@@ -50,12 +50,25 @@ run_install() {
   [ "$count" -eq 22 ]
 }
 
-@test "Full install: installs all macOS skills" {
+@test "Full install: installs platform-appropriate skills" {
   run_install "1"
 
-  [ -d "$HOME/.claude/skills/calendar-fetch" ]
-  [ -d "$HOME/.claude/skills/inbox-fetch" ]
-  [ -d "$HOME/.claude/skills/reminders-fetch" ]
+  if [[ "$(uname)" == "Darwin" ]]; then
+    # macOS: native skills installed
+    [ -d "$HOME/.claude/skills/calendar-fetch" ]
+    [ -d "$HOME/.claude/skills/inbox-fetch" ]
+    [ -d "$HOME/.claude/skills/reminders-fetch" ]
+  else
+    # Linux: stubs installed instead
+    [ -d "$HOME/.claude/skills/calendar-fetch-linux" ]
+    [ -d "$HOME/.claude/skills/inbox-fetch-linux" ]
+    [ ! -d "$HOME/.claude/skills/reminders-fetch" ]
+  fi
+
+  # Cross-platform skills always installed
+  [ -d "$HOME/.claude/skills/careful-mode" ]
+  [ -d "$HOME/.claude/skills/freeze-mode" ]
+  [ -d "$HOME/.claude/skills/wizard" ]
 }
 
 @test "Full install: .template extension stripped from rules" {

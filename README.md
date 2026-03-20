@@ -330,6 +330,30 @@ claude-agent-team/
 
 ---
 
+## Companion: Claude Dashboard
+
+This framework pairs with **[Claude Dashboard](https://github.com/ek33450505/claude-dashboard)** — a real-time web UI that visualizes everything this repo installs.
+
+```
+┌─────────────────────────────┐     ┌─────────────────────────────┐
+│   Claude Agent Team         │     │   Claude Dashboard          │
+│                             │     │                             │
+│   22 agents, 23 commands,   │────▶│   Real-time agent activity  │
+│   9 skills, hooks, rules    │     │   Session history & replay  │
+│                             │     │   Agent roster & stats      │
+│   Config layer (no runtime) │     │   Memory & knowledge viewer │
+└─────────────────────────────┘     │   System health overview    │
+          ~/.claude/                │                             │
+                                    │   React 19 + Vite + Express │
+                                    └─────────────────────────────┘
+```
+
+The dashboard reads from `~/.claude/` — the same directory this installer populates. Together they form a complete Claude Code power-user toolkit: **Agent Team** handles orchestration, **Dashboard** handles observability.
+
+The dashboard works with any Claude Code installation, not just this framework.
+
+---
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
