@@ -46,6 +46,7 @@ PROFESSIONAL_CMDS="browser qa present"
 ALWAYS_CMDS="eval"
 
 MACOS_SKILLS="calendar-fetch inbox-fetch reminders-fetch"
+LINUX_SKILLS="calendar-fetch-linux inbox-fetch-linux"
 GENERAL_SKILLS="action-items briefing-writer git-activity careful-mode freeze-mode wizard"
 
 # --- Pre-flight check ---
@@ -201,6 +202,11 @@ if $INSTALL_MACOS_SKILLS; then
     for skill in $MACOS_SKILLS; do
         install_skill "$skill"
     done
+else
+    # Install Linux stubs for macOS-only skills
+    for skill in $LINUX_SKILLS; do
+        install_skill "$skill"
+    done
 fi
 success "  $SKILL_COUNT skills installed"
 
@@ -257,6 +263,6 @@ printf "  5. Review ${BOLD}~/.claude/settings.template.json${NC} — merge into 
 printf "\n"
 success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills"
 if ! $IS_MACOS; then
-    warn "Note: macOS skills were skipped. Morning briefings will use git-activity and action-items only."
+    warn "Note: macOS skills were replaced with Linux stubs. Morning briefings will use git-activity and action-items only."
 fi
 printf "\n"
