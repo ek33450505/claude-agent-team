@@ -23,7 +23,7 @@ Every agent has a defined role, model assignment (sonnet or haiku), and trigger 
 ## Quick Start
 
 ```bash
-git clone https://github.com/edkubiak/claude-agent-team.git
+git clone https://github.com/ek33450505/claude-agent-team.git
 cd claude-agent-team
 bash install.sh
 ```
