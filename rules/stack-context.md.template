@@ -1,24 +1,123 @@
-<!-- TEMPLATE: Replace the examples below with your actual tech stack. -->
+<!--
+  TEMPLATE: This file tells agents about YOUR tech stack.
+
+  HOW TO USE:
+  1. Delete every section that doesn't apply to you
+  2. Uncomment the lines that match your stack
+  3. Add anything missing — agents read this before giving advice
+
+  Keep it short. Agents use this for quick context, not documentation.
+-->
 # Tech Stack
 
+<!--
+  Delete sections you don't use. Keep only what's real.
+  The more accurate this is, the better agents perform.
+-->
+
 ## Frontend
-- **React 18/19** with Vite (your Vite projects) or CRA/react-scripts (your CRA projects)
-- **TypeScript:** `.tsx`, `tsconfig.json`
-- **UI Libraries:** Bootstrap 5, React-Bootstrap, MUI (Material UI), Lucide React, FontAwesome
-- **Tables:** `react-data-table-component`, TanStack Table v8
+<!-- Pick your framework(s) and delete the rest -->
+
+<!-- React -->
+<!-- - **React 18/19** with Vite -->
+<!-- - **React 18/19** with CRA / react-scripts -->
+<!-- - **Next.js 14/15** (App Router) -->
+
+<!-- Vue -->
+<!-- - **Vue 3** with Vite -->
+<!-- - **Nuxt 3** -->
+
+<!-- Svelte -->
+<!-- - **SvelteKit** -->
+
+<!-- Angular -->
+<!-- - **Angular 17/18** -->
+
+<!-- Vanilla / Other -->
+<!-- - **Astro** -->
+<!-- - **HTML/CSS/JS** (no framework) -->
+
+<!-- TypeScript -->
+<!-- - **TypeScript** — `.tsx` / `.ts`, `tsconfig.json` -->
+
+<!-- UI libraries (uncomment what you use) -->
+<!-- - **Tailwind CSS** -->
+<!-- - **Bootstrap 5** / React-Bootstrap -->
+<!-- - **MUI (Material UI)** -->
+<!-- - **shadcn/ui** -->
+<!-- - **Chakra UI** -->
 
 ## Backend
-- **Express 4/5** (Node.js)
-- **SQLite** via `better-sqlite3`
-- **Anthropic SDK** (`@anthropic-ai/sdk`)
-- **Ollama** for local LLM inference
+<!-- Pick your backend and delete the rest -->
 
-## Data
-- **BigQuery** via `bq` CLI
-- **SQLite** for local/embedded storage
+<!-- Node.js -->
+<!-- - **Express 4/5** (Node.js) -->
+<!-- - **Fastify** -->
+<!-- - **NestJS** -->
+
+<!-- Python -->
+<!-- - **FastAPI** -->
+<!-- - **Django** / Django REST Framework -->
+<!-- - **Flask** -->
+
+<!-- Go -->
+<!-- - **Go** with net/http / Gin / Echo -->
+
+<!-- Ruby -->
+<!-- - **Ruby on Rails** -->
+
+<!-- Rust -->
+<!-- - **Actix Web** / Axum -->
+
+<!-- Java/Kotlin -->
+<!-- - **Spring Boot** -->
+
+## Database
+<!-- Pick your database(s) -->
+
+<!-- - **PostgreSQL** -->
+<!-- - **MySQL / MariaDB** -->
+<!-- - **SQLite** via better-sqlite3 (Node) or sqlite3 (Python) -->
+<!-- - **MongoDB** -->
+<!-- - **Redis** -->
+<!-- - **Supabase** -->
+<!-- - **Firebase / Firestore** -->
+<!-- - **Prisma** (ORM) -->
+<!-- - **Drizzle** (ORM) -->
+<!-- - **BigQuery** via `bq` CLI -->
 
 ## Testing
-- **Jest + React Testing Library** — CRA projects
-- **Vitest + RTL** — Vite projects (scaffold if not present)
-- **Supertest** — Express backend route testing
-- Vite projects that have no test framework yet → scaffold Vitest (see `test-writer` agent for setup steps)
+<!-- Pick your test tools -->
+
+<!-- JavaScript -->
+<!-- - **Jest** + React Testing Library -->
+<!-- - **Vitest** + React Testing Library -->
+<!-- - **Playwright** for E2E -->
+<!-- - **Cypress** for E2E -->
+<!-- - **Supertest** for API routes -->
+
+<!-- Python -->
+<!-- - **pytest** -->
+<!-- - **unittest** -->
+
+<!-- Go -->
+<!-- - **go test** -->
+
+<!-- General -->
+<!-- - **No tests yet** — agents will suggest setup when relevant -->
+
+## AI / LLM (if applicable)
+<!-- - **Anthropic SDK** (`@anthropic-ai/sdk` or `anthropic` Python) -->
+<!-- - **OpenAI SDK** -->
+<!-- - **Ollama** for local inference -->
+<!-- - **LangChain** / LangGraph -->
+<!-- - **Vercel AI SDK** -->
+
+## Infrastructure (if applicable)
+<!-- - **Docker** / Docker Compose -->
+<!-- - **AWS** (Lambda, S3, EC2, etc.) -->
+<!-- - **GCP** (Cloud Run, Cloud Functions, etc.) -->
+<!-- - **Vercel** -->
+<!-- - **Netlify** -->
+<!-- - **Railway** -->
+<!-- - **Fly.io** -->

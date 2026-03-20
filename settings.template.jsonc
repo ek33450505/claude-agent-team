@@ -4,17 +4,24 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
 
   // Environment variables that enable experimental features
+  // NOTE: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS is required for agent spawning.
+  // If a future Claude Code release removes or renames this flag, agents will
+  // still work as regular markdown prompts — they just won't spawn as teammates.
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",  // Enable agent teams (teammate spawning)
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"        // Auto-compact context at 80% capacity
   },
 
   // Tool permissions — what Claude Code can do without asking
+  // ⚠️  REVIEW CAREFULLY before merging into your settings.
+  // These permissions let Claude Code run commands, create files, and edit files
+  // WITHOUT prompting you first. Remove any you're not comfortable with.
+  // A safer starting point: remove "Bash", "Write", "Edit" and let Claude ask each time.
   "permissions": {
     "allow": [
-      "Bash",                                        // Run shell commands
-      "Write",                                       // Create new files
-      "Edit",                                        // Modify existing files
+      "Bash",                                        // Run shell commands (remove for manual approval)
+      "Write",                                       // Create new files (remove for manual approval)
+      "Edit",                                        // Modify existing files (remove for manual approval)
       "WebSearch",                                   // Search the web
       "WebFetch(domain:github.com)",                 // Fetch from GitHub
       "WebFetch(domain:raw.githubusercontent.com)",   // Fetch raw GitHub content
