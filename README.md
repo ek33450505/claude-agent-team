@@ -269,12 +269,14 @@ Review `~/.claude/settings.template.json` and merge the hooks and sandbox config
 
 Most of this framework is cross-platform. The following features require **macOS**:
 
-| Feature | Requirement | Why |
+| Feature | Requirement | Linux/WSL behavior |
 |---|---|---|
-| `calendar-fetch` skill | macOS + Microsoft Outlook | Uses AppleScript to query Outlook |
-| `inbox-fetch` skill | macOS + Microsoft Outlook | Uses AppleScript to query Outlook |
-| `reminders-fetch` skill | macOS | Uses AppleScript to query Apple Reminders |
-| `email-manager` agent | macOS + Thunderbird or Outlook | Uses AppleScript for email access |
+| `calendar-fetch` skill | macOS + Microsoft Outlook | Skipped; stub returns "unavailable" note |
+| `inbox-fetch` skill | macOS + Microsoft Outlook | Skipped; stub returns "unavailable" note |
+| `reminders-fetch` skill | macOS | Skipped; section omitted from briefing |
+| `email-manager` agent | macOS + Thunderbird or Outlook | Agent installed but AppleScript calls will fail |
+
+**On Linux/WSL:** The installer auto-detects your platform and skips macOS-only skills. Morning briefings still work — `git-activity` and `action-items` run on all platforms.
 
 These are clearly marked as optional during install.
 
@@ -312,7 +314,9 @@ claude-agent-team/
 │   ├── briefing-writer/SKILL.md
 │   ├── careful-mode/SKILL.md
 │   ├── freeze-mode/SKILL.md
-│   └── wizard/SKILL.md
+│   ├── wizard/SKILL.md
+│   ├── calendar-fetch-linux/SKILL.md  # Linux stub (auto-detected)
+│   └── inbox-fetch-linux/SKILL.md     # Linux stub (auto-detected)
 │
 ├── scripts/
 │   ├── auto-format.sh                # PostToolUse hook target

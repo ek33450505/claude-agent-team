@@ -16,6 +16,13 @@ success() { printf "${GREEN}%s${NC}\n" "$1"; }
 warn()    { printf "${YELLOW}%s${NC}\n" "$1"; }
 error()   { printf "${RED}%s${NC}\n" "$1"; }
 
+# --- Platform Detection ---
+PLATFORM="$(uname -s)"
+IS_MACOS=false
+if [ "$PLATFORM" = "Darwin" ]; then
+  IS_MACOS=true
+fi
+
 # --- Paths ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
@@ -67,7 +74,9 @@ case "$CHOICE" in
         INSTALL_EXTENDED=true
         INSTALL_PRODUCTIVITY=true
         INSTALL_PROFESSIONAL=true
-        INSTALL_MACOS_SKILLS=true
+        if $IS_MACOS; then
+            INSTALL_MACOS_SKILLS=true
+        fi
         ;;
     2)
         # Core only — defaults are fine
@@ -89,10 +98,14 @@ case "$CHOICE" in
         printf "  Install? [y/N]: "
         read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_PROFESSIONAL=true
 
-        printf "\n  macOS skills (calendar-fetch, inbox-fetch, reminders-fetch)\n"
-        warn "  Note: these require Microsoft Outlook for calendar/email."
-        printf "  Install? [y/N]: "
-        read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_MACOS_SKILLS=true
+        if $IS_MACOS; then
+            printf "\n  macOS skills (calendar-fetch, inbox-fetch, reminders-fetch)\n"
+            warn "  Note: these require Microsoft Outlook for calendar/email."
+            printf "  Install? [y/N]: "
+            read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_MACOS_SKILLS=true
+        else
+            warn "\n  macOS skills skipped — not running on macOS (detected: $PLATFORM)"
+        fi
         ;;
     *)
         error "Invalid choice. Exiting."
@@ -243,4 +256,7 @@ printf "  4. Review ${BOLD}~/.claude/CLAUDE.md.template${NC} — rename to CLAUD
 printf "  5. Review ${BOLD}~/.claude/settings.template.json${NC} — merge into your settings\n"
 printf "\n"
 success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills"
+if ! $IS_MACOS; then
+    warn "Note: macOS skills were skipped. Morning briefings will use git-activity and action-items only."
+fi
 printf "\n"
