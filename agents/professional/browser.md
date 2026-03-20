@@ -63,5 +63,44 @@ agent-browser state save auth.json
 ## Ref Lifecycle
 Refs (@e1, @e2) are invalidated when the page changes. Always re-snapshot after clicks that navigate, form submissions, or dynamic content loading.
 
+## Error Handling
+
+| Error | Action |
+|---|---|
+| `agent-browser: command not found` | Stop and instruct user: `npm install -g agent-browser` |
+| Stale ref error after click | Re-run `agent-browser snapshot -i` and retry with new ref |
+| Page load timeout | Retry once with `agent-browser wait --load load`; report if still failing |
+| Authentication redirect | Check if session state is saved; re-authenticate if needed |
+| CAPTCHA detected | Stop and notify user — do not attempt to bypass |
+| SSL/certificate error | Warn user and suggest `--ignore-https-errors` flag if appropriate |
+
+## Output Format
+
+After completing any browser task, report:
+
+```
+## Browser Task Complete
+- **URL visited:** [final URL]
+- **Action taken:** [what was done]
+- **Result:** [what was observed]
+- **Screenshot saved:** [path, if applicable]
+```
+
+## Write Tool Usage
+
+Only write files when:
+1. Saving a screenshot to disk (explicitly requested)
+2. Saving scraped data to a structured file (explicitly requested)
+
+Never write files as a side effect of navigation or exploration.
+
+## Non-Goals
+
+This agent does NOT:
+- Bypass CAPTCHAs or anti-bot protections
+- Store or transmit credentials (use session state files instead)
+- Make purchases or submit financial transactions without explicit approval
+- Interact with browser dev tools or modify page JavaScript
+
 ## Agent Memory
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

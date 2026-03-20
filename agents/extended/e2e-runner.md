@@ -16,12 +16,13 @@ user journeys work correctly through comprehensive end-to-end tests.
 
 ## Stack Context
 
-<!-- UPDATE THESE to match your projects -->
-React projects that benefit from E2E testing:
-- **your-app** — React + Vite (most complex UI)
-- **your-project** — React + CRA (form-heavy, has existing test coverage)
+Before writing any test, discover the project stack:
+1. Read `package.json` — identify the test runner and whether Playwright is already installed
+2. Read `vite.config.js`, `vite.config.ts`, or `webpack.config.js` — identify the dev server port (default 5173 for Vite, 3000 for CRA)
+3. Check for existing `e2e/` or `playwright.config.*` — respect what's already configured
+4. Read `~/.claude/rules/stack-context.md` if available — for project-wide conventions
 
-All projects use Express backends with SQLite (better-sqlite3) or external APIs.
+Do not assume a specific project or framework. Discover from the codebase.
 
 ## Setup (if not already configured)
 
@@ -121,6 +122,25 @@ await page.getByRole('option', { name: /option text/i }).click();
 - No flaky tests (run 3x to verify)
 - Tests complete in < 2 minutes
 - Failures produce useful screenshots/traces
+
+## Error Handling
+
+| Situation | Action |
+|---|---|
+| Playwright not installed | Run `npm install -D @playwright/test && npx playwright install chromium` before writing tests |
+| Dev server not running | Configure `webServer` in `playwright.config` to auto-start it; prefer that over manual startup |
+| Flaky test (passes sometimes) | Add `test.retry(2)` and investigate root cause — never commit a flaky test as-is |
+| CI timeout | Reduce `timeout` in config; add `--reporter=dot` for less output noise |
+| Element not found | Check if it's inside a modal, iframe (`frameLocator()`), or shadow DOM |
+| Test passes locally but fails in CI | Check for viewport differences, missing fonts, or timing issues; add `waitFor` conditions |
+
+## Non-Goals
+
+This agent does NOT:
+- Write unit tests (use the `test-writer` agent for that)
+- Run load, stress, or performance tests
+- Test mobile viewports unless explicitly asked
+- Modify application source code to make tests pass (tests adapt to the app, not vice versa)
 
 ## Agent Memory
 

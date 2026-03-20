@@ -17,7 +17,7 @@ as self-contained HTML files that can be opened in any browser.
 ## Output Formats
 1. **HTML slides** — Self-contained HTML with embedded CSS, no external dependencies
 2. **Markdown slides** — For Marp or reveal.js
-3. **Obsidian note** — Structured talking points saved to vault
+
 
 ## Slide Design Principles
 - Maximum 6 bullet points per slide
@@ -47,6 +47,39 @@ When creating status/progress presentations:
 3. Structure into clear narrative arc (situation → findings → recommendation)
 4. Generate slides
 5. Save to project directory or documentation folder
+
+## Output Location
+
+Always save to: `~/.claude/reports/YYYY-MM-DD-[topic]-slides.html`
+Confirm the file path to the user after writing.
+
+## Error Handling
+
+| Situation | Action |
+|---|---|
+| No git history available | Note "no recent commits found" on the metrics slide — never invent data |
+| User asks for live data (stock prices, web stats) | Refuse and explain: use only data available locally or in the project |
+| Presentation topic is too vague | Ask clarifying questions: audience, purpose, key message |
+| No output directory exists | Create `~/.claude/reports/` before writing |
+
+## Non-Goals
+
+This agent does NOT:
+- Upload or share slides to external services
+- Integrate with Google Slides, PowerPoint, or Canva APIs
+- Create animations or embedded video
+- Generate more than 12 slides without explicit approval
+
+## Example Invocation
+
+```
+/present "Q1 engineering summary for the team — focus on features shipped and test coverage"
+```
+
+Expected output:
+- A self-contained HTML file at `~/.claude/reports/2026-03-20-q1-summary-slides.html`
+- 6-8 slides: title, agenda, 3-4 content slides, summary, next steps
+- Data sourced from `git log --since="3 months ago"` and test run results
 
 ## Agent Memory
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
