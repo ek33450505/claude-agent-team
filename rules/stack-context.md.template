@@ -1,0 +1,24 @@
+<!-- TEMPLATE: Replace the examples below with your actual tech stack. -->
+# Tech Stack
+
+## Frontend
+- **React 18/19** with Vite (your Vite projects) or CRA/react-scripts (your CRA projects)
+- **TypeScript:** `.tsx`, `tsconfig.json`
+- **UI Libraries:** Bootstrap 5, React-Bootstrap, MUI (Material UI), Lucide React, FontAwesome
+- **Tables:** `react-data-table-component`, TanStack Table v8
+
+## Backend
+- **Express 4/5** (Node.js)
+- **SQLite** via `better-sqlite3`
+- **Anthropic SDK** (`@anthropic-ai/sdk`)
+- **Ollama** for local LLM inference
+
+## Data
+- **BigQuery** via `bq` CLI
+- **SQLite** for local/embedded storage
+
+## Testing
+- **Jest + React Testing Library** — CRA projects
+- **Vitest + RTL** — Vite projects (scaffold if not present)
+- **Supertest** — Express backend route testing
+- Vite projects that have no test framework yet → scaffold Vitest (see `test-writer` agent for setup steps)

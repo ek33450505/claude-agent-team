@@ -1,0 +1,90 @@
+// Claude Code Settings Template
+// Copy this to ~/.claude/settings.local.json (remove comments or rename to .jsonc)
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
+  // Environment variables that enable experimental features
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",  // Enable agent teams (teammate spawning)
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"        // Auto-compact context at 80% capacity
+  },
+
+  // Tool permissions — what Claude Code can do without asking
+  "permissions": {
+    "allow": [
+      "Bash",                                        // Run shell commands
+      "Write",                                       // Create new files
+      "Edit",                                        // Modify existing files
+      "WebSearch",                                   // Search the web
+      "WebFetch(domain:github.com)",                 // Fetch from GitHub
+      "WebFetch(domain:raw.githubusercontent.com)",   // Fetch raw GitHub content
+      "WebFetch(domain:api.github.com)"              // Use GitHub API
+    ]
+  },
+
+  // Hooks — scripts that run automatically at specific lifecycle points
+  "hooks": {
+    // After Write or Edit: auto-format with prettier if the project supports it
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/auto-format.sh",
+            "timeout": 10
+          }
+        ],
+        "description": "Auto-format JS/TS/CSS files after Write/Edit if prettier is configured"
+      }
+    ],
+    // Before Claude stops: nudge to verify tests/build if code was changed
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Before completing: if code was modified but no tests were run, suggest running them. If a build-breaking change was made, suggest verifying the build. Otherwise, allow completion."
+          }
+        ],
+        "description": "Verification nudge before completion"
+      }
+    ]
+  },
+
+  // Agent teams run in-process (same session) rather than spawning subprocesses
+  "teammateMode": "in-process",
+
+  // Update channel for Claude Code CLI
+  "autoUpdatesChannel": "stable",
+
+  // Where implementation plans are stored
+  "plansDirectory": "~/.claude/plans/",
+
+  // Worktree settings — symlink these dirs instead of copying (saves disk space)
+  "worktree": {
+    "symlinkDirectories": ["node_modules", ".cache", "dist"]
+  },
+
+  // Sandbox restricts file and network access for safety
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,              // Don't prompt for Bash if sandboxed
+    "excludedCommands": ["git", "docker", "bq", "osascript"],  // These bypass sandbox
+    "filesystem": {
+      "denyRead": ["~/.aws/credentials", "~/.ssh/id_*", "~/.gnupg"],  // Never read secrets
+      "allowWrite": ["/tmp"]                        // Only allow writes to /tmp (plus project dir)
+    },
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "*.github.com",
+        "*.npmjs.org",
+        "registry.yarnpkg.com",
+        "*.googleapis.com",
+        "api.anthropic.com"
+      ],
+      "allowLocalBinding": true                     // Allow localhost servers (dev servers, etc.)
+    }
+  }
+}

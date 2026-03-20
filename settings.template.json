@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Write",
+      "Edit",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/auto-format.sh",
+            "timeout": 10
+          }
+        ],
+        "description": "Auto-format JS/TS/CSS files after Write/Edit if prettier is configured"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Before completing: if code was modified but no tests were run, suggest running them. If a build-breaking change was made, suggest verifying the build. Otherwise, allow completion."
+          }
+        ],
+        "description": "Verification nudge before completion"
+      }
+    ]
+  },
+  "teammateMode": "in-process",
+  "autoUpdatesChannel": "stable",
+  "plansDirectory": "~/.claude/plans/",
+  "worktree": {
+    "symlinkDirectories": ["node_modules", ".cache", "dist"]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "excludedCommands": ["git", "docker", "bq", "osascript"],
+    "filesystem": {
+      "denyRead": ["~/.aws/credentials", "~/.ssh/id_*", "~/.gnupg"],
+      "allowWrite": ["/tmp"]
+    },
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "*.github.com",
+        "*.npmjs.org",
+        "registry.yarnpkg.com",
+        "*.googleapis.com",
+        "api.anthropic.com"
+      ],
+      "allowLocalBinding": true
+    }
+  }
+}

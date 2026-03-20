@@ -1,0 +1,14 @@
+<!-- TEMPLATE: Add your projects here. Claude uses this for path-specific suggestions. -->
+# Key Projects
+
+## Work Projects
+| Name | Path | Stack | Notes |
+|---|---|---|---|
+| my-app | `~/Projects/work/my-app` | React + Vite | Main web application |
+| api-server | `~/Projects/work/api-server` | Express + SQLite | Backend API service |
+
+## Personal Projects
+| Name | Path | Stack | Notes |
+|---|---|---|---|
+| side-project | `~/Projects/personal/side-project` | React + Vite | Personal project |
+| cli-tool | `~/Projects/personal/cli-tool` | Python + Click | Command-line utility |

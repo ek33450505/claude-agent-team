@@ -1,0 +1,98 @@
+# Claude Code — Global Context for [Your Name]
+
+This file is loaded into every session. Tech stack, projects, and conventions are in `~/.claude/rules/`.
+
+---
+
+## Agent Roster
+
+22 custom agents at `~/.claude/agents/`. Use them proactively — don't wait to be asked.
+
+### Core Agents
+| Agent | Model | When to use |
+|---|---|---|
+| `planner` | sonnet (blue) | Starting any new feature, refactor, or complex change |
+| `debugger` | sonnet (red) | Any error, test failure, or unexpected behavior |
+| `test-writer` | sonnet (green) | After writing or modifying code; when coverage is needed |
+| `code-reviewer` | haiku (cyan) | Immediately after writing or modifying code |
+| `data-scientist` | sonnet (orange) | Data analysis tasks, SQL queries, BigQuery exploration |
+| `db-reader` | haiku (purple) | Read-only DB queries (SELECT only — writes blocked at hook level) |
+| `commit` | haiku (yellow) | Creating semantic git commits |
+| `security` | sonnet (magenta) | Security review, OWASP, secrets scanning |
+
+### Extended Agents
+| Agent | Model | When to use |
+|---|---|---|
+| `architect` | sonnet (teal) | System design, ADRs, module boundaries, trade-off analysis |
+| `tdd-guide` | sonnet (lime) | Red-green-refactor TDD workflow (complements test-writer) |
+| `build-error-resolver` | haiku (coral) | Fix Vite/CRA/TS/ESLint build errors with minimal diffs |
+| `e2e-runner` | sonnet (sky) | Playwright E2E tests for React apps |
+| `refactor-cleaner` | haiku (silver) | Dead code, unused imports, dependency cleanup |
+| `doc-updater` | haiku (gold) | README, changelog, JSDoc updates |
+
+### Productivity Agents
+| Agent | Model | When to use |
+|---|---|---|
+| `researcher` | sonnet (indigo) | Technical research, tool/library evaluation, comparisons |
+| `report-writer` | haiku (amber) | Status reports, sprint summaries, stakeholder updates |
+| `meeting-notes` | haiku (rose) | Process meeting notes, extract action items and decisions |
+| `email-manager` | sonnet (pink) | Email triage, drafting, inbox summary (Thunderbird + Outlook) |
+| `morning-briefing` | sonnet (bronze) | Daily briefing: calendar + email + reminders + git + action items |
+
+### Professional Agents
+| Agent | Model | When to use |
+|---|---|---|
+| `browser` | sonnet (navy) | Browser automation, form filling, screenshots, web scraping |
+| `qa-reviewer` | sonnet (orange-red) | Second-opinion QA review focused on functional correctness |
+| `presenter` | sonnet (violet) | Slide decks, status presentations, demo materials |
+
+### Slash Commands
+23 commands at `~/.claude/commands/`:
+
+| Command | Agent | Command | Agent |
+|---|---|---|---|
+| `/plan` | planner | `/research` | researcher |
+| `/review` | code-reviewer | `/report` | report-writer |
+| `/debug` | debugger | `/meeting` | meeting-notes |
+| `/test` | test-writer | `/email` | email-manager |
+| `/secure` | security | `/morning` | morning-briefing |
+| `/commit` | commit | `/browser` | browser |
+| `/data` | data-scientist | `/qa` | qa-reviewer |
+| `/query` | db-reader | `/present` | presenter |
+| `/architect` | architect | `/build-fix` | build-error-resolver |
+| `/tdd` | tdd-guide | `/refactor` | refactor-cleaner |
+| `/e2e` | e2e-runner | `/docs` | doc-updater |
+| `/eval` | evaluator-optimizer | | |
+
+### Skills (reusable procedures)
+9 custom skills at `~/.claude/skills/`:
+`calendar-fetch`, `inbox-fetch`, `reminders-fetch`, `git-activity`, `action-items`, `briefing-writer`, `careful-mode`, `freeze-mode`, `wizard`
+
+### Memory Architecture (2 layers)
+| Layer | Location | Purpose |
+|---|---|---|
+| Project memory | `~/.claude/projects/*/memory/` | Project-specific context |
+| Agent memory | `~/.claude/agent-memory-local/` | Agent-learned patterns (22 agents) |
+
+### Shared Config
+Project list and paths centralized in `~/.claude/config.sh` — sourced by scripts and skills.
+
+### Output Directories
+| Directory | Purpose |
+|---|---|
+| `~/.claude/briefings/` | Morning briefing output |
+| `~/.claude/meetings/` | Processed meeting notes |
+| `~/.claude/reports/` | Generated reports |
+| `~/.claude/plans/` | Implementation plans |
+
+---
+
+## Claude Code Settings
+
+- **Model:** [your preferred model]
+- **Platform:** macOS (darwin), shell: zsh
+- **Claude config dir:** `~/.claude/`
+- **Rules:** `~/.claude/rules/` (stack-context, project-catalog, working-conventions)
+- **Agent definitions:** `~/.claude/agents/`
+- **Plan files:** `~/.claude/plans/`
+- **Agent memory:** `~/.claude/agent-memory-local/<agent-name>/`

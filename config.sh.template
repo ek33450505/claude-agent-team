@@ -1,0 +1,37 @@
+#!/bin/bash
+# Claude Code — Shared Configuration
+# Source this file from any script that needs project paths or shared settings.
+# Usage: source ~/.claude/config.sh
+
+# --- Directories ---
+CLAUDE_DIR="$HOME/.claude"
+BRIEFINGS_DIR="$CLAUDE_DIR/briefings"
+MEETINGS_DIR="$CLAUDE_DIR/meetings"
+REPORTS_DIR="$CLAUDE_DIR/reports"
+PLANS_DIR="$CLAUDE_DIR/plans"
+MEMORY_DIR="$CLAUDE_DIR/agent-memory-local"
+
+# --- Project Directories ---
+# Add or remove projects here. All scripts source this single list.
+# Each entry should be the absolute path to a project root directory.
+# Example: "$HOME/Projects/work/my-app"
+PROJECTS=(
+  "$HOME/Projects/work/your-project-1"
+  "$HOME/Projects/personal/your-project-2"
+)
+
+# --- Project Display Names ---
+# Maps directory basename to a human-readable name.
+# Used by scripts that need semantic project names.
+# Add one entry per project. The key is the directory basename (last segment of the path).
+declare -A PROJECT_NAMES=(
+  [your-project-1]="Your Project 1"
+  [your-project-2]="Your Project 2"
+)
+
+# Helper: get display name for a project directory
+get_project_name() {
+  local basename
+  basename="$(basename "$1")"
+  echo "${PROJECT_NAMES[$basename]:-$basename}"
+}
