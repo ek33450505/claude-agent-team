@@ -332,7 +332,7 @@ claude-agent-team/
 
 ## Companion: Claude Dashboard
 
-This framework pairs with **[Claude Dashboard](https://github.com/ek33450505/claude-dashboard)** — a real-time web UI that visualizes everything this repo installs.
+This framework pairs with **[Claude Dashboard](https://github.com/ek33450505/claude-code-dashboard)** — a real-time web UI that visualizes everything this repo installs.
 
 ```
 ┌─────────────────────────────┐     ┌─────────────────────────────┐
