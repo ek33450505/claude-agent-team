@@ -1,0 +1,26 @@
+name: Test Installer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bats-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Run BATS tests
+        run: tests/bats/bin/bats tests/install.bats
+
+  bats-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Run BATS tests (macOS)
+        run: tests/bats/bin/bats tests/install.bats
