@@ -73,7 +73,7 @@ for pattern in table.get('opus_signals', {}).get('complexity_patterns', []):
 for route in table.get('routes', []):
     for pattern in route.get('patterns', []):
         if re.search(pattern, prompt, re.IGNORECASE):
-            print(json.dumps({'agent': route['agent'], 'command': route['command'], 'pattern': pattern}))
+            print(json.dumps({'agent': route['agent'], 'command': route['command'], 'pattern': pattern, 'post_chain': route.get('post_chain')}))
             sys.exit(0)
 " 2>/dev/null || echo "")"
 
@@ -99,6 +99,17 @@ fi
 AGENT="$(echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agent',''))" 2>/dev/null || echo "")"
 COMMAND="$(echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('command') or '')" 2>/dev/null || echo "")"
 PATTERN="$(echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('pattern',''))" 2>/dev/null || echo "")"
+CHAIN="$(echo "$RESULT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+chain=d.get('post_chain') or []
+if chain and chain != ['auto-dispatch-from-manifest']:
+    print(' → '.join('\`' + a + '\` agent' for a in chain))
+elif chain == ['auto-dispatch-from-manifest']:
+    print('auto-dispatch-from-manifest')
+else:
+    print('')
+" 2>/dev/null || echo "")"
 
 [ -z "$AGENT" ] && exit 0
 
@@ -118,11 +129,21 @@ with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
 " 2>/dev/null || true
 
 # Output routing instruction as plain text (stdout is added to Claude's context)
-# Phase 2: instruct Claude to dispatch directly rather than ask the user
+# Phase 3: dispatch directly + inject post-chain instructions
 if [ "$AGENT" = "opus" ]; then
   echo '**[Router]** Complexity signals detected. Switch to Opus for this message before answering.'
 elif [ -n "$COMMAND" ]; then
-  echo "**[Router]** Dispatch to \`$AGENT\` agent now using the Agent tool (subagent_type: '$AGENT'). Do NOT ask the user first — invoke the agent immediately with the user's prompt as the task."
+  MSG="**[Router]** Dispatch to \`$AGENT\` agent now using the Agent tool (subagent_type: '$AGENT'). Do NOT ask the user first — invoke the agent immediately with the user's prompt as the task."
+  if [ "$CHAIN" = "auto-dispatch-from-manifest" ]; then
+    MSG="$MSG
+
+**[Router - Chain]** After the planner agent completes, read the plan file for the \`## Agent Dispatch Manifest\` section. Present the dispatch queue to the user and execute all batches upon approval."
+  elif [ -n "$CHAIN" ]; then
+    MSG="$MSG
+
+**[Router - Chain]** After the agent completes, continue the chain: $CHAIN. Invoke each agent in sequence when the previous one finishes."
+  fi
+  echo "$MSG"
 fi
 
 exit 0
