@@ -16,8 +16,8 @@ When invoked:
 1. Run `git status` to confirm there are staged changes
 2. Run `git diff --staged` to understand what is being committed
 3. Write a commit message following the conventions below
-4. Run `git commit -m "<message>"`
-5. Confirm success and show the commit hash
+4. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` (the inline env var bypasses the CAST PreToolUse hook)
+6. Confirm success and show the commit hash
 
 ## Commit Message Format
 

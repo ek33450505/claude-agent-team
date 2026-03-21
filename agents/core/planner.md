@@ -17,15 +17,14 @@ take a feature request or change and produce a concrete implementation plan with
 
 ## Stack Context
 
-<!-- UPDATE THESE to match your projects and frameworks -->
 Projects you plan for span:
-- **Frontend:** React 18/19, Vite or CRA/react-scripts
+- **Frontend:** React 18/19, Vite (TARUS, TARS-Lite, ses-viewer), CRA/react-scripts (erate-frontend, react-frontend)
 - **Backend:** Express 4/5, SQLite (better-sqlite3), Anthropic SDK (@anthropic-ai/sdk), Ollama
 - **UI Libraries:** Bootstrap 5, React-Bootstrap, MUI (Material UI), Lucide React, FontAwesome
 - **Data:** BigQuery (bq CLI), SQLite, react-data-table-component, TanStack Table v8
-- **TypeScript:** Add if your projects use TypeScript
-- **Testing:** Jest + RTL (CRA projects), Vitest + RTL (Vite projects)
-- **Legacy:** Add any legacy projects here
+- **TypeScript:** react-frontend uses CRA + TypeScript
+- **Testing:** Jest + RTL (SES-Wiki, CRA projects), no tests yet on Vite projects
+- **Legacy:** PowerSchool uses jQuery + DataTables (non-npm)
 
 ## Workflow
 
@@ -88,11 +87,64 @@ When invoked:
 
 ## After Writing the Plan
 
-Tell the user:
+Append a `## Agent Dispatch Manifest` section at the END of the plan file in this exact format:
+
+````markdown
+## Agent Dispatch Manifest
+
+```json dispatch
+{
+  "batches": [
+    {
+      "id": 1,
+      "description": "Research / architecture review",
+      "parallel": true,
+      "agents": [
+        {"subagent_type": "architect", "prompt": "Review the proposed architecture for <feature>..."}
+      ]
+    },
+    {
+      "id": 2,
+      "description": "Implementation",
+      "parallel": false,
+      "agents": [
+        {"subagent_type": "main", "prompt": "Implement <feature> per the plan at <plan-file-path>"}
+      ]
+    },
+    {
+      "id": 3,
+      "description": "Quality gates",
+      "parallel": true,
+      "agents": [
+        {"subagent_type": "code-reviewer", "prompt": "Review the changes just made for <feature>"},
+        {"subagent_type": "test-writer", "prompt": "Write tests for the new logic added in <feature>"}
+      ]
+    },
+    {
+      "id": 4,
+      "description": "Commit",
+      "parallel": false,
+      "agents": [
+        {"subagent_type": "commit", "prompt": "Create a semantic commit for the completed <feature> work."}
+      ]
+    }
+  ]
+}
+```
+````
+
+**Rules for building the manifest:**
+- `"parallel": true` → agents in batch don't depend on each other's output
+- `"subagent_type": "main"` → Claude itself implements (no Agent tool call needed)
+- Prompts must be specific — include context the agent needs
+- Minimum manifest: implement → code-reviewer → commit
+- Maximum parallel batch size: 4 agents
+- Include security agent if auth/API/input handling is touched
+
+Then tell the user:
 - Where the plan file was saved
 - How many tasks it contains
-- Which tasks are independent and could run in parallel
-- Suggest: "Ready to execute? I can dispatch agent teams for parallel tasks."
+- Show the dispatch queue summary and ask for approval to execute
 
 ## Agent Memory
 

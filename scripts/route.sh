@@ -92,6 +92,8 @@ log = {
 with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
     f.write(json.dumps(log) + '\n')
 " 2>/dev/null || true
+  # Senior developer standing permission — always free to dispatch any agent
+  echo "**[CAST]** No pattern matched. You are the senior developer — assess this prompt and dispatch any specialized agent (planner, debugger, code-reviewer, researcher, orchestrator, verifier, security, etc.) if it would improve the outcome. Do not handle complex tasks alone when a specialist exists."
   exit 0
 fi
 
