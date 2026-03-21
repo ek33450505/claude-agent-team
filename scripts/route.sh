@@ -24,6 +24,9 @@ except Exception:
 
 [ -z "$PROMPT" ] && exit 0
 
+# Export prompt for safe use in Python subshells (avoids string interpolation injection)
+export CAST_PROMPT="$PROMPT"
+
 # Skip internal Claude Code system messages (task-notifications, XML system messages)
 if echo "$PROMPT" | grep -qi "^<task-\|^<system-\|<task-id>\|task-notification"; then
   exit 0
@@ -35,7 +38,7 @@ if echo "$PROMPT" | grep -qi "^opus:"; then
 import json, datetime, os
 log = {
   'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
-  'prompt_preview': '''${PROMPT:0:80}''',
+  'prompt_preview': os.environ.get('CAST_PROMPT', '')[:80],
   'action': 'opus_escalation',
   'matched_route': 'opus',
   'command': None,
@@ -52,7 +55,7 @@ fi
 RESULT="$(python3 -c "
 import json, re, sys, os
 
-prompt = '''${PROMPT}'''
+prompt = os.environ.get('CAST_PROMPT', '')
 
 try:
     with open(os.path.expanduser('~/.claude/config/routing-table.json')) as f:
@@ -80,7 +83,7 @@ if [ -z "$RESULT" ]; then
 import json, datetime, os
 log = {
   'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
-  'prompt_preview': '''${PROMPT:0:80}''',
+  'prompt_preview': os.environ.get('CAST_PROMPT', '')[:80],
   'action': 'no_match',
   'matched_route': None,
   'command': None,
@@ -104,7 +107,7 @@ python3 -c "
 import json, datetime, os
 log = {
   'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
-  'prompt_preview': '''${PROMPT:0:80}''',
+  'prompt_preview': os.environ.get('CAST_PROMPT', '')[:80],
   'action': 'dispatched',
   'matched_route': '$AGENT',
   'command': '$COMMAND' if '$COMMAND' else None,
