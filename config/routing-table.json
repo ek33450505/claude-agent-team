@@ -1,7 +1,7 @@
 {
   "routes": [
     {
-      "patterns": ["write test", "add test", "tests for", "test coverage", "failing test", "vitest", "jest"],
+      "patterns": ["write.*test", "add.*test", "test.*for", "test coverage", "test.*fail|fail.*test", "vitest", "jest"],
       "agent": "test-writer",
       "command": "/test"
     },
