@@ -1,7 +1,7 @@
 #!/bin/bash
 # route.sh — UserPromptSubmit hook for agent routing
 # Input: JSON on stdin from Claude Code {prompt: str}
-# Output: JSON {"inject": "<hint>"} if matched, nothing if no match
+# Output: JSON {"additionalContext": "<hint>"} if matched, nothing if no match
 # Log: ~/.claude/routing-log.jsonl
 
 set -euo pipefail
@@ -38,7 +38,7 @@ log = {
 }
 with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
     f.write(json.dumps(log) + '\n')
-hint = json.dumps({'inject': '**[Router]** Opus escalation active. Using Opus for this message.'})
+hint = json.dumps({'additionalContext': '**[Router]** Opus escalation active. Using Opus for this message.'})
 print(hint)
 " 2>/dev/null || true
   exit 0
@@ -99,13 +99,13 @@ if [ "$AGENT" = "opus" ]; then
   python3 -c "
 import json
 hint = '**[Router]** Complexity signals detected. Before proceeding, ask the user: \"This looks like a complex task — would you like me to use Opus? (Prefix your next message with \`opus:\` to escalate.)\"'
-print(json.dumps({'inject': hint}))
+print(json.dumps({'additionalContext': hint}))
 " 2>/dev/null || true
 elif [ -n "$COMMAND" ]; then
   python3 -c "
 import json
 hint = '**[Router]** This prompt matches the \`$AGENT\` agent. Before answering directly, ask the user: \"This looks like a \`$COMMAND\` task — should I route it to the \`$AGENT\` agent? (It runs on a cheaper model and keeps the main session clean.)\"'
-print(json.dumps({'inject': hint}))
+print(json.dumps({'additionalContext': hint}))
 " 2>/dev/null || true
 fi
 
