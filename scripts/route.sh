@@ -38,9 +38,8 @@ log = {
 }
 with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
     f.write(json.dumps(log) + '\n')
-hint = json.dumps({'additionalContext': '**[Router]** Opus escalation active. Using Opus for this message.'})
-print(hint)
 " 2>/dev/null || true
+  echo '**[Router]** Opus escalation active. Using Opus for this message.'
   exit 0
 fi
 
@@ -94,19 +93,11 @@ with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
     f.write(json.dumps(log) + '\n')
 " 2>/dev/null || true
 
-# Build and output inject hint
+# Output routing hint as plain text (stdout is added to Claude's context)
 if [ "$AGENT" = "opus" ]; then
-  python3 -c "
-import json
-hint = '**[Router]** Complexity signals detected. Before proceeding, ask the user: \"This looks like a complex task — would you like me to use Opus? (Prefix your next message with \`opus:\` to escalate.)\"'
-print(json.dumps({'additionalContext': hint}))
-" 2>/dev/null || true
+  echo '**[Router]** Complexity signals detected. Before proceeding, ask the user: "This looks like a complex task — would you like me to use Opus? (Prefix your next message with `opus:` to escalate.)"'
 elif [ -n "$COMMAND" ]; then
-  python3 -c "
-import json
-hint = '**[Router]** This prompt matches the \`$AGENT\` agent. Before answering directly, ask the user: \"This looks like a \`$COMMAND\` task — should I route it to the \`$AGENT\` agent? (It runs on a cheaper model and keeps the main session clean.)\"'
-print(json.dumps({'additionalContext': hint}))
-" 2>/dev/null || true
+  echo "**[Router]** This prompt matches the \`$AGENT\` agent. Before answering directly, ask the user: \"This looks like a \`$COMMAND\` task — should I route it to the \`$AGENT\` agent? (It runs on a cheaper model and keeps the main session clean.)\""
 fi
 
 exit 0
