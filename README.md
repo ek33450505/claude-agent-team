@@ -1,22 +1,189 @@
 # CAST — Claude Agent System & Team
 
-**A production-grade Claude Code framework with 24 specialized agents, 24 slash commands, 9 skills, automatic agent routing, and a 3-hook safety system.**
+**An AI-enforced software development process embedded at the Claude Code infrastructure layer.**
 
-Install in 3 commands. Customize in 10 minutes. CAST transforms how you use Claude Code across 3 layers: **Agents** (24 specialists) → **Intelligence** (automatic routing) → **Visibility** (companion dashboard).
+CAST turns Claude Code from a conversational assistant into an orchestrated team with automatic routing, chain execution, and hard enforcement — all through config files, shell scripts, and markdown. No application code. No runtime server.
 
 ```
-24 Agents  |  24 Commands  |  9 Skills  |  Agent Router  |  3 Hooks  |  3 Rules
+git clone https://github.com/ek33450505/claude-agent-team.git
+cd claude-agent-team
+bash install.sh
+```
+
+> **[Interactive Architecture Diagram](https://gistpreview.github.io/?318b393bdb8cf26b18ce66334bcafc91)**
+
+---
+
+## The Problem
+
+Claude Code out of the box is a generalist. It will write tests, do code review, plan features, and commit changes — but you have to remember to ask. You have to know which specialist to invoke, type the right command, and manually chain follow-up steps.
+
+CAST intercepts that loop at the infrastructure layer. Type naturally. The right agent fires. When that agent finishes, the next one in the chain fires automatically.
+
+---
+
+## How It Works: 3 Layers
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Layer 1 — Agents                                        │
+│  24 specialists. Each has a defined role, model          │
+│  assignment, and persistent per-agent memory.            │
+│                                                          │
+│  planner  debugger  security  commit  test-writer  +19   │
+└──────────────────┬───────────────────────────────────────┘
+                   │ dispatched by
+┌──────────────────▼───────────────────────────────────────┐
+│  Layer 2 — Intelligence (this repo)                      │
+│  route.sh: UserPromptSubmit hook intercepts every prompt │
+│  routing-table.json: 13 routes → agent + post_chain      │
+│  git-commit-intercept.sh: PreToolUse hard block          │
+│                                                          │
+│  "fix this bug" → debugger → code-reviewer → commit      │
+└──────────────────┬───────────────────────────────────────┘
+                   │ visualized by
+┌──────────────────▼───────────────────────────────────────┐
+│  Layer 3 — Visibility (claude-code-dashboard)            │
+│  Real-time routing events, miss-rate tracking,           │
+│  dispatch stats, session replay, cost analytics          │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## What This Is
+## Layer 2: The Routing System
 
-Claude Code ships with powerful built-in tools, but out of the box it's a generalist. This framework turns it into an **orchestrated team of specialists** — a planner that architects before you code, a debugger that investigates before it guesses, a security reviewer that catches OWASP issues, a TDD guide that enforces red-green-refactor, and 19 more.
+This is the differentiator. Everything else — agents, commands, memory — exists in other frameworks. The routing system does not.
 
-Every agent has a defined role, model assignment (sonnet or haiku), and trigger conditions. Slash commands route to agents. Skills chain multi-step workflows. Hooks enforce quality gates automatically. The result: Claude Code that works the way a senior engineering team works — with specialization, process, and memory.
+### What fires on every prompt
 
-> **[Interactive Architecture Diagram](https://gistpreview.github.io/?318b393bdb8cf26b18ce66334bcafc91)** — explore the full 5-layer system visually
+A `UserPromptSubmit` hook calls `route.sh` before Claude sees your message. The script:
+
+1. Reads the routing table from `~/.claude/config/routing-table.json`
+2. Matches your prompt against regex patterns using Python's `re` module (no external dependencies)
+3. If matched: injects a direct dispatch instruction into Claude's context
+4. Logs every decision — matched route, pattern, timestamp, prompt preview — to `~/.claude/routing-log.jsonl`
+
+The instruction Claude receives is not a suggestion. It reads:
+
+```
+**[Router]** Dispatch to `debugger` agent now using the Agent tool
+(subagent_type: 'debugger'). Do NOT ask the user first — invoke the
+agent immediately with the user's prompt as the task.
+
+**[Router - Chain]** After the agent completes, continue the chain:
+`code-reviewer` agent → `commit` agent. Invoke each agent in sequence
+when the previous one finishes.
+```
+
+### What a routing decision looks like
+
+You type: `"why is this function failing with a TypeError"`
+
+```jsonl
+{
+  "timestamp": "2026-03-21T19:42:11Z",
+  "prompt_preview": "why is this function failing with a TypeError",
+  "action": "dispatched",
+  "matched_route": "debugger",
+  "command": "/debug",
+  "pattern": "why.*failing"
+}
+```
+
+Claude dispatches `debugger` (Sonnet). When it finishes, `code-reviewer` (Haiku) runs automatically. When that finishes, `commit` (Haiku) runs. You typed one sentence. Three agents executed in sequence.
+
+### The 13 routes
+
+All patterns live in `config/routing-table.json`. Edit them freely.
+
+| Patterns (examples) | Agent | Post-chain |
+|---|---|---|
+| `fix.*bug`, `debug`, `why.*failing`, `stack trace` | `debugger` | `code-reviewer` → `commit` |
+| `write.*test`, `test coverage`, `vitest`, `jest` | `test-writer` | `commit` |
+| `review.*code`, `code review`, `check.*changes` | `code-reviewer` | `commit` |
+| `plan.*implement`, `how.*should.*build`, `architect` | `planner` | auto-dispatch-from-manifest |
+| `refactor`, `dead code`, `clean up`, `unused import` | `refactor-cleaner` | `code-reviewer` → `commit` |
+| `write.*docs`, `update.*readme`, `add.*jsdoc` | `doc-updater` | `commit` |
+| `security.*review`, `owasp`, `sql injection`, `xss` | `security` | — |
+| `e2e test`, `playwright`, `end.to.end` | `e2e-runner` | — |
+| `build.*error`, `typescript error`, `eslint.*error` | `build-error-resolver` | `commit` |
+| `research`, `compare.*librar`, `evaluate.*tool` | `researcher` | — |
+| `morning briefing`, `daily briefing`, `my schedule` | `morning-briefing` | — |
+| `slide deck`, `create.*presentation` | `presenter` | — |
+| `^commit$`, `git commit`, `stage and commit` | `commit` | — |
+
+Unmatched prompts log `"action": "no_match"`. When miss-rate exceeds 20%, the `router` agent (Phase 2 — Haiku LLM classifier) activates to handle the gap.
+
+### Opus escalation
+
+Prefix any message with `opus:` to bypass routing for that message:
+
+```
+opus: design the entire authentication system from scratch
+```
+
+Complexity signals (`"design the entire"`, `"analyze the whole codebase"`, `"system design"`) also trigger Opus escalation automatically.
+
+---
+
+## Post-Plan Auto-Dispatch
+
+When the `planner` agent matches (e.g., `"plan this feature"`), the post-chain is `auto-dispatch-from-manifest`. This triggers a different behavior.
+
+The planner writes a structured plan file to `~/.claude/plans/`. At the bottom of that plan file is an **Agent Dispatch Manifest**:
+
+```markdown
+## Agent Dispatch Manifest
+
+### Batch 1 (parallel — independent tasks)
+- test-writer: src/api/auth.js
+- doc-updater: README.md
+
+### Batch 2 (after Batch 1)
+- code-reviewer: all modified files
+- commit: staged changes
+```
+
+After the planner completes, `route.sh` instructs Claude to:
+
+1. Read the plan file
+2. Find the `## Agent Dispatch Manifest` section
+3. Present the queue to you: "Here are the agents queued. Approve to execute."
+4. On approval — execute all batches, parallelizing within each batch
+
+One approval. Multiple agents execute automatically.
+
+---
+
+## Hard Enforcement: git-commit-intercept.sh
+
+`route.sh` routes soft — it injects instructions, which Claude follows. `git-commit-intercept.sh` enforces hard.
+
+This `PreToolUse` hook intercepts every `Bash` tool call before execution. If the command contains `git commit` and does not carry the `CAST_COMMIT_AGENT=1` escape hatch, the hook blocks it with exit code 2:
+
+```
+**[CAST PreToolUse]** Raw git commit blocked. Use the commit agent
+instead (Agent tool, subagent_type: 'commit'). Stage files with
+git add first, then delegate to the commit agent.
+```
+
+The commit agent uses `CAST_COMMIT_AGENT=1 git commit ...` internally. Claude cannot bypass this. The only path to a committed change is through the commit agent, which enforces semantic messages and checks staged content.
+
+---
+
+## Three Enforcement Tiers
+
+```
+CLAUDE.md rules        →  Advisory ("Use planner before any non-trivial change")
+route.sh               →  Behavioral (injects dispatch instructions Claude follows)
+git-commit-intercept   →  Hard block (exit 2 — the tool call never executes)
+```
+
+Each tier handles a different failure mode:
+- CLAUDE.md catches cases where Claude might otherwise skip process
+- route.sh catches cases where you didn't type the right command
+- The PreToolUse hook catches cases where Claude tries to shortcut past the commit agent
 
 ---
 
@@ -28,259 +195,257 @@ cd claude-agent-team
 bash install.sh
 ```
 
-The installer gives you three options:
+The installer offers three options:
 
 | Option | What you get |
 |---|---|
-| **Full install** | All 24 agents, 24 commands, 9 skills, scripts, rules, hooks |
+| **Full install** | 24 agents, 25 commands, 9 skills, 3 scripts, 3 rules, hooks |
 | **Core only** | 8 essential agents + their commands (minimal, portable) |
-| **Custom** | Pick categories: core, extended, productivity, professional, macOS skills |
+| **Custom** | Choose categories: core, extended, productivity, professional, macOS skills |
 
-After install, edit 3 files to personalize:
+The installer backs up your existing `~/.claude/` before copying anything.
+
+After install, personalize 3 files:
+
 1. `~/.claude/config.sh` — your project directories
 2. `~/.claude/rules/stack-context.md` — your tech stack
 3. `~/.claude/rules/project-catalog.md` — your projects
 
----
-
-## Agent Router — Automatic Command Routing
-
-> The only Claude Code framework with automatic agent routing. Never forget which command to type.
-
-Claude Agent Team ships a **hook-based routing system** that intercepts every prompt and suggests the right slash command — so you don't have to remember when to use `/test` vs `/debug` vs `/commit`.
-
-### How it works
-
-A `UserPromptSubmit` hook fires on every message. Your prompt is matched against `routing-table.json`. If it matches a known pattern, CAST dispatches the right agent directly — no command needed:
-
-> "run playwright tests" → CAST dispatches `e2e-runner` automatically
-> "typescript error in my build" → CAST dispatches `build-error-resolver` (Haiku, ~$0.001)
-
-Every routing decision is logged to `~/.claude/routing-log.jsonl` for dashboard visualization.
-
-### Routing table
-
-Patterns live in `~/.claude/config/routing-table.json` — edit freely to match your workflow:
-
-| Pattern triggers | Routes to | Command |
-|---|---|---|
-| "write test", "test coverage", "jest", "vitest" | `test-writer` | `/test` |
-| "commit", "git commit", "stage and commit" | `commit` | `/commit` |
-| "error", "stack trace", "failing", "unexpected" | `debugger` | `/debug` |
-| "review my", "check this code", "look at my changes" | `code-reviewer` | `/review` |
-| "plan this", "how should I implement", "break this down" | `planner` | `/plan` |
-| "refactor", "dead code", "cleanup", "unused imports" | `refactor-cleaner` | `/refactor` |
-| "security", "vulnerability", "owasp" | `security` | `/secure` |
-| "docs", "readme", "jsdoc" | `doc-updater` | `/docs` |
-| "research", "compare", "evaluate" | `researcher` | `/research` |
-
-### Opus escalation
-
-Prefix any message with `opus:` to bypass routing and use Claude Opus for that message:
-
-```
-opus: design the entire authentication system from scratch
-```
-
-Complex prompts are also auto-detected (multi-system architecture, security design, etc.).
-
-### Phase 2: LLM classifier
-
-The `router` agent (Haiku, `maxTurns: 1`) is the Phase 2 upgrade — when a prompt doesn't match any pattern, it classifies the intent and returns a confidence score. High-confidence matches dispatch silently. Activation is triggered automatically when routing miss-rate (tracked in `routing-log.jsonl`) exceeds 20%.
-
----
-
-## How CAST Compares
-
-| | CAST | NanoClaw v2 | Ruflo v3 |
-|---|---|---|---|
-| Hook-based routing | ✅ | ✅ | ✅ |
-| Auto-dispatch (not ask-first) | ✅ Phase 2 | ❌ | ✅ |
-| Visibility dashboard | ✅ companion app | ❌ | ❌ |
-| Agent quality rubric | ✅ scored, public | ❌ | ❌ |
-| One-command install | ✅ | ✅ | ❌ |
-| Open source | MIT | MIT | Proprietary |
-
-**CAST's differentiator:** You can see what the system is doing (dashboard), agents meet a documented quality bar (rubric), and the install is one command (install.sh). NanoClaw v2 and Ruflo are the closest comparisons — both do hook routing, neither has a visual observability layer.
-
----
-
-## Architecture
-
-```
-                        ┌─────────────────────┐
-                        │     YOU (Layer 1)    │
-                        │  Natural language,   │
-                        │  /commands, skills   │
-                        └─────────┬───────────┘
-                                  │
-                        ┌─────────▼───────────┐
-                        │  CLAUDE.md (Layer 2) │
-                        │  Context injection,  │
-                        │  routing decisions   │
-                        └─────────┬───────────┘
-                                  │
-              ┌───────────────────┼───────────────────┐
-              │                   │                   │
-    ┌─────────▼─────┐  ┌─────────▼─────┐  ┌─────────▼─────┐
-    │   Commands    │  │    Skills     │  │    Rules      │
-    │   (Layer 3)   │  │   (Layer 3)   │  │   (Layer 3)   │
-    │  24 dispatch  │  │  9 reusable   │  │  3 always-on  │
-    │   wrappers    │  │  procedures   │  │   context     │
-    └───────┬───────┘  └───────┬───────┘  └───────────────┘
-            │                  │
-            └────────┬─────────┘
-                     │
-           ┌─────────▼───────────┐
-           │   Agents (Layer 4)  │
-           │  24 specialists     │
-           │  sonnet + haiku     │
-           └─────────┬───────────┘
-                     │
-           ┌─────────▼───────────┐
-           │  Memory (Layer 5)   │
-           │  2-layer persistent │
-           │  + output dirs      │
-           └─────────────────────┘
-```
+Then merge `settings.template.json` into your `~/.claude/settings.local.json` to activate the hooks.
 
 ---
 
 ## Agent Roster
 
-### Core Agents (8) — always installed
+### Core (8) — always installed
 
-| Agent | Model | Slash Command | When to use |
+| Agent | Model | Command | Role |
 |---|---|---|---|
-| `planner` | sonnet | `/plan` | Starting any new feature, refactor, or complex change |
-| `debugger` | sonnet | `/debug` | Any error, test failure, or unexpected behavior |
-| `test-writer` | sonnet | `/test` | After writing or modifying code; when coverage is needed |
-| `code-reviewer` | haiku | `/review` | Immediately after writing or modifying code |
-| `data-scientist` | sonnet | `/data` | Data analysis tasks, SQL queries, BigQuery exploration |
-| `db-reader` | haiku | `/query` | Read-only DB queries (SELECT only — writes blocked at hook level) |
-| `commit` | haiku | `/commit` | Creating semantic git commits |
-| `security` | sonnet | `/secure` | Security review, OWASP, secrets scanning |
+| `planner` | Sonnet | `/plan` | Converts requests into ordered task plans with dispatch manifest |
+| `debugger` | Sonnet | `/debug` | Investigates errors, stack traces, unexpected behavior |
+| `test-writer` | Sonnet | `/test` | Writes Jest/Vitest/RTL tests with coverage |
+| `code-reviewer` | Haiku | `/review` | Code review focused on readability and correctness |
+| `security` | Sonnet | `/secure` | OWASP review, secrets scanning, vulnerability analysis |
+| `data-scientist` | Sonnet | `/data` | SQL queries, BigQuery analysis, data exploration |
+| `db-reader` | Haiku | `/query` | Read-only DB queries — writes blocked at tool level |
+| `commit` | Haiku | `/commit` | Semantic commit messages, staged content verification |
 
-### Extended Agents (8)
+### Extended (8)
 
-| Agent | Model | Slash Command | When to use |
+| Agent | Model | Command | Role |
 |---|---|---|---|
-| `architect` | sonnet | `/architect` | System design, ADRs, module boundaries, trade-off analysis |
-| `tdd-guide` | sonnet | `/tdd` | Red-green-refactor TDD workflow (complements test-writer) |
-| `build-error-resolver` | haiku | `/build-fix` | Fix Vite/CRA/TS/ESLint build errors with minimal diffs |
-| `e2e-runner` | sonnet | `/e2e` | Playwright E2E tests for React apps |
-| `refactor-cleaner` | haiku | `/refactor` | Dead code, unused imports, dependency cleanup |
-| `doc-updater` | haiku | `/docs` | README, changelog, JSDoc updates |
-| `readme-writer` | sonnet | `/readme` | Audit and rewrite READMEs for accuracy and positioning |
-| `router` | haiku | — | Phase 2 LLM classifier — routes ambiguous prompts to the right agent |
+| `architect` | Sonnet | `/architect` | System design, ADRs, module boundaries |
+| `tdd-guide` | Sonnet | `/tdd` | Red-green-refactor TDD workflow |
+| `build-error-resolver` | Haiku | `/build-fix` | Vite/CRA/TS/ESLint build errors, minimal diffs |
+| `e2e-runner` | Sonnet | `/e2e` | Playwright E2E tests with stack auto-discovery |
+| `refactor-cleaner` | Haiku | `/refactor` | Dead code, unused imports, dependency cleanup |
+| `doc-updater` | Haiku | `/docs` | README, changelog, JSDoc — diff preview workflow |
+| `readme-writer` | Sonnet | `/readme` | Full README audit against codebase, rewrite |
+| `router` | Haiku | — | Phase 2 LLM classifier for unmatched prompts |
 
-### Productivity Agents (5)
+### Productivity (5)
 
-| Agent | Model | Slash Command | When to use |
+| Agent | Model | Command | Role |
 |---|---|---|---|
-| `researcher` | sonnet | `/research` | Technical research, tool/library evaluation, comparisons |
-| `report-writer` | haiku | `/report` | Status reports, sprint summaries, stakeholder updates |
-| `meeting-notes` | haiku | `/meeting` | Process meeting notes, extract action items and decisions |
-| `email-manager` | sonnet | `/email` | Email triage, drafting, inbox summary (macOS + Outlook) |
-| `morning-briefing` | sonnet | `/morning` | Daily briefing: calendar + email + reminders + git + action items |
+| `researcher` | Sonnet | `/research` | Tool/library evaluation, technical comparisons |
+| `report-writer` | Haiku | `/report` | Status reports, sprint summaries |
+| `meeting-notes` | Haiku | `/meeting` | Extract action items and decisions from notes |
+| `email-manager` | Sonnet | `/email` | Email triage and drafting (macOS + Outlook) |
+| `morning-briefing` | Sonnet | `/morning` | Calendar + email + reminders + git activity briefing |
 
-### Professional Agents (3)
+### Professional (3)
 
-| Agent | Model | Slash Command | When to use |
+| Agent | Model | Command | Role |
 |---|---|---|---|
-| `browser` | sonnet | `/browser` | Browser automation, form filling, screenshots, web scraping |
-| `qa-reviewer` | sonnet | `/qa` | Second-opinion QA review focused on functional correctness |
-| `presenter` | sonnet | `/present` | Slide decks, status presentations, demo materials |
+| `browser` | Sonnet | `/browser` | Browser automation, screenshots, web scraping |
+| `qa-reviewer` | Sonnet | `/qa` | Second-opinion QA focused on functional correctness |
+| `presenter` | Sonnet | `/present` | Slide decks, status presentations |
 
-### Standalone Command
+### Standalone commands
 
-| Command | Purpose |
-|---|---|
-| `/eval` | Evaluator-optimizer loop — dispatches a reviewer agent, fixes critical issues, re-evaluates (max 2x) |
+`/help` — lists all installed agents with model, trigger conditions, and routing examples.
+`/eval` — evaluator-optimizer loop: dispatch reviewer, fix critical issues, re-evaluate (max 2x).
 
 ---
 
 ## Skills
 
-Skills are reusable procedures that agents invoke — multi-step workflows packaged as prompts.
+Skills are reusable multi-step procedures that agents invoke as sub-workflows.
 
-| Skill | Type | Purpose |
+| Skill | Platform | Purpose |
 |---|---|---|
-| `calendar-fetch` | Data fetch | Fetch today's calendar from Outlook (macOS only) |
-| `inbox-fetch` | Data fetch | Fetch unread emails from Outlook (macOS only) |
-| `reminders-fetch` | Data fetch | Fetch due reminders from Apple Reminders (macOS only) |
-| `git-activity` | Data fetch | Scan project repos for yesterday's commits |
-| `action-items` | Data fetch | Find unchecked action items from meeting notes |
-| `briefing-writer` | Composer | Assemble morning briefing from all data sources |
-| `careful-mode` | Safety mode | Require confirmation before every Write, Edit, Bash |
-| `freeze-mode` | Safety mode | Read-only session — no file modifications |
-| `wizard` | Approval gate | Human-approval gates before destructive operations |
+| `calendar-fetch` | macOS + Outlook | Fetch today's calendar |
+| `inbox-fetch` | macOS + Outlook | Fetch unread emails |
+| `reminders-fetch` | macOS | Fetch due Apple Reminders |
+| `git-activity` | All | Scan project repos for recent commits |
+| `action-items` | All | Find unchecked items from meeting notes |
+| `briefing-writer` | All | Assemble morning briefing from all data sources |
+| `careful-mode` | All | Require confirmation before every Write, Edit, Bash |
+| `freeze-mode` | All | Read-only session — no file modifications |
+| `wizard` | All | Human-approval gates before destructive operations |
 
 ---
 
 ## Hooks
 
-Three lifecycle hooks — two quality gates and the agent router:
-
-| Hook | Trigger | Action |
-|---|---|---|
-| **UserPromptSubmit** | Before every message | Runs `route.sh` — matches prompt against routing table, injects agent suggestion if matched, logs decision |
-| **PostToolUse** | After any `Write` or `Edit` | Runs `auto-format.sh` (Prettier if configured) |
-| **Stop** | Before Claude completes a response | Nudge: "if code was modified but no tests were run, suggest running them" |
+| Hook | Trigger | Script | What it does |
+|---|---|---|---|
+| `UserPromptSubmit` | Before every message | `route.sh` | Pattern match → agent dispatch + chain injection + routing log |
+| `PreToolUse` | Before any Bash call | `git-commit-intercept.sh` | Block raw `git commit`, redirect to commit agent |
+| `PostToolUse` | After Write or Edit | `auto-format.sh` | Run Prettier if configured |
+| `Stop` | Before response completes | (prompt) | Nudge: if code changed but tests not run, suggest running them |
 
 ---
 
-## Memory Architecture
+## Memory
 
 | Layer | Location | Purpose |
 |---|---|---|
-| **Project memory** | `~/.claude/projects/*/memory/` | Per-project context that persists across sessions |
-| **Agent memory** | `~/.claude/agent-memory-local/` | Each agent learns and stores patterns independently |
+| Project memory | `~/.claude/projects/*/memory/` | Per-project context across sessions |
+| Agent memory | `~/.claude/agent-memory-local/` | Each agent stores learned patterns independently |
 
-### Output Directories
+Output directories under `~/.claude/`: `briefings/`, `meetings/`, `reports/`, `plans/`.
 
-All generated output stays within `~/.claude/`:
+---
 
-| Directory | Purpose |
+## Data Flow Examples
+
+### Debug session
+
+```
+You: "why is this failing with a TypeError"
+      ↓
+route.sh matches "why.*failing" → debugger
+      ↓
+[Router] Dispatch to debugger now. After completion:
+  chain: code-reviewer → commit
+      ↓
+debugger (Sonnet) investigates, proposes fix
+      ↓
+code-reviewer (Haiku) reviews the fix
+      ↓
+commit (Haiku) writes semantic commit message, commits
+```
+
+### Planning + auto-dispatch
+
+```
+You: "plan implementing OAuth2 login"
+      ↓
+route.sh matches "plan.*implement" → planner, post_chain: auto-dispatch-from-manifest
+      ↓
+planner (Sonnet) reads codebase, writes plan to ~/.claude/plans/2026-03-21-oauth2-login.md
+      ↓
+[Router - Chain] Reads plan, finds ## Agent Dispatch Manifest section
+      ↓
+"Agent queue:
+  Batch 1 (parallel): test-writer, doc-updater
+  Batch 2: code-reviewer → commit
+  Approve to execute? [y/n]"
+      ↓
+You: y
+      ↓
+Batch 1: test-writer + doc-updater run in parallel
+Batch 2: code-reviewer runs, then commit runs
+```
+
+### Morning briefing
+
+```
+You: "what's on today"
+      ↓
+route.sh matches "what.*on.*today" → morning-briefing
+      ↓
+morning-briefing invokes 5 skills in parallel:
+  calendar-fetch, inbox-fetch, reminders-fetch, git-activity, action-items
+      ↓
+briefing-writer assembles output
+      ↓
+Saved to ~/.claude/briefings/2026-03-21.md
+```
+
+---
+
+## What's in This Repo
+
+```
+claude-agent-team/
+├── install.sh                        # Interactive installer (full / core / custom)
+├── CLAUDE.md.template                # Global context — fill in your projects + stack
+├── config.sh.template                # Shared project paths for skills and scripts
+├── settings.template.json            # Hooks + sandbox config (merge into settings.local.json)
+├── settings.template.jsonc           # Same with inline comments
+│
+├── scripts/
+│   ├── route.sh                      # UserPromptSubmit hook — regex routing + chain injection
+│   ├── git-commit-intercept.sh       # PreToolUse hook — hard-blocks raw git commit
+│   └── auto-format.sh                # PostToolUse hook — Prettier on Write/Edit
+│
+├── config/
+│   └── routing-table.json            # 13 routes: patterns → agent + post_chain arrays
+│
+├── agents/
+│   ├── core/          (8 agents)
+│   ├── extended/      (8 agents)
+│   ├── productivity/  (5 agents)
+│   └── professional/  (3 agents)
+│
+├── commands/          (25 commands)  # One .md per slash command
+│
+├── skills/            (9 skills)     # Each in its own subdirectory with SKILL.md
+│   ├── calendar-fetch/               # macOS + Outlook
+│   ├── inbox-fetch/                  # macOS + Outlook
+│   ├── reminders-fetch/              # macOS
+│   ├── git-activity/
+│   ├── action-items/
+│   ├── briefing-writer/
+│   ├── careful-mode/
+│   ├── freeze-mode/
+│   └── wizard/
+│
+├── rules/
+│   ├── working-conventions.md        # Quality standards (copy verbatim)
+│   ├── stack-context.md.template     # Your tech stack
+│   └── project-catalog.md.template  # Your projects
+│
+└── docs/
+    └── agent-quality-rubric.md       # 5-dimension scoring sheet for all 22 scored agents
+```
+
+---
+
+## Agent Quality Rubric
+
+Every agent is scored across 5 dimensions (1-5 each, 25 max):
+
+| Dimension | Score 5 means |
 |---|---|
-| `~/.claude/briefings/` | Morning briefing output |
-| `~/.claude/meetings/` | Processed meeting notes |
-| `~/.claude/reports/` | Generated reports |
-| `~/.claude/plans/` | Implementation plans |
+| Role Clarity | Explicit "I do NOT do X" boundary statements |
+| Workflow Specificity | Numbered steps with concrete commands and file paths |
+| Output Format | Exact output template with example — copy-paste ready |
+| Error Handling | Named failure modes with explicit fallback for each |
+| Tool Discipline | Minimal tool set; `disallowedTools` blocks writes for read-only agents |
+
+Top-scoring agents: `planner` (24/25), `debugger` (24/25), `security` (23/25), `doc-updater` (23/25), `e2e-runner` (23/25). Full rubric: `docs/agent-quality-rubric.md`.
 
 ---
 
-## Data Flow Patterns
+## Platform Notes
 
-### Simple Code Review (`/review` with 2 files)
-```
-You → /review → Main Agent → code-reviewer (haiku) → Summary
-```
+Most of CAST is cross-platform. macOS-only features:
 
-### Large Review (`/review` with 12+ files)
-```
-You → /review → Main Agent ─┬→ code-reviewer (readability)
-                             ├→ security (OWASP)
-                             └→ qa-reviewer (correctness)
-                                      ↓
-                              Synthesized report
-```
+| Feature | Requirement | Linux/WSL |
+|---|---|---|
+| `calendar-fetch` | macOS + Outlook | Skipped — stub returns "unavailable" |
+| `inbox-fetch` | macOS + Outlook | Skipped — stub returns "unavailable" |
+| `reminders-fetch` | macOS | Section omitted from briefing |
+| `email-manager` | macOS + Outlook | Installed but AppleScript calls will fail |
 
-### Morning Briefing (`/morning`)
-```
-You → /morning → morning-briefing ─→ 5 skills (calendar, inbox, reminders, git, action-items)
-                                   ─→ briefing-writer
-                                   ─→ ~/.claude/briefings/YYYY-MM-DD.md
-```
-
-### Evaluator-Optimizer (`/eval`)
-```
-You → /eval → Identify artifact → Dispatch reviewer → Critical? → Fix & re-evaluate (max 2x) → Report
-```
+The installer detects your platform and skips macOS-only skills automatically. Morning briefings on Linux still work — `git-activity` and `action-items` run on all platforms.
 
 ---
 
-## Customization Guide
+## Customization
 
 ### Add your projects
 
@@ -290,147 +455,65 @@ PROJECTS=(
   "$HOME/Projects/your-app"
   "$HOME/Projects/your-api"
 )
-
-declare -A PROJECT_NAMES=(
-  [your-app]="My App"
-  [your-api]="My API"
-)
 ```
 
 ### Define your tech stack
 
-Edit `~/.claude/rules/stack-context.md` — describe your languages, frameworks, testing tools, and build systems. Agents reference this to give stack-aware advice.
+Edit `~/.claude/rules/stack-context.md`. Agents read this file to give stack-specific advice. Describe your languages, frameworks, test tools, and build systems.
 
 ### Add your own agents
 
-Create a markdown file in `~/.claude/agents/`:
+Create `~/.claude/agents/my-agent.md`:
 ```markdown
 ---
 name: my-agent
-description: What this agent does
-tools: Read, Write, Edit, Bash, Glob, Grep
+description: What this agent does and when to use it
+tools: Read, Write, Edit, Glob, Grep
 model: sonnet
 ---
 
-You are a specialist in [domain]. Your role is to...
+You are a specialist in [domain]...
 ```
 
-Then create a matching command in `~/.claude/commands/`:
-```markdown
----
-description: Dispatch to my-agent
----
-
-Use the `my-agent` agent for: $ARGUMENTS
+Add a routing pattern in `~/.claude/config/routing-table.json`:
+```json
+{
+  "patterns": ["your trigger phrase"],
+  "agent": "my-agent",
+  "command": "/my-command",
+  "post_chain": ["commit"]
+}
 ```
 
-### Merge settings
+### Extend the routing table
 
-Review `~/.claude/settings.template.json` and merge the hooks and sandbox config into your existing `~/.claude/settings.local.json`. The companion `.jsonc` file has comments explaining each section.
+Every route supports `post_chain` — an array of agent names to execute in sequence after the primary agent finishes. Set it to `null` for agents that terminate the chain.
 
----
-
-## Platform Notes
-
-Most of this framework is cross-platform. The following features require **macOS**:
-
-| Feature | Requirement | Linux/WSL behavior |
-|---|---|---|
-| `calendar-fetch` skill | macOS + Microsoft Outlook | Skipped; stub returns "unavailable" note |
-| `inbox-fetch` skill | macOS + Microsoft Outlook | Skipped; stub returns "unavailable" note |
-| `reminders-fetch` skill | macOS | Skipped; section omitted from briefing |
-| `email-manager` agent | macOS + Thunderbird or Outlook | Agent installed but AppleScript calls will fail |
-
-**On Linux/WSL:** The installer auto-detects your platform and skips macOS-only skills. Morning briefings still work — `git-activity` and `action-items` run on all platforms.
-
-These are clearly marked as optional during install.
+The special value `["auto-dispatch-from-manifest"]` tells `route.sh` to read the plan file after the planner finishes and present a batch execution queue for approval.
 
 ---
 
-## What's Included
+## Companion: Claude Code Dashboard
+
+CAST generates structured data that the **[Claude Code Dashboard](https://github.com/ek33450505/claude-code-dashboard)** visualizes in real time.
 
 ```
-claude-agent-team/
-├── README.md
-├── LICENSE (MIT)
-├── install.sh                        # Interactive 3-option installer
-├── config.sh.template                # Project directories (you fill in)
-├── CLAUDE.md.template                # Global context file (you fill in)
-├── settings.template.json            # Hooks + sandbox config
-├── settings.template.jsonc           # Same, with comments
-│
-├── agents/
-│   ├── core/          (8 agents)     # planner, debugger, test-writer, code-reviewer,
-│   │                                 # data-scientist, db-reader, commit, security
-│   ├── extended/      (8 agents)     # architect, tdd-guide, build-error-resolver,
-│   │                                 # e2e-runner, refactor-cleaner, doc-updater, readme-writer, router
-│   ├── productivity/  (5 agents)     # researcher, report-writer, meeting-notes,
-│   │                                 # email-manager, morning-briefing
-│   └── professional/  (3 agents)     # browser, qa-reviewer, presenter
-│
-├── commands/          (24 commands)   # Flat — one .md per slash command
-│
-├── skills/            (9 skills)     # Each in its own subdirectory
-│   ├── calendar-fetch/SKILL.md       # macOS + Outlook
-│   ├── inbox-fetch/SKILL.md          # macOS + Outlook
-│   ├── reminders-fetch/SKILL.md      # macOS
-│   ├── git-activity/SKILL.md
-│   ├── action-items/SKILL.md
-│   ├── briefing-writer/SKILL.md
-│   ├── careful-mode/SKILL.md
-│   ├── freeze-mode/SKILL.md
-│   ├── wizard/SKILL.md
-│   ├── calendar-fetch-linux/SKILL.md  # Linux stub (auto-detected)
-│   └── inbox-fetch-linux/SKILL.md     # Linux stub (auto-detected)
-│
-├── scripts/
-│   ├── auto-format.sh                # PostToolUse hook target
-│   ├── route.sh                      # UserPromptSubmit hook — agent routing
-│   └── tidy.sh.template              # Cleanup script (you configure paths)
-│
-├── config/
-│   └── routing-table.json            # Pattern → agent mappings (editable)
-│
-└── rules/
-    ├── working-conventions.md        # Quality standards (copy verbatim)
-    ├── stack-context.md.template     # Your tech stack (you fill in)
-    └── project-catalog.md.template   # Your projects (you fill in)
+CAST                          Claude Code Dashboard
+────────────────              ────────────────────────────────
+~/.claude/agents/         →   Agent roster, model badges, quality scores
+~/.claude/routing-log.jsonl → Live routing feed, miss-rate chart, dispatch stats
+~/.claude/plans/          →   Plan history, dispatch manifest viewer
+~/.claude/briefings/      →   Productivity output feed
 ```
 
----
-
-## Companion: Claude Dashboard
-
-This framework pairs with **[Claude Dashboard](https://github.com/ek33450505/claude-code-dashboard)** — a memory architecture visualizer that reads everything this repo installs and renders it as a live control panel.
-
-```
-┌─────────────────────────────┐     ┌─────────────────────────────┐
-│   Claude Agent Team         │     │   Claude Dashboard          │
-│                             │     │                             │
-│   24 agents, 24 commands,   │     │   Agent roster & memory     │
-│   9 skills, hooks, rules    │────▶│   Model/category analytics  │
-│                             │     │   Hookify rule status       │
-│   Orchestration layer       │     │   Productivity output feed  │
-│   (config, no runtime)      │     │   Plugin ecosystem viewer   │
-└─────────────────────────────┘     │   Routing feed (live routing events)│
-          ~/.claude/                │   Model badges (Sonnet/Haiku/Opus)  │
-          ~/.claude/                │                             │
-                                    │   React 19 + Vite + Recharts│
-                                    └─────────────────────────────┘
-```
-
-The dashboard has a clean 3-layer scan architecture: `scan-core.js` (7 specialized scanners with zero-dependency frontmatter parsing) → `scan.js` (CLI, writes static JSON) → Vite SSE watcher (live reload on filesystem changes, 400ms debounce). No backend, no database — just your `~/.claude/` directory, visualized.
-
-**Agent Team** populates `~/.claude/`. **Dashboard** reads it. Together they form a complete Claude Code power-user toolkit.
-
-The dashboard works with any Claude Code installation, not just this framework.
+The dashboard is a separate React 19 + Vite app — no backend, no database. It reads your `~/.claude/` directory directly via a local scan script and reloads on filesystem changes. It works with any Claude Code installation, not just CAST.
 
 ---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
 
 ---
 
-Built with Claude Code. Designed to make Claude Code better.
+Built with Claude Code. Designed to make Claude Code work the way a senior engineering team works.
