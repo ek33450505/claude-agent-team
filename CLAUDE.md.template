@@ -6,7 +6,7 @@ This file is loaded into every session. Tech stack, projects, and conventions ar
 
 ## Agent Roster
 
-22 custom agents at `~/.claude/agents/`. Use them proactively — don't wait to be asked.
+23 custom agents at `~/.claude/agents/`. Use them proactively — don't wait to be asked.
 
 ### Core Agents
 | Agent | Model | When to use |
@@ -29,6 +29,7 @@ This file is loaded into every session. Tech stack, projects, and conventions ar
 | `e2e-runner` | sonnet (sky) | Playwright E2E tests for React apps |
 | `refactor-cleaner` | haiku (silver) | Dead code, unused imports, dependency cleanup |
 | `doc-updater` | haiku (gold) | README, changelog, JSDoc updates |
+| `readme-writer` | sonnet (emerald) | Audit and rewrite READMEs for accuracy and positioning |
 
 ### Productivity Agents
 | Agent | Model | When to use |
@@ -47,7 +48,7 @@ This file is loaded into every session. Tech stack, projects, and conventions ar
 | `presenter` | sonnet (violet) | Slide decks, status presentations, demo materials |
 
 ### Slash Commands
-23 commands at `~/.claude/commands/`:
+24 commands at `~/.claude/commands/`:
 
 | Command | Agent | Command | Agent |
 |---|---|---|---|
@@ -62,7 +63,7 @@ This file is loaded into every session. Tech stack, projects, and conventions ar
 | `/architect` | architect | `/build-fix` | build-error-resolver |
 | `/tdd` | tdd-guide | `/refactor` | refactor-cleaner |
 | `/e2e` | e2e-runner | `/docs` | doc-updater |
-| `/eval` | evaluator-optimizer | | |
+| `/readme` | readme-writer | `/eval` | evaluator-optimizer |
 
 ### Skills (reusable procedures)
 9 custom skills at `~/.claude/skills/`:
@@ -72,7 +73,7 @@ This file is loaded into every session. Tech stack, projects, and conventions ar
 | Layer | Location | Purpose |
 |---|---|---|
 | Project memory | `~/.claude/projects/*/memory/` | Project-specific context |
-| Agent memory | `~/.claude/agent-memory-local/` | Agent-learned patterns (22 agents) |
+| Agent memory | `~/.claude/agent-memory-local/` | Agent-learned patterns (23 agents) |
 
 ### Shared Config
 Project list and paths centralized in `~/.claude/config.sh` — sourced by scripts and skills.

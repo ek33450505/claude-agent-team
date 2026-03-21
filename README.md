@@ -1,18 +1,18 @@
 # Claude Agent Team
 
-**A production-grade Claude Code framework with 22 specialized agents, 23 slash commands, 9 skills, and a 2-hook safety system.**
+**A production-grade Claude Code framework with 23 specialized agents, 24 slash commands, 9 skills, and a 2-hook safety system.**
 
 Install in 3 commands. Customize in 10 minutes. Transform how you use Claude Code.
 
 ```
-22 Agents  |  23 Commands  |  9 Skills  |  2 Hooks  |  3 Rules  |  2 Scripts
+23 Agents  |  24 Commands  |  9 Skills  |  2 Hooks  |  3 Rules  |  2 Scripts
 ```
 
 ---
 
 ## What This Is
 
-Claude Code ships with powerful built-in tools, but out of the box it's a generalist. This framework turns it into an **orchestrated team of specialists** — a planner that architects before you code, a debugger that investigates before it guesses, a security reviewer that catches OWASP issues, a TDD guide that enforces red-green-refactor, and 18 more.
+Claude Code ships with powerful built-in tools, but out of the box it's a generalist. This framework turns it into an **orchestrated team of specialists** — a planner that architects before you code, a debugger that investigates before it guesses, a security reviewer that catches OWASP issues, a TDD guide that enforces red-green-refactor, and 19 more.
 
 Every agent has a defined role, model assignment (sonnet or haiku), and trigger conditions. Slash commands route to agents. Skills chain multi-step workflows. Hooks enforce quality gates automatically. The result: Claude Code that works the way a senior engineering team works — with specialization, process, and memory.
 
@@ -32,7 +32,7 @@ The installer gives you three options:
 
 | Option | What you get |
 |---|---|
-| **Full install** | All 22 agents, 23 commands, 9 skills, scripts, rules, hooks |
+| **Full install** | All 23 agents, 24 commands, 9 skills, scripts, rules, hooks |
 | **Core only** | 8 essential agents + their commands (minimal, portable) |
 | **Custom** | Pick categories: core, extended, productivity, professional, macOS skills |
 
@@ -71,7 +71,7 @@ After install, edit 3 files to personalize:
                      │
            ┌─────────▼───────────┐
            │   Agents (Layer 4)  │
-           │  22 specialists     │
+           │  23 specialists     │
            │  sonnet + haiku     │
            └─────────┬───────────┘
                      │
@@ -99,7 +99,7 @@ After install, edit 3 files to personalize:
 | `commit` | haiku | `/commit` | Creating semantic git commits |
 | `security` | sonnet | `/secure` | Security review, OWASP, secrets scanning |
 
-### Extended Agents (6)
+### Extended Agents (7)
 
 | Agent | Model | Slash Command | When to use |
 |---|---|---|---|
@@ -109,6 +109,7 @@ After install, edit 3 files to personalize:
 | `e2e-runner` | sonnet | `/e2e` | Playwright E2E tests for React apps |
 | `refactor-cleaner` | haiku | `/refactor` | Dead code, unused imports, dependency cleanup |
 | `doc-updater` | haiku | `/docs` | README, changelog, JSDoc updates |
+| `readme-writer` | sonnet | `/readme` | Audit and rewrite READMEs for accuracy and positioning |
 
 ### Productivity Agents (5)
 
@@ -297,13 +298,13 @@ claude-agent-team/
 ├── agents/
 │   ├── core/          (8 agents)     # planner, debugger, test-writer, code-reviewer,
 │   │                                 # data-scientist, db-reader, commit, security
-│   ├── extended/      (6 agents)     # architect, tdd-guide, build-error-resolver,
-│   │                                 # e2e-runner, refactor-cleaner, doc-updater
+│   ├── extended/      (7 agents)     # architect, tdd-guide, build-error-resolver,
+│   │                                 # e2e-runner, refactor-cleaner, doc-updater, readme-writer
 │   ├── productivity/  (5 agents)     # researcher, report-writer, meeting-notes,
 │   │                                 # email-manager, morning-briefing
 │   └── professional/  (3 agents)     # browser, qa-reviewer, presenter
 │
-├── commands/          (23 commands)   # Flat — one .md per slash command
+├── commands/          (24 commands)   # Flat — one .md per slash command
 │
 ├── skills/            (9 skills)     # Each in its own subdirectory
 │   ├── calendar-fetch/SKILL.md       # macOS + Outlook
@@ -332,23 +333,26 @@ claude-agent-team/
 
 ## Companion: Claude Dashboard
 
-This framework pairs with **[Claude Dashboard](https://github.com/ek33450505/claude-code-dashboard)** — a real-time web UI that visualizes everything this repo installs.
+This framework pairs with **[Claude Dashboard](https://github.com/ek33450505/claude-code-dashboard)** — a memory architecture visualizer that reads everything this repo installs and renders it as a live control panel.
 
 ```
 ┌─────────────────────────────┐     ┌─────────────────────────────┐
 │   Claude Agent Team         │     │   Claude Dashboard          │
 │                             │     │                             │
-│   22 agents, 23 commands,   │────▶│   Real-time agent activity  │
-│   9 skills, hooks, rules    │     │   Session history & replay  │
-│                             │     │   Agent roster & stats      │
-│   Config layer (no runtime) │     │   Memory & knowledge viewer │
-└─────────────────────────────┘     │   System health overview    │
+│   23 agents, 24 commands,   │     │   Agent roster & memory     │
+│   9 skills, hooks, rules    │────▶│   Model/category analytics  │
+│                             │     │   Hookify rule status       │
+│   Orchestration layer       │     │   Productivity output feed  │
+│   (config, no runtime)      │     │   Plugin ecosystem viewer   │
+└─────────────────────────────┘     │   Obsidian vault browser    │
           ~/.claude/                │                             │
-                                    │   React 19 + Vite + Express │
+                                    │   React 19 + Vite + Recharts│
                                     └─────────────────────────────┘
 ```
 
-The dashboard reads from `~/.claude/` — the same directory this installer populates. Together they form a complete Claude Code power-user toolkit: **Agent Team** handles orchestration, **Dashboard** handles observability.
+The dashboard has a clean 3-layer scan architecture: `scan-core.js` (7 specialized scanners with zero-dependency frontmatter parsing) → `scan.js` (CLI, writes static JSON) → Vite SSE watcher (live reload on filesystem changes, 400ms debounce). No backend, no database — just your `~/.claude/` directory, visualized.
+
+**Agent Team** populates `~/.claude/`. **Dashboard** reads it. Together they form a complete Claude Code power-user toolkit.
 
 The dashboard works with any Claude Code installation, not just this framework.
 

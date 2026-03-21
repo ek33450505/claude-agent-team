@@ -35,12 +35,12 @@ SKILL_COUNT=0
 
 # --- Agent / command / skill lists ---
 CORE_AGENTS="planner debugger test-writer code-reviewer data-scientist db-reader commit security"
-EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cleaner doc-updater"
+EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cleaner doc-updater readme-writer"
 PRODUCTIVITY_AGENTS="researcher report-writer meeting-notes email-manager morning-briefing"
 PROFESSIONAL_AGENTS="browser qa-reviewer presenter"
 
 CORE_CMDS="plan review debug test secure commit data query"
-EXTENDED_CMDS="architect tdd build-fix e2e refactor docs"
+EXTENDED_CMDS="architect tdd build-fix e2e refactor docs readme"
 PRODUCTIVITY_CMDS="research report meeting email morning"
 PROFESSIONAL_CMDS="browser qa present"
 ALWAYS_CMDS="eval"
@@ -56,7 +56,7 @@ fi
 
 # --- Menu ---
 printf "\n${BOLD}Claude Agent Team — Installer${NC}\n\n"
-printf "  ${BOLD}[1]${NC} Full install — all 22 agents, 23 commands, 9 skills, scripts, rules\n"
+printf "  ${BOLD}[1]${NC} Full install — all 23 agents, 24 commands, 9 skills, scripts, rules\n"
 printf "  ${BOLD}[2]${NC} Core only   — 8 core agents + their commands (minimal, portable)\n"
 printf "  ${BOLD}[3]${NC} Custom      — choose categories\n"
 printf "\n"
@@ -85,8 +85,8 @@ case "$CHOICE" in
     3)
         printf "\nSelect categories to install (core agents always included):\n\n"
 
-        printf "  Extended agents (6): architect, tdd-guide, build-error-resolver,\n"
-        printf "    e2e-runner, refactor-cleaner, doc-updater\n"
+        printf "  Extended agents (7): architect, tdd-guide, build-error-resolver,\n"
+        printf "    e2e-runner, refactor-cleaner, doc-updater, readme-writer\n"
         printf "  Install? [y/N]: "
         read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_EXTENDED=true
 
