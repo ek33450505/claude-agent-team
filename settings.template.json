@@ -17,6 +17,18 @@
     ]
   },
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/route.sh",
+            "timeout": 5
+          }
+        ],
+        "description": "Agent routing — suggests the right slash command for the task"
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",

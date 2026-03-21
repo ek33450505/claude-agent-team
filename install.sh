@@ -35,7 +35,7 @@ SKILL_COUNT=0
 
 # --- Agent / command / skill lists ---
 CORE_AGENTS="planner debugger test-writer code-reviewer data-scientist db-reader commit security"
-EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cleaner doc-updater readme-writer"
+EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cleaner doc-updater readme-writer router"
 PRODUCTIVITY_AGENTS="researcher report-writer meeting-notes email-manager morning-briefing"
 PROFESSIONAL_AGENTS="browser qa-reviewer presenter"
 
@@ -56,7 +56,7 @@ fi
 
 # --- Menu ---
 printf "\n${BOLD}Claude Agent Team — Installer${NC}\n\n"
-printf "  ${BOLD}[1]${NC} Full install — all 23 agents, 24 commands, 9 skills, scripts, rules\n"
+printf "  ${BOLD}[1]${NC} Full install — all 24 agents, 24 commands, 9 skills, scripts, rules\n"
 printf "  ${BOLD}[2]${NC} Core only   — 8 core agents + their commands (minimal, portable)\n"
 printf "  ${BOLD}[3]${NC} Custom      — choose categories\n"
 printf "\n"
@@ -85,8 +85,8 @@ case "$CHOICE" in
     3)
         printf "\nSelect categories to install (core agents always included):\n\n"
 
-        printf "  Extended agents (7): architect, tdd-guide, build-error-resolver,\n"
-        printf "    e2e-runner, refactor-cleaner, doc-updater, readme-writer\n"
+        printf "  Extended agents (8): architect, tdd-guide, build-error-resolver,\n"
+        printf "    e2e-runner, refactor-cleaner, doc-updater, readme-writer, router\n"
         printf "  Install? [y/N]: "
         read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_EXTENDED=true
 
@@ -234,6 +234,17 @@ for script_file in "$SCRIPT_DIR"/scripts/*; do
     chmod +x "$CLAUDE_DIR/scripts/$dest_name"
     success "  Installed: $dest_name"
 done
+
+# --- Install config/ (routing table and other configs) ---
+if [ -d "$SCRIPT_DIR/config" ]; then
+  info "Installing config files..."
+  mkdir -p "$CLAUDE_DIR/config"
+  for config_file in "$SCRIPT_DIR"/config/*; do
+    base="$(basename "$config_file")"
+    cp "$config_file" "$CLAUDE_DIR/config/$base"
+    success "  Installed: $base"
+  done
+fi
 
 # --- Install config.sh (only if doesn't exist) ---
 if [ ! -f "$CLAUDE_DIR/config.sh" ]; then
