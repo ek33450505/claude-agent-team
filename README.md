@@ -1,11 +1,11 @@
 # Claude Agent Team
 
-**A production-grade Claude Code framework with 23 specialized agents, 24 slash commands, 9 skills, and a 2-hook safety system.**
+**A production-grade Claude Code framework with 24 specialized agents, 24 slash commands, 9 skills, automatic agent routing, and a 3-hook safety system.**
 
 Install in 3 commands. Customize in 10 minutes. Transform how you use Claude Code.
 
 ```
-23 Agents  |  24 Commands  |  9 Skills  |  2 Hooks  |  3 Rules  |  2 Scripts
+24 Agents  |  24 Commands  |  9 Skills  |  Agent Router  |  3 Hooks  |  3 Rules
 ```
 
 ---
@@ -32,7 +32,7 @@ The installer gives you three options:
 
 | Option | What you get |
 |---|---|
-| **Full install** | All 23 agents, 24 commands, 9 skills, scripts, rules, hooks |
+| **Full install** | All 24 agents, 24 commands, 9 skills, scripts, rules, hooks |
 | **Core only** | 8 essential agents + their commands (minimal, portable) |
 | **Custom** | Pick categories: core, extended, productivity, professional, macOS skills |
 
@@ -40,6 +40,52 @@ After install, edit 3 files to personalize:
 1. `~/.claude/config.sh` — your project directories
 2. `~/.claude/rules/stack-context.md` — your tech stack
 3. `~/.claude/rules/project-catalog.md` — your projects
+
+---
+
+## Agent Router — Automatic Command Routing
+
+> The only Claude Code framework with automatic agent routing. Never forget which command to type.
+
+Claude Agent Team ships a **hook-based routing system** that intercepts every prompt and suggests the right slash command — so you don't have to remember when to use `/test` vs `/debug` vs `/commit`.
+
+### How it works
+
+A `UserPromptSubmit` hook fires on every message. Your prompt is matched against `routing-table.json`. If it matches a known pattern, Claude asks before answering directly:
+
+> "This looks like a `/test` task — should I route it to the `test-writer` agent for a focused response?"
+
+You confirm or skip. Every routing decision is logged to `~/.claude/routing-log.jsonl` for dashboard visualization.
+
+### Routing table
+
+Patterns live in `~/.claude/config/routing-table.json` — edit freely to match your workflow:
+
+| Pattern triggers | Routes to | Command |
+|---|---|---|
+| "write test", "test coverage", "jest", "vitest" | `test-writer` | `/test` |
+| "commit", "git commit", "stage and commit" | `commit` | `/commit` |
+| "error", "stack trace", "failing", "unexpected" | `debugger` | `/debug` |
+| "review my", "check this code", "look at my changes" | `code-reviewer` | `/review` |
+| "plan this", "how should I implement", "break this down" | `planner` | `/plan` |
+| "refactor", "dead code", "cleanup", "unused imports" | `refactor-cleaner` | `/refactor` |
+| "security", "vulnerability", "owasp" | `security` | `/secure` |
+| "docs", "readme", "jsdoc" | `doc-updater` | `/docs` |
+| "research", "compare", "evaluate" | `researcher` | `/research` |
+
+### Opus escalation
+
+Prefix any message with `opus:` to bypass routing and use Claude Opus for that message:
+
+```
+opus: design the entire authentication system from scratch
+```
+
+Complex prompts are also auto-detected (multi-system architecture, security design, etc.).
+
+### Phase 2: LLM classifier
+
+The `router` agent (Haiku, `maxTurns: 1`) is the Phase 2 upgrade — when a prompt doesn't match any pattern, it classifies the intent and returns a confidence score. High-confidence matches dispatch silently. The stub is installed now; activation is a config flag.
 
 ---
 
@@ -99,7 +145,7 @@ After install, edit 3 files to personalize:
 | `commit` | haiku | `/commit` | Creating semantic git commits |
 | `security` | sonnet | `/secure` | Security review, OWASP, secrets scanning |
 
-### Extended Agents (7)
+### Extended Agents (8)
 
 | Agent | Model | Slash Command | When to use |
 |---|---|---|---|
@@ -110,6 +156,7 @@ After install, edit 3 files to personalize:
 | `refactor-cleaner` | haiku | `/refactor` | Dead code, unused imports, dependency cleanup |
 | `doc-updater` | haiku | `/docs` | README, changelog, JSDoc updates |
 | `readme-writer` | sonnet | `/readme` | Audit and rewrite READMEs for accuracy and positioning |
+| `router` | haiku | — | Phase 2 LLM classifier — routes ambiguous prompts to the right agent |
 
 ### Productivity Agents (5)
 
@@ -157,10 +204,11 @@ Skills are reusable procedures that agents invoke — multi-step workflows packa
 
 ## Hooks
 
-Two lifecycle hooks enforce quality automatically:
+Three lifecycle hooks — two quality gates and the agent router:
 
 | Hook | Trigger | Action |
 |---|---|---|
+| **UserPromptSubmit** | Before every message | Runs `route.sh` — matches prompt against routing table, injects agent suggestion if matched, logs decision |
 | **PostToolUse** | After any `Write` or `Edit` | Runs `auto-format.sh` (Prettier if configured) |
 | **Stop** | Before Claude completes a response | Nudge: "if code was modified but no tests were run, suggest running them" |
 
@@ -298,8 +346,8 @@ claude-agent-team/
 ├── agents/
 │   ├── core/          (8 agents)     # planner, debugger, test-writer, code-reviewer,
 │   │                                 # data-scientist, db-reader, commit, security
-│   ├── extended/      (7 agents)     # architect, tdd-guide, build-error-resolver,
-│   │                                 # e2e-runner, refactor-cleaner, doc-updater, readme-writer
+│   ├── extended/      (8 agents)     # architect, tdd-guide, build-error-resolver,
+│   │                                 # e2e-runner, refactor-cleaner, doc-updater, readme-writer, router
 │   ├── productivity/  (5 agents)     # researcher, report-writer, meeting-notes,
 │   │                                 # email-manager, morning-briefing
 │   └── professional/  (3 agents)     # browser, qa-reviewer, presenter
@@ -321,7 +369,11 @@ claude-agent-team/
 │
 ├── scripts/
 │   ├── auto-format.sh                # PostToolUse hook target
+│   ├── route.sh                      # UserPromptSubmit hook — agent routing
 │   └── tidy.sh.template              # Cleanup script (you configure paths)
+│
+├── config/
+│   └── routing-table.json            # Pattern → agent mappings (editable)
 │
 └── rules/
     ├── working-conventions.md        # Quality standards (copy verbatim)
@@ -339,12 +391,13 @@ This framework pairs with **[Claude Dashboard](https://github.com/ek33450505/cla
 ┌─────────────────────────────┐     ┌─────────────────────────────┐
 │   Claude Agent Team         │     │   Claude Dashboard          │
 │                             │     │                             │
-│   23 agents, 24 commands,   │     │   Agent roster & memory     │
+│   24 agents, 24 commands,   │     │   Agent roster & memory     │
 │   9 skills, hooks, rules    │────▶│   Model/category analytics  │
 │                             │     │   Hookify rule status       │
 │   Orchestration layer       │     │   Productivity output feed  │
 │   (config, no runtime)      │     │   Plugin ecosystem viewer   │
-└─────────────────────────────┘     │   Obsidian vault browser    │
+└─────────────────────────────┘     │   Routing feed (live routing events)│
+          ~/.claude/                │   Model badges (Sonnet/Haiku/Opus)  │
           ~/.claude/                │                             │
                                     │   React 19 + Vite + Recharts│
                                     └─────────────────────────────┘
