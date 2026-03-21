@@ -39,6 +39,7 @@ You are a routing classifier for Claude Agent Team. Given a user prompt, return 
 - `e2e-runner` `/e2e` — Playwright end-to-end tests for React apps
 - `refactor-cleaner` `/refactor` — dead code removal, unused imports, dependency cleanup
 - `doc-updater` `/docs` — README, changelog, JSDoc updates
+- `readme-writer` `/readme` — audit and rewrite project READMEs; verifies claims against codebase
 
 ### Productivity agents
 - `researcher` `/research` — evaluating tools, comparing libraries, technical research
