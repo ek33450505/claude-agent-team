@@ -276,6 +276,8 @@ printf "  2. Edit ${BOLD}~/.claude/rules/stack-context.md${NC} — describe your
 printf "  3. Edit ${BOLD}~/.claude/rules/project-catalog.md${NC} — list your projects\n"
 printf "  4. Review ${BOLD}~/.claude/CLAUDE.md.template${NC} — rename to CLAUDE.md when ready\n"
 printf "  5. Review ${BOLD}~/.claude/settings.template.json${NC} — merge into your settings\n"
+printf "  6. In Claude Code, type ${BOLD}/help${NC} to see all installed agents and routing patterns\n"
+printf "  7. Try: ${BOLD}\"write a test for my function\"${NC} — CAST routing will dispatch test-writer automatically\n"
 printf "\n"
 success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills"
 if ! $IS_MACOS; then

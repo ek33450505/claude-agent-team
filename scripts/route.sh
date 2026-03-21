@@ -24,6 +24,11 @@ except Exception:
 
 [ -z "$PROMPT" ] && exit 0
 
+# Skip internal Claude Code system messages (task-notifications, XML system messages)
+if echo "$PROMPT" | grep -qi "^<task-\|^<system-\|<task-id>\|task-notification"; then
+  exit 0
+fi
+
 # Check for opus: prefix
 if echo "$PROMPT" | grep -qi "^opus:"; then
   python3 -c "
@@ -69,7 +74,23 @@ for route in table.get('routes', []):
             sys.exit(0)
 " 2>/dev/null || echo "")"
 
-[ -z "$RESULT" ] && exit 0
+if [ -z "$RESULT" ]; then
+  # Log no-match for miss-rate visibility (dashboard uses this to track routing coverage)
+  python3 -c "
+import json, datetime, os
+log = {
+  'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
+  'prompt_preview': '''${PROMPT:0:80}''',
+  'action': 'no_match',
+  'matched_route': None,
+  'command': None,
+  'pattern': None
+}
+with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
+    f.write(json.dumps(log) + '\n')
+" 2>/dev/null || true
+  exit 0
+fi
 
 # Parse result fields
 AGENT="$(echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agent',''))" 2>/dev/null || echo "")"
@@ -84,7 +105,7 @@ import json, datetime, os
 log = {
   'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
   'prompt_preview': '''${PROMPT:0:80}''',
-  'action': 'suggested',
+  'action': 'dispatched',
   'matched_route': '$AGENT',
   'command': '$COMMAND' if '$COMMAND' else None,
   'pattern': '$PATTERN'
@@ -93,11 +114,12 @@ with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
     f.write(json.dumps(log) + '\n')
 " 2>/dev/null || true
 
-# Output routing hint as plain text (stdout is added to Claude's context)
+# Output routing instruction as plain text (stdout is added to Claude's context)
+# Phase 2: instruct Claude to dispatch directly rather than ask the user
 if [ "$AGENT" = "opus" ]; then
-  echo '**[Router]** Complexity signals detected. Before proceeding, ask the user: "This looks like a complex task — would you like me to use Opus? (Prefix your next message with `opus:` to escalate.)"'
+  echo '**[Router]** Complexity signals detected. Switch to Opus for this message before answering.'
 elif [ -n "$COMMAND" ]; then
-  echo "**[Router]** This prompt matches the \`$AGENT\` agent. Before answering directly, ask the user: \"This looks like a \`$COMMAND\` task — should I route it to the \`$AGENT\` agent? (It runs on a cheaper model and keeps the main session clean.)\""
+  echo "**[Router]** Dispatch to \`$AGENT\` agent now using the Agent tool (subagent_type: '$AGENT'). Do NOT ask the user first — invoke the agent immediately with the user's prompt as the task."
 fi
 
 exit 0

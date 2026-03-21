@@ -64,12 +64,45 @@ ls -la docs/ 2>/dev/null
 - Complex logic that isn't self-documenting
 - API route handlers (method, path, params, response)
 
-### 3. Validate
+### 3. Show Diff Before Applying
+
+Before writing any changes, show the user a before/after preview:
+
+```
+BEFORE (lines 12-18):
+  ## Setup
+  Run `npm install`
+
+AFTER:
+  ## Setup
+  Run `npm install`
+  Set `API_KEY=your-key` in `.env` (see `.env.example`)
+```
+
+Apply with Edit (in-place). Do NOT create new files unless explicitly asked.
+
+### 4. Validate
 
 - [ ] All file paths mentioned in docs actually exist
 - [ ] Setup commands actually work
 - [ ] Environment variable names match actual code
 - [ ] No references to removed features
+
+## Output
+
+- Edits target file **in-place** using the Edit tool
+- Shows a before/after diff preview before applying
+- Does not create new documentation files unless the user asks
+- One file per task — do not bulk-update unrelated docs
+
+## Error Handling
+
+| Situation | Action |
+|---|---|
+| File has no existing JSDoc | Generate from function signatures + infer behavior from code — do NOT invent undocumented behavior |
+| README references a file that doesn't exist | Flag it as a stale reference, remove or update the path |
+| No CHANGELOG.md exists | Ask before creating one — not all projects maintain one |
+| Docs are severely outdated | Rewrite the affected section from scratch using current codebase state |
 
 ## Key Principles
 

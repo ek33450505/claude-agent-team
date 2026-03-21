@@ -49,15 +49,14 @@ Each agent is scored across 5 dimensions. A production-grade agent scores 4-5 on
 | researcher | 4 | 4 | 4 | 3 | 4 | **19** | Good comparison format |
 | report-writer | 4 | 4 | 4 | 3 | 4 | **19** | Adequate |
 | meeting-notes | 4 | 4 | 4 | 3 | 4 | **19** | Adequate |
-| doc-updater | 4 | 3 | 3 | 2 | 4 | **16** | Needs output template |
+| doc-updater | 4 | 5 | 5 | 5 | 4 | **23** | Phase 2: output format, diff preview, error table added |
 | refactor-cleaner | 4 | 4 | 3 | 3 | 4 | **18** | Adequate |
 | build-error-resolver | 4 | 4 | 4 | 3 | 4 | **19** | Haiku, minimal diffs |
-| e2e-runner | 3 | 4 | 3 | 2 | 4 | **16** | Needs error handling, stack discovery |
-| browser | 4 | 4 | 3 | 2 | 3 | **16** | Needs error handling, output format |
-| presenter | 3 | 3 | 3 | 2 | 3 | **14** | Weakest — needs full hardening |
+| e2e-runner | 5 | 5 | 4 | 5 | 4 | **23** | Phase 2: stack discovery + error table added |
+| browser | 5 | 5 | 3 | 4 | 3 | **20** | Good workflow, output format could use template |
+| presenter | 5 | 4 | 4 | 3 | 4 | **20** | Phase 2 re-score: has output formats, data workflow |
 
 ## Priority Fix Order (lowest score first)
-1. **presenter** (14) — needs output location, error handling, non-goals, example
-2. **browser** (16) — needs error handling, output format, write discipline
-3. **e2e-runner** (16) — needs stack discovery, error handling, non-goals
-4. doc-updater (16) — future pass
+1. **doc-updater** (16) — needs output template and workflow specificity
+2. **refactor-cleaner** (18) — output format gap
+3. All other agents score 19+ as of Phase 2

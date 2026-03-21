@@ -1,8 +1,8 @@
-# Claude Agent Team
+# CAST — Claude Agent System & Team
 
 **A production-grade Claude Code framework with 24 specialized agents, 24 slash commands, 9 skills, automatic agent routing, and a 3-hook safety system.**
 
-Install in 3 commands. Customize in 10 minutes. Transform how you use Claude Code.
+Install in 3 commands. Customize in 10 minutes. CAST transforms how you use Claude Code across 3 layers: **Agents** (24 specialists) → **Intelligence** (automatic routing) → **Visibility** (companion dashboard).
 
 ```
 24 Agents  |  24 Commands  |  9 Skills  |  Agent Router  |  3 Hooks  |  3 Rules
@@ -51,11 +51,12 @@ Claude Agent Team ships a **hook-based routing system** that intercepts every pr
 
 ### How it works
 
-A `UserPromptSubmit` hook fires on every message. Your prompt is matched against `routing-table.json`. If it matches a known pattern, Claude asks before answering directly:
+A `UserPromptSubmit` hook fires on every message. Your prompt is matched against `routing-table.json`. If it matches a known pattern, CAST dispatches the right agent directly — no command needed:
 
-> "This looks like a `/test` task — should I route it to the `test-writer` agent for a focused response?"
+> "run playwright tests" → CAST dispatches `e2e-runner` automatically
+> "typescript error in my build" → CAST dispatches `build-error-resolver` (Haiku, ~$0.001)
 
-You confirm or skip. Every routing decision is logged to `~/.claude/routing-log.jsonl` for dashboard visualization.
+Every routing decision is logged to `~/.claude/routing-log.jsonl` for dashboard visualization.
 
 ### Routing table
 
@@ -85,7 +86,22 @@ Complex prompts are also auto-detected (multi-system architecture, security desi
 
 ### Phase 2: LLM classifier
 
-The `router` agent (Haiku, `maxTurns: 1`) is the Phase 2 upgrade — when a prompt doesn't match any pattern, it classifies the intent and returns a confidence score. High-confidence matches dispatch silently. The stub is installed now; activation is a config flag.
+The `router` agent (Haiku, `maxTurns: 1`) is the Phase 2 upgrade — when a prompt doesn't match any pattern, it classifies the intent and returns a confidence score. High-confidence matches dispatch silently. Activation is triggered automatically when routing miss-rate (tracked in `routing-log.jsonl`) exceeds 20%.
+
+---
+
+## How CAST Compares
+
+| | CAST | NanoClaw v2 | Ruflo v3 |
+|---|---|---|---|
+| Hook-based routing | ✅ | ✅ | ✅ |
+| Auto-dispatch (not ask-first) | ✅ Phase 2 | ❌ | ✅ |
+| Visibility dashboard | ✅ companion app | ❌ | ❌ |
+| Agent quality rubric | ✅ scored, public | ❌ | ❌ |
+| One-command install | ✅ | ✅ | ❌ |
+| Open source | MIT | MIT | Proprietary |
+
+**CAST's differentiator:** You can see what the system is doing (dashboard), agents meet a documented quality bar (rubric), and the install is one command (install.sh). NanoClaw v2 and Ruflo are the closest comparisons — both do hook routing, neither has a visual observability layer.
 
 ---
 
@@ -109,7 +125,7 @@ The `router` agent (Haiku, `maxTurns: 1`) is the Phase 2 upgrade — when a prom
     ┌─────────▼─────┐  ┌─────────▼─────┐  ┌─────────▼─────┐
     │   Commands    │  │    Skills     │  │    Rules      │
     │   (Layer 3)   │  │   (Layer 3)   │  │   (Layer 3)   │
-    │  23 dispatch  │  │  9 reusable   │  │  3 always-on  │
+    │  24 dispatch  │  │  9 reusable   │  │  3 always-on  │
     │   wrappers    │  │  procedures   │  │   context     │
     └───────┬───────┘  └───────┬───────┘  └───────────────┘
             │                  │
@@ -117,7 +133,7 @@ The `router` agent (Haiku, `maxTurns: 1`) is the Phase 2 upgrade — when a prom
                      │
            ┌─────────▼───────────┐
            │   Agents (Layer 4)  │
-           │  23 specialists     │
+           │  24 specialists     │
            │  sonnet + haiku     │
            └─────────┬───────────┘
                      │

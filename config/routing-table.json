@@ -6,7 +6,7 @@
       "command": "/test"
     },
     {
-      "patterns": ["commit", "git commit", "stage and commit", "create a commit"],
+      "patterns": ["^commit$", "git commit", "stage and commit", "create a commit", "make a commit", "need to commit"],
       "agent": "commit",
       "command": "/commit"
     },
@@ -44,6 +44,26 @@
       "patterns": ["research", "compare.*librar", "evaluate.*tool", "which.*framework"],
       "agent": "researcher",
       "command": "/research"
+    },
+    {
+      "patterns": ["e2e test", "playwright", "end.to.end", "integration test"],
+      "agent": "e2e-runner",
+      "command": "/e2e"
+    },
+    {
+      "patterns": ["build.*error", "typescript error", "eslint.*error", "tsc.*fail", "vite.*error"],
+      "agent": "build-error-resolver",
+      "command": "/build-fix"
+    },
+    {
+      "patterns": ["slide deck", "create.*presentation", "create.*slides", "status.*deck"],
+      "agent": "presenter",
+      "command": "/present"
+    },
+    {
+      "patterns": ["morning briefing", "daily briefing", "what.*on.*today", "my schedule"],
+      "agent": "morning-briefing",
+      "command": "/morning"
     }
   ],
   "opus_signals": {
