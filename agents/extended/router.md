@@ -23,6 +23,7 @@ You are a routing classifier for Claude Agent Team. Given a user prompt, return 
 ## Available agents and their domains
 
 ### Core agents
+- `planner` `/plan` — planning features, implementation strategy, breaking down complex changes
 - `test-writer` `/test` — writing, fixing, adding, or running tests; test coverage; vitest; jest
 - `debugger` `/debug` — errors, failures, unexpected behavior, stack traces
 - `commit` `/commit` — git commits, staging, commit messages
@@ -32,7 +33,6 @@ You are a routing classifier for Claude Agent Team. Given a user prompt, return 
 - `security` `/secure` — security review, OWASP, secrets scanning, vulnerabilities
 
 ### Extended agents
-- `planner` `/plan` — planning features, implementation strategy, breaking down complex changes
 - `architect` `/architect` — system design, ADRs, module boundaries, trade-off analysis
 - `tdd-guide` `/tdd` — test-driven development, red-green-refactor workflow
 - `build-error-resolver` `/build-fix` — fixing build errors, TypeScript errors, ESLint issues

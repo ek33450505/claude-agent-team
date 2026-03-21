@@ -241,8 +241,13 @@ if [ -d "$SCRIPT_DIR/config" ]; then
   mkdir -p "$CLAUDE_DIR/config"
   for config_file in "$SCRIPT_DIR"/config/*; do
     base="$(basename "$config_file")"
-    cp "$config_file" "$CLAUDE_DIR/config/$base"
-    success "  Installed: $base"
+    dest="$CLAUDE_DIR/config/$base"
+    if [ -f "$dest" ]; then
+      info "  Skipped (exists): $base"
+    else
+      cp "$config_file" "$dest"
+      success "  Installed: $base"
+    fi
   done
 fi
 
