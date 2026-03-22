@@ -7,31 +7,31 @@
       "post_chain": ["commit"]
     },
     {
-      "patterns": ["^commit$", "git commit", "stage and commit", "create a commit", "make a commit", "need to commit"],
+      "patterns": ["^commit$", "^/commit\\b", "git commit", "^push$", "^git push", "stage and commit", "create a commit", "make a commit", "need to commit"],
       "agent": "commit",
       "command": "/commit",
       "post_chain": null
     },
     {
-      "patterns": ["fix.*bug", "debug", "why.*failing", "what.*error", "traceback", "stack trace", "not working"],
+      "patterns": ["fix.*bug", "debug", "why.*failing", "what.*error", "traceback", "stack trace", "not working", "\\bbroken\\b", "quick.*fix", "quickfix", "not.*showing"],
       "agent": "debugger",
       "command": "/debug",
       "post_chain": ["code-reviewer", "commit"]
     },
     {
-      "patterns": ["review.*code", "code review", "check.*changes", "look.*over"],
+      "patterns": ["^/review\\b", "^/code-review\\b", "review.*code", "code review", "check.*changes", "look.*over"],
       "agent": "code-reviewer",
       "command": "/review",
       "post_chain": ["commit"]
     },
     {
-      "patterns": ["plan.*implement", "implementation plan", "how.*should.*build", "design.*feature", "architect", "create.*agent", "add.*agent", "new.*agent", "wrap.*up", "finish.*up", "finalize"],
+      "patterns": ["^/plan\\b", "plan.*implement", "implementation plan", "how.*should.*build", "design.*feature", "architect", "create.*agent", "add.*agent", "new.*agent", "wrap.*up", "finish.*up", "finalize"],
       "agent": "planner",
       "command": "/plan",
       "post_chain": ["auto-dispatch-from-manifest"]
     },
     {
-      "patterns": ["write.*docs", "update.*readme", "update.*changelog", "add.*jsdoc", "document"],
+      "patterns": ["write.*docs", "update.*readme", "ensure.*readme", "verify.*readme", "readme.*accurate", "readme.*describes", "check.*readme", "update.*changelog", "add.*jsdoc", "document"],
       "agent": "doc-updater",
       "command": "/docs",
       "post_chain": ["commit"]
