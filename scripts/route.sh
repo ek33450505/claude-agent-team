@@ -92,8 +92,13 @@ log = {
 with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
     f.write(json.dumps(log) + '\n')
 " 2>/dev/null || true
-  # Senior developer standing permission — always free to dispatch any agent
-  echo "**[CAST]** No pattern matched. You are the senior developer — assess this prompt and dispatch any specialized agent (planner, debugger, code-reviewer, researcher, orchestrator, verifier, security, etc.) if it would improve the outcome. Do not handle complex tasks alone when a specialist exists."
+  # Senior Dev triage protocol — delegate, don't do
+  echo "**[CAST Senior Dev]** No pattern matched. Run your Triage Protocol:
+1. INTERPRET this prompt — what does the user need?
+2. DECOMPOSE — does it need multiple steps? → planner first
+3. MATCH — check your Agent Capability Registry. Can a specialist handle this?
+4. MODEL SELECTION — prefer haiku agents for routine work
+5. DISPATCH — invoke the agent now. Do NOT handle specialist work inline."
   exit 0
 fi
 
