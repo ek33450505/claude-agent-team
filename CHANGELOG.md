@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## Phase 4 (2026-03-22)
+
+### Universal Dispatcher
+- **New:** `/cast <request>` command — analyzes user intent and dispatches specialist agents
+- **Changed:** `route.sh` stripped to logging-only for observability (no more text injection or dispatch messages)
+- **Changed:** `CLAUDE.md.template` compressed from 175 to ~75 lines (delegation protocol now implicit in /cast behavior)
+- **Added:** BATS test suite for `route.sh` (16 tests covering all routing scenarios and edge cases)
+
+### Pattern Matching Simplification
+- **Removed:** Overly broad planner patterns (`implement`, `we need to`, `i want to`, etc.) — replaced by Claude NLU in /cast
+- **Removed:** `spawn-mode` from `route.sh` (superseded by explicit `/cast` invocation)
+- **Removed:** `post-write-review.sh` and `code-review-gate.sh` PostToolUse hooks (enforcement moved to user command)
+- **Simplified:** Stop hook to one-line prompt (reduced unnecessary output)
+
+### Architecture Shift
+- **From:** regex pattern matching (90 patterns, 15 routes) + text injection enforcement
+- **To:** Claude's native NLU via /cast + explicit user commands
+- **Result:** `route.sh` now observation-only (logs to dashboard), dispatch is user-initiated and transparent
+
+---
+
 ## Phase 2 (2026-03-21)
 
 ### Routing System

@@ -43,7 +43,7 @@ CORE_CMDS="plan review debug test secure commit data query"
 EXTENDED_CMDS="architect tdd build-fix e2e refactor docs readme"
 PRODUCTIVITY_CMDS="research report meeting email morning"
 PROFESSIONAL_CMDS="browser qa present"
-ALWAYS_CMDS="eval"
+ALWAYS_CMDS="eval cast"
 
 MACOS_SKILLS="calendar-fetch inbox-fetch reminders-fetch"
 LINUX_SKILLS="calendar-fetch-linux inbox-fetch-linux"

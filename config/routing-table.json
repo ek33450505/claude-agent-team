@@ -17,7 +17,8 @@
       "command": "/test",
       "post_chain": [
         "commit"
-      ]
+      ],
+      "spawn": true
     },
     {
       "patterns": [
@@ -57,7 +58,8 @@
       "post_chain": [
         "code-reviewer",
         "commit"
-      ]
+      ],
+      "spawn": true
     },
     {
       "patterns": [
@@ -88,21 +90,15 @@
         "create.*agent",
         "add.*agent",
         "new.*agent",
-        "wrap.*up",
-        "finish.*up",
-        "finalize",
         "let's build",
-        "add.*feature",
-        "implement",
-        "we need to",
-        "i want to",
-        "how should we"
+        "add.*feature"
       ],
       "agent": "planner",
       "command": "/plan",
       "post_chain": [
         "auto-dispatch-from-manifest"
-      ]
+      ],
+      "spawn": true
     },
     {
       "patterns": [

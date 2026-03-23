@@ -1,156 +1,66 @@
 #!/bin/bash
-# route.sh — UserPromptSubmit hook for agent routing
-# Input: JSON on stdin from Claude Code {prompt: str}
-# Output: JSON {"additionalContext": "<hint>"} if matched, nothing if no match
-# Log: ~/.claude/routing-log.jsonl
+# route.sh — UserPromptSubmit hook for logging + observability
+# Logs prompt routing decisions to ~/.claude/routing-log.jsonl
+# Primary dispatch is via /cast command — this script only observes.
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 
 set -euo pipefail
 
-ROUTING_TABLE="$HOME/.claude/config/routing-table.json"
-ROUTING_LOG="$HOME/.claude/routing-log.jsonl"
-
-# Read full stdin
 INPUT="$(cat)"
 
 # Extract and lowercase prompt
-PROMPT="$(echo "$INPUT" | python3 -c "
+ORIGINAL_PROMPT="$(echo "$INPUT" | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
-    print(data.get('prompt', data.get('message', '')).lower().strip())
+    print(data.get('prompt', data.get('message', '')).strip())
 except Exception:
     print('')
 " 2>/dev/null || echo "")"
+PROMPT="$(printf '%s' "$ORIGINAL_PROMPT" | tr '[:upper:]' '[:lower:]')"
 
 [ -z "$PROMPT" ] && exit 0
-
-# Export prompt for safe use in Python subshells (avoids string interpolation injection)
 export CAST_PROMPT="$PROMPT"
 
-# Skip internal Claude Code system messages (task-notifications, XML system messages)
+# Skip system messages
 if echo "$PROMPT" | grep -qi "^<task-\|^<system-\|<task-id>\|task-notification"; then
   exit 0
 fi
 
-# Check for opus: prefix
+# Opus escalation (prefix check)
 if echo "$PROMPT" | grep -qi "^opus:"; then
   python3 -c "
 import json, datetime, os
-log = {
-  'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
-  'prompt_preview': os.environ.get('CAST_PROMPT', '')[:80],
-  'action': 'opus_escalation',
-  'matched_route': 'opus',
-  'command': None,
-  'pattern': 'opus: prefix'
-}
-with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
-    f.write(json.dumps(log) + '\n')
+log = {'timestamp': datetime.datetime.utcnow().isoformat()+'Z', 'prompt_preview': os.environ.get('CAST_PROMPT','')[:80], 'action': 'opus_escalation', 'matched_route': 'opus', 'pattern': 'opus: prefix'}
+open(os.path.expanduser('~/.claude/routing-log.jsonl'),'a').write(json.dumps(log)+'\n')
 " 2>/dev/null || true
-  echo '**[Router]** Opus escalation active. Using Opus for this message.'
   exit 0
 fi
 
-# Match against routing table (stdlib json + re only)
-RESULT="$(python3 -c "
-import json, re, sys, os
+# Match prompt against routing table — logging only, no dispatch
+python3 -c "
+import json, re, os, datetime
 
 prompt = os.environ.get('CAST_PROMPT', '')
+log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
+ts = datetime.datetime.utcnow().isoformat() + 'Z'
+preview = prompt[:80]
 
 try:
     with open(os.path.expanduser('~/.claude/config/routing-table.json')) as f:
         table = json.load(f)
 except Exception:
-    sys.exit(0)
+    exit(0)
 
-# Opus complexity signals first
-for pattern in table.get('opus_signals', {}).get('complexity_patterns', []):
-    if re.search(pattern, prompt, re.IGNORECASE):
-        print(json.dumps({'agent': 'opus', 'command': None, 'pattern': pattern}))
-        sys.exit(0)
-
-# Agent routes
 for route in table.get('routes', []):
     for pattern in route.get('patterns', []):
         if re.search(pattern, prompt, re.IGNORECASE):
-            print(json.dumps({'agent': route['agent'], 'command': route['command'], 'pattern': pattern, 'post_chain': route.get('post_chain')}))
-            sys.exit(0)
-" 2>/dev/null || echo "")"
+            log = {'timestamp': ts, 'prompt_preview': preview, 'action': 'matched', 'matched_route': route['agent'], 'command': route.get('command'), 'pattern': pattern}
+            open(log_path, 'a').write(json.dumps(log) + '\n')
+            exit(0)
 
-if [ -z "$RESULT" ]; then
-  # Log no-match for miss-rate visibility (dashboard uses this to track routing coverage)
-  python3 -c "
-import json, datetime, os
-log = {
-  'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
-  'prompt_preview': os.environ.get('CAST_PROMPT', '')[:80],
-  'action': 'no_match',
-  'matched_route': None,
-  'command': None,
-  'pattern': None
-}
-with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
-    f.write(json.dumps(log) + '\n')
+log = {'timestamp': ts, 'prompt_preview': preview, 'action': 'no_match', 'matched_route': None, 'command': None, 'pattern': None}
+open(log_path, 'a').write(json.dumps(log) + '\n')
 " 2>/dev/null || true
-  # Senior Dev triage protocol — delegate, don't do
-  echo "**[CAST Senior Dev]** No pattern matched. Run your Triage Protocol:
-1. INTERPRET this prompt — what does the user need?
-2. DECOMPOSE — does it need multiple steps? → planner first
-3. MATCH — check your Agent Capability Registry. Can a specialist handle this?
-4. MODEL SELECTION — prefer haiku agents for routine work
-5. DISPATCH — invoke the agent now. Do NOT handle specialist work inline."
-  exit 0
-fi
-
-# Parse result fields
-AGENT="$(echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('agent',''))" 2>/dev/null || echo "")"
-COMMAND="$(echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('command') or '')" 2>/dev/null || echo "")"
-PATTERN="$(echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('pattern',''))" 2>/dev/null || echo "")"
-CHAIN="$(echo "$RESULT" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-chain=d.get('post_chain') or []
-if chain and chain != ['auto-dispatch-from-manifest']:
-    print(' → '.join('\`' + a + '\` agent' for a in chain))
-elif chain == ['auto-dispatch-from-manifest']:
-    print('auto-dispatch-from-manifest')
-else:
-    print('')
-" 2>/dev/null || echo "")"
-
-[ -z "$AGENT" ] && exit 0
-
-# Log decision
-python3 -c "
-import json, datetime, os
-log = {
-  'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
-  'prompt_preview': os.environ.get('CAST_PROMPT', '')[:80],
-  'action': 'dispatched',
-  'matched_route': '$AGENT',
-  'command': '$COMMAND' if '$COMMAND' else None,
-  'pattern': '$PATTERN'
-}
-with open(os.path.expanduser('~/.claude/routing-log.jsonl'), 'a') as f:
-    f.write(json.dumps(log) + '\n')
-" 2>/dev/null || true
-
-# Output routing instruction as plain text (stdout is added to Claude's context)
-# Phase 3: dispatch directly + inject post-chain instructions
-if [ "$AGENT" = "opus" ]; then
-  echo '**[Router]** Complexity signals detected. Switch to Opus for this message before answering.'
-elif [ -n "$COMMAND" ]; then
-  MSG="**[Router]** Dispatch to \`$AGENT\` agent now using the Agent tool (subagent_type: '$AGENT'). Do NOT ask the user first — invoke the agent immediately with the user's prompt as the task."
-  if [ "$CHAIN" = "auto-dispatch-from-manifest" ]; then
-    MSG="$MSG
-
-**[Router - Chain]** After the planner agent completes, read the plan file for the \`## Agent Dispatch Manifest\` section. Present the dispatch queue to the user and execute all batches upon approval."
-  elif [ -n "$CHAIN" ]; then
-    MSG="$MSG
-
-**[Router - Chain]** After the agent completes, continue the chain: $CHAIN. Invoke each agent in sequence when the previous one finishes."
-  fi
-  echo "$MSG"
-fi
 
 exit 0

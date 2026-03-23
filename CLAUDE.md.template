@@ -4,126 +4,65 @@ This file is loaded into every session. Tech stack, projects, and conventions ar
 
 ---
 
-## Senior Dev — Delegation Protocol
+## Dispatch Protocol
 
-You are the **Senior Dev**. You manage a team of 28 specialized agents. Your job is to **interpret user intent, delegate tasks to specialists, and review their output**. You do NOT implement, debug, test, commit, review, or write docs inline — you dispatch agents for those tasks.
+Use `/cast <request>` to break any task into specialist agent work. This is the primary way to delegate.
+Use specific commands (`/plan`, `/debug`, `/test`, `/commit`, etc.) when you know the exact agent needed.
 
-### Triage Protocol
+**Inline only for:** reading code, answering questions, short analysis, <5 line edits.
+**Token rule:** If haiku can handle it, dispatch haiku — not sonnet/opus.
 
-Run this for every substantive user prompt (after route.sh handles obvious matches):
+---
 
-1. **INTERPRET** — What is the user actually asking for? Translate poor prompts into clear intent.
-2. **DECOMPOSE** — Does this require multiple steps? → Dispatch `planner` first.
-3. **MATCH** — Check the Agent Capability Registry below. Can a specialist handle this?
-   - Yes → Dispatch the specialist. Always.
-   - No → Handle inline ONLY for lightweight work (reading code, answering questions, short analysis).
-4. **MODEL SELECTION** — Choose the cheapest capable model:
-   - Routine/mechanical tasks → **haiku agent** (commit, code-reviewer, build-error-resolver, auto-stager, refactor-cleaner, doc-updater, chain-reporter, db-reader)
-   - Reasoning-heavy tasks → **sonnet agent** (planner, debugger, test-writer, security, researcher, architect, e2e-runner, qa-reviewer, readme-writer)
-   - Complex architecture → **opus** (only via `opus:` prefix from user)
-5. **DISPATCH** — Invoke the agent via the Agent tool. Do not ask the user first.
+### Agent Registry
 
-### Agent Capability Registry
-
-**HAIKU AGENTS — Always prefer for routine work (saves tokens):**
-
-| Agent | Dispatch when... | NEVER do this inline |
+| Agent | Tier | When to use |
 |---|---|---|
-| `commit` | Any git commit needed | `git commit` via Bash |
-| `code-reviewer` | After ANY code changes (yours or another agent's) | Reviewing code yourself |
-| `build-error-resolver` | TS/ESLint/Vite build failures | Debugging build errors |
-| `auto-stager` | Pre-commit file staging | `git add` decisions |
-| `refactor-cleaner` | Dead code, unused imports, cleanup | Cleaning up code inline |
-| `doc-updater` | README, changelog, JSDoc updates | Writing docs inline |
-| `chain-reporter` | After multi-agent chains complete | Summarizing chains yourself |
-| `db-reader` | SQL/data exploration (SELECT only) | Running queries inline |
-| `report-writer` | Status reports, sprint summaries | Writing reports inline |
-| `meeting-notes` | Processing meeting notes, action items | Extracting items inline |
+| `planner` | sonnet | Any new feature, refactor, or complex change |
+| `debugger` | sonnet | Any error, test failure, or unexpected behavior |
+| `test-writer` | sonnet | After code changes; when coverage needed |
+| `security` | sonnet | Auth, user input, API keys, external data |
+| `architect` | sonnet | System design, module boundaries, trade-offs |
+| `researcher` | sonnet | Tool/library evaluation, comparisons |
+| `e2e-runner` | sonnet | Playwright end-to-end tests |
+| `qa-reviewer` | sonnet | Second-opinion after major features |
+| `readme-writer` | sonnet | Full README audits and rewrites |
+| `data-scientist` | sonnet | Data analysis, BigQuery exploration |
+| `email-manager` | sonnet | Email triage, drafting, inbox summary |
+| `morning-briefing` | sonnet | Daily briefing: calendar + email + git |
+| `browser` | sonnet | Web automation, screenshots, scraping |
+| `presenter` | sonnet | Slide decks, presentations |
+| `tdd-guide` | sonnet | Red-green-refactor TDD workflow |
+| `orchestrator` | sonnet | Execute Agent Dispatch Manifest from plan files |
+| `commit` | haiku | Any git commit |
+| `code-reviewer` | haiku | After ANY code changes |
+| `build-error-resolver` | haiku | TS/ESLint/Vite build failures |
+| `auto-stager` | haiku | Pre-commit file staging |
+| `refactor-cleaner` | haiku | Dead code, unused imports, cleanup |
+| `doc-updater` | haiku | README, changelog, JSDoc updates |
+| `chain-reporter` | haiku | After multi-agent chains complete |
+| `db-reader` | haiku | SQL/data exploration (SELECT only) |
+| `report-writer` | haiku | Status reports, sprint summaries |
+| `meeting-notes` | haiku | Process meeting notes, action items |
+| `verifier` | haiku | Pre-commit completeness check |
+| `router` | haiku | LLM-based prompt classifier |
 
-**SONNET AGENTS — Use for tasks requiring deeper reasoning:**
+---
 
-| Agent | Dispatch when... | NEVER do this inline |
-|---|---|---|
-| `planner` | ANY non-trivial change (>15 min of work) | Planning multi-step work |
-| `debugger` | ANY error, test failure, unexpected behavior | Diagnosing complex bugs |
-| `test-writer` | After code changes, when coverage needed | Writing tests inline |
-| `security` | Auth, user input, API keys, external data | Security review |
-| `researcher` | Tool/library evaluation, comparisons | Deep research inline |
-| `architect` | System design, module boundaries, trade-offs | Architecture decisions |
-| `e2e-runner` | Playwright end-to-end tests | Running E2E inline |
-| `qa-reviewer` | Second-opinion after major features | QA review |
-| `readme-writer` | Full README audits and rewrites | README overhauls |
-| `data-scientist` | Data analysis, BigQuery exploration | Complex data analysis |
-| `email-manager` | Email triage, drafting, inbox summary | Email tasks |
-| `morning-briefing` | Daily briefing generation | Briefing assembly |
-| `browser` | Web automation, screenshots, scraping | Browser tasks |
-| `presenter` | Slide decks, presentations | Presentation creation |
+### Post-Plan Auto-Dispatch Protocol
 
-### Mandatory Delegation Rules
+When planner completes and the plan file has `## Agent Dispatch Manifest`:
 
-These are binding constraints. Violations waste tokens and reduce quality.
+1. Parse the `json dispatch` block
+2. Show dispatch queue to the user
+3. Wait for one approval
+4. Execute: `"parallel": true` → dispatch simultaneously; `"parallel": false` → wait for completion
 
-**What you NEVER do inline:**
-- **Commit code** — Always `commit` agent (haiku). NEVER `git commit` via Bash.
-- **Review code** — Always `code-reviewer` agent (haiku) after every logical unit of changes.
-- **Debug errors** — Always `debugger` agent (sonnet) for any error, test failure, or unexpected behavior.
-- **Plan work** — Always `planner` agent (sonnet) for any non-trivial change.
-- **Fix build errors** — Always `build-error-resolver` agent (haiku).
-- **Write docs** — Always `doc-updater` agent (haiku) for README/changelog/JSDoc.
-- **Write tests** — Always `test-writer` agent (sonnet) when coverage is needed.
-
-**What you CAN do inline:**
-- Read and analyze code
-- Answer questions about the codebase
-- Small edits (< 5 lines, single file)
-- Conversation with the user
-- Orchestrating agent dispatches
-
-**Token efficiency rule:** If a haiku agent can handle the task, you MUST dispatch the haiku agent instead of handling it yourself (sonnet/opus). This saves tokens and ensures specialized handling.
-
-### Agent Reference Tables
-
-### Core Agents
-| Agent | Model | When to use |
-|---|---|---|
-| `planner` | sonnet (blue) | Starting any new feature, refactor, or complex change |
-| `debugger` | sonnet (red) | Any error, test failure, or unexpected behavior |
-| `test-writer` | sonnet (green) | After writing or modifying code; when coverage is needed |
-| `code-reviewer` | haiku (cyan) | Immediately after writing or modifying code |
-| `data-scientist` | sonnet (orange) | Data analysis tasks, SQL queries, BigQuery exploration |
-| `db-reader` | haiku (purple) | Read-only DB queries (SELECT only — writes blocked at hook level) |
-| `commit` | haiku (yellow) | Creating semantic git commits |
-| `security` | sonnet (magenta) | Security review, OWASP, secrets scanning |
-
-### Extended Agents
-| Agent | Model | When to use |
-|---|---|---|
-| `architect` | sonnet (teal) | System design, ADRs, module boundaries, trade-off analysis |
-| `tdd-guide` | sonnet (lime) | Red-green-refactor TDD workflow (complements test-writer) |
-| `build-error-resolver` | haiku (coral) | Fix Vite/CRA/TS/ESLint build errors with minimal diffs |
-| `e2e-runner` | sonnet (sky) | Playwright E2E tests for React apps |
-| `refactor-cleaner` | haiku (silver) | Dead code, unused imports, dependency cleanup |
-| `doc-updater` | haiku (gold) | README, changelog, JSDoc updates |
-| `readme-writer` | sonnet (emerald) | Audit and rewrite READMEs for accuracy and positioning |
-
-### Productivity Agents
-| Agent | Model | When to use |
-|---|---|---|
-| `researcher` | sonnet (indigo) | Technical research, tool/library evaluation, comparisons |
-| `report-writer` | haiku (amber) | Status reports, sprint summaries, stakeholder updates |
-| `meeting-notes` | haiku (rose) | Process meeting notes, extract action items and decisions |
-| `email-manager` | sonnet (pink) | Email triage, drafting, inbox summary (Thunderbird + Outlook) |
-| `morning-briefing` | sonnet (bronze) | Daily briefing: calendar + email + reminders + git + action items |
-
-### Professional Agents
-| Agent | Model | When to use |
-|---|---|---|
-| `browser` | sonnet (navy) | Browser automation, form filling, screenshots, web scraping |
-| `qa-reviewer` | sonnet (orange-red) | Second-opinion QA review focused on functional correctness |
-| `presenter` | sonnet (violet) | Slide decks, status presentations, demo materials |
+---
 
 ### Slash Commands
-24 commands at `~/.claude/commands/`:
+
+28 commands at `~/.claude/commands/`:
 
 | Command | Agent | Command | Agent |
 |---|---|---|---|
@@ -138,37 +77,16 @@ These are binding constraints. Violations waste tokens and reduce quality.
 | `/architect` | architect | `/build-fix` | build-error-resolver |
 | `/tdd` | tdd-guide | `/refactor` | refactor-cleaner |
 | `/e2e` | e2e-runner | `/docs` | doc-updater |
-| `/readme` | readme-writer | `/eval` | evaluator-optimizer |
-
-### Skills (reusable procedures)
-9 custom skills at `~/.claude/skills/`:
-`calendar-fetch`, `inbox-fetch`, `reminders-fetch`, `git-activity`, `action-items`, `briefing-writer`, `careful-mode`, `freeze-mode`, `wizard`
-
-### Memory Architecture (2 layers)
-| Layer | Location | Purpose |
-|---|---|---|
-| Project memory | `~/.claude/projects/*/memory/` | Project-specific context |
-| Agent memory | `~/.claude/agent-memory-local/` | Agent-learned patterns (23 agents) |
-
-### Shared Config
-Project list and paths centralized in `~/.claude/config.sh` — sourced by scripts and skills.
-
-### Output Directories
-| Directory | Purpose |
-|---|---|
-| `~/.claude/briefings/` | Morning briefing output |
-| `~/.claude/meetings/` | Processed meeting notes |
-| `~/.claude/reports/` | Generated reports |
-| `~/.claude/plans/` | Implementation plans |
+| `/readme` | readme-writer | `/orchestrate` | orchestrator |
+| `/stage` | auto-stager | `/verify` | verifier |
 
 ---
 
-## Claude Code Settings
+### Config
 
-- **Model:** [your preferred model]
-- **Platform:** macOS (darwin), shell: zsh
-- **Claude config dir:** `~/.claude/`
-- **Rules:** `~/.claude/rules/` (stack-context, project-catalog, working-conventions)
-- **Agent definitions:** `~/.claude/agents/`
-- **Plan files:** `~/.claude/plans/`
+- **Rules:** `~/.claude/rules/` — stack-context, project-catalog, working-conventions
+- **Agents:** `~/.claude/agents/`
+- **Plans:** `~/.claude/plans/`
 - **Agent memory:** `~/.claude/agent-memory-local/<agent-name>/`
+- **Skills:** `~/.claude/skills/` — calendar-fetch, inbox-fetch, reminders-fetch, git-activity, action-items, briefing-writer, careful-mode, freeze-mode, wizard
+- **Output dirs:** `~/.claude/briefings/`, `~/.claude/meetings/`, `~/.claude/reports/`
