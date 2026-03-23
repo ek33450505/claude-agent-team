@@ -17,6 +17,19 @@
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/pre-tool-guard.sh",
+            "timeout": 3
+          }
+        ],
+        "description": "CAST enforcement — blocks raw git commit/push, redirects to agents"
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -26,7 +39,7 @@
             "timeout": 5
           }
         ],
-        "description": "Agent routing — suggests the right slash command for the task"
+        "description": "CAST routing — matches prompts and injects [CAST-DISPATCH] directives"
       }
     ],
     "PostToolUse": [
@@ -35,11 +48,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/auto-format.sh",
+            "command": "bash ~/.claude/scripts/post-tool-hook.sh",
             "timeout": 10
           }
         ],
-        "description": "Auto-format JS/TS/CSS files after Write/Edit if prettier is configured"
+        "description": "CAST review — auto-formats code and injects [CAST-REVIEW] directive"
       }
     ],
     "Stop": [
@@ -47,10 +60,10 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "Before completing: if code was modified but no tests were run, suggest running them. If a build-breaking change was made, suggest verifying the build. Otherwise, allow completion."
+            "prompt": "Were code changes made without dispatching code-reviewer? Were commits made without the commit agent? If yes, dispatch now before completing."
           }
         ],
-        "description": "Verification nudge before completion"
+        "description": "CAST safety net — catches missed reviews/commits before session ends"
       }
     ]
   },

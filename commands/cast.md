@@ -1,32 +1,34 @@
-Analyze the user's request and break it into specialist agent tasks. Do NOT do any work inline — your ONLY job is to decompose and dispatch.
+CAST diagnostic and manual override command.
 
-## Request
+## Usage
+
+- `/cast` (no args) — Show routing status: last matched route, available agents, hook health
+- `/cast <agent> <prompt>` — Force-dispatch a specific agent, bypassing automatic routing
+
+## If arguments provided:
+
 $ARGUMENTS
 
-## Agent Registry
-| Agent | Tier | Dispatch when |
-|---|---|---|
-| `planner` | sonnet | New features, complex changes, multi-step work |
-| `debugger` | sonnet | Errors, bugs, failures, unexpected behavior |
-| `test-writer` | sonnet | Writing or running tests |
-| `code-reviewer` | haiku | After code changes |
-| `commit` | haiku | Git commits |
-| `security` | sonnet | Auth, input validation, secrets |
-| `build-error-resolver` | haiku | Build/TS/ESLint errors |
-| `refactor-cleaner` | haiku | Dead code, cleanup |
-| `doc-updater` | haiku | README, docs, changelog |
-| `researcher` | sonnet | Compare tools, evaluate libraries |
-| `architect` | sonnet | System design, trade-offs |
-| `e2e-runner` | sonnet | Playwright end-to-end tests |
+Parse the first word as the agent name. Dispatch that agent via the Agent tool with the remaining text as the prompt. If the first word is not a recognized agent name, treat the entire text as a prompt and use the automatic routing table to select the agent.
 
-## Protocol
+## If no arguments:
 
-1. **Classify** — Is this a single-agent task or multi-step?
-2. **Dispatch immediately** — Use the Agent tool. Do not ask the user first.
-   - Single-agent: dispatch one specialist with the full request
-   - Multi-step: dispatch agents in dependency order — parallel where independent, sequential where dependent
-   - Always prefer haiku-tier agents for routine tasks (saves tokens)
-3. **Chain** — After code changes: `code-reviewer` → `commit`
-4. **Never work inline** — If no agent fits, say so. Do not fall back to doing it yourself.
+Show:
+1. **Last routing decision** — Read the last 3 entries from `~/.claude/routing-log.jsonl`
+2. **Available agents** — List all agents from `~/.claude/agents/` with their model tier
+3. **Hook status** — Confirm route.sh, pre-tool-guard.sh, and post-tool-hook.sh are present
 
-Dispatch now.
+## Agent Registry (for manual dispatch)
+
+| Agent | Model | Agent | Model |
+|---|---|---|---|
+| `commit` | haiku | `debugger` | sonnet |
+| `code-reviewer` | haiku | `test-writer` | sonnet |
+| `build-error-resolver` | haiku | `planner` | sonnet |
+| `refactor-cleaner` | haiku | `security` | sonnet |
+| `doc-updater` | haiku | `architect` | sonnet |
+| `auto-stager` | haiku | `researcher` | sonnet |
+| `db-reader` | haiku | `e2e-runner` | sonnet |
+| `report-writer` | haiku | `qa-reviewer` | sonnet |
+| `meeting-notes` | haiku | `data-scientist` | sonnet |
+| `chain-reporter` | haiku | `morning-briefing` | sonnet |

@@ -1,210 +1,177 @@
 {
   "routes": [
     {
-      "patterns": [
-        "write.*test",
-        "add.*test",
-        "test.*for",
-        "test coverage",
-        "test.*fail|fail.*test",
-        "vitest",
-        "jest",
-        "need.*test",
-        "test.*coverage",
-        "should.*test"
-      ],
+      "patterns": ["write.*test", "add.*test", "test.*for", "test coverage", "test.*fail|fail.*test", "vitest", "jest", "need.*test", "test.*coverage", "should.*test", "missing.*test", "no.*test"],
       "agent": "test-writer",
+      "model": "sonnet",
       "command": "/test",
-      "post_chain": [
-        "commit"
-      ],
-      "spawn": true
+      "confidence": "hard",
+      "post_chain": ["commit"]
     },
     {
-      "patterns": [
-        "^commit$",
-        "^/commit\\b",
-        "git commit",
-        "^push$",
-        "^git push",
-        "stage and commit",
-        "create a commit",
-        "make a commit",
-        "need to commit"
-      ],
+      "patterns": ["^commit$", "^/commit\\b", "git commit", "^push$", "^git push", "stage and commit", "create a commit", "make a commit", "need to commit"],
       "agent": "commit",
+      "model": "haiku",
       "command": "/commit",
+      "confidence": "hard",
       "post_chain": null
     },
     {
       "patterns": [
-        "fix.*bug",
-        "debug",
-        "why.*failing",
-        "what.*error",
-        "traceback",
-        "stack trace",
-        "not working",
-        "\\bbroken\\b",
-        "quick.*fix",
-        "quickfix",
-        "not.*showing",
-        "what.*wrong",
-        "doesn't.*work",
-        "issue with"
+        "fix.*bug", "debug", "why.*failing", "what.*error", "traceback", "stack trace",
+        "not working", "\\bbroken\\b", "quick.*fix", "quickfix", "not.*showing",
+        "what.*wrong", "doesn't.*work", "issue with",
+        "is broken", "page.*broken", "not.*correct", "something.*wrong",
+        "\\berror\\b", "\\bexception\\b", "\\bcrash\\b", "\\bfails\\b", "\\bfailing\\b",
+        "won'?t work", "getting an error",
+        "\\bTypeError\\b", "\\bReferenceError\\b", "\\bstuck\\b",
+        "^fix\\b", "can you fix", "please fix", "can'?t.*load",
+        "blank.*screen", "white.*screen", "console.*error",
+        "(it|this|that).*(broken|not working|wrong)",
+        "nothing.*happen", "unexpected.*behav"
       ],
       "agent": "debugger",
+      "model": "sonnet",
       "command": "/debug",
-      "post_chain": [
-        "code-reviewer",
-        "commit"
-      ],
-      "spawn": true
+      "confidence": "hard",
+      "post_chain": ["code-reviewer", "commit"]
     },
     {
-      "patterns": [
-        "^/review\\b",
-        "^/code-review\\b",
-        "review.*code",
-        "code review",
-        "check.*changes",
-        "look.*over",
-        "before we push",
-        "check.*code",
-        "look.*at.*changes"
-      ],
+      "patterns": ["^/review\\b", "^/code-review\\b", "review.*code", "code review", "check.*changes", "look.*over", "before we push", "check.*code", "look.*at.*changes", "review.*pr", "pr review"],
       "agent": "code-reviewer",
+      "model": "haiku",
       "command": "/review",
-      "post_chain": [
-        "commit"
-      ]
+      "confidence": "hard",
+      "post_chain": ["commit"]
     },
     {
       "patterns": [
-        "^/plan\\b",
-        "plan.*implement",
-        "implementation plan",
-        "how.*should.*build",
-        "design.*feature",
-        "architect",
-        "create.*agent",
-        "add.*agent",
-        "new.*agent",
-        "let's build",
-        "add.*feature"
+        "^/plan\\b", "plan.*implement", "implementation plan", "how.*should.*build",
+        "design.*feature", "create.*agent", "add.*agent", "new.*agent",
+        "let's build", "add.*feature",
+        "^implement\\b", "^create a\\b", "^build\\b",
+        "i want to (add|build|create)", "let'?s (add|build|create|implement)",
+        "^add.*page", "^add.*route", "^add.*endpoint",
+        "add support for", "build.*feature",
+        "^add.*to the", "^add a\\b", "^create a new\\b", "^we need to\\b"
       ],
       "agent": "planner",
+      "model": "sonnet",
       "command": "/plan",
-      "post_chain": [
-        "auto-dispatch-from-manifest"
-      ],
-      "spawn": true
+      "confidence": "soft",
+      "post_chain": ["auto-dispatch-from-manifest"]
     },
     {
-      "patterns": [
-        "write.*docs",
-        "update.*readme",
-        "ensure.*readme",
-        "verify.*readme",
-        "readme.*accurate",
-        "readme.*describes",
-        "check.*readme",
-        "update.*changelog",
-        "add.*jsdoc",
-        "document",
-        "update.*doc",
-        "fix.*readme",
-        "readme.*wrong"
-      ],
+      "patterns": ["write.*docs", "update.*readme", "ensure.*readme", "verify.*readme", "readme.*accurate", "readme.*describes", "check.*readme", "update.*changelog", "add.*jsdoc", "document.*the", "update.*doc", "fix.*readme", "readme.*wrong", "^/docs\\b"],
       "agent": "doc-updater",
+      "model": "haiku",
       "command": "/docs",
-      "post_chain": [
-        "commit"
-      ]
+      "confidence": "hard",
+      "post_chain": ["commit"]
     },
     {
-      "patterns": [
-        "security.*review",
-        "check.*vulnerabilit",
-        "owasp",
-        "sql injection",
-        "xss"
-      ],
+      "patterns": ["security.*review", "check.*vulnerabilit", "owasp", "sql injection", "xss", "^/secure\\b", "security.*audit"],
       "agent": "security",
+      "model": "sonnet",
       "command": "/secure",
+      "confidence": "hard",
       "post_chain": null
     },
     {
-      "patterns": [
-        "refactor",
-        "dead code",
-        "clean up",
-        "unused import"
-      ],
+      "patterns": ["\\barchitecture\\b", "how should.*structured", "best.*approach.*for", "trade.?off", "\\bADR\\b", "design.*decision", "module.*boundar", "should we use", "which.*approach", "evaluate.*option", "^/architect\\b"],
+      "agent": "architect",
+      "model": "sonnet",
+      "command": "/architect",
+      "confidence": "hard",
+      "post_chain": null
+    },
+    {
+      "patterns": ["refactor", "dead code", "clean up", "unused import", "^/refactor\\b", "simplify.*code", "reduce.*complexity"],
       "agent": "refactor-cleaner",
+      "model": "haiku",
       "command": "/refactor",
-      "post_chain": [
-        "code-reviewer",
-        "commit"
-      ]
+      "confidence": "hard",
+      "post_chain": ["code-reviewer", "commit"]
     },
     {
-      "patterns": [
-        "research",
-        "compare.*librar",
-        "evaluate.*tool",
-        "which.*framework"
-      ],
+      "patterns": ["research", "compare.*librar", "evaluate.*tool", "which.*framework", "^/research\\b", "pros.*cons", "alternative.*to"],
       "agent": "researcher",
+      "model": "sonnet",
       "command": "/research",
+      "confidence": "hard",
       "post_chain": null
     },
     {
-      "patterns": [
-        "e2e test",
-        "playwright",
-        "end.to.end",
-        "integration test"
-      ],
+      "patterns": ["e2e test", "playwright", "end.to.end", "integration test", "^/e2e\\b"],
       "agent": "e2e-runner",
+      "model": "sonnet",
       "command": "/e2e",
+      "confidence": "hard",
       "post_chain": null
     },
     {
-      "patterns": [
-        "build.*error",
-        "typescript error",
-        "eslint.*error",
-        "tsc.*fail",
-        "vite.*error"
-      ],
+      "patterns": ["build.*error", "typescript error", "eslint.*error", "tsc.*fail", "vite.*error", "^/build-fix\\b", "build.*fail", "compile.*error", "type.*error.*in"],
       "agent": "build-error-resolver",
+      "model": "haiku",
       "command": "/build-fix",
-      "post_chain": [
-        "commit"
-      ]
+      "confidence": "hard",
+      "post_chain": ["commit"]
     },
     {
-      "patterns": [
-        "slide deck",
-        "create.*presentation",
-        "create.*slides",
-        "status.*deck"
-      ],
+      "patterns": ["slide deck", "create.*presentation", "create.*slides", "status.*deck", "^/present\\b"],
       "agent": "presenter",
+      "model": "sonnet",
       "command": "/present",
+      "confidence": "hard",
       "post_chain": null
     },
     {
-      "patterns": [
-        "morning briefing",
-        "daily briefing",
-        "what.*on.*today",
-        "my schedule"
-      ],
+      "patterns": ["morning briefing", "daily briefing", "what.*on.*today", "my schedule", "^/morning\\b"],
       "agent": "morning-briefing",
+      "model": "sonnet",
       "command": "/morning",
+      "confidence": "hard",
       "post_chain": null
+    },
+    {
+      "patterns": ["^/data\\b", "analyze.*data", "data.*analysis", "bigquery", "\\bbq\\b.*query"],
+      "agent": "data-scientist",
+      "model": "sonnet",
+      "command": "/data",
+      "confidence": "hard",
+      "post_chain": null
+    },
+    {
+      "patterns": ["^/query\\b", "run.*query", "select.*from", "sql.*query"],
+      "agent": "db-reader",
+      "model": "haiku",
+      "command": "/query",
+      "confidence": "hard",
+      "post_chain": null
+    },
+    {
+      "patterns": ["^/email\\b", "check.*email", "inbox", "draft.*email", "reply.*to"],
+      "agent": "email-manager",
+      "model": "sonnet",
+      "command": "/email",
+      "confidence": "hard",
+      "post_chain": null
+    },
+    {
+      "patterns": ["^/qa\\b", "qa review", "quality.*check", "second.*opinion"],
+      "agent": "qa-reviewer",
+      "model": "sonnet",
+      "command": "/qa",
+      "confidence": "hard",
+      "post_chain": null
+    },
+    {
+      "patterns": ["^/readme\\b", "rewrite.*readme", "readme.*audit"],
+      "agent": "readme-writer",
+      "model": "sonnet",
+      "command": "/readme",
+      "confidence": "hard",
+      "post_chain": ["commit"]
     }
   ],
   "opus_signals": {
