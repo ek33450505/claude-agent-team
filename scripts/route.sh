@@ -1,5 +1,5 @@
 #!/bin/bash
-# route.sh v3 — CAST Active Dispatch Injection
+# route.sh v3.1 — CAST Active Dispatch Injection
 # UserPromptSubmit hook: matches prompts against routing-table.json
 # On match: injects [CAST-DISPATCH] directive into Claude's context via hookSpecificOutput
 # On no match: outputs nothing, Claude handles inline normally
@@ -24,8 +24,6 @@ except Exception:
 PROMPT="$(printf '%s' "$ORIGINAL_PROMPT" | tr '[:upper:]' '[:lower:]')"
 
 [ -z "$PROMPT" ] && exit 0
-export CAST_PROMPT="$PROMPT"
-export CAST_ORIGINAL="$ORIGINAL_PROMPT"
 
 # Skip system messages
 if echo "$PROMPT" | grep -qi "^<task-\|^<system-\|<task-id>\|task-notification"; then
@@ -34,16 +32,18 @@ fi
 
 # Opus escalation (prefix check) — log and continue
 if echo "$PROMPT" | grep -qi "^opus:"; then
-  python3 -c "
+  # Scope variables to subprocess invocation only (not exported globally)
+  CAST_PROMPT_VAL="$PROMPT" python3 -c "
 import json, datetime, os
-log = {'timestamp': datetime.datetime.utcnow().isoformat()+'Z', 'prompt_preview': os.environ.get('CAST_PROMPT','')[:80], 'action': 'opus_escalation', 'matched_route': 'opus', 'pattern': 'opus: prefix'}
+log = {'timestamp': datetime.datetime.utcnow().isoformat()+'Z', 'prompt_preview': os.environ.get('CAST_PROMPT_VAL','')[:80], 'action': 'opus_escalation', 'matched_route': 'opus', 'pattern': 'opus: prefix'}
 open(os.path.expanduser('~/.claude/routing-log.jsonl'),'a').write(json.dumps(log)+'\n')
 " 2>/dev/null || true
   exit 0
 fi
 
 # Match prompt against routing table and inject dispatch directive
-python3 -c "
+# Variables are passed as env prefixes to the subprocess rather than globally exported
+CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
 import json, re, os, datetime, sys
 
 prompt = os.environ.get('CAST_PROMPT', '')
@@ -55,12 +55,22 @@ preview = prompt[:80]
 try:
     with open(os.path.expanduser('~/.claude/config/routing-table.json')) as f:
         table = json.load(f)
-except Exception:
+except Exception as e:
+    # Log config read failure for observability
+    try:
+        log = {'timestamp': ts, 'prompt_preview': preview, 'action': 'config_error', 'error': str(e)}
+        open(log_path, 'a').write(json.dumps(log) + '\n')
+    except Exception:
+        pass
     sys.exit(0)
 
 for route in table.get('routes', []):
     for pattern in route.get('patterns', []):
-        if re.search(pattern, prompt, re.IGNORECASE):
+        try:
+            matched = re.search(pattern, prompt, re.IGNORECASE)
+        except re.error:
+            continue  # Skip malformed patterns silently
+        if matched:
             agent = route['agent']
             confidence = route.get('confidence', 'hard')
             command = route.get('command', '')
@@ -77,7 +87,7 @@ for route in table.get('routes', []):
 
             directive = f'[CAST-DISPATCH] Route: {agent} (confidence: {confidence})\n'
             directive += f'{strength}: {verb} the \`{agent}\` agent via the Agent tool (model: {model}).\n'
-            directive += f'Pass the user\\'s full prompt as the agent task. Do NOT handle this inline.\n'
+            directive += f'Pass the user\'s full prompt as the agent task. Do NOT handle this inline.\n'
 
             # Add post-chain directive if present
             if post_chain and post_chain != ['auto-dispatch-from-manifest']:
