@@ -32,7 +32,7 @@ User types a prompt
 │  Hook 1 — UserPromptSubmit                            │
 │  scripts/route.sh                                     │
 │                                                       │
-│  Matches prompt against 19 routes in routing-table.  │
+│  Matches prompt against 21 routes in routing-table.  │
 │  On match: injects [CAST-DISPATCH] directive into    │
 │  Claude's context via hookSpecificOutput.            │
 │  Claude sees the directive alongside the prompt and  │
@@ -117,7 +117,7 @@ On no match, `route.sh` outputs nothing. Claude handles the prompt inline (answe
 
 ## Routing Table
 
-19 routes covering the most common development tasks. Each route specifies the agent, model tier, and optional post-chain:
+21 routes covering the most common development tasks. Each route specifies the agent, model tier, and optional post-chain:
 
 | Trigger patterns (examples) | Agent | Model | Post-chain |
 |---|---|---|---|
@@ -206,7 +206,7 @@ The file defines:
 
 ## Agent Roster
 
-28 agents across 5 tiers.
+29 agents across 5 tiers.
 
 **Haiku — routine and mechanical**
 
@@ -245,37 +245,101 @@ The file defines:
 | `qa-reviewer` | `/qa` | Second-opinion QA on functional correctness |
 | `presenter` | `/present` | Slide decks, status presentations |
 | `orchestrator` | `/orchestrate` | Agent Dispatch Manifest execution |
+| `bash-specialist` | — | CAST hook scripts, exit codes, hookSpecificOutput format |
 
 ---
 
 ## Memory Architecture
 
-Two layers that persist across every session.
+Two independent memory layers persist state across every session. Together they make every conversation context-aware from the first token.
+
+### Project Memory
+
+Stored at `~/.claude/projects/<project-hash>/memory/`. This directory is project-specific — it lives alongside your working directory's session history and is loaded automatically when you open Claude Code in that project.
 
 ```
-~/.claude/
-├── projects/*/memory/           ← Project memory (per working directory)
-│   ├── MEMORY.md                ← Index — loaded into every session via CLAUDE.md
-│   ├── user_role.md
-│   ├── feedback_testing.md
-│   └── project_decisions.md
-│
-└── agent-memory-local/          ← Agent memory (per specialist)
-    ├── planner/MEMORY.md        ← What planner has learned across all sessions
-    ├── debugger/MEMORY.md       ← Recurring failure patterns
-    ├── code-reviewer/MEMORY.md  ← Project-specific review preferences
-    └── ...25 more agents
+~/.claude/projects/<hash>/memory/
+├── MEMORY.md                ← Index file — loaded into every context window
+├── user_role.md             ← Who you are, your expertise level, your preferences
+├── feedback_testing.md      ← Corrections and confirmations from past sessions
+├── project_decisions.md     ← Goals, constraints, architectural choices
+└── reference_external.md   ← Where to find info: Linear boards, Grafana dashboards, Slack channels
 ```
 
-**Project memory** — loaded automatically. Claude never asks who you are or what your stack is.
+`MEMORY.md` is an index. When Claude loads a session, it reads the index, which points to individual memory files. Memory files use four typed categories:
 
-**Agent memory** — per-specialist. Each agent consults its own `MEMORY.md` on invocation and updates it when something is worth preserving. Four memory types: `user` (role, preferences), `feedback` (what worked, corrections), `project` (goals, decisions), `reference` (where external info lives).
+| Type | Stores | Example |
+|---|---|---|
+| `user` | Role, expertise, preferences | "Senior Go dev, new to React — frame frontend explanations in terms of backend analogues" |
+| `feedback` | Corrections + confirmed approaches | "Don't mock the database — integration tests must hit real DB; prior incident caused prod failure" |
+| `project` | Goals, decisions, deadlines | "Auth rewrite is compliance-driven, not tech debt — scope decisions favor compliance over ergonomics" |
+| `reference` | Where info lives externally | "Pipeline bugs tracked in Linear project INGEST; oncall watches grafana.internal/d/api-latency" |
+
+Claude writes to project memory automatically — when it learns something about your role, when you correct an approach, when a project decision is made. The next session starts with full context. **You never re-explain your stack, preferences, or project history.**
+
+### Agent Memory
+
+Each specialist maintains its own memory at `~/.claude/agent-memory-local/<agent>/MEMORY.md`. These are isolated per-agent and consulted at invocation time.
+
+```
+~/.claude/agent-memory-local/
+├── planner/MEMORY.md        ← Preferred plan formats, task sizing preferences
+├── debugger/MEMORY.md       ← Recurring failure patterns in this codebase
+├── code-reviewer/MEMORY.md  ← Project-specific review standards, what to ignore
+├── commit/MEMORY.md         ← Commit message style, branch conventions
+├── test-writer/MEMORY.md    ← Test patterns, framework setup, coverage targets
+└── ...24 more agents
+```
+
+The debugger remembers where bugs have appeared before. The code reviewer remembers what your project considers acceptable. The commit agent remembers your commit message style. Each specialist improves over time within your codebase — not globally, but for your specific working patterns.
+
+### What This Means in Practice
+
+- Claude Code on a fresh session in a known project: full context, no onboarding prompts
+- Agents invoked for the first time in a new project: they read what the previous session wrote
+- Session consistency is maintained by the memory system, not by keeping the same context window alive
+- Token usage drops because Claude isn't re-establishing context every session
+
+---
+
+## Config & Rules Layer
+
+The `~/.claude/rules/` directory sets behavioral context that loads into every session automatically. Unlike agent-specific memory, rules are global — they apply regardless of which agent is running or which project is open.
+
+```
+~/.claude/rules/
+├── working-conventions.md     ← Quality gates: TDD, commit agent mandate, review mandate
+├── stack-context.md           ← Your tech stack: React version, test framework, DB, CSS lib
+└── project-catalog.md         ← Your projects: paths, stacks, notes per repo
+```
+
+**`working-conventions.md`** is the enforcer — it contains the same mandates as the hooks but in natural language: always use the commit agent, always invoke code-reviewer after changes, never mock the database. Claude reads this alongside hook directives.
+
+**`stack-context.md`** means agents never guess your stack. The test-writer knows you're on Vitest, not Jest. The build-error-resolver knows you're on Vite, not webpack. The architect knows your ORM.
+
+**`project-catalog.md`** gives agents a map of your entire workspace — which repos exist, where they live, what stack they use, and any per-project notes. The debugger can cross-reference other projects. The planner can scope work against your actual repository structure.
+
+These three files are the difference between an agent that asks "what's your tech stack?" on every session and one that already knows.
 
 ---
 
 ## Skills
 
-9 reusable multi-step procedures that agents invoke as sub-workflows: `calendar-fetch`, `inbox-fetch`, `reminders-fetch` (macOS + Outlook), `git-activity`, `action-items`, `briefing-writer`, `careful-mode`, `freeze-mode`, `wizard` (all platforms).
+Skills are reusable multi-step procedures — composed workflows that agents invoke as sub-routines. Unlike slash commands (which dispatch a single agent), skills orchestrate sequences of tool calls and can be called from within an agent's context.
+
+| Skill | Platform | What it does |
+|---|---|---|
+| `calendar-fetch` | macOS + Outlook | Fetches today's calendar events via AppleScript |
+| `inbox-fetch` | macOS + Outlook | Fetches unread emails, classifies by priority |
+| `reminders-fetch` | macOS | Fetches due and overdue Apple Reminders tasks |
+| `git-activity` | All | Scans project repos for yesterday's commits across your catalog |
+| `action-items` | All | Extracts unchecked checkboxes from meeting notes |
+| `briefing-writer` | All | Assembles morning briefing sections into a structured markdown file |
+| `careful-mode` | All | Read-only session — blocks all Write, Edit, and Bash operations |
+| `freeze-mode` | All | Exploration mode — no modifications allowed |
+| `wizard` | All | Multi-step workflow with human approval gates before destructive operations |
+
+The `morning-briefing` agent uses five of these skills in sequence: `calendar-fetch` → `inbox-fetch` → `reminders-fetch` → `git-activity` → `action-items` → `briefing-writer`. The result is a structured markdown briefing at `~/.claude/briefings/` every morning with zero prompting.
 
 The installer detects platform and installs Linux stubs for macOS-only skills.
 
@@ -293,7 +357,7 @@ The installer offers three modes:
 
 | Option | What you get |
 |---|---|
-| **Full** | All 28 agents, 30 commands, 9 skills, 3 scripts, 4 hooks, rules |
+| **Full** | All 29 agents, 30 commands, 9 skills, 3 scripts, 4 hooks, rules |
 | **Core** | 8 essential agents + their commands (minimal, portable) |
 | **Custom** | Choose categories: core, extended, productivity, professional |
 
@@ -312,7 +376,7 @@ Then merge `settings.template.json` into your `~/.claude/settings.local.json` to
 ## Repo Structure
 
 ```
-claude-agent-team/
+claude-agent-team/                    # What you clone
 ├── install.sh                        # Interactive installer (full / core / custom)
 ├── CLAUDE.md.template                # Global context — 60 lines, 3 directives
 ├── config.sh.template                # Shared project paths for skills and scripts
@@ -324,14 +388,14 @@ claude-agent-team/
 │   └── pre-tool-guard.sh             # PreToolUse Bash — hard-blocks git commit/push
 │
 ├── config/
-│   └── routing-table.json            # 19 routes: patterns, agent, model, confidence, post_chain
+│   └── routing-table.json            # 21 routes: patterns, agent, model, confidence, post_chain
 │
 ├── agents/
 │   ├── core/           (8 agents)
 │   ├── extended/       (8 agents)
 │   ├── productivity/   (5 agents)
 │   ├── professional/   (3 agents)
-│   └── orchestration/  (4 agents)
+│   └── orchestration/  (5 agents)
 │
 ├── commands/           (30 commands) # One .md per slash command
 │
@@ -346,6 +410,41 @@ claude-agent-team/
 │
 └── docs/
     └── agent-quality-rubric.md       # 5-dimension scoring sheet for all agents
+```
+
+### Runtime Layout (`~/.claude/` after install)
+
+```
+~/.claude/
+├── CLAUDE.md                         # 60-line directive file — loaded every session
+├── settings.local.json               # Hook wiring (4 hooks), permissions, sandbox
+├── config.sh                         # Your project paths — sourced by skills
+│
+├── agents/                           # 29 agent definitions (.md frontmatter + prompt)
+├── commands/                         # 30 slash command prompts
+├── skills/                           # 9 multi-step skill workflows
+│
+├── rules/
+│   ├── working-conventions.md        # Global quality mandates
+│   ├── stack-context.md              # Your tech stack (filled in at install)
+│   └── project-catalog.md           # Your project map (filled in at install)
+│
+├── config/
+│   └── routing-table.json            # 21 routes — edit here to add/remove dispatch rules
+│
+├── routing-log.jsonl                 # Append-only dispatch log (every prompt, every route)
+│
+├── projects/<hash>/
+│   ├── memory/MEMORY.md             ← Project memory index (auto-loaded per project)
+│   └── *.jsonl                       # Session conversation history
+│
+├── agent-memory-local/
+│   └── <agent>/MEMORY.md            ← Per-agent learned preferences and patterns
+│
+├── plans/                            # Planner output — JSON manifests + markdown specs
+├── briefings/                        # Morning briefing output (daily markdown)
+├── reports/                          # Chain reporter output
+└── meetings/                         # Meeting notes processor output
 ```
 
 ---
@@ -396,7 +495,7 @@ Create `~/.claude/commands/my-command.md` with the agent prompt and `$ARGUMENTS`
 
 | Hook | Trigger | Script | What it does |
 |---|---|---|---|
-| `UserPromptSubmit` | Every user prompt | `route.sh` | Matches against 19 routes, injects [CAST-DISPATCH] directive or logs no-match |
+| `UserPromptSubmit` | Every user prompt | `route.sh` | Matches against 21 routes, injects [CAST-DISPATCH] directive or logs no-match |
 | `PostToolUse` | After Write or Edit | `post-tool-hook.sh` | Injects [CAST-REVIEW] directive; runs prettier auto-format |
 | `PreToolUse` | Before every Bash call | `pre-tool-guard.sh` | Hard-blocks `git commit` and `git push` (exit 2) |
 | `Stop` | Before response | prompt | Safety net — catches missed reviews and commits |
@@ -427,4 +526,4 @@ MIT. See [LICENSE](LICENSE).
 
 ---
 
-Built with Claude Code. Designed to make Claude Code work the way a senior engineering team works — automatically, at the infrastructure layer, not as advisory text that gets ignored.
+Built with Claude Code. Designed to run the way a real engineering team works — automatically, at the infrastructure layer, with every session informed by what the last one learned.
