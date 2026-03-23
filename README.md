@@ -2,7 +2,7 @@
 
 **Automatic agent dispatch for Claude Code. The right specialist runs without you asking.**
 
-CAST embeds a 28-agent development team into Claude Code at the hook layer. When you type a prompt, three enforcement hooks intercept it before Claude sees it — dispatching the right specialist, enforcing code review after every write, and hard-blocking raw `git commit`. No manual `/cast` command required for most tasks.
+CAST embeds a 29-agent development team into Claude Code at the hook layer. When you type a prompt, three enforcement hooks intercept it before Claude sees it — dispatching the right specialist, enforcing code review after every write, and hard-blocking raw `git commit`. No manual `/cast` command required for most tasks.
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team.git
