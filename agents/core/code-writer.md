@@ -57,9 +57,17 @@ Write a machine-readable status file: create a JSON file at `~/.claude/agent-sta
 
 ## Completion Report
 
-Output this as your final response:
+Output this as your final response. Always include the Work Log — it is the primary way the user sees what you did.
 
 ---
+## Work Log
+
+- Read: [list each file read with line count, e.g. "src/auth.ts (142 lines)"]
+- Wrote/edited: [list each file changed with a one-line description of the change]
+- code-reviewer result: [DONE | DONE_WITH_CONCERNS — include any critical findings verbatim]
+- test-writer result: [DONE | skipped — reason if skipped]
+- Decisions: [any non-obvious choices made, e.g. "used existing retry helper at utils/retry.js rather than inlining"]
+
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 Summary: [what was implemented, which files, whether code-reviewer approved]
 Files changed: [explicit list]

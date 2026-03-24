@@ -11,6 +11,7 @@ System hooks inject directives into your context. These are not suggestions — 
 - **`[CAST-DISPATCH]`** — Dispatch the named agent via the Agent tool. Pass the user's full prompt. Do NOT handle the task inline.
 - **`[CAST-REVIEW]`** — Dispatch `code-reviewer` (haiku) after completing your current logical unit of changes.
 - **`[CAST-CHAIN]`** — After the primary agent completes, dispatch the listed agents in sequence. Do not ask for confirmation.
+- **Agent Work Logs** — When an agent returns a `## Work Log` section, echo it verbatim to the user before continuing. Do not summarize or collapse it. This is the user's primary visibility into what happened.
 - **`[CAST-DISPATCH-GROUP: <group-id>]`** — Auto-generate an Agent Dispatch Manifest
   from the Payload JSON in the directive. Pass immediately to orchestrator with no
   approval gate. Orchestrator runs waves in order: parallel agents fire simultaneously,
