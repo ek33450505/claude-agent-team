@@ -92,26 +92,26 @@ case "$CHOICE" in
         printf "  Extended agents (8): architect, tdd-guide, build-error-resolver,\n"
         printf "    e2e-runner, refactor-cleaner, doc-updater, readme-writer, router\n"
         printf "  Install? [y/N]: "
-        read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_EXTENDED=true
+        read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_EXTENDED=true; fi
 
         printf "\n  Productivity agents (5): researcher, report-writer, meeting-notes,\n"
         printf "    email-manager, morning-briefing\n"
         printf "  Install? [y/N]: "
-        read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_PRODUCTIVITY=true
+        read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_PRODUCTIVITY=true; fi
 
         printf "\n  Professional agents (3): browser, qa-reviewer, presenter\n"
         printf "  Install? [y/N]: "
-        read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_PROFESSIONAL=true
+        read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_PROFESSIONAL=true; fi
 
         printf "\n  Specialist agents (4): devops, performance, seo-content, linter\n"
         printf "  Install? [y/N]: "
-        read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_SPECIALIST=true
+        read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_SPECIALIST=true; fi
 
         if $IS_MACOS; then
             printf "\n  macOS skills (calendar-fetch, inbox-fetch, reminders-fetch)\n"
             warn "  Note: these require Microsoft Outlook for calendar/email."
             printf "  Install? [y/N]: "
-            read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_MACOS_SKILLS=true
+            read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_MACOS_SKILLS=true; fi
         else
             warn "\n  macOS skills skipped — not running on macOS (detected: $PLATFORM)"
         fi
