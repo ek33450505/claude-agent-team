@@ -1,8 +1,8 @@
 # CAST — Claude Agent Specialist Team
 
 ![Version](https://img.shields.io/badge/version-1.5.0-blue)
-![Agents](https://img.shields.io/badge/agents-29-green)
-![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen)
+![Agents](https://img.shields.io/badge/agents-31-green)
+![Tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-orange)
 
@@ -328,8 +328,8 @@ A clean install reports:
 CAST Validate v1.6.0 (6 checks)
 ==============================
 ✓ Hook wiring: route.sh, pre-tool-guard.sh, post-tool-hook.sh wired
-✓ Agent frontmatter: 29 agents — all valid
-✓ Routing table: 21 routes — schema valid
+✓ Agent frontmatter: 31 agents — all valid
+✓ Routing table: 22 routes — schema valid
 ✓ CLAUDE.md directives: [CAST-DISPATCH] [CAST-REVIEW] [CAST-CHAIN] present
 ✓ CAST dirs: events/ state/ reviews/ artifacts/ agent-status/ all present
 ✓ cast-events.sh: installed at /Users/you/.claude/scripts/cast-events.sh
@@ -950,7 +950,7 @@ claude-agent-team/                    # What you clone
 │   └── gen-stats.sh                  # Sentinel token README updater
 │
 ├── config/
-│   └── routing-table.json            # 21 routes: patterns, agent, model, confidence, post_chain
+│   └── routing-table.json            # 22 routes: patterns, agent, model, confidence, post_chain
 │
 ├── agents/
 │   ├── core/           (9 agents)
@@ -967,7 +967,7 @@ claude-agent-team/                    # What you clone
 │   ├── stack-context.md.template     # Your tech stack
 │   └── project-catalog.md.template   # Your projects
 │
-├── tests/                            # BATS test suite (57 tests across 5 files)
+├── tests/                            # BATS test suite (86 tests across 5 files)
 │
 └── docs/
     ├── cast-protocol-spec.md         # 796-line protocol specification
@@ -983,7 +983,7 @@ claude-agent-team/                    # What you clone
 ├── settings.local.json               # Hook wiring (4 hooks), permissions, sandbox
 ├── config.sh                         # Your project paths — sourced by skills
 │
-├── agents/                           # 29 agent definitions
+├── agents/                           # 31 agent definitions
 ├── commands/                         # 30 slash command prompts
 ├── skills/                           # 9 multi-step skill workflows
 │

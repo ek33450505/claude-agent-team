@@ -46,6 +46,11 @@ update_token "CAST_SKILL_COUNT"   "$SKILL_COUNT"   "$README"
 update_token "CAST_TEST_COUNT"    "$TEST_COUNT"    "$README"
 update_token "CAST_ROUTE_COUNT"   "$ROUTE_COUNT"   "$README"
 
+# --- Update shields.io badge URLs ---
+sed -i.bak "s|/badge/agents-[0-9]*-green|/badge/agents-${AGENT_COUNT}-green|g" "$README"
+sed -i.bak "s|/badge/tests-[0-9]*%20passing|/badge/tests-${TEST_COUNT}%20passing|g" "$README"
+sed -i.bak "s|/badge/routes-[0-9]*-|/badge/routes-${ROUTE_COUNT}-|g" "$README"
+
 rm -f "${README}.bak"
 
 echo "CAST stats updated:"
