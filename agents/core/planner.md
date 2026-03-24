@@ -53,7 +53,7 @@ When invoked:
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Claude (orchestrator):** This plan contains an Agent Dispatch Manifest. Dispatch the `orchestrator` agent with this plan file path to execute all batches in dependency order. Do not implement inline — use the orchestrator.
 
 **Goal:** [One sentence]
 
@@ -145,6 +145,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 
 **Rules for building the manifest:**
 - `"parallel": true` → agents in batch don't depend on each other's output
+- `"type": "fan-out"` → dispatch all agents simultaneously, synthesize their outputs into a Fan-out Summary, and prepend that summary as additional context to every agent in the immediately following batch. Max 4 agents per fan-out batch.
 - `"subagent_type": "main"` → Claude itself implements (no Agent tool call needed)
 - Prompts must be specific — include context the agent needs
 - Minimum manifest: implement → code-reviewer → commit
@@ -157,6 +158,34 @@ Then tell the user:
 - Where the plan file was saved
 - How many tasks it contains
 - Show the dispatch queue summary and ask for approval to execute
+
+## Review Mode
+
+When invoked with context like "review task board for plan X" or "how is plan X going":
+
+1. Read `~/.claude/task-board.json` to get the current state of all tasks.
+2. Read the original plan file to retrieve the acceptance criteria and task list.
+3. Compare task states in the task board against each plan task and its acceptance criteria.
+4. Flag any tasks with status `DONE_WITH_CONCERNS` — list the concern and the batch it came from.
+5. Flag any tasks with status `BLOCKED` — list the blocker and how many retry attempts have been made.
+6. Check which code implementation tasks lack a corresponding test-runner `DONE` entry in the task board.
+7. Output a completion confidence report in this format:
+
+```
+## Plan Review: [Plan Name]
+
+Tasks complete: X / N
+Tasks blocked: [list batch IDs and blockers]
+Tasks with concerns: [list batch IDs and concern summaries]
+Test coverage gaps: [list implementation tasks without a test-runner DONE entry]
+
+Acceptance criteria:
+  - [criterion 1]: MET / NOT MET / PARTIAL
+  - [criterion 2]: MET / NOT MET / PARTIAL
+
+Overall confidence: HIGH / MEDIUM / LOW
+Recommendation: [one sentence on whether to proceed, revisit, or escalate]
+```
 
 ## Agent Memory
 

@@ -72,11 +72,66 @@ the prompt of every agent in the immediately following batch.
 
 **After each batch completes:**
 - Mark that batch's todo item as `completed`
+- Emit an event to the CAST event log by running:
+  ```bash
+  source ~/.claude/scripts/cast-events.sh
+  cast_emit_event 'task_claimed' '<agent>' 'batch-<id>' '' 'Starting <description>'
+  ```
+- When a batch completes, emit a completion event:
+  ```bash
+  cast_emit_event 'task_completed' '<agent>' 'batch-<id>' '' '<status summary>' '<DONE|BLOCKED|DONE_WITH_CONCERNS>'
+  ```
 - Check if the agent's response contains a `Status:` line:
   - `Status: DONE` → proceed to next batch normally
-  - `Status: DONE_WITH_CONCERNS` → mark completed, log the Concerns line in your running notes, proceed but surface concerns in Step 4 summary
-  - `Status: BLOCKED` → mark the todo as `in_progress` (stuck), halt execution immediately, report the Blocker to the user and ask how to proceed
+  - `Status: DONE_WITH_CONCERNS` → mark completed, log the Concerns line in your running notes, force a re-review pass before proceeding to the next batch (re-dispatch `code-reviewer` with context from the concern), then continue
+  - `Status: BLOCKED` → invoke the Retry Protocol (see below)
   - `Status: NEEDS_CONTEXT` → pause, provide the missing context to the user, re-dispatch the same agent with updated context
+
+## Event-Sourcing Protocol
+
+After each agent dispatch, emit an event to the CAST event log by running:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' '<agent>' 'batch-<id>' '' 'Starting <description>'
+```
+
+When a batch completes, emit a completion event:
+```bash
+cast_emit_event 'task_completed' '<agent>' 'batch-<id>' '' '<status summary>' '<DONE|BLOCKED|DONE_WITH_CONCERNS>'
+```
+
+**Directory structure** (all under ~/.claude/cast/):
+- events/    — one immutable JSON file per agent action, never overwritten
+- state/     — derived task state, written by orchestrator from events
+- reviews/   — reviewer decisions attached to artifact IDs
+- artifacts/ — plans, patches, test files produced by agents
+
+**Why events, not shared state:** Multiple agents running in parallel cannot safely write to one JSON file. Each agent writes its own timestamped event file. The orchestrator derives state by calling `cast_derive_state <task_id>` after each batch.
+
+**Artifact ownership:** When an agent produces a code change or plan, it registers the artifact:
+```bash
+cast_emit_event 'artifact_written' '<agent>' 'batch-<id>' 'batch-<id>-<type>' '<description>'
+```
+
+**Review gating:** Before proceeding to commit, orchestrator checks approvals:
+```bash
+cast_check_approvals 'batch-<id>' 'code-reviewer'
+# Returns 0=all approvals present, 1=missing approvals, 2=unanswered rejections
+```
+If return code is 1 or 2, orchestrator does not dispatch commit agent.
+
+### Retry Protocol
+
+When a batch returns `Status: BLOCKED`:
+
+1. Emit a blocked event:
+   ```bash
+   cast_emit_event 'task_blocked' '<agent>' 'batch-<id>' '' '<blocker summary>' 'BLOCKED'
+   ```
+2. Re-dispatch the same batch a second time, prefixing the agent prompt with: `"Previous attempt BLOCKED: <blocker>. Resolve and retry."` where `<blocker>` is the blocker text from the agent's response.
+3. If the second attempt also returns `BLOCKED`: re-dispatch one final time, prepending the full accumulated context from both prior attempts.
+4. If the third attempt returns `BLOCKED`: halt execution and surface to the user: `"Batch <id> blocked after 3 attempts. Human intervention required. Blocker: <blocker>"`. Do not proceed to subsequent batches.
+5. If any retry succeeds (`DONE` or `DONE_WITH_CONCERNS`): resume normal execution from the next batch.
 
 ### Step 4: Summarize
 

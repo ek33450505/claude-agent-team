@@ -134,7 +134,8 @@ Install supertest if not present: `npm install -D supertest`
 3. **MANDATORY — do not skip:** Dispatch `code-reviewer` via the Agent tool with this prompt:
    "Review the test file(s) just written: [list the test files]. Check for: (1) behavior-based queries used (getByRole/getByText over getByTestId), (2) edge case coverage, (3) no implementation leakage (testing internals), (4) test descriptions are clear. The source files under test are: [list source files]."
 4. Address any CRITICAL issues raised by code-reviewer before completing. Note WARNINGS in your status block.
-5. Output this completion report as your final response:
+5. Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/test-writer-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
+6. Output this completion report as your final response:
 
 ---
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT

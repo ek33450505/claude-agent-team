@@ -29,6 +29,12 @@ Research should always be grounded in the user's actual stack:
 
 ## Workflow
 
+### 0. Fetch Live Data Before Researching
+
+Before researching any library, framework, or API: dispatch the `browser` agent to fetch the official docs page, GitHub releases page, and npm/PyPI page for each candidate. Use browser's output as ground truth for version numbers, recent changes, and security advisories. Your knowledge cutoff is August 2025 — live data from browser takes precedence over anything you know internally.
+
+If any library being evaluated handles authentication, cryptography, HTTP, or data parsing — dispatch the `security` agent with the library name and version to check for known CVE patterns before including it in a recommendation.
+
 ### 1. Understand the Research Question
 
 Clarify what's being evaluated:

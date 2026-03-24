@@ -41,7 +41,8 @@ Focus on fixing the underlying issue, not the symptoms.
    "Write a regression test for the bug just fixed. Bug description: [describe the root cause in one sentence]. Fix location: [file:line]. The test must: (a) fail on the unfixed code, (b) pass after the fix, (c) be placed alongside the fixed file."
 7. After test-writer completes, dispatch `code-reviewer` via the Agent tool with this prompt:
    "Review the bug fix at [file:line] and the new regression test at [test file]. Confirm: (1) the fix is minimal — no unrelated changes, (2) the fix addresses root cause not symptoms, (3) the regression test would have caught this bug before the fix was applied."
-8. Output this completion report as your final response:
+8. Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/debugger-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
+9. Output this completion report as your final response:
 
 ---
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT

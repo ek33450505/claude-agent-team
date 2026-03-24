@@ -2,6 +2,7 @@
 # post-tool-hook.sh — Combined PostToolUse hook for Write|Edit operations
 # 1. Auto-formats JS/TS/CSS/JSON files with prettier (all sessions including subagents)
 # 2. Injects [CAST-REVIEW] directive for code-reviewer dispatch (main session only)
+# 3. Detects Agent Dispatch Manifests in .md plan files (main session only)
 
 set -euo pipefail
 
@@ -36,6 +37,24 @@ if [ "${CLAUDE_SUBPROCESS:-0}" != "1" ]; then
   cat <<'DIRECTIVE'
 {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"[CAST-REVIEW] Code was modified. After completing your current logical unit of changes, dispatch `code-reviewer` agent (haiku) to review. Do not skip this step."}}
 DIRECTIVE
+fi
+
+# --- Part 3: Detect Agent Dispatch Manifests in .md plan files (main session only) ---
+# Only fires for Write operations on .md files under a /plans/ directory.
+# If the file contains a ```json dispatch block, inject [CAST-ORCHESTRATE] directive.
+if [ "${CLAUDE_SUBPROCESS:-0}" != "1" ]; then
+  if [[ "$TOOL_NAME" == "Write" && "$FILE_PATH" == *"/plans/"* && "$FILE_PATH" == *.md ]]; then
+    REAL_PLAN_PATH=$(realpath "$FILE_PATH" 2>/dev/null) || REAL_PLAN_PATH=""
+    if [[ -n "$REAL_PLAN_PATH" && "$REAL_PLAN_PATH" == "$HOME/"* ]]; then
+      if grep -q '```json dispatch' "$REAL_PLAN_PATH" 2>/dev/null; then
+        python3 -c "
+import json, sys
+msg = '[CAST-ORCHESTRATE] Plan file at $REAL_PLAN_PATH contains an Agent Dispatch Manifest. Dispatch the \`orchestrator\` agent via the Agent tool with this plan file path. Present the queue to the user for approval before executing any batches.'
+print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': msg}}))
+"
+      fi
+    fi
+  fi
 fi
 
 exit 0
