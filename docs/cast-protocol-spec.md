@@ -424,6 +424,12 @@ Resolve the blocker before continuing. Do not retry the blocked operation.
 
 ---
 
+### 4.6 `[CAST-DISPATCH-GROUP]`
+
+`[CAST-DISPATCH-GROUP]` is injected by `route.sh` when the user's prompt matches a pattern in `~/.claude/config/agent-groups.json`. It instructs Claude to dispatch the `orchestrator` agent with the matched group's wave plan rather than routing to a single agent. The group payload — including `group_id`, `description`, `waves`, and optional `post_chain` — is written to a temporary JSON file whose path is embedded in the directive. Claude must pass this file path to the orchestrator as task context and must not attempt to execute the waves inline. Wave-based dispatch follows the same fan-out semantics defined in Section 3.4, with agents in each wave running in parallel before the next wave begins.
+
+---
+
 ## Section 5 — Hook Event Model
 
 CAST uses three Claude Code hook events. Each hook script reads a JSON payload from stdin and outputs either nothing (allow silently) or a JSON response to stdout.

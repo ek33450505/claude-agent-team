@@ -11,6 +11,12 @@ System hooks inject directives into your context. These are not suggestions — 
 - **`[CAST-DISPATCH]`** — Dispatch the named agent via the Agent tool. Pass the user's full prompt. Do NOT handle the task inline.
 - **`[CAST-REVIEW]`** — Dispatch `code-reviewer` (haiku) after completing your current logical unit of changes.
 - **`[CAST-CHAIN]`** — After the primary agent completes, dispatch the listed agents in sequence. Do not ask for confirmation.
+- **`[CAST-DISPATCH-GROUP: <group-id>]`** — Auto-generate an Agent Dispatch Manifest
+  from the Payload JSON in the directive. Pass immediately to orchestrator with no
+  approval gate. Orchestrator runs waves in order: parallel agents fire simultaneously,
+  Fan-out Summary is prepended to the next wave's prompts, post_chain agents run
+  sequentially after all waves complete.
+  Do NOT ask for confirmation. Do NOT handle inline. Do NOT skip orchestrator.
 
 ---
 
@@ -40,6 +46,13 @@ You handle these directly — everything else goes to an agent:
 | `meeting-notes` | haiku | `readme-writer` | sonnet |
 | `chain-reporter` | haiku | `data-scientist` | sonnet |
 | `verifier` | haiku | `morning-briefing` | sonnet |
+| `push` | haiku | `bash-specialist` | sonnet |
+| `test-runner` | haiku | `router` | haiku |
+| `seo-content` | haiku | `tdd-guide` | sonnet |
+| `linter` | haiku | `orchestrator` | sonnet |
+| `devops` | sonnet | `performance` | sonnet |
+| `browser` | sonnet | `presenter` | sonnet |
+| `email-manager` | sonnet | `refactor-cleaner` | haiku |
 
 Agent definitions: `~/.claude/agents/`
 
@@ -53,7 +66,9 @@ Agent definitions: `~/.claude/agents/`
 
 ## Config
 
-- Rules: `~/.claude/rules/`
-- Plans: `~/.claude/plans/`
-- Agent memory: `~/.claude/agent-memory-local/<agent>/`
-- Skills: `~/.claude/skills/`
+- **Rules:** `~/.claude/rules/`
+- **Agents:** `~/.claude/agents/`
+- **Plans:** `~/.claude/plans/`
+- **Agent memory:** `~/.claude/agent-memory-local/<agent>/`
+- **Skills:** `~/.claude/skills/`
+- **Output dirs:** `~/.claude/briefings/`, `~/.claude/meetings/`, `~/.claude/reports/`

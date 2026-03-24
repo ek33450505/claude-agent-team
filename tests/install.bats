@@ -42,12 +42,12 @@ run_install() {
   [ -d "$HOME/.claude/agent-memory-local" ]
 }
 
-@test "Full install: installs all 30 agents" {
+@test "Full install: installs all 35 agents" {
   run_install "1"
 
   local count
   count=$(ls -1 "$HOME/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
-  [ "$count" -eq 30 ]
+  [ "$count" -eq 35 ]
 }
 
 @test "Full install: installs platform-appropriate skills" {
@@ -190,4 +190,29 @@ run_install() {
 
   # The custom marker should still be there (file was not overwritten)
   grep -q "CUSTOM_MARKER" "$HOME/.claude/rules/working-conventions.md"
+}
+
+@test "Full install: specialist tier directory has exactly 4 agents" {
+  run_install "1"
+
+  local count
+  count=$(ls -1 "$HOME/.claude/agents/devops.md" "$HOME/.claude/agents/performance.md" \
+              "$HOME/.claude/agents/seo-content.md" "$HOME/.claude/agents/linter.md" \
+              2>/dev/null | wc -l | tr -d ' ')
+  [ "$count" -eq 4 ]
+}
+
+@test "Full install: installs agent-groups.json config" {
+  run_install "1"
+
+  [ -f "$HOME/.claude/config/agent-groups.json" ]
+}
+
+@test "Custom install: selecting specialist installs specialist agents" {
+  run_install "$(printf '3\nn\nn\nn\ny\nn\n')"
+
+  [ -f "$HOME/.claude/agents/devops.md" ]
+  [ -f "$HOME/.claude/agents/performance.md" ]
+  [ -f "$HOME/.claude/agents/seo-content.md" ]
+  [ -f "$HOME/.claude/agents/linter.md" ]
 }

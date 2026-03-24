@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-VERSION="1.6.0"
+VERSION="1.7.0"
 ERRORS=0
 WARNINGS=0
 
@@ -15,7 +15,7 @@ pass()  { echo "✓ $*"; }
 fail()  { echo "✗ $*"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "⚠ $*"; WARNINGS=$((WARNINGS + 1)); }
 
-echo "CAST Validate v${VERSION} (6 checks)"
+echo "CAST Validate v${VERSION} (7 checks)"
 echo "══════════════════════════════"
 
 # --- Check 1: Hook wiring ---
@@ -210,7 +210,7 @@ else
 import sys
 
 path = sys.argv[1]
-required = ["[CAST-DISPATCH]", "[CAST-REVIEW]", "[CAST-CHAIN]"]
+required = ["[CAST-DISPATCH]", "[CAST-REVIEW]", "[CAST-CHAIN]", "[CAST-DISPATCH-GROUP"]
 try:
     with open(path) as f:
         content = f.read()
@@ -226,7 +226,7 @@ else:
 PYEOF
 )
   if [[ "$DIRECTIVES_RESULT" == OK ]]; then
-    pass "CLAUDE.md directives: [CAST-DISPATCH] [CAST-REVIEW] [CAST-CHAIN] present"
+    pass "CLAUDE.md directives: [CAST-DISPATCH] [CAST-REVIEW] [CAST-CHAIN] [CAST-DISPATCH-GROUP] present"
   elif [[ "$DIRECTIVES_RESULT" == MISSING:* ]]; then
     MISSING_DIRS="${DIRECTIVES_RESULT#MISSING:}"
     fail "CLAUDE.md directives: missing — ${MISSING_DIRS}"
@@ -269,6 +269,26 @@ if [[ -f "$CAST_EVENTS_SCRIPT" ]]; then
   pass "cast-events.sh: installed at ${CAST_EVENTS_SCRIPT}"
 else
   fail "cast-events.sh: ${CAST_EVENTS_SCRIPT} not found (required for event-sourcing protocol)"
+fi
+
+# --- Check 7: agent-groups.json present ---
+AGENT_GROUPS="$HOME/.claude/config/agent-groups.json"
+if [[ -f "$AGENT_GROUPS" ]]; then
+  GROUP_COUNT=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('$AGENT_GROUPS'))
+    print(len(data.get('groups', [])))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+  if [[ "$GROUP_COUNT" -gt 0 ]]; then
+    pass "agent-groups.json: ${GROUP_COUNT} groups — present and valid"
+  else
+    warn "agent-groups.json: present but 0 groups parsed (may be malformed)"
+  fi
+else
+  warn "agent-groups.json: ${AGENT_GROUPS} not found (parallel agent groups disabled)"
 fi
 
 # --- Summary ---

@@ -67,6 +67,44 @@ setup() {
   }
 }
 EOF
+
+  cat > "$HOME/.claude/config/agent-groups.json" <<'EOF'
+{
+  "version": "1.0",
+  "groups": [
+    {
+      "id": "morning-start",
+      "description": "Morning briefing",
+      "patterns": ["good morning", "start my day"],
+      "confidence": "hard",
+      "waves": [
+        { "id": 1, "description": "Briefing", "parallel": true, "agents": ["morning-briefing", "chain-reporter"] }
+      ],
+      "post_chain": []
+    },
+    {
+      "id": "ship-it",
+      "description": "Full ship pipeline",
+      "patterns": ["ship it", "ready.*deploy"],
+      "confidence": "hard",
+      "waves": [
+        { "id": 1, "description": "Verify and deploy", "parallel": true, "agents": ["verifier", "test-runner", "devops"] }
+      ],
+      "post_chain": ["auto-stager", "commit", "push"]
+    },
+    {
+      "id": "daily-wrap",
+      "description": "End-of-day wrap-up",
+      "patterns": ["end of day", "wrap.*up.*day"],
+      "confidence": "soft",
+      "waves": [
+        { "id": 1, "description": "Chain report", "parallel": true, "agents": ["chain-reporter", "verifier"] }
+      ],
+      "post_chain": []
+    }
+  ]
+}
+EOF
 }
 
 teardown() {
@@ -177,4 +215,52 @@ teardown() {
   run_route "<system-reminder> always be helpful"
   assert_success
   assert_output ""
+}
+
+# ---------------------------------------------------------------------------
+# 6. Group routing
+# ---------------------------------------------------------------------------
+
+@test "group routing: hard-confidence group match emits [CAST-DISPATCH-GROUP] directive" {
+  run_route "good morning"
+  assert_success
+  assert_output --partial "CAST-DISPATCH-GROUP"
+}
+
+@test "group routing: matched output contains the group id" {
+  run_route "good morning"
+  assert_output --partial "morning-start"
+}
+
+@test "group routing: unmatched prompt falls through to routing-table" {
+  run_route "code review please"
+  assert_output --partial "CAST-DISPATCH"
+  refute_output --partial "CAST-DISPATCH-GROUP"
+}
+
+@test "group routing: group pre-check runs before routing-table (group match wins)" {
+  # 'good morning' matches group fixture but has no routing-table entry
+  # so only CAST-DISPATCH-GROUP directive should appear — no single-agent directive
+  run_route "good morning"
+  assert_output --partial "CAST-DISPATCH-GROUP"
+  refute_output --partial "\"agent\":"
+}
+
+@test "group routing: matching is case-insensitive" {
+  run_route "GOOD MORNING"
+  assert_success
+  assert_output --partial "CAST-DISPATCH-GROUP"
+  assert_output --partial "morning-start"
+}
+
+@test "group routing: directive format is [CAST-DISPATCH-GROUP: <id>]" {
+  run_route "ship it"
+  assert_output --partial "[CAST-DISPATCH-GROUP: ship-it]"
+}
+
+@test "group routing: soft-confidence group match still emits CAST-DISPATCH-GROUP directive" {
+  run_route "end of day"
+  assert_success
+  assert_output --partial "CAST-DISPATCH-GROUP"
+  assert_output --partial "daily-wrap"
 }

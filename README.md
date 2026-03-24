@@ -1,14 +1,14 @@
 # CAST — Claude Agent Specialist Team
 
 ![Version](https://img.shields.io/badge/version-1.5.0-blue)
-![Agents](https://img.shields.io/badge/agents-31-green)
-![Tests](https://img.shields.io/badge/tests-86%20passing-brightgreen)
+![Agents](https://img.shields.io/badge/agents-35-green)
+![Tests](https://img.shields.io/badge/tests-106%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-orange)
 
 **The right specialist. Every time. Automatically.**
 
-CAST is a <!-- CAST_AGENT_COUNT -->31<!-- /CAST_AGENT_COUNT -->-agent development team embedded directly into Claude Code at the hook layer. When you type a prompt, three enforcement hooks intercept it — dispatching the right specialist, enforcing code review after every write, and hard-blocking raw `git commit`. No `/commands` required. No remembering which agent to call. Just type naturally and your expert team handles the rest.
+CAST is a <!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT -->-agent development team embedded directly into Claude Code at the hook layer. When you type a prompt, three enforcement hooks intercept it — dispatching the right specialist, enforcing code review after every write, and hard-blocking raw `git commit`. No `/commands` required. No remembering which agent to call. Just type naturally and your expert team handles the rest.
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team.git
@@ -111,7 +111,7 @@ Claude sees `[CAST-DISPATCH]` as a system-level directive. `CLAUDE.md` (60 lines
 | Event-sourcing protocol | `cast-events.sh` replaces mutable `task-board.json` — immutable append-only events with derived state |
 | Status Block Protocol | Machine-readable JSON enforcement via `agent-status-reader.sh` PostToolUse hook |
 | `cast-validate.sh` | 6-check installability CLI — verify your install before use |
-| <!-- CAST_TEST_COUNT -->86<!-- /CAST_TEST_COUNT --> BATS tests | Full coverage: event-sourcing, status enforcement, validate CLI, routing, install |
+| <!-- CAST_TEST_COUNT -->106<!-- /CAST_TEST_COUNT --> BATS tests | Full coverage: event-sourcing, status enforcement, validate CLI, routing, install |
 | `push` agent + `/push` command | Managed push workflow with unpushed-commit Stop hook |
 | Formal protocol spec | `docs/cast-protocol-spec.md` — 796 lines, 7 sections |
 | Dashboard integration contract | `docs/dashboard-integration.md` — schema for routing-log.jsonl, agent-status/, cast/ dirs |
@@ -126,7 +126,7 @@ Claude sees `[CAST-DISPATCH]` as a system-level directive. `CLAUDE.md` (60 lines
 
 ## Agent Directory
 
-<!-- CAST_AGENT_COUNT -->31<!-- /CAST_AGENT_COUNT --> specialist agents across 5 tiers. Model tier is enforced at the routing layer — haiku for mechanical tasks, sonnet for reasoning-heavy work.
+<!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT --> specialist agents across 5 tiers. Model tier is enforced at the routing layer — haiku for mechanical tasks, sonnet for reasoning-heavy work.
 
 ### Core Tier (9 agents)
 
@@ -298,7 +298,7 @@ git clone https://github.com/ek33450505/claude-agent-team.git && cd claude-agent
 
 | Mode | What you get | Best for |
 |---|---|---|
-| **[1] Full** | All <!-- CAST_AGENT_COUNT -->31<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->31<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->11<!-- /CAST_SKILL_COUNT --> skills, all scripts, rules | Most users |
+| **[1] Full** | All <!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->31<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->11<!-- /CAST_SKILL_COUNT --> skills, all scripts, rules | Most users |
 | **[2] Core** | 9 essential agents + their commands, scripts, rules | Minimal installs, CI |
 | **[3] Custom** | Choose categories: core, extended, productivity, professional | Power users |
 
@@ -719,7 +719,7 @@ The `morning-briefing` agent chains six skills in sequence: `calendar-fetch` →
 
 ## Testing
 
-<!-- CAST_TEST_COUNT -->86<!-- /CAST_TEST_COUNT --> BATS tests covering the core protocol infrastructure.
+<!-- CAST_TEST_COUNT -->106<!-- /CAST_TEST_COUNT --> BATS tests covering the core protocol infrastructure.
 
 ### Running the suite
 
@@ -787,10 +787,10 @@ Agent counts, command counts, test counts, and route counts in this README are m
 ### Sentinel format
 
 ```html
-<!-- CAST_AGENT_COUNT -->31<!-- /CAST_AGENT_COUNT -->
+<!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT -->
 <!-- CAST_COMMAND_COUNT -->31<!-- /CAST_COMMAND_COUNT -->
 <!-- CAST_SKILL_COUNT -->11<!-- /CAST_SKILL_COUNT -->
-<!-- CAST_TEST_COUNT -->86<!-- /CAST_TEST_COUNT -->
+<!-- CAST_TEST_COUNT -->106<!-- /CAST_TEST_COUNT -->
 <!-- CAST_ROUTE_COUNT -->22<!-- /CAST_ROUTE_COUNT -->
 ```
 

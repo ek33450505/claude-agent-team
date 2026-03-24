@@ -34,6 +34,11 @@ After parsing the manifest, initialize a todo list using TodoWrite with one item
 
 ### Step 2: Present the Queue
 
+**Check for `pre_approved` flag first:**
+If the manifest root contains `"pre_approved": true`, skip the queue presentation and user confirmation entirely. Proceed immediately to Step 3 (Execute Batches). This flag is set only by `[CAST-DISPATCH-GROUP]` directives — groups are pre-vetted at catalog build time.
+
+If `pre_approved` is absent or `false`, display the queue and wait for confirmation as normal:
+
 Display the dispatch queue clearly:
 
 ```

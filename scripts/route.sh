@@ -42,6 +42,56 @@ open(log_path,'a').write(json.dumps(log)+'\n')
   exit 0
 fi
 
+# --- Group pre-check: match against agent-groups.json before routing table ---
+CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
+import json, re, os, datetime, sys
+
+prompt = os.environ.get('CAST_PROMPT', '')
+original = os.environ.get('CAST_ORIGINAL', '')
+log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
+ts = datetime.datetime.utcnow().isoformat() + 'Z'
+preview = prompt[:80]
+session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
+
+groups_path = os.path.expanduser('~/.claude/config/agent-groups.json')
+try:
+    with open(groups_path) as f:
+        groups_data = json.load(f)
+except Exception:
+    sys.exit(0)
+
+for group in groups_data.get('groups', []):
+    for pattern in group.get('patterns', []):
+        if len(pattern) > 200:
+            continue
+        try:
+            if re.search(pattern, prompt, re.IGNORECASE):
+                print(f\"[CAST] Group matched: {group['id']} ({len(group['waves'])} waves)\", file=sys.stderr)
+                directive = f\"[CAST-DISPATCH-GROUP: {group['id']}]\\n\"
+                directive += 'MANDATORY: Pass the following Payload JSON to the orchestrator agent immediately with pre_approved: true. Do NOT handle inline.\\n'
+                payload = {
+                    'group_id': group['id'],
+                    'description': group.get('description', ''),
+                    'pre_approved': True,
+                    'waves': group.get('waves', []),
+                    'post_chain': group.get('post_chain', [])
+                }
+                directive += json.dumps(payload)
+                output = {
+                    'hookSpecificOutput': {
+                        'hookEventName': 'UserPromptSubmit',
+                        'additionalContext': directive
+                    }
+                }
+                print(json.dumps(output))
+                log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'group_dispatched', 'matched_route': group['id'], 'pattern': pattern, 'confidence': group.get('confidence', 'soft')}
+                open(log_path, 'a').write(json.dumps(log) + '\\n')
+                sys.exit(0)
+        except re.error:
+            continue
+sys.exit(1)
+" 2>/dev/null && exit 0
+
 # Match prompt against routing table and inject dispatch directive
 # Variables are passed as env prefixes to the subprocess rather than globally exported
 CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
@@ -81,6 +131,7 @@ for route in table.get('routes', []):
             command = route.get('command', '')
             post_chain = route.get('post_chain', [])
             model = route.get('model', 'sonnet')
+            print(f'[CAST] Route matched: {agent}', file=sys.stderr)
 
             # Build dispatch directive
             if confidence == 'hard':

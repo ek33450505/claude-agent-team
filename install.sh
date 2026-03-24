@@ -39,6 +39,7 @@ EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cl
 PRODUCTIVITY_AGENTS="researcher report-writer meeting-notes email-manager morning-briefing"
 PROFESSIONAL_AGENTS="browser qa-reviewer presenter"
 ORCHESTRATION_AGENTS="orchestrator auto-stager chain-reporter verifier test-runner"
+SPECIALIST_AGENTS="devops performance seo-content linter"
 
 CORE_CMDS="plan review debug test secure commit data query push"
 EXTENDED_CMDS="architect tdd build-fix e2e refactor docs readme"
@@ -57,7 +58,7 @@ fi
 
 # --- Menu ---
 printf "\n${BOLD}Claude Agent Team — Installer${NC}\n\n"
-printf "  ${BOLD}[1]${NC} Full install — all 30 agents, 26 commands, 9 skills, scripts, rules\n"
+printf "  ${BOLD}[1]${NC} Full install — all 35 agents, 26 commands, 9 skills, scripts, rules\n"
 printf "  ${BOLD}[2]${NC} Core only   — 9 core agents + their commands (minimal, portable)\n"
 printf "  ${BOLD}[3]${NC} Custom      — choose categories\n"
 printf "\n"
@@ -69,6 +70,7 @@ INSTALL_CORE=true
 INSTALL_EXTENDED=false
 INSTALL_PRODUCTIVITY=false
 INSTALL_PROFESSIONAL=false
+INSTALL_SPECIALIST=false
 INSTALL_MACOS_SKILLS=false
 
 case "$CHOICE" in
@@ -76,6 +78,7 @@ case "$CHOICE" in
         INSTALL_EXTENDED=true
         INSTALL_PRODUCTIVITY=true
         INSTALL_PROFESSIONAL=true
+        INSTALL_SPECIALIST=true
         if $IS_MACOS; then
             INSTALL_MACOS_SKILLS=true
         fi
@@ -99,6 +102,10 @@ case "$CHOICE" in
         printf "\n  Professional agents (3): browser, qa-reviewer, presenter\n"
         printf "  Install? [y/N]: "
         read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_PROFESSIONAL=true
+
+        printf "\n  Specialist agents (4): devops, performance, seo-content, linter\n"
+        printf "  Install? [y/N]: "
+        read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] && INSTALL_SPECIALIST=true
 
         if $IS_MACOS; then
             printf "\n  macOS skills (calendar-fetch, inbox-fetch, reminders-fetch)\n"
@@ -165,6 +172,7 @@ $INSTALL_EXTENDED && install_agents "extended" $EXTENDED_AGENTS
 $INSTALL_PRODUCTIVITY && install_agents "productivity" $PRODUCTIVITY_AGENTS
 $INSTALL_PROFESSIONAL && install_agents "professional" $PROFESSIONAL_AGENTS
 install_agents "orchestration" $ORCHESTRATION_AGENTS
+$INSTALL_SPECIALIST && install_agents "specialist" $SPECIALIST_AGENTS
 success "  $AGENT_COUNT agents installed"
 
 # --- Install commands ---

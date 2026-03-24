@@ -12,8 +12,8 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 README="${1:-$REPO_DIR/README.md}"
 
 # --- Counts ---
-# Agents: subdir tier agents + root-only bash-specialist (excludes root commit.md/planner.md duplicates)
-AGENT_COUNT=$(( $(find "$REPO_DIR/agents" -mindepth 2 -name "*.md" | wc -l | tr -d ' ') + 1 ))
+# After restructure, bash-specialist moved to core/ — all agents live in subdirs
+AGENT_COUNT=$(find "$REPO_DIR/agents" -mindepth 2 -name "*.md" | wc -l | tr -d ' ')
 CMD_COUNT=$(find "$REPO_DIR/commands" -maxdepth 1 -name "*.md" | wc -l | tr -d ' ')
 # Skills: count unique skill dirs (exclude linux variant dirs that are install-time substitutes)
 SKILL_COUNT=$(find "$REPO_DIR/skills" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ')
