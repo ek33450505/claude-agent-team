@@ -260,6 +260,31 @@
       "post_chain": ["report-writer"]
     },
     {
+      "id": "full-audit",
+      "description": "Full codebase audit: security, code review, and QA in parallel, then consolidated report",
+      "patterns": [
+        "full.?audit", "audit.*codebase", "audit.*the.*code",
+        "audit.*everything", "pre.?release.*audit", "release.*check",
+        "production.*ready", "ship.*ready", "ready.*to.*ship"
+      ],
+      "confidence": "soft",
+      "waves": [
+        {
+          "id": 1,
+          "description": "Parallel audit — security, code quality, functional QA",
+          "parallel": true,
+          "agents": ["security", "code-reviewer", "qa-reviewer"]
+        },
+        {
+          "id": 2,
+          "description": "Consolidated audit report",
+          "parallel": false,
+          "agents": ["report-writer"]
+        }
+      ],
+      "post_chain": ["chain-reporter"]
+    },
+    {
       "id": "quality-sweep",
       "description": "Full code quality audit: security, review, QA, and linting",
       "patterns": ["audit", "full review", "code.*quality", "pre.?release check"],

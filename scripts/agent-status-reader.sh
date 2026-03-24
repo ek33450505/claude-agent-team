@@ -38,7 +38,7 @@ if [[ -z "$REAL_PATH" || "$REAL_PATH" != "$REAL_HOME/"* ]]; then exit 0; fi
 
 # Parse status and summary using python3 stdlib only
 CAST_STATUS_FILE="$REAL_PATH" python3 -c "
-import json, os, sys
+import json, os, sys, time
 
 filepath = os.environ.get('CAST_STATUS_FILE', '')
 try:
@@ -46,6 +46,12 @@ try:
         d = json.load(f)
 except Exception:
     sys.exit(0)
+
+# Age guard: ignore status files older than 60 seconds (stale from prior sessions)
+file_mtime = os.path.getmtime(filepath)
+age_seconds = time.time() - file_mtime
+if age_seconds > 60:
+    sys.exit(0)  # Stale file — ignore
 
 status    = d.get('status', '')
 agent     = d.get('agent', 'unknown')

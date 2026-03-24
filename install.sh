@@ -34,7 +34,7 @@ CMD_COUNT=0
 SKILL_COUNT=0
 
 # --- Agent / command / skill lists ---
-CORE_AGENTS="planner debugger test-writer code-reviewer data-scientist db-reader commit security push"
+CORE_AGENTS="planner debugger test-writer code-reviewer data-scientist db-reader commit security push code-writer bash-specialist"
 EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cleaner doc-updater readme-writer router"
 PRODUCTIVITY_AGENTS="researcher report-writer meeting-notes email-manager morning-briefing"
 PROFESSIONAL_AGENTS="browser qa-reviewer presenter"
@@ -58,8 +58,8 @@ fi
 
 # --- Menu ---
 printf "\n${BOLD}Claude Agent Team — Installer${NC}\n\n"
-printf "  ${BOLD}[1]${NC} Full install — all 35 agents, 26 commands, 9 skills, scripts, rules\n"
-printf "  ${BOLD}[2]${NC} Core only   — 9 core agents + their commands (minimal, portable)\n"
+printf "  ${BOLD}[1]${NC} Full install — all 36 agents, 26 commands, 9 skills, scripts, rules\n"
+printf "  ${BOLD}[2]${NC} Core only   — 11 core agents + their commands (minimal, portable)\n"
 printf "  ${BOLD}[3]${NC} Custom      — choose categories\n"
 printf "\n"
 printf "Enter choice [1/2/3]: "

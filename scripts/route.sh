@@ -210,4 +210,61 @@ except Exception:
     pass
 " 2>/dev/null || true
 
+# --- Catch-all: route ambiguous implementation prompts to router agent ---
+# Fires when: 5+ words, not a question, not conversational filler, contains action verb signals
+CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
+import json, re, os, datetime, sys
+
+prompt = os.environ.get('CAST_PROMPT', '')
+original = os.environ.get('CAST_ORIGINAL', '')
+log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
+ts = datetime.datetime.utcnow().isoformat() + 'Z'
+preview = prompt[:80]
+session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
+
+# Must be 5+ words (not conversational)
+words = prompt.split()
+if len(words) < 5:
+    sys.exit(0)
+
+# Exclude pure questions
+question_starters = r'^(what|why|how|is|are|can|could|would|will|should|do|does|did|where|when|who|which)'
+if re.match(question_starters, prompt.strip(), re.IGNORECASE):
+    sys.exit(0)
+
+# Exclude conversational filler
+filler = r'^(yes|no|ok|okay|sure|thanks|thank you|got it|sounds good|great|perfect|looks good|agreed)'
+if re.match(filler, prompt.strip(), re.IGNORECASE):
+    sys.exit(0)
+
+# Must contain action verb signals
+action_verbs = r'\b(improve|enhance|make|update|fix|add|rework|better|cleaner|refactor|change|modify|rewrite|convert|migrate|move|rename|delete|remove|build|create|implement|write|generate|replace|extend|integrate|connect|deploy|configure|setup|install|enable|disable)\b'
+if not re.search(action_verbs, prompt, re.IGNORECASE):
+    sys.exit(0)
+
+# Inject soft [CAST-DISPATCH] recommending router agent
+directive = '[CAST-DISPATCH] Route: router (confidence: soft)\n'
+directive += 'RECOMMENDED: Consider dispatching the \`router\` agent (haiku) to classify this prompt and determine the best agent. Pass the full prompt as the task. If confidence < 0.7, router returns \"main\" — handle inline in that case.'
+
+output = {
+    'hookSpecificOutput': {
+        'hookEventName': 'UserPromptSubmit',
+        'additionalContext': directive
+    }
+}
+print(json.dumps(output))
+
+log = {
+    'timestamp': ts,
+    'session_id': session_id,
+    'prompt_preview': preview,
+    'action': 'catchall_dispatched',
+    'matched_route': 'router',
+    'command': None,
+    'pattern': 'catchall:action_verb_heuristic',
+    'confidence': 'soft'
+}
+open(log_path, 'a').write(json.dumps(log) + '\n')
+" 2>/dev/null || true
+
 exit 0

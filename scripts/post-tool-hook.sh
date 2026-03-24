@@ -1,7 +1,7 @@
 #!/bin/bash
 # post-tool-hook.sh — Combined PostToolUse hook for Write|Edit operations
 # 1. Auto-formats JS/TS/CSS/JSON files with prettier (all sessions including subagents)
-# 2. Injects [CAST-REVIEW] directive for code-reviewer dispatch (main session only)
+# 2. Injects [CAST-CHAIN] / [CAST-REVIEW] directive differentiated by session context + file type
 # 3. Detects Agent Dispatch Manifests in .md plan files (all sessions, including subagents)
 
 set -euo pipefail
@@ -30,13 +30,37 @@ if [[ "$TOOL_NAME" == "Write" || "$TOOL_NAME" == "Edit" ]]; then
   fi
 fi
 
-# --- Part 2: Inject review directive (main session only) ---
-# Subagents (CLAUDE_SUBPROCESS=1) should NOT get review directives —
-# they are doing focused work and the main session handles review orchestration.
-if [ "${CLAUDE_SUBPROCESS:-0}" != "1" ]; then
-  cat <<'DIRECTIVE'
-{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"[CAST-REVIEW] Code was modified. After completing your current logical unit of changes, dispatch `code-reviewer` agent (haiku) to review. Do not skip this step."}}
+# --- Part 2: Inject review/chain directive ---
+if [[ "$TOOL_NAME" == "Write" || "$TOOL_NAME" == "Edit" ]]; then
+  IS_CODE_FILE=false
+  if [[ "$FILE_PATH" =~ \.(js|jsx|ts|tsx|sh|py|mjs|cjs)$ ]]; then
+    IS_CODE_FILE=true
+  fi
+
+  if [ "${CLAUDE_SUBPROCESS:-0}" != "1" ]; then
+    # Main session + code file: HARD [CAST-CHAIN] — mandatory, non-skippable
+    if $IS_CODE_FILE; then
+      python3 -c "
+import json
+msg = '[CAST-CHAIN] Code file modified. MANDATORY: After completing your current logical unit, dispatch in sequence: (1) \`code-reviewer\` (haiku) — review all changes in this unit. (2) \`test-writer\` (sonnet) if logic was added. Do NOT proceed to next unit or commit until code-reviewer returns Status: DONE or DONE_WITH_CONCERNS. Skipping is a protocol violation.'
+print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': msg}}))
+"
+    else
+      # Main session + non-code file: soft review suggestion
+      cat <<'DIRECTIVE'
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"[CAST-REVIEW] Non-code file modified. Dispatch `code-reviewer` if the change is significant."}}
 DIRECTIVE
+    fi
+  else
+    # Subagent + code file: reinforcing signal (agent's own instructions are primary)
+    if $IS_CODE_FILE; then
+      python3 -c "
+import json
+msg = '[CAST-REVIEW] Code modified in subagent context. Per your agent instructions, dispatch \`code-reviewer\` after this logical unit completes.'
+print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': msg}}))
+"
+    fi
+  fi
 fi
 
 # --- Part 3: Detect Agent Dispatch Manifests in .md plan files (all sessions) ---

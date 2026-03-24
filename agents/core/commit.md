@@ -74,6 +74,18 @@ After a successful commit, always remind the user:
 Check if there are any unpushed commits: `git log @{u}..HEAD --oneline 2>/dev/null`
 If commits exist, include the count in the reminder.
 
+## Auto-Chain Push (opt-in)
+
+If the prompt contains `--and-push`, `and push`, or `then push`, treat it as an
+explicit push authorization. After a successful commit:
+
+1. Confirm the commit succeeded (exit 0)
+2. Dispatch `push` agent via the Agent tool:
+   "Push commits on branch [current-branch]. Commits: [unpushed log]. Auto-chain dispatch — proceed without additional confirmation."
+3. Do NOT auto-dispatch push if the commit fails or if the prompt contains no push signal.
+
+Default behavior (no push signal): commit only, show reminder to dispatch push agent.
+
 ## What NOT to do
 - Do not run `git add` — only commit what is already staged
 - Do not use `--no-verify` or bypass hooks

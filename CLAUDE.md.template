@@ -23,11 +23,15 @@ System hooks inject directives into your context. These are not suggestions — 
 ## Inline Whitelist
 
 You handle these directly — everything else goes to an agent:
-- Read and analyze code
+- Read and analyze code (never modifying)
 - Answer questions about the codebase
-- Single-file edits under 5 lines
 - Orchestrate agent dispatches and post-chains
 - Conversation with the user
+- Documentation edits (non-code: .md, .txt, comments-only) under 10 lines
+
+CODE CHANGES — even single-line fixes — go to `code-writer` or the appropriate specialist
+agent. The rule: if it modifies executable behavior, it is NOT inline. No exceptions for
+"small" changes. When in doubt, dispatch.
 
 ---
 
@@ -53,6 +57,7 @@ You handle these directly — everything else goes to an agent:
 | `devops` | sonnet | `performance` | sonnet |
 | `browser` | sonnet | `presenter` | sonnet |
 | `email-manager` | sonnet | `refactor-cleaner` | haiku |
+| `code-writer` | sonnet | `bash-specialist` | sonnet |
 
 Agent definitions: `~/.claude/agents/`
 

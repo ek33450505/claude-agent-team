@@ -110,7 +110,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
       "description": "Implementation",
       "parallel": false,
       "agents": [
-        {"subagent_type": "main", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. Commit each logical unit."}
+        {"subagent_type": "code-writer", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. For each logical unit: write code, dispatch code-reviewer, dispatch test-writer if logic was added. Do NOT commit directly — commit agent handles that."}
       ]
     },
     {
