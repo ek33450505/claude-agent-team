@@ -42,12 +42,12 @@ run_install() {
   [ -d "$HOME/.claude/agent-memory-local" ]
 }
 
-@test "Full install: installs all 23 agents" {
+@test "Full install: installs all 30 agents" {
   run_install "1"
 
   local count
   count=$(ls -1 "$HOME/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
-  [ "$count" -eq 23 ]
+  [ "$count" -eq 30 ]
 }
 
 @test "Full install: installs platform-appropriate skills" {
@@ -81,19 +81,19 @@ run_install() {
 @test "Full install: scripts are executable" {
   run_install "1"
 
-  [ -x "$HOME/.claude/scripts/auto-format.sh" ]
+  [ -x "$HOME/.claude/scripts/tidy.sh" ]
 }
 
 # =============================================================================
 # Core install mode (choice 2)
 # =============================================================================
 
-@test "Core install: installs exactly 8 core agents" {
+@test "Core install: installs exactly 14 core agents" {
   run_install "2"
 
   local count
   count=$(ls -1 "$HOME/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
-  [ "$count" -eq 8 ]
+  [ "$count" -eq 14 ]
 }
 
 @test "Core install: does not install extended agents" {
@@ -150,9 +150,10 @@ run_install() {
   [ ! -f "$HOME/.claude/agents/researcher.md" ]
   [ ! -f "$HOME/.claude/agents/browser.md" ]
 
+  # 9 core + 5 orchestration always installed
   local count
   count=$(ls -1 "$HOME/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
-  [ "$count" -eq 8 ]
+  [ "$count" -eq 14 ]
 }
 
 @test "Backup: existing agents dir is backed up before overwrite" {
