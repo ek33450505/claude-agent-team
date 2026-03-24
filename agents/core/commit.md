@@ -66,10 +66,19 @@ When invoked:
 - Good: `feat(auth): add JWT refresh token rotation`
 - Bad: `fix stuff`, `update`, `WIP`
 
+## After Committing
+
+After a successful commit, always remind the user:
+"Commit complete. Dispatch the `push` agent to push to remote, or run `/push`."
+
+Check if there are any unpushed commits: `git log @{u}..HEAD --oneline 2>/dev/null`
+If commits exist, include the count in the reminder.
+
 ## What NOT to do
 - Do not run `git add` — only commit what is already staged
 - Do not use `--no-verify` or bypass hooks
 - Do not commit if nothing is staged — report it and stop
+- Do not run `git push` — that is the push agent's job
 
 ## Agent Memory
 

@@ -2,6 +2,17 @@
   "routes": [
     {
       "patterns": [
+        "^/push\\b", "^push$", "git push", "push.*remote", "push.*origin",
+        "push.*branch", "push the code", "push.*commit", "push.*changes"
+      ],
+      "agent": "push",
+      "model": "haiku",
+      "command": "/push",
+      "confidence": "hard",
+      "post_chain": []
+    },
+    {
+      "patterns": [
         "build.*error", "typescript.*error", "eslint.*error", "tsc.*fail",
         "vite.*error", "^/build-fix\\b", "build.*fail", "compile.*error",
         "type.*error.*in", "module.*not found", "import.*error", "cannot find module"
