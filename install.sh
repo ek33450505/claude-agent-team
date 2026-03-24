@@ -38,6 +38,7 @@ CORE_AGENTS="planner debugger test-writer code-reviewer data-scientist db-reader
 EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cleaner doc-updater readme-writer router"
 PRODUCTIVITY_AGENTS="researcher report-writer meeting-notes email-manager morning-briefing"
 PROFESSIONAL_AGENTS="browser qa-reviewer presenter"
+ORCHESTRATION_AGENTS="orchestrator auto-stager chain-reporter verifier test-runner"
 
 CORE_CMDS="plan review debug test secure commit data query"
 EXTENDED_CMDS="architect tdd build-fix e2e refactor docs readme"
@@ -56,7 +57,7 @@ fi
 
 # --- Menu ---
 printf "\n${BOLD}Claude Agent Team — Installer${NC}\n\n"
-printf "  ${BOLD}[1]${NC} Full install — all 24 agents, 24 commands, 9 skills, scripts, rules\n"
+printf "  ${BOLD}[1]${NC} Full install — all 29 agents, 24 commands, 9 skills, scripts, rules\n"
 printf "  ${BOLD}[2]${NC} Core only   — 8 core agents + their commands (minimal, portable)\n"
 printf "  ${BOLD}[3]${NC} Custom      — choose categories\n"
 printf "\n"
@@ -137,6 +138,11 @@ mkdir -p "$CLAUDE_DIR/agents" "$CLAUDE_DIR/commands" "$CLAUDE_DIR/skills"
 mkdir -p "$CLAUDE_DIR/briefings" "$CLAUDE_DIR/meetings" "$CLAUDE_DIR/reports" "$CLAUDE_DIR/plans"
 mkdir -p "$CLAUDE_DIR/agent-memory-local"
 mkdir -p "$CLAUDE_DIR/rules"
+mkdir -p "$CLAUDE_DIR/cast/events"
+mkdir -p "$CLAUDE_DIR/cast/state"
+mkdir -p "$CLAUDE_DIR/cast/reviews"
+mkdir -p "$CLAUDE_DIR/cast/artifacts"
+mkdir -p "$CLAUDE_DIR/agent-status"
 
 # --- Install agents (flat — strip subdirectory structure) ---
 install_agents() {
@@ -158,6 +164,7 @@ install_agents "core" $CORE_AGENTS
 $INSTALL_EXTENDED && install_agents "extended" $EXTENDED_AGENTS
 $INSTALL_PRODUCTIVITY && install_agents "productivity" $PRODUCTIVITY_AGENTS
 $INSTALL_PROFESSIONAL && install_agents "professional" $PROFESSIONAL_AGENTS
+install_agents "orchestration" $ORCHESTRATION_AGENTS
 success "  $AGENT_COUNT agents installed"
 
 # --- Install commands ---
@@ -259,6 +266,9 @@ else
     info "  Skipped (exists): config.sh"
 fi
 
+# --- Copy VERSION file ---
+cp "$SCRIPT_DIR/VERSION" "$CLAUDE_DIR/cast-version" 2>/dev/null || true
+
 # --- Copy templates for user review (never overwrite originals) ---
 info "Copying templates for review..."
 cp "$SCRIPT_DIR/CLAUDE.md.template" "$CLAUDE_DIR/CLAUDE.md.template"
@@ -269,7 +279,8 @@ fi
 success "  Templates copied (review before renaming)"
 
 # --- Post-install summary ---
-printf "\n${GREEN}${BOLD}Installation complete!${NC}\n\n"
+CAST_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "unknown")"
+printf "\n${GREEN}${BOLD}Installation complete! (CAST v${CAST_VERSION})${NC}\n\n"
 printf "Next steps:\n"
 printf "  1. Edit ${BOLD}~/.claude/config.sh${NC} — add your project directories\n"
 printf "  2. Edit ${BOLD}~/.claude/rules/stack-context.md${NC} — describe your tech stack\n"
@@ -279,7 +290,7 @@ printf "  5. Review ${BOLD}~/.claude/settings.template.json${NC} — merge into 
 printf "  6. In Claude Code, type ${BOLD}/help${NC} to see all installed agents and routing patterns\n"
 printf "  7. Try: ${BOLD}\"write a test for my function\"${NC} — CAST routing will dispatch test-writer automatically\n"
 printf "\n"
-success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills"
+success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills  [v${CAST_VERSION}]"
 if ! $IS_MACOS; then
     warn "Note: macOS skills were replaced with Linux stubs. Morning briefings will use git-activity and action-items only."
 fi
