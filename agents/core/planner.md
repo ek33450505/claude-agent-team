@@ -87,6 +87,8 @@ When invoked:
 
 ## After Writing the Plan
 
+> **Placeholder substitution required:** In the manifest template below, replace `<feature>` with the actual feature name and `<plan-file-path>` with the full resolved path to the plan file you just wrote (e.g., `~/.claude/plans/2026-03-23-feature-name.md`). Do not leave angle-bracket placeholders in the output manifest.
+
 Append a `## Agent Dispatch Manifest` section at the END of the plan file in this exact format:
 
 ````markdown
@@ -100,7 +102,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
       "description": "Research / architecture review",
       "parallel": true,
       "agents": [
-        {"subagent_type": "architect", "prompt": "Review the proposed architecture for <feature>..."}
+        {"subagent_type": "architect", "prompt": "Review the proposed architecture for <feature>. Read the plan at <plan-file-path>. Identify risks, alternatives, and alignment with existing patterns."}
       ]
     },
     {
@@ -108,20 +110,28 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
       "description": "Implementation",
       "parallel": false,
       "agents": [
-        {"subagent_type": "main", "prompt": "Implement <feature> per the plan at <plan-file-path>"}
+        {"subagent_type": "main", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. Commit each logical unit."}
       ]
     },
     {
       "id": 3,
-      "description": "Quality gates",
-      "parallel": true,
+      "description": "Spec compliance review",
+      "parallel": false,
       "agents": [
-        {"subagent_type": "code-reviewer", "prompt": "Review the changes just made for <feature>"},
-        {"subagent_type": "test-writer", "prompt": "Write tests for the new logic added in <feature>"}
+        {"subagent_type": "code-reviewer", "prompt": "You are a SPEC COMPLIANCE reviewer — not a code quality reviewer. Read the plan at <plan-file-path> and the code changes. Verify: (1) every requirement in the plan is implemented, (2) nothing extra was built beyond what was asked, (3) no misunderstandings of the spec. Do NOT evaluate code style, naming, or architecture — only spec compliance. Be specific: cite plan task numbers for any gaps."}
       ]
     },
     {
       "id": 4,
+      "description": "Code quality review + tests",
+      "parallel": false,
+      "agents": [
+        {"subagent_type": "code-reviewer", "prompt": "Code quality review for <feature>. Check: correctness, edge cases, security, naming, error handling, and conventions. The spec compliance review (Batch 3) already confirmed the right things were built — focus only on HOW they were built."},
+        {"subagent_type": "test-writer", "prompt": "Write tests for the new logic added in <feature>. Cover: happy path, edge cases, and error states."}
+      ]
+    },
+    {
+      "id": 5,
       "description": "Commit",
       "parallel": false,
       "agents": [
@@ -140,6 +150,8 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - Minimum manifest: implement → code-reviewer → commit
 - Maximum parallel batch size: 4 agents
 - Include security agent if auth/API/input handling is touched
+- Batch 3 (spec compliance) MUST always run sequentially BEFORE Batch 4 (code quality) — never merge these into a parallel batch
+- Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
 
 Then tell the user:
 - Where the plan file was saved

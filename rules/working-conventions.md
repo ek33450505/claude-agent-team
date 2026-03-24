@@ -9,7 +9,11 @@
 - YAGNI: build only what was asked
 - DRY: find existing patterns before inventing new ones
 - TDD: write failing tests before implementation for logic-heavy tasks
-- Run `code-reviewer` after every meaningful code change
+- MANDATORY: Invoke `code-reviewer` agent after every logical unit of changes
+- MANDATORY: Never run `git commit` directly — always use the `commit` agent
+- MANDATORY: Route any error/failure to `debugger` agent rather than inline triage
+- MANDATORY: Agents that modify code (`test-writer`, `debugger`, `refactor-cleaner`, `build-error-resolver`) self-dispatch `code-reviewer` internally — do not double-dispatch from the main session
+- MANDATORY: All agents output a structured Status block as their final response: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
 
 ## Testing
 - Tests live alongside source: `src/components/Foo.jsx` → `src/components/Foo.test.jsx`
@@ -22,6 +26,7 @@
 - For BigQuery: use `bq query` CLI
 
 ## Commits
+- MANDATORY: Use the `commit` agent for all commits — never raw `git commit` via Bash
 - Commit message format: imperative mood, concise (`Add feature X`, `Fix bug in Y`)
 - Never amend published commits
 
