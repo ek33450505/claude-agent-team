@@ -1,7 +1,7 @@
 # CAST — Claude Agent Specialist Team
 
 ![Version](https://img.shields.io/badge/version-1.5.0-blue)
-![Agents](https://img.shields.io/badge/agents-35-green)
+![Agents](https://img.shields.io/badge/agents-36-green)
 ![Routes](https://img.shields.io/badge/routes-22-blue)
 ![Tests](https://img.shields.io/badge/tests-106%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -9,7 +9,7 @@
 
 CAST is a local AI ecosystem that grows with you. Agents that remember. Workflows that self-coordinate. Everything on your machine.
 
-<!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT --> specialist agents embedded into Claude Code at the hook layer. When you type a prompt, routing intercepts it and dispatches the right specialist automatically. Agent memory persists across sessions in plain markdown files you own. Compound workflows run in parallel waves without slash commands. Nothing is synced to the cloud. Nothing requires a new network surface beyond what Claude Code already uses.
+<!-- CAST_AGENT_COUNT -->36<!-- /CAST_AGENT_COUNT --> specialist agents embedded into Claude Code at the hook layer. When you type a prompt, routing intercepts it and dispatches the right specialist automatically. Agent memory persists across sessions in plain markdown files you own. Compound workflows run in parallel waves without slash commands. Nothing is synced to the cloud. Nothing requires a new network surface beyond what Claude Code already uses.
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team.git
@@ -23,7 +23,7 @@ bash install.sh
 
 ## How It Works
 
-- **Agents** — <!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT --> specialists across 6 tiers. Each agent is a markdown file with a defined role, model tier, and self-dispatch chain. Haiku for mechanical tasks, Sonnet for reasoning-heavy work — enforced at the route level.
+- **Agents** — <!-- CAST_AGENT_COUNT -->36<!-- /CAST_AGENT_COUNT --> specialists across 6 tiers. Each agent is a markdown file with a defined role, model tier, and self-dispatch chain. Haiku for mechanical tasks, Sonnet for reasoning-heavy work — enforced at the route level.
 - **Routing** — `route.sh` runs on every prompt via the `UserPromptSubmit` hook. It matches against <!-- CAST_ROUTE_COUNT -->22<!-- /CAST_ROUTE_COUNT --> regex patterns in `routing-table.json` and injects a `[CAST-DISPATCH]` directive into Claude's context. No match means Claude handles it inline.
 - **Agent Groups** — 30 compound workflows defined in `config/agent-groups.json`. Each group runs agents in parallel waves with a post-chain. Type "ship it" or "pre-release check" — CAST handles the rest.
 - **Memory** — Plain markdown files in `~/.claude/agent-memory-local/<agent-name>/`. Agents read and write them across sessions. Open any file in any editor to see exactly what your agent remembers.
@@ -74,7 +74,7 @@ Pure config, shell scripts, and markdown. Zero custom application code to mainta
 
 ---
 
-## The Agents (<!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT -->)
+## The Agents (<!-- CAST_AGENT_COUNT -->36<!-- /CAST_AGENT_COUNT -->)
 
 ### Core Tier — 10 agents
 
@@ -292,7 +292,7 @@ git clone https://github.com/ek33450505/claude-agent-team.git && cd claude-agent
 
 | Mode | What you get | Best for |
 |---|---|---|
-| **[1] Full** | All <!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->31<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->11<!-- /CAST_SKILL_COUNT --> skills, all scripts, rules | Most users |
+| **[1] Full** | All <!-- CAST_AGENT_COUNT -->36<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->31<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->12<!-- /CAST_SKILL_COUNT --> skills, all scripts, rules | Most users |
 | **[2] Core** | 9 essential agents + their commands, scripts, rules | Minimal installs, CI |
 | **[3] Custom** | Choose categories: core, extended, productivity, professional, specialist | Power users |
 
@@ -368,7 +368,7 @@ Six event types: `task_created`, `task_claimed`, `task_completed`, `task_blocked
 
 ## Skills
 
-<!-- CAST_SKILL_COUNT -->11<!-- /CAST_SKILL_COUNT --> skills in `~/.claude/skills/`. Skills are reusable prompt fragments sourced by agents at runtime — they are not agents themselves.
+<!-- CAST_SKILL_COUNT -->12<!-- /CAST_SKILL_COUNT --> skills in `~/.claude/skills/`. Skills are reusable prompt fragments sourced by agents at runtime — they are not agents themselves.
 
 | Skill | Purpose |
 |---|---|
@@ -392,11 +392,11 @@ macOS skills (calendar, inbox, reminders) require Microsoft Outlook. Linux insta
 
 | Metric | Count |
 |---|---|
-| Agents | <!-- CAST_AGENT_COUNT -->35<!-- /CAST_AGENT_COUNT --> |
+| Agents | <!-- CAST_AGENT_COUNT -->36<!-- /CAST_AGENT_COUNT --> |
 | Agent groups | 30 |
 | Routes | <!-- CAST_ROUTE_COUNT -->22<!-- /CAST_ROUTE_COUNT --> |
 | Commands | <!-- CAST_COMMAND_COUNT -->31<!-- /CAST_COMMAND_COUNT --> |
-| Skills | <!-- CAST_SKILL_COUNT -->11<!-- /CAST_SKILL_COUNT --> |
+| Skills | <!-- CAST_SKILL_COUNT -->12<!-- /CAST_SKILL_COUNT --> |
 | Tests | <!-- CAST_TEST_COUNT -->106<!-- /CAST_TEST_COUNT --> |
 | Directives | 4 |
 
