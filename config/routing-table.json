@@ -93,7 +93,7 @@
       "model": "sonnet",
       "command": "/plan",
       "confidence": "soft",
-      "post_chain": ["auto-dispatch-from-manifest"]
+      "post_chain": ["orchestrator"]
     },
     {
       "patterns": ["write.*docs", "update.*readme", "ensure.*readme", "verify.*readme", "readme.*accurate", "readme.*describes", "check.*readme", "update.*changelog", "add.*jsdoc", "document.*the", "update.*doc", "fix.*readme", "fix.*docs", "fix.*documentation", "readme.*wrong", "^/docs\\b"],
