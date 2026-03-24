@@ -115,6 +115,35 @@ On no match, `route.sh` outputs nothing. Claude handles the prompt inline (answe
 
 ---
 
+## Agent Self-Dispatch
+
+Hook-layer dispatch gets the right specialist running. But four agents go further — they internally dispatch other agents as mandatory post-steps, without waiting for the hook layer to catch it.
+
+| Agent | After completing | Dispatches |
+|---|---|---|
+| `debugger` | Fix is verified | `test-writer` (regression test), then `code-reviewer` (review fix + test) |
+| `test-writer` | Tests pass | `code-reviewer` (review test quality: behavior-based queries, edge case coverage) |
+| `refactor-cleaner` | Each batch passes build + tests | `code-reviewer` (confirm no logic changed), then `commit` |
+| `build-error-resolver` | Build passes | `code-reviewer` (confirm minimal diff), then `commit` |
+
+This is a second enforcement layer — agents cannot complete without triggering their downstream chain. The hook layer catches cases that slip through; the self-dispatch layer is unconditional within the agent itself.
+
+### Structured Status Blocks
+
+All four code-modifying agents end with a standardized status block:
+
+```
+Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+Summary: [what was done]
+Files changed: [list]
+Concerns: [required if DONE_WITH_CONCERNS]
+Context needed: [required if NEEDS_CONTEXT]
+```
+
+The orchestrator reads these blocks to control execution flow: `DONE` proceeds, `DONE_WITH_CONCERNS` logs and continues, `BLOCKED` halts and surfaces to the user, `NEEDS_CONTEXT` pauses for clarification.
+
+---
+
 ## Routing Table
 
 21 routes covering the most common development tasks. Each route specifies the agent, model tier, and optional post-chain:
@@ -136,6 +165,50 @@ On no match, `route.sh` outputs nothing. Claude handles the prompt inline (answe
 | `rewrite.*readme`, `readme.*audit` | `readme-writer` | sonnet | commit |
 
 Full table: `config/routing-table.json`
+
+---
+
+## Planner Manifests
+
+The `planner` agent doesn't just write a task breakdown — it appends an **Agent Dispatch Manifest** to the plan file. The orchestrator reads this manifest and executes the full agent queue with one user approval.
+
+Every planner manifest follows a 5-batch structure:
+
+| Batch | Type | Description |
+|---|---|---|
+| 1 | parallel | Architecture / research review |
+| 2 | sequential | Implementation (main model or specialist) |
+| 3 | sequential | Spec compliance review — "did we build what was asked?" |
+| 4 | sequential | Code quality review + test writing |
+| 5 | sequential | Commit |
+
+Batches 3 and 4 are always sequential and always separate. Batch 3 checks spec compliance — whether every requirement was implemented, nothing extra was built, no misunderstandings of the plan. Batch 4 checks code quality — correctness, edge cases, naming, error handling. Merging these into a single parallel batch is disallowed by the planner's rules.
+
+The manifest is a `json dispatch` code block in the plan file. The orchestrator parses it, presents the queue for one-shot approval, then executes in batch order.
+
+---
+
+## Orchestrator
+
+The `orchestrator` agent reads an Agent Dispatch Manifest and runs the full queue. It handles four batch types:
+
+| Batch type | How it runs |
+|---|---|
+| `"parallel": true` | All agents dispatched simultaneously in a single response |
+| `"parallel": false` | Single agent dispatched, waits for output before next batch |
+| `"subagent_type": "main"` | Claude (the main model) implements directly — no Agent tool call |
+| `"type": "fan-out"` | Agents dispatched in parallel; outputs synthesized into a **Fan-out Summary**; that summary is passed as prefixed context to every agent in the next batch |
+
+**Progress tracking:** The orchestrator initializes a TodoWrite list at startup — one item per batch. Items are marked `completed` as batches finish, giving visible per-batch status throughout execution.
+
+**Status-aware execution:** After each batch, the orchestrator reads the agent's status block:
+
+- `DONE` — proceed to next batch
+- `DONE_WITH_CONCERNS` — mark completed, log the Concerns line, surface in final summary
+- `BLOCKED` — mark as stuck, halt immediately, report to user and wait for direction
+- `NEEDS_CONTEXT` — pause, surface the missing context to the user, re-dispatch with updated context
+
+**Completion summary:** After all batches finish, the orchestrator outputs a per-batch summary. If any batch returned `DONE_WITH_CONCERNS`, a separate concerns section lists each concern with its batch number.
 
 ---
 
@@ -167,12 +240,14 @@ You type: `fix the TypeError in the auth middleware`
 3. Claude dispatches `debugger` (sonnet) with your full prompt
 4. Debugger finds and fixes the bug — writes to file
 5. `post-tool-hook.sh` fires on the Write, injects `[CAST-REVIEW]`
-6. Claude dispatches `code-reviewer` (haiku) per the chain directive
-7. Code reviewer approves — Claude dispatches `commit` (haiku)
-8. `pre-tool-guard.sh` allows the commit because the commit agent uses `CAST_COMMIT_AGENT=1 git commit`
-9. Session ends — `Stop` hook verifies nothing was skipped
+6. **Debugger self-dispatches `test-writer`** — writes a regression test that would have caught the bug
+7. `test-writer` self-dispatches `code-reviewer` (haiku) after the test file is written
+8. Code reviewer approves — debugger then self-dispatches `code-reviewer` again on the fix itself
+9. Claude dispatches `commit` (haiku) per the hook chain directive
+10. `pre-tool-guard.sh` allows the commit because the commit agent uses `CAST_COMMIT_AGENT=1 git commit`
+11. Session ends — `Stop` hook verifies nothing was skipped
 
-Total cost: sonnet (debug) + haiku (review) + haiku (commit). Not three sonnet calls.
+Total cost: sonnet (debug) + sonnet (test-writer) + haiku (code-reviewer × 2) + haiku (commit). Not five sonnet calls.
 
 ---
 
@@ -183,7 +258,7 @@ Total cost: sonnet (debug) + haiku (review) + haiku (commit). Not three sonnet c
 The file defines:
 1. The three hook directives (mandatory, no exceptions)
 2. The inline whitelist (what Claude handles directly)
-3. The agent registry (28 agents, haiku/sonnet assignments)
+3. The agent registry (29 agents, haiku/sonnet assignments)
 4. Slash command list (manual overrides when routing misses)
 
 ---
