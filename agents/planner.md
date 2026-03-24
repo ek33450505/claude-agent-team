@@ -53,7 +53,7 @@ When invoked:
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Claude:** After this plan is written, dispatch the `orchestrator` agent via the Agent tool with the plan file path to execute it task-by-task.
 
 **Goal:** [One sentence]
 

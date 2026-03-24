@@ -35,8 +35,9 @@ if echo "$PROMPT" | grep -qi "^opus:"; then
   # Scope variables to subprocess invocation only (not exported globally)
   CAST_PROMPT_VAL="$PROMPT" python3 -c "
 import json, datetime, os
-log = {'timestamp': datetime.datetime.utcnow().isoformat()+'Z', 'prompt_preview': os.environ.get('CAST_PROMPT_VAL','')[:80], 'action': 'opus_escalation', 'matched_route': 'opus', 'pattern': 'opus: prefix'}
-open(os.path.expanduser('~/.claude/routing-log.jsonl'),'a').write(json.dumps(log)+'\n')
+log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
+log = {'timestamp': datetime.datetime.utcnow().isoformat()+'Z', 'session_id': os.environ.get('CLAUDE_SESSION_ID','unknown'), 'prompt_preview': os.environ.get('CAST_PROMPT_VAL','')[:80], 'action': 'opus_escalation', 'matched_route': 'opus', 'pattern': 'opus: prefix'}
+open(log_path,'a').write(json.dumps(log)+'\n')
 " 2>/dev/null || true
   exit 0
 fi
@@ -51,6 +52,7 @@ original = os.environ.get('CAST_ORIGINAL', '')
 log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
 ts = datetime.datetime.utcnow().isoformat() + 'Z'
 preview = prompt[:80]
+session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
 
 try:
     with open(os.path.expanduser('~/.claude/config/routing-table.json')) as f:
@@ -58,7 +60,7 @@ try:
 except Exception as e:
     # Log config read failure for observability
     try:
-        log = {'timestamp': ts, 'prompt_preview': preview, 'action': 'config_error', 'error': str(e)}
+        log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'config_error', 'error': str(e)}
         open(log_path, 'a').write(json.dumps(log) + '\n')
     except Exception:
         pass
@@ -66,6 +68,9 @@ except Exception as e:
 
 for route in table.get('routes', []):
     for pattern in route.get('patterns', []):
+        # Skip patterns >200 chars — prevents ReDoS via catastrophic backtracking
+        if len(pattern) > 200:
+            continue
         try:
             matched = re.search(pattern, prompt, re.IGNORECASE)
         except re.error:
@@ -106,6 +111,7 @@ for route in table.get('routes', []):
             # Log the match
             log = {
                 'timestamp': ts,
+                'session_id': session_id,
                 'prompt_preview': preview,
                 'action': 'dispatched',
                 'matched_route': agent,
@@ -114,11 +120,24 @@ for route in table.get('routes', []):
                 'confidence': confidence
             }
             open(log_path, 'a').write(json.dumps(log) + '\n')
+            # Rotate log if >5MB — keep at most 2 rotated files
+            try:
+                if os.path.getsize(log_path) > 5 * 1024 * 1024:
+                    old2 = log_path + '.2'
+                    old1 = log_path + '.1'
+                    if os.path.exists(old2):
+                        os.remove(old2)
+                    if os.path.exists(old1):
+                        os.rename(old1, old2)
+                    os.rename(log_path, old1)
+            except Exception:
+                pass
             sys.exit(0)
 
 # No match — log and output nothing (Claude handles inline)
 log = {
     'timestamp': ts,
+    'session_id': session_id,
     'prompt_preview': preview,
     'action': 'no_match',
     'matched_route': None,
@@ -126,6 +145,18 @@ log = {
     'pattern': None
 }
 open(log_path, 'a').write(json.dumps(log) + '\n')
+# Rotate log if >5MB — keep at most 2 rotated files
+try:
+    if os.path.getsize(log_path) > 5 * 1024 * 1024:
+        old2 = log_path + '.2'
+        old1 = log_path + '.1'
+        if os.path.exists(old2):
+            os.remove(old2)
+        if os.path.exists(old1):
+            os.rename(old1, old2)
+        os.rename(log_path, old1)
+except Exception:
+    pass
 " 2>/dev/null || true
 
 exit 0
