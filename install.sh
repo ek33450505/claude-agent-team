@@ -294,4 +294,10 @@ success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skill
 if ! $IS_MACOS; then
     warn "Note: macOS skills were replaced with Linux stubs. Morning briefings will use git-activity and action-items only."
 fi
+
+# --- Update README stat tokens ---
+if [ -f "$SCRIPT_DIR/scripts/gen-stats.sh" ] && [ -f "$SCRIPT_DIR/README.md" ]; then
+    bash "$SCRIPT_DIR/scripts/gen-stats.sh" "$SCRIPT_DIR/README.md" >/dev/null 2>&1 || true
+fi
+
 printf "\n"
