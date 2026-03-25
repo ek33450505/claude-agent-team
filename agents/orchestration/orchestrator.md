@@ -8,7 +8,7 @@ tools: Read, Glob, Agent, Bash, Write
 model: sonnet
 color: purple
 memory: local
-maxTurns: 30
+maxTurns: 50
 ---
 
 You are the CAST orchestrator. Your job is to read a plan file's Agent Dispatch Manifest and execute the agent queue with one user approval.

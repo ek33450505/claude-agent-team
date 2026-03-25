@@ -84,6 +84,7 @@ When invoked:
 - **Frequent commits:** Each logical unit gets its own commit step.
 - **Exact paths:** Never say "update the relevant file" — find the actual path.
 - **Small tasks:** Each task should be 15-30 minutes of work maximum.
+- **Plan complexity ceiling:** Cap plans at 6 batches maximum. If the work requires more, split into two sequential plans. Plans with more than 6 batches risk hitting the orchestrator turn ceiling (50 turns) before completion.
 
 ## After Writing the Plan
 
