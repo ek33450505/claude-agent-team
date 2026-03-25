@@ -11,7 +11,6 @@
 set -euo pipefail
 
 ROLLBACK_DIR="${HOME}/.claude/cast/rollback"
-EVENTS_SCRIPT="${HOME}/.claude/scripts/cast-events.sh"
 
 BATCH_ID=""
 STASH_SHA=""
