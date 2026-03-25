@@ -1,4 +1,4 @@
-.PHONY: docs validate test sync
+.PHONY: docs validate test sync hooks
 
 # Regenerate README stats from live counts
 docs:
@@ -21,3 +21,9 @@ test:
 
 # Sync docs then validate
 sync: docs validate
+
+# Wire the pre-commit hook (alternative to running ./install.sh)
+hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/pre-commit
+	@echo "Pre-commit hook installed."

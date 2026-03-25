@@ -18,6 +18,8 @@ cd claude-agent-team
 make test
 ```
 
+`./install.sh` automatically wires the pre-commit hook, which runs `make docs` before every commit and re-stages `README.md` if counts changed. If you skip `install.sh`, run `make hooks` once to activate the hook manually.
+
 ---
 
 ## Adding a New Agent

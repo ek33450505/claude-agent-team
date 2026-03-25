@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# CAST pre-commit hook: sync README stats before commit
+# Non-blocking — never aborts a commit on failure
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+if command -v make &>/dev/null && [ -f Makefile ]; then
+  make docs --no-print-directory 2>/dev/null || bash scripts/gen-stats.sh 2>/dev/null || true
+else
+  bash scripts/gen-stats.sh 2>/dev/null || true
+fi
+
+if ! git diff --quiet README.md 2>/dev/null; then
+  git add README.md
+  echo "[CAST] README.md stats updated and staged automatically."
+fi
+
+exit 0

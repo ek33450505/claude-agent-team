@@ -307,4 +307,8 @@ fi
 echo "Syncing README stats..."
 bash "$(dirname "$0")/scripts/gen-stats.sh" 2>/dev/null || true
 
+# --- Wire pre-commit hook ---
+git -C "$(dirname "$0")" config core.hooksPath .githooks 2>/dev/null || true
+echo "Pre-commit hook wired (.githooks/pre-commit)"
+
 printf "\n"
