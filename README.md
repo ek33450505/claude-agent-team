@@ -515,18 +515,29 @@ bash ~/.claude/scripts/cast-validate.sh
 A clean install reports:
 
 ```
-CAST Validate v1.6.0 (7 checks)
+CAST Validate v1.8.0 (10 checks)
 ══════════════════════════════
-  Hook wiring: route.sh, pre-tool-guard.sh, post-tool-hook.sh wired
-  Agent frontmatter: 36 agents — all valid
-  Routing table: 28 routes — schema valid
-  CLAUDE.md directives: [CAST-DISPATCH] [CAST-REVIEW] [CAST-CHAIN] [CAST-DISPATCH-GROUP] present
-  CAST dirs: events/ state/ reviews/ artifacts/ agent-status/ all present
-  cast-events.sh: installed at /Users/you/.claude/scripts/cast-events.sh
-  agent-groups.json: 31 groups — present and valid
+✓ Hook wiring: route.sh, pre-tool-guard.sh, post-tool-hook.sh wired
+✓ Agent frontmatter: 36 agents — all valid
+✓ Routing table: 28 routes — schema valid
+✓ CLAUDE.md directives: [CAST-DISPATCH] [CAST-REVIEW] [CAST-CHAIN] [CAST-DISPATCH-GROUP] present
+✓ CAST dirs: events/ state/ reviews/ artifacts/ agent-status/ all present
+✓ cast-events.sh: installed at /Users/you/.claude/scripts/cast-events.sh
+✓ agent-groups.json: 31 groups — present and valid
+✓ cast-route-install.sh: present and executable (repo copy)
+✓ stop-hook.sh: wired in settings.local.json
+✓ routing-proposals.json: not present (proposals pipeline not yet run — OK)
 ══════════════════════════════
 0 errors, 0 warnings
 ```
+
+The validator checks three additions introduced in v1.8.0:
+
+| Check | What it verifies |
+|---|---|
+| 8 | `cast-route-install.sh` present and executable (routing proposal approval pipeline) |
+| 9 | `stop-hook.sh` wired in `settings.local.json` (chain-reporter auto-dispatch at session end) |
+| 10 | `routing-proposals.json` schema valid, if present (generated proposals are structurally correct) |
 
 ---
 
@@ -619,6 +630,30 @@ macOS skills (calendar, inbox, reminders) require Microsoft Outlook. Linux insta
 
 ---
 
+## Self-Improving Routing
+
+The routing table is static by default but can evolve. `stop-hook.sh` runs `cast-routing-feedback.sh` weekly, which clusters unmatched prompts and writes candidate routing proposals to `~/.claude/routing-proposals.json`. You review and install them with two scripts:
+
+```bash
+# Review pending proposals (opens formatted display)
+bash ~/.claude/scripts/cast-route-review.sh
+
+# Approve one proposal and merge it into routing-table.json
+bash ~/.claude/scripts/cast-route-install.sh --install <proposal-id>
+
+# Reject a proposal
+bash ~/.claude/scripts/cast-route-install.sh --reject <proposal-id>
+
+# List all proposals with status
+bash ~/.claude/scripts/cast-route-install.sh --list
+```
+
+Each proposal has a `status` field: `pending`, `installed`, or `rejected`. The pre-session briefing surfaces the pending count so you see it on the first prompt of each session.
+
+`cast-validate.sh` Check 8 confirms `cast-route-install.sh` is present and executable. Check 10 validates the proposals file schema if it exists.
+
+---
+
 ## Stats
 
 | Metric | Count |
@@ -628,12 +663,13 @@ macOS skills (calendar, inbox, reminders) require Microsoft Outlook. Linux insta
 | Routes | 28 |
 | Slash commands | 32 |
 | Skills | 12 |
-| Tests | 106 |
+| Tests | 138 |
 | Hook directives | 11 |
 | post-tool-hook.sh parts | 5 |
 | agent-status-reader responses | 5 |
 | Event types | 7 |
 | cast-stats.sh sections | 8 |
+| cast-validate.sh checks | 10 |
 
 ---
 
@@ -644,6 +680,7 @@ See [docs/known-limitations.md](docs/known-limitations.md) for details on:
 - **SendMessage Gap** — orchestrator cannot resume after a network drop; workaround: checkpoint log + re-invocation with `pre_approved: true`
 - **Agent tool depth** — nesting depth ≥ 3 may suppress self-dispatch chains; inline session acts as fallback enforcer
 - **Turn ceiling** — orchestrator stops cleanly at turn 40 and checkpoints for manual resume
+- **CAST-DEBUG silent suppression** — `post-tool-hook.sh` Part 5 uses `echo "$INPUT" | python3 - <<'PYEOF'`; in bash, the heredoc takes precedence as stdin for `python3 -`, leaving `sys.stdin` empty in the script. The `json.load(sys.stdin)` call raises and is caught by `|| true`. CAST-DEBUG directives are not emitted in the current implementation. The `[CAST-DEBUG]` directive in `CLAUDE.md` remains effective as a defined instruction; the auto-injection from the hook is the broken path.
 
 ---
 
