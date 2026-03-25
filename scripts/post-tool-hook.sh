@@ -54,11 +54,25 @@ DIRECTIVE
   else
     # Subagent + code file: reinforcing signal (agent's own instructions are primary)
     if $IS_CODE_FILE; then
-      python3 -c "
+      # Check nesting depth — deeper nesting needs stronger warning
+      DEPTH_FILE="/tmp/cast-depth-${PPID}.depth"
+      SUBAGENT_DEPTH=1
+      if [ -f "$DEPTH_FILE" ]; then
+        SUBAGENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 1)"
+      fi
+      if [ "$SUBAGENT_DEPTH" -ge 2 ]; then
+        python3 -c "
+import json
+msg = 'DEEP NESTING WARNING: [CAST-REVIEW] Code modified in subagent context. Per your agent instructions, dispatch \`code-reviewer\` after this logical unit completes. If Agent tool dispatch fails at this depth, the inline session must re-dispatch code-reviewer as fallback.'
+print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': msg}}))
+"
+      else
+        python3 -c "
 import json
 msg = '[CAST-REVIEW] Code modified in subagent context. Per your agent instructions, dispatch \`code-reviewer\` after this logical unit completes.'
 print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': msg}}))
 "
+      fi
     fi
   fi
 fi

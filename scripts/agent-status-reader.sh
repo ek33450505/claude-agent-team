@@ -7,8 +7,16 @@
 #   the latest file in ~/.claude/agent-status/ and acts on it:
 #
 #   BLOCKED           → hard-block the session (exit 2) with [CAST-HALT] directive
+#                       Also tracks per-session BLOCKED counter; on 3rd consecutive
+#                       BLOCKED, emits [CAST-ESCALATE] advisory suggesting escalation
 #   DONE_WITH_CONCERNS → inject [CAST-REVIEW] hookSpecificOutput for main session review
-#   DONE / NEEDS_CONTEXT / missing file → exit 0 silently
+#   DONE              → resets BLOCKED counter; exits 0 silently
+#   NEEDS_CONTEXT / missing file → exit 0 silently
+#
+# CAST-TIMEOUT:
+#   On each invocation, checks session start epoch and recent commit events.
+#   If session has run 90+ minutes without a commit in the last 60 min,
+#   injects a soft advisory suggesting /commit or /fresh.
 #
 # IMPORTANT — inverted subprocess guard:
 #   Unlike route.sh and post-tool-hook.sh (which run in the MAIN session),
@@ -21,6 +29,71 @@ if [ "${CLAUDE_SUBPROCESS:-0}" != "1" ]; then exit 0; fi
 set -euo pipefail
 
 CAST_STATUS_DIR="${CAST_STATUS_DIR:-${HOME}/.claude/agent-status}"
+SESSION_ID="${CLAUDE_SESSION_ID:-default}"
+BLOCKED_COUNT_FILE="/tmp/cast-blocked-${SESSION_ID}.count"
+SESSION_EPOCH_FILE="/tmp/cast-session-start-${SESSION_ID}.epoch"
+CAST_EVENTS_DIR="${HOME}/.claude/cast/events"
+
+# --- CAST-TIMEOUT: session duration check ---
+# Create session start epoch file if absent; suppress errors if /tmp is not writable
+CURRENT_EPOCH="$(date +%s)"
+CAST_EPOCH_FILE="$SESSION_EPOCH_FILE" CAST_EPOCH_VAL="$CURRENT_EPOCH" python3 -c "
+import os
+f = os.environ.get('CAST_EPOCH_FILE','')
+v = os.environ.get('CAST_EPOCH_VAL','')
+if f and not os.path.exists(f):
+    try:
+        open(f,'w').write(v)
+    except Exception:
+        pass
+" 2>/dev/null || true
+
+SESSION_START="$(cat "$SESSION_EPOCH_FILE" 2>/dev/null || echo "$CURRENT_EPOCH")"
+SESSION_AGE=$(( CURRENT_EPOCH - SESSION_START ))
+
+if [ "$SESSION_AGE" -gt 5400 ]; then
+  # Check for a commit event in the last 3600 seconds
+  RECENT_COMMIT_FOUND=0
+  if [ -d "$CAST_EVENTS_DIR" ]; then
+    CUTOFF=$(( CURRENT_EPOCH - 3600 ))
+    # Look for commit events in event files; check file mtime as proxy
+    while IFS= read -r -d '' evfile; do
+      FILE_MTIME="$(stat -f '%m' "$evfile" 2>/dev/null || echo 0)"
+      if [ "$FILE_MTIME" -ge "$CUTOFF" ]; then
+        if grep -q '"event_type"\s*:\s*"task_completed"' "$evfile" 2>/dev/null && \
+           grep -q '"agent"\s*:\s*"commit"' "$evfile" 2>/dev/null; then
+          RECENT_COMMIT_FOUND=1
+          break
+        fi
+        # Also match commit in artifact_written or task_claimed events
+        if grep -q '"commit"' "$evfile" 2>/dev/null; then
+          RECENT_COMMIT_FOUND=1
+          break
+        fi
+      fi
+    done < <(find "$CAST_EVENTS_DIR" -name "*.json" -print0 2>/dev/null)
+  fi
+
+  if [ "$RECENT_COMMIT_FOUND" -eq 0 ]; then
+    TIMEOUT_ADVISORY='[CAST-TIMEOUT] Session running 90+ minutes without a commit event. Consider: /commit to checkpoint progress, or /fresh to start a clean context.'
+    TIMEOUT_OUTPUT="$(python3 -c "
+import json
+msg = '$TIMEOUT_ADVISORY'
+output = {
+    'hookSpecificOutput': {
+        'hookEventName': 'PostToolUse',
+        'additionalContext': msg
+    }
+}
+print(json.dumps(output))
+" 2>/dev/null)"
+    echo "$TIMEOUT_OUTPUT"
+    # exit 0 — advisory only, do not block; but we still need to continue
+    # We cannot exit here and also check status, so we print and continue
+  fi
+fi
+
+# --- Status file check ---
 
 # Nothing to read if the directory does not exist yet
 if [ ! -d "$CAST_STATUS_DIR" ]; then exit 0; fi
@@ -37,10 +110,14 @@ REAL_HOME="$(realpath "$HOME" 2>/dev/null)" || REAL_HOME="$HOME"
 if [[ -z "$REAL_PATH" || "$REAL_PATH" != "$REAL_HOME/"* ]]; then exit 0; fi
 
 # Parse status and summary using python3 stdlib only
-CAST_STATUS_FILE="$REAL_PATH" python3 -c "
+CAST_STATUS_FILE="$REAL_PATH" \
+CAST_BLOCKED_COUNT_FILE="$BLOCKED_COUNT_FILE" \
+python3 -c "
 import json, os, sys, time
 
 filepath = os.environ.get('CAST_STATUS_FILE', '')
+blocked_count_file = os.environ.get('CAST_BLOCKED_COUNT_FILE', '')
+
 try:
     with open(filepath) as f:
         d = json.load(f)
@@ -59,15 +136,53 @@ summary   = d.get('summary', '')
 concerns  = d.get('concerns') or ''
 
 if status == 'BLOCKED':
-    msg = (
-        f'**[CAST-HALT]** Agent \`{agent}\` is BLOCKED and cannot proceed.\n'
-        f'Summary: {summary}'
-    )
-    if concerns:
-        msg += f'\nConcerns: {concerns}'
-    msg += '\nResolve the blocker before continuing. Do not retry the blocked operation.'
+    # --- CAST-ESCALATE: per-session BLOCKED counter ---
+    current_count = 0
+    try:
+        with open(blocked_count_file) as cf:
+            current_count = int(cf.read().strip())
+    except Exception:
+        current_count = 0
+    current_count += 1
+    try:
+        with open(blocked_count_file, 'w') as cf:
+            cf.write(str(current_count))
+    except Exception:
+        pass
+
+    if current_count >= 3:
+        # Escalation path
+        msg = (
+            f'**[CAST-ESCALATE]** Agent \`{agent}\` has reported BLOCKED {current_count} times this session.\n'
+            f'Summary: {summary}'
+        )
+        if concerns:
+            msg += f'\nConcerns: {concerns}'
+        msg += (
+            '\nOptions: (1) prefix your next prompt with opus: for higher-capability model, '
+            '(2) provide missing context manually, '
+            '(3) split the task into smaller units.'
+        )
+    else:
+        # Standard BLOCKED path
+        msg = (
+            f'**[CAST-HALT]** Agent \`{agent}\` is BLOCKED and cannot proceed.\n'
+            f'Summary: {summary}'
+        )
+        if concerns:
+            msg += f'\nConcerns: {concerns}'
+        msg += '\nResolve the blocker before continuing. Do not retry the blocked operation.'
     print(msg)
     sys.exit(2)
+
+elif status == 'DONE':
+    # Reset BLOCKED counter on success
+    try:
+        with open(blocked_count_file, 'w') as cf:
+            cf.write('0')
+    except Exception:
+        pass
+    sys.exit(0)
 
 elif status == 'DONE_WITH_CONCERNS':
     directive = (
@@ -87,7 +202,7 @@ elif status == 'DONE_WITH_CONCERNS':
     print(_json.dumps(output))
     sys.exit(0)
 
-# DONE / NEEDS_CONTEXT / unknown — exit silently
+# NEEDS_CONTEXT / unknown — exit silently
 sys.exit(0)
 " 2>/dev/null
 STATUS_EXIT="${PIPESTATUS[0]:-$?}"

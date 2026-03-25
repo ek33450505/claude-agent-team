@@ -6,7 +6,26 @@
 # Always logs to routing-log.jsonl for observability
 
 # Skip subprocesses (subagent prompts should not trigger re-routing)
-if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
+# But track nesting depth for subagents so deeply nested agents can be warned
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
+  # Depth tracking: increment per-PPID counter
+  DEPTH_FILE="/tmp/cast-depth-${PPID}.depth"
+  CURRENT_DEPTH=1
+  if [ -f "$DEPTH_FILE" ]; then
+    CURRENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 1)"
+  fi
+  CURRENT_DEPTH=$(( CURRENT_DEPTH + 1 ))
+  echo "$CURRENT_DEPTH" > "$DEPTH_FILE"
+
+  if [ "$CURRENT_DEPTH" -ge 2 ]; then
+    python3 -c "
+import json
+msg = '[CAST-DEPTH-WARN] Nesting depth >= 2 (orchestrator->agent->sub-agent). The Agent tool may be unavailable at this depth. If self-dispatch fails silently, the inline session is the fallback enforcer -- check agent output for missing downstream dispatch confirmation.'
+print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': msg}}))
+" 2>/dev/null || true
+  fi
+  exit 0
+fi
 
 set -euo pipefail
 
