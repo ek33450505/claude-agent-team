@@ -56,10 +56,12 @@ fi
 if echo "$PROMPT" | grep -qi "^opus:"; then
   # Scope variables to subprocess invocation only (not exported globally)
   CAST_PROMPT_VAL="$PROMPT" python3 -c "
-import json, datetime, os
-log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
+import json, datetime, os, subprocess
 log = {'timestamp': datetime.datetime.utcnow().isoformat()+'Z', 'session_id': os.environ.get('CLAUDE_SESSION_ID','unknown'), 'prompt_preview': os.environ.get('CAST_PROMPT_VAL','')[:80], 'action': 'opus_escalation', 'matched_route': 'opus', 'pattern': 'opus: prefix'}
-open(log_path,'a').write(json.dumps(log)+'\n')
+subprocess.run(
+    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+    input=json.dumps(log), text=True, timeout=5
+)
 " 2>/dev/null || true
   exit 0
 fi
@@ -107,7 +109,11 @@ for group in groups_data.get('groups', []):
                 }
                 print(json.dumps(output))
                 log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'group_dispatched', 'matched_route': group['id'], 'pattern': pattern, 'confidence': group.get('confidence', 'soft')}
-                open(log_path, 'a').write(json.dumps(log) + '\\n')
+                import subprocess
+                subprocess.run(
+                    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+                    input=json.dumps(log), text=True, timeout=5
+                )
                 sys.exit(0)
         except re.error:
             continue
@@ -132,8 +138,12 @@ try:
 except Exception as e:
     # Log config read failure for observability
     try:
+        import subprocess as _sp
         log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'config_error', 'error': str(e)}
-        open(log_path, 'a').write(json.dumps(log) + '\n')
+        _sp.run(
+            ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+            input=json.dumps(log), text=True, timeout=5
+        )
     except Exception:
         pass
     sys.exit(0)
@@ -149,6 +159,47 @@ for route in table.get('routes', []):
             continue  # Skip malformed patterns silently
         if matched:
             agent = route['agent']
+            # --- Dispatch loop detection ---
+            dispatch_log = f'/tmp/cast-dispatch-{session_id}.log'
+            dispatch_count = 0
+            try:
+                if os.path.exists(dispatch_log):
+                    with open(dispatch_log) as dl:
+                        for dline in dl:
+                            parts = dline.strip().split('\t')
+                            if len(parts) >= 2:
+                                if parts[1] == 'commit':
+                                    dispatch_count = 0  # reset on commit
+                                elif parts[1] == agent:
+                                    dispatch_count += 1
+            except Exception:
+                pass
+
+            if dispatch_count >= 3:
+                # Circuit-break: inject loop-break instead of dispatch
+                loop_directive = f'[CAST-LOOP-BREAK] Agent \`{agent}\` dispatched {dispatch_count} times this session without a commit. Possible dispatch loop detected. Handle inline or break the cycle.'
+                loop_output = {
+                    'hookSpecificOutput': {
+                        'hookEventName': 'UserPromptSubmit',
+                        'additionalContext': loop_directive
+                    }
+                }
+                print(json.dumps(loop_output))
+                loop_log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'loop_break', 'matched_route': agent, 'pattern': pattern, 'dispatch_count': dispatch_count}
+                import subprocess as _sp2
+                _sp2.run(
+                    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+                    input=json.dumps(loop_log), text=True, timeout=5
+                )
+                sys.exit(0)
+
+            # Record this dispatch in the registry
+            try:
+                with open(dispatch_log, 'a') as dl:
+                    dl.write(f'{ts}\t{agent}\n')
+            except Exception:
+                pass
+
             confidence = route.get('confidence', 'hard')
             command = route.get('command', '')
             post_chain = route.get('post_chain', [])
@@ -192,19 +243,11 @@ for route in table.get('routes', []):
                 'pattern': pattern,
                 'confidence': confidence
             }
-            open(log_path, 'a').write(json.dumps(log) + '\n')
-            # Rotate log if >5MB — keep at most 2 rotated files
-            try:
-                if os.path.getsize(log_path) > 5 * 1024 * 1024:
-                    old2 = log_path + '.2'
-                    old1 = log_path + '.1'
-                    if os.path.exists(old2):
-                        os.remove(old2)
-                    if os.path.exists(old1):
-                        os.rename(old1, old2)
-                    os.rename(log_path, old1)
-            except Exception:
-                pass
+            import subprocess as _sp3
+            _sp3.run(
+                ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+                input=json.dumps(log), text=True, timeout=5
+            )
             sys.exit(0)
 
 # No match — log and output nothing (Claude handles inline)
@@ -217,19 +260,11 @@ log = {
     'command': None,
     'pattern': None
 }
-open(log_path, 'a').write(json.dumps(log) + '\n')
-# Rotate log if >5MB — keep at most 2 rotated files
-try:
-    if os.path.getsize(log_path) > 5 * 1024 * 1024:
-        old2 = log_path + '.2'
-        old1 = log_path + '.1'
-        if os.path.exists(old2):
-            os.remove(old2)
-        if os.path.exists(old1):
-            os.rename(old1, old2)
-        os.rename(log_path, old1)
-except Exception:
-    pass
+import subprocess as _sp4
+_sp4.run(
+    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+    input=json.dumps(log), text=True, timeout=5
+)
 " 2>/dev/null || true
 
 # --- Catch-all: route ambiguous implementation prompts to router agent ---
@@ -286,7 +321,11 @@ log = {
     'pattern': 'catchall:action_verb_heuristic',
     'confidence': 'soft'
 }
-open(log_path, 'a').write(json.dumps(log) + '\n')
+import subprocess as _sp5
+_sp5.run(
+    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+    input=json.dumps(log), text=True, timeout=5
+)
 " 2>/dev/null || true
 
 exit 0

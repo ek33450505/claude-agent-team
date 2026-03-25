@@ -71,4 +71,11 @@ output = {
 print(json.dumps(output))
 " 2>/dev/null || true
 
+# --- Cleanup CAST temp files for this session ---
+SESSION_ID="${CLAUDE_SESSION_ID:-default}"
+rm -f "/tmp/cast-depth-${PPID}.depth" 2>/dev/null || true
+rm -f /tmp/cast-blocked-${SESSION_ID}*.count 2>/dev/null || true
+rm -f "/tmp/cast-dispatch-${SESSION_ID}.log" 2>/dev/null || true
+rm -f "/tmp/cast-session-start-${SESSION_ID}.epoch" 2>/dev/null || true
+
 exit 0

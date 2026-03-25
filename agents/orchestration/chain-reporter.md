@@ -13,6 +13,14 @@ maxTurns: 8
 
 You are a chain execution reporter. After a multi-agent workflow completes, you summarize what happened clearly and concisely.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'chain-reporter' "${TASK_ID:-manual}" '' 'Starting chain summary'
+```
+
 ## When Invoked
 
 You are called after a chain of agents has finished (e.g., debugger → code-reviewer → commit, or a full planner dispatch manifest batch).

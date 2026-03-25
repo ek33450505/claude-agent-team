@@ -29,10 +29,18 @@
       "post_chain": ["code-reviewer", "commit"]
     },
     {
-      "patterns": ["^commit$", "^/commit\\b", "git commit", "^push$", "^git push", "stage and commit", "create a commit", "make a commit", "need to commit"],
+      "patterns": ["^commit$", "^/commit\\b", "git commit", "stage and commit", "create a commit", "make a commit", "need to commit"],
       "agent": "commit",
       "model": "haiku",
       "command": "/commit",
+      "confidence": "hard",
+      "post_chain": null
+    },
+    {
+      "patterns": ["^/push\\b", "^push$", "^git push", "push.*code", "push.*origin", "push.*change", "push.*remote", "push to (main|master|origin|upstream)"],
+      "agent": "push",
+      "model": "haiku",
+      "command": "/push",
       "confidence": "hard",
       "post_chain": null
     },
@@ -197,7 +205,7 @@
       "post_chain": null
     },
     {
-      "patterns": ["ci.?cd", "pipeline", "dockerfile", "github.actions", "deploy.*container", "containerize", "^/devops\\b"],
+      "patterns": ["ci.?cd", "(ci|cd|deploy|github.actions|workflow).*pipeline|pipeline.*(ci|cd|deploy|github.actions|workflow)", "dockerfile", "github.actions", "deploy.*container", "containerize", "^/devops\\b"],
       "agent": "devops",
       "model": "haiku",
       "command": "/devops",
@@ -218,7 +226,8 @@
       "model": "haiku",
       "command": "/lint",
       "confidence": "hard",
-      "post_chain": []
+      "post_chain": [],
+      "_note": "eslint.*error intentionally shadowed by build-error-resolver (position 1). Build errors take priority over lint fixes."
     },
     {
       "patterns": ["test.driven", "red.green.refactor", "write.test.first", "\\btdd\\b", "^/tdd\\b"],
@@ -239,7 +248,6 @@
     {
       "patterns": [
         "write.*new.*feature", "implement.*feature", "add.*component", "create.*component",
-        "add.*endpoint", "add.*route", "add.*page",
         "implement.*the", "build.*the", "code.*this",
         "^/code\\b"
       ],

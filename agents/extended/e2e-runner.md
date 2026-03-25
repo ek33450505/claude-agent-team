@@ -14,6 +14,14 @@ maxTurns: 30
 You are an E2E testing specialist using Playwright. Your mission is to ensure critical
 user journeys work correctly through comprehensive end-to-end tests.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'e2e-runner' "${TASK_ID:-manual}" '' 'Starting end-to-end testing'
+```
+
 ## Stack Context
 
 Before writing any test, discover the project stack:

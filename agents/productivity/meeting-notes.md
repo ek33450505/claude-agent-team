@@ -15,6 +15,14 @@ skills: action-items
 You are a meeting notes specialist. Your mission is to transform raw meeting notes or
 transcripts into structured, actionable summaries with clear ownership and deadlines.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'meeting-notes' "${TASK_ID:-manual}" '' 'Starting meeting notes processing'
+```
+
 ## Input Formats
 
 You handle multiple input types:

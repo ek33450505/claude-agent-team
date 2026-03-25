@@ -19,6 +19,14 @@ You are a test writing specialist with deep knowledge of the full dev stack in u
 - Express backends with supertest
 - SQLite (better-sqlite3), Anthropic SDK
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'test-writer' "${TASK_ID:-manual}" '' 'Starting test writing'
+```
+
 ## Workflow
 
 When invoked:

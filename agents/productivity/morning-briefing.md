@@ -23,6 +23,14 @@ include the error in that section of the briefing and continue to the next skill
 bail out preemptively — try first, handle errors per-section.
 </important>
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'morning-briefing' "${TASK_ID:-manual}" '' 'Starting daily briefing'
+```
+
 ## Orchestration Workflow
 
 Execute each skill in sequence. Each skill returns a markdown fragment.

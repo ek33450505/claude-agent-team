@@ -30,7 +30,7 @@ set -euo pipefail
 
 CAST_STATUS_DIR="${CAST_STATUS_DIR:-${HOME}/.claude/agent-status}"
 SESSION_ID="${CLAUDE_SESSION_ID:-default}"
-BLOCKED_COUNT_FILE="/tmp/cast-blocked-${SESSION_ID}.count"
+BLOCKED_COUNT_PREFIX="/tmp/cast-blocked-${SESSION_ID}"
 SESSION_EPOCH_FILE="/tmp/cast-session-start-${SESSION_ID}.epoch"
 CAST_EVENTS_DIR="${HOME}/.claude/cast/events"
 TIMEOUT_MSG=""
@@ -113,12 +113,12 @@ if [[ -z "$REAL_PATH" || "$REAL_PATH" != "$REAL_HOME/"* ]]; then exit 0; fi
 
 # Parse status and summary using python3 stdlib only
 CAST_STATUS_FILE="$REAL_PATH" \
-CAST_BLOCKED_COUNT_FILE="$BLOCKED_COUNT_FILE" \
+CAST_BLOCKED_COUNT_PREFIX="$BLOCKED_COUNT_PREFIX" \
 python3 -c "
 import json, os, sys, time
 
 filepath = os.environ.get('CAST_STATUS_FILE', '')
-blocked_count_file = os.environ.get('CAST_BLOCKED_COUNT_FILE', '')
+blocked_count_prefix = os.environ.get('CAST_BLOCKED_COUNT_PREFIX', '/tmp/cast-blocked-default')
 
 try:
     with open(filepath) as f:
@@ -136,6 +136,9 @@ status    = d.get('status', '')
 agent     = d.get('agent', 'unknown')
 summary   = d.get('summary', '')
 concerns  = d.get('concerns') or ''
+
+# Per-agent BLOCKED counter path (scoped to session + agent)
+blocked_count_file = f'{blocked_count_prefix}-{agent}.count'
 
 if status == 'BLOCKED':
     # --- CAST-ESCALATE: per-session BLOCKED counter ---

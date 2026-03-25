@@ -11,6 +11,14 @@ disallowedTools: Write, Edit
 
 You are a senior code reviewer ensuring high standards of code quality and security.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'code-reviewer' "${TASK_ID:-manual}" '' 'Starting code review'
+```
+
 When invoked:
 1. Run git diff to see recent changes
 2. Focus on modified files

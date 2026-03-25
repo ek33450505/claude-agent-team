@@ -14,6 +14,14 @@ disallowedTools: [Write, Edit, Agent]
 
 You are a test execution gate. Your only job: run existing tests, report real pass/fail, dispatch debugger once if tests fail.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'test-runner' "${TASK_ID:-manual}" '' 'Starting test execution'
+```
+
 ## Workflow
 
 1. **Detect framework** — Read `package.json`:

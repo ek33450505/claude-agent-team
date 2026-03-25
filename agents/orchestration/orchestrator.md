@@ -68,12 +68,24 @@ Dispatch the single agent and wait for its output before moving to the next batc
 **For `"subagent_type": "main"`:**
 Output the implementation instructions directly — do not spawn a subagent. Claude (the main model) handles implementation.
 
+**After any parallel batch completes** (including regular parallel, not just fan-out), produce a **Batch Synthesis** (2-3 sentences): note the key finding from each agent, flag any conflicts between their outputs, and note areas of agreement. Format:
+
+```
+[Batch N Synthesis] Agent-A found X. Agent-B found Y. No conflicts detected.
+```
+or:
+```
+[Batch N Synthesis] Agent-A found X. Agent-B found Y. CONFLICT: A recommends approach-1 but B flags concern-Z — downstream agents should be aware.
+```
+
+Prefix this synthesis to the prompt of every agent in the immediately following batch as additional context. This ensures cross-agent awareness and catches conflicts early (e.g., security flagging something that code-reviewer approved).
+
 **For `"type": "fan-out"` batches:**
 Dispatch all agents in the batch simultaneously (same as `"parallel": true`). After all
 agents complete, synthesize their outputs into a **Fan-out Summary**: a single paragraph
 combining the key findings from each agent (mention each agent's main finding, any
 conflicts between findings). Pass this Fan-out Summary as additional context prefixed to
-the prompt of every agent in the immediately following batch.
+the prompt of every agent in the immediately following batch. Fan-out batches use the same synthesis mechanism described above, with the additional requirement of structured key-findings extraction per agent.
 
 **After each batch completes:**
 - Mark that batch's todo item as `completed`
@@ -87,10 +99,31 @@ the prompt of every agent in the immediately following batch.
   cast_emit_event 'task_completed' '<agent>' 'batch-<id>' '' '<status summary>' '<DONE|BLOCKED|DONE_WITH_CONCERNS>'
   ```
 - Check if the agent's response contains a `Status:` line:
+  - **If agent response does NOT contain a `Status:` line:** Treat as `Status: BLOCKED` with reason "Agent response truncated — no Status block found." Emit a blocked event:
+    ```bash
+    cast_emit_event 'task_blocked' '<agent>' 'batch-<id>' '' 'Agent response truncated — no Status block found' 'BLOCKED'
+    ```
+    Then enter the Retry Protocol as if BLOCKED was returned. This catches orphaned sessions from truncated agent responses.
   - `Status: DONE` → proceed to next batch normally
   - `Status: DONE_WITH_CONCERNS` → mark completed, log the Concerns line in your running notes, force a re-review pass before proceeding to the next batch (re-dispatch `code-reviewer` with context from the concern), then continue
   - `Status: BLOCKED` → invoke the Retry Protocol (see below)
   - `Status: NEEDS_CONTEXT` → pause, provide the missing context to the user, re-dispatch the same agent with updated context
+
+### Post-Chain Verification
+
+After processing each batch where a post_chain was specified (e.g., the route included `"post_chain": ["code-reviewer"]`):
+1. Wait 10 seconds for event propagation, then run:
+   ```bash
+   source ~/.claude/scripts/cast-events.sh
+   cast_derive_state 'batch-<id>'
+   ```
+2. Read the derived state file at `~/.claude/cast/state/batch-<id>.json`
+3. Check if `"approvals"` array contains `"code-reviewer"` or if `"last_event"` is `"review_submitted"`
+4. If verification **fails** (no review found):
+   - Log: "Post-chain verification failed: code-reviewer did not run for batch-<id>"
+   - Re-dispatch `code-reviewer` (haiku) with context: "Review batch-<id> changes. Previous chain dispatch may have been dropped."
+   - Wait for its output before proceeding to the next batch
+5. If verification **passes**, proceed normally to the next batch.
 
 ## Event-Sourcing Protocol
 
@@ -162,7 +195,15 @@ When a batch returns `Status: BLOCKED`:
    cast_emit_event 'task_blocked' '<agent>' 'batch-<id>' '' '<blocker summary>' 'BLOCKED'
    ```
 2. Re-dispatch the same batch a second time, prefixing the agent prompt with: `"Previous attempt BLOCKED: <blocker>. Resolve and retry."` where `<blocker>` is the blocker text from the agent's response.
+   **Model escalation:** If the agent's configured model is `haiku`, re-dispatch with `model: 'sonnet'`. Log the escalation:
+   ```bash
+   cast_emit_event 'task_claimed' '<agent>' 'batch-<id>' '' 'Model escalation: haiku -> sonnet (retry 2)' 'IN_PROGRESS'
+   ```
 3. If the second attempt also returns `BLOCKED`: re-dispatch one final time, prepending the full accumulated context from both prior attempts.
+   **Model escalation:** Re-dispatch with `model: 'opus'` regardless of the agent's configured model. Log the escalation:
+   ```bash
+   cast_emit_event 'task_claimed' '<agent>' 'batch-<id>' '' 'Model escalation: -> opus (retry 3)' 'IN_PROGRESS'
+   ```
 4. If the third attempt returns `BLOCKED`: halt execution and surface to the user: `"Batch <id> blocked after 3 attempts. Human intervention required. Blocker: <blocker>"`. Do not proceed to subsequent batches.
 5. If any retry succeeds (`DONE` or `DONE_WITH_CONCERNS`): resume normal execution from the next batch.
 

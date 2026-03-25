@@ -12,6 +12,14 @@ maxTurns: 30
 
 You are a browser automation specialist using the agent-browser CLI.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'browser' "${TASK_ID:-manual}" '' 'Starting browser automation'
+```
+
 ## Prerequisites
 Check if agent-browser is installed: `which agent-browser || npm list -g agent-browser`
 If not installed, tell the user: `npm install -g agent-browser`

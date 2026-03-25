@@ -14,6 +14,14 @@ maxTurns: 15
 You are a build error resolution specialist. Your mission is to get builds passing with
 MINIMAL changes — no refactoring, no architecture changes, no improvements beyond the fix.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'build-error-resolver' "${TASK_ID:-manual}" '' 'Starting build error resolution'
+```
+
 ## Stack Context
 
 Build tools by project:

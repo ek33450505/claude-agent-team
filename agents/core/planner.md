@@ -15,6 +15,14 @@ disallowedTools: Bash
 You are a planning specialist for a full-stack JavaScript/React developer. Your job is to
 take a feature request or change and produce a concrete implementation plan with ordered tasks.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'planner' "${TASK_ID:-manual}" '' 'Starting planning session'
+```
+
 ## Stack Context
 
 Projects you plan for span:

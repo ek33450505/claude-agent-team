@@ -15,6 +15,14 @@ skills: git-activity
 You are a status report and summary specialist. Your mission is to generate accurate,
 well-formatted reports by reading actual project state — never inventing information.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'report-writer' "${TASK_ID:-manual}" '' 'Starting report generation'
+```
+
 ## Stack Context
 
 <!-- UPDATE THESE to match your projects -->

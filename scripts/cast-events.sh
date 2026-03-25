@@ -47,14 +47,16 @@ cast_emit_event() {
 
   local ts
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  local ts_iso
+  ts_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local event_file="${CAST_EVENTS_DIR}/${ts}-${agent}-${task_id}.json"
 
-  python3 - "$event_type" "$agent" "$task_id" "$artifact_id" "$summary" "$status" "$concerns" "$ts" "$event_file" <<'PYEOF'
+  python3 - "$event_type" "$agent" "$task_id" "$artifact_id" "$summary" "$status" "$concerns" "$ts" "$event_file" "$ts_iso" <<'PYEOF'
 import json, sys
-event_type, agent, task_id, artifact_id, summary, status, concerns, ts, filepath = sys.argv[1:]
+event_type, agent, task_id, artifact_id, summary, status, concerns, ts, filepath, ts_iso = sys.argv[1:]
 event = {
     "event_id": f"{ts}-{agent}-{task_id}",
-    "timestamp": ts,
+    "timestamp": ts_iso,
     "agent": agent,
     "task_id": task_id,
     "parent_task_id": None,
@@ -73,7 +75,7 @@ PYEOF
   # Only for actionable event types; skip artifact/review noise
   if [[ "$event_type" == "task_claimed" || "$event_type" == "task_completed" || "$event_type" == "task_blocked" ]]; then
     CAST_ETYPE="$event_type" CAST_AGENT="$agent" CAST_TASK="$task_id" \
-    CAST_SUMMARY="$summary" CAST_STATUS="$status" CAST_TS="$ts" \
+    CAST_SUMMARY="$summary" CAST_STATUS="$status" CAST_TS="$ts_iso" \
     python3 -c "
 import json, os
 etype   = os.environ.get('CAST_ETYPE', '')
@@ -95,9 +97,11 @@ entry = {
     'status':         status if status else None,
     'task_id':        task_id,
 }
-log_path = os.path.join(os.path.expanduser('~'), '.claude', 'routing-log.jsonl')
-with open(log_path, 'a') as f:
-    f.write(json.dumps(entry) + '\n')
+import subprocess
+subprocess.run(
+    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+    input=json.dumps(entry), text=True, timeout=5
+)
 " 2>/dev/null || true
   fi
 }
@@ -116,20 +120,22 @@ cast_write_review() {
 
   local ts
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  local ts_iso
+  ts_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   # Safe filename: replace slashes in artifact_id
   local safe_artifact
   safe_artifact="${artifact_id//\//-}"
   local review_file="${CAST_REVIEWS_DIR}/${safe_artifact}-${reviewer}-${ts}.json"
 
-  python3 - "$artifact_id" "$reviewer" "$decision" "$feedback" "$recommended" "$ts" "$review_file" <<'PYEOF'
+  python3 - "$artifact_id" "$reviewer" "$decision" "$feedback" "$recommended" "$ts" "$review_file" "$ts_iso" <<'PYEOF'
 import json, sys
-artifact_id, reviewer, decision, feedback, recommended, ts, filepath = sys.argv[1:]
+artifact_id, reviewer, decision, feedback, recommended, ts, filepath, ts_iso = sys.argv[1:]
 review = {
     "review_id": f"{artifact_id}-{reviewer}-{ts}",
     "artifact_id": artifact_id,
     "reviewer": reviewer,
     "decision": decision,
-    "timestamp": ts,
+    "timestamp": ts_iso,
     "feedback": feedback if feedback else None,
     "recommended_agents": [a.strip() for a in recommended.split(",") if a.strip()] if recommended else []
 }

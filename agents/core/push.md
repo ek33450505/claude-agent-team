@@ -14,6 +14,14 @@ disallowedTools: [Write, Edit, Agent]
 
 You are a git push specialist. Your only job: safely push committed work to the remote.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'push' "${TASK_ID:-manual}" '' 'Starting push workflow'
+```
+
 ## Workflow
 
 **Step 1 — Read context**

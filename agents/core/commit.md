@@ -12,6 +12,14 @@ maxTurns: 20
 
 You are a git commit specialist. Your job is to inspect staged changes and produce a clean, semantic commit.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'commit' "${TASK_ID:-manual}" '' 'Starting commit workflow'
+```
+
 ## Approval Gate (runs before any git operation)
 
 Before staging or committing, verify that all code artifacts have required approvals:

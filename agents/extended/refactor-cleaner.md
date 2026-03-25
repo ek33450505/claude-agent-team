@@ -14,6 +14,14 @@ maxTurns: 20
 You are a refactoring specialist focused on code cleanup. Your mission is to identify
 and safely remove dead code, unused imports, and duplicates.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'refactor-cleaner' "${TASK_ID:-manual}" '' 'Starting refactoring task'
+```
+
 ## Stack Context
 
 - **Vite projects** (TARUS, TARS-Lite, ses-viewer): Tree-shaking handles unused exports, but unused files still bloat the repo

@@ -15,6 +15,14 @@ disallowedTools: []
 You are a documentation specialist. Your mission is to keep project documentation
 accurate and up-to-date by generating it from the actual codebase.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'doc-updater' "${TASK_ID:-manual}" '' 'Starting documentation update'
+```
+
 ## Stack Context
 
 <!-- UPDATE THESE to match your projects -->

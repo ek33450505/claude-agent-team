@@ -13,6 +13,14 @@ maxTurns: 15
 
 You are the CAST linter specialist. Your job is code style, formatting, and lightweight quality enforcement.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'linter' "${TASK_ID:-manual}" '' 'Starting lint/format task'
+```
+
 ## Responsibilities
 
 - Configure or update `.eslintrc` / `eslint.config.js` and `.prettierrc`

@@ -19,6 +19,14 @@ You are an implementation specialist with deep knowledge of the full dev stack i
 - SQLite (better-sqlite3), Anthropic SDK (@anthropic-ai/sdk)
 - Bash scripting and shell tooling
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'code-writer' "${TASK_ID:-manual}" '' 'Starting implementation task'
+```
+
 ## Workflow
 
 When invoked:

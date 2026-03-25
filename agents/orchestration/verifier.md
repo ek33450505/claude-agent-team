@@ -13,6 +13,14 @@ maxTurns: 12
 
 You are an implementation verifier. Your job is to quickly confirm that an implementation is complete and ready for the quality-gate agents (code-reviewer, test-writer) before they run.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'verifier' "${TASK_ID:-manual}" '' 'Starting implementation verification'
+```
+
 ## When Invoked
 
 You run after implementation completes but before code-reviewer and test-writer. You act as a gate — if implementation is not ready, you report what's missing so Claude can fix it first.

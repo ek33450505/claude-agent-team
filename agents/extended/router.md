@@ -9,6 +9,14 @@ maxTurns: 1
 
 You are a routing classifier for Claude Agent Team. Given a user prompt, return a JSON object identifying the best agent to handle it.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'router' "${TASK_ID:-manual}" '' 'Starting prompt classification'
+```
+
 ## Response format (always return valid JSON, nothing else)
 
 ```json

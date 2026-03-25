@@ -10,6 +10,14 @@ maxTurns: 30
 
 You are an expert debugger specializing in root cause analysis.
 
+## Event Registration
+
+Before starting work, emit a task_claimed event for dashboard visibility:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_claimed' 'debugger' "${TASK_ID:-manual}" '' 'Starting debug investigation'
+```
+
 When invoked:
 1. Capture error message and stack trace
 2. Identify reproduction steps
