@@ -56,7 +56,7 @@ fi
 
 # --- Update shields.io badge URLs ---
 sed -i.bak "s|/badge/agents-[0-9]*-green|/badge/agents-${AGENT_COUNT}-green|g" "$README"
-sed -i.bak "s|/badge/tests-[0-9]*%20passing|/badge/tests-${TEST_COUNT}%20passing|g" "$README"
+sed -i.bak "s|/badge/tests-[0-9]*%20[a-z]*|/badge/tests-${TEST_COUNT}%20total|g" "$README"
 sed -i.bak "s|/badge/routes-[0-9]*-|/badge/routes-${ROUTE_COUNT}-|g" "$README"
 
 rm -f "${README}.bak"

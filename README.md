@@ -4,7 +4,7 @@
 ![Agents](https://img.shields.io/badge/agents-36-green)
 ![Routes](https://img.shields.io/badge/routes-28-blue)
 ![Commands](https://img.shields.io/badge/commands-32-blue)
-![Tests](https://img.shields.io/badge/tests-106%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-106%20total-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-orange)
 
@@ -35,6 +35,7 @@ bash install.sh
 - [Parallel Agent Waves](#parallel-agent-waves)
 - [The Agents (36)](#the-agents-36)
 - [The Commit → Push Chain](#the-commit--push-chain)
+- [Rollback Protocol](#rollback-protocol)
 - [Event-Sourcing Protocol](#event-sourcing-protocol)
 - [Installation](#installation)
 - [Slash Commands](#slash-commands)
@@ -87,6 +88,8 @@ code-reviewer (haiku) -- emits Work Log + Status Block
     |
     v
 [Hook 3: PreToolUse] -- pre-tool-guard.sh
+    policy engine (Write/Edit): path matches policies.json rule -> [CAST-POLICY-BLOCK] exit 2
+                                 unless required agent ran this session (or CAST_POLICY_OVERRIDE=1)
     hard-block: git commit  (escape: CAST_COMMIT_AGENT=1 git commit ...)
     hard-block: git push    (escape: CAST_PUSH_OK=1 git push ...)
     |
@@ -94,7 +97,12 @@ code-reviewer (haiku) -- emits Work Log + Status Block
 commit agent (haiku) -- CAST_COMMIT_AGENT=1 git commit
     |
     v
-[Hook 4: Stop] -- unpushed-commit check
+[Hook 4: Stop] -- stop-hook.sh
+    chain-reporter dispatch (if multi-batch session detected)
+    cast-routing-feedback.sh (weekly, background — writes routing-gaps report if >7 days stale)
+    cast-board.sh (background — derives project-board.json from event files)
+    cast-agent-memory-init.sh (background — seeds each agent's MEMORY.md)
+    session temp file cleanup
     |
     v
 cast-events.sh -- ~/.claude/cast/events/ (append-only, immutable)
@@ -109,6 +117,20 @@ cast-events.sh -- ~/.claude/cast/events/ (append-only, immutable)
 | Hard | `pre-tool-guard.sh` exit 2 | OS-level block — Claude cannot bypass |
 
 `confidence: "hard"` produces `MANDATORY: Dispatch the agent`. `confidence: "soft"` produces `RECOMMENDED: Consider dispatching`. No routing match and no catch-all hit means `route.sh` outputs nothing — Claude handles inline.
+
+**Tier 2 supervisory layer** — five capabilities that run at session boundaries, not per-prompt:
+
+| Capability | Script | When | Output |
+|---|---|---|---|
+| Pre-session briefing | `route.sh` | First prompt of every new session | `[CAST-SESSION-BRIEFING]` with git status, last 3 routing events, BLOCKED agents, project board snapshot |
+| Policy engine | `pre-tool-guard.sh` | Every Write/Edit tool call | `[CAST-POLICY-BLOCK]` exit 2 if path matches a policy rule and required agent hasn't run |
+| Routing feedback | `cast-routing-feedback.sh` | Session end, weekly | `~/.claude/reports/routing-gaps-YYYY-MM-DD.md` with top-5 unmatched prompt clusters |
+| Project board | `cast-board.sh` | Session end | `~/.claude/cast/project-board.json` with blocked/in-flight tasks and stale rollback refs |
+| Agent memory init | `cast-agent-memory-init.sh` | Session end | Seeds each agent's `MEMORY.md` with project context and recent dispatch history |
+
+Policy rules live in `config/policies.json`. Four rules ship by default: auth files, DB migrations, GitHub workflows, and `.env` files each require the appropriate specialist agent before modification. Override any block with `CAST_POLICY_OVERRIDE=1`.
+
+The project board snapshot is consumed by the pre-session briefing: on the first prompt of a new session, `route.sh` reads `project-board.json` and surfaces blocked tasks, in-flight tasks, and stale rollback checkpoints as context before routing begins.
 
 ---
 
@@ -386,6 +408,23 @@ CAST_PUSH_OK=1 git push
 
 To push after committing, include "and push" in your original prompt. The `commit` agent detects this phrase and auto-chains `push`. You can also say "ship it" to trigger the full `ship-it` agent group, which runs `verifier` + `test-runner` + `devops` first, then commits and pushes.
 
+### Rollback Protocol
+
+When an orchestrator batch fails mid-execution, `cast-rollback.sh` restores the working tree to the pre-batch state:
+
+```bash
+# Review what will change (no changes applied)
+CAST_ROLLBACK_DRY_RUN=1 cast-rollback.sh --batch <id>
+
+# Apply rollback after reviewing the diff
+cast-rollback.sh --batch <id>
+
+# Or use a stash SHA directly
+cast-rollback.sh --sha <stash-sha>
+```
+
+The orchestrator captures a `git stash create` SHA at the start of each code-modifying batch and writes it to `~/.claude/cast/rollback/batch-<id>.sha`. Stash files older than 7 days are surfaced as warnings in the pre-session briefing via the project board. Clean the old refs with `cast-rollback.sh --batch <id>` once a failed batch is resolved.
+
 ---
 
 ## Event-Sourcing Protocol
@@ -552,6 +591,8 @@ Agent memory is plain markdown files in `~/.claude/agent-memory-local/<agent-nam
 ```
 
 Not a vector database. Not an opaque embedding. A markdown file you can edit, back up, or delete.
+
+`cast-agent-memory-init.sh` seeds these files automatically at session end (triggered by `stop-hook.sh`). For each of the 17 core agents, it writes project name, root path, recent task history (last 3 events from the event log), and any BLOCKED history. If a `MEMORY.md` already exists with a `## Custom Notes` section, that section is preserved — auto-init only rewrites the header and history blocks.
 
 ---
 

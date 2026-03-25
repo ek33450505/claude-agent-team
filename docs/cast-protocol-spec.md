@@ -170,6 +170,8 @@ The CAST PreToolUse hook (`pre-tool-guard.sh`) hard-blocks certain Bash operatio
 |---|---|---|
 | `CAST_COMMIT_AGENT=1` | `git commit` | `commit` agent exclusively |
 | `CAST_PUSH_OK=1` | `git push` | Post-review push workflows |
+| `CAST_POLICY_OVERRIDE=1` | Write/Edit blocked by policy engine | Operator bypass when policy rule should be skipped; logged as `[CAST-POLICY-WARN]` |
+| `CAST_ROLLBACK_DRY_RUN=1` | `cast-rollback.sh` apply | Preview rollback diff without applying changes |
 
 ### 2.2 Syntax Requirements
 
@@ -487,7 +489,11 @@ CAST uses three Claude Code hook events. Each hook script reads a JSON payload f
 }
 ```
 
-**Processing:** Only acts on `tool_name == "Bash"`. Checks `command` against blocked operation patterns. Validates escape hatches at position 0.
+**Processing:** Acts on two tool classes:
+
+1. **Write/Edit tool calls** — runs the policy engine: matches `file_path` against rules in `~/.claude/config/policies.json`. If the path matches a policy rule and the required agent has not completed in the current session (checked via `~/.claude/agent-status/` files with mtime < 2 hours), exits 2 with `[CAST-POLICY-BLOCK]`. Severity `warn` emits a stderr warning instead. Override any block with `CAST_POLICY_OVERRIDE=1`.
+
+2. **Bash tool calls** — checks `command` against blocked operation patterns. Validates escape hatches at position 0.
 
 **Stdout on block:**
 ```
@@ -756,25 +762,38 @@ A CAST-compatible hook script SHOULD:
 ├── agents/                          # Agent definition files (.md with YAML frontmatter)
 ├── commands/                        # Slash command definitions
 ├── scripts/
-│   ├── route.sh                     # UserPromptSubmit hook
-│   ├── pre-tool-guard.sh            # PreToolUse hook
+│   ├── route.sh                     # UserPromptSubmit hook + pre-session briefing injector
+│   ├── pre-tool-guard.sh            # PreToolUse hook: policy engine + git commit/push guard
 │   ├── post-tool-hook.sh            # PostToolUse hook (formatter + review + orchestrate)
 │   ├── agent-status-reader.sh       # PostToolUse hook (subagent status propagation)
+│   ├── stop-hook.sh                 # Stop hook: chain-reporter + weekly feedback + board + memory
 │   ├── status-writer.sh             # Sourced helper: cast_write_status
-│   ├── task-board.sh                # Sourced helper: cast_task_update, cast_task_read
-│   └── cast-validate.sh             # System integrity checker
+│   ├── cast-events.sh               # Sourced helper: cast_emit_event, cast_write_review, cast_derive_state
+│   ├── cast-validate.sh             # System integrity checker
+│   ├── cast-routing-feedback.sh     # Routing gap analyzer: groups no_match events, writes report
+│   ├── cast-board.sh                # Project board: derives blocked/in-flight from event files
+│   ├── cast-agent-memory-init.sh    # Agent memory seeder: seeds MEMORY.md for 17 core agents
+│   ├── cast-rollback.sh             # Working tree recovery after failed orchestrator batches
+│   ├── cast-stats.sh                # Stats reporter: 8 sections from routing-log.jsonl
+│   └── cast-log-append.py           # Atomic log appender (called by route.sh)
 ├── config/
-│   └── routing-table.json           # Prompt-to-agent routing rules
+│   ├── routing-table.json           # Prompt-to-agent routing rules
+│   ├── agent-groups.json            # Multi-agent wave groups (31 groups)
+│   └── policies.json                # Path-based edit policies (requires_agent rules)
 ├── rules/                           # Stack context, project catalog, conventions
 ├── plans/                           # Plan files with Agent Dispatch Manifests
 ├── agent-status/                    # Per-agent JSON status files (written by cast_write_status)
-├── task-board.json                  # Shared task board (cross-agent progress tracking)
 ├── agent-memory-local/              # Per-agent persistent memory (MEMORY.md files)
 │   └── <agent-name>/MEMORY.md
 ├── routing-log.jsonl                # Dispatch routing log
+├── cast/
+│   ├── events/                      # Immutable event files: {timestamp}-{agent}-{batch}.json
+│   ├── project-board.json           # Derived task state (written by cast-board.sh)
+│   ├── rollback/                    # Batch rollback checkpoints: batch-{id}.sha
+│   └── orchestrator-checkpoint.log  # Orchestrator batch progress (for resume-on-reinvoke)
 ├── briefings/                       # Morning briefing outputs
 ├── meetings/                        # Meeting notes outputs
-└── reports/                         # Report writer outputs
+└── reports/                         # Report writer outputs (routing-gaps-*.md, chain summaries)
 ```
 
 ## Appendix B — Routing Table Schema
