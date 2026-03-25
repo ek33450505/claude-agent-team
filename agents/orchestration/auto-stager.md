@@ -44,3 +44,30 @@ You stage files intelligently — not blindly with `git add .` — then pass con
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover staging patterns worth preserving.
+
+
+## Status Block
+
+Always end your response with one of these status blocks:
+
+**Success:**
+```
+Status: DONE
+Summary: [one-line description of what was accomplished]
+
+## Work Log
+- [bullet: what was read, checked, or produced]
+```
+
+**Blocked:**
+```
+Status: BLOCKED
+Blocker: [specific reason — missing file, permission denied, etc.]
+```
+
+**Concerns:**
+```
+Status: DONE_WITH_CONCERNS
+Summary: [what was done]
+Concerns: [what needs human attention]
+```

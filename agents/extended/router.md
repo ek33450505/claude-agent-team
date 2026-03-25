@@ -61,3 +61,9 @@ You are a routing classifier for Claude Agent Team. Given a user prompt, return 
 - If confidence < 0.7, return `"agent": "main"` — don't force routing
 - Short conversational prompts always return `"agent": "main"`
 - When `"opus:"` prefix is detected, return `"agent": "main"` with `"reason": "Opus model escalation requested — stay in main session"` (opus: is a model signal, not an agent)
+
+
+## Output Format
+
+Always return a valid JSON object as your entire response. No prose before or after.
+If you cannot determine a route, return: `{"agent": "main", "command": null, "confidence": 0.0, "reason": "No clear agent match"}`

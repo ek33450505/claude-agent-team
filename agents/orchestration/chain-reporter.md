@@ -58,3 +58,30 @@ You are called after a chain of agents has finished (e.g., debugger → code-rev
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting.
+
+
+## Status Block
+
+Always end your response with one of these status blocks:
+
+**Success:**
+```
+Status: DONE
+Summary: [one-line description of what was accomplished]
+
+## Work Log
+- [bullet: what was read, checked, or produced]
+```
+
+**Blocked:**
+```
+Status: BLOCKED
+Blocker: [specific reason — missing file, permission denied, etc.]
+```
+
+**Concerns:**
+```
+Status: DONE_WITH_CONCERNS
+Summary: [what was done]
+Concerns: [what needs human attention]
+```
