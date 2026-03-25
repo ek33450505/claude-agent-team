@@ -1,12 +1,13 @@
 #!/bin/bash
-# cast-validate.sh — CAST system integrity checker v1.6.0
+# cast-validate.sh — CAST system integrity checker v1.8.0
 # Checks: hook wiring, agent frontmatter, routing table schema,
-#         CLAUDE.md directives, CAST directory structure, cast-events.sh installed.
+#         CLAUDE.md directives, CAST directory structure, cast-events.sh installed,
+#         cast-route-install.sh present, stop-hook.sh wiring, routing-proposals.json schema.
 # Exit codes: 0=all green, 1=warnings only, 2=one or more errors
 
 set -euo pipefail
 
-VERSION="1.7.0"
+VERSION="1.8.0"
 ERRORS=0
 WARNINGS=0
 
@@ -15,7 +16,7 @@ pass()  { echo "✓ $*"; }
 fail()  { echo "✗ $*"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "⚠ $*"; WARNINGS=$((WARNINGS + 1)); }
 
-echo "CAST Validate v${VERSION} (7 checks)"
+echo "CAST Validate v${VERSION} (10 checks)"
 echo "══════════════════════════════"
 
 # --- Check 1: Hook wiring ---
@@ -289,6 +290,107 @@ except Exception:
   fi
 else
   warn "agent-groups.json: ${AGENT_GROUPS} not found (parallel agent groups disabled)"
+fi
+
+# --- Check 8: cast-route-install.sh present and executable ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROUTE_INSTALL_REPO="${SCRIPT_DIR}/cast-route-install.sh"
+ROUTE_INSTALL_HOME="$HOME/.claude/scripts/cast-route-install.sh"
+if [[ -f "$ROUTE_INSTALL_REPO" && -x "$ROUTE_INSTALL_REPO" ]]; then
+  pass "cast-route-install.sh: present and executable (repo copy)"
+elif [[ -f "$ROUTE_INSTALL_HOME" && -x "$ROUTE_INSTALL_HOME" ]]; then
+  pass "cast-route-install.sh: present and executable (home copy)"
+elif [[ -f "$ROUTE_INSTALL_REPO" || -f "$ROUTE_INSTALL_HOME" ]]; then
+  warn "cast-route-install.sh: found but not executable (run chmod +x)"
+else
+  fail "cast-route-install.sh: not found (routing proposal install pipeline unavailable)"
+fi
+
+# --- Check 9: stop-hook.sh wired in settings.local.json ---
+if [[ -f "$SETTINGS" ]]; then
+  STOP_WIRED=$(python3 - "$SETTINGS" <<'PYEOF'
+import sys, json
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        d = json.load(f)
+except Exception:
+    print("UNKNOWN")
+    sys.exit(0)
+hooks = d.get("hooks", {})
+all_cmds = " ".join(
+    h.get("command", "") + h.get("prompt", "")
+    for event_hooks in hooks.values()
+    for entry in event_hooks
+    for h in entry.get("hooks", [])
+)
+print("OK" if "stop-hook.sh" in all_cmds else "MISSING")
+PYEOF
+)
+  if [[ "$STOP_WIRED" == "OK" ]]; then
+    pass "stop-hook.sh: wired in settings.local.json"
+  elif [[ "$STOP_WIRED" == "MISSING" ]]; then
+    warn "stop-hook.sh: not wired (chain-reporter auto-dispatch on session end unavailable)"
+  else
+    warn "stop-hook.sh: could not verify wiring"
+  fi
+fi
+
+# --- Check 10: routing-proposals.json schema (if present) ---
+PROPOSALS_FILE="$HOME/.claude/routing-proposals.json"
+if [[ -f "$PROPOSALS_FILE" ]]; then
+  PROPOSALS_RESULT=$(python3 - "$PROPOSALS_FILE" <<'PYEOF'
+import sys, json
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception as e:
+    print(f"ERROR:{e}")
+    sys.exit(0)
+if not isinstance(data.get("generated"), str):
+    print("ERROR:missing 'generated' field")
+    sys.exit(0)
+proposals = data.get("proposals", [])
+if not isinstance(proposals, list):
+    print("ERROR:'proposals' must be an array")
+    sys.exit(0)
+valid_statuses = {"pending", "installed", "rejected"}
+bad = []
+for p in proposals:
+    pid = p.get("id", "(unknown)")
+    if not isinstance(p.get("id"), str):
+        bad.append(f"{pid}: missing 'id'")
+    if not isinstance(p.get("patterns"), list):
+        bad.append(f"{pid}: 'patterns' must be array")
+    if not isinstance(p.get("agent"), str):
+        bad.append(f"{pid}: missing 'agent'")
+    if p.get("status") not in valid_statuses:
+        bad.append(f"{pid}: invalid status '{p.get('status')}'")
+if bad:
+    print("BAD:" + "|".join(bad))
+else:
+    pending = sum(1 for p in proposals if p.get("status") == "pending")
+    print(f"OK:{len(proposals)}:{pending}")
+PYEOF
+)
+  if [[ "$PROPOSALS_RESULT" == OK:* ]]; then
+    REST="${PROPOSALS_RESULT#OK:}"
+    TOTAL="${REST%%:*}"
+    PENDING="${REST#*:}"
+    pass "routing-proposals.json: ${TOTAL} proposals, ${PENDING} pending — schema valid"
+  elif [[ "$PROPOSALS_RESULT" == BAD:* ]]; then
+    DETAILS="${PROPOSALS_RESULT#BAD:}"
+    fail "routing-proposals.json: schema violations"
+    IFS='|' read -ra BAD_LIST <<< "$DETAILS"
+    for b in "${BAD_LIST[@]}"; do
+      echo "  ✗ ${b}"
+    done
+  elif [[ "$PROPOSALS_RESULT" == ERROR:* ]]; then
+    fail "routing-proposals.json: parse error — ${PROPOSALS_RESULT#ERROR:}"
+  fi
+else
+  pass "routing-proposals.json: not present (proposals pipeline not yet run — OK)"
 fi
 
 # --- Summary ---
