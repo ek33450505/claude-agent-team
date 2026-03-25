@@ -158,6 +158,22 @@ cast_check_approvals 'batch-<id>' 'code-reviewer'
 ```
 If return code is 1 or 2, orchestrator does not dispatch commit agent.
 
+## Rollback Checkpoint Protocol
+
+Before dispatching any batch that contains a code-modifying agent (`code-writer`, `refactor-cleaner`, `debugger`, `test-writer`, `build-error-resolver`), capture a git snapshot:
+
+```bash
+mkdir -p ~/.claude/cast/rollback
+ROLLBACK_SHA=$(git stash create 2>/dev/null || echo '')
+if [ -n "$ROLLBACK_SHA" ]; then
+  echo "$ROLLBACK_SHA" > ~/.claude/cast/rollback/batch-${BATCH_ID}.sha
+else
+  echo 'CLEAN' > ~/.claude/cast/rollback/batch-${BATCH_ID}.sha
+fi
+```
+
+This checkpoint is written before the batch starts. If the batch completes successfully, the SHA file is left in place for 7 days (surfaced by `cast-board.sh` as a stale ref after that). If the batch is BLOCKED after all retries, the SHA file is used to surface the rollback path to the user.
+
 ## Checkpoint & Resume
 
 After completing each batch, emit a checkpoint marker to the log:
@@ -205,6 +221,12 @@ When a batch returns `Status: BLOCKED`:
    cast_emit_event 'task_claimed' '<agent>' 'batch-<id>' '' 'Model escalation: -> opus (retry 3)' 'IN_PROGRESS'
    ```
 4. If the third attempt returns `BLOCKED`: halt execution and surface to the user: `"Batch <id> blocked after 3 attempts. Human intervention required. Blocker: <blocker>"`. Do not proceed to subsequent batches.
+   If a rollback SHA file exists at `~/.claude/cast/rollback/batch-<id>.sha` and its contents are not `CLEAN`, include in the BLOCKED surface message:
+   ```
+   rollback_ref: <sha>
+   rollback_cmd: ~/.claude/scripts/cast-rollback.sh --batch <id>
+   Message: "Partial changes from batch <id> are recoverable. Run rollback_cmd to restore prior state."
+   ```
 5. If any retry succeeds (`DONE` or `DONE_WITH_CONCERNS`): resume normal execution from the next batch.
 
 ### Step 4: Summarize

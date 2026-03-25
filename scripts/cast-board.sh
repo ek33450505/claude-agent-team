@@ -177,6 +177,31 @@ board = {
     'top_agents': top_agents
 }
 
+# Stale rollback refs: batch-*.sha files in ~/.claude/cast/rollback/ older than 7 days
+stale_rollback_refs = []
+rollback_dir = os.path.expanduser('~/.claude/cast/rollback')
+if os.path.isdir(rollback_dir):
+    import time as _time
+    now_ts = _time.time()
+    seven_days_sec = 7 * 24 * 3600
+    for sha_file in glob.glob(os.path.join(rollback_dir, 'batch-*.sha')):
+        try:
+            age_sec = now_ts - os.path.getmtime(sha_file)
+            if age_sec > seven_days_sec:
+                basename = os.path.basename(sha_file)
+                batch_id = basename.replace('batch-', '').replace('.sha', '')
+                age_days = round(age_sec / 86400, 1)
+                stale_rollback_refs.append({
+                    'batch_id': batch_id,
+                    'sha_file': sha_file,
+                    'age_days': age_days
+                })
+        except Exception:
+            continue
+    stale_rollback_refs.sort(key=lambda r: r['age_days'], reverse=True)
+
+board['stale_rollback_refs'] = stale_rollback_refs
+
 with open(board_path, 'w') as f:
     json.dump(board, f, indent=2)
 
@@ -185,6 +210,11 @@ print(f'Events replayed: {len(events)}')
 print(f'Blocked tasks: {len(blocked_tasks)}')
 print(f'In-flight tasks: {len(in_flight_tasks)}')
 print(f'Top agents: {[a[\"agent\"] for a in top_agents]}')
+print(f'Stale rollback refs: {len(stale_rollback_refs)}')
+
+if stale_rollback_refs:
+    stale_ids = ', '.join(r['batch_id'] for r in stale_rollback_refs)
+    print(f'WARNING Stale rollback refs: batches [{stale_ids}] have unresolved checkpoints — run cast-rollback.sh --batch <id> to review or clean up.')
 
 do_print = os.environ.get('CAST_BOARD_PRINT', '0')
 if do_print == '1':

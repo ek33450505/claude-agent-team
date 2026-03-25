@@ -129,6 +129,10 @@ try:
                 board_lines.append('  In-flight tasks:')
                 for t in in_flight_tasks[:3]:
                     board_lines.append(f'    [{t.get(\"agent\",\"?\")}] {t.get(\"task_id\",\"?\")} — started {t.get(\"age_hours\",0):.1f}h ago')
+            stale_rollback_refs = board.get('stale_rollback_refs', [])
+            if stale_rollback_refs:
+                stale_ids = ', '.join(r.get('batch_id', '?') for r in stale_rollback_refs)
+                board_lines.append(f'  WARNING Stale rollback refs: batches [{stale_ids}] have unresolved checkpoints — run cast-rollback.sh --batch <id> to review or clean up.')
             if board_lines:
                 lines.append('## Project Board Snapshot\n' + '\n'.join(board_lines))
 except Exception:
