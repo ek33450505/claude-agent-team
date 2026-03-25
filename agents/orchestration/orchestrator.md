@@ -180,6 +180,12 @@ If any batches had `DONE_WITH_CONCERNS` status, add a final section:
 ⚠ Concerns raised during execution:
   [list each concern with the batch number it came from]
 
+After outputting the summary, emit a terminal self-completion event so the dashboard can mark this session DONE:
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_emit_event 'task_completed' 'orchestrator' 'session' '' 'All batches complete' 'DONE'
+```
+
 ## Output Discipline
 
 When reporting agent results, you MUST:
