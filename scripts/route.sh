@@ -34,6 +34,123 @@ set -euo pipefail
 
 INPUT="$(cat)"
 
+# --- Pre-session briefing block ---
+# On the first prompt of a new session, inject a structured context block:
+# git status, recent routing-log entries, any stale BLOCKED agent-status files.
+# Runs fast (<200ms) — git status + file reads only. No heavy computation.
+if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+  SESSIONS_LOG="/tmp/cast-sessions-seen.log"
+  if ! grep -qxF "${CLAUDE_SESSION_ID}" "$SESSIONS_LOG" 2>/dev/null; then
+    # Mark this session as seen BEFORE building the briefing (prevents double-fire)
+    echo "${CLAUDE_SESSION_ID}" >> "$SESSIONS_LOG"
+
+    # Detect REPO_ROOT by walking up from cwd
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+
+    CAST_SESSION_ID="${CLAUDE_SESSION_ID}" CAST_REPO_ROOT="${REPO_ROOT}" python3 -c "
+import json, os, subprocess, datetime
+
+session_id = os.environ.get('CAST_SESSION_ID', '')
+repo_root = os.environ.get('CAST_REPO_ROOT', '')
+lines = []
+
+# 1. Git status (modified files)
+if repo_root:
+    try:
+        result = subprocess.run(
+            ['git', '-C', repo_root, 'status', '--short'],
+            capture_output=True, text=True, timeout=5
+        )
+        git_out = result.stdout.strip()
+        if git_out:
+            lines.append('## Git Status\n' + git_out)
+        else:
+            lines.append('## Git Status\nClean working tree')
+    except Exception:
+        pass
+
+# 2. Last 3 routing-log entries
+routing_log = os.path.expanduser('~/.claude/routing-log.jsonl')
+try:
+    with open(routing_log) as f:
+        entries = [l.strip() for l in f if l.strip()]
+    last3 = entries[-3:] if len(entries) >= 3 else entries
+    if last3:
+        parsed = []
+        for entry in last3:
+            try:
+                d = json.loads(entry)
+                parsed.append(f'  {d.get(\"timestamp\",\"?\")[:19]} | {d.get(\"action\",\"?\")} | {d.get(\"matched_route\",\"none\")}')
+            except Exception:
+                pass
+        if parsed:
+            lines.append('## Last 3 Routing Events\n' + '\n'.join(parsed))
+except Exception:
+    pass
+
+# 3. BLOCKED agent-status files (modified <24hr)
+agent_status_dir = os.path.expanduser('~/.claude/agent-status')
+if os.path.isdir(agent_status_dir):
+    now = datetime.datetime.utcnow().timestamp()
+    blocked = []
+    try:
+        for fname in os.listdir(agent_status_dir):
+            fpath = os.path.join(agent_status_dir, fname)
+            age = now - os.path.getmtime(fpath)
+            if age < 86400:  # <24 hours
+                try:
+                    with open(fpath) as f:
+                        content = f.read()
+                    if 'BLOCKED' in content:
+                        blocked.append(f'  {fname}: BLOCKED')
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if blocked:
+        lines.append('## Stale BLOCKED Agents (last 24hr)\n' + '\n'.join(blocked))
+
+# 4. Cross-session project board snapshot (if <24hr old and has notable state)
+board_path = os.path.expanduser('~/.claude/cast/project-board.json')
+try:
+    if os.path.exists(board_path):
+        board_age = datetime.datetime.utcnow().timestamp() - os.path.getmtime(board_path)
+        if board_age < 86400:  # <24 hours
+            with open(board_path) as f:
+                board = json.load(f)
+            board_lines = []
+            blocked_tasks = board.get('blocked_tasks', [])
+            in_flight_tasks = board.get('in_flight_tasks', [])
+            if blocked_tasks:
+                board_lines.append('  Blocked tasks:')
+                for t in blocked_tasks[:3]:
+                    board_lines.append(f'    [{t.get(\"agent\",\"?\")}] {t.get(\"task_id\",\"?\")} — blocked {t.get(\"age_hours\",0):.1f}h ago')
+            if in_flight_tasks:
+                board_lines.append('  In-flight tasks:')
+                for t in in_flight_tasks[:3]:
+                    board_lines.append(f'    [{t.get(\"agent\",\"?\")}] {t.get(\"task_id\",\"?\")} — started {t.get(\"age_hours\",0):.1f}h ago')
+            if board_lines:
+                lines.append('## Project Board Snapshot\n' + '\n'.join(board_lines))
+except Exception:
+    pass
+
+if not lines:
+    import sys; sys.exit(0)
+
+briefing = '[CAST-SESSION-BRIEFING] First prompt of new session. Context:\n\n'
+briefing += '\n\n'.join(lines)
+
+output = {
+    'hookSpecificOutput': {
+        'hookEventName': 'UserPromptSubmit',
+        'additionalContext': briefing
+    }
+}
+print(json.dumps(output))
+" 2>/dev/null && exit 0 || true
+  fi
+fi
+
 # Extract and lowercase prompt
 ORIGINAL_PROMPT="$(echo "$INPUT" | python3 -c "
 import sys, json

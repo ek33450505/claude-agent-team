@@ -1,0 +1,36 @@
+{
+  "policies": [
+    {
+      "id": "auth-requires-security",
+      "description": "Auth files require security agent review before modification",
+      "path_pattern": "src/auth/.*",
+      "requires_agent": "security",
+      "scope": "session",
+      "severity": "block"
+    },
+    {
+      "id": "migrations-require-db-agent",
+      "description": "DB migration files require db-reader agent review before modification",
+      "path_pattern": ".*migrations/.*",
+      "requires_agent": "db-reader",
+      "scope": "session",
+      "severity": "warn"
+    },
+    {
+      "id": "workflows-require-devops",
+      "description": "GitHub workflow files require devops agent review",
+      "path_pattern": "\\.github/workflows/.*",
+      "requires_agent": "devops",
+      "scope": "session",
+      "severity": "block"
+    },
+    {
+      "id": "env-files-require-security",
+      "description": "Environment config files require security agent review",
+      "path_pattern": ".*\\.env(\\..*)?$",
+      "requires_agent": "security",
+      "scope": "session",
+      "severity": "block"
+    }
+  ]
+}

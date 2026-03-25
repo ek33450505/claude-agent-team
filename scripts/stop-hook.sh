@@ -71,6 +71,41 @@ output = {
 print(json.dumps(output))
 " 2>/dev/null || true
 
+# --- Weekly routing feedback analysis ---
+# Runs cast-routing-feedback.sh if last report is >7 days old or missing.
+# Runs in background to avoid blocking session close.
+CAST_ROUTING_FEEDBACK="${HOME}/.claude/scripts/cast-routing-feedback.sh"
+# Also check repo-local version
+REPO_FEEDBACK="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-routing-feedback.sh"
+if [ -f "$REPO_FEEDBACK" ]; then
+  CAST_ROUTING_FEEDBACK="$REPO_FEEDBACK"
+fi
+if [ -f "$CAST_ROUTING_FEEDBACK" ]; then
+  if ! bash "$CAST_ROUTING_FEEDBACK" --check 2>/dev/null; then
+    bash "$CAST_ROUTING_FEEDBACK" > /tmp/cast-routing-feedback-last.log 2>&1 &
+  fi
+fi
+
+# --- Project board refresh ---
+CAST_BOARD="${HOME}/.claude/scripts/cast-board.sh"
+REPO_BOARD="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-board.sh"
+if [ -f "$REPO_BOARD" ]; then
+  CAST_BOARD="$REPO_BOARD"
+fi
+if [ -f "$CAST_BOARD" ]; then
+  bash "$CAST_BOARD" > /tmp/cast-board-last.log 2>&1 &
+fi
+
+# --- Agent memory auto-initialization ---
+CAST_AGENT_MEM_INIT="${HOME}/.claude/scripts/cast-agent-memory-init.sh"
+REPO_MEM_INIT="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-agent-memory-init.sh"
+if [ -f "$REPO_MEM_INIT" ]; then
+  CAST_AGENT_MEM_INIT="$REPO_MEM_INIT"
+fi
+if [ -f "$CAST_AGENT_MEM_INIT" ]; then
+  bash "$CAST_AGENT_MEM_INIT" > /tmp/cast-agent-memory-init-last.log 2>&1 &
+fi
+
 # --- Cleanup CAST temp files for this session ---
 SESSION_ID="${CLAUDE_SESSION_ID:-default}"
 rm -f "/tmp/cast-depth-${PPID}.depth" 2>/dev/null || true

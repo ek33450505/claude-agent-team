@@ -1,0 +1,160 @@
+#!/bin/bash
+# cast-routing-feedback.sh — CAST Routing Gap Analyzer
+# Reads routing-log.jsonl, groups no_match events by leading token,
+# surfaces top-5 unmatched patterns as suggested route entries,
+# and writes a markdown report to ~/.claude/reports/routing-gaps-YYYY-MM-DD.md
+#
+# Usage:
+#   cast-routing-feedback.sh            # Run analysis, write report
+#   cast-routing-feedback.sh --check    # Exit 0 if report is <7 days old, 1 if stale/missing
+
+set -euo pipefail
+
+REPORTS_DIR="${HOME}/.claude/reports"
+ROUTING_LOG="${HOME}/.claude/routing-log.jsonl"
+TODAY="$(date +%Y-%m-%d)"
+REPORT_PATH="${REPORTS_DIR}/routing-gaps-${TODAY}.md"
+
+# --check mode: used by stop-hook.sh to decide if re-run is needed
+if [ "${1:-}" = "--check" ]; then
+  SEVEN_DAYS_AGO=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d 2>/dev/null || echo "")
+  LATEST_REPORT=""
+  if ls "${REPORTS_DIR}"/routing-gaps-*.md 2>/dev/null | head -1 > /dev/null 2>&1; then
+    LATEST_REPORT=$(ls "${REPORTS_DIR}"/routing-gaps-*.md 2>/dev/null | sort | tail -1)
+  fi
+  if [ -z "$LATEST_REPORT" ]; then
+    exit 1  # No report exists — stale
+  fi
+  # Extract date from filename routing-gaps-YYYY-MM-DD.md
+  REPORT_DATE=$(basename "$LATEST_REPORT" .md | sed 's/routing-gaps-//')
+  if [ "$REPORT_DATE" \< "$SEVEN_DAYS_AGO" ] 2>/dev/null; then
+    exit 1  # Report is older than 7 days — stale
+  fi
+  exit 0  # Report is fresh
+fi
+
+# Main analysis
+mkdir -p "$REPORTS_DIR"
+
+if [ ! -f "$ROUTING_LOG" ]; then
+  echo "No routing log found at $ROUTING_LOG. Nothing to analyze."
+  exit 0
+fi
+
+python3 -c "
+import json, os, sys, re, datetime
+from collections import defaultdict, Counter
+
+routing_log = os.path.expanduser('~/.claude/routing-log.jsonl')
+reports_dir = os.path.expanduser('~/.claude/reports')
+today = datetime.date.today().isoformat()
+report_path = os.path.join(reports_dir, f'routing-gaps-{today}.md')
+
+# Stop words to skip when clustering
+STOP_WORDS = {
+    'a', 'an', 'the', 'i', 'my', 'me', 'we', 'our', 'you', 'your', 'it', 'its',
+    'is', 'was', 'be', 'been', 'are', 'were', 'do', 'does', 'did', 'have', 'has',
+    'had', 'will', 'would', 'could', 'should', 'may', 'might', 'shall', 'can',
+    'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'about', 'from', 'into',
+    'that', 'this', 'these', 'those', 'and', 'but', 'or', 'nor', 'so', 'yet',
+    'all', 'any', 'each', 'few', 'more', 'most', 'some', 'such', 'no', 'not'
+}
+
+# Read no_match entries
+no_match_entries = []
+try:
+    with open(routing_log) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                if entry.get('action') == 'no_match':
+                    preview = entry.get('prompt_preview', '').strip()
+                    if preview:
+                        no_match_entries.append(preview)
+            except Exception:
+                pass
+except Exception as e:
+    print(f'Error reading routing log: {e}', file=sys.stderr)
+    sys.exit(0)
+
+if not no_match_entries:
+    print('No no_match entries found in routing log.')
+    sys.exit(0)
+
+# Cluster by first significant word/token
+clusters = defaultdict(list)
+for prompt in no_match_entries:
+    words = re.split(r'[\s,./;:!?]+', prompt.lower())
+    key = None
+    for word in words:
+        word = word.strip()
+        if word and word not in STOP_WORDS and len(word) > 2:
+            key = word
+            break
+    if key is None:
+        key = '_other'
+    clusters[key].append(prompt)
+
+# Sort by frequency, take top 5
+top5 = sorted(clusters.items(), key=lambda x: len(x[1]), reverse=True)[:5]
+
+# Generate suggested route entries
+suggested_routes = []
+for key, prompts in top5:
+    # Build a regex pattern from the leading token
+    pattern = f'\\\\b{re.escape(key)}\\\\b'
+    example = prompts[0][:60]
+    suggested_routes.append({
+        'id': f'auto-{key}',
+        'patterns': [pattern],
+        'agent': 'router',
+        'confidence': 'soft',
+        'description': f'Auto-suggested from {len(prompts)} no_match events. Example: \"{example}\"'
+    })
+
+# Write markdown report
+total_no_match = len(no_match_entries)
+report_lines = [
+    f'# CAST Routing Gap Report — {today}',
+    '',
+    f'**Total no_match events analyzed:** {total_no_match}',
+    f'**Top 5 unmatched clusters:**',
+    '',
+    '| Rank | Token | Count | Example Prompt |',
+    '|------|-------|-------|----------------|',
+]
+
+for i, (key, prompts) in enumerate(top5, 1):
+    example = prompts[0][:50].replace('|', '\\\\|')
+    report_lines.append(f'| {i} | \`{key}\` | {len(prompts)} | {example} |')
+
+report_lines += [
+    '',
+    '## Suggested Route Entries (JSON)',
+    '',
+    'Add these to \`~/.claude/config/routing-table.json\` after review:',
+    '',
+    '\`\`\`json',
+    json.dumps({'suggested_routes': suggested_routes}, indent=2),
+    '\`\`\`',
+    '',
+    '---',
+    f'*Generated by cast-routing-feedback.sh on {today}*'
+]
+
+report_content = '\n'.join(report_lines)
+with open(report_path, 'w') as f:
+    f.write(report_content)
+
+# Print summary to stdout
+print(f'Routing gap report written to: {report_path}')
+print(f'Total no_match events: {total_no_match}')
+print('Top 5 unmatched tokens:')
+for i, (key, prompts) in enumerate(top5, 1):
+    print(f'  {i}. \"{key}\" — {len(prompts)} events')
+" 2>/dev/null || true
+
+exit 0
