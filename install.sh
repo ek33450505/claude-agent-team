@@ -304,8 +304,7 @@ if ! $IS_MACOS; then
 fi
 
 # --- Update README stat tokens ---
-if [ -f "$SCRIPT_DIR/scripts/gen-stats.sh" ] && [ -f "$SCRIPT_DIR/README.md" ]; then
-    bash "$SCRIPT_DIR/scripts/gen-stats.sh" "$SCRIPT_DIR/README.md" >/dev/null 2>&1 || true
-fi
+echo "Syncing README stats..."
+bash "$(dirname "$0")/scripts/gen-stats.sh" 2>/dev/null || true
 
 printf "\n"

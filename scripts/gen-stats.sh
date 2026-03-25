@@ -46,6 +46,14 @@ update_token "CAST_SKILL_COUNT"   "$SKILL_COUNT"   "$README"
 update_token "CAST_TEST_COUNT"    "$TEST_COUNT"    "$README"
 update_token "CAST_ROUTE_COUNT"   "$ROUTE_COUNT"   "$README"
 
+# --- Update version badge sentinel ---
+VERSION_FILE="$REPO_DIR/VERSION"
+if [ -f "$VERSION_FILE" ]; then
+  CAST_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+  NEW_BADGE="![Version](https://img.shields.io/badge/version-${CAST_VERSION}-blue)"
+  sed -i.bak "s|<!-- CAST_VERSION_BADGE -->.*<!-- /CAST_VERSION_BADGE -->|<!-- CAST_VERSION_BADGE -->${NEW_BADGE}<!-- /CAST_VERSION_BADGE -->|g" "$README"
+fi
+
 # --- Update shields.io badge URLs ---
 sed -i.bak "s|/badge/agents-[0-9]*-green|/badge/agents-${AGENT_COUNT}-green|g" "$README"
 sed -i.bak "s|/badge/tests-[0-9]*%20passing|/badge/tests-${TEST_COUNT}%20passing|g" "$README"
@@ -59,3 +67,4 @@ echo "  Commands: $CMD_COUNT"
 echo "  Skills:   $SKILL_COUNT"
 echo "  Tests:    $TEST_COUNT"
 echo "  Routes:   $ROUTE_COUNT"
+[ -f "$VERSION_FILE" ] && echo "  Version:  $CAST_VERSION"

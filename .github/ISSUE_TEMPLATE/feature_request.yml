@@ -1,0 +1,34 @@
+name: Feature Request
+description: Suggest a new agent, route, hook enhancement, or other improvement
+labels: [enhancement]
+title: "[Feature] "
+body:
+  - type: dropdown
+    id: feature-type
+    attributes:
+      label: Feature Type
+      options: [New Agent, New Route, Hook Enhancement, Agent Group, Config Change, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed Behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+  - type: dropdown
+    id: willing
+    attributes:
+      label: Willing to Implement?
+      options: ["Yes", "No", "Maybe"]

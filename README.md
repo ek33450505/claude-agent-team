@@ -1,17 +1,18 @@
 # CAST — Claude Agent Specialist Team
 
-![Version](https://img.shields.io/badge/version-1.5.0-blue)
+<!-- CAST_VERSION_BADGE -->![Version](https://img.shields.io/badge/version-1.5.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-36-green)
-![Routes](https://img.shields.io/badge/routes-22-blue)
+![Routes](https://img.shields.io/badge/routes-28-blue)
+![Commands](https://img.shields.io/badge/commands-32-blue)
 ![Tests](https://img.shields.io/badge/tests-106%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-orange)
 
-Claude Code is a capable editor. Without infrastructure, you're still manually deciding which agent to call, remembering to run tests, remembering to review your own code, and typing `git commit` by hand. CAST is the infrastructure layer that removes that coordination overhead entirely.
+Claude Code is a capable editor. Without infrastructure, you are still manually deciding which agent to call, remembering to run tests, remembering to review your own code, and typing `git commit` by hand. CAST is the infrastructure layer that removes that coordination overhead entirely.
 
 Install CAST and every prompt you type is intercepted by `route.sh` before Claude sees it. The right specialist agent is dispatched automatically. After it writes code, `post-tool-hook.sh` injects a mandatory `[CAST-CHAIN]` directive that forces `code-reviewer` to run — you cannot skip it. Raw `git commit` is hard-blocked at the `PreToolUse` hook; the `commit` agent is the only escape hatch. Parallel agent waves handle complex multi-file work without you coordinating anything. Work Logs surface exactly what every agent did, inline in your terminal.
 
-This is not a prompt library. It is <!-- CAST_AGENT_COUNT -->36<!-- /CAST_AGENT_COUNT --> specialists wired into Claude Code at the hook layer, enforcing their own quality gates.
+This is not a prompt library. It is 36 specialists wired into Claude Code at the hook layer, enforcing their own quality gates.
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team.git
@@ -23,6 +24,27 @@ bash install.sh
 
 ---
 
+## Table of Contents
+
+- [How It Works](#how-it-works)
+- [Hook Directives](#hook-directives)
+- [Routing](#routing)
+- [post-tool-hook.sh — Five Parts](#post-tool-hooksh--five-parts)
+- [agent-status-reader.sh — Status Propagation](#agent-status-readersh--status-propagation)
+- [Work Logs](#work-logs)
+- [Parallel Agent Waves](#parallel-agent-waves)
+- [The Agents (36)](#the-agents-36)
+- [The Commit → Push Chain](#the-commit--push-chain)
+- [Event-Sourcing Protocol](#event-sourcing-protocol)
+- [Installation](#installation)
+- [Slash Commands](#slash-commands)
+- [Memory](#memory)
+- [Skills](#skills)
+- [Stats](#stats)
+- [Companion](#companion)
+
+---
+
 ## How It Works
 
 ```
@@ -31,9 +53,9 @@ User Prompt
     v
 [Hook 1: UserPromptSubmit] -- route.sh
     |
-    |-- agent-groups.json match (31 groups) -------> [CAST-DISPATCH-GROUP]
+    |-- agent-groups.json match (31 groups) ------> [CAST-DISPATCH-GROUP]
     |                                                    |
-    |-- routing-table.json match (22 routes) --------> [CAST-DISPATCH]
+    |-- routing-table.json match (28 routes) -------> [CAST-DISPATCH]
     |                                                    |
     |-- catch-all: 5+ words, action verb, not question -> router agent (NLU)
     |
@@ -42,20 +64,26 @@ Claude handles inline
     |
     v (Write or Edit tool fires on any matched path)
 [Hook 2: PostToolUse] -- post-tool-hook.sh
-    |-- prettier auto-format (JS/TS/CSS/JSON, if .prettierrc found)
-    |-- main session + code file  -> [CAST-CHAIN]  (mandatory, non-skippable)
-    |-- main session + other file -> [CAST-REVIEW] (soft review suggestion)
-    |-- subagent + code file      -> [CAST-REVIEW] (reinforcing signal)
-    |-- plan file with dispatch manifest -> [CAST-ORCHESTRATE]
+    |-- Part 1: prettier auto-format (JS/TS/CSS/JSON, if .prettierrc found)
+    |-- Part 2: main session + code file  -> [CAST-CHAIN]  (mandatory, non-skippable)
+    |           main session + other file -> [CAST-REVIEW] (soft review suggestion)
+    |           subagent + depth >= 2     -> [CAST-DEPTH-WARN] + [CAST-REVIEW]
+    |           subagent + code file      -> [CAST-REVIEW] (reinforcing signal)
+    |-- Part 3: plan file with dispatch manifest -> [CAST-ORCHESTRATE]
+    |-- Part 4: Agent tool fired -> log dispatch to routing-log.jsonl
+    |-- Part 5: Bash non-zero exit (main session only) -> [CAST-DEBUG]
     |
     v
 code-reviewer (haiku) -- emits Work Log + Status Block
     |
     v
 [Hook 2b: PostToolUse] -- agent-status-reader.sh
-    | age guard: status files >60s ignored (stale cross-session protection)
-    | BLOCKED -> [CAST-HALT] exit 2
-    | DONE    -> log silently
+    | age guard: status files > 60s ignored (stale cross-session protection)
+    | BLOCKED           -> [CAST-HALT] exit 2
+    | DONE_WITH_CONCERNS -> [CAST-REVIEW] advisory
+    | NEEDS_CONTEXT     -> [CAST-NEEDS-CONTEXT] advisory
+    | 3rd BLOCKED       -> [CAST-ESCALATE] advisory
+    | 90min no commit   -> [CAST-TIMEOUT] advisory
     |
     v
 [Hook 3: PreToolUse] -- pre-tool-guard.sh
@@ -72,17 +100,44 @@ commit agent (haiku) -- CAST_COMMIT_AGENT=1 git commit
 cast-events.sh -- ~/.claude/cast/events/ (append-only, immutable)
 ```
 
-**Five directives drive all of this.** They are defined in `CLAUDE.md` and treated as unconditional system-level instructions:
+**Three enforcement tiers** operate in parallel. They are not redundant — each catches what the others cannot:
+
+| Tier | Mechanism | Enforces |
+|---|---|---|
+| Advisory | `CLAUDE.md` directive definitions | Claude's understanding of the protocol |
+| Behavioral | `route.sh` hookSpecificOutput injection | Claude's next action (alongside the prompt) |
+| Hard | `pre-tool-guard.sh` exit 2 | OS-level block — Claude cannot bypass |
+
+`confidence: "hard"` produces `MANDATORY: Dispatch the agent`. `confidence: "soft"` produces `RECOMMENDED: Consider dispatching`. No routing match and no catch-all hit means `route.sh` outputs nothing — Claude handles inline.
+
+---
+
+## Hook Directives
+
+Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as standing instructions. Seven are injected at runtime by hook scripts alongside the triggering event.
+
+### Defined in CLAUDE.md.template
 
 | Directive | Injected by | Behavior |
 |---|---|---|
-| `[CAST-DISPATCH]` | `route.sh` via `UserPromptSubmit` | Dispatch the named agent. Do not handle inline. |
-| `[CAST-CHAIN]` | `post-tool-hook.sh` (code files, main session) | Dispatch the listed agents in sequence. Non-skippable. |
-| `[CAST-REVIEW]` | `post-tool-hook.sh` (non-code files, subagent context) | Soft: dispatch `code-reviewer` if the change is significant. |
+| `[CAST-DISPATCH]` | `route.sh` via UserPromptSubmit | Dispatch the named agent. Do not handle inline. |
+| `[CAST-CHAIN]` | `post-tool-hook.sh` Part 2 (code files, main session) | Dispatch listed agents in sequence. Non-skippable. |
+| `[CAST-REVIEW]` | `post-tool-hook.sh` Part 2 (non-code files or subagent context) | Soft: dispatch `code-reviewer` if the change is significant. |
 | `[CAST-DISPATCH-GROUP]` | `route.sh` (agent-groups.json match) | Execute the named group: waves in order, post-chain after final wave. |
-| `[CAST-ORCHESTRATE]` | `post-tool-hook.sh` (plan files with dispatch manifest) | Dispatch `orchestrator` with the plan file path. |
 
-`confidence: "hard"` produces `MANDATORY: Dispatch the agent`. `confidence: "soft"` produces `RECOMMENDED: Consider dispatching`. No routing match and no catch-all hit means `route.sh` outputs nothing — Claude handles inline.
+### Injected at runtime by hooks
+
+| Directive | Source | Behavior |
+|---|---|---|
+| `[CAST-ORCHESTRATE]` | `post-tool-hook.sh` Part 3 | Plan file with dispatch manifest written — dispatch `orchestrator`. |
+| `[CAST-DEBUG]` | `post-tool-hook.sh` Part 5 | Bash command exited non-zero in main session — route to `debugger`. |
+| `[CAST-HALT]` | `agent-status-reader.sh` | Agent reported BLOCKED — hard-block (exit 2) until blocker resolved. |
+| `[CAST-REVIEW]` (status) | `agent-status-reader.sh` | Agent completed with concerns — dispatch `code-reviewer` before proceeding. |
+| `[CAST-NEEDS-CONTEXT]` | `agent-status-reader.sh` | Agent needs more context — dispatch `researcher` to gather it. |
+| `[CAST-ESCALATE]` | `agent-status-reader.sh` | Third consecutive BLOCKED from same agent — suggest model escalation or task split. |
+| `[CAST-TIMEOUT]` | `agent-status-reader.sh` | Session running 90+ minutes without a commit — suggest `/commit` or `/fresh`. |
+| `[CAST-DEPTH-WARN]` | `route.sh` (subagent context) | Nesting depth >= 2 — warn that Agent tool may be unavailable; inline session is fallback. |
+| `[CAST-LOOP-BREAK]` | `route.sh` | Loop detected in routing — break and handle inline. |
 
 ---
 
@@ -92,7 +147,7 @@ cast-events.sh -- ~/.claude/cast/events/ (append-only, immutable)
 
 **Stage 1 — Agent Group pre-check:** matches against `config/agent-groups.json` (31 groups). On match, the orchestrator receives a full Payload JSON with wave definitions and runs them immediately.
 
-**Stage 2 — Routing table:** matches against `config/routing-table.json` (<!-- CAST_ROUTE_COUNT -->22<!-- /CAST_ROUTE_COUNT --> routes). On match, Claude sees:
+**Stage 2 — Routing table:** matches against `config/routing-table.json` (28 routes). On match, Claude sees:
 
 ```json
 {
@@ -105,7 +160,41 @@ cast-events.sh -- ~/.claude/cast/events/ (append-only, immutable)
 
 **Stage 3 — Catch-all:** fires when no route matched, the prompt is 5+ words, is not a question, and contains an action verb (`fix`, `add`, `implement`, `build`, etc.). Routes to the `router` agent (haiku) for NLU classification. If `router` returns confidence < 0.7, it returns `"main"` and Claude handles inline.
 
-Every routing decision — match, no-match, catch-all, group dispatch — is logged to `~/.claude/routing-log.jsonl`. The [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) companion reads this file for observability.
+Every routing decision — match, no-match, catch-all, group dispatch — is logged to `~/.claude/routing-log.jsonl`.
+
+---
+
+## post-tool-hook.sh — Five Parts
+
+`post-tool-hook.sh` runs on every `PostToolUse` event. Its five parts are independent — each fires based on its own conditions:
+
+| Part | Trigger | Action |
+|---|---|---|
+| 1 | Write or Edit on `.js/.jsx/.ts/.tsx/.css/.json`, `.prettierrc` found | Run `npx prettier --write` |
+| 2 | Write or Edit — main session + code file | Inject `[CAST-CHAIN]` (mandatory) |
+| 2 | Write or Edit — main session + non-code file | Inject `[CAST-REVIEW]` (soft) |
+| 2 | Write or Edit — subagent depth >= 2 | Inject `[CAST-DEPTH-WARN]` + `[CAST-REVIEW]` |
+| 2 | Write or Edit — subagent + code file | Inject `[CAST-REVIEW]` (reinforcing signal) |
+| 3 | Write on `.md` file under `plans/` containing a dispatch block | Inject `[CAST-ORCHESTRATE]` |
+| 4 | Agent tool fired (any session) | Append dispatch entry to `routing-log.jsonl` |
+| 5 | Bash non-zero exit in main session | Inject `[CAST-DEBUG]` (suppresses benign exits: grep/rg exit 1, git diff exit 1) |
+
+---
+
+## agent-status-reader.sh — Status Propagation
+
+`agent-status-reader.sh` runs at `PostToolUse` inside subagent context (`CLAUDE_SUBPROCESS=1`). It reads the latest file from `~/.claude/agent-status/` and acts on the `status` field:
+
+| Status | Action | Exit |
+|---|---|---|
+| `BLOCKED` | Inject `[CAST-HALT]` message, hard-stop | exit 2 |
+| `BLOCKED` (3rd time, same agent, same session) | Inject `[CAST-ESCALATE]` advisory | exit 2 |
+| `DONE_WITH_CONCERNS` | Inject `[CAST-REVIEW]` advisory | exit 0 |
+| `NEEDS_CONTEXT` | Inject `[CAST-NEEDS-CONTEXT]` advisory | exit 0 |
+| `DONE` | Reset BLOCKED counter, exit silently | exit 0 |
+| File older than 60s | Ignore (stale from prior session) | exit 0 |
+
+The 90-minute timeout check runs on every invocation. If the session has been running for 90+ minutes without a commit event in the last 60 minutes, `[CAST-TIMEOUT]` is injected — but only when the status check result is non-blocking (it does not override `[CAST-HALT]`).
 
 ---
 
@@ -149,7 +238,7 @@ Recommended agents:
   - debugger: auth.ts:89 — async handler needs try/catch or .catch() wrapper
 ```
 
-The Status Block is also read by `agent-status-reader.sh` at the `PostToolUse` hook. A `BLOCKED` status emits `[CAST-HALT]` (exit 2), halting execution until the block is resolved.
+The Status Block is read by `agent-status-reader.sh`. A `BLOCKED` status emits `[CAST-HALT]` (exit 2), halting execution until the block is resolved.
 
 ---
 
@@ -201,7 +290,7 @@ Other groups: `feature-build`, `ui-build`, `backend-build`, `api-integration`, `
 
 ---
 
-## The Agents (<!-- CAST_AGENT_COUNT -->36<!-- /CAST_AGENT_COUNT -->)
+## The Agents (36)
 
 ### Core — 11 agents
 
@@ -242,7 +331,7 @@ The foundation of every CAST install. Every quality gate flows through this tier
 | `auto-stager` | haiku | Pre-commit staging — never stages `.env` or sensitive files |
 | `chain-reporter` | haiku | Writes chain execution summaries to `~/.claude/reports/` |
 | `verifier` | haiku | Build check and TODO scan before quality gate passes |
-| `test-runner` | sonnet | Runs test suite, parses output, dispatches `debugger` automatically on failure |
+| `test-runner` | haiku | Runs test suite, parses output, dispatches `debugger` automatically on failure |
 
 ### Productivity — 5 agents
 
@@ -268,7 +357,7 @@ The foundation of every CAST install. Every quality gate flows through this tier
 |---|---|---|
 | `devops` | sonnet | CI/CD pipelines, Dockerfile, GitHub Actions, deploy config |
 | `performance` | sonnet | Core Web Vitals, bundle analysis, render performance |
-| `seo-content` | sonnet | Meta tags, accessibility, WCAG, localization |
+| `seo-content` | haiku | Meta tags, accessibility, WCAG, localization |
 | `linter` | haiku | Lint rule enforcement and auto-fix |
 
 ---
@@ -299,6 +388,41 @@ To push after committing, include "and push" in your original prompt. The `commi
 
 ---
 
+## Event-Sourcing Protocol
+
+Every agent action writes an immutable, timestamped event file. State is derived from events by replaying them in order.
+
+```
+~/.claude/cast/
+├── events/     # Immutable: {timestamp}-{agent}-{task_id}.json
+├── state/      # Derived task state: {task_id}.json
+├── reviews/    # Review decisions: {artifact_id}-{reviewer}-{timestamp}.json
+└── artifacts/  # Plans, patches, test files
+```
+
+Each event file:
+
+```json
+{
+  "event_id": "20260324T142301Z-debugger-batch-2",
+  "timestamp": "2026-03-24T14:23:01Z",
+  "agent": "debugger",
+  "task_id": "batch-2",
+  "parent_task_id": null,
+  "event_type": "task_completed",
+  "status": "DONE",
+  "summary": "Fixed TypeError in auth middleware — null check added at line 47",
+  "artifact_id": "batch-2-fix-20260324T142301Z.patch",
+  "concerns": null
+}
+```
+
+Seven event types: `task_created`, `task_claimed`, `task_completed`, `task_blocked`, `task_rejected`, `artifact_written`, `review_submitted`.
+
+`cast-events.sh` exposes four shell functions: `cast_emit_event`, `cast_write_review`, `cast_derive_state`, `cast_read_board`. Source it from any agent or hook script.
+
+---
+
 ## Installation
 
 ### Prerequisites
@@ -316,7 +440,7 @@ git clone https://github.com/ek33450505/claude-agent-team.git && cd claude-agent
 ### Three modes
 
 ```
-[1] Full    — all 36 agents, 26 commands, 9 skills, scripts, rules
+[1] Full    — all 36 agents, 32 commands, 12 skills, scripts, rules
 [2] Core    — 11 core agents + their commands (minimal, portable)
 [3] Custom  — choose categories: core, extended, productivity, professional, specialist
 ```
@@ -352,11 +476,11 @@ bash ~/.claude/scripts/cast-validate.sh
 A clean install reports:
 
 ```
-CAST Validate v1.7.0 (7 checks)
+CAST Validate v1.6.0 (7 checks)
 ══════════════════════════════
   Hook wiring: route.sh, pre-tool-guard.sh, post-tool-hook.sh wired
   Agent frontmatter: 36 agents — all valid
-  Routing table: 22 routes — schema valid
+  Routing table: 28 routes — schema valid
   CLAUDE.md directives: [CAST-DISPATCH] [CAST-REVIEW] [CAST-CHAIN] [CAST-DISPATCH-GROUP] present
   CAST dirs: events/ state/ reviews/ artifacts/ agent-status/ all present
   cast-events.sh: installed at /Users/you/.claude/scripts/cast-events.sh
@@ -369,7 +493,7 @@ CAST Validate v1.7.0 (7 checks)
 
 ## Slash Commands
 
-26 commands at `~/.claude/commands/`. Use these as manual overrides when you know exactly which agent you want, or when automatic routing doesn't fire.
+32 commands at `~/.claude/commands/`. Use these as manual overrides when you know exactly which agent you want, or when automatic routing doesn't fire.
 
 | Command | Agent | Model |
 |---|---|---|
@@ -397,10 +521,18 @@ CAST Validate v1.7.0 (7 checks)
 | `/browser` | browser | sonnet |
 | `/qa` | qa-reviewer | sonnet |
 | `/present` | presenter | sonnet |
+| `/stage` | auto-stager | haiku |
+| `/verify` | verifier | haiku |
+| `/orchestrate` | orchestrator | sonnet |
 | `/cast` | router | haiku |
+| `/cast-stats` | cast-stats.sh | — |
+| `/chain-report` | chain-reporter | haiku |
+| `/help` | — | — |
 | `/eval` | — | — |
 
 `/cast` is the universal fallback — it bypasses the regex layer entirely and uses NLU to classify intent and select the right agent.
+
+`/cast-stats` runs `cast-stats.sh` directly, printing 8 sections: unmatched prompts, route match frequency, agent lifecycle events, loop breaks, model escalations, group dispatches, catch-all dispatches, and config errors.
 
 ---
 
@@ -446,48 +578,21 @@ macOS skills (calendar, inbox, reminders) require Microsoft Outlook. Linux insta
 
 ---
 
-## Event-Sourcing Protocol
-
-Every agent action writes an immutable, timestamped event file. State is derived from events by replaying them in order.
-
-```
-~/.claude/cast/
-├── events/     # Immutable: {timestamp}-{agent}-{task_id}.json
-├── state/      # Derived task state: {task_id}.json
-├── reviews/    # Review decisions: {artifact_id}-{reviewer}-{timestamp}.json
-└── artifacts/  # Plans, patches, test files
-```
-
-Each event file:
-
-```json
-{
-  "event_id": "20260324T142301Z-debugger-batch-2",
-  "timestamp": "20260324T142301Z",
-  "agent": "debugger",
-  "task_id": "batch-2",
-  "event_type": "task_completed",
-  "status": "DONE",
-  "summary": "Fixed TypeError in auth middleware — null check added at line 47",
-  "artifact_id": "batch-2-fix-20260324T142301Z.patch"
-}
-```
-
-Six event types: `task_created`, `task_claimed`, `task_completed`, `task_blocked`, `artifact_written`, `review_submitted`.
-
----
-
 ## Stats
 
 | Metric | Count |
 |---|---|
-| Agents | <!-- CAST_AGENT_COUNT -->36<!-- /CAST_AGENT_COUNT --> |
+| Agents | 36 |
 | Agent groups | 31 |
-| Routes | <!-- CAST_ROUTE_COUNT -->22<!-- /CAST_ROUTE_COUNT --> |
-| Commands | 26 |
-| Skills | <!-- CAST_SKILL_COUNT -->12<!-- /CAST_SKILL_COUNT --> |
-| Tests | <!-- CAST_TEST_COUNT -->106<!-- /CAST_TEST_COUNT --> |
-| Hook directives | 5 |
+| Routes | 28 |
+| Slash commands | 32 |
+| Skills | 12 |
+| Tests | 106 |
+| Hook directives | 11 |
+| post-tool-hook.sh parts | 5 |
+| agent-status-reader responses | 5 |
+| Event types | 7 |
+| cast-stats.sh sections | 8 |
 
 ---
 
