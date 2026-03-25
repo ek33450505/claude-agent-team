@@ -22,24 +22,29 @@ CMD="$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).g
 # Only intercept Bash tool
 [ "$TOOL" != "Bash" ] && exit 0
 
+# Extract only the first line of $CMD to prevent multiline escape hatch bypass.
+# A multiline command with CAST_COMMIT_AGENT=1 on line 2 would otherwise pass
+# the ^ anchor check while the actual git command is on line 1.
+FIRST_LINE="${CMD%%$'\n'*}"
+
 # --- git commit block ---
 # Allow ONLY if escape hatch is a leading env assignment immediately before git commit
-if echo "$CMD" | grep -qE "^CAST_COMMIT_AGENT=1[[:space:]]+git[[:space:]]+commit"; then
+if echo "$FIRST_LINE" | grep -qE "^CAST_COMMIT_AGENT=1[[:space:]]+git[[:space:]]+commit"; then
   exit 0
 fi
 # Block any other git commit invocation
-if echo "$CMD" | grep -qE "(^|[[:space:]])git[[:space:]]+commit"; then
+if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git[[:space:]]+commit"; then
   echo "**[CAST]** Raw \`git commit\` blocked. Dispatch the \`commit\` agent instead (Agent tool, subagent_type: 'commit')."
   exit 2
 fi
 
 # --- git push block ---
 # Allow ONLY if escape hatch is a leading env assignment immediately before git push
-if echo "$CMD" | grep -qE "^CAST_PUSH_OK=1[[:space:]]+git[[:space:]]+push"; then
+if echo "$FIRST_LINE" | grep -qE "^CAST_PUSH_OK=1[[:space:]]+git[[:space:]]+push"; then
   exit 0
 fi
 # Block any other git push invocation
-if echo "$CMD" | grep -qE "(^|[[:space:]])git[[:space:]]+push"; then
+if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git[[:space:]]+push"; then
   echo "**[CAST]** Raw \`git push\` blocked. Ensure code-reviewer has run, then use \`CAST_PUSH_OK=1 git push\` or dispatch via the commit agent workflow."
   exit 2
 fi

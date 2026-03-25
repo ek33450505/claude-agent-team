@@ -8,9 +8,12 @@
 #
 # Detection heuristics:
 #   1. ~/.claude/cast/orchestrator-checkpoint.log exists (orchestrator wrote checkpoints)
-#   2. OR event files in ~/.claude/cast/events/ were written in the last 30 minutes
+#   2. OR orchestrator-checkpoint.log was modified in the last 30 minutes
 
 set -euo pipefail
+
+# 3a: Only fire in the main session — not inside subagents
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 
 CAST_DIR="${HOME}/.claude/cast"
 CHECKPOINT_FILE="${CAST_DIR}/orchestrator-checkpoint.log"
@@ -26,10 +29,12 @@ if [ -f "$CHECKPOINT_FILE" ]; then
   fi
 fi
 
-# Heuristic 2: recent event files in the last 30 minutes (only check if not already detected)
-if [ "$MULTI_BATCH_DETECTED" -eq 0 ] && [ -d "$EVENTS_DIR" ]; then
-  RECENT_COUNT=$(find "$EVENTS_DIR" -name "*.json" -mmin -30 2>/dev/null | wc -l | tr -d ' ')
-  if [ "${RECENT_COUNT:-0}" -gt 2 ]; then
+# Heuristic 2: checkpoint log modified in the last 30 minutes — session-scoped signal.
+# The orchestrator clears the checkpoint at session end, so a recent mtime means this
+# session. This replaces the find-based event-file count which was not session-scoped.
+if [ "$MULTI_BATCH_DETECTED" -eq 0 ] && [ -f "$CHECKPOINT_FILE" ]; then
+  CHECKPOINT_AGE=$(( $(date +%s) - $(stat -f '%m' "$CHECKPOINT_FILE" 2>/dev/null || echo 0) ))
+  if [ "$CHECKPOINT_AGE" -lt 1800 ]; then
     MULTI_BATCH_DETECTED=1
   fi
 fi
@@ -38,11 +43,12 @@ if [ "$MULTI_BATCH_DETECTED" -eq 0 ]; then
   exit 0
 fi
 
-# Locate plan file path from checkpoint log if available
+# Locate plan file path from checkpoint log if available.
+# 3b: Use $HOME expansion — checkpoint logs write absolute paths (/Users/…/.claude/plans/…).
+# The tilde pattern '~/.claude/plans/…' never matches absolute paths.
 PLAN_FILE=""
 if [ -f "$CHECKPOINT_FILE" ]; then
-  # Attempt to extract a plan file path from checkpoint contents
-  PLAN_FILE=$(grep -oE '~/.claude/plans/[^[:space:]]+\.md' "$CHECKPOINT_FILE" 2>/dev/null | tail -1 || echo "")
+  PLAN_FILE=$(grep -oE "${HOME}/.claude/plans/[^[:space:]]+\\.md" "$CHECKPOINT_FILE" 2>/dev/null | tail -1 || echo "")
 fi
 
 PLAN_CONTEXT=""

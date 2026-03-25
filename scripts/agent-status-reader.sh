@@ -33,6 +33,7 @@ SESSION_ID="${CLAUDE_SESSION_ID:-default}"
 BLOCKED_COUNT_FILE="/tmp/cast-blocked-${SESSION_ID}.count"
 SESSION_EPOCH_FILE="/tmp/cast-session-start-${SESSION_ID}.epoch"
 CAST_EVENTS_DIR="${HOME}/.claude/cast/events"
+TIMEOUT_MSG=""
 
 # --- CAST-TIMEOUT: session duration check ---
 # Create session start epoch file if absent; suppress errors if /tmp is not writable
@@ -75,10 +76,14 @@ if [ "$SESSION_AGE" -gt 5400 ]; then
   fi
 
   if [ "$RECENT_COMMIT_FOUND" -eq 0 ]; then
-    TIMEOUT_ADVISORY='[CAST-TIMEOUT] Session running 90+ minutes without a commit event. Consider: /commit to checkpoint progress, or /fresh to start a clean context.'
-    TIMEOUT_OUTPUT="$(python3 -c "
+    # Collect into a variable instead of printing immediately.
+    # If the status-file check below also produces output, two JSON objects on
+    # stdout would cause the second to be silently dropped by the hook infra.
+    # We defer printing until after the status check, and only print when the
+    # status is non-blocking (empty / DONE / NEEDS_CONTEXT).
+    TIMEOUT_MSG="$(python3 -c "
 import json
-msg = '$TIMEOUT_ADVISORY'
+msg = '[CAST-TIMEOUT] Session running 90+ minutes without a commit event. Consider: /commit to checkpoint progress, or /fresh to start a clean context.'
 output = {
     'hookSpecificOutput': {
         'hookEventName': 'PostToolUse',
@@ -87,9 +92,6 @@ output = {
 }
 print(json.dumps(output))
 " 2>/dev/null)"
-    echo "$TIMEOUT_OUTPUT"
-    # exit 0 — advisory only, do not block; but we still need to continue
-    # We cannot exit here and also check status, so we print and continue
   fi
 fi
 
@@ -223,5 +225,12 @@ elif status == 'NEEDS_CONTEXT':
 sys.exit(0)
 " 2>/dev/null
 STATUS_EXIT="${PIPESTATUS[0]:-$?}"
+
+# If the status check exited cleanly (non-blocking: DONE / NEEDS_CONTEXT / unknown / no file),
+# emit the deferred timeout advisory now — if one was collected above.
+# BLOCKED (exit 2) and DONE_WITH_CONCERNS take priority; suppress the advisory in those cases.
+if [ "$STATUS_EXIT" -eq 0 ] && [ -n "${TIMEOUT_MSG:-}" ]; then
+  echo "$TIMEOUT_MSG"
+fi
 
 exit "$STATUS_EXIT"

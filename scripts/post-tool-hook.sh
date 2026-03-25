@@ -86,9 +86,13 @@ if [[ "$TOOL_NAME" == "Write" && "$FILE_PATH" == *"/plans/"* && "$FILE_PATH" == 
   REAL_PLAN_PATH=$(realpath "$FILE_PATH" 2>/dev/null) || REAL_PLAN_PATH=""
   if [[ -n "$REAL_PLAN_PATH" && "$REAL_PLAN_PATH" == "$HOME/"* ]]; then
     if grep -q '```json dispatch' "$REAL_PLAN_PATH" 2>/dev/null; then
-      python3 -c "
-import json, sys
-msg = '[CAST-ORCHESTRATE] Plan file at $REAL_PLAN_PATH contains an Agent Dispatch Manifest. Dispatch the \`orchestrator\` agent via the Agent tool with this plan file path. Present the queue to the user for approval before executing any batches.'
+      # Pass plan path as env var to avoid single-quote injection in Python string literal
+      CAST_PLAN_PATH="$REAL_PLAN_PATH" python3 -c "
+import json, os
+plan_path = os.environ.get('CAST_PLAN_PATH', '')
+msg = ('[CAST-ORCHESTRATE] Plan file at ' + plan_path + ' contains an Agent Dispatch Manifest. '
+       'Dispatch the \`orchestrator\` agent via the Agent tool with this plan file path. '
+       'Present the queue to the user for approval before executing any batches.')
 print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': msg}}))
 "
     fi
@@ -123,18 +127,24 @@ except Exception:
   TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   LOG_FILE="$HOME/.claude/routing-log.jsonl"
 
-  python3 -c "
-import json, sys
+  # Pass all values as env vars to prevent single-quote injection breaking the Python literal
+  CAST_TS="$TIMESTAMP" CAST_SID="$SESSION_ID" CAST_AGENT="$SUBAGENT_TYPE" \
+  CAST_PREVIEW="$PROMPT_PREVIEW" CAST_LOG="$LOG_FILE" python3 -c "
+import json, os
+ts      = os.environ.get('CAST_TS', '')
+sid     = os.environ.get('CAST_SID', '')
+agent   = os.environ.get('CAST_AGENT', '')
+preview = os.environ.get('CAST_PREVIEW', '')
+log_path = os.environ.get('CAST_LOG', '')
 entry = {
-    'timestamp': '$TIMESTAMP',
-    'session_id': '$SESSION_ID',
+    'timestamp': ts,
+    'session_id': sid,
     'action': 'agent_dispatched',
-    'matched_route': '$SUBAGENT_TYPE',
-    'prompt_preview': $(echo "$PROMPT_PREVIEW" | python3 -c "import sys, json; print(json.dumps(sys.stdin.read().strip()))"),
+    'matched_route': agent,
+    'prompt_preview': preview,
     'confidence': 'direct'
 }
-with open('$LOG_FILE', 'a') as f:
-    f.write(json.dumps(entry) + '\n')
+open(log_path, 'a').write(json.dumps(entry) + '\n')
 " 2>/dev/null || true
 fi
 

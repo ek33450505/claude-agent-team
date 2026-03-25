@@ -11,7 +11,7 @@ if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
   # Depth tracking: only active when CLAUDE_SESSION_ID is set (i.e. real Claude session)
   # Without a session ID (e.g. tests), skip depth tracking to avoid stale /tmp files
   if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
-    DEPTH_FILE="/tmp/cast-depth-${CLAUDE_SESSION_ID}-${PPID}.depth"
+    DEPTH_FILE="/tmp/cast-depth-${PPID}.depth"
     CURRENT_DEPTH=1
     if [ -f "$DEPTH_FILE" ]; then
       CURRENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 1)"
