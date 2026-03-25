@@ -68,6 +68,38 @@ with open(filepath, 'w') as f:
     json.dump(event, f, indent=2)
 print(filepath, file=__import__('sys').stderr)
 PYEOF
+
+  # Mirror to routing-log.jsonl for dashboard visibility
+  # Only for actionable event types; skip artifact/review noise
+  if [[ "$event_type" == "task_claimed" || "$event_type" == "task_completed" || "$event_type" == "task_blocked" ]]; then
+    CAST_ETYPE="$event_type" CAST_AGENT="$agent" CAST_TASK="$task_id" \
+    CAST_SUMMARY="$summary" CAST_STATUS="$status" CAST_TS="$ts" \
+    python3 -c "
+import json, os
+etype   = os.environ.get('CAST_ETYPE', '')
+agent   = os.environ.get('CAST_AGENT', '')
+task_id = os.environ.get('CAST_TASK', '')
+summary = os.environ.get('CAST_SUMMARY', '')
+status  = os.environ.get('CAST_STATUS', '')
+ts      = os.environ.get('CAST_TS', '')
+action  = 'agent_dispatch' if etype == 'task_claimed' else ('agent_complete' if etype == 'task_completed' else 'agent_blocked')
+entry = {
+    'timestamp':      ts,
+    'action':         action,
+    'matched_route':  agent,
+    'agent_name':     agent,
+    'prompt_preview': summary[:80] if summary else task_id,
+    'command':        None,
+    'pattern':        'cast_event',
+    'confidence':     'hard',
+    'status':         status if status else None,
+    'task_id':        task_id,
+}
+log_path = os.path.join(os.path.expanduser('~'), '.claude', 'routing-log.jsonl')
+with open(log_path, 'a') as f:
+    f.write(json.dumps(entry) + '\n')
+" 2>/dev/null || true
+  fi
 }
 
 # Write a review decision attached to a specific artifact.
