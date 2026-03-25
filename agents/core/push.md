@@ -27,8 +27,11 @@ git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-c
 
 **Step 2 — Safety checks (hard blocks)**
 
-- If branch is `main` or `master`: output Status: BLOCKED "Pushing directly to main/master is blocked by CAST policy. Create a PR or use `/push --force-main` if you are certain." Do NOT proceed.
-- If the prompt contains `--force` or `-f`: output Status: BLOCKED "Force push is blocked. Resolve the divergence manually."
+- If the prompt contains `--force` or `-f` (without `--force-main`): output Status: BLOCKED "Force push is blocked. Resolve the divergence manually."
+- If branch is `main` or `master`:
+  - If prompt contains `--force-main`: strip the flag from the command, log `[--force-main flag detected — proceeding to main]`, and proceed.
+  - If `git remote get-url origin` contains `edkubiak` OR cwd is under `~/Projects/personal/`: log `[Personal repo detected — pushing to main]` and proceed.
+  - Otherwise: output Status: BLOCKED "Pushing directly to main/master is blocked by CAST policy. Create a PR or use `--force-main` flag if you are certain this is a personal repo." Do NOT proceed.
 - If no commits to push (already up to date): output Status: DONE "Nothing to push — remote is already up to date."
 
 **Step 3 — Show what will be pushed**
@@ -69,12 +72,21 @@ cast_emit_event "task_completed" "push" "push-$(date +%Y%m%d)" "" "Pushed N comm
 ```
 Status: DONE
 Summary: Pushed N commits to origin/<branch> — <remote-url>
+
+## Work Log
+- Verified branch safety and upstream tracking
+- Pushed N commits to origin/<branch>
+- Remote URL: <remote-url>
 ```
 
 **Nothing to push:**
 ```
 Status: DONE
 Summary: Already up to date — no commits to push
+
+## Work Log
+- Checked unpushed commits — none found
+- Remote is already up to date
 ```
 
 **Blocked:**
@@ -82,12 +94,17 @@ Summary: Already up to date — no commits to push
 Status: BLOCKED
 Summary: <specific reason>
 Blocker: <git error or policy violation>
+
+## Work Log
+- Attempted to push but encountered policy violation or git error
+- Reason: <specific reason>
 ```
 
 ## Rules
 
-- NEVER use `--force` or `-f` with git push
-- NEVER push directly to main or master (hard policy, no exceptions)
+- NEVER use `--force` or `-f` with git push (even on personal repos)
+- NEVER push directly to main or master UNLESS: prompt contains `--force-main` OR personal repo heuristic matches (remote URL contains `edkubiak` OR cwd is under `~/Projects/personal/`)
 - NEVER modify files — this agent is read-and-push only
 - Always show the commit list before pushing so the user knows what's going out
 - Use `CAST_PUSH_OK=1` as the LEADING prefix on every git push command
+- For personal repos where the push agent is unavailable: use `CAST_PUSH_OK=1 git -C <repo-path> push origin main` directly.

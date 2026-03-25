@@ -41,14 +41,14 @@ print('ok')
   assert_output "ok"
 }
 
-@test "agent-groups.json: group count is 30" {
+@test "agent-groups.json: group count is 31" {
   run python3 -c "
 import json
 data = json.load(open('$REPO_DIR/config/agent-groups.json'))
 print(len(data['groups']))
 "
   assert_success
-  assert_output "30"
+  assert_output "31"
 }
 
 @test "agent-groups.json: every group has required fields (id, description, patterns, confidence, waves)" {

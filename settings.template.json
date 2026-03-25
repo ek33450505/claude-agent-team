@@ -44,7 +44,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write|Edit|Agent|Bash",
         "hooks": [
           {
             "type": "command",
@@ -52,7 +52,7 @@
             "timeout": 10
           }
         ],
-        "description": "CAST review — auto-formats code and injects [CAST-REVIEW] directive"
+        "description": "CAST review — auto-formats code, injects [CAST-REVIEW] directive, logs agent dispatches, and triggers [CAST-DEBUG] on Bash non-zero exits"
       }
     ],
     "Stop": [
@@ -61,9 +61,14 @@
           {
             "type": "prompt",
             "prompt": "Before finishing: (1) Were code changes made without dispatching code-reviewer? (2) Were commits made without the commit agent? (3) Are there unpushed commits? Check with: git log @{u}..HEAD --oneline 2>/dev/null. If yes to any, dispatch the appropriate agent (code-reviewer, commit, or push) now."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/stop-hook.sh",
+            "timeout": 5
           }
         ],
-        "description": "CAST safety net — catches missed reviews/commits before session ends"
+        "description": "CAST safety net — catches missed reviews/commits before session ends; auto-dispatches chain-reporter after multi-batch orchestrator sessions"
       }
     ]
   },

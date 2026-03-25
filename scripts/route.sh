@@ -8,21 +8,24 @@
 # Skip subprocesses (subagent prompts should not trigger re-routing)
 # But track nesting depth for subagents so deeply nested agents can be warned
 if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
-  # Depth tracking: increment per-PPID counter
-  DEPTH_FILE="/tmp/cast-depth-${PPID}.depth"
-  CURRENT_DEPTH=1
-  if [ -f "$DEPTH_FILE" ]; then
-    CURRENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 1)"
-  fi
-  CURRENT_DEPTH=$(( CURRENT_DEPTH + 1 ))
-  echo "$CURRENT_DEPTH" > "$DEPTH_FILE"
+  # Depth tracking: only active when CLAUDE_SESSION_ID is set (i.e. real Claude session)
+  # Without a session ID (e.g. tests), skip depth tracking to avoid stale /tmp files
+  if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+    DEPTH_FILE="/tmp/cast-depth-${CLAUDE_SESSION_ID}-${PPID}.depth"
+    CURRENT_DEPTH=1
+    if [ -f "$DEPTH_FILE" ]; then
+      CURRENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 1)"
+    fi
+    CURRENT_DEPTH=$(( CURRENT_DEPTH + 1 ))
+    echo "$CURRENT_DEPTH" > "$DEPTH_FILE"
 
-  if [ "$CURRENT_DEPTH" -ge 2 ]; then
-    python3 -c "
+    if [ "$CURRENT_DEPTH" -ge 2 ]; then
+      python3 -c "
 import json
 msg = '[CAST-DEPTH-WARN] Nesting depth >= 2 (orchestrator->agent->sub-agent). The Agent tool may be unavailable at this depth. If self-dispatch fails silently, the inline session is the fallback enforcer -- check agent output for missing downstream dispatch confirmation.'
 print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'additionalContext': msg}}))
 " 2>/dev/null || true
+    fi
   fi
   exit 0
 fi
@@ -183,7 +186,7 @@ for route in table.get('routes', []):
                 'timestamp': ts,
                 'session_id': session_id,
                 'prompt_preview': preview,
-                'action': 'dispatched',
+                'action': 'matched',
                 'matched_route': agent,
                 'command': command,
                 'pattern': pattern,

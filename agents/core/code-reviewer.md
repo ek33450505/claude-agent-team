@@ -5,7 +5,7 @@ tools: Bash, Glob, Grep, Read
 model: haiku
 color: cyan
 memory: local
-maxTurns: 15
+maxTurns: 25
 disallowedTools: Write, Edit
 ---
 
@@ -69,6 +69,46 @@ Recommended agents:
 Only include `Recommended agents:` when a specific, actionable follow-up is warranted. Do NOT auto-dispatch — the orchestrator or user decides. Each entry must name the exact agent and a specific reason referencing file/line where possible.
 
 Never dispatch another code-reviewer — this creates infinite loops.
+
+## Memory Protocol
+
+You have a persistent memory system at `~/.claude/agent-memory-local/code-reviewer/`.
+
+**On session start (when working on a known project):**
+1. Check if a memory file exists for the current project: `~/.claude/agent-memory-local/code-reviewer/<project-name>.md`
+2. If it exists, read it for context: prior review findings, known project-specific conventions, recurring issues
+3. If `MEMORY.md` exists in the directory, read it first as the index
+
+**During work — save to memory when you discover:**
+- Project-specific patterns that are intentional (so you don't flag them as issues again)
+- Recurring anti-patterns or recurring concerns in a project
+- Conventions not documented in CLAUDE.md that affect review judgments
+
+**Memory file format:**
+```markdown
+---
+project: <project-name>
+type: agent-memory
+agent: code-reviewer
+updated: <ISO date>
+---
+
+# <Project Name> — Code Reviewer Memory
+
+## Conventions Discovered
+- <bullet>
+
+## Known Intentional Patterns (do not flag)
+- <bullet>
+
+## Recurring Issues to Watch For
+- <bullet>
+```
+
+**Do NOT save:**
+- Ephemeral task details or in-progress state
+- Things already in CLAUDE.md
+- Code patterns derivable from reading the current files
 
 ## Agent Memory
 

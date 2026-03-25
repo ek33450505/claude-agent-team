@@ -2,17 +2,6 @@
   "routes": [
     {
       "patterns": [
-        "^/push\\b", "^push$", "git push", "push.*remote", "push.*origin",
-        "push.*branch", "push the code", "push.*commit", "push.*changes"
-      ],
-      "agent": "push",
-      "model": "haiku",
-      "command": "/push",
-      "confidence": "hard",
-      "post_chain": []
-    },
-    {
-      "patterns": [
         "build.*error", "typescript.*error", "eslint.*error", "tsc.*fail",
         "vite.*error", "^/build-fix\\b", "build.*fail", "compile.*error",
         "type.*error.*in", "module.*not found", "import.*error", "cannot find module"
@@ -24,7 +13,7 @@
       "post_chain": ["commit"]
     },
     {
-      "patterns": ["e2e test", "integration test", "playwright", "end.to.end", "^/e2e\\b"],
+      "patterns": ["e2e test", "integration test", "playwright", "end.to.end", "^/e2e\\b", "user.flow.test", "e2e.test"],
       "agent": "e2e-runner",
       "model": "sonnet",
       "command": "/e2e",
@@ -136,7 +125,7 @@
       "post_chain": null
     },
     {
-      "patterns": ["slide deck", "create.*presentation", "create.*slides", "status.*deck", "^/present\\b"],
+      "patterns": ["slide deck", "create.*presentation", "create.*slides", "status.*deck", "^/present\\b", "pitch.deck", "make.*presentation"],
       "agent": "presenter",
       "model": "sonnet",
       "command": "/present",
@@ -144,7 +133,7 @@
       "post_chain": null
     },
     {
-      "patterns": ["morning briefing", "daily briefing", "what.*on.*today", "my schedule", "^/morning\\b"],
+      "patterns": ["morning briefing", "daily briefing", "what.*on.*today", "my schedule", "^/morning\\b", "daily.brief", "start.of.day.brief"],
       "agent": "morning-briefing",
       "model": "sonnet",
       "command": "/morning",
@@ -152,7 +141,7 @@
       "post_chain": null
     },
     {
-      "patterns": ["^/data\\b", "analyze.*data", "data.*analysis", "bigquery", "\\bbq\\b.*query"],
+      "patterns": ["^/data\\b", "analyze.*data", "data.*analysis", "bigquery", "\\bbq\\b.*query", "analyze.*csv", "analyze.*dataframe", "explore.*data", "run.*analysis"],
       "agent": "data-scientist",
       "model": "sonnet",
       "command": "/data",
@@ -160,7 +149,7 @@
       "post_chain": null
     },
     {
-      "patterns": ["^/query\\b", "run.*query", "select.*from", "sql.*query"],
+      "patterns": ["^/query\\b", "run.*query", "select.*from", "sql.*query", "query.*the.*database", "sqlite.*query", "bigquery.*table"],
       "agent": "db-reader",
       "model": "haiku",
       "command": "/query",
@@ -192,7 +181,7 @@
       "post_chain": ["commit"]
     },
     {
-      "patterns": ["generate.*report", "write.*report", "status.*report", "project.*report", "sprint.*report", "^/report\\b"],
+      "patterns": ["generate.*report", "write.*report", "status.*report", "project.*report", "sprint.*report", "^/report\\b", "sprint.summary"],
       "agent": "report-writer",
       "model": "haiku",
       "command": "/report",
@@ -200,12 +189,65 @@
       "post_chain": null
     },
     {
-      "patterns": ["meeting notes", "process.*meeting", "meeting.*transcript", "extract.*action items", "action items.*from", "^/meeting\\b"],
+      "patterns": ["meeting notes", "process.*meeting", "meeting.*transcript", "extract.*action items", "action items.*from", "^/meeting\\b", "standup.notes", "process.*notes"],
       "agent": "meeting-notes",
       "model": "haiku",
       "command": "/meeting",
       "confidence": "hard",
       "post_chain": null
+    },
+    {
+      "patterns": ["ci.?cd", "pipeline", "dockerfile", "github.actions", "deploy.*container", "containerize", "^/devops\\b"],
+      "agent": "devops",
+      "model": "haiku",
+      "command": "/devops",
+      "confidence": "hard",
+      "post_chain": ["code-reviewer"]
+    },
+    {
+      "patterns": ["lighthouse", "bundle.size", "web.vitals", "core.vitals", "lazy.load", "render.performance", "^/performance\\b"],
+      "agent": "performance",
+      "model": "sonnet",
+      "command": "/performance",
+      "confidence": "hard",
+      "post_chain": ["code-reviewer"]
+    },
+    {
+      "patterns": ["eslint.*(error|fix|config)", "prettier.*(format|config)", "lint.error", "fix.lint", "^/lint\\b"],
+      "agent": "linter",
+      "model": "haiku",
+      "command": "/lint",
+      "confidence": "hard",
+      "post_chain": []
+    },
+    {
+      "patterns": ["test.driven", "red.green.refactor", "write.test.first", "\\btdd\\b", "^/tdd\\b"],
+      "agent": "tdd-guide",
+      "model": "sonnet",
+      "command": "/tdd",
+      "confidence": "hard",
+      "post_chain": ["test-runner"]
+    },
+    {
+      "patterns": ["browser.automation", "fill.*form.*browser", "screenshot.the.page", "scrape.the", "^/browser\\b"],
+      "agent": "browser",
+      "model": "sonnet",
+      "command": "/browser",
+      "confidence": "hard",
+      "post_chain": []
+    },
+    {
+      "patterns": [
+        "write.*new.*feature", "implement.*feature", "add.*component", "create.*component",
+        "add.*endpoint", "add.*route", "add.*page",
+        "implement.*the", "build.*the", "code.*this",
+        "^/code\\b"
+      ],
+      "agent": "code-writer",
+      "model": "sonnet",
+      "command": "/code",
+      "confidence": "soft",
+      "post_chain": ["code-reviewer", "test-writer"]
     }
   ],
   "opus_signals": {

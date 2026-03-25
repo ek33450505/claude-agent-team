@@ -125,6 +125,34 @@ cast_check_approvals 'batch-<id>' 'code-reviewer'
 ```
 If return code is 1 or 2, orchestrator does not dispatch commit agent.
 
+## Checkpoint & Resume
+
+After completing each batch, emit a checkpoint marker to the log:
+
+```bash
+mkdir -p ~/.claude/cast
+echo "[BATCH $BATCH_ID COMPLETE] $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a ~/.claude/cast/orchestrator-checkpoint.log
+```
+
+On startup, check for an existing checkpoint file to resume a partially executed plan:
+
+```bash
+if [ -f ~/.claude/cast/orchestrator-checkpoint.log ]; then
+  LAST_BATCH=$(grep 'BATCH.*COMPLETE' ~/.claude/cast/orchestrator-checkpoint.log | tail -1 | grep -oE 'BATCH [0-9]+' | grep -oE '[0-9]+')
+  if [ -n "$LAST_BATCH" ]; then
+    echo "Resuming from batch $((LAST_BATCH + 1)) — skipping batches 0-${LAST_BATCH}"
+  fi
+fi
+```
+
+If a checkpoint exists, skip all batches with id <= LAST_BATCH. After the final batch succeeds, delete the checkpoint:
+
+```bash
+rm -f ~/.claude/cast/orchestrator-checkpoint.log
+```
+
+Always output `[BATCH N COMPLETE]` as a log line after each batch so progress is scannable in the conversation and in the checkpoint log.
+
 ### Retry Protocol
 
 When a batch returns `Status: BLOCKED`:
@@ -152,12 +180,63 @@ If any batches had `DONE_WITH_CONCERNS` status, add a final section:
 ⚠ Concerns raised during execution:
   [list each concern with the batch number it came from]
 
+## Output Discipline
+
+When reporting agent results, you MUST:
+- Summarize each completed agent in ≤3 sentences — what it did, what it found, what it changed.
+- NEVER echo the full agent prompt back in your response. Never repeat the plan file contents.
+- NEVER paste full agent output verbatim. Extract only the Status block and key findings.
+- Keep the completion summary under 200 words total.
+
+Violating these rules causes response truncation and orphaned sessions. Brevity is correctness.
+
 ## Rules
 
 - Never skip a batch unless the user explicitly says to
 - If an agent fails, report the failure and ask the user whether to continue or stop
 - Keep agent prompts specific — include the feature name, plan file path, and relevant context
 - Maximum 4 agents per parallel batch
+
+## Memory Protocol
+
+You have a persistent memory system at `~/.claude/agent-memory-local/orchestrator/`.
+
+**On session start:**
+1. Read `MEMORY.md` in that directory as the cross-project index (if it exists)
+2. Derive the project slug from the basename of the current working directory (e.g., `claude-agent-team`)
+3. Check if `~/.claude/agent-memory-local/orchestrator/project-<slug>.md` exists — if so, read it for prior orchestration context for this project
+
+**During work — save to project memory when you discover:**
+- Batch ordering decisions specific to this project's workflow
+- Agent combinations that worked well or caused conflicts
+- Project-specific conventions that affect dispatch decisions
+- Recurring blockers or retry patterns
+
+**At session end:**
+Write project-specific observations to `project-<slug>.md` (create if absent). Reserve `MEMORY.md` for cross-project patterns.
+
+**Memory file format:**
+```markdown
+---
+project: <slug>
+type: agent-memory
+agent: orchestrator
+updated: <ISO date>
+---
+
+# <Project Name> — Orchestrator Memory
+
+## Batch Patterns
+- <bullet>
+
+## Agent Notes
+- <bullet>
+
+## Recurring Issues
+- <bullet>
+```
+
+**Slug derivation:** `basename "$PWD"` — e.g., working in `~/Projects/personal/claude-agent-team` → slug is `claude-agent-team` → file is `project-claude-agent-team.md`.
 
 ## Agent Memory
 

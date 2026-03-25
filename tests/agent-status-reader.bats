@@ -186,11 +186,12 @@ PYEOF
 # 6. NEEDS_CONTEXT status
 # ---------------------------------------------------------------------------
 
-@test "NEEDS_CONTEXT: exits 0 silently" {
+@test "NEEDS_CONTEXT: exits 0 and emits researcher suggestion" {
   write_status_file "NEEDS_CONTEXT" "planner" "Need more info about scope" ""
   run_hook
   assert_success
-  assert_output ""
+  assert_output --partial "[CAST-NEEDS-CONTEXT]"
+  assert_output --partial "researcher"
 }
 
 # ---------------------------------------------------------------------------

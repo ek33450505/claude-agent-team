@@ -80,6 +80,24 @@ MD
 }
 JSON
 
+  # --- agent-groups.json: minimal valid config ---
+  cat > "$HOME/.claude/config/agent-groups.json" <<'JSON'
+{
+  "version": "1.0",
+  "groups": [
+    {
+      "id": "test-group",
+      "description": "Test group",
+      "patterns": ["test pattern"],
+      "confidence": "hard",
+      "waves": [
+        { "id": 1, "description": "Test", "parallel": true, "agents": ["planner"] }
+      ]
+    }
+  ]
+}
+JSON
+
   # --- CLAUDE.md with all required directives ---
   cat > "$HOME/.claude/CLAUDE.md" <<'MD'
 # CAST
@@ -87,6 +105,7 @@ JSON
 [CAST-DISPATCH] — dispatch agents
 [CAST-REVIEW]   — dispatch code-reviewer
 [CAST-CHAIN]    — run chains
+[CAST-DISPATCH-GROUP] — dispatch agent groups
 MD
 }
 

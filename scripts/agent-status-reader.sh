@@ -202,7 +202,24 @@ elif status == 'DONE_WITH_CONCERNS':
     print(_json.dumps(output))
     sys.exit(0)
 
-# NEEDS_CONTEXT / unknown — exit silently
+elif status == 'NEEDS_CONTEXT':
+    directive = (
+        f'[CAST-NEEDS-CONTEXT] Agent \`{agent}\` needs more context to proceed.\n'
+        f'Summary: {summary}\n'
+        'Recommended: dispatch the \`researcher\` agent to gather the missing context, '
+        'then re-dispatch the original agent with research findings prepended to its prompt.'
+    )
+    output = {
+        'hookSpecificOutput': {
+            'hookEventName': 'PostToolUse',
+            'additionalContext': directive
+        }
+    }
+    import json as _json
+    print(_json.dumps(output))
+    sys.exit(0)
+
+# unknown — exit silently
 sys.exit(0)
 " 2>/dev/null
 STATUS_EXIT="${PIPESTATUS[0]:-$?}"

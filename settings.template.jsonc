@@ -46,15 +46,21 @@
       }
     ],
     // Before Claude stops: nudge to verify tests/build if code was changed
+    // Also: chain-reporter auto-dispatch after multi-batch orchestrator sessions
     "Stop": [
       {
         "hooks": [
           {
             "type": "prompt",
             "prompt": "Before completing: if code was modified but no tests were run, suggest running them. If a build-breaking change was made, suggest verifying the build. Otherwise, allow completion."
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/stop-hook.sh",
+            "timeout": 5
           }
         ],
-        "description": "Verification nudge before completion"
+        "description": "Verification nudge before completion; auto-dispatches chain-reporter after multi-batch orchestrator sessions"
       }
     ]
   },
