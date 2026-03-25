@@ -123,7 +123,7 @@ run_install() {
 # =============================================================================
 
 @test "Custom install: selecting extended only installs extended + core" {
-  run_install "$(printf '3\ny\nn\nn\nn\n')"
+  run_install "$(printf '3\ny\nn\nn\nn\nn\n')"
 
   # Core agents should be present
   [ -f "$HOME/.claude/agents/planner.md" ]
@@ -139,7 +139,7 @@ run_install() {
 }
 
 @test "Custom install: selecting no categories skips non-core" {
-  run_install "$(printf '3\nn\nn\nn\nn\n')"
+  run_install "$(printf '3\nn\nn\nn\nn\nn\n')"
 
   # Core agents should still be present
   [ -f "$HOME/.claude/agents/planner.md" ]
