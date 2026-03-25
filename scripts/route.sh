@@ -138,6 +138,20 @@ try:
 except Exception:
     pass
 
+# 5. Pending route proposals
+proposals_path = os.path.expanduser('~/.claude/routing-proposals.json')
+try:
+    if os.path.exists(proposals_path):
+        with open(proposals_path) as f:
+            proposals_data = json.load(f)
+        pending = [p for p in proposals_data.get('proposals', []) if p.get('status') == 'pending']
+        if pending:
+            ids = ', '.join(p.get('id', '?') for p in pending[:3])
+            more = f' (+{len(pending)-3} more)' if len(pending) > 3 else ''
+            lines.append(f'## Route Proposals\n  {len(pending)} pending: {ids}{more}\n  Run `/cast route-review` or check Dashboard > Routing to approve')
+except Exception:
+    pass
+
 if not lines:
     import sys; sys.exit(0)
 

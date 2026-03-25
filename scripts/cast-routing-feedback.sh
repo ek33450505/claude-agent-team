@@ -155,6 +155,109 @@ print(f'Total no_match events: {total_no_match}')
 print('Top 5 unmatched tokens:')
 for i, (key, prompts) in enumerate(top5, 1):
     print(f'  {i}. \"{key}\" — {len(prompts)} events')
+
+# Write routing-proposals.json
+import json as _json
+import datetime as _datetime
+import shutil as _shutil
+
+KEYWORD_AGENT_MAP = {
+    'analyze': ('data-scientist', 'sonnet'),
+    'investigate': ('data-scientist', 'sonnet'),
+    'explore': ('data-scientist', 'sonnet'),
+    'convert': ('code-writer', 'sonnet'),
+    'transform': ('code-writer', 'sonnet'),
+    'migrate': ('code-writer', 'sonnet'),
+    'compare': ('architect', 'sonnet'),
+    'evaluate': ('architect', 'sonnet'),
+    'choose': ('architect', 'sonnet'),
+    'document': ('doc-updater', 'haiku'),
+    'readme': ('doc-updater', 'haiku'),
+    'changelog': ('doc-updater', 'haiku'),
+}
+
+def _get_agent_for_token(token):
+    t = token.lower()
+    for kw, (agent, model) in KEYWORD_AGENT_MAP.items():
+        if kw in t:
+            return agent, model
+    return 'router', 'haiku'
+
+# Read existing routing-table.json to get dedup set
+routing_table_path = os.path.expanduser('~/.claude/config/routing-table.json')
+existing_patterns = set()
+try:
+    if os.path.exists(routing_table_path):
+        with open(routing_table_path) as _f:
+            _rt = _json.load(_f)
+        for _route in _rt.get('routes', []):
+            for _p in _route.get('patterns', []):
+                existing_patterns.add(_p)
+except Exception:
+    pass
+
+# Read existing proposals file if any
+proposals_path = os.path.expanduser('~/.claude/routing-proposals.json')
+existing_proposals = {}
+try:
+    if os.path.exists(proposals_path):
+        with open(proposals_path) as _f:
+            _existing = _json.load(_f)
+        for _p in _existing.get('proposals', []):
+            existing_proposals[_p['id']] = _p
+except Exception:
+    pass
+
+# Build new proposals from top5
+new_proposals = {}
+for key, prompts in top5:
+    pattern = f'\\\\b{re.escape(key)}\\\\b'
+    if pattern in existing_patterns:
+        continue
+    prop_id = f'auto-{key}'
+    agent, model = _get_agent_for_token(key)
+    example_prompts = [p[:60] for p in prompts[:3]]
+    if prop_id in existing_proposals:
+        existing_status = existing_proposals[prop_id].get('status', 'pending')
+        if existing_status in ('installed', 'rejected'):
+            continue
+        new_proposals[prop_id] = dict(existing_proposals[prop_id])
+        new_proposals[prop_id]['frequency'] = len(prompts)
+        new_proposals[prop_id]['example_prompts'] = example_prompts
+    else:
+        new_proposals[prop_id] = {
+            'id': prop_id,
+            'patterns': [pattern],
+            'agent': agent,
+            'model': model,
+            'confidence': 'soft',
+            'frequency': len(prompts),
+            'example_prompts': example_prompts,
+            'status': 'pending',
+        }
+
+# Merge: keep installed/rejected from existing, add/update pending
+final_proposals = []
+seen_ids = set()
+for _prop_id, _prop in existing_proposals.items():
+    if _prop.get('status') in ('installed', 'rejected'):
+        final_proposals.append(_prop)
+        seen_ids.add(_prop_id)
+for _prop_id, _prop in new_proposals.items():
+    if _prop_id not in seen_ids:
+        final_proposals.append(_prop)
+
+proposals_output = {
+    'generated': _datetime.datetime.utcnow().isoformat() + 'Z',
+    'proposals': final_proposals,
+}
+try:
+    with open(proposals_path, 'w') as _f:
+        _json.dump(proposals_output, _f, indent=2)
+    _pending_count = sum(1 for _p in final_proposals if _p.get('status') == 'pending')
+    print(f'Routing proposals written to: {proposals_path} ({_pending_count} pending)')
+except Exception as _e:
+    print(f'Warning: could not write routing-proposals.json: {_e}', file=sys.stderr)
 " 2>/dev/null || true
 
 exit 0
