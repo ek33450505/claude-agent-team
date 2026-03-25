@@ -150,6 +150,35 @@ subprocess.run(
     input=json.dumps(entry), text=True, timeout=5
 )
 " 2>/dev/null || true
+
+  # Write a chain_dispatched status file to ~/.claude/agent-status/ so the inline
+  # session can observe which agents were dispatched via self-dispatch chains.
+  # This is especially useful when code-writer self-dispatches code-reviewer — the
+  # main session can confirm the chain fired without parsing agent output text.
+  CAST_STATUS_DIR="$HOME/.claude/agent-status"
+  mkdir -p "$CAST_STATUS_DIR"
+  CAST_TS_COMPACT=$(echo "$TIMESTAMP" | tr -d ':-' | tr 'T' 'T' | cut -c1-16)
+  CAST_STATUS_FILE="${CAST_STATUS_DIR}/chain-dispatch-${CAST_TS_COMPACT}Z.json"
+  CAST_AGENT_VAL="$SUBAGENT_TYPE" CAST_TS_VAL="$TIMESTAMP" CAST_SID_VAL="$SESSION_ID" \
+  CAST_FILE_VAL="$CAST_STATUS_FILE" python3 -c "
+import json, os
+agent    = os.environ.get('CAST_AGENT_VAL', 'unknown')
+ts       = os.environ.get('CAST_TS_VAL', '')
+sid      = os.environ.get('CAST_SID_VAL', '')
+filepath = os.environ.get('CAST_FILE_VAL', '')
+if not filepath:
+    import sys; sys.exit(0)
+d = {
+    'agent': 'dispatcher',
+    'status': 'DONE',
+    'summary': f'Agent dispatched: {agent}',
+    'chain_dispatched': [agent],
+    'session_id': sid,
+    'timestamp': ts
+}
+with open(filepath, 'w') as f:
+    json.dump(d, f, indent=2)
+" 2>/dev/null || true
 fi
 
 # --- Part 5: PostToolUse(Bash non-zero exit) → [CAST-DEBUG] directive ---

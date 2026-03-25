@@ -596,6 +596,16 @@ macOS skills (calendar, inbox, reminders) require Microsoft Outlook. Linux insta
 
 ---
 
+## Known Limitations
+
+See [docs/known-limitations.md](docs/known-limitations.md) for details on:
+
+- **SendMessage Gap** — orchestrator cannot resume after a network drop; workaround: checkpoint log + re-invocation with `pre_approved: true`
+- **Agent tool depth** — nesting depth ≥ 3 may suppress self-dispatch chains; inline session acts as fallback enforcer
+- **Turn ceiling** — orchestrator stops cleanly at turn 40 and checkpoints for manual resume
+
+---
+
 ## Companion
 
 [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) — observability UI for CAST. Reads `routing-log.jsonl`, `agent-status/`, and `cast/` directories written by CAST hooks. Shows routing decisions, agent status, and chain execution history in a React dashboard.

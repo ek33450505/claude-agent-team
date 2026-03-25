@@ -132,10 +132,11 @@ age_seconds = time.time() - file_mtime
 if age_seconds > 60:
     sys.exit(0)  # Stale file — ignore
 
-status    = d.get('status', '')
-agent     = d.get('agent', 'unknown')
-summary   = d.get('summary', '')
-concerns  = d.get('concerns') or ''
+status          = d.get('status', '')
+agent           = d.get('agent', 'unknown')
+summary         = d.get('summary', '')
+concerns        = d.get('concerns') or ''
+chain_dispatched = d.get('chain_dispatched') or []
 
 # Per-agent BLOCKED counter path (scoped to session + agent)
 blocked_count_file = f'{blocked_count_prefix}-{agent}.count'
@@ -187,6 +188,21 @@ elif status == 'DONE':
             cf.write('0')
     except Exception:
         pass
+    # Surface chain_dispatched info if present so inline session knows the chain fired
+    if chain_dispatched:
+        chain_list = ', '.join(a for a in chain_dispatched)
+        directive = (
+            f'[CAST-CHAIN-CONFIRMED] Agent {agent} dispatched downstream agent(s): {chain_list}. '
+            'Chain is active — do not re-dispatch these agents from the inline session.'
+        )
+        output = {
+            'hookSpecificOutput': {
+                'hookEventName': 'PostToolUse',
+                'additionalContext': directive
+            }
+        }
+        import json as _json
+        print(_json.dumps(output))
     sys.exit(0)
 
 elif status == 'DONE_WITH_CONCERNS':
