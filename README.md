@@ -2,7 +2,7 @@
 
 <!-- CAST_VERSION_BADGE -->![Version](https://img.shields.io/badge/version-1.5.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-42-green)
-![Routes](https://img.shields.io/badge/routes-28-blue)
+![Routes](https://img.shields.io/badge/routes-35-blue)
 ![Commands](https://img.shields.io/badge/commands-32-blue)
 ![Tests](https://img.shields.io/badge/tests-147%20total-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)

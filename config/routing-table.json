@@ -29,18 +29,10 @@
       "post_chain": ["code-reviewer", "commit"]
     },
     {
-      "patterns": ["^commit$", "^/commit\\b", "git commit", "stage and commit", "create a commit", "make a commit", "need to commit"],
+      "patterns": ["^commit$", "^/commit\\b", "git commit", "^push$", "^git push", "stage and commit", "create a commit", "make a commit", "need to commit"],
       "agent": "commit",
       "model": "haiku",
       "command": "/commit",
-      "confidence": "hard",
-      "post_chain": null
-    },
-    {
-      "patterns": ["^/push\\b", "^push$", "^git push", "push.*code", "push.*origin", "push.*change", "push.*remote", "push to (main|master|origin|upstream)"],
-      "agent": "push",
-      "model": "haiku",
-      "command": "/push",
       "confidence": "hard",
       "post_chain": null
     },
@@ -205,7 +197,7 @@
       "post_chain": null
     },
     {
-      "patterns": ["ci.?cd", "(ci|cd|deploy|github.actions|workflow).*pipeline|pipeline.*(ci|cd|deploy|github.actions|workflow)", "dockerfile", "github.actions", "deploy.*container", "containerize", "^/devops\\b"],
+      "patterns": ["ci.?cd", "pipeline", "dockerfile", "github.actions", "deploy.*container", "containerize", "^/devops\\b"],
       "agent": "devops",
       "model": "haiku",
       "command": "/devops",
@@ -226,8 +218,7 @@
       "model": "haiku",
       "command": "/lint",
       "confidence": "hard",
-      "post_chain": [],
-      "_note": "eslint.*error intentionally shadowed by build-error-resolver (position 1). Build errors take priority over lint fixes."
+      "post_chain": []
     },
     {
       "patterns": ["test.driven", "red.green.refactor", "write.test.first", "\\btdd\\b", "^/tdd\\b"],
@@ -247,7 +238,20 @@
     },
     {
       "patterns": [
+        "\\bauth\\b", "login.*form", "api[._]key", "\\bpassword\\b",
+        "\\bjwt\\b", "\\boauth\\b", "\\bcredential", "session.*token",
+        "\\bencrypt", "\\bdecrypt", "hash.*password"
+      ],
+      "agent": "code-writer",
+      "model": "sonnet",
+      "confidence": "soft",
+      "post_chain": [["code-reviewer", "security"], "commit"],
+      "_note": "Security-sensitive paths — parallel review (voting pattern)"
+    },
+    {
+      "patterns": [
         "write.*new.*feature", "implement.*feature", "add.*component", "create.*component",
+        "add.*endpoint", "add.*route", "add.*page",
         "implement.*the", "build.*the", "code.*this",
         "^/code\\b"
       ],
@@ -255,7 +259,123 @@
       "model": "sonnet",
       "command": "/code",
       "confidence": "soft",
-      "post_chain": ["code-reviewer", "test-writer"]
+      "post_chain": [["code-reviewer", "security"], "commit"]
+    },
+    {
+      "agent": "merge",
+      "command": "/merge",
+      "confidence": "hard",
+      "model": "sonnet",
+      "post_chain": [],
+      "patterns": [
+        "\\bgit merge\\b",
+        "\\brebase onto\\b",
+        "merge.*conflict|conflict.*resolution",
+        "\\bsquash.*merge\\b|\\bgh pr merge\\b",
+        "clean.*branch|worktree.*cleanup",
+        "merge (branch|pr)|pr (merge|rebase)",
+        "\\bdelete.*branch\\b|\\bbranch.*cleanup\\b"
+      ]
+    },
+    {
+      "agent": "frontend-designer",
+      "command": "/design",
+      "confidence": "hard",
+      "model": "sonnet",
+      "post_chain": [],
+      "patterns": [
+        "\\bui (design|polish|component|redesign)\\b",
+        "\\b(tailwind|shadcn|mui|bootstrap) (component|theme|layout)\\b",
+        "design system|component library",
+        "\\b(accessibility|wcag|aria)\\b.*component",
+        "color scheme|dark mode|animation.*component",
+        "visual polish|visual design",
+        "\\bredesign\\b|improve.*ui\\b",
+        "responsive layout|mobile.*layout"
+      ]
+    },
+    {
+      "agent": "db-architect",
+      "command": "/db-arch",
+      "confidence": "hard",
+      "model": "sonnet",
+      "post_chain": [],
+      "patterns": [
+        "\\bschema (design|migration|audit)\\b",
+        "\\b(prisma|drizzle|knex|alembic|activerecord) (schema|migration)\\b",
+        "database (design|optimization|refactor)",
+        "\\b(n\\+1|slow query|query optimization)\\b",
+        "\\b(rls|row level security)\\b",
+        "\\b(soft delete|partition|audit log)\\b",
+        "\\bcreate.*migration\\b|\\bwrite.*migration\\b",
+        "\\bexplain analyze\\b|index strategy"
+      ]
+    },
+    {
+      "agent": "framework-expert",
+      "command": "/framework",
+      "confidence": "hard",
+      "model": "sonnet",
+      "post_chain": [],
+      "patterns": [
+        "\\b(laravel|django|rails|vue|nuxt)\\b",
+        "\\b(eloquent|activerecord|django orm|drf|pinia)\\b",
+        "\\b(artisan|devise|blade|viewset)\\b",
+        "\\b(celery|sidekiq|hotwire|turbo)\\b",
+        "framework.*pattern|idiomatic.*code",
+        "orm.*relationship|middleware.*auth",
+        "controller.*action|service.*layer",
+        "api.*endpoint.*best practice"
+      ]
+    },
+    {
+      "agent": "infra",
+      "command": "/infra",
+      "confidence": "hard",
+      "model": "sonnet",
+      "post_chain": [],
+      "patterns": [
+        "\\bterraform\\b|infrastructure as code|\\biac\\b",
+        "\\b(aws|gcp|azure)\\b.*(provision|resource|infra)",
+        "\\b(planetscale|neon|supabase|railway)\\b.*setup",
+        "\\b(vpc|route53|cloudfront|acm certificate)\\b",
+        "\\bvault.*secret|secrets management\\b",
+        "database.*provision|cloud.*infrastructure",
+        "cost optimization.*cloud|terraform.*module",
+        "state backend|cloud resource"
+      ]
+    },
+    {
+      "agent": "pentest",
+      "command": "/pentest",
+      "confidence": "hard",
+      "model": "sonnet",
+      "post_chain": [],
+      "patterns": [
+        "security scan|vulnerability (assessment|test|scan)",
+        "\\b(npm|pip) audit\\b|dependency audit",
+        "\\bcve\\b|owasp scan|\\bsast\\b",
+        "pen test|penetration test",
+        "security report|security.*gate",
+        "auth flow.*test|security testing",
+        "supply chain risk|vulnerability disclosure"
+      ]
+    },
+    {
+      "agent": "seo-content",
+      "command": "/seo",
+      "confidence": "hard",
+      "model": "haiku",
+      "post_chain": [],
+      "patterns": [
+        "\\bseo\\b|meta tags?|open graph",
+        "structured data|json-ld",
+        "\\bwcag\\b|accessibility audit",
+        "\\bi18n\\b|localization|internationali[sz]ation",
+        "robots\\.txt|sitemap\\.xml",
+        "canonical url|hreflang",
+        "alt text|color contrast|keyboard nav"
+      ]
     }
   ],
   "opus_signals": {
