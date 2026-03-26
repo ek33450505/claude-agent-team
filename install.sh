@@ -151,6 +151,11 @@ mkdir -p "$CLAUDE_DIR/cast/state"
 mkdir -p "$CLAUDE_DIR/cast/reviews"
 mkdir -p "$CLAUDE_DIR/cast/artifacts"
 mkdir -p "$CLAUDE_DIR/agent-status"
+mkdir -p "$CLAUDE_DIR/config"
+
+# --- Initialize cast.db (Phase 7a: SQLite state foundation) ---
+# Scripts are copied below; run init after they land in ~/.claude/scripts/
+# Deferred — see "Initialize cast.db" block after script install step.
 
 # --- Install agents (flat — strip subdirectory structure) ---
 install_agents() {
@@ -250,6 +255,16 @@ for script_file in "$SCRIPT_DIR"/scripts/*; do
     chmod +x "$CLAUDE_DIR/scripts/$dest_name"
     success "  Installed: $dest_name"
 done
+
+# --- Initialize cast.db (SQLite state foundation — Phase 7a) ---
+DB_INIT_SCRIPT="$CLAUDE_DIR/scripts/cast-db-init.sh"
+if [ -f "$DB_INIT_SCRIPT" ]; then
+  if bash "$DB_INIT_SCRIPT" 2>/dev/null; then
+    success "  cast.db initialized"
+  else
+    warn "  cast.db initialization failed — run scripts/cast-db-init.sh manually if needed"
+  fi
+fi
 
 # --- Semantic routing: generate agent embeddings ---
 EMBED_SCRIPT="$CLAUDE_DIR/scripts/cast-embed-agents.sh"

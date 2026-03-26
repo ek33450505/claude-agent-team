@@ -53,6 +53,26 @@
           }
         ],
         "description": "CAST review — auto-formats code, injects [CAST-REVIEW] directive, logs agent dispatches, and triggers [CAST-DEBUG] on Bash non-zero exits"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-cost-tracker.sh",
+            "timeout": 5
+          }
+        ],
+        "description": "CAST cost tracking — records token usage per tool call into cast.db sessions and agent_runs tables"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-budget-alert.sh",
+            "timeout": 3
+          }
+        ],
+        "description": "CAST budget guard — injects [CAST-BUDGET-WARN] or [CAST-BUDGET-HARD-LIMIT] when daily spend threshold reached"
       }
     ],
     "Stop": [
