@@ -218,3 +218,82 @@ with open('$outside_dir/20991231T235959Z-evil.json', 'w') as f:
   assert_success
   rm -rf "$outside_dir"
 }
+
+# ---------------------------------------------------------------------------
+# 8. Status logging — routing-log.jsonl persistence
+# ---------------------------------------------------------------------------
+
+setup_log_script() {
+  # Install a minimal cast-log-append.py that appends stdin to routing-log.jsonl
+  mkdir -p "$HOME/.claude/scripts"
+  cat > "$HOME/.claude/scripts/cast-log-append.py" <<'PYEOF'
+import sys, os
+log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
+os.makedirs(os.path.dirname(log_path), exist_ok=True)
+data = sys.stdin.read().strip()
+if data:
+    with open(log_path, 'a') as f:
+        f.write(data + '\n')
+PYEOF
+}
+
+@test "status logging: DONE status writes agent_complete entry with status=DONE" {
+  setup_log_script
+  write_status_file "DONE" "code-reviewer" "Review complete" ""
+  run_hook
+  assert_success
+  local log_file="$HOME/.claude/routing-log.jsonl"
+  [ -f "$log_file" ] || fail "routing-log.jsonl was not created"
+  python3 - "$log_file" <<'PYEOF'
+import json, sys
+log_file = sys.argv[1]
+entries = []
+with open(log_file) as f:
+    for line in f:
+        line = line.strip()
+        if line:
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+agent_complete = [e for e in entries if e.get('action') == 'agent_complete']
+assert agent_complete, f"No agent_complete entries found. All entries: {entries}"
+last = agent_complete[-1]
+assert last.get('status') == 'DONE', f"Expected status=DONE, got: {last}"
+assert last.get('matched_route') == 'code-reviewer', f"Expected matched_route=code-reviewer, got: {last}"
+PYEOF
+}
+
+@test "status logging: BLOCKED status writes agent_complete entry with status=BLOCKED" {
+  setup_log_script
+  write_status_file "BLOCKED" "debugger" "Cannot proceed" ""
+  run env CLAUDE_SUBPROCESS=1 CAST_STATUS_DIR="$CAST_STATUS_DIR" bash "$HOOK" <<< "{}"
+  # exit code 2 expected for BLOCKED — don't assert_success
+  local log_file="$HOME/.claude/routing-log.jsonl"
+  [ -f "$log_file" ] || fail "routing-log.jsonl was not created"
+  python3 - "$log_file" <<'PYEOF'
+import json, sys
+log_file = sys.argv[1]
+entries = []
+with open(log_file) as f:
+    for line in f:
+        line = line.strip()
+        if line:
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+agent_complete = [e for e in entries if e.get('action') == 'agent_complete']
+assert agent_complete, f"No agent_complete entries found. All entries: {entries}"
+last = agent_complete[-1]
+assert last.get('status') == 'BLOCKED', f"Expected status=BLOCKED, got: {last}"
+PYEOF
+}
+
+@test "status logging: logging failure does not break status handling" {
+  # Do NOT create cast-log-append.py — logging will silently fail
+  write_status_file "DONE" "commit" "Committed successfully" ""
+  run_hook
+  # Must still exit 0 (DONE path) even though logging failed
+  assert_success
+}

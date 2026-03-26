@@ -152,6 +152,32 @@ try:
 except Exception:
     pass
 
+# 6. Agent health advisory
+try:
+    log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
+    if os.path.exists(log_path):
+        from collections import defaultdict
+        counts = defaultdict(lambda: defaultdict(int))
+        with open(log_path) as f:
+            for line in f:
+                try:
+                    e = json.loads(line.strip())
+                    if e.get('action') == 'agent_complete' and e.get('matched_route') and e.get('status'):
+                        counts[e['matched_route']][e['status']] += 1
+                except Exception:
+                    pass
+        flagged = []
+        for ag, statuses in counts.items():
+            total = sum(statuses.values())
+            if total >= 5:
+                blocked_rate = statuses.get('BLOCKED', 0) / total
+                if blocked_rate >= 0.20:
+                    flagged.append(f'{ag}: {int(blocked_rate*100)}% BLOCKED ({statuses["BLOCKED"]}/{total} runs)')
+        if flagged:
+            lines.append('## Agent Health\n  ' + '\n  '.join(f'WARNING {item}' for item in flagged))
+except Exception:
+    pass
+
 if not lines:
     import sys; sys.exit(0)
 
@@ -401,6 +427,52 @@ _sp4.run(
     input=json.dumps(log), text=True, timeout=5
 )
 " 2>/dev/null || true
+
+# --- Stage 2.5: Semantic routing (Ollama-based, graceful fallback) ---
+SEMANTIC_SCRIPT="$HOME/.claude/scripts/cast-semantic-route.sh"
+if [[ -f "$SEMANTIC_SCRIPT" && -x "$SEMANTIC_SCRIPT" ]]; then
+  SEMANTIC_AGENT="$(bash "$SEMANTIC_SCRIPT" "${PROMPT:-}" 2>/dev/null || echo "")"
+  if [[ -n "$SEMANTIC_AGENT" ]]; then
+    CAST_SEMANTIC_AGENT="$SEMANTIC_AGENT" CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
+import json, os, datetime, sys, subprocess
+
+agent = os.environ.get('CAST_SEMANTIC_AGENT', '')
+prompt = os.environ.get('CAST_PROMPT', '')
+original = os.environ.get('CAST_ORIGINAL', '')
+ts = datetime.datetime.utcnow().isoformat() + 'Z'
+preview = prompt[:80]
+session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
+
+directive = f'[CAST-DISPATCH] Route: {agent} (confidence: semantic)\n'
+directive += f'MANDATORY: Dispatch the \`{agent}\` agent via the Agent tool.\n'
+directive += 'Pass the user full prompt as the agent task. Do NOT handle this inline.\n'
+directive += '(Matched via semantic similarity — Ollama embedding stage)'
+
+output = {
+    'hookSpecificOutput': {
+        'hookEventName': 'UserPromptSubmit',
+        'additionalContext': directive
+    }
+}
+print(json.dumps(output))
+
+log = {
+    'timestamp': ts,
+    'session_id': session_id,
+    'prompt_preview': preview,
+    'action': 'matched',
+    'matched_route': agent,
+    'command': None,
+    'pattern': 'semantic:cosine_similarity',
+    'confidence': 'semantic'
+}
+subprocess.run(
+    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+    input=json.dumps(log), text=True, timeout=5
+)
+" 2>/dev/null && exit 0 || true
+  fi
+fi
 
 # --- Catch-all: route ambiguous implementation prompts to router agent ---
 # Fires when: 5+ words, not a question, not conversational filler, contains action verb signals

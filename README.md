@@ -4,7 +4,7 @@
 ![Agents](https://img.shields.io/badge/agents-36-green)
 ![Routes](https://img.shields.io/badge/routes-28-blue)
 ![Commands](https://img.shields.io/badge/commands-32-blue)
-![Tests](https://img.shields.io/badge/tests-138%20total-brightgreen)
+![Tests](https://img.shields.io/badge/tests-147%20total-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-orange)
 

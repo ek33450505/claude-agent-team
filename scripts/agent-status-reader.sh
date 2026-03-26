@@ -115,7 +115,7 @@ if [[ -z "$REAL_PATH" || "$REAL_PATH" != "$REAL_HOME/"* ]]; then exit 0; fi
 CAST_STATUS_FILE="$REAL_PATH" \
 CAST_BLOCKED_COUNT_PREFIX="$BLOCKED_COUNT_PREFIX" \
 python3 -c "
-import json, os, sys, time
+import json, os, sys, time, subprocess
 
 filepath = os.environ.get('CAST_STATUS_FILE', '')
 blocked_count_prefix = os.environ.get('CAST_BLOCKED_COUNT_PREFIX', '/tmp/cast-blocked-default')
@@ -137,6 +137,23 @@ agent           = d.get('agent', 'unknown')
 summary         = d.get('summary', '')
 concerns        = d.get('concerns') or ''
 chain_dispatched = d.get('chain_dispatched') or []
+
+# --- Persist status to routing-log ---
+import datetime as _dt
+_log_entry = json.dumps({
+    'timestamp': _dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'session_id': os.environ.get('CLAUDE_SESSION_ID', ''),
+    'action': 'agent_complete',
+    'matched_route': agent,
+    'status': status,
+    'summary': (summary or '')[:120]
+})
+_log_script = os.path.expanduser('~/.claude/scripts/cast-log-append.py')
+if os.path.exists(_log_script):
+    try:
+        subprocess.run([sys.executable, _log_script], input=_log_entry, text=True, timeout=3, check=False)
+    except Exception:
+        pass  # logging failure must never break status handling
 
 # Per-agent BLOCKED counter path (scoped to session + agent)
 blocked_count_file = f'{blocked_count_prefix}-{agent}.count'
