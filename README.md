@@ -29,6 +29,7 @@ bash install.sh
 - [How It Works](#how-it-works)
 - [Hook Directives](#hook-directives)
 - [Routing](#routing)
+- [Parallel Post-Chain](#parallel-post-chain)
 - [post-tool-hook.sh — Five Parts](#post-tool-hooksh--five-parts)
 - [agent-status-reader.sh — Status Propagation](#agent-status-readersh--status-propagation)
 - [Work Logs](#work-logs)
@@ -44,6 +45,8 @@ bash install.sh
 - [Self-Improving Routing](#self-improving-routing)
 - [Semantic Routing](#semantic-routing)
 - [Agent Performance Profiling](#agent-performance-profiling)
+- [Dry-Run Mode](#dry-run-mode)
+- [ACI Reference Sections](#aci-reference-sections)
 - [Stats](#stats)
 - [Known Limitations](#known-limitations)
 - [Companion](#companion)
@@ -60,7 +63,7 @@ User Prompt
     |
     |-- Stage 1: agent-groups.json match (31 groups) --> [CAST-DISPATCH-GROUP]
     |                                                         |
-    |-- Stage 2: routing-table.json match (27 routes) -----> [CAST-DISPATCH]
+    |-- Stage 2: routing-table.json match (28 routes) -----> [CAST-DISPATCH]
     |                                                         |
     |-- Stage 2.5: semantic cosine similarity (Ollama) ----> [CAST-DISPATCH] (confidence: semantic)
     |              cast-semantic-route.sh + agent-embeddings.json
@@ -177,7 +180,7 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
 
 **Stage 1 — Agent Group pre-check:** matches against `config/agent-groups.json` (31 groups). On match, the orchestrator receives a full Payload JSON with wave definitions and runs them immediately.
 
-**Stage 2 — Routing table:** matches against `config/routing-table.json` (27 routes). On match, Claude sees:
+**Stage 2 — Routing table:** matches against `config/routing-table.json` (28 routes). On match, Claude sees:
 
 ```json
 {
@@ -193,6 +196,29 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
 **Stage 3 — Catch-all:** fires when no route matched, the prompt is 5+ words, is not a question, and contains an action verb (`fix`, `add`, `implement`, `build`, etc.). Routes to the `router` agent (haiku) for NLU classification. If `router` returns confidence < 0.7, it returns `"main"` and Claude handles inline.
 
 Every routing decision — match, no-match, catch-all, group dispatch — is logged to `~/.claude/routing-log.jsonl`.
+
+---
+
+## Parallel Post-Chain
+
+Routes can define a `post_chain` array that runs agents after the primary dispatch completes. The `code-writer` route uses the parallel voting pattern:
+
+```json
+{
+  "agent": "code-writer",
+  "post_chain": [["code-reviewer", "security"], "commit"]
+}
+```
+
+Nested arrays mean parallel execution. `["code-reviewer", "security"]` fires both agents simultaneously. `"commit"` runs after both complete. This gives security review at no extra latency cost on auth and implementation work.
+
+Sequential post-chains use a flat array:
+
+```json
+"post_chain": ["code-reviewer", "commit"]
+```
+
+`cast-validate.sh` Check 11 verifies that `security` is wired into at least one `post_chain` — either as a parallel member `["code-reviewer", "security"]` or as a sequential step.
 
 ---
 
@@ -525,7 +551,7 @@ bash ~/.claude/scripts/cast-validate.sh
 A clean install reports:
 
 ```
-CAST Validate v1.8.0 (10 checks)
+CAST Validate v1.9.0 (11 checks)
 ══════════════════════════════
 ✓ Hook wiring: route.sh, pre-tool-guard.sh, post-tool-hook.sh wired
 ✓ Agent frontmatter: 36 agents — all valid
@@ -537,17 +563,19 @@ CAST Validate v1.8.0 (10 checks)
 ✓ cast-route-install.sh: present and executable (repo copy)
 ✓ stop-hook.sh: wired in settings.local.json
 ✓ routing-proposals.json: not present (proposals pipeline not yet run — OK)
+✓ Security post_chain: security agent wired in ≥1 route (parallel or sequential)
 ══════════════════════════════
 0 errors, 0 warnings
 ```
 
-The validator checks three additions introduced in v1.8.0:
+Checks added in v1.8.0 and v1.9.0:
 
-| Check | What it verifies |
-|---|---|
-| 8 | `cast-route-install.sh` present and executable (routing proposal approval pipeline) |
-| 9 | `stop-hook.sh` wired in `settings.local.json` (chain-reporter auto-dispatch at session end) |
-| 10 | `routing-proposals.json` schema valid, if present (generated proposals are structurally correct) |
+| Check | Version | What it verifies |
+|---|---|---|
+| 8 | v1.8.0 | `cast-route-install.sh` present and executable (routing proposal approval pipeline) |
+| 9 | v1.8.0 | `stop-hook.sh` wired in `settings.local.json` (chain-reporter auto-dispatch at session end) |
+| 10 | v1.8.0 | `routing-proposals.json` schema valid, if present (generated proposals are structurally correct) |
+| 11 | v1.9.0 | `security` agent wired in at least one `post_chain` — parallel or sequential |
 
 ---
 
@@ -728,6 +756,49 @@ The Score column is `DONE% + DWC% × 0.60`, capped at 100. Use it to spot agents
 
 `/cast-stats` (the existing slash command) covers routing and dispatch metrics. `cast-agent-stats.sh` focuses on outcome quality per agent — they are complementary.
 
+The pre-session briefing's Agent Health advisory is also derived from this data: if any agent has a BLOCKED rate ≥ 20% across 5+ runs, it appears as a warning on the first prompt of the next session.
+
+---
+
+## Dry-Run Mode
+
+`CAST_DRY_RUN=1` runs the full routing pipeline without side effects. No `hookSpecificOutput` is emitted, no `routing-log.jsonl` entries are written, and no agent is dispatched. Instead, `route.sh` prints a JSON summary of what would have been dispatched:
+
+```bash
+echo '{"prompt": "debug this error"}' | CAST_DRY_RUN=1 bash ~/.claude/scripts/route.sh
+```
+
+```json
+{
+  "dry_run": true,
+  "prompt": "debug this error",
+  "matched_agent": "debugger",
+  "match_type": "regex",
+  "match_pattern": "\\bdebug\\b",
+  "post_chain": null,
+  "directive_would_be": "[CAST-DISPATCH] debugger"
+}
+```
+
+`match_type` is one of `regex`, `group`, `semantic`, `no_match`, or `catchall`. The integration test suite uses `CAST_DRY_RUN=1` to verify routing decisions against a minimal routing table without triggering live agent dispatches.
+
+---
+
+## ACI Reference Sections
+
+Six core agent definitions include an `## ACI Reference` section — structured guidance for the orchestrating session on when to dispatch, what to include in the prompt, and how to handle edge cases:
+
+| Agent | ACI topics covered |
+|---|---|
+| `code-writer` | Dispatch threshold (>1 file or >5 lines), prompt structure, parallel post_chain note |
+| `code-reviewer` | What to include in review scope, when not to re-dispatch after self-dispatch |
+| `debugger` | Escalation rule (>1 inline tool call → dispatch), what context to pass |
+| `test-writer` | When to dispatch vs. inline, behavior-based query guidance |
+| `bash-specialist` | When CAST hook script work requires this agent rather than inline editing |
+| `commit` | Commit message conventions, "and push" detection, escape hatch usage |
+
+The `## ACI Reference` sections address the most common dispatch mistakes: vague prompts, double-dispatching after self-dispatch, and handling `DONE_WITH_CONCERNS` before proceeding.
+
 ---
 
 ## Stats
@@ -739,13 +810,16 @@ The Score column is `DONE% + DWC% × 0.60`, capped at 100. Use it to spot agents
 | Routes | 28 |
 | Slash commands | 32 |
 | Skills | 12 |
-| Tests | 147 |
+| Unit tests | 147 |
+| Integration tests | 7 |
+| Total tests | 154 |
 | Hook directives | 11 |
 | post-tool-hook.sh parts | 5 |
 | agent-status-reader responses | 5 |
 | Event types | 7 |
 | cast-stats.sh sections | 8 |
-| cast-validate.sh checks | 10 |
+| cast-validate.sh checks | 11 |
+| Agents with ACI Reference sections | 6 |
 
 ---
 
