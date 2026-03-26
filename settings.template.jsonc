@@ -31,6 +31,20 @@
 
   // Hooks — scripts that run automatically at specific lifecycle points
   "hooks": {
+    // Before every tool call: audit log (Phase 7f). Observation only — never blocks.
+    // Writes one JSONL line per tool call to ~/.claude/logs/audit.jsonl.
+    // Use `cast audit` (Phase 7e) to query the log.
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-audit-hook.sh"
+          }
+        ],
+        "description": "CAST Phase 7f audit hook — logs all tool calls to ~/.claude/logs/audit.jsonl"
+      }
+    ],
     // After Write or Edit: auto-format with prettier if the project supports it
     "PostToolUse": [
       {

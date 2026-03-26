@@ -151,6 +151,7 @@ mkdir -p "$CLAUDE_DIR/cast/state"
 mkdir -p "$CLAUDE_DIR/cast/reviews"
 mkdir -p "$CLAUDE_DIR/cast/artifacts"
 mkdir -p "$CLAUDE_DIR/agent-status"
+mkdir -p "$CLAUDE_DIR/logs"
 
 # --- Install agents (flat — strip subdirectory structure) ---
 install_agents() {
@@ -308,6 +309,21 @@ printf "  4. Review ${BOLD}~/.claude/CLAUDE.md.template${NC} — rename to CLAUD
 printf "  5. Review ${BOLD}~/.claude/settings.template.json${NC} — merge into your settings\n"
 printf "  6. In Claude Code, type ${BOLD}/help${NC} to see all installed agents and routing patterns\n"
 printf "  7. Try: ${BOLD}\"write a test for my function\"${NC} — CAST routing will dispatch test-writer automatically\n"
+
+# --- Phase 7f: Check Presidio availability ---
+printf "\n${CYAN}Privacy Layer (Phase 7f):${NC}\n"
+if python3 -c "import presidio_analyzer, presidio_anonymizer" 2>/dev/null; then
+  success "  Presidio installed — cast-redact.py PII redaction is active"
+else
+  warn "  Presidio not installed. To enable PII redaction:"
+  warn "    pip install presidio-analyzer presidio-anonymizer"
+  warn "    python3 -m spacy download en_core_web_lg"
+  warn "  cast-redact.py will use regex-only fallback mode until then."
+fi
+printf "  Audit log: ${BOLD}~/.claude/logs/audit.jsonl${NC}\n"
+printf "  To enable the PreToolUse audit hook, add to ${BOLD}~/.claude/settings.json${NC}:\n"
+printf '    "PreToolUse": [{"hooks": [{"type": "command", "command": "bash ~/.claude/scripts/cast-audit-hook.sh"}]}]\n'
+printf "  (See settings.template.jsonc for the full example)\n"
 printf "\n"
 success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills  [v${CAST_VERSION}]"
 if ! $IS_MACOS; then
