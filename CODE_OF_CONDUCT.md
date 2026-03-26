@@ -14,7 +14,7 @@ Maintainers may edit, remove, or reject contributions, comments, or other conten
 ## Reporting
 
 - For public matters, open a GitHub Issue labeled **`conduct`**.
-- For private or sensitive matters, use [GitHub Security Advisories](https://github.com/edkubiak/claude-agent-team/security/advisories/new) to contact maintainers confidentially.
+- For private or sensitive matters, use [GitHub Security Advisories](https://github.com/ek33450505/claude-agent-team/security/advisories/new) to contact maintainers confidentially.
 
 ## Reference
 

@@ -6,10 +6,10 @@ docs:
 
 # Run CAST validation script (checks installed config integrity)
 validate:
-	@if [ -f ~/.claude/scripts/cast-validate.sh ]; then \
-		bash ~/.claude/scripts/cast-validate.sh; \
-	elif [ -f scripts/cast-validate.sh ]; then \
+	@if [ -f scripts/cast-validate.sh ]; then \
 		bash scripts/cast-validate.sh; \
+	elif [ -f ~/.claude/scripts/cast-validate.sh ]; then \
+		bash ~/.claude/scripts/cast-validate.sh; \
 	else \
 		echo "cast-validate.sh not found — run ./install.sh first"; \
 		exit 1; \

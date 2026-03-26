@@ -34,22 +34,22 @@ CMD_COUNT=0
 SKILL_COUNT=0
 
 # --- Agent / command / skill lists ---
-CORE_AGENTS="planner debugger test-writer code-reviewer data-scientist db-reader commit security push code-writer bash-specialist"
+CORE_AGENTS="planner debugger test-writer code-reviewer data-scientist db-reader commit security push code-writer bash-specialist merge"
 EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cleaner doc-updater readme-writer router"
 PRODUCTIVITY_AGENTS="researcher report-writer meeting-notes email-manager morning-briefing"
 PROFESSIONAL_AGENTS="browser qa-reviewer presenter"
 ORCHESTRATION_AGENTS="orchestrator auto-stager chain-reporter verifier test-runner"
-SPECIALIST_AGENTS="devops performance seo-content linter"
+SPECIALIST_AGENTS="devops performance seo-content linter frontend-designer framework-expert pentest infra db-architect"
 
 CORE_CMDS="plan review debug test secure commit data query push"
 EXTENDED_CMDS="architect tdd build-fix e2e refactor docs readme"
 PRODUCTIVITY_CMDS="research report meeting email morning"
 PROFESSIONAL_CMDS="browser qa present"
-ALWAYS_CMDS="eval cast"
+ALWAYS_CMDS="eval cast cast-stats chain-report help orchestrate stage verify"
 
 MACOS_SKILLS="calendar-fetch inbox-fetch reminders-fetch"
 LINUX_SKILLS="calendar-fetch-linux inbox-fetch-linux"
-GENERAL_SKILLS="action-items briefing-writer git-activity careful-mode freeze-mode wizard"
+GENERAL_SKILLS="action-items briefing-writer git-activity careful-mode freeze-mode wizard merge plan"
 
 # --- Pre-flight check ---
 if ! command -v claude >/dev/null 2>&1; then
@@ -58,7 +58,7 @@ fi
 
 # --- Menu ---
 printf "\n${BOLD}Claude Agent Team — Installer${NC}\n\n"
-printf "  ${BOLD}[1]${NC} Full install — all 36 agents, 26 commands, 9 skills, scripts, rules\n"
+printf "  ${BOLD}[1]${NC} Full install — all 42 agents, 32 commands, 13 skills, scripts, rules\n"
 printf "  ${BOLD}[2]${NC} Core only   — 11 core agents + their commands (minimal, portable)\n"
 printf "  ${BOLD}[3]${NC} Custom      — choose categories\n"
 printf "\n"
@@ -103,7 +103,8 @@ case "$CHOICE" in
         printf "  Install? [y/N]: "
         read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_PROFESSIONAL=true; fi
 
-        printf "\n  Specialist agents (4): devops, performance, seo-content, linter\n"
+        printf "\n  Specialist agents (9): devops, performance, seo-content, linter,\n"
+        printf "    frontend-designer, framework-expert, pentest, infra, db-architect\n"
         printf "  Install? [y/N]: "
         read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_SPECIALIST=true; fi
 

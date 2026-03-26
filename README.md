@@ -521,7 +521,7 @@ git clone https://github.com/ek33450505/claude-agent-team.git && cd claude-agent
 ### Three modes
 
 ```
-[1] Full    — all 36 agents, 32 commands, 12 skills, scripts, rules
+[1] Full    — all 42 agents, 32 commands, 13 skills, scripts, rules
 [2] Core    — 11 core agents + their commands (minimal, portable)
 [3] Custom  — choose categories: core, extended, productivity, professional, specialist
 ```
@@ -560,7 +560,7 @@ A clean install reports:
 CAST Validate v1.9.0 (11 checks)
 ══════════════════════════════
 ✓ Hook wiring: route.sh, pre-tool-guard.sh, post-tool-hook.sh wired
-✓ Agent frontmatter: 36 agents — all valid
+✓ Agent frontmatter: 42 agents — all valid
 ✓ Routing table: 28 routes — schema valid
 ✓ CLAUDE.md directives: [CAST-DISPATCH] [CAST-REVIEW] [CAST-CHAIN] [CAST-DISPATCH-GROUP] present
 ✓ CAST dirs: events/ state/ reviews/ artifacts/ agent-status/ all present
@@ -653,7 +653,7 @@ Not a vector database. Not an opaque embedding. A markdown file you can edit, ba
 
 ## Skills
 
-12 skills in `~/.claude/skills/`. Skills are reusable prompt fragments sourced by agents at runtime — not agents themselves.
+13 skills in `~/.claude/skills/`. Skills are reusable prompt fragments sourced by agents at runtime — not agents themselves.
 
 | Skill | Purpose |
 |---|---|
@@ -669,6 +669,7 @@ Not a vector database. Not an opaque embedding. A markdown file you can edit, ba
 | `calendar-fetch-linux` | Linux stub for calendar-fetch |
 | `inbox-fetch-linux` | Linux stub for inbox-fetch |
 | `plan` | Plan skill fragment used by planner agent |
+| `merge` | Scenario detection and dispatch routing for git merge, rebase, and conflict resolution |
 
 macOS skills (calendar, inbox, reminders) require Microsoft Outlook. Linux installs receive stubs automatically.
 
