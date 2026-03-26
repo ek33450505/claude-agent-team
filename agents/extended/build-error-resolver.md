@@ -116,6 +116,18 @@ Context needed: [required if NEEDS_CONTEXT — describe what information is miss
 - Tests still pass
 - Minimal lines changed
 
+## Memory Integration
+
+At task start, query relevant memories:
+```bash
+bash ~/.claude/scripts/cast-memory-query.sh "$(echo $TASK | head -c 100)" --agent build-error-resolver --project "$(basename $PWD)" --limit 3
+```
+
+At task end, write key findings:
+```bash
+bash ~/.claude/scripts/cast-memory-write.sh "build-error-resolver" "feedback" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
+```
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

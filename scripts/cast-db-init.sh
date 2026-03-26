@@ -2,7 +2,11 @@
 # cast-db-init.sh — CAST SQLite State Foundation
 # Creates ~/.claude/cast.db with the full schema for the CAST Local-First OS.
 # Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
-# Schema versioning via PRAGMA user_version (current = 1).
+# Schema versioning via PRAGMA user_version (current = 2).
+#
+# sqlite-vec extension support (optional, graceful degradation if unavailable):
+#   Install: pip install sqlite-vec   OR   brew install sqlite-vec
+#   Provides cosine similarity search over agent_memories.embedding column.
 #
 # Usage:
 #   cast-db-init.sh [--db /path/to/cast.db]
@@ -25,10 +29,47 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# cast_vec_available — returns 0 if sqlite-vec extension can be loaded, 1 if not
+#
+# Uses python3 sqlite3 module which supports load_extension() when the
+# underlying SQLite library has extension loading enabled (default on macOS/Linux).
+# ---------------------------------------------------------------------------
+cast_vec_available() {
+  python3 - <<'PYEOF' 2>/dev/null
+import sqlite3, sys
+conn = sqlite3.connect(":memory:")
+conn.enable_load_extension(True)
+try:
+    conn.load_extension("sqlite_vec")
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+PYEOF
+}
+
+# Attempt to load sqlite-vec; warn on stderr but never block initialization
+if cast_vec_available 2>/dev/null; then
+  SQLITE_VEC_AVAILABLE=1
+else
+  SQLITE_VEC_AVAILABLE=0
+  echo "Warning: sqlite-vec extension not available. Semantic search will fall back to full-text LIKE matching." >&2
+  echo "  To enable: pip install sqlite-vec   OR   brew install sqlite-vec" >&2
+fi
+
+export SQLITE_VEC_AVAILABLE
+
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-if [ "$CURRENT_VERSION" -ge 1 ]; then
+if [ "$CURRENT_VERSION" -ge 2 ]; then
   echo "cast.db already initialized (v${CURRENT_VERSION})"
+  exit 0
+fi
+
+# Migrate v1 → v2: bump PRAGMA user_version only (no schema changes needed for v2)
+if [ "$CURRENT_VERSION" -eq 1 ]; then
+  sqlite3 "$DB_PATH" 'PRAGMA user_version = 2;'
+  echo "cast.db migrated v1 → v2 (sqlite-vec support marker added)"
   exit 0
 fi
 
@@ -130,7 +171,7 @@ CREATE INDEX IF NOT EXISTS idx_task_queue_status        ON task_queue(status);
 CREATE INDEX IF NOT EXISTS idx_agent_memories_agent     ON agent_memories(agent);
 
 -- Set schema version
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 SQL
 
-echo "cast.db initialized (v1)"
+echo "cast.db initialized (v2)"

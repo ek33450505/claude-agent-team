@@ -196,6 +196,18 @@ Overall confidence: HIGH / MEDIUM / LOW
 Recommendation: [one sentence on whether to proceed, revisit, or escalate]
 ```
 
+## Memory Integration
+
+At task start, query relevant memories:
+```bash
+bash ~/.claude/scripts/cast-memory-query.sh "$(echo $TASK | head -c 100)" --agent planner --project "$(basename $PWD)" --limit 3
+```
+
+At task end, write key findings (architectural decisions, scope clarifications, recurring plan patterns):
+```bash
+bash ~/.claude/scripts/cast-memory-write.sh "planner" "project" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
+```
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

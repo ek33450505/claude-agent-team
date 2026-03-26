@@ -101,6 +101,18 @@ I confirmed route.sh is executable and routing-table.json has the entry.
 - For TypeScript/ESLint/build errors: use `build-error-resolver` instead
 - Debugger self-dispatches code-reviewer after fixes — do NOT re-dispatch from orchestrating session
 
+## Memory Integration
+
+At task start, query relevant memories:
+```bash
+bash ~/.claude/scripts/cast-memory-query.sh "$(echo $TASK | head -c 100)" --agent debugger --project "$(basename $PWD)" --limit 3
+```
+
+At task end, write key findings:
+```bash
+bash ~/.claude/scripts/cast-memory-write.sh "debugger" "feedback" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
+```
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

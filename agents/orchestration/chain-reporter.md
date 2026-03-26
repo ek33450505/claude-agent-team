@@ -63,6 +63,18 @@ You are called after a chain of agents has finished (e.g., debugger → code-rev
 - If an agent didn't run or failed, mark it clearly
 - Flag any unresolved issues from the chain (e.g., code-reviewer found issues that weren't fixed)
 
+## Memory Integration
+
+At task start, query relevant memories:
+```bash
+bash ~/.claude/scripts/cast-memory-query.sh "$(echo $TASK | head -c 100)" --agent chain-reporter --project "$(basename $PWD)" --limit 3
+```
+
+At task end, write key findings (notable chain outcomes, recurring blockers, patterns in agent failures):
+```bash
+bash ~/.claude/scripts/cast-memory-write.sh "chain-reporter" "feedback" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
+```
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting.

@@ -77,6 +77,18 @@ Report findings grouped by severity:
 
 For each finding include: file:line, what the issue is, and the fix.
 
+## Memory Integration
+
+At task start, query relevant memories:
+```bash
+bash ~/.claude/scripts/cast-memory-query.sh "$(echo $TASK | head -c 100)" --agent security --project "$(basename $PWD)" --limit 3
+```
+
+At task end, write key findings:
+```bash
+bash ~/.claude/scripts/cast-memory-write.sh "security" "feedback" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
+```
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

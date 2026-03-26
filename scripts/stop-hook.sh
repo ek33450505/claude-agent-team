@@ -106,6 +106,17 @@ if [ -f "$CAST_AGENT_MEM_INIT" ]; then
   bash "$CAST_AGENT_MEM_INIT" > /tmp/cast-agent-memory-init-last.log 2>&1 &
 fi
 
+# --- Auto-escalation rule engine ---
+# Detects recurring BLOCKED patterns and reviewer concerns; writes auto-rules to cast.db.
+CAST_MEM_ESCALATION="${HOME}/.claude/scripts/cast-memory-escalation.sh"
+REPO_MEM_ESCALATION="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-memory-escalation.sh"
+if [ -f "$REPO_MEM_ESCALATION" ]; then
+  CAST_MEM_ESCALATION="$REPO_MEM_ESCALATION"
+fi
+if [ -f "$CAST_MEM_ESCALATION" ]; then
+  bash "$CAST_MEM_ESCALATION" > /tmp/cast-memory-escalation-last.log 2>&1 &
+fi
+
 # --- Cleanup CAST temp files for this session ---
 SESSION_ID="${CLAUDE_SESSION_ID:-default}"
 rm -f "/tmp/cast-depth-${PPID}.depth" 2>/dev/null || true
