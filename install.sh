@@ -250,6 +250,7 @@ done
 info "Installing scripts..."
 mkdir -p "$CLAUDE_DIR/scripts"
 for script_file in "$SCRIPT_DIR"/scripts/*; do
+    [ -d "$script_file" ] && continue  # skip subdirectories (e.g. scripts/hooks/)
     base="$(basename "$script_file")"
     dest_name="${base%.template}"
     cp "$script_file" "$CLAUDE_DIR/scripts/$dest_name"
