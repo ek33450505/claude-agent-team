@@ -41,7 +41,11 @@ bash install.sh
 - [Slash Commands](#slash-commands)
 - [Memory](#memory)
 - [Skills](#skills)
+- [Self-Improving Routing](#self-improving-routing)
+- [Semantic Routing](#semantic-routing)
+- [Agent Performance Profiling](#agent-performance-profiling)
 - [Stats](#stats)
+- [Known Limitations](#known-limitations)
 - [Companion](#companion)
 
 ---
@@ -54,11 +58,15 @@ User Prompt
     v
 [Hook 1: UserPromptSubmit] -- route.sh
     |
-    |-- agent-groups.json match (31 groups) ------> [CAST-DISPATCH-GROUP]
-    |                                                    |
-    |-- routing-table.json match (28 routes) -------> [CAST-DISPATCH]
-    |                                                    |
-    |-- catch-all: 5+ words, action verb, not question -> router agent (NLU)
+    |-- Stage 1: agent-groups.json match (31 groups) --> [CAST-DISPATCH-GROUP]
+    |                                                         |
+    |-- Stage 2: routing-table.json match (27 routes) -----> [CAST-DISPATCH]
+    |                                                         |
+    |-- Stage 2.5: semantic cosine similarity (Ollama) ----> [CAST-DISPATCH] (confidence: semantic)
+    |              cast-semantic-route.sh + agent-embeddings.json
+    |                                                         |
+    |-- Stage 3: catch-all — 5+ words, action verb, -------> router agent (NLU)
+    |            not question
     |
     v (no match)
 Claude handles inline
@@ -124,7 +132,7 @@ cast-events.sh -- ~/.claude/cast/events/ (append-only, immutable)
 |---|---|---|---|
 | Pre-session briefing | `route.sh` | First prompt of every new session | `[CAST-SESSION-BRIEFING]` with git status, last 3 routing events, BLOCKED agents, project board snapshot |
 | Policy engine | `pre-tool-guard.sh` | Every Write/Edit tool call | `[CAST-POLICY-BLOCK]` exit 2 if path matches a policy rule and required agent hasn't run |
-| Routing feedback | `cast-routing-feedback.sh` | Session end, weekly | `~/.claude/reports/routing-gaps-YYYY-MM-DD.md` with top-5 unmatched prompt clusters |
+| Routing feedback | `cast-routing-feedback.sh` | Session end, weekly | `~/.claude/reports/routing-gaps-YYYY-MM-DD.md` with top-5 unmatched prompt clusters; also writes `~/.claude/routing-proposals.json` with staged route proposals |
 | Project board | `cast-board.sh` | Session end | `~/.claude/cast/project-board.json` with blocked/in-flight tasks and stale rollback refs |
 | Agent memory init | `cast-agent-memory-init.sh` | Session end | Seeds each agent's `MEMORY.md` with project context and recent dispatch history |
 
@@ -165,11 +173,11 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
 
 ## Routing
 
-`route.sh` runs on every user prompt via the `UserPromptSubmit` hook. Routing has three stages, evaluated in order:
+`route.sh` runs on every user prompt via the `UserPromptSubmit` hook. Routing has four stages, evaluated in order:
 
 **Stage 1 — Agent Group pre-check:** matches against `config/agent-groups.json` (31 groups). On match, the orchestrator receives a full Payload JSON with wave definitions and runs them immediately.
 
-**Stage 2 — Routing table:** matches against `config/routing-table.json` (28 routes). On match, Claude sees:
+**Stage 2 — Routing table:** matches against `config/routing-table.json` (27 routes). On match, Claude sees:
 
 ```json
 {
@@ -179,6 +187,8 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
   }
 }
 ```
+
+**Stage 2.5 — Semantic routing:** when Stage 2 finds no regex match, `cast-semantic-route.sh` embeds the prompt via Ollama (`nomic-embed-text`) and computes cosine similarity against pre-built agent embeddings in `~/.claude/config/agent-embeddings.json`. If the top match exceeds the threshold (default: 0.72), that agent is dispatched with `confidence: semantic`. Falls through silently when Ollama is not running.
 
 **Stage 3 — Catch-all:** fires when no route matched, the prompt is 5+ words, is not a question, and contains an action verb (`fix`, `add`, `implement`, `build`, etc.). Routes to the `router` agent (haiku) for NLU classification. If `router` returns confidence < 0.7, it returns `"main"` and Claude handles inline.
 
@@ -638,19 +648,85 @@ The routing table is static by default but can evolve. `stop-hook.sh` runs `cast
 # Review pending proposals (opens formatted display)
 bash ~/.claude/scripts/cast-route-review.sh
 
-# Approve one proposal and merge it into routing-table.json
-bash ~/.claude/scripts/cast-route-install.sh --install <proposal-id>
+# Approve one or more proposals and merge them into routing-table.json
+bash ~/.claude/scripts/cast-route-install.sh --approve <proposal-id>
 
 # Reject a proposal
 bash ~/.claude/scripts/cast-route-install.sh --reject <proposal-id>
 
 # List all proposals with status
 bash ~/.claude/scripts/cast-route-install.sh --list
+
+# Print count of pending proposals
+bash ~/.claude/scripts/cast-route-install.sh --pending-count
 ```
 
 Each proposal has a `status` field: `pending`, `installed`, or `rejected`. The pre-session briefing surfaces the pending count so you see it on the first prompt of each session.
 
 `cast-validate.sh` Check 8 confirms `cast-route-install.sh` is present and executable. Check 10 validates the proposals file schema if it exists.
+
+---
+
+## Semantic Routing
+
+Stage 2.5 adds embedding-based routing for prompts that don't match any regex route. It requires Ollama running locally with the `nomic-embed-text` model.
+
+### Setup
+
+```bash
+# Pre-compute agent embeddings (run once, or after adding agents)
+bash ~/.claude/scripts/cast-embed-agents.sh
+```
+
+`cast-embed-agents.sh` reads `routing-table.json` to identify routable agents, pulls the `description:` field from each agent's frontmatter, and calls the Ollama embeddings API. Results are stored at `~/.claude/config/agent-embeddings.json`.
+
+### How it fires
+
+On every prompt that falls through Stage 2, `route.sh` calls `cast-semantic-route.sh "<prompt>"`. The script embeds the prompt and computes cosine similarity against every agent in `agent-embeddings.json`. If the top score exceeds the threshold (default 0.72, override with `SEMANTIC_THRESHOLD=<value>`), that agent is dispatched with `confidence: semantic`.
+
+If Ollama is not running, or `agent-embeddings.json` does not exist, `cast-semantic-route.sh` exits 0 silently and Stage 3 (catch-all) takes over.
+
+### Re-embedding after agent changes
+
+Run `cast-embed-agents.sh` again whenever you add, remove, or significantly change agent descriptions. The output file is re-generated in place.
+
+---
+
+## Agent Performance Profiling
+
+`cast-agent-stats.sh` reads `~/.claude/routing-log.jsonl` and reports DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT rates per agent, with a composite health score.
+
+```bash
+# All-time stats for every agent (table format)
+bash ~/.claude/scripts/cast-agent-stats.sh
+
+# Single agent detail
+bash ~/.claude/scripts/cast-agent-stats.sh --agent debugger
+
+# Filter to last 7 days
+bash ~/.claude/scripts/cast-agent-stats.sh --since 7d
+
+# JSON output (for piping or dashboard ingestion)
+bash ~/.claude/scripts/cast-agent-stats.sh --format json
+```
+
+Example output:
+
+```
+Agent Performance Report (last 7 days)
+==============================================================
+Agent                Runs   DONE    DWC    BLK  NEEDS  Score
+--------------------------------------------------------------
+code-reviewer          42    88%    10%     2%     0%     94
+debugger               11    73%    18%     9%     0%     84
+test-writer             8    75%    25%     0%     0%     90
+--------------------------------------------------------------
+  Total:               61    83%    13%     4%     0%
+```
+
+The Score column is `DONE% + DWC% × 0.60`, capped at 100. Use it to spot agents accumulating BLOCKED events before they affect velocity.
+
+`/cast-stats` (the existing slash command) covers routing and dispatch metrics. `cast-agent-stats.sh` focuses on outcome quality per agent — they are complementary.
 
 ---
 
@@ -663,7 +739,7 @@ Each proposal has a `status` field: `pending`, `installed`, or `rejected`. The p
 | Routes | 28 |
 | Slash commands | 32 |
 | Skills | 12 |
-| Tests | 138 |
+| Tests | 147 |
 | Hook directives | 11 |
 | post-tool-hook.sh parts | 5 |
 | agent-status-reader responses | 5 |
