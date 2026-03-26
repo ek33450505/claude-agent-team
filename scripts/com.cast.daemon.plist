@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.cast.daemon.plist — macOS LaunchAgent for the CAST persistent daemon
+  Install path: ~/Library/LaunchAgents/com.cast.daemon.plist
+
+  To install:
+    cp scripts/com.cast.daemon.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.cast.daemon.plist
+
+  To uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.cast.daemon.plist
+    rm ~/Library/LaunchAgents/com.cast.daemon.plist
+
+  Logs: ~/.claude/logs/castd.log
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+
+  <!-- Unique service identifier -->
+  <key>Label</key>
+  <string>com.cast.daemon</string>
+
+  <!-- Shell wrapper so PATH, HOME, and zsh profile are available -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/edkubiak/.claude/scripts/castd.sh</string>
+  </array>
+
+  <!-- Start immediately when loaded -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart automatically if the daemon crashes -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Minimum 10 seconds between restart attempts to avoid tight crash loops -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <!-- Redirect stdout and stderr to the same log file -->
+  <key>StandardOutPath</key>
+  <string>/Users/edkubiak/.claude/logs/castd.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/edkubiak/.claude/logs/castd.log</string>
+
+  <!-- Ensure HOME is set correctly for the daemon process -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/edkubiak</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+  </dict>
+
+</dict>
+</plist>
