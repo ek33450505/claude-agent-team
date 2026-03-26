@@ -14,7 +14,7 @@ if [[ -z "$PROMPT_TEXT" ]]; then
   exit 0
 fi
 
-python3 - "$PROMPT_TEXT" "${SEMANTIC_THRESHOLD:-0.72}" "${HOME}/.claude/config/agent-embeddings.json" "http://localhost:11434" "nomic-embed-text" <<'PYEOF' 2>/dev/null || exit 0
+python3 - "$PROMPT_TEXT" "${SEMANTIC_THRESHOLD:-0.72}" "${HOME}/.claude/config/agent-embeddings.json" "http://localhost:11434" "nomic-embed-text-v2-moe" <<'PYEOF' 2>/dev/null || exit 0
 import sys
 import json
 import os

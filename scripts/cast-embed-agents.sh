@@ -11,7 +11,7 @@ ROUTING_TABLE="${HOME}/.claude/config/routing-table.json"
 AGENTS_DIR="${HOME}/.claude/agents"
 OUTPUT_FILE="${HOME}/.claude/config/agent-embeddings.json"
 OLLAMA_URL="http://localhost:11434"
-EMBED_MODEL="nomic-embed-text"
+EMBED_MODEL="nomic-embed-text-v2-moe"
 
 # Check Ollama is running
 if ! curl -sf "${OLLAMA_URL}" > /dev/null 2>&1; then
