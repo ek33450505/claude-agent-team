@@ -279,6 +279,98 @@ PYEOF
   exit $?
 fi
 
+# ── Git hook installation ────────────────────────────────────────────────────
+# install_git_hooks() — Install CAST git hooks into .git/hooks/ of the current repo.
+#
+# Hooks installed:
+#   post-commit  → enqueues code-reviewer (priority 7, non-blocking)
+#   pre-push     → enqueues security scan (priority 2, non-blocking)
+#   post-merge   → enqueues chain-reporter summary (priority 5, non-blocking)
+#
+# Each hook is installed as a symlink to scripts/hooks/<hook>.sh so updates
+# to the source scripts are picked up automatically.
+
+install_git_hooks() {
+  local REPO_ROOT
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+  if [[ -z "$REPO_ROOT" ]]; then
+    echo "Error: not inside a git repository — cannot install git hooks" >&2
+    return 1
+  fi
+
+  local HOOKS_DIR="${REPO_ROOT}/.git/hooks"
+  local SCRIPTS_DIR
+  SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local HOOKS_SRC="${SCRIPTS_DIR}/hooks"
+
+  if [[ ! -d "$HOOKS_SRC" ]]; then
+    echo "Error: hooks source directory not found: ${HOOKS_SRC}" >&2
+    return 1
+  fi
+
+  mkdir -p "$HOOKS_DIR"
+
+  # Map of git hook name → source script filename
+  declare -A HOOK_MAP
+  HOOK_MAP["post-commit"]="post-commit.sh"
+  HOOK_MAP["pre-push"]="pre-push.sh"
+  HOOK_MAP["post-merge"]="post-merge.sh"
+
+  local installed=0
+  local skipped=0
+
+  for hook_name in "${!HOOK_MAP[@]}"; do
+    local src="${HOOKS_SRC}/${HOOK_MAP[$hook_name]}"
+    local dest="${HOOKS_DIR}/${hook_name}"
+
+    if [[ ! -f "$src" ]]; then
+      echo "Warning: hook source not found, skipping: ${src}" >&2
+      skipped=$(( skipped + 1 ))
+      continue
+    fi
+
+    # Make source script executable
+    chmod +x "$src"
+
+    if [[ -L "$dest" ]]; then
+      # Already a symlink — update it
+      ln -sf "$src" "$dest"
+      echo "Updated hook symlink: ${hook_name} -> ${src}"
+      installed=$(( installed + 1 ))
+    elif [[ -f "$dest" ]]; then
+      # Existing non-CAST hook — back it up and replace
+      local backup="${dest}.pre-cast.bak"
+      cp "$dest" "$backup"
+      echo "Backed up existing hook: ${dest} -> ${backup}"
+      ln -sf "$src" "$dest"
+      echo "Installed hook symlink: ${hook_name} -> ${src}"
+      installed=$(( installed + 1 ))
+    else
+      ln -sf "$src" "$dest"
+      echo "Installed hook symlink: ${hook_name} -> ${src}"
+      installed=$(( installed + 1 ))
+    fi
+  done
+
+  echo "Git hooks: ${installed} installed, ${skipped} skipped"
+  return 0
+}
+
+# --install-hooks  (standalone mode: install git hooks only)
+if [ "$MODE" = "--install-hooks" ]; then
+  install_git_hooks
+  exit $?
+fi
+
+# Integrate git hook installation into --approve flow:
+# If MODE is --approve AND the git hooks flag is set, also install hooks.
+# Hooks installation is also triggered automatically when this script detects
+# it is being run as part of a fresh install (detected by CAST_INSTALL=1).
+if [ "${CAST_INSTALL:-0}" = "1" ]; then
+  echo "--- Installing CAST git hooks ---"
+  install_git_hooks || true
+fi
+
 # Unknown mode
 echo "Error: unknown option: ${MODE}" >&2
 usage
