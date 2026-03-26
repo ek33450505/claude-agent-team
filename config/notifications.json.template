@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "quiet_hours_start": 22,
+  "quiet_hours_end": 8,
+  "events": {
+    "blocked": true,
+    "queue_complete": true,
+    "budget_alert": true,
+    "briefing_ready": true,
+    "daemon_stopped": true,
+    "daemon_started": false
+  }
+}

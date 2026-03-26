@@ -1,0 +1,32 @@
+{
+  "watch_root": ".",
+  "rules": [
+    {
+      "pattern": "**/*.test.{js,ts,jsx,tsx}",
+      "event": "modified",
+      "action": "enqueue",
+      "agent": "test-runner",
+      "task": "Run tests for changed file: {file}",
+      "priority": 3,
+      "cooldown_seconds": 30
+    },
+    {
+      "pattern": "**/*.sql",
+      "event": "modified",
+      "action": "enqueue",
+      "agent": "db-architect",
+      "task": "Review SQL changes in: {file}",
+      "priority": 5,
+      "cooldown_seconds": 60
+    },
+    {
+      "pattern": "CLAUDE.md",
+      "event": "modified",
+      "action": "enqueue",
+      "agent": "doc-updater",
+      "task": "Review CLAUDE.md changes and update agent documentation: {file}",
+      "priority": 7,
+      "cooldown_seconds": 300
+    }
+  ]
+}
