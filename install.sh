@@ -304,6 +304,53 @@ fi
 # --- Copy VERSION file ---
 cp "$SCRIPT_DIR/VERSION" "$CLAUDE_DIR/cast-version" 2>/dev/null || true
 
+# --- Phase 7e: Install cast CLI (bin/cast symlink) ---
+info "Installing cast CLI..."
+LOCAL_BIN="${HOME}/.local/bin"
+mkdir -p "$LOCAL_BIN"
+CAST_BIN_SRC="$SCRIPT_DIR/bin/cast"
+CAST_BIN_DEST="$LOCAL_BIN/cast"
+if [ -f "$CAST_BIN_SRC" ]; then
+  chmod +x "$CAST_BIN_SRC"
+  # Remove stale symlink or file if present
+  rm -f "$CAST_BIN_DEST"
+  ln -s "$CAST_BIN_SRC" "$CAST_BIN_DEST"
+  success "  Symlinked bin/cast → $CAST_BIN_DEST"
+  if ! echo "$PATH" | tr ':' '\n' | grep -q "$LOCAL_BIN"; then
+    warn "  Note: $LOCAL_BIN is not in your PATH. Add to ~/.zshrc or ~/.bashrc:"
+    warn "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+  fi
+else
+  warn "  bin/cast not found — skipping CLI symlink"
+fi
+
+# --- Phase 7e: Copy cast-cli.json config (only if not present) ---
+CAST_CLI_CONFIG_SRC="$SCRIPT_DIR/config/cast-cli.json"
+CAST_CLI_CONFIG_DEST="$CLAUDE_DIR/config/cast-cli.json"
+if [ -f "$CAST_CLI_CONFIG_SRC" ]; then
+  if [ ! -f "$CAST_CLI_CONFIG_DEST" ]; then
+    cp "$CAST_CLI_CONFIG_SRC" "$CAST_CLI_CONFIG_DEST"
+    success "  Installed: config/cast-cli.json"
+  else
+    info "  Skipped (exists): config/cast-cli.json"
+  fi
+fi
+
+# --- Phase 7e: Install shell completions ---
+if [ -f "$CAST_BIN_DEST" ] && command -v "$CAST_BIN_DEST" >/dev/null 2>&1; then
+  if bash "$CAST_BIN_DEST" install-completions 2>/dev/null; then
+    success "  Shell completions installed"
+  else
+    info "  Shell completions skipped (run: cast install-completions)"
+  fi
+elif [ -f "$CAST_BIN_SRC" ]; then
+  if bash "$CAST_BIN_SRC" install-completions 2>/dev/null; then
+    success "  Shell completions installed"
+  else
+    info "  Shell completions skipped (run: cast install-completions)"
+  fi
+fi
+
 # --- Copy templates for user review (never overwrite originals) ---
 info "Copying templates for review..."
 cp "$SCRIPT_DIR/CLAUDE.md.template" "$CLAUDE_DIR/CLAUDE.md.template"
@@ -324,6 +371,7 @@ printf "  4. Review ${BOLD}~/.claude/CLAUDE.md.template${NC} — rename to CLAUD
 printf "  5. Review ${BOLD}~/.claude/settings.template.json${NC} — merge into your settings\n"
 printf "  6. In Claude Code, type ${BOLD}/help${NC} to see all installed agents and routing patterns\n"
 printf "  7. Try: ${BOLD}\"write a test for my function\"${NC} — CAST routing will dispatch test-writer automatically\n"
+printf "  8. Run: ${BOLD}cast status${NC} to see the CAST Local-First OS health dashboard\n"
 
 # --- Phase 7f: Check Presidio availability ---
 printf "\n${CYAN}Privacy Layer (Phase 7f):${NC}\n"

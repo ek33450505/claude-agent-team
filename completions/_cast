@@ -1,0 +1,217 @@
+#compdef cast
+# zsh completion for cast CLI
+# Install: copy to a directory in $fpath (e.g. ~/.zsh/completions/_cast)
+# Then add to ~/.zshrc:
+#   fpath=(~/.zsh/completions $fpath)
+#   autoload -U compinit && compinit
+
+_cast_agents() {
+  local agents_dir="${HOME}/.claude/agents"
+  if [[ -d "$agents_dir" ]]; then
+    local -a agents
+    agents=("${agents_dir}"/*.md(:t:r))
+    _describe 'agent' agents
+  fi
+}
+
+_cast_queue_statuses() {
+  local -a statuses
+  statuses=(pending claimed done failed)
+  _describe 'status' statuses
+}
+
+_cast_memory_types() {
+  local -a types
+  types=(feedback project user reference)
+  _describe 'type' types
+}
+
+_cast_run() {
+  local curcontext="$curcontext" state line
+  _arguments \
+    '1:agent:_cast_agents' \
+    '2:task:()' \
+    '--model[Override model resolution]:model:(local cloud auto)' \
+    '--priority[Task priority 1-10]:priority:()' \
+    '--async[Enqueue instead of running synchronously]' \
+    '--help[Show help]'
+}
+
+_cast_queue() {
+  local curcontext="$curcontext" state line
+  local -a subcommands
+  subcommands=(
+    'list:List queued tasks'
+    'add:Add a task to the queue'
+    'cancel:Cancel a pending task'
+    'retry:Retry a failed task'
+  )
+  _arguments \
+    '1:subcommand:->subcommand' \
+    '*::arg:->args'
+
+  case "$state" in
+    subcommand)
+      _describe 'subcommand' subcommands
+      ;;
+    args)
+      case "$line[1]" in
+        list)
+          _arguments \
+            '--status[Filter by status]:status:_cast_queue_statuses' \
+            '--project[Filter by project]:project:()' \
+            '--limit[Maximum results]:limit:()'
+          ;;
+        add)
+          _arguments \
+            '1:agent:_cast_agents' \
+            '2:task:()' \
+            '--priority[Priority 1-10]:priority:()' \
+            '--when[Schedule datetime ISO8601]:datetime:()'
+          ;;
+        cancel|retry)
+          _arguments '1:task-id:()'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_cast_memory() {
+  local curcontext="$curcontext" state line
+  local -a subcommands
+  subcommands=(
+    'search:Search memories by query'
+    'list:List all memories'
+    'forget:Delete a memory by ID'
+    'export:Export all memories as JSON'
+  )
+  _arguments \
+    '1:subcommand:->subcommand' \
+    '*::arg:->args'
+
+  case "$state" in
+    subcommand)
+      _describe 'subcommand' subcommands
+      ;;
+    args)
+      case "$line[1]" in
+        search)
+          _arguments \
+            '1:query:()' \
+            '--agent[Filter by agent]:agent:_cast_agents' \
+            '--project[Filter by project]:project:()' \
+            '--limit[Maximum results]:limit:()'
+          ;;
+        list)
+          _arguments \
+            '--agent[Filter by agent]:agent:_cast_agents' \
+            '--type[Filter by type]:type:_cast_memory_types'
+          ;;
+        forget)
+          _arguments '1:memory-id:()'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_cast_budget() {
+  local curcontext="$curcontext" state line
+  _arguments \
+    '--week[Show last 7 days breakdown]' \
+    '--project[Show project spend]:project:()' \
+    '1:subcommand:(set)' \
+    '*::arg:->args'
+
+  case "$state" in
+    args)
+      case "$line[1]" in
+        set)
+          _arguments \
+            '--global[Set global daily budget]:amount:()' \
+            '--session[Set per-session budget]:amount:()'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_cast_audit() {
+  _arguments \
+    '--session[Filter by session ID]:session-id:()' \
+    '--week[Last 7 days summary]' \
+    '--export[Dump full JSON to stdout]' \
+    '--redact[Toggle PII redaction]:setting:(on off)'
+}
+
+_cast_daemon() {
+  local curcontext="$curcontext" state line
+  local -a subcommands
+  subcommands=(
+    'status:Show daemon status'
+    'start:Start castd daemon'
+    'stop:Stop castd daemon'
+    'restart:Restart castd daemon'
+    'logs:View daemon logs'
+  )
+  _arguments \
+    '1:subcommand:->subcommand' \
+    '*::arg:->args'
+
+  case "$state" in
+    subcommand)
+      _describe 'subcommand' subcommands
+      ;;
+    args)
+      case "$line[1]" in
+        logs)
+          _arguments '--tail[Number of lines]:lines:()'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_cast() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+
+  _arguments -C \
+    '--json[Machine-readable JSON output]' \
+    '--quiet[Suppress informational output]' \
+    '--verbose[Show debug details]' \
+    '--help[Show help]' \
+    '--version[Show version]' \
+    '1:subcommand:->subcommand' \
+    '*::arg:->args'
+
+  case "$state" in
+    subcommand)
+      local -a subcommands
+      subcommands=(
+        'run:Run an agent synchronously or async'
+        'queue:Manage the persistent task queue'
+        'memory:Query and manage agent memories'
+        'budget:View cost and savings summary'
+        'audit:View and manage audit log'
+        'daemon:Control the castd background daemon'
+        'status:Terminal health dashboard'
+        'install-completions:Install shell tab completions'
+      )
+      _describe 'subcommand' subcommands
+      ;;
+    args)
+      case "$line[1]" in
+        run)      _cast_run ;;
+        queue)    _cast_queue ;;
+        memory)   _cast_memory ;;
+        budget)   _cast_budget ;;
+        audit)    _cast_audit ;;
+        daemon)   _cast_daemon ;;
+      esac
+      ;;
+  esac
+}
+
+_cast "$@"
