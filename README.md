@@ -1,7 +1,7 @@
 # CAST — Claude Agent Specialist Team
 
 <!-- CAST_VERSION_BADGE -->![Version](https://img.shields.io/badge/version-1.5.0-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-36-green)
+![Agents](https://img.shields.io/badge/agents-42-green)
 ![Routes](https://img.shields.io/badge/routes-28-blue)
 ![Commands](https://img.shields.io/badge/commands-32-blue)
 ![Tests](https://img.shields.io/badge/tests-147%20total-brightgreen)
@@ -12,7 +12,7 @@ Claude Code is a capable editor. Without infrastructure, you are still manually 
 
 Install CAST and every prompt you type is intercepted by `route.sh` before Claude sees it. The right specialist agent is dispatched automatically. After it writes code, `post-tool-hook.sh` injects a mandatory `[CAST-CHAIN]` directive that forces `code-reviewer` to run — you cannot skip it. Raw `git commit` is hard-blocked at the `PreToolUse` hook; the `commit` agent is the only escape hatch. Parallel agent waves handle complex multi-file work without you coordinating anything. Work Logs surface exactly what every agent did, inline in your terminal.
 
-This is not a prompt library. It is 36 specialists wired into Claude Code at the hook layer, enforcing their own quality gates.
+This is not a prompt library. It is 42 specialists wired into Claude Code at the hook layer, enforcing their own quality gates.
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team.git
@@ -34,7 +34,7 @@ bash install.sh
 - [agent-status-reader.sh — Status Propagation](#agent-status-readersh--status-propagation)
 - [Work Logs](#work-logs)
 - [Parallel Agent Waves](#parallel-agent-waves)
-- [The Agents (36)](#the-agents-36)
+- [The Agents (42)](#the-agents-42)
 - [The Commit → Push Chain](#the-commit--push-chain)
 - [Rollback Protocol](#rollback-protocol)
 - [Event-Sourcing Protocol](#event-sourcing-protocol)
@@ -348,9 +348,9 @@ Other groups: `feature-build`, `ui-build`, `backend-build`, `api-integration`, `
 
 ---
 
-## The Agents (36)
+## The Agents (42)
 
-### Core — 11 agents
+### Core — 12 agents
 
 The foundation of every CAST install. Every quality gate flows through this tier.
 
@@ -367,6 +367,7 @@ The foundation of every CAST install. Every quality gate flows through this tier
 | `security` | sonnet | OWASP review, secrets scanning, XSS/SQLi analysis |
 | `push` | haiku | Managed push workflow with pre-push verification via `CAST_PUSH_OK=1` |
 | `bash-specialist` | sonnet | CAST hook scripts, exit codes, `hookSpecificOutput` format — consulted when modifying CAST itself |
+| `merge` | sonnet | Git merge, rebase, and conflict resolution — hard-blocks force-merges to main/master without explicit approval |
 
 ### Extended — 8 agents
 
@@ -409,7 +410,7 @@ The foundation of every CAST install. Every quality gate flows through this tier
 | `qa-reviewer` | sonnet | Second-opinion QA on functional correctness — catches what `code-reviewer` misses |
 | `presenter` | sonnet | Slide decks and status presentations from specs or notes |
 
-### Specialist — 4 agents
+### Specialist — 9 agents
 
 | Agent | Model | Role |
 |---|---|---|
@@ -417,6 +418,11 @@ The foundation of every CAST install. Every quality gate flows through this tier
 | `performance` | sonnet | Core Web Vitals, bundle analysis, render performance |
 | `seo-content` | haiku | Meta tags, accessibility, WCAG, localization |
 | `linter` | haiku | Lint rule enforcement and auto-fix |
+| `frontend-designer` | sonnet | Production-grade UI and design systems — avoids generic templates, covers React/Vue/Tailwind/MUI/shadcn |
+| `framework-expert` | sonnet | Framework-native implementation for Laravel, Django, Rails, React, and Vue |
+| `pentest` | sonnet | Automated security scanning, dependency audits, OWASP scanning — scans and reports only, never modifies files |
+| `infra` | sonnet | Terraform/IaC and cloud resource provisioning (AWS, GCP, Azure); deeper infrastructure layer than `devops` |
+| `db-architect` | sonnet | Schema design, migration authoring, and query optimization — write-capable counterpart to `db-reader` |
 
 ---
 
@@ -805,7 +811,7 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 
 | Metric | Count |
 |---|---|
-| Agents | 36 |
+| Agents | 42 |
 | Agent groups | 31 |
 | Routes | 28 |
 | Slash commands | 32 |
