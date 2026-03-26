@@ -12,9 +12,9 @@ if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
   # Without a session ID (e.g. tests), skip depth tracking to avoid stale /tmp files
   if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
     DEPTH_FILE="/tmp/cast-depth-${PPID}.depth"
-    CURRENT_DEPTH=1
+    CURRENT_DEPTH=0
     if [ -f "$DEPTH_FILE" ]; then
-      CURRENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 1)"
+      CURRENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 0)"
     fi
     CURRENT_DEPTH=$(( CURRENT_DEPTH + 1 ))
     echo "$CURRENT_DEPTH" > "$DEPTH_FILE"

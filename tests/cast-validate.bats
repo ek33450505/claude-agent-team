@@ -50,6 +50,14 @@ build_clean_install() {
           {"type": "command", "command": "bash ~/.claude/scripts/post-tool-hook.sh"}
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "bash ~/.claude/scripts/stop-hook.sh"}
+        ]
+      }
     ]
   }
 }

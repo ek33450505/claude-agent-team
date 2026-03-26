@@ -37,7 +37,8 @@ PYEOF
 
 run_hook() {
   # Feed empty JSON (the hook reads stdin but only uses CAST_STATUS_DIR env var logic)
-  run env CLAUDE_SUBPROCESS=1 CAST_STATUS_DIR="$CAST_STATUS_DIR" bash "$HOOK" <<< "{}"
+  run env CLAUDE_SUBPROCESS=1 CAST_STATUS_DIR="$CAST_STATUS_DIR" \
+      CLAUDE_SESSION_ID="$CLAUDE_SESSION_ID" bash "$HOOK" <<< "{}"
 }
 
 # ---------------------------------------------------------------------------
@@ -48,10 +49,17 @@ setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(mktemp -d)"
   export CAST_STATUS_DIR="$HOME/.claude/agent-status"
+  # Use a unique session ID per test run to isolate /tmp/cast-blocked-* and
+  # /tmp/cast-session-start-*.epoch files, preventing state leakage from real sessions.
+  export CLAUDE_SESSION_ID="test-asr-$$-${BATS_TEST_NUMBER:-0}"
+  # Write a fresh epoch file so CAST-TIMEOUT logic does not fire in tests.
+  printf '%s' "$(date +%s)" > "/tmp/cast-session-start-${CLAUDE_SESSION_ID}.epoch"
 }
 
 teardown() {
   rm -rf "$HOME"
+  rm -f "/tmp/cast-session-start-${CLAUDE_SESSION_ID}.epoch"
+  rm -f "/tmp/cast-blocked-${CLAUDE_SESSION_ID}-"*.count 2>/dev/null || true
   export HOME="$ORIG_HOME"
 }
 
@@ -267,7 +275,8 @@ PYEOF
 @test "status logging: BLOCKED status writes agent_complete entry with status=BLOCKED" {
   setup_log_script
   write_status_file "BLOCKED" "debugger" "Cannot proceed" ""
-  run env CLAUDE_SUBPROCESS=1 CAST_STATUS_DIR="$CAST_STATUS_DIR" bash "$HOOK" <<< "{}"
+  run env CLAUDE_SUBPROCESS=1 CAST_STATUS_DIR="$CAST_STATUS_DIR" \
+      CLAUDE_SESSION_ID="$CLAUDE_SESSION_ID" bash "$HOOK" <<< "{}"
   # exit code 2 expected for BLOCKED — don't assert_success
   local log_file="$HOME/.claude/routing-log.jsonl"
   [ -f "$log_file" ] || fail "routing-log.jsonl was not created"

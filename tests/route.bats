@@ -32,6 +32,25 @@ setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(mktemp -d)"
   mkdir -p "$HOME/.claude/config"
+  mkdir -p "$HOME/.claude/scripts"
+
+  # Stub cast-log-append.py so route.sh can write routing-log.jsonl
+  cat > "$HOME/.claude/scripts/cast-log-append.py" <<'PYEOF'
+import sys, os
+log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
+os.makedirs(os.path.dirname(log_path), exist_ok=True)
+data = sys.stdin.read().strip()
+if data:
+    with open(log_path, 'a') as f:
+        f.write(data + '\n')
+PYEOF
+
+  # Use a unique session ID per test to isolate /tmp/cast-dispatch-<id>.log
+  export CLAUDE_SESSION_ID="test-route-$$-${BATS_TEST_NUMBER:-0}"
+
+  # Pre-register the test session ID so the session-briefing block in route.sh
+  # does not fire and exit 0 before routing logic runs
+  echo "$CLAUDE_SESSION_ID" >> /tmp/cast-sessions-seen.log
 
   cat > "$HOME/.claude/config/routing-table.json" <<'EOF'
 {
@@ -117,7 +136,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "subprocess guard: exits 0 with no output when CLAUDE_SUBPROCESS=1" {
-  run env CLAUDE_SUBPROCESS=1 bash "$ROUTE_SH" <<< "$(prompt_json "add a login page")"
+  run env CLAUDE_SUBPROCESS=1 CLAUDE_SESSION_ID="" bash "$ROUTE_SH" <<< "$(prompt_json "add a login page")"
   assert_success
   assert_output ""
 }
