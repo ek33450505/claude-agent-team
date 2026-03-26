@@ -165,6 +165,30 @@ Concerns: [required if DONE_WITH_CONCERNS — list code-reviewer warnings]
 Context needed: [required if NEEDS_CONTEXT — describe what information is missing]
 ---
 
+## ACI Reference
+
+**When to dispatch:** After code-writer completes a logical unit that includes new functions, components, or routes that need test coverage.
+
+**What to include in your prompt:**
+- Files that were changed or created (absolute paths)
+- What behavior to test (happy path, edge cases, error states)
+- Where tests should go (alongside source or in a separate test dir)
+- Test framework in use (Jest, Vitest, BATS, Supertest)
+
+**Good prompt example:**
+```
+Write tests for the new `useDebounce` hook added in src/hooks/useDebounce.ts.
+Tests go in src/hooks/useDebounce.test.ts.
+Use Vitest + React Testing Library.
+Cover: returns debounced value, respects delay, cleans up on unmount.
+```
+
+**Poor prompt:** `"Write tests"` — no file, no framework, no cases specified.
+
+**Self-dispatch rule:** test-writer self-dispatches code-reviewer internally after writing tests. Do NOT re-dispatch code-reviewer from the orchestrating session after test-writer completes.
+
+**Do NOT dispatch** if code-writer already ran — code-writer self-dispatches test-writer as part of its chain. Only dispatch test-writer directly for standalone test work.
+
 ## Key Principles
 
 - Test behavior, not implementation — use accessible queries (getByRole, getByText) over getByTestId

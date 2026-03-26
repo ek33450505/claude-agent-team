@@ -171,6 +171,33 @@ fi
 | Settings | `~/.claude/settings.local.json` |
 | Repo scripts | `~/Projects/personal/claude-agent-team/scripts/` |
 
+## ACI Reference
+
+**When to dispatch:** Any shell script task — write, review, debug, or test. Even 5-line scripts. This agent knows CAST conventions.
+
+**What to include in your prompt:**
+- Script purpose and absolute path
+- Inputs (stdin, args, env vars) and outputs (stdout, exit codes, files written)
+- Existing scripts to follow as patterns
+- Whether BATS tests are needed and where
+
+**CAST script conventions to reference:**
+- Always `set -euo pipefail`
+- Use `python3 -c` inline for JSON (no jq)
+- Log via `~/.claude/scripts/cast-log-append.py`
+- Exit codes: 0=success, 1=validation error, 2=file not found
+- Graceful degradation: exit 0 silently when optional tools (Ollama, Prettier) are unavailable
+
+**Good prompt example:**
+```
+Create scripts/cast-my-tool.sh.
+Purpose: reads ~/.claude/config/routing-table.json and prints a summary.
+Input: optional --format table|json arg.
+Follow the pattern of scripts/cast-agent-stats.sh.
+Exit 0 gracefully if routing-table.json not found.
+Bats tests in tests/cast-my-tool.bats — 4 cases: missing file, table output, json output, invalid flag.
+```
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

@@ -32,13 +32,23 @@ fi
 
 set -euo pipefail
 
+# --- Dry-run mode ---
+# Activated by CAST_DRY_RUN=1. Runs the full routing pipeline but does NOT emit
+# hookSpecificOutput or write to routing-log.jsonl. Instead prints a JSON summary
+# of what would have been dispatched and exits 0.
+DRY_RUN="${CAST_DRY_RUN:-0}"
+DRY_RUN_FILE=""
+if [ "$DRY_RUN" = "1" ]; then
+  DRY_RUN_FILE="$(mktemp /tmp/cast-dry-run-XXXXXX.json)"
+fi
+
 INPUT="$(cat)"
 
 # --- Pre-session briefing block ---
 # On the first prompt of a new session, inject a structured context block:
 # git status, recent routing-log entries, any stale BLOCKED agent-status files.
 # Runs fast (<200ms) — git status + file reads only. No heavy computation.
-if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+if [ "$DRY_RUN" = "0" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
   SESSIONS_LOG="/tmp/cast-sessions-seen.log"
   if ! grep -qxF "${CLAUDE_SESSION_ID}" "$SESSIONS_LOG" 2>/dev/null; then
     # Mark this session as seen BEFORE building the briefing (prevents double-fire)
@@ -228,11 +238,13 @@ subprocess.run(
 fi
 
 # --- Group pre-check: match against agent-groups.json before routing table ---
-CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
+CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" python3 -c "
 import json, re, os, datetime, sys
 
 prompt = os.environ.get('CAST_PROMPT', '')
 original = os.environ.get('CAST_ORIGINAL', '')
+dry_run = os.environ.get('CAST_DRY_RUN', '0') == '1'
+dry_run_file = os.environ.get('CAST_DRY_RUN_FILE', '')
 log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
 ts = datetime.datetime.utcnow().isoformat() + 'Z'
 preview = prompt[:80]
@@ -252,6 +264,25 @@ for group in groups_data.get('groups', []):
         try:
             if re.search(pattern, prompt, re.IGNORECASE):
                 print(f\"[CAST] Group matched: {group['id']} ({len(group['waves'])} waves)\", file=sys.stderr)
+                post_chain = group.get('post_chain', [])
+                if dry_run:
+                    # Write dry-run result to temp file; do not emit hookSpecificOutput or log
+                    result = {
+                        'dry_run': True,
+                        'prompt': original[:100],
+                        'matched_agent': group['id'],
+                        'match_type': 'group',
+                        'match_pattern': pattern,
+                        'post_chain': post_chain if post_chain else None,
+                        'directive_would_be': f'[CAST-DISPATCH-GROUP: {group[\"id\"]}]'
+                    }
+                    if dry_run_file:
+                        try:
+                            with open(dry_run_file, 'w') as rf:
+                                rf.write(json.dumps(result))
+                        except Exception:
+                            pass
+                    sys.exit(0)
                 directive = f\"[CAST-DISPATCH-GROUP: {group['id']}]\\n\"
                 directive += 'MANDATORY: Pass the following Payload JSON to the orchestrator agent immediately with pre_approved: true. Do NOT handle inline.\\n'
                 payload = {
@@ -259,7 +290,7 @@ for group in groups_data.get('groups', []):
                     'description': group.get('description', ''),
                     'pre_approved': True,
                     'waves': group.get('waves', []),
-                    'post_chain': group.get('post_chain', [])
+                    'post_chain': post_chain
                 }
                 directive += json.dumps(payload)
                 output = {
@@ -279,15 +310,17 @@ for group in groups_data.get('groups', []):
         except re.error:
             continue
 sys.exit(1)
-" 2>/dev/null && exit 0
+" 2>/dev/null && { [ "$DRY_RUN" = "1" ] || exit 0; }
 
 # Match prompt against routing table and inject dispatch directive
 # Variables are passed as env prefixes to the subprocess rather than globally exported
-CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
+CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" python3 -c "
 import json, re, os, datetime, sys
 
 prompt = os.environ.get('CAST_PROMPT', '')
 original = os.environ.get('CAST_ORIGINAL', '')
+dry_run = os.environ.get('CAST_DRY_RUN', '0') == '1'
+dry_run_file = os.environ.get('CAST_DRY_RUN_FILE', '')
 log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
 ts = datetime.datetime.utcnow().isoformat() + 'Z'
 preview = prompt[:80]
@@ -338,34 +371,84 @@ for route in table.get('routes', []):
 
             if dispatch_count >= 3:
                 # Circuit-break: inject loop-break instead of dispatch
-                loop_directive = f'[CAST-LOOP-BREAK] Agent \`{agent}\` dispatched {dispatch_count} times this session without a commit. Possible dispatch loop detected. Handle inline or break the cycle.'
-                loop_output = {
-                    'hookSpecificOutput': {
-                        'hookEventName': 'UserPromptSubmit',
-                        'additionalContext': loop_directive
+                if not dry_run:
+                    loop_directive = f'[CAST-LOOP-BREAK] Agent \`{agent}\` dispatched {dispatch_count} times this session without a commit. Possible dispatch loop detected. Handle inline or break the cycle.'
+                    loop_output = {
+                        'hookSpecificOutput': {
+                            'hookEventName': 'UserPromptSubmit',
+                            'additionalContext': loop_directive
+                        }
                     }
-                }
-                print(json.dumps(loop_output))
-                loop_log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'loop_break', 'matched_route': agent, 'pattern': pattern, 'dispatch_count': dispatch_count}
-                import subprocess as _sp2
-                _sp2.run(
-                    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
-                    input=json.dumps(loop_log), text=True, timeout=5
-                )
+                    print(json.dumps(loop_output))
+                    loop_log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'loop_break', 'matched_route': agent, 'pattern': pattern, 'dispatch_count': dispatch_count}
+                    import subprocess as _sp2
+                    _sp2.run(
+                        ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+                        input=json.dumps(loop_log), text=True, timeout=5
+                    )
+                else:
+                    result = {
+                        'dry_run': True,
+                        'prompt': original[:100],
+                        'matched_agent': agent,
+                        'match_type': 'regex',
+                        'match_pattern': pattern,
+                        'post_chain': None,
+                        'directive_would_be': f'[CAST-LOOP-BREAK] (dispatch_count={dispatch_count})'
+                    }
+                    already_matched = False
+                    if dry_run_file and os.path.exists(dry_run_file):
+                        try:
+                            already_matched = os.path.getsize(dry_run_file) > 0
+                        except Exception:
+                            pass
+                    if not already_matched and dry_run_file:
+                        try:
+                            with open(dry_run_file, 'w') as rf:
+                                rf.write(json.dumps(result))
+                        except Exception:
+                            pass
                 sys.exit(0)
 
-            # Record this dispatch in the registry
-            try:
-                with open(dispatch_log, 'a') as dl:
-                    dl.write(f'{ts}\t{agent}\n')
-            except Exception:
-                pass
+            # Record this dispatch in the registry (skip in dry-run — no side effects)
+            if not dry_run:
+                try:
+                    with open(dispatch_log, 'a') as dl:
+                        dl.write(f'{ts}\t{agent}\n')
+                except Exception:
+                    pass
 
             confidence = route.get('confidence', 'hard')
             command = route.get('command', '')
             post_chain = route.get('post_chain', [])
             model = route.get('model', 'sonnet')
             print(f'[CAST] Route matched: {agent}', file=sys.stderr)
+
+            if dry_run:
+                # Write dry-run result to temp file (first match only)
+                already_matched = False
+                if dry_run_file and os.path.exists(dry_run_file):
+                    try:
+                        already_matched = os.path.getsize(dry_run_file) > 0
+                    except Exception:
+                        pass
+                if not already_matched and dry_run_file:
+                    effective_post_chain = post_chain if (post_chain and post_chain != ['auto-dispatch-from-manifest']) else None
+                    result = {
+                        'dry_run': True,
+                        'prompt': original[:100],
+                        'matched_agent': agent,
+                        'match_type': 'regex',
+                        'match_pattern': pattern,
+                        'post_chain': effective_post_chain,
+                        'directive_would_be': f'[CAST-DISPATCH] {agent}'
+                    }
+                    try:
+                        with open(dry_run_file, 'w') as rf:
+                            rf.write(json.dumps(result))
+                    except Exception:
+                        pass
+                sys.exit(0)
 
             # Build dispatch directive
             if confidence == 'hard':
@@ -411,21 +494,22 @@ for route in table.get('routes', []):
             )
             sys.exit(0)
 
-# No match — log and output nothing (Claude handles inline)
-log = {
-    'timestamp': ts,
-    'session_id': session_id,
-    'prompt_preview': preview,
-    'action': 'no_match',
-    'matched_route': None,
-    'command': None,
-    'pattern': None
-}
-import subprocess as _sp4
-_sp4.run(
-    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
-    input=json.dumps(log), text=True, timeout=5
-)
+# No match — log and output nothing (Claude handles inline); skip log in dry-run
+if not dry_run:
+    log = {
+        'timestamp': ts,
+        'session_id': session_id,
+        'prompt_preview': preview,
+        'action': 'no_match',
+        'matched_route': None,
+        'command': None,
+        'pattern': None
+    }
+    import subprocess as _sp4
+    _sp4.run(
+        ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+        input=json.dumps(log), text=True, timeout=5
+    )
 " 2>/dev/null || true
 
 # --- Stage 2.5: Semantic routing (Ollama-based, graceful fallback) ---
@@ -433,15 +517,42 @@ SEMANTIC_SCRIPT="$HOME/.claude/scripts/cast-semantic-route.sh"
 if [[ -f "$SEMANTIC_SCRIPT" && -x "$SEMANTIC_SCRIPT" ]]; then
   SEMANTIC_AGENT="$(bash "$SEMANTIC_SCRIPT" "${PROMPT:-}" 2>/dev/null || echo "")"
   if [[ -n "$SEMANTIC_AGENT" ]]; then
-    CAST_SEMANTIC_AGENT="$SEMANTIC_AGENT" CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
+    CAST_SEMANTIC_AGENT="$SEMANTIC_AGENT" CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" python3 -c "
 import json, os, datetime, sys, subprocess
 
 agent = os.environ.get('CAST_SEMANTIC_AGENT', '')
 prompt = os.environ.get('CAST_PROMPT', '')
 original = os.environ.get('CAST_ORIGINAL', '')
+dry_run = os.environ.get('CAST_DRY_RUN', '0') == '1'
+dry_run_file = os.environ.get('CAST_DRY_RUN_FILE', '')
 ts = datetime.datetime.utcnow().isoformat() + 'Z'
 preview = prompt[:80]
 session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
+
+if dry_run:
+    # Write dry-run result to temp file (first match only)
+    already_matched = False
+    if dry_run_file and os.path.exists(dry_run_file):
+        try:
+            already_matched = os.path.getsize(dry_run_file) > 0
+        except Exception:
+            pass
+    if not already_matched and dry_run_file:
+        result = {
+            'dry_run': True,
+            'prompt': original[:100],
+            'matched_agent': agent,
+            'match_type': 'semantic',
+            'match_pattern': 'semantic:cosine_similarity',
+            'post_chain': None,
+            'directive_would_be': f'[CAST-DISPATCH] {agent}'
+        }
+        try:
+            with open(dry_run_file, 'w') as rf:
+                rf.write(json.dumps(result))
+        except Exception:
+            pass
+    sys.exit(0)
 
 directive = f'[CAST-DISPATCH] Route: {agent} (confidence: semantic)\n'
 directive += f'MANDATORY: Dispatch the \`{agent}\` agent via the Agent tool.\n'
@@ -470,17 +581,19 @@ subprocess.run(
     ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
     input=json.dumps(log), text=True, timeout=5
 )
-" 2>/dev/null && exit 0 || true
+" 2>/dev/null && { [ "$DRY_RUN" = "1" ] || exit 0; } || true
   fi
 fi
 
 # --- Catch-all: route ambiguous implementation prompts to router agent ---
 # Fires when: 5+ words, not a question, not conversational filler, contains action verb signals
-CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" python3 -c "
+CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" python3 -c "
 import json, re, os, datetime, sys
 
 prompt = os.environ.get('CAST_PROMPT', '')
 original = os.environ.get('CAST_ORIGINAL', '')
+dry_run = os.environ.get('CAST_DRY_RUN', '0') == '1'
+dry_run_file = os.environ.get('CAST_DRY_RUN_FILE', '')
 log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
 ts = datetime.datetime.utcnow().isoformat() + 'Z'
 preview = prompt[:80]
@@ -504,6 +617,31 @@ if re.match(filler, prompt.strip(), re.IGNORECASE):
 # Must contain action verb signals
 action_verbs = r'\b(improve|enhance|make|update|fix|add|rework|better|cleaner|refactor|change|modify|rewrite|convert|migrate|move|rename|delete|remove|build|create|implement|write|generate|replace|extend|integrate|connect|deploy|configure|setup|install|enable|disable)\b'
 if not re.search(action_verbs, prompt, re.IGNORECASE):
+    sys.exit(0)
+
+if dry_run:
+    # Write dry-run result to temp file (first match only)
+    already_matched = False
+    if dry_run_file and os.path.exists(dry_run_file):
+        try:
+            already_matched = os.path.getsize(dry_run_file) > 0
+        except Exception:
+            pass
+    if not already_matched and dry_run_file:
+        result = {
+            'dry_run': True,
+            'prompt': original[:100],
+            'matched_agent': 'router',
+            'match_type': 'no_match',
+            'match_pattern': 'catchall:action_verb_heuristic',
+            'post_chain': None,
+            'directive_would_be': '[CAST-CATCHALL]'
+        }
+        try:
+            with open(dry_run_file, 'w') as rf:
+                rf.write(json.dumps(result))
+        except Exception:
+            pass
     sys.exit(0)
 
 # Inject soft [CAST-DISPATCH] recommending router agent
@@ -534,5 +672,40 @@ _sp5.run(
     input=json.dumps(log), text=True, timeout=5
 )
 " 2>/dev/null || true
+
+# --- Dry-run output ---
+# If dry-run mode was active, print the JSON summary of what would have been dispatched.
+if [ "$DRY_RUN" = "1" ]; then
+  CAST_DRY_RUN_FILE_VAL="${DRY_RUN_FILE:-}" CAST_ORIGINAL_VAL="$ORIGINAL_PROMPT" python3 -c "
+import json, os, sys
+
+dry_run_file = os.environ.get('CAST_DRY_RUN_FILE_VAL', '')
+original = os.environ.get('CAST_ORIGINAL_VAL', '')
+
+result = None
+if dry_run_file and os.path.exists(dry_run_file):
+    try:
+        content = open(dry_run_file).read().strip()
+        if content:
+            result = json.loads(content)
+    except Exception:
+        pass
+
+if result is None:
+    result = {
+        'dry_run': True,
+        'prompt': original[:100],
+        'matched_agent': None,
+        'match_type': 'no_match',
+        'match_pattern': None,
+        'post_chain': None,
+        'directive_would_be': 'none'
+    }
+
+print(json.dumps(result, indent=2))
+" 2>/dev/null || true
+  # Clean up temp file
+  [ -n "${DRY_RUN_FILE:-}" ] && rm -f "$DRY_RUN_FILE" 2>/dev/null || true
+fi
 
 exit 0

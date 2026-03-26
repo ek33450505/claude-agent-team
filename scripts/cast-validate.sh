@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-VERSION="1.8.0"
+VERSION="1.9.0"
 ERRORS=0
 WARNINGS=0
 
@@ -16,7 +16,7 @@ pass()  { echo "✓ $*"; }
 fail()  { echo "✗ $*"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "⚠ $*"; WARNINGS=$((WARNINGS + 1)); }
 
-echo "CAST Validate v${VERSION} (10 checks)"
+echo "CAST Validate v${VERSION} (11 checks)"
 echo "══════════════════════════════"
 
 # --- Check 1: Hook wiring ---
@@ -391,6 +391,41 @@ PYEOF
   fi
 else
   pass "routing-proposals.json: not present (proposals pipeline not yet run — OK)"
+fi
+
+# --- Check 11: security agent wired in at least one post_chain ---
+if [[ -f "$ROUTING_TABLE" ]]; then
+  SECURITY_WIRED=$(python3 - "$ROUTING_TABLE" <<'PYEOF'
+import sys, json
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception as e:
+    print(f"ERROR:{e}")
+    sys.exit(0)
+routes = data if isinstance(data, list) else data.get('routes', [])
+def has_security(chain):
+    if not chain:
+        return False
+    for item in chain:
+        if isinstance(item, list):
+            if 'security' in item:
+                return True
+        elif item == 'security':
+            return True
+    return False
+wired = any(has_security(r.get('post_chain')) for r in routes)
+print('OK' if wired else 'MISSING')
+PYEOF
+)
+  if [[ "$SECURITY_WIRED" == 'OK' ]]; then
+    pass "Security post_chain: security agent wired in ≥1 route (parallel or sequential)"
+  elif [[ "$SECURITY_WIRED" == 'MISSING' ]]; then
+    warn "Security post_chain: security agent not in any post_chain (consider wiring for auth/API routes)"
+  else
+    warn "Security post_chain: could not verify — ${SECURITY_WIRED#ERROR:}"
+  fi
 fi
 
 # --- Summary ---

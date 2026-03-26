@@ -83,6 +83,33 @@ Concerns: [required if DONE_WITH_CONCERNS]
 Context needed: [required if NEEDS_CONTEXT]
 ---
 
+## ACI Reference
+
+**When to dispatch:** Feature work spanning >1 file or >5 lines. Single-file edits under 5 lines can be handled inline by the orchestrating session.
+
+**What to include in your prompt:**
+- Files to create or modify (absolute paths)
+- Existing patterns or files to follow (e.g. "follow the pattern in `src/hooks/useLocalStorage.ts`")
+- Acceptance criteria or behavior description
+- Where tests should go
+
+**Good prompt example:**
+```
+Add a `useDebounce` hook to `src/hooks/useDebounce.ts`.
+Follow the pattern in `src/hooks/useLocalStorage.ts`.
+Accept `value: T` and `delay: number` params, return debounced value.
+Tests go in `src/hooks/useDebounce.test.ts`.
+```
+
+**Poor prompt (too vague):** `"Add a debounce hook"` — missing file path, pattern reference, and test location.
+
+**Edge cases:**
+- Cross-repo changes: one code-writer call per repo
+- Changes >3 files: break into sequential batches in a plan ADM
+- When code-writer returns DONE_WITH_CONCERNS: read concerns before committing
+
+**Post-chain note:** code-writer self-dispatches code-reviewer internally. The routing-table post_chain `[["code-reviewer", "security"], "commit"]` fires code-reviewer and security in parallel — do NOT add another code-reviewer dispatch from the orchestrating session.
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

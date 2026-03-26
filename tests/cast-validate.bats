@@ -75,6 +75,7 @@ Plan things.
 MD
 
   # --- Routing table with valid schema ---
+  # Second route includes security in post_chain so Check 11 passes cleanly
   cat > "$HOME/.claude/config/routing-table.json" <<'JSON'
 {
   "routes": [
@@ -83,6 +84,13 @@ MD
       "agent": "planner",
       "model": "claude-haiku-4-5",
       "confidence": "hard"
+    },
+    {
+      "patterns": ["^/secure\\b"],
+      "agent": "security",
+      "model": "claude-sonnet-4-5",
+      "confidence": "hard",
+      "post_chain": ["security"]
     }
   ]
 }

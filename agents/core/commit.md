@@ -110,6 +110,18 @@ Default behavior (no push signal): commit only, show reminder to dispatch push a
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
+## ACI Reference
+
+**What to include:** repo path (absolute) + what the change does and why (not a file list — agent reads git diff).
+
+**Good prompt:** `"Commit all changes in /Users/edkubiak/Projects/personal/claude-agent-team. Feature: routing-table.json now runs code-reviewer and security in parallel post_chain."`
+
+**Poor prompt:** `"Commit route.json, cast-validate.sh"` — file lists add noise.
+
+**Multi-repo:** One commit agent per repo — cannot batch.
+
+**If BLOCKED:** cast_check_approvals found no recent code-reviewer approval. Do NOT retry. Ensure code-reviewer ran first.
+
 ## Status Block
 
 Always end your response with one of these status blocks:

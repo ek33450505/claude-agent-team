@@ -118,6 +118,18 @@ updated: <ISO date>
 - Things already in CLAUDE.md
 - Code patterns derivable from reading the current files
 
+## ACI Reference
+
+**What to include:** files changed + 1-sentence description of what the change does.
+
+**Scope:** Reviews, does not fix. DONE_WITH_CONCERNS = proceed but surface. BLOCKED = fix required before commit.
+
+**When to re-run:** After any fix touching reviewed files.
+
+**Do NOT dispatch** from orchestrating session if change was made by code-writer, debugger, test-writer, refactor-cleaner, or build-error-resolver — these self-dispatch code-reviewer internally.
+
+**Parallel post-chain note:** When routing-table post_chain fires code-reviewer and security in parallel, both run independently. If either returns BLOCKED, surface to user before dispatching commit.
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

@@ -73,6 +73,34 @@ Concerns: [required if DONE_WITH_CONCERNS]
 Context needed: [required if NEEDS_CONTEXT — describe what information is missing]
 ---
 
+## ACI Reference
+
+**When to dispatch:** Any error, test failure, or unexpected behavior requiring more than 1 inline tool call to investigate.
+
+**What to include in your prompt:**
+- Exact error message or failing output (copy-paste, not paraphrased)
+- The command or action that triggered the failure
+- File and line number if known
+- What you already tried
+
+**Good prompt example:**
+```
+The BATS test 'route dispatches code-writer' is failing:
+  ✗ route dispatches code-writer
+    (in test file tests/route.bats, line 142)
+    'assert_output --partial [CAST-DISPATCH]' failed
+  actual output: (empty)
+Script under test: scripts/route.sh
+I confirmed route.sh is executable and routing-table.json has the entry.
+```
+
+**Poor prompt:** `"The tests are failing"` — no output, no file, no context.
+
+**Edge cases:**
+- If debugger returns BLOCKED: likely environmental (missing file, wrong path, permissions)
+- For TypeScript/ESLint/build errors: use `build-error-resolver` instead
+- Debugger self-dispatches code-reviewer after fixes — do NOT re-dispatch from orchestrating session
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
