@@ -1,0 +1,170 @@
+{
+  "name": "CAST — Claude Agent Specialist Team",
+  "description": "Quick access to CAST agent commands from Alfred 5",
+  "version": "1.0.0",
+  "objects": [
+    {
+      "uid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+      "type": "alfred.workflow.input.keyword",
+      "version": 1,
+      "config": {
+        "argumenttype": 1,
+        "keyword": "c run",
+        "subtext": "Run a CAST agent or task",
+        "title": "CAST: Run agent/task",
+        "withspace": true
+      }
+    },
+    {
+      "uid": "B2C3D4E5-F6A7-8901-BCDE-F12345678901",
+      "type": "alfred.workflow.action.script",
+      "version": 2,
+      "config": {
+        "script": "~/.local/bin/cast run \"{query}\"",
+        "type": 0,
+        "scriptfile": "",
+        "escaping": 102
+      }
+    },
+    {
+      "uid": "C3D4E5F6-A7B8-9012-CDEF-123456789012",
+      "type": "alfred.workflow.input.keyword",
+      "version": 1,
+      "config": {
+        "argumenttype": 0,
+        "keyword": "c queue",
+        "subtext": "Show CAST task queue",
+        "title": "CAST: Queue",
+        "withspace": false
+      }
+    },
+    {
+      "uid": "D4E5F6A7-B8C9-0123-DEF0-234567890123",
+      "type": "alfred.workflow.output.largetype",
+      "version": 1,
+      "config": {
+        "largetype": "~/.local/bin/cast queue list"
+      }
+    },
+    {
+      "uid": "E5F6A7B8-C9D0-1234-EF01-345678901234",
+      "type": "alfred.workflow.input.keyword",
+      "version": 1,
+      "config": {
+        "argumenttype": 1,
+        "keyword": "c memory",
+        "subtext": "Search CAST agent memory",
+        "title": "CAST: Memory Search",
+        "withspace": true
+      }
+    },
+    {
+      "uid": "F6A7B8C9-D0E1-2345-F012-456789012345",
+      "type": "alfred.workflow.action.script",
+      "version": 2,
+      "config": {
+        "script": "~/.local/bin/cast memory search \"{query}\"",
+        "type": 0,
+        "scriptfile": "",
+        "escaping": 102
+      }
+    },
+    {
+      "uid": "A7B8C9D0-E1F2-3456-0123-567890123456",
+      "type": "alfred.workflow.input.keyword",
+      "version": 1,
+      "config": {
+        "argumenttype": 0,
+        "keyword": "c status",
+        "subtext": "Show CAST daemon and agent status",
+        "title": "CAST: Status",
+        "withspace": false
+      }
+    },
+    {
+      "uid": "B8C9D0E1-F2A3-4567-1234-678901234567",
+      "type": "alfred.workflow.output.largetype",
+      "version": 1,
+      "config": {
+        "largetype": "~/.local/bin/cast status"
+      }
+    },
+    {
+      "uid": "C9D0E1F2-A3B4-5678-2345-789012345678",
+      "type": "alfred.workflow.input.keyword",
+      "version": 1,
+      "config": {
+        "argumenttype": 1,
+        "keyword": "c agent",
+        "subtext": "Run a named CAST agent",
+        "title": "CAST: Agent",
+        "withspace": true
+      }
+    },
+    {
+      "uid": "D0E1F2A3-B4C5-6789-3456-890123456789",
+      "type": "alfred.workflow.action.script",
+      "version": 2,
+      "config": {
+        "script": "~/.local/bin/cast run \"{query}\"",
+        "type": 0,
+        "scriptfile": "",
+        "escaping": 102
+      }
+    }
+  ],
+  "connections": {
+    "A1B2C3D4-E5F6-7890-ABCD-EF1234567890": [
+      {
+        "destinationuid": "B2C3D4E5-F6A7-8901-BCDE-F12345678901",
+        "modifiers": 0,
+        "modifiersubtext": "",
+        "vitoclose": false
+      }
+    ],
+    "C3D4E5F6-A7B8-9012-CDEF-123456789012": [
+      {
+        "destinationuid": "D4E5F6A7-B8C9-0123-DEF0-234567890123",
+        "modifiers": 0,
+        "modifiersubtext": "",
+        "vitoclose": false
+      }
+    ],
+    "E5F6A7B8-C9D0-1234-EF01-345678901234": [
+      {
+        "destinationuid": "F6A7B8C9-D0E1-2345-F012-456789012345",
+        "modifiers": 0,
+        "modifiersubtext": "",
+        "vitoclose": false
+      }
+    ],
+    "A7B8C9D0-E1F2-3456-0123-567890123456": [
+      {
+        "destinationuid": "B8C9D0E1-F2A3-4567-1234-678901234567",
+        "modifiers": 0,
+        "modifiersubtext": "",
+        "vitoclose": false
+      }
+    ],
+    "C9D0E1F2-A3B4-5678-2345-789012345678": [
+      {
+        "destinationuid": "D0E1F2A3-B4C5-6789-3456-890123456789",
+        "modifiers": 0,
+        "modifiersubtext": "",
+        "vitoclose": false
+      }
+    ]
+  },
+  "uidata": {
+    "A1B2C3D4-E5F6-7890-ABCD-EF1234567890": {"xpos": 100, "ypos": 50},
+    "B2C3D4E5-F6A7-8901-BCDE-F12345678901": {"xpos": 400, "ypos": 50},
+    "C3D4E5F6-A7B8-9012-CDEF-123456789012": {"xpos": 100, "ypos": 150},
+    "D4E5F6A7-B8C9-0123-DEF0-234567890123": {"xpos": 400, "ypos": 150},
+    "E5F6A7B8-C9D0-1234-EF01-345678901234": {"xpos": 100, "ypos": 250},
+    "F6A7B8C9-D0E1-2345-F012-456789012345": {"xpos": 400, "ypos": 250},
+    "A7B8C9D0-E1F2-3456-0123-567890123456": {"xpos": 100, "ypos": 350},
+    "B8C9D0E1-F2A3-4567-1234-678901234567": {"xpos": 400, "ypos": 350},
+    "C9D0E1F2-A3B4-5678-2345-789012345678": {"xpos": 100, "ypos": 450},
+    "D0E1F2A3-B4C5-6789-3456-890123456789": {"xpos": 400, "ypos": 450}
+  }
+}
