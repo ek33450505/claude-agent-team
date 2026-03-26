@@ -154,6 +154,10 @@ This agent does NOT:
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
+## Final Step (MANDATORY)
+After E2E tests are written and passing, dispatch `commit` via Agent tool:
+> "Create a semantic commit for the E2E tests: [describe what flows are covered]."
+Do NOT return to the calling session before dispatching commit.
 
 ## Status Block
 

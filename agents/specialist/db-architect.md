@@ -246,6 +246,11 @@ After schema or migration work:
 1. Dispatch `code-reviewer` — validate migration files, index strategy, naming conventions
 2. If new database resources need to be provisioned → dispatch `infra`
 
+## Final Step (MANDATORY)
+After migrations/schema changes are written, dispatch `commit` via Agent tool:
+> "Create a semantic commit for the database changes: [describe schema changes or migrations]."
+Do NOT return to the calling session before dispatching commit.
+
 ## Status Block
 
 Always end your response with one of these status blocks:

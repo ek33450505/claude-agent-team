@@ -202,6 +202,10 @@ Bats tests in tests/cast-my-tool.bats — 4 cases: missing file, table output, j
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
+## Final Step (MANDATORY)
+After all scripts are written and reviewed, dispatch `commit` via Agent tool:
+> "Create a semantic commit for the bash scripts added/modified: [file list and purpose]."
+Do NOT return to the calling session before dispatching commit.
 
 ## Status Block
 

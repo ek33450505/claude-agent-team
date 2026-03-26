@@ -123,6 +123,10 @@ If the project has companion repos (check README for links, package.json for rel
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving — especially cross-repo relationships and recurring README problems.
 
+## Final Step (MANDATORY)
+After the README is updated and validated, dispatch `commit` via Agent tool:
+> "Create a semantic commit for the README update: [describe what was updated]."
+Do NOT return to the calling session before dispatching commit.
 
 ## Status Block
 

@@ -259,6 +259,11 @@ After Terraform authoring:
 1. Dispatch `security` — check for credential exposure, over-permissive IAM, open security groups
 2. Dispatch `code-reviewer` — validate HCL syntax, module structure, naming conventions
 
+## Final Step (MANDATORY)
+After infrastructure changes are written and reviewed, dispatch `commit` via Agent tool:
+> "Create a semantic commit for the infrastructure changes: [describe what was provisioned or changed]."
+Do NOT return to the calling session before dispatching commit.
+
 ## Status Block
 
 Always end your response with one of these status blocks:

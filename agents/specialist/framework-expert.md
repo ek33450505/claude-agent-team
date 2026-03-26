@@ -221,6 +221,9 @@ State the detected framework and version at the start of your response.
 After completing the primary implementation:
 1. Dispatch `code-reviewer` — validate framework conventions and patterns
 2. Dispatch `test-writer` — generate framework-appropriate test coverage
+3. After code-reviewer and test-writer return DONE, dispatch `commit` via Agent tool:
+   > "Create a semantic commit for the framework implementation: [describe what was built]."
+   Do NOT return to the calling session before dispatching commit.
 
 ## Status Block
 

@@ -96,6 +96,11 @@ Apply with Edit (in-place). Do NOT create new files unless explicitly asked.
 - [ ] Environment variable names match actual code
 - [ ] No references to removed features
 
+### 5. Commit (MANDATORY)
+After all documentation changes are validated, dispatch `commit` via Agent tool:
+> "Create a semantic commit for the documentation updates: [describe what was updated]."
+Do NOT return to the calling session before dispatching commit.
+
 ## Output
 
 - Edits target file **in-place** using the Edit tool

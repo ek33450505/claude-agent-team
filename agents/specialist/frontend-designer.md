@@ -121,6 +121,11 @@ After completing the primary implementation:
 1. Dispatch `code-reviewer` — validate component structure, accessibility, and prop types
 2. For accessibility-heavy components → dispatch `seo-content` (accessibility audit)
 
+## Final Step (MANDATORY)
+After code-reviewer approves the component, dispatch `commit` via Agent tool:
+> "Create a semantic commit for the UI component work: [describe what was designed]."
+Do NOT return to the calling session before dispatching commit.
+
 ## Output Format
 
 Always include:

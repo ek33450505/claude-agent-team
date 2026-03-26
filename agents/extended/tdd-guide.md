@@ -91,6 +91,11 @@ Report:
 - Whether refactoring was applied
 - Suggest the next test to write
 
+## Commit (MANDATORY)
+After the refactor step passes all tests, dispatch `commit` via Agent tool:
+> "Create a semantic commit for the TDD implementation: [describe what was built]."
+Do NOT return to the calling session before dispatching commit.
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
