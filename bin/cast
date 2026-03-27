@@ -104,6 +104,7 @@ ${C_BOLD}CAST v${CAST_VERSION} — Local-First OS${C_RESET}
 Usage: cast <subcommand> [args] [flags]
 
 Subcommands:
+  ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest externally
   ${C_BOLD}run${C_RESET}       <agent> "<task>"        Run an agent synchronously or async
   ${C_BOLD}queue${C_RESET}     list|add|cancel|retry   Manage the persistent task queue
   ${C_BOLD}memory${C_RESET}    search|list|forget|export  Query and manage agent memories
@@ -348,7 +349,7 @@ db_path, task_id = sys.argv[1], sys.argv[2]
 conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 cur.execute(
-    "UPDATE task_queue SET status='failed' WHERE id=? AND status='pending'",
+    "UPDATE task_queue SET status='cancelled' WHERE id=? AND status='pending'",
     (task_id,)
 )
 conn.commit()
@@ -383,7 +384,7 @@ db_path, task_id = sys.argv[1], sys.argv[2]
 conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 cur.execute(
-    "UPDATE task_queue SET status='pending', retry_count=retry_count+1, claimed_at=NULL, claimed_by_session=NULL WHERE id=?",
+    "UPDATE task_queue SET status='pending', retry_count=0, claimed_at=NULL, claimed_by_session=NULL WHERE id=?",
     (task_id,)
 )
 conn.commit()
@@ -1429,6 +1430,26 @@ PYEOF
   local sep
   sep="$(python3 -c "print('━' * $width)" 2>/dev/null || printf '%0.s─' $(seq 1 $width))"
 
+  # Upgrade CRITICAL alert
+  local upgrade_candidates="${HOME}/.claude/cast/upgrade-candidates.json"
+  if [ -f "$upgrade_candidates" ] && command -v python3 >/dev/null 2>&1; then
+    local critical_count
+    critical_count="$(python3 -c "
+import json, sys
+try:
+    items = json.load(open('$upgrade_candidates'))
+    if isinstance(items, list):
+        print(sum(1 for i in items if i.get('category') == 'CRITICAL'))
+    else:
+        print(0)
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)"
+    if [ "${critical_count:-0}" -gt 0 ]; then
+      printf "${C_RED}⚠ CAST upgrade alerts: %d critical item(s)${C_RESET}  (run: cast upgrade list)\n" "$critical_count"
+    fi
+  fi
+
   printf "${C_BOLD}CAST v${CAST_VERSION} — Local-First OS${C_RESET}\n"
   printf "%s\n" "$sep"
 
@@ -1968,6 +1989,147 @@ _cmd_learn() {
   _do_learn "$pattern" "$agent" "$confidence" "$description"
 }
 
+# ── Subcommand: compat ───────────────────────────────────────────────────────
+_cmd_compat() {
+  local action="${1:-test}"
+  shift 2>/dev/null || true
+  local compat_sh="${CAST_SCRIPTS_DIR}/cast-compat.sh"
+  if [ ! -f "$compat_sh" ]; then
+    _error "cast-compat.sh not found: $compat_sh"
+    exit 1
+  fi
+  case "$action" in
+    test) bash "$compat_sh" test ;;
+    save) bash "$compat_sh" save ;;
+    diff) bash "$compat_sh" diff ;;
+    *) _error "Unknown compat action: $action (use: test|save|diff)"; exit 1 ;;
+  esac
+}
+
+# ── Subcommand: upgrade ───────────────────────────────────────────────────────
+_cmd_upgrade() {
+  local action="${1:-list}"
+  shift 2>/dev/null || true
+  local upgrade_sh="${CAST_SCRIPTS_DIR}/cast-upgrade-check.sh"
+  local candidates="${HOME}/.claude/cast/upgrade-candidates.json"
+  case "$action" in
+    check)
+      if [ ! -f "$upgrade_sh" ]; then
+        _error "cast-upgrade-check.sh not found: $upgrade_sh"
+        exit 1
+      fi
+      bash "$upgrade_sh"
+      ;;
+    list)
+      if [ -f "$candidates" ]; then
+        python3 -c "
+import json, sys
+try:
+    items = json.load(open('$candidates'))
+    if not items:
+        print('No upgrade candidates found.')
+    else:
+        for i in items:
+            cat = i.get('category','?')
+            print(f\"[{cat}] {i.get('item','')}  —  {i.get('cast_component','')}\")
+            print(f\"      {i.get('reason','')}\")
+except Exception as e:
+    print(f'Error reading candidates: {e}', file=sys.stderr)
+" 2>/dev/null
+      else
+        _info "No upgrade candidates yet. Run: cast upgrade check"
+      fi
+      ;;
+    clear)
+      if [ -f "$candidates" ]; then
+        rm -f "$candidates"
+        _success "Cleared upgrade candidates."
+      else
+        _info "No upgrade candidates file to clear."
+      fi
+      ;;
+    *) _error "Unknown upgrade action: $action (use: check|list|clear)"; exit 1 ;;
+  esac
+}
+
+# ── Subcommand: exec ─────────────────────────────────────────────────────────
+_cmd_exec() {
+  local mode_flag=""
+  local plan_file=""
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --resume)
+        mode_flag="--resume"
+        shift
+        ;;
+      --status)
+        mode_flag="--status"
+        shift
+        ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast exec [--resume | --status] <plan-file>
+
+  <plan-file>            Execute all batches defined in the plan manifest
+  --resume <plan-file>   Skip completed batches, resume from first non-complete
+  --status <plan-file>   Print current checkpoint state and exit
+
+The plan file must contain a \`\`\`json dispatch\`\`\` fenced block with the
+Agent Dispatch Manifest JSON (plan_id, batches, agents, verify_files).
+
+Examples:
+  cast exec ~/.claude/plans/2026-03-27-cast-phase-9.75b.md
+  cast exec --resume ~/.claude/plans/2026-03-27-cast-phase-9.75b.md
+  cast exec --status ~/.claude/plans/2026-03-27-cast-phase-9.75b.md
+
+Agent logs are written to: /tmp/cast-exec-{plan_id}-batch-{n}-{agent}.log
+Checkpoint state:          ~/.claude/cast/exec-state/{plan_id}.json
+USAGE
+        return 0
+        ;;
+      -*)
+        _error "Unknown flag: $1"
+        printf "  Use: cast exec --help\n" >&2
+        return 1
+        ;;
+      *)
+        if [ -z "$plan_file" ]; then
+          plan_file="$1"
+        else
+          _error "Unexpected argument: $1"
+          return 1
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$plan_file" ]; then
+    _error "Plan file is required."
+    printf "  Usage: cast exec [--resume|--status] <plan-file>\n" >&2
+    return 1
+  fi
+
+  # Resolve cast-exec.sh: prefer installed location, fall back to repo
+  local exec_script="${CAST_SCRIPTS_DIR}/cast-exec.sh"
+  if [ ! -f "$exec_script" ]; then
+    exec_script="${CAST_REPO_DIR}/scripts/cast-exec.sh"
+  fi
+  if [ ! -f "$exec_script" ]; then
+    _error "cast-exec.sh not found. Expected at:"
+    printf "  %s\n" "${CAST_SCRIPTS_DIR}/cast-exec.sh" >&2
+    printf "  %s\n" "${CAST_REPO_DIR}/scripts/cast-exec.sh" >&2
+    return 1
+  fi
+
+  if [ -n "$mode_flag" ]; then
+    bash "$exec_script" "$mode_flag" "$plan_file"
+  else
+    bash "$exec_script" "$plan_file"
+  fi
+}
+
 # ── Main dispatch ─────────────────────────────────────────────────────────────
 if [ "$#" -gt 0 ]; then
   CAST_ARGS=("$@")
@@ -1989,6 +2151,9 @@ SUBCOMMAND="${1:-}"
 shift 2>/dev/null || true
 
 case "$SUBCOMMAND" in
+  exec)                 _cmd_exec "$@" ;;
+  compat)               _cmd_compat "$@" ;;
+  upgrade)              _cmd_upgrade "$@" ;;
   run)                  _cmd_run "$@" ;;
   queue)                _cmd_queue "$@" ;;
   memory)               _cmd_memory "$@" ;;

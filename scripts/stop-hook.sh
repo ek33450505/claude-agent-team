@@ -71,12 +71,15 @@ output = {
 print(json.dumps(output))
 " 2>/dev/null || true
 
+# Resolve repo scripts directory — portable, no hardcoded paths
+CAST_SCRIPTS_DIR="${CAST_SCRIPTS_DIR:-$(dirname "$(readlink -f "$0")")}"
+
 # --- Weekly routing feedback analysis ---
 # Runs cast-routing-feedback.sh if last report is >7 days old or missing.
 # Runs in background to avoid blocking session close.
 CAST_ROUTING_FEEDBACK="${HOME}/.claude/scripts/cast-routing-feedback.sh"
 # Also check repo-local version
-REPO_FEEDBACK="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-routing-feedback.sh"
+REPO_FEEDBACK="${CAST_SCRIPTS_DIR}/cast-routing-feedback.sh"
 if [ -f "$REPO_FEEDBACK" ]; then
   CAST_ROUTING_FEEDBACK="$REPO_FEEDBACK"
 fi
@@ -88,7 +91,7 @@ fi
 
 # --- Project board refresh ---
 CAST_BOARD="${HOME}/.claude/scripts/cast-board.sh"
-REPO_BOARD="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-board.sh"
+REPO_BOARD="${CAST_SCRIPTS_DIR}/cast-board.sh"
 if [ -f "$REPO_BOARD" ]; then
   CAST_BOARD="$REPO_BOARD"
 fi
@@ -98,7 +101,7 @@ fi
 
 # --- Agent memory auto-initialization ---
 CAST_AGENT_MEM_INIT="${HOME}/.claude/scripts/cast-agent-memory-init.sh"
-REPO_MEM_INIT="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-agent-memory-init.sh"
+REPO_MEM_INIT="${CAST_SCRIPTS_DIR}/cast-agent-memory-init.sh"
 if [ -f "$REPO_MEM_INIT" ]; then
   CAST_AGENT_MEM_INIT="$REPO_MEM_INIT"
 fi
@@ -109,7 +112,7 @@ fi
 # --- Auto-escalation rule engine ---
 # Detects recurring BLOCKED patterns and reviewer concerns; writes auto-rules to cast.db.
 CAST_MEM_ESCALATION="${HOME}/.claude/scripts/cast-memory-escalation.sh"
-REPO_MEM_ESCALATION="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-memory-escalation.sh"
+REPO_MEM_ESCALATION="${CAST_SCRIPTS_DIR}/cast-memory-escalation.sh"
 if [ -f "$REPO_MEM_ESCALATION" ]; then
   CAST_MEM_ESCALATION="$REPO_MEM_ESCALATION"
 fi

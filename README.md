@@ -1,10 +1,10 @@
 # CAST — Claude Agent Specialist Team
 
-![Version](https://img.shields.io/badge/version-1.6.0-blue)
+![Version](https://img.shields.io/badge/version-2.35-blue)
 ![Agents](https://img.shields.io/badge/agents-42-green)
 ![Routes](https://img.shields.io/badge/routes-35-blue)
 ![Commands](https://img.shields.io/badge/commands-32-blue)
-![Tests](https://img.shields.io/badge/tests-243%20total-brightgreen)
+![Tests](https://img.shields.io/badge/tests-307%20total-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-orange)
 
@@ -263,7 +263,7 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
 
 | Directive | Source | Behavior |
 |---|---|---|
-| `[CAST-ORCHESTRATE]` | `post-tool-hook.sh` Part 3 | Plan file with dispatch manifest written — dispatch `orchestrator`. |
+| `[CAST-ORCHESTRATE]` | `post-tool-hook.sh` Part 3 | Plan file with dispatch manifest written — dispatch `orchestrator` (or use `cast exec` for direct execution). |
 | `[CAST-DEBUG]` | `post-tool-hook.sh` Part 5 | Bash command exited non-zero in main session — route to `debugger`. |
 | `[CAST-HALT]` | `agent-status-reader.sh` | Agent reported BLOCKED — hard-block (exit 2) until blocker resolved. |
 | `[CAST-REVIEW]` (status) | `agent-status-reader.sh` | Agent completed with concerns — dispatch `code-reviewer` before proceeding. |
@@ -279,7 +279,7 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
 
 `route.sh` runs on every user prompt via the `UserPromptSubmit` hook. Routing has four stages, evaluated in order:
 
-**Stage 1 — Agent Group pre-check:** matches against `config/agent-groups.json` (31 groups). On match, the orchestrator receives a full Payload JSON with wave definitions and runs them immediately.
+**Stage 1 — Agent Group pre-check:** matches against `config/agent-groups.json` (31 groups). On match, the orchestrator receives a full Payload JSON with wave definitions and runs them immediately (via `orchestrator` agent or `cast exec` for direct execution).
 
 **Stage 2 — Routing table:** matches against `config/routing-table.json` (35 routes). On match, Claude sees:
 
@@ -507,7 +507,7 @@ The foundation of every CAST install. Every quality gate flows through this tier
 
 | Agent | Model | Role |
 |---|---|---|
-| `orchestrator` | sonnet | Reads Agent Dispatch Manifests, runs full queue with batch-aware status handling |
+| `orchestrator` | sonnet | Reads Agent Dispatch Manifests, runs full queue with batch-aware status handling. Superseded by `cast exec` for direct plan execution. |
 | `auto-stager` | haiku | Pre-commit staging — never stages `.env` or sensitive files |
 | `chain-reporter` | haiku | Writes chain execution summaries to `~/.claude/reports/` |
 | `verifier` | haiku | Build check and TODO scan before quality gate passes |
@@ -793,6 +793,36 @@ cast learn --from-session
 ```
 
 Each learned route is written to `routing-table.json` with `source='cast-learn'` and logged to `routing_events` with `action='learned'`. The `--from-session` mode surfaces prompts that either had no match or triggered a rapid re-prompt mismatch signal.
+
+**`cast exec`** — Execute a task plan from the orchestrator. Dispatches parallel waves and sequential post-chains.
+
+```bash
+cast exec ~/.claude/plans/my-plan.json
+cast exec <plan-file> --dry-run    # Show what would execute without running
+cast exec <plan-file> --model local # Override model selection
+```
+
+Replaces the orchestrator agent for reproducible plan execution outside of Claude Code sessions.
+
+**`cast compat`** — Test compatibility with Anthropic Claude Code hook updates.
+
+```bash
+cast compat test                      # Run full contract test suite
+cast compat status                    # Show compatible hook versions
+cast compat upgrade --check           # Check for available upgrades
+```
+
+Ensures CAST remains compatible as Claude Code's hook system evolves.
+
+**`cast upgrade`** — Check for and apply new CAST versions.
+
+```bash
+cast upgrade check                    # Check for new releases
+cast upgrade list                     # Show version changelog
+cast upgrade apply <version>          # Apply a specific version
+```
+
+Watches the release channel and manages versioned upgrades safely.
 
 ---
 
