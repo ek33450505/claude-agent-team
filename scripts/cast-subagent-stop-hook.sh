@@ -39,7 +39,7 @@ set +e
 CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
 TURN_CEILING_DIR="${CAST_DIR}/turn-ceiling-events"
-DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast/cast.db}"
+DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
