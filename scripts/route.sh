@@ -475,6 +475,31 @@ for route in table.get('routes', []):
                         pass
                 sys.exit(0)
 
+            # --- Low-success-rate performance warning ---
+            # If agent has >20 runs and success rate <50%, write a warning to routing_events.
+            # Wrapped in try/except — never blocks routing on failure.
+            try:
+                import sqlite3 as _sq_perf
+                _db_perf = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+                _conn_perf = _sq_perf.connect(_db_perf)
+                _perf_row = _conn_perf.execute(
+                    'SELECT COUNT(*), SUM(CASE WHEN status IN ("DONE","DONE_WITH_CONCERNS") THEN 1 ELSE 0 END) FROM agent_runs WHERE agent = ?',
+                    (agent,)
+                ).fetchone()
+                if _perf_row and _perf_row[0] > 20:
+                    _total_runs = _perf_row[0]
+                    _success_runs = _perf_row[1] or 0
+                    _success_rate = _success_runs / _total_runs
+                    if _success_rate < 0.5:
+                        _conn_perf.execute(
+                            'INSERT INTO routing_events (timestamp, prompt_hash, matched_agent, match_type, confidence) VALUES (datetime("now"), ?, ?, ?, ?)',
+                            ('DISPATCH_WARNING', agent, 'perf_warning', round(_success_rate, 4))
+                        )
+                        _conn_perf.commit()
+                _conn_perf.close()
+            except Exception:
+                pass
+
             # Build dispatch directive
             if confidence == 'hard':
                 strength = 'MANDATORY'
@@ -752,6 +777,206 @@ _sp5.run(
     input=json.dumps(log), text=True, timeout=5
 )
 " 2>/dev/null || true
+
+# --- Stage 2.4: Haiku NLU fallback ---
+# Only runs if no earlier stage fired a match (DRY_RUN_FILE is empty or missing).
+# Calls Claude Haiku with a structured routing prompt and parses agent + confidence.
+# If confidence >= 0.6, injects [CAST-DISPATCH]. Otherwise logs UNMATCHED_INTENT.
+# Entire block is wrapped in graceful fallback — never crashes or hangs routing.
+if [ "${CAST_AIRGAP_ACTIVE:-0}" != "1" ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  # Check if an earlier stage already matched (dry-run file has content, or we already exited)
+  _NLU_ALREADY_MATCHED=0
+  if [ "$DRY_RUN" = "1" ] && [ -n "${DRY_RUN_FILE:-}" ] && [ -f "$DRY_RUN_FILE" ]; then
+    _NLU_FILE_SIZE="$(wc -c < "$DRY_RUN_FILE" 2>/dev/null || echo 0)"
+    [ "$_NLU_FILE_SIZE" -gt 0 ] && _NLU_ALREADY_MATCHED=1
+  fi
+
+  if [ "$_NLU_ALREADY_MATCHED" = "0" ]; then
+    # Build agent list from routing-table.json using python3 (no jq dependency)
+    _ROUTING_TABLE_PATH="${HOME}/.claude/config/routing-table.json"
+    _NLU_AGENT_LIST="$(CAST_RT_PATH="$_ROUTING_TABLE_PATH" python3 -c "
+import json, os, sys
+try:
+    with open(os.environ.get('CAST_RT_PATH', '')) as f:
+        table = json.load(f)
+    routes = table.get('routes', [])
+    lines = []
+    for r in routes:
+        agent = r.get('agent', '')
+        desc = r.get('description', '')
+        if not desc:
+            # derive a minimal description from agent name
+            desc = agent.replace('-', ' ')
+        if agent:
+            lines.append(agent + ': ' + desc)
+    print('\n'.join(lines))
+except Exception as e:
+    sys.exit(1)
+" 2>/dev/null || echo "")"
+
+    if [ -n "$_NLU_AGENT_LIST" ]; then
+      # Build JSON payload safely via python3 json.dumps (avoids shell injection)
+      _NLU_PAYLOAD="$(CAST_NLU_PROMPT="$ORIGINAL_PROMPT" CAST_NLU_AGENTS="$_NLU_AGENT_LIST" python3 -c "
+import json, os
+prompt = os.environ.get('CAST_NLU_PROMPT', '')
+agents = os.environ.get('CAST_NLU_AGENTS', '')
+system_msg = 'You are a routing classifier for the CAST agent system. Given a user prompt and a list of available agents with descriptions, return ONLY a JSON object with two fields: \"agent\" (the best matching agent name as a string) and \"confidence\" (a float from 0.0 to 1.0). Return {\"agent\": null, \"confidence\": 0.0} if no agent fits well.'
+user_msg = 'Available agents:\n' + agents + '\n\nUser prompt: ' + prompt + '\n\nRespond with JSON only.'
+payload = {
+    'model': 'claude-haiku-4-5',
+    'max_tokens': 64,
+    'system': system_msg,
+    'messages': [{'role': 'user', 'content': user_msg}]
+}
+print(json.dumps(payload))
+" 2>/dev/null || echo "")"
+
+      if [ -n "$_NLU_PAYLOAD" ]; then
+        # Call Haiku API — timeout via curl's --max-time; failures are swallowed
+        _HAIKU_RESPONSE="$(curl -sf --max-time 8 -X POST https://api.anthropic.com/v1/messages \
+          -H "x-api-key: $ANTHROPIC_API_KEY" \
+          -H "anthropic-version: 2023-06-01" \
+          -H "content-type: application/json" \
+          -d "$_NLU_PAYLOAD" 2>/dev/null || echo "")"
+
+        if [ -n "$_HAIKU_RESPONSE" ]; then
+          # Parse agent and confidence from Haiku response
+          _NLU_PARSED="$(CAST_NLU_RAW="$_HAIKU_RESPONSE" python3 -c "
+import json, os, sys, re
+raw = os.environ.get('CAST_NLU_RAW', '')
+try:
+    resp = json.loads(raw)
+    content_text = resp['content'][0]['text'].strip()
+    # Strip markdown code fences if present
+    content_text = re.sub(r'^[\x60]{1,3}(?:json)?\s*', '', content_text)
+    content_text = re.sub(r'\s*[\x60]{1,3}$', '', content_text)
+    parsed = json.loads(content_text)
+    agent = parsed.get('agent') or ''
+    confidence = float(parsed.get('confidence', 0.0))
+    print(json.dumps({'agent': agent, 'confidence': confidence}))
+except Exception:
+    print(json.dumps({'agent': '', 'confidence': 0.0}))
+" 2>/dev/null || echo '{"agent":"","confidence":0.0}')"
+
+          _NLU_AGENT="$(echo "$_NLU_PARSED" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('agent') or '')" 2>/dev/null || echo "")"
+          _NLU_CONF="$(echo "$_NLU_PARSED" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('confidence',0.0))" 2>/dev/null || echo "0.0")"
+
+          # Check threshold and dispatch or log UNMATCHED_INTENT
+          CAST_NLU_AGENT="$_NLU_AGENT" CAST_NLU_CONF="$_NLU_CONF" \
+          CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" \
+          CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" python3 -c "
+import json, os, datetime, sys, subprocess
+
+agent = os.environ.get('CAST_NLU_AGENT', '')
+conf_str = os.environ.get('CAST_NLU_CONF', '0.0')
+prompt = os.environ.get('CAST_PROMPT', '')
+original = os.environ.get('CAST_ORIGINAL', '')
+dry_run = os.environ.get('CAST_DRY_RUN', '0') == '1'
+dry_run_file = os.environ.get('CAST_DRY_RUN_FILE', '')
+ts = datetime.datetime.utcnow().isoformat() + 'Z'
+preview = prompt[:80]
+session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
+db_log_py = os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))
+
+try:
+    confidence = float(conf_str)
+except ValueError:
+    confidence = 0.0
+
+def _write_routing_event(match_type, matched_agent, conf):
+    try:
+        import sqlite3
+        db_path = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            'INSERT INTO routing_events (timestamp, prompt_hash, matched_agent, match_type, confidence) VALUES (datetime(\"now\"), ?, ?, ?, ?)',
+            ('NLU_' + match_type.upper(), matched_agent or 'none', match_type, round(conf, 4))
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+if agent and confidence >= 0.6:
+    print(f'[CAST] Haiku NLU matched: {agent} (confidence: {confidence:.2f})', file=sys.stderr)
+
+    if dry_run:
+        already_matched = False
+        if dry_run_file and os.path.exists(dry_run_file):
+            try:
+                already_matched = os.path.getsize(dry_run_file) > 0
+            except Exception:
+                pass
+        if not already_matched and dry_run_file:
+            result = {
+                'dry_run': True,
+                'prompt': original[:100],
+                'matched_agent': agent,
+                'match_type': 'haiku_nlu',
+                'match_pattern': f'haiku_nlu:confidence={confidence:.2f}',
+                'post_chain': None,
+                'directive_would_be': f'[CAST-DISPATCH] {agent}',
+                'nlu_confidence': confidence
+            }
+            try:
+                with open(dry_run_file, 'w') as rf:
+                    rf.write(json.dumps(result))
+            except Exception:
+                pass
+        sys.exit(0)
+
+    _write_routing_event('NLU_MATCH', agent, confidence)
+
+    directive = f'[CAST-DISPATCH] Route: {agent} (confidence: semantic/{confidence:.2f})\n'
+    directive += f'RECOMMENDED: Consider dispatching the \`{agent}\` agent via the Agent tool.\n'
+    directive += f'Pass the user full prompt as the agent task. Do NOT handle this inline.\n'
+    directive += f'(Matched via Haiku NLU semantic routing — confidence: {confidence:.2f})'
+
+    output = {
+        'hookSpecificOutput': {
+            'hookEventName': 'UserPromptSubmit',
+            'additionalContext': directive
+        }
+    }
+    print(json.dumps(output))
+
+    log = {
+        'timestamp': ts,
+        'session_id': session_id,
+        'prompt_preview': preview,
+        'action': 'matched',
+        'matched_route': agent,
+        'command': None,
+        'pattern': f'haiku_nlu:confidence={confidence:.2f}',
+        'confidence': 'semantic',
+        'match_type': 'haiku_nlu'
+    }
+    subprocess.run(['python3', db_log_py], input=json.dumps(log), text=True, timeout=5)
+    sys.exit(0)
+
+else:
+    # Low confidence or empty agent — log UNMATCHED_INTENT
+    print(f'[CAST] No route matched (Haiku confidence: {confidence:.2f}). Prompt unrouted.', file=sys.stderr)
+
+    if not dry_run:
+        _write_routing_event('UNMATCHED_INTENT', None, confidence)
+        log = {
+            'timestamp': ts,
+            'session_id': session_id,
+            'prompt_preview': preview,
+            'action': 'unmatched_intent',
+            'matched_route': None,
+            'command': None,
+            'pattern': None,
+            'confidence': confidence
+        }
+        subprocess.run(['python3', db_log_py], input=json.dumps(log), text=True, timeout=5)
+" 2>/dev/null && { [ "$DRY_RUN" = "1" ] || exit 0; } || true
+        fi
+      fi
+    fi
+  fi
+fi
 
 # --- Dry-run output ---
 # If dry-run mode was active, print the JSON summary of what would have been dispatched.

@@ -1698,6 +1698,240 @@ subprocess.run(
 " 2>/dev/null || true
 }
 
+_cmd_profile() {
+  _require_db
+  local agent_filter=""
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --agent)
+        agent_filter="${2:-}"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  if [ -n "$agent_filter" ]; then
+    # Single-agent drill-down
+    CAST_DB_PATH="$CAST_DB_PATH" CAST_AGENT="$agent_filter" python3 -c "
+import sqlite3, os, sys
+
+db = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+agent = os.environ.get('CAST_AGENT', '')
+
+try:
+    conn = sqlite3.connect(db)
+except Exception as e:
+    print(f'Error: cannot open DB: {e}', file=sys.stderr)
+    sys.exit(1)
+
+# Scorecard row for this agent
+row = conn.execute('''
+    SELECT agent,
+           COUNT(*) AS runs,
+           SUM(CASE WHEN status IN (\"DONE\",\"DONE_WITH_CONCERNS\") THEN 1 ELSE 0 END) AS successes,
+           SUM(CASE WHEN status = \"BLOCKED\" THEN 1 ELSE 0 END) AS blocked,
+           ROUND(AVG(cost_usd), 6) AS avg_cost
+    FROM agent_runs
+    WHERE agent = ?
+    GROUP BY agent
+''', (agent,)).fetchone()
+
+if not row:
+    print(f'No runs found for agent: {agent}')
+    conn.close()
+    sys.exit(0)
+
+name, runs, successes, blocked, avg_cost = row
+success_pct = round((successes / runs) * 100, 1) if runs > 0 else 0.0
+RED = '\033[0;31m'; YELLOW = '\033[0;33m'; GREEN = '\033[0;32m'; RESET = '\033[0m'; BOLD = '\033[1m'
+
+flag = ''
+if success_pct < 70 and blocked > 5:
+    flag = f' {RED}[UNDERPERFORMER]{RESET}'
+
+print(f'{BOLD}Agent Profile: {name}{RESET}{flag}')
+print(f'  Runs:        {runs}')
+print(f'  Success:     {GREEN if success_pct >= 80 else YELLOW if success_pct >= 70 else RED}{success_pct}%{RESET}')
+print(f'  Blocked:     {RED if blocked > 5 else \"\"}{blocked}{RESET if blocked > 5 else \"\"}')
+print(f'  Avg Cost:    \${avg_cost:.6f}')
+print()
+
+# Last 10 runs
+print(f'{BOLD}Last 10 runs:{RESET}')
+print(f'  {\"STARTED\":<22}  {\"STATUS\":<22}  {\"COST\":>10}  SUMMARY')
+print(f'  {\"-\"*22}  {\"-\"*22}  {\"-\"*10}  {\"-\"*40}')
+rows = conn.execute('''
+    SELECT started_at, status, cost_usd, task_summary
+    FROM agent_runs
+    WHERE agent = ?
+    ORDER BY started_at DESC
+    LIMIT 10
+''', (agent,)).fetchall()
+
+for r in rows:
+    started, st, cost, summary = r
+    started = (started or \"\")[:19]
+    st = (st or \"\").upper()
+    cost_str = f\"\${cost:.6f}\" if cost else \"\$0.000000\"
+    summary_str = (summary or \"-\")[:40]
+    color = GREEN if st in (\"DONE\", \"DONE_WITH_CONCERNS\") else RED if st == \"BLOCKED\" else YELLOW
+    print(f'  {started:<22}  {color}{st:<22}{RESET}  {cost_str:>10}  {summary_str}')
+
+conn.close()
+" 2>/dev/null || { _error "Failed to query cast.db — is the schema up to date?"; exit 1; }
+  else
+    # All-agents scorecard
+    CAST_DB_PATH="$CAST_DB_PATH" python3 -c "
+import sqlite3, os, sys
+
+db = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+
+try:
+    conn = sqlite3.connect(db)
+except Exception as e:
+    print(f'Error: cannot open DB: {e}', file=sys.stderr)
+    sys.exit(1)
+
+rows = conn.execute('''
+    SELECT agent,
+           COUNT(*) AS runs,
+           SUM(CASE WHEN status IN (\"DONE\",\"DONE_WITH_CONCERNS\") THEN 1 ELSE 0 END) AS successes,
+           SUM(CASE WHEN status = \"BLOCKED\" THEN 1 ELSE 0 END) AS blocked,
+           ROUND(AVG(cost_usd), 6) AS avg_cost
+    FROM agent_runs
+    GROUP BY agent
+    ORDER BY runs DESC
+''').fetchall()
+
+conn.close()
+
+if not rows:
+    print('No agent runs in cast.db yet.')
+    sys.exit(0)
+
+RED = '\033[0;31m'; YELLOW = '\033[0;33m'; GREEN = '\033[0;32m'; RESET = '\033[0m'; BOLD = '\033[1m'; DIM = '\033[2m'
+HEADER_FMT = f'{BOLD}{{:<22}}  {{:>6}}  {{:>9}}  {{:>8}}  {{:>14}}{RESET}'
+ROW_FMT    = '{:<22}  {:>6}  {:>9}  {:>8}  {:>14}'
+
+print()
+print(HEADER_FMT.format('AGENT', 'RUNS', 'SUCCESS%', 'BLOCKED', 'AVG_COST_USD'))
+print(f'  {\"-\"*22}  {\"-\"*6}  {\"-\"*9}  {\"-\"*8}  {\"-\"*14}')
+
+for name, runs, successes, blocked, avg_cost in rows:
+    success_pct = round((successes / runs) * 100, 1) if runs > 0 else 0.0
+    underperformer = success_pct < 70 and blocked > 5
+    color = RED if underperformer else (GREEN if success_pct >= 80 else YELLOW)
+    flag = f' {RED}*{RESET}' if underperformer else ''
+    cost_str = f'\${avg_cost:.6f}' if avg_cost else '\$0.000000'
+    pct_str = f'{color}{success_pct}%{RESET}'
+    blk_str = f'{RED}{blocked}{RESET}' if blocked > 5 else str(blocked)
+    print(f'  {name:<22}  {runs:>6}  {pct_str:>9}  {blk_str:>8}  {cost_str:>14}{flag}')
+
+print()
+print(f'{DIM}* = underperformer: <70% success AND >5 BLOCKED{RESET}')
+print(f'{DIM}Tip: cast profile --agent <name> for drill-down{RESET}')
+print()
+" 2>/dev/null || { _error "Failed to query cast.db — is the schema up to date?"; exit 1; }
+  fi
+}
+
+_cmd_route_test() {
+  local prompt="${1:-}"
+  if [ -z "$prompt" ]; then
+    echo "Usage: cast route test \"<prompt>\"" >&2
+    exit 1
+  fi
+
+  local route_script="${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}/route.sh"
+  if [ ! -f "$route_script" ]; then
+    _error "route.sh not found at: $route_script"
+    exit 1
+  fi
+
+  # Run route.sh in dry-run mode; capture JSON result and stderr separately
+  local tmp_stderr
+  tmp_stderr="$(mktemp /tmp/cast-route-test-XXXXXX.err)"
+
+  local dry_result
+  dry_result="$(CAST_DRY_RUN=1 bash "$route_script" \
+    <<< "{\"prompt\":\"$prompt\"}" 2>"$tmp_stderr" || true)"
+
+  local stderr_out
+  stderr_out="$(cat "$tmp_stderr" 2>/dev/null || true)"
+  rm -f "$tmp_stderr" 2>/dev/null || true
+
+  # Parse the dry-run JSON
+  CAST_DRY_JSON="$dry_result" CAST_DRY_PROMPT="$prompt" python3 -c "
+import json, os, sys
+
+raw = os.environ.get('CAST_DRY_JSON', '')
+prompt = os.environ.get('CAST_DRY_PROMPT', '')
+SEP = '\u2500' * 45
+
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    d = {}
+
+match_type  = d.get('match_type', 'no_match')
+agent       = d.get('matched_agent') or '(none)'
+pattern     = d.get('match_pattern') or ''
+confidence  = d.get('nlu_confidence')
+
+print(f'Testing route for: \"{prompt}\"')
+print(SEP)
+
+if match_type == 'regex':
+    print(f'Stage:    regex')
+    print(f'Matched:  {agent}')
+    print(f'Pattern:  {pattern}')
+    print(f'Cost:     \$0.00 (no API call)')
+elif match_type == 'group':
+    print(f'Stage:    group dispatch')
+    print(f'Matched:  {agent}')
+    print(f'Pattern:  {pattern}')
+    print(f'Cost:     \$0.00 (no API call)')
+elif match_type == 'memory':
+    print(f'Stage:    memory-assisted routing')
+    print(f'Matched:  {agent}')
+    print(f'Pattern:  {pattern}')
+    print(f'Cost:     \$0.00 (no API call)')
+elif match_type == 'haiku_nlu':
+    conf_str = f'{confidence:.2f}' if confidence is not None else 'n/a'
+    print(f'Stage:    haiku NLU (no regex match)')
+    print(f'Matched:  {agent}')
+    print(f'Confidence: {conf_str}')
+    print(f'Cost:     ~\$0.0005 (Haiku API call)')
+elif match_type in ('no_match', None):
+    conf_str = f'{confidence:.2f}' if confidence is not None else 'n/a'
+    if confidence is not None:
+        print(f'Stage:    unmatched')
+        print(f'Matched:  (none)')
+        print(f'Confidence: {conf_str} (below 0.6 threshold)')
+        print(f'Cost:     ~\$0.0005 (Haiku API call made)')
+    else:
+        print(f'Stage:    unmatched')
+        print(f'Matched:  (none)')
+        print(f'Cost:     \$0.00 (no API call)')
+else:
+    print(f'Stage:    {match_type}')
+    print(f'Matched:  {agent}')
+    if pattern:
+        print(f'Pattern:  {pattern}')
+
+print(SEP)
+" 2>/dev/null || {
+    echo "Testing route for: \"$prompt\""
+    printf '%s\n' "$(printf '%.0s─' {1..45})"
+    echo "Stage:    error (could not parse result)"
+    echo "Raw:      $dry_result"
+    printf '%s\n' "$(printf '%.0s─' {1..45})"
+  }
+}
+
 _cmd_learn() {
   if [ "${1:-}" = "--from-session" ]; then
     _require_db
@@ -1784,6 +2018,14 @@ case "$SUBCOMMAND" in
   status)               _cmd_status "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
   learn)                _cmd_learn "$@" ;;
+  profile)              _cmd_profile "$@" ;;
+  route)
+    shift
+    case "${1:-}" in
+      test) shift; _cmd_route_test "$@" ;;
+      *) echo "Usage: cast route test \"<prompt>\"" >&2; exit 1 ;;
+    esac
+    ;;
   ""|--help|-h)
     _usage
     exit 0

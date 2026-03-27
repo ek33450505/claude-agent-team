@@ -146,7 +146,7 @@ FIRST_LINE="${CMD%%$'\n'*}"
 
 # --- git commit block ---
 # Allow ONLY if escape hatch is a leading env assignment immediately before git commit
-if echo "$FIRST_LINE" | grep -qE "^CAST_COMMIT_AGENT=1[[:space:]]+git[[:space:]]+commit"; then
+if echo "$FIRST_LINE" | grep -qE "^(cd[[:space:]]+[^[:space:]]+[[:space:]]+&&[[:space:]]+)?CAST_COMMIT_AGENT=1[[:space:]]+git[[:space:]]+commit"; then
   exit 0
 fi
 # Block any other git commit invocation
@@ -157,7 +157,7 @@ fi
 
 # --- git push block ---
 # Allow ONLY if escape hatch is a leading env assignment immediately before git push
-if echo "$FIRST_LINE" | grep -qE "^CAST_PUSH_OK=1[[:space:]]+git[[:space:]]+push"; then
+if echo "$FIRST_LINE" | grep -qE "^(cd[[:space:]]+[^[:space:]]+[[:space:]]+&&[[:space:]]+)?CAST_PUSH_OK=1[[:space:]]+git[[:space:]]+push"; then
   exit 0
 fi
 # Block any other git push invocation
