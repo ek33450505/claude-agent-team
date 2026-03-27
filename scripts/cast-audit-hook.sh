@@ -18,8 +18,9 @@
 #   is_cloud_bound   true if the tool routes data outside the machine
 #   input_hash       SHA256[:16] of full tool_input (catch-all fingerprint)
 #
-# This hook is OBSERVATION ONLY — it never blocks (always exit 0).
-# Phase 7f-full will add PII redaction and air-gap enforcement.
+# PII enforcement: when redact_pii=true AND a cloud-bound tool call contains PII,
+# this hook outputs {"decision":"block"} and exits 2 to prevent the call.
+# Enforcement can be toggled: cast audit --redact on|off
 #
 # Installation (add to ~/.claude/settings.json):
 #   "PreToolUse": [
@@ -265,18 +266,45 @@ except Exception:
     pass
 " 2>/dev/null || true
 
-        # Inject CAST-REDACT-WARN directive
-        python3 -c "
+        # Check enforcement mode: block if redact_pii=true, else warn only
+        ENFORCE_BLOCK="$(python3 -c "
+import json, os
+try:
+    with open(os.path.expanduser('~/.claude/config/cast-cli.json')) as f:
+        cfg = json.load(f)
+    print('true' if cfg.get('redact_pii') else 'false')
+except Exception:
+    print('false')
+" 2>/dev/null || echo 'false')"
+
+        if [ "$ENFORCE_BLOCK" = "true" ]; then
+          # Append audit record before blocking so the block is logged
+          echo "$RECORD" >> "$AUDIT_LOG" 2>/dev/null || true
+          # Output block decision — Claude Code reads this from stdout
+          python3 -c "
+import json, os
+n = int(os.environ.get('CAST_REDACT_COUNT', 0))
+output = {
+    'decision': 'block',
+    'reason': f'[CAST-PII-BLOCK] {n} PII entities detected in cloud-bound tool call. Tool execution blocked. Disable with: cast audit --redact off'
+}
+print(json.dumps(output))
+" 2>/dev/null || true
+          exit 2
+        else
+          # Observation mode: warn but allow
+          python3 -c "
 import json, os
 n = int(os.environ.get('CAST_REDACT_COUNT', 0))
 output = {
     'hookSpecificOutput': {
         'hookEventName': 'PreToolUse',
-        'additionalContext': f'[CAST-REDACT-WARN: {n} PII entities detected in cloud-bound tool call. Audit record annotated. Consider enabling data minimization.]'
+        'additionalContext': f'[CAST-REDACT-WARN: {n} PII entities detected in cloud-bound tool call. Audit record annotated. Enable enforcement with: cast audit --redact on]'
     }
 }
 print(json.dumps(output))
 " 2>/dev/null || true
+        fi
       fi
     fi
   fi
@@ -286,5 +314,4 @@ fi
 # Single atomic line append — JSONL format (one JSON object per line).
 echo "$RECORD" >> "$AUDIT_LOG" 2>/dev/null || true
 
-# Never block — audit hook is observation only
 exit 0
