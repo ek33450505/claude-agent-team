@@ -398,8 +398,6 @@ PYEOF
   fi
 
   log INFO "Executing task ${task_id}: agent=${agent}"
-  local output exit_code
-  exit_code=0
 
   # Set working directory to project root if available
   local run_dir="${HOME}"
@@ -407,8 +405,41 @@ PYEOF
     run_dir="$project_root"
   fi
 
-  # Task execution via Claude API (cloud only)
-  output="" ; exit_code=0
+  # Task execution via Claude CLI (non-interactive print mode).
+  # task_text is written to a temp file to prevent shell injection via argument
+  # expansion. CLAUDE_SUBPROCESS=1 triggers the subprocess guard at the top of
+  # this script, preventing recursive daemon invocation. Set CLAUDE_BIN env var
+  # to override the claude binary path (useful for testing).
+  local _task_tmp
+  _task_tmp=$(mktemp "${TMPDIR:-/tmp}/castd-task.XXXXXX")
+  printf '%s' "$task_text" > "$_task_tmp"
+
+  local _claude_bin
+  _claude_bin="${CLAUDE_BIN:-${HOME}/.local/bin/claude}"
+
+  local output exit_code
+  output=""
+  exit_code=0
+  # --dangerously-skip-permissions: daemon is headless (no TTY for prompts).
+  # Task queue is written only by trusted CAST agents/CLI (schema-gated);
+  # untrusted callers cannot insert tasks, so permission bypass is safe here.
+  if [[ -x "$_claude_bin" ]]; then
+    output=$(
+      cd "$run_dir" && \
+      CLAUDE_SUBPROCESS=1 \
+      "$_claude_bin" \
+        --print \
+        --agent "$agent" \
+        --dangerously-skip-permissions \
+        --output-format text \
+        --no-session-persistence \
+        < "$_task_tmp" 2>&1
+    ) || exit_code=$?
+  else
+    log ERROR "claude CLI not found at ${_claude_bin} — skipping task ${task_id}"
+    exit_code=127
+  fi
+  rm -f "$_task_tmp"
 
   # Determine status from output
   local run_status="done"
