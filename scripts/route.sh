@@ -552,6 +552,42 @@ for route in table.get('routes', []):
                 ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
                 input=json.dumps(log), text=True, timeout=5
             )
+
+            # --- Mismatch signal detection ---
+            # If a previous matched event for this session fired <60s ago, record a mismatch signal.
+            # Wrapped entirely in try/except so any failure is silent and never blocks routing.
+            try:
+                import sqlite3 as _sq, datetime as _dt
+                _sid = session_id
+                _cur_prompt = original[:200]
+                if _sid and _sid != 'unknown':
+                    _db_path = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+                    _conn = _sq.connect(_db_path)
+                    _sel = ('SELECT id, prompt_preview, matched_route, timestamp'
+                            ' FROM routing_events'
+                            ' WHERE session_id = ? AND action = \'matched\''
+                            ' ORDER BY id DESC LIMIT 1 OFFSET 1')
+                    _row = _conn.execute(_sel, (_sid,)).fetchone()
+                    if _row:
+                        _prev_id, _prev_prompt, _prev_route, _prev_ts = _row
+                        try:
+                            _prev_dt = _dt.datetime.fromisoformat(_prev_ts.rstrip('Z'))
+                            _now_dt = _dt.datetime.utcnow()
+                            _delta = (_now_dt - _prev_dt).total_seconds()
+                            if _delta < 60:
+                                _ins = ('INSERT INTO mismatch_signals'
+                                        ' (routing_event_id, session_id, original_prompt, follow_up_prompt,'
+                                        ' timestamp, route_fired, auto_detected)'
+                                        ' VALUES (?, ?, ?, ?, ?, ?, 1)')
+                                _conn.execute(_ins, (_prev_id, _sid, _prev_prompt, _cur_prompt,
+                                      _now_dt.isoformat() + 'Z', _prev_route))
+                                _conn.commit()
+                        except Exception:
+                            pass
+                    _conn.close()
+            except Exception:
+                pass
+
             sys.exit(0)
 
 # No match — log and output nothing (Claude handles inline); skip log in dry-run
@@ -571,6 +607,98 @@ if not dry_run:
         input=json.dumps(log), text=True, timeout=5
     )
 " 2>/dev/null || true
+
+# --- Stage 2.3: Memory-assisted routing pass ---
+# Only runs if no pattern match fired above. Calls cast-memory-router.py;
+# if it returns an agent with confidence >= 0.7, injects [CAST-DISPATCH] and
+# logs as match_type='memory'. Failures are fully swallowed — never blocks routing.
+_MEMORY_ROUTER_PY="$(dirname "$0")/cast-memory-router.py"
+[ ! -f "$_MEMORY_ROUTER_PY" ] && _MEMORY_ROUTER_PY="${HOME}/.claude/scripts/cast-memory-router.py"
+
+if [ -f "$_MEMORY_ROUTER_PY" ]; then
+  MEMORY_RESULT="$(CAST_DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}" \
+    python3 "$_MEMORY_ROUTER_PY" --prompt "$ORIGINAL_PROMPT" 2>/dev/null || echo '{}')"
+  CAST_MEMORY_AGENT="$(echo "$MEMORY_RESULT" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('agent') or '')" 2>/dev/null || echo "")"
+
+  if [ -n "$CAST_MEMORY_AGENT" ]; then
+    CAST_MEMORY_RESULT="$MEMORY_RESULT" CAST_MEMORY_AGENT_VAL="$CAST_MEMORY_AGENT" \
+    CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" \
+    CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" python3 -c "
+import json, os, datetime, sys, subprocess
+
+agent = os.environ.get('CAST_MEMORY_AGENT_VAL', '')
+memory_result_raw = os.environ.get('CAST_MEMORY_RESULT', '{}')
+prompt = os.environ.get('CAST_PROMPT', '')
+original = os.environ.get('CAST_ORIGINAL', '')
+dry_run = os.environ.get('CAST_DRY_RUN', '0') == '1'
+dry_run_file = os.environ.get('CAST_DRY_RUN_FILE', '')
+ts = datetime.datetime.utcnow().isoformat() + 'Z'
+preview = prompt[:80]
+session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
+
+try:
+    mem_data = json.loads(memory_result_raw)
+    confidence_val = mem_data.get('confidence', 0.0)
+    reason = mem_data.get('reason', 'memory match')
+except Exception:
+    confidence_val = 0.0
+    reason = 'memory match'
+
+if dry_run:
+    already_matched = False
+    if dry_run_file and os.path.exists(dry_run_file):
+        try:
+            already_matched = os.path.getsize(dry_run_file) > 0
+        except Exception:
+            pass
+    if not already_matched and dry_run_file:
+        result = {
+            'dry_run': True,
+            'prompt': original[:100],
+            'matched_agent': agent,
+            'match_type': 'memory',
+            'match_pattern': f'memory:{reason}',
+            'post_chain': None,
+            'directive_would_be': f'[CAST-DISPATCH] {agent}'
+        }
+        try:
+            with open(dry_run_file, 'w') as rf:
+                rf.write(json.dumps(result))
+        except Exception:
+            pass
+    sys.exit(0)
+
+directive = f'[CAST-DISPATCH] Route: {agent} (confidence: memory)\n'
+directive += f'RECOMMENDED: Consider dispatching the \`{agent}\` agent via the Agent tool.\n'
+directive += f'Pass the user full prompt as the agent task. Do NOT handle this inline.\n'
+directive += f'(Matched via agent memory keyword similarity — reason: {reason})'
+
+output = {
+    'hookSpecificOutput': {
+        'hookEventName': 'UserPromptSubmit',
+        'additionalContext': directive
+    }
+}
+print(json.dumps(output))
+
+log = {
+    'timestamp': ts,
+    'session_id': session_id,
+    'prompt_preview': preview,
+    'action': 'matched',
+    'matched_route': agent,
+    'command': None,
+    'pattern': f'memory:{reason}',
+    'confidence': 'memory',
+    'match_type': 'memory'
+}
+subprocess.run(
+    ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
+    input=json.dumps(log), text=True, timeout=5
+)
+" 2>/dev/null && { [ "$DRY_RUN" = "1" ] || exit 0; } || true
+  fi
+fi
 
 # --- Stage 2.5: Semantic routing (Ollama-based, graceful fallback) ---
 SEMANTIC_SCRIPT="$HOME/.claude/scripts/cast-semantic-route.sh"

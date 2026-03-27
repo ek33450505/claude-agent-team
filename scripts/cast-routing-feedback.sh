@@ -227,6 +227,7 @@ for key, prompts in top5:
     else:
         new_proposals[prop_id] = {
             'id': prop_id,
+            'source': 'no_match',
             'patterns': [pattern],
             'agent': agent,
             'model': model,

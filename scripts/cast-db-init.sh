@@ -64,7 +64,7 @@ export SQLITE_VEC_AVAILABLE
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-if [ "$CURRENT_VERSION" -ge 2 ]; then
+if [ "$CURRENT_VERSION" -ge 3 ]; then
   echo "cast.db already initialized (v${CURRENT_VERSION})" >&2
   exit 0
 fi
@@ -73,6 +73,30 @@ fi
 if [ "$CURRENT_VERSION" -eq 1 ]; then
   sqlite3 "$DB_PATH" 'PRAGMA user_version = 2;'
   echo "cast.db migrated v1 → v2 (sqlite-vec support marker added)" >&2
+  CURRENT_VERSION=2
+fi
+
+# Migrate v2 → v3: add mismatch_signals table
+if [ "$CURRENT_VERSION" -eq 2 ]; then
+  sqlite3 "$DB_PATH" <<'MIGRATE_V3'
+CREATE TABLE IF NOT EXISTS mismatch_signals (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  routing_event_id    INTEGER REFERENCES routing_events(id),
+  session_id          TEXT,
+  original_prompt     TEXT,
+  follow_up_prompt    TEXT,
+  timestamp           TEXT,
+  route_fired         TEXT,
+  auto_detected       INTEGER  DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_mismatch_signals_session    ON mismatch_signals(session_id);
+CREATE INDEX IF NOT EXISTS idx_mismatch_signals_route      ON mismatch_signals(route_fired);
+CREATE INDEX IF NOT EXISTS idx_mismatch_signals_timestamp  ON mismatch_signals(timestamp);
+
+PRAGMA user_version = 3;
+MIGRATE_V3
+  echo "cast.db migrated v2 → v3 (mismatch_signals table added)" >&2
   exit 0
 fi
 
@@ -167,6 +191,18 @@ CREATE TABLE IF NOT EXISTS budgets (
   created_at    TEXT
 );
 
+-- Mismatch signals: rapid re-prompt after a route fired = potential route error
+CREATE TABLE IF NOT EXISTS mismatch_signals (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  routing_event_id    INTEGER REFERENCES routing_events(id),
+  session_id          TEXT,
+  original_prompt     TEXT,    -- first 200 chars of the routed prompt
+  follow_up_prompt    TEXT,    -- first 200 chars of the re-prompt
+  timestamp           TEXT,    -- ISO8601
+  route_fired         TEXT,    -- matched_route from the routing_event
+  auto_detected       INTEGER  DEFAULT 1  -- 1 = auto, 0 = manually tagged
+);
+
 -- Indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_routing_events_session   ON routing_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_routing_events_timestamp ON routing_events(timestamp);
@@ -181,10 +217,13 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status  ON agent_runs(agent, sta
 CREATE INDEX IF NOT EXISTS idx_task_queue_created_at    ON task_queue(created_at);
 CREATE INDEX IF NOT EXISTS idx_routing_events_route     ON routing_events(matched_route);
 CREATE INDEX IF NOT EXISTS idx_budgets_scope_key        ON budgets(scope_key);
+CREATE INDEX IF NOT EXISTS idx_mismatch_signals_session    ON mismatch_signals(session_id);
+CREATE INDEX IF NOT EXISTS idx_mismatch_signals_route      ON mismatch_signals(route_fired);
+CREATE INDEX IF NOT EXISTS idx_mismatch_signals_timestamp  ON mismatch_signals(timestamp);
 
 -- Set schema version
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 SQL
 
 chmod 600 "$DB_PATH"
-echo "cast.db initialized (v2)" >&2
+echo "cast.db initialized (v3)" >&2

@@ -112,6 +112,7 @@ Subcommands:
   ${C_BOLD}airgap${C_RESET}    on|off|status           Toggle air-gap mode (local-only routing)
   ${C_BOLD}daemon${C_RESET}    status|start|stop|...   Control the castd background daemon
   ${C_BOLD}status${C_RESET}                            Terminal health dashboard
+  ${C_BOLD}learn${C_RESET}     "<pattern>" <agent>     Install a learned route into routing-table.json
   ${C_BOLD}install-completions${C_RESET}               Install shell tab completions
 
 Global flags:
@@ -1218,6 +1219,16 @@ _daemon_start() {
 
   # macOS: try launchctl
   if [ "$(uname -s)" = "Darwin" ] && [ -f "$plist_src" ]; then
+    # Install castd.sh to ~/.claude/scripts/ before loading the plist —
+    # the plist hardcodes that path, so launchd will exit 127 without this.
+    if [ -f "$castd_script" ]; then
+      mkdir -p "${HOME}/.claude/scripts"
+      cp "$castd_script" "${HOME}/.claude/scripts/castd.sh"
+      chmod +x "${HOME}/.claude/scripts/castd.sh"
+    else
+      _error "castd.sh not found; cannot start daemon"
+      return 1
+    fi
     mkdir -p "${HOME}/Library/LaunchAgents"
     cp "$plist_src" "$plist_dest"
     if launchctl load "$plist_dest" 2>/dev/null; then
@@ -1571,6 +1582,177 @@ _parse_global_flags() {
   fi
 }
 
+# ── Subcommand: learn ─────────────────────────────────────────────────────────
+_learn_from_session() {
+  # Query last session's no_match and mismatch events, interactively prompt to route each
+  local session_id
+  session_id="$(sqlite3 "$CAST_DB_PATH" \
+    "SELECT session_id FROM routing_events ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")"
+
+  if [ -z "$session_id" ]; then
+    echo "No routing events found in cast.db." >&2
+    return 0
+  fi
+
+  echo "Session: $session_id"
+  echo "Reviewing unmatched prompts from last session..."
+  echo ""
+
+  # Get no_match events for the session
+  local prompts
+  prompts="$(sqlite3 "$CAST_DB_PATH" \
+    "SELECT prompt_preview FROM routing_events WHERE session_id='${session_id}' AND action='no_match' ORDER BY id DESC LIMIT 20;" \
+    2>/dev/null || echo "")"
+
+  if [ -z "$prompts" ]; then
+    echo "No unmatched prompts found for session $session_id."
+    return 0
+  fi
+
+  while IFS= read -r prompt_preview; do
+    [ -z "$prompt_preview" ] && continue
+    echo "Prompt: \"$prompt_preview\""
+    printf "Route to agent [or skip]: "
+    local agent_input
+    read -r agent_input
+    if [ -n "$agent_input" ] && [ "$agent_input" != "skip" ]; then
+      if [ ! -f "${CAST_AGENTS_DIR}/${agent_input}.md" ]; then
+        echo "  Agent not found: $agent_input — skipping" >&2
+        continue
+      fi
+      _do_learn "$prompt_preview" "$agent_input" "soft" "Learned from session review"
+    fi
+  done <<< "$prompts"
+}
+
+_do_learn() {
+  local pattern="$1"
+  local agent="$2"
+  local confidence="${3:-soft}"
+  local description="${4:-}"
+
+  local routing_table="${HOME}/.claude/config/routing-table.json"
+  local epoch
+  epoch="$(date +%s)"
+  local route_id="learned-${agent}-${epoch}"
+
+  if [ -z "$description" ]; then
+    description="Learned route for agent ${agent} (pattern: ${pattern})"
+  fi
+
+  python3 - "$routing_table" "$route_id" "$pattern" "$agent" "$confidence" "$description" <<'PYEOF'
+import json, sys, os
+
+routing_table, route_id, pattern, agent, confidence, description = sys.argv[1:]
+
+try:
+    with open(routing_table) as f:
+        table = json.load(f)
+except Exception as e:
+    print(f"Error reading routing table: {e}", file=sys.stderr)
+    sys.exit(1)
+
+if 'routes' not in table:
+    table['routes'] = []
+
+new_route = {
+    'id': route_id,
+    'patterns': [pattern],
+    'agent': agent,
+    'confidence': confidence,
+    'description': description,
+    'source': 'cast-learn',
+}
+
+table['routes'].append(new_route)
+
+with open(routing_table, 'w') as f:
+    json.dump(table, f, indent=2)
+
+print(f"Route installed:")
+print(f"  Pattern:    {pattern}")
+print(f"  Agent:      {agent}")
+print(f"  Confidence: {confidence}")
+print(f"  ID:         {route_id}")
+PYEOF
+
+  # Log to routing_events
+  python3 -c "
+import json, datetime, os, sys
+sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
+log = {
+    'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
+    'session_id': os.environ.get('CLAUDE_SESSION_ID', 'cast-cli'),
+    'prompt_preview': '${pattern}'[:80],
+    'action': 'learned',
+    'matched_route': '${agent}',
+    'match_type': 'manual',
+    'pattern': '${pattern}',
+    'confidence': '${confidence}',
+}
+import subprocess
+subprocess.run(
+    ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
+    input=json.dumps(log), text=True, timeout=5
+)
+" 2>/dev/null || true
+}
+
+_cmd_learn() {
+  if [ "${1:-}" = "--from-session" ]; then
+    _require_db
+    _learn_from_session
+    return
+  fi
+
+  local pattern="${1:-}"
+  local agent="${2:-}"
+  local confidence="soft"
+  local description=""
+
+  shift 2 2>/dev/null || true
+
+  # Parse optional flags
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --confidence)
+        confidence="${2:-soft}"
+        shift 2
+        ;;
+      --description)
+        description="${2:-}"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$pattern" ] || [ -z "$agent" ]; then
+    echo "Usage: cast learn \"<pattern>\" <agent> [--confidence hard|soft] [--description \"...\"]" >&2
+    echo "       cast learn --from-session" >&2
+    exit 1
+  fi
+
+  # Validate confidence
+  if [ "$confidence" != "hard" ] && [ "$confidence" != "soft" ]; then
+    echo "Error: --confidence must be 'hard' or 'soft' (got: $confidence)" >&2
+    exit 1
+  fi
+
+  # Validate agent
+  if [ ! -f "${CAST_AGENTS_DIR}/${agent}.md" ]; then
+    echo "Agent not found: $agent" >&2
+    echo "Available agents:" >&2
+    ls "${CAST_AGENTS_DIR}/" 2>/dev/null | sed 's/\.md$//' | sort | sed 's/^/    /' >&2
+    exit 1
+  fi
+
+  _require_db
+  _do_learn "$pattern" "$agent" "$confidence" "$description"
+}
+
 # ── Main dispatch ─────────────────────────────────────────────────────────────
 if [ "$#" -gt 0 ]; then
   CAST_ARGS=("$@")
@@ -1601,6 +1783,7 @@ case "$SUBCOMMAND" in
   daemon)               _cmd_daemon "$@" ;;
   status)               _cmd_status "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
+  learn)                _cmd_learn "$@" ;;
   ""|--help|-h)
     _usage
     exit 0
