@@ -21,7 +21,9 @@ if [[ "$TOOL_NAME" == "Write" || "$TOOL_NAME" == "Edit" ]]; then
       while [[ "$SEARCH_DIR" != "/" && "$SEARCH_DIR" != "$HOME" ]]; do
         if [[ -f "$SEARCH_DIR/.prettierrc" || -f "$SEARCH_DIR/.prettierrc.json" || -f "$SEARCH_DIR/prettier.config.js" ]]; then
           # Use subshell to avoid mutating the script's working directory
-          (cd "$SEARCH_DIR" && npx prettier --write "$REAL_PATH" 2>/dev/null) || true
+          if ! (cd "$SEARCH_DIR" && npx prettier --write "$REAL_PATH" 2>/tmp/cast-prettier-err.tmp 2>&1); then
+            echo "[CAST-WARN] prettier failed for $REAL_PATH — skipping format. $(head -3 /tmp/cast-prettier-err.tmp 2>/dev/null)" >&2
+          fi
           break
         fi
         SEARCH_DIR=$(dirname "$SEARCH_DIR")

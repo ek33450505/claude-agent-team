@@ -25,6 +25,7 @@ cast_write_status() {
   local recommended="${5:-}"
 
   mkdir -p "$CAST_STATUS_DIR"
+  chmod 700 "$CAST_STATUS_DIR"
 
   local ts
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -33,7 +34,7 @@ cast_write_status() {
   # Use python3 stdlib only — no pip packages required.
   # Pass all values as positional argv to avoid shell-quoting pitfalls with
   # heredoc variables and to keep the inline script readable.
-  python3 - "$agent" "$status" "$summary" "$concerns" "$recommended" "$ts" "$filepath" <<'PYEOF'
+  written_path=$(python3 - "$agent" "$status" "$summary" "$concerns" "$recommended" "$ts" "$filepath" <<'PYEOF'
 import json, sys
 
 agent, status, summary, concerns, recommended, ts, filepath = sys.argv[1:]
@@ -52,4 +53,6 @@ with open(filepath, 'w') as f:
 
 print(filepath)
 PYEOF
+)
+  chmod 600 "$written_path" 2>/dev/null || true
 }

@@ -103,7 +103,7 @@
     "autoAllowBashIfSandboxed": true,
     "excludedCommands": ["git", "docker", "bq", "osascript"],
     "filesystem": {
-      "denyRead": ["~/.aws/credentials", "~/.ssh/id_*", "~/.gnupg"],
+      "denyRead": ["~/.aws/credentials", "~/.ssh/id_*", "~/.gnupg", "~/.claude/cast.db", "~/.claude/history.jsonl", "~/.claude/logs/**", "~/.claude/routing-log.jsonl"],
       "allowWrite": ["/tmp"]
     },
     "network": {

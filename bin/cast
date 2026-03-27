@@ -11,12 +11,12 @@
 
 set -uo pipefail
 
-# ── Version ──────────────────────────────────────────────────────────────────
-CAST_VERSION="1.6.0"
-
 # ── Script directory (resolve symlinks) ──────────────────────────────────────
 CAST_BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 CAST_REPO_DIR="$(cd "$CAST_BIN_DIR/.." && pwd)"
+
+# ── Version (read from VERSION file so install banners stay in sync) ──────────
+CAST_VERSION="$(cat "${CAST_REPO_DIR}/VERSION" 2>/dev/null || echo "unknown")"
 CAST_SCRIPTS_DIR="${HOME}/.claude/scripts"
 CAST_AGENTS_DIR="${HOME}/.claude/agents"
 

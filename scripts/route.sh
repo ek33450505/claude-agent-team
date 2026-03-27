@@ -11,13 +11,14 @@ if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
   # Depth tracking: only active when CLAUDE_SESSION_ID is set (i.e. real Claude session)
   # Without a session ID (e.g. tests), skip depth tracking to avoid stale /tmp files
   if [ -n "${CLAUDE_SESSION_ID:-}" ]; then
-    DEPTH_FILE="/tmp/cast-depth-${PPID}.depth"
+    DEPTH_FILE="/tmp/cast-depth-${PPID}-${CLAUDE_SESSION_ID:-nosession}.depth"
     CURRENT_DEPTH=0
     if [ -f "$DEPTH_FILE" ]; then
       CURRENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 0)"
     fi
     CURRENT_DEPTH=$(( CURRENT_DEPTH + 1 ))
     echo "$CURRENT_DEPTH" > "$DEPTH_FILE"
+    chmod 600 "$DEPTH_FILE" 2>/dev/null || true
 
     if [ "$CURRENT_DEPTH" -ge 2 ]; then
       python3 -c "
@@ -32,10 +33,13 @@ fi
 
 set -euo pipefail
 
+# --- Stale /tmp cast-* file cleanup (older than 1 day) ---
+find /tmp -maxdepth 1 -name 'cast-*' -mtime +1 -delete 2>/dev/null || true
+
 # --- SQLite DB init guard (runs once per machine boot via flag file) ---
 # Ensures cast.db exists before any routing event is logged to it.
 # Uses a /tmp flag so we only invoke the init script once per session, not per prompt.
-_CAST_DB_INIT_FLAG="/tmp/cast-db-initialized-${PPID}.flag"
+_CAST_DB_INIT_FLAG="/tmp/cast-db-initialized-${PPID}-${CLAUDE_SESSION_ID:-nosession}.flag"
 if [ ! -f "$_CAST_DB_INIT_FLAG" ]; then
   _CAST_DB="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
   if [ ! -f "$_CAST_DB" ]; then
@@ -46,15 +50,19 @@ if [ ! -f "$_CAST_DB_INIT_FLAG" ]; then
   touch "$_CAST_DB_INIT_FLAG" 2>/dev/null || true
 fi
 
+# --- Resolve cast-db-log.py path (dirname-first so test HOME overrides work) ---
+_CAST_DB_LOG_PY="$(dirname "$0")/cast-db-log.py"
+[ ! -f "$_CAST_DB_LOG_PY" ] && _CAST_DB_LOG_PY="${HOME}/.claude/scripts/cast-db-log.py"
+export CAST_DB_LOG_PY="$_CAST_DB_LOG_PY"
+
 # --- Air-gap mode ---
 # Activated by CAST_AIRGAP=1 env var OR airgap=true in cast-cli.json.
+# Config file takes precedence: if config says airgap:true, env var cannot override it off.
+# Logic: airgap_active = config_airgap OR (env_airgap == '1')
 # When active: inject [CAST-AIRGAP] into the session briefing, and any
 # route with a cloud: model is rewritten to local:qwen3:8b at dispatch time.
 CAST_AIRGAP_ACTIVE=0
-if [ "${CAST_AIRGAP:-0}" = "1" ]; then
-  CAST_AIRGAP_ACTIVE=1
-else
-  _airgap_cfg="$(python3 -c "
+_airgap_cfg="$(python3 -c "
 import json, os
 try:
     with open(os.path.expanduser('~/.claude/config/cast-cli.json')) as f:
@@ -63,9 +71,10 @@ try:
 except Exception:
     print('0')
 " 2>/dev/null || echo '0')"
-  if [ "$_airgap_cfg" = "1" ]; then
-    CAST_AIRGAP_ACTIVE=1
-  fi
+if [ "$_airgap_cfg" = "1" ]; then
+  CAST_AIRGAP_ACTIVE=1
+elif [ "${CAST_AIRGAP:-0}" = "1" ]; then
+  CAST_AIRGAP_ACTIVE=1
 fi
 
 # --- Dry-run mode ---
@@ -270,7 +279,7 @@ if echo "$PROMPT" | grep -qi "^opus:"; then
 import json, datetime, os, subprocess
 log = {'timestamp': datetime.datetime.utcnow().isoformat()+'Z', 'session_id': os.environ.get('CLAUDE_SESSION_ID','unknown'), 'prompt_preview': os.environ.get('CAST_PROMPT_VAL','')[:80], 'action': 'opus_escalation', 'matched_route': 'opus', 'pattern': 'opus: prefix'}
 subprocess.run(
-    ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+    ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
     input=json.dumps(log), text=True, timeout=5
 )
 " 2>/dev/null || true
@@ -343,7 +352,7 @@ for group in groups_data.get('groups', []):
                 log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'group_dispatched', 'matched_route': group['id'], 'pattern': pattern, 'confidence': group.get('confidence', 'soft')}
                 import subprocess
                 subprocess.run(
-                    ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+                    ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
                     input=json.dumps(log), text=True, timeout=5
                 )
                 sys.exit(0)
@@ -376,7 +385,7 @@ except Exception as e:
         import subprocess as _sp
         log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'config_error', 'error': str(e)}
         _sp.run(
-            ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+            ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
             input=json.dumps(log), text=True, timeout=5
         )
     except Exception:
@@ -424,7 +433,7 @@ for route in table.get('routes', []):
                     loop_log = {'timestamp': ts, 'session_id': session_id, 'prompt_preview': preview, 'action': 'loop_break', 'matched_route': agent, 'pattern': pattern, 'dispatch_count': dispatch_count}
                     import subprocess as _sp2
                     _sp2.run(
-                        ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+                        ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
                         input=json.dumps(loop_log), text=True, timeout=5
                     )
                 else:
@@ -540,7 +549,7 @@ for route in table.get('routes', []):
             }
             import subprocess as _sp3
             _sp3.run(
-                ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+                ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
                 input=json.dumps(log), text=True, timeout=5
             )
             sys.exit(0)
@@ -558,7 +567,7 @@ if not dry_run:
     }
     import subprocess as _sp4
     _sp4.run(
-        ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+        ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
         input=json.dumps(log), text=True, timeout=5
     )
 " 2>/dev/null || true
@@ -629,7 +638,7 @@ log = {
     'confidence': 'semantic'
 }
 subprocess.run(
-    ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+    ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
     input=json.dumps(log), text=True, timeout=5
 )
 " 2>/dev/null && { [ "$DRY_RUN" = "1" ] || exit 0; } || true
@@ -719,7 +728,7 @@ log = {
 }
 import subprocess as _sp5
 _sp5.run(
-    ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+    ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
     input=json.dumps(log), text=True, timeout=5
 )
 " 2>/dev/null || true

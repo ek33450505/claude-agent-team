@@ -23,6 +23,9 @@ fi
 # Ensure parent directory exists
 mkdir -p "$(dirname "$DB_PATH")"
 
+# Harden permissions on existing DB (migration path for installs prior to 0600 fix)
+chmod 600 "$DB_PATH" 2>/dev/null || true
+
 # Check for sqlite3
 if ! command -v sqlite3 >/dev/null 2>&1; then
   echo "Error: sqlite3 not found in PATH. Install sqlite3 to use cast.db." >&2
@@ -62,18 +65,20 @@ export SQLITE_VEC_AVAILABLE
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
 if [ "$CURRENT_VERSION" -ge 2 ]; then
-  echo "cast.db already initialized (v${CURRENT_VERSION})"
+  echo "cast.db already initialized (v${CURRENT_VERSION})" >&2
   exit 0
 fi
 
 # Migrate v1 → v2: bump PRAGMA user_version only (no schema changes needed for v2)
 if [ "$CURRENT_VERSION" -eq 1 ]; then
   sqlite3 "$DB_PATH" 'PRAGMA user_version = 2;'
-  echo "cast.db migrated v1 → v2 (sqlite-vec support marker added)"
+  echo "cast.db migrated v1 → v2 (sqlite-vec support marker added)" >&2
   exit 0
 fi
 
 sqlite3 "$DB_PATH" <<'SQL'
+PRAGMA foreign_keys = ON;
+
 -- Sessions: one row per Claude Code session
 CREATE TABLE IF NOT EXISTS sessions (
   id                    TEXT PRIMARY KEY,          -- CLAUDE_SESSION_ID
@@ -95,7 +100,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   model           TEXT,                            -- 'cloud:sonnet', 'local:qwen3:8b'
   started_at      TEXT,
   ended_at        TEXT,
-  status          TEXT,                            -- DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+  status          TEXT CHECK (status IN ('DONE','DONE_WITH_CONCERNS','BLOCKED','NEEDS_CONTEXT','running','failed')),
   input_tokens    INTEGER,
   output_tokens   INTEGER,
   cost_usd        REAL,
@@ -126,8 +131,8 @@ CREATE TABLE IF NOT EXISTS task_queue (
   project_root          TEXT,
   agent                 TEXT,
   task                  TEXT NOT NULL,
-  priority              INTEGER DEFAULT 5,         -- 1=urgent, 10=low
-  status                TEXT DEFAULT 'pending',    -- pending | claimed | done | failed
+  priority              INTEGER CHECK (priority BETWEEN 1 AND 10) DEFAULT 5,
+  status                TEXT    CHECK (status IN ('pending','claimed','done','failed','cancelled')) DEFAULT 'pending',
   claimed_at            TEXT,
   claimed_by_session    TEXT,
   completed_at          TEXT,
@@ -170,8 +175,16 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_agent         ON agent_runs(agent);
 CREATE INDEX IF NOT EXISTS idx_task_queue_status        ON task_queue(status);
 CREATE INDEX IF NOT EXISTS idx_agent_memories_agent     ON agent_memories(agent);
 
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status        ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_ended_at      ON agent_runs(ended_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status  ON agent_runs(agent, status);
+CREATE INDEX IF NOT EXISTS idx_task_queue_created_at    ON task_queue(created_at);
+CREATE INDEX IF NOT EXISTS idx_routing_events_route     ON routing_events(matched_route);
+CREATE INDEX IF NOT EXISTS idx_budgets_scope_key        ON budgets(scope_key);
+
 -- Set schema version
 PRAGMA user_version = 2;
 SQL
 
-echo "cast.db initialized (v2)"
+chmod 600 "$DB_PATH"
+echo "cast.db initialized (v2)" >&2

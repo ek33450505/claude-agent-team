@@ -1,6 +1,6 @@
 # CAST — Claude Agent Specialist Team
 
-<!-- CAST_VERSION_BADGE -->![Version](https://img.shields.io/badge/version-1.5.0-blue)<!-- /CAST_VERSION_BADGE -->
+<!-- CAST_VERSION_BADGE -->![Version](https://img.shields.io/badge/version-1.6.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-42-green)
 ![Routes](https://img.shields.io/badge/routes-35-blue)
 ![Commands](https://img.shields.io/badge/commands-32-blue)
@@ -1077,7 +1077,7 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 | Phase 4 (2026-03-22) | Universal dispatcher (`/cast`). BATS test suite. Pattern simplification — NLU replaces broad regex. `stop-hook.sh`. Agent status reader. Rollback protocol. |
 | Phase 5 (2026-03-22–26) | Semantic routing (Ollama + cosine similarity). Agent performance profiling. Self-improving routing proposals pipeline. 6 specialist agents added (frontend-designer, framework-expert, pentest, infra, db-architect, merge). Merge skill. |
 | Phase 6 | SQLite state foundation (`cast.db`). Background daemon (`castd`) with queue polling and offline mode. Agent memory evolution with semantic search. Local Ollama execution tier. PII redaction pipeline (Presidio). Audit hook. |
-| Phase 7 (2026-03-26) | `cast` CLI (9 subcommands: run, queue, memory, budget, audit, airgap, daemon, status, install-completions). macOS OS-level integration: status bar app, Alfred workflow, file watcher, Notification Center, cross-machine sync. Air-gap mode. 35 routes. 198 tests. |
+| Phase 7 (2026-03-26) | `cast` CLI (9 subcommands: run, queue, memory, budget, audit, airgap, daemon, status, install-completions). macOS OS-level integration: status bar app, Alfred workflow, file watcher, Notification Center, cross-machine sync. Air-gap mode. 35 routes. 205 tests. |
 
 ---
 
@@ -1090,7 +1090,7 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 | Routes | 35 |
 | Slash commands | 32 |
 | Skills | 13 |
-| Tests | 198 |
+| Tests | 205 |
 | Hook directives | 11 |
 | post-tool-hook.sh parts | 5 |
 | agent-status-reader responses | 5 |

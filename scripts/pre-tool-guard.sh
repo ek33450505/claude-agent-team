@@ -99,6 +99,22 @@ for policy in config.get('policies', []):
     if severity == 'block':
         if override:
             print(f'[CAST-POLICY-WARN] Policy \"{policy_id}\" bypassed via CAST_POLICY_OVERRIDE=1. Requires: {required_agent}', file=sys.stderr)
+            import datetime as _dt, json as _json
+            audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
+            os.makedirs(os.path.dirname(audit_path), exist_ok=True)
+            event = {
+                'timestamp': _dt.datetime.utcnow().isoformat() + 'Z',
+                'event': 'POLICY_OVERRIDE',
+                'policy_id': policy_id,
+                'file_path': file_path,
+                'session_id': session_id,
+                'override_env': 'CAST_POLICY_OVERRIDE'
+            }
+            try:
+                with open(audit_path, 'a') as _af:
+                    _af.write(_json.dumps(event) + '\n')
+            except Exception:
+                pass
             sys.exit(0)
         else:
             msg = (

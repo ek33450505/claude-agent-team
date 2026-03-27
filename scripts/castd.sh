@@ -370,15 +370,19 @@ PYEOF
 
   # Claim the task atomically
   local claim_result
-  claim_result=$(sqlite3 "$CAST_DB" "
-    UPDATE task_queue
-    SET    status = 'claimed',
-           claimed_at = datetime('now'),
-           claimed_by_session = 'castd-$$'
-    WHERE  id = ${task_id}
-      AND  status = 'pending';
-    SELECT changes();
-  " 2>/dev/null || echo "0")
+  claim_result=$(python3 - "$CAST_DB" "$task_id" <<'PYEOF'
+import sqlite3, sys, os
+db_path, task_id = sys.argv[1], int(sys.argv[2])
+conn = sqlite3.connect(db_path)
+cur = conn.execute(
+    "UPDATE task_queue SET status='claimed', claimed_at=datetime('now'), claimed_by_session=? WHERE id=? AND status='pending'",
+    (f'castd-{os.getpid()}', task_id)
+)
+conn.commit()
+print(cur.rowcount)
+conn.close()
+PYEOF
+)
 
   if [[ "${claim_result:-0}" -eq 0 ]]; then
     # Another process claimed it first — skip
@@ -398,13 +402,14 @@ PYEOF
   # Offline check: defer cloud tasks if offline
   if [[ "$CAST_OFFLINE" -eq 1 && "$backend" == "cloud" ]]; then
     log WARN "Task ${task_id} requires cloud model but CAST_OFFLINE=1 — resetting to pending"
-    sqlite3 "$CAST_DB" "
-      UPDATE task_queue
-      SET    status = 'pending',
-             claimed_at = NULL,
-             claimed_by_session = NULL
-      WHERE  id = ${task_id};
-    " 2>/dev/null || true
+    python3 - "$CAST_DB" "$task_id" <<'PYEOF'
+import sqlite3, sys
+db_path, task_id = sys.argv[1], int(sys.argv[2])
+conn = sqlite3.connect(db_path)
+conn.execute("UPDATE task_queue SET status='pending', claimed_at=NULL, claimed_by_session=NULL WHERE id=?", (task_id,))
+conn.commit()
+conn.close()
+PYEOF
     return 0
   fi
 
@@ -438,13 +443,14 @@ PYEOF
   result_summary=$(echo "$output" | head -c 200)
 
   if [[ "$run_status" == "done" ]]; then
-    sqlite3 "$CAST_DB" "
-      UPDATE task_queue
-      SET    status = 'done',
-             completed_at = datetime('now'),
-             result_summary = $(python3 -c "import sys; s=sys.argv[1][:200]; print(repr(s))" "$result_summary")
-      WHERE  id = ${task_id};
-    " 2>/dev/null || true
+    python3 - "$CAST_DB" "$task_id" "$result_summary" <<'PYEOF'
+import sqlite3, sys
+db_path, task_id, result_summary = sys.argv[1], int(sys.argv[2]), sys.argv[3][:200]
+conn = sqlite3.connect(db_path)
+conn.execute("UPDATE task_queue SET status='done', completed_at=datetime('now'), result_summary=? WHERE id=?", (result_summary, task_id))
+conn.commit()
+conn.close()
+PYEOF
 
     log INFO "Task ${task_id} DONE: ${agent}"
     notify "CAST Task Done" "Agent ${agent} completed task ${task_id}"
@@ -457,23 +463,24 @@ PYEOF
   else
     # Failed — check retry eligibility
     if [[ "$retry_count" -lt "$max_retries" ]]; then
-      sqlite3 "$CAST_DB" "
-        UPDATE task_queue
-        SET    status = 'pending',
-               claimed_at = NULL,
-               claimed_by_session = NULL,
-               retry_count = retry_count + 1
-        WHERE  id = ${task_id};
-      " 2>/dev/null || true
+      python3 - "$CAST_DB" "$task_id" <<'PYEOF'
+import sqlite3, sys
+db_path, task_id = sys.argv[1], int(sys.argv[2])
+conn = sqlite3.connect(db_path)
+conn.execute("UPDATE task_queue SET status='pending', claimed_at=NULL, claimed_by_session=NULL, retry_count=retry_count+1 WHERE id=?", (task_id,))
+conn.commit()
+conn.close()
+PYEOF
       log WARN "Task ${task_id} FAILED (retry $((retry_count+1))/${max_retries}): ${agent}"
     else
-      sqlite3 "$CAST_DB" "
-        UPDATE task_queue
-        SET    status = 'failed',
-               completed_at = datetime('now'),
-               result_summary = $(python3 -c "import sys; s=sys.argv[1][:200]; print(repr(s))" "$result_summary")
-        WHERE  id = ${task_id};
-      " 2>/dev/null || true
+      python3 - "$CAST_DB" "$task_id" "$result_summary" <<'PYEOF'
+import sqlite3, sys
+db_path, task_id, result_summary = sys.argv[1], int(sys.argv[2]), sys.argv[3][:200]
+conn = sqlite3.connect(db_path)
+conn.execute("UPDATE task_queue SET status='failed', completed_at=datetime('now'), result_summary=? WHERE id=?", (result_summary, task_id))
+conn.commit()
+conn.close()
+PYEOF
       log ERROR "Task ${task_id} FAILED permanently after ${max_retries} retries: ${agent}"
       notify "CAST Task Failed" "Agent ${agent} task ${task_id} failed permanently"
     fi

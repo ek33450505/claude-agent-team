@@ -81,6 +81,49 @@
       "description": "Database connection string with embedded credentials",
       "regex": "(?i)(?:postgres|mysql|mongodb|redis|sqlite)(?:ql)?://[^:@\\s]+:[^@\\s]+@[^\\s]+",
       "score": 0.95
+    },
+    {
+      "name": "STRIPE_SECRET_KEY",
+      "entity_type": "STRIPE_KEY",
+      "description": "Stripe secret API key (live or test)",
+      "regex": "sk_(?:live|test)_[A-Za-z0-9]{24,}",
+      "score": 0.99
+    },
+    {
+      "name": "TWILIO_SID",
+      "entity_type": "TWILIO_SID",
+      "description": "Twilio Account SID",
+      "regex": "AC[0-9a-f]{32}",
+      "score": 0.92
+    },
+    {
+      "name": "SLACK_TOKEN",
+      "entity_type": "SLACK_TOKEN",
+      "description": "Slack API token (bot, app, user, or workspace)",
+      "regex": "xox[bpao]-[0-9A-Za-z\\-]{10,}",
+      "score": 0.98
+    },
+    {
+      "name": "NPM_TOKEN",
+      "entity_type": "NPM_TOKEN",
+      "description": "NPM automation or publish token",
+      "regex": "npm_[A-Za-z0-9]{36}",
+      "score": 0.98
+    },
+    {
+      "name": "GCP_SERVICE_ACCOUNT",
+      "entity_type": "GCP_CREDENTIAL",
+      "description": "GCP service account private_key_id field",
+      "regex": "\"private_key_id\"\\s*:\\s*\"[a-f0-9]{40}\"",
+      "score": 0.97
+    },
+    {
+      "name": "SECRET_ASSIGNMENT",
+      "entity_type": "GENERIC_SECRET",
+      "description": "Generic secret, password, or passwd variable assignment",
+      "regex": "(?i)(?:secret|password|passwd|pwd)[\\s]*[=:][\\s]*['\"]?([A-Za-z0-9_\\-!@#$%^&*]{8,})['\"]?",
+      "group": 1,
+      "score": 0.75
     }
   ]
 }
