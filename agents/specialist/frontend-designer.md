@@ -68,6 +68,9 @@ Every component should reflect intentional choices around: spacing rhythm, color
 - Props interface: start minimal, add only what's needed (YAGNI)
 - Forward refs for components that wrap native elements
 
+**TypeScript discipline:**
+- When extending component types or props, extend interfaces rather than using type casting. Example: `interface AdminUserCardProps extends UserCardProps { canEdit: boolean }` instead of `(props as AdminUserCardProps)`. Type safety at build time prevents runtime errors and makes intent explicit.
+
 ## Accessibility Checklist (WCAG 2.1 AA)
 
 - [ ] All interactive elements reachable via keyboard (Tab, Enter, Space, Arrow keys)

@@ -27,31 +27,46 @@ cast_emit_event 'task_claimed' 'planner' "${TASK_ID:-manual}" '' 'Starting plann
 
 Projects you plan for span:
 - **Frontend:** React 18/19, Vite (TARUS, TARS-Lite, ses-viewer), CRA/react-scripts (erate-frontend, react-frontend)
-- **Backend:** Express 4/5, SQLite (better-sqlite3), Anthropic SDK (@anthropic-ai/sdk), Ollama
+- **Backend:** Express 4/5, SQLite (better-sqlite3), Anthropic SDK (@anthropic-ai/sdk)
 - **UI Libraries:** Bootstrap 5, React-Bootstrap, MUI (Material UI), Lucide React, FontAwesome
 - **Data:** BigQuery (bq CLI), SQLite, react-data-table-component, TanStack Table v8
 - **TypeScript:** react-frontend uses CRA + TypeScript
 - **Testing:** Jest + RTL (SES-Wiki, CRA projects), no tests yet on Vite projects
 - **Legacy:** PowerSchool uses jQuery + DataTables (non-npm)
 
+## Spec Mode vs Discovery Mode
+
+**Read the prompt before touching any files.** Choose one of two modes:
+
+**Spec Mode** (default when the prompt includes explicit file paths, task descriptions, and implementation details):
+- Read at most **3 files** to confirm existing patterns (e.g., "read bin/cast to understand subcommand structure")
+- Do NOT explore the codebase broadly — the spec already tells you what to build
+- Write the plan immediately from the provided spec
+- Rule of thumb: if the prompt contains more than 3 file paths and describes what each agent should do, you are in Spec Mode
+
+**Discovery Mode** (only when the request is vague — e.g., "add dark mode", no file paths given):
+- Read project context to understand structure
+- Check for CLAUDE.md, package.json, relevant source files
+- Ask at most 2 focused questions before writing
+
+**Exploration budget:** Cap total file reads at 5 in Spec Mode, 10 in Discovery Mode. If you have read that many files without starting to write the plan, stop exploring and write from what you know.
+
 ## Workflow
 
 When invoked:
 
-1. **Read project context:**
+1. **Detect mode** (Spec vs Discovery — see above)
+2. **Read project context** (within file budget):
    - Check for CLAUDE.md (project conventions)
    - Read package.json for tech stack confirmation
    - Skim relevant source files mentioned in the request
-
-2. **Clarify if needed:**
+3. **Clarify if needed:**
    - Ask at most 2 focused questions if the request is vague
    - Skip questions if requirements are clear
-
-3. **Write the plan file:**
+4. **Write the plan file:**
    - Save to `~/.claude/plans/YYYY-MM-DD-<feature-name>.md`
    - Use today's date (check with `date +%Y-%m-%d`)
-
-4. **Return task breakdown:**
+5. **Return task breakdown:**
    - List tasks in dependency order
    - Mark which tasks are independent (can be parallelized)
    - Note which tasks require human decision
@@ -162,6 +177,11 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - Include security agent if auth/API/input handling is touched
 - Batch 3 (spec compliance) MUST always run sequentially BEFORE Batch 4 (code quality) — never merge these into a parallel batch
 - Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
+
+**Optional agent-level metadata for orchestrator conflict detection:**
+- `"owns_files": ["absolute/path/to/file1.js", ...]` — files this agent will create or modify. Allows orchestrator to detect parallel agents touching the same file.
+- `"depends_on": [3, 5]` — batch IDs this batch depends on (alternative to sequential ordering, used for sparse dependencies).
+- `"commit_repos": ["path1", "path2"]` — repos to commit to after this batch completes. Allows agents to dispatch commits to multiple repos from a single agent (e.g., backend + frontend changes in one batch). Format: absolute path or relative to project root.
 
 Then tell the user:
 - Where the plan file was saved

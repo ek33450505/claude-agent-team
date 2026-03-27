@@ -55,7 +55,27 @@ Approve to execute all batches automatically? [yes/no]
 
 Wait for user confirmation before proceeding.
 
-### Step 3: Execute Batches
+### Step 3: Budget Check & Conflict Detection
+
+Before dispatching each batch, perform two checks:
+
+**Turn Budget:**
+- Orchestrator max turns = 50. At each batch boundary, calculate remaining turns: if fewer than 5 turns remain, stop and output: "TURN LIMIT APPROACHING: Plan execution paused at Batch N to preserve context. Output checkpoint; user should resume in a fresh session with `/resume [plan-path]`."
+- This gives the last batch at least 5 turns to complete and emit its status block.
+
+**File Ownership Conflict Detection (parallel batches only):**
+- Before dispatching a parallel batch (where `"parallel": true`), parse the `"owns_files"` field from each agent's manifest entry.
+- If 2+ agents claim ownership of the same file, surface a CONFLICT:
+  ```
+  FILE OWNERSHIP CONFLICT in Batch N: Agent-A and Agent-B both claim ownership of src/auth.js.
+  Parallel execution would lose changes. Recommend:
+    - Sequential order (dispatch A first, then B)
+    - Split into separate batches
+    - Clarify responsibility in manifests
+  ```
+  Do NOT dispatch the conflicted batch. Return status BLOCKED with this conflict message.
+
+### Step 4: Execute Batches
 
 Process each batch in order:
 
@@ -124,6 +144,14 @@ After processing each batch where a post_chain was specified (e.g., the route in
    - Re-dispatch `code-reviewer` (haiku) with context: "Review batch-<id> changes. Previous chain dispatch may have been dropped."
    - Wait for its output before proceeding to the next batch
 5. If verification **passes**, proceed normally to the next batch.
+
+### Per-Agent Commit Protocol
+
+If an agent's manifest contains `"commit_repos": ["path1", "path2"]` field:
+- The agent is responsible for dispatching `commit` for those specific repos after its batch completes.
+- Orchestrator does NOT double-dispatch commit — trust the agent to handle it.
+- If the agent completes with `Status: DONE` but does not dispatch commit for listed repos, orchestrator should flag: "Agent completed but did not dispatch commit for [commit_repos]. Check if commit dispatch was missed."
+- Multiple agents can target different repos in parallel — orchestrator relies on per-agent commit_repos to avoid conflicts (Agent-A commits to backend/, Agent-B commits to frontend/ — both can run in parallel).
 
 ## Event-Sourcing Protocol
 

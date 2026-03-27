@@ -45,6 +45,7 @@ When invoked:
 - **Small units:** Each logical unit should be 15-30 minutes of work maximum.
 - **Exact paths:** Never say "update the relevant file" — find the actual path.
 - Never commit directly — always leave commits to the `commit` agent.
+- **TypeScript discipline:** When extending existing types or interfaces, extend them rather than using type casting. Example: `type UserAdmin = User & { isAdmin: true }` instead of `(user as UserAdmin)`. Type safety at build time prevents runtime errors.
 
 ## Self-Dispatch: Code Review (step 4)
 
