@@ -879,7 +879,7 @@ macOS skills require Microsoft Outlook. Linux installs receive stubs automatical
 
 CAST includes a PII redaction pipeline that intercepts tool-use output before it is stored or logged.
 
-**`cast-redact.py`** — Presidio-based redaction engine. Detects and masks: names, emails, phone numbers, IP addresses, credit card numbers, SSNs, and custom patterns defined in `config/redact-config.json`. Runs as a PreToolUse hook when `cast audit --redact on` is set.
+**`cast-redact.py`** — Presidio-based redaction engine. Detects and masks: names, emails, phone numbers, IP addresses, credit card numbers, SSNs, and custom patterns defined in `config/redact-config.json`. Enabled by default (`redact_pii: true` in `config/cast-cli.json`) — disable with `cast audit --redact off`.
 
 **`cast-audit-hook.sh`** — Writes every tool call (tool name, file path, truncated args) to an append-only audit log at `~/.claude/logs/cast-audit.jsonl`. Independent of the redaction pipeline — audit logging is always on.
 
