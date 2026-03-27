@@ -55,28 +55,6 @@ _CAST_DB_LOG_PY="$(dirname "$0")/cast-db-log.py"
 [ ! -f "$_CAST_DB_LOG_PY" ] && _CAST_DB_LOG_PY="${HOME}/.claude/scripts/cast-db-log.py"
 export CAST_DB_LOG_PY="$_CAST_DB_LOG_PY"
 
-# --- Air-gap mode ---
-# Activated by CAST_AIRGAP=1 env var OR airgap=true in cast-cli.json.
-# Config file takes precedence: if config says airgap:true, env var cannot override it off.
-# Logic: airgap_active = config_airgap OR (env_airgap == '1')
-# When active: inject [CAST-AIRGAP] into the session briefing, and any
-# route with a cloud: model is rewritten to local:qwen3:8b at dispatch time.
-CAST_AIRGAP_ACTIVE=0
-_airgap_cfg="$(python3 -c "
-import json, os
-try:
-    with open(os.path.expanduser('~/.claude/config/cast-cli.json')) as f:
-        cfg = json.load(f)
-    print('1' if cfg.get('airgap') else '0')
-except Exception:
-    print('0')
-" 2>/dev/null || echo '0')"
-if [ "$_airgap_cfg" = "1" ]; then
-  CAST_AIRGAP_ACTIVE=1
-elif [ "${CAST_AIRGAP:-0}" = "1" ]; then
-  CAST_AIRGAP_ACTIVE=1
-fi
-
 # --- Dry-run mode ---
 # Activated by CAST_DRY_RUN=1. Runs the full routing pipeline but does NOT emit
 # hookSpecificOutput or write to routing-log.jsonl. Instead prints a JSON summary
@@ -102,16 +80,12 @@ if [ "$DRY_RUN" = "0" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
     # Detect REPO_ROOT by walking up from cwd
     REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
 
-    CAST_SESSION_ID="${CLAUDE_SESSION_ID}" CAST_REPO_ROOT="${REPO_ROOT}" CAST_AIRGAP_ACTIVE="${CAST_AIRGAP_ACTIVE}" python3 -c "
+    CAST_SESSION_ID="${CLAUDE_SESSION_ID}" CAST_REPO_ROOT="${REPO_ROOT}" python3 -c "
 import json, os, subprocess, datetime
 
 session_id = os.environ.get('CAST_SESSION_ID', '')
 repo_root = os.environ.get('CAST_REPO_ROOT', '')
 lines = []
-
-# 0. Air-gap advisory (first so it's prominent)
-if os.environ.get('CAST_AIRGAP_ACTIVE', '0') == '1':
-    lines.append('[CAST-AIRGAP] Air-gap mode is ACTIVE. All cloud: model routes will be rewritten to local:qwen3:8b. No data will leave this machine via routing.')
 
 # 1. Git status (modified files)
 if repo_root:
@@ -473,16 +447,7 @@ for route in table.get('routes', []):
             post_chain = route.get('post_chain', [])
             model = route.get('model', 'sonnet')
 
-            # Air-gap model rewrite: cloud: → local:qwen3:8b
-            airgap_rewritten = False
-            if airgap_active and isinstance(model, str) and model.startswith('cloud:'):
-                original_model = model
-                model = 'local:qwen3:8b'
-                airgap_rewritten = True
-
             print(f'[CAST] Route matched: {agent}', file=sys.stderr)
-            if airgap_rewritten:
-                print(f'[CAST-AIRGAP] Rewrote model {original_model} -> {model}', file=sys.stderr)
 
             if dry_run:
                 # Write dry-run result to temp file (first match only)
@@ -541,7 +506,7 @@ for route in table.get('routes', []):
                 'timestamp': ts,
                 'session_id': session_id,
                 'prompt_preview': preview,
-                'action': 'airgap_rewrite' if airgap_rewritten else 'matched',
+                'action': 'matched',
                 'matched_route': agent,
                 'command': command,
                 'pattern': pattern,
@@ -691,79 +656,6 @@ log = {
     'pattern': f'memory:{reason}',
     'confidence': 'memory',
     'match_type': 'memory'
-}
-subprocess.run(
-    ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
-    input=json.dumps(log), text=True, timeout=5
-)
-" 2>/dev/null && { [ "$DRY_RUN" = "1" ] || exit 0; } || true
-  fi
-fi
-
-# --- Stage 2.5: Semantic routing (Ollama-based, graceful fallback) ---
-SEMANTIC_SCRIPT="$HOME/.claude/scripts/cast-semantic-route.sh"
-if [[ -f "$SEMANTIC_SCRIPT" && -x "$SEMANTIC_SCRIPT" ]]; then
-  SEMANTIC_AGENT="$(bash "$SEMANTIC_SCRIPT" "${PROMPT:-}" 2>/dev/null || echo "")"
-  if [[ -n "$SEMANTIC_AGENT" ]]; then
-    CAST_SEMANTIC_AGENT="$SEMANTIC_AGENT" CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" python3 -c "
-import json, os, datetime, sys, subprocess
-
-agent = os.environ.get('CAST_SEMANTIC_AGENT', '')
-prompt = os.environ.get('CAST_PROMPT', '')
-original = os.environ.get('CAST_ORIGINAL', '')
-dry_run = os.environ.get('CAST_DRY_RUN', '0') == '1'
-dry_run_file = os.environ.get('CAST_DRY_RUN_FILE', '')
-ts = datetime.datetime.utcnow().isoformat() + 'Z'
-preview = prompt[:80]
-session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
-
-if dry_run:
-    # Write dry-run result to temp file (first match only)
-    already_matched = False
-    if dry_run_file and os.path.exists(dry_run_file):
-        try:
-            already_matched = os.path.getsize(dry_run_file) > 0
-        except Exception:
-            pass
-    if not already_matched and dry_run_file:
-        result = {
-            'dry_run': True,
-            'prompt': original[:100],
-            'matched_agent': agent,
-            'match_type': 'semantic',
-            'match_pattern': 'semantic:cosine_similarity',
-            'post_chain': None,
-            'directive_would_be': f'[CAST-DISPATCH] {agent}'
-        }
-        try:
-            with open(dry_run_file, 'w') as rf:
-                rf.write(json.dumps(result))
-        except Exception:
-            pass
-    sys.exit(0)
-
-directive = f'[CAST-DISPATCH] Route: {agent} (confidence: semantic)\n'
-directive += f'MANDATORY: Dispatch the \`{agent}\` agent via the Agent tool.\n'
-directive += 'Pass the user full prompt as the agent task. Do NOT handle this inline.\n'
-directive += '(Matched via semantic similarity — Ollama embedding stage)'
-
-output = {
-    'hookSpecificOutput': {
-        'hookEventName': 'UserPromptSubmit',
-        'additionalContext': directive
-    }
-}
-print(json.dumps(output))
-
-log = {
-    'timestamp': ts,
-    'session_id': session_id,
-    'prompt_preview': preview,
-    'action': 'matched',
-    'matched_route': agent,
-    'command': None,
-    'pattern': 'semantic:cosine_similarity',
-    'confidence': 'semantic'
 }
 subprocess.run(
     ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],

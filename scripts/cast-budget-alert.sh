@@ -85,9 +85,7 @@ try:
         msg = (
             f'[CAST-BUDGET-HARD-LIMIT] Daily spend ${today_spend:.4f} has reached the '
             f'${limit_usd:.2f} daily budget limit ({pct_used*100:.0f}%). '
-            'MANDATORY: Route all remaining tasks ONLY to local models (local:qwen3:8b, '
-            'local:devstral:24b). Do NOT dispatch cloud agents (haiku, sonnet, opus) '
-            'until the budget resets at midnight UTC.'
+            'MANDATORY: Pause all agent dispatches until the budget resets at midnight UTC.'
         )
     elif pct_used >= alert_at_pct:
         # Warning threshold reached

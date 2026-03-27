@@ -1,6 +1,6 @@
 {
   "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-03-26.",
-  "_note": "Local models have zero cost. Cloud costs reflect Anthropic published pricing.",
+  "_note": "Cloud costs reflect Anthropic published pricing.",
   "models": {
     "claude-opus-4-5": {
       "cost_per_million_input": 15.00,
@@ -37,42 +37,6 @@
       "cost_per_million_output": 75.00,
       "tier": "cloud",
       "provider": "anthropic"
-    },
-    "local:qwen3:1.7b": {
-      "cost_per_million_input": 0,
-      "cost_per_million_output": 0,
-      "tier": "local",
-      "provider": "ollama"
-    },
-    "local:qwen3:8b": {
-      "cost_per_million_input": 0,
-      "cost_per_million_output": 0,
-      "tier": "local",
-      "provider": "ollama"
-    },
-    "local:qwen2.5-coder:7b": {
-      "cost_per_million_input": 0,
-      "cost_per_million_output": 0,
-      "tier": "local",
-      "provider": "ollama"
-    },
-    "local:devstral:24b": {
-      "cost_per_million_input": 0,
-      "cost_per_million_output": 0,
-      "tier": "local",
-      "provider": "ollama"
-    },
-    "local:deepseek-r1:14b": {
-      "cost_per_million_input": 0,
-      "cost_per_million_output": 0,
-      "tier": "local",
-      "provider": "ollama"
-    },
-    "local:nomic-embed-text-v2-moe": {
-      "cost_per_million_input": 0,
-      "cost_per_million_output": 0,
-      "tier": "local",
-      "provider": "ollama"
     }
   }
 }

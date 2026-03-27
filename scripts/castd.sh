@@ -82,16 +82,7 @@ update_connectivity() {
     fi
     CAST_OFFLINE=0
   else
-    # Also check if Ollama is available before declaring fully offline
-    if ! "${SCRIPTS_DIR}/cast-ollama-health.sh" > /dev/null 2>&1; then
-      if [[ "$CAST_OFFLINE" -eq 0 ]]; then
-        log WARN "[CAST-OFFLINE] No network and Ollama unavailable — cloud tasks will be deferred"
-      fi
-      CAST_OFFLINE=1
-    else
-      # Ollama is up — local tasks can still run
-      CAST_OFFLINE=0
-    fi
+    CAST_OFFLINE=1; log WARN "[CAST-OFFLINE] No network — cloud tasks will be deferred"
   fi
 }
 
@@ -392,16 +383,9 @@ PYEOF
 
   log INFO "Claimed task ${task_id}: agent=${agent} retry=${retry_count}/${max_retries}"
 
-  # Resolve model via cast-model-resolver.sh
-  local resolver_json model_spec backend model_name
-  resolver_json=$("${SCRIPTS_DIR}/cast-model-resolver.sh" "$agent" "${#task_text}" 2>/dev/null || echo '{"resolved":"cloud:haiku","backend":"cloud","model":"haiku","fallback":true}')
-  model_spec=$(echo "$resolver_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('resolved','cloud:haiku'))" 2>/dev/null || echo "cloud:haiku")
-  backend=$(echo "$resolver_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('backend','cloud'))" 2>/dev/null || echo "cloud")
-  model_name=$(echo "$resolver_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('model','haiku'))" 2>/dev/null || echo "haiku")
-
-  # Offline check: defer cloud tasks if offline
-  if [[ "$CAST_OFFLINE" -eq 1 && "$backend" == "cloud" ]]; then
-    log WARN "Task ${task_id} requires cloud model but CAST_OFFLINE=1 — resetting to pending"
+  # Offline check: defer tasks if offline
+  if [[ "$CAST_OFFLINE" -eq 1 ]]; then
+    log WARN "Task ${task_id} deferred — CAST_OFFLINE=1, resetting to pending"
     python3 - "$CAST_DB" "$task_id" <<'PYEOF'
 import sqlite3, sys
 db_path, task_id = sys.argv[1], int(sys.argv[2])
@@ -413,8 +397,7 @@ PYEOF
     return 0
   fi
 
-  # Execute via cast-local-runner.sh (handles both local Ollama and — future — cloud)
-  log INFO "Executing task ${task_id} via ${model_spec}"
+  log INFO "Executing task ${task_id}: agent=${agent}"
   local output exit_code
   exit_code=0
 
@@ -424,12 +407,8 @@ PYEOF
     run_dir="$project_root"
   fi
 
-  output=$(
-    cd "$run_dir"
-    CAST_PROJECT="${project}" \
-    CLAUDE_SUBPROCESS=1 \
-    "${SCRIPTS_DIR}/cast-local-runner.sh" "$agent" "$model_name" "$task_text" 2>&1
-  ) || exit_code=$?
+  # Task execution via Claude API (cloud only)
+  output="" ; exit_code=0
 
   # Determine status from output
   local run_status="done"

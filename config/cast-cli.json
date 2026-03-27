@@ -1,6 +1,5 @@
 {
   "db_path": "~/.claude/cast.db",
-  "ollama_url": "http://localhost:11434",
   "redact_pii": true,
   "default_model": "auto",
   "log_dir": "~/.claude/logs"
