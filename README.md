@@ -8,11 +8,11 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-orange)
 
-Claude Code is a capable editor. Without infrastructure, you are still manually deciding which agent to call, remembering to run tests, remembering to review your own code, and typing `git commit` by hand. CAST is the infrastructure layer that removes that coordination overhead entirely.
+CAST is a local-first OS built on Claude Code. 42 specialist agents. A routing system. A background daemon. A privacy layer. Zero cloud lock-in.
 
-Install CAST and every prompt you type is intercepted by `route.sh` before Claude sees it. The right specialist agent is dispatched automatically. After it writes code, `post-tool-hook.sh` injects a mandatory `[CAST-CHAIN]` directive that forces `code-reviewer` to run — you cannot skip it. Raw `git commit` is hard-blocked at the `PreToolUse` hook; the `commit` agent is the only escape hatch. Parallel agent waves handle complex multi-file work without you coordinating anything. Work Logs surface exactly what every agent did, inline in your terminal.
+Every prompt you type is intercepted before Claude sees it. The right agent is dispatched automatically. Code review is mandatory and non-skippable. `git commit` is hard-blocked — the `commit` agent is the only path through. Agent memory lives in plain markdown files you can read, edit, and back up. Nothing syncs to a server you don't control.
 
-This is not a prompt library. It is 42 specialists wired into Claude Code at the hook layer, enforcing their own quality gates.
+This is not a prompt library. It is infrastructure.
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team.git
@@ -26,6 +26,8 @@ bash install.sh
 
 ## Table of Contents
 
+- [The OS Analogy](#the-os-analogy)
+- [Architecture Overview](#architecture-overview)
 - [How It Works](#how-it-works)
 - [Hook Directives](#hook-directives)
 - [Routing](#routing)
@@ -34,22 +36,132 @@ bash install.sh
 - [agent-status-reader.sh — Status Propagation](#agent-status-readersh--status-propagation)
 - [Work Logs](#work-logs)
 - [Parallel Agent Waves](#parallel-agent-waves)
+- [What's in the Box](#whats-in-the-box)
 - [The Agents (42)](#the-agents-42)
 - [The Commit → Push Chain](#the-commit--push-chain)
 - [Rollback Protocol](#rollback-protocol)
 - [Event-Sourcing Protocol](#event-sourcing-protocol)
-- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [cast CLI Reference](#cast-cli-reference)
 - [Slash Commands](#slash-commands)
 - [Memory](#memory)
 - [Skills](#skills)
+- [Privacy Layer](#privacy-layer)
+- [Background Daemon (castd)](#background-daemon-castd)
+- [macOS Integration](#macos-integration)
 - [Self-Improving Routing](#self-improving-routing)
 - [Semantic Routing](#semantic-routing)
 - [Agent Performance Profiling](#agent-performance-profiling)
 - [Dry-Run Mode](#dry-run-mode)
 - [ACI Reference Sections](#aci-reference-sections)
+- [Phase History](#phase-history)
 - [Stats](#stats)
 - [Known Limitations](#known-limitations)
 - [Companion](#companion)
+
+---
+
+## The OS Analogy
+
+Claude Code is a capable shell. Without infrastructure, you are the scheduler, the enforcer, and the memory system. CAST is the OS layer that handles all three.
+
+| OS concept | CAST component | What it does |
+|---|---|---|
+| Kernel | `route.sh` + `pre-tool-guard.sh` + `post-tool-hook.sh` | Routes every prompt, enforces every policy, reacts to every tool call |
+| Processes | 42 specialist agents | Each agent is an isolated, role-bounded executor with its own instructions |
+| Scheduler | Agent groups + routing table | Matches work to the right agent — no manual dispatch needed |
+| Interrupts | Hook directives (`[CAST-CHAIN]`, `[CAST-HALT]`, `[CAST-DEBUG]`) | Inject mandatory signals alongside prompt context; Claude cannot ignore them |
+| Shell | `cast` CLI | Subcommand surface for running agents, inspecting queues, managing memory, controlling the daemon |
+| Daemon | `castd` (background process) | Processes the async task queue, runs health checks, fires budget alerts |
+| Filesystem | `~/.claude/` | Everything — agents, memory, events, config, logs — is a plain file you control |
+
+Zero custom application code. Pure config, shell, and markdown. If you understand bash and JSON, you can read and modify every part of CAST.
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          Your Terminal                                  │
+│                                                                         │
+│  You type a prompt → Claude Code receives it                            │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Hook Layer  (~/.claude/scripts/)                     │
+│                                                                         │
+│  [UserPromptSubmit]  route.sh                                           │
+│      Stage 1: agent-groups.json match (31 groups)  → [CAST-DISPATCH-GROUP]
+│      Stage 2: routing-table.json regex (35 routes) → [CAST-DISPATCH]   │
+│      Stage 2.5: Ollama cosine similarity           → [CAST-DISPATCH]   │
+│      Stage 3: catch-all NLU (router agent)         → [CAST-DISPATCH]   │
+│                                                                         │
+│  [PostToolUse]  post-tool-hook.sh  (5 independent parts)               │
+│      Part 1: prettier auto-format on code files                         │
+│      Part 2: inject [CAST-CHAIN] (mandatory) or [CAST-REVIEW] (soft)   │
+│      Part 3: plan file written → [CAST-ORCHESTRATE]                    │
+│      Part 4: Agent tool fired → log to routing-log.jsonl               │
+│      Part 5: Bash non-zero exit → [CAST-DEBUG]                         │
+│                                                                         │
+│  [PostToolUse]  agent-status-reader.sh                                  │
+│      Reads ~/.claude/agent-status/ — BLOCKED → [CAST-HALT] exit 2      │
+│                                                                         │
+│  [PreToolUse]  pre-tool-guard.sh                                        │
+│      Hard-blocks: git commit, git push (escape: env var)                │
+│      Policy engine: auth, migrations, workflows, .env                   │
+│                                                                         │
+│  [Stop]  stop-hook.sh                                                   │
+│      Routing feedback (weekly) / project board / memory seeding         │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     Agent Layer  (~/.claude/agents/)                    │
+│                                                                         │
+│  42 specialist agents organized in 5 tiers:                             │
+│                                                                         │
+│  Core (12)       code-writer, code-reviewer, debugger, test-writer,    │
+│                  commit, push, security, merge, planner, data-scientist,│
+│                  db-reader, bash-specialist                              │
+│                                                                         │
+│  Extended (8)    architect, tdd-guide, build-error-resolver, e2e-runner,│
+│                  refactor-cleaner, doc-updater, readme-writer, router   │
+│                                                                         │
+│  Orchestration (5)  orchestrator, auto-stager, chain-reporter,          │
+│                     verifier, test-runner                               │
+│                                                                         │
+│  Productivity (5)  researcher, report-writer, meeting-notes,            │
+│                    email-manager, morning-briefing                      │
+│                                                                         │
+│  Professional (3)  browser, qa-reviewer, presenter                     │
+│                                                                         │
+│  Specialist (9)  devops, performance, seo-content, linter,             │
+│                  frontend-designer, framework-expert, pentest,          │
+│                  infra, db-architect                                    │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                   Persistence Layer  (~/.claude/)                       │
+│                                                                         │
+│  cast.db              SQLite — task queue, cost tracking, agent stats   │
+│  routing-log.jsonl    Every routing decision, matched or not            │
+│  cast/events/         Immutable event log (append-only)                 │
+│  agent-status/        Latest status from each agent run                 │
+│  agent-memory-local/  Per-agent markdown memory files                  │
+│  reports/             Chain summaries, routing gap reports              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Three enforcement tiers** operate in parallel. They are not redundant — each catches what the others cannot:
+
+| Tier | Mechanism | Enforces |
+|---|---|---|
+| Advisory | `CLAUDE.md` directive definitions | Claude's understanding of the protocol |
+| Behavioral | `route.sh` hookSpecificOutput injection | Claude's next action (alongside the prompt) |
+| Hard | `pre-tool-guard.sh` exit 2 | OS-level block — Claude cannot bypass |
 
 ---
 
@@ -63,7 +175,7 @@ User Prompt
     |
     |-- Stage 1: agent-groups.json match (31 groups) --> [CAST-DISPATCH-GROUP]
     |                                                         |
-    |-- Stage 2: routing-table.json match (28 routes) -----> [CAST-DISPATCH]
+    |-- Stage 2: routing-table.json match (35 routes) -----> [CAST-DISPATCH]
     |                                                         |
     |-- Stage 2.5: semantic cosine similarity (Ollama) ----> [CAST-DISPATCH] (confidence: semantic)
     |              cast-semantic-route.sh + agent-embeddings.json
@@ -119,16 +231,6 @@ commit agent (haiku) -- CAST_COMMIT_AGENT=1 git commit
 cast-events.sh -- ~/.claude/cast/events/ (append-only, immutable)
 ```
 
-**Three enforcement tiers** operate in parallel. They are not redundant — each catches what the others cannot:
-
-| Tier | Mechanism | Enforces |
-|---|---|---|
-| Advisory | `CLAUDE.md` directive definitions | Claude's understanding of the protocol |
-| Behavioral | `route.sh` hookSpecificOutput injection | Claude's next action (alongside the prompt) |
-| Hard | `pre-tool-guard.sh` exit 2 | OS-level block — Claude cannot bypass |
-
-`confidence: "hard"` produces `MANDATORY: Dispatch the agent`. `confidence: "soft"` produces `RECOMMENDED: Consider dispatching`. No routing match and no catch-all hit means `route.sh` outputs nothing — Claude handles inline.
-
 **Tier 2 supervisory layer** — five capabilities that run at session boundaries, not per-prompt:
 
 | Capability | Script | When | Output |
@@ -140,8 +242,6 @@ cast-events.sh -- ~/.claude/cast/events/ (append-only, immutable)
 | Agent memory init | `cast-agent-memory-init.sh` | Session end | Seeds each agent's `MEMORY.md` with project context and recent dispatch history |
 
 Policy rules live in `config/policies.json`. Four rules ship by default: auth files, DB migrations, GitHub workflows, and `.env` files each require the appropriate specialist agent before modification. Override any block with `CAST_POLICY_OVERRIDE=1`.
-
-The project board snapshot is consumed by the pre-session briefing: on the first prompt of a new session, `route.sh` reads `project-board.json` and surfaces blocked tasks, in-flight tasks, and stale rollback checkpoints as context before routing begins.
 
 ---
 
@@ -180,7 +280,7 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
 
 **Stage 1 — Agent Group pre-check:** matches against `config/agent-groups.json` (31 groups). On match, the orchestrator receives a full Payload JSON with wave definitions and runs them immediately.
 
-**Stage 2 — Routing table:** matches against `config/routing-table.json` (28 routes). On match, Claude sees:
+**Stage 2 — Routing table:** matches against `config/routing-table.json` (35 routes). On match, Claude sees:
 
 ```json
 {
@@ -348,6 +448,26 @@ Other groups: `feature-build`, `ui-build`, `backend-build`, `api-integration`, `
 
 ---
 
+## What's in the Box
+
+| Component | Count | Where |
+|---|---|---|
+| Specialist agents | 42 | `~/.claude/agents/` |
+| Routing rules | 35 | `config/routing-table.json` |
+| Agent groups | 31 | `config/agent-groups.json` |
+| Slash commands | 32 | `~/.claude/commands/` |
+| Skills | 13 | `~/.claude/skills/` |
+| Hook scripts | 5 | `~/.claude/scripts/` (route.sh, post-tool-hook.sh, pre-tool-guard.sh, agent-status-reader.sh, stop-hook.sh) |
+| cast CLI subcommands | 9 | `bin/cast` (run, queue, memory, budget, audit, airgap, daemon, status, install-completions) |
+| SQLite database | 1 | `~/.claude/cast.db` |
+| Event types | 7 | `~/.claude/cast/events/` |
+| Hook directives | 11 | `CLAUDE.md` + injected at runtime |
+| Validation checks | 11 | `scripts/cast-validate.sh` |
+| Agent groups | 31 | `config/agent-groups.json` |
+| ACI reference agents | 6 | In-agent `## ACI Reference` sections |
+
+---
+
 ## The Agents (42)
 
 ### Core — 12 agents
@@ -504,7 +624,7 @@ Seven event types: `task_created`, `task_claimed`, `task_completed`, `task_block
 
 ---
 
-## Installation
+## Quick Start
 
 ### Prerequisites
 
@@ -561,7 +681,7 @@ CAST Validate v1.9.0 (11 checks)
 ══════════════════════════════
 ✓ Hook wiring: route.sh, pre-tool-guard.sh, post-tool-hook.sh wired
 ✓ Agent frontmatter: 42 agents — all valid
-✓ Routing table: 28 routes — schema valid
+✓ Routing table: 35 routes — schema valid
 ✓ CLAUDE.md directives: [CAST-DISPATCH] [CAST-REVIEW] [CAST-CHAIN] [CAST-DISPATCH-GROUP] present
 ✓ CAST dirs: events/ state/ reviews/ artifacts/ agent-status/ all present
 ✓ cast-events.sh: installed at /Users/you/.claude/scripts/cast-events.sh
@@ -574,14 +694,92 @@ CAST Validate v1.9.0 (11 checks)
 0 errors, 0 warnings
 ```
 
-Checks added in v1.8.0 and v1.9.0:
+---
 
-| Check | Version | What it verifies |
-|---|---|---|
-| 8 | v1.8.0 | `cast-route-install.sh` present and executable (routing proposal approval pipeline) |
-| 9 | v1.8.0 | `stop-hook.sh` wired in `settings.local.json` (chain-reporter auto-dispatch at session end) |
-| 10 | v1.8.0 | `routing-proposals.json` schema valid, if present (generated proposals are structurally correct) |
-| 11 | v1.9.0 | `security` agent wired in at least one `post_chain` — parallel or sequential |
+## cast CLI Reference
+
+`cast` is the unified command-line interface for CAST. After install, it lives at `~/.claude/bin/cast` (symlinked to `/usr/local/bin/cast` or `~/bin/cast`).
+
+```
+cast <subcommand> [args] [--json] [--quiet] [--verbose]
+```
+
+### Subcommands
+
+**`cast run`** — Run an agent synchronously or queue it for async execution.
+
+```bash
+cast run code-reviewer "Review src/auth.js"
+cast run debugger "Fix failing tests" --async --priority 2
+cast run planner "Plan the auth refactor" --model local
+```
+
+Flags: `--model local|cloud|auto`, `--priority 1-10`, `--async`
+
+**`cast queue`** — Inspect and manage the async task queue (backed by SQLite).
+
+```bash
+cast queue list              # Show pending, claimed, and recently completed tasks
+cast queue add debugger "Fix the auth bug"
+cast queue cancel <task-id>
+cast queue retry <task-id>
+```
+
+**`cast memory`** — Search and manage per-agent markdown memory.
+
+```bash
+cast memory search "auth middleware" --agent debugger
+cast memory list --agent code-reviewer
+cast memory forget <memory-id>
+cast memory export --agent planner
+```
+
+**`cast budget`** — View and set API cost limits.
+
+```bash
+cast budget                        # Show today's spend and limits
+cast budget set --global 10.00     # Set $10/day global limit
+cast budget set --session 2.00     # Set $2/session limit
+```
+
+**`cast audit`** — Review the tool-use audit trail and manage PII redaction.
+
+```bash
+cast audit                         # Show recent audit log entries
+cast audit --redact on             # Enable Presidio PII redaction pipeline
+cast audit --since 24h             # Filter to last 24 hours
+```
+
+**`cast daemon`** — Control the background daemon (`castd`).
+
+```bash
+cast daemon status                 # Check castd running state and queue depth
+cast daemon start                  # Start castd (launchctl or background process)
+cast daemon start --airgap         # Start in air-gap mode (no outbound network)
+cast daemon stop
+cast daemon restart
+cast daemon logs                   # Tail castd.log
+```
+
+**`cast airgap`** — Toggle and inspect air-gap mode.
+
+```bash
+cast airgap status
+cast airgap on                     # Block all outbound LLM calls; local Ollama only
+cast airgap off
+```
+
+**`cast status`** — Terminal health dashboard: Ollama status, castd state, queue depth, budget.
+
+```bash
+cast status
+```
+
+**`cast install-completions`** — Install bash/zsh tab completions for the cast CLI.
+
+```bash
+cast install-completions
+```
 
 ---
 
@@ -649,29 +847,98 @@ Not a vector database. Not an opaque embedding. A markdown file you can edit, ba
 
 `cast-agent-memory-init.sh` seeds these files automatically at session end (triggered by `stop-hook.sh`). For each of the 17 core agents, it writes project name, root path, recent task history (last 3 events from the event log), and any BLOCKED history. If a `MEMORY.md` already exists with a `## Custom Notes` section, that section is preserved — auto-init only rewrites the header and history blocks.
 
+`cast memory search` (via the CLI) does semantic search across all agent memory files using Ollama embeddings when available, falling back to grep-based substring matching.
+
 ---
 
 ## Skills
 
 13 skills in `~/.claude/skills/`. Skills are reusable prompt fragments sourced by agents at runtime — not agents themselves.
 
-| Skill | Purpose |
-|---|---|
-| `action-items` | Extract action items from text |
-| `briefing-writer` | Assemble a structured daily briefing from component outputs |
-| `git-activity` | Summarize recent git activity across configured projects |
-| `careful-mode` | Slow down — confirm before each write |
-| `freeze-mode` | Read-only mode — no writes, analysis only |
-| `wizard` | Interactive step-by-step prompting for complex tasks |
-| `calendar-fetch` | Fetch today's calendar events (macOS/Outlook) |
-| `inbox-fetch` | Fetch unread emails (macOS/Outlook) |
-| `reminders-fetch` | Fetch pending reminders (macOS) |
-| `calendar-fetch-linux` | Linux stub for calendar-fetch |
-| `inbox-fetch-linux` | Linux stub for inbox-fetch |
-| `plan` | Plan skill fragment used by planner agent |
-| `merge` | Scenario detection and dispatch routing for git merge, rebase, and conflict resolution |
+| Skill | Platform | Purpose |
+|---|---|---|
+| `action-items` | all | Extract action items from text |
+| `briefing-writer` | all | Assemble a structured daily briefing from component outputs |
+| `git-activity` | all | Summarize recent git activity across configured projects |
+| `careful-mode` | all | Slow down — confirm before each write |
+| `freeze-mode` | all | Read-only mode — no writes, analysis only |
+| `wizard` | all | Interactive step-by-step prompting for complex tasks |
+| `plan` | all | Plan skill fragment used by planner agent |
+| `merge` | all | Scenario detection and dispatch routing for git merge, rebase, and conflict resolution |
+| `calendar-fetch` | macOS | Fetch today's calendar events (Microsoft Outlook) |
+| `inbox-fetch` | macOS | Fetch unread emails (Microsoft Outlook) |
+| `reminders-fetch` | macOS | Fetch pending reminders |
+| `calendar-fetch-linux` | Linux | Stub for calendar-fetch |
+| `inbox-fetch-linux` | Linux | Stub for inbox-fetch |
 
-macOS skills (calendar, inbox, reminders) require Microsoft Outlook. Linux installs receive stubs automatically.
+macOS skills require Microsoft Outlook. Linux installs receive stubs automatically.
+
+---
+
+## Privacy Layer
+
+CAST includes a PII redaction pipeline that intercepts tool-use output before it is stored or logged.
+
+**`cast-redact.py`** — Presidio-based redaction engine. Detects and masks: names, emails, phone numbers, IP addresses, credit card numbers, SSNs, and custom patterns defined in `config/redact-config.json`. Runs as a PreToolUse hook when `cast audit --redact on` is set.
+
+**`cast-audit-hook.sh`** — Writes every tool call (tool name, file path, truncated args) to an append-only audit log at `~/.claude/logs/cast-audit.jsonl`. Independent of the redaction pipeline — audit logging is always on.
+
+**Air-gap mode** — `CAST_AIRGAP=1` blocks all outbound LLM API calls. Agents route to the local Ollama execution tier instead. Toggle via `cast airgap on/off` or `cast daemon start --airgap`.
+
+```bash
+# Inspect the audit trail
+cast audit --since 24h
+
+# Enable PII redaction
+cast audit --redact on
+
+# Run in full air-gap mode
+cast daemon start --airgap
+```
+
+---
+
+## Background Daemon (castd)
+
+`castd` is a background process that polls the SQLite task queue and dispatches agents without requiring an active Claude Code session.
+
+```
+~/.claude/scripts/castd.sh          # Daemon process
+~/.claude/logs/castd.log            # Daemon log
+~/.claude/cast.db                   # SQLite queue and cost tracking
+com.cast.daemon.plist               # launchd plist for macOS login-time launch
+```
+
+`castd` handles:
+- Async task queue processing (tasks added via `cast queue add` or `cast run --async`)
+- Budget monitoring and alerts when cost thresholds are hit
+- Ollama health checks (surfaces model availability in `cast status`)
+- Queue depth reporting (shown in `cast status` and the pre-session briefing)
+
+Control the daemon:
+
+```bash
+cast daemon start      # Start (or register with launchctl on macOS)
+cast daemon stop
+cast daemon status     # PID, queue depth, last run timestamp
+cast daemon logs       # Tail the daemon log
+```
+
+---
+
+## macOS Integration
+
+Phase 7g adds OS-level integration for macOS users. These components are optional and installed separately via `scripts/cast-install-7g.sh`.
+
+**Status bar app** (`macos/cast-statusbar.py`) — A menu bar app (requires `rumps`) showing live agent activity, castd state, and current budget. Launches at login via `macos/cast-statusbar.plist`.
+
+**Alfred workflow** (`macos/cast-alfred-workflow.json`) — Trigger any cast CLI subcommand from Alfred 5 without switching to a terminal. Includes keyword triggers for `cast run`, `cast status`, and common agent dispatches.
+
+**File watcher** (`scripts/cast-fswatcher.sh`) — Watches configured directories with `fswatch` (macOS) or `inotifywait` (Linux) and enqueues agent tasks when matching file events fire. Rules defined in `config/fswatcher-config.json.template`.
+
+**Notification Center** (`scripts/cast-notify.sh`) — Sends native macOS notifications (via `osascript`) or Linux `notify-send` alerts on agent completion, BLOCKED events, and budget threshold hits.
+
+**Cross-machine sync** (`scripts/cast-sync.sh`) — `rsync`-based sync for `cast.db` and `agent-memory-local/` across multiple machines. Config in `config/sync-config.json.template`.
 
 ---
 
@@ -698,8 +965,6 @@ bash ~/.claude/scripts/cast-route-install.sh --pending-count
 
 Each proposal has a `status` field: `pending`, `installed`, or `rejected`. The pre-session briefing surfaces the pending count so you see it on the first prompt of each session.
 
-`cast-validate.sh` Check 8 confirms `cast-route-install.sh` is present and executable. Check 10 validates the proposals file schema if it exists.
-
 ---
 
 ## Semantic Routing
@@ -720,10 +985,6 @@ bash ~/.claude/scripts/cast-embed-agents.sh
 On every prompt that falls through Stage 2, `route.sh` calls `cast-semantic-route.sh "<prompt>"`. The script embeds the prompt and computes cosine similarity against every agent in `agent-embeddings.json`. If the top score exceeds the threshold (default 0.72, override with `SEMANTIC_THRESHOLD=<value>`), that agent is dispatched with `confidence: semantic`.
 
 If Ollama is not running, or `agent-embeddings.json` does not exist, `cast-semantic-route.sh` exits 0 silently and Stage 3 (catch-all) takes over.
-
-### Re-embedding after agent changes
-
-Run `cast-embed-agents.sh` again whenever you add, remove, or significantly change agent descriptions. The output file is re-generated in place.
 
 ---
 
@@ -761,9 +1022,7 @@ test-writer             8    75%    25%     0%     0%     90
 
 The Score column is `DONE% + DWC% × 0.60`, capped at 100. Use it to spot agents accumulating BLOCKED events before they affect velocity.
 
-`/cast-stats` (the existing slash command) covers routing and dispatch metrics. `cast-agent-stats.sh` focuses on outcome quality per agent — they are complementary.
-
-The pre-session briefing's Agent Health advisory is also derived from this data: if any agent has a BLOCKED rate ≥ 20% across 5+ runs, it appears as a warning on the first prompt of the next session.
+The pre-session briefing's Agent Health advisory is also derived from this data: if any agent has a BLOCKED rate >= 20% across 5+ runs, it appears as a warning on the first prompt of the next session.
 
 ---
 
@@ -808,24 +1067,37 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 
 ---
 
+## Phase History
+
+| Phase | Delivered |
+|---|---|
+| Phase 1 (2026-03-20) | Initial release: 24 agents, 24 commands, 9 skills, 3 lifecycle hooks. Regex routing + Opus escalation. Agent quality rubric. Cross-platform support (macOS + Linux/WSL). |
+| Phase 2 (2026-03-21) | Auto-dispatch routing (1-step loop vs. 4-step). 4 new routes. False-positive fix for `<task-notification>` XML. `/help` command. Official rename to CAST. |
+| Phase 3 | Parallel post-chain voting pattern. Agent groups (31 compound workflows). Pre-session briefing. Policy engine (`policies.json`). Dry-run mode. Event-sourcing protocol. |
+| Phase 4 (2026-03-22) | Universal dispatcher (`/cast`). BATS test suite. Pattern simplification — NLU replaces broad regex. `stop-hook.sh`. Agent status reader. Rollback protocol. |
+| Phase 5 (2026-03-22–26) | Semantic routing (Ollama + cosine similarity). Agent performance profiling. Self-improving routing proposals pipeline. 6 specialist agents added (frontend-designer, framework-expert, pentest, infra, db-architect, merge). Merge skill. |
+| Phase 6 | SQLite state foundation (`cast.db`). Background daemon (`castd`) with queue polling and offline mode. Agent memory evolution with semantic search. Local Ollama execution tier. PII redaction pipeline (Presidio). Audit hook. |
+| Phase 7 (2026-03-26) | `cast` CLI (9 subcommands: run, queue, memory, budget, audit, airgap, daemon, status, install-completions). macOS OS-level integration: status bar app, Alfred workflow, file watcher, Notification Center, cross-machine sync. Air-gap mode. 35 routes. 198 tests. |
+
+---
+
 ## Stats
 
 | Metric | Count |
 |---|---|
 | Agents | 42 |
 | Agent groups | 31 |
-| Routes | 28 |
+| Routes | 35 |
 | Slash commands | 32 |
-| Skills | 12 |
-| Unit tests | 147 |
-| Integration tests | 7 |
-| Total tests | 154 |
+| Skills | 13 |
+| Tests | 198 |
 | Hook directives | 11 |
 | post-tool-hook.sh parts | 5 |
 | agent-status-reader responses | 5 |
 | Event types | 7 |
 | cast-stats.sh sections | 8 |
 | cast-validate.sh checks | 11 |
+| cast CLI subcommands | 9 |
 | Agents with ACI Reference sections | 6 |
 
 ---
@@ -835,7 +1107,7 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 See [docs/known-limitations.md](docs/known-limitations.md) for details on:
 
 - **SendMessage Gap** — orchestrator cannot resume after a network drop; workaround: checkpoint log + re-invocation with `pre_approved: true`
-- **Agent tool depth** — nesting depth ≥ 3 may suppress self-dispatch chains; inline session acts as fallback enforcer
+- **Agent tool depth** — nesting depth >= 3 may suppress self-dispatch chains; inline session acts as fallback enforcer
 - **Turn ceiling** — orchestrator stops cleanly at turn 40 and checkpoints for manual resume
 - **CAST-DEBUG silent suppression** — `post-tool-hook.sh` Part 5 uses `echo "$INPUT" | python3 - <<'PYEOF'`; in bash, the heredoc takes precedence as stdin for `python3 -`, leaving `sys.stdin` empty in the script. The `json.load(sys.stdin)` call raises and is caught by `|| true`. CAST-DEBUG directives are not emitted in the current implementation. The `[CAST-DEBUG]` directive in `CLAUDE.md` remains effective as a defined instruction; the auto-injection from the hook is the broken path.
 
@@ -843,7 +1115,7 @@ See [docs/known-limitations.md](docs/known-limitations.md) for details on:
 
 ## Companion
 
-[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) — observability UI for CAST. Reads `routing-log.jsonl`, `agent-status/`, and `cast/` directories written by CAST hooks. Shows routing decisions, agent status, and chain execution history in a React dashboard.
+[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) — observability UI for CAST. Reads `routing-log.jsonl`, `agent-status/`, and `cast/` directories written by CAST hooks. Shows routing decisions, agent status, and chain execution history in a React dashboard. No backend, no database — filesystem scan only.
 
 ---
 
