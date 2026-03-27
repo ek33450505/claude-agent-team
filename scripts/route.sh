@@ -46,6 +46,28 @@ if [ ! -f "$_CAST_DB_INIT_FLAG" ]; then
   touch "$_CAST_DB_INIT_FLAG" 2>/dev/null || true
 fi
 
+# --- Air-gap mode ---
+# Activated by CAST_AIRGAP=1 env var OR airgap=true in cast-cli.json.
+# When active: inject [CAST-AIRGAP] into the session briefing, and any
+# route with a cloud: model is rewritten to local:qwen3:8b at dispatch time.
+CAST_AIRGAP_ACTIVE=0
+if [ "${CAST_AIRGAP:-0}" = "1" ]; then
+  CAST_AIRGAP_ACTIVE=1
+else
+  _airgap_cfg="$(python3 -c "
+import json, os
+try:
+    with open(os.path.expanduser('~/.claude/config/cast-cli.json')) as f:
+        cfg = json.load(f)
+    print('1' if cfg.get('airgap') else '0')
+except Exception:
+    print('0')
+" 2>/dev/null || echo '0')"
+  if [ "$_airgap_cfg" = "1" ]; then
+    CAST_AIRGAP_ACTIVE=1
+  fi
+fi
+
 # --- Dry-run mode ---
 # Activated by CAST_DRY_RUN=1. Runs the full routing pipeline but does NOT emit
 # hookSpecificOutput or write to routing-log.jsonl. Instead prints a JSON summary
@@ -71,12 +93,16 @@ if [ "$DRY_RUN" = "0" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
     # Detect REPO_ROOT by walking up from cwd
     REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
 
-    CAST_SESSION_ID="${CLAUDE_SESSION_ID}" CAST_REPO_ROOT="${REPO_ROOT}" python3 -c "
+    CAST_SESSION_ID="${CLAUDE_SESSION_ID}" CAST_REPO_ROOT="${REPO_ROOT}" CAST_AIRGAP_ACTIVE="${CAST_AIRGAP_ACTIVE}" python3 -c "
 import json, os, subprocess, datetime
 
 session_id = os.environ.get('CAST_SESSION_ID', '')
 repo_root = os.environ.get('CAST_REPO_ROOT', '')
 lines = []
+
+# 0. Air-gap advisory (first so it's prominent)
+if os.environ.get('CAST_AIRGAP_ACTIVE', '0') == '1':
+    lines.append('[CAST-AIRGAP] Air-gap mode is ACTIVE. All cloud: model routes will be rewritten to local:qwen3:8b. No data will leave this machine via routing.')
 
 # 1. Git status (modified files)
 if repo_root:
@@ -328,13 +354,14 @@ sys.exit(1)
 
 # Match prompt against routing table and inject dispatch directive
 # Variables are passed as env prefixes to the subprocess rather than globally exported
-CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" python3 -c "
+CAST_PROMPT="$PROMPT" CAST_ORIGINAL="$ORIGINAL_PROMPT" CAST_DRY_RUN="$DRY_RUN" CAST_DRY_RUN_FILE="${DRY_RUN_FILE:-}" CAST_AIRGAP_ACTIVE="${CAST_AIRGAP_ACTIVE}" python3 -c "
 import json, re, os, datetime, sys
 
 prompt = os.environ.get('CAST_PROMPT', '')
 original = os.environ.get('CAST_ORIGINAL', '')
 dry_run = os.environ.get('CAST_DRY_RUN', '0') == '1'
 dry_run_file = os.environ.get('CAST_DRY_RUN_FILE', '')
+airgap_active = os.environ.get('CAST_AIRGAP_ACTIVE', '0') == '1'
 log_path = os.path.expanduser('~/.claude/routing-log.jsonl')
 ts = datetime.datetime.utcnow().isoformat() + 'Z'
 preview = prompt[:80]
@@ -436,7 +463,17 @@ for route in table.get('routes', []):
             command = route.get('command', '')
             post_chain = route.get('post_chain', [])
             model = route.get('model', 'sonnet')
+
+            # Air-gap model rewrite: cloud: → local:qwen3:8b
+            airgap_rewritten = False
+            if airgap_active and isinstance(model, str) and model.startswith('cloud:'):
+                original_model = model
+                model = 'local:qwen3:8b'
+                airgap_rewritten = True
+
             print(f'[CAST] Route matched: {agent}', file=sys.stderr)
+            if airgap_rewritten:
+                print(f'[CAST-AIRGAP] Rewrote model {original_model} -> {model}', file=sys.stderr)
 
             if dry_run:
                 # Write dry-run result to temp file (first match only)
@@ -490,12 +527,12 @@ for route in table.get('routes', []):
             }
             print(json.dumps(output))
 
-            # Log the match
+            # Log the match (include airgap_rewrite if applicable)
             log = {
                 'timestamp': ts,
                 'session_id': session_id,
                 'prompt_preview': preview,
-                'action': 'matched',
+                'action': 'airgap_rewrite' if airgap_rewritten else 'matched',
                 'matched_route': agent,
                 'command': command,
                 'pattern': pattern,

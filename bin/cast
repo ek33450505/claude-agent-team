@@ -108,7 +108,8 @@ Subcommands:
   ${C_BOLD}queue${C_RESET}     list|add|cancel|retry   Manage the persistent task queue
   ${C_BOLD}memory${C_RESET}    search|list|forget|export  Query and manage agent memories
   ${C_BOLD}budget${C_RESET}    [--week] [--project]    View cost and savings summary
-  ${C_BOLD}audit${C_RESET}     [--week] [--export]     View and manage audit log
+  ${C_BOLD}audit${C_RESET}     [--week] [--export] [--violations] [--stats]  View and manage audit log
+  ${C_BOLD}airgap${C_RESET}    on|off|status           Toggle air-gap mode (local-only routing)
   ${C_BOLD}daemon${C_RESET}    status|start|stop|...   Control the castd background daemon
   ${C_BOLD}status${C_RESET}                            Terminal health dashboard
   ${C_BOLD}install-completions${C_RESET}               Install shell tab completions
@@ -807,14 +808,20 @@ _cmd_audit() {
   local session_id=""
   local show_week=0
   local do_export=0
+  local do_violations=0
+  local do_stats=0
+  local export_output=""
   local redact_setting=""
   local audit_log="${HOME}/.claude/logs/audit.jsonl"
 
   while [ "${#}" -gt 0 ]; do
     case "$1" in
-      --session)  session_id="${2:-}"; shift 2 ;;
-      --week)     show_week=1; shift ;;
-      --export)   do_export=1; shift ;;
+      --session)    session_id="${2:-}"; shift 2 ;;
+      --week)       show_week=1; shift ;;
+      --export)     do_export=1; shift ;;
+      --output)     export_output="${2:-}"; shift 2 ;;
+      --violations) do_violations=1; shift ;;
+      --stats)      do_stats=1; shift ;;
       --redact)
         redact_setting="${2:-}"
         shift 2
@@ -825,7 +832,10 @@ Usage: cast audit [options]
 
   --session <id>     Filter by session ID
   --week             Last 7 days summary
-  --export           Full JSON dump to stdout
+  --export           Full JSON array dump to stdout
+  --output <file>    Write --export output to file instead of stdout
+  --violations       Show unredacted cloud-bound calls (privacy violations)
+  --stats            Show aggregate statistics (calls, cloud%, redaction rate, top tools)
   --redact on|off    Toggle PII redaction in cast-cli.json
 USAGE
         return 0
@@ -847,7 +857,145 @@ USAGE
   fi
 
   if [ "$do_export" -eq 1 ]; then
-    cat "$audit_log"
+    python3 - "$audit_log" "$export_output" <<'PYEOF'
+import sys, json
+
+audit_log, output_file = sys.argv[1], sys.argv[2]
+
+entries = []
+try:
+    with open(audit_log) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+except Exception:
+    pass
+
+result = json.dumps(entries, indent=2)
+
+if output_file:
+    try:
+        with open(output_file, 'w') as f:
+            f.write(result)
+            f.write('\n')
+        print(f"Exported {len(entries)} entries to {output_file}")
+    except Exception as e:
+        print(f"Error writing to {output_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+else:
+    print(result)
+PYEOF
+    return 0
+  fi
+
+  if [ "$do_violations" -eq 1 ]; then
+    python3 - "$audit_log" <<'PYEOF'
+import sys, json
+from datetime import datetime, timezone
+
+audit_log = sys.argv[1]
+
+entries = []
+try:
+    with open(audit_log) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+except Exception:
+    pass
+
+# Violations: cloud-bound AND not redacted
+violations = [
+    e for e in entries
+    if e.get('is_cloud_bound') and not e.get('redacted')
+]
+
+if not violations:
+    print("No privacy violations found. All cloud-bound calls have redaction annotations.")
+    sys.exit(0)
+
+print(f"Privacy Violations: {len(violations)} unredacted cloud-bound calls")
+print(f"{'Timestamp':<20} {'Session':<20} {'Tool':<20} {'Preview'}")
+print('-' * 90)
+for e in violations:
+    ts = (e.get('timestamp') or '')[:19]
+    sess = (e.get('session_id') or 'unknown')[:18]
+    tool = (e.get('tool_name') or '?')[:18]
+    preview = (e.get('url') or e.get('query') or e.get('command_preview') or '')[:40]
+    print(f"{ts:<20} {sess:<20} {tool:<20} {preview}")
+PYEOF
+    return 0
+  fi
+
+  if [ "$do_stats" -eq 1 ]; then
+    python3 - "$audit_log" <<'PYEOF'
+import sys, json
+from datetime import datetime, timezone
+from collections import Counter
+
+audit_log = sys.argv[1]
+
+entries = []
+try:
+    with open(audit_log) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                pass
+except Exception:
+    pass
+
+if not entries:
+    print("No audit entries found.")
+    sys.exit(0)
+
+total = len(entries)
+today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+today_count = sum(1 for e in entries if (e.get('timestamp') or '')[:10] == today_str)
+
+cloud_entries = [e for e in entries if e.get('is_cloud_bound')]
+local_entries = [e for e in entries if not e.get('is_cloud_bound')]
+cloud_count = len(cloud_entries)
+local_count = len(local_entries)
+redacted_count = sum(1 for e in cloud_entries if e.get('redacted'))
+
+cloud_pct = (cloud_count / total * 100) if total > 0 else 0.0
+local_pct = (local_count / total * 100) if total > 0 else 0.0
+redact_rate = (redacted_count / cloud_count * 100) if cloud_count > 0 else 0.0
+violations = cloud_count - redacted_count
+
+sessions = set(e.get('session_id', '') for e in entries if e.get('session_id'))
+
+tool_counts = Counter(e.get('tool_name', 'unknown') for e in entries)
+top5 = tool_counts.most_common(5)
+
+print(f"CAST Audit Statistics")
+print(f"{'=' * 40}")
+print(f"Total calls:       {total:>6}  (today: {today_count})")
+print(f"Sessions:          {len(sessions):>6}")
+print(f"Cloud calls:       {cloud_count:>6}  ({cloud_pct:.1f}%)")
+print(f"Local calls:       {local_count:>6}  ({local_pct:.1f}%)")
+print(f"Redacted (cloud):  {redacted_count:>6}  ({redact_rate:.1f}% redaction rate)")
+print(f"Violations:        {violations:>6}  (unredacted cloud calls)")
+print(f"\nTop 5 tools:")
+for tool, count in top5:
+    bar = '#' * min(30, int(count / total * 60)) if total > 0 else ''
+    print(f"  {tool:<22} {count:>5}  {bar}")
+PYEOF
     return 0
   fi
 
@@ -951,23 +1099,51 @@ PYEOF
 # ── Subcommand: daemon ────────────────────────────────────────────────────────
 _cmd_daemon() {
   local subcmd="${1:-status}"
+  local airgap_flag=0
   shift 2>/dev/null || true
+
+  # Pre-scan for --airgap flag
+  local remaining_args=()
+  for arg in "$@"; do
+    if [ "$arg" = "--airgap" ]; then
+      airgap_flag=1
+    else
+      remaining_args+=("$arg")
+    fi
+  done
 
   case "$subcmd" in
     status)  _daemon_status ;;
-    start)   _daemon_start ;;
+    start)
+      if [ "$airgap_flag" -eq 1 ]; then
+        export CAST_AIRGAP=1
+        _info "Starting castd with air-gap mode enabled (CAST_AIRGAP=1)"
+      fi
+      _daemon_start
+      ;;
     stop)    _daemon_stop ;;
-    restart) _daemon_stop; sleep 1; _daemon_start ;;
-    logs)    _daemon_logs "$@" ;;
+    restart)
+      _daemon_stop
+      sleep 1
+      if [ "$airgap_flag" -eq 1 ]; then
+        export CAST_AIRGAP=1
+        _info "Restarting castd with air-gap mode enabled (CAST_AIRGAP=1)"
+      fi
+      _daemon_start
+      ;;
+    logs)    _daemon_logs "${remaining_args[@]+"${remaining_args[@]}"}" ;;
     --help|-h)
       cat <<USAGE
-Usage: cast daemon <subcommand>
+Usage: cast daemon <subcommand> [flags]
 
   status           Check castd running state, queue depth, last run
   start            Start castd daemon (launchctl or background process)
   stop             Stop castd daemon
   restart          Stop then start
   logs [--tail N]  View castd log (default: last 50 lines)
+
+Flags:
+  --airgap         Start daemon with CAST_AIRGAP=1 (rewrites cloud routes to local)
 USAGE
       ;;
     *)
@@ -1201,6 +1377,25 @@ PYEOF
     semantic_avail=1
   fi
 
+  # Air-gap state
+  local airgap_on=0
+  if [ "${CAST_AIRGAP:-0}" = "1" ]; then
+    airgap_on=1
+  else
+    _ag_cfg="$(python3 -c "
+import json, os
+try:
+    with open(os.path.expanduser('~/.claude/config/cast-cli.json')) as f:
+        cfg = json.load(f)
+    print('1' if cfg.get('airgap') else '0')
+except Exception:
+    print('0')
+" 2>/dev/null || echo '0')"
+    if [ "${_ag_cfg:-0}" = "1" ]; then
+      airgap_on=1
+    fi
+  fi
+
   # Recent agent runs (last 5)
   local recent_runs=""
   if [ -f "$CAST_DB_PATH" ] && command -v python3 >/dev/null 2>&1; then
@@ -1270,6 +1465,13 @@ PYEOF
     printf "Memory      %d entries  semantic: ${C_YELLOW}● unavailable${C_RESET} (start Ollama)\n" "$mem_count"
   fi
 
+  # Air-gap row
+  if [ "$airgap_on" -eq 1 ]; then
+    printf "Air-gap     ${C_YELLOW}[AIRGAP: ON]${C_RESET}   cloud routes -> local:qwen3:8b\n"
+  else
+    printf "Air-gap     ${C_GREEN}[AIRGAP: OFF]${C_RESET}  normal routing\n"
+  fi
+
   printf "%s\n" "$sep"
 
   if [ -n "$recent_runs" ]; then
@@ -1318,6 +1520,25 @@ _cmd_install_completions() {
     _warn "No completion files found in $completions_src"
     return 1
   fi
+}
+
+# ── Subcommand: airgap ────────────────────────────────────────────────────────
+_cmd_airgap() {
+  local subcmd="${1:-status}"
+  local airgap_script="${CAST_SCRIPTS_DIR}/cast-airgap.sh"
+
+  # Fallback: check repo scripts dir
+  if [ ! -f "$airgap_script" ]; then
+    airgap_script="${CAST_REPO_DIR}/scripts/cast-airgap.sh"
+  fi
+
+  if [ ! -f "$airgap_script" ]; then
+    _error "cast-airgap.sh not found at $airgap_script"
+    printf "  Run: cast install  (or install cast-airgap.sh to %s)\n" "$CAST_SCRIPTS_DIR" >&2
+    return 1
+  fi
+
+  bash "$airgap_script" "$subcmd"
 }
 
 # ── Global flag pre-processing ────────────────────────────────────────────────
@@ -1376,6 +1597,7 @@ case "$SUBCOMMAND" in
   memory)               _cmd_memory "$@" ;;
   budget)               _cmd_budget "$@" ;;
   audit)                _cmd_audit "$@" ;;
+  airgap)               _cmd_airgap "$@" ;;
   daemon)               _cmd_daemon "$@" ;;
   status)               _cmd_status "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;

@@ -174,6 +174,114 @@ if [ -z "$RECORD" ]; then
   RECORD="{\"timestamp\":\"${CAST_AUDIT_TIMESTAMP}\",\"session_id\":\"${CAST_AUDIT_SESSION}\",\"project\":\"${CAST_AUDIT_PROJECT}\",\"tool_name\":\"unknown\"}"
 fi
 
+# ── Step 3b: PII Redaction (observation-only annotation) ─────────────────────
+# If redact_pii=true in cast-cli.json and the call is cloud-bound:
+#   - Run cast-redact.py in analyze mode
+#   - Annotate the audit record with redacted=true and redacted_count=N
+#   - Store the redaction map to ~/.claude/logs/redact-maps/
+#   - Inject [CAST-REDACT-WARN] into hookSpecificOutput
+# NOTE: This hook cannot intercept API calls — we annotate what WOULD be redacted.
+# Failures are always silent (exit 0 guaranteed).
+IS_CLOUD_BOUND="$(echo "$PARSED" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    print('true' if d.get('is_cloud_bound') else 'false')
+except Exception:
+    print('false')
+" 2>/dev/null || echo 'false')"
+
+if [ "$IS_CLOUD_BOUND" = "true" ]; then
+  REDACT_ENABLED="$(python3 -c "
+import json, os
+try:
+    with open(os.path.expanduser('~/.claude/config/cast-cli.json')) as f:
+        cfg = json.load(f)
+    print('true' if cfg.get('redact_pii') else 'false')
+except Exception:
+    print('false')
+" 2>/dev/null || echo 'false')"
+
+  if [ "$REDACT_ENABLED" = "true" ]; then
+    # Extract relevant text from PARSED (url, query, or command_preview)
+    REDACT_TEXT="$(echo "$PARSED" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    text = d.get('url') or d.get('query') or d.get('command_preview') or ''
+    print(text[:500])
+except Exception:
+    print('')
+" 2>/dev/null || echo '')"
+
+    if [ -n "$REDACT_TEXT" ]; then
+      REDACT_SCRIPT="$HOME/.claude/scripts/cast-redact.py"
+      REDACT_RESULT=""
+      if [ -f "$REDACT_SCRIPT" ]; then
+        REDACT_RESULT="$(python3 "$REDACT_SCRIPT" --text "$REDACT_TEXT" --mode analyze 2>/dev/null || echo '')"
+      fi
+
+      ENTITY_COUNT="$(echo "$REDACT_RESULT" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('entity_count', 0))
+except Exception:
+    print(0)
+" 2>/dev/null || echo '0')"
+
+      if [ -n "$ENTITY_COUNT" ] && [ "$ENTITY_COUNT" -gt 0 ] 2>/dev/null; then
+        # Annotate the audit record with redaction fields
+        export CAST_REDACT_COUNT="$ENTITY_COUNT"
+        RECORD="$(echo "$RECORD" | python3 -c "
+import sys, json, os
+try:
+    r = json.loads(sys.stdin.read())
+    r['redacted'] = True
+    r['redacted_count'] = int(os.environ.get('CAST_REDACT_COUNT', 0))
+    print(json.dumps(r, separators=(',', ':')))
+except Exception:
+    print(sys.stdin.read())
+" 2>/dev/null || echo "$RECORD")"
+
+        # Store redaction map
+        mkdir -p "$HOME/.claude/logs/redact-maps" 2>/dev/null
+        REDACT_MAP_FILE="$HOME/.claude/logs/redact-maps/${CAST_AUDIT_SESSION}-${CAST_AUDIT_TIMESTAMP}.json"
+        export CAST_REDACT_RESULT="$REDACT_RESULT"
+        export CAST_REDACT_MAP_SESSION="$CAST_AUDIT_SESSION"
+        export CAST_REDACT_MAP_TS="$CAST_AUDIT_TIMESTAMP"
+        python3 -c "
+import json, os
+try:
+    result = json.loads(os.environ.get('CAST_REDACT_RESULT', '{}'))
+    map_data = {
+        'timestamp': os.environ.get('CAST_REDACT_MAP_TS', ''),
+        'session_id': os.environ.get('CAST_REDACT_MAP_SESSION', ''),
+        'entities': result.get('entities', [])
+    }
+    with open(os.path.expanduser('~/.claude/logs/redact-maps/' + os.environ.get('CAST_REDACT_MAP_SESSION','unknown') + '-' + os.environ.get('CAST_REDACT_MAP_TS','').replace(':','-') + '.json'), 'w') as f:
+        json.dump(map_data, f)
+except Exception:
+    pass
+" 2>/dev/null || true
+
+        # Inject CAST-REDACT-WARN directive
+        python3 -c "
+import json, os
+n = int(os.environ.get('CAST_REDACT_COUNT', 0))
+output = {
+    'hookSpecificOutput': {
+        'hookEventName': 'PreToolUse',
+        'additionalContext': f'[CAST-REDACT-WARN: {n} PII entities detected in cloud-bound tool call. Audit record annotated. Consider enabling data minimization.]'
+    }
+}
+print(json.dumps(output))
+" 2>/dev/null || true
+      fi
+    fi
+  fi
+fi
+
 # ── Step 4: Append to audit log ────────────────────────────────────────────────
 # Single atomic line append — JSONL format (one JSON object per line).
 echo "$RECORD" >> "$AUDIT_LOG" 2>/dev/null || true
