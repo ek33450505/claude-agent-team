@@ -158,14 +158,15 @@ try:
           input_tokens, output_tokens, call_cost, model))
 
     # Insert agent_runs row only for Agent tool calls (we know which agent ran)
+    # status='running' allows SubagentStop to UPDATE the row when the agent finishes
     if tool_name == 'Agent' and agent_name:
         cur.execute('''
             INSERT INTO agent_runs
               (session_id, agent, model, started_at, ended_at,
-               input_tokens, output_tokens, cost_usd, task_summary, project)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               input_tokens, output_tokens, cost_usd, task_summary, project, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (session_id, agent_name, model, now, now,
-              input_tokens, output_tokens, call_cost, task_summary, project_name))
+              input_tokens, output_tokens, call_cost, task_summary, project_name, 'running'))
 
     conn.commit()
     conn.close()

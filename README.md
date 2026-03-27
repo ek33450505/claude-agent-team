@@ -1191,6 +1191,22 @@ See [docs/known-limitations.md](docs/known-limitations.md) for details on:
 
 [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) — observability UI for CAST. Reads `routing-log.jsonl`, `agent-status/`, and `cast/` directories written by CAST hooks. Shows routing decisions, agent status, and chain execution history in a React dashboard. No backend, no database — filesystem scan only.
 
+**Dashboard Pages:**
+- `/activity` — Live stream of agent runs and dispatches
+- `/sessions` — Session history and session detail view
+- `/analytics` — Agent performance analytics
+- `/analytics/agents/:agent` — Per-agent scorecard and metrics
+- `/agents` — List of all 42 agents
+- `/agents/:name` — Agent detail view
+- `/routing` — Routing log and routing decision history
+- `/hooks` — Hook health and event stream
+- `/plans` — Stored plan files and plan detail views
+- `/memory` — Memory browser with semantic search
+- `/system` — System health, castd status, queue depth
+- `/privacy` — Privacy audit log and redaction events
+- `/token-spend` — Token usage tracking
+- `/db` — SQLite explorer (read-only)
+
 ---
 
 MIT License
