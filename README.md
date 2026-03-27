@@ -1,6 +1,6 @@
 # CAST — Claude Agent Specialist Team
 
-<!-- CAST_VERSION_BADGE -->![Version](https://img.shields.io/badge/version-1.6.0-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-1.6.0-blue)
 ![Agents](https://img.shields.io/badge/agents-42-green)
 ![Routes](https://img.shields.io/badge/routes-35-blue)
 ![Commands](https://img.shields.io/badge/commands-32-blue)
