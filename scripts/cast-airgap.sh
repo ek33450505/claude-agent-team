@@ -21,6 +21,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
   echo '{}' > "$CONFIG_FILE"
 fi
 
+AIRGAP_STATE_FILE="${HOME}/.claude/cast/state/airgap.state"
+
 case "$SUBCMD" in
   on)
     python3 - "$CONFIG_FILE" "true" <<'PYEOF'
@@ -41,6 +43,8 @@ with open(config_file, 'w') as f:
     json.dump(cfg, f, indent=2)
     f.write('\n')
 PYEOF
+    mkdir -p "$(dirname "$AIRGAP_STATE_FILE")"
+    echo "1" > "$AIRGAP_STATE_FILE"
     echo "[CAST-AIRGAP ON] Air-gap mode enabled. Cloud routes will be rewritten to local:qwen3:8b."
     ;;
 
@@ -63,6 +67,7 @@ with open(config_file, 'w') as f:
     json.dump(cfg, f, indent=2)
     f.write('\n')
 PYEOF
+    rm -f "$AIRGAP_STATE_FILE"
     echo "[CAST-AIRGAP OFF] Air-gap mode disabled. Cloud routes restored."
     ;;
 

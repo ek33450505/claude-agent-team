@@ -50,6 +50,18 @@ if [ ! -f "$_CAST_DB_INIT_FLAG" ]; then
   touch "$_CAST_DB_INIT_FLAG" 2>/dev/null || true
 fi
 
+# --- Air-gap state file check ---
+# If CAST_AIRGAP_ACTIVE is not set in the environment, check the persistent state file.
+# cast-airgap.sh writes/deletes ~/.claude/cast/state/airgap.state to persist across processes.
+if [ -z "${CAST_AIRGAP_ACTIVE:-}" ]; then
+  _AIRGAP_STATE="${HOME}/.claude/cast/state/airgap.state"
+  if [ -f "$_AIRGAP_STATE" ]; then
+    export CAST_AIRGAP_ACTIVE=1
+  else
+    export CAST_AIRGAP_ACTIVE=0
+  fi
+fi
+
 # --- Resolve cast-db-log.py path (dirname-first so test HOME overrides work) ---
 _CAST_DB_LOG_PY="$(dirname "$0")/cast-db-log.py"
 [ ! -f "$_CAST_DB_LOG_PY" ] && _CAST_DB_LOG_PY="${HOME}/.claude/scripts/cast-db-log.py"
@@ -514,7 +526,13 @@ for route in table.get('routes', []):
 
             # Add post-chain directive if present
             if post_chain and post_chain != ['auto-dispatch-from-manifest']:
-                chain_str = ' -> '.join(f'\`{a}\`' for a in post_chain)
+                parts = []
+                for step in post_chain:
+                    if isinstance(step, list):
+                        parts.append('[' + ', '.join(f'\`{a}\`' for a in step) + ']')
+                    else:
+                        parts.append(f'\`{step}\`')
+                chain_str = ' -> '.join(parts)
                 directive += f'[CAST-CHAIN] After {agent} completes: dispatch {chain_str} in sequence.'
 
             # Output JSON hookSpecificOutput for Claude to see

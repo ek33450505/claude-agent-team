@@ -99,7 +99,7 @@ entry = {
 }
 import subprocess
 subprocess.run(
-    ['python3', os.path.expanduser('~/.claude/scripts/cast-log-append.py')],
+    ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
     input=json.dumps(entry), text=True, timeout=5
 )
 " 2>/dev/null || true

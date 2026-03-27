@@ -64,7 +64,7 @@ export SQLITE_VEC_AVAILABLE
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-if [ "$CURRENT_VERSION" -ge 3 ]; then
+if [ "$CURRENT_VERSION" -ge 4 ]; then
   echo "cast.db already initialized (v${CURRENT_VERSION})" >&2
   exit 0
 fi
@@ -97,6 +97,17 @@ CREATE INDEX IF NOT EXISTS idx_mismatch_signals_timestamp  ON mismatch_signals(t
 PRAGMA user_version = 3;
 MIGRATE_V3
   echo "cast.db migrated v2 → v3 (mismatch_signals table added)" >&2
+  CURRENT_VERSION=3
+fi
+
+# Migrate v3 → v4: add commit_sha column to agent_runs
+if [ "$CURRENT_VERSION" -eq 3 ]; then
+  sqlite3 "$DB_PATH" <<'MIGRATE_V4'
+ALTER TABLE agent_runs ADD COLUMN commit_sha TEXT;
+PRAGMA user_version = 4;
+MIGRATE_V4
+  echo "cast.db migrated v3 → v4 (commit_sha column added to agent_runs)" >&2
+  CURRENT_VERSION=4
   exit 0
 fi
 
@@ -130,7 +141,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   cost_usd        REAL,
   task_summary    TEXT,                            -- first 200 chars of task
   prompt          TEXT,                            -- full prompt (optional, privacy flag)
-  project         TEXT
+  project         TEXT,
+  commit_sha      TEXT                             -- git commit SHA after agent completes (for rollback)
 );
 
 -- Routing events: replaces routing-log.jsonl
@@ -222,8 +234,8 @@ CREATE INDEX IF NOT EXISTS idx_mismatch_signals_route      ON mismatch_signals(r
 CREATE INDEX IF NOT EXISTS idx_mismatch_signals_timestamp  ON mismatch_signals(timestamp);
 
 -- Set schema version
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 SQL
 
 chmod 600 "$DB_PATH"
-echo "cast.db initialized (v3)" >&2
+echo "cast.db initialized (v4)" >&2

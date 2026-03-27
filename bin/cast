@@ -218,35 +218,16 @@ USAGE
     return 0
   fi
 
-  # Synchronous run — resolve model and call cast-local-runner.sh
-  local runner_script="${CAST_SCRIPTS_DIR}/cast-local-runner.sh"
-  if [ ! -f "$runner_script" ]; then
-    runner_script="${CAST_REPO_DIR}/scripts/cast-local-runner.sh"
-  fi
-
-  local model="$model_override"
-  if [ -z "$model" ]; then
-    # Use model resolver
-    local resolver_script="${CAST_SCRIPTS_DIR}/cast-model-resolver.sh"
-    if [ ! -f "$resolver_script" ]; then
-      resolver_script="${CAST_REPO_DIR}/scripts/cast-model-resolver.sh"
-    fi
-    if [ -f "$resolver_script" ]; then
-      local resolved
-      resolved="$(bash "$resolver_script" "$agent" "${#task}" 2>/dev/null || echo "")"
-      model="$(echo "$resolved" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('model',''))" 2>/dev/null || echo "")"
-      _verbose "Model resolved: $resolved"
-    fi
-    model="${model:-qwen3:8b}"
-  fi
-
-  if [ ! -f "$runner_script" ]; then
-    _error "cast-local-runner.sh not found"
-    return 1
-  fi
+  # Synchronous run — invoke Claude CLI directly
+  local model="${model_override:-claude-sonnet-4-6}"
 
   _verbose "Running: $agent with model=$model"
-  bash "$runner_script" "$agent" "$model" "$task"
+  local log_file="/tmp/cast-run-$$"
+  claude --agent "$agent" --print --dangerously-skip-permissions -p "$task" \
+    2>&1 | tee "$log_file"
+  local exit_code="${PIPESTATUS[0]}"
+  rm -f "$log_file"
+  return "$exit_code"
 }
 
 # ── Subcommand: queue ─────────────────────────────────────────────────────────
