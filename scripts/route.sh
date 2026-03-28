@@ -319,7 +319,7 @@ for group in groups_data.get('groups', []):
                             pass
                     sys.exit(0)
                 directive = f\"[CAST-DISPATCH-GROUP: {group['id']}]\\n\"
-                directive += 'MANDATORY: Pass the following Payload JSON to the orchestrator agent immediately with pre_approved: true. Do NOT handle inline.\\n'
+                directive += 'MANDATORY: Pass the following Payload JSON to the inline session orchestrator immediately with pre_approved: true. Do NOT handle inline — dispatch agents per the manifest.\\n'
                 payload = {
                     'group_id': group['id'],
                     'description': group.get('description', ''),
