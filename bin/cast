@@ -57,9 +57,6 @@ if [ -z "${CAST_DB_PATH:-}" ]; then
 fi
 export CAST_DB_PATH
 
-OLLAMA_URL="${OLLAMA_URL:-$(_config_get ollama_url "http://localhost:11434")}"
-export OLLAMA_URL
-
 # ── Colors ────────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
   C_BOLD='\033[1m'
@@ -114,6 +111,7 @@ Subcommands:
   ${C_BOLD}daemon${C_RESET}    status|start|stop|...   Control the castd background daemon
   ${C_BOLD}status${C_RESET}                            Terminal health dashboard
   ${C_BOLD}learn${C_RESET}     "<pattern>" <agent>     Install a learned route into routing-table.json
+  ${C_BOLD}doctor${C_RESET}                            Run system health check (traffic-light report)
   ${C_BOLD}install-completions${C_RESET}               Install shell tab completions
 
 Global flags:
@@ -1287,7 +1285,6 @@ _daemon_logs() {
 # ── Subcommand: status ────────────────────────────────────────────────────────
 _cmd_status() {
   # Terminal health dashboard using printf/tput only
-  local ollama_url="${OLLAMA_URL:-http://localhost:11434}"
   local log_file="${HOME}/.claude/logs/castd.log"
 
   # Width
@@ -1298,23 +1295,6 @@ _cmd_status() {
   if [ "$width" -gt 70 ]; then width=70; fi
 
   # ── Gather data ────────────────────────────────────────────────────────────
-  # Ollama status
-  local ollama_running=0
-  local ollama_models=""
-  if curl -sf --max-time 2 "${ollama_url}/api/tags" >/dev/null 2>&1; then
-    ollama_running=1
-    ollama_models="$(curl -sf --max-time 2 "${ollama_url}/api/tags" 2>/dev/null | \
-      python3 -c "
-import json,sys
-try:
-    d=json.load(sys.stdin)
-    names=[m['name'] for m in d.get('models',[])]
-    print(', '.join(names[:3]) if names else 'no models')
-except:
-    print('?')
-" 2>/dev/null || echo "?")"
-  fi
-
   # castd status
   local castd_running=0
   local castd_pid=""
@@ -1362,12 +1342,6 @@ PYEOF
   local mem_count=0
   if [ -f "$CAST_DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
     mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories;" 2>/dev/null || echo 0)"
-  fi
-
-  # Semantic search availability
-  local semantic_avail=0
-  if curl -sf --max-time 1 "${ollama_url}/api/tags" >/dev/null 2>&1; then
-    semantic_avail=1
   fi
 
   # Air-gap state
@@ -1453,13 +1427,6 @@ except Exception:
   printf "${C_BOLD}CAST v${CAST_VERSION} — Local-First OS${C_RESET}\n"
   printf "%s\n" "$sep"
 
-  # Ollama row
-  if [ "$ollama_running" -eq 1 ]; then
-    printf "Ollama      ${C_GREEN}● running${C_RESET}    models: %s\n" "${ollama_models:-none}"
-  else
-    printf "Ollama      ${C_RED}● stopped${C_RESET}    (start: ollama serve)\n"
-  fi
-
   # castd row
   if [ "$castd_running" -eq 1 ]; then
     printf "castd       ${C_GREEN}● running${C_RESET}    queue: %d pending, %d claimed\n" "$q_pending" "$q_claimed"
@@ -1472,11 +1439,7 @@ except Exception:
     "$today_spend" "$week_spend" "$local_count"
 
   # Memory row
-  if [ "$semantic_avail" -eq 1 ]; then
-    printf "Memory      %d entries  semantic: ${C_GREEN}● available${C_RESET}\n" "$mem_count"
-  else
-    printf "Memory      %d entries  semantic: ${C_YELLOW}● unavailable${C_RESET} (start Ollama)\n" "$mem_count"
-  fi
+  printf "Memory      %d entries\n" "$mem_count"
 
   # Air-gap row
   if [ "$airgap_on" -eq 1 ]; then
@@ -2052,6 +2015,189 @@ except Exception as e:
   esac
 }
 
+# ── Subcommand: doctor ───────────────────────────────────────────────────────
+_cmd_doctor() {
+  local overall_ok=1
+
+  # Traffic-light symbols
+  local OK="[${C_GREEN}✓${C_RESET}]"
+  local WARN="[${C_YELLOW}!${C_RESET}]"
+  local ERR="[${C_RED}✗${C_RESET}]"
+  local INFO="[${C_CYAN}i${C_RESET}]"
+
+  printf "${C_BOLD}CAST Doctor — system health check${C_RESET}\n"
+  printf "%s\n" "$(python3 -c "print('─' * 52)" 2>/dev/null || printf '%0.s─' {1..52})"
+
+  # ── 1. cast.db accessible ────────────────────────────────────────────────
+  if sqlite3 "$CAST_DB_PATH" 'SELECT 1' >/dev/null 2>&1; then
+    printf "%b cast.db accessible (%s)\n" "$OK" "$CAST_DB_PATH"
+  else
+    printf "%b cast.db not accessible (%s)\n" "$ERR" "$CAST_DB_PATH"
+    overall_ok=0
+    # Cannot proceed with DB checks
+    printf "\n  Cannot continue DB checks — fix cast.db first.\n"
+    printf "  Run: bash %s/cast-db-init.sh\n" "$CAST_SCRIPTS_DIR"
+    return 1
+  fi
+
+  # ── 2. Schema current ────────────────────────────────────────────────────
+  local required_tables="sessions agent_runs agent_memories task_queue routing_events budgets"
+  local missing_tables=""
+  local found_count=0
+  for tbl in $required_tables; do
+    if sqlite3 "$CAST_DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='${tbl}';" 2>/dev/null | grep -q "${tbl}"; then
+      found_count=$((found_count + 1))
+    else
+      missing_tables="${missing_tables} ${tbl}"
+    fi
+  done
+  local total_required
+  total_required=$(echo "$required_tables" | wc -w | tr -d ' ')
+  if [ -z "$missing_tables" ]; then
+    printf "%b Schema: %d tables present\n" "$OK" "$found_count"
+  else
+    printf "%b Schema: %d/%d tables found — missing:%s\n" "$WARN" "$found_count" "$total_required" "$missing_tables"
+    overall_ok=0
+  fi
+
+  # ── 3. Hooks registered ──────────────────────────────────────────────────
+  local settings_file="${HOME}/.claude/settings.json"
+  local hook_count=0
+  if [ -f "$settings_file" ]; then
+    hook_count="$(python3 - "$settings_file" <<'PYEOF'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    hooks = cfg.get("hooks", {})
+    total = sum(len(v) if isinstance(v, list) else 1 for v in hooks.values())
+    print(total)
+except Exception:
+    print(0)
+PYEOF
+    2>/dev/null || echo 0)"
+  fi
+  if [ "${hook_count:-0}" -gt 3 ]; then
+    printf "%b Hooks registered: %d hooks found\n" "$OK" "$hook_count"
+  elif [ "${hook_count:-0}" -gt 0 ]; then
+    printf "%b Hooks registered: only %d hooks found (expected >3)\n" "$WARN" "$hook_count"
+    overall_ok=0
+  else
+    printf "%b Hooks registered: 0 hooks found in %s\n" "$WARN" "$settings_file"
+    overall_ok=0
+  fi
+
+  # ── 4. Hook scripts exist ────────────────────────────────────────────────
+  if [ -f "$settings_file" ]; then
+    local missing_scripts
+    missing_scripts="$(python3 - "$settings_file" <<'PYEOF'
+import json, sys, re, os
+
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    hooks = cfg.get("hooks", {})
+except Exception:
+    sys.exit(0)
+
+missing = []
+for event, entries in hooks.items():
+    if not isinstance(entries, list):
+        entries = [entries]
+    for entry in entries:
+        cmd = ""
+        if isinstance(entry, dict):
+            cmd = entry.get("command", "")
+        elif isinstance(entry, str):
+            cmd = entry
+        if not cmd:
+            continue
+        # Extract first token that looks like a file path
+        parts = cmd.split()
+        # Skip interpreter prefix (bash, sh, python3, etc.)
+        interpreters = {"bash", "sh", "python3", "python", "node", "ruby", "perl"}
+        for part in parts:
+            if part in interpreters:
+                continue
+            if part.startswith("-"):
+                continue
+            expanded = os.path.expanduser(part)
+            if "/" in expanded:
+                if not os.path.isfile(expanded):
+                    missing.append(expanded)
+                break
+
+for m in missing:
+    print(m)
+PYEOF
+    2>/dev/null || echo "")"
+    if [ -z "$missing_scripts" ]; then
+      printf "%b Hook scripts: all found\n" "$OK"
+    else
+      while IFS= read -r script_path; do
+        [ -z "$script_path" ] && continue
+        printf "%b Hook script missing: %s\n" "$ERR" "$script_path"
+        overall_ok=0
+      done <<< "$missing_scripts"
+    fi
+  else
+    printf "%b Hook scripts: settings.json not found at %s\n" "$WARN" "$settings_file"
+    overall_ok=0
+  fi
+
+  # ── 5. Events dir writable ───────────────────────────────────────────────
+  local events_dir="${HOME}/.claude/cast/events"
+  if [ -d "$events_dir" ] && [ -w "$events_dir" ]; then
+    printf "%b Events dir writable (%s)\n" "$OK" "$events_dir"
+  elif [ -d "$events_dir" ]; then
+    printf "%b Events dir not writable: %s\n" "$WARN" "$events_dir"
+    overall_ok=0
+  else
+    printf "%b Events dir missing: %s\n" "$WARN" "$events_dir"
+    overall_ok=0
+  fi
+
+  # ── 6. route.sh: routing_events row count ────────────────────────────────
+  local routing_row_count
+  routing_row_count="$(sqlite3 "$CAST_DB_PATH" 'SELECT COUNT(*) FROM routing_events;' 2>/dev/null || echo 0)"
+  if [ "${routing_row_count:-0}" -gt 0 ]; then
+    printf "%b routing_events: %d rows\n" "$OK" "$routing_row_count"
+  else
+    printf "%b routing_events: 0 rows — route.sh may have wrong DB path\n" "$WARN"
+    overall_ok=0
+  fi
+
+  # ── 7. Budget table rows (info only) ─────────────────────────────────────
+  local budget_row_count
+  budget_row_count="$(sqlite3 "$CAST_DB_PATH" 'SELECT COUNT(*) FROM budgets;' 2>/dev/null || echo 0)"
+  if [ "${budget_row_count:-0}" -gt 0 ]; then
+    printf "%b Budget table: %d limit(s) configured\n" "$INFO" "$budget_row_count"
+  else
+    printf "%b Budget table: no limits set (run: cast budget set --global <usd>)\n" "$INFO"
+  fi
+
+  # ── 8. BATS available ────────────────────────────────────────────────────
+  if command -v bats >/dev/null 2>&1; then
+    local bats_path
+    bats_path="$(command -v bats)"
+    printf "%b BATS available: %s\n" "$OK" "$bats_path"
+  else
+    printf "%b BATS not found in PATH (install: brew install bats-core)\n" "$WARN"
+    overall_ok=0
+  fi
+
+  # ── 9. Version ───────────────────────────────────────────────────────────
+  printf "%b Version: %s\n" "$INFO" "$CAST_VERSION"
+
+  # ── Summary ──────────────────────────────────────────────────────────────
+  printf "%s\n" "$(python3 -c "print('─' * 52)" 2>/dev/null || printf '%0.s─' {1..52})"
+  if [ "$overall_ok" -eq 1 ]; then
+    printf "%b All checks passed\n" "$OK"
+  else
+    printf "%b Some checks need attention (see %b above)\n" "$WARN" "${C_YELLOW}[!]/${C_RED}[✗]${C_RESET}"
+  fi
+}
+
 # ── Subcommand: exec ─────────────────────────────────────────────────────────
 _cmd_exec() {
   local mode_flag=""
@@ -2151,6 +2297,7 @@ SUBCOMMAND="${1:-}"
 shift 2>/dev/null || true
 
 case "$SUBCOMMAND" in
+  doctor)               _cmd_doctor "$@" ;;
   exec)                 _cmd_exec "$@" ;;
   compat)               _cmd_compat "$@" ;;
   upgrade)              _cmd_upgrade "$@" ;;

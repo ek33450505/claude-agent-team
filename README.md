@@ -96,7 +96,7 @@ Zero custom application code. Pure config, shell, and markdown. If you understan
 │  [UserPromptSubmit]  route.sh                                           │
 │      Stage 1: agent-groups.json match (31 groups)  → [CAST-DISPATCH-GROUP]
 │      Stage 2: routing-table.json regex (35 routes) → [CAST-DISPATCH]   │
-│      Stage 2.5: Ollama cosine similarity           → [CAST-DISPATCH]   │
+│      Stage 2.5: (reserved for Claude Embeddings API integration)       │
 │      Stage 3: catch-all NLU (router agent)         → [CAST-DISPATCH]   │
 │                                                                         │
 │  [PostToolUse]  post-tool-hook.sh  (5 independent parts)               │
@@ -178,8 +178,7 @@ User Prompt
     |                                                         |
     |-- Stage 2: routing-table.json match (35 routes) -----> [CAST-DISPATCH]
     |                                                         |
-    |-- Stage 2.5: semantic cosine similarity (Ollama) ----> [CAST-DISPATCH] (confidence: semantic)
-    |              cast-semantic-route.sh + agent-embeddings.json
+    |-- Stage 2.5: (reserved for Claude Embeddings API)     (falls through to Stage 3)
     |                                                         |
     |-- Stage 3: catch-all — 5+ words, action verb, -------> router agent (NLU)
     |            not question
@@ -292,7 +291,7 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
 }
 ```
 
-**Stage 2.5 — Semantic routing:** when Stage 2 finds no regex match, `cast-semantic-route.sh` embeds the prompt via Ollama (`nomic-embed-text`) and computes cosine similarity against pre-built agent embeddings in `~/.claude/config/agent-embeddings.json`. If the top match exceeds the threshold (default: 0.72), that agent is dispatched with `confidence: semantic`. Falls through silently when Ollama is not running.
+**Stage 2.5 — Semantic routing (reserved for future):** this stage is reserved for Claude Embeddings API integration. Currently, semantic routing is not active and the routing pipeline falls through to Stage 3.
 
 **Stage 3 — Catch-all:** fires when no route matched, the prompt is 5+ words, is not a question, and contains an action verb (`fix`, `add`, `implement`, `build`, etc.). Routes to the `router` agent (haiku) for NLU classification. If `router` returns confidence < 0.7, it returns `"main"` and Claude handles inline.
 
@@ -766,11 +765,11 @@ cast daemon logs                   # Tail castd.log
 
 ```bash
 cast airgap status
-cast airgap on                     # Block all outbound LLM calls; local Ollama only
+cast airgap on                     # Block all outbound LLM calls
 cast airgap off
 ```
 
-**`cast status`** — Terminal health dashboard: Ollama status, castd state, queue depth, budget.
+**`cast status`** — Terminal health dashboard: castd state, queue depth, budget.
 
 ```bash
 cast status
@@ -890,7 +889,7 @@ Not a vector database. Not an opaque embedding. A markdown file you can edit, ba
 
 `cast-agent-memory-init.sh` seeds these files automatically at session end (triggered by `stop-hook.sh`). For each of the 17 core agents, it writes project name, root path, recent task history (last 3 events from the event log), and any BLOCKED history. If a `MEMORY.md` already exists with a `## Custom Notes` section, that section is preserved — auto-init only rewrites the header and history blocks.
 
-`cast memory search` (via the CLI) does semantic search across all agent memory files using Ollama embeddings when available, falling back to grep-based substring matching.
+`cast memory search` (via the CLI) does full-text search across all agent memory files using grep-based substring matching.
 
 ---
 
@@ -926,7 +925,7 @@ CAST includes a PII redaction pipeline that intercepts tool-use output before it
 
 **`cast-audit-hook.sh`** — Writes every tool call (tool name, file path, truncated args) to an append-only audit log at `~/.claude/logs/cast-audit.jsonl`. Independent of the redaction pipeline — audit logging is always on.
 
-**Air-gap mode** — `CAST_AIRGAP=1` blocks all outbound LLM API calls. Agents route to the local Ollama execution tier instead. Toggle via `cast airgap on/off` or `cast daemon start --airgap`.
+**Air-gap mode** — `CAST_AIRGAP=1` blocks all outbound LLM API calls. Toggle via `cast airgap on/off` or `cast daemon start --airgap`.
 
 ```bash
 # Inspect the audit trail
@@ -955,7 +954,6 @@ com.cast.daemon.plist               # launchd plist for macOS login-time launch
 `castd` handles:
 - Async task queue processing (tasks added via `cast queue add` or `cast run --async`)
 - Budget monitoring and alerts when cost thresholds are hit
-- Ollama health checks (surfaces model availability in `cast status`)
 - Queue depth reporting (shown in `cast status` and the pre-session briefing)
 
 Control the daemon:
@@ -1040,24 +1038,9 @@ Each proposal has a `status` field: `pending`, `installed`, or `rejected`. The p
 
 ---
 
-## Semantic Routing
+## Semantic Routing (Reserved for Future)
 
-Stage 2.5 adds embedding-based routing for prompts that don't match any regex route. It requires Ollama running locally with the `nomic-embed-text` model.
-
-### Setup
-
-```bash
-# Pre-compute agent embeddings (run once, or after adding agents)
-bash ~/.claude/scripts/cast-embed-agents.sh
-```
-
-`cast-embed-agents.sh` reads `routing-table.json` to identify routable agents, pulls the `description:` field from each agent's frontmatter, and calls the Ollama embeddings API. Results are stored at `~/.claude/config/agent-embeddings.json`.
-
-### How it fires
-
-On every prompt that falls through Stage 2, `route.sh` calls `cast-semantic-route.sh "<prompt>"`. The script embeds the prompt and computes cosine similarity against every agent in `agent-embeddings.json`. If the top score exceeds the threshold (default 0.72, override with `SEMANTIC_THRESHOLD=<value>`), that agent is dispatched with `confidence: semantic`.
-
-If Ollama is not running, or `agent-embeddings.json` does not exist, `cast-semantic-route.sh` exits 0 silently and Stage 3 (catch-all) takes over.
+Stage 2.5 is reserved for embedding-based routing using the Claude Embeddings API. This feature is currently in development. The routing pipeline currently falls through from Stage 2 directly to Stage 3 (catch-all NLU).
 
 ---
 
@@ -1148,8 +1131,8 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 | Phase 2 (2026-03-21) | Auto-dispatch routing (1-step loop vs. 4-step). 4 new routes. False-positive fix for `<task-notification>` XML. `/help` command. Official rename to CAST. |
 | Phase 3 | Parallel post-chain voting pattern. Agent groups (31 compound workflows). Pre-session briefing. Policy engine (`policies.json`). Dry-run mode. Event-sourcing protocol. |
 | Phase 4 (2026-03-22) | Universal dispatcher (`/cast`). BATS test suite. Pattern simplification — NLU replaces broad regex. `stop-hook.sh`. Agent status reader. Rollback protocol. |
-| Phase 5 (2026-03-22–26) | Semantic routing (Ollama + cosine similarity). Agent performance profiling. Self-improving routing proposals pipeline. 6 specialist agents added (frontend-designer, framework-expert, pentest, infra, db-architect, merge). Merge skill. |
-| Phase 6 | SQLite state foundation (`cast.db`). Background daemon (`castd`) with queue polling and offline mode. Agent memory evolution with semantic search. Local Ollama execution tier. PII redaction pipeline (Presidio). Audit hook. |
+| Phase 5 (2026-03-22–26) | Agent performance profiling. Self-improving routing proposals pipeline. 6 specialist agents added (frontend-designer, framework-expert, pentest, infra, db-architect, merge). Merge skill. |
+| Phase 6 | SQLite state foundation (`cast.db`). Background daemon (`castd`) with queue polling and offline mode. Agent memory evolution. PII redaction pipeline (Presidio). Audit hook. |
 | Phase 7 (2026-03-26) | `cast` CLI (9 subcommands: run, queue, memory, budget, audit, airgap, daemon, status, install-completions). macOS OS-level integration: status bar app, Alfred workflow, file watcher, Notification Center, cross-machine sync. Air-gap mode. 35 routes. 205 tests. |
 | Phase 9 (2026-03-27) | Self-learning routing: mismatch detection (rapid re-prompt signal → `mismatch_signals` table), memory-assisted routing pass (`cast-memory-router.py`, keyword overlap against `agent_memories`), `cast learn` subcommand (direct pattern install + `--from-session` mode), `cast-mismatch-analyzer.sh` (auto-proposals from mismatch data). DB migrated to v3. 215 tests. |
 

@@ -503,9 +503,18 @@ for route in table.get('routes', []):
                     _success_runs = _perf_row[1] or 0
                     _success_rate = _success_runs / _total_runs
                     if _success_rate < 0.5:
+                        _perf_session_id = os.environ.get('CLAUDE_SESSION_ID_VAL', os.environ.get('CLAUDE_SESSION_ID', ''))
+                        try:
+                            import subprocess as _sp_proj
+                            _perf_project = _sp_proj.check_output(
+                                ['git', 'rev-parse', '--show-toplevel'], stderr=_sp_proj.DEVNULL, text=True
+                            ).strip()
+                            _perf_project = os.path.basename(_perf_project) if _perf_project else ''
+                        except Exception:
+                            _perf_project = ''
                         _conn_perf.execute(
-                            'INSERT INTO routing_events (timestamp, prompt_hash, matched_agent, match_type, confidence) VALUES (datetime("now"), ?, ?, ?, ?)',
-                            ('DISPATCH_WARNING', agent, 'perf_warning', round(_success_rate, 4))
+                            'INSERT INTO routing_events (timestamp, session_id, prompt_preview, matched_route, match_type, confidence, project) VALUES (datetime("now"), ?, ?, ?, ?, ?, ?)',
+                            (_perf_session_id, ('DISPATCH_WARNING:' + agent)[:80], agent, 'perf_warning', round(_success_rate, 4), _perf_project)
                         )
                         _conn_perf.commit()
                 _conn_perf.close()
@@ -903,12 +912,20 @@ except ValueError:
 
 def _write_routing_event(match_type, matched_agent, conf):
     try:
-        import sqlite3
+        import sqlite3, subprocess as _sp_proj2
         db_path = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+        _nlu_session_id = os.environ.get('CLAUDE_SESSION_ID_VAL', os.environ.get('CLAUDE_SESSION_ID', ''))
+        try:
+            _nlu_project = _sp_proj2.check_output(
+                ['git', 'rev-parse', '--show-toplevel'], stderr=_sp_proj2.DEVNULL, text=True
+            ).strip()
+            _nlu_project = os.path.basename(_nlu_project) if _nlu_project else ''
+        except Exception:
+            _nlu_project = ''
         conn = sqlite3.connect(db_path)
         conn.execute(
-            'INSERT INTO routing_events (timestamp, prompt_hash, matched_agent, match_type, confidence) VALUES (datetime(\"now\"), ?, ?, ?, ?)',
-            ('NLU_' + match_type.upper(), matched_agent or 'none', match_type, round(conf, 4))
+            'INSERT INTO routing_events (timestamp, session_id, prompt_preview, matched_route, match_type, confidence, project) VALUES (datetime(\"now\"), ?, ?, ?, ?, ?, ?)',
+            (_nlu_session_id, ('NLU_' + match_type.upper() + ':' + (matched_agent or 'none'))[:80], matched_agent or 'none', match_type, round(conf, 4), _nlu_project)
         )
         conn.commit()
         conn.close()

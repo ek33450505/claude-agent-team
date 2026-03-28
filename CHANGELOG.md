@@ -28,13 +28,11 @@
 - **New:** `cast-board.sh` — derives project board state from event log
 - **Fixed:** Four identified gaps from code audit (see commit body for details)
 
-### Semantic Routing + Agent Profiling (`13ce26e`, `341c947`)
-- **New:** `cast-semantic-route.sh` — Stage 2.5 cosine similarity routing using Ollama + nomic-embed-text embeddings
-- **New:** `cast-embed-agents.sh` — pre-computes agent embeddings from frontmatter descriptions
+### Agent Profiling (`13ce26e`, `341c947`)
+- **Removed:** Stage 2.5 semantic routing (Ollama-based) — reserved for future Claude Embeddings API integration
 - **New:** `cast-agent-stats.sh` — agent performance profiling: hit rate, BLOCKED rate, avg turn count per agent
 - **New:** `cast-validate.sh` v1.9.0 — adds 4 new checks (8–11): route install script, stop-hook wiring, proposals schema, security post_chain
-- **Added:** `config/agent-embeddings.json` — persisted embedding vectors for semantic routing
-- **Added:** `SEMANTIC_THRESHOLD` env var (default 0.72) to tune cosine similarity cutoff
+- **Note:** semantic routing infrastructure remains in codebase for future development
 
 ---
 
