@@ -6,9 +6,8 @@
 #
 # Types: user | feedback | project | reference
 #
-# Embedding: generated via Ollama nomic-embed-text if available.
-# If Ollama is unreachable, row is inserted with NULL embedding (still useful
-# for exact-match and full-text LIKE search).
+# Embedding: currently NULL. Future support planned via Claude Embeddings API.
+# Rows are still useful for exact-match and full-text LIKE search.
 #
 # Deduplication: exact content match prevents duplicate inserts; matching row's
 # updated_at is refreshed instead. If sqlite-vec is available, cosine similarity
@@ -19,8 +18,6 @@
 set -uo pipefail
 
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
-OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
-EMBED_MODEL="${CAST_EMBED_MODEL:-nomic-embed-text}"
 
 # ---------------------------------------------------------------------------
 # Arg parsing
@@ -96,32 +93,10 @@ if [ -n "$EXISTING_ID" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Embedding generation via Ollama
+# Embeddings disabled — future: replace with Claude Embeddings API
 # ---------------------------------------------------------------------------
 EMBEDDING_BLOB=""
 EMBEDDING_JSON=""
-
-if command -v curl >/dev/null 2>&1; then
-  EMBED_RESPONSE="$(curl -s --max-time 5 \
-    "$OLLAMA_URL/api/embeddings" \
-    -d "{\"model\":\"$EMBED_MODEL\",\"prompt\":$(printf '%s' "$CONTENT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}" \
-    2>/dev/null || echo "")"
-
-  if [ -n "$EMBED_RESPONSE" ]; then
-    EMBEDDING_JSON="$(echo "$EMBED_RESPONSE" | python3 -c '
-import json, sys, struct
-try:
-    data = json.load(sys.stdin)
-    floats = data.get("embedding", [])
-    if floats:
-        packed = struct.pack(f"{len(floats)}f", *floats)
-        import base64
-        print(base64.b64encode(packed).decode())
-except Exception:
-    pass
-' 2>/dev/null || echo "")"
-  fi
-fi
 
 # ---------------------------------------------------------------------------
 # Description: first 100 chars of content
