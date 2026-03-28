@@ -1,6 +1,6 @@
 # CAST — Claude Agent Specialist Team
 
-![Version](https://img.shields.io/badge/version-2.35-blue)
+![Version](https://img.shields.io/badge/version-2.4-blue)
 ![Agents](https://img.shields.io/badge/agents-42-green)
 ![Routes](https://img.shields.io/badge/routes-35-blue)
 ![Commands](https://img.shields.io/badge/commands-32-blue)
@@ -51,7 +51,7 @@ bash install.sh
 - [macOS Integration](#macos-integration)
 - [Self-Learning Routing](#self-learning-routing)
 - [Self-Improving Routing](#self-improving-routing)
-- [Semantic Routing](#semantic-routing)
+- [Memory-Assisted Routing](#self-improving-routing)
 - [Agent Performance Profiling](#agent-performance-profiling)
 - [Dry-Run Mode](#dry-run-mode)
 - [ACI Reference Sections](#aci-reference-sections)
@@ -96,7 +96,6 @@ Zero custom application code. Pure config, shell, and markdown. If you understan
 │  [UserPromptSubmit]  route.sh                                           │
 │      Stage 1: agent-groups.json match (31 groups)  → [CAST-DISPATCH-GROUP]
 │      Stage 2: routing-table.json regex (35 routes) → [CAST-DISPATCH]   │
-│      Stage 2.5: (reserved for Claude Embeddings API integration)       │
 │      Stage 3: catch-all NLU (router agent)         → [CAST-DISPATCH]   │
 │                                                                         │
 │  [PostToolUse]  post-tool-hook.sh  (5 independent parts)               │
@@ -177,8 +176,6 @@ User Prompt
     |-- Stage 1: agent-groups.json match (31 groups) --> [CAST-DISPATCH-GROUP]
     |                                                         |
     |-- Stage 2: routing-table.json match (35 routes) -----> [CAST-DISPATCH]
-    |                                                         |
-    |-- Stage 2.5: (reserved for Claude Embeddings API)     (falls through to Stage 3)
     |                                                         |
     |-- Stage 3: catch-all — 5+ words, action verb, -------> router agent (NLU)
     |            not question
@@ -276,7 +273,7 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
 
 ## Routing
 
-`route.sh` runs on every user prompt via the `UserPromptSubmit` hook. Routing has four stages, evaluated in order:
+`route.sh` runs on every user prompt via the `UserPromptSubmit` hook. Routing has three stages, evaluated in order:
 
 **Stage 1 — Agent Group pre-check:** matches against `config/agent-groups.json` (31 groups). On match, the orchestrator receives a full Payload JSON with wave definitions and runs them immediately (via `orchestrator` agent or `cast exec` for direct execution).
 
@@ -290,8 +287,6 @@ Eleven directives drive the system. Four are defined in `CLAUDE.md.template` as 
   }
 }
 ```
-
-**Stage 2.5 — Semantic routing (reserved for future):** this stage is reserved for Claude Embeddings API integration. Currently, semantic routing is not active and the routing pipeline falls through to Stage 3.
 
 **Stage 3 — Catch-all:** fires when no route matched, the prompt is 5+ words, is not a question, and contains an action verb (`fix`, `add`, `implement`, `build`, etc.). Routes to the `router` agent (haiku) for NLU classification. If `router` returns confidence < 0.7, it returns `"main"` and Claude handles inline.
 
@@ -769,6 +764,12 @@ cast airgap on                     # Block all outbound LLM calls
 cast airgap off
 ```
 
+**`cast doctor`** — System health diagnostic. Runs 9 checks and prints a traffic-light report: cast.db accessible, schema current, hooks registered, hook scripts exist, events dir writable, routing_events populated, budget table, BATS available, version.
+
+```bash
+cast doctor
+```
+
 **`cast status`** — Terminal health dashboard: castd state, queue depth, budget.
 
 ```bash
@@ -1038,12 +1039,6 @@ Each proposal has a `status` field: `pending`, `installed`, or `rejected`. The p
 
 ---
 
-## Semantic Routing (Reserved for Future)
-
-Stage 2.5 is reserved for embedding-based routing using the Claude Embeddings API. This feature is currently in development. The routing pipeline currently falls through from Stage 2 directly to Stage 3 (catch-all NLU).
-
----
-
 ## Agent Performance Profiling
 
 `cast-agent-stats.sh` reads `~/.claude/routing-log.jsonl` and reports DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT rates per agent, with a composite health score.
@@ -1102,7 +1097,7 @@ echo '{"prompt": "debug this error"}' | CAST_DRY_RUN=1 bash ~/.claude/scripts/ro
 }
 ```
 
-`match_type` is one of `regex`, `group`, `semantic`, `no_match`, or `catchall`. The integration test suite uses `CAST_DRY_RUN=1` to verify routing decisions against a minimal routing table without triggering live agent dispatches.
+`match_type` is one of `regex`, `group`, `memory`, `no_match`, or `catchall`. The integration test suite uses `CAST_DRY_RUN=1` to verify routing decisions against a minimal routing table without triggering live agent dispatches.
 
 ---
 
@@ -1134,7 +1129,8 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 | Phase 5 (2026-03-22–26) | Agent performance profiling. Self-improving routing proposals pipeline. 6 specialist agents added (frontend-designer, framework-expert, pentest, infra, db-architect, merge). Merge skill. |
 | Phase 6 | SQLite state foundation (`cast.db`). Background daemon (`castd`) with queue polling and offline mode. Agent memory evolution. PII redaction pipeline (Presidio). Audit hook. |
 | Phase 7 (2026-03-26) | `cast` CLI (9 subcommands: run, queue, memory, budget, audit, airgap, daemon, status, install-completions). macOS OS-level integration: status bar app, Alfred workflow, file watcher, Notification Center, cross-machine sync. Air-gap mode. 35 routes. 205 tests. |
-| Phase 9 (2026-03-27) | Self-learning routing: mismatch detection (rapid re-prompt signal → `mismatch_signals` table), memory-assisted routing pass (`cast-memory-router.py`, keyword overlap against `agent_memories`), `cast learn` subcommand (direct pattern install + `--from-session` mode), `cast-mismatch-analyzer.sh` (auto-proposals from mismatch data). DB migrated to v3. 215 tests. |
+| Phase 9 (2026-03-27) | Self-learning routing: mismatch detection (rapid re-prompt signal → `mismatch_signals` table), memory-assisted routing pass (`cast-memory-router.py`, keyword overlap against `agent_memories`), `cast learn` subcommand (direct pattern install + `--from-session` mode), `cast-mismatch-analyzer.sh` (auto-proposals from mismatch data). DB migrated to v3. |
+| Phase 9.9 (2026-03-27) | Pre-release systems check: dead code removal, `routing_events` column fix, `cast doctor` diagnostic command, Ollama removal (Claude API only), privacy view wired to `audit.jsonl`, SSE auto-reconnect, error boundaries. 307 tests. v2.4. |
 
 ---
 
@@ -1147,7 +1143,7 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 | Routes | 35 |
 | Slash commands | 32 |
 | Skills | 13 |
-| Tests | 215 |
+| Tests | 307 |
 | Hook directives | 11 |
 | post-tool-hook.sh parts | 5 |
 | agent-status-reader responses | 5 |
@@ -1184,7 +1180,7 @@ See [docs/known-limitations.md](docs/known-limitations.md) for details on:
 - `/routing` — Routing log and routing decision history
 - `/hooks` — Hook health and event stream
 - `/plans` — Stored plan files and plan detail views
-- `/memory` — Memory browser with semantic search
+- `/memory` — Memory browser with keyword search across agent memory files
 - `/system` — System health, castd status, queue depth
 - `/privacy` — Privacy audit log and redaction events
 - `/token-spend` — Token usage tracking
