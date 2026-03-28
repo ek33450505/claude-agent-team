@@ -222,9 +222,9 @@ def _run_hook_mode() -> None:
 
     # Extract the text to scan
     if tool_name == "Bash":
-        text = tool_input.get("command", "")
+        text = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     else:
-        text = json.dumps(tool_input)
+        text = json.dumps(tool_input) if tool_input is not None else ""
 
     if not text or not text.strip():
         sys.exit(0)
