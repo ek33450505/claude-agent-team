@@ -41,6 +41,7 @@ import re
 import hashlib
 import argparse
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 PATTERNS_CONFIG = os.path.expanduser("~/.claude/config/pii-patterns.json")
@@ -200,6 +201,66 @@ def redact_regex(text: str, entities: list[dict], mode: str) -> str:
     return result
 
 
+def _run_hook_mode() -> None:
+    """Claude Code PreToolUse hook mode.
+
+    Contract:
+      - exit 0, no stdout  → silent allow (no PII found)
+      - exit 2, one-line   → block the tool call (PII detected)
+
+    Never prints JSON. Never raises unhandled exceptions (malformed stdin → exit 0).
+    """
+    try:
+        raw = sys.stdin.read()
+        data = json.loads(raw)
+    except Exception:
+        # Malformed or empty stdin — allow silently; don't crash the hook
+        sys.exit(0)
+
+    tool_name = data.get("tool_name", "")
+    tool_input = data.get("tool_input", {})
+
+    # Extract the text to scan
+    if tool_name == "Bash":
+        text = tool_input.get("command", "")
+    else:
+        text = json.dumps(tool_input)
+
+    if not text or not text.strip():
+        sys.exit(0)
+
+    # Detection only — regex engine for speed (no Presidio startup cost in hook path)
+    entities = analyze_regex(text, [])
+    entities = [e for e in entities if e["score"] >= 0.5]
+
+    if not entities:
+        sys.exit(0)
+
+    # PII detected — write audit entry then block
+    entity_types = sorted(set(e["entity_type"] for e in entities))
+
+    audit_path = os.path.expanduser("~/.claude/logs/audit.jsonl")
+    try:
+        os.makedirs(os.path.dirname(audit_path), exist_ok=True)
+        entry = {
+            "timestamp": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+            "tool": tool_name,
+            "destination": "cloud",
+            "redacted": True,
+            "entity_types": entity_types,
+        }
+        with open(audit_path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # Audit write failure must never block the block itself
+
+    print(
+        f"[CAST-REDACT] Blocked: PII detected in {tool_name} — "
+        f"{', '.join(entity_types)}. Remove before running."
+    )
+    sys.exit(2)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="CAST PII redaction using Microsoft Presidio",
@@ -230,7 +291,20 @@ def main():
         default=0.5,
         help="Minimum confidence score to redact (0.0–1.0, default: 0.5)",
     )
+    parser.add_argument(
+        "--hook",
+        action="store_true",
+        help=(
+            "Run as a Claude Code PreToolUse hook: "
+            "exit 0 (no stdout) when clean, exit 2 (plain-text reason) when PII found"
+        ),
+    )
     args = parser.parse_args()
+
+    # ── Hook mode (PreToolUse) ─────────────────────────────────────────────────
+    if args.hook:
+        _run_hook_mode()
+        return
 
     # ── Read input ─────────────────────────────────────────────────────────────
     if args.file:
