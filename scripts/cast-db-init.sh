@@ -64,7 +64,7 @@ export SQLITE_VEC_AVAILABLE
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-if [ "$CURRENT_VERSION" -ge 4 ]; then
+if [ "$CURRENT_VERSION" -ge 5 ]; then
   echo "cast.db already initialized (v${CURRENT_VERSION})" >&2
   exit 0
 fi
@@ -108,6 +108,17 @@ PRAGMA user_version = 4;
 MIGRATE_V4
   echo "cast.db migrated v3 → v4 (commit_sha column added to agent_runs)" >&2
   CURRENT_VERSION=4
+fi
+
+# Migrate v4 → v5: add agent_id column to agent_runs for cross-event correlation
+if [ "$CURRENT_VERSION" -eq 4 ]; then
+  sqlite3 "$DB_PATH" <<'MIGRATE_V5'
+ALTER TABLE agent_runs ADD COLUMN agent_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);
+PRAGMA user_version = 5;
+MIGRATE_V5
+  echo "cast.db migrated v4 → v5 (agent_id column added to agent_runs)" >&2
+  CURRENT_VERSION=5
   exit 0
 fi
 
@@ -142,7 +153,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   task_summary    TEXT,                            -- first 200 chars of task
   prompt          TEXT,                            -- full prompt (optional, privacy flag)
   project         TEXT,
-  commit_sha      TEXT                             -- git commit SHA after agent completes (for rollback)
+  commit_sha      TEXT,                            -- git commit SHA after agent completes (for rollback)
+  agent_id        TEXT                             -- Claude Code agent_id (v2.1.69+) for cross-event correlation
 );
 
 -- Routing events: replaces routing-log.jsonl
@@ -226,6 +238,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_memories_agent     ON agent_memories(agent)
 CREATE INDEX IF NOT EXISTS idx_agent_runs_status        ON agent_runs(status);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_ended_at      ON agent_runs(ended_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status  ON agent_runs(agent, status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id      ON agent_runs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_task_queue_created_at    ON task_queue(created_at);
 CREATE INDEX IF NOT EXISTS idx_routing_events_route     ON routing_events(matched_route);
 CREATE INDEX IF NOT EXISTS idx_budgets_scope_key        ON budgets(scope_key);
@@ -234,8 +247,8 @@ CREATE INDEX IF NOT EXISTS idx_mismatch_signals_route      ON mismatch_signals(r
 CREATE INDEX IF NOT EXISTS idx_mismatch_signals_timestamp  ON mismatch_signals(timestamp);
 
 -- Set schema version
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 SQL
 
 chmod 600 "$DB_PATH"
-echo "cast.db initialized (v4)" >&2
+echo "cast.db initialized (v5)" >&2

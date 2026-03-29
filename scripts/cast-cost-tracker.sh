@@ -105,6 +105,7 @@ call_cost = (input_tokens / 1_000_000 * cost_per_m_in) + \
 # -----------------------------------------------------------------------
 tool_name = ''
 agent_name = ''
+agent_id = ''
 task_summary = ''
 
 if raw_input.strip():
@@ -114,6 +115,7 @@ if raw_input.strip():
         if tool_name == 'Agent':
             ti = data.get('tool_input', {})
             agent_name   = ti.get('subagent_type', ti.get('agent_type', 'unknown'))
+            agent_id     = ti.get('agent_id', '')       # v2.1.69+: unique per-invocation ID
             task_summary = str(ti.get('prompt', ti.get('task', '')))[:200]
     except Exception:
         pass
@@ -159,14 +161,16 @@ try:
 
     # Insert agent_runs row only for Agent tool calls (we know which agent ran)
     # status='running' allows SubagentStop to UPDATE the row when the agent finishes
+    # agent_id (v2.1.69+) enables cross-event correlation between start and completion
     if tool_name == 'Agent' and agent_name:
         cur.execute('''
             INSERT INTO agent_runs
               (session_id, agent, model, started_at, ended_at,
-               input_tokens, output_tokens, cost_usd, task_summary, project, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               input_tokens, output_tokens, cost_usd, task_summary, project, status, agent_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (session_id, agent_name, model, now, now,
-              input_tokens, output_tokens, call_cost, task_summary, project_name, 'running'))
+              input_tokens, output_tokens, call_cost, task_summary, project_name, 'running',
+              agent_id or None))
 
     conn.commit()
     conn.close()

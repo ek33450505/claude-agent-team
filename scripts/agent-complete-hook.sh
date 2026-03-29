@@ -27,9 +27,10 @@ except Exception:
 if data.get("tool_name") != "Agent":
     sys.exit(0)
 
-# --- Extract agent name ---
+# --- Extract agent name and id ---
 tool_input = data.get("tool_input") or {}
 subagent_type = tool_input.get("subagent_type") or "unknown"
+agent_id = tool_input.get("agent_id") or ""   # v2.1.69+: unique per-invocation ID
 description = tool_input.get("description") or tool_input.get("prompt") or ""
 preview = description[:80] if description else subagent_type[:80]
 
@@ -96,6 +97,7 @@ event = {
     "timestamp": iso_ts,
     "type": "agent_status",
     "agent": subagent_type,
+    "agent_id": agent_id or None,
     "status": status_found,
     "prompt_preview": preview,
 }
@@ -111,12 +113,13 @@ try:
 except Exception as e:
     print(f"[CAST-WARN] agent-complete-hook: failed to write event file: {e}", file=sys.stderr)
 
-# --- Append to routing-log.jsonl (with status field) ---
+# --- Append to routing-log.jsonl (with status and agent_id fields) ---
 entry = {
     "timestamp": iso_ts,
     "action": "agent_complete",
     "matched_route": subagent_type,
     "agent_name": subagent_type,
+    "agent_id": agent_id or None,
     "prompt_preview": preview,
     "command": None,
     "pattern": "Agent tool",
