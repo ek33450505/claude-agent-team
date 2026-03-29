@@ -49,18 +49,19 @@ setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(mktemp -d)"
   export CAST_STATUS_DIR="$HOME/.claude/agent-status"
-  # Use a unique session ID per test run to isolate /tmp/cast-blocked-* and
-  # /tmp/cast-session-start-*.epoch files, preventing state leakage from real sessions.
+  # Use a unique session ID per test run to isolate cast-blocked-* and
+  # cast-session-start-*.epoch files, preventing state leakage from real sessions.
   export CLAUDE_SESSION_ID="test-asr-$$-${BATS_TEST_NUMBER:-0}"
+  # Use HOME as temp dir so writes don't hit sandbox-restricted /tmp
+  export TMPDIR="$HOME"
   # Write a fresh epoch file so CAST-TIMEOUT logic does not fire in tests.
-  printf '%s' "$(date +%s)" > "/tmp/cast-session-start-${CLAUDE_SESSION_ID}.epoch"
+  printf '%s' "$(date +%s)" > "$HOME/cast-session-start-${CLAUDE_SESSION_ID}.epoch"
 }
 
 teardown() {
   rm -rf "$HOME"
-  rm -f "/tmp/cast-session-start-${CLAUDE_SESSION_ID}.epoch"
-  rm -f "/tmp/cast-blocked-${CLAUDE_SESSION_ID}-"*.count 2>/dev/null || true
   export HOME="$ORIG_HOME"
+  unset TMPDIR
 }
 
 # ---------------------------------------------------------------------------

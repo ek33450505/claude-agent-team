@@ -301,7 +301,8 @@ _dispatch_agent() {
   local agent_type="$3"
   local prompt="$4"
 
-  local log_file="/tmp/cast-exec-${plan_id}-batch-${batch_id}-${agent_type}.log"
+  local _tmpdir="${TMPDIR:-/tmp}"
+  local log_file="${_tmpdir}/cast-exec-${plan_id}-batch-${batch_id}-${agent_type}.log"
 
   _info "  Dispatching ${C_BOLD}${agent_type}${C_RESET}${C_CYAN} (log: ${log_file})"
 
@@ -326,7 +327,8 @@ _dispatch_agent_background() {
   local prompt="$4"
   local pidvar="$5"   # name of variable to store PID in
 
-  local log_file="/tmp/cast-exec-${plan_id}-batch-${batch_id}-${agent_type}.log"
+  local _tmpdir="${TMPDIR:-/tmp}"
+  local log_file="${_tmpdir}/cast-exec-${plan_id}-batch-${batch_id}-${agent_type}.log"
 
   _info "  Dispatching (parallel) ${C_BOLD}${agent_type}${C_RESET}${C_CYAN} (log: ${log_file})"
 

@@ -31,9 +31,15 @@ setup() {
   [[ "$output" =~ "dangerously-skip-permissions" ]]
 }
 
-# 3. Basic inference works (timeout 30 to catch hangs)
+# 3. Basic inference works
 @test "claude -p responds to a simple prompt" {
-  run timeout 30 claude -p "Reply with only the word PONG" --print
+  command -v claude &>/dev/null || skip "claude CLI not available"
+  # Use gtimeout on macOS, timeout on Linux, or skip if neither available
+  local timeout_cmd=""
+  if command -v gtimeout &>/dev/null; then timeout_cmd="gtimeout 30"
+  elif command -v timeout &>/dev/null; then timeout_cmd="timeout 30"
+  fi
+  run $timeout_cmd claude -p "Reply with only the word PONG" --print
   [ "$status" -eq 0 ]
   [[ "$output" =~ "PONG" ]]
 }

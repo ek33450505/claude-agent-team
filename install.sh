@@ -34,96 +34,19 @@ CMD_COUNT=0
 SKILL_COUNT=0
 
 # --- Agent / command / skill lists ---
-CORE_AGENTS="planner debugger test-writer code-reviewer data-scientist db-reader commit security push code-writer bash-specialist merge"
-EXTENDED_AGENTS="architect tdd-guide build-error-resolver e2e-runner refactor-cleaner doc-updater readme-writer router"
-PRODUCTIVITY_AGENTS="researcher report-writer meeting-notes email-manager morning-briefing"
-PROFESSIONAL_AGENTS="browser qa-reviewer presenter"
-ORCHESTRATION_AGENTS="orchestrator auto-stager chain-reporter verifier test-runner"
-SPECIALIST_AGENTS="devops performance seo-content linter frontend-designer framework-expert pentest infra db-architect"
+CORE_AGENTS="planner debugger test-runner code-reviewer commit security push code-writer bash-specialist merge orchestrator morning-briefing devops researcher docs"
 
-CORE_CMDS="plan review debug test secure commit data query push"
-EXTENDED_CMDS="architect tdd build-fix e2e refactor docs readme"
-PRODUCTIVITY_CMDS="research report meeting email morning"
-PROFESSIONAL_CMDS="browser qa present"
-ALWAYS_CMDS="eval cast cast-stats chain-report help orchestrate stage verify"
+ALL_CMDS="bash cast commit debug devops docs doctor merge morning orchestrate plan push research review secure test"
 
-MACOS_SKILLS="calendar-fetch inbox-fetch reminders-fetch"
-LINUX_SKILLS="calendar-fetch-linux inbox-fetch-linux"
-GENERAL_SKILLS="action-items briefing-writer git-activity careful-mode freeze-mode wizard merge plan"
+GENERAL_SKILLS="briefing-writer careful-mode freeze-mode git-activity merge plan wizard"
 
 # --- Pre-flight check ---
 if ! command -v claude >/dev/null 2>&1; then
     warn "Warning: 'claude' CLI not found in PATH. Install it before using the framework."
 fi
 
-# --- Menu ---
-printf "\n${BOLD}Claude Agent Team — Installer${NC}\n\n"
-printf "  ${BOLD}[1]${NC} Full install — all 42 agents, 32 commands, 13 skills, scripts, rules\n"
-printf "  ${BOLD}[2]${NC} Core only   — 11 core agents + their commands (minimal, portable)\n"
-printf "  ${BOLD}[3]${NC} Custom      — choose categories\n"
-printf "\n"
-printf "Enter choice [1/2/3]: "
-read -r CHOICE
-
-# Determine what to install
-INSTALL_CORE=true
-INSTALL_EXTENDED=false
-INSTALL_PRODUCTIVITY=false
-INSTALL_PROFESSIONAL=false
-INSTALL_SPECIALIST=false
-INSTALL_MACOS_SKILLS=false
-
-case "$CHOICE" in
-    1)
-        INSTALL_EXTENDED=true
-        INSTALL_PRODUCTIVITY=true
-        INSTALL_PROFESSIONAL=true
-        INSTALL_SPECIALIST=true
-        if $IS_MACOS; then
-            INSTALL_MACOS_SKILLS=true
-        fi
-        ;;
-    2)
-        # Core only — defaults are fine
-        ;;
-    3)
-        printf "\nSelect categories to install (core agents always included):\n\n"
-
-        printf "  Extended agents (8): architect, tdd-guide, build-error-resolver,\n"
-        printf "    e2e-runner, refactor-cleaner, doc-updater, readme-writer, router\n"
-        printf "  Install? [y/N]: "
-        read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_EXTENDED=true; fi
-
-        printf "\n  Productivity agents (5): researcher, report-writer, meeting-notes,\n"
-        printf "    email-manager, morning-briefing\n"
-        printf "  Install? [y/N]: "
-        read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_PRODUCTIVITY=true; fi
-
-        printf "\n  Professional agents (3): browser, qa-reviewer, presenter\n"
-        printf "  Install? [y/N]: "
-        read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_PROFESSIONAL=true; fi
-
-        printf "\n  Specialist agents (9): devops, performance, seo-content, linter,\n"
-        printf "    frontend-designer, framework-expert, pentest, infra, db-architect\n"
-        printf "  Install? [y/N]: "
-        read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_SPECIALIST=true; fi
-
-        if $IS_MACOS; then
-            printf "\n  macOS skills (calendar-fetch, inbox-fetch, reminders-fetch)\n"
-            warn "  Note: these require Microsoft Outlook for calendar/email."
-            printf "  Install? [y/N]: "
-            read -r ans; if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then INSTALL_MACOS_SKILLS=true; fi
-        else
-            warn "\n  macOS skills skipped — not running on macOS (detected: $PLATFORM)"
-        fi
-        ;;
-    *)
-        error "Invalid choice. Exiting."
-        exit 1
-        ;;
-esac
-
-printf "\n"
+printf "\n${BOLD}Claude Agent Team — Installer (v3)${NC}\n\n"
+printf "  Installing 15 agents, 16 commands, 7 skills\n\n"
 info "Starting installation..."
 
 # --- Backup existing dirs if non-empty ---
@@ -158,12 +81,10 @@ mkdir -p "$CLAUDE_DIR/logs"
 # Scripts are copied below; run init after they land in ~/.claude/scripts/
 # Deferred — see "Initialize cast.db" block after script install step.
 
-# --- Install agents (flat — strip subdirectory structure) ---
+# --- Install agents (flat — all from agents/core/) ---
 install_agents() {
-    local subdir="$1"
-    shift
     for agent in "$@"; do
-        local src="$SCRIPT_DIR/agents/$subdir/$agent.md"
+        local src="$SCRIPT_DIR/agents/core/$agent.md"
         if [ -f "$src" ]; then
             cp "$src" "$CLAUDE_DIR/agents/$agent.md"
             AGENT_COUNT=$((AGENT_COUNT + 1))
@@ -174,12 +95,7 @@ install_agents() {
 }
 
 info "Installing agents..."
-install_agents "core" $CORE_AGENTS
-$INSTALL_EXTENDED && install_agents "extended" $EXTENDED_AGENTS
-$INSTALL_PRODUCTIVITY && install_agents "productivity" $PRODUCTIVITY_AGENTS
-$INSTALL_PROFESSIONAL && install_agents "professional" $PROFESSIONAL_AGENTS
-install_agents "orchestration" $ORCHESTRATION_AGENTS
-$INSTALL_SPECIALIST && install_agents "specialist" $SPECIALIST_AGENTS
+install_agents $CORE_AGENTS
 success "  $AGENT_COUNT agents installed"
 
 # --- Install commands ---
@@ -196,11 +112,7 @@ install_cmds() {
 }
 
 info "Installing commands..."
-install_cmds $ALWAYS_CMDS
-install_cmds $CORE_CMDS
-$INSTALL_EXTENDED && install_cmds $EXTENDED_CMDS
-$INSTALL_PRODUCTIVITY && install_cmds $PRODUCTIVITY_CMDS
-$INSTALL_PROFESSIONAL && install_cmds $PROFESSIONAL_CMDS
+install_cmds $ALL_CMDS
 success "  $CMD_COUNT commands installed"
 
 # --- Install skills (preserve subdirectory structure) ---
@@ -220,16 +132,6 @@ info "Installing skills..."
 for skill in $GENERAL_SKILLS; do
     install_skill "$skill"
 done
-if $INSTALL_MACOS_SKILLS; then
-    for skill in $MACOS_SKILLS; do
-        install_skill "$skill"
-    done
-else
-    # Install Linux stubs for macOS-only skills
-    for skill in $LINUX_SKILLS; do
-        install_skill "$skill"
-    done
-fi
 success "  $SKILL_COUNT skills installed"
 
 # --- Install rules (skip if destination exists, strip .template) ---
@@ -389,10 +291,7 @@ printf "  To enable the PreToolUse audit hook, add to ${BOLD}~/.claude/settings.
 printf '    "PreToolUse": [{"hooks": [{"type": "command", "command": "bash ~/.claude/scripts/cast-audit-hook.sh"}]}]\n'
 printf "  (See settings.template.jsonc for the full example)\n"
 printf "\n"
-success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills  [v${CAST_VERSION}]"
-if ! $IS_MACOS; then
-    warn "Note: macOS skills were replaced with Linux stubs. Morning briefings will use git-activity and action-items only."
-fi
+success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills  [v3.0]"
 
 # --- Update README stat tokens ---
 echo "Syncing README stats..."

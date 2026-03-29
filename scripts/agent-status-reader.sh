@@ -30,8 +30,9 @@ set -euo pipefail
 
 CAST_STATUS_DIR="${CAST_STATUS_DIR:-${HOME}/.claude/agent-status}"
 SESSION_ID="${CLAUDE_SESSION_ID:-default}"
-BLOCKED_COUNT_PREFIX="/tmp/cast-blocked-${SESSION_ID}"
-SESSION_EPOCH_FILE="/tmp/cast-session-start-${SESSION_ID}.epoch"
+CAST_TMP="${TMPDIR:-/tmp}"
+BLOCKED_COUNT_PREFIX="${CAST_TMP}/cast-blocked-${SESSION_ID}"
+SESSION_EPOCH_FILE="${CAST_TMP}/cast-session-start-${SESSION_ID}.epoch"
 CAST_EVENTS_DIR="${HOME}/.claude/cast/events"
 TIMEOUT_MSG=""
 
