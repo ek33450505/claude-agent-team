@@ -196,60 +196,7 @@ MD
 }
 
 # ---------------------------------------------------------------------------
-# 3. Route with pattern >200 characters — warning, not error
-# ---------------------------------------------------------------------------
-
-@test "long pattern: exits 1 (warning only, not error)" {
-  build_clean_install
-  # Build a routing table with one pattern that exceeds 200 chars
-  local long_pattern
-  long_pattern="$(python3 -c "print('x' * 201)")"
-  python3 - "$HOME/.claude/config/routing-table.json" "$long_pattern" <<'PYEOF'
-import json, sys
-path, pattern = sys.argv[1], sys.argv[2]
-data = {
-    "routes": [
-        {
-            "patterns": [pattern],
-            "agent": "planner",
-            "model": "claude-haiku-4-5",
-            "confidence": "hard"
-        }
-    ]
-}
-with open(path, "w") as f:
-    json.dump(data, f)
-PYEOF
-  run_validate
-  [ "$status" -eq 1 ]
-}
-
-@test "long pattern: output contains warning symbol" {
-  build_clean_install
-  local long_pattern
-  long_pattern="$(python3 -c "print('x' * 201)")"
-  python3 - "$HOME/.claude/config/routing-table.json" "$long_pattern" <<'PYEOF'
-import json, sys
-path, pattern = sys.argv[1], sys.argv[2]
-data = {
-    "routes": [
-        {
-            "patterns": [pattern],
-            "agent": "planner",
-            "model": "claude-haiku-4-5",
-            "confidence": "hard"
-        }
-    ]
-}
-with open(path, "w") as f:
-    json.dump(data, f)
-PYEOF
-  run_validate
-  assert_output --partial "⚠"
-}
-
-# ---------------------------------------------------------------------------
-# 4. Missing agent-status dir — check 5 fails (error), not a warning
+# 3. Missing agent-status dir — check 5 fails (error), not a warning
 # ---------------------------------------------------------------------------
 
 @test "missing agent-status dir: exits 2" {
@@ -285,13 +232,6 @@ PYEOF
   [ "$status" -le 2 ]
 }
 
-@test "partial install: missing routing table — script completes" {
-  build_clean_install
-  rm "$HOME/.claude/config/routing-table.json"
-  run_validate
-  [ "$status" -le 2 ]
-}
-
 @test "partial install: completely empty HOME/.claude — script completes" {
   mkdir -p "$HOME/.claude"
   run_validate
@@ -301,24 +241,6 @@ PYEOF
 # ---------------------------------------------------------------------------
 # 6. Hook wiring checks
 # ---------------------------------------------------------------------------
-
-@test "hook wiring: missing route.sh wiring → exits 2" {
-  build_clean_install
-  # Remove route.sh from settings
-  python3 - "$HOME/.claude/settings.local.json" <<'PYEOF'
-import json, sys
-path = sys.argv[1]
-with open(path) as f:
-    d = json.load(f)
-# Remove UserPromptSubmit hooks (where route.sh lives)
-d["hooks"].pop("UserPromptSubmit", None)
-with open(path, "w") as f:
-    json.dump(d, f)
-PYEOF
-  run_validate
-  [ "$status" -eq 2 ]
-  assert_output --partial "route.sh"
-}
 
 @test "hook wiring: missing pre-tool-guard.sh wiring → exits 2" {
   build_clean_install

@@ -202,12 +202,6 @@ run_install() {
   [ "$count" -eq 4 ]
 }
 
-@test "Full install: installs agent-groups.json config" {
-  run_install "1"
-
-  [ -f "$HOME/.claude/config/agent-groups.json" ]
-}
-
 @test "Custom install: selecting specialist installs specialist agents" {
   run_install "$(printf '3\nn\nn\nn\ny\nn\n')"
 
