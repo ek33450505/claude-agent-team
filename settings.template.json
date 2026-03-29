@@ -105,6 +105,53 @@
         "description": "CAST budget guard — injects [CAST-BUDGET-WARN] or [CAST-BUDGET-HARD-LIMIT] when daily spend threshold reached"
       }
     ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-post-compact-hook.sh",
+            "timeout": 5
+          }
+        ],
+        "description": "CAST compaction logger — records compact events to cast/events/ and compact-log.jsonl"
+      },
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Context was automatically compacted. Briefly let the user know this happened, summarize the current task state, and continue where you left off."
+          }
+        ],
+        "description": "CAST compaction notice — injects prompt to acknowledge auto-compact and resume context"
+      }
+    ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-task-created-hook.sh",
+            "timeout": 5
+          }
+        ],
+        "description": "CAST task logger — logs background agent task creation to cast/events/ and cast.db"
+      }
+    ],
+    "InstructionsLoaded": [
+      {
+        "matcher": "session_start",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-instructions-loaded-hook.sh",
+            "timeout": 3
+          }
+        ],
+        "description": "CAST instructions audit — logs active CLAUDE.md files at session start"
+      }
+    ],
     "Stop": [
       {
         "hooks": [
