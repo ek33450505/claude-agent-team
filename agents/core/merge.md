@@ -62,6 +62,16 @@ When escalating: show the full conflict diff and ask the user which resolution t
 - Never delete the currently checked-out branch
 - Always verify the merge succeeded before branch cleanup
 
+## Merge Worktree Branch
+
+When given a worktree branch name (e.g., from a code-writer or debugger agent), follow this process:
+
+1. Fetch the branch: verify it exists with `git branch -a`
+2. Diff against HEAD: `git diff HEAD...<worktree-branch>` — review for correctness
+3. If clean: merge with `git merge --no-ff <worktree-branch>` and delete the branch
+4. If conflicts: surface to user with the conflicting files listed — do NOT force-merge
+5. After successful merge: run `git worktree remove` if the worktree path still exists
+
 ## Self-Dispatch Chain
 
 After a successful merge:

@@ -75,6 +75,21 @@ Concerns: [required if DONE_WITH_CONCERNS]
 Context needed: [required if NEEDS_CONTEXT — describe what information is missing]
 ---
 
+## Worktree Isolation
+
+When dispatched with `isolation: "worktree"`, changes land on a temporary isolated branch rather than the working tree. Use this for:
+- Multi-file refactors
+- Unfamiliar codebases
+- Security-sensitive changes
+- Experimental fixes
+
+When running in a worktree, your final Status block must include the worktree branch name:
+```
+Status: DONE
+Worktree branch: cast-worktree-XXXXXX
+```
+The parent session can then dispatch the `merge` agent with that branch name to review and merge, or discard it.
+
 ## ACI Reference
 
 **When to dispatch:** Any error, test failure, or unexpected behavior requiring more than 1 inline tool call to investigate.
