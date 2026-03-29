@@ -98,7 +98,7 @@ try:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-except sqlite3.DatabaseError as e:
+except Exception as e:
     print(f"[CAST-WARN] cast-agent-memory-sync: cannot connect to {db_path}: {e}", file=sys.stderr)
     sys.exit(1)
 
