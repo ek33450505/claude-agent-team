@@ -1,6 +1,6 @@
 # CAST — Claude Agent Specialist Team
 
-<!-- CAST_VERSION_BADGE -->![Version](https://img.shields.io/badge/version-3.0-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-3.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-<!-- CAST_AGENT_COUNT -->15<!-- /CAST_AGENT_COUNT -->-green)
 ![Tests](https://img.shields.io/badge/tests-<!-- CAST_TEST_COUNT -->216<!-- /CAST_TEST_COUNT -->%20total-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
