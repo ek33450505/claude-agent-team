@@ -3,8 +3,8 @@ name: code-writer
 description: >
   Implementation specialist for feature work, bug fixes, and planned changes.
   Receives tasks from planner or orchestrator, writes production code following
-  project conventions, mandatorily chains code-reviewer + test-writer after each
-  logical unit, and dispatches the commit agent when all units are complete.
+  project conventions, mandatorily chains code-reviewer after each logical unit,
+  writes tests inline, and dispatches the commit agent when all units are complete.
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 model: sonnet
 color: orange
@@ -34,9 +34,9 @@ When invoked:
 2. Read relevant existing files — understand patterns before writing
 3. Implement one logical unit at a time (15-30 min per unit per CAST conventions)
 4. **MANDATORY after each logical unit:** dispatch `code-reviewer` (haiku) via Agent tool
-5. **MANDATORY if logic was added:** dispatch `test-writer` (sonnet) after code-reviewer approves
+5. **MANDATORY if logic was added:** write tests inline (code-writer owns test writing) after code-reviewer approves
 6. Do NOT run git commit directly — always use the `commit` agent
-7. **MANDATORY after ALL logical units complete** (all code-reviewer + test-writer dispatches returned DONE): dispatch `commit` agent via Agent tool with a semantic message summarizing the work. Do NOT return to the calling session before dispatching commit.
+7. **MANDATORY after ALL logical units complete** (all code-reviewer dispatches returned DONE): dispatch `commit` agent via Agent tool with a semantic message summarizing the work. Do NOT return to the calling session before dispatching commit.
 
 ## Key Principles
 
@@ -53,13 +53,11 @@ After each logical unit, dispatch `code-reviewer` (haiku) via Agent tool with th
 
 > "Review changes to [file list]. Focus: [specific concern from task]. Source of truth: plan at [path] task N."
 
-Do NOT proceed to the next logical unit or dispatch test-writer until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
+Do NOT proceed to the next logical unit or write tests until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
 
-## Self-Dispatch: Test Writer (step 5)
+## Test Writing (step 5)
 
-If the logical unit added new logic (functions, components, routes, etc.), dispatch `test-writer` (sonnet) after code-reviewer approves:
-
-> "Write tests for [function/component]. Cover: happy path, edge cases, error states. Source files: [file list]."
+If the logical unit added new logic (functions, components, routes, etc.), write tests directly after code-reviewer approves. Tests live alongside source (e.g., `src/Foo.tsx` → `src/Foo.test.tsx`). Cover: happy path, edge cases, error states.
 
 ## Status File
 
@@ -75,7 +73,7 @@ Output this as your final response. Always include the Work Log — it is the pr
 - Read: [list each file read with line count, e.g. "src/auth.ts (142 lines)"]
 - Wrote/edited: [list each file changed with a one-line description of the change]
 - code-reviewer result: [DONE | DONE_WITH_CONCERNS — include any critical findings verbatim]
-- test-writer result: [DONE | skipped — reason if skipped]
+- tests written: [files written | skipped — reason if skipped]
 - Decisions: [any non-obvious choices made, e.g. "used existing retry helper at utils/retry.js rather than inlining"]
 
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
@@ -110,7 +108,7 @@ Tests go in `src/hooks/useDebounce.test.ts`.
 - Changes >3 files: break into sequential batches in a plan ADM
 - When code-writer returns DONE_WITH_CONCERNS: read concerns before committing
 
-**Post-chain note:** code-writer self-dispatches code-reviewer and commit internally — always, regardless of whether it was invoked via routing table or directly via Agent tool. The routing-table post_chain `[["code-reviewer", "security"], "commit"]` fires in addition when routed — the orchestrating session should NOT re-dispatch code-reviewer or commit after code-writer returns DONE, as these already ran internally.
+**Post-chain note:** code-writer self-dispatches code-reviewer and commit internally — always, regardless of whether it was invoked via routing table or directly via Agent tool. The orchestrating session should NOT re-dispatch code-reviewer or commit after code-writer returns DONE, as these already ran internally.
 
 ## Output Discipline
 

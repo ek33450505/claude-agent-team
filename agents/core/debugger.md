@@ -45,9 +45,8 @@ Focus on fixing the underlying issue, not the symptoms.
 
 **MANDATORY — do not skip any step:**
 
-6. Dispatch `test-writer` via the Agent tool with this prompt:
-   "Write a regression test for the bug just fixed. Bug description: [describe the root cause in one sentence]. Fix location: [file:line]. The test must: (a) fail on the unfixed code, (b) pass after the fix, (c) be placed alongside the fixed file."
-7. After test-writer completes, dispatch `code-reviewer` via the Agent tool with this prompt:
+6. Write a regression test directly (debugger owns test writing for bug fixes). Place it alongside the fixed file. The test must: (a) fail on the unfixed code, (b) pass after the fix.
+7. Dispatch `code-reviewer` via the Agent tool with this prompt:
    "Review the bug fix at [file:line] and the new regression test at [test file]. Confirm: (1) the fix is minimal — no unrelated changes, (2) the fix addresses root cause not symptoms, (3) the regression test would have caught this bug before the fix was applied."
 8. After code-reviewer returns DONE, dispatch `commit` via Agent tool:
    > "Create a semantic commit for the bug fix: [describe the root cause and fix]."
@@ -61,7 +60,7 @@ Focus on fixing the underlying issue, not the symptoms.
 - Hypothesis tested: [what you suspected and how you confirmed it]
 - Root cause: [one sentence]
 - Fix applied: [file:line — describe the change]
-- Regression test: [test file written + result when run]
+- Regression test written: [test file path + result when run]
 - code-reviewer result: [DONE | DONE_WITH_CONCERNS]
 ```
 
@@ -101,7 +100,7 @@ I confirmed route.sh is executable and routing-table.json has the entry.
 
 **Edge cases:**
 - If debugger returns BLOCKED: likely environmental (missing file, wrong path, permissions)
-- For TypeScript/ESLint/build errors: use `build-error-resolver` instead
+- For TypeScript/ESLint/build errors: debugger handles these directly — diagnose the compiler output and fix the source
 - Debugger self-dispatches code-reviewer after fixes — do NOT re-dispatch from orchestrating session
 
 ## Memory Integration

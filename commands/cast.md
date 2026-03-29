@@ -1,34 +1,32 @@
-CAST diagnostic and manual override command.
+CAST diagnostic and manual dispatch command.
 
 ## Usage
 
-- `/cast` (no args) — Show routing status: last matched route, available agents, hook health
-- `/cast <agent> <prompt>` — Force-dispatch a specific agent, bypassing automatic routing
+- `/cast` (no args) — Show system status: available agents, hook health, recent agent runs
+- `/cast <agent> <prompt>` — Force-dispatch a specific agent via the Agent tool
 
 ## If arguments provided:
 
 $ARGUMENTS
 
-Parse the first word as the agent name. Dispatch that agent via the Agent tool with the remaining text as the prompt. If the first word is not a recognized agent name, treat the entire text as a prompt and use the automatic routing table to select the agent.
+Parse the first word as the agent name. Dispatch that agent via the Agent tool with the remaining text as the prompt. If the first word is not a recognized agent name, use the CLAUDE.md dispatch table to select the agent.
 
 ## If no arguments:
 
 Show:
-1. **Last routing decision** — Read the last 3 entries from `~/.claude/routing-log.jsonl`
-2. **Available agents** — List all agents from `~/.claude/agents/` with their model tier
-3. **Hook status** — Confirm route.sh, pre-tool-guard.sh, and post-tool-hook.sh are present
+1. **Available agents** — List all 15 agents from `~/.claude/agents/` with their model
+2. **Hook status** — Confirm pre-tool-guard.sh, post-tool-hook.sh, cast-cost-tracker.sh, and cast-session-end.sh are present
+3. **Recent agent runs** — Query last 5 entries from cast.db agent_runs table
 
 ## Agent Registry (for manual dispatch)
 
 | Agent | Model | Agent | Model |
 |---|---|---|---|
-| `commit` | haiku | `debugger` | sonnet |
-| `code-reviewer` | haiku | `test-writer` | sonnet |
-| `build-error-resolver` | haiku | `planner` | sonnet |
-| `refactor-cleaner` | haiku | `security` | sonnet |
-| `doc-updater` | haiku | `architect` | sonnet |
-| `auto-stager` | haiku | `researcher` | sonnet |
-| `db-reader` | haiku | `e2e-runner` | sonnet |
-| `report-writer` | haiku | `qa-reviewer` | sonnet |
-| `meeting-notes` | haiku | `data-scientist` | sonnet |
-| `chain-reporter` | haiku | `morning-briefing` | sonnet |
+| `code-writer` | sonnet | `code-reviewer` | haiku |
+| `debugger` | sonnet | `commit` | haiku |
+| `planner` | sonnet | `push` | haiku |
+| `security` | sonnet | `test-runner` | haiku |
+| `merge` | sonnet | `bash-specialist` | sonnet |
+| `researcher` | sonnet | `orchestrator` | sonnet |
+| `docs` | sonnet | `morning-briefing` | sonnet |
+| `devops` | sonnet | | |

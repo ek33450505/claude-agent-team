@@ -69,9 +69,9 @@ Status: DONE_WITH_CONCERNS
 Summary: [what was reviewed]
 Concerns: [specific issues]
 Recommended agents:
-  - refactor-cleaner: [reason — e.g., dead code in src/utils.js lines 45-67]
+  - code-writer: [reason — e.g., dead code in src/utils.js lines 45-67 needs refactoring]
   - security: [reason — e.g., auth bypass pattern in login handler]
-  - doc-updater: [reason — e.g., public API signature changed]
+  - docs: [reason — e.g., public API signature changed]
 ```
 
 Only include `Recommended agents:` when a specific, actionable follow-up is warranted. Do NOT auto-dispatch — the orchestrator or user decides. Each entry must name the exact agent and a specific reason referencing file/line where possible.
@@ -126,7 +126,7 @@ updated: <ISO date>
 
 **When to re-run:** After any fix touching reviewed files.
 
-**Do NOT dispatch** from orchestrating session if change was made by code-writer, debugger, test-writer, refactor-cleaner, or build-error-resolver — these self-dispatch code-reviewer internally.
+**Do NOT dispatch** from orchestrating session if change was made by code-writer or debugger — these self-dispatch code-reviewer internally.
 
 **Parallel post-chain note:** When routing-table post_chain fires code-reviewer and security in parallel, both run independently. If either returns BLOCKED, surface to user before dispatching commit.
 

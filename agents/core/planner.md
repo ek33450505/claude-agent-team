@@ -123,22 +123,14 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
   "batches": [
     {
       "id": 1,
-      "description": "Research / architecture review",
-      "parallel": true,
+      "description": "Implementation",
+      "parallel": false,
       "agents": [
-        {"subagent_type": "architect", "prompt": "Review the proposed architecture for <feature>. Read the plan at <plan-file-path>. Identify risks, alternatives, and alignment with existing patterns."}
+        {"subagent_type": "code-writer", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. For each logical unit: write code, dispatch code-reviewer, write tests inline if logic was added. Do NOT commit directly — commit agent handles that."}
       ]
     },
     {
       "id": 2,
-      "description": "Implementation",
-      "parallel": false,
-      "agents": [
-        {"subagent_type": "code-writer", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. For each logical unit: write code, dispatch code-reviewer, dispatch test-writer if logic was added. Do NOT commit directly — commit agent handles that."}
-      ]
-    },
-    {
-      "id": 3,
       "description": "Spec compliance review",
       "parallel": false,
       "agents": [
@@ -146,16 +138,16 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
       ]
     },
     {
-      "id": 4,
-      "description": "Code quality review + tests",
-      "parallel": false,
+      "id": 3,
+      "description": "Code quality review + test run",
+      "parallel": true,
       "agents": [
-        {"subagent_type": "code-reviewer", "prompt": "Code quality review for <feature>. Check: correctness, edge cases, security, naming, error handling, and conventions. The spec compliance review (Batch 3) already confirmed the right things were built — focus only on HOW they were built."},
-        {"subagent_type": "test-writer", "prompt": "Write tests for the new logic added in <feature>. Cover: happy path, edge cases, and error states."}
+        {"subagent_type": "code-reviewer", "prompt": "Code quality review for <feature>. Check: correctness, edge cases, security, naming, error handling, and conventions. The spec compliance review (Batch 2) already confirmed the right things were built — focus only on HOW they were built."},
+        {"subagent_type": "test-runner", "prompt": "Run the full test suite for the <feature> changes. Report pass/fail with exit code."}
       ]
     },
     {
-      "id": 5,
+      "id": 4,
       "description": "Commit",
       "parallel": false,
       "agents": [
@@ -175,7 +167,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - Minimum manifest: implement → code-reviewer → commit
 - Maximum parallel batch size: 4 agents
 - Include security agent if auth/API/input handling is touched
-- Batch 3 (spec compliance) MUST always run sequentially BEFORE Batch 4 (code quality) — never merge these into a parallel batch
+- Batch 2 (spec compliance) MUST always run sequentially BEFORE Batch 3 (code quality) — never merge these into a parallel batch
 - Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
 
 **Optional agent-level metadata for orchestrator conflict detection:**
