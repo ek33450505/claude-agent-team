@@ -15,6 +15,9 @@ set -euo pipefail
 # 3a: Only fire in the main session — not inside subagents
 if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 
+# D5: Touch marker file for hook health tracking
+mkdir -p ~/.claude/cast/hook-last-fired && touch ~/.claude/cast/hook-last-fired/Stop.timestamp
+
 CAST_DIR="${HOME}/.claude/cast"
 CHECKPOINT_FILE="${CAST_DIR}/orchestrator-checkpoint.log"
 EVENTS_DIR="${CAST_DIR}/events"

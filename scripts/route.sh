@@ -33,6 +33,9 @@ fi
 
 set -euo pipefail
 
+# D5: Touch marker file for hook health tracking
+mkdir -p ~/.claude/cast/hook-last-fired && touch ~/.claude/cast/hook-last-fired/UserPromptSubmit.timestamp
+
 # --- Stale /tmp cast-* file cleanup (older than 1 day) ---
 find /tmp -maxdepth 1 -name 'cast-*' -mtime +1 -delete 2>/dev/null || true
 
