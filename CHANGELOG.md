@@ -1,5 +1,7 @@
 # CHANGELOG
 
+- 2026-03-28: Add cast-archive.sh — automated Stop hook for ~/.claude/ file archiving and cast.db pruning
+
 ## Phase 5 (2026-03-22 to 2026-03-26)
 
 ### Merge Skill (`b2edc4c`)
