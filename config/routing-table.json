@@ -93,7 +93,7 @@
       "post_chain": ["commit"]
     },
     {
-      "patterns": ["security.*review", "check.*vulnerabilit", "owasp", "sql injection", "xss", "^/secure\\b", "security.*audit"],
+      "patterns": ["security.*review", "check.*vulnerabilit", "owasp", "sql injection", "xss", "^/secure\\b", "security.*audit", "check.*security", "security.*check"],
       "agent": "security",
       "model": "sonnet",
       "command": "/secure",
@@ -109,7 +109,7 @@
       "post_chain": null
     },
     {
-      "patterns": ["refactor", "dead code", "clean up", "unused import", "^/refactor\\b", "simplify.*code", "reduce.*complexity"],
+      "patterns": ["refactor", "dead code", "clean up", "unused import", "^/refactor\\b", "simplify.*code", "reduce.*complexity", "improve.*code.*quality", "code.*quality"],
       "agent": "refactor-cleaner",
       "model": "haiku",
       "command": "/refactor",
@@ -197,7 +197,7 @@
       "post_chain": null
     },
     {
-      "patterns": ["ci.?cd", "pipeline", "dockerfile", "github.actions", "deploy.*container", "containerize", "^/devops\\b"],
+      "patterns": ["ci.?cd", "pipeline", "dockerfile", "github.actions", "deploy.*container", "containerize", "^/devops\\b", "deploy.*prod", "deploy.*production", "deploy.*staging"],
       "agent": "devops",
       "model": "haiku",
       "command": "/devops",
@@ -205,7 +205,7 @@
       "post_chain": ["code-reviewer"]
     },
     {
-      "patterns": ["lighthouse", "bundle.size", "web.vitals", "core.vitals", "lazy.load", "render.performance", "^/performance\\b"],
+      "patterns": ["lighthouse", "bundle.size", "web.vitals", "core.vitals", "lazy.load", "render.performance", "^/performance\\b", "performance.*check", "perf.*review", "check.*performance", "slow.*page", "page.*slow"],
       "agent": "performance",
       "model": "sonnet",
       "command": "/performance",
@@ -305,6 +305,7 @@
         "\\b(prisma|drizzle|knex|alembic|activerecord) (schema|migration)\\b",
         "database (design|optimization|refactor)",
         "\\b(n\\+1|slow query|query optimization)\\b",
+        "optimize.*database", "database.*optim",
         "\\b(rls|row level security)\\b",
         "\\b(soft delete|partition|audit log)\\b",
         "\\bcreate.*migration\\b|\\bwrite.*migration\\b",
@@ -389,6 +390,14 @@
       "command": "/bash",
       "confidence": "hard",
       "post_chain": ["code-reviewer", "commit"]
+    },
+    {
+      "patterns": ["^/stage\\b", "^stage\\b", "ready.*commit", "stage.*files", "git.*add"],
+      "agent": "auto-stager",
+      "model": "haiku",
+      "command": "/stage",
+      "confidence": "soft",
+      "post_chain": ["commit"]
     },
     {
       "patterns": [
