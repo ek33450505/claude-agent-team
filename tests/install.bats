@@ -36,12 +36,12 @@ run_install() {
   [ -d "$HOME/.claude/agent-memory-local" ]
 }
 
-@test "Install: installs all 15 agents" {
+@test "Install: installs all 16 agents" {
   run_install
 
   local count
   count=$(ls -1 "$HOME/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
-  [ "$count" -eq 15 ]
+  [ "$count" -eq 16 ]
 }
 
 @test "Install: installs all 7 skills" {

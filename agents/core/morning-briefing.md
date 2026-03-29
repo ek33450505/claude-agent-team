@@ -56,9 +56,53 @@ Always run git-activity and action-items — these are cross-platform.
 
 On Linux/WSL, a useful briefing is still produced from steps 4 and 5.
 
-### Step 3: Assemble and write
+### Step 3: CAST system intelligence
 
-Pass all 5 fragments to the **briefing-writer** skill instructions to assemble
+Run these bash queries to enrich the briefing:
+
+**3a. Dirty repo detector** — find repos with uncommitted or unpushed work:
+```bash
+for dir in ~/Projects/personal ~/Projects/work; do
+  find "$dir" -maxdepth 2 -name ".git" -type d 2>/dev/null | while read gitdir; do
+    repo="$(dirname "$gitdir")"
+    dirty=$(git -C "$repo" status --short 2>/dev/null | wc -l | tr -d ' ')
+    unpushed=$(git -C "$repo" log @{u}.. --oneline 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$dirty" -gt 0 ] || [ "$unpushed" -gt 0 ]; then
+      echo "⚠ $(basename "$repo"): ${dirty} uncommitted, ${unpushed} unpushed"
+    fi
+  done
+done
+```
+
+**3b. Open PR digest** — list open PRs across repos:
+```bash
+gh pr list --author "@me" --state open --json title,repository,url,createdAt \
+  --jq '.[] | "• \(.title) [\(.repository.name)] — \(.url)"' 2>/dev/null | head -10
+```
+
+**3c. Yesterday's CAST spend** — query cast.db:
+```bash
+sqlite3 ~/.claude/cast/cast.db \
+  "SELECT printf('Sessions: %d | Tokens: %d | Cost: $%.4f',
+    COUNT(*), SUM(total_tokens), SUM(total_cost))
+   FROM sessions
+   WHERE DATE(started_at) = DATE('now', '-1 day');" 2>/dev/null
+```
+
+**3d. Unresolved BLOCKED agents** — any stuck tasks:
+```bash
+sqlite3 ~/.claude/cast/cast.db \
+  "SELECT agent || ': ' || COALESCE(result_summary,'no detail')
+   FROM task_queue
+   WHERE status = 'failed' AND DATE(created_at) >= DATE('now', '-3 days')
+   LIMIT 5;" 2>/dev/null
+```
+
+Collect all output from Step 3 as a single markdown fragment titled `## CAST Intelligence`.
+
+### Step 4: Assemble and write
+
+Pass all fragments (Steps 2 and 3) to the **briefing-writer** skill instructions to assemble
 the final briefing file at:
 `~/.claude/briefings/YYYY-MM-DD-morning.md`
 

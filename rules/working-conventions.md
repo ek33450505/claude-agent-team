@@ -15,6 +15,13 @@
 - MANDATORY: Agents that modify code (`test-writer`, `debugger`, `refactor-cleaner`, `build-error-resolver`) self-dispatch `code-reviewer` internally — do not double-dispatch from the main session
 - MANDATORY: All agents output a structured Status block as their final response: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
 
+## Researcher vs Explore
+
+- **`researcher` (sonnet):** Deep investigation, external sources, multi-step analysis, data synthesis, open-ended questions ("How should we approach X?")
+- **`Explore` subagent (sonnet):** Fast codebase navigation, file discovery, grep-level searches ("Where is X defined?")
+
+Rule: use Explore for location queries, researcher for understanding and recommendation queries.
+
 ## Testing
 - Tests live alongside source: `src/components/Foo.jsx` → `src/components/Foo.test.jsx`
 - Test behavior, not implementation — prefer `getByRole`/`getByText` over `getByTestId`

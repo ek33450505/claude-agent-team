@@ -34,7 +34,7 @@ CMD_COUNT=0
 SKILL_COUNT=0
 
 # --- Agent / command / skill lists ---
-CORE_AGENTS="planner debugger test-runner code-reviewer commit security push code-writer bash-specialist merge orchestrator morning-briefing devops researcher docs"
+CORE_AGENTS="planner debugger test-runner code-reviewer commit security push code-writer bash-specialist merge orchestrator morning-briefing devops researcher docs test-writer"
 
 ALL_CMDS="bash cast commit debug devops docs doctor merge morning orchestrate plan push research review secure test"
 
@@ -46,7 +46,7 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 printf "\n${BOLD}Claude Agent Team — Installer (v3)${NC}\n\n"
-printf "  Installing 15 agents, 16 commands, 7 skills\n\n"
+printf "  Installing 16 agents, 16 commands, 7 skills\n\n"
 info "Starting installation..."
 
 # --- Backup existing dirs if non-empty ---
