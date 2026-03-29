@@ -23,14 +23,33 @@
         "hooks": [
           {
             "type": "command",
+            "if": "Bash(git *)",
             "command": "bash ~/.claude/scripts/pre-tool-guard.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "if": "Bash(curl *)",
+            "command": "bash ~/.claude/scripts/cast-security-guard.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "if": "Bash(ssh *)",
+            "command": "bash ~/.claude/scripts/cast-security-guard.sh",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "if": "Bash(scp *)",
+            "command": "bash ~/.claude/scripts/cast-security-guard.sh",
             "timeout": 3
           }
         ],
-        "description": "CAST enforcement — blocks raw git commit/push, redirects to agents"
+        "description": "CAST enforcement — git guard (pre-tool-guard.sh, git * only) + security advisory (cast-security-guard.sh, curl/ssh/scp only)"
       },
       {
-        "matcher": "Write|Edit|Bash",
+        "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
@@ -38,7 +57,7 @@
             "timeout": 3
           }
         ],
-        "description": "CAST security advisory — flags sensitive file edits and commands"
+        "description": "CAST security advisory — flags sensitive file edits (Write/Edit tools)"
       }
     ],
     "UserPromptSubmit": [
