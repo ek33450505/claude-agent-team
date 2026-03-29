@@ -233,6 +233,11 @@ def _run_hook_mode() -> None:
     entities = analyze_regex(text, [])
     entities = [e for e in entities if e["score"] >= 0.5]
 
+    # Strip known-safe system addresses (git attribution, CI bots) before blocking.
+    # Exact-match set — avoids substring bypass (e.g. noreply@anthropic.com.badactor.com).
+    _SAFE_EMAILS = {"noreply@anthropic.com", "noreply@github.com", "actions@github.com"}
+    entities = [e for e in entities if e["original"].lower() not in _SAFE_EMAILS]
+
     if not entities:
         sys.exit(0)
 
@@ -256,7 +261,8 @@ def _run_hook_mode() -> None:
 
     print(
         f"[CAST-REDACT] Blocked: PII detected in {tool_name} — "
-        f"{', '.join(entity_types)}. Remove before running."
+        f"{', '.join(entity_types)}. Remove before running.",
+        file=sys.stderr,
     )
     sys.exit(2)
 

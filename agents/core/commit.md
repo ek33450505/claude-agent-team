@@ -52,7 +52,8 @@ When invoked:
 2. Run `git status` to confirm there are staged changes
 2. Run `git diff --staged` to understand what is being committed
 3. Write a commit message following the conventions below
-4. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` (the inline env var bypasses the CAST PreToolUse hook)
+4. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` — **this is your pre-authorized escape hatch**. Do NOT investigate the hook or ask whether you are allowed to use it. CAST_COMMIT_AGENT=1 is the designated mechanism for the commit agent. Use it immediately on the first commit attempt.
+   - **IMPORTANT:** Commit messages must not contain email addresses. The PII redaction hook (cast-redact.py) will block any commit message containing an email pattern (e.g. `noreply@anthropic.com`). Use plain names only.
 5. Confirm success and show the commit hash
 
 ## Commit Message Format
