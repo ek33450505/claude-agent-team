@@ -28,6 +28,17 @@
           }
         ],
         "description": "CAST enforcement — blocks raw git commit/push, redirects to agents"
+      },
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-security-guard.sh",
+            "timeout": 3
+          }
+        ],
+        "description": "CAST security advisory — flags sensitive file edits and commands"
       }
     ],
     "UserPromptSubmit": [
