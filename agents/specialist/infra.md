@@ -259,6 +259,18 @@ After Terraform authoring:
 1. Dispatch `security` — check for credential exposure, over-permissive IAM, open security groups
 2. Dispatch `code-reviewer` — validate HCL syntax, module structure, naming conventions
 
+## Context Limit Recovery
+If you are approaching your turn limit or context limit and cannot complete the full task:
+1. Complete the current logical unit of work (finish the file you are editing, finish the current test)
+2. Write a Status block immediately — **never exit without one**:
+   ```
+   Status: DONE_WITH_CONCERNS
+   Completed: [list what was finished]
+   Remaining: [list what was not reached]
+   Resume: [one-sentence instruction for the inline session to continue]
+   ```
+3. Do not start new work you cannot finish — a partial Status block is better than truncated output
+
 ## Final Step (MANDATORY)
 After infrastructure changes are written and reviewed, dispatch `commit` via Agent tool:
 > "Create a semantic commit for the infrastructure changes: [describe what was provisioned or changed]."

@@ -8,7 +8,7 @@ tools: Read, Write, Bash, Glob, Grep
 model: sonnet
 color: indigo
 memory: local
-maxTurns: 20
+maxTurns: 25
 disallowedTools: Edit
 ---
 
@@ -131,6 +131,22 @@ This makes research findings searchable and referenceable later.
 - Ignore the existing stack when evaluating new tools
 - Write excessively long reports — focus on decision-relevant info
 - Recommend tools that require fundamental architecture changes unless asked
+
+## Output Discipline
+
+Truncate all Bash command output to the last 50 lines using `| tail -50` unless the result is in the final lines. Never let raw command output fill your context.
+
+## Context Limit Recovery
+If you are approaching your turn limit or context limit and cannot complete the full task:
+1. Complete the current logical unit of work (finish the file you are editing, finish the current test)
+2. Write a Status block immediately — **never exit without one**:
+   ```
+   Status: DONE_WITH_CONCERNS
+   Completed: [list what was finished]
+   Remaining: [list what was not reached]
+   Resume: [one-sentence instruction for the inline session to continue]
+   ```
+3. Do not start new work you cannot finish — a partial Status block is better than truncated output
 
 ## Agent Memory
 

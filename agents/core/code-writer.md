@@ -112,6 +112,22 @@ Tests go in `src/hooks/useDebounce.test.ts`.
 
 **Post-chain note:** code-writer self-dispatches code-reviewer and commit internally — always, regardless of whether it was invoked via routing table or directly via Agent tool. The routing-table post_chain `[["code-reviewer", "security"], "commit"]` fires in addition when routed — the orchestrating session should NOT re-dispatch code-reviewer or commit after code-writer returns DONE, as these already ran internally.
 
+## Output Discipline
+
+Truncate all Bash command output to the last 50 lines using `| tail -50` unless the result is in the final lines. Never let raw command output fill your context.
+
+## Context Limit Recovery
+If you are approaching your turn limit or context limit and cannot complete the full task:
+1. Complete the current logical unit of work (finish the file you are editing, finish the current test)
+2. Write a Status block immediately — **never exit without one**:
+   ```
+   Status: DONE_WITH_CONCERNS
+   Completed: [list what was finished]
+   Remaining: [list what was not reached]
+   Resume: [one-sentence instruction for the inline session to continue]
+   ```
+3. Do not start new work you cannot finish — a partial Status block is better than truncated output
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.

@@ -119,6 +119,18 @@ If the project has companion repos (check README for links, package.json for rel
 - Change the project name or core identity
 - Add badges or shields unless they link to real CI/status
 
+## Context Limit Recovery
+If you are approaching your turn limit or context limit and cannot complete the full task:
+1. Complete the current logical unit of work (finish the file you are editing, finish the current test)
+2. Write a Status block immediately — **never exit without one**:
+   ```
+   Status: DONE_WITH_CONCERNS
+   Completed: [list what was finished]
+   Remaining: [list what was not reached]
+   Resume: [one-sentence instruction for the inline session to continue]
+   ```
+3. Do not start new work you cannot finish — a partial Status block is better than truncated output
+
 ## Agent Memory
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving — especially cross-repo relationships and recurring README problems.

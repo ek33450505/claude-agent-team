@@ -376,6 +376,43 @@
         "canonical url|hreflang",
         "alt text|color contrast|keyboard nav"
       ]
+    },
+    {
+      "patterns": [
+        "write.*hook script", "bash.*hook", "shell script.*hook",
+        "bats.*test", "\\.sh.*script", "write.*\\.sh\\b",
+        "hook.*script", "write.*shell script", "create.*hook",
+        "^/bash\\b"
+      ],
+      "agent": "bash-specialist",
+      "model": "sonnet",
+      "command": "/bash",
+      "confidence": "hard",
+      "post_chain": ["code-reviewer", "commit"]
+    },
+    {
+      "patterns": [
+        "^push$", "^/push\\b", "^git push",
+        "push.*remote", "push.*origin", "push.*branch",
+        "push.*to.*github", "push.*upstream"
+      ],
+      "agent": "push",
+      "model": "haiku",
+      "command": "/push",
+      "confidence": "hard",
+      "post_chain": []
+    },
+    {
+      "patterns": [
+        "run.*test", "execute.*test", "run.*test suite", "run.*specs",
+        "npm.*test", "bats.*run", "run.*bats", "run.*jest",
+        "run.*vitest", "run.*the.*tests", "^/run-tests\\b"
+      ],
+      "agent": "test-runner",
+      "model": "sonnet",
+      "command": "/run-tests",
+      "confidence": "hard",
+      "post_chain": []
     }
   ],
   "opus_signals": {
