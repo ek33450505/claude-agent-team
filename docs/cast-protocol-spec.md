@@ -1,8 +1,8 @@
 # CAST Agent Protocol Specification
 
-**Version:** 1.5.0
+**Version:** 2.0.0
 **Status:** Active
-**Last Updated:** 2026-03-24
+**Last Updated:** 2026-03-28
 
 ---
 
@@ -118,10 +118,10 @@ Agents that modify code MUST also write a JSON status file via `cast_write_statu
 
 ```bash
 source ~/.claude/scripts/status-writer.sh
-cast_write_status "DONE" "Refactored auth module" "refactor-cleaner" "" ""
-cast_write_status "DONE_WITH_CONCERNS" "Refactored auth module" "refactor-cleaner" \
+cast_write_status "DONE" "Implemented auth module" "code-writer" "" ""
+cast_write_status "DONE_WITH_CONCERNS" "Implemented auth module" "code-writer" \
   "dead code remains in src/utils.js lines 45-67" "code-reviewer"
-cast_write_status "BLOCKED" "Could not complete refactor" "refactor-cleaner" \
+cast_write_status "BLOCKED" "Could not complete implementation" "code-writer" \
   "Missing test coverage — cannot verify behavior preservation" ""
 ```
 
@@ -145,9 +145,9 @@ When `code-reviewer` emits `DONE_WITH_CONCERNS`, the `Recommended agents:` subse
 
 ```
 Recommended agents:
-  - refactor-cleaner: dead code in src/utils.js lines 45-67
+  - code-writer: dead code in src/utils.js lines 45-67
   - security: potential auth bypass in src/auth/login.js line 112
-  - doc-updater: public API signature changed in src/api/routes.js
+  - docs: public API signature changed in src/api/routes.js
 ```
 
 Rules:
@@ -170,8 +170,6 @@ The CAST PreToolUse hook (`pre-tool-guard.sh`) hard-blocks certain Bash operatio
 |---|---|---|
 | `CAST_COMMIT_AGENT=1` | `git commit` | `commit` agent exclusively |
 | `CAST_PUSH_OK=1` | `git push` | Post-review push workflows |
-| `CAST_POLICY_OVERRIDE=1` | Write/Edit blocked by policy engine | Operator bypass when policy rule should be skipped; logged as `[CAST-POLICY-WARN]` |
-| `CAST_ROLLBACK_DRY_RUN=1` | `cast-rollback.sh` apply | Preview rollback diff without applying changes |
 
 ### 2.2 Syntax Requirements
 
@@ -239,8 +237,8 @@ When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plan
       "type": "fan-out",
       "agents": [
         {
-          "subagent_type": "architect",
-          "prompt": "Review the proposed architecture for X. Plan file: ~/.claude/plans/2026-03-24-X.md"
+          "subagent_type": "planner",
+          "prompt": "Create a detailed implementation plan for X. Plan file: ~/.claude/plans/2026-03-24-X.md"
         },
         {
           "subagent_type": "security",
@@ -269,8 +267,8 @@ When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plan
           "prompt": "Review the changes just made for X"
         },
         {
-          "subagent_type": "test-writer",
-          "prompt": "Write tests for the new logic added in X"
+          "subagent_type": "test-runner",
+          "prompt": "Run tests to verify the new logic added in X"
         }
       ]
     },
@@ -356,7 +354,7 @@ MANDATORY|RECOMMENDED: Dispatch the `<agent>` agent via the Agent tool (model: <
 Pass the user's full prompt as the agent task. Do NOT handle this inline.
 ```
 
-**Trigger:** `route.sh` (UserPromptSubmit hook) matches the user's prompt against `routing-table.json`
+**Trigger:** In CAST v3, `[CAST-DISPATCH]` is no longer injected by a hook. The model reads the dispatch table in `CLAUDE.md` and dispatches agents directly via the Agent tool. This directive is documented here for protocol reference but is now handled by model-driven dispatch rather than hook injection.
 
 **What Claude must do:** Dispatch the named agent via the Agent tool immediately. Do not answer the user's question inline. Do not ask for confirmation when confidence is `hard`.
 
@@ -380,7 +378,7 @@ dispatch `code-reviewer` agent (haiku) to review. Do not skip this step.
 
 **CLAUDE_SUBPROCESS guard:** This directive is only injected in the main session (`CLAUDE_SUBPROCESS != 1`). Subagents do not receive it — they have their own internal review logic or report status to the main session.
 
-**Agents that self-dispatch code-reviewer:** `test-writer`, `debugger`, `refactor-cleaner`, `build-error-resolver` self-dispatch `code-reviewer` internally. The main session MUST NOT re-dispatch `code-reviewer` after these agents complete — the review already happened internally.
+**Agents that self-dispatch code-reviewer:** `code-writer` and `debugger` self-dispatch `code-reviewer` internally. The main session MUST NOT re-dispatch `code-reviewer` after these agents complete — the review already happened internally.
 
 ### 4.3 `[CAST-CHAIN]`
 
@@ -389,7 +387,7 @@ dispatch `code-reviewer` agent (haiku) to review. Do not skip this step.
 [CAST-CHAIN] After <agent> completes: dispatch `agent-a` -> `agent-b` in sequence.
 ```
 
-**Trigger:** `route.sh` appends this when the matched route has a `post_chain` array with entries other than `"auto-dispatch-from-manifest"`
+**Trigger:** In CAST v3, post-chain behavior is defined in `CLAUDE.md` (not injected by hooks). After code-writer or debugger completes: `code-reviewer → commit → push`. The model reads this protocol and dispatches accordingly.
 
 **What Claude must do:** After the primary agent's task is complete, dispatch the listed agents in order. Do not ask for confirmation. Each agent in the chain receives the output of the previous agent as context.
 
@@ -428,6 +426,8 @@ Resolve the blocker before continuing. Do not retry the blocked operation.
 
 ### 4.6 `[CAST-DISPATCH-GROUP]`
 
+> **Historical (CAST v2):** This directive was removed in CAST v3. Agent groups and the routing table were eliminated in favor of model-driven dispatch.
+
 `[CAST-DISPATCH-GROUP]` is injected by `route.sh` when the user's prompt matches a pattern in `~/.claude/config/agent-groups.json`. It instructs Claude to dispatch the `orchestrator` agent with the matched group's wave plan rather than routing to a single agent. The group payload — including `group_id`, `description`, `waves`, and optional `post_chain` — is written to a temporary JSON file whose path is embedded in the directive. Claude must pass this file path to the orchestrator as task context and must not attempt to execute the waves inline. Wave-based dispatch follows the same fan-out semantics defined in Section 3.4, with agents in each wave running in parallel before the next wave begins.
 
 ---
@@ -440,11 +440,14 @@ CAST uses three Claude Code hook events. Each hook script reads a JSON payload f
 
 | Event | Hook script | Fires when |
 |---|---|---|
-| `UserPromptSubmit` | `route.sh` | User submits a prompt |
-| `PreToolUse` | `pre-tool-guard.sh` | Claude is about to call any tool |
-| `PostToolUse` | `post-tool-hook.sh`, `agent-status-reader.sh` | Claude just completed a tool call |
+| `PreToolUse:Bash` | `pre-tool-guard.sh` | Claude is about to run a bash command |
+| `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Claude just wrote or edited a file |
+| `PostToolUse:Agent` | `cast-cost-tracker.sh` | Claude just dispatched an agent |
+| `Stop` | `cast-session-end.sh` | Session ends |
 
 ### 5.2 `UserPromptSubmit` — `route.sh`
+
+> **Historical (CAST v2):** The `UserPromptSubmit` hook (`route.sh`) was removed in CAST v3. Dispatch is now model-driven — the model reads the CLAUDE.md dispatch table and decides which agent to call. This section is preserved for protocol documentation.
 
 **Stdin JSON schema:**
 ```json
@@ -489,11 +492,7 @@ CAST uses three Claude Code hook events. Each hook script reads a JSON payload f
 }
 ```
 
-**Processing:** Acts on two tool classes:
-
-1. **Write/Edit tool calls** — runs the policy engine: matches `file_path` against rules in `~/.claude/config/policies.json`. If the path matches a policy rule and the required agent has not completed in the current session (checked via `~/.claude/agent-status/` files with mtime < 2 hours), exits 2 with `[CAST-POLICY-BLOCK]`. Severity `warn` emits a stderr warning instead. Override any block with `CAST_POLICY_OVERRIDE=1`.
-
-2. **Bash tool calls** — checks `command` against blocked operation patterns. Validates escape hatches at position 0.
+**Processing:** Acts on Bash tool calls only — checks `command` against blocked operation patterns (git commit, git push). Validates escape hatches at position 0.
 
 **Stdout on block:**
 ```
@@ -542,6 +541,8 @@ Note: `pre-tool-guard.sh` does not output `hookSpecificOutput` JSON — it outpu
 **Exit codes:** Always 0 (no hard-blocking in post-tool-hook.sh).
 
 ### 5.5 `PostToolUse` — `agent-status-reader.sh`
+
+> **Note:** In CAST v3, `agent-status-reader.sh` is no longer registered as a hook. Status propagation is handled by the model reading agent Status blocks directly. This section is preserved for protocol reference.
 
 This hook runs only in subagent context. It inverts the standard CLAUDE_SUBPROCESS guard:
 
@@ -722,7 +723,7 @@ A CAST-compatible agent MUST:
 - [ ] Include `Concerns:` when status is DONE_WITH_CONCERNS
 - [ ] If code-modifying: source `status-writer.sh` and call `cast_write_status` with matching values
 - [ ] Never dispatch another instance of itself (prevents infinite loops)
-- [ ] Not re-dispatch `code-reviewer` if it self-dispatches internally (self-dispatching agents: `test-writer`, `debugger`, `refactor-cleaner`, `build-error-resolver`)
+- [ ] Not re-dispatch `code-reviewer` if it self-dispatches internally (self-dispatching agents: `code-writer`, `debugger`)
 - [ ] Use `CAST_COMMIT_AGENT=1 git commit` (not raw `git commit`) if it needs to commit directly
 
 A CAST-compatible agent SHOULD:
@@ -742,8 +743,7 @@ A CAST-compatible hook script MUST:
 - [ ] Use exit code 0 (allow), 1 (warn), or 2 (hard-block) — never exit with other codes for protocol responses
 - [ ] Output `hookSpecificOutput` JSON for directive injection; output plain text for block messages
 - [ ] Limit regex pattern length to 200 characters maximum (ReDoS prevention)
-- [ ] Log dispatch events to `~/.claude/routing-log.jsonl` with timestamp, session ID, and matched pattern (for UserPromptSubmit hooks)
-- [ ] Rotate logs at 5MB maximum, keeping up to 2 rotated copies
+- [ ] Log dispatch events to `cast.db` via `cast-cost-tracker.sh` (for PostToolUse:Agent hooks)
 - [ ] Use `python3` stdlib only — no pip packages
 
 A CAST-compatible hook script SHOULD:
@@ -758,45 +758,36 @@ A CAST-compatible hook script SHOULD:
 
 ```
 ~/.claude/
-├── CLAUDE.md                        # Hook directive definitions (loaded every session)
+├── CLAUDE.md                        # Dispatch table + post-chain protocol (loaded every session)
 ├── agents/                          # Agent definition files (.md with YAML frontmatter)
-├── commands/                        # Slash command definitions
 ├── scripts/
-│   ├── route.sh                     # UserPromptSubmit hook + pre-session briefing injector
-│   ├── pre-tool-guard.sh            # PreToolUse hook: policy engine + git commit/push guard
-│   ├── post-tool-hook.sh            # PostToolUse hook (formatter + review + orchestrate)
-│   ├── agent-status-reader.sh       # PostToolUse hook (subagent status propagation)
-│   ├── stop-hook.sh                 # Stop hook: chain-reporter + weekly feedback + board + memory
+│   ├── pre-tool-guard.sh            # PreToolUse:Bash hook: git commit/push guard
+│   ├── post-tool-hook.sh            # PostToolUse:Write|Edit hook (review injection)
+│   ├── cast-cost-tracker.sh         # PostToolUse:Agent hook (logs to cast.db)
+│   ├── cast-session-end.sh          # Stop hook: archival, pruning, memory sync
 │   ├── status-writer.sh             # Sourced helper: cast_write_status
-│   ├── cast-events.sh               # Sourced helper: cast_emit_event, cast_write_review, cast_derive_state
+│   ├── cast-events.sh               # Sourced helper: cast_emit_event
 │   ├── cast-validate.sh             # System integrity checker
-│   ├── cast-routing-feedback.sh     # Routing gap analyzer: groups no_match events, writes report
-│   ├── cast-board.sh                # Project board: derives blocked/in-flight from event files
-│   ├── cast-agent-memory-init.sh    # Agent memory seeder: seeds MEMORY.md for 17 core agents
-│   ├── cast-rollback.sh             # Working tree recovery after failed orchestrator batches
-│   ├── cast-stats.sh                # Stats reporter: 8 sections from routing-log.jsonl
-│   └── cast-log-append.py           # Atomic log appender (called by route.sh)
-├── config/
-│   ├── routing-table.json           # Prompt-to-agent routing rules
-│   ├── agent-groups.json            # Multi-agent wave groups (31 groups)
-│   └── policies.json                # Path-based edit policies (requires_agent rules)
+│   ├── cast-stats.sh                # Usage analytics from cast.db
+│   ├── cast-cron-setup.sh           # Cron installer for scheduled tasks
+│   └── cast-db-init.sh              # Initialize cast.db schema
 ├── rules/                           # Stack context, project catalog, conventions
 ├── plans/                           # Plan files with Agent Dispatch Manifests
-├── agent-status/                    # Per-agent JSON status files (written by cast_write_status)
-├── agent-memory-local/              # Per-agent persistent memory (MEMORY.md files)
+├── agent-status/                    # Per-agent JSON status files
+├── agent-memory-local/              # Per-agent persistent memory
 │   └── <agent-name>/MEMORY.md
-├── routing-log.jsonl                # Dispatch routing log
+├── cast.db                          # SQLite: sessions, agent_runs, budgets, agent_memories
 ├── cast/
-│   ├── events/                      # Immutable event files: {timestamp}-{agent}-{batch}.json
-│   ├── project-board.json           # Derived task state (written by cast-board.sh)
-│   ├── rollback/                    # Batch rollback checkpoints: batch-{id}.sha
-│   └── orchestrator-checkpoint.log  # Orchestrator batch progress (for resume-on-reinvoke)
+│   ├── events/                      # Immutable event files
+│   └── orchestrator-checkpoint.log  # Orchestrator batch progress
 ├── briefings/                       # Morning briefing outputs
 ├── meetings/                        # Meeting notes outputs
-└── reports/                         # Report writer outputs (routing-gaps-*.md, chain summaries)
+└── reports/                         # Report outputs
 ```
 
 ## Appendix B — Routing Table Schema
+
+> **Historical (CAST v2):** The routing table was removed in CAST v3. This section is preserved for protocol documentation.
 
 Each entry in `routing-table.json` under the `routes` array:
 
@@ -817,5 +808,6 @@ Each entry in `routing-table.json` under the `routes` array:
 
 | Version | Changes |
 |---|---|
+| 2.0.0 | CAST v3: Removed routing table and route.sh. Model-driven dispatch via CLAUDE.md. Consolidated 42→15 agents. 4 hooks (pre-tool-guard, post-tool-hook, cast-cost-tracker, cast-session-end). Added cast.db observability. Replaced castd daemon with cron. |
 | 1.5.0 | Added orchestrator, fan-out dispatch, task board, agent-status-reader, CAST-ORCHESTRATE and CAST-HALT directives |
 | 1.0.0 | Initial protocol: Status Blocks, escape hatches, route.sh, pre-tool-guard.sh, post-tool-hook.sh |

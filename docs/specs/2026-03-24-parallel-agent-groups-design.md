@@ -1,7 +1,9 @@
 # CAST Parallel Agent Groups — Design Spec
 **Date:** 2026-03-24
 **Version:** 1.0
-**Status:** Approved
+**Status:** Historical / Superseded by CAST v3
+
+> **Note (2026-03-28):** This spec describes the parallel agent groups feature designed for CAST v2. In the v3 lean architecture redesign, the routing table (`routing-table.json`), agent groups (`agent-groups.json`), and `route.sh` were all removed. CAST v3 uses model-driven dispatch via a CLAUDE.md dispatch table — the model reads 15 rows and decides which agent to call. This document is preserved for historical context only.
 
 ---
 

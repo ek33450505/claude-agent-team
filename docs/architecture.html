@@ -244,8 +244,8 @@
 
 <header>
   <h1><span>CAST</span> Architecture</h1>
-  <span class="version-badge">Protocol v1.5.0</span>
-  <p class="header-desc">Claude Agent Specialist Team — 4-hook automatic dispatch system for Claude Code</p>
+  <span class="version-badge">v3</span>
+  <p class="header-desc">Claude Agent Specialist Team — model-driven dispatch, 15 agents, 4 hooks</p>
   <div class="controls">
     <button class="btn active" id="btn-flow" onclick="setView('flow')">Flow View</button>
     <button class="btn" id="btn-dir" onclick="setView('directory')">Agent Directory</button>
@@ -278,7 +278,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team" target="_blank">GitHub</a>
   <a href="https://github.com/ek33450505/claude-code-dashboard" target="_blank">Dashboard Repo</a>
   <a href="cast-protocol-spec.md" target="_blank">Protocol Spec (797 lines)</a>
-  <span style="margin-left:auto">31 agents &middot; 4 hooks &middot; 22 routes &middot; 86 tests</span>
+  <span style="margin-left:auto">15 agents &middot; 4 hooks &middot; model-driven dispatch</span>
 </footer>
 
 <script>
@@ -296,27 +296,27 @@ const W = 240, H = 44, CX = 380;
 const NODES = [
   {
     id: 'prompt', label: 'User Prompt', type: 'entry', y: 40,
-    tooltip: { title: 'User Prompt', body: 'Any text entered in Claude Code.\nImmediately intercepted by the UserPromptSubmit hook before Claude sees it.' }
+    tooltip: { title: 'User Prompt', body: 'Any text entered in Claude Code.\nClaude reads the dispatch table in CLAUDE.md and decides which agent to invoke, or handles inline.' }
   },
   {
-    id: 'hook1', label: 'Hook 1: UserPromptSubmit', type: 'hook', y: 130,
-    tooltip: { title: 'route.sh (162 lines)', body: 'Matches against 21 regex patterns. ReDoS protection: skips prompts >200 chars.\nInjects [CAST-DISPATCH] via hookSpecificOutput.\nLogs every decision to routing-log.jsonl (rotates at 5MB).\nSubprocess guard: skips if CLAUDE_SUBPROCESS=1.' }
+    id: 'hook1', label: 'Hook 1: PreToolUse (Bash)', type: 'hook', y: 130,
+    tooltip: { title: 'pre-tool-guard.sh', body: 'Hard-blocks Bash tool calls:\n"git commit" → blocked unless CAST_COMMIT_AGENT=1 is present\n"git push" → blocked unless CAST_PUSH_OK=1 is present\nExit code 2 = Claude cannot bypass.\nInjection attack detection: escape hatch must lead the command.' }
   },
   {
     id: 'inline', label: 'Claude Inline', type: 'bypass', y: 130, bypass: true,
-    tooltip: { title: 'No-match path', body: 'If no routing pattern matches, hook outputs nothing.\nClaude handles the prompt directly without any agent dispatch.' }
+    tooltip: { title: 'Inline path', body: 'Single-file edits under 5 lines or read-only tasks.\nClaude handles directly without dispatching an agent.' }
   },
   {
     id: 'dispatch', label: 'Agent Dispatch', type: 'agent', y: 240,
-    tooltip: { title: 'Agent Dispatch (29 agents)', body: 'Claude obeys the [CAST-DISPATCH] directive and invokes the matched specialist via the Agent tool.\nClick to see all 29 agents by tier.' }
+    tooltip: { title: 'Agent Dispatch (15 agents)', body: 'Claude reads the 15-row dispatch table in CLAUDE.md and invokes the matched specialist via the Agent tool.\nNo route.sh or routing-table.json — model-driven dispatch.\nClick to see all 15 agents.' }
   },
   {
     id: 'execute', label: 'Agent Executes', type: 'agent', y: 350,
     tooltip: { title: 'Agent Execution', body: 'Specialist agent runs on haiku or sonnet depending on role.\nAgents never share mutable state — each writes immutable event files.\nSelf-dispatch chains may trigger secondary agents.' }
   },
   {
-    id: 'hook2', label: 'Hook 2: PostToolUse', type: 'hook', y: 460,
-    tooltip: { title: 'post-tool-hook.sh (60 lines)', body: '3 behaviors on Write/Edit:\n1. Auto-format JS/TS/CSS/JSON via prettier\n2. Inject [CAST-REVIEW] directive → triggers code-reviewer\n3. Detect Agent Dispatch Manifests in plan .md files → inject [CAST-ORCHESTRATE]' }
+    id: 'hook2', label: 'Hook 2: PostToolUse (Write|Edit)', type: 'hook', y: 460,
+    tooltip: { title: 'post-tool-hook.sh', body: '3 behaviors on Write/Edit:\n1. Auto-format JS/TS/CSS/JSON via prettier\n2. Inject [CAST-REVIEW] directive → triggers code-reviewer\n3. Detect Agent Dispatch Manifests in plan .md files → inject [CAST-ORCHESTRATE]' }
   },
   {
     id: 'reviewer', label: 'code-reviewer (haiku)', type: 'agent', y: 570,
@@ -327,8 +327,8 @@ const NODES = [
     tooltip: { title: 'Status Block Protocol', body: 'Every agent must emit a structured Status block:\nDONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT\nMachine-readable contract driving automatic routing.\nClick to see all variants.' }
   },
   {
-    id: 'statusreader', label: 'agent-status-reader.sh', type: 'protocol', y: 775,
-    tooltip: { title: 'agent-status-reader.sh (89 lines)', body: 'PostToolUse hook in subagent context.\nReads latest ~/.claude/agent-status/*.json.\nBLOCKED → exit 2, emits [CAST-HALT].\nDONE_WITH_CONCERNS → injects [CAST-REVIEW].' }
+    id: 'statusreader', label: 'Status Router', type: 'protocol', y: 775,
+    tooltip: { title: 'Status Router', body: 'Reads the agent Status block from the response.\nBLOCKED → surfaces to user immediately, halts chain.\nDONE_WITH_CONCERNS → logs concerns, continues chain.\nDONE → proceeds to next step.' }
   },
   {
     id: 'halt', label: '[CAST-HALT]', type: 'protocol', y: 775, halt: true,
@@ -339,31 +339,31 @@ const NODES = [
     tooltip: { title: 'cast-events.sh (266 lines)', body: 'Event-sourcing protocol. Agents emit immutable JSON events.\nStorage: ~/.claude/cast/events/ (never mutated).\n7 event types: task_created, task_claimed, task_completed,\ntask_blocked, task_rejected, artifact_written, review_submitted.\nClick to see JSON schema.' }
   },
   {
-    id: 'hook3', label: 'Hook 3: PreToolUse', type: 'hook', y: 990,
-    tooltip: { title: 'pre-tool-guard.sh (47 lines)', body: 'Hard-blocks Bash tool calls:\n"git commit" → blocked unless CAST_COMMIT_AGENT=1 is present\n"git push" → blocked unless CAST_PUSH_OK=1 is present\nExit code 2 = Claude cannot bypass.\nInjection attack detection: escape hatch must lead the command.' }
+    id: 'hook3', label: 'Hook 3: PostToolUse (Agent)', type: 'hook', y: 990,
+    tooltip: { title: 'cast-cost-tracker.sh', body: 'Fires after every Agent tool call.\nRecords agent invocation cost and metadata to cast.db (SQLite).\nProvides per-session and per-agent cost observability.' }
   },
   {
     id: 'commit', label: 'commit agent (haiku)', type: 'agent', y: 1095,
-    tooltip: { title: 'commit agent (haiku)', body: 'Stages files, writes conventional commit messages.\nRuns git commit with CAST_COMMIT_AGENT=1 escape hatch.\nThe only permitted path through the PreToolUse git commit block.' }
+    tooltip: { title: 'commit agent (haiku)', body: 'Stages files, writes conventional commit messages.\nRuns git commit with CAST_COMMIT_AGENT=1 escape hatch.\nThe only permitted path through the pre-tool-guard.sh git commit block.' }
   },
   {
     id: 'hook4', label: 'Hook 4: Stop', type: 'hook', y: 1200,
-    tooltip: { title: 'Stop Hook', body: 'Safety net at session end.\nChecks for uncommitted changes or unpushed commits.\nWarns operator before the session closes.' }
+    tooltip: { title: 'cast-session-end.sh', body: 'Consolidated Stop hook. Fires at session end.\nChecks for uncommitted changes or unpushed commits.\nWrites session summary to cast.db.\nWarns operator before the session closes.' }
   },
   {
     id: 'storage', label: 'Storage Layer', type: 'storage', y: 1305,
-    tooltip: { title: 'Storage Layer (~/.claude/)', body: 'routing-log.jsonl — all routing decisions (5MB rotation)\ncast/ — events/, state/, reviews/, artifacts/\nagent-status/*.json — per-agent status files\nagent-memory-local/<agent>/ — persistent agent memory\nplans/ — planner output\nrules/ — stack context and conventions' }
+    tooltip: { title: 'Storage Layer (~/.claude/)', body: 'cast.db — SQLite observability database\ncast/ — events/, state/, reviews/, artifacts/\nagent-status/*.json — per-agent status files\nagent-memory-local/<agent>/ — persistent agent memory\nplans/ — planner output\nrules/ — stack context and conventions' }
   },
   {
     id: 'dashboard', label: 'Dashboard', type: 'dashboard', y: 1410,
-    tooltip: { title: 'claude-code-dashboard', body: 'Companion observability app.\nReads routing-log.jsonl, agent-status/, cast/ directories.\nPolls for live session data.\ngithub.com/ek33450505/claude-code-dashboard' }
+    tooltip: { title: 'claude-code-dashboard', body: 'Companion observability app.\nReads cast.db, agent-status/, cast/ directories.\nPolls for live session data.\ngithub.com/ek33450505/claude-code-dashboard' }
   },
 ];
 
 const EDGES = [
   { from: 'prompt',       to: 'hook1',        label: '' },
-  { from: 'hook1',        to: 'dispatch',     label: 'match → [CAST-DISPATCH]' },
-  { from: 'hook1',        to: 'inline',       label: 'no match', branch: 'right' },
+  { from: 'hook1',        to: 'dispatch',     label: 'agent task' },
+  { from: 'hook1',        to: 'inline',       label: 'inline', branch: 'right' },
   { from: 'dispatch',     to: 'execute',      label: '' },
   { from: 'execute',      to: 'hook2',        label: 'writes code' },
   { from: 'hook2',        to: 'reviewer',     label: '[CAST-REVIEW]' },
@@ -371,96 +371,68 @@ const EDGES = [
   { from: 'statusblock',  to: 'statusreader', label: '' },
   { from: 'statusreader', to: 'halt',         label: 'BLOCKED', branch: 'right' },
   { from: 'statusreader', to: 'events',       label: 'DONE' },
-  { from: 'events',       to: 'hook3',        label: '→ agent-events.jsonl' },
-  { from: 'hook3',        to: 'commit',       label: 'allows commit agent' },
+  { from: 'events',       to: 'hook3',        label: '→ cast.db' },
+  { from: 'hook3',        to: 'commit',       label: 'tracks cost' },
   { from: 'commit',       to: 'hook4',        label: '' },
   { from: 'hook4',        to: 'storage',      label: 'session end check' },
   { from: 'storage',      to: 'dashboard',    label: 'reads live' },
 ];
 
 const AGENTS = [
-  { tier: 'Core',          name: 'planner',              model: 'sonnet', role: 'Plans tasks into 15–30 min chunks with agent manifests' },
-  { tier: 'Core',          name: 'debugger',             model: 'sonnet', role: 'Triages errors, self-dispatches code-reviewer' },
-  { tier: 'Core',          name: 'test-writer',          model: 'sonnet', role: 'Writes tests, self-dispatches code-reviewer' },
-  { tier: 'Core',          name: 'code-reviewer',        model: 'haiku',  role: 'Post-edit review gate, emits Recommended agents:' },
-  { tier: 'Core',          name: 'commit',               model: 'haiku',  role: 'Conventional commits via CAST_COMMIT_AGENT=1 escape hatch' },
-  { tier: 'Core',          name: 'security',             model: 'sonnet', role: 'Security audit and vulnerability scan' },
-  { tier: 'Core',          name: 'data-scientist',       model: 'sonnet', role: 'Data analysis and visualization' },
-  { tier: 'Core',          name: 'db-reader',            model: 'haiku',  role: 'Read-only SQLite/BigQuery exploration' },
-  { tier: 'Core',          name: 'push',                 model: 'haiku',  role: 'Manages git push with CAST_PUSH_OK=1 escape hatch' },
-  { tier: 'Core',          name: 'bash-specialist',      model: 'sonnet', role: 'Complex shell scripting for CAST hook scripts' },
-  { tier: 'Extended',      name: 'architect',            model: 'sonnet', role: 'Architecture blueprints and ADRs' },
-  { tier: 'Extended',      name: 'tdd-guide',            model: 'sonnet', role: 'Test-driven development workflow enforcement' },
-  { tier: 'Extended',      name: 'build-error-resolver', model: 'haiku',  role: 'TypeScript/Vite/ESLint build errors, self-dispatches reviewer' },
-  { tier: 'Extended',      name: 'e2e-runner',           model: 'sonnet', role: 'Playwright end-to-end test execution' },
-  { tier: 'Extended',      name: 'refactor-cleaner',     model: 'haiku',  role: 'DRY refactors, self-dispatches code-reviewer' },
-  { tier: 'Extended',      name: 'doc-updater',          model: 'haiku',  role: 'Keeps docs in sync with code changes' },
-  { tier: 'Extended',      name: 'readme-writer',        model: 'sonnet', role: 'README generation and accuracy verification' },
-  { tier: 'Extended',      name: 'router',               model: 'sonnet', role: 'Meta-routing and dispatch classification' },
-  { tier: 'Orchestration', name: 'orchestrator',         model: 'sonnet', role: 'Executes Agent Dispatch Manifests in dependency order' },
-  { tier: 'Orchestration', name: 'auto-stager',          model: 'haiku',  role: 'Intelligently stages files before commit agent' },
-  { tier: 'Orchestration', name: 'chain-reporter',       model: 'haiku',  role: 'Produces markdown summary of completed agent chains' },
-  { tier: 'Orchestration', name: 'verifier',             model: 'haiku',  role: 'Post-task completeness verification before quality gate' },
-  { tier: 'Orchestration', name: 'test-runner',          model: 'sonnet', role: 'Runs test suites, auto-routes failures to debugger' },
-  { tier: 'Productivity',  name: 'researcher',           model: 'sonnet', role: 'Research tasks, dispatches browser for live docs' },
-  { tier: 'Productivity',  name: 'report-writer',        model: 'haiku',  role: 'Generates structured status reports from git/Jira' },
-  { tier: 'Productivity',  name: 'meeting-notes',        model: 'haiku',  role: 'Processes meeting transcripts into action items' },
-  { tier: 'Productivity',  name: 'email-manager',        model: 'sonnet', role: 'Email drafting and inbox triage for Outlook/Thunderbird' },
-  { tier: 'Productivity',  name: 'morning-briefing',     model: 'sonnet', role: 'Daily briefing from calendar, git activity, inbox' },
-  { tier: 'Professional',  name: 'browser',              model: 'sonnet', role: 'Live web browsing for documentation and scraping' },
-  { tier: 'Professional',  name: 'qa-reviewer',          model: 'sonnet', role: 'QA review focused on functional correctness and edge cases' },
-  { tier: 'Professional',  name: 'presenter',            model: 'sonnet', role: 'Slide deck and presentation generation' },
+  { name: 'code-writer',      model: 'sonnet', role: 'Feature work >1 file or >5 lines. Self-dispatches code-reviewer and commit.' },
+  { name: 'debugger',         model: 'sonnet', role: 'Diagnoses and fixes failures. Self-dispatches code-reviewer after fixes.' },
+  { name: 'planner',          model: 'sonnet', role: 'Breaks features into a sequenced plan with tasks 15–30 min each.' },
+  { name: 'security',         model: 'sonnet', role: 'Reviews auth, input handling, API key usage, and dependency vulnerabilities.' },
+  { name: 'merge',            model: 'sonnet', role: 'Git merges, rebases, and conflict resolution.' },
+  { name: 'researcher',       model: 'sonnet', role: 'Explores codebases, summarizes data, answers open-ended questions.' },
+  { name: 'docs',             model: 'sonnet', role: 'Writes documentation, READMEs, and reports.' },
+  { name: 'bash-specialist',  model: 'sonnet', role: 'Writes and reviews shell scripts and BATS tests.' },
+  { name: 'orchestrator',     model: 'sonnet', role: 'Executes multi-agent plan manifests in dependency order.' },
+  { name: 'morning-briefing', model: 'sonnet', role: 'Generates a daily briefing from git activity, open PRs, and notes.' },
+  { name: 'devops',           model: 'sonnet', role: 'CI/CD pipelines, Terraform, IaC, and cloud infrastructure.' },
+  { name: 'code-reviewer',    model: 'haiku',  role: 'Reviews diffs for correctness, style, and adherence to conventions.' },
+  { name: 'commit',           model: 'haiku',  role: 'Stages and commits changes with a semantic commit message.' },
+  { name: 'push',             model: 'haiku',  role: 'Pushes current branch to remote.' },
+  { name: 'test-runner',      model: 'haiku',  role: 'Runs test suites (jest, vitest, bats, npm test).' },
 ];
 
 const CHAINS = [
-  { from: 'test-writer',          to: 'code-reviewer', then: 'commit' },
-  { from: 'debugger',             to: 'code-reviewer', then: 'commit' },
-  { from: 'refactor-cleaner',     to: 'code-reviewer', then: 'commit' },
-  { from: 'build-error-resolver', to: 'code-reviewer', then: 'commit' },
-  { from: 'test-runner',          to: 'debugger',      then: null },
-  { from: 'researcher',           to: 'browser',       then: null },
-  { from: 'planner',              to: 'orchestrator',  then: null },
+  { from: 'code-writer', to: 'code-reviewer', then: 'commit' },
+  { from: 'debugger',    to: 'code-reviewer', then: 'commit' },
+  { from: 'planner',     to: 'orchestrator',  then: null },
+  { from: 'test-runner', to: 'debugger',      then: null },
 ];
 
 // Panel HTML keyed by node id
 function buildDispatchPanel() {
-  const tiers = ['Core','Extended','Orchestration','Productivity','Professional'];
-  return `<h3>All 29 Agents</h3>` + tiers.map(tier => {
-    const agents = AGENTS.filter(a => a.tier === tier);
-    return `<div class="agent-tier-group">
-      <div class="agent-tier-label">${tier} (${agents.length})</div>
-      ${agents.map(a => `<div class="agent-chip">${a.name}<span class="badge badge-${a.model}">${a.model}</span></div>`).join('')}
-    </div>`;
-  }).join('');
+  return `<h3>All 15 Agents</h3><div class="agent-tier-group">
+    <div class="agent-tier-label">Sonnet</div>
+    ${AGENTS.filter(a => a.model === 'sonnet').map(a => `<div class="agent-chip">${a.name}<span class="badge badge-sonnet">sonnet</span></div>`).join('')}
+  </div><div class="agent-tier-group">
+    <div class="agent-tier-label">Haiku</div>
+    ${AGENTS.filter(a => a.model === 'haiku').map(a => `<div class="agent-chip">${a.name}<span class="badge badge-haiku">haiku</span></div>`).join('')}
+  </div>`;
 }
 
 const PANELS = {
   hook1: `
-    <h3>Hook 1: UserPromptSubmit</h3>
+    <h3>Hook 1: PreToolUse (Bash)</h3>
     <div class="panel-section">
-      <h4>Sample routing-table.json entry</h4>
-      <pre>{
-  "patterns": [
-    "fix.*bug", "debug this",
-    "not working", "broken",
-    "TypeError", "what.*wrong"
-  ],
-  "agent": "debugger",
-  "model": "sonnet",
-  "command": "/debug",
-  "confidence": "hard",
-  "post_chain": ["code-reviewer","commit"]
-}</pre>
+      <h4>pre-tool-guard.sh</h4>
+      <pre># Blocks raw git commit
+if echo "$CMD" | grep -q "git commit"; then
+  if ! echo "$CMD" | grep -q "CAST_COMMIT_AGENT=1"; then
+    exit 2  # Claude cannot bypass
+  fi
+fi</pre>
     </div>
     <div class="panel-section">
       <h4>Key behaviors</h4>
       <ul>
-        <li>21 routes, regex-matched against lowercased prompt</li>
-        <li>ReDoS protection: skips patterns &gt;200 chars</li>
-        <li>Logs every decision to routing-log.jsonl</li>
-        <li>File rotates at 5MB → routing-log.jsonl.1</li>
-        <li>session_id included in every log entry</li>
-        <li>Subprocess guard: CLAUDE_SUBPROCESS=1 exits immediately</li>
+        <li>Blocks "git commit" unless CAST_COMMIT_AGENT=1 leads the command</li>
+        <li>Blocks "git push" unless CAST_PUSH_OK=1 leads the command</li>
+        <li>Exit code 2 hard-blocks the tool call</li>
+        <li>Injection attack detection: escape hatch must lead the command</li>
       </ul>
     </div>`,
 
@@ -755,12 +727,12 @@ function renderChainOverlay(visible) {
 // ─── AGENT DIRECTORY ─────────────────────────────────────────────────────────
 function renderAgentDirectory() {
   const dir = document.getElementById('agent-directory');
-  const tiers = ['Core','Extended','Orchestration','Productivity','Professional'];
+  const models = ['sonnet', 'haiku'];
   dir.innerHTML = `<h2>Agent Directory <span style="color:var(--muted);font-weight:400;font-size:14px">(${AGENTS.length} agents)</span></h2>` +
-    tiers.map(tier => {
-      const agents = AGENTS.filter(a => a.tier === tier);
+    models.map(model => {
+      const agents = AGENTS.filter(a => a.model === model);
       return `<div class="tier-section">
-        <div class="tier-header">${tier} — ${agents.length} agents</div>
+        <div class="tier-header">${model} — ${agents.length} agents</div>
         <div class="agent-grid">
           ${agents.map(a => `<div class="agent-card">
             <div class="agent-name">${a.name}<span class="badge badge-${a.model}">${a.model}</span></div>
