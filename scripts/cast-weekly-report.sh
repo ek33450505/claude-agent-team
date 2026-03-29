@@ -1,0 +1,136 @@
+#!/bin/bash
+# cast-weekly-report.sh — CAST weekly analytics from cast.db
+# Outputs markdown with YAML frontmatter to ~/.claude/reports/weekly-YYYY-MM-DD.md
+# Gracefully handles empty or missing cast.db.
+#
+# Usage:
+#   cast-weekly-report.sh
+#
+# Environment:
+#   CAST_DB_PATH — override default cast.db location (default: ~/.claude/cast.db)
+
+set -euo pipefail
+
+DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
+REPORTS_DIR="${HOME}/.claude/reports"
+TODAY=$(date +%Y-%m-%d)
+WEEK_START=$(date -v-7d +%Y-%m-%d 2>/dev/null || date -d '7 days ago' +%Y-%m-%d)
+OUTPUT_FILE="${REPORTS_DIR}/weekly-${TODAY}.md"
+
+mkdir -p "$REPORTS_DIR"
+
+# Check if db exists and has the sessions table
+if [ ! -f "$DB_PATH" ] || ! sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions';" 2>/dev/null | grep -q sessions; then
+  echo "[cast-weekly-report] cast.db not initialized or missing sessions table — run cast-db-init.sh first" >&2
+  cat > "$OUTPUT_FILE" <<PLACEHOLDER
+---
+title: CAST Weekly Report
+type: weekly
+week_of: ${TODAY}
+total_cost: "\$0.0000"
+sessions: 0
+generated_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+---
+
+# CAST Weekly Report — ${TODAY}
+
+No data available. Run \`cast-db-init.sh\` to initialize cast.db.
+PLACEHOLDER
+  echo "$OUTPUT_FILE"
+  exit 0
+fi
+
+# --- Query helper ---
+q() { sqlite3 "$DB_PATH" "$1" 2>/dev/null || echo ""; }
+
+# Totals for the week
+TOTAL_COST=$(q "SELECT printf('%.4f', COALESCE(SUM(total_cost_usd),0)) FROM sessions WHERE started_at >= '${WEEK_START}';")
+SESSION_COUNT=$(q "SELECT COUNT(*) FROM sessions WHERE started_at >= '${WEEK_START}';")
+AVG_DURATION=$(q "SELECT printf('%.1f', COALESCE(AVG((julianday(ended_at)-julianday(started_at))*86400),0)) FROM sessions WHERE started_at >= '${WEEK_START}' AND ended_at IS NOT NULL;")
+
+# Top 5 most expensive sessions
+TOP_SESSIONS=$(q "SELECT printf('| %-30s | \$%-8s | %s |', COALESCE(project,'unknown'), printf('%.4f',total_cost_usd), strftime('%Y-%m-%d %H:%M',started_at)) FROM sessions WHERE started_at >= '${WEEK_START}' ORDER BY total_cost_usd DESC LIMIT 5;")
+
+# Agent performance (DONE / DONE_WITH_CONCERNS / BLOCKED / total)
+AGENT_STATS=$(q "SELECT printf('| %-20s | %4d | %4d | %4d | %4d |', agent, SUM(CASE WHEN status='DONE' THEN 1 ELSE 0 END), SUM(CASE WHEN status='DONE_WITH_CONCERNS' THEN 1 ELSE 0 END), SUM(CASE WHEN status='BLOCKED' THEN 1 ELSE 0 END), COUNT(*)) FROM agent_runs WHERE started_at >= '${WEEK_START}' GROUP BY agent ORDER BY COUNT(*) DESC;")
+
+# Zombie tasks (pending/claimed older than 24h)
+ZOMBIES=$(q "SELECT printf('| %-20s | %s | %s |', agent, created_at, COALESCE(task,'')) FROM task_queue WHERE status IN ('pending','claimed') AND created_at < datetime('now','-1 day') LIMIT 10;")
+
+# Top failure reasons from task_queue
+BLOCKED=$(q "SELECT printf('| %3d | %s |', COUNT(*), COALESCE(SUBSTR(result_summary,1,60),'(none)')) FROM task_queue WHERE status='failed' AND created_at >= '${WEEK_START}' GROUP BY result_summary ORDER BY COUNT(*) DESC LIMIT 5;")
+
+# Week-over-week comparison
+PREV_WEEK=$(date -v-14d +%Y-%m-%d 2>/dev/null || date -d '14 days ago' +%Y-%m-%d)
+PREV_COST=$(q "SELECT printf('%.4f', COALESCE(SUM(total_cost_usd),0)) FROM sessions WHERE started_at >= '${PREV_WEEK}' AND started_at < '${WEEK_START}';")
+PREV_SESSIONS=$(q "SELECT COUNT(*) FROM sessions WHERE started_at >= '${PREV_WEEK}' AND started_at < '${WEEK_START}';")
+
+if [ "${PREV_SESSIONS:-0}" -gt 0 ] 2>/dev/null; then
+  WOW_COST_DIFF=$(python3 -c "print(f'{float(\"${TOTAL_COST}\") - float(\"${PREV_COST}\"):+.4f}')" 2>/dev/null || echo "N/A")
+  WOW_SESSION_DIFF=$(( SESSION_COUNT - PREV_SESSIONS ))
+  WOW_SECTION="## Week-over-Week
+
+| Metric | This Week | Last Week | Delta |
+|--------|-----------|-----------|-------|
+| Sessions | ${SESSION_COUNT} | ${PREV_SESSIONS} | $([ "${WOW_SESSION_DIFF}" -ge 0 ] && echo "+${WOW_SESSION_DIFF}" || echo "${WOW_SESSION_DIFF}") |
+| Total Cost | \$${TOTAL_COST} | \$${PREV_COST} | ${WOW_COST_DIFF} |"
+else
+  WOW_SECTION="## Week-over-Week
+
+No prior week data available."
+fi
+
+# Write report
+cat > "$OUTPUT_FILE" <<REPORT
+---
+title: CAST Weekly Report
+type: weekly
+week_of: ${TODAY}
+total_cost: "\$${TOTAL_COST}"
+sessions: ${SESSION_COUNT}
+generated_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+---
+
+# CAST Weekly Report — ${TODAY}
+
+**Period:** ${WEEK_START} → ${TODAY}
+
+## Summary
+
+| Metric | Value |
+|--------|-------|
+| Total Sessions | ${SESSION_COUNT} |
+| Total Cost | \$${TOTAL_COST} |
+| Avg Session Duration | ${AVG_DURATION}s |
+
+## Top 5 Most Expensive Sessions
+
+| Project | Cost | Started |
+|---------|------|---------|
+${TOP_SESSIONS:-| (no data) | — | — |}
+
+## Agent Performance
+
+| Agent | DONE | CONCERNS | BLOCKED | Total |
+|-------|------|----------|---------|-------|
+${AGENT_STATS:-| (no data) | — | — | — | — |}
+
+## Zombie Tasks (pending >24h)
+
+| Agent | Created | Task |
+|-------|---------|------|
+${ZOMBIES:-| (none) | — | — |}
+
+## Top Failure Reasons
+
+| Count | Reason |
+|-------|--------|
+${BLOCKED:-| (none) | — |}
+
+${WOW_SECTION}
+
+---
+*Generated by cast-weekly-report.sh*
+REPORT
+
+echo "$OUTPUT_FILE"
