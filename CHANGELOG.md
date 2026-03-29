@@ -31,7 +31,7 @@
 - **Fixed:** Four identified gaps from code audit (see commit body for details)
 
 ### Agent Profiling (`13ce26e`, `341c947`)
-- **Removed:** Stage 2.5 semantic routing (Ollama-based) — reserved for future Claude Embeddings API integration
+- **Removed:** Stage 2.5 semantic routing — reserved for future Claude Embeddings API integration
 - **New:** `cast-agent-stats.sh` — agent performance profiling: hit rate, BLOCKED rate, avg turn count per agent
 - **New:** `cast-validate.sh` v1.9.0 — adds 4 new checks (8–11): route install script, stop-hook wiring, proposals schema, security post_chain
 - **Note:** semantic routing infrastructure remains in codebase for future development

@@ -1130,7 +1130,7 @@ The `## ACI Reference` sections address the most common dispatch mistakes: vague
 | Phase 6 | SQLite state foundation (`cast.db`). Background daemon (`castd`) with queue polling and offline mode. Agent memory evolution. PII redaction pipeline (Presidio). Audit hook. |
 | Phase 7 (2026-03-26) | `cast` CLI (9 subcommands: run, queue, memory, budget, audit, airgap, daemon, status, install-completions). macOS OS-level integration: status bar app, Alfred workflow, file watcher, Notification Center, cross-machine sync. Air-gap mode. 35 routes. 205 tests. |
 | Phase 9 (2026-03-27) | Self-learning routing: mismatch detection (rapid re-prompt signal → `mismatch_signals` table), memory-assisted routing pass (`cast-memory-router.py`, keyword overlap against `agent_memories`), `cast learn` subcommand (direct pattern install + `--from-session` mode), `cast-mismatch-analyzer.sh` (auto-proposals from mismatch data). DB migrated to v3. |
-| Phase 9.9 (2026-03-27) | Pre-release systems check: dead code removal, `routing_events` column fix, `cast doctor` diagnostic command, Ollama removal (Claude API only), privacy view wired to `audit.jsonl`, SSE auto-reconnect, error boundaries. 307 tests. v2.4. |
+| Phase 9.9 (2026-03-27) | Pre-release systems check: dead code removal, `routing_events` column fix, `cast doctor` diagnostic command, privacy view wired to `audit.jsonl`, SSE auto-reconnect, error boundaries. 307 tests. v2.4. |
 
 ---
 

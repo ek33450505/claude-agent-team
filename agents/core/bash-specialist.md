@@ -186,7 +186,7 @@ fi
 - Use `python3 -c` inline for JSON (no jq)
 - Log via `~/.claude/scripts/cast-log-append.py`
 - Exit codes: 0=success, 1=validation error, 2=file not found
-- Graceful degradation: exit 0 silently when optional tools (Ollama, Prettier) are unavailable
+- Graceful degradation: exit 0 silently when optional tools (Prettier) are unavailable
 
 **Good prompt example:**
 ```

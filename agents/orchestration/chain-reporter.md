@@ -1,5 +1,6 @@
 ---
 name: chain-reporter
+internal-only: true
 description: >
   Post-chain summary specialist. After a multi-agent workflow completes, produces
   a clean markdown summary of what each agent did, what was found, and what was committed.

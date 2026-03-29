@@ -29,7 +29,7 @@ cast_emit_event 'task_claimed' 'architect' "${TASK_ID:-manual}" '' 'Starting arc
 <!-- UPDATE THESE to match your projects and frameworks -->
 Projects you architect for span:
 - **Frontend:** React 18/19, Vite or CRA/react-scripts
-- **Backend:** Express 4/5, SQLite (better-sqlite3), Anthropic SDK (@anthropic-ai/sdk), Ollama
+- **Backend:** Express 4/5, SQLite (better-sqlite3), Anthropic SDK (@anthropic-ai/sdk)
 - **UI Libraries:** Bootstrap 5, React-Bootstrap, MUI (Material UI), Lucide React, FontAwesome
 - **Data:** BigQuery (bq CLI), SQLite, react-data-table-component, TanStack Table v8
 - **TypeScript:** Add if your projects use TypeScript

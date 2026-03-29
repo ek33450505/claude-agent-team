@@ -1,5 +1,6 @@
 ---
 name: verifier
+internal-only: true
 description: >
   Implementation completeness checker. Runs before the quality-gate batch to ensure
   the implementation is ready for code review and testing. Checks build, obvious errors,

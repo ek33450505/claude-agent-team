@@ -33,7 +33,7 @@ Research should always be grounded in the user's actual stack:
 - **UI:** Bootstrap 5, React-Bootstrap, MUI, Lucide React, FontAwesome
 - **Tables:** react-data-table-component, TanStack Table v8
 - **Testing:** Jest (CRA), Vitest (Vite), Supertest (Express)
-- **AI:** Anthropic SDK, Ollama for local inference
+- **AI:** Anthropic SDK
 
 ## Workflow
 

@@ -1,5 +1,6 @@
 ---
 name: router
+internal-only: true
 description: Classifies user prompts and recommends the best agent or slash command. Phase 1 uses pattern matching via route.sh; this agent provides Phase 2 LLM-quality routing when pattern confidence is low.
 model: claude-haiku-4-5-20251001
 color: gray

@@ -29,8 +29,7 @@ setup() {
   export CAST_AGENTS_DIR="$TEST_HOME/.claude/agents"
   # Point DB log script at repo copy so learned events are actually written
   export CAST_DB_LOG_PY="$DB_LOG_PY"
-  # Disable Ollama for tests
-  export OLLAMA_URL="http://localhost:19999"
+  # Disable embedding service for tests
 
   mkdir -p "$TEST_HOME/.claude/agents" \
            "$TEST_HOME/.claude/config" \
@@ -41,7 +40,6 @@ setup() {
   cat > "$TEST_HOME/.claude/config/cast-cli.json" <<'JSON'
 {
   "db_path": "~/.claude/cast-test.db",
-  "ollama_url": "http://localhost:19999",
   "redact_pii": false,
   "default_model": "auto",
   "log_dir": "~/.claude/logs"
@@ -67,7 +65,7 @@ AGENT
 teardown() {
   rm -rf "$TEST_HOME"
   export HOME="$ORIG_HOME"
-  unset CAST_DB_PATH TEST_DB TEST_HOME CAST_AGENTS_DIR CAST_DB_LOG_PY OLLAMA_URL
+  unset CAST_DB_PATH TEST_DB TEST_HOME CAST_AGENTS_DIR CAST_DB_LOG_PY
 }
 
 # ---------------------------------------------------------------------------

@@ -109,7 +109,7 @@
 ## AI / LLM (if applicable)
 <!-- - **Anthropic SDK** (`@anthropic-ai/sdk` or `anthropic` Python) -->
 <!-- - **OpenAI SDK** -->
-<!-- - **Ollama** for local inference -->
+<!-- - **Local LLM** for local inference -->
 <!-- - **LangChain** / LangGraph -->
 <!-- - **Vercel AI SDK** -->
 

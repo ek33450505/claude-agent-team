@@ -1,5 +1,6 @@
 ---
 name: auto-stager
+internal-only: true
 description: >
   Pre-commit staging specialist. Inspects modified files, intelligently stages
   the right ones (excludes .env, secrets, build artifacts), then hands off to

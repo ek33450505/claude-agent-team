@@ -21,15 +21,12 @@ setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(mktemp -d)"
   export CAST_DB_PATH="$HOME/.claude/cast-test.db"
-  export OLLAMA_URL="http://localhost:19999"
-
   mkdir -p "$HOME/.claude/agents" "$HOME/.claude/config" "$HOME/.claude/logs" "$HOME/.claude/cast"
   bash "$DB_INIT_SH" --db "$CAST_DB_PATH" >/dev/null 2>&1 || true
 
   cat > "$HOME/.claude/config/cast-cli.json" <<'JSON'
 {
   "db_path": "~/.claude/cast-test.db",
-  "ollama_url": "http://localhost:19999",
   "redact_pii": false,
   "default_model": "auto",
   "log_dir": "~/.claude/logs"
@@ -64,7 +61,7 @@ teardown() {
   rm -rf "$HOME"
   rm -f /tmp/cast-run-stub-$$.log
   export HOME="$ORIG_HOME"
-  unset CAST_DB_PATH OLLAMA_URL
+  unset CAST_DB_PATH
 }
 
 # ---------------------------------------------------------------------------

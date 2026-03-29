@@ -274,7 +274,7 @@ if [ -f "$EMBED_SCRIPT" ]; then
   if bash "$EMBED_SCRIPT" 2>/dev/null; then
     success "  Agent embeddings generated (semantic routing enabled)"
   else
-    warn "  Agent embeddings skipped — Ollama not running. Run scripts/cast-embed-agents.sh when Ollama is available to enable semantic routing."
+    warn "  Agent embeddings skipped — embedding service not available. Run scripts/cast-embed-agents.sh when available to enable semantic routing."
   fi
 fi
 

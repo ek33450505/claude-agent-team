@@ -21,8 +21,7 @@ setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(mktemp -d)"
   export CAST_DB_PATH="$HOME/.claude/cast-test.db"
-  # Disable Ollama for tests (no embedding server in CI)
-  export OLLAMA_URL="http://localhost:19999"
+  # Disable embedding service for tests
 
   mkdir -p "$HOME/.claude"
   # Initialize the DB schema
@@ -33,7 +32,6 @@ teardown() {
   rm -rf "$HOME"
   export HOME="$ORIG_HOME"
   unset CAST_DB_PATH
-  unset OLLAMA_URL
 }
 
 # ---------------------------------------------------------------------------

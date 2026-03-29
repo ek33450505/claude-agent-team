@@ -73,7 +73,6 @@ setup() {
   cat > "$HOME/.claude/config/cast-cli.json" <<'JSON'
 {
   "db_path": "~/.claude/cast-test.db",
-  "ollama_url": "http://localhost:19999",
   "redact_pii": false,
   "default_model": "auto",
   "log_dir": "~/.claude/logs"

@@ -27,8 +27,8 @@ setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(mktemp -d)"
   export CAST_DB_PATH="$HOME/.claude/cast-test.db"
-  # Disable Ollama for tests
-  export OLLAMA_URL="http://localhost:19999"
+  # Disable embedding service for tests
+  export EMBED_URL="http://localhost:19999"
 
   mkdir -p "$HOME/.claude/agents" "$HOME/.claude/config" "$HOME/.claude/logs"
 
@@ -39,7 +39,6 @@ setup() {
   cat > "$HOME/.claude/config/cast-cli.json" <<'JSON'
 {
   "db_path": "~/.claude/cast-test.db",
-  "ollama_url": "http://localhost:19999",
   "redact_pii": false,
   "default_model": "auto",
   "log_dir": "~/.claude/logs"
@@ -50,7 +49,7 @@ JSON
 teardown() {
   rm -rf "$HOME"
   export HOME="$ORIG_HOME"
-  unset CAST_DB_PATH OLLAMA_URL
+  unset CAST_DB_PATH EMBED_URL
 }
 
 # ---------------------------------------------------------------------------
