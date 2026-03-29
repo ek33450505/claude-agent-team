@@ -24,8 +24,8 @@ if [[ "$TOOL_NAME" == "Write" || "$TOOL_NAME" == "Edit" ]]; then
       while [[ "$SEARCH_DIR" != "/" && "$SEARCH_DIR" != "$HOME" ]]; do
         if [[ -f "$SEARCH_DIR/.prettierrc" || -f "$SEARCH_DIR/.prettierrc.json" || -f "$SEARCH_DIR/prettier.config.js" ]]; then
           # Use subshell to avoid mutating the script's working directory
-          if ! (cd "$SEARCH_DIR" && npx prettier --write "$REAL_PATH" 2>/tmp/cast-prettier-err.tmp 2>&1); then
-            echo "[CAST-WARN] prettier failed for $REAL_PATH — skipping format. $(head -3 /tmp/cast-prettier-err.tmp 2>/dev/null)" >&2
+          if ! (cd "$SEARCH_DIR" && npx prettier --write "$REAL_PATH" 2>"${TMPDIR:-/tmp}/cast-prettier-err.tmp"); then
+            echo "[CAST-WARN] prettier failed for $REAL_PATH — skipping format. $(head -3 "${TMPDIR:-/tmp}/cast-prettier-err.tmp" 2>/dev/null)" >&2
           fi
           break
         fi
@@ -60,7 +60,7 @@ DIRECTIVE
     # Subagent + code file: reinforcing signal (agent's own instructions are primary)
     if $IS_CODE_FILE; then
       # Check nesting depth — deeper nesting needs stronger warning
-      DEPTH_FILE="/tmp/cast-depth-${PPID}.depth"
+      DEPTH_FILE="${TMPDIR:-/tmp}/cast-depth-${PPID}.depth"
       SUBAGENT_DEPTH=1
       if [ -f "$DEPTH_FILE" ]; then
         SUBAGENT_DEPTH="$(cat "$DEPTH_FILE" 2>/dev/null || echo 1)"

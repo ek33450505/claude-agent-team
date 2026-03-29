@@ -119,7 +119,7 @@ python3 -c "
 import json, os, sys, time, subprocess
 
 filepath = os.environ.get('CAST_STATUS_FILE', '')
-blocked_count_prefix = os.environ.get('CAST_BLOCKED_COUNT_PREFIX', '/tmp/cast-blocked-default')
+blocked_count_prefix = os.environ.get('CAST_BLOCKED_COUNT_PREFIX', os.path.join(os.environ.get('TMPDIR', '/tmp'), 'cast-blocked-default'))
 
 try:
     with open(filepath) as f:

@@ -13,7 +13,7 @@
 #   cast-exec.sh --status <plan-file>
 #
 # Checkpoint: ~/.claude/cast/exec-state/{plan_id}.json
-# Agent logs:  /tmp/cast-exec-{plan_id}-batch-{id}-{agent}.log
+# Agent logs:  ${TMPDIR:-/tmp}/cast-exec-{plan_id}-batch-{id}-{agent}.log
 #
 # Exit codes:
 #   0 — all batches completed and verified
@@ -432,7 +432,7 @@ print(d['agents'][$idx].get('prompt', ''))
       wait "$pid" || exit_code=$?
       if [ "$exit_code" -ne 0 ]; then
         _error "  Agent '${agent_name}' exited with code ${exit_code}"
-        _error "  Log: /tmp/cast-exec-${PLAN_ID}-batch-${batch_id}-${agent_name}.log"
+        _error "  Log: ${TMPDIR:-/tmp}/cast-exec-${PLAN_ID}-batch-${batch_id}-${agent_name}.log"
         all_ok=0
       else
         _success "  Agent '${agent_name}' completed."
@@ -474,7 +474,7 @@ print(d['agents'][$idx].get('prompt', ''))
         _checkpoint_write_batch "$batch_id" "blocked" \
           "{\"reason\":\"agent ${agent_type} exited with code ${exit_code}\"}"
         _error "Batch ${batch_id} blocked: ${agent_type} exited with code ${exit_code}."
-        _error "  Log: /tmp/cast-exec-${PLAN_ID}-batch-${batch_id}-${agent_type}.log"
+        _error "  Log: ${TMPDIR:-/tmp}/cast-exec-${PLAN_ID}-batch-${batch_id}-${agent_type}.log"
         return 1
       fi
 

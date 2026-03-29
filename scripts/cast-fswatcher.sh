@@ -118,7 +118,7 @@ PYEOF"
 watch_root="${watch_root/#\~/$HOME}"
 
 # Write rules JSON to a temp file to avoid embedding complex JSON in shell variables
-RULES_TMPFILE="$(mktemp /tmp/cast-fswatcher-rules.XXXXXX.json)"
+RULES_TMPFILE="$(mktemp "${TMPDIR:-/tmp}/cast-fswatcher-rules.XXXXXX.json")"
 trap 'rm -f "$RULES_TMPFILE"; rm -f "$PIDFILE"' EXIT
 python3 - "$CONFIG_PATH" "$RULES_TMPFILE" <<'PYEOF' 2>/dev/null || echo "[]" > "$RULES_TMPFILE"
 import json, sys

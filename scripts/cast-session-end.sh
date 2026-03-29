@@ -46,19 +46,19 @@ fi
 # Project board refresh
 CAST_BOARD="${CAST_SCRIPTS_DIR}/cast-board.sh"
 if [ -f "$CAST_BOARD" ]; then
-  bash "$CAST_BOARD" > /tmp/cast-board-last.log 2>&1 &
+  bash "$CAST_BOARD" > "${TMPDIR:-/tmp}/cast-board-last.log" 2>&1 &
 fi
 
 # Agent memory auto-initialization
 CAST_AGENT_MEM_INIT="${CAST_SCRIPTS_DIR}/cast-agent-memory-init.sh"
 if [ -f "$CAST_AGENT_MEM_INIT" ]; then
-  bash "$CAST_AGENT_MEM_INIT" > /tmp/cast-agent-memory-init-last.log 2>&1 &
+  bash "$CAST_AGENT_MEM_INIT" > "${TMPDIR:-/tmp}/cast-agent-memory-init-last.log" 2>&1 &
 fi
 
 # Auto-escalation rule engine
 CAST_MEM_ESCALATION="${CAST_SCRIPTS_DIR}/cast-memory-escalation.sh"
 if [ -f "$CAST_MEM_ESCALATION" ]; then
-  bash "$CAST_MEM_ESCALATION" > /tmp/cast-memory-escalation-last.log 2>&1 &
+  bash "$CAST_MEM_ESCALATION" > "${TMPDIR:-/tmp}/cast-memory-escalation-last.log" 2>&1 &
 fi
 
 # === ARCHIVE STALE FILES ===
@@ -298,9 +298,9 @@ PYEOF
 fi
 
 # === TEMP FILE CLEANUP ===
-rm -f "/tmp/cast-depth-${PPID}.depth" 2>/dev/null || true
-rm -f /tmp/cast-blocked-${SESSION_ID}*.count 2>/dev/null || true
-rm -f "/tmp/cast-dispatch-${SESSION_ID}.log" 2>/dev/null || true
-rm -f "/tmp/cast-session-start-${SESSION_ID}.epoch" 2>/dev/null || true
+rm -f "${TMPDIR:-/tmp}/cast-depth-${PPID}.depth" 2>/dev/null || true
+rm -f "${TMPDIR:-/tmp}/cast-blocked-${SESSION_ID}"*.count 2>/dev/null || true
+rm -f "${TMPDIR:-/tmp}/cast-dispatch-${SESSION_ID}.log" 2>/dev/null || true
+rm -f "${TMPDIR:-/tmp}/cast-session-start-${SESSION_ID}.epoch" 2>/dev/null || true
 
 exit 0
