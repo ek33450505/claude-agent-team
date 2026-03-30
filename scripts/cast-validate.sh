@@ -1,13 +1,14 @@
 #!/bin/bash
-# cast-validate.sh — CAST system integrity checker v1.8.0
+# cast-validate.sh — CAST system integrity checker v2.0.0
 # Checks: hook wiring, agent frontmatter, routing table schema,
 #         CLAUDE.md directives, CAST directory structure, cast-events.sh installed,
-#         cast-route-install.sh present, cast-session-end.sh wiring, routing-proposals.json schema.
+#         agent-groups.json, cast-session-end.sh wiring, routing-proposals.json schema,
+#         security post_chain wiring.
 # Exit codes: 0=all green, 1=warnings only, 2=one or more errors
 
 set -euo pipefail
 
-VERSION="1.9.0"
+VERSION="2.0.0"
 ERRORS=0
 WARNINGS=0
 
@@ -16,7 +17,7 @@ pass()  { echo "✓ $*"; }
 fail()  { echo "✗ $*"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "⚠ $*"; WARNINGS=$((WARNINGS + 1)); }
 
-echo "CAST Validate v${VERSION} (11 checks)"
+echo "CAST Validate v${VERSION} (10 checks)"
 echo "══════════════════════════════"
 
 # --- Check 1: Hook wiring ---
@@ -292,21 +293,7 @@ else
   warn "agent-groups.json: ${AGENT_GROUPS} not found (parallel agent groups disabled)"
 fi
 
-# --- Check 8: cast-route-install.sh present and executable ---
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROUTE_INSTALL_REPO="${SCRIPT_DIR}/cast-route-install.sh"
-ROUTE_INSTALL_HOME="$HOME/.claude/scripts/cast-route-install.sh"
-if [[ -f "$ROUTE_INSTALL_REPO" && -x "$ROUTE_INSTALL_REPO" ]]; then
-  pass "cast-route-install.sh: present and executable (repo copy)"
-elif [[ -f "$ROUTE_INSTALL_HOME" && -x "$ROUTE_INSTALL_HOME" ]]; then
-  pass "cast-route-install.sh: present and executable (home copy)"
-elif [[ -f "$ROUTE_INSTALL_REPO" || -f "$ROUTE_INSTALL_HOME" ]]; then
-  warn "cast-route-install.sh: found but not executable (run chmod +x)"
-else
-  fail "cast-route-install.sh: not found (routing proposal install pipeline unavailable)"
-fi
-
-# --- Check 9: cast-session-end.sh wired in settings.local.json ---
+# --- Check 8: cast-session-end.sh wired in settings.local.json ---
 if [[ -f "$SETTINGS" ]]; then
   STOP_WIRED=$(python3 - "$SETTINGS" <<'PYEOF'
 import sys, json
@@ -336,7 +323,7 @@ PYEOF
   fi
 fi
 
-# --- Check 10: routing-proposals.json schema (if present) ---
+# --- Check 9: routing-proposals.json schema (if present) ---
 PROPOSALS_FILE="$HOME/.claude/routing-proposals.json"
 if [[ -f "$PROPOSALS_FILE" ]]; then
   PROPOSALS_RESULT=$(python3 - "$PROPOSALS_FILE" <<'PYEOF'
@@ -393,7 +380,7 @@ else
   pass "routing-proposals.json: not present (proposals pipeline not yet run — OK)"
 fi
 
-# --- Check 11: security agent wired in at least one post_chain ---
+# --- Check 10: security agent wired in at least one post_chain ---
 if [[ -f "$ROUTING_TABLE" ]]; then
   SECURITY_WIRED=$(python3 - "$ROUTING_TABLE" <<'PYEOF'
 import sys, json

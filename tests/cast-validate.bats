@@ -55,7 +55,7 @@ build_clean_install() {
       {
         "matcher": "",
         "hooks": [
-          {"type": "command", "command": "bash ~/.claude/scripts/stop-hook.sh"}
+          {"type": "command", "command": "bash ~/.claude/scripts/cast-session-end.sh"}
         ]
       }
     ]

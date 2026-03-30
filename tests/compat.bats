@@ -12,6 +12,7 @@ setup() {
 
 # 1. Claude CLI version check
 @test "claude binary is present and returns version" {
+  command -v claude &>/dev/null || skip "claude CLI not available"
   run claude --version
   [ "$status" -eq 0 ]
   [[ "$output" =~ ^[0-9]+\.[0-9]+ ]]
@@ -19,6 +20,7 @@ setup() {
 
 # 2. Required flags still exist — --print
 @test "claude --print flag is accepted" {
+  command -v claude &>/dev/null || skip "claude CLI not available"
   run claude --help
   [ "$status" -eq 0 ]
   [[ "$output" =~ "--print" ]]
@@ -26,6 +28,7 @@ setup() {
 
 # 2b. Required flags still exist — --dangerously-skip-permissions
 @test "claude --dangerously-skip-permissions flag is accepted" {
+  command -v claude &>/dev/null || skip "claude CLI not available"
   run claude --help
   [ "$status" -eq 0 ]
   [[ "$output" =~ "dangerously-skip-permissions" ]]
