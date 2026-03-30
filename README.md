@@ -12,13 +12,23 @@ A local-first agent infrastructure layer built on Claude Code. 15 specialist age
 
 ## Quick Start
 
+**Option 1 — Homebrew (recommended)**
+
+```bash
+brew tap ek33450505/cast
+brew install cast
+bash $(brew --prefix cast)/libexec/install.sh
+```
+
+**Option 2 — Git clone**
+
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team
 cd claude-agent-team
 bash install.sh
 ```
 
-`install.sh` copies agents to `~/.claude/agents/`, installs hooks into `~/.claude/settings.json`, initializes `cast.db`, and optionally sets up cron tasks.
+`install.sh` copies agents to `~/.claude/agents/`, installs hooks into `~/.claude/settings.json`, initializes `cast.db`, and symlinks the `cast` CLI to `~/.local/bin/cast`.
 
 ---
 
