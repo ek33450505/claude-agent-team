@@ -40,6 +40,8 @@ CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
 TURN_CEILING_DIR="${CAST_DIR}/turn-ceiling-events"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
+STOP_ERROR_LOG="${HOME}/.claude/logs/subagent-stop-errors.log"
+mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
@@ -73,6 +75,7 @@ result = {
     "output_preview": (data.get("output") or "")[:200],
     "has_turn_ceiling": "[TURN CEILING]" in (data.get("output") or ""),
     "output_full": data.get("output") or "",
+    "agent_id": data.get("agent_id") or data.get("subagent_id") or "",
 }
 print(json.dumps(result))
 PYEOF
@@ -91,6 +94,8 @@ AGENT_NAME="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP
 SESSION_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('session_id',''))" 2>/dev/null || echo "")"
 STOP_REASON="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('stop_reason',''))" 2>/dev/null || echo "")"
 HAS_TURN_CEILING="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print('1' if d.get('has_turn_ceiling') else '0')" 2>/dev/null || echo "0")"
+AGENT_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('agent_id',''))" 2>/dev/null || echo "")"
+export CAST_STOP_AGENT_ID="$AGENT_ID"
 
 # Determine event type: blocked if [TURN CEILING] or stop_reason indicates error
 EVENT_TYPE="task_completed"
@@ -141,10 +146,10 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
     DB_STATUS="BLOCKED"
   fi
   export CAST_STOP_DB_STATUS="$DB_STATUS"
-  python3 - <<'PYEOF' 2>/dev/null || true
+  python3 - <<'PYEOF' 2>>"$STOP_ERROR_LOG" || true
 import subprocess, os
 
-db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast/cast.db'))
+db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
 agent = os.environ.get('CAST_STOP_AGENT', '')
 sess  = os.environ.get('CAST_STOP_SESSION', '')
 ts    = os.environ.get('CAST_STOP_TS_ISO', '')
@@ -153,13 +158,20 @@ st    = os.environ.get('CAST_STOP_DB_STATUS', 'DONE')
 if not agent or not db:
     raise SystemExit(0)
 
-# Update the most recent running row for this agent in this session.
-# If no running row exists, INSERT a minimal completed row.
-update_sql = (
-    f"UPDATE agent_runs SET status='{st}', ended_at='{ts}' "
-    f"WHERE status='running' AND agent='{agent}' AND session_id='{sess}' "
-    f"AND id=(SELECT MAX(id) FROM agent_runs WHERE status='running' AND agent='{agent}' AND session_id='{sess}');"
-)
+# Update the running row for this agent. Use agent_id for precise matching when
+# available; fall back to MAX(id) heuristic when agent_id is absent.
+agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
+if agent_id:
+    update_sql = (
+        f"UPDATE agent_runs SET status='{st}', ended_at='{ts}' "
+        f"WHERE status='running' AND agent_id='{agent_id}';"
+    )
+else:
+    update_sql = (
+        f"UPDATE agent_runs SET status='{st}', ended_at='{ts}' "
+        f"WHERE status='running' AND agent='{agent}' AND session_id='{sess}' "
+        f"AND id=(SELECT MAX(id) FROM agent_runs WHERE status='running' AND agent='{agent}' AND session_id='{sess}');"
+    )
 subprocess.run(['sqlite3', db, update_sql], capture_output=True, timeout=5)
 PYEOF
 fi
@@ -194,6 +206,34 @@ if filepath:
     with open(filepath, 'w') as f:
         json.dump(checkpoint, f, indent=2)
 PYEOF
+fi
+
+# ── Step 4: Chain dispatch (pipeline automation) ──────────────────────────────
+# When an agent completes DONE, check chain-map.json for defined successors
+# and enqueue them via cast-queue-add.sh.
+CHAIN_MAP="${HOME}/.claude/config/chain-map.json"
+QUEUE_ADD="${HOME}/.claude/scripts/cast-queue-add.sh"
+
+if [ "$EVENT_TYPE" = "task_completed" ] && [ -f "$CHAIN_MAP" ] && [ -f "$QUEUE_ADD" ]; then
+  export CAST_CHAIN_MAP="$CHAIN_MAP"
+  SUCCESSORS="$(python3 - <<'PYEOF' 2>/dev/null
+import json, os
+chain_map_path = os.environ.get('CAST_CHAIN_MAP', '')
+agent = os.environ.get('CAST_STOP_AGENT', '')
+try:
+    with open(chain_map_path) as f:
+        chain = json.load(f)
+    successors = chain.get(agent, [])
+    print('\n'.join(successors))
+except Exception:
+    pass
+PYEOF
+  )"
+  if [ -n "$SUCCESSORS" ]; then
+    while IFS= read -r successor; do
+      [ -n "$successor" ] && bash "$QUEUE_ADD" "$successor" "$SESSION_ID" 2>/dev/null || true
+    done <<< "$SUCCESSORS"
+  fi
 fi
 
 exit 0

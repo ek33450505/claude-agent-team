@@ -139,11 +139,12 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
     },
     {
       "id": 3,
-      "description": "Code quality review + test run",
+      "description": "Code quality review + test run + security",
       "parallel": true,
       "agents": [
         {"subagent_type": "code-reviewer", "prompt": "Code quality review for <feature>. Check: correctness, edge cases, security, naming, error handling, and conventions. The spec compliance review (Batch 2) already confirmed the right things were built — focus only on HOW they were built."},
-        {"subagent_type": "test-runner", "prompt": "Run the full test suite for the <feature> changes. Report pass/fail with exit code."}
+        {"subagent_type": "test-runner", "prompt": "Run the full test suite for the <feature> changes. Report pass/fail with exit code."},
+        {"subagent_type": "security", "prompt": "Security review for <feature>. Check: injection risks, auth bypass, secrets in code, unsafe shell interpolation, and path traversal. The spec compliance review (Batch 2) already confirmed correct scope — focus only on security properties of the implementation."}
       ]
     },
     {
@@ -152,6 +153,14 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
       "parallel": false,
       "agents": [
         {"subagent_type": "commit", "prompt": "Create a semantic commit for the completed <feature> work."}
+      ]
+    },
+    {
+      "id": 5,
+      "description": "Push",
+      "parallel": false,
+      "agents": [
+        {"subagent_type": "push", "prompt": "Push the committed <feature> changes to origin. Verify the push succeeds and report the remote ref."}
       ]
     }
   ]
@@ -169,6 +178,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - Include security agent if auth/API/input handling is touched
 - Batch 2 (spec compliance) MUST always run sequentially BEFORE Batch 3 (code quality) — never merge these into a parallel batch
 - Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
+- Include push as Batch 5 in every plan manifest
 
 **Optional agent-level metadata for orchestrator conflict detection:**
 - `"owns_files": ["absolute/path/to/file1.js", ...]` — files this agent will create or modify. Allows orchestrator to detect parallel agents touching the same file.

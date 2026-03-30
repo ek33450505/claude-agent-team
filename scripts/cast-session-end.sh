@@ -165,6 +165,8 @@ DB="${CLAUDE_DIR}/cast.db"
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB" ]; then
   sqlite3 "$DB" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
   sqlite3 "$DB" "DELETE FROM sessions WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
+  # Convert ghost rows (stuck 'running') older than 2 hours to 'failed'
+  sqlite3 "$DB" "UPDATE agent_runs SET status='failed' WHERE status='running' AND started_at < datetime('now', '-2 hours');" 2>/dev/null || true
 fi
 
 # === AGENT MEMORY DB SYNC ===

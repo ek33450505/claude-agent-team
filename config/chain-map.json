@@ -1,0 +1,9 @@
+{
+  "_comment": "Maps agent completions to successor agents. Key = agent name. Value = array of agent subagent_types to dispatch when status=DONE.",
+  "researcher": ["planner"],
+  "planner": [],
+  "code-writer": ["code-reviewer"],
+  "code-reviewer": [],
+  "test-writer": ["test-runner"],
+  "security": []
+}

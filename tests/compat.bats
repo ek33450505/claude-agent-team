@@ -54,10 +54,8 @@ setup() {
     skip "pre-tool-guard.sh not found at $guard_script"
   fi
   # Script should not exit 127 (command not found) on minimal JSON input
-  echo '{"tool_name":"Write","tool_input":{}}' | \
-    bash "$guard_script" > /dev/null 2>&1
-  local exit_code=$?
-  [ "$exit_code" -ne 127 ]
+  run bash "$guard_script" <<< '{"tool_name":"Write","tool_input":{}}'
+  [ "$status" -ne 127 ]
 }
 
 # 5. Version change detection — informational, always passes, warns if changed

@@ -136,6 +136,15 @@ suggest next steps based on the data.
 
 Truncate all Bash command output to the last 50 lines using `| tail -50` unless the result is in the final lines. Never let raw command output fill your context.
 
+## Auto-Dispatch Rules
+
+After completing research, apply these dispatch rules before closing:
+
+- If the research output recommends code changes, new files, or implementation work:
+  emit `[CAST-DISPATCH: planner]` on its own line in your response.
+  Pass the full research findings as context in the dispatch prompt so the planner has the complete spec.
+- If the research is purely informational (no code changes needed): do NOT emit the dispatch directive.
+
 ## Context Limit Recovery
 If you are approaching your turn limit or context limit and cannot complete the full task:
 1. Complete the current logical unit of work
