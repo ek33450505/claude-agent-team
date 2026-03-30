@@ -111,6 +111,7 @@ Subcommands:
   ${C_BOLD}daemon${C_RESET}    status|start|stop|...   Control the castd background daemon
   ${C_BOLD}status${C_RESET}                            Terminal health dashboard
   ${C_BOLD}learn${C_RESET}     "<pattern>" <agent>     Install a learned route into routing-table.json
+  ${C_BOLD}explain${C_RESET}   [--lines N] [--file P]  Summarize the last Claude Code session
   ${C_BOLD}doctor${C_RESET}                            Run system health check (traffic-light report)
   ${C_BOLD}install-completions${C_RESET}               Install shell tab completions
 
@@ -2276,6 +2277,48 @@ USAGE
   fi
 }
 
+# ── Subcommand: explain ──────────────────────────────────────────────────────
+_cmd_explain() {
+  local lines=200
+  local session_file=""
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --lines) lines="${2:-200}"; shift 2 ;;
+      --file)  session_file="${2:-}"; shift 2 ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast explain [--lines N] [--file PATH]
+
+Summarizes the last Claude Code session using Haiku.
+
+  --lines N     Lines of JSONL to sample (default: 200)
+  --file PATH   Explicit JSONL file path (default: most recent in ~/.claude/projects/)
+
+Output: markdown summary of agents dispatched, decisions made, tool calls, cost.
+USAGE
+        return 0 ;;
+      *) _error "Unknown flag: $1"; return 1 ;;
+    esac
+  done
+
+  if [ -z "$session_file" ]; then
+    session_file="$(find "${HOME}/.claude/projects" -name "*.jsonl" -type f 2>/dev/null \
+      | xargs ls -t 2>/dev/null | head -1)"
+  fi
+
+  if [ -z "$session_file" ] || [ ! -f "$session_file" ]; then
+    _error "No session JSONL found under ~/.claude/projects/"
+    return 1
+  fi
+
+  _info "Summarizing: $session_file"
+
+  local prompt="You are summarizing a Claude Code session log (JSONL format). For each line that is a tool_use or tool_result event, extract: which agents were dispatched (look for subagent_type or agent fields), what decisions were made, how many tool calls occurred, and any cost data. Output a concise markdown summary with sections: ## Agents Dispatched, ## Key Decisions, ## Stats. Be brief."
+
+  tail -n "$lines" "$session_file" | claude -p "$prompt"
+}
+
 # ── Main dispatch ─────────────────────────────────────────────────────────────
 if [ "$#" -gt 0 ]; then
   CAST_ARGS=("$@")
@@ -2311,6 +2354,7 @@ case "$SUBCOMMAND" in
   status)               _cmd_status "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
   learn)                _cmd_learn "$@" ;;
+  explain)              _cmd_explain "$@" ;;
   profile)              _cmd_profile "$@" ;;
   route)
     shift

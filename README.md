@@ -1,12 +1,13 @@
 # CAST — Claude Agent Specialist Team
 
-![Version](https://img.shields.io/badge/version-3.0-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-3.0.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-16-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-255%20total-brightgreen)<!-- CAST_TEST_COUNT -->
+![CI](https://github.com/ek33450505/claude-agent-team/actions/workflows/cast-ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-A local-first agent infrastructure layer built on Claude Code. 15 specialist agents, model-driven dispatch, mandatory code review, and hard-blocked git operations — all enforced by 4 shell hooks. Zero cloud lock-in. Everything lives in `~/.claude/`.
+A local-first agent infrastructure layer built on Claude Code. 16 specialist agents, model-driven dispatch, mandatory code review, and hard-blocked git operations — all enforced by 4 shell hooks. Zero cloud lock-in. Everything lives in `~/.claude/`.
 
 ---
 
@@ -53,7 +54,7 @@ User prompt
 
 ---
 
-## The 15 Agents
+## The 16 Agents
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
@@ -72,6 +73,7 @@ User prompt
 | commit | haiku | Stages and commits with semantic messages |
 | push | haiku | Pushes to remote with safety checks |
 | test-runner | haiku | Runs test suites (jest, vitest, bats) |
+| test-writer | haiku | Writes test suites for existing code |
 
 Agent definitions live in `~/.claude/agents/` as plain markdown files.
 
@@ -81,11 +83,11 @@ Agent definitions live in `~/.claude/agents/` as plain markdown files.
 
 CAST v3 has no routing table. No regex. No `route.sh`.
 
-`CLAUDE.md` contains a 15-row dispatch table. When a prompt arrives, the model reads it and decides which agent to call via the Agent tool. This follows Anthropic's "Building Effective Agents" principle: let the model decide.
+`CLAUDE.md` contains a 16-row dispatch table. When a prompt arrives, the model reads it and decides which agent to call via the Agent tool. This follows Anthropic's "Building Effective Agents" principle: let the model decide.
 
 **CLAUDE.md structure (47 lines):**
 - Core Rules (6 rules)
-- Dispatch Table (15 rows mapping situation to agent)
+- Dispatch Table (16 rows mapping situation to agent)
 - Post-Chain protocol (what runs after each agent)
 - Agent Models (sonnet vs haiku split)
 - Config paths

@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## v3.0.0 — Public Release (2026-03-30)
+
+### What's in CAST v3.0
+
+This is the first versioned public release of CAST. It represents ~4 weeks of iterative
+development from a personal workflow tool into a distributable agent infrastructure layer.
+
+**Core system:**
+- 16 specialist agents (sonnet + haiku tier split) with mandatory dispatch routing
+- 4 shell hooks: PreToolUse guard, PostToolUse cost tracker, Stop session-end archiver, PostCompact memory sync
+- `cast` CLI: `run`, `queue`, `memory`, `budget`, `audit`, `airgap`, `daemon`, `status`, `doctor`, `exec`, `learn`, `explain`
+- `cast.db` SQLite schema: sessions, agent_runs, budgets, agent_memories (v5, with agent_id correlation)
+
+**Observability:**
+- cast.db panels: session timeline, agent dispatch heatmap, cost tracker, memory explorer
+- `cast weekly` report: cost summary, top agents, BLOCKED rate
+- Event bus: `cast_emit_event` / `cast-events.sh` for cross-agent visibility
+
+**Testing:**
+- 232 BATS tests across 20 test files
+- GitHub Actions CI running full suite on push + PR
+
+**Dashboard** (`claude-code-dashboard`):
+- React 19 + Vite + TypeScript
+- 7 cast.db panels (sessions, agent runs, budgets, memories, events)
+- 188+ Vitest tests passing
+
+---
+
 - 2026-03-28: Add cast-archive.sh — automated Stop hook for ~/.claude/ file archiving and cast.db pruning
 
 ## Phase 5 (2026-03-22 to 2026-03-26)

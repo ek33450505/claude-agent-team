@@ -1,0 +1,41 @@
+name: CAST CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          submodules: recursive
+
+      - name: Run BATS suite (excluding env-dependent tests)
+        # Excluded files and why:
+        #   tests/agent-status-reader.bats — depends on live castd daemon state
+        #   tests/cast_exec.bats            — depends on running castd / external process
+        #   tests/compat_suite.bats         — contains airgap_state test requiring live airgap state
+        # These are excluded entirely rather than run with || true to keep CI signal clean.
+        run: |
+          tests/bats/bin/bats \
+            tests/cast-events.bats \
+            tests/post-tool-hook.bats \
+            tests/cast-agent-stats.bats \
+            tests/cast-mismatch.bats \
+            tests/upgrade_check.bats \
+            tests/cast_run.bats \
+            tests/cast-memory.bats \
+            tests/queue_status.bats \
+            tests/cast-validate.bats \
+            tests/cast-cli.bats \
+            tests/compat.bats \
+            tests/cast-security-guard.bats \
+            tests/install.bats \
+            tests/cast-weekly-report.bats \
+            tests/cast-post-compact-hook.bats \
+            tests/cast-task-created-hook.bats \
+            tests/cast-instructions-loaded-hook.bats
