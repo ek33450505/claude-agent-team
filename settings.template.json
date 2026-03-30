@@ -149,10 +149,6 @@
       {
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "Before finishing: (1) Were code changes made without dispatching code-reviewer? (2) Were commits made without the commit agent? (3) Are there unpushed commits? Check with: git log @{u}..HEAD --oneline 2>/dev/null. If yes to any, dispatch the appropriate agent (code-reviewer, commit, or push) now."
-          },
-          {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-session-end.sh",
             "timeout": 5
