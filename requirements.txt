@@ -1,0 +1,8 @@
+# Python dependencies for CAST Python scripts
+#
+# All scripts (cast-db-log.py, cast-log-append.py, cast-memory-router.py) use only Python stdlib.
+# Only cast-redact.py has optional third-party dependencies for Presidio-based PII redaction.
+
+# Optional: PII redaction (cast-redact.py) — install only if presidio anonymization is needed
+# presidio-analyzer
+# presidio-anonymizer

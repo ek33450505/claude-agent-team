@@ -160,6 +160,30 @@
         ],
         "description": "CAST safety net — catches missed reviews/commits before session ends; auto-dispatches chain-reporter after multi-batch orchestrator sessions"
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-subagent-stop-hook.sh",
+            "timeout": 5
+          }
+        ],
+        "description": "CAST subagent stop logger — fires when a subagent completes"
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-stop-failure-hook.sh",
+            "timeout": 5
+          }
+        ],
+        "description": "CAST stop failure handler — fires when a session stop fails"
+      }
     ]
   },
   "teammateMode": "in-process",

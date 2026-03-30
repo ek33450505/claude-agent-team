@@ -170,16 +170,6 @@ if [ -f "$DB_INIT_SCRIPT" ]; then
   fi
 fi
 
-# --- Semantic routing: generate agent embeddings ---
-EMBED_SCRIPT="$CLAUDE_DIR/scripts/cast-embed-agents.sh"
-if [ -f "$EMBED_SCRIPT" ]; then
-  if bash "$EMBED_SCRIPT" 2>/dev/null; then
-    success "  Agent embeddings generated (semantic routing enabled)"
-  else
-    warn "  Agent embeddings skipped — embedding service not available. Run scripts/cast-embed-agents.sh when available to enable semantic routing."
-  fi
-fi
-
 # --- Install config/ (routing table and other configs) ---
 if [ -d "$SCRIPT_DIR/config" ]; then
   info "Installing config files..."
