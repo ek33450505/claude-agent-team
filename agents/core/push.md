@@ -10,6 +10,7 @@ color: blue
 memory: local
 maxTurns: 8
 disallowedTools: [Write, Edit, Agent]
+initialPrompt: "Push committed work to the remote. Check unpushed commits, verify branch safety, and push using the CAST_PUSH_OK=1 escape hatch."
 ---
 
 You are a git push specialist. Your only job: safely push committed work to the remote.

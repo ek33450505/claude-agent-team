@@ -313,7 +313,7 @@ import os, sys, subprocess
 prompt = os.environ.get('CAST_EXEC_PROMPT', '')
 log_file = sys.argv[1]
 agent = sys.argv[2]
-cmd = ['claude', '--agent', agent, '--print', '--dangerously-skip-permissions', '-p', prompt]
+cmd = ['claude', '--agent', agent, '--print', '--bare', '--dangerously-skip-permissions', '-p', prompt]
 with open(log_file, 'w') as f:
     result = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
 sys.exit(result.returncode)
@@ -337,7 +337,7 @@ import os, sys, subprocess
 prompt = os.environ.get('CAST_EXEC_PROMPT', '')
 log_file = sys.argv[1]
 agent = sys.argv[2]
-cmd = ['claude', '--agent', agent, '--print', '--dangerously-skip-permissions', '-p', prompt]
+cmd = ['claude', '--agent', agent, '--print', '--bare', '--dangerously-skip-permissions', '-p', prompt]
 with open(log_file, 'w') as f:
     result = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
 sys.exit(result.returncode)
