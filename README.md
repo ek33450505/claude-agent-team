@@ -6,7 +6,7 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-A local-first agent infrastructure layer built on Claude Code. 15 specialist agents, model-driven dispatch, mandatory code review, and hard-blocked git operations — all enforced by 4 shell hooks. Zero cloud lock-in. Everything lives in `~/.claude/`.
+A local-first agent infrastructure layer built on Claude Code. 16 specialist agents, model-driven dispatch, mandatory code review, and hard-blocked git operations — all enforced by 4 shell hooks. Zero cloud lock-in. Everything lives in `~/.claude/`.
 
 ---
 
@@ -28,7 +28,7 @@ cd claude-agent-team
 bash install.sh
 ```
 
-`install.sh` copies agents to `~/.claude/agents/`, installs hooks into `~/.claude/settings.json`, initializes `cast.db`, and symlinks the `cast` CLI to `~/.local/bin/cast`.
+`install.sh` copies agents to `~/.claude/agents/`, copies a settings template that requires manual merge into `~/.claude/settings.json`, initializes `cast.db`, and symlinks the `cast` CLI to `~/.local/bin/cast`.
 
 ---
 
@@ -38,7 +38,7 @@ bash install.sh
 User prompt
      |
      v
-[CLAUDE.md dispatch table]   <-- model reads 15 rows, picks agent
+[CLAUDE.md dispatch table]   <-- model reads 16 rows, picks agent
      |
      v
 [PreToolUse hook]            <-- pre-tool-guard.sh: blocks raw git commit/push
@@ -63,7 +63,7 @@ User prompt
 
 ---
 
-## The 15 Agents
+## The 16 Agents
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
@@ -82,6 +82,7 @@ User prompt
 | commit | haiku | Stages and commits with semantic messages |
 | push | haiku | Pushes to remote with safety checks |
 | test-runner | haiku | Runs test suites (jest, vitest, bats) |
+| test-writer | sonnet | Writes unit and integration tests |
 
 Agent definitions live in `~/.claude/agents/` as plain markdown files.
 
@@ -91,11 +92,11 @@ Agent definitions live in `~/.claude/agents/` as plain markdown files.
 
 CAST v3 has no routing table. No regex. No `route.sh`.
 
-`CLAUDE.md` contains a 15-row dispatch table. When a prompt arrives, the model reads it and decides which agent to call via the Agent tool. This follows Anthropic's "Building Effective Agents" principle: let the model decide.
+`CLAUDE.md` contains a 16-row dispatch table. When a prompt arrives, the model reads it and decides which agent to call via the Agent tool. This follows Anthropic's "Building Effective Agents" principle: let the model decide.
 
 **CLAUDE.md structure (47 lines):**
 - Core Rules (6 rules)
-- Dispatch Table (15 rows mapping situation to agent)
+- Dispatch Table (16 rows mapping situation to agent)
 - Post-Chain protocol (what runs after each agent)
 - Agent Models (sonnet vs haiku split)
 - Config paths
@@ -251,14 +252,14 @@ All scripts live in `scripts/`.
 
 ## Test Suite
 
-224 BATS tests across 15 files. 0 failures.
+255 BATS tests across 20 files. 0 failures.
 
 ```bash
 # Run all tests
 bats tests/
 
 # Run a single test file
-bats tests/pre-tool-guard.bats
+bats tests/post-tool-hook.bats
 ```
 
 Tests cover: hook scripts, guard logic, event emission, stats generation, DB init, cron setup, and agent-status reader.

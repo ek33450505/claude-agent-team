@@ -2,7 +2,7 @@
 # cast-validate.sh — CAST system integrity checker v1.8.0
 # Checks: hook wiring, agent frontmatter, routing table schema,
 #         CLAUDE.md directives, CAST directory structure, cast-events.sh installed,
-#         cast-route-install.sh present, stop-hook.sh wiring, routing-proposals.json schema.
+#         cast-route-install.sh present, cast-session-end.sh wiring, routing-proposals.json schema.
 # Exit codes: 0=all green, 1=warnings only, 2=one or more errors
 
 set -euo pipefail
@@ -45,7 +45,7 @@ for event_hooks in hooks.values():
 
 all_commands = " ".join(commands)
 missing = []
-for script in ["route.sh", "pre-tool-guard.sh", "post-tool-hook.sh"]:
+for script in ["pre-tool-guard.sh", "post-tool-hook.sh"]:
     if script not in all_commands:
         missing.append(script)
 
@@ -56,7 +56,7 @@ else:
 PYEOF
 )
   if [[ "$WIRING" == OK ]]; then
-    pass "Hook wiring: route.sh, pre-tool-guard.sh, post-tool-hook.sh wired"
+    pass "Hook wiring: pre-tool-guard.sh, post-tool-hook.sh wired"
   elif [[ "$WIRING" == MISSING:* ]]; then
     MISSING_SCRIPTS="${WIRING#MISSING:}"
     fail "Hook wiring: missing scripts not wired — ${MISSING_SCRIPTS}"
@@ -306,7 +306,7 @@ else
   fail "cast-route-install.sh: not found (routing proposal install pipeline unavailable)"
 fi
 
-# --- Check 9: stop-hook.sh wired in settings.local.json ---
+# --- Check 9: cast-session-end.sh wired in settings.local.json ---
 if [[ -f "$SETTINGS" ]]; then
   STOP_WIRED=$(python3 - "$SETTINGS" <<'PYEOF'
 import sys, json
@@ -324,15 +324,15 @@ all_cmds = " ".join(
     for entry in event_hooks
     for h in entry.get("hooks", [])
 )
-print("OK" if "stop-hook.sh" in all_cmds else "MISSING")
+print("OK" if "cast-session-end.sh" in all_cmds else "MISSING")
 PYEOF
 )
   if [[ "$STOP_WIRED" == "OK" ]]; then
-    pass "stop-hook.sh: wired in settings.local.json"
+    pass "cast-session-end.sh: wired in settings.local.json"
   elif [[ "$STOP_WIRED" == "MISSING" ]]; then
-    warn "stop-hook.sh: not wired (chain-reporter auto-dispatch on session end unavailable)"
+    warn "cast-session-end.sh: not wired (chain-reporter auto-dispatch on session end unavailable)"
   else
-    warn "stop-hook.sh: could not verify wiring"
+    warn "cast-session-end.sh: could not verify wiring"
   fi
 fi
 

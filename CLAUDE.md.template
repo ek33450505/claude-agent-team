@@ -40,25 +40,14 @@ agent. The rule: if it modifies executable behavior, it is NOT inline. No except
 
 | Agent | Model | Agent | Model |
 |---|---|---|---|
-| `commit` | haiku | `debugger` | sonnet |
-| `code-reviewer` | haiku | `test-writer` | sonnet |
-| `build-error-resolver` | haiku | `planner` | sonnet |
-| `refactor-cleaner` | haiku | `security` | sonnet |
-| `doc-updater` | haiku | `architect` | sonnet |
-| `auto-stager` | haiku | `researcher` | sonnet |
-| `db-reader` | haiku | `e2e-runner` | sonnet |
-| `report-writer` | haiku | `qa-reviewer` | sonnet |
-| `meeting-notes` | haiku | `readme-writer` | sonnet |
-| `chain-reporter` | haiku | `data-scientist` | sonnet |
-| `verifier` | haiku | `morning-briefing` | sonnet |
-| `push` | haiku | `bash-specialist` | sonnet |
-| `test-runner` | haiku | `router` | haiku |
-| `seo-content` | haiku | `tdd-guide` | sonnet |
-| `linter` | haiku | `orchestrator` | sonnet |
-| `devops` | sonnet | `performance` | sonnet |
-| `browser` | sonnet | `presenter` | sonnet |
-| `email-manager` | sonnet | `refactor-cleaner` | haiku |
-| `code-writer` | sonnet | `bash-specialist` | sonnet |
+| `commit` | haiku | `code-reviewer` | haiku |
+| `test-runner` | haiku | `push` | haiku |
+| `code-writer` | sonnet | `debugger` | sonnet |
+| `test-writer` | sonnet | `planner` | sonnet |
+| `security` | sonnet | `researcher` | sonnet |
+| `orchestrator` | sonnet | `bash-specialist` | sonnet |
+| `devops` | sonnet | `docs` | sonnet |
+| `merge` | sonnet | `morning-briefing` | sonnet |
 
 Agent definitions: `~/.claude/agents/`
 
@@ -66,7 +55,7 @@ Agent definitions: `~/.claude/agents/`
 
 ## Slash Commands (Manual Overrides)
 
-`/plan` `/debug` `/test` `/review` `/commit` `/secure` `/data` `/query` `/architect` `/tdd` `/e2e` `/build-fix` `/refactor` `/docs` `/readme` `/research` `/report` `/meeting` `/email` `/morning` `/browser` `/qa` `/present` `/stage` `/verify`
+`/bash` `/cast` `/commit` `/debug` `/devops` `/docs` `/doctor` `/merge` `/morning` `/orchestrate` `/plan` `/push` `/research` `/review` `/secure` `/test`
 
 ---
 

@@ -60,18 +60,6 @@
         "description": "CAST security advisory — flags sensitive file edits (Write/Edit tools)"
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/route.sh",
-            "timeout": 5
-          }
-        ],
-        "description": "CAST routing — matches prompts and injects [CAST-DISPATCH] directives"
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|Agent|Bash",
@@ -166,7 +154,7 @@
           },
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/stop-hook.sh",
+            "command": "bash ~/.claude/scripts/cast-session-end.sh",
             "timeout": 5
           }
         ],
