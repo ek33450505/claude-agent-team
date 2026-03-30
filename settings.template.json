@@ -112,9 +112,14 @@
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-post-compact-hook.sh",
             "timeout": 5
+          },
+          {
+            "type": "http",
+            "url": "http://localhost:3001/api/hook-events",
+            "timeout": 3
           }
         ],
-        "description": "CAST compaction logger — records compact events to cast/events/ and compact-log.jsonl"
+        "description": "CAST compaction logger — records to cast/events/ and pushes to dashboard SSE"
       },
       {
         "matcher": "auto",
