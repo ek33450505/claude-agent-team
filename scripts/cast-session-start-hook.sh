@@ -65,4 +65,35 @@ except Exception:
     pass
 PYEOF
 
+CAST_INPUT="$INPUT" python3 - <<'PYEOF2' || true
+import json, os, sqlite3 as _sqlite3
+from datetime import datetime, timezone
+
+raw = os.environ.get("CAST_INPUT", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    import sys; sys.exit(0)
+
+session_id = data.get("session_id", "unknown")
+cwd        = data.get("cwd", "")
+now        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+project    = os.path.basename(cwd.rstrip('/')) if cwd else "unknown"
+
+db_path = os.path.expanduser("~/.claude/cast.db")
+if not os.path.exists(db_path):
+    import sys; sys.exit(0)
+
+try:
+    con = _sqlite3.connect(db_path, timeout=3)
+    con.execute(
+        "INSERT OR IGNORE INTO sessions (id, project, project_root, started_at) VALUES (?, ?, ?, ?)",
+        (session_id, project, cwd, now),
+    )
+    con.commit()
+    con.close()
+except Exception:
+    pass
+PYEOF2
+
 exit 0

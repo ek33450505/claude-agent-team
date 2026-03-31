@@ -2,7 +2,7 @@
 # cast-db-init.sh — CAST SQLite State Foundation
 # Creates ~/.claude/cast.db with the full schema for the CAST Local-First OS.
 # Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
-# Schema versioning via PRAGMA user_version (current = 2).
+# Schema versioning via PRAGMA user_version (current = 6).
 #
 # sqlite-vec extension support (optional, graceful degradation if unavailable):
 #   Install: pip install sqlite-vec   OR   brew install sqlite-vec
@@ -64,7 +64,7 @@ export SQLITE_VEC_AVAILABLE
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-if [ "$CURRENT_VERSION" -ge 5 ]; then
+if [ "$CURRENT_VERSION" -ge 6 ]; then
   echo "cast.db already initialized (v${CURRENT_VERSION})" >&2
   exit 0
 fi
@@ -119,7 +119,17 @@ PRAGMA user_version = 5;
 MIGRATE_V5
   echo "cast.db migrated v4 → v5 (agent_id column added to agent_runs)" >&2
   CURRENT_VERSION=5
-  exit 0
+fi
+
+# Migrate v5 → v6: add event_type and data columns to routing_events
+if [ "$CURRENT_VERSION" -eq 5 ]; then
+  sqlite3 "$DB_PATH" <<'MIGRATE_V6'
+ALTER TABLE routing_events ADD COLUMN event_type TEXT;
+ALTER TABLE routing_events ADD COLUMN data TEXT;
+PRAGMA user_version = 6;
+MIGRATE_V6
+  echo "cast.db migrated v5 → v6 (event_type and data columns added to routing_events)" >&2
+  CURRENT_VERSION=6
 fi
 
 sqlite3 "$DB_PATH" <<'SQL'
@@ -168,7 +178,9 @@ CREATE TABLE IF NOT EXISTS routing_events (
   match_type      TEXT,                            -- regex | semantic | group | catchall
   pattern         TEXT,
   confidence      TEXT,                            -- hard | soft | semantic
-  project         TEXT
+  project         TEXT,
+  event_type      TEXT,                            -- user_prompt_submit | tool_failure | etc.
+  data            TEXT                             -- JSON blob of event-specific data
 );
 
 -- Persistent task queue: survives across sessions
@@ -247,8 +259,8 @@ CREATE INDEX IF NOT EXISTS idx_mismatch_signals_route      ON mismatch_signals(r
 CREATE INDEX IF NOT EXISTS idx_mismatch_signals_timestamp  ON mismatch_signals(timestamp);
 
 -- Set schema version
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 SQL
 
 chmod 600 "$DB_PATH"
-echo "cast.db initialized (v5)" >&2
+echo "cast.db initialized (v6)" >&2
