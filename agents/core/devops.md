@@ -6,6 +6,7 @@ description: >
   and environment management.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
+effort: medium
 color: orange
 memory: local
 maxTurns: 20

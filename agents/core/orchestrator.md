@@ -6,6 +6,7 @@ description: >
   at a time. Use when a planner has produced a manifest and you need automated execution.
 tools: Read, Glob, Agent, Bash, Write, Edit
 model: sonnet
+effort: high
 color: purple
 memory: local
 maxTurns: 50
@@ -216,6 +217,49 @@ cast_emit_event 'task_completed' 'orchestrator' 'session' '' 'All batches comple
 - Never skip a batch unless the user explicitly says to
 - If an agent fails, report the failure and ask the user whether to continue or stop
 - Keep agent prompts specific — include the feature name, plan file path, and relevant context
+- Maximum 4 agents per parallel batch
+
+## Fan-out Pattern
+
+Use this pattern when you need multiple agents to work on different files in parallel without conflict.
+
+Each agent declares `owns_files` with absolute paths. The orchestrator checks these before dispatch — if two agents claim the same file, the batch is blocked and reported as a conflict.
+
+**Example: parallel code-writer + security + test-writer on different files**
+
+```json
+{
+  "batches": [
+    {
+      "id": 1,
+      "parallel": true,
+      "agents": [
+        {
+          "agent": "code-writer",
+          "prompt": "Implement the auth middleware in /Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-auth.sh",
+          "owns_files": ["/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-auth.sh"]
+        },
+        {
+          "agent": "security",
+          "prompt": "Review /Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-security-guard.sh for OWASP issues",
+          "owns_files": ["/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-security-guard.sh"]
+        },
+        {
+          "agent": "test-writer",
+          "prompt": "Write BATS tests for /Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-events.sh in tests/cast-events-new.bats",
+          "owns_files": ["/Users/edkubiak/Projects/personal/claude-agent-team/tests/cast-events-new.bats"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Rules for safe fan-out:**
+- `owns_files` must list every file the agent will Write or Edit — not just files it reads
+- No two agents in the same parallel batch may claim the same file path
+- Agents with `isolation: worktree` in their frontmatter get a separate git worktree automatically — changes are merged back after the batch completes
+- Read-only agents (code-reviewer, security) do not need `owns_files` entries
 - Maximum 4 agents per parallel batch
 
 ## Memory Protocol

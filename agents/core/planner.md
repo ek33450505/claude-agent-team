@@ -6,6 +6,7 @@ description: >
   returns a task list ready for delegation to agent teams.
 tools: Read, Write, Glob, Grep
 model: sonnet
+effort: high
 color: blue
 memory: local
 maxTurns: 20

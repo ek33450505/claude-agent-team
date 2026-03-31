@@ -6,6 +6,7 @@ description: >
   readme-writer, doc-updater, report-writer, and chain-reporter roles.
 tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
 model: sonnet
+effort: medium
 color: emerald
 memory: local
 maxTurns: 20

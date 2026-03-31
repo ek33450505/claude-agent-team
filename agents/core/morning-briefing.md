@@ -6,6 +6,7 @@ description: >
   via /morning on demand.
 tools: Read, Write, Bash, Glob, Grep
 model: sonnet
+effort: medium
 color: bronze
 memory: local
 maxTurns: 25

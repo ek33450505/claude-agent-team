@@ -6,6 +6,7 @@ description: >
   to main/master. Use after commit agent completes.
 tools: [Bash, Read]
 model: haiku
+effort: low
 color: blue
 memory: local
 maxTurns: 8

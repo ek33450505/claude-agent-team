@@ -6,6 +6,7 @@ description: >
   On failure, dispatches debugger automatically (one retry) before escalating.
 tools: [Bash, Read, Glob]
 model: haiku
+effort: low
 color: green
 memory: none
 maxTurns: 20

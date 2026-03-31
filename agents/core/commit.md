@@ -5,6 +5,7 @@ description: >
   Reads staged changes, writes a semantic commit message, and commits cleanly.
 tools: Bash, Read
 model: haiku
+effort: low
 color: yellow
 memory: local
 maxTurns: 20

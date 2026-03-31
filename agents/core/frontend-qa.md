@@ -2,6 +2,7 @@
 name: frontend-qa
 description: Frontend QA specialist for React/TypeScript dashboard projects. Reviews .tsx/.ts files for component prop correctness, API contract alignment (frontend hooks vs backend routes), Vitest test coverage gaps, and accessibility basics. Triggered automatically when .tsx/.ts files change in dashboard projects. Distinct from generic code-reviewer — go deeper on React patterns and type safety.
 model: haiku
+effort: low
 color: cyan
 memory: local
 maxTurns: 20

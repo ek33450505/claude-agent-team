@@ -7,6 +7,7 @@ description: >
   exit codes, escape hatches, hookSpecificOutput JSON format, and CLAUDE_SUBPROCESS guard patterns.
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: sonnet
+effort: medium
 color: yellow
 memory: local
 maxTurns: 20

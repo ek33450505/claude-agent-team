@@ -6,9 +6,11 @@ description: >
   exposure, and stack-specific vulnerabilities.
 tools: Read, Glob, Grep, Bash
 model: sonnet
+effort: high
 color: magenta
 memory: local
 maxTurns: 20
+isolation: worktree
 disallowedTools: Write, Edit
 ---
 
@@ -105,6 +107,18 @@ If you are approaching your turn limit or context limit and cannot complete the 
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
+
+## Worktree Isolation
+
+This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.
+
+Note: This agent has `disallowedTools: Write, Edit` — it is read-only by design. Worktree isolation applies when other file-modifying agents run in the same parallel batch.
+
+When running in a worktree context, include the branch name in your final Status block:
+```
+Status: DONE
+Worktree branch: cast-worktree-XXXXXX
+```
 
 ## Status Block
 

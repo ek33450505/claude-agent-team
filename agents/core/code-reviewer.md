@@ -3,6 +3,7 @@ name: code-reviewer
 description: "Use immediately after writing or modifying code."
 tools: Bash, Glob, Grep, Read
 model: haiku
+effort: low
 color: cyan
 memory: local
 maxTurns: 25

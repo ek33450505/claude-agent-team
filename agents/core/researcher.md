@@ -6,6 +6,7 @@ description: >
   Absorbs the former explore, data-scientist, and db-reader roles.
 tools: Read, Write, Bash, Glob, Grep, WebFetch, WebSearch
 model: sonnet
+effort: high
 color: indigo
 memory: local
 maxTurns: 30

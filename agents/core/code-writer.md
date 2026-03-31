@@ -7,9 +7,11 @@ description: >
   writes tests inline, and dispatches the commit agent when all units are complete.
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 model: sonnet
+effort: high
 color: orange
 memory: local
 maxTurns: 40
+isolation: worktree
 ---
 
 You are an implementation specialist with deep knowledge of the full dev stack in use:
@@ -85,11 +87,14 @@ Context needed: [required if NEEDS_CONTEXT]
 
 ## Worktree Isolation
 
+This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.
+
 When dispatched with `isolation: "worktree"`, changes land on a temporary isolated branch rather than the working tree. Use this for:
 - Multi-file refactors
 - Unfamiliar codebases
 - Security-sensitive changes
 - Experimental fixes
+- Any parallel batch where another agent also modifies files
 
 When running in a worktree, your final Status block must include the worktree branch name:
 ```

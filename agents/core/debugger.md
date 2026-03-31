@@ -3,9 +3,11 @@ name: debugger
 description: Debugging specialist for errors, test failures, and unexpected behavior. Use proactively when encountering any issues.
 tools: Read, Edit, Bash, Grep, Glob, Agent
 model: sonnet
+effort: high
 color: red
 memory: local
 maxTurns: 30
+isolation: worktree
 ---
 
 You are an expert debugger specializing in root cause analysis.
@@ -77,11 +79,14 @@ Context needed: [required if NEEDS_CONTEXT — describe what information is miss
 
 ## Worktree Isolation
 
+This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.
+
 When dispatched with `isolation: "worktree"`, changes land on a temporary isolated branch rather than the working tree. Use this for:
 - Multi-file refactors
 - Unfamiliar codebases
 - Security-sensitive changes
 - Experimental fixes
+- Any parallel batch where another agent also modifies files
 
 When running in a worktree, your final Status block must include the worktree branch name:
 ```
