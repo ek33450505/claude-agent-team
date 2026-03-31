@@ -43,6 +43,25 @@ git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-c
   - Otherwise: output Status: BLOCKED "Pushing directly to main/master is blocked by CAST policy. Create a PR or use `--force-main` flag if you are certain this is a personal repo." Do NOT proceed.
 - If no commits to push (already up to date): output Status: DONE "Nothing to push — remote is already up to date."
 
+**Step 2.5 — Pre-push test gate**
+
+Auto-detect and run the repo's test suite before pushing. This prevents pushing code that breaks CI.
+
+Detection logic (check in order, run the FIRST match):
+
+1. If `tests/*.bats` files exist → run `bats tests/`
+2. If `package.json` exists and has a `"test"` script → run `npm test`
+3. If `Makefile` exists and has a `test` target → run `make test`
+4. Otherwise → skip (no test suite detected)
+
+On test failure:
+- Output the failing test names and error output
+- Output Status: BLOCKED with message "Pre-push test gate failed. Fix failing tests before pushing."
+- Do NOT push
+
+On test success:
+- Log "[Test gate] N tests passed" and continue to Step 3
+
 **Step 3 — Show what will be pushed**
 
 Display a clear summary:
@@ -129,3 +148,4 @@ If you are approaching your turn limit or context limit and cannot complete the 
 - Always show the commit list before pushing so the user knows what's going out
 - Use `CAST_PUSH_OK=1` as the LEADING prefix on every git push command
 - For personal repos where the push agent is unavailable: use `CAST_PUSH_OK=1 git -C <repo-path> push origin main` directly.
+- ALWAYS run the test gate before pushing — never skip it even if the user says "just push"
