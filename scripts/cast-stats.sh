@@ -11,6 +11,23 @@ set -euo pipefail
 
 LOG_FILE="${HOME}/.claude/routing-log.jsonl"
 
+# --brief mode: output a single status line for statusLine setting
+if [ "${1:-}" = "--brief" ]; then
+  if [ ! -f "$LOG_FILE" ]; then
+    echo "CAST ready"
+    exit 0
+  fi
+  TODAY=$(date +%Y%m%d)
+  EVENTS_DIR="${HOME}/.claude/cast/events"
+  agents_today=$(ls "$EVENTS_DIR" 2>/dev/null | grep -c "^${TODAY}T.*subagent-stop\.json$" || echo 0)
+  dispatches=$(awk '/agent_dispatch/{c++} END{print c+0}' "$LOG_FILE" 2>/dev/null || echo 0)
+  bytes=$(wc -c < "$LOG_FILE" 2>/dev/null | tr -d ' ' || echo 0)
+  bytes=${bytes:-0}
+  mb=$(awk "BEGIN{printf \"%.1f\", ${bytes}/1048576}")
+  printf "CAST | agents:%d today  dispatches:%d | log: %sMB\n" "$agents_today" "$dispatches" "$mb"
+  exit 0
+fi
+
 if [ ! -f "$LOG_FILE" ]; then
   echo "No routing log found at $LOG_FILE"
   echo "CAST routing events will appear here once you start using CAST agents."
