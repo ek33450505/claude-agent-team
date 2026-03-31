@@ -15,5 +15,10 @@ jobs:
         run: |
           git clone https://github.com/bats-core/bats-core.git /tmp/bats
           sudo /tmp/bats/install.sh /usr/local
+      - name: Set up CAST runtime dirs
+        run: |
+          mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
+          cp scripts/*.sh ~/.claude/scripts/
+          chmod +x ~/.claude/scripts/*.sh
       - name: Run BATS tests
-        run: bats tests/ --tap
+        run: bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats --tap

@@ -7,7 +7,7 @@ bats_require_minimum_version 1.5.0
 load '../test_helper/bats-support/load'
 load '../test_helper/bats-assert/load'
 
-HOOK="/Users/edkubiak/.claude/scripts/cast-headless-guard.sh"
+HOOK="$HOME/.claude/scripts/cast-headless-guard.sh"
 
 # ── Payload helpers ──────────────────────────────────────────────────────────
 

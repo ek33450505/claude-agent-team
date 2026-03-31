@@ -18,7 +18,12 @@ CMD_COUNT=$(find "$REPO_DIR/commands" -maxdepth 1 -name "*.md" | wc -l | tr -d '
 # Skills: count unique skill dirs (exclude linux variant dirs that are install-time substitutes)
 SKILL_COUNT=$(find "$REPO_DIR/skills" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ')
 # Tests: top-level *.bats only (excludes embedded bats framework test files)
-TEST_COUNT=$(grep -h "^@test" "$REPO_DIR/tests"/*.bats 2>/dev/null | wc -l | tr -d ' ')
+TEST_COUNT=$(grep -h "^@test" \
+  "$REPO_DIR"/tests/*.bats \
+  "$REPO_DIR"/tests/hooks/*.bats \
+  "$REPO_DIR"/tests/agents/*.bats \
+  "$REPO_DIR"/tests/scripts/*.bats \
+  2>/dev/null | wc -l | tr -d ' ')
 # Routes removed in CAST v3 — model-driven dispatch via CLAUDE.md
 ROUTE_COUNT=0
 
