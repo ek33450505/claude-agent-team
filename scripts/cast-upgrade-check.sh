@@ -108,7 +108,7 @@ while IFS= read -r REPO; do
     --json tagName,publishedAt 2>/dev/null || echo "[]")"
 
   if [ "$RELEASES_JSON" = "[]" ] || [ -z "$RELEASES_JSON" ]; then
-    printf "[cast-upgrade-check] Warning: could not fetch releases for %s — skipping.\n" "$REPO" >&2
+    printf "[cast-upgrade-check] Warning: gh could not fetch releases for %s — skipping.\n" "$REPO" >&2
     continue
   fi
 
