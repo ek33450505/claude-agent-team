@@ -171,9 +171,10 @@ EOF
   chmod +x "$HOME/no-bats-bin/bats"
 
   # Override PATH to a bats that always fails (simulates bats not in PATH)
-  PATH="$HOME/no-bats-bin:/usr/bin:/bin" run bash "$COMPAT_SH" test
-  # Should print an error, not crash with unbound variable / pipe error
-  [ "$status" -ne 0 ]
+  # run -127: tell BATS that exit code 127 is expected (suppresses BW01 warning)
+  PATH="$HOME/no-bats-bin:/usr/bin:/bin" run -127 bash "$COMPAT_SH" test
+  # Should exit 127 (command not found for bats inside the script)
+  [ "$status" -eq 127 ]
   assert_output --partial "bats"
 }
 
