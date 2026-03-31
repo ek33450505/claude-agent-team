@@ -1,7 +1,7 @@
 # CAST — Claude Agent Specialist Team
 
 ![Version](https://img.shields.io/badge/version-3.0-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-16-green)<!-- CAST_AGENT_COUNT -->
+![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-255%20total-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
@@ -341,7 +341,7 @@ Everything is local. No data leaves your machine.
 
 ## Stats
 
-<!-- CAST_AGENT_COUNT -->16<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
 <!-- CAST_TEST_COUNT -->255<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->16<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->7<!-- /CAST_SKILL_COUNT --> skills
