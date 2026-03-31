@@ -1,0 +1,19 @@
+name: BATS Tests
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: |
+          git clone https://github.com/bats-core/bats-core.git /tmp/bats
+          sudo /tmp/bats/install.sh /usr/local
+      - name: Run BATS tests
+        run: bats tests/ --tap

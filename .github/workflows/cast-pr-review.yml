@@ -1,0 +1,23 @@
+name: CAST PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  cast-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review the changed files in this PR. Focus on:
+            1. BATS test coverage for any new shell scripts
+            2. Hook script defensive coding (empty input handling, exit codes)
+            3. Agent frontmatter completeness (name, model, effort, memory fields)
+            Post findings as a PR comment. Be specific — cite file:line.

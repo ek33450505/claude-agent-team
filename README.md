@@ -1,26 +1,102 @@
 # CAST — Claude Agent Specialist Team
 
-![Version](https://img.shields.io/badge/version-3.0-blue)<!-- /CAST_VERSION_BADGE -->
+[![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
+![Version](https://img.shields.io/badge/version-3.1-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-301%20total-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-346%2B-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-A local-first agent infrastructure layer built on Claude Code. 16 specialist agents, model-driven dispatch, mandatory code review, and hard-blocked git operations — all enforced by 4 shell hooks. Zero cloud lock-in. Everything lives in `~/.claude/`.
+**A multi-agent framework for Claude Code.** 16 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
+
+---
+
+## What is CAST?
+
+CAST turns Claude Code from a single-session assistant into a coordinated team:
+
+- **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 16-row dispatch table and picks the agent — no regex, no routing config.
+- **Quality is enforced, not requested.** Raw `git commit` and `git push` are hard-blocked by shell hooks. Every code change mandates a `code-reviewer` pass. Commit only happens through the `commit` agent.
+- **Everything is observable.** Every agent dispatch, session, and token spend is logged to `cast.db` (SQLite). A companion React dashboard shows activity, analytics, agent status, and memory in real time.
+
+---
+
+## Architecture
+
+```
+User Prompt
+      │
+      ▼
+┌─────────────────────────────────────────────┐
+│  CLAUDE.md dispatch table (16-row routing)  │
+│  Model reads table → picks specialist agent │
+└──────────────────┬──────────────────────────┘
+                   │
+      ┌────────────▼────────────┐
+      │   PreToolUse hooks      │
+      │  • pre-tool-guard.sh    │  ← blocks raw git commit/push
+      │  • cast-security-guard  │  ← blocks curl/ssh on threat patterns
+      │  • cast-headless-guard  │  ← auto-answers AskUserQuestion
+      └────────────┬────────────┘
+                   │
+      ┌────────────▼────────────┐
+      │  Agent Tool dispatch    │
+      │  Specialist agent runs  │
+      │  (SubagentStart hook    │  ← emits task_claimed to cast.db
+      │   fires on spawn)       │
+      └────────────┬────────────┘
+                   │
+      ┌────────────▼────────────┐
+      │   PostToolUse hooks     │
+      │  • post-tool-hook.sh    │  ← injects [CAST-REVIEW] after writes
+      │  • cast-cost-tracker    │  ← logs dispatch to cast.db (async)
+      │  • cast-budget-alert    │  ← fires if token budget exceeded (async)
+      └────────────┬────────────┘
+                   │
+      ┌────────────▼────────────┐
+      │   Post-chain protocol   │
+      │  code change?           │
+      │    yes → code-reviewer  │
+      │          → commit       │
+      │          → push         │
+      │    no  → done           │
+      └────────────┬────────────┘
+                   │
+      ┌────────────▼────────────┐
+      │   Stop hook             │
+      │  cast-session-end.sh    │  ← archival, DB pruning, memory sync
+      └────────────┬────────────┘
+                   │
+      ┌────────────▼────────────┐
+      │        cast.db          │
+      │  sessions │ agent_runs  │
+      │  routing_events │ budgets│
+      └─────────────────────────┘
+                   │
+      ┌────────────▼────────────┐
+      │  claude-code-dashboard  │
+      │  React UI on :5173      │
+      │  /activity /sessions    │
+      │  /analytics /agents     │
+      │  /memory /token-spend   │
+      └─────────────────────────┘
+```
 
 ---
 
 ## Quick Start
 
-**Option 1 — Homebrew (recommended)**
+Three commands to a working CAST installation:
 
 ```bash
 brew tap ek33450505/cast
 brew install cast
-bash $(brew --prefix cast)/libexec/install.sh
+cast doctor
 ```
 
-**Option 2 — Git clone**
+`cast doctor` runs `cast-validate.sh` — checks hook wiring, agent files, database schema, and CLI path. Green across the board means you're ready.
+
+**Git clone alternative:**
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team
@@ -28,242 +104,185 @@ cd claude-agent-team
 bash install.sh
 ```
 
-`install.sh` copies agents to `~/.claude/agents/`, copies a settings template that requires manual merge into `~/.claude/settings.json`, initializes `cast.db`, and symlinks the `cast` CLI to `~/.local/bin/cast`.
+---
+
+## Agent Roster
+
+16 specialists. Each is a plain markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, effort, and isolation.
+
+| Agent | Model | Effort | Purpose |
+|---|---|---|---|
+| `code-writer` | sonnet | high | Feature implementation spanning files or logical units |
+| `debugger` | sonnet | high | Root-cause diagnosis and fixes for failures |
+| `planner` | sonnet | high | Breaks features into sequenced task plans with ADM |
+| `orchestrator` | sonnet | high | Executes multi-agent plan manifests (ADM) |
+| `researcher` | sonnet | high | Multi-source analysis, gap reports, data synthesis |
+| `security` | sonnet | high | Auth, input validation, secrets, vulnerability audit |
+| `merge` | sonnet | high | Git merges, rebases, conflict resolution |
+| `test-writer` | sonnet | medium | Unit and integration tests |
+| `devops` | sonnet | medium | CI/CD, Docker, infrastructure |
+| `docs` | sonnet | medium | Documentation, READMEs, changelogs |
+| `morning-briefing` | sonnet | medium | Daily git activity summary |
+| `bash-specialist` | sonnet | medium | Shell scripts, BATS tests, hook scripts |
+| `code-reviewer` | haiku | low | Diff scan for correctness and conventions |
+| `test-runner` | haiku | low | Runs test suites (bats, jest, vitest) |
+| `commit` | haiku | low | Stages and commits with semantic messages |
+| `push` | haiku | low | Pushes to remote with safety checks |
+
+All agents carry `memory: local` — each accumulates session knowledge in `~/.claude/agent-memory-local/<name>/`.
 
 ---
 
-## Architecture
+## Hook Event Coverage
 
-```
-User prompt
-     |
-     v
-[CLAUDE.md dispatch table]   <-- model reads 16 rows, picks agent
-     |
-     v
-[PreToolUse hook]            <-- pre-tool-guard.sh: blocks raw git commit/push
-     |
-     v
-[Agent tool dispatch]        <-- specialist agent runs
-     |
-     v
-[PostToolUse hook]           <-- post-tool-hook.sh: injects [CAST-REVIEW] after writes
-     |                        -- cast-cost-tracker.sh: logs dispatch to cast.db
-     v
-[Code change?]
-   yes --> code-reviewer --> commit --> push
-    no --> done
-     |
-     v
-[Stop hook]                  <-- cast-session-end.sh: archival, pruning, memory sync
-     |
-     v
-[cast.db]                    <-- SQLite: sessions, agent_runs, budgets, agent_memories
-```
+13 Claude Code lifecycle events are wired. Every event that matters for observability, safety, or pipeline automation is handled.
 
----
-
-## The 16 Agents
-
-| Agent | Model | Purpose |
-|-------|-------|---------|
-| code-writer | sonnet | Feature work spanning >1 file or >5 lines |
-| code-reviewer | haiku | Reviews diffs for correctness and conventions |
-| debugger | sonnet | Diagnoses and fixes failures |
-| planner | sonnet | Breaks features into sequenced task plans |
-| security | sonnet | Auth, input handling, API keys, vulnerabilities |
-| merge | sonnet | Git merges, rebases, conflict resolution |
-| researcher | sonnet | Codebase exploration, web research, data analysis |
-| docs | sonnet | Documentation, READMEs, reports |
-| bash-specialist | sonnet | Shell scripts, BATS tests, hook scripts |
-| orchestrator | sonnet | Executes multi-agent plan manifests |
-| morning-briefing | sonnet | Daily briefing from git activity |
-| devops | sonnet | CI/CD, Docker, infrastructure |
-| commit | haiku | Stages and commits with semantic messages |
-| push | haiku | Pushes to remote with safety checks |
-| test-runner | haiku | Runs test suites (jest, vitest, bats) |
-| test-writer | sonnet | Writes unit and integration tests |
-
-Agent definitions live in `~/.claude/agents/` as plain markdown files.
-
----
-
-## How Dispatch Works
-
-CAST v3 has no routing table. No regex. No `route.sh`.
-
-`CLAUDE.md` contains a 16-row dispatch table. When a prompt arrives, the model reads it and decides which agent to call via the Agent tool. This follows Anthropic's "Building Effective Agents" principle: let the model decide.
-
-**CLAUDE.md structure (47 lines):**
-- Core Rules (6 rules)
-- Dispatch Table (16 rows mapping situation to agent)
-- Post-Chain protocol (what runs after each agent)
-- Agent Models (sonnet vs haiku split)
-- Config paths
-
-**Example dispatch rules in the table:**
-- Feature work spanning >1 file → `code-writer`
-- Any test failure or bug → `debugger`
-- Auth, input validation, API key handling → `security`
-- Git merges or conflict resolution → `merge`
-- Shell scripts or BATS tests → `bash-specialist`
-
-The model is the router. It reads the table at inference time and dispatches accordingly.
-
----
-
-## Hook Architecture
-
-4 hooks enforce CAST conventions at the Claude Code process boundary. Hooks fire before or after every tool call — they cannot be bypassed by agents.
-
-| Hook | Event | Script | Purpose |
-|------|-------|--------|---------|
-| Bash guard | PreToolUse:Bash | pre-tool-guard.sh | Hard-blocks raw `git commit` and `git push` |
-| Code chain | PostToolUse:Write\|Edit | post-tool-hook.sh | Injects `[CAST-REVIEW]` after code changes |
-| Cost tracker | PostToolUse:Agent | cast-cost-tracker.sh | Logs every agent dispatch to cast.db |
-| Session end | Stop | cast-session-end.sh | Archival, DB pruning, memory sync, temp cleanup |
+| Event | Hook Script | What It Does |
+|---|---|---|
+| `SessionStart` | `cast-session-start.sh` | Opens session row in cast.db |
+| `UserPromptSubmit` | `cast-user-prompt-hook.sh` | Logs prompt metadata to routing_events |
+| `PreToolUse:Bash` | `pre-tool-guard.sh` | Hard-blocks `git commit` / `git push` (exit 2) |
+| `PreToolUse:Bash` | `cast-security-guard.sh` | Blocks curl/ssh on threat patterns |
+| `PreToolUse:Bash` | `cast-headless-guard.sh` | Auto-answers AskUserQuestion in pipelines |
+| `PreToolUse:Write\|Edit` | `cast-audit-hook.sh` | Logs file modification events |
+| `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Injects [CAST-REVIEW] directive after code changes |
+| `PostToolUse:Agent` | `cast-cost-tracker.sh` | Logs agent dispatch to cast.db (async) |
+| `PostToolUse:Agent` | `cast-budget-alert.sh` | Fires alert if token budget exceeded (async) |
+| `PostCompact` | `cast-post-compact-hook.sh` | Reinjects plan context, emits context_compacted |
+| `TaskCreated` | `cast-task-created-hook.sh` | Emits task_created event to cast.db (async) |
+| `TaskCompleted` | `cast-task-completed-hook.sh` | Emits task_completed event to cast.db (async) |
+| `InstructionsLoaded` | `cast-instructions-loaded.sh` | Logs session context load |
+| `SubagentStart` | `cast-subagent-start-hook.sh` | Emits task_claimed on agent spawn (async) |
+| `SubagentStop` | `cast-subagent-stop-hook.sh` | Closes agent_runs row on completion (async) |
+| `Stop` | `cast-session-end.sh` | Archives session, prunes events, syncs memory |
+| `StopFailure` | `cast-stop-failure-hook.sh` | Logs abnormal session termination |
+| `PostToolUseFailure` | `cast-error-hook.sh` | Logs tool failures to cast.db |
 
 **Exit code convention:**
-- Exit 0 — hook passed, tool call proceeds normally
-- Exit 2 — hook blocked the tool call (bash guard uses this to stop raw commits)
-
-**Bash guard escape hatches:**
-- `CAST_COMMIT_AGENT=1` — allows a single git commit through (used by the commit agent internally)
-- `CAST_PUSH_OK=1` — allows a single git push through (used by the push agent internally)
-
-These are set by the commit and push agents as environment flags before their git calls. They are not for general use.
-
----
-
-## Post-Chain Protocol
-
-After code changes, agents follow a mandatory post-chain. The model reads the post-chain protocol from `CLAUDE.md` and dispatches accordingly.
-
-**Standard chain (after code-writer or debugger):**
-```
-code-reviewer --> commit --> push
-```
-
-**Security-sensitive chain (parallel review):**
-```
-[code-reviewer, security] (parallel) --> commit --> push
-```
-
-Parallel agents in a nested array dispatch simultaneously — neither influences the other before reporting. Both must return DONE before commit proceeds.
-
-The inline session acts as fallback enforcer: if an agent returns without having dispatched its mandatory chain, the session immediately dispatches the missing agent.
+- Exit 0 — hook passed, tool call proceeds
+- Exit 2 — hook blocked the tool call (guard hooks only)
+- Never exit 1 (reserved for fatal hook errors)
 
 ---
 
 ## Observability
 
-**cast.db** — SQLite database at `~/.claude/cast.db`
+`cast.db` at `~/.claude/cast.db` — append-only SQLite. Never truncated.
 
 | Table | Contents |
-|-------|----------|
-| sessions | Session start/end, model, token counts — row written on SessionStart |
-| agent_runs | Every agent dispatch: agent name, model, duration, status |
-| routing_events | Prompt routing records: matched route, confidence, event_type, data (JSON) |
-| budgets | Per-session and per-agent token budgets |
-| agent_memories | Synced from `~/.claude/agent-memory-local/` on session close |
+|---|---|
+| `sessions` | Session start/end, model, token counts |
+| `agent_runs` | Every dispatch: agent, model, duration, status |
+| `routing_events` | Prompt routing records, event types, JSON payloads |
+| `budgets` | Per-session and per-agent token budgets |
+| `agent_memories` | Synced from `~/.claude/agent-memory-local/` on Stop |
 
-**Key scripts:**
-- `cast-cost-tracker.sh` — writes a row to agent_runs on every Agent tool PostToolUse event
-- `cast-validate.sh` — system health check (also available as `/doctor` slash command)
-- `cast-stats.sh` — usage analytics: top agents, average durations, cost trends
-- `cast/events/` — append-only event log (one JSON file per session)
-
-**Running stats:**
 ```bash
+# Usage analytics
 bash scripts/cast-stats.sh
-bash scripts/cast-validate.sh
+
+# Health check
+bash scripts/cast-validate.sh   # also available as: cast doctor
+
+# Query recent agent runs
+sqlite3 ~/.claude/cast.db "SELECT agent, status, created_at FROM agent_runs ORDER BY id DESC LIMIT 10;"
 ```
 
 ---
 
-## Scheduled Tasks
+## Multi-Agent Pipelines
 
-`cast-cron-setup.sh` installs 3 cron entries. No daemon. No background process. Pure cron.
+The `orchestrator` agent executes plans defined by an **Agent Dispatch Manifest (ADM)** — a JSON structure inside plan files. Plans live in `~/.claude/plans/`.
 
-| Schedule | Script | Purpose |
-|----------|--------|---------|
-| Daily 7am | morning-briefing agent | Git activity summary across all repos |
-| Daily 6pm | cast-stats.sh | Daily usage summary |
-| Monday 9am | cast-stats.sh --weekly | Weekly cost report |
+**ADM structure:**
+
+```json
+{
+  "batches": [
+    {
+      "id": 1,
+      "parallel": true,
+      "agents": [
+        {
+          "subagent_type": "code-writer",
+          "owns_files": ["/abs/path/to/file.sh"],
+          "prompt": "..."
+        },
+        {
+          "subagent_type": "security",
+          "owns_files": ["/abs/path/to/other.sh"],
+          "prompt": "..."
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "parallel": false,
+      "agents": [{ "subagent_type": "commit", "prompt": "..." }]
+    }
+  ]
+}
+```
+
+`owns_files` prevents two parallel agents from writing the same file. The orchestrator detects conflicts before dispatch and blocks the batch if any overlap exists.
 
 ```bash
-# Install cron tasks
-bash scripts/cast-cron-setup.sh
+# Run a plan
+cast exec ~/.claude/plans/my-plan.md
 
-# List installed tasks
-bash scripts/cast-cron-setup.sh --list
-
-# Remove cron tasks
-bash scripts/cast-cron-setup.sh --remove
+# Or dispatch the orchestrator agent directly:
+# "Orchestrate the plan at ~/.claude/plans/my-plan.md"
 ```
 
 ---
 
-## Memory System
+## Agent Memory
 
-Each agent has its own persistent markdown-based memory directory.
+Each agent has a persistent markdown-based memory directory. Agents accumulate domain knowledge across sessions.
 
-**Location:** `~/.claude/agent-memory-local/<agent>/`
-
-**Structure:**
 ```
 ~/.claude/agent-memory-local/
   code-writer/
-    MEMORY.md          <-- index file loaded into every session
-    feedback_*.md      <-- guidance the user gave this agent
-    project_*.md       <-- project context relevant to this agent
-    user_*.md          <-- user profile for this agent
-  code-reviewer/
+    MEMORY.md              ← index (loaded into every session)
+    feedback_testing.md    ← user guidance on testing approach
+    project_auth.md        ← project-specific auth context
+  debugger/
     MEMORY.md
     ...
 ```
 
-**Persistence:** `cast-session-end.sh` syncs memory files to the `agent_memories` table in `cast.db` on every session close. The markdown files are the source of truth — cast.db is the backup.
-
-**Why plain files:** Read them, edit them, back them up, version control them. No proprietary format. A memory is just a `.md` file with frontmatter.
-
----
-
-## Scripts Reference
-
-All scripts live in `scripts/`.
-
-| Script | Purpose |
-|--------|---------|
-| pre-tool-guard.sh | PreToolUse bash guard (installed as hook) |
-| post-tool-hook.sh | PostToolUse code chain injector (installed as hook) |
-| cast-cost-tracker.sh | Agent dispatch logger (installed as hook) |
-| cast-session-end.sh | Consolidated Stop hook |
-| cast-cron-setup.sh | Cron installer for scheduled tasks |
-| cast-validate.sh | System health checks |
-| cast-stats.sh | Usage analytics |
-| cast-exec.sh | Standalone plan executor |
-| cast-events.sh | Event emission helpers |
-| cast-db-init.sh | Initialize cast.db schema |
-| agent-status-reader.sh | Reads agent status JSON files |
-| gen-stats.sh | Auto-generates stats for README badges |
-| install.sh | Full CAST installation |
-
----
-
-## Test Suite
-
-255 BATS tests across 20 files. 0 failures.
+Memory files are plain markdown with YAML frontmatter. `cast-session-end.sh` syncs them to `agent_memories` in cast.db on every Stop. The markdown files are the source of truth.
 
 ```bash
-# Run all tests
-bats tests/
-
-# Run a single test file
-bats tests/post-tool-hook.bats
+# Back up all agent memory to a GitHub release
+bash scripts/cast-memory-backup.sh --dry-run   # preview only
+bash scripts/cast-memory-backup.sh             # creates tarball + gh release
 ```
 
-Tests cover: hook scripts, guard logic, event emission, stats generation, DB init, cron setup, and agent-status reader.
+---
+
+## Dashboard
+
+[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) — React 19 + Vite + Express observability UI for CAST.
+
+Reads `cast/events/`, `agent-status/`, and `cast.db` directly — no backend API required for reads.
+
+| Page | What It Shows |
+|---|---|
+| `/activity` | Live agent spawn timeline, hook events |
+| `/sessions` | Session list with compaction markers |
+| `/analytics` | Token spend by agent, prompt volume over time |
+| `/agents` | Agent roster status, last active, run count |
+| `/hooks` | Hook health: fired/blocked/failed counts |
+| `/plans` | Plan files, ADM batch status |
+| `/memory` | Per-agent MEMORY.md viewer, last-modified |
+| `/token-spend` | Budget burn rate, cost trends |
+| `/db` | Raw cast.db explorer |
+
+```bash
+cd ~/Projects/personal/claude-code-dashboard
+npm run dev    # Vite :5173 + Express :3001
+```
 
 ---
 
@@ -272,71 +291,96 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 ```
 claude-agent-team/
   agents/
-    core/               <-- agent definitions (mirrored to ~/.claude/agents/)
-  scripts/              <-- all hook and utility scripts
-  tests/                <-- BATS test suite
-  config/               <-- CLAUDE.md and any static config
-  cast/                 <-- runtime: events/, logs/
+    core/               ← 16 agent definitions (mirrored to ~/.claude/agents/)
+  scripts/              ← hook scripts, utilities, cron setup
+  tests/
+    *.bats              ← core test suite
+    hooks/              ← hook-specific BATS tests
+    agents/             ← agent frontmatter BATS tests
+    scripts/            ← script utility BATS tests
+  .github/
+    workflows/
+      bats-ci.yml       ← BATS CI on push + daily schedule
+      cast-pr-review.yml← Automated PR review via claude-code-action
+  .mcp.json             ← Project-scoped MCP server config
   install.sh
   VERSION
-  README.md
+  CHANGELOG.md
 ```
 
-**Runtime directories (outside repo, in ~/.claude/):**
+**Runtime (outside repo, in `~/.claude/`):**
+
 ```
 ~/.claude/
-  agents/               <-- live agent definitions (copied from agents/core/)
-  agent-memory-local/   <-- per-agent persistent memory
-  plans/                <-- planner output files
-  settings.json         <-- Claude Code config with hooks registered
-  cast.db               <-- SQLite observability database
+  agents/               ← live agent definitions (copied from agents/core/)
+  agent-memory-local/   ← per-agent persistent memory
+  plans/                ← planner output + ADM plan files
+  settings.json         ← Claude Code config with all hooks registered
+  cast.db               ← SQLite observability database
+  cast/events/          ← append-only event log (one JSON per session)
+  scripts/              ← installed hook scripts
+  logs/                 ← pipeline, headless-stalls, memory-backup logs
 ```
 
 ---
 
-## Companion Dashboard
+## Scheduled Tasks
 
-[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) — React observability UI for CAST. Reads `cast/events/`, `agent-status/`, and `cast.db`. No backend — filesystem scan and SQLite only.
+Pure cron. No daemon. No background process.
 
-Dashboard pages: `/activity`, `/sessions`, `/analytics`, `/agents`, `/hooks`, `/plans`, `/memory`, `/system`, `/token-spend`, `/db`
+| Schedule | Script | Purpose |
+|---|---|---|
+| Daily 7am | morning-briefing agent | Git activity summary across all repos |
+| Daily 6pm | cast-stats.sh | Daily usage summary |
+| Monday 9am | cast-stats.sh --weekly | Weekly cost report |
+| Daily 2am | cast-memory-backup.sh | Backup agent memory to GitHub release |
+
+```bash
+bash scripts/cast-cron-setup.sh          # install
+bash scripts/cast-cron-setup.sh --list   # view
+bash scripts/cast-cron-setup.sh --remove # uninstall
+```
 
 ---
 
-## Privacy
+## Test Suite
 
-Everything is local. No data leaves your machine.
+346+ BATS tests across 4 directories. 0 failures.
 
-- Agents run via Claude Code's Agent tool (local process)
-- cast.db is `~/.claude/cast.db` — your filesystem
-- Memory files are `~/.claude/agent-memory-local/` — plain markdown
-- No telemetry, no cloud sync, no external API calls beyond Anthropic's API (which Claude Code already uses)
+```bash
+# Run all tests
+bats tests/
 
----
+# Run a specific category
+bats tests/hooks/
+bats tests/agents/
+bats tests/scripts/
+```
 
-## Known Limitations
-
-- **Agent tool depth** — nesting depth >= 3 may suppress self-dispatch chains. The inline session acts as fallback enforcer for broken chains.
-- **Turn ceiling** — orchestrator stops cleanly at turn 40 (of 50) and checkpoints for manual resume. No automatic continuation.
-- **SendMessage gap** — orchestrator cannot auto-resume after a network drop. Workaround: checkpoint log + re-invocation.
-- **CAST-DEBUG hook** — the auto-injection path in `post-tool-hook.sh` is broken (heredoc stdin conflict). The `[CAST-DEBUG]` directive in `CLAUDE.md` works as a manual instruction; only auto-injection is broken.
+Tests cover: hook scripts, guard logic, event emission, stats generation, DB init, cron setup, agent-status reader, effort frontmatter, headless guard, and memory backup.
 
 ---
 
 ## Version History
 
 | Version | Highlights |
-|---------|------------|
-| v1 | Manual dispatch, no hooks, no memory system |
-| v2 | 42 agents, routing table (`routing-table.json`), regex-based dispatch, `castd` daemon |
-| v3 | 15 agents, model-driven dispatch (no routing table), 4 hooks, cron replaces daemon, plain-file memory, cast.db observability |
+|---|---|
+| v1 | Manual dispatch, no hooks, no memory |
+| v2 | 42 agents, routing table, regex dispatch, castd daemon |
+| v3.0 | 16 agents, model-driven dispatch, 4 hooks, cron, cast.db |
+| v3.1 | Async hooks, worktree isolation, per-agent memory, headless pipelines, GitHub CI |
 
-**v3 changes from v2:**
-- Agent count: 42 → 15 (consolidated by domain)
-- Routing table: removed entirely — model decides
-- Daemon (`castd`): removed — replaced by cron
-- Dispatch mechanism: regex matching → CLAUDE.md table lookup
-- New agents: orchestrator, morning-briefing, devops, docs, researcher, test-runner
-- Removed agents: ~27 single-purpose agents folded into the 15 specialists
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue first for non-trivial changes. PRs automatically trigger the `cast-pr-review.yml` workflow — the `code-reviewer` agent reviews your diff and posts inline comments.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ---
 
@@ -346,7 +390,3 @@ Everything is local. No data leaves your machine.
 <!-- CAST_TEST_COUNT -->301<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->16<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->7<!-- /CAST_SKILL_COUNT --> skills
-
----
-
-MIT License
