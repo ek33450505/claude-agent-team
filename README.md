@@ -161,8 +161,9 @@ The inline session acts as fallback enforcer: if an agent returns without having
 
 | Table | Contents |
 |-------|----------|
-| sessions | Session start/end, model, token counts |
+| sessions | Session start/end, model, token counts — row written on SessionStart |
 | agent_runs | Every agent dispatch: agent name, model, duration, status |
+| routing_events | Prompt routing records: matched route, confidence, event_type, data (JSON) |
 | budgets | Per-session and per-agent token budgets |
 | agent_memories | Synced from `~/.claude/agent-memory-local/` on session close |
 

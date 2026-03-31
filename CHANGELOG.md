@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 2026-03-31
+
+### Schema v6 + SessionStart write (`e4019cb`)
+- **Migrated:** cast.db v5 → v6: added `event_type` and `data` columns to `routing_events` table
+- **Fixed:** Spurious `exit 0` in v4→v5 migration path that caused the migration to silently succeed without running
+- **Updated:** Fresh-install `CREATE TABLE routing_events` now includes `event_type` and `data` columns
+- **Added:** `cast-session-start-hook.sh` writes `INSERT OR IGNORE` into sessions table on SessionStart (GAP-005)
+- **Schema version:** bumped to 6
+
+---
+
 - 2026-03-28: Add cast-archive.sh — automated Stop hook for ~/.claude/ file archiving and cast.db pruning
 
 ## Phase 5 (2026-03-22 to 2026-03-26)
