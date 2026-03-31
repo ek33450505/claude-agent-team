@@ -39,6 +39,9 @@ The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only 
 **Required approvals for a standard code commit:**
 - code-reviewer: approved (mandatory)
 - test-runner: approved OR no test framework present (mandatory for projects with tests)
+- security: approved OR DONE_WITH_CONCERNS (conditional — only required if a security agent was dispatched in the current chain)
+
+**Security gate logic:** Check whether the current prompt or chain context includes a security agent invocation. If `security` was dispatched upstream in the same chain (indicated by "security" appearing in the chain context or task approval records), treat its approval as mandatory. If security was never dispatched (e.g., docs-only changes, config-only updates, schema migrations without auth logic), skip the security check entirely — do not block the commit.
 
 **How to pass the task_id:** The orchestrator passes it in the prompt when dispatching commit. It matches the batch ID of the implementation batch being committed.
 

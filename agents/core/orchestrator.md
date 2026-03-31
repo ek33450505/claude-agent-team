@@ -106,25 +106,33 @@ Same as parallel — dispatch all simultaneously. After all complete, synthesize
 
 ### Checkpoint & Resume
 
+Checkpoint files are isolated per-plan using a hash suffix to prevent collision when multiple orchestrator sessions run in parallel.
+
+Compute the plan hash at startup:
+```bash
+PLAN_HASH=$(echo -n "$PLAN_FILE_PATH" | shasum -a 256 | cut -c1-8)
+CHECKPOINT_FILE=~/.claude/cast/orchestrator-checkpoint-${PLAN_HASH}.log
+```
+
 After completing each batch, write a checkpoint:
 
 ```bash
 mkdir -p ~/.claude/cast
-echo "[BATCH $BATCH_ID COMPLETE] $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a ~/.claude/cast/orchestrator-checkpoint.log
+echo "[BATCH $BATCH_ID COMPLETE] $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$CHECKPOINT_FILE"
 ```
 
 On startup, check for an existing checkpoint to resume a partially executed plan:
 
 ```bash
-if [ -f ~/.claude/cast/orchestrator-checkpoint.log ]; then
-  LAST_BATCH=$(grep 'BATCH.*COMPLETE' ~/.claude/cast/orchestrator-checkpoint.log | tail -1 | grep -oE 'BATCH [0-9]+' | grep -oE '[0-9]+')
+if [ -f "$CHECKPOINT_FILE" ]; then
+  LAST_BATCH=$(grep 'BATCH.*COMPLETE' "$CHECKPOINT_FILE" | tail -1 | grep -oE 'BATCH [0-9]+' | grep -oE '[0-9]+')
   [ -n "$LAST_BATCH" ] && echo "Resuming from batch $((LAST_BATCH + 1))"
 fi
 ```
 
 Skip batches with id <= LAST_BATCH. Delete the checkpoint after the final batch succeeds:
 ```bash
-rm -f ~/.claude/cast/orchestrator-checkpoint.log
+rm -f "$CHECKPOINT_FILE"
 ```
 
 Always output `[BATCH N COMPLETE]` after each batch.
