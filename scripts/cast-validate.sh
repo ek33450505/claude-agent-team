@@ -21,9 +21,10 @@ echo "CAST Validate v${VERSION} (10 checks)"
 echo "══════════════════════════════"
 
 # --- Check 1: Hook wiring ---
-SETTINGS="$HOME/.claude/settings.local.json"
+SETTINGS="$HOME/.claude/settings.json"
+[[ ! -f "$SETTINGS" ]] && SETTINGS="$HOME/.claude/settings.local.json"
 if [[ ! -f "$SETTINGS" ]]; then
-  fail "Hook wiring: $SETTINGS not found"
+  fail "Hook wiring: neither settings.json nor settings.local.json found"
 else
   WIRING=$(python3 - "$SETTINGS" <<'PYEOF'
 import sys, json
@@ -298,7 +299,7 @@ else
   warn "agent-groups.json: ${AGENT_GROUPS} not found (parallel agent groups disabled)"
 fi
 
-# --- Check 8: cast-session-end.sh wired in settings.local.json ---
+# --- Check 8: cast-session-end.sh wired in settings file ---
 if [[ -f "$SETTINGS" ]]; then
   STOP_WIRED=$(python3 - "$SETTINGS" <<'PYEOF'
 import sys, json
@@ -327,7 +328,7 @@ print("OK" if found else "MISSING")
 PYEOF
 )
   if [[ "$STOP_WIRED" == "OK" ]]; then
-    pass "cast-session-end.sh: wired in settings.local.json"
+    pass "cast-session-end.sh: wired in $(basename "$SETTINGS")"
   elif [[ "$STOP_WIRED" == "MISSING" ]]; then
     warn "cast-session-end.sh: not wired (chain-reporter auto-dispatch on session end unavailable)"
   else
