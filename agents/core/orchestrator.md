@@ -150,12 +150,41 @@ When a batch returns `Status: BLOCKED`:
 4. If third attempt BLOCKED: halt and surface to user: `"Batch <id> blocked after 3 attempts. Human intervention required. Blocker: <blocker>"`. Do not proceed to subsequent batches.
 5. If any retry succeeds: resume normal execution from the next batch.
 
+### Human Escalation Protocol
+
+If a batch returns `Status: BLOCKED` after 3 retry attempts (see Retry Protocol above):
+
+1. Write a resume checkpoint with the batch ID and blocker reason:
+   ```bash
+   echo "[BLOCKED BATCH $BATCH_ID] $(date -u +%Y-%m-%dT%H:%M:%SZ) — $BLOCKER" >> "$CHECKPOINT_FILE"
+   ```
+2. Output `Status: DONE_WITH_CONCERNS` with clear resume instructions:
+   ```
+   Status: DONE_WITH_CONCERNS
+   Summary: Plan paused at Batch N — human intervention required.
+   Concerns: Batch N blocked after 3 attempts. Blocker: [blocker reason].
+   Resume: Fix the blocker, then run `/orchestrate [plan-path]` in a fresh session.
+             The checkpoint at ~/.claude/cast/orchestrator-checkpoint-[hash].log will
+             resume execution from Batch N automatically.
+   ```
+3. Do NOT proceed to subsequent batches. The checkpoint ensures the plan resumes cleanly.
+
 ### Per-Agent Commit Protocol
 
 If an agent's manifest contains `"commit_repos": ["path1"]`:
 - The agent is responsible for dispatching `commit` for those repos after its batch completes.
 - Orchestrator does NOT double-dispatch commit.
 - If the agent completes with `Status: DONE` but did not dispatch commit for listed repos, flag it: "Agent completed but did not dispatch commit for [commit_repos]."
+
+### Code-Reviewer Deduplication
+
+If a parallel batch contains both `code-writer` and `debugger`, both agents self-dispatch `code-reviewer` internally when they complete. The second `code-reviewer` invocation is redundant.
+
+The orchestrator does not need to intervene — agents handle this internally. Note it in the Batch Synthesis:
+```
+[Batch N Synthesis] code-writer and debugger both completed. Both self-dispatched code-reviewer — second review is redundant but harmless. Proceeding.
+```
+Do not block, cancel, or re-dispatch to resolve this. It is informational only.
 
 ### Step 5: Summarize
 
