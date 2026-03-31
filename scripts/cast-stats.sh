@@ -13,15 +13,14 @@ LOG_FILE="${HOME}/.claude/routing-log.jsonl"
 
 # --brief mode: output a single status line for statusLine setting
 if [ "${1:-}" = "--brief" ]; then
-  if [ ! -f "$LOG_FILE" ]; then
-    echo "CAST ready"
-    exit 0
-  fi
   TODAY=$(date +%Y%m%d)
   EVENTS_DIR="${HOME}/.claude/cast/events"
+  CAST_LOG_DIR="${HOME}/.claude/cast"
   agents_today=$(ls "$EVENTS_DIR" 2>/dev/null | grep -c "^${TODAY}T.*subagent-stop\.json$" || echo 0)
-  dispatches=$(awk '/agent_dispatch/{c++} END{print c+0}' "$LOG_FILE" 2>/dev/null || echo 0)
-  bytes=$(wc -c < "$LOG_FILE" 2>/dev/null | tr -d ' ' || echo 0)
+  # Count dispatches from events dir (subagent-stop files = completed agent runs, all time)
+  dispatches=$(ls "$EVENTS_DIR" 2>/dev/null | grep -c "subagent-stop\.json$" || echo 0)
+  # Measure total size of active CAST log files (~/.claude/cast/*.jsonl)
+  bytes=$(cat "${CAST_LOG_DIR}"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')
   bytes=${bytes:-0}
   mb=$(awk "BEGIN{printf \"%.1f\", ${bytes}/1048576}")
   printf "CAST | agents:%d today  dispatches:%d | log: %sMB\n" "$agents_today" "$dispatches" "$mb"
