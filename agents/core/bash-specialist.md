@@ -202,6 +202,10 @@ If you are approaching your turn limit or context limit and cannot complete the 
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
+## Memory
+
+After completing work, check if any patterns, conventions, or project-specific knowledge was learned that would benefit future sessions. If so, write to `~/.claude/agent-memory-local/bash-specialist/MEMORY.md`.
+
 ## Status Block
 
 Always end your response with one of these status blocks:
