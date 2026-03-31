@@ -60,13 +60,14 @@ except Exception:
 
 # Log to cast.db routing_events
 db_path = os.path.expanduser("~/.claude/cast.db")
+project = os.path.basename(os.getcwd().rstrip('/')) or "unknown"
 data_json = json.dumps({"tool_name": tool_name, "error_preview": error_preview})
 try:
     import sqlite3 as _sqlite3
     con = _sqlite3.connect(db_path, timeout=3)
     con.execute(
-        "INSERT INTO routing_events (timestamp, session_id, event_type, data) VALUES (?, ?, ?, ?)",
-        (iso_ts, session_id, "tool_failure", data_json),
+        "INSERT INTO routing_events (timestamp, session_id, event_type, action, project, data) VALUES (?, ?, ?, ?, ?, ?)",
+        (iso_ts, session_id, "tool_failure", "tool_failure", project, data_json),
     )
     con.commit()
     con.close()

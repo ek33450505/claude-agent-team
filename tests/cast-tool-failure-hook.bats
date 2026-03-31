@@ -28,6 +28,20 @@ setup() {
   export HOME="$(realpath "$(mktemp -d)")"
   mkdir -p "$HOME/.claude/cast"
   unset CLAUDE_SUBPROCESS
+  # Create a real cast.db with the routing_events schema for DB tests
+  python3 -c "
+import sqlite3, os
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+con.execute('''CREATE TABLE IF NOT EXISTS routing_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT, timestamp TEXT, prompt_preview TEXT,
+  action TEXT, matched_route TEXT, match_type TEXT,
+  pattern TEXT, confidence TEXT, project TEXT,
+  event_type TEXT, data TEXT
+)''')
+con.commit(); con.close()
+"
 }
 
 teardown() {
@@ -149,4 +163,30 @@ print('ok')
   run bash "$HOOK_SH" <<< "$(make_payload "sess-special" "Write" "/tmp/f" "$special_error")"
   assert_success
   [ -f "$HOME/.claude/cast/tool-failures.jsonl" ]
+}
+
+# ---------------------------------------------------------------------------
+# 10. DB regression: routing_events row has action and project populated
+#     (regression for bug where only event_type was written — action and
+#      project were NULL)
+# ---------------------------------------------------------------------------
+
+@test "DB write: routing_events row includes action and project for tool_failure" {
+  bash "$HOOK_SH" <<< "$(make_payload "sess-db-tf-1" "Bash" "ls /missing" "No such file")"
+  python3 -c "
+import sqlite3, os
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+row = con.execute(
+    'SELECT event_type, action, project FROM routing_events WHERE session_id=?',
+    ('sess-db-tf-1',)
+).fetchone()
+con.close()
+assert row is not None, 'no row written to routing_events'
+event_type, action, project = row
+assert event_type == 'tool_failure',  f'event_type={event_type}'
+assert action     == 'tool_failure',  f'action is NULL or wrong: {action}'
+assert project is not None and len(project) > 0, f'project is NULL or empty'
+print('ok')
+"
 }

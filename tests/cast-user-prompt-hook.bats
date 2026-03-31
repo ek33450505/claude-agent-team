@@ -24,6 +24,20 @@ setup() {
   export HOME="$(realpath "$(mktemp -d)")"
   mkdir -p "$HOME/.claude/cast"
   unset CLAUDE_SUBPROCESS
+  # Create a real cast.db with the routing_events schema for DB tests
+  python3 -c "
+import sqlite3, os
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+con.execute('''CREATE TABLE IF NOT EXISTS routing_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT, timestamp TEXT, prompt_preview TEXT,
+  action TEXT, matched_route TEXT, match_type TEXT,
+  pattern TEXT, confidence TEXT, project TEXT,
+  event_type TEXT, data TEXT
+)''')
+con.commit(); con.close()
+"
 }
 
 teardown() {
@@ -144,4 +158,56 @@ print('ok')
   run bash "$HOOK_SH" <<< "$(make_payload "sess-special" "$special_prompt")"
   assert_success
   [ -f "$HOME/.claude/cast/user-prompts.jsonl" ]
+}
+
+# ---------------------------------------------------------------------------
+# 10. DB regression: routing_events row has prompt_preview, action, project
+#     (regression for bug where only event_type was written — all other
+#      columns were NULL)
+# ---------------------------------------------------------------------------
+
+@test "DB write: routing_events row includes prompt_preview, action, and project" {
+  bash "$HOOK_SH" <<< "$(make_payload "sess-db-1" "Check the routing columns")"
+  python3 -c "
+import sqlite3, os
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+row = con.execute(
+    'SELECT event_type, prompt_preview, action, project FROM routing_events WHERE session_id=?',
+    ('sess-db-1',)
+).fetchone()
+con.close()
+assert row is not None, 'no row written to routing_events'
+event_type, prompt_preview, action, project = row
+assert event_type    == 'user_prompt_submit', f'event_type={event_type}'
+assert prompt_preview is not None and len(prompt_preview) > 0, f'prompt_preview is NULL or empty'
+assert prompt_preview == 'Check the routing columns', f'prompt_preview={prompt_preview}'
+assert action         == 'user_prompt_submit', f'action={action}'
+assert project        is not None and len(project) > 0, f'project is NULL or empty'
+print('ok')
+"
+}
+
+# ---------------------------------------------------------------------------
+# 11. DB regression: prompt_preview is capped at 80 chars in the DB row
+# ---------------------------------------------------------------------------
+
+@test "DB write: prompt_preview in routing_events is capped at 80 chars" {
+  local long_prompt
+  long_prompt=$(python3 -c "print('X' * 200)")
+  bash "$HOOK_SH" <<< "$(make_payload "sess-db-2" "$long_prompt")"
+  python3 -c "
+import sqlite3, os
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+row = con.execute(
+    'SELECT prompt_preview FROM routing_events WHERE session_id=?',
+    ('sess-db-2',)
+).fetchone()
+con.close()
+assert row is not None, 'no row written'
+preview_len = len(row[0] or '')
+assert preview_len == 80, f'expected 80, got {preview_len}'
+print('ok')
+"
 }
