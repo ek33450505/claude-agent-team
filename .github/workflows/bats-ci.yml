@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install bats
         run: |
           git clone https://github.com/bats-core/bats-core.git /tmp/bats
