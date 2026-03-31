@@ -40,6 +40,7 @@ declare -a CRON_ENTRIES=(
   "45 3 * * *|log-compress|find ~/.claude/cast/events -name '*.jsonl' -mtime +7 -exec gzip {} \\;"
   "0 10 * * 0|security-audit|Run a security audit of the CAST scripts and agent definitions. Check for hardcoded secrets, overly permissive file operations, and injection risks. Save report to ~/.claude/reports/security-$(date +\%Y-\%m-\%d).md"
   "30 10 * * 0|weekly-report|Generate a weekly agent performance report from cast.db. Include: top agents by run count, average duration per agent, error rates, token spend by agent. Save to ~/.claude/briefings/weekly-$(date +\%Y-\%m-\%d).md"
+  "*/5 * * * *|resume-watcher|Check ~/.claude/cast/resume-queue/ for pending orchestrator resume requests and dispatch a new orchestrator session if any are found"
 )
 
 # ── Help ──────────────────────────────────────────────────────────────────────

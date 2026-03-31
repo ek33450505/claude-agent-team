@@ -236,4 +236,68 @@ PYEOF
   fi
 fi
 
+# ── Step 5: Auto-resume detection for orchestrator context-limit stops ────────
+# Fires when an orchestrator agent stops mid-run without completing all batches.
+# Writes a resume-request JSON to ~/.claude/cast/resume-queue/ and notifies.
+CKPT_LOG="${HOME}/.claude/cast/orchestrator-checkpoint.log"
+
+if echo "$AGENT_NAME" | grep -qiE "orchestrator"; then
+  if [ -f "$CKPT_LOG" ]; then
+    # Check the checkpoint does NOT end with [ORCHESTRATOR DONE]
+    if ! tail -1 "$CKPT_LOG" 2>/dev/null | grep -q '\[ORCHESTRATOR DONE\]'; then
+      # Only trigger on clean stops, not errors
+      if echo "$STOP_REASON" | grep -qiE "^(end_turn|max_turns)$"; then
+
+        LAST_BATCH="$(grep 'BATCH.*COMPLETE' "$CKPT_LOG" 2>/dev/null | tail -1 | grep -oE '[0-9]+')"
+        NEXT_BATCH="$((${LAST_BATCH:-0} + 1))"
+        PLAN_FILE="$(grep '^\[PLAN\]' "$CKPT_LOG" 2>/dev/null | tail -1 | sed 's/\[PLAN\] //')"
+
+        RESUME_DIR="${HOME}/.claude/cast/resume-queue"
+        mkdir -p "$RESUME_DIR" 2>/dev/null || true
+
+        TS="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
+        OUT="${RESUME_DIR}/${TS}-orchestrator.json"
+
+        export CAST_RESUME_TS="$TS"
+        export CAST_RESUME_PLAN_FILE="${PLAN_FILE:-}"
+        export CAST_RESUME_NEXT_BATCH="$NEXT_BATCH"
+        export CAST_RESUME_CKPT="$CKPT_LOG"
+        export CAST_RESUME_OUT="$OUT"
+
+        python3 - <<'PYEOF' 2>/dev/null || true
+import json, os
+
+out  = os.environ.get('CAST_RESUME_OUT', '')
+if not out:
+    raise SystemExit(0)
+
+payload = {
+    "version":           1,
+    "timestamp":         os.environ.get('CAST_RESUME_TS', ''),
+    "plan_file":         os.environ.get('CAST_RESUME_PLAN_FILE') or None,
+    "resume_from_batch": int(os.environ.get('CAST_RESUME_NEXT_BATCH', '1')),
+    "checkpoint_log":    os.environ.get('CAST_RESUME_CKPT', ''),
+}
+with open(out, 'w') as f:
+    json.dump(payload, f, indent=2)
+PYEOF
+
+        # Notify user
+        NOTIFY_MSG="Orchestrator stopped mid-run after Batch ${LAST_BATCH:-0} — run /orchestrate to resume"
+        bash "${HOME}/.claude/scripts/cast-notify.sh" "$NOTIFY_MSG" 2>/dev/null || true
+
+        # Emit task_blocked event
+        if [ -f "${HOME}/.claude/scripts/cast-events.sh" ]; then
+          # shellcheck source=/dev/null
+          source "${HOME}/.claude/scripts/cast-events.sh" 2>/dev/null || true
+          cast_emit_event 'task_blocked' 'orchestrator' 'session' '' \
+            "Orchestrator stopped at batch ${LAST_BATCH:-0} without DONE sentinel" \
+            'BLOCKED' 2>/dev/null || true
+        fi
+
+      fi
+    fi
+  fi
+fi
+
 exit 0
