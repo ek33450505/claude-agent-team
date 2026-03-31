@@ -36,6 +36,7 @@ except Exception as e:
     print(f"ERROR:{e}")
     sys.exit(0)
 
+import os
 hooks = d.get("hooks", {})
 commands = []
 for event_hooks in hooks.values():
@@ -44,10 +45,14 @@ for event_hooks in hooks.values():
             cmd = h.get("command", "") + h.get("prompt", "")
             commands.append(cmd)
 
-all_commands = " ".join(commands)
 missing = []
 for script in ["pre-tool-guard.sh", "post-tool-hook.sh"]:
-    if script not in all_commands:
+    found = any(
+        script in cmd or
+        any(os.path.basename(tok) == script for tok in cmd.split())
+        for cmd in commands if cmd.strip()
+    )
+    if not found:
         missing.append(script)
 
 if missing:
@@ -304,14 +309,21 @@ try:
 except Exception:
     print("UNKNOWN")
     sys.exit(0)
+import os
 hooks = d.get("hooks", {})
-all_cmds = " ".join(
+cmds = [
     h.get("command", "") + h.get("prompt", "")
     for event_hooks in hooks.values()
     for entry in event_hooks
     for h in entry.get("hooks", [])
+]
+script = "cast-session-end.sh"
+found = any(
+    script in cmd or
+    any(os.path.basename(tok) == script for tok in cmd.split())
+    for cmd in cmds if cmd.strip()
 )
-print("OK" if "cast-session-end.sh" in all_cmds else "MISSING")
+print("OK" if found else "MISSING")
 PYEOF
 )
   if [[ "$STOP_WIRED" == "OK" ]]; then
