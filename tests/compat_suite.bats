@@ -9,6 +9,8 @@
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
+bats_require_minimum_version 1.5.0
+
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 COMPAT_SH="$REPO_DIR/scripts/cast-compat.sh"
 CAST_CLI="$REPO_DIR/bin/cast"
