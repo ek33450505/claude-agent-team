@@ -160,6 +160,7 @@ print('ok')
 # ---------------------------------------------------------------------------
 
 @test "settings.json has a catch-all PreToolUse entry for cast-audit-hook.sh" {
+  [ -f "$SETTINGS_JSON" ] || skip "settings.json not installed (CI)"
   assert [ -f "$SETTINGS_JSON" ]
   python3 - "$SETTINGS_JSON" <<'PYEOF'
 import sys, json

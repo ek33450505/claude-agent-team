@@ -16,11 +16,12 @@ if [ "${1:-}" = "--brief" ]; then
   TODAY=$(date +%Y%m%d)
   EVENTS_DIR="${HOME}/.claude/cast/events"
   CAST_LOG_DIR="${HOME}/.claude/cast"
-  agents_today=$(ls "$EVENTS_DIR" 2>/dev/null | grep -c "^${TODAY}T.*subagent-stop\.json$" || echo 0)
+  agents_today=$(ls "$EVENTS_DIR" 2>/dev/null | { grep -c "^${TODAY}T.*subagent-stop\.json$" || true; })
   # Count dispatches from events dir (subagent-stop files = completed agent runs, all time)
-  dispatches=$(ls "$EVENTS_DIR" 2>/dev/null | grep -c "subagent-stop\.json$" || echo 0)
+  dispatches=$(ls "$EVENTS_DIR" 2>/dev/null | { grep -c "subagent-stop\.json$" || true; })
   # Measure total size of active CAST log files (~/.claude/cast/*.jsonl)
-  bytes=$(cat "${CAST_LOG_DIR}"/*.jsonl 2>/dev/null | wc -c | tr -d ' ')
+  # Use find+xargs to avoid glob-no-match failure under set -e on Linux
+  bytes=$(find "${CAST_LOG_DIR}" -maxdepth 1 -name '*.jsonl' 2>/dev/null | xargs cat 2>/dev/null | wc -c | tr -d '[:space:]')
   bytes=${bytes:-0}
   mb=$(awk "BEGIN{printf \"%.1f\", ${bytes}/1048576}")
   printf "CAST | agents:%d today  dispatches:%d | log: %sMB\n" "$agents_today" "$dispatches" "$mb"
