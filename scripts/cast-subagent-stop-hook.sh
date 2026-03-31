@@ -147,7 +147,7 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
   fi
   export CAST_STOP_DB_STATUS="$DB_STATUS"
   python3 - <<'PYEOF' 2>>"$STOP_ERROR_LOG" || true
-import subprocess, os
+import sqlite3, os
 
 db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
 agent = os.environ.get('CAST_STOP_AGENT', '')
@@ -161,18 +161,26 @@ if not agent or not db:
 # Update the running row for this agent. Use agent_id for precise matching when
 # available; fall back to MAX(id) heuristic when agent_id is absent.
 agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
-if agent_id:
-    update_sql = (
-        f"UPDATE agent_runs SET status='{st}', ended_at='{ts}' "
-        f"WHERE status='running' AND agent_id='{agent_id}';"
-    )
-else:
-    update_sql = (
-        f"UPDATE agent_runs SET status='{st}', ended_at='{ts}' "
-        f"WHERE status='running' AND agent='{agent}' AND session_id='{sess}' "
-        f"AND id=(SELECT MAX(id) FROM agent_runs WHERE status='running' AND agent='{agent}' AND session_id='{sess}');"
-    )
-subprocess.run(['sqlite3', db, update_sql], capture_output=True, timeout=5)
+try:
+    conn = sqlite3.connect(db, timeout=5)
+    cur  = conn.cursor()
+    if agent_id:
+        cur.execute(
+            "UPDATE agent_runs SET status=?, ended_at=? "
+            "WHERE status='running' AND agent_id=?",
+            (st, ts, agent_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE agent_runs SET status=?, ended_at=? "
+            "WHERE status='running' AND agent=? AND session_id=? "
+            "AND id=(SELECT MAX(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
+            (st, ts, agent, sess, agent, sess),
+        )
+    conn.commit()
+    conn.close()
+except Exception:
+    pass
 PYEOF
 fi
 

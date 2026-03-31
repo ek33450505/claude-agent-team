@@ -66,8 +66,8 @@ PREV_BATCH="$((RESUME_FROM - 1))"
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] resume-watcher: resuming ${PLAN_FILE} from batch ${RESUME_FROM}" >> "$LOG_FILE" 2>/dev/null || true
 
-claude -p "Resume orchestrator plan at ${PLAN_FILE}. Batches 1 through ${PREV_BATCH} are complete. Skip them and execute from Batch ${RESUME_FROM} to the end without asking for approval." \
-  >> "$LOG_FILE" 2>&1 || true
+RESUME_PROMPT="Resume orchestrator plan at ${PLAN_FILE}. Batches 1 through ${PREV_BATCH} are complete. Skip them and execute from Batch ${RESUME_FROM} to the end without asking for approval."
+claude -p "$RESUME_PROMPT" >> "$LOG_FILE" 2>&1 || true
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] resume-watcher: claude invocation finished" >> "$LOG_FILE" 2>/dev/null || true
 
