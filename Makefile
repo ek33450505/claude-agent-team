@@ -17,7 +17,7 @@ validate:
 
 # Run the full BATS test suite
 test:
-	tests/bats/bin/bats tests/*.bats
+	tests/bats/bin/bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats
 
 # Sync docs then validate
 sync: docs validate
