@@ -191,14 +191,24 @@ assert 'last_checked' in d and d['last_checked']
 # ---------------------------------------------------------------------------
 
 @test "upgrade-check: exits 0 when gh is not in PATH" {
-  # Do NOT install any gh stub — PATH has no gh binary
-  # Remove any existing gh from PATH by using a clean minimal PATH
-  PATH="/usr/bin:/bin" run bash "$UPGRADE_CHECK_SH"
+  # Do NOT install any gh stub — ensure gh is absent from PATH on all platforms.
+  # On Ubuntu, gh lives at /usr/bin/gh so we cannot use /usr/bin:/bin.
+  # Instead: create an isolated bin with only python3 symlinked so the script
+  # can still call python3 but cannot find gh.
+  local no_gh_bin
+  no_gh_bin="$(mktemp -d)"
+  ln -sf "$(command -v python3)" "$no_gh_bin/python3" 2>/dev/null || true
+  PATH="$no_gh_bin:/bin" run bash "$UPGRADE_CHECK_SH"
+  rm -rf "$no_gh_bin"
   assert_success
 }
 
 @test "upgrade-check: prints warning when gh is not in PATH" {
-  PATH="/usr/bin:/bin" run bash "$UPGRADE_CHECK_SH"
+  local no_gh_bin
+  no_gh_bin="$(mktemp -d)"
+  ln -sf "$(command -v python3)" "$no_gh_bin/python3" 2>/dev/null || true
+  PATH="$no_gh_bin:/bin" run bash "$UPGRADE_CHECK_SH"
+  rm -rf "$no_gh_bin"
   assert_success
   assert_output --partial "gh"
 }
