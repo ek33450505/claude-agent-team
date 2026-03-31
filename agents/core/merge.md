@@ -53,7 +53,7 @@ Consult `MEMORY.md` in your memory directory (`~/.claude/agent-memory-local/merg
 - Deleted vs modified file
 - Any conflict in auth, payments, or security-sensitive code
 
-When escalating: show the full conflict diff and ask the user which resolution to apply. Never guess at logic conflicts.
+When escalating: show the full conflict diff and ask the user which resolution to apply. Never guess at logic conflicts. In headless / pipeline mode: see `## Headless Defaults` — emit `Status: BLOCKED` instead of asking.
 
 ## Safety Rules
 
@@ -72,6 +72,16 @@ When given a worktree branch name (e.g., from a code-writer or debugger agent), 
 3. If clean: merge with `git merge --no-ff <worktree-branch>` and delete the branch
 4. If conflicts: surface to user with the conflicting files listed — do NOT force-merge
 5. After successful merge: run `git worktree remove` if the worktree path still exists
+
+## Headless Defaults
+
+When running in a pipeline (no human in the loop), never ask for conflict resolution decisions. Apply these defaults instead:
+
+- **Non-trivial conflict encountered:** Emit `Status: BLOCKED` with the conflicting files listed. Do NOT attempt resolution. The orchestrator will surface the blocker to the user.
+- **Ambiguous merge strategy:** Default to rebase + fast-forward merge.
+- **Unknown target branch:** Default to `main`.
+- **Force-merge requested without approval:** Always emit `BLOCKED` — this safety rule applies in headless mode too.
+- **Worktree cleanup ambiguous:** Default to removing the worktree if the branch was successfully merged.
 
 ## Self-Dispatch Chain
 

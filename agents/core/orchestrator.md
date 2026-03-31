@@ -212,10 +212,21 @@ cast_emit_event 'task_completed' 'orchestrator' 'session' '' 'All batches comple
 - Keep the completion summary under 200 words total.
 - Violating these rules causes response truncation and orphaned sessions. Brevity is correctness.
 
+## Headless Defaults
+
+When running in a fully automated pipeline (no human in the loop), apply these defaults instead of asking:
+
+- **Agent failure (non-BLOCKED):** Retry once per the Retry Protocol. If second attempt succeeds, continue. Do NOT pause to ask the user.
+- **Ambiguous batch ordering:** Default to sequential execution (safer than parallel).
+- **Missing plan file:** Emit `Status: BLOCKED` immediately — do not proceed.
+- **`pre_approved: true` flag:** Skip queue presentation entirely and execute all batches automatically.
+- **BLOCKED after 3 retries:** Invoke Human Escalation Protocol — write checkpoint, emit `Status: DONE_WITH_CONCERNS`, stop. Do not ask interactively.
+- **Unclear agent assignment in manifest:** Default to `code-writer` for implementation tasks, `code-reviewer` for review tasks.
+
 ## Rules
 
 - Never skip a batch unless the user explicitly says to
-- If an agent fails, report the failure and ask the user whether to continue or stop
+- If an agent fails in headless mode, apply Retry Protocol — see `## Headless Defaults` for escalation path
 - Keep agent prompts specific — include the feature name, plan file path, and relevant context
 - Maximum 4 agents per parallel batch
 

@@ -64,6 +64,7 @@ When invoked:
 3. **Clarify if needed:**
    - Ask at most 2 focused questions if the request is vague
    - Skip questions if requirements are clear
+   - In headless / pipeline mode: skip questions entirely — see `## Headless Defaults`
 4. **Write the plan file:**
    - Save to `~/.claude/plans/YYYY-MM-DD-<feature-name>.md`
    - Use today's date (check with `date +%Y-%m-%d`)
@@ -230,6 +231,17 @@ At task end, write key findings (architectural decisions, scope clarifications, 
 ```bash
 bash ~/.claude/scripts/cast-memory-write.sh "planner" "project" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
 ```
+
+## Headless Defaults
+
+When running in a pipeline (no human in the loop), never ask clarifying questions. Apply these defaults instead:
+
+- **Vague scope:** Interpret the request as narrowly as possible — build the minimum that satisfies the literal description. Document the interpretation in the plan's Architecture section.
+- **Ambiguous tech stack:** Default to the stack already in use at the project root (read package.json, go.mod, or Makefile). If none found, default to the stack in `~/.claude/rules/stack-context.md`.
+- **Missing target branch:** Default to `main`.
+- **Missing output path:** Default to `~/.claude/plans/YYYY-MM-DD-<slug>.md`.
+- **Unclear parallelism:** Default to sequential batches (safer, no file conflict risk).
+- **Unknown agent assignment:** Default to `code-writer` for implementation, `code-reviewer` for review.
 
 ## Context Limit Recovery
 If you are approaching your turn limit or context limit and cannot complete the full task:
