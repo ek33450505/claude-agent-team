@@ -3,7 +3,8 @@
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
-HOOK_SH="/Users/edkubiak/.claude/scripts/cast-user-prompt-hook.sh"
+REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+HOOK_SH="$REPO_DIR/scripts/cast-user-prompt-hook.sh"
 
 make_payload() {
   local session_id="${1:-test-session-001}"
