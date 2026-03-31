@@ -18,6 +18,7 @@ CAST turns Claude Code from a single-session assistant into a coordinated team:
 - **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 16-row dispatch table and picks the agent — no regex, no routing config.
 - **Quality is enforced, not requested.** Raw `git commit` and `git push` are hard-blocked by shell hooks. Every code change mandates a `code-reviewer` pass. Commit only happens through the `commit` agent.
 - **Everything is observable.** Every agent dispatch, session, and token spend is logged to `cast.db` (SQLite). A companion React dashboard shows activity, analytics, agent status, and memory in real time.
+- **Lightweight tasks use cheaper models automatically.** Haiku handles `code-reviewer`, `commit`, `push`, and `test-runner` — the high-frequency, low-complexity work. Sonnet handles planning, writing, and debugging. The cost difference is 20x per token. CAST routes silently; you pay for what the task actually needs.
 
 ---
 
@@ -130,6 +131,8 @@ bash install.sh
 | `push` | haiku | low | Pushes to remote with safety checks |
 
 All agents carry `memory: local` — each accumulates session knowledge in `~/.claude/agent-memory-local/<name>/`.
+
+> Haiku agents (`code-reviewer`, `commit`, `push`, `test-runner`) run at ~$0.25/MTok vs Sonnet's ~$3/MTok — a 12x cost difference on high-frequency tasks.
 
 ---
 
