@@ -171,7 +171,7 @@ EOF
   chmod +x "$HOME/no-bats-bin/bats"
 
   # Override PATH to a bats that always fails (simulates bats not in PATH)
-  PATH="$HOME/no-bats-bin" run bash "$COMPAT_SH" test
+  PATH="$HOME/no-bats-bin:/usr/bin:/bin" run bash "$COMPAT_SH" test
   # Should print an error, not crash with unbound variable / pipe error
   [ "$status" -ne 0 ]
   assert_output --partial "bats"
