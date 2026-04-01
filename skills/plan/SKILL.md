@@ -44,10 +44,11 @@ Use `"subagent_type": "main"` for tasks the orchestrator handles inline. Use nam
 
 Once the plan file is written and the user approves ExitPlanMode:
 
-Dispatch the `orchestrator` agent via the Agent tool, passing the absolute path to the plan file you just wrote. Example:
+Dispatch the orchestrator via the Agent tool using `subagent_type: "general-purpose"`. The orchestrator definition lives at `~/.claude/agents/orchestrator.md` — instruct the agent to read it first, then execute the plan.
 
-> Dispatch orchestrator with task: "Execute plan at /Users/<you>/.claude/plans/<filename>.md"
+Example prompt to pass:
+> "You are the CAST orchestrator. Read your full instructions at ~/.claude/agents/orchestrator.md first, then execute the plan at /Users/<you>/.claude/plans/<filename>.md. Follow the orchestrator instructions exactly — present the batch queue, await approval, then execute all batches in order."
 
-The orchestrator will read the Agent Dispatch Manifest, present the batch queue for user approval, and execute the batches in order.
+**Important:** Do NOT use `subagent_type: "orchestrator"` — that name is a custom CAST agent and is not a valid built-in subagent type. Always use `subagent_type: "general-purpose"` with the instructions above.
 
-Do not execute the plan yourself — hand it off to the orchestrator.
+Do not execute the plan yourself — hand it off to the agent.
