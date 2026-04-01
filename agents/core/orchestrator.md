@@ -6,7 +6,7 @@ description: >
   at a time. Use when a planner has produced a manifest and you need automated execution.
 tools: Read, Glob, Agent, Bash, Write, Edit
 model: sonnet
-effort: medium
+effort: high
 color: purple
 memory: local
 maxTurns: 50

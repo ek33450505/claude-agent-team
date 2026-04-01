@@ -6,7 +6,7 @@ description: >
   existing conventions. Use after code-writer completes a logical unit.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
-effort: medium
+effort: high
 color: fuchsia
 memory: local
 maxTurns: 20

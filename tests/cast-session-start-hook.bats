@@ -124,3 +124,31 @@ print('ok')
   lines=$(wc -l < "$HOME/.claude/cast/session-starts.jsonl")
   [ "$lines" -eq 2 ]
 }
+
+# ---------------------------------------------------------------------------
+# 9. OTEL export wiring — OTLP endpoint set → writes otlp exporters
+# ---------------------------------------------------------------------------
+
+@test "OTEL_EXPORTER_OTLP_ENDPOINT set → writes OTEL_METRICS_EXPORTER=otlp to env file" {
+  local env_file="$HOME/otel-env.sh"
+  export CLAUDE_ENV_FILE="$env_file"
+  export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+  bash "$HOOK_SH" <<< "$(make_payload "sess-otel" "/tmp")"
+  [ -f "$env_file" ]
+  grep -q "OTEL_METRICS_EXPORTER=otlp" "$env_file"
+  grep -q "OTEL_LOGS_EXPORTER=otlp" "$env_file"
+  unset OTEL_EXPORTER_OTLP_ENDPOINT
+}
+
+# ---------------------------------------------------------------------------
+# 10. OTEL export wiring — OTLP endpoint unset → writes console exporter
+# ---------------------------------------------------------------------------
+
+@test "OTEL_EXPORTER_OTLP_ENDPOINT unset → writes OTEL_METRICS_EXPORTER=console to env file" {
+  local env_file="$HOME/otel-env-console.sh"
+  export CLAUDE_ENV_FILE="$env_file"
+  unset OTEL_EXPORTER_OTLP_ENDPOINT
+  bash "$HOOK_SH" <<< "$(make_payload "sess-console" "/tmp")"
+  [ -f "$env_file" ]
+  grep -q "OTEL_METRICS_EXPORTER=console" "$env_file"
+}

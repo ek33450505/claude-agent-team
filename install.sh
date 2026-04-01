@@ -276,6 +276,13 @@ else
   warn "    python3 -m spacy download en_core_web_lg"
   warn "  cast-redact.py will use regex-only fallback mode until then."
 fi
+# --- Optional: OpenTelemetry export configuration ---
+# export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+# When set, CAST will export metrics and logs via OTLP to your observability backend.
+# Unset = console exporter (default, no external dependency).
+# The cast-session-start-hook.sh automatically detects this variable and wires
+# OTEL_METRICS_EXPORTER and OTEL_LOGS_EXPORTER into the session environment.
+
 printf "  Audit log: ${BOLD}~/.claude/logs/audit.jsonl${NC}\n"
 printf "  To enable the PreToolUse audit hook, add to ${BOLD}~/.claude/settings.json${NC}:\n"
 printf '    "PreToolUse": [{"hooks": [{"type": "command", "command": "bash ~/.claude/scripts/cast-audit-hook.sh"}]}]\n'

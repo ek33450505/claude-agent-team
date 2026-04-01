@@ -96,4 +96,13 @@ except Exception:
     pass
 PYEOF2
 
+# OTEL export wiring
+# If OTEL_EXPORTER_OTLP_ENDPOINT is set, configure OTLP exporters; otherwise use console.
+if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" ]; then
+  echo "OTEL_METRICS_EXPORTER=otlp" >> "${CLAUDE_ENV_FILE:-/dev/null}" 2>/dev/null || true
+  echo "OTEL_LOGS_EXPORTER=otlp" >> "${CLAUDE_ENV_FILE:-/dev/null}" 2>/dev/null || true
+else
+  echo "OTEL_METRICS_EXPORTER=console" >> "${CLAUDE_ENV_FILE:-/dev/null}" 2>/dev/null || true
+fi
+
 exit 0

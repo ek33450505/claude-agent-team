@@ -7,7 +7,7 @@ description: >
   writes tests inline, and dispatches the commit agent when all units are complete.
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 model: sonnet
-effort: medium
+effort: high
 color: orange
 memory: local
 maxTurns: 40

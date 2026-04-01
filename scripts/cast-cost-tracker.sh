@@ -172,6 +172,42 @@ try:
               input_tokens, output_tokens, call_cost, task_summary, project_name, 'running',
               agent_id or None))
 
+        # Also log to dispatch_decisions if the table exists (v3.2 schema)
+        try:
+            tbl_check = cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='dispatch_decisions'"
+            ).fetchone()
+            if tbl_check:
+                # Attempt to read effort level from agent frontmatter
+                effort_val = None
+                try:
+                    import re as _re
+                    agent_md_paths = [
+                        os.path.expanduser(f'~/.claude/agents/{agent_name}.md'),
+                        os.path.join(os.path.dirname(__file__) if '__file__' in dir() else '',
+                                     '..', 'agents', 'core', f'{agent_name}.md'),
+                    ]
+                    for md_path in agent_md_paths:
+                        if os.path.exists(md_path):
+                            with open(md_path) as mf:
+                                content = mf.read(512)
+                            m = _re.search(r'^effort:\s*(\S+)', content, _re.MULTILINE)
+                            if m:
+                                effort_val = m.group(1).strip()
+                            break
+                except Exception:
+                    pass
+
+                prompt_snippet = task_summary[:200] if task_summary else None
+                cur.execute('''
+                    INSERT INTO dispatch_decisions
+                      (session_id, prompt_snippet, chosen_agent, model, effort, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (session_id, prompt_snippet, agent_name, model or None,
+                      effort_val, now))
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
 except Exception:
