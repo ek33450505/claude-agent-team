@@ -6,7 +6,7 @@ description: >
   merged worktrees and branches. Hard-blocks force-merges to main/master without explicit approval.
 tools: Bash, Read, Edit, Glob, Grep
 model: sonnet
-effort: high
+effort: medium
 color: yellow
 memory: local
 maxTurns: 20

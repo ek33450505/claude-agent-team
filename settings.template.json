@@ -67,7 +67,9 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/post-tool-hook.sh",
-            "timeout": 10
+            "if": "Write|Edit|Agent|Bash",
+            "timeout": 10,
+            "async": true
           }
         ],
         "description": "CAST review — auto-formats code, injects [CAST-REVIEW] directive, logs agent dispatches, and triggers [CAST-DEBUG] on Bash non-zero exits"
@@ -77,7 +79,9 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-cost-tracker.sh",
-            "timeout": 5
+            "if": "Bash|Edit|Write|Agent",
+            "timeout": 5,
+            "async": true
           }
         ],
         "description": "CAST cost tracking — records token usage per tool call into cast.db sessions and agent_runs tables"
@@ -87,7 +91,9 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-budget-alert.sh",
-            "timeout": 3
+            "if": "Bash|Edit|Write|Agent",
+            "timeout": 3,
+            "async": true
           }
         ],
         "description": "CAST budget guard — injects [CAST-BUDGET-WARN] or [CAST-BUDGET-HARD-LIMIT] when daily spend threshold reached"
@@ -99,12 +105,14 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-post-compact-hook.sh",
-            "timeout": 5
+            "timeout": 5,
+            "async": true
           },
           {
             "type": "http",
             "url": "http://localhost:3001/api/hook-events",
-            "timeout": 3
+            "timeout": 3,
+            "async": true
           }
         ],
         "description": "CAST compaction logger — records to cast/events/ and pushes to dashboard SSE"
@@ -126,7 +134,8 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-task-created-hook.sh",
-            "timeout": 5
+            "timeout": 5,
+            "async": true
           }
         ],
         "description": "CAST task logger — logs background agent task creation to cast/events/ and cast.db"
@@ -139,7 +148,8 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-instructions-loaded-hook.sh",
-            "timeout": 3
+            "timeout": 3,
+            "async": true
           }
         ],
         "description": "CAST instructions audit — logs active CLAUDE.md files at session start"
@@ -151,7 +161,8 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-session-end.sh",
-            "timeout": 5
+            "timeout": 5,
+            "async": true
           }
         ],
         "description": "CAST safety net — catches missed reviews/commits before session ends; auto-dispatches chain-reporter after multi-batch orchestrator sessions"
@@ -163,7 +174,8 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-subagent-stop-hook.sh",
-            "timeout": 5
+            "timeout": 5,
+            "async": true
           }
         ],
         "description": "CAST subagent stop logger — fires when a subagent completes"
