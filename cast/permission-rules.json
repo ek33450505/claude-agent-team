@@ -1,0 +1,13 @@
+{
+  "_comment": "CAST permission rules — auto-approve/deny patterns for the PermissionRequest hook. Edit to customize.",
+  "auto_approve": [
+    "git status", "git log", "git diff", "git branch", "git show",
+    "ls", "cat ", "head ", "tail ", "wc ", "echo ", "which ", "pwd",
+    "env ", "printenv", "date", "uname"
+  ],
+  "auto_deny": [
+    "curl", "wget", "nc ", "ncat", "rm -rf", "dd if",
+    "mkfs", "chmod 777", "sudo rm", "gh auth logout", "aws configure"
+  ],
+  "default": "allow"
+}

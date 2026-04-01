@@ -1,0 +1,76 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-audit-hook.sh",
+            "if": "Write|Edit",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/pre-tool-guard.sh",
+            "if": "Bash(git *)",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-security-guard.sh",
+            "if": "Bash(curl *)",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-security-guard.sh",
+            "if": "Bash(ssh *)",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-security-guard.sh",
+            "if": "Bash(scp *)",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-security-guard.sh",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-headless-guard.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-permission-hook.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

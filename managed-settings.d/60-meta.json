@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "worktree": {
+    "symlinkDirectories": [
+      "node_modules",
+      ".cache",
+      "dist"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/scripts/cast-stats.sh --brief 2>/dev/null | head -1 || echo 'CAST ready'"
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "*.github.com",
+        "*.npmjs.org",
+        "registry.yarnpkg.com",
+        "*.googleapis.com",
+        "api.anthropic.com"
+      ],
+      "allowLocalBinding": true
+    },
+    "filesystem": {
+      "allowWrite": [
+        "/tmp"
+      ],
+      "denyRead": [
+        "~/.aws/credentials",
+        "~/.ssh/id_*",
+        "~/.gnupg",
+        "~/.claude/cast.db",
+        "~/.claude/history.jsonl",
+        "~/.claude/logs/**",
+        "~/.claude/routing-log.jsonl"
+      ]
+    },
+    "excludedCommands": [
+      "git",
+      "docker",
+      "bq",
+      "osascript"
+    ]
+  },
+  "autoUpdatesChannel": "stable",
+  "plansDirectory": "~/.claude/plans/",
+  "_permissions_warning": "REVIEW CAREFULLY: Bash/Write/Edit let Claude act without asking. Remove any you're not comfortable with.",
+  "_routing_note": "Model routing: haiku for commit/push/code-reviewer/test-runner. sonnet for all others. Set CLAUDE_CODE_SUBAGENT_MODEL to override globally. Effort levels: see agent frontmatter.",
+  "teammateMode": "in-process",
+  "model": "sonnet"
+}

@@ -160,6 +160,22 @@ for script_file in "$SCRIPT_DIR"/scripts/*; do
     success "  Installed: $dest_name"
 done
 
+# --- Install managed-settings.d/ fragments ---
+info "Installing settings fragments..."
+mkdir -p "$CLAUDE_DIR/managed-settings.d"
+if [ -d "$SCRIPT_DIR/managed-settings.d" ]; then
+  cp "$SCRIPT_DIR"/managed-settings.d/*.json "$CLAUDE_DIR/managed-settings.d/"
+  success "  Settings fragments installed"
+  # Regenerate settings.json from fragments (overwrites the template-merged copy)
+  if bash "$CLAUDE_DIR/scripts/cast-merge-settings.sh" 2>/dev/null; then
+    success "  [install] merged settings fragments → ~/.claude/settings.json"
+  else
+    warn "  Settings merge failed — settings.json may be stale. Run: bash ~/.claude/scripts/cast-merge-settings.sh"
+  fi
+else
+  warn "  managed-settings.d/ not found in repo — skipping fragment install"
+fi
+
 # --- Initialize cast.db (SQLite state foundation — Phase 7a) ---
 DB_INIT_SCRIPT="$CLAUDE_DIR/scripts/cast-db-init.sh"
 if [ -f "$DB_INIT_SCRIPT" ]; then
@@ -167,6 +183,17 @@ if [ -f "$DB_INIT_SCRIPT" ]; then
     success "  cast.db initialized"
   else
     warn "  cast.db initialization failed — run scripts/cast-db-init.sh manually if needed"
+  fi
+fi
+
+# --- Seed cast/permission-rules.json (only if not already present) ---
+if [ -f "$SCRIPT_DIR/cast/permission-rules.json" ]; then
+  mkdir -p "$CLAUDE_DIR/cast"
+  if [ ! -f "$CLAUDE_DIR/cast/permission-rules.json" ]; then
+    cp "$SCRIPT_DIR/cast/permission-rules.json" "$CLAUDE_DIR/cast/permission-rules.json"
+    success "  Installed: cast/permission-rules.json"
+  else
+    info "  Skipped (exists): cast/permission-rules.json"
   fi
 fi
 

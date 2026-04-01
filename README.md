@@ -392,6 +392,6 @@ MIT — see [LICENSE](LICENSE).
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->362<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->389<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->17<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->8<!-- /CAST_SKILL_COUNT --> skills

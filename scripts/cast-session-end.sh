@@ -1,6 +1,6 @@
 #!/bin/bash
-# cast-session-end.sh — CAST consolidated Stop hook
-# Hook event: Stop
+# cast-session-end.sh — CAST consolidated session-end hook
+# Hook events: Stop, SessionEnd
 # Timeout: 15 seconds
 #
 # Replaces: stop-hook.sh, cast-archive.sh, cast-agent-memory-sync.sh,
@@ -27,7 +27,7 @@ if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 set +e
 
 # === HOOK HEALTH MARKER ===
-mkdir -p "${HOME}/.claude/cast/hook-last-fired" && touch "${HOME}/.claude/cast/hook-last-fired/Stop.timestamp"
+mkdir -p "${HOME}/.claude/cast/hook-last-fired" && touch "${HOME}/.claude/cast/hook-last-fired/Stop.timestamp" "${HOME}/.claude/cast/hook-last-fired/SessionEnd.timestamp"
 
 CAST_DIR="${HOME}/.claude/cast"
 SESSION_ID="${CLAUDE_SESSION_ID:-default}"
