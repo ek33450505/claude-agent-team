@@ -53,10 +53,11 @@ Wait for explicit confirmation before proceeding.
 
 ## Step 3 — Dispatch the orchestrator
 
-Once the user confirms, dispatch via the Agent tool using `subagent_type: "general-purpose"`. Pass this prompt:
+Once the user confirms, dispatch via the Agent tool with these exact parameters:
+- `subagent_type: "general-purpose"`
+- `name: "orchestrator"` — makes it show as "orchestrator" in the UI instead of a UUID
+- prompt: `"You are the CAST orchestrator. Read your full instructions at ~/.claude/agents/orchestrator.md first, then execute the plan at [ABSOLUTE_PLAN_PATH]. Follow the orchestrator instructions exactly — present the batch queue for approval, then execute all batches in order."`
 
-> "You are the CAST orchestrator. Read your full instructions at ~/.claude/agents/orchestrator.md first, then execute the plan at [ABSOLUTE_PLAN_PATH]. Follow the orchestrator instructions exactly — present the batch queue for approval, then execute all batches in order."
-
-**Important:** Always use `subagent_type: "general-purpose"` — never `subagent_type: "orchestrator"`. That name is a custom CAST agent, not a valid built-in subagent type.
+**Important:** Always use `subagent_type: "general-purpose"` — never `subagent_type: "orchestrator"`. That name is a custom CAST agent, not a valid built-in subagent type. The `name` field is what makes it appear labeled in the UI.
 
 Do not execute the plan yourself — hand it off to the agent.

@@ -28,8 +28,9 @@ If no plan file can be found, output: "No plan file found in ~/.claude/plans/. R
 
 ## Step 2 — Dispatch the orchestrator
 
-Dispatch via the Agent tool using `subagent_type: "general-purpose"`. Pass this prompt:
+Dispatch via the Agent tool with these exact parameters:
+- `subagent_type: "general-purpose"`
+- `name: "orchestrator"` — makes it show as "orchestrator" in the UI instead of a UUID
+- prompt: `"You are the CAST orchestrator. Read your full instructions at ~/.claude/agents/orchestrator.md first. Then execute the plan at [RESOLVED_PLAN_PATH]. Follow the orchestrator instructions exactly: present the batch queue for approval, then execute all batches in order. If resuming, the last completed batch was [LAST_BATCH] — skip batches with id <= that number."`
 
-> "You are the CAST orchestrator. Read your full instructions at ~/.claude/agents/orchestrator.md first. Then execute the plan at [RESOLVED_PLAN_PATH]. Follow the orchestrator instructions exactly: present the batch queue for approval, then execute all batches in order. If resuming, the last completed batch was [LAST_BATCH] — skip batches with id <= that number."
-
-**Important:** Always use `subagent_type: "general-purpose"` — never `subagent_type: "orchestrator"`. The orchestrator is a custom CAST agent and not a valid built-in subagent type.
+**Important:** Always use `subagent_type: "general-purpose"` — never `subagent_type: "orchestrator"`. The orchestrator is a custom CAST agent and not a valid built-in subagent type. The `name` field is what makes it appear labeled in the UI.
