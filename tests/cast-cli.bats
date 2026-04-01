@@ -59,7 +59,7 @@ teardown() {
 @test "cast --version: prints version string" {
   run bash "$CAST_CLI" --version
   assert_success
-  assert_output --partial "3.0"
+  assert_output --partial "3.1"
 }
 
 @test "cast --help: prints usage with subcommands" {
@@ -183,7 +183,7 @@ teardown() {
 @test "cast status: output contains CAST version header" {
   run bash "$CAST_CLI" status
   assert_success
-  assert_output --partial "CAST v3.0"
+  assert_output --partial "CAST v3.1"
 }
 
 @test "cast status: output contains Budget line" {
