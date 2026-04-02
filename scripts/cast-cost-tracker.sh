@@ -96,7 +96,12 @@ if raw_input.strip():
                 input_tokens  = int(usage.get('input_tokens', 0) or 0)
                 output_tokens = int(usage.get('output_tokens', 0) or 0)
         if not model:
-            model = data.get('model', '') or ''
+            model = (data.get('model')
+                     or (tool_resp.get('model') if isinstance(tool_resp, dict) else None)
+                     or '')
+        # Final fallback: default to sonnet so pricing lookup doesn't return $0
+        if not model:
+            model = 'claude-sonnet-4-6'
     except Exception:
         pass
 
