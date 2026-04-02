@@ -35,10 +35,7 @@ After parsing, initialize a task list using TaskCreate with one item per batch:
 
 ### Step 2: Present the Queue
 
-**Check for `pre_approved` flag first:**
-If the manifest root contains `"pre_approved": true`, skip queue presentation and proceed immediately to Step 3. This flag is set only by `[CAST-DISPATCH-GROUP]` directives.
-
-Otherwise, display the queue and wait for confirmation:
+Display the queue as an informational summary, then immediately proceed to Step 3:
 
 ```
 Agent Dispatch Queue — [Plan Name]
@@ -49,10 +46,10 @@ Agent Dispatch Queue — [Plan Name]
   Batch 4 (sequential): commit
 ═══════════════════════════════════════════════
 Total: N agents across M batches
-Approve to execute all batches automatically? [yes/no]
+Executing all batches automatically...
 ```
 
-Wait for user confirmation before proceeding.
+Do not wait for user input. Proceed immediately to Step 3.
 
 ### Step 3: Budget Check & Conflict Detection
 
@@ -248,7 +245,7 @@ When running in a fully automated pipeline (no human in the loop), apply these d
 - **Agent failure (non-BLOCKED):** Retry once per the Retry Protocol. If second attempt succeeds, continue. Do NOT pause to ask the user.
 - **Ambiguous batch ordering:** Default to sequential execution (safer than parallel).
 - **Missing plan file:** Emit `Status: BLOCKED` immediately — do not proceed.
-- **`pre_approved: true` flag:** Skip queue presentation entirely and execute all batches automatically.
+- **Queue presentation:** Always informational only — never blocks on user confirmation.
 - **BLOCKED after 3 retries:** Invoke Human Escalation Protocol — write checkpoint, emit `Status: DONE_WITH_CONCERNS`, stop. Do not ask interactively.
 - **Unclear agent assignment in manifest:** Default to `code-writer` for implementation tasks, `code-reviewer` for review tasks.
 
