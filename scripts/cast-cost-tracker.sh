@@ -5,8 +5,10 @@
 # Silent on error — never blocks Claude Code.
 #
 # PostToolUse hook: runs after every tool call.
-# Token env vars: CLAUDE_INPUT_TOKENS, CLAUDE_OUTPUT_TOKENS (set by Claude Code)
-# Fallback: parse JSON from stdin if env vars are absent.
+# Claude Code does NOT export CLAUDE_INPUT_TOKENS / CLAUDE_OUTPUT_TOKENS / CLAUDE_SESSION_ID
+# as process env vars to hooks. All data (session_id, tokens, cost) comes via stdin JSON.
+# For Agent PostToolUse: tool_response.usage has token counts, tool_response.total_cost_usd has cost.
+# For Bash/Read/Write PostToolUse: no usage data — hook exits early (expected behavior).
 
 set -euo pipefail
 
@@ -34,7 +36,6 @@ PRICING_JSON_VAL="$PRICING_JSON" \
 CLAUDE_INPUT_TOKENS_VAL="${CLAUDE_INPUT_TOKENS:-}" \
 CLAUDE_OUTPUT_TOKENS_VAL="${CLAUDE_OUTPUT_TOKENS:-}" \
 CLAUDE_MODEL_VAL="${CLAUDE_MODEL:-}" \
-CLAUDE_SESSION_ID_VAL="${CLAUDE_SESSION_ID:-unknown}" \
 CAST_INPUT="$INPUT" \
 python3 - <<'PYEOF' 2>/dev/null || true
 
@@ -42,34 +43,65 @@ import json, os, sys, sqlite3, datetime
 
 db_path      = os.environ.get('DB_PATH_VAL', '')
 pricing_file = os.environ.get('PRICING_JSON_VAL', '')
-session_id   = os.environ.get('CLAUDE_SESSION_ID_VAL', 'unknown')
 raw_input    = os.environ.get('CAST_INPUT', '')
+
+# Read session_id from stdin JSON (data['session_id']) — Claude Code does NOT export
+# CLAUDE_SESSION_ID as a process env var; it only substitutes it in command strings.
+# The hook stdin JSON (createBaseHookInput) always includes session_id.
+session_id = 'unknown'
+if raw_input.strip():
+    try:
+        _sid_data = json.loads(raw_input)
+        session_id = _sid_data.get('session_id') or 'unknown'
+    except Exception:
+        pass
 
 if not db_path or not os.path.exists(db_path):
     sys.exit(0)
 
 # -----------------------------------------------------------------------
-# 1. Determine token counts
+# 1. Determine token counts and cost
 # -----------------------------------------------------------------------
 input_tokens  = int(os.environ.get('CLAUDE_INPUT_TOKENS_VAL', '0') or '0')
 output_tokens = int(os.environ.get('CLAUDE_OUTPUT_TOKENS_VAL', '0') or '0')
 model         = os.environ.get('CLAUDE_MODEL_VAL', '') or ''
+direct_cost   = None  # cost read directly from tool_response (more accurate than recompute)
 
-# Fallback: try to parse from stdin JSON if env vars are empty
-if input_tokens == 0 and output_tokens == 0 and raw_input.strip():
+# Parse from stdin JSON — the primary source of token/cost data.
+# Claude Code does NOT set CLAUDE_INPUT_TOKENS / CLAUDE_OUTPUT_TOKENS env vars;
+# those are always empty. Real data lives in the hook stdin JSON:
+#   - For Agent PostToolUse: tool_response.usage (tokens) and tool_response.total_cost_usd
+#   - For Bash/Read/Write PostToolUse: no usage data (expected — exits early below)
+if raw_input.strip():
     try:
         data = json.loads(raw_input)
-        usage = data.get('usage', data.get('tool_response', {}).get('usage', {}))
-        if isinstance(usage, dict):
-            input_tokens  = int(usage.get('input_tokens', 0) or 0)
-            output_tokens = int(usage.get('output_tokens', 0) or 0)
+        # tool_response is present for PostToolUse; for Agent calls it is the full result
+        # object with { type, subtype, total_cost_usd, usage: {input_tokens, output_tokens}, ... }
+        tool_resp = data.get('tool_response')
+        if isinstance(tool_resp, dict):
+            usage = tool_resp.get('usage', {})
+            if isinstance(usage, dict) and input_tokens == 0 and output_tokens == 0:
+                input_tokens  = int(usage.get('input_tokens', 0) or 0)
+                output_tokens = int(usage.get('output_tokens', 0) or 0)
+            # Prefer cost straight from tool_response (avoids pricing file lookup errors)
+            if tool_resp.get('total_cost_usd') is not None:
+                try:
+                    direct_cost = float(tool_resp['total_cost_usd'])
+                except (TypeError, ValueError):
+                    pass
+        # Fallback: usage at root level (shouldn't normally appear, but be safe)
+        if input_tokens == 0 and output_tokens == 0:
+            usage = data.get('usage', {})
+            if isinstance(usage, dict):
+                input_tokens  = int(usage.get('input_tokens', 0) or 0)
+                output_tokens = int(usage.get('output_tokens', 0) or 0)
         if not model:
             model = data.get('model', '') or ''
     except Exception:
         pass
 
 # If we have no token data at all, nothing to record
-if input_tokens == 0 and output_tokens == 0:
+if input_tokens == 0 and output_tokens == 0 and direct_cost is None:
     sys.exit(0)
 
 # -----------------------------------------------------------------------
@@ -97,8 +129,11 @@ if pricing_file and os.path.exists(pricing_file):
     except Exception:
         pass
 
-call_cost = (input_tokens / 1_000_000 * cost_per_m_in) + \
-            (output_tokens / 1_000_000 * cost_per_m_out)
+if direct_cost is not None:
+    call_cost = direct_cost
+else:
+    call_cost = (input_tokens / 1_000_000 * cost_per_m_in) + \
+                (output_tokens / 1_000_000 * cost_per_m_out)
 
 # -----------------------------------------------------------------------
 # 3. Parse tool info for agent_runs context
@@ -108,17 +143,25 @@ agent_name = ''
 agent_id = ''
 task_summary = ''
 
-if raw_input.strip():
-    try:
-        data = json.loads(raw_input)
-        tool_name = data.get('tool_name', '')
-        if tool_name == 'Agent':
-            ti = data.get('tool_input', {})
-            agent_name   = ti.get('subagent_type', ti.get('agent_type', 'unknown'))
-            agent_id     = ti.get('agent_id', '')       # v2.1.69+: unique per-invocation ID
-            task_summary = str(ti.get('prompt', ti.get('task', '')))[:200]
-    except Exception:
-        pass
+# 'data' was already parsed above in the token-reading block; reuse it if available.
+# Fall back to a fresh parse if for some reason data is not defined.
+try:
+    _d = data
+except NameError:
+    _d = {}
+    if raw_input.strip():
+        try:
+            _d = json.loads(raw_input)
+        except Exception:
+            pass
+
+if _d:
+    tool_name = _d.get('tool_name', '')
+    if tool_name == 'Agent':
+        ti = _d.get('tool_input', {})
+        agent_name   = ti.get('subagent_type', ti.get('agent_type', 'unknown'))
+        agent_id     = ti.get('agent_id', '')       # v2.1.69+: unique per-invocation ID
+        task_summary = str(ti.get('prompt', ti.get('task', '')))[:200]
 
 now = datetime.datetime.utcnow().isoformat() + 'Z'
 
