@@ -128,7 +128,13 @@ Tests go in `src/hooks/useDebounce.test.ts`.
 - Changes >3 files: break into sequential batches in a plan ADM
 - When code-writer returns DONE_WITH_CONCERNS: read concerns before committing
 
-**Post-chain note:** code-writer self-dispatches code-reviewer and commit internally — always, regardless of whether it was invoked via routing table or directly via Agent tool. The orchestrating session should NOT re-dispatch code-reviewer or commit after code-writer returns DONE, as these already ran internally.
+**Post-chain note (orchestrator dispatch):** When invoked by the orchestrator (plan-based dispatch), code-writer should NOT self-dispatch code-reviewer or commit. Instead, return `Status: DONE` and include a `## Recommended Next Agents` section:
+```
+## Recommended Next Agents
+- code-reviewer: review all changes in this unit
+- commit: commit the implementation
+```
+The orchestrator handles chaining. Self-dispatch chains (steps 4 and 7) apply only when code-writer is invoked directly from the routing table — NOT from an orchestrator batch plan.
 
 ## Output Discipline
 

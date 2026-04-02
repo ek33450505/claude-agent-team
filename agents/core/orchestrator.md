@@ -28,9 +28,10 @@ Read the plan file. Locate the `## Agent Dispatch Manifest` section and parse th
 
 If no manifest exists, report: "No Agent Dispatch Manifest found in [plan file]. Ask the planner agent to add one."
 
-After parsing, initialize a todo list using TodoWrite with one item per batch:
-- Format: "Batch N: [batch description] ([agent list])"
-- Set all items to `pending` status
+After parsing, initialize a task list using TaskCreate with one item per batch:
+- Call TaskCreate for each batch: subject = "Batch N: [batch description]", description = "[agent list]"
+- All tasks are created with `pending` status automatically
+- Use TaskUpdate to mark each batch `in_progress` before dispatching it and `completed` after it succeeds
 
 ### Step 2: Present the Queue
 
@@ -71,6 +72,16 @@ Before dispatching each batch:
 
 ### Step 4: Execute Batches
 
+**H6 — Policy Validation (before each batch dispatch):**
+Before dispatching any batch, read `config/policies.json` from the project root (if it exists):
+- For each agent in the batch, check if the task description or target files match any policy rule
+- Known default policies to check: `"auth files require security agent"`, `"migrations require review"`
+- If a policy violation is detected:
+  - Log a warning to `~/.claude/logs/policy-violations.log` with format: `[ISO_TS] POLICY_VIOLATION batch-N: agent=<name> rule=<rule> file=<file>`
+  - Insert a human-approval gate: output the violation and ask user to confirm before dispatching that agent
+- If `config/policies.json` does not exist or is unreadable → proceed without validation (never block on missing config)
+- If no violations → dispatch normally
+
 **For `"parallel": true` batches:**
 Dispatch all agents simultaneously using the Agent tool in a single response.
 
@@ -98,8 +109,16 @@ Same as parallel — dispatch all simultaneously. After all complete, synthesize
   source ~/.claude/scripts/cast-events.sh
   cast_emit_event 'task_completed' '<agent>' 'batch-<id>' '' '<status summary>' '<DONE|BLOCKED|DONE_WITH_CONCERNS>'
   ```
-- Parse the agent's `Status:` line:
-  - **No `Status:` line found** → treat as `Status: BLOCKED`, reason: "Agent response truncated". Enter Retry Protocol.
+- Parse the agent's `Status:` line using this decision tree:
+
+  **C3 — Response structure validation (check FIRST before Status parse):**
+  - If response length < 50 characters → classify as `TRUNCATED` (NOT `BLOCKED`)
+  - `TRUNCATED` → retry ONCE with prompt: "Your previous response was truncated. Please provide your complete Status block and work summary."
+  - Do NOT trigger the haiku→sonnet→opus cascade for truncation — only escalate for genuine BLOCKED/FAILED states
+  - If the retry of a TRUNCATED response also produces < 50 chars → then escalate to BLOCKED handling
+
+  **Status parse (after truncation check):**
+  - **No `Status:` line found** (and response length >= 50) → treat as `Status: BLOCKED`, reason: "Agent response missing Status block". Enter Retry Protocol.
   - `Status: DONE` → proceed to next batch
   - `Status: DONE_WITH_CONCERNS` → log the Concerns, re-dispatch `code-reviewer` with concern context, then continue
   - `Status: BLOCKED` → invoke Retry Protocol
@@ -114,6 +133,16 @@ Compute the plan hash at startup:
 PLAN_HASH=$(echo -n "$PLAN_FILE_PATH" | shasum -a 256 | cut -c1-8)
 CHECKPOINT_FILE=~/.claude/cast/orchestrator-checkpoint-${PLAN_HASH}.log
 ```
+
+**H5 — JSON status checkpoint:** Before dispatching each batch N, also write a structured JSON checkpoint to `~/.claude/agent-status/orchestrator-checkpoint.json`:
+```json
+{
+  "plan": "<plan_file_path>",
+  "completed_batches": [1, 2, 3],
+  "last_updated": "<ISO_TIMESTAMP>"
+}
+```
+On orchestrator session start: if `~/.claude/agent-status/orchestrator-checkpoint.json` exists and its `plan` field matches the current plan, read `completed_batches` and skip those batches. After all batches complete, delete this JSON checkpoint.
 
 After completing each batch, write a checkpoint:
 

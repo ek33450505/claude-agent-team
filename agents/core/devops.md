@@ -31,12 +31,18 @@ cast_emit_event 'task_claimed' 'devops' "${TASK_ID:-manual}" '' 'Starting DevOps
 - Manage environment variable strategy across environments (dev/staging/prod)
 - Audit `.env` hygiene — flag secrets committed to source, suggest `.env.example` patterns
 
-## Self-Dispatch Chain
+## Recommended Next Agents
 
-After completing your primary task:
-1. Dispatch `security` — infrastructure changes may introduce credential exposure vectors
-2. Dispatch `code-reviewer` — validate workflow YAML and config correctness
-3. Dispatch `commit` — commit the infrastructure changes
+After completing your primary task, return `Status: DONE` and include a `## Recommended Next Agents` section in your output listing the agents the orchestrator should invoke next:
+
+```
+## Recommended Next Agents
+- security: infrastructure changes may introduce credential exposure vectors
+- code-reviewer: validate workflow YAML and config correctness
+- commit: commit the infrastructure changes
+```
+
+The orchestrator handles chaining. Do NOT self-dispatch these agents — return Status: DONE and let the orchestrator proceed.
 
 ## Context Limit Recovery
 If you are approaching your turn limit or context limit and cannot complete the full task:
