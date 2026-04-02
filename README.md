@@ -26,6 +26,10 @@ CAST turns Claude Code from a single-session assistant into a coordinated team:
 
 ## Architecture
 
+Claude Code exposes ~40 discrete tools, each with a per-tool permission gate evaluated in `Deny → Ask → Allow` order, and an `AgentTool` that dispatches subagents as flat tool calls with no orchestration layer. Hook events (`PreToolUse`, `PostToolUse`, `SessionStart/Stop`, `SubagentStart/Stop`, `PostCompact`, `TaskCreated`) are first-class extension points. Context compaction runs at three internal tiers. An autonomous daemon mode and a coordinator pattern exist internally but are not yet shipped.
+
+CAST is built to fill the gaps those unshipped features leave, and to make the hook system load-bearing rather than observational.
+
 ```
 User Prompt
       │
@@ -84,6 +88,24 @@ User Prompt
       │  /memory /token-spend   │
       └─────────────────────────┘
 ```
+
+---
+
+### Where CAST extends Claude Code
+
+| Claude Code (native) | CAST (on top) | Design rationale |
+|---|---|---|
+| `AgentTool` dispatches one subagent per call, no sequencing | Orchestrator executes Agent Dispatch Manifests: parallel batches fire simultaneously, sequential batches gate on prior completion, `owns_files` prevents write conflicts | Fills the gap left by the native coordinator pattern not yet shipping |
+| No post-agent successor logic | Chain-maps: `code-writer` → `code-reviewer` → `commit` enforced by `PostToolUse` hook injecting `[CAST-CHAIN]` directive | Makes quality gates structural, not advisory |
+| Hook system exists but carries no persistent state | `cast.db` (SQLite, WAL mode): 9 tables — `sessions`, `agent_runs`, `routing_events`, `task_queue`, `agent_memories`, `budgets`, `mismatch_signals`, `quality_gates`, `dispatch_decisions` | Turns ephemeral hook events into a queryable audit trail |
+| No per-tool cost attribution | `cast-cost-tracker.sh` logs every agent dispatch; `cast-budget-alert.sh` fires on budget breach; dashboard `/token-spend` shows burn by agent | 20x cost gap between Haiku and Sonnet makes per-agent tracking worth the overhead |
+| No routing feedback loop | `mismatch_signals` table records rapid re-prompts after routing; feeds keyword updates to `agent_memories` | Self-improving dispatch without model fine-tuning |
+| `PostCompact` fires but has no default handler | `cast-post-compact-hook.sh` reinjects plan context and emits `context_compacted` to `cast.db` | Prevents plan amnesia across the 3-tier compaction cycle |
+| `PreToolUse` exit codes 0/2 are the permission gate | `pre-tool-guard.sh` (exit 2 on raw `git commit`/`push`), `cast-security-guard.sh` (exit 2 on threats), `cast-audit-hook.sh` (SHA256 fingerprint + PII advisory) | Uses the same gate native permission rules use — no separate enforcement layer |
+
+### On the native coordinator pattern
+
+Claude Code's internal coordinator pattern specifies one coordinator spawning workers with isolated contexts, a shared scratchpad, a mailbox pattern for dangerous operations, and prompt cache prefix sharing between subagents. CAST's orchestrator covers most of this surface today — ADM batches, parallel dispatch, file ownership to prevent write contention, and checkpoint files for plan resumption across session disconnects. When the native coordinator ships, CAST adapts rather than competes: the ADM format maps onto the coordinator's worker model, hook coverage remains additive, and `cast.db` observability applies regardless of which dispatch path Claude Code uses internally.
 
 ---
 

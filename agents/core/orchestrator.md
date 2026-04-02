@@ -58,6 +58,16 @@ Before each batch:
 
 **Parallel batches** (`"parallel": true`): dispatch all agents simultaneously in one response using the Agent tool.
 
+<!-- PROMPT CACHE OPTIMIZATION: When constructing prompts for parallel batch agents, front-load
+     shared context (project path, repo description, conventions, plan summary) BEFORE the
+     agent-specific instructions. Claude Code subagents share a prompt cache prefix with the
+     coordinator — if the first N tokens of each agent prompt are identical, those tokens cost
+     near-zero on cache hits. Prompts that diverge immediately (e.g. "You are the security agent..."
+     as the first line) waste the cache sharing opportunity. Structure as:
+       [SHARED CONTEXT block: project, stack, plan summary, conventions]
+       You are the <agent-name> agent. <agent-specific instructions>
+     For a 3-agent parallel batch, this can reduce input token costs by 40-60% on the shared prefix. -->
+
 **Sequential batches** (`"parallel": false`): dispatch the single agent, wait for response.
 
 After each agent responds:
