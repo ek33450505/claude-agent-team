@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## v3.4 — Security & Portability Hardening (2026-04-02)
+
+33-issue audit pass. No feature additions — hardening and correctness only.
+
+### Security
+- **S1** — `cast-permission-hook.sh` Python injection fix: user-controlled input now passed via argument vector, not string interpolation
+- **S2** — `cast-merge-settings.sh` path injection fix: file paths are validated and quoted before use in shell expansions
+- **S3** — `cast` CLI: `--model` flag added to allow explicit model override at invocation time
+
+### Portability
+- **P1** — All `/Users/edkubiak` hardcodes replaced with `__HOME__` tokens throughout hook scripts and config files
+- **P2** — `install.sh` now runs `sed` substitution on `__HOME__` tokens during plist install, enabling cross-user installation
+
+### Settings Cleanup
+- **SC1** — Removed invalid matchers and hooks from `settings.json` that referenced non-existent scripts or used unsupported hook syntax
+- **SC2** — Pruned unconfirmed environment variables from settings to reduce noise and prevent unexpected behavior
+
+### Metadata & Agents
+- **M1** — `frontend-qa` agent added to `install.sh` sync list and `agents/core/`
+- **M2** — `test-writer` model corrected from haiku to sonnet in frontmatter
+- **M3** — Agent count updated to 17/17 across install.sh, README, and settings
+
+### Daemon Cleanup
+- **D1** — `cast-sync.sh` replaced `castd pause/resume` calls with `flock` lockfile pattern; no daemon dependency
+- **D2** — `cast-notify.sh` stale daemon event references removed
+
+### New Docs
+- **DOC1** — `docs/native-tools-reference.md` added: 8 confirmed Claude Code native tools with parameter signatures and usage notes
+
+### Test Suite
+- 324 BATS tests passing (0 failures)
+
+---
+
 ## v3.3 — Phase 11: Audit Hardening (2026-04-01)
 
 ### Code Fixes (C1–C8)

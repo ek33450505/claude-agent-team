@@ -1,9 +1,9 @@
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-3.3-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-3.4-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-346%2B-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-324-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -17,7 +17,7 @@
 
 CAST turns Claude Code from a single-session assistant into a coordinated team:
 
-- **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 16-row dispatch table and picks the agent — no regex, no routing config.
+- **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 17-row dispatch table and picks the agent — no regex, no routing config.
 - **Quality is enforced, not requested.** Raw `git commit` and `git push` are hard-blocked by shell hooks. Every code change mandates a `code-reviewer` pass. Commit only happens through the `commit` agent.
 - **Everything is observable.** Every agent dispatch, session, and token spend is logged to `cast.db` (SQLite). A companion React dashboard shows activity, analytics, agent status, and memory in real time.
 - **Lightweight tasks use cheaper models automatically.** Haiku handles `code-reviewer`, `commit`, `push`, and `test-runner` — the high-frequency, low-complexity work. Sonnet handles planning, writing, and debugging. The cost difference is 20x per token. CAST routes silently; you pay for what the task actually needs.
@@ -35,7 +35,7 @@ User Prompt
       │
       ▼
 ┌─────────────────────────────────────────────┐
-│  CLAUDE.md dispatch table (16-row routing)  │
+│  CLAUDE.md dispatch table (17-row routing)  │
 │  Model reads table → picks specialist agent │
 └──────────────────┬──────────────────────────┘
                    │
@@ -133,7 +133,7 @@ bash install.sh
 
 ## Agent Roster
 
-16 specialists. Each is a plain markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, effort, and isolation.
+17 specialists. Each is a plain markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, effort, and isolation.
 
 | Agent | Model | Effort | Purpose |
 |---|---|---|---|
@@ -153,6 +153,7 @@ bash install.sh
 | `test-runner` | haiku | low | Runs test suites (bats, jest, vitest) |
 | `commit` | haiku | low | Stages and commits with semantic messages |
 | `push` | haiku | low | Pushes to remote with safety checks |
+| `frontend-qa` | haiku | low | Frontend diff review, component audit |
 
 All agents carry `memory: local` — each accumulates session knowledge in `~/.claude/agent-memory-local/<name>/`.
 
@@ -318,7 +319,8 @@ npm run dev    # Vite :5173 + Express :3001
 ```
 claude-agent-team/
   agents/
-    core/               ← 16 agent definitions (mirrored to ~/.claude/agents/)
+    core/               ← 17 agent definitions (mirrored to ~/.claude/agents/)
+  docs/                 ← architecture specs, native-tools-reference.md, protocol docs
   scripts/              ← hook scripts, utilities, cron setup
   tests/
     *.bats              ← core test suite
@@ -372,7 +374,7 @@ bash scripts/cast-cron-setup.sh --remove # uninstall
 
 ## Test Suite
 
-346+ BATS tests across 4 directories. 0 failures.
+324 BATS tests across 4 directories. 0 failures.
 
 ```bash
 # Run all tests
@@ -397,6 +399,7 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v3.0 | 16 agents, model-driven dispatch, 4 hooks, cron, cast.db |
 | v3.1 | Async hooks, worktree isolation, per-agent memory, headless pipelines, GitHub CI |
 | v3.3 | Audit hardening: WAL mode, structured error logging, SQL injection fix, PII advisory mode, orchestrator resilience (checkpoints, policy gate, TRUNCATED classification), 4 scripts committed to repo |
+| v3.4 | Security hardening: Python injection fix, path injection fix, --model flag on CLI; portability: __HOME__ tokens replace hardcoded paths; settings cleanup; daemon cleanup (flock lockfile); frontend-qa agent added; docs/native-tools-reference.md; 324 BATS tests |
 
 ---
 
