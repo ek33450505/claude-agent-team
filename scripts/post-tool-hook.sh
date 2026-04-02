@@ -6,6 +6,10 @@
 
 set -euo pipefail
 
+# _log_error: append a structured error line to hook-errors.log (never fails itself)
+mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+
 # D5: Touch marker file for hook health tracking
 mkdir -p ~/.claude/cast/hook-last-fired && touch ~/.claude/cast/hook-last-fired/PostToolUse.timestamp
 
@@ -24,8 +28,12 @@ if [[ "$TOOL_NAME" == "Write" || "$TOOL_NAME" == "Edit" ]]; then
       while [[ "$SEARCH_DIR" != "/" && "$SEARCH_DIR" != "$HOME" ]]; do
         if [[ -f "$SEARCH_DIR/.prettierrc" || -f "$SEARCH_DIR/.prettierrc.json" || -f "$SEARCH_DIR/prettier.config.js" ]]; then
           # Use subshell to avoid mutating the script's working directory
+          # H7: prettier crash is a critical failure — exit 1 so it's visible rather than silently corrupting the file
           if ! (cd "$SEARCH_DIR" && npx prettier --write "$REAL_PATH" 2>"${TMPDIR:-/tmp}/cast-prettier-err.tmp"); then
-            echo "[CAST-WARN] prettier failed for $REAL_PATH — skipping format. $(head -3 "${TMPDIR:-/tmp}/cast-prettier-err.tmp" 2>/dev/null)" >&2
+            PRETTIER_ERR="$(head -3 "${TMPDIR:-/tmp}/cast-prettier-err.tmp" 2>/dev/null)"
+            _log_error "prettier crashed for $REAL_PATH: $PRETTIER_ERR"
+            echo "[CAST-WARN] prettier failed for $REAL_PATH — see hook-errors.log. Error: $PRETTIER_ERR" >&2
+            exit 1
           fi
           break
         fi
@@ -164,15 +172,16 @@ subprocess.run(
   mkdir -p "$CAST_STATUS_DIR"
   CAST_TS_COMPACT=$(echo "$TIMESTAMP" | tr -d ':-' | tr 'T' 'T' | cut -c1-16)
   CAST_STATUS_FILE="${CAST_STATUS_DIR}/chain-dispatch-${CAST_TS_COMPACT}Z.json"
+  # H7: status file write failure is critical — exit 1 so the main session knows dispatch tracking broke
   CAST_AGENT_VAL="$SUBAGENT_TYPE" CAST_TS_VAL="$TIMESTAMP" CAST_SID_VAL="$SESSION_ID" \
   CAST_FILE_VAL="$CAST_STATUS_FILE" python3 -c "
-import json, os
+import json, os, sys
 agent    = os.environ.get('CAST_AGENT_VAL', 'unknown')
 ts       = os.environ.get('CAST_TS_VAL', '')
 sid      = os.environ.get('CAST_SID_VAL', '')
 filepath = os.environ.get('CAST_FILE_VAL', '')
 if not filepath:
-    import sys; sys.exit(0)
+    sys.exit(0)
 d = {
     'agent': 'dispatcher',
     'status': 'DONE',
@@ -181,9 +190,13 @@ d = {
     'session_id': sid,
     'timestamp': ts
 }
-with open(filepath, 'w') as f:
-    json.dump(d, f, indent=2)
-" 2>/dev/null || true
+try:
+    with open(filepath, 'w') as f:
+        json.dump(d, f, indent=2)
+except Exception as e:
+    print(f'ERROR: status file write failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" || { _log_error "agent status file write failed for $CAST_STATUS_FILE"; exit 1; }
 fi
 
 # --- Part 5: PostToolUse(Bash non-zero exit) → [CAST-DEBUG] directive ---

@@ -1,4 +1,4 @@
-Use the `doc-updater` agent to update documentation:
+Use the `docs` agent to update documentation:
 
 $ARGUMENTS
 

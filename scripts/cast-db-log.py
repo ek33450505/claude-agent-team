@@ -7,20 +7,38 @@ Reads a JSON log entry from stdin and writes to:
 
 Replaces cast-log-append.py calls in route.sh during the 7a transition.
 Preserves atomic JSONL append behavior (fcntl exclusive lock + rotation).
-Silent on any error — never blocks the hook pipeline.
+Errors are logged to ~/.claude/logs/db-write-errors.log — never blocks the hook pipeline.
 """
 import sys, fcntl, os, json, sqlite3
+from datetime import datetime, timezone
+
+def _log_db_error(exc_type, exc_msg, payload_preview=""):
+    """Append a structured error line to the DB write error log."""
+    try:
+        log_dir = os.path.expanduser("~/.claude/logs")
+        os.makedirs(log_dir, exist_ok=True)
+        err_log = os.path.join(log_dir, "db-write-errors.log")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(err_log, "a") as f:
+            f.write(
+                f"[{ts}] ERROR cast-db-log.py: {exc_type}: {exc_msg}"
+                f" | payload_preview: {payload_preview[:200]}\n"
+            )
+    except Exception:
+        pass  # Logging failure must never propagate
 
 line = sys.stdin.read().strip()
 if not line:
     sys.exit(0)
+
+payload_preview = line[:200]
 
 # -----------------------------------------------------------------------
 # 1. Validate input JSON
 # -----------------------------------------------------------------------
 try:
     entry = json.loads(line)
-except Exception:
+except Exception as e:
     sys.exit(0)
 
 # -----------------------------------------------------------------------
@@ -40,11 +58,11 @@ try:
                     os.remove(old2)
                 if os.path.exists(old1):
                     os.rename(old1, old2)
-        except Exception:
-            pass
+        except Exception as e:
+            _log_db_error(type(e).__name__, str(e), payload_preview)
         # Lock released on close
-except Exception:
-    pass
+except Exception as e:
+    _log_db_error(type(e).__name__, str(e), payload_preview)
 
 # -----------------------------------------------------------------------
 # 3. SQLite write into routing_events
@@ -75,5 +93,5 @@ try:
     )
     conn.commit()
     conn.close()
-except Exception:
-    pass
+except Exception as e:
+    _log_db_error(type(e).__name__, str(e), payload_preview)

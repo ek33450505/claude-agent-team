@@ -43,6 +43,9 @@ DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 STOP_ERROR_LOG="${HOME}/.claude/logs/subagent-stop-errors.log"
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 
+# _log_error: append a structured error line to hook-errors.log (never fails itself)
+_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
 # Read stdin once
