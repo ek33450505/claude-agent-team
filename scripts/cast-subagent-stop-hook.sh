@@ -162,28 +162,38 @@ if not agent or not db:
     raise SystemExit(0)
 
 # Update the running row for this agent. Use agent_id for precise matching when
-# available; fall back to MAX(id) heuristic when agent_id is absent.
+# available; fall back to MIN(id) FIFO heuristic when agent_id is absent.
+# FIFO: oldest started row of this type is the one that just finished first.
 agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
-try:
-    conn = sqlite3.connect(db, timeout=5)
-    cur  = conn.cursor()
-    if agent_id:
-        cur.execute(
-            "UPDATE agent_runs SET status=?, ended_at=? "
-            "WHERE status='running' AND agent_id=?",
-            (st, ts, agent_id),
-        )
-    else:
-        cur.execute(
-            "UPDATE agent_runs SET status=?, ended_at=? "
-            "WHERE status='running' AND agent=? AND session_id=? "
-            "AND id=(SELECT MAX(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
-            (st, ts, agent, sess, agent, sess),
-        )
-    conn.commit()
-    conn.close()
-except Exception:
-    pass
+for attempt in range(3):
+    try:
+        conn = sqlite3.connect(db, timeout=5)
+        cur  = conn.cursor()
+        if agent_id:
+            cur.execute(
+                "UPDATE agent_runs SET status=?, ended_at=? "
+                "WHERE status='running' AND agent_id=?",
+                (st, ts, agent_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE agent_runs SET status=?, ended_at=? "
+                "WHERE status='running' AND agent=? AND session_id=? "
+                "AND id=(SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
+                (st, ts, agent, sess, agent, sess),
+            )
+        rows_affected = conn.execute("SELECT changes()").fetchone()[0]
+        conn.commit()
+        conn.close()
+        if rows_affected > 0 or attempt == 2:
+            break
+        import time as _time; _time.sleep(0.1)
+    except Exception:
+        try: conn.close()
+        except Exception: pass
+        if attempt < 2:
+            import time as _time; _time.sleep(0.1)
+        break
 PYEOF
 fi
 

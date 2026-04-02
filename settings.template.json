@@ -46,7 +46,7 @@
             "timeout": 3
           }
         ],
-        "description": "CAST enforcement — git guard (pre-tool-guard.sh, git * only) + security advisory (cast-security-guard.sh, curl/ssh/scp only)"
+        "description": "CAST enforcement \u2014 git guard (pre-tool-guard.sh, git * only) + security advisory (cast-security-guard.sh, curl/ssh/scp only)"
       },
       {
         "matcher": "Write|Edit",
@@ -57,7 +57,7 @@
             "timeout": 3
           }
         ],
-        "description": "CAST security advisory — flags sensitive file edits (Write/Edit tools)"
+        "description": "CAST security advisory \u2014 flags sensitive file edits (Write/Edit tools)"
       }
     ],
     "PostToolUse": [
@@ -72,7 +72,7 @@
             "async": true
           }
         ],
-        "description": "CAST review — auto-formats code, injects [CAST-REVIEW] directive, logs agent dispatches, and triggers [CAST-DEBUG] on Bash non-zero exits"
+        "description": "CAST review \u2014 auto-formats code, injects [CAST-REVIEW] directive, logs agent dispatches, and triggers [CAST-DEBUG] on Bash non-zero exits"
       },
       {
         "hooks": [
@@ -84,7 +84,7 @@
             "async": true
           }
         ],
-        "description": "CAST cost tracking — records token usage per tool call into cast.db sessions and agent_runs tables"
+        "description": "CAST cost tracking \u2014 records token usage per tool call into cast.db sessions and agent_runs tables"
       },
       {
         "hooks": [
@@ -96,7 +96,7 @@
             "async": true
           }
         ],
-        "description": "CAST budget guard — injects [CAST-BUDGET-WARN] or [CAST-BUDGET-HARD-LIMIT] when daily spend threshold reached"
+        "description": "CAST budget guard \u2014 injects [CAST-BUDGET-WARN] or [CAST-BUDGET-HARD-LIMIT] when daily spend threshold reached"
       }
     ],
     "PostCompact": [
@@ -115,7 +115,7 @@
             "async": true
           }
         ],
-        "description": "CAST compaction logger — records to cast/events/ and pushes to dashboard SSE"
+        "description": "CAST compaction logger \u2014 records to cast/events/ and pushes to dashboard SSE"
       },
       {
         "matcher": "auto",
@@ -125,7 +125,7 @@
             "prompt": "Context was automatically compacted. Briefly let the user know this happened, summarize the current task state, and continue where you left off."
           }
         ],
-        "description": "CAST compaction notice — injects prompt to acknowledge auto-compact and resume context"
+        "description": "CAST compaction notice \u2014 injects prompt to acknowledge auto-compact and resume context"
       }
     ],
     "TaskCreated": [
@@ -138,7 +138,7 @@
             "async": true
           }
         ],
-        "description": "CAST task logger — logs background agent task creation to cast/events/ and cast.db"
+        "description": "CAST task logger \u2014 logs background agent task creation to cast/events/ and cast.db"
       }
     ],
     "InstructionsLoaded": [
@@ -152,7 +152,7 @@
             "async": true
           }
         ],
-        "description": "CAST instructions audit — logs active CLAUDE.md files at session start"
+        "description": "CAST instructions audit \u2014 logs active CLAUDE.md files at session start"
       }
     ],
     "Stop": [
@@ -165,7 +165,7 @@
             "async": true
           }
         ],
-        "description": "CAST safety net — catches missed reviews/commits before session ends; auto-dispatches chain-reporter after multi-batch orchestrator sessions"
+        "description": "CAST safety net \u2014 catches missed reviews/commits before session ends; auto-dispatches chain-reporter after multi-batch orchestrator sessions"
       }
     ],
     "SubagentStop": [
@@ -178,7 +178,7 @@
             "async": true
           }
         ],
-        "description": "CAST subagent stop logger — fires when a subagent completes"
+        "description": "CAST subagent stop logger \u2014 fires when a subagent completes"
       }
     ],
     "StopFailure": [
@@ -190,7 +190,19 @@
             "timeout": 5
           }
         ],
-        "description": "CAST stop failure handler — fires when a session stop fails"
+        "description": "CAST stop failure handler \u2014 fires when a session stop fails"
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-subagent-start-hook.sh",
+            "timeout": 3
+          }
+        ],
+        "description": "CAST subagent start logger \u2014 fires when a subagent starts (synchronous for DB ordering)"
       }
     ]
   },
@@ -198,15 +210,34 @@
   "autoUpdatesChannel": "stable",
   "plansDirectory": "~/.claude/plans/",
   "worktree": {
-    "symlinkDirectories": ["node_modules", ".cache", "dist"]
+    "symlinkDirectories": [
+      "node_modules",
+      ".cache",
+      "dist"
+    ]
   },
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
-    "excludedCommands": ["git", "docker", "bq", "osascript"],
+    "excludedCommands": [
+      "git",
+      "docker",
+      "bq",
+      "osascript"
+    ],
     "filesystem": {
-      "denyRead": ["~/.aws/credentials", "~/.ssh/id_*", "~/.gnupg", "~/.claude/cast.db", "~/.claude/history.jsonl", "~/.claude/logs/**", "~/.claude/routing-log.jsonl"],
-      "allowWrite": ["/tmp"]
+      "denyRead": [
+        "~/.aws/credentials",
+        "~/.ssh/id_*",
+        "~/.gnupg",
+        "~/.claude/cast.db",
+        "~/.claude/history.jsonl",
+        "~/.claude/logs/**",
+        "~/.claude/routing-log.jsonl"
+      ],
+      "allowWrite": [
+        "/tmp"
+      ]
     },
     "network": {
       "allowedDomains": [

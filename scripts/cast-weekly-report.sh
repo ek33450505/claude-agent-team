@@ -44,12 +44,12 @@ fi
 q() { sqlite3 "$DB_PATH" "$1" 2>/dev/null || echo ""; }
 
 # Totals for the week
-TOTAL_COST=$(q "SELECT printf('%.4f', COALESCE(SUM(total_cost_usd),0)) FROM sessions WHERE started_at >= '${WEEK_START}';")
+TOTAL_COST=$(q "SELECT printf('%.4f', COALESCE(SUM(cost_usd),0)) FROM agent_runs WHERE started_at >= '${WEEK_START}';")
 SESSION_COUNT=$(q "SELECT COUNT(*) FROM sessions WHERE started_at >= '${WEEK_START}';")
 AVG_DURATION=$(q "SELECT printf('%.1f', COALESCE(AVG((julianday(ended_at)-julianday(started_at))*86400),0)) FROM sessions WHERE started_at >= '${WEEK_START}' AND ended_at IS NOT NULL;")
 
 # Top 5 most expensive sessions
-TOP_SESSIONS=$(q "SELECT printf('| %-30s | \$%-8s | %s |', COALESCE(project,'unknown'), printf('%.4f',total_cost_usd), strftime('%Y-%m-%d %H:%M',started_at)) FROM sessions WHERE started_at >= '${WEEK_START}' ORDER BY total_cost_usd DESC LIMIT 5;")
+TOP_SESSIONS=$(q "SELECT printf('| %-30s | \$%-8s | %s |', COALESCE(project,'unknown'), printf('%.4f',cost_usd), strftime('%Y-%m-%d %H:%M',started_at)) FROM agent_runs WHERE started_at >= '${WEEK_START}' ORDER BY cost_usd DESC LIMIT 5;")
 
 # Agent performance (DONE / DONE_WITH_CONCERNS / BLOCKED / total)
 AGENT_STATS=$(q "SELECT printf('| %-20s | %4d | %4d | %4d | %4d |', agent, SUM(CASE WHEN status='DONE' THEN 1 ELSE 0 END), SUM(CASE WHEN status='DONE_WITH_CONCERNS' THEN 1 ELSE 0 END), SUM(CASE WHEN status='BLOCKED' THEN 1 ELSE 0 END), COUNT(*)) FROM agent_runs WHERE started_at >= '${WEEK_START}' GROUP BY agent ORDER BY COUNT(*) DESC;")
@@ -62,7 +62,7 @@ BLOCKED=$(q "SELECT printf('| %3d | %s |', COUNT(*), COALESCE(SUBSTR(result_summ
 
 # Week-over-week comparison
 PREV_WEEK=$(date -v-14d +%Y-%m-%d 2>/dev/null || date -d '14 days ago' +%Y-%m-%d)
-PREV_COST=$(q "SELECT printf('%.4f', COALESCE(SUM(total_cost_usd),0)) FROM sessions WHERE started_at >= '${PREV_WEEK}' AND started_at < '${WEEK_START}';")
+PREV_COST=$(q "SELECT printf('%.4f', COALESCE(SUM(cost_usd),0)) FROM agent_runs WHERE started_at >= '${PREV_WEEK}' AND started_at < '${WEEK_START}';")
 PREV_SESSIONS=$(q "SELECT COUNT(*) FROM sessions WHERE started_at >= '${PREV_WEEK}' AND started_at < '${WEEK_START}';")
 
 if [ "${PREV_SESSIONS:-0}" -gt 0 ] 2>/dev/null; then

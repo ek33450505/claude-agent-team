@@ -661,14 +661,14 @@ week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d')
 
 # Today's spend
 cur.execute(
-    "SELECT COALESCE(SUM(total_cost_usd),0) FROM sessions WHERE DATE(started_at)=?",
+    "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?",
     (today,)
 )
 today_spend = cur.fetchone()[0] or 0.0
 
 # This week's spend
 cur.execute(
-    "SELECT COALESCE(SUM(total_cost_usd),0) FROM sessions WHERE DATE(started_at)>=?",
+    "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?",
     (week_ago,)
 )
 week_spend = cur.fetchone()[0] or 0.0
@@ -685,7 +685,7 @@ local_actual_cost = row[1] or 0.0
 project_spend = None
 if project_f:
     cur.execute(
-        "SELECT COALESCE(SUM(total_cost_usd),0) FROM sessions WHERE project=?",
+        "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE project=?",
         (project_f,)
     )
     project_spend = cur.fetchone()[0] or 0.0
@@ -694,8 +694,8 @@ if project_f:
 week_rows = []
 if show_week:
     cur.execute(
-        """SELECT DATE(started_at) as day, COALESCE(SUM(total_cost_usd),0) as spend
-           FROM sessions WHERE DATE(started_at)>=? GROUP BY day ORDER BY day DESC""",
+        """SELECT DATE(started_at) as day, COALESCE(SUM(cost_usd),0) as spend
+           FROM agent_runs WHERE DATE(started_at)>=? GROUP BY day ORDER BY day DESC""",
         (week_ago,)
     )
     week_rows = [{"date": r["day"], "spend": r["spend"]} for r in cur.fetchall()]
@@ -1323,9 +1323,9 @@ conn = sqlite3.connect(db)
 cur = conn.cursor()
 today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 week_ago = (datetime.now(timezone.utc)-timedelta(days=7)).strftime('%Y-%m-%d')
-cur.execute("SELECT COALESCE(SUM(total_cost_usd),0) FROM sessions WHERE DATE(started_at)=?", (today,))
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?", (today,))
 today_s = cur.fetchone()[0] or 0
-cur.execute("SELECT COALESCE(SUM(total_cost_usd),0) FROM sessions WHERE DATE(started_at)>=?", (week_ago,))
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?", (week_ago,))
 week_s = cur.fetchone()[0] or 0
 cur.execute("SELECT COUNT(*), COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE model LIKE 'local:%'")
 r = cur.fetchone()
