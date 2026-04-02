@@ -27,16 +27,32 @@ trigger         = data.get("trigger", "unknown")
 session_id      = data.get("session_id", "unknown")
 transcript_path = data.get("transcript_path", "")
 
+# Map trigger to canonical compaction tier
+# Claude Code PostCompact trigger values: 'auto', 'manual', 'micro' (confirmed from source)
+def detect_tier(trigger_val):
+    t = (trigger_val or "").lower()
+    if t in ("micro", "microcompact"):
+        return "MicroCompact"
+    elif t in ("manual", "full", "user"):
+        return "FullCompact"
+    elif t in ("auto", "autocompact", ""):
+        return "AutoCompact"
+    else:
+        return f"Unknown({trigger_val})"
+
+compaction_tier = detect_tier(trigger)
+
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 event = {
-    "id":              str(uuid.uuid4()),
-    "timestamp":       iso_ts,
-    "type":            "post_compact",
-    "trigger":         trigger,
-    "session_id":      session_id,
-    "transcript_path": transcript_path,
+    "id":               str(uuid.uuid4()),
+    "timestamp":        iso_ts,
+    "type":             "post_compact",
+    "trigger":          trigger,
+    "compaction_tier":  compaction_tier,
+    "session_id":       session_id,
+    "transcript_path":  transcript_path,
 }
 
 # Write to cast/events/
@@ -56,6 +72,32 @@ log_path = os.path.expanduser("~/.claude/cast/compact-log.jsonl")
 try:
     with open(log_path, "a") as f:
         f.write(json.dumps(event) + "\n")
+except Exception:
+    pass
+
+# Write compaction tier to cast.db (best-effort — hook must not fail)
+import sys
+sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
+try:
+    from cast_db import db_execute, db_write
+    db_execute('''
+        CREATE TABLE IF NOT EXISTS compaction_events (
+            id TEXT PRIMARY KEY,
+            session_id TEXT,
+            timestamp TEXT,
+            trigger TEXT,
+            compaction_tier TEXT,
+            transcript_path TEXT
+        )
+    ''')
+    db_write('compaction_events', {
+        'id': event['id'],
+        'session_id': session_id,
+        'timestamp': iso_ts,
+        'trigger': trigger,
+        'compaction_tier': compaction_tier,
+        'transcript_path': transcript_path,
+    })
 except Exception:
     pass
 PYEOF

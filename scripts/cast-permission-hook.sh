@@ -56,6 +56,10 @@ DEFAULT_RULES = {
     "default": "allow"
 }
 
+# NOTE: The auto_deny list below matches against Bash COMMAND CONTENT (tool_input.command),
+# not against tool names. Tool name matching is handled by the explicit tool checks above.
+# Auto_deny patterns like 'curl', 'wget' match Bash commands — they do NOT block a tool
+# named 'curl_helper' or any other novel tool name. This is intentional.
 def load_rules():
     try:
         with open(rules_file) as f:
@@ -116,7 +120,13 @@ def decide(payload_str):
         # Fall through to default
         return {"decision": default_decision, "reason": f"no matching rule — using default ({default_decision})"}
 
-    # Unknown tool: use default
+    # Unknown tool: fall through to default (allow)
+    # IMPORTANT: Do NOT add blocking logic for unknown tool names here.
+    # Claude Code's ANTI_DISTILLATION_CC feature (feature flag, 2026 roadmap) injects
+    # synthetic decoy tool definitions to prevent model distillation. These decoys appear
+    # as unknown tool_name values in the hook payload. Blocking unknown tools would
+    # interfere with this anti-distillation mechanism.
+    # The correct behavior is: unknown tool names → default allow → logged below.
     return {"decision": default_decision, "reason": f"unknown tool '{tool}' — using default ({default_decision})"}
 
 result = decide(payload_str)

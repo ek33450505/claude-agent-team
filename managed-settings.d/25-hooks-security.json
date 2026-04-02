@@ -46,6 +46,7 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-security-guard.sh",
+            "if": "Write|Edit",
             "timeout": 3
           }
         ]
