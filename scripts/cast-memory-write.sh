@@ -77,78 +77,52 @@ if ! sqlite3 "$DB_PATH" "SELECT 1 FROM agent_memories LIMIT 1;" >/dev/null 2>&1;
 fi
 
 # ---------------------------------------------------------------------------
-# Deduplication: exact content match
+# Deduplication check + Insert — all via parameterized Python (C6: SQL injection fix)
 # ---------------------------------------------------------------------------
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-EXISTING_ID="$(sqlite3 "$DB_PATH" \
-  "SELECT id FROM agent_memories WHERE agent='$(echo "$AGENT" | sed "s/'/''/g")' AND content='$(echo "$CONTENT" | sed "s/'/''/g")' LIMIT 1;" \
-  2>/dev/null || echo "")"
-
-if [ -n "$EXISTING_ID" ]; then
-  sqlite3 "$DB_PATH" \
-    "UPDATE agent_memories SET updated_at='$NOW' WHERE id=$EXISTING_ID;" 2>/dev/null || true
-  echo "Memory updated (duplicate detected): $NAME [$EXISTING_ID]"
-  exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# Embeddings disabled — future: replace with Claude Embeddings API
-# ---------------------------------------------------------------------------
-EMBEDDING_BLOB=""
-EMBEDDING_JSON=""
-
-# ---------------------------------------------------------------------------
-# Description: first 100 chars of content
-# ---------------------------------------------------------------------------
 DESCRIPTION="$(echo "$CONTENT" | cut -c1-100)"
 
-# ---------------------------------------------------------------------------
-# Insert row
-# ---------------------------------------------------------------------------
-# Escape single quotes for SQLite
-AGENT_ESC="$(echo "$AGENT" | sed "s/'/''/g")"
-PROJECT_ESC="$(echo "$PROJECT" | sed "s/'/''/g")"
-TYPE_ESC="$(echo "$TYPE" | sed "s/'/''/g")"
-NAME_ESC="$(echo "$NAME" | sed "s/'/''/g")"
-DESC_ESC="$(echo "$DESCRIPTION" | sed "s/'/''/g")"
-CONTENT_ESC="$(echo "$CONTENT" | sed "s/'/''/g")"
+# Pass all values as argv to Python — never interpolate into SQL strings
+INSERT_ID="$(python3 - "$DB_PATH" "$AGENT" "$PROJECT" "$TYPE" "$NAME" "$DESCRIPTION" "$CONTENT" "$NOW" <<'PYEOF' 2>/dev/null || echo ""
+import sys, sqlite3
 
-if [ -n "$EMBEDDING_JSON" ]; then
-  # Insert with embedding decoded from base64 → BLOB via Python helper
-  INSERT_ID="$(python3 - "$DB_PATH" "$AGENT_ESC" "$PROJECT_ESC" "$TYPE_ESC" "$NAME_ESC" "$DESC_ESC" "$CONTENT_ESC" "$NOW" "$EMBEDDING_JSON" <<'PYEOF'
-import sys, sqlite3, base64, struct
+db_path, agent, project, mem_type, name, description, content, now = sys.argv[1:9]
 
-db_path, agent, project, mem_type, name, desc, content, now, emb_b64 = sys.argv[1:10]
-
-blob = base64.b64decode(emb_b64)
-conn = sqlite3.connect(db_path)
+conn = sqlite3.connect(db_path, timeout=5)
 cur = conn.cursor()
+
+# Deduplication: exact content match — parameterized query (safe from injection)
 cur.execute(
-    "INSERT INTO agent_memories (agent, project, type, name, description, content, created_at, updated_at, embedding) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    (agent, project or None, mem_type, name, desc, content, now, now, blob)
+    "SELECT id FROM agent_memories WHERE agent = ? AND content = ? LIMIT 1",
+    (agent, content)
+)
+row = cur.fetchone()
+if row:
+    existing_id = row[0]
+    cur.execute("UPDATE agent_memories SET updated_at = ? WHERE id = ?", (now, existing_id))
+    conn.commit()
+    conn.close()
+    print(f"UPDATED:{existing_id}")
+    sys.exit(0)
+
+# Insert new row — parameterized (safe from injection including semicolons, backslashes, UTF-8)
+cur.execute(
+    "INSERT INTO agent_memories "
+    "(agent, project, type, name, description, content, created_at, updated_at, embedding) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+    (agent, project or None, mem_type, name, description, content, now, now)
 )
 conn.commit()
-print(cur.lastrowid)
+insert_id = cur.lastrowid
 conn.close()
+print(insert_id)
 PYEOF
-  2>/dev/null || echo "")"
-else
-  # Build project SQL value: NULL when empty, quoted string otherwise
-  if [ -n "$PROJECT_ESC" ]; then
-    PROJECT_SQL="'$PROJECT_ESC'"
-  else
-    PROJECT_SQL="NULL"
-  fi
-  INSERT_ID="$(sqlite3 "$DB_PATH" \
-    "INSERT INTO agent_memories (agent, project, type, name, description, content, created_at, updated_at, embedding) \
-     VALUES ('$AGENT_ESC',$PROJECT_SQL,'$TYPE_ESC','$NAME_ESC','$DESC_ESC','$CONTENT_ESC','$NOW','$NOW',NULL); \
-     SELECT last_insert_rowid();" \
-    2>/dev/null || echo "")"
-fi
+)"
 
-if [ -n "$INSERT_ID" ]; then
+if echo "$INSERT_ID" | grep -q "^UPDATED:"; then
+  DUP_ID="${INSERT_ID#UPDATED:}"
+  echo "Memory updated (duplicate detected): $NAME [$DUP_ID]"
+elif [ -n "$INSERT_ID" ]; then
   echo "Memory written: $NAME [$INSERT_ID]"
 else
   echo "Memory written: $NAME [unknown id]"

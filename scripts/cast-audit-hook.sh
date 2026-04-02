@@ -37,6 +37,22 @@
 # Audit hook must never fail loudly — a broken audit hook must not interrupt work.
 set +e
 
+# C5: PII bypass safelist — known false-positive patterns skip enforcement
+SAFELIST_PATTERNS=(
+  'anthropic\.com'
+  'github\.com'
+  'example\.com'
+  'example\.org'
+  'noreply@'
+  'user@example'
+  '@anthropic'
+  'claude\.ai'
+  'docs\.anthropic'
+)
+
+# C5: ENFORCEMENT_MODE — only "strict" triggers exit 2 block. Default is advisory (log only).
+ENFORCEMENT_MODE="${CAST_PII_ENFORCEMENT:-advisory}"
+
 AUDIT_LOG="$HOME/.claude/logs/audit.jsonl"
 
 # Ensure log directory exists
@@ -277,7 +293,20 @@ except Exception:
     print('false')
 " 2>/dev/null || echo 'false')"
 
-        if [ "$ENFORCE_BLOCK" = "true" ]; then
+        # C5: Check safelist — if matched text contains any safelist pattern, skip blocking
+        SAFELIST_MATCHED=false
+        for PATTERN in "${SAFELIST_PATTERNS[@]}"; do
+          if echo "$REDACT_TEXT" | grep -qE "$PATTERN" 2>/dev/null; then
+            SAFELIST_MATCHED=true
+            break
+          fi
+        done
+
+        if [ "$SAFELIST_MATCHED" = "true" ]; then
+          # Safelist match — log advisory only, never block
+          echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] PII-ADVISORY cast-audit-hook.sh: safelist match, skipping enforcement. Text preview: ${REDACT_TEXT:0:100}" >> "$HOME/.claude/logs/pii-advisory.log" 2>/dev/null || true
+        elif [ "$ENFORCEMENT_MODE" = "strict" ] && [ "$ENFORCE_BLOCK" = "true" ]; then
+          # C5: strict mode only — exit 2 to block
           # Append audit record before blocking so the block is logged
           echo "$RECORD" >> "$AUDIT_LOG" 2>/dev/null || true
           # Output block decision — Claude Code reads this from stdout
@@ -286,20 +315,21 @@ import json, os
 n = int(os.environ.get('CAST_REDACT_COUNT', 0))
 output = {
     'decision': 'block',
-    'reason': f'[CAST-PII-BLOCK] {n} PII entities detected in cloud-bound tool call. Tool execution blocked. Disable with: cast audit --redact off'
+    'reason': f'[CAST-PII-BLOCK] {n} PII entities detected in cloud-bound tool call. Tool execution blocked. Set CAST_PII_ENFORCEMENT=advisory to disable blocking.'
 }
 print(json.dumps(output))
 " 2>/dev/null || true
           exit 2
         else
-          # Observation mode: warn but allow
+          # Advisory mode (default): warn but allow. Log to pii-advisory.log.
+          echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] PII-ADVISORY cast-audit-hook.sh: ${ENTITY_COUNT} entities detected (advisory mode). Text preview: ${REDACT_TEXT:0:100}" >> "$HOME/.claude/logs/pii-advisory.log" 2>/dev/null || true
           python3 -c "
 import json, os
 n = int(os.environ.get('CAST_REDACT_COUNT', 0))
 output = {
     'hookSpecificOutput': {
         'hookEventName': 'PreToolUse',
-        'additionalContext': f'[CAST-REDACT-WARN: {n} PII entities detected in cloud-bound tool call. Audit record annotated. Enable enforcement with: cast audit --redact on]'
+        'additionalContext': f'[CAST-REDACT-WARN: {n} PII entities detected in cloud-bound tool call. Audit record annotated. Set CAST_PII_ENFORCEMENT=strict to enable blocking.]'
     }
 }
 print(json.dumps(output))

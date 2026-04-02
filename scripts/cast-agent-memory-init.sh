@@ -16,32 +16,27 @@ AGENT_MEMORY_DIR="${HOME}/.claude/agent-memory-local"
 EVENTS_DIR="${HOME}/.claude/cast/events"
 AGENT_REGISTRY_DIR="${HOME}/.claude/agents"
 
-# Known agents to seed memory for
-KNOWN_AGENTS=(
-  "commit"
-  "code-reviewer"
-  "build-error-resolver"
-  "refactor-cleaner"
-  "doc-updater"
-  "auto-stager"
-  "debugger"
-  "test-writer"
-  "planner"
-  "security"
-  "architect"
-  "researcher"
-  "bash-specialist"
-  "test-runner"
-  "report-writer"
-  "chain-reporter"
-  "verifier"
-)
+# H3: Dynamic agent discovery — no hardcoded ghost agents.
+# Discover from ~/.claude/agents/ first; fall back to repo agents/core/ if needed.
+if [ -d "${AGENT_REGISTRY_DIR}" ]; then
+  KNOWN_AGENTS_LIST="$(find "${AGENT_REGISTRY_DIR}" -name '*.md' -exec basename {} .md \; 2>/dev/null | sort)"
+fi
+if [ -z "${KNOWN_AGENTS_LIST:-}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  FALLBACK_DIR="${SCRIPT_DIR}/../agents/core"
+  if [ -d "$FALLBACK_DIR" ]; then
+    KNOWN_AGENTS_LIST="$(find "$FALLBACK_DIR" -name '*.md' -exec basename {} .md \; 2>/dev/null | sort)"
+  fi
+fi
+# Final fallback: empty list — don't seed phantom agents
+KNOWN_AGENTS_LIST="${KNOWN_AGENTS_LIST:-}"
 
-python3 -c "
+CAST_PROJECT_ROOT="$PROJECT_ROOT" CAST_KNOWN_AGENTS="$KNOWN_AGENTS_LIST" python3 - <<'PYEOF' 2>/dev/null || true
 import json, os, sys, glob, datetime
 from collections import defaultdict
 
 project_root = os.environ.get('CAST_PROJECT_ROOT', '')
+known_agents_raw = os.environ.get('CAST_KNOWN_AGENTS', '')
 agent_memory_dir = os.path.expanduser('~/.claude/agent-memory-local')
 events_dir = os.path.expanduser('~/.claude/cast/events')
 today = datetime.date.today().isoformat()
@@ -49,12 +44,11 @@ today = datetime.date.today().isoformat()
 # Detect project name and stack from project-catalog.md if available
 project_name = os.path.basename(project_root) if project_root else 'unknown'
 
-known_agents = [
-    'commit', 'code-reviewer', 'build-error-resolver', 'refactor-cleaner',
-    'doc-updater', 'auto-stager', 'debugger', 'test-writer', 'planner',
-    'security', 'architect', 'researcher', 'bash-specialist', 'test-runner',
-    'report-writer', 'chain-reporter', 'verifier'
-]
+# H3: Use dynamically discovered agents — no ghost agents
+known_agents = [a.strip() for a in known_agents_raw.splitlines() if a.strip()]
+if not known_agents:
+    print("No agents discovered — skipping memory seed.")
+    sys.exit(0)
 
 # Read recent events
 events = []
@@ -150,6 +144,6 @@ updated: {today}
 
 print(f'Agent memory seeded for {len(known_agents)} agents in project: {project_name}')
 print(f'Memory directory: {agent_memory_dir}')
-" CAST_PROJECT_ROOT="$PROJECT_ROOT" 2>/dev/null || true
+PYEOF
 
 exit 0

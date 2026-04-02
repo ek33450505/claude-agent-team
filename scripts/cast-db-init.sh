@@ -295,4 +295,8 @@ PRAGMA user_version = 6;
 SQL
 
 chmod 600 "$DB_PATH"
-echo "cast.db initialized (v6)" >&2
+
+# H8: Enable WAL mode for concurrent write safety (parallel orchestrator agents)
+sqlite3 "$DB_PATH" 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;' >/dev/null 2>&1 || true
+
+echo "cast.db initialized (v6, WAL mode)" >&2

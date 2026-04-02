@@ -150,40 +150,65 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
   fi
   export CAST_STOP_DB_STATUS="$DB_STATUS"
   python3 - <<'PYEOF' 2>>"$STOP_ERROR_LOG" || true
-import sqlite3, os
+import sqlite3, os, time
 
 db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
 agent = os.environ.get('CAST_STOP_AGENT', '')
 sess  = os.environ.get('CAST_STOP_SESSION', '')
 ts    = os.environ.get('CAST_STOP_TS_ISO', '')
 st    = os.environ.get('CAST_STOP_DB_STATUS', 'DONE')
+err_log = os.path.expanduser('~/.claude/logs/hook-errors.log')
 
 if not agent or not db:
     raise SystemExit(0)
 
+def _log_hook_error(msg):
+    try:
+        from datetime import datetime, timezone
+        t = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(err_log, 'a') as f:
+            f.write(f"[{t}] ERROR cast-subagent-stop-hook.sh: {msg}\n")
+    except Exception:
+        pass
+
 # Update the running row for this agent. Use agent_id for precise matching when
 # available; fall back to MAX(id) heuristic when agent_id is absent.
 agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
-try:
-    conn = sqlite3.connect(db, timeout=5)
-    cur  = conn.cursor()
-    if agent_id:
-        cur.execute(
-            "UPDATE agent_runs SET status=?, ended_at=? "
-            "WHERE status='running' AND agent_id=?",
-            (st, ts, agent_id),
-        )
-    else:
-        cur.execute(
-            "UPDATE agent_runs SET status=?, ended_at=? "
-            "WHERE status='running' AND agent=? AND session_id=? "
-            "AND id=(SELECT MAX(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
-            (st, ts, agent, sess, agent, sess),
-        )
-    conn.commit()
-    conn.close()
-except Exception:
-    pass
+
+# H8: Retry up to 3 times with backoff on SQLITE_BUSY / locked
+for attempt in range(3):
+    try:
+        conn = sqlite3.connect(db, timeout=5)
+        cur  = conn.cursor()
+        if agent_id:
+            cur.execute(
+                "UPDATE agent_runs SET status=?, ended_at=? "
+                "WHERE status='running' AND agent_id=?",
+                (st, ts, agent_id),
+            )
+        else:
+            cur.execute(
+                "UPDATE agent_runs SET status=?, ended_at=? "
+                "WHERE status='running' AND agent=? AND session_id=? "
+                "AND id=(SELECT MAX(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
+                (st, ts, agent, sess, agent, sess),
+            )
+        conn.commit()
+        conn.close()
+        break
+    except sqlite3.OperationalError as e:
+        conn_close_safe = locals().get('conn')
+        if conn_close_safe:
+            try: conn_close_safe.close()
+            except Exception: pass
+        if 'locked' in str(e) and attempt < 2:
+            time.sleep(0.1 * (attempt + 1))
+        else:
+            _log_hook_error(f"DB UPDATE failed after {attempt+1} attempt(s): {e}")
+            break
+    except Exception as e:
+        _log_hook_error(f"DB UPDATE unexpected error: {type(e).__name__}: {e}")
+        break
 PYEOF
 fi
 

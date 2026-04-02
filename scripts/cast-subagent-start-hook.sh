@@ -108,36 +108,60 @@ PYEOF
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   export CAST_START_DB_PATH="$DB_PATH"
   python3 - <<'PYEOF' 2>>"$START_ERROR_LOG" || true
-import sqlite3, os
+import sqlite3, os, time
 
 db       = os.path.expanduser(os.environ.get('CAST_START_DB_PATH', '~/.claude/cast.db'))
 agent    = os.environ.get('CAST_START_AGENT', '')
 sess     = os.environ.get('CAST_START_SESSION', '')
 ts       = os.environ.get('CAST_START_TS_ISO', '')
 agent_id = os.environ.get('CAST_START_AGENT_ID', '')
+err_log  = os.path.expanduser('~/.claude/logs/hook-errors.log')
 
 if not agent:
     raise SystemExit(0)
 
-try:
-    conn = sqlite3.connect(db, timeout=5)
-    cur  = conn.cursor()
-    # Check if agent_runs has agent_id column
-    cols = [r[1] for r in cur.execute("PRAGMA table_info(agent_runs)").fetchall()]
-    if 'agent_id' in cols:
-        cur.execute(
-            "INSERT INTO agent_runs (agent, session_id, status, started_at, agent_id) VALUES (?, ?, 'running', ?, ?)",
-            (agent, sess, ts, agent_id),
-        )
-    else:
-        cur.execute(
-            "INSERT INTO agent_runs (agent, session_id, status, started_at) VALUES (?, ?, 'running', ?)",
-            (agent, sess, ts),
-        )
-    conn.commit()
-    conn.close()
-except Exception:
-    pass
+def _log_hook_error(msg):
+    try:
+        from datetime import datetime, timezone
+        t = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(err_log, 'a') as f:
+            f.write(f"[{t}] ERROR cast-subagent-start-hook.sh: {msg}\n")
+    except Exception:
+        pass
+
+# H8: Retry up to 3 times with backoff on SQLITE_BUSY / locked
+for attempt in range(3):
+    try:
+        conn = sqlite3.connect(db, timeout=5)
+        cur  = conn.cursor()
+        # Check if agent_runs has agent_id column
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(agent_runs)").fetchall()]
+        if 'agent_id' in cols:
+            cur.execute(
+                "INSERT INTO agent_runs (agent, session_id, status, started_at, agent_id) VALUES (?, ?, 'running', ?, ?)",
+                (agent, sess, ts, agent_id),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO agent_runs (agent, session_id, status, started_at) VALUES (?, ?, 'running', ?)",
+                (agent, sess, ts),
+            )
+        conn.commit()
+        conn.close()
+        break
+    except sqlite3.OperationalError as e:
+        conn_close_safe = locals().get('conn')
+        if conn_close_safe:
+            try: conn_close_safe.close()
+            except Exception: pass
+        if 'locked' in str(e) and attempt < 2:
+            time.sleep(0.1 * (attempt + 1))
+        else:
+            _log_hook_error(f"DB INSERT failed after {attempt+1} attempt(s): {e}")
+            break
+    except Exception as e:
+        _log_hook_error(f"DB INSERT unexpected error: {type(e).__name__}: {e}")
+        break
 PYEOF
 fi
 
