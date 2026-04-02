@@ -96,6 +96,16 @@ install_agents() {
 
 info "Installing agents..."
 install_agents $CORE_AGENTS
+# H1: Sync any additional agent definitions not in CORE_AGENTS list
+for _extra_agent in "$SCRIPT_DIR"/agents/core/*.md; do
+    _agent_name="$(basename "$_extra_agent" .md)"
+    _dest="$CLAUDE_DIR/agents/$_agent_name.md"
+    if [ ! -f "$_dest" ]; then
+        cp "$_extra_agent" "$_dest"
+        AGENT_COUNT=$((AGENT_COUNT + 1))
+        success "  Installed (extra): $_agent_name"
+    fi
+done
 success "  $AGENT_COUNT agents installed"
 
 # --- Install commands ---
