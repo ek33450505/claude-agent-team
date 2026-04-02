@@ -108,6 +108,7 @@ When invoked:
 - **TDD:** For any logic-heavy task, include a "write failing test first" step.
 - **Frequent commits:** Each logical unit gets its own commit step.
 - **Exact paths:** Never say "update the relevant file" — find the actual path.
+- **CAST agent files:** Agent definitions live in the repo at `agents/core/<name>.md` — always reference and modify the repo path, NOT the runtime copy at `~/.claude/agents/<name>.md`. `install.sh` syncs repo → runtime; editing the runtime copy directly leaves the repo out of sync.
 - **Small tasks:** Each task should be 15-30 minutes of work maximum.
 - **Plan complexity ceiling:** Cap plans at 6 batches maximum. If the work requires more, split into two sequential plans. Plans with more than 6 batches risk hitting the orchestrator turn ceiling (50 turns) before completion.
 
