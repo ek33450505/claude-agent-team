@@ -55,7 +55,7 @@ except Exception:
     sys.exit(0)
 
 result = {
-    "agent_name": data.get("agent_name") or data.get("subagent_name") or "unknown",
+    "agent_name": data.get("agent_type") or data.get("agent_name") or data.get("subagent_name") or "unknown",
     "session_id": data.get("session_id") or "",
     "agent_id":   data.get("agent_id") or data.get("subagent_id") or "",
 }
