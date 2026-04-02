@@ -135,7 +135,7 @@ After completing work, check if any patterns, conventions, or project-specific k
 
 **What to include:** repo path (absolute) + what the change does and why (not a file list — agent reads git diff).
 
-**Good prompt:** `"Commit all changes in /Users/edkubiak/Projects/personal/claude-agent-team. Feature: routing-table.json now runs code-reviewer and security in parallel post_chain."`
+**Good prompt:** `"Commit all changes in ~/Projects/my-project. Feature: routing-table.json now runs code-reviewer and security in parallel post_chain."`
 
 **Poor prompt:** `"Commit route.json, cast-validate.sh"` — file lists add noise.
 

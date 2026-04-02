@@ -222,7 +222,7 @@ USAGE
 
   _verbose "Running: $agent with model=$model"
   local log_file="/tmp/cast-run-$$"
-  claude --agent "$agent" --print --dangerously-skip-permissions -p "$task" \
+  claude --agent "$agent" --print --dangerously-skip-permissions --model "$model" -p "$task" \
     2>&1 | tee "$log_file"
   local exit_code="${PIPESTATUS[0]}"
   rm -f "$log_file"

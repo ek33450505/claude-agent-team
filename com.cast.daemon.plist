@@ -2,8 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   CAST Background Daemon — macOS LaunchAgent
-  Install: cp com.cast.daemon.plist ~/Library/LaunchAgents/
-  Load:    launchctl load ~/Library/LaunchAgents/com.cast.daemon.plist
+  NOTE: __HOME__ is a template token. Run install.sh which substitutes $HOME before copying.
+  NOTE: castd.sh lives in scripts/archive/ — daemon mode is superseded by cron (see cast-cron-setup.sh).
+  Install (via install.sh): install.sh will substitute __HOME__ and copy to ~/Library/LaunchAgents/
+  Manual install:
+    sed "s|__HOME__|$HOME|g" com.cast.daemon.plist > ~/Library/LaunchAgents/com.cast.daemon.plist
+    launchctl load ~/Library/LaunchAgents/com.cast.daemon.plist
   Stop:    launchctl unload ~/Library/LaunchAgents/com.cast.daemon.plist
   Logs:    tail -f ~/.claude/logs/castd.log
 -->
@@ -15,7 +19,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/edkubiak/.claude/scripts/castd.sh</string>
+    <string>__HOME__/.claude/scripts/castd.sh</string>
   </array>
 
   <!-- Start immediately on login -->
@@ -30,9 +34,9 @@
 
   <!-- Log stdout + stderr to shared log file -->
   <key>StandardOutPath</key>
-  <string>/Users/edkubiak/.claude/logs/castd.log</string>
+  <string>__HOME__/.claude/logs/castd.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/edkubiak/.claude/logs/castd.log</string>
+  <string>__HOME__/.claude/logs/castd.log</string>
 
   <!-- Inherit a login-like environment so PATH includes Homebrew + pyenv -->
   <key>EnvironmentVariables</key>
@@ -40,7 +44,7 @@
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key>
-    <string>/Users/edkubiak</string>
+    <string>__HOME__</string>
   </dict>
 </dict>
 </plist>

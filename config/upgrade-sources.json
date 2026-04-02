@@ -4,5 +4,5 @@
     { "repo": "anthropics/anthropic-sdk-js", "type": "github-releases" }
   ],
   "last_checked": null,
-  "cast_description": "CAST uses hooks (PreToolUse/PostToolUse/UserPromptSubmit/SubagentStop/StopFailure), agent definitions with tools/model/maxTurns frontmatter, route.sh for routing, castd daemon for async task execution, sqlite cast.db for state, --agent and --print flags"
+  "cast_description": "CAST uses hooks (PreToolUse/PostToolUse/UserPromptSubmit/SubagentStop/StopFailure), agent definitions with tools/model/maxTurns frontmatter, route.sh for routing, cron-based scheduling (cast-cron-setup.sh) for async task execution, sqlite cast.db for state, --agent and --print flags"
 }

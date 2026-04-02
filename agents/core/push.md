@@ -4,7 +4,7 @@ description: >
   Git push specialist. Verifies branch safety, shows unpushed commits, sets upstream
   if needed, then pushes using the CAST_PUSH_OK=1 escape hatch. Hard-blocks force-push
   to main/master. Use after commit agent completes.
-tools: [Bash, Read]
+tools: Bash, Read
 model: haiku
 effort: low
 color: blue

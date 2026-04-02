@@ -22,8 +22,7 @@ if [ "${CAST_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 CAST_DIR="${HOME}/.claude/cast"
 CLAUDE_DIR="${HOME}/.claude"
 SYNC_CONFIG="${HOME}/.claude/config/sync.json"
-CASTD_STATE_FILE="${CAST_DIR}/castd.state"
-CASTD_PID_FILE="${CAST_DIR}/castd.pid"
+SYNC_LOCK_FILE="/tmp/cast-sync.lock"
 
 # Color helpers (only when writing to a tty)
 if [ -t 1 ]; then
@@ -169,42 +168,20 @@ build_rsync_args() {
   echo "--filter=hide,! **/"
 }
 
-# --- Daemon pause/resume ---
-daemon_running() {
-  local state
-  state="$(python3 -c "
-import json
-from pathlib import Path
-f = Path('${CASTD_STATE_FILE}')
-try:
-  d = json.loads(f.read_text()) if f.exists() else {}
-  print(d.get('status', 'stopped'))
-except Exception:
-  print('stopped')
-" 2>/dev/null || echo "stopped")"
-  [[ "$state" == "running" ]]
+# --- Concurrency lockfile ---
+# Uses flock to prevent concurrent sync runs. Daemon pause/resume was removed
+# in v3 when castd was replaced by cron-based scheduling.
+acquire_lock() {
+  exec 9>"$SYNC_LOCK_FILE"
+  if ! flock -n 9 2>/dev/null; then
+    error "Another cast-sync is already running (lock: $SYNC_LOCK_FILE). Aborting."
+    exit 1
+  fi
 }
 
-pause_daemon() {
-  if [[ -f "$CASTD_PID_FILE" ]] && daemon_running; then
-    local pid
-    pid="$(cat "$CASTD_PID_FILE")"
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -STOP "$pid" 2>/dev/null || true
-      info "Paused castd (PID $pid) during sync"
-      echo "$pid"
-      return
-    fi
-  fi
-  echo ""
-}
-
-resume_daemon() {
-  local pid="$1"
-  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-    kill -CONT "$pid" 2>/dev/null || true
-    info "Resumed castd (PID $pid)"
-  fi
+release_lock() {
+  flock -u 9 2>/dev/null || true
+  exec 9>&-
 }
 
 # --- Commands ---
@@ -251,9 +228,7 @@ cmd_push() {
 
   mapfile -t rsync_args < <(build_rsync_args)
 
-  # Pause daemon during push
-  local paused_pid
-  paused_pid="$(pause_daemon)"
+  acquire_lock
 
   local exit_code=0
   rsync --verbose \
@@ -263,7 +238,7 @@ cmd_push() {
     "${CLAUDE_DIR}/" \
     "$remote" || exit_code=$?
 
-  resume_daemon "$paused_pid"
+  release_lock
 
   if [[ "$exit_code" -eq 0 ]]; then
     update_sync_timestamp "last_push"

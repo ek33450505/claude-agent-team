@@ -5,8 +5,8 @@
 #
 # Scheduled tasks:
 #   0 7  * * *   morning-briefing   — daily morning briefing at 07:00
-#   0 18 * * *   chain-reporter     — daily agent summary at 18:00
-#   0 9  * * 1   report-writer      — weekly cost report at 09:00 Monday
+#   0 18 * * *   summary            — daily agent summary at 18:00
+#   0 9  * * 1   cost-report        — weekly cost report at 09:00 Monday
 #
 # Usage:
 #   cast-cron-setup.sh           Install missing cron entries (idempotent)
@@ -35,7 +35,7 @@ declare -a CRON_ENTRIES=(
   "0 7 * * *|morning|Generate morning briefing: summarize pending tasks, recent agent activity, and priorities for today"
   "0 18 * * *|summary|Generate daily summary: summarize all agent_runs completed today from cast.db, highlight any BLOCKED or DONE_WITH_CONCERNS statuses"
   "0 9 * * 1|cost-report|Generate weekly cost report from cast.db agent_runs: show total cost_usd by model, local vs cloud split, cost savings this week"
-  "0 * * * *|sweep|cast exec --sweep"
+  "0 * * * *|sweep|cast exec"
   "30 3 * * *|db-prune|sqlite3 ~/.claude/cast.db \"DELETE FROM routing_events WHERE created_at < datetime('now', '-90 days'); DELETE FROM agent_runs WHERE started_at < datetime('now', '-90 days');\""
   "45 3 * * *|log-compress|find ~/.claude/cast/events -name '*.jsonl' -mtime +7 -exec gzip {} \\;"
   "0 10 * * 0|security-audit|Run a security audit of the CAST scripts and agent definitions. Check for hardcoded secrets, overly permissive file operations, and injection risks. Save report to ~/.claude/reports/security-$(date +\%Y-\%m-\%d).md"

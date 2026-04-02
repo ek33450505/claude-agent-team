@@ -72,7 +72,6 @@
     ],
     "InstructionsLoaded": [
       {
-        "matcher": "session_start",
         "hooks": [
           {
             "type": "command",

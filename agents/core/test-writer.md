@@ -5,7 +5,7 @@ description: >
   edge cases, and error states. Detects the project's test framework and follows
   existing conventions. Use after code-writer completes a logical unit.
 tools: Read, Write, Edit, Bash, Glob, Grep
-model: haiku
+model: sonnet
 effort: high
 color: fuchsia
 memory: local

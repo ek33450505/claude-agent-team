@@ -330,7 +330,7 @@ PYEOF
   if [[ "$STOP_WIRED" == "OK" ]]; then
     pass "cast-session-end.sh: wired in $(basename "$SETTINGS")"
   elif [[ "$STOP_WIRED" == "MISSING" ]]; then
-    warn "cast-session-end.sh: not wired (chain-reporter auto-dispatch on session end unavailable)"
+    warn "cast-session-end.sh: not wired in settings.json (session end telemetry unavailable)"
   else
     warn "cast-session-end.sh: could not verify wiring"
   fi

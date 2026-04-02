@@ -31,13 +31,14 @@ if read -t 2 -r line 2>/dev/null; then
 fi
 
 # Use Python for JSON parsing and rule evaluation (no external deps)
-python3 - "$RULES_FILE" "$LOG_FILE" "$TIMESTAMP_FILE" <<PYEOF
+# PAYLOAD is passed via env var (not string interpolation) to avoid triple-quote injection.
+CAST_HOOK_PAYLOAD="$PAYLOAD" python3 - "$RULES_FILE" "$LOG_FILE" "$TIMESTAMP_FILE" <<PYEOF
 import json
 import sys
 import os
 from datetime import datetime, timezone
 
-payload_str = """${PAYLOAD}"""
+payload_str = os.environ.get("CAST_HOOK_PAYLOAD", "")
 rules_file  = sys.argv[1]
 log_file    = sys.argv[2]
 ts_file     = sys.argv[3]

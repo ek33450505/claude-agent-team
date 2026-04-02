@@ -13,8 +13,6 @@
 #   queue_complete    — all queued tasks finished
 #   budget_alert      — spending threshold exceeded
 #   briefing_ready    — morning briefing is available
-#   daemon_stopped    — castd daemon stopped unexpectedly
-#   daemon_started    — castd daemon started
 
 set -euo pipefail
 
@@ -32,7 +30,7 @@ TITLE="${3:-CAST}"
 
 if [ -z "$EVENT_TYPE" ]; then
   echo "Usage: cast-notify.sh <event_type> [message] [title]" >&2
-  echo "Event types: blocked, queue_complete, budget_alert, briefing_ready, daemon_stopped, daemon_started" >&2
+  echo "Event types: blocked, queue_complete, budget_alert, briefing_ready" >&2
   exit 0
 fi
 
@@ -105,11 +103,8 @@ case "$EVENT_TYPE" in
   blocked|budget_alert)
     SOUND="Bottle"
     ;;
-  queue_complete|briefing_ready|daemon_started)
+  queue_complete|briefing_ready)
     SOUND="Glass"
-    ;;
-  daemon_stopped)
-    SOUND="Bottle"
     ;;
   *)
     SOUND="Glass"
@@ -123,8 +118,6 @@ if [ -z "$MESSAGE" ]; then
     queue_complete) MESSAGE="All queued tasks have completed." ;;
     budget_alert)   MESSAGE="CAST budget threshold exceeded." ;;
     briefing_ready) MESSAGE="Your morning briefing is ready." ;;
-    daemon_stopped) MESSAGE="castd daemon has stopped." ;;
-    daemon_started) MESSAGE="castd daemon started." ;;
     *)              MESSAGE="$EVENT_TYPE" ;;
   esac
 fi

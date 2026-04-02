@@ -35,8 +35,13 @@ if [ ${#FRAGMENTS[@]} -eq 0 ]; then
 fi
 
 # Validate all fragments before merging
+# Fragments are passed as argv (not string interpolation) to avoid path injection.
 for f in "${FRAGMENTS[@]}"; do
-  if ! python3 -c "import json, sys; json.load(open('$f'))" 2>/dev/null; then
+  if ! python3 - "$f" <<'PYEOF' 2>/dev/null
+import json, sys
+json.load(open(sys.argv[1]))
+PYEOF
+  then
     echo "[cast-merge-settings] ERROR: invalid JSON in fragment: $f — aborting, output not written" >&2
     exit 2
   fi

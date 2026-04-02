@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   com.cast.daemon.plist — macOS LaunchAgent for the CAST persistent daemon
-  Install path: ~/Library/LaunchAgents/com.cast.daemon.plist
+  NOTE: __HOME__ is a template token. install.sh substitutes $HOME before copying.
+  NOTE: castd.sh lives in scripts/archive/ — daemon mode is superseded by cron (see cast-cron-setup.sh).
 
-  To install:
-    cp scripts/com.cast.daemon.plist ~/Library/LaunchAgents/
+  Install (via install.sh — preferred): install.sh substitutes __HOME__ and copies to ~/Library/LaunchAgents/
+  Manual install:
+    sed "s|__HOME__|$HOME|g" scripts/com.cast.daemon.plist > ~/Library/LaunchAgents/com.cast.daemon.plist
     launchctl load ~/Library/LaunchAgents/com.cast.daemon.plist
 
   To uninstall:
@@ -26,7 +28,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/edkubiak/.claude/scripts/castd.sh</string>
+    <string>__HOME__/.claude/scripts/castd.sh</string>
   </array>
 
   <!-- Start immediately when loaded -->
@@ -43,16 +45,16 @@
 
   <!-- Redirect stdout and stderr to the same log file -->
   <key>StandardOutPath</key>
-  <string>/Users/edkubiak/.claude/logs/castd.log</string>
+  <string>__HOME__/.claude/logs/castd.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/edkubiak/.claude/logs/castd.log</string>
+  <string>__HOME__/.claude/logs/castd.log</string>
 
   <!-- Ensure HOME is set correctly for the daemon process -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>/Users/edkubiak</string>
+    <string>__HOME__</string>
     <key>PATH</key>
     <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
   </dict>

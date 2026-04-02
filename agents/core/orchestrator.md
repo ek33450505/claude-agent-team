@@ -29,9 +29,9 @@ If the checkpoint exists, read the last completed batch ID and skip batches with
 
 ### Dispatch Backend Check
 
-Read `dispatch_backend` from `/Users/edkubiak/Projects/personal/claude-agent-team/config/cast-cli.json`:
+Read `dispatch_backend` from `~/.claude/config/cast-cli.json`:
 ```bash
-DISPATCH_BACKEND=$(python3 -c "import json; d=json.load(open('/Users/edkubiak/Projects/personal/claude-agent-team/config/cast-cli.json')); print(d.get('dispatch_backend', 'cast'))" 2>/dev/null || echo 'cast')
+DISPATCH_BACKEND=$(python3 -c "import json,os; d=json.load(open(os.path.expanduser('~/.claude/config/cast-cli.json'))); print(d.get('dispatch_backend', 'cast'))" 2>/dev/null || echo 'cast')
 ```
 Log the backend to cast.db routing_events table:
 ```bash
@@ -93,12 +93,12 @@ Before passing the `prompt` field from the ADM to the Agent tool, prepend the fo
 
 ```
 [CAST SHARED CONTEXT]
-Project: claude-agent-team (CAST v3.3)
-Repo: /Users/edkubiak/Projects/personal/claude-agent-team
-Stack: Bash + Python + SQLite | 17 agents | BATS tests in tests/
+Project: claude-agent-team
+Repo: $CAST_REPO_DIR (or infer from git root)
+Stack: Bash + Python + SQLite | BATS tests in tests/
 DB access: always use scripts/cast_db.py (db_write, db_query, db_execute)
 Conventions: YAGNI, DRY, exit 0 on all async hooks, exit 2 to block PreToolUse
-Working dir: /Users/edkubiak/Projects/personal/claude-agent-team
+Working dir: $CAST_REPO_DIR (or infer from git root)
 [END CAST SHARED CONTEXT]
 
 [AGENT TASK]
@@ -180,6 +180,8 @@ After each batch completes:
 ## Step 4 — Summarize
 
 After all batches complete, print a brief summary (≤200 words): what each batch did, any concerns.
+
+> **Note — VerifyPlanExecutionTool:** The native `VerifyPlanExecutionTool` (confirmed in Claude Code source) returns a PASS/FAIL/PARTIAL verdict after plan execution. When this tool is officially available in the tool registry, add it to the `tools:` frontmatter and call it here before emitting the terminal event. Log the verdict to `cast.db quality_gates`. See `docs/native-tools-reference.md` for the full list of confirmed native tools.
 
 Delete checkpoint:
 ```bash

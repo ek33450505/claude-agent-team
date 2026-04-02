@@ -183,7 +183,7 @@ All agents carry `memory: local` — each accumulates session knowledge in `~/.c
 | `SubagentStop` | `cast-subagent-stop-hook.sh` | Closes agent_runs row on completion (async) |
 | `Stop` | `cast-session-end.sh` | Archives session, prunes events, syncs memory |
 | `StopFailure` | `cast-stop-failure-hook.sh` | Logs abnormal session termination |
-| `PostToolUseFailure` | `cast-error-hook.sh` | Logs tool failures to cast.db |
+| `PostToolUseFailure` | `cast-tool-failure-hook.sh` | Logs tool failures to cast.db |
 
 **Exit code convention:**
 - Exit 0 — hook passed, tool call proceeds

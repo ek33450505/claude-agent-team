@@ -34,9 +34,9 @@ CMD_COUNT=0
 SKILL_COUNT=0
 
 # --- Agent / command / skill lists ---
-CORE_AGENTS="planner debugger test-runner code-reviewer commit security push code-writer bash-specialist merge orchestrator morning-briefing devops researcher docs test-writer"
+CORE_AGENTS="planner debugger test-runner code-reviewer commit security push code-writer bash-specialist merge orchestrator morning-briefing devops researcher docs test-writer frontend-qa"
 
-ALL_CMDS="bash cast commit debug devops docs doctor merge morning orchestrate plan push research review secure test"
+ALL_CMDS="bash cast commit debug devops docs doctor merge morning orchestrate plan push research review roadmap secure test"
 
 GENERAL_SKILLS="briefing-writer careful-mode freeze-mode git-activity merge plan wizard"
 
@@ -46,7 +46,7 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 printf "\n${BOLD}Claude Agent Team — Installer (v3)${NC}\n\n"
-printf "  Installing 16 agents, 16 commands, 7 skills\n\n"
+printf "  Installing 17 agents, 17 commands, 7 skills\n\n"
 info "Starting installation..."
 
 # --- Backup existing dirs if non-empty ---
@@ -231,6 +231,18 @@ else
     info "  Skipped (exists): config.sh"
 fi
 
+# --- Install LaunchAgent plist (macOS only, substitute __HOME__ token) ---
+if [ "$IS_MACOS" = true ]; then
+  PLIST_SRC="$SCRIPT_DIR/scripts/com.cast.daemon.plist"
+  PLIST_DEST="$HOME/Library/LaunchAgents/com.cast.daemon.plist"
+  if [ -f "$PLIST_SRC" ]; then
+    mkdir -p "$HOME/Library/LaunchAgents"
+    sed "s|__HOME__|$HOME|g" "$PLIST_SRC" > "$PLIST_DEST"
+    success "  Installed: com.cast.daemon.plist (with \$HOME substituted)"
+    info "  Note: daemon mode is superseded by cron. Use cast-cron-setup.sh instead."
+  fi
+fi
+
 # --- Copy VERSION file ---
 cp "$SCRIPT_DIR/VERSION" "$CLAUDE_DIR/cast-version" 2>/dev/null || true
 
@@ -325,7 +337,7 @@ printf "  To enable the PreToolUse audit hook, add to ${BOLD}~/.claude/settings.
 printf '    "PreToolUse": [{"hooks": [{"type": "command", "command": "bash ~/.claude/scripts/cast-audit-hook.sh"}]}]\n'
 printf "  (See settings.template.jsonc for the full example)\n"
 printf "\n"
-success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills  [v3.0]"
+success "Installed: $AGENT_COUNT agents, $CMD_COUNT commands, $SKILL_COUNT skills  [v${CAST_VERSION}]"
 
 # --- Update README stat tokens ---
 echo "Syncing README stats..."
