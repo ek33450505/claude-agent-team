@@ -59,7 +59,7 @@ teardown() {
 @test "cast --version: prints version string" {
   run bash "$CAST_CLI" --version
   assert_success
-  assert_output --partial "CAST v"
+  assert_output --partial "cast version"
 }
 
 @test "cast --help: prints usage with subcommands" {
