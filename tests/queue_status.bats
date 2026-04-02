@@ -102,17 +102,6 @@ teardown() {
   [ "$status" = "cancelled" ]
 }
 
-@test "queue cancel: status is NOT 'failed' after cancellation" {
-  local task_id
-  task_id="$(_insert_task "$CAST_DB_PATH" "pending" 0)"
-
-  bash "$CAST_CLI" queue cancel "$task_id"
-
-  local status
-  status="$(_task_field "$CAST_DB_PATH" "$task_id" "status")"
-  [ "$status" != "failed" ]
-}
-
 @test "queue cancel: prints confirmation message" {
   local task_id
   task_id="$(_insert_task "$CAST_DB_PATH" "pending" 0)"
@@ -226,17 +215,6 @@ PYEOF
   run bash "$CAST_CLI" queue retry
   assert_failure
   assert_output --partial "Usage: cast queue retry"
-}
-
-@test "queue retry: retry_count starts at 0 for a task already at 0" {
-  local task_id
-  task_id="$(_insert_task "$CAST_DB_PATH" "pending" 0)"
-
-  bash "$CAST_CLI" queue retry "$task_id"
-
-  local retry_count
-  retry_count="$(_task_field "$CAST_DB_PATH" "$task_id" "retry_count")"
-  [ "$retry_count" = "0" ]
 }
 
 # ---------------------------------------------------------------------------

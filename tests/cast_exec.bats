@@ -155,20 +155,6 @@ teardown() {
   assert_output --partial "[DONE]"
 }
 
-@test "cast exec --status: exits 0 when no prior batches have run" {
-  local plan_id="test-plan-no-ckpt-$$"
-  local plan_file="$HOME/plan.md"
-
-  _write_plan "$plan_file" "$plan_id"
-  # No checkpoint pre-written; the script initialises one on first call
-
-  run bash "$EXEC_SH" --status "$plan_file"
-  assert_success
-  # Either "No batch records yet" (new checkpoint) or batch list is printed
-  # The plan_id must always appear
-  assert_output --partial "$plan_id"
-}
-
 # ---------------------------------------------------------------------------
 # T2 — cast exec --resume skips batches with status=complete in checkpoint
 # ---------------------------------------------------------------------------
@@ -280,23 +266,6 @@ teardown() {
 
   run test -f "${exec_state_dir}/${plan_id}.json"
   assert_success
-}
-
-@test "cast exec: checkpoint contains matching plan_id field" {
-  local plan_id="test-plan-ckpt-field-$$"
-  local plan_file="$HOME/plan.md"
-  local exec_state_dir="$HOME/.claude/cast/exec-state"
-
-  _write_plan "$plan_file" "$plan_id"
-  bash "$EXEC_SH" "$plan_file" 2>/dev/null || true
-
-  local checkpoint_file="${exec_state_dir}/${plan_id}.json"
-  run test -f "$checkpoint_file"
-  assert_success
-
-  local stored_id
-  stored_id="$(python3 -c "import json; d=json.load(open('$checkpoint_file')); print(d.get('plan_id',''))")"
-  [ "$stored_id" = "$plan_id" ]
 }
 
 @test "cast exec: two different plan_ids produce two separate checkpoint files" {

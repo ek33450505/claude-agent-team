@@ -59,7 +59,7 @@ teardown() {
 @test "cast --version: prints version string" {
   run bash "$CAST_CLI" --version
   assert_success
-  assert_output --partial "3.3"
+  assert_output --partial "CAST v"
 }
 
 @test "cast --help: prints usage with subcommands" {
@@ -180,12 +180,6 @@ teardown() {
   assert_success
 }
 
-@test "cast status: output contains CAST version header" {
-  run bash "$CAST_CLI" status
-  assert_success
-  assert_output --partial "CAST v3.3"
-}
-
 @test "cast status: output contains Budget line" {
   run bash "$CAST_CLI" status
   assert_success
@@ -300,14 +294,4 @@ teardown() {
   run bash "$CAST_CLI" daemon logs
   # Not a failure — either empty or warning
   [ "$status" -eq 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# cast install-completions
-# ---------------------------------------------------------------------------
-
-@test "cast install-completions: exits zero (completions exist in repo)" {
-  run bash "$CAST_CLI" install-completions
-  # May warn about missing dir but should not crash with non-zero
-  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 }

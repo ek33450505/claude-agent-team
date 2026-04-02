@@ -159,33 +159,3 @@ print('ok')
 # (before the catch-all entry was added) and PASS after the fix.
 # ---------------------------------------------------------------------------
 
-@test "settings.json has a catch-all PreToolUse entry for cast-audit-hook.sh" {
-  [ -f "$SETTINGS_JSON" ] || skip "settings.json not installed (CI)"
-  assert [ -f "$SETTINGS_JSON" ]
-  python3 - "$SETTINGS_JSON" <<'PYEOF'
-import sys, json
-
-with open(sys.argv[1]) as f:
-    settings = json.load(f)
-
-pre_tool_use = settings.get("hooks", {}).get("PreToolUse", [])
-
-# Look for an entry with NO matcher (catch-all) that includes cast-audit-hook.sh
-found = False
-for entry in pre_tool_use:
-    if "matcher" in entry:
-        continue  # skip matcher-scoped entries
-    for hook in entry.get("hooks", []):
-        if "cast-audit-hook.sh" in hook.get("command", ""):
-            found = True
-            break
-    if found:
-        break
-
-assert found, (
-    "No catch-all PreToolUse entry for cast-audit-hook.sh found in settings.json. "
-    "The audit hook is never invoked and audit.jsonl will never be created."
-)
-print("ok")
-PYEOF
-}

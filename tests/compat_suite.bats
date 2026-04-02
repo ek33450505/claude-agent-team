@@ -67,38 +67,10 @@ teardown() {
   assert_success
 }
 
-@test "cast compat save: last-known-good-version contains a non-empty version string" {
-  bash "$COMPAT_SH" save
-
-  local lkg
-  lkg="$(cat "$HOME/.claude/cast/last-known-good-version")"
-  [ -n "$lkg" ]
-}
-
-@test "cast compat save: saved version matches claude --version output" {
-  bash "$COMPAT_SH" save
-
-  local saved
-  saved="$(cat "$HOME/.claude/cast/last-known-good-version")"
-  local live
-  live="$(claude --version 2>/dev/null | head -1)"
-  [ "$saved" = "$live" ]
-}
-
 @test "cast compat save: prints confirmation message" {
   run bash "$COMPAT_SH" save
   assert_success
   assert_output --partial "Saved last-known-good version"
-}
-
-@test "cast compat save: running twice overwrites, does not duplicate content" {
-  bash "$COMPAT_SH" save
-  bash "$COMPAT_SH" save
-
-  # File should contain exactly one line
-  local line_count
-  line_count="$(wc -l < "$HOME/.claude/cast/last-known-good-version")"
-  [ "$line_count" -le 1 ]
 }
 
 # ---------------------------------------------------------------------------

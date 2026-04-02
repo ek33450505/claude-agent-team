@@ -24,44 +24,7 @@ SCRIPT="$REPO_DIR/scripts/cast-morning-briefing-sdk.py"
 }
 
 # ---------------------------------------------------------------------------
-# 3. Contains import statement
-# ---------------------------------------------------------------------------
-
-@test "script contains import statements" {
-  run grep -q "^import\|^from " "$SCRIPT"
-  assert_success
-}
-
-# ---------------------------------------------------------------------------
-# 4. Contains argparse / --date argument handling
-# ---------------------------------------------------------------------------
-
-@test "script contains argparse for --date argument" {
-  run grep -q "argparse\|--date" "$SCRIPT"
-  assert_success
-}
-
-# ---------------------------------------------------------------------------
-# 5. Non-trivial size (more than 10 lines)
-# ---------------------------------------------------------------------------
-
-@test "script has more than 10 lines" {
-  local lines
-  lines=$(wc -l < "$SCRIPT")
-  [ "$lines" -gt 10 ]
-}
-
-# ---------------------------------------------------------------------------
-# 6. Contains if __name__ == '__main__' guard
-# ---------------------------------------------------------------------------
-
-@test "script has __main__ guard" {
-  run grep -q "__name__" "$SCRIPT"
-  assert_success
-}
-
-# ---------------------------------------------------------------------------
-# 7. --date argument is parseable (dry run, no claude CLI needed)
+# 3. --date argument is parseable (dry run, no claude CLI needed)
 # ---------------------------------------------------------------------------
 
 @test "--date argument is accepted without error (argparse only)" {

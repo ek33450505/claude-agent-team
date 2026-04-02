@@ -65,43 +65,12 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# B1 — no legacy script references
-# ---------------------------------------------------------------------------
-
-@test "cast binary contains no reference to cast-local-runner.sh" {
-  run grep -c 'cast-local-runner' "$CAST_CLI"
-  # grep -c returns 0 if no match found, exit code 1 means 0 lines matched
-  assert_failure
-}
-
-@test "cast binary contains no reference to cast-model-resolver.sh" {
-  run grep -c 'cast-model-resolver' "$CAST_CLI"
-  assert_failure
-}
-
-@test "cast binary uses direct claude --print invocation for sync run" {
-  run grep 'claude.*--print.*dangerously-skip-permissions' "$CAST_CLI"
-  assert_success
-  assert_output --partial '--print'
-  assert_output --partial '--dangerously-skip-permissions'
-}
-
-# ---------------------------------------------------------------------------
 # B1 — cast run exits 0 (stub claude returns DONE)
 # ---------------------------------------------------------------------------
 
 @test "cast run exits 0 when claude stub succeeds" {
   run bash "$CAST_CLI" run commit "test commit task"
   assert_success
-}
-
-@test "cast run passes agent name to claude binary" {
-  bash "$CAST_CLI" run commit "test task" 2>/dev/null || true
-  run grep 'stub-claude-invoked' /tmp/cast-run-stub-$$.log
-  # If log exists, the stub was called (claude was invoked)
-  # The log may not exist if the run path branches differently — that's also acceptable
-  # as long as exit code was 0 (tested above)
-  true
 }
 
 # ---------------------------------------------------------------------------

@@ -58,23 +58,3 @@ setup() {
   [ "$status" -ne 127 ]
 }
 
-# 5. Version change detection — informational, always passes, warns if changed
-@test "installed version matches or supersedes last-known-good" {
-  local lkg_file="${HOME}/.claude/cast/last-known-good-version"
-  if [ -f "$lkg_file" ]; then
-    local lkg
-    lkg="$(cat "$lkg_file")"
-    local current
-    current="$(claude --version 2>/dev/null | head -1)"
-    echo "LKG: $lkg | Current: $current"
-    if [ "$lkg" != "$current" ]; then
-      echo "WARNING: Claude version changed from $lkg to $current"
-      echo "Run: cast compat save  to update last-known-good"
-    fi
-  else
-    echo "No last-known-good version file found at $lkg_file"
-    echo "Run: cast compat save  to record current version"
-  fi
-  # Always pass — this test is informational only
-  true
-}
