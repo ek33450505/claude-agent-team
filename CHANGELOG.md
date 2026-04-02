@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## v3.3 — Phase 11: Audit Hardening (2026-04-01)
+
+### Code Fixes (C1–C8)
+
+- **C1** — `cast-task-completed-hook.sh` added to repo and wired into `install.sh`
+- **C2** — `cast-db-log.py` silent exceptions replaced with structured error logging to `~/.claude/logs/db-write-errors.log`
+- **C3** — Orchestrator classifies TRUNCATED responses separately from BLOCKED; no cascade on truncation
+- **C4** — All critical hook scripts gain `_log_error()` helper — no more silent failures
+- **C5** — `cast-audit-hook.sh` PII enforcement is advisory by default; opt into strict mode via `CAST_PII_ENFORCEMENT=strict`; 9-pattern safelist added to suppress false positives
+- **C6** — `cast-memory-write.sh` SQL injection fixed — `sed` string escaping replaced with Python parameterized queries
+- **C7** — Orchestrator `TodoWrite` references replaced with `TaskCreate`/`TaskUpdate`
+- **C8** — `docs.md` command fixed — `doc-updater` → `docs` agent name
+
+### Hardening Fixes (H1–H9)
+
+- **H1** — `install.sh` now syncs `agents/core/*.md` to runtime on every install
+- **H2** — `cast-memory-backup.sh` now includes `cast.db`, `plans/`, and `auto-memory/` in backup tarball
+- **H3** — `cast-agent-memory-init.sh` ghost agent list removed — dynamic discovery via `find ~/.claude/agents/`
+- **H4** — `code-writer` and `devops` agents no longer self-dispatch review chains — use Recommended Next Agents pattern instead
+- **H5** — Orchestrator checkpoint system added — plans survive session disconnects mid-execution
+- **H6** — Orchestrator policy enforcement gate added — reads `config/policies.json` before each batch dispatch
+- **H7** — `post-tool-hook.sh` exits non-zero on prettier crash or status file write failure
+- **H8** — SQLite WAL mode enabled; subagent hooks retry up to 3× with backoff on `SQLITE_BUSY`
+- **H9** — 4 runtime-only scripts committed to repo: `cast-ci-monitor.sh`, `cast-route-install.sh`, `cast-routing-feedback.sh`, `tidy.sh`
+
+### Behavior Change
+
+- **Approval gate removed** — Orchestrator no longer pauses for user confirmation before batch dispatch; queue display is informational only, execution is immediate
+
+---
+
 ## 2026-03-31
 
 ### Schema v6 + SessionStart write (`e4019cb`)

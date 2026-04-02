@@ -1,7 +1,7 @@
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-3.1-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-3.3-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-346%2B-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -374,8 +374,20 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v2 | 42 agents, routing table, regex dispatch, castd daemon |
 | v3.0 | 16 agents, model-driven dispatch, 4 hooks, cron, cast.db |
 | v3.1 | Async hooks, worktree isolation, per-agent memory, headless pipelines, GitHub CI |
+| v3.3 | Audit hardening: WAL mode, structured error logging, SQL injection fix, PII advisory mode, orchestrator resilience (checkpoints, policy gate, TRUNCATED classification), 4 scripts committed to repo |
 
 ---
+
+## Reliability (Phase 11)
+
+v3.3 hardened the runtime against the most common failure modes:
+
+- **SQLite WAL mode** — concurrent hook writes no longer contend; subagent hooks retry up to 3× on `SQLITE_BUSY`.
+- **Structured error logging** — `cast-db-log.py` and all critical hook scripts write failures to `~/.claude/logs/db-write-errors.log` instead of swallowing them silently.
+- **SQL injection fix** — `cast-memory-write.sh` replaced `sed` string escaping with Python parameterized queries.
+- **PII enforcement is advisory by default** — `cast-audit-hook.sh` warns on PII patterns without blocking. Set `CAST_PII_ENFORCEMENT=strict` to restore hard-blocking. A 9-pattern safelist eliminates common false positives.
+- **Orchestrator resilience** — TRUNCATED responses are classified separately from BLOCKED (no cascade failures). A checkpoint system allows plans to survive session disconnects. A policy gate reads `config/policies.json` before each batch dispatch.
+- **No approval gate** — orchestrator queue display is informational; execution is immediate.
 
 ## Contributing
 
