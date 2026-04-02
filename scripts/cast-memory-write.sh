@@ -83,39 +83,66 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DESCRIPTION="$(echo "$CONTENT" | cut -c1-100)"
 
 # Pass all values as argv to Python — never interpolate into SQL strings
-INSERT_ID="$(python3 - "$DB_PATH" "$AGENT" "$PROJECT" "$TYPE" "$NAME" "$DESCRIPTION" "$CONTENT" "$NOW" <<'PYEOF' 2>/dev/null || echo ""
-import sys, sqlite3
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+INSERT_ID="$(CAST_DB_PATH="$DB_PATH" python3 - "$DB_PATH" "$AGENT" "$PROJECT" "$TYPE" "$NAME" "$DESCRIPTION" "$CONTENT" "$NOW" "$SCRIPT_DIR" <<'PYEOF' 2>/dev/null || echo ""
+import sys, os
+from pathlib import Path
 
-db_path, agent, project, mem_type, name, description, content, now = sys.argv[1:9]
+db_path, agent, project, mem_type, name, description, content, now, script_dir = sys.argv[1:10]
 
-conn = sqlite3.connect(db_path, timeout=5)
-cur = conn.cursor()
+# Use cast_db abstraction if available alongside this script
+sys.path.insert(0, script_dir)
+try:
+    from cast_db import db_execute, db_query
+    USE_CAST_DB = True
+except ImportError:
+    import sqlite3
+    USE_CAST_DB = False
 
-# Deduplication: exact content match — parameterized query (safe from injection)
-cur.execute(
-    "SELECT id FROM agent_memories WHERE agent = ? AND content = ? LIMIT 1",
-    (agent, content)
-)
-row = cur.fetchone()
-if row:
-    existing_id = row[0]
-    cur.execute("UPDATE agent_memories SET updated_at = ? WHERE id = ?", (now, existing_id))
+if USE_CAST_DB:
+    rows = db_query(
+        "SELECT id FROM agent_memories WHERE agent = ? AND content = ? LIMIT 1",
+        (agent, content)
+    )
+    if rows:
+        existing_id = rows[0]['id']
+        db_execute("UPDATE agent_memories SET updated_at = ? WHERE id = ?", (now, existing_id))
+        print(f"UPDATED:{existing_id}")
+        sys.exit(0)
+    db_execute(
+        "INSERT INTO agent_memories "
+        "(agent, project, type, name, description, content, created_at, updated_at, embedding) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        (agent, project or None, mem_type, name, description, content, now, now)
+    )
+    rows = db_query("SELECT last_insert_rowid() AS id")
+    print(rows[0]['id'] if rows else '')
+else:
+    import sqlite3
+    conn = sqlite3.connect(db_path, timeout=5)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM agent_memories WHERE agent = ? AND content = ? LIMIT 1",
+        (agent, content)
+    )
+    row = cur.fetchone()
+    if row:
+        existing_id = row[0]
+        cur.execute("UPDATE agent_memories SET updated_at = ? WHERE id = ?", (now, existing_id))
+        conn.commit()
+        conn.close()
+        print(f"UPDATED:{existing_id}")
+        sys.exit(0)
+    cur.execute(
+        "INSERT INTO agent_memories "
+        "(agent, project, type, name, description, content, created_at, updated_at, embedding) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        (agent, project or None, mem_type, name, description, content, now, now)
+    )
     conn.commit()
+    insert_id = cur.lastrowid
     conn.close()
-    print(f"UPDATED:{existing_id}")
-    sys.exit(0)
-
-# Insert new row — parameterized (safe from injection including semicolons, backslashes, UTF-8)
-cur.execute(
-    "INSERT INTO agent_memories "
-    "(agent, project, type, name, description, content, created_at, updated_at, embedding) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-    (agent, project or None, mem_type, name, description, content, now, now)
-)
-conn.commit()
-insert_id = cur.lastrowid
-conn.close()
-print(insert_id)
+    print(insert_id)
 PYEOF
 )"
 

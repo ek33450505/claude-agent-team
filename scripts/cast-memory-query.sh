@@ -96,17 +96,24 @@ EXTRA_WHERE="$(build_where_clauses)"
 # ---------------------------------------------------------------------------
 QUERY_ESC="$(echo "$QUERY" | sed "s/'/''/g")"
 
-python3 - "$DB_PATH" "$QUERY_ESC" "$LIMIT" "$AGENT_FILTER" "$PROJECT_FILTER" "$TYPE_FILTER" <<'PYEOF' 2>/dev/null || echo "[]"
-import sys, sqlite3, json
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CAST_DB_PATH="$DB_PATH" python3 - "$DB_PATH" "$QUERY_ESC" "$LIMIT" "$AGENT_FILTER" "$PROJECT_FILTER" "$TYPE_FILTER" "$SCRIPT_DIR" <<'PYEOF' 2>/dev/null || echo "[]"
+import sys, json
+from pathlib import Path
 
-db_path, query, limit_str, agent_filter, project_filter, type_filter = sys.argv[1:7]
+db_path, query, limit_str, agent_filter, project_filter, type_filter, script_dir = sys.argv[1:8]
 limit = int(limit_str)
 
+# Use cast_db abstraction if available alongside this script
+sys.path.insert(0, script_dir)
 try:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    from cast_db import db_query
+    USE_CAST_DB = True
+except ImportError:
+    import sqlite3
+    USE_CAST_DB = False
 
+try:
     conditions = ["(content LIKE ? OR name LIKE ?)"]
     params = [f"%{query}%", f"%{query}%"]
     if agent_filter:
@@ -120,12 +127,17 @@ try:
         params.append(type_filter)
 
     where_clause = " AND ".join(conditions)
-    cur.execute(
-        f"SELECT id, agent, type, name, content, created_at FROM agent_memories WHERE {where_clause} LIMIT ?",
-        params + [limit]
-    )
-    rows = cur.fetchall()
-    conn.close()
+    sql = f"SELECT id, agent, type, name, content, created_at FROM agent_memories WHERE {where_clause} LIMIT ?"
+    all_params = tuple(params + [limit])
+
+    if USE_CAST_DB:
+        rows = db_query(sql, all_params)
+    else:
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(db_path)
+        conn.row_factory = _sqlite3.Row
+        rows = conn.execute(sql, all_params).fetchall()
+        conn.close()
 
     results = [
         {
@@ -139,7 +151,7 @@ try:
         for row in rows
     ]
     print(json.dumps(results, indent=2))
-except Exception as e:
+except Exception:
     print("[]")
 PYEOF
 
