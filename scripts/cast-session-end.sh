@@ -164,11 +164,22 @@ archive_category \
   "$TTL_REPORTS" \
   "reports"
 
-# === UPDATE sessions.ended_at ===
+# === UPDATE sessions.ended_at + FINAL COST CAPTURE ===
 DB="${CLAUDE_DIR}/cast.db"
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB" ]; then
   ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   sqlite3 "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
+
+  # Capture final session cost from statusline data (best-effort)
+  # The statusline script reads native JSON with cost.total_cost_usd
+  FINAL_COST=""
+  if [ -f "${HOME}/.claude/scripts/cast-statusline.sh" ]; then
+    # Try to read the last known cost from cast.db session or agent_runs
+    FINAL_COST=$(sqlite3 "$DB" "SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs WHERE session_id = '${SESSION_ID}';" 2>/dev/null || echo "")
+  fi
+  if [ -n "$FINAL_COST" ] && [ "$FINAL_COST" != "0" ]; then
+    sqlite3 "$DB" "UPDATE sessions SET total_cost_usd = ${FINAL_COST} WHERE id = '${SESSION_ID}';" 2>/dev/null || true
+  fi
 fi
 
 # === DB PRUNING ===

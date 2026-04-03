@@ -4,6 +4,7 @@ description: "Use immediately after writing or modifying code."
 tools: Bash, Glob, Grep, Read
 model: haiku
 effort: low
+background: true
 color: cyan
 memory: local
 maxTurns: 25

@@ -115,6 +115,13 @@ for script_file in "$SCRIPT_DIR"/scripts/*; do
     cp "$script_file" "$CLAUDE_DIR/scripts/$dest_name"
     chmod +x "$CLAUDE_DIR/scripts/$dest_name"
 done
+# Remove scripts deleted in v4.1 (native feature adoption)
+rm -f "$CLAUDE_DIR/scripts/cast-route-install.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-route-review.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-routing-feedback.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-mismatch-analyzer.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-security-guard.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-cost-tracker.sh"
 success "  Scripts installed (including cast_db.py)"
 
 # --- Initialize cast.db ---

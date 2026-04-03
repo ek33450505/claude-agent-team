@@ -7,6 +7,7 @@ description: >
 tools: Read, Write, Bash, Glob, Grep
 model: sonnet
 effort: medium
+initialPrompt: "/morning"
 color: bronze
 memory: local
 maxTurns: 25
