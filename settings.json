@@ -249,7 +249,10 @@
       "osascript"
     ]
   },
-  "spinnerVerbs": ["Dispatching", "Orchestrating", "Auditing", "Reviewing", "Analyzing", "Investigating"],
+  "spinnerVerbs": {
+    "mode": "append",
+    "verbs": ["Dispatching", "Orchestrating", "Auditing", "Reviewing", "Analyzing", "Investigating"]
+  },
   "showTurnDuration": true,
   "autoUpdatesChannel": "stable",
   "plansDirectory": "~/.claude/plans/",
