@@ -16,8 +16,11 @@ MEMORY_DIR="$CLAUDE_DIR/agent-memory-local"
 # Each entry should be the absolute path to a project root directory.
 # Example: "$HOME/Projects/work/my-app"
 PROJECTS=(
-  "$HOME/Projects/work/your-project-1"
-  "$HOME/Projects/personal/your-project-2"
+  "$HOME/Projects/personal/claude-agent-team"
+  "$HOME/Projects/personal/claude-code-dashboard"
+  "$HOME/Projects/personal/Edward_Kubiak"
+  "$HOME/Projects/personal/homebrew-cast"
+  "$HOME/Projects/personal/promptbot"
 )
 
 # --- Project Display Names ---
@@ -25,8 +28,11 @@ PROJECTS=(
 # Used by scripts that need semantic project names.
 # Add one entry per project. The key is the directory basename (last segment of the path).
 declare -A PROJECT_NAMES=(
-  [your-project-1]="Your Project 1"
-  [your-project-2]="Your Project 2"
+  [claude-agent-team]="CAST Framework"
+  [claude-code-dashboard]="CAST Dashboard"
+  [Edward_Kubiak]="Portfolio Site"
+  [homebrew-cast]="Homebrew Tap"
+  [promptbot]="PromptBot"
 )
 
 # Helper: get display name for a project directory

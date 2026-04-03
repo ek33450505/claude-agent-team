@@ -4,7 +4,7 @@
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: status, exec, memory, budget, agents, hooks, doctor, install-completions
+# Subcommands: status, exec, memory, budget, agents, hooks, doctor, tidy, install-completions
 #
 # Config: ~/.claude/config/cast-cli.json
 # DB:     $CAST_DB_PATH or ~/.claude/cast.db
@@ -136,6 +136,7 @@ Subcommands:
   ${C_BOLD}agents${C_RESET}                          List installed CAST agents
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}doctor${C_RESET}                          Run system health check
+  ${C_BOLD}tidy${C_RESET}      [--dry-run]               Clean up old plans, events, logs, briefings
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
 
 Global flags:
@@ -897,6 +898,198 @@ USAGE
   fi
 }
 
+# ── Subcommand: tidy ────────────────────────────────────────────────────────
+_cmd_tidy() {
+  local dry_run=0
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --dry-run)  dry_run=1; shift ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast tidy [--dry-run]
+
+Clean up accumulated CAST files:
+  Plans older than 7 days       → archived to plans/archive/YYYY-MM/
+  Events older than 3 days      → deleted
+  Logs older than 7 days / >1MB → rotated (max 4 rotations)
+  cast.db agent_runs >30 days   → pruned + VACUUM
+  Briefings older than 14 days  → archived to briefings/archive/YYYY-MM/
+  Agent status older than 24h   → deleted
+  Orchestrator checkpoints >7d  → deleted
+
+Options:
+  --dry-run   Preview what would be cleaned without making changes
+USAGE
+        return 0
+        ;;
+      *) shift ;;
+    esac
+  done
+
+  local cleanup_days
+  cleanup_days="$(_config_get cleanupPeriodDays 14)"
+
+  local label="Cleaning"
+  [ "$dry_run" -eq 1 ] && label="Dry run"
+
+  printf "${C_BOLD}CAST Tidy${C_RESET} (%s)\n" "$label"
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+
+  local plans_archived=0 events_deleted=0 logs_rotated=0 db_pruned=0
+  local briefings_archived=0 status_deleted=0 checkpoints_deleted=0
+
+  # 1. Plans — archive files older than 7 days
+  local plans_dir="${HOME}/.claude/plans"
+  if [ -d "$plans_dir" ]; then
+    while IFS= read -r -d '' pfile; do
+      [ -z "$pfile" ] && continue
+      local fname
+      fname="$(basename "$pfile")"
+      local archive_dir
+      archive_dir="${plans_dir}/archive/$(date -r "$pfile" +%Y-%m 2>/dev/null || echo "unknown")"
+      if [ "$dry_run" -eq 1 ]; then
+        _info "  Would archive: $fname → archive/"
+      else
+        mkdir -p "$archive_dir"
+        mv "$pfile" "$archive_dir/"
+      fi
+      plans_archived=$((plans_archived + 1))
+    done < <(find "$plans_dir" -maxdepth 1 -type f -name "*.md" -mtime +7 -print0 2>/dev/null)
+  fi
+
+  # 2. Events — delete files older than 3 days
+  local events_dir="${HOME}/.claude/cast/events"
+  if [ -d "$events_dir" ]; then
+    while IFS= read -r -d '' efile; do
+      [ -z "$efile" ] && continue
+      if [ "$dry_run" -eq 1 ]; then
+        _info "  Would delete event: $(basename "$efile")"
+      else
+        rm -f "$efile"
+      fi
+      events_deleted=$((events_deleted + 1))
+    done < <(find "$events_dir" -maxdepth 1 -type f -mtime +3 -print0 2>/dev/null)
+  fi
+
+  # 3. Logs — rotate files older than 7 days or larger than 1MB
+  local logs_dir="${HOME}/.claude/logs"
+  if [ -d "$logs_dir" ]; then
+    for logfile in "$logs_dir"/*.log "$logs_dir"/*.jsonl; do
+      [ -f "$logfile" ] || continue
+      local should_rotate=0
+      # Check age
+      if find "$logfile" -maxdepth 0 -mtime +7 -print -quit 2>/dev/null | grep -q .; then
+        should_rotate=1
+      fi
+      # Check size (>1MB)
+      local fsize
+      fsize="$(stat -f%z "$logfile" 2>/dev/null || stat -c%s "$logfile" 2>/dev/null || echo 0)"
+      if [ "${fsize:-0}" -gt 1048576 ]; then
+        should_rotate=1
+      fi
+      if [ "$should_rotate" -eq 1 ]; then
+        if [ "$dry_run" -eq 1 ]; then
+          _info "  Would rotate: $(basename "$logfile") ($(( fsize / 1024 ))KB)"
+        else
+          # Rotate: .4.gz → delete, .3.gz → .4.gz, .2.gz → .3.gz, .1 → .2.gz, current → .1
+          rm -f "${logfile}.4.gz"
+          [ -f "${logfile}.3.gz" ] && mv "${logfile}.3.gz" "${logfile}.4.gz"
+          [ -f "${logfile}.2.gz" ] && mv "${logfile}.2.gz" "${logfile}.3.gz"
+          [ -f "${logfile}.1" ] && gzip -f "${logfile}.1" && mv "${logfile}.1.gz" "${logfile}.2.gz"
+          mv "$logfile" "${logfile}.1"
+        fi
+        logs_rotated=$((logs_rotated + 1))
+      fi
+    done
+  fi
+
+  # 4. cast.db — prune old agent_runs, VACUUM
+  if [ -f "$CAST_DB_PATH" ]; then
+    local old_rows
+    old_rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE started_at < datetime('now', '-30 days');" 2>/dev/null || echo 0)"
+    if [ "${old_rows:-0}" -gt 0 ]; then
+      if [ "$dry_run" -eq 1 ]; then
+        _info "  Would prune: $old_rows agent_runs older than 30 days"
+      else
+        sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-30 days');" 2>/dev/null
+      fi
+      db_pruned=$old_rows
+    fi
+    if [ "$dry_run" -eq 0 ]; then
+      sqlite3 "$CAST_DB_PATH" "VACUUM;" 2>/dev/null
+    else
+      _info "  Would VACUUM cast.db"
+    fi
+  fi
+
+  # 5. Briefings — archive files older than 14 days
+  local briefings_dir="${HOME}/.claude/briefings"
+  if [ -d "$briefings_dir" ]; then
+    while IFS= read -r -d '' bfile; do
+      [ -z "$bfile" ] && continue
+      local bname
+      bname="$(basename "$bfile")"
+      local barchive_dir
+      barchive_dir="${briefings_dir}/archive/$(date -r "$bfile" +%Y-%m 2>/dev/null || echo "unknown")"
+      if [ "$dry_run" -eq 1 ]; then
+        _info "  Would archive briefing: $bname"
+      else
+        mkdir -p "$barchive_dir"
+        mv "$bfile" "$barchive_dir/"
+      fi
+      briefings_archived=$((briefings_archived + 1))
+    done < <(find "$briefings_dir" -maxdepth 1 -type f -name "*.md" -mtime +14 -print0 2>/dev/null)
+  fi
+
+  # 6. Agent status — delete files older than 24 hours
+  local status_dir="${HOME}/.claude/agent-status"
+  if [ -d "$status_dir" ]; then
+    while IFS= read -r -d '' sfile; do
+      [ -z "$sfile" ] && continue
+      if [ "$dry_run" -eq 1 ]; then
+        _info "  Would delete status: $(basename "$sfile")"
+      else
+        rm -f "$sfile"
+      fi
+      status_deleted=$((status_deleted + 1))
+    done < <(find "$status_dir" -maxdepth 1 -type f -mtime +0 -print0 2>/dev/null)
+  fi
+
+  # 7. Orchestrator checkpoints — delete files older than 7 days
+  local cast_dir="${HOME}/.claude/cast"
+  if [ -d "$cast_dir" ]; then
+    while IFS= read -r -d '' cfile; do
+      [ -z "$cfile" ] && continue
+      if [ "$dry_run" -eq 1 ]; then
+        _info "  Would delete checkpoint: $(basename "$cfile")"
+      else
+        rm -f "$cfile"
+      fi
+      checkpoints_deleted=$((checkpoints_deleted + 1))
+    done < <(find "$cast_dir" -maxdepth 1 -name "orchestrator-checkpoint-*.log" -mtime +7 -print0 2>/dev/null)
+  fi
+
+  # Summary table
+  printf "\n%-28s %-10s %s\n" "Area" "Action" "Count"
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%-28s %-10s %d\n" "Plans (>7 days)"          "archived" "$plans_archived"
+  printf "%-28s %-10s %d\n" "Events (>3 days)"         "deleted"  "$events_deleted"
+  printf "%-28s %-10s %d\n" "Logs (>7d or >1MB)"       "rotated"  "$logs_rotated"
+  printf "%-28s %-10s %d\n" "DB agent_runs (>30 days)"  "pruned"   "$db_pruned"
+  printf "%-28s %-10s %d\n" "Briefings (>14 days)"     "archived" "$briefings_archived"
+  printf "%-28s %-10s %d\n" "Agent status (>24h)"      "deleted"  "$status_deleted"
+  printf "%-28s %-10s %d\n" "Checkpoints (>7 days)"    "deleted"  "$checkpoints_deleted"
+
+  local total=$((plans_archived + events_deleted + logs_rotated + db_pruned + briefings_archived + status_deleted + checkpoints_deleted))
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  if [ "$dry_run" -eq 1 ]; then
+    printf "${C_YELLOW}Dry run: %d items would be affected${C_RESET}\n" "$total"
+  else
+    printf "${C_GREEN}Tidy complete: %d items processed${C_RESET}\n" "$total"
+  fi
+}
+
 # ── Subcommand: install-completions ──────────────────────────────────────────
 _cmd_install_completions() {
   local completions_src="${CAST_REPO_DIR}/completions"
@@ -963,6 +1156,7 @@ case "$SUBCOMMAND" in
   agents)               _cmd_agents "$@" ;;
   hooks)                _cmd_hooks "$@" ;;
   doctor)               _cmd_doctor "$@" ;;
+  tidy)                 _cmd_tidy "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
   ""|--help|-h)
     _usage

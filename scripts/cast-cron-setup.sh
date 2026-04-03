@@ -4,9 +4,12 @@
 # Replaces castd.sh daemon with simple cron jobs.
 #
 # Scheduled tasks:
-#   0 7  * * *   morning-briefing   — daily morning briefing at 07:00
-#   0 18 * * *   summary            — daily agent summary at 18:00
-#   0 9  * * 1   cost-report        — weekly cost report at 09:00 Monday
+#   0 7  * * *   morning   — daily morning briefing at 07:00 (--agent morning-briefing)
+#   0 18 * * *   summary   — daily agent summary at 18:00 (--agent docs)
+#   0 9  * * 1   cost-report — weekly cost report at 09:00 Monday (--agent researcher)
+#   0 3  * * *   tidy      — daily CAST cleanup at 03:00
+#   30 3 * * *   db-prune  — prune old DB rows at 03:30
+#   45 3 * * *   log-compress — compress old event logs at 03:45
 #
 # Usage:
 #   cast-cron-setup.sh           Install missing cron entries (idempotent)
@@ -29,18 +32,15 @@ MARKER="# CAST-MANAGED"
 mkdir -p "$LOGS_DIR"
 
 # ── Cron entry definitions ────────────────────────────────────────────────────
-# Each entry: "schedule|job_name|prompt"
-# claude -p runs Claude Code in headless (non-interactive) mode.
+# Each entry: "schedule|job_name|command"
+# Agent tasks use claude --agent; raw shell tasks use the command directly.
 declare -a CRON_ENTRIES=(
-  "0 7 * * *|morning|Generate morning briefing: summarize pending tasks, recent agent activity, and priorities for today"
-  "0 18 * * *|summary|Generate daily summary: summarize all agent_runs completed today from cast.db, highlight any BLOCKED or DONE_WITH_CONCERNS statuses"
-  "0 9 * * 1|cost-report|Generate weekly cost report from cast.db agent_runs: show total cost_usd by model, local vs cloud split, cost savings this week"
-  "0 * * * *|sweep|cast exec"
+  "0 7 * * *|morning|claude --agent morning-briefing -p 'Generate today\\'s morning briefing' --max-turns 25 --permission-mode bypassPermissions"
+  "0 18 * * *|summary|claude --agent docs -p 'Generate daily summary from cast.db: summarize agent_runs completed today, highlight BLOCKED or DONE_WITH_CONCERNS' --max-turns 15 --permission-mode bypassPermissions"
+  "0 9 * * 1|cost-report|claude --agent researcher -p 'Generate weekly cost report from cast.db agent_runs: show total cost_usd by model, cost savings this week' --max-turns 15 --permission-mode bypassPermissions"
+  "0 3 * * *|tidy|~/.local/bin/cast tidy"
   "30 3 * * *|db-prune|sqlite3 ~/.claude/cast.db \"DELETE FROM routing_events WHERE created_at < datetime('now', '-90 days'); DELETE FROM agent_runs WHERE started_at < datetime('now', '-90 days');\""
   "45 3 * * *|log-compress|find ~/.claude/cast/events -name '*.jsonl' -mtime +7 -exec gzip {} \\;"
-  "0 10 * * 0|security-audit|Run a security audit of the CAST scripts and agent definitions. Check for hardcoded secrets, overly permissive file operations, and injection risks. Save report to ~/.claude/reports/security-$(date +\%Y-\%m-\%d).md"
-  "30 10 * * 0|weekly-report|Generate a weekly agent performance report from cast.db. Include: top agents by run count, average duration per agent, error rates, token spend by agent. Save to ~/.claude/briefings/weekly-$(date +\%Y-\%m-\%d).md"
-  "*/5 * * * *|resume-watcher|Check ~/.claude/cast/resume-queue/ for pending orchestrator resume requests and dispatch a new orchestrator session if any are found"
 )
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -53,9 +53,9 @@ usage() {
 make_cron_line() {
   local schedule="$1"
   local job_name="$2"
-  local prompt="$3"
+  local command="$3"
   local log_file="${LOGS_DIR}/cron-${job_name}.log"
-  echo "${schedule} claude -p \"${prompt}\" >> \"${log_file}\" 2>&1 ${MARKER}:${job_name}"
+  echo "${schedule} ${command} >> \"${log_file}\" 2>&1 ${MARKER}:${job_name}"
 }
 
 # ── List installed CAST cron entries ─────────────────────────────────────────

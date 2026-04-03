@@ -1,9 +1,9 @@
 ---
 name: morning-briefing
 description: >
-  Daily briefing agent that orchestrates 5 data-gathering skills and assembles
-  a structured markdown briefing. Use at the start of each day or invoke
-  via /morning on demand.
+  Daily briefing agent that gathers git activity, action items, and CAST
+  system intelligence, then assembles a structured markdown briefing.
+  Use at the start of each day or invoke via /morning on demand.
 tools: Read, Write, Bash, Glob, Grep
 model: sonnet
 effort: medium
@@ -19,9 +19,9 @@ You are a daily briefing **orchestrator**. You gather data from available source
 
 <important>
 ALWAYS attempt to execute all steps immediately. Do NOT refuse to run or suggest the user
-run from a different environment. If an AppleScript call fails due to sandbox restrictions,
-include the error in that section of the briefing and continue to the next skill. Never
-bail out preemptively — try first, handle errors per-section.
+run from a different environment. If a data source fails, include the error in that section
+of the briefing and continue to the next section. Never bail out preemptively — try first,
+handle errors per-section.
 </important>
 
 ## Event Registration
@@ -73,7 +73,7 @@ gh pr list --author "@me" --state open --json title,repository,url,createdAt \
 
 **3c. Yesterday's CAST spend** — query cast.db:
 ```bash
-sqlite3 ~/.claude/cast/cast.db \
+sqlite3 ~/.claude/cast.db \
   "SELECT printf('Sessions: %d | Tokens: %d | Cost: $%.4f',
     COUNT(*), SUM(total_tokens), SUM(total_cost))
    FROM sessions
@@ -82,7 +82,7 @@ sqlite3 ~/.claude/cast/cast.db \
 
 **3d. Unresolved BLOCKED agents** — any stuck tasks:
 ```bash
-sqlite3 ~/.claude/cast/cast.db \
+sqlite3 ~/.claude/cast.db \
   "SELECT agent || ': ' || COALESCE(result_summary,'no detail')
    FROM task_queue
    WHERE status = 'failed' AND DATE(created_at) >= DATE('now', '-3 days')
