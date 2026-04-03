@@ -268,5 +268,5 @@
       }
     }
   },
-  "teammateMode": "in-process"
+  "teammateMode": "tmux"
 }
