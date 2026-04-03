@@ -408,6 +408,24 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v4.1 | Native adoption: replace cost-tracker with native statusline, remove prettier hook, delete 4 dead routing scripts, migrate security guard to sandbox rules, add PreCompact hook, add effort/background/initialPrompt to agent frontmatter; 262 BATS tests |
 | v4.2 | `cast dash` TUI dashboard (Textual, htop for CAST); `cast tidy` cleanup subcommand; CHEATSHEET.md; morning-briefing fixes; spinnerVerbs settings fix |
 
+## CAST Ecosystem
+
+CAST is split across focused repos. The core framework lives here; install individual pieces or use the Homebrew taps.
+
+| Repo | Description | Homebrew Tap |
+|---|---|---|
+| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Core framework — agents, hooks, CLI, observability | `ek33450505/cast` |
+| [cast-agents](https://github.com/ek33450505/cast-agents) | Agent definition library | `ek33450505/cast-agents` |
+| [cast-observe](https://github.com/ek33450505/cast-observe) | Observability scripts and cast.db tooling | `ek33450505/cast-observe` |
+| [cast-security](https://github.com/ek33450505/cast-security) | Security hooks and audit tooling | `ek33450505/cast-security` |
+| [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts framework — 13 hooks, CLI tool (v0.1.0) | `ek33450505/cast-hooks` |
+| [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — 4-panel live display (v0.1.0) | `ek33450505/cast-dash` |
+| [homebrew-cast](https://github.com/ek33450505/homebrew-cast) | Homebrew formula for core CAST | — |
+
+**7 repos, 6 Homebrew taps.**
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue first for non-trivial changes. PRs automatically trigger the `cast-pr-review.yml` workflow — the `code-reviewer` agent reviews your diff and posts inline comments.
