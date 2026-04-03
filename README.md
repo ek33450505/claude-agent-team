@@ -1,7 +1,7 @@
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-4.1-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-4.2-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-262-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -198,6 +198,9 @@ All agents carry `memory: local` — each accumulates session knowledge in `~/.c
 | `agent_memories` | Synced from `~/.claude/agent-memory-local/` on Stop |
 
 ```bash
+# Live TUI dashboard — htop for CAST (requires: pip install textual)
+cast dash
+
 # Usage analytics
 bash scripts/cast-stats.sh
 
@@ -207,6 +210,8 @@ bash scripts/cast-validate.sh   # also available as: cast doctor
 # Query recent agent runs
 sqlite3 ~/.claude/cast.db "SELECT agent, status, created_at FROM agent_runs ORDER BY id DESC LIMIT 10;"
 ```
+
+`cast dash` is a Textual-based terminal UI. It reads `cast.db` and `~/.claude/` directly — no web browser required. Shows active agents, today's stats with a sparkline, recent runs table, and system health panel. Updates live. Requires the `textual` Python package (installed automatically by `install.sh`).
 
 ---
 
@@ -362,6 +367,13 @@ bash scripts/cast-cron-setup.sh --list   # view
 bash scripts/cast-cron-setup.sh --remove # uninstall
 ```
 
+Manual cleanup is available via `cast tidy`:
+
+```bash
+cast tidy            # clean plans, events, logs, db rows, briefings older than 14 days
+cast tidy --dry-run  # preview what would be removed
+```
+
 ---
 
 ## Test Suite
@@ -394,6 +406,7 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v3.4 | Security hardening: Python injection fix, path injection fix, --model flag on CLI; portability: __HOME__ tokens replace hardcoded paths; settings cleanup; daemon cleanup (flock lockfile); frontend-qa agent added; docs/native-tools-reference.md; 324 BATS tests |
 | v4.0 | Major cleanup: gut 33 hooks to 15, slim CLI from 2331→976 lines, installer 351→193 lines; drop 5 empty DB tables (9→4 canonical); delete observe-* shadow system, daemon, routing scripts; rebuild cast.db at v7 with batch_id; 271 BATS tests |
 | v4.1 | Native adoption: replace cost-tracker with native statusline, remove prettier hook, delete 4 dead routing scripts, migrate security guard to sandbox rules, add PreCompact hook, add effort/background/initialPrompt to agent frontmatter; 262 BATS tests |
+| v4.2 | `cast dash` TUI dashboard (Textual, htop for CAST); `cast tidy` cleanup subcommand; CHEATSHEET.md; morning-briefing fixes; spinnerVerbs settings fix |
 
 ## Contributing
 

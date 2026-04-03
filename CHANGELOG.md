@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## v4.2 — TUI Dashboard & Tidy (2026-04-03)
+
+Two new user-facing subcommands and several fixes.
+
+### Added
+- `cast dash` — Textual-based terminal UI for live CAST observability. Shows active agents, today's stats with sparkline, recent runs table, and system health. Reads `cast.db` and `~/.claude/` directly. Requires `textual` (installed automatically by `install.sh`).
+- `cast tidy` — cleanup subcommand with `--dry-run` flag. Prunes plans, events, logs, DB rows, and briefings older than `cleanupPeriodDays` (default: 14). Configured via `config/cast-cli.json`.
+- `CHEATSHEET.md` — comprehensive quick-reference for all CAST commands, agents, hooks, and config paths.
+
+### Fixed
+- `settings.json`: corrected `spinnerVerbs` to object format (was array, caused parse error)
+- Morning briefing agent: removed broken AppleScript, fixed `cast.db` path
+- `cast-cron-setup.sh`: updated cron jobs to use `--agent` flag for proper agent dispatch
+- `config.sh`: populated real project paths (was placeholder template values)
+
+---
+
 ## v4.1 — Native Adoption (2026-04-02)
 
 Adopt native Claude Code features, remove CAST overlap.
