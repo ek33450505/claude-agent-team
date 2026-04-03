@@ -55,6 +55,8 @@ Detection logic (check in order, run the FIRST match):
 3. If `Makefile` exists and has a `test` target → run `make test`
 4. Otherwise → skip (no test suite detected)
 
+**Sandbox note:** Test suites (especially BATS) create temp directories and need filesystem access beyond the sandbox allowlist. Always run the test command with `dangerouslyDisableSandbox: true` in the Bash tool call.
+
 On test failure:
 - Output the failing test names and error output
 - Output Status: BLOCKED with message "Pre-push test gate failed. Fix failing tests before pushing."
