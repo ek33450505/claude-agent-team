@@ -159,6 +159,24 @@ if [ -f "$SCRIPT_DIR/cast/permission-rules.json" ]; then
     fi
 fi
 
+# --- Setup Python venv for TUI dashboard ---
+info "Setting up Python venv..."
+VENV_DIR="$CLAUDE_DIR/venv"
+if [ ! -d "$VENV_DIR" ]; then
+    if python3 -m venv "$VENV_DIR" 2>/dev/null; then
+        success "  Created venv at $VENV_DIR"
+    else
+        warn "  Could not create venv — cast dash will use system Python"
+    fi
+fi
+if [ -x "$VENV_DIR/bin/pip" ]; then
+    if "$VENV_DIR/bin/pip" install textual --quiet 2>/dev/null; then
+        success "  textual installed in venv"
+    else
+        warn "  Could not install textual — cast dash may not work"
+    fi
+fi
+
 # --- Install cast CLI (symlink) ---
 info "Installing cast CLI..."
 LOCAL_BIN="${HOME}/.local/bin"

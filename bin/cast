@@ -4,7 +4,7 @@
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: status, exec, memory, budget, agents, hooks, doctor, tidy, install-completions
+# Subcommands: status, exec, memory, budget, agents, hooks, doctor, tidy, dash, install-completions
 #
 # Config: ~/.claude/config/cast-cli.json
 # DB:     $CAST_DB_PATH or ~/.claude/cast.db
@@ -137,6 +137,7 @@ Subcommands:
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}doctor${C_RESET}                          Run system health check
   ${C_BOLD}tidy${C_RESET}      [--dry-run]               Clean up old plans, events, logs, briefings
+  ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
 
 Global flags:
@@ -1128,6 +1129,32 @@ _cmd_install_completions() {
   fi
 }
 
+# ── Subcommand: dash ────────────────────────────────────────────────────────
+_cmd_dash() {
+  local dash_script="${CAST_SCRIPTS_DIR}/cast-dash.py"
+  local venv_python="${HOME}/.claude/venv/bin/python3"
+  local python_cmd="python3"
+
+  if [ -x "$venv_python" ]; then
+    python_cmd="$venv_python"
+  fi
+
+  if [ ! -f "$dash_script" ]; then
+    _error "cast-dash.py not found. Run: bash install.sh"
+    exit 1
+  fi
+
+  # Verify textual is available
+  if ! "$python_cmd" -c "import textual" 2>/dev/null; then
+    _error "textual is not installed."
+    printf "  Install: %s -m pip install textual\n" "$python_cmd" >&2
+    printf "  Or run:  bash install.sh  (from claude-agent-team repo)\n" >&2
+    exit 1
+  fi
+
+  CAST_DB_PATH="${CAST_DB_PATH}" exec "$python_cmd" "$dash_script" "$@"
+}
+
 # ── Main dispatch ────────────────────────────────────────────────────────────
 if [ "$#" -gt 0 ]; then
   CAST_ARGS=("$@")
@@ -1157,6 +1184,7 @@ case "$SUBCOMMAND" in
   hooks)                _cmd_hooks "$@" ;;
   doctor)               _cmd_doctor "$@" ;;
   tidy)                 _cmd_tidy "$@" ;;
+  dash)                 _cmd_dash "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
   ""|--help|-h)
     _usage
