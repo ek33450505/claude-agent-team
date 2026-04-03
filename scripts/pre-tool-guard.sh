@@ -147,8 +147,12 @@ fi
 FIRST_LINE="${CMD%%$'\n'*}"
 
 # --- git commit block ---
-# Allow ONLY if escape hatch is a leading env assignment immediately before git commit
-if echo "$FIRST_LINE" | grep -qE "^(cd[[:space:]]+[^[:space:]]+[[:space:]]+&&[[:space:]]+)?CAST_COMMIT_AGENT=1[[:space:]]+git[[:space:]]+commit"; then
+# Allow commits from authorized subagent sessions (CLAUDE_SUBPROCESS=1 is set by Claude Code)
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
+  exit 0
+fi
+# Allow ONLY if escape hatch env var appears before git commit (tolerates leading cd chains)
+if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_COMMIT_AGENT=1[[:space:]]+git[[:space:]]+commit"; then
   exit 0
 fi
 # Block any other git commit invocation
@@ -158,8 +162,12 @@ if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git[[:space:]]+commit"; then
 fi
 
 # --- git push block ---
-# Allow ONLY if escape hatch is a leading env assignment immediately before git push
-if echo "$FIRST_LINE" | grep -qE "^(cd[[:space:]]+[^[:space:]]+[[:space:]]+&&[[:space:]]+)?CAST_PUSH_OK=1[[:space:]]+git[[:space:]]+push"; then
+# Allow pushes from authorized subagent sessions (CLAUDE_SUBPROCESS=1 is set by Claude Code)
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
+  exit 0
+fi
+# Allow ONLY if escape hatch env var appears before git push (tolerates leading cd chains)
+if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_PUSH_OK=1[[:space:]]+git[[:space:]]+push"; then
   exit 0
 fi
 # Block any other git push invocation
