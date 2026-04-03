@@ -194,67 +194,25 @@ try:
     conn = sqlite3.connect(db_path)
     cur  = conn.cursor()
 
-    # Upsert session row — accumulate token and cost totals
+    # Upsert session row (v7 schema: no token/cost columns on sessions)
     cur.execute('''
-        INSERT INTO sessions (id, project, project_root, started_at,
-                              total_input_tokens, total_output_tokens, total_cost_usd, model)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (id, project, project_root, started_at, model)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-          total_input_tokens  = total_input_tokens  + excluded.total_input_tokens,
-          total_output_tokens = total_output_tokens + excluded.total_output_tokens,
-          total_cost_usd      = total_cost_usd      + excluded.total_cost_usd,
-          model               = CASE WHEN excluded.model != '' THEN excluded.model ELSE model END
-    ''', (session_id, project_name, project_root, now,
-          input_tokens, output_tokens, call_cost, model))
+          model = CASE WHEN excluded.model != '' THEN excluded.model ELSE model END
+    ''', (session_id, project_name, project_root, now, model))
 
-    # Insert agent_runs row only for Agent tool calls (we know which agent ran)
-    # status='running' allows SubagentStop to UPDATE the row when the agent finishes
-    # agent_id (v2.1.69+) enables cross-event correlation between start and completion
-    if tool_name == 'Agent' and agent_name:
+    # Update the most recent running agent_run for this session with cost/token data.
+    # SubagentStart hook creates the row — cost-tracker should NOT insert a duplicate.
+    # Only update if we have meaningful cost or token data to contribute.
+    if tool_name == 'Agent' and agent_name and (input_tokens > 0 or output_tokens > 0 or call_cost > 0):
         cur.execute('''
-            INSERT INTO agent_runs
-              (session_id, agent, model, started_at, ended_at,
-               input_tokens, output_tokens, cost_usd, task_summary, project, status, agent_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (session_id, agent_name, model, now, now,
-              input_tokens, output_tokens, call_cost, task_summary, project_name, 'running',
-              agent_id or None))
-
-        # Also log to dispatch_decisions if the table exists (v3.2 schema)
-        try:
-            tbl_check = cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='dispatch_decisions'"
-            ).fetchone()
-            if tbl_check:
-                # Attempt to read effort level from agent frontmatter
-                effort_val = None
-                try:
-                    import re as _re
-                    agent_md_paths = [
-                        os.path.expanduser(f'~/.claude/agents/{agent_name}.md'),
-                        os.path.join(os.path.dirname(__file__) if '__file__' in dir() else '',
-                                     '..', 'agents', 'core', f'{agent_name}.md'),
-                    ]
-                    for md_path in agent_md_paths:
-                        if os.path.exists(md_path):
-                            with open(md_path) as mf:
-                                content = mf.read(512)
-                            m = _re.search(r'^effort:\s*(\S+)', content, _re.MULTILINE)
-                            if m:
-                                effort_val = m.group(1).strip()
-                            break
-                except Exception:
-                    pass
-
-                prompt_snippet = task_summary[:200] if task_summary else None
-                cur.execute('''
-                    INSERT INTO dispatch_decisions
-                      (session_id, prompt_snippet, chosen_agent, model, effort, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (session_id, prompt_snippet, agent_name, model or None,
-                      effort_val, now))
-        except Exception:
-            pass
+            UPDATE agent_runs
+            SET input_tokens = ?, output_tokens = ?, cost_usd = ?, model = ?
+            WHERE status = 'running' AND session_id = ? AND agent = ?
+            AND id = (SELECT MAX(id) FROM agent_runs WHERE status = 'running' AND session_id = ? AND agent = ?)
+        ''', (input_tokens, output_tokens, call_cost, model,
+              session_id, agent_name, session_id, agent_name))
 
     conn.commit()
     conn.close()

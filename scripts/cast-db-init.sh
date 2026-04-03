@@ -1,12 +1,10 @@
 #!/bin/bash
-# cast-db-init.sh — CAST SQLite State Foundation
-# Creates ~/.claude/cast.db with the full schema for the CAST Local-First OS.
-# Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
-# Schema versioning via PRAGMA user_version (current = 6).
+# cast-db-init.sh — CAST SQLite State Foundation (v7 — clean rebuild)
+# Creates ~/.claude/cast.db with exactly 4 tables:
+#   sessions, agent_runs, routing_events, agent_memories
 #
-# sqlite-vec extension support (optional, graceful degradation if unavailable):
-#   Install: pip install sqlite-vec   OR   brew install sqlite-vec
-#   Provides cosine similarity search over agent_memories.embedding column.
+# Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
+# Schema versioning via PRAGMA user_version (current = 7).
 #
 # Usage:
 #   cast-db-init.sh [--db /path/to/cast.db]
@@ -23,7 +21,7 @@ fi
 # Ensure parent directory exists
 mkdir -p "$(dirname "$DB_PATH")"
 
-# Harden permissions on existing DB (migration path for installs prior to 0600 fix)
+# Harden permissions on existing DB
 chmod 600 "$DB_PATH" 2>/dev/null || true
 
 # Check for sqlite3
@@ -32,271 +30,128 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
   exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# cast_vec_available — returns 0 if sqlite-vec extension can be loaded, 1 if not
-#
-# Uses python3 sqlite3 module which supports load_extension() when the
-# underlying SQLite library has extension loading enabled (default on macOS/Linux).
-# ---------------------------------------------------------------------------
-cast_vec_available() {
-  python3 - <<'PYEOF' 2>/dev/null
-import sqlite3, sys
-conn = sqlite3.connect(":memory:")
-conn.enable_load_extension(True)
-try:
-    conn.load_extension("sqlite_vec")
-    sys.exit(0)
-except Exception:
-    sys.exit(1)
-PYEOF
-}
-
-# Attempt to load sqlite-vec; warn on stderr but never block initialization
-if cast_vec_available 2>/dev/null; then
-  SQLITE_VEC_AVAILABLE=1
-else
-  SQLITE_VEC_AVAILABLE=0
-  echo "Warning: sqlite-vec extension not available. Semantic search will fall back to full-text LIKE matching." >&2
-  echo "  To enable: pip install sqlite-vec   OR   brew install sqlite-vec" >&2
-fi
-
-export SQLITE_VEC_AVAILABLE
-
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-if [ "$CURRENT_VERSION" -ge 6 ]; then
+# If already at v7, nothing to do
+if [ "$CURRENT_VERSION" -ge 7 ]; then
   echo "cast.db already initialized (v${CURRENT_VERSION})" >&2
   exit 0
 fi
 
-# Migrate v1 → v2: bump PRAGMA user_version only (no schema changes needed for v2)
-if [ "$CURRENT_VERSION" -eq 1 ]; then
-  sqlite3 "$DB_PATH" 'PRAGMA user_version = 2;'
-  echo "cast.db migrated v1 → v2 (sqlite-vec support marker added)" >&2
-  CURRENT_VERSION=2
+# Migrate v6 → v7: drop empty tables, add batch_id to agent_runs
+if [ "$CURRENT_VERSION" -eq 6 ]; then
+  sqlite3 "$DB_PATH" <<'MIGRATE_V7'
+DROP TABLE IF EXISTS task_queue;
+DROP TABLE IF EXISTS budgets;
+DROP TABLE IF EXISTS mismatch_signals;
+DROP TABLE IF EXISTS quality_gates;
+DROP TABLE IF EXISTS dispatch_decisions;
+
+-- Add batch_id column if missing
+ALTER TABLE agent_runs ADD COLUMN batch_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);
+
+-- Drop stale indexes
+DROP INDEX IF EXISTS idx_task_queue_status;
+DROP INDEX IF EXISTS idx_task_queue_created_at;
+DROP INDEX IF EXISTS idx_budgets_scope_key;
+DROP INDEX IF EXISTS idx_mismatch_signals_session;
+DROP INDEX IF EXISTS idx_mismatch_signals_route;
+DROP INDEX IF EXISTS idx_mismatch_signals_timestamp;
+DROP INDEX IF EXISTS idx_quality_gates_session;
+DROP INDEX IF EXISTS idx_quality_gates_gate_type;
+DROP INDEX IF EXISTS idx_quality_gates_created_at;
+DROP INDEX IF EXISTS idx_dispatch_decisions_session;
+DROP INDEX IF EXISTS idx_dispatch_decisions_agent;
+DROP INDEX IF EXISTS idx_dispatch_decisions_created_at;
+
+PRAGMA user_version = 7;
+MIGRATE_V7
+  echo "cast.db migrated v6 → v7 (dropped 5 empty tables, added batch_id)" >&2
+  CURRENT_VERSION=7
 fi
 
-# Migrate v2 → v3: add mismatch_signals table
-if [ "$CURRENT_VERSION" -eq 2 ]; then
-  sqlite3 "$DB_PATH" <<'MIGRATE_V3'
-CREATE TABLE IF NOT EXISTS mismatch_signals (
-  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-  routing_event_id    INTEGER REFERENCES routing_events(id),
-  session_id          TEXT,
-  original_prompt     TEXT,
-  follow_up_prompt    TEXT,
-  timestamp           TEXT,
-  route_fired         TEXT,
-  auto_detected       INTEGER  DEFAULT 1
-);
-
-CREATE INDEX IF NOT EXISTS idx_mismatch_signals_session    ON mismatch_signals(session_id);
-CREATE INDEX IF NOT EXISTS idx_mismatch_signals_route      ON mismatch_signals(route_fired);
-CREATE INDEX IF NOT EXISTS idx_mismatch_signals_timestamp  ON mismatch_signals(timestamp);
-
-PRAGMA user_version = 3;
-MIGRATE_V3
-  echo "cast.db migrated v2 → v3 (mismatch_signals table added)" >&2
-  CURRENT_VERSION=3
-fi
-
-# Migrate v3 → v4: add commit_sha column to agent_runs
-if [ "$CURRENT_VERSION" -eq 3 ]; then
-  sqlite3 "$DB_PATH" <<'MIGRATE_V4'
-ALTER TABLE agent_runs ADD COLUMN commit_sha TEXT;
-PRAGMA user_version = 4;
-MIGRATE_V4
-  echo "cast.db migrated v3 → v4 (commit_sha column added to agent_runs)" >&2
-  CURRENT_VERSION=4
-fi
-
-# Migrate v4 → v5: add agent_id column to agent_runs for cross-event correlation
-if [ "$CURRENT_VERSION" -eq 4 ]; then
-  sqlite3 "$DB_PATH" <<'MIGRATE_V5'
-ALTER TABLE agent_runs ADD COLUMN agent_id TEXT;
-CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);
-PRAGMA user_version = 5;
-MIGRATE_V5
-  echo "cast.db migrated v4 → v5 (agent_id column added to agent_runs)" >&2
-  CURRENT_VERSION=5
-fi
-
-# Migrate v5 → v6: add event_type and data columns to routing_events
-if [ "$CURRENT_VERSION" -eq 5 ]; then
-  sqlite3 "$DB_PATH" <<'MIGRATE_V6'
-ALTER TABLE routing_events ADD COLUMN event_type TEXT;
-ALTER TABLE routing_events ADD COLUMN data TEXT;
-PRAGMA user_version = 6;
-MIGRATE_V6
-  echo "cast.db migrated v5 → v6 (event_type and data columns added to routing_events)" >&2
-  CURRENT_VERSION=6
-fi
-
-sqlite3 "$DB_PATH" <<'SQL'
+# Fresh install (no existing DB or version 0)
+if [ "$CURRENT_VERSION" -lt 7 ]; then
+  sqlite3 "$DB_PATH" <<'SQL'
 PRAGMA foreign_keys = ON;
 
 -- Sessions: one row per Claude Code session
 CREATE TABLE IF NOT EXISTS sessions (
-  id                    TEXT PRIMARY KEY,          -- CLAUDE_SESSION_ID
-  project               TEXT,                      -- git repo name
-  project_root          TEXT,                      -- absolute path to repo root
-  started_at            TEXT,                      -- ISO8601
+  id                    TEXT PRIMARY KEY,
+  project               TEXT,
+  project_root          TEXT,
+  started_at            TEXT,
   ended_at              TEXT,
-  total_input_tokens    INTEGER DEFAULT 0,
-  total_output_tokens   INTEGER DEFAULT 0,
-  total_cost_usd        REAL    DEFAULT 0.0,
-  model                 TEXT                       -- primary model used
+  model                 TEXT
 );
 
 -- Agent runs: one row per agent invocation
 CREATE TABLE IF NOT EXISTS agent_runs (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id      TEXT REFERENCES sessions(id),
-  agent           TEXT NOT NULL,                   -- 'code-reviewer', 'debugger', etc.
-  model           TEXT,                            -- 'cloud:sonnet', 'local:qwen3:8b'
+  agent           TEXT NOT NULL,
+  model           TEXT,
   started_at      TEXT,
   ended_at        TEXT,
   status          TEXT CHECK (status IN ('DONE','DONE_WITH_CONCERNS','BLOCKED','NEEDS_CONTEXT','running','failed')),
   input_tokens    INTEGER,
   output_tokens   INTEGER,
   cost_usd        REAL,
-  task_summary    TEXT,                            -- first 200 chars of task
-  prompt          TEXT,                            -- full prompt (optional, privacy flag)
+  task_summary    TEXT,
   project         TEXT,
-  commit_sha      TEXT,                            -- git commit SHA after agent completes (for rollback)
-  agent_id        TEXT                             -- Claude Code agent_id (v2.1.69+) for cross-event correlation
+  agent_id        TEXT,
+  batch_id        INTEGER
 );
 
--- Routing events: replaces routing-log.jsonl
+-- Routing events: structured event log
 CREATE TABLE IF NOT EXISTS routing_events (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id      TEXT,
   timestamp       TEXT,
-  prompt_preview  TEXT,                            -- first 80 chars of prompt
-  action          TEXT,                            -- matched | no_match | group_dispatched | loop_break
+  prompt_preview  TEXT,
+  action          TEXT,
   matched_route   TEXT,
-  match_type      TEXT,                            -- regex | semantic | group | catchall
+  match_type      TEXT,
   pattern         TEXT,
-  confidence      TEXT,                            -- hard | soft | semantic
+  confidence      TEXT,
   project         TEXT,
-  event_type      TEXT,                            -- user_prompt_submit | tool_failure | etc.
-  data            TEXT                             -- JSON blob of event-specific data
+  event_type      TEXT,
+  data            TEXT
 );
 
--- Persistent task queue: survives across sessions
-CREATE TABLE IF NOT EXISTS task_queue (
-  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-  created_at            TEXT,
-  project               TEXT,
-  project_root          TEXT,
-  agent                 TEXT,
-  task                  TEXT NOT NULL,
-  priority              INTEGER CHECK (priority BETWEEN 1 AND 10) DEFAULT 5,
-  status                TEXT    CHECK (status IN ('pending','claimed','done','failed','cancelled')) DEFAULT 'pending',
-  claimed_at            TEXT,
-  claimed_by_session    TEXT,
-  completed_at          TEXT,
-  result_summary        TEXT,
-  retry_count           INTEGER DEFAULT 0,
-  max_retries           INTEGER DEFAULT 3,
-  scheduled_for         TEXT                       -- ISO8601, NULL = run immediately
-);
-
--- Agent memories: replaces markdown MEMORY.md files for queryable state
+-- Agent memories: queryable agent state
 CREATE TABLE IF NOT EXISTS agent_memories (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   agent       TEXT NOT NULL,
   project     TEXT,
-  type        TEXT,                                -- user | feedback | project | reference
+  type        TEXT,
   name        TEXT,
   description TEXT,
   content     TEXT,
   created_at  TEXT,
-  updated_at  TEXT,
-  embedding   BLOB                                 -- sqlite-vec F32 embedding (nullable)
+  updated_at  TEXT
 );
 
--- Cost budgets
-CREATE TABLE IF NOT EXISTS budgets (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  scope         TEXT,                              -- session | project | global
-  scope_key     TEXT,                              -- session_id | project_name | 'global'
-  period        TEXT,                              -- daily | weekly | monthly | per-session
-  limit_usd     REAL,
-  alert_at_pct  REAL DEFAULT 0.80,                -- warn at 80% consumed
-  created_at    TEXT
-);
-
--- Mismatch signals: rapid re-prompt after a route fired = potential route error
-CREATE TABLE IF NOT EXISTS mismatch_signals (
-  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-  routing_event_id    INTEGER REFERENCES routing_events(id),
-  session_id          TEXT,
-  original_prompt     TEXT,    -- first 200 chars of the routed prompt
-  follow_up_prompt    TEXT,    -- first 200 chars of the re-prompt
-  timestamp           TEXT,    -- ISO8601
-  route_fired         TEXT,    -- matched_route from the routing_event
-  auto_detected       INTEGER  DEFAULT 1  -- 1 = auto, 0 = manually tagged
-);
-
--- Indexes for common query patterns
-CREATE INDEX IF NOT EXISTS idx_routing_events_session   ON routing_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_routing_events_timestamp ON routing_events(timestamp);
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_agent_runs_session       ON agent_runs(session_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent         ON agent_runs(agent);
-CREATE INDEX IF NOT EXISTS idx_task_queue_status        ON task_queue(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status        ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id      ON agent_runs(batch_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id      ON agent_runs(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_ended_at      ON agent_runs(ended_at);
+CREATE INDEX IF NOT EXISTS idx_routing_events_session   ON routing_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_routing_events_timestamp ON routing_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_routing_events_route     ON routing_events(matched_route);
 CREATE INDEX IF NOT EXISTS idx_agent_memories_agent     ON agent_memories(agent);
 
-CREATE INDEX IF NOT EXISTS idx_agent_runs_status        ON agent_runs(status);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_ended_at      ON agent_runs(ended_at);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_status  ON agent_runs(agent, status);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id      ON agent_runs(agent_id);
-CREATE INDEX IF NOT EXISTS idx_task_queue_created_at    ON task_queue(created_at);
-CREATE INDEX IF NOT EXISTS idx_routing_events_route     ON routing_events(matched_route);
-CREATE INDEX IF NOT EXISTS idx_budgets_scope_key        ON budgets(scope_key);
-CREATE INDEX IF NOT EXISTS idx_mismatch_signals_session    ON mismatch_signals(session_id);
-CREATE INDEX IF NOT EXISTS idx_mismatch_signals_route      ON mismatch_signals(route_fired);
-CREATE INDEX IF NOT EXISTS idx_mismatch_signals_timestamp  ON mismatch_signals(timestamp);
-
--- Quality gates: records results from code-review, commit, and teammate-idle quality checks
-CREATE TABLE IF NOT EXISTS quality_gates (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id      TEXT,
-  agent           TEXT,
-  gate_type       TEXT,          -- 'code_review' | 'commit_approval' | 'teammate_idle'
-  gate_result     TEXT,          -- 'pass' | 'block' | 'warn'
-  feedback        TEXT,          -- feedback message when blocked
-  artifact_count  INTEGER DEFAULT 0,
-  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Dispatch decisions: records agent routing choices for audit and analytics
-CREATE TABLE IF NOT EXISTS dispatch_decisions (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id      TEXT,
-  prompt_snippet  TEXT,          -- first 200 chars of routing prompt
-  chosen_agent    TEXT,
-  model           TEXT,
-  effort          TEXT,
-  wave_id         TEXT,          -- ADM wave identifier if in orchestrated run
-  parallel        INTEGER DEFAULT 0,
-  created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_quality_gates_session    ON quality_gates(session_id);
-CREATE INDEX IF NOT EXISTS idx_quality_gates_gate_type  ON quality_gates(gate_type);
-CREATE INDEX IF NOT EXISTS idx_quality_gates_created_at ON quality_gates(created_at);
-CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_session     ON dispatch_decisions(session_id);
-CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_agent       ON dispatch_decisions(chosen_agent);
-CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_created_at  ON dispatch_decisions(created_at);
-
--- Set schema version
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 SQL
+fi
 
 chmod 600 "$DB_PATH"
 
-# H8: Enable WAL mode for concurrent write safety (parallel orchestrator agents)
+# Enable WAL mode for concurrent write safety
 sqlite3 "$DB_PATH" 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;' >/dev/null 2>&1 || true
 
-echo "cast.db initialized (v6, WAL mode)" >&2
+echo "cast.db initialized (v7, WAL mode, 4 tables)" >&2

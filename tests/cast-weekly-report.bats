@@ -11,7 +11,7 @@ TUNER_SH="$REPO_DIR/scripts/cast-weekly-tuner.sh"
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Create minimal cast.db schema (sessions, agent_runs, task_queue) in a temp file
+# Create minimal cast.db schema (sessions, agent_runs) in a temp file
 init_test_db() {
   local db_path="$1"
   sqlite3 "$db_path" <<'SQL'
@@ -21,9 +21,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   project_root          TEXT,
   started_at            TEXT,
   ended_at              TEXT,
-  total_input_tokens    INTEGER DEFAULT 0,
-  total_output_tokens   INTEGER DEFAULT 0,
-  total_cost_usd        REAL    DEFAULT 0.0,
   model                 TEXT
 );
 CREATE TABLE IF NOT EXISTS agent_runs (
@@ -38,26 +35,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   output_tokens   INTEGER,
   cost_usd        REAL,
   task_summary    TEXT,
-  prompt          TEXT,
   project         TEXT,
-  commit_sha      TEXT
-);
-CREATE TABLE IF NOT EXISTS task_queue (
-  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-  created_at            TEXT,
-  project               TEXT,
-  project_root          TEXT,
-  agent                 TEXT,
-  task                  TEXT NOT NULL,
-  priority              INTEGER DEFAULT 5,
-  status                TEXT DEFAULT 'pending',
-  claimed_at            TEXT,
-  claimed_by_session    TEXT,
-  completed_at          TEXT,
-  result_summary        TEXT,
-  retry_count           INTEGER DEFAULT 0,
-  max_retries           INTEGER DEFAULT 3,
-  scheduled_for         TEXT
+  agent_id        TEXT,
+  batch_id        INTEGER
 );
 SQL
 }
@@ -181,9 +161,11 @@ teardown() {
   export CAST_WEEKLY_BUDGET="0.01"
   init_test_db "$db_path"
 
-  # Insert a session with cost that exceeds the budget
-  sqlite3 "$db_path" "INSERT INTO sessions (id, project, started_at, total_cost_usd)
-    VALUES ('test-session-1', 'test-project', date('now', '-1 day'), 5.0);"
+  # Insert a session and agent run with cost that exceeds the budget
+  sqlite3 "$db_path" "INSERT INTO sessions (id, project, started_at)
+    VALUES ('test-session-1', 'test-project', date('now', '-1 day'));"
+  sqlite3 "$db_path" "INSERT INTO agent_runs (session_id, agent, started_at, cost_usd, status)
+    VALUES ('test-session-1', 'test-agent', date('now', '-1 day'), 5.0, 'DONE');"
 
   run bash "$TUNER_SH"
   [ "$status" -eq 0 ]

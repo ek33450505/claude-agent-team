@@ -58,6 +58,7 @@ result = {
     "agent_name": data.get("agent_type") or data.get("agent_name") or data.get("subagent_name") or "unknown",
     "session_id": data.get("session_id") or "",
     "agent_id":   data.get("agent_id") or data.get("subagent_id") or "",
+    "batch_id":   data.get("batch_id") or "",
 }
 print(json.dumps(result))
 PYEOF
@@ -73,7 +74,9 @@ export CAST_START_PARSED="$PARSED"
 AGENT_NAME="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_START_PARSED','{}')); print(d.get('agent_name','unknown'))" 2>/dev/null || echo "unknown")"
 SESSION_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_START_PARSED','{}')); print(d.get('session_id',''))" 2>/dev/null || echo "")"
 AGENT_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_START_PARSED','{}')); print(d.get('agent_id',''))" 2>/dev/null || echo "")"
+BATCH_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_START_PARSED','{}')); print(d.get('batch_id',''))" 2>/dev/null || echo "")"
 export CAST_START_AGENT_ID="$AGENT_ID"
+export CAST_START_BATCH_ID="$BATCH_ID"
 
 # ── Step 1: Write task_claimed event to ~/.claude/cast/events/ ────────────────
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
@@ -115,6 +118,8 @@ agent    = os.environ.get('CAST_START_AGENT', '')
 sess     = os.environ.get('CAST_START_SESSION', '')
 ts       = os.environ.get('CAST_START_TS_ISO', '')
 agent_id = os.environ.get('CAST_START_AGENT_ID', '')
+batch_id_str = os.environ.get('CAST_START_BATCH_ID', '')
+batch_id = int(batch_id_str) if batch_id_str.isdigit() else None
 err_log  = os.path.expanduser('~/.claude/logs/hook-errors.log')
 
 if not agent:
@@ -136,7 +141,12 @@ for attempt in range(3):
         cur  = conn.cursor()
         # Check if agent_runs has agent_id column
         cols = [r[1] for r in cur.execute("PRAGMA table_info(agent_runs)").fetchall()]
-        if 'agent_id' in cols:
+        if 'batch_id' in cols and 'agent_id' in cols:
+            cur.execute(
+                "INSERT INTO agent_runs (agent, session_id, status, started_at, agent_id, batch_id) VALUES (?, ?, 'running', ?, ?, ?)",
+                (agent, sess, ts, agent_id, batch_id),
+            )
+        elif 'agent_id' in cols:
             cur.execute(
                 "INSERT INTO agent_runs (agent, session_id, status, started_at, agent_id) VALUES (?, ?, 'running', ?, ?)",
                 (agent, sess, ts, agent_id),

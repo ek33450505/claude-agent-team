@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# cast — CAST Local-First OS CLI
+# cast — CAST CLI (v4 rebuild)
 # Main entrypoint for all cast subcommands.
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: run, queue, memory, budget, audit, daemon, status, install-completions
+# Subcommands: status, exec, memory, budget, agents, hooks, doctor, install-completions
 #
 # Config: ~/.claude/config/cast-cli.json
-# DB:     $CAST_DB_PATH or ~/.claude/cast.db (from config)
+# DB:     $CAST_DB_PATH or ~/.claude/cast.db
 
 set -uo pipefail
 
@@ -15,17 +15,17 @@ set -uo pipefail
 CAST_BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 CAST_REPO_DIR="$(cd "$CAST_BIN_DIR/.." && pwd)"
 
-# ── Version (read from VERSION file so install banners stay in sync) ──────────
+# ── Version ──────────────────────────────────────────────────────────────────
 CAST_VERSION="$(cat "${CAST_REPO_DIR}/VERSION" 2>/dev/null || echo "unknown")"
 CAST_SCRIPTS_DIR="${HOME}/.claude/scripts"
 CAST_AGENTS_DIR="${HOME}/.claude/agents"
 
-# ── Global flags (defaults) ───────────────────────────────────────────────────
+# ── Global flags ─────────────────────────────────────────────────────────────
 CAST_JSON=0
 CAST_QUIET=0
 CAST_VERBOSE=0
 
-# ── Load config ───────────────────────────────────────────────────────────────
+# ── Load config ──────────────────────────────────────────────────────────────
 CAST_CONFIG_FILE="${HOME}/.claude/config/cast-cli.json"
 
 _config_get() {
@@ -57,7 +57,7 @@ if [ -z "${CAST_DB_PATH:-}" ]; then
 fi
 export CAST_DB_PATH
 
-# ── Colors ────────────────────────────────────────────────────────────────────
+# ── Colors ───────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
   C_BOLD='\033[1m'
   C_GREEN='\033[0;32m'
@@ -70,7 +70,7 @@ else
   C_BOLD='' C_GREEN='' C_YELLOW='' C_CYAN='' C_RED='' C_DIM='' C_RESET=''
 fi
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 _info()    { [ "$CAST_QUIET" -eq 0 ] && printf "${C_CYAN}%s${C_RESET}\n" "$*"; }
 _success() { [ "$CAST_QUIET" -eq 0 ] && printf "${C_GREEN}%s${C_RESET}\n" "$*"; }
 _warn()    { printf "${C_YELLOW}%s${C_RESET}\n" "$*" >&2; }
@@ -80,7 +80,7 @@ _verbose() { [ "$CAST_VERBOSE" -eq 1 ] && printf "${C_DIM}[verbose] %s${C_RESET}
 _require_db() {
   if [ ! -f "$CAST_DB_PATH" ]; then
     _error "cast.db not found at $CAST_DB_PATH"
-    printf "  Run: cast-db-init.sh  (or: bash ${CAST_SCRIPTS_DIR}/cast-db-init.sh)\n" >&2
+    printf "  Run: bash %s/cast-db-init.sh\n" "$CAST_SCRIPTS_DIR" >&2
     exit 1
   fi
   if ! command -v sqlite3 >/dev/null 2>&1; then
@@ -93,316 +93,316 @@ _db() {
   sqlite3 "$CAST_DB_PATH" "$@"
 }
 
-# ── Usage ─────────────────────────────────────────────────────────────────────
+_parse_global_flags() {
+  local remaining=()
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --json)     CAST_JSON=1; shift ;;
+      --quiet)    CAST_QUIET=1; shift ;;
+      --verbose)  CAST_VERBOSE=1; shift ;;
+      --help|-h)
+        _usage
+        exit 0
+        ;;
+      --version)
+        echo "cast version ${CAST_VERSION}"
+        exit 0
+        ;;
+      *)
+        remaining+=("$1")
+        shift
+        ;;
+    esac
+  done
+  if [ "${#remaining[@]}" -gt 0 ]; then
+    CAST_ARGS=("${remaining[@]}")
+  else
+    CAST_ARGS=()
+  fi
+}
+
+# ── Usage ────────────────────────────────────────────────────────────────────
 _usage() {
   cat <<USAGE
-${C_BOLD}CAST v${CAST_VERSION} — Local-First OS${C_RESET}
+${C_BOLD}CAST v${CAST_VERSION}${C_RESET}
 
 Usage: cast <subcommand> [args] [flags]
 
 Subcommands:
-  ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest externally
-  ${C_BOLD}run${C_RESET}       <agent> "<task>"        Run an agent synchronously or async
-  ${C_BOLD}queue${C_RESET}     list|add|cancel|retry   Manage the persistent task queue
-  ${C_BOLD}memory${C_RESET}    search|list|forget|export  Query and manage agent memories
-  ${C_BOLD}budget${C_RESET}    [--week] [--project]    View cost and savings summary
-  ${C_BOLD}audit${C_RESET}     [--week] [--export] [--violations] [--stats]  View and manage audit log
-  ${C_BOLD}airgap${C_RESET}    on|off|status           Toggle air-gap mode (local-only routing)
-  ${C_BOLD}daemon${C_RESET}    status|start|stop|...   Control the castd background daemon
-  ${C_BOLD}status${C_RESET}                            Terminal health dashboard
-  ${C_BOLD}learn${C_RESET}     "<pattern>" <agent>     Install a learned route into routing-table.json
-  ${C_BOLD}doctor${C_RESET}                            Run system health check (traffic-light report)
-  ${C_BOLD}install-completions${C_RESET}               Install shell tab completions
+  ${C_BOLD}status${C_RESET}                          Terminal health dashboard
+  ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest
+  ${C_BOLD}memory${C_RESET}    search|list|forget|export   Query and manage agent memories
+  ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
+  ${C_BOLD}agents${C_RESET}                          List installed CAST agents
+  ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
+  ${C_BOLD}doctor${C_RESET}                          Run system health check
+  ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
 
 Global flags:
   --json        Machine-readable JSON output
   --quiet       Suppress informational messages
   --verbose     Show debug details
   --help, -h    Show this help
+  --version     Show version
 
 Config: ${CAST_CONFIG_FILE}
 DB:     ${CAST_DB_PATH}
 USAGE
 }
 
-# ── Subcommand: run ───────────────────────────────────────────────────────────
-_cmd_run() {
-  local agent=""
-  local task=""
-  local model_override=""
-  local priority=5
-  local async=0
+# ── Subcommand: status ───────────────────────────────────────────────────────
+_cmd_status() {
+  local width=50
+  if command -v tput >/dev/null 2>&1; then
+    width="$(tput cols 2>/dev/null || echo 50)"
+  fi
+  if [ "$width" -gt 70 ]; then width=70; fi
 
-  while [ "${#}" -gt 0 ]; do
-    case "$1" in
-      --model)
-        model_override="${2:-}"
-        shift 2
-        ;;
-      --priority)
-        priority="${2:-5}"
-        shift 2
-        ;;
-      --async)
-        async=1
-        shift
-        ;;
-      --help|-h)
-        cat <<USAGE
-Usage: cast run <agent> "<task>" [--model local|cloud|auto] [--priority 1-10] [--async]
-
-  --model     Override model resolution (local|cloud|auto)
-  --priority  Task priority 1-10 when using --async (default: 5)
-  --async     Enqueue task instead of running synchronously
-
-Examples:
-  cast run code-reviewer "Review src/auth.js"
-  cast run debugger "Fix failing tests" --async --priority 2
-USAGE
-        return 0
-        ;;
-      -*)
-        _error "Unknown flag: $1"
-        return 1
-        ;;
-      *)
-        if [ -z "$agent" ]; then
-          agent="$1"
-        elif [ -z "$task" ]; then
-          task="$1"
-        fi
-        shift
-        ;;
-    esac
-  done
-
-  if [ -z "$agent" ] || [ -z "$task" ]; then
-    _error "Usage: cast run <agent> \"<task>\""
-    return 1
+  # Budget
+  local today_spend=0 week_spend=0
+  if [ -f "$CAST_DB_PATH" ] && command -v python3 >/dev/null 2>&1; then
+    read -r today_spend week_spend <<< "$(python3 - "$CAST_DB_PATH" <<'PYEOF'
+import sys, sqlite3
+from datetime import datetime, timedelta, timezone
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+cur = conn.cursor()
+today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+week_ago = (datetime.now(timezone.utc)-timedelta(days=7)).strftime('%Y-%m-%d')
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?", (today,))
+today_s = cur.fetchone()[0] or 0
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?", (week_ago,))
+week_s = cur.fetchone()[0] or 0
+conn.close()
+print(f"{today_s:.2f} {week_s:.2f}")
+PYEOF
+    2>/dev/null || echo "0.00 0.00")"
   fi
 
-  # Validate agent exists
-  if [ ! -f "${CAST_AGENTS_DIR}/${agent}.md" ]; then
-    _error "Agent not found: ${agent}"
-    printf "  Available agents:\n" >&2
-    ls "${CAST_AGENTS_DIR}/" 2>/dev/null | sed 's/\.md$//' | sort | sed 's/^/    /' >&2
-    return 1
+  # Memory count
+  local mem_count=0
+  if [ -f "$CAST_DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
+    mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories;" 2>/dev/null || echo 0)"
   fi
 
-  if [ "$async" -eq 1 ]; then
-    # Enqueue via cast-queue-add.sh
-    local queue_script="${CAST_SCRIPTS_DIR}/cast-queue-add.sh"
-    if [ ! -f "$queue_script" ]; then
-      queue_script="${CAST_REPO_DIR}/scripts/cast-queue-add.sh"
-    fi
-    if [ ! -f "$queue_script" ]; then
-      _error "cast-queue-add.sh not found"
-      return 1
-    fi
-    local output
-    output="$(bash "$queue_script" "$agent" "$task" --priority "$priority" 2>&1)"
-    local exit_code=$?
-    if [ "$exit_code" -ne 0 ]; then
-      _error "$output"
-      return 1
-    fi
-    local task_id
-    task_id="$(echo "$output" | grep -oE '^[0-9]+' | head -1)"
-    if [ "$CAST_JSON" -eq 1 ]; then
-      printf '{"status":"queued","task_id":"%s","agent":"%s","priority":%d}\n' \
-        "${task_id:-?}" "$agent" "$priority"
-    else
-      _success "Queued task ${task_id:-?}: agent=${agent} priority=${priority}"
-    fi
-    return 0
+  # Agent count
+  local agent_count=0
+  if [ -d "$CAST_AGENTS_DIR" ]; then
+    agent_count="$(ls "$CAST_AGENTS_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')"
   fi
 
-  # Synchronous run — invoke Claude CLI directly
-  local model="${model_override:-claude-sonnet-4-6}"
+  # Hook count
+  local hook_count=0
+  local settings_file="${HOME}/.claude/settings.json"
+  if [ -f "$settings_file" ]; then
+    hook_count="$(python3 -c "
+import json
+with open('$settings_file') as f:
+    cfg = json.load(f)
+hooks = cfg.get('hooks', {})
+print(sum(len(v) if isinstance(v, list) else 1 for v in hooks.values()))
+" 2>/dev/null || echo 0)"
+  fi
 
-  _verbose "Running: $agent with model=$model"
-  local log_file="/tmp/cast-run-$$"
-  claude --agent "$agent" --print --dangerously-skip-permissions --model "$model" -p "$task" \
-    2>&1 | tee "$log_file"
-  local exit_code="${PIPESTATUS[0]}"
-  rm -f "$log_file"
-  return "$exit_code"
-}
-
-# ── Subcommand: queue ─────────────────────────────────────────────────────────
-_cmd_queue() {
-  local subcmd="${1:-list}"
-  shift 2>/dev/null || true
-
-  case "$subcmd" in
-    list)   _queue_list "$@" ;;
-    add)    _queue_add "$@" ;;
-    cancel) _queue_cancel "$@" ;;
-    retry)  _queue_retry "$@" ;;
-    --help|-h)
-      cat <<USAGE
-Usage: cast queue <subcommand> [args]
-
-  list   [--status pending|claimed|done|failed] [--project <name>] [--limit 20]
-  add    <agent> "<task>" [--priority 3] [--when "2026-03-27T08:00"]
-  cancel <task-id>
-  retry  <task-id>
-USAGE
-      ;;
-    *)
-      _error "Unknown queue subcommand: $subcmd"
-      printf "  Use: cast queue list|add|cancel|retry\n" >&2
-      return 1
-      ;;
-  esac
-}
-
-_queue_list() {
-  _require_db
-
-  local status_filter=""
-  local project_filter=""
-  local limit=20
-
-  while [ "${#}" -gt 0 ]; do
-    case "$1" in
-      --status)   status_filter="${2:-}"; shift 2 ;;
-      --project)  project_filter="${2:-}"; shift 2 ;;
-      --limit)    limit="${2:-20}"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-
-  python3 - "$CAST_DB_PATH" "$status_filter" "$project_filter" "$limit" "$CAST_JSON" <<'PYEOF'
-import sys, sqlite3, json
+  # Recent agent runs (last 5)
+  local recent_runs=""
+  if [ -f "$CAST_DB_PATH" ] && command -v python3 >/dev/null 2>&1; then
+    recent_runs="$(python3 - "$CAST_DB_PATH" <<'PYEOF'
+import sys, sqlite3
 from datetime import datetime, timezone
-
-db_path, status_f, project_f, limit_s, json_mode = sys.argv[1:6]
-limit = int(limit_s)
-json_out = json_mode == "1"
-
-conn = sqlite3.connect(db_path)
+db = sys.argv[1]
+conn = sqlite3.connect(db)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
-
-conditions = []
-params = []
-if status_f:
-    conditions.append("status = ?")
-    params.append(status_f)
-if project_f:
-    conditions.append("project = ?")
-    params.append(project_f)
-
-where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-cur.execute(
-    f"SELECT id, agent, status, priority, created_at, task FROM task_queue {where} ORDER BY priority ASC, created_at ASC LIMIT ?",
-    params + [limit]
-)
-rows = [dict(r) for r in cur.fetchall()]
+cur.execute("""
+    SELECT agent, status, model, ended_at, batch_id
+    FROM agent_runs ORDER BY id DESC LIMIT 5
+""")
+rows = cur.fetchall()
 conn.close()
+now = datetime.now(timezone.utc)
+for r in rows:
+    ended = r['ended_at'] or ''
+    ago = ''
+    if ended:
+        try:
+            t = datetime.fromisoformat(ended.replace('Z','+00:00'))
+            diff = int((now - t).total_seconds())
+            if diff < 3600:
+                ago = f"{diff//60}m ago"
+            else:
+                ago = f"{diff//3600}h ago"
+        except:
+            ago = ''
+    status_sym = '+' if r['status'] == 'DONE' else ('x' if r['status'] in ('BLOCKED','NEEDS_CONTEXT') else '~')
+    model = r['model'] or ''
+    batch = f" [batch:{r['batch_id']}]" if r['batch_id'] else ''
+    print(f"  {status_sym} {(r['agent'] or ''):<22} [{model:<24}] {ago}{batch}")
+PYEOF
+    2>/dev/null || echo "")"
+  fi
+
+  # Render dashboard
+  local sep
+  sep="$(python3 -c "print('=' * $width)" 2>/dev/null || printf '%0.s=' $(seq 1 $width))"
+
+  printf "${C_BOLD}CAST v${CAST_VERSION}${C_RESET}\n"
+  printf "%s\n" "$sep"
+  printf "Agents      %d installed\n" "$agent_count"
+  printf "Hooks       %d active\n" "$hook_count"
+  printf "Budget      \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
+  printf "Memory      %d entries\n" "$mem_count"
+  printf "%s\n" "$sep"
+
+  if [ -n "$recent_runs" ]; then
+    printf "Recent agents (last 5):\n"
+    printf "%s\n" "$recent_runs"
+  else
+    printf "${C_DIM}No recent agent runs recorded.${C_RESET}\n"
+  fi
+}
+
+# ── Subcommand: agents ───────────────────────────────────────────────────────
+_cmd_agents() {
+  if [ ! -d "$CAST_AGENTS_DIR" ]; then
+    _error "Agents directory not found: $CAST_AGENTS_DIR"
+    return 1
+  fi
+
+  python3 - "$CAST_AGENTS_DIR" "$CAST_JSON" <<'PYEOF'
+import sys, os, json, re
+
+agents_dir = sys.argv[1]
+json_out = sys.argv[2] == "1"
+
+agents = []
+for fname in sorted(os.listdir(agents_dir)):
+    if not fname.endswith('.md'):
+        continue
+    fpath = os.path.join(agents_dir, fname)
+    try:
+        with open(fpath, 'r') as f:
+            content = f.read()
+    except Exception:
+        continue
+
+    name = fname.replace('.md', '')
+    model = ''
+    description = ''
+
+    # Parse YAML frontmatter
+    if content.startswith('---'):
+        parts = content.split('---', 2)
+        if len(parts) >= 3:
+            fm = parts[1]
+            for line in fm.strip().split('\n'):
+                line = line.strip()
+                if line.startswith('model:'):
+                    model = line.split(':', 1)[1].strip().strip('"').strip("'")
+                elif line.startswith('description:'):
+                    desc_val = line.split(':', 1)[1].strip()
+                    if desc_val == '>':
+                        continue
+                    description = desc_val.strip('"').strip("'")
+                elif not line.startswith(('name:', 'tools:', 'color:', 'memory:', 'maxTurns:', 'effort:')) and description == '' and ':' not in line and line:
+                    # Continuation of multiline description
+                    description = line.strip()
+
+    agents.append({
+        'name': name,
+        'model': model or 'sonnet',
+        'description': description[:80] if description else '',
+    })
 
 if json_out:
-    print(json.dumps(rows, indent=2))
+    print(json.dumps(agents, indent=2))
     sys.exit(0)
 
-if not rows:
-    print("Queue is empty.")
+print(f"{'AGENT':<24} {'MODEL':<10} DESCRIPTION")
+print("-" * 80)
+for a in agents:
+    print(f"{a['name']:<24} {a['model']:<10} {a['description']}")
+print(f"\n{len(agents)} agents installed")
+PYEOF
+}
+
+# ── Subcommand: hooks ────────────────────────────────────────────────────────
+_cmd_hooks() {
+  local settings_file="${HOME}/.claude/settings.json"
+  if [ ! -f "$settings_file" ]; then
+    _error "settings.json not found at $settings_file"
+    return 1
+  fi
+
+  python3 - "$settings_file" "$CAST_JSON" <<'PYEOF'
+import sys, json, os
+
+settings_file = sys.argv[1]
+json_out = sys.argv[2] == "1"
+
+with open(settings_file) as f:
+    cfg = json.load(f)
+
+hooks_cfg = cfg.get("hooks", {})
+entries = []
+
+for event, hook_list in hooks_cfg.items():
+    if not isinstance(hook_list, list):
+        hook_list = [hook_list]
+    for entry in hook_list:
+        if not isinstance(entry, dict):
+            continue
+        hook_id = entry.get("id", "")
+        matcher = entry.get("matcher", "")
+        inner_hooks = entry.get("hooks", [])
+        for h in inner_hooks:
+            if not isinstance(h, dict):
+                continue
+            htype = h.get("type", "")
+            cmd = h.get("command", h.get("url", h.get("prompt", "")))[:60]
+            is_async = h.get("async", False)
+            timeout = h.get("timeout", "")
+
+            # Check if script exists
+            health = "ok"
+            if htype == "command" and cmd:
+                parts = cmd.split()
+                for part in parts:
+                    if part in ("bash", "sh", "python3"):
+                        continue
+                    if part.startswith("-"):
+                        continue
+                    expanded = os.path.expanduser(part)
+                    if "/" in expanded:
+                        if not os.path.isfile(expanded):
+                            health = "MISSING"
+                        break
+
+            entries.append({
+                "event": event,
+                "id": hook_id,
+                "type": htype,
+                "command": cmd,
+                "async": is_async,
+                "timeout": timeout,
+                "matcher": matcher,
+                "health": health,
+            })
+
+if json_out:
+    print(json.dumps(entries, indent=2))
     sys.exit(0)
 
-# Table format
-print(f"{'ID':<6} {'AGENT':<22} {'STATUS':<10} {'PRI':<4} {'CREATED':<20} TASK")
-print("-" * 90)
-for r in rows:
-    task_preview = (r['task'] or '')[:50]
-    created = (r['created_at'] or '')[:19]
-    print(f"{r['id']:<6} {(r['agent'] or ''):<22} {(r['status'] or ''):<10} {r['priority']:<4} {created:<20} {task_preview}")
+print(f"{'EVENT':<20} {'ID':<24} {'ASYNC':<6} {'HEALTH':<8} COMMAND")
+print("-" * 100)
+for e in entries:
+    async_str = "yes" if e["async"] else "no"
+    print(f"{e['event']:<20} {e['id']:<24} {async_str:<6} {e['health']:<8} {e['command']}")
+print(f"\n{len(entries)} hook entries across {len(hooks_cfg)} event types")
 PYEOF
 }
 
-_queue_add() {
-  local queue_script="${CAST_SCRIPTS_DIR}/cast-queue-add.sh"
-  if [ ! -f "$queue_script" ]; then
-    queue_script="${CAST_REPO_DIR}/scripts/cast-queue-add.sh"
-  fi
-  if [ ! -f "$queue_script" ]; then
-    _error "cast-queue-add.sh not found"
-    return 1
-  fi
-  bash "$queue_script" "$@"
-}
-
-_queue_cancel() {
-  _require_db
-  local task_id="${1:-}"
-  if [ -z "$task_id" ]; then
-    _error "Usage: cast queue cancel <task-id>"
-    return 1
-  fi
-
-  local rows_affected
-  rows_affected="$(python3 - "$CAST_DB_PATH" "$task_id" <<'PYEOF'
-import sys, sqlite3
-db_path, task_id = sys.argv[1], sys.argv[2]
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
-cur.execute(
-    "UPDATE task_queue SET status='cancelled' WHERE id=? AND status='pending'",
-    (task_id,)
-)
-conn.commit()
-print(cur.rowcount)
-conn.close()
-PYEOF
-  )"
-
-  if [ "${rows_affected:-0}" -eq 0 ]; then
-    _warn "Task $task_id not found or not in pending status"
-  else
-    if [ "$CAST_JSON" -eq 1 ]; then
-      printf '{"status":"cancelled","task_id":"%s"}\n' "$task_id"
-    else
-      _success "Task $task_id cancelled"
-    fi
-  fi
-}
-
-_queue_retry() {
-  _require_db
-  local task_id="${1:-}"
-  if [ -z "$task_id" ]; then
-    _error "Usage: cast queue retry <task-id>"
-    return 1
-  fi
-
-  local rows_affected
-  rows_affected="$(python3 - "$CAST_DB_PATH" "$task_id" <<'PYEOF'
-import sys, sqlite3
-db_path, task_id = sys.argv[1], sys.argv[2]
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
-cur.execute(
-    "UPDATE task_queue SET status='pending', retry_count=0, claimed_at=NULL, claimed_by_session=NULL WHERE id=?",
-    (task_id,)
-)
-conn.commit()
-print(cur.rowcount)
-conn.close()
-PYEOF
-  )"
-
-  if [ "${rows_affected:-0}" -eq 0 ]; then
-    _warn "Task $task_id not found"
-  else
-    if [ "$CAST_JSON" -eq 1 ]; then
-      printf '{"status":"retrying","task_id":"%s"}\n' "$task_id"
-    else
-      _success "Task $task_id reset to pending (retry queued)"
-    fi
-  fi
-}
-
-# ── Subcommand: memory ────────────────────────────────────────────────────────
+# ── Subcommand: memory ───────────────────────────────────────────────────────
 _cmd_memory() {
   local subcmd="${1:-list}"
   shift 2>/dev/null || true
@@ -597,50 +597,27 @@ print(json.dumps(rows, indent=2))
 PYEOF
 }
 
-# ── Subcommand: budget ────────────────────────────────────────────────────────
+# ── Subcommand: budget ───────────────────────────────────────────────────────
 _cmd_budget() {
   local show_week=0
   local project_filter=""
-  local set_scope=""
-  local set_amount=""
 
   while [ "${#}" -gt 0 ]; do
     case "$1" in
       --week)     show_week=1; shift ;;
       --project)  project_filter="${2:-}"; shift 2 ;;
-      set)
-        shift
-        # Parse set subcommand
-        while [ "${#}" -gt 0 ]; do
-          case "$1" in
-            --global)   set_scope="global"; set_amount="${2:-}"; shift 2 ;;
-            --session)  set_scope="session"; set_amount="${2:-}"; shift 2 ;;
-            *) shift ;;
-          esac
-        done
-        ;;
       --help|-h)
         cat <<USAGE
 Usage: cast budget [options]
-       cast budget set --global <amount>
-       cast budget set --session <amount>
 
   --week              Last 7 days grouped by date
   --project <name>    All-time spend for project
-  set --global <usd>  Set daily global budget limit
-  set --session <usd> Set per-session budget limit
 USAGE
         return 0
         ;;
       *) shift ;;
     esac
   done
-
-  # Handle set command
-  if [ -n "$set_scope" ]; then
-    _budget_set "$set_scope" "$set_amount"
-    return $?
-  fi
 
   _require_db
 
@@ -659,38 +636,20 @@ cur = conn.cursor()
 today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d')
 
-# Today's spend
-cur.execute(
-    "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?",
-    (today,)
-)
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?", (today,))
 today_spend = cur.fetchone()[0] or 0.0
 
-# This week's spend
-cur.execute(
-    "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?",
-    (week_ago,)
-)
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?", (week_ago,))
 week_spend = cur.fetchone()[0] or 0.0
 
-# Local runs count
-cur.execute(
-    "SELECT COUNT(*), COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE model LIKE 'local:%'"
-)
-row = cur.fetchone()
-local_count = row[0] or 0
-local_actual_cost = row[1] or 0.0
+cur.execute("SELECT COUNT(*) FROM agent_runs")
+total_runs = cur.fetchone()[0] or 0
 
-# Project spend (all-time)
 project_spend = None
 if project_f:
-    cur.execute(
-        "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE project=?",
-        (project_f,)
-    )
+    cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE project=?", (project_f,))
     project_spend = cur.fetchone()[0] or 0.0
 
-# Week breakdown
 week_rows = []
 if show_week:
     cur.execute(
@@ -702,18 +661,11 @@ if show_week:
 
 conn.close()
 
-# Average cloud cost per run: rough estimate ~$0.003 per agent call
-AVG_CLOUD_EQUIV = 0.003
-local_savings = round(local_count * AVG_CLOUD_EQUIV - local_actual_cost, 4)
-if local_savings < 0:
-    local_savings = 0.0
-
 if json_out:
     out = {
         "today_usd": round(today_spend, 4),
         "week_usd": round(week_spend, 4),
-        "local_runs": local_count,
-        "local_savings_est_usd": local_savings,
+        "total_runs": total_runs,
     }
     if project_f:
         out["project"] = project_f
@@ -723,7 +675,7 @@ if json_out:
     print(json.dumps(out, indent=2))
     sys.exit(0)
 
-print(f"Today: ${today_spend:.2f}  |  This week: ${week_spend:.2f}  |  Local runs: {local_count} (saved ~${local_savings:.2f})")
+print(f"Today: ${today_spend:.2f}  |  This week: ${week_spend:.2f}  |  Total runs: {total_runs}")
 if project_f:
     print(f"Project '{project_f}': ${project_spend:.2f} all-time")
 if show_week and week_rows:
@@ -736,1312 +688,30 @@ elif show_week:
 PYEOF
 }
 
-_budget_set() {
-  local scope="$1"
-  local amount="$2"
-
-  if [ -z "$amount" ]; then
-    _error "Usage: cast budget set --${scope} <amount>"
-    return 1
-  fi
-
-  _require_db
-
-  python3 - "$CAST_DB_PATH" "$scope" "$amount" <<'PYEOF'
-import sys, sqlite3
-from datetime import datetime, timezone
-
-db_path, scope, amount = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    limit_val = float(amount)
-except ValueError:
-    print(f"Error: amount must be a number, got: {amount}", file=sys.stderr)
-    sys.exit(1)
-
-period = "daily" if scope == "global" else "per-session"
-now = datetime.now(timezone.utc).isoformat()
-
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
-cur.execute(
-    "SELECT id FROM budgets WHERE scope=? AND scope_key=? AND period=?",
-    (scope, scope, period)
-)
-existing = cur.fetchone()
-if existing:
-    cur.execute(
-        "UPDATE budgets SET limit_usd=? WHERE id=?",
-        (limit_val, existing[0])
-    )
-else:
-    cur.execute(
-        "INSERT INTO budgets (scope, scope_key, period, limit_usd, created_at) VALUES (?,?,?,?,?)",
-        (scope, scope, period, limit_val, now)
-    )
-conn.commit()
-conn.close()
-print(f"Budget set: {scope} {period} limit = ${limit_val:.2f}")
-PYEOF
-}
-
-# ── Subcommand: audit ─────────────────────────────────────────────────────────
-_cmd_audit() {
-  local session_id=""
-  local show_week=0
-  local do_export=0
-  local do_violations=0
-  local do_stats=0
-  local export_output=""
-  local redact_setting=""
-  local audit_log="${HOME}/.claude/logs/audit.jsonl"
-
-  while [ "${#}" -gt 0 ]; do
-    case "$1" in
-      --session)    session_id="${2:-}"; shift 2 ;;
-      --week)       show_week=1; shift ;;
-      --export)     do_export=1; shift ;;
-      --output)     export_output="${2:-}"; shift 2 ;;
-      --violations) do_violations=1; shift ;;
-      --stats)      do_stats=1; shift ;;
-      --redact)
-        redact_setting="${2:-}"
-        shift 2
-        ;;
-      --help|-h)
-        cat <<USAGE
-Usage: cast audit [options]
-
-  --session <id>     Filter by session ID
-  --week             Last 7 days summary
-  --export           Full JSON array dump to stdout
-  --output <file>    Write --export output to file instead of stdout
-  --violations       Show unredacted cloud-bound calls (privacy violations)
-  --stats            Show aggregate statistics (calls, cloud%, redaction rate, top tools)
-  --redact on|off    Toggle PII redaction in cast-cli.json
-USAGE
-        return 0
-        ;;
-      *) shift ;;
-    esac
-  done
-
-  # Handle redact toggle
-  if [ -n "$redact_setting" ]; then
-    _audit_set_redact "$redact_setting"
-    return $?
-  fi
-
-  if [ ! -f "$audit_log" ]; then
-    _warn "Audit log not found: $audit_log"
-    printf "  Enable the PreToolUse audit hook to start recording.\n"
-    return 0
-  fi
-
-  if [ "$do_export" -eq 1 ]; then
-    python3 - "$audit_log" "$export_output" <<'PYEOF'
-import sys, json
-
-audit_log, output_file = sys.argv[1], sys.argv[2]
-
-entries = []
-try:
-    with open(audit_log) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except Exception:
-                pass
-except Exception:
-    pass
-
-result = json.dumps(entries, indent=2)
-
-if output_file:
-    try:
-        with open(output_file, 'w') as f:
-            f.write(result)
-            f.write('\n')
-        print(f"Exported {len(entries)} entries to {output_file}")
-    except Exception as e:
-        print(f"Error writing to {output_file}: {e}", file=sys.stderr)
-        sys.exit(1)
-else:
-    print(result)
-PYEOF
-    return 0
-  fi
-
-  if [ "$do_violations" -eq 1 ]; then
-    python3 - "$audit_log" <<'PYEOF'
-import sys, json
-from datetime import datetime, timezone
-
-audit_log = sys.argv[1]
-
-entries = []
-try:
-    with open(audit_log) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except Exception:
-                pass
-except Exception:
-    pass
-
-# Violations: cloud-bound AND not redacted
-violations = [
-    e for e in entries
-    if e.get('is_cloud_bound') and not e.get('redacted')
-]
-
-if not violations:
-    print("No privacy violations found. All cloud-bound calls have redaction annotations.")
-    sys.exit(0)
-
-print(f"Privacy Violations: {len(violations)} unredacted cloud-bound calls")
-print(f"{'Timestamp':<20} {'Session':<20} {'Tool':<20} {'Preview'}")
-print('-' * 90)
-for e in violations:
-    ts = (e.get('timestamp') or '')[:19]
-    sess = (e.get('session_id') or 'unknown')[:18]
-    tool = (e.get('tool_name') or '?')[:18]
-    preview = (e.get('url') or e.get('query') or e.get('command_preview') or '')[:40]
-    print(f"{ts:<20} {sess:<20} {tool:<20} {preview}")
-PYEOF
-    return 0
-  fi
-
-  if [ "$do_stats" -eq 1 ]; then
-    python3 - "$audit_log" <<'PYEOF'
-import sys, json
-from datetime import datetime, timezone
-from collections import Counter
-
-audit_log = sys.argv[1]
-
-entries = []
-try:
-    with open(audit_log) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except Exception:
-                pass
-except Exception:
-    pass
-
-if not entries:
-    print("No audit entries found.")
-    sys.exit(0)
-
-total = len(entries)
-today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-today_count = sum(1 for e in entries if (e.get('timestamp') or '')[:10] == today_str)
-
-cloud_entries = [e for e in entries if e.get('is_cloud_bound')]
-local_entries = [e for e in entries if not e.get('is_cloud_bound')]
-cloud_count = len(cloud_entries)
-local_count = len(local_entries)
-redacted_count = sum(1 for e in cloud_entries if e.get('redacted'))
-
-cloud_pct = (cloud_count / total * 100) if total > 0 else 0.0
-local_pct = (local_count / total * 100) if total > 0 else 0.0
-redact_rate = (redacted_count / cloud_count * 100) if cloud_count > 0 else 0.0
-violations = cloud_count - redacted_count
-
-sessions = set(e.get('session_id', '') for e in entries if e.get('session_id'))
-
-tool_counts = Counter(e.get('tool_name', 'unknown') for e in entries)
-top5 = tool_counts.most_common(5)
-
-print(f"CAST Audit Statistics")
-print(f"{'=' * 40}")
-print(f"Total calls:       {total:>6}  (today: {today_count})")
-print(f"Sessions:          {len(sessions):>6}")
-print(f"Cloud calls:       {cloud_count:>6}  ({cloud_pct:.1f}%)")
-print(f"Local calls:       {local_count:>6}  ({local_pct:.1f}%)")
-print(f"Redacted (cloud):  {redacted_count:>6}  ({redact_rate:.1f}% redaction rate)")
-print(f"Violations:        {violations:>6}  (unredacted cloud calls)")
-print(f"\nTop 5 tools:")
-for tool, count in top5:
-    bar = '#' * min(30, int(count / total * 60)) if total > 0 else ''
-    print(f"  {tool:<22} {count:>5}  {bar}")
-PYEOF
-    return 0
-  fi
-
-  python3 - "$audit_log" "$session_id" "$show_week" "$CAST_JSON" <<'PYEOF'
-import sys, json
-from datetime import datetime, timedelta, timezone
-
-audit_log, session_f, week_mode, json_mode = sys.argv[1:5]
-show_week = week_mode == "1"
-json_out = json_mode == "1"
-
-entries = []
-try:
-    with open(audit_log) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(json.loads(line))
-            except Exception:
-                pass
-except Exception:
-    pass
-
-# Filter by session
-if session_f:
-    entries = [e for e in entries if e.get('session_id') == session_f]
-
-# Week filter
-if show_week:
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()[:19]
-    entries = [e for e in entries if (e.get('timestamp') or '') >= cutoff]
-
-if json_out:
-    print(json.dumps(entries, indent=2))
-    sys.exit(0)
-
-if show_week:
-    cloud_calls = sum(1 for e in entries if e.get('is_cloud_bound'))
-    local_calls = len(entries) - cloud_calls
-    redactions = sum(1 for e in entries if e.get('redacted'))
-    print(f"Last 7 days: {len(entries)} total calls  |  {cloud_calls} cloud  |  {local_calls} local  |  {redactions} redactions")
-    sys.exit(0)
-
-if not entries:
-    print("No audit entries found.")
-    sys.exit(0)
-
-# Show last 50
-for e in entries[-50:]:
-    ts = (e.get('timestamp') or '')[:19]
-    tool = e.get('tool_name', '?')
-    cloud = '[cloud]' if e.get('is_cloud_bound') else '[local]'
-    detail = e.get('file_path') or e.get('command_preview') or e.get('url') or e.get('query') or ''
-    if detail:
-        detail = detail[:60]
-    print(f"{ts}  {cloud:<8} {tool:<20} {detail}")
-PYEOF
-}
-
-_audit_set_redact() {
-  local setting="$1"
-  if [ "$setting" != "on" ] && [ "$setting" != "off" ]; then
-    _error "cast audit --redact must be 'on' or 'off'"
-    return 1
-  fi
-
-  local redact_val="false"
-  if [ "$setting" = "on" ]; then redact_val="true"; fi
-
-  # Ensure config file exists
-  if [ ! -f "$CAST_CONFIG_FILE" ]; then
-    mkdir -p "$(dirname "$CAST_CONFIG_FILE")"
-    echo '{}' > "$CAST_CONFIG_FILE"
-  fi
-
-  python3 - "$CAST_CONFIG_FILE" "$redact_val" <<'PYEOF'
-import sys, json, os
-
-config_file, redact_val = sys.argv[1], sys.argv[2]
-redact_bool = redact_val == "true"
-
-try:
-    with open(config_file) as f:
-        cfg = json.load(f)
-except Exception:
-    cfg = {}
-
-cfg['redact_pii'] = redact_bool
-cfg['CAST_REDACT'] = "on" if redact_bool else "off"
-
-with open(config_file, 'w') as f:
-    json.dump(cfg, f, indent=2)
-    f.write('\n')
-
-print(f"PII redaction: {'on' if redact_bool else 'off'}")
-PYEOF
-}
-
-# ── Subcommand: daemon ────────────────────────────────────────────────────────
-_cmd_daemon() {
-  local subcmd="${1:-status}"
-  local airgap_flag=0
-  shift 2>/dev/null || true
-
-  # Pre-scan for --airgap flag
-  local remaining_args=()
-  for arg in "$@"; do
-    if [ "$arg" = "--airgap" ]; then
-      airgap_flag=1
-    else
-      remaining_args+=("$arg")
-    fi
-  done
-
-  case "$subcmd" in
-    status)  _daemon_status ;;
-    start)
-      if [ "$airgap_flag" -eq 1 ]; then
-        export CAST_AIRGAP=1
-        _info "Starting castd with air-gap mode enabled (CAST_AIRGAP=1)"
-      fi
-      _daemon_start
-      ;;
-    stop)    _daemon_stop ;;
-    restart)
-      _daemon_stop
-      sleep 1
-      if [ "$airgap_flag" -eq 1 ]; then
-        export CAST_AIRGAP=1
-        _info "Restarting castd with air-gap mode enabled (CAST_AIRGAP=1)"
-      fi
-      _daemon_start
-      ;;
-    logs)    _daemon_logs "${remaining_args[@]+"${remaining_args[@]}"}" ;;
-    --help|-h)
-      cat <<USAGE
-Usage: cast daemon <subcommand> [flags]
-
-  status           Check castd running state, queue depth, last run
-  start            Start castd daemon (launchctl or background process)
-  stop             Stop castd daemon
-  restart          Stop then start
-  logs [--tail N]  View castd log (default: last 50 lines)
-
-Flags:
-  --airgap         Start daemon with CAST_AIRGAP=1 (rewrites cloud routes to local)
-USAGE
-      ;;
-    *)
-      _error "Unknown daemon subcommand: $subcmd"
-      printf "  Use: cast daemon status|start|stop|restart|logs\n" >&2
-      return 1
-      ;;
-  esac
-}
-
-_daemon_status() {
-  local pid_file="${HOME}/.claude/run/castd.pid"
-  local log_file="${HOME}/.claude/logs/castd.log"
-  local plist_label="com.cast.daemon"
-
-  local running=0
-  local pid=""
-
-  # Check pgrep first
-  pid="$(pgrep -f "castd.sh" 2>/dev/null | head -1 || echo "")"
-  if [ -n "$pid" ]; then
-    running=1
-  elif [ -f "$pid_file" ]; then
-    pid="$(cat "$pid_file" 2>/dev/null || echo "")"
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      running=1
-    fi
-  fi
-
-  # Queue depth
-  local queue_depth=0
-  local claimed_depth=0
-  if [ -f "$CAST_DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
-    queue_depth="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM task_queue WHERE status='pending';" 2>/dev/null || echo 0)"
-    claimed_depth="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM task_queue WHERE status='claimed';" 2>/dev/null || echo 0)"
-  fi
-
-  # Last run time from log
-  local last_run=""
-  if [ -f "$log_file" ]; then
-    last_run="$(tail -20 "$log_file" 2>/dev/null | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' | tail -1 || echo "")"
-  fi
-
-  if [ "$CAST_JSON" -eq 1 ]; then
-    printf '{"running":%s,"pid":"%s","queue_pending":%d,"queue_claimed":%d,"last_run":"%s"}\n' \
-      "$([ $running -eq 1 ] && echo true || echo false)" \
-      "${pid:-}" "$queue_depth" "$claimed_depth" "${last_run:-}"
-    return 0
-  fi
-
-  local status_str
-  if [ "$running" -eq 1 ]; then
-    status_str="${C_GREEN}running${C_RESET} (pid ${pid})"
-  else
-    status_str="${C_RED}stopped${C_RESET}"
-  fi
-
-  printf "castd:  %b\n" "$status_str"
-  printf "Queue:  %d pending, %d claimed\n" "$queue_depth" "$claimed_depth"
-  if [ -n "$last_run" ]; then
-    printf "Last:   %s\n" "$last_run"
-  fi
-}
-
-_daemon_start() {
-  local plist_src="${CAST_REPO_DIR}/com.cast.daemon.plist"
-  local plist_dest="${HOME}/Library/LaunchAgents/com.cast.daemon.plist"
-  local castd_script="${CAST_SCRIPTS_DIR}/castd.sh"
-  if [ ! -f "$castd_script" ]; then
-    castd_script="${CAST_REPO_DIR}/scripts/castd.sh"
-  fi
-
-  # macOS: try launchctl
-  if [ "$(uname -s)" = "Darwin" ] && [ -f "$plist_src" ]; then
-    # Install castd.sh to ~/.claude/scripts/ before loading the plist —
-    # the plist hardcodes that path, so launchd will exit 127 without this.
-    if [ -f "$castd_script" ]; then
-      mkdir -p "${HOME}/.claude/scripts"
-      cp "$castd_script" "${HOME}/.claude/scripts/castd.sh"
-      chmod +x "${HOME}/.claude/scripts/castd.sh"
-    else
-      _error "castd.sh not found; cannot start daemon"
-      return 1
-    fi
-    mkdir -p "${HOME}/Library/LaunchAgents"
-    cp "$plist_src" "$plist_dest"
-    if launchctl load "$plist_dest" 2>/dev/null; then
-      _success "castd started via launchctl"
-      return 0
-    fi
-  fi
-
-  # Fallback: background process
-  if [ ! -f "$castd_script" ]; then
-    _error "castd.sh not found"
-    return 1
-  fi
-
-  mkdir -p "${HOME}/.claude/logs" "${HOME}/.claude/run"
-  nohup bash "$castd_script" >> "${HOME}/.claude/logs/castd.log" 2>&1 &
-  local bg_pid=$!
-  echo "$bg_pid" > "${HOME}/.claude/run/castd.pid"
-  _success "castd started (pid ${bg_pid})"
-}
-
-_daemon_stop() {
-  local pid_file="${HOME}/.claude/run/castd.pid"
-  local plist_dest="${HOME}/Library/LaunchAgents/com.cast.daemon.plist"
-
-  # macOS: try launchctl
-  if [ "$(uname -s)" = "Darwin" ] && [ -f "$plist_dest" ]; then
-    if launchctl unload "$plist_dest" 2>/dev/null; then
-      _success "castd stopped via launchctl"
-      return 0
-    fi
-  fi
-
-  # Kill by pgrep
-  local pid
-  pid="$(pgrep -f "castd.sh" 2>/dev/null | head -1 || echo "")"
-  if [ -n "$pid" ]; then
-    kill "$pid" 2>/dev/null && _success "castd stopped (pid ${pid})"
-    rm -f "$pid_file"
-    return 0
-  fi
-
-  # Kill by pid file
-  if [ -f "$pid_file" ]; then
-    pid="$(cat "$pid_file" 2>/dev/null || echo "")"
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" && _success "castd stopped (pid ${pid})"
-    fi
-    rm -f "$pid_file"
-    return 0
-  fi
-
-  _warn "castd does not appear to be running"
-}
-
-_daemon_logs() {
-  local tail_lines=50
-  while [ "${#}" -gt 0 ]; do
-    case "$1" in
-      --tail) tail_lines="${2:-50}"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-
-  local log_file="${HOME}/.claude/logs/castd.log"
-  if [ ! -f "$log_file" ]; then
-    _warn "castd log not found: $log_file"
-    return 0
-  fi
-
-  tail -n "$tail_lines" "$log_file"
-}
-
-# ── Subcommand: status ────────────────────────────────────────────────────────
-_cmd_status() {
-  # Terminal health dashboard using printf/tput only
-  local log_file="${HOME}/.claude/logs/castd.log"
-
-  # Width
-  local width=50
-  if command -v tput >/dev/null 2>&1; then
-    width="$(tput cols 2>/dev/null || echo 50)"
-  fi
-  if [ "$width" -gt 70 ]; then width=70; fi
-
-  # ── Gather data ────────────────────────────────────────────────────────────
-  # castd status
-  local castd_running=0
-  local castd_pid=""
-  castd_pid="$(pgrep -f "castd.sh" 2>/dev/null | head -1 || echo "")"
-  if [ -n "$castd_pid" ]; then castd_running=1; fi
-
-  # Queue depth
-  local q_pending=0
-  local q_claimed=0
-  if [ -f "$CAST_DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
-    q_pending="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM task_queue WHERE status='pending';" 2>/dev/null || echo 0)"
-    q_claimed="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM task_queue WHERE status='claimed';" 2>/dev/null || echo 0)"
-  fi
-
-  # Budget
-  local today_spend=0
-  local week_spend=0
-  local local_count=0
-  local local_savings=0
-  if [ -f "$CAST_DB_PATH" ] && command -v python3 >/dev/null 2>&1; then
-    read -r today_spend week_spend local_count local_savings <<< "$(python3 - "$CAST_DB_PATH" <<'PYEOF'
-import sys, sqlite3
-from datetime import datetime, timedelta, timezone
-db = sys.argv[1]
-conn = sqlite3.connect(db)
-cur = conn.cursor()
-today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-week_ago = (datetime.now(timezone.utc)-timedelta(days=7)).strftime('%Y-%m-%d')
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?", (today,))
-today_s = cur.fetchone()[0] or 0
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?", (week_ago,))
-week_s = cur.fetchone()[0] or 0
-cur.execute("SELECT COUNT(*), COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE model LIKE 'local:%'")
-r = cur.fetchone()
-lc = r[0] or 0
-la = r[1] or 0
-savings = max(0, lc * 0.003 - la)
-conn.close()
-print(f"{today_s:.2f} {week_s:.2f} {lc} {savings:.2f}")
-PYEOF
-    2>/dev/null || echo "0.00 0.00 0 0.00")"
-  fi
-
-  # Memory count
-  local mem_count=0
-  if [ -f "$CAST_DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
-    mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories;" 2>/dev/null || echo 0)"
-  fi
-
-  # Air-gap state
-  local airgap_on=0
-  if [ "${CAST_AIRGAP:-0}" = "1" ]; then
-    airgap_on=1
-  else
-    _ag_cfg="$(python3 -c "
-import json, os
-try:
-    with open(os.path.expanduser('~/.claude/config/cast-cli.json')) as f:
-        cfg = json.load(f)
-    print('1' if cfg.get('airgap') else '0')
-except Exception:
-    print('0')
-" 2>/dev/null || echo '0')"
-    if [ "${_ag_cfg:-0}" = "1" ]; then
-      airgap_on=1
-    fi
-  fi
-
-  # Recent agent runs (last 5)
-  local recent_runs=""
-  if [ -f "$CAST_DB_PATH" ] && command -v python3 >/dev/null 2>&1; then
-    recent_runs="$(python3 - "$CAST_DB_PATH" <<'PYEOF'
-import sys, sqlite3
-from datetime import datetime, timezone
-db = sys.argv[1]
-conn = sqlite3.connect(db)
-conn.row_factory = sqlite3.Row
-cur = conn.cursor()
-cur.execute("""
-    SELECT agent, status, model, ended_at
-    FROM agent_runs ORDER BY id DESC LIMIT 5
-""")
-rows = cur.fetchall()
-conn.close()
-now = datetime.now(timezone.utc)
-for r in rows:
-    ended = r['ended_at'] or ''
-    ago = ''
-    if ended:
-        try:
-            t = datetime.fromisoformat(ended.replace('Z','+00:00'))
-            diff = int((now - t).total_seconds())
-            if diff < 3600:
-                ago = f"{diff//60}m ago"
-            else:
-                ago = f"{diff//3600}h ago"
-        except:
-            ago = ''
-    status_sym = '✓' if r['status'] == 'DONE' else ('✗' if r['status'] in ('BLOCKED','NEEDS_CONTEXT') else '~')
-    model = r['model'] or ''
-    print(f"  {status_sym} {(r['agent'] or ''):<22} [{model:<24}] {ago}")
-PYEOF
-    2>/dev/null || echo "")"
-  fi
-
-  # ── Render dashboard ────────────────────────────────────────────────────────
-  local sep
-  sep="$(python3 -c "print('━' * $width)" 2>/dev/null || printf '%0.s─' $(seq 1 $width))"
-
-  # Upgrade CRITICAL alert
-  local upgrade_candidates="${HOME}/.claude/cast/upgrade-candidates.json"
-  if [ -f "$upgrade_candidates" ] && command -v python3 >/dev/null 2>&1; then
-    local critical_count
-    critical_count="$(python3 -c "
-import json, sys
-try:
-    items = json.load(open('$upgrade_candidates'))
-    if isinstance(items, list):
-        print(sum(1 for i in items if i.get('category') == 'CRITICAL'))
-    else:
-        print(0)
-except Exception:
-    print(0)
-" 2>/dev/null || echo 0)"
-    if [ "${critical_count:-0}" -gt 0 ]; then
-      printf "${C_RED}⚠ CAST upgrade alerts: %d critical item(s)${C_RESET}  (run: cast upgrade list)\n" "$critical_count"
-    fi
-  fi
-
-  printf "${C_BOLD}CAST v${CAST_VERSION} — Local-First OS${C_RESET}\n"
-  printf "%s\n" "$sep"
-
-  # castd row
-  if [ "$castd_running" -eq 1 ]; then
-    printf "castd       ${C_GREEN}● running${C_RESET}    queue: %d pending, %d claimed\n" "$q_pending" "$q_claimed"
-  else
-    printf "castd       ${C_RED}● stopped${C_RESET}    queue: %d pending\n" "$q_pending"
-  fi
-
-  # Budget row
-  printf "Budget      \$%s today  \$%s this week  (%d local saves)\n" \
-    "$today_spend" "$week_spend" "$local_count"
-
-  # Memory row
-  printf "Memory      %d entries\n" "$mem_count"
-
-  # Air-gap row
-  if [ "$airgap_on" -eq 1 ]; then
-    printf "Air-gap     ${C_YELLOW}[AIRGAP: ON]${C_RESET}   cloud routes -> local:qwen3:8b\n"
-  else
-    printf "Air-gap     ${C_GREEN}[AIRGAP: OFF]${C_RESET}  normal routing\n"
-  fi
-
-  printf "%s\n" "$sep"
-
-  if [ -n "$recent_runs" ]; then
-    printf "Recent agents (last 5):\n"
-    printf "%s\n" "$recent_runs"
-  else
-    printf "${C_DIM}No recent agent runs recorded.${C_RESET}\n"
-  fi
-}
-
-# ── Subcommand: install-completions ──────────────────────────────────────────
-_cmd_install_completions() {
-  local completions_src="${CAST_REPO_DIR}/completions"
-
-  if [ ! -d "$completions_src" ]; then
-    _warn "Completions directory not found: $completions_src"
-    return 1
-  fi
-
-  local zsh_installed=0
-  local bash_installed=0
-
-  # zsh completion
-  local zsh_comp="${completions_src}/_cast"
-  if [ -f "$zsh_comp" ]; then
-    local zsh_dir="${HOME}/.zsh/completions"
-    mkdir -p "$zsh_dir"
-    cp "$zsh_comp" "${zsh_dir}/_cast"
-    zsh_installed=1
-    _success "zsh completion installed: ${zsh_dir}/_cast"
-    _info "  Add to ~/.zshrc: fpath=(~/.zsh/completions \$fpath) && autoload -U compinit && compinit"
-  fi
-
-  # bash completion
-  local bash_comp="${completions_src}/cast.bash"
-  if [ -f "$bash_comp" ]; then
-    local bash_dir="${HOME}/.bash_completion.d"
-    mkdir -p "$bash_dir"
-    cp "$bash_comp" "${bash_dir}/cast"
-    bash_installed=1
-    _success "bash completion installed: ${bash_dir}/cast"
-    _info "  Add to ~/.bashrc: source ~/.bash_completion.d/cast"
-  fi
-
-  if [ "$zsh_installed" -eq 0 ] && [ "$bash_installed" -eq 0 ]; then
-    _warn "No completion files found in $completions_src"
-    return 1
-  fi
-}
-
-# ── Subcommand: airgap ────────────────────────────────────────────────────────
-_cmd_airgap() {
-  local subcmd="${1:-status}"
-  local airgap_script="${CAST_SCRIPTS_DIR}/cast-airgap.sh"
-
-  # Fallback: check repo scripts dir
-  if [ ! -f "$airgap_script" ]; then
-    airgap_script="${CAST_REPO_DIR}/scripts/cast-airgap.sh"
-  fi
-
-  if [ ! -f "$airgap_script" ]; then
-    _error "cast-airgap.sh not found at $airgap_script"
-    printf "  Run: cast install  (or install cast-airgap.sh to %s)\n" "$CAST_SCRIPTS_DIR" >&2
-    return 1
-  fi
-
-  bash "$airgap_script" "$subcmd"
-}
-
-# ── Global flag pre-processing ────────────────────────────────────────────────
-_parse_global_flags() {
-  local remaining=()
-  while [ "${#}" -gt 0 ]; do
-    case "$1" in
-      --json)     CAST_JSON=1; shift ;;
-      --quiet)    CAST_QUIET=1; shift ;;
-      --verbose)  CAST_VERBOSE=1; shift ;;
-      --help|-h)
-        _usage
-        exit 0
-        ;;
-      --version)
-        echo "cast version ${CAST_VERSION}"
-        exit 0
-        ;;
-      *)
-        remaining+=("$1")
-        shift
-        ;;
-    esac
-  done
-  # Re-export remaining args (bash 3.2 safe: no empty array expansion)
-  if [ "${#remaining[@]}" -gt 0 ]; then
-    CAST_ARGS=("${remaining[@]}")
-  else
-    CAST_ARGS=()
-  fi
-}
-
-# ── Subcommand: learn ─────────────────────────────────────────────────────────
-_learn_from_session() {
-  # Query last session's no_match and mismatch events, interactively prompt to route each
-  local session_id
-  session_id="$(sqlite3 "$CAST_DB_PATH" \
-    "SELECT session_id FROM routing_events ORDER BY id DESC LIMIT 1;" 2>/dev/null || echo "")"
-
-  if [ -z "$session_id" ]; then
-    echo "No routing events found in cast.db." >&2
-    return 0
-  fi
-
-  echo "Session: $session_id"
-  echo "Reviewing unmatched prompts from last session..."
-  echo ""
-
-  # Get no_match events for the session
-  local prompts
-  prompts="$(sqlite3 "$CAST_DB_PATH" \
-    "SELECT prompt_preview FROM routing_events WHERE session_id='${session_id}' AND action='no_match' ORDER BY id DESC LIMIT 20;" \
-    2>/dev/null || echo "")"
-
-  if [ -z "$prompts" ]; then
-    echo "No unmatched prompts found for session $session_id."
-    return 0
-  fi
-
-  while IFS= read -r prompt_preview; do
-    [ -z "$prompt_preview" ] && continue
-    echo "Prompt: \"$prompt_preview\""
-    printf "Route to agent [or skip]: "
-    local agent_input
-    read -r agent_input
-    if [ -n "$agent_input" ] && [ "$agent_input" != "skip" ]; then
-      if [ ! -f "${CAST_AGENTS_DIR}/${agent_input}.md" ]; then
-        echo "  Agent not found: $agent_input — skipping" >&2
-        continue
-      fi
-      _do_learn "$prompt_preview" "$agent_input" "soft" "Learned from session review"
-    fi
-  done <<< "$prompts"
-}
-
-_do_learn() {
-  local pattern="$1"
-  local agent="$2"
-  local confidence="${3:-soft}"
-  local description="${4:-}"
-
-  local routing_table="${HOME}/.claude/config/routing-table.json"
-  local epoch
-  epoch="$(date +%s)"
-  local route_id="learned-${agent}-${epoch}"
-
-  if [ -z "$description" ]; then
-    description="Learned route for agent ${agent} (pattern: ${pattern})"
-  fi
-
-  python3 - "$routing_table" "$route_id" "$pattern" "$agent" "$confidence" "$description" <<'PYEOF'
-import json, sys, os
-
-routing_table, route_id, pattern, agent, confidence, description = sys.argv[1:]
-
-try:
-    with open(routing_table) as f:
-        table = json.load(f)
-except Exception as e:
-    print(f"Error reading routing table: {e}", file=sys.stderr)
-    sys.exit(1)
-
-if 'routes' not in table:
-    table['routes'] = []
-
-new_route = {
-    'id': route_id,
-    'patterns': [pattern],
-    'agent': agent,
-    'confidence': confidence,
-    'description': description,
-    'source': 'cast-learn',
-}
-
-table['routes'].append(new_route)
-
-with open(routing_table, 'w') as f:
-    json.dump(table, f, indent=2)
-
-print(f"Route installed:")
-print(f"  Pattern:    {pattern}")
-print(f"  Agent:      {agent}")
-print(f"  Confidence: {confidence}")
-print(f"  ID:         {route_id}")
-PYEOF
-
-  # Log to routing_events
-  python3 -c "
-import json, datetime, os, sys
-sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
-log = {
-    'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
-    'session_id': os.environ.get('CLAUDE_SESSION_ID', 'cast-cli'),
-    'prompt_preview': '${pattern}'[:80],
-    'action': 'learned',
-    'matched_route': '${agent}',
-    'match_type': 'manual',
-    'pattern': '${pattern}',
-    'confidence': '${confidence}',
-}
-import subprocess
-subprocess.run(
-    ['python3', os.environ.get('CAST_DB_LOG_PY', os.path.expanduser('~/.claude/scripts/cast-db-log.py'))],
-    input=json.dumps(log), text=True, timeout=5
-)
-" 2>/dev/null || true
-}
-
-_cmd_profile() {
-  _require_db
-  local agent_filter=""
-  while [ "${#}" -gt 0 ]; do
-    case "$1" in
-      --agent)
-        agent_filter="${2:-}"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-
-  if [ -n "$agent_filter" ]; then
-    # Single-agent drill-down
-    CAST_DB_PATH="$CAST_DB_PATH" CAST_AGENT="$agent_filter" python3 -c "
-import sqlite3, os, sys
-
-db = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
-agent = os.environ.get('CAST_AGENT', '')
-
-try:
-    conn = sqlite3.connect(db)
-except Exception as e:
-    print(f'Error: cannot open DB: {e}', file=sys.stderr)
-    sys.exit(1)
-
-# Scorecard row for this agent
-row = conn.execute('''
-    SELECT agent,
-           COUNT(*) AS runs,
-           SUM(CASE WHEN status IN (\"DONE\",\"DONE_WITH_CONCERNS\") THEN 1 ELSE 0 END) AS successes,
-           SUM(CASE WHEN status = \"BLOCKED\" THEN 1 ELSE 0 END) AS blocked,
-           ROUND(AVG(cost_usd), 6) AS avg_cost
-    FROM agent_runs
-    WHERE agent = ?
-    GROUP BY agent
-''', (agent,)).fetchone()
-
-if not row:
-    print(f'No runs found for agent: {agent}')
-    conn.close()
-    sys.exit(0)
-
-name, runs, successes, blocked, avg_cost = row
-success_pct = round((successes / runs) * 100, 1) if runs > 0 else 0.0
-RED = '\033[0;31m'; YELLOW = '\033[0;33m'; GREEN = '\033[0;32m'; RESET = '\033[0m'; BOLD = '\033[1m'
-
-flag = ''
-if success_pct < 70 and blocked > 5:
-    flag = f' {RED}[UNDERPERFORMER]{RESET}'
-
-print(f'{BOLD}Agent Profile: {name}{RESET}{flag}')
-print(f'  Runs:        {runs}')
-print(f'  Success:     {GREEN if success_pct >= 80 else YELLOW if success_pct >= 70 else RED}{success_pct}%{RESET}')
-print(f'  Blocked:     {RED if blocked > 5 else \"\"}{blocked}{RESET if blocked > 5 else \"\"}')
-print(f'  Avg Cost:    \${avg_cost:.6f}')
-print()
-
-# Last 10 runs
-print(f'{BOLD}Last 10 runs:{RESET}')
-print(f'  {\"STARTED\":<22}  {\"STATUS\":<22}  {\"COST\":>10}  SUMMARY')
-print(f'  {\"-\"*22}  {\"-\"*22}  {\"-\"*10}  {\"-\"*40}')
-rows = conn.execute('''
-    SELECT started_at, status, cost_usd, task_summary
-    FROM agent_runs
-    WHERE agent = ?
-    ORDER BY started_at DESC
-    LIMIT 10
-''', (agent,)).fetchall()
-
-for r in rows:
-    started, st, cost, summary = r
-    started = (started or \"\")[:19]
-    st = (st or \"\").upper()
-    cost_str = f\"\${cost:.6f}\" if cost else \"\$0.000000\"
-    summary_str = (summary or \"-\")[:40]
-    color = GREEN if st in (\"DONE\", \"DONE_WITH_CONCERNS\") else RED if st == \"BLOCKED\" else YELLOW
-    print(f'  {started:<22}  {color}{st:<22}{RESET}  {cost_str:>10}  {summary_str}')
-
-conn.close()
-" 2>/dev/null || { _error "Failed to query cast.db — is the schema up to date?"; exit 1; }
-  else
-    # All-agents scorecard
-    CAST_DB_PATH="$CAST_DB_PATH" python3 -c "
-import sqlite3, os, sys
-
-db = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
-
-try:
-    conn = sqlite3.connect(db)
-except Exception as e:
-    print(f'Error: cannot open DB: {e}', file=sys.stderr)
-    sys.exit(1)
-
-rows = conn.execute('''
-    SELECT agent,
-           COUNT(*) AS runs,
-           SUM(CASE WHEN status IN (\"DONE\",\"DONE_WITH_CONCERNS\") THEN 1 ELSE 0 END) AS successes,
-           SUM(CASE WHEN status = \"BLOCKED\" THEN 1 ELSE 0 END) AS blocked,
-           ROUND(AVG(cost_usd), 6) AS avg_cost
-    FROM agent_runs
-    GROUP BY agent
-    ORDER BY runs DESC
-''').fetchall()
-
-conn.close()
-
-if not rows:
-    print('No agent runs in cast.db yet.')
-    sys.exit(0)
-
-RED = '\033[0;31m'; YELLOW = '\033[0;33m'; GREEN = '\033[0;32m'; RESET = '\033[0m'; BOLD = '\033[1m'; DIM = '\033[2m'
-HEADER_FMT = f'{BOLD}{{:<22}}  {{:>6}}  {{:>9}}  {{:>8}}  {{:>14}}{RESET}'
-ROW_FMT    = '{:<22}  {:>6}  {:>9}  {:>8}  {:>14}'
-
-print()
-print(HEADER_FMT.format('AGENT', 'RUNS', 'SUCCESS%', 'BLOCKED', 'AVG_COST_USD'))
-print(f'  {\"-\"*22}  {\"-\"*6}  {\"-\"*9}  {\"-\"*8}  {\"-\"*14}')
-
-for name, runs, successes, blocked, avg_cost in rows:
-    success_pct = round((successes / runs) * 100, 1) if runs > 0 else 0.0
-    underperformer = success_pct < 70 and blocked > 5
-    color = RED if underperformer else (GREEN if success_pct >= 80 else YELLOW)
-    flag = f' {RED}*{RESET}' if underperformer else ''
-    cost_str = f'\${avg_cost:.6f}' if avg_cost else '\$0.000000'
-    pct_str = f'{color}{success_pct}%{RESET}'
-    blk_str = f'{RED}{blocked}{RESET}' if blocked > 5 else str(blocked)
-    print(f'  {name:<22}  {runs:>6}  {pct_str:>9}  {blk_str:>8}  {cost_str:>14}{flag}')
-
-print()
-print(f'{DIM}* = underperformer: <70% success AND >5 BLOCKED{RESET}')
-print(f'{DIM}Tip: cast profile --agent <name> for drill-down{RESET}')
-print()
-" 2>/dev/null || { _error "Failed to query cast.db — is the schema up to date?"; exit 1; }
-  fi
-}
-
-_cmd_route_test() {
-  local prompt="${1:-}"
-  if [ -z "$prompt" ]; then
-    echo "Usage: cast route test \"<prompt>\"" >&2
-    exit 1
-  fi
-
-  local route_script="${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}/route.sh"
-  if [ ! -f "$route_script" ]; then
-    _error "route.sh not found at: $route_script"
-    exit 1
-  fi
-
-  # Run route.sh in dry-run mode; capture JSON result and stderr separately
-  local tmp_stderr
-  tmp_stderr="$(mktemp /tmp/cast-route-test-XXXXXX.err)"
-
-  local dry_result
-  dry_result="$(CAST_DRY_RUN=1 bash "$route_script" \
-    <<< "{\"prompt\":\"$prompt\"}" 2>"$tmp_stderr" || true)"
-
-  local stderr_out
-  stderr_out="$(cat "$tmp_stderr" 2>/dev/null || true)"
-  rm -f "$tmp_stderr" 2>/dev/null || true
-
-  # Parse the dry-run JSON
-  CAST_DRY_JSON="$dry_result" CAST_DRY_PROMPT="$prompt" python3 -c "
-import json, os, sys
-
-raw = os.environ.get('CAST_DRY_JSON', '')
-prompt = os.environ.get('CAST_DRY_PROMPT', '')
-SEP = '\u2500' * 45
-
-try:
-    d = json.loads(raw) if raw.strip() else {}
-except Exception:
-    d = {}
-
-match_type  = d.get('match_type', 'no_match')
-agent       = d.get('matched_agent') or '(none)'
-pattern     = d.get('match_pattern') or ''
-confidence  = d.get('nlu_confidence')
-
-print(f'Testing route for: \"{prompt}\"')
-print(SEP)
-
-if match_type == 'regex':
-    print(f'Stage:    regex')
-    print(f'Matched:  {agent}')
-    print(f'Pattern:  {pattern}')
-    print(f'Cost:     \$0.00 (no API call)')
-elif match_type == 'group':
-    print(f'Stage:    group dispatch')
-    print(f'Matched:  {agent}')
-    print(f'Pattern:  {pattern}')
-    print(f'Cost:     \$0.00 (no API call)')
-elif match_type == 'memory':
-    print(f'Stage:    memory-assisted routing')
-    print(f'Matched:  {agent}')
-    print(f'Pattern:  {pattern}')
-    print(f'Cost:     \$0.00 (no API call)')
-elif match_type == 'haiku_nlu':
-    conf_str = f'{confidence:.2f}' if confidence is not None else 'n/a'
-    print(f'Stage:    haiku NLU (no regex match)')
-    print(f'Matched:  {agent}')
-    print(f'Confidence: {conf_str}')
-    print(f'Cost:     ~\$0.0005 (Haiku API call)')
-elif match_type in ('no_match', None):
-    conf_str = f'{confidence:.2f}' if confidence is not None else 'n/a'
-    if confidence is not None:
-        print(f'Stage:    unmatched')
-        print(f'Matched:  (none)')
-        print(f'Confidence: {conf_str} (below 0.6 threshold)')
-        print(f'Cost:     ~\$0.0005 (Haiku API call made)')
-    else:
-        print(f'Stage:    unmatched')
-        print(f'Matched:  (none)')
-        print(f'Cost:     \$0.00 (no API call)')
-else:
-    print(f'Stage:    {match_type}')
-    print(f'Matched:  {agent}')
-    if pattern:
-        print(f'Pattern:  {pattern}')
-
-print(SEP)
-" 2>/dev/null || {
-    echo "Testing route for: \"$prompt\""
-    printf '%s\n' "$(printf '%.0s─' {1..45})"
-    echo "Stage:    error (could not parse result)"
-    echo "Raw:      $dry_result"
-    printf '%s\n' "$(printf '%.0s─' {1..45})"
-  }
-}
-
-_cmd_learn() {
-  if [ "${1:-}" = "--from-session" ]; then
-    _require_db
-    _learn_from_session
-    return
-  fi
-
-  local pattern="${1:-}"
-  local agent="${2:-}"
-  local confidence="soft"
-  local description=""
-
-  shift 2 2>/dev/null || true
-
-  # Parse optional flags
-  while [ "${#}" -gt 0 ]; do
-    case "$1" in
-      --confidence)
-        confidence="${2:-soft}"
-        shift 2
-        ;;
-      --description)
-        description="${2:-}"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-
-  if [ -z "$pattern" ] || [ -z "$agent" ]; then
-    echo "Usage: cast learn \"<pattern>\" <agent> [--confidence hard|soft] [--description \"...\"]" >&2
-    echo "       cast learn --from-session" >&2
-    exit 1
-  fi
-
-  # Validate confidence
-  if [ "$confidence" != "hard" ] && [ "$confidence" != "soft" ]; then
-    echo "Error: --confidence must be 'hard' or 'soft' (got: $confidence)" >&2
-    exit 1
-  fi
-
-  # Validate agent
-  if [ ! -f "${CAST_AGENTS_DIR}/${agent}.md" ]; then
-    echo "Agent not found: $agent" >&2
-    echo "Available agents:" >&2
-    ls "${CAST_AGENTS_DIR}/" 2>/dev/null | sed 's/\.md$//' | sort | sed 's/^/    /' >&2
-    exit 1
-  fi
-
-  _require_db
-  _do_learn "$pattern" "$agent" "$confidence" "$description"
-}
-
-# ── Subcommand: compat ───────────────────────────────────────────────────────
-_cmd_compat() {
-  local action="${1:-test}"
-  shift 2>/dev/null || true
-  local compat_sh="${CAST_SCRIPTS_DIR}/cast-compat.sh"
-  if [ ! -f "$compat_sh" ]; then
-    _error "cast-compat.sh not found: $compat_sh"
-    exit 1
-  fi
-  case "$action" in
-    test) bash "$compat_sh" test ;;
-    save) bash "$compat_sh" save ;;
-    diff) bash "$compat_sh" diff ;;
-    *) _error "Unknown compat action: $action (use: test|save|diff)"; exit 1 ;;
-  esac
-}
-
-# ── Subcommand: upgrade ───────────────────────────────────────────────────────
-_cmd_upgrade() {
-  local action="${1:-list}"
-  shift 2>/dev/null || true
-  local upgrade_sh="${CAST_SCRIPTS_DIR}/cast-upgrade-check.sh"
-  local candidates="${HOME}/.claude/cast/upgrade-candidates.json"
-  case "$action" in
-    check)
-      if [ ! -f "$upgrade_sh" ]; then
-        _error "cast-upgrade-check.sh not found: $upgrade_sh"
-        exit 1
-      fi
-      bash "$upgrade_sh"
-      ;;
-    list)
-      if [ -f "$candidates" ]; then
-        python3 -c "
-import json, sys
-try:
-    items = json.load(open('$candidates'))
-    if not items:
-        print('No upgrade candidates found.')
-    else:
-        for i in items:
-            cat = i.get('category','?')
-            print(f\"[{cat}] {i.get('item','')}  —  {i.get('cast_component','')}\")
-            print(f\"      {i.get('reason','')}\")
-except Exception as e:
-    print(f'Error reading candidates: {e}', file=sys.stderr)
-" 2>/dev/null
-      else
-        _info "No upgrade candidates yet. Run: cast upgrade check"
-      fi
-      ;;
-    clear)
-      if [ -f "$candidates" ]; then
-        rm -f "$candidates"
-        _success "Cleared upgrade candidates."
-      else
-        _info "No upgrade candidates file to clear."
-      fi
-      ;;
-    *) _error "Unknown upgrade action: $action (use: check|list|clear)"; exit 1 ;;
-  esac
-}
-
 # ── Subcommand: doctor ───────────────────────────────────────────────────────
 _cmd_doctor() {
   local overall_ok=1
 
-  # Traffic-light symbols
-  local OK="[${C_GREEN}✓${C_RESET}]"
-  local WARN="[${C_YELLOW}!${C_RESET}]"
-  local ERR="[${C_RED}✗${C_RESET}]"
-  local INFO="[${C_CYAN}i${C_RESET}]"
+  local OK="[${C_GREEN}ok${C_RESET}]"
+  local WARN="[${C_YELLOW}!!${C_RESET}]"
+  local ERR="[${C_RED}ERR${C_RESET}]"
+  local INFO="[${C_CYAN}--${C_RESET}]"
 
-  printf "${C_BOLD}CAST Doctor — system health check${C_RESET}\n"
-  printf "%s\n" "$(python3 -c "print('─' * 52)" 2>/dev/null || printf '%0.s─' {1..52})"
+  printf "${C_BOLD}CAST Doctor${C_RESET}\n"
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
 
-  # ── 1. cast.db accessible ────────────────────────────────────────────────
+  # 1. cast.db accessible
   if sqlite3 "$CAST_DB_PATH" 'SELECT 1' >/dev/null 2>&1; then
     printf "%b cast.db accessible (%s)\n" "$OK" "$CAST_DB_PATH"
   else
     printf "%b cast.db not accessible (%s)\n" "$ERR" "$CAST_DB_PATH"
     overall_ok=0
-    # Cannot proceed with DB checks
-    printf "\n  Cannot continue DB checks — fix cast.db first.\n"
-    printf "  Run: bash %s/cast-db-init.sh\n" "$CAST_SCRIPTS_DIR"
+    printf "\n  Run: bash %s/cast-db-init.sh\n" "$CAST_SCRIPTS_DIR"
     return 1
   fi
 
-  # ── 2. Schema current ────────────────────────────────────────────────────
-  local required_tables="sessions agent_runs agent_memories task_queue routing_events budgets"
+  # 2. Schema — 4 required tables
+  local required_tables="sessions agent_runs agent_memories routing_events"
   local missing_tables=""
   local found_count=0
   for tbl in $required_tables; do
@@ -2051,16 +721,14 @@ _cmd_doctor() {
       missing_tables="${missing_tables} ${tbl}"
     fi
   done
-  local total_required
-  total_required=$(echo "$required_tables" | wc -w | tr -d ' ')
   if [ -z "$missing_tables" ]; then
     printf "%b Schema: %d tables present\n" "$OK" "$found_count"
   else
-    printf "%b Schema: %d/%d tables found — missing:%s\n" "$WARN" "$found_count" "$total_required" "$missing_tables"
+    printf "%b Schema: %d/4 tables found — missing:%s\n" "$WARN" "$found_count" "$missing_tables"
     overall_ok=0
   fi
 
-  # ── 3. Hooks registered ──────────────────────────────────────────────────
+  # 3. Hooks registered
   local settings_file="${HOME}/.claude/settings.json"
   local hook_count=0
   if [ -f "$settings_file" ]; then
@@ -2078,20 +746,17 @@ PYEOF
     2>/dev/null || echo 0)"
   fi
   if [ "${hook_count:-0}" -gt 3 ]; then
-    printf "%b Hooks registered: %d hooks found\n" "$OK" "$hook_count"
-  elif [ "${hook_count:-0}" -gt 0 ]; then
-    printf "%b Hooks registered: only %d hooks found (expected >3)\n" "$WARN" "$hook_count"
-    overall_ok=0
+    printf "%b Hooks registered: %d entries\n" "$OK" "$hook_count"
   else
-    printf "%b Hooks registered: 0 hooks found in %s\n" "$WARN" "$settings_file"
+    printf "%b Hooks registered: only %d entries found\n" "$WARN" "$hook_count"
     overall_ok=0
   fi
 
-  # ── 4. Hook scripts exist ────────────────────────────────────────────────
+  # 4. Hook scripts exist
   if [ -f "$settings_file" ]; then
     local missing_scripts
     missing_scripts="$(python3 - "$settings_file" <<'PYEOF'
-import json, sys, re, os
+import json, sys, os
 
 try:
     with open(sys.argv[1]) as f:
@@ -2101,29 +766,23 @@ except Exception:
     sys.exit(0)
 
 missing = []
+interpreters = {"bash", "sh", "python3", "python", "node"}
 for event, entries in hooks.items():
     if not isinstance(entries, list):
         entries = [entries]
     for entry in entries:
-        cmd = ""
-        if isinstance(entry, dict):
-            cmd = entry.get("command", "")
-        elif isinstance(entry, str):
-            cmd = entry
-        if not cmd:
-            continue
-        # Extract first token that looks like a file path
-        parts = cmd.split()
-        # Skip interpreter prefix (bash, sh, python3, etc.)
-        interpreters = {"bash", "sh", "python3", "python", "node", "ruby", "perl"}
-        for part in parts:
-            if part in interpreters:
+        inner = entry.get("hooks", []) if isinstance(entry, dict) else []
+        for h in inner:
+            if not isinstance(h, dict):
                 continue
-            if part.startswith("-"):
+            cmd = h.get("command", "")
+            if not cmd:
                 continue
-            expanded = os.path.expanduser(part)
-            if "/" in expanded:
-                if not os.path.isfile(expanded):
+            for part in cmd.split():
+                if part in interpreters or part.startswith("-"):
+                    continue
+                expanded = os.path.expanduser(part)
+                if "/" in expanded and not os.path.isfile(expanded):
                     missing.append(expanded)
                 break
 
@@ -2140,15 +799,12 @@ PYEOF
         overall_ok=0
       done <<< "$missing_scripts"
     fi
-  else
-    printf "%b Hook scripts: settings.json not found at %s\n" "$WARN" "$settings_file"
-    overall_ok=0
   fi
 
-  # ── 5. Events dir writable ───────────────────────────────────────────────
+  # 5. Events dir writable
   local events_dir="${HOME}/.claude/cast/events"
   if [ -d "$events_dir" ] && [ -w "$events_dir" ]; then
-    printf "%b Events dir writable (%s)\n" "$OK" "$events_dir"
+    printf "%b Events dir writable\n" "$OK"
   elif [ -d "$events_dir" ]; then
     printf "%b Events dir not writable: %s\n" "$WARN" "$events_dir"
     overall_ok=0
@@ -2157,44 +813,30 @@ PYEOF
     overall_ok=0
   fi
 
-  # ── 6. route.sh: routing_events row count ────────────────────────────────
-  local routing_row_count
-  routing_row_count="$(sqlite3 "$CAST_DB_PATH" 'SELECT COUNT(*) FROM routing_events;' 2>/dev/null || echo 0)"
-  if [ "${routing_row_count:-0}" -gt 0 ]; then
-    printf "%b routing_events: %d rows\n" "$OK" "$routing_row_count"
-  else
-    printf "%b routing_events: 0 rows — route.sh may have wrong DB path\n" "$WARN"
-    overall_ok=0
+  # 6. Agent count
+  local agent_count=0
+  if [ -d "$CAST_AGENTS_DIR" ]; then
+    agent_count="$(ls "$CAST_AGENTS_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')"
   fi
+  printf "%b Agents: %d installed\n" "$INFO" "$agent_count"
 
-  # ── 7. Budget table rows (info only) ─────────────────────────────────────
-  local budget_row_count
-  budget_row_count="$(sqlite3 "$CAST_DB_PATH" 'SELECT COUNT(*) FROM budgets;' 2>/dev/null || echo 0)"
-  if [ "${budget_row_count:-0}" -gt 0 ]; then
-    printf "%b Budget table: %d limit(s) configured\n" "$INFO" "$budget_row_count"
-  else
-    printf "%b Budget table: no limits set (run: cast budget set --global <usd>)\n" "$INFO"
-  fi
-
-  # ── 8. BATS available ────────────────────────────────────────────────────
+  # 7. BATS available
   if command -v bats >/dev/null 2>&1; then
-    local bats_path
-    bats_path="$(command -v bats)"
-    printf "%b BATS available: %s\n" "$OK" "$bats_path"
+    printf "%b BATS available\n" "$OK"
   else
-    printf "%b BATS not found in PATH (install: brew install bats-core)\n" "$WARN"
+    printf "%b BATS not found (install: brew install bats-core)\n" "$WARN"
     overall_ok=0
   fi
 
-  # ── 9. Version ───────────────────────────────────────────────────────────
+  # 8. Version
   printf "%b Version: %s\n" "$INFO" "$CAST_VERSION"
 
-  # ── Summary ──────────────────────────────────────────────────────────────
-  printf "%s\n" "$(python3 -c "print('─' * 52)" 2>/dev/null || printf '%0.s─' {1..52})"
+  # Summary
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
     printf "%b All checks passed\n" "$OK"
   else
-    printf "%b Some checks need attention (see %b above)\n" "$WARN" "${C_YELLOW}[!]/${C_RED}[✗]${C_RESET}"
+    printf "%b Some checks need attention\n" "$WARN"
   fi
 }
 
@@ -2205,14 +847,8 @@ _cmd_exec() {
 
   while [ "${#}" -gt 0 ]; do
     case "$1" in
-      --resume)
-        mode_flag="--resume"
-        shift
-        ;;
-      --status)
-        mode_flag="--status"
-        shift
-        ;;
+      --resume) mode_flag="--resume"; shift ;;
+      --status) mode_flag="--status"; shift ;;
       --help|-h)
         cat <<USAGE
 Usage: cast exec [--resume | --status] <plan-file>
@@ -2220,23 +856,11 @@ Usage: cast exec [--resume | --status] <plan-file>
   <plan-file>            Execute all batches defined in the plan manifest
   --resume <plan-file>   Skip completed batches, resume from first non-complete
   --status <plan-file>   Print current checkpoint state and exit
-
-The plan file must contain a \`\`\`json dispatch\`\`\` fenced block with the
-Agent Dispatch Manifest JSON (plan_id, batches, agents, verify_files).
-
-Examples:
-  cast exec ~/.claude/plans/2026-03-27-cast-phase-9.75b.md
-  cast exec --resume ~/.claude/plans/2026-03-27-cast-phase-9.75b.md
-  cast exec --status ~/.claude/plans/2026-03-27-cast-phase-9.75b.md
-
-Agent logs are written to: /tmp/cast-exec-{plan_id}-batch-{n}-{agent}.log
-Checkpoint state:          ~/.claude/cast/exec-state/{plan_id}.json
 USAGE
         return 0
         ;;
       -*)
         _error "Unknown flag: $1"
-        printf "  Use: cast exec --help\n" >&2
         return 1
         ;;
       *)
@@ -2257,15 +881,12 @@ USAGE
     return 1
   fi
 
-  # Resolve cast-exec.sh: prefer installed location, fall back to repo
   local exec_script="${CAST_SCRIPTS_DIR}/cast-exec.sh"
   if [ ! -f "$exec_script" ]; then
     exec_script="${CAST_REPO_DIR}/scripts/cast-exec.sh"
   fi
   if [ ! -f "$exec_script" ]; then
-    _error "cast-exec.sh not found. Expected at:"
-    printf "  %s\n" "${CAST_SCRIPTS_DIR}/cast-exec.sh" >&2
-    printf "  %s\n" "${CAST_REPO_DIR}/scripts/cast-exec.sh" >&2
+    _error "cast-exec.sh not found"
     return 1
   fi
 
@@ -2276,7 +897,45 @@ USAGE
   fi
 }
 
-# ── Main dispatch ─────────────────────────────────────────────────────────────
+# ── Subcommand: install-completions ──────────────────────────────────────────
+_cmd_install_completions() {
+  local completions_src="${CAST_REPO_DIR}/completions"
+
+  if [ ! -d "$completions_src" ]; then
+    _warn "Completions directory not found: $completions_src"
+    return 1
+  fi
+
+  local zsh_installed=0
+  local bash_installed=0
+
+  local zsh_comp="${completions_src}/_cast"
+  if [ -f "$zsh_comp" ]; then
+    local zsh_dir="${HOME}/.zsh/completions"
+    mkdir -p "$zsh_dir"
+    cp "$zsh_comp" "${zsh_dir}/_cast"
+    zsh_installed=1
+    _success "zsh completion installed: ${zsh_dir}/_cast"
+    _info "  Add to ~/.zshrc: fpath=(~/.zsh/completions \$fpath) && autoload -U compinit && compinit"
+  fi
+
+  local bash_comp="${completions_src}/cast.bash"
+  if [ -f "$bash_comp" ]; then
+    local bash_dir="${HOME}/.bash_completion.d"
+    mkdir -p "$bash_dir"
+    cp "$bash_comp" "${bash_dir}/cast"
+    bash_installed=1
+    _success "bash completion installed: ${bash_dir}/cast"
+    _info "  Add to ~/.bashrc: source ~/.bash_completion.d/cast"
+  fi
+
+  if [ "$zsh_installed" -eq 0 ] && [ "$bash_installed" -eq 0 ]; then
+    _warn "No completion files found in $completions_src"
+    return 1
+  fi
+}
+
+# ── Main dispatch ────────────────────────────────────────────────────────────
 if [ "$#" -gt 0 ]; then
   CAST_ARGS=("$@")
 else
@@ -2297,28 +956,14 @@ SUBCOMMAND="${1:-}"
 shift 2>/dev/null || true
 
 case "$SUBCOMMAND" in
-  doctor)               _cmd_doctor "$@" ;;
+  status)               _cmd_status "$@" ;;
   exec)                 _cmd_exec "$@" ;;
-  compat)               _cmd_compat "$@" ;;
-  upgrade)              _cmd_upgrade "$@" ;;
-  run)                  _cmd_run "$@" ;;
-  queue)                _cmd_queue "$@" ;;
   memory)               _cmd_memory "$@" ;;
   budget)               _cmd_budget "$@" ;;
-  audit)                _cmd_audit "$@" ;;
-  airgap)               _cmd_airgap "$@" ;;
-  daemon)               _cmd_daemon "$@" ;;
-  status)               _cmd_status "$@" ;;
+  agents)               _cmd_agents "$@" ;;
+  hooks)                _cmd_hooks "$@" ;;
+  doctor)               _cmd_doctor "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
-  learn)                _cmd_learn "$@" ;;
-  profile)              _cmd_profile "$@" ;;
-  route)
-    shift
-    case "${1:-}" in
-      test) shift; _cmd_route_test "$@" ;;
-      *) echo "Usage: cast route test \"<prompt>\"" >&2; exit 1 ;;
-    esac
-    ;;
   ""|--help|-h)
     _usage
     exit 0

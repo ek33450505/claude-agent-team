@@ -5,3 +5,4 @@ agent-memory-local/
 projects/
 plans/
 .claude/
+__pycache__/

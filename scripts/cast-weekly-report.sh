@@ -54,11 +54,11 @@ TOP_SESSIONS=$(q "SELECT printf('| %-30s | \$%-8s | %s |', COALESCE(project,'unk
 # Agent performance (DONE / DONE_WITH_CONCERNS / BLOCKED / total)
 AGENT_STATS=$(q "SELECT printf('| %-20s | %4d | %4d | %4d | %4d |', agent, SUM(CASE WHEN status='DONE' THEN 1 ELSE 0 END), SUM(CASE WHEN status='DONE_WITH_CONCERNS' THEN 1 ELSE 0 END), SUM(CASE WHEN status='BLOCKED' THEN 1 ELSE 0 END), COUNT(*)) FROM agent_runs WHERE started_at >= '${WEEK_START}' GROUP BY agent ORDER BY COUNT(*) DESC;")
 
-# Zombie tasks (pending/claimed older than 24h)
-ZOMBIES=$(q "SELECT printf('| %-20s | %s | %s |', agent, created_at, COALESCE(task,'')) FROM task_queue WHERE status IN ('pending','claimed') AND created_at < datetime('now','-1 day') LIMIT 10;")
+# Zombie agent runs (stuck running older than 24h)
+ZOMBIES=$(q "SELECT printf('| %-20s | %s | %s |', agent, started_at, COALESCE(task_summary,'')) FROM agent_runs WHERE status='running' AND started_at < datetime('now','-1 day') LIMIT 10;")
 
-# Top failure reasons from task_queue
-BLOCKED=$(q "SELECT printf('| %3d | %s |', COUNT(*), COALESCE(SUBSTR(result_summary,1,60),'(none)')) FROM task_queue WHERE status='failed' AND created_at >= '${WEEK_START}' GROUP BY result_summary ORDER BY COUNT(*) DESC LIMIT 5;")
+# Top failure reasons from agent_runs
+BLOCKED=$(q "SELECT printf('| %3d | %s |', COUNT(*), COALESCE(SUBSTR(task_summary,1,60),'(none)')) FROM agent_runs WHERE status IN ('BLOCKED','failed') AND started_at >= '${WEEK_START}' GROUP BY task_summary ORDER BY COUNT(*) DESC LIMIT 5;")
 
 # Week-over-week comparison
 PREV_WEEK=$(date -v-14d +%Y-%m-%d 2>/dev/null || date -d '14 days ago' +%Y-%m-%d)

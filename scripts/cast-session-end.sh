@@ -164,8 +164,14 @@ archive_category \
   "$TTL_REPORTS" \
   "reports"
 
-# === DB PRUNING ===
+# === UPDATE sessions.ended_at ===
 DB="${CLAUDE_DIR}/cast.db"
+if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB" ]; then
+  ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  sqlite3 "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
+fi
+
+# === DB PRUNING ===
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB" ]; then
   sqlite3 "$DB" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
   sqlite3 "$DB" "DELETE FROM sessions WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true

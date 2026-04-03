@@ -37,7 +37,7 @@ log_action() {
 }
 
 # --- Check total weekly spend vs budget ---
-TOTAL_COST=$(q "SELECT COALESCE(SUM(total_cost_usd),0) FROM sessions WHERE started_at >= '${WEEK_START}';")
+TOTAL_COST=$(q "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= '${WEEK_START}';")
 if python3 -c "import sys; sys.exit(0 if float('${TOTAL_COST}') > float('${BUDGET_USD}') else 1)" 2>/dev/null; then
   echo "[CAST-BUDGET-WARN] Weekly spend \$${TOTAL_COST} exceeds budget \$${BUDGET_USD}" >&2
   log_action "budget_warn" "spend=${TOTAL_COST} budget=${BUDGET_USD}"

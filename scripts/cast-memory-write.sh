@@ -111,8 +111,8 @@ if USE_CAST_DB:
         sys.exit(0)
     db_execute(
         "INSERT INTO agent_memories "
-        "(agent, project, type, name, description, content, created_at, updated_at, embedding) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        "(agent, project, type, name, description, content, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (agent, project or None, mem_type, name, description, content, now, now)
     )
     rows = db_query("SELECT last_insert_rowid() AS id")
@@ -135,8 +135,8 @@ else:
         sys.exit(0)
     cur.execute(
         "INSERT INTO agent_memories "
-        "(agent, project, type, name, description, content, created_at, updated_at, embedding) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        "(agent, project, type, name, description, content, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (agent, project or None, mem_type, name, description, content, now, now)
     )
     conn.commit()
