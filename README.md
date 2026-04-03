@@ -1,9 +1,9 @@
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-3.4-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-4.1-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-324-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-262-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -42,7 +42,7 @@ User Prompt
       ┌────────────▼────────────┐
       │   PreToolUse hooks      │
       │  • pre-tool-guard.sh    │  ← blocks raw git commit/push
-      │  • cast-security-guard  │  ← blocks curl/ssh on threat patterns
+      │  • cast-audit-hook.sh   │  ← logs file modifications
       │  • cast-headless-guard  │  ← auto-answers AskUserQuestion
       └────────────┬────────────┘
                    │
@@ -56,8 +56,6 @@ User Prompt
       ┌────────────▼────────────┐
       │   PostToolUse hooks     │
       │  • post-tool-hook.sh    │  ← injects [CAST-REVIEW] after writes
-      │  • cast-cost-tracker    │  ← logs dispatch to cast.db (async)
-      │  • cast-budget-alert    │  ← fires if token budget exceeded (async)
       └────────────┬────────────┘
                    │
       ┌────────────▼────────────┐
@@ -74,11 +72,12 @@ User Prompt
       │  cast-session-end.sh    │  ← archival, DB pruning, memory sync
       └────────────┬────────────┘
                    │
-      ┌────────────▼────────────┐
-      │        cast.db          │
-      │  sessions │ agent_runs  │
-      │  routing_events │ budgets│
-      └─────────────────────────┘
+      ┌────────────────────────────┐
+      │        cast.db             │
+      │  sessions  │  agent_runs   │
+      │  routing_events            │
+      │  agent_memories            │
+      └────────────────────────────┘
                    │
       ┌────────────▼────────────┐
       │  claude-code-dashboard  │
@@ -97,11 +96,10 @@ User Prompt
 |---|---|---|
 | `AgentTool` dispatches one subagent per call, no sequencing | Orchestrator executes Agent Dispatch Manifests: parallel batches fire simultaneously, sequential batches gate on prior completion, `owns_files` prevents write conflicts | Fills the gap left by the native coordinator pattern not yet shipping |
 | No post-agent successor logic | Chain-maps: `code-writer` → `code-reviewer` → `commit` enforced by `PostToolUse` hook injecting `[CAST-CHAIN]` directive | Makes quality gates structural, not advisory |
-| Hook system exists but carries no persistent state | `cast.db` (SQLite, WAL mode): 9 tables — `sessions`, `agent_runs`, `routing_events`, `task_queue`, `agent_memories`, `budgets`, `mismatch_signals`, `quality_gates`, `dispatch_decisions` | Turns ephemeral hook events into a queryable audit trail |
-| No per-tool cost attribution | `cast-cost-tracker.sh` logs every agent dispatch; `cast-budget-alert.sh` fires on budget breach; dashboard `/token-spend` shows burn by agent | 20x cost gap between Haiku and Sonnet makes per-agent tracking worth the overhead |
-| No routing feedback loop | `mismatch_signals` table records rapid re-prompts after routing; feeds keyword updates to `agent_memories` | Self-improving dispatch without model fine-tuning |
-| `PostCompact` fires but has no default handler | `cast-post-compact-hook.sh` reinjects plan context and emits `context_compacted` to `cast.db` | Prevents plan amnesia across the 3-tier compaction cycle |
-| `PreToolUse` exit codes 0/2 are the permission gate | `pre-tool-guard.sh` (exit 2 on raw `git commit`/`push`), `cast-security-guard.sh` (exit 2 on threats), `cast-audit-hook.sh` (SHA256 fingerprint + PII advisory) | Uses the same gate native permission rules use — no separate enforcement layer |
+| Hook system exists but carries no persistent state | `cast.db` (SQLite, WAL mode): 4 tables — `sessions`, `agent_runs`, `routing_events`, `agent_memories` | Turns ephemeral hook events into a queryable audit trail |
+| No native cost display beyond statusline | Native `cost.total_cost_usd` exposed in statusline format; CAST statusline script surfaces it per-session | Claude Code now provides cost natively; CAST presents it |
+| `PostCompact` fires but has no default handler | `cast-pre-compact-hook.sh` detects dumb-zone onset; `cast-post-compact-hook.sh` reinjects plan context | Both Pre and PostCompact are covered to prevent plan amnesia |
+| `PreToolUse` exit codes 0/2 are the permission gate | `pre-tool-guard.sh` (exit 2 on raw `git commit`/`push`), `cast-audit-hook.sh` (file modification logging) | Security guard behavior migrated to native sandbox `denyRead`/`denyWrite` rules |
 
 ### On the native coordinator pattern
 
@@ -167,24 +165,19 @@ All agents carry `memory: local` — each accumulates session knowledge in `~/.c
 
 | Event | Hook Script | What It Does |
 |---|---|---|
-| `SessionStart` | `cast-session-start.sh` | Opens session row in cast.db |
+| `SessionStart` | `cast-session-start-hook.sh` | Opens session row in cast.db |
 | `UserPromptSubmit` | `cast-user-prompt-hook.sh` | Logs prompt metadata to routing_events |
+| `InstructionsLoaded` | `cast-instructions-loaded-hook.sh` | Logs session context load |
 | `PreToolUse:Bash` | `pre-tool-guard.sh` | Hard-blocks `git commit` / `git push` (exit 2) |
-| `PreToolUse:Bash` | `cast-security-guard.sh` | Blocks curl/ssh on threat patterns |
-| `PreToolUse:Bash` | `cast-headless-guard.sh` | Auto-answers AskUserQuestion in pipelines |
+| `PreToolUse:AskUserQuestion` | `cast-headless-guard.sh` | Auto-answers AskUserQuestion in pipelines |
 | `PreToolUse:Write\|Edit` | `cast-audit-hook.sh` | Logs file modification events |
-| `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Injects [CAST-REVIEW] directive after code changes |
-| `PostToolUse:Agent` | `cast-cost-tracker.sh` | Logs agent dispatch to cast.db (async) |
-| `PostToolUse:Agent` | `cast-budget-alert.sh` | Fires alert if token budget exceeded (async) |
+| `PostToolUse:Write\|Edit\|Agent\|Bash` | `post-tool-hook.sh` | Injects [CAST-REVIEW] directive after code changes |
+| `PostToolUseFailure` | `cast-tool-failure-hook.sh` | Logs tool failures to cast.db |
+| `PreCompact` | `cast-pre-compact-hook.sh` | Detects dumb-zone onset, emits pre_compact event |
 | `PostCompact` | `cast-post-compact-hook.sh` | Reinjects plan context, emits context_compacted |
-| `TaskCreated` | `cast-task-created-hook.sh` | Emits task_created event to cast.db (async) |
-| `TaskCompleted` | `cast-task-completed-hook.sh` | Emits task_completed event to cast.db (async) |
-| `InstructionsLoaded` | `cast-instructions-loaded.sh` | Logs session context load |
 | `SubagentStart` | `cast-subagent-start-hook.sh` | Emits task_claimed on agent spawn (async) |
 | `SubagentStop` | `cast-subagent-stop-hook.sh` | Closes agent_runs row on completion (async) |
-| `Stop` | `cast-session-end.sh` | Archives session, prunes events, syncs memory |
-| `StopFailure` | `cast-stop-failure-hook.sh` | Logs abnormal session termination |
-| `PostToolUseFailure` | `cast-tool-failure-hook.sh` | Logs tool failures to cast.db |
+| `SessionEnd` | `cast-session-end.sh` | Archives session, closes DB row, syncs memory |
 
 **Exit code convention:**
 - Exit 0 — hook passed, tool call proceeds
@@ -200,9 +193,8 @@ All agents carry `memory: local` — each accumulates session knowledge in `~/.c
 | Table | Contents |
 |---|---|
 | `sessions` | Session start/end, model, token counts |
-| `agent_runs` | Every dispatch: agent, model, duration, status |
+| `agent_runs` | Every dispatch: agent, model, duration, status, batch_id |
 | `routing_events` | Prompt routing records, event types, JSON payloads |
-| `budgets` | Per-session and per-agent token budgets |
 | `agent_memories` | Synced from `~/.claude/agent-memory-local/` on Stop |
 
 ```bash
@@ -400,19 +392,8 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v3.1 | Async hooks, worktree isolation, per-agent memory, headless pipelines, GitHub CI |
 | v3.3 | Audit hardening: WAL mode, structured error logging, SQL injection fix, PII advisory mode, orchestrator resilience (checkpoints, policy gate, TRUNCATED classification), 4 scripts committed to repo |
 | v3.4 | Security hardening: Python injection fix, path injection fix, --model flag on CLI; portability: __HOME__ tokens replace hardcoded paths; settings cleanup; daemon cleanup (flock lockfile); frontend-qa agent added; docs/native-tools-reference.md; 324 BATS tests |
-
----
-
-## Reliability (Phase 11)
-
-v3.3 hardened the runtime against the most common failure modes:
-
-- **SQLite WAL mode** — concurrent hook writes no longer contend; subagent hooks retry up to 3× on `SQLITE_BUSY`.
-- **Structured error logging** — `cast-db-log.py` and all critical hook scripts write failures to `~/.claude/logs/db-write-errors.log` instead of swallowing them silently.
-- **SQL injection fix** — `cast-memory-write.sh` replaced `sed` string escaping with Python parameterized queries.
-- **PII enforcement is advisory by default** — `cast-audit-hook.sh` warns on PII patterns without blocking. Set `CAST_PII_ENFORCEMENT=strict` to restore hard-blocking. A 9-pattern safelist eliminates common false positives.
-- **Orchestrator resilience** — TRUNCATED responses are classified separately from BLOCKED (no cascade failures). A checkpoint system allows plans to survive session disconnects. A policy gate reads `config/policies.json` before each batch dispatch.
-- **No approval gate** — orchestrator queue display is informational; execution is immediate.
+| v4.0 | Major cleanup: gut 33 hooks to 15, slim CLI from 2331→976 lines, installer 351→193 lines; drop 5 empty DB tables (9→4 canonical); delete observe-* shadow system, daemon, routing scripts; rebuild cast.db at v7 with batch_id; 271 BATS tests |
+| v4.1 | Native adoption: replace cost-tracker with native statusline, remove prettier hook, delete 4 dead routing scripts, migrate security guard to sandbox rules, add PreCompact hook, add effort/background/initialPrompt to agent frontmatter; 262 BATS tests |
 
 ## Contributing
 

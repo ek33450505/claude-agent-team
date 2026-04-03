@@ -1,5 +1,70 @@
 # CHANGELOG
 
+## v4.1 — Native Adoption (2026-04-02)
+
+Adopt native Claude Code features, remove CAST overlap.
+
+### Replaced
+- `cast-cost-tracker.sh` removed — native `cost.total_cost_usd` field in statusline replaces it
+- `cast-security-guard.sh` removed — security guard behavior migrated to sandbox `denyRead`/`denyWrite` rules in settings.json
+- Prettier `PostToolUse` hook removed — Claude Code formats natively
+
+### Deleted (dead routing scripts)
+- `cast-route-install.sh` — model-based routing via agent frontmatter makes this obsolete
+- `cast-route-review.sh` — same rationale
+- `cast-routing-feedback.sh` — mismatch feedback loop no longer needed
+- `cast-mismatch-analyzer.sh` — depended on deleted mismatch_signals table
+
+### Added
+- `cast-pre-compact-hook.sh` — `PreCompact` hook for dumb-zone detection
+- `cast-statusline.sh` — surfaces native cost and token data in session statusline
+- `settings.json` committed to repo for reproducible installs
+
+### Agent Frontmatter
+- `code-reviewer`: `background: true` added — runs without blocking the main session
+- `morning-briefing`: `initialPrompt: "/morning"` added
+- All agents: `effort` frontmatter verified across all 17 definitions
+
+### Tests
+- `cast-security-guard.bats` removed (9 tests for deleted script)
+- **262 BATS tests passing (0 failures)**
+
+---
+
+## v4.0 — CAST Rebuild (2026-04-02)
+
+Major cleanup removing accumulated rot from v1–v3.4. No new features — reduction only.
+
+### Removals
+- Deleted `observe-*` shadow system (7 scripts)
+- Removed 21 hooks from settings.json; consolidated guard hooks with matchers
+- Gutted `bin/cast`: removed daemon, airgap, profile, route-test, learn, compat, upgrade, queue, run, audit subcommands
+- Removed 17 stale files: research/, scripts/archive/, templates, plist, requirements.txt
+- Deleted 5 test files for removed features
+- Removed `CLAUDE.md.template` (replaced by committed settings.json)
+
+### Schema
+- cast.db rebuilt at v7: dropped 5 empty tables (`task_queue`, `budgets`, `mismatch_signals`, `quality_gates`, `dispatch_decisions`)
+- Added `batch_id` column to `agent_runs`
+- Canonical tables: `sessions`, `agent_runs`, `routing_events`, `agent_memories`
+
+### Reduced
+- `bin/cast`: 2331 → 976 lines
+- `install.sh`: 351 → 193 lines (removed templates, daemon, managed-settings merge)
+- Hooks wired in settings.json: 33 → 15 (then 13 after v4.1)
+
+### Added
+- `cast agents` subcommand — reads agent frontmatter, lists roster
+- `cast hooks` subcommand — reads settings.json, lists wired hooks
+- `sessions.ended_at` UPDATE in `cast-session-end.sh`
+- `batch_id` support in `cast-subagent-start-hook.sh`
+
+### Tests
+- Rewrote `cast-cli.bats` for v4 subcommands
+- **271 BATS tests passing (0 failures)**
+
+---
+
 ## v3.4 — Security & Portability Hardening (2026-04-02)
 
 33-issue audit pass. No feature additions — hardening and correctness only.
