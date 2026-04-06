@@ -26,9 +26,10 @@ CAST_STATE_DIR="${CAST_DIR}/state"
 CAST_REVIEWS_DIR="${CAST_DIR}/reviews"
 CAST_ARTIFACTS_DIR="${CAST_DIR}/artifacts"
 
-# --- Keychain fallback (OPT-IN) ---
-# Only attempts Keychain lookup if ANTHROPIC_API_KEY is NOT already set.
-# This is a passive fallback — it never overrides an existing env var.
+# --- API key resolution (priority: env var override > Keychain > unset) ---
+# Keychain is the PRIMARY source on macOS. The env var acts as an override:
+# if ANTHROPIC_API_KEY is already set in the environment, it wins and we skip
+# the Keychain lookup entirely. If neither is available, we continue without it.
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
   _keychain_key=$(security find-generic-password -s cast-anthropic-api-key -a cast -w 2>/dev/null || true)
   if [[ -n "$_keychain_key" ]]; then
