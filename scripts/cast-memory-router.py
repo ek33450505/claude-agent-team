@@ -24,6 +24,7 @@ import re
 import math
 import argparse
 import sqlite3
+import struct
 from datetime import datetime, timezone
 
 STOP_WORDS = {
@@ -41,6 +42,48 @@ STOP_WORDS = {
 
 VALID_TYPES = {'user', 'feedback', 'project', 'reference', 'procedural'}
 
+OLLAMA_EMBED_URL = 'http://localhost:11434/api/embed'
+EMBED_MODEL = 'nomic-embed-text'
+
+
+def embed_text(text, timeout=3):
+    """Call Ollama embed API. Returns list[float] or None on any error."""
+    try:
+        import urllib.request
+        payload = json.dumps({"model": EMBED_MODEL, "input": text}).encode('utf-8')
+        req = urllib.request.Request(
+            OLLAMA_EMBED_URL,
+            data=payload,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        embeddings = data.get('embeddings')
+        if not embeddings or not isinstance(embeddings, list) or len(embeddings) == 0:
+            return None
+        vec = embeddings[0]
+        if not isinstance(vec, list) or len(vec) == 0:
+            return None
+        return [float(x) for x in vec]
+    except Exception:
+        return None
+
+
+def unpack_embedding(blob):
+    """Unpack float32 BLOB to list of floats."""
+    return list(struct.unpack(f'{len(blob)//4}f', blob))
+
+
+def cosine_similarity(a, b):
+    """Dot product / (norm_a * norm_b). Returns 0.0 if either norm is zero."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
 
 def tokenize(text):
     """Split on whitespace + punctuation, lowercase, remove stop words, filter short."""
@@ -48,8 +91,8 @@ def tokenize(text):
     return [t for t in tokens if len(t) >= 3 and t not in STOP_WORDS]
 
 
-def relevance_score(mem_row, fts_rank, column_names):
-    """Weighted score: 0.4*recency + 0.3*importance + 0.3*fts_rank_norm"""
+def relevance_score(mem_row, fts_rank, column_names, cosine_sim=0.0):
+    """Weighted score: 0.3*recency + 0.2*importance + 0.25*fts_rank_norm + 0.25*cosine_sim"""
     # Recency
     created_at_str = mem_row[column_names.index('created_at')] if 'created_at' in column_names else None
     if created_at_str:
@@ -76,7 +119,7 @@ def relevance_score(mem_row, fts_rank, column_names):
     # rank of 0.0 means no FTS match was used (fallback path)
     fts_norm = max(0.0, min(1.0, 1.0 + fts_rank / 10.0)) if fts_rank != 0.0 else 0.5
 
-    return 0.4 * recency + 0.3 * importance + 0.3 * fts_norm
+    return 0.3 * recency + 0.2 * importance + 0.25 * fts_norm + 0.25 * cosine_sim
 
 
 def sanitize_fts_query(prompt):
@@ -141,13 +184,28 @@ def retrieve_memories(conn, prompt, agent, top_n=5, type_filter=None):
     # Build column_names + 'rank' for scoring
     col_names_with_rank = column_names + ['rank']
 
+    # Attempt cosine re-rank
+    query_embedding = embed_text(prompt)
+
     scored = []
     for row in rows:
         row_list = list(row)
         fts_rank = row_list[-1] if row_list else 0.0
         if fts_rank is None:
             fts_rank = 0.0
-        score = relevance_score(row_list, fts_rank, col_names_with_rank)
+
+        cosine_sim = 0.0
+        if query_embedding is not None and 'embedding' in col_names_with_rank:
+            embed_idx = col_names_with_rank.index('embedding')
+            stored_blob = row_list[embed_idx] if embed_idx < len(row_list) else None
+            if stored_blob:
+                try:
+                    stored_vec = unpack_embedding(stored_blob)
+                    cosine_sim = cosine_similarity(query_embedding, stored_vec)
+                except Exception:
+                    cosine_sim = 0.0
+
+        score = relevance_score(row_list, fts_rank, col_names_with_rank, cosine_sim=cosine_sim)
         scored.append((score, row_list))
 
     scored.sort(key=lambda x: x[0], reverse=True)

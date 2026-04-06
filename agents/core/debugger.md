@@ -1,3 +1,4 @@
+<!-- cache-optimized: static sections first -->
 ---
 name: debugger
 description: Debugging specialist for errors, test failures, and unexpected behavior. Use proactively when encountering any issues.

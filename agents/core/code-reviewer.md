@@ -1,3 +1,4 @@
+<!-- cache-optimized: static sections first -->
 ---
 name: code-reviewer
 description: "Use immediately after writing or modifying code."

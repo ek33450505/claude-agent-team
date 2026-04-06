@@ -1,3 +1,4 @@
+<!-- cache-optimized: static sections first -->
 ---
 name: orchestrator
 description: >
