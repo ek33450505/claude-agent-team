@@ -16,6 +16,7 @@ WARNINGS=0
 pass()  { echo "✓ $*"; }
 fail()  { echo "✗ $*"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "⚠ $*"; WARNINGS=$((WARNINGS + 1)); }
+info()  { echo "ℹ $*"; }  # Optional/advisory — does not increment WARNINGS
 
 echo "CAST Validate v${VERSION} (11 checks)"
 echo "══════════════════════════════"
@@ -437,7 +438,7 @@ echo "─────────────────────"
 if [[ "$(uname -s)" == "Darwin" ]] && security find-generic-password -s cast-anthropic-api-key -a cast -w >/dev/null 2>&1; then
   pass "Keychain: ANTHROPIC_API_KEY stored in macOS Keychain"
 else
-  warn "Keychain: ANTHROPIC_API_KEY not in Keychain (opt-in: cast-keychain.sh set anthropic-api-key)"
+  info "Keychain: ANTHROPIC_API_KEY not in Keychain (opt-in: cast-keychain.sh set anthropic-api-key)"
 fi
 
 # Encryption: is age installed? Memory file state?
@@ -450,7 +451,7 @@ if command -v age >/dev/null 2>&1; then
     pass "Encryption: age installed (memory not encrypted — opt-in: cast-encrypt.sh encrypt)"
   fi
 else
-  warn "Encryption: age not installed (opt-in: brew install age)"
+  info "Encryption: age not installed (opt-in: brew install age)"
 fi
 
 # Backup: freshness check
@@ -466,10 +467,10 @@ print(f'{age:.0f}')
 " 2>/dev/null || echo "?")
     pass "Backup: latest $(basename "$LATEST_BACKUP") (${BACKUP_AGE_DAYS}d ago)"
   else
-    warn "Backup: $BACKUP_DIR exists but no cast-db-*.db snapshots found"
+    info "Backup: $BACKUP_DIR exists but no cast-db-*.db snapshots found"
   fi
 else
-  warn "Backup: ~/.claude/backups/ not found (run: cast-db-backup.py)"
+  info "Backup: ~/.claude/backups/ not found (run: cast-db-backup.py)"
 fi
 
 # Ollama: is it running?
@@ -478,10 +479,10 @@ if command -v ollama >/dev/null 2>&1; then
     OLLAMA_MODEL_COUNT=$(curl -s --connect-timeout 2 "http://localhost:11434/api/tags" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo "?")
     pass "Ollama: running ($OLLAMA_MODEL_COUNT model(s) available)"
   else
-    warn "Ollama: installed but not running (start: ollama serve)"
+    info "Ollama: installed but not running (start: ollama serve)"
   fi
 else
-  warn "Ollama: not installed (opt-in: brew install ollama)"
+  info "Ollama: not installed (opt-in: brew install ollama)"
 fi
 
 # Offline queue depth
@@ -504,10 +505,10 @@ if [[ -f "$CAST_DB" ]]; then
   if [[ "$FTS5_CHECK" -gt 0 ]]; then
     pass "FTS5: agent_memories_fts table present in cast.db"
   else
-    warn "FTS5: agent_memories_fts table not found (run: cast-memory-fts5-migrate.py)"
+    info "FTS5: agent_memories_fts table not found (run: cast-memory-fts5-migrate.py)"
   fi
 else
-  warn "FTS5: cast.db not found"
+  info "FTS5: cast.db not found"
 fi
 
 echo ""
