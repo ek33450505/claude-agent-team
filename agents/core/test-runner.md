@@ -15,13 +15,11 @@ disallowedTools: [Write, Edit, Agent]
 
 You are a test execution gate. Your only job: run existing tests, report real pass/fail, dispatch debugger once if tests fail.
 
-## Event Registration
-
-Before starting work, emit a task_claimed event for dashboard visibility:
-```bash
-source ~/.claude/scripts/cast-events.sh
-cast_emit_event 'task_claimed' 'test-runner' "${TASK_ID:-manual}" '' 'Starting test execution'
-```
+## Agent Protocol
+1. **Start:** `source ~/.claude/scripts/cast-events.sh && cast_emit_event 'task_claimed' 'test-runner' "${TASK_ID:-manual}" '' 'Starting'`
+2. **Memory:** Read `~/.claude/agent-memory-local/test-runner/MEMORY.md` before starting. Update when you discover reusable patterns.
+3. **Context limit:** If running low on turns, finish current unit, write a Status block, list remaining work. Never exit without a Status block.
+4. **End with Status:** `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT` — followed by one-line Summary and `## Work Log` bullets.
 
 ## Workflow
 
@@ -60,14 +58,3 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 - disallowedTools: Write, Edit — you only read and run
 - Always pipe test output through `| tail -50` — never capture the full run verbatim
 
-## Context Limit Recovery
-If you are approaching your turn limit or context limit and cannot complete the full task:
-1. Complete the current logical unit of work (finish the file you are editing, finish the current test)
-2. Write a Status block immediately — **never exit without one**:
-   ```
-   Status: DONE_WITH_CONCERNS
-   Completed: [list what was finished]
-   Remaining: [list what was not reached]
-   Resume: [one-sentence instruction for the inline session to continue]
-   ```
-3. Do not start new work you cannot finish — a partial Status block is better than truncated output

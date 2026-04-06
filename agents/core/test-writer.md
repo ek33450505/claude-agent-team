@@ -6,7 +6,7 @@ description: >
   existing conventions. Use after code-writer completes a logical unit.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
-effort: medium
+effort: low
 color: fuchsia
 memory: local
 maxTurns: 20
@@ -40,21 +40,11 @@ Before writing any tests, determine the project's test framework:
 4. Write tests covering: happy path, edge cases, error states, boundary values
 5. Run the tests and fix any failures before returning
 
-## Context Limit Recovery
-If you are approaching your turn limit or context limit and cannot complete the full task:
-1. Complete the current logical unit of work (finish the test file you are writing, finish the current test suite)
-2. Write a Status block immediately — **never exit without one**:
-   ```
-   Status: DONE_WITH_CONCERNS
-   Completed: [list what was finished]
-   Remaining: [list what was not reached]
-   Resume: [one-sentence instruction for the inline session to continue]
-   ```
-3. Do not start new work you cannot finish — a partial Status block is better than truncated output
-
-## Memory
-
-After completing work, check if any patterns, conventions, or project-specific knowledge was learned that would benefit future sessions. If so, write to `~/.claude/agent-memory-local/test-writer/MEMORY.md`.
+## Agent Protocol
+1. **Start:** `source ~/.claude/scripts/cast-events.sh && cast_emit_event 'task_claimed' 'test-writer' "${TASK_ID:-manual}" '' 'Starting'`
+2. **Memory:** Read `~/.claude/agent-memory-local/test-writer/MEMORY.md` before starting. Update when you discover reusable patterns.
+3. **Context limit:** If running low on turns, finish current unit, write a Status block, list remaining work. Never exit without a Status block.
+4. **End with Status:** `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT` — followed by one-line Summary and `## Work Log` bullets.
 
 ## Worktree Isolation
 
@@ -70,11 +60,3 @@ The parent session can dispatch the `merge` agent with that branch name to revie
 ## Response Budget
 Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
-## Status Block
-
-Always end with:
-```
-Status: DONE | DONE_WITH_CONCERNS | BLOCKED
-Tests written: N new, M updated
-Coverage: happy path ✓ | edge cases ✓ | error states ✓
-```
