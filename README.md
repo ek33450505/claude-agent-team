@@ -1,7 +1,7 @@
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-4.3-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-4.4-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-262-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -141,12 +141,12 @@ bash install.sh
 | `orchestrator` | sonnet | high | Executes multi-agent plan manifests (ADM) |
 | `researcher` | sonnet | high | Multi-source analysis, gap reports, data synthesis |
 | `security` | sonnet | high | Auth, input validation, secrets, vulnerability audit |
-| `merge` | sonnet | high | Git merges, rebases, conflict resolution |
-| `test-writer` | sonnet | medium | Unit and integration tests |
-| `devops` | sonnet | medium | CI/CD, Docker, infrastructure |
-| `docs` | sonnet | medium | Documentation, READMEs, changelogs |
-| `morning-briefing` | sonnet | medium | Daily git activity summary |
-| `bash-specialist` | sonnet | medium | Shell scripts, BATS tests, hook scripts |
+| `merge` | haiku | low | Git merges, rebases, conflict resolution |
+| `test-writer` | haiku | low | Unit and integration tests |
+| `devops` | haiku | low | CI/CD, Docker, infrastructure |
+| `docs` | haiku | low | Documentation, READMEs, changelogs |
+| `morning-briefing` | haiku | low | Daily git activity summary |
+| `bash-specialist` | haiku | low | Shell scripts, BATS tests, hook scripts |
 | `code-reviewer` | haiku | low | Diff scan for correctness and conventions |
 | `test-runner` | haiku | low | Runs test suites (bats, jest, vitest) |
 | `commit` | haiku | low | Stages and commits with semantic messages |
@@ -155,7 +155,25 @@ bash install.sh
 
 All agents carry `memory: local` — each accumulates session knowledge in `~/.claude/agent-memory-local/<name>/`.
 
-> Haiku agents (`code-reviewer`, `commit`, `push`, `test-runner`) run at ~$0.25/MTok vs Sonnet's ~$3/MTok — a 12x cost difference on high-frequency tasks.
+> 11 of 17 agents run on Haiku ($1/MTok input) — the high-frequency, pattern-following work. 6 agents run on Sonnet ($3/MTok input) for complex reasoning. Model tiering cuts token costs by 25-40% compared to running all agents on the same model.
+
+---
+
+## Token Efficiency
+
+CAST is designed to minimize token spend without sacrificing quality. Multi-agent systems use 15x more tokens than single-turn chat (per Anthropic's own research) — every optimization compounds.
+
+| Optimization | How It Works | Impact |
+|---|---|---|
+| Model tiering | 11 agents on Haiku, 6 on Sonnet — route by task complexity | 3x cost reduction on lightweight tasks |
+| Response budgets | Agents have enforced token limits: 300 (lightweight), 800 (medium), 2,000 (heavy) | Prevents verbose responses from bloating context |
+| Compressed Agent Protocol | Shared boilerplate condensed from ~310 tokens to ~100 tokens per agent | ~210 tokens saved per invocation |
+| Orchestrator preamble tiers | Full context for implementation agents, minimal for lightweight agents | ~80 tokens saved per lightweight dispatch |
+| Effort tuning | Haiku agents set to `effort: low` — no extended thinking overhead | Reduces output token waste |
+| WebFetch efficiency | Researcher pre-screens URLs, caches results, writes to disk instead of passing raw content | Cuts researcher token spend (~27% of total) |
+| Output compression | Orchestrator summarizes agent responses in <100 words, compacts at 30k tokens | Prevents context window bloat across batches |
+
+Estimated savings: **25-40% reduction** in monthly token spend compared to unoptimized multi-agent dispatch.
 
 ---
 
@@ -500,6 +518,7 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v4.1 | Native adoption: replace cost-tracker with native statusline, remove prettier hook, delete 4 dead routing scripts, migrate security guard to sandbox rules, add PreCompact hook, add effort/background/initialPrompt to agent frontmatter; 262 BATS tests |
 | v4.2 | `cast dash` TUI dashboard (Textual, htop for CAST); `cast tidy` cleanup subcommand; CHEATSHEET.md; morning-briefing fixes; spinnerVerbs settings fix |
 | v4.3 | Memory persistence: FTS5 search, relevance scoring, shared pool, procedural memory, semantic embeddings, session distiller, staleness validation, MCP server, weekly consolidation, standalone cast-memory repo |
+| v4.4 | Token efficiency: model tiering (11 Haiku / 6 Sonnet), response budgets, compressed Agent Protocol, orchestrator preamble tiers, research URL cache, token budget alerts — 25-40% cost reduction |
 
 ## CAST Ecosystem
 

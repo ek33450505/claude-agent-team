@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## v4.4 — Token Efficiency (2026-04-06)
+
+Systematic token cost optimization across all 17 agents.
+
+### Changed
+- Downgraded 6 agents from Sonnet to Haiku: test-writer, bash-specialist, merge, morning-briefing, docs, devops
+- Lowered effort from medium to low for all 11 Haiku agents
+- Compressed 4 boilerplate sections (Event Registration, Context Limit Recovery, Agent Memory, Status Block) into single compact Agent Protocol across all 17 agents (~210 tokens saved per agent)
+- Added tiered orchestrator preamble: full context for implementation agents, minimal for lightweight agents
+- Strengthened orchestrator output compression rules (100-word summaries, 30k token compaction trigger)
+
+### Added
+- Response Budget sections on all 17 agents (300/800/2000 token tiers)
+- WebFetch Efficiency guidance in researcher agent
+- `scripts/cast-research-cache.py` — URL result cache for researcher (1-hour TTL)
+- `scripts/cast-token-budget-check.py` — token budget alerting for orchestrator sessions
+- Token Efficiency section in README documenting all optimizations
+
+### Impact
+- Estimated 25-40% reduction in monthly token spend
+- Agent prompt inventory reduced by ~3,570 tokens total (-726 lines, +104 lines across 17 files)
+- 6 fewer Sonnet invocations per typical workflow (3x cost reduction each)
+
+---
+
 ## v4.3 — Memory Persistence (2026-04-05)
 
 Four-tier implementation of persistent, searchable, scored agent memory.

@@ -188,6 +188,13 @@ After each batch completes:
   ```
 - Print `[BATCH N COMPLETE]`
 
+**Token budget check (between batches):**
+After each batch completes, check the session token budget:
+```bash
+python3 ~/.claude/scripts/cast-token-budget-check.py --threshold 50000 2>/dev/null
+```
+If exit code is 1 (over threshold), log a warning and consider compacting context before the next batch. Do not stop execution — this is advisory only.
+
 ## Step 4 — Summarize
 
 After all batches complete, print a brief summary (≤200 words): what each batch did, any concerns.

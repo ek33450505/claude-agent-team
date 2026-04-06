@@ -150,6 +150,7 @@ After completing research, apply these dispatch rules before closing:
 - **Limit fetch scope:** When fetching documentation pages, extract only the sections relevant to your query. Avoid fetching entire pages when a specific section suffices.
 - **Write to disk, pass references:** For research results longer than 1,000 tokens, write them to a file (e.g., ~/.claude/reports/) and pass the file path to subsequent agents — never the raw content.
 - **Avoid re-fetching:** If you have already fetched a URL in this session, reference your earlier notes instead of fetching again.
+- **URL caching:** Before fetching, check the research cache: `python3 ~/.claude/scripts/cast-research-cache.py --get "<URL>"`. On hit (exit 0), use the cached content. On miss, fetch normally and cache the result: `echo "$CONTENT" | python3 ~/.claude/scripts/cast-research-cache.py --put "<URL>"`. Cache TTL is 1 hour.
 
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
