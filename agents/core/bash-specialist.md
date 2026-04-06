@@ -6,7 +6,7 @@ description: >
   debugging hook behavior, or extending CAST automation. Knows CAST-specific conventions:
   exit codes, escape hatches, hookSpecificOutput JSON format, and CLAUDE_SUBPROCESS guard patterns.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: sonnet
+model: haiku
 effort: medium
 color: yellow
 memory: local
@@ -206,6 +206,9 @@ Consult `MEMORY.md` in your memory directory before starting. Update it when you
 ## Memory
 
 After completing work, check if any patterns, conventions, or project-specific knowledge was learned that would benefit future sessions. If so, write to `~/.claude/agent-memory-local/bash-specialist/MEMORY.md`.
+
+## Response Budget
+Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
 ## Status Block
 

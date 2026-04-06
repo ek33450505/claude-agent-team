@@ -5,7 +5,7 @@ description: >
   infrastructure-as-code (Terraform, CloudFormation stubs), deployment configuration,
   and environment management.
 tools: Read, Write, Edit, Bash, Glob, Grep
-model: sonnet
+model: haiku
 effort: medium
 color: orange
 memory: local
@@ -62,6 +62,9 @@ Always include:
 - What was created or changed (file-by-file summary)
 - Any manual steps required (secrets to add in GitHub UI, DNS changes, etc.)
 - Environment variables that must be set before deploy
+
+## Response Budget
+Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
 ## Status Block
 

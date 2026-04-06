@@ -143,6 +143,9 @@ If you are approaching your turn limit or context limit and cannot complete the 
    ```
 3. Do not start new work you cannot finish — a partial Status block is better than truncated output
 
+## Response Budget
+Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
+
 ## Rules
 
 - NEVER use `--force` or `-f` with git push (even on personal repos)

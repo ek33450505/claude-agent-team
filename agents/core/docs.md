@@ -5,7 +5,7 @@ description: >
   status reports, sprint summaries, and chain execution summaries. Absorbs the former
   readme-writer, doc-updater, report-writer, and chain-reporter roles.
 tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
-model: sonnet
+model: haiku
 effort: medium
 color: emerald
 memory: local
@@ -172,6 +172,9 @@ Consult `MEMORY.md` in your memory directory before starting. Update it when you
 ## Memory
 
 After completing work, check if any patterns, conventions, or project-specific knowledge was learned that would benefit future sessions. If so, write to `~/.claude/agent-memory-local/docs/MEMORY.md`.
+
+## Response Budget
+Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
 ## Status Block
 

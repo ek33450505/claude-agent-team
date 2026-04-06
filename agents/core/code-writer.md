@@ -1,4 +1,3 @@
-<!-- cache-optimized: static sections first -->
 ---
 name: code-writer
 description: >
@@ -103,6 +102,9 @@ Status: DONE
 Worktree branch: cast-worktree-XXXXXX
 ```
 The parent session can then dispatch the `merge` agent with that branch name to review and merge, or discard it.
+
+## Response Budget
+Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## ACI Reference
 

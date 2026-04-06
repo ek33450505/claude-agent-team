@@ -81,6 +81,9 @@ Consult `MEMORY.md` in your memory directory before starting. Update it when you
 
 After completing work, check if any patterns, conventions, or project-specific knowledge was learned that would benefit future sessions. If so, write to `~/.claude/agent-memory-local/frontend-qa/MEMORY.md`.
 
+## Response Budget
+Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
+
 ## Status Block
 
 Always end your response with one of these status blocks:

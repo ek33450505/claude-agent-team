@@ -1,4 +1,3 @@
-<!-- cache-optimized: static sections first -->
 ---
 name: orchestrator
 description: >
@@ -195,6 +194,12 @@ source ~/.claude/scripts/cast-events.sh
 cast_emit_event 'task_completed' 'orchestrator' 'session' '' 'All batches complete' 'DONE'
 ```
 
+## Output Compression Rules
+- Summarize each agent's response in **under 100 words**. Never reproduce content from the agent's spawn prompt.
+- Never paste full tool output, file contents, or raw WebFetch results into your context.
+- If your accumulated context exceeds ~30,000 tokens (roughly 15+ agent dispatches), perform inline compaction: discard completed batch details, keep only the status summary per batch.
+- When passing context to the next batch, include only: (1) the plan's remaining batches, (2) a 1-sentence summary per completed batch, (3) any blocking issues.
+
 ## Rules
 
 - Never skip a batch unless the user explicitly says to
@@ -206,6 +211,9 @@ cast_emit_event 'task_completed' 'orchestrator' 'session' '' 'All batches comple
 
 On session start: read `~/.claude/agent-memory-local/orchestrator/MEMORY.md` if it exists.
 At session end: write observations to `project-<slug>.md` in the same directory.
+
+## Response Budget
+Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## Status Block
 

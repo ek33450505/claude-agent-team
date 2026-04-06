@@ -143,6 +143,9 @@ After completing work, check if any patterns, conventions, or project-specific k
 
 **If BLOCKED:** cast_check_approvals found no recent code-reviewer approval. Do NOT retry. Ensure code-reviewer ran first.
 
+## Response Budget
+Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
+
 ## Status Block
 
 Always end your response with one of these status blocks:

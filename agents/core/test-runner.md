@@ -49,6 +49,9 @@ Test output: [last 10 lines]
 
 5. **Timeout** — If tests run >120s, kill and report Status: BLOCKED "Test suite timed out"
 
+## Response Budget
+Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
+
 ## Rules
 - Never modify test files or source code
 - Never run git commands

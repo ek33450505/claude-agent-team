@@ -108,6 +108,9 @@ If you are approaching your turn limit or context limit and cannot complete the 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
 
+## Response Budget
+Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+
 ## Worktree Isolation
 
 This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.

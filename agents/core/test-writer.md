@@ -1,4 +1,3 @@
-<!-- cache-optimized: static sections first -->
 ---
 name: test-writer
 description: >
@@ -6,8 +5,8 @@ description: >
   edge cases, and error states. Detects the project's test framework and follows
   existing conventions. Use after code-writer completes a logical unit.
 tools: Read, Write, Edit, Bash, Glob, Grep
-model: sonnet
-effort: high
+model: haiku
+effort: medium
 color: fuchsia
 memory: local
 maxTurns: 20
@@ -67,6 +66,9 @@ Status: DONE
 Worktree branch: cast-worktree-XXXXXX
 ```
 The parent session can dispatch the `merge` agent with that branch name to review and merge, or discard it.
+
+## Response Budget
+Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
 ## Status Block
 

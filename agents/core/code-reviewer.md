@@ -1,4 +1,3 @@
-<!-- cache-optimized: static sections first -->
 ---
 name: code-reviewer
 description: "Use immediately after writing or modifying code."
@@ -120,6 +119,9 @@ updated: <ISO date>
 - Ephemeral task details or in-progress state
 - Things already in CLAUDE.md
 - Code patterns derivable from reading the current files
+
+## Response Budget
+Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
 ## ACI Reference
 

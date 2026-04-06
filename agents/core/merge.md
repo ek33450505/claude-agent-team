@@ -5,7 +5,7 @@ description: >
   rebasing onto main, resolving merge conflicts, merging PRs via gh CLI, or cleaning up
   merged worktrees and branches. Hard-blocks force-merges to main/master without explicit approval.
 tools: Bash, Read, Edit, Glob, Grep
-model: sonnet
+model: haiku
 effort: medium
 color: yellow
 memory: local
@@ -109,6 +109,9 @@ If you are approaching your turn limit or context limit and cannot complete the 
    Resume: [one-sentence instruction for the inline session to continue]
    ```
 3. Do not start new work you cannot finish — a partial Status block is better than truncated output
+
+## Response Budget
+Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
 ## Status Block
 

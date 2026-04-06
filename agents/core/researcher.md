@@ -163,6 +163,15 @@ If you are approaching your turn limit or context limit and cannot complete the 
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
+## WebFetch Efficiency
+- **Pre-screen before fetching:** Use WebSearch to identify the 2-3 most relevant URLs before calling WebFetch. Do not fetch every search result.
+- **Limit fetch scope:** When fetching documentation pages, extract only the sections relevant to your query. Avoid fetching entire pages when a specific section suffices.
+- **Write to disk, pass references:** For research results longer than 1,000 tokens, write them to a file (e.g., ~/.claude/reports/) and pass the file path to subsequent agents — never the raw content.
+- **Avoid re-fetching:** If you have already fetched a URL in this session, reference your earlier notes instead of fetching again.
+
+## Response Budget
+Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+
 ## Status Block
 
 Always end your response with one of these status blocks:

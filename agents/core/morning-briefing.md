@@ -5,7 +5,7 @@ description: >
   system intelligence, then assembles a structured markdown briefing.
   Use at the start of each day or invoke via /morning on demand.
 tools: Read, Write, Bash, Glob, Grep
-model: sonnet
+model: haiku
 effort: medium
 initialPrompt: "/morning"
 color: bronze
@@ -120,6 +120,9 @@ If you are approaching your turn limit or context limit and cannot complete the 
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
+
+## Response Budget
+Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
 ## Status Block
 

@@ -1,4 +1,3 @@
-<!-- cache-optimized: static sections first -->
 ---
 name: planner
 description: >
@@ -261,6 +260,9 @@ If you are approaching your turn limit or context limit and cannot complete the 
 
 Consult `MEMORY.md` in your memory directory before starting. Update it when you discover patterns worth preserving.
 
+
+## Response Budget
+Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## Status Block
 
