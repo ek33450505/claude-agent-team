@@ -148,7 +148,9 @@ print('1' if pub > lkg else '0')
     printf "[cast-upgrade-check] New release: %s@%s (%s)\n" "$REPO" "$TAG" "$PUBLISHED"
 
     # Fetch release notes
-    NOTES_FILE="$(mktemp "${TMPDIR:-/tmp}/cast-upgrade-notes-XXXXXX.txt")"
+    # Note: BSD mktemp (macOS) does not support a suffix after XXXXXX — drop .txt
+    # to avoid creating a literal "cast-upgrade-notes-XXXXXX.txt" file on macOS.
+    NOTES_FILE="$(mktemp "${TMPDIR:-/tmp}/cast-upgrade-notes-XXXXXX")"
     # shellcheck disable=SC2064
     trap "rm -f '$NOTES_FILE'" EXIT
 

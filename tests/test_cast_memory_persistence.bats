@@ -213,7 +213,14 @@ teardown() {
     python3 "$SEED_SCRIPT" >/dev/null 2>&1
     # Rebuild FTS index to include newly seeded rows
     python3 "$FTS5_SCRIPT" >/dev/null 2>&1
-    result=$(sqlite3 "$TEST_DB" "SELECT content FROM agent_memories_fts WHERE agent_memories_fts MATCH 'whitespace' LIMIT 1")
+    # Use Python's sqlite3 (has FTS5) instead of sqlite3 CLI (may lack FTS5 on CI)
+    result=$(python3 -c "
+import sqlite3, os
+conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+row = conn.execute(\"SELECT content FROM agent_memories_fts WHERE agent_memories_fts MATCH 'whitespace' LIMIT 1\").fetchone()
+print(row[0] if row else '')
+conn.close()
+")
     [ -n "$result" ]
 }
 

@@ -6,6 +6,13 @@
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
       }
+    },
+    "cast-memory": {
+      "command": "python3",
+      "args": ["/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-mcp-memory-server.py"],
+      "env": {
+        "CAST_DB_PATH": "/Users/edkubiak/.claude/cast.db"
+      }
     }
   }
 }

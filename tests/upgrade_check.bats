@@ -82,6 +82,12 @@ setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(mktemp -d)"
   export ORIG_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+  # Redirect TMPDIR into the fake HOME so mktemp calls from the script under
+  # test are cleaned up by teardown() instead of accumulating in the real
+  # system temp dir across test runs.
+  export ORIG_TMPDIR="${TMPDIR:-}"
+  export TMPDIR="$HOME/tmp"
+  mkdir -p "$TMPDIR"
 
   mkdir -p "$HOME/.claude/cast"
   mkdir -p "$HOME/bin"
@@ -98,6 +104,11 @@ teardown() {
   rm -rf "$HOME"
   export HOME="$ORIG_HOME"
   export ANTHROPIC_API_KEY="$ORIG_ANTHROPIC_API_KEY"
+  if [ -n "$ORIG_TMPDIR" ]; then
+    export TMPDIR="$ORIG_TMPDIR"
+  else
+    unset TMPDIR
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -259,4 +270,54 @@ FAIL_VIEW_STUB
 
   run bash "$UPGRADE_CHECK_SH"
   assert_success
+}
+
+# ---------------------------------------------------------------------------
+# Regression: mktemp must not create a literal "XXXXXX" file (macOS BSD mktemp
+# does not support a suffix after the X-template, causing all invocations to
+# land on the same fixed filename and fail with "File exists" on the second run)
+# ---------------------------------------------------------------------------
+
+@test "upgrade-check: mktemp does not leave a literal XXXXXX temp file" {
+  _install_gh_stub "$HOME/bin"
+
+  # Run the script once — if mktemp template had a .txt suffix, BSD mktemp would
+  # create a file literally named "cast-upgrade-notes-XXXXXX.txt" in TMPDIR.
+  bash "$UPGRADE_CHECK_SH" 2>/dev/null || true
+
+  # No file with the literal template name should exist in TMPDIR
+  local literal_file="$TMPDIR/cast-upgrade-notes-XXXXXX"
+  if [ -f "${literal_file}.txt" ]; then
+    echo "BUG: BSD mktemp left a literal template file: ${literal_file}.txt" >&2
+    return 1
+  fi
+  # Also check without extension (belt-and-suspenders)
+  if [ -f "$literal_file" ]; then
+    echo "BUG: mktemp left a literal template file: $literal_file" >&2
+    return 1
+  fi
+  true
+}
+
+@test "upgrade-check: succeeds on second run without leftover temp files causing mktemp failure" {
+  # Regression: BSD mktemp (macOS) does not support a suffix after XXXXXX.
+  # If the template was "...XXXXXX.txt", the first run created a literal file
+  # named "cast-upgrade-notes-XXXXXX.txt". The second run then failed because
+  # mktemp refused to overwrite the existing file.
+  _install_gh_stub "$HOME/bin"
+
+  # First run
+  bash "$UPGRADE_CHECK_SH" 2>/dev/null || true
+
+  # Simulate the pre-fix bug: manually create a literal XXXXXX file to prove
+  # the fix prevents collisions even if such a file exists from another source.
+  # (With the fix in place the script uses a different template name, so this
+  # file is irrelevant to mktemp and the run must still succeed.)
+  touch "$TMPDIR/cast-upgrade-notes-XXXXXX.txt"
+
+  # Second run — must still succeed despite the stale literal file
+  run bash "$UPGRADE_CHECK_SH"
+  assert_success
+
+  rm -f "$TMPDIR/cast-upgrade-notes-XXXXXX.txt"
 }
