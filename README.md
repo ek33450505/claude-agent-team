@@ -1,13 +1,13 @@
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-4.4-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-4.5-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-262-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-357-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**A multi-agent framework for Claude Code.** 17 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
+**A local-first multi-agent framework for Claude Code.** 17 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
 
 **[Live Demo →](https://cast-site-iota.vercel.app)** |
 [Dashboard →](https://github.com/ek33450505/claude-code-dashboard)
@@ -274,6 +274,12 @@ The `orchestrator` agent executes plans defined by an **Agent Dispatch Manifest 
 # Run a plan
 cast exec ~/.claude/plans/my-plan.md
 
+# Run a plan across two parallel worktree sessions
+cast parallel ~/.claude/plans/my-plan.md
+
+# Preview the batch split without executing
+cast parallel --dry-run ~/.claude/plans/my-plan.md
+
 # Or dispatch the orchestrator agent directly:
 # "Orchestrate the plan at ~/.claude/plans/my-plan.md"
 ```
@@ -520,6 +526,7 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v4.2 | `cast dash` TUI dashboard (Textual, htop for CAST); `cast tidy` cleanup subcommand; CHEATSHEET.md; morning-briefing fixes; spinnerVerbs settings fix |
 | v4.3 | Memory persistence: FTS5 search, relevance scoring, shared pool, procedural memory, semantic embeddings, session distiller, staleness validation, MCP server, weekly consolidation, standalone cast-memory repo |
 | v4.4 | Token efficiency: model tiering (11 Haiku / 6 Sonnet), response budgets, compressed Agent Protocol, orchestrator preamble tiers, research URL cache, token budget alerts — 25-40% cost reduction |
+| v4.5 | Local-first hardening: macOS Keychain integration, age encryption with Secure Enclave binding, WAL-safe SQLite backups, network detection with offline queue, Ollama local model fallback, parallel plan execution across dual worktrees; 357 BATS tests |
 
 ## CAST Ecosystem
 
@@ -534,9 +541,23 @@ CAST is split across focused repos. The core framework lives here; install indiv
 | [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts framework — 13 hooks, CLI tool (v0.1.0) | `ek33450505/cast-hooks` |
 | [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — 4-panel live display (v0.1.0) | `ek33450505/cast-dash` |
 | [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP (v0.1.0) | `ek33450505/cast-memory` |
+| [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel plan execution across dual worktrees (v0.1.0) | `ek33450505/cast-parallel` |
 | [homebrew-cast](https://github.com/ek33450505/homebrew-cast) | Homebrew formula for core CAST | — |
 
-**8 repos, 7 Homebrew taps.**
+**9 repos, 8 Homebrew taps.**
+
+---
+
+## Local-First
+
+CAST v4.5 adds local-first hardening for data protection and offline workflows:
+
+- **macOS Keychain integration** for API key storage (`cast-keychain.sh`)
+- **age encryption** for agent memory with optional Secure Enclave binding (`cast-encrypt.sh`)
+- **WAL-safe SQLite backups** with 7-day retention (`cast-db-backup.py`)
+- **Network detection** with offline queue and auto-replay (`cast-connectivity.sh`)
+- **Ollama local model fallback** for offline tasks (`cast-ollama.sh`)
+- **Parallel plan execution** across dual worktrees (`cast-parallel.sh`)
 
 ---
 
@@ -555,6 +576,6 @@ MIT — see [LICENSE](LICENSE).
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->396<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->402<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->8<!-- /CAST_SKILL_COUNT --> skills

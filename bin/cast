@@ -4,7 +4,7 @@
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: status, exec, memory, budget, agents, hooks, doctor, tidy, dash, install-completions
+# Subcommands: status, exec, parallel, memory, budget, agents, hooks, doctor, tidy, dash, install-completions
 #
 # Config: ~/.claude/config/cast-cli.json
 # DB:     $CAST_DB_PATH or ~/.claude/cast.db
@@ -131,6 +131,7 @@ Usage: cast <subcommand> [args] [flags]
 Subcommands:
   ${C_BOLD}status${C_RESET}                          Terminal health dashboard
   ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest
+  ${C_BOLD}parallel${C_RESET}  [--dry-run] [--split N] <plan>  Split plan across parallel worktrees
   ${C_BOLD}memory${C_RESET}    search|list|forget|export   Query and manage agent memories
   ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
   ${C_BOLD}agents${C_RESET}                          List installed CAST agents
@@ -1178,6 +1179,17 @@ shift 2>/dev/null || true
 case "$SUBCOMMAND" in
   status)               _cmd_status "$@" ;;
   exec)                 _cmd_exec "$@" ;;
+  parallel)
+    parallel_script="${CAST_SCRIPTS_DIR}/cast-parallel.sh"
+    if [ ! -f "$parallel_script" ]; then
+      parallel_script="${CAST_REPO_DIR}/scripts/cast-parallel.sh"
+    fi
+    if [ ! -f "$parallel_script" ]; then
+      _error "cast-parallel.sh not found. Run: bash install.sh"
+      exit 1
+    fi
+    exec bash "$parallel_script" "$@"
+    ;;
   memory)               _cmd_memory "$@" ;;
   budget)               _cmd_budget "$@" ;;
   agents)               _cmd_agents "$@" ;;
