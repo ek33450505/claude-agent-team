@@ -275,10 +275,15 @@ The `orchestrator` agent executes plans defined by an **Agent Dispatch Manifest 
 cast exec ~/.claude/plans/my-plan.md
 
 # Run a plan across two parallel worktree sessions
+# Splits batches at the midpoint, launches two claude --headless processes
+# in separate git worktrees, and merges results back when both complete
 cast parallel ~/.claude/plans/my-plan.md
 
 # Preview the batch split without executing
 cast parallel --dry-run ~/.claude/plans/my-plan.md
+
+# Control the split point (batches 1-2 in Stream A, rest in Stream B)
+cast parallel --split 2 ~/.claude/plans/my-plan.md
 
 # Or dispatch the orchestrator agent directly:
 # "Orchestrate the plan at ~/.claude/plans/my-plan.md"
