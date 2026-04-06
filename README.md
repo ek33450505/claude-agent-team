@@ -1,7 +1,7 @@
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-4.2-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-4.3-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-262-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -286,6 +286,98 @@ bash scripts/cast-memory-backup.sh             # creates tarball + gh release
 
 ---
 
+## Memory Persistence
+
+CAST v4.3 adds FTS5-indexed full-text search, relevance scoring, shared memory pool, procedural memory type, semantic embeddings, session distillation, staleness validation, MCP server access, and weekly consolidation. All state lives in `cast.db` — no external services required.
+
+### FTS5 Schema
+
+The `agent_memories_fts` virtual table indexes `content` and `description` columns for full-text search. Three triggers (`am_ai`, `am_au`, `am_ad`) keep the index in sync with `agent_memories` on insert, update, and delete. Migration:
+
+```bash
+python3 scripts/cast-memory-fts5-migrate.py
+```
+
+### Relevance Scoring
+
+Weighted formula: `0.4 * recency + 0.3 * importance + 0.3 * fts_rank`. Recency decays exponentially using per-type decay rates:
+
+| Memory Type | Decay Rate |
+|---|---|
+| `feedback`, `user` | 0.999 |
+| `reference` | 0.997 |
+| `project` | 0.990 |
+
+The `importance` column (0.0–1.0) weights critical memories higher. Default importance is backfilled by type.
+
+### Shared Pool
+
+Memories with `agent='shared'` are visible to all agents. The router query uses `WHERE (agent = ? OR agent = 'shared')`, so shared memories appear alongside agent-specific results without duplication.
+
+### Procedural Memory
+
+`type='procedural'` stores operational patterns — BATS whitespace fixes, sandbox workarounds, orchestrator dispatch patterns. Seeded by `cast-memory-seed-procedural.py`. Auto-loaded into agent sessions at start.
+
+```bash
+python3 scripts/cast-memory-seed-procedural.py   # seed 5 built-in patterns
+```
+
+### Semantic Search
+
+Optional Ollama dependency. `cast-memory-embed.py` generates 768-dim nomic-embed-text embeddings stored as BLOBs in `agent_memories.embedding`. Hybrid search combines FTS5 rank with cosine similarity for more accurate retrieval.
+
+```bash
+# Backfill embeddings for all existing memories
+python3 scripts/cast-memory-embed.py --backfill
+
+# Embed a single text
+python3 scripts/cast-memory-embed.py --text "how to fix BATS whitespace"
+```
+
+Requires Ollama running locally with `nomic-embed-text` pulled. Without Ollama, FTS5-only search is used automatically.
+
+### Session Distiller
+
+`cast-session-distiller.py` runs at session end, extracting decisions, patterns, and failures into procedural memories. Captures operational knowledge that would otherwise be lost at session close.
+
+```bash
+python3 scripts/cast-session-distiller.py
+```
+
+### Staleness Validation
+
+`cast-memory-validate.py` flags memories older than 30 days and verifies that file and function references still exist in the codebase. Outputs a JSON report sorted by staleness score.
+
+```bash
+python3 scripts/cast-memory-validate.py --check          # report only
+python3 scripts/cast-memory-validate.py --validate        # update timestamps
+python3 scripts/cast-memory-validate.py --archive-stale   # zero-out stale importance
+```
+
+### MCP Server
+
+`cast-mcp-memory-server.py` wraps `agent_memories` as an MCP resource, allowing external tools and editors to read and search CAST memory. Configured in `.mcp.json`.
+
+### Consolidation
+
+`cast-memory-consolidate.py` runs weekly via cron. Deduplicates similar memories, applies decay, and archives memories below the relevance threshold.
+
+```bash
+python3 scripts/cast-memory-consolidate.py   # run manually
+```
+
+### Standalone Install
+
+For users who want memory persistence without full CAST:
+
+```bash
+brew tap ek33450505/cast-memory && brew install cast-memory
+```
+
+See [cast-memory](https://github.com/ek33450505/cast-memory).
+
+---
+
 ## Dashboard
 
 [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) — React 19 + Vite + Express observability UI for CAST.
@@ -407,6 +499,7 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v4.0 | Major cleanup: gut 33 hooks to 15, slim CLI from 2331→976 lines, installer 351→193 lines; drop 5 empty DB tables (9→4 canonical); delete observe-* shadow system, daemon, routing scripts; rebuild cast.db at v7 with batch_id; 271 BATS tests |
 | v4.1 | Native adoption: replace cost-tracker with native statusline, remove prettier hook, delete 4 dead routing scripts, migrate security guard to sandbox rules, add PreCompact hook, add effort/background/initialPrompt to agent frontmatter; 262 BATS tests |
 | v4.2 | `cast dash` TUI dashboard (Textual, htop for CAST); `cast tidy` cleanup subcommand; CHEATSHEET.md; morning-briefing fixes; spinnerVerbs settings fix |
+| v4.3 | Memory persistence: FTS5 search, relevance scoring, shared pool, procedural memory, semantic embeddings, session distiller, staleness validation, MCP server, weekly consolidation, standalone cast-memory repo |
 
 ## CAST Ecosystem
 
@@ -420,9 +513,10 @@ CAST is split across focused repos. The core framework lives here; install indiv
 | [cast-security](https://github.com/ek33450505/cast-security) | Security hooks and audit tooling | `ek33450505/cast-security` |
 | [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts framework — 13 hooks, CLI tool (v0.1.0) | `ek33450505/cast-hooks` |
 | [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — 4-panel live display (v0.1.0) | `ek33450505/cast-dash` |
+| [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP (v0.1.0) | `ek33450505/cast-memory` |
 | [homebrew-cast](https://github.com/ek33450505/homebrew-cast) | Homebrew formula for core CAST | — |
 
-**7 repos, 6 Homebrew taps.**
+**8 repos, 7 Homebrew taps.**
 
 ---
 

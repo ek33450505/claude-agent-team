@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## v4.3 — Memory Persistence (2026-04-05)
+
+Four-tier implementation of persistent, searchable, scored agent memory.
+
+### Added (Tier 1 — Foundation)
+- FTS5 full-text search on `agent_memories` via `agent_memories_fts` virtual table with sync triggers
+- `importance` and `decay_rate` columns on `agent_memories` with type-specific backfill
+- Relevance scoring: weighted `0.4*recency + 0.3*importance + 0.3*fts_rank` formula
+- Shared memory pool: `agent='shared'` convention for cross-agent visibility
+- Procedural memory type (`type='procedural'`) for operational patterns
+- 5 seeded procedural memories (BATS whitespace, push sandbox, orchestrator dispatch, hook repo sync, dashboard QA)
+- Path-scoped rule files: `rules/tests.md`, `rules/scripts.md`, `rules/agents.md`
+- `cast-memory-router.py` updated: `--mode retrieve`, `--agent`, `--type`, `--top-n` flags
+
+### Added (Tier 2 — Semantic Search & Distillation)
+- Hybrid semantic search via Ollama nomic-embed-text embeddings (768 dims)
+- `cast-memory-embed.py` — embedding generator with BLOB storage
+- `cast-session-distiller.py` — end-of-session extractor for decisions/patterns/failures
+- Memory staleness validation: `cast-memory-validate.py` flags >30-day memories, verifies file/function references
+- `cast-memory-schema-v3.py` — adds `embedding BLOB` column
+
+### Added (Tier 3 — Architecture)
+- `cast-mcp-memory-server.py` — MCP server wrapping agent_memories table
+- `cast-memory-consolidate.py` — weekly dedup, decay, archive below threshold
+- Agent preamble wiring: procedural memories auto-loaded at session start
+- `cast-memory-schema-v4.py` — MCP server schema additions
+
+### Added (Tier 4 — Distribution)
+- README: Memory Persistence section with full schema/algorithm documentation
+- Standalone `cast-memory` repo (`ek33450505/cast-memory`) with install.sh and Homebrew tap
+- `homebrew-cast-memory` tap formula
+
+---
+
 ## v4.2 — TUI Dashboard & Tidy (2026-04-03)
 
 Two new user-facing subcommands and several fixes.
