@@ -1,14 +1,14 @@
 #!/bin/bash
-# cast-validate.sh — CAST system integrity checker v2.0.0
+# cast-validate.sh — CAST system integrity checker v2.1.0
 # Checks: hook wiring, agent frontmatter, routing table schema,
 #         CLAUDE.md directives, CAST directory structure, cast-events.sh installed,
 #         agent-groups.json, cast-session-end.sh wiring, routing-proposals.json schema,
-#         security post_chain wiring.
+#         security post_chain wiring, local-first readiness.
 # Exit codes: 0=all green, 1=warnings only, 2=one or more errors
 
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 ERRORS=0
 WARNINGS=0
 
@@ -17,7 +17,7 @@ pass()  { echo "✓ $*"; }
 fail()  { echo "✗ $*"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "⚠ $*"; WARNINGS=$((WARNINGS + 1)); }
 
-echo "CAST Validate v${VERSION} (10 checks)"
+echo "CAST Validate v${VERSION} (11 checks)"
 echo "══════════════════════════════"
 
 # --- Check 1: Hook wiring ---
@@ -427,6 +427,90 @@ PYEOF
     warn "Security post_chain: could not verify — ${SECURITY_WIRED#ERROR:}"
   fi
 fi
+
+# --- Check 11: Local-First Readiness ---
+echo ""
+echo "Local-First Readiness"
+echo "─────────────────────"
+
+# Keychain: is ANTHROPIC_API_KEY stored?
+if [[ "$(uname -s)" == "Darwin" ]] && security find-generic-password -s cast-anthropic-api-key -a cast -w >/dev/null 2>&1; then
+  pass "Keychain: ANTHROPIC_API_KEY stored in macOS Keychain"
+else
+  warn "Keychain: ANTHROPIC_API_KEY not in Keychain (opt-in: cast-keychain.sh set anthropic-api-key)"
+fi
+
+# Encryption: is age installed? Memory file state?
+if command -v age >/dev/null 2>&1; then
+  MEMORY_DIR="$HOME/.claude/agent-memory-local"
+  AGE_COUNT=$(find "$MEMORY_DIR" -name "*.age" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$AGE_COUNT" -gt 0 ]]; then
+    pass "Encryption: age installed, $AGE_COUNT encrypted memory file(s)"
+  else
+    pass "Encryption: age installed (memory not encrypted — opt-in: cast-encrypt.sh encrypt)"
+  fi
+else
+  warn "Encryption: age not installed (opt-in: brew install age)"
+fi
+
+# Backup: freshness check
+BACKUP_DIR="$HOME/.claude/backups"
+if [[ -d "$BACKUP_DIR" ]]; then
+  LATEST_BACKUP=$(find "$BACKUP_DIR" -name "cast-db-*.db" -type f 2>/dev/null | sort -r | head -1)
+  if [[ -n "$LATEST_BACKUP" ]]; then
+    BACKUP_AGE_DAYS=$(python3 -c "
+import os, datetime
+mtime = os.path.getmtime('$LATEST_BACKUP')
+age = (datetime.datetime.now().timestamp() - mtime) / 86400
+print(f'{age:.0f}')
+" 2>/dev/null || echo "?")
+    pass "Backup: latest $(basename "$LATEST_BACKUP") (${BACKUP_AGE_DAYS}d ago)"
+  else
+    warn "Backup: $BACKUP_DIR exists but no cast-db-*.db snapshots found"
+  fi
+else
+  warn "Backup: ~/.claude/backups/ not found (run: cast-db-backup.py)"
+fi
+
+# Ollama: is it running?
+if command -v ollama >/dev/null 2>&1; then
+  if curl -s --connect-timeout 2 "http://localhost:11434/api/tags" >/dev/null 2>&1; then
+    OLLAMA_MODEL_COUNT=$(curl -s --connect-timeout 2 "http://localhost:11434/api/tags" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo "?")
+    pass "Ollama: running ($OLLAMA_MODEL_COUNT model(s) available)"
+  else
+    warn "Ollama: installed but not running (start: ollama serve)"
+  fi
+else
+  warn "Ollama: not installed (opt-in: brew install ollama)"
+fi
+
+# Offline queue depth
+OFFLINE_QUEUE_DIR="$HOME/.claude/cast/offline-queue"
+if [[ -d "$OFFLINE_QUEUE_DIR" ]]; then
+  QUEUE_DEPTH=$(find "$OFFLINE_QUEUE_DIR" -name "*.json" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$QUEUE_DEPTH" -eq 0 ]]; then
+    pass "Offline queue: empty (0 pending)"
+  else
+    warn "Offline queue: $QUEUE_DEPTH item(s) pending replay"
+  fi
+else
+  pass "Offline queue: not initialized (no pending items)"
+fi
+
+# FTS5: agent_memories_fts table present?
+CAST_DB="$HOME/.claude/cast.db"
+if [[ -f "$CAST_DB" ]]; then
+  FTS5_CHECK=$(sqlite3 "$CAST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='agent_memories_fts';" 2>/dev/null || echo "0")
+  if [[ "$FTS5_CHECK" -gt 0 ]]; then
+    pass "FTS5: agent_memories_fts table present in cast.db"
+  else
+    warn "FTS5: agent_memories_fts table not found (run: cast-memory-fts5-migrate.py)"
+  fi
+else
+  warn "FTS5: cast.db not found"
+fi
+
+echo ""
 
 # --- Summary ---
 echo "══════════════════════════════"

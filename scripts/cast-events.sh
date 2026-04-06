@@ -26,6 +26,31 @@ CAST_STATE_DIR="${CAST_DIR}/state"
 CAST_REVIEWS_DIR="${CAST_DIR}/reviews"
 CAST_ARTIFACTS_DIR="${CAST_DIR}/artifacts"
 
+# --- Keychain fallback (OPT-IN) ---
+# Only attempts Keychain lookup if ANTHROPIC_API_KEY is NOT already set.
+# This is a passive fallback — it never overrides an existing env var.
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+  _keychain_key=$(security find-generic-password -s cast-anthropic-api-key -a cast -w 2>/dev/null || true)
+  if [[ -n "$_keychain_key" ]]; then
+    export ANTHROPIC_API_KEY="$_keychain_key"
+  fi
+  unset _keychain_key
+fi
+
+# --- Connectivity check utility ---
+# Calls cast-connectivity.sh check if available. Returns 0=online, 1=offline.
+cast_check_connectivity() {
+  local script="${HOME}/.claude/scripts/cast-connectivity.sh"
+  if [[ -x "$script" ]]; then
+    "$script" check >/dev/null 2>&1
+    return $?
+  else
+    # Fallback: direct ping check
+    ping -c 1 -W 2 api.anthropic.com >/dev/null 2>&1
+    return $?
+  fi
+}
+
 _cast_init_dirs() {
   mkdir -p "$CAST_EVENTS_DIR" "$CAST_STATE_DIR" "$CAST_REVIEWS_DIR" "$CAST_ARTIFACTS_DIR"
 }
