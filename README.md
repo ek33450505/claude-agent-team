@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**A local-first multi-agent framework for Claude Code.** 17 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
+**A local-first multi-agent framework for Claude Code.** 25 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
 
 **[Live Demo →](https://cast-site-iota.vercel.app)** |
 [Dashboard →](https://github.com/ek33450505/claude-code-dashboard)
@@ -18,7 +18,7 @@
 
 CAST turns Claude Code from a single-session assistant into a coordinated team:
 
-- **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 17-row dispatch table and picks the agent — no regex, no routing config.
+- **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 25-row dispatch table and picks the agent — no regex, no routing config.
 - **Quality is enforced, not requested.** Raw `git commit` and `git push` are hard-blocked by shell hooks. Every code change mandates a `code-reviewer` pass. Commit only happens through the `commit` agent.
 - **Everything is observable.** Every agent dispatch, session, and token spend is logged to `cast.db` (SQLite). A companion React dashboard shows activity, analytics, agent status, and memory in real time.
 - **Lightweight tasks use cheaper models automatically.** Haiku handles `code-reviewer`, `commit`, `push`, and `test-runner` — the high-frequency, low-complexity work. Sonnet handles planning, writing, and debugging. The cost difference is 20x per token. CAST routes silently; you pay for what the task actually needs.
@@ -36,7 +36,7 @@ User Prompt
       │
       ▼
 ┌─────────────────────────────────────────────┐
-│  CLAUDE.md dispatch table (17-row routing)  │
+│  CLAUDE.md dispatch table (25-row routing)  │
 │  Model reads table → picks specialist agent │
 └──────────────────┬──────────────────────────┘
                    │
@@ -132,7 +132,7 @@ bash install.sh
 
 ## Agent Roster
 
-17 specialists. Each is a plain markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, effort, and isolation.
+25 specialists. Each is a plain markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, effort, and isolation.
 
 | Agent | Model | Effort | Purpose |
 |---|---|---|---|
@@ -154,9 +154,22 @@ bash install.sh
 | `push` | haiku | low | Pushes to remote with safety checks |
 | `frontend-qa` | haiku | low | Frontend diff review, component audit |
 
+### JARVIS Personal Assistant Agents
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| `pa-briefing` | sonnet | Morning briefing — weather, calendar, email, Jira, Todoist, dev status |
+| `pa-triage` | haiku | Email triage — 4-category classification, draft replies |
+| `pa-jira` | haiku | Stand-up generator — Jira sprint + git commits |
+| `pa-eod` | haiku | End-of-day summary — done, carried forward, tomorrow's top 3 |
+| `pa-weekly` | sonnet | Weekly report — sprint velocity, accomplishments, next week |
+| `pa-meeting-prep` | sonnet | On-demand meeting prep — Confluence, Jira, Gmail, vault context |
+| `pa-calendar` | haiku | Calendar management — natural language create/update/list events |
+| `pa-backup` | haiku | Nightly backup — rsync + integrity verification |
+
 All agents carry `memory: local` — each accumulates session knowledge in `~/.claude/agent-memory-local/<name>/`.
 
-> 11 of 17 agents run on Haiku ($1/MTok input) — the high-frequency, pattern-following work. 6 agents run on Sonnet ($3/MTok input) for complex reasoning. Model tiering cuts token costs by 25-40% compared to running all agents on the same model.
+> 16 of 25 agents run on Haiku ($1/MTok input) — the high-frequency, pattern-following work. 9 agents run on Sonnet ($3/MTok input) for complex reasoning. Model tiering cuts token costs by 25-40% compared to running all agents on the same model.
 
 ---
 
@@ -166,7 +179,7 @@ CAST is designed to minimize token spend without sacrificing quality. Multi-agen
 
 | Optimization | How It Works | Impact |
 |---|---|---|
-| Model tiering | 11 agents on Haiku, 6 on Sonnet — route by task complexity | 3x cost reduction on lightweight tasks |
+| Model tiering | 16 agents on Haiku, 9 on Sonnet — route by task complexity | 3x cost reduction on lightweight tasks |
 | Response budgets | Agents have enforced token limits: 300 (lightweight), 800 (medium), 2,000 (heavy) | Prevents verbose responses from bloating context |
 | Compressed Agent Protocol | Shared boilerplate condensed from ~310 tokens to ~100 tokens per agent | ~210 tokens saved per invocation |
 | Orchestrator preamble tiers | Full context for implementation agents, minimal for lightweight agents | ~80 tokens saved per lightweight dispatch |
@@ -438,7 +451,7 @@ npm run dev    # Vite :5173 + Express :3001
 ```
 claude-agent-team/
   agents/
-    core/               ← 17 agent definitions (mirrored to ~/.claude/agents/)
+    core/               ← 25 agent definitions (mirrored to ~/.claude/agents/)
   docs/                 ← architecture specs, native-tools-reference.md, protocol docs
   scripts/              ← hook scripts, utilities, cron setup
   tests/
@@ -532,6 +545,7 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v4.3 | Memory persistence: FTS5 search, relevance scoring, shared pool, procedural memory, semantic embeddings, session distiller, staleness validation, MCP server, weekly consolidation, standalone cast-memory repo |
 | v4.4 | Token efficiency: model tiering (11 Haiku / 6 Sonnet), response budgets, compressed Agent Protocol, orchestrator preamble tiers, research URL cache, token budget alerts — 25-40% cost reduction |
 | v4.5 | Local-first hardening: macOS Keychain integration, age encryption with Secure Enclave binding, WAL-safe SQLite backups, network detection with offline queue, Ollama local model fallback, parallel plan execution across dual worktrees; 357 BATS tests |
+| v4.6 | JARVIS personal assistant agents: 8 pa-* agents (pa-briefing, pa-triage, pa-jira, pa-eod, pa-weekly, pa-meeting-prep, pa-calendar, pa-backup) — total roster grows to 25 agents |
 
 ## CAST Ecosystem
 
