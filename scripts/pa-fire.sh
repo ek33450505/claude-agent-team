@@ -9,12 +9,12 @@ LOG_DIR="${HOME}/.claude/logs"
 VAULT_DIR="/Users/edkubiak/JARVIS"
 mkdir -p "$LOG_DIR"
 
-# Load API key from keychain
-export ANTHROPIC_API_KEY=$(security find-generic-password -s "ANTHROPIC_API_KEY" -w 2>/dev/null)
-
-if [[ -z "$ANTHROPIC_API_KEY" ]]; then
-  echo "[ERROR] ANTHROPIC_API_KEY not found in keychain" >> "$LOG_DIR/${AGENT}.log"
-  exit 1
+# Load API key from keychain if available (optional — OAuth auth works without it)
+ANTHROPIC_API_KEY=$(security find-generic-password -s "ANTHROPIC_API_KEY" -w 2>/dev/null || true)
+if [[ -n "$ANTHROPIC_API_KEY" ]]; then
+  export ANTHROPIC_API_KEY
+else
+  echo "[INFO] No API key in keychain — using OAuth auth" >> "$LOG_DIR/${AGENT}.log"
 fi
 
 # TTS option — set JARVIS_SPEAK=1 in environment or shell profile to enable
