@@ -32,7 +32,7 @@ Claude Code exposes ~40 discrete tools, each with a per-tool permission gate eva
 CAST is built to fill the gaps those unshipped features leave, and to make the hook system load-bearing rather than observational.
 
 <p align="center">
-  <img src="docs/cast-architecture.svg" alt="CAST architecture diagram" width="680" />
+  <img src="docs/cast-architecture.svg" alt="CAST architecture diagram" width="900" />
 </p>
 
 ---
