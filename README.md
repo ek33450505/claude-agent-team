@@ -31,63 +31,9 @@ Claude Code exposes ~40 discrete tools, each with a per-tool permission gate eva
 
 CAST is built to fill the gaps those unshipped features leave, and to make the hook system load-bearing rather than observational.
 
-```
-User Prompt
-      │
-      ▼
-┌─────────────────────────────────────────────┐
-│  CLAUDE.md dispatch table (17-row routing)  │
-│  Model reads table → picks specialist agent │
-└──────────────────┬──────────────────────────┘
-                   │
-      ┌────────────▼────────────┐
-      │   PreToolUse hooks      │
-      │  • pre-tool-guard.sh    │  ← blocks raw git commit/push
-      │  • cast-audit-hook.sh   │  ← logs file modifications
-      │  • cast-headless-guard  │  ← auto-answers AskUserQuestion
-      └────────────┬────────────┘
-                   │
-      ┌────────────▼────────────┐
-      │  Agent Tool dispatch    │
-      │  Specialist agent runs  │
-      │  (SubagentStart hook    │  ← emits task_claimed to cast.db
-      │   fires on spawn)       │
-      └────────────┬────────────┘
-                   │
-      ┌────────────▼────────────┐
-      │   PostToolUse hooks     │
-      │  • post-tool-hook.sh    │  ← injects [CAST-REVIEW] after writes
-      └────────────┬────────────┘
-                   │
-      ┌────────────▼────────────┐
-      │   Post-chain protocol   │
-      │  code change?           │
-      │    yes → code-reviewer  │
-      │          → commit       │
-      │          → push         │
-      │    no  → done           │
-      └────────────┬────────────┘
-                   │
-      ┌────────────▼────────────┐
-      │   Stop hook             │
-      │  cast-session-end.sh    │  ← archival, DB pruning, memory sync
-      └────────────┬────────────┘
-                   │
-      ┌────────────────────────────┐
-      │        cast.db             │
-      │  sessions  │  agent_runs   │
-      │  routing_events            │
-      │  agent_memories            │
-      └────────────────────────────┘
-                   │
-      ┌────────────▼────────────┐
-      │  claude-code-dashboard  │
-      │  React UI on :5173      │
-      │  /activity /sessions    │
-      │  /analytics /agents     │
-      │  /memory /token-spend   │
-      └─────────────────────────┘
-```
+<p align="center">
+  <img src="docs/cast-architecture.svg" alt="CAST architecture diagram" width="680" />
+</p>
 
 ---
 
