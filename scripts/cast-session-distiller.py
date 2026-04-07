@@ -1,292 +1,272 @@
 #!/usr/bin/env python3
 """
-cast-session-distiller.py — End-of-session heuristic memory extraction for CAST.
+cast-session-distiller.py — Extract worth-keeping facts from a session transcript.
 
-Reads agent_runs from cast.db and writes pattern-matched memories to agent_memories.
-No LLM calls — pure sqlite3 queries and regex pattern matching.
+Reads a session transcript from stdin or --input file, applies regex/keyword
+extraction rules to find feedback/project/user/reference memories, deduplicates
+against existing agent_memories rows (valid_to IS NULL), and writes matches to cast.db.
 
 Usage:
-  cast-session-distiller.py [--db <path>] [--session-id <id>] [--dry-run]
+  cat transcript.txt | python3 cast-session-distiller.py [options]
+  python3 cast-session-distiller.py --input transcript.txt [options]
 
-Output: JSON object with distilled memories and skipped count.
-Exit: 0 always (exit 1 only on DB connection failure).
+Options:
+  --input <file>          Read transcript from file instead of stdin
+  --db <path>             Path to cast.db (default: ~/.claude/cast.db or $CAST_DB_PATH)
+  --dry-run               Print candidates as JSON without writing to DB
+  --min-importance <f>    Minimum importance threshold (default: 0.6)
+
+Exit codes:
+  0 — success (even if no candidates found)
+  1 — unrecoverable error (DB connection failure on non-dry-run)
 """
 
-import os
 import sys
-import json
+import os
 import re
-import argparse
+import json
 import sqlite3
-from datetime import datetime, timezone
-
-PATH_REGEX = re.compile(r'/[^\s\'")\]]{5,}')
-DATE_SUFFIX = datetime.now().strftime('%Y%m%d')
-REPO_DIR = os.path.expanduser('~/Projects/personal/claude-agent-team')
+import argparse
+import datetime
 
 
-def get_db_path():
-    """Resolve cast.db path using same logic as cast_db.py."""
-    url = os.environ.get('CAST_DB_URL', '')
-    if url.startswith('sqlite:///'):
-        return url[len('sqlite:///'):]
-    return os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+# ---------------------------------------------------------------------------
+# Extraction patterns — (compiled_regex, memory_type, importance)
+# Patterns are evaluated in order; first match per sentence wins.
+# ---------------------------------------------------------------------------
+EXTRACTION_PATTERNS = [
+    (re.compile(
+        r"(?:don't|dont|do not|stop doing|never)\s+.{5,}",
+        re.IGNORECASE
+    ), 'feedback', 0.85),
+
+    (re.compile(
+        r"(?:always|make sure|remember that|remember to)\s+.{5,}",
+        re.IGNORECASE
+    ), 'feedback', 0.75),
+
+    (re.compile(
+        r"(?:the reason (?:we|we're|we are)|because of|driven by)\s+.{5,}",
+        re.IGNORECASE
+    ), 'project', 0.70),
+
+    (re.compile(
+        r"(?:we decided|decision:)\s+.{3,}",
+        re.IGNORECASE
+    ), 'project', 0.70),
+
+    (re.compile(
+        r".+(?:\bis at path\b|\blives in\b|\blocated at\b)\s+.{3,}",
+        re.IGNORECASE
+    ), 'reference', 0.65),
+
+    (re.compile(
+        r"(?:I prefer|I like)\s+.{5,}",
+        re.IGNORECASE
+    ), 'user', 0.60),
+]
 
 
-def get_agent_runs_columns(conn):
-    """Discover agent_runs columns via PRAGMA."""
-    rows = conn.execute("PRAGMA table_info(agent_runs)").fetchall()
-    return {row[1] for row in rows}
+def slugify(text, max_words=8):
+    """Convert text to a slug: first N words, lowercased, joined by hyphens."""
+    words = re.split(r'\W+', text.lower())
+    words = [w for w in words if w][:max_words]
+    return '-'.join(words) if words else 'memory'
 
 
-def check_table_exists(conn, table_name):
-    """Return True if table exists."""
-    result = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        (table_name,)
-    ).fetchone()
-    return result is not None
+def split_sentences(text):
+    """Split text into (sentence, surrounding_context) tuples."""
+    sentence_pattern = re.compile(r'(?<=[.!?])\s+')
+    sentences = sentence_pattern.split(text.strip())
+    result = []
+    for i, sentence in enumerate(sentences):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        # Gather up to 1 sentence before and 1 after for context
+        parts = [sentence]
+        if i > 0:
+            parts = [sentences[i - 1].strip()] + parts
+        if i < len(sentences) - 1:
+            parts = parts + [sentences[i + 1].strip()]
+        context = ' '.join(p for p in parts if p)
+        result.append((sentence, context))
+    return result
 
 
-def memory_exists(conn, name):
-    """Return True if a memory with this name already exists for agent='shared'."""
-    row = conn.execute(
-        "SELECT id FROM agent_memories WHERE agent='shared' AND name=?",
-        (name,)
-    ).fetchone()
-    return row is not None
+def extract_candidates(text, min_importance=0.6):
+    """
+    Extract memory candidates from transcript text.
+
+    Returns list of dicts: {name, description, content, type, importance}
+    """
+    candidates = []
+    seen_names = set()
+
+    sentence_tuples = split_sentences(text)
+
+    for sentence, context in sentence_tuples:
+        for pattern, mem_type, importance in EXTRACTION_PATTERNS:
+            if importance < min_importance:
+                continue
+            match = pattern.search(sentence)
+            if match:
+                # Use the full sentence as description (truncated to 200 chars)
+                description = sentence[:200]
+
+                # Generate slug name from matched sentence
+                name = slugify(sentence, max_words=8)
+
+                # Avoid duplicate names within this run
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+
+                candidates.append({
+                    'name': name,
+                    'description': description,
+                    'content': context[:500],  # up to 2 surrounding sentences for context
+                    'type': mem_type,
+                    'importance': importance,
+                })
+                break  # first pattern match wins per sentence
+
+    return candidates
 
 
-def count_blocked_memories(conn, agent):
-    """Count existing BLOCKED memories for this agent."""
-    row = conn.execute(
-        "SELECT COUNT(*) FROM agent_memories WHERE content LIKE '%BLOCKED%' AND content LIKE ?",
-        (f'%{agent}%',)
-    ).fetchone()
-    return row[0] if row else 0
+def check_duplicate(conn, name):
+    """Return True if a non-superseded shared memory with this name exists."""
+    try:
+        # Check if valid_to column exists
+        cursor = conn.execute("PRAGMA table_info(agent_memories)")
+        col_names = {row[1] for row in cursor.fetchall()}
+
+        if 'valid_to' in col_names:
+            row = conn.execute(
+                "SELECT id FROM agent_memories WHERE agent = 'shared' AND name = ? "
+                "AND valid_to IS NULL LIMIT 1",
+                (name,)
+            ).fetchone()
+        else:
+            # Migration not yet run — check without temporal filter
+            row = conn.execute(
+                "SELECT id FROM agent_memories WHERE agent = 'shared' AND name = ? LIMIT 1",
+                (name,)
+            ).fetchone()
+        return row is not None
+    except Exception:
+        return False
 
 
-def write_memory(conn, name, mem_type, description, content, importance, decay_rate=0.995):
-    """Write a memory via direct sqlite3 INSERT."""
-    conn.execute(
-        """INSERT INTO agent_memories
-           (agent, project, type, name, description, content, importance, decay_rate)
-           VALUES ('shared', 'cast', ?, ?, ?, ?, ?, ?)""",
-        (mem_type, name, description, content, importance, decay_rate)
-    )
+def insert_memory(conn, candidate):
+    """Insert a candidate memory into agent_memories as agent='shared'."""
+    now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+    try:
+        conn.execute("""
+            INSERT INTO agent_memories
+            (agent, type, name, description, content, importance, valid_from, created_at, updated_at)
+            VALUES ('shared', ?, ?, ?, ?, ?, datetime('now'), ?, ?)
+        """, (
+            candidate['type'],
+            candidate['name'],
+            candidate['description'],
+            candidate['content'],
+            candidate['importance'],
+            now,
+            now,
+        ))
+    except sqlite3.OperationalError:
+        # valid_from column may not exist yet (migration not run) — insert without it
+        conn.execute("""
+            INSERT INTO agent_memories
+            (agent, type, name, description, content, importance, created_at, updated_at)
+            VALUES ('shared', ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            candidate['type'],
+            candidate['name'],
+            candidate['description'],
+            candidate['content'],
+            candidate['importance'],
+            now,
+            now,
+        ))
     conn.commit()
-
-
-def extract_memories(conn, run_row, col_names, dry_run=False):
-    """
-    Extract heuristic memories from a single agent_runs row.
-    Returns list of memory dicts (written or would-be-written) and skipped count.
-    """
-    def safe_get(field, default=''):
-        return run_row[col_names.index(field)] if field in col_names else default
-
-    run_id = safe_get('id', None)
-    session_id = safe_get('session_id', None)
-    agent = safe_get('agent', 'unknown')
-    status = safe_get('status', '')
-    task_summary = safe_get('task_summary', '') or ''
-
-    distilled = []
-    skipped = 0
-
-    # --- Rule a: BLOCKED pattern ---
-    if status == 'BLOCKED':
-        excerpt = task_summary[:200].strip()
-        name = f'blocked-{agent}-{DATE_SUFFIX}'
-        content = f'Agent {agent} was BLOCKED on task: {excerpt}'
-
-        # Rule d: Repeated failure detection
-        blocked_count = count_blocked_memories(conn, agent)
-        importance = 0.85 if blocked_count >= 2 else 0.7
-
-        if memory_exists(conn, name):
-            skipped += 1
-        else:
-            mem = {
-                'name': name,
-                'type': 'procedural',
-                'description': f'BLOCKED status from {agent} on {DATE_SUFFIX}',
-                'content': content,
-                'importance': importance,
-                'decay_rate': 0.990
-            }
-            if not dry_run:
-                write_memory(conn, name, 'procedural',
-                             mem['description'], content, importance, 0.990)
-            distilled.append({k: v for k, v in mem.items()})
-
-    # --- Rule b: DONE_WITH_CONCERNS pattern ---
-    elif status == 'DONE_WITH_CONCERNS':
-        excerpt = task_summary[:200].strip()
-        name = f'concern-{agent}-{DATE_SUFFIX}'
-        content = f'Agent {agent} completed with concerns: {excerpt}'
-        importance = 0.65
-
-        if memory_exists(conn, name):
-            skipped += 1
-        else:
-            mem = {
-                'name': name,
-                'type': 'feedback',
-                'description': f'DONE_WITH_CONCERNS from {agent} on {DATE_SUFFIX}',
-                'content': content,
-                'importance': importance,
-                'decay_rate': 0.995
-            }
-            if not dry_run:
-                write_memory(conn, name, 'feedback',
-                             mem['description'], content, importance)
-            distilled.append({k: v for k, v in mem.items()})
-
-    # --- Rule c: File path references ---
-    if task_summary:
-        paths = list(dict.fromkeys(PATH_REGEX.findall(task_summary)))[:5]
-        for path in paths:
-            if not os.path.exists(path):
-                basename = os.path.basename(path)
-                name = f'stale-path-{basename}'
-                content = f'Path referenced in session no longer exists: {path}'
-                importance = 0.5
-
-                if memory_exists(conn, name):
-                    skipped += 1
-                else:
-                    mem = {
-                        'name': name,
-                        'type': 'reference',
-                        'description': f'Stale path reference: {path}',
-                        'content': content,
-                        'importance': importance,
-                        'decay_rate': 0.995
-                    }
-                    if not dry_run:
-                        write_memory(conn, name, 'reference',
-                                     mem['description'], content, importance)
-                    distilled.append({k: v for k, v in mem.items()})
-
-    return distilled, skipped
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='End-of-session heuristic memory extraction for CAST.'
+        description='Extract worth-keeping facts from a session transcript'
     )
-    parser.add_argument('--db', help='Path to cast.db (overrides CAST_DB_PATH)')
-    parser.add_argument('--session-id', help='Session ID to process (default: most recent run)')
+    parser.add_argument('--input', type=str, default=None,
+                        help='Read transcript from file instead of stdin')
+    parser.add_argument('--db', type=str, default=None,
+                        help='Path to cast.db (default: ~/.claude/cast.db or $CAST_DB_PATH)')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Print what would be written without writing to DB')
+                        help='Print candidates as JSON without writing to DB')
+    parser.add_argument('--min-importance', type=float, default=0.6,
+                        help='Minimum importance threshold (default: 0.6)')
     args = parser.parse_args()
 
-    db_path = args.db if args.db else get_db_path()
+    # Read transcript
+    if args.input:
+        try:
+            with open(args.input, 'r', encoding='utf-8') as f:
+                text = f.read()
+        except Exception as e:
+            print(f"ERROR: Cannot read input file {args.input}: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        try:
+            text = sys.stdin.read()
+        except Exception:
+            text = ''
+
+    if not text or not text.strip():
+        # Empty input — exit cleanly
+        if args.dry_run:
+            print(json.dumps([]))
+        sys.exit(0)
+
+    candidates = extract_candidates(text, min_importance=args.min_importance)
+
+    if args.dry_run:
+        print(json.dumps(candidates, indent=2))
+        sys.exit(0)
+
+    if not candidates:
+        sys.exit(0)
+
+    # Resolve DB path
+    db_path = args.db or os.environ.get('CAST_DB_PATH',
+                                         os.path.expanduser('~/.claude/cast.db'))
 
     if not os.path.exists(db_path):
-        print(f"ERROR: cast.db not found at {db_path}", file=sys.stderr)
-        sys.exit(1)
+        print(f"[distiller] DB not found at {db_path} — skipping write", file=sys.stderr)
+        sys.exit(0)
 
     try:
-        conn = sqlite3.connect(db_path, timeout=10)
-    except sqlite3.Error as e:
+        conn = sqlite3.connect(db_path)
+    except Exception as e:
         print(f"ERROR: Cannot connect to {db_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        # Check tables exist
-        if not check_table_exists(conn, 'agent_runs'):
-            output = {
-                'session_id': args.session_id,
-                'agent_run_id': None,
-                'distilled': [],
-                'skipped': 0,
-                'note': 'agent_runs table not found'
-            }
-            print(json.dumps(output, indent=2))
-            conn.close()
-            sys.exit(0)
-
-        if not check_table_exists(conn, 'agent_memories'):
-            output = {
-                'session_id': args.session_id,
-                'agent_run_id': None,
-                'distilled': [],
-                'skipped': 0,
-                'note': 'agent_memories table not found'
-            }
-            print(json.dumps(output, indent=2))
-            conn.close()
-            sys.exit(0)
-
-        # Discover columns
-        col_names_set = get_agent_runs_columns(conn)
-        col_names = [r[1] for r in conn.execute("PRAGMA table_info(agent_runs)").fetchall()]
-
-        # Fetch run(s) to process
-        if args.session_id:
-            if 'session_id' in col_names_set:
-                rows = conn.execute(
-                    "SELECT * FROM agent_runs WHERE session_id=? ORDER BY id DESC",
-                    (args.session_id,)
-                ).fetchall()
-            else:
-                rows = []
-        else:
-            # Most recent single row
-            row = conn.execute(
-                "SELECT * FROM agent_runs ORDER BY id DESC LIMIT 1"
-            ).fetchone()
-            rows = [row] if row else []
-
-        if not rows:
-            output = {
-                'session_id': args.session_id,
-                'agent_run_id': None,
-                'distilled': [],
-                'skipped': 0,
-                'note': 'No agent_runs rows found'
-            }
-            print(json.dumps(output, indent=2))
-            conn.close()
-            sys.exit(0)
-
-        all_distilled = []
-        total_skipped = 0
-        first_run_id = rows[0][col_names.index('id')] if 'id' in col_names_set else None
-        first_session_id = rows[0][col_names.index('session_id')] if 'session_id' in col_names_set else args.session_id
-
-        for run_row in rows:
-            d, s = extract_memories(conn, run_row, col_names, dry_run=args.dry_run)
-            all_distilled.extend(d)
-            total_skipped += s
-
-        output = {
-            'session_id': first_session_id,
-            'agent_run_id': first_run_id,
-            'distilled': all_distilled,
-            'skipped': total_skipped
-        }
-
-        print(json.dumps(output, indent=2))
-        conn.close()
-        sys.exit(0)
-
-    except sqlite3.Error as e:
-        print(f"ERROR: Distillation failed: {e}", file=sys.stderr)
+    inserted = 0
+    skipped = 0
+    for candidate in candidates:
+        if check_duplicate(conn, candidate['name']):
+            skipped += 1
+            continue
         try:
-            conn.close()
-        except Exception:
-            pass
-        sys.exit(1)
-    except Exception as e:
-        print(f"ERROR: Unexpected error: {e}", file=sys.stderr)
-        try:
-            conn.close()
-        except Exception:
-            pass
-        sys.exit(1)
+            insert_memory(conn, candidate)
+            inserted += 1
+        except Exception as e:
+            print(f"[distiller] WARN: failed to insert '{candidate['name']}': {e}",
+                  file=sys.stderr)
+
+    conn.close()
+    print(f"[distiller] {inserted} inserted, {skipped} skipped (duplicates)",
+          file=sys.stderr)
+    sys.exit(0)
 
 
 if __name__ == '__main__':

@@ -134,7 +134,16 @@ def sanitize_fts_query(prompt):
     return sanitized if sanitized.strip() else None
 
 
-def retrieve_memories(conn, prompt, agent, top_n=5, type_filter=None):
+def invalidate_memory(conn, memory_id):
+    """Mark a memory as superseded by setting valid_to = now."""
+    conn.execute(
+        "UPDATE agent_memories SET valid_to = datetime('now') WHERE id = ?",
+        (memory_id,)
+    )
+    conn.commit()
+
+
+def retrieve_memories(conn, prompt, agent, top_n=5, type_filter=None, include_history=False):
     """Return top-N memories for agent, ranked by relevance. Includes shared pool."""
     # Check FTS availability
     has_fts = conn.execute(
@@ -144,6 +153,14 @@ def retrieve_memories(conn, prompt, agent, top_n=5, type_filter=None):
     # Get column names for flexible field access
     cursor = conn.execute("PRAGMA table_info(agent_memories)")
     column_names = [row[1] for row in cursor.fetchall()]
+
+    # Temporal filter: hide superseded memories unless --history requested
+    # Gate on column existence so function degrades gracefully before migration runs
+    has_valid_to = 'valid_to' in column_names
+    if has_valid_to and not include_history:
+        temporal_clause = "AND am.valid_to IS NULL"
+    else:
+        temporal_clause = ""
 
     type_clause = "AND am.type = ?" if type_filter else ""
     type_params = (type_filter,) if type_filter else ()
@@ -160,6 +177,7 @@ def retrieve_memories(conn, prompt, agent, top_n=5, type_filter=None):
                     JOIN agent_memories_fts fts ON am.id = fts.rowid
                     WHERE agent_memories_fts MATCH ?
                     AND (am.agent = ? OR am.agent = 'shared')
+                    {temporal_clause}
                     {type_clause}
                     ORDER BY fts.rank
                     LIMIT 50
@@ -176,6 +194,7 @@ def retrieve_memories(conn, prompt, agent, top_n=5, type_filter=None):
             SELECT am.*, 0 AS rank
             FROM agent_memories am
             WHERE (am.agent = ? OR am.agent = 'shared')
+            {temporal_clause}
             {type_clause}
         """
         params = (agent,) + type_params
@@ -228,7 +247,9 @@ def write_shared_memory(conn, name, description, content, memory_type='project',
                 content=excluded.content,
                 description=excluded.description,
                 importance=excluded.importance,
-                updated_at=CURRENT_TIMESTAMP
+                updated_at=CURRENT_TIMESTAMP,
+                valid_from=datetime('now'),
+                valid_to=NULL
         """, (memory_type, name, description, content, importance, decay_rate))
     except sqlite3.OperationalError:
         # ON CONFLICT clause requires a UNIQUE index — if not present, use INSERT OR REPLACE
@@ -256,9 +277,31 @@ def main():
                         help='Max memories to return in retrieve mode (default: 5)')
     parser.add_argument('--mode', type=str, default='route', choices=['route', 'retrieve'],
                         help='route: return best agent; retrieve: return ranked memory list')
+    parser.add_argument('--history', action='store_true',
+                        help='Include superseded (valid_to IS NOT NULL) memories in retrieve mode')
+    parser.add_argument('--invalidate', type=int, default=None, metavar='ID',
+                        help='Mark memory with given ID as superseded (sets valid_to=now) and exit')
     args = parser.parse_args()
 
     null_result = json.dumps({"agent": None, "confidence": 0.0})
+
+    # Resolve DB path (needed for both --invalidate and normal modes)
+    db_path = args.db or os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+
+    # --- INVALIDATE MODE (early exit, no prompt required) ---
+    if args.invalidate is not None:
+        if not os.path.exists(db_path):
+            print(f"ERROR: Database not found at {db_path}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            conn = sqlite3.connect(db_path)
+            invalidate_memory(conn, args.invalidate)
+            conn.close()
+            print(json.dumps({"invalidated": args.invalidate}))
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
 
     # Get prompt from arg or stdin
     prompt = args.prompt
@@ -278,9 +321,6 @@ def main():
         else:
             print(null_result)
         return
-
-    # Resolve DB path
-    db_path = args.db or os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
 
     if not os.path.exists(db_path):
         if args.mode == 'retrieve':
@@ -310,7 +350,8 @@ def main():
             agent = args.agent or 'shared'
             type_filter = args.type
             results = retrieve_memories(conn, prompt, agent, top_n=args.top_n,
-                                        type_filter=type_filter)
+                                        type_filter=type_filter,
+                                        include_history=args.history)
 
             # Get column names for building output dicts
             cursor = conn.execute("PRAGMA table_info(agent_memories)")

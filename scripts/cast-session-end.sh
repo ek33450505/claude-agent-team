@@ -316,6 +316,14 @@ print(f"cast-session-end: memory sync {inserted} inserted, {updated} updated, {e
 PYEOF
 fi
 
+# === SESSION DISTILLER — extract memories from transcript ===
+DISTILLER="${HOME}/.claude/scripts/cast-session-distiller.py"
+if [[ -f "$DISTILLER" && -n "$CAST_SESSION_TRANSCRIPT" ]]; then
+  echo "$CAST_SESSION_TRANSCRIPT" | \
+    python3 "$DISTILLER" --min-importance 0.7 \
+    >> "${HOME}/.claude/logs/distiller.log" 2>&1 || true
+fi
+
 # === TEMP FILE CLEANUP ===
 rm -f "${TMPDIR:-/tmp}/cast-depth-${PPID}.depth" 2>/dev/null || true
 rm -f "${TMPDIR:-/tmp}/cast-blocked-${SESSION_ID}"*.count 2>/dev/null || true
