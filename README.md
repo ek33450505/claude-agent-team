@@ -2,7 +2,7 @@
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-4.5-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-25-green)<!-- CAST_AGENT_COUNT -->
+![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-357-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
@@ -154,22 +154,9 @@ bash install.sh
 | `push` | haiku | low | Pushes to remote with safety checks |
 | `frontend-qa` | haiku | low | Frontend diff review, component audit |
 
-### JARVIS Personal Assistant Agents
-
-| Agent | Model | Purpose |
-|-------|-------|---------|
-| `pa-briefing` | sonnet | Morning briefing — weather, calendar, email, Jira, Todoist, dev status |
-| `pa-triage` | haiku | Email triage — 4-category classification, draft replies |
-| `pa-jira` | haiku | Stand-up generator — Jira sprint + git commits |
-| `pa-eod` | haiku | End-of-day summary — done, carried forward, tomorrow's top 3 |
-| `pa-weekly` | sonnet | Weekly report — sprint velocity, accomplishments, next week |
-| `pa-meeting-prep` | sonnet | On-demand meeting prep — Confluence, Jira, Gmail, vault context |
-| `pa-calendar` | haiku | Calendar management — natural language create/update/list events |
-| `pa-backup` | haiku | Nightly backup — rsync + integrity verification |
-
 All agents carry `memory: local` — each accumulates session knowledge in `~/.claude/agent-memory-local/<name>/`.
 
-> 16 of 25 agents run on Haiku ($1/MTok input) — the high-frequency, pattern-following work. 9 agents run on Sonnet ($3/MTok input) for complex reasoning. Model tiering cuts token costs by 25-40% compared to running all agents on the same model.
+> 11 of 17 agents run on Haiku ($1/MTok input) — the high-frequency, pattern-following work. 6 agents run on Sonnet ($3/MTok input) for complex reasoning. Model tiering cuts token costs by 25-40% compared to running all agents on the same model.
 
 ---
 
@@ -545,7 +532,7 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v4.3 | Memory persistence: FTS5 search, relevance scoring, shared pool, procedural memory, semantic embeddings, session distiller, staleness validation, MCP server, weekly consolidation, standalone cast-memory repo |
 | v4.4 | Token efficiency: model tiering (11 Haiku / 6 Sonnet), response budgets, compressed Agent Protocol, orchestrator preamble tiers, research URL cache, token budget alerts — 25-40% cost reduction |
 | v4.5 | Local-first hardening: macOS Keychain integration, age encryption with Secure Enclave binding, WAL-safe SQLite backups, network detection with offline queue, Ollama local model fallback, parallel plan execution across dual worktrees; 357 BATS tests |
-| v4.6 | JARVIS personal assistant agents: 8 pa-* agents (pa-briefing, pa-triage, pa-jira, pa-eod, pa-weekly, pa-meeting-prep, pa-calendar, pa-backup) — total roster grows to 25 agents |
+| v4.6 | JARVIS extracted to standalone repo (ek33450505/jarvis) — 8 pa-* agents, 7 launchd plists, install/uninstall scripts; core roster is 17 agents |
 
 ## CAST Ecosystem
 
@@ -562,8 +549,10 @@ CAST is split across focused repos. The core framework lives here; install indiv
 | [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP (v0.1.0) | `ek33450505/cast-memory` |
 | [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel plan execution across dual worktrees (v0.1.0) | `ek33450505/cast-parallel` |
 | [homebrew-cast](https://github.com/ek33450505/homebrew-cast) | Homebrew formula for core CAST | — |
+| [jarvis](https://github.com/ek33450505/jarvis) | Personal Assistant agents (pa-briefing, pa-triage, pa-jira, pa-eod, pa-weekly, pa-meeting-prep, pa-calendar, pa-backup) | `ek33450505/jarvis` |
+| [homebrew-jarvis](https://github.com/ek33450505/homebrew-jarvis) | Homebrew formula for JARVIS | — |
 
-**9 repos, 8 Homebrew taps.**
+**11 repos, 9 Homebrew taps.**
 
 ---
 
@@ -594,7 +583,7 @@ MIT — see [LICENSE](LICENSE).
 
 ## Stats
 
-<!-- CAST_AGENT_COUNT -->25<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
 <!-- CAST_TEST_COUNT -->402<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->8<!-- /CAST_SKILL_COUNT --> skills
