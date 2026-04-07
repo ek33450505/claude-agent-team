@@ -8,7 +8,7 @@
 #   4-6.  cast-memory-embed: --text, --backfill, graceful on Ollama down
 #   7-10. cast-memory-validate: --check, JSON, --validate, --archive-stale
 #  11-12. cast-memory-router: hybrid search, Ollama fallback
-#  13-15. cast-session-distiller: --dry-run, JSON, BLOCKED memory write
+#  13-15. cast-session-distiller: --dry-run, JSON, feedback pattern write
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -200,28 +200,25 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# cast-session-distiller: dry-run and BLOCKED memory write
+# cast-session-distiller: stdin-based transcript extraction
 # ---------------------------------------------------------------------------
 
-@test "cast-session-distiller: --dry-run exits 0" {
-  run python3 "$DISTILLER_PY" --dry-run
+@test "cast-session-distiller: --dry-run exits 0 on empty input" {
+  run bash -c "echo '' | python3 '$DISTILLER_PY' --dry-run"
   assert_success
 }
 
 @test "cast-session-distiller: --dry-run output is valid JSON" {
-  run python3 "$DISTILLER_PY" --dry-run
+  run bash -c "echo '' | python3 '$DISTILLER_PY' --dry-run"
   assert_success
-  echo "$output" | python3 -m json.tool >/dev/null
+  echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list)'
 }
 
-@test "cast-session-distiller: writes memory for a BLOCKED agent_run" {
-  # Seed an agent_runs row with status=BLOCKED using actual schema columns
-  sqlite3 "$CAST_DB_PATH" "INSERT INTO agent_runs (session_id, agent, status, task_summary) VALUES ('test-session-001', 'test-agent', 'BLOCKED', 'Could not proceed due to missing config.');" 2>/dev/null
-
-  run python3 "$DISTILLER_PY"
+@test "cast-session-distiller: writes memory for feedback pattern" {
+  run bash -c "echo \"don't mock the database in tests\" | python3 '$DISTILLER_PY' --db '$CAST_DB_PATH'"
   assert_success
 
-  # Verify memory was written to agent_memories
-  mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE name LIKE 'blocked-test-agent-%';" 2>/dev/null)"
+  # Verify a feedback memory was inserted into agent_memories
+  mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE agent='shared' AND type='feedback';" 2>/dev/null)"
   [ "$mem_count" -ge 1 ]
 }
