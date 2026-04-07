@@ -2,7 +2,7 @@
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-4.5-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
+![Agents](https://img.shields.io/badge/agents-25-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-357-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
@@ -580,7 +580,7 @@ MIT — see [LICENSE](LICENSE).
 
 ## Stats
 
-<!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_AGENT_COUNT -->25<!-- /CAST_AGENT_COUNT --> agents |
 <!-- CAST_TEST_COUNT -->402<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->8<!-- /CAST_SKILL_COUNT --> skills
