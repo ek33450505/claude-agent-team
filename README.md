@@ -214,7 +214,7 @@ Estimated savings: **25-40% reduction** in monthly token spend compared to unopt
 | `sessions` | Session start/end, model, token counts |
 | `agent_runs` | Every dispatch: agent, model, duration, status, batch_id |
 | `routing_events` | Prompt routing records, event types, JSON payloads |
-| `agent_memories` | Synced from `~/.claude/agent-memory-local/` on Stop |
+| `agent_memories` | Synced from `~/.claude/agent-memory-local/` on Stop; temporal validity (valid_from/valid_to) |
 
 ```bash
 # Live TUI dashboard — htop for CAST (requires: pip install textual)
@@ -365,6 +365,27 @@ python3 scripts/cast-memory-embed.py --text "how to fix BATS whitespace"
 ```
 
 Requires Ollama running locally with `nomic-embed-text` pulled. Without Ollama, FTS5-only search is used automatically.
+
+### Temporal Validity
+
+`valid_from` and `valid_to` columns on `agent_memories` let facts be superseded without deletion — preserving history while keeping current queries clean. Run the migration to add these columns:
+
+```bash
+python3 scripts/cast-memory-migrate-temporal.py
+```
+
+Default queries filter `WHERE valid_to IS NULL` to return only current facts. Use `--history` to include superseded memories, or `--invalidate <id>` to mark a memory as superseded:
+
+```bash
+# Retrieve only current memories (default)
+python3 scripts/cast-memory-router.py --mode retrieve --agent shared --prompt "test"
+
+# Include superseded memories
+python3 scripts/cast-memory-router.py --mode retrieve --agent shared --prompt "test" --history
+
+# Mark memory #42 as superseded
+python3 scripts/cast-memory-router.py --invalidate 42
+```
 
 ### Session Distiller
 
@@ -530,8 +551,8 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v4.1 | Native adoption: replace cost-tracker with native statusline, remove prettier hook, delete 4 dead routing scripts, migrate security guard to sandbox rules, add PreCompact hook, add effort/background/initialPrompt to agent frontmatter; 262 BATS tests |
 | v4.2 | `cast dash` TUI dashboard (Textual, htop for CAST); `cast tidy` cleanup subcommand; CHEATSHEET.md; morning-briefing fixes; spinnerVerbs settings fix |
 | v4.3 | Memory persistence: FTS5 search, relevance scoring, shared pool, procedural memory, semantic embeddings, session distiller, staleness validation, MCP server, weekly consolidation, standalone cast-memory repo |
-| v4.4 | Token efficiency: model tiering (11 Haiku / 6 Sonnet), response budgets, compressed Agent Protocol, orchestrator preamble tiers, research URL cache, token budget alerts — 25-40% cost reduction |
-| v4.5 | Local-first hardening: macOS Keychain integration, age encryption with Secure Enclave binding, WAL-safe SQLite backups, network detection with offline queue, Ollama local model fallback, parallel plan execution across dual worktrees; 357 BATS tests |
+| v4.4 | Temporal validity on agent_memories, session distiller rewrite with regex extraction |
+| v4.5 | Token efficiency: model tiering (11 Haiku / 6 Sonnet), response budgets, compressed Agent Protocol, orchestrator preamble tiers, research URL cache, token budget alerts — 25-40% cost reduction; Local-first hardening: macOS Keychain integration, age encryption with Secure Enclave binding, WAL-safe SQLite backups, network detection with offline queue, Ollama local model fallback, parallel plan execution across dual worktrees; 357 BATS tests |
 | v4.6 | JARVIS extracted to standalone repo (ek33450505/jarvis) — 8 pa-* agents, 7 launchd plists, install/uninstall scripts; core roster is 17 agents |
 
 ## CAST Ecosystem
@@ -584,6 +605,6 @@ MIT — see [LICENSE](LICENSE).
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->402<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->443<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->8<!-- /CAST_SKILL_COUNT --> skills
