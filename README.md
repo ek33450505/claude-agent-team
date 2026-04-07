@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**A local-first multi-agent framework for Claude Code.** 25 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
+**A local-first multi-agent framework for Claude Code.** 17 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
 
 **[Live Demo →](https://cast-site-iota.vercel.app)** |
 [Dashboard →](https://github.com/ek33450505/claude-code-dashboard)
@@ -18,7 +18,7 @@
 
 CAST turns Claude Code from a single-session assistant into a coordinated team:
 
-- **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 25-row dispatch table and picks the agent — no regex, no routing config.
+- **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 17-row dispatch table and picks the agent — no regex, no routing config.
 - **Quality is enforced, not requested.** Raw `git commit` and `git push` are hard-blocked by shell hooks. Every code change mandates a `code-reviewer` pass. Commit only happens through the `commit` agent.
 - **Everything is observable.** Every agent dispatch, session, and token spend is logged to `cast.db` (SQLite). A companion React dashboard shows activity, analytics, agent status, and memory in real time.
 - **Lightweight tasks use cheaper models automatically.** Haiku handles `code-reviewer`, `commit`, `push`, and `test-runner` — the high-frequency, low-complexity work. Sonnet handles planning, writing, and debugging. The cost difference is 20x per token. CAST routes silently; you pay for what the task actually needs.
@@ -36,7 +36,7 @@ User Prompt
       │
       ▼
 ┌─────────────────────────────────────────────┐
-│  CLAUDE.md dispatch table (25-row routing)  │
+│  CLAUDE.md dispatch table (17-row routing)  │
 │  Model reads table → picks specialist agent │
 └──────────────────┬──────────────────────────┘
                    │
@@ -132,7 +132,7 @@ bash install.sh
 
 ## Agent Roster
 
-25 specialists. Each is a plain markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, effort, and isolation.
+17 specialists. Each is a plain markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, effort, and isolation.
 
 | Agent | Model | Effort | Purpose |
 |---|---|---|---|
@@ -438,7 +438,7 @@ npm run dev    # Vite :5173 + Express :3001
 ```
 claude-agent-team/
   agents/
-    core/               ← 25 agent definitions (mirrored to ~/.claude/agents/)
+    core/               ← 17 agent definitions (mirrored to ~/.claude/agents/)
   docs/                 ← architecture specs, native-tools-reference.md, protocol docs
   scripts/              ← hook scripts, utilities, cron setup
   tests/
