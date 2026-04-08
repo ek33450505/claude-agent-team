@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/cast-banner.png" alt="CAST — A local-first multi-agent framework for Claude Code" />
+</p>
+
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
