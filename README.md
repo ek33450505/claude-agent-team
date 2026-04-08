@@ -13,7 +13,7 @@
 
 **A local-first multi-agent framework for Claude Code.** 17 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
 
-**[CAST →](https://castframework.dev)** 
+**[CAST](https://castframework.dev)** 
 ---
 
 ## What is CAST?
