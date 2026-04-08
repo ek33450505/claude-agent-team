@@ -13,9 +13,7 @@
 
 **A local-first multi-agent framework for Claude Code.** 17 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
 
-**[Live Demo →](https://cast-site-iota.vercel.app)** |
-[Dashboard →](https://github.com/ek33450505/claude-code-dashboard)
-
+**[CAST →](https://castframework.dev)** 
 ---
 
 ## What is CAST?
