@@ -64,7 +64,7 @@ except Exception:
     sys.exit(0)
 
 result = {
-    "agent_name": data.get("agent_name") or data.get("subagent_name") or "unknown",
+    "agent_name": data.get("agent_type") or data.get("agent_name") or data.get("subagent_name") or "unknown",
     "session_id": data.get("session_id") or "",
     "error":      (data.get("error") or data.get("stop_reason") or "unknown failure")[:500],
 }
@@ -83,6 +83,14 @@ if [ -n "$PARSED" ]; then
 else
   SESSION_ID=""
   ERROR_MSG="unknown failure"
+fi
+
+# ── Guard: skip benign invalid_request events with no identifiable agent ────────
+# Claude Code fires StopFailure with error="invalid_request" for internal
+# housekeeping stops that have no agent context. These produce noise with
+# agent="unknown" and are not actionable.
+if [ "$AGENT_NAME" = "unknown" ] && [ "$ERROR_MSG" = "invalid_request" ]; then
+  exit 0
 fi
 
 # ── Step 1: Write stop_failure event to ~/.claude/cast/events/ ────────────────
