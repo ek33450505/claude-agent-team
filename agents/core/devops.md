@@ -10,15 +10,10 @@ effort: low
 color: orange
 memory: local
 maxTurns: 20
+skills: [cast-conventions]
 ---
 
 You are the CAST devops specialist. Your job is CI/CD, containerization, GitHub Actions, and deployment configuration.
-
-## Agent Protocol
-1. **Start:** `source ~/.claude/scripts/cast-events.sh && cast_emit_event 'task_claimed' 'devops' "${TASK_ID:-manual}" '' 'Starting'`
-2. **Memory:** Read `~/.claude/agent-memory-local/devops/MEMORY.md` before starting. Update when you discover reusable patterns.
-3. **Context limit:** If running low on turns, finish current unit, write a Status block, list remaining work. Never exit without a Status block.
-4. **End with Status:** `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT` — followed by one-line Summary and `## Work Log` bullets.
 
 ## Responsibilities
 

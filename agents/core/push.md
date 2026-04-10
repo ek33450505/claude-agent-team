@@ -11,16 +11,12 @@ color: blue
 memory: local
 maxTurns: 8
 disallowedTools: [Write, Edit, Agent]
+skills: [cast-conventions]
+includeGitInstructions: false
 initialPrompt: "Push committed work to the remote. Check unpushed commits, verify branch safety, and push using the CAST_PUSH_OK=1 escape hatch."
 ---
 
 You are a git push specialist. Your only job: safely push committed work to the remote.
-
-## Agent Protocol
-1. **Start:** `source ~/.claude/scripts/cast-events.sh && cast_emit_event 'task_claimed' 'push' "${TASK_ID:-manual}" '' 'Starting'`
-2. **Memory:** Read `~/.claude/agent-memory-local/push/MEMORY.md` before starting. Update when you discover reusable patterns.
-3. **Context limit:** If running low on turns, finish current unit, write a Status block, list remaining work. Never exit without a Status block.
-4. **End with Status:** `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT` — followed by one-line Summary and `## Work Log` bullets.
 
 ## Workflow
 

@@ -9,12 +9,20 @@ Replaces cast-log-append.py calls in route.sh during the 7a transition.
 Preserves atomic JSONL append behavior (fcntl exclusive lock + rotation).
 Errors are logged to ~/.claude/logs/db-write-errors.log — never blocks the hook pipeline.
 """
-import sys, fcntl, os, json
+import sys, fcntl, os, json, argparse
 from pathlib import Path
 
 # Add scripts dir to path so cast_db is importable when run directly
 sys.path.insert(0, str(Path(__file__).parent))
 from cast_db import db_execute, _log_error
+
+# -----------------------------------------------------------------------
+# 0. Parse optional CLI arguments for agent_id/agent_type
+# -----------------------------------------------------------------------
+parser = argparse.ArgumentParser(description='CAST dual-write log helper')
+parser.add_argument('--agent-id', default=None, help='Agent ID from hook event')
+parser.add_argument('--agent-type', default=None, help='Agent type from hook event')
+args, _unknown = parser.parse_known_args()
 
 line = sys.stdin.read().strip()
 if not line:
@@ -29,6 +37,12 @@ try:
     entry = json.loads(line)
 except Exception:
     sys.exit(0)
+
+# Merge CLI agent_id/agent_type into entry (CLI takes precedence)
+if args.agent_id:
+    entry['agent_id'] = args.agent_id
+if args.agent_type:
+    entry['agent_type'] = args.agent_type
 
 # -----------------------------------------------------------------------
 # 2. JSONL append (same behavior as cast-log-append.py)
@@ -60,11 +74,21 @@ db_path = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db')
 if not os.path.exists(db_path):
     sys.exit(0)
 
+# Ensure agent_id and agent_type columns exist (idempotent)
+try:
+    db_execute('ALTER TABLE routing_events ADD COLUMN agent_id TEXT')
+except Exception:
+    pass  # Column already exists
+try:
+    db_execute('ALTER TABLE routing_events ADD COLUMN agent_type TEXT')
+except Exception:
+    pass  # Column already exists
+
 db_execute(
     '''INSERT INTO routing_events
        (session_id, timestamp, prompt_preview, action, matched_route,
-        match_type, pattern, confidence, project)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        match_type, pattern, confidence, project, agent_id, agent_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
     (
         entry.get('session_id', 'unknown'),
         entry.get('timestamp', ''),
@@ -75,5 +99,7 @@ db_execute(
         entry.get('pattern'),
         entry.get('confidence'),
         entry.get('project'),
+        entry.get('agent_id'),
+        entry.get('agent_type'),
     )
 )

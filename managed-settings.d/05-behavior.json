@@ -1,0 +1,7 @@
+{
+  "feedbackSurveyRate": 0,
+  "cleanupPeriodDays": 30,
+  "sandbox": {
+    "failIfUnavailable": true
+  }
+}

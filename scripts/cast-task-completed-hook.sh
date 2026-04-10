@@ -26,9 +26,17 @@ except Exception:
 
 task_id      = data.get("task_id", "")
 task_subject = (data.get("task_subject") or data.get("task_description") or "")[:80]
+task_result  = data.get("result", data.get("task_result", ""))
 session_id   = data.get("session_id", "unknown")
 cwd          = data.get("cwd", "")
 project      = os.path.basename(cwd) if cwd else ""
+
+# Verify Status block in task result (CAST contract)
+import re
+valid_statuses = ["DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT"]
+status_match = re.search(r'Status:\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)', str(task_result))
+has_status_block = bool(status_match)
+extracted_status = status_match.group(1) if status_match else "MISSING"
 
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -68,6 +76,34 @@ if db_path and os.path.exists(db_path):
             ''', (iso_ts, project, "background", task_subject or task_id, "completed"))
             conn.commit()
         conn.close()
+    except Exception:
+        pass
+
+# Log Status block compliance to quality_gates table
+if db_path and os.path.exists(db_path):
+    try:
+        conn2 = sqlite3.connect(db_path)
+        cur2 = conn2.cursor()
+        cur2.execute("""
+            CREATE TABLE IF NOT EXISTS quality_gates (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                batch_id INTEGER,
+                agent_name TEXT,
+                timestamp TEXT,
+                status_line TEXT,
+                contract_passed INTEGER,
+                retry_count INTEGER
+            )
+        """)
+        cur2.execute('''
+            INSERT INTO quality_gates
+              (id, session_id, batch_id, agent_name, timestamp, status_line, contract_passed, retry_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (str(uuid.uuid4())[:16], session_id, 0, "background", iso_ts,
+              f"Status: {extracted_status}", 1 if has_status_block else 0, 0))
+        conn2.commit()
+        conn2.close()
     except Exception:
         pass
 

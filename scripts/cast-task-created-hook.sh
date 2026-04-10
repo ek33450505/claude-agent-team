@@ -53,6 +53,16 @@ try:
 except Exception:
     pass
 
+# Validate task naming: CAST convention is kebab-case, optionally prefixed with agent type
+import re
+naming_warning = ""
+if task_subject:
+    # Check kebab-case pattern (lowercase alphanumeric + hyphens)
+    cleaned = task_subject.strip()
+    # Task subjects can be free-form descriptions, but IDs should be kebab-case
+    if task_id and not re.match(r'^[a-z0-9]+(-[a-z0-9]+)*$', task_id):
+        naming_warning = f"Task ID '{task_id}' does not follow kebab-case convention"
+
 # Log to cast.db task_queue if the DB and table exist
 if db_path and os.path.exists(db_path):
     try:
