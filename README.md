@@ -5,9 +5,9 @@
 # CAST — Claude Agent Specialist Team
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-4.5-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-4.6-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-357-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-431-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -45,10 +45,12 @@ CAST is built to fill the gaps those unshipped features leave, and to make the h
 |---|---|---|
 | `AgentTool` dispatches one subagent per call, no sequencing | Orchestrator executes Agent Dispatch Manifests: parallel batches fire simultaneously, sequential batches gate on prior completion, `owns_files` prevents write conflicts | Fills the gap left by the native coordinator pattern not yet shipping |
 | No post-agent successor logic | Chain-maps: `code-writer` → `code-reviewer` → `commit` enforced by `PostToolUse` hook injecting `[CAST-CHAIN]` directive | Makes quality gates structural, not advisory |
-| Hook system exists but carries no persistent state | `cast.db` (SQLite, WAL mode): 4 tables — `sessions`, `agent_runs`, `routing_events`, `agent_memories` | Turns ephemeral hook events into a queryable audit trail |
+| Hook system exists but carries no persistent state | **v4.6:** `cast.db` (SQLite, WAL mode): 6 tables — `sessions`, `agent_runs`, `routing_events`, `agent_memories`, `stream_events`, `stream_hook_events` | Turns ephemeral hook events into queryable audit trail; streaming JSON ingestion for real-time observability |
 | No native cost display beyond statusline | Native `cost.total_cost_usd` exposed in statusline format; CAST statusline script surfaces it per-session | Claude Code now provides cost natively; CAST presents it |
 | `PostCompact` fires but has no default handler | `cast-pre-compact-hook.sh` detects dumb-zone onset; `cast-post-compact-hook.sh` reinjects plan context | Both Pre and PostCompact are covered to prevent plan amnesia |
-| `PreToolUse` exit codes 0/2 are the permission gate | `pre-tool-guard.sh` (exit 2 on raw `git commit`/`push`), `cast-audit-hook.sh` (file modification logging) | Security guard behavior migrated to native sandbox `denyRead`/`denyWrite` rules |
+| `PreToolUse` exit codes 0/2 are the permission gate | **v4.6:** `pre-tool-guard.sh` (exit 2 on raw `git commit`/`push`), `cast-audit-hook.sh` (file modification logging), Prompt hooks (sensitive file security gates) | Security guard behavior migrated to native sandbox `denyRead`/`denyWrite` rules; v4.6 adds prompt-level validation |
+| Model selection is per-session via `--model` flag | **v4.6:** Orchestrator routes per-task: Haiku for reviews/commits, Sonnet for writing/planning; LiteLLM proxy with Ollama contractor fallback (local-commit, local-fast models) | Automatic cost optimization; offline capability via local models with validation gates |
+| Stream output not persisted | **v4.6:** `cast-stream-wrapper.sh` + `cast-stream-consumer.py` parses `--output-format stream-json` into cast.db; Channel Event Bus (SSE on :9200) for real-time dashboard updates | Real-time observability without post-session analysis; HTTP hooks stream to dashboard live |
 
 ### On the native coordinator pattern
 
@@ -58,7 +60,7 @@ Claude Code's internal coordinator pattern specifies one coordinator spawning wo
 
 ## Quick Start
 
-Three commands to a working CAST installation:
+**Homebrew** (recommended):
 
 ```bash
 brew tap ek33450505/cast
@@ -66,15 +68,23 @@ brew install cast
 cast doctor
 ```
 
-`cast doctor` runs `cast-validate.sh` — checks hook wiring, agent files, database schema, and CLI path. Green across the board means you're ready.
+**Claude Code Plugin** (v4.6):
 
-**Git clone alternative:**
+```bash
+claude plugin install ek33450505/cast
+```
+
+Installs CAST as a Claude Code plugin. Scripts relocate via `CAST_SCRIPTS_DIR` environment variable.
+
+**Git clone** (development):
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team
 cd claude-agent-team
 bash install.sh
 ```
+
+`cast doctor` (or `cast-validate.sh`) checks hook wiring, agent files, database schema, CLI path, and advanced features (stream pipeline, channel bus, LiteLLM proxy). Green across the board means you're ready.
 
 ---
 
@@ -128,7 +138,7 @@ Estimated savings: **25-40% reduction** in monthly token spend compared to unopt
 
 ## Hook Event Coverage
 
-13 Claude Code lifecycle events are wired. Every event that matters for observability, safety, or pipeline automation is handled.
+13 Claude Code lifecycle events are wired with 3 advanced hook types: HTTP hooks (real-time dashboard streaming), prompt hooks (security gates for sensitive files), and agent hooks (pre-push BATS verification).
 
 | Event | Hook Script | What It Does |
 |---|---|---|
@@ -137,12 +147,12 @@ Estimated savings: **25-40% reduction** in monthly token spend compared to unopt
 | `InstructionsLoaded` | `cast-instructions-loaded-hook.sh` | Logs session context load |
 | `PreToolUse:Bash` | `pre-tool-guard.sh` | Hard-blocks `git commit` / `git push` (exit 2) |
 | `PreToolUse:AskUserQuestion` | `cast-headless-guard.sh` | Auto-answers AskUserQuestion in pipelines |
-| `PreToolUse:Write\|Edit` | `cast-audit-hook.sh` | Logs file modification events |
-| `PostToolUse:Write\|Edit\|Agent\|Bash` | `post-tool-hook.sh` | Injects [CAST-REVIEW] directive after code changes |
+| `PreToolUse:Write\|Edit` | `cast-audit-hook.sh` | Logs file modification events; **Prompt hooks**: security gate on .env, auth/, credentials |
+| `PostToolUse:Write\|Edit\|Agent\|Bash` | `post-tool-hook.sh` | Injects [CAST-REVIEW] directive; **HTTP hooks**: POST to dashboard SSE stream (`:9200`) |
 | `PostToolUseFailure` | `cast-tool-failure-hook.sh` | Logs tool failures to cast.db |
 | `PreCompact` | `cast-pre-compact-hook.sh` | Detects dumb-zone onset, emits pre_compact event |
 | `PostCompact` | `cast-post-compact-hook.sh` | Reinjects plan context, emits context_compacted |
-| `SubagentStart` | `cast-subagent-start-hook.sh` | Emits task_claimed on agent spawn (async) |
+| `SubagentStart` | `cast-subagent-start-hook.sh` | Emits task_claimed on agent spawn; **Agent hooks**: pre-push BATS gate |
 | `SubagentStop` | `cast-subagent-stop-hook.sh` | Closes agent_runs row on completion (async) |
 | `SessionEnd` | `cast-session-end.sh` | Archives session, closes DB row, syncs memory |
 
@@ -153,6 +163,59 @@ Estimated savings: **25-40% reduction** in monthly token spend compared to unopt
 
 ---
 
+## Advanced Observability Features (v4.6)
+
+**Stream-JSON Pipeline** — Real-time observability with persistent consumer:
+
+```bash
+# Wrap Claude Code with stream-json parsing and DB logging
+cast-stream-wrapper.sh -p "your prompt here"
+
+# Or manually
+claude -p "..." --output-format stream-json --include-hook-events \
+    | python3 scripts/cast-stream-consumer.py
+```
+
+Parses streaming JSON into `stream_events` and `stream_hook_events` tables. Live monitor via `cast-tmux-session.sh --stream`.
+
+**Channel Event Bus** — HTTP SSE streaming for real-time dashboard updates:
+
+```bash
+# Start the event bus daemon (SSE on port 9200)
+scripts/cast-channel-start.sh
+
+# Publish hook events to both file and HTTP stream
+scripts/cast-channel-publish.sh "hook_fired" '{"hook":"post-tool","tool":"Write"}'
+
+# View status
+scripts/cast-channel-start.sh status
+```
+
+Configuration: `managed-settings.d/27-hooks-advanced.json` — enable/disable HTTP hooks per event type.
+
+**Ollama Contractor Routing** — Local model fallback for offline/cost-sensitive tasks:
+
+```bash
+# Start LiteLLM proxy (routes to local Ollama or Claude)
+scripts/cast-litellm-start.sh
+
+# Models available:
+# - local-commit: tavernari/git-commit-message (Ollama)
+# - local-fast: qwen2.5-coder:7b (Ollama)
+# - claude-sonnet-4-6, claude-haiku-4-5 (Anthropic API)
+```
+
+Automatic fallback to Claude when Ollama is unavailable. `model_used` column in `cast.db` tracks actual inference endpoint. Validation: `cast-validate-contractor.sh`.
+
+**Remote Tasks** — JARVIS agents configured for Anthropic infrastructure:
+
+```bash
+# pa-jira and pa-meeting-prep can run on Anthropic remote execution
+# Output routing via cast-output-adapter.py (Obsidian/repo/stdout)
+```
+
+---
+
 ## Observability
 
 `cast.db` at `~/.claude/cast.db` — append-only SQLite. Never truncated.
@@ -160,9 +223,11 @@ Estimated savings: **25-40% reduction** in monthly token spend compared to unopt
 | Table | Contents |
 |---|---|
 | `sessions` | Session start/end, model, token counts |
-| `agent_runs` | Every dispatch: agent, model, duration, status, batch_id |
+| `agent_runs` | Every dispatch: agent, model, duration, status, batch_id, `model_used` (Ollama vs Claude) |
 | `routing_events` | Prompt routing records, event types, JSON payloads |
 | `agent_memories` | Synced from `~/.claude/agent-memory-local/` on Stop; temporal validity (valid_from/valid_to) |
+| `stream_events` | (v4.6) Real-time tool events from stream-json pipeline |
+| `stream_hook_events` | (v4.6) Hook lifecycle events captured from streaming output |
 
 ```bash
 # Live TUI dashboard — htop for CAST (requires: pip install textual)
@@ -408,8 +473,11 @@ npm run dev    # Vite :5173 + Express :3001
 claude-agent-team/
   agents/
     core/               ← 17 agent definitions (mirrored to ~/.claude/agents/)
+  config/
+    cast-litellm.yaml   ← LiteLLM proxy config (Ollama + Claude routing)
+    managed-settings.d/ ← Modular settings: hooks, observability, security gates
   docs/                 ← architecture specs, native-tools-reference.md, protocol docs
-  scripts/              ← hook scripts, utilities, cron setup
+  scripts/              ← hook scripts, utilities, stream/channel/contractor pipelines
   tests/
     *.bats              ← core test suite
     hooks/              ← hook-specific BATS tests
@@ -420,6 +488,7 @@ claude-agent-team/
       bats-ci.yml       ← BATS CI on push + daily schedule
       cast-pr-review.yml← Automated PR review via claude-code-action
   .mcp.json             ← Project-scoped MCP server config
+  claude-plugin.json    ← Claude Code plugin manifest (v4.6)
   install.sh
   VERSION
   CHANGELOG.md
@@ -501,27 +570,23 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | v4.3 | Memory persistence: FTS5 search, relevance scoring, shared pool, procedural memory, semantic embeddings, session distiller, staleness validation, MCP server, weekly consolidation, standalone cast-memory repo |
 | v4.4 | Temporal validity on agent_memories, session distiller rewrite with regex extraction |
 | v4.5 | Token efficiency: model tiering (11 Haiku / 6 Sonnet), response budgets, compressed Agent Protocol, orchestrator preamble tiers, research URL cache, token budget alerts — 25-40% cost reduction; Local-first hardening: macOS Keychain integration, age encryption with Secure Enclave binding, WAL-safe SQLite backups, network detection with offline queue, Ollama local model fallback, parallel plan execution across dual worktrees; 357 BATS tests |
-| v4.6 | JARVIS extracted to standalone repo (ek33450505/jarvis) — 8 pa-* agents, 7 launchd plists, install/uninstall scripts; core roster is 17 agents |
+| v4.6 | **Stream-JSON observability:** persistent consumer ingests stream-json → cast.db; **Advanced hooks:** HTTP (real-time dashboard SSE), Prompt (sensitive file gates), Agent (pre-push BATS); **Channel bus:** port 9200 SSE streaming; **Ollama contractor:** LiteLLM proxy with local model fallback; **Remote tasks:** pa-jira/pa-meeting-prep on Anthropic infrastructure; **Plugin packaging:** `claude plugin install` support; JARVIS extracted to standalone (ek33450505/jarvis); 17-agent core roster |
 
 ## CAST Ecosystem
 
-CAST is split across focused repos. The core framework lives here; install individual pieces or use the Homebrew taps.
+CAST is split across focused repos. The core framework lives here; install via Homebrew, Claude Code plugin, or git clone.
 
-| Repo | Description | Homebrew Tap |
+| Repo | Description | Distribution |
 |---|---|---|
-| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Core framework — agents, hooks, CLI, observability | `ek33450505/cast` |
-| [cast-agents](https://github.com/ek33450505/cast-agents) | Agent definition library | `ek33450505/cast-agents` |
-| [cast-observe](https://github.com/ek33450505/cast-observe) | Observability scripts and cast.db tooling | `ek33450505/cast-observe` |
-| [cast-security](https://github.com/ek33450505/cast-security) | Security hooks and audit tooling | `ek33450505/cast-security` |
-| [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts framework — 13 hooks, CLI tool (v0.1.0) | `ek33450505/cast-hooks` |
-| [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — 4-panel live display (v0.1.0) | `ek33450505/cast-dash` |
-| [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP (v0.1.0) | `ek33450505/cast-memory` |
-| [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel plan execution across dual worktrees (v0.1.0) | `ek33450505/cast-parallel` |
-| [homebrew-cast](https://github.com/ek33450505/homebrew-cast) | Homebrew formula for core CAST | — |
-| [jarvis](https://github.com/ek33450505/jarvis) | Personal Assistant agents (pa-briefing, pa-triage, pa-jira, pa-eod, pa-weekly, pa-meeting-prep, pa-calendar, pa-backup) | `ek33450505/jarvis` |
-| [homebrew-jarvis](https://github.com/ek33450505/homebrew-jarvis) | Homebrew formula for JARVIS | — |
+| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Core framework — agents, hooks, CLI, observability | Homebrew `ek33450505/cast`, Claude plugin |
+| [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts framework — 13 hooks, CLI tool (v0.1.0) | Homebrew `ek33450505/cast-hooks` |
+| [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — 4-panel live display (v0.1.0) | Homebrew `ek33450505/cast-dash` |
+| [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP (v0.1.0) | Homebrew `ek33450505/cast-memory` |
+| [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel plan execution across dual worktrees (v0.1.0) | Homebrew `ek33450505/cast-parallel` |
+| [jarvis](https://github.com/ek33450505/jarvis) | Personal Assistant — 8 pa-* agents, Obsidian, Strava, Todoist, TTS | Homebrew `ek33450505/jarvis`, Claude plugin |
+| [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) | React 19 observability UI — activity, sessions, analytics, agents, hooks, memory | Standalone repo |
 
-**11 repos, 9 Homebrew taps.**
+**Distribution:** 2 Claude Code plugins (`cast`, `jarvis`), 5 Homebrew taps, 1 standalone web UI.
 
 ---
 
@@ -553,6 +618,6 @@ MIT — see [LICENSE](LICENSE).
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->443<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->477<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->9<!-- /CAST_SKILL_COUNT --> skills

@@ -17,7 +17,9 @@ SESSION_NAME="cast"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 EVENTS_DIR="${HOME}/.claude/cast/events"
 STATUS_DIR="${HOME}/.claude/agent-status"
+CAST_SCRIPTS_DIR="${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}"
 REFRESH_INTERVAL=10
+STREAM_MODE=0
 
 # -----------------------------------------------------------------------
 # Help
@@ -27,21 +29,29 @@ usage() {
 cast-tmux-session.sh — CAST tmux companion
 
 Usage:
-  cast-tmux-session.sh [-h] [-- <claude-args>...]
+  cast-tmux-session.sh [-h] [--stream] [-- <claude-args>...]
 
 Options:
   -h, --help    Show this help message
+  --stream      Enable stream-JSON observability pipeline (uses cast-stream-wrapper.sh)
 
 The session creates two panes:
   Left (70%)  : Claude Code session
   Right (30%) : Live CAST monitor (refreshes every ${REFRESH_INTERVAL}s)
 
+With --stream:
+  The main pane runs claude through cast-stream-wrapper.sh for stream-JSON
+  observability. All tool events are captured to cast.db stream_events table.
+  The monitor pane shows stream_events count for the current session.
+
 Status bar shows CAST version and session name.
 
 Examples:
   cast-tmux-session.sh
+  cast-tmux-session.sh --stream
   cast-tmux-session.sh -- --resume
   cast-tmux-session.sh -- -p "run tests"
+  cast-tmux-session.sh --stream -- -p "run tests"
 EOF
   exit 0
 }
@@ -53,6 +63,7 @@ CLAUDE_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage ;;
+    --stream)  STREAM_MODE=1; shift ;;
     --)        shift; CLAUDE_ARGS=("$@"); break ;;
     *)         CLAUDE_ARGS+=("$1"); shift ;;
   esac
@@ -79,6 +90,7 @@ MONITOR_SCRIPT=$(cat <<'MONITOR'
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 EVENTS_DIR="${HOME}/.claude/cast/events"
 STATUS_DIR="${HOME}/.claude/agent-status"
+STREAM_SESSION_ID="${CLAUDE_SESSION_ID:-}"
 
 render() {
   clear
@@ -167,6 +179,32 @@ except Exception as e:
   fi
   echo ""
 
+  # --- Stream Events (shown when stream mode active) ---
+  if [ -n "$STREAM_SESSION_ID" ] && [ -f "$DB_PATH" ]; then
+    echo "  STREAM EVENTS"
+    echo "$SEP"
+    python3 -c "
+import sqlite3, os
+db = os.environ.get('DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+sid = os.environ.get('CLAUDE_SESSION_ID', '')
+try:
+    con = sqlite3.connect(db, timeout=2)
+    cur = con.cursor()
+    cur.execute(\"SELECT name FROM sqlite_master WHERE type='table' AND name='stream_events'\")
+    if cur.fetchone():
+        cur.execute('SELECT COUNT(*) FROM stream_events WHERE session_id = ?', (sid,))
+        count = cur.fetchone()[0]
+        print(f'  Stream events this session: {count}')
+        cur.execute('SELECT event_type, tool_name, timestamp FROM stream_events WHERE session_id = ? ORDER BY timestamp DESC LIMIT 3', (sid,))
+        for r in cur.fetchall():
+            print(f'  {r[0]:<18} {(r[1] or \"\"):<20} {(r[2] or \"\")[:19]}')
+    con.close()
+except Exception as e:
+    print(f'  (stream query error: {e})')
+" 2>/dev/null || true
+    echo ""
+  fi
+
   # --- Today's Activity ---
   echo "  TODAY'S ACTIVITY"
   echo "$SEP"
@@ -211,9 +249,17 @@ MONITOR
 # Kill existing session if present
 tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
 
+# Determine main pane command (stream mode or normal)
+if [ "$STREAM_MODE" -eq 1 ]; then
+  export CLAUDE_SESSION_ID="stream-$(date +%Y%m%d%H%M%S)"
+  MAIN_CMD="\"${CAST_SCRIPTS_DIR}/cast-stream-wrapper.sh\" ${CLAUDE_ARGS[*]:-}; exec bash"
+else
+  MAIN_CMD="claude ${CLAUDE_ARGS[*]:-}; exec bash"
+fi
+
 # Create session with claude in the main pane
 tmux new-session -d -s "$SESSION_NAME" -x "$(tput cols)" -y "$(tput lines)" \
-  "claude ${CLAUDE_ARGS[*]:-}; exec bash"
+  "$MAIN_CMD"
 
 # Split right pane for monitor (30% width)
 tmux split-window -h -t "$SESSION_NAME" -p 30 \

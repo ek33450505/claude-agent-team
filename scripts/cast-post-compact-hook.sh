@@ -77,7 +77,7 @@ except Exception:
 
 # Write compaction tier to cast.db (best-effort — hook must not fail)
 import sys
-sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
+sys.path.insert(0, os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')))
 try:
     from cast_db import db_execute, db_write
     db_execute('''

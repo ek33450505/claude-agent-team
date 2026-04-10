@@ -32,9 +32,43 @@ fi
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-# If already at v7, nothing to do
+# If already at v7+, apply additive stream tables migration and exit
 if [ "$CURRENT_VERSION" -ge 7 ]; then
-  echo "cast.db already initialized (v${CURRENT_VERSION})" >&2
+  # Additive migration: create stream_events and stream_hook_events if missing
+  # Also add model_used column to agent_runs if missing (Ollama contractor routing)
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
+  sqlite3 "$DB_PATH" <<'STREAM_TABLES'
+CREATE TABLE IF NOT EXISTS stream_events (
+  id                  TEXT PRIMARY KEY,
+  session_id          TEXT,
+  timestamp           TEXT,
+  event_type          TEXT,
+  tool_name           TEXT,
+  tool_input_preview  TEXT,
+  status              TEXT,
+  duration_ms         INTEGER,
+  raw_json            TEXT
+);
+
+CREATE TABLE IF NOT EXISTS stream_hook_events (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT,
+  timestamp   TEXT,
+  hook_type   TEXT,
+  tool_name   TEXT,
+  result      TEXT,
+  duration_ms INTEGER,
+  output      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_stream_events_session
+  ON stream_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
+  ON stream_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_stream_hook_events_session
+  ON stream_hook_events(session_id);
+STREAM_TABLES
+  echo "cast.db already initialized (v${CURRENT_VERSION}), stream tables ensured" >&2
   exit 0
 fi
 
@@ -49,6 +83,8 @@ DROP TABLE IF EXISTS dispatch_decisions;
 
 -- Add batch_id column if missing
 ALTER TABLE agent_runs ADD COLUMN batch_id INTEGER;
+-- Add model_used column if missing (Ollama contractor routing)
+ALTER TABLE agent_runs ADD COLUMN model_used TEXT;
 CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);
 
 -- Drop stale indexes
@@ -101,7 +137,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   task_summary    TEXT,
   project         TEXT,
   agent_id        TEXT,
-  batch_id        INTEGER
+  batch_id        INTEGER,
+  model_used      TEXT
 );
 
 -- Routing events: structured event log
@@ -144,6 +181,37 @@ CREATE INDEX IF NOT EXISTS idx_routing_events_session   ON routing_events(sessio
 CREATE INDEX IF NOT EXISTS idx_routing_events_timestamp ON routing_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_routing_events_route     ON routing_events(matched_route);
 CREATE INDEX IF NOT EXISTS idx_agent_memories_agent     ON agent_memories(agent);
+
+-- Stream events: stream-JSON observability pipeline (v4.6)
+CREATE TABLE IF NOT EXISTS stream_events (
+  id                  TEXT PRIMARY KEY,
+  session_id          TEXT,
+  timestamp           TEXT,
+  event_type          TEXT,
+  tool_name           TEXT,
+  tool_input_preview  TEXT,
+  status              TEXT,
+  duration_ms         INTEGER,
+  raw_json            TEXT
+);
+
+CREATE TABLE IF NOT EXISTS stream_hook_events (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT,
+  timestamp   TEXT,
+  hook_type   TEXT,
+  tool_name   TEXT,
+  result      TEXT,
+  duration_ms INTEGER,
+  output      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_stream_events_session
+  ON stream_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
+  ON stream_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_stream_hook_events_session
+  ON stream_hook_events(session_id);
 
 PRAGMA user_version = 7;
 SQL

@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:3001/api/hook-events",
+            "method": "POST",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Evaluate whether this file change could expose secrets, weaken authentication, or leak sensitive data. If the change is dangerous, respond with BLOCK and explain why. If safe, respond with ALLOW.",
+            "if": "Write(**/.env*) || Write(**/auth/**) || Write(**/credentials*) || Write(**/secrets*) || Edit(**/.env*) || Edit(**/auth/**) || Edit(**/credentials*) || Edit(**/secrets*)"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "Before allowing this git push, check: 1) Are there uncommitted changes? 2) Is this pushing to main/master? If pushing to main, run the test suite (bats tests/ from the repo root) and verify no regressions. Report ALLOW or BLOCK with reason.",
+            "if": "Bash(git push*)",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

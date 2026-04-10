@@ -41,7 +41,7 @@ fi
 # --- Connectivity check utility ---
 # Calls cast-connectivity.sh check if available. Returns 0=online, 1=offline.
 cast_check_connectivity() {
-  local script="${HOME}/.claude/scripts/cast-connectivity.sh"
+  local script="${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}/cast-connectivity.sh"
   if [[ -x "$script" ]]; then
     "$script" check >/dev/null 2>&1
     return $?
@@ -125,7 +125,7 @@ entry = {
 }
 import subprocess
 subprocess.run(
-    ['python3', os.path.expanduser('~/.claude/scripts/cast-db-log.py')],
+    ['python3', os.path.join(os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')), 'cast-db-log.py')],
     input=json.dumps(entry), text=True, timeout=5
 )
 " 2>/dev/null || true

@@ -444,7 +444,7 @@ fi
 # Encryption: is age installed? Memory file state?
 if command -v age >/dev/null 2>&1; then
   MEMORY_DIR="$HOME/.claude/agent-memory-local"
-  AGE_COUNT=$(find "$MEMORY_DIR" -name "*.age" -type f 2>/dev/null | wc -l | tr -d ' ')
+  AGE_COUNT=$(find "$MEMORY_DIR" -name "*.age" -type f 2>/dev/null | wc -l | tr -d ' ' || echo 0)
   if [[ "$AGE_COUNT" -gt 0 ]]; then
     pass "Encryption: age installed, $AGE_COUNT encrypted memory file(s)"
   else

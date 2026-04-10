@@ -149,7 +149,7 @@ _log_entry = json.dumps({
     'status': status,
     'summary': (summary or '')[:120]
 })
-_log_script = os.path.expanduser('~/.claude/scripts/cast-log-append.py')
+_log_script = os.path.join(os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')), 'cast-log-append.py')
 if os.path.exists(_log_script):
     try:
         subprocess.run([sys.executable, _log_script], input=_log_entry, text=True, timeout=3, check=False)

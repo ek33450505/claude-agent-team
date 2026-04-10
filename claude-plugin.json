@@ -1,0 +1,27 @@
+{
+  "name": "cast",
+  "version": "4.6.0",
+  "description": "Claude Agent Specialist Team — multi-agent framework with 17+ agents, hook-enforced quality gates, and SQLite observability",
+  "author": "ek33450505",
+  "repository": "https://github.com/ek33450505/claude-agent-team",
+  "license": "MIT",
+  "claude_code_version": ">=2.1.90",
+  "components": {
+    "agents": "agents/core/",
+    "skills": "skills/",
+    "hooks": "managed-settings.d/",
+    "rules": "rules/"
+  },
+  "install": {
+    "scripts": {
+      "source": "scripts/",
+      "destination": "~/.claude/scripts/"
+    },
+    "postInstall": "bash scripts/cast-plugin-install.sh"
+  },
+  "dependencies": {
+    "python3": ">=3.9",
+    "jq": ">=1.6"
+  },
+  "keywords": ["agents", "multi-agent", "observability", "quality-gates"]
+}
