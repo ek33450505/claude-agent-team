@@ -10,6 +10,7 @@ DB_INIT="$REPO_DIR/scripts/cast-db-init.sh"
 VALID_CONFIG="$REPO_DIR/swarm-configs/fullstack-team.yml"
 
 setup() {
+  command -v python3 >/dev/null && python3 -c "import yaml" 2>/dev/null || skip "pyyaml not available"
   export ORIG_HOME="$HOME"
   export HOME="$(realpath "$(mktemp -d)")"
   mkdir -p "$HOME/.claude/cast/swarms" "$HOME/.claude/logs"

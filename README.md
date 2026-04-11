@@ -550,7 +550,7 @@ bats tests/scripts/
 | v4.3 | Memory persistence: FTS5, relevance scoring, shared pool, session distiller, MCP server |
 | v4.4 | Temporal validity on agent_memories |
 | v4.5 | Token efficiency: model tiering (11 Haiku/6 Sonnet), response budgets, local worktree isolation, Ollama fallback, parallel dual-worktree execution |
-| v4.6 | Stream-JSON observability, advanced hooks (HTTP/Prompt/Agent), Channel Event Bus, LiteLLM proxy, plugin packaging, JARVIS extraction |
+| v4.6 | Stream-JSON observability, advanced hooks (HTTP/Prompt/Agent), Channel Event Bus, LiteLLM proxy, plugin packaging |
 | v5.0 | **Agent Teams Integration:** swarm bootstrap from YAML, peer gossip protocol, force-directed Constellation dashboard, TeammateIdle/TaskCreated/TaskCompleted hooks, cast.db v8 (swarm_sessions/teammate_runs/teammate_messages), Ollama contractor hardening, production quality gates |
 
 ---
@@ -566,10 +566,9 @@ CAST is distributed across focused repos. The core framework lives here.
 | [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — htop for CAST | Homebrew `ek33450505/cast-dash` |
 | [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP | Homebrew `ek33450505/cast-memory` |
 | [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel plan execution across dual worktrees | Homebrew `ek33450505/cast-parallel` |
-| [jarvis](https://github.com/ek33450505/jarvis) | Personal Assistant — 8 pa-* agents, Obsidian, Strava, Todoist | Homebrew `ek33450505/jarvis` |
 | [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) | v5.0 React UI — Constellation graph, swarm activity, analytics | Standalone repo |
 
-**Distribution:** 2 Claude Code plugins, 5 Homebrew taps, 1 React dashboard.
+**Distribution:** 2 Claude Code plugins, 4 Homebrew taps, 1 React dashboard.
 
 ---
 

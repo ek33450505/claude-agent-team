@@ -9,7 +9,8 @@
 
 bats_require_minimum_version 1.5.0
 
-HOOK="${HOME}/.claude/scripts/cast-stop-failure-hook.sh"
+REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+HOOK="$REPO_DIR/scripts/cast-stop-failure-hook.sh"
 
 setup() {
     TMPDIR_TEST="$(mktemp -d)"
