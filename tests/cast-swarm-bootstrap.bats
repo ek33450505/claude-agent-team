@@ -22,6 +22,9 @@ teardown() {
   rm -f "$TEST_DB"
   rm -rf "$HOME"
   export HOME="$ORIG_HOME"
+  # Clean up any swarm worktrees created during tests (F10)
+  git -C "$REPO_DIR" worktree list --porcelain 2>/dev/null | grep "^worktree /tmp/cast-swarm-" | sed 's/^worktree //' | xargs -I{} git -C "$REPO_DIR" worktree remove --force {} 2>/dev/null || true
+  rm -rf /tmp/cast-swarm-* 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
