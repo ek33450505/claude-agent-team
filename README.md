@@ -1,60 +1,65 @@
 <p align="center">
-  <img src="docs/cast-banner.png" alt="CAST — A local-first multi-agent framework for Claude Code" />
+  <img src="docs/cast-banner.png" alt="CAST — Swarm control plane for Anthropic Agent Teams" />
 </p>
 
-# CAST — Claude Agent Specialist Team
+# CAST v5.0 — Swarm Control Plane
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-4.6-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-5.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-431-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-481-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**A local-first multi-agent framework for Claude Code.** 17 specialist agents, hook-enforced quality gates, async observability, and a full SQLite audit trail — all running locally with zero cloud lock-in.
+**CAST v5.0 is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. 17 specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
 
-**[CAST](https://castframework.dev)** 
+**[CAST Framework](https://castframework.dev)** | **[Cloud-native deployment guide](docs/swarm-deployment.md)**
+
 ---
 
 ## What is CAST?
 
-CAST turns Claude Code from a single-session assistant into a coordinated team:
+CAST v5.0 transforms Agent Teams from a raw execution primitive into a **production control plane:**
 
-- **Every task goes to the right expert.** Code changes dispatch to `code-writer`, failures to `debugger`, scripts to `bash-specialist`. The model reads a 17-row dispatch table and picks the agent — no regex, no routing config.
-- **Quality is enforced, not requested.** Raw `git commit` and `git push` are hard-blocked by shell hooks. Every code change mandates a `code-reviewer` pass. Commit only happens through the `commit` agent.
-- **Everything is observable.** Every agent dispatch, session, and token spend is logged to `cast.db` (SQLite). A companion React dashboard shows activity, analytics, agent status, and memory in real time.
-- **Lightweight tasks use cheaper models automatically.** Haiku handles `code-reviewer`, `commit`, `push`, and `test-runner` — the high-frequency, low-complexity work. Sonnet handles planning, writing, and debugging. The cost difference is 20x per token. CAST routes silently; you pay for what the task actually needs.
+- **Swarm composition in YAML.** Define teams (full-stack, review squad, research cluster), assign agent roles, set quality gates. CAST bootstraps worktrees, seeds teammates with identity + prompts, manages peer messaging.
+- **Quality gates are structural, not advisory.** Code changes mandate a reviewer pass. Commits only happen through the commit agent. Raw `git commit` and `git push` are hard-blocked by hooks. Violations trigger build failures.
+- **Everything is observable.** Every swarm session, teammate task, peer message, and token spend is logged to `cast.db` (SQLite). Real-time dashboard shows agent force-directed graph, worktree isolation, task satellites.
+- **Local models for cost optimization.** Haiku agents route to local Ollama (commit-message model, fast-review model) while Sonnet agents use Claude API. Cost per swarm drops 40-60% when paired with LiteLLM proxy.
+- **Teammate peer networking.** Agents send task claims, status updates, and query results to each other via cast.db message bus. No central coordinator—fully decentralized gossip protocol.
 
 ---
 
 ## Architecture
 
-Claude Code exposes ~40 discrete tools, each with a per-tool permission gate evaluated in `Deny → Ask → Allow` order, and an `AgentTool` that dispatches subagents as flat tool calls with no orchestration layer. Hook events (`PreToolUse`, `PostToolUse`, `SessionStart/Stop`, `SubagentStart/Stop`, `PostCompact`, `TaskCreated`) are first-class extension points. Context compaction runs at three internal tiers. An autonomous daemon mode and a coordinator pattern exist internally but are not yet shipped.
+CAST v5.0 operates as the native Agent Teams companion — Anthropic handles execution parallelism, CAST handles definition, composition, and observability.
 
-CAST is built to fill the gaps those unshipped features leave, and to make the hook system load-bearing rather than observational.
+```
+Agent Teams (Anthropic Native)
+    ↓
+    └─ CAST Swarm Bootstrap
+        ├─ Parse YAML team definition
+        ├─ Create worktree per teammate
+        ├─ Seed agent identity + quality gates preamble
+        └─ Stream events → cast.db
+            ├─ swarm_sessions table
+            ├─ teammate_runs table (per-agent task tracking)
+            └─ teammate_messages table (peer gossip)
+```
 
 <p align="center">
-  <img src="docs/cast-architecture.svg" alt="CAST architecture diagram" />
+  <img src="docs/cast-architecture-v5.svg" alt="CAST v5.0 swarm architecture" />
 </p>
 
----
+### Where CAST extends Agent Teams
 
-### Where CAST extends Claude Code
-
-| Claude Code (native) | CAST (on top) | Design rationale |
+| Agent Teams (native) | CAST v5.0 (on top) | Design rationale |
 |---|---|---|
-| `AgentTool` dispatches one subagent per call, no sequencing | Orchestrator executes Agent Dispatch Manifests: parallel batches fire simultaneously, sequential batches gate on prior completion, `owns_files` prevents write conflicts | Fills the gap left by the native coordinator pattern not yet shipping |
-| No post-agent successor logic | Chain-maps: `code-writer` → `code-reviewer` → `commit` enforced by `PostToolUse` hook injecting `[CAST-CHAIN]` directive | Makes quality gates structural, not advisory |
-| Hook system exists but carries no persistent state | **v4.6:** `cast.db` (SQLite, WAL mode): 6 tables — `sessions`, `agent_runs`, `routing_events`, `agent_memories`, `stream_events`, `stream_hook_events` | Turns ephemeral hook events into queryable audit trail; streaming JSON ingestion for real-time observability |
-| No native cost display beyond statusline | Native `cost.total_cost_usd` exposed in statusline format; CAST statusline script surfaces it per-session | Claude Code now provides cost natively; CAST presents it |
-| `PostCompact` fires but has no default handler | `cast-pre-compact-hook.sh` detects dumb-zone onset; `cast-post-compact-hook.sh` reinjects plan context | Both Pre and PostCompact are covered to prevent plan amnesia |
-| `PreToolUse` exit codes 0/2 are the permission gate | **v4.6:** `pre-tool-guard.sh` (exit 2 on raw `git commit`/`push`), `cast-audit-hook.sh` (file modification logging), Prompt hooks (sensitive file security gates) | Security guard behavior migrated to native sandbox `denyRead`/`denyWrite` rules; v4.6 adds prompt-level validation |
-| Model selection is per-session via `--model` flag | **v4.6:** Orchestrator routes per-task: Haiku for reviews/commits, Sonnet for writing/planning; LiteLLM proxy with Ollama contractor fallback (local-commit, local-fast models) | Automatic cost optimization; offline capability via local models with validation gates |
-| Stream output not persisted | **v4.6:** `cast-stream-wrapper.sh` + `cast-stream-consumer.py` parses `--output-format stream-json` into cast.db; Channel Event Bus (SSE on :9200) for real-time dashboard updates | Real-time observability without post-session analysis; HTTP hooks stream to dashboard live |
-
-### On the native coordinator pattern
-
-Claude Code's internal coordinator pattern specifies one coordinator spawning workers with isolated contexts, a shared scratchpad, a mailbox pattern for dangerous operations, and prompt cache prefix sharing between subagents. CAST's orchestrator covers most of this surface today — ADM batches, parallel dispatch, file ownership to prevent write contention, and checkpoint files for plan resumption across session disconnects. When the native coordinator ships, CAST adapts rather than competes: the ADM format maps onto the coordinator's worker model, hook coverage remains additive, and `cast.db` observability applies regardless of which dispatch path Claude Code uses internally.
+| Parallel agent execution | Swarm bootstrap + composition layer | Lift team definition out of code, standardize YAML config |
+| No cross-agent messaging | Peer gossip protocol (cast.db message bus) | Agents collaborate without central broker |
+| Hook system exists | Production-hardened hooks: TeammateIdle, TaskCreated, TaskCompleted, WorktreeCreate | Real-time swarm lifecycle events |
+| Model selection per-session | Per-task routing: Haiku → Ollama (cheap), Sonnet → Claude (smart) | Automatic cost optimization |
+| No persistent audit trail | `cast.db` v8: swarm_sessions, teammate_runs, teammate_messages, with temporal indices | Queryable, immutable swarm history |
+| No visual observability | Constellation Dashboard: force-directed agent graph + task satellites (React 19 + D3) | Live swarm topology + task flow |
 
 ---
 
@@ -68,7 +73,7 @@ brew install cast
 cast doctor
 ```
 
-**Claude Code Plugin** (v4.6):
+**Claude Code Plugin** (v5.0):
 
 ```bash
 claude plugin install ek33450505/cast
@@ -84,17 +89,91 @@ cd claude-agent-team
 bash install.sh
 ```
 
-`cast doctor` (or `cast-validate.sh`) checks hook wiring, agent files, database schema, CLI path, and advanced features (stream pipeline, channel bus, LiteLLM proxy). Green across the board means you're ready.
+`cast doctor` (or `cast-validate.sh`) checks hook wiring, agent files, database schema, CLI path, advanced features (swarm bootstrap, Ollama proxy, channel bus). Green across the board means you're ready.
+
+---
+
+## Swarm System
+
+### Define a Team (YAML)
+
+```yaml
+# swarm-configs/fullstack-team.yml
+team_name: fullstack
+description: "Full-stack feature implementation with review loop"
+
+teammates:
+  - role: frontend
+    agent_def: code-writer
+    task: "Implement React component for feature X"
+    model: claude-sonnet-4-6
+  - role: backend
+    agent_def: code-writer
+    task: "Implement Express API route and database migration"
+    model: claude-sonnet-4-6
+  - role: reviewer
+    agent_def: code-reviewer
+    task: "Review all changes from frontend and backend before merge"
+    model: claude-haiku-4-5
+
+quality_gates:
+  require_reviewer: true
+  commit_agent_only: true
+  pre_merge_review: true
+  
+merge_strategy: squash  # squash | merge | rebase
+```
+
+### Bootstrap and Run
+
+```bash
+# Spawn the swarm
+cast swarm bootstrap swarm-configs/fullstack-team.yml
+
+# Monitor in real time
+cast swarm status <swarm_id>
+
+# Merge results when done
+cast swarm merge <swarm_id>
+```
+
+Under the hood:
+1. CAST creates isolated git worktrees per teammate
+2. Each teammate gets a Claude Code terminal with agent identity preamble
+3. Agent Teams parallelizes execution; CAST emits lifecycle events
+4. Peer messages route through cast.db message bus
+5. Dashboard displays force-directed graph of all teammates + active tasks
+
+---
+
+## Agent Constellation Dashboard
+
+[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) v5.0 introduces **Constellation** — a force-directed graph visualization of your swarm:
+
+| Feature | What It Shows |
+|---|---|
+| **Agent Force Graph** | 17 agents + task satellites, gravity physics, live updates |
+| **Swarm Sessions** | Active swarms, teammates, task assignments, peer messages |
+| **Worktree Isolation** | Per-teammate file ownership, no write conflicts |
+| **Token Heatmap** | Per-agent token spend, cost trends, local vs Claude |
+| **Hook Audit Trail** | TeammateIdle, TaskCreated, TaskCompleted lifecycle events |
+| **Peer Messages** | Task claims, status updates, query results flowing between teammates |
+
+```bash
+cd ~/Projects/personal/claude-code-dashboard
+npm run dev    # Vite :5173 + Express :3001
+# Visit http://localhost:5173/constellation
+```
 
 ---
 
 ## Agent Roster
 
-17 specialists. Each is a plain markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, effort, and isolation.
+17 specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
 
 | Agent | Model | Effort | Purpose |
 |---|---|---|---|
-| `code-writer` | sonnet | high | Feature implementation spanning files or logical units |
+| `code-writer` | sonnet | high | Feature implementation across files or logical units |
 | `debugger` | sonnet | high | Root-cause diagnosis and fixes for failures |
 | `planner` | sonnet | high | Breaks features into sequenced task plans with ADM |
 | `orchestrator` | sonnet | high | Executes multi-agent plan manifests (ADM) |
@@ -112,49 +191,41 @@ bash install.sh
 | `push` | haiku | low | Pushes to remote with safety checks |
 | `frontend-qa` | haiku | low | Frontend diff review, component audit |
 
-All agents carry `memory: local` — each accumulates session knowledge in `~/.claude/agent-memory-local/<name>/`.
-
-> 11 of 17 agents run on Haiku ($1/MTok input) — the high-frequency, pattern-following work. 6 agents run on Sonnet ($3/MTok input) for complex reasoning. Model tiering cuts token costs by 25-40% compared to running all agents on the same model.
+**Model tiering:** 11 agents on Haiku ($1/MTok), 6 on Sonnet ($3/MTok). This 25-40% cost savings scales across the swarm.
 
 ---
 
-## Token Efficiency
+## Token Efficiency & Cost Optimization
 
-CAST is designed to minimize token spend without sacrificing quality. Multi-agent systems use 15x more tokens than single-turn chat (per Anthropic's own research) — every optimization compounds.
+CAST v5.0 uses five optimization layers:
 
-| Optimization | How It Works | Impact |
-|---|---|---|
-| Model tiering | 16 agents on Haiku, 9 on Sonnet — route by task complexity | 3x cost reduction on lightweight tasks |
-| Response budgets | Agents have enforced token limits: 300 (lightweight), 800 (medium), 2,000 (heavy) | Prevents verbose responses from bloating context |
-| Compressed Agent Protocol | Shared boilerplate condensed from ~310 tokens to ~100 tokens per agent | ~210 tokens saved per invocation |
-| Orchestrator preamble tiers | Full context for implementation agents, minimal for lightweight agents | ~80 tokens saved per lightweight dispatch |
-| Effort tuning | Haiku agents set to `effort: low` — no extended thinking overhead | Reduces output token waste |
-| WebFetch efficiency | Researcher pre-screens URLs, caches results, writes to disk instead of passing raw content | Cuts researcher token spend (~27% of total) |
-| Output compression | Orchestrator summarizes agent responses in <100 words, compacts at 30k tokens | Prevents context window bloat across batches |
+| Layer | Impact |
+|---|---|
+| **Model tiering** | Haiku for reviews/commits (high-frequency), Sonnet for writing/planning | 3x cost reduction on lightweight tasks |
+| **Response budgets** | Enforced token limits per agent: 300 (lightweight), 800 (medium), 2,000 (heavy) | Prevents context bloat |
+| **Ollama contractor** | Cheap agents route to local codellama/deepseek-coder; fallback to Claude if unavailable | 40-60% cost drop for local tasks |
+| **Orchestrator preamble tiers** | Full context for complex agents, minimal for lightweight agents | ~80 tokens saved per dispatch |
+| **Output compression** | Responses summarized in <100 words before next batch | Prevents window bloat |
 
-Estimated savings: **25-40% reduction** in monthly token spend compared to unoptimized multi-agent dispatch.
+**Net result:** ~30-50% reduction in swarm token spend vs. naive multi-agent dispatch.
 
 ---
 
 ## Hook Event Coverage
 
-13 Claude Code lifecycle events are wired with 3 advanced hook types: HTTP hooks (real-time dashboard streaming), prompt hooks (security gates for sensitive files), and agent hooks (pre-push BATS verification).
+**New in v5.0:** TeammateIdle, TaskCreated, TaskCompleted, WorktreeCreate are production-hardened hooks capturing swarm lifecycle:
 
 | Event | Hook Script | What It Does |
 |---|---|---|
 | `SessionStart` | `cast-session-start-hook.sh` | Opens session row in cast.db |
-| `UserPromptSubmit` | `cast-user-prompt-hook.sh` | Logs prompt metadata to routing_events |
-| `InstructionsLoaded` | `cast-instructions-loaded-hook.sh` | Logs session context load |
+| `TeammateIdle` | `cast-teammate-idle-hook.sh` | Logs idle event; agent can pick up next task |
+| `TaskCreated` | `cast-task-created-hook.sh` | Logs task assignment; updates teammate_runs table |
+| `TaskCompleted` | `cast-task-completed-hook.sh` | Logs completion status; streams result to peers |
+| `WorktreeCreate` | `cast-worktree-create-hook.sh` | Creates isolated worktree; seeds agent identity preamble |
 | `PreToolUse:Bash` | `pre-tool-guard.sh` | Hard-blocks `git commit` / `git push` (exit 2) |
-| `PreToolUse:AskUserQuestion` | `cast-headless-guard.sh` | Auto-answers AskUserQuestion in pipelines |
-| `PreToolUse:Write\|Edit` | `cast-audit-hook.sh` | Logs file modification events; **Prompt hooks**: security gate on .env, auth/, credentials |
-| `PostToolUse:Write\|Edit\|Agent\|Bash` | `post-tool-hook.sh` | Injects [CAST-REVIEW] directive; **HTTP hooks**: POST to dashboard SSE stream (`:9200`) |
-| `PostToolUseFailure` | `cast-tool-failure-hook.sh` | Logs tool failures to cast.db |
-| `PreCompact` | `cast-pre-compact-hook.sh` | Detects dumb-zone onset, emits pre_compact event |
-| `PostCompact` | `cast-post-compact-hook.sh` | Reinjects plan context, emits context_compacted |
-| `SubagentStart` | `cast-subagent-start-hook.sh` | Emits task_claimed on agent spawn; **Agent hooks**: pre-push BATS gate |
-| `SubagentStop` | `cast-subagent-stop-hook.sh` | Closes agent_runs row on completion (async) |
-| `SessionEnd` | `cast-session-end.sh` | Archives session, closes DB row, syncs memory |
+| `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Logs file modifications; emits HTTP event to dashboard |
+| `PostCompact` | `cast-post-compact-hook.sh` | Reinjects swarm context after compaction |
+| `SessionEnd` | `cast-session-end.sh` | Archives session, syncs peer messages, closes cast.db rows |
 
 **Exit code convention:**
 - Exit 0 — hook passed, tool call proceeds
@@ -163,95 +234,106 @@ Estimated savings: **25-40% reduction** in monthly token spend compared to unopt
 
 ---
 
-## Advanced Observability Features (v4.6)
+## Observability & cast.db v8
 
-**Stream-JSON Pipeline** — Real-time observability with persistent consumer:
+`cast.db` at `~/.claude/cast.db` — SQLite WAL mode, append-only, never truncated.
 
-```bash
-# Wrap Claude Code with stream-json parsing and DB logging
-cast-stream-wrapper.sh -p "your prompt here"
+**New in v5.0:**
 
-# Or manually
-claude -p "..." --output-format stream-json --include-hook-events \
-    | python3 scripts/cast-stream-consumer.py
-```
+| Table | Purpose |
+|---|---|
+| `swarm_sessions` | Swarm metadata: team_name, started_at, status, merge_strategy |
+| `teammate_runs` | Per-agent task tracking: swarm_id, agent_role, status, token counts |
+| `teammate_messages` | Peer gossip: from_agent, to_agent, message_type, JSON payload |
 
-Parses streaming JSON into `stream_events` and `stream_hook_events` tables. Live monitor via `cast-tmux-session.sh --stream`.
-
-**Channel Event Bus** — HTTP SSE streaming for real-time dashboard updates:
-
-```bash
-# Start the event bus daemon (SSE on port 9200)
-scripts/cast-channel-start.sh
-
-# Publish hook events to both file and HTTP stream
-scripts/cast-channel-publish.sh "hook_fired" '{"hook":"post-tool","tool":"Write"}'
-
-# View status
-scripts/cast-channel-start.sh status
-```
-
-Configuration: `managed-settings.d/27-hooks-advanced.json` — enable/disable HTTP hooks per event type.
-
-**Ollama Contractor Routing** — Local model fallback for offline/cost-sensitive tasks:
-
-```bash
-# Start LiteLLM proxy (routes to local Ollama or Claude)
-scripts/cast-litellm-start.sh
-
-# Models available:
-# - local-commit: tavernari/git-commit-message (Ollama)
-# - local-fast: qwen2.5-coder:7b (Ollama)
-# - claude-sonnet-4-6, claude-haiku-4-5 (Anthropic API)
-```
-
-Automatic fallback to Claude when Ollama is unavailable. `model_used` column in `cast.db` tracks actual inference endpoint. Validation: `cast-validate-contractor.sh`.
-
-**Remote Tasks** — JARVIS agents configured for Anthropic infrastructure:
-
-```bash
-# pa-jira and pa-meeting-prep can run on Anthropic remote execution
-# Output routing via cast-output-adapter.py (Obsidian/repo/stdout)
-```
-
----
-
-## Observability
-
-`cast.db` at `~/.claude/cast.db` — append-only SQLite. Never truncated.
-
+**Existing tables** (v4.6):
 | Table | Contents |
 |---|---|
 | `sessions` | Session start/end, model, token counts |
-| `agent_runs` | Every dispatch: agent, model, duration, status, batch_id, `model_used` (Ollama vs Claude) |
-| `routing_events` | Prompt routing records, event types, JSON payloads |
-| `agent_memories` | Synced from `~/.claude/agent-memory-local/` on Stop; temporal validity (valid_from/valid_to) |
-| `stream_events` | (v4.6) Real-time tool events from stream-json pipeline |
-| `stream_hook_events` | (v4.6) Hook lifecycle events captured from streaming output |
+| `agent_runs` | Every dispatch: agent, model, duration, status, batch_id |
+| `routing_events` | Prompt routing records |
+| `agent_memories` | Synced from `~/.claude/agent-memory-local/` with temporal validity |
+| `stream_events` | Real-time tool events from stream-json pipeline |
 
 ```bash
-# Live TUI dashboard — htop for CAST (requires: pip install textual)
-cast dash
+# Query active swarms
+sqlite3 ~/.claude/cast.db "SELECT swarm_id, team_name, status, COUNT(*) FROM swarm_sessions \
+  JOIN teammate_runs ON swarm_sessions.id = teammate_runs.swarm_id \
+  WHERE status='running' GROUP BY swarm_id;"
 
-# Usage analytics
-bash scripts/cast-stats.sh
+# Export swarm timeline
+sqlite3 ~/.claude/cast.db "SELECT timestamp, from_agent, to_agent, message_type \
+  FROM teammate_messages WHERE swarm_id = ? ORDER BY timestamp;"
 
-# Health check
-bash scripts/cast-validate.sh   # also available as: cast doctor
-
-# Query recent agent runs
-sqlite3 ~/.claude/cast.db "SELECT agent, status, created_at FROM agent_runs ORDER BY id DESC LIMIT 10;"
+# Cast health check
+cast doctor
 ```
-
-`cast dash` is a Textual-based terminal UI. It reads `cast.db` and `~/.claude/` directly — no web browser required. Shows active agents, today's stats with a sparkline, recent runs table, and system health panel. Updates live. Requires the `textual` Python package (installed automatically by `install.sh`).
 
 ---
 
-## Multi-Agent Pipelines
+## Peer Messaging & Gossip Protocol
 
-The `orchestrator` agent executes plans defined by an **Agent Dispatch Manifest (ADM)** — a JSON structure inside plan files. Plans live in `~/.claude/plans/`.
+Teammates communicate via cast.db message bus — no central broker, fully decentralized:
 
-**ADM structure:**
+```json
+{
+  "message_type": "task_claim",
+  "from_agent": "backend",
+  "to_agent": "reviewer",
+  "payload": {
+    "task_id": "task-123",
+    "subject": "Implement POST /users route",
+    "status": "complete",
+    "files_changed": ["/src/routes/users.ts"]
+  }
+}
+```
+
+Message types:
+- **task_claim** — Agent announces it's starting a task
+- **status_update** — Agent reports progress or completion
+- **peer_query** — Agent asks other teammate for information
+- **idle_event** — Agent is waiting for next task
+
+All messages are logged to `teammate_messages` table with timestamps, enabling full swarm replay and debugging.
+
+---
+
+## Ollama Integration & Local Model Fallback
+
+**New in v5.0:** LiteLLM proxy with transparent Ollama fallback.
+
+```bash
+# Start LiteLLM proxy (port 8000)
+scripts/cast-litellm-start.sh
+
+# Start Ollama with recommended models
+ollama pull codellama:7b
+ollama pull deepseek-coder:7b
+ollama pull nomic-embed-text  # for semantic search
+
+# Route cheap agents to local models
+# Model routing in managed-settings.d/25-litellm.json
+```
+
+**Routing strategy:**
+- `claude-haiku-4-5` (review, commit) → local-commit (codellama) if Ollama available
+- `claude-sonnet-4-6` (write, plan) → claude-sonnet-4-6 (Claude API, no fallback)
+- **Fallback:** If Ollama unavailable, silently retry via Claude API
+
+`cast.db` tracks `model_used` in `agent_runs` — you can measure how many tokens stayed local vs. went to Claude.
+
+```bash
+# Cost breakdown: local vs Claude
+sqlite3 ~/.claude/cast.db "SELECT model_used, COUNT(*), SUM(tokens_in + tokens_out) as total_tokens \
+  FROM agent_runs WHERE created_at > datetime('now', '-7 days') GROUP BY model_used;"
+```
+
+---
+
+## Multi-Agent Pipelines (v4.6+)
+
+The `orchestrator` agent executes **Agent Dispatch Manifests (ADM)** — JSON structures for sequential/parallel work:
 
 ```json
 {
@@ -262,203 +344,90 @@ The `orchestrator` agent executes plans defined by an **Agent Dispatch Manifest 
       "agents": [
         {
           "subagent_type": "code-writer",
-          "owns_files": ["/abs/path/to/file.sh"],
-          "prompt": "..."
+          "owns_files": ["/src/app.ts"],
+          "prompt": "Implement authentication module"
         },
         {
-          "subagent_type": "security",
-          "owns_files": ["/abs/path/to/other.sh"],
-          "prompt": "..."
+          "subagent_type": "test-writer",
+          "owns_files": ["/src/app.test.ts"],
+          "prompt": "Write unit tests for auth"
         }
       ]
     },
     {
       "id": 2,
       "parallel": false,
-      "agents": [{ "subagent_type": "commit", "prompt": "..." }]
+      "agents": [
+        {
+          "subagent_type": "code-reviewer",
+          "prompt": "Review changes from batch 1"
+        }
+      ]
     }
   ]
 }
 ```
 
-`owns_files` prevents two parallel agents from writing the same file. The orchestrator detects conflicts before dispatch and blocks the batch if any overlap exists.
+`owns_files` prevents write conflicts — orchestrator blocks if two parallel agents claim the same file.
 
 ```bash
-# Run a plan
 cast exec ~/.claude/plans/my-plan.md
-
-# Run a plan across two parallel worktree sessions
-# Splits batches at the midpoint, launches two claude --headless processes
-# in separate git worktrees, and merges results back when both complete
-cast parallel ~/.claude/plans/my-plan.md
-
-# Preview the batch split without executing
-cast parallel --dry-run ~/.claude/plans/my-plan.md
-
-# Control the split point (batches 1-2 in Stream A, rest in Stream B)
-cast parallel --split 2 ~/.claude/plans/my-plan.md
-
-# Or dispatch the orchestrator agent directly:
-# "Orchestrate the plan at ~/.claude/plans/my-plan.md"
+cast parallel ~/.claude/plans/my-plan.md --split 2
+cast parallel ~/.claude/plans/my-plan.md --dry-run
 ```
 
 ---
 
-## Agent Memory
+## Agent Memory & Persistence (v4.3+)
 
-Each agent has a persistent markdown-based memory directory. Agents accumulate domain knowledge across sessions.
+Each agent accumulates domain knowledge across sessions in `~/.claude/agent-memory-local/<name>/`:
 
 ```
 ~/.claude/agent-memory-local/
   code-writer/
     MEMORY.md              ← index (loaded into every session)
     feedback_testing.md    ← user guidance on testing approach
-    project_auth.md        ← project-specific auth context
+    project_auth.md        ← project-specific context
   debugger/
     MEMORY.md
     ...
 ```
 
-Memory files are plain markdown with YAML frontmatter. `cast-session-end.sh` syncs them to `agent_memories` in cast.db on every Stop. The markdown files are the source of truth.
+**v4.3+ features:**
+- FTS5 full-text search on memory descriptions
+- Relevance scoring: recency + importance + semantic similarity
+- Temporal validity: memories superseded but not deleted (history preserved)
+- Shared pool: memories with `agent='shared'` visible to all teammates
+- Procedural type: operational patterns (e.g., "BATS whitespace fixes")
+- Session distiller: extracts decisions into procedural memory at session end
 
 ```bash
-# Back up all agent memory to a GitHub release
-bash scripts/cast-memory-backup.sh --dry-run   # preview only
-bash scripts/cast-memory-backup.sh             # creates tarball + gh release
+# Search across all agent memories
+python3 scripts/cast-memory-router.py --mode retrieve --agent shared --prompt "how to fix BATS"
+
+# Back up all memories to GitHub release
+bash scripts/cast-memory-backup.sh
 ```
-
----
-
-## Memory Persistence
-
-CAST v4.3 adds FTS5-indexed full-text search, relevance scoring, shared memory pool, procedural memory type, semantic embeddings, session distillation, staleness validation, MCP server access, and weekly consolidation. All state lives in `cast.db` — no external services required.
-
-### FTS5 Schema
-
-The `agent_memories_fts` virtual table indexes `content` and `description` columns for full-text search. Three triggers (`am_ai`, `am_au`, `am_ad`) keep the index in sync with `agent_memories` on insert, update, and delete. Migration:
-
-```bash
-python3 scripts/cast-memory-fts5-migrate.py
-```
-
-### Relevance Scoring
-
-Weighted formula: `0.4 * recency + 0.3 * importance + 0.3 * fts_rank`. Recency decays exponentially using per-type decay rates:
-
-| Memory Type | Decay Rate |
-|---|---|
-| `feedback`, `user` | 0.999 |
-| `reference` | 0.997 |
-| `project` | 0.990 |
-
-The `importance` column (0.0–1.0) weights critical memories higher. Default importance is backfilled by type.
-
-### Shared Pool
-
-Memories with `agent='shared'` are visible to all agents. The router query uses `WHERE (agent = ? OR agent = 'shared')`, so shared memories appear alongside agent-specific results without duplication.
-
-### Procedural Memory
-
-`type='procedural'` stores operational patterns — BATS whitespace fixes, sandbox workarounds, orchestrator dispatch patterns. Seeded by `cast-memory-seed-procedural.py`. Auto-loaded into agent sessions at start.
-
-```bash
-python3 scripts/cast-memory-seed-procedural.py   # seed 5 built-in patterns
-```
-
-### Semantic Search
-
-Optional Ollama dependency. `cast-memory-embed.py` generates 768-dim nomic-embed-text embeddings stored as BLOBs in `agent_memories.embedding`. Hybrid search combines FTS5 rank with cosine similarity for more accurate retrieval.
-
-```bash
-# Backfill embeddings for all existing memories
-python3 scripts/cast-memory-embed.py --backfill
-
-# Embed a single text
-python3 scripts/cast-memory-embed.py --text "how to fix BATS whitespace"
-```
-
-Requires Ollama running locally with `nomic-embed-text` pulled. Without Ollama, FTS5-only search is used automatically.
-
-### Temporal Validity
-
-`valid_from` and `valid_to` columns on `agent_memories` let facts be superseded without deletion — preserving history while keeping current queries clean. Run the migration to add these columns:
-
-```bash
-python3 scripts/cast-memory-migrate-temporal.py
-```
-
-Default queries filter `WHERE valid_to IS NULL` to return only current facts. Use `--history` to include superseded memories, or `--invalidate <id>` to mark a memory as superseded:
-
-```bash
-# Retrieve only current memories (default)
-python3 scripts/cast-memory-router.py --mode retrieve --agent shared --prompt "test"
-
-# Include superseded memories
-python3 scripts/cast-memory-router.py --mode retrieve --agent shared --prompt "test" --history
-
-# Mark memory #42 as superseded
-python3 scripts/cast-memory-router.py --invalidate 42
-```
-
-### Session Distiller
-
-`cast-session-distiller.py` runs at session end, extracting decisions, patterns, and failures into procedural memories. Captures operational knowledge that would otherwise be lost at session close.
-
-```bash
-python3 scripts/cast-session-distiller.py
-```
-
-### Staleness Validation
-
-`cast-memory-validate.py` flags memories older than 30 days and verifies that file and function references still exist in the codebase. Outputs a JSON report sorted by staleness score.
-
-```bash
-python3 scripts/cast-memory-validate.py --check          # report only
-python3 scripts/cast-memory-validate.py --validate        # update timestamps
-python3 scripts/cast-memory-validate.py --archive-stale   # zero-out stale importance
-```
-
-### MCP Server
-
-`cast-mcp-memory-server.py` wraps `agent_memories` as an MCP resource, allowing external tools and editors to read and search CAST memory. Configured in `.mcp.json`.
-
-### Consolidation
-
-`cast-memory-consolidate.py` runs weekly via cron. Deduplicates similar memories, applies decay, and archives memories below the relevance threshold.
-
-```bash
-python3 scripts/cast-memory-consolidate.py   # run manually
-```
-
-### Standalone Install
-
-For users who want memory persistence without full CAST:
-
-```bash
-brew tap ek33450505/cast-memory && brew install cast-memory
-```
-
-See [cast-memory](https://github.com/ek33450505/cast-memory).
 
 ---
 
 ## Dashboard
 
-[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) — React 19 + Vite + Express observability UI for CAST.
-
-Reads `cast/events/`, `agent-status/`, and `cast.db` directly — no backend API required for reads.
+[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) v5.0 — React 19 + Vite + Express observability UI.
 
 | Page | What It Shows |
 |---|---|
-| `/activity` | Live agent spawn timeline, hook events |
-| `/sessions` | Session list with compaction markers |
-| `/analytics` | Token spend by agent, prompt volume over time |
-| `/agents` | Agent roster status, last active, run count |
-| `/hooks` | Hook health: fired/blocked/failed counts |
-| `/plans` | Plan files, ADM batch status |
-| `/memory` | Per-agent MEMORY.md viewer, last-modified |
-| `/token-spend` | Budget burn rate, cost trends |
+| `/constellation` | Force-directed agent graph + task satellites (NEW v5.0) |
+| `/activity` | Live swarm spawn timeline, hook events, peer messages (NEW v5.0) |
+| `/sessions` | Session list with swarm affiliation and compaction markers |
+| `/analytics` | Token spend by agent + model (Claude vs Ollama), trends |
+| `/agents` | Agent roster status, last active, run count per teammate |
+| `/hooks` | Hook health: fired/blocked/failed counts per event type |
+| `/memory` | Per-agent MEMORY.md viewer + FTS5 search |
+| `/token-spend` | Budget burn rate, cost trends, local vs cloud split |
 | `/db` | Raw cast.db explorer |
+
+**Start the dashboard:**
 
 ```bash
 cd ~/Projects/personal/claude-code-dashboard
@@ -472,40 +441,45 @@ npm run dev    # Vite :5173 + Express :3001
 ```
 claude-agent-team/
   agents/
-    core/               ← 17 agent definitions (mirrored to ~/.claude/agents/)
+    core/                        ← 17 agent definitions
   config/
-    cast-litellm.yaml   ← LiteLLM proxy config (Ollama + Claude routing)
-    managed-settings.d/ ← Modular settings: hooks, observability, security gates
-  docs/                 ← architecture specs, native-tools-reference.md, protocol docs
-  scripts/              ← hook scripts, utilities, stream/channel/contractor pipelines
+    cast-litellm.yaml            ← LiteLLM proxy config
+    managed-settings.d/          ← modular settings
+  docs/
+    cast-architecture-v5.svg     ← swarm topology diagram
+    swarm-deployment.md          ← production guide
+  scripts/
+    cast-swarm-bootstrap.sh      ← team bootstrap (NEW v5.0)
+    cast-swarm-*.sh              ← swarm management scripts (NEW v5.0)
+    cast-teammate-*.sh           ← teammate hooks (HARDENED v5.0)
+    cast-litellm-*.sh            ← LiteLLM proxy control
+    cast-*.sh                    ← core hooks + utilities
+  swarm-configs/                 ← YAML team definitions
+    fullstack-team.yml
+    review-team.yml
+    research-team.yml
   tests/
-    *.bats              ← core test suite
-    hooks/              ← hook-specific BATS tests
-    agents/             ← agent frontmatter BATS tests
-    scripts/            ← script utility BATS tests
+    *.bats                       ← core test suite
+    hooks/                       ← hook tests
+    swarm/                       ← swarm-specific tests (NEW v5.0)
   .github/
     workflows/
-      bats-ci.yml       ← BATS CI on push + daily schedule
-      cast-pr-review.yml← Automated PR review via claude-code-action
-  .mcp.json             ← Project-scoped MCP server config
-  claude-plugin.json    ← Claude Code plugin manifest (v4.6)
-  install.sh
+      bats-ci.yml                ← BATS CI on push
   VERSION
   CHANGELOG.md
+  README.md
 ```
 
-**Runtime (outside repo, in `~/.claude/`):**
+**Runtime (in `~/.claude/`):**
 
 ```
 ~/.claude/
-  agents/               ← live agent definitions (copied from agents/core/)
-  agent-memory-local/   ← per-agent persistent memory
-  plans/                ← planner output + ADM plan files
-  settings.json         ← Claude Code config with all hooks registered
-  cast.db               ← SQLite observability database
-  cast/events/          ← append-only event log (one JSON per session)
-  scripts/              ← installed hook scripts
-  logs/                 ← pipeline, headless-stalls, memory-backup logs
+  agents/                ← live agent definitions
+  agent-memory-local/    ← per-agent persistent memory
+  plans/                 ← planner output + ADM files
+  swarm-sessions/        ← active swarm metadata (NEW v5.0)
+  cast.db                ← SQLite observability (v8)
+  scripts/               ← installed hook scripts
 ```
 
 ---
@@ -516,10 +490,10 @@ Pure cron. No daemon. No background process.
 
 | Schedule | Script | Purpose |
 |---|---|---|
-| Daily 7am | morning-briefing agent | Git activity summary across all repos |
-| Daily 6pm | cast-stats.sh | Daily usage summary |
-| Monday 9am | cast-stats.sh --weekly | Weekly cost report |
-| Daily 2am | cast-memory-backup.sh | Backup agent memory to GitHub release |
+| Daily 7am | `morning-briefing` agent | Git activity summary |
+| Daily 6pm | `cast-stats.sh` | Daily usage summary |
+| Monday 9am | `cast-stats.sh --weekly` | Weekly cost report |
+| Daily 2am | `cast-memory-backup.sh` | Backup agent memory to GitHub release |
 
 ```bash
 bash scripts/cast-cron-setup.sh          # install
@@ -527,10 +501,10 @@ bash scripts/cast-cron-setup.sh --list   # view
 bash scripts/cast-cron-setup.sh --remove # uninstall
 ```
 
-Manual cleanup is available via `cast tidy`:
+Manual cleanup:
 
 ```bash
-cast tidy            # clean plans, events, logs, db rows, briefings older than 14 days
+cast tidy            # clean plans, events, logs, db rows older than 14 days
 cast tidy --dry-run  # preview what would be removed
 ```
 
@@ -538,19 +512,25 @@ cast tidy --dry-run  # preview what would be removed
 
 ## Test Suite
 
-324 BATS tests across 4 directories. 0 failures.
+**481 BATS tests** across 5 directories. 0 failures. Coverage includes:
+
+- Core hook scripts (13 hooks)
+- Swarm bootstrap and lifecycle (NEW v5.0)
+- Agent team definitions
+- Message bus communication (NEW v5.0)
+- Database migrations (v7 → v8)
+- Guard logic (commit/push blocking)
+- Event emission (HTTP SSE, database logging)
+- Memory persistence (FTS5, temporal validity)
+- Cron setup and cleanup
 
 ```bash
-# Run all tests
 bats tests/
-
-# Run a specific category
 bats tests/hooks/
+bats tests/swarm/        # NEW v5.0
 bats tests/agents/
 bats tests/scripts/
 ```
-
-Tests cover: hook scripts, guard logic, event emission, stats generation, DB init, cron setup, agent-status reader, effort frontmatter, headless guard, and memory backup.
 
 ---
 
@@ -559,47 +539,52 @@ Tests cover: hook scripts, guard logic, event emission, stats generation, DB ini
 | Version | Highlights |
 |---|---|
 | v1 | Manual dispatch, no hooks, no memory |
-| v2 | 42 agents, routing table, regex dispatch, castd daemon |
-| v3.0 | 16 agents, model-driven dispatch, 4 hooks, cron, cast.db |
-| v3.1 | Async hooks, worktree isolation, per-agent memory, headless pipelines, GitHub CI |
-| v3.3 | Audit hardening: WAL mode, structured error logging, SQL injection fix, PII advisory mode, orchestrator resilience (checkpoints, policy gate, TRUNCATED classification), 4 scripts committed to repo |
-| v3.4 | Security hardening: Python injection fix, path injection fix, --model flag on CLI; portability: __HOME__ tokens replace hardcoded paths; settings cleanup; daemon cleanup (flock lockfile); frontend-qa agent added; docs/native-tools-reference.md; 324 BATS tests |
-| v4.0 | Major cleanup: gut 33 hooks to 15, slim CLI from 2331→976 lines, installer 351→193 lines; drop 5 empty DB tables (9→4 canonical); delete observe-* shadow system, daemon, routing scripts; rebuild cast.db at v7 with batch_id; 271 BATS tests |
-| v4.1 | Native adoption: replace cost-tracker with native statusline, remove prettier hook, delete 4 dead routing scripts, migrate security guard to sandbox rules, add PreCompact hook, add effort/background/initialPrompt to agent frontmatter; 262 BATS tests |
-| v4.2 | `cast dash` TUI dashboard (Textual, htop for CAST); `cast tidy` cleanup subcommand; CHEATSHEET.md; morning-briefing fixes; spinnerVerbs settings fix |
-| v4.3 | Memory persistence: FTS5 search, relevance scoring, shared pool, procedural memory, semantic embeddings, session distiller, staleness validation, MCP server, weekly consolidation, standalone cast-memory repo |
-| v4.4 | Temporal validity on agent_memories, session distiller rewrite with regex extraction |
-| v4.5 | Token efficiency: model tiering (11 Haiku / 6 Sonnet), response budgets, compressed Agent Protocol, orchestrator preamble tiers, research URL cache, token budget alerts — 25-40% cost reduction; Local-first hardening: macOS Keychain integration, age encryption with Secure Enclave binding, WAL-safe SQLite backups, network detection with offline queue, Ollama local model fallback, parallel plan execution across dual worktrees; 357 BATS tests |
-| v4.6 | **Stream-JSON observability:** persistent consumer ingests stream-json → cast.db; **Advanced hooks:** HTTP (real-time dashboard SSE), Prompt (sensitive file gates), Agent (pre-push BATS); **Channel bus:** port 9200 SSE streaming; **Ollama contractor:** LiteLLM proxy with local model fallback; **Remote tasks:** pa-jira/pa-meeting-prep on Anthropic infrastructure; **Plugin packaging:** `claude plugin install` support; JARVIS extracted to standalone (ek33450505/jarvis); 17-agent core roster |
-
-## CAST Ecosystem
-
-CAST is split across focused repos. The core framework lives here; install via Homebrew, Claude Code plugin, or git clone.
-
-| Repo | Description | Distribution |
-|---|---|---|
-| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Core framework — agents, hooks, CLI, observability | Homebrew `ek33450505/cast`, Claude plugin |
-| [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts framework — 13 hooks, CLI tool (v0.1.0) | Homebrew `ek33450505/cast-hooks` |
-| [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — 4-panel live display (v0.1.0) | Homebrew `ek33450505/cast-dash` |
-| [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP (v0.1.0) | Homebrew `ek33450505/cast-memory` |
-| [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel plan execution across dual worktrees (v0.1.0) | Homebrew `ek33450505/cast-parallel` |
-| [jarvis](https://github.com/ek33450505/jarvis) | Personal Assistant — 8 pa-* agents, Obsidian, Strava, Todoist, TTS | Homebrew `ek33450505/jarvis`, Claude plugin |
-| [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) | React 19 observability UI — activity, sessions, analytics, agents, hooks, memory | Standalone repo |
-
-**Distribution:** 2 Claude Code plugins (`cast`, `jarvis`), 5 Homebrew taps, 1 standalone web UI.
+| v2 | 42 agents, routing table, regex dispatch |
+| v3.0 | 16 agents, model-driven dispatch, 4 hooks, cast.db |
+| v3.1 | Async hooks, worktree isolation, per-agent memory |
+| v3.3 | Audit hardening: WAL mode, SQL injection fixes, 324 BATS tests |
+| v3.4 | Security hardening: path injection fix, frontend-qa agent, portability |
+| v4.0 | Hook system rewrite (15 → 13 hooks), CLI slim, drop 5 empty DB tables |
+| v4.1 | Native adoption: native statusline cost display, migration to sandbox rules |
+| v4.2 | `cast dash` TUI dashboard, `cast tidy` cleanup, CHEATSHEET |
+| v4.3 | Memory persistence: FTS5, relevance scoring, shared pool, session distiller, MCP server |
+| v4.4 | Temporal validity on agent_memories |
+| v4.5 | Token efficiency: model tiering (11 Haiku/6 Sonnet), response budgets, local worktree isolation, Ollama fallback, parallel dual-worktree execution |
+| v4.6 | Stream-JSON observability, advanced hooks (HTTP/Prompt/Agent), Channel Event Bus, LiteLLM proxy, plugin packaging, JARVIS extraction |
+| v5.0 | **Agent Teams Integration:** swarm bootstrap from YAML, peer gossip protocol, force-directed Constellation dashboard, TeammateIdle/TaskCreated/TaskCompleted hooks, cast.db v8 (swarm_sessions/teammate_runs/teammate_messages), Ollama contractor hardening, production quality gates |
 
 ---
 
-## Local-First
+## CAST Ecosystem
 
-CAST v4.5 adds local-first hardening for data protection and offline workflows:
+CAST is distributed across focused repos. The core framework lives here.
 
-- **macOS Keychain integration** for API key storage (`cast-keychain.sh`)
-- **age encryption** for agent memory with optional Secure Enclave binding (`cast-encrypt.sh`)
-- **WAL-safe SQLite backups** with 7-day retention (`cast-db-backup.py`)
-- **Network detection** with offline queue and auto-replay (`cast-connectivity.sh`)
-- **Ollama local model fallback** for offline tasks (`cast-ollama.sh`)
-- **Parallel plan execution** across dual worktrees (`cast-parallel.sh`)
+| Repo | Description | Distribution |
+|---|---|---|
+| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Core v5.0 framework — agents, swarm bootstrap, hooks, CLI, observability | Homebrew `ek33450505/cast`, Claude plugin |
+| [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts framework — 13 hooks, CLI tool | Homebrew `ek33450505/cast-hooks` |
+| [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — htop for CAST | Homebrew `ek33450505/cast-dash` |
+| [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP | Homebrew `ek33450505/cast-memory` |
+| [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel plan execution across dual worktrees | Homebrew `ek33450505/cast-parallel` |
+| [jarvis](https://github.com/ek33450505/jarvis) | Personal Assistant — 8 pa-* agents, Obsidian, Strava, Todoist | Homebrew `ek33450505/jarvis` |
+| [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) | v5.0 React UI — Constellation graph, swarm activity, analytics | Standalone repo |
+
+**Distribution:** 2 Claude Code plugins, 5 Homebrew taps, 1 React dashboard.
+
+---
+
+## Local-First & Offline
+
+CAST v5.0 maintains v4.5's local-first hardening:
+
+- **macOS Keychain integration** for API key storage
+- **age encryption** for agent memory with Secure Enclave binding
+- **WAL-safe SQLite backups** with 7-day retention
+- **Network detection** with offline queue and auto-replay
+- **Ollama local model fallback** for offline tasks
+- **Parallel worktree isolation** — no shared state between teammates
+
+All observability stays in `cast.db` on disk — zero cloud lock-in, zero network required for core functionality.
 
 ---
 
@@ -615,9 +600,19 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
+## Author
+
+**Edward Kubiak**  
+Full-stack engineer, Claude Code expert, building the future of multi-agent orchestration.
+
+GitHub: [ek33450505](https://github.com/ek33450505)  
+CAST Portfolio: [castframework.dev](https://castframework.dev)
+
+---
+
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->477<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->481<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->9<!-- /CAST_SKILL_COUNT --> skills

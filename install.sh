@@ -1,5 +1,5 @@
 #!/bin/bash
-# CAST Installer (v4 rebuild)
+# CAST Installer (v5.0)
 # Copies agents, commands, skills, scripts, and rules to ~/.claude/
 set -euo pipefail
 
@@ -159,6 +159,37 @@ if [ -f "$SCRIPT_DIR/cast/permission-rules.json" ]; then
     if [ ! -f "$CLAUDE_DIR/cast/permission-rules.json" ]; then
         cp "$SCRIPT_DIR/cast/permission-rules.json" "$CLAUDE_DIR/cast/permission-rules.json"
         success "  Installed: cast/permission-rules.json"
+    fi
+fi
+
+# --- Install swarm-configs (skip if destination exists — don't overwrite user customizations) ---
+if [ -d "$SCRIPT_DIR/swarm-configs" ]; then
+    info "Installing swarm configs..."
+    mkdir -p "$CLAUDE_DIR/swarm-configs"
+    mkdir -p "$CLAUDE_DIR/cast/swarms"
+    for config_file in "$SCRIPT_DIR"/swarm-configs/*.yml; do
+        [ -f "$config_file" ] || continue
+        base="$(basename "$config_file")"
+        dest="$CLAUDE_DIR/swarm-configs/$base"
+        if [ -f "$dest" ]; then
+            info "  Skipped (exists): swarm-configs/$base"
+        else
+            cp "$config_file" "$dest"
+            success "  Installed: swarm-configs/$base"
+        fi
+    done
+fi
+
+# --- Install swarm skill (skip if destination exists) ---
+if [ -f "$SCRIPT_DIR/skills/swarm/SKILL.md" ]; then
+    info "Installing swarm skill..."
+    mkdir -p "$CLAUDE_DIR/skills/swarm"
+    dest="$CLAUDE_DIR/skills/swarm/SKILL.md"
+    if [ -f "$dest" ]; then
+        info "  Skipped (exists): skills/swarm/SKILL.md"
+    else
+        cp "$SCRIPT_DIR/skills/swarm/SKILL.md" "$dest"
+        success "  Installed: skills/swarm/SKILL.md"
     fi
 fi
 

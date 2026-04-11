@@ -1,10 +1,11 @@
 #!/bin/bash
-# cast-db-init.sh — CAST SQLite State Foundation (v7 — clean rebuild)
-# Creates ~/.claude/cast.db with exactly 4 tables:
+# cast-db-init.sh — CAST SQLite State Foundation (v8 — swarm tables)
+# Creates ~/.claude/cast.db with core tables + swarm observability tables:
 #   sessions, agent_runs, routing_events, agent_memories
+#   swarm_sessions, teammate_runs, teammate_messages
 #
 # Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
-# Schema versioning via PRAGMA user_version (current = 7).
+# Schema versioning via PRAGMA user_version (current = 8).
 #
 # Usage:
 #   cast-db-init.sh [--db /path/to/cast.db]
@@ -32,8 +33,8 @@ fi
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-# If already at v7+, apply additive stream tables migration and exit
-if [ "$CURRENT_VERSION" -ge 7 ]; then
+# If already at v8+, ensure all additive tables exist and exit
+if [ "$CURRENT_VERSION" -ge 8 ]; then
   # Additive migration: create stream_events and stream_hook_events if missing
   # Also add model_used column to agent_runs if missing (Ollama contractor routing)
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
@@ -67,9 +68,131 @@ CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
   ON stream_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_stream_hook_events_session
   ON stream_hook_events(session_id);
+
+CREATE TABLE IF NOT EXISTS swarm_sessions (
+  id           TEXT PRIMARY KEY,
+  team_name    TEXT NOT NULL,
+  config_path  TEXT,
+  started_at   TEXT,
+  ended_at     TEXT,
+  status       TEXT DEFAULT 'running',
+  session_id   TEXT,
+  project      TEXT,
+  notes        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS teammate_runs (
+  id           TEXT PRIMARY KEY,
+  swarm_id     TEXT REFERENCES swarm_sessions(id),
+  agent_role   TEXT,
+  agent_def    TEXT,
+  worktree     TEXT,
+  task_id      TEXT,
+  task_subject TEXT,
+  status       TEXT DEFAULT 'idle',
+  started_at   TEXT,
+  ended_at     TEXT,
+  tokens_in    INTEGER DEFAULT 0,
+  tokens_out   INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS teammate_messages (
+  id           TEXT PRIMARY KEY,
+  swarm_id     TEXT REFERENCES swarm_sessions(id),
+  from_agent   TEXT,
+  to_agent     TEXT,
+  message_type TEXT,
+  payload      TEXT,
+  timestamp    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
+CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
 STREAM_TABLES
-  echo "cast.db already initialized (v${CURRENT_VERSION}), stream tables ensured" >&2
+  echo "cast.db already initialized (v${CURRENT_VERSION}), all tables ensured" >&2
   exit 0
+fi
+
+# Migrate v7 → v8: add swarm tables (additive only — no drops)
+if [ "$CURRENT_VERSION" -eq 7 ]; then
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
+  sqlite3 "$DB_PATH" <<'MIGRATE_V8'
+CREATE TABLE IF NOT EXISTS stream_events (
+  id                  TEXT PRIMARY KEY,
+  session_id          TEXT,
+  timestamp           TEXT,
+  event_type          TEXT,
+  tool_name           TEXT,
+  tool_input_preview  TEXT,
+  status              TEXT,
+  duration_ms         INTEGER,
+  raw_json            TEXT
+);
+
+CREATE TABLE IF NOT EXISTS stream_hook_events (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT,
+  timestamp   TEXT,
+  hook_type   TEXT,
+  tool_name   TEXT,
+  result      TEXT,
+  duration_ms INTEGER,
+  output      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_stream_events_session
+  ON stream_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
+  ON stream_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_stream_hook_events_session
+  ON stream_hook_events(session_id);
+
+CREATE TABLE IF NOT EXISTS swarm_sessions (
+  id           TEXT PRIMARY KEY,
+  team_name    TEXT NOT NULL,
+  config_path  TEXT,
+  started_at   TEXT,
+  ended_at     TEXT,
+  status       TEXT DEFAULT 'running',
+  session_id   TEXT,
+  project      TEXT,
+  notes        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS teammate_runs (
+  id           TEXT PRIMARY KEY,
+  swarm_id     TEXT REFERENCES swarm_sessions(id),
+  agent_role   TEXT,
+  agent_def    TEXT,
+  worktree     TEXT,
+  task_id      TEXT,
+  task_subject TEXT,
+  status       TEXT DEFAULT 'idle',
+  started_at   TEXT,
+  ended_at     TEXT,
+  tokens_in    INTEGER DEFAULT 0,
+  tokens_out   INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS teammate_messages (
+  id           TEXT PRIMARY KEY,
+  swarm_id     TEXT REFERENCES swarm_sessions(id),
+  from_agent   TEXT,
+  to_agent     TEXT,
+  message_type TEXT,
+  payload      TEXT,
+  timestamp    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
+CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
+
+PRAGMA user_version = 8;
+MIGRATE_V8
+  echo "cast.db migrated v7 → v8 (added swarm_sessions, teammate_runs, teammate_messages)" >&2
+  CURRENT_VERSION=8
 fi
 
 # Migrate v6 → v7: drop empty tables, add batch_id to agent_runs
@@ -107,7 +230,7 @@ MIGRATE_V7
   CURRENT_VERSION=7
 fi
 
-# Fresh install (no existing DB or version 0)
+# Fresh install (no existing DB or version 0-6)
 if [ "$CURRENT_VERSION" -lt 7 ]; then
   sqlite3 "$DB_PATH" <<'SQL'
 PRAGMA foreign_keys = ON;
@@ -213,7 +336,49 @@ CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
 CREATE INDEX IF NOT EXISTS idx_stream_hook_events_session
   ON stream_hook_events(session_id);
 
-PRAGMA user_version = 7;
+-- Swarm observability tables (v8)
+CREATE TABLE IF NOT EXISTS swarm_sessions (
+  id           TEXT PRIMARY KEY,
+  team_name    TEXT NOT NULL,
+  config_path  TEXT,
+  started_at   TEXT,
+  ended_at     TEXT,
+  status       TEXT DEFAULT 'running',
+  session_id   TEXT,
+  project      TEXT,
+  notes        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS teammate_runs (
+  id           TEXT PRIMARY KEY,
+  swarm_id     TEXT REFERENCES swarm_sessions(id),
+  agent_role   TEXT,
+  agent_def    TEXT,
+  worktree     TEXT,
+  task_id      TEXT,
+  task_subject TEXT,
+  status       TEXT DEFAULT 'idle',
+  started_at   TEXT,
+  ended_at     TEXT,
+  tokens_in    INTEGER DEFAULT 0,
+  tokens_out   INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS teammate_messages (
+  id           TEXT PRIMARY KEY,
+  swarm_id     TEXT REFERENCES swarm_sessions(id),
+  from_agent   TEXT,
+  to_agent     TEXT,
+  message_type TEXT,
+  payload      TEXT,
+  timestamp    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
+CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
+
+PRAGMA user_version = 8;
 SQL
 fi
 
@@ -222,4 +387,4 @@ chmod 600 "$DB_PATH"
 # Enable WAL mode for concurrent write safety
 sqlite3 "$DB_PATH" 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;' >/dev/null 2>&1 || true
 
-echo "cast.db initialized (v7, WAL mode, 4 tables)" >&2
+echo "cast.db initialized (v8, WAL mode, swarm tables included)" >&2

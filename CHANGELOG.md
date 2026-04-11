@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## v5.0 — Swarm Control Plane (2026-04-10)
+
+CAST becomes the control plane for Anthropic's native Agent Teams. Swarm orchestration, live agent visualization, and local model routing.
+
+### Added
+- **Agent Teams Integration** — CAST wraps Anthropic's teammate mode with composition, quality gates, and observability
+- **`/swarm` skill** — Bootstrap parallel agent teams from YAML config files (`/swarm fullstack-team "task"`)
+- **Swarm configs** — `fullstack-team.yml`, `review-team.yml`, `research-team.yml` with model routing options
+- **`cast-swarm-bootstrap.sh`** — Creates git worktrees per teammate, seeds spawn preambles, logs to cast.db
+- **`cast-swarm-merge.sh`** — Post-swarm merge with safety checks (refuses incomplete teammates)
+- **`cast-swarm-teardown.sh`** — Emergency swarm cleanup with `--force` flag
+- **cast.db v8 schema** — `swarm_sessions`, `teammate_runs`, `teammate_messages` tables with indexes
+- **Ollama/LiteLLM model routing** — Route teammate agents to local models (`ollama:codellama`, `ollama:deepseek-coder`) for cost savings
+- **Agent Constellation** — Live force-directed graph dashboard page showing all 17 agents with task satellite nodes (dashboard repo)
+
+### Changed
+- Hardened `cast-task-completed-hook.sh` — writes to `teammate_runs` and `teammate_messages` tables
+- Hardened `cast-teammate-idle-hook.sh` — routes through `teammate_messages` instead of ad-hoc tables
+- Expanded `cast-worktree-create-hook.sh` — handles `CAST_SWARM_ID` and `CAST_SPAWN_PREAMBLE` env vars
+- `install.sh` syncs `swarm-configs/` and `skills/swarm/` to `~/.claude/`
+- Version bump: `VERSION` → 5.0, `claude-plugin.json` → 5.0.0
+
 ## v4.4 — Token Efficiency (2026-04-06)
 
 Systematic token cost optimization across all 17 agents.

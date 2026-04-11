@@ -1,0 +1,32 @@
+# Model options:
+#   Claude API:  claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5
+#   Ollama:      ollama:codellama, ollama:deepseek-coder, ollama:llama3
+#   LiteLLM handles routing — Ollama models run locally (free, private)
+#   Use Claude for code-writing/planning, Ollama for reviews/commits
+
+name: fullstack-team
+description: "Frontend + backend parallel development with code review gate"
+
+teammates:
+  - role: frontend-dev
+    agent_def: code-writer
+    model: claude-sonnet-4-6
+    task: "Implement the React component changes described in the task. Follow existing patterns in src/. Run tests after changes."
+
+  - role: backend-dev
+    agent_def: code-writer
+    model: claude-sonnet-4-6
+    task: "Implement the Express API route changes described in the task. Follow existing patterns in server/. Ensure all routes have error handling."
+
+  - role: reviewer
+    agent_def: code-reviewer
+    model: claude-haiku-4-5
+    task: "Review all changes from frontend-dev and backend-dev before merge. Check for: correctness, test coverage, CAST quality gates compliance, no TODOs left in code."
+    read_only: false
+
+quality_gates:
+  require_reviewer: true
+  commit_agent_only: true
+  pre_merge_review: true
+
+merge_strategy: squash
