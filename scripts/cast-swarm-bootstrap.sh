@@ -40,7 +40,7 @@ SWARMS_DIR_VAL="$SWARMS_DIR_VAL" \
 GIT_ROOT_VAL="$GIT_ROOT" \
 CONFIG_PATH_VAL="$CONFIG_ABS" \
 python3 - <<'PYEOF'
-import json, os, sys, uuid, sqlite3
+import json, os, sys, uuid, sqlite3, subprocess
 from datetime import datetime, timezone
 
 config_raw   = os.environ.get("CONFIG_CONTENT", "")
@@ -137,7 +137,6 @@ This swarm uses **{merge_strategy}** merge strategy.
     # For read-only teams, skip worktree creation
     actual_worktree = None
     if not read_only:
-        import subprocess
         # Create parent dir so git worktree add can create the leaf
         parent_dir = os.path.dirname(worktree_path)
         os.makedirs(parent_dir, exist_ok=True)

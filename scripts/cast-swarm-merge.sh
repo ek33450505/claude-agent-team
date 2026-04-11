@@ -32,7 +32,7 @@ DB_PATH_VAL="$DB_PATH_VAL" \
 SWARM_ID_VAL="$SWARM_ID_VAL" \
 GIT_ROOT_VAL="$GIT_ROOT" \
 python3 - <<'PYEOF'
-import json, os, sqlite3, sys, subprocess
+import json, os, sqlite3, sys, subprocess, uuid
 from datetime import datetime, timezone
 
 manifest_raw = os.environ.get("MANIFEST_CONTENT", "")
@@ -145,7 +145,7 @@ if db_path and os.path.exists(db_path):
                    (id, swarm_id, from_agent, to_agent, message_type, payload, timestamp)
                    VALUES (?, ?, ?, ?, ?, ?, ?)''',
                 (
-                    __import__("uuid").uuid4().hex[:16],
+                    uuid.uuid4().hex[:16],
                     swarm_id,
                     "cast-swarm-merge",
                     None,

@@ -51,7 +51,7 @@ SWARM_ID_VAL="$SWARM_ID" \
 GIT_ROOT_VAL="$GIT_ROOT" \
 MANIFEST_FILE_VAL="$MANIFEST_FILE" \
 python3 - <<'PYEOF'
-import json, os, sqlite3, sys, subprocess
+import json, os, sqlite3, sys, subprocess, shutil
 from datetime import datetime, timezone
 
 manifest_raw  = os.environ.get("MANIFEST_CONTENT", "")
@@ -97,7 +97,6 @@ for tm in teammates:
     else:
         print(f"  {role}: WARNING — could not remove {worktree}: {result.stderr.strip()}", file=sys.stderr)
         # Try to clean up the directory directly as last resort
-        import shutil
         try:
             if os.path.exists(worktree):
                 shutil.rmtree(worktree)
