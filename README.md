@@ -486,24 +486,35 @@ claude-agent-team/
 
 ## Scheduled Tasks
 
-Pure cron. No daemon. No background process.
+CAST uses a hybrid scheduling model: **Anthropic RemoteTriggers** for AI-powered tasks with MCP access (run in the cloud, fire even when Claude Code is closed), and **cron** for pure shell maintenance tasks.
 
-| Schedule | Script | Purpose |
+### RemoteTriggers (cloud-scheduled)
+
+| Trigger | Schedule (EDT) | Model | MCPs | Output |
+|---|---|---|---|---|
+| `pa-briefing` | Weekdays 7:27 AM | Sonnet | Calendar + Gmail + Jira | `Briefings/` + `Reports/` (standup) |
+| `pa-eod` | Daily 4:53 PM | Haiku | Jira | `Daily Notes/` |
+| `pa-weekly` | Friday 3:57 PM | Sonnet | Jira | `Reports/` |
+
+The morning briefing is a mega-trigger that combines weather, calendar, email triage (with draft replies), Jira standup, and sprint overview into one session. It writes both a full briefing and a copy-paste-ready Teams standup.
+
+Local-only sections (git status, cast.db health) gracefully degrade with a note to run `/morning` locally for full data.
+
+### Cron (local shell tasks)
+
+| Schedule | Job | Purpose |
 |---|---|---|
-| Daily 7am | `morning-briefing` agent | Git activity summary |
-| Daily 6pm | `cast-stats.sh` | Daily usage summary |
-| Monday 9am | `cast-stats.sh --weekly` | Weekly cost report |
-| Daily 2am | `cast-memory-backup.sh` | Backup agent memory to GitHub release |
+| Every 30 min | `cast-ci-monitor.sh` | GitHub Actions failure alerts |
+| Daily 3:00 AM | `cast tidy` | Clean old plans, events, logs |
+| Daily 3:30 AM | SQLite prune | 90-day data retention on cast.db |
+| Daily 3:45 AM | Log compress | gzip event logs older than 7 days |
+| Daily 10:47 PM | `pa-backup` | rsync ~/.claude/ + ~/JARVIS/ vault |
 
 ```bash
-bash scripts/cast-cron-setup.sh          # install
-bash scripts/cast-cron-setup.sh --list   # view
-bash scripts/cast-cron-setup.sh --remove # uninstall
-```
+# View scheduled cron jobs
+crontab -l
 
-Manual cleanup:
-
-```bash
+# Manual cleanup
 cast tidy            # clean plans, events, logs, db rows older than 14 days
 cast tidy --dry-run  # preview what would be removed
 ```
@@ -512,7 +523,7 @@ cast tidy --dry-run  # preview what would be removed
 
 ## Test Suite
 
-**481 BATS tests** across 5 directories. 0 failures. Coverage includes:
+**462 BATS tests** across 5 directories. 0 failures. Coverage includes:
 
 - Core hook scripts (13 hooks)
 - Swarm bootstrap and lifecycle (NEW v5.0)
@@ -612,6 +623,6 @@ CAST Portfolio: [castframework.dev](https://castframework.dev)
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->507<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->462<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->10<!-- /CAST_SKILL_COUNT --> skills
