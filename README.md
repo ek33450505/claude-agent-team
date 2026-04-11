@@ -523,7 +523,7 @@ cast tidy --dry-run  # preview what would be removed
 
 ## Test Suite
 
-**462 BATS tests** across 5 directories. 0 failures. Coverage includes:
+**507 BATS tests** across 5 directories. 0 failures. Coverage includes:
 
 - Core hook scripts (13 hooks)
 - Swarm bootstrap and lifecycle (NEW v5.0)
@@ -623,6 +623,6 @@ CAST Portfolio: [castframework.dev](https://castframework.dev)
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->462<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->507<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->10<!-- /CAST_SKILL_COUNT --> skills
