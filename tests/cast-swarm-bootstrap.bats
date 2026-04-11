@@ -80,7 +80,7 @@ print('ok')
 
 @test "cast-swarm-bootstrap: invalid YAML → exit 1" {
   local bad_config
-  bad_config="$(mktemp /tmp/bad-config-$$.yml)"
+  bad_config="$(mktemp /tmp/bad-config-XXXXXX.yml)"
   printf 'name: [unclosed bracket\nteammates: {\n' > "$bad_config"
 
   run bash "$BOOTSTRAP_SH" "$bad_config" "Some task"
