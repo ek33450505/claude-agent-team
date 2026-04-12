@@ -7,7 +7,7 @@ description: >
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
 effort: low
-color: orange
+color: teal
 memory: local
 maxTurns: 20
 skills: [cast-conventions]

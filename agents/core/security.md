@@ -7,7 +7,7 @@ description: >
 tools: Read, Glob, Grep, Bash
 model: sonnet
 effort: high
-color: magenta
+color: hot-pink
 memory: local
 maxTurns: 20
 isolation: worktree

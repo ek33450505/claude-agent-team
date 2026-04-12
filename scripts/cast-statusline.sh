@@ -3,6 +3,11 @@
 # Reads native JSON from stdin, outputs a single formatted line.
 # Must be fast (<100ms) — runs after every assistant message.
 
+# Source agent color helper
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=cast-agent-color.sh
+source "${SCRIPT_DIR}/cast-agent-color.sh"
+
 INPUT="$(cat 2>/dev/null || true)"
 [ -z "$INPUT" ] && echo "CAST | n/a" && exit 0
 
@@ -65,7 +70,8 @@ fi
 reset="\033[0m"
 
 # Build output
-out="⚡ ${agent} | ${cost_fmt} | ctx: ${ctx_color}${ctx_pct}%${reset}"
+agent_color=$(get_agent_color "$agent")
+out="⚡ ${agent_color}${agent}${reset} | ${cost_fmt} | ctx: ${ctx_color}${ctx_pct}%${reset}"
 
 # Add rate limit if present
 if [ -n "$rate_pct" ] && [ "$rate_pct" != "null" ]; then

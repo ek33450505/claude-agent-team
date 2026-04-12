@@ -7,7 +7,7 @@ description: >
 tools: Read, Write, Glob, Grep
 model: sonnet
 effort: high
-color: blue
+color: cornflower
 memory: local
 maxTurns: 20
 disallowedTools: Bash

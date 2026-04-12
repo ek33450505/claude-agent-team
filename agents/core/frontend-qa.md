@@ -5,7 +5,7 @@ model: haiku
 effort: low
 tools: Read, Bash, Glob, Grep
 isolation: worktree
-color: cyan
+color: sky
 memory: local
 maxTurns: 20
 skills: [cast-conventions]
