@@ -66,7 +66,7 @@ cast_emit_event() {
   local task_id="$3"
   local artifact_id="${4:-}"
   local summary="${5:-}"
-  local status="${6:-}"
+  local run_status="${6:-}"
   local concerns="${7:-}"
 
   _cast_init_dirs
@@ -77,7 +77,7 @@ cast_emit_event() {
   ts_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local event_file="${CAST_EVENTS_DIR}/${ts}-${agent}-${task_id}.json"
 
-  python3 - "$event_type" "$agent" "$task_id" "$artifact_id" "$summary" "$status" "$concerns" "$ts" "$event_file" "$ts_iso" <<'PYEOF'
+  python3 - "$event_type" "$agent" "$task_id" "$artifact_id" "$summary" "$run_status" "$concerns" "$ts" "$event_file" "$ts_iso" <<'PYEOF'
 import json, sys
 event_type, agent, task_id, artifact_id, summary, status, concerns, ts, filepath, ts_iso = sys.argv[1:]
 event = {
@@ -101,7 +101,7 @@ PYEOF
   # Only for actionable event types; skip artifact/review noise
   if [[ "$event_type" == "task_claimed" || "$event_type" == "task_completed" || "$event_type" == "task_blocked" ]]; then
     CAST_ETYPE="$event_type" CAST_AGENT="$agent" CAST_TASK="$task_id" \
-    CAST_SUMMARY="$summary" CAST_STATUS="$status" CAST_TS="$ts_iso" \
+    CAST_SUMMARY="$summary" CAST_STATUS="$run_status" CAST_TS="$ts_iso" \
     python3 -c "
 import json, os
 etype   = os.environ.get('CAST_ETYPE', '')
