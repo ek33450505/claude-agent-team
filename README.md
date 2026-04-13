@@ -7,7 +7,7 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-5.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-31-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-462-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-525-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -241,6 +241,22 @@ CAST v5.0 uses five optimization layers:
 | **Output compression** | Responses summarized in <100 words before next batch | Prevents window bloat |
 
 **Net result:** ~30-50% reduction in swarm token spend vs. naive multi-agent dispatch.
+
+---
+
+## Token Optimization (v5.0+)
+
+Beyond cost tiering, CAST v5.0 introduces five new optimization features to reduce token consumption:
+
+| Feature | Usage | Impact |
+|---|---|---|
+| **Caveman Mode** | `/caveman [lite\|full\|ultra\|off]` | 15-25% output reduction via terse formatting (3 intensity levels) |
+| **RTK Hook** | `scripts/cast-rtk-install.sh` | 60-89% compression on tool outputs; optional install |
+| **Context Audit** | `scripts/audit-context-size.sh` | Measures always-loaded context; warns if >500 lines (rules slimmed by 95 lines) |
+| **Compact Discipline** | Auto-trigger at 40 tool calls/session | Suggests `/compact` via reminder hook + best practices skill |
+| **Thinking Budgets** | `config/thinking-budgets.json` | Per-agent extended thinking tiers (0–8192 tokens); prevents wasteful defaults |
+
+**Combined:** These optimizations reduce total session token spend by 20-35% without sacrificing output quality.
 
 ---
 
@@ -556,7 +572,7 @@ cast tidy --dry-run  # preview what would be removed
 
 ## Test Suite
 
-**507 BATS tests** across 5 directories. 0 failures. Coverage includes:
+**525 BATS tests** across 5 directories. 0 failures. Coverage includes:
 
 - Core hook scripts (13 hooks)
 - Swarm bootstrap and lifecycle (NEW v5.0)
