@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ek33450505/claude-agent-team/schemas/work-log.schema.json",
+  "title": "CAST Agent Work Log",
+  "description": "Schema for the structured Work Log that agents include in their final response. Captures what was read, written, reviewed, and decided during task execution.",
+  "type": "object",
+  "required": ["agent", "entries"],
+  "properties": {
+    "agent": {
+      "type": "string",
+      "description": "Name of the agent that produced this work log."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when the work log was generated."
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action", "summary"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["read", "wrote", "edited", "reviewed", "tested", "dispatched", "decided", "skipped"],
+            "description": "Type of action performed."
+          },
+          "files": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "File paths involved in this action."
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Brief description of the action."
+          },
+          "result": {
+            "type": "string",
+            "description": "Outcome of the action (e.g., 'DONE', 'PASS', 'FAIL')."
+          }
+        }
+      }
+    }
+  }
+}

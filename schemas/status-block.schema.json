@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ek33450505/claude-agent-team/schemas/status-block.schema.json",
+  "title": "CAST Agent Status Block",
+  "description": "Schema for the structured Status block that every CAST agent must include in its final response. Currently enforced via prompt instructions; this schema enables future machine verification via Structured Outputs.",
+  "type": "object",
+  "required": ["status", "summary"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT"],
+      "description": "Terminal status of the agent's task execution."
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "One-line summary of what was accomplished or why the agent is blocked."
+    },
+    "concerns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of concerns when status is DONE_WITH_CONCERNS. Required when status is DONE_WITH_CONCERNS."
+    },
+    "context_needed": {
+      "type": "string",
+      "description": "Description of missing context when status is NEEDS_CONTEXT. Required when status is NEEDS_CONTEXT."
+    },
+    "blocker": {
+      "type": "string",
+      "description": "Description of the blocking issue when status is BLOCKED. Required when status is BLOCKED."
+    },
+    "files_changed": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of absolute file paths that were created or modified."
+    },
+    "worktree_branch": {
+      "type": "string",
+      "description": "Git branch name when the agent ran in worktree isolation mode."
+    }
+  },
+  "if": { "properties": { "status": { "const": "DONE_WITH_CONCERNS" } } },
+  "then": { "required": ["concerns"] },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "BLOCKED" } } },
+      "then": { "required": ["blocker"] }
+    },
+    {
+      "if": { "properties": { "status": { "const": "NEEDS_CONTEXT" } } },
+      "then": { "required": ["context_needed"] }
+    }
+  ]
+}

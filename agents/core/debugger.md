@@ -88,6 +88,14 @@ Worktree branch: cast-worktree-XXXXXX
 ```
 The parent session can then dispatch the `merge` agent with that branch name to review and merge, or discard it.
 
+## Advisor Tool (future integration)
+
+> Anthropic's Advisor Tool (API beta, `advisor-tool-2026-03-01`) pairs a Sonnet executor
+> with an Opus advisor in a single API call. This is currently API-only and not available
+> through Claude Code's Agent tool. When CAST moves to custom API pipelines, debugger
+> should be configured with Opus advisory for complex root cause analysis, giving
+> near-Opus diagnostic quality at Sonnet cost.
+
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 

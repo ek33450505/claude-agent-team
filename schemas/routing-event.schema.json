@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ek33450505/claude-agent-team/schemas/routing-event.schema.json",
+  "title": "CAST Routing Event",
+  "description": "Schema for routing events logged to cast.db when agents are dispatched. Captures the dispatch decision metadata for observability.",
+  "type": "object",
+  "required": ["session_id", "agent", "model", "timestamp"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique event identifier (hex string)."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Parent session ID that initiated the dispatch."
+    },
+    "agent": {
+      "type": "string",
+      "description": "Name of the dispatched agent."
+    },
+    "model": {
+      "type": "string",
+      "enum": ["haiku", "sonnet", "opus"],
+      "description": "Model tier assigned to the agent."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of the routing decision."
+    },
+    "prompt_summary": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Truncated summary of the prompt sent to the agent."
+    },
+    "dispatch_backend": {
+      "type": "string",
+      "enum": ["cast", "coordinator", "agent-teams"],
+      "description": "Which dispatch mechanism was used."
+    },
+    "batch_id": {
+      "type": "integer",
+      "description": "Batch number when dispatched as part of an orchestrator plan."
+    },
+    "isolation": {
+      "type": "string",
+      "enum": ["none", "worktree"],
+      "description": "Whether the agent ran in worktree isolation."
+    }
+  }
+}

@@ -218,6 +218,22 @@ cast_emit_event 'task_completed' 'orchestrator' 'session' '' 'All batches comple
 - If your accumulated context exceeds ~30,000 tokens (roughly 15+ agent dispatches), perform inline compaction: discard completed batch details, keep only the status summary per batch.
 - When passing context to the next batch, include only: (1) the plan's remaining batches, (2) a 1-sentence summary per completed batch, (3) any blocking issues.
 
+## Agent Teams Integration (experimental)
+
+When `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set in settings.json, the orchestrator
+can operate as a **team lead** in an Agent Team instead of using hub-and-spoke subagent
+dispatch. In team-lead mode:
+
+- Parallel batch agents become **teammates** with shared task lists
+- `TeammateIdle` hook fires when a teammate finishes — logged by `cast-teammate-idle-hook.sh`
+- `TaskCompleted` hook fires when a shared task is marked done — logged by `cast-task-completed-hook.sh`
+- The orchestrator creates tasks via `TaskCreate` and teammates claim/complete them
+- Fallback: if Agent Teams is not available or the flag is unset, standard hub-and-spoke
+  dispatch via the Agent tool continues to work unchanged
+
+This is additive — the existing dispatch model remains the default. Agent Teams is an
+opt-in enhancement for parallel batches that benefit from peer-to-peer coordination.
+
 ## Rules
 
 - Never skip a batch unless the user explicitly says to

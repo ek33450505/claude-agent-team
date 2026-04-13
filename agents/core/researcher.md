@@ -104,6 +104,26 @@ ORDER BY enrollment_year DESC;
 After running queries: explain the approach, document assumptions, highlight key findings,
 suggest next steps based on the data.
 
+## Citation Convention
+
+All research reports must include verifiable source attribution. Since Anthropic's
+Citations API is currently API-only (not available through Claude Code's tool pipeline),
+follow this manual citation convention:
+
+- **Inline citations:** When referencing external information, include the source URL
+  inline: `According to the React docs (https://react.dev/reference/...), ...`
+- **Source section:** Every research report must end with a `## Sources` section listing
+  all URLs consulted, with a one-line description of what was found at each.
+- **Web results:** When using WebSearch/WebFetch, always note the URL in your findings.
+  Do not present web-sourced information without attribution.
+- **Codebase references:** When citing project code, include the file path and line
+  numbers: `(see src/hooks/useAuth.ts:42-58)`
+
+> **Future:** When Anthropic's Citations API becomes available through Claude Code
+> (currently API-only, GA since Jan 2025), automatic citation passthrough will replace
+> this manual convention. See `schemas/` for the structured output schemas that will
+> enable machine-verified citations.
+
 ## Key Principles
 
 - **Stack-aware:** Always evaluate options against the actual tech stack
