@@ -127,6 +127,14 @@ rm -f "$CLAUDE_DIR/scripts/cast-security-guard.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-cost-tracker.sh"
 success "  Scripts installed (including cast_db.py)"
 
+# --- Optional RTK check ---
+info "Checking for RTK (optional token compression)..."
+if command -v rtk >/dev/null 2>&1; then
+    success "  rtk found: $(rtk --version 2>/dev/null || echo 'version unknown')"
+else
+    warn "  rtk not installed — run scripts/cast-rtk-install.sh to enable token compression"
+fi
+
 # --- Initialize cast.db ---
 DB_INIT_SCRIPT="$CLAUDE_DIR/scripts/cast-db-init.sh"
 if [ -f "$DB_INIT_SCRIPT" ]; then

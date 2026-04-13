@@ -656,6 +656,6 @@ CAST Portfolio: [castframework.dev](https://castframework.dev)
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->31<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->507<!-- /CAST_TEST_COUNT --> tests |
-<!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
-<!-- CAST_SKILL_COUNT -->10<!-- /CAST_SKILL_COUNT --> skills
+<!-- CAST_TEST_COUNT -->525<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
+<!-- CAST_SKILL_COUNT -->14<!-- /CAST_SKILL_COUNT --> skills

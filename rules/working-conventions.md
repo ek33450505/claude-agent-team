@@ -2,44 +2,38 @@
 
 ## Planning
 - Run `planner` before any non-trivial change
-- Tasks should be 15-30 min of work max; break larger work into smaller chunks
+- Tasks: 15-30 min max; break larger work into chunks
 - Each logical unit gets its own commit
 
-## Code quality
+## Code Quality
 - YAGNI: build only what was asked
 - DRY: find existing patterns before inventing new ones
 - TDD: write failing tests before implementation for logic-heavy tasks
-- MANDATORY: Invoke `code-reviewer` agent after every logical unit of changes
-- MANDATORY: Never run `git commit` directly — always use the `commit` agent
-- MANDATORY: Route any error/failure to `debugger` agent rather than inline triage
-- MANDATORY: Agents that modify code (`test-writer`, `debugger`, `refactor-cleaner`, `build-error-resolver`) self-dispatch `code-reviewer` internally — do not double-dispatch from the main session
-- MANDATORY: All agents output a structured Status block as their final response: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
+- MANDATORY: `code-reviewer` after every logical unit of changes
+- MANDATORY: Never `git commit` directly — use the `commit` agent
+- MANDATORY: Route errors to `debugger` agent, not inline triage
+- MANDATORY: Code-modifying agents self-dispatch `code-reviewer` internally
+- MANDATORY: All agents end with Status: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
 
-## Researcher vs Explore
-
-- **`researcher` (sonnet):** Deep investigation, external sources, multi-step analysis, data synthesis, open-ended questions ("How should we approach X?")
-- **`Explore` subagent (sonnet):** Fast codebase navigation, file discovery, grep-level searches ("Where is X defined?")
-
-Rule: use Explore for location queries, researcher for understanding and recommendation queries.
+## Agent Selection
+- `researcher` (sonnet): deep investigation, external sources, recommendations
+- `Explore` subagent: fast codebase navigation, file/grep searches
 
 ## Testing
-- Tests live alongside source: `src/components/Foo.jsx` → `src/components/Foo.test.jsx`
-- Test behavior, not implementation — prefer `getByRole`/`getByText` over `getByTestId`
+- Tests alongside source: `Foo.jsx` -> `Foo.test.jsx`
+- Test behavior (`getByRole`/`getByText`), not implementation
 - Cover: happy path, edge cases, error states
 
 ## SQL / Data
-- Always use `db-reader` for read-only exploration
-- Write optimized queries with filters and comments for complex logic
-- For BigQuery: use `bq query` CLI
+- `db-reader` for read-only exploration
+- Optimized queries with filters; BigQuery via `bq query` CLI
 
 ## Commits
-- MANDATORY: Use the `commit` agent for all commits — never raw `git commit` via Bash
-- Commit message format: imperative mood, concise (`Add feature X`, `Fix bug in Y`)
-- Never amend published commits
+- MANDATORY: Use `commit` agent — never raw `git commit`
+- Imperative mood, concise (`Add feature X`, `Fix bug in Y`)
 
 ## Context Management
-- Watch for the "dumb zone" — quality degrades when context reaches ~50% compaction
-- Use `/compact` manually before hitting the zone, or `/clear` and start fresh
-- For large tasks: break into sub-sessions, use `/rename` + `/resume`
-- Use Esc Esc or `/rewind` to undo mistakes instead of fixing in same context
+- Compact at ~60% context (before "dumb zone" at ~70%)
+- `/compact` to summarize; `/clear` + `/resume` for fresh start
+- Commit before compacting — compact discards tool output history
 - Commit at least hourly during implementation sessions

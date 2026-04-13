@@ -1,123 +1,34 @@
 <!--
-  TEMPLATE: This file tells agents about YOUR tech stack.
-
-  HOW TO USE:
-  1. Delete every section that doesn't apply to you
-  2. Uncomment the lines that match your stack
-  3. Add anything missing — agents read this before giving advice
-
-  Keep it short. Agents use this for quick context, not documentation.
+  TEMPLATE: Tell agents about YOUR tech stack.
+  Delete sections that don't apply. Keep it short.
+  Full library/command reference: load /stack-reference skill.
 -->
 # Tech Stack
 
-<!--
-  Delete sections you don't use. Keep only what's real.
-  The more accurate this is, the better agents perform.
--->
-
 ## Frontend
-<!-- Pick your framework(s) and delete the rest -->
-
-<!-- React -->
-<!-- - **React 18/19** with Vite -->
-<!-- - **React 18/19** with CRA / react-scripts -->
-<!-- - **Next.js 14/15** (App Router) -->
-
-<!-- Vue -->
-<!-- - **Vue 3** with Vite -->
-<!-- - **Nuxt 3** -->
-
-<!-- Svelte -->
-<!-- - **SvelteKit** -->
-
-<!-- Angular -->
-<!-- - **Angular 17/18** -->
-
-<!-- Vanilla / Other -->
-<!-- - **Astro** -->
-<!-- - **HTML/CSS/JS** (no framework) -->
-
-<!-- TypeScript -->
-<!-- - **TypeScript** — `.tsx` / `.ts`, `tsconfig.json` -->
-
-<!-- UI libraries (uncomment what you use) -->
-<!-- - **Tailwind CSS** -->
-<!-- - **Bootstrap 5** / React-Bootstrap -->
-<!-- - **MUI (Material UI)** -->
-<!-- - **shadcn/ui** -->
-<!-- - **Chakra UI** -->
+<!-- e.g. React 19 + Vite, Next.js 15, Vue 3, SvelteKit, Angular 18 -->
+<!-- Add: UI lib (Tailwind, MUI, shadcn), state, routing -->
 
 ## Backend
-<!-- Pick your backend and delete the rest -->
-
-<!-- Node.js -->
-<!-- - **Express 4/5** (Node.js) -->
-<!-- - **Fastify** -->
-<!-- - **NestJS** -->
-
-<!-- Python -->
-<!-- - **FastAPI** -->
-<!-- - **Django** / Django REST Framework -->
-<!-- - **Flask** -->
-
-<!-- Go -->
-<!-- - **Go** with net/http / Gin / Echo -->
-
-<!-- Ruby -->
-<!-- - **Ruby on Rails** -->
-
-<!-- Rust -->
-<!-- - **Actix Web** / Axum -->
-
-<!-- Java/Kotlin -->
-<!-- - **Spring Boot** -->
+<!-- e.g. Express 5, FastAPI, Django, Go net/http, Spring Boot -->
 
 ## Database
-<!-- Pick your database(s) -->
-
-<!-- - **PostgreSQL** -->
-<!-- - **MySQL / MariaDB** -->
-<!-- - **SQLite** via better-sqlite3 (Node) or sqlite3 (Python) -->
-<!-- - **MongoDB** -->
-<!-- - **Redis** -->
-<!-- - **Supabase** -->
-<!-- - **Firebase / Firestore** -->
-<!-- - **Prisma** (ORM) -->
-<!-- - **Drizzle** (ORM) -->
-<!-- - **BigQuery** via `bq` CLI -->
+<!-- e.g. PostgreSQL, SQLite, MongoDB, Redis, Prisma ORM -->
 
 ## Testing
-<!-- Pick your test tools -->
+<!-- e.g. Vitest + RTL, Jest, pytest, Playwright, BATS -->
 
-<!-- JavaScript -->
-<!-- - **Jest** + React Testing Library -->
-<!-- - **Vitest** + React Testing Library -->
-<!-- - **Playwright** for E2E -->
-<!-- - **Cypress** for E2E -->
-<!-- - **Supertest** for API routes -->
-
-<!-- Python -->
-<!-- - **pytest** -->
-<!-- - **unittest** -->
-
-<!-- Go -->
-<!-- - **go test** -->
-
-<!-- General -->
-<!-- - **No tests yet** — agents will suggest setup when relevant -->
+## Shell / Scripting
+<!-- e.g. Bash, Python 3, PowerShell -->
 
 ## AI / LLM (if applicable)
-<!-- - **Anthropic SDK** (`@anthropic-ai/sdk` or `anthropic` Python) -->
-<!-- - **OpenAI SDK** -->
-<!-- - **Local LLM** for local inference -->
-<!-- - **LangChain** / LangGraph -->
-<!-- - **Vercel AI SDK** -->
+<!-- e.g. Anthropic SDK, OpenAI SDK, LangChain -->
 
-## Infrastructure (if applicable)
-<!-- - **Docker** / Docker Compose -->
-<!-- - **AWS** (Lambda, S3, EC2, etc.) -->
-<!-- - **GCP** (Cloud Run, Cloud Functions, etc.) -->
-<!-- - **Vercel** -->
-<!-- - **Netlify** -->
-<!-- - **Railway** -->
-<!-- - **Fly.io** -->
+## Infrastructure
+<!-- e.g. Docker, AWS, GCP, Vercel, GitHub Actions -->
+
+## Key Dev Commands
+<!-- Add 3-5 most-used commands. Full list: /stack-reference -->
+```bash
+# npm run dev / bats tests/ / etc.
+```
