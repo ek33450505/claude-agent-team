@@ -5,5 +5,19 @@
   "code-writer": ["code-reviewer"],
   "code-reviewer": [],
   "test-writer": ["test-runner"],
-  "security": []
+  "security": [],
+  "migration-reviewer": [],
+  "api-contract": [],
+  "adr-writer": [],
+  "dep-auditor": [],
+  "release-notes": [],
+  "perf-sentinel": [],
+  "task-triage": [],
+  "standup-writer": [],
+  "meeting-prep": [],
+  "email-drafter": [],
+  "pr-narrator": [],
+  "knowledge-curator": [],
+  "learning-scout": [],
+  "portfolio-sync": []
 }

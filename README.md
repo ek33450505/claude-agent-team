@@ -6,12 +6,12 @@
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-5.0-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-17-green)<!-- CAST_AGENT_COUNT -->
+![Agents](https://img.shields.io/badge/agents-31-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-462-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**CAST v5.0 is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. 17 specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
+**CAST v5.0 is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. 31 specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
 
 **[CAST Framework](https://castframework.dev)** | **[Cloud-native deployment guide](docs/swarm-deployment.md)**
 
@@ -152,7 +152,7 @@ Under the hood:
 
 | Feature | What It Shows |
 |---|---|
-| **Agent Force Graph** | 17 agents + task satellites, gravity physics, live updates |
+| **Agent Force Graph** | 31 agents + task satellites, gravity physics, live updates |
 | **Swarm Sessions** | Active swarms, teammates, task assignments, peer messages |
 | **Worktree Isolation** | Per-teammate file ownership, no write conflicts |
 | **Token Heatmap** | Per-agent token spend, cost trends, local vs Claude |
@@ -169,7 +169,9 @@ npm run dev    # Vite :5173 + Express :3001
 
 ## Agent Roster
 
-17 specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
+31 specialists across 4 categories. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
+
+### Core Agents
 
 | Agent | Model | Effort | Purpose |
 |---|---|---|---|
@@ -191,7 +193,38 @@ npm run dev    # Vite :5173 + Express :3001
 | `push` | haiku | low | Pushes to remote with safety checks |
 | `frontend-qa` | haiku | low | Frontend diff review, component audit |
 
-**Model tiering:** 11 agents on Haiku ($1/MTok), 6 on Sonnet ($3/MTok). This 25-40% cost savings scales across the swarm.
+### Dev Workflow Agents
+
+| Agent | Model | Effort | Purpose |
+|---|---|---|---|
+| `migration-reviewer` | sonnet | high | Database schema change safety review, rollback plans |
+| `api-contract` | sonnet | high | REST API breaking change detection, OpenAPI-style diffs |
+| `adr-writer` | haiku | low | Architecture Decision Record drafting |
+| `dep-auditor` | haiku | low | Dependency audit: CVEs, licenses, version compatibility |
+| `release-notes` | haiku | low | Structured changelog generation from git history |
+| `perf-sentinel` | sonnet | high | Performance regression detection, git bisect suggestions |
+
+### Productivity Agents
+
+| Agent | Model | Effort | Purpose |
+|---|---|---|---|
+| `task-triage` | haiku | low | Todoist inbox triage, priority assignment, stale task surfacing |
+| `standup-writer` | haiku | low | Daily standup generation from git activity and completions |
+| `meeting-prep` | haiku | low | Calendar-aware meeting prep briefs via Google Calendar MCP |
+| `email-drafter` | haiku | low | Professional email drafting via Gmail MCP (never sends) |
+| `pr-narrator` | haiku | low | PR diffs translated to stakeholder-facing summaries |
+
+### Knowledge & Career Agents
+
+| Agent | Model | Effort | Purpose |
+|---|---|---|---|
+| `knowledge-curator` | haiku | low | Obsidian vault organization, orphan/stale note surfacing |
+| `learning-scout` | sonnet | high | Tech topic research and resource curation to Obsidian |
+| `portfolio-sync` | haiku | low | Syncs showcase repo READMEs with actual project stats |
+
+**Model tiering:** 21 agents on Haiku ($1/MTok), 10 on Sonnet ($3/MTok). This 25-40% cost savings scales across the swarm.
+
+**MCP integrations:** Todoist (task-triage), Google Calendar (meeting-prep), Gmail (email-drafter), Obsidian (knowledge-curator, learning-scout).
 
 ---
 
@@ -441,7 +474,7 @@ npm run dev    # Vite :5173 + Express :3001
 ```
 claude-agent-team/
   agents/
-    core/                        ← 17 agent definitions
+    core/                        ← 31 agent definitions
   config/
     cast-litellm.yaml            ← LiteLLM proxy config
     managed-settings.d/          ← modular settings
@@ -622,7 +655,7 @@ CAST Portfolio: [castframework.dev](https://castframework.dev)
 
 ## Stats
 
-<!-- CAST_AGENT_COUNT -->17<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_AGENT_COUNT -->31<!-- /CAST_AGENT_COUNT --> agents |
 <!-- CAST_TEST_COUNT -->507<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->18<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->10<!-- /CAST_SKILL_COUNT --> skills

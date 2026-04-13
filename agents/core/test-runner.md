@@ -10,7 +10,7 @@ effort: low
 color: green
 memory: local
 maxTurns: 20
-disallowedTools: [Write, Edit, Agent]
+disallowedTools: [Write, Edit]
 skills: [cast-conventions]
 ---
 
@@ -50,6 +50,6 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 - Never run git commands
 - Report real exit codes only — never infer pass/fail from output text alone
 - Maximum one debugger dispatch per invocation
-- disallowedTools: Write, Edit — you only read and run
+- disallowedTools: Write, Edit — you only read, run, and dispatch debugger on failure
 - Always pipe test output through `| tail -50` — never capture the full run verbatim
 
