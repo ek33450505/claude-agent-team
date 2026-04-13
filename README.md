@@ -60,6 +60,7 @@ Agent Teams (Anthropic Native)
 | Model selection per-session | Per-task routing: Haiku → Ollama (cheap), Sonnet → Claude (smart) | Automatic cost optimization |
 | No persistent audit trail | `cast.db` v8: swarm_sessions, teammate_runs, teammate_messages, with temporal indices | Queryable, immutable swarm history |
 | No visual observability | Constellation Dashboard: force-directed agent graph + task satellites (React 19 + D3) | Live swarm topology + task flow |
+| No agent response schema | Structured Output JSON schemas (`schemas/`) defining status-block, work-log, routing-event contracts | Machine-readable agent response contract for API pipelines |
 
 ---
 
@@ -171,6 +172,8 @@ npm run dev    # Vite :5173 + Express :3001
 
 31 specialists across 4 categories. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
 
+**New in v5.0:** Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
+
 ### Core Agents
 
 | Agent | Model | Effort | Purpose |
@@ -178,8 +181,8 @@ npm run dev    # Vite :5173 + Express :3001
 | `code-writer` | sonnet | high | Feature implementation across files or logical units |
 | `debugger` | sonnet | high | Root-cause diagnosis and fixes for failures |
 | `planner` | sonnet | high | Breaks features into sequenced task plans with ADM |
-| `orchestrator` | sonnet | high | Executes multi-agent plan manifests (ADM) |
-| `researcher` | sonnet | high | Multi-source analysis, gap reports, data synthesis |
+| `orchestrator` | sonnet | high | Executes multi-agent plan manifests (ADM); Agent Teams coordinator pattern (NEW v5.0) |
+| `researcher` | sonnet | high | Multi-source analysis, gap reports, data synthesis, source citations |
 | `security` | sonnet | high | Auth, input validation, secrets, vulnerability audit |
 | `merge` | haiku | low | Git merges, rebases, conflict resolution |
 | `test-writer` | haiku | low | Unit and integration tests |
@@ -262,14 +265,14 @@ Beyond cost tiering, CAST v5.0 introduces five new optimization features to redu
 
 ## Hook Event Coverage
 
-**New in v5.0:** TeammateIdle, TaskCreated, TaskCompleted, WorktreeCreate are production-hardened hooks capturing swarm lifecycle:
+**New in v5.0:** TeammateIdle, TaskCreated, TaskCompleted, WorktreeCreate are production-hardened hooks capturing swarm lifecycle. All responses validate against JSON schemas in `schemas/`.
 
 | Event | Hook Script | What It Does |
 |---|---|---|
 | `SessionStart` | `cast-session-start-hook.sh` | Opens session row in cast.db |
-| `TeammateIdle` | `cast-teammate-idle-hook.sh` | Logs idle event; agent can pick up next task |
+| `TeammateIdle` | `cast-teammate-idle-hook.sh` | Logs idle event; agent can pick up next task (Agent Teams native) |
 | `TaskCreated` | `cast-task-created-hook.sh` | Logs task assignment; updates teammate_runs table |
-| `TaskCompleted` | `cast-task-completed-hook.sh` | Logs completion status; streams result to peers |
+| `TaskCompleted` | `cast-task-completed-hook.sh` | Logs completion status; validates vs status-block schema (Agent Teams native) |
 | `WorktreeCreate` | `cast-worktree-create-hook.sh` | Creates isolated worktree; seeds agent identity preamble |
 | `PreToolUse:Bash` | `pre-tool-guard.sh` | Hard-blocks `git commit` / `git push` (exit 2) |
 | `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Logs file modifications; emits HTTP event to dashboard |
@@ -497,6 +500,11 @@ claude-agent-team/
   docs/
     cast-architecture-v5.svg     ← swarm topology diagram
     swarm-deployment.md          ← production guide
+    articles/                    ← feature audit docs (NEW v5.0)
+  schemas/                       ← JSON schemas (NEW v5.0)
+    status-block.schema.json     ← CAST agent status response contract
+    work-log.schema.json         ← Work log entry format
+    routing-event.schema.json    ← Event routing format
   scripts/
     cast-swarm-bootstrap.sh      ← team bootstrap (NEW v5.0)
     cast-swarm-*.sh              ← swarm management scripts (NEW v5.0)
