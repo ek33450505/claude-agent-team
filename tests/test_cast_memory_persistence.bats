@@ -22,6 +22,10 @@ TEST_DB="/tmp/test_cast_memory_$$.db"
 
 setup() {
     export CAST_DB_PATH="$TEST_DB"
+    # Skip all tests if SQLite FTS5 module is not available (e.g. CI macOS runners)
+    if ! sqlite3 ":memory:" "CREATE VIRTUAL TABLE t USING fts5(x);" 2>/dev/null; then
+        skip "FTS5 module not available"
+    fi
     # Initialize a minimal agent_memories table with importance + decay_rate
     sqlite3 "$TEST_DB" "
         CREATE TABLE IF NOT EXISTS agent_memories (
