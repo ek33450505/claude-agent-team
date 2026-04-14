@@ -25,9 +25,11 @@ import sys
 import os
 import re
 import json
-import sqlite3
 import argparse
 import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cast_db import db_query, db_execute
 
 
 # ---------------------------------------------------------------------------
@@ -134,35 +136,39 @@ def extract_candidates(text, min_importance=0.6):
     return candidates
 
 
-def check_duplicate(conn, name):
+def check_duplicate(name):
     """Return True if a non-superseded shared memory with this name exists."""
     try:
         # Check if valid_to column exists
-        cursor = conn.execute("PRAGMA table_info(agent_memories)")
-        col_names = {row[1] for row in cursor.fetchall()}
+        col_rows = db_query("PRAGMA table_info(agent_memories)")
+        col_names = {row[1] for row in col_rows}
 
         if 'valid_to' in col_names:
-            row = conn.execute(
+            rows = db_query(
                 "SELECT id FROM agent_memories WHERE agent = 'shared' AND name = ? "
                 "AND valid_to IS NULL LIMIT 1",
                 (name,)
-            ).fetchone()
+            )
         else:
             # Migration not yet run — check without temporal filter
-            row = conn.execute(
+            rows = db_query(
                 "SELECT id FROM agent_memories WHERE agent = 'shared' AND name = ? LIMIT 1",
                 (name,)
-            ).fetchone()
-        return row is not None
+            )
+        return len(rows) > 0
     except Exception:
         return False
 
 
-def insert_memory(conn, candidate):
+def insert_memory(candidate):
     """Insert a candidate memory into agent_memories as agent='shared'."""
     now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-    try:
-        conn.execute("""
+    # Check if valid_from column exists
+    col_rows = db_query("PRAGMA table_info(agent_memories)")
+    col_names = {row[1] for row in col_rows}
+
+    if 'valid_from' in col_names:
+        db_execute("""
             INSERT INTO agent_memories
             (agent, type, name, description, content, importance, valid_from, created_at, updated_at)
             VALUES ('shared', ?, ?, ?, ?, ?, datetime('now'), ?, ?)
@@ -175,9 +181,9 @@ def insert_memory(conn, candidate):
             now,
             now,
         ))
-    except sqlite3.OperationalError:
+    else:
         # valid_from column may not exist yet (migration not run) — insert without it
-        conn.execute("""
+        db_execute("""
             INSERT INTO agent_memories
             (agent, type, name, description, content, importance, created_at, updated_at)
             VALUES ('shared', ?, ?, ?, ?, ?, ?, ?)
@@ -190,7 +196,6 @@ def insert_memory(conn, candidate):
             now,
             now,
         ))
-    conn.commit()
 
 
 def main():
@@ -236,7 +241,7 @@ def main():
     if not candidates:
         sys.exit(0)
 
-    # Resolve DB path
+    # Resolve DB path — set env var so cast_db._get_db_path() picks it up
     db_path = args.db or os.environ.get('CAST_DB_PATH',
                                          os.path.expanduser('~/.claude/cast.db'))
 
@@ -244,26 +249,22 @@ def main():
         print(f"[distiller] DB not found at {db_path} — skipping write", file=sys.stderr)
         sys.exit(0)
 
-    try:
-        conn = sqlite3.connect(db_path)
-    except Exception as e:
-        print(f"ERROR: Cannot connect to {db_path}: {e}", file=sys.stderr)
-        sys.exit(1)
+    # Override CAST_DB_PATH so cast_db functions use the resolved path
+    os.environ['CAST_DB_PATH'] = db_path
 
     inserted = 0
     skipped = 0
     for candidate in candidates:
-        if check_duplicate(conn, candidate['name']):
+        if check_duplicate(candidate['name']):
             skipped += 1
             continue
         try:
-            insert_memory(conn, candidate)
+            insert_memory(candidate)
             inserted += 1
         except Exception as e:
             print(f"[distiller] WARN: failed to insert '{candidate['name']}': {e}",
                   file=sys.stderr)
 
-    conn.close()
     print(f"[distiller] {inserted} inserted, {skipped} skipped (duplicates)",
           file=sys.stderr)
     sys.exit(0)
