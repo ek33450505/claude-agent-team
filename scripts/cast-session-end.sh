@@ -22,7 +22,7 @@
 #   0 — always (hook must NEVER block session close)
 
 # --- Subprocess guard (must be first) ---
-if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
+if [[ "${CLAUDE_SUBPROCESS:-0}" = "1" ]]; then exit 0; fi
 
 set +e
 
@@ -40,7 +40,7 @@ CAST_SCRIPTS_DIR="${HOME}/.claude/scripts"
 # === BLOCKED COUNT ESCALATION ===
 BLOCKED_LOG="${CAST_DIR}/blocked-count.txt"
 BLOCKED_COUNT=$(cat "$BLOCKED_LOG" 2>/dev/null || echo 0)
-if [ "${BLOCKED_COUNT}" -ge 2 ] 2>/dev/null; then
+if [[ "${BLOCKED_COUNT}" -ge 2 ]] 2>/dev/null; then
   echo "[CAST-ESCALATE] WARNING: ${BLOCKED_COUNT} consecutive BLOCKED responses detected. Human intervention may be required. Check ${CAST_DIR}/events/ for details." >&2
   rm -f "$BLOCKED_LOG"
 fi
@@ -49,19 +49,19 @@ fi
 
 # Project board refresh
 CAST_BOARD="${CAST_SCRIPTS_DIR}/cast-board.sh"
-if [ -f "$CAST_BOARD" ]; then
+if [[ -f "$CAST_BOARD" ]]; then
   bash "$CAST_BOARD" > "${TMPDIR:-/tmp}/cast-board-last.log" 2>&1 &
 fi
 
 # Agent memory auto-initialization
 CAST_AGENT_MEM_INIT="${CAST_SCRIPTS_DIR}/cast-agent-memory-init.sh"
-if [ -f "$CAST_AGENT_MEM_INIT" ]; then
+if [[ -f "$CAST_AGENT_MEM_INIT" ]]; then
   bash "$CAST_AGENT_MEM_INIT" > "${TMPDIR:-/tmp}/cast-agent-memory-init-last.log" 2>&1 &
 fi
 
 # Auto-escalation rule engine
 CAST_MEM_ESCALATION="${CAST_SCRIPTS_DIR}/cast-memory-escalation.sh"
-if [ -f "$CAST_MEM_ESCALATION" ]; then
+if [[ -f "$CAST_MEM_ESCALATION" ]]; then
   bash "$CAST_MEM_ESCALATION" > "${TMPDIR:-/tmp}/cast-memory-escalation-last.log" 2>&1 &
 fi
 
@@ -88,22 +88,22 @@ archive_category() {
   local ttl="$5"
   local label="$6"
 
-  [ -d "$src" ] || return 0
+  [[ -d "$src" ]] || return 0
 
   local dest="${ARCHIVE_BASE}/${dest_sub}"
   local count=0
   local dest_created=0
 
   local find_cmd=( find "$src" -maxdepth 1 )
-  [ -n "$name_pat" ] && find_cmd+=( -name "$name_pat" )
-  [ "$type_f" = "1" ] && find_cmd+=( -type f )
+  [[ -n "$name_pat" ]] && find_cmd+=( -name "$name_pat" )
+  [[ "$type_f" = "1" ]] && find_cmd+=( -type f )
   find_cmd+=( -mtime +"$ttl" -print0 )
 
   while IFS= read -r -d '' f; do
-    [ -L "$f" ] && continue
-    [ -f "$f" ] || continue
+    [[ -L "$f" ]] && continue
+    [[ -f "$f" ]] || continue
 
-    if [ "$dest_created" -eq 0 ]; then
+    if [[ "$dest_created" -eq 0 ]]; then
       mkdir -p "$dest" 2>/dev/null || { echo "[cast-session-end] WARN: cannot create ${dest}" >&2; return 0; }
       dest_created=1
     fi
@@ -114,7 +114,7 @@ archive_category() {
     count=$((count + 1))
   done < <( "${find_cmd[@]}" 2>/dev/null )
 
-  if [ "$count" -gt 0 ]; then
+  if [[ "$count" -gt 0 ]]; then
     echo "[cast-session-end] archive ${label}: ${count} archived → ~/Archive/claude-archive-auto/${dest_sub}" >&2
   fi
 }
@@ -166,7 +166,7 @@ archive_category \
 
 # === UPDATE sessions.ended_at + FINAL COST CAPTURE ===
 DB="${CLAUDE_DIR}/cast.db"
-if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB" ]; then
+if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   sqlite3 "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
 
@@ -179,7 +179,7 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB" ]; then
 fi
 
 # === DB PRUNING ===
-if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB" ]; then
+if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   sqlite3 "$DB" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
   sqlite3 "$DB" "DELETE FROM sessions WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
   # Convert ghost rows (stuck 'running') older than 2 hours to 'failed'
@@ -190,7 +190,7 @@ fi
 MEMORY_DIR="${HOME}/.claude/agent-memory-local"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 
-if [ -f "$DB_PATH" ] && [ -d "$MEMORY_DIR" ]; then
+if [[ -f "$DB_PATH" ]] && [[ -d "$MEMORY_DIR" ]]; then
   python3 - "$DB_PATH" "$MEMORY_DIR" <<'PYEOF' 2>/dev/null || true
 import sys
 import os
