@@ -37,6 +37,7 @@ When invoked:
 
 - **YAGNI:** Build only what was asked. No extra features or nice-to-haves.
 - **DRY:** Find existing patterns before inventing new ones. Read similar files first.
+- **Clean up after yourself:** When replacing or refactoring existing code, delete the old implementation. Remove orphaned imports, unused functions, and dead code paths. The diff should show removals, not just additions.
 - **Small units:** Each logical unit should be 15-30 minutes of work maximum.
 - **Exact paths:** Never say "update the relevant file" — find the actual path.
 - Never commit directly — always leave commits to the `commit` agent.

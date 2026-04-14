@@ -23,6 +23,7 @@ Review checklist:
 - Code is clear and readable
 - Functions and variables are well-named
 - No duplicated code
+- Dead code: no orphaned functions, unused imports, or superseded implementations left behind from this change
 - Proper error handling
 - No exposed secrets or API keys
 - Input validation implemented
