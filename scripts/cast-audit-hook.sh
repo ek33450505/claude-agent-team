@@ -39,6 +39,10 @@ set +e
 
 if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then exit 0; fi
 
+# _log_error: append a structured error line to hook-errors.log (never fails itself)
+mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+
 # C5: PII bypass safelist — known false-positive patterns skip enforcement
 SAFELIST_PATTERNS=(
   'anthropic\.com'
