@@ -119,50 +119,52 @@ archive_category() {
   fi
 }
 
-# Plans: date-prefixed completed plans only
-archive_category \
-  "${CLAUDE_DIR}/plans" \
-  "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md" \
-  "0" \
-  "plans" \
-  "$TTL_PLANS" \
-  "plans"
+(
+  # Plans: date-prefixed completed plans only
+  archive_category \
+    "${CLAUDE_DIR}/plans" \
+    "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md" \
+    "0" \
+    "plans" \
+    "$TTL_PLANS" \
+    "plans"
 
-# Debug logs: *.txt files only (symlink guard skips 'latest')
-archive_category \
-  "${CLAUDE_DIR}/debug" \
-  "*.txt" \
-  "0" \
-  "debug" \
-  "$TTL_DEBUG" \
-  "debug"
+  # Debug logs: *.txt files only (symlink guard skips 'latest')
+  archive_category \
+    "${CLAUDE_DIR}/debug" \
+    "*.txt" \
+    "0" \
+    "debug" \
+    "$TTL_DEBUG" \
+    "debug"
 
-# Shell snapshots: all regular files
-archive_category \
-  "${CLAUDE_DIR}/shell-snapshots" \
-  "" \
-  "1" \
-  "shell-snapshots" \
-  "$TTL_SHELL_SNAPSHOTS" \
-  "shell-snapshots"
+  # Shell snapshots: all regular files
+  archive_category \
+    "${CLAUDE_DIR}/shell-snapshots" \
+    "" \
+    "1" \
+    "shell-snapshots" \
+    "$TTL_SHELL_SNAPSHOTS" \
+    "shell-snapshots"
 
-# Paste cache: all regular files
-archive_category \
-  "${CLAUDE_DIR}/paste-cache" \
-  "" \
-  "1" \
-  "paste-cache" \
-  "$TTL_PASTE_CACHE" \
-  "paste-cache"
+  # Paste cache: all regular files
+  archive_category \
+    "${CLAUDE_DIR}/paste-cache" \
+    "" \
+    "1" \
+    "paste-cache" \
+    "$TTL_PASTE_CACHE" \
+    "paste-cache"
 
-# Reports: all regular files
-archive_category \
-  "${CLAUDE_DIR}/reports" \
-  "" \
-  "1" \
-  "reports" \
-  "$TTL_REPORTS" \
-  "reports"
+  # Reports: all regular files
+  archive_category \
+    "${CLAUDE_DIR}/reports" \
+    "" \
+    "1" \
+    "reports" \
+    "$TTL_REPORTS" \
+    "reports"
+) &
 
 # === UPDATE sessions.ended_at + FINAL COST CAPTURE ===
 DB="${CLAUDE_DIR}/cast.db"
@@ -182,6 +184,8 @@ fi
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   sqlite3 "$DB" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
   sqlite3 "$DB" "DELETE FROM sessions WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
+  # Prompt/routing data is more sensitive — hard-capped at 30 days regardless of TTL_DB_ROWS
+  sqlite3 "$DB" "DELETE FROM routing_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
   # Convert ghost rows (stuck 'running') older than 2 hours to 'failed'
   sqlite3 "$DB" "UPDATE agent_runs SET status='failed' WHERE status='running' AND started_at < datetime('now', '-2 hours');" 2>/dev/null || true
 fi
