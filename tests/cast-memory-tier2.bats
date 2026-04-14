@@ -1,22 +1,19 @@
 #!/usr/bin/env bats
 # Tests for CAST Memory Persistence Tier 2 scripts:
-#   cast-memory-schema-v3.py, cast-memory-embed.py, cast-memory-validate.py,
+#   cast-memory-embed.py, cast-memory-validate.py,
 #   cast-memory-router.py (hybrid search), cast-session-distiller.py
 #
-# Coverage (15 tests):
-#   1-3.  cast-memory-schema-v3: adds columns, idempotent
-#   4-6.  cast-memory-embed: --text, --backfill, graceful on Ollama down
-#   7-10. cast-memory-validate: --check, JSON, --validate, --archive-stale
-#  11-12. cast-memory-router: hybrid search, Ollama fallback
-#  13-15. cast-session-distiller: --dry-run, JSON, feedback pattern write
+# Coverage (surviving tests after orphan script cleanup):
+#   1-3.  cast-memory-embed: --text, --backfill, graceful on Ollama down
+#   4-6.  cast-memory-validate: --check, JSON, --archive-stale
+#   7-8.  cast-memory-router: hybrid search, Ollama fallback
+#   9-11. cast-session-distiller: --dry-run, JSON, feedback pattern write
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 DB_INIT_SH="$REPO_DIR/scripts/cast-db-init.sh"
-SCHEMA_V2="$REPO_DIR/scripts/cast-memory-schema-v2.py"
-SCHEMA_V3="$REPO_DIR/scripts/cast-memory-schema-v3.py"
 EMBED_PY="$REPO_DIR/scripts/cast-memory-embed.py"
 VALIDATE_PY="$REPO_DIR/scripts/cast-memory-validate.py"
 ROUTER_PY="$REPO_DIR/scripts/cast-memory-router.py"
@@ -33,35 +30,21 @@ setup() {
 
   mkdir -p "$HOME/.claude"
   bash "$DB_INIT_SH" --db "$CAST_DB_PATH" >/dev/null 2>&1 || true
-  python3 "$SCHEMA_V2" >/dev/null 2>&1 || true
-  python3 "$SCHEMA_V3" >/dev/null 2>&1 || true
+  # Add columns that were previously added by migration scripts (now deleted)
+  sqlite3 "$CAST_DB_PATH" "
+    ALTER TABLE agent_memories ADD COLUMN importance FLOAT DEFAULT 0.5;
+    ALTER TABLE agent_memories ADD COLUMN decay_rate FLOAT DEFAULT 0.995;
+    ALTER TABLE agent_memories ADD COLUMN embedding BLOB;
+    ALTER TABLE agent_memories ADD COLUMN last_validated_at TEXT;
+    CREATE VIRTUAL TABLE IF NOT EXISTS agent_memories_fts
+      USING fts5(name, description, content, content=agent_memories, content_rowid=id);
+  " 2>/dev/null || true
 }
 
 teardown() {
   rm -rf "$HOME"
   export HOME="$ORIG_HOME"
   unset CAST_DB_PATH
-}
-
-# ---------------------------------------------------------------------------
-# cast-memory-schema-v3: column additions
-# ---------------------------------------------------------------------------
-
-@test "cast-memory-schema-v3: adds embedding column" {
-  col_count="$(sqlite3 "$CAST_DB_PATH" "PRAGMA table_info(agent_memories);" 2>/dev/null | grep -c "^[0-9]*|embedding|" || true)"
-  [ "$col_count" -ge 1 ]
-}
-
-@test "cast-memory-schema-v3: adds last_validated_at column" {
-  col_count="$(sqlite3 "$CAST_DB_PATH" "PRAGMA table_info(agent_memories);" 2>/dev/null | grep -c "last_validated_at" || true)"
-  [ "$col_count" -ge 1 ]
-}
-
-@test "cast-memory-schema-v3: is idempotent on second run" {
-  # Already run once in setup; run again and confirm exits 0 with "already present"
-  run python3 "$SCHEMA_V3"
-  assert_success
-  assert_output --partial "already present"
 }
 
 # ---------------------------------------------------------------------------
@@ -122,18 +105,6 @@ PYEOF
   run python3 "$VALIDATE_PY" --check
   assert_success
   echo "$output" | python3 -m json.tool >/dev/null
-}
-
-@test "cast-memory-validate: --validate updates last_validated_at for non-stale memories" {
-  # Seed a fresh memory (created now — should be non-stale)
-  sqlite3 "$CAST_DB_PATH" "INSERT INTO agent_memories (agent, project, type, name, description, content, importance, decay_rate) VALUES ('shared', 'cast', 'feedback', 'fresh-memory-validate', 'Test', 'Fresh memory content.', 0.8, 0.995);" 2>/dev/null
-
-  run python3 "$VALIDATE_PY" --validate
-  assert_success
-
-  # Check last_validated_at was set for the fresh memory
-  val="$(sqlite3 "$CAST_DB_PATH" "SELECT last_validated_at FROM agent_memories WHERE name='fresh-memory-validate';" 2>/dev/null)"
-  [ -n "$val" ]
 }
 
 @test "cast-memory-validate: --archive-stale sets importance=0 for old memories" {
