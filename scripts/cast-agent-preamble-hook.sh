@@ -26,6 +26,8 @@
 # Never fail loudly — a broken hook must not interrupt agent dispatch.
 set +e
 
+if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then exit 0; fi
+
 PREAMBLE_SCRIPT="/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-agent-preamble.py"
 
 # Read stdin once

@@ -74,16 +74,6 @@ db_path = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db')
 if not os.path.exists(db_path):
     sys.exit(0)
 
-# Ensure agent_id and agent_type columns exist (idempotent)
-try:
-    db_execute('ALTER TABLE routing_events ADD COLUMN agent_id TEXT')
-except Exception:
-    pass  # Column already exists
-try:
-    db_execute('ALTER TABLE routing_events ADD COLUMN agent_type TEXT')
-except Exception:
-    pass  # Column already exists
-
 db_execute(
     '''INSERT INTO routing_events
        (session_id, timestamp, prompt_preview, action, matched_route,

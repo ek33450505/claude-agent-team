@@ -37,6 +37,8 @@
 # Audit hook must never fail loudly — a broken audit hook must not interrupt work.
 set +e
 
+if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then exit 0; fi
+
 # C5: PII bypass safelist — known false-positive patterns skip enforcement
 SAFELIST_PATTERNS=(
   'anthropic\.com'

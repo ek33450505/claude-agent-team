@@ -16,6 +16,8 @@
 
 set +e
 
+if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then exit 0; fi
+
 RULES_FILE="${HOME}/.claude/cast/permission-rules.json"
 LOG_FILE="${HOME}/.claude/logs/permission-hook.log"
 TIMESTAMP_FILE="${HOME}/.claude/cast/hook-last-fired/PermissionRequest.timestamp"
