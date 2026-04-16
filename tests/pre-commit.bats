@@ -12,6 +12,8 @@ setup() {
   # Initialize a git repo for testing
   cd "$TEST_REPO"
   git init --initial-branch=main >/dev/null 2>&1
+  git config user.email "test@example.com"
+  git config user.name "BATS Test"
 
   # Create a minimal settings.json
   cat > settings.json <<'EOF'

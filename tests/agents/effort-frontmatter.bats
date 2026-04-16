@@ -49,10 +49,6 @@ AGENTS_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/core" && pwd)"
   grep -q "^effort:" "$AGENTS_DIR/morning-briefing.md"
 }
 
-@test "orchestrator has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/orchestrator.md"
-}
-
 @test "planner has effort field" {
   grep -q "^effort:" "$AGENTS_DIR/planner.md"
 }

@@ -39,7 +39,11 @@ create_status_file() {
   # We need to set the file to be exactly age_minutes old
   local target_epoch
   target_epoch=$(date -v-${age_minutes}M +%s 2>/dev/null || date -d "-${age_minutes} minutes" +%s 2>/dev/null)
-  touch -t "$(date -r "$target_epoch" +%Y%m%d%H%M.%S 2>/dev/null || echo '202301011200.00')" "$fpath" 2>/dev/null || touch -d "@${target_epoch}" "$fpath" 2>/dev/null || true
+  if touch -d "@${target_epoch}" "$fpath" 2>/dev/null; then
+    : # GNU touch succeeded
+  else
+    touch -t "$(date -r "$target_epoch" +%Y%m%d%H%M.%S)" "$fpath" 2>/dev/null || true
+  fi
 }
 
 # Helper: create a Bash tool input JSON
