@@ -37,3 +37,19 @@
 - `/compact` to summarize; `/clear` + `/resume` for fresh start
 - Commit before compacting — compact discards tool output history
 - Commit at least hourly during implementation sessions
+
+## Worktree Workflow
+- DO NOT use git worktrees for parallel agent work unless explicitly requested. Worktree-based agent dispatches have repeatedly lost changes, overwritten good files with stale versions, and required manual recovery.
+- If parallelization is needed, prefer sequential edits on the main branch or explicitly confirm the worktree strategy with the user first.
+- Always verify agent-reported file changes by reading the files after the agent completes.
+
+## Branch Naming
+- Before starting any phase/feature work, verify the current branch matches the phase name (e.g., Phase C3 work must land on feature/c3-*, not feature/c2-*).
+- When orchestrating a new phase, explicitly create and checkout the correctly-named branch FIRST before any edits or agent dispatches.
+
+## Post-Push CI Verification
+- After pushing commits that could affect CI, check for hardcoded absolute paths, platform-specific modules (e.g., FTS5 on macOS runners), and stale version lookups after package renames.
+- Run the test suite locally with CI-equivalent paths before pushing when possible.
+
+## Stat/Fact Verification
+- Before writing any public-facing content (LinkedIn, README, dev.to articles, announcements) that cites project stats (agent counts, test counts, line counts), verify numbers against the actual repo state — do not rely on memory or prior session context.
