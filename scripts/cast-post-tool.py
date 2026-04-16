@@ -16,6 +16,11 @@ import os
 import re
 import fcntl
 
+# Security auto-dispatch helpers
+SECURITY_EXTENSIONS = re.compile(r'\.(sh|py)$')
+SCRIPTS_PATH_PATTERN = re.compile(r'(scripts/|hooks/)')
+SIZE_THRESHOLD = 5
+
 
 def _read_stdin_json():
     raw = sys.stdin.read()
@@ -58,6 +63,26 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
         else:
             _hook_output(
                 "[CAST-REVIEW] Non-code file modified. Dispatch `code-reviewer` if the change is significant."
+            )
+
+        # Security chain: fire on shell/Python writes in scripts/ or hooks/ with >= 5 lines
+        is_security_target = (
+            bool(SECURITY_EXTENSIONS.search(file_path)) and
+            bool(SCRIPTS_PATH_PATTERN.search(file_path))
+        )
+        new_content = (
+            data.get("input", {}).get("content", "") or
+            data.get("input", {}).get("new_string", "") or
+            data.get("tool_input", {}).get("content", "") or
+            data.get("tool_input", {}).get("new_string", "")
+        )
+        lines_changed = len([l for l in new_content.split('\n') if l.strip()])
+        if is_security_target and lines_changed >= SIZE_THRESHOLD:
+            _hook_output(
+                "[CAST-CHAIN: security] Shell/Python script in scripts/ or hooks/ modified with "
+                f"{lines_changed} lines. MANDATORY: dispatch `security` agent after "
+                "code-reviewer completes. Security agent must scan for SQL injection, "
+                "env var interpolation into sqlite3, and shell injection before commit."
             )
     else:
         # Subagent context

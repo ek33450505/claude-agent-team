@@ -247,3 +247,61 @@ PLAN
   run bash "$HOOK_SH" <<< "$(write_payload "$ts_file" "export const x = 1")"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# 16–19. Security chain (Batch 2 — CAST follow-ups 2026-04-16)
+#
+# cast-post-tool.py emits [CAST-CHAIN: security] only when:
+#   - main session (CLAUDE_SUBPROCESS not set or = "0")
+#   - file path matches .sh or .py extension AND scripts/ or hooks/ path
+#   - non-blank line count of content >= 5
+# ---------------------------------------------------------------------------
+
+# Helper: build Write payload for a scripts/ .sh file with N non-blank lines
+scripts_sh_payload() {
+  local file_path="${1:-scripts/foo.sh}"
+  local line_count="${2:-6}"
+  local content
+  content="$(python3 -c "
+import sys
+n = int(sys.argv[1])
+lines = ['#!/bin/bash'] + [f'echo line_{i}' for i in range(n - 1)]
+print('\n'.join(lines))
+" "$line_count")"
+  python3 -c "import json,sys; print(json.dumps({'tool_name':'Write','tool_input':{'file_path':sys.argv[1],'content':sys.argv[2]},'tool_response':{}}))" "$file_path" "$content"
+}
+
+@test "security chain fires for scripts/foo.sh with 6 non-blank lines" {
+  local file_path="$HOME/projects/repo/scripts/foo.sh"
+  run bash "$HOOK_SH" <<< "$(scripts_sh_payload "$file_path" 6)"
+  assert_success
+  assert_output --partial "[CAST-CHAIN: security]"
+}
+
+@test "security chain does NOT fire for scripts/foo.sh with 3 non-blank lines" {
+  local file_path="$HOME/projects/repo/scripts/foo.sh"
+  run bash "$HOOK_SH" <<< "$(scripts_sh_payload "$file_path" 3)"
+  assert_success
+  refute_output --partial "[CAST-CHAIN: security]"
+}
+
+@test "security chain does NOT fire for src/components/Foo.jsx regardless of size" {
+  local file_path="$HOME/projects/repo/src/components/Foo.jsx"
+  local content
+  content="$(python3 -c "
+lines = ['import React from \"react\"'] + [f'const x{i} = {i}' for i in range(22)]
+print('\n'.join(lines))
+")"
+  local payload
+  payload="$(python3 -c "import json,sys; print(json.dumps({'tool_name':'Write','tool_input':{'file_path':sys.argv[1],'content':sys.argv[2]},'tool_response':{}}))" "$file_path" "$content")"
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+  refute_output --partial "[CAST-CHAIN: security]"
+}
+
+@test "security chain does NOT fire when CLAUDE_SUBPROCESS=1" {
+  local file_path="$HOME/projects/repo/scripts/foo.sh"
+  run env CLAUDE_SUBPROCESS=1 bash "$HOOK_SH" <<< "$(scripts_sh_payload "$file_path" 10)"
+  assert_success
+  refute_output --partial "[CAST-CHAIN: security]"
+}

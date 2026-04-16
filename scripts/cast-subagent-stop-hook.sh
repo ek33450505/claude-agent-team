@@ -231,6 +231,53 @@ if filepath:
 PYEOF
 fi
 
+# ── Step 3.5: Truncation detection ───────────────────────────────────────────
+# A well-formed agent output ends with a Status: <VALUE> line.
+# If missing, the agent was truncated mid-execution.
+export CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+
+TRUNCATED="$(python3 - <<'PYEOF' 2>/dev/null
+import re, os
+output = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
+tail = '\n'.join(output.splitlines()[-40:]) if output else ''
+has_status = bool(re.search(r'Status:\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', tail))
+print('0' if has_status else '1')
+PYEOF
+)"
+
+if [[ "${TRUNCATED:-0}" = "1" ]] && [[ -n "$CAST_STOP_OUTPUT_FULL" ]]; then
+  TRUNC_DIR="${HOME}/.claude/cast/truncated-agents"
+  mkdir -p "$TRUNC_DIR" 2>/dev/null || true
+
+  export CAST_TRUNC_DIR="$TRUNC_DIR"
+  export CAST_TRUNC_SAFE_AGENT="$SAFE_AGENT"
+
+  python3 - <<'PYEOF' 2>/dev/null || true
+import json, os
+trunc_dir = os.environ.get('CAST_TRUNC_DIR', '')
+agent_raw = os.environ.get('CAST_STOP_AGENT', 'unknown')
+safe_agent = os.environ.get('CAST_TRUNC_SAFE_AGENT', 'unknown') or 'unknown'
+ts    = os.environ.get('CAST_STOP_TS_ISO', '')
+sess  = os.environ.get('CAST_STOP_SESSION', '')
+out   = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
+if not trunc_dir:
+    raise SystemExit(0)
+record = {
+    "timestamp": ts, "agent": agent_raw, "session_id": sess,
+    "truncation_detected": True,
+    "output_tail": out[-500:] if out else "",
+}
+ts_safe = ts.replace(':','').replace('-','').replace('.','')
+filepath = f"{trunc_dir}/{ts_safe}-{safe_agent or 'unknown'}.json"
+with open(filepath, 'w') as f:
+    json.dump(record, f, indent=2)
+PYEOF
+
+  # Emit directive to parent session — use SAFE_AGENT (not AGENT_NAME) to prevent JSON-breaking
+  # characters from hostile hook payloads (security hardening).
+  echo '{"hookSpecificOutput":{"hookEventName":"SubagentStop","additionalContext":"[CAST-TRUNCATED] Agent '"$SAFE_AGENT"' stopped without a valid Status block. Output may be incomplete. Re-dispatch the agent or review ~/.claude/cast/truncated-agents/ for the partial output. Do NOT auto-retry expensive agents — surface this as BLOCKED."}}'
+fi
+
 # ── Step 4: Chain dispatch (pipeline automation) ──────────────────────────────
 # When an agent completes DONE, check chain-map.json for defined successors
 # and enqueue them via cast-queue-add.sh.
