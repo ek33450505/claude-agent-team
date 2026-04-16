@@ -11,15 +11,43 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**CAST v6.0 is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. A team of specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
+**CAST is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. A team of specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
 
 **[CAST Framework](https://castframework.dev)**
+
+## Table of Contents
+
+- [What is CAST?](#what-is-cast)
+- [Quick Start](#quick-start)
+- [Your First Workflow](#your-first-workflow)
+- [Architecture](#architecture)
+- [Personal Overlay — Layered Configuration](#personal-overlay--layered-configuration)
+- [Swarm System](#swarm-system)
+- [Agent Constellation Dashboard](#agent-constellation-dashboard)
+- [Agent Roster](#agent-roster)
+- [Token Efficiency & Cost Optimization](#token-efficiency--cost-optimization)
+- [Hook Event Coverage](#hook-event-coverage)
+- [Observability & cast.db v8](#observability--castdb-v8)
+- [Peer Messaging & Gossip Protocol](#peer-messaging--gossip-protocol)
+- [Ollama Integration & Local Model Fallback](#ollama-integration--local-model-fallback)
+- [Multi-Agent Pipelines (v4.6+)](#multi-agent-pipelines-v46)
+- [Agent Memory & Persistence (v4.3+)](#agent-memory--persistence-v43)
+- [Project Structure](#project-structure)
+- [Scheduled Tasks](#scheduled-tasks)
+- [Test Suite](#test-suite)
+- [Version History](#version-history)
+- [CAST Ecosystem](#cast-ecosystem)
+- [Local-First & Offline](#local-first--offline)
+- [Contributing](#contributing)
+- [License](#license)
+- [Author](#author)
+- [Stats](#stats)
 
 ---
 
 ## What is CAST?
 
-CAST v5.0 transforms Agent Teams from a raw execution primitive into a **production control plane:**
+CAST transforms Agent Teams from a raw execution primitive into a **production control plane:**
 
 - **Swarm composition in YAML.** Define teams (full-stack, review squad, research cluster), assign agent roles, set quality gates. CAST bootstraps worktrees, seeds teammates with identity + prompts, manages peer messaging.
 - **Quality gates are structural, not advisory.** Code changes mandate a reviewer pass. Commits only happen through the commit agent. Raw `git commit` and `git push` are hard-blocked by hooks. Violations trigger build failures.
@@ -29,9 +57,56 @@ CAST v5.0 transforms Agent Teams from a raw execution primitive into a **product
 
 ---
 
+## Quick Start
+
+**Homebrew** (recommended):
+
+```bash
+brew tap ek33450505/cast
+brew install cast
+cast doctor
+```
+
+**Claude Code Plugin:**
+
+```bash
+claude plugin install ek33450505/cast
+```
+
+Installs CAST as a Claude Code plugin. Scripts relocate via `CAST_SCRIPTS_DIR` environment variable.
+
+**Git clone** (development):
+
+```bash
+git clone https://github.com/ek33450505/claude-agent-team
+cd claude-agent-team
+bash install.sh
+```
+
+`cast doctor` (or `cast-validate.sh`) checks hook wiring, agent files, database schema, CLI path, advanced features (swarm bootstrap, Ollama proxy, channel bus). Green across the board means you're ready.
+
+---
+
+## Your First Workflow
+
+Once installed, CAST turns any non-trivial task into a planned, reviewed, committed pipeline:
+
+1. **Plan** — `/plan add user auth feature`
+   → The planner agent writes `~/.claude/plans/<date>-<slug>.md` with an Agent Dispatch Manifest.
+
+2. **Execute** — `/orchestrate next`
+   → The main session reads the manifest and runs each batch: code-writer implements, code-reviewer checks, test-runner verifies, commit agent stages and writes a semantic commit.
+
+3. **Ship** — `/ship` (or `/push` to just push)
+   → Runs tests, pre-push CI sanity check, pushes to origin, writes a journal entry.
+
+Quality gates are structural: raw `git commit` / `git push` are blocked by hooks; code changes flow through the agent pipeline. Every step logs to `cast.db` for replay and debugging.
+
+---
+
 ## Architecture
 
-CAST v5.0 operates as the native Agent Teams companion — Anthropic handles execution parallelism, CAST handles definition, composition, and observability.
+CAST operates as the native Agent Teams companion — Anthropic handles execution parallelism, CAST handles definition, composition, and observability.
 
 ```
 Agent Teams (Anthropic Native)
@@ -52,7 +127,7 @@ Agent Teams (Anthropic Native)
 
 ### Where CAST extends Agent Teams
 
-| Agent Teams (native) | CAST v5.0 (on top) | Design rationale |
+| Agent Teams (native) | CAST (on top) | Design rationale |
 |---|---|---|
 | Parallel agent execution | Swarm bootstrap + composition layer | Lift team definition out of code, standardize YAML config |
 | No cross-agent messaging | Peer gossip protocol (cast.db message bus) | Agents collaborate without central broker |
@@ -61,36 +136,6 @@ Agent Teams (Anthropic Native)
 | No persistent audit trail | `cast.db` v8: swarm_sessions, teammate_runs, teammate_messages, with temporal indices | Queryable, immutable swarm history |
 | No visual observability | Constellation Dashboard: force-directed agent graph + task satellites (React 19 + D3) | Live swarm topology + task flow |
 | No agent response schema | Structured Output JSON schemas (`schemas/`) defining status-block, work-log, routing-event contracts | Machine-readable agent response contract for API pipelines |
-
----
-
-## Quick Start
-
-**Homebrew** (recommended):
-
-```bash
-brew tap ek33450505/cast
-brew install cast
-cast doctor
-```
-
-**Claude Code Plugin** (v5.0):
-
-```bash
-claude plugin install ek33450505/cast
-```
-
-Installs CAST as a Claude Code plugin. Scripts relocate via `CAST_SCRIPTS_DIR` environment variable.
-
-**Git clone** (development):
-
-```bash
-git clone https://github.com/ek33450505/claude-agent-team
-cd claude-agent-team
-bash install.sh
-```
-
-`cast doctor` (or `cast-validate.sh`) checks hook wiring, agent files, database schema, CLI path, advanced features (swarm bootstrap, Ollama proxy, channel bus). Green across the board means you're ready.
 
 ---
 
@@ -187,7 +232,7 @@ Under the hood:
 
 ## Agent Constellation Dashboard
 
-[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) v5.0 introduces **Constellation** — a force-directed graph visualization of your swarm:
+[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) ships **Constellation** — a force-directed graph visualization of your swarm:
 
 | Feature | What It Shows |
 |---|---|
@@ -210,7 +255,7 @@ npm run dev    # Vite :5173 + Express :3001
 
 Core specialists across 4 categories, with optional personal overlay. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
 
-**New in v5.0:** Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
+Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
 
 ### Core Agents
 
@@ -291,7 +336,7 @@ CAST uses multiple optimization layers to reduce token spend without sacrificing
 
 ## Hook Event Coverage
 
-**New in v5.0:** TaskCreated, WorktreeCreate are production-hardened hooks capturing swarm lifecycle. All responses validate against JSON schemas in `schemas/`.
+TaskCreated and WorktreeCreate are production-hardened hooks capturing swarm lifecycle. All responses validate against JSON schemas in `schemas/`.
 
 | Event | Hook Script | What It Does |
 |---|---|---|
@@ -313,8 +358,6 @@ CAST uses multiple optimization layers to reduce token spend without sacrificing
 ## Observability & cast.db v8
 
 `cast.db` at `~/.claude/cast.db` — SQLite WAL mode, append-only, never truncated.
-
-**New in v5.0:**
 
 | Table | Purpose |
 |---|---|
@@ -377,7 +420,7 @@ All messages are logged to `teammate_messages` table with timestamps, enabling f
 
 ## Ollama Integration & Local Model Fallback
 
-**New in v5.0:** LiteLLM proxy with transparent Ollama fallback.
+LiteLLM proxy with transparent Ollama fallback.
 
 ```bash
 # Start LiteLLM proxy (port 8000)
@@ -508,15 +551,15 @@ claude-agent-team/
     engram-identity.md           ← personal traits and context
   docs/
     cast-architecture.svg        ← swarm topology diagram
-    articles/                    ← feature audit docs (NEW v5.0)
-  schemas/                       ← JSON schemas (NEW v5.0)
+    articles/                    ← feature audit docs
+  schemas/                       ← JSON schemas
     status-block.schema.json     ← CAST agent status response contract
     work-log.schema.json         ← Work log entry format
     routing-event.schema.json    ← Event routing format
   scripts/
-    cast-swarm-bootstrap.sh      ← team bootstrap (NEW v5.0)
-    cast-swarm-*.sh              ← swarm management scripts (NEW v5.0)
-    cast-teammate-*.sh           ← teammate hooks (HARDENED v5.0)
+    cast-swarm-bootstrap.sh      ← team bootstrap
+    cast-swarm-*.sh              ← swarm management scripts
+    cast-teammate-*.sh           ← teammate hooks
     cast-litellm-*.sh            ← LiteLLM proxy control
     cast-*.sh                    ← core hooks + utilities
   swarm-configs/                 ← YAML team definitions
@@ -526,7 +569,7 @@ claude-agent-team/
   tests/
     *.bats                       ← core test suite
     hooks/                       ← hook tests
-    swarm/                       ← swarm-specific tests (NEW v5.0)
+    swarm/                       ← swarm-specific tests
   .github/
     workflows/
       bats-ci.yml                ← BATS CI on push
@@ -542,7 +585,7 @@ claude-agent-team/
   agents/                ← live agent definitions
   agent-memory-local/    ← per-agent persistent memory
   plans/                 ← planner output + ADM files
-  swarm-sessions/        ← active swarm metadata (NEW v5.0)
+  swarm-sessions/        ← active swarm metadata
   cast.db                ← SQLite observability (v8)
   scripts/               ← installed hook scripts
 ```
@@ -551,34 +594,20 @@ claude-agent-team/
 
 ## Scheduled Tasks
 
-CAST uses a hybrid scheduling model: **Anthropic RemoteTriggers** for AI-powered tasks with MCP access (run in the cloud, fire even when Claude Code is closed), and **cron** for pure shell maintenance tasks.
+CAST supports a hybrid scheduling model for automating recurring tasks:
 
-### RemoteTriggers (cloud-scheduled)
+**Anthropic RemoteTriggers** — for AI-powered tasks that need MCP access (calendar, email, project management tools). Triggers run in the cloud and fire even when Claude Code is closed. Example tasks you can define:
+- A morning briefing that pulls calendar events, email, and CI health into a daily summary
+- An end-of-day digest for async standups
+- A weekly report aggregating git activity and project status
 
-| Trigger | Schedule (EDT) | Model | MCPs | Output |
-|---|---|---|---|---|
-| `pa-briefing` | Weekdays 7:27 AM | Sonnet | Calendar + Gmail + Jira | `Briefings/` + `Reports/` (standup) |
-| `pa-eod` | Daily 4:53 PM | Haiku | Jira | `Daily Notes/` |
-| `pa-weekly` | Friday 3:57 PM | Sonnet | Jira | `Reports/` |
-
-The morning briefing is a mega-trigger that combines weather, calendar, email triage (with draft replies), Jira standup, and sprint overview into one session. It writes both a full briefing and a copy-paste-ready Teams standup.
-
-Local-only sections (git status, cast.db health) gracefully degrade with a note to run `/morning` locally for full data.
-
-### Cron (local shell tasks)
-
-| Schedule | Job | Purpose |
-|---|---|---|
-| Every 30 min | `cast-ci-monitor.sh` | GitHub Actions failure alerts |
-| Daily 3:00 AM | `cast tidy` | Clean old plans, events, logs |
-| Daily 3:30 AM | SQLite prune | 90-day data retention on cast.db |
-| Daily 3:45 AM | Log compress | gzip event logs older than 7 days |
-| Daily 10:47 PM | `pa-backup` | rsync ~/.claude/ + ~/JARVIS/ vault |
+**Cron** — for local shell maintenance tasks that don't require AI. Example tasks:
+- Periodic CI failure monitoring (`cast-ci-monitor.sh`)
+- Routine cleanup of old plans, events, and logs (`cast tidy`)
+- SQLite data retention pruning on `cast.db`
+- Log compression for older event files
 
 ```bash
-# View scheduled cron jobs
-crontab -l
-
 # Manual cleanup
 cast tidy            # clean plans, events, logs, db rows older than 14 days
 cast tidy --dry-run  # preview what would be removed
@@ -591,9 +620,9 @@ cast tidy --dry-run  # preview what would be removed
 **Hundreds of BATS tests** across 5 directories (see stats block for current count). 0 failures. Coverage includes:
 
 - Core hook scripts (13 hooks)
-- Swarm bootstrap and lifecycle (NEW v5.0)
+- Swarm bootstrap and lifecycle
 - Agent team definitions
-- Message bus communication (NEW v5.0)
+- Message bus communication
 - Database migrations (v7 → v8)
 - Guard logic (commit/push blocking)
 - Event emission (HTTP SSE, database logging)
@@ -603,7 +632,7 @@ cast tidy --dry-run  # preview what would be removed
 ```bash
 bats tests/
 bats tests/hooks/
-bats tests/swarm/        # NEW v5.0
+bats tests/swarm/
 bats tests/agents/
 bats tests/scripts/
 ```
@@ -622,7 +651,7 @@ CAST is distributed across focused repos. The core framework lives here.
 
 | Repo | Description | Distribution |
 |---|---|---|
-| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Core v5.0 framework — agents, swarm bootstrap, hooks, CLI, observability | Homebrew `ek33450505/cast`, Claude plugin |
+| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Core framework — agents, swarm bootstrap, hooks, CLI, observability | Homebrew `ek33450505/cast`, Claude plugin |
 | [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts framework — 13 hooks, CLI tool | Homebrew `ek33450505/cast-hooks` |
 | [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard — htop for CAST | Homebrew `ek33450505/cast-dash` |
 | [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence — FTS5, embeddings, MCP | Homebrew `ek33450505/cast-memory` |
@@ -635,7 +664,7 @@ CAST is distributed across focused repos. The core framework lives here.
 
 ## Local-First & Offline
 
-CAST v5.0 maintains v4.5's local-first hardening:
+CAST maintains its local-first hardening:
 
 - **macOS Keychain integration** for API key storage
 - **age encryption** for agent memory with Secure Enclave binding
