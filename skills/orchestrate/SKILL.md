@@ -73,6 +73,25 @@ If `DISPATCH_BACKEND` is `"coordinator"` or `"auto"`, print a notice: `[CAST] di
 
 Create one TaskCreate entry per batch (subject = "Batch N: [description]").
 
+## Step 2.5 — Branch Pre-Flight
+
+Extract the declared phase name or target branch from the plan file (look for patterns like "Phase C3", "feature/c3-*", or explicit `target_branch` keys in the manifest JSON). Then verify the current branch:
+
+```bash
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+echo "[CAST-ORCHESTRATE] Current branch: $CURRENT_BRANCH"
+```
+
+If the plan declares a target branch pattern AND the current branch does not match it, STOP and output:
+```
+BLOCKED: Branch mismatch. Plan declares work for [target] but current branch is [CURRENT_BRANCH].
+Create/checkout the correct branch before dispatching.
+```
+
+Do not proceed to Step 3 until the branch is confirmed correct. This prevents the C3-on-C2-branch class of errors documented in the 2026-04-16 insights report.
+
+If no target branch is declared in the plan, log `[CAST-ORCHESTRATE] No target branch declared — skipping branch check.` and continue.
+
 ## Step 3 — Present the Queue
 
 Print the batch list as an informational summary. Do not wait for input. Proceed immediately.
@@ -185,6 +204,13 @@ Apply the appropriate preamble tier to ALL agent dispatches — both parallel an
    - `Status: DONE_WITH_CONCERNS` → log the concern text (the line following Status:), mark completed, continue
    - `Status: BLOCKED` or no Status line after retry → write checkpoint and stop: "Batch N blocked. Human intervention required. Blocker: [extracted reason or 'no Status line']"
    - `Status: NEEDS_CONTEXT` → stop and request clarification from the user before continuing
+
+5. **File presence check** — after `Status: DONE` or `Status: DONE_WITH_CONCERNS`, run:
+   ```bash
+   git status --short
+   git diff --stat HEAD | tail -20
+   ```
+   Then Read the 2-3 most critical files the agent claimed to modify (as listed in its Work Log or the plan task's "Files" section). Only mark the batch step complete after confirming the agent's claimed changes are present on disk. If git status shows no changes but the agent claimed edits, retry the agent once or escalate to the user — do NOT silently continue.
 
 After each batch completes:
 - Mark task `completed`

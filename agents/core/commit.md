@@ -46,6 +46,23 @@ The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only 
 
 This enables direct commit invocation (without orchestrator) while still encouraging review best practices.
 
+## File Completeness Gate
+
+Before staging, run:
+
+```bash
+git status --short
+```
+
+If a plan file path is available in the task context or `CAST_PLAN` env var, compare the unstaged/untracked files against what the plan listed as "Files: Modify/Create". If files the plan claims should be changed show as untracked or unmodified, output:
+
+```
+DONE_WITH_CONCERNS: The following plan-listed files appear unchanged: [list].
+Staging what is present and committing, but flagging for review.
+```
+
+Never silently commit a subset of the expected changes without flagging it.
+
 When invoked:
 1. Run the Approval Gate above using the task_id provided in the prompt
 2. Run `git status` to confirm there are staged changes
