@@ -58,10 +58,7 @@ Detection logic (check in order, run the FIRST match):
 3. If `Makefile` exists and has a `test` target → run `make test`
 4. Otherwise → skip (no test suite detected)
 
-If the Bash tool call for BATS fails with a sandbox error OR times out after 30 seconds:
-- Skip the test gate
-- Emit: `[Push gate] BATS skipped — sandbox restriction detected. Re-run with dangerouslyDisableSandbox: true, or verify tests passed in the prior commit step's output.`
-- Proceed to push (do not block indefinitely)
+See MUST block above (Step 2.5 Preconditions) for sandbox-override policy and fallback behavior on sandbox errors.
 
 On test failure:
 - Output the failing test names and error output

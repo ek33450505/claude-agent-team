@@ -113,6 +113,9 @@ fi
 # ── Step 1: Write event to ~/.claude/cast/events/ ─────────────────────────────
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
 TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat()+'Z')" | sed 's/+00:00//')"
+# Trust boundary: safe_agent sanitization is defensive-only.
+# The agent name originates from Claude Code's trusted SubagentStop payload;
+# this sanitization guards against future input-source changes, not current untrusted input.
 SAFE_AGENT="${AGENT_NAME//[^a-zA-Z0-9_-]/}"
 EVENT_FILE="${EVENTS_DIR}/${TIMESTAMP}-${SAFE_AGENT}-subagent-stop.json"
 
