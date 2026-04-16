@@ -2,16 +2,16 @@
   <img src="docs/cast-banner.png" alt="CAST — Swarm control plane for Anthropic Agent Teams" />
 </p>
 
-# CAST v5.0 — Swarm Control Plane
+# CAST v6.0 — Swarm Control Plane
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-5.0-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-31-green)<!-- CAST_AGENT_COUNT -->
+![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
+![Agents](https://img.shields.io/badge/agents-30-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-409-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**CAST v5.0 is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. 31 specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
+**CAST v6.0 is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. 29 core specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
 
 **[CAST Framework](https://castframework.dev)** | **[Cloud-native deployment guide](docs/swarm-deployment.md)**
 
@@ -94,6 +94,44 @@ bash install.sh
 
 ---
 
+## Personal Overlay — Layered Configuration
+
+CAST ships in **two layers:** a generic `core` layer (29 agents, 11 skills, rules templates) safe for 2000+ clones, and an optional `personal` overlay for maintainer-specific content.
+
+**Default behavior:**
+```bash
+bash install.sh
+```
+Installs only the core layer. Your clone is safe, trustworthy, and contains no maintainer-specific paths or projects.
+
+**With personal overlay** (for CAST maintainers or anyone who has populated `rules-personal/`):
+```bash
+bash install.sh --personal
+```
+Installs both layers — personal files are merged on top of core into `~/.claude/rules/` and `~/.claude/agents/core/`. Both overlay directories (`rules-personal/`, `agents/personal/`) are tracked in the repo but their contents are only copied into the runtime when `--personal` is passed. `rules-personal/` ships empty for clones to populate themselves; `agents/personal/` holds maintainer-specific agents like `portfolio-sync`.
+
+**What's in each layer:**
+
+| Layer | What It Contains | Shipped? |
+|---|---|---|
+| `rules-core/` | Generic CAST setup, stack-reference skill, shell/python/typescript conventions | Always |
+| `rules-personal/` | Maintainer's project catalog, identity traits, journal settings, custom config.sh | Optional (--personal flag) |
+| `agents/core/` | 29 specialist agents (code-writer, debugger, planner, etc.) | Always |
+| `agents/personal/` | Maintainer-specific agents (e.g., portfolio-sync) | Optional (--personal flag) |
+
+**Why the split?**
+
+CAST is dogfooded against the maintainer's portfolio and personal projects. A fresh clone must not load that context. The split ensures:
+- New users get a trustworthy, generic installation
+- Maintainers can overlay personal agents and rules without risk of leaking them to clones
+- PRs from contributors target the core layer by default
+
+**Migration for existing clones:**
+
+If you cloned before this split, `rules/` has been renamed to `rules-core/`. Re-run `bash install.sh` to pick up the new structure. If you had custom rules in your runtime `~/.claude/rules/`, back them up before reinstalling — they live in the same runtime directory and the installer may overwrite.
+
+---
+
 ## Swarm System
 
 ### Define a Team (YAML)
@@ -153,7 +191,7 @@ Under the hood:
 
 | Feature | What It Shows |
 |---|---|
-| **Agent Force Graph** | 31 agents + task satellites, gravity physics, live updates |
+| **Agent Force Graph** | 29 core agents + task satellites, gravity physics, live updates |
 | **Swarm Sessions** | Active swarms, teammates, task assignments, peer messages |
 | **Worktree Isolation** | Per-teammate file ownership, no write conflicts |
 | **Token Heatmap** | Per-agent token spend, cost trends, local vs Claude |
@@ -170,7 +208,7 @@ npm run dev    # Vite :5173 + Express :3001
 
 ## Agent Roster
 
-31 specialists across 4 categories. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
+29 core specialists across 4 categories, with optional personal overlay. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
 
 **New in v5.0:** Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
 
@@ -181,7 +219,6 @@ npm run dev    # Vite :5173 + Express :3001
 | `code-writer` | sonnet | high | Feature implementation across files or logical units |
 | `debugger` | sonnet | high | Root-cause diagnosis and fixes for failures |
 | `planner` | sonnet | high | Breaks features into sequenced task plans with ADM |
-| `orchestrator` | sonnet | high | Executes multi-agent plan manifests (ADM); Agent Teams coordinator pattern (NEW v5.0) |
 | `researcher` | sonnet | high | Multi-source analysis, gap reports, data synthesis, source citations |
 | `security` | sonnet | high | Auth, input validation, secrets, vulnerability audit |
 | `merge` | haiku | low | Git merges, rebases, conflict resolution |
@@ -225,7 +262,7 @@ npm run dev    # Vite :5173 + Express :3001
 | `learning-scout` | sonnet | high | Tech topic research and resource curation to Obsidian |
 | `portfolio-sync` | haiku | low | Syncs showcase repo READMEs with actual project stats |
 
-**Model tiering:** 21 agents on Haiku ($1/MTok), 10 on Sonnet ($3/MTok). This 25-40% cost savings scales across the swarm.
+**Model tiering:** 20 core agents on Haiku ($1/MTok), 9 on Sonnet ($3/MTok). This 25-40% cost savings scales across the swarm.
 
 **MCP integrations:** Todoist (task-triage), Google Calendar (meeting-prep), Gmail (email-drafter), Obsidian (knowledge-curator, learning-scout).
 
@@ -265,14 +302,12 @@ Beyond cost tiering, CAST v5.0 introduces five new optimization features to redu
 
 ## Hook Event Coverage
 
-**New in v5.0:** TeammateIdle, TaskCreated, TaskCompleted, WorktreeCreate are production-hardened hooks capturing swarm lifecycle. All responses validate against JSON schemas in `schemas/`.
+**New in v5.0:** TaskCreated, WorktreeCreate are production-hardened hooks capturing swarm lifecycle. All responses validate against JSON schemas in `schemas/`.
 
 | Event | Hook Script | What It Does |
 |---|---|---|
 | `SessionStart` | `cast-session-start-hook.sh` | Opens session row in cast.db |
-| `TeammateIdle` | `cast-teammate-idle-hook.sh` | Logs idle event; agent can pick up next task (Agent Teams native) |
 | `TaskCreated` | `cast-task-created-hook.sh` | Logs task assignment; updates teammate_runs table |
-| `TaskCompleted` | `cast-task-completed-hook.sh` | Logs completion status; validates vs status-block schema (Agent Teams native) |
 | `WorktreeCreate` | `cast-worktree-create-hook.sh` | Creates isolated worktree; seeds agent identity preamble |
 | `PreToolUse:Bash` | `pre-tool-guard.sh` | Hard-blocks `git commit` / `git push` (exit 2) |
 | `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Logs file modifications; emits HTTP event to dashboard |
@@ -385,7 +420,7 @@ sqlite3 ~/.claude/cast.db "SELECT model_used, COUNT(*), SUM(tokens_in + tokens_o
 
 ## Multi-Agent Pipelines (v4.6+)
 
-The `orchestrator` agent executes **Agent Dispatch Manifests (ADM)** — JSON structures for sequential/parallel work:
+The `/orchestrate` skill executes **Agent Dispatch Manifests (ADM)** — JSON structures for sequential/parallel work:
 
 ```json
 {
@@ -420,13 +455,16 @@ The `orchestrator` agent executes **Agent Dispatch Manifests (ADM)** — JSON st
 }
 ```
 
-`owns_files` prevents write conflicts — orchestrator blocks if two parallel agents claim the same file.
+`owns_files` prevents write conflicts — `/orchestrate` blocks if two parallel agents claim the same file.
 
 ```bash
 cast exec ~/.claude/plans/my-plan.md
 cast parallel ~/.claude/plans/my-plan.md --split 2
 cast parallel ~/.claude/plans/my-plan.md --dry-run
 ```
+
+**Maintenance Skills:**
+- `/cast-audit` — Monthly codebase audit (bugs, security, performance, test coverage) — runs first Monday of each month at 08:00, dispatches 4 parallel researchers, surfaces findings to `~/.claude/reports/cast-audit-YYYY-MM-DD.md`.
 
 ---
 
@@ -493,10 +531,17 @@ npm run dev    # Vite :5173 + Express :3001
 ```
 claude-agent-team/
   agents/
-    core/                        ← 31 agent definitions
+    core/                        ← 29 core agent definitions
+    personal/                    ← optional: maintainer-specific agents
   config/
     cast-litellm.yaml            ← LiteLLM proxy config
     managed-settings.d/          ← modular settings
+  rules-core/
+    working-conventions.md       ← shared conventions, shell, python, typescript
+    stack-reference.md           ← generic stack reference
+  rules-personal/                ← .gitignored; created with install.sh --personal
+    project-catalog.md           ← maintainer's project list
+    engram-identity.md           ← personal traits and context
   docs/
     cast-architecture-v5.svg     ← swarm topology diagram
     swarm-deployment.md          ← production guide
@@ -679,7 +724,7 @@ CAST Portfolio: [castframework.dev](https://castframework.dev)
 
 ## Stats
 
-<!-- CAST_AGENT_COUNT -->31<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->454<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_TEST_COUNT -->492<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
-<!-- CAST_SKILL_COUNT -->14<!-- /CAST_SKILL_COUNT --> skills
+<!-- CAST_SKILL_COUNT -->15<!-- /CAST_SKILL_COUNT --> skills

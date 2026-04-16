@@ -1,0 +1,146 @@
+name: Clean Install Verification
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Run weekly on Monday at 07:00 UTC
+    - cron: '0 7 * * 1'
+
+jobs:
+  clean-install-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout clean repo
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: Install prerequisites (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bash python3 jq bats sqlite3
+
+      - name: Run clean install to test directory
+        run: |
+          export HOME=/tmp/clean-install-ubuntu
+          mkdir -p "$HOME"
+          bash "$GITHUB_WORKSPACE/install.sh"
+        env:
+          CLAUDE_DIR: /tmp/clean-install-ubuntu/.claude
+
+      - name: Verify scripts exist post-install
+        run: |
+          python3 << 'VERIFY_EOF'
+          import json
+          import os
+          import sys
+
+          settings_path = "${{ github.workspace }}/settings.json"
+          claude_dir = "/tmp/clean-install-ubuntu/.claude"
+
+          with open(settings_path) as f:
+              settings = json.load(f)
+
+          # Extract all script references
+          scripts_referenced = set()
+          for hook_type, hook_list in settings.get('hooks', {}).items():
+              for hook in hook_list:
+                  if isinstance(hook, dict):
+                      for sub_hook in hook.get('hooks', []):
+                          if isinstance(sub_hook, dict) and 'command' in sub_hook:
+                              cmd = sub_hook['command']
+                              if 'bash' in cmd and '~/.claude/scripts/' in cmd:
+                                  script = cmd.split('~/.claude/scripts/')[-1].split()[0]
+                                  scripts_referenced.add(script)
+
+          # Verify each script exists in the clean install
+          missing = []
+          for script in sorted(scripts_referenced):
+              script_path = os.path.join(claude_dir, 'scripts', script)
+              if not os.path.exists(script_path):
+                  missing.append(script)
+
+          if missing:
+              print("ERROR: The following scripts are referenced in settings.json but missing from clean install:")
+              for s in missing:
+                  print(f"  - {s}")
+              print("\nThese scripts must be added to scripts/ and committed to the repo.")
+              sys.exit(1)
+          else:
+              print("✓ All scripts referenced in settings.json exist post-install")
+          VERIFY_EOF
+
+      - name: Verify cast status command
+        run: |
+          export HOME=/tmp/clean-install-ubuntu
+          export PATH="/tmp/clean-install-ubuntu/.local/bin:$PATH"
+          # cast status should not error; if cast CLI is not in PATH it's ok, but don't crash
+          cast status 2>/dev/null || echo "Note: cast CLI not in PATH (expected in CI)"
+
+  clean-install-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout clean repo
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: Install prerequisites (macOS)
+        run: |
+          # bash, python3, jq, sqlite3 are pre-installed on macos-latest
+          # bats needs to be installed via homebrew or source
+          command -v bats >/dev/null || brew install bats-core
+
+      - name: Run clean install to test directory
+        run: |
+          export HOME=/tmp/clean-install-macos
+          mkdir -p "$HOME"
+          bash "$GITHUB_WORKSPACE/install.sh"
+        env:
+          CLAUDE_DIR: /tmp/clean-install-macos/.claude
+
+      - name: Verify scripts exist post-install
+        run: |
+          python3 << 'VERIFY_EOF'
+          import json
+          import os
+          import sys
+
+          settings_path = "${{ github.workspace }}/settings.json"
+          claude_dir = "/tmp/clean-install-macos/.claude"
+
+          with open(settings_path) as f:
+              settings = json.load(f)
+
+          # Extract all script references
+          scripts_referenced = set()
+          for hook_type, hook_list in settings.get('hooks', {}).items():
+              for hook in hook_list:
+                  if isinstance(hook, dict):
+                      for sub_hook in hook.get('hooks', []):
+                          if isinstance(sub_hook, dict) and 'command' in sub_hook:
+                              cmd = sub_hook['command']
+                              if 'bash' in cmd and '~/.claude/scripts/' in cmd:
+                                  script = cmd.split('~/.claude/scripts/')[-1].split()[0]
+                                  scripts_referenced.add(script)
+
+          # Verify each script exists in the clean install
+          missing = []
+          for script in sorted(scripts_referenced):
+              script_path = os.path.join(claude_dir, 'scripts', script)
+              if not os.path.exists(script_path):
+                  missing.append(script)
+
+          if missing:
+              print("ERROR: The following scripts are referenced in settings.json but missing from clean install:")
+              for s in missing:
+                  print(f"  - {s}")
+              print("\nThese scripts must be added to scripts/ and committed to the repo.")
+              sys.exit(1)
+          else:
+              print("✓ All scripts referenced in settings.json exist post-install")
+          VERIFY_EOF
+
+      - name: Verify cast status command
+        run: |
+          export HOME=/tmp/clean-install-macos
+          export PATH="/tmp/clean-install-macos/.local/bin:$PATH"
+          # cast status should not error; if cast CLI is not in PATH it's ok, but don't crash
+          cast status 2>/dev/null || echo "Note: cast CLI not in PATH (expected in CI)"

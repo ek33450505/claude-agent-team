@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ek33450505/claude-agent-team/schemas/agent-status.json",
+  "title": "CAST Agent Status Block",
+  "description": "Machine-readable schema for the structured Status block emitted by every CAST agent at the end of task execution. Enables reliable orchestration, dashboard consumption, and changelog generation.",
+  "type": "object",
+  "required": ["status", "summary", "agent"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT"],
+      "description": "Terminal status of the agent's task execution."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "description": "One-line description of what the agent did or why it is blocked/needs context."
+    },
+    "agent": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the agent that produced this status block (e.g. 'code-writer', 'debugger')."
+    },
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "List of concerns when status is DONE_WITH_CONCERNS. Required when status is DONE_WITH_CONCERNS. May be empty for other statuses."
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Absolute paths of files created or modified during the task."
+    },
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Suggested follow-up actions for the orchestrator or user."
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Descriptions of blocking issues. Required when status is BLOCKED."
+    },
+    "context_needed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Descriptions of missing context. Required when status is NEEDS_CONTEXT."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Version of this schema. Pin to '1.0' for all current agents."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "DONE_WITH_CONCERNS" } },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["concerns"],
+        "properties": {
+          "concerns": { "minItems": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "BLOCKED" } },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["blockers"],
+        "properties": {
+          "blockers": { "minItems": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "NEEDS_CONTEXT" } },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["context_needed"],
+        "properties": {
+          "context_needed": { "minItems": 1 }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}
