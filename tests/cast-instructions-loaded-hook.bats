@@ -7,7 +7,7 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOK_SH="$REPO_DIR/scripts/cast-instructions-loaded-hook.sh"
 
 make_payload() {
-  local file_path="${1:-/Users/ed/.claude/CLAUDE.md}"
+  local file_path="${1:-/tmp/CLAUDE.md}"
   local memory_type="${2:-User}"
   local load_reason="${3:-session_start}"
   python3 -c "
