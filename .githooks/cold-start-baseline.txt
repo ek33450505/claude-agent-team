@@ -1,0 +1,13 @@
+scripts/agent-status-reader.sh:3
+scripts/cast-ci-monitor.sh:5
+scripts/cast-exec.sh:17
+scripts/cast-notify.sh:3
+scripts/cast-ollama.sh:7
+scripts/cast-parallel.sh:4
+scripts/cast-stop-failure-hook.sh:6
+scripts/cast-subagent-start-hook.sh:6
+scripts/cast-subagent-stop-hook.sh:9
+scripts/cast-tmux-session.sh:7
+scripts/cast-upgrade-check.sh:13
+scripts/cast-validate.sh:3
+scripts/pre-tool-guard.sh:4

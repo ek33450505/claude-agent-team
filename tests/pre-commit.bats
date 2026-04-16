@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # BATS tests for .githooks/pre-commit regression lints
 
+REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
+
 setup() {
   # Create a temporary directory for each test
   export TEST_DIR=$(mktemp -d)
@@ -32,14 +34,15 @@ EOF
   git add settings.json
   git commit -m "initial" >/dev/null 2>&1
 
-  # Copy the pre-commit hook
+  # Copy the pre-commit hook and baseline
   mkdir -p .githooks
-  cp /Users/edkubiak/Projects/personal/claude-agent-team/.githooks/pre-commit .githooks/
+  cp "$REPO_ROOT/.githooks/pre-commit" .githooks/
+  cp "$REPO_ROOT/.githooks/cold-start-baseline.txt" .githooks/ 2>/dev/null || true
   git config core.hooksPath .githooks
 
   # Copy scripts and helper Python script
-  cp /Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-lint-orphan-scripts.py scripts/
-  cp /Users/edkubiak/Projects/personal/claude-agent-team/scripts/gen-stats.sh scripts/gen-stats.sh 2>/dev/null || true
+  cp "$REPO_ROOT/scripts/cast-lint-orphan-scripts.py" scripts/
+  cp "$REPO_ROOT/scripts/gen-stats.sh" scripts/gen-stats.sh 2>/dev/null || true
 
   cd /
 }
@@ -79,7 +82,7 @@ EOF
   # Should not fail due to python count
 }
 
-@test "lint-cold-starts: fail when script has >2 python3 -c calls" {
+@test "lint-cold-starts: fail when NEW script has >2 python3 -c calls" {
   cd "$TEST_REPO"
   cat > scripts/many-python.sh <<'EOF'
 #!/bin/bash
@@ -87,13 +90,49 @@ set -euo pipefail
 python3 -c "print('one')"
 python3 -c "print('two')"
 python3 -c "print('three')"
-python3 -c "print('four')"
 EOF
   chmod +x scripts/many-python.sh
   git add scripts/many-python.sh
   run bash .githooks/pre-commit
-  # The lint may or may not block, but should warn
-  [[ "$output" == *"python3 -c"* ]] || [[ $status -eq 0 ]]
+  # New file with 3 calls should be detected
+  [[ "$output" == *"python3 -c"* ]]
+}
+
+@test "lint-cold-starts: pass when GRANDFATHERED file keeps same count" {
+  cd "$TEST_REPO"
+  # Add a grandfathered file to baseline with count=3
+  echo "scripts/grandfathered.sh:3" >> .githooks/cold-start-baseline.txt
+  cat > scripts/grandfathered.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+python3 -c "print('one')"
+python3 -c "print('two')"
+python3 -c "print('three')"
+EOF
+  chmod +x scripts/grandfathered.sh
+  git add scripts/grandfathered.sh .githooks/cold-start-baseline.txt
+  run bash .githooks/pre-commit
+  # Should NOT fail because count (3) matches baseline (3)
+  [[ "$output" != *"ERROR [lint-cold-starts]: scripts/grandfathered.sh"* ]]
+}
+
+@test "lint-cold-starts: fail when GRANDFATHERED file's count INCREASES" {
+  cd "$TEST_REPO"
+  # Add a grandfathered file to baseline with count=3
+  echo "scripts/regression.sh:3" >> .githooks/cold-start-baseline.txt
+  cat > scripts/regression.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+python3 -c "print('one')"
+python3 -c "print('two')"
+python3 -c "print('three')"
+python3 -c "print('four')"
+EOF
+  chmod +x scripts/regression.sh
+  git add scripts/regression.sh .githooks/cold-start-baseline.txt
+  run bash .githooks/pre-commit
+  # Should FAIL because count (4) exceeds baseline (3)
+  [[ "$output" == *"ERROR [lint-cold-starts]: scripts/regression.sh has 4 python3 -c calls (baseline: 3)"* ]]
 }
 
 # === LINT 2: SQL injection detector ===
@@ -245,11 +284,11 @@ EOF
 }
 
 @test "pre-commit-hook: is executable" {
-  [[ -x /Users/edkubiak/Projects/personal/claude-agent-team/.githooks/pre-commit ]]
+  [[ -x "$REPO_ROOT/.githooks/pre-commit" ]]
 }
 
 @test "pre-commit-hook: is installed via git config" {
-  cd /Users/edkubiak/Projects/personal/claude-agent-team
+  cd "$REPO_ROOT"
   run git config core.hooksPath
   [[ "$output" == ".githooks" ]]
 }
