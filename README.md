@@ -290,7 +290,7 @@ Beyond cost tiering, CAST v5.0 introduces five new optimization features to redu
 
 | Feature | Usage | Impact |
 |---|---|---|
-| **Caveman Mode** | `/caveman [lite\|full\|ultra\|off]` | 15-25% output reduction via terse formatting (3 intensity levels) |
+| **Laconic Mode** | `/laconic [lite\|full\|ultra\|off]` | 15-25% output reduction via terse formatting (3 intensity levels) |
 | **RTK Hook** | `scripts/cast-rtk-install.sh` | 60-89% compression on tool outputs; optional install |
 | **Context Audit** | `scripts/audit-context-size.sh` | Measures always-loaded context; warns if >500 lines (rules slimmed by 95 lines) |
 | **Compact Discipline** | Auto-trigger at 40 tool calls/session | Suggests `/compact` via reminder hook + best practices skill |
