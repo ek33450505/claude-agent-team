@@ -202,21 +202,17 @@ PLAN
 # ---------------------------------------------------------------------------
 # 11–14. Bash CAST-DEBUG section
 #
-# NOTE: The CAST-DEBUG Python block in post-tool-hook.sh uses the pattern:
-#   echo "$INPUT" | python3 - <<'PYEOF'
-# In bash, when a pipe and a heredoc are both present, the heredoc takes
-# stdin for the script source (python3 -), leaving sys.stdin empty inside
-# the script. As a result, json.load(sys.stdin) raises an exception which
-# is caught and silently swallowed (|| true). CAST-DEBUG output is
-# therefore suppressed for ALL Bash payloads in the current implementation.
-# These tests document the actual behavior; the defect is tracked separately.
+# cast-post-tool.py (consolidated handler) receives $INPUT via herestring
+# (<<< "$INPUT") rather than the old pipe+heredoc pattern that caused stdin
+# to be empty inside the Python process. CAST-DEBUG is now correctly emitted
+# for non-zero Bash exits in main sessions, except for grace-listed commands.
 # ---------------------------------------------------------------------------
 
-@test "Bash tool exit_code=1 + main session → exits 0 (CAST-DEBUG suppressed: known stdin-heredoc conflict)" {
+@test "Bash tool exit_code=1 + main session → exits 0 and emits [CAST-DEBUG]" {
   run bash "$HOOK_SH" <<< "$(bash_payload "npm run build" 1)"
   assert_success
-  # CAST-DEBUG is currently suppressed due to stdin/heredoc conflict in the hook
-  refute_output --partial "CAST-DEBUG"
+  # Non-grace-listed command with exit_code=1 should route to debugger
+  assert_output --partial "CAST-DEBUG"
 }
 
 @test "Bash tool exit_code=1 + CLAUDE_SUBPROCESS=1 → exits 0 with no [CAST-DEBUG]" {

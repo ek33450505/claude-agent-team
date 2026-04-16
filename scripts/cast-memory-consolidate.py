@@ -21,10 +21,13 @@ import os
 import sys
 import json
 import math
+import re
 import struct
 import argparse
 import sqlite3
 from datetime import datetime, timezone
+
+SAFE_COL = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 
 # --- Copied from cast-memory-router.py / cast-memory-embed.py (no cross-script imports) ---
@@ -179,13 +182,17 @@ def op_archive(conn, dry_run=False):
     count = rows[0] if rows else 0
 
     if count > 0 and not dry_run:
-        # Get column names for agent_memories
+        # Get column names for agent_memories — filter through allowlist before SQL interpolation
         col_info = conn.execute("PRAGMA table_info(agent_memories)").fetchall()
-        am_cols = [r[1] for r in col_info]
+        am_cols = [r[1] for r in col_info if SAFE_COL.match(r[1])]
+        if not am_cols:
+            raise ValueError("No safe columns found in PRAGMA table_info for agent_memories")
 
         # Get column names for archived_memories (minus archived_at which gets DEFAULT)
         arch_col_info = conn.execute("PRAGMA table_info(archived_memories)").fetchall()
-        arch_cols = [r[1] for r in arch_col_info]
+        arch_cols = [r[1] for r in arch_col_info if SAFE_COL.match(r[1])]
+        if not arch_cols:
+            raise ValueError("No safe columns found in PRAGMA table_info for archived_memories")
 
         # Find common columns (excluding archived_at which auto-fills)
         common_cols = [c for c in am_cols if c in arch_cols and c != 'archived_at']

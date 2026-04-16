@@ -5,6 +5,12 @@
 
 if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 
+set +e
+
+# _log_error: append a structured error line to hook-errors.log (never fails itself)
+mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+
 set -euo pipefail
 
 INPUT="$(cat 2>/dev/null || true)"

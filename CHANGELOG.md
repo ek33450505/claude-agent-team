@@ -1,5 +1,37 @@
 # CHANGELOG
 
+## [Unreleased] — 2026-04-16
+
+### Security
+- Fixed SESSION_ID SQL injection in cast-session-end.sh (HIGH)
+- Removed eval fallback in cast-statusline.sh (HIGH)
+- Routed prompt_preview through cast-redact.py (MEDIUM)
+- Allowlisted column names from PRAGMA in cast-memory-consolidate.py (MEDIUM)
+
+### Bug Fixes
+- Committed missing claudes_journal-session-end.sh (fixes broken clean install)
+- Committed engram-identity-start.sh and engram-session-end.sh to repo
+- Added _log_error to cast-subagent-stop-hook.sh and cast-task-created-hook.sh
+- Consolidated hook error logs to single hook-errors.log
+
+### Performance
+- Consolidated 13 python3 invocations in cast-audit-hook.sh (~40-140ms/Write)
+- Consolidated 10 python3 invocations in post-tool-hook.sh (~140-280ms/PostToolUse)
+- Added TTL cleanup for agent-status directory (120-min)
+- Added indexes on sessions(project), sessions(started_at), agent_runs(project), routing_events(event_type)
+- Added 30-day retention for 6 cast.db tables
+
+### Tests
+- Added BATS coverage for 4 previously-untested hooks: cast-session-end, pre-tool-guard, cast-subagent-start-hook, cast-headless-guard (+63 tests)
+- Deleted dead tests/cast-litellm.bats
+- Fixed bracket convention violations in 2 test files
+- Updated post-tool-hook.bats test 12 after stdin-heredoc bug fix (consolidation)
+
+### Cleanup
+- Removed 3 dead installable scripts (cast-rtk-hook.sh, audit-context-size.sh, cast-compact-reminder-hook.sh)
+
+---
+
 ## v5.0 — Swarm Control Plane (2026-04-10)
 
 CAST becomes the control plane for Anthropic's native Agent Teams. Swarm orchestration, live agent visualization, and local model routing.

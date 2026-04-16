@@ -58,9 +58,9 @@ teardown() {
 @test "Bash tool call → audit.jsonl is created and contains a record" {
   run bash "$HOOK_SH" <<< "$(make_payload "Bash")"
   assert_success
-  assert [ -f "$HOME/.claude/logs/audit.jsonl" ]
+  [[ -f "$HOME/.claude/logs/audit.jsonl" ]]
   run wc -l < "$HOME/.claude/logs/audit.jsonl"
-  assert [ "$(cat "$HOME/.claude/logs/audit.jsonl" | wc -l)" -ge 1 ]
+  [[ "$(cat "$HOME/.claude/logs/audit.jsonl" | wc -l)" -ge 1 ]]
 }
 
 @test "Bash tool call → audit record is valid JSON with tool_name field" {
@@ -132,13 +132,13 @@ print('ok')
   bash "$HOOK_SH" <<< "$(make_payload "WebFetch")"
   local count
   count="$(wc -l < "$HOME/.claude/logs/audit.jsonl" | tr -d ' ')"
-  assert [ "$count" -eq 3 ]
+  [[ "$count" -eq 3 ]]
 }
 
 @test "Empty input → hook exits 0 without writing audit record" {
   run bash "$HOOK_SH" <<< ""
   assert_success
-  assert [ ! -f "$HOME/.claude/logs/audit.jsonl" ] || [ "$(wc -l < "$HOME/.claude/logs/audit.jsonl" | tr -d ' ')" -eq 0 ]
+  [[ ! -f "$HOME/.claude/logs/audit.jsonl" ]] || [[ "$(wc -l < "$HOME/.claude/logs/audit.jsonl" | tr -d ' ')" -eq 0 ]]
 }
 
 @test "Invalid JSON input → hook exits 0 without crashing" {
@@ -149,7 +149,7 @@ print('ok')
 @test "audit.jsonl log directory is created if missing" {
   rm -rf "$HOME/.claude/logs"
   bash "$HOOK_SH" <<< "$(make_payload "Bash")"
-  assert [ -f "$HOME/.claude/logs/audit.jsonl" ]
+  [[ -f "$HOME/.claude/logs/audit.jsonl" ]]
 }
 
 # ---------------------------------------------------------------------------

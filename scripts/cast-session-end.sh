@@ -37,6 +37,14 @@ CAST_DIR="${HOME}/.claude/cast"
 SESSION_ID="${CLAUDE_SESSION_ID:-default}"
 CAST_SCRIPTS_DIR="${HOME}/.claude/scripts"
 
+# === SESSION_ID SAFETY GUARD ===
+# Reject any SESSION_ID that contains characters outside [a-zA-Z0-9_-] to prevent
+# SQL injection via interpolation into sqlite3 CLI calls below.
+if [[ ! "${SESSION_ID}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  _log_error "cast-session-end: Refusing unsafe SESSION_ID: ${SESSION_ID:0:40}"
+  exit 0
+fi
+
 # === BLOCKED COUNT ESCALATION ===
 BLOCKED_LOG="${CAST_DIR}/blocked-count.txt"
 BLOCKED_COUNT=$(cat "$BLOCKED_LOG" 2>/dev/null || echo 0)
@@ -186,6 +194,13 @@ if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   sqlite3 "$DB" "DELETE FROM sessions WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
   # Prompt/routing data is more sensitive — hard-capped at 30 days regardless of TTL_DB_ROWS
   sqlite3 "$DB" "DELETE FROM routing_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
+  # Additional tables with 30-day retention (audit remediation 2026-04-16)
+  sqlite3 "$DB" "DELETE FROM dispatch_decisions WHERE created_at < datetime('now', '-30 days');" 2>/dev/null || true
+  sqlite3 "$DB" "DELETE FROM quality_gates WHERE created_at < datetime('now', '-30 days');" 2>/dev/null || true
+  sqlite3 "$DB" "DELETE FROM stream_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
+  sqlite3 "$DB" "DELETE FROM stream_hook_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
+  sqlite3 "$DB" "DELETE FROM worktree_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
+  sqlite3 "$DB" "DELETE FROM cast_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
   # Convert ghost rows (stuck 'running') older than 2 hours to 'failed'
   sqlite3 "$DB" "UPDATE agent_runs SET status='failed' WHERE status='running' AND started_at < datetime('now', '-2 hours');" 2>/dev/null || true
 fi

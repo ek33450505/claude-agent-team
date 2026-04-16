@@ -118,6 +118,12 @@ CREATE TABLE IF NOT EXISTS teammate_messages (
 CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
+
+-- Indexes added 2026-04-16 audit remediation
+CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
+CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 STREAM_TABLES
   echo "cast.db already initialized (v${CURRENT_VERSION}), all tables ensured" >&2
   exit 0
@@ -197,6 +203,12 @@ CREATE TABLE IF NOT EXISTS teammate_messages (
 CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
+
+-- Indexes added 2026-04-16 audit remediation
+CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
+CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 
 PRAGMA user_version = 8;
 MIGRATE_V8
@@ -313,6 +325,12 @@ CREATE INDEX IF NOT EXISTS idx_routing_events_session   ON routing_events(sessio
 CREATE INDEX IF NOT EXISTS idx_routing_events_timestamp ON routing_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_routing_events_route     ON routing_events(matched_route);
 CREATE INDEX IF NOT EXISTS idx_agent_memories_agent     ON agent_memories(agent);
+
+-- Indexes added 2026-04-16 audit remediation
+CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
+CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 
 -- Stream events: stream-JSON observability pipeline (v4.6)
 CREATE TABLE IF NOT EXISTS stream_events (

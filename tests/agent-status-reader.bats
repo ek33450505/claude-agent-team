@@ -252,7 +252,7 @@ PYEOF
   run_hook
   assert_success
   local log_file="$HOME/.claude/routing-log.jsonl"
-  [ -f "$log_file" ] || fail "routing-log.jsonl was not created"
+  [[ -f "$log_file" ]] || fail "routing-log.jsonl was not created"
   python3 - "$log_file" <<'PYEOF'
 import json, sys
 log_file = sys.argv[1]
@@ -280,7 +280,7 @@ PYEOF
       CLAUDE_SESSION_ID="$CLAUDE_SESSION_ID" bash "$HOOK" <<< "{}"
   # exit code 2 expected for BLOCKED — don't assert_success
   local log_file="$HOME/.claude/routing-log.jsonl"
-  [ -f "$log_file" ] || fail "routing-log.jsonl was not created"
+  [[ -f "$log_file" ]] || fail "routing-log.jsonl was not created"
   python3 - "$log_file" <<'PYEOF'
 import json, sys
 log_file = sys.argv[1]

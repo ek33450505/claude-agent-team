@@ -21,34 +21,8 @@ if command -v jq >/dev/null 2>&1; then
   session=$(echo "$INPUT" | jq -r '.session_name // empty' 2>/dev/null)
   session_id=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 else
-  eval "$(echo "$INPUT" | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    def g(path, default='n/a'):
-        obj = d
-        for k in path.split('.'):
-            if isinstance(obj, dict):
-                obj = obj.get(k, None)
-            else:
-                return default
-        return obj if obj is not None else default
-    print(f\"agent='{g('agent.name','main')}'\")
-    print(f\"cost='{g('cost.total_cost_usd','0')}'\")
-    print(f\"ctx_pct='{g('context_window.used_percentage','0')}'\")
-    print(f\"rate_pct='{g('rate_limits.five_hour.used_percentage','')}'\")
-    print(f\"model='{g('model.display_name','n/a')}'\")
-    print(f\"session='{g('session_name','')}'\")
-    print(f\"session_id='{g('session_id','')}'\")
-except Exception:
-    print(\"agent='main'\")
-    print(\"cost='0'\")
-    print(\"ctx_pct='0'\")
-    print(\"rate_pct=''\")
-    print(\"model='n/a'\")
-    print(\"session=''\")
-    print(\"session_id=''\")
-" 2>/dev/null)"
+  # jq not available — use safe static defaults
+  agent="main"; cost="0"; ctx_pct="0"; rate_pct=""; model="n/a"; session=""; session_id=""
 fi
 
 # ── Git branch ────────────────────────────────────────────────────────────────

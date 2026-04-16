@@ -36,12 +36,14 @@
 # Never fail loudly — a broken hook must not interrupt the parent session.
 set +e
 
+# _log_error: append a structured error line to hook-errors.log (never fails itself)
+mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+
 CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
 TURN_CEILING_DIR="${CAST_DIR}/turn-ceiling-events"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
-STOP_ERROR_LOG="${HOME}/.claude/logs/subagent-stop-errors.log"
-mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
@@ -149,7 +151,7 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
     DB_STATUS="BLOCKED"
   fi
   export CAST_STOP_DB_STATUS="$DB_STATUS"
-  python3 - <<'PYEOF' 2>>"$STOP_ERROR_LOG" || true
+  python3 - <<'PYEOF' 2>>"${HOME}/.claude/logs/hook-errors.log" || true
 import sqlite3, os
 
 db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))

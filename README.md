@@ -7,7 +7,7 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-5.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-31-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-525-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-409-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -580,7 +580,7 @@ cast tidy --dry-run  # preview what would be removed
 
 ## Test Suite
 
-**525 BATS tests** across 5 directories. 0 failures. Coverage includes:
+**409 BATS tests** across 5 directories. 0 failures. Coverage includes:
 
 - Core hook scripts (13 hooks)
 - Swarm bootstrap and lifecycle (NEW v5.0)
@@ -680,6 +680,6 @@ CAST Portfolio: [castframework.dev](https://castframework.dev)
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->31<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->443<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->454<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->14<!-- /CAST_SKILL_COUNT --> skills

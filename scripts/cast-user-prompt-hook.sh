@@ -23,7 +23,8 @@ _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/
 
 INPUT="$(cat 2>/dev/null || true)"
 
-CAST_INPUT="$INPUT" python3 - <<'PYEOF' || true
+_CAST_REDACT_SCRIPT="$(dirname "$0")/cast-redact.py"
+CAST_INPUT="$INPUT" _CAST_REDACT_SCRIPT="$_CAST_REDACT_SCRIPT" python3 - <<'PYEOF' || true
 import json, os
 from datetime import datetime, timezone
 
@@ -36,7 +37,26 @@ except Exception:
 session_id     = data.get("session_id", "unknown")
 prompt_text    = data.get("prompt", "")
 prompt_length  = len(prompt_text)
-prompt_preview = prompt_text[:120]
+raw_preview    = prompt_text[:120]
+
+# Redact PII from preview before writing to any log
+import subprocess as _sp
+_redact_script = os.environ.get("_CAST_REDACT_SCRIPT", "")
+prompt_preview = raw_preview
+if _redact_script and os.path.isfile(_redact_script):
+    try:
+        _result = _sp.run(
+            ["python3", _redact_script],
+            input=raw_preview,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if _result.returncode == 0 and _result.stdout.strip():
+            _out = json.loads(_result.stdout)
+            prompt_preview = _out.get("redacted_text", raw_preview)
+    except Exception:
+        pass  # fallback: use raw_preview unredacted
 
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -59,7 +79,7 @@ except Exception:
 
 # Log to cast.db routing_events
 db_path = os.path.expanduser("~/.claude/cast.db")
-prompt_preview_db = prompt_text[:80]
+prompt_preview_db = prompt_preview[:80]
 project = os.path.basename(os.getcwd().rstrip('/')) or "unknown"
 data_json = json.dumps({"prompt_length": prompt_length, "prompt_preview": prompt_preview})
 try:

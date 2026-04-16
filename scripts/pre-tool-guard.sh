@@ -32,6 +32,9 @@ ti = d.get('tool_input', {})
 print(ti.get('file_path', ti.get('path', '')))" 2>/dev/null || echo "")"
 
   if [ -n "$FILE_PATH" ]; then
+    # TTL sweep: remove agent-status files older than 2 hours (matches SESSION_TIMEOUT=7200)
+    find "${CLAUDE_DIR:-$HOME/.claude}/agent-status/" -name "*.json" -mmin +120 -delete 2>/dev/null || true
+
     CAST_FILE_PATH="$FILE_PATH" CAST_POLICY_OVERRIDE="${CAST_POLICY_OVERRIDE:-0}" python3 -c "
 import json, os, re, sys, datetime
 

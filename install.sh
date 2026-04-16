@@ -132,7 +132,7 @@ info "Checking for RTK (optional token compression)..."
 if command -v rtk >/dev/null 2>&1; then
     success "  rtk found: $(rtk --version 2>/dev/null || echo 'version unknown')"
 else
-    warn "  rtk not installed — run scripts/cast-rtk-install.sh to enable token compression"
+    info "  rtk not installed (optional — install Rust and run: cargo install --git https://github.com/rtk-ai/rtk)"
 fi
 
 # --- Initialize cast.db ---
