@@ -59,3 +59,21 @@ Keep your final response under **400 tokens**. Return your Status Block with cou
 - Always present the plan before executing updates
 - Batch updates for efficiency
 - Status: DONE with count of triaged/updated tasks
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "task-triage",
+  "summary": "Triaged 8 inbox tasks — 3 moved to projects, 2 rescheduled, 3 archived",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

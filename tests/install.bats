@@ -36,12 +36,13 @@ run_install() {
   [ -d "$HOME/.claude/agent-memory-local" ]
 }
 
-@test "Install: installs all 31 agents" {
+@test "Install: installs all core agents (no personal overlay)" {
   run_install
 
   local count
   count=$(ls -1 "$HOME/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
-  [ "$count" -eq 31 ]
+  # portfolio-sync.md is personal-only; core install has 29 agents
+  [ "$count" -eq 29 ]
 }
 
 @test "Install: installs all 7 skills" {

@@ -1,6 +1,38 @@
 # CHANGELOG
 
-## [Unreleased] — 2026-04-16
+## [6.0] — 2026-04-16 — Strategic Evolution Sweep
+
+**Strategic goals:** trust for 2000+ clones, maintenance cadence, subtract complexity, leverage current model capabilities.
+
+### Added
+- Clean-install CI matrix (ubuntu + macos) verifying every script referenced in settings.json exists post-install (.github/workflows/clean-install.yml)
+- Pre-commit regression lints: python cold-start counter, SQL-injection pattern detector, orphan-script detector (.githooks/pre-commit + scripts/cast-lint-orphan-scripts.py)
+- Agent Status JSON schema + stdlib validator (schemas/agent-status.json, scripts/cast-validate-status.py)
+- All 29 core agent definitions now emit structured JSON status alongside human-readable Status block
+- `/cast-audit` skill — monthly 4-parallel-researcher audit (bugs, security, performance, coverage) into dated reports
+- `rules-personal/` + `agents/personal/` layered overlay pattern; `install.sh --personal` opts in
+
+### Changed
+- `rules/` renamed to `rules-core/` — core content ships to all clones; personal overlay is opt-in
+- `portfolio-sync` agent moved from `agents/core/` to `agents/personal/` (maintainer-only)
+- `config.sh.template` scrubbed to placeholders only (no real maintainer paths)
+- Agent count: 31 → 29 (retired `orchestrator`, archived `claudes-journal-session-end` hookscript moved to personal)
+- Documentation (docs/cast-protocol-spec.md, CHEATSHEET.md) updated to reflect skill-based `/orchestrate` dispatch
+
+### Removed
+- `agents/core/orchestrator.md` — subagent form cannot dispatch further agents (structural limitation); `/orchestrate` skill replaces it
+- Orphan hook references in `settings.json`, `managed-settings.d/40-hooks-tasks.json`, `README.md` (cleanup from commit 83f01bc which deleted scripts but missed the configs)
+
+### Security
+- SESSION_ID SQL-injection fix shipped in commit 89a1dc4 (2026-04-16 tactical audit)
+
+### Notes
+- D5 decision: VERSION bumped to 6.0 due to structural changes (agent count, layered install, orchestrator retirement, orphan cleanup)
+- Agent audit report: candidates (dep-auditor, task-triage, standup-writer, pr-narrator, email-drafter) assessed but all retained. Report at `~/.claude/reports/agent-dispatch-audit-2026-04-16.md`
+
+---
+
+## [Unreleased] — Post 2026-04-16 Tactical Audit
 
 ### Security
 - Fixed SESSION_ID SQL injection in cast-session-end.sh (HIGH)

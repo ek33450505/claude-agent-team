@@ -51,3 +51,21 @@ Keep your final response under **300 tokens**. Return your Status Block with dra
 - Always show a preview before creating the draft when dispatched interactively
 - Match the user's writing style when possible (reference previous sent emails via `mcp__claude_ai_Gmail__gmail_search_messages`)
 - Status: DONE with draft ID
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "email-drafter",
+  "summary": "Created Gmail draft — Subject: [subject], recipient: [email], draft ID: [id]",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

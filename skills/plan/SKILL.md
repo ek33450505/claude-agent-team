@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Activate plan mode — write a structured plan file with Agent Dispatch Manifest, then dispatch the orchestrator agent to execute it. Use for any non-trivial feature, refactor, or multi-step task.
+description: Activate plan mode — write a structured plan file with Agent Dispatch Manifest, then invoke the /orchestrate skill to execute it. Use for any non-trivial feature, refactor, or multi-step task.
 user-invocable: true
 allowed-tools: [Write, Read, Glob, Grep, Agent]
 ---
@@ -47,17 +47,16 @@ After writing the plan file, display a concise summary:
 - Number of batches and agents
 - A table: Batch | Mode | What it does
 
-Then ask the user: **"Dispatch orchestrator to execute this plan? [yes/no]"**
+Then ask the user: **"Execute this plan with /orchestrate? [yes/no]"**
 
 Wait for explicit confirmation before proceeding.
 
-## Step 3 — Dispatch the orchestrator
+## Step 3 — Execute via /orchestrate skill
 
-Once the user confirms, dispatch via the Agent tool with these exact parameters:
-- `subagent_type: "general-purpose"`
-- `name: "orchestrator"` — makes it show as "orchestrator" in the UI instead of a UUID
-- prompt: `"You are the CAST orchestrator. Read your full instructions at ~/.claude/agents/orchestrator.md first, then execute the plan at [ABSOLUTE_PLAN_PATH]. Follow the orchestrator instructions exactly — present the batch queue for approval, then execute all batches in order."`
+Once the user confirms, invoke the `/orchestrate` skill with the plan file path:
 
-**Important:** Always use `subagent_type: "general-purpose"` — never `subagent_type: "orchestrator"`. That name is a custom CAST agent, not a valid built-in subagent type. The `name` field is what makes it appear labeled in the UI.
+```
+/orchestrate [ABSOLUTE_PLAN_PATH]
+```
 
-Do not execute the plan yourself — hand it off to the agent.
+The `/orchestrate` skill reads the plan's Agent Dispatch Manifest and executes all batches directly from the main session — presenting the batch queue, running the interrupt window, then dispatching agents in order.

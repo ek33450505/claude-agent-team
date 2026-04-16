@@ -141,32 +141,6 @@
         ]
       }
     ],
-    "TeammateIdle": [
-      {
-        "id": "cast-teammate-idle",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-teammate-idle-hook.sh",
-            "timeout": 5,
-            "async": true
-          }
-        ]
-      }
-    ],
-    "TaskCompleted": [
-      {
-        "id": "cast-task-completed",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-task-completed-hook.sh",
-            "timeout": 5,
-            "async": true
-          }
-        ]
-      }
-    ],
     "SubagentStop": [
       {
         "id": "cast-subagent-stop",

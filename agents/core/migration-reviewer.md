@@ -69,3 +69,21 @@ Keep your final response under **500 tokens**. Return your Status Block, risk le
 - Read-only analysis only
 - Always check for rollback/down operations
 - Always report risk level explicitly
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "migration-reviewer",
+  "summary": "Migration safety review: risk level LOW — rollbacks present, no destructive ops",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

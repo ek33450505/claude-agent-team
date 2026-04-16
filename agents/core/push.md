@@ -94,6 +94,24 @@ cast_emit_event "task_completed" "push" "push-$(date +%Y%m%d)" "" "Pushed N comm
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "push",
+  "summary": "Pushed 3 commits to origin/main — SHA: abc1234",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+
 ## Rules
 
 - NEVER use `--force` or `-f` with git push (even on personal repos)

@@ -99,3 +99,21 @@ the final briefing file at:
 ## Response Budget
 Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "morning-briefing",
+  "summary": "Morning briefing assembled and saved to ~/.claude/briefings/2026-04-16-morning.md",
+  "concerns": [],
+  "files_changed": ["/Users/edkubiak/.claude/briefings/2026-04-16-morning.md"],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+

@@ -18,7 +18,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `/doctor` | Run comprehensive CAST system health check |
 | `/merge` | Dispatch merge agent for git merges, rebases, conflict resolution |
 | `/morning` | Dispatch morning-briefing agent to generate today's briefing |
-| `/orchestrate` | Execute a CAST plan via the orchestrator agent |
+| `/orchestrate` | Execute a CAST plan via the orchestrate skill |
 | `/plan` | Dispatch planner agent to create an implementation plan |
 | `/push` | Dispatch push agent to push committed work to remote |
 | `/research` | Dispatch researcher agent for technical research |

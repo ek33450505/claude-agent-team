@@ -72,3 +72,21 @@ Keep your final response under **500 tokens**. Return your Status Block and key 
 - Timeout benchmarks at 120 seconds
 - Always report numbers, not just pass/fail
 - If no baseline exists, establish one and report current numbers
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "perf-sentinel",
+  "summary": "Benchmarks complete — no regressions; baseline established for 3 operations",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

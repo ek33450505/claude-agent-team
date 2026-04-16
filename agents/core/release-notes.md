@@ -72,3 +72,21 @@ Keep your final response under **300 tokens**. Return your Status Block with com
 - Group commits logically — don't just list them
 - Include commit short SHAs for traceability
 - Status: DONE with commit count and category breakdown
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "release-notes",
+  "summary": "Generated release notes for v1.2.0 — 12 commits: 3 features, 5 fixes, 4 other",
+  "concerns": [],
+  "files_changed": ["/absolute/path/to/CHANGELOG.md"],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

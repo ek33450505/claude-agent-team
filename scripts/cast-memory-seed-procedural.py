@@ -47,14 +47,14 @@ PROCEDURAL_MEMORIES = [
         'decay_rate': 0.999,
     },
     {
-        'name': 'orchestrator-subagent-type',
-        'description': 'Custom CAST agent names are not valid subagent_type values in Agent tool',
+        'name': 'orchestrate-skill-dispatch',
+        'description': 'Plan execution uses the /orchestrate skill in the main session, not an orchestrator agent',
         'content': (
-            "When dispatching the orchestrator via the Agent tool, use "
-            "`subagent_type: 'general-purpose'` with the orchestrator's full system prompt "
-            "included. Custom CAST agent names (e.g., 'orchestrator', 'planner') are not "
-            "recognized as subagent_type values — only built-in Claude Code agent types work. "
-            "The orchestrator prompt should reference the plan file path."
+            "As of 2026-04-16, the orchestrator agent is retired. Plan execution now runs via "
+            "the `/orchestrate` skill invoked directly in the main session. When a plan file "
+            "contains a `json dispatch` block, the [CAST-ORCHESTRATE] hook directive instructs "
+            "the main session to invoke `/orchestrate` with the plan file path. "
+            "Do not dispatch a subagent named 'orchestrator' — there is no such agent."
         ),
         'importance': 0.85,
         'decay_rate': 0.999,

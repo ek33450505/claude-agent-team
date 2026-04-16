@@ -53,3 +53,21 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 - disallowedTools: Write, Edit — you only read, run, and dispatch debugger on failure
 - Always pipe test output through `| tail -50` — never capture the full run verbatim
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "test-runner",
+  "summary": "Test suite passed — 255 tests, 0 failed",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+

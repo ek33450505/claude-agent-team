@@ -1,10 +1,66 @@
 #!/usr/bin/env bash
-# CAST pre-commit hook: sync README stats before commit
-# Non-blocking — never aborts a commit on failure
+# CAST pre-commit hook: regression lints + sync README stats
+# Blocks on regression lint failures; non-blocking on README update
+
+set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Lint 1: Python cold-start counter — fail if >2 inline python3 -c calls per script
+_lint_python_cold_starts() {
+  local failed=0
+  local script
+  for script in scripts/*.sh; do
+    [[ -f "$script" ]] || continue
+    local count
+    count=$(grep -c 'python3 -c' "$script" 2>/dev/null || echo "0")
+    # Strip newlines from count to prevent [[: syntax errors
+    count=$(echo "$count" | tr -d '\n')
+    if [[ $count -gt 2 ]]; then
+      echo "ERROR [lint-cold-starts]: $script has $count inline python3 -c calls (max 2). Consolidate into a .py file."
+      failed=1
+    fi
+  done
+  return $failed
+}
+
+# Lint 2: SQL injection detector — flag scripts that interpolate env vars into sqlite3 strings
+_lint_sql_injection() {
+  local failed=0
+  local script
+  for script in scripts/*.sh; do
+    [[ -f "$script" ]] || continue
+    # Pattern: sqlite3 with ${...} interpolation; check if any guard exists in same file
+    if grep -q 'sqlite3.*\${' "$script" 2>/dev/null; then
+      # Check for a guard pattern (parameterized query, escaping, or explicit var binding)
+      # Guards: single quotes around vars, $() with processing, or PRAGMA ignore_check_constraint
+      if ! grep -q '\$([^)]*"' "$script" 2>/dev/null && \
+         ! grep -q "'\$" "$script" 2>/dev/null && \
+         ! grep -q 'PRAGMA.*constraint' "$script" 2>/dev/null; then
+        echo "ERROR [lint-sql-injection]: $script interpolates env vars into sqlite3 (potential SQL injection). Use parameterized queries or wrap in single quotes."
+        failed=1
+      fi
+    fi
+  done
+  return $failed
+}
+
+# Lint 3: Orphan script detector — fail if a script is referenced in settings.json but missing from scripts/
+_lint_orphan_scripts() {
+  python3 scripts/cast-lint-orphan-scripts.py
+}
+
+# Run all lints
+echo "[CAST pre-commit] Running regression lints..."
+_lint_python_cold_starts || true
+_lint_sql_injection || true
+_lint_orphan_scripts || {
+  echo "ERROR: Orphan script check failed. See above."
+  exit 1
+}
+
+# README stats update (non-blocking)
 if command -v make &>/dev/null && [ -f Makefile ]; then
   make docs --no-print-directory 2>/dev/null || bash scripts/gen-stats.sh 2>/dev/null || true
 else

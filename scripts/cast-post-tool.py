@@ -107,7 +107,7 @@ def part2_plan_manifest(tool_name: str, file_path: str) -> None:
     if "```json dispatch" in contents:
         msg = (
             f"[CAST-ORCHESTRATE] Plan file at {real_path} contains an Agent Dispatch Manifest. "
-            "Dispatch the `orchestrator` agent via the Agent tool with this plan file path. "
+            "Invoke the `/orchestrate` skill with this plan file path. "
             "Present the queue to the user for approval before executing any batches."
         )
         _hook_output(msg)

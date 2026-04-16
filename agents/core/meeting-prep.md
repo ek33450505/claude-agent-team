@@ -48,3 +48,21 @@ Keep your final response under **300 tokens**. Return your Status Block with mee
 - Never create or modify calendar events — read-only calendar access
 - Never fabricate meeting context
 - Status: DONE with count of meetings prepped and file path
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "meeting-prep",
+  "summary": "Prepared briefs for 3 meetings — saved to ~/.claude/briefings/meeting-prep-2026-04-16.md",
+  "concerns": [],
+  "files_changed": ["/Users/edkubiak/.claude/briefings/meeting-prep-2026-04-16.md"],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

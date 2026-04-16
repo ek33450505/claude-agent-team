@@ -71,7 +71,7 @@ When invoked:
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For Claude (orchestrator):** This plan contains an Agent Dispatch Manifest. Dispatch the `orchestrator` agent with this plan file path to execute all batches in dependency order. Do not implement inline — use the orchestrator.
+> **For Claude (orchestrating session):** This plan contains an Agent Dispatch Manifest. Invoke `/orchestrate [plan-file-path]` to execute all batches in dependency order. Do not implement inline — use the `/orchestrate` skill.
 
 **Goal:** [One sentence]
 
@@ -103,7 +103,21 @@ When invoked:
 - **Exact paths:** Never say "update the relevant file" — find the actual path.
 - **CAST agent files:** Agent definitions live in the repo at `agents/core/<name>.md` — always reference and modify the repo path, NOT the runtime copy at `~/.claude/agents/<name>.md`. `install.sh` syncs repo → runtime; editing the runtime copy directly leaves the repo out of sync.
 - **Small tasks:** Each task should be 15-30 minutes of work maximum.
-- **Plan complexity ceiling:** Cap plans at 6 batches maximum. If the work requires more, split into two sequential plans. Plans with more than 6 batches risk hitting the orchestrator turn ceiling (50 turns) before completion.
+- **Plan complexity ceiling:** Cap plans at 6 batches maximum. If the work requires more, split into two sequential plans. Plans with more than 6 batches risk hitting the session turn ceiling before completion.
+
+## How Manifest Execution Works
+
+When the planner writes a plan file to `~/.claude/plans/`, a PostToolUse hook (`cast-post-tool.py`) automatically detects the `json dispatch` block and injects a `[CAST-ORCHESTRATE]` directive into the main session's context. The directive instructs the main session to invoke `/orchestrate` with the plan file path. The `/orchestrate` skill then reads the manifest, presents batches to the user for approval, and fans out agents one batch at a time — all from the main session (which has full Agent tool access).
+
+The planner does NOT dispatch agents directly. It writes the plan and the hook pipeline handles the rest.
+
+**Flow summary:**
+1. Planner writes `~/.claude/plans/YYYY-MM-DD-feature.md` with a `json dispatch` block
+2. `cast-post-tool.py` PostToolUse hook fires on the Write event, detects the manifest, emits `[CAST-ORCHESTRATE]` directive
+3. Main session receives the directive and invokes `/orchestrate [plan-file-path]`
+4. `/orchestrate` skill reads the manifest, presents the batch queue to the user for approval
+5. User approves → skill dispatches each batch sequentially, fanning out parallel agents within each batch
+6. Results feed forward to the next batch; gates pause for user confirmation
 
 ## After Writing the Plan
 
@@ -176,8 +190,8 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
 - Include push as Batch 5 in every plan manifest
 
-**Optional agent-level metadata for orchestrator conflict detection:**
-- `"owns_files": ["absolute/path/to/file1.js", ...]` — files this agent will create or modify. Allows orchestrator to detect parallel agents touching the same file.
+**Optional agent-level metadata for conflict detection:**
+- `"owns_files": ["absolute/path/to/file1.js", ...]` — files this agent will create or modify. Allows the `/orchestrate` skill to detect parallel agents touching the same file.
 - `"depends_on": [3, 5]` — batch IDs this batch depends on (alternative to sequential ordering, used for sparse dependencies).
 - `"commit_repos": ["path1", "path2"]` — repos to commit to after this batch completes. Allows agents to dispatch commits to multiple repos from a single agent (e.g., backend + frontend changes in one batch). Format: absolute path or relative to project root.
 
@@ -239,4 +253,22 @@ When running in a pipeline (no human in the loop), never ask clarifying question
 
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "planner",
+  "summary": "Plan written to ~/.claude/plans/2026-04-16-feature-name.md — N tasks, M batches",
+  "concerns": [],
+  "files_changed": ["/Users/edkubiak/.claude/plans/2026-04-16-feature-name.md"],
+  "next_actions": ["orchestrate: invoke /orchestrate with the plan file path"]
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 

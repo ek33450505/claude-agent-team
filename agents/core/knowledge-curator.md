@@ -57,3 +57,21 @@ Keep your final response under **400 tokens**. Return your Status Block with vau
 - Always present plan before making changes
 - Preserve existing note content — only append links or update frontmatter
 - Status: DONE with vault stats summary
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "knowledge-curator",
+  "summary": "Vault health scan complete — 3 orphan notes linked, 1 MOC created",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

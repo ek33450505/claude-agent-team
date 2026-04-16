@@ -22,20 +22,36 @@ make test
 
 ---
 
+## Scope — Core vs Personal
+
+CAST v5.0+ distinguishes between **core** and **personal** content:
+
+- **Core** — shipped to all 2000+ clones. High review bar. Must be generic, trustworthy, and maintainer-agnostic.
+- **Personal** — maintainer-only overlay. Opt-in via `--personal` flag. Lower review burden; not shipped to clones.
+
+| File Path | Scope | Review Bar |
+|---|---|---|
+| `rules-core/` | Core | High — used by all clones |
+| `rules-personal/` | Personal | Standard — local-only |
+| `agents/core/` | Core | High — 29 shipped agents |
+| `agents/personal/` | Personal | Standard — maintainer-specific agents |
+| `skills/*/SKILL.md` | Core | High — generic skill |
+| `skills/*/SKILL-personal.md` | Personal | Standard — overlay content |
+
+**For contributors:** PRs targeting `rules-core/` or `agents/core/` should focus on generic, widely-useful features. Maintainer-specific enhancements belong in the personal overlay. Ask in the issue if you're unsure.
+
+---
+
 ## Adding a New Agent
 
 ### File location
 
-Agents live under `agents/<tier>/<name>.md`, where tier is one of:
+Agents live under `agents/<layer>/<name>.md`, where layer is one of:
 
-| Tier | Path | Purpose |
-|------|------|---------|
-| core | `agents/core/` | Always installed, essential to CAST |
-| extended | `agents/extended/` | Opt-in at install time |
-| productivity | `agents/productivity/` | Scheduling, writing, briefings |
-| professional | `agents/professional/` | Browser, QA, presentations |
-| orchestration | `agents/orchestration/` | Orchestrators, verifiers, auto-stagers |
-| specialist | `agents/specialist/` | DevOps, performance, SEO, linting |
+| Layer | Path | Scope | Notes |
+|---|---|---|---|
+| core | `agents/core/` | Core (all clones) | High review bar; always installed |
+| personal | `agents/personal/` | Personal (maintainer only) | Standard review; `--personal` flag required |
 
 ### Required frontmatter
 
@@ -158,6 +174,25 @@ git add README.md
 
 ---
 
+## Personal Overlay Setup (Maintainers Only)
+
+If you're the CAST maintainer and want to populate the personal layer:
+
+```bash
+# Create personal rules and agents (one-time)
+mkdir -p rules-personal/ agents/personal/
+cp my-custom-stack-context.md rules-personal/stack-context.md
+cp my-custom-identity.md rules-personal/engram-identity.md
+cp my-portfolio-agent.md agents/personal/portfolio-sync.md
+
+# Install with personal overlay
+bash install.sh --personal
+```
+
+The personal directories are `.gitignored` — they never ship to clones. Re-run `bash install.sh --personal` to sync after changes.
+
+---
+
 ## PR Checklist
 
 Before opening a pull request:
@@ -170,3 +205,4 @@ Before opening a pull request:
 - [ ] New routing pattern: test case added to `tests/route.bats`
 - [ ] No hardcoded paths — use `$HOME` or `~/` for user-relative paths
 - [ ] `CHANGELOG.md` updated for any user-visible change
+- [ ] **Scope check:** Core PRs (rules-core/, agents/core/) target generic, widely-useful changes

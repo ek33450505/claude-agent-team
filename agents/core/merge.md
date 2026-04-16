@@ -100,3 +100,21 @@ Always include:
 ## Response Budget
 Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "merge",
+  "summary": "Merged cast-worktree-abc123 into main via rebase+ff — branch and worktree cleaned up",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+

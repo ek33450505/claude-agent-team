@@ -68,6 +68,25 @@ Summary: [root cause identified, fix applied at file:line, regression test writt
 Files changed: [list all modified/created files]
 Concerns: [required if DONE_WITH_CONCERNS]
 Context needed: [required if NEEDS_CONTEXT — describe what information is missing]
+
+After the human-readable block above, also emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "debugger",
+  "summary": "Fixed null pointer in src/auth.ts:42 — regression test added",
+  "concerns": [],
+  "files_changed": [
+    "/absolute/path/to/src/auth.ts",
+    "/absolute/path/to/src/auth.test.ts"
+  ],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 ---
 
 ## Worktree Isolation

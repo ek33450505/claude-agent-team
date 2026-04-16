@@ -120,3 +120,21 @@ Default behavior (no push signal): commit only, show reminder to dispatch push a
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "commit",
+  "summary": "Committed: feat(auth): add JWT refresh token rotation (abc1234)",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": ["push: push committed changes to remote"]
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+

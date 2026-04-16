@@ -55,3 +55,21 @@ The parent session can dispatch the `merge` agent with that branch name to revie
 ## Response Budget
 Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "test-writer",
+  "summary": "Wrote test suite for src/auth.ts — 12 tests covering happy path, edge cases, error states",
+  "concerns": [],
+  "files_changed": ["/absolute/path/to/src/auth.test.ts"],
+  "next_actions": ["test-runner: run the new test suite"]
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+

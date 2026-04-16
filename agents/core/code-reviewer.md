@@ -55,6 +55,25 @@ Before the status block, always output a Work Log so the user can see what you a
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "code-reviewer",
+  "summary": "Reviewed 3 files — no critical issues; 1 warning noted",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+If status is `DONE_WITH_CONCERNS`, populate the `concerns` array with one string per concern.
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+
 ## ACI Reference
 
 **What to include:** files changed + 1-sentence description of what the change does.

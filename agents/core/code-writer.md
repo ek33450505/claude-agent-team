@@ -2,7 +2,7 @@
 name: code-writer
 description: >
   Implementation specialist for feature work, bug fixes, and planned changes.
-  Receives tasks from planner or orchestrator, writes production code following
+  Receives tasks from planner or orchestrating session, writes production code following
   project conventions, mandatorily chains code-reviewer after each logical unit,
   writes tests inline, and dispatches the commit agent when all units are complete.
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent
@@ -77,6 +77,22 @@ Summary: [what was implemented, which files, whether code-reviewer approved]
 Files changed: [explicit list]
 Concerns: [required if DONE_WITH_CONCERNS]
 Context needed: [required if NEEDS_CONTEXT]
+
+After the human-readable block above, also emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "code-writer",
+  "summary": "Implemented feature X — N files changed, code-reviewer approved",
+  "concerns": [],
+  "files_changed": ["/absolute/path/to/file.ts"],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 ---
 
 ## Worktree Isolation
@@ -134,13 +150,13 @@ Tests go in `src/hooks/useDebounce.test.ts`.
 - Changes >3 files: break into sequential batches in a plan ADM
 - When code-writer returns DONE_WITH_CONCERNS: read concerns before committing
 
-**Post-chain note (orchestrator dispatch):** When invoked by the orchestrator (plan-based dispatch), code-writer should NOT self-dispatch code-reviewer or commit. Instead, return `Status: DONE` and include a `## Recommended Next Agents` section:
+**Post-chain note (plan-based dispatch):** When invoked via an Agent Dispatch Manifest (plan-based dispatch), code-writer should NOT self-dispatch code-reviewer or commit. Instead, return `Status: DONE` and include a `## Recommended Next Agents` section:
 ```
 ## Recommended Next Agents
 - code-reviewer: review all changes in this unit
 - commit: commit the implementation
 ```
-The orchestrator handles chaining. Self-dispatch chains (steps 4 and 7) apply only when code-writer is invoked directly from the routing table — NOT from an orchestrator batch plan.
+The orchestrating session handles chaining. Self-dispatch chains (steps 4 and 7) apply only when code-writer is invoked directly from the routing table — NOT from a plan batch.
 
 ## Output Discipline
 

@@ -69,3 +69,21 @@ Keep your final response under **500 tokens**. Return your Status Block and key 
 - Always compare against a base ref
 - Check for missing validation on new params
 - Report consumer impact where detectable
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "api-contract",
+  "summary": "API contract review: no breaking changes found between HEAD~1 and HEAD",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

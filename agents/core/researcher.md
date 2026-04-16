@@ -170,3 +170,22 @@ After completing research, apply these dispatch rules before closing:
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "researcher",
+  "summary": "Research complete — recommendation: use Vitest over Jest; report at ~/.claude/reports/2026-04-16-vitest-vs-jest.md",
+  "concerns": [],
+  "files_changed": ["/Users/edkubiak/.claude/reports/2026-04-16-topic.md"],
+  "next_actions": []
+}
+```
+
+For read-only analysis with no written files, `files_changed` is `[]`.
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+

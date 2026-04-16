@@ -16,6 +16,14 @@ success() { printf "${GREEN}%s${NC}\n" "$1"; }
 warn()    { printf "${YELLOW}%s${NC}\n" "$1"; }
 error()   { printf "${RED}%s${NC}\n" "$1"; }
 
+# --- Flags ---
+INSTALL_PERSONAL=false
+for arg in "$@"; do
+    case "$arg" in
+        --personal) INSTALL_PERSONAL=true ;;
+    esac
+done
+
 # --- Paths ---
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
@@ -71,6 +79,16 @@ for agent_file in "$SCRIPT_DIR"/agents/core/*.md; do
     cp "$agent_file" "$CLAUDE_DIR/agents/$base"
     AGENT_COUNT=$((AGENT_COUNT + 1))
 done
+
+# Personal agent overlay (non-destructive — only adds files)
+if [ "$INSTALL_PERSONAL" = true ] && [ -d "$SCRIPT_DIR/agents/personal" ]; then
+    for agent_file in "$SCRIPT_DIR"/agents/personal/*.md; do
+        [ -f "$agent_file" ] || continue
+        base="$(basename "$agent_file")"
+        cp "$agent_file" "$CLAUDE_DIR/agents/$base"
+        AGENT_COUNT=$((AGENT_COUNT + 1))
+    done
+fi
 success "  $AGENT_COUNT agents installed"
 
 # --- Install commands ---
@@ -96,7 +114,7 @@ success "  $SKILL_COUNT skills installed"
 
 # --- Install rules (skip if destination exists) ---
 info "Installing rules..."
-for rule_file in "$SCRIPT_DIR"/rules/*; do
+for rule_file in "$SCRIPT_DIR"/rules-core/*; do
     [ -f "$rule_file" ] || continue
     base="$(basename "$rule_file")"
     dest_name="${base%.template}"
@@ -108,6 +126,22 @@ for rule_file in "$SCRIPT_DIR"/rules/*; do
         success "  Installed: $dest_name"
     fi
 done
+
+# Personal rules overlay (non-destructive — only adds files not already present)
+if [ "$INSTALL_PERSONAL" = true ] && [ -d "$SCRIPT_DIR/rules-personal" ]; then
+    for rule_file in "$SCRIPT_DIR"/rules-personal/*; do
+        [ -f "$rule_file" ] || continue
+        base="$(basename "$rule_file")"
+        dest_name="${base%.template}"
+        dest="$CLAUDE_DIR/rules/$dest_name"
+        if [ -f "$dest" ]; then
+            info "  Skipped (exists): $dest_name"
+        else
+            cp "$rule_file" "$dest"
+            success "  Installed (personal): $dest_name"
+        fi
+    done
+fi
 
 # --- Install scripts (chmod +x) ---
 info "Installing scripts..."
@@ -258,3 +292,6 @@ printf "Next steps:\n"
 printf "  1. Run ${BOLD}cast status${NC} to verify\n"
 printf "  2. Run ${BOLD}cast doctor${NC} for health check\n"
 printf "  3. Run ${BOLD}cast agents${NC} to see installed agents\n\n"
+if [ "$INSTALL_PERSONAL" = false ]; then
+    printf "  Tip: Run ${BOLD}bash install.sh --personal${NC} to also install personal overlay files (portfolio-sync, personal rules).\n\n"
+fi

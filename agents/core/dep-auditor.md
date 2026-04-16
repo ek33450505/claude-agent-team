@@ -69,3 +69,21 @@ Keep your final response under **400 tokens**. Return your Status Block and key 
 - Read-only analysis + CLI audit commands only
 - Pipe all output through `head` or `tail` to limit size
 - Report risk level explicitly
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "dep-auditor",
+  "summary": "Dependency audit complete — risk level LOW, no CVEs found",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

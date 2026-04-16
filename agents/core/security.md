@@ -87,6 +87,25 @@ bash ~/.claude/scripts/cast-memory-write.sh "security" "feedback" "<finding-name
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "security",
+  "summary": "Security review complete — no critical findings; 1 medium: missing rate limit on /api/auth",
+  "concerns": ["Missing rate limiting on POST /api/auth — add express-rate-limit middleware"],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+This agent is read-only; `files_changed` is always `[]`.
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+
 ## Worktree Isolation
 
 This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.

@@ -259,9 +259,10 @@ PYEOF
   fi
 fi
 
-# ── Step 5: Auto-resume detection for orchestrator context-limit stops ────────
-# Fires when an orchestrator agent stops mid-run without completing all batches.
-# Writes a resume-request JSON to ~/.claude/cast/resume-queue/ and notifies.
+# ── Step 5: Auto-resume detection (DISABLED — orchestrator agent retired 2026-04-16) ─
+# The orchestrator agent was retired in Task 2.1. Plan execution now runs via the
+# /orchestrate skill in the main session. This block will never fire because no
+# subagent named "orchestrator" is dispatched anymore. Kept for reference only.
 CKPT_LOG="${HOME}/.claude/cast/orchestrator-checkpoint.log"
 
 if echo "$AGENT_NAME" | grep -qiE "orchestrator"; then

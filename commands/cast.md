@@ -27,6 +27,6 @@ Show:
 | `planner` | sonnet | `push` | haiku |
 | `security` | sonnet | `test-runner` | haiku |
 | `merge` | sonnet | `bash-specialist` | sonnet |
-| `researcher` | sonnet | `orchestrator` | sonnet |
+| `researcher` | sonnet | `perf-sentinel` | sonnet |
 | `docs` | sonnet | `morning-briefing` | sonnet |
 | `devops` | sonnet | | |

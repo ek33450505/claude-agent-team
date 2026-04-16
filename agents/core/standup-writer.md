@@ -55,3 +55,21 @@ Keep your final response under **300 tokens**. Return your Status Block with sta
 - Total standup under 200 words
 - Do not embellish or editorialize
 - Status: DONE with file path
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "standup-writer",
+  "summary": "Standup written for 2026-04-16 — saved to ~/.claude/reports/standups/2026-04-16.md",
+  "concerns": [],
+  "files_changed": ["/Users/edkubiak/.claude/reports/standups/2026-04-16.md"],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

@@ -56,3 +56,22 @@ If only minor concerns (APPROVED_WITH_CONCERNS): do NOT dispatch debugger — no
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "frontend-qa",
+  "summary": "Reviewed 2 .tsx files — APPROVED; 1 warning: missing loading state test",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+If status is `DONE_WITH_CONCERNS`, populate `concerns` with one string per issue found.
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+

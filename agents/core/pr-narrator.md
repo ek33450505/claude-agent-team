@@ -63,3 +63,21 @@ Keep your final response under **400 tokens**. Return your Status Block with PR 
 - Focus on user/business impact, not implementation details
 - Never include code snippets in the summary
 - Status: DONE with PR count and summary length
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "pr-narrator",
+  "summary": "Narrated 3 PRs — 450-word stakeholder summary covering features, bug fixes, and infra",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

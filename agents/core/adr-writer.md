@@ -61,3 +61,21 @@ Keep your final response under **300 tokens**. Return your Status Block with ADR
 - Always include Context, Decision, and Consequences sections
 - Reference prior ADRs when relevant
 - Status: DONE with ADR path and number
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "adr-writer",
+  "summary": "Wrote ADR-NNNN: [title] at docs/adr/ADR-NNNN-title.md",
+  "concerns": [],
+  "files_changed": ["/absolute/path/to/docs/adr/ADR-NNNN-title.md"],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

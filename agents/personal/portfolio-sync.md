@@ -59,3 +59,21 @@ Keep your final response under **300 tokens**. Return your Status Block with rep
 - Only update factual numbers and lists
 - If a stat can't be determined, leave unchanged and note in report
 - Status: DONE with repos updated count
+
+## Structured Status Output
+
+After your human-readable Status block, also emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "portfolio-sync",
+  "summary": "Synced N portfolio repos; M READMEs updated",
+  "concerns": [],
+  "files_changed": ["/absolute/path/to/repo/README.md"],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.

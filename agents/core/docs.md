@@ -148,3 +148,25 @@ Truncate all Bash command output to the last 50 lines using `| tail -50`. Never 
 ## Response Budget
 Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload:
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "docs",
+  "summary": "Updated README and CHANGELOG — added feature section, bumped version ref",
+  "concerns": [],
+  "files_changed": [
+    "/absolute/path/to/README.md",
+    "/absolute/path/to/CHANGELOG.md"
+  ],
+  "next_actions": []
+}
+```
+
+For report outputs, use the report file path (e.g., `~/.claude/reports/chain-2026-04-16-14-00.md`).
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+

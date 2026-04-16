@@ -209,7 +209,7 @@ Exit code semantics: exit 0 = allow, exit 2 = hard-block. Never use exit 1 in pr
 
 ## Section 3 — Agent Dispatch Manifest Format
 
-An Agent Dispatch Manifest is a declarative execution plan embedded in a plan `.md` file under `~/.claude/plans/`. It tells the `orchestrator` agent which specialist agents to run, in what order, and whether they can run in parallel.
+An Agent Dispatch Manifest is a declarative execution plan embedded in a plan `.md` file under `~/.claude/plans/`. It tells the `/orchestrate` skill which specialist agents to run, in what order, and whether they can run in parallel.
 
 ### 3.1 Location and Detection
 
@@ -223,7 +223,7 @@ A manifest lives inside a `## Agent Dispatch Manifest` section in a plan file. T
 ```
 ````
 
-When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plans/` path that contains a `json dispatch` block, it injects a `[CAST-ORCHESTRATE]` directive telling Claude to dispatch the `orchestrator` agent.
+When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plans/` path that contains a `json dispatch` block, it injects a `[CAST-ORCHESTRATE]` directive telling Claude to invoke the `/orchestrate` skill with the plan file path.
 
 ### 3.2 Full Field Reference
 
@@ -398,13 +398,13 @@ dispatch `code-reviewer` agent (haiku) to review. Do not skip this step.
 **Format injected by hook:**
 ```
 [CAST-ORCHESTRATE] Plan file at <path> contains an Agent Dispatch Manifest.
-Dispatch the `orchestrator` agent via the Agent tool with this plan file path.
+Invoke the `/orchestrate` skill with this plan file path.
 Present the queue to the user for approval before executing any batches.
 ```
 
 **Trigger:** `post-tool-hook.sh` detects a `json dispatch` block in a newly written `.md` file under a `/plans/` path
 
-**What Claude must do:** Dispatch the `orchestrator` agent with the plan file path. The orchestrator presents the queue to the user for approval before executing any batches. Do not execute the manifest directly.
+**What Claude must do:** Invoke the `/orchestrate` skill with the plan file path. The skill presents the queue to the user for approval before executing any batches. Plan execution runs in the main session — do not dispatch a separate orchestrator subagent.
 
 ### 4.5 `[CAST-HALT]`
 
