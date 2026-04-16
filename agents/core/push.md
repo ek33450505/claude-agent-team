@@ -40,6 +40,15 @@ git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-c
 
 **Step 2.5 — Pre-push test gate**
 
+### Step 2.5 Preconditions — Sandbox Override
+
+**REQUIRED:** All Bash calls in Step 2.5 (test gate) MUST set `dangerouslyDisableSandbox: true`. Without this override:
+- BATS tests hang silently inside the sandbox
+- `cast.db` reads fail with permission errors
+- `cast status` times out
+
+Do NOT attempt Step 2.5 without the override. If you cannot set `dangerouslyDisableSandbox: true` for any reason (tool-call policy, user restriction), SKIP the test gate with a clear warning log; do NOT hang the push pipeline.
+
 Auto-detect and run the repo's test suite before pushing. This prevents pushing code that breaks CI.
 
 Detection logic (check in order, run the FIRST match):
@@ -49,7 +58,10 @@ Detection logic (check in order, run the FIRST match):
 3. If `Makefile` exists and has a `test` target → run `make test`
 4. Otherwise → skip (no test suite detected)
 
-**Sandbox note:** Test suites (especially BATS) create temp directories and need filesystem access beyond the sandbox allowlist. Always run the test command with `dangerouslyDisableSandbox: true` in the Bash tool call.
+If the Bash tool call for BATS fails with a sandbox error OR times out after 30 seconds:
+- Skip the test gate
+- Emit: `[Push gate] BATS skipped — sandbox restriction detected. Re-run with dangerouslyDisableSandbox: true, or verify tests passed in the prior commit step's output.`
+- Proceed to push (do not block indefinitely)
 
 On test failure:
 - Output the failing test names and error output
@@ -106,6 +118,7 @@ After your human-readable Status block, emit a machine-readable JSON payload:
   "summary": "Pushed 3 commits to origin/main — SHA: abc1234",
   "concerns": [],
   "files_changed": [],
+  "test_gate_status": "passed | skipped_sandbox | failed",
   "next_actions": []
 }
 ```

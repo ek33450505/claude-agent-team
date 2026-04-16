@@ -49,10 +49,23 @@ This enables direct commit invocation (without orchestrator) while still encoura
 When invoked:
 1. Run the Approval Gate above using the task_id provided in the prompt
 2. Run `git status` to confirm there are staged changes
-2. Run `git diff --staged` to understand what is being committed
-3. Write a commit message following the conventions below
-4. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` (the inline env var bypasses the CAST PreToolUse hook)
-5. Confirm success and show the commit hash
+3. Run `git diff --staged` to understand what is being committed
+
+### Step 2.5 — Post-staging scope check
+
+After staging, run `git status --short` and inspect remaining lines.
+
+- If any ` M ` (modified-not-staged) or ` D ` (deleted-not-staged) lines remain that appear related to the current work scope:
+  - **Do NOT auto-stage them** — never stage without explicit user intent
+  - List them explicitly in your response
+  - Emit `Status: DONE_WITH_CONCERNS` with concern: "X files in scope were not staged — verify the caller intended a partial commit"
+  - Include counts in the Status block: `Files staged: N` and `Files unstaged (in-scope): M`
+- If no residual lines exist, or all residual lines are clearly out of scope (unrelated directories, transient artifacts like `node_modules/`, `dist/`, `.cache/`, `.claude/worktrees/`):
+  - Proceed normally with `Status: DONE`
+
+4. Write a commit message following the conventions below
+5. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` (the inline env var bypasses the CAST PreToolUse hook)
+6. Confirm success and show the commit hash
 
 ## Commit Message Format
 
@@ -124,6 +137,10 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 
 After your human-readable Status block, emit a machine-readable JSON payload:
 
+The Status block MUST include these counts:
+- `Files staged: N` — count of files included in this commit
+- `Files unstaged (in-scope): M` — count of in-scope files NOT staged (or "none detected")
+
 ```json status
 {
   "schema_version": "1.0",
@@ -132,6 +149,8 @@ After your human-readable Status block, emit a machine-readable JSON payload:
   "summary": "Committed: feat(auth): add JWT refresh token rotation (abc1234)",
   "concerns": [],
   "files_changed": [],
+  "files_staged_count": null,
+  "files_unstaged_in_scope_count": null,
   "next_actions": ["push: push committed changes to remote"]
 }
 ```
