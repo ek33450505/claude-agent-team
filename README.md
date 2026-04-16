@@ -11,9 +11,9 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**CAST v6.0 is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. 29 core specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
+**CAST v6.0 is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability. A team of specialist agents + peer-to-peer messaging + force-directed swarm visualization + local model fallback.
 
-**[CAST Framework](https://castframework.dev)** | **[Cloud-native deployment guide](docs/swarm-deployment.md)**
+**[CAST Framework](https://castframework.dev)**
 
 ---
 
@@ -47,7 +47,7 @@ Agent Teams (Anthropic Native)
 ```
 
 <p align="center">
-  <img src="docs/cast-architecture-v5.svg" alt="CAST v5.0 swarm architecture" />
+  <img src="docs/cast-architecture.svg" alt="CAST swarm architecture" />
 </p>
 
 ### Where CAST extends Agent Teams
@@ -96,7 +96,7 @@ bash install.sh
 
 ## Personal Overlay — Layered Configuration
 
-CAST ships in **two layers:** a generic `core` layer (29 agents, 11 skills, rules templates) safe for 2000+ clones, and an optional `personal` overlay for maintainer-specific content.
+CAST ships in **two layers:** a generic `core` layer (specialist agents + skills + rules templates) safe for 2000+ clones, and an optional `personal` overlay for maintainer-specific content.
 
 **Default behavior:**
 ```bash
@@ -116,7 +116,7 @@ Installs both layers — personal files are merged on top of core into `~/.claud
 |---|---|---|
 | `rules-core/` | Generic CAST setup, stack-reference skill, shell/python/typescript conventions | Always |
 | `rules-personal/` | Maintainer's project catalog, identity traits, journal settings, custom config.sh | Optional (--personal flag) |
-| `agents/core/` | 29 specialist agents (code-writer, debugger, planner, etc.) | Always |
+| `agents/core/` | Specialist agents (code-writer, debugger, planner, etc.) | Always |
 | `agents/personal/` | Maintainer-specific agents (e.g., portfolio-sync) | Optional (--personal flag) |
 
 **Why the split?**
@@ -191,7 +191,7 @@ Under the hood:
 
 | Feature | What It Shows |
 |---|---|
-| **Agent Force Graph** | 29 core agents + task satellites, gravity physics, live updates |
+| **Agent Force Graph** | Core agents + task satellites, gravity physics, live updates |
 | **Swarm Sessions** | Active swarms, teammates, task assignments, peer messages |
 | **Worktree Isolation** | Per-teammate file ownership, no write conflicts |
 | **Token Heatmap** | Per-agent token spend, cost trends, local vs Claude |
@@ -208,7 +208,7 @@ npm run dev    # Vite :5173 + Express :3001
 
 ## Agent Roster
 
-29 core specialists across 4 categories, with optional personal overlay. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
+Core specialists across 4 categories, with optional personal overlay. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
 
 **New in v5.0:** Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
 
@@ -262,7 +262,7 @@ npm run dev    # Vite :5173 + Express :3001
 | `learning-scout` | sonnet | high | Tech topic research and resource curation to Obsidian |
 | `portfolio-sync` | haiku | low | Syncs showcase repo READMEs with actual project stats |
 
-**Model tiering:** 20 core agents on Haiku ($1/MTok), 9 on Sonnet ($3/MTok). This 25-40% cost savings scales across the swarm.
+**Model tiering:** Most lightweight agents run on Haiku ($1/MTok); reasoning-heavy agents on Sonnet ($3/MTok). This cost savings scales across the swarm.
 
 **MCP integrations:** Todoist (task-triage), Google Calendar (meeting-prep), Gmail (email-drafter), Obsidian (knowledge-curator, learning-scout).
 
@@ -270,33 +270,22 @@ npm run dev    # Vite :5173 + Express :3001
 
 ## Token Efficiency & Cost Optimization
 
-CAST v5.0 uses five optimization layers:
+CAST uses multiple optimization layers to reduce token spend without sacrificing output quality:
 
 | Layer | Impact |
 |---|---|
-| **Model tiering** | Haiku for reviews/commits (high-frequency), Sonnet for writing/planning | 3x cost reduction on lightweight tasks |
-| **Response budgets** | Enforced token limits per agent: 300 (lightweight), 800 (medium), 2,000 (heavy) | Prevents context bloat |
-| **Ollama contractor** | Cheap agents route to local codellama/deepseek-coder; fallback to Claude if unavailable | 40-60% cost drop for local tasks |
-| **Orchestrator preamble tiers** | Full context for complex agents, minimal for lightweight agents | ~80 tokens saved per dispatch |
-| **Output compression** | Responses summarized in <100 words before next batch | Prevents window bloat |
+| **Model tiering** | Haiku for reviews/commits (high-frequency), Sonnet for writing/planning — 3x cost reduction on lightweight tasks |
+| **Response budgets** | Enforced token limits per agent: 300 (lightweight), 800 (medium), 2,000 (heavy) — prevents context bloat |
+| **Ollama contractor** | Cheap agents route to local codellama/deepseek-coder; fallback to Claude if unavailable — 40-60% cost drop for local tasks |
+| **Orchestrate skill preamble tiers** | Full context for complex agents, minimal for lightweight agents — ~80 tokens saved per dispatch |
+| **Output compression** | Responses summarized in <100 words before next batch — prevents window bloat |
+| **Laconic Mode** | `/laconic [lite\|full\|ultra\|off]` — 15-25% output reduction via terse formatting (3 intensity levels) |
+| **RTK Hook** | `scripts/cast-rtk-install.sh` — 60-89% compression on tool outputs; optional install |
+| **Context Audit** | `scripts/audit-context-size.sh` — measures always-loaded context; warns if >500 lines |
+| **Compact Discipline** | Auto-trigger at 40 tool calls/session — suggests `/compact` via reminder hook |
+| **Thinking Budgets** | `config/thinking-budgets.json` — per-agent extended thinking tiers (0–8192 tokens) |
 
 **Net result:** ~30-50% reduction in swarm token spend vs. naive multi-agent dispatch.
-
----
-
-## Token Optimization (v5.0+)
-
-Beyond cost tiering, CAST v5.0 introduces five new optimization features to reduce token consumption:
-
-| Feature | Usage | Impact |
-|---|---|---|
-| **Laconic Mode** | `/laconic [lite\|full\|ultra\|off]` | 15-25% output reduction via terse formatting (3 intensity levels) |
-| **RTK Hook** | `scripts/cast-rtk-install.sh` | 60-89% compression on tool outputs; optional install |
-| **Context Audit** | `scripts/audit-context-size.sh` | Measures always-loaded context; warns if >500 lines (rules slimmed by 95 lines) |
-| **Compact Discipline** | Auto-trigger at 40 tool calls/session | Suggests `/compact` via reminder hook + best practices skill |
-| **Thinking Budgets** | `config/thinking-budgets.json` | Per-agent extended thinking tiers (0–8192 tokens); prevents wasteful defaults |
-
-**Combined:** These optimizations reduce total session token spend by 20-35% without sacrificing output quality.
 
 ---
 
@@ -501,37 +490,12 @@ bash scripts/cast-memory-backup.sh
 
 ---
 
-## Dashboard
-
-[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) v5.0 — React 19 + Vite + Express observability UI.
-
-| Page | What It Shows |
-|---|---|
-| `/constellation` | Force-directed agent graph + task satellites (NEW v5.0) |
-| `/activity` | Live swarm spawn timeline, hook events, peer messages (NEW v5.0) |
-| `/sessions` | Session list with swarm affiliation and compaction markers |
-| `/analytics` | Token spend by agent + model (Claude vs Ollama), trends |
-| `/agents` | Agent roster status, last active, run count per teammate |
-| `/hooks` | Hook health: fired/blocked/failed counts per event type |
-| `/memory` | Per-agent MEMORY.md viewer + FTS5 search |
-| `/token-spend` | Budget burn rate, cost trends, local vs cloud split |
-| `/db` | Raw cast.db explorer |
-
-**Start the dashboard:**
-
-```bash
-cd ~/Projects/personal/claude-code-dashboard
-npm run dev    # Vite :5173 + Express :3001
-```
-
----
-
 ## Project Structure
 
 ```
 claude-agent-team/
   agents/
-    core/                        ← 29 core agent definitions
+    core/                        ← core agent definitions
     personal/                    ← optional: maintainer-specific agents
   config/
     cast-litellm.yaml            ← LiteLLM proxy config
@@ -543,8 +507,7 @@ claude-agent-team/
     project-catalog.md           ← maintainer's project list
     engram-identity.md           ← personal traits and context
   docs/
-    cast-architecture-v5.svg     ← swarm topology diagram
-    swarm-deployment.md          ← production guide
+    cast-architecture.svg        ← swarm topology diagram
     articles/                    ← feature audit docs (NEW v5.0)
   schemas/                       ← JSON schemas (NEW v5.0)
     status-block.schema.json     ← CAST agent status response contract
@@ -625,7 +588,7 @@ cast tidy --dry-run  # preview what would be removed
 
 ## Test Suite
 
-**409 BATS tests** across 5 directories. 0 failures. Coverage includes:
+**Hundreds of BATS tests** across 5 directories (see stats block for current count). 0 failures. Coverage includes:
 
 - Core hook scripts (13 hooks)
 - Swarm bootstrap and lifecycle (NEW v5.0)
@@ -649,22 +612,7 @@ bats tests/scripts/
 
 ## Version History
 
-| Version | Highlights |
-|---|---|
-| v1 | Manual dispatch, no hooks, no memory |
-| v2 | 42 agents, routing table, regex dispatch |
-| v3.0 | 16 agents, model-driven dispatch, 4 hooks, cast.db |
-| v3.1 | Async hooks, worktree isolation, per-agent memory |
-| v3.3 | Audit hardening: WAL mode, SQL injection fixes, 324 BATS tests |
-| v3.4 | Security hardening: path injection fix, frontend-qa agent, portability |
-| v4.0 | Hook system rewrite (15 → 13 hooks), CLI slim, drop 5 empty DB tables |
-| v4.1 | Native adoption: native statusline cost display, migration to sandbox rules |
-| v4.2 | `cast dash` TUI dashboard, `cast tidy` cleanup, CHEATSHEET |
-| v4.3 | Memory persistence: FTS5, relevance scoring, shared pool, session distiller, MCP server |
-| v4.4 | Temporal validity on agent_memories |
-| v4.5 | Token efficiency: model tiering (11 Haiku/6 Sonnet), response budgets, local worktree isolation, Ollama fallback, parallel dual-worktree execution |
-| v4.6 | Stream-JSON observability, advanced hooks (HTTP/Prompt/Agent), Channel Event Bus, LiteLLM proxy, plugin packaging |
-| v5.0 | **Agent Teams Integration:** swarm bootstrap from YAML, peer gossip protocol, force-directed Constellation dashboard, TeammateIdle/TaskCreated/TaskCompleted hooks, cast.db v8 (swarm_sessions/teammate_runs/teammate_messages), Ollama contractor hardening, production quality gates |
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 ---
 

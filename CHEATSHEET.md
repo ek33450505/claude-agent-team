@@ -16,15 +16,17 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `/devops` | Dispatch devops agent for CI/CD, Docker, and infrastructure |
 | `/docs` | Dispatch docs agent to update documentation |
 | `/doctor` | Run comprehensive CAST system health check |
+| `/laconic` | Toggle laconic terse-output mode. Usage: /laconic [lite|full|ultra|off] |
 | `/merge` | Dispatch merge agent for git merges, rebases, conflict resolution |
 | `/morning` | Dispatch morning-briefing agent to generate today's briefing |
-| `/orchestrate` | Execute a CAST plan via the orchestrate skill |
+| `/orchestrate` | Execute a CAST plan via the /orchestrate skill (main session dispatches sub-agents inline) |
 | `/plan` | Dispatch planner agent to create an implementation plan |
 | `/push` | Dispatch push agent to push committed work to remote |
 | `/research` | Dispatch researcher agent for technical research |
 | `/review` | Review code changes with size-appropriate strategy |
 | `/roadmap` | Resume the CAST backlog from research/cast-future-roadmap.md |
 | `/secure` | Dispatch security agent for a security review |
+| `/ship` | Run ship workflow: tests → CI check → commit → push → journal |
 | `/test` | Dispatch test-writer agent to write tests |
 
 ---
@@ -33,23 +35,22 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 
 | Agent | Model | Effort | Key Tools | Description |
 |---|---|---|---|---|
-| bash-specialist | sonnet | medium | Bash, Edit, Grep | Shell scripting and BATS test specialist |
+| bash-specialist | haiku | low | Bash, Edit, Grep | Shell scripting and BATS test specialist |
 | code-reviewer | haiku | low | Bash, Grep, Read | Post-change code review |
 | code-writer | sonnet | high | Edit, Write, Agent | Primary code implementation agent |
 | commit | haiku | low | Bash, Read | Semantic git commit creation |
 | debugger | sonnet | high | Edit, Bash, Agent | Error investigation and fix |
-| devops | sonnet | medium | Bash, Edit, Grep | CI/CD, Docker, infrastructure |
-| docs | sonnet | medium | Write, Edit, WebSearch | Documentation updates |
+| devops | haiku | low | Bash, Edit, Grep | CI/CD, Docker, infrastructure |
+| docs | haiku | low | Write, Edit, WebSearch | Documentation updates |
 | frontend-qa | haiku | low | Bash, Grep, Read | Frontend quality assurance |
-| merge | sonnet | medium | Bash, Edit, Grep | Git merge, rebase, conflict resolution |
-| morning-briefing | sonnet | medium | Bash, Write, Grep | Daily morning briefing orchestrator |
-| orchestrator | sonnet | high | Agent, TaskCreate | Plan executor, batch dispatcher |
+| merge | haiku | low | Bash, Edit, Grep | Git merge, rebase, conflict resolution |
+| morning-briefing | haiku | low | Bash, Write, Grep | Daily morning briefing orchestrator |
 | planner | sonnet | high | Read, Write, Grep | Implementation plan creation |
 | push | haiku | low | Bash, Read | Push commits to remote repository |
 | researcher | sonnet | high | WebFetch, WebSearch | Deep technical research and analysis |
 | security | sonnet | high | Read, Grep, Bash | Security audit and review |
 | test-runner | haiku | low | Bash, Read, Glob | Run test suites and report results |
-| test-writer | sonnet | high | Edit, Write, Bash | Write tests for code changes |
+| test-writer | haiku | low | Edit, Write, Bash | Write tests for code changes |
 
 ---
 
@@ -62,7 +63,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | freeze-mode | Read-only session, no file modifications allowed | Yes |
 | git-activity | Scan project repos for yesterday's git activity | No |
 | merge | Git merge, rebase, and conflict resolution | Yes |
-| orchestrate | Execute a CAST plan by dispatching the orchestrator | Yes |
+| orchestrate | Execute a CAST plan via the /orchestrate skill (main session dispatches sub-agents inline) | Yes |
 | plan | Write a structured plan with Agent Dispatch Manifest | Yes |
 | wizard | Multi-step workflow with human-approval gates | Yes |
 
@@ -108,7 +109,7 @@ These directives appear in hook-injected context and must be followed immediatel
 - **`[CAST-DISPATCH]`** -- Dispatch the named agent via the Agent tool. Pass the user's full prompt. Do NOT handle inline.
 - **`[CAST-CHAIN]`** -- After the primary agent completes, dispatch the listed agents in sequence. No confirmation needed.
 - **`[CAST-REVIEW]`** -- Dispatch code-reviewer (haiku) after completing the current logical unit of changes.
-- **`[CAST-DISPATCH-GROUP: <group-id>]`** -- Auto-generate an Agent Dispatch Manifest from the payload JSON. Pass to orchestrator immediately with no approval gate.
+- **`[CAST-DISPATCH-GROUP: <group-id>]`** -- Auto-generate an Agent Dispatch Manifest from the payload JSON. Invoke the /orchestrate skill immediately with the plan file path. Do not delegate to an orchestrator agent.
 
 ---
 
