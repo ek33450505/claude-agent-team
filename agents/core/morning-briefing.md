@@ -34,12 +34,59 @@ Collect all fragments, then pass them to the briefing-writer skill to assemble t
 date +%Y-%m-%d && date "+%A, %B %d %Y"
 ```
 
-### Step 2: Gather data
+### Step 2: Fetch weather
+
+Fetch the current NWS forecast for Upper Arlington, OH and format it as a markdown fragment.
+If the fetch or parse fails at any point, emit the fallback note and continue — do not abort.
+
+```bash
+WEATHER_RESPONSE=$(curl -s -m 10 \
+  -H "User-Agent: CAST/1.0 (ek33450505@gmail.com)" \
+  "https://api.weather.gov/gridpoints/ILN/83,83/forecast" 2>/dev/null || echo "CURL_ERROR")
+
+if [[ "${WEATHER_RESPONSE}" == "CURL_ERROR" || "${WEATHER_RESPONSE}" =~ ^\<\!DOCTYPE ]]; then
+  echo "## Weather — Upper Arlington, OH"
+  echo "*Weather data unavailable — NWS API unreachable*"
+else
+  echo "${WEATHER_RESPONSE}" | python3 -c '
+import json, sys
+from datetime import datetime
+
+try:
+    data = json.loads(sys.stdin.read())
+    periods = data.get("properties", {}).get("periods", [])[:3]
+    if not periods:
+        raise ValueError("no periods")
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M ET")
+    lines = ["## Weather — Upper Arlington, OH", f"*Updated: {ts}*", ""]
+    for p in periods:
+        name = p.get("name", "Unknown")
+        temp = p.get("temperature", "N/A")
+        unit = p.get("temperatureUnit", "F")
+        detail = p.get("detailedForecast", "No details available")
+        wind_speed = p.get("windSpeed", "Calm")
+        wind_dir = p.get("windDirection", "--")
+        precip = (p.get("probabilityOfPrecipitation") or {}).get("value") or 0
+        lines.append(f"### {name} — {temp}\u00b0{unit}")
+        lines.append(detail)
+        lines.append(f"- Wind: {wind_speed} {wind_dir}")
+        lines.append(f"- Precipitation: {precip}%")
+        lines.append("")
+    print("\n".join(lines), end="")
+except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+    print("## Weather — Upper Arlington, OH\n*Weather data unavailable — parse error*", end="")
+' 2>/dev/null || echo -e "## Weather — Upper Arlington, OH\n*Weather data unavailable — parse error*"
+fi
+```
+
+Collect the output as a markdown fragment titled `## Weather — Upper Arlington, OH`.
+
+### Step 3: Gather data
 
 1. **git-activity** — Scan project repos for yesterday's commits (cross-platform)
 2. **action-items** — Grep meeting notes and TODOs for open checkboxes (cross-platform)
 
-### Step 3: CAST system intelligence
+### Step 4: CAST system intelligence
 
 Run these bash queries to enrich the briefing:
 
@@ -81,11 +128,11 @@ sqlite3 ~/.claude/cast.db \
    LIMIT 5;" 2>/dev/null
 ```
 
-Collect all output from Step 3 as a single markdown fragment titled `## CAST Intelligence`.
+Collect all output from Step 4 as a single markdown fragment titled `## CAST Intelligence`.
 
-### Step 4: Assemble and write
+### Step 5: Assemble and write
 
-Pass all fragments (Steps 2 and 3) to the **briefing-writer** skill instructions to assemble
+Pass all fragments (Steps 2, 3, and 4) to the **briefing-writer** skill instructions to assemble
 the final briefing file at:
 `~/.claude/briefings/YYYY-MM-DD-morning.md`
 
