@@ -202,6 +202,73 @@ for attempt in range(3):
 PYEOF
 fi
 
+# ── Step 2.5: Quality gate logging ──────────────────────────────────────────
+# When a gate agent (code-reviewer, test-runner, security) finishes, extract its
+# Status line and insert a row into quality_gates for dashboard observability.
+#   DONE                 → pass
+#   DONE_WITH_CONCERNS   → warn
+#   BLOCKED              → block
+#   NEEDS_CONTEXT        → warn
+# Other agents are skipped.
+# Export the full agent output up-front — Step 3.5 (truncation detection)
+# exports it again below; this earlier export lets quality-gate logging read it.
+export CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+
+if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+  case "$AGENT_NAME" in
+    code-reviewer|test-runner|security)
+      export CAST_QG_GATE_TYPE="$(case "$AGENT_NAME" in
+        code-reviewer) echo "code_review" ;;
+        test-runner)   echo "test_run" ;;
+        security)      echo "security_scan" ;;
+      esac)"
+      python3 - <<'PYEOF' 2>>"${HOME}/.claude/logs/hook-errors.log" || true
+import sqlite3, os, re
+
+db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
+agent = os.environ.get('CAST_STOP_AGENT', '')
+sess  = os.environ.get('CAST_STOP_SESSION', '')
+out   = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
+gtype = os.environ.get('CAST_QG_GATE_TYPE', 'code_review')
+
+if not agent or not db:
+    raise SystemExit(0)
+
+# Extract Status line from last ~40 lines of output
+tail = '\n'.join(out.splitlines()[-40:]) if out else ''
+m = re.search(r'Status:\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)', tail)
+if not m:
+    raise SystemExit(0)
+
+status = m.group(1)
+result = {
+    'DONE': 'pass',
+    'DONE_WITH_CONCERNS': 'warn',
+    'BLOCKED': 'block',
+    'NEEDS_CONTEXT': 'warn',
+}.get(status, 'warn')
+
+# Grab feedback: the "Summary:" line if present, else first 200 chars of tail
+fm = re.search(r'Summary:\s*(.+)', tail)
+feedback = (fm.group(1).strip() if fm else tail.strip())[:500]
+
+try:
+    conn = sqlite3.connect(db, timeout=5)
+    conn.execute(
+        'INSERT INTO quality_gates (session_id, agent, gate_type, gate_result, feedback) '
+        'VALUES (?, ?, ?, ?, ?)',
+        (sess, agent, gtype, result, feedback),
+    )
+    conn.commit()
+    conn.close()
+except Exception:
+    try: conn.close()
+    except Exception: pass
+PYEOF
+      ;;
+  esac
+fi
+
 # ── Step 3: Turn ceiling checkpoint ──────────────────────────────────────────
 if [ "$HAS_TURN_CEILING" = "1" ]; then
   mkdir -p "$TURN_CEILING_DIR" 2>/dev/null || true
