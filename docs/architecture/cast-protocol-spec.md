@@ -61,7 +61,7 @@ Recommended agents:
 Required fields: `Status`, `Summary`, `Concerns`
 Optional fields: `Recommended agents` — include only when actionable follow-up is warranted
 
-The `Recommended agents:` subsection lists the exact agent names (matching entries in the agent registry) and a specific reason for each. The orchestrator or main session decides whether to dispatch — the recommending agent MUST NOT auto-dispatch. See Section 1.3 for how `Recommended agents` are processed.
+The `Recommended agents:` subsection lists the exact agent names (matching entries in the agent registry) and a specific reason for each. The main session decides whether to dispatch — the recommending agent MUST NOT auto-dispatch. See Section 1.3 for how `Recommended agents` are processed.
 
 #### BLOCKED
 
@@ -91,7 +91,7 @@ Missing: [specific questions or data needed to proceed]
 Required fields: `Status`, `Summary`, `Missing`
 Optional fields: none
 
-The orchestrator handles NEEDS_CONTEXT by pausing batch execution, surfacing the `Missing` field to the user, and re-dispatching the same agent with the updated context prepended to its prompt.
+The `/orchestrate` skill handles NEEDS_CONTEXT by pausing batch execution, surfacing the `Missing` field to the user, and re-dispatching the same agent with the updated context prepended to its prompt.
 
 ### 1.2 JSON File Format (machine-readable, required for code-modifying agents)
 
@@ -134,7 +134,7 @@ The `agent-status-reader.sh` PostToolUse hook runs inside subagent context (`CLA
 | `DONE` | Exit silently | 0 |
 | `DONE_WITH_CONCERNS` | Output `[CAST-REVIEW]` directive via `hookSpecificOutput` | 0 |
 | `BLOCKED` | Output `[CAST-HALT]` directive and block message | 2 |
-| `NEEDS_CONTEXT` | Exit silently (orchestrator reads text block) | 0 |
+| `NEEDS_CONTEXT` | Exit silently (main session reads text block) | 0 |
 | File missing | Exit silently | 0 |
 
 Path canonicalization: before reading any status file, `agent-status-reader.sh` calls `realpath` and verifies the result starts with `$HOME/`. Files outside `$HOME` are silently skipped.
@@ -154,7 +154,7 @@ Rules:
 - Each entry names one agent from the CAST registry
 - Reason MUST reference a specific file and line number where possible
 - `code-reviewer` MUST NOT dispatch these agents — it only recommends
-- The main session or orchestrator reads the `Recommended agents:` section and decides whether to dispatch
+- The main session reads the `Recommended agents:` section and decides whether to dispatch
 - `code-reviewer` MUST NOT recommend another `code-reviewer` — this creates infinite loops
 - Maximum 3 recommended agents per review pass
 
@@ -297,25 +297,25 @@ When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plan
 | `parallel` | boolean | yes | `true` = dispatch all agents in batch simultaneously; `false` = dispatch one agent, wait for completion |
 | `type` | string | no | `"fan-out"` enables Fan-out Dispatch behavior (see Section 7); `"sequential"` is the default when omitted |
 | `agents` | array | yes | One or more agent dispatch entries |
-| `subagent_type` | string | yes | Name of the agent to dispatch, matching the `name` field in the agent's frontmatter; or `"main"` for orchestrator self-execution |
+| `subagent_type` | string | yes | Name of the agent to dispatch, matching the `name` field in the agent's frontmatter; or `"main"` for main session inline execution |
 | `prompt` | string | yes | Task description passed to the agent; MUST be specific and include relevant context (feature name, file paths, plan path) |
 
 ### 3.4 `"parallel": true` Fan-out Behavior
 
-When `"parallel": true`, the orchestrator dispatches all agents in the batch in a single response using simultaneous Agent tool calls. Agents in a parallel batch MUST NOT depend on each other's outputs. Maximum 4 agents per parallel batch.
+When `"parallel": true`, the /orchestrate skill dispatches all agents in the batch in a single response using simultaneous Agent tool calls. Agents in a parallel batch MUST NOT depend on each other's outputs. Maximum 4 agents per parallel batch.
 
 ### 3.5 `"type": "sequential"` vs `"type": "fan-out"`
 
 - `"type": "sequential"` (default): agents run one at a time regardless of `parallel` flag; the `parallel` flag takes precedence if set to `true`
-- `"type": "fan-out"`: all agents dispatch simultaneously AND the orchestrator synthesizes their outputs before passing context to the next batch (see Section 7)
+- `"type": "fan-out"`: all agents dispatch simultaneously AND the /orchestrate skill synthesizes their outputs before passing context to the next batch (see Section 7)
 
 ### 3.6 `"subagent_type": "main"` Semantics
 
-When `subagent_type` is `"main"`, the orchestrator does not spawn a subagent via the Agent tool. Instead, the orchestrator (or main Claude session) executes the implementation instructions directly. This is used for batches where the work cannot be effectively delegated, such as complex multi-file implementation steps that require the full reasoning context of the session.
+When `subagent_type` is `"main"`, the /orchestrate skill does not spawn a subagent via the Agent tool. Instead, the main session executes the implementation instructions directly. This is used for batches where the work cannot be effectively delegated, such as complex multi-file implementation steps that require the full reasoning context of the session.
 
 ### 3.7 Retry Protocol
 
-When a batch returns `Status: BLOCKED`, the orchestrator applies the following retry protocol:
+When a batch returns `Status: BLOCKED`, the /orchestrate skill applies the following retry protocol:
 
 1. Log the BLOCKED status to the task board with the blocker description
 2. Re-dispatch the same batch a second time, prepending: `"Previous attempt BLOCKED: <blocker>. Resolve and retry."` to the agent prompt
@@ -428,7 +428,7 @@ Resolve the blocker before continuing. Do not retry the blocked operation.
 
 > **Historical (CAST v2):** This directive was removed in CAST v3. Agent groups and the routing table were eliminated in favor of model-driven dispatch.
 
-`[CAST-DISPATCH-GROUP]` is injected by `route.sh` when the user's prompt matches a pattern in `~/.claude/config/agent-groups.json`. It instructs Claude to dispatch the `orchestrator` agent with the matched group's wave plan rather than routing to a single agent. The group payload — including `group_id`, `description`, `waves`, and optional `post_chain` — is written to a temporary JSON file whose path is embedded in the directive. Claude must pass this file path to the orchestrator as task context and must not attempt to execute the waves inline. Wave-based dispatch follows the same fan-out semantics defined in Section 3.4, with agents in each wave running in parallel before the next wave begins.
+`[CAST-DISPATCH-GROUP]` auto-generates an Agent Dispatch Manifest from the Payload JSON in the directive. The main session invokes the `/orchestrate` skill immediately with the plan file path. The main session executes waves in order: parallel agents fire simultaneously, a Fan-out Summary is prepended to the next wave's prompts, and post_chain agents run sequentially after all waves complete. Wave-based dispatch follows the same fan-out semantics defined in Section 3.4, with agents in each wave running in parallel before the next wave begins.
 
 ---
 
@@ -605,7 +605,7 @@ All under `~/.claude/cast/`:
 | Directory | Contents | Mutable? |
 |---|---|---|
 | `events/` | `{timestamp}-{agent}-{task_id}.json` — one file per agent action | Never (append-only) |
-| `state/` | `{task_id}.json` — derived from events by orchestrator | Derived (can be re-derived) |
+| `state/` | `{task_id}.json` — derived from events by main session | Derived (can be re-derived) |
 | `reviews/` | `{artifact_id}-{reviewer}-{timestamp}.json` — review decisions | Never |
 | `artifacts/` | Plans, patches, test files produced by agents | Never |
 
@@ -678,7 +678,7 @@ Fan-out dispatch enables multiple specialist agents to work on a problem simulta
 
 ### 7.1 Manifest-Level Fan-out
 
-Triggered by `"type": "fan-out"` in a manifest batch. The orchestrator:
+Triggered by `"type": "fan-out"` in a manifest batch. The /orchestrate skill:
 
 1. Dispatches all agents in the batch simultaneously (single response, multiple Agent tool calls)
 2. Collects all agent responses
@@ -703,9 +703,9 @@ An agent may itself dispatch multiple sub-specialists simultaneously. This is ag
 
 ### 7.3 Constraints
 
-- Maximum 4 agents per fan-out batch (orchestrator enforces this; planner MUST respect it when building manifests)
+- Maximum 4 agents per fan-out batch (the /orchestrate skill enforces this; planner MUST respect it when building manifests)
 - Agents in a fan-out batch MUST NOT depend on each other's outputs
-- The synthesizing agent (orchestrator or dispatching agent) MUST produce a Fan-out Summary before passing context forward
+- The synthesizing agent (main session or dispatching agent) MUST produce a Fan-out Summary before passing context forward
 - Fan-out does not imply fan-in review is skipped — quality gates still apply to the synthesized output
 
 ---
@@ -779,7 +779,7 @@ A CAST-compatible hook script SHOULD:
 ├── cast.db                          # SQLite: sessions, agent_runs, budgets, agent_memories
 ├── cast/
 │   ├── events/                      # Immutable event files
-│   └── orchestrator-checkpoint.log  # Orchestrator batch progress
+│   └── orchestrate-checkpoint.log   # /orchestrate skill batch progress
 ├── briefings/                       # Morning briefing outputs
 ├── meetings/                        # Meeting notes outputs
 └── reports/                         # Report outputs
