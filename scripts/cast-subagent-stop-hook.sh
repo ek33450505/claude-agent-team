@@ -81,6 +81,8 @@ result = {
     "has_turn_ceiling": "[TURN CEILING]" in (data.get("last_assistant_message") or data.get("output") or ""),
     "output_full": data.get("last_assistant_message") or data.get("output") or "",
     "agent_id": data.get("agent_id") or data.get("subagent_id") or "",
+    "duration_ms": data.get("duration_ms") or data.get("total_duration_ms") or 0,
+    "tool_uses": len(data.get("tool_uses", [])) if isinstance(data.get("tool_uses"), list) else (data.get("tool_use_count") or 0),
 }
 print(json.dumps(result))
 PYEOF
@@ -100,7 +102,11 @@ SESSION_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP
 STOP_REASON="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('stop_reason',''))" 2>/dev/null || echo "")"
 HAS_TURN_CEILING="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print('1' if d.get('has_turn_ceiling') else '0')" 2>/dev/null || echo "0")"
 AGENT_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('agent_id',''))" 2>/dev/null || echo "")"
+DURATION_MS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('duration_ms',0))" 2>/dev/null || echo 0)"
+TOOL_USES="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('tool_uses',0))" 2>/dev/null || echo 0)"
 export CAST_STOP_AGENT_ID="$AGENT_ID"
+export CAST_STOP_DURATION_MS="$DURATION_MS"
+export CAST_STOP_TOOL_USES="$TOOL_USES"
 
 # Determine event type: blocked if [TURN CEILING] or stop_reason indicates error
 EVENT_TYPE="task_completed"
@@ -162,9 +168,24 @@ agent = os.environ.get('CAST_STOP_AGENT', '')
 sess  = os.environ.get('CAST_STOP_SESSION', '')
 ts    = os.environ.get('CAST_STOP_TS_ISO', '')
 st    = os.environ.get('CAST_STOP_DB_STATUS', 'DONE')
+duration_ms = int(os.environ.get('CAST_STOP_DURATION_MS', '0') or '0')
+tool_uses = int(os.environ.get('CAST_STOP_TOOL_USES', '0') or '0')
 
 if not agent or not db:
     raise SystemExit(0)
+
+# Add new telemetry columns if they don't exist (idempotent)
+try:
+    conn = sqlite3.connect(db, timeout=5)
+    for col, coltype in [('duration_ms', 'INTEGER'), ('tool_uses', 'INTEGER')]:
+        try:
+            conn.execute(f'ALTER TABLE agent_runs ADD COLUMN {col} {coltype}')
+        except Exception:
+            pass  # column already exists
+    conn.commit()
+    conn.close()
+except Exception:
+    pass
 
 # Update the running row for this agent. Use agent_id for precise matching when
 # available; fall back to MIN(id) FIFO heuristic when agent_id is absent.
@@ -176,16 +197,16 @@ for attempt in range(3):
         cur  = conn.cursor()
         if agent_id:
             cur.execute(
-                "UPDATE agent_runs SET status=?, ended_at=? "
+                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=? "
                 "WHERE status='running' AND agent_id=?",
-                (st, ts, agent_id),
+                (st, ts, duration_ms, tool_uses, agent_id),
             )
         else:
             cur.execute(
-                "UPDATE agent_runs SET status=?, ended_at=? "
+                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=? "
                 "WHERE status='running' AND agent=? AND session_id=? "
                 "AND id=(SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
-                (st, ts, agent, sess, agent, sess),
+                (st, ts, duration_ms, tool_uses, agent, sess, agent, sess),
             )
         rows_affected = conn.execute("SELECT changes()").fetchone()[0]
         conn.commit()

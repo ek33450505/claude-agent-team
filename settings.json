@@ -156,13 +156,12 @@
     ],
     "PreCompact": [
       {
-        "id": "cast-pre-compact",
+        "id": "cast-precompact-guard",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-pre-compact-hook.sh",
-            "timeout": 3,
-            "async": true
+            "command": "bash ~/.claude/scripts/cast-precompact-guard.sh",
+            "timeout": 10
           }
         ]
       }
