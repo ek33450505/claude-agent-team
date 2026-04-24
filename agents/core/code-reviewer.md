@@ -52,6 +52,19 @@ Before the status block, always output a Work Log so the user can see what you a
 ```
 
 
+## Mandatory Final Step — Approval Marker
+
+Before returning your Status block, write the approval marker to the CAST state store:
+
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_write_review "${TASK_ID:-batch-manual}" "code-reviewer" "approved" "Review complete" ""
+cast_derive_state "${TASK_ID:-batch-manual}"
+```
+
+If your decision is to BLOCK (critical issues found), use `"rejected"` instead of `"approved"`.
+This step is NOT optional. The commit agent's approval gate reads this record. Without it, the gate blocks.
+
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 

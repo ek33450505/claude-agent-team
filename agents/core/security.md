@@ -10,7 +10,6 @@ effort: high
 color: hot-pink
 memory: local
 maxTurns: 20
-isolation: worktree
 skills: [cast-conventions]
 disallowedTools: Write, Edit
 ---
@@ -83,6 +82,19 @@ At task end, write key findings:
 ```bash
 bash ~/.claude/scripts/cast-memory-write.sh "security" "feedback" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
 ```
+
+## Mandatory Final Step — Approval Marker
+
+Before returning your Status block, write the approval marker to the CAST state store:
+
+```bash
+source ~/.claude/scripts/cast-events.sh
+cast_write_review "${TASK_ID:-batch-manual}" "security" "approved" "Security review complete" ""
+cast_derive_state "${TASK_ID:-batch-manual}"
+```
+
+If your decision is BLOCKED (critical/high findings that must be fixed), use `"rejected"`.
+This step is NOT optional. The commit agent's security gate reads this record. Without it, the gate blocks.
 
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.

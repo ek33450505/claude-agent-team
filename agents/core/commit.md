@@ -46,6 +46,28 @@ The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only 
 
 This enables direct commit invocation (without orchestrator) while still encouraging review best practices.
 
+## Repo Class Detection
+
+Before writing the commit message, read the repo's cast.json:
+
+```bash
+CAST_JSON="$(git rev-parse --show-toplevel 2>/dev/null)/.claude/cast.json"
+if [[ -f "$CAST_JSON" ]]; then
+  REPO_CLASS="$(python3 -c "import json,sys; d=json.load(open('$CAST_JSON')); print(d.get('repo_class','personal'))" 2>/dev/null || echo personal)"
+  CO_AUTHOR_TRAILER="$(python3 -c "import json,sys; d=json.load(open('$CAST_JSON')); print(d.get('co_author_trailer',''))" 2>/dev/null || echo '')"
+else
+  REPO_CLASS="personal"
+  CO_AUTHOR_TRAILER=""
+fi
+```
+
+Trailer rules (evaluated in order):
+- If `co_author_trailer` is `"none"`: omit trailer entirely
+- If `co_author_trailer` is a non-empty string other than `"none"` and `"claude"`: use it verbatim as the trailer value
+- If `co_author_trailer` is `"claude"` or empty AND `repo_class` is `"personal"`: include `Co-Authored-By: Claude <noreply@anthropic.com>`
+- If `repo_class` is `"work"` and `co_author_trailer` is empty or `"claude"`: **omit trailer** (work-projects rule)
+- Default (no cast.json): include Claude trailer (existing behavior)
+
 ## File Completeness Gate
 
 Before staging, run:

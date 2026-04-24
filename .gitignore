@@ -4,6 +4,7 @@
 agent-memory-local/
 projects/
 plans/
-.claude/
+.claude/*
+!.claude/cast.json
 __pycache__/
 articles/
