@@ -156,6 +156,32 @@
         ]
       }
     ],
+    "StopFailure": [
+      {
+        "id": "cast-stop-failure",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-stop-failure-hook.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "TaskCreated": [
+      {
+        "id": "cast-task-created",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-task-created-hook.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "id": "cast-precompact-guard",
@@ -212,7 +238,8 @@
   "statusLine": {
     "type": "command",
     "command": "bash ~/.claude/scripts/cast-statusline.sh",
-    "padding": 1
+    "padding": 1,
+    "refreshIntervalMs": 5000
   },
   "sandbox": {
     "enabled": true,

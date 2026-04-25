@@ -17,6 +17,26 @@ mkdir -p ~/.claude/cast/hook-last-fired && touch ~/.claude/cast/hook-last-fired/
 INPUT="$(cat)"
 
 # Delegate all logic to cast-post-tool.py — reads stdin JSON once, handles all parts
-python3 "$(dirname "$0")/cast-post-tool.py" <<< "$INPUT" || true
+HOOK_OUTPUT="$(python3 "$(dirname "$0")/cast-post-tool.py" <<< "$INPUT" 2>/dev/null)" || true
+
+# Guard: if output exceeds 50K, write to disk and emit path instead
+MAX_BYTES=51200
+OUTPUT_LEN="${#HOOK_OUTPUT}"
+if [ "$OUTPUT_LEN" -gt "$MAX_BYTES" ]; then
+  OVERFLOW_FILE="${HOME}/.claude/logs/hook-overflow-$(date -u +%Y%m%dT%H%M%SZ).txt"
+  mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+  REDACTED=$(printf '%s' "$HOOK_OUTPUT" | python3 "${HOME}/.claude/scripts/cast-redact.py" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("redacted_text",""))' 2>/dev/null)
+  if [ -n "$REDACTED" ]; then
+    printf '%s' "$REDACTED" > "$OVERFLOW_FILE" 2>/dev/null || true
+    REDACTED_OK="true"
+  else
+    # fail-closed: don't write raw output if redaction failed
+    printf '[REDACTION_FAILED — original %d bytes discarded for safety]' "$OUTPUT_LEN" > "$OVERFLOW_FILE" 2>/dev/null || true
+    REDACTED_OK="false"
+  fi
+  HOOK_OUTPUT="{\"overflow\": true, \"path\": \"$OVERFLOW_FILE\", \"original_bytes\": $OUTPUT_LEN, \"redacted\": $REDACTED_OK}"
+fi
+
+printf '%s\n' "$HOOK_OUTPUT"
 
 exit 0
