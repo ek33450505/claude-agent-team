@@ -47,6 +47,17 @@
 - If the dirty banner appears, copy the listed files from the worktree path to the active branch, then `git worktree remove --force --force <path>`.
 - Always verify agent-reported file changes by reading the files after the agent completes.
 
+## Multi-Terminal Coordination
+
+When running more than one terminal on the same repo simultaneously:
+
+- **Explicit stage lists:** Never use `git add -A` or `git add .` — always stage by explicit file path. This prevents Terminal B from committing files that Terminal A is mid-edit on.
+- **Pull before push:** `git pull --rebase origin <branch>` before every push. If the rebase fails, resolve; never force-push shared history.
+- **Pre-commit status check:** Run `git status` immediately before staging to surface any cross-stream artifacts (unexpected modifications or untracked files from the other terminal's agent work).
+- **Sequential push order is the proven safe pattern:** Finish Terminal A's entire commit chain, push it, then Terminal B rebases and pushes. Parallel pushes to the same branch cause race-condition overwrites.
+- **Parallel research dispatches are safe:** Read-only agent work (researcher, code-reviewer) can run in parallel across terminals without coordination. Writes must be sequential.
+- **No cross-terminal agent scope overlap:** If Terminal A owns a file, Terminal B agents must not touch it, even to "fix" adjacent issues. Scope creep from one terminal's agents is the primary cause of mid-session reverts.
+
 ## Branch Naming
 - Before starting any phase/feature work, verify the current branch matches the phase name (e.g., Phase C3 work must land on feature/c3-*, not feature/c2-*).
 - When orchestrating a new phase, explicitly create and checkout the correctly-named branch FIRST before any edits or agent dispatches.
