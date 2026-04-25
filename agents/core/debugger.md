@@ -7,7 +7,6 @@ effort: high
 color: red
 memory: local
 maxTurns: 30
-isolation: worktree
 skills: [cast-conventions]
 ---
 

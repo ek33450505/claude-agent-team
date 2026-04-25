@@ -4,7 +4,6 @@ description: Frontend QA specialist for React/TypeScript dashboard projects. Rev
 model: haiku
 effort: low
 tools: Read, Bash, Glob, Grep
-isolation: worktree
 color: sky
 memory: local
 maxTurns: 20

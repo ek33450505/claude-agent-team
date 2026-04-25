@@ -10,7 +10,6 @@ effort: low
 color: fuchsia
 memory: local
 maxTurns: 20
-isolation: worktree
 skills: [cast-conventions]
 ---
 
