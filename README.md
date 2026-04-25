@@ -195,7 +195,7 @@ Hybrid model: **RemoteTriggers** for AI-powered tasks (briefings, standups, repo
 
 ## Test Suite
 
-<!-- CAST_TEST_COUNT -->541<!-- /CAST_TEST_COUNT --> BATS tests across 5 directories. 0 failures. Coverage: core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, memory persistence. Run with `bats tests/`.
+<!-- CAST_TEST_COUNT -->542<!-- /CAST_TEST_COUNT --> BATS tests across 5 directories. 0 failures. Coverage: core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, memory persistence. Run with `bats tests/`.
 
 ---
 
@@ -246,6 +246,6 @@ GitHub: [ek33450505](https://github.com/ek33450505) | CAST Portfolio: [castframe
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->541<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->542<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills

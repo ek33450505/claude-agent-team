@@ -110,3 +110,20 @@ teardown() {
   run bash -c "echo '{}' | CAST_DB_PATH=/nonexistent/path/cast.db bash '$HOOK_SH'"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# 7. bash 3.2 compat: empty DIRTY_REPOS array does not trigger unbound variable
+#    Regression for: `DIRTY_REPOS[@]: unbound variable` under set -u + bash 3.2
+#    Fixed at: scripts/cast-precompact-guard.sh (dedup guard)
+# ---------------------------------------------------------------------------
+@test "PreCompact guard: bash 3.2 compat — exits 0 with no git repos in scope" {
+  # Force /bin/bash which is bash 3.2 on macOS CI runners.
+  # KNOWN_PROJECTS all miss (HOME is isolated temp dir), CAST_EXTRA_PROJECT unset,
+  # so DIRTY_REPOS remains empty — this is the exact path that triggered the unbound
+  # variable error before the fix.
+  if [ ! -x /bin/bash ]; then
+    skip "/bin/bash not available"
+  fi
+  run /bin/bash -c "echo '{}' | CAST_DB_PATH=/dev/null /bin/bash '$HOOK_SH'"
+  assert_success
+}

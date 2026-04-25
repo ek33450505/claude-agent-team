@@ -51,8 +51,10 @@ for proj in "${KNOWN_PROJECTS[@]}"; do
   fi
 done
 
-# Deduplicate
-DIRTY_REPOS=($(printf '%s\n' "${DIRTY_REPOS[@]}" | sort -u))
+# Deduplicate (guard empty-array expansion for bash 3.2 compatibility on macOS)
+if [ ${#DIRTY_REPOS[@]} -gt 0 ]; then
+  DIRTY_REPOS=($(printf '%s\n' "${DIRTY_REPOS[@]}" | sort -u))
+fi
 
 if [ ${#DIRTY_REPOS[@]} -eq 0 ]; then
   # Log observability event (carry forward from cast-pre-compact-hook.sh behavior)
