@@ -122,6 +122,15 @@ Key agents: `code-writer`, `debugger`, `planner`, `researcher`, `security`, `cod
 
 Model tiering, response budgets, Ollama local routing, laconic mode, and RTK compression achieve ~30-50% token spend reduction. See [docs/TOKEN-OPTIMIZATION.md](docs/TOKEN-OPTIMIZATION.md).
 
+### Optional: Local-first cheap-mode (claude-code-router)
+
+For local Haiku-tier work without API spend, install [claude-code-router](https://github.com/musistudio/claude-code-router) and run `ccr` instead of `claude`. CCR proxies all model calls to local Ollama (default: `deepseek-coder:latest`). Opt-in per session — vanilla `claude` continues to use Anthropic API.
+
+**Install:** `npm install -g @musistudio/claude-code-router`  
+**Config:** `~/.claude-code-router/config.json` (CAST-compatible default ships with this repo)  
+**Use for:** code-reviewer-only sessions, doc edits, quick exploration  
+**Avoid for:** sonnet/opus-tier agents (code-writer, debugger, planner, researcher) — local models cannot match
+
 ---
 
 ## Hook Event Coverage
@@ -186,7 +195,7 @@ Hybrid model: **RemoteTriggers** for AI-powered tasks (briefings, standups, repo
 
 ## Test Suite
 
-<!-- CAST_TEST_COUNT -->530<!-- /CAST_TEST_COUNT --> BATS tests across 5 directories. 0 failures. Coverage: core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, memory persistence. Run with `bats tests/`.
+<!-- CAST_TEST_COUNT -->541<!-- /CAST_TEST_COUNT --> BATS tests across 5 directories. 0 failures. Coverage: core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, memory persistence. Run with `bats tests/`.
 
 ---
 
@@ -237,6 +246,6 @@ GitHub: [ek33450505](https://github.com/ek33450505) | CAST Portfolio: [castframe
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->530<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->541<!-- /CAST_TEST_COUNT --> tests |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills

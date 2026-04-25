@@ -38,6 +38,8 @@
 - Commit before compacting — compact discards tool output history
 - Commit at least hourly during implementation sessions
 - Run `/usage` periodically to monitor token spend; cost data feeds the monthly review process
+- Run `/cost` after long sessions for per-model + cache-hit breakdown (complements `/usage`).
+- `CLAUDE_CODE_SCRIPT_CAPS=100` is set in settings.json — caps per-session script invocations to prevent runaway agent loops.
 
 ## Worktree Recovery
 - `code-writer`, `debugger`, `test-writer`, `security`, and `frontend-qa` no longer auto-isolate into git worktrees (`isolation: worktree` removed from frontmatter). The agent runs in the orchestrator's working tree.
