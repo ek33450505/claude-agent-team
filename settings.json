@@ -2,7 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "env": {
     "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "ENABLE_PROMPT_CACHING_1H": "1"
   },
   "permissions": {
     "allow": [
@@ -161,6 +162,16 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-precompact-guard.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "id": "cast-precompact-memory-save",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-precompact-memory-save.sh",
             "timeout": 10
           }
         ]

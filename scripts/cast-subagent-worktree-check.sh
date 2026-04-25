@@ -77,7 +77,7 @@ for line in res.stdout.splitlines():
     if line.startswith('worktree '):
         worktree_paths.append(line[len('worktree '):])
 
-agent_pattern = re.compile(r'/\.claude/worktrees/agent-')
+agent_pattern = re.compile(r'^' + re.escape(repo_root) + r'/\.claude/worktrees/agent-')
 
 for wt in worktree_paths:
     if not agent_pattern.search(wt):
@@ -156,5 +156,9 @@ for wt in worktree_paths:
 conn.commit()
 conn.close()
 PYEOF
+
+# Opportunistic prune: remove stale worktree entries where directory is gone.
+# Safe: git worktree prune only removes entries where the worktree dir no longer exists.
+git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
 
 exit 0

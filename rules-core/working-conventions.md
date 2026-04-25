@@ -37,10 +37,12 @@
 - `/compact` to summarize; `/clear` + `/resume` for fresh start
 - Commit before compacting — compact discards tool output history
 - Commit at least hourly during implementation sessions
+- Run `/usage` periodically to monitor token spend; cost data feeds the monthly review process
 
-## Worktree Workflow
-- DO NOT use git worktrees for parallel agent work unless explicitly requested. Worktree-based agent dispatches have repeatedly lost changes, overwritten good files with stale versions, and required manual recovery.
-- If parallelization is needed, prefer sequential edits on the main branch or explicitly confirm the worktree strategy with the user first.
+## Worktree Recovery
+- `code-writer`, `debugger`, `test-writer`, `security`, and `frontend-qa` no longer auto-isolate into git worktrees (`isolation: worktree` removed from frontmatter). The agent runs in the orchestrator's working tree.
+- A `SubagentStop` detection hook (`cast-subagent-worktree-check.sh`) fires after every dispatch of these agents. If the harness still spawns a worktree as a side effect, the hook auto-removes it when clean (banner: `✓ AGENT-WORKTREE CLEANUP`) and escalates when dirty (banner: `⚠ AGENT-WORKTREE DETECTED (DIRTY)`). All anomalies log to `cast.db worktree_anomalies`.
+- If the dirty banner appears, copy the listed files from the worktree path to the active branch, then `git worktree remove --force --force <path>`.
 - Always verify agent-reported file changes by reading the files after the agent completes.
 
 ## Branch Naming

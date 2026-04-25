@@ -27,7 +27,7 @@ You will receive data sections (git activity, action items, CAST intelligence) a
 ## CAST Intelligence
 - **Dirty repos:** [list or "All clean"]
 - **Open PRs:** [list or "None"]
-- **Yesterday's spend:** [sessions/tokens/cost or "No data"]
+- **Yesterday's spend:** [sessions/tokens/usage or "No data"]
 - **Blocked agents:** [list or "None"]
 ```
 

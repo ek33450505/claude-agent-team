@@ -87,3 +87,29 @@ count_anomalies() {
   [ "$status" -eq 0 ]
   [ "$(count_anomalies)" -eq 0 ]
 }
+
+@test "non-anchored worktree path outside repo root is ignored" {
+  # Create a separate fixture repo to simulate a worktree at a sibling path
+  SIBLING="$TMPROOT/sibling"
+  mkdir -p "$SIBLING"
+  git -C "$SIBLING" init -q
+  git -C "$SIBLING" config user.email "test@cast"
+  git -C "$SIBLING" config user.name "cast-test"
+  echo "seed" > "$SIBLING/README.md"
+  git -C "$SIBLING" add -A
+  git -C "$SIBLING" commit -q -m "seed"
+  git -C "$SIBLING" branch -M main
+
+  # Create a worktree that looks like it could match the substring
+  # but is under the sibling repo, not our test repo
+  mkdir -p "$SIBLING/.claude/worktrees"
+  git -C "$SIBLING" worktree add -q "$SIBLING/.claude/worktrees/agent-fake" HEAD
+
+  # Now run the hook on REPO — the regex should be anchored to REPO's root
+  # and should NOT match or process the worktree in SIBLING
+  cd "$REPO"
+  run bash -c "echo '$STDIN_JSON' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  # No anomalies should be recorded for our REPO (sibling's worktree should be ignored)
+  [ "$(count_anomalies)" -eq 0 ]
+}

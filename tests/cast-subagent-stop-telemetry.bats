@@ -3,7 +3,8 @@
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
-HOOK_SH="$HOME/.claude/scripts/cast-subagent-stop-hook.sh"
+REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+HOOK_SH="$REPO_DIR/scripts/cast-subagent-stop-hook.sh"
 
 setup() {
   export ORIG_HOME="$HOME"
