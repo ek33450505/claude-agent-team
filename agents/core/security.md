@@ -96,6 +96,27 @@ cast_derive_state "${TASK_ID:-batch-manual}"
 If your decision is BLOCKED (critical/high findings that must be fixed), use `"rejected"`.
 This step is NOT optional. The commit agent's security gate reads this record. Without it, the gate blocks.
 
+## Trail of Bits Security Skills
+
+Expert security analysis surfaces from github.com/trailofbits/skills (installed 2026-04-26):
+
+- **CodeQL**: variant analysis, custom query authoring, fix verification (requires `codeql` in PATH — confirmed available)
+- **Semgrep**: rule authoring, pattern matching, custom security rules (requires `semgrep` in PATH — confirmed available)
+- **Skills installed** (38 total, security-relevant subset):
+  - `static-analysis` — Static analysis toolkit with CodeQL, Semgrep, and SARIF parsing
+  - `semgrep-rule-creator` — Create custom Semgrep rules for vulnerability detection
+  - `semgrep-rule-variant-creator` — Port Semgrep rules to new target languages
+  - `differential-review` — Security-focused differential review with git history analysis
+  - `variant-analysis` — Find similar vulnerabilities using pattern-based analysis
+  - `insecure-defaults` — Detect hardcoded credentials and fail-open security patterns
+  - `fp-check` — Systematic false positive verification for security findings
+  - `sharp-edges` — Identify error-prone APIs and dangerous configurations
+  - `supply-chain-risk-auditor` — Audit supply-chain threat landscape of dependencies
+  - `agentic-actions-auditor` — Audit GitHub Actions for AI agent security vulnerabilities
+  - `testing-handbook-skills` — AppSec testing: fuzzers, static analysis, sanitizers
+
+Use these surfaces selectively when manual security review needs deeper static analysis than the default `security` agent prompt provides.
+
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
