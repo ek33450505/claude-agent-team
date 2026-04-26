@@ -269,6 +269,6 @@ GitHub: [ek33450505](https://github.com/ek33450505) | CAST Portfolio: [castframe
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->564<!-- /CAST_TEST_COUNT --> test files (520+ assertions) |
+<!-- CAST_TEST_COUNT -->566<!-- /CAST_TEST_COUNT --> test files (520+ assertions) |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills

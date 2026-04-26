@@ -6,7 +6,8 @@
 # Responsibilities:
 #   1. Log a stop_failure event to ~/.claude/cast/events/ as
 #      {timestamp}-stop-failure.json
-#   2. Send a macOS desktop notification via osascript
+#   2. Write to cast.db stop_failure_events table (idempotent)
+#   3. Send a macOS desktop notification via osascript
 #
 # Stdin JSON fields (StopFailure):
 #   agent_name  — name of the subagent that failed
@@ -127,7 +128,57 @@ if filepath:
         json.dump(event, f, indent=2)
 PYEOF
 
-# ── Step 2: macOS desktop notification ───────────────────────────────────────
+# ── Step 2: Write to cast.db stop_failure_events table ──────────────────────────
+# Idempotent schema creation + insert
+python3 - <<'DBEOF' 2>/dev/null || true
+import sqlite3
+import os
+import json
+from datetime import datetime, timezone
+
+db_path = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+if not os.path.exists(db_path):
+    exit(0)
+
+try:
+    conn = sqlite3.connect(db_path)
+    conn.isolation_level = None  # autocommit
+    cursor = conn.cursor()
+
+    # Create table if not exists
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS stop_failure_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            event_id TEXT UNIQUE,
+            agent_name TEXT,
+            session_id TEXT,
+            error_message TEXT,
+            source TEXT DEFAULT 'StopFailure',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Insert stop failure event
+    timestamp_iso = os.environ.get('CAST_FAIL_TS_ISO', '')
+    event_id = 'stop-failure-' + timestamp_iso
+    agent = os.environ.get('CAST_FAIL_AGENT', 'unknown')
+    session = os.environ.get('CAST_FAIL_SESSION', '')
+    error = os.environ.get('CAST_FAIL_ERROR', 'unknown failure')
+
+    cursor.execute('''
+        INSERT OR IGNORE INTO stop_failure_events
+        (timestamp, event_id, agent_name, session_id, error_message)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (timestamp_iso, event_id, agent, session, error))
+
+    conn.close()
+except Exception:
+    # Schema error or DB unavailable — non-fatal
+    pass
+DBEOF
+
+# ── Step 3: macOS desktop notification ───────────────────────────────────────
 # Truncate agent name and error for display — osascript is sensitive to long strings
 DISPLAY_AGENT="${AGENT_NAME:0:40}"
 DISPLAY_ERROR="${ERROR_MSG:0:80}"
@@ -135,10 +186,8 @@ DISPLAY_ERROR="${ERROR_MSG:0:80}"
 export CAST_NOTIFY_AGENT="$DISPLAY_AGENT"
 export CAST_NOTIFY_ERROR="$DISPLAY_ERROR"
 
-# Use env vars in a heredoc so that special characters in agent name/error
-# do not break the osascript invocation
-OSACODE="display notification \"CAST agent stopped with failure: ${DISPLAY_AGENT}\" with title \"CAST StopFailure\""
-
-osascript -e "$OSACODE" 2>/dev/null || true
+# Use system attribute to read CAST_NOTIFY_AGENT safely from env vars,
+# avoiding shell/AppleScript metacharacter injection
+osascript -e 'display notification ("CAST agent stopped with failure: " & (system attribute "CAST_NOTIFY_AGENT")) with title "CAST StopFailure"' 2>/dev/null || true
 
 exit 0

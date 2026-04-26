@@ -100,7 +100,7 @@ This step is NOT optional. The commit agent's security gate reads this record. W
 
 ## Trail of Bits Security Skills
 
-Expert security analysis surfaces from github.com/trailofbits/skills (installed 2026-04-26):
+Expert security analysis via github.com/trailofbits/skills (install: `/plugin marketplace add trailofbits/skills`). Security agent can invoke these as slash commands once installed:
 
 - **CodeQL**: variant analysis, custom query authoring, fix verification (requires `codeql` in PATH — confirmed available)
 - **Semgrep**: rule authoring, pattern matching, custom security rules (requires `semgrep` in PATH — confirmed available)

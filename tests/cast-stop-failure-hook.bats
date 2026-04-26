@@ -54,3 +54,30 @@ teardown() {
     count=$(ls "${BATS_EVENTS_DIR}/"*stop-failure*.json 2>/dev/null | wc -l | tr -d ' ')
     [ "$count" -eq 1 ]
 }
+
+@test "writes to cast.db stop_failure_events table when db exists" {
+    # Create a temporary cast.db
+    TEST_DB="${BATS_FAKE_HOME}/.claude/cast.db"
+    mkdir -p "${BATS_FAKE_HOME}/.claude"
+    sqlite3 "$TEST_DB" "SELECT 1;" > /dev/null 2>&1
+
+    run -0 bash -c "CAST_DB_PATH='${TEST_DB}' HOME='${BATS_FAKE_HOME}' bash '${HOOK}'" <<< '{"agent_type":"test-agent","session_id":"xyz789","error":"test_failure"}'
+    [ "$status" -eq 0 ]
+
+    # Verify table was created
+    table_exists=$(sqlite3 "$TEST_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='stop_failure_events';" 2>/dev/null | tr -d ' ')
+    [ "$table_exists" = "stop_failure_events" ]
+
+    # Verify row was inserted
+    row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM stop_failure_events WHERE agent_name='test-agent';" 2>/dev/null | tr -d ' ')
+    [ "$row_count" -eq 1 ]
+}
+
+@test "skips db write gracefully when cast.db is unavailable" {
+    # Do not create a cast.db — should fail gracefully
+    run -0 bash -c "CAST_DB_PATH='/nonexistent/cast.db' HOME='${BATS_FAKE_HOME}' bash '${HOOK}'" <<< '{"agent_type":"test-agent","session_id":"xyz789","error":"test_failure"}'
+    [ "$status" -eq 0 ]
+    # Should still write the event file
+    count=$(ls "${BATS_EVENTS_DIR}/"*stop-failure*.json 2>/dev/null | wc -l | tr -d ' ')
+    [ "$count" -eq 1 ]
+}
