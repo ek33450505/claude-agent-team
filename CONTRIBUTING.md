@@ -182,7 +182,6 @@ If you're the CAST maintainer and want to populate the personal layer:
 # Create personal rules and agents (one-time)
 mkdir -p rules-personal/ agents/personal/
 cp my-custom-stack-context.md rules-personal/stack-context.md
-cp my-custom-identity.md rules-personal/engram-identity.md
 cp my-portfolio-agent.md agents/personal/portfolio-sync.md
 
 # Install with personal overlay

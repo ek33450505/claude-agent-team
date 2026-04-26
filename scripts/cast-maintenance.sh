@@ -27,7 +27,7 @@ pruned=$(find "${CAST_DIR}/agent-status/" -name "*.json" -mtime +7 -delete -prin
 log "Pruned $pruned status files (>7d)"
 
 # 4. Prune git worktrees across project repos
-for repo in ~/Projects/personal/claude-agent-team ~/Projects/personal/claude-code-dashboard ~/Projects/personal/project-engram; do
+for repo in ~/Projects/personal/claude-agent-team ~/Projects/personal/claude-code-dashboard; do
   if [ -d "$repo/.git" ]; then
     git -C "$repo" worktree prune 2>/dev/null
   fi

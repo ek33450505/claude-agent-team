@@ -11,7 +11,6 @@
 # These exist in deployed instances but are added by external systems or
 # sessions outside this init script, and should NOT be included here:
 #   - agent_memories_fts (FTS5 full-text search index)
-#   - engram_identity_sync (Project Engram identity persistence)
 #   - memory_decay_log (temporal decay tracking for memory expiry)
 #   - agent_memory_embeddings (semantic search vectors)
 # To audit live DB: sqlite3 ~/.claude/cast.db ".tables"

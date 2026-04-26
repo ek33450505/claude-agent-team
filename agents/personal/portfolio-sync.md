@@ -3,7 +3,7 @@ name: portfolio-sync
 description: >
   Portfolio updater. Syncs showcase repo READMEs with actual project state:
   test counts, feature lists, agent counts, version numbers, badge data.
-  Keeps claude-agent-team, claude-code-dashboard, Edward_Kubiak, and project-engram repos current.
+  Keeps claude-agent-team, claude-code-dashboard, and Edward_Kubiak repos current.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
 effort: low
@@ -21,13 +21,11 @@ You are a portfolio sync agent. You keep showcase repo READMEs accurate by synci
    - `~/Projects/personal/claude-agent-team`
    - `~/Projects/personal/claude-code-dashboard`
    - `~/Projects/personal/Edward_Kubiak`
-   - `~/Projects/personal/project-engram`
 
 2. **Gather actual stats per repo:**
    - **claude-agent-team:** agent count (`ls agents/core/*.md | wc -l`), test count (parse BATS output or `grep -c '@test' tests/*.bats`), version (`cat VERSION`), script count, hook count
    - **claude-code-dashboard:** component count, route count, API endpoint count, test count (Vitest), version
    - **Edward_Kubiak:** project list, tech stack, featured repos
-   - **project-engram:** test count (pytest), signal count (engram.db), schema version, CLI command count
 
 3. **Compare README stats vs actual:**
    - Read current `README.md`

@@ -15,7 +15,7 @@ Codifies the test → CI-safety-check → commit → push → journal loop.
 
 4. **Push** — dispatch `push` agent.
 
-5. **Write journal entry** — reflect on what shipped, any surprises, and what the next session should pick up. Write to `~/.claude/claudes_journal/YYYY-MM-DD.md`.
+5. **Write journal entry** — reflect on what shipped, any surprises, and what the next session should pick up. Write to `~/Documents/Claude/YYYY-MM/YYYY-MM-DD.md` — create today's per-date note inside this month's folder (Write tool; mkdir -p the month folder if missing). Start with a `# <Month Day, Year>` heading.
 
 ## Usage
 

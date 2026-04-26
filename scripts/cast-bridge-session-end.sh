@@ -4,11 +4,7 @@
 # Apache-2.0 License
 #
 # Fires on: CAST Stop (session-end) hook
-# Purpose: Thin bridge that:
-#   1. Reads CAST_SESSION_TRANSCRIPT env var (set by CAST's Stop hook)
-#   2. Pipes transcript to engram-session-end.sh for signal extraction
-#   3. Runs engram compress to dedup signals after extraction
-#   Respects ENGRAM_DISABLED=1 to skip processing.
+# Purpose: Session-end bridge (engram pipeline retired — this script is now a no-op).
 #
 # Always exits 0 — never blocks CAST session end.
 

@@ -4,9 +4,7 @@
 # Apache-2.0 License
 #
 # Fires on: CAST SessionStart hook
-# Purpose: Thin bridge that delegates to engram-identity-start.sh.
-#   Passes hookSpecificOutput from Engram back to CAST.
-#   Respects ENGRAM_DISABLED=1 to skip processing.
+# Purpose: Session-start bridge (engram pipeline retired — this script is now a no-op).
 #
 # Always exits 0 — never blocks CAST session start.
 

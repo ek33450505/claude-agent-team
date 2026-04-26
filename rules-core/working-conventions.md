@@ -46,7 +46,7 @@
 - `mcpServers` wired in `settings.json` — github MCP available in all sessions
 - `/cost` after long sessions for per-model + cache-hit breakdown
 - `/usage` periodically for token spend monitoring
-- All three feed the monthly cost re-evaluation cadence (see `~/.claude/stratum/threads/cast-cost-optimization.md`)
+- All three feed the monthly cost re-evaluation cadence
 
 ## Worktree Recovery
 - `code-writer`, `debugger`, `test-writer`, `security`, and `frontend-qa` no longer auto-isolate into git worktrees (`isolation: worktree` removed from frontmatter). The agent runs in the orchestrator's working tree.
