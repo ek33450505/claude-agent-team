@@ -160,6 +160,34 @@ For local Haiku-tier work without API spend, install [claude-code-router](https:
 
 Hooks cover the full swarm lifecycle: SessionStart, TaskCreated, WorktreeCreate, PreToolUse:Bash (commit guard), PostToolUse, PostCompact, SessionEnd. See [docs/observability/OBSERVABILITY.md](docs/observability/OBSERVABILITY.md#hook-event-coverage).
 
+### Recent Hook Enhancements (Phase A–C, as of 2026-04-26)
+
+**New Hook Events:**
+- **StopFailure** (REC-01) — Fires when agent API calls fail mid-task. Logs error details to `cast.db` `stop_failure_events` table; triggers osascript desktop notification with error context.
+- **CwdChanged** (REC-06) — Reads `.claude/cast.json` repo metadata and exports `CAST_REPO_CLASS` environment variable (values: `personal`, `work`). Enables repo-aware hooks and agent behavior.
+- **SessionStart** — Now reads the latest `~/Documents/Claude/YYYY-MM/*.md` journal entry (if present) and injects a context banner for continuity. Sourced via `cast-claudes_journal` standalone repo.
+
+**Hook Matcher Pattern (REC-02):**
+All PreToolUse/PostToolUse hook entries in CAST agent definitions already use the `matcher` field as an equivalent pre-filter to the deprecated `if` field. No migration needed.
+
+**Trail of Bits Security Skills (Phase 7):**
+Install security audit skills via `/plugin marketplace add trailofbits/skills`. Integrated with `security` agent for enhanced vulnerability scanning. Requires Claude Code v2.1.118+.
+
+**Managed Agents & Forked Subagents (REC-04):**
+Parallel local agent dispatch via `cast-managed-agent.sh --fork` exports `CLAUDE_CODE_FORK_SUBAGENT=1` for worktree-free parallel work. Managed Agents preferred for long-running autonomously-executed tasks.
+
+**Rate Limits API (REC-05):**
+`cast-rate-check.py` snapshots `cast.db` `rate_limit_snapshots` table on SessionStart, capturing Anthropic API rate limit headroom. Surfaced in `morning-briefing` output to prevent surprise throttling.
+
+**PreCompact Guard Block (REC-10):**
+`/compact` now blocks when the current git repository has staged or unstaged changes. Gracefully passes through outside git worktrees. Prevents accidental context loss mid-work.
+
+**Agent initialPrompt Frontmatter (REC-08):**
+`morning-briefing` and `standup-writer` agents auto-load context from agent definition `initialPrompt` field on first turn, reducing cold-start latency and improving continuity.
+
+**Journal Continuity:**
+SessionStart hook reads the latest dated journal entry from Claude's Journal (cast-claudes_journal standalone repo) and injects it as a SessionStart banner. Enables context carryover from prior day without explicit carry-forward.
+
 ---
 
 ## Observability & cast.db v8
@@ -263,6 +291,19 @@ MIT — see [LICENSE](LICENSE).
 
 **Edward Kubiak** — Full-stack engineer, Claude Code expert.  
 GitHub: [ek33450505](https://github.com/ek33450505) | CAST Portfolio: [castframework.dev](https://castframework.dev)
+
+---
+
+## Deferred Work (Phase A–C Follow-up)
+
+The following capabilities were audited but deferred pending dependency updates or effort assessment:
+
+- **REC-03: MCP Tools from Hooks** — Allow hook scripts to define custom MCP tools (`type: "mcp_tool"` in hook JSON). Currently blocked: installed Claude Code v2.1.116 < required v2.1.118. Re-evaluate after `claude update` and once Anthropic publishes the MCP parameter schema.
+- **REC-07: Haiku 3 → 4.5 Migration** — Zero hits found in code paths; Haiku 3 is fully retired as of 2026-04. No migration work needed — Anthropic API defaults to Haiku 4.5.
+- **REC-09: Effort Flag Upgrade (xhigh)** — `planner.md` and `debugger.md` agent definitions remain model: sonnet. REC-09 proposes adding `effort: xhigh` to these files, but this requires Opus-tier models. Defer until these agents are promoted to Opus or the `effort` field supports sonnet-tier thresholds.
+- **CAST_ALLOW_DIRTY_COMPACT Env Var** — Future UX improvement to allow `/compact` override when git has dirty state. Suggested by `code-reviewer` to reduce friction in iterative sessions. Currently blocks for safety; revisit after gathering user feedback.
+- **Journal Session Re-prompt Hardening** — Apr 22–26 entry gap traced to `/tmp/cast_journal_cancelled_*` flag files persisting across sessions. Future work to detect prior-day empty entries and re-prompt on next SessionStart.
+- **cast-claudes_journal v0.2.0 Release** — After release tarball is cut, bump `homebrew-claudes-journal` formula sha256 checksum.
 
 ---
 
