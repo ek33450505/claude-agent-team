@@ -1,0 +1,121 @@
+#!/usr/bin/env bats
+
+load 'test_helper/bats-support/load'
+load 'test_helper/bats-assert/load'
+
+REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+SHIM="${REPO_DIR}/scripts/cast-managed-agent.sh"
+
+# ---------------------------------------------------------------------------
+# Setup / Teardown
+# ---------------------------------------------------------------------------
+
+setup() {
+  export ORIG_HOME="$HOME"
+  export ORIG_PATH="$PATH"
+
+  export HOME="$(mktemp -d)"
+  export BATS_TMPDIR="${HOME}/bats-tmp"
+  mkdir -p "$BATS_TMPDIR"
+
+  MOCK_BIN_DIR="${BATS_TMPDIR}/bin"
+  mkdir -p "$MOCK_BIN_DIR"
+  export PATH="${MOCK_BIN_DIR}:${ORIG_PATH}"
+
+  # Mock curl: reads status from curl-status.txt (default 200), response from curl-response.json
+  cat > "${MOCK_BIN_DIR}/curl" <<'CURL_MOCK'
+#!/bin/bash
+RESPONSE_FILE="${BATS_TMPDIR}/curl-response.json"
+STATUS_FILE="${BATS_TMPDIR}/curl-status.txt"
+STATUS=200
+[ -f "$STATUS_FILE" ] && STATUS="$(cat "$STATUS_FILE")"
+if [ -f "$RESPONSE_FILE" ]; then
+  cat "$RESPONSE_FILE"
+else
+  echo '{"id":"agent_test123","type":"agent"}'
+fi
+echo ""
+echo "__HTTP_STATUS__${STATUS}"
+CURL_MOCK
+  chmod +x "${MOCK_BIN_DIR}/curl"
+
+  # Block real keychain access — replace `security` with a no-op that exits 1
+  cat > "${MOCK_BIN_DIR}/security" <<'SEC_MOCK'
+#!/bin/bash
+exit 1
+SEC_MOCK
+  chmod +x "${MOCK_BIN_DIR}/security"
+
+  # Set DB path into temp home so tests don't touch real cast.db
+  export CAST_DB_PATH="${HOME}/.claude/cast.db"
+  mkdir -p "${HOME}/.claude/logs"
+}
+
+teardown() {
+  export PATH="$ORIG_PATH"
+  export HOME="$ORIG_HOME"
+  unset BATS_TMPDIR MOCK_BIN_DIR CAST_DB_PATH
+  unset ANTHROPIC_API_KEY 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Test cases
+# ---------------------------------------------------------------------------
+
+@test "missing API key + no keychain → exits 2" {
+  unset ANTHROPIC_API_KEY
+  run bash "$SHIM" test-agent "do something"
+  assert_failure
+  [ "$status" -eq 2 ]
+  assert_output --partial "ANTHROPIC_API_KEY"
+}
+
+@test "401 fail-closed even with --local-fallback" {
+  export ANTHROPIC_API_KEY="test-key-12345"
+  echo "401" > "${BATS_TMPDIR}/curl-status.txt"
+  cat > "${BATS_TMPDIR}/curl-response.json" <<'EOF'
+{"error":{"type":"authentication_error","message":"invalid x-api-key"}}
+EOF
+  run bash "$SHIM" test-agent "do something" --local-fallback
+  assert_failure
+  assert_output --partial "authentication failure"
+}
+
+@test "403 fail-closed even with --local-fallback" {
+  export ANTHROPIC_API_KEY="test-key-12345"
+  echo "403" > "${BATS_TMPDIR}/curl-status.txt"
+  cat > "${BATS_TMPDIR}/curl-response.json" <<'EOF'
+{"error":{"type":"permission_error","message":"permission denied"}}
+EOF
+  run bash "$SHIM" test-agent "do something" --local-fallback
+  assert_failure
+  assert_output --partial "authentication failure"
+}
+
+@test "success path 200 (full flow) → exits 0 with stdout" {
+  export ANTHROPIC_API_KEY="test-key-12345"
+  # All three curl calls will use this response (agent, env, session all return id)
+  cat > "${BATS_TMPDIR}/curl-response.json" <<'EOF'
+{"id":"agent_test123","type":"agent"}
+EOF
+  run bash "$SHIM" test-agent "do something"
+  assert_success
+  [ -n "$output" ]
+}
+
+@test "--define-only mode → exits 0" {
+  export ANTHROPIC_API_KEY="test-key-12345"
+  cat > "${BATS_TMPDIR}/curl-response.json" <<'EOF'
+{"id":"agent_test123","type":"agent"}
+EOF
+  run bash "$SHIM" test-agent "do something" --define-only
+  assert_success
+}
+
+@test "no args → exits 2 with Usage" {
+  export ANTHROPIC_API_KEY="test-key-12345"
+  run bash "$SHIM"
+  assert_failure
+  [ "$status" -eq 2 ]
+  assert_output --partial "Usage"
+}
