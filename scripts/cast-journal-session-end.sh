@@ -12,6 +12,7 @@ set +e
 
 VAULT_DIR="${HOME}/Documents/Claude"
 TODAY="$(date +%Y-%m-%d)"
+YESTERDAY="$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d 'yesterday' +%Y-%m-%d)"
 MONTH="$(date +%Y-%m)"
 MONTH_DIR="${VAULT_DIR}/${MONTH}"
 TODAY_NOTE="${MONTH_DIR}/${TODAY}.md"
@@ -31,7 +32,7 @@ fi
 touch "$CANCEL_FLAG"
 
 cat <<HOOKJSON
-{"decision": "block", "reason": "No journal entry written today. Before closing, create a per-date note at ~/Documents/Claude/${MONTH}/${TODAY}.md using the Write tool. Start with a '# <Month Day, Year>' heading and write in first person. This is your space, not a work log — note what was interesting, surprising, or worth carrying forward. Use [[wiki-links]] to connect to prior entries when relevant. Then you may stop."}
+{"decision": "block", "reason": "No journal entry written today. Before closing, create ~/Documents/Claude/${MONTH}/${TODAY}.md using the Write tool.\n\nSuggested starter:\n# <Month Day, Year>\n\n<your reflection — first person, what was interesting/surprising/worth carrying forward>\n\n---\n**Prev:** [[${YESTERDAY}]]\n\nWrap recurring concepts as [[wiki-links]] (e.g., [[CAST]], [[Engram]], [[Managed Agents]]) so they form topic hubs in the graph. Then you may stop."}
 HOOKJSON
 
 exit 0
