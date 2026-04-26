@@ -101,3 +101,33 @@ EOF
   assert_success
   assert_output ""
 }
+
+@test "CAST_REPO_ROOT override: script uses env-var repo root, not script dir" {
+  # Point CAST_REPO_ROOT at a temp dir with no agents/core — expect exit 0 (no drift, nothing to compare)
+  local fake_repo
+  fake_repo="$(mktemp -d)"
+  mkdir -p "$fake_repo/agents/core" "$fake_repo/agents/personal" "$fake_repo/scripts"
+  run env CAST_REPO_ROOT="$fake_repo" \
+          CAST_RUNTIME_AGENTS="$(mktemp -d)" \
+          CAST_RUNTIME_SCRIPTS="$(mktemp -d)" \
+          bash "$REPO_DIR/scripts/cast-sync-check.sh"
+  # No files in source dirs → no drift → exit 0
+  assert_success
+  rm -rf "$fake_repo"
+}
+
+@test "allow-list: runtime-only script is NOT flagged as MISSING_IN_REPO" {
+  local fake_repo runtime_scripts
+  fake_repo="$(mktemp -d)"
+  runtime_scripts="$(mktemp -d)"
+  mkdir -p "$fake_repo/agents/core" "$fake_repo/agents/personal" "$fake_repo/scripts"
+  # Put an allow-listed filename in runtime scripts but NOT in repo scripts
+  touch "$runtime_scripts/cast-session-start-journal.sh"
+  run env CAST_REPO_ROOT="$fake_repo" \
+          CAST_RUNTIME_AGENTS="$(mktemp -d)" \
+          CAST_RUNTIME_SCRIPTS="$runtime_scripts" \
+          bash "$REPO_DIR/scripts/cast-sync-check.sh"
+  assert_success
+  refute_output --partial "MISSING_IN_REPO"
+  rm -rf "$fake_repo" "$runtime_scripts"
+}

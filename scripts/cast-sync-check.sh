@@ -8,10 +8,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="${CAST_REPO_ROOT:-$(dirname "$SCRIPT_DIR")}"
 
 STRICT=0
 [[ "${1:-}" == "--strict" ]] && STRICT=1
+
+# Runtime-only scripts owned by other repos — not drift
+RUNTIME_ONLY_ALLOW_LIST=(
+  "cast-session-start-journal.sh"
+  "engram-style-capture.py"
+  "engram-identity-start.sh"
+  "engram-session-end.sh"
+  "engram-prompt-sentinel.py"
+  "engram-journal-extractor.py"
+  "stratum-session-start.sh"
+  "stratum-close-sentinel.sh"
+  "stratum-session-end.sh"
+)
 
 # Runtime path overrides for testability
 CAST_RUNTIME_AGENTS="${CAST_RUNTIME_AGENTS:-$HOME/.claude/agents}"
@@ -72,11 +85,14 @@ check_source_against_runtime() {
         ((drift_count++)) || true
       fi
 
-      # Mode check
-      local src_mode runtime_mode
+      # Mode check — executable-bit only (install.sh chmod is expected and not drift)
+      local src_mode runtime_mode src_exec runtime_exec
       src_mode="$(stat -c '%a' "$src_file" 2>/dev/null || stat -f '%OLp' "$src_file" 2>/dev/null || echo 'unknown')"
       runtime_mode="$(stat -c '%a' "$runtime_file" 2>/dev/null || stat -f '%OLp' "$runtime_file" 2>/dev/null || echo 'unknown')"
-      if [[ "$src_mode" != "unknown" && "$runtime_mode" != "unknown" && "$src_mode" != "$runtime_mode" ]]; then
+      src_exec=0; runtime_exec=0
+      [[ "$src_mode" =~ [75] ]] && src_exec=1 || true
+      [[ "$runtime_mode" =~ [75] ]] && runtime_exec=1 || true
+      if [[ "$src_exec" != "$runtime_exec" ]]; then
         echo "MODE_DIFFERS: $label/$rel_path (repo: $src_mode, runtime: $runtime_mode)"
         ((drift_count++)) || true
       fi
@@ -100,6 +116,12 @@ check_runtime_orphans() {
     local bn
     bn="$(basename "$rt_file")"
     if [[ -z "${known_agent_basenames[$bn]+_}" ]]; then
+      # Skip basenames owned by other repos
+      local skip=0
+      for allowed in "${RUNTIME_ONLY_ALLOW_LIST[@]}"; do
+        [[ "$bn" == "$allowed" ]] && skip=1 && break
+      done
+      [[ "$skip" == "1" ]] && continue
       echo "MISSING_IN_REPO: $rt_file"
       ((drift_count++)) || true
     fi
@@ -139,10 +161,14 @@ compare_dir() {
         ((drift_count++)) || true
       fi
 
-      local src_mode runtime_mode
+      # Mode check — executable-bit only (install.sh chmod is expected and not drift)
+      local src_mode runtime_mode src_exec runtime_exec
       src_mode="$(stat -c '%a' "$src_file" 2>/dev/null || stat -f '%OLp' "$src_file" 2>/dev/null || echo 'unknown')"
       runtime_mode="$(stat -c '%a' "$runtime_file" 2>/dev/null || stat -f '%OLp' "$runtime_file" 2>/dev/null || echo 'unknown')"
-      if [[ "$src_mode" != "unknown" && "$runtime_mode" != "unknown" && "$src_mode" != "$runtime_mode" ]]; then
+      src_exec=0; runtime_exec=0
+      [[ "$src_mode" =~ [75] ]] && src_exec=1 || true
+      [[ "$runtime_mode" =~ [75] ]] && runtime_exec=1 || true
+      if [[ "$src_exec" != "$runtime_exec" ]]; then
         echo "MODE_DIFFERS: $label/$rel_path (repo: $src_mode, runtime: $runtime_mode)"
         ((drift_count++)) || true
       fi
@@ -159,6 +185,12 @@ compare_dir() {
       local bn
       bn="$(basename "$rt_file")"
       if [[ -z "${local_known[$bn]+_}" ]]; then
+        # Skip basenames owned by other repos
+        local skip=0
+        for allowed in "${RUNTIME_ONLY_ALLOW_LIST[@]}"; do
+          [[ "$bn" == "$allowed" ]] && skip=1 && break
+        done
+        [[ "$skip" == "1" ]] && continue
         echo "MISSING_IN_REPO: $rt_file"
         ((drift_count++)) || true
       fi
