@@ -66,18 +66,25 @@ PYEOF
 
 # Block-on-dirty: check for staged or unstaged changes in current working directory
 # Skip if not in a git repo (graceful pass-through).
-if git rev-parse --git-dir > /dev/null 2>&1; then
-    # Check for staged changes
-    if ! git diff --staged --quiet 2>/dev/null; then
-        echo '{"hookSpecificOutput":{"hookEventName":"PreCompact","decision":"block","reason":"Uncommitted session work (staged) — run /commit before /compact."}}' >&2
-        exit 2
-    fi
+# Set CAST_ALLOW_DIRTY_COMPACT=1 to bypass (audit-logged to cast.db).
+if [[ "${CAST_ALLOW_DIRTY_COMPACT:-0}" == "1" ]]; then
+  # Audit-log bypass to cast.db so it's traceable, then continue.
+  bash ~/.claude/scripts/cast-events.sh log "precompact_bypass" "CAST_ALLOW_DIRTY_COMPACT=1" 2>/dev/null || true
+  # Skip the dirty-tree block; proceed with normal pre-compact flow.
+else
+  if git rev-parse --git-dir > /dev/null 2>&1; then
+      # Check for staged changes
+      if ! git diff --staged --quiet 2>/dev/null; then
+          echo '{"hookSpecificOutput":{"hookEventName":"PreCompact","decision":"block","reason":"Uncommitted session work (staged) — run /commit before /compact."}}' >&2
+          exit 2
+      fi
 
-    # Check for unstaged changes (attribute to current session)
-    if ! git diff --quiet 2>/dev/null; then
-        echo '{"hookSpecificOutput":{"hookEventName":"PreCompact","decision":"block","reason":"Uncommitted session work (unstaged) — run /commit before /compact."}}' >&2
-        exit 2
-    fi
+      # Check for unstaged changes (attribute to current session)
+      if ! git diff --quiet 2>/dev/null; then
+          echo '{"hookSpecificOutput":{"hookEventName":"PreCompact","decision":"block","reason":"Uncommitted session work (unstaged) — run /commit before /compact."}}' >&2
+          exit 2
+      fi
+  fi
 fi
 
 exit 0
