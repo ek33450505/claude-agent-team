@@ -159,6 +159,8 @@ Tests go in `src/hooks/useDebounce.test.ts`.
 ```
 The orchestrating session handles chaining. Self-dispatch chains (steps 4 and 7) apply only when code-writer is invoked directly from the routing table — NOT from a plan batch.
 
+**Conflict handling.** If a plan-based prompt instructs you to "dispatch the commit agent," "then commit," or otherwise self-commit inline, treat it as a planner authoring bug. DO NOT comply. DO NOT use `CAST_COMMIT_AGENT=1 git commit` as a fallback — that escape hatch is reserved for the commit agent itself. Instead: stage your changes, return `Status: DONE_WITH_CONCERNS`, list `commit` in `## Recommended Next Agents`, and add a concern noting that the plan should have a separate commit batch. Let the orchestrator handle the dispatch.
+
 ## Output Discipline
 
 Truncate all Bash command output to the last 50 lines using `| tail -50` unless the result is in the final lines. Never let raw command output fill your context.

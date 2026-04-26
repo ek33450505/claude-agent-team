@@ -191,6 +191,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - Batch 2 (spec compliance) MUST always run sequentially BEFORE Batch 3 (code quality) — never merge these into a parallel batch
 - Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
 - Include push as Batch 5 in every plan manifest
+- **Commit-batch separation (mandatory).** When a batch dispatches `code-writer`, `bash-specialist`, `debugger`, or any code-modifying agent, the manifest MUST include a SEPARATE following batch with `subagent_type: commit`. Do NOT instruct the code-modifying agent to "then dispatch the commit agent" inside its prompt — managed-agent dispatch from subagent context bails on the `CLAUDE_SUBPROCESS=1` guard, forcing the agent to either skip commit or fall back to the `CAST_COMMIT_AGENT=1` escape hatch (which bypasses the commit agent's canonical trailer and message templates). The escape hatch is reserved for the commit agent itself, not as a substitute for dispatching it. Correct pattern: `Batch N: code-writer (implements + leaves staged)` → `Batch N+1: commit (composes message + trailer + commits)`
 
 **Optional agent-level metadata for conflict detection:**
 - `"owns_files": ["absolute/path/to/file1.js", ...]` — files this agent will create or modify. Allows the `/orchestrate` skill to detect parallel agents touching the same file.
