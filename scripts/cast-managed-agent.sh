@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # cast-managed-agent.sh — dispatch a task via Anthropic Managed Agents
 # Usage:
-#   cast-managed-agent.sh <agent-name> <prompt> [--local-fallback] [--define-only]
+#   cast-managed-agent.sh <agent-name> <prompt> [--local-fallback] [--define-only] [--fork]
+# Flags:
+#   --local-fallback   fall back to local dispatch on Managed Agents API errors
+#   --define-only      stop after agent definition (do not create environment/session)
+#   --fork             export CLAUDE_CODE_FORK_SUBAGENT=1 in agent environment
 # Env:
 #   ANTHROPIC_API_KEY   required (or stored in macOS keychain under 'anthropic-api-key')
 # Beta header: managed-agents-2026-04-01
@@ -25,11 +29,13 @@ AGENT_NAME=""
 PROMPT=""
 LOCAL_FALLBACK=0
 DEFINE_ONLY=0
+FORK_MODE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local-fallback) LOCAL_FALLBACK=1; shift ;;
     --define-only) DEFINE_ONLY=1; shift ;;
+    --fork) FORK_MODE=1; shift ;;
     -*)
       echo "Unknown flag: $1" >&2
       exit 2
@@ -49,7 +55,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$AGENT_NAME" || -z "$PROMPT" ]]; then
-  echo "Usage: cast-managed-agent.sh <agent-name> <prompt> [--local-fallback] [--define-only]" >&2
+  echo "Usage: cast-managed-agent.sh <agent-name> <prompt> [--local-fallback] [--define-only] [--fork]" >&2
   exit 2
 fi
 
@@ -87,6 +93,11 @@ if [[ "$DEFINE_ONLY" -eq 1 ]]; then
   MODE_LABEL="define-only"
 else
   MODE_LABEL="full-session"
+fi
+
+# --- Export fork mode if requested ---
+if [[ "$FORK_MODE" -eq 1 ]]; then
+  export CLAUDE_CODE_FORK_SUBAGENT=1
 fi
 
 # --- Telemetry helper ---
