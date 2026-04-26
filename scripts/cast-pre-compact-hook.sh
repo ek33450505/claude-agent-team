@@ -9,6 +9,7 @@ set -euo pipefail
 
 # _log_error: append a structured error line to hook-errors.log (never fails itself)
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+# shellcheck disable=SC2329
 _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
 
 INPUT="$(cat 2>/dev/null || true)"
@@ -62,5 +63,21 @@ try:
 except Exception:
     pass
 PYEOF
+
+# Block-on-dirty: check for staged or unstaged changes in current working directory
+# Skip if not in a git repo (graceful pass-through).
+if git rev-parse --git-dir > /dev/null 2>&1; then
+    # Check for staged changes
+    if ! git diff --staged --quiet 2>/dev/null; then
+        echo '{"hookSpecificOutput":{"hookEventName":"PreCompact","decision":"block","reason":"Uncommitted session work (staged) — run /commit before /compact."}}' >&2
+        exit 2
+    fi
+
+    # Check for unstaged changes (attribute to current session)
+    if ! git diff --quiet 2>/dev/null; then
+        echo '{"hookSpecificOutput":{"hookEventName":"PreCompact","decision":"block","reason":"Uncommitted session work (unstaged) — run /commit before /compact."}}' >&2
+        exit 2
+    fi
+fi
 
 exit 0

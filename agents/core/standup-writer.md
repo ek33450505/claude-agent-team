@@ -7,6 +7,7 @@ tools: Read, Write, Bash, Glob, Grep
 model: haiku
 effort: low
 color: green
+initialPrompt: "Pull last 24h git activity and Todoist completions."
 memory: local
 maxTurns: 15
 skills: [git-activity, cast-conventions]

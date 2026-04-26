@@ -7,7 +7,7 @@ description: >
 tools: Read, Write, Bash, Glob, Grep
 model: haiku
 effort: low
-initialPrompt: "/morning"
+initialPrompt: "Load memory index, check today's date, read last journal entry."
 color: bronze
 memory: local
 maxTurns: 25
