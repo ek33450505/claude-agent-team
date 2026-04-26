@@ -75,3 +75,10 @@ When running more than one terminal on the same repo simultaneously:
 
 ## Stat/Fact Verification
 - Before writing any public-facing content (LinkedIn, README, dev.to articles, announcements) that cites project stats (agent counts, test counts, line counts), verify numbers against the actual repo state — do not rely on memory or prior session context.
+
+## Phase 5b — Workflow Closures
+
+- **Auto mode:** `defaultMode: "auto"` is set but has a session-start bug — use `--permission-mode auto` until upstream fixes it.
+- **Routines:** Prefer `/schedule` over local cron for scheduled CAST jobs.
+- **Forked subagents:** Cannot spawn sub-subagents — no nested orchestration.
+- **Task Budgets:** Opus 4.7 API beta only — no Claude Code surface yet; revisit when GA.

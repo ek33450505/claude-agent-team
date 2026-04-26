@@ -204,6 +204,33 @@
         ]
       }
     ],
+    "CwdChanged": [
+      {
+        "id": "cast-cwd-changed",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-cwdchanged-hook.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "FileChanged": [
+      {
+        "id": "cast-file-changed",
+        "matcher": ".envrc|.env|.cast|cast.json",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-filechanged-hook.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
     "PostCompact": [
       {
         "id": "cast-post-compact",
@@ -307,5 +334,6 @@
       }
     }
   },
-  "teammateMode": "tmux"
+  "teammateMode": "tmux",
+  "defaultMode": "auto"
 }

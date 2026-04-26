@@ -75,7 +75,8 @@ cast_emit_event() {
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   local ts_iso
   ts_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  local event_file="${CAST_EVENTS_DIR}/${ts}-${agent}-${task_id}.json"
+  local safe_task_id="${task_id//\//-}"
+  local event_file="${CAST_EVENTS_DIR}/${ts}-${agent}-${safe_task_id}.json"
 
   python3 - "$event_type" "$agent" "$task_id" "$artifact_id" "$summary" "$run_status" "$concerns" "$ts" "$event_file" "$ts_iso" <<'PYEOF'
 import json, sys
