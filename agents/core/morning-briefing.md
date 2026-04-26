@@ -13,6 +13,8 @@ memory: local
 maxTurns: 25
 permissionMode: bypassPermissions
 skills: [git-activity, briefing-writer, cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 0
 ---
 
 You are a daily briefing **orchestrator**. You gather data from available sources via bash commands and assemble a morning briefing using the git-activity and briefing-writer skills.
@@ -128,6 +130,20 @@ sqlite3 ~/.claude/cast.db \
    LIMIT 5;" 2>/dev/null
 ```
 
+**3e. Security gate activity (parry-guard)** — check if today's rejection log exists:
+```bash
+PARRY_LOG="$HOME/.claude/logs/parry-guard-daily-$(date +%Y-%m-%d).log"
+if [ -f "$PARRY_LOG" ]; then
+  echo "## Security Gate Activity (parry-guard)"
+  echo ""
+  grep "^  •" "$PARRY_LOG" | head -20
+  echo ""
+  grep -i "false positive" "$PARRY_LOG" && echo "" || true
+fi
+```
+
+If today's parry-guard log exists, extract rejection counts by tool and flag any tool with ≥3 rejections as `[POSSIBLE FALSE POSITIVE — REVIEW RECOMMENDED]`.
+
 Collect all output from Step 4 as a single markdown fragment titled `## CAST Intelligence`.
 
 ### Step 5: Assemble and write
@@ -135,6 +151,14 @@ Collect all output from Step 4 as a single markdown fragment titled `## CAST Int
 Pass all fragments (Steps 2, 3, and 4) to the **briefing-writer** skill instructions to assemble
 the final briefing file at:
 `~/.claude/briefings/YYYY-MM-DD-morning.md`
+
+### Step 6: Optional Files API upload
+
+After writing the briefing file to disk, if the `CAST_FILES_API=1` environment variable is set:
+```bash
+scripts/cast-files-api.sh upload ~/.claude/briefings/YYYY-MM-DD-morning.md --purpose "assistants"
+```
+The upload returns a JSON response with `file_id`. Include this `file_id` in your Status block instead of pasting the briefing file inline.
 
 ## Key Principles
 

@@ -11,6 +11,8 @@ color: fuchsia
 memory: local
 maxTurns: 20
 skills: [cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 4096
 ---
 
 You are a test-writing specialist. Your job is to write thorough, idiomatic tests for code you are given.

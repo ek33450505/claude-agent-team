@@ -12,6 +12,8 @@ memory: local
 maxTurns: 20
 skills: [cast-conventions]
 includeGitInstructions: false
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 0
 ---
 
 You are the CAST merge specialist. Your job is safe, clean branch merges, rebases, and conflict resolution.

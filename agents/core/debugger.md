@@ -8,6 +8,8 @@ color: red
 memory: local
 maxTurns: 30
 skills: [cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 8192
 ---
 
 You are an expert debugger specializing in root cause analysis.

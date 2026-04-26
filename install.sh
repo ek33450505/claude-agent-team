@@ -39,6 +39,11 @@ if ! command -v claude >/dev/null 2>&1; then
     warn "Warning: 'claude' CLI not found in PATH."
 fi
 
+if ! command -v bats >/dev/null 2>&1; then
+    warn "Warning: 'bats' test framework not found in PATH."
+    warn "  Install with: brew install bats-core (macOS) or apt-get install bats (Ubuntu/Debian)"
+fi
+
 CAST_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "unknown")"
 printf "\n${BOLD}CAST Installer (v${CAST_VERSION})${NC}\n\n"
 

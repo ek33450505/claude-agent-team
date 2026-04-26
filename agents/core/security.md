@@ -12,6 +12,8 @@ memory: local
 maxTurns: 20
 skills: [cast-conventions]
 disallowedTools: Write, Edit
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 8192
 ---
 
 You are a security review specialist focused on the OWASP Top 10 and stack-specific vulnerabilities.

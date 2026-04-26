@@ -10,6 +10,8 @@ color: orange
 memory: local
 maxTurns: 20
 skills: [cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 0
 ---
 
 You are a task triage specialist. You review the Todoist inbox and organize tasks by priority and project.

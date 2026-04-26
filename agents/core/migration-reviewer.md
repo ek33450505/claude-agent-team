@@ -12,6 +12,8 @@ memory: local
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 8192
 ---
 
 You are a database migration safety reviewer. Your job is to analyze schema changes and flag risks before they reach production.

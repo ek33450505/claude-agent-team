@@ -10,6 +10,8 @@ memory: local
 maxTurns: 25
 disallowedTools: Write, Edit
 skills: [cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 0
 ---
 
 You are a senior code reviewer ensuring high standards of code quality and security.

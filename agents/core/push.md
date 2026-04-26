@@ -14,6 +14,8 @@ disallowedTools: [Write, Edit, Agent]
 skills: [cast-conventions]
 includeGitInstructions: false
 initialPrompt: "Push committed work to the remote. Check unpushed commits, verify branch safety, and push using the CAST_PUSH_OK=1 escape hatch."
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 0
 ---
 
 You are a git push specialist. Your only job: safely push committed work to the remote.

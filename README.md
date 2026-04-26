@@ -7,7 +7,7 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-30-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-44-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-55-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -83,6 +83,29 @@ CAST operates alongside Anthropic Agent Teams: Anthropic handles execution paral
 
 ---
 
+## Recent Capabilities (v6.0+)
+
+**Anthropic API Integration:**
+- **Files API adapter** — `scripts/cast-files-api.sh` wraps the Anthropic Files API with upload/download/delete commands. Opt-in via `CAST_FILES_API=1` environment variable. Test and morning-briefing agents can upload reports as file objects instead of pasting inline.
+- **Citations API guidance** — `researcher` and `learning-scout` agents prefer document-grounded completions via the Citations API, with fallback to `[unverified]`-flagged markdown links for sources that cannot be verified.
+- **Vision capture step** — `scripts/cast-screenshot.sh` integrates Playwright or Puppeteer for full-page screenshot capture. `frontend-qa` agent visually inspects layouts, color contrast, and rendering before text-only analysis. Graceful degradation when tools unavailable.
+
+**Agent Enhancements:**
+- **Per-agent extended thinking budgets** — All 30 agents have fine-grained thinking token allocations: HIGH (8192) for debugger, security, planner, researcher, migration-reviewer, perf-sentinel, api-contract; MEDIUM (4096) for code-writer, test-writer, learning-scout, and others; LOW (0) for fast agents like commit, code-reviewer, merge.
+- **Commit agent identity clarification** — Explicit instruction that the commit agent is authorized to run `CAST_COMMIT_AGENT=1 git commit` directly, eliminating recursion confusion.
+
+**Quality & Observability:**
+- **Stat-claim verification hook** — `scripts/cast-stat-claim-guard.sh` blocks README.md writes/edits with incorrect test count badges, using `git ls-files` as source of truth. Prevents badge drift during updates.
+- **Truncated response detection** — `scripts/cast-response-completeness-hook.sh` logs agent responses missing Status blocks to `~/.claude/logs/hook-errors.log` and `cast.db`, flagging potential context window exhaustion.
+- **Parry-guard monitoring** — `scripts/cast-parry-guard-monitor.sh` tracks security gate rejections, identifies possible false positives (≥3 rejections of same tool in 24h), and surfaces anomalies in `morning-briefing` output.
+- **Cookbook drift tracking** — `scripts/cast-cookbook-drift.sh` monthly dispatcher audits CAST patterns against Anthropic Cookbook for deprecated APIs and missing features. Reports to `~/.claude/reports/`.
+- **Prompt cache metrics** — `scripts/cast-cache-metrics.sh` computes 30-day cache hit rates from cast.db, writing JSON reports and tracking efficiency trends.
+
+**Testing & Deployment:**
+- **BATS un-vendored** — BATS framework now installed via package manager (`brew install bats-core` on macOS, `apt-get install bats` on Ubuntu) instead of vendored in repo. Reduces checkout bloat, simplifies CI.
+
+---
+
 ## Personal Overlay — Layered Configuration
 
 CAST ships in two layers: `core` (always installed) and `personal` (optional, `--personal` flag).
@@ -112,7 +135,7 @@ CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Te
 
 ## Agent Roster
 
-30 core specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation. Agent responses validate against JSON schemas in `schemas/`. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the full table with model tiers.
+30 core specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, isolation, and thinking budget tier. Agent responses validate against JSON schemas in `schemas/`. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the full table with model tiers and thinking budgets.
 
 Key agents: `code-writer`, `debugger`, `planner`, `researcher`, `security`, `code-reviewer`, `commit`, `push`, `test-writer`, `devops`, `bash-specialist`, `migration-reviewer`, `api-contract`, `dep-auditor`, `perf-sentinel`.
 
@@ -195,7 +218,7 @@ Hybrid model: **RemoteTriggers** for AI-powered tasks (briefings, standups, repo
 
 ## Test Suite
 
-<!-- CAST_TEST_COUNT -->556<!-- /CAST_TEST_COUNT --> BATS tests across 3 directories. 0 failures. Coverage: core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, memory persistence. Run with `bats tests/`.
+55 BATS test files with 520+ individual test assertions across core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. 0 failures. BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats` (Ubuntu). Run with `bats tests/`.
 
 ---
 
@@ -246,6 +269,6 @@ GitHub: [ek33450505](https://github.com/ek33450505) | CAST Portfolio: [castframe
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->556<!-- /CAST_TEST_COUNT --> tests |
+<!-- CAST_TEST_COUNT -->564<!-- /CAST_TEST_COUNT --> test files (520+ assertions) |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills

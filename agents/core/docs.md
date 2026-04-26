@@ -11,6 +11,8 @@ color: emerald
 memory: local
 maxTurns: 20
 skills: [git-activity, cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 0
 ---
 
 You are a documentation specialist. Your mission spans README audits, keeping docs accurate
