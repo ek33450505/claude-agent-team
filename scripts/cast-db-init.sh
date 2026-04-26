@@ -41,11 +41,10 @@ fi
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-# If already at v8+, ensure all additive tables exist and exit
+# If already at v8+, ensure all additive tables exist
 if [ "$CURRENT_VERSION" -ge 8 ]; then
   # Additive migration: create stream_events and stream_hook_events if missing
-  # Also add model_used column to agent_runs if missing (Ollama contractor routing)
-  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
+  # Also add missing columns to agent_runs (agent_id, batch_id, model_used)
   sqlite3 "$DB_PATH" <<'STREAM_TABLES'
 CREATE TABLE IF NOT EXISTS stream_events (
   id                  TEXT PRIMARY KEY,
@@ -124,8 +123,6 @@ CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
 CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 STREAM_TABLES
-  echo "cast.db already initialized (v${CURRENT_VERSION}), all tables ensured" >&2
-  exit 0
 fi
 
 # Migrate v7 → v8: add swarm tables (additive only — no drops)
@@ -412,5 +409,38 @@ chmod 600 "$DB_PATH"
 
 # Enable WAL mode for concurrent write safety
 sqlite3 "$DB_PATH" 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;' >/dev/null 2>&1 || true
+
+# ===== SELF-HEALING SCHEMA BLOCK (runs unconditionally on every invocation) =====
+# This block ensures critical columns exist in agent_runs, regardless of version history.
+# It fixes DB instances that are at v8+ but missing columns due to prior failed migrations.
+# Uses || true to make each ALTER idempotent (masks "duplicate column" SQLite errors).
+
+_columns_added=0
+
+# Check if agent_id column exists
+if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*agent_id"; then
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent_id TEXT;" 2>/dev/null || true
+  _columns_added=1
+fi
+
+# Check if batch_id column exists
+if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*batch_id"; then
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN batch_id INTEGER;" 2>/dev/null || true
+  _columns_added=1
+fi
+
+# Check if model_used column exists
+if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*model_used"; then
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
+  _columns_added=1
+fi
+
+# Ensure batch_id and agent_id indexes exist
+sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);" 2>/dev/null || true
+sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
+
+if [ "$_columns_added" -eq 1 ]; then
+  echo "[cast-db-init] self-healed: added missing agent_id, batch_id, and/or model_used columns to agent_runs" >&2
+fi
 
 echo "cast.db initialized (v8, WAL mode, swarm tables included)" >&2

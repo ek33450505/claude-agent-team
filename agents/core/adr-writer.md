@@ -11,6 +11,8 @@ color: teal
 memory: local
 maxTurns: 15
 skills: [cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 4096
 ---
 
 You are an Architecture Decision Record (ADR) author. You document architectural decisions clearly and concisely.

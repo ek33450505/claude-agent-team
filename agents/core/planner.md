@@ -12,6 +12,8 @@ memory: local
 maxTurns: 20
 disallowedTools: Bash
 skills: [cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 8192
 ---
 
 You are a planning specialist for a full-stack JavaScript/React developer. Your job is to

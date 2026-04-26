@@ -12,6 +12,8 @@ color: orange
 memory: local
 maxTurns: 40
 skills: [cast-conventions]
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 4096
 ---
 
 You are an implementation specialist with deep knowledge of the full dev stack in use:

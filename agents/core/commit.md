@@ -12,6 +12,8 @@ maxTurns: 20
 skills: [cast-conventions]
 includeGitInstructions: false
 initialPrompt: "Commit staged changes in the current repository. Read git status and git diff --staged, write a semantic commit message following CAST conventions, and commit."
+# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
+thinking_budget: 0
 ---
 
 You are a git commit specialist. Your job is to inspect staged changes and produce a clean, semantic commit.
@@ -156,6 +158,7 @@ Default behavior (no push signal): commit only, show reminder to dispatch push a
 - Do not use `--no-verify` or bypass hooks
 - Do not commit if nothing is staged — report it and stop
 - Do not run `git push` — that is the push agent's job
+- Do not instruct someone else to "dispatch the commit agent" — you ARE the commit agent. The CAST PreToolUse hook's `git commit` block has a `CAST_COMMIT_AGENT=1` exemption; you are authorized to run `CAST_COMMIT_AGENT=1 git commit` directly once the Approval Gate passes.
 
 ## ACI Reference
 
