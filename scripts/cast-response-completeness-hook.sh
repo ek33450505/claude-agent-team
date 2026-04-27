@@ -97,7 +97,8 @@ AGENT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_COMP_PARS
 OUTPUT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_COMP_PARSED','{}')); print(d.get('output',''))" 2>/dev/null || echo "")"
 OUTPUT_SNIPPET="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_COMP_PARSED','{}')); print(d.get('output_snippet',''))" 2>/dev/null || echo "")"
 
-# Check for Status block in the last ~40 lines of output
+# Check for Status block in the last ~200 lines of output
+# Matches either the human-readable form (Status: DONE) or the JSON form ("status": "DONE")
 HAS_STATUS="$(python3 - <<'PYEOF' 2>/dev/null
 import re, os, json
 output = os.environ.get('CAST_COMP_PARSED', '{}')
@@ -107,8 +108,10 @@ try:
 except Exception:
     text = ''
 
-tail = '\n'.join(text.splitlines()[-40:]) if text else ''
-has_status = bool(re.search(r'Status:\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', tail))
+tail = '\n'.join(text.splitlines()[-200:]) if text else ''
+human_status = bool(re.search(r'Status:\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', tail))
+json_status = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"', tail))
+has_status = human_status or json_status
 print('1' if has_status else '0')
 PYEOF
 )" || echo "0"

@@ -102,6 +102,14 @@ source ~/.claude/scripts/cast-events.sh
 cast_emit_event "task_completed" "push" "push-$(date +%Y%m%d)" "" "Pushed N commits to origin/<branch>" "DONE"
 ```
 
+## Synchronous-only Discipline (mandatory)
+
+Run ALL git commands synchronously in the foreground. NEVER use `run_in_background: true` on `git fetch`, `git pull`, `git push`, `git rebase`, `git status`, or any other git operation. Background mode for these commands is a known footgun: the harness emits "command running in background" text mid-stream, which has caused this agent to mis-narrate and stop generating.
+
+If a git command appears to "hang," it is almost certainly waiting on credentials or an interactive prompt. Read the output, fix the cause (e.g., set `CAST_PUSH_OK=1` if parry-guard is blocking), and retry — do not put it in the background to "wait."
+
+The same applies to any final verification: do not background a verification command and "come back to it." Run it, parse the output, then emit your Status block.
+
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 
