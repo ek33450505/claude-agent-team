@@ -41,10 +41,11 @@ fi
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-# If already at v8+, ensure all additive tables exist
+# If already at v8+, ensure all additive tables exist and exit
 if [ "$CURRENT_VERSION" -ge 8 ]; then
   # Additive migration: create stream_events and stream_hook_events if missing
-  # Also add missing columns to agent_runs (agent_id, batch_id, model_used)
+  # Also add model_used column to agent_runs if missing (Ollama contractor routing)
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
   sqlite3 "$DB_PATH" <<'STREAM_TABLES'
 CREATE TABLE IF NOT EXISTS stream_events (
   id                  TEXT PRIMARY KEY,
@@ -123,6 +124,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
 CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 STREAM_TABLES
+  echo "cast.db already initialized (v${CURRENT_VERSION}), all tables ensured" >&2
+  exit 0
 fi
 
 # Migrate v7 → v8: add swarm tables (additive only — no drops)
