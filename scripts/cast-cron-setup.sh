@@ -6,10 +6,12 @@
 # Scheduled tasks:
 #   0 7  * * *   morning   — daily morning briefing at 07:00 (--agent morning-briefing)
 #   0 18 * * *   summary   — daily agent summary at 18:00 (--agent docs)
-#   0 9  * * 1   cost-report — weekly cost report at 09:00 Monday (--agent researcher)
 #   0 3  * * *   tidy      — daily CAST cleanup at 03:00
 #   30 3 * * *   db-prune  — prune old DB rows at 03:30
 #   45 3 * * *   log-compress — compress old event logs at 03:45
+#   47 3  * * *  cast-maintenance — daily CAST maintenance at 03:47
+#   47 22 * * *  pa-backup — backup Claude/.claude and JARVIS vault at 22:47
+#   0 8  * * 0   cron-health — weekly cron job health check on Sunday 08:00
 #
 # Usage:
 #   cast-cron-setup.sh           Install missing cron entries (idempotent)
@@ -35,12 +37,14 @@ mkdir -p "$LOGS_DIR"
 # Each entry: "schedule|job_name|command"
 # Agent tasks use claude --agent; raw shell tasks use the command directly.
 declare -a CRON_ENTRIES=(
-  "0 7 * * *|morning|claude --agent morning-briefing -p 'Generate today\\'s morning briefing' --max-turns 25 --permission-mode bypassPermissions"
-  "0 18 * * *|summary|claude --agent docs -p 'Generate daily summary from cast.db: summarize agent_runs completed today, highlight BLOCKED or DONE_WITH_CONCERNS' --max-turns 15 --permission-mode bypassPermissions"
-  "0 9 * * 1|cost-report|claude --agent researcher -p 'Generate weekly cost report from cast.db agent_runs: show total cost_usd by model, cost savings this week' --max-turns 15 --permission-mode bypassPermissions"
-  "0 3 * * *|tidy|~/.local/bin/cast tidy"
+  "0 7 * * *|morning|/opt/homebrew/bin/claude --agent morning-briefing -p 'Generate today\\'s morning briefing' --max-turns 25 --permission-mode bypassPermissions"
+  "0 18 * * *|summary|/opt/homebrew/bin/claude --agent docs -p 'Generate daily summary from cast.db: summarize agent_runs completed today, highlight BLOCKED or DONE_WITH_CONCERNS' --max-turns 15 --permission-mode bypassPermissions"
+  "0 3 * * *|tidy|/Users/edkubiak/.local/bin/cast tidy"
   "30 3 * * *|db-prune|sqlite3 ~/.claude/cast.db \"DELETE FROM routing_events WHERE created_at < datetime('now', '-90 days'); DELETE FROM agent_runs WHERE started_at < datetime('now', '-90 days');\""
   "45 3 * * *|log-compress|find ~/.claude/cast/events -name '*.jsonl' -mtime +7 -exec gzip {} \\;"
+  "47 22 * * *|pa-backup|rsync -a --delete --exclude=\"node_modules/\" --exclude=\".claude/worktrees/\" --exclude=\"cast.db-wal\" --exclude=\"cast.db-shm\" --exclude=\"projects/*/subagents/\" ~/.claude/ /Users/edkubiak/Backups/jarvis/claude/ && rsync -a --delete --exclude=\".obsidian/plugins/*/node_modules/\" /Users/edkubiak/JARVIS/ /Users/edkubiak/Backups/jarvis/vault/"
+  "47 3 * * *|cast-maintenance|bash ~/.claude/scripts/cast-maintenance.sh"
+  "0 8 * * 0|cron-health|bash ~/.claude/scripts/cast-cron-health.sh"
 )
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -88,7 +92,19 @@ cmd_install() {
 
   local added=0
   local skipped=0
-  local new_crontab="$current_crontab"
+
+  # Ensure PATH header is present (idempotent)
+  local new_crontab
+  if echo "$current_crontab" | grep -qE "^(SHELL=|PATH=)"; then
+    # Header already present; use crontab as-is
+    new_crontab="$current_crontab"
+  else
+    # Insert PATH header at the top
+    new_crontab="SHELL=/bin/zsh"$'\n'"PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"$'\n'
+    if [[ -n "$current_crontab" ]]; then
+      new_crontab+=$'\n'"${current_crontab}"
+    fi
+  fi
 
   for entry in "${CRON_ENTRIES[@]}"; do
     IFS='|' read -r schedule job_name prompt <<< "$entry"
@@ -134,7 +150,7 @@ cmd_remove() {
   while IFS= read -r line; do
     if echo "$line" | grep -qF "$MARKER"; then
       removed=$((removed + 1))
-      echo "  removed: ${line##*${MARKER}:}"
+      echo "  removed: ${line##*"${MARKER}":}"
     else
       if [[ -n "$new_crontab" ]]; then
         new_crontab="${new_crontab}"$'\n'"${line}"
