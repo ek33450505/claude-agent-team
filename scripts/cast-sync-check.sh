@@ -139,17 +139,20 @@ compare_dir() {
     return 0
   fi
 
-  # Collect known basenames from this source
+  # Collect known basenames from this source (skip *.template — install.sh strips the suffix on copy)
   declare -A local_known
   while IFS= read -r -d '' src_file; do
     local bn
     bn="$(basename "$src_file")"
+    [[ "$bn" == *.template ]] && continue
     local_known["$bn"]=1
   done < <(find "$source_dir" -maxdepth 1 -type f -print0 2>/dev/null)
 
   while IFS= read -r -d '' src_file; do
     local rel_path
     rel_path="${src_file#"$source_dir"/}"
+    # Skip *.template files — install.sh copies them with the suffix stripped; they are not drift
+    [[ "$rel_path" == *.template ]] && continue
     local runtime_file="$runtime_dir/$rel_path"
 
     if [[ ! -e "$runtime_file" ]]; then
