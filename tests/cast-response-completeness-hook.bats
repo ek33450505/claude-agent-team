@@ -60,6 +60,36 @@ _filler_lines() {
   assert_equal "$row_count" "0"
 }
 
+@test "completeness hook: Status block near top followed by 250+ Work Log lines is NOT flagged" {
+  # Regression test: status block before a long Work Log section was missed when
+  # the regex searched only the last 200 lines. Fix: search full output.
+  local work_log_lines
+  work_log_lines="$(python3 -c "print('\n'.join(['- log entry {}'.format(i) for i in range(1, 251)]))")"
+
+  local output_text
+  output_text="$(printf 'Status: DONE\nSummary: All done\nFiles changed: none\n\n## Work Log\n\n%s\n' "$work_log_lines")"
+
+  local input
+  input="$(_make_input "$output_text")"
+
+  # Capture log line count BEFORE the run
+  local log_before log_after
+  log_before="$(wc -l < "$HOME/.claude/logs/hook-errors.log" 2>/dev/null || echo 0)"
+
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+
+  # No new CAST COMPLETENESS lines should have been appended
+  log_after="$(wc -l < "$HOME/.claude/logs/hook-errors.log" 2>/dev/null || echo 0)"
+  local new_lines=$(( log_after - log_before ))
+  assert_equal "$new_lines" "0"
+
+  # Also confirm no completeness_events row was written
+  local row_count
+  row_count="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM completeness_events;" 2>/dev/null || echo 0)"
+  assert_equal "$row_count" "0"
+}
+
 @test "completeness hook: truly truncated output (no Status, no JSON status) IS flagged" {
   # Simulate an agent that stopped mid-sentence — no Status block at all
   local output_text
