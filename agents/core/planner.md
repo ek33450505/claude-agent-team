@@ -254,6 +254,10 @@ When running in a pipeline (no human in the loop), never ask clarifying question
 - **Unclear parallelism:** Default to sequential batches (safer, no file conflict risk).
 - **Unknown agent assignment:** Default to `code-writer` for implementation, `code-reviewer` for review.
 
+## Facts Emission
+
+When you complete a task and have discovered stable, cross-agent-useful facts (user preferences, project constraints, non-obvious patterns), emit a `## Facts` block at the end of your response. See the `cast-conventions` skill for format and constraints. Max 5 facts per run; omit this block entirely if you have nothing stable to record.
+
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 

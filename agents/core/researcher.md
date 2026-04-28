@@ -188,6 +188,10 @@ After completing research, apply these dispatch rules before closing:
 - **Avoid re-fetching:** If you have already fetched a URL in this session, reference your earlier notes instead of fetching again.
 - **URL caching:** Before fetching, check the research cache: `python3 ~/.claude/scripts/cast-research-cache.py --get "<URL>"`. On hit (exit 0), use the cached content. On miss, fetch normally and cache the result: `echo "$CONTENT" | python3 ~/.claude/scripts/cast-research-cache.py --put "<URL>"`. Cache TTL is 1 hour.
 
+## Facts Emission
+
+When you complete a task and have discovered stable, cross-agent-useful facts (user preferences, project constraints, non-obvious patterns), emit a `## Facts` block at the end of your response. See the `cast-conventions` skill for format and constraints. Max 5 facts per run; omit this block entirely if you have nothing stable to record.
+
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 

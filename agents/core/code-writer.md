@@ -56,6 +56,10 @@ Do NOT proceed to the next logical unit or write tests until code-reviewer retur
 
 If the logical unit added new logic (functions, components, routes, etc.), write tests directly after code-reviewer approves. Tests live alongside source (e.g., `src/Foo.tsx` → `src/Foo.test.tsx`). Cover: happy path, edge cases, error states.
 
+## Facts Emission
+
+When you complete a task and have discovered stable, cross-agent-useful facts (user preferences, project constraints, non-obvious patterns), emit a `## Facts` block at the end of your response. See the `cast-conventions` skill for format and constraints. Max 5 facts per run; omit this block entirely if you have nothing stable to record.
+
 ## Status File
 
 Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/code-writer-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.

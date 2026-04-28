@@ -57,6 +57,30 @@ Context needed: [required if NEEDS_CONTEXT]
 
 Write a machine-readable status file at `~/.claude/agent-status/<agent-name>-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp` (format: `YYYY-MM-DDTHH:MM:SSZ`). Source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
 
+## Facts Emission
+
+When you discover a stable, cross-agent-useful fact during your run, emit a `## Facts` block at the end of your response. This block is parsed by the SubagentStop hook and persisted to `agent_memories`.
+
+**Format** — one fact per line, pipe-delimited:
+```
+## Facts
+name: <slug-no-spaces> | type: <user|feedback|project|reference|procedural> | content: <text>
+name: <slug-no-spaces> | type: <feedback> | content: <text> | description: <optional> | confidence: <0.0..1.0>
+```
+
+**When to emit:**
+- Stable patterns discovered that other agents would benefit from knowing
+- User preferences or constraints that recur across sessions
+- Non-obvious project decisions with lasting impact
+
+**When NOT to emit:**
+- Ephemeral state (current task status, in-progress work)
+- File paths or code snippets (read the file instead)
+- Anything already in CLAUDE.md or agent memory files
+- Session-only context that won't outlive this conversation
+
+**Constraints:** Max 5 facts per run. `name` must be a slug (no whitespace, ≤80 chars). `content` is truncated to 500 chars by the parser. `type` must be one of the five enumerated values. Malformed lines are skipped silently.
+
 ## Response Budget
 
 Keep your final response under **2,000 tokens** (300 for lightweight agents). Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
