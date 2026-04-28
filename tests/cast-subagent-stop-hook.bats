@@ -121,6 +121,27 @@ print('\n'.join(lines))
   [[ "$count" -eq 0 ]]
 }
 
+@test "no truncation record written when agent_name is empty (unknown agent FP)" {
+  # Regression: SubagentStop fired with agent_type absent/empty — CAST_STOP_AGENT resolves
+  # to "unknown". Guard must skip writing a truncated-agents record in this case.
+  local input
+  input="$(python3 -c "
+import json, sys
+# agent_type missing — resolves to 'unknown' in the hook
+print(json.dumps({
+    'session_id':             'sess-fp-test',
+    'stop_reason':            'end_turn',
+    'last_assistant_message': 'Some parent-Claude conversational text with no Status block.',
+}))
+")"
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+  # No truncated-agents record should be written
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
 @test "no false positive when Status: DONE is buried under 100+ trailing lines" {
   # Reproduces long Work Log FP: Status block early, then many filler lines push it outside a 40-line window
   local output

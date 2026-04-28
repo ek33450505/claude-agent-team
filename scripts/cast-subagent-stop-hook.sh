@@ -337,7 +337,10 @@ print('0' if (has_status or has_json_status) else '1')
 PYEOF
 )"
 
-if [[ "${TRUNCATED:-0}" = "1" ]] && [[ -n "$CAST_STOP_OUTPUT_FULL" ]]; then
+if [[ "${TRUNCATED:-0}" = "1" ]] \
+   && [[ -n "$CAST_STOP_OUTPUT_FULL" ]] \
+   && [[ -n "${CAST_STOP_AGENT:-}" ]] \
+   && [[ "${CAST_STOP_AGENT:-}" != "unknown" ]]; then
   TRUNC_DIR="${HOME}/.claude/cast/truncated-agents"
   mkdir -p "$TRUNC_DIR" 2>/dev/null || true
 

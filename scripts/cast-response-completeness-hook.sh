@@ -110,7 +110,7 @@ try:
 except Exception:
     text = ''
 
-human_status = bool(re.search(r'Status:\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', text))
+human_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', text))
 json_status = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"', text))
 has_status = human_status or json_status
 print('1' if has_status else '0')

@@ -90,6 +90,22 @@ _filler_lines() {
   assert_equal "$row_count" "0"
 }
 
+@test "completeness hook: markdown-bold Status: **DONE** is NOT flagged as truncated" {
+  # Regression: some agents emit Status: **DONE** (bold verb) — should NOT trigger FP
+  local output_text
+  output_text="$(printf 'Some work was completed.\n\nStatus: **DONE**\nSummary: All done\nFiles changed: none')"
+
+  local input
+  input="$(_make_input "$output_text")"
+
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+
+  local row_count
+  row_count="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM completeness_events;" 2>/dev/null || echo 0)"
+  assert_equal "$row_count" "0"
+}
+
 @test "completeness hook: truly truncated output (no Status, no JSON status) IS flagged" {
   # Simulate an agent that stopped mid-sentence — no Status block at all
   local output_text
