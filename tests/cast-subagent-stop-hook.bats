@@ -120,3 +120,34 @@ print('\n'.join(lines))
   count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
   [[ "$count" -eq 0 ]]
 }
+
+@test "no false positive when Status: DONE is buried under 100+ trailing lines" {
+  # Reproduces long Work Log FP: Status block early, then many filler lines push it outside a 40-line window
+  local output
+  output="$(python3 -c "
+lines = ['Status: DONE', 'Summary: all tasks complete']
+lines += ['Work Log filler line ' + str(i) for i in range(100)]
+print('\n'.join(lines))
+")"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "test-agent" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "no false positive when Status verb is wrapped in markdown bold" {
+  # Reproduces markdown-emphasis FP: code-reviewer ends with Status: **DONE**
+  local output
+  output="$(python3 -c "
+lines = ['Reviewed the changes.', '', 'Status: **DONE**', 'Summary: looks good']
+print('\n'.join(lines))
+")"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-reviewer" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}

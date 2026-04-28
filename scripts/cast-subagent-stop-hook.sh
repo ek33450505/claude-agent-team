@@ -255,9 +255,8 @@ gtype = os.environ.get('CAST_QG_GATE_TYPE', 'code_review')
 if not agent or not db:
     raise SystemExit(0)
 
-# Extract Status line from last ~40 lines of output
-tail = '\n'.join(out.splitlines()[-40:]) if out else ''
-m = re.search(r'Status:\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)', tail)
+# Extract Status line from full output (no tail window — avoids FP for long Work Logs)
+m = re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)', out)
 if not m:
     raise SystemExit(0)
 
@@ -269,9 +268,9 @@ result = {
     'NEEDS_CONTEXT': 'warn',
 }.get(status, 'warn')
 
-# Grab feedback: the "Summary:" line if present, else first 200 chars of tail
-fm = re.search(r'Summary:\s*(.+)', tail)
-feedback = (fm.group(1).strip() if fm else tail.strip())[:500]
+# Grab feedback: the "Summary:" line if present, else first 500 chars of output
+fm = re.search(r'Summary:\s*(.+)', out)
+feedback = (fm.group(1).strip() if fm else out.strip())[:500]
 
 try:
     conn = sqlite3.connect(db, timeout=5)
@@ -330,9 +329,11 @@ export CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.envi
 TRUNCATED="$(python3 - <<'PYEOF' 2>/dev/null
 import re, os
 output = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
-tail = '\n'.join(output.splitlines()[-40:]) if output else ''
-has_status = bool(re.search(r'Status:\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', tail))
-print('0' if has_status else '1')
+# Search full output — no tail window (avoids FP for long Work Logs)
+# Also accept markdown emphasis around Status verb and JSON status form
+has_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', output))
+has_json_status = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"', output))
+print('0' if (has_status or has_json_status) else '1')
 PYEOF
 )"
 
