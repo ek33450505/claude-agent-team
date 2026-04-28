@@ -35,7 +35,8 @@ warning_count=0
 warnings=()
 
 # Track all basenames known to repo agent sources (to detect runtime orphans)
-declare -A known_agent_basenames
+# Bash 3.2-compatible: newline-delimited string set, not associative array
+known_agent_basenames=""
 
 # check_effort_model_mismatch <file>
 # Emits a WARNING if the file has effort: xhigh but model is not opus.
@@ -72,7 +73,10 @@ check_source_against_runtime() {
     local runtime_file="$runtime_dir/$basename_only"
 
     if [[ "$track_basenames" == "1" ]]; then
-      known_agent_basenames["$basename_only"]=1
+      # Bash 3.2-compatible: add to newline-delimited set if not already present
+      if ! echo "$known_agent_basenames" | grep -Fxq "$basename_only"; then
+        known_agent_basenames+="$basename_only"$'\n'
+      fi
     fi
 
     if [[ ! -e "$runtime_file" ]]; then
@@ -115,7 +119,8 @@ check_runtime_orphans() {
   while IFS= read -r -d '' rt_file; do
     local bn
     bn="$(basename "$rt_file")"
-    if [[ -z "${known_agent_basenames[$bn]+_}" ]]; then
+    # Bash 3.2-compatible: check if basename is in the newline-delimited set
+    if ! echo "$known_agent_basenames" | grep -Fxq "$bn"; then
       # Skip basenames owned by other repos
       local skip=0
       for allowed in "${RUNTIME_ONLY_ALLOW_LIST[@]}"; do
@@ -140,12 +145,13 @@ compare_dir() {
   fi
 
   # Collect known basenames from this source (skip *.template — install.sh strips the suffix on copy)
-  declare -A local_known
+  # Bash 3.2-compatible: newline-delimited string set
+  local local_known=""
   while IFS= read -r -d '' src_file; do
     local bn
     bn="$(basename "$src_file")"
     [[ "$bn" == *.template ]] && continue
-    local_known["$bn"]=1
+    local_known+="$bn"$'\n'
   done < <(find "$source_dir" -maxdepth 1 -type f -print0 2>/dev/null)
 
   while IFS= read -r -d '' src_file; do
@@ -187,7 +193,8 @@ compare_dir() {
     while IFS= read -r -d '' rt_file; do
       local bn
       bn="$(basename "$rt_file")"
-      if [[ -z "${local_known[$bn]+_}" ]]; then
+      # Bash 3.2-compatible: check if basename is in the newline-delimited set
+      if ! echo "$local_known" | grep -Fxq "$bn"; then
         # Skip basenames owned by other repos
         local skip=0
         for allowed in "${RUNTIME_ONLY_ALLOW_LIST[@]}"; do
@@ -206,10 +213,19 @@ compare_dir() {
 # We do source→runtime checks for each, then a single unified orphan check.
 
 # Build the union of known agent basenames from both source dirs
-while IFS= read -r -d '' f; do known_agent_basenames["$(basename "$f")"]=1; done \
-  < <(find "$REPO_ROOT/agents/core"     -maxdepth 1 -type f -print0 2>/dev/null)
-while IFS= read -r -d '' f; do known_agent_basenames["$(basename "$f")"]=1; done \
-  < <(find "$REPO_ROOT/agents/personal" -maxdepth 1 -type f -print0 2>/dev/null)
+# Bash 3.2-compatible: build newline-delimited string set
+while IFS= read -r -d '' f; do
+  bn="$(basename "$f")"
+  if ! echo "$known_agent_basenames" | grep -Fxq "$bn"; then
+    known_agent_basenames+="$bn"$'\n'
+  fi
+done < <(find "$REPO_ROOT/agents/core"     -maxdepth 1 -type f -print0 2>/dev/null)
+while IFS= read -r -d '' f; do
+  bn="$(basename "$f")"
+  if ! echo "$known_agent_basenames" | grep -Fxq "$bn"; then
+    known_agent_basenames+="$bn"$'\n'
+  fi
+done < <(find "$REPO_ROOT/agents/personal" -maxdepth 1 -type f -print0 2>/dev/null)
 
 check_source_against_runtime "$REPO_ROOT/agents/core"     "$CAST_RUNTIME_AGENTS" "agents/core"
 check_source_against_runtime "$REPO_ROOT/agents/personal" "$CAST_RUNTIME_AGENTS" "agents/personal"
