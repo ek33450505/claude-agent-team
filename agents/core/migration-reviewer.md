@@ -5,7 +5,7 @@ description: >
   rollback plans, validates ordering, and checks for data-loss risks. Works with
   SQLite, PostgreSQL, and MS SQL Server. Read-only reviewer.
 tools: Read, Bash, Glob, Grep
-model: sonnet
+model: opus
 effort: high
 color: purple
 memory: local

@@ -29,11 +29,13 @@
 #     }
 #   ]
 
-# StopFailure fires in the parent session context.
-# No subprocess guard needed.
-
 # Never fail loudly — a broken hook must not interrupt the parent session.
 set +e
+
+# Skip nested invocations (subprocess agents)
+if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then
+  exit 0
+fi
 
 # _log_error: append a structured error line to hook-errors.log (never fails itself)
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
@@ -141,7 +143,7 @@ if not os.path.exists(db_path):
     exit(0)
 
 try:
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=5)
     conn.isolation_level = None  # autocommit
     cursor = conn.cursor()
 

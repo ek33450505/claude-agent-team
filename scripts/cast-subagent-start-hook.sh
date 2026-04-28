@@ -21,6 +21,11 @@
 # Never fail loudly — a broken hook must not interrupt the parent session.
 set +e
 
+# Skip nested invocations (subprocess agents)
+if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then
+  exit 0
+fi
+
 CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
