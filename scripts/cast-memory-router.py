@@ -8,6 +8,10 @@ Usage (route mode — default, backward compatible):
 
 Usage (retrieve mode):
   cast-memory-router.py --mode retrieve --agent <name> --prompt "<text>" [--top-n 5] [--type <type>]
+  cast-memory-router.py --mode retrieve --agent <name> --prompt "<text>" --fts-only [--top-n 5]
+
+Flags:
+  --fts-only    Skip Ollama embed call entirely; use cosine_sim=0.0. Reduces latency from ~3s to ~10-30ms.
 
 Output (route mode):
   {"agent": "debugger", "confidence": 0.82, "memory_id": 42, "reason": "..."}
@@ -145,7 +149,7 @@ def invalidate_memory(memory_id):
     )
 
 
-def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False):
+def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False, fts_only=False):
     """Return top-N memories for agent, ranked by relevance. Includes shared pool."""
     conn = _connect()
 
@@ -207,8 +211,8 @@ def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=
     # Build column_names + 'rank' for scoring
     col_names_with_rank = column_names + ['rank']
 
-    # Attempt cosine re-rank
-    query_embedding = embed_text(prompt)
+    # Attempt cosine re-rank (skipped when --fts-only; cosine term contributes 0.0)
+    query_embedding = None if fts_only else embed_text(prompt)
 
     scored = []
     for row in rows:
@@ -283,6 +287,8 @@ def main():
                         help='route: return best agent; retrieve: return ranked memory list')
     parser.add_argument('--history', action='store_true',
                         help='Include superseded (valid_to IS NOT NULL) memories in retrieve mode')
+    parser.add_argument('--fts-only', action='store_true', default=False,
+                        help='Skip Ollama embed call; use cosine_sim=0.0 (faster, ~10-30ms)')
     parser.add_argument('--invalidate', type=int, default=None, metavar='ID',
                         help='Mark memory with given ID as superseded (sets valid_to=now) and exit')
     args = parser.parse_args()
@@ -351,7 +357,8 @@ def main():
             type_filter = args.type
             results = retrieve_memories(prompt, agent, top_n=args.top_n,
                                         type_filter=type_filter,
-                                        include_history=args.history)
+                                        include_history=args.history,
+                                        fts_only=args.fts_only)
 
             # Get column names for building output dicts
             col_rows = db_query("PRAGMA table_info(agent_memories)")
