@@ -1,0 +1,6 @@
+[mcp_servers.cast-memory]
+args = ["/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-mcp-memory-server.py"]
+command = "python3"
+
+[mcp_servers.cast-memory.env]
+CAST_DB_PATH = "/Users/edkubiak/.claude/cast.db"

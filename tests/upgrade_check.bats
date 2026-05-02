@@ -130,6 +130,7 @@ teardown() {
   # We run the script in a subshell so HOME is already overridden
   # Run once
   CAST_STATE_DIR="$HOME/.claude/cast" \
+  CAST_UPGRADE_SCORE_SCRIPT="$tmp_scripts/cast-upgrade-score.sh" \
   bash "$UPGRADE_CHECK_SH" 2>/dev/null || true
 
   local count_after_first
@@ -145,6 +146,7 @@ except Exception:
 
   # Run again with the same mock release data
   CAST_STATE_DIR="$HOME/.claude/cast" \
+  CAST_UPGRADE_SCORE_SCRIPT="$tmp_scripts/cast-upgrade-score.sh" \
   bash "$UPGRADE_CHECK_SH" 2>/dev/null || true
 
   local count_after_second
@@ -165,7 +167,9 @@ except Exception:
 
 @test "upgrade-check: upgrade-candidates.json is valid JSON after first run" {
   _install_gh_stub "$HOME/bin"
+  _install_score_stub "$HOME/scripts"
 
+  CAST_UPGRADE_SCORE_SCRIPT="$HOME/scripts/cast-upgrade-score.sh" \
   bash "$UPGRADE_CHECK_SH" 2>/dev/null || true
 
   local candidates_file="$HOME/.claude/cast/upgrade-candidates.json"
@@ -180,7 +184,9 @@ except Exception:
 
 @test "upgrade-check: last-checked timestamp is written after run" {
   _install_gh_stub "$HOME/bin"
+  _install_score_stub "$HOME/scripts"
 
+  CAST_UPGRADE_SCORE_SCRIPT="$HOME/scripts/cast-upgrade-score.sh" \
   bash "$UPGRADE_CHECK_SH" 2>/dev/null || true
 
   local last_checked_file="$HOME/.claude/cast/last-checked-upgrades.json"
@@ -280,9 +286,11 @@ FAIL_VIEW_STUB
 
 @test "upgrade-check: mktemp does not leave a literal XXXXXX temp file" {
   _install_gh_stub "$HOME/bin"
+  _install_score_stub "$HOME/scripts"
 
   # Run the script once — if mktemp template had a .txt suffix, BSD mktemp would
   # create a file literally named "cast-upgrade-notes-XXXXXX.txt" in TMPDIR.
+  CAST_UPGRADE_SCORE_SCRIPT="$HOME/scripts/cast-upgrade-score.sh" \
   bash "$UPGRADE_CHECK_SH" 2>/dev/null || true
 
   # No file with the literal template name should exist in TMPDIR
@@ -305,8 +313,10 @@ FAIL_VIEW_STUB
   # named "cast-upgrade-notes-XXXXXX.txt". The second run then failed because
   # mktemp refused to overwrite the existing file.
   _install_gh_stub "$HOME/bin"
+  _install_score_stub "$HOME/scripts"
 
   # First run
+  CAST_UPGRADE_SCORE_SCRIPT="$HOME/scripts/cast-upgrade-score.sh" \
   bash "$UPGRADE_CHECK_SH" 2>/dev/null || true
 
   # Simulate the pre-fix bug: manually create a literal XXXXXX file to prove
@@ -316,7 +326,7 @@ FAIL_VIEW_STUB
   touch "$TMPDIR/cast-upgrade-notes-XXXXXX.txt"
 
   # Second run — must still succeed despite the stale literal file
-  run bash "$UPGRADE_CHECK_SH"
+  CAST_UPGRADE_SCORE_SCRIPT="$HOME/scripts/cast-upgrade-score.sh" run bash "$UPGRADE_CHECK_SH"
   assert_success
 
   rm -f "$TMPDIR/cast-upgrade-notes-XXXXXX.txt"

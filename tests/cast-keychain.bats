@@ -20,6 +20,14 @@ setup() {
 teardown() {
   # Clean up any test Keychain entries
   security delete-generic-password -s "cast-test-bats-key" -a cast 2>/dev/null || true
+  security delete-generic-password -s "cast-test-bats-probe" -a cast 2>/dev/null || true
+}
+
+require_keychain_writes() {
+  if ! security add-generic-password -U -s "cast-test-bats-probe" -a cast -w "probe" 2>/dev/null; then
+    skip "Keychain writes unavailable in this environment"
+  fi
+  security delete-generic-password -s "cast-test-bats-probe" -a cast 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -58,6 +66,8 @@ teardown() {
 }
 
 @test "cast-keychain.sh: set/get cycle round-trips a secret" {
+  require_keychain_writes
+
   run bash "$CAST_KEYCHAIN_SH" set "test-bats-key" "hello-from-bats"
   assert_success
   assert_output --partial "Stored secret"
@@ -68,6 +78,8 @@ teardown() {
 }
 
 @test "cast-keychain.sh: delete removes a stored key" {
+  require_keychain_writes
+
   # Store a key first
   bash "$CAST_KEYCHAIN_SH" set "test-bats-key" "to-be-deleted" 2>/dev/null
 

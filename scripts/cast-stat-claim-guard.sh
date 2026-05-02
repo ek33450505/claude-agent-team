@@ -9,7 +9,7 @@ if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 set -euo pipefail
 
 LOG_FILE="${HOME}/.claude/logs/stat-guard.log"
-mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 
 # Parse JSON fields using Python (read from stdin once, then pass via env var)
 INPUT="$(cat 2>/dev/null || true)"
@@ -41,7 +41,7 @@ if [[ -z "$CLAIMED_COUNT" ]]; then
 fi
 
 # Log the check attempt
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Stat claim check: claimed=$CLAIMED_COUNT, actual=$REAL_COUNT" >> "$LOG_FILE"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Stat claim check: claimed=$CLAIMED_COUNT, actual=$REAL_COUNT" >> "$LOG_FILE" 2>/dev/null || true
 
 # If counts match, allow
 if [[ "$CLAIMED_COUNT" == "$REAL_COUNT" ]]; then

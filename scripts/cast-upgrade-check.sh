@@ -18,9 +18,9 @@ set -euo pipefail
 # ── Resolve paths ──────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SOURCES_FILE="${REPO_ROOT}/config/upgrade-sources.json"
-SCORE_SCRIPT="${SCRIPT_DIR}/cast-upgrade-score.sh"
-CAST_STATE_DIR="${HOME}/.claude/cast"
+SOURCES_FILE="${CAST_UPGRADE_SOURCES_FILE:-${REPO_ROOT}/config/upgrade-sources.json}"
+SCORE_SCRIPT="${CAST_UPGRADE_SCORE_SCRIPT:-${SCRIPT_DIR}/cast-upgrade-score.sh}"
+CAST_STATE_DIR="${CAST_STATE_DIR:-${HOME}/.claude/cast}"
 LAST_CHECKED_FILE="${CAST_STATE_DIR}/last-checked-upgrades.json"
 CANDIDATES_FILE="${CAST_STATE_DIR}/upgrade-candidates.json"
 

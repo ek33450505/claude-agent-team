@@ -39,6 +39,10 @@ set +e
 # _log_error: append a structured error line to hook-errors.log (never fails itself)
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+HOOK_ERROR_LOG="${HOME}/.claude/logs/hook-errors.log"
+if ! { mkdir -p "$(dirname "$HOOK_ERROR_LOG")" 2>/dev/null && touch "$HOOK_ERROR_LOG" 2>/dev/null; }; then
+  HOOK_ERROR_LOG="/dev/null"
+fi
 
 CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
@@ -160,7 +164,7 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
     DB_STATUS="BLOCKED"
   fi
   export CAST_STOP_DB_STATUS="$DB_STATUS"
-  python3 - <<'PYEOF' 2>>"${HOME}/.claude/logs/hook-errors.log" || true
+  python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os
 
 db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
@@ -243,7 +247,7 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
         test-runner)   echo "test_run" ;;
         security)      echo "security_scan" ;;
       esac)"
-      python3 - <<'PYEOF' 2>>"${HOME}/.claude/logs/hook-errors.log" || true
+      python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os, re
 
 db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
