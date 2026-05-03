@@ -19,6 +19,9 @@ _log_error() {
     >> "$HOME/.claude/logs/hook-errors.log"
 }
 
+CAST_HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CAST_HOOK_DIR
+
 python3 - <<'PYEOF' || _log_error "truncation check failed"
 import json
 import os
@@ -28,7 +31,9 @@ from datetime import datetime
 from pathlib import Path
 
 # ── Resolve cast_db.py ────────────────────────────────────────────────────────
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# CAST_HOOK_DIR is set by bash to the real directory of this script before the
+# heredoc runs. This is reliable even when python3 __file__ == '<stdin>'.
+_SCRIPT_DIR = os.environ.get('CAST_HOOK_DIR', '')
 _SCRIPTS_DIRS = [
     _SCRIPT_DIR,
     os.path.expanduser('~/.claude/scripts'),

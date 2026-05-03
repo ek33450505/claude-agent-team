@@ -21,6 +21,7 @@ jobs:
         run: |
           mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
           cp scripts/*.sh ~/.claude/scripts/
+          cp scripts/*.py ~/.claude/scripts/
           chmod +x ~/.claude/scripts/*.sh
       - name: Run BATS tests
         run: bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats --tap

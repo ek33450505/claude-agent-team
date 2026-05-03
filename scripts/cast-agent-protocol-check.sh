@@ -18,6 +18,9 @@ _log_error() {
     >> "$HOME/.claude/logs/hook-errors.log"
 }
 
+CAST_HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CAST_HOOK_DIR
+
 # Run detection logic in Python for JSON parsing and DB access
 python3 - <<'PYEOF' || _log_error "protocol check failed"
 import json
@@ -26,8 +29,10 @@ import re
 import sys
 from datetime import datetime
 
-# Resolve cast_db.py from the repo path or fall back to runtime copy
-_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+# Resolve cast_db.py from the real hook script directory.
+# CAST_HOOK_DIR is set by bash before the heredoc; __file__ == '<stdin>' in heredocs
+# so it cannot be used to locate sibling files reliably.
+_REPO_DIR = os.environ.get("CAST_HOOK_DIR", "")
 _SCRIPTS_DIRS = [
     _REPO_DIR,
     os.path.expanduser("~/.claude/scripts"),

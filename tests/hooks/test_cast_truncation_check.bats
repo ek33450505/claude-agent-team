@@ -134,3 +134,30 @@ Summary: Security review complete, no issues found."
   refute_output --partial "[CAST-TRUNCATED]"
   [ "$(count_truncations)" -eq 0 ]
 }
+
+# 6. CI regression: hook must write a DB row even when ~/.claude/scripts/cast_db.py is
+# absent. Reproduces the macOS-passes / Ubuntu-CI-fails bug where bats-ci.yml only copied
+# *.sh files to ~/.claude/scripts/ (not *.py), causing the cast_db.py no-op fallback and
+# a silent count=0. The fix: (a) bats-ci.yml now copies *.py too, and (b) hook scripts
+# resolve cast_db.py via CAST_HOOK_DIR (set from BASH_SOURCE[0]) so the repo-local copy
+# is found even if ~/.claude/scripts/cast_db.py is absent.
+@test "truncation-check: writes DB row when ~/.claude/scripts/cast_db.py is absent (CI regression)" {
+  # Simulate CI: shadow HOME so ~/.claude/scripts/ has only .sh files, not cast_db.py
+  local fake_home
+  fake_home="$(mktemp -d)"
+  mkdir -p "$fake_home/.claude/scripts" "$fake_home/.claude/logs"
+  cp "$REPO_DIR/scripts/"*.sh "$fake_home/.claude/scripts/"
+
+  local long_text="Checking all files in the repository. The implementation looks fine so far. Authentication flow is correct."
+  local payload
+  payload="$(make_payload 'security' "$long_text")"
+
+  # Run with fake HOME; CAST_DB_PATH still points to the test DB from setup()
+  HOME="$fake_home" CAST_INPUT="$payload" run bash "$HOOK" <<< ""
+  assert_success
+  assert_output --partial "[CAST-TRUNCATED]"
+  # Row must be written via the repo-local cast_db.py (resolved through CAST_HOOK_DIR)
+  [ "$(count_truncations)" -eq 1 ]
+
+  rm -rf "$fake_home"
+}
