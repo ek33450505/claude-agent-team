@@ -56,3 +56,25 @@ BATS_CI_YML="$REPO_DIR/.github/workflows/bats-ci.yml"
   installer_cp=$(grep "cp scripts/\*.sh ~/.claude/scripts/" "$TEST_INSTALLER_YML" | head -1 | tr -d ' ')
   [ "$bats_ci_cp" = "$installer_cp" ]
 }
+
+# ── test-installer.yml: *.py copy present in both jobs ──────────────────────
+
+@test "test-installer.yml: bats-ubuntu job copies *.py scripts to ~/.claude/scripts/" {
+  # Must appear at least twice (once per job)
+  run grep -c "cp scripts/\*.py ~/.claude/scripts/" "$TEST_INSTALLER_YML"
+  [ "$output" -ge 2 ]
+}
+
+@test "test-installer.yml: bats-macos job copies *.py scripts to ~/.claude/scripts/" {
+  # Confirm the py copy line appears in the macos job section
+  macos_section=$(awk '/bats-macos:/,0' "$TEST_INSTALLER_YML")
+  run echo "$macos_section"
+  assert_output --partial "cp scripts/*.py ~/.claude/scripts/"
+}
+
+@test "test-installer.yml: *.py copy parity with bats-ci.yml" {
+  run grep "cp scripts/\*.py ~/.claude/scripts/" "$BATS_CI_YML"
+  assert_success
+  run grep "cp scripts/\*.py ~/.claude/scripts/" "$TEST_INSTALLER_YML"
+  assert_success
+}

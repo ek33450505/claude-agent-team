@@ -23,6 +23,7 @@ jobs:
         run: |
           mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
           cp scripts/*.sh ~/.claude/scripts/
+          cp scripts/*.py ~/.claude/scripts/
           chmod +x ~/.claude/scripts/*.sh
       - name: Install Python dependencies
         run: pip3 install --break-system-packages pyyaml
@@ -43,6 +44,7 @@ jobs:
         run: |
           mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
           cp scripts/*.sh ~/.claude/scripts/
+          cp scripts/*.py ~/.claude/scripts/
           chmod +x ~/.claude/scripts/*.sh
       - name: Install Python dependencies
         run: pip3 install --break-system-packages pyyaml
