@@ -261,3 +261,72 @@ teardown() {
   assert_success
   assert_output --partial "tables"
 }
+
+# ---------------------------------------------------------------------------
+# cast doctor — Updates Available block
+# ---------------------------------------------------------------------------
+
+@test "cast doctor: exits 0 when upgrade-candidates.json is missing" {
+  # Ensure no candidates file exists in our isolated HOME
+  rm -f "$HOME/.claude/cast/upgrade-candidates.json"
+  run bash "$CAST_CLI" doctor
+  assert_success
+}
+
+@test "cast doctor: shows 'cast upgrade-check' hint when candidates file is missing" {
+  rm -f "$HOME/.claude/cast/upgrade-candidates.json"
+  run bash "$CAST_CLI" doctor
+  assert_success
+  assert_output --partial "cast upgrade-check"
+}
+
+@test "cast doctor: exits 0 when upgrade-candidates.json exists with no candidates" {
+  mkdir -p "$HOME/.claude/cast"
+  echo '{}' > "$HOME/.claude/cast/upgrade-candidates.json"
+  run bash "$CAST_CLI" doctor
+  assert_success
+}
+
+@test "cast doctor: shows candidate info when upgrade-candidates.json has entries" {
+  mkdir -p "$HOME/.claude/cast"
+  python3 -c "
+import json, time
+entry = {
+  'test-org-test-repo-v1.0.0-abc12345': {
+    'repo': 'test-org/test-repo',
+    'tag': 'v1.0.0',
+    'published_at': '2026-05-01T00:00:00Z',
+    'item': 'Add new hook support',
+    'category': 'CRITICAL',
+    'reason': 'Affects hook interface',
+    'cast_component': 'hooks',
+    'key': 'test-org-test-repo-v1.0.0-abc12345'
+  }
+}
+print(json.dumps(entry))
+" > "$HOME/.claude/cast/upgrade-candidates.json"
+  run bash "$CAST_CLI" doctor
+  assert_success
+  assert_output --partial "test-org/test-repo"
+}
+
+# ---------------------------------------------------------------------------
+# cast upgrade-check
+# ---------------------------------------------------------------------------
+
+@test "cast upgrade-check: exits 0 when gh is not available (graceful skip)" {
+  # The upgrade-check script exits 0 gracefully when gh CLI is not in PATH.
+  # We stub gh to a non-executable to simulate absence while keeping the rest
+  # of PATH intact (dirname, readlink, etc. must remain available).
+  local fake_bin
+  fake_bin="$(mktemp -d)"
+  # Create a stub gh that exits non-zero to simulate "not found" behavior
+  cat > "$fake_bin/gh" <<'GHSTUB'
+#!/bin/bash
+exit 127
+GHSTUB
+  chmod -x "$fake_bin/gh"   # make it non-executable so command -v skips it
+  PATH="$fake_bin:$PATH" run bash "$CAST_CLI" upgrade-check
+  rm -rf "$fake_bin"
+  assert_success
+}

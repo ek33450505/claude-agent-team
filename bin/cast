@@ -4,7 +4,7 @@
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: status, exec, parallel, memory, budget, agents, hooks, doctor, tidy, dash, install-completions
+# Subcommands: status, exec, parallel, memory, budget, agents, hooks, doctor, upgrade-check, tidy, dash, install-completions
 #
 # Config: ~/.claude/config/cast-cli.json
 # DB:     $CAST_DB_PATH or ~/.claude/cast.db
@@ -137,6 +137,7 @@ Subcommands:
   ${C_BOLD}agents${C_RESET}                          List installed CAST agents
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}doctor${C_RESET}                          Run system health check
+  ${C_BOLD}upgrade-check${C_RESET}                   Check configured repos for new releases
   ${C_BOLD}migrate${C_RESET}   [--dry-run]               Apply pending DB schema migrations
   ${C_BOLD}tidy${C_RESET}      [--dry-run]               Clean up old plans, events, logs, briefings
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
@@ -853,6 +854,11 @@ PYEOF
     done <<< "$slow_rows"
   fi
 
+  # 10. Updates Available
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "${C_BOLD}Updates Available${C_RESET}\n"
+  _doctor_upgrades
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
@@ -860,6 +866,118 @@ PYEOF
   else
     printf "%b Some checks need attention\n" "$WARN"
   fi
+}
+
+# ── Doctor helper: upgrades block ────────────────────────────────────────────
+_doctor_upgrades() {
+  local CAST_STATE_DIR="${HOME}/.claude/cast"
+  local candidates_file="${CAST_STATE_DIR}/upgrade-candidates.json"
+  local last_checked_file="${CAST_STATE_DIR}/last-checked-upgrades.json"
+  local INFO_SYM="[${C_CYAN}--${C_RESET}]"
+  local UP_SYM="[${C_YELLOW}^^${C_RESET}]"
+  local OK_SYM="[${C_GREEN}ok${C_RESET}]"
+
+  # Check gh availability first
+  if ! command -v gh >/dev/null 2>&1; then
+    printf "  %b gh CLI not installed — install gh to enable update notifications.\n" "$INFO_SYM"
+    return 0
+  fi
+
+  # Check if candidates file exists and is fresh (<24h old)
+  local file_exists=0
+  local file_fresh=0
+  if [ -f "$candidates_file" ]; then
+    file_exists=1
+    local file_age_hours
+    file_age_hours="$(python3 -c "
+import os, time
+try:
+    mtime = os.path.getmtime('$candidates_file')
+    age_s = time.time() - mtime
+    print(int(age_s // 3600))
+except Exception:
+    print(999)
+" 2>/dev/null || echo 999)"
+    if [ "${file_age_hours:-999}" -lt 24 ]; then
+      file_fresh=1
+    fi
+  fi
+
+  if [ "$file_exists" -eq 0 ] || [ "$file_fresh" -eq 0 ]; then
+    printf "  %b Run \`cast upgrade-check\` to check for new releases (last check >24h ago or never run).\n" "$INFO_SYM"
+    return 0
+  fi
+
+  # Read last-checked timestamp for display
+  local last_checked_display="unknown"
+  if [ -f "$last_checked_file" ]; then
+    last_checked_display="$(python3 -c "
+import json
+try:
+    d = json.load(open('$last_checked_file'))
+    print(d.get('last_checked', 'unknown'))
+except Exception:
+    print('unknown')
+" 2>/dev/null || echo "unknown")"
+  fi
+  printf "  %b Last checked: %s\n" "$INFO_SYM" "$last_checked_display"
+
+  # Parse and display candidates
+  python3 - "$candidates_file" <<'PYEOF'
+import sys, json, os
+
+candidates_file = sys.argv[1]
+try:
+    with open(candidates_file) as f:
+        candidates = json.load(f)
+except Exception:
+    candidates = {}
+
+# Group by repo+tag to find distinct upgrade opportunities
+upgrades = {}
+for key, entry in candidates.items():
+    repo = entry.get('repo', '')
+    tag = entry.get('tag', '')
+    category = entry.get('category', 'SKIP')
+    if category == 'SKIP':
+        continue
+    rkey = f"{repo}@{tag}"
+    if rkey not in upgrades:
+        upgrades[rkey] = {'repo': repo, 'tag': tag, 'category': category, 'items': []}
+    upgrades[rkey]['items'].append(entry.get('item', ''))
+
+if not upgrades:
+    print("  [ok] No new upgrade candidates found.")
+else:
+    for rkey, u in sorted(upgrades.items()):
+        repo = u['repo']
+        tag = u['tag']
+        item_count = len(u['items'])
+        cat = u['category']
+        marker = "^^" if cat == "CRITICAL" else " ^"
+        print(f"  [{marker}] {repo}: {tag} available — {item_count} item(s) — run `cast upgrade-check` for details")
+PYEOF
+
+  printf "  %b Run \`cast upgrade-check\` to refresh.\n" "$INFO_SYM"
+}
+
+# ── Subcommand: upgrade-check ────────────────────────────────────────────────
+_cmd_upgrade_check() {
+  local upgrade_script="${CAST_SCRIPTS_DIR}/cast-upgrade-check.sh"
+  if [ ! -f "$upgrade_script" ]; then
+    upgrade_script="${CAST_REPO_DIR}/scripts/cast-upgrade-check.sh"
+  fi
+  if [ ! -f "$upgrade_script" ]; then
+    _error "cast-upgrade-check.sh not found. Run: bash install.sh"
+    return 1
+  fi
+
+  bash "$upgrade_script" "$@"
+  local exit_code=$?
+  if [ "$exit_code" -eq 0 ]; then
+    _success "upgrade-check complete — run \`cast doctor\` to see results"
+  fi
+  return "$exit_code"
 }
 
 # ── Subcommand: migrate ──────────────────────────────────────────────────────
@@ -1255,6 +1373,7 @@ case "$SUBCOMMAND" in
   agents)               _cmd_agents "$@" ;;
   hooks)                _cmd_hooks "$@" ;;
   doctor)               _cmd_doctor "$@" ;;
+  upgrade-check)        _cmd_upgrade_check "$@" ;;
   migrate)              _cmd_migrate "$@" ;;
   tidy)                 _cmd_tidy "$@" ;;
   dash)                 _cmd_dash "$@" ;;

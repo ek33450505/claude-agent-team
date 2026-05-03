@@ -134,7 +134,7 @@ except Exception:
     text = ''
 
 # Check if text ends with incomplete phrases
-if re.search(r'(Perfect!|Let me|I\'ll|Now|I\'m|I am)\s*$', text, re.IGNORECASE):
+if re.search(r"(Perfect!|Let me|I'll|Now|I'm|I am)\s*$", text, re.IGNORECASE):
     print('HIGH')
 else:
     print('MEDIUM')
