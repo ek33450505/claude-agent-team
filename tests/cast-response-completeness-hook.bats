@@ -127,3 +127,13 @@ _filler_lines() {
   severity="$(sqlite3 "$TEMP_DB" "SELECT severity FROM completeness_events LIMIT 1;" 2>/dev/null || echo "")"
   assert_equal "$severity" "HIGH"
 }
+
+@test "completeness hook: parses cleanly under /bin/bash (Bash 3.2 regression)" {
+  # Regression: Bash 3.2 (macOS system shell) misparsed \'ll and \'m inside a
+  # single-quoted heredoc inside $(). Verify /bin/bash exits 0 with no parser error.
+  run /bin/bash "$HOOK_SH" < /dev/null
+  # Should NOT emit "unexpected EOF" or "syntax error"
+  refute_output --partial "unexpected EOF"
+  refute_output --partial "syntax error"
+  assert_success
+}

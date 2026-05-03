@@ -88,13 +88,13 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Write .md file + main session → [CAST-REVIEW]
+# 3. Write .md file + main session → CAST-REVIEW SUPPRESSED (plan/doc edits, not code)
 # ---------------------------------------------------------------------------
 
-@test "Write .md + main session → output contains [CAST-REVIEW]" {
+@test "Write .md + main session → CAST-REVIEW SUPPRESSED (plan/doc edits, not code)" {
   run bash "$HOOK_SH" <<< "$(write_payload "$HOME/notes.md" "# just a note")"
   assert_success
-  assert_output --partial "CAST-REVIEW"
+  refute_output --partial "CAST-REVIEW"
 }
 
 # ---------------------------------------------------------------------------

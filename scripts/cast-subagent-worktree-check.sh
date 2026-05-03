@@ -11,6 +11,7 @@
 set -euo pipefail
 
 INPUT="$(cat 2>/dev/null || true)"
+export CAST_INPUT="$INPUT"
 
 _log_error() {
   mkdir -p "$HOME/.claude/logs"
@@ -160,5 +161,21 @@ PYEOF
 # Opportunistic prune: remove stale worktree entries where directory is gone.
 # Safe: git worktree prune only removes entries where the worktree dir no longer exists.
 git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+
+# === Phase 5b additions: protocol violations, truncation, duration ===
+# All three are advisory hooks — they log to cast.db and emit stderr,
+# but never block. Failures are silently absorbed.
+
+if [[ -x "$HOME/.claude/scripts/cast-agent-protocol-check.sh" ]]; then
+  bash "$HOME/.claude/scripts/cast-agent-protocol-check.sh" 2>&1 || true
+fi
+
+if [[ -x "$HOME/.claude/scripts/cast-truncation-check.sh" ]]; then
+  bash "$HOME/.claude/scripts/cast-truncation-check.sh" 2>&1 || true
+fi
+
+if [[ -x "$HOME/.claude/scripts/cast-duration-check.sh" ]]; then
+  bash "$HOME/.claude/scripts/cast-duration-check.sh" 2>&1 || true
+fi
 
 exit 0

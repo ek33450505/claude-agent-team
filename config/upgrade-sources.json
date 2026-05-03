@@ -1,5 +1,9 @@
 {
   "sources": [
+    { "repo": "ek33450505/claude-agent-team", "type": "github-releases" },
+    { "repo": "ek33450505/cast-dash", "type": "github-releases" },
+    { "repo": "ek33450505/cast-hooks", "type": "github-releases" },
+    { "repo": "ek33450505/cast-claudes_journal", "type": "github-releases" },
     { "repo": "anthropics/claude-code", "type": "github-releases" },
     { "repo": "anthropics/anthropic-sdk-js", "type": "github-releases" }
   ],
