@@ -157,6 +157,15 @@ for script_file in "$SCRIPT_DIR"/scripts/*; do
     cp "$script_file" "$CLAUDE_DIR/scripts/$dest_name"
     chmod +x "$CLAUDE_DIR/scripts/$dest_name"
 done
+# Install migrations/ subdirectory (required by cast-migrate.py at runtime)
+if [ -d "$SCRIPT_DIR/scripts/migrations" ]; then
+    mkdir -p "$CLAUDE_DIR/scripts/migrations"
+    for sql_file in "$SCRIPT_DIR"/scripts/migrations/*.sql; do
+        [ -f "$sql_file" ] || continue
+        cp "$sql_file" "$CLAUDE_DIR/scripts/migrations/"
+    done
+    success "  Migrations installed"
+fi
 # Remove scripts deleted in v4.1 (native feature adoption)
 rm -f "$CLAUDE_DIR/scripts/cast-route-install.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-route-review.sh"

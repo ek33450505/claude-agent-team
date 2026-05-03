@@ -137,6 +137,7 @@ Subcommands:
   ${C_BOLD}agents${C_RESET}                          List installed CAST agents
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}doctor${C_RESET}                          Run system health check
+  ${C_BOLD}migrate${C_RESET}   [--dry-run]               Apply pending DB schema migrations
   ${C_BOLD}tidy${C_RESET}      [--dry-run]               Clean up old plans, events, logs, briefings
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
@@ -834,12 +835,71 @@ PYEOF
   # 8. Version
   printf "%b Version: %s\n" "$INFO" "$CAST_VERSION"
 
+  # 9. Slowest agents this week
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "${C_BOLD}Slowest agents this week${C_RESET}\n"
+  local slow_rows
+  slow_rows="$(sqlite3 "$CAST_DB_PATH" \
+    "SELECT matched_route, COUNT(*) as slow_count, MAX(CAST(json_extract(data,'$.duration_ms') AS INTEGER)) as max_ms \
+     FROM routing_events \
+     WHERE event_type='slow_agent' AND timestamp >= datetime('now','-7 days') \
+     GROUP BY matched_route ORDER BY max_ms DESC LIMIT 5;" 2>/dev/null || true)"
+  if [[ -z "$slow_rows" ]]; then
+    printf "  (no slow_agent events this week)\n"
+  else
+    while IFS='|' read -r agent count max_ms; do
+      [[ -z "$agent" ]] && continue
+      printf "  %-20s %3d slow run(s)  max=%sms\n" "$agent" "$count" "$max_ms"
+    done <<< "$slow_rows"
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
     printf "%b All checks passed\n" "$OK"
   else
     printf "%b Some checks need attention\n" "$WARN"
+  fi
+}
+
+# ── Subcommand: migrate ──────────────────────────────────────────────────────
+_cmd_migrate() {
+  local dry_run_flag=""
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --dry-run)  dry_run_flag="--dry-run"; shift ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast migrate [--dry-run]
+
+Apply pending versioned SQL migrations to cast.db.
+Migrations live in scripts/migrations/NNN_name.sql and are applied in order.
+Running multiple times is safe (already-applied migrations are skipped).
+
+Options:
+  --dry-run   Show pending migrations without applying them
+USAGE
+        return 0
+        ;;
+      *) shift ;;
+    esac
+  done
+
+  # Resolve migrate script: installed copy first, repo fallback
+  local migrate_script="${CAST_SCRIPTS_DIR}/cast-migrate.py"
+  if [ ! -f "$migrate_script" ]; then
+    migrate_script="${CAST_REPO_DIR}/scripts/cast-migrate.py"
+  fi
+  if [ ! -f "$migrate_script" ]; then
+    _error "cast-migrate.py not found. Run: bash install.sh"
+    return 1
+  fi
+
+  if [ -n "$dry_run_flag" ]; then
+    python3 "$migrate_script" --dry-run
+  else
+    python3 "$migrate_script"
   fi
 }
 
@@ -1195,6 +1255,7 @@ case "$SUBCOMMAND" in
   agents)               _cmd_agents "$@" ;;
   hooks)                _cmd_hooks "$@" ;;
   doctor)               _cmd_doctor "$@" ;;
+  migrate)              _cmd_migrate "$@" ;;
   tidy)                 _cmd_tidy "$@" ;;
   dash)                 _cmd_dash "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;

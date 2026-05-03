@@ -52,6 +52,31 @@ After each logical unit, dispatch `code-reviewer` (haiku) via Agent tool with th
 
 Do NOT proceed to the next logical unit or write tests until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
 
+### ANTI-PATTERN — Prose-only dispatch is a protocol violation
+
+DO NOT write "Dispatching code-reviewer" or "I'll dispatch code-reviewer" as prose.
+You MUST emit an actual Agent tool call. Prose-only dispatch claims that omit
+the Agent tool use are detected by the SubagentStop protocol-check hook and
+logged to cast.db `agent_protocol_violations`.
+
+```
+// VIOLATION — do not do this:
+"I'll now dispatch the code-reviewer agent to review these changes."
+
+// CORRECT — emit the Agent tool call:
+<Agent tool call to code-reviewer with the prompt template above>
+```
+
+If the Agent tool dispatch fails at this depth (e.g., max nesting), do NOT narrate a
+dispatch that did not occur. Instead write `Status: DONE_WITH_CONCERNS` and note the
+failure explicitly so the orchestrating session can dispatch the reviewer.
+
+This rule applies to **direct-dispatch mode** (when code-writer is invoked outside
+an orchestrate session). In **plan-based dispatch** (when invoked by `/orchestrate`
+or as part of a planned batch), return `Status: DONE` with a `## Recommended Next Agents`
+section instead — the orchestrator dispatches the reviewer in the next batch, and
+self-dispatching the reviewer would create a duplicate review.
+
 ## Test Writing (step 5)
 
 If the logical unit added new logic (functions, components, routes, etc.), write tests directly after code-reviewer approves. Tests live alongside source (e.g., `src/Foo.tsx` → `src/Foo.test.tsx`). Cover: happy path, edge cases, error states.

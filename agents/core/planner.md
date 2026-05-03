@@ -132,6 +132,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 
 ```json dispatch
 {
+  "target_branch": "feature/<slug>",
   "batches": [
     {
       "id": 1,
@@ -181,6 +182,10 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 ````
 
 **Rules for building the manifest:**
+- `target_branch` (REQUIRED) — the branch this plan's work will land on. Use `main` for
+  in-place work; use `feature/<slug>` for feature branches. Omitting this field triggers
+  a DEPRECATION warning from `/orchestrate` (cutover 2026-06-03, after which it becomes
+  a hard block). Default: `main` when the headless default applies.
 - `"parallel": true` → agents in batch don't depend on each other's output
 - `"type": "fan-out"` → dispatch all agents simultaneously, synthesize their outputs into a Fan-out Summary, and prepend that summary as additional context to every agent in the immediately following batch. Max 4 agents per fan-out batch.
 - `"subagent_type": "main"` → Claude itself implements (no Agent tool call needed)

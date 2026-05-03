@@ -75,22 +75,51 @@ Create one TaskCreate entry per batch (subject = "Batch N: [description]").
 
 ## Step 2.5 — Branch Pre-Flight
 
-Extract the declared phase name or target branch from the plan file (look for patterns like "Phase C3", "feature/c3-*", or explicit `target_branch` keys in the manifest JSON). Then verify the current branch:
+Read `target_branch` from the manifest JSON (the `dispatch` block parsed in Step 2). Then apply the following logic:
 
 ```bash
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-echo "[CAST-ORCHESTRATE] Current branch: $CURRENT_BRANCH"
+CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+TODAY=$(date +%Y%m%d)
+CUTOVER=20260603
 ```
 
-If the plan declares a target branch pattern AND the current branch does not match it, STOP and output:
+**Case 1 — `target_branch` is absent AND today < 2026-06-03 (`$TODAY -lt $CUTOVER`):**
 ```
-BLOCKED: Branch mismatch. Plan declares work for [target] but current branch is [CURRENT_BRANCH].
-Create/checkout the correct branch before dispatching.
+[CAST-ORCHESTRATE] DEPRECATION WARNING: This plan omits target_branch.
+Plans without target_branch will fail to orchestrate from 2026-06-03.
+Add target_branch to the manifest. Continuing with no branch check.
 ```
+Log the warning and proceed.
 
-Do not proceed to Step 3 until the branch is confirmed correct. This prevents the C3-on-C2-branch class of errors documented in the 2026-04-16 insights report.
+**Case 2 — `target_branch` is absent AND today >= 2026-06-03 (`$TODAY -ge $CUTOVER`):**
+```
+BLOCKED: target_branch is required in the manifest (enforced since 2026-06-03).
+Add "target_branch": "<branch-name>" to the manifest JSON and re-run.
+```
+Stop. Do not proceed to Step 3.
 
-If no target branch is declared in the plan, log `[CAST-ORCHESTRATE] No target branch declared — skipping branch check.` and continue.
+**Case 3 — `target_branch` is present AND current branch matches:**
+Log `[CAST-ORCHESTRATE] Branch check passed: $CURRENT_BRANCH` and continue.
+
+**Case 4 — `target_branch` is present AND current branch does NOT match:**
+```
+[CAST-ORCHESTRATE] Branch mismatch detected.
+  Current branch : <CURRENT_BRANCH>
+  Plan targets   : <target_branch>
+Switch to the target branch before continuing? [y/N]
+```
+Stop and wait. Do not proceed to Step 3 unless the user explicitly confirms (replies "y" or "yes"). This prevents the C3-on-C2-branch class of errors documented in the 2026-04-16 insights report.
+
+Inline shell reference for the cutover check (for runtime implementation):
+```bash
+if [[ "$(date +%Y%m%d)" -ge "20260603" ]]; then
+  echo "BLOCKED: target_branch is required in the manifest (enforced since 2026-06-03)."
+  # stop
+else
+  echo "[CAST-ORCHESTRATE] DEPRECATION WARNING: This plan omits target_branch. Plans without target_branch will fail to orchestrate from 2026-06-03. Add target_branch to the manifest. Continuing with no branch check."
+  # proceed
+fi
+```
 
 ## Step 3 — Present the Queue
 
@@ -113,6 +142,12 @@ for i in $(seq 10 -1 1); do printf "\r  Starting in %2ds..." $i; sleep 1; done; 
 If you receive a message containing "abort" before Batch 1 dispatches, print "Aborted." and stop.
 
 ## Step 4 — Execute Each Batch
+
+At the start of this step, before dispatching any batch, set:
+```bash
+export CAST_ORCHESTRATE_ACTIVE=1
+```
+This suppresses CAST-CHAIN and CAST-REVIEW hook noise for the duration of the orchestrate session. All child processes and hooks will see this variable.
 
 Before each batch:
 - Mark its task `in_progress`
@@ -232,6 +267,11 @@ After each batch completes, check the session token budget:
 python3 ~/.claude/scripts/cast-token-budget-check.py --threshold 50000 2>/dev/null
 ```
 If exit code is 1 (over threshold), log a warning and consider compacting context before the next batch. Do not stop execution — this is advisory only.
+
+After all batches complete (or on any early-exit path — blocked, turn limit, or abort), clear the env var:
+```bash
+unset CAST_ORCHESTRATE_ACTIVE
+```
 
 ## Step 5 — Summarize
 

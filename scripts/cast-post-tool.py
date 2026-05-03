@@ -48,9 +48,41 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
         return
 
     is_code_file = bool(re.search(r'\.(js|jsx|ts|tsx|sh|py|mjs|cjs)$', file_path))
+    is_md_file = file_path.endswith(".md")
     is_subprocess = os.environ.get("CLAUDE_SUBPROCESS", "0") == "1"
+    is_orchestrate_active = os.environ.get("CAST_ORCHESTRATE_ACTIVE", "0") == "1"
+
+    # Security chain: fire on shell/Python writes in scripts/ or hooks/ with >= 5 lines.
+    # Security is NOT suppressed by orchestrate context — it's a real escalation, not noise.
+    is_security_target = (
+        bool(SECURITY_EXTENSIONS.search(file_path)) and
+        bool(SCRIPTS_PATH_PATTERN.search(file_path))
+    )
+    new_content = (
+        data.get("input", {}).get("content", "") or
+        data.get("input", {}).get("new_string", "") or
+        data.get("tool_input", {}).get("content", "") or
+        data.get("tool_input", {}).get("new_string", "")
+    )
+    lines_changed = len([l for l in new_content.split('\n') if l.strip()])
 
     if not is_subprocess:
+        # In orchestrate sessions: suppress CAST-CHAIN and CAST-REVIEW (they're noise),
+        # but always keep the security chain (real escalation, not hook chatter).
+        if is_orchestrate_active:
+            if is_security_target and lines_changed >= SIZE_THRESHOLD:
+                _hook_output(
+                    "[CAST-CHAIN: security] Shell/Python script in scripts/ or hooks/ modified with "
+                    f"{lines_changed} lines. MANDATORY: dispatch `security` agent after "
+                    "code-reviewer completes. Security agent must scan for SQL injection, "
+                    "env var interpolation into sqlite3, and shell injection before commit."
+                )
+            return
+
+        # .md files are plan/docs, not code — CAST-REVIEW is not relevant.
+        if is_md_file:
+            return
+
         if is_code_file:
             msg = (
                 "[CAST-CHAIN] Code file modified. MANDATORY: After completing your current logical unit, "
@@ -65,18 +97,6 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
                 "[CAST-REVIEW] Non-code file modified. Dispatch `code-reviewer` if the change is significant."
             )
 
-        # Security chain: fire on shell/Python writes in scripts/ or hooks/ with >= 5 lines
-        is_security_target = (
-            bool(SECURITY_EXTENSIONS.search(file_path)) and
-            bool(SCRIPTS_PATH_PATTERN.search(file_path))
-        )
-        new_content = (
-            data.get("input", {}).get("content", "") or
-            data.get("input", {}).get("new_string", "") or
-            data.get("tool_input", {}).get("content", "") or
-            data.get("tool_input", {}).get("new_string", "")
-        )
-        lines_changed = len([l for l in new_content.split('\n') if l.strip()])
         if is_security_target and lines_changed >= SIZE_THRESHOLD:
             _hook_output(
                 "[CAST-CHAIN: security] Shell/Python script in scripts/ or hooks/ modified with "
@@ -250,6 +270,97 @@ def part4_bash_debug(data: dict) -> None:
     _hook_output(directive)
 
 
+def part5_unstaged_warning(data: dict) -> None:
+    """Warn on unstaged files when a git commit Bash call is made (main session only)."""
+    import subprocess
+    import sqlite3
+    import datetime
+
+    if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
+        return
+
+    tool_input = data.get("tool_input", {})
+    command = tool_input.get("command", "")
+    if "git commit" not in command:
+        return
+
+    # Get unstaged modified files in working tree
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True, text=True, timeout=10
+        )
+        unstaged_files = [f for f in result.stdout.strip().split("\n") if f]
+    except Exception:
+        unstaged_files = []
+
+    if not unstaged_files:
+        return
+
+    db_path = os.environ.get("CAST_DB_PATH", os.path.expanduser("~/.claude/cast.db"))
+    session_id = os.environ.get("CLAUDE_SESSION_ID", "unknown")
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Look up most-recent agent_run for this session to get owns_files
+    in_scope_files = []
+    owns_files_json = None
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        row = conn.execute(
+            "SELECT owns_files FROM agent_runs WHERE session_id = ? AND owns_files IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (session_id,)
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            owns_files_json = row[0]
+    except Exception:
+        pass
+
+    overlapping = unstaged_files  # default: all unstaged files (no scope info)
+    if owns_files_json:
+        try:
+            owns_set = set(json.loads(owns_files_json))
+            # Normalize: strip leading slashes / path components to match relative git paths
+            overlapping = [
+                f for f in unstaged_files
+                if any(f in owned or owned.endswith(f) for owned in owns_set)
+            ]
+        except Exception:
+            overlapping = unstaged_files
+
+    if not overlapping:
+        return
+
+    # Insert into unstaged_warnings (created by migration 009)
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS unstaged_warnings "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, commit_sha TEXT, "
+            "unstaged_files TEXT, in_scope_files TEXT, timestamp TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO unstaged_warnings (session_id, commit_sha, unstaged_files, in_scope_files, timestamp) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_id, None, json.dumps(unstaged_files), json.dumps(overlapping), timestamp)
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+    files_list = ", ".join(overlapping[:10])
+    print(
+        f"[CAST-UNSTAGED] Unstaged files detected in commit scope: {files_list}\n"
+        "Verify with `git status` before proceeding.",
+        file=sys.stderr
+    )
+    _hook_output(
+        f"[CAST-WARN] Unstaged files detected in commit scope: {files_list}. "
+        "Verify with `git status` before proceeding."
+    )
+
+
 def main():
     data = _read_stdin_json()
     tool_name = data.get("tool_name", "")
@@ -264,6 +375,7 @@ def main():
 
     if tool_name == "Bash":
         part4_bash_debug(data)
+        part5_unstaged_warning(data)
 
 
 if __name__ == "__main__":

@@ -92,6 +92,18 @@ run_install() {
   [ "$found" = true ]
 }
 
+@test "Install: migrations/ directory and SQL files are copied to ~/.claude/scripts/migrations/" {
+  run_install
+
+  [ -d "$HOME/.claude/scripts/migrations" ]
+  # At least one .sql file must exist after install
+  local sql_count
+  sql_count=$(ls -1 "$HOME/.claude/scripts/migrations/"*.sql 2>/dev/null | wc -l | tr -d ' ')
+  [ "$sql_count" -gt 0 ]
+  # Verify the known migration file is present
+  [ -f "$HOME/.claude/scripts/migrations/009_cast_framework_fixes.sql" ]
+}
+
 @test "Rules: existing rule file is not overwritten" {
   # First install
   run_install
