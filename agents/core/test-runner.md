@@ -45,6 +45,19 @@ Test report: file_id=<file_id> (if CAST_FILES_API=1) or [last 10 lines of output
 
 5. **Timeout** — If tests run >120s, kill and report Status: BLOCKED "Test suite timed out"
 
+## Work Log
+
+Before the status block, always output a Work Log so the user can see what was run:
+
+```
+## Work Log
+
+- Framework detected: [vitest | jest | bats | none]
+- Tests run: [N passed, N failed, N skipped]
+- Debugger dispatched: [yes — result: DONE/BLOCKED | no]
+- Final result: [DONE | BLOCKED | DONE_WITH_CONCERNS]
+```
+
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 

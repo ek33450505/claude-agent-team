@@ -172,6 +172,20 @@ Default behavior (no push signal): commit only, show reminder to dispatch push a
 
 **If BLOCKED:** cast_check_approvals found no recent code-reviewer approval. Do NOT retry. Ensure code-reviewer ran first.
 
+## Work Log
+
+Before the status block, always output a Work Log so the user can see what was committed:
+
+```
+## Work Log
+
+- Files staged: N
+- Commit message: [type(scope): short summary]
+- Commit SHA: [short hash]
+- Approval gate: [passed | skipped — no task_id | BLOCKED]
+- Repo class: [personal | work]
+```
+
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 

@@ -110,6 +110,20 @@ If a git command appears to "hang," it is almost certainly waiting on credential
 
 The same applies to any final verification: do not background a verification command and "come back to it." Run it, parse the output, then emit your Status block.
 
+## Work Log
+
+Before the status block, always output a Work Log so the user can see what was pushed:
+
+```
+## Work Log
+
+- Branch: [branch-name] → origin/[branch-name]
+- Commits pushed: N
+- Test gate: [N tests passed | skipped — no test suite | BLOCKED — N failed]
+- Push result: [DONE | BLOCKED]
+- Remote SHA: [short hash of HEAD after push]
+```
+
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 

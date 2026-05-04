@@ -46,10 +46,41 @@ for _d in _SCRIPTS_DIRS:
         _mod = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
         db_write = _mod.db_write
+        db_execute = _mod.db_execute
         break
 else:
     def db_write(table, payload):
         pass  # graceful no-op if cast_db.py not found
+    def db_execute(sql, params=None):
+        pass
+
+# ── Idempotent schema migration: add partial_work_log column ─────────────────
+try:
+    db_execute(
+        'ALTER TABLE agent_truncations ADD COLUMN partial_work_log TEXT'
+    )
+except Exception:
+    pass  # column already exists — safe to ignore
+
+
+def extract_work_log(text: str):
+    """Extract text between '## Work Log' and 'Status:' (or end of string).
+
+    Returns the extracted section as a stripped string, or None if no
+    '## Work Log' heading is found in the text.
+    """
+    # Match ## Work Log heading (case-insensitive) followed by content up to
+    # the first 'Status:' line or end of string.
+    pattern = re.compile(
+        r'##\s+Work\s+Log\s*\n([\s\S]*?)(?=\nStatus:|$)',
+        re.IGNORECASE,
+    )
+    match = pattern.search(text)
+    if not match:
+        return None
+    extracted = match.group(1).strip()
+    return extracted if extracted else None
+
 
 # ── Parse stdin (passed via CAST_INPUT env var) ───────────────────────────────
 raw_input = os.environ.get('CAST_INPUT', '')
@@ -105,16 +136,18 @@ has_json = bool(json_status_pattern.search(response_text))
 
 # ── Log and warn if response appears truncated ────────────────────────────────
 if not has_status and not has_json:
+    partial_work_log = extract_work_log(response_text)
     db_write('agent_truncations', {
-        'session_id': session_id,
-        'agent_type': agent_type,
-        'agent_id':   agent_id,
-        'batch_id':   batch_id,
-        'last_line':  last_line,
-        'timestamp':  now_iso,
-        'char_count': char_count,
-        'has_status': 0,
-        'has_json':   0,
+        'session_id':       session_id,
+        'agent_type':       agent_type,
+        'agent_id':         agent_id,
+        'batch_id':         batch_id,
+        'last_line':        last_line,
+        'timestamp':        now_iso,
+        'char_count':       char_count,
+        'has_status':       0,
+        'has_json':         0,
+        'partial_work_log': partial_work_log,
     })
     print(
         f'[CAST-TRUNCATED] Agent {agent_type} response appears truncated '
