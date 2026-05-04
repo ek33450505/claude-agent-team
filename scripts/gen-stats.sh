@@ -12,18 +12,22 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 README="${1:-$REPO_DIR/README.md}"
 
 # --- Counts ---
-# After restructure, bash-specialist moved to core/ — all agents live in subdirs
-AGENT_COUNT=$(find "$REPO_DIR/agents" -mindepth 2 -name "*.md" | wc -l | tr -d ' ')
-CMD_COUNT=$(find "$REPO_DIR/commands" -maxdepth 1 -name "*.md" | wc -l | tr -d ' ')
-# Skills: count unique skill dirs (exclude linux variant dirs that are install-time substitutes)
-SKILL_COUNT=$(find "$REPO_DIR/skills" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ')
-# Tests: top-level *.bats only (excludes embedded bats framework test files)
-TEST_COUNT=$(grep -h "^@test" \
-  "$REPO_DIR"/tests/*.bats \
-  "$REPO_DIR"/tests/hooks/*.bats \
-  "$REPO_DIR"/tests/agents/*.bats \
-  "$REPO_DIR"/tests/scripts/*.bats \
-  2>/dev/null | wc -l | tr -d ' ')
+# Use `git ls-files` to count only TRACKED files. Counting untracked or in-flight
+# files (find/ls) causes pre-commit-vs-CI divergence — the pre-commit auto-staged
+# stats reflect untracked-but-on-disk files that CI can't see, so readme-in-sync
+# fails. Tracked-only is the only deterministic, CI-stable count.
+cd "$REPO_DIR"
+AGENT_COUNT=$(git ls-files 'agents/*.md' | grep -cE '^agents/[^/]+/[^/]+\.md$' | tr -d ' ')
+CMD_COUNT=$(git ls-files 'commands/*.md' | wc -l | tr -d ' ')
+# Skills: count unique skill dirs (any tracked file under skills/<dir>/)
+SKILL_COUNT=$(git ls-files 'skills/*' | grep -oE '^skills/[^/]+' | sort -u | wc -l | tr -d ' ')
+# Tests: count individual @test functions across all tracked .bats files
+TEST_FILES=$(git ls-files 'tests/*.bats' 'tests/*/*.bats')
+if [ -n "$TEST_FILES" ]; then
+  TEST_COUNT=$(echo "$TEST_FILES" | xargs grep -h "^@test" 2>/dev/null | wc -l | tr -d ' ')
+else
+  TEST_COUNT=0
+fi
 # Routes removed in CAST v3 — model-driven dispatch via CLAUDE.md
 ROUTE_COUNT=0
 
