@@ -119,12 +119,29 @@ Expert security analysis via github.com/trailofbits/skills (install: `/plugin ma
 
 Use these surfaces selectively when manual security review needs deeper static analysis than the default `security` agent prompt provides.
 
+## Completion Report
+
+Output Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation.
+
+```
+Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+Summary: [security review complete — N critical, N high, N medium findings]
+Concerns: [required if DONE_WITH_CONCERNS or BLOCKED — list each finding]
+
+## Work Log
+
+- Reads: [1-line summary of files and git diff reviewed]
+- Critical: [count + one-line summary each, or "none"]
+- High: [count + one-line summary each, or "none"]
+- Medium: [count + one-line summary each, or "none"]
+```
+
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## Structured Output
 
-After your human-readable Status block, emit a machine-readable JSON payload:
+After your human-readable block above, emit a machine-readable JSON payload:
 
 ```json status
 {

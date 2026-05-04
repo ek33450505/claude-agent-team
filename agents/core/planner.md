@@ -263,12 +263,29 @@ When running in a pipeline (no human in the loop), never ask clarifying question
 
 When you complete a task and have discovered stable, cross-agent-useful facts (user preferences, project constraints, non-obvious patterns), emit a `## Facts` block at the end of your response. See the `cast-conventions` skill for format and constraints. Max 5 facts per run; omit this block entirely if you have nothing stable to record.
 
+## Completion Report
+
+Output Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation.
+
+```
+Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+Summary: [plan written to path — N tasks, M batches]
+Files changed: [plan file path]
+Concerns: [required if DONE_WITH_CONCERNS]
+
+## Work Log
+
+- Reads: [1-line summary of files consulted]
+- Plan: [path written + task/batch count]
+- Decisions: [≤3 bullets on non-obvious scoping or ordering choices]
+```
+
 ## Response Budget
 Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## Structured Output
 
-After your human-readable Status block, emit a machine-readable JSON payload:
+After your human-readable block above, emit a machine-readable JSON payload:
 
 ```json status
 {

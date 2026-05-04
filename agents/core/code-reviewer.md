@@ -39,20 +39,23 @@ Provide feedback organized by priority:
 
 Include specific examples of how to fix issues.
 
-## Work Log
+## Completion Report
 
-Before the status block, always output a Work Log so the user can see what you actually checked:
+Output Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation.
 
 ```
+Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+Summary: [one-line summary of what was reviewed and the outcome]
+Concerns: [required if DONE_WITH_CONCERNS or BLOCKED]
+
 ## Work Log
 
-- Files reviewed: [list each file with line count]
-- git diff: [summary of what changed — e.g. "3 functions added in auth.ts, 1 removed"]
+- Files reviewed: [list each file]
+- git diff: [summary of what changed]
 - Critical issues: [count + one-line summary each, or "none"]
 - Warnings: [count + one-line summary each, or "none"]
 - Suggestions: [count, or "none"]
 ```
-
 
 ## Mandatory Final Step — Approval Marker
 

@@ -47,21 +47,8 @@ Focus on fixing the underlying issue, not the symptoms.
 8. After code-reviewer returns DONE, dispatch `commit` via Agent tool:
    > "Create a semantic commit for the bug fix: [describe the root cause and fix]."
    Do NOT return to the calling session before dispatching commit.
-9. Output a Work Log before the status block:
-
-```
-## Work Log
-
-- Error captured: [error message / stack trace summary]
-- Hypothesis tested: [what you suspected and how you confirmed it]
-- Root cause: [one sentence]
-- Fix applied: [file:line — describe the change]
-- Regression test written: [test file path + result when run]
-- code-reviewer result: [DONE | DONE_WITH_CONCERNS]
-```
-
-10. Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/debugger-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
-11. Output this completion report as your final response:
+9. Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/debugger-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
+10. Output this completion report as your final response. Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation:
 
 ---
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
@@ -69,6 +56,14 @@ Summary: [root cause identified, fix applied at file:line, regression test writt
 Files changed: [list all modified/created files]
 Concerns: [required if DONE_WITH_CONCERNS]
 Context needed: [required if NEEDS_CONTEXT — describe what information is missing]
+
+## Work Log
+
+- Error: [error message / stack trace in ≤1 line]
+- Root cause: [one sentence]
+- Fix: [file:line — describe the change in ≤1 sentence]
+- Regression test: [test file path + pass/fail]
+- code-reviewer: [DONE | DONE_WITH_CONCERNS]
 
 After the human-readable block above, also emit a machine-readable JSON payload:
 
