@@ -26,6 +26,19 @@ get_agent_color() {
     merge)             code="38;5;142" ;;  # olive
     frontend-qa)       code="38;5;45"  ;;  # sky blue
     morning-briefing)  code="38;5;172" ;;  # bronze
+    adr-writer)        code="38;5;37"  ;;  # teal (distinct from devops 30)
+    api-contract)      code="38;5;27"  ;;  # blue (distinct from push 33)
+    dep-auditor)       code="38;5;226" ;;  # yellow (distinct from commit 220)
+    email-drafter)     code="38;5;153" ;;  # light blue
+    knowledge-curator) code="38;5;141" ;;  # purple (distinct from orchestrator 135)
+    learning-scout)    code="38;5;178" ;;  # gold
+    meeting-prep)      code="38;5;39"  ;;  # blue (distinct from push 33 and api-contract 27)
+    migration-reviewer) code="38;5;99" ;;  # purple (distinct from orchestrator 135, knowledge-curator 141)
+    perf-sentinel)     code="38;5;164" ;;  # magenta
+    pr-narrator)       code="38;5;218" ;;  # pink
+    release-notes)     code="38;5;51"  ;;  # cyan (distinct from code-reviewer 36)
+    standup-writer)    code="38;5;112" ;;  # green (distinct from test-runner 32)
+    task-triage)       code="38;5;202" ;;  # orange (distinct from code-writer 208)
     main)              code="38;5;255" ;;  # white (default session)
     *)                 code="0"        ;;  # reset / no color
   esac

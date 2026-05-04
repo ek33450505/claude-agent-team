@@ -35,20 +35,33 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 
 | Agent | Model | Effort | Key Tools | Description |
 |---|---|---|---|---|
+| adr-writer | haiku | low | Read, Write, Grep | Architecture Decision Record author |
+| api-contract | sonnet | high | Read, Bash, Grep | API contract guardian, detects breaking changes |
 | bash-specialist | haiku | low | Bash, Edit, Grep | Shell scripting and BATS test specialist |
 | code-reviewer | haiku | low | Bash, Grep, Read | Post-change code review |
 | code-writer | sonnet | high | Edit, Write, Agent | Primary code implementation agent |
 | commit | haiku | low | Bash, Read | Semantic git commit creation |
 | debugger | sonnet | high | Edit, Bash, Agent | Error investigation and fix |
+| dep-auditor | haiku | low | Read, Bash, Grep | Dependency auditor for CVEs and licenses |
 | devops | haiku | low | Bash, Edit, Grep | CI/CD, Docker, infrastructure |
 | docs | haiku | low | Write, Edit, WebSearch | Documentation updates |
+| email-drafter | haiku | low | Read, Write, Bash | Professional email composer, creates drafts |
 | frontend-qa | haiku | low | Bash, Grep, Read | Frontend quality assurance |
+| knowledge-curator | haiku | low | Read, Write, Grep | Obsidian vault organizer and linker |
+| learning-scout | sonnet | high | WebSearch, WebFetch, Write | Tech topic monitor and resource curator |
+| meeting-prep | haiku | low | Read, Write, Bash | Meeting prep briefs from calendar context |
 | merge | haiku | low | Bash, Edit, Grep | Git merge, rebase, conflict resolution |
+| migration-reviewer | opus | high | Read, Bash, Grep | Database schema change reviewer |
 | morning-briefing | haiku | low | Bash, Write, Grep | Daily morning briefing orchestrator |
+| perf-sentinel | sonnet | high | Read, Bash, Grep | Performance regression detector |
 | planner | sonnet | high | Read, Write, Grep | Implementation plan creation |
+| pr-narrator | haiku | low | Read, Bash, Grep | PR storyteller for stakeholder summaries |
 | push | haiku | low | Bash, Read | Push commits to remote repository |
+| release-notes | haiku | low | Read, Write, Bash | Release notes generator from git commits |
 | researcher | sonnet | high | WebFetch, WebSearch | Deep technical research and analysis |
 | security | sonnet | high | Read, Grep, Bash | Security audit and review |
+| standup-writer | haiku | low | Read, Write, Bash | Daily standup update generator |
+| task-triage | haiku | low | Read, Write, Bash | Todoist inbox triage agent |
 | test-runner | haiku | low | Bash, Read, Glob | Run test suites and report results |
 | test-writer | haiku | low | Edit, Write, Bash | Write tests for code changes |
 
