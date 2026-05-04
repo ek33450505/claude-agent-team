@@ -15,6 +15,28 @@
 
 **[CAST Framework](https://castframework.dev)**
 
+---
+
+## Why CAST in 30 Seconds
+
+**Problem:** You use Claude Code but want specialist agents that actually enforce quality gates—not just "remember to lint." You want to see what agents did, why they did it, and audit decision trails. You don't want your codebase on a SaaS dashboard.
+
+**Answer:** CAST is an OS-layer for Claude Code. You get:
+- **30 specialist agents** — code-writer, debugger, planner, researcher, security, and more, all pre-configured
+- **Enforced quality gates** — hooks block bad commits, mandate code review, run tests before push
+- **Full observability** — SQLite-backed event log runs on your machine; audit every decision
+
+All local, all yours.
+
+---
+
+<!-- TODO(ed): record 10s asciinema of `cast status` + an orchestrate run, replace this block with the SVG/GIF -->
+<p align="center">
+  <em>Demo: <code>cast status</code> + orchestrate run — recording in progress</em>
+</p>
+
+---
+
 ## Table of Contents
 
 - [What is CAST?](#what-is-cast)
@@ -272,6 +294,23 @@ See [CHANGELOG.md](CHANGELOG.md).
 ## Local-First & Offline
 
 macOS Keychain, age encryption (Secure Enclave), WAL-safe SQLite backups, offline queue with auto-replay, Ollama fallback. All observability stays in `cast.db` on disk — zero cloud lock-in.
+
+---
+
+## Used In / Built With CAST
+
+CAST powers real-world projects in the ecosystem:
+
+- [**claude-code-dashboard**](https://github.com/ek33450505/claude-code-dashboard) — React observability UI for CAST events; Constellation 3D graph of agents, tasks, and token spend
+- [**cast-claudes_journal**](https://github.com/ek33450505/cast-claudes_journal) — Session journaling agent; auto-injects prior-day context via SessionStart hook
+- [**cast-dash**](https://github.com/ek33450505/cast-dash) — TUI dashboard for live swarm monitoring; 4-panel layout
+- [**cast-hooks**](https://github.com/ek33450505/cast-hooks) — Standalone hook scripts framework; 13 auditable hooks
+
+---
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ek33450505/claude-agent-team&type=Date)](https://star-history.com/#ek33450505/claude-agent-team&Date)
 
 ---
 
