@@ -1,6 +1,6 @@
 ---
 name: laconic
-description: Terse output mode. Compresses Claude prose to minimum tokens while preserving technical accuracy. Three intensity levels: lite, full (default), ultra.
+description: "Terse output mode. Compresses Claude prose to minimum tokens while preserving technical accuracy. Three intensity levels: lite, full (default), ultra."
 user-invocable: true
 allowed-tools: []
 ---
