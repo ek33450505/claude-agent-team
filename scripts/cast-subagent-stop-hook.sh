@@ -74,6 +74,36 @@ except Exception:
     print(json.dumps({"error": "invalid json"}))
     sys.exit(0)
 
+
+# Extract response text — try structured agent_response.content first (Phase C payload),
+# then fall back to flat last_assistant_message / output fields (older dispatch paths).
+# This multi-path approach fixes truncation underrecording: cast-truncation-check.sh
+# only reads agent_response.content, so agents dispatched via older paths were missed.
+response_text = ''
+try:
+    agent_response = data.get('agent_response') or {}
+    content_blocks = agent_response.get('content') or []
+    if isinstance(content_blocks, list) and content_blocks:
+        texts = [
+            block.get('text', '')
+            for block in content_blocks
+            if isinstance(block, dict) and block.get('type') == 'text'
+        ]
+        response_text = '\n'.join(t for t in texts if t)
+except Exception:
+    response_text = ''
+
+# Flat-field fallback: last_assistant_message or output
+if not response_text:
+    response_text = (
+        data.get('last_assistant_message') or
+        data.get('output') or
+        data.get('body') or
+        ''
+    )
+
+flat_output = data.get("last_assistant_message") or data.get("output") or ""
+
 result = {
     # SubagentStop stdin uses 'agent_type' (not 'agent_name') per Claude Code source.
     # 'agent_name' and 'subagent_name' are not sent by Claude Code; 'agent_type' is
@@ -81,9 +111,10 @@ result = {
     "agent_name": data.get("agent_type") or data.get("agent_name") or data.get("subagent_name") or "unknown",
     "session_id": data.get("session_id") or "",
     "stop_reason": data.get("stop_reason") or "",
-    "output_preview": (data.get("last_assistant_message") or data.get("output") or "")[:200],
-    "has_turn_ceiling": "[TURN CEILING]" in (data.get("last_assistant_message") or data.get("output") or ""),
-    "output_full": data.get("last_assistant_message") or data.get("output") or "",
+    "output_preview": (flat_output or response_text)[:200],
+    "has_turn_ceiling": "[TURN CEILING]" in (flat_output or response_text),
+    "output_full": flat_output or response_text,
+    "response_text": response_text,
     "agent_id": data.get("agent_id") or data.get("subagent_id") or "",
     "duration_ms": data.get("duration_ms") or data.get("total_duration_ms") or 0,
     "tool_uses": len(data.get("tool_uses", [])) if isinstance(data.get("tool_uses"), list) else (data.get("tool_use_count") or 0),
@@ -158,12 +189,14 @@ PYEOF
 # ── Step 2: Mirror to cast.db agent_runs (best-effort) ───────────────────────
 # The cast.db agent_runs table tracks agent invocations. If the DB exists and
 # is initialized, update the most recent running row for this agent/session.
+# Also captures the agent's full response text for dashboard work-log feed.
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   DB_STATUS="DONE"
   if [ "$EVENT_TYPE" = "task_blocked" ]; then
     DB_STATUS="BLOCKED"
   fi
   export CAST_STOP_DB_STATUS="$DB_STATUS"
+  export CAST_STOP_RESPONSE_TEXT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('response_text','') or d.get('output_full',''))" 2>/dev/null || echo "")"
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os
 
@@ -172,16 +205,21 @@ agent = os.environ.get('CAST_STOP_AGENT', '')
 sess  = os.environ.get('CAST_STOP_SESSION', '')
 ts    = os.environ.get('CAST_STOP_TS_ISO', '')
 st    = os.environ.get('CAST_STOP_DB_STATUS', 'DONE')
-duration_ms = int(os.environ.get('CAST_STOP_DURATION_MS', '0') or '0')
-tool_uses = int(os.environ.get('CAST_STOP_TOOL_USES', '0') or '0')
+duration_ms   = int(os.environ.get('CAST_STOP_DURATION_MS', '0') or '0')
+tool_uses     = int(os.environ.get('CAST_STOP_TOOL_USES', '0') or '0')
+response_text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '') or None
 
 if not agent or not db:
     raise SystemExit(0)
 
-# Add new telemetry columns if they don't exist (idempotent)
+# Add new telemetry columns if they don't exist (idempotent — migration 011)
 try:
     conn = sqlite3.connect(db, timeout=5)
-    for col, coltype in [('duration_ms', 'INTEGER'), ('tool_uses', 'INTEGER')]:
+    for col, coltype in [
+        ('duration_ms', 'INTEGER'),
+        ('tool_uses',   'INTEGER'),
+        ('response',    'TEXT'),
+    ]:
         try:
             conn.execute(f'ALTER TABLE agent_runs ADD COLUMN {col} {coltype}')
         except Exception:
@@ -201,16 +239,16 @@ for attempt in range(3):
         cur  = conn.cursor()
         if agent_id:
             cur.execute(
-                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=? "
+                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=?, response=? "
                 "WHERE status='running' AND agent_id=?",
-                (st, ts, duration_ms, tool_uses, agent_id),
+                (st, ts, duration_ms, tool_uses, response_text, agent_id),
             )
         else:
             cur.execute(
-                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=? "
+                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=?, response=? "
                 "WHERE status='running' AND agent=? AND session_id=? "
                 "AND id=(SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
-                (st, ts, duration_ms, tool_uses, agent, sess, agent, sess),
+                (st, ts, duration_ms, tool_uses, response_text, agent, sess, agent, sess),
             )
         rows_affected = conn.execute("SELECT changes()").fetchone()[0]
         conn.commit()
@@ -224,6 +262,69 @@ for attempt in range(3):
         if attempt < 2:
             import time as _time; _time.sleep(0.1)
         break
+PYEOF
+fi
+
+# ── Step 2.1: Truncation logging for all agents ───────────────────────────────
+# cast-truncation-check.sh only fires for a subset of agents (via worktree-check
+# hook matcher: code-writer|debugger|test-writer|security|frontend-qa).
+# This step fills the gap: log truncations for ALL agents directly from this hook.
+# Uses response_text (already extracted above) — same payload, same detection logic.
+if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+  python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
+import sqlite3, os, re
+
+db           = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
+agent        = os.environ.get('CAST_STOP_AGENT', '')
+sess         = os.environ.get('CAST_STOP_SESSION', '')
+agent_id     = os.environ.get('CAST_STOP_AGENT_ID', '')
+ts           = os.environ.get('CAST_STOP_TS_ISO', '')
+response_text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '') or ''
+
+# Only process non-trivial responses (mirrors cast-truncation-check.sh guard)
+if len(response_text.strip()) < 50:
+    raise SystemExit(0)
+
+# Detection: prose Status block
+has_status = bool(re.search(
+    r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)',
+    response_text,
+))
+# Detection: JSON fenced status block
+has_json = bool(re.search(
+    r'```json\s+status[\s\S]*?"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"',
+    response_text, re.IGNORECASE,
+))
+
+if has_status or has_json:
+    raise SystemExit(0)
+
+# Response appears truncated — log to agent_truncations
+last_line  = response_text[-200:] if len(response_text) > 200 else response_text
+char_count = len(response_text)
+partial_work_log = ''
+wl_match = re.search(r'## Work Log\s*([\s\S]*?)(?=\Z|Status:)', response_text)
+if wl_match:
+    partial_work_log = wl_match.group(1).strip()[:2000]
+
+try:
+    conn = sqlite3.connect(db, timeout=5)
+    # Ensure partial_work_log column exists (added in Phase 1)
+    try:
+        conn.execute('ALTER TABLE agent_truncations ADD COLUMN partial_work_log TEXT')
+    except Exception:
+        pass
+    conn.execute(
+        'INSERT INTO agent_truncations '
+        '(session_id, agent_type, agent_id, last_line, timestamp, char_count, has_status, has_json, partial_work_log) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (sess, agent, agent_id or None, last_line, ts, char_count, 0, 0, partial_work_log or None),
+    )
+    conn.commit()
+    conn.close()
+except Exception:
+    try: conn.close()
+    except Exception: pass
 PYEOF
 fi
 

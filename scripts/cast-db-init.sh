@@ -281,7 +281,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   project         TEXT,
   agent_id        TEXT,
   batch_id        INTEGER,
-  model_used      TEXT
+  model_used      TEXT,
+  response        TEXT
 );
 
 -- Routing events: structured event log
@@ -438,12 +439,18 @@ if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "
   _columns_added=1
 fi
 
+# Check if response column exists (migration 011 — agent response capture)
+if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*	response	"; then
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+  _columns_added=1
+fi
+
 # Ensure batch_id and agent_id indexes exist
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);" 2>/dev/null || true
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
 
 if [ "$_columns_added" -eq 1 ]; then
-  echo "[cast-db-init] self-healed: added missing agent_id, batch_id, and/or model_used columns to agent_runs" >&2
+  echo "[cast-db-init] self-healed: added missing agent_id, batch_id, model_used, and/or response columns to agent_runs" >&2
 fi
 
 echo "cast.db initialized (v8, WAL mode, swarm tables included)" >&2
