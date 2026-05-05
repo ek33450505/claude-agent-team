@@ -28,6 +28,38 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "id": "cast-time-context",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-time-context-hook.sh",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "id": "cast-session-start-journal",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-session-start-journal.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "id": "cast-journal-session-end",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-journal-session-end.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
