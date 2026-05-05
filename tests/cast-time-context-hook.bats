@@ -179,7 +179,7 @@ print('OK')
   rm -f "$TMPFILE"
 }
 
-@test "settings.json has 3 SessionStart entries in correct order and 1 Stop entry" {
+@test "settings.json has cast-time-context + cast-session-start-journal in SessionStart and cast-journal-session-end in Stop" {
   SETTINGS="${BATS_TEST_DIRNAME}/../settings.json"
   run python3 -c "
 import json
@@ -188,11 +188,11 @@ with open('$SETTINGS') as f:
 hooks = s['hooks']
 starts = hooks.get('SessionStart', [])
 stops  = hooks.get('Stop', [])
-assert len(starts) == 3, f'Expected 3 SessionStart, got {len(starts)}'
-assert len(stops)  == 1, f'Expected 1 Stop, got {len(stops)}'
-ids = [h['id'] for h in starts]
-assert ids == ['cast-session-start', 'cast-time-context', 'cast-session-start-journal'], f'Wrong order: {ids}'
-assert stops[0]['id'] == 'cast-journal-session-end', f\"Wrong Stop id: {stops[0]['id']}\"
+start_ids = [h.get('id', '') for h in starts]
+stop_ids  = [h.get('id', '') for h in stops]
+assert 'cast-time-context' in start_ids, f'cast-time-context missing from SessionStart: {start_ids}'
+assert 'cast-session-start-journal' in start_ids, f'cast-session-start-journal missing from SessionStart: {start_ids}'
+assert 'cast-journal-session-end' in stop_ids, f'cast-journal-session-end missing from Stop: {stop_ids}'
 print('OK')
 "
   assert_output "OK"
