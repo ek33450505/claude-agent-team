@@ -134,37 +134,85 @@ PYEOF
   done
 }
 
-@test "install preserves existing fragments at destination (skip-if-exists)" {
-  # Pre-create a downstream-only fragment with distinctive content
+@test "install preserves downstream-only fragments and user-customizable fragments (skip-if-exists)" {
+  # Pre-create a downstream-only fragment (filename not in source) with distinctive content
   local downstream="$TEST_CLAUDE_DIR/managed-settings.d/99-downstream.json"
   printf '{"_downstream":"preserve-me-123"}' > "$downstream"
 
-  # Also pre-create one of the source fragments (simulate prior install)
-  local first_src
-  first_src="$(ls "$REPO_DIR"/managed-settings.d/*.json | sort | head -1)"
-  local first_base
-  first_base="$(basename "$first_src")"
-  local dest_first="$TEST_CLAUDE_DIR/managed-settings.d/$first_base"
-  printf '{"_sentinel":"original-content"}' > "$dest_first"
+  # Pre-create a user-customizable fragment (50-mcp.json — not a *-hooks-* file in name)
+  # to verify the skip-if-exists path for non-hook fragments
+  local user_frag="$TEST_CLAUDE_DIR/managed-settings.d/50-mcp.json"
+  printf '{"_user_custom":"my-mcp-config"}' > "$user_frag"
 
-  # Run fragment copy (skip-if-exists)
+  # Run install fragment block (mirrors the dual policy in install.sh)
   for fragment in "$REPO_DIR"/managed-settings.d/*.json; do
     [ -f "$fragment" ] || continue
     base="$(basename "$fragment")"
     dest="$TEST_CLAUDE_DIR/managed-settings.d/$base"
-    [ -f "$dest" ] && continue
-    cp "$fragment" "$dest"
+    case "$base" in
+      *-hooks-*.json)
+        cp "$fragment" "$dest"
+        ;;
+      *)
+        [ -f "$dest" ] && continue
+        cp "$fragment" "$dest"
+        ;;
+    esac
   done
 
-  # 99-downstream.json must be unchanged
+  # Downstream-only fragment must be unchanged
   local content
   content=$(cat "$downstream")
   [ "$content" = '{"_downstream":"preserve-me-123"}' ]
 
-  # The first fragment that existed must not have been overwritten
-  local sentinel
-  sentinel=$(python3 -c "import json; d=json.load(open('$dest_first')); print(d.get('_sentinel',''))")
-  [ "$sentinel" = "original-content" ]
+  # User-customizable fragment must not have been overwritten
+  local user_marker
+  user_marker=$(python3 -c "import json; d=json.load(open('$user_frag')); print(d.get('_user_custom',''))")
+  [ "$user_marker" = "my-mcp-config" ]
+}
+
+@test "install overwrites stale CAST-owned hook fragments to propagate source updates" {
+  # Plant a stale hook fragment in destination that LACKS a journal hook
+  local stale_30="$TEST_CLAUDE_DIR/managed-settings.d/30-hooks-session.json"
+  printf '%s' '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash ~/.claude/scripts/cast-stale.sh"}]}]}}' > "$stale_30"
+
+  # Confirm the stale fragment lacks the journal hook
+  local stale_has_journal
+  stale_has_journal=$(python3 -c "
+import json
+d = json.load(open('$stale_30'))
+ss = d.get('hooks',{}).get('SessionStart',[])
+found = any('cast-session-start-journal' in str(e) for e in ss)
+print('yes' if found else 'no')
+")
+  [ "$stale_has_journal" = "no" ]
+
+  # Run install fragment block — should overwrite *-hooks-*.json
+  for fragment in "$REPO_DIR"/managed-settings.d/*.json; do
+    [ -f "$fragment" ] || continue
+    base="$(basename "$fragment")"
+    dest="$TEST_CLAUDE_DIR/managed-settings.d/$base"
+    case "$base" in
+      *-hooks-*.json)
+        cp "$fragment" "$dest"
+        ;;
+      *)
+        [ -f "$dest" ] && continue
+        cp "$fragment" "$dest"
+        ;;
+    esac
+  done
+
+  # Stale fragment was overwritten — journal hook now present
+  local now_has_journal
+  now_has_journal=$(python3 -c "
+import json
+d = json.load(open('$stale_30'))
+ss = d.get('hooks',{}).get('SessionStart',[])
+found = any(e.get('id') == 'cast-session-start-journal' for e in ss)
+print('yes' if found else 'no')
+")
+  [ "$now_has_journal" = "yes" ]
 }
 
 @test "merged settings.json contains all hook entries from all fragments" {

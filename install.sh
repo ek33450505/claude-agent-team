@@ -175,19 +175,37 @@ rm -f "$CLAUDE_DIR/scripts/cast-security-guard.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-cost-tracker.sh"
 success "  Scripts installed (including cast_db.py)"
 
-# --- Install managed-settings.d fragments (skip-if-exists, never overwrite downstream) ---
+# --- Install managed-settings.d fragments ---
+# Policy: CAST-owned hook fragments (*-hooks-*.json) overwrite — they ship behavior changes
+# that must reach the deployed copy. User-customizable fragments (env, permissions, MCP, etc.)
+# skip-if-exists. Downstream-only fragments (filenames not in source) are preserved by
+# virtue of never being touched. Backup of the prior CAST-owned copy goes to backups/.
 info "Installing settings fragments..."
 mkdir -p "$CLAUDE_DIR/managed-settings.d"
 for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
     [ -f "$fragment" ] || continue
     base="$(basename "$fragment")"
     dest="$CLAUDE_DIR/managed-settings.d/$base"
-    if [ -f "$dest" ]; then
-        info "  Skipped (exists): managed-settings.d/$base"
-    else
-        cp "$fragment" "$dest"
-        success "  Installed: managed-settings.d/$base"
-    fi
+    case "$base" in
+        *-hooks-*.json)
+            # CAST-owned: overwrite to propagate source updates
+            if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
+                mkdir -p "$BACKUP_DIR/managed-settings.d"
+                cp "$dest" "$BACKUP_DIR/managed-settings.d/$base"
+            fi
+            cp "$fragment" "$dest"
+            success "  Synced: managed-settings.d/$base"
+            ;;
+        *)
+            # User-customizable: skip if present
+            if [ -f "$dest" ]; then
+                info "  Skipped (exists): managed-settings.d/$base"
+            else
+                cp "$fragment" "$dest"
+                success "  Installed: managed-settings.d/$base"
+            fi
+            ;;
+    esac
 done
 
 # --- Regenerate ~/.claude/settings.json from fragments ---
