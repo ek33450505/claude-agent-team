@@ -8,7 +8,8 @@ HOOK_SH="$REPO_DIR/scripts/cast-subagent-stop-hook.sh"
 
 setup() {
   export ORIG_HOME="$HOME"
-  export TEMP_DB="$(mktemp /tmp/cast-test-XXXX.db)"
+  export TEST_TMPDIR="$(mktemp -d /tmp/cast-stop-test.XXXXXXXX)"
+  export TEMP_DB="$TEST_TMPDIR/test.db"
   sqlite3 "$TEMP_DB" "CREATE TABLE agent_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent TEXT,
@@ -24,7 +25,7 @@ setup() {
 }
 
 teardown() {
-  [ -n "${TEMP_DB:-}" ] && rm -f "$TEMP_DB"
+  [ -n "${TEST_TMPDIR:-}" ] && rm -rf "$TEST_TMPDIR"
 }
 
 @test "SubagentStop: writes duration_ms and tool_uses to agent_runs" {
