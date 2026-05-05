@@ -82,6 +82,16 @@ _lint_orphan_scripts() {
   python3 scripts/cast-lint-orphan-scripts.py
 }
 
+# --- Hook contract validation ---
+if git diff --cached --name-only | grep -qE '^(settings\.json|managed-settings\.d/.*\.json)$'; then
+    if [ -x scripts/cast-validate-hook-contracts.sh ]; then
+        if ! bash scripts/cast-validate-hook-contracts.sh --source; then
+            echo "[pre-commit] Hook contract validator failed — see output above. Use CAST_SKIP_HOOK_VALIDATE=1 to bypass."
+            [ "${CAST_SKIP_HOOK_VALIDATE:-0}" != "1" ] && exit 1
+        fi
+    fi
+fi
+
 # Run all lints
 echo "[CAST pre-commit] Running regression lints..."
 _lint_python_cold_starts || true

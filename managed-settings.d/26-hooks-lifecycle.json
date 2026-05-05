@@ -1,49 +1,50 @@
 {
   "hooks": {
-    "ConfigChange": [
+    "CwdChanged": [
       {
+        "id": "cast-cwd-changed",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-config-change-hook.sh",
+            "command": "bash ~/.claude/scripts/cast-cwdchanged-hook.sh",
             "timeout": 5,
             "async": true
           }
         ]
       }
     ],
-    "PermissionDenied": [
+    "FileChanged": [
       {
+        "id": "cast-file-changed",
+        "matcher": ".envrc|.env|.cast|cast.json",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-permission-denied-hook.sh",
+            "command": "bash ~/.claude/scripts/cast-filechanged-hook.sh",
             "timeout": 5,
             "async": true
           }
         ]
       }
     ],
-    "WorktreeCreate": [
+    "PreCompact": [
       {
+        "id": "cast-precompact-guard",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-worktree-create-hook.sh",
-            "timeout": 10,
-            "async": true
+            "command": "bash ~/.claude/scripts/cast-precompact-guard.sh",
+            "timeout": 10
           }
         ]
-      }
-    ],
-    "Stop": [
+      },
       {
+        "id": "cast-precompact-memory-save",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-stop-hook.sh",
-            "timeout": 5,
-            "async": true
+            "command": "bash ~/.claude/scripts/cast-precompact-memory-save.sh",
+            "timeout": 10
           }
         ]
       }

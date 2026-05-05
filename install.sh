@@ -175,6 +175,30 @@ rm -f "$CLAUDE_DIR/scripts/cast-security-guard.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-cost-tracker.sh"
 success "  Scripts installed (including cast_db.py)"
 
+# --- Install managed-settings.d fragments (skip-if-exists, never overwrite downstream) ---
+info "Installing settings fragments..."
+mkdir -p "$CLAUDE_DIR/managed-settings.d"
+for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
+    [ -f "$fragment" ] || continue
+    base="$(basename "$fragment")"
+    dest="$CLAUDE_DIR/managed-settings.d/$base"
+    if [ -f "$dest" ]; then
+        info "  Skipped (exists): managed-settings.d/$base"
+    else
+        cp "$fragment" "$dest"
+        success "  Installed: managed-settings.d/$base"
+    fi
+done
+
+# --- Regenerate ~/.claude/settings.json from fragments ---
+if [ -x "$CLAUDE_DIR/scripts/cast-merge-settings.sh" ]; then
+    if bash "$CLAUDE_DIR/scripts/cast-merge-settings.sh" "$CLAUDE_DIR/settings.json" 2>&1 | tail -1; then
+        success "  Settings merged from fragments → ~/.claude/settings.json"
+    else
+        warn "  Settings merge failed — settings.json may be stale. Run: bash ~/.claude/scripts/cast-merge-settings.sh"
+    fi
+fi
+
 # --- Optional RTK check ---
 info "Checking for RTK (optional token compression)..."
 if command -v rtk >/dev/null 2>&1; then

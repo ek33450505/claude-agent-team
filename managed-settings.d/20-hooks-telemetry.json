@@ -51,17 +51,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-cost-tracker.sh",
-            "if": "Bash|Edit|Write|Agent",
-            "timeout": 5,
-            "async": true
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
             "command": "bash ~/.claude/scripts/cast-budget-alert.sh",
             "if": "Bash|Edit|Write|Agent",
             "timeout": 3,
