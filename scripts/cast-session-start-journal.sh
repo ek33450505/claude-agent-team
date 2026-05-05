@@ -34,7 +34,7 @@ import json, os
 date = os.environ.get("CAST_JOURNAL_DATE", "")
 excerpt = os.environ.get("CAST_JOURNAL_EXCERPT", "").rstrip()
 # Build context with proper newline escaping for JSON
-lines = ["## Last Claude's Journal Entry (" + date + ")", "", excerpt, "", "---"]
+lines = ["## Last Claude's Journal Entry (" + date + ")", "", excerpt, ""]
 context_text = "\n".join(lines)
 output = {
     "hookSpecificOutput": {
