@@ -1,5 +1,49 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "id": "cast-time-context",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-time-context-hook.sh",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "id": "cast-session-start-journal",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-session-start-journal.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "id": "cast-journal-session-end",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-journal-session-end.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-session-end.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [
@@ -7,18 +51,6 @@
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-session-end.sh",
             "timeout": 15,
-            "async": true
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-session-end.sh",
-            "timeout": 5,
             "async": true
           }
         ]
@@ -38,10 +70,22 @@
     ],
     "SubagentStop": [
       {
+        "id": "cast-subagent-stop",
         "hooks": [
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-subagent-stop-hook.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
+      },
+      {
+        "id": "cast-response-completeness",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/Projects/personal/claude-agent-team/scripts/cast-response-completeness-hook.sh",
             "timeout": 5,
             "async": true
           }
