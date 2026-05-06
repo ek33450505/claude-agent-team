@@ -7,26 +7,51 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-30-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-55-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-72-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-**CAST is the control plane for Anthropic's native Agent Teams.** Define multiagent swarms in YAML, let the framework handle orchestration, quality gates, and observability.
+> CAST turns Claude Code into a team: define a workflow once, let specialist agents plan,
+> implement, review, test, and commit — automatically — while a local audit log tells you
+> exactly what happened and why.
 
 **[CAST Framework](https://castframework.dev)**
 
 ---
 
-## Why CAST in 30 Seconds
+## Install
 
-**Problem:** You use Claude Code but want specialist agents that actually enforce quality gates—not just "remember to lint." You want to see what agents did, why they did it, and audit decision trails. You don't want your codebase on a SaaS dashboard.
+```bash
+brew tap ek33450505/cast && brew install cast
+```
 
-**Answer:** CAST is an OS-layer for Claude Code. You get:
-- **30 specialist agents** — code-writer, debugger, planner, researcher, security, and more, all pre-configured
-- **Enforced quality gates** — hooks block bad commits, mandate code review, run tests before push
-- **Full observability** — SQLite-backed event log runs on your machine; audit every decision
+Or clone + install: `git clone https://github.com/ek33450505/claude-agent-team.git && bash install.sh`
 
-All local, all yours.
+---
+
+## Quick Start
+
+**[docs/tutorial/getting-started.md](docs/tutorial/getting-started.md)** — install, verify, and run `cast status` in 5 minutes.
+
+---
+
+## What Makes CAST Different
+
+- **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a reviewer pass. You cannot skip this.
+- **30 specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
+- **SQLite audit trail, fully local.** Every agent dispatch, tool call, and token spend logs to `cast.db` on your machine. No SaaS dashboard, no cloud lock-in.
+- **72 BATS tests with 0 failures.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
+
+---
+
+## Documentation
+
+| Guide | Description |
+|---|---|
+| [Tutorial](docs/tutorial/getting-started.md) | Install CAST and run your first agent dispatch |
+| [Compatibility Matrix](docs/compatibility.md) | Claude Code version requirements and known breakages |
+| [Hook Authoring Guide](docs/hooks/authoring-guide.md) | Write, test, and install custom hook scripts |
+| [Full Docs Index](docs/README.md) | All documentation with one-line descriptions |
 
 ---
 
@@ -40,7 +65,8 @@ All local, all yours.
 ## Table of Contents
 
 - [What is CAST?](#what-is-cast)
-- [Quick Start](#quick-start)
+- [Tutorial](docs/tutorial/getting-started.md)
+- [Compatibility](docs/compatibility.md)
 - [Your First Workflow](#your-first-workflow)
 - [Architecture](#architecture)
 - [Personal Overlay — Layered Configuration](#personal-overlay--layered-configuration)
@@ -74,16 +100,6 @@ CAST transforms Agent Teams into a **production control plane:**
 - **Structural quality gates.** Code changes mandate a reviewer pass. Raw `git commit` and `git push` are hard-blocked by hooks.
 - **Full observability.** Every session, task, peer message, and token spend logs to `cast.db` (SQLite).
 - **Local model routing.** Haiku agents route to Ollama; cost per swarm drops 40-60% with LiteLLM proxy.
-
----
-
-## Quick Start
-
-```bash
-brew tap ek33450505/cast && brew install cast && cast doctor
-```
-
-Or: `claude plugin install ek33450505/cast` — or clone + `bash install.sh`.
 
 ---
 
