@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # cast-managed-agent.sh — dispatch a task via Anthropic Managed Agents
 # Usage:
-#   cast-managed-agent.sh <agent-name> <prompt> [--local-fallback] [--define-only] [--fork]
+#   cast-managed-agent.sh <agent-name> <prompt> [--local-fallback] [--define-only] [--fork] [--no-stream]
 # Flags:
 #   --local-fallback   fall back to local dispatch on Managed Agents API errors
 #   --define-only      stop after agent definition (do not create environment/session)
 #   --fork             export CLAUDE_CODE_FORK_SUBAGENT=1 in agent environment
+#   --no-stream        disable SSE streaming (use synchronous polling; suitable for CI/non-TTY)
 # Env:
 #   ANTHROPIC_API_KEY   required (or stored in macOS keychain under 'anthropic-api-key')
 # Beta header: managed-agents-2026-04-01
@@ -30,12 +31,14 @@ PROMPT=""
 LOCAL_FALLBACK=0
 DEFINE_ONLY=0
 FORK_MODE=0
+NO_STREAM=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local-fallback) LOCAL_FALLBACK=1; shift ;;
     --define-only) DEFINE_ONLY=1; shift ;;
     --fork) FORK_MODE=1; shift ;;
+    --no-stream) NO_STREAM=1; shift ;;
     -*)
       echo "Unknown flag: $1" >&2
       exit 2
@@ -55,7 +58,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$AGENT_NAME" || -z "$PROMPT" ]]; then
-  echo "Usage: cast-managed-agent.sh <agent-name> <prompt> [--local-fallback] [--define-only] [--fork]" >&2
+  echo "Usage: cast-managed-agent.sh <agent-name> <prompt> [--local-fallback] [--define-only] [--fork] [--no-stream]" >&2
   exit 2
 fi
 
@@ -284,6 +287,81 @@ if [[ -z "$ENVIRONMENT_ID" ]]; then
   exit 1
 fi
 
+# --- agent_runs telemetry helper (Task 2.3) ---
+# Usage: _write_agent_runs <status> <task_summary>
+# All dynamic values passed via env vars — single-quoted heredoc is CRITICAL.
+_write_agent_runs() {
+  local run_status="$1"
+  local task_summary="${2:-}"
+  CAST_AGENT_NAME="${AGENT_NAME}" \
+  CAST_STARTED_AT="${SESSION_STARTED_AT:-}" \
+  CAST_AGENT_STATUS="$run_status" \
+  CAST_TASK_SUMMARY="$task_summary" \
+  python3 - <<'PYEOF' 2>/dev/null || true
+import sys, os, datetime
+sys.path.insert(0, os.path.expanduser('~/Projects/personal/claude-agent-team/scripts'))
+sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
+try:
+    from cast_db import db_execute, db_write
+    db_execute('''
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            agent TEXT NOT NULL,
+            model TEXT,
+            started_at TEXT,
+            ended_at TEXT,
+            status TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cost_usd REAL,
+            task_summary TEXT,
+            execution_mode TEXT DEFAULT 'local'
+        )
+    ''')
+    db_write('agent_runs', {
+        'session_id': os.environ.get('CAST_SESSION_ID', 'unknown'),
+        'agent': os.environ.get('CAST_AGENT_NAME', 'unknown'),
+        'started_at': os.environ.get('CAST_STARTED_AT', ''),
+        'ended_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'status': os.environ.get('CAST_AGENT_STATUS', 'unknown'),
+        'execution_mode': 'managed',
+        'task_summary': (os.environ.get('CAST_TASK_SUMMARY', '') or '')[:500],
+    })
+except Exception:
+    pass
+PYEOF
+}
+
+# --- SSE parser helper (Task 2.2) ---
+# Usage: _parse_sse_output <raw_sse_text>
+# Prints extracted text deltas to stdout, returns accumulated text.
+_parse_sse_lines() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" == "data: [DONE]" ]]; then
+      continue
+    fi
+    if [[ "$line" == data:* ]]; then
+      local payload="${line#data: }"
+      # Extract text delta if present; fall back to printing raw payload
+      local text
+      text="$(echo "$payload" | python3 -c '
+import json, sys
+try:
+    obj = json.load(sys.stdin)
+    delta = obj.get("delta", {})
+    t = delta.get("text", "")
+    if t:
+        print(t, end="")
+except Exception:
+    pass
+' 2>/dev/null || true)"
+      printf '%s' "$text"
+    fi
+  done
+}
+
 # --- Step 3: POST /v1/sessions ---
 SESSION_BODY="$(CAST_MA_AGENT_ID="$AGENT_ID" CAST_MA_ENV_ID="$ENVIRONMENT_ID" CAST_MA_AGENT="$AGENT_NAME" python3 -c '
 import json, os
@@ -296,23 +374,123 @@ print(json.dumps(body))
 ')"
 
 SESSION_START_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
+SESSION_STARTED_AT="$(python3 -c 'import datetime; print(datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 LAST_HTTP_STATUS="0"
 STEP3_RESPONSE=""
-STEP3_RESPONSE="$(_curl_step POST "${API_BASE}/v1/sessions" "$SESSION_BODY")" || {
-  local_exit=$?
-  if [[ "$local_exit" -eq 2 ]]; then
-    exit 0
+STEP3_AGENT_OUTPUT=""
+
+if [[ "$NO_STREAM" -eq 1 ]]; then
+  # --- Non-streaming (polling) path ---
+  STEP3_RESPONSE="$(_curl_step POST "${API_BASE}/v1/sessions" "$SESSION_BODY")" || {
+    local_exit=$?
+    if [[ "$local_exit" -eq 2 ]]; then
+      _write_agent_runs "fallback" ""
+      exit 0
+    fi
+    _write_agent_runs "error" ""
+    _write_telemetry "$MODE_LABEL" "${LAST_HTTP_STATUS:-0}" 1 0
+    exit 1
+  }
+  SESSION_END_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
+  SESSION_DURATION_MS=$(( SESSION_END_MS - SESSION_START_MS ))
+  STEP3_HTTP_STATUS="$LAST_HTTP_STATUS"
+  _log "success" "http=${STEP3_HTTP_STATUS} duration_ms=${SESSION_DURATION_MS}"
+  echo "$STEP3_RESPONSE"
+  STEP3_AGENT_OUTPUT="$STEP3_RESPONSE"
+else
+  # --- SSE streaming path ---
+  # Use --no-buffer to get progressive output; accumulate lines for cast.db write.
+  local curl_sse_exit=0
+  local sse_tmpfile
+  sse_tmpfile="$(mktemp)"
+
+  echo "$SESSION_BODY" | curl \
+    --no-buffer \
+    --silent \
+    --show-error \
+    --max-redirs 3 \
+    -X POST "${API_BASE}/v1/sessions" \
+    -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+    -H "anthropic-beta: ${BETA_HEADER}" \
+    -H "anthropic-version: 2023-06-01" \
+    -H "content-type: application/json" \
+    -H "Accept: text/event-stream" \
+    --data-binary @- \
+    --write-out "\n__HTTP_STATUS__%{http_code}" \
+    2>&1 | tee "$sse_tmpfile" | _parse_sse_lines || curl_sse_exit=$?
+
+  SESSION_END_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
+  SESSION_DURATION_MS=$(( SESSION_END_MS - SESSION_START_MS ))
+
+  local raw_sse
+  raw_sse="$(cat "$sse_tmpfile")"
+  rm -f "$sse_tmpfile"
+
+  # Extract HTTP status from appended marker
+  STEP3_HTTP_STATUS="0"
+  if [[ "$raw_sse" =~ __HTTP_STATUS__([0-9]+)$ ]]; then
+    STEP3_HTTP_STATUS="${BASH_REMATCH[1]}"
   fi
-  exit 1
-}
-SESSION_END_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
-SESSION_DURATION_MS=$(( SESSION_END_MS - SESSION_START_MS ))
+  LAST_HTTP_STATUS="$STEP3_HTTP_STATUS"
 
-STEP3_HTTP_STATUS="$LAST_HTTP_STATUS"
-_log "success" "http=${STEP3_HTTP_STATUS} duration_ms=${SESSION_DURATION_MS}"
+  if [[ "$STEP3_HTTP_STATUS" == "401" || "$STEP3_HTTP_STATUS" == "403" ]]; then
+    _log "auth_error" "http=${STEP3_HTTP_STATUS}"
+    echo "ERROR: authentication failure (HTTP ${STEP3_HTTP_STATUS})" >&2
+    _write_agent_runs "error" ""
+    _write_telemetry "$MODE_LABEL" "${STEP3_HTTP_STATUS:-0}" 1 "${SESSION_DURATION_MS:-0}"
+    exit 1
+  fi
 
-# --- Emit session response to stdout ---
-echo "$STEP3_RESPONSE"
+  if [[ "$curl_sse_exit" -ne 0 ]]; then
+    if [[ "$LOCAL_FALLBACK" -eq 1 ]]; then
+      _log "error" "sse_failed http=${STEP3_HTTP_STATUS} fallback=local"
+      echo "WARN: Managed Agents SSE failed (HTTP ${STEP3_HTTP_STATUS}), falling back" >&2
+      _write_agent_runs "fallback" ""
+      _write_telemetry "$MODE_LABEL" "${STEP3_HTTP_STATUS:-0}" 0 "${SESSION_DURATION_MS:-0}"
+      exit 0
+    fi
+    _log "error" "sse_failed http=${STEP3_HTTP_STATUS}"
+    echo "ERROR: Managed Agents SSE failed (HTTP ${STEP3_HTTP_STATUS})" >&2
+    _write_agent_runs "error" ""
+    _write_telemetry "$MODE_LABEL" "${STEP3_HTTP_STATUS:-0}" 1 "${SESSION_DURATION_MS:-0}"
+    exit 1
+  fi
 
-# --- cast.db telemetry ---
+  # Accumulate full agent output for telemetry summary
+  STEP3_AGENT_OUTPUT="$raw_sse"
+  _log "success" "http=${STEP3_HTTP_STATUS} duration_ms=${SESSION_DURATION_MS} streaming=true"
+fi
+
+# --- cast.db: agent_runs (Task 2.3) ---
+# Extract a brief task summary from the agent output (first 500 chars of text content)
+TASK_SUMMARY="$(echo "$STEP3_AGENT_OUTPUT" | python3 -c '
+import sys
+raw = sys.stdin.read()
+# Try to extract text from SSE lines
+lines = raw.split("\n")
+parts = []
+for line in lines:
+    line = line.strip()
+    if not line.startswith("data:"):
+        continue
+    payload = line[5:].strip()
+    if payload == "[DONE]":
+        continue
+    try:
+        import json
+        obj = json.loads(payload)
+        t = obj.get("delta", {}).get("text", "")
+        if t:
+            parts.append(t)
+    except Exception:
+        pass
+summary = "".join(parts)[:500]
+if not summary:
+    summary = raw[:500]
+print(summary)
+' 2>/dev/null || echo "")"
+
+_write_agent_runs "DONE" "$TASK_SUMMARY"
+
+# --- cast.db: managed_agent_invocations ---
 _write_telemetry "$MODE_LABEL" "${STEP3_HTTP_STATUS:-0}" 0 "${SESSION_DURATION_MS:-0}"

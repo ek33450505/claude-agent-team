@@ -132,6 +132,7 @@ Subcommands:
   ${C_BOLD}status${C_RESET}                          Terminal health dashboard
   ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest
   ${C_BOLD}parallel${C_RESET}  [--dry-run] [--split N] <plan>  Split plan across parallel worktrees
+  ${C_BOLD}dispatch${C_RESET}  [--managed] <agent> <prompt>  Dispatch an agent task
   ${C_BOLD}memory${C_RESET}    search|list|forget|export   Query and manage agent memories
   ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
   ${C_BOLD}agents${C_RESET}                          List installed CAST agents
@@ -153,6 +154,112 @@ Global flags:
 Config: ${CAST_CONFIG_FILE}
 DB:     ${CAST_DB_PATH}
 USAGE
+}
+
+# ── Subcommand: dispatch ─────────────────────────────────────────────────────
+_cmd_dispatch() {
+  local use_managed=0
+  local beta_header="managed-agents-2026-04-01"
+  local no_stream=0
+  local dry_run=0
+  local agent_name=""
+  local prompt=""
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --managed)              use_managed=1; shift ;;
+      --beta-header)          beta_header="${2:-}"; shift 2 ;;
+      --no-stream)            no_stream=1; shift ;;
+      --dry-run)              dry_run=1; shift ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast dispatch [--managed] <agent> <prompt>
+
+  --managed              Use Managed Agents API (Anthropic cloud execution)
+  --beta-header <value>  Override beta header (default: managed-agents-2026-04-01)
+  --no-stream            Disable streaming (for CI/non-TTY contexts)
+  --dry-run              Print the curl command without executing
+
+Without --managed: prints instructions for local dispatch via Claude Code.
+With --managed: calls scripts/cast-managed-agent.sh with appropriate flags.
+
+Examples:
+  cast dispatch --managed code-reviewer "Review my recent changes"
+  cast dispatch --dry-run --managed code-reviewer "test"
+  cast dispatch --managed --no-stream commit "Implement feature X"
+USAGE
+        return 0
+        ;;
+      -*)
+        _error "Unknown flag: $1"
+        printf "  Run: cast dispatch --help\n" >&2
+        return 1
+        ;;
+      *)
+        if [ -z "$agent_name" ]; then
+          agent_name="$1"
+        elif [ -z "$prompt" ]; then
+          prompt="$1"
+        else
+          _error "Unexpected argument: $1"
+          return 1
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$agent_name" ] || [ -z "$prompt" ]; then
+    _error "Usage: cast dispatch [--managed] <agent> <prompt>"
+    printf "  Run: cast dispatch --help\n" >&2
+    return 1
+  fi
+
+  if [ "$use_managed" -eq 0 ]; then
+    _info "Local dispatch: use /orchestrate or the Agent tool in Claude Code"
+    return 0
+  fi
+
+  # --- Managed dispatch ---
+  local shim_script="${CAST_SCRIPTS_DIR}/cast-managed-agent.sh"
+  if [ ! -f "$shim_script" ]; then
+    shim_script="${CAST_REPO_DIR}/scripts/cast-managed-agent.sh"
+  fi
+  if [ ! -f "$shim_script" ]; then
+    _error "cast-managed-agent.sh not found. Run: bash install.sh"
+    return 1
+  fi
+
+  # Build shim flags
+  local shim_flags=()
+  [ "$no_stream" -eq 1 ] && shim_flags+=("--no-stream")
+
+  if [ "$dry_run" -eq 1 ]; then
+    # Print the curl command that would be issued for the first API step
+    printf "# dry-run: would execute managed dispatch\n"
+    printf "curl -s -X POST https://api.anthropic.com/v1/agents"
+    printf " \\\\\n  -H 'x-api-key: <ANTHROPIC_API_KEY>'"
+    printf " \\\\\n  -H 'anthropic-beta: %s'" "$beta_header"
+    printf " \\\\\n  -H 'anthropic-version: 2023-06-01'"
+    printf " \\\\\n  -H 'content-type: application/json'"
+    if [ "$no_stream" -eq 0 ]; then
+      printf " \\\\\n  -H 'Accept: text/event-stream'"
+    fi
+    printf " \\\\\n  -d '{\"name\":\"%s\",\"model\":\"claude-haiku-4-5\",\"system\":\"...\",\"tools\":[{\"type\":\"agent_toolset_20260401\"}]}'" "$agent_name"
+    printf "\n"
+    printf "# agent: %s\n# prompt: %s\n# no-stream: %d\n" "$agent_name" "$prompt" "$no_stream"
+    return 0
+  fi
+
+  _verbose "Dispatching managed agent: $agent_name"
+  bash "$shim_script" "$agent_name" "$prompt" "${shim_flags[@]+"${shim_flags[@]}"}"
+  local exit_code=$?
+  if [ "$exit_code" -eq 0 ]; then
+    _success "Managed dispatch complete: $agent_name"
+  else
+    _error "Managed dispatch failed (exit $exit_code): $agent_name"
+  fi
+  return "$exit_code"
 }
 
 # ── Subcommand: status ───────────────────────────────────────────────────────
@@ -1357,6 +1464,7 @@ shift 2>/dev/null || true
 case "$SUBCOMMAND" in
   status)               _cmd_status "$@" ;;
   exec)                 _cmd_exec "$@" ;;
+  dispatch)             _cmd_dispatch "$@" ;;
   parallel)
     parallel_script="${CAST_SCRIPTS_DIR}/cast-parallel.sh"
     if [ ! -f "$parallel_script" ]; then
