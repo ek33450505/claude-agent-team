@@ -400,8 +400,7 @@ if [[ "$NO_STREAM" -eq 1 ]]; then
 else
   # --- SSE streaming path ---
   # Use --no-buffer to get progressive output; accumulate lines for cast.db write.
-  local curl_sse_exit=0
-  local sse_tmpfile
+  curl_sse_exit=0
   sse_tmpfile="$(mktemp)"
 
   echo "$SESSION_BODY" | curl \
@@ -422,7 +421,6 @@ else
   SESSION_END_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
   SESSION_DURATION_MS=$(( SESSION_END_MS - SESSION_START_MS ))
 
-  local raw_sse
   raw_sse="$(cat "$sse_tmpfile")"
   rm -f "$sse_tmpfile"
 

@@ -7,9 +7,11 @@ on:
 jobs:
   cast-review:
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
       contents: read
       pull-requests: write
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: anthropics/claude-code-action@v1
