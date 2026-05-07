@@ -14,6 +14,28 @@ STOP_HOOK="${REPO_ROOT}/scripts/cast-subagent-stop-hook.sh"
 PROMPT_HOOK="${REPO_ROOT}/scripts/cast-user-prompt-hook.sh"
 ROUTER="${REPO_ROOT}/scripts/cast-memory-router.py"
 INIT_SCRIPT="${REPO_ROOT}/scripts/cast-db-init.sh"
+ROUTER_BACKUP="${BATS_TMPDIR}/cast-memory-router-backup-$$.py"
+
+# Helper: build a valid SubagentStop JSON payload from a response string.
+# Uses Python json.dumps to ensure multiline strings are properly escaped.
+make_stop_payload() {
+    local agent_type="${1:-test-agent}"
+    local session_id="${2:-test-session-123}"
+    local response_text="${3:-}"
+    _AGENT_TYPE="$agent_type" _SESSION_ID="$session_id" _RESPONSE_TEXT="$response_text" \
+    python3 -c "
+import json, os
+payload = {
+    'agent_type': os.environ['_AGENT_TYPE'],
+    'session_id': os.environ['_SESSION_ID'],
+    'stop_reason': 'end_turn',
+    'agent_response': {
+        'content': [{'type': 'text', 'text': os.environ['_RESPONSE_TEXT']}]
+    }
+}
+print(json.dumps(payload))
+"
+}
 
 setup() {
     # Create a clean test DB for each test
@@ -71,20 +93,9 @@ name: user-pref | type: feedback | content: User prefers terse responses.
 - Did something
 '
 
-    # Create SubagentStop payload
-    local payload=$(cat <<EOF
-{
-    "agent_type": "test-agent",
-    "session_id": "test-session-123",
-    "stop_reason": "end_turn",
-    "agent_response": {
-        "content": [
-            {"type": "text", "text": "$response"}
-        ]
-    }
-}
-EOF
-)
+    # Build valid JSON payload (heredoc expansion creates invalid JSON with literal newlines)
+    local payload
+    payload=$(make_stop_payload "test-agent" "test-session-123" "$response")
 
     # Run the hook
     export CAST_DB_PATH="${TEST_DB}"
@@ -114,19 +125,8 @@ EOF
 name: dup-test | type: project | content: Version 1 of this fact.
 '
 
-    local payload1=$(cat <<EOF
-{
-    "agent_type": "agent-x",
-    "session_id": "session-1",
-    "stop_reason": "end_turn",
-    "agent_response": {
-        "content": [
-            {"type": "text", "text": "$response1"}
-        ]
-    }
-}
-EOF
-)
+    local payload1
+    payload1=$(make_stop_payload "agent-x" "session-1" "$response1")
 
     export CAST_DB_PATH="${TEST_DB}"
     echo "$payload1" | bash "${STOP_HOOK}" >/dev/null 2>&1
@@ -142,19 +142,8 @@ EOF
 name: dup-test | type: project | content: Version 2 of this fact.
 '
 
-    local payload2=$(cat <<EOF
-{
-    "agent_type": "agent-x",
-    "session_id": "session-2",
-    "stop_reason": "end_turn",
-    "agent_response": {
-        "content": [
-            {"type": "text", "text": "$response2"}
-        ]
-    }
-}
-EOF
-)
+    local payload2
+    payload2=$(make_stop_payload "agent-x" "session-2" "$response2")
 
     echo "$payload2" | bash "${STOP_HOOK}" >/dev/null 2>&1
 
@@ -191,9 +180,9 @@ print(json.dumps(data))
 PYTHON
     chmod +x "${mock_router}"
 
-    # Temporarily replace router with mock
-    local orig_router="${ROUTER}"
+    # Temporarily replace router with mock (save real router to temp backup first)
     local hook_dir="$(dirname "${PROMPT_HOOK}")"
+    cp "${hook_dir}/cast-memory-router.py" "${ROUTER_BACKUP}"
     cp "${mock_router}" "${hook_dir}/cast-memory-router.py"
 
     # Create UserPromptSubmit payload
@@ -210,8 +199,8 @@ EOF
     export CAST_DB_PATH="${TEST_DB}"
     output=$(echo "$payload" | bash "${PROMPT_HOOK}" 2>/dev/null || true)
 
-    # Restore original router
-    cp "${orig_router}" "${hook_dir}/cast-memory-router.py" 2>/dev/null || true
+    # Restore original router from backup
+    cp "${ROUTER_BACKUP}" "${hook_dir}/cast-memory-router.py" 2>/dev/null || true
 
     # Verify hook output contains hookSpecificOutput with additionalContext
     if [ -n "$output" ]; then
@@ -266,19 +255,8 @@ name: another-fact | type: invalid_type | content: Invalid type value.
 name:  | type: project | content: Empty name field.
 '
 
-    local payload=$(cat <<EOF
-{
-    "agent_type": "test-agent",
-    "session_id": "session-123",
-    "stop_reason": "end_turn",
-    "agent_response": {
-        "content": [
-            {"type": "text", "text": "$response"}
-        ]
-    }
-}
-EOF
-)
+    local payload
+    payload=$(make_stop_payload "test-agent" "session-123" "$response")
 
     export CAST_DB_PATH="${TEST_DB}"
     echo "$payload" | bash "${STOP_HOOK}" >/dev/null 2>&1
@@ -300,19 +278,8 @@ EOF
 name: user-work-hours | type: user_profile | content: Ed works 9am-6pm ET.
 '
 
-    local payload=$(cat <<EOF
-{
-    "agent_type": "test-agent",
-    "session_id": "session-123",
-    "stop_reason": "end_turn",
-    "agent_response": {
-        "content": [
-            {"type": "text", "text": "$response"}
-        ]
-    }
-}
-EOF
-)
+    local payload
+    payload=$(make_stop_payload "test-agent" "session-123" "$response")
 
     export CAST_DB_PATH="${TEST_DB}"
     echo "$payload" | bash "${STOP_HOOK}" >/dev/null 2>&1

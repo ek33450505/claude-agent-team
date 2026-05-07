@@ -415,8 +415,7 @@ if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]] && command -v python3 >/dev/null 2>&1
   CAST_STOP_RESPONSE_TEXT="${CAST_STOP_RESPONSE_TEXT}" \
   CAST_DB_PATH="${DB_PATH}" \
   CAST_PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")" \
-  python3 - 2>>"$HOOK_ERROR_LOG" || true
-  <<'PYEOF'
+  python3 - 2>>"$HOOK_ERROR_LOG" <<'PYEOF' || true
 import os, sys, re, sqlite3
 from datetime import datetime, timezone
 

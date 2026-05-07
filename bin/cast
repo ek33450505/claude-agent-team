@@ -134,6 +134,7 @@ Subcommands:
   ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest
   ${C_BOLD}parallel${C_RESET}  [--dry-run] [--split N] <plan>  Split plan across parallel worktrees
   ${C_BOLD}dispatch${C_RESET}  [--managed] <agent> <prompt>  Dispatch an agent task
+  ${C_BOLD}test${C_RESET}      [agent-name] [--record] [--ci]  Run agent contract tests
   ${C_BOLD}memory${C_RESET}    search|list|forget|export   Query and manage agent memories
   ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
   ${C_BOLD}agents${C_RESET}                          List installed CAST agents
@@ -611,6 +612,110 @@ for e in entries:
     print(f"{e['event']:<20} {e['id']:<24} {async_str:<6} {e['health']:<8} {e['command']}")
 print(f"\n{len(entries)} hook entries across {len(hooks_cfg)} event types")
 PYEOF
+}
+
+# ── Subcommand: test ────────────────────────────────────────────────────────
+_cmd_test() {
+  local agent_filter=""
+  local record_mode=0
+  local ci_mode=0
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --record)   record_mode=1; shift ;;
+      --ci)       ci_mode=1; shift ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast test [agent-name] [--record] [--ci]
+
+  No agent name      Run all contracts in agent-contracts/
+  <agent-name>       Run contract for a specific agent
+  --record           Record agent output to fixtures (not yet implemented)
+  --ci               Suppress ANSI color codes, machine-readable output
+
+Examples:
+  cast test              — run all contracts
+  cast test commit       — run commit agent contract
+  cast test --ci         — CI-safe mode (no colors)
+USAGE
+        return 0
+        ;;
+      -*)
+        _error "Unknown flag: $1"
+        return 1
+        ;;
+      *)
+        if [ -z "$agent_filter" ]; then
+          agent_filter="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  # Find contract runner script
+  local contract_runner="${CAST_SCRIPTS_DIR}/cast-contract-runner.sh"
+  if [ ! -f "$contract_runner" ]; then
+    contract_runner="${CAST_REPO_DIR}/scripts/cast-contract-runner.sh"
+  fi
+
+  if [ ! -f "$contract_runner" ]; then
+    _error "cast-contract-runner.sh not found. Run: bash install.sh"
+    return 1
+  fi
+
+  # Build runner flags
+  local runner_flags=""
+  [ "$record_mode" -eq 1 ] && runner_flags="--record"
+
+  # Run contract(s)
+  if [ -n "$agent_filter" ]; then
+    # Single agent contract
+    REPO_ROOT="$CAST_REPO_DIR" bash "$contract_runner" "$agent_filter" $runner_flags
+    return $?
+  else
+    # All contracts
+    local contracts_dir="${CAST_REPO_DIR}/agent-contracts"
+    if [ ! -d "$contracts_dir" ]; then
+      _error "agent-contracts/ directory not found"
+      return 1
+    fi
+
+    local total_passed=0 total_failed=0
+    local found_any=0
+
+    if [ -n "$(ls "$contracts_dir"/*.contract.yaml 2>/dev/null || true)" ]; then
+      while IFS= read -r contract_file; do
+        [ ! -f "$contract_file" ] && continue
+        found_any=1
+
+        local agent_name
+        agent_name="$(basename "$contract_file" .contract.yaml)"
+
+        _info "Testing $agent_name..."
+        if REPO_ROOT="$CAST_REPO_DIR" bash "$contract_runner" "$agent_name" $runner_flags; then
+          total_passed=$((total_passed + 1))
+        else
+          total_failed=$((total_failed + 1))
+        fi
+      done < <(find "$contracts_dir" -maxdepth 1 -name "*.contract.yaml" -type f 2>/dev/null || true)
+    fi
+
+    if [ "$found_any" -eq 0 ]; then
+      _warn "No contract files found in agent-contracts/"
+      return 0
+    fi
+
+    # Summary
+    printf "\n%s\n" "$(python3 -c "print('=' * 52)" 2>/dev/null || printf '%0.s=' $(seq 1 52))"
+    printf "Contract tests: %d passed, %d failed\n" "$total_passed" "$total_failed"
+
+    if [ "$total_failed" -gt 0 ]; then
+      return 1
+    else
+      return 0
+    fi
+  fi
 }
 
 # ── Subcommand: memory ───────────────────────────────────────────────────────
@@ -1675,6 +1780,7 @@ case "$SUBCOMMAND" in
     fi
     exec bash "$parallel_script" "$@"
     ;;
+  test)                 _cmd_test "$@" ;;
   memory)               _cmd_memory "$@" ;;
   budget)               _cmd_budget "$@" ;;
   agents)               _cmd_agents "$@" ;;

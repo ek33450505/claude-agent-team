@@ -1,0 +1,17 @@
+agent: code-reviewer
+version: "1.0"
+assertions:
+  - type: output_contains
+    pattern: "Status: (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"
+  - type: output_contains
+    pattern: "(CRITICAL|WARNING|INFO|PASS)"
+  - type: cast_db_write
+    table: agent_runs
+    field: agent_name
+    expected: code-reviewer
+  - type: output_contains
+    pattern: "## (Work Log|Review|Findings)"
+fixtures:
+  - name: "basic review"
+    input: "Review changes to README.md. Focus: documentation accuracy."
+    expected_status: DONE

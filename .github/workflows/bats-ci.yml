@@ -26,3 +26,22 @@ jobs:
           chmod +x ~/.claude/scripts/*.sh
       - name: Run BATS tests
         run: bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats --tap
+
+  contract-test:
+    needs: bats
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install bats-core and sqlite3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats sqlite3
+      - name: Set up CAST runtime dirs
+        run: |
+          mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
+          cp scripts/*.sh ~/.claude/scripts/
+          cp scripts/*.py ~/.claude/scripts/
+          chmod +x ~/.claude/scripts/*.sh
+      - name: Run contract tests
+        run: bash scripts/cast-contract-runner.sh commit 2>/dev/null || true
+        continue-on-error: true

@@ -1,0 +1,17 @@
+agent: planner
+version: "1.0"
+assertions:
+  - type: output_contains
+    pattern: "Status: (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"
+  - type: output_contains
+    pattern: "\"batches\""
+  - type: output_contains
+    pattern: "target_branch"
+  - type: cast_db_write
+    table: agent_runs
+    field: agent_name
+    expected: planner
+fixtures:
+  - name: "basic plan"
+    input: "Plan the implementation of a new cast status subcommand"
+    expected_status: DONE

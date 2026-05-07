@@ -1,0 +1,17 @@
+agent: push
+version: "1.0"
+assertions:
+  - type: output_contains
+    pattern: "Status: (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"
+  - type: output_contains
+    pattern: "origin"
+  - type: cast_db_write
+    table: agent_runs
+    field: agent_name
+    expected: push
+  - type: output_not_contains
+    pattern: "force.push|push --force"
+fixtures:
+  - name: "basic push"
+    input: "Push the current branch to origin"
+    expected_status: DONE

@@ -1,0 +1,17 @@
+agent: code-writer
+version: "1.0"
+assertions:
+  - type: output_contains
+    pattern: "Status: (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"
+  - type: output_contains
+    pattern: "## Work Log"
+  - type: output_contains
+    pattern: "Files changed:"
+  - type: cast_db_write
+    table: agent_runs
+    field: agent_name
+    expected: code-writer
+fixtures:
+  - name: "basic implementation"
+    input: "Add a hello function to scripts/cast-hello.sh that prints 'Hello from CAST'"
+    expected_status: DONE
