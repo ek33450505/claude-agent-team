@@ -22,6 +22,10 @@ setup() {
   # add the two tables that cast-budget-alert.sh reads directly.
   bash "$REPO_DIR/scripts/cast-db-init.sh" --db "$TEST_DB" 2>/dev/null || true
 
+  # Ensure total_cost_usd column exists (cast-db-init.sh creates sessions without it)
+  sqlite3 "$TEST_DB" \
+    "ALTER TABLE sessions ADD COLUMN total_cost_usd REAL DEFAULT 0.0;" 2>/dev/null || true
+
   # budgets table (not created by cast-db-init.sh v8)
   sqlite3 "$TEST_DB" \
     "CREATE TABLE IF NOT EXISTS budgets (
@@ -103,4 +107,28 @@ teardown() {
 
   assert_success
   assert_output --partial "[CAST-BUDGET-WARN]"
+}
+
+# ---------------------------------------------------------------------------
+# Test 4: DB has a global daily budget row; today's spend >= 100% of limit
+#          → script must print a string containing [CAST-BUDGET-HARD-LIMIT]
+# ---------------------------------------------------------------------------
+
+@test "prints [CAST-BUDGET-HARD-LIMIT] when daily spend reaches or exceeds the limit" {
+  # Insert a global/daily budget: $10.00 limit, 80% warning threshold (default)
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO budgets (scope, period, limit_usd, alert_at_pct)
+     VALUES ('global', 'daily', 10.0, 0.80);"
+
+  # Insert a session for today with $10.50 spend (105% of $10 limit → triggers hard limit)
+  local today
+  today="$(date +%Y-%m-%d)"
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO sessions (id, project, started_at, total_cost_usd)
+     VALUES ('test-session-2', 'test-project', '${today}T10:00:00Z', 10.50);"
+
+  run bash "$ALERT_SH"
+
+  assert_success
+  assert_output --partial "[CAST-BUDGET-HARD-LIMIT]"
 }
