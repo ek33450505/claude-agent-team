@@ -7,30 +7,59 @@ body:
     id: cast-version
     attributes:
       label: CAST Version
-      placeholder: "e.g. 1.5.0"
+      description: Run `cast --version` to get this
+      placeholder: "e.g. 6.0.1"
     validations:
       required: true
   - type: dropdown
     id: os
     attributes:
       label: Operating System
-      options: [macOS, Linux]
+      options: [macOS, Ubuntu, Other Linux]
     validations:
       required: true
+  - type: input
+    id: bash-version
+    attributes:
+      label: Bash Version
+      description: Run `bash --version | head -1`
+      placeholder: "e.g. GNU bash, version 5.2.26"
   - type: input
     id: claude-version
     attributes:
       label: Claude Code Version
       placeholder: "e.g. 1.2.3"
   - type: dropdown
-    id: hook
+    id: component
     attributes:
-      label: Hook That Fired
-      options: [route.sh, post-tool-hook.sh, stop-hook.sh, agent-status-reader.sh, cast-events.sh, other]
+      label: CAST Component Affected
+      options:
+        - cast-audit-hook.sh
+        - cast-budget-alert.sh
+        - cast-cwdchanged-hook.sh
+        - cast-session-start-hook.sh
+        - cast-subagent-stop-hook.sh
+        - cast-user-prompt-hook.sh
+        - cast-stop-failure-hook.sh
+        - cast-events.sh
+        - bin/cast (CLI)
+        - install.sh
+        - agent (specify in description)
+        - other
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear description of what went wrong
+    validations:
+      required: true
   - type: textarea
     id: steps
     attributes:
       label: Steps to Reproduce
+      placeholder: |
+        1. Run `cast ...`
+        2. See error
     validations:
       required: true
   - type: textarea
@@ -46,10 +75,11 @@ body:
     validations:
       required: true
   - type: textarea
-    id: hook-output
+    id: logs
     attributes:
-      label: Hook Output
-      description: Paste the raw hook output or routing-log.jsonl entries
+      label: Relevant Logs
+      description: Paste from `~/.claude/logs/hook-errors.log` or terminal output
+      render: shell
   - type: textarea
     id: context
     attributes:

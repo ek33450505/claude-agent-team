@@ -48,9 +48,9 @@ done
 
 # Validate type
 case "$TYPE" in
-  user|feedback|project|reference) ;;
+  user|feedback|project|reference|user_profile) ;;
   *)
-    echo "Error: type must be one of: user, feedback, project, reference (got: '$TYPE')" >&2
+    echo "Error: type must be one of: user, feedback, project, reference, user_profile (got: '$TYPE')" >&2
     exit 0
     ;;
 esac

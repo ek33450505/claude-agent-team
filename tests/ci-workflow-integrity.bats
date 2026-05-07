@@ -52,7 +52,7 @@ BATS_CI_YML="$REPO_DIR/.github/workflows/bats-ci.yml"
 }
 
 @test "bats-ci.yml and test-installer.yml: both use identical cp command" {
-  bats_ci_cp=$(grep "cp scripts/\*.sh ~/.claude/scripts/" "$BATS_CI_YML" | tr -d ' ')
+  bats_ci_cp=$(grep "cp scripts/\*.sh ~/.claude/scripts/" "$BATS_CI_YML" | head -1 | tr -d ' ')
   installer_cp=$(grep "cp scripts/\*.sh ~/.claude/scripts/" "$TEST_INSTALLER_YML" | head -1 | tr -d ' ')
   [ "$bats_ci_cp" = "$installer_cp" ]
 }

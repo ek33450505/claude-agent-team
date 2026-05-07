@@ -1,0 +1,20 @@
+agent: commit
+version: "1.0"
+assertions:
+  - type: output_contains
+    pattern: "Status: (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"
+  - type: output_contains
+    pattern: "## Work Log"
+  - type: cast_db_write
+    table: agent_runs
+    field: agent_name
+    expected: commit
+  - type: output_not_contains
+    pattern: "^git commit"
+fixtures:
+  - name: "basic commit"
+    input: "Create a commit for changes to README.md"
+    mock_files:
+      - path: README.md
+        content: "# Changed"
+    expected_status: DONE

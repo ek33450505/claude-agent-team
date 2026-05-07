@@ -1,0 +1,7 @@
+agent: test-pass
+version: "1.0"
+assertions:
+  - type: output_contains
+    pattern: "Status: DONE"
+fixtures:
+  - name: "basic"

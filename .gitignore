@@ -8,3 +8,6 @@ plans/
 !.claude/cast.json
 __pycache__/
 articles/
+test_output.log
+test_results.log
+test_run.log

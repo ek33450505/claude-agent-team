@@ -311,7 +311,16 @@ CREATE TABLE IF NOT EXISTS agent_memories (
   description TEXT,
   content     TEXT,
   created_at  TEXT,
-  updated_at  TEXT
+  updated_at  TEXT,
+  confidence  REAL DEFAULT 1.0,
+  importance  REAL DEFAULT 0.5,
+  decay_rate  REAL DEFAULT 0.0,
+  valid_from  TEXT,
+  valid_to    TEXT,
+  superseded_by INTEGER,
+  source_type TEXT,
+  embedding BLOB,
+  last_validated_at TEXT
 );
 
 -- Indexes

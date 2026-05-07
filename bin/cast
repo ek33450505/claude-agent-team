@@ -129,10 +129,13 @@ ${C_BOLD}CAST v${CAST_VERSION}${C_RESET}
 Usage: cast <subcommand> [args] [flags]
 
 Subcommands:
+  ${C_BOLD}init-repo${C_RESET}                       Initialize CAST config for this repo
+  ${C_BOLD}new-agent${C_RESET}  <name>                  Scaffold a new agent frontmatter file
   ${C_BOLD}status${C_RESET}                          Terminal health dashboard
   ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest
   ${C_BOLD}parallel${C_RESET}  [--dry-run] [--split N] <plan>  Split plan across parallel worktrees
   ${C_BOLD}dispatch${C_RESET}  [--managed] <agent> <prompt>  Dispatch an agent task
+  ${C_BOLD}test${C_RESET}      [agent-name] [--record] [--ci]  Run agent contract tests
   ${C_BOLD}memory${C_RESET}    search|list|forget|export   Query and manage agent memories
   ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
   ${C_BOLD}agents${C_RESET}                          List installed CAST agents
@@ -154,6 +157,121 @@ Global flags:
 Config: ${CAST_CONFIG_FILE}
 DB:     ${CAST_DB_PATH}
 USAGE
+}
+
+# ── Subcommand: init-repo ────────────────────────────────────────────────────
+_cmd_init_repo() {
+  local target_dir="${PWD}"
+  local claude_dir="${target_dir}/.claude"
+  local config_file="${claude_dir}/cast.json"
+
+  # Idempotent: already initialized
+  if [ -f "$config_file" ]; then
+    printf "Already initialized.\n"
+    printf "\nCurrent config (%s):\n" "$config_file"
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -m json.tool "$config_file" 2>/dev/null || cat "$config_file"
+    else
+      cat "$config_file"
+    fi
+    return 0
+  fi
+
+  # Detect repo class from git remote URL
+  local repo_class="personal"
+  local co_author_trailer="claude"
+  local remote_url
+  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+
+  if echo "$remote_url" | grep -q "bitbucket.org"; then
+    repo_class="work"
+    co_author_trailer="none"
+  elif echo "$remote_url" | grep -q "github.com"; then
+    repo_class="personal"
+    co_author_trailer="claude"
+  elif [ -n "$remote_url" ]; then
+    # Unknown remote — default to personal
+    repo_class="personal"
+    co_author_trailer="claude"
+  fi
+  # No remote: default to personal
+
+  # Create .claude/ dir if needed
+  mkdir -p "$claude_dir"
+
+  # Write cast.json
+  python3 - "$config_file" "$repo_class" "$co_author_trailer" <<'PYEOF'
+import sys, json
+config_file, repo_class, co_author_trailer = sys.argv[1], sys.argv[2], sys.argv[3]
+config = {
+    "repo_class": repo_class,
+    "co_author_trailer": co_author_trailer,
+    "budget": {
+        "per_dispatch_limit_usd": 1.00
+    }
+}
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2)
+    f.write('\n')
+print(json.dumps(config, indent=2))
+PYEOF
+
+  printf "\nCAST initialized for this repo.\n"
+  printf "  Repo class:    %s\n" "$repo_class"
+  printf "  Co-author:     %s\n" "$co_author_trailer"
+  printf "\nNext steps:\n"
+  printf "  cast status     — see what CAST is doing\n"
+  printf "  cast dispatch   — run an agent\n"
+  printf "  cast test       — run contract tests (coming soon)\n"
+  printf "\nDocs: https://github.com/ek33450505/claude-agent-team\n"
+}
+
+# ── Subcommand: new-agent ────────────────────────────────────────────────────
+_cmd_new_agent() {
+  local agent_name="${1:-}"
+
+  if [[ -z "$agent_name" ]]; then
+    printf "Usage: cast new-agent <name>\n" >&2
+    exit 1
+  fi
+
+  # Validate: alphanumeric + hyphens only, no path traversal
+  if ! [[ "$agent_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*$ ]]; then
+    printf "Error: agent name must be alphanumeric with hyphens only\n" >&2
+    exit 1
+  fi
+
+  local agents_dir="${HOME}/.claude/agents"
+  local agent_file="${agents_dir}/${agent_name}.md"
+
+  mkdir -p "$agents_dir"
+
+  if [[ -f "$agent_file" ]]; then
+    printf "Agent already exists: %s\n" "$agent_file" >&2
+    exit 1
+  fi
+
+  cat > "$agent_file" <<FRONTMATTER
+---
+name: ${agent_name}
+description: TODO — describe when to use this agent
+model: sonnet
+tools:
+  - Read
+  - Edit
+  - Write
+  - Bash
+  - Glob
+  - Grep
+---
+
+# ${agent_name}
+
+TODO — write agent instructions here.
+FRONTMATTER
+
+  printf "Created: %s\n" "$agent_file"
+  printf "Edit the description and instructions, then run: cast agents\n"
 }
 
 # ── Subcommand: dispatch ─────────────────────────────────────────────────────
@@ -291,10 +409,31 @@ PYEOF
     2>/dev/null || echo "0.00 0.00")"
   fi
 
-  # Memory count
-  local mem_count=0
+  # Memory count + stale count + last verified
+  local mem_count=0 mem_stale=0 mem_last_verified="never"
   if [ -f "$CAST_DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
     mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories;" 2>/dev/null || echo 0)"
+    mem_stale="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE confidence < 0.4;" 2>/dev/null || echo 0)"
+    local _mem_lv
+    _mem_lv="$(sqlite3 "$CAST_DB_PATH" "SELECT MAX(last_verified) FROM agent_memories;" 2>/dev/null || true)"
+    [ -n "$_mem_lv" ] && mem_last_verified="$_mem_lv"
+  fi
+
+  # Budget limit from .claude/cast.json
+  local budget_limit=""
+  local repo_cast_json="${PWD}/.claude/cast.json"
+  if [ -f "$repo_cast_json" ] && command -v python3 >/dev/null 2>&1; then
+    budget_limit="$(python3 -c "
+import json
+try:
+    with open('$repo_cast_json') as f:
+        cfg = json.load(f)
+    limit = cfg.get('budget', {}).get('per_dispatch_limit_usd')
+    if limit is not None:
+        print(f'\${limit:.2f} per dispatch limit')
+except Exception:
+    pass
+" 2>/dev/null || true)"
   fi
 
   # Agent count
@@ -362,8 +501,18 @@ PYEOF
   printf "%s\n" "$sep"
   printf "Agents      %d installed\n" "$agent_count"
   printf "Hooks       %d active\n" "$hook_count"
-  printf "Budget      \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
-  printf "Memory      %d entries\n" "$mem_count"
+  printf "Spend       \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
+  if [ -n "$budget_limit" ]; then
+    printf "Budget      %s\n" "$budget_limit"
+  else
+    printf "Budget      not configured (run cast init-repo)\n"
+  fi
+  if [ "${mem_count:-0}" -gt 0 ]; then
+    printf "Memory      %d entries | %d stale (confidence < 0.4) | last verified: %s\n" \
+      "$mem_count" "$mem_stale" "$mem_last_verified"
+  else
+    printf "Memory      not configured\n"
+  fi
   printf "%s\n" "$sep"
 
   if [ -n "$recent_runs" ]; then
@@ -514,29 +663,139 @@ print(f"\n{len(entries)} hook entries across {len(hooks_cfg)} event types")
 PYEOF
 }
 
+# ── Subcommand: test ────────────────────────────────────────────────────────
+_cmd_test() {
+  local agent_filter=""
+  local record_mode=0
+  local ci_mode=0
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --record)   record_mode=1; shift ;;
+      --ci)       ci_mode=1; shift ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast test [agent-name] [--record] [--ci]
+
+  No agent name      Run all contracts in agent-contracts/
+  <agent-name>       Run contract for a specific agent
+  --record           Record agent output to fixtures (not yet implemented)
+  --ci               Suppress ANSI color codes, machine-readable output
+
+Examples:
+  cast test              — run all contracts
+  cast test commit       — run commit agent contract
+  cast test --ci         — CI-safe mode (no colors)
+USAGE
+        return 0
+        ;;
+      -*)
+        _error "Unknown flag: $1"
+        return 1
+        ;;
+      *)
+        if [ -z "$agent_filter" ]; then
+          agent_filter="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  # Find contract runner script
+  local contract_runner="${CAST_SCRIPTS_DIR}/cast-contract-runner.sh"
+  if [ ! -f "$contract_runner" ]; then
+    contract_runner="${CAST_REPO_DIR}/scripts/cast-contract-runner.sh"
+  fi
+
+  if [ ! -f "$contract_runner" ]; then
+    _error "cast-contract-runner.sh not found. Run: bash install.sh"
+    return 1
+  fi
+
+  # Build runner flags
+  local runner_flags=""
+  [ "$record_mode" -eq 1 ] && runner_flags="--record"
+
+  # Run contract(s)
+  if [ -n "$agent_filter" ]; then
+    # Single agent contract
+    REPO_ROOT="$CAST_REPO_DIR" bash "$contract_runner" "$agent_filter" $runner_flags
+    return $?
+  else
+    # All contracts
+    local contracts_dir="${CAST_REPO_DIR}/agent-contracts"
+    if [ ! -d "$contracts_dir" ]; then
+      _error "agent-contracts/ directory not found"
+      return 1
+    fi
+
+    local total_passed=0 total_failed=0
+    local found_any=0
+
+    if [ -n "$(ls "$contracts_dir"/*.contract.yaml 2>/dev/null || true)" ]; then
+      while IFS= read -r contract_file; do
+        [ ! -f "$contract_file" ] && continue
+        found_any=1
+
+        local agent_name
+        agent_name="$(basename "$contract_file" .contract.yaml)"
+
+        _info "Testing $agent_name..."
+        if REPO_ROOT="$CAST_REPO_DIR" bash "$contract_runner" "$agent_name" $runner_flags; then
+          total_passed=$((total_passed + 1))
+        else
+          total_failed=$((total_failed + 1))
+        fi
+      done < <(find "$contracts_dir" -maxdepth 1 -name "*.contract.yaml" -type f 2>/dev/null || true)
+    fi
+
+    if [ "$found_any" -eq 0 ]; then
+      _warn "No contract files found in agent-contracts/"
+      return 0
+    fi
+
+    # Summary
+    printf "\n%s\n" "$(python3 -c "print('=' * 52)" 2>/dev/null || printf '%0.s=' $(seq 1 52))"
+    printf "Contract tests: %d passed, %d failed\n" "$total_passed" "$total_failed"
+
+    if [ "$total_failed" -gt 0 ]; then
+      return 1
+    else
+      return 0
+    fi
+  fi
+}
+
 # ── Subcommand: memory ───────────────────────────────────────────────────────
 _cmd_memory() {
   local subcmd="${1:-list}"
   shift 2>/dev/null || true
 
   case "$subcmd" in
-    search)  _memory_search "$@" ;;
-    list)    _memory_list "$@" ;;
-    forget)  _memory_forget "$@" ;;
-    export)  _memory_export "$@" ;;
+    search)   _memory_search "$@" ;;
+    list)     _memory_list "$@" ;;
+    verify)   _memory_verify "$@" ;;
+    show)     _memory_show "$@" ;;
+    delete)   _memory_delete "$@" ;;
+    forget)   _memory_forget "$@" ;;
+    export)   _memory_export "$@" ;;
     --help|-h)
       cat <<USAGE
 Usage: cast memory <subcommand> [args]
 
   search "<query>"  [--agent <name>] [--project <name>] [--limit 10]
   list              [--agent <name>] [--type feedback|project|user|reference]
+  verify            [--agent <name>]  Run staleness sweep
+  show <id>                           Print full memory entry
+  delete <id>                         Delete a memory entry
   forget <id>
   export
 USAGE
       ;;
     *)
       _error "Unknown memory subcommand: $subcmd"
-      printf "  Use: cast memory search|list|forget|export\n" >&2
+      printf "  Use: cast memory search|list|verify|show|delete|forget|export\n" >&2
       return 1
       ;;
   esac
@@ -706,6 +965,99 @@ cur.execute("SELECT id, agent, project, type, name, description, content, create
 rows = [dict(r) for r in cur.fetchall()]
 conn.close()
 print(json.dumps(rows, indent=2))
+PYEOF
+}
+
+_memory_verify() {
+  _require_db
+
+  local agent_filter=""
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --agent) agent_filter="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  local sweep_script="${CAST_SCRIPTS_DIR}/cast-memory-staleness-sweep.sh"
+  if [ ! -f "$sweep_script" ]; then
+    sweep_script="${CAST_REPO_DIR}/scripts/cast-memory-staleness-sweep.sh"
+  fi
+
+  if [ ! -f "$sweep_script" ]; then
+    _error "cast-memory-staleness-sweep.sh not found"
+    return 1
+  fi
+
+  bash "$sweep_script"
+}
+
+_memory_show() {
+  _require_db
+
+  local memory_id="${1:-}"
+  if [ -z "$memory_id" ]; then
+    _error "Usage: cast memory show <memory-id>"
+    return 1
+  fi
+
+  python3 - "$CAST_DB_PATH" "$memory_id" "$CAST_JSON" <<'PYEOF'
+import sys, sqlite3, json
+
+db_path, mem_id, json_mode = sys.argv[1:4]
+json_out = json_mode == "1"
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+cur.execute("SELECT * FROM agent_memories WHERE id = ?", (mem_id,))
+row = cur.fetchone()
+conn.close()
+
+if not row:
+  print(f"Memory {mem_id} not found.", file=__import__('sys').stderr)
+  sys.exit(1)
+
+if json_out:
+  print(json.dumps(dict(row), indent=2))
+else:
+  r = dict(row)
+  print(f"[{r['id']}] {r['agent']} / {r['type']}")
+  print(f"Name: {r['name']}")
+  print(f"Description: {r['description'] or '(none)'}")
+  print(f"Confidence: {r.get('confidence', 1.0)}")
+  print(f"Last Verified: {r.get('last_verified', '(never)')}")
+  print(f"Created: {r['created_at']}")
+  print()
+  print("Content:")
+  print("-" * 80)
+  print(r['content'] or '(empty)')
+PYEOF
+}
+
+_memory_delete() {
+  _require_db
+
+  local memory_id="${1:-}"
+  if [ -z "$memory_id" ]; then
+    _error "Usage: cast memory delete <memory-id>"
+    return 1
+  fi
+
+  python3 - "$CAST_DB_PATH" "$memory_id" <<'PYEOF'
+import sys, sqlite3
+db_path, mem_id = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+cur.execute("DELETE FROM agent_memories WHERE id = ?", (mem_id,))
+conn.commit()
+affected = cur.rowcount
+conn.close()
+if affected == 0:
+  print(f"Memory {mem_id} not found.", file=__import__('sys').stderr)
+  sys.exit(1)
+print(f"Memory {mem_id} deleted.")
 PYEOF
 }
 
@@ -1462,6 +1814,8 @@ SUBCOMMAND="${1:-}"
 shift 2>/dev/null || true
 
 case "$SUBCOMMAND" in
+  init-repo)            _cmd_init_repo "$@" ;;
+  new-agent)            _cmd_new_agent "$@" ;;
   status)               _cmd_status "$@" ;;
   exec)                 _cmd_exec "$@" ;;
   dispatch)             _cmd_dispatch "$@" ;;
@@ -1476,6 +1830,7 @@ case "$SUBCOMMAND" in
     fi
     exec bash "$parallel_script" "$@"
     ;;
+  test)                 _cmd_test "$@" ;;
   memory)               _cmd_memory "$@" ;;
   budget)               _cmd_budget "$@" ;;
   agents)               _cmd_agents "$@" ;;

@@ -1,4 +1,4 @@
-.PHONY: docs validate test sync hooks
+.PHONY: docs validate test test-ubuntu sync hooks
 
 # Regenerate README stats from live counts
 docs:
@@ -19,11 +19,26 @@ validate:
 test:
 	bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats
 
+# Run BATS in Docker Ubuntu container (mirrors CI environment)
+test-ubuntu:
+	@echo "Running BATS in Docker Ubuntu (mirrors CI)..."
+	docker build -f Dockerfile.ci -t cast-ci-ubuntu . --quiet
+	docker run --rm \
+	  -v "$(PWD):/repo" \
+	  -v "$(HOME)/.claude:/root/.claude" \
+	  cast-ci-ubuntu bash -c " \
+	    mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status && \
+	    cp /repo/scripts/*.sh ~/.claude/scripts/ && \
+	    cp /repo/scripts/*.py ~/.claude/scripts/ && \
+	    chmod +x ~/.claude/scripts/*.sh && \
+	    bats /repo/tests/*.bats /repo/tests/hooks/*.bats /repo/tests/agents/*.bats /repo/tests/scripts/*.bats --tap \
+	  "
+
 # Sync docs then validate
 sync: docs validate
 
-# Wire the pre-commit hook (alternative to running ./install.sh)
+# Wire the pre-commit and pre-push hooks
 hooks:
 	git config core.hooksPath .githooks
-	chmod +x .githooks/pre-commit
-	@echo "Pre-commit hook installed."
+	chmod +x .githooks/pre-commit .githooks/pre-push
+	@echo "Pre-commit and pre-push hooks installed."

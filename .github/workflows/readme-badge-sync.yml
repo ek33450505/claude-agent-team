@@ -1,0 +1,28 @@
+name: Sync README Badges
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  sync-badges:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update badges
+        run: bash scripts/gen-stats.sh
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet README.md || {
+            git add README.md
+            git commit -m "chore: sync README badges [skip ci]"
+            git push
+          }

@@ -101,16 +101,7 @@ _lint_orphan_scripts || {
   exit 1
 }
 
-# README stats update (non-blocking)
-if command -v make &>/dev/null && [ -f Makefile ]; then
-  make docs --no-print-directory 2>/dev/null || bash scripts/gen-stats.sh 2>/dev/null || true
-else
-  bash scripts/gen-stats.sh 2>/dev/null || true
-fi
-
-if ! git diff --quiet README.md 2>/dev/null; then
-  git add README.md
-  echo "[CAST] README.md stats updated and staged automatically."
-fi
+# NOTE: README badge updates are now handled by the post-merge job (readme-badge-sync.yml)
+# This ensures badges are always in sync on main without blocking PRs.
 
 exit 0

@@ -4,148 +4,28 @@ Thank you for your interest in contributing to CAST — Claude Agent Specialist 
 
 ## Prerequisites
 
-- [Bats-core](https://github.com/bats-core/bats-core) (included as a submodule at `tests/bats/`)
-- `jq` 1.6+
-- Bash 4.0+
 - [Claude Code CLI](https://claude.ai/code) installed and configured
+- [bats-core](https://github.com/bats-core/bats-core) — included as a submodule at `tests/bats/`
+- Bash 5.0+
+- `sqlite3` (for `cast.db` inspection)
+- `jq` 1.6+
 
-## Quick Start
+## Setup
 
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team.git
 cd claude-agent-team
-./install.sh
-make test
+git config core.hooksPath .githooks
+chmod +x .githooks/*
+make hooks
+bash install.sh
 ```
 
-`./install.sh` automatically wires the pre-commit hook, which runs `make docs` before every commit and re-stages `README.md` if counts changed. If you skip `install.sh`, run `make hooks` once to activate the hook manually.
+`install.sh` wires hook scripts into `~/.claude/scripts/` and `~/.claude/settings.json`.
+If something looks wrong after install, run `cast doctor` to diagnose the setup.
 
----
-
-## Scope — Core vs Personal
-
-CAST v5.0+ distinguishes between **core** and **personal** content:
-
-- **Core** — shipped to all 2000+ clones. High review bar. Must be generic, trustworthy, and maintainer-agnostic.
-- **Personal** — maintainer-only overlay. Opt-in via `--personal` flag. Lower review burden; not shipped to clones.
-
-| File Path | Scope | Review Bar |
-|---|---|---|
-| `rules-core/` | Core | High — used by all clones |
-| `rules-personal/` | Personal | Standard — local-only |
-| `agents/core/` | Core | High — 29 shipped agents |
-| `agents/personal/` | Personal | Standard — maintainer-specific agents |
-| `skills/*/SKILL.md` | Core | High — generic skill |
-| `skills/*/SKILL-personal.md` | Personal | Standard — overlay content |
-
-**For contributors:** PRs targeting `rules-core/` or `agents/core/` should focus on generic, widely-useful features. Maintainer-specific enhancements belong in the personal overlay. Ask in the issue if you're unsure.
-
----
-
-## Adding a New Agent
-
-### File location
-
-Agents live under `agents/<layer>/<name>.md`, where layer is one of:
-
-| Layer | Path | Scope | Notes |
-|---|---|---|---|
-| core | `agents/core/` | Core (all clones) | High review bar; always installed |
-| personal | `agents/personal/` | Personal (maintainer only) | Standard review; `--personal` flag required |
-
-### Required frontmatter
-
-Every agent file must begin with YAML frontmatter:
-
-```yaml
----
-name: <agent-name>
-description: <one-line description used by Claude Code to select this agent>
-tools: Read, Write, Edit, Bash   # list only tools the agent needs
-model: claude-haiku-4-5          # or claude-sonnet-4-5
----
-```
-
-See `docs/agent-quality-rubric.md` for how agents are evaluated. Aim for score 4-5 on all dimensions.
-
-### Mandatory Step 0 — task_claimed event
-
-Every agent must emit a `task_claimed` event as its **first action**:
-
-```bash
-source ~/.claude/scripts/cast-events.sh
-cast_emit_event 'task_claimed' '<agent-name>' 'task-<id>' '' 'Starting <description>'
-```
-
-This populates the CAST event log and the dashboard session view.
-
-### Mandatory Status block
-
-Every agent must end its response with a structured Status block:
-
-```
-Status: DONE
-Summary: <one sentence>
-```
-
-Valid status values: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
-
-If `DONE_WITH_CONCERNS`, add a `Concerns:` line immediately after Status.
-If `BLOCKED`, add a `Blocker:` line describing what is preventing completion.
-
----
-
-## Adding a Routing Rule
-
-Routing rules live in `config/routing-table.json`. Each rule has this shape:
-
-```json
-{
-  "pattern": "(?i)\\bwrite.*test\\b",
-  "agent": "test-writer",
-  "confidence": "hard",
-  "description": "Explicit test-writing request"
-}
-```
-
-**Confidence levels:**
-- `hard` — unambiguous match; always dispatches
-- `soft` — heuristic match; may fall through to NLU router if score is low
-
-**Pattern safety rules:**
-- Max 200 characters
-- Must not contain catastrophic backtracking patterns (avoid `(a+)+`, nested quantifiers)
-- Test your regex with `python3 -c "import re; re.compile('<your_pattern>')"`
-
-**Required:** add a corresponding test case to `tests/route.bats`:
-
-```bash
-@test "routes 'write a test for foo' to test-writer" {
-  result=$(echo "write a test for foo" | bash scripts/route.sh)
-  [[ "$result" == *"test-writer"* ]]
-}
-```
-
----
-
-## Adding an Agent Group
-
-Agent groups live in `config/agent-groups.json`. Each group dispatches multiple agents in waves:
-
-```json
-{
-  "name": "my-feature",
-  "pattern": "(?i)my trigger phrase",
-  "waves": [
-    { "agents": ["architect"], "parallel": false },
-    { "agents": ["code-writer", "test-writer"], "parallel": true }
-  ],
-  "post_chain": ["code-reviewer", "commit"]
-}
-```
-
-Waves run in order. Agents within a wave with `"parallel": true` run simultaneously.
-`post_chain` agents run after all waves complete.
+> **Note:** Agent Step 0 code sources `~/.claude/scripts/cast-events.sh`, which ships via
+> `install.sh`. Run `bash install.sh` at least once before writing or testing new agents.
 
 ---
 
@@ -157,51 +37,97 @@ make test
 
 # Single file
 tests/bats/bin/bats tests/route.bats
+
+# Ubuntu CI parity check (catches bash 4/5 divergence — run before opening a PR)
+make test-ubuntu
 ```
+
+**Counting tests:** use `git ls-files tests/*.bats | xargs grep -h "@test" | wc -l` — never
+`find tests/ -name "*.bats"` (the vendored bats-core submodule inflates the count).
+
+---
+
+## Adding an Agent
+
+1. Copy an existing agent from `agents/core/` as a starting point.
+2. Edit the required frontmatter:
+
+```yaml
+---
+name: <agent-name>
+description: <one-line description used by Claude Code to select this agent>
+tools: Read, Write, Edit, Bash
+model: claude-haiku-4-5   # or claude-sonnet-4-5
+effort: low               # low | medium | high
+---
+```
+
+3. Add the agent to the registry table in `CLAUDE.md` (and the `CHEATSHEET.md` agents table).
+4. Add a BATS test in `tests/` covering the agent's core behavior.
+
+See [docs/agents/agent-quality-rubric.md](docs/agents/agent-quality-rubric.md) for how agents are evaluated. Aim for score 4–5 on all dimensions.
+
+**Every agent must:**
+- Emit a `task_claimed` event as its first action (Step 0).
+- End every response with a structured `Status:` block (`DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`).
+
+---
+
+## Adding a Hook Script
+
+1. Create the script in `scripts/` following the naming convention `cast-<purpose>-hook.sh`.
+2. Wire it in `~/.claude/settings.json` under the appropriate hook event key.
+3. Add a BATS test in `tests/`.
+4. Ensure `bats-ci.yml` copies the new script in its CI setup step — both `*.sh` and `*.py` files must be copied, or CI hooks silently no-op on Ubuntu.
+
+---
+
+## Scope — Core vs Personal
+
+CAST distinguishes between **core** (ships to all installs) and **personal** (maintainer-only overlay):
+
+| Path | Scope | Review Bar |
+|---|---|---|
+| `agents/core/` | Core — all clones | High — generic, trustworthy |
+| `agents/personal/` | Personal — `--personal` flag | Standard |
+| `rules-core/` | Core | High |
+| `rules-personal/` | Personal | Standard |
+
+PRs targeting `agents/core/` or `rules-core/` should focus on generic, widely-useful features.
 
 ---
 
 ## Keeping Docs in Sync
 
-README badge counts (agents, routes, commands, etc.) are maintained by `scripts/gen-stats.sh`.
-**Always run `make docs` before committing** if you added or removed any agent, command, skill, route, or test.
-CI will fail the PR if README counts are stale.
+README badge counts (agents, tests, etc.) are **auto-updated on merge to `main`** by the
+`readme-badge-sync.yml` workflow — do NOT manually edit badge numbers.
 
-```bash
-make docs
-git add README.md
-```
-
----
-
-## Personal Overlay Setup (Maintainers Only)
-
-If you're the CAST maintainer and want to populate the personal layer:
-
-```bash
-# Create personal rules and agents (one-time)
-mkdir -p rules-personal/ agents/personal/
-cp my-custom-stack-context.md rules-personal/stack-context.md
-cp my-portfolio-agent.md agents/personal/portfolio-sync.md
-
-# Install with personal overlay
-bash install.sh --personal
-```
-
-The personal directories are `.gitignored` — they never ship to clones. Re-run `bash install.sh --personal` to sync after changes.
+If you add a new agent, command, or skill, run `make docs` locally to verify counts look
+correct, but do not commit the README badge update — CI handles it post-merge.
 
 ---
 
 ## PR Checklist
 
-Before opening a pull request:
+- [ ] `bats tests/` passes locally (run `make test-ubuntu` for cross-platform check)
+- [ ] New shell scripts have BATS test coverage in `tests/`
+- [ ] If adding a new agent: frontmatter complete (`name`, `description`, `tools`, `model`, `effort`), added to `CLAUDE.md` registry and `CHEATSHEET.md`
+- [ ] If adding a new hook script: wired in `settings.json`, script exists in `scripts/`, CI setup step copies it
+- [ ] README badge NOT manually edited — auto-syncs on merge to `main`
+- [ ] No `find tests/ -name "*.bats"` — use `git ls-files tests/*.bats` for test counts
+- [ ] No hardcoded absolute paths — use `$HOME` or `~/`
+- [ ] `CHANGELOG.md` updated for user-visible changes
 
-- [ ] `make test` passes locally
-- [ ] `make docs` run and `README.md` committed with updated counts
-- [ ] New agent: frontmatter is complete (`name`, `description`, `tools`, `model`)
-- [ ] New agent: emits `task_claimed` event in Step 0
-- [ ] New agent: outputs structured `Status:` block as the final line of every response
-- [ ] New routing pattern: test case added to `tests/route.bats`
-- [ ] No hardcoded paths — use `$HOME` or `~/` for user-relative paths
-- [ ] `CHANGELOG.md` updated for any user-visible change
-- [ ] **Scope check:** Core PRs (rules-core/, agents/core/) target generic, widely-useful changes
+---
+
+## Good First Issues
+
+New to the codebase? Start here:
+[https://github.com/ek33450505/claude-agent-team/issues?q=label%3A%22good+first+issue%22](https://github.com/ek33450505/claude-agent-team/issues?q=label%3A%22good+first+issue%22)
+
+Good first issues in this repo are:
+- Self-contained (one file, or one script + one test)
+- Under 2–4 hours
+- Come with specific acceptance criteria and file pointers
+
+If you're unsure where to start, open an issue or leave a comment on a good-first-issue ticket asking for guidance.

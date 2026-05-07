@@ -7,7 +7,7 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-30-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-72-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-74-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -19,7 +19,7 @@
 
 ---
 
-## Install
+## Installation
 
 ```bash
 brew tap ek33450505/cast && brew install cast
@@ -40,7 +40,7 @@ Or clone + install: `git clone https://github.com/ek33450505/claude-agent-team.g
 - **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a reviewer pass. You cannot skip this.
 - **30 specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
 - **SQLite audit trail, fully local.** Every agent dispatch, tool call, and token spend logs to `cast.db` on your machine. No SaaS dashboard, no cloud lock-in.
-- **72 BATS tests with 0 failures.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
+- **693 BATS test cases with 0 failures.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
 
 ---
 
@@ -72,16 +72,16 @@ Or clone + install: `git clone https://github.com/ek33450505/claude-agent-team.g
 - [Personal Overlay — Layered Configuration](#personal-overlay--layered-configuration)
 - [Swarm System](#swarm-system)
 - [Agent Constellation Dashboard](#agent-constellation-dashboard)
-- [Agent Roster](#agent-roster)
+- [Agents](#agents)
 - [Token Efficiency & Cost Optimization](#token-efficiency--cost-optimization)
-- [Hook Event Coverage](#hook-event-coverage)
+- [Hooks](#hooks)
 - [Observability & cast.db v8](#observability--castdb-v8)
 - [Peer Messaging & Gossip Protocol](#peer-messaging--gossip-protocol)
 - [Multi-Agent Pipelines (v4.6+)](#multi-agent-pipelines-v46)
 - [Agent Memory & Persistence (v4.3+)](#agent-memory--persistence-v43)
 - [Project Structure](#project-structure)
 - [Scheduled Tasks](#scheduled-tasks)
-- [Test Suite](#test-suite)
+- [Testing](#testing)
 - [Version History](#version-history)
 - [CAST Ecosystem](#cast-ecosystem)
 - [Local-First & Offline](#local-first--offline)
@@ -171,7 +171,7 @@ CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Te
 
 ---
 
-## Agent Roster
+## Agents
 
 30 core specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, isolation, and thinking budget tier. Agent responses validate against JSON schemas in `schemas/`. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the full table with model tiers and thinking budgets.
 
@@ -194,7 +194,7 @@ For local Haiku-tier work without API spend, install [claude-code-router](https:
 
 ---
 
-## Hook Event Coverage
+## Hooks
 
 Hooks cover the full swarm lifecycle: SessionStart, TaskCreated, WorktreeCreate, PreToolUse:Bash (commit guard), PostToolUse, PostCompact, SessionEnd. See [docs/observability/OBSERVABILITY.md](docs/observability/OBSERVABILITY.md#hook-event-coverage).
 
@@ -282,7 +282,7 @@ Hybrid model: **RemoteTriggers** for AI-powered tasks (briefings, standups, repo
 
 ---
 
-## Test Suite
+## Testing
 
 55 BATS test files with 520+ individual test assertions across core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. 0 failures. BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats` (Ubuntu). Run with `bats tests/`.
 
@@ -332,7 +332,11 @@ CAST powers real-world projects in the ecosystem:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue first for non-trivial changes. PRs trigger `cast-pr-review.yml` — `code-reviewer` agent reviews your diff.
+Contributions are welcome — CAST is built in the open and actively developed. New agents, shell script fixes, BATS test coverage, and documentation improvements are all fair game.
+
+**Good first issues:** [`good first issue` label](https://github.com/ek33450505/claude-agent-team/issues?q=label%3A%22good+first+issue%22) — curated entry points with clear scope and test expectations.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow. Open an issue first for non-trivial changes. PRs trigger `cast-pr-review.yml` — the `code-reviewer` agent reviews your diff before merge.
 
 ---
 
@@ -365,6 +369,6 @@ The following capabilities were audited but deferred pending dependency updates 
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->693<!-- /CAST_TEST_COUNT --> test files (520+ assertions) |
+<!-- CAST_TEST_COUNT -->735<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
