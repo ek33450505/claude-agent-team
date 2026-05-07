@@ -1,0 +1,12 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    bash \
+    bats \
+    python3 \
+    jq \
+    sqlite3 \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /repo

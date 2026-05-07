@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+bash "$(git rev-parse --show-toplevel)/scripts/pre-push-ubuntu-check.sh"

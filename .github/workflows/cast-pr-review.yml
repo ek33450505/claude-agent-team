@@ -1,12 +1,18 @@
+# NOTE: [HUMAN ACTION REQUIRED] Remove "CAST PR Review" from required status checks in GitHub branch protection settings.
+# This workflow is advisory only and runs after BATS tests pass via workflow_run trigger.
+
 name: CAST PR Review
 
 on:
-  pull_request:
-    types: [opened, synchronize]
+  workflow_run:
+    workflows: ["BATS Tests"]
+    types: [completed]
 
 jobs:
   cast-review:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     continue-on-error: true
     permissions:
       contents: read
@@ -14,6 +20,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}

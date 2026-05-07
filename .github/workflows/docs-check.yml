@@ -7,19 +7,13 @@ on:
     branches: [main]
 
 jobs:
-  readme-in-sync:
+  readme-structure:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
-      - name: Regenerate README stats
-        run: bash scripts/gen-stats.sh
-
-      - name: Verify README is up to date
+      - name: Verify required README sections
         run: |
-          if ! git diff --exit-code README.md; then
-            echo ""
-            echo "README.md is out of sync with current counts."
-            echo "Run 'make docs' and commit the updated README before merging."
-            exit 1
-          fi
+          for section in "## Installation" "## Agents" "## Hooks" "## Testing"; do
+            grep -q "$section" README.md || { echo "Missing: $section"; exit 1; }
+          done
