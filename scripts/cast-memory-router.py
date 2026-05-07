@@ -47,7 +47,7 @@ STOP_WORDS = {
     'very', 'just', 'also', 'as', 'up', 'if', 'then', 'into', 'about',
 }
 
-VALID_TYPES = {'user', 'feedback', 'project', 'reference', 'procedural'}
+VALID_TYPES = {'user', 'feedback', 'project', 'reference', 'procedural', 'user_profile'}
 
 OLLAMA_EMBED_URL = 'http://localhost:11434/api/embed'
 EMBED_MODEL = 'nomic-embed-text'
@@ -150,7 +150,7 @@ def invalidate_memory(memory_id):
 
 
 def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False, fts_only=False):
-    """Return top-N memories for agent, ranked by relevance. Includes shared pool."""
+    """Return top-N memories for agent, ranked by relevance. Includes shared pool and user_profile (global) facts."""
     conn = _connect()
 
     # Check FTS availability
@@ -184,7 +184,7 @@ def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=
                     FROM agent_memories am
                     JOIN agent_memories_fts fts ON am.id = fts.rowid
                     WHERE agent_memories_fts MATCH ?
-                    AND (am.agent = ? OR am.agent = 'shared')
+                    AND (am.agent = ? OR am.agent = 'shared' OR (am.agent = 'global' AND am.type = 'user_profile'))
                     {temporal_clause}
                     {type_clause}
                     ORDER BY fts.rank
@@ -201,7 +201,7 @@ def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=
         sql = f"""
             SELECT am.*, 0 AS rank
             FROM agent_memories am
-            WHERE (am.agent = ? OR am.agent = 'shared')
+            WHERE (am.agent = ? OR am.agent = 'shared' OR (am.agent = 'global' AND am.type = 'user_profile'))
             {temporal_clause}
             {type_clause}
         """

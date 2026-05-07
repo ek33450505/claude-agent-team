@@ -93,6 +93,55 @@ try:
     con.close()
 except Exception:
     pass
+
+# Memory retrieval and injection (non-fatal)
+if not prompt_text or len(prompt_text.strip()) < 10:
+    raise SystemExit(0)
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+router = os.path.join(script_dir, 'cast-memory-router.py')
+
+if not os.path.isfile(router):
+    raise SystemExit(0)
+
+try:
+    import subprocess as _subprocess
+    result = _subprocess.run(
+        ['python3', router, '--mode', 'retrieve', '--agent', 'shared',
+         '--prompt', prompt_text[:500], '--top-n', '5', '--fts-only'],
+        capture_output=True, text=True, timeout=5
+    )
+    memories = json.loads(result.stdout or '[]')
+except Exception:
+    memories = []
+
+if not memories:
+    raise SystemExit(0)
+
+# Format as [memory:type:name] lines for injection
+lines = []
+for m in memories:
+    score = m.get('score', 0)
+    if score < 0.3:  # minimum relevance threshold
+        continue
+    mem_type = m.get('type', '')
+    name = m.get('name', '')
+    content = m.get('content', '')[:200]
+    if mem_type and name and content:
+        lines.append(f"[memory:{mem_type}:{name}] {content}")
+
+if not lines:
+    raise SystemExit(0)
+
+context_block = "Relevant memory context:\n" + "\n".join(lines)
+
+# Emit as additionalContext in hookSpecificOutput
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": context_block
+    }
+}))
 PYEOF
 
 exit 0

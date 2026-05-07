@@ -619,23 +619,29 @@ _cmd_memory() {
   shift 2>/dev/null || true
 
   case "$subcmd" in
-    search)  _memory_search "$@" ;;
-    list)    _memory_list "$@" ;;
-    forget)  _memory_forget "$@" ;;
-    export)  _memory_export "$@" ;;
+    search)   _memory_search "$@" ;;
+    list)     _memory_list "$@" ;;
+    verify)   _memory_verify "$@" ;;
+    show)     _memory_show "$@" ;;
+    delete)   _memory_delete "$@" ;;
+    forget)   _memory_forget "$@" ;;
+    export)   _memory_export "$@" ;;
     --help|-h)
       cat <<USAGE
 Usage: cast memory <subcommand> [args]
 
   search "<query>"  [--agent <name>] [--project <name>] [--limit 10]
   list              [--agent <name>] [--type feedback|project|user|reference]
+  verify            [--agent <name>]  Run staleness sweep
+  show <id>                           Print full memory entry
+  delete <id>                         Delete a memory entry
   forget <id>
   export
 USAGE
       ;;
     *)
       _error "Unknown memory subcommand: $subcmd"
-      printf "  Use: cast memory search|list|forget|export\n" >&2
+      printf "  Use: cast memory search|list|verify|show|delete|forget|export\n" >&2
       return 1
       ;;
   esac
@@ -805,6 +811,99 @@ cur.execute("SELECT id, agent, project, type, name, description, content, create
 rows = [dict(r) for r in cur.fetchall()]
 conn.close()
 print(json.dumps(rows, indent=2))
+PYEOF
+}
+
+_memory_verify() {
+  _require_db
+
+  local agent_filter=""
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --agent) agent_filter="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  local sweep_script="${CAST_SCRIPTS_DIR}/cast-memory-staleness-sweep.sh"
+  if [ ! -f "$sweep_script" ]; then
+    sweep_script="${CAST_REPO_DIR}/scripts/cast-memory-staleness-sweep.sh"
+  fi
+
+  if [ ! -f "$sweep_script" ]; then
+    _error "cast-memory-staleness-sweep.sh not found"
+    return 1
+  fi
+
+  bash "$sweep_script"
+}
+
+_memory_show() {
+  _require_db
+
+  local memory_id="${1:-}"
+  if [ -z "$memory_id" ]; then
+    _error "Usage: cast memory show <memory-id>"
+    return 1
+  fi
+
+  python3 - "$CAST_DB_PATH" "$memory_id" "$CAST_JSON" <<'PYEOF'
+import sys, sqlite3, json
+
+db_path, mem_id, json_mode = sys.argv[1:4]
+json_out = json_mode == "1"
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+cur.execute("SELECT * FROM agent_memories WHERE id = ?", (mem_id,))
+row = cur.fetchone()
+conn.close()
+
+if not row:
+  print(f"Memory {mem_id} not found.", file=__import__('sys').stderr)
+  sys.exit(1)
+
+if json_out:
+  print(json.dumps(dict(row), indent=2))
+else:
+  r = dict(row)
+  print(f"[{r['id']}] {r['agent']} / {r['type']}")
+  print(f"Name: {r['name']}")
+  print(f"Description: {r['description'] or '(none)'}")
+  print(f"Confidence: {r.get('confidence', 1.0)}")
+  print(f"Last Verified: {r.get('last_verified', '(never)')}")
+  print(f"Created: {r['created_at']}")
+  print()
+  print("Content:")
+  print("-" * 80)
+  print(r['content'] or '(empty)')
+PYEOF
+}
+
+_memory_delete() {
+  _require_db
+
+  local memory_id="${1:-}"
+  if [ -z "$memory_id" ]; then
+    _error "Usage: cast memory delete <memory-id>"
+    return 1
+  fi
+
+  python3 - "$CAST_DB_PATH" "$memory_id" <<'PYEOF'
+import sys, sqlite3
+db_path, mem_id = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+cur.execute("DELETE FROM agent_memories WHERE id = ?", (mem_id,))
+conn.commit()
+affected = cur.rowcount
+conn.close()
+if affected == 0:
+  print(f"Memory {mem_id} not found.", file=__import__('sys').stderr)
+  sys.exit(1)
+print(f"Memory {mem_id} deleted.")
 PYEOF
 }
 

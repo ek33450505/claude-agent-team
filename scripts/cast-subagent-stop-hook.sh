@@ -407,6 +407,129 @@ if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]] && command -v python3 >/dev/null 2>&1
   python3 "$(dirname "$0")/cast_claimed_work_verifier.py" 2>/dev/null || true
 fi
 
+# ── Step 2.7: Memory write — extract ## Facts block and persist to agent_memories ──
+# Agents emit ## Facts blocks (pipe-delimited fields: name, type, content, confidence)
+# Parser extracts, validates, and writes to agent_memories table with deduplication.
+if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]] && command -v python3 >/dev/null 2>&1; then
+  CAST_STOP_AGENT="${AGENT_NAME}" \
+  CAST_STOP_RESPONSE_TEXT="${CAST_STOP_RESPONSE_TEXT}" \
+  CAST_DB_PATH="${DB_PATH}" \
+  CAST_PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")" \
+  python3 - 2>>"$HOOK_ERROR_LOG" || true
+  <<'PYEOF'
+import os, sys, re, sqlite3
+from datetime import datetime, timezone
+
+agent = os.environ.get('CAST_STOP_AGENT', 'unknown')
+response_text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
+db_path = os.environ.get('CAST_DB_PATH', '').strip()
+project_root = os.environ.get('CAST_PROJECT_ROOT', '').strip()
+
+if not response_text or not db_path:
+    sys.exit(0)
+
+# Extract ## Facts block (scan from start, stop at next ## heading or end)
+facts_match = re.search(r'## Facts\s*\n(.*?)(?=\n##|\Z)', response_text, re.DOTALL)
+if not facts_match:
+    sys.exit(0)
+
+facts_block = facts_match.group(1).strip()
+MAX_FACTS = 5
+parsed = 0
+
+try:
+    db_path = os.path.expanduser(db_path)
+    conn = sqlite3.connect(db_path, timeout=5)
+
+    # Ensure optional columns exist (idempotent)
+    try:
+        conn.execute('ALTER TABLE agent_memories ADD COLUMN confidence REAL DEFAULT 1.0')
+    except Exception:
+        pass  # column already exists or table doesn't exist yet
+    try:
+        conn.execute('ALTER TABLE agent_memories ADD COLUMN valid_from TEXT')
+    except Exception:
+        pass
+    try:
+        conn.execute('ALTER TABLE agent_memories ADD COLUMN valid_to TEXT')
+    except Exception:
+        pass
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    for line in facts_block.splitlines():
+        if parsed >= MAX_FACTS:
+            break
+        line = line.strip()
+        if not line:
+            continue
+
+        # Parse pipe-delimited fields: name: X | type: Y | content: Z | confidence: W
+        fields = {}
+        for part in line.split('|'):
+            if ':' in part:
+                k, _, v = part.strip().partition(':')
+                fields[k.strip()] = v.strip()
+
+        name = fields.get('name', '')
+        mem_type = fields.get('type', '')
+        content = fields.get('content', '')[:500]
+        confidence_str = fields.get('confidence', '1.0')
+        try:
+            confidence = float(confidence_str) if confidence_str else 1.0
+        except ValueError:
+            confidence = 1.0
+
+        VALID_TYPES = {'user', 'feedback', 'project', 'reference', 'procedural', 'user_profile'}
+        SLUG_RE = re.compile(r'^[a-zA-Z0-9_-]{1,80}$')
+
+        # Validate all fields
+        if not name or not SLUG_RE.match(name) or mem_type not in VALID_TYPES or not content:
+            continue
+
+        # Deduplication: match on (agent, name) — update if exists, otherwise insert
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM agent_memories WHERE agent = ? AND name = ? LIMIT 1",
+            (agent, name)
+        )
+        existing = cur.fetchone()
+
+        if existing:
+            # Update: overwrite content, reset valid_to, bump updated_at
+            cur.execute(
+                "UPDATE agent_memories SET content=?, updated_at=?, confidence=?, valid_to=NULL "
+                "WHERE id=?",
+                (content, now, confidence, existing[0])
+            )
+        else:
+            # Insert new memory entry
+            project = os.path.basename(project_root.rstrip('/')) if project_root else 'unknown'
+            cur.execute(
+                "INSERT INTO agent_memories "
+                "(agent, project, type, name, description, content, created_at, updated_at, confidence, valid_from) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (agent, project, mem_type, name, content[:100], content, now, now, confidence, now)
+            )
+
+        parsed += 1
+
+    conn.commit()
+    conn.close()
+
+    if parsed > 0:
+        print(f"[CAST-MEMORY] Wrote {parsed} facts from {agent}", file=sys.stderr)
+
+except Exception as e:
+    try:
+        log_path = os.path.expanduser('~/.claude/logs/hook-errors.log')
+        with open(log_path, 'a') as f:
+            f.write(f"[memory-write] {e}\n")
+    except Exception:
+        pass
+PYEOF
+fi
+
 # ── Step 3: Turn ceiling checkpoint ──────────────────────────────────────────
 if [ "$HAS_TURN_CEILING" = "1" ]; then
   mkdir -p "$TURN_CEILING_DIR" 2>/dev/null || true
