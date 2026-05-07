@@ -332,7 +332,11 @@ CAST powers real-world projects in the ecosystem:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue first for non-trivial changes. PRs trigger `cast-pr-review.yml` — `code-reviewer` agent reviews your diff.
+Contributions are welcome — CAST is built in the open and actively developed. New agents, shell script fixes, BATS test coverage, and documentation improvements are all fair game.
+
+**Good first issues:** [`good first issue` label](https://github.com/ek33450505/claude-agent-team/issues?q=label%3A%22good+first+issue%22) — curated entry points with clear scope and test expectations.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow. Open an issue first for non-trivial changes. PRs trigger `cast-pr-review.yml` — the `code-reviewer` agent reviews your diff before merge.
 
 ---
 
