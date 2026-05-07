@@ -394,6 +394,19 @@ PYEOF
   esac
 fi
 
+# ── Step 2.6: Claimed-work verification (observability only) ───────────────────
+# Category 1 hallucination guard: verify agent's file work claims against reality.
+# Extracts claimed paths from Work Log and checks if files were actually modified
+# after the agent started. Logs discrepancies to agent_hallucinations table (no block).
+if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]] && command -v python3 >/dev/null 2>&1; then
+  CAST_AGENT_NAME="${AGENT_NAME}" \
+  CAST_SESSION_ID="${SESSION_ID}" \
+  CAST_AGENT_START_TIME="${TIMESTAMP_ISO}" \
+  CAST_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")" \
+  CAST_DB_PATH="${DB_PATH}" \
+  python3 "$(dirname "$0")/cast_claimed_work_verifier.py" 2>/dev/null || true
+fi
+
 # ── Step 3: Turn ceiling checkpoint ──────────────────────────────────────────
 if [ "$HAS_TURN_CEILING" = "1" ]; then
   mkdir -p "$TURN_CEILING_DIR" 2>/dev/null || true
