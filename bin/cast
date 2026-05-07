@@ -129,6 +129,7 @@ ${C_BOLD}CAST v${CAST_VERSION}${C_RESET}
 Usage: cast <subcommand> [args] [flags]
 
 Subcommands:
+  ${C_BOLD}init-repo${C_RESET}                       Initialize CAST config for this repo
   ${C_BOLD}status${C_RESET}                          Terminal health dashboard
   ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest
   ${C_BOLD}parallel${C_RESET}  [--dry-run] [--split N] <plan>  Split plan across parallel worktrees
@@ -154,6 +155,73 @@ Global flags:
 Config: ${CAST_CONFIG_FILE}
 DB:     ${CAST_DB_PATH}
 USAGE
+}
+
+# ── Subcommand: init-repo ────────────────────────────────────────────────────
+_cmd_init_repo() {
+  local target_dir="${PWD}"
+  local claude_dir="${target_dir}/.claude"
+  local config_file="${claude_dir}/cast.json"
+
+  # Idempotent: already initialized
+  if [ -f "$config_file" ]; then
+    printf "Already initialized.\n"
+    printf "\nCurrent config (%s):\n" "$config_file"
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -m json.tool "$config_file" 2>/dev/null || cat "$config_file"
+    else
+      cat "$config_file"
+    fi
+    return 0
+  fi
+
+  # Detect repo class from git remote URL
+  local repo_class="personal"
+  local co_author_trailer="claude"
+  local remote_url
+  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+
+  if echo "$remote_url" | grep -q "bitbucket.org"; then
+    repo_class="work"
+    co_author_trailer="none"
+  elif echo "$remote_url" | grep -q "github.com"; then
+    repo_class="personal"
+    co_author_trailer="claude"
+  elif [ -n "$remote_url" ]; then
+    # Unknown remote — default to personal
+    repo_class="personal"
+    co_author_trailer="claude"
+  fi
+  # No remote: default to personal
+
+  # Create .claude/ dir if needed
+  mkdir -p "$claude_dir"
+
+  # Write cast.json
+  python3 - "$config_file" "$repo_class" "$co_author_trailer" <<'PYEOF'
+import sys, json
+config_file, repo_class, co_author_trailer = sys.argv[1], sys.argv[2], sys.argv[3]
+config = {
+    "repo_class": repo_class,
+    "co_author_trailer": co_author_trailer,
+    "budget": {
+        "per_dispatch_limit_usd": 1.00
+    }
+}
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2)
+    f.write('\n')
+print(json.dumps(config, indent=2))
+PYEOF
+
+  printf "\nCAST initialized for this repo.\n"
+  printf "  Repo class:    %s\n" "$repo_class"
+  printf "  Co-author:     %s\n" "$co_author_trailer"
+  printf "\nNext steps:\n"
+  printf "  cast status     — see what CAST is doing\n"
+  printf "  cast dispatch   — run an agent\n"
+  printf "  cast test       — run contract tests (coming soon)\n"
+  printf "\nDocs: https://github.com/ek33450505/claude-agent-team\n"
 }
 
 # ── Subcommand: dispatch ─────────────────────────────────────────────────────
@@ -291,10 +359,31 @@ PYEOF
     2>/dev/null || echo "0.00 0.00")"
   fi
 
-  # Memory count
-  local mem_count=0
+  # Memory count + stale count + last verified
+  local mem_count=0 mem_stale=0 mem_last_verified="never"
   if [ -f "$CAST_DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
     mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories;" 2>/dev/null || echo 0)"
+    mem_stale="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE confidence < 0.4;" 2>/dev/null || echo 0)"
+    local _mem_lv
+    _mem_lv="$(sqlite3 "$CAST_DB_PATH" "SELECT MAX(last_verified) FROM agent_memories;" 2>/dev/null || true)"
+    [ -n "$_mem_lv" ] && mem_last_verified="$_mem_lv"
+  fi
+
+  # Budget limit from .claude/cast.json
+  local budget_limit=""
+  local repo_cast_json="${PWD}/.claude/cast.json"
+  if [ -f "$repo_cast_json" ] && command -v python3 >/dev/null 2>&1; then
+    budget_limit="$(python3 -c "
+import json
+try:
+    with open('$repo_cast_json') as f:
+        cfg = json.load(f)
+    limit = cfg.get('budget', {}).get('per_dispatch_limit_usd')
+    if limit is not None:
+        print(f'\${limit:.2f} per dispatch limit')
+except Exception:
+    pass
+" 2>/dev/null || true)"
   fi
 
   # Agent count
@@ -362,8 +451,18 @@ PYEOF
   printf "%s\n" "$sep"
   printf "Agents      %d installed\n" "$agent_count"
   printf "Hooks       %d active\n" "$hook_count"
-  printf "Budget      \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
-  printf "Memory      %d entries\n" "$mem_count"
+  printf "Spend       \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
+  if [ -n "$budget_limit" ]; then
+    printf "Budget      %s\n" "$budget_limit"
+  else
+    printf "Budget      not configured (run cast init-repo)\n"
+  fi
+  if [ "${mem_count:-0}" -gt 0 ]; then
+    printf "Memory      %d entries | %d stale (confidence < 0.4) | last verified: %s\n" \
+      "$mem_count" "$mem_stale" "$mem_last_verified"
+  else
+    printf "Memory      not configured\n"
+  fi
   printf "%s\n" "$sep"
 
   if [ -n "$recent_runs" ]; then
@@ -1462,6 +1561,7 @@ SUBCOMMAND="${1:-}"
 shift 2>/dev/null || true
 
 case "$SUBCOMMAND" in
+  init-repo)            _cmd_init_repo "$@" ;;
   status)               _cmd_status "$@" ;;
   exec)                 _cmd_exec "$@" ;;
   dispatch)             _cmd_dispatch "$@" ;;

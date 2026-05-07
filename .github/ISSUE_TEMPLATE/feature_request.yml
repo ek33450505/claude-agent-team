@@ -1,32 +1,42 @@
 name: Feature Request
-description: Suggest a new agent, route, hook enhancement, or other improvement
+description: Suggest a new agent, hook enhancement, CLI command, or other improvement
 labels: [enhancement]
 title: "[Feature] "
 body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: A clear description of the problem. E.g. "I always have to manually..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the Solution You'd Like
+      description: What should CAST do that it doesn't do today?
+    validations:
+      required: true
   - type: dropdown
-    id: feature-type
+    id: component
     attributes:
-      label: Feature Type
-      options: [New Agent, New Route, Hook Enhancement, Agent Group, Config Change, Other]
-    validations:
-      required: true
-  - type: textarea
-    id: use-case
-    attributes:
-      label: Use Case
-      description: What problem does this solve?
-    validations:
-      required: true
-  - type: textarea
-    id: proposed
-    attributes:
-      label: Proposed Behavior
+      label: Which CAST Component Does This Affect?
+      options:
+        - hooks
+        - agents
+        - CLI (bin/cast)
+        - cast.db / observability
+        - CI / workflows
+        - install / setup
+        - docs
+        - other
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives Considered
+      description: Other approaches you've thought about or tried
   - type: dropdown
     id: willing
     attributes:
