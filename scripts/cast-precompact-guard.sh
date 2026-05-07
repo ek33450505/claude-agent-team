@@ -1,5 +1,6 @@
 #!/bin/bash
-# cast-precompact-guard.sh — PreCompact hook: block compaction if any tracked repo is dirty
+# cast-precompact-guard.sh — PreCompact hook: block AUTO-compaction if any tracked repo is dirty.
+# Manual /compact always passes through — only system-triggered compaction is guarded.
 # Returns {"decision":"block","reason":"..."} to stdout when dirty repos found.
 # Returns {"decision":"allow"} when clean.
 # Exit 0 always.
@@ -12,6 +13,14 @@ mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
 
 INPUT="$(cat 2>/dev/null || true)"
+
+# Always allow manual /compact — only guard auto-compaction
+TRIGGER="$(echo "$INPUT" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('trigger','auto'))" 2>/dev/null || echo "auto")"
+if [[ "$TRIGGER" == "manual" ]]; then
+  CAST_INPUT="$INPUT" python3 "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
+  printf '{"decision":"allow"}\n'
+  exit 0
+fi
 
 # Known project roots to check. Add more as needed.
 # Reads from cast.db sessions table for recently active project paths (best-effort).
