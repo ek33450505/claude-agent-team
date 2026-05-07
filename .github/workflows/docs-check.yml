@@ -14,6 +14,6 @@ jobs:
 
       - name: Verify required README sections
         run: |
-          for section in "## Installation" "## Agents" "## Hooks" "## Testing"; do
+          for section in "## Install" "## Agent Roster" "## Hook Event Coverage" "## Test Suite"; do
             grep -q "$section" README.md || { echo "Missing: $section"; exit 1; }
           done
