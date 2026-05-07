@@ -10,5 +10,10 @@ if ! command -v docker &>/dev/null; then
   exit 0
 fi
 
+if ! docker info &>/dev/null 2>&1; then
+  echo "[CAST] Docker daemon not running — skipping Ubuntu CI parity check." >&2
+  exit 0
+fi
+
 echo "[CAST] Running Ubuntu CI parity check via Docker..."
 make test-ubuntu
