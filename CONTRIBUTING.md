@@ -65,7 +65,7 @@ effort: low               # low | medium | high
 3. Add the agent to the registry table in `CLAUDE.md` (and the `CHEATSHEET.md` agents table).
 4. Add a BATS test in `tests/` covering the agent's core behavior.
 
-See `docs/agents/agent-quality-rubric.md` for how agents are evaluated. Aim for score 4–5 on all dimensions.
+See [docs/agents/agent-quality-rubric.md](docs/agents/agent-quality-rubric.md) for how agents are evaluated. Aim for score 4–5 on all dimensions.
 
 **Every agent must:**
 - Emit a `task_claimed` event as its first action (Step 0).
