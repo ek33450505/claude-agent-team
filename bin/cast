@@ -130,6 +130,7 @@ Usage: cast <subcommand> [args] [flags]
 
 Subcommands:
   ${C_BOLD}init-repo${C_RESET}                       Initialize CAST config for this repo
+  ${C_BOLD}new-agent${C_RESET}  <name>                  Scaffold a new agent frontmatter file
   ${C_BOLD}status${C_RESET}                          Terminal health dashboard
   ${C_BOLD}exec${C_RESET}      [--resume|--status] <plan>  Execute a plan manifest
   ${C_BOLD}parallel${C_RESET}  [--dry-run] [--split N] <plan>  Split plan across parallel worktrees
@@ -223,6 +224,54 @@ PYEOF
   printf "  cast dispatch   — run an agent\n"
   printf "  cast test       — run contract tests (coming soon)\n"
   printf "\nDocs: https://github.com/ek33450505/claude-agent-team\n"
+}
+
+# ── Subcommand: new-agent ────────────────────────────────────────────────────
+_cmd_new_agent() {
+  local agent_name="${1:-}"
+
+  if [[ -z "$agent_name" ]]; then
+    printf "Usage: cast new-agent <name>\n" >&2
+    exit 1
+  fi
+
+  # Validate: alphanumeric + hyphens only, no path traversal
+  if ! [[ "$agent_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*$ ]]; then
+    printf "Error: agent name must be alphanumeric with hyphens only\n" >&2
+    exit 1
+  fi
+
+  local agents_dir="${HOME}/.claude/agents"
+  local agent_file="${agents_dir}/${agent_name}.md"
+
+  mkdir -p "$agents_dir"
+
+  if [[ -f "$agent_file" ]]; then
+    printf "Agent already exists: %s\n" "$agent_file" >&2
+    exit 1
+  fi
+
+  cat > "$agent_file" <<FRONTMATTER
+---
+name: ${agent_name}
+description: TODO — describe when to use this agent
+model: sonnet
+tools:
+  - Read
+  - Edit
+  - Write
+  - Bash
+  - Glob
+  - Grep
+---
+
+# ${agent_name}
+
+TODO — write agent instructions here.
+FRONTMATTER
+
+  printf "Created: %s\n" "$agent_file"
+  printf "Edit the description and instructions, then run: cast agents\n"
 }
 
 # ── Subcommand: dispatch ─────────────────────────────────────────────────────
@@ -1766,6 +1815,7 @@ shift 2>/dev/null || true
 
 case "$SUBCOMMAND" in
   init-repo)            _cmd_init_repo "$@" ;;
+  new-agent)            _cmd_new_agent "$@" ;;
   status)               _cmd_status "$@" ;;
   exec)                 _cmd_exec "$@" ;;
   dispatch)             _cmd_dispatch "$@" ;;

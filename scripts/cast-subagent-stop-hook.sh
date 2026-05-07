@@ -706,4 +706,41 @@ PYEOF
   fi
 fi
 
+# ── Emit compressed hookSpecificOutput ───────────────────────────────────────
+# Only emit when there is response text to parse. Excludes full response body
+# from the payload — contains only: status, summary, concerns.
+if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]]; then
+  CAST_STOP_RESPONSE_TEXT="${CAST_STOP_RESPONSE_TEXT}" python3 - <<'PYEOF'
+import os, sys, re, json
+
+text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
+
+# Extract Status
+status_match = re.search(r'Status:\s*(\S+)', text)
+status = status_match.group(1) if status_match else 'UNKNOWN'
+
+# Extract Summary (first non-empty line after "Summary:")
+summary_match = re.search(r'Summary:\s*(.+)', text)
+summary = summary_match.group(1).strip() if summary_match else ''
+
+# Extract Concerns (lines starting with - after "Concerns:")
+concerns = []
+concerns_match = re.search(r'Concerns?:(.*?)(?=\n#|\n##|\nStatus:|$)', text, re.DOTALL | re.IGNORECASE)
+if concerns_match:
+    for line in concerns_match.group(1).splitlines():
+        line = line.strip().lstrip('- ').strip()
+        if line:
+            concerns.append(line)
+
+output = json.dumps({
+    'hookSpecificOutput': json.dumps({
+        'status': status,
+        'summary': summary,
+        'concerns': concerns
+    })
+})
+print(output)
+PYEOF
+fi
+
 exit 0
