@@ -19,7 +19,7 @@
 
 ---
 
-## Install
+## Installation
 
 ```bash
 brew tap ek33450505/cast && brew install cast
@@ -72,16 +72,16 @@ Or clone + install: `git clone https://github.com/ek33450505/claude-agent-team.g
 - [Personal Overlay — Layered Configuration](#personal-overlay--layered-configuration)
 - [Swarm System](#swarm-system)
 - [Agent Constellation Dashboard](#agent-constellation-dashboard)
-- [Agent Roster](#agent-roster)
+- [Agents](#agents)
 - [Token Efficiency & Cost Optimization](#token-efficiency--cost-optimization)
-- [Hook Event Coverage](#hook-event-coverage)
+- [Hooks](#hooks)
 - [Observability & cast.db v8](#observability--castdb-v8)
 - [Peer Messaging & Gossip Protocol](#peer-messaging--gossip-protocol)
 - [Multi-Agent Pipelines (v4.6+)](#multi-agent-pipelines-v46)
 - [Agent Memory & Persistence (v4.3+)](#agent-memory--persistence-v43)
 - [Project Structure](#project-structure)
 - [Scheduled Tasks](#scheduled-tasks)
-- [Test Suite](#test-suite)
+- [Testing](#testing)
 - [Version History](#version-history)
 - [CAST Ecosystem](#cast-ecosystem)
 - [Local-First & Offline](#local-first--offline)
@@ -171,7 +171,7 @@ CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Te
 
 ---
 
-## Agent Roster
+## Agents
 
 30 core specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, isolation, and thinking budget tier. Agent responses validate against JSON schemas in `schemas/`. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the full table with model tiers and thinking budgets.
 
@@ -194,7 +194,7 @@ For local Haiku-tier work without API spend, install [claude-code-router](https:
 
 ---
 
-## Hook Event Coverage
+## Hooks
 
 Hooks cover the full swarm lifecycle: SessionStart, TaskCreated, WorktreeCreate, PreToolUse:Bash (commit guard), PostToolUse, PostCompact, SessionEnd. See [docs/observability/OBSERVABILITY.md](docs/observability/OBSERVABILITY.md#hook-event-coverage).
 
@@ -282,7 +282,7 @@ Hybrid model: **RemoteTriggers** for AI-powered tasks (briefings, standups, repo
 
 ---
 
-## Test Suite
+## Testing
 
 55 BATS test files with 520+ individual test assertions across core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. 0 failures. BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats` (Ubuntu). Run with `bats tests/`.
 
