@@ -3,26 +3,44 @@ name: Sync README Badges
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   sync-badges:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update badges
         run: bash scripts/gen-stats.sh
 
-      - name: Commit if changed
+      - name: Check for badge changes
+        id: changes
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git diff --quiet README.md || {
-            git add README.md
-            git commit -m "chore: sync README badges [skip ci]"
-            git push
-          }
+          if git diff --quiet README.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR if badges changed
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: sync README badges"
+          title: "chore: sync README badges"
+          body: |
+            Automated badge sync from `scripts/gen-stats.sh`.
+
+            Branch protection on `main` requires PRs, so this workflow opens a PR instead of
+            pushing directly. Auto-merge after CI green is safe — the change is docs-only.
+          branch: chore/sync-readme-badges
+          delete-branch: true
+          base: main
+          labels: |
+            automated
+            docs
