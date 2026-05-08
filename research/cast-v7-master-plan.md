@@ -17,6 +17,71 @@ Phases 0–5 merged to main today (2026-05-07, PR #25, 672 BATS tests). This pla
 | 3 | Memory pipeline (write, read, staleness sweep, user_profile type) |
 | 4 | Agent contract testing framework (`cast test`, contract runner, 6 BATS) |
 | 5 | DX polish (`cast new-agent`, init-repo BATS, hook output compression) |
+| **Recovery (2026-05-08, PR #29)** | **Hook output spec recovery + automated prevention guardrails + Engram/Stratum sunset.** See "Phase 0 — Recovery Lessons" below before resuming any phase. |
+
+---
+
+## Phase 0 — Recovery Lessons & Inviolable Rules (READ FIRST)
+
+**This section exists because Phase 4 (Contract Testing, commit be8d924) shipped a session-breaking bug.** A hook emitted `'hookSpecificOutput': json.dumps({...})` — a stringified blob — instead of the spec-required object. The Claude Code CLI evaluated `"additionalContext" in <string>` and threw `q.hookSpecificOutput is not an Object` on every subagent completion. Ed lost a full work day to recovery sessions.
+
+**Why this slipped through every gate:**
+- The shape mismatch is invisible at static-analysis time (Python typing accepts both `dict` and `dumps(dict)` as values).
+- BATS tested the `cast-validate-hook-contracts.sh` validator in isolation, but no CI job ran the validator against actual hook output.
+- The validator was fully written and would have caught the bug — it just wasn't wired in.
+- Local cleanup also surfaced 4,908 stale branches (mostly `cast-swarm-*` and `worktree-agent-*`) — slop from agent dispatches that never cleaned up after themselves.
+
+### Automated prevention now in place (PR #29)
+
+| Guardrail | What it prevents | Where it lives |
+|---|---|---|
+| `hook-contract-validation` CI job | Any hook emitting non-spec `hookSpecificOutput` blocks merge. The exact bug class that crashed sessions yesterday is now a hard CI fail. | `.github/workflows/bats-ci.yml` |
+| `scripts/cast-validate-all-hooks.sh` | Orchestrator that fires every wired hook with synthetic stdin and validates output against `cast-validate-hook-contracts.sh`. 5 BATS tests. | `scripts/` |
+| `scripts/cast-branch-groomer.sh` + `cast clean` | Stops branch slop accumulating to 4,000+ orphans again. Hard whitelist guards `main`, `feat/*`, `feature/cast-v7-*`, and any branch in an active worktree. 7 BATS tests. | `scripts/` + `bin/cast` |
+| `scripts/cast-branch-groomer-schedule.sh` | Weekly dry-run report at `~/.claude/reports/branch-grooming-<date>.md`. Visibility before automation. | `scripts/` |
+| Engram + Stratum bridge code removed | Sunset projects can no longer be re-wired by accident. | Deleted `cast-bridge-session-{start,end}.sh`, scrubbed `cast-sync-check.sh` allow-list. |
+
+### Inviolable rules — apply to ALL future phases
+
+1. **Every hook that emits structured output MUST be exercised by a fixture-fired test** that asserts the output is a JSON object with the right shape. The validator already exists; new hooks must be added to `cast-validate-all-hooks.sh`'s discovery loop.
+2. **`hookSpecificOutput` is an object, not a stringified blob.** Format: `{"hookSpecificOutput": {"hookEventName": "<EventName>", "additionalContext": "<string>"}}`. Stringify the contents of `additionalContext`, never the `hookSpecificOutput` field itself.
+3. **Every agent or skill that creates a branch or worktree MUST clean up on success.** The groomer is a safety net, not the primary mechanism. Failed/abandoned runs must be cleaned manually before session end.
+4. **No new mentions of Engram or Stratum** in any CAST code, hooks, settings, agent definitions, or rules. Historical CHANGELOG/journal mentions are preserved as accurate history; new code must not reference them.
+5. **Before introducing a new structured-output surface** (cast.db schema, jsonl event log, agent-status JSON), write the contract validator and its CI gate in the SAME PR that introduces the surface. Do not defer.
+6. **Run `cast clean --dry-run` before every commit/push** in any session that dispatches agents. If the output shows >5 stale branches, run `--apply` before push.
+
+### Open follow-ups from 2026-05-08 audit (address opportunistically)
+
+Three audits ran during the recovery session — bash-specialist (DONE, all clean), researcher (DONE_WITH_CONCERNS, 7 findings), security (pending at time of writing, will land on PR #29 when complete). Verified findings:
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| R6 | LOW (real) | `cast-response-completeness-hook.sh` is wired in `settings.json` with absolute path `~/Projects/personal/claude-agent-team/scripts/...` instead of `~/.claude/scripts/...`. Breaks if repo is moved or cloned to a different path. | Fix in v7 Phase 1 (friction reduction). One-line settings.json edit + re-run install. |
+| R5 | MEDIUM (real) | Only 3 of 30 agents have `agent-contracts/<name>.contract.yaml`. The contract testing framework from old Phase 4 is built but coverage is 10%. | v7 Phase 4 territory. Decide coverage target during Agent Inventory Audit. |
+| R-bonus | MEDIUM (real) | The existing `contract-test` CI job has `\|\| true` AND `continue-on-error: true` — it runs but its result is decorative, not enforced. Different from the new `hook-contract-validation` job (which IS enforced). | Add to v7 Phase 1 or Phase 6 final-CI sweep: remove suppression, gate PRs on contract-test results. |
+| R2 | LOW (real) | LLM-eval hooks (`type: prompt` and `type: agent` entries in `settings.json`) are skipped by the contract validator since they have no `command` field. If a prompt-type hook emits malformed BLOCK/ALLOW, no test catches it. | Future: extend validator to recognize LLM-eval hook variants. Not urgent — these hooks don't emit `hookSpecificOutput`. |
+| R4 | MEDIUM | No migration sequence guard — `cast-db-migrate-v32.sh` is the latest, idempotent via `IF NOT EXISTS`, but no registry verifies all 32 migrations applied in order. | Defer; add to a future "DB safety" phase. |
+| R7 | INFO | 50+ scripts in `scripts/` not wired in any settings.json — mix of CLI utilities and possibly retired hooks. Inventory unclear. | v7 Phase 4 (Agent Inventory Audit) extends to scripts/ inventory. |
+| R1 | FALSE POSITIVE | Researcher claimed "hook contract validator not in CI." Verified: the new `hook-contract-validation` job in `.github/workflows/bats-ci.yml` IS the wired-in enforcement. | None. Validated correct. |
+| R3 | FALSE POSITIVE | Researcher claimed "agents/ has 2 entries vs 30 claimed." Verified: `agents/core/` + `agents/personal/` contain 30 .md files. Researcher only listed top-level dirs. | None. |
+| Bash (DONE) | — | bash-specialist found zero critical/high bugs in the 6 changed/new shell scripts. JSON construction safe, heredocs single-quoted, exit codes correct, stdin parsing safe, empty-output guarded, macOS/Ubuntu portable. | None. |
+| **S-M1** | **MEDIUM (real, post-merge)** | **PII/secrets passthrough in `cast-subagent-stop-hook.sh`.** Agent response `Summary` and `Concerns` are serialized into `additionalContext` AND written to `cast.db quality_gates.feedback`. No redaction. If an agent's response includes an API key (e.g. an error message containing a token), it leaks to (a) the parent session context and (b) the queryable DB. | **Address as the FIRST item in v7 Phase 1.** Apply `cast-redact.py` (already in `scripts/`) to `summary` and `concerns` before serializing. ~10 line fix. |
+| S-M2 | MEDIUM (real, post-merge) | Fork PRs from outside contributors will execute arbitrary code on the CI runner via the new `hook-contract-validation` job (it runs every hook script with `CLAUDE_SUBPROCESS=0` to bypass the subprocess guard). Currently CI has no elevated permissions and no secrets, so blast radius is bounded — but social-engineering risk grows as contributor count grows. | v7 Phase 6 (release) — enable GitHub's "Require approval for outside collaborators" on the repo, OR add a `pull_request` branch filter that only runs on maintainer-pushed branches. |
+| S-L1 | LOW (informational) | `cast-subagent-stop-hook.sh:613` uses `echo` with bash interpolation into a JSON literal. `SAFE_AGENT` is correctly sanitized (strips non-`[a-zA-Z0-9_-]`), so no live injection. But the pattern is regression-prone — a future edit could omit the sanitization. | Future cleanup — refactor to `printf '%s'` inside a double-quoted template. Not urgent. |
+| S-L2 | LOW (informational) | `cast-branch-groomer.sh` reads `gh pr list` headRefName output into a bash array. Currently only used for `==` comparison (no interpolation), so safe. If future code ever passes these values to `git` invocations, this becomes exploitable. | Note in code comment as a constraint. |
+
+### Phase-startup ritual (do this for Phases 1–6 below)
+
+Before writing any code in a new v7 phase session:
+1. `git status --short` (using `-c submodule.recurse=false` if in worktree) — confirm clean tree.
+2. `bash scripts/cast-validate-all-hooks.sh --source` — confirm all 26 hooks emit valid output BEFORE making changes.
+3. `cast clean --dry-run` — surface any stale branches; clean if needed.
+4. Note the current `git rev-parse HEAD` for rollback.
+
+After completing the phase, before commit:
+1. `bash scripts/cast-validate-all-hooks.sh --source` — re-confirm all hooks valid (the gate that failed last week).
+2. `bats tests/` — full BATS suite green (one pre-existing local flake on `core.hooksPath` is acceptable; CI runs in clean env).
+3. PR description must list each new hook/script and confirm it's in the validator's discovery loop.
 
 ---
 

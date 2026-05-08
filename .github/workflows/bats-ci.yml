@@ -45,3 +45,19 @@ jobs:
       - name: Run contract tests
         run: bash scripts/cast-contract-runner.sh commit 2>/dev/null || true
         continue-on-error: true
+
+  hook-contract-validation:
+    needs: bats
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Set up CAST runtime dirs
+        run: |
+          mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
+          cp scripts/*.sh ~/.claude/scripts/
+          cp scripts/*.py ~/.claude/scripts/
+          chmod +x ~/.claude/scripts/*.sh
+      - name: Validate hook output contracts
+        run: bash scripts/cast-validate-all-hooks.sh --source
