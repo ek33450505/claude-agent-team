@@ -17,6 +17,51 @@ Phases 0–5 merged to main today (2026-05-07, PR #25, 672 BATS tests). This pla
 | 3 | Memory pipeline (write, read, staleness sweep, user_profile type) |
 | 4 | Agent contract testing framework (`cast test`, contract runner, 6 BATS) |
 | 5 | DX polish (`cast new-agent`, init-repo BATS, hook output compression) |
+| **Recovery (2026-05-08, PR #29)** | **Hook output spec recovery + automated prevention guardrails + Engram/Stratum sunset.** See "Phase 0 — Recovery Lessons" below before resuming any phase. |
+
+---
+
+## Phase 0 — Recovery Lessons & Inviolable Rules (READ FIRST)
+
+**This section exists because Phase 4 (Contract Testing, commit be8d924) shipped a session-breaking bug.** A hook emitted `'hookSpecificOutput': json.dumps({...})` — a stringified blob — instead of the spec-required object. The Claude Code CLI evaluated `"additionalContext" in <string>` and threw `q.hookSpecificOutput is not an Object` on every subagent completion. Ed lost a full work day to recovery sessions.
+
+**Why this slipped through every gate:**
+- The shape mismatch is invisible at static-analysis time (Python typing accepts both `dict` and `dumps(dict)` as values).
+- BATS tested the `cast-validate-hook-contracts.sh` validator in isolation, but no CI job ran the validator against actual hook output.
+- The validator was fully written and would have caught the bug — it just wasn't wired in.
+- Local cleanup also surfaced 4,908 stale branches (mostly `cast-swarm-*` and `worktree-agent-*`) — slop from agent dispatches that never cleaned up after themselves.
+
+### Automated prevention now in place (PR #29)
+
+| Guardrail | What it prevents | Where it lives |
+|---|---|---|
+| `hook-contract-validation` CI job | Any hook emitting non-spec `hookSpecificOutput` blocks merge. The exact bug class that crashed sessions yesterday is now a hard CI fail. | `.github/workflows/bats-ci.yml` |
+| `scripts/cast-validate-all-hooks.sh` | Orchestrator that fires every wired hook with synthetic stdin and validates output against `cast-validate-hook-contracts.sh`. 5 BATS tests. | `scripts/` |
+| `scripts/cast-branch-groomer.sh` + `cast clean` | Stops branch slop accumulating to 4,000+ orphans again. Hard whitelist guards `main`, `feat/*`, `feature/cast-v7-*`, and any branch in an active worktree. 7 BATS tests. | `scripts/` + `bin/cast` |
+| `scripts/cast-branch-groomer-schedule.sh` | Weekly dry-run report at `~/.claude/reports/branch-grooming-<date>.md`. Visibility before automation. | `scripts/` |
+| Engram + Stratum bridge code removed | Sunset projects can no longer be re-wired by accident. | Deleted `cast-bridge-session-{start,end}.sh`, scrubbed `cast-sync-check.sh` allow-list. |
+
+### Inviolable rules — apply to ALL future phases
+
+1. **Every hook that emits structured output MUST be exercised by a fixture-fired test** that asserts the output is a JSON object with the right shape. The validator already exists; new hooks must be added to `cast-validate-all-hooks.sh`'s discovery loop.
+2. **`hookSpecificOutput` is an object, not a stringified blob.** Format: `{"hookSpecificOutput": {"hookEventName": "<EventName>", "additionalContext": "<string>"}}`. Stringify the contents of `additionalContext`, never the `hookSpecificOutput` field itself.
+3. **Every agent or skill that creates a branch or worktree MUST clean up on success.** The groomer is a safety net, not the primary mechanism. Failed/abandoned runs must be cleaned manually before session end.
+4. **No new mentions of Engram or Stratum** in any CAST code, hooks, settings, agent definitions, or rules. Historical CHANGELOG/journal mentions are preserved as accurate history; new code must not reference them.
+5. **Before introducing a new structured-output surface** (cast.db schema, jsonl event log, agent-status JSON), write the contract validator and its CI gate in the SAME PR that introduces the surface. Do not defer.
+6. **Run `cast clean --dry-run` before every commit/push** in any session that dispatches agents. If the output shows >5 stale branches, run `--apply` before push.
+
+### Phase-startup ritual (do this for Phases 1–6 below)
+
+Before writing any code in a new v7 phase session:
+1. `git status --short` (using `-c submodule.recurse=false` if in worktree) — confirm clean tree.
+2. `bash scripts/cast-validate-all-hooks.sh --source` — confirm all 26 hooks emit valid output BEFORE making changes.
+3. `cast clean --dry-run` — surface any stale branches; clean if needed.
+4. Note the current `git rev-parse HEAD` for rollback.
+
+After completing the phase, before commit:
+1. `bash scripts/cast-validate-all-hooks.sh --source` — re-confirm all hooks valid (the gate that failed last week).
+2. `bats tests/` — full BATS suite green (one pre-existing local flake on `core.hooksPath` is acceptable; CI runs in clean env).
+3. PR description must list each new hook/script and confirm it's in the validator's discovery loop.
 
 ---
 
