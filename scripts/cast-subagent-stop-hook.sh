@@ -732,12 +732,16 @@ if concerns_match:
         if line:
             concerns.append(line)
 
+compressed = {
+    'status': status,
+    'summary': summary,
+    'concerns': concerns,
+}
 output = json.dumps({
-    'hookSpecificOutput': json.dumps({
-        'status': status,
-        'summary': summary,
-        'concerns': concerns
-    })
+    'hookSpecificOutput': {
+        'hookEventName': 'SubagentStop',
+        'additionalContext': json.dumps(compressed),
+    }
 })
 print(output)
 PYEOF

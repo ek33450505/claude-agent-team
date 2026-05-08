@@ -4,7 +4,7 @@
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: status, exec, parallel, memory, budget, agents, hooks, doctor, upgrade-check, tidy, dash, install-completions
+# Subcommands: status, exec, parallel, memory, budget, agents, hooks, doctor, upgrade-check, tidy, clean, dash, install-completions
 #
 # Config: ~/.claude/config/cast-cli.json
 # DB:     $CAST_DB_PATH or ~/.claude/cast.db
@@ -144,6 +144,7 @@ Subcommands:
   ${C_BOLD}upgrade-check${C_RESET}                   Check configured repos for new releases
   ${C_BOLD}migrate${C_RESET}   [--dry-run]               Apply pending DB schema migrations
   ${C_BOLD}tidy${C_RESET}      [--dry-run]               Clean up old plans, events, logs, briefings
+  ${C_BOLD}clean${C_RESET}     [--apply] [--worktrees]   Prune stale branches (dry-run by default)
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
 
@@ -1767,6 +1768,69 @@ _cmd_install_completions() {
   fi
 }
 
+# ── Subcommand: clean ───────────────────────────────────────────────────────
+_cmd_clean() {
+  local apply=0
+  local do_worktrees=0
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --apply)      apply=1; shift ;;
+      --worktrees)  do_worktrees=1; shift ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast clean [--apply] [--worktrees]
+
+  (no flags)     Dry-run: print what would be deleted, change nothing
+  --apply        Actually delete stale branches
+  --worktrees    Also prune dead worktree directories
+
+Branch deletion policy:
+  cast-swarm-*    : last commit > 14 days ago AND no open PR
+  worktree-agent-*: last commit > 7 days ago
+  feature/* fix/* : merged into main AND remote tracking ref is [gone]
+
+Hard whitelist (never deleted):
+  main, feat/*, feature/cast-v7-*, branches checked out in any worktree
+
+Examples:
+  cast clean                  — preview what would be removed
+  cast clean --apply          — delete stale branches
+  cast clean --apply --worktrees  — delete stale branches + dead worktrees
+USAGE
+        return 0
+        ;;
+      -*)
+        _error "Unknown flag: $1"
+        printf "  Run: cast clean --help\n" >&2
+        return 1
+        ;;
+      *) shift ;;
+    esac
+  done
+
+  # Resolve groomer script: installed copy first, repo fallback
+  local groomer_script="${CAST_SCRIPTS_DIR}/cast-branch-groomer.sh"
+  if [ ! -f "$groomer_script" ]; then
+    groomer_script="${CAST_REPO_DIR}/scripts/cast-branch-groomer.sh"
+  fi
+  if [ ! -f "$groomer_script" ]; then
+    _error "cast-branch-groomer.sh not found. Run: bash install.sh"
+    return 1
+  fi
+
+  # Build flags
+  local groomer_flags=()
+  if [ "$apply" -eq 1 ]; then
+    groomer_flags+=("--apply")
+  else
+    groomer_flags+=("--dry-run")
+  fi
+  [ "$do_worktrees" -eq 1 ] && groomer_flags+=("--worktrees")
+
+  bash "$groomer_script" "${groomer_flags[@]}"
+}
+
 # ── Subcommand: dash ────────────────────────────────────────────────────────
 _cmd_dash() {
   local dash_script="${CAST_SCRIPTS_DIR}/cast-dash.py"
@@ -1839,6 +1903,7 @@ case "$SUBCOMMAND" in
   upgrade-check)        _cmd_upgrade_check "$@" ;;
   migrate)              _cmd_migrate "$@" ;;
   tidy)                 _cmd_tidy "$@" ;;
+  clean)                _cmd_clean "$@" ;;
   dash)                 _cmd_dash "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
   ""|--help|-h)
