@@ -174,9 +174,10 @@ _run_validate_all() {
   mkdir -p "$fake_home/.claude"
   cp "$settings" "$fake_home/.claude/settings.json"
 
-  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+  # Validator writes [fail] messages to stderr; merge stderr so $output sees them.
+  run bash -c "env HOME='$fake_home' bash '$VALIDATOR_ALL' 2>&1"
   assert_failure
-  [[ "$output" =~ "fail" ]] || [[ "$output" =~ "error" ]]
+  [[ "$output" =~ "1 fail" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -194,9 +195,10 @@ _run_validate_all() {
   mkdir -p "$fake_home/.claude"
   cp "$settings" "$fake_home/.claude/settings.json"
 
-  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+  # Validator writes [fail] messages to stderr; merge stderr so $output sees them.
+  run bash -c "env HOME='$fake_home' bash '$VALIDATOR_ALL' 2>&1"
   assert_failure
-  [[ "$output" =~ "WrongEvent" ]] || [[ "$output" =~ "fail" ]]
+  [[ "$output" =~ "1 fail" ]]
 }
 
 # ---------------------------------------------------------------------------

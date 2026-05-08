@@ -139,7 +139,13 @@ while IFS=$'\t' read -r event label cmd; do
   export CAST_CV_LABEL="$label"
   export CAST_CV_STDOUT="$hook_stdout"
 
-  result_raw=$(python3 - <<'PYEOF' 2>&1; echo "CAST_EXIT:$?")
+  # Capture python output + exit code via temp file (portable across bash 3.2 / 4 / 5;
+  # mixing heredoc with `; echo` inside $(...) breaks on macOS bash 3.2 — see PR #29 fix).
+  # The `|| validate_exit=$?` keeps set -e from killing the script when python exits
+  # non-zero (warnings/fails) — we need that exit code to classify, not abort.
+  _cv_tmp=$(mktemp)
+  validate_exit=0
+  python3 - >"$_cv_tmp" 2>&1 <<'PYEOF' || validate_exit=$?
 import json, os, sys
 
 event = os.environ["CAST_CV_EVENT"]
@@ -214,9 +220,8 @@ elif status == 0:
 
 sys.exit(status)
 PYEOF
-
-  validate_exit="${result_raw##*CAST_EXIT:}"
-  result="${result_raw%$'\n'CAST_EXIT:*}"
+  result=$(cat "$_cv_tmp")
+  rm -f "$_cv_tmp"
 
   if [[ "$validate_exit" -eq 0 ]]; then
     printf '%s\n' "$result"
@@ -235,9 +240,11 @@ done <<< "$HOOK_LINES"
 TOTAL=$((OK_COUNT + WARN_COUNT + FAIL_COUNT))
 printf "\nvalidated %d hooks: %d ok, %d warn, %d fail\n" "$TOTAL" "$OK_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
 
+# Exit policy: fails block CI; warnings are advisory and do NOT block.
+# Use --strict to also fail on warnings (e.g. when tightening contracts).
 if [[ $FAIL_COUNT -gt 0 ]]; then
   exit 2
-elif [[ $WARN_COUNT -gt 0 ]]; then
+elif [[ "${CAST_VALIDATE_STRICT:-0}" == "1" && $WARN_COUNT -gt 0 ]]; then
   exit 1
 else
   exit 0
