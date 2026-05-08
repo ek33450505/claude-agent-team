@@ -50,6 +50,26 @@ Phases 0–5 merged to main today (2026-05-07, PR #25, 672 BATS tests). This pla
 5. **Before introducing a new structured-output surface** (cast.db schema, jsonl event log, agent-status JSON), write the contract validator and its CI gate in the SAME PR that introduces the surface. Do not defer.
 6. **Run `cast clean --dry-run` before every commit/push** in any session that dispatches agents. If the output shows >5 stale branches, run `--apply` before push.
 
+### Open follow-ups from 2026-05-08 audit (address opportunistically)
+
+Three audits ran during the recovery session — bash-specialist (DONE, all clean), researcher (DONE_WITH_CONCERNS, 7 findings), security (pending at time of writing, will land on PR #29 when complete). Verified findings:
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| R6 | LOW (real) | `cast-response-completeness-hook.sh` is wired in `settings.json` with absolute path `~/Projects/personal/claude-agent-team/scripts/...` instead of `~/.claude/scripts/...`. Breaks if repo is moved or cloned to a different path. | Fix in v7 Phase 1 (friction reduction). One-line settings.json edit + re-run install. |
+| R5 | MEDIUM (real) | Only 3 of 30 agents have `agent-contracts/<name>.contract.yaml`. The contract testing framework from old Phase 4 is built but coverage is 10%. | v7 Phase 4 territory. Decide coverage target during Agent Inventory Audit. |
+| R-bonus | MEDIUM (real) | The existing `contract-test` CI job has `\|\| true` AND `continue-on-error: true` — it runs but its result is decorative, not enforced. Different from the new `hook-contract-validation` job (which IS enforced). | Add to v7 Phase 1 or Phase 6 final-CI sweep: remove suppression, gate PRs on contract-test results. |
+| R2 | LOW (real) | LLM-eval hooks (`type: prompt` and `type: agent` entries in `settings.json`) are skipped by the contract validator since they have no `command` field. If a prompt-type hook emits malformed BLOCK/ALLOW, no test catches it. | Future: extend validator to recognize LLM-eval hook variants. Not urgent — these hooks don't emit `hookSpecificOutput`. |
+| R4 | MEDIUM | No migration sequence guard — `cast-db-migrate-v32.sh` is the latest, idempotent via `IF NOT EXISTS`, but no registry verifies all 32 migrations applied in order. | Defer; add to a future "DB safety" phase. |
+| R7 | INFO | 50+ scripts in `scripts/` not wired in any settings.json — mix of CLI utilities and possibly retired hooks. Inventory unclear. | v7 Phase 4 (Agent Inventory Audit) extends to scripts/ inventory. |
+| R1 | FALSE POSITIVE | Researcher claimed "hook contract validator not in CI." Verified: the new `hook-contract-validation` job in `.github/workflows/bats-ci.yml` IS the wired-in enforcement. | None. Validated correct. |
+| R3 | FALSE POSITIVE | Researcher claimed "agents/ has 2 entries vs 30 claimed." Verified: `agents/core/` + `agents/personal/` contain 30 .md files. Researcher only listed top-level dirs. | None. |
+| Bash (DONE) | — | bash-specialist found zero critical/high bugs in the 6 changed/new shell scripts. JSON construction safe, heredocs single-quoted, exit codes correct, stdin parsing safe, empty-output guarded, macOS/Ubuntu portable. | None. |
+| **S-M1** | **MEDIUM (real, post-merge)** | **PII/secrets passthrough in `cast-subagent-stop-hook.sh`.** Agent response `Summary` and `Concerns` are serialized into `additionalContext` AND written to `cast.db quality_gates.feedback`. No redaction. If an agent's response includes an API key (e.g. an error message containing a token), it leaks to (a) the parent session context and (b) the queryable DB. | **Address as the FIRST item in v7 Phase 1.** Apply `cast-redact.py` (already in `scripts/`) to `summary` and `concerns` before serializing. ~10 line fix. |
+| S-M2 | MEDIUM (real, post-merge) | Fork PRs from outside contributors will execute arbitrary code on the CI runner via the new `hook-contract-validation` job (it runs every hook script with `CLAUDE_SUBPROCESS=0` to bypass the subprocess guard). Currently CI has no elevated permissions and no secrets, so blast radius is bounded — but social-engineering risk grows as contributor count grows. | v7 Phase 6 (release) — enable GitHub's "Require approval for outside collaborators" on the repo, OR add a `pull_request` branch filter that only runs on maintainer-pushed branches. |
+| S-L1 | LOW (informational) | `cast-subagent-stop-hook.sh:613` uses `echo` with bash interpolation into a JSON literal. `SAFE_AGENT` is correctly sanitized (strips non-`[a-zA-Z0-9_-]`), so no live injection. But the pattern is regression-prone — a future edit could omit the sanitization. | Future cleanup — refactor to `printf '%s'` inside a double-quoted template. Not urgent. |
+| S-L2 | LOW (informational) | `cast-branch-groomer.sh` reads `gh pr list` headRefName output into a bash array. Currently only used for `==` comparison (no interpolation), so safe. If future code ever passes these values to `git` invocations, this becomes exploitable. | Note in code comment as a constraint. |
+
 ### Phase-startup ritual (do this for Phases 1–6 below)
 
 Before writing any code in a new v7 phase session:
