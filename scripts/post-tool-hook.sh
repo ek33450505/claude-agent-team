@@ -37,6 +37,10 @@ if [ "$OUTPUT_LEN" -gt "$MAX_BYTES" ]; then
   HOOK_OUTPUT="{\"overflow\": true, \"path\": \"$OVERFLOW_FILE\", \"original_bytes\": $OUTPUT_LEN, \"redacted\": $REDACTED_OK}"
 fi
 
-printf '%s\n' "$HOOK_OUTPUT"
+# Only emit if there is actual content — a bare newline from an empty
+# HOOK_OUTPUT would be treated as non-JSON by the CLI and crash it.
+if [ -n "$HOOK_OUTPUT" ] && [ "$(echo "$HOOK_OUTPUT" | tr -d ' \t\n')" != "" ]; then
+  printf '%s\n' "$HOOK_OUTPUT"
+fi
 
 exit 0

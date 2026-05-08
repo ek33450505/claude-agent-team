@@ -40,7 +40,7 @@ if [[ -f "$CANCEL_FLAG" ]]; then
     exit 0
   fi
   CURRENT_HOUR="$(date +%H)"
-  if [[ "$CURRENT_HOUR" -lt 18 ]]; then
+  if [[ $((10#$CURRENT_HOUR)) -lt 18 ]]; then
     # Before 18:00 → honor cancel flag
     exit 0
   fi
