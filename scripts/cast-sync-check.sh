@@ -16,14 +16,6 @@ STRICT=0
 # Runtime-only scripts owned by other repos — not drift
 RUNTIME_ONLY_ALLOW_LIST=(
   "cast-session-start-journal.sh"
-  "engram-style-capture.py"
-  "engram-identity-start.sh"
-  "engram-session-end.sh"
-  "engram-prompt-sentinel.py"
-  "engram-journal-extractor.py"
-  "stratum-session-start.sh"
-  "stratum-close-sentinel.sh"
-  "stratum-session-end.sh"
 )
 
 # Runtime path overrides for testability
