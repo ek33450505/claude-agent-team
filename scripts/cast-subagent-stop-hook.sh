@@ -48,6 +48,8 @@ CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
 TURN_CEILING_DIR="${CAST_DIR}/turn-ceiling-events"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
+# Export HOOK_DIR so Python heredocs can locate sibling scripts (cast-redact.py, etc.)
+export HOOK_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || dirname "$0")"
 
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
@@ -349,7 +351,7 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
         security)      echo "security_scan" ;;
       esac)"
       python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
-import sqlite3, os, re
+import sqlite3, os, re, subprocess, json, sys
 
 db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
 agent = os.environ.get('CAST_STOP_AGENT', '')
@@ -375,7 +377,29 @@ result = {
 
 # Grab feedback: the "Summary:" line if present, else first 500 chars of output
 fm = re.search(r'Summary:\s*(.+)', out)
-feedback = (fm.group(1).strip() if fm else out.strip())[:500]
+feedback_raw = (fm.group(1).strip() if fm else out.strip())[:500]
+
+# Redact PII from feedback before writing to DB.
+# HOOK_DIR env var is set by the parent shell near script top (resolves sibling scripts).
+# Fallback: if cast-redact.py is unavailable or fails, use raw value (intentional passthrough).
+def _redact(text):
+    try:
+        hook_dir = os.environ.get('HOOK_DIR', '')
+        redact_script = os.path.join(hook_dir, 'cast-redact.py') if hook_dir else ''
+        if not redact_script or not os.path.exists(redact_script):
+            return text
+        proc = subprocess.run(
+            [sys.executable, redact_script],
+            input=text, capture_output=True, text=True, timeout=5
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            d = json.loads(proc.stdout)
+            return d.get('redacted_text', text)
+    except Exception:
+        pass
+    return text
+
+feedback = _redact(feedback_raw)
 
 try:
     conn = sqlite3.connect(db, timeout=5)
@@ -710,6 +734,35 @@ fi
 # Only emit when there is response text to parse. Excludes full response body
 # from the payload — contains only: status, summary, concerns.
 if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]]; then
+  # Extract summary and concerns as Bash vars so they can be redacted before serialization.
+  export CAST_STOP_SUMMARY="$(python3 -c "
+import os, re
+text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
+m = re.search(r'Summary:\s*(.+)', text)
+print(m.group(1).strip() if m else '')
+" 2>/dev/null || echo "")"
+
+  export CAST_STOP_CONCERNS="$(python3 -c "
+import os, re, json
+text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
+concerns = []
+m = re.search(r'Concerns?:(.*?)(?=\n#|\n##|\nStatus:|\$)', text, re.DOTALL | re.IGNORECASE)
+if m:
+    for line in m.group(1).splitlines():
+        line = line.strip().lstrip('- ').strip()
+        if line:
+            concerns.append(line)
+print(json.dumps(concerns))
+" 2>/dev/null || echo "[]")"
+
+  # Redact PII (e.g. API keys, emails) from summary and concerns before serialization.
+  # HOOK_DIR is exported at script top — points to the directory containing cast-redact.py.
+  # Fallback: if cast-redact.py is unavailable, use raw values (|| passthrough is intentional).
+  SUMMARY_REDACTED="$(echo "${CAST_STOP_SUMMARY}" | python3 "${HOOK_DIR}/cast-redact.py" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("redacted_text",""))' 2>/dev/null || echo "${CAST_STOP_SUMMARY}")"
+  CONCERNS_REDACTED="$(echo "${CAST_STOP_CONCERNS}" | python3 "${HOOK_DIR}/cast-redact.py" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("redacted_text",""))' 2>/dev/null || echo "${CAST_STOP_CONCERNS}")"
+  export CAST_STOP_SUMMARY_REDACTED="$SUMMARY_REDACTED"
+  export CAST_STOP_CONCERNS_REDACTED="$CONCERNS_REDACTED"
+
   CAST_STOP_RESPONSE_TEXT="${CAST_STOP_RESPONSE_TEXT}" python3 - <<'PYEOF'
 import os, sys, re, json
 
@@ -719,18 +772,19 @@ text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
 status_match = re.search(r'Status:\s*(\S+)', text)
 status = status_match.group(1) if status_match else 'UNKNOWN'
 
-# Extract Summary (first non-empty line after "Summary:")
-summary_match = re.search(r'Summary:\s*(.+)', text)
-summary = summary_match.group(1).strip() if summary_match else ''
+# Use pre-redacted summary and concerns (PII already stripped by cast-redact.py)
+summary_raw = os.environ.get('CAST_STOP_SUMMARY_REDACTED', '')
+concerns_raw = os.environ.get('CAST_STOP_CONCERNS_REDACTED', '[]')
 
-# Extract Concerns (lines starting with - after "Concerns:")
-concerns = []
-concerns_match = re.search(r'Concerns?:(.*?)(?=\n#|\n##|\nStatus:|$)', text, re.DOTALL | re.IGNORECASE)
-if concerns_match:
-    for line in concerns_match.group(1).splitlines():
-        line = line.strip().lstrip('- ').strip()
-        if line:
-            concerns.append(line)
+# summary is a plain string; concerns is a JSON array string
+summary = summary_raw
+
+try:
+    concerns = json.loads(concerns_raw)
+    if not isinstance(concerns, list):
+        concerns = []
+except Exception:
+    concerns = []
 
 compressed = {
     'status': status,
