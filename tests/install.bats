@@ -126,6 +126,8 @@ run_install() {
   local tmp_repo
   tmp_repo="$(mktemp -d)"
   cp -R "$REPO_DIR/." "$tmp_repo/"
+  # Discard any inherited .git (e.g., CI's detached pull/N/merge state) so init creates a fresh repo.
+  rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
   git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
@@ -151,6 +153,8 @@ run_install() {
   local tmp_repo
   tmp_repo="$(mktemp -d)"
   cp -R "$REPO_DIR/." "$tmp_repo/"
+  # Discard any inherited .git (e.g., CI's detached pull/N/merge state) so init creates a fresh repo.
+  rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
   git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
@@ -169,6 +173,8 @@ run_install() {
   local tmp_repo
   tmp_repo="$(mktemp -d)"
   cp -R "$REPO_DIR/." "$tmp_repo/"
+  # Discard any inherited .git (e.g., CI's detached pull/N/merge state) so init creates a fresh repo.
+  rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
   git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
