@@ -19,7 +19,10 @@ setup() {
     started_at TEXT,
     ended_at TEXT,
     duration_ms INTEGER,
-    tool_uses INTEGER
+    tool_uses INTEGER,
+    response TEXT,
+    cache_read_input_tokens INTEGER,
+    cache_creation_input_tokens INTEGER
   );"
   unset CLAUDE_SUBPROCESS
 }
