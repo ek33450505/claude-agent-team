@@ -338,7 +338,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/Projects/personal/claude-agent-team/scripts/cast-response-completeness-hook.sh",
+            "command": "bash ~/.claude/scripts/cast-response-completeness-hook.sh",
             "timeout": 5,
             "async": true
           }

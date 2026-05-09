@@ -3,6 +3,27 @@
 # Copies agents, commands, skills, scripts, and rules to ~/.claude/
 set -euo pipefail
 
+# Resolve script directory early — needed by dirty-tree guard and path setup below.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Dirty-tree guard: refuse to overwrite uncommitted edits in paths install.sh touches.
+# Set CAST_INSTALL_FORCE=1 to bypass (for CI / test harnesses that manage their own git state).
+if [[ "${CAST_INSTALL_FORCE:-0}" != "1" ]]; then
+  DIRTY=false
+  if ! git -C "$SCRIPT_DIR" diff --quiet HEAD -- agents/ scripts/ bin/ rules-core/ 2>/dev/null; then
+    DIRTY=true
+  elif git -C "$SCRIPT_DIR" status --porcelain -- agents/ scripts/ bin/ rules-core/ 2>/dev/null | grep -q '^??'; then
+    DIRTY=true
+  fi
+  if [[ "$DIRTY" == "true" ]]; then
+    DIRTY_FILES="$(git -C "$SCRIPT_DIR" diff --name-only HEAD -- agents/ scripts/ bin/ rules-core/ 2>/dev/null)"
+    echo "ERROR: install.sh aborted — uncommitted changes in install-managed paths:" >&2
+    echo "$DIRTY_FILES" >&2
+    echo "Commit or stash these changes before running install.sh (or set CAST_INSTALL_FORCE=1 to bypass)." >&2
+    exit 1
+  fi
+fi
+
 # --- Colors ---
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -25,7 +46,6 @@ for arg in "$@"; do
 done
 
 # --- Paths ---
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 BACKUP_DIR="$CLAUDE_DIR/backups/$(date +%Y%m%d-%H%M%S)"
 

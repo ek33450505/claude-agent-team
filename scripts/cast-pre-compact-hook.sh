@@ -68,9 +68,24 @@ PYEOF
 # Skip if not in a git repo (graceful pass-through).
 # Set CAST_ALLOW_DIRTY_COMPACT=1 to bypass (audit-logged to cast.db).
 if [[ "${CAST_ALLOW_DIRTY_COMPACT:-0}" == "1" ]]; then
-  # Audit-log bypass to cast.db so it's traceable, then continue.
-  bash ~/.claude/scripts/cast-events.sh log "precompact_bypass" "CAST_ALLOW_DIRTY_COMPACT=1" 2>/dev/null || true
-  # Skip the dirty-tree block; proceed with normal pre-compact flow.
+  # Log bypass event to cast.db for audit trail.
+  python3 - <<'PYEOF' 2>/dev/null || true
+import os, sqlite3
+from datetime import datetime, timezone
+db_path = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+try:
+    conn = sqlite3.connect(os.path.expanduser(db_path), timeout=5)
+    conn.execute(
+        "INSERT INTO routing_events (session_id, event_type, data, timestamp) VALUES (?, ?, ?, ?)",
+        (os.environ.get('CLAUDE_SESSION_ID', 'unknown'), 'dirty_compact_bypass',
+         'CAST_ALLOW_DIRTY_COMPACT=1 set; dirty check skipped', datetime.now(timezone.utc).isoformat())
+    )
+    conn.commit()
+    conn.close()
+except Exception:
+    pass
+PYEOF
+  exit 0
 else
   if git rev-parse --git-dir > /dev/null 2>&1; then
       # Check for staged changes

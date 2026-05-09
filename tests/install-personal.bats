@@ -15,14 +15,15 @@ teardown() {
 }
 
 # Helper: run install.sh without --personal
+# CAST_INSTALL_FORCE=1 bypasses the dirty-tree guard so tests can run in any working-tree state.
 run_install_core() {
-  bash "$REPO_DIR/install.sh" 2>&1
+  CAST_INSTALL_FORCE=1 bash "$REPO_DIR/install.sh" 2>&1
   return $?
 }
 
 # Helper: run install.sh with --personal
 run_install_personal() {
-  bash "$REPO_DIR/install.sh" --personal 2>&1
+  CAST_INSTALL_FORCE=1 bash "$REPO_DIR/install.sh" --personal 2>&1
   return $?
 }
 

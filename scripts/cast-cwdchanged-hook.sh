@@ -52,6 +52,7 @@ import json, os
 output = {
     "hookSpecificOutput": {
         "hookEventName": "CwdChanged",
+        "additionalContext": "",
         "environment": {
             "CAST_REPO_CLASS": os.environ.get("REPO_CLASS", "personal")
         }
