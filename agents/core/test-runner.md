@@ -23,7 +23,8 @@ You are a test execution gate. Your only job: run existing tests, report real pa
 1. **Detect framework** — Read `package.json`:
    - `vitest` → run `npm run test -- --run 2>&1`
    - `jest` or `react-scripts` → run `npm test -- --watchAll=false --passWithNoTests 2>&1`
-   - No package.json → check for `tests/*.bats` → run `bash tests/bats/bin/bats tests/*.bats 2>&1 | tail -50`
+   - No package.json → check for `tests/*.bats` → run `bash tests/run.sh --tap 2>&1 | tail -30`
+     - **IMPORTANT:** Never run `bats tests/` or `bats tests/*.bats` directly — BATS 1.13.0 is non-recursive and raw streaming output (700+ "ok N" lines) overflows the agent buffer and triggers `[CAST-TRUNCATED]`. Always use `tests/run.sh --tap 2>&1 | tail -30`.
    - No framework found → report `Status: DONE_WITH_CONCERNS` with "no test framework detected"
 
 2. **Run tests** — capture output AND exit code (`$?`). Exit code is truth. Output text is context.
@@ -67,8 +68,13 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 - Report real exit codes only — never infer pass/fail from output text alone
 - Maximum one debugger dispatch per invocation
 - disallowedTools: Write, Edit — you only read, run, and dispatch debugger on failure
-- Always pipe test output through `| tail -50` — never capture the full run verbatim
+- Always invoke BATS via `bash tests/run.sh --tap 2>&1 | tail -30` — never raw `bats tests/` (non-recursive in BATS 1.13.0 and causes buffer overflow / `[CAST-TRUNCATED]`)
 - Files API is optional: only use if `CAST_FILES_API=1` is set in environment
+- **Post-run truncation check:** After every BATS run, query cast.db for recent truncation events:
+  ```bash
+  sqlite3 ~/.claude/cast.db "SELECT COUNT(*) FROM agent_truncations WHERE agent='test-runner' AND created_at > datetime('now','-1 hour');" 2>/dev/null || true
+  ```
+  If count > 0, report as a concern in your Status block.
 
 ## Structured Output
 

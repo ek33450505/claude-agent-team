@@ -45,7 +45,10 @@ CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo
 if [ "$CURRENT_VERSION" -ge 8 ]; then
   # Additive migration: create stream_events and stream_hook_events if missing
   # Also add model_used column to agent_runs if missing (Ollama contractor routing)
+  # Also add cache token columns if missing (Task 0a: token optimization)
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cache_read_input_tokens INTEGER;" 2>/dev/null || true
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cache_creation_input_tokens INTEGER;" 2>/dev/null || true
   sqlite3 "$DB_PATH" <<'STREAM_TABLES'
 CREATE TABLE IF NOT EXISTS stream_events (
   id                  TEXT PRIMARY KEY,
@@ -282,7 +285,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   agent_id        TEXT,
   batch_id        INTEGER,
   model_used      TEXT,
-  response        TEXT
+  response        TEXT,
+  cache_read_input_tokens INTEGER,
+  cache_creation_input_tokens INTEGER
 );
 
 -- Routing events: structured event log

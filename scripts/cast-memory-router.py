@@ -149,9 +149,17 @@ def invalidate_memory(memory_id):
     )
 
 
-def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False, fts_only=False):
-    """Return top-N memories for agent, ranked by relevance. Includes shared pool and user_profile (global) facts."""
+def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False, fts_only=False, agent_type=None):
+    """Return top-N memories for agent, ranked by relevance. Includes shared pool and user_profile (global) facts.
+
+    If agent_type is one of (commit, push, merge, code-reviewer), exclude type IN ('project', 'reference').
+    For other agent types, no filtering is applied.
+    """
     conn = _connect()
+
+    # Determine if we should filter out project/reference for lightweight agents
+    lightweight_agents = {'commit', 'push', 'merge', 'code-reviewer'}
+    should_filter = agent_type in lightweight_agents if agent_type else False
 
     # Check FTS availability
     has_fts = conn.execute(
@@ -170,8 +178,15 @@ def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=
     else:
         temporal_clause = ""
 
-    type_clause = "AND am.type = ?" if type_filter else ""
-    type_params = (type_filter,) if type_filter else ()
+    # Type filter: either explicit --type filter OR implicit lightweight-agent filter
+    type_params = ()
+    if type_filter:
+        type_clause = "AND am.type = ?"
+        type_params = (type_filter,)
+    elif should_filter:
+        type_clause = "AND am.type NOT IN ('project', 'reference')"
+    else:
+        type_clause = ""
 
     rows = []
 
@@ -289,6 +304,8 @@ def main():
                         help='Include superseded (valid_to IS NOT NULL) memories in retrieve mode')
     parser.add_argument('--fts-only', action='store_true', default=False,
                         help='Skip Ollama embed call; use cosine_sim=0.0 (faster, ~10-30ms)')
+    parser.add_argument('--agent-type', type=str, default=None,
+                        help='Agent type for filtering (commit|push|merge|code-reviewer excludes project/reference types)')
     parser.add_argument('--invalidate', type=int, default=None, metavar='ID',
                         help='Mark memory with given ID as superseded (sets valid_to=now) and exit')
     args = parser.parse_args()
@@ -358,7 +375,8 @@ def main():
             results = retrieve_memories(prompt, agent, top_n=args.top_n,
                                         type_filter=type_filter,
                                         include_history=args.history,
-                                        fts_only=args.fts_only)
+                                        fts_only=args.fts_only,
+                                        agent_type=args.agent_type)
 
             # Get column names for building output dicts
             col_rows = db_query("PRAGMA table_info(agent_memories)")

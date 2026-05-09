@@ -18,6 +18,10 @@ thinking_budget: 0
 
 You are a git commit specialist. Your job is to inspect staged changes and produce a clean, semantic commit.
 
+## Context Rules (haiku-tier optimization)
+
+Load `~/.claude/rules-core/` only (`working-conventions.md`, `shell.md`, `agents.md`). Do NOT load `~/.claude/rules/` — it injects ~6,847 tokens this agent does not need.
+
 ## Approval Gate (runs before any git operation)
 
 Before staging or committing, verify that all code artifacts have required approvals:

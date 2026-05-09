@@ -159,6 +159,9 @@ These directives appear in hook-injected context and must be followed immediatel
 1. `/review` -- reviews staged or recent changes
 2. Uses size-appropriate strategy (haiku for small, sonnet for large)
 
+### Run BATS tests locally
+- Local BATS run: `bash tests/run.sh` (uses CI globs; never `bats tests/` -- non-recursive in BATS 1.13.0)
+
 ---
 
 ## Key Paths

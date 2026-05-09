@@ -25,8 +25,10 @@ AGENTS_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/core" && pwd)"
   grep -q "^effort:" "$AGENTS_DIR/commit.md"
 }
 
-@test "debugger has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/debugger.md"
+@test "debugger does NOT have effort field (Task 3.4 — N/A on sonnet)" {
+  # Task 3.4 (CAST v7 Phase 3): effort field removed from sonnet-tier agents.
+  # Only Opus reads the effort field; debugger is sonnet, so the field is dead weight.
+  ! grep -q "^effort:" "$AGENTS_DIR/debugger.md"
 }
 
 @test "devops has effort field" {
@@ -49,8 +51,9 @@ AGENTS_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/core" && pwd)"
   grep -q "^effort:" "$AGENTS_DIR/morning-briefing.md"
 }
 
-@test "planner has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/planner.md"
+@test "planner does NOT have effort field (Task 3.4 — N/A on sonnet)" {
+  # Task 3.4 (CAST v7 Phase 3): effort field removed from sonnet-tier agents.
+  ! grep -q "^effort:" "$AGENTS_DIR/planner.md"
 }
 
 @test "push has effort field" {

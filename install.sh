@@ -168,6 +168,21 @@ if [ "$INSTALL_PERSONAL" = true ] && [ -d "$SCRIPT_DIR/rules-personal" ]; then
     done
 fi
 
+# --- Install rules-core (haiku-tier subset) ---
+info "Installing rules-core (haiku-tier subset)..."
+mkdir -p "$CLAUDE_DIR/rules-core"
+if [ -d "$SCRIPT_DIR/rules/core" ]; then
+    for rule_file in "$SCRIPT_DIR"/rules/core/*; do
+        [ -f "$rule_file" ] || continue
+        base="$(basename "$rule_file")"
+        dest="$CLAUDE_DIR/rules-core/$base"
+        cp "$rule_file" "$dest"
+        success "  Synced: rules-core/$base"
+    done
+else
+    info "  rules/core/ directory not found (non-fatal)"
+fi
+
 # --- Install scripts (chmod +x) ---
 info "Installing scripts..."
 for script_file in "$SCRIPT_DIR"/scripts/*; do
