@@ -31,11 +31,11 @@ Expected output:
 ==> Installing cast
   CAST Installer (v6.0)
 
-  ✓ Installed 31 agents -> ~/.claude/agents/
-  ✓ Installed 12 slash commands -> ~/.claude/commands/
-  ✓ Installed 8 skills -> ~/.claude/skills/
-  ✓ Installed 28 hook scripts -> ~/.claude/scripts/
-  ✓ Installed 7 rules -> ~/.claude/rules/
+  ✓ Installed 30 agents -> ~/.claude/agents/
+  ✓ Installed 20 slash commands -> ~/.claude/commands/
+  ✓ Installed 18 skills -> ~/.claude/skills/
+  ✓ Installed hook scripts -> ~/.claude/scripts/
+  ✓ Installed 12 rules -> ~/.claude/rules/
   ✓ Wired settings.json (hooks, permissions)
   CAST v6.0 installed.
 ```
@@ -61,14 +61,14 @@ cast status
 Expected output (abbreviated):
 
 ```
-CAST v6.0 — Status
-──────────────────────────────────────────
-Agents loaded:       31
-Hook events wired:   16
-cast.db tables:      29
-Session ID:          ses_01Xabc...
-──────────────────────────────────────────
-All systems nominal.
+CAST v6.0
+======================================================================
+Agents      30 installed
+Hooks       29 active
+Spend       $0.00 today  $X.XX this week
+Budget      not configured (run cast init-repo)
+Memory      N entries | ...
+======================================================================
 ```
 
 If you see `command not found: cast`, ensure `~/.local/bin` is on your `$PATH`:

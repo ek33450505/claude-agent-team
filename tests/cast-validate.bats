@@ -257,3 +257,27 @@ PYEOF
   [ "$status" -eq 2 ]
   assert_output --partial "pre-tool-guard.sh"
 }
+
+# ---------------------------------------------------------------------------
+# 7. Help flag tests
+# ---------------------------------------------------------------------------
+
+@test "cast-validate.sh --help exits 0" {
+  run bash "$VALIDATE_SH" --help
+  [ "$status" -eq 0 ]
+}
+
+@test "cast-validate.sh --help output contains Usage:" {
+  run bash "$VALIDATE_SH" --help
+  assert_output --partial "Usage:"
+}
+
+@test "cast-validate.sh -h exits 0" {
+  run bash "$VALIDATE_SH" -h
+  [ "$status" -eq 0 ]
+}
+
+@test "cast-validate.sh -h output contains Usage:" {
+  run bash "$VALIDATE_SH" -h
+  assert_output --partial "Usage:"
+}
