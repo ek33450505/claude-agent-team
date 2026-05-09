@@ -6,7 +6,6 @@ description: >
   knowledge base over time.
 tools: Read, Write, Bash, Glob, Grep, WebSearch, WebFetch
 model: sonnet
-effort: high
 color: gold
 memory: local
 maxTurns: 25

@@ -7,7 +7,7 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-30-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-793-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-859-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -377,6 +377,6 @@ The following capabilities were audited but deferred pending dependency updates 
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->812<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->859<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills

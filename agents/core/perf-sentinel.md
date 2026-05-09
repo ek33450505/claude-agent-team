@@ -5,7 +5,6 @@ description: >
   of recent changes, and suggests git bisect targets for identified regressions.
 tools: Read, Bash, Glob, Grep
 model: sonnet
-effort: high
 color: magenta
 memory: local
 maxTurns: 25
