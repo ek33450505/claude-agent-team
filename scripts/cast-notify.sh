@@ -19,6 +19,40 @@ set -euo pipefail
 # Guards
 if [ "${CAST_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 
+# --- Help handler ---
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      cat <<'USAGE'
+Usage: cast-notify.sh <event_type> [message] [title]
+
+Send native desktop notifications for CAST events.
+Integrates with macOS osascript and Linux notify-send.
+
+Event types:
+  blocked           - Agent blocked, needs user attention
+  queue_complete    - All queued tasks finished
+  budget_alert      - Spending threshold exceeded
+  briefing_ready    - Morning briefing is available
+
+Arguments:
+  event_type        Event type (required)
+  message           Notification message (optional)
+  title             Notification title (optional, default: "CAST")
+
+Options:
+  --help, -h        Show this help message and exit
+
+Respects notifications.json configuration for:
+  - Global enable/disable
+  - Per-event enabling
+  - Quiet hours (budget_alert bypasses quiet hours)
+USAGE
+      exit 0
+      ;;
+  esac
+done
+
 CAST_DIR="${HOME}/.claude/cast"
 NOTIFY_QUEUE_FILE="${CAST_DIR}/notify-queue.json"
 NOTIFICATIONS_CONFIG="${HOME}/.claude/config/notifications.json"

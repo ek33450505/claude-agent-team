@@ -8,6 +8,8 @@ This document records framework-level limitations that are not bugs but rather c
 
 > **Resolved (partially) 2026-04-16:** The orchestrator agent was retired. Plan execution now runs via the `/orchestrate` skill in the main session, which eliminates the subagent-specific SendMessage gap. However, if the main session itself is dropped mid-execution, the same constraint applies to any subagent it has dispatched.
 
+> **Partially resolved — v7 Phase 1 (2026-05-08):** Three additional friction points were addressed: (1) `push`, `install`, and `compact` operations now run with `bypassPermissions` mode so agent-initiated pushes no longer stall mid-chain waiting for user approval; (2) PII redaction via `cast-redact.py` prevents session tokens and API keys from being logged to `cast.db` or hook output, reducing the blast radius of a dropped/replayed session; (3) the `pre_approved: true` manifest flag is now the documented default for long-running plans. The core gap — inability to resume a dropped subagent session — remains open at the Claude Code runtime level.
+
 **Symptom:** If the main session is dropped mid-execution (network error, timeout, process kill), dispatched specialist subagents cannot be resumed via `SendMessage`.
 
 **Root cause:** Claude Code's `Agent` tool does not expose a `SendMessage` / continuation mechanism for already-running subagent contexts. When a subagent's session ends, it ends permanently.
@@ -26,6 +28,8 @@ This document records framework-level limitations that are not bugs but rather c
 ---
 
 ## 2. Agent Tool Unavailable at Nesting Depth >= 3
+
+> **Status as of v7 Phase 1 (2026-05-08):** Still accurate. Claude Code enforces nesting depth limits on tool availability and there is no known upstream change to this behavior. The workarounds below remain the recommended mitigations.
 
 **Symptom:** Agents nested 3+ levels deep (main session → specialist agent → sub-agent) may not have access to the `Agent` tool, causing self-dispatch chains to silently fail.
 

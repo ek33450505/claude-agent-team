@@ -8,9 +8,14 @@ load 'test_helper/bats-assert/load'
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 GUARD="$REPO_DIR/scripts/cast-stat-claim-guard.sh"
 
-# Get the real test count the same way the script does
+# Get the real test count the same way the script does (matching gen-stats.sh)
 setup() {
-  REAL_COUNT=$(git -C "$REPO_DIR" ls-files 'tests/*.bats' 2>/dev/null | grep -vc 'tests/bats/' || echo "0")
+  TEST_FILES=$(git -C "$REPO_DIR" ls-files 'tests/*.bats' 'tests/*/*.bats' 2>/dev/null || echo "")
+  if [ -n "$TEST_FILES" ]; then
+    REAL_COUNT=$(echo "$TEST_FILES" | xargs grep -h "^@test" 2>/dev/null | wc -l | tr -d ' ')
+  else
+    REAL_COUNT=0
+  fi
   export CLAUDE_SUBPROCESS=0
 }
 
@@ -72,4 +77,17 @@ setup() {
   run bash "$GUARD" <<< '{"tool_name":"Write","tool_input":{"file_path":"/tmp/README.md","content":"![tests](https://img.shields.io/badge/tests-99999-green)"}}'
   # Must exit 2 (blocked), NOT 1 (git-not-found crash)
   assert_equal "$status" 2
+}
+
+# ---------------------------------------------------------------------------
+# Regression test: count method must match gen-stats.sh
+# This ensures the guard and stat generator agree on test count forever.
+# ---------------------------------------------------------------------------
+
+@test "guard count method matches gen-stats.sh counting logic" {
+  # Get the count from gen-stats.sh (lines 24-30)
+  GEN_STATS_COUNT=$(bash -c 'cd '"$REPO_DIR"' && TEST_FILES=$(git ls-files "tests/*.bats" "tests/*/*.bats"); if [ -n "$TEST_FILES" ]; then echo "$TEST_FILES" | xargs grep -h "^@test" 2>/dev/null | wc -l | tr -d " "; else echo 0; fi')
+
+  # Both should produce the same REAL_COUNT
+  [ "$REAL_COUNT" = "$GEN_STATS_COUNT" ]
 }

@@ -31,7 +31,7 @@ Agent Teams (Anthropic Native)
 | No cross-agent messaging | Peer gossip protocol (cast.db message bus) | Agents collaborate without central broker |
 | Hook system exists | Production-hardened hooks: TeammateIdle, TaskCreated, TaskCompleted, WorktreeCreate | Real-time swarm lifecycle events |
 | Model selection per-session | Per-task routing: Haiku → Ollama (cheap), Sonnet → Claude (smart) | Automatic cost optimization |
-| No persistent audit trail | `cast.db` v8: swarm_sessions, teammate_runs, teammate_messages, with temporal indices | Queryable, immutable swarm history |
+| No persistent audit trail | `cast.db` v8: 31 tables including swarm_sessions, teammate_runs, teammate_messages, agent_runs, routing_events, agent_memories, quality_gates, parry_guard_events, worktree_anomalies, and more — with temporal indices | Queryable, immutable swarm history |
 | No visual observability | Constellation Dashboard: force-directed agent graph + task satellites (React 19 + D3) | Live swarm topology + task flow |
 | No agent response schema | Structured Output JSON schemas (`schemas/`) defining status-block, work-log, routing-event contracts | Machine-readable agent response contract for API pipelines |
 
@@ -115,3 +115,24 @@ Message types:
 - **idle_event** — Agent is waiting for next task
 
 All messages are logged to `teammate_messages` table with timestamps, enabling full swarm replay and debugging.
+
+---
+
+## Memory Pipeline
+
+CAST persists agent-discovered knowledge across sessions via `cast-memory-router.py`:
+
+**Save flow (SubagentStop hook):**
+1. Agent emits a `## Facts` block in its response (pipe-delimited: `name | type | content`)
+2. `post-tool-hook.sh` fires on `SubagentStop`, extracts the Facts block
+3. `cast-memory-router.py` validates each entry (slug name, known type, ≤500 char content) and writes to `agent_memories` table in `cast.db`
+4. Malformed lines are skipped silently; valid entries are upserted by name
+
+**Retrieval flow (SessionStart / UserPromptSubmit hooks):**
+1. `cast-user-prompt-hook.sh` calls `cast-memory-router.py --query` with the incoming prompt text
+2. Router searches `agent_memories` using keyword matching; high-confidence entries (confidence ≥ 0.7) are injected into session context
+3. Agent definitions also read their own `~/.claude/agent-memory-local/<agent>/MEMORY.md` file at task start for agent-scoped persistent memory
+
+**Memory types:** `user`, `feedback`, `project`, `reference`, `procedural`
+
+**DB table:** `agent_memories` — columns: `name` (slug, unique), `type`, `content`, `description`, `confidence`, `created_at`, `updated_at`

@@ -62,6 +62,8 @@ Verbose per-file enumeration (e.g., "src/auth.ts (142 lines)", "src/utils.ts (88
 
 ## `thinking_budget` on haiku agents
 
+> **Model name:** All haiku agents use `claude-haiku-4-5` (canonical since April 2026; Haiku 3 retired). When authoring or editing agent frontmatter, use `model: claude-haiku-4-5` — never `haiku-3` or `claude-haiku-3`.
+
 Do NOT set `thinking_budget` on `model: haiku` agents. Thinking tokens count against the same output budget as response tokens. haiku's output budget is already tight; adding thinking overhead increases truncation risk.
 
 Agents affected by this rule: `test-writer`, `code-reviewer`, `bash-specialist`, `commit`, `push`, `test-runner`.

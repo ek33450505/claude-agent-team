@@ -8,6 +8,30 @@
 
 set -euo pipefail
 
+# --- Help handler ---
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      cat <<'USAGE'
+Usage: cast-validate.sh [--help|-h]
+
+CAST system integrity checker v2.1.0.
+Validates hook wiring, agent frontmatter, routing table schema,
+CLAUDE.md directives, CAST directory structure, and local-first readiness.
+
+Exit codes:
+  0 = all checks passed
+  1 = warnings only
+  2 = one or more errors
+
+Options:
+  --help, -h    Show this help message and exit
+USAGE
+      exit 0
+      ;;
+  esac
+done
+
 VERSION="2.1.0"
 ERRORS=0
 WARNINGS=0

@@ -35,6 +35,7 @@ get_agent_color() {
     meeting-prep)      code="38;5;39"  ;;  # blue (distinct from push 33 and api-contract 27)
     migration-reviewer) code="38;5;99" ;;  # purple (distinct from orchestrator 135, knowledge-curator 141)
     perf-sentinel)     code="38;5;164" ;;  # magenta
+    portfolio-sync)    code="38;5;81"  ;;  # aqua (sync/writer class)
     pr-narrator)       code="38;5;218" ;;  # pink
     release-notes)     code="38;5;51"  ;;  # cyan (distinct from code-reviewer 36)
     standup-writer)    code="38;5;112" ;;  # green (distinct from test-runner 32)

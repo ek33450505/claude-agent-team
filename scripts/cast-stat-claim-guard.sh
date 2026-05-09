@@ -29,8 +29,14 @@ if ! echo "$CONTENT" | grep -qiE "tests-[0-9]+|badge.*test.*[0-9]+" ; then
   exit 0
 fi
 
-# Get the actual test count from git ls-files
-REAL_COUNT=$(git ls-files 'tests/*.bats' 2>/dev/null | grep -vc 'tests/bats/' || echo "0")
+# Get the actual test count from git ls-files by counting @test annotations
+# (matches the method in gen-stats.sh lines 24-30)
+TEST_FILES=$(git ls-files 'tests/*.bats' 'tests/*/*.bats' 2>/dev/null || echo "")
+if [ -n "$TEST_FILES" ]; then
+  REAL_COUNT=$(echo "$TEST_FILES" | xargs grep -h "^@test" 2>/dev/null | wc -l | tr -d ' ')
+else
+  REAL_COUNT=0
+fi
 
 # Extract the claimed count from the badge string (pattern: tests-(\d+)-)
 CLAIMED_COUNT=$(echo "$CONTENT" | grep -oE "tests-[0-9]+" | head -1 | sed 's/tests-//' || echo "")
@@ -50,5 +56,5 @@ fi
 
 # Counts differ — block and explain
 DIFF=$((CLAIMED_COUNT - REAL_COUNT))
-echo "[CAST STAT GUARD] Badge claims $CLAIMED_COUNT tests but git ls-files finds $REAL_COUNT. Difference: $DIFF. Update the badge before proceeding. (See: feedback_bats_count_method.md)" >&2
+echo "[CAST STAT GUARD] Badge claims $CLAIMED_COUNT tests but actual @test count is $REAL_COUNT. Difference: $DIFF. Update the badge before proceeding. (See: feedback_bats_count_method.md)" >&2
 exit 2

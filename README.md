@@ -7,13 +7,11 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-30-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-74-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-793-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-> CAST turns Claude Code into a team: define a workflow once, let specialist agents plan,
-> implement, review, test, and commit — automatically — while a local audit log tells you
-> exactly what happened and why.
+> CAST is a production control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with 31 tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (30 agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
 
 **[CAST Framework](https://castframework.dev)**
 
@@ -21,11 +19,21 @@
 
 ## Installation
 
+### Homebrew
+
 ```bash
 brew tap ek33450505/cast && brew install cast
 ```
 
-Or clone + install: `git clone https://github.com/ek33450505/claude-agent-team.git && bash install.sh`
+### Manual install
+
+```bash
+git clone https://github.com/ek33450505/claude-agent-team.git
+cd claude-agent-team
+bash install.sh
+```
+
+This is for users who don't use Homebrew or want to install directly from source.
 
 ---
 
@@ -113,7 +121,7 @@ CAST transforms Agent Teams into a **production control plane:**
 
 ## Architecture
 
-CAST operates alongside Anthropic Agent Teams: Anthropic handles execution parallelism, CAST handles definition, composition, and observability. See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) for the full guide including Agent Teams comparison table.
+Every CAST operation follows a four-stage flow: (1) **hook validation** — pre-tool hooks enforce quality gates and block non-compliant writes before any change lands; (2) **agent dispatch** — the typed agent registry routes work to the correct model tier (haiku 4.5 for review/commit, sonnet for implementation, opus for migration review); (3) **memory injection** — each agent receives relevant prior-session context from its `~/.claude/agent-memory-local/<name>/MEMORY.md` on startup; (4) **cast.db audit** — every session, routing decision, quality gate result, and token spend is appended to the local SQLite database. See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) for the full guide including Agent Teams comparison table.
 
 <p align="center">
   <img src="docs/architecture/cast-architecture.svg" alt="CAST swarm architecture" />
@@ -369,6 +377,6 @@ The following capabilities were audited but deferred pending dependency updates 
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->772<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->793<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
