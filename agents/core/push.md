@@ -51,6 +51,8 @@ git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-c
 
 Do NOT attempt Step 2.5 without the override. If you cannot set `dangerouslyDisableSandbox: true` for any reason (tool-call policy, user restriction), SKIP the test gate with a clear warning log; do NOT hang the push pipeline.
 
+**Skip-tests directive:** If the caller's prompt explicitly contains `skip tests`, `no tests`, or `don't run BATS`, do NOT run the test suite. Log `[Test gate] Skipped — caller requested no tests` and proceed directly to Step 3. Only invoke the test suite when the caller's prompt does not mention tests, or when the caller explicitly asks for tests.
+
 Auto-detect and run the repo's test suite before pushing. This prevents pushing code that breaks CI.
 
 Detection logic (check in order, run the FIRST match):
@@ -154,4 +156,4 @@ Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py
 - Always show the commit list before pushing so the user knows what's going out
 - Use `CAST_PUSH_OK=1` as the LEADING prefix on every git push command
 - For personal repos where the push agent is unavailable: use `CAST_PUSH_OK=1 git -C <repo-path> push origin main` directly.
-- ALWAYS run the test gate before pushing — never skip it even if the user says "just push"
+- ALWAYS run the test gate before pushing — UNLESS the caller's prompt explicitly contains `skip tests`, `no tests`, or `don't run BATS`, in which case skip the gate and log the reason

@@ -1,5 +1,12 @@
 name: Sync README Badges
 
+# REQUIRES MANUAL REPO SETTING:
+#   Settings → Actions → General → Workflow permissions:
+#   "Allow GitHub Actions to create and approve pull requests" must be CHECKED.
+# Without this, the `gh pr create` step in this workflow fails with:
+#   "GitHub Actions is not permitted to create or approve pull requests"
+# This is a one-time toggle per repo. See PR #29 follow-up.
+
 on:
   push:
     branches: [main]

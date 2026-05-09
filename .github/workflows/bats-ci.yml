@@ -43,8 +43,7 @@ jobs:
           cp scripts/*.py ~/.claude/scripts/
           chmod +x ~/.claude/scripts/*.sh
       - name: Run contract tests
-        run: bash scripts/cast-contract-runner.sh commit 2>/dev/null || true
-        continue-on-error: true
+        run: bash scripts/cast-contract-runner.sh commit 2>/dev/null
 
   hook-contract-validation:
     needs: bats
