@@ -6,7 +6,8 @@
 # cast-validate-hook-contracts.sh, and aggregates results.
 #
 # Usage:
-#   bash scripts/cast-validate-all-hooks.sh               # uses ~/.claude/settings.json
+#   bash scripts/cast-validate-all-hooks.sh               # uses ~/.claude/settings.json (default)
+#   bash scripts/cast-validate-all-hooks.sh --runtime     # uses ~/.claude/settings.json (explicit)
 #   bash scripts/cast-validate-all-hooks.sh --source      # uses repo settings.json
 #
 # Exit: 0 = all ok, 1 = warnings, 2 = at least one hook failed contract
@@ -26,12 +27,36 @@ if [[ ! -f "$VALIDATOR" ]]; then
 fi
 
 # ── Parse flags ───────────────────────────────────────────────────────────
-USE_SOURCE=0
+# --runtime: use ~/.claude/settings.json (default if no flag)
+# --source:  use repo settings.json
+MODE="runtime"
 for arg in "$@"; do
-  [[ "$arg" == "--source" ]] && USE_SOURCE=1
+  case "$arg" in
+    --runtime) MODE="runtime" ;;
+    --source)  MODE="source" ;;
+    --help|-h)
+      cat <<'HELP'
+cast-validate-all-hooks.sh — validate hook contracts
+
+Usage:
+  bash scripts/cast-validate-all-hooks.sh [--runtime|--source]
+
+Flags:
+  --runtime    Validate ~/.claude/scripts/ hooks (reads ~/.claude/settings.json) [default]
+  --source     Validate repo scripts/ hooks (reads repo settings.json)
+  --help, -h   Show this message
+
+Exit:
+  0 = all ok
+  1 = warnings (non-fatal)
+  2 = at least one hook failed contract validation
+HELP
+      exit 0
+      ;;
+  esac
 done
 
-if [[ "$USE_SOURCE" == "1" ]]; then
+if [[ "$MODE" == "source" ]]; then
   SETTINGS_FILE="$REPO_DIR/settings.json"
 else
   SETTINGS_FILE="$HOME/.claude/settings.json"

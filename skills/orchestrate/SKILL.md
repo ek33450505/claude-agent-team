@@ -310,6 +310,19 @@ dispatch. In team-lead mode:
 This is additive — the existing dispatch model remains the default. Agent Teams is an
 opt-in enhancement for parallel batches that benefit from peer-to-peer coordination.
 
+## Truncation Fallback for Gate Agents
+
+If `[CAST-TRUNCATED]` fires on a read-only gate agent (test-runner, code-reviewer, security):
+
+1. **Do NOT auto-retry** — the truncation note says "do NOT auto-retry expensive agents."
+2. **Inline fallback is permitted:**
+   - For test-runner: run `bash tests/run.sh --tap 2>&1 | tail -20` inline and report counts.
+   - For code-reviewer: read changed files, apply code-review checklist manually.
+   - For security: grep for known anti-patterns (hardcoded keys, SQL injection, shell injection), defer deep reasoning review to next session.
+3. **Log the fallback** in the Work Log as a concern: mark `Status: DONE_WITH_CONCERNS` and note which gate ran inline.
+4. **Log to cast.db** as: `agent_name = '<role>-INLINE-FALLBACK'`, `contract_passed = 1` if the inline check found no issues, else `0`.
+5. **If inline fallback cannot complete**, mark the batch `BLOCKED` and stop — do not attempt to continue.
+
 ## Rules
 
 - Never skip a batch unless the user explicitly says to

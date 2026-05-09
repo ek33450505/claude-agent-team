@@ -169,10 +169,24 @@ The repo hasn't had a full documentation pass since v4.6. Before v7.0.0 ships pu
 ## Phase 3 — Token & Cost Optimization
 **Effort:** 3–5 hours | **Branch:** `feature/cast-v7-phase-3-tokens`
 
-From `research/2026-05-07-token-optimization.md`. Hook output compression landed in Phase 5. Three items remain.
+From `research/2026-05-07-token-optimization.md`. Hook output compression landed in Phase 5. Three items remain — plus carryover from Phase 2 below.
+
+### 3.0 — Discovery / measurement gate (NEW — added post-Phase-2, READ FIRST)
+
+Phase 2 caught a master-plan claim of "13 missing CHEATSHEET agents" that turned out to be 1 in reality. Lesson carried forward: every Phase 3 task quotes a number (~7,500 tokens, 4,000–5,000 savings, 10x cost reduction). **Measure before cutting.** Before any 3.1–3.4 work, run:
+
+1. `cast status` token counter snapshot for: 1 haiku dispatch, 1 sonnet dispatch, 1 opus dispatch. Record actual injected token sizes.
+2. Decompose: how many of those tokens are CLAUDE.md vs `rules/*.md` vs agent frontmatter vs memory injection? Use `wc -c` and a quick token-rough estimate (chars/4).
+3. Pin numbers to `/tmp/cast-v7-phase3-token-baseline.txt` and reference them in every 3.x prompt.
+
+If the actual baseline shows `rules/` injection is <3,000 tokens (not 7,500), Section 3.1 is not high-impact — re-evaluate before doing the migration work.
+
+If the baseline shows it's higher than 7,500, the gain is bigger — say so.
+
+This 3.0 step is non-negotiable. It's the discovery-first pattern from Phase 2 made permanent.
 
 ### 3.1 — Rules deduplication / agent-tier routing (HIGH IMPACT)
-**Issue:** `~/.claude/rules/` injects ~7,500 tokens into every agent dispatch, including lightweight haiku agents (commit, push, merge) that only need CLAUDE.md + shell.md.  
+**Issue:** `~/.claude/rules/` injects ~7,500 tokens into every agent dispatch, including lightweight haiku agents (commit, push, merge) that only need CLAUDE.md + shell.md. **Verify the 7,500 number against 3.0's pinned baseline before proceeding.**
 **Fix:** Create `rules/core/` subset (~2,500 tokens: CLAUDE.md summary + shell.md + agent-specific). Lightweight agents (commit, push, merge, code-reviewer) load core only. Implementation agents (code-writer, debugger, planner, researcher) load full rules.  
 **Estimated savings:** 4,000–5,000 tokens/dispatch on haiku agents (~75% reduction for that tier).  
 **Note:** Verify via `cast status` token counter before/after.
@@ -191,6 +205,22 @@ From `research/2026-05-07-token-optimization.md`. Hook output compression landed
 **Issue:** `planner.md` and `debugger.md` have `effort: xhigh` despite being `model: sonnet` (effort field is silently ignored on non-Opus).  
 **Decision needed:** (a) Promote planner/debugger to `model: opus` + keep `effort: xhigh`, or (b) remove `effort: xhigh` from non-Opus agents and document as N/A.  
 **Recommendation:** Option (b) — clean up the frontmatter noise. Opus is expensive; sonnet is the right call for these agents unless a specific dispatch warrants it. Document in CLAUDE.md agent registry.
+
+### 3.5 — Phase 2 carryover (open issues + bugs)
+
+These surfaced during Phase 2 execution and are bundled into Phase 3 as opportunistic fixes — they all touch token cost / agent behavior in ways that align with the phase theme. Do NOT defer them past Phase 3.
+
+| # | Severity | Item | Location | Fix |
+|---|---|---|---|---|
+| C1 | LOW (security) | `event_enabled()` in `cast-notify.sh:98` interpolates `$EVENT_TYPE` into a `python3 -c` double-quoted string. Single-quote in `$1` breaks Python string boundary. Internal use only; low exploitability. | `scripts/cast-notify.sh:65` (validation) and `:98` (call site) | Add an `EVENT_TYPE` whitelist check at line 65: `case "$EVENT_TYPE" in blocked\|queue_complete\|budget_alert\|briefing_ready) ;; *) echo "Unknown event type: $EVENT_TYPE" >&2; exit 1 ;; esac`. Or pass via `sys.argv[1]` instead of interpolation. ~5 lines + 1 BATS regression test. |
+| C2 | MEDIUM (correctness) | Validator `--source` flag misnomer: `bash scripts/cast-validate-all-hooks.sh --source` reads runtime copies at `~/.claude/scripts/`, not repo source. Carried from Phase 1; would have caught Phase 1's cwd-changed regression sooner. | `scripts/cast-validate-all-hooks.sh` | Either (a) make `--source` actually read from `scripts/` (repo) and add a `--runtime` flag for the existing behavior, or (b) rename the existing flag to `--runtime` and add a new `--source` that reads repo. Add a BATS test that asserts `--source` reads from `scripts/<file>` and `--runtime` reads from `~/.claude/scripts/<file>`. The test is the rule from Phase 1's lesson "when I write a `--source` flag, the next thing I write should be a BATS test that asserts it reads from `scripts/`." |
+| C3 | LOW (DX) | `bats tests/` is non-recursive in BATS 1.13.0. Running it locally executes only 79 of 89 BATS files (719 of 793 tests). CI uses explicit globs and is fine, but the local invocation pattern misleads. | invocation pattern | Either: (a) add a `tests/run.sh` wrapper that uses CI's exact glob list, or (b) document the pattern in CONTRIBUTING.md and CHEATSHEET. Option (a) preferred — less drift risk. |
+| C4 | LOW (orchestration) | Phase 2 Batch 5 `test-runner` agent ran for 8.5 min on `bats tests/` and the `[CAST-TRUNCATED]` hook fired. Likely cause: BATS streams 700+ lines of `ok N` output and the agent's output buffer overflows. | `~/.claude/agents/core/test-runner.md` (or wherever the prompt lives) | Update the test-runner prompt to pipe BATS through `bats --tap` + summarize counts via grep, OR have it run targeted file lists. Either approach keeps the agent's buffer under the truncation threshold. Add a CI cast.db query to verify `agent_truncations` table doesn't show test-runner regressions. |
+| C5 | INFO (visibility) | 217 `cast-swarm-*` branches accumulated in the 2026-05-08 sessions. All under the 14-day shield, so `cast clean` won't touch them yet. They'll all become candidates on 2026-05-22. | branch hygiene | Either run `cast clean --apply` on 2026-05-22 manually, or add a calendar reminder. Long-term: research-tier agents (`researcher`, `bash-specialist`, `security`) still auto-isolate into worktrees+branches per the 2026-05-08 journal. Phase 4 (Agent Inventory) is the right place to revisit auto-isolation defaults. |
+| C6 | INFO (sunset hygiene) | `scripts/cast-cron-setup.sh` references `/Users/edkubiak/JARVIS/` as a backup destination path. `scripts/pa-weather-prefetch.sh` is a JARVIS output-target script left intentionally per `~/.claude/rules/project-catalog.md`. Both pre-date the JARVIS archive; both classified as not Rule 4 violations during Phase 2 review. | `scripts/cast-cron-setup.sh:45`, `scripts/pa-weather-prefetch.sh` (whole file) | Phase 4 (Agent Inventory + scripts/ inventory) decides whether to move these to `scripts/archive/` or leave alone. No action in Phase 3 unless they actively break something. |
+| C7 | INFO (process) | The `[CAST-TRUNCATED]` hook is correct and useful; orchestrator handled it well by running gates inline. But the pattern of "agent truncates → orchestrator falls back to inline" should be a documented escape hatch, not an ad-hoc move. | orchestrate skill | Add a section to `~/.claude/skills/orchestrate/SKILL.md` describing the fallback rule: "If `[CAST-TRUNCATED]` fires on a read-only gate agent (test-runner, code-reviewer, security), the orchestrator may run the gate's commands inline as a substitute." This formalizes what we did in Phase 2 Batch 5. |
+
+C1 + C2 are the only ones that touch executable behavior and need code-writer/bash-specialist dispatch. C3, C4, C7 are doc/skill updates. C5, C6 are deferrals to track. Treat C1 + C2 as required Phase 3 deliverables; the rest are bonus if there's time.
 
 ---
 

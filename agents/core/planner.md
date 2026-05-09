@@ -6,7 +6,7 @@ description: >
   returns a task list ready for delegation to agent teams.
 tools: Read, Write, Glob, Grep
 model: sonnet
-effort: high
+# effort field is N/A on sonnet — only Opus reads it
 color: cornflower
 memory: local
 maxTurns: 20

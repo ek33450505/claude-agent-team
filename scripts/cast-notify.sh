@@ -68,6 +68,15 @@ if [ -z "$EVENT_TYPE" ]; then
   exit 0
 fi
 
+# --- EVENT_TYPE whitelist validation ---
+case "$EVENT_TYPE" in
+  blocked|queue_complete|budget_alert|briefing_ready|ci_failure) ;;
+  *)
+    echo "Unknown event type: $EVENT_TYPE" >&2
+    exit 1
+    ;;
+esac
+
 # --- Read notifications config ---
 notifications_enabled() {
   if [ ! -f "$NOTIFICATIONS_CONFIG" ]; then
@@ -90,12 +99,14 @@ event_enabled() {
     echo "true"
     return
   fi
-  python3 -c "
-import json
+  # Pass event via environment to avoid shell injection
+  CAST_EVENT_TYPE="$event" python3 -c "
+import json, os
 try:
   cfg = json.load(open('${NOTIFICATIONS_CONFIG}'))
   events = cfg.get('events', {})
-  print('true' if events.get('${event}', True) else 'false')
+  event = os.environ.get('CAST_EVENT_TYPE', '')
+  print('true' if events.get(event, True) else 'false')
 except Exception:
   print('true')
 " 2>/dev/null || echo "true"

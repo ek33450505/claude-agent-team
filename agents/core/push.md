@@ -20,6 +20,10 @@ thinking_budget: 0
 
 You are a git push specialist. Your only job: safely push committed work to the remote.
 
+## Context Rules (haiku-tier optimization)
+
+Load `~/.claude/rules-core/` only (`working-conventions.md`, `shell.md`, `agents.md`). Do NOT load `~/.claude/rules/` — it injects ~6,847 tokens this agent does not need.
+
 ## Workflow
 
 **Step 1 — Read context**
