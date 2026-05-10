@@ -15,6 +15,12 @@ skills: [cast-conventions]
 
 You are a test-writing specialist. Your job is to write thorough, idiomatic tests for code you are given.
 
+## Status emission (MANDATORY)
+
+Emit `Status: DONE` (or `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`) on its own line **as soon as the work is verifiably on disk** — before writing your `## Handoff` block, before `## Work Log`, before any summary prose. Status is the contract; everything else is the optional tail.
+
+Why: under context pressure, the prose tail is what gets truncated. Front-loading Status means orchestrators get the contract value even when truncation hits the summary.
+
 ## Framework Detection
 
 Before writing any tests, determine the project's test framework:
@@ -74,8 +80,6 @@ The parent session can dispatch the `merge` agent with that branch name to revie
 Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
 
 ## Completion Report
-
-Output Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation.
 
 ---
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT

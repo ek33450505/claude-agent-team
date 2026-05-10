@@ -147,6 +147,7 @@ Subcommands:
   ${C_BOLD}clean${C_RESET}     [--apply] [--worktrees]   Prune stale branches (dry-run by default)
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
+  ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
 
 Global flags:
   --json        Machine-readable JSON output
@@ -781,6 +782,7 @@ _cmd_memory() {
     delete)   _memory_delete "$@" ;;
     forget)   _memory_forget "$@" ;;
     export)   _memory_export "$@" ;;
+    review)   _memory_review "$@" ;;
     --help|-h)
       cat <<USAGE
 Usage: cast memory <subcommand> [args]
@@ -792,11 +794,12 @@ Usage: cast memory <subcommand> [args]
   delete <id>                         Delete a memory entry
   forget <id>
   export
+  review            [--list] [--auto-promote]   Pending memory review TUI
 USAGE
       ;;
     *)
       _error "Unknown memory subcommand: $subcmd"
-      printf "  Use: cast memory search|list|verify|show|delete|forget|export\n" >&2
+      printf "  Use: cast memory search|list|verify|show|delete|forget|export|review\n" >&2
       return 1
       ;;
   esac
@@ -1035,6 +1038,18 @@ else:
   print("-" * 80)
   print(r['content'] or '(empty)')
 PYEOF
+}
+
+_memory_review() {
+  local script="${CAST_SCRIPTS_DIR}/cast-memory-review.sh"
+  if [ ! -f "$script" ]; then
+    script="${CAST_REPO_DIR}/scripts/cast-memory-review.sh"
+  fi
+  if [ ! -f "$script" ]; then
+    _error "cast-memory-review.sh not found"
+    return 1
+  fi
+  bash "$script" "$@"
 }
 
 _memory_delete() {
@@ -1293,10 +1308,152 @@ PYEOF
     overall_ok=0
   fi
 
-  # 8. Version
+  # 8. Database migrations
+  local migrate_script="${CAST_SCRIPTS_DIR}/cast-migrate.sh"
+  if [ ! -f "$migrate_script" ]; then
+    migrate_script="${CAST_REPO_DIR}/scripts/cast-migrate.sh"
+  fi
+  if [ -f "$migrate_script" ]; then
+    local migration_output
+    migration_output=$(bash "$migrate_script" 2>&1 || true)
+    local applied_count
+    applied_count=$(echo "$migration_output" | grep -c "^\[migrate\] applied" 2>/dev/null)
+    applied_count=${applied_count:-0}
+    local total_count
+    total_count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
+    printf "%b Migrations: %d applied this run, %d total recorded\n" "$INFO" "$applied_count" "$total_count"
+  else
+    printf "%b Migrations: script not found\n" "$WARN"
+  fi
+
+  # 9. Stale auto-memory check
+  local stale_output
+  stale_output=$(python3 << 'PYEOF' 2>/dev/null || echo "0"
+import os
+import re
+from datetime import datetime
+
+home = os.path.expanduser("~")
+projects_dir = os.path.join(home, ".claude", "projects")
+
+stale = []
+try:
+  for proj_dir in os.listdir(projects_dir):
+    memory_dir = os.path.join(projects_dir, proj_dir, "memory")
+    if not os.path.isdir(memory_dir):
+      continue
+
+    for fname in os.listdir(memory_dir):
+      if fname == "MEMORY.md" or not fname.endswith(".md"):
+        continue
+
+      fpath = os.path.join(memory_dir, fname)
+      try:
+        with open(fpath, 'r') as f:
+          content = f.read()
+      except:
+        continue
+
+      # Parse frontmatter
+      if not content.startswith('---'):
+        continue
+
+      parts = content.split('---')
+      if len(parts) < 3:
+        continue
+
+      frontmatter = parts[1]
+      body = '---'.join(parts[2:])
+
+      # Extract verified_at
+      verified_at = None
+      for line in frontmatter.split('\n'):
+        if line.startswith('verified_at:'):
+          match = re.search(r'(\d{4}-\d{2}-\d{2})', line)
+          if match:
+            verified_at = match.group(1)
+          break
+
+      if not verified_at:
+        continue
+
+      # Check age
+      try:
+        vdate = datetime.strptime(verified_at, '%Y-%m-%d')
+        today = datetime.utcnow()
+        age_days = (today - vdate).days
+      except:
+        continue
+
+      if age_days <= 30:
+        continue
+
+      # Check if body names paths/functions/flags
+      has_specific = bool(
+        re.search(r'/scripts/', body) or
+        re.search(r'~/.claude/', body) or
+        re.search(r'\w+\(\)', body) or
+        re.search(r'--\w+', body)
+      )
+
+      if has_specific:
+        stale.append((fpath, verified_at, age_days))
+
+except:
+  pass
+
+print(len(stale))
+for fpath, vdate, age in sorted(stale)[:10]:
+  print(f"{fpath}|{vdate}|{age}")
+PYEOF
+)
+
+  local stale_count
+  stale_count=$(echo "$stale_output" | head -1 | tr -d ' ')
+  stale_count=${stale_count:-0}
+
+  if [ "$stale_count" -gt 0 ]; then
+    printf "%b Stale memories: %d flagged (verified_at > 30 days, names specific paths/flags)\n" "$WARN" "$stale_count"
+    while IFS='|' read -r fpath vdate age; do
+      [[ -z "$fpath" ]] && continue
+      printf "      %s (verified %s, %d days ago)\n" "$fpath" "$vdate" "$age"
+    done <<< "$(echo "$stale_output" | tail -n +2)"
+    if [ "$stale_count" -gt 10 ]; then
+      printf "      ... and %d more\n" $((stale_count - 10))
+    fi
+  else
+    printf "%b Stale memories: none\n" "$OK"
+  fi
+
+  # 10. Pending memory review queue
+  local pending_count
+  pending_count=$(python3 << 'PYEOF' 2>/dev/null || echo 0
+import os
+home = os.path.expanduser("~")
+projects_dir = os.path.join(home, ".claude", "projects")
+count = 0
+try:
+  for proj_dir in os.listdir(projects_dir):
+    pending_dir = os.path.join(projects_dir, proj_dir, "memory", "_pending")
+    if os.path.isdir(pending_dir):
+      for f in os.listdir(pending_dir):
+        if f.endswith(".md") and f != "MEMORY.md":
+          count += 1
+except:
+  pass
+print(count)
+PYEOF
+  )
+  if [ "${pending_count:-0}" -gt 0 ]; then
+    printf "%b Pending memory review: %d entries (run: cast memory review)\n" "$WARN" "$pending_count"
+  else
+    printf "%b Pending memory review: queue empty\n" "$OK"
+  fi
+
+  # 11. Version
   printf "%b Version: %s\n" "$INFO" "$CAST_VERSION"
 
-  # 9. Slowest agents this week
+  # 12. Slowest agents this week
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Slowest agents this week${C_RESET}\n"
   local slow_rows
@@ -1314,7 +1471,7 @@ PYEOF
     done <<< "$slow_rows"
   fi
 
-  # 10. Updates Available
+  # 13. Updates Available
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
   _doctor_upgrades
@@ -1857,6 +2014,19 @@ _cmd_dash() {
   CAST_DB_PATH="${CAST_DB_PATH}" exec "$python_cmd" "$dash_script" "$@"
 }
 
+# ── Subcommand: incidents ────────────────────────────────────────────────────
+_cmd_incidents() {
+  local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
+  if [ ! -f "$incidents_script" ]; then
+    incidents_script="${CAST_REPO_DIR}/scripts/cast-db-incidents.py"
+  fi
+  if [ ! -f "$incidents_script" ]; then
+    _error "cast-db-incidents.py not found. Run: bash install.sh"
+    exit 1
+  fi
+  CAST_DB_PATH="${CAST_DB_PATH}" exec python3 "$incidents_script" "$@"
+}
+
 # ── Main dispatch ────────────────────────────────────────────────────────────
 if [ "$#" -gt 0 ]; then
   CAST_ARGS=("$@")
@@ -1906,6 +2076,7 @@ case "$SUBCOMMAND" in
   clean)                _cmd_clean "$@" ;;
   dash)                 _cmd_dash "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
+  incidents)            _cmd_incidents "$@" ;;
   ""|--help|-h)
     _usage
     exit 0
