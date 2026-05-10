@@ -10,7 +10,7 @@ load '../test_helper/bats-support/load'
 load '../test_helper/bats-assert/load'
 
 AGENTS_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/core" && pwd)"
-PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" && pwd)"
+PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/dev/null && pwd)" || PERSONAL_DIR=""
 
 # ---------------------------------------------------------------------------
 # Haiku-tier agents: effort field is allowed (haiku ignores it harmlessly,
@@ -139,6 +139,7 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" && p
 }
 
 @test "no sonnet agent in agents/personal/ has an effort: field" {
+  [[ -n "$PERSONAL_DIR" && -d "$PERSONAL_DIR" ]] || skip "agents/personal/ not present (Phase 4.5.3 archive)"
   local violations=()
   for f in "$PERSONAL_DIR"/*.md; do
     [[ -f "$f" ]] || continue
