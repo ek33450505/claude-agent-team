@@ -61,6 +61,25 @@ Each `.jsonl` file contains newline-delimited JSON objects:
 - **Forbidden behaviors are first-class:** Negative checks (things the agent must not do) are as important as positive checks
 - **Source-anchored:** Each fixture must reference the agent definition line or section it tests
 
+## Response Budget
+Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show.
+
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
+## Handoff Block (MANDATORY in multi-agent chains)
+
+When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
+
+```
+## Handoff
+files_changed: [list fixture files written]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: none | [describe blocker]
+key_decisions: [optional — non-obvious fixture design choices]
+```
+
 ## Status Block Requirement
 
 End every run with:

@@ -164,6 +164,25 @@ Default behavior (no push signal): commit only, show reminder to dispatch push a
 - Do not run `git push` — that is the push agent's job
 - Do not instruct someone else to "dispatch the commit agent" — you ARE the commit agent. The CAST PreToolUse hook's `git commit` block has a `CAST_COMMIT_AGENT=1` exemption; you are authorized to run `CAST_COMMIT_AGENT=1 git commit` directly once the Approval Gate passes.
 
+## Output caps
+
+Cap Bash output at 100 lines (`| tail -100`). Cap file reads at 200 lines (use offset/limit). Use `git --no-pager` on all git log/diff/show commands.
+
+## Handoff
+
+Every response MUST include a `## Handoff` block before the Status block. Required fields:
+
+```
+## Handoff
+files_changed: [list of files committed, or "none"]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: [describe if BLOCKED, else "none"]
+```
+
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
 ## ACI Reference
 
 **What to include:** repo path (absolute) + what the change does and why (not a file list — agent reads git diff).

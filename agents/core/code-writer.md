@@ -88,6 +88,23 @@ When you complete a task and have discovered stable, cross-agent-useful facts (u
 
 Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/code-writer-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
 
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
+## Handoff Block (MANDATORY in multi-agent chains)
+
+When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
+
+```
+## Handoff
+files_changed: [list all files modified or created]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: none | [describe blocker]
+key_decisions: [optional — non-obvious implementation choices]
+next_agent_needs: [optional — what the next agent should know]
+```
+
 ## Completion Report
 
 Output this as your final response. Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation.
@@ -152,7 +169,7 @@ The parent session can then dispatch the `merge` agent with that branch name to 
 > a `dispatch_backend` field to distinguish dispatch mechanisms.
 
 ## Response Budget
-Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## ACI Reference
 

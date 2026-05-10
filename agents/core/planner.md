@@ -263,6 +263,23 @@ When running in a pipeline (no human in the loop), never ask clarifying question
 
 When you complete a task and have discovered stable, cross-agent-useful facts (user preferences, project constraints, non-obvious patterns), emit a `## Facts` block at the end of your response. See the `cast-conventions` skill for format and constraints. Max 5 facts per run; omit this block entirely if you have nothing stable to record.
 
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
+## Handoff Block (MANDATORY in multi-agent chains)
+
+When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
+
+```
+## Handoff
+files_changed: [plan file path written]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: none | [describe blocker]
+key_decisions: [optional — non-obvious scoping or ordering choices]
+next_agent_needs: [optional — e.g., "orchestrate the plan at <path>"]
+```
+
 ## Completion Report
 
 Output Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation.
@@ -281,7 +298,7 @@ Concerns: [required if DONE_WITH_CONCERNS]
 ```
 
 ## Response Budget
-Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## Structured Output
 

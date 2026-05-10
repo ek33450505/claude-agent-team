@@ -118,6 +118,22 @@ Expert security analysis via github.com/trailofbits/skills (install: `/plugin ma
 
 Use these surfaces selectively when manual security review needs deeper static analysis than the default `security` agent prompt provides.
 
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
+## Handoff Block (MANDATORY in multi-agent chains)
+
+When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
+
+```
+## Handoff
+files_changed: []
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: none | [describe blocker — critical findings that must be fixed]
+key_decisions: [optional — highest-severity finding summary]
+```
+
 ## Completion Report
 
 Output Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation.
@@ -136,7 +152,7 @@ Concerns: [required if DONE_WITH_CONCERNS or BLOCKED — list each finding]
 ```
 
 ## Response Budget
-Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## Structured Output
 

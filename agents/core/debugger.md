@@ -47,8 +47,16 @@ Focus on fixing the underlying issue, not the symptoms.
 8. After code-reviewer returns DONE, dispatch `commit` via Agent tool:
    > "Create a semantic commit for the bug fix: [describe the root cause and fix]."
    Do NOT return to the calling session before dispatching commit.
-9. Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/debugger-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
-10. Output this completion report as your final response. Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation:
+9. When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
+   ```
+   ## Handoff
+   files_changed: [list all files modified or created]
+   status: DONE | DONE_WITH_CONCERNS | BLOCKED
+   blockers: none | [describe blocker]
+   key_decisions: [root cause summary — useful for downstream reviewers]
+   ```
+10. Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/debugger-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
+11. Output this completion report as your final response. Status FIRST, then Work Log — Status must appear before Work Log so it survives output truncation:
 
 ---
 Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
@@ -85,6 +93,10 @@ After the human-readable block above, also emit a machine-readable JSON payload:
 Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 ---
 
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
 ## Worktree Isolation
 
 This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.
@@ -112,7 +124,7 @@ The parent session can then dispatch the `merge` agent with that branch name to 
 > near-Opus diagnostic quality at Sonnet cost.
 
 ## Response Budget
-Keep your final response under **2,000 tokens**. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## ACI Reference
 

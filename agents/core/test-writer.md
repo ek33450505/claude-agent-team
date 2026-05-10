@@ -40,6 +40,25 @@ Before writing any tests, determine the project's test framework:
 4. Write tests covering: happy path, edge cases, error states, boundary values
 5. Run the tests and fix any failures before returning
 
+## Output caps
+
+Cap Bash output at 100 lines (`| tail -100`). Cap file reads at 200 lines (use offset/limit). Use `git --no-pager` on all git log/diff/show commands.
+
+## Handoff
+
+Every response MUST include a `## Handoff` block before the Status block. Required fields:
+
+```
+## Handoff
+files_changed: [list of test files written or modified]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: [describe if BLOCKED, else "none"]
+```
+
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
 ## Worktree Isolation
 
 This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.
