@@ -252,6 +252,130 @@ Audit current agent inventory before adding anything new. Only add what fills a 
 
 ---
 
+## Phase 4.5 — Top-Tier Dev Team Foundation
+**Effort:** 8–12 hours | **Branch:** `feature/cast-v7-phase-4-5-quality`
+
+The "fewer-but-better" execution phase. Phase 4 produced the audit + truncation baseline; Phase 4.5 acts on them. The framing Ed set on 2026-05-09: "top-tier developer agents — cover all agent infra and logic so we don't have to revisit. Fix all the bugs, the truncations, the miscommunications. Solid foundation."
+
+Coverage target — every stage of an Anthropic-developer workflow has exactly one well-defined agent (or skill):
+**project creation → architecture → implementation → testing → review → security → perf → API/migration → deps → git → docs → release → CI/infra → eval/benchmark → marketing copy.**
+
+### 4.5.0 — Discovery research (gate, ~1h)
+Researcher scope: "What does an Anthropic developer's full workflow look like in 2026?" Use Anthropic docs + Claude Code best-practices posts + WebSearch. Output: `research/anthropic-dev-workflow-gaps-v7.md`. Pin findings before deciding adds.
+
+Specific gap-validation questions:
+- Is `eval-writer` (writes Claude API evals / benchmark fixtures) a real Anthropic-developer-essential agent, or a niche?
+- Is a deep PR-reviewer (holistic, at PR-open time) distinct enough from per-unit code-reviewer to warrant a separate agent?
+- Is `marketing-copy` (landing-page hero, blog drafts, README pitch, social posts) better as an agent or as a routine (Phase 4.6) — the latter if the trigger is webhook (release tag) rather than dispatch.
+- What does Anthropic's own internal dev tooling cite as the "standard agent inventory"? (If they've published anything — docs, blog posts, internal showcase.)
+
+### 4.5.1 — Critical bug fixes
+Three blockers identified by `research/agent-truncation-baseline-v7.md`:
+1. **`unknown` agent-type 93.9% truncation rate** — logging bug. 168 of ~179 dispatches log without proper agent_type. Audit `PostToolUse` and `cast_emit_event` paths; verify `agent_type` is consistently set. Pre-tool-guard validation: block any dispatch lacking valid agent type. **CRITICAL — without this fix, all future truncation telemetry is garbage.**
+2. **`merge` agent 31% truncation → convert to skill** (Ed's call). Merge is mostly approval gates + `git merge` + cleanup — deterministic shell, not model-mediated. Replace with a `/merge` skill that auto-dispatches the script, with explicit prompt only for genuine ambiguity.
+3. **`bash-specialist` 21% truncation** — implement output caps (Bash: 100 lines max via tail; `--no-pager` on git; BATS through `--tap` then `tail -20`; Read 200 lines max with offset/limit for large files).
+
+### 4.5.2 — Retirements
+Tier 1 (safe, no integration deps, role covered by another agent):
+- `standup-writer` — morning-briefing covers git activity
+- `pr-narrator` — researcher produces equivalent prose
+- `knowledge-curator` — Obsidian workflow not active
+- `learning-scout` — researcher handles topic research; sonnet cost with zero ROI
+
+Tier 2 (requires routing-table cleanup):
+- `adr-writer` — remove `adr/architecture decision` from routing-table or redirect to researcher
+- `task-triage` — remove Todoist/inbox routing keywords
+- `meeting-prep` — remove calendar routing keywords
+
+`migration-reviewer` — RETIRE if Phase 4.5 can't fix its routing trigger. Routing tested in 4.5.0 discovery. If broken, retire; if fixable, KEEP.
+
+### 4.5.3 — Merges
+- `email-drafter` → docs (move `email/draft/compose/reply/gmail` keywords to docs)
+- `portfolio-sync` → docs (move `portfolio/sync/readme stats` keywords to docs)
+
+### 4.5.4 — Adds (gated on 4.5.0 research)
+Provisional candidates pending research validation:
+- `eval-writer` — write evals/benchmark fixtures for Claude API + agent prompt regressions. Anthropic-specific value.
+- `pr-reviewer` — holistic PR review at PR-open time (distinct from per-unit code-reviewer). Reads whole diff + commit history + linked issues.
+- `marketing-copy` — landing pages, blog posts, README hero, social. Replaces what pr-narrator was attempting.
+
+Rule: each add must address a measurable gap from 4.5.0 research. No additions without justification.
+
+### 4.5.5 — Quality investments per kept agent
+For every agent that survives the cuts, name and execute ONE measurable improvement:
+- **Output caps** — Bash 100 lines, Read 200 lines, structured output preferred over prose
+- **Handoff schema strictness** — every agent ends with required keys (`files_changed`, `status`, `blockers`); orchestrator validates JSON shape, not just regex match on `Status:`
+- **Tool-list trim** — read each agent's frontmatter; remove tools the agent never uses (audit via cast.db tool-call telemetry if available, else manual review)
+- **Truncation-aware prompt structure** — high-truncation agents (commit, push, planner) get prompt restructuring: file-presence check first, action second, summary third — recoverable if mid-task truncation hits
+- **Per-agent memory pool** — agents with recurring decision patterns (commit, debugger, security) get dedicated memory directories
+
+### 4.5.6 — Chain-verify mapping
+Every code-modifying agent auto-dispatches a verify agent:
+- code-writer → code-reviewer (already wired)
+- bash-specialist → code-reviewer (currently optional; make mandatory)
+- debugger → test-runner (verify fix actually fixes)
+- security → code-reviewer + dedicated security-regression test
+- migration-reviewer (if kept) → test-runner against migration fixtures
+
+The principle: no code-modifying agent reports DONE without a chained verification step. The `cast-claimed-work-verifier` hook already enforces some of this — extend coverage to all code-modifying agents.
+
+### 4.5.7 — Cross-repo count sync
+Update agent counts wherever they appear:
+- `claude-agent-team` — README badge (auto-stamped via gen-stats), CHEATSHEET, install.sh hint text
+- `claude-code-dashboard` — `/agents` page UI, any "30 agents" string
+- `cast-website` (under `~/Projects/personal/`) — hero copy, features section
+- `homebrew-cast` formula description
+- `Edward_Kubiak` portfolio README (mechanical only — full marketing push moves to post-v8)
+
+### 4.5.8 — PR #45 CI fixes
+Bundle into the 4.5 PR per Ed's call: 3 BATS jobs (bats, bats-macos, bats-ubuntu) failed on PR #45. Likely candidates:
+- New effort-frontmatter assertions hit a path/fixture issue in CI
+- Possible `bats-ci.yml` missing scripts/*.py copy step (per `feedback_bats_ci_copy_py.md`)
+- Run debugger on the failed jobs first
+
+---
+
+## Phase 4.6 — CAST Routines (sibling phase, can run after 4.5 or in parallel)
+**Effort:** 6–10 hours | **Branch:** `feature/cast-v7-phase-4-6-routines`
+
+The reframe Ed surfaced on 2026-05-09: the agents we're retiring (task-triage, meeting-prep, standup-writer, knowledge-curator, learning-scout, pr-narrator) weren't bad agents — they were **mistargeted dispatch**. Their work is scheduled or webhook-triggered, not on-demand-via-keyword. Phase 4.6 generalizes the JARVIS PA migration pattern (RemoteTrigger + cron, per `project_jarvis_pa.md`) from Ed-only to user-installable.
+
+This is also the deliverable that makes CAST meaningfully different from "Claude Code with extra agents" — it's an admin layer for "automate my dev life." Direct precedent for the v8 desktop app's value prop.
+
+### 4.6.1 — Routine framework
+- Define `cast routines` CLI surface: `list`, `status`, `enable`, `disable`, `trigger <name>`
+- Routines stored as YAML/JSON specs under `~/.claude/routines/<name>.yaml`
+- Each routine: trigger (cron string OR webhook OR remote-trigger), agent to dispatch, prompt template, output destination
+- BATS coverage for the framework before any routines ship
+
+### 4.6.2 — Convert retired agents to routines
+- `task-triage` → cron daily 8am (if Todoist MCP wired) OR webhook on Todoist task-created
+- `meeting-prep` → webhook on Google Calendar event-created (if MS365/GCal MCP wired)
+- `standup-writer` → cron daily 8am (git activity + Todoist completed yesterday → standup format)
+- `knowledge-curator` → cron weekly Sunday (Obsidian vault scan)
+- `learning-scout` → cron weekly Sunday (WebSearch on user-defined topics → Obsidian writeback)
+- `pr-narrator` → GitHub webhook on PR-opened
+
+For each: the agent file moves from `agents/core/` to `routines/<name>/agent.md`; the routine YAML wires the trigger.
+
+### 4.6.3 — New routines (greenfield)
+- `email-triage` (Gmail webhook on new mail → Claude Haiku categorize + draft replies)
+- `release-celebration` (GitHub webhook on release tag → marketing-copy post draft to LinkedIn/dev.to)
+- `daily-CAST-health` (cron daily → cast doctor → notify if regressions)
+- `weekly-cost-report` (cron Sunday → /cost + /usage aggregation → email summary)
+
+### 4.6.4 — Local admin UI
+- Add `/routines` page to `claude-code-dashboard` showing routine status, last-run, next-run, recent output
+- Manual trigger button per routine
+- This is the precursor to v8's desktop admin UI
+
+### 4.6.5 — Documentation
+- New `docs/routines.md` — what they are, how to author one, how triggers wire
+- README section explaining routines vs agents (the dispatch-vs-schedule distinction)
+- CHEATSHEET row per routine
+
+---
+
 ## Phase 5 — Two-Copy Mirroring Resolution
 **Effort:** 1–2 hours | **Branch:** `feature/cast-v7-phase-5-mirror`
 
@@ -297,17 +421,35 @@ Everything needed to cut a v7.0.0 release that's presentable as an Anthropic por
 1. In `~/Projects/personal/cast-claudes_journal/`, bump VERSION to `0.2.0`, commit, push, tag `v0.2.0`
 2. Update `~/Projects/personal/homebrew-claudes-journal/Formula/claudes-journal.rb` — url + sha256
 
-### 6.4 — Portfolio sync
-- `Edward_Kubiak` README: update CAST stats (agent count, test count, version, new Phase 5 features)
+### 6.4 — Mechanical portfolio sync
+**Mechanical only — no marketing push (deferred to post-v8 per Ed 2026-05-09).**
+- `Edward_Kubiak` README: update CAST stats (agent count, test count, version, Phase 4.5/4.6 highlights)
 - `claude-code-dashboard` README: verify it references v7 once release is cut
-- LinkedIn/GitHub bio: update version reference if present
+- `cast-website`: hero copy stat sync (agent count, test count, version)
+- `homebrew-cast` formula description: version bump
+- LinkedIn/GitHub bio: minimal version-string update (no announcement post)
 
 ### 6.5 — Final CI + health check
 - `cast doctor` passes cleanly on a fresh install
-- `bats tests/` green (≥672 tests)
+- `bash tests/run.sh --tap | tail -5` green (target: ~900 tests after 4.5/4.6 additions)
 - `cast test commit` runs against fixture without error
 - All open PRs closed or merged
 - No stale branches
+
+### 6.6 — Marketing push: DEFERRED to post-v8
+The big-marketing-push deliverables are intentionally held until the v8 desktop app is shippable. v7 is technical depth (a portfolio piece for technical reviewers); v8 is the product story (what tells the public-facing narrative). Pushing v7 marketing now spends visibility on a release that's a setup for the real one.
+
+Items moved to post-v8:
+- LinkedIn long-form CAST announcement
+- dev.to / Hashnode article series (Phase-by-phase deep dives)
+- Demo video / screencast
+- Help-wanted issues batch (drafted in `research/archive/2026-05-09-help-wanted-issues-draft.md`, archived during Phase 4 housekeeping)
+- Anthropic Discord / community announcements
+- Twitter / Bluesky thread
+- HackerNews / Reddit show-and-tell
+- Recruiter outreach citing CAST as portfolio
+
+Rationale: v7 ships as a clean technical release that lives on the README and Homebrew tap. v8 (CAST Desktop) is the moment the project graduates from "personal workshop" to "product story." Marketing once, with the bigger story, lands harder than two narrower pushes.
 
 ---
 
@@ -328,10 +470,33 @@ These are real but not blocking v7:
 ## Sequencing
 
 ```
-Phase 1 (friction) → Phase 2 (docs) → Phase 3 (tokens) → Phase 4 (agents) → Phase 5 (mirror) → Phase 6 (release)
+Phase 1 (friction) → Phase 2 (docs) → Phase 3 (tokens) → Phase 4 (agent audit)
+                                                              ↓
+                                          Phase 4.5 (top-tier dev team)  ← critical bug fixes + retires + adds + quality
+                                                              ↓
+                                          Phase 4.6 (routines)           ← can run after 4.5 or parallel; sibling
+                                                              ↓
+                                          Phase 5 (mirror cleanup)
+                                                              ↓
+                                          Phase 6 (release — mechanical, no marketing push)
+                                                              ↓
+                                          [v8 — CAST Desktop bundle]    ← see research/cast-v8-master-plan.md
+                                                              ↓
+                                          Phase 6.6 marketing push (held until v8 ships)
 ```
 
-Phases 2 and 3 can run in parallel sessions (different files). Phase 4 must come after Phase 2 (CHEATSHEET + frontmatter must be clean before the inventory audit is meaningful). Phase 6 must be last.
+- Phases 2 and 3 can run in parallel sessions (different files).
+- Phase 4 must come after Phase 2 (CHEATSHEET + frontmatter must be clean before the inventory audit is meaningful).
+- Phase 4.5 must come after Phase 4 (acts on Phase 4's audit + truncation baseline).
+- Phase 4.6 can run after 4.5 or in parallel — different surface area (routines, not agents).
+- Phase 6 must be last in the v7 sequence.
+- v8 (desktop app) is a separate plan; marketing waits for v8 to ship.
+
+## v8 — CAST Desktop (forward pointer)
+
+v7 ships as a technical-depth release. v8 bundles Forge (Tauri terminal) + claude-code-dashboard + voice into a single OS app — the product story. Master plan in `research/cast-v8-master-plan.md`.
+
+The "really cool when it's ready" anchor (Ed, 2026-05-09). v7 finishes; v8 is when CAST graduates from personal workshop to shippable product. The team-sharing / SaaS pivot is v9-and-beyond territory and depends on v8 landing first.
 
 ---
 
