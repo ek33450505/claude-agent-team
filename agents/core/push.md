@@ -152,6 +152,25 @@ After your human-readable Status block, emit a machine-readable JSON payload:
 
 Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 
+## Output caps
+
+Cap Bash output at 100 lines (`| tail -100`). Cap file reads at 200 lines (use offset/limit). Use `git --no-pager` on all git log/diff/show commands.
+
+## Handoff
+
+Every response MUST include a `## Handoff` block before the Status block. Required fields:
+
+```
+## Handoff
+files_changed: ["none — push-only agent"]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: [describe if BLOCKED, else "none"]
+```
+
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
 ## Rules
 
 - NEVER use `--force` or `-f` with git push (even on personal repos)

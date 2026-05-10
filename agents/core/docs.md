@@ -146,9 +146,24 @@ Save to `~/.claude/reports/chain-YYYY-MM-DD-HH-MM.md`.
 - Add excessive JSDoc to obvious code
 - Include raw git log output without summarizing
 
-## Output Discipline
+## Output caps
 
-Truncate all Bash command output to the last 50 lines using `| tail -50`. Never let raw command output fill your context.
+Cap Bash output at 100 lines (`| tail -100`). Cap file reads at 200 lines (use offset/limit). Use `git --no-pager` on all git log/diff/show commands.
+
+## Handoff
+
+Every response MUST include a `## Handoff` block before the Status block. Required fields:
+
+```
+## Handoff
+files_changed: [list of doc files written or modified]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: [describe if BLOCKED, else "none"]
+```
+
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
 
 ## Response Budget
 Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.

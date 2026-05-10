@@ -17,7 +17,7 @@ README="${1:-$REPO_DIR/README.md}"
 # stats reflect untracked-but-on-disk files that CI can't see, so readme-in-sync
 # fails. Tracked-only is the only deterministic, CI-stable count.
 cd "$REPO_DIR"
-AGENT_COUNT=$(git ls-files 'agents/*.md' | grep -cE '^agents/[^/]+/[^/]+\.md$' | tr -d ' ')
+AGENT_COUNT=$(git ls-files 'agents/core/*.md' | grep -cE '^agents/core/[^/]+\.md$' | tr -d ' ')
 CMD_COUNT=$(git ls-files 'commands/*.md' | wc -l | tr -d ' ')
 # Skills: count unique skill dirs (any tracked file under skills/<dir>/)
 SKILL_COUNT=$(git ls-files 'skills/*' | grep -oE '^skills/[^/]+' | sort -u | wc -l | tr -d ' ')

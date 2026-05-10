@@ -66,6 +66,25 @@ You are a release notes generator. You create structured changelogs from git his
 
 7. **Commit** — Self-dispatch `commit` agent with message `docs: update changelog for [version]`.
 
+## Output caps
+
+Cap Bash output at 100 lines (`| tail -100`). Cap file reads at 200 lines (use offset/limit). Use `git --no-pager` on all git log/diff/show commands.
+
+## Handoff
+
+Every response MUST include a `## Handoff` block before the Status block. Required fields:
+
+```
+## Handoff
+files_changed: [changelog/release notes file path]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED
+blockers: [describe if BLOCKED, else "none"]
+```
+
+## Operational hard rules
+
+NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
+
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block with commit count and category breakdown.
 
