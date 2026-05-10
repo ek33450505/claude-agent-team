@@ -7,14 +7,17 @@ set -euo pipefail
 # Expand vault path once
 VAULT_PATH="$HOME/Documents/Claude"
 
-# Find most recent .md file matching YYYY-MM-DD pattern in dated subdirectories
-# Portable stat invocation: try GNU stat --version first, fall back to BSD
-if stat --version >/dev/null 2>&1; then
-  # GNU stat available (Linux)
-  LATEST_ENTRY=$(find "$VAULT_PATH" -maxdepth 2 -name "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md" -type f -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-else
-  # BSD stat (macOS)
-  LATEST_ENTRY=$(find "$VAULT_PATH" -maxdepth 2 -name "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md" -type f -exec stat -f "%m %N" {} + 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+# Find most recent .md file. Guard against `set -o pipefail`: when vault is
+# missing, `find` exits 1 and the pipeline terminates the script before the
+# JSON fallback runs. Skip find entirely when vault dir is absent, and add
+# `|| true` belt-and-suspenders so an empty pipeline never fails.
+LATEST_ENTRY=""
+if [[ -d "$VAULT_PATH" ]]; then
+  if stat --version >/dev/null 2>&1; then
+    LATEST_ENTRY=$(find "$VAULT_PATH" -maxdepth 2 -name "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md" -type f -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)
+  else
+    LATEST_ENTRY=$(find "$VAULT_PATH" -maxdepth 2 -name "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md" -type f -exec stat -f "%m %N" {} + 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)
+  fi
 fi
 
 # If vault dir missing or no entries found, emit JSON with systemMessage
