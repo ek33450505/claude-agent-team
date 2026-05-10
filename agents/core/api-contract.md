@@ -6,7 +6,6 @@ description: >
   Express routes and any REST API surfaces.
 tools: Read, Bash, Glob, Grep
 model: sonnet
-effort: high
 color: blue
 memory: local
 maxTurns: 20

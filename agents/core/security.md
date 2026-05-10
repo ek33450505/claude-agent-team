@@ -6,7 +6,6 @@ description: >
   exposure, and stack-specific vulnerabilities.
 tools: Read, Glob, Grep, Bash
 model: sonnet
-effort: high
 color: hot-pink
 memory: local
 maxTurns: 20
