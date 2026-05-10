@@ -90,6 +90,14 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" && p
   ! grep -q "^effort:" "$AGENTS_DIR/perf-sentinel.md"
 }
 
+@test "eval-writer does NOT have effort field (sonnet — N/A)" {
+  ! grep -q "^effort:" "$AGENTS_DIR/eval-writer.md"
+}
+
+@test "pr-reviewer does NOT have effort field (sonnet — N/A)" {
+  ! grep -q "^effort:" "$AGENTS_DIR/pr-reviewer.md"
+}
+
 # ---------------------------------------------------------------------------
 # Opus exemption: migration-reviewer is opus — effort: high is intentional.
 # ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@
     { "keywords": ["release", "changelog", "version", "release notes"], "agent": "release-notes" },
     { "keywords": ["benchmark", "performance", "regression", "perf", "bisect"], "agent": "perf-sentinel" },
     { "keywords": ["email", "draft email", "compose email", "reply email", "gmail", "portfolio sync", "readme stats", "portfolio update", "showcase", "readme", "docs", "documentation", "doc update"], "agent": "docs" },
-    { "keywords": ["obsidian", "vault", "organize", "curator", "orphan notes", "moc"], "agent": "docs" }
+    { "keywords": ["obsidian", "vault", "organize", "curator", "orphan notes", "moc"], "agent": "docs" },
+    { "keywords": ["eval", "evals", "benchmark fixture", "prompt regression", "agent eval"], "agent": "eval-writer" },
+    { "keywords": ["pr review", "pull request review", "pr open", "holistic review"], "agent": "pr-reviewer" }
   ]
 }
