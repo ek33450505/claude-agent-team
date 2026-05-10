@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing to CAST — Claude Agent Specialist Team.
 
+CAST is part of a multi-repo ecosystem — see the [Ecosystem section](README.md#the-cast-ecosystem) for related projects.
+
 ## Prerequisites
 
 - [Claude Code CLI](https://claude.ai/code) installed and configured
