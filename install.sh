@@ -270,6 +270,16 @@ if [ -f "$DB_INIT_SCRIPT" ]; then
     fi
 fi
 
+# --- Run migrations ---
+MIGRATE_SCRIPT="$CLAUDE_DIR/scripts/cast-migrate.sh"
+if [ -f "$MIGRATE_SCRIPT" ]; then
+    if bash "$MIGRATE_SCRIPT" 2>/dev/null; then
+        success "  Database migrations applied"
+    else
+        warn "  Database migrations failed — run cast-migrate.sh manually"
+    fi
+fi
+
 # --- Install config/ (only if not present) ---
 if [ -d "$SCRIPT_DIR/config" ]; then
     info "Installing config files..."

@@ -130,7 +130,14 @@ sqlite3 ~/.claude/cast.db \
    LIMIT 5;" 2>/dev/null
 ```
 
-**3e. Security gate activity (parry-guard)** — check if today's rejection log exists:
+**3e. Open incidents** — surface unresolved incidents from cast.db:
+```bash
+cast incidents recent 3 --status=open --json 2>/dev/null || true
+```
+
+If the command returns a non-empty JSON array, include an **Open Incidents** section in the briefing listing each incident as: `occurred_at — problem_summary` (truncated to 100 chars). If the output is empty, the exit code is non-zero, or the array has no entries, omit the section entirely — do not render an empty heading.
+
+**3f. Security gate activity (parry-guard)** — check if today's rejection log exists:
 ```bash
 PARRY_LOG="$HOME/.claude/logs/parry-guard-daily-$(date +%Y-%m-%d).log"
 if [ -f "$PARRY_LOG" ]; then

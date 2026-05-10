@@ -147,6 +147,7 @@ Subcommands:
   ${C_BOLD}clean${C_RESET}     [--apply] [--worktrees]   Prune stale branches (dry-run by default)
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
+  ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
 
 Global flags:
   --json        Machine-readable JSON output
@@ -1293,10 +1294,28 @@ PYEOF
     overall_ok=0
   fi
 
-  # 8. Version
+  # 8. Database migrations
+  local migrate_script="${CAST_SCRIPTS_DIR}/cast-migrate.sh"
+  if [ ! -f "$migrate_script" ]; then
+    migrate_script="${CAST_REPO_DIR}/scripts/cast-migrate.sh"
+  fi
+  if [ -f "$migrate_script" ]; then
+    local migration_output
+    migration_output=$(bash "$migrate_script" 2>&1 || true)
+    local applied_count
+    applied_count=$(echo "$migration_output" | grep -c "^\[migrate\] applied" 2>/dev/null)
+    applied_count=${applied_count:-0}
+    local total_count
+    total_count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
+    printf "%b Migrations: %d applied this run, %d total recorded\n" "$INFO" "$applied_count" "$total_count"
+  else
+    printf "%b Migrations: script not found\n" "$WARN"
+  fi
+
+  # 9. Version
   printf "%b Version: %s\n" "$INFO" "$CAST_VERSION"
 
-  # 9. Slowest agents this week
+  # 10. Slowest agents this week
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Slowest agents this week${C_RESET}\n"
   local slow_rows
@@ -1314,7 +1333,7 @@ PYEOF
     done <<< "$slow_rows"
   fi
 
-  # 10. Updates Available
+  # 11. Updates Available
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
   _doctor_upgrades
@@ -1857,6 +1876,19 @@ _cmd_dash() {
   CAST_DB_PATH="${CAST_DB_PATH}" exec "$python_cmd" "$dash_script" "$@"
 }
 
+# ── Subcommand: incidents ────────────────────────────────────────────────────
+_cmd_incidents() {
+  local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
+  if [ ! -f "$incidents_script" ]; then
+    incidents_script="${CAST_REPO_DIR}/scripts/cast-db-incidents.py"
+  fi
+  if [ ! -f "$incidents_script" ]; then
+    _error "cast-db-incidents.py not found. Run: bash install.sh"
+    exit 1
+  fi
+  CAST_DB_PATH="${CAST_DB_PATH}" exec python3 "$incidents_script" "$@"
+}
+
 # ── Main dispatch ────────────────────────────────────────────────────────────
 if [ "$#" -gt 0 ]; then
   CAST_ARGS=("$@")
@@ -1906,6 +1938,7 @@ case "$SUBCOMMAND" in
   clean)                _cmd_clean "$@" ;;
   dash)                 _cmd_dash "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
+  incidents)            _cmd_incidents "$@" ;;
   ""|--help|-h)
     _usage
     exit 0
