@@ -64,10 +64,6 @@ setup() {
     grep -q "Load \`~/.claude/rules-core/\`" "$REPO_ROOT/agents/core/push.md"
 }
 
-@test "merge.md references rules-core" {
-    grep -q "Load \`~/.claude/rules-core/\`" "$REPO_ROOT/agents/core/merge.md"
-}
-
 @test "code-reviewer.md references rules-core" {
     grep -q "Load \`~/.claude/rules-core/\`" "$REPO_ROOT/agents/core/code-reviewer.md"
 }
@@ -80,16 +76,12 @@ setup() {
     grep -q "## Context Rules (haiku-tier optimization)" "$REPO_ROOT/agents/core/push.md"
 }
 
-@test "merge.md has Context Rules section" {
-    grep -q "## Context Rules (haiku-tier optimization)" "$REPO_ROOT/agents/core/merge.md"
-}
-
 @test "code-reviewer.md has Context Rules section" {
     grep -q "## Context Rules (haiku-tier optimization)" "$REPO_ROOT/agents/core/code-reviewer.md"
 }
 
 @test "all haiku agents warn NOT to load full rules/" {
-    for agent in commit push merge code-reviewer; do
+    for agent in commit push code-reviewer; do
         grep -q "Do NOT load \`~/.claude/rules/\`" "$REPO_ROOT/agents/core/$agent.md" || return 1
     done
 }

@@ -106,11 +106,30 @@ if not response_text:
 
 flat_output = data.get("last_assistant_message") or data.get("output") or ""
 
+agent_name_raw = data.get("agent_type") or data.get("agent_name") or data.get("subagent_name") or "unknown"
+agent_id_raw = data.get("agent_id") or data.get("subagent_id") or ""
+
+# Fallback: if agent_name is "unknown" but agent_id is non-empty, query agent_runs
+if agent_name_raw == "unknown" and agent_id_raw:
+    try:
+        import sqlite3
+        db_path = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
+        if os.path.isfile(db_path):
+            conn = sqlite3.connect(db_path, timeout=2)
+            cur = conn.cursor()
+            cur.execute("SELECT agent FROM agent_runs WHERE agent_id = ? LIMIT 1", (agent_id_raw,))
+            row = cur.fetchone()
+            if row and row[0]:
+                agent_name_raw = row[0]
+            conn.close()
+    except Exception:
+        pass  # Fall back to "unknown" on any DB error
+
 result = {
     # SubagentStop stdin uses 'agent_type' (not 'agent_name') per Claude Code source.
     # 'agent_name' and 'subagent_name' are not sent by Claude Code; 'agent_type' is
     # the correct field (from createBaseHookInput + SubagentStop payload).
-    "agent_name": data.get("agent_type") or data.get("agent_name") or data.get("subagent_name") or "unknown",
+    "agent_name": agent_name_raw,
     "session_id": data.get("session_id") or "",
     "stop_reason": data.get("stop_reason") or "",
     "output_preview": (flat_output or response_text)[:200],
@@ -294,6 +313,19 @@ sess         = os.environ.get('CAST_STOP_SESSION', '')
 agent_id     = os.environ.get('CAST_STOP_AGENT_ID', '')
 ts           = os.environ.get('CAST_STOP_TS_ISO', '')
 response_text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '') or ''
+
+# Fallback: if agent is "unknown" but agent_id is non-empty, query agent_runs
+if agent == 'unknown' and agent_id:
+    try:
+        conn = sqlite3.connect(db, timeout=2)
+        cur = conn.cursor()
+        cur.execute("SELECT agent FROM agent_runs WHERE agent_id = ? LIMIT 1", (agent_id,))
+        row = cur.fetchone()
+        if row and row[0]:
+            agent = row[0]
+        conn.close()
+    except Exception:
+        pass  # Fall back to "unknown" on any DB error
 
 # Only process non-trivial responses (mirrors cast-truncation-check.sh guard)
 if len(response_text.strip()) < 50:

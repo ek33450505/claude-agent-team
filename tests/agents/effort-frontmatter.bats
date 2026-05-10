@@ -10,7 +10,7 @@ load '../test_helper/bats-support/load'
 load '../test_helper/bats-assert/load'
 
 AGENTS_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/core" && pwd)"
-PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" && pwd)"
+PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/dev/null && pwd)" || PERSONAL_DIR=""
 
 # ---------------------------------------------------------------------------
 # Haiku-tier agents: effort field is allowed (haiku ignores it harmlessly,
@@ -39,10 +39,6 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" && p
 
 @test "frontend-qa has effort field" {
   grep -q "^effort:" "$AGENTS_DIR/frontend-qa.md"
-}
-
-@test "merge has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/merge.md"
 }
 
 @test "morning-briefing has effort field" {
@@ -90,12 +86,16 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" && p
   ! grep -q "^effort:" "$AGENTS_DIR/api-contract.md"
 }
 
-@test "learning-scout does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/learning-scout.md"
-}
-
 @test "perf-sentinel does NOT have effort field (sonnet — N/A)" {
   ! grep -q "^effort:" "$AGENTS_DIR/perf-sentinel.md"
+}
+
+@test "eval-writer does NOT have effort field (sonnet — N/A)" {
+  ! grep -q "^effort:" "$AGENTS_DIR/eval-writer.md"
+}
+
+@test "pr-reviewer does NOT have effort field (sonnet — N/A)" {
+  ! grep -q "^effort:" "$AGENTS_DIR/pr-reviewer.md"
 }
 
 # ---------------------------------------------------------------------------
@@ -139,6 +139,7 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" && p
 }
 
 @test "no sonnet agent in agents/personal/ has an effort: field" {
+  [[ -n "$PERSONAL_DIR" && -d "$PERSONAL_DIR" ]] || skip "agents/personal/ not present (Phase 4.5.3 archive)"
   local violations=()
   for f in "$PERSONAL_DIR"/*.md; do
     [[ -f "$f" ]] || continue

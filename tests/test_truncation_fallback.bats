@@ -20,8 +20,8 @@ setup() {
   bash "$DB_INIT" --db "$TEMP_DB" > /dev/null 2>&1
 
   # Apply migrations 009 and 010 to create agent_truncations table and partial_work_log column
-  sqlite3 "$TEMP_DB" < "$REPO_DIR/scripts/migrations/009_cast_framework_fixes.sql" 2>/dev/null || true
-  sqlite3 "$TEMP_DB" < "$REPO_DIR/scripts/migrations/010_work_log_stream.sql" 2>/dev/null || true
+  cat "$REPO_DIR/scripts/migrations/009_cast_framework_fixes.sql" | sqlite3 "$TEMP_DB" 2>/dev/null || true
+  cat "$REPO_DIR/scripts/migrations/010_work_log_stream.sql" | sqlite3 "$TEMP_DB" 2>/dev/null || true
 }
 
 teardown() {
@@ -412,4 +412,44 @@ Concerns: Timeout on API call"
   # Should contain a line like: N|partial_work_log|TEXT|0||0
   [[ "$columns" == *"partial_work_log"* ]]
   [[ "$columns" == *"TEXT"* ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test: agent_type fallback queries agent_runs when agent_type is missing
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "truncation hook: agent_type fallback — missing agent_type queries agent_runs table" {
+  # Pre-insert a row into agent_runs with agent_id='fallback-test-001' and agent='code-writer'
+  sqlite3 "$TEMP_DB" <<'SQL'
+INSERT INTO agent_runs (agent_id, agent, session_id, started_at, status)
+VALUES ('fallback-test-001', 'code-writer', 'sess-fallback', datetime('now'), 'DONE');
+SQL
+
+  # Create a payload with NO agent_type field but with agent_id
+  local payload
+  payload=$(python3 -c "
+import json
+payload = {
+    'agent_id': 'fallback-test-001',
+    'agent_type': '',  # Empty, so it falls back to 'unknown'
+    'session_id': 'sess-fallback',
+    'agent_response': {
+        'content': [
+            {'type': 'text', 'text': 'Some output that is definitely longer than fifty characters so the truncation check runs'}
+        ]
+    }
+}
+print(json.dumps(payload))
+")
+
+  # Run the truncation hook with the payload
+  export CAST_INPUT="$payload"
+  run bash "$TRUNCATION_HOOK"
+  assert_success
+
+  # Verify that the agent_truncations row has agent_type='code-writer' (from DB fallback), not 'unknown'
+  local agent_type_in_db
+  agent_type_in_db=$(sqlite3 "$TEMP_DB" "SELECT agent_type FROM agent_truncations WHERE agent_id='fallback-test-001' LIMIT 1;")
+
+  assert_equal "$agent_type_in_db" "code-writer"
 }

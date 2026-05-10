@@ -3,17 +3,12 @@
   "patterns": [
     { "keywords": ["migrate", "migration", "schema", "alter table", "create table"], "agent": "migration-reviewer" },
     { "keywords": ["api", "contract", "endpoint", "route", "breaking change", "openapi"], "agent": "api-contract" },
-    { "keywords": ["adr", "architecture decision", "decision record"], "agent": "adr-writer" },
     { "keywords": ["dependency", "audit", "cve", "vulnerability", "npm audit", "pip audit"], "agent": "dep-auditor" },
     { "keywords": ["release", "changelog", "version", "release notes"], "agent": "release-notes" },
     { "keywords": ["benchmark", "performance", "regression", "perf", "bisect"], "agent": "perf-sentinel" },
-    { "keywords": ["triage", "inbox", "todoist", "prioritize", "categorize tasks"], "agent": "task-triage" },
-    { "keywords": ["standup", "status update", "daily update"], "agent": "standup-writer" },
-    { "keywords": ["meeting", "prep", "calendar", "agenda", "meeting prep"], "agent": "meeting-prep" },
-    { "keywords": ["email", "draft", "compose", "reply", "gmail"], "agent": "email-drafter" },
-    { "keywords": ["narrate", "stakeholder", "shipped", "sprint summary", "pr summary"], "agent": "pr-narrator" },
-    { "keywords": ["obsidian", "vault", "organize", "curator", "orphan notes", "moc"], "agent": "knowledge-curator" },
-    { "keywords": ["learn", "scout", "resources", "tutorial", "learning"], "agent": "learning-scout" },
-    { "keywords": ["portfolio", "sync", "readme stats", "showcase"], "agent": "portfolio-sync" }
+    { "keywords": ["email", "draft email", "compose email", "reply email", "gmail", "portfolio sync", "readme stats", "portfolio update", "showcase", "readme", "docs", "documentation", "doc update"], "agent": "docs" },
+    { "keywords": ["obsidian", "vault", "organize", "curator", "orphan notes", "moc"], "agent": "docs" },
+    { "keywords": ["eval", "evals", "benchmark fixture", "prompt regression", "agent eval"], "agent": "eval-writer" },
+    { "keywords": ["pr review", "pull request review", "pr open", "holistic review"], "agent": "pr-reviewer" }
   ]
 }
