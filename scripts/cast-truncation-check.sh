@@ -26,6 +26,7 @@ python3 - <<'PYEOF' || _log_error "truncation check failed"
 import json
 import os
 import re
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -97,6 +98,21 @@ agent_id   = data.get('agent_id') or data.get('subagent_id') or ''
 batch_id   = data.get('batch_id')
 session_id = data.get('session_id') or ''
 now_iso    = datetime.utcnow().isoformat() + 'Z'
+
+# Fallback: if agent_type is "unknown" but agent_id is non-empty, query agent_runs
+if (agent_type == 'unknown' or not agent_type) and agent_id:
+    try:
+        db_path = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
+        if os.path.isfile(db_path):
+            conn = sqlite3.connect(db_path, timeout=2)
+            cur = conn.cursor()
+            cur.execute("SELECT agent FROM agent_runs WHERE agent_id = ? LIMIT 1", (agent_id,))
+            row = cur.fetchone()
+            if row and row[0]:
+                agent_type = row[0]
+            conn.close()
+    except Exception:
+        pass  # Fall back to "unknown" on any DB error
 
 # ── Extract last assistant message text ───────────────────────────────────────
 response_text = ''

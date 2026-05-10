@@ -41,10 +41,6 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" && p
   grep -q "^effort:" "$AGENTS_DIR/frontend-qa.md"
 }
 
-@test "merge has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/merge.md"
-}
-
 @test "morning-briefing has effort field" {
   grep -q "^effort:" "$AGENTS_DIR/morning-briefing.md"
 }

@@ -50,7 +50,6 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | knowledge-curator | haiku 4.5 | low | Read, Write, Grep | Obsidian vault organizer and linker |
 | learning-scout | sonnet | high | WebSearch, WebFetch, Write | Tech topic monitor and resource curator |
 | meeting-prep | haiku 4.5 | low | Read, Write, Bash | Meeting prep briefs from calendar context |
-| merge | haiku 4.5 | low | Bash, Edit, Grep | Git merge, rebase, conflict resolution |
 | migration-reviewer | opus | high | Read, Bash, Grep | Database schema change reviewer |
 | morning-briefing | haiku 4.5 | low | Bash, Write, Grep | Daily morning briefing orchestrator |
 | perf-sentinel | sonnet | high | Read, Bash, Grep | Performance regression detector |
