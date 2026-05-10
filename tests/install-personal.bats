@@ -57,6 +57,7 @@ run_install_personal() {
 # =============================================================================
 
 @test "Personal install: installs portfolio-sync.md" {
+  skip "portfolio-sync archived in v7 Phase 4.5; agents/personal/ is empty. Unskip when a new personal-overlay agent is added."
   run_install_personal
 
   [ -f "$HOME/.claude/agents/portfolio-sync.md" ]
@@ -82,6 +83,7 @@ run_install_personal() {
 # =============================================================================
 
 @test "Idempotency: personal agent not removed by subsequent core install" {
+  skip "portfolio-sync archived in v7 Phase 4.5; agents/personal/ is empty. Unskip when a new personal-overlay agent is added."
   # First run with --personal to install portfolio-sync.md
   run_install_personal
 

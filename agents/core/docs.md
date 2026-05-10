@@ -3,7 +3,10 @@ name: docs
 description: >
   Documentation specialist. Handles README audits/rewrites, doc updates after code changes,
   status reports, sprint summaries, and chain execution summaries. Absorbs the former
-  readme-writer, doc-updater, report-writer, and chain-reporter roles.
+  readme-writer, doc-updater, report-writer, and chain-reporter roles. Since Phase 4.5.3,
+  also handles email drafting (compose, reply, gmail) and portfolio README sync (readme stats,
+  showcase, portfolio update) — formerly email-drafter and portfolio-sync.
+keywords: [readme, docs, documentation, email, draft email, compose email, reply email, gmail, portfolio sync, readme stats, portfolio update, showcase, status report, changelog]
 tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
 model: haiku
 effort: low

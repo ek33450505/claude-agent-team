@@ -42,8 +42,9 @@ run_install() {
 
   local count
   count=$(ls -1 "$HOME/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
-  # portfolio-sync.md is personal-only; merge converted to skill in v7 Phase 4.5; core install has 28 agents
-  [ "$count" -eq 28 ]
+  # merge converted to skill + 7 agents retired + email-drafter merged into docs in v7 Phase 4.5;
+  # portfolio-sync was in personal/ overlay (now archived); core install has 20 agents
+  [ "$count" -eq 20 ]
 }
 
 @test "Install: installs all 7 skills" {
