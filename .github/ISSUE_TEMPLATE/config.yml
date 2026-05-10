@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask in Discussions
+    url: https://github.com/ek33450505/claude-agent-team/discussions
+    about: For open-ended questions and ideas, prefer Discussions over Issues.
