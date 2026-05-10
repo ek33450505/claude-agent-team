@@ -205,6 +205,17 @@
         ]
       },
       {
+        "id": "cast-no-fake-success-guard",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-no-fake-success-guard.sh",
+            "timeout": 3
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
         "hooks": [
           {
