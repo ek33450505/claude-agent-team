@@ -24,6 +24,17 @@
 - Test behavior (`getByRole`/`getByText`), not implementation
 - Cover: happy path, edge cases, error states
 
+## Accessibility (UI projects)
+- Every icon-only button/link gets `aria-label`; decorative icons get `aria-hidden="true"`
+- Visible `:focus-visible` state on every interactive element — never rely on browser default rings on dark themes
+- Color contrast ≥ 4.5:1 for text and meaningful icons
+- Hit target ≥ 44×44 px on touch surfaces
+- Form inputs have `<label>`, `autoComplete`, and `aria-describedby` for errors
+- Animation respects `prefers-reduced-motion` via `useReducedMotion()` or CSS media query
+- Semantic HTML first (`<button>`, `<a>`, `<nav>`, `<main>`); ARIA only when semantic HTML is insufficient
+- Keyboard navigation works end-to-end — logical tab order, modal focus trap, Escape closes overlays
+- Applies on first pass, not as a later sweep. Dispatch `frontend-qa` for a dedicated a11y review before commit on UI-heavy changes.
+
 ## SQL / Data
 - `db-reader` for read-only exploration
 - Optimized queries with filters; BigQuery via `bq query` CLI
@@ -76,9 +87,30 @@ When running more than one terminal on the same repo simultaneously:
 ## Stat/Fact Verification
 - Before writing any public-facing content (LinkedIn, README, dev.to articles, announcements) that cites project stats (agent counts, test counts, line counts), verify numbers against the actual repo state — do not rely on memory or prior session context.
 
+## Memory Verification
+
+- Auto-memory entries that name a wired hook, registered route, or flag-gated feature must be verified on disk before being relied on for new work. Memory records intent and snapshots; reality is the file system and live config.
+- When recommending action based on a memory entry that names a specific function/path/script, grep or stat the target first. "The memory says X exists" is not the same as "X exists now."
+- Bug class context: 2026-05-05 — a 3-week-old auto-memory said `SessionStart read hook added 2026-04-26` but the hook had never been wired. The intent was recorded; the wiring step never happened. The memory was honest about what it observed.
+
+## Branch & Worktree Hygiene
+
+- **Grooming policy:**
+  - `cast-swarm-*` branches older than 14 days with no open PR are candidates for deletion.
+  - `worktree-agent-*` branches older than 7 days are candidates for deletion.
+  - `feature/*` and `fix/*` branches that are merged into `main` AND whose remote tracking ref is `[gone]` are candidates for deletion.
+- **Hard whitelist (never deleted):** `main`, `feat/*`, `feature/cast-v7-*`, any branch currently checked out in a worktree.
+- **Manual usage:**
+  - `cast clean` — dry-run preview (default, no changes made)
+  - `cast clean --apply` — delete stale branches
+  - `cast clean --apply --worktrees` — delete stale branches and prune dead worktree directories
+- **Weekly automated dry-run report:** `scripts/cast-branch-groomer-schedule.sh` writes a dated report to `~/.claude/reports/branch-grooming-<date>.md`. Review the report, then run `cast clean --apply` when ready.
+- **Hard rule:** Any agent or skill that creates a branch or worktree MUST clean up on success. The groomer is a safety net, not the primary cleanup mechanism. Orphaned branches from failed or abandoned agent runs must be cleaned manually.
+- **CI contract validation:** The `hook-contract-validation` job in `.github/workflows/bats-ci.yml` validates `hookSpecificOutput` format. Non-spec output is a hard CI fail — fix before pushing.
+
 ## Phase 5b — Workflow Closures
 
 - **Auto mode:** `defaultMode: "auto"` is set but has a session-start bug — use `--permission-mode auto` until upstream fixes it.
 - **Routines:** Prefer `/schedule` over local cron for scheduled CAST jobs.
-- **Forked subagents:** Cannot spawn sub-subagents — no nested orchestration.
+- **Forked subagents:** Use `scripts/cast-managed-agent.sh <agent> <prompt> --fork` to spawn agents on Anthropic infrastructure with `CLAUDE_CODE_FORK_SUBAGENT=1` set. This replaces worktree isolation for parallel work — Managed Agents isolate execution on cloud infrastructure, eliminating filesystem contention. Cannot spawn sub-subagents — no nested orchestration.
 - **Task Budgets:** Opus 4.7 API beta only — no Claude Code surface yet; revisit when GA.
