@@ -77,12 +77,24 @@ DB_PATH="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
 if [ -f "$DB_PATH" ]; then
   GATE_ID=$(uuidgen 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())" 2>/dev/null || echo "")
   if [ -n "$GATE_ID" ]; then
-    GATE_SUMMARY="fake-success warn: $PATTERN in $FILE_PATH"
-    # Escape single quotes for SQL (replace ' with '')
-    GATE_SUMMARY_SQL="${GATE_SUMMARY//\'/\'\'}"
-    SESSION_ID_SQL="${CAST_SESSION_ID:-unknown}"
-    SESSION_ID_SQL="${SESSION_ID_SQL//\'/\'\'}"
-    sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed) VALUES ('$GATE_ID', '$SESSION_ID_SQL', 'cast-no-fake-success-guard', '$TIMESTAMP', '$GATE_SUMMARY_SQL', 0);" 2>/dev/null || true
+    export CAST_NFG_GATE_ID="$GATE_ID"
+    export CAST_NFG_SESSION_ID="${CAST_SESSION_ID:-unknown}"
+    export CAST_NFG_TIMESTAMP="$TIMESTAMP"
+    export CAST_NFG_SUMMARY="fake-success warn: $PATTERN in $FILE_PATH"
+    export CAST_NFG_DB="$DB_PATH"
+    python3 <<'PYEOF' 2>/dev/null || true
+import os, sqlite3
+try:
+    conn = sqlite3.connect(os.environ['CAST_NFG_DB'])
+    conn.execute(
+        "INSERT OR IGNORE INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed) VALUES (?, ?, ?, ?, ?, ?)",
+        (os.environ['CAST_NFG_GATE_ID'], os.environ['CAST_NFG_SESSION_ID'], 'cast-no-fake-success-guard', os.environ['CAST_NFG_TIMESTAMP'], os.environ['CAST_NFG_SUMMARY'], 0)
+    )
+    conn.commit()
+    conn.close()
+except Exception:
+    pass
+PYEOF
   fi
 fi
 
