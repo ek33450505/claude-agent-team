@@ -148,6 +148,7 @@ Subcommands:
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
+  ${C_BOLD}routines${C_RESET} list|status|get|trigger      Manage scheduled agent routines
 
 Global flags:
   --json        Machine-readable JSON output
@@ -2014,6 +2015,19 @@ _cmd_dash() {
   CAST_DB_PATH="${CAST_DB_PATH}" exec "$python_cmd" "$dash_script" "$@"
 }
 
+# ── Subcommand: routines ─────────────────────────────────────────────────────
+_cmd_routines() {
+  local routines_script="${CAST_SCRIPTS_DIR}/cast-db-routines.py"
+  if [ ! -f "$routines_script" ]; then
+    routines_script="${CAST_REPO_DIR}/scripts/cast-db-routines.py"
+  fi
+  if [ ! -f "$routines_script" ]; then
+    _error "cast-db-routines.py not found. Run: bash install.sh"
+    exit 1
+  fi
+  CAST_DB_PATH="${CAST_DB_PATH}" exec python3 "$routines_script" "$@"
+}
+
 # ── Subcommand: incidents ────────────────────────────────────────────────────
 _cmd_incidents() {
   local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
@@ -2076,6 +2090,7 @@ case "$SUBCOMMAND" in
   clean)                _cmd_clean "$@" ;;
   dash)                 _cmd_dash "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
+  routines)             _cmd_routines "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
   ""|--help|-h)
     _usage

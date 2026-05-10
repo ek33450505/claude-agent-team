@@ -1,0 +1,12 @@
+name: daily-briefing
+description: "Run morning-briefing agent at 8am daily and save output to routines-output"
+trigger:
+  type: cron
+  value: "0 7 * * *"
+agent: morning-briefing
+prompt_template: |
+  Run the daily briefing. Check cast.db for agent activity from the last 24 hours,
+  summarize recent sessions, flag any BLOCKED or DONE_WITH_CONCERNS agents, and
+  write a concise morning-briefing markdown file.
+output_dir: "~/.claude/routines-output/daily-briefing"
+enabled: true
