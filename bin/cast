@@ -1312,10 +1312,109 @@ PYEOF
     printf "%b Migrations: script not found\n" "$WARN"
   fi
 
-  # 9. Version
+  # 9. Stale auto-memory check
+  local stale_output
+  stale_output=$(python3 << 'PYEOF' 2>/dev/null || echo "0"
+import os
+import re
+from datetime import datetime
+
+home = os.path.expanduser("~")
+projects_dir = os.path.join(home, ".claude", "projects")
+
+stale = []
+try:
+  for proj_dir in os.listdir(projects_dir):
+    memory_dir = os.path.join(projects_dir, proj_dir, "memory")
+    if not os.path.isdir(memory_dir):
+      continue
+
+    for fname in os.listdir(memory_dir):
+      if fname == "MEMORY.md" or not fname.endswith(".md"):
+        continue
+
+      fpath = os.path.join(memory_dir, fname)
+      try:
+        with open(fpath, 'r') as f:
+          content = f.read()
+      except:
+        continue
+
+      # Parse frontmatter
+      if not content.startswith('---'):
+        continue
+
+      parts = content.split('---')
+      if len(parts) < 3:
+        continue
+
+      frontmatter = parts[1]
+      body = '---'.join(parts[2:])
+
+      # Extract verified_at
+      verified_at = None
+      for line in frontmatter.split('\n'):
+        if line.startswith('verified_at:'):
+          match = re.search(r'(\d{4}-\d{2}-\d{2})', line)
+          if match:
+            verified_at = match.group(1)
+          break
+
+      if not verified_at:
+        continue
+
+      # Check age
+      try:
+        vdate = datetime.strptime(verified_at, '%Y-%m-%d')
+        today = datetime.utcnow()
+        age_days = (today - vdate).days
+      except:
+        continue
+
+      if age_days <= 30:
+        continue
+
+      # Check if body names paths/functions/flags
+      has_specific = bool(
+        re.search(r'/scripts/', body) or
+        re.search(r'~/.claude/', body) or
+        re.search(r'\w+\(\)', body) or
+        re.search(r'--\w+', body)
+      )
+
+      if has_specific:
+        stale.append((fpath, verified_at, age_days))
+
+except:
+  pass
+
+print(len(stale))
+for fpath, vdate, age in sorted(stale)[:10]:
+  print(f"{fpath}|{vdate}|{age}")
+PYEOF
+)
+
+  local stale_count
+  stale_count=$(echo "$stale_output" | head -1 | tr -d ' ')
+  stale_count=${stale_count:-0}
+
+  if [ "$stale_count" -gt 0 ]; then
+    printf "%b Stale memories: %d flagged (verified_at > 30 days, names specific paths/flags)\n" "$WARN" "$stale_count"
+    while IFS='|' read -r fpath vdate age; do
+      [[ -z "$fpath" ]] && continue
+      printf "      %s (verified %s, %d days ago)\n" "$fpath" "$vdate" "$age"
+    done <<< "$(echo "$stale_output" | tail -n +2)"
+    if [ "$stale_count" -gt 10 ]; then
+      printf "      ... and %d more\n" $((stale_count - 10))
+    fi
+  else
+    printf "%b Stale memories: none\n" "$OK"
+  fi
+
+  # 10. Version
   printf "%b Version: %s\n" "$INFO" "$CAST_VERSION"
 
-  # 10. Slowest agents this week
+  # 11. Slowest agents this week
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Slowest agents this week${C_RESET}\n"
   local slow_rows
@@ -1333,7 +1432,7 @@ PYEOF
     done <<< "$slow_rows"
   fi
 
-  # 11. Updates Available
+  # 12. Updates Available
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
   _doctor_upgrades
