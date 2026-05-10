@@ -143,7 +143,14 @@ cast incidents recent 3 --status=open --json 2>/dev/null || true
 
 If the command returns a non-empty JSON array, include an **Open Incidents** section in the briefing listing each incident as: `occurred_at — problem_summary` (truncated to 100 chars). If the output is empty, the exit code is non-zero, or the array has no entries, omit the section entirely — do not render an empty heading.
 
-**3f. Security gate activity (parry-guard)** — check if today's rejection log exists:
+**3f. Pending memory review** — check for low-confidence auto-memories awaiting review:
+```bash
+bash scripts/cast-memory-review.sh --list 2>/dev/null || echo "[review] unable to check pending"
+```
+
+If the count is > 0, include a **Pending Memory Review** section showing the entry count and first 3 entries. If count is 0 or the command fails, omit the section entirely.
+
+**3g. Security gate activity (parry-guard)** — check if today's rejection log exists:
 ```bash
 PARRY_LOG="$HOME/.claude/logs/parry-guard-daily-$(date +%Y-%m-%d).log"
 if [ -f "$PARRY_LOG" ]; then

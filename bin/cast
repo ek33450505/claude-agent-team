@@ -782,6 +782,7 @@ _cmd_memory() {
     delete)   _memory_delete "$@" ;;
     forget)   _memory_forget "$@" ;;
     export)   _memory_export "$@" ;;
+    review)   _memory_review "$@" ;;
     --help|-h)
       cat <<USAGE
 Usage: cast memory <subcommand> [args]
@@ -793,11 +794,12 @@ Usage: cast memory <subcommand> [args]
   delete <id>                         Delete a memory entry
   forget <id>
   export
+  review            [--list] [--auto-promote]   Pending memory review TUI
 USAGE
       ;;
     *)
       _error "Unknown memory subcommand: $subcmd"
-      printf "  Use: cast memory search|list|verify|show|delete|forget|export\n" >&2
+      printf "  Use: cast memory search|list|verify|show|delete|forget|export|review\n" >&2
       return 1
       ;;
   esac
@@ -1036,6 +1038,18 @@ else:
   print("-" * 80)
   print(r['content'] or '(empty)')
 PYEOF
+}
+
+_memory_review() {
+  local script="${CAST_SCRIPTS_DIR}/cast-memory-review.sh"
+  if [ ! -f "$script" ]; then
+    script="${CAST_REPO_DIR}/scripts/cast-memory-review.sh"
+  fi
+  if [ ! -f "$script" ]; then
+    _error "cast-memory-review.sh not found"
+    return 1
+  fi
+  bash "$script" "$@"
 }
 
 _memory_delete() {
@@ -1411,10 +1425,35 @@ PYEOF
     printf "%b Stale memories: none\n" "$OK"
   fi
 
-  # 10. Version
+  # 10. Pending memory review queue
+  local pending_count
+  pending_count=$(python3 << 'PYEOF' 2>/dev/null || echo 0
+import os
+home = os.path.expanduser("~")
+projects_dir = os.path.join(home, ".claude", "projects")
+count = 0
+try:
+  for proj_dir in os.listdir(projects_dir):
+    pending_dir = os.path.join(projects_dir, proj_dir, "memory", "_pending")
+    if os.path.isdir(pending_dir):
+      for f in os.listdir(pending_dir):
+        if f.endswith(".md") and f != "MEMORY.md":
+          count += 1
+except:
+  pass
+print(count)
+PYEOF
+  )
+  if [ "${pending_count:-0}" -gt 0 ]; then
+    printf "%b Pending memory review: %d entries (run: cast memory review)\n" "$WARN" "$pending_count"
+  else
+    printf "%b Pending memory review: queue empty\n" "$OK"
+  fi
+
+  # 11. Version
   printf "%b Version: %s\n" "$INFO" "$CAST_VERSION"
 
-  # 11. Slowest agents this week
+  # 12. Slowest agents this week
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Slowest agents this week${C_RESET}\n"
   local slow_rows
@@ -1432,7 +1471,7 @@ PYEOF
     done <<< "$slow_rows"
   fi
 
-  # 12. Updates Available
+  # 13. Updates Available
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
   _doctor_upgrades
