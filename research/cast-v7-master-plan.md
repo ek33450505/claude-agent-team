@@ -376,6 +376,72 @@ For each: the agent file moves from `agents/core/` to `routines/<name>/agent.md`
 
 ---
 
+## Phase 4.8 — Stability + Memory Hardening (CAST tighten)
+**Effort:** 1.5–2 days | **Branch:** `feature/cast-v7-phase-4-8-stability`
+**Decided:** 2026-05-10 (Ed). Frame: "v7 = tighten CAST further, v8 = the app." This phase closes the highest-leverage stability/memory gaps surfaced from two pieces of research Ed dropped 2026-05-10 (local-LLM memory architecture + Claude Code limitations as of May 2026). The vector-DB / observer-process / formal-retry-policy work is intentionally **deferred to v8** (see v8 plan §"Memory v2 + Reliability layer") — those change the data model and add dependencies, which conflicts with v7's "set in stone" goal.
+
+### Why these four (and not the bigger architecture)
+The full memory architecture from the research (vector DB + decoupled observer + 3-tier semantic/episodic/procedural) is a multi-week build and changes cast.db's shape. v7 is shipping. These four items each take half a day, leverage the schema and hooks already in place, and close the recurring bug classes Ed has hit:
+- 3-week-old stale auto-memory pointing at wires that were never connected (2026-05-05 incident, see `feedback_memory_verification.md`)
+- Bugs encountered before, debugged again from scratch (no episodic recall)
+- Auto-memories landing silently with no review surface (cluttered MEMORY.md indexes)
+- "Silent fake success" risk that Anthropic Claude Code itself ships around in 2026 (try/catch returning sample data when API integration fails)
+
+### 4.8.1 — Episodic incidents table
+- Add migration `migrations/011-incidents.sql` with schema:
+  ```sql
+  CREATE TABLE IF NOT EXISTS incidents (
+    id TEXT PRIMARY KEY,
+    occurred_at TEXT NOT NULL,
+    problem_summary TEXT NOT NULL,
+    fix_summary TEXT,
+    related_files TEXT,         -- JSON array
+    related_commit TEXT,
+    resolution_status TEXT,     -- open | fixed | wont-fix | duplicate
+    surfaced_by TEXT             -- agent name or 'manual'
+  );
+  CREATE INDEX IF NOT EXISTS idx_incidents_occurred ON incidents(occurred_at);
+  ```
+- Auto-populate hook: `cast-incident-record.sh` fires when `debugger` agent ends with Status: DONE — extracts problem from initial prompt, fix from final summary, files from `files_changed`.
+- CLI surface: `cast incidents recent [N]`, `cast incidents search <kw>` (sqlite LIKE for v7; FTS in v8).
+- Morning briefing surface: top 3 unresolved incidents.
+
+### 4.8.2 — Flag-for-review pattern for auto-memory
+- Today: `cast-memory-router.py --mode write` lands memories silently into `~/.claude/projects/<id>/memory/`.
+- New: route auto-writes to `~/.claude/projects/<id>/memory/_pending/` instead. The auto-writer flags low-confidence writes (e.g., short text, no clear category, mentions retired entities).
+- Morning briefing surfaces pending review queue; one-key approve/reject on a `cast memory review` TUI prompt.
+- Auto-promote after 7 days if not reviewed (failsafe — no entries lost).
+- Manual writes (when Ed says "remember this") bypass the queue and land immediately.
+
+### 4.8.3 — Stale-memory TTL warning
+- Add `last_seen` and `verified_at` columns to memory metadata (frontmatter — markdown extension, no schema change).
+- `cast doctor` adds a "stale memory" check: any auto-memory with `verified_at` > 30 days old AND naming a specific path/function/flag gets surfaced for re-verification.
+- Closes the 2026-05-05 bug class where the memory was honest about its observation but the world had moved.
+
+### 4.8.4 — Anti-fake-success guard hook
+- New PreToolUse hook on Edit + Write: `cast-no-fake-success-guard.sh`.
+- Greps the new content for the pattern Anthropic's own users report: `try.*except.*return.*\(sample\|fake\|mock\|placeholder\|dummy\)` (Python) and `try.*catch.*return\s*[\[{].*\(sample\|fake\|mock\)` (JS/TS).
+- On match: warns inline (not a hard block — too many false positives in test files) and logs to `cast.db quality_gates`.
+- Test-file-aware: skip if the file path contains `/tests/` or `.test.` or `.spec.`.
+- The bar is "developer notices this in the diff," not "block the edit."
+
+### 4.8.5 — Front-load Status emission (agent definition convention)
+- Insight from 2026-05-10 journal: agents complete the work then truncate before reporting. Status is the *last* thing they emit and the *first* thing context overrun cuts off. Mid-orchestration recovery has worked tonight via inline diff-verification, but it's a recurring tax.
+- Update agent definitions: emit `Status: DONE` on its own line **as soon as the work is verifiably on disk**, then write `## Handoff` and `## Work Log` after. Summary becomes the optional tail, not the load-bearing contract.
+- This is a one-line edit in each of the 21 agent prompts modified by Phase 4.5.5 — fold in here rather than reopening that PR.
+
+### 4.8.6 — Test gate + push + PR
+- Full BATS suite green before commit
+- PR titled "CAST v7 Phase 4.8: Stability + Memory Hardening — episodic incidents, review queue, TTL, fake-success guard"
+- Merge before Phase 5
+
+### Coordination with other v7 phases
+- **Runs after Phase 4.6** (routines framework) — routines might want to consume the incidents table.
+- **Runs before Phase 4.7** (ecosystem sync) — the new schema columns and CLI commands need to land before the cross-repo sync references them.
+- **Independent of Phase 5/5.5/6** — no overlap.
+
+---
+
 ## Phase 5 — Two-Copy Mirroring Resolution
 **Effort:** 1–2 hours | **Branch:** `feature/cast-v7-phase-5-mirror`
 

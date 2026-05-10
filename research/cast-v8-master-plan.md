@@ -93,6 +93,51 @@ The marketing math also works better with one bigger push at v8 than two narrowe
   - Twitter / Bluesky thread
 - Recruiter outreach citing v8 as portfolio
 
+### Phase 6 — Memory v2 + Reliability layer (deferred from v7)
+**Effort:** 1–2 weeks | **Branch:** `feature/cast-v8-phase-6-memory-v2`
+**Origin:** Two pieces of research Ed dropped 2026-05-10 — local-LLM memory architecture (vector DB + decoupled observer + 3-tier semantic/episodic/procedural) and Claude Code limitations (silent fake success, latency, service instability, declining quality). The small surgical items from those pieces shipped in v7 Phase 4.8 (episodic incidents table, flag-for-review queue, stale-memory TTL, anti-fake-success guard, front-loaded Status). The bigger architectural items below were deferred because they change the data model and add dependencies — not v7-shaped work.
+
+#### 6.1 — Vector DB over agent + project memory
+- Replace grep-based memory retrieval with semantic search.
+- Stack candidates: `sqlite-vss` (extends existing cast.db, no new process), `chromadb` (Python, more mature), or `lancedb` (Rust, fastest). Decide via Phase 0 spike.
+- Embeddings: local model (no API roundtrip on every read). `nomic-embed-text` via Ollama or `all-MiniLM-L6-v2` via sentence-transformers.
+- Migration path: keep the markdown files as canonical (human-editable), index them into the vector store on write. Vector store is a derived artifact — `cast memory reindex` rebuilds from scratch.
+- Surface: `cast memory search "<query>"` returns ranked relevance, not just grep matches.
+
+#### 6.2 — Decoupled observer process
+- Today: memory writes happen at session-end via SubagentStop hook (synchronous, in the same process as the agent that triggered it).
+- v8: separate `cast-memory-observer` daemon (Tauri sidecar in the desktop app) that watches `cast.db` and `~/.claude/agent-memory-local/` for writes, applies curation rules independently of the agent that triggered them.
+- Rationale (per the research): "True improvement comes from decoupling [reasoning engine and memory store], where external 'observer' processes manage the memory to prevent the model from getting stuck in feedback loops of its own hallucinations."
+- The observer runs the curation/summarization pass that's currently absent — proactive consolidation of redundant entries, cross-linking related memories, identifying conflicts.
+
+#### 6.3 — Formal retry + backoff policy in orchestrate
+- Today: agent truncations recovered ad-hoc via SendMessage in the orchestrating session. Worked tonight (2026-05-10) but cost minutes per recovery.
+- v8: orchestrate skill detects truncation via missing Status block, auto-dispatches a "wrap-up only" SendMessage with explicit token cap. Logged to `cast.db agent_truncations`.
+- Exponential backoff on Anthropic API 429/503 — 3 attempts with jittered delay. Surface failures to dashboard.
+- This pairs with Phase 4.8.5 (front-loaded Status) — the convention reduces truncation risk; the retry policy handles it when it happens anyway.
+
+#### 6.4 — 3-tier memory schema formalization
+- v7 Phase 4.8.1 added an `incidents` table (episodic).
+- v8 formalizes the full taxonomy:
+  - **Semantic** — facts, preferences, project state (already in markdown auto-memory + cast.db `agent_memories`)
+  - **Episodic** — events with outcomes (`incidents` table from v7 Phase 4.8.1, expanded)
+  - **Procedural** — how-to workflows (already in `agent-memory-local/<agent>/procedural/` per memory-router)
+- Add `cast memory tier <semantic|episodic|procedural>` filtering.
+- Cross-tier graph view in dashboard — which incident relates to which procedural memory, etc.
+
+#### 6.5 — Memory + reliability dashboard surface
+- New `/memory-graph` page in the desktop app showing the cross-tier graph.
+- New `/reliability` page showing truncation rate, retry success rate, observer activity, stale-memory count over time.
+- Both surfaces depend on v8 desktop app being live — that's why this whole phase is v8, not v7.
+
+### Why this is v8 work, not v7
+- Adds dependencies (vector DB, embedding model) — v7 is "set in stone, ship it."
+- Changes data model (new tables, new tier classification) — riskier than v7's "convention + small additions" pattern.
+- Requires Tauri sidecar process for the observer — that infrastructure only exists in v8.
+- The dashboard surfaces (6.5) only make sense in the desktop app context.
+
+The v7 Phase 4.8 items were chosen specifically because they could ship without these dependencies. Deferring 6.1–6.5 to v8 is the right call given Ed's "v7 = tighten CAST further, v8 = the app" framing (2026-05-10).
+
 ---
 
 ## Strategic anchor
