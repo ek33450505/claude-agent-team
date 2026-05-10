@@ -290,6 +290,17 @@ source ~/.claude/scripts/cast-events.sh
 cast_emit_event 'task_completed' 'orchestrate-skill' 'session' '' 'All batches complete' 'DONE'
 ```
 
+## Mandatory Chain Entries
+
+The following agents automatically dispatch their successor agents when status = DONE:
+
+- **code-writer** → code-reviewer
+- **bash-specialist** → code-reviewer
+- **debugger** → test-runner
+- **security** → code-reviewer
+
+These fire automatically after each upstream agent completes and should not be re-dispatched manually in the plan.
+
 ## Output Compression Rules
 - Summarize each agent's response in **under 100 words**. Never reproduce content from the agent's spawn prompt.
 - Never paste full tool output, file contents, or raw WebFetch results into your context.
