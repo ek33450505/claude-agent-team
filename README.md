@@ -302,16 +302,73 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## CAST Ecosystem
+## The CAST Ecosystem
 
-| Repo | Description | Distribution |
+CAST is one of 10 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source and actively maintained.
+
+<div align="center">
+
+```mermaid
+graph TD
+    CAT["claude-agent-team<br/>(Core Framework)"]
+    
+    CAT --> CH["cast-hooks"]
+    CAT --> CA["cast-agents"]
+    CAT --> CM["cast-memory"]
+    CAT --> CO["cast-observe"]
+    CAT --> CS["cast-security"]
+    CAT --> CP["cast-parallel"]
+    CAT --> CJ["cast-claudes_journal"]
+    CAT --> CD["cast-dash"]
+    
+    CAT -.-> DI["claude-code-dashboard<br/>(Observability UI)"]
+    CAT -.-> PF["Edward_Kubiak<br/>(Portfolio)"]
+    
+    classDef core fill:#2c3e50,stroke:#3498db,stroke-width:3px,color:#ecf0f1
+    classDef sources fill:#34495e,stroke:#1abc9c,stroke-width:2px,color:#ecf0f1
+    classDef products fill:#16a085,stroke:#27ae60,stroke-width:2px,color:#ecf0f1
+    
+    class CAT core
+    class CH,CA,CM,CO,CS,CP,CJ,CD sources
+    class DI,PF products
+```
+
+</div>
+
+### Core Framework & Tools
+
+| Repo | Description | Latest | Install |
+|---|---|---|---|
+| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Local-first swarm control plane. Specialist agents, quality gates, hook enforcement, cast.db audit trail. | ![](https://img.shields.io/github/v/release/ek33450505/claude-agent-team?style=flat-square) | `brew tap ek33450505/cast && brew install cast` |
+| [cast-hooks](https://github.com/ek33450505/cast-hooks) | 13 auditable hook scripts — observability, safety guards, quality gates. SessionStart, PreToolUse, PostToolUse, PostCompact. | ![](https://img.shields.io/github/v/release/ek33450505/cast-hooks?style=flat-square) | `brew tap ek33450505/cast-hooks && brew install cast-hooks` |
+| [cast-agents](https://github.com/ek33450505/cast-agents) | 17 specialist agents — commit, debug, review, plan, test, research, and more. Agent definitions with YAML frontmatter. | ![](https://img.shields.io/github/v/release/ek33450505/cast-agents?style=flat-square) | `brew tap ek33450505/cast-agents && brew install cast-agents` |
+| [cast-memory](https://github.com/ek33450505/cast-memory) | Persistent agent memory with FTS5 search, relevance scoring, shared pool, semantic embeddings. Per-agent knowledge accumulation. | ![](https://img.shields.io/github/v/release/ek33450505/cast-memory?style=flat-square) | `brew tap ek33450505/cast-memory && brew install cast-memory` |
+| [cast-observe](https://github.com/ek33450505/cast-observe) | Session-level observability — cost tracking, agent run history, token spend, event sourcing. Feeds cast.db. | ![](https://img.shields.io/github/v/release/ek33450505/cast-observe?style=flat-square) | `brew tap ek33450505/cast-observe && brew install cast-observe` |
+| [cast-security](https://github.com/ek33450505/cast-security) | Security hooks and audit trails. PII redaction, parry-guard integration, compliance logging. | ![](https://img.shields.io/github/v/release/ek33450505/cast-security?style=flat-square) | `brew tap ek33450505/cast-security && brew install cast-security` |
+| [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel agent execution across worktree sessions. Agent Dispatch Manifest (ADM) support. | ![](https://img.shields.io/github/v/release/ek33450505/cast-parallel?style=flat-square) | `brew tap ek33450505/cast-parallel && brew install cast-parallel` |
+| [cast-claudes_journal](https://github.com/ek33450505/cast-claudes_journal) | Session continuity — Claude's Journal auto-injects prior-day context via SessionStart hook. Obsidian vault sync. | ![](https://img.shields.io/github/v/release/ek33450505/cast-claudes_journal?style=flat-square) | `brew tap ek33450505/homebrew-claudes-journal && brew install claudes-journal` |
+| [cast-dash](https://github.com/ek33450505/cast-dash) | Terminal UI dashboard for live swarm monitoring. 4-panel real-time display (Textual framework). | ![](https://img.shields.io/github/v/release/ek33450505/cast-dash?style=flat-square) | `brew tap ek33450505/cast-dash && brew install cast-dash` |
+
+### Observability & Dashboards
+
+| Repo | Description | Install |
 |---|---|---|
-| [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Core framework | Homebrew `ek33450505/cast`, Claude plugin |
-| [cast-hooks](https://github.com/ek33450505/cast-hooks) | Hook scripts — 13 hooks | Homebrew `ek33450505/cast-hooks` |
-| [cast-dash](https://github.com/ek33450505/cast-dash) | TUI dashboard | Homebrew `ek33450505/cast-dash` |
-| [cast-memory](https://github.com/ek33450505/cast-memory) | Standalone memory persistence | Homebrew `ek33450505/cast-memory` |
-| [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel plan execution | Homebrew `ek33450505/cast-parallel` |
-| [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) | React UI — Constellation graph | Standalone repo |
+| [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) | React observability UI — sessions, agent analytics, hook health, memory browser, SQLite explorer. Constellation 3D graph of agents and token spend. | Clone from GitHub |
+
+### Get Started
+
+**New to CAST?** Start here:
+- [Quick Start](docs/tutorial/getting-started.md) — install, verify, and run in 5 minutes
+- [Agent Roster](docs/agents/AGENT-ROSTER.md) — all 30 agents with model tiers and thinking budgets
+- [Architecture Guide](docs/architecture/ARCHITECTURE.md) — hook enforcement, swarm composition, peer messaging
+
+**Already using CAST?**
+- [Changelog](CHANGELOG.md) — version history and breaking changes
+- [Hook Authoring Guide](docs/hooks/authoring-guide.md) — write and test custom hooks
+- [Full Docs Index](docs/README.md) — complete documentation
+
+### See Also
+[Edward Kubiak portfolio](https://github.com/ek33450505/Edward_Kubiak) — the personal site that hosts the CAST origin story.
 
 ---
 
@@ -377,6 +434,6 @@ The following capabilities were audited but deferred pending dependency updates 
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->859<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->858<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
