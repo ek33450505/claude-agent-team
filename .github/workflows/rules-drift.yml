@@ -1,0 +1,46 @@
+name: Rules Drift Detection
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rules-core/**'
+      - '.github/rules-core.manifest'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'rules-core/**'
+      - '.github/rules-core.manifest'
+
+jobs:
+  rules-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate current rules-core manifest
+        run: |
+          bash scripts/gen-rules-manifest.sh
+          cat .github/rules-core.manifest
+
+      - name: Detect drift
+        run: |
+          # Stash the generated manifest
+          cp .github/rules-core.manifest /tmp/current.manifest
+
+          # Restore the committed manifest
+          git show HEAD:.github/rules-core.manifest > /tmp/committed.manifest 2>/dev/null || {
+            echo "First-time run: no committed manifest yet. This is expected on initial Phase 5 merge."
+            exit 0
+          }
+
+          # Compare
+          if ! diff -q /tmp/committed.manifest /tmp/current.manifest > /dev/null; then
+            echo "rules-core drift detected:"
+            diff /tmp/committed.manifest /tmp/current.manifest || true
+            echo ""
+            echo "To fix: run 'bash scripts/gen-rules-manifest.sh' and commit the changes"
+            exit 1
+          fi
+
+          echo "✓ rules-core manifest in sync"
