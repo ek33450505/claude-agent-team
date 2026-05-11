@@ -195,7 +195,36 @@ Apply the appropriate preamble tier to ALL agent dispatches — both parallel an
 2. **Contract validation** — check for a valid Status line:
    - Valid values: `Status: DONE`, `Status: DONE_WITH_CONCERNS`, `Status: BLOCKED`, `Status: NEEDS_CONTEXT`
    - If no valid Status line is found AND response length > 50 chars, retry once with: "Your response is missing a Status block. End your response with Status: DONE (or DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT)."
-   - On retry, if still missing: treat as `BLOCKED` and proceed to step 4 below.
+   - On retry, if still missing: attempt status file fallback before declaring BLOCKED (see below).
+   - **Status file fallback (truncation resilience — Phase 4.9):** Before declaring BLOCKED, check for a recent status file at `~/.claude/agent-status/<agent>-*.json`. Find the most recent matching file with `mtime` within the last 300 seconds:
+     ```bash
+     AGENT_NAME="<agent name or subagent_type from the ADM entry>"
+     STATUS_FILE=$(find ~/.claude/agent-status -name "${AGENT_NAME}-*.json" -type f 2>/dev/null | \
+       xargs -I{} sh -c 'echo "$(stat -f %m "{}") {}"' 2>/dev/null | \
+       sort -rn | head -1 | awk '{print $2}')
+     if [ -n "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ]; then
+       FILE_MTIME=$(stat -f %m "$STATUS_FILE" 2>/dev/null || echo 0)
+       NOW=$(date +%s)
+       AGE=$((NOW - FILE_MTIME))
+       if [ "$AGE" -le 300 ]; then
+         FILE_STATUS=$(python3 -c "
+     import json, sys
+     try:
+         d = json.load(open('$STATUS_FILE'))
+         print(d.get('status', ''))
+     except Exception:
+         pass
+     " 2>/dev/null)
+         if [ -n "$FILE_STATUS" ]; then
+           # Use file-status as authoritative; skip the BLOCKED path
+           STATUS_LINE="Status: $FILE_STATUS (recovered from status file)"
+           # Proceed to step 4 routing with the recovered status
+         fi
+       fi
+     fi
+     ```
+   - If the status file fallback recovers a Status, log to cast.db `quality_gates` with `contract_passed = -1` (special sentinel meaning "recovered via file fallback").
+   - Only treat as `BLOCKED` if both the retry AND the file fallback fail.
 
 3. Log validation result to cast.db:
    ```bash

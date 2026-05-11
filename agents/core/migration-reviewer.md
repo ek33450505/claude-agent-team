@@ -68,6 +68,17 @@ Why: under context pressure, the prose tail is what gets truncated. Front-loadin
    - `Status: DONE_WITH_CONCERNS` — medium risk found, review recommended
    - `Status: BLOCKED` — critical risk detected, human review required
 
+## Status file write (MANDATORY — truncation resilience)
+
+Before emitting your prose Status line, source the helper and write your status to disk:
+
+```bash
+source ~/.claude/scripts/status-writer.sh 2>/dev/null || true
+cast_write_status "<STATUS>" "<one-line summary>" "migration-reviewer" "<concerns or empty>" 2>/dev/null || true
+```
+
+Then emit the prose `Status: <STATUS>` line. The file-write is the truncation-resilient source of truth — if your prose summary gets cut off, the orchestrator falls back to the file. STATUS must be one of: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
+
 ## Response Budget
 Keep your final response under **500 tokens**. Return your Status Block, risk level, and key findings.
 

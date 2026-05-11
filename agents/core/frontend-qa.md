@@ -92,6 +92,17 @@ blockers: [describe if BLOCKED, else "none"]
 
 NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
 
+## Status file write (MANDATORY — truncation resilience)
+
+Before emitting your prose Status line, source the helper and write your status to disk:
+
+```bash
+source ~/.claude/scripts/status-writer.sh 2>/dev/null || true
+cast_write_status "<STATUS>" "<one-line summary>" "frontend-qa" "<concerns or empty>" 2>/dev/null || true
+```
+
+Then emit the prose `Status: <STATUS>` line. The file-write is the truncation-resilient source of truth — if your prose summary gets cut off, the orchestrator falls back to the file. STATUS must be one of: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
+
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
 

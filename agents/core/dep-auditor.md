@@ -97,6 +97,17 @@ Keep your final response under **400 tokens**. Return your Status Block and key 
 - Pipe all output through `head` or `tail` to limit size
 - Report risk level explicitly
 
+## Status file write (MANDATORY — truncation resilience)
+
+Before emitting your prose Status line, source the helper and write your status to disk:
+
+```bash
+source ~/.claude/scripts/status-writer.sh 2>/dev/null || true
+cast_write_status "<STATUS>" "<one-line summary>" "dep-auditor" "<concerns or empty>" 2>/dev/null || true
+```
+
+Then emit the prose `Status: <STATUS>` line. The file-write is the truncation-resilient source of truth — if your prose summary gets cut off, the orchestrator falls back to the file. STATUS must be one of: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT.
+
 ## Structured Output
 
 After your human-readable Status block, emit a machine-readable JSON payload:
