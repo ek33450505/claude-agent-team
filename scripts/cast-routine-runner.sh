@@ -24,7 +24,8 @@ ROUTINES_DIR="${CAST_ROUTINES_DIR:-$HOME/.claude/routines}"
 DRY_RUN=0
 FROM_CRON=0
 ROUTINE_NAME=""
-declare -A PROMPT_ARGS
+# bash 3.2-compatible: accumulate key=value pairs in an indexed array
+PROMPT_ARGS_RAW=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,14 +39,14 @@ while [[ $# -gt 0 ]]; do
       fi
       _arg_key="${1%%=*}"
       _arg_val="${1#*=}"
-      PROMPT_ARGS["$_arg_key"]="$_arg_val"
+      PROMPT_ARGS_RAW+=("${_arg_key}=${_arg_val}")
       shift
       ;;
     --arg=*)
       _kv="${1#--arg=}"
       _arg_key="${_kv%%=*}"
       _arg_val="${_kv#*=}"
-      PROMPT_ARGS["$_arg_key"]="$_arg_val"
+      PROMPT_ARGS_RAW+=("${_arg_key}=${_arg_val}")
       shift
       ;;
     -*)
@@ -166,7 +167,7 @@ TIMESTAMP="$(date -u +%Y-%m-%d-%H%M)"
 OUTPUT_FILE="$OUTPUT_DIR_REAL/$TIMESTAMP.md"
 
 # ── Step 5b: Validate required prompt_args ───────────────────────────────────
-# Build a JSON object of supplied args from the PROMPT_ARGS associative array.
+# Build a JSON object of supplied args from PROMPT_ARGS_RAW.
 # Use a temp file to avoid heredoc-in-condition parsing issues.
 _ARGS_VALIDATE_PY="$(mktemp -t cast-routine-args.XXXXXX)"
 cat > "$_ARGS_VALIDATE_PY" <<'PYEOF'
@@ -188,16 +189,14 @@ if errors:
     sys.exit(1)
 PYEOF
 
-# Serialize PROMPT_ARGS associative array to JSON.
-# `${PROMPT_ARGS[*]+x}` guards against the bash strict-mode (set -u) edge
-# case where an empty associative array reports as "unbound" rather than
-# length 0. Short-circuit AND ensures the length check only runs when
-# the array has been written to at least once.
+# Serialize PROMPT_ARGS_RAW (indexed array of key=value strings) to JSON.
+# bash 3.2-compatible: no associative arrays used.
 SUPPLIED_ARGS_JSON="{}"
-if [[ -n "${PROMPT_ARGS[*]+x}" && ${#PROMPT_ARGS[@]} -gt 0 ]]; then
+if [[ ${#PROMPT_ARGS_RAW[@]} -gt 0 ]]; then
   _supplied_parts=""
-  for _k in "${!PROMPT_ARGS[@]}"; do
-    _v="${PROMPT_ARGS[$_k]}"
+  for _kv_pair in "${PROMPT_ARGS_RAW[@]}"; do
+    _k="${_kv_pair%%=*}"
+    _v="${_kv_pair#*=}"
     # Escape backslash and double-quote for JSON
     _v_escaped="${_v//\\/\\\\}"
     _v_escaped="${_v_escaped//\"/\\\"}"
@@ -264,11 +263,12 @@ fi
 RENDERED_PROMPT="${PROMPT_TEMPLATE//\{\{routine_name\}\}/$ROUTINE_NAME}"
 RENDERED_PROMPT="${RENDERED_PROMPT//\{\{routine_output_path\}\}/$OUTPUT_FILE}"
 
-# Substitute {{<arg_name>}} placeholders from supplied PROMPT_ARGS.
-# Same `set -u` guard as the JSON serializer above.
-if [[ -n "${PROMPT_ARGS[*]+x}" && ${#PROMPT_ARGS[@]} -gt 0 ]]; then
-  for _key in "${!PROMPT_ARGS[@]}"; do
-    _val="${PROMPT_ARGS[$_key]}"
+# Substitute {{<arg_name>}} placeholders from PROMPT_ARGS_RAW.
+# bash 3.2-compatible: iterate indexed array of key=value strings.
+if [[ ${#PROMPT_ARGS_RAW[@]} -gt 0 ]]; then
+  for _kv_pair in "${PROMPT_ARGS_RAW[@]}"; do
+    _key="${_kv_pair%%=*}"
+    _val="${_kv_pair#*=}"
     RENDERED_PROMPT="${RENDERED_PROMPT//\{\{${_key}\}\}/$_val}"
   done
 fi

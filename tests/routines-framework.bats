@@ -593,3 +593,21 @@ FAKECRON
 
   rm -rf "$settings_dir"
 }
+
+# ---------------------------------------------------------------------------
+# Regression: bash 3.2 compatibility — no declare -A (associative arrays)
+# Catches: PR #54 CI failure — declare -A is bash 4+ only; macOS CI = bash 3.2
+# ---------------------------------------------------------------------------
+
+@test "runner script has no bash 4-only declare -A syntax" {
+  # grep exits 1 when no match found — that is the desired passing state.
+  # This test would have FAILED on the unfixed code (declare -A PROMPT_ARGS).
+  run grep -n "declare -A" "$RUNNER"
+  assert_failure
+}
+
+@test "runner is parseable by bash without syntax errors" {
+  # bash -n checks for syntax errors without executing.
+  run bash -n "$RUNNER"
+  assert_success
+}
