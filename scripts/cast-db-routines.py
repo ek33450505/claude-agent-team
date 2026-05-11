@@ -333,6 +333,64 @@ def cmd_update_status(args: list) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: enable-disable
+# ---------------------------------------------------------------------------
+def cmd_enable_disable(args: list) -> int:
+    """
+    enable-disable <name> <0|1>
+    Sets the enabled flag for a routine.
+    """
+    if len(args) < 2:
+        print(json.dumps({"error": "enable-disable requires: <name> <0|1>"}))
+        return 1
+
+    name = args[0]
+    try:
+        enabled = int(args[1])
+        if enabled not in (0, 1):
+            raise ValueError("must be 0 or 1")
+    except ValueError:
+        print(json.dumps({"error": "second argument must be 0 or 1"}))
+        return 1
+
+    try:
+        conn = _connect()
+    except sqlite3.Error as e:
+        logging.error(f"DB connect error in enable-disable: {e}")
+        print(json.dumps({"error": str(e)}))
+        return 1
+
+    try:
+        if not _table_exists(conn):
+            print(json.dumps({"error": "routines table not yet initialized — run: cast migrate"}))
+            return 1
+
+        conn.execute(
+            "UPDATE routines SET enabled = ? WHERE name = ?",
+            (enabled, name),
+        )
+        conn.commit()
+
+        if conn.execute("SELECT changes()").fetchone()[0] == 0:
+            print(json.dumps({"error": f"routine not found: {name}"}))
+            return 1
+
+        state = "enabled" if enabled else "disabled"
+        print(json.dumps({"status": "ok", "name": name, "enabled": enabled, "state": state}))
+        return 0
+    except sqlite3.OperationalError as e:
+        logging.error(f"OperationalError in enable-disable: {e}")
+        print(json.dumps({"error": str(e)}))
+        return 1
+    except Exception as e:
+        logging.error(f"Unexpected error in enable-disable: {e}")
+        print(json.dumps({"error": str(e)}))
+        return 1
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Main dispatch
 # ---------------------------------------------------------------------------
 SUBCOMMANDS = {
@@ -341,6 +399,7 @@ SUBCOMMANDS = {
     "get": cmd_get,
     "upsert": cmd_upsert,
     "update-status": cmd_update_status,
+    "enable-disable": cmd_enable_disable,
 }
 
 
@@ -350,7 +409,8 @@ def main() -> int:
     if len(sys.argv) < 2:
         print(
             "Usage: cast-db-routines.py <subcommand> [args]\n"
-            "Subcommands: list, status [name], get <name>, upsert, update-status <name> <status> [output_path]",
+            "Subcommands: list, status [name], get <name>, upsert, update-status <name> <status> [output_path],"
+            " enable-disable <name> <0|1>",
             file=sys.stderr,
         )
         return 1
