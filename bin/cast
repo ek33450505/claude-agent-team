@@ -13,7 +13,7 @@ set -uo pipefail
 
 # ── Script directory (resolve symlinks) ──────────────────────────────────────
 CAST_BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
-CAST_REPO_DIR="$(cd "$CAST_BIN_DIR/.." && pwd)"
+CAST_REPO_DIR="${CAST_REPO_DIR:-$(cd "$CAST_BIN_DIR/.." && pwd)}"
 
 # ── Version ──────────────────────────────────────────────────────────────────
 CAST_VERSION="$(cat "${CAST_REPO_DIR}/VERSION" 2>/dev/null || echo "unknown")"
@@ -1476,6 +1476,155 @@ PYEOF
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
   _doctor_upgrades
+
+  # 14. Agent frontmatter parses
+  local frontmatter_errors
+  frontmatter_errors="$(python3 - "$CAST_AGENTS_DIR" <<'PYEOF'
+import os, sys, re
+agents_dir = sys.argv[1]
+errors = []
+if os.path.isdir(agents_dir):
+    for fname in sorted(os.listdir(agents_dir)):
+        if not fname.endswith('.md'):
+            continue
+        fpath = os.path.join(agents_dir, fname)
+        try:
+            with open(fpath) as fh:
+                content = fh.read()
+            # Expect frontmatter block bounded by '---' at top
+            m = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+            if not m:
+                errors.append(f"{fname}: no frontmatter block")
+                continue
+            block = m.group(1)
+            # Cheap key check (no yaml lib in stdlib)
+            for key in ('name', 'description', 'tools'):
+                if not re.search(rf'^{key}\s*:', block, re.MULTILINE):
+                    errors.append(f"{fname}: missing '{key}'")
+        except Exception as e:
+            errors.append(f"{fname}: {e}")
+for e in errors:
+    print(e)
+PYEOF
+2>/dev/null || true)"
+  if [ -z "$frontmatter_errors" ]; then
+    printf "%b Agent frontmatter: all %d parse cleanly\n" "$OK" "$agent_count"
+  else
+    printf "%b Agent frontmatter: errors found:\n" "$WARN"
+    while IFS= read -r line; do
+      [ -n "$line" ] && printf "    %s\n" "$line"
+    done <<< "$frontmatter_errors"
+    overall_ok=0
+  fi
+
+  # 15. MCP servers reachable (best-effort)
+  local settings_file="${HOME}/.claude/settings.json"
+  if [ -f "$settings_file" ]; then
+    local mcp_status
+    mcp_status="$(python3 - "$settings_file" <<'PYEOF'
+import json, sys, os, shutil, subprocess
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    servers = cfg.get("mcpServers", {})
+except Exception:
+    sys.exit(0)
+for name, server in servers.items():
+    url = server.get("url")
+    cmd = server.get("command")
+    if url:
+        try:
+            r = subprocess.run(["curl", "-sf", "--max-time", "2", url], capture_output=True, timeout=3)
+            status = "ok" if r.returncode == 0 else "unreachable"
+        except Exception:
+            status = "error"
+        print(f"{name}|{status}|{url}")
+    elif cmd:
+        resolved = shutil.which(cmd) or (cmd if os.path.isfile(cmd) else None)
+        status = "ok" if resolved else "missing"
+        print(f"{name}|{status}|{cmd}")
+    else:
+        print(f"{name}|unknown|<no url or command>")
+PYEOF
+  2>/dev/null || echo "")"
+    if [ -z "$mcp_status" ]; then
+      printf "%b MCP servers: none configured\n" "$INFO"
+    else
+      local mcp_ok=0 mcp_bad=0
+      while IFS='|' read -r name status target; do
+        [ -z "$name" ] && continue
+        if [ "$status" = "ok" ]; then
+          mcp_ok=$((mcp_ok+1))
+        else
+          mcp_bad=$((mcp_bad+1))
+        fi
+      done <<< "$mcp_status"
+      if [ "$mcp_bad" -eq 0 ]; then
+        printf "%b MCP servers: %d configured, all reachable\n" "$OK" "$mcp_ok"
+      else
+        printf "%b MCP servers: %d reachable, %d unreachable/missing\n" "$WARN" "$mcp_ok" "$mcp_bad"
+        while IFS='|' read -r name status target; do
+          [ -z "$name" ] && continue
+          [ "$status" = "ok" ] && continue
+          printf "    %s: %s (%s)\n" "$name" "$status" "$target"
+        done <<< "$mcp_status"
+      fi
+    fi
+  else
+    printf "%b MCP servers: settings.json not found\n" "$INFO"
+  fi
+
+  # 16. Routines validate
+  local routines_dir="${CAST_REPO_DIR}/routines"
+  if [ -d "$routines_dir" ]; then
+    local routine_status
+    routine_status="$(python3 - "$routines_dir" <<'PYEOF'
+import os, sys, re
+routines_dir = sys.argv[1]
+total = 0
+errors = []
+for fname in sorted(os.listdir(routines_dir)):
+    if not fname.endswith('.yaml') and not fname.endswith('.yml'):
+        continue
+    total += 1
+    fpath = os.path.join(routines_dir, fname)
+    try:
+        with open(fpath) as fh:
+            content = fh.read()
+        for key in ('name:', 'agent:', 'prompt_template:'):
+            if key not in content:
+                errors.append(f"{fname}: missing '{key.rstrip(':')}'")
+    except Exception as e:
+        errors.append(f"{fname}: {e}")
+print(f"total={total}")
+for e in errors:
+    print(f"err={e}")
+PYEOF
+  2>/dev/null || echo "total=0")"
+    local rt_total=0
+    local rt_errs=0
+    while IFS= read -r line; do
+      case "$line" in
+        total=*) rt_total="${line#total=}" ;;
+        err=*) rt_errs=$((rt_errs+1)) ;;
+      esac
+    done <<< "$routine_status"
+    if [ "$rt_errs" -eq 0 ]; then
+      if [ "$rt_total" -eq 0 ]; then
+        printf "%b Routines: none configured\n" "$INFO"
+      else
+        printf "%b Routines: %d configured, all schemas valid\n" "$OK" "$rt_total"
+      fi
+    else
+      printf "%b Routines: %d configured, %d with schema errors\n" "$WARN" "$rt_total" "$rt_errs"
+      while IFS= read -r line; do
+        case "$line" in err=*) printf "    %s\n" "${line#err=}" ;; esac
+      done <<< "$routine_status"
+      overall_ok=0
+    fi
+  else
+    printf "%b Routines: directory not found (%s)\n" "$INFO" "$routines_dir"
+  fi
 
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
