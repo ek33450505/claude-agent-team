@@ -459,6 +459,6 @@ The following capabilities were audited but deferred pending dependency updates 
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->967<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->987<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
