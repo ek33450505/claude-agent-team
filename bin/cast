@@ -2237,7 +2237,7 @@ PYEOF
       echo "  get <name>                   Get a single routine record"
       echo "  install <yaml-path>          Install routine from YAML spec"
       echo "  uninstall <name>             Remove cron entry and disable routine"
-      echo "  trigger <name> [--dry-run]   Trigger a routine manually"
+      echo "  trigger <name> [--dry-run] [--arg key=value ...]  Trigger a routine manually"
       echo "  enable <name>                Enable routine (reinstalls cron)"
       echo "  disable <name>               Disable routine (removes cron)"
       echo "  validate <yaml-path>         Validate a routine YAML spec"

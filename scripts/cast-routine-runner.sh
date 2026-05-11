@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # cast-routine-runner.sh — single entry point for all routine trigger types.
-# Usage: cast-routine-runner.sh <routine-name> [--dry-run] [--from-cron]
+# Usage: cast-routine-runner.sh <routine-name> [--dry-run] [--from-cron] [--arg key=value ...]
 #
 # Env:
-#   CAST_ROUTINES_DIR   override default ~/.claude/routines
-#   CAST_DB_PATH        override default ~/.claude/cast.db
-#   CAST_SCRIPTS_DIR    override default ~/.claude/scripts
-#   CAST_CRONTAB_CMD    override crontab binary (useful in tests)
+#   CAST_ROUTINES_DIR          override default ~/.claude/routines
+#   CAST_DB_PATH               override default ~/.claude/cast.db
+#   CAST_SCRIPTS_DIR           override default ~/.claude/scripts
+#   CAST_CRONTAB_CMD           override crontab binary (useful in tests)
+#   CAST_ROUTINE_SKIP_MCP_CHECK  set to 1 to bypass mcp_required pre-flight check
 
 # ── Subprocess bypass ────────────────────────────────────────────────────────
 if [[ "${CLAUDE_SUBPROCESS:-}" == "1" ]]; then
@@ -23,11 +24,30 @@ ROUTINES_DIR="${CAST_ROUTINES_DIR:-$HOME/.claude/routines}"
 DRY_RUN=0
 FROM_CRON=0
 ROUTINE_NAME=""
+declare -A PROMPT_ARGS
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)   DRY_RUN=1; shift ;;
     --from-cron) FROM_CRON=1; shift ;;
+    --arg)
+      shift
+      if [[ -z "${1:-}" ]]; then
+        echo "Error: --arg requires a key=value argument" >&2
+        exit 1
+      fi
+      _arg_key="${1%%=*}"
+      _arg_val="${1#*=}"
+      PROMPT_ARGS["$_arg_key"]="$_arg_val"
+      shift
+      ;;
+    --arg=*)
+      _kv="${1#--arg=}"
+      _arg_key="${_kv%%=*}"
+      _arg_val="${_kv#*=}"
+      PROMPT_ARGS["$_arg_key"]="$_arg_val"
+      shift
+      ;;
     -*)
       echo "Unknown flag: $1" >&2
       exit 1
@@ -45,7 +65,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$ROUTINE_NAME" ]]; then
-  echo "Usage: cast-routine-runner.sh <routine-name> [--dry-run] [--from-cron]" >&2
+  echo "Usage: cast-routine-runner.sh <routine-name> [--dry-run] [--from-cron] [--arg key=value ...]" >&2
   exit 1
 fi
 
@@ -86,6 +106,8 @@ result = {
     "trigger_type":    data.get("trigger", {}).get("type", "manual"),
     "trigger_value":   data.get("trigger", {}).get("value", ""),
     "description":     data.get("description", ""),
+    "prompt_args":     data.get("prompt_args", []),
+    "mcp_required":    data.get("mcp_required", []),
 }
 print(json.dumps(result))
 PYEOF
@@ -96,6 +118,8 @@ PARSED="$(_parse_yaml)"
 AGENT="$(echo "$PARSED" | python3 -c "import sys,json; print(json.load(sys.stdin)['agent'])")"
 PROMPT_TEMPLATE="$(echo "$PARSED" | python3 -c "import sys,json; print(json.load(sys.stdin)['prompt_template'])")"
 OUTPUT_DIR_RAW="$(echo "$PARSED" | python3 -c "import sys,json; print(json.load(sys.stdin)['output_dir'])")"
+PROMPT_ARGS_JSON="$(echo "$PARSED" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['prompt_args']))")"
+MCP_REQUIRED_JSON="$(echo "$PARSED" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['mcp_required']))")"
 
 # ── Step 5 (early): Verify agent exists in agents/core/ ──────────────────────
 # Derive repo dir relative to this script's location
@@ -141,9 +165,113 @@ fi
 TIMESTAMP="$(date -u +%Y-%m-%d-%H%M)"
 OUTPUT_FILE="$OUTPUT_DIR_REAL/$TIMESTAMP.md"
 
-# ── Step 6: Render prompt (substitute {{routine_name}} and {{routine_output_path}}) ──
+# ── Step 5b: Validate required prompt_args ───────────────────────────────────
+# Build a JSON object of supplied args from the PROMPT_ARGS associative array.
+# Use a temp file to avoid heredoc-in-condition parsing issues.
+_ARGS_VALIDATE_PY="$(mktemp -t cast-routine-args.XXXXXX)"
+cat > "$_ARGS_VALIDATE_PY" <<'PYEOF'
+import sys, json
+
+prompt_args_spec = json.loads(sys.argv[1])  # list of {name, required}
+supplied        = json.loads(sys.argv[2])   # dict of supplied key->value
+
+errors = []
+for spec in prompt_args_spec:
+    name     = spec.get("name", "")
+    required = spec.get("required", False)
+    if required and name not in supplied:
+        errors.append(f"required prompt_arg '{name}' not supplied (use --arg {name}=<value>)")
+
+if errors:
+    for e in errors:
+        print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+
+# Serialize PROMPT_ARGS associative array to JSON.
+# `${PROMPT_ARGS[*]+x}` guards against the bash strict-mode (set -u) edge
+# case where an empty associative array reports as "unbound" rather than
+# length 0. Short-circuit AND ensures the length check only runs when
+# the array has been written to at least once.
+SUPPLIED_ARGS_JSON="{}"
+if [[ -n "${PROMPT_ARGS[*]+x}" && ${#PROMPT_ARGS[@]} -gt 0 ]]; then
+  _supplied_parts=""
+  for _k in "${!PROMPT_ARGS[@]}"; do
+    _v="${PROMPT_ARGS[$_k]}"
+    # Escape backslash and double-quote for JSON
+    _v_escaped="${_v//\\/\\\\}"
+    _v_escaped="${_v_escaped//\"/\\\"}"
+    _k_escaped="${_k//\\/\\\\}"
+    _k_escaped="${_k_escaped//\"/\\\"}"
+    _supplied_parts="${_supplied_parts},\"${_k_escaped}\":\"${_v_escaped}\""
+  done
+  SUPPLIED_ARGS_JSON="{${_supplied_parts:1}}"
+fi
+
+python3 "$_ARGS_VALIDATE_PY" "$PROMPT_ARGS_JSON" "$SUPPLIED_ARGS_JSON" >&2
+_ARGS_RC=$?
+rm -f "$_ARGS_VALIDATE_PY"
+if [[ "$_ARGS_RC" -ne 0 ]]; then
+  exit 1
+fi
+
+# ── Step 5c: MCP pre-flight check ────────────────────────────────────────────
+if [[ "${CAST_ROUTINE_SKIP_MCP_CHECK:-0}" != "1" ]]; then
+  SETTINGS_FILE="$HOME/.claude/settings.json"
+  if [[ -n "$MCP_REQUIRED_JSON" && "$MCP_REQUIRED_JSON" != "[]" ]]; then
+    if [[ ! -f "$SETTINGS_FILE" ]]; then
+      # No settings.json at all — warn but continue
+      echo "[MCP pre-flight] Warning: ~/.claude/settings.json not found; skipping MCP check." >&2
+    else
+      _MCP_PREFLIGHT_PY="$(mktemp -t cast-routine-mcp.XXXXXX)"
+      cat > "$_MCP_PREFLIGHT_PY" <<'PYEOF'
+import sys, json
+
+mcp_required  = json.loads(sys.argv[1])
+routine_name  = sys.argv[2]
+settings_path = sys.argv[3]
+
+try:
+    with open(settings_path) as f:
+        settings = json.load(f)
+except Exception as e:
+    print(f"[MCP pre-flight] Warning: could not parse {settings_path}: {e}", file=sys.stderr)
+    sys.exit(0)
+
+mcp_servers = settings.get("mcpServers", {})
+missing = [m for m in mcp_required if m not in mcp_servers]
+if missing:
+    for m in missing:
+        print(
+            f"[MCP pre-flight] Routine '{routine_name}' requires MCP server '{m}' "
+            f"but it is not configured in ~/.claude/settings.json mcpServers. "
+            f"Wire it before triggering, OR set CAST_ROUTINE_SKIP_MCP_CHECK=1 to bypass.",
+            file=sys.stderr
+        )
+    sys.exit(1)
+PYEOF
+      python3 "$_MCP_PREFLIGHT_PY" "$MCP_REQUIRED_JSON" "$ROUTINE_NAME" "$SETTINGS_FILE" >&2
+      _MCP_RC=$?
+      rm -f "$_MCP_PREFLIGHT_PY"
+      if [[ "$_MCP_RC" -ne 0 ]]; then
+        exit 1
+      fi
+    fi
+  fi
+fi
+
+# ── Step 6: Render prompt (substitute built-in + prompt_args placeholders) ───
 RENDERED_PROMPT="${PROMPT_TEMPLATE//\{\{routine_name\}\}/$ROUTINE_NAME}"
 RENDERED_PROMPT="${RENDERED_PROMPT//\{\{routine_output_path\}\}/$OUTPUT_FILE}"
+
+# Substitute {{<arg_name>}} placeholders from supplied PROMPT_ARGS.
+# Same `set -u` guard as the JSON serializer above.
+if [[ -n "${PROMPT_ARGS[*]+x}" && ${#PROMPT_ARGS[@]} -gt 0 ]]; then
+  for _key in "${!PROMPT_ARGS[@]}"; do
+    _val="${PROMPT_ARGS[$_key]}"
+    RENDERED_PROMPT="${RENDERED_PROMPT//\{\{${_key}\}\}/$_val}"
+  done
+fi
 
 # ── Dry-run: print plan and exit ─────────────────────────────────────────────
 if [[ "$DRY_RUN" -eq 1 ]]; then

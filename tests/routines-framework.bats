@@ -485,3 +485,111 @@ FAKECRON
   rm -f "$bad_yaml"
   rm -rf "$fake_crontab_dir" "$tmp_routines_dir"
 }
+
+# ---------------------------------------------------------------------------
+# Wave 4c: New routine YAML validation tests
+# ---------------------------------------------------------------------------
+
+@test "meeting-prep.yaml passes cast routines validate" {
+  run env CAST_REPO_DIR="$REPO_DIR" \
+    bash "$CAST_BIN" routines validate "$REPO_DIR/routines/meeting-prep.yaml"
+  assert_success
+  assert_output --partial "OK: meeting-prep"
+}
+
+@test "knowledge-curator.yaml passes cast routines validate" {
+  run env CAST_REPO_DIR="$REPO_DIR" \
+    bash "$CAST_BIN" routines validate "$REPO_DIR/routines/knowledge-curator.yaml"
+  assert_success
+  assert_output --partial "OK: knowledge-curator"
+}
+
+@test "learning-scout.yaml passes cast routines validate" {
+  run env CAST_REPO_DIR="$REPO_DIR" \
+    bash "$CAST_BIN" routines validate "$REPO_DIR/routines/learning-scout.yaml"
+  assert_success
+  assert_output --partial "OK: learning-scout"
+}
+
+@test "pr-narrator.yaml passes cast routines validate" {
+  run env CAST_REPO_DIR="$REPO_DIR" \
+    bash "$CAST_BIN" routines validate "$REPO_DIR/routines/pr-narrator.yaml"
+  assert_success
+  assert_output --partial "OK: pr-narrator"
+}
+
+@test "runner exits 1 when required prompt_arg is missing" {
+  # pr-narrator requires pr_url — trigger without --arg should fail
+  local routines_dir="$REPO_DIR/routines"
+  sqlite3 "$TEST_DB" < "$MIGRATION_FILE"
+
+  run env CAST_ROUTINES_DIR="$routines_dir" \
+    CAST_DB_PATH="$TEST_DB" \
+    CLAUDE_SUBPROCESS="" \
+    CAST_ROUTINE_SKIP_MCP_CHECK=1 \
+    bash "$RUNNER" pr-narrator --dry-run
+
+  assert_failure
+  assert_output --partial "required prompt_arg 'pr_url' not supplied"
+}
+
+@test "runner interpolates prompt_arg into rendered prompt" {
+  local routines_dir="$REPO_DIR/routines"
+  sqlite3 "$TEST_DB" < "$MIGRATION_FILE"
+
+  run env CAST_ROUTINES_DIR="$routines_dir" \
+    CAST_DB_PATH="$TEST_DB" \
+    CLAUDE_SUBPROCESS="" \
+    CAST_ROUTINE_SKIP_MCP_CHECK=1 \
+    bash "$RUNNER" pr-narrator --dry-run --arg pr_url=https://example.com/pr/1
+
+  assert_success
+  assert_output --partial "https://example.com/pr/1"
+}
+
+@test "runner exits 1 when mcp_required references unconfigured MCP" {
+  local routines_dir="$REPO_DIR/routines"
+  sqlite3 "$TEST_DB" < "$MIGRATION_FILE"
+
+  # Write a settings.json fixture with no mcpServers entry for claude_ai_Google_Calendar
+  local settings_dir
+  settings_dir="$(mktemp -d)"
+  mkdir -p "$settings_dir/.claude"
+  printf '{"mcpServers": {}}' > "$settings_dir/.claude/settings.json"
+
+  run env CAST_ROUTINES_DIR="$routines_dir" \
+    CAST_DB_PATH="$TEST_DB" \
+    CLAUDE_SUBPROCESS="" \
+    HOME="$settings_dir" \
+    bash "$RUNNER" meeting-prep --dry-run
+
+  assert_failure
+  assert_output --partial "[MCP pre-flight]"
+  assert_output --partial "claude_ai_Google_Calendar"
+
+  rm -rf "$settings_dir"
+}
+
+@test "runner skips MCP check when CAST_ROUTINE_SKIP_MCP_CHECK=1" {
+  local routines_dir="$REPO_DIR/routines"
+  sqlite3 "$TEST_DB" < "$MIGRATION_FILE"
+
+  # Same fixture as above — no MCP configured — but bypass flag is set
+  local settings_dir
+  settings_dir="$(mktemp -d)"
+  mkdir -p "$settings_dir/.claude"
+  printf '{"mcpServers": {}}' > "$settings_dir/.claude/settings.json"
+
+  run env CAST_ROUTINES_DIR="$routines_dir" \
+    CAST_DB_PATH="$TEST_DB" \
+    CLAUDE_SUBPROCESS="" \
+    CAST_ROUTINE_SKIP_MCP_CHECK=1 \
+    HOME="$settings_dir" \
+    bash "$RUNNER" meeting-prep --dry-run
+
+  # dry-run should succeed (dispatch is bypassed)
+  assert_success
+  assert_output --partial "=== cast-routine-runner dry-run ==="
+
+  rm -rf "$settings_dir"
+}

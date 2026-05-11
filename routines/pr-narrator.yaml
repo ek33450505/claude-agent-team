@@ -1,0 +1,37 @@
+name: pr-narrator
+description: "Generate a stakeholder-facing PR summary from a GitHub PR URL (manual trigger)"
+trigger:
+  type: manual
+agent: docs
+prompt_template: |
+  Produce a stakeholder-facing summary of this pull request: {{pr_url}}
+
+  Fetch the PR details using: gh pr view {{pr_url}} --json title,body,additions,deletions,changedFiles,commits,reviews,state
+
+  Write a summary for a non-technical stakeholder covering:
+  - What changed and why (1-2 sentences)
+  - Impact: what this enables or fixes
+  - Risk level: low / medium / high (brief rationale)
+  - Current status: open / merged / closed
+
+  Format the output as a short markdown document and write it to {{routine_output_path}}.
+output_dir: "~/.claude/routines-output/pr-narrator"
+enabled: true
+mcp_required: []
+prompt_args:
+  - name: pr_url
+    required: true
+  - name: pr_number
+    required: false
+notes: |
+  Dispatches the 'docs' agent (the 'pr-narrator' agent was retired in CAST v7 Phase 4.5a;
+  its functionality is covered by 'docs' + this routine template).
+
+  Usage:
+    cast routines trigger pr-narrator --arg pr_url=https://github.com/owner/repo/pull/123
+
+  The optional pr_number arg is extracted from the URL if absent — no need to supply it
+  separately unless you want to override.
+
+  GitHub webhook trigger is deferred to v8; this routine is manual-only for now.
+  Requires the 'gh' CLI to be authenticated: run 'gh auth login' if not already done.
