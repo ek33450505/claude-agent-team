@@ -66,12 +66,31 @@ if [ ! -f "$README" ]; then
   exit 1
 fi
 
-update_token "CAST_AGENT_COUNT"    "$AGENT_COUNT"    "$README"
-update_token "CAST_COMMAND_COUNT"  "$CMD_COUNT"      "$README"
-update_token "CAST_SKILL_COUNT"    "$SKILL_COUNT"    "$README"
-update_token "CAST_TEST_COUNT"     "$TEST_COUNT"     "$README"
-update_token "CAST_ROUTE_COUNT"    "$ROUTE_COUNT"    "$README"
-update_token "CAST_DB_TABLE_COUNT" "$DB_TABLE_COUNT" "$README"
+update_all_tokens() {
+  local file="$1"
+  update_token "CAST_AGENT_COUNT"    "$AGENT_COUNT"    "$file"
+  update_token "CAST_COMMAND_COUNT"  "$CMD_COUNT"      "$file"
+  update_token "CAST_SKILL_COUNT"    "$SKILL_COUNT"    "$file"
+  update_token "CAST_TEST_COUNT"     "$TEST_COUNT"     "$file"
+  update_token "CAST_ROUTE_COUNT"    "$ROUTE_COUNT"    "$file"
+  update_token "CAST_DB_TABLE_COUNT" "$DB_TABLE_COUNT" "$file"
+}
+
+update_all_tokens "$README"
+
+# Also walk docs/ for any other files that carry sentinel tokens. Files without
+# sentinels are untouched (sed is a no-op on them). Files with sentinels stay
+# fresh on every gen-stats run, just like README.md.
+if [ -d "$REPO_DIR/docs" ]; then
+  while IFS= read -r doc; do
+    [ -f "$doc" ] || continue
+    if grep -q "<!-- CAST_" "$doc" 2>/dev/null; then
+      update_all_tokens "$doc"
+      rm -f "${doc}.bak"
+      echo "  refreshed: $doc"
+    fi
+  done < <(find "$REPO_DIR/docs" -name '*.md' -type f 2>/dev/null)
+fi
 
 # --- Update version badge sentinel ---
 VERSION_FILE="$REPO_DIR/VERSION"

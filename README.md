@@ -329,7 +329,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ## The CAST Ecosystem
 
-CAST is one of 11 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source and actively maintained.
+CAST is one of 13 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source and actively maintained.
 
 <div align="center">
 
@@ -346,6 +346,8 @@ graph TD
     CAT --> CJ["cast-claudes_journal"]
     CAT --> CD["cast-dash"]
     CAT --> CT["cast-time"]
+    CAT --> CR["cast-routines"]
+    CAT --> CDR["cast-doctor"]
     
     CAT -.-> DI["claude-code-dashboard<br/>(Observability UI)"]
     CAT -.-> PF["Edward_Kubiak<br/>(Portfolio)"]
@@ -355,7 +357,7 @@ graph TD
     classDef products fill:#16a085,stroke:#27ae60,stroke-width:2px,color:#ecf0f1
     
     class CAT core
-    class CH,CA,CM,CO,CS,CP,CJ,CD,CT sources
+    class CH,CA,CM,CO,CS,CP,CJ,CD,CT,CR,CDR sources
     class DI,PF products
 ```
 
@@ -375,6 +377,8 @@ graph TD
 | [cast-claudes_journal](https://github.com/ek33450505/cast-claudes_journal) | Session continuity — Claude's Journal auto-injects prior-day context via SessionStart hook. Obsidian vault sync. | ![](https://img.shields.io/github/v/release/ek33450505/cast-claudes_journal?style=flat-square) | `brew tap ek33450505/homebrew-claudes-journal && brew install claudes-journal` |
 | [cast-dash](https://github.com/ek33450505/cast-dash) | Terminal UI dashboard for live swarm monitoring. 4-panel real-time display (Textual framework). | ![](https://img.shields.io/github/v/release/ek33450505/cast-dash?style=flat-square) | `brew tap ek33450505/cast-dash && brew install cast-dash` |
 | [cast-time](https://github.com/ek33450505/cast-time) | Gives Claude Code a clock — injects local time, timezone, and a semantic time-of-day bucket at every SessionStart. | ![](https://img.shields.io/github/v/release/ek33450505/cast-time?style=flat-square) | `brew tap ek33450505/cast-time && brew install cast-time` |
+| [cast-routines](https://github.com/ek33450505/cast-routines) | Scheduled autonomous Claude Code routines via YAML + cron. Daily briefings, inbox triage, release celebration, weekly cost reports. | ![](https://img.shields.io/github/v/release/ek33450505/cast-routines?style=flat-square) | `brew tap ek33450505/cast-routines && brew install cast-routines` |
+| [cast-doctor](https://github.com/ek33450505/cast-doctor) | Read-only health check for any Claude Code install. Validates hooks, MCP servers, agent frontmatter, cast.db schema, stale memories. | ![](https://img.shields.io/github/v/release/ek33450505/cast-doctor?style=flat-square) | `brew tap ek33450505/cast-doctor && brew install cast-doctor` |
 
 ### Observability & Dashboards
 
@@ -414,6 +418,8 @@ CAST powers real-world projects in the ecosystem:
 - [**cast-dash**](https://github.com/ek33450505/cast-dash) — TUI dashboard for live swarm monitoring; 4-panel layout
 - [**cast-hooks**](https://github.com/ek33450505/cast-hooks) — Standalone hook scripts framework; 13 auditable hooks
 - [**cast-time**](https://github.com/ek33450505/cast-time) — SessionStart hook that injects local time and timezone into every Claude Code session
+- [**cast-routines**](https://github.com/ek33450505/cast-routines) — Schedule autonomous Claude Code routines via YAML + cron
+- [**cast-doctor**](https://github.com/ek33450505/cast-doctor) — Read-only health check for any Claude Code install
 
 ---
 
