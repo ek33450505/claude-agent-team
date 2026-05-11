@@ -32,7 +32,8 @@ EOF
   run bash -c "
     LATEST=\$(ls -t '$status_dir'/${agent}-*.json 2>/dev/null | head -1)
     if [ -n \"\$LATEST\" ]; then
-      FILE_AGE=\$(( \$(date +%s) - \$(stat -f %m \"\$LATEST\" 2>/dev/null || stat -c %Y \"\$LATEST\") ))
+      FILE_MTIME=\$(python3 -c \"import os,sys; print(int(os.path.getmtime(sys.argv[1])))\" \"\$LATEST\" 2>/dev/null || echo 0)
+      FILE_AGE=\$(( \$(date +%s) - FILE_MTIME ))
       if [ \"\$FILE_AGE\" -le 300 ]; then
         python3 -c \"import json,sys; d=json.load(open('\$LATEST')); print(d.get('status','MISSING'))\"
       fi
@@ -58,7 +59,8 @@ EOF
   run bash -c "
     LATEST=\$(ls -t '$status_dir'/${agent}-*.json 2>/dev/null | head -1)
     if [ -n \"\$LATEST\" ]; then
-      FILE_AGE=\$(( \$(date +%s) - \$(stat -f %m \"\$LATEST\" 2>/dev/null || stat -c %Y \"\$LATEST\") ))
+      FILE_MTIME=\$(python3 -c \"import os,sys; print(int(os.path.getmtime(sys.argv[1])))\" \"\$LATEST\" 2>/dev/null || echo 0)
+      FILE_AGE=\$(( \$(date +%s) - FILE_MTIME ))
       if [ \"\$FILE_AGE\" -le 300 ]; then
         python3 -c \"import json,sys; d=json.load(open('\$LATEST')); print(d.get('status','MISSING'))\"
       else
@@ -81,7 +83,8 @@ EOF
   run bash -c "
     LATEST=\$(ls -t '$status_dir'/${agent}-*.json 2>/dev/null | head -1)
     if [ -n \"\$LATEST\" ]; then
-      FILE_AGE=\$(( \$(date +%s) - \$(stat -f %m \"\$LATEST\" 2>/dev/null || stat -c %Y \"\$LATEST\") ))
+      FILE_MTIME=\$(python3 -c \"import os,sys; print(int(os.path.getmtime(sys.argv[1])))\" \"\$LATEST\" 2>/dev/null || echo 0)
+      FILE_AGE=\$(( \$(date +%s) - FILE_MTIME ))
       if [ \"\$FILE_AGE\" -le 300 ]; then
         python3 -c \"import json,sys; d=json.load(open('\$LATEST')); print(d.get('status','MISSING'))\" 2>/dev/null || echo \"JSON_ERROR\"
       fi

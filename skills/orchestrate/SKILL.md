@@ -199,11 +199,15 @@ Apply the appropriate preamble tier to ALL agent dispatches — both parallel an
    - **Status file fallback (truncation resilience — Phase 4.9):** Before declaring BLOCKED, check for a recent status file at `~/.claude/agent-status/<agent>-*.json`. Find the most recent matching file with `mtime` within the last 300 seconds:
      ```bash
      AGENT_NAME="<agent name or subagent_type from the ADM entry>"
-     STATUS_FILE=$(find ~/.claude/agent-status -name "${AGENT_NAME}-*.json" -type f 2>/dev/null | \
-       xargs -I{} sh -c 'echo "$(stat -f %m "{}") {}"' 2>/dev/null | \
-       sort -rn | head -1 | awk '{print $2}')
+     STATUS_FILE=$(python3 -c "
+import os, glob, sys
+files = glob.glob(os.path.expanduser('~/.claude/agent-status/'+sys.argv[1]+'-*.json'))
+if files:
+    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+    print(files[0])
+" "$AGENT_NAME" 2>/dev/null)
      if [ -n "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ]; then
-       FILE_MTIME=$(stat -f %m "$STATUS_FILE" 2>/dev/null || echo 0)
+       FILE_MTIME=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$STATUS_FILE" 2>/dev/null || echo 0)
        NOW=$(date +%s)
        AGE=$((NOW - FILE_MTIME))
        if [ "$AGE" -le 300 ]; then
@@ -229,11 +233,15 @@ Apply the appropriate preamble tier to ALL agent dispatches — both parallel an
    - **Test-runner authoritative file truth (Phase 4.11):** When the dispatched agent is `test-runner` (or `subagent_type=test-runner`), the file at `~/.claude/agent-status/test-runner-*.json` is treated as MORE authoritative than the prose Status line — even when prose is present. This guards against the hallucination class observed 2026-05-11 where test-runner reported false BLOCKED on a green suite. Implementation:
      ```bash
      if [[ "$AGENT_NAME" == "test-runner" ]]; then
-       STATUS_FILE=$(find ~/.claude/agent-status -name "test-runner-*.json" -type f 2>/dev/null | \
-         xargs -I{} sh -c 'echo "$(stat -f %m "{}") {}"' 2>/dev/null | \
-         sort -rn | head -1 | awk '{print $2}')
+       STATUS_FILE=$(python3 -c "
+import os, glob
+files = glob.glob(os.path.expanduser('~/.claude/agent-status/test-runner-*.json'))
+if files:
+    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+    print(files[0])
+" 2>/dev/null)
        if [[ -n "$STATUS_FILE" && -f "$STATUS_FILE" ]]; then
-         FILE_MTIME=$(stat -f %m "$STATUS_FILE" 2>/dev/null || echo 0)
+         FILE_MTIME=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$STATUS_FILE" 2>/dev/null || echo 0)
          NOW=$(date +%s)
          AGE=$((NOW - FILE_MTIME))
          if [[ "$AGE" -le 300 ]]; then
