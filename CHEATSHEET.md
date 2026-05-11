@@ -96,6 +96,44 @@ Global flags: `--json`, `--quiet`, `--verbose`, `--help`, `--version`
 
 ---
 
+## Routines
+
+Scheduled autonomous agent jobs for daily tasks, triage, and reports.
+
+| Routine | Schedule | What it does |
+|---|---|---|
+| `daily-briefing` | 7am UTC daily | Morning briefing: agent activity, blockers |
+| `daily-cast-health` | 8pm UTC daily | CAST infrastructure health check |
+| `email-triage` | Manual | Gmail triage, priority buckets, drafts |
+| `knowledge-curator` | 10am UTC daily | Obsidian vault organization |
+| `learning-scout` | 3pm UTC daily | Tech topic monitor, resource curator |
+| `meeting-prep` | 6am UTC daily | Calendar-driven meeting briefs |
+| `pr-narrator` | 30min after webhook | PR storyteller, change summary |
+| `release-celebration` | Manual | Release notes + stakeholder brief |
+| `standup-writer` | 4pm UTC daily | Daily standup summary |
+| `task-triage` | 8am UTC daily | Todoist overdue, BLOCKED agents |
+| `weekly-cost-report` | Mon 9am UTC | API cost breakdown by agent |
+
+### Routine Commands
+
+| Command | Description |
+|---|---|
+| `cast routines list` | List all routines with status |
+| `cast routines get <name>` | Show routine status and last run |
+| `cast routines trigger <name>` | Run routine manually (ignores schedule) |
+| `cast routines trigger <name> --arg key=value` | Trigger with runtime arguments |
+| `cast routines trigger <name> --dry-run` | Simulate without dispatching |
+| `cast routines validate <name>` | Validate YAML syntax |
+| `cast routines schedule <name>` | Install into crontab |
+| `cast routines uninstall <name>` | Remove from crontab |
+| `cast routines enable <name>` | Re-enable soft-disabled routine |
+| `cast routines disable <name>` | Soft-disable routine |
+| `cast routines install` | Install all routines at once |
+
+Full guide: [docs/routines.md](../docs/routines.md)
+
+---
+
 ## Hook Events
 
 | Event | Script(s) | What it does |
