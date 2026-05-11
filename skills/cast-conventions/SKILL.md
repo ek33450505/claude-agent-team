@@ -102,6 +102,15 @@ The Response Budget exists to keep the prose tail intact through the model's out
 - A single agent dispatched to audit/sync/review more than one repo is a truncation risk. Split into one dispatch per target.
 - If you receive a multi-target prompt and the union of expected output exceeds your response budget, return `Status: NEEDS_CONTEXT` with: "Multi-target scope — request a separate dispatch per target."
 
+**Refusal trigger (when to invoke NEEDS_CONTEXT):**
+- 5+ distinct numbered checks / audit items in a single dispatch → refuse and ask for split.
+- 3+ heterogeneous output targets (e.g., "audit repo A AND repo B AND generate report") → refuse.
+- An explicit "comprehensive audit" / "full sweep" / "exhaustive review" framing → refuse and propose narrower passes.
+- The agent's first response after receiving the prompt MUST either (a) emit the refusal, or (b) immediately begin scoped work on the first target. There is no "I'll try it and see if it fits" path.
+- See also: `agents/core/researcher.md` Pre-flight scope check — the researcher's hard rule mirrors this trigger and cites it as the authoritative source.
+
+Why this matters: a 2026-05-11 researcher dispatch with 10 audit checks ran 50+ tool calls and truncated to an empty reply. Twice. The rule existed; the trigger was not invoked. The structural fix is an explicit trigger condition, not a stronger suggestion.
+
 **Reference, don't reproduce:**
 - File contents → write a diff, not the new file body.
 - Test output → counts + failing-test names, never the raw TAP stream.
