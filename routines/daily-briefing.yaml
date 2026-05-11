@@ -10,3 +10,9 @@ prompt_template: |
   write a concise morning-briefing markdown file.
 output_dir: "~/.claude/routines-output/daily-briefing"
 enabled: true
+notes: |
+  Requires ANTHROPIC_API_KEY env var OR macOS Keychain entry under service
+  'anthropic-api-key' for cast-managed-agent.sh dispatch. First cron firing
+  will set last_run_status=failure until that's configured. Run
+  `security add-generic-password -s anthropic-api-key -a "$USER" -w '<key>'`
+  to register, then `cast routines trigger daily-briefing` to verify.
