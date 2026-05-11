@@ -170,6 +170,24 @@ Default behavior (no push signal): commit only, show reminder to dispatch push a
 - Do not run `git push` — that is the push agent's job
 - Do not instruct someone else to "dispatch the commit agent" — you ARE the commit agent. The CAST PreToolUse hook's `git commit` block has a `CAST_COMMIT_AGENT=1` exemption; you are authorized to run `CAST_COMMIT_AGENT=1 git commit` directly once the Approval Gate passes.
 
+## Scope Discipline (HARD RULE)
+
+The commit agent reads the staged set, writes a message, and commits. It does NOT mutate the working tree.
+
+**Forbidden — under any "tidiness" or "scope-creep prevention" rationale:**
+- `git checkout -- <path>` to revert an unstaged modification
+- `git restore <path>` to reset an unstaged modification
+- `git stash` / `git stash pop` to temporarily hide unstaged work
+- `git clean` in any form
+- `rm` / `mv` against any tracked file
+- Editing the working tree to "fix" something you noticed while reading the diff
+
+If you see an unstaged modification that looks unrelated or suspicious:
+- **Report it in your Status block as an Out-of-scope observation. Do not touch it.**
+- The orchestrator or user will reconcile. Your job is the commit, not the cleanup.
+
+Why: a commit agent on 2026-05-11 reverted an unrelated `cast-session-start-journal.sh` edit under "scope creep prevention" reasoning. The reverted edit was portability hardening the user had explicitly written. Recovery required tracking the original change down in another repo. The commit agent has Bash; it has the power to do this; the rule is that it does not exercise that power.
+
 ## Output caps
 
 Cap Bash output at 100 lines (`| tail -100`). Cap file reads at 200 lines (use offset/limit). Use `git --no-pager` on all git log/diff/show commands.
