@@ -39,6 +39,21 @@ fi
 # Routes removed in CAST v3 — model-driven dispatch via CLAUDE.md
 ROUTE_COUNT=0
 
+# DB tables: count CREATE TABLE IF NOT EXISTS across canonical schema sources
+# (init script + both migration directories). This counts the tables the framework
+# ships with, not a particular user's live cast.db (which may have FTS sidecars
+# or accumulated state from past versions).
+DB_TABLE_COUNT=0
+for f in scripts/cast-db-init.sh scripts/migrations/*.sql migrations/*.sql; do
+  if [ -f "$f" ]; then
+    # grep -c emits a count on stdout AND exits 1 when count is 0;
+    # the `|| echo 0` shim re-prints "0", producing a multi-line value
+    # that breaks $(()). Suppress stderr, redirect to /dev/null on miss.
+    n=$(grep -cE "CREATE TABLE IF NOT EXISTS" "$f" 2>/dev/null) || n=0
+    DB_TABLE_COUNT=$((DB_TABLE_COUNT + n))
+  fi
+done
+
 # --- Update sentinel tokens in README ---
 update_token() {
   local token="$1" value="$2" file="$3"
@@ -51,11 +66,12 @@ if [ ! -f "$README" ]; then
   exit 1
 fi
 
-update_token "CAST_AGENT_COUNT"   "$AGENT_COUNT"   "$README"
-update_token "CAST_COMMAND_COUNT" "$CMD_COUNT"     "$README"
-update_token "CAST_SKILL_COUNT"   "$SKILL_COUNT"   "$README"
-update_token "CAST_TEST_COUNT"    "$TEST_COUNT"    "$README"
-update_token "CAST_ROUTE_COUNT"   "$ROUTE_COUNT"   "$README"
+update_token "CAST_AGENT_COUNT"    "$AGENT_COUNT"    "$README"
+update_token "CAST_COMMAND_COUNT"  "$CMD_COUNT"      "$README"
+update_token "CAST_SKILL_COUNT"    "$SKILL_COUNT"    "$README"
+update_token "CAST_TEST_COUNT"     "$TEST_COUNT"     "$README"
+update_token "CAST_ROUTE_COUNT"    "$ROUTE_COUNT"    "$README"
+update_token "CAST_DB_TABLE_COUNT" "$DB_TABLE_COUNT" "$README"
 
 # --- Update version badge sentinel ---
 VERSION_FILE="$REPO_DIR/VERSION"
@@ -66,13 +82,21 @@ if [ -f "$VERSION_FILE" ]; then
 fi
 
 # --- Update shields.io badge URLs ---
-sed -i.bak "s|/badge/agents-[0-9]*-green|/badge/agents-${AGENT_COUNT}-green|g" "$README"
-sed -i.bak "s|/badge/tests-[0-9]*%20[a-z]*|/badge/tests-${TEST_COUNT}%20total|g" "$README"
+# Agents: matches /badge/agents-<N>-<color>
+sed -i.bak -E "s|/badge/agents-[0-9]+-[a-z]+|/badge/agents-${AGENT_COUNT}-green|g" "$README"
+# Tests: matches both /badge/tests-<N>-<color> (plain) and /badge/tests-<N>%20<word> (legacy "total" form)
+sed -i.bak -E "s|/badge/tests-[0-9]+-[a-z]+|/badge/tests-${TEST_COUNT}-brightgreen|g" "$README"
+sed -i.bak -E "s|/badge/tests-[0-9]+%20[a-z]+|/badge/tests-${TEST_COUNT}-brightgreen|g" "$README"
+# Version: matches /badge/version-<X.Y[.Z]>-<color>
+if [ -f "$VERSION_FILE" ]; then
+  sed -i.bak -E "s|/badge/version-[0-9]+(\.[0-9]+){0,2}-[a-z]+|/badge/version-${CAST_VERSION}-blue|g" "$README"
+fi
 rm -f "${README}.bak"
 
 echo "CAST stats updated:"
-echo "  Agents:   $AGENT_COUNT"
-echo "  Commands: $CMD_COUNT"
-echo "  Skills:   $SKILL_COUNT"
-echo "  Tests:    $TEST_COUNT"
-[ -f "$VERSION_FILE" ] && echo "  Version:  $CAST_VERSION"
+echo "  Agents:    $AGENT_COUNT"
+echo "  Commands:  $CMD_COUNT"
+echo "  Skills:    $SKILL_COUNT"
+echo "  Tests:     $TEST_COUNT"
+echo "  DB tables: $DB_TABLE_COUNT"
+[ -f "$VERSION_FILE" ] && echo "  Version:   $CAST_VERSION"

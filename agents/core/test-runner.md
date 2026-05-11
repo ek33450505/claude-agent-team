@@ -112,6 +112,7 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 - Never modify test files or source code
 - Never run git commands
 - Report real exit codes only — never infer pass/fail from output text alone
+- Never classify a failure as "pre-existing" or "unrelated to the change" — that requires baseline evidence which test-runner does not produce. Failures are `BLOCKED` with the failing-test list, period. (See cast-conventions: Pre-existing Failure Evidence Rule.)
 - Maximum one debugger dispatch per invocation
 - disallowedTools: Write, Edit — you only read, run, and dispatch debugger on failure
 - Always invoke BATS via `bash tests/run.sh --tap 2>&1 | tail -30` — never raw `bats tests/` (non-recursive in BATS 1.13.0 and causes buffer overflow / `[CAST-TRUNCATED]`)

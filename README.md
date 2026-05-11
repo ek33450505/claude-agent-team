@@ -2,16 +2,16 @@
   <img src="docs/cast-banner.png" alt="CAST — Swarm control plane for Anthropic Agent Teams" />
 </p>
 
-# CAST v6.0 — Swarm Control Plane
+# CAST v7.0 — Backend Lockdown
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-7.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-859-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-989-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-> CAST is a production control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with 31 tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (30 agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
+> CAST is a production control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->27<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
 
 **[CAST Framework](https://castframework.dev)**
 
@@ -46,9 +46,9 @@ This is for users who don't use Homebrew or want to install directly from source
 ## What Makes CAST Different
 
 - **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a reviewer pass. You cannot skip this.
-- **30 specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
+- **<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
 - **SQLite audit trail, fully local.** Every agent dispatch, tool call, and token spend logs to `cast.db` on your machine. No SaaS dashboard, no cloud lock-in.
-- **693 BATS test cases with 0 failures.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
+- **<!-- CAST_TEST_COUNT -->989<!-- /CAST_TEST_COUNT --> BATS test cases with 0 failures.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
 
 ---
 
@@ -130,7 +130,7 @@ Every CAST operation follows a four-stage flow: (1) **hook validation** — pre-
 
 ---
 
-## Recent Capabilities (v6.0+)
+## Recent Capabilities (v7.0)
 
 **Anthropic API Integration:**
 - **Files API adapter** — `scripts/cast-files-api.sh` wraps the Anthropic Files API with upload/download/delete commands. Opt-in via `CAST_FILES_API=1` environment variable. Test and morning-briefing agents can upload reports as file objects instead of pasting inline.
@@ -138,7 +138,7 @@ Every CAST operation follows a four-stage flow: (1) **hook validation** — pre-
 - **Vision capture step** — `scripts/cast-screenshot.sh` integrates Playwright or Puppeteer for full-page screenshot capture. `frontend-qa` agent visually inspects layouts, color contrast, and rendering before text-only analysis. Graceful degradation when tools unavailable.
 
 **Agent Enhancements:**
-- **Per-agent extended thinking budgets** — All 30 agents have fine-grained thinking token allocations: HIGH (8192) for debugger, security, planner, researcher, migration-reviewer, perf-sentinel, api-contract; MEDIUM (4096) for code-writer, test-writer, learning-scout, and others; LOW (0) for fast agents like commit, code-reviewer, merge.
+- **Per-agent extended thinking budgets** — Every agent has a fine-grained thinking token allocation: HIGH (8192) for debugger, security, planner, researcher, migration-reviewer, perf-sentinel, api-contract; MEDIUM (4096) for code-writer, test-writer, learning-scout, and others; LOW (0) for fast agents like commit, code-reviewer, merge.
 - **Commit agent identity clarification** — Explicit instruction that the commit agent is authorized to run `CAST_COMMIT_AGENT=1 git commit` directly, eliminating recursion confusion.
 
 **Quality & Observability:**
@@ -329,7 +329,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ## The CAST Ecosystem
 
-CAST is one of 10 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source and actively maintained.
+CAST is one of 11 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source and actively maintained.
 
 <div align="center">
 
@@ -345,6 +345,7 @@ graph TD
     CAT --> CP["cast-parallel"]
     CAT --> CJ["cast-claudes_journal"]
     CAT --> CD["cast-dash"]
+    CAT --> CT["cast-time"]
     
     CAT -.-> DI["claude-code-dashboard<br/>(Observability UI)"]
     CAT -.-> PF["Edward_Kubiak<br/>(Portfolio)"]
@@ -354,7 +355,7 @@ graph TD
     classDef products fill:#16a085,stroke:#27ae60,stroke-width:2px,color:#ecf0f1
     
     class CAT core
-    class CH,CA,CM,CO,CS,CP,CJ,CD sources
+    class CH,CA,CM,CO,CS,CP,CJ,CD,CT sources
     class DI,PF products
 ```
 
@@ -366,13 +367,14 @@ graph TD
 |---|---|---|---|
 | [claude-agent-team](https://github.com/ek33450505/claude-agent-team) | Local-first swarm control plane. Specialist agents, quality gates, hook enforcement, cast.db audit trail. | ![](https://img.shields.io/github/v/release/ek33450505/claude-agent-team?style=flat-square) | `brew tap ek33450505/cast && brew install cast` |
 | [cast-hooks](https://github.com/ek33450505/cast-hooks) | 13 auditable hook scripts — observability, safety guards, quality gates. SessionStart, PreToolUse, PostToolUse, PostCompact. | ![](https://img.shields.io/github/v/release/ek33450505/cast-hooks?style=flat-square) | `brew tap ek33450505/cast-hooks && brew install cast-hooks` |
-| [cast-agents](https://github.com/ek33450505/cast-agents) | 17 specialist agents — commit, debug, review, plan, test, research, and more. Agent definitions with YAML frontmatter. | ![](https://img.shields.io/github/v/release/ek33450505/cast-agents?style=flat-square) | `brew tap ek33450505/cast-agents && brew install cast-agents` |
+| [cast-agents](https://github.com/ek33450505/cast-agents) | 22 specialist agents — commit, debug, review, plan, test, research, and more. Agent definitions with YAML frontmatter. v7-synced. | ![](https://img.shields.io/github/v/release/ek33450505/cast-agents?style=flat-square) | `brew tap ek33450505/cast-agents && brew install cast-agents` |
 | [cast-memory](https://github.com/ek33450505/cast-memory) | Persistent agent memory with FTS5 search, relevance scoring, shared pool, semantic embeddings. Per-agent knowledge accumulation. | ![](https://img.shields.io/github/v/release/ek33450505/cast-memory?style=flat-square) | `brew tap ek33450505/cast-memory && brew install cast-memory` |
 | [cast-observe](https://github.com/ek33450505/cast-observe) | Session-level observability — cost tracking, agent run history, token spend, event sourcing. Feeds cast.db. | ![](https://img.shields.io/github/v/release/ek33450505/cast-observe?style=flat-square) | `brew tap ek33450505/cast-observe && brew install cast-observe` |
 | [cast-security](https://github.com/ek33450505/cast-security) | Security hooks and audit trails. PII redaction, parry-guard integration, compliance logging. | ![](https://img.shields.io/github/v/release/ek33450505/cast-security?style=flat-square) | `brew tap ek33450505/cast-security && brew install cast-security` |
 | [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel agent execution across worktree sessions. Agent Dispatch Manifest (ADM) support. | ![](https://img.shields.io/github/v/release/ek33450505/cast-parallel?style=flat-square) | `brew tap ek33450505/cast-parallel && brew install cast-parallel` |
 | [cast-claudes_journal](https://github.com/ek33450505/cast-claudes_journal) | Session continuity — Claude's Journal auto-injects prior-day context via SessionStart hook. Obsidian vault sync. | ![](https://img.shields.io/github/v/release/ek33450505/cast-claudes_journal?style=flat-square) | `brew tap ek33450505/homebrew-claudes-journal && brew install claudes-journal` |
 | [cast-dash](https://github.com/ek33450505/cast-dash) | Terminal UI dashboard for live swarm monitoring. 4-panel real-time display (Textual framework). | ![](https://img.shields.io/github/v/release/ek33450505/cast-dash?style=flat-square) | `brew tap ek33450505/cast-dash && brew install cast-dash` |
+| [cast-time](https://github.com/ek33450505/cast-time) | Gives Claude Code a clock — injects local time, timezone, and a semantic time-of-day bucket at every SessionStart. | ![](https://img.shields.io/github/v/release/ek33450505/cast-time?style=flat-square) | `brew tap ek33450505/cast-time && brew install cast-time` |
 
 ### Observability & Dashboards
 
@@ -384,7 +386,7 @@ graph TD
 
 **New to CAST?** Start here:
 - [Quick Start](docs/tutorial/getting-started.md) — install, verify, and run in 5 minutes
-- [Agent Roster](docs/agents/AGENT-ROSTER.md) — all 30 agents with model tiers and thinking budgets
+- [Agent Roster](docs/agents/AGENT-ROSTER.md) — all <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents with model tiers and thinking budgets
 - [Architecture Guide](docs/architecture/ARCHITECTURE.md) — hook enforcement, swarm composition, peer messaging
 
 **Already using CAST?**
@@ -411,6 +413,7 @@ CAST powers real-world projects in the ecosystem:
 - [**cast-claudes_journal**](https://github.com/ek33450505/cast-claudes_journal) — Session journaling agent; auto-injects prior-day context via SessionStart hook
 - [**cast-dash**](https://github.com/ek33450505/cast-dash) — TUI dashboard for live swarm monitoring; 4-panel layout
 - [**cast-hooks**](https://github.com/ek33450505/cast-hooks) — Standalone hook scripts framework; 13 auditable hooks
+- [**cast-time**](https://github.com/ek33450505/cast-time) — SessionStart hook that injects local time and timezone into every Claude Code session
 
 ---
 
@@ -459,6 +462,6 @@ The following capabilities were audited but deferred pending dependency updates 
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->987<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->989<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
