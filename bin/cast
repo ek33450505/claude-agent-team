@@ -470,7 +470,9 @@ conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 cur.execute("""
     SELECT agent, status, model, ended_at, batch_id
-    FROM agent_runs ORDER BY id DESC LIMIT 5
+    FROM agent_runs
+    WHERE agent IS NOT NULL AND agent != '' AND agent != 'unknown'
+    ORDER BY id DESC LIMIT 5
 """)
 rows = cur.fetchall()
 conn.close()
@@ -502,7 +504,7 @@ PYEOF
 
   printf "${C_BOLD}CAST v${CAST_VERSION}${C_RESET}\n"
   printf "%s\n" "$sep"
-  printf "Agents      %d installed\n" "$agent_count"
+  printf "Agents      %d in ~/.claude/agents/\n" "$agent_count"
   printf "Hooks       %d active\n" "$hook_count"
   printf "Spend       \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
   if [ -n "$budget_limit" ]; then

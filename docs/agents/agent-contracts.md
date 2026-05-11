@@ -13,7 +13,7 @@ The agent-status schema (`schemas/agent-status.json`) formalizes the contract. E
 
 ## Schema Reference
 
-Source: [`schemas/agent-status.json`](../schemas/agent-status.json)
+Source: [`schemas/agent-status.json`](../../schemas/agent-status.json)
 
 Draft: JSON Schema 2020-12
 

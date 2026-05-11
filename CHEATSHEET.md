@@ -44,13 +44,13 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | dep-auditor | haiku 4.5 | low | Read, Bash, Grep | Dependency auditor for CVEs and licenses |
 | devops | haiku 4.5 | low | Bash, Edit, Grep | CI/CD, Docker, infrastructure |
 | docs | haiku 4.5 | low | Write, Edit, WebSearch | Documentation updates, email drafting, portfolio sync (since 4.5.3) |
-| eval-writer | sonnet | — | Read, Write, Edit, Bash | Eval + benchmark fixture author for agent prompts and routing rules (Phase 4.5.4) |
+| eval-writer | sonnet | — | Read, Write, Edit, Bash | Eval + benchmark fixture author for agent prompts and routing rules |
 | frontend-qa | haiku 4.5 | low | Bash, Grep, Read | Frontend quality assurance |
 | migration-reviewer | opus | high | Read, Bash, Grep | Database schema change reviewer |
 | morning-briefing | haiku 4.5 | low | Bash, Write, Grep | Daily morning briefing orchestrator |
 | perf-sentinel | sonnet | high | Read, Bash, Grep | Performance regression detector |
 | planner | sonnet | high | Read, Write, Grep | Implementation plan creation |
-| pr-reviewer | sonnet | — | Read, Bash, Grep | Holistic PR-level reviewer at PR-open time; distinct from per-unit code-reviewer (Phase 4.5.4) |
+| pr-reviewer | sonnet | — | Read, Bash, Grep | Holistic PR-level reviewer at PR-open time; distinct from per-unit code-reviewer |
 | push | haiku 4.5 | low | Bash, Read | Push commits to remote repository |
 | release-notes | haiku 4.5 | low | Read, Write, Bash | Release notes generator from git commits |
 | researcher | sonnet | high | WebFetch, WebSearch | Deep technical research and analysis |
@@ -130,7 +130,7 @@ Scheduled autonomous agent jobs for daily tasks, triage, and reports.
 | `cast routines disable <name>` | Soft-disable routine |
 | `cast routines install` | Install all routines at once |
 
-Full guide: [docs/routines.md](../docs/routines.md)
+Full guide: [docs/routines.md](docs/routines.md)
 
 ---
 

@@ -217,7 +217,7 @@ Hooks cover the full swarm lifecycle: SessionStart, TaskCreated, WorktreeCreate,
 **Hook Matcher Pattern (REC-02):**
 All PreToolUse/PostToolUse hook entries in CAST agent definitions already use the `matcher` field as an equivalent pre-filter to the deprecated `if` field. No migration needed.
 
-**Trail of Bits Security Skills (Phase 7):**
+**Trail of Bits Security Skills:**
 Install security audit skills via `/plugin marketplace add trailofbits/skills`. Integrated with `security` agent for enhanced vulnerability scanning. Requires Claude Code v2.1.118+.
 
 **Managed Agents & Forked Subagents (REC-04):**

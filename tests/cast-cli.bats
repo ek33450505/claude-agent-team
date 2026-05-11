@@ -165,6 +165,12 @@ teardown() {
   assert_output --partial "Agents"
 }
 
+@test "cast status: agents label specifies runtime dir" {
+  run bash "$CAST_CLI" status
+  assert_success
+  assert_output --partial "~/.claude/agents/"
+}
+
 # ---------------------------------------------------------------------------
 # cast memory — empty DB
 # ---------------------------------------------------------------------------
