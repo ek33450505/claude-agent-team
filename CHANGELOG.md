@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## [7.0] — 2026-05-11 — Backend Lockdown
+
+**Strategic goal:** set CAST logic in stone so it "just works" — update occasionally with Anthropic updates, otherwise turn attention to v8 (desktop app) and other projects.
+
+### Added
+- **Routines framework (Phase 4.6)** — 11 scheduled/event-triggered autonomous agent jobs (`routines/*.yaml`). Cron + cast-managed-agent dispatch with `prompt_args` interpolation, `mcp_required` pre-flight checks, and a CLI surface (`cast routines list/trigger/enable/disable/validate/schedule`). Generalizes the JARVIS PA pattern. Authoring guide at `docs/routines.md`.
+- **Truncation-resilient status emission (Phase 4.9)** — all code-modifying agents write `~/.claude/agent-status/<agent>-<ts>.json` BEFORE prose. Orchestrate skill falls back to file truth (mtime ≤ 300s) when prose Status is missing/truncated.
+- **Test-gate authoritative file truth (Phase 4.11)** — test-runner writes raw ok/notok grep counts to status JSON; orchestrate skill trusts file over prose for test-runner specifically (closes the hallucination class observed 2026-05-11 where test-runner reported BLOCKED on a green suite).
+- **Cast doctor expansion (Phase 6.5b)** — three new checks: agent frontmatter parses, MCP servers reachable, routines validate.
+- **Incident corpus (Phase 6.5c)** — 17 historical problem-fix pairs backfilled into `cast.db incidents` table from journal + feedback memories + fix commits. Idempotent backfill script.
+- **DB schema drift fix (Phase 4.10)** — `agent_truncations` CREATE TABLE added to `cast-db-init.sh` self-healing block. Stops the 1917-line flood of "no such table" errors in fresh BATS test environments.
+
+### Changed
+- **gen-stats.sh BATS guard (Phase 4.11)** — refuses to mutate `README.md` when `BATS_TEST_NAME`/`BATS_TEST_FILENAME`/`BATS_TMPDIR` is set. Eliminates the sentinel-leak class that has forced manual `git checkout -- README.md` reverts on every full-suite run.
+- **bin/cast** — `CAST_REPO_DIR` now respects pre-set env var (was unconditionally overwritten, broke test isolation).
+- **test-runner agent definition** — removed false "dispatches debugger automatically" claim (the agent's `tools:` field does not include Agent). Workflow now reports BLOCKED with failing test names; orchestrator dispatches debugger when needed.
+- **7 code-modifying agent definitions** (api-contract, bash-specialist, dep-auditor, devops, frontend-qa, migration-reviewer, test-writer) — gained a "Status file write (MANDATORY — truncation resilience)" section.
+
+### Tests
+- 918 → 987 (+69 new BATS tests across Phases 4.6, 4.9, 4.10, 4.11, 6.5b, 6.5c)
+
+### Notes
+- v7 is the "set in stone" release: backend hardened, observability solidified, agent contracts file-resilient. v8 (Forge + dashboard + voice as a desktop app) gets the marketing push.
+
+---
+
 ## [6.0] — 2026-04-16 — Strategic Evolution Sweep
 
 **Strategic goals:** trust for 2000+ clones, maintenance cadence, subtract complexity, leverage current model capabilities.

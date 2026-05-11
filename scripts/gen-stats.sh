@@ -7,6 +7,14 @@
 
 set -euo pipefail
 
+# BATS guard — refuse to mutate README.md when called during BATS test execution.
+# BATS sets these env vars in every test run; their presence means we're inside
+# a test gate and any side-effect on the real README is a leak.
+if [[ -n "${BATS_TEST_NAME:-}" || -n "${BATS_TEST_FILENAME:-}" || -n "${BATS_TMPDIR:-}" ]]; then
+  echo "[gen-stats] BATS context detected — skipping README mutation" >&2
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 README="${1:-$REPO_DIR/README.md}"

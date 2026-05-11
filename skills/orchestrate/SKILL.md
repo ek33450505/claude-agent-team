@@ -195,7 +195,67 @@ Apply the appropriate preamble tier to ALL agent dispatches — both parallel an
 2. **Contract validation** — check for a valid Status line:
    - Valid values: `Status: DONE`, `Status: DONE_WITH_CONCERNS`, `Status: BLOCKED`, `Status: NEEDS_CONTEXT`
    - If no valid Status line is found AND response length > 50 chars, retry once with: "Your response is missing a Status block. End your response with Status: DONE (or DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT)."
-   - On retry, if still missing: treat as `BLOCKED` and proceed to step 4 below.
+   - On retry, if still missing: attempt status file fallback before declaring BLOCKED (see below).
+   - **Status file fallback (truncation resilience — Phase 4.9):** Before declaring BLOCKED, check for a recent status file at `~/.claude/agent-status/<agent>-*.json`. Find the most recent matching file with `mtime` within the last 300 seconds:
+     ```bash
+     AGENT_NAME="<agent name or subagent_type from the ADM entry>"
+     STATUS_FILE=$(python3 -c "
+import os, glob, sys
+files = glob.glob(os.path.expanduser('~/.claude/agent-status/'+sys.argv[1]+'-*.json'))
+if files:
+    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+    print(files[0])
+" "$AGENT_NAME" 2>/dev/null)
+     if [ -n "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ]; then
+       FILE_MTIME=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$STATUS_FILE" 2>/dev/null || echo 0)
+       NOW=$(date +%s)
+       AGE=$((NOW - FILE_MTIME))
+       if [ "$AGE" -le 300 ]; then
+         FILE_STATUS=$(python3 -c "
+     import json, sys
+     try:
+         d = json.load(open('$STATUS_FILE'))
+         print(d.get('status', ''))
+     except Exception:
+         pass
+     " 2>/dev/null)
+         if [ -n "$FILE_STATUS" ]; then
+           # Use file-status as authoritative; skip the BLOCKED path
+           STATUS_LINE="Status: $FILE_STATUS (recovered from status file)"
+           # Proceed to step 4 routing with the recovered status
+         fi
+       fi
+     fi
+     ```
+   - If the status file fallback recovers a Status, log to cast.db `quality_gates` with `contract_passed = -1` (special sentinel meaning "recovered via file fallback").
+   - Only treat as `BLOCKED` if both the retry AND the file fallback fail.
+
+   - **Test-runner authoritative file truth (Phase 4.11):** When the dispatched agent is `test-runner` (or `subagent_type=test-runner`), the file at `~/.claude/agent-status/test-runner-*.json` is treated as MORE authoritative than the prose Status line — even when prose is present. This guards against the hallucination class observed 2026-05-11 where test-runner reported false BLOCKED on a green suite. Implementation:
+     ```bash
+     if [[ "$AGENT_NAME" == "test-runner" ]]; then
+       STATUS_FILE=$(python3 -c "
+import os, glob
+files = glob.glob(os.path.expanduser('~/.claude/agent-status/test-runner-*.json'))
+if files:
+    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
+    print(files[0])
+" 2>/dev/null)
+       if [[ -n "$STATUS_FILE" && -f "$STATUS_FILE" ]]; then
+         FILE_MTIME=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$STATUS_FILE" 2>/dev/null || echo 0)
+         NOW=$(date +%s)
+         AGE=$((NOW - FILE_MTIME))
+         if [[ "$AGE" -le 300 ]]; then
+           FILE_STATUS=$(python3 -c "import json; d=json.load(open('$STATUS_FILE')); print(d.get('status',''))" 2>/dev/null)
+           # If file status differs from prose status, trust the file
+           if [[ -n "$FILE_STATUS" && "$FILE_STATUS" != "$(echo "$STATUS_LINE" | grep -oE 'DONE|BLOCKED|DONE_WITH_CONCERNS|NEEDS_CONTEXT' | head -1)" ]]; then
+             echo "[CAST] test-runner prose said $STATUS_LINE but file says $FILE_STATUS — trusting file."
+             STATUS_LINE="Status: $FILE_STATUS (file-authoritative)"
+           fi
+         fi
+       fi
+     fi
+     ```
+   - This rule applies BEFORE the generic Phase 4.9 fallback — for test-runner, the file always wins.
 
 3. Log validation result to cast.db:
    ```bash

@@ -1,0 +1,36 @@
+name: knowledge-curator
+description: "Weekly scan of Obsidian vault for orphan notes and knowledge gaps (Sunday 10am)"
+trigger:
+  type: cron
+  value: "0 10 * * 0"
+agent: docs
+prompt_template: |
+  Curate the knowledge base in ~/Documents/.
+
+  Use the Obsidian MCP tool (mcp__obsidian__search_notes) to:
+  1. Search for recently modified notes (modified in the last 7 days)
+  2. Identify notes with no outbound [[wiki-links]] (potential orphans)
+  3. Look for recurring topics across recent entries that lack a dedicated note
+  4. Surface any TODOs, incomplete thoughts, or stub notes that need expansion
+
+  Produce a weekly knowledge-curation report written to {{routine_output_path}} with:
+  - Orphan notes (notes with no outbound links)
+  - Knowledge gaps (topics referenced but lacking their own note)
+  - Recommended new notes to create
+  - Quick-win expansions (stubs under 100 words)
+
+  Keep the report concise — actionable bullets, not prose.
+output_dir: "~/.claude/routines-output/knowledge-curator"
+enabled: true
+mcp_required:
+  - obsidian
+notes: |
+  Requires the Obsidian MCP server ('obsidian') wired in ~/.claude/settings.json
+  mcpServers. The Obsidian MCP must be pointed at ~/Documents/ (or the user's
+  configured vault root).
+
+  If Obsidian MCP is not available, set CAST_ROUTINE_SKIP_MCP_CHECK=1 to bypass
+  the pre-flight check — the agent will then fall back to filesystem-based
+  scanning of ~/Documents/ using native tools.
+
+  Runs in parallel with learning-scout (same cron slot: Sunday 10am).

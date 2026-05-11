@@ -1,0 +1,74 @@
+name: release-celebration
+description: "On new release tag: draft LinkedIn post and dev.to article outline"
+trigger:
+  type: manual
+agent: docs
+prompt_template: |
+  Draft release celebration content for {{repo}} version {{version}}.
+
+  Step 1 — Fetch release details:
+  Run: gh release view {{version}} --repo {{repo}} --json tagName,name,body,publishedAt,author
+
+  If the release is not found, exit with a clear error message.
+
+  Step 2 — Verify stats from the repo (do NOT cite numbers from memory):
+  Run the following to get current, accurate project statistics:
+    gh api repos/{{repo}} --jq '{stars: .stargazers_count, forks: .forks_count, language: .language}'
+    bash tests/run.sh --tap 2>/dev/null | grep -c "^ok " || echo "test count unavailable"
+    gh api repos/{{repo}}/languages --jq 'keys | join(", ")'
+
+  Use only numbers returned by these commands in any published content.
+  Do NOT cite agent counts, test counts, or line counts from memory.
+
+  Step 3 — Draft a LinkedIn post (200–300 words):
+  Write a professional, engaging post announcing the release. Include:
+  - What the project is and why it matters (1-2 sentences)
+  - Key highlights from the release notes (bullet points)
+  - A call to action (link to the repo, invitation to try it out)
+  - Relevant hashtags (#OpenSource #AI #DeveloperTools or project-specific)
+  Keep tone energetic but professional. Drafts only — do not publish.
+
+  Step 4 — Draft a dev.to article outline (5 sections):
+  Write a structured outline for a dev.to article about this release. Include:
+  1. Introduction — what problem this project solves
+  2. What's New in {{version}} — highlights from the release notes
+  3. How It Works — architecture or key design decisions
+  4. Getting Started — install + first run
+  5. What's Next — roadmap or community call to action
+  Include suggested titles for each section and 2-3 bullet points per section.
+
+  Step 5 — Write both drafts to {{routine_output_path}}:
+  Create two files:
+    - {{routine_output_path}}/linkedin-post.md
+    - {{routine_output_path}}/devto-outline.md
+
+  IMPORTANT: All statistics (test counts, agent counts, star counts, line counts)
+  must be verified via the gh CLI and test runner above. Do not publish without
+  verifying numbers against actual repo state. These are drafts — review before posting.
+
+output_dir: "~/.claude/routines-output/release-celebration"
+enabled: true
+mcp_required: []
+prompt_args:
+  - name: repo
+    required: true
+    description: "GitHub repo slug, e.g. ek33450505/claude-agent-team"
+  - name: version
+    required: true
+    description: "Release tag to celebrate, e.g. v7.0.0"
+notes: |
+  Uses 'gh' CLI (not MCP) to fetch release data and repo stats. Requires:
+    gh auth login  # if not already authenticated
+
+  Usage:
+    cast routines trigger release-celebration \
+      --arg repo=ek33450505/claude-agent-team \
+      --arg version=v7.0.0
+
+  Both output files are DRAFTS. Review linkedin-post.md and devto-outline.md
+  before publishing. The prompt explicitly verifies stats via 'gh' and the test
+  runner — never trust numbers cited from memory or prior session context
+  (per feedback_stat_fact_verification).
+
+  GitHub webhook trigger (auto-fire on new tag push) is deferred to v8. This
+  routine is manual-only for now.

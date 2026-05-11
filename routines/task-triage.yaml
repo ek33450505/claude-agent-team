@@ -1,0 +1,13 @@
+name: task-triage
+description: "Daily task triage — surfaces BLOCKED/overdue items from cast.db and any wired Todoist MCP"
+trigger:
+  type: cron
+  value: "0 8 * * *"
+agent: researcher
+prompt_template: |
+  Query cast.db for any agent_runs with status BLOCKED from the last 48 hours.
+  If Todoist MCP is available, fetch overdue tasks. Summarize priorities for today.
+  Write markdown report to routines-output/task-triage/.
+output_dir: "~/.claude/routines-output/task-triage"
+enabled: true
+notes: "Full Todoist integration requires Todoist MCP wired. Gracefully degrades to cast.db-only if MCP unavailable."

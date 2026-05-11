@@ -1,0 +1,42 @@
+name: learning-scout
+description: "Weekly research digest on user-defined topics via WebSearch (Sunday 10am)"
+trigger:
+  type: cron
+  value: "0 10 * * 0"
+agent: researcher
+prompt_template: |
+  Research recent developments on the topics listed in
+  ~/.claude/routines/learning-scout-topics.txt.
+
+  If that file does not exist, use these default topics:
+  - LLM training
+  - agent frameworks
+  - developer tooling
+
+  For each topic:
+  1. Use WebSearch to find articles, papers, or announcements from the last 7 days
+  2. Summarize the 2-3 most relevant findings (1-2 sentences each)
+  3. Note why it matters in practical terms
+
+  Write a concise weekly digest to {{routine_output_path}}. Format:
+  ## <Topic>
+  - [Source title](url) — one-sentence summary. Why it matters: ...
+
+  Keep the total report under 500 words.
+output_dir: "~/.claude/routines-output/learning-scout"
+enabled: true
+mcp_required: []
+notes: |
+  Uses WebSearch (native Claude tool — no MCP required).
+
+  Topic customization: create or edit ~/.claude/routines/learning-scout-topics.txt
+  with one topic per line. Example:
+    LLM training
+    agent frameworks
+    developer tooling
+    Rust async patterns
+    TypeScript type system
+
+  If the file is absent the routine falls back to the three default topics above.
+
+  Runs in parallel with knowledge-curator (same cron slot: Sunday 10am).

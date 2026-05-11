@@ -1,0 +1,46 @@
+name: meeting-prep
+description: "Draft meeting preparation notes using Google Calendar MCP or a supplied meeting title"
+trigger:
+  type: manual
+agent: researcher
+prompt_template: |
+  Prepare meeting notes for the upcoming meeting.
+
+  {{#if meeting_title}}
+  The meeting title is: {{meeting_title}}
+  Research background on this topic and draft preparation notes covering:
+  - Key agenda items to address
+  - Background context and relevant prior decisions
+  - Questions to clarify or decisions to make
+  - Any relevant stakeholders or dependencies
+  {{else}}
+  Fetch the next upcoming calendar event using the Google Calendar MCP tool
+  (mcp__claude_ai_Google_Calendar__list_events). Use today as the start date and
+  look for events in the next 48 hours. For the first upcoming event found, draft
+  preparation notes covering:
+  - Key agenda items to address
+  - Background context and relevant prior decisions
+  - Questions to clarify or decisions to make
+  - Any relevant stakeholders or dependencies
+  If no calendar events are found or the MCP tool is unavailable, ask the user
+  to provide a meeting title via --arg meeting_title="<title>".
+  {{/if}}
+
+  Write the output to {{routine_output_path}}.
+output_dir: "~/.claude/routines-output/meeting-prep"
+enabled: true
+mcp_required:
+  - claude_ai_Google_Calendar
+prompt_args:
+  - name: meeting_title
+    required: false
+notes: |
+  Requires the Google Calendar MCP server ('claude_ai_Google_Calendar') wired in
+  ~/.claude/settings.json mcpServers for automatic calendar lookup.
+
+  Graceful-degrade behavior: if the MCP server is absent, set
+  CAST_ROUTINE_SKIP_MCP_CHECK=1 and pass the meeting title manually:
+    cast routines trigger meeting-prep --arg meeting_title="Sprint Planning"
+
+  Without CAST_ROUTINE_SKIP_MCP_CHECK=1, the runner will exit 1 with a message
+  explaining how to wire the MCP or bypass the check.

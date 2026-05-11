@@ -374,6 +374,44 @@ For each: the agent file moves from `agents/core/` to `routines/<name>/agent.md`
 - README section explaining routines vs agents (the dispatch-vs-schedule distinction)
 - CHEATSHEET row per routine
 
+### 4.6.6 — MCP availability pre-flight (in-line addition to Wave 4c, added 2026-05-10)
+**Why:** The runner built in Wave 2 will happily dispatch a Gmail-dependent routine even if the Gmail MCP isn't wired — fails confusingly mid-dispatch with cryptic MCP errors. Routines that need MCP integrations (email-triage, meeting-prep, knowledge-curator, learning-scout) must fail-fast with a clear actionable message.
+- Add optional `mcp_required: [<server-name>, ...]` field to routine YAML spec
+- Runner reads field, probes each required MCP server (one-shot test call via `cast-managed-agent.sh --define-only` or equivalent), exits 1 with clear "MCP <name> not reachable — wire it in settings.json mcpServers and retry" on failure
+- BATS coverage: routine with unreachable MCP fails-fast; routine with no `mcp_required` field still dispatches (backward compatible)
+- Slots into Wave 4c (where the MCP-dependent routines are authored)
+
+---
+
+## Phase 4.9 — Truncation-Resilient Status Emission (NEW — added 2026-05-10)
+**Effort:** ~0.5 day | **Branch:** `feature/cast-v7-phase-4-9-status-resilience`
+**Why:** Tonight's session evidence — 7 of 9 substantive agent dispatches truncated mid-summary; work was on disk in every case, only the prose tail got cut. Phase 4.8.5's front-loaded Status emission helps the orchestrator parse what landed but doesn't eliminate the "did it work?" question when the response itself never returns a Status line.
+
+### Design
+- Every code-modifying agent writes `~/.claude/agent-status/<agent_id>.json` BEFORE writing the prose summary. Schema: `{schema_version, status, agent, summary, concerns[], files_changed[], next_actions[], timestamp}`.
+- Orchestrator falls back to reading the status file if the response is missing a Status line after one retry. Treats file-status as source of truth.
+- Existing `cast-status-write.sh` plumbing reused — adds a "write before summary" convention to agent definitions in `agents/core/`.
+- BATS coverage: dispatching an agent that hits the truncation pattern (simulated via short max-tokens) still resolves to its file-written Status.
+
+### Why before docs/ecosystem
+This change touches `agents/core/*.md` (frontmatter or boilerplate) and the orchestrate skill. Doing it before the docs sweep means docs reflect the new convention from day one. Doing it before the ecosystem sync means agent definitions sync once with the new convention rather than syncing twice.
+
+---
+
+## Phase 4.10 — cast.db Schema Drift Cleanup (NEW — added 2026-05-10)
+**Effort:** ~2-3 hours | **Branch:** `feature/cast-v7-phase-4-10-db-drift`
+**Why:** Per the open memory `project_cast_db_schema_drift_2026-05-10.md`: `routing_events.agent_id` column missing in production; `agent_truncations` table missing in BATS test envs without migrations 009/010. Silent failures landing in `~/.claude/logs/db-write-errors.log`. Observability you can't trust is worse than no observability. Phase 5 has shipped — this is no longer blocked.
+
+### Design
+- Audit `~/.claude/logs/db-write-errors.log` to enumerate the actual write failures hitting production now
+- Add migration `013-schema-drift-fix.sql` with idempotent ALTER TABLE blocks (try/except on each ALTER to survive existing-column errors)
+- Ensure migrations 009 + 010 + 013 run on BATS test setup (audit `tests/test_helper/cast-setup.bash` or equivalent)
+- BATS coverage: `routing_events.agent_id` write succeeds; `agent_truncations` insert succeeds in fresh test env
+- After fix, verify `db-write-errors.log` is empty for 24h before declaring done (optional verification step before merge)
+
+### Why before docs/ecosystem
+Silent DB write failures = bad data in production right now. Better to fix the observability layer before any new docs claim "CAST has full observability."
+
 ---
 
 ## Phase 4.8 — Stability + Memory Hardening (CAST tighten)
@@ -501,6 +539,27 @@ Everything needed to cut a v7.0.0 release that's presentable as an Anthropic por
 - `cast test commit` runs against fixture without error
 - All open PRs closed or merged
 - No stale branches
+
+### 6.5b — `cast doctor` expansion (NEW — added 2026-05-10)
+**Why:** Tonight's session evidence + `feedback_memory_verification.md` (2026-05-05 incident: 3-week-old memory pointed at a hook that was never wired). Current `cast doctor` catches the basics; v7 lockdown should mean it catches the "wires-missing" class too.
+- Check every hook in `~/.claude/settings.json` resolves to a script that exists and is executable
+- Check every MCP server in `mcpServers` is reachable (one-shot ping with short timeout — best-effort, warn-not-fail if a server is intentionally offline)
+- Check every `agents/core/*.md` has parseable YAML frontmatter
+- Check every `routines/*.yaml` validates (after Phase 4.6 ships)
+- BATS coverage for each new check
+
+### 6.5c — Incident corpus backfill (NEW — added 2026-05-10)
+**Why:** Phase 4.8.1 shipped the `incidents` table empty. v7 ships with a useful corpus instead of waiting for organic accumulation.
+- One-pass review of last 30 days of `~/Documents/Claude/` journal + the `feedback_*.md` memories that document specific bug classes
+- Write 10–20 incidents to the `incidents` table covering the recurring patterns: macOS leniency blind spots, Python heredoc injection, gen-stats README leak, bash 3.2 parameter expansion, BSD-vs-GNU stat, commit agent file-drops, agent truncation rate
+- Each row: occurred_at, problem_summary, fix_summary, related_files, related_commit (if traceable), resolution_status='fixed', surfaced_by='manual-backfill-v7-lockdown'
+- Run via a one-shot Python script committed to `scripts/cast-incident-backfill-v7.py` (delete after run or leave as historical artifact — Ed's call)
+
+### 6.5d — Branch protection on main (NEW — added 2026-05-10)
+**Why:** Right now nothing on GitHub stops a direct-to-main push. v7 "set in cement" framing means main should be PR-only.
+- After v7.0.0 tag lands, enable on `ek33450505/claude-agent-team` (or `ek33450505/cast` post-rename): "Require a pull request before merging" + "Require status checks to pass before merging" (require: `bats`, `bats-ubuntu`, `bats-macos`, `CodeQL`)
+- 2-minute mechanical GitHub setting — but verify locally by attempting a direct push (should be rejected)
+- Document the rule in CLAUDE.md / working-conventions.md so future Claude doesn't try to push direct
 
 ### 6.6 — Marketing push: DEFERRED to post-v8
 The big-marketing-push deliverables are intentionally held until the v8 desktop app is shippable. v7 is technical depth (a portfolio piece for technical reviewers); v8 is the product story (what tells the public-facing narrative). Pushing v7 marketing now spends visibility on a release that's a setup for the real one.

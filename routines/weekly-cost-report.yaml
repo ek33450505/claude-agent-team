@@ -1,0 +1,12 @@
+name: weekly-cost-report
+description: "Weekly token cost summary via cast.db + /usage aggregation"
+trigger:
+  type: cron
+  value: "0 9 * * 0"    # Sunday 9am
+agent: bash-specialist
+prompt_template: |
+  Query cast.db sessions table for token usage over the past 7 days.
+  Calculate per-model cost using current Anthropic pricing (Sonnet 4.6: $3/$15 per M tokens, Haiku 4.5: $0.80/$4 per M).
+  Write a markdown cost report to routines-output/weekly-cost-report/.
+output_dir: "~/.claude/routines-output/weekly-cost-report"
+enabled: true

@@ -13,7 +13,7 @@ set -uo pipefail
 
 # ── Script directory (resolve symlinks) ──────────────────────────────────────
 CAST_BIN_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
-CAST_REPO_DIR="$(cd "$CAST_BIN_DIR/.." && pwd)"
+CAST_REPO_DIR="${CAST_REPO_DIR:-$(cd "$CAST_BIN_DIR/.." && pwd)}"
 
 # ── Version ──────────────────────────────────────────────────────────────────
 CAST_VERSION="$(cat "${CAST_REPO_DIR}/VERSION" 2>/dev/null || echo "unknown")"
@@ -148,6 +148,7 @@ Subcommands:
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
+  ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
 
 Global flags:
   --json        Machine-readable JSON output
@@ -1476,6 +1477,155 @@ PYEOF
   printf "${C_BOLD}Updates Available${C_RESET}\n"
   _doctor_upgrades
 
+  # 14. Agent frontmatter parses
+  local frontmatter_errors
+  frontmatter_errors="$(python3 - "$CAST_AGENTS_DIR" <<'PYEOF'
+import os, sys, re
+agents_dir = sys.argv[1]
+errors = []
+if os.path.isdir(agents_dir):
+    for fname in sorted(os.listdir(agents_dir)):
+        if not fname.endswith('.md'):
+            continue
+        fpath = os.path.join(agents_dir, fname)
+        try:
+            with open(fpath) as fh:
+                content = fh.read()
+            # Expect frontmatter block bounded by '---' at top
+            m = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+            if not m:
+                errors.append(f"{fname}: no frontmatter block")
+                continue
+            block = m.group(1)
+            # Cheap key check (no yaml lib in stdlib)
+            for key in ('name', 'description', 'tools'):
+                if not re.search(rf'^{key}\s*:', block, re.MULTILINE):
+                    errors.append(f"{fname}: missing '{key}'")
+        except Exception as e:
+            errors.append(f"{fname}: {e}")
+for e in errors:
+    print(e)
+PYEOF
+2>/dev/null || true)"
+  if [ -z "$frontmatter_errors" ]; then
+    printf "%b Agent frontmatter: all %d parse cleanly\n" "$OK" "$agent_count"
+  else
+    printf "%b Agent frontmatter: errors found:\n" "$WARN"
+    while IFS= read -r line; do
+      [ -n "$line" ] && printf "    %s\n" "$line"
+    done <<< "$frontmatter_errors"
+    overall_ok=0
+  fi
+
+  # 15. MCP servers reachable (best-effort)
+  local settings_file="${HOME}/.claude/settings.json"
+  if [ -f "$settings_file" ]; then
+    local mcp_status
+    mcp_status="$(python3 - "$settings_file" <<'PYEOF'
+import json, sys, os, shutil, subprocess
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+    servers = cfg.get("mcpServers", {})
+except Exception:
+    sys.exit(0)
+for name, server in servers.items():
+    url = server.get("url")
+    cmd = server.get("command")
+    if url:
+        try:
+            r = subprocess.run(["curl", "-sf", "--max-time", "2", url], capture_output=True, timeout=3)
+            status = "ok" if r.returncode == 0 else "unreachable"
+        except Exception:
+            status = "error"
+        print(f"{name}|{status}|{url}")
+    elif cmd:
+        resolved = shutil.which(cmd) or (cmd if os.path.isfile(cmd) else None)
+        status = "ok" if resolved else "missing"
+        print(f"{name}|{status}|{cmd}")
+    else:
+        print(f"{name}|unknown|<no url or command>")
+PYEOF
+  2>/dev/null || echo "")"
+    if [ -z "$mcp_status" ]; then
+      printf "%b MCP servers: none configured\n" "$INFO"
+    else
+      local mcp_ok=0 mcp_bad=0
+      while IFS='|' read -r name status target; do
+        [ -z "$name" ] && continue
+        if [ "$status" = "ok" ]; then
+          mcp_ok=$((mcp_ok+1))
+        else
+          mcp_bad=$((mcp_bad+1))
+        fi
+      done <<< "$mcp_status"
+      if [ "$mcp_bad" -eq 0 ]; then
+        printf "%b MCP servers: %d configured, all reachable\n" "$OK" "$mcp_ok"
+      else
+        printf "%b MCP servers: %d reachable, %d unreachable/missing\n" "$WARN" "$mcp_ok" "$mcp_bad"
+        while IFS='|' read -r name status target; do
+          [ -z "$name" ] && continue
+          [ "$status" = "ok" ] && continue
+          printf "    %s: %s (%s)\n" "$name" "$status" "$target"
+        done <<< "$mcp_status"
+      fi
+    fi
+  else
+    printf "%b MCP servers: settings.json not found\n" "$INFO"
+  fi
+
+  # 16. Routines validate
+  local routines_dir="${CAST_REPO_DIR}/routines"
+  if [ -d "$routines_dir" ]; then
+    local routine_status
+    routine_status="$(python3 - "$routines_dir" <<'PYEOF'
+import os, sys, re
+routines_dir = sys.argv[1]
+total = 0
+errors = []
+for fname in sorted(os.listdir(routines_dir)):
+    if not fname.endswith('.yaml') and not fname.endswith('.yml'):
+        continue
+    total += 1
+    fpath = os.path.join(routines_dir, fname)
+    try:
+        with open(fpath) as fh:
+            content = fh.read()
+        for key in ('name:', 'agent:', 'prompt_template:'):
+            if key not in content:
+                errors.append(f"{fname}: missing '{key.rstrip(':')}'")
+    except Exception as e:
+        errors.append(f"{fname}: {e}")
+print(f"total={total}")
+for e in errors:
+    print(f"err={e}")
+PYEOF
+  2>/dev/null || echo "total=0")"
+    local rt_total=0
+    local rt_errs=0
+    while IFS= read -r line; do
+      case "$line" in
+        total=*) rt_total="${line#total=}" ;;
+        err=*) rt_errs=$((rt_errs+1)) ;;
+      esac
+    done <<< "$routine_status"
+    if [ "$rt_errs" -eq 0 ]; then
+      if [ "$rt_total" -eq 0 ]; then
+        printf "%b Routines: none configured\n" "$INFO"
+      else
+        printf "%b Routines: %d configured, all schemas valid\n" "$OK" "$rt_total"
+      fi
+    else
+      printf "%b Routines: %d configured, %d with schema errors\n" "$WARN" "$rt_total" "$rt_errs"
+      while IFS= read -r line; do
+        case "$line" in err=*) printf "    %s\n" "${line#err=}" ;; esac
+      done <<< "$routine_status"
+      overall_ok=0
+    fi
+  else
+    printf "%b Routines: directory not found (%s)\n" "$INFO" "$routines_dir"
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
@@ -2014,6 +2164,242 @@ _cmd_dash() {
   CAST_DB_PATH="${CAST_DB_PATH}" exec "$python_cmd" "$dash_script" "$@"
 }
 
+# ── Subcommand: routines ─────────────────────────────────────────────────────
+_cmd_routines() {
+  local routines_script="${CAST_SCRIPTS_DIR}/cast-db-routines.py"
+  if [ ! -f "$routines_script" ]; then
+    routines_script="${CAST_REPO_DIR}/scripts/cast-db-routines.py"
+  fi
+  if [ ! -f "$routines_script" ]; then
+    _error "cast-db-routines.py not found. Run: bash install.sh"
+    exit 1
+  fi
+
+  local routine_runner="${CAST_SCRIPTS_DIR}/cast-routine-runner.sh"
+  if [ ! -f "$routine_runner" ]; then
+    routine_runner="${CAST_REPO_DIR}/scripts/cast-routine-runner.sh"
+  fi
+
+  local routines_dir="${CAST_ROUTINES_DIR:-$HOME/.claude/routines}"
+  local crontab_cmd="${CAST_CRONTAB_CMD:-crontab}"
+
+  local subcmd="${1:-}"
+  shift 2>/dev/null || true
+
+  case "$subcmd" in
+    list|status|get)
+      CAST_DB_PATH="${CAST_DB_PATH}" python3 "$routines_script" "$subcmd" "$@"
+      ;;
+
+    trigger)
+      local routine_name="${1:?Usage: cast routines trigger <name> [--dry-run]}"
+      shift
+      if [ ! -f "$routine_runner" ]; then
+        _error "cast-routine-runner.sh not found. Run: bash install.sh"
+        exit 1
+      fi
+      CAST_ROUTINES_DIR="$routines_dir" \
+        CAST_DB_PATH="${CAST_DB_PATH}" \
+        CAST_REPO_DIR="${CAST_REPO_DIR}" \
+        bash "$routine_runner" "$routine_name" "$@"
+      ;;
+
+    install)
+      local yaml_path="${1:?Usage: cast routines install <yaml-path>}"
+      if [ ! -f "$yaml_path" ]; then
+        _error "YAML file not found: $yaml_path"
+        exit 1
+      fi
+      # Parse fields from YAML
+      local name trigger_type trigger_value agent prompt_template output_dir enabled
+      name="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('name',''))" "$yaml_path")"
+      trigger_type="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('type','manual'))" "$yaml_path")"
+      trigger_value="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('value','') or '')" "$yaml_path")"
+      agent="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('agent',''))" "$yaml_path")"
+      prompt_template="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('prompt_template',''))" "$yaml_path")"
+      output_dir="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('output_dir',''))" "$yaml_path")"
+      enabled="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(1 if d.get('enabled',True) else 0)" "$yaml_path")"
+
+      if [ -z "$name" ]; then
+        _error "YAML missing required field: name"
+        exit 1
+      fi
+
+      # Validate routine name (prevent path traversal)
+      if ! [[ "$name" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]; then
+        _error "Invalid routine name: '$name'. Must match ^[a-z][a-z0-9_-]{0,63}\$ (start with lowercase letter, lowercase alphanumerics + hyphen + underscore, max 64 chars)."
+        return 1
+      fi
+
+      # Copy YAML to routines dir
+      mkdir -p "$routines_dir"
+      cp "$yaml_path" "$routines_dir/$name.yaml"
+
+      # Upsert into DB
+      local upsert_json
+      upsert_json="$(python3 -c "
+import json, sys
+print(json.dumps({
+  'name': sys.argv[1],
+  'trigger_type': sys.argv[2],
+  'trigger_value': sys.argv[3] or None,
+  'agent_to_dispatch': sys.argv[4],
+  'prompt_template': sys.argv[5],
+  'output_dir': sys.argv[6],
+  'enabled': int(sys.argv[7]),
+}))" "$name" "$trigger_type" "$trigger_value" "$agent" "$prompt_template" "$output_dir" "$enabled")"
+
+      echo "$upsert_json" | CAST_DB_PATH="${CAST_DB_PATH}" python3 "$routines_script" upsert
+
+      # Install crontab entry if trigger is cron
+      if [ "$trigger_type" = "cron" ] && [ -n "$trigger_value" ]; then
+        # Validate cron expression (5 fields of [0-9*,/-]+ separated by whitespace)
+        if ! [[ "$trigger_value" =~ ^[0-9*,/-]+[[:space:]]+[0-9*,/-]+[[:space:]]+[0-9*,/-]+[[:space:]]+[0-9*,/-]+[[:space:]]+[0-9*,/-]+$ ]]; then
+          _error "Invalid cron expression in trigger_value: '$trigger_value'. Must be 5 fields of [0-9*,/-]+ separated by whitespace."
+          return 1
+        fi
+        local cron_entry="$trigger_value bash $routine_runner $name --from-cron"
+        ( "$crontab_cmd" -l 2>/dev/null; echo "$cron_entry" ) | sort -u | "$crontab_cmd" -
+        echo "Installed cron entry: $cron_entry"
+      fi
+
+      echo "Installed routine: $name"
+      ;;
+
+    uninstall)
+      local routine_name="${1:?Usage: cast routines uninstall <name>}"
+      # Validate routine name (prevent path traversal)
+      if ! [[ "$routine_name" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]; then
+        _error "Invalid routine name: '$routine_name'. Must match ^[a-z][a-z0-9_-]{0,63}\$ (start with lowercase letter, lowercase alphanumerics + hyphen + underscore, max 64 chars)."
+        return 1
+      fi
+      # Remove crontab entry
+      "$crontab_cmd" -l 2>/dev/null | grep -vF "cast-routine-runner.sh $routine_name --from-cron" | "$crontab_cmd" - 2>/dev/null || true
+      # Mark disabled in DB
+      local upsert_json
+      upsert_json="$(python3 -c "
+import json, sys
+print(json.dumps({'name': sys.argv[1], 'trigger_type': 'manual', 'agent_to_dispatch': '', 'prompt_template': '', 'enabled': 0}))" "$routine_name")"
+      # Use update directly — only flip enabled flag
+      CAST_DB_PATH="${CAST_DB_PATH}" python3 "$routines_script" enable-disable "$routine_name" "0" 2>/dev/null || true
+      echo "Uninstalled routine: $routine_name (YAML preserved; re-run install to re-enable)"
+      ;;
+
+    enable)
+      local routine_name="${1:?Usage: cast routines enable <name>}"
+      # Validate routine name (prevent path traversal)
+      if ! [[ "$routine_name" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]; then
+        _error "Invalid routine name: '$routine_name'. Must match ^[a-z][a-z0-9_-]{0,63}\$ (start with lowercase letter, lowercase alphanumerics + hyphen + underscore, max 64 chars)."
+        return 1
+      fi
+      CAST_DB_PATH="${CAST_DB_PATH}" python3 "$routines_script" enable-disable "$routine_name" "1"
+      # Reinstall cron entry if YAML present
+      local yaml_file="$routines_dir/$routine_name.yaml"
+      if [ -f "$yaml_file" ]; then
+        local trigger_type trigger_value
+        trigger_type="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('type','manual'))" "$yaml_file")"
+        trigger_value="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('value','') or '')" "$yaml_file")"
+        if [ "$trigger_type" = "cron" ] && [ -n "$trigger_value" ]; then
+          local cron_entry="$trigger_value bash $routine_runner $routine_name --from-cron"
+          ( "$crontab_cmd" -l 2>/dev/null; echo "$cron_entry" ) | sort -u | "$crontab_cmd" -
+          echo "Reinstalled cron entry for: $routine_name"
+        fi
+      fi
+      echo "Enabled routine: $routine_name"
+      ;;
+
+    disable)
+      local routine_name="${1:?Usage: cast routines disable <name>}"
+      # Validate routine name (prevent path traversal)
+      if ! [[ "$routine_name" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]; then
+        _error "Invalid routine name: '$routine_name'. Must match ^[a-z][a-z0-9_-]{0,63}\$ (start with lowercase letter, lowercase alphanumerics + hyphen + underscore, max 64 chars)."
+        return 1
+      fi
+      CAST_DB_PATH="${CAST_DB_PATH}" python3 "$routines_script" enable-disable "$routine_name" "0"
+      # Remove cron entry
+      "$crontab_cmd" -l 2>/dev/null | grep -vF "cast-routine-runner.sh $routine_name --from-cron" | "$crontab_cmd" - 2>/dev/null || true
+      echo "Disabled routine: $routine_name"
+      ;;
+
+    validate)
+      local yaml_path="${1:?Usage: cast routines validate <yaml-path>}"
+      if [ ! -f "$yaml_path" ]; then
+        _error "YAML file not found: $yaml_path"
+        exit 1
+      fi
+      local errors=0
+      # Check required fields
+      local check_result
+      check_result="$(python3 - "$yaml_path" "${CAST_REPO_DIR:-$(cd "$(dirname "$routine_runner")/.." && pwd)}" <<'PYEOF'
+import yaml, sys, os, json
+
+yaml_path = sys.argv[1]
+repo_dir  = sys.argv[2]
+errors = []
+
+try:
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f)
+except yaml.YAMLError as e:
+    print(f"ERROR: invalid YAML: {e}")
+    sys.exit(1)
+
+required_top = ["name", "agent", "prompt_template", "output_dir"]
+for field in required_top:
+    if not data.get(field):
+        errors.append(f"missing required field: {field}")
+
+trigger = data.get("trigger", {})
+if not isinstance(trigger, dict):
+    errors.append("'trigger' must be a mapping")
+else:
+    if not trigger.get("type"):
+        errors.append("missing required field: trigger.type")
+    if not trigger.get("value") and trigger.get("type") == "cron":
+        errors.append("missing required field: trigger.value (required when trigger.type=cron)")
+
+agent = data.get("agent", "")
+if agent:
+    agent_file = os.path.join(repo_dir, "agents", "core", f"{agent}.md")
+    if not os.path.isfile(agent_file):
+        errors.append(f"agent not found in agents/core/: {agent}")
+
+if errors:
+    for e in errors:
+        print(f"ERROR: {e}")
+    sys.exit(1)
+else:
+    print(f"OK: {data.get('name')} (agent: {agent})")
+PYEOF
+      )"
+      local exit_code=$?
+      echo "$check_result"
+      exit $exit_code
+      ;;
+
+    ""|--help|-h)
+      echo "Usage: cast routines <subcommand> [args]"
+      echo ""
+      echo "Subcommands:"
+      echo "  list                         List all routines"
+      echo "  status [name]                Show detailed status"
+      echo "  get <name>                   Get a single routine record"
+      echo "  install <yaml-path>          Install routine from YAML spec"
+      echo "  uninstall <name>             Remove cron entry and disable routine"
+      echo "  trigger <name> [--dry-run] [--arg key=value ...]  Trigger a routine manually"
+      echo "  enable <name>                Enable routine (reinstalls cron)"
+      echo "  disable <name>               Disable routine (removes cron)"
+      echo "  validate <yaml-path>         Validate a routine YAML spec"
+      ;;
+
+    *)
+      # Fall through to cast-db-routines.py for any unrecognised subcommand
+      # (allows direct use of: cast routines upsert, cast routines update-status, etc.)
+      CAST_DB_PATH="${CAST_DB_PATH}" python3 "$routines_script" "$subcmd" "$@"
+      ;;
+  esac
+}
+
 # ── Subcommand: incidents ────────────────────────────────────────────────────
 _cmd_incidents() {
   local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
@@ -2076,6 +2462,7 @@ case "$SUBCOMMAND" in
   clean)                _cmd_clean "$@" ;;
   dash)                 _cmd_dash "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
+  routines)             _cmd_routines "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
   ""|--help|-h)
     _usage

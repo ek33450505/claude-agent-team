@@ -459,6 +459,29 @@ if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "
   _columns_added=1
 fi
 
+# Check if agent_truncations table exists (migration 012 — agent truncation tracking)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "agent_truncations"; then
+  sqlite3 "$DB_PATH" <<'AGENT_TRUNCATIONS_TABLE'
+CREATE TABLE IF NOT EXISTS agent_truncations (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id   TEXT,
+  agent_type   TEXT NOT NULL,
+  agent_id     TEXT,
+  batch_id     INTEGER,
+  last_line    TEXT,
+  timestamp    TEXT NOT NULL,
+  char_count   INTEGER,
+  has_status   INTEGER DEFAULT 0,
+  has_json     INTEGER DEFAULT 0,
+  partial_work_log TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_at_session ON agent_truncations(session_id);
+CREATE INDEX IF NOT EXISTS idx_at_agent_type ON agent_truncations(agent_type);
+AGENT_TRUNCATIONS_TABLE
+  _columns_added=1
+fi
+
 # Ensure batch_id and agent_id indexes exist
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);" 2>/dev/null || true
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true

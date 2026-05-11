@@ -87,6 +87,7 @@ This is for users who don't use Homebrew or want to install directly from source
 - [Peer Messaging & Gossip Protocol](#peer-messaging--gossip-protocol)
 - [Multi-Agent Pipelines (v4.6+)](#multi-agent-pipelines-v46)
 - [Agent Memory & Persistence (v4.3+)](#agent-memory--persistence-v43)
+- [Routines: Scheduled Workflows (v4.6+)](#routines-scheduled-workflows-v46)
 - [Project Structure](#project-structure)
 - [Scheduled Tasks](#scheduled-tasks)
 - [Testing](#testing)
@@ -265,6 +266,30 @@ Each agent accumulates domain knowledge in `~/.claude/agent-memory-local/<name>/
 
 ---
 
+## Routines: Scheduled Workflows (v4.6+)
+
+**Routines** are time-triggered or event-triggered autonomous agent jobs — daily briefings, inbox triage, infrastructure checks, and reports that run on a schedule without user interaction. Define task once in YAML, schedule via cron, and forget it.
+
+**11 built-in routines:**
+
+| Routine | Schedule | Purpose |
+|---|---|---|
+| `daily-briefing` | 7am daily | Morning briefing: agent activity, blockers, urgent flags |
+| `daily-cast-health` | 8pm daily | CAST infrastructure health (hooks, db, agents) |
+| `email-triage` | Manual | Gmail inbox triage, priority buckets, draft replies |
+| `knowledge-curator` | 10am daily | Obsidian vault organization, orphaned notes, link suggestions |
+| `learning-scout` | 3pm daily | Tech topic monitor, learning resource curation |
+| `meeting-prep` | 6am daily | Calendar-driven briefs for today's meetings |
+| `pr-narrator` | 30min after GitHub webhook | PR storyteller, change summary, risk flags |
+| `release-celebration` | Manual | Release notes + stakeholder brief |
+| `standup-writer` | 4pm daily | Daily standup (blockers, wins, next 24h) |
+| `task-triage` | 8am daily | Todoist overdue, BLOCKED agents, priorities |
+| `weekly-cost-report` | Mon 9am | Claude API cost breakdown by agent, trends |
+
+Manage with `cast routines list`, `cast routines trigger <name>`, `cast routines schedule <name>`. Full guide: [docs/routines.md](docs/routines.md).
+
+---
+
 ## Project Structure
 
 ```
@@ -434,6 +459,6 @@ The following capabilities were audited but deferred pending dependency updates 
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->918<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->987<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
