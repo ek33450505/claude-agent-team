@@ -29,11 +29,11 @@ Expected output:
 ==> Tapping ek33450505/cast
 ==> Downloading https://github.com/ek33450505/cast/...
 ==> Installing cast
-  CAST Installer (v6.0)
+  CAST Installer (v7.0)
 
-  ✓ Installed 30 agents -> ~/.claude/agents/
-  ✓ Installed 20 slash commands -> ~/.claude/commands/
-  ✓ Installed 18 skills -> ~/.claude/skills/
+  ✓ Installed <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents -> ~/.claude/agents/
+  ✓ Installed <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> slash commands -> ~/.claude/commands/
+  ✓ Installed <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills -> ~/.claude/skills/
   ✓ Installed hook scripts -> ~/.claude/scripts/
   ✓ Installed 12 rules -> ~/.claude/rules/
   ✓ Wired settings.json (hooks, permissions)
@@ -104,7 +104,7 @@ YAML frontmatter specifying the model, memory, and thinking budget for that spec
 ## What just happened
 
 `brew install cast` ran `install.sh`, which:
-1. Copied 30 agent definition files into `~/.claude/agents/` — Claude Code loads these automatically
+1. Copied <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agent definition files into `~/.claude/agents/` — Claude Code loads these automatically
 2. Installed slash commands (e.g., `/commit`, `/review`, `/plan`) into `~/.claude/commands/`
 3. Wired hook scripts into `~/.claude/settings.json` so hook events (SessionStart, PreToolUse, SubagentStop, etc.) fire on every session
 4. Created the `cast` CLI at `~/.local/bin/cast`
