@@ -1,0 +1,12 @@
+name: daily-cast-health
+description: "Run cast doctor daily and notify on regressions"
+trigger:
+  type: cron
+  value: "0 9 * * *"
+agent: bash-specialist
+prompt_template: |
+  Run `cast doctor` and capture output. If any failures or warnings are detected,
+  write a structured markdown report to routines-output/daily-cast-health/.
+  Exit 0 even if cast doctor finds issues — record them, don't fail the routine.
+output_dir: "~/.claude/routines-output/daily-cast-health"
+enabled: true

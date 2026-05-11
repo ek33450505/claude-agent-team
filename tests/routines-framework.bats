@@ -409,6 +409,38 @@ FAKECRON
   rm -rf "$fake_crontab_dir"
 }
 
+# ---------------------------------------------------------------------------
+# Wave 4a + 4b: New routine YAML validation tests
+# ---------------------------------------------------------------------------
+
+@test "standup-writer.yaml passes cast routines validate" {
+  run env CAST_REPO_DIR="$REPO_DIR" \
+    bash "$CAST_BIN" routines validate "$REPO_DIR/routines/standup-writer.yaml"
+  assert_success
+  assert_output --partial "OK: standup-writer"
+}
+
+@test "daily-cast-health.yaml passes cast routines validate" {
+  run env CAST_REPO_DIR="$REPO_DIR" \
+    bash "$CAST_BIN" routines validate "$REPO_DIR/routines/daily-cast-health.yaml"
+  assert_success
+  assert_output --partial "OK: daily-cast-health"
+}
+
+@test "task-triage.yaml passes cast routines validate" {
+  run env CAST_REPO_DIR="$REPO_DIR" \
+    bash "$CAST_BIN" routines validate "$REPO_DIR/routines/task-triage.yaml"
+  assert_success
+  assert_output --partial "OK: task-triage"
+}
+
+@test "weekly-cost-report.yaml passes cast routines validate" {
+  run env CAST_REPO_DIR="$REPO_DIR" \
+    bash "$CAST_BIN" routines validate "$REPO_DIR/routines/weekly-cost-report.yaml"
+  assert_success
+  assert_output --partial "OK: weekly-cost-report"
+}
+
 @test "install rejects trigger value with newline injection" {
   # Create a YAML with newline in trigger_value
   local bad_yaml
