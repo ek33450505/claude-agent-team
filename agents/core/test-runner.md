@@ -3,7 +3,7 @@ name: test-runner
 description: >
   Test execution gate. Runs the project test suite and gates the chain on real exit codes.
   Dispatched by the orchestrator before commit. Does NOT write tests — use code-writer for that.
-  On failure, dispatches debugger automatically (one retry) before escalating.
+  On failure, reports failing test names and exit code; the orchestrator dispatches debugger when needed.
 tools: Bash, Read, Glob
 model: haiku
 effort: low
@@ -26,6 +26,24 @@ Why: under context pressure, the prose tail is what gets truncated. Front-loadin
 
 ## Workflow
 
+0. **Write raw counts to status file (truncation-resilient):**
+   After running the test command, BEFORE writing any prose summary, write the raw ok/not_ok counts to your status JSON so the orchestrator has machine-readable truth even if your prose is truncated:
+   ```bash
+   source ~/.claude/scripts/status-writer.sh 2>/dev/null || true
+   ok_count=$(grep -c '^ok ' /tmp/test-output.tap 2>/dev/null || echo 0)
+   notok_count=$(grep -c '^not ok ' /tmp/test-output.tap 2>/dev/null || echo 0)
+   total=$((ok_count + notok_count))
+   if [[ "$notok_count" -eq 0 && "$ok_count" -gt 0 ]]; then
+     status="DONE"
+     summary="$ok_count tests passed, 0 failures"
+   else
+     status="BLOCKED"
+     summary="$notok_count of $total tests failed"
+   fi
+   cast_write_status "$status" "$summary" "test-runner" "" 2>/dev/null || true
+   ```
+   The grep counts are the source of truth — do not rely on your own reasoning over the test output. If your prose Status disagrees with the file Status, the orchestrator trusts the file.
+
 1. **Detect framework** — Read `package.json`:
    - `vitest` → run `npm run test -- --run 2>&1`
    - `jest` or `react-scripts` → run `npm test -- --watchAll=false --passWithNoTests 2>&1`
@@ -34,6 +52,11 @@ Why: under context pressure, the prose tail is what gets truncated. Front-loadin
    - No framework found → report `Status: DONE_WITH_CONCERNS` with "no test framework detected"
 
 2. **Run tests** — capture output AND exit code (`$?`). Exit code is truth. Output text is context.
+   For BATS tests, write TAP output to `/tmp/test-output.tap` so step 0 can read it:
+   ```bash
+   bash tests/run.sh --tap > /tmp/test-output.tap 2>&1; exit_code=$?
+   tail -30 /tmp/test-output.tap
+   ```
 
 3. **On PASS (exit 0):**
    - (Optional) If `CAST_FILES_API=1` env var is set: upload the test report via `scripts/cast-files-api.sh upload <report-path>` and include the returned `file_id` in your Status block instead of pasting inline output.
@@ -43,12 +66,10 @@ Summary: All tests passed — N passed, 0 failed
 Test report: file_id=<file_id> (if CAST_FILES_API=1) or [last 10 lines of output] (default)
 ```
 
-4. **On FAIL (non-zero) — First attempt:**
+4. **On FAIL (non-zero) — Report and exit:**
    - Capture failing test names and error output (last 20 lines)
-   - Dispatch `debugger` agent: "Tests are failing. Failing tests: [names]. Error: [output]. Diagnose and fix the implementation. Do NOT modify test files."
-   - After debugger completes: re-run tests once
-   - If pass: report Status: DONE — "Tests passed after debugger fix"
-   - If still fail: report Status: BLOCKED — "Tests still failing after debugger retry. Human intervention required. Failing: [names]"
+   - Emit Status: BLOCKED — "Tests failing: [names]. Orchestrator should dispatch `debugger` and re-run."
+   - Do NOT attempt to dispatch debugger yourself — your tool list does not include the Agent tool. The orchestrator handles dispatch decisions.
 
 5. **Timeout** — If tests run >120s, kill and report Status: BLOCKED "Test suite timed out"
 

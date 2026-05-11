@@ -226,6 +226,29 @@ Apply the appropriate preamble tier to ALL agent dispatches — both parallel an
    - If the status file fallback recovers a Status, log to cast.db `quality_gates` with `contract_passed = -1` (special sentinel meaning "recovered via file fallback").
    - Only treat as `BLOCKED` if both the retry AND the file fallback fail.
 
+   - **Test-runner authoritative file truth (Phase 4.11):** When the dispatched agent is `test-runner` (or `subagent_type=test-runner`), the file at `~/.claude/agent-status/test-runner-*.json` is treated as MORE authoritative than the prose Status line — even when prose is present. This guards against the hallucination class observed 2026-05-11 where test-runner reported false BLOCKED on a green suite. Implementation:
+     ```bash
+     if [[ "$AGENT_NAME" == "test-runner" ]]; then
+       STATUS_FILE=$(find ~/.claude/agent-status -name "test-runner-*.json" -type f 2>/dev/null | \
+         xargs -I{} sh -c 'echo "$(stat -f %m "{}") {}"' 2>/dev/null | \
+         sort -rn | head -1 | awk '{print $2}')
+       if [[ -n "$STATUS_FILE" && -f "$STATUS_FILE" ]]; then
+         FILE_MTIME=$(stat -f %m "$STATUS_FILE" 2>/dev/null || echo 0)
+         NOW=$(date +%s)
+         AGE=$((NOW - FILE_MTIME))
+         if [[ "$AGE" -le 300 ]]; then
+           FILE_STATUS=$(python3 -c "import json; d=json.load(open('$STATUS_FILE')); print(d.get('status',''))" 2>/dev/null)
+           # If file status differs from prose status, trust the file
+           if [[ -n "$FILE_STATUS" && "$FILE_STATUS" != "$(echo "$STATUS_LINE" | grep -oE 'DONE|BLOCKED|DONE_WITH_CONCERNS|NEEDS_CONTEXT' | head -1)" ]]; then
+             echo "[CAST] test-runner prose said $STATUS_LINE but file says $FILE_STATUS — trusting file."
+             STATUS_LINE="Status: $FILE_STATUS (file-authoritative)"
+           fi
+         fi
+       fi
+     fi
+     ```
+   - This rule applies BEFORE the generic Phase 4.9 fallback — for test-runner, the file always wins.
+
 3. Log validation result to cast.db:
    ```bash
    python3 -c "
