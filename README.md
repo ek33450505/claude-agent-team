@@ -7,7 +7,7 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-7.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-989-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-990-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
