@@ -361,10 +361,77 @@ def part5_unstaged_warning(data: dict) -> None:
     )
 
 
+def part6_file_writes(data: dict, tool_name: str, file_path: str) -> None:
+    """Record file writes to file_writes table for IDE gutter annotations."""
+    if tool_name not in ("Write", "Edit", "MultiEdit"):
+        return
+    if not file_path:
+        return
+
+    import datetime
+    try:
+        from cast_db import db_write, db_execute
+        # Ensure the table exists (idempotent — safe on every call)
+        db_execute(
+            "CREATE TABLE IF NOT EXISTS file_writes ("
+            "  id         INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  session_id TEXT,"
+            "  agent_name TEXT,"
+            "  run_id     INTEGER,"
+            "  file_path  TEXT NOT NULL,"
+            "  tool_name  TEXT NOT NULL,"
+            "  ts         TEXT NOT NULL DEFAULT (datetime('now')),"
+            "  line_range TEXT"
+            ")"
+        )
+        db_execute(
+            "CREATE INDEX IF NOT EXISTS idx_file_writes_path "
+            "ON file_writes(file_path)"
+        )
+        db_execute(
+            "CREATE INDEX IF NOT EXISTS idx_file_writes_session_ts "
+            "ON file_writes(session_id, ts)"
+        )
+        db_execute(
+            "CREATE INDEX IF NOT EXISTS idx_file_writes_run "
+            "ON file_writes(run_id)"
+        )
+
+        try:
+            real = os.path.realpath(file_path)
+        except Exception:
+            real = file_path
+
+        sid = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID")
+        run_id = os.environ.get("CAST_AGENT_RUN_ID")
+        agent = os.environ.get("CAST_AGENT_NAME")
+
+        db_write('file_writes', {
+            'session_id': sid,
+            'agent_name': agent,
+            'run_id': run_id,
+            'file_path': real,
+            'tool_name': tool_name,
+        })
+    except Exception as e:
+        try:
+            import datetime as _dt
+            log_path = os.path.expanduser("~/.claude/logs/hook-errors.log")
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            ts = _dt.datetime.utcnow().isoformat() + 'Z'
+            with open(log_path, 'a') as f:
+                f.write(f'[{ts}] ERROR cast-post-tool.py part6_file_writes: {e}\n')
+        except Exception:
+            pass
+
+
 def main():
     data = _read_stdin_json()
     tool_name = data.get("tool_name", "")
     file_path = data.get("tool_input", {}).get("file_path", "")
+
+    if tool_name in ("Write", "Edit", "MultiEdit"):
+        part6_file_writes(data, tool_name, file_path)
 
     if tool_name in ("Write", "Edit"):
         part1_directive(data, tool_name, file_path)
