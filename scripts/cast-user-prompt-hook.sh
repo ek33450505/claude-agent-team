@@ -39,10 +39,13 @@ prompt_text    = data.get("prompt", "")
 prompt_length  = len(prompt_text)
 raw_preview    = prompt_text[:120]
 
-# Redact PII from preview before writing to any log
+# Redact PII from preview before writing to any log.
+# If redaction fails, skip the DB write entirely — do not fall back to raw text.
 import subprocess as _sp
 _redact_script = os.environ.get("_CAST_REDACT_SCRIPT", "")
-prompt_preview = raw_preview
+_redaction_ok = False
+prompt_preview = None
+
 if _redact_script and os.path.isfile(_redact_script):
     try:
         _result = _sp.run(
@@ -54,9 +57,24 @@ if _redact_script and os.path.isfile(_redact_script):
         )
         if _result.returncode == 0 and _result.stdout.strip():
             _out = json.loads(_result.stdout)
-            prompt_preview = _out.get("redacted_text", raw_preview)
+            prompt_preview = _out.get("redacted_text")
+            if prompt_preview is not None:
+                _redaction_ok = True
     except Exception:
-        pass  # fallback: use raw_preview unredacted
+        pass
+
+if not _redaction_ok:
+    # Log the failure and skip both JSONL and DB writes for this prompt.
+    _err_log = os.path.expanduser("~/.claude/logs/hook-errors.log")
+    try:
+        os.makedirs(os.path.dirname(_err_log), exist_ok=True)
+        import time as _time
+        _ts = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        with open(_err_log, 'a') as _f:
+            _f.write(f"[{_ts}] ERROR cast-user-prompt-hook.sh: redaction failed — prompt dropped (session={session_id})\n")
+    except Exception:
+        pass
+    import sys; sys.exit(0)
 
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")

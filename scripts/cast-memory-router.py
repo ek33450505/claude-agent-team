@@ -29,6 +29,7 @@ import math
 import argparse
 import sqlite3
 import struct
+import urllib.parse
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -52,10 +53,26 @@ VALID_TYPES = {'user', 'feedback', 'project', 'reference', 'procedural', 'user_p
 OLLAMA_EMBED_URL = 'http://localhost:11434/api/embed'
 EMBED_MODEL = 'nomic-embed-text'
 
+_ALLOWED_EMBED_HOSTS = {'localhost', '127.0.0.1', '::1'}
+
+
+def _is_safe_url(url: str) -> bool:
+    """Return True only if url has an allowed scheme and a local hostname."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in ('http', 'https'):
+        return False
+    hostname = parsed.hostname or ''
+    return hostname in _ALLOWED_EMBED_HOSTS
+
 
 def embed_text(text, timeout=3):
     """Call Ollama embed API. Returns list[float] or None on any error."""
     try:
+        if not _is_safe_url(OLLAMA_EMBED_URL):
+            raise ValueError(f"Unsafe Ollama embed URL: {OLLAMA_EMBED_URL!r}")
         import urllib.request
         payload = json.dumps({"model": EMBED_MODEL, "input": text}).encode('utf-8')
         req = urllib.request.Request(

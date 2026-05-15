@@ -25,7 +25,16 @@ from pathlib import Path
 
 
 LOG_FILE = Path.home() / ".claude" / "logs" / "cast-rate-check.log"
-API_BASE = os.environ.get("ANTHROPIC_API_BASE", "https://api.anthropic.com")
+
+_ALLOWED_API_BASE_PREFIXES = ("https://api.anthropic.com", "https://localhost")
+
+_raw_api_base = os.environ.get("ANTHROPIC_API_BASE", "https://api.anthropic.com")
+if not any(_raw_api_base.startswith(prefix) for prefix in _ALLOWED_API_BASE_PREFIXES):
+    raise ValueError(
+        f"ANTHROPIC_API_BASE {_raw_api_base!r} is not allowed. "
+        f"Must start with one of: {_ALLOWED_API_BASE_PREFIXES}"
+    )
+API_BASE = _raw_api_base
 
 
 def _log(level: str, msg: str) -> None:

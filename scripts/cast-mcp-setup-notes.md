@@ -25,7 +25,7 @@ The consolidation script applies importance decay, deduplicates similar memories
 Add this cron entry (runs weekly, Sunday at 3am):
 
 ```
-0 3 * * 0 python3 /Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-memory-consolidate.py >> ~/.claude/logs/memory-consolidate.log 2>&1
+0 3 * * 0 python3 $(git rev-parse --show-toplevel)/scripts/cast-memory-consolidate.py >> ~/.claude/logs/memory-consolidate.log 2>&1
 ```
 
 To run manually:
@@ -51,7 +51,7 @@ The preamble hook injects procedural memories into Agent tool calls. Add this to
         "hooks": [
           {
             "type": "command",
-            "command": "bash /Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-agent-preamble-hook.sh"
+            "command": "bash $(git rev-parse --show-toplevel)/scripts/cast-agent-preamble-hook.sh"
           }
         ]
       }

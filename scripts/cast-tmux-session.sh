@@ -251,7 +251,8 @@ tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
 
 # Determine main pane command (stream mode or normal)
 if [ "$STREAM_MODE" -eq 1 ]; then
-  export CLAUDE_SESSION_ID="stream-$(date +%Y%m%d%H%M%S)"
+  CLAUDE_SESSION_ID="stream-$(date +%Y%m%d%H%M%S)"
+  export CLAUDE_SESSION_ID
   MAIN_CMD="\"${CAST_SCRIPTS_DIR}/cast-stream-wrapper.sh\" ${CLAUDE_ARGS[*]:-}; exec bash"
 else
   MAIN_CMD="claude ${CLAUDE_ARGS[*]:-}; exec bash"

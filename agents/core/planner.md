@@ -315,7 +315,7 @@ After your human-readable block above, emit a machine-readable JSON payload:
   "agent": "planner",
   "summary": "Plan written to ~/.claude/plans/2026-04-16-feature-name.md — N tasks, M batches",
   "concerns": [],
-  "files_changed": ["/Users/edkubiak/.claude/plans/2026-04-16-feature-name.md"],
+  "files_changed": ["/Users/<your-user>/.claude/plans/2026-04-16-feature-name.md"],
   "next_actions": ["orchestrate: invoke /orchestrate with the plan file path"]
 }
 ```

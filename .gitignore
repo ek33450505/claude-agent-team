@@ -1,4 +1,5 @@
 .DS_Store
+.mcp.json
 *.local
 *.env
 agent-memory-local/

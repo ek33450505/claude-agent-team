@@ -139,10 +139,10 @@ Concerns: Dashboard is absorb-ready but has two high-priority Tauri blockers (Vi
 ---
 
 Sources:
-- `/Users/edkubiak/Projects/personal/claude-code-dashboard/src/App.tsx` — route config (verified)
-- `/Users/edkubiak/Projects/personal/claude-code-dashboard/server/routes/index.ts` — API mount table (verified)
-- `/Users/edkubiak/Projects/personal/claude-code-dashboard/server/routes/castDb.ts` — DB access layer (verified)
-- `/Users/edkubiak/Projects/personal/claude-code-dashboard/server/constants.ts` — path/port constants (verified)
-- `/Users/edkubiak/Projects/personal/claude-code-dashboard/vite.config.ts` — proxy config (verified)
-- `/Users/edkubiak/Projects/personal/claude-code-dashboard/server/routes/workLogStream.ts` — work log stream route (verified)
+- `~/Projects/personal/claude-code-dashboard/src/App.tsx` — route config (verified)
+- `~/Projects/personal/claude-code-dashboard/server/routes/index.ts` — API mount table (verified)
+- `~/Projects/personal/claude-code-dashboard/server/routes/castDb.ts` — DB access layer (verified)
+- `~/Projects/personal/claude-code-dashboard/server/constants.ts` — path/port constants (verified)
+- `~/Projects/personal/claude-code-dashboard/vite.config.ts` — proxy config (verified)
+- `~/Projects/personal/claude-code-dashboard/server/routes/workLogStream.ts` — work log stream route (verified)
 - `npm run build` output — dist sizes verified in this session

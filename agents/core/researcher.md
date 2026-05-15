@@ -253,7 +253,7 @@ After your human-readable block above, emit a machine-readable JSON payload:
   "agent": "researcher",
   "summary": "Research complete — recommendation: use Vitest over Jest; report at ~/.claude/reports/2026-04-16-vitest-vs-jest.md",
   "concerns": [],
-  "files_changed": ["/Users/edkubiak/.claude/reports/2026-04-16-topic.md"],
+  "files_changed": ["/Users/<your-user>/.claude/reports/2026-04-16-topic.md"],
   "next_actions": []
 }
 ```

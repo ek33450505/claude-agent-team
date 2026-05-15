@@ -116,7 +116,7 @@ After your human-readable Status block, emit a machine-readable JSON payload:
   "agent": "learning-scout",
   "summary": "Curated 5 resources on Tauri v2 IPC patterns — saved to ~/.claude/reports/learning/2026-04-16-tauri-ipc.md",
   "concerns": [],
-  "files_changed": ["/Users/edkubiak/.claude/reports/learning/2026-04-16-topic.md"],
+  "files_changed": ["/Users/<your-user>/.claude/reports/learning/2026-04-16-topic.md"],
   "next_actions": []
 }
 ```

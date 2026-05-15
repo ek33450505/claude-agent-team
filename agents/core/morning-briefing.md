@@ -49,7 +49,7 @@ If the fetch or parse fails at any point, emit the fallback note and continue â€
 
 ```bash
 WEATHER_RESPONSE=$(curl -s -m 10 \
-  -H "User-Agent: CAST/1.0 (ek33450505@gmail.com)" \
+  -H "User-Agent: CAST/1.0 (your-email@example.com)" \
   "https://api.weather.gov/gridpoints/ILN/83,83/forecast" 2>/dev/null || echo "CURL_ERROR")
 
 if [[ "${WEATHER_RESPONSE}" == "CURL_ERROR" || "${WEATHER_RESPONSE}" =~ ^\<\!DOCTYPE ]]; then
@@ -220,7 +220,7 @@ After your human-readable Status block, emit a machine-readable JSON payload:
   "agent": "morning-briefing",
   "summary": "Morning briefing assembled and saved to ~/.claude/briefings/2026-04-16-morning.md",
   "concerns": [],
-  "files_changed": ["/Users/edkubiak/.claude/briefings/2026-04-16-morning.md"],
+  "files_changed": ["/Users/<your-user>/.claude/briefings/2026-04-16-morning.md"],
   "next_actions": []
 }
 ```

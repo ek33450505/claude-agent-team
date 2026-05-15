@@ -123,6 +123,6 @@ Two dispatches is appropriate for a release-cadence agent — CAST ships roughly
 - [Using the Evaluation Tool — Claude API Docs](https://docs.anthropic.com/en/docs/test-and-evaluate/eval-tool) — Anthropic docs (verified via WebSearch)
 - [Create strong empirical evaluations — Claude Docs](https://docs.anthropic.com/en/docs/test-and-evaluate/develop-tests) — Anthropic docs (verified via WebSearch)
 - [Bloom: open source tool for automated behavioral evaluations](https://alignment.anthropic.com/2025/bloom-auto-evals/) — Anthropic alignment (verified via WebSearch)
-- `/Users/edkubiak/Projects/personal/claude-agent-team/.claude/agents/migration-reviewer.md` — local agent def
-- `/Users/edkubiak/Projects/personal/claude-agent-team/.claude/agents/api-contract.md` — local agent def
-- `/Users/edkubiak/Projects/personal/claude-agent-team/.claude/agents/release-notes.md` — local agent def
+- `~/Projects/personal/claude-agent-team/.claude/agents/migration-reviewer.md` — local agent def
+- `~/Projects/personal/claude-agent-team/.claude/agents/api-contract.md` — local agent def
+- `~/Projects/personal/claude-agent-team/.claude/agents/release-notes.md` — local agent def

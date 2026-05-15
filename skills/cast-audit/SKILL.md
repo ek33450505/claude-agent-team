@@ -165,7 +165,7 @@ Create a scheduled task that invokes Claude Code with:
 ```
 claude-code \
   --message "Dispatch /cast-audit skill to run monthly audit." \
-  --cwd /Users/edkubiak/Projects/personal/claude-agent-team
+  --cwd ${HOME}/Projects/personal/claude-agent-team
 ```
 
 Schedule: **First Monday of each month at 08:00 local time**
@@ -175,7 +175,7 @@ Schedule: **First Monday of each month at 08:00 local time**
 Add to `crontab -e` on macOS/Linux (adjust for your timezone):
 ```bash
 # First Monday of month at 08:00 local — CAST audit
-0 8 * * 1 [ $(date +\%d) -le 7 ] && cd /Users/edkubiak/Projects/personal/claude-agent-team && bash scripts/cast-audit-cron.sh
+0 8 * * 1 [ $(date +\%d) -le 7 ] && cd ${HOME}/Projects/personal/claude-agent-team && bash scripts/cast-audit-cron.sh
 ```
 
 Requires `scripts/cast-audit-cron.sh` helper (see below).
@@ -195,7 +195,7 @@ set -euo pipefail
 echo "[cast-audit] Scheduled audit trigger fired at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Log to audit event file
-AUDIT_LOG="/Users/edkubiak/.claude/cast-audit-scheduled.log"
+AUDIT_LOG="${HOME}/.claude/cast-audit-scheduled.log"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) audit triggered" >> "$AUDIT_LOG"
 
 # Note: Actual invocation requires a Claude Code session.

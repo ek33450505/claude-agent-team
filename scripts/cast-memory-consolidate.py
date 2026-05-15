@@ -11,7 +11,7 @@ Performs four sequential operations:
 Output: JSON summary to stdout.
 
 Cron entry (weekly Sunday 3am):
-  0 3 * * 0 python3 /Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-memory-consolidate.py >> ~/.claude/logs/memory-consolidate.log 2>&1
+  0 3 * * 0 python3 ~/Projects/personal/claude-agent-team/scripts/cast-memory-consolidate.py >> ~/.claude/logs/memory-consolidate.log 2>&1
 
 Usage:
   cast-memory-consolidate.py [--db PATH] [--dry-run]

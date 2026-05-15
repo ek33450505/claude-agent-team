@@ -65,6 +65,10 @@ FALLBACK_PATTERNS = [
     ("DATABASE_URL",    r"(?i)(?:postgres|mysql|mongodb|redis)(?:ql)?://[^:@\s]+:[^@\s]+@[^\s]+"),
     ("PRIVATE_KEY",     r"-----BEGIN[A-Z ]+(?:PRIVATE KEY|CERTIFICATE)-----"),
     ("API_KEY",         r"(?i)(?:api[_-]?key|apikey|x-api-key)[:\s=]+['\"]?([A-Za-z0-9_\-]{20,})['\"]?"),
+    # Paths and URLs
+    ("ABSOLUTE_PATH",   r"/Users/[a-zA-Z0-9_\-]+/[^\s]*"),
+    ("BITBUCKET_URL",   r"bitbucket\.org/[^\s]+"),
+    ("SLACK_WEBHOOK",   r"hooks\.slack\.com/[^\s]+"),
 ]
 
 
@@ -186,6 +190,15 @@ def analyze_regex(text: str, custom_patterns: list[dict]) -> list[dict]:
     return sorted(entities, key=lambda e: e["start"])
 
 
+# Custom replacement strings for specific entity types (redact mode only).
+# Entities not listed here fall back to the standard <ENTITY_TYPE> format.
+_CUSTOM_REPLACEMENTS: dict[str, str] = {
+    "ABSOLUTE_PATH": "~/",
+    "BITBUCKET_URL": "[BITBUCKET_URL]",
+    "SLACK_WEBHOOK": "[SLACK_WEBHOOK]",
+}
+
+
 def redact_regex(text: str, entities: list[dict], mode: str) -> str:
     """Apply redactions to text based on entity spans (non-overlapping, right-to-left).
 
@@ -196,7 +209,10 @@ def redact_regex(text: str, entities: list[dict], mode: str) -> str:
     result = text
     for entity in sorted(entities, key=lambda e: e["start"], reverse=True):
         start, end = entity["start"], entity["end"]
-        replacement = "*" * (end - start) if mode == "mask" else f"<{entity['entity_type']}>"
+        if mode == "mask":
+            replacement = "*" * (end - start)
+        else:
+            replacement = _CUSTOM_REPLACEMENTS.get(entity["entity_type"], f"<{entity['entity_type']}>")
         result = result[:start] + replacement + result[end:]
     return result
 

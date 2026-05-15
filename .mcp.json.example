@@ -9,9 +9,9 @@
     },
     "cast-memory": {
       "command": "python3",
-      "args": ["/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-mcp-memory-server.py"],
+      "args": ["${HOME}/Projects/personal/claude-agent-team/scripts/cast-mcp-memory-server.py"],
       "env": {
-        "CAST_DB_PATH": "/Users/edkubiak/.claude/cast.db"
+        "CAST_DB_PATH": "${HOME}/.claude/cast.db"
       }
     }
   }

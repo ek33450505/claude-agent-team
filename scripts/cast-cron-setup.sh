@@ -3,6 +3,10 @@
 #
 # Replaces castd.sh daemon with simple cron jobs.
 #
+# Each cron entry delegates to a generated script under ${HOME}/.cast/cron/<name>.sh
+# rather than inlining commands directly in the crontab. This eliminates the class
+# of cron-line injection that arises when agent prompt strings are embedded inline.
+#
 # Scheduled tasks:
 #   0 7  * * *   morning   — daily morning briefing at 07:00 (--agent morning-briefing)
 #   0 18 * * *   summary   — daily agent summary at 18:00 (--agent docs)
@@ -28,24 +32,123 @@ set -euo pipefail
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 LOGS_DIR="${HOME}/.claude/logs"
+CRON_SCRIPTS_DIR="${HOME}/.cast/cron"
 MARKER="# CAST-MANAGED"
 
-# Ensure log directory exists
+# Ensure directories exist
 mkdir -p "$LOGS_DIR"
+mkdir -p "$CRON_SCRIPTS_DIR"
 
 # ── Cron entry definitions ────────────────────────────────────────────────────
-# Each entry: "schedule|job_name|command"
-# Agent tasks use claude --agent; raw shell tasks use the command directly.
+# Each entry: "schedule|job_name"
+# The actual command for each job is defined in _write_cron_script() below.
+# Agent tasks are NOT inlined here — they live in generated script files.
 declare -a CRON_ENTRIES=(
-  "0 7 * * *|morning|/opt/homebrew/bin/claude --agent morning-briefing -p 'Generate today\\'s morning briefing' --max-turns 25 --permission-mode bypassPermissions"
-  "0 18 * * *|summary|/opt/homebrew/bin/claude --agent docs -p 'Generate daily summary from cast.db: summarize agent_runs completed today, highlight BLOCKED or DONE_WITH_CONCERNS' --max-turns 15 --permission-mode bypassPermissions"
-  "0 3 * * *|tidy|/Users/edkubiak/.local/bin/cast tidy"
-  "30 3 * * *|db-prune|sqlite3 ~/.claude/cast.db \"DELETE FROM routing_events WHERE created_at < datetime('now', '-90 days'); DELETE FROM agent_runs WHERE started_at < datetime('now', '-90 days');\""
-  "45 3 * * *|log-compress|find ~/.claude/cast/events -name '*.jsonl' -mtime +7 -exec gzip {} \\;"
-  "47 22 * * *|pa-backup|rsync -a --delete --exclude=\"node_modules/\" --exclude=\".claude/worktrees/\" --exclude=\"cast.db-wal\" --exclude=\"cast.db-shm\" --exclude=\"projects/*/subagents/\" ~/.claude/ /Users/edkubiak/Backups/jarvis/claude/ && rsync -a --delete --exclude=\".obsidian/plugins/*/node_modules/\" /Users/edkubiak/JARVIS/ /Users/edkubiak/Backups/jarvis/vault/"
-  "47 3 * * *|cast-maintenance|bash ~/.claude/scripts/cast-maintenance.sh"
-  "0 8 * * 0|cron-health|bash ~/.claude/scripts/cast-cron-health.sh"
+  "0 7 * * *|morning"
+  "0 18 * * *|summary"
+  "0 3 * * *|tidy"
+  "30 3 * * *|db-prune"
+  "45 3 * * *|log-compress"
+  "47 22 * * *|pa-backup"
+  "47 3 * * *|cast-maintenance"
+  "0 8 * * 0|cron-health"
 )
+
+# ── Write the per-job script file ─────────────────────────────────────────────
+# Each job gets its own executable script under ${HOME}/.cast/cron/<name>.sh.
+# The crontab entry just calls: bash ${HOME}/.cast/cron/<name>.sh
+# This prevents any prompt string or path from being interpolated into a cron line.
+_write_cron_script() {
+  local job_name="$1"
+  local script_file="${CRON_SCRIPTS_DIR}/${job_name}.sh"
+
+  case "$job_name" in
+    morning)
+      cat > "$script_file" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+exec /opt/homebrew/bin/claude \
+  --agent morning-briefing \
+  --max-turns 25 \
+  --permission-mode bypassPermissions \
+  -p "Generate today's morning briefing"
+SCRIPT
+      ;;
+    summary)
+      cat > "$script_file" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+exec /opt/homebrew/bin/claude \
+  --agent docs \
+  --max-turns 15 \
+  --permission-mode bypassPermissions \
+  -p "Generate daily summary from cast.db: summarize agent_runs completed today, highlight BLOCKED or DONE_WITH_CONCERNS"
+SCRIPT
+      ;;
+    tidy)
+      cat > "$script_file" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+exec "${HOME}/.local/bin/cast" tidy
+SCRIPT
+      ;;
+    db-prune)
+      cat > "$script_file" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+sqlite3 "${HOME}/.claude/cast.db" \
+  "DELETE FROM routing_events WHERE created_at < datetime('now', '-90 days');
+   DELETE FROM agent_runs WHERE started_at < datetime('now', '-90 days');"
+SCRIPT
+      ;;
+    log-compress)
+      cat > "$script_file" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+find "${HOME}/.claude/cast/events" -name '*.jsonl' -mtime +7 -exec gzip {} \;
+SCRIPT
+      ;;
+    pa-backup)
+      cat > "$script_file" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+rsync -a --delete \
+  --exclude="node_modules/" \
+  --exclude=".claude/worktrees/" \
+  --exclude="cast.db" \
+  --exclude="cast.db-wal" \
+  --exclude="cast.db-shm" \
+  --exclude="projects/*/subagents/" \
+  "${HOME}/.claude/" \
+  "${HOME}/Backups/jarvis/claude/"
+rsync -a --delete \
+  --exclude=".obsidian/plugins/*/node_modules/" \
+  "${HOME}/JARVIS/" \
+  "${HOME}/Backups/jarvis/vault/"
+SCRIPT
+      ;;
+    cast-maintenance)
+      cat > "$script_file" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+exec bash "${HOME}/.claude/scripts/cast-maintenance.sh"
+SCRIPT
+      ;;
+    cron-health)
+      cat > "$script_file" <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+exec bash "${HOME}/.claude/scripts/cast-cron-health.sh"
+SCRIPT
+      ;;
+    *)
+      echo "cast-cron-setup: unknown job name: '${job_name}'" >&2
+      return 1
+      ;;
+  esac
+
+  chmod +x "$script_file"
+}
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 usage() {
@@ -54,12 +157,13 @@ usage() {
 }
 
 # ── Build the cron line for a given entry ─────────────────────────────────────
+# The crontab line delegates to the per-job script; no inline command or prompt.
 make_cron_line() {
   local schedule="$1"
   local job_name="$2"
-  local command="$3"
   local log_file="${LOGS_DIR}/cron-${job_name}.log"
-  echo "${schedule} ${command} >> \"${log_file}\" 2>&1 ${MARKER}:${job_name}"
+  local script_file="${CRON_SCRIPTS_DIR}/${job_name}.sh"
+  echo "${schedule} bash ${script_file} >> \"${log_file}\" 2>&1 ${MARKER}:${job_name}"
 }
 
 # ── List installed CAST cron entries ─────────────────────────────────────────
@@ -72,7 +176,7 @@ cmd_list() {
 
   local found=0
   for entry in "${CRON_ENTRIES[@]}"; do
-    IFS='|' read -r schedule job_name prompt <<< "$entry"
+    IFS='|' read -r schedule job_name <<< "$entry"
     if echo "$current_crontab" | grep -qF "${MARKER}:${job_name}"; then
       echo "  installed   ${job_name}  (${schedule})"
       found=$((found + 1))
@@ -107,9 +211,13 @@ cmd_install() {
   fi
 
   for entry in "${CRON_ENTRIES[@]}"; do
-    IFS='|' read -r schedule job_name prompt <<< "$entry"
+    IFS='|' read -r schedule job_name <<< "$entry"
+
+    # Always (re)write the script file to keep it current
+    _write_cron_script "$job_name"
+
     local cron_line
-    cron_line=$(make_cron_line "$schedule" "$job_name" "$prompt")
+    cron_line=$(make_cron_line "$schedule" "$job_name")
 
     if echo "$current_crontab" | grep -qF "${MARKER}:${job_name}"; then
       echo "  skipped (already installed): ${job_name}"
