@@ -70,7 +70,7 @@ After your human-readable Status block, emit a machine-readable JSON payload:
   "agent": "standup-writer",
   "summary": "Standup written for 2026-04-16 — saved to ~/.claude/reports/standups/2026-04-16.md",
   "concerns": [],
-  "files_changed": ["/Users/edkubiak/.claude/reports/standups/2026-04-16.md"],
+  "files_changed": ["/Users/<your-user>/.claude/reports/standups/2026-04-16.md"],
   "next_actions": []
 }
 ```

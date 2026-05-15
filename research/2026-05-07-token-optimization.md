@@ -177,7 +177,7 @@ Read from `agent_runs` table — add columns: `cache_tokens_read`, `cache_tokens
 
 ## Sources
 
-- CLAUDE.md agent registry: `/Users/edkubiak/.claude/CLAUDE.md` (verified)
+- CLAUDE.md agent registry: `~/.claude/CLAUDE.md` (verified)
 - Agent frontmatter files: `agents/core/commit.md`, `code-reviewer.md`, `planner.md`, `migration-reviewer.md` (verified)
 - Hook scripts: `scripts/cast-subagent-stop-hook.sh`, `cast-subagent-start-hook.sh`, `cast-user-prompt-hook.sh`, `cast-session-start-hook.sh` (verified)
 - DB schema: `sqlite3 ~/.claude/cast.db .schema agent_runs` (verified)

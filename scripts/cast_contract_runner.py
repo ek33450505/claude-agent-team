@@ -17,6 +17,23 @@ import re
 import sqlite3
 from pathlib import Path
 
+# Import identifier validation from cast_db when available; fall back to inline.
+try:
+    import sys as _sys
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        'cast_db',
+        str(Path(__file__).parent / 'cast_db.py'),
+    )
+    _cast_db = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_cast_db)
+    _validate_identifier = _cast_db._validate_identifier
+except Exception:
+    def _validate_identifier(name: str) -> str:  # type: ignore[misc]
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+            raise ValueError(f'Invalid SQL identifier: {name!r}')
+        return name
+
 
 def get_db_path():
     """Get cast.db path from env or default."""
@@ -42,6 +59,8 @@ def eval_output_not_contains(pattern, content):
 def eval_cast_db_write(table, field, expected):
     """Check if cast.db contains a row with field=expected in table."""
     try:
+        _validate_identifier(table)
+        _validate_identifier(field)
         db_path = get_db_path()
         if not os.path.exists(db_path):
             return False

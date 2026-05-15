@@ -49,7 +49,8 @@ EVENTS_DIR="${CAST_DIR}/events"
 TURN_CEILING_DIR="${CAST_DIR}/turn-ceiling-events"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 # Export HOOK_DIR so Python heredocs can locate sibling scripts (cast-redact.py, etc.)
-export HOOK_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || dirname "$0")"
+export HOOK_DIR
+HOOK_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || dirname "$0")"
 
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
@@ -223,7 +224,8 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
     DB_STATUS="BLOCKED"
   fi
   export CAST_STOP_DB_STATUS="$DB_STATUS"
-  export CAST_STOP_RESPONSE_TEXT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('response_text','') or d.get('output_full',''))" 2>/dev/null || echo "")"
+  CAST_STOP_RESPONSE_TEXT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('response_text','') or d.get('output_full',''))" 2>/dev/null || echo "")"
+  export CAST_STOP_RESPONSE_TEXT
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os
 
@@ -384,16 +386,18 @@ fi
 # Other agents are skipped.
 # Export the full agent output up-front — Step 3.5 (truncation detection)
 # exports it again below; this earlier export lets quality-gate logging read it.
-export CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+export CAST_STOP_OUTPUT_FULL
 
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   case "$AGENT_NAME" in
     code-reviewer|test-runner|security)
-      export CAST_QG_GATE_TYPE="$(case "$AGENT_NAME" in
+      CAST_QG_GATE_TYPE="$(case "$AGENT_NAME" in
         code-reviewer) echo "code_review" ;;
         test-runner)   echo "test_run" ;;
         security)      echo "security_scan" ;;
       esac)"
+      export CAST_QG_GATE_TYPE
       python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os, re, subprocess, json, sys
 
@@ -632,7 +636,8 @@ fi
 # ── Step 3.5: Truncation detection ───────────────────────────────────────────
 # A well-formed agent output ends with a Status: <VALUE> line.
 # If missing, the agent was truncated mid-execution.
-export CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+export CAST_STOP_OUTPUT_FULL
 
 TRUNCATED="$(python3 - <<'PYEOF' 2>/dev/null
 import re, os
@@ -779,14 +784,15 @@ fi
 # from the payload — contains only: status, summary, concerns.
 if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]]; then
   # Extract summary and concerns as Bash vars so they can be redacted before serialization.
-  export CAST_STOP_SUMMARY="$(python3 -c "
+  CAST_STOP_SUMMARY="$(python3 -c "
 import os, re
 text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
 m = re.search(r'Summary:\s*(.+)', text)
 print(m.group(1).strip() if m else '')
 " 2>/dev/null || echo "")"
+  export CAST_STOP_SUMMARY
 
-  export CAST_STOP_CONCERNS="$(python3 -c "
+  CAST_STOP_CONCERNS="$(python3 -c "
 import os, re, json
 text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
 concerns = []
@@ -798,6 +804,7 @@ if m:
             concerns.append(line)
 print(json.dumps(concerns))
 " 2>/dev/null || echo "[]")"
+  export CAST_STOP_CONCERNS
 
   # Redact PII (e.g. API keys, emails) from summary and concerns before serialization.
   # HOOK_DIR is exported at script top — points to the directory containing cast-redact.py.

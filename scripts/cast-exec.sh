@@ -344,7 +344,9 @@ sys.exit(result.returncode)
 " "$log_file" "$agent_type" &
 
   # Capture the PID of the background process
-  eval "${pidvar}=$!"
+  # Validate pidvar name before using declare -g to avoid eval injection
+  [[ "$pidvar" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || { echo "cast-exec: bad pidvar name: '$pidvar'" >&2; exit 1; }
+  declare -g "${pidvar}=$!"
 }
 
 # ── Batch execution ───────────────────────────────────────────────────────────
@@ -418,7 +420,7 @@ print(d['agents'][$idx].get('prompt', ''))
       local pid_var="agent_pid_${idx}"
       _dispatch_agent_background "$PLAN_ID" "$batch_id" "$agent_type" "$agent_prompt" "$pid_var"
       local pid_val
-      pid_val=$(eval echo "\$${pid_var}")
+      pid_val="${!pid_var}"
       pids+=("$pid_val")
       agents_dispatched+=("$agent_type")
     done

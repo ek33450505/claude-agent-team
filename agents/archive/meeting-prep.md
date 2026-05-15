@@ -62,7 +62,7 @@ After your human-readable Status block, emit a machine-readable JSON payload:
   "agent": "meeting-prep",
   "summary": "Prepared briefs for 3 meetings — saved to ~/.claude/briefings/meeting-prep-2026-04-16.md",
   "concerns": [],
-  "files_changed": ["/Users/edkubiak/.claude/briefings/meeting-prep-2026-04-16.md"],
+  "files_changed": ["/Users/<your-user>/.claude/briefings/meeting-prep-2026-04-16.md"],
   "next_actions": []
 }
 ```

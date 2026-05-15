@@ -223,7 +223,8 @@ cmd_push() {
   remote="$(resolve_remote)"
   info "Pushing to $remote"
 
-  local backup_dir="${CAST_DIR}/sync-backups/$(date +%Y%m%d)"
+  local backup_dir
+  backup_dir="${CAST_DIR}/sync-backups/$(date +%Y%m%d)"
   mkdir -p "$backup_dir"
 
   mapfile -t rsync_args < <(build_rsync_args)
@@ -272,7 +273,8 @@ cmd_pull() {
     exit 0
   fi
 
-  local backup_dir="${CAST_DIR}/sync-backups/$(date +%Y%m%d)-pull"
+  local backup_dir
+  backup_dir="${CAST_DIR}/sync-backups/$(date +%Y%m%d)-pull"
   mkdir -p "$backup_dir"
 
   local exit_code=0

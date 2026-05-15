@@ -124,10 +124,14 @@ _mode_list() {
   for file in "${pending_files[@]}"; do
     count=$((count + 1))
     local proj_path="${file%/memory/_pending/*}"
-    local proj_name="$(basename "$proj_path")"
-    local file_name="$(basename "$file")"
-    local age_days=$(_file_age_days "$file")
-    local name=$(_read_frontmatter "$file" "name")
+    local proj_name
+    proj_name="$(basename "$proj_path")"
+    local file_name
+    file_name="$(basename "$file")"
+    local age_days
+    age_days=$(_file_age_days "$file")
+    local name
+    name=$(_read_frontmatter "$file" "name")
 
     printf "%3d. %s/%s — %s days old\n" "$count" "$proj_name" "$file_name" "$age_days"
     if [ -n "$name" ]; then
@@ -162,13 +166,15 @@ _mode_auto_promote() {
       if [ ! -f "$file" ]; then continue; fi
       if [ "$(basename "$file")" = "MEMORY.md" ]; then continue; fi
 
-      local age_days=$(_file_age_days "$file")
+      local age_days
+      age_days=$(_file_age_days "$file")
       if [ "$age_days" = "?" ] || [ "$age_days" -lt 7 ]; then
         continue
       fi
 
       # File is > 7 days old — promote it
-      local file_name="$(basename "$file")"
+      local file_name
+      file_name="$(basename "$file")"
       local canonical_file="$proj_dir/memory/$file_name"
       local memory_idx="$proj_dir/memory/MEMORY.md"
 
@@ -186,8 +192,10 @@ _mode_auto_promote() {
         echo "" >> "$memory_idx"
       fi
 
-      local name=$(_read_frontmatter "$canonical_file" "name")
-      local desc=$(_read_frontmatter "$canonical_file" "description")
+      local name
+      name=$(_read_frontmatter "$canonical_file" "name")
+      local desc
+      desc=$(_read_frontmatter "$canonical_file" "description")
 
       # Check if already in index
       if ! grep -q "^\- \[.*\]($file_name)" "$memory_idx" 2>/dev/null; then
@@ -240,12 +248,18 @@ _mode_interactive() {
 
   for file in "${pending_files[@]}"; do
     local proj_path="${file%/memory/_pending/*}"
-    local proj_name="$(basename "$proj_path")"
-    local file_name="$(basename "$file")"
-    local age_days=$(_file_age_days "$file")
-    local name=$(_read_frontmatter "$file" "name")
-    local desc=$(_read_frontmatter "$file" "description")
-    local type_field=$(_read_frontmatter "$file" "type")
+    local proj_name
+    proj_name="$(basename "$proj_path")"
+    local file_name
+    file_name="$(basename "$file")"
+    local age_days
+    age_days=$(_file_age_days "$file")
+    local name
+    name=$(_read_frontmatter "$file" "name")
+    local desc
+    desc=$(_read_frontmatter "$file" "description")
+    local type_field
+    type_field=$(_read_frontmatter "$file" "type")
 
     # Print entry header
     printf "\n%s — %s days old\n" "$proj_name/$file_name" "$age_days"

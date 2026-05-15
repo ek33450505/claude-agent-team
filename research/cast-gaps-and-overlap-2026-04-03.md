@@ -395,5 +395,5 @@ Rationale:
 - [awesome-claude-code ecosystem list](https://github.com/hesreallyhim/awesome-claude-code)
 - [Hatchet: Building a TUI is easy now](https://hatchet.run/blog/tuis-are-easy-now)
 - [7 TUI libraries comparison — LogRocket](https://blog.logrocket.com/7-tui-libraries-interactive-terminal-apps/)
-- Cast repo: `/Users/edkubiak/Projects/personal/claude-agent-team`
-- Dashboard repo: `/Users/edkubiak/Projects/personal/claude-code-dashboard`
+- Cast repo: `~/Projects/personal/claude-agent-team`
+- Dashboard repo: `~/Projects/personal/claude-code-dashboard`

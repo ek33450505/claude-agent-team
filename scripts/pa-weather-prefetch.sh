@@ -7,7 +7,7 @@ set -euo pipefail
 
 # --- Constants ---
 WEATHER_ENDPOINT="https://api.weather.gov/gridpoints/ILN/83,83/forecast"
-USER_AGENT="JARVIS/1.0 (ek33450505@gmail.com)"
+USER_AGENT="JARVIS/1.0 (your-email@example.com)"
 CURL_TIMEOUT=10
 JARVIS_WEATHER_FILE="${HOME}/Projects/personal/jarvis/CAST/weather-cache.md"
 LOG_FILE="${HOME}/.claude/logs/pa-weather-prefetch.log"

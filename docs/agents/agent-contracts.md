@@ -52,8 +52,8 @@ Files changed: src/routes/auth.ts, src/routes/auth.test.ts
   "summary": "Implemented three new routes and wrote 12 tests.",
   "agent": "code-writer",
   "files_changed": [
-    "/Users/edkubiak/Projects/personal/my-project/src/routes/auth.ts",
-    "/Users/edkubiak/Projects/personal/my-project/src/routes/auth.test.ts"
+    "/Users/yourname/Projects/personal/my-project/src/routes/auth.ts",
+    "/Users/yourname/Projects/personal/my-project/src/routes/auth.test.ts"
   ],
   "schema_version": "1.0"
 }
@@ -71,10 +71,10 @@ The JSON block is the machine-readable contract. The human-readable block above 
   "summary": "Added cast-validate-status.py with stdin/file input, --schema override, and structured error messages.",
   "agent": "code-writer",
   "files_changed": [
-    "/Users/edkubiak/Projects/personal/claude-agent-team/schemas/agent-status.json",
-    "/Users/edkubiak/Projects/personal/claude-agent-team/scripts/cast-validate-status.py",
-    "/Users/edkubiak/Projects/personal/claude-agent-team/tests/cast-validate-status.bats",
-    "/Users/edkubiak/Projects/personal/claude-agent-team/docs/agent-contracts.md"
+    "/Users/yourname/Projects/personal/claude-agent-team/schemas/agent-status.json",
+    "/Users/yourname/Projects/personal/claude-agent-team/scripts/cast-validate-status.py",
+    "/Users/yourname/Projects/personal/claude-agent-team/tests/cast-validate-status.bats",
+    "/Users/yourname/Projects/personal/claude-agent-team/docs/agent-contracts.md"
   ],
   "next_actions": [
     "Dispatch code-reviewer to review all four new files",

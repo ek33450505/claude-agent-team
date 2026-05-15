@@ -1,16 +1,93 @@
 #!/usr/bin/env python3
 """CAST database abstraction layer. Reads CAST_DB_URL env var, defaults to ~/.claude/cast.db."""
 import os
+import re
 import sqlite3
 import datetime
+import tempfile
 from pathlib import Path
+
+# All tables that cast_db.py is allowed to write to.
+ALLOWED_TABLES = {
+    'agent_hallucinations',
+    'agent_memories',
+    'agent_protocol_violations',
+    'agent_runs',
+    'agent_truncations',
+    'budgets',
+    'code_ref_checks',
+    'compaction_events',
+    'completeness_events',
+    'dispatch_decisions',
+    'dispatch_events',
+    'file_writes',
+    'incidents',
+    'injection_log',
+    'pane_bindings',
+    'parry_guard_events',
+    'quality_gates',
+    'rate_limit_snapshots',
+    'routines',
+    'routing_events',
+    'schema_migrations',
+    'sessions',
+    'stop_failure_events',
+    'stream_events',
+    'stream_hook_events',
+    'swarm_sessions',
+    'teammate_messages',
+    'teammate_runs',
+    'unstaged_warnings',
+    'worktree_anomalies',
+}
+
+# Allowlist for CAST_DB_URL / CAST_DB_PATH resolved paths.
+# Goal: block traversals into /etc, /usr, /root, other users' homes — while
+# allowing the user's ~/.claude/ and any system tempdir used by BATS / pytest.
+def _allowed_db_prefixes() -> tuple:
+    prefixes = [
+        str(Path.home() / '.claude') + os.sep,
+        '/tmp/',
+        str(Path('/tmp').resolve()) + os.sep,
+        str(Path(tempfile.gettempdir()).resolve()) + os.sep,
+    ]
+    bats_tmpdir = os.environ.get('BATS_TEST_TMPDIR') or os.environ.get('BATS_TMPDIR')
+    if bats_tmpdir:
+        prefixes.append(str(Path(bats_tmpdir).resolve()) + os.sep)
+    return tuple(prefixes)
+
+
+_DB_PATH_PREFIXES = _allowed_db_prefixes()
+
+
+def _validate_identifier(name: str) -> str:
+    """Validate that name is a safe SQL identifier (table or column name).
+
+    Raises ValueError if name contains characters outside [a-zA-Z0-9_] or
+    does not start with a letter or underscore.
+    """
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise ValueError(f'Invalid SQL identifier: {name!r}')
+    return name
 
 
 def _get_db_path() -> str:
     url = os.environ.get('CAST_DB_URL', '')
     if url.startswith('sqlite:///'):
-        return url[len('sqlite:///'):]
-    return str(Path(os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))))
+        raw = url[len('sqlite:///'):]
+    else:
+        raw = str(Path(os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))))
+    resolved = str(Path(raw).resolve())
+    prefixes = _allowed_db_prefixes()
+    if not any(resolved.startswith(prefix) for prefix in prefixes):
+        # Also accept exact match against the default db file (no trailing sep needed)
+        default = str((Path.home() / '.claude' / 'cast.db').resolve())
+        if resolved != default:
+            raise ValueError(
+                f'CAST_DB_URL/CAST_DB_PATH resolves to an unexpected path: {resolved!r}. '
+                f'Must be under {prefixes}.'
+            )
+    return raw
 
 
 def _connect():
@@ -23,6 +100,11 @@ def _connect():
 
 def db_write(table: str, payload: dict) -> None:
     """Insert a row into table using INSERT OR REPLACE. Keys become columns."""
+    _validate_identifier(table)
+    if table not in ALLOWED_TABLES:
+        raise ValueError(f'Table {table!r} is not in the CAST allowed-tables list.')
+    for col in payload.keys():
+        _validate_identifier(col)
     cols = ', '.join(payload.keys())
     placeholders = ', '.join(['?' for _ in payload])
     sql = f'INSERT OR REPLACE INTO {table} ({cols}) VALUES ({placeholders})'
