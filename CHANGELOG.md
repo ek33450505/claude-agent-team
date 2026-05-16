@@ -1,5 +1,57 @@
 # CHANGELOG
 
+## [7.1] — 2026-05-17 — cast.db Observability Remediation
+
+**Strategic focus:** Observability hardening — wired silent-exception fallback logging, repaired schema drift in quality_gates, closed agent-truncation routing bugs, restored daily-briefing routine. Addresses 15+ findings from the 2026-05-16 audit (see [corrections file](~/.claude/plans/cast-agent-team-corrections-2026-05-16.md) for detailed evidence).
+
+### Fixed
+
+- **`log_hook_failure()` wired end-to-end** — all silent `except Exception: pass` blocks now route through `log_hook_failure()` in `cast_db.py:204`. Invisible hook failures surface in `hook_failures` table in real time. (#14)
+- **`quality_gates` INSERT broken since migration 009** — column names mismatched with current schema (`gate_type` → `status_line`, old 5-column shape → new 8-column). Writes now land correctly with proper Status enum + contract_passed logic. (#7)
+- **Stop hook mis-firing on main-session content** — precondition guard added; hook now exits early on `Stop` events (user responses), fires only on `SubagentStop` (agent terminations). Eliminates 81% of `agent_type='unknown'` false positives. (#8, #10)
+- **`agent_truncations` now accurate** — agent_type lookup fallback extended to truncation-detection block; stalled agents are attributed correctly instead of as 'unknown'. (#10)
+- **`agent_memories` schema drift** — `last_validated_at` and `retrieval_count` columns added via idempotent migration 013. Memory validation/consolidation sweeps no longer silently swallow `column not found` errors. (#2)
+- **Daily-briefing routine restored** — underlying dispatcher failure from earlier schema change fixed; cron re-enabled and verified running successfully. (#19)
+- **`compaction_events` writer re-enabled** — hook wiring verified and firing again after 8-day silence; compact operations now logged. (#15)
+- **`injection_log` writer implemented** — memory-injection observability now functional; each fact injected to a prompt writes a scored row to `injection_log`. (#9)
+- **Path-prefix validation in routines** — `cast-db-routines.py update-status` now validates `output_path` prefix before writing to DB; blocks writes outside `~/.claude/routines-output/`. (#22)
+
+### Added
+
+- **`docs/cast-db-schema-rationale.md`** — documents the three "dispatch" tables (hook_events vs orchestrate_invocations vs scheduled_dispatches), failure-tracking table pairs (truncations vs completeness_events; hallucinations vs code_ref_checks), and intentionally-dormant swarm tables. Cross-references audit findings. (#5, #6, #12, #21)
+- **Migration 013** — `agent_memories` column additions, idempotent. (#2)
+- **`cast-backfill-schema-migrations.py`** — one-time backfill of pre-009 migration history from filesystem + git log. Closes schema_migrations history gap. (#18)
+- **Hook failure telemetry** — `hook_failures` table now populated; cast.db audit logs visible. Enables detection of future silent-exception bugs at observation time, not in post-mortem.
+
+### Changed
+
+- **`cast-subagent-stop-hook.sh`** — corrected column bindings in quality_gates INSERT; added SubagentStop precondition guard; extended agent_type fallback scope; wired log_hook_failure to 3 exception handlers. (#7, #8, #10, #14)
+- **`cast-subagent-start-hook.sh`** — exception handler now routes through log_hook_failure. (#14)
+- **`cast-memory-validate.py` + `cast-memory-consolidate.py`** — removed 10 silent-swallow blocks; all exception paths now log to hook_failures. (#14)
+- **`cast_db.py`** — `ensure_schema_columns()` extended with agent_memories migration 013. (#2)
+- **`cast-session-end.sh` + `cast-abandon-stale-runs.py`** — WHERE clauses audited and hardened to catch null-`session_id` stuck `running` rows; one-time cleanup sweep applied. (#4)
+- **`agent_protocol_violations` and `unstaged_warnings` hooks** — verified firing; hooks re-tested after Phase D commit flurry. (#13)
+- **`worktree_anomalies` hooks** — verified clean (code-modifying agents no longer spawn worktrees by design; zero rows is correct). (#16)
+
+### Schema
+
+- **`agent_memories`** — added `last_validated_at` TEXT, `retrieval_count` INTEGER DEFAULT 0 (migration 013, idempotent).
+- **`schema_migrations`** — backfilled pre-009 history (one-time).
+- **`hook_failures`** — now actively populated; serves as universal silent-exception telemetry sink.
+
+### Tests
+
+- 987 → 990 BATS tests passing (+3 new hook verification tests)
+
+### Notes
+
+- v7.1 closes all P0/P1 findings from the 2026-05-16 cast.db audit. P2 cleanup items (#3 token tracking, #11 agent reliability UI, #20 /db stub-badging) deferred to next phases (claude-agent-team P2 wave + cast-desktop next arc).
+- The audit surfaced a meta-bug pattern: silent exception swallow + no fallback logging = systemic visibility loss. `log_hook_failure()` wiring prevents future silent-failure accumulation.
+- Deferred to cast-desktop: `agent_hallucinations` reliability dashboard (#11); /db browser stub-badging for deferred tables (#20); Routines panel with failed-run visibility (#19 cast-desktop side).
+- See `~/.claude/plans/cast-agent-team-corrections-2026-05-16.md` (full audit report) and `~/.claude/plans/2026-05-17-cast-db-remediation-v7.1.md` (remediation plan) for detailed evidence + fix rationale.
+
+---
+
 ## [7.0] — 2026-05-11 — Backend Lockdown
 
 **Strategic goal:** set CAST logic in stone so it "just works" — update occasionally with Anthropic updates, otherwise turn attention to v8 (desktop app) and other projects.
