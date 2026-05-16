@@ -23,6 +23,17 @@ import sqlite3
 import subprocess
 from datetime import datetime, timedelta, timezone
 
+# cast_db is co-located in scripts/ — import for hook failure logging.
+# Guarded so the CLI tool still runs on a broken install where cast_db is unimportable.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from cast_db import log_hook_failure
+except Exception:
+    log_hook_failure = None
+def _maybe_log_failure(*args, **kwargs):
+    if log_hook_failure:
+        log_hook_failure(*args, **kwargs)
+
 REPO_DIR = os.path.expanduser('~/Projects/personal/claude-agent-team')
 SYMBOL_REGEX = re.compile(r'`(\w{4,})`')
 PATH_REGEX = re.compile(r'(?:^|[\s(\'"](/[^\s\'")\]]+))', re.MULTILINE)
@@ -255,6 +266,7 @@ def main():
 
     except sqlite3.Error as e:
         print(f"ERROR: Validation failed: {e}", file=sys.stderr)
+        _maybe_log_failure('cast-memory-validate', 1, str(e))
         try:
             conn.close()
         except Exception:
@@ -262,6 +274,7 @@ def main():
         sys.exit(1)
     except Exception as e:
         print(f"ERROR: Unexpected error: {e}", file=sys.stderr)
+        _maybe_log_failure('cast-memory-validate', -1, str(e))
         try:
             conn.close()
         except Exception:

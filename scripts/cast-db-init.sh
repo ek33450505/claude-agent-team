@@ -325,7 +325,8 @@ CREATE TABLE IF NOT EXISTS agent_memories (
   superseded_by INTEGER,
   source_type TEXT,
   embedding BLOB,
-  last_validated_at TEXT
+  last_validated_at TEXT,
+  retrieval_count INTEGER DEFAULT 0
 );
 
 -- Indexes
