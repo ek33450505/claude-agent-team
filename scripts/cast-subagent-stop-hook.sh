@@ -381,6 +381,7 @@ if wl_match:
     partial_work_log = wl_match.group(1).strip()[:2000]
 
 try:
+    import uuid as _uuid
     conn = sqlite3.connect(db, timeout=5)
     # Ensure partial_work_log column exists (added in Phase 1)
     try:
@@ -394,6 +395,19 @@ try:
         (sess, agent, agent_id or None, last_line, ts, char_count, 0, 0, partial_work_log or None),
     )
     conn.commit()
+    # P1 #1: also write a quality_gates row so truncation telemetry has a single source of truth.
+    # Isolated in its own try so a missing quality_gates table (e.g., reduced test fixtures)
+    # does not roll back the primary agent_truncations write.
+    try:
+        conn.execute(
+            'INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (str(_uuid.uuid4()), sess, agent, ts, 'TRUNCATED', 0, 0),
+        )
+        conn.commit()
+    except Exception as _e:
+        if log_hook_failure:
+            log_hook_failure('cast-subagent-stop-hook:truncation_qg', -1, str(_e), sess)
     conn.close()
 except Exception as e:
     try: conn.close()
