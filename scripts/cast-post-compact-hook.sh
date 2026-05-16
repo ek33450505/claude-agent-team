@@ -68,18 +68,20 @@ try:
     with open(event_path, "w") as f:
         json.dump(event, f, indent=2)
         f.write("\n")
-except Exception:
-    pass
+except Exception as e:
+    import sys
+    print(f"[cast-post-compact-hook] Failed to write event file: {e}", file=sys.stderr)
 
 # Append to compact-log.jsonl for easy chronological review
 log_path = os.path.expanduser("~/.claude/cast/compact-log.jsonl")
 try:
     with open(log_path, "a") as f:
         f.write(json.dumps(event) + "\n")
-except Exception:
-    pass
+except Exception as e:
+    import sys
+    print(f"[cast-post-compact-hook] Failed to append to compact-log: {e}", file=sys.stderr)
 
-# Write compaction tier to cast.db (best-effort — hook must not fail)
+# Write compaction tier to cast.db (best-effort — errors logged to hook_failures)
 import sys
 sys.path.insert(0, os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')))
 try:
@@ -102,8 +104,12 @@ try:
         'compaction_tier': compaction_tier,
         'transcript_path': transcript_path,
     })
-except Exception:
-    pass
+except Exception as e:
+    try:
+        from cast_db import log_hook_failure
+        log_hook_failure('cast-post-compact-hook.sh:compaction_events', 1, str(e), session_id)
+    except Exception:
+        pass  # Fallback: silently fail, hook must not crash
 PYEOF
 
 exit 0
