@@ -19,6 +19,38 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+# cast_db is co-located in scripts/ — import guardedly for hook failure logging.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from cast_db import log_hook_failure as _log_hook_failure
+except Exception:
+    _log_hook_failure = None
+
+
+def _maybe_log_failure(hook: str, code: int, msg: str) -> None:
+    if _log_hook_failure:
+        try:
+            _log_hook_failure(hook, code, msg)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Path validation
+# ---------------------------------------------------------------------------
+ALLOWED_OUTPUT_PREFIX = os.path.realpath(os.path.expanduser("~/.claude/routines-output"))
+
+
+def _validate_output_path(path: str, command: str) -> str | None:
+    """Return an error message string if path is outside ALLOWED_OUTPUT_PREFIX, else None."""
+    resolved = os.path.realpath(os.path.expanduser(path))
+    if not (resolved == ALLOWED_OUTPUT_PREFIX or resolved.startswith(ALLOWED_OUTPUT_PREFIX + os.sep)):
+        msg = f"path rejected: {path}"
+        _maybe_log_failure(f"cast-db-routines:{command}", -3, msg)
+        return f"output_path must be under {ALLOWED_OUTPUT_PREFIX}"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
@@ -204,6 +236,30 @@ def cmd_upsert(args: list) -> int:
         print(json.dumps({"error": f"missing required fields: {', '.join(missing)}"}))
         return 1
 
+    # Validate user-supplied path fields before writing to DB
+    for path_field in ("output_dir", "last_run_output_path"):
+        val = data.get(path_field)
+        if val:
+            err = _validate_output_path(val, f"upsert:{path_field}")
+            if err is not None:
+                print(json.dumps({"error": err, "field": path_field}))
+                return 1
+
+    # Prompt-size diagnostic: warn when prompt_template is large enough to risk
+    # context overflow when combined with agent system prompts and injected memories.
+    PROMPT_SIZE_WARN_BYTES = 50_000
+    prompt = data.get("prompt_template", "")
+    if len(prompt.encode()) > PROMPT_SIZE_WARN_BYTES:
+        logging.warning(
+            f"upsert: prompt_template for '{data.get('name')}' is {len(prompt.encode())} bytes "
+            f"(>{PROMPT_SIZE_WARN_BYTES}), may exceed context window when combined with system prompt and memories"
+        )
+        _maybe_log_failure(
+            "cast-db-routines:upsert",
+            -4,
+            f"prompt_size_warning: {len(prompt.encode())} bytes for routine '{data.get('name')}'",
+        )
+
     # Generate id if not provided
     if not data.get("id"):
         import uuid
@@ -284,6 +340,12 @@ def cmd_update_status(args: list) -> int:
     name = args[0]
     status = args[1]
     output_path = args[2] if len(args) > 2 else None
+
+    if output_path is not None:
+        err = _validate_output_path(output_path, "update-status")
+        if err is not None:
+            print(json.dumps({"error": err}))
+            return 1
 
     valid_statuses = {"success", "failure", "skipped"}
     if status not in valid_statuses:
