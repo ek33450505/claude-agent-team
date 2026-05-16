@@ -43,7 +43,7 @@ CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo
 
 # If already at v8+, ensure all additive tables exist and exit
 if [ "$CURRENT_VERSION" -ge 8 ]; then
-  # Additive migration: create stream_events and stream_hook_events if missing
+  # Additive migration: create stream_events if missing (stream_hook_events retired via migration 015)
   # Also add cache token columns if missing (Task 0a: token optimization)
   # Note: model_used column was dropped via migration 014 (audit 2026-05-16 #3)
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cache_read_input_tokens INTEGER;" 2>/dev/null || true
@@ -61,23 +61,10 @@ CREATE TABLE IF NOT EXISTS stream_events (
   raw_json            TEXT
 );
 
-CREATE TABLE IF NOT EXISTS stream_hook_events (
-  id          TEXT PRIMARY KEY,
-  session_id  TEXT,
-  timestamp   TEXT,
-  hook_type   TEXT,
-  tool_name   TEXT,
-  result      TEXT,
-  duration_ms INTEGER,
-  output      TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_stream_events_session
   ON stream_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
   ON stream_events(timestamp);
-CREATE INDEX IF NOT EXISTS idx_stream_hook_events_session
-  ON stream_hook_events(session_id);
 
 CREATE TABLE IF NOT EXISTS swarm_sessions (
   id           TEXT PRIMARY KEY,
@@ -146,23 +133,10 @@ CREATE TABLE IF NOT EXISTS stream_events (
   raw_json            TEXT
 );
 
-CREATE TABLE IF NOT EXISTS stream_hook_events (
-  id          TEXT PRIMARY KEY,
-  session_id  TEXT,
-  timestamp   TEXT,
-  hook_type   TEXT,
-  tool_name   TEXT,
-  result      TEXT,
-  duration_ms INTEGER,
-  output      TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_stream_events_session
   ON stream_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
   ON stream_events(timestamp);
-CREATE INDEX IF NOT EXISTS idx_stream_hook_events_session
-  ON stream_hook_events(session_id);
 
 CREATE TABLE IF NOT EXISTS swarm_sessions (
   id           TEXT PRIMARY KEY,
@@ -357,23 +331,10 @@ CREATE TABLE IF NOT EXISTS stream_events (
   raw_json            TEXT
 );
 
-CREATE TABLE IF NOT EXISTS stream_hook_events (
-  id          TEXT PRIMARY KEY,
-  session_id  TEXT,
-  timestamp   TEXT,
-  hook_type   TEXT,
-  tool_name   TEXT,
-  result      TEXT,
-  duration_ms INTEGER,
-  output      TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_stream_events_session
   ON stream_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
   ON stream_events(timestamp);
-CREATE INDEX IF NOT EXISTS idx_stream_hook_events_session
-  ON stream_hook_events(session_id);
 
 -- Swarm observability tables (v8)
 CREATE TABLE IF NOT EXISTS swarm_sessions (
