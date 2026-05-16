@@ -48,9 +48,11 @@ CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
 TURN_CEILING_DIR="${CAST_DIR}/turn-ceiling-events"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
-# Export HOOK_DIR so Python heredocs can locate sibling scripts (cast-redact.py, etc.)
+# Export HOOK_DIR and CAST_HOOK_DIR so Python heredocs can locate sibling scripts
+# (cast-redact.py, cast_db.py/log_hook_failure, etc.).
 export HOOK_DIR
 HOOK_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || dirname "$0")"
+export CAST_HOOK_DIR="${CAST_HOOK_DIR:-$HOOK_DIR}"
 
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
@@ -214,6 +216,11 @@ if filepath:
         json.dump(event, f, indent=2)
 PYEOF
 
+# ── #8/#10 Precondition guard: refuse to write telemetry for main-session Stop ──
+# Defensive — SubagentStop should always set CAST_STOP_AGENT_ID or CAST_STOP_AGENT;
+# if both are missing, refuse to write telemetry rather than capture main-session content.
+[[ -n "${CAST_STOP_AGENT_ID:-}" || -n "${CAST_STOP_AGENT:-}" ]] || exit 0
+
 # ── Step 2: Mirror to cast.db agent_runs (best-effort) ───────────────────────
 # The cast.db agent_runs table tracks agent invocations. If the DB exists and
 # is initialized, update the most recent running row for this agent/session.
@@ -227,7 +234,12 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
   CAST_STOP_RESPONSE_TEXT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('response_text','') or d.get('output_full',''))" 2>/dev/null || echo "")"
   export CAST_STOP_RESPONSE_TEXT
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
-import sqlite3, os
+import sqlite3, os, sys
+sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
+try:
+    from cast_db import log_hook_failure
+except Exception:
+    log_hook_failure = None
 
 db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
 agent = os.environ.get('CAST_STOP_AGENT', '')
@@ -291,11 +303,14 @@ for attempt in range(3):
         if rows_affected > 0 or attempt == 2:
             break
         import time as _time; _time.sleep(0.1)
-    except Exception:
+    except Exception as e:
         try: conn.close()
         except Exception: pass
         if attempt < 2:
             import time as _time; _time.sleep(0.1)
+        else:
+            if log_hook_failure:
+                log_hook_failure('cast-subagent-stop-hook:agent_runs', -1, str(e), sess if 'sess' in dir() else None)
         break
 PYEOF
 fi
@@ -307,7 +322,12 @@ fi
 # Uses response_text (already extracted above) — same payload, same detection logic.
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
-import sqlite3, os, re
+import sqlite3, os, re, sys
+sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
+try:
+    from cast_db import log_hook_failure
+except Exception:
+    log_hook_failure = None
 
 db           = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
 agent        = os.environ.get('CAST_STOP_AGENT', '')
@@ -332,6 +352,11 @@ if agent == 'unknown' and agent_id:
 # Only process non-trivial responses (mirrors cast-truncation-check.sh guard)
 if len(response_text.strip()) < 50:
     raise SystemExit(0)
+
+# #8/#10: if agent is STILL 'unknown' after fallback, log to hook_failures so we can tune it
+if agent == 'unknown':
+    if log_hook_failure:
+        log_hook_failure('cast-subagent-stop-hook:truncation', -2, f'agent_id={agent_id} lookup failed', sess)
 
 # Detection: prose Status block
 has_status = bool(re.search(
@@ -370,9 +395,11 @@ try:
     )
     conn.commit()
     conn.close()
-except Exception:
+except Exception as e:
     try: conn.close()
     except Exception: pass
+    if log_hook_failure:
+        log_hook_failure('cast-subagent-stop-hook:truncation', -1, str(e), sess)
 PYEOF
 fi
 
@@ -392,20 +419,18 @@ export CAST_STOP_OUTPUT_FULL
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   case "$AGENT_NAME" in
     code-reviewer|test-runner|security)
-      CAST_QG_GATE_TYPE="$(case "$AGENT_NAME" in
-        code-reviewer) echo "code_review" ;;
-        test-runner)   echo "test_run" ;;
-        security)      echo "security_scan" ;;
-      esac)"
-      export CAST_QG_GATE_TYPE
       python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
-import sqlite3, os, re, subprocess, json, sys
+import sqlite3, os, re, sys, uuid, datetime
+sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
+try:
+    from cast_db import log_hook_failure
+except Exception:
+    log_hook_failure = None
 
 db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
 agent = os.environ.get('CAST_STOP_AGENT', '')
 sess  = os.environ.get('CAST_STOP_SESSION', '')
 out   = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
-gtype = os.environ.get('CAST_QG_GATE_TYPE', 'code_review')
 
 if not agent or not db:
     raise SystemExit(0)
@@ -416,51 +441,22 @@ if not m:
     raise SystemExit(0)
 
 status = m.group(1)
-result = {
-    'DONE': 'pass',
-    'DONE_WITH_CONCERNS': 'warn',
-    'BLOCKED': 'block',
-    'NEEDS_CONTEXT': 'warn',
-}.get(status, 'warn')
-
-# Grab feedback: the "Summary:" line if present, else first 500 chars of output
-fm = re.search(r'Summary:\s*(.+)', out)
-feedback_raw = (fm.group(1).strip() if fm else out.strip())[:500]
-
-# Redact PII from feedback before writing to DB.
-# HOOK_DIR env var is set by the parent shell near script top (resolves sibling scripts).
-# Fallback: if cast-redact.py is unavailable or fails, use raw value (intentional passthrough).
-def _redact(text):
-    try:
-        hook_dir = os.environ.get('HOOK_DIR', '')
-        redact_script = os.path.join(hook_dir, 'cast-redact.py') if hook_dir else ''
-        if not redact_script or not os.path.exists(redact_script):
-            return text
-        proc = subprocess.run(
-            [sys.executable, redact_script],
-            input=text, capture_output=True, text=True, timeout=5
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            d = json.loads(proc.stdout)
-            return d.get('redacted_text', text)
-    except Exception:
-        pass
-    return text
-
-feedback = _redact(feedback_raw)
+ts = datetime.datetime.utcnow().isoformat() + 'Z'
 
 try:
     conn = sqlite3.connect(db, timeout=5)
     conn.execute(
-        'INSERT INTO quality_gates (session_id, agent, gate_type, gate_result, feedback) '
-        'VALUES (?, ?, ?, ?, ?)',
-        (sess, agent, gtype, result, feedback),
+        'INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (str(uuid.uuid4()), sess, agent, ts, status, 1 if status == 'DONE' else 0, 0),
     )
     conn.commit()
     conn.close()
-except Exception:
+except Exception as e:
     try: conn.close()
     except Exception: pass
+    if log_hook_failure:
+        log_hook_failure('cast-subagent-stop-hook:quality_gates', -1, str(e), sess)
 PYEOF
       ;;
   esac

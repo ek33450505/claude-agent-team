@@ -30,6 +30,9 @@ CAST_DIR="${HOME}/.claude/cast"
 EVENTS_DIR="${CAST_DIR}/events"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 START_ERROR_LOG="${HOME}/.claude/logs/subagent-start-errors.log"
+# Export CAST_HOOK_DIR so Python heredocs can locate sibling scripts (cast_db.py, etc.)
+export CAST_HOOK_DIR
+CAST_HOOK_DIR="${CAST_HOOK_DIR:-$(cd "$(dirname "$0")" 2>/dev/null && pwd || dirname "$0")}"
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 mkdir -p "$EVENTS_DIR" 2>/dev/null || true
 
@@ -116,7 +119,12 @@ PYEOF
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   export CAST_START_DB_PATH="$DB_PATH"
   python3 - <<'PYEOF' 2>>"$START_ERROR_LOG" || true
-import sqlite3, os, time
+import sqlite3, os, time, sys
+sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
+try:
+    from cast_db import log_hook_failure
+except Exception:
+    log_hook_failure = None
 
 db       = os.path.expanduser(os.environ.get('CAST_START_DB_PATH', '~/.claude/cast.db'))
 agent    = os.environ.get('CAST_START_AGENT', '')
@@ -173,9 +181,13 @@ for attempt in range(3):
             time.sleep(0.1 * (attempt + 1))
         else:
             _log_hook_error(f"DB INSERT failed after {attempt+1} attempt(s): {e}")
+            if log_hook_failure:
+                log_hook_failure('cast-subagent-start-hook:agent_runs', -1, str(e), sess)
             break
     except Exception as e:
         _log_hook_error(f"DB INSERT unexpected error: {type(e).__name__}: {e}")
+        if log_hook_failure:
+            log_hook_failure('cast-subagent-start-hook:agent_runs', -1, f'{type(e).__name__}: {e}', sess)
         break
 PYEOF
 fi
