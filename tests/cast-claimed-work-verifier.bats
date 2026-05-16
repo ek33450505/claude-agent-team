@@ -64,9 +64,9 @@ run_verifier() {
 # ---------------------------------------------------------------------------
 
 @test "extracts paths from 'Files changed:' section and writes to DB" {
-  # Create a real test file
-  mkdir -p "$TEMP_DIR/src/hooks"
-  touch "$TEMP_DIR/src/hooks/useAuth.ts"
+  # Use a non-existent file so it resolves to [NOT FOUND], which passes the
+  # write-gate (only [NOT FOUND] inserts a row — Phase 1 Task 1.1 behavior).
+  # src/hooks/useAuth.ts is intentionally NOT created in TEMP_DIR.
 
   RESPONSE='## Work Log
 - Created auth hook
@@ -76,31 +76,13 @@ Files changed:
 
 Status: DONE'
 
-  # Set agent start time to before now
   export CAST_AGENT_START_TIME="2000-01-01T00:00:00Z"
   export CAST_STOP_RESPONSE_TEXT="$RESPONSE"
 
-  run python3 - << 'PYEOF'
-import os, sys, sqlite3
-db = os.environ.get('CAST_DB_PATH')
-if os.path.exists(db):
-    conn = sqlite3.connect(db)
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM agent_hallucinations 2>/dev/null")
-    try:
-        rows = cur.fetchone()[0]
-        print(rows)
-    except:
-        print("0")
-    conn.close()
-else:
-    print("0")
-PYEOF
-
-  # Run verifier (captures stderr but we check DB directly)
+  # Run verifier so it writes to DB
   run_verifier "$RESPONSE"
 
-  # Verify DB was written: agent_hallucinations should have 1 row
+  # Verify DB was written: agent_hallucinations should have 1 row ([NOT FOUND])
   run python3 - << 'PYEOF'
 import os, sqlite3
 db = os.environ.get('CAST_DB_PATH')
@@ -214,7 +196,11 @@ Status: DONE'
 # 6. Extracts paths from inline prose claims
 # ---------------------------------------------------------------------------
 
-@test "extracts paths from inline 'wrote X' and 'created X' patterns" {
+@test "prose 'wrote X' and 'created X' patterns are NOT extracted (Patterns 3+4 dropped)" {
+  # Phase 1 Task 1.1: Patterns 3+4 (prose verb extraction) were intentionally
+  # removed from extract_file_paths() because they extracted paths the agent
+  # only read/referenced, flooding [PRE_EXISTING] rows. This test asserts that
+  # prose-only claims produce no file extractions and no verifier output.
   mkdir -p "$TEMP_DIR/scripts"
   touch "$TEMP_DIR/scripts/setup.sh"
 
@@ -231,8 +217,8 @@ Status: DONE'
   run run_verifier "$RESPONSE"
 
   assert_success
-  # Should find and verify scripts/setup.sh
-  assert_line --partial "verified=1"
+  # No [CAST-VERIFY] lines should appear — prose paths are no longer extracted
+  refute_output --partial "[CAST-VERIFY]"
 }
 
 # ---------------------------------------------------------------------------

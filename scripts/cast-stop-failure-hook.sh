@@ -100,6 +100,18 @@ if [ "$AGENT_NAME" = "unknown" ] && [ "$ERROR_MSG" = "invalid_request" ]; then
   exit 0
 fi
 
+# ── Guard: skip test harness noise ──────────────────────────────────────────
+# Payloads with "session_id":"test" originate from the BATS test harness, not
+# real Claude Code invocations. Writing them to stop_failure_events floods the
+# table with non-actionable rows.
+#
+# One-time cleanup (review before executing — DO NOT automate):
+#   DELETE FROM stop_failure_events WHERE error_message LIKE '%"session_id":"test"%';
+#   -- Expected: ~375 rows. Verify count before committing.
+if echo "$INPUT" | grep -q '"session_id":"test"' 2>/dev/null; then
+  exit 0
+fi
+
 # ── Step 1: Write stop_failure event to ~/.claude/cast/events/ ────────────────
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
 TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat()+'Z')" | sed 's/+00:00//')"

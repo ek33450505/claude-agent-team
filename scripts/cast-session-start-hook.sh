@@ -102,9 +102,20 @@ if not os.path.exists(db_path):
 
 try:
     con = _sqlite3.connect(db_path, timeout=3)
+    # Add status column if missing (idempotent — silently ignored if already present)
+    try:
+        con.execute("ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'ended'")
+        con.commit()
+    except Exception:
+        pass
     con.execute(
-        "INSERT OR IGNORE INTO sessions (id, project, project_root, started_at) VALUES (?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO sessions (id, project, project_root, started_at, status) VALUES (?, ?, ?, ?, 'active')",
         (session_id, project, cwd, now),
+    )
+    # If row already existed (OR IGNORE), update status to active
+    con.execute(
+        "UPDATE sessions SET status = 'active' WHERE id = ? AND status != 'active'",
+        (session_id,),
     )
     con.commit()
     con.close()

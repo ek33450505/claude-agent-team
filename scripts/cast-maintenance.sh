@@ -18,13 +18,13 @@ if [ "$stale" -gt 0 ]; then
   log "Cleaned $stale stale running agents"
 fi
 
-# 2. Prune event files older than 30 days
-pruned=$(find "${CAST_DIR}/cast/events/" -name "*.json" -mtime +30 -delete -print 2>/dev/null | wc -l | tr -d ' ')
+# 2. Prune event files older than 30 days (both .json and .jsonl.gz)
+pruned=$(find "${CAST_DIR}/cast/events/" \( -name "*.json" -o -name "*.jsonl.gz" \) -mtime +30 -delete -print 2>/dev/null | wc -l | tr -d ' ')
 log "Pruned $pruned event files (>30d)"
 
-# 3. Prune agent-status files older than 7 days
-pruned=$(find "${CAST_DIR}/agent-status/" -name "*.json" -mtime +7 -delete -print 2>/dev/null | wc -l | tr -d ' ')
-log "Pruned $pruned status files (>7d)"
+# 3. Prune agent-status files older than 24h (-mtime +0 means modified >24h ago)
+pruned=$(find "${CAST_DIR}/agent-status/" -name "*.json" -mtime +0 -delete -print 2>/dev/null | wc -l | tr -d ' ')
+log "Pruned $pruned status files (>24h)"
 
 # 4. Prune git worktrees across project repos
 for repo in ~/Projects/personal/claude-agent-team ~/Projects/personal/claude-code-dashboard; do
@@ -45,9 +45,9 @@ AND id IN (SELECT DISTINCT session_id FROM agent_runs WHERE cost_usd > 0);
 " 2>/dev/null
 log "Backfilled session costs"
 
-# 6. Rotate large log files (>5MB)
+# 6. Rotate large log files (>512KB)
 for logfile in "${CAST_DIR}"/logs/*.log; do
-  if [ -f "$logfile" ] && [ "$(stat -f%z "$logfile" 2>/dev/null || stat -c%s "$logfile" 2>/dev/null)" -gt 5242880 ]; then
+  if [ -f "$logfile" ] && [ "$(stat -f%z "$logfile" 2>/dev/null || stat -c%s "$logfile" 2>/dev/null)" -gt 524288 ]; then
     tail -1000 "$logfile" > "${logfile}.tmp" && mv "${logfile}.tmp" "$logfile"
     log "Rotated $(basename "$logfile")"
   fi

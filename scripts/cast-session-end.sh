@@ -178,7 +178,7 @@ archive_category() {
 DB="${CLAUDE_DIR}/cast.db"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  sqlite3 "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
+  sqlite3 "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}', status = 'ended' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
 
   # Aggregate token counts and cost from agent_runs for this session
   sqlite3 "$DB" "UPDATE sessions SET
