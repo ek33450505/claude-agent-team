@@ -1489,6 +1489,10 @@ if os.path.isdir(agents_dir):
     for fname in sorted(os.listdir(agents_dir)):
         if not fname.endswith('.md'):
             continue
+        # Skip non-agent docs that ride along in agents/ (conventions files,
+        # READMEs). Agent files are kebab-case lowercase by convention.
+        if not fname[0].islower():
+            continue
         fpath = os.path.join(agents_dir, fname)
         try:
             with open(fpath) as fh:
