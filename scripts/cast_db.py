@@ -177,6 +177,8 @@ def ensure_schema_columns() -> None:
     migrations = [
         ("ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'ended'", "sessions.status"),
         ("ALTER TABLE dispatch_decisions ADD COLUMN outcome TEXT DEFAULT 'pending'", "dispatch_decisions.outcome"),
+        ("ALTER TABLE agent_memories ADD COLUMN last_validated_at TEXT", "agent_memories.last_validated_at"),
+        ("ALTER TABLE agent_memories ADD COLUMN retrieval_count INTEGER DEFAULT 0", "agent_memories.retrieval_count"),
     ]
     for sql, label in migrations:
         try:
