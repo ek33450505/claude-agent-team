@@ -34,7 +34,6 @@ ALLOWED_TABLES = {
     'sessions',
     'stop_failure_events',
     'stream_events',
-    'stream_hook_events',
     'swarm_sessions',
     'teammate_messages',
     'teammate_runs',

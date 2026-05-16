@@ -241,3 +241,39 @@ YAML
   [ "$status" -eq 0 ]
   [[ "$output" =~ "Routines: 1 configured, all schemas valid" ]]
 }
+
+@test "check 14: CAST_AGENT_CONVENTIONS.md is skipped by frontmatter scope filter" {
+  # Create a conventions file (uppercase, no frontmatter) alongside a valid agent.
+  # The conventions file should be silently skipped, not trigger frontmatter errors.
+  cat > "${CAST_AGENTS_DIR}/CAST_AGENT_CONVENTIONS.md" <<'CONV'
+# Agent Conventions
+
+This is a conventions document with no frontmatter.
+
+## Rules
+
+- All agents must have frontmatter
+- etc.
+CONV
+
+  # Also create a valid agent so the check runs
+  cat > "${CAST_AGENTS_DIR}/valid-agent.md" <<'AGENT'
+---
+name: test-agent
+description: A test agent
+tools:
+  - bash
+model: haiku
+---
+
+Body content here.
+AGENT
+
+  run bash bin/cast doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Agent frontmatter:" ]]
+  # Ensure no errors were triggered
+  ! [[ "$output" =~ "errors found" ]]
+  # Ensure conventions file was not mentioned in output
+  ! [[ "$output" =~ "CAST_AGENT_CONVENTIONS" ]]
+}

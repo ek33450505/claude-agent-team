@@ -353,10 +353,10 @@ if agent == 'unknown' and agent_id:
 if len(response_text.strip()) < 50:
     raise SystemExit(0)
 
-# #8/#10: if agent is STILL 'unknown' after fallback, log to hook_failures so we can tune it
-if agent == 'unknown':
-    if log_hook_failure:
-        log_hook_failure('cast-subagent-stop-hook:truncation', -2, f'agent_id={agent_id} lookup failed', sess)
+# agent_id lookup miss is expected for subprocess-mode agents:
+# cast-subagent-start-hook.sh exits early when CLAUDE_SUBPROCESS=1, so those
+# agents never get a row in agent_runs. Truncation is still recorded with
+# agent='unknown' — no hook_failure needed for this expected gap.
 
 # Detection: prose Status block
 has_status = bool(re.search(
