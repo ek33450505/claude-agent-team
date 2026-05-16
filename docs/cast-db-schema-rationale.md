@@ -1,0 +1,69 @@
+# cast.db Schema Rationale
+
+Decoder ring for tables in `cast.db` that otherwise look confusing or overlapping in the /db browser.
+Generated 2026-05-17 from the 2026-05-16 audit (see `~/.claude/plans/cast-agent-team-corrections-2026-05-16.md`).
+
+## Three "dispatch" tables (closes Correction #6)
+
+The cast.db has three tables with overlapping names but non-overlapping concerns:
+
+| Table | Rows (snapshot) | Writer | What it tracks |
+|---|---|---|---|
+| `routing_events` | 3824 | All hook scripts | **General hook-event log** despite the name. The naming predates the dispatch refactor. |
+| `dispatch_decisions` | 12 | `/orchestrate` skill (LLM-driven) | One row per `/orchestrate` plan dispatched. Schema dropped richer fields in v6→v7. |
+| `dispatch_events` | 1 | `scripts/cast-cookbook-drift.sh` | Single cron-job audit trail. Currently invisible in /db browser. |
+
+**Recommended long-term renames** (post v7.1 scope): `routing_events` → `hook_events`, `dispatch_decisions` → `orchestrate_invocations`, `dispatch_events` → `scheduled_dispatches`. Not done in v7.1 because rename migrations are riskier than warranted.
+
+## Failure-tracking table pairs (closes Correction #12)
+
+Two pairs of conceptually overlapping tables:
+
+### `agent_truncations` vs `completeness_events`
+
+Both capture "incomplete agent responses" but via different writer paths:
+- `agent_truncations` — written by `cast-subagent-stop-hook.sh` when no Status block is detected in a sub-agent response.
+- `completeness_events` — written by `cast-response-completeness-hook.sh` on `SubagentStop`, broader heuristic that includes response shape, not just Status block presence.
+
+The two tables answer slightly different questions. Kept separate to preserve writer simplicity.
+
+### `agent_hallucinations` vs `code_ref_checks`
+
+Both capture "agent claim vs reality" mismatches but at different granularity:
+- `agent_hallucinations` — file-level: agent claimed to write `/path/to/file` but the file doesn't exist post-stop.
+- `code_ref_checks` — symbol-level: agent referenced a function/class name that doesn't exist in the codebase.
+
+Kept separate to allow different remediation paths (hallucinations are usually agent errors; code_ref mismatches can be stale memory).
+
+## `incidents` table (closes Correction #17)
+
+`incidents` is the canonical retrospective post-mortem table. Manually-recorded incidents (currently 17 rows from CLI + backfill). Reader will be added to cast-desktop in a future iteration; for now the audit/correction file workflow in `~/.claude/plans/` serves the same purpose. This table is NOT auto-populated by hooks — it's deliberate human input.
+
+## Swarm tables (closes Correction #21)
+
+`swarm_sessions`, `teammate_messages`, `teammate_runs` are intentionally dormant until `cast swarm` runs. Zero rows is CORRECT — these only populate when a swarm bootstrap occurs. The /db browser should show a tooltip indicating "populates only during active swarm sessions."
+
+## `dispatch_events` placement (closes Correction #5)
+
+`dispatch_events` should appear in cast-desktop's /db browser GROUP_MAP under a "Scheduled Jobs" group when added. Until then it is invisible in the UI but still receives writes from `cast-cookbook-drift.sh`. Decision: keep, surface later.
+
+## `schema_migrations` dual-runner drift (discovered 2026-05-17 during P2 pre-flight)
+
+The live cast.db `schema_migrations` table has schema **`(version TEXT PRIMARY KEY, applied_at TEXT, checksum TEXT)`** — created by the original `scripts/cast-migrate.sh` runner. A newer `scripts/cast-migrate.py` runner was added in v7 but creates an INCOMPATIBLE schema **`(id INTEGER PK, migration_name TEXT UNIQUE, applied_at TEXT)`** via its own `CREATE TABLE IF NOT EXISTS`.
+
+**Symptom:** the python runner's INSERT references `migration_name`, which doesn't exist on the bash-created live table. So `cast-migrate.py` only works on fresh DBs (CI test DB) and silently breaks on the live DB.
+
+**Why the live DB isn't broken:** migrations are only added occasionally; when they're applied via the python runner, the INSERT raises "no such column: migration_name" and gets caught somewhere or simply doesn't record. Migrations themselves DO apply (the ALTER/CREATE statements succeed), so schema drift doesn't accumulate — just the audit trail in `schema_migrations` stays out of date.
+
+**Backfill in Phase 2 #18:** uses the LIVE bash schema. Does NOT attempt to reconcile the two runners.
+
+**Phase 3 followup needed:** decide on one canonical runner. Options:
+1. Standardize on python runner — requires migrating live data from `(version, ...)` to `(migration_name, ...)` and updating bash runner to match.
+2. Standardize on bash runner — delete the python version, keep bash + add CI coverage.
+3. Make python runner schema-compatible with the existing bash table.
+
+Recommend option 3 — least disruption, preserves both runner code paths.
+
+---
+
+*This doc is maintained alongside cast.db schema evolution. When adding a new table, add a section here explaining its intent if the name isn't self-evident.*

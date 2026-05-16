@@ -72,7 +72,10 @@ def _find_migrations(migrations_dir: Path) -> list:
 
 
 def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
-    """Execute all statements in the SQL file. ALTERs that fail on duplicate column are tolerated."""
+    """Execute all statements in the SQL file. Idempotency-class errors are tolerated:
+    - "duplicate column name" on ALTER TABLE ADD COLUMN (column already added)
+    - "no such column" on ALTER TABLE DROP COLUMN (column already dropped or never existed)
+    """
     sql_text = sql_path.read_text(encoding='utf-8')
     # Split on semicolons but keep non-empty statements
     statements = [s.strip() for s in sql_text.split(';') if s.strip()]
@@ -92,6 +95,9 @@ def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
             # Tolerate "duplicate column name" from ALTER TABLE ADD COLUMN (idempotency)
             if 'duplicate column' in err:
                 print(f'  [NOTE] Column already exists (skipping): {stmt[:60]}...')
+            # Tolerate "no such column" from ALTER TABLE DROP COLUMN (already-dropped idempotency)
+            elif 'no such column' in err and 'drop column' in stmt.lower():
+                print(f'  [NOTE] Column already absent (skipping DROP): {stmt[:60]}...')
             else:
                 raise
     conn.commit()

@@ -44,9 +44,8 @@ CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo
 # If already at v8+, ensure all additive tables exist and exit
 if [ "$CURRENT_VERSION" -ge 8 ]; then
   # Additive migration: create stream_events and stream_hook_events if missing
-  # Also add model_used column to agent_runs if missing (Ollama contractor routing)
   # Also add cache token columns if missing (Task 0a: token optimization)
-  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
+  # Note: model_used column was dropped via migration 014 (audit 2026-05-16 #3)
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cache_read_input_tokens INTEGER;" 2>/dev/null || true
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cache_creation_input_tokens INTEGER;" 2>/dev/null || true
   sqlite3 "$DB_PATH" <<'STREAM_TABLES'
@@ -132,8 +131,8 @@ STREAM_TABLES
 fi
 
 # Migrate v7 → v8: add swarm tables (additive only — no drops)
+# Note: model_used column was dropped via migration 014 (audit 2026-05-16 #3)
 if [ "$CURRENT_VERSION" -eq 7 ]; then
-  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
   sqlite3 "$DB_PATH" <<'MIGRATE_V8'
 CREATE TABLE IF NOT EXISTS stream_events (
   id                  TEXT PRIMARY KEY,
@@ -229,8 +228,7 @@ DROP TABLE IF EXISTS dispatch_decisions;
 
 -- Add batch_id column if missing
 ALTER TABLE agent_runs ADD COLUMN batch_id INTEGER;
--- Add model_used column if missing (Ollama contractor routing)
-ALTER TABLE agent_runs ADD COLUMN model_used TEXT;
+-- Note: model_used column dropped via migration 014 (audit 2026-05-16 #3)
 CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);
 
 -- Drop stale indexes
@@ -284,7 +282,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   project         TEXT,
   agent_id        TEXT,
   batch_id        INTEGER,
-  model_used      TEXT,
   response        TEXT,
   cache_read_input_tokens INTEGER,
   cache_creation_input_tokens INTEGER
@@ -448,12 +445,7 @@ if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "
   _columns_added=1
 fi
 
-# Check if model_used column exists
-if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*model_used"; then
-  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN model_used TEXT;" 2>/dev/null || true
-  _columns_added=1
-fi
-
+# model_used column was dropped via migration 014 (audit 2026-05-16 #3)
 # Check if response column exists (migration 011 — agent response capture)
 if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*	response	"; then
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
@@ -488,7 +480,7 @@ sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
 
 if [ "$_columns_added" -eq 1 ]; then
-  echo "[cast-db-init] self-healed: added missing agent_id, batch_id, model_used, and/or response columns to agent_runs" >&2
+  echo "[cast-db-init] self-healed: added missing agent_id, batch_id, and/or response columns to agent_runs" >&2
 fi
 
 echo "cast.db initialized (v8, WAL mode, swarm tables included)" >&2
