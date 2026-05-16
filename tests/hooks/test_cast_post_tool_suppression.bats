@@ -118,7 +118,7 @@ teardown() {
 
 # 3. No orchestrate env + .md file edit → CAST-REVIEW suppressed unconditionally
 @test "suppression: .md file edit suppresses CAST-REVIEW unconditionally" {
-  run python3 "$HOOK" <<< "$(make_write_payload '/Users/edkubiak/.claude/plans/test.md' '# test plan')"
+  run python3 "$HOOK" <<< "$(make_write_payload "${HOME}/.claude/plans/test.md" '# test plan')"
   assert_success
   refute_output --partial "CAST-REVIEW"
   refute_output --partial "CAST-CHAIN"
