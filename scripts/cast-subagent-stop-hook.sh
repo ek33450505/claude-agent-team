@@ -714,6 +714,13 @@ PYEOF
   fi
 fi
 
+# ── Step 4.5: Worktree anomaly check ─────────────────────────────────────────
+# Detects unexpected agent worktrees, auto-removes clean ones, escalates dirty
+# ones, and logs all anomalies to cast.db worktree_anomalies. Always exits 0.
+if [[ -x "$(dirname "$0")/cast-subagent-worktree-check.sh" ]]; then
+  bash "$(dirname "$0")/cast-subagent-worktree-check.sh" <<< "${INPUT:-}" 2>/dev/null || true
+fi
+
 # ── Step 5: Auto-resume detection (DISABLED — orchestrator agent retired 2026-04-16) ─
 # The orchestrator agent was retired in Task 2.1. Plan execution now runs via the
 # /orchestrate skill in the main session. This block will never fire because no

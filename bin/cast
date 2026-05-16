@@ -1866,6 +1866,7 @@ Clean up accumulated CAST files:
   Briefings older than 14 days  → archived to briefings/archive/YYYY-MM/
   Agent status older than 24h   → deleted
   Orchestrator checkpoints >7d  → deleted
+  Stale worktree metadata        → pruned (git worktree prune)
 
 Options:
   --dry-run   Preview what would be cleaned without making changes
@@ -2017,6 +2018,22 @@ USAGE
       fi
       checkpoints_deleted=$((checkpoints_deleted + 1))
     done < <(find "$cast_dir" -maxdepth 1 -name "orchestrator-checkpoint-*.log" -mtime +7 -print0 2>/dev/null)
+  fi
+
+  # 8. Git worktree prune — remove stale worktree metadata entries where the
+  #    directory no longer exists. Safe: only removes entries whose path is gone.
+  if command -v git >/dev/null 2>&1; then
+    local cast_repo_dir="${CAST_REPO_DIR:-${HOME}/Projects/personal/claude-agent-team}"
+    if [ -d "$cast_repo_dir/.git" ]; then
+      if [ "$dry_run" -eq 1 ]; then
+        local stale_wt
+        stale_wt="$(git -C "$cast_repo_dir" worktree list --porcelain 2>/dev/null | grep '^worktree ' | awk '{print $2}' | while read -r wt; do [ -d "$wt" ] || echo "$wt"; done | wc -l | tr -d ' ')"
+        [ "${stale_wt:-0}" -gt 0 ] && _info "  Would prune: $stale_wt stale worktree entries"
+      else
+        git -C "$cast_repo_dir" worktree prune 2>/dev/null || true
+        _info "  Git worktree metadata pruned"
+      fi
+    fi
   fi
 
   # Summary table

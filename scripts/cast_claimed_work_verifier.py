@@ -41,11 +41,10 @@ def parse_iso_timestamp(ts_str: str) -> float:
 def extract_file_paths(response_text: str) -> list:
     """Extract claimed file paths from agent output.
 
-    Patterns:
+    Patterns (only 1 and 2 are active — 3 and 4 were dropped because they
+    extract paths the agent only read/referenced, flooding [PRE_EXISTING] rows):
     1. Files changed: section followed by file list
     2. files_changed: array in JSON status block
-    3. Inline prose: "wrote X", "created X", "modified X", "updated X"
-    4. Inline backticks: `path/to/file`
     """
     paths = set()
 
@@ -67,17 +66,9 @@ def extract_file_paths(response_text: str) -> list:
         json_paths = re.findall(r'"([^"]+\.[a-zA-Z0-9]+)"', array_text)
         paths.update(json_paths)
 
-    # Pattern 3: Inline prose claims
-    for verb in ['wrote', 'created', 'modified', 'updated', 'added']:
-        # Match: verb ... path/to/file.ext (more flexible pattern)
-        pattern = rf'(?:^|[\s\-]){verb}\b.*?([a-zA-Z0-9_./\-]+\.[a-zA-Z0-9]+)'
-        matches = re.findall(pattern, response_text, re.IGNORECASE | re.MULTILINE)
-        paths.update(matches)
-
-    # Pattern 4: Backticks (guard against false positives in code blocks)
-    backtick_paths = re.findall(r'`([a-zA-Z0-9_./\-]+\.[a-zA-Z0-9]+)`', response_text)
-    # Filter to likely file paths (has / or known extension)
-    paths.update(p for p in backtick_paths if '/' in p or any(p.endswith(f'.{ext}') for ext in ['sh', 'py', 'md', 'yml', 'json', 'bats', 'ts', 'js', 'rb']))
+    # Patterns 3 and 4 (prose verbs + backtick paths) are intentionally omitted.
+    # They extracted paths the agent only read, not wrote, flooding [PRE_EXISTING] rows.
+    # See: cast.db hygiene plan 2026-05-15, Task 1.1.
 
     return list(paths)
 
@@ -111,7 +102,19 @@ def verify_file(repo_root: str, path: str, agent_start_time_unix: float) -> str:
 
 def write_hallucination_record(db_path: str, session_id: str, agent_name: str,
                                 claim_type: str, claimed_value: str, actual_value: str) -> None:
-    """Write a hallucination record to cast.db agent_hallucinations table."""
+    """Write a hallucination record to cast.db agent_hallucinations table.
+
+    Write-gate: only INSERT when actual_value == '[NOT FOUND]'. [PRE_EXISTING]
+    and [VERIFIED] results are not actionable noise — skip them.
+    See: cast.db hygiene plan 2026-05-15, Task 1.1.
+
+    One-time cleanup (review before executing — DO NOT automate):
+      DELETE FROM agent_hallucinations WHERE actual_value = '[PRE_EXISTING]';
+      -- Expected: ~2,767 rows. Verify count before committing.
+    """
+    if actual_value != '[NOT FOUND]':
+        return  # write-gate: only genuine hallucinations are worth recording
+
     if not db_path or not os.path.exists(db_path):
         return
 

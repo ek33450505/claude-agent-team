@@ -21,6 +21,7 @@ ALLOWED_TABLES = {
     'dispatch_decisions',
     'dispatch_events',
     'file_writes',
+    'hook_failures',
     'incidents',
     'injection_log',
     'pane_bindings',
@@ -165,3 +166,57 @@ def _log_error(msg: str) -> None:
             f.write(f'[{ts}] ERROR cast_db.py: {msg}\n')
     except Exception:
         pass
+
+
+def ensure_schema_columns() -> None:
+    """Idempotently add new columns introduced in Phase 1 hygiene.
+
+    Uses ALTER TABLE with try/except so repeated runs are safe.
+    Called at module import time in scripts that need these columns.
+    """
+    migrations = [
+        ("ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'ended'", "sessions.status"),
+        ("ALTER TABLE dispatch_decisions ADD COLUMN outcome TEXT DEFAULT 'pending'", "dispatch_decisions.outcome"),
+    ]
+    for sql, label in migrations:
+        try:
+            db_execute(sql)
+        except Exception as e:
+            # Column already exists — that's fine. Any other error is also non-fatal.
+            if 'duplicate column' not in str(e).lower() and 'already exists' not in str(e).lower():
+                _log_error(f'ensure_schema_columns: {label}: {e}')
+
+
+def ensure_hook_failures_table() -> None:
+    """Idempotently create the hook_failures table if it does not exist."""
+    sql = """CREATE TABLE IF NOT EXISTS hook_failures (
+        id         TEXT PRIMARY KEY,
+        hook_name  TEXT NOT NULL,
+        exit_code  INTEGER,
+        stderr     TEXT,
+        session_id TEXT,
+        timestamp  TEXT NOT NULL
+    )"""
+    db_execute(sql)
+
+
+def log_hook_failure(hook_name: str, exit_code: int, stderr: str, session_id: str = None) -> None:
+    """Write a row to hook_failures. Wraps the DB write in try/except — MUST NOT crash the hook pipeline.
+
+    Call this from hook error handlers in place of (or in addition to) plain file logging.
+    Falls back to stderr-only if the DB write fails for any reason.
+    """
+    import uuid
+    try:
+        ensure_hook_failures_table()
+        db_write('hook_failures', {
+            'id': str(uuid.uuid4()),
+            'hook_name': hook_name,
+            'exit_code': exit_code,
+            'stderr': (stderr or '')[:2000],
+            'session_id': session_id,
+            'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
+        })
+    except Exception as e:
+        import sys
+        print(f'[hook_failures] DB write failed (non-fatal): {e}', file=sys.stderr)
