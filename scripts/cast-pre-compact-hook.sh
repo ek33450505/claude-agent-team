@@ -21,15 +21,15 @@ touch "${HOME}/.claude/cast/hook-last-fired/cast-pre-compact.timestamp" 2>/dev/n
 # Warn on stderr
 echo "CAST: context compaction imminent — consider /compact or /clear" >&2
 
-CAST_INPUT="$INPUT" python3 - <<'PYEOF' || true
-import json, os, uuid
+CAST_INPUT="$INPUT" python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
+import json, os, uuid, sys
 from datetime import datetime, timezone
 
 raw = os.environ.get("CAST_INPUT", "")
 try:
     data = json.loads(raw)
 except Exception:
-    import sys; sys.exit(0)
+    sys.exit(0)
 
 trigger    = data.get("trigger", "unknown")
 session_id = data.get("session_id", "unknown")
@@ -37,8 +37,7 @@ session_id = data.get("session_id", "unknown")
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-# Write to cast.db (best-effort)
-import sys
+# Write to cast.db (best-effort, errors logged to hook_failures)
 sys.path.insert(0, os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')))
 try:
     from cast_db import db_execute, db_write
@@ -60,8 +59,12 @@ try:
         'compaction_tier': 'PreCompact',
         'transcript_path': '',
     })
-except Exception:
-    pass
+except Exception as e:
+    try:
+        from cast_db import log_hook_failure
+        log_hook_failure('cast-pre-compact-hook.sh:compaction_events', 1, str(e), session_id)
+    except Exception:
+        pass  # Fallback: silently fail, hook must not crash
 PYEOF
 
 # Block-on-dirty: check for staged or unstaged changes in current working directory
