@@ -5,9 +5,19 @@
 # CAST v7.1 — Backend Lockdown
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
+<<<<<<< Updated upstream
 ![Version](https://img.shields.io/badge/version-7.1-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-1010-brightgreen)<!-- CAST_TEST_COUNT -->
+||||||| Stash base
+![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
+![Agents](https://img.shields.io/badge/agents-30-green)<!-- CAST_AGENT_COUNT -->
+![Tests](https://img.shields.io/badge/tests-859-brightgreen)<!-- CAST_TEST_COUNT -->
+=======
+![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
+![Agents](https://img.shields.io/badge/agents-33-green)<!-- CAST_AGENT_COUNT -->
+![Tests](https://img.shields.io/badge/tests-859-brightgreen)<!-- CAST_TEST_COUNT -->
+>>>>>>> Stashed changes
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -129,6 +139,22 @@ Every CAST operation follows a four-stage flow: (1) **hook validation** — pre-
 </p>
 
 ---
+
+## Recent Capabilities (v7.1)
+
+**cast.db observability remediation** — closed 15+ findings from the 2026-05-16 audit. Three sequential PRs (#74 P0, #75 P1, #77 P2) bundled into v7.1.
+
+- **`log_hook_failure()` wired end-to-end** — every silent `except Exception: pass` block in hook scripts now routes failures to the `hook_failures` table. The meta-bug: helper existed at `scripts/cast_db.py:204` with zero callers. Closing it surfaces every other broken writer in real time.
+- **`quality_gates` writer repaired** — `cast-subagent-stop-hook.sh` INSERT used the pre-migration-009 column set; broke silently for months. Now lands rows for every sub-agent stop with `status_line`, `contract_passed`, and a TRUNCATED row when no Status block is detected.
+- **Stop hook scoped correctly** — added precondition guard so `agent_truncations` no longer captures main-session user content. Improved `agent_type` fallback by joining `agent_runs` on `agent_id`.
+- **`agent_memories` schema drift closed** — migration 013 adds `last_validated_at` + `retrieval_count`; memory validation/consolidation scripts no longer swallow column-missing errors.
+- **`injection_log` writer built** — schema and cast-desktop reader existed; writer was never wired. `cast-memory-router.py` now writes one row per injected fact with score breakdown.
+- **`cast-db-routines.py` path-prefix validation** — `update-status` and `upsert` reject `output_path` outside `~/.claude/routines-output/`. Path-traversal class fix from cast-desktop security review.
+- **Daily-briefing routine restored** — trimmed `prompt_template` after 5-day failure with "Prompt is too long".
+- **`compaction_events` observability wired** — three compact-hook scripts had silent swallows; routed through `log_hook_failure()` so future silence is loud.
+- **Dead `agent_runs.model_used` column dropped** — migration 014. Runner now tolerates "no such column" on `ALTER DROP` (mirrors existing "duplicate column" tolerance on `ALTER ADD`).
+- **`docs/cast-db-schema-rationale.md`** — decoder ring for confusing table groups (three "dispatch" tables, failure-tracking pairs, swarm tables, the documented `schema_migrations` dual-runner drift for P3).
+- **Proof of life:** `hook_failures` went from 0 rows (helper had zero callers) to 10+ rows over the remediation arc — real silent failures now surfacing.
 
 ## Recent Capabilities (v7.0)
 
@@ -469,7 +495,15 @@ The following capabilities were audited but deferred pending dependency updates 
 
 ## Stats
 
+<<<<<<< Updated upstream
 <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
 <!-- CAST_TEST_COUNT -->1010<!-- /CAST_TEST_COUNT --> test cases |
+||||||| Stash base
+<!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_TEST_COUNT -->858<!-- /CAST_TEST_COUNT --> test cases |
+=======
+<!-- CAST_AGENT_COUNT -->33<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_TEST_COUNT -->858<!-- /CAST_TEST_COUNT --> test cases |
+>>>>>>> Stashed changes
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
