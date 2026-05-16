@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## [7.2] — 2026-05-17 — Post-v7.1 Cleanup
+
+**Strategic focus:** Retire dead stub infrastructure, eliminate observability noise introduced by the v7.1 arc, and add regression coverage for the cast-doctor frontmatter scope fix.
+
+### Fixed
+
+- **Stop-hook spurious `hook_failures`** — removed `log_hook_failure` call for `agent_id` lookup miss in the truncation section of `cast-subagent-stop-hook.sh`. Root cause confirmed: `CLAUDE_SUBPROCESS=1` guard in the start-hook intentionally skips `agent_runs` writes for subprocess-mode agents; the stop-hook lookup miss was expected behavior, not a bug. 7 false-positive `hook_failures` rows from the 2026-05-16 session are now the last of their kind. (#80)
+
+### Removed
+
+- **`stream_hook_events` table retired** — 0 rows ever written, no writer, no reader. Removed from `cast-db-init.sh` (3 locations) and `cast_db.py` stub list. Migration 015 applied to live DB. (#80)
+
+### Added
+
+- **BATS regression test: cast-doctor frontmatter scope** — test 16 in `cast-doctor-expansion.bats` locks the v7.1 fix that skips uppercase files (e.g. `CAST_AGENT_CONVENTIONS.md`) during the agent frontmatter check. Prevents silent regression if the `if not fname[0].islower(): continue` guard is removed. (#80)
+
+### Investigated / Documented (→ v7.3 backlog)
+
+- **`compaction_events` confirmed healthy** — 452 rows since 2026-04-26; hook fires on every `/compact`. Minor data quality gap: `trigger` and `session_id` often `'unknown'` (PreCompact event JSON not fully surfaced via `CAST_INPUT`) → v7.3.
+- **`agent_runs.prompt` NULL pattern** — 57% NULL in May 2026. Root cause: pre-`agent_id` INSERT path wrote `prompt`; new `agent_id`-aware paths don't. No current hook script writes `prompt` at SubagentStart time → v7.3.
+- **`schema_migrations` dual-runner drift** — bash and python runners use incompatible schemas; migrations still apply correctly. Recommend porting python runner to bash schema format → v7.3.
+
+---
+
 ## [7.1] — 2026-05-17 — cast.db Observability Remediation
 
 **Strategic focus:** Observability hardening — wired silent-exception fallback logging, repaired schema drift in quality_gates, closed agent-truncation routing bugs, restored daily-briefing routine. Addresses 15+ findings from the 2026-05-16 audit (see [corrections file](~/.claude/plans/cast-agent-team-corrections-2026-05-16.md) for detailed evidence).

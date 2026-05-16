@@ -2,22 +2,12 @@
   <img src="docs/cast-banner.png" alt="CAST — Swarm control plane for Anthropic Agent Teams" />
 </p>
 
-# CAST v7.1 — Backend Lockdown
+# CAST v7.2 — Post-v7.1 Cleanup
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-<<<<<<< Updated upstream
-![Version](https://img.shields.io/badge/version-7.1-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-7.2-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-1011-brightgreen)<!-- CAST_TEST_COUNT -->
-||||||| Stash base
-![Version](https://img.shields.io/badge/version-7.1-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-1011-brightgreen)<!-- CAST_TEST_COUNT -->
-=======
-![Version](https://img.shields.io/badge/version-7.1-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-1011-brightgreen)<!-- CAST_TEST_COUNT -->
->>>>>>> Stashed changes
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
