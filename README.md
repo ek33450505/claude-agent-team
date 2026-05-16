@@ -10,13 +10,13 @@
 ![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-1010-brightgreen)<!-- CAST_TEST_COUNT -->
 ||||||| Stash base
-![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-30-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-859-brightgreen)<!-- CAST_TEST_COUNT -->
+![Version](https://img.shields.io/badge/version-7.1-blue)<!-- /CAST_VERSION_BADGE -->
+![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
+![Tests](https://img.shields.io/badge/tests-1010-brightgreen)<!-- CAST_TEST_COUNT -->
 =======
-![Version](https://img.shields.io/badge/version-6.0-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-33-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-859-brightgreen)<!-- CAST_TEST_COUNT -->
+![Version](https://img.shields.io/badge/version-7.1-blue)<!-- /CAST_VERSION_BADGE -->
+![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
+![Tests](https://img.shields.io/badge/tests-1010-brightgreen)<!-- CAST_TEST_COUNT -->
 >>>>>>> Stashed changes
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
@@ -499,11 +499,11 @@ The following capabilities were audited but deferred pending dependency updates 
 <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
 <!-- CAST_TEST_COUNT -->1010<!-- /CAST_TEST_COUNT --> test cases |
 ||||||| Stash base
-<!-- CAST_AGENT_COUNT -->30<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->858<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_TEST_COUNT -->1010<!-- /CAST_TEST_COUNT --> test cases |
 =======
-<!-- CAST_AGENT_COUNT -->33<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->858<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_TEST_COUNT -->1010<!-- /CAST_TEST_COUNT --> test cases |
 >>>>>>> Stashed changes
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
