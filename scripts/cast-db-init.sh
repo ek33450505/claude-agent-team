@@ -112,6 +112,16 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
 CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
+
+CREATE TABLE IF NOT EXISTS tool_call_failures (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp  TEXT    NOT NULL,
+    session_id TEXT,
+    tool_name  TEXT    NOT NULL,
+    error      TEXT,
+    project    TEXT,
+    data       TEXT
+);
 STREAM_TABLES
   echo "cast.db already initialized (v${CURRENT_VERSION}), all tables ensured" >&2
   exit 0
@@ -184,6 +194,17 @@ CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
 CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
+
+-- Tool call failures: PostToolUseFailure hook events (separate from routing_events)
+CREATE TABLE IF NOT EXISTS tool_call_failures (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp  TEXT    NOT NULL,
+    session_id TEXT,
+    tool_name  TEXT    NOT NULL,
+    error      TEXT,
+    project    TEXT,
+    data       TEXT
+);
 
 PRAGMA user_version = 8;
 MIGRATE_V8
@@ -377,6 +398,17 @@ CREATE TABLE IF NOT EXISTS teammate_messages (
 CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
+
+-- Tool call failures: PostToolUseFailure hook events (separate from routing_events)
+CREATE TABLE IF NOT EXISTS tool_call_failures (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp  TEXT    NOT NULL,
+    session_id TEXT,
+    tool_name  TEXT    NOT NULL,
+    error      TEXT,
+    project    TEXT,
+    data       TEXT
+);
 
 PRAGMA user_version = 8;
 SQL

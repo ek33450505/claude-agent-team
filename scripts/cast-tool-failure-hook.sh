@@ -4,7 +4,7 @@
 # Responsibilities:
 #   1. Guard against subprocess invocations
 #   2. Log failure metadata to ~/.claude/cast/tool-failures.jsonl
-#   3. Log to cast.db routing_events table
+#   3. Log to cast.db tool_call_failures table
 #
 # Stdin JSON fields (PostToolUseFailure):
 #   session_id  — current session ID
@@ -62,16 +62,28 @@ try:
 except Exception:
     pass
 
-# Log to cast.db routing_events
+# Log to cast.db tool_call_failures
 db_path = os.path.expanduser("~/.claude/cast.db")
 project = os.path.basename(os.getcwd().rstrip('/')) or "unknown"
 data_json = json.dumps({"tool_name": tool_name, "error_preview": error_preview})
 try:
     import sqlite3 as _sqlite3
     con = _sqlite3.connect(db_path, timeout=3)
+    # Ensure table exists (idempotent) — hooks are standalone and may run before init
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS tool_call_failures (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp  TEXT    NOT NULL,
+            session_id TEXT,
+            tool_name  TEXT    NOT NULL,
+            error      TEXT,
+            project    TEXT,
+            data       TEXT
+        )
+    """)
     con.execute(
-        "INSERT INTO routing_events (timestamp, session_id, event_type, action, project, data) VALUES (?, ?, ?, ?, ?, ?)",
-        (iso_ts, session_id, "tool_failure", "tool_failure", project, data_json),
+        "INSERT INTO tool_call_failures (timestamp, session_id, tool_name, error, project, data) VALUES (?, ?, ?, ?, ?, ?)",
+        (iso_ts, session_id, tool_name, error_preview, project, data_json),
     )
     con.commit()
     con.close()
