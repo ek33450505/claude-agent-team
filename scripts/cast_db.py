@@ -34,6 +34,7 @@ ALLOWED_TABLES = {
     'sessions',
     'stop_failure_events',
     'stream_events',
+    'tool_call_failures',
     'swarm_sessions',
     'teammate_messages',
     'teammate_runs',
@@ -197,6 +198,20 @@ def ensure_hook_failures_table() -> None:
         stderr     TEXT,
         session_id TEXT,
         timestamp  TEXT NOT NULL
+    )"""
+    db_execute(sql)
+
+
+def ensure_tool_call_failures_table() -> None:
+    """Idempotently create the tool_call_failures table if it does not exist."""
+    sql = """CREATE TABLE IF NOT EXISTS tool_call_failures (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp  TEXT    NOT NULL,
+        session_id TEXT,
+        tool_name  TEXT    NOT NULL,
+        error      TEXT,
+        project    TEXT,
+        data       TEXT
     )"""
     db_execute(sql)
 
