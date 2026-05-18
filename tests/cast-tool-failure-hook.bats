@@ -28,17 +28,15 @@ setup() {
   export HOME="$(realpath "$(mktemp -d)")"
   mkdir -p "$HOME/.claude/cast"
   unset CLAUDE_SUBPROCESS
-  # Create a real cast.db with the routing_events schema for DB tests
+  # Create a real cast.db with the tool_call_failures schema for DB tests
   python3 -c "
 import sqlite3, os
 db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
 con = sqlite3.connect(db)
-con.execute('''CREATE TABLE IF NOT EXISTS routing_events (
+con.execute('''CREATE TABLE IF NOT EXISTS tool_call_failures (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT, timestamp TEXT, prompt_preview TEXT,
-  action TEXT, matched_route TEXT, match_type TEXT,
-  pattern TEXT, confidence TEXT, project TEXT,
-  event_type TEXT, data TEXT
+  timestamp TEXT, session_id TEXT, tool_name TEXT,
+  error TEXT, project TEXT, data TEXT
 )''')
 con.commit(); con.close()
 "
@@ -166,26 +164,23 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 10. DB regression: routing_events row has action and project populated
-#     (regression for bug where only event_type was written — action and
-#      project were NULL)
+# 10. DB write: tool_call_failures row has tool_name and project populated
 # ---------------------------------------------------------------------------
 
-@test "DB write: routing_events row includes action and project for tool_failure" {
+@test "DB write: tool_call_failures row includes tool_name and project for tool_failure" {
   bash "$HOOK_SH" <<< "$(make_payload "sess-db-tf-1" "Bash" "ls /missing" "No such file")"
   python3 -c "
 import sqlite3, os
 db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
 con = sqlite3.connect(db)
 row = con.execute(
-    'SELECT event_type, action, project FROM routing_events WHERE session_id=?',
+    'SELECT tool_name, project FROM tool_call_failures WHERE session_id=?',
     ('sess-db-tf-1',)
 ).fetchone()
 con.close()
-assert row is not None, 'no row written to routing_events'
-event_type, action, project = row
-assert event_type == 'tool_failure',  f'event_type={event_type}'
-assert action     == 'tool_failure',  f'action is NULL or wrong: {action}'
+assert row is not None, 'no row written to tool_call_failures'
+tool_name, project = row
+assert tool_name == 'Bash',                                       f'tool_name={tool_name}'
 assert project is not None and len(project) > 0, f'project is NULL or empty'
 print('ok')
 "
