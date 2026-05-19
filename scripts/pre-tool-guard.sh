@@ -179,4 +179,20 @@ if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git[[:space:]]+push"; then
   exit 2
 fi
 
+# --- git stash block ---
+# Allow stash operations from authorized subagent sessions (CLAUDE_SUBPROCESS=1 is set by Claude Code)
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
+  exit 0
+fi
+# Allow ONLY if explicit escape hatch env var appears before git stash
+if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_STASH_OK=1[[:space:]]+git[[:space:]]+stash"; then
+  exit 0
+fi
+# Block any git stash invocation (push, pop, apply, drop, clear, list, save, show, create, store, branch)
+# Guards against the 2026-05-19 push-agent bug where bare 'git stash pop/apply' resurrected abandoned stashes.
+if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git[[:space:]]+stash([[:space:]]|$)"; then
+  echo "**[CAST]** Raw \`git stash\` blocked. Stash operations are prohibited for agents — they risk resurrecting abandoned stashes from other sessions. If you genuinely need stash, use \`CAST_STASH_OK=1 git stash\` (document your reason). See: 2026-05-19 push-agent stash incident."
+  exit 2
+fi
+
 exit 0

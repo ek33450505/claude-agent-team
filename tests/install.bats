@@ -44,8 +44,8 @@ run_install() {
   count=$(ls -1 "$HOME/.claude/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
   # merge converted to skill + 7 agents retired + email-drafter merged into docs in v7 Phase 4.5;
   # +2 agents added Phase 4.5.4 (eval-writer, pr-reviewer); portfolio-sync was personal/ (archived);
-  # core install has 22 agents
-  [ "$count" -eq 22 ]
+  # merge.md moved from archive back to core (v7.3 PR lifecycle chain); core install has 23 agents
+  [ "$count" -eq 23 ]
 }
 
 @test "Install: installs all 7 skills" {
