@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## [7.3] — 2026-05-19 — Hook Safety & Observability Hardening
+
+**Strategic focus:** Agent protocol reliability — enforce Handoff block contracts in multi-agent chains, prevent stale stash corruption in push workflow, and route API failures to dedicated observability table.
+
+### Fixed
+
+- **tool_call_failures table routing** — Agent API call failures are now routed to the dedicated `tool_call_failures` table in cast.db. Previously these errors were inconsistently logged or swallowed. Failure events are now queryable alongside other cast.db events for observability. (#82)
+- **push-agent stash safety** — Blocked `git stash` operations at the hook layer to prevent the push agent from surfacing stale stashes from prior sessions. Also added PR lifecycle chain enforcement so the push agent cannot proceed past a dirty stash state. (#84)
+- **agent Handoff block enforcement** — Safer baseline pattern for agent dispatch in multi-agent chains. Chains now enforce that every agent includes a `## Handoff` block (key-value pairs: `files_changed`, `status`, `blockers`) before passing context to the next agent. Prevents context loss in long orchestration chains. (#86)
+
+### Internal
+
+- Hook layer: stash guard script added to pre-push hooks.
+- Agent definitions: Handoff block enforcement section added to multi-agent chain agents.
+- cast.db schema: `tool_call_failures` table populated on agent API errors.
+
+---
+
 ## [7.2] — 2026-05-17 — Post-v7.1 Cleanup
 
 **Strategic focus:** Retire dead stub infrastructure, eliminate observability noise introduced by the v7.1 arc, and add regression coverage for the cast-doctor frontmatter scope fix.
