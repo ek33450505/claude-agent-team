@@ -6,12 +6,12 @@
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-7.2-blue)<!-- /CAST_VERSION_BADGE -->
-![Agents](https://img.shields.io/badge/agents-22-green)<!-- CAST_AGENT_COUNT -->
+![Agents](https://img.shields.io/badge/agents-23-green)<!-- CAST_AGENT_COUNT -->
 ![Tests](https://img.shields.io/badge/tests-1011-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-> CAST is a production control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->27<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
+> CAST is a production control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->30<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
 
 **[CAST Framework](https://castframework.dev)**
 
@@ -46,7 +46,7 @@ This is for users who don't use Homebrew or want to install directly from source
 ## What Makes CAST Different
 
 - **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a reviewer pass. You cannot skip this.
-- **<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
+- **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
 - **SQLite audit trail, fully local.** Every agent dispatch, tool call, and token spend logs to `cast.db` on your machine. No SaaS dashboard, no cloud lock-in.
 - **<!-- CAST_TEST_COUNT -->1011<!-- /CAST_TEST_COUNT --> BATS test cases with 0 failures.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
 
@@ -408,7 +408,7 @@ graph TD
 
 **New to CAST?** Start here:
 - [Quick Start](docs/tutorial/getting-started.md) — install, verify, and run in 5 minutes
-- [Agent Roster](docs/agents/AGENT-ROSTER.md) — all <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents with model tiers and thinking budgets
+- [Agent Roster](docs/agents/AGENT-ROSTER.md) — all <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents with model tiers and thinking budgets
 - [Architecture Guide](docs/architecture/ARCHITECTURE.md) — hook enforcement, swarm composition, peer messaging
 
 **Already using CAST?**
@@ -485,15 +485,7 @@ The following capabilities were audited but deferred pending dependency updates 
 
 ## Stats
 
-<<<<<<< Updated upstream
-<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
+<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents |
 <!-- CAST_TEST_COUNT -->1011<!-- /CAST_TEST_COUNT --> test cases |
-||||||| Stash base
-<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->1011<!-- /CAST_TEST_COUNT --> test cases |
-=======
-<!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->1011<!-- /CAST_TEST_COUNT --> test cases |
->>>>>>> Stashed changes
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
