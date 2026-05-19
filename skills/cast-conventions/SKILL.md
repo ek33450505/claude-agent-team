@@ -133,14 +133,20 @@ Why: a CAST routines deletion on 2026-05-11 traced to a BATS test that ran `rm -
 An agent MAY NOT classify a test failure as "pre-existing," "unrelated to my change," or "already broken" without producing baseline evidence.
 
 **The contract:**
-- Baseline evidence = running the same test command at the prior commit using a sha-anchored stash and showing the same failures:
-  ```
-  git stash push -u -m "cast-baseline-$$" && <run tests>; git stash pop "stash@{0}"
-  ```
+- Baseline evidence = running the same test command at a clean HEAD using an isolated worktree, and showing the same failures.
 - Without baseline evidence, the only valid classifications are `BLOCKED` (the failure is real and you cannot resolve it) or `DONE_WITH_CONCERNS` (you fixed what you could, but flag the residual).
 - "I assume these were already failing" is not a classification. It's a guess. Guesses are not valid in a Status block.
 
-**Stash safety:** Never run `git stash pop` or `git stash apply` without naming the specific stash ref you created (`stash@{0}` immediately after your own `git stash push`). Bare `git stash pop` pops the top of the stash list — which may be an unrelated entry from days ago. If `git stash list` is non-empty when you begin, prefer `git worktree add` over stash, OR skip the baseline and report `Status: BLOCKED` per the rule.
+**Baseline evidence pattern (preferred — worktree):**
+```bash
+WORKTREE=$(mktemp -d)
+git worktree add "$WORKTREE" HEAD~1
+(cd "$WORKTREE" && <run tests>)
+git worktree remove "$WORKTREE"
+```
+Worktrees never touch the stash stack and never modify the active working tree. Always prefer this over `git stash`-based baselining.
+
+**Stash safety (if you must use stash anyway):** never run `git stash pop` or `git stash apply` without a captured SHA from `git stash create`. `stash@{N}` refs are unstable — any other process that stashes (a hook, a parallel agent, an editor) shifts the indexes. If you cannot use a worktree and cannot capture a SHA, escalate to `Status: BLOCKED` and let the orchestrator decide.
 
 **Practical application:**
 - test-runner: if the test framework reports failures, the Status is `BLOCKED` with the failing-test list. test-runner does not classify pre-existing.
