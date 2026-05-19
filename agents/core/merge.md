@@ -88,15 +88,21 @@ Fix the failures and push again, or close the PR manually.
 PR: <url>
 ```
 
-**Step 4 — Execute merge (only when user confirms)**
+**Step 4 — Squash-merge (only when explicitly confirmed)**
 
-If this agent is invoked with the user's explicit merge confirmation in its prompt (the orchestrator passes the user's "merge" reply through), run:
+This step ONLY runs when the orchestrator's prompt to this agent contains one of:
+- The literal phrase `[user confirmed: merge]`
+- The user's verbatim merge reply (e.g., `merge`, `/merge`, `go ahead and merge`)
+
+Without one of those signals in your prompt, you MUST stop at Step 3 with `Status: NEEDS_CONTEXT` and never invoke `gh pr merge`.
+
+When the signal IS present:
 
 ```bash
 gh pr merge <number> --squash --delete-branch
 ```
 
-On success, emit `Status: DONE` with the merged SHA.
+Emit `Status: DONE` with the merged SHA and confirmation that the branch was deleted.
 On failure, emit `Status: BLOCKED` with the gh error verbatim.
 
 ## Secondary Workflow — Direct Invocation (local merge/rebase)
@@ -168,6 +174,17 @@ Always include:
 - Conflicts encountered and how they were resolved
 - Branches and worktrees cleaned up
 - Any manual steps required
+
+## Handoff
+
+Every response MUST include a `## Handoff` block before the Status block. Required fields:
+
+```
+## Handoff
+files_changed: ["none — merge-only agent"]
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+blockers: [describe if BLOCKED, else "none"]
+```
 
 ## Response Budget
 Keep your final response under **800 tokens**. Return a structured summary with key findings and your Status Block. Compress verbose tool output before including it.
