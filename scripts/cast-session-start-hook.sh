@@ -127,6 +127,75 @@ except Exception as e:
         lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: DB INSERT failed: {type(e).__name__}: {e}\n")
 PYEOF2
 
+# Export pane_id for use in the next python block
+export CAST_PANE_ID_FOR_HOOK="${CAST_DESKTOP_PANE_ID:-}"
+
+CAST_INPUT="$INPUT" python3 - <<'PYEOF3' || _log_error "session-start pane-bindings block failed (exit $?)"
+import json, os, sqlite3 as _sqlite3
+from datetime import datetime, timezone
+
+# Early exit if no pane_id provided
+pane_id = os.environ.get("CAST_PANE_ID_FOR_HOOK", "").strip()
+if not pane_id:
+    import sys; sys.exit(0)
+
+# Parse session_id and cwd from CAST_INPUT
+raw = os.environ.get("CAST_INPUT", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    import sys; sys.exit(0)
+
+session_id = data.get("session_id", "unknown")
+cwd = data.get("cwd", "")
+
+db_path = os.path.expanduser("~/.claude/cast.db")
+if not os.path.exists(db_path):
+    import sys; sys.exit(0)
+
+try:
+    con = _sqlite3.connect(db_path, timeout=3)
+    # Create pane_bindings table if missing
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS pane_bindings (
+            pane_id TEXT PRIMARY KEY,
+            session_id TEXT,
+            started_at INTEGER,
+            ended_at INTEGER,
+            project_path TEXT
+        )
+    """)
+    # Insert or update pane binding
+    con.execute(
+        """
+        INSERT INTO pane_bindings (pane_id, session_id, started_at, project_path)
+        VALUES (?, ?, strftime('%s','now'), ?)
+        ON CONFLICT(pane_id) DO UPDATE SET
+            session_id=excluded.session_id,
+            started_at=excluded.started_at,
+            project_path=excluded.project_path,
+            ended_at=NULL
+        """,
+        (pane_id, session_id, cwd),
+    )
+    con.commit()
+    con.close()
+except Exception as e:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log_dir = os.path.expanduser("~/.claude/logs")
+    os.makedirs(log_dir, exist_ok=True)
+    with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
+        lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: pane-bindings INSERT failed: {type(e).__name__}: {e}\n")
+PYEOF3
+
+# Notify the Cast Desktop backend of the pane binding
+if [ -n "${CAST_DESKTOP_PANE_ID:-}" ]; then
+  curl -s -X POST "http://localhost:3001/api/pane-bindings/notify" \
+    -H "Content-Type: application/json" \
+    -d "{\"paneId\": \"${CAST_DESKTOP_PANE_ID}\"}" \
+    --max-time 2 >/dev/null 2>&1 || true
+fi
+
 # OTEL export wiring
 # If OTEL_EXPORTER_OTLP_ENDPOINT is set, configure OTLP exporters; otherwise use console.
 if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" ]; then

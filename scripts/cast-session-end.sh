@@ -205,6 +205,35 @@ if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   sqlite3 "$DB" "UPDATE agent_runs SET status='failed' WHERE status='running' AND started_at < datetime('now', '-2 hours');" 2>/dev/null || true
 fi
 
+# === PANE BINDINGS UPDATE ===
+if [[ -f "$DB" ]]; then
+  python3 - "$DB" "$SESSION_ID" <<'PYEOF_PANE' 2>/dev/null || _log_error "pane-bindings end update failed"
+import os
+import sys
+import sqlite3
+from datetime import datetime, timezone
+
+db_path = sys.argv[1]
+session_id = sys.argv[2]
+
+try:
+    con = sqlite3.connect(db_path, timeout=3)
+    # Update ended_at for pane bindings associated with this session
+    con.execute(
+        "UPDATE pane_bindings SET ended_at = strftime('%s','now') WHERE session_id = ? AND ended_at IS NULL",
+        (session_id,),
+    )
+    con.commit()
+    con.close()
+except Exception as e:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log_dir = os.path.expanduser("~/.claude/logs")
+    os.makedirs(log_dir, exist_ok=True)
+    with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
+        lf.write(f"[{ts}] ERROR cast-session-end: pane-bindings UPDATE failed: {type(e).__name__}: {e}\n")
+PYEOF_PANE
+fi
+
 # === AGENT MEMORY DB SYNC ===
 MEMORY_DIR="${HOME}/.claude/agent-memory-local"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"

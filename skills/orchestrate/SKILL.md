@@ -69,6 +69,32 @@ db_write('dispatch_decisions', {
 })
 " 2>/dev/null || true
 ```
+
+```bash
+# Write plan_sessions row so cast-desktop plans.ts can look up active plan by session_id
+python3 -c "
+import sys; sys.path.insert(0, '$HOME/.claude/scripts')
+from cast_db import db_write, db_execute
+import datetime, os
+# Write plan_sessions row so cast-desktop plans.ts can look up active plan by session_id
+try:
+    db_execute('''
+        CREATE TABLE IF NOT EXISTS plan_sessions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            plan_file  TEXT NOT NULL,
+            started_at TEXT NOT NULL
+        )
+    ''')
+    db_write('plan_sessions', {
+        'session_id': os.environ.get('CAST_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID', 'unknown'),
+        'plan_file': '$PLAN_FILE_PATH',
+        'started_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+    })
+except Exception:
+    pass
+" 2>/dev/null || true
+```
 If `DISPATCH_BACKEND` is `"coordinator"` or `"auto"`, print a notice: `[CAST] dispatch_backend=$DISPATCH_BACKEND — COORDINATOR_MODE not yet supported; falling back to cast dispatch.` and continue with standard dispatch. This stub is intentional — coordinator dispatch logic will be added when COORDINATOR_MODE ships publicly.
 
 Create one TaskCreate entry per batch (subject = "Batch N: [description]").

@@ -89,13 +89,13 @@ teardown() {
   # Count rows in schema_migrations
   local row_count
   row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;")
-  # Baseline (000) + incidents (011) + routines (012) = 3 rows
-  [ "$row_count" -eq 3 ]
+  # Baseline (000) + incidents (011) + routines (012) + plan-sessions (013) = 4 rows
+  [ "$row_count" -eq 4 ]
 
   # Verify distinct versions
   local versions
   versions=$(sqlite3 "$TEST_DB" "SELECT COUNT(DISTINCT version) FROM schema_migrations;")
-  [ "$versions" -eq 3 ]
+  [ "$versions" -eq 4 ]
 }
 
 @test "cast-migrate: checksum is stored for non-baseline migrations" {
