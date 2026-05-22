@@ -1,2 +1,29 @@
 #!/usr/bin/env bash
-bash "$(git rev-parse --show-toplevel)/scripts/pre-push-ubuntu-check.sh"
+# CAST pre-push hook: ubuntu check + BATS regression gate
+# Runs ubuntu check (non-blocking if Docker is down) + BATS test gate
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# Run ubuntu check (non-blocking; exits 0 if Docker is unavailable)
+bash "$REPO_ROOT/scripts/pre-push-ubuntu-check.sh" || true
+
+# BATS regression gate
+if command -v bats &>/dev/null; then
+  if [ "${CAST_SKIP_BATS_PUSH:-0}" != "1" ]; then
+    echo "[CAST pre-push] Running BATS test suite..."
+    if ! bats "$REPO_ROOT/tests/"; then
+      echo "ERROR: BATS tests failed. Fix the failures above and try again." >&2
+      echo "To skip this gate, set: CAST_SKIP_BATS_PUSH=1 git push" >&2
+      exit 1
+    fi
+  else
+    echo "[CAST pre-push] Skipping BATS tests (CAST_SKIP_BATS_PUSH=1)" >&2
+  fi
+else
+  echo "[CAST pre-push] WARNING: bats not found; skipping test gate. Install with: brew install bats-core" >&2
+fi
+
+exit 0
