@@ -45,12 +45,14 @@ Read `dispatch_backend` from `~/.claude/config/cast-cli.json`:
 ```bash
 DISPATCH_BACKEND=$(python3 -c "import json,os; d=json.load(open(os.path.expanduser('~/.claude/config/cast-cli.json'))); print(d.get('dispatch_backend', 'cast'))" 2>/dev/null || echo 'cast')
 ```
-Log the backend to cast.db routing_events table:
+Log the backend to cast.db **and** write the active plan_sessions binding (cast-desktop's `plans.ts` uses this to resolve session_id → active plan) — kept in a single `python3 -c` invocation so the LLM cannot run one write and skip the other:
 ```bash
 python3 -c "
 import sys; sys.path.insert(0, '$HOME/.claude/scripts')
 from cast_db import db_write, db_execute
 import datetime, os
+SESSION_ID = os.environ.get('CAST_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or 'unknown'
+NOW = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
 db_execute('''
     CREATE TABLE IF NOT EXISTS dispatch_decisions (
         id TEXT PRIMARY KEY,
@@ -62,21 +64,11 @@ db_execute('''
 ''')
 db_write('dispatch_decisions', {
     'id': os.urandom(8).hex(),
-    'session_id': os.environ.get('CLAUDE_SESSION_ID', 'unknown'),
-    'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'session_id': SESSION_ID,
+    'timestamp': NOW,
     'dispatch_backend': '$DISPATCH_BACKEND',
     'plan_file': '$PLAN_FILE_PATH'
 })
-" 2>/dev/null || true
-```
-
-```bash
-# Write plan_sessions row so cast-desktop plans.ts can look up active plan by session_id
-python3 -c "
-import sys; sys.path.insert(0, '$HOME/.claude/scripts')
-from cast_db import db_write, db_execute
-import datetime, os
-# Write plan_sessions row so cast-desktop plans.ts can look up active plan by session_id
 try:
     db_execute('''
         CREATE TABLE IF NOT EXISTS plan_sessions (
@@ -87,9 +79,9 @@ try:
         )
     ''')
     db_write('plan_sessions', {
-        'session_id': os.environ.get('CAST_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID', 'unknown'),
+        'session_id': SESSION_ID,
         'plan_file': '$PLAN_FILE_PATH',
-        'started_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'started_at': NOW,
     })
 except Exception:
     pass
