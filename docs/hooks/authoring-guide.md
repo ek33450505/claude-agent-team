@@ -251,3 +251,36 @@ numbered fragment) is the correct install path — do not edit `settings.json` b
 - [Example: Block on dirty worktree](./examples/block-on-dirty-worktree.sh)
 - [Example: Notify on agent stop](./examples/notify-on-agent-stop.sh)
 - [Compatibility matrix](../compatibility.md) — which hook events require which Claude Code version
+
+---
+
+## Phase A–C Enhancements
+
+> Source: Moved from README.md as part of 2026-05-25 ecosystem alignment.
+> Original section: "Recent Hook Enhancements (Phase A–C, as of 2026-04-26)"
+
+**New Hook Events:**
+- **StopFailure** (REC-01) — Fires when agent API calls fail mid-task. Logs error details to `cast.db` `stop_failure_events` table; triggers osascript desktop notification with error context.
+- **CwdChanged** (REC-06) — Reads `.claude/cast.json` repo metadata and exports `CAST_REPO_CLASS` environment variable (values: `personal`, `work`). Enables repo-aware hooks and agent behavior.
+- **SessionStart** — Now reads the latest `~/Documents/Claude/YYYY-MM/*.md` journal entry (if present) and injects a context banner for continuity. Sourced via `cast-claudes_journal` standalone repo.
+
+**Hook Matcher Pattern (REC-02):**
+All PreToolUse/PostToolUse hook entries in CAST agent definitions already use the `matcher` field as an equivalent pre-filter to the deprecated `if` field. No migration needed.
+
+**Trail of Bits Security Skills:**
+Install security audit skills via `/plugin marketplace add trailofbits/skills`. Integrated with `security` agent for enhanced vulnerability scanning. Requires Claude Code v2.1.118+.
+
+**Managed Agents & Forked Subagents (REC-04):**
+Parallel local agent dispatch via `cast-managed-agent.sh --fork` exports `CLAUDE_CODE_FORK_SUBAGENT=1` for worktree-free parallel work. Managed Agents preferred for long-running autonomously-executed tasks.
+
+**Rate Limits API (REC-05):**
+`cast-rate-check.py` snapshots `cast.db` `rate_limit_snapshots` table on SessionStart, capturing Anthropic API rate limit headroom. Surfaced in `morning-briefing` output to prevent surprise throttling.
+
+**PreCompact Guard Block (REC-10):**
+`/compact` now blocks when the current git repository has staged or unstaged changes. Gracefully passes through outside git worktrees. Prevents accidental context loss mid-work.
+
+**Agent initialPrompt Frontmatter (REC-08):**
+`morning-briefing` and `standup-writer` agents auto-load context from agent definition `initialPrompt` field on first turn, reducing cold-start latency and improving continuity.
+
+**Journal Continuity:**
+SessionStart hook reads the latest dated journal entry from Claude's Journal (cast-claudes_journal standalone repo) and injects it as a SessionStart banner. Enables context carryover from prior day without explicit carry-forward.

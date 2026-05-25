@@ -1,5 +1,14 @@
 # CHANGELOG
 
+All notable changes to CAST are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+## [Unreleased]
+
+### Added
+<!-- Add new unreleased changes here -->
+
+---
+
 ## [7.3] — 2026-05-19 — Hook Safety & Observability Hardening
 
 **Strategic focus:** Agent protocol reliability — enforce Handoff block contracts in multi-agent chains, prevent stale stash corruption in push workflow, and route API failures to dedicated observability table.
@@ -152,7 +161,7 @@
 
 ---
 
-## [Unreleased] — Post 2026-04-16 Tactical Audit
+## [6.0-patch] — 2026-04-16 — Tactical Audit Follow-up
 
 ### Security
 - Fixed SESSION_ID SQL injection in cast-session-end.sh (HIGH)
