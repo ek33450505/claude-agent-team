@@ -26,6 +26,7 @@ ALLOWED_TABLES = {
     'injection_log',
     'pane_bindings',
     'parry_guard_events',
+    'memory_consolidation_runs',
     'plan_sessions',
     'quality_gates',
     'rate_limit_snapshots',

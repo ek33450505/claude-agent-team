@@ -1,0 +1,5 @@
+{"type":"user","message":{"content":"I prefer tabs over spaces for indentation"}}
+{"type":"assistant","message":{"content":"Noted, I'll use tabs for indentation going forward."}}
+{"type":"user","message":{"content":"from now on always use tabs in shell scripts too"}}
+{"type":"assistant","message":{"content":"Understood, tabs in all shell scripts."}}
+{"type":"user","message":{"content":"I like the clean look of tab-indented code"}}

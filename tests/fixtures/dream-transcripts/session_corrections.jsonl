@@ -1,0 +1,5 @@
+{"type":"user","message":{"content":"don't mock the database in tests"}}
+{"type":"assistant","message":{"content":"Understood, I'll use a real DB."}}
+{"type":"user","message":{"content":"actually I meant use a real SQLite file, not an in-memory DB"}}
+{"type":"assistant","message":{"content":"Got it, I'll use a file-backed SQLite for all tests."}}
+{"type":"user","message":{"content":"correct, that's what I want"}}

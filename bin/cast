@@ -786,6 +786,7 @@ _cmd_memory() {
     forget)   _memory_forget "$@" ;;
     export)   _memory_export "$@" ;;
     review)   _memory_review "$@" ;;
+    dream)    _memory_dream "$@" ;;
     --help|-h)
       cat <<USAGE
 Usage: cast memory <subcommand> [args]
@@ -798,12 +799,39 @@ Usage: cast memory <subcommand> [args]
   forget <id>
   export
   review            [--list] [--auto-promote]   Pending memory review TUI
+  dream             [flags...]                  Run markdown memory consolidation
+  dream review      [--project-id <id>]         List pending dream output dirs
+  dream promote     --run-id <id> [--force]     Promote a dream output to canonical
 USAGE
       ;;
     *)
       _error "Unknown memory subcommand: $subcmd"
-      printf "  Use: cast memory search|list|verify|show|delete|forget|export|review\n" >&2
+      printf "  Use: cast memory search|list|verify|show|delete|forget|export|review|dream\n" >&2
       return 1
+      ;;
+  esac
+}
+
+# ── Subcommand: memory dream ──────────────────────────────────────────────────
+_memory_dream() {
+  local dream_subcmd="${1:-}"
+
+  case "$dream_subcmd" in
+    review)
+      shift
+      python3 ~/.claude/scripts/cast-memory-dream-review.py "$@"
+      ;;
+    promote)
+      shift
+      python3 ~/.claude/scripts/cast-memory-dream-promote.py "$@"
+      ;;
+    --help|-h)
+      python3 ~/.claude/scripts/cast-memory-dream.py --help
+      ;;
+    *)
+      # No recognized sub-subcommand: forward all args to cast-memory-dream.py
+      # (handles --dry-run, --project-id, --instructions, etc.)
+      python3 ~/.claude/scripts/cast-memory-dream.py "$@"
       ;;
   esac
 }
