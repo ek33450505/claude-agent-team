@@ -96,34 +96,23 @@ print(d['memory_files_read'])
 # ──────────────────────────────────────────────────────────────────────────────
 @test "no canonical mutation: fixture memory .md files are byte-identical before and after full run" {
     local mem_dir="$BATS_TEST_TMPDIR/projects/$TEST_PROJECT_ID/memory"
+    local before_file="$BATS_TEST_TMPDIR/sha-before.txt"
+    local after_file="$BATS_TEST_TMPDIR/sha-after.txt"
 
-    # Compute SHA256 of each .md file before the run (exclude _dream-output-* dirs)
-    declare -A sha_before
-    for f in "$mem_dir"/*.md; do
-        [ -f "$f" ] || continue
-        sha_before["$(basename "$f")"]=$(shasum -a 256 "$f" | awk '{print $1}')
-    done
+    # Capture sorted SHA-256 of every .md file in the canonical memory dir.
+    # Excludes _dream-output-* subdirs because the glob doesn't recurse.
+    ( cd "$mem_dir" && shasum -a 256 *.md 2>/dev/null | sort ) > "$before_file"
 
-    # Run full (non-dry-run) consolidation
     run python3 "$DREAM_SCRIPT" \
         --project-id "$TEST_PROJECT_ID" \
         --transcripts-since "2026-05-01"
 
     assert_success
 
-    # Recompute SHAs and compare
-    local all_match=1
-    for fname in "${!sha_before[@]}"; do
-        fpath="$mem_dir/$fname"
-        [ -f "$fpath" ] || { all_match=0; break; }
-        sha_after=$(shasum -a 256 "$fpath" | awk '{print $1}')
-        if [ "${sha_before[$fname]}" != "$sha_after" ]; then
-            echo "SHA mismatch: $fname" >&2
-            all_match=0
-        fi
-    done
+    ( cd "$mem_dir" && shasum -a 256 *.md 2>/dev/null | sort ) > "$after_file"
 
-    [ "$all_match" -eq 1 ]
+    # Test passes iff before and after are byte-identical.
+    diff "$before_file" "$after_file"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
