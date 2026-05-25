@@ -11,7 +11,7 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-> CAST is a production control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->31<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
+> CAST is a production control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->32<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
 
 **[CAST Framework](https://castframework.dev)**
 
@@ -129,6 +129,18 @@ Every CAST operation follows a four-stage flow: (1) **hook validation** — pre-
 </p>
 
 ---
+
+## Recent Capabilities (v7.2)
+
+**`cast memory dream` — markdown-layer consolidation** — a Python stdlib 4-phase consolidator over `~/.claude/projects/<id>/memory/*.md` files that mirrors the safety properties of Anthropic's Dreams API (`dreaming-2026-04-21` beta). Operates as a sibling to `cast-memory-consolidate.py` (which handles the cast.db embedding layer).
+
+- **4 phases** — Orient → Gather Signal (targeted grep over recent session JSONL transcripts) → Consolidate (relative-date normalization, stale-reference drop, contradiction routing) → Prune & Index (rebuild MEMORY.md ≤200 lines).
+- **Input never modified** — output written to `memory/_dream-output-<isoTs>/`. Promotion to canonical is a separate, explicit step (`cast memory dream promote --run-id <id>`).
+- **SHA256-preconditioned promote** — atomic `os.replace()` writes only when the canonical file's current SHA matches the pre-dream SHA captured in `_dream-manifest.json`. Mismatches are reported in `promotion_conflicts` and skipped.
+- **Lifecycle audit** — every run lands a row in the new `memory_consolidation_runs` table (`pending` → `running` → `completed` / `failed` / `canceled`). `cast memory dream review` lists pending and partial runs; `.promoted` sentinel marks fully-promoted, `.partial` marks partial-success retryable.
+- **Flag-for-review contradiction default** — when a transcript signal contradicts existing memory, the conflict lands in `_review_needed.md` for human resolution. Latest-wins is opt-in via `--contradiction-policy latest-wins`. Survey of mem0/Letta/dream-skill confirmed all three default to silent latest-wins, which CAST treats as the unsafe default.
+- **Safety guards** — `--project-id` realpath containment check, `CLAUDE_PROJECTS_DIR` env-var sanitization with `isdir` guard + stderr warning, 1MB per-line cap on JSONL parse to prevent OOM, hard `_dream-output-` invariant before any write.
+- **7 BATS tests** — migration idempotency, output isolation, no canonical mutation (SHA before/after), DB row lifecycle, cancel semantics, SHA precondition on promote.
 
 ## Recent Capabilities (v7.1)
 
