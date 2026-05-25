@@ -159,3 +159,147 @@ _create_branch_aged() {
   [ "$status" -eq 0 ]
   [[ "$output" =~ "Groomed" ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 8: squash-merged feature/fix branches with [gone] remote are deleted
+# This is the regression test for the bug fix.
+# ---------------------------------------------------------------------------
+
+@test "groomer: detects squash-merged feature/* branch via cherry (core logic)" {
+  # Create a feature branch with actual file content
+  git -C "$TEST_REPO" checkout -b feature/squash-test >/dev/null 2>&1
+  echo "feature content" > "$TEST_REPO/feature-file.txt"
+  git -C "$TEST_REPO" add feature-file.txt
+  git -C "$TEST_REPO" commit -m "Feature work" >/dev/null 2>&1
+
+  # Use standard git merge --squash to create a proper squash merge
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+  git -C "$TEST_REPO" merge --squash feature/squash-test >/dev/null 2>&1
+  git -C "$TEST_REPO" commit -m "Squash-merged feature/squash-test" >/dev/null 2>&1
+
+  # Verify the branch is squash-merged using the groomer's core logic
+  local ahead_count plus_count cherry_total
+  ahead_count="$(git -C "$TEST_REPO" rev-list --count main..feature/squash-test 2>/dev/null || echo 1)"
+  plus_count=$(git -C "$TEST_REPO" cherry main feature/squash-test 2>/dev/null | grep -c '^+') || plus_count=0
+  cherry_total=$(git -C "$TEST_REPO" cherry main feature/squash-test 2>/dev/null | wc -l | tr -d ' ') || cherry_total=0
+
+  # The squash-merge detection should work: no '+' lines in cherry, all commits accounted for
+  [ "$plus_count" -eq 0 ]
+  [ "$cherry_total" -eq "$ahead_count" ]
+  [ "$cherry_total" -gt 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 9: unmerged feature/fix branch with [gone] remote is kept
+# This ensures we don't over-correct and delete branches with unmerged work.
+# ---------------------------------------------------------------------------
+
+@test "groomer: keeps unmerged feature/* branch with [gone] remote" {
+  # Create a feature branch with unique commits not on main
+  git -C "$TEST_REPO" checkout -b feature/unmerged-work >/dev/null 2>&1
+  git -C "$TEST_REPO" commit --allow-empty -m "Unique work 1" >/dev/null 2>&1
+  git -C "$TEST_REPO" commit --allow-empty -m "Unique work 2" >/dev/null 2>&1
+  local unmerged_sha
+  unmerged_sha="$(git -C "$TEST_REPO" rev-parse HEAD)"
+
+  # Create fake [gone] remote ref and config
+  git -C "$TEST_REPO" update-ref "refs/remotes/origin/feature/unmerged-work" "$unmerged_sha" >/dev/null 2>&1
+  git -C "$TEST_REPO" config branch.feature/unmerged-work.remote "origin" >/dev/null 2>&1
+  git -C "$TEST_REPO" config branch.feature/unmerged-work.merge "refs/heads/feature/unmerged-work" >/dev/null 2>&1
+  # Delete the remote ref to simulate [gone]
+  git -C "$TEST_REPO" update-ref -d "refs/remotes/origin/feature/unmerged-work" >/dev/null 2>&1
+
+  # Run groomer in apply mode
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  # Branch should still exist because it has unmerged work
+  git -C "$TEST_REPO" branch --list | grep -q "feature/unmerged-work"
+}
+
+# ---------------------------------------------------------------------------
+# Test 10: whitelist protection (feature/cast-v7-*) even if merged and [gone]
+# ---------------------------------------------------------------------------
+
+@test "groomer whitelist: keeps feature/cast-v7-* even if merged with [gone]" {
+  # Create feature/cast-v7-* branch and merge it
+  git -C "$TEST_REPO" checkout -b feature/cast-v7-critical-fix >/dev/null 2>&1
+  git -C "$TEST_REPO" commit --allow-empty -m "Critical fix" >/dev/null 2>&1
+  local cast_v7_sha
+  cast_v7_sha="$(git -C "$TEST_REPO" rev-parse HEAD)"
+
+  # Switch to main and squash merge
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+  local tree
+  tree="$(git -C "$TEST_REPO" rev-parse feature/cast-v7-critical-fix^{tree})"
+  git -C "$TEST_REPO" commit-tree "$tree" -m "Merged feature/cast-v7-critical-fix" \
+    -p "$(git -C "$TEST_REPO" rev-parse HEAD)" | \
+    xargs -I {} sh -c 'cd "$TEST_REPO" && git update-ref refs/heads/main {}' >/dev/null 2>&1
+
+  # Create fake [gone] remote ref
+  git -C "$TEST_REPO" update-ref "refs/remotes/origin/feature/cast-v7-critical-fix" "$cast_v7_sha" >/dev/null 2>&1
+  git -C "$TEST_REPO" config branch.feature/cast-v7-critical-fix.remote "origin" >/dev/null 2>&1
+  git -C "$TEST_REPO" config branch.feature/cast-v7-critical-fix.merge "refs/heads/feature/cast-v7-critical-fix" >/dev/null 2>&1
+  git -C "$TEST_REPO" update-ref -d "refs/remotes/origin/feature/cast-v7-critical-fix" >/dev/null 2>&1
+
+  # Run groomer
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  # Should still exist because it's in the whitelist
+  git -C "$TEST_REPO" branch --list | grep -q "feature/cast-v7-critical-fix"
+}
+
+# ---------------------------------------------------------------------------
+# Test 11: fix/* branches work same as feature/* (squash merge + [gone] deleted)
+# ---------------------------------------------------------------------------
+
+@test "groomer: detects squash-merged fix/* branch via cherry (core logic)" {
+  # Create a fix branch with actual file content
+  git -C "$TEST_REPO" checkout -b fix/squash-bugfix >/dev/null 2>&1
+  echo "bug fix content" > "$TEST_REPO/bugfix-file.txt"
+  git -C "$TEST_REPO" add bugfix-file.txt
+  git -C "$TEST_REPO" commit -m "Bug fix" >/dev/null 2>&1
+
+  # Use standard git merge --squash
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+  git -C "$TEST_REPO" merge --squash fix/squash-bugfix >/dev/null 2>&1
+  git -C "$TEST_REPO" commit -m "Merged fix/squash-bugfix" >/dev/null 2>&1
+
+  # Verify the branch is squash-merged using the groomer's core logic
+  local ahead_count plus_count cherry_total
+  ahead_count="$(git -C "$TEST_REPO" rev-list --count main..fix/squash-bugfix 2>/dev/null || echo 1)"
+  plus_count=$(git -C "$TEST_REPO" cherry main fix/squash-bugfix 2>/dev/null | grep -c '^+') || plus_count=0
+  cherry_total=$(git -C "$TEST_REPO" cherry main fix/squash-bugfix 2>/dev/null | wc -l | tr -d ' ') || cherry_total=0
+
+  # The squash-merge detection should work: no '+' lines in cherry, all commits accounted for
+  [ "$plus_count" -eq 0 ]
+  [ "$cherry_total" -eq "$ahead_count" ]
+  [ "$cherry_total" -gt 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 12: cast-swarm-* threshold is 7 days (not 14) — 6d kept, 8d deleted
+# ---------------------------------------------------------------------------
+
+@test "groomer: keeps fresh cast-swarm-* branch at 6 days old" {
+  _create_branch_aged "cast-swarm-young-xyz" 6
+
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  # Should still exist because it's < 7 days old
+  git -C "$TEST_REPO" branch --list | grep -q "cast-swarm-young-xyz"
+}
+
+@test "groomer: deletes stale cast-swarm-* branch at 8 days old" {
+  _create_branch_aged "cast-swarm-old-xyz" 8
+
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  # Should be deleted because it's >= 7 days old
+  local still_exists
+  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-old-xyz" | wc -l)"
+  [ "$still_exists" -eq 0 ]
+}

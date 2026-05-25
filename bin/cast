@@ -2144,7 +2144,7 @@ Usage: cast clean [--apply] [--worktrees]
   --worktrees    Also prune dead worktree directories
 
 Branch deletion policy:
-  cast-swarm-*    : last commit > 14 days ago AND no open PR
+  cast-swarm-*    : last commit > 7 days ago AND no open PR
   worktree-agent-*: last commit > 7 days ago
   feature/* fix/* : merged into main AND remote tracking ref is [gone]
 
