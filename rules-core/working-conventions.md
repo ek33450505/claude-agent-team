@@ -96,7 +96,7 @@ When running more than one terminal on the same repo simultaneously:
 ## Branch & Worktree Hygiene
 
 - **Grooming policy:**
-  - `cast-swarm-*` branches older than 14 days with no open PR are candidates for deletion.
+  - `cast-swarm-*` branches older than 7 days with no open PR are candidates for deletion.
   - `worktree-agent-*` branches older than 7 days are candidates for deletion.
   - `feature/*` and `fix/*` branches that are merged into `main` AND whose remote tracking ref is `[gone]` are candidates for deletion.
 - **Hard whitelist (never deleted):** `main`, `feat/*`, `feature/cast-v7-*`, any branch currently checked out in a worktree.

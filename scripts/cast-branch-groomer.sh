@@ -5,7 +5,7 @@
 # Use --apply to actually delete.
 #
 # Branch deletion policy:
-#   cast-swarm-*    : committerdate < now-14d AND no open PR
+#   cast-swarm-*    : committerdate < now-7d AND no open PR
 #   worktree-agent-*: committerdate < now-7d
 #   feature/* fix/* : merged into main AND remote tracking ref is gone ([gone])
 #
@@ -132,7 +132,7 @@ _delete_branch() {
   fi
 }
 
-# ── Process cast-swarm-* branches (>14d, no open PR) ─────────────────────
+# ── Process cast-swarm-* branches (>7d, no open PR) ──────────────────────
 while IFS= read -r branch; do
   branch="${branch#  }"  # strip leading whitespace
   branch="${branch# }"
@@ -145,7 +145,7 @@ while IFS= read -r branch; do
   _is_whitelisted "$branch" && continue
   _has_open_pr "$branch" && { printf '[groomer] Keeping %s — has open PR\n' "$branch"; continue; }
   local_age=$(_days_since_commit "$branch")
-  if [[ "$local_age" -ge 14 ]]; then
+  if [[ "$local_age" -ge 7 ]]; then
     _delete_branch "$branch"
     DELETED_SWARM=$((DELETED_SWARM + 1))
   fi
@@ -172,10 +172,27 @@ while IFS= read -r vv_line; do
     [[ -z "$branch" ]] && continue
     if [[ "$branch" =~ ^feature/ ]] || [[ "$branch" =~ ^fix/ ]]; then
       _is_whitelisted "$branch" && continue
-      # Check if it's merged into main
-      if git merge-base --is-ancestor "refs/heads/$branch" "refs/heads/main" 2>/dev/null; then
+
+      # Two-stage merge check:
+      # (1) ahead_count == 0  → fully merged via ff/true merge
+      # (2) ahead_count > 0 + git cherry shows all commits content-merged → squash merge
+      local ahead_count plus_count cherry_total
+      ahead_count="$(git rev-list --count main.."$branch" 2>/dev/null || echo 1)"
+
+      if [[ "$ahead_count" -eq 0 ]]; then
         _delete_branch "$branch"
         DELETED_MERGED=$((DELETED_MERGED + 1))
+      else
+        # cherry uses patch-id: '+' = unmerged content, '-' = content-equivalent commit in main
+        plus_count=$(git cherry main "$branch" 2>/dev/null | grep -c '^+') || plus_count=0
+        cherry_total=$(git cherry main "$branch" 2>/dev/null | wc -l | tr -d ' ') || cherry_total=0
+        # Delete only if: zero '+' lines AND cherry accounted for every ahead commit
+        # (cherry_total == ahead_count guard prevents deletion of branches with only
+        # empty commits, which produce no cherry output but rev-list counts them)
+        if [[ "$plus_count" -eq 0 ]] && [[ "$cherry_total" -gt 0 ]] && [[ "$cherry_total" -eq "$ahead_count" ]]; then
+          _delete_branch "$branch"
+          DELETED_MERGED=$((DELETED_MERGED + 1))
+        fi
       fi
     fi
   fi
