@@ -42,6 +42,17 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "id": "cast-tilde-write-guard",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-tilde-write-guard.sh",
+            "timeout": 2
+          }
+        ]
       }
     ]
   }

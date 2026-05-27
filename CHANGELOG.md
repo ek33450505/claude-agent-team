@@ -9,6 +9,20 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ---
 
+## [7.3.1] — 2026-05-26 — Literal-tilde Write Guard
+
+**Strategic focus:** Mitigate an upstream Claude Code plan-mode harness bug that creates phantom literal-`~` directories under cwd when the harness joins a `~/.claude/plans/<name>.md` Plan File Info path with cwd before model dispatch (instead of expanding `~` to `$HOME` first).
+
+### Added
+
+- **`cast-tilde-write-guard.sh` PreToolUse hook** — blocks `Write`/`Edit` calls whose `tool_input.file_path` contains a literal `~` directory segment (e.g. `<cwd>/~/.claude/plans/foo.md`) and emits a corrective `$HOME`-prefixed path in stderr. Wired in `managed-settings.d/25-hooks-security.json` via the proven `matcher: "Write|Edit"` pattern (the bare `if: "Write|Edit"` form did NOT fire on plan-mode Write during validation — same pattern that works for `cast-stat-claim-guard`). Logs incidents to `~/.claude/logs/tilde-guard.log`. 7 BATS cases (`tests/cast-tilde-write-guard.bats`).
+
+### Internal
+
+- Local incident sweep (2026-05-26) found 26 phantom literal-`~` directories filesystem-wide and 7 trapped plan files (recovered to `~/.claude/plans/_recovered-tilde-bug-2026-05-26/`). Bug correlates with random-three-word plan filenames — older date-prefixed plans landed correctly, suggesting a concurrent upstream change in plan naming and path resolution. Upstream report pending at `github.com/anthropics/claude-code`.
+
+---
+
 ## [7.3] — 2026-05-19 — Hook Safety & Observability Hardening
 
 **Strategic focus:** Agent protocol reliability — enforce Handoff block contracts in multi-agent chains, prevent stale stash corruption in push workflow, and route API failures to dedicated observability table.
