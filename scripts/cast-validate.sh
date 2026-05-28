@@ -113,12 +113,16 @@ total = 0
 for fname in sorted(os.listdir(agents_dir)):
     if not fname.endswith(".md"):
         continue
-    total += 1
     fpath = os.path.join(agents_dir, fname)
     try:
         with open(fpath) as f:
             lines = [f.readline() for _ in range(20)]
         head = "".join(lines)
+        # Skip files that don't have YAML frontmatter (first non-empty line != "---")
+        first_nonempty = next((line.strip() for line in lines if line.strip()), "")
+        if first_nonempty != "---":
+            continue
+        total += 1
         missing = [field for field in required_fields if field not in head]
         if missing:
             bad.append(f"{fname}(missing: {', '.join(missing)})")
