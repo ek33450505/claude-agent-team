@@ -2,14 +2,18 @@
 """
 cast-db-backup.py — WAL-safe SQLite backup for cast.db
 
-Uses Python's sqlite3.backup() API for a consistent, WAL-safe database
-snapshot. Complements cast-memory-backup.sh (tar + GitHub release backup).
+Uses Python's stdlib sqlite3.Connection.backup() API for a consistent,
+WAL-safe snapshot. Filename: cast-db-YYYY-MM-DD.db (one per day, overwrites).
+Retention: 7 daily + 4 weekly (ISO-week anchor = newest file from each week).
 
-Behavior:
-  1. Connect to ~/.claude/cast.db (or CAST_DB_PATH env override)
-  2. Create backup at ~/.claude/backups/cast-db-YYYY-MM-DD.db
-  3. Enforce retention: keep 7 daily backups, delete older ones
-  4. Print JSON status report
+Environment variables:
+  CAST_DB_PATH   — path to source DB (default: ~/.claude/cast.db)
+  CAST_BACKUP_DIR — directory for backups (default: ~/.claude/backups)
+
+JSON output (single line to stdout):
+  Success: {"backup_path": "/abs/path/cast-db-YYYY-MM-DD.db",
+            "size_bytes": N, "retained": N, "pruned": N}
+  Failure: {"backup_path": null, "error": "reason"}
 
 Exit codes: 0=success, 1=error
 """
@@ -18,110 +22,151 @@ import os
 import sys
 import json
 import glob
-from datetime import datetime, timedelta
+import logging
+from datetime import date
 from pathlib import Path
 
 
-def get_db_path():
-    """Resolve cast.db path from env or default."""
-    return os.path.expanduser(
-        os.environ.get('CAST_DB_PATH', '~/.claude/cast.db')
-    )
+def _resolve_paths():
+    """Resolve DB source, backup dir, and log paths from env or defaults."""
+    db_src = Path(os.environ.get("CAST_DB_PATH", "~/.claude/cast.db")).expanduser()
+    backup_dir = Path(os.environ.get("CAST_BACKUP_DIR", "~/.claude/backups")).expanduser()
+    log_path = Path("~/.claude/logs/cast-db-backup.log").expanduser()
+    return db_src, backup_dir, log_path
 
 
-def get_backup_dir():
-    """Resolve backup directory."""
-    return os.path.expanduser('~/.claude/backups')
+def _setup_logging(log_path: Path) -> logging.Logger:
+    """Configure file-based logger. Creates log dir if needed."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("cast-db-backup")
+    logger.setLevel(logging.ERROR)
+    if not logger.handlers:
+        handler = logging.FileHandler(str(log_path))
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+    return logger
 
 
-def create_backup(db_path, backup_dir):
-    """Perform WAL-safe backup using sqlite3.backup() API."""
-    today = datetime.now().strftime('%Y-%m-%d')
-    backup_path = os.path.join(backup_dir, f'cast-db-{today}.db')
+def _do_backup(db_src: Path, backup_dir: Path) -> Path:
+    """Perform WAL-safe backup via sqlite3.Connection.backup(). Returns dest path."""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    today_str = date.today().strftime("%Y-%m-%d")
+    dest_path = backup_dir / f"cast-db-{today_str}.db"
 
-    # Create backup directory if needed
-    os.makedirs(backup_dir, exist_ok=True)
+    with sqlite3.connect(str(db_src)) as src:
+        with sqlite3.connect(str(dest_path)) as dst:
+            src.backup(dst)
 
-    # Connect to source database
-    src = sqlite3.connect(db_path)
-    dst = sqlite3.connect(backup_path)
+    return dest_path
 
+
+def _parse_date_from_filename(filepath: Path):
+    """Extract date from cast-db-YYYY-MM-DD.db filename. Returns date or None."""
+    stem = filepath.stem  # cast-db-YYYY-MM-DD
     try:
-        src.backup(dst)
-        dst.close()
-        src.close()
-    except Exception as e:
-        dst.close()
-        src.close()
-        # Clean up partial backup
-        if os.path.exists(backup_path):
-            os.remove(backup_path)
-        raise e
-
-    return backup_path
+        date_part = stem[len("cast-db-"):]  # YYYY-MM-DD
+        return date.fromisoformat(date_part)
+    except (ValueError, IndexError):
+        return None
 
 
-def enforce_retention(backup_dir, keep_days=7):
-    """Keep only the most recent `keep_days` backups, delete older ones."""
-    pattern = os.path.join(backup_dir, 'cast-db-*.db')
-    backups = sorted(glob.glob(pattern))
+def _enforce_retention(backup_dir: Path, keep_daily: int = 7, keep_weekly: int = 4):
+    """
+    Retention: keep 7 most-recent dailies + up to 4 weekly anchors.
 
+    Weekly anchor = the newest file from each ISO week number that is NOT
+    already represented in the 7 dailies, across the 4 most-recent distinct
+    ISO weeks outside the daily window.
+
+    Returns (retained_count, pruned_count).
+    """
+    pattern = str(backup_dir / "cast-db-*.db")
+    all_files = sorted(glob.glob(pattern))  # ascending by ISO date (alphabetical = chronological)
+
+    if len(all_files) <= keep_daily:
+        return len(all_files), 0
+
+    # Files to always keep: last `keep_daily` by sort order
+    daily_window = set(all_files[-keep_daily:])
+
+    # Older files — candidate for weekly anchor promotion
+    older_files = all_files[:-keep_daily]
+
+    # Collect ISO week numbers already represented in daily window
+    daily_weeks = set()
+    for f in daily_window:
+        d = _parse_date_from_filename(Path(f))
+        if d:
+            daily_weeks.add(d.isocalendar()[1])  # ISO week number
+
+    # Build weekly anchor set: newest file from each distinct ISO week
+    # not already in daily_weeks, up to keep_weekly distinct weeks
+    week_to_newest: dict[int, str] = {}
+    for f in older_files:
+        d = _parse_date_from_filename(Path(f))
+        if d is None:
+            continue
+        iso_week = d.isocalendar()[1]
+        if iso_week in daily_weeks:
+            continue
+        # newer files come later in sorted order — keep overwriting to get newest
+        week_to_newest[iso_week] = f
+
+    # Take the 4 most-recent distinct weeks (by ISO week number descending)
+    sorted_weeks = sorted(week_to_newest.keys(), reverse=True)[:keep_weekly]
+    weekly_anchor_set = {week_to_newest[w] for w in sorted_weeks}
+
+    keep_set = daily_window | weekly_anchor_set
+
+    _logger = logging.getLogger("cast-db-backup")
     pruned = 0
-    if len(backups) > keep_days:
-        to_remove = backups[:len(backups) - keep_days]
-        for old_backup in to_remove:
+    for f in all_files:
+        if f not in keep_set:
             try:
-                os.remove(old_backup)
+                os.remove(f)
                 pruned += 1
-            except OSError:
-                pass
+            except OSError as e:
+                _logger.warning(f"failed to prune {f}: {e}")
 
-    retained = len(backups) - pruned
+    retained = len(keep_set)
     return retained, pruned
 
 
 def main():
-    db_path = get_db_path()
-    backup_dir = get_backup_dir()
+    db_src, backup_dir, log_path = _resolve_paths()
+    logger = _setup_logging(log_path)
 
-    # Verify source database exists
-    if not os.path.exists(db_path):
-        print(json.dumps({
-            'error': f'Source database not found: {db_path}',
-            'backup_path': None,
-            'size_bytes': 0,
-            'retained': 0,
-            'pruned': 0
-        }))
+    def _fail(msg: str) -> None:
+        payload = json.dumps({"backup_path": None, "error": msg})
+        print(payload)
+        logger.error(msg)
         sys.exit(1)
+
+    # Guard: source must exist
+    if not db_src.exists():
+        _fail(f"source not found: {db_src}")
 
     try:
-        # Perform backup
-        backup_path = create_backup(db_path, backup_dir)
-        size_bytes = os.path.getsize(backup_path)
-
-        # Enforce retention
-        retained, pruned = enforce_retention(backup_dir)
-
-        result = {
-            'backup_path': backup_path,
-            'size_bytes': size_bytes,
-            'retained': retained,
-            'pruned': pruned
-        }
-        print(json.dumps(result))
-        sys.exit(0)
-
+        dest_path = _do_backup(db_src, backup_dir)
     except Exception as e:
-        print(json.dumps({
-            'error': str(e),
-            'backup_path': None,
-            'size_bytes': 0,
-            'retained': 0,
-            'pruned': 0
-        }))
-        sys.exit(1)
+        _fail(f"backup failed: {e}")
+        return  # unreachable — keeps type checker happy
+
+    try:
+        size_bytes = dest_path.stat().st_size
+        retained, pruned = _enforce_retention(backup_dir)
+    except Exception as e:
+        _fail(f"post-backup error: {e}")
+        return
+
+    print(json.dumps({
+        "backup_path": str(dest_path),
+        "size_bytes": size_bytes,
+        "retained": retained,
+        "pruned": pruned,
+    }))
+    sys.exit(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
