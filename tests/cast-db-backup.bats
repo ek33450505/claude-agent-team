@@ -111,3 +111,25 @@ assert 'error' in data, 'expected error field'
 assert data['backup_path'] is None, 'backup_path should be None on error'
 "
 }
+
+@test "cast-db-backup.py: same-day re-run is idempotent (one file, not two)" {
+  # First run
+  run python3 "$CAST_DB_BACKUP_PY"
+  assert_success
+
+  FIRST_PATH=$(echo "$output" | python3 -c "import sys,json; print(json.load(sys.stdin)['backup_path'])")
+
+  # Second run same day
+  run python3 "$CAST_DB_BACKUP_PY"
+  assert_success
+
+  SECOND_PATH=$(echo "$output" | python3 -c "import sys,json; print(json.load(sys.stdin)['backup_path'])")
+
+  # Paths must be identical (same date → same filename)
+  [ "$FIRST_PATH" = "$SECOND_PATH" ]
+
+  # Only one backup file should exist for today
+  TODAY=$(date +%Y-%m-%d)
+  COUNT=$(ls "$TEST_BACKUP_DIR"/cast-db-${TODAY}.db 2>/dev/null | wc -l | tr -d ' ')
+  [ "$COUNT" -eq 1 ]
+}
