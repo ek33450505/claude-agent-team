@@ -74,11 +74,11 @@ teardown() {
   assert_failure
 }
 
-@test "install: crontab entry does NOT contain personal absolute path /Users/edkubiak" {
+@test "install: crontab entry does NOT contain any hardcoded /Users/ path" {
   run bash "$CRON_SH"
   assert_success
   assert [ -f "${HOME}/.stub-crontab" ]
-  run grep -F '/Users/edkubiak' "${HOME}/.stub-crontab"
+  run grep -E '/Users/[a-zA-Z]' "${HOME}/.stub-crontab"
   assert_failure
 }
 
@@ -130,10 +130,10 @@ teardown() {
   assert_output --partial '--exclude="cast.db"'
 }
 
-@test "pa-backup.sh: does not contain hardcoded /Users/edkubiak path" {
+@test "pa-backup.sh: does not contain any hardcoded /Users/ path" {
   run bash "$CRON_SH"
   assert_success
-  run grep -F '/Users/edkubiak' "${HOME}/.cast/cron/pa-backup.sh"
+  run grep -E '/Users/[a-zA-Z]' "${HOME}/.cast/cron/pa-backup.sh"
   # grep returns 1 when no match found — we want no match
   assert_failure
 }
@@ -149,10 +149,10 @@ teardown() {
 # Regression: tidy.sh uses ${HOME} not hardcoded path
 # ---------------------------------------------------------------------------
 
-@test "tidy.sh: uses \${HOME}/.local/bin/cast not hardcoded /Users/edkubiak" {
+@test "tidy.sh: uses \${HOME}/.local/bin/cast not any hardcoded /Users/ path" {
   run bash "$CRON_SH"
   assert_success
-  run grep -F '/Users/edkubiak' "${HOME}/.cast/cron/tidy.sh"
+  run grep -E '/Users/[a-zA-Z]' "${HOME}/.cast/cron/tidy.sh"
   assert_failure
 }
 
