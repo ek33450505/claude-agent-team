@@ -1,0 +1,14 @@
+# ruff.toml — Ruff linter configuration for CAST Python scripts.
+# Scoped to scripts/*.py; extends to all .py files by default.
+
+[lint]
+# audit Phase 4 debt: pre-existing violations in scripts/*.py as of 2026-06-01.
+# These rules are ignored to keep the gate green while catching new issues.
+# Revisit and fix the underlying code before removing entries here.
+#
+# E401 — Multiple imports on one line (cast_contract_runner.py)
+# E402 — Module level import not at top of file (cast_contract_runner.py)
+# E741 — Ambiguous variable name: `l` (cast-log-append.py or similar)
+# F401 — Unused imports (datetime, json, pathlib.Path, sqlite3, sys, uuid)
+# F841 — Local variable assigned but never used (`e`, `db_path`, `in_scope_files`)
+ignore = ["E401", "E402", "E741", "F401", "F841"]

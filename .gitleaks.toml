@@ -1,0 +1,34 @@
+# .gitleaks.toml — Gitleaks allowlist configuration for CAST.
+# Each [[allowlists]] entry suppresses a known false-positive finding.
+# Entries must include a comment explaining why the finding is safe.
+
+title = "CAST Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+# tests/cast-batch-dispatch.bats line 47:
+# ANTHROPIC_API_KEY="test-api-key-12345" — clearly a test fixture value
+# set in BATS setup() to satisfy env-var checks in the script under test.
+# Not a real key; committed 2026-04-25 in commit 383d993.
+description = "BATS test fixture fake API key — not a real credential"
+paths = ["tests/cast-batch-dispatch.bats"]
+regexTarget = "match"
+regexes = ["test-api-key-12345"]
+
+[[allowlists]]
+# tests/ci-pii-scan.bats — fake sk-ant keys used to verify scanner detection.
+# These are deliberately constructed test strings, not real credentials.
+description = "ci-pii-scan BATS fixture fake sk-ant keys for scanner self-test"
+paths = ["tests/ci-pii-scan.bats"]
+regexTarget = "line"
+regexes = ["sk-ant-"]
+
+[[allowlists]]
+# tests/cast-subagent-stop-hook-redaction.bats — fake keys used to test
+# the redaction hook. Lines are explicitly labeled as FAKE or test values.
+description = "Redaction hook BATS fixture fake keys — labeled as test values"
+paths = ["tests/cast-subagent-stop-hook-redaction.bats"]
+regexTarget = "line"
+regexes = ["sk-ant-"]

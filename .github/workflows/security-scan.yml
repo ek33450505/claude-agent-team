@@ -1,0 +1,60 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pii-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Run PII tree scan
+        run: bash scripts/ci-pii-scan.sh
+
+      - name: Verify scanner detects fakes (self-test)
+        run: bash scripts/ci-pii-scan.sh --self-test
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y shellcheck
+
+      - name: ShellCheck scripts
+        run: |
+          shellcheck --severity=error scripts/*.sh
+          shellcheck --severity=error .githooks/pre-commit
+          shellcheck --severity=error .githooks/pre-push
+          shellcheck --severity=error install.sh
+
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint Python scripts
+        run: ruff check scripts/*.py
