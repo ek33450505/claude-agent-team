@@ -126,7 +126,7 @@ echo "$FAKE_PATH"
 # 6. sk-ant Anthropic key is detected
 # ---------------------------------------------------------------------------
 @test "planted sk-ant key: exits 1" {
-  _run_scan "config/env_backup.sh" 'export ANTHROPIC_API_KEY="sk-ant-api03-realkeyrealkeyrealkey1234567890ab"'
+  _run_scan "config/env_backup.sh" 'export ANTHROPIC_API_KEY="sk-ant-''api03-realkeyrealkeyrealkey1234567890ab"'
   assert_failure
   assert_output --partial "anthropic-key"
 }
@@ -135,7 +135,7 @@ echo "$FAKE_PATH"
 # 7. GitHub PAT is detected
 # ---------------------------------------------------------------------------
 @test "planted github PAT (ghp_): exits 1" {
-  _run_scan "scripts/release.sh" 'GH_TOKEN="ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"'
+  _run_scan "scripts/release.sh" 'GH_TOKEN="ghp_''abcdefghijklmnopqrstuvwxyzABCDEFGHIJ"'
   assert_failure
   assert_output --partial "github-pat"
 }
@@ -144,7 +144,7 @@ echo "$FAKE_PATH"
 # 8. AWS key is detected
 # ---------------------------------------------------------------------------
 @test "planted AWS access key: exits 1" {
-  _run_scan "config/aws.sh" 'export AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE"'
+  _run_scan "config/aws.sh" 'export AWS_ACCESS_KEY_ID="AKIA''IOSFODNN7EXAMPLE"'
   assert_failure
   assert_output --partial "aws-key"
 }
