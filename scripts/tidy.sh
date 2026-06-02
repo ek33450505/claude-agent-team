@@ -1,5 +1,5 @@
-# TEMPLATE: Configure the paths below to match your directory structure.
 #!/usr/bin/env bash
+# TEMPLATE: Configure the paths below to match your directory structure.
 # ╔══════════════════════════════════════════════════════╗
 # ║  tidy.sh — Smart Home Directory Hygiene Script      ║
 # ║  Run manually or schedule with launchd/cron         ║
