@@ -7,7 +7,8 @@ bats_require_minimum_version 1.5.0
 load '../test_helper/bats-support/load'
 load '../test_helper/bats-assert/load'
 
-HOOK="$HOME/.claude/scripts/cast-headless-guard.sh"
+REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
+HOOK="$REPO_DIR/scripts/cast-headless-guard.sh"
 
 # ── Payload helpers ──────────────────────────────────────────────────────────
 

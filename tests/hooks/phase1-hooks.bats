@@ -8,8 +8,8 @@ load '../test_helper/bats-support/load'
 load '../test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
-SUBAGENT_START_HOOK="$HOME/.claude/scripts/cast-subagent-start-hook.sh"
-USER_PROMPT_HOOK="$HOME/.claude/scripts/cast-user-prompt-hook.sh"
+SUBAGENT_START_HOOK="$REPO_DIR/scripts/cast-subagent-start-hook.sh"
+USER_PROMPT_HOOK="$REPO_DIR/scripts/cast-user-prompt-hook.sh"
 
 # ── Payload helpers ──────────────────────────────────────────────────────────
 
