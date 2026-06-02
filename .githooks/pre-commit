@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # CAST pre-commit hook: regression lints + sync README stats
-# Blocks on regression lint failures; non-blocking on README update
+# Blocks on all lint failures (Lints 1–3 + hook-contract validation).
+# One-time bypass: prefix the commit command with CAST_SKIP_LINTS=1 to skip
+# Lints 1 and 2 (cold-start counter and SQL injection). This does NOT bypass
+# the orphan-script lint or hook-contract validation.
 
 set -euo pipefail
 
@@ -94,8 +97,22 @@ fi
 
 # Run all lints
 echo "[CAST pre-commit] Running regression lints..."
-_lint_python_cold_starts || true
-_lint_sql_injection || true
+
+if [[ "${CAST_SKIP_LINTS:-0}" == "1" ]]; then
+  echo "[CAST pre-commit] WARNING: CAST_SKIP_LINTS=1 — Lints 1 (cold-start) and 2 (SQL injection) skipped. This bypass is for one-time emergencies only." >&2
+else
+  lint_failed=0
+  _lint_python_cold_starts || lint_failed=1
+  _lint_sql_injection || lint_failed=1
+  if [[ "$lint_failed" -ne 0 ]]; then
+    echo ""
+    echo "ERROR [pre-commit]: One or more regression lints failed. See above for details."
+    echo "  To bypass for a one-time emergency: CAST_SKIP_LINTS=1 git commit ..."
+    echo "  CAST_SKIP_LINTS is NOT a permanent fix — address the lint violations."
+    exit 1
+  fi
+fi
+
 _lint_orphan_scripts || {
   echo "ERROR: Orphan script check failed. See above."
   exit 1
