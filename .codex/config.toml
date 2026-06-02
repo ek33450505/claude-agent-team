@@ -1,6 +1,0 @@
-[mcp_servers.cast-memory]
-args = ["~/Projects/personal/claude-agent-team/scripts/cast-mcp-memory-server.py"]
-command = "python3"
-
-[mcp_servers.cast-memory.env]
-CAST_DB_PATH = "~/.claude/cast.db"
