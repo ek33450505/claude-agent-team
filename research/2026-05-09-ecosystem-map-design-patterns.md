@@ -58,7 +58,7 @@ Adaptable pattern for CAST:
 ```markdown
 **New to CAST?** → [Quickstart](docs/quickstart.md) · [Concepts](docs/concepts.md) · [Agent Catalog](docs/agents.md)
 
-Already using CAST? → [Changelog](CHANGELOG.md) · [Roadmap](research/cast-v7-master-plan.md) · [Discord](...)
+Already using CAST? → [Changelog](CHANGELOG.md) · [Roadmap](research/roadmap.md) · [Discord](...)
 ```
 
 ### 4. Performance / Proof Block — ruff / uv pattern
@@ -73,7 +73,7 @@ Both Astral projects lead with a benchmark SVG (not a table). The image has dark
 ```
 
 ### 5. Testimonials / Social Proof — ruff pattern
-ruff embeds 3-4 attributed developer quotes near the top. For CAST this maps to: quotes from the Anthropic job thread, or from early community users once they exist. Skip until there's authentic copy.
+ruff embeds 3-4 attributed developer quotes near the top. For CAST this maps to: quotes from early community users once they exist. Skip until there's authentic copy.
 
 ---
 

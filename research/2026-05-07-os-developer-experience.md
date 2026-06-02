@@ -1,6 +1,6 @@
 # Open Source Developer Experience Audit — 2026-05-07
 
-**Scope:** CAST v6.0 at `~/Projects/personal/claude-agent-team`
+**Scope:** CAST v6.0 in the claude-agent-team repository
 **Auditor:** researcher agent
 **Context:** ~2000 clones per 14 days. Vision: zero-config, phenomenal open source Anthropic developer CLI framework. Current reality: install works, but value extraction requires deep orientation.
 
