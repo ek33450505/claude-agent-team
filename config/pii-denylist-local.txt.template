@@ -1,0 +1,21 @@
+# CAST local PII deny-list template
+#
+# Usage:
+#   Copy this file to ~/.claude/config/pii-denylist-local.txt and fill in
+#   your own work/personal identifiers. The pre-push gate reads that file
+#   before every push — patterns are never committed to the repo itself.
+#
+# Format:
+#   - One extended regular expression (ERE) per line
+#   - Lines beginning with # are comments and are ignored
+#   - Blank lines are ignored
+#   - Patterns are matched case-insensitively
+#   - Use ERE syntax: dots, pipes, brackets, +, ?, {n,m}, etc.
+#
+# Examples (commented out — replace with your own):
+#
+# your-employer-name
+# your-internal-project-codename
+# your-username
+# firstname\.lastname@company\.com
+# internal-tool-[0-9]+

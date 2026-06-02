@@ -10,6 +10,18 @@ cd "$REPO_ROOT"
 # Run ubuntu check (non-blocking; exits 0 if Docker is unavailable)
 bash "$REPO_ROOT/scripts/pre-push-ubuntu-check.sh" || true
 
+# PII / secret gate — fail fast before spending time on tests
+if [ "${CAST_SKIP_PII_CHECK:-0}" != "1" ]; then
+  echo "[CAST pre-push] Running PII/secret gate..."
+  if ! bash "$REPO_ROOT/scripts/pre-push-ci-check.sh"; then
+    echo "ERROR: PII/secret check failed. Fix the issues above and try again." >&2
+    echo "To skip this gate, set: CAST_SKIP_PII_CHECK=1 git push" >&2
+    exit 1
+  fi
+else
+  echo "[CAST pre-push] Skipping PII check (CAST_SKIP_PII_CHECK=1)" >&2
+fi
+
 # BATS regression gate
 if command -v bats &>/dev/null; then
   if [ "${CAST_SKIP_BATS_PUSH:-0}" != "1" ]; then
