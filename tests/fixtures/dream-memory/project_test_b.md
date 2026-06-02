@@ -4,7 +4,7 @@ description: Test project memory with stale path reference
 type: project
 verified_at: 2026-05-20
 ---
-Project configuration lives at /Users/edkubiak/nonexistent_file.txt for historical reasons.
+Project configuration lives at /Users/testuser/nonexistent_file.txt for historical reasons.
 
 **Why:** Stale path references should be detected and flagged during consolidation.
 

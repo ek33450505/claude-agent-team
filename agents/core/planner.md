@@ -28,13 +28,13 @@ Why: under context pressure, the prose tail is what gets truncated. Front-loadin
 ## Stack Context
 
 Projects you plan for span:
-- **Frontend:** React 18/19, Vite (TARUS, TARS-Lite, ses-viewer), CRA/react-scripts (erate-frontend, react-frontend)
+- **Frontend:** React 18/19 — Vite SPAs and CRA/react-scripts apps
 - **Backend:** Express 4/5, SQLite (better-sqlite3), Anthropic SDK (@anthropic-ai/sdk)
 - **UI Libraries:** Bootstrap 5, React-Bootstrap, MUI (Material UI), Lucide React, FontAwesome
 - **Data:** BigQuery (bq CLI), SQLite, react-data-table-component, TanStack Table v8
-- **TypeScript:** react-frontend uses CRA + TypeScript
-- **Testing:** Jest + RTL (SES-Wiki, CRA projects), no tests yet on Vite projects
-- **Legacy:** PowerSchool uses jQuery + DataTables (non-npm)
+- **TypeScript:** CRA + TypeScript and Vite + TypeScript projects
+- **Testing:** Jest + RTL on CRA projects, Vitest on Vite projects
+- **Legacy:** jQuery + DataTables apps (non-npm, vendor-hosted)
 
 ## Spec Mode vs Discovery Mode
 

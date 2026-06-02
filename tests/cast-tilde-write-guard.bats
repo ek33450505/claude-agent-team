@@ -39,7 +39,7 @@ teardown() {
 
 @test "file_path with /~/ segment → exit 2 and stderr contains BLOCKED and corrected path" {
   local payload
-  payload="$(make_payload "Write" "/Users/edkubiak/Desktop/~/.claude/plans/foo.md")"
+  payload="$(make_payload "Write" "/Users/testuser/Desktop/~/.claude/plans/foo.md")"
   run bash "$HOOK_SH" <<< "$payload"
   assert_failure
   [[ "$status" -eq 2 ]]
@@ -49,7 +49,7 @@ teardown() {
 
 @test "file_path ending in /~ (no trailing segment) → exit 2, BLOCKED, corrected path is exactly HOME" {
   local payload
-  payload="$(make_payload "Write" "/Users/edkubiak/Desktop/~")"
+  payload="$(make_payload "Write" "/Users/testuser/Desktop/~")"
   run bash "$HOOK_SH" <<< "$payload"
   assert_failure
   [[ "$status" -eq 2 ]]
@@ -82,7 +82,7 @@ teardown() {
 @test "CLAUDE_SUBPROCESS=1 → exit 0 even with literal-tilde path" {
   export CLAUDE_SUBPROCESS=1
   local payload
-  payload="$(make_payload "Write" "/Users/edkubiak/Desktop/~/.claude/plans/foo.md")"
+  payload="$(make_payload "Write" "/Users/testuser/Desktop/~/.claude/plans/foo.md")"
   run bash "$HOOK_SH" <<< "$payload"
   assert_success
 }

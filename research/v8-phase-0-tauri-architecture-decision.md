@@ -1,7 +1,7 @@
 # CAST v8 Phase 0.4 — Tauri Architecture Decision
 
 **Date:** 2026-05-11
-**Inputs:** `v8-phase-0-dashboard-state.md`, `v8-phase-0-forge-state.md`, `cast-v8-master-plan.md`
+**Inputs:** `v8-phase-0-dashboard-state.md`, `v8-phase-0-forge-state.md`, v8 master plan (internal planning doc)
 **Decision-maker on record:** Ed (this doc is the recommendation + reasoning)
 
 ---
@@ -99,7 +99,7 @@ This is the natural-hybrid endgame: Rust for native concerns (PTY, hot streams, 
 
 ## Master-plan gap notes (Phase 0.1 fold-in)
 
-The v8 master plan (`research/cast-v8-master-plan.md`, written 2026-05-09) drifts from reality and from tonight's framing in five places:
+The v8 master plan (internal planning doc, written 2026-05-09) drifts from reality and from tonight's framing in five places:
 
 1. **Dashboard page list is stale.** Plan lists 10 pages; reality is 8 stable + 2 newer (`/docs`, `/swarm`, `/work-log`). Six of the plan's "pages" are now redirects absorbed into `/system`/`/sessions`/`/analytics`. Plan should sync after this audit.
 

@@ -22,7 +22,7 @@ AVAILABLE COMMANDS
 After importing, the following keyword triggers are available in Alfred:
 
   c run {query}       — Run a CAST agent or free-form task in Terminal
-                        Example: c run debug the auth error in ses-wiki
+                        Example: c run debug the auth error in my-app
 
   c queue             — Show current CAST task queue (Large Type output)
 

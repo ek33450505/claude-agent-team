@@ -254,6 +254,46 @@ numbered fragment) is the correct install path — do not edit `settings.json` b
 
 ---
 
+## 6. Git Pre-Commit Hook
+
+CAST ships a git pre-commit hook at `.githooks/pre-commit` that enforces three lints
+on every commit. Install it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+### Lints
+
+| Lint | What it checks | Blocks on failure |
+|---|---|---|
+| Lint 1: cold-start counter | No more than 2 inline `python3 -c` calls per new script. Grandfathered scripts in `.githooks/cold-start-baseline.txt` are allowed their current count but fail if the count *increases*. | Yes |
+| Lint 2: SQL injection | Scripts must not interpolate shell variables directly into `sqlite3` commands. | Yes |
+| Lint 3: orphan scripts | Scripts referenced in `settings.json` must exist under `scripts/`. | Yes |
+| Hook-contract validation | When `settings.json` or `managed-settings.d/*.json` is staged, validates hook entries match the contract schema. | Yes |
+
+### Emergency bypass for Lints 1 and 2
+
+If you need to commit despite a Lint 1 or 2 failure (e.g., mid-audit), prefix the
+commit with `CAST_SKIP_LINTS=1`:
+
+```bash
+CAST_SKIP_LINTS=1 git commit -m "wip: ..."
+```
+
+This does NOT bypass the orphan-script lint or hook-contract validation.
+A warning is printed to stderr when the bypass is active. Resolve violations in the
+next commit — do not rely on the bypass as a long-term escape.
+
+### Baseline file
+
+`.githooks/cold-start-baseline.txt` lists grandfathered scripts and their current
+`python3 -c` call counts. Comment lines (starting with `#`) are ignored by the lint
+logic. Entries are targeted for consolidation into `.py` files in audit Phase 4.
+Do not add new entries to the baseline — fix new violations instead.
+
+---
+
 ## Phase A–C Enhancements
 
 > Source: Moved from README.md as part of 2026-05-25 ecosystem alignment.

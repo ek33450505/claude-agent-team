@@ -9,6 +9,14 @@ plans/
 !.claude/cast.json
 __pycache__/
 articles/
-test_output.log
-test_results.log
-test_run.log
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+settings.local.json
+backups/
+config/*oauth*
+config/*secret*
+config/*credential*
+.codex/

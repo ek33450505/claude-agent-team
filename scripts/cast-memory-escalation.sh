@@ -197,12 +197,12 @@ fi
 # ---------------------------------------------------------------------------
 RULE_COUNT="$(echo "$AUTO_RULES" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
 
-echo "$AUTO_RULES" | python3 - "$SCRIPTS_DIR" "$AGENT_MEMORY_DIR" <<'PYEOF' 2>/dev/null || true
+CAST_AUTO_RULES="$AUTO_RULES" python3 - "$SCRIPTS_DIR" "$AGENT_MEMORY_DIR" <<'PYEOF' 2>/dev/null || true
 import json, sys, os, subprocess, datetime
 
 scripts_dir = sys.argv[1]
 memory_dir = sys.argv[2]
-rules = json.load(sys.stdin)
+rules = json.loads(os.environ.get("CAST_AUTO_RULES", "[]"))
 write_script = os.path.join(scripts_dir, "cast-memory-write.sh")
 
 for rule in rules:

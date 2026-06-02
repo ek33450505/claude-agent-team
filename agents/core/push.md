@@ -56,7 +56,7 @@ git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-c
 - If the prompt contains `--force` or `-f` (without `--force-main`): output Status: BLOCKED "Force push is blocked. Resolve the divergence manually."
 - If branch is `main` or `master`:
   - If prompt contains `--force-main`: strip the flag from the command, log `[--force-main flag detected — proceeding to main]`, and proceed.
-  - If `git remote get-url origin` contains `edkubiak` OR cwd is under `~/Projects/personal/`: log `[Personal repo detected — pushing to main]` and proceed.
+  - If `.claude/cast.json` exists at the repo root with `"repo_class": "personal"`, OR the `CAST_REPO_CLASS` environment variable equals `personal`: log `[Personal repo detected — pushing to main]` and proceed.
   - Otherwise: output Status: BLOCKED "Pushing directly to main/master is blocked by CAST policy. Create a PR or use `--force-main` flag if you are certain this is a personal repo." Do NOT proceed.
 - If no commits to push (already up to date): output Status: DONE "Nothing to push — remote is already up to date."
 
@@ -213,7 +213,7 @@ NEVER run any of: git stash (any form), git reset (any form), git checkout <bran
 ## Rules
 
 - NEVER use `--force` or `-f` with git push (even on personal repos)
-- NEVER push directly to main or master UNLESS: prompt contains `--force-main` OR personal repo heuristic matches (remote URL contains `edkubiak` OR cwd is under `~/Projects/personal/`)
+- NEVER push directly to main or master UNLESS: prompt contains `--force-main` OR personal repo heuristic matches (`.claude/cast.json` has `"repo_class": "personal"` OR `CAST_REPO_CLASS=personal`)
 - NEVER modify files — this agent is read-and-push only
 - NEVER run `git stash` in any form — see ABSOLUTE PROHIBITION at the top of this file
 - Always show the commit list before pushing so the user knows what's going out

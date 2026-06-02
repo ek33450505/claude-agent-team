@@ -1,0 +1,25 @@
+# .gitleaks.toml — Gitleaks allowlist configuration for CAST.
+#
+# IMPORTANT: This file uses the universally-supported [allowlist] (singular)
+# global table syntax (gitleaks ≥8.0). The [[allowlists]] array-of-tables
+# syntax is NOT used because CI runs gitleaks 8.24.x, which does not support
+# that syntax (it arrived in 8.25). Using [[allowlists]] causes the config to
+# be silently ignored on 8.24.x, which is what caused CI to fail on PR #104.
+#
+# The [allowlist].paths entries suppress findings in scanner test-fixture files,
+# including in historical commit diffs. These files intentionally contain fake
+# secrets to prove detection works; see each file's header comments.
+
+title = "CAST Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Scanner test-fixture files — these intentionally contain fake secrets to prove detection works; see each file's header comments"
+paths = [
+  '''tests/ci-pii-scan\.bats''',
+  '''tests/pre-push-ci-check\.bats''',
+  '''tests/cast-batch-dispatch\.bats''',
+  '''tests/cast-subagent-stop-hook-redaction\.bats''',
+]

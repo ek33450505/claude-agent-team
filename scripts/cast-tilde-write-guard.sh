@@ -36,7 +36,7 @@ except Exception:
 [[ -z "$FILE_PATH" ]] && exit 0
 
 # Detect literal `~` as a path segment (between two slashes, or trailing).
-# This catches /Users/edkubiak/Desktop/~/.claude/plans/foo.md
+# This catches /Users/<user>/Desktop/~/.claude/plans/foo.md
 # but NOT a leading ~/foo or ~ followed by anything that isn't a path sep.
 if [[ "$FILE_PATH" == *"/~/"* ]] || [[ "$FILE_PATH" == */~ ]]; then
   # Compute the corrected canonical path (assume the intent was $HOME)

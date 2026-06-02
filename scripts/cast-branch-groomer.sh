@@ -176,7 +176,6 @@ while IFS= read -r vv_line; do
       # Two-stage merge check:
       # (1) ahead_count == 0  → fully merged via ff/true merge
       # (2) ahead_count > 0 + git cherry shows all commits content-merged → squash merge
-      local ahead_count plus_count cherry_total
       ahead_count="$(git rev-list --count main.."$branch" 2>/dev/null || echo 1)"
 
       if [[ "$ahead_count" -eq 0 ]]; then
