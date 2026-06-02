@@ -380,7 +380,7 @@ Major cleanup removing accumulated rot from v1–v3.4. No new features — reduc
 - **S3** — `cast` CLI: `--model` flag added to allow explicit model override at invocation time
 
 ### Portability
-- **P1** — All `/Users/edkubiak` hardcodes replaced with `__HOME__` tokens throughout hook scripts and config files
+- **P1** — All personal absolute-path (`/Users/<user>`) hardcodes replaced with `__HOME__` tokens throughout hook scripts and config files
 - **P2** — `install.sh` now runs `sed` substitution on `__HOME__` tokens during plist install, enabling cross-user installation
 
 ### Settings Cleanup
