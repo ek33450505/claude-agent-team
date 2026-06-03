@@ -16,6 +16,19 @@
 # Backup destination: GitHub release on ek33450505/cast-memory-backup
 # Log file: ~/.claude/logs/memory-backup.log
 
+# ============================================================================
+# DEPRECATED (2026-06-02, audit §3.9)
+# This script tarred to /tmp and pushed GitHub release ASSETS — not
+# version-controlled, and per the recovery audit it likely never produced a
+# usable backup. Replaced by:
+#   scripts/cast-snapshot.py       — on-disk dated snapshots (7d+4w retention)
+#   scripts/cast-overlay-sync.sh   — version-controlled GitHub overlay (cast-private)
+#   cast backup [--overlay]        — the user-facing entry point
+# Kept as a stub for reference / to avoid breaking any stale caller.
+# ============================================================================
+echo "[DEPRECATED] cast-memory-backup.sh is retired (§3.9). Use: cast backup" >&2
+exit 0
+
 set -euo pipefail
 
 DATE=$(date +%Y%m%d)
