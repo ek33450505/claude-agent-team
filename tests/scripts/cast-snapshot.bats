@@ -64,10 +64,11 @@ teardown() {
   export CAST_BACKUP_ROOT="$BATS_BACKUP_ROOT"
   export CAST_CLAUDE_DIR="$BATS_CLAUDE_DIR"
 
-  # Create 10 fake snapshot directories with dates spanning multiple weeks
-  # Use macOS-compatible date arithmetic with -v flag
+  # Create 10 fake snapshot directories with dates spanning multiple weeks.
+  # Portable date arithmetic via python3 — GNU `date -d` and BSD `date -v` differ,
+  # and CI runs on Linux (the `date -v` form fails there with "invalid option -- v").
   for i in {0..9}; do
-    DATE=$(date -u -v-${i}d +%Y-%m-%d)
+    DATE=$(python3 -c "import datetime,sys; print((datetime.date.today()-datetime.timedelta(days=int(sys.argv[1]))).isoformat())" "$i")
     mkdir -p "$BATS_BACKUP_ROOT/cast-snapshot-$DATE"
   done
 

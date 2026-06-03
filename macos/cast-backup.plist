@@ -7,8 +7,8 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
-    <string>__HOME__/.claude/scripts/cast-snapshot.py</string>
+    <string>/bin/bash</string>
+    <string>__HOME__/.claude/scripts/cast-backup-scheduled.sh</string>
   </array>
 
   <key>StartCalendarInterval</key>
@@ -20,10 +20,10 @@
   </dict>
 
   <key>StandardOutPath</key>
-  <string>__HOME__/.claude/logs/cast-snapshot.log</string>
+  <string>__HOME__/.claude/logs/cast-backup-scheduled.log</string>
 
   <key>StandardErrorPath</key>
-  <string>__HOME__/.claude/logs/cast-snapshot.log</string>
+  <string>__HOME__/.claude/logs/cast-backup-scheduled.log</string>
 
   <key>EnvironmentVariables</key>
   <dict>

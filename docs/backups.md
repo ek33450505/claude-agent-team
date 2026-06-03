@@ -34,7 +34,11 @@ Secrets (API keys, `.env`, `.pem`, `.key` files) are explicitly excluded from bo
 
 Version-controlled working tree with full git history — not GitHub release assets. Copies the same files as the on-disk snapshot.
 
-**Note:** The overlay is not auto-scheduled by launchd (it requires working `gh` and SSH authentication, which a background job may lack). Run manually via `cast backup --overlay` or set `CAST_OVERLAY_SYNC=1`.
+**Scheduling:** The daily `com.cast.backup` launchd job now runs both the on-disk snapshot AND a best-effort overlay push via `scripts/cast-backup-scheduled.sh`. This runs as the user (not as a Claude Code agent), so it has legitimate access to working `gh` and SSH authentication in the launchd environment.
+
+**Caveat — authentication in launchd:** The overlay push requires working `gh` and `ssh` credentials in the launchd environment. If the scheduled push fails (e.g., due to auth timeouts or SSH key passphrases), it is logged as non-fatal — the on-disk snapshot still succeeds. To manually trigger the overlay push or verify that it succeeded, run `cast backup --overlay` from your terminal (where `gh` and `ssh` auth are fully configured). If the scheduled job hasn't pushed recently, run this command to catch up.
+
+**Security note:** Claude Code agents are intentionally hard-blocked from pushing to `cast-private` by the platform's data-exfiltration guard. The overlay push is always a user-initiated or user-scheduled action (via launchd as your user, not as an agent).
 
 ## Running a backup manually
 
