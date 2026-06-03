@@ -86,11 +86,17 @@ _lint_orphan_scripts() {
 }
 
 # --- Hook contract validation ---
+# Exit code semantics: 0=all pass, 1=warn-only (benign), 2=errors found.
+# Only block (exit 1) when the validator reports ERRORS (exit 2). Warns let the commit proceed.
 if git diff --cached --name-only | grep -qE '^(settings\.json|managed-settings\.d/.*\.json)$'; then
-    if [ -x scripts/cast-validate-hook-contracts.sh ]; then
-        if ! bash scripts/cast-validate-hook-contracts.sh --source; then
-            echo "[pre-commit] Hook contract validator failed — see output above. Use CAST_SKIP_HOOK_VALIDATE=1 to bypass."
-            [ "${CAST_SKIP_HOOK_VALIDATE:-0}" != "1" ] && exit 1
+    if [[ -x scripts/cast-validate-hook-contracts.sh ]]; then
+        validate_exit=0
+        bash scripts/cast-validate-hook-contracts.sh --source || validate_exit=$?
+        if [[ $validate_exit -eq 2 ]]; then
+            echo "[pre-commit] Hook contract validator found ERRORS — see output above. Use CAST_SKIP_HOOK_VALIDATE=1 to bypass." >&2
+            [[ "${CAST_SKIP_HOOK_VALIDATE:-0}" != "1" ]] && exit 1
+        elif [[ $validate_exit -eq 1 ]]; then
+            echo "[pre-commit] Hook contract validator found warnings (non-blocking) — see output above." >&2
         fi
     fi
 fi

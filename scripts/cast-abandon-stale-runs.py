@@ -11,9 +11,9 @@ Exit: always 0 (non-blocking; cron must not be broken by this script).
 
 One-time backfill (review before executing — DO NOT automate):
   UPDATE agent_runs
-  SET status = 'abandoned', abandoned_at = datetime('now')
+  SET status = 'abandoned', abandoned_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
   WHERE status = 'running'
-    AND started_at < datetime('now', '-2 hours');
+    AND started_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-2 hours');
   -- Expected: ~33 rows updated. Verify count before committing.
 
 Usage:
@@ -25,7 +25,7 @@ Usage:
 import os
 import sys
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # --- Config ---
 DB_PATH = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
@@ -48,7 +48,9 @@ def main() -> None:
         _log(f'cast.db not found at {DB_PATH} — skipping')
         sys.exit(0)
 
-    now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    now_utc = datetime.now(timezone.utc)
+    now_iso = now_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+    threshold_iso = (now_utc - timedelta(hours=STALE_HOURS)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -65,15 +67,20 @@ def main() -> None:
         except sqlite3.OperationalError:
             pass  # column already exists
 
-        # Find and flip stale running rows
+        # Find and flip stale running rows.
+        # Use a Python-computed ISO-8601 threshold so that string comparison
+        # against ISO-formatted started_at values (YYYY-MM-DDTHH:MM:SSZ) is
+        # lexicographically correct.  SQLite's datetime('now') produces
+        # 'YYYY-MM-DD HH:MM:SS' (space separator, no Z) which does NOT sort
+        # correctly against ISO-8601 strings and would break cast-db-verify C5/C7.
         cursor = conn.execute(
             '''
             SELECT id, agent, started_at
             FROM agent_runs
             WHERE status = 'running'
-              AND started_at < datetime('now', ?)
+              AND started_at < ?
             ''',
-            (f'-{STALE_HOURS} hours',)
+            (threshold_iso,)
         )
         stale_rows = cursor.fetchall()
 

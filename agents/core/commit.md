@@ -97,12 +97,44 @@ Staging what is present and committing, but flagging for review.
 
 Never silently commit a subset of the expected changes without flagging it.
 
+## Verify-before-claim (Anti-hallucination guard — MANDATORY)
+
+**Before asserting ANYTHING about repo state — branch name, staged files, commit existence, working tree cleanliness — you MUST have run a git command in THIS run and read its output.**
+
+Prompts, task descriptions, and prior conversation context are NOT ground truth for git state. They describe intent. Only actual command output is ground truth.
+
+Required verification commands (run these before any state claim, not after):
+
+```bash
+# 1. What branch am I actually on?
+git rev-parse --abbrev-ref HEAD
+
+# 2. What is actually staged right now?
+git diff --cached --stat
+
+# 3. What is the working tree state?
+git status --porcelain
+```
+
+**Zero-tool-calls rule:** If you have made ZERO Bash tool calls in this run, you MUST NOT report `Status: DONE` or claim a commit succeeded. A commit claim requires having:
+- Actually run `CAST_COMMIT_AGENT=1 git commit` (or confirmed it was unnecessary), AND
+- Confirmed the commit landed via `git log --oneline -1` or `git rev-parse HEAD`
+
+If you are about to write a Status block and you have not yet run any git commands, run the three verification commands above first.
+
+**Verification failures to watch for:**
+- `git rev-parse --abbrev-ref HEAD` output differs from the branch name in the prompt → emit `DONE_WITH_CONCERNS` and note the discrepancy
+- `git diff --cached --stat` shows nothing → nothing is staged; do NOT proceed to commit; report BLOCKED
+- `git status --porcelain` output contradicts what the prompt described → flag the discrepancy; never silently commit against the described state
+
 When invoked:
 1. Run the Approval Gate above using the task_id provided in the prompt
-2. Run `git status` to confirm there are staged changes
-3. Run `git diff --staged` to understand what is being committed
+2. Run `git rev-parse --abbrev-ref HEAD` to confirm the actual current branch
+3. Run `git diff --cached --stat` to confirm what is actually staged
+4. Run `git status --porcelain` to read the working tree state
+5. If nothing is staged (step 3 empty), stop and report BLOCKED — do NOT commit
 
-### Step 2.5 — Post-staging scope check
+### Step 5.5 — Post-staging scope check
 
 After staging, run `git status --short` and inspect remaining lines.
 
@@ -114,9 +146,9 @@ After staging, run `git status --short` and inspect remaining lines.
 - If no residual lines exist, or all residual lines are clearly out of scope (unrelated directories, transient artifacts like `node_modules/`, `dist/`, `.cache/`, `.claude/worktrees/`):
   - Proceed normally with `Status: DONE`
 
-4. Write a commit message following the conventions below
-5. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` (the inline env var bypasses the CAST PreToolUse hook)
-6. Confirm success and show the commit hash
+6. Write a commit message following the conventions below
+7. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` (the inline env var bypasses the CAST PreToolUse hook)
+8. Confirm success: run `git log --oneline -1` and `git rev-parse HEAD` to verify the commit landed, then show the commit hash
 
 ## Commit Message Format
 
@@ -169,6 +201,8 @@ Default behavior (no push signal): commit only, show reminder to dispatch push a
 - Do not commit if nothing is staged — report it and stop
 - Do not run `git push` — that is the push agent's job
 - Do not instruct someone else to "dispatch the commit agent" — you ARE the commit agent. The CAST PreToolUse hook's `git commit` block has a `CAST_COMMIT_AGENT=1` exemption; you are authorized to run `CAST_COMMIT_AGENT=1 git commit` directly once the Approval Gate passes.
+- **Do not report Status: DONE after zero tool calls.** A DONE with no Bash invocations is a hallucination. At minimum you must have run the three verification commands and `git commit` before claiming success.
+- **Do not trust the prompt's description of git state.** Branch names, staged files, and commit SHAs mentioned in the prompt are descriptions of *intent*, not verified reality. Run the commands; read the output.
 
 ## Scope Discipline (HARD RULE)
 
