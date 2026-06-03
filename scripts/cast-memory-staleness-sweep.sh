@@ -37,11 +37,11 @@ try:
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    # Query stale entries (null last_verified OR older than 30 days)
+    # Query stale entries (null last_validated_at OR older than 30 days)
     cur.execute("""
         SELECT id, name, content
         FROM agent_memories
-        WHERE last_verified IS NULL OR last_verified < datetime('now', '-30 days')
+        WHERE last_validated_at IS NULL OR last_validated_at < datetime('now', '-30 days')
         LIMIT ?
     """, (max_entries,))
     rows = cur.fetchall()
@@ -81,7 +81,7 @@ try:
             # Subprocess failed
             confidence_delta = -0.2
 
-        # Update database: set new confidence and last_verified
+        # Update database: set new confidence and last_validated_at
         # Confidence: old + delta, clamped to [0.0, 1.0]
         cur.execute("SELECT confidence FROM agent_memories WHERE id = ?", (entry_id,))
         old_confidence = cur.fetchone()[0] or 1.0
@@ -89,7 +89,7 @@ try:
 
         cur.execute("""
             UPDATE agent_memories
-            SET confidence = ?, last_verified = datetime('now')
+            SET confidence = ?, last_validated_at = datetime('now')
             WHERE id = ?
         """, (new_confidence, entry_id))
 
