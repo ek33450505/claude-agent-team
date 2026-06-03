@@ -22,8 +22,13 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  # Only remove the temp HOME if setup() actually created it (i.e., ORIG_HOME was set).
+  # If setup() called skip before setting ORIG_HOME, HOME still points at the real user
+  # home and rm -rf "$HOME" would destroy the live runtime (§3.8.A root cause).
+  if [ -n "${ORIG_HOME:-}" ] && [ "$HOME" != "$ORIG_HOME" ]; then
+    rm -rf "$HOME"
+    export HOME="$ORIG_HOME"
+  fi
   # Clean up any swarm worktrees created during tests (F10)
   git -C "$REPO_DIR" worktree list --porcelain 2>/dev/null | grep "^worktree /tmp/cast-swarm-" | sed 's/^worktree //' | xargs -I{} git -C "$REPO_DIR" worktree remove --force {} 2>/dev/null || true
   rm -rf /tmp/cast-swarm-* 2>/dev/null || true
