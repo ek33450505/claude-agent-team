@@ -277,7 +277,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   model           TEXT,
   started_at      TEXT,
   ended_at        TEXT,
-  status          TEXT CHECK (status IN ('DONE','DONE_WITH_CONCERNS','BLOCKED','NEEDS_CONTEXT','running','failed')),
+  status          TEXT,  -- no CHECK: agent_runs is observability; the status contract is enforced by hooks/agents, not the DB (Phase 3). Writers also record 'abandoned','fallback','unknown'.
   input_tokens    INTEGER,
   output_tokens   INTEGER,
   cost_usd        REAL,
@@ -564,6 +564,15 @@ fi
 # Ensure batch_id and agent_id indexes exist
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);" 2>/dev/null || true
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
+
+# Phase 3: drop the legacy agent_runs.status CHECK on existing DBs. The enum
+# rejected real telemetry values ('abandoned','fallback','unknown') that wired
+# writers produce, silently dropping rows. Idempotent helper — preserves all
+# columns, data, the session_id FK, and every index; no-op when no CHECK exists.
+_DROP_CHECK_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/cast-db-drop-status-check.py"
+if [ -f "$_DROP_CHECK_HELPER" ] && command -v python3 >/dev/null 2>&1; then
+  CAST_DB_PATH="$DB_PATH" python3 "$_DROP_CHECK_HELPER" "$DB_PATH" >&2 || true
+fi
 
 if [ "$_columns_added" -eq 1 ]; then
   echo "[cast-db-init] self-healed: added missing agent_id, batch_id, and/or response columns to agent_runs" >&2
