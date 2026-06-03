@@ -25,6 +25,7 @@ PII_ALLOWLIST=(
   "tests/pre-push-ci-check.bats"
   "tests/ci-pii-scan.bats"
   "tests/cast_cron_setup.bats"
+  "tests/scripts/cast-overlay-sync.bats"
 )
 
 # Build an ERE that matches any allowlisted file in grep's "file:line:content" output.

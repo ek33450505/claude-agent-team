@@ -5,7 +5,12 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 ## [Unreleased]
 
 ### Added
-<!-- Add new unreleased changes here -->
+- **Backup subsystem refresh (§3.9)** — Deprecated flawed GitHub-release-asset backup approach (`cast-memory-backup.sh`). Replaced with:
+  - `scripts/cast-snapshot.py` — on-disk dated snapshots with 7-day + 4-week retention
+  - `scripts/cast-overlay-sync.sh` — version-controlled GitHub overlay (cast-private repo)
+  - `cast backup [--overlay]` — unified user-facing entry point
+  - `cast doctor` backup-freshness check — validates snapshot age and alerts on stale backups
+- `scripts/cast-memory-backup.sh` deprecated and converted to a no-op stub (exits 0 on first line, preserving call-site compatibility)
 
 ---
 

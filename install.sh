@@ -380,6 +380,29 @@ if [ -f "$CAST_BIN_SRC" ]; then
     fi
 fi
 
+# --- Install launchd plist (macOS only) ---
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    info "Installing launchd scheduler (macOS)..."
+    LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
+    mkdir -p "$LAUNCH_AGENTS_DIR"
+
+    # Install cast-backup.plist for daily snapshot
+    if [ -f "$SCRIPT_DIR/macos/cast-backup.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.backup.plist"
+        # Substitute the __HOME__ template token (launchd does not expand ${HOME} in plists).
+        # Matches the convention in scripts/com.cast.daemon.plist.
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-backup.plist" > "$PLIST_DEST"
+
+        # Idempotently (re)load the plist
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.backup)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+fi
+
 # --- Wire pre-commit hook ---
 git -C "$SCRIPT_DIR" config core.hooksPath .githooks 2>/dev/null || true
 

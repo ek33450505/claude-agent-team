@@ -41,12 +41,14 @@ teardown() {
 
 # 1. --dry-run exits 0 when agent-memory-local is present
 @test "cast-memory-backup: --dry-run exits 0 with agent-memory-local present" {
+  skip "DEPRECATED: cast-memory-backup.sh retired in §3.9 — replaced by cast-snapshot.py + cast-overlay-sync.sh"
   run bash "$BACKUP_SCRIPT" --dry-run
   assert_success
 }
 
 # 2. --dry-run creates a .tar.gz file in CAST_BACKUP_DIR
 @test "cast-memory-backup: --dry-run creates tarball in backup dir" {
+  skip "DEPRECATED: cast-memory-backup.sh retired in §3.9 — replaced by cast-snapshot.py + cast-overlay-sync.sh"
   DATE=$(date +%Y%m%d)
   EXPECTED_FILE="${CAST_BACKUP_DIR}/cast-memory-backup-${DATE}.tar.gz"
   rm -f "$EXPECTED_FILE"
@@ -58,6 +60,7 @@ teardown() {
 
 # 3. --dry-run tarball contains agent-memory-local/
 @test "cast-memory-backup: --dry-run tarball contains agent-memory-local/" {
+  skip "DEPRECATED: cast-memory-backup.sh retired in §3.9 — replaced by cast-snapshot.py + cast-overlay-sync.sh"
   DATE=$(date +%Y%m%d)
   TARBALL="${CAST_BACKUP_DIR}/cast-memory-backup-${DATE}.tar.gz"
   rm -f "$TARBALL"
@@ -71,6 +74,7 @@ teardown() {
 
 # 4. --dry-run does NOT invoke gh CLI
 @test "cast-memory-backup: --dry-run does not call gh release" {
+  skip "DEPRECATED: cast-memory-backup.sh retired in §3.9 — replaced by cast-snapshot.py + cast-overlay-sync.sh"
   rm -f "${MOCK_BIN}/gh_calls.log"
 
   run bash "$BACKUP_SCRIPT" --dry-run
@@ -85,6 +89,7 @@ teardown() {
 
 # 5. Missing agent-memory-local exits 1 with error message
 @test "cast-memory-backup: missing agent-memory-local exits 1 with error" {
+  skip "DEPRECATED: cast-memory-backup.sh retired in §3.9 — replaced by cast-snapshot.py + cast-overlay-sync.sh"
   rm -rf "${HOME}/.claude/agent-memory-local"
 
   run bash "$BACKUP_SCRIPT" --dry-run
@@ -94,6 +99,7 @@ teardown() {
 
 # 6. Full run (non-dry-run) invokes gh release create
 @test "cast-memory-backup: full run calls gh release create" {
+  skip "DEPRECATED: cast-memory-backup.sh retired in §3.9 — replaced by cast-snapshot.py + cast-overlay-sync.sh"
   rm -f "${MOCK_BIN}/gh_calls.log"
 
   run bash "$BACKUP_SCRIPT"
@@ -106,11 +112,13 @@ teardown() {
 
 # 7. Script is executable
 @test "cast-memory-backup: script is executable" {
+  skip "DEPRECATED: cast-memory-backup.sh retired in §3.9 — replaced by cast-snapshot.py + cast-overlay-sync.sh"
   [ -x "$BACKUP_SCRIPT" ]
 }
 
 # 8. Script header documents the cron line
 @test "cast-memory-backup: header contains cron documentation" {
+  skip "DEPRECATED: cast-memory-backup.sh retired in §3.9 — replaced by cast-snapshot.py + cast-overlay-sync.sh"
   run grep -q "0 2 \* \* \*" "$BACKUP_SCRIPT"
   assert_success
 }
