@@ -152,3 +152,48 @@ teardown() {
   # We check that the CAST_TEST_COUNT line no longer has 666
   ! grep -q "<!-- CAST_TEST_COUNT -->666<!-- /CAST_TEST_COUNT -->" "$TEST_README"
 }
+
+# ---------------------------------------------------------------------------
+# Test 5: DB_TABLE_COUNT counts DISTINCT tables, not sum of CREATE statements
+# ---------------------------------------------------------------------------
+
+@test "DB_TABLE_COUNT is stable and counts distinct tables (not duplicate declarations)" {
+  # Unset BATS env vars to run gen-stats normally
+  unset BATS_TEST_NAME
+  unset BATS_TEST_FILENAME
+  unset BATS_TMPDIR
+
+  # Add DB_TABLE_COUNT sentinel to the fake README
+  cat >> "$TEST_README" <<'EOF'
+<!-- CAST_DB_TABLE_COUNT -->999<!-- /CAST_DB_TABLE_COUNT -->
+EOF
+
+  # Run gen-stats
+  run env -u BATS_TEST_NAME -u BATS_TEST_FILENAME -u BATS_TMPDIR \
+    bash "$GEN_STATS" "$TEST_README"
+  assert_success
+
+  # Extract the actual DB_TABLE_COUNT from the output
+  # Output format is "DB tables: <N>"
+  DB_ACTUAL=$(echo "$output" | grep "DB tables:" | sed -E 's/.*DB tables:[[:space:]]+//')
+
+  # Verify the count is a single integer and not 0 or 999 (the placeholder)
+  [[ "$DB_ACTUAL" =~ ^[0-9]+$ ]] || {
+    echo "DB_TABLE_COUNT='$DB_ACTUAL' is not a valid integer" >&2
+    return 1
+  }
+
+  # Verify it's in the expected range (cast-db-init.sh has 32 CREATE statements for ~24 distinct tables)
+  # The fix should yield ~24 distinct tables, not the inflated sum of ~42
+  [[ "$DB_ACTUAL" -ge 20 && "$DB_ACTUAL" -le 26 ]] || {
+    echo "DB_TABLE_COUNT=$DB_ACTUAL is outside expected range [20,26]" >&2
+    return 1
+  }
+
+  # Verify the sentinel was updated in the README (should no longer be 999)
+  UPDATED=$(grep "<!-- CAST_DB_TABLE_COUNT -->" "$TEST_README" | grep -oE '[0-9]+' | tail -1)
+  [[ "$UPDATED" == "$DB_ACTUAL" ]] || {
+    echo "Sentinel in README ($UPDATED) does not match computed count ($DB_ACTUAL)" >&2
+    return 1
+  }
+}
