@@ -71,10 +71,11 @@ echo "$DEPLOY_PATH"
 # ---------------------------------------------------------------------------
 @test "testuser path: passes (allowlisted placeholder)" {
   _run_scan "tests/fixture.bats" '#!/usr/bin/env bats
-@test "path portability" {
-  run bash -c "ls /Users/testuser/config"
-  assert_failure
-}
+# path portability fixture — testuser is an allowlisted placeholder path.
+# Intentionally NOT a real @test block: a line-start @test inside this string
+# literal is miscounted as a top-level test by bats 1.10 in the CI container,
+# which breaks the suite plan (executed N-1 of N). Keep the path, drop the token.
+ls /Users/testuser/config
 '
   assert_success
   assert_output --partial "All checks passed"
