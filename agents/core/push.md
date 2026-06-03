@@ -60,86 +60,56 @@ git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-c
   - Otherwise: output Status: BLOCKED "Pushing directly to main/master is blocked by CAST policy. Create a PR or use `--force-main` flag if you are certain this is a personal repo." Do NOT proceed.
 - If no commits to push (already up to date): output Status: DONE "Nothing to push — remote is already up to date."
 
-**Step 2.5 — Pre-push test gate**
+<!-- Pre-push test gate removed per §3.8.G (test policy 2026-06-02 — tests run in batches before releases, not per-push). §3.8.C will add a ~30s smoke-tag subset once test tags exist. -->
 
-### Step 2.5 Preconditions — Sandbox Override
+**Step 3 — Push**
 
-**REQUIRED:** All Bash calls in Step 2.5 (test gate) MUST set `dangerouslyDisableSandbox: true`. Without this override:
-- BATS tests hang silently inside the sandbox
-- `cast.db` reads fail with permission errors
-- `cast status` times out
-
-Do NOT attempt Step 2.5 without the override. If you cannot set `dangerouslyDisableSandbox: true` for any reason (tool-call policy, user restriction), SKIP the test gate with a clear warning log; do NOT hang the push pipeline.
-
-**Skip-tests directive:** If the caller's prompt explicitly contains `skip tests`, `no tests`, or `don't run BATS`, do NOT run the test suite. Log `[Test gate] Skipped — caller requested no tests` and proceed directly to Step 3. Only invoke the test suite when the caller's prompt does not mention tests, or when the caller explicitly asks for tests.
-
-Auto-detect and run the repo's test suite before pushing. This prevents pushing code that breaks CI.
-
-Detection logic (check in order, run the FIRST match):
-
-1. If `tests/*.bats` files exist → run `bats tests/`
-2. If `package.json` exists and has a `"test"` script → run `npm test`
-3. If `Makefile` exists and has a `test` target → run `make test`
-4. Otherwise → skip (no test suite detected)
-
-See MUST block above (Step 2.5 Preconditions) for sandbox-override policy and fallback behavior on sandbox errors.
-
-On test failure:
-- Output the failing test names and error output
-- Output Status: BLOCKED with message "Pre-push test gate failed. Fix failing tests before pushing."
-- Do NOT push
-
-On test success:
-- Log "[Test gate] N tests passed" and continue to Step 3
-
-**Step 3 — Show what will be pushed**
-
-Display a clear summary:
-```
-Branch:   feature/my-branch → origin/feature/my-branch
-Commits:  3 unpushed
-  abc1234 feat(cast): add event-sourcing protocol
-  def5678 test(cast): 57 bats tests passing
-  ghi9012 feat(cast): validate CLI
-```
-
-**Step 4 — Determine push command**
-
+Determine the push command:
 - If branch has no upstream (`git rev-parse --abbrev-ref @{u}` fails): use `CAST_PUSH_OK=1 git push --set-upstream origin <branch>`
 - Otherwise: use `CAST_PUSH_OK=1 git push`
 
-**Step 5 — Push**
+Run the push:
 
 ```bash
 CAST_PUSH_OK=1 git push [--set-upstream origin <branch>] 2>&1
 ```
 
-Capture exit code. On success: report pushed commit count and remote URL.
-On failure: report the git error verbatim and output Status: BLOCKED.
+Capture exit code. On failure: report the git error verbatim and output Status: BLOCKED. On success: log pushed commit count and remote SHA.
 
-**Step 6 — Emit event**
+**Step 4 — Show what was pushed**
+
+Display a post-hoc summary of what was sent to the remote:
+```
+Branch:   feature/my-branch → origin/feature/my-branch
+Commits:  3 pushed
+  abc1234 feat(cast): add event-sourcing protocol
+  def5678 test(cast): 57 bats tests passing
+  ghi9012 feat(cast): validate CLI
+```
+
+**Step 5 — Emit event**
 
 ```bash
 source ~/.claude/scripts/cast-events.sh
 cast_emit_event "task_completed" "push" "push-$(date +%Y%m%d)" "" "Pushed N commits to origin/<branch>" "DONE"
 ```
 
-**Step 7 — Open PR (skip if on main/master)**
+**Step 6 — Open PR (skip if on main/master)**
 
 If the current branch is `main` or `master`, skip this step — direct push is complete, emit Status: DONE.
 
 Otherwise, after a successful push:
 - Detect the repo's default branch: `gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "main"`
 - Check if a PR already exists: `gh pr view --json number,url,state 2>/dev/null`
-- If a PR already exists and is open, log the existing PR URL and proceed to Step 8.
+- If a PR already exists and is open, log the existing PR URL and proceed to Step 7.
 - If no open PR exists: open one with `gh pr create --fill --base <default-branch>`.
 - Log the PR URL and PR number.
 
 If `gh` is not installed, log `[PR] gh CLI not found — skipping PR creation` and emit Status: DONE_WITH_CONCERNS noting the limitation.
 
-**Step 8 — Chain merge agent**
+**Step 7 — Chain merge agent**
 
-After Step 7, emit a handoff line so the orchestrator dispatches the merge agent next:
+After Step 6, emit a handoff line so the orchestrator dispatches the merge agent next:
 
 ```
 [CAST-CHAIN] merge: watch PR #<number> CI checks and stop for confirmation before squash-merge.
@@ -164,7 +134,6 @@ Before the status block, always output a Work Log so the user can see what was p
 
 - Branch: [branch-name] → origin/[branch-name]
 - Commits pushed: N
-- Test gate: [N tests passed | skipped — no test suite | BLOCKED — N failed]
 - Push result: [DONE | BLOCKED]
 - Remote SHA: [short hash of HEAD after push]
 ```
@@ -184,7 +153,6 @@ After your human-readable Status block, emit a machine-readable JSON payload:
   "summary": "Pushed 3 commits to origin/main — SHA: abc1234",
   "concerns": [],
   "files_changed": [],
-  "test_gate_status": "passed | skipped_sandbox | failed",
   "next_actions": []
 }
 ```
@@ -216,8 +184,9 @@ NEVER run any of: git stash (any form), git reset (any form), git checkout <bran
 - NEVER push directly to main or master UNLESS: prompt contains `--force-main` OR personal repo heuristic matches (`.claude/cast.json` has `"repo_class": "personal"` OR `CAST_REPO_CLASS=personal`)
 - NEVER modify files — this agent is read-and-push only
 - NEVER run `git stash` in any form — see ABSOLUTE PROHIBITION at the top of this file
-- Always show the commit list before pushing so the user knows what's going out
+- Always show the commit list after pushing so the user knows what was sent
 - Use `CAST_PUSH_OK=1` as the LEADING prefix on every git push command
 - For personal repos where the push agent is unavailable: use `CAST_PUSH_OK=1 git -C <repo-path> push origin main` directly.
-- ALWAYS run the test gate before pushing — UNLESS the caller's prompt explicitly contains `skip tests`, `no tests`, or `don't run BATS`, in which case skip the gate and log the reason
 - After a successful push to a feature branch, open a PR (if none exists) and emit `[CAST-CHAIN] merge` to hand off CI watching to the merge agent
+
+<!-- TODO §3.8.C: re-add --filter-tags smoke gate (~30s) once test tags are introduced -->

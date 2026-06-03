@@ -265,6 +265,43 @@ print(json.dumps({
 }
 
 # ---------------------------------------------------------------------------
+# git -C global-option tolerance
+# ---------------------------------------------------------------------------
+
+@test "git -C /repo push without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C /tmp/repo push origin main")"
+  assert_failure
+  assert_output --partial "git push"
+}
+
+@test "CAST_PUSH_OK=1 git -C /repo push → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 git -C /tmp/repo push origin main")"
+  assert_success
+}
+
+@test "git -C /repo commit without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C /tmp/repo commit -m 'msg'")"
+  assert_failure
+  assert_output --partial "git commit"
+}
+
+@test "CAST_COMMIT_AGENT=1 git -C /repo commit → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_COMMIT_AGENT=1 git -C /tmp/repo commit -m 'msg'")"
+  assert_success
+}
+
+@test "git commit with escape hatch only inside message → still blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git commit -m \"CAST_COMMIT_AGENT=1\"")"
+  assert_failure
+  assert_output --partial "git commit"
+}
+
+@test "CAST_STASH_OK=1 git -C /tmp/repo stash → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_STASH_OK=1 git -C /tmp/repo stash")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
 # Empty Input Handling
 # ---------------------------------------------------------------------------
 
