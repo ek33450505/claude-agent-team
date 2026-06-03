@@ -280,6 +280,10 @@ teardown() {
 }
 
 @test "cast doctor: shows 'cast upgrade-check' hint when candidates file is missing" {
+  # gh stub (scoped to this test): _doctor_upgrades only does `command -v gh`; provide one
+  # so it proceeds past the gh gate to the upgrade-hint output. Not global, so the
+  # "exits 0 when gh is not available" test below still simulates true gh absence.
+  mkdir -p "$HOME/.claude/stubs"; printf '#!/bin/sh\nexit 0\n' > "$HOME/.claude/stubs/gh"; chmod +x "$HOME/.claude/stubs/gh"; export PATH="$HOME/.claude/stubs:$PATH"
   rm -f "$HOME/.claude/cast/upgrade-candidates.json"
   run bash "$CAST_CLI" doctor
   assert_success
@@ -294,6 +298,8 @@ teardown() {
 }
 
 @test "cast doctor: shows candidate info when upgrade-candidates.json has entries" {
+  # gh stub (scoped to this test) so _doctor_upgrades reaches the candidate display.
+  mkdir -p "$HOME/.claude/stubs"; printf '#!/bin/sh\nexit 0\n' > "$HOME/.claude/stubs/gh"; chmod +x "$HOME/.claude/stubs/gh"; export PATH="$HOME/.claude/stubs:$PATH"
   mkdir -p "$HOME/.claude/cast"
   python3 -c "
 import json, time
