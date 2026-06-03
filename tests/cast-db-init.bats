@@ -143,3 +143,53 @@ teardown() {
   run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM task_queue;"
   assert_output "1"
 }
+
+# ---------------------------------------------------------------------------
+# Phase 3 #1 regression: the v8 EARLY-EXIT bug.
+# An existing v8 DB that predates the consolidated tables (injection_log,
+# quality_gates, dispatch_decisions, task_queue, agent_truncations) must get
+# them re-provisioned on re-init. The old `exit 0` in the v8+ branch made the
+# unconditional self-healing block unreachable, so these tables were NEVER
+# created on any existing v8 DB — only on fresh installs (different code path).
+# The pre-existing "v8+ re-init" idempotency test could not catch this because
+# it re-inits a COMPLETE DB; this test drops the tables first to reproduce a
+# real old-v8 instance.
+# ---------------------------------------------------------------------------
+
+@test "cast-db-init re-provisions self-healing tables on an existing v8 DB missing them" {
+  # Build a complete DB, then simulate an OLD v8 instance that lacks the
+  # consolidated tables while remaining at user_version=8.
+  bash "$DB_INIT" --db "$TEST_DB"
+  sqlite3 "$TEST_DB" "DROP TABLE injection_log; DROP TABLE quality_gates; DROP TABLE dispatch_decisions; DROP TABLE task_queue; DROP TABLE agent_truncations; PRAGMA user_version=8;"
+
+  # Sanity: confirm the precondition (tables really gone, still v8).
+  run sqlite3 "$TEST_DB" "PRAGMA user_version;"
+  assert_output "8"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('injection_log','quality_gates','dispatch_decisions','task_queue','agent_truncations');"
+  assert_output "0"
+
+  # Re-run init: self-healing block MUST run despite the v8 short-circuit.
+  run bash "$DB_INIT" --db "$TEST_DB"
+  assert_success
+
+  # All five self-healing tables must be back.
+  for tbl in injection_log quality_gates dispatch_decisions task_queue agent_truncations; do
+    run sqlite3 "$TEST_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='$tbl';"
+    assert_output "$tbl"
+  done
+}
+
+@test "cast-db-init self-heals a missing agent_runs column on an existing v8 DB" {
+  # Regression companion: the agent_runs column self-heal (response/agent_id/batch_id)
+  # also lived past the early exit and was unreachable for v8 DBs. Drop ONLY the
+  # 'response' column (a later additive column) to reproduce a realistic old-v8 DB.
+  bash "$DB_INIT" --db "$TEST_DB"
+  sqlite3 "$TEST_DB" "ALTER TABLE agent_runs DROP COLUMN response; PRAGMA user_version=8;"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name='response';"
+  assert_output "0"
+
+  run bash "$DB_INIT" --db "$TEST_DB"
+  assert_success
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name='response';"
+  assert_output "1"
+}

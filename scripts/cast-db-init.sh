@@ -41,7 +41,8 @@ fi
 
 CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
 
-# If already at v8+, ensure all additive tables exist and exit
+# If already at v8+, ensure version-specific additive tables exist, then FALL THROUGH
+# to the unconditional self-healing block at the bottom (do NOT exit here).
 if [ "$CURRENT_VERSION" -ge 8 ]; then
   # Additive migration: create stream_events if missing (stream_hook_events retired via migration 015)
   # Also add cache token columns if missing (Task 0a: token optimization)
@@ -124,8 +125,14 @@ CREATE TABLE IF NOT EXISTS tool_call_failures (
 );
 
 STREAM_TABLES
-  echo "cast.db already initialized (v${CURRENT_VERSION}), all tables ensured" >&2
-  exit 0
+  # Phase 3 #1 fix: do NOT exit here. Falling through lets the unconditional
+  # self-healing block (bottom of file) provision agent_truncations / injection_log /
+  # quality_gates / dispatch_decisions / task_queue on EXISTING v8 DBs. The early
+  # `exit 0` that used to be here made that block unreachable, so consolidated tables
+  # were never created on any v8 DB (only on fresh installs, which fall through). The
+  # version-gated migration blocks below are guarded by exact-version checks
+  # (==7, ==6, <7) and will not fire for a v8 DB; every statement is idempotent.
+  echo "cast.db already at v${CURRENT_VERSION}; ensuring additive + self-healing tables" >&2
 fi
 
 # Migrate v7 → v8: add swarm tables (additive only — no drops)
