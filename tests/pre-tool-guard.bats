@@ -279,6 +279,17 @@ print(json.dumps({
   assert_success
 }
 
+@test "CAST_PUSH_OK=1 with additional env var (CAST_SKIP_BATS_PUSH=1) before git push → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 CAST_SKIP_BATS_PUSH=1 git push -u origin feature/x")"
+  assert_success
+}
+
+@test "CAST_SKIP_BATS_PUSH=1 without CAST_PUSH_OK → still blocked (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_SKIP_BATS_PUSH=1 git push -u origin feature/x")"
+  assert_failure
+  assert_output --partial "git push"
+}
+
 @test "git -C /repo commit without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C /tmp/repo commit -m 'msg'")"
   assert_failure

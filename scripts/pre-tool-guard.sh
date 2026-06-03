@@ -170,8 +170,14 @@ fi
 if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
   exit 0
 fi
-# Allow ONLY if escape hatch env var appears before git push (tolerates leading cd chains and git global options)
-if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_PUSH_OK=1[[:space:]]+git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+push"; then
+# Allow ONLY if escape hatch env var appears before git push (tolerates leading cd chains, additional
+# env-var assignments between CAST_PUSH_OK=1 and git, and git global options).
+# Pattern breakdown:
+#   (^|&&\s*)             — start of line or after a && chain
+#   CAST_PUSH_OK=1\s+     — the required escape hatch
+#   ([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+\s+)*  — zero or more extra VAR=value assignments (e.g. CAST_SKIP_BATS_PUSH=1)
+#   git(global-opts)*\s+push — the actual git push command
+if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_PUSH_OK=1[[:space:]]+([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+push"; then
   exit 0
 fi
 # Block any other git push invocation (including those with git global options)
