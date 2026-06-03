@@ -38,6 +38,7 @@ ALLOWED_TABLES = {
     'stream_events',
     'tool_call_failures',
     'swarm_sessions',
+    'task_queue',
     'teammate_messages',
     'teammate_runs',
     'unstaged_warnings',
