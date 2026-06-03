@@ -9,7 +9,7 @@
 #   bash cast-overlay-sync.sh [--dry-run]
 #
 # Environment overrides:
-#   CAST_OVERLAY_REPO    — private repo URL (default: git@github.com:ek33450505/cast-private.git)
+#   CAST_OVERLAY_REPO    — private repo URL (default: https://github.com/ek33450505/cast-private.git)
 #   CAST_OVERLAY_DIR     — clone directory (default: ~/.local/share/cast/overlay)
 #   CAST_CLAUDE_DIR      — source dir (default: ~/.claude)
 
@@ -22,7 +22,7 @@ set -euo pipefail
 # Configuration
 # ============================================================================
 
-CAST_OVERLAY_REPO="${CAST_OVERLAY_REPO:-git@github.com:ek33450505/cast-private.git}"
+CAST_OVERLAY_REPO="${CAST_OVERLAY_REPO:-https://github.com/ek33450505/cast-private.git}"
 CAST_OVERLAY_DIR="${CAST_OVERLAY_DIR:-${HOME}/.local/share/cast/overlay}"
 CAST_CLAUDE_DIR="${CAST_CLAUDE_DIR:-${HOME}/.claude}"
 
@@ -124,8 +124,8 @@ if [[ ! -d "$CAST_OVERLAY_DIR" ]]; then
   info "Overlay dir not found at $CAST_OVERLAY_DIR, creating repo..."
 
   # Best-effort create private repo (no-op if exists)
-  repo_slug="${CAST_OVERLAY_REPO#git@github.com:}"
-  repo_slug="${repo_slug#https://github.com/}"
+  # Strip any scheme/host prefix (https://github.com/ or SSH host:) and the .git suffix.
+  repo_slug="${CAST_OVERLAY_REPO##*github.com[:/]}"
   repo_slug="${repo_slug%.git}"
   gh repo create "$repo_slug" --private 2>/dev/null || true
 
