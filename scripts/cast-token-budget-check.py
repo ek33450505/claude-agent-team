@@ -12,7 +12,11 @@ DB_PATH = Path(os.path.expanduser("~/.claude/cast.db"))
 
 
 def get_token_usage(session_id: str = None) -> dict:
-    """Get token usage for a session. Returns dict with token counts."""
+    """Get token usage for a session. Returns dict with token counts.
+
+    sessions table has: id, project, project_root, started_at, ended_at, model
+    agent_runs table has: session_id, input_tokens, output_tokens (no total_tokens column)
+    """
     if not DB_PATH.exists():
         return {"error": "cast.db not found", "total_tokens": 0}
 
@@ -21,33 +25,36 @@ def get_token_usage(session_id: str = None) -> dict:
     try:
         if session_id:
             row = conn.execute(
-                "SELECT session_id, total_tokens, input_tokens, output_tokens FROM sessions WHERE session_id = ? LIMIT 1",
+                "SELECT id AS session_id FROM sessions WHERE id = ? LIMIT 1",
                 (session_id,),
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT session_id, total_tokens, input_tokens, output_tokens FROM sessions ORDER BY created_at DESC LIMIT 1"
+                "SELECT id AS session_id FROM sessions ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
 
         if not row:
             return {"error": "No sessions found", "total_tokens": 0}
 
-        total = row["total_tokens"] or 0
         sid = row["session_id"]
 
-        # Fallback: sum from agent_runs if total_tokens is 0
-        if total == 0:
-            result = conn.execute(
-                "SELECT SUM(total_tokens) as total FROM agent_runs WHERE session_id = ?",
-                (sid,),
-            ).fetchone()
-            total = (result["total"] or 0) if result else 0
+        # Sum tokens from agent_runs (the authoritative source)
+        result = conn.execute(
+            "SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens, "
+            "COALESCE(SUM(output_tokens), 0) AS output_tokens "
+            "FROM agent_runs WHERE session_id = ?",
+            (sid,),
+        ).fetchone()
+
+        input_tokens = (result["input_tokens"] or 0) if result else 0
+        output_tokens = (result["output_tokens"] or 0) if result else 0
+        total = input_tokens + output_tokens
 
         return {
             "session_id": sid,
             "total_tokens": total,
-            "input_tokens": row["input_tokens"] or 0,
-            "output_tokens": row["output_tokens"] or 0,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
         }
     except sqlite3.OperationalError as e:
         return {"error": str(e), "total_tokens": 0}

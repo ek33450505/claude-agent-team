@@ -109,14 +109,20 @@ if USE_CAST_DB:
         db_execute("UPDATE agent_memories SET updated_at = ? WHERE id = ?", (now, existing_id))
         print(f"UPDATED:{existing_id}")
         sys.exit(0)
-    db_execute(
+    ok = db_execute(
         "INSERT INTO agent_memories "
         "(agent, project, type, name, description, content, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (agent, project or None, mem_type, name, description, content, now, now)
     )
-    rows = db_query("SELECT last_insert_rowid() AS id")
-    print(rows[0]['id'] if rows else '')
+    if ok:
+        rows = db_query(
+            "SELECT id FROM agent_memories WHERE agent = ? AND content = ? ORDER BY id DESC LIMIT 1",
+            (agent, content)
+        )
+        print(rows[0]['id'] if rows else '')
+    else:
+        print('')
 else:
     import sqlite3
     conn = sqlite3.connect(db_path, timeout=5)
@@ -152,7 +158,7 @@ if echo "$INSERT_ID" | grep -q "^UPDATED:"; then
 elif [ -n "$INSERT_ID" ]; then
   echo "Memory written: $NAME [$INSERT_ID]"
 else
-  echo "Memory written: $NAME [unknown id]"
+  echo "cast-memory-write: FAILED to persist '$NAME' — db write returned no id (see ~/.claude/logs/db-write-errors.log)" >&2
 fi
 
 exit 0

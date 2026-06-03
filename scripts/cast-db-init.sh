@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS tool_call_failures (
     project    TEXT,
     data       TEXT
 );
+
 STREAM_TABLES
   echo "cast.db already initialized (v${CURRENT_VERSION}), all tables ensured" >&2
   exit 0
@@ -465,6 +466,91 @@ CREATE TABLE IF NOT EXISTS agent_truncations (
 CREATE INDEX IF NOT EXISTS idx_at_session ON agent_truncations(session_id);
 CREATE INDEX IF NOT EXISTS idx_at_agent_type ON agent_truncations(agent_type);
 AGENT_TRUNCATIONS_TABLE
+  _columns_added=1
+fi
+
+# injection_log: memory retrieval telemetry (writer: cast-memory-router.py)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "injection_log"; then
+  sqlite3 "$DB_PATH" <<'INJECTION_LOG_TABLE'
+CREATE TABLE IF NOT EXISTS injection_log (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id      TEXT,
+  prompt_hash     TEXT,
+  fact_id         INTEGER,
+  score           REAL,
+  score_breakdown TEXT,
+  injected_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_injection_log_session     ON injection_log(session_id);
+CREATE INDEX IF NOT EXISTS idx_injection_log_injected_at ON injection_log(injected_at);
+INJECTION_LOG_TABLE
+  _columns_added=1
+fi
+
+# quality_gates: per-agent contract compliance (writers: cast-subagent-stop-hook.sh, cast-no-fake-success-guard.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "quality_gates"; then
+  sqlite3 "$DB_PATH" <<'QUALITY_GATES_TABLE'
+CREATE TABLE IF NOT EXISTS quality_gates (
+  id              TEXT PRIMARY KEY,
+  session_id      TEXT,
+  batch_id        INTEGER,
+  agent_name      TEXT,
+  timestamp       TEXT,
+  status_line     TEXT,
+  contract_passed INTEGER,
+  retry_count     INTEGER,
+  gate_type       TEXT,
+  created_at      TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_quality_gates_session    ON quality_gates(session_id);
+CREATE INDEX IF NOT EXISTS idx_quality_gates_gate_type  ON quality_gates(gate_type);
+CREATE INDEX IF NOT EXISTS idx_quality_gates_created_at ON quality_gates(created_at);
+QUALITY_GATES_TABLE
+  _columns_added=1
+fi
+
+# dispatch_decisions: routing telemetry (writer: cast-session-end.sh, cast-subagent-stop-hook.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "dispatch_decisions"; then
+  sqlite3 "$DB_PATH" <<'DISPATCH_DECISIONS_TABLE'
+CREATE TABLE IF NOT EXISTS dispatch_decisions (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id      TEXT,
+  prompt_snippet  TEXT,
+  chosen_agent    TEXT,
+  model           TEXT,
+  effort          TEXT,
+  wave_id         TEXT,
+  parallel        INTEGER DEFAULT 0,
+  created_at      TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_session    ON dispatch_decisions(session_id);
+CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_agent      ON dispatch_decisions(chosen_agent);
+CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_created_at ON dispatch_decisions(created_at);
+DISPATCH_DECISIONS_TABLE
+  _columns_added=1
+fi
+
+# task_queue: persistent agent task queue (writers: cast-queue-add.sh, cast-task-created-hook.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "task_queue"; then
+  sqlite3 "$DB_PATH" <<'TASK_QUEUE_TABLE'
+CREATE TABLE IF NOT EXISTS task_queue (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent         TEXT NOT NULL,
+  task          TEXT NOT NULL,
+  priority      INTEGER DEFAULT 5,
+  status        TEXT DEFAULT 'pending',
+  created_at    TEXT DEFAULT (datetime('now')),
+  claimed_at    TEXT,
+  completed_at  TEXT,
+  retry_count   INTEGER DEFAULT 0,
+  max_retries   INTEGER DEFAULT 3,
+  project       TEXT,
+  project_root  TEXT,
+  scheduled_for TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_queue_status     ON task_queue(status);
+CREATE INDEX IF NOT EXISTS idx_task_queue_created_at ON task_queue(created_at);
+TASK_QUEUE_TABLE
   _columns_added=1
 fi
 

@@ -419,7 +419,7 @@ PYEOF
     mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories;" 2>/dev/null || echo 0)"
     mem_stale="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE confidence < 0.4;" 2>/dev/null || echo 0)"
     local _mem_lv
-    _mem_lv="$(sqlite3 "$CAST_DB_PATH" "SELECT MAX(last_verified) FROM agent_memories;" 2>/dev/null || true)"
+    _mem_lv="$(sqlite3 "$CAST_DB_PATH" "SELECT MAX(last_validated_at) FROM agent_memories;" 2>/dev/null || true)"
     [ -n "$_mem_lv" ] && mem_last_verified="$_mem_lv"
   fi
 
@@ -1063,7 +1063,7 @@ else:
   print(f"Name: {r['name']}")
   print(f"Description: {r['description'] or '(none)'}")
   print(f"Confidence: {r.get('confidence', 1.0)}")
-  print(f"Last Verified: {r.get('last_verified', '(never)')}")
+  print(f"Last Verified: {r.get('last_validated_at', '(never)')}")
   print(f"Created: {r['created_at']}")
   print()
   print("Content:")
