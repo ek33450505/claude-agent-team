@@ -47,20 +47,27 @@ ALLOWED_TABLES = {
 # Allowlist for CAST_DB_URL / CAST_DB_PATH resolved paths.
 # Goal: block traversals into /etc, /usr, /root, other users' homes — while
 # allowing the user's ~/.claude/ and any system tempdir used by BATS / pytest.
+# The allowlist is evaluated per-call (not cached at module level) so it reflects
+# current env vars (e.g. TMPDIR, BATS_TMPDIR) at the time of each DB access.
 def _allowed_db_prefixes() -> tuple:
     prefixes = [
         str(Path.home() / '.claude') + os.sep,
         '/tmp/',
         str(Path('/tmp').resolve()) + os.sep,
         str(Path(tempfile.gettempdir()).resolve()) + os.sep,
+        # macOS system temp: /var/folders/... resolves to /private/var/folders/...
+        '/var/folders/',
+        str(Path('/var/folders').resolve()) + os.sep,
     ]
+    # Include any temp-dir env vars (TMPDIR, TEMP, TMP) — handles macOS mktemp paths
+    for env_var in ('TMPDIR', 'TEMP', 'TMP'):
+        val = os.environ.get(env_var)
+        if val:
+            prefixes.append(str(Path(val).resolve()) + os.sep)
     bats_tmpdir = os.environ.get('BATS_TEST_TMPDIR') or os.environ.get('BATS_TMPDIR')
     if bats_tmpdir:
         prefixes.append(str(Path(bats_tmpdir).resolve()) + os.sep)
     return tuple(prefixes)
-
-
-_DB_PATH_PREFIXES = _allowed_db_prefixes()
 
 
 def _validate_identifier(name: str) -> str:
@@ -101,8 +108,13 @@ def _connect():
     return conn
 
 
-def db_write(table: str, payload: dict) -> None:
-    """Insert a row into table using INSERT OR REPLACE. Keys become columns."""
+def db_write(table: str, payload: dict) -> bool:
+    """Insert a row into table using INSERT OR REPLACE. Keys become columns.
+
+    Returns True on success, False on any failure. Never raises. Callers that
+    ignore the return value are unaffected — the never-raise contract is preserved.
+    Retries up to 3 times on 'locked' OperationalError before returning False.
+    """
     _validate_identifier(table)
     if table not in ALLOWED_TABLES:
         raise ValueError(f'Table {table!r} is not in the CAST allowed-tables list.')
@@ -116,17 +128,17 @@ def db_write(table: str, payload: dict) -> None:
             with _connect() as conn:
                 conn.execute(sql, list(payload.values()))
                 conn.commit()
-            return
+            return True
         except sqlite3.OperationalError as e:
             if 'locked' in str(e) and attempt < 2:
                 import time
                 time.sleep(0.1 * (attempt + 1))
             else:
                 _log_error(f'db_write failed on {table}: {e}')
-                return
+                return False
         except Exception as e:
             _log_error(f'db_write failed on {table}: {e}')
-            return
+            return False
 
 
 def db_query(sql: str, params: tuple = ()) -> list:
@@ -139,24 +151,29 @@ def db_query(sql: str, params: tuple = ()) -> list:
         return []
 
 
-def db_execute(sql: str, params: tuple = ()) -> None:
-    """Run a non-SELECT statement (INSERT/UPDATE/DELETE/PRAGMA)."""
+def db_execute(sql: str, params: tuple = ()) -> bool:
+    """Run a non-SELECT statement (INSERT/UPDATE/DELETE/PRAGMA).
+
+    Returns True on success, False on any failure. Never raises. Callers that
+    ignore the return value are unaffected — the never-raise contract is preserved.
+    Retries up to 3 times on 'locked' OperationalError before returning False.
+    """
     for attempt in range(3):
         try:
             with _connect() as conn:
                 conn.execute(sql, params)
                 conn.commit()
-            return
+            return True
         except sqlite3.OperationalError as e:
             if 'locked' in str(e) and attempt < 2:
                 import time
                 time.sleep(0.1 * (attempt + 1))
             else:
                 _log_error(f'db_execute failed: {e}')
-                return
+                return False
         except Exception as e:
             _log_error(f'db_execute failed: {e}')
-            return
+            return False
 
 
 def _log_error(msg: str) -> None:
@@ -167,7 +184,8 @@ def _log_error(msg: str) -> None:
         with open(log_path, 'a') as f:
             f.write(f'[{ts}] ERROR cast_db.py: {msg}\n')
     except Exception:
-        pass
+        import sys
+        sys.stderr.write(f'cast_db.py ERROR (log unavailable): {msg}\n')
 
 
 def ensure_schema_columns() -> None:
