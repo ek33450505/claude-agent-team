@@ -1114,6 +1114,67 @@ _cmd_budget() {
   local show_week=0
   local project_filter=""
 
+  # `cast budget set ...` — configure a budget limit (writer). cast-budget-alert.sh
+  # reads the scope='global'/period='daily' row to fire spend warnings.
+  if [ "${1:-}" = "set" ]; then
+    shift
+    local b_scope="global" b_period="daily" b_limit="" b_alert="0.80"
+    while [ "${#}" -gt 0 ]; do
+      case "$1" in
+        --limit)    b_limit="${2:-}"; shift 2 ;;
+        --alert-at) b_alert="${2:-}"; shift 2 ;;
+        --scope)    b_scope="${2:-}"; shift 2 ;;
+        --period)   b_period="${2:-}"; shift 2 ;;
+        --help|-h)
+          cat <<USAGE
+Usage: cast budget set --limit <usd> [--alert-at <0-1>] [--scope global] [--period daily]
+
+  --limit <usd>       Spend limit in USD (required)
+  --alert-at <0-1>    Warn when spend reaches this fraction of the limit (default 0.80)
+  --scope <name>      Budget scope (default: global)
+  --period <name>     Budget period (default: daily)
+USAGE
+          return 0
+          ;;
+        *) shift ;;
+      esac
+    done
+    if [ -z "$b_limit" ]; then
+      _error "cast budget set requires --limit <usd>"
+      return 1
+    fi
+    _require_db
+    python3 - "$CAST_DB_PATH" "$b_scope" "$b_period" "$b_limit" "$b_alert" <<'PYEOF'
+import sys, sqlite3
+from datetime import datetime, timezone
+db_path, scope, period, limit_usd, alert_at = sys.argv[1:6]
+try:
+    limit_val = float(limit_usd)
+    alert_val = float(alert_at)
+except ValueError:
+    print("ERROR: --limit and --alert-at must be numbers", file=sys.stderr)
+    sys.exit(1)
+conn = sqlite3.connect(db_path, timeout=10)
+# Defensive: ensure the table exists even on an un-migrated DB.
+conn.execute(
+    "CREATE TABLE IF NOT EXISTS budgets ("
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, scope_key TEXT, period TEXT,"
+    "  limit_usd REAL, alert_at_pct REAL, created_at TEXT)"
+)
+# Upsert by (scope, period): clear any prior row then insert the new limit.
+conn.execute("DELETE FROM budgets WHERE scope=? AND period=?", (scope, period))
+conn.execute(
+    "INSERT INTO budgets (scope, scope_key, period, limit_usd, alert_at_pct, created_at) "
+    "VALUES (?, '*', ?, ?, ?, ?)",
+    (scope, period, limit_val, alert_val, datetime.now(timezone.utc).isoformat())
+)
+conn.commit()
+conn.close()
+print(f"Budget set: {scope}/{period} limit=${limit_val:.2f} alert_at={alert_val*100:.0f}%")
+PYEOF
+    return 0
+  fi
+
   while [ "${#}" -gt 0 ]; do
     case "$1" in
       --week)     show_week=1; shift ;;
@@ -1222,8 +1283,16 @@ _cmd_doctor() {
     return 1
   fi
 
-  # 2. Schema — 4 required tables
-  local required_tables="sessions agent_runs agent_memories routing_events"
+  # 2. Schema — every table cast-db-init.sh provisions (the single source of truth).
+  # Keep in sync with cast-db-init.sh. Organic self-create tables (file_writes,
+  # agent_hallucinations, etc.) are intentionally excluded — their writers create
+  # them lazily, so they may legitimately be absent on a fresh install.
+  local required_tables="sessions agent_runs routing_events agent_memories \
+stream_events swarm_sessions teammate_runs teammate_messages tool_call_failures \
+agent_truncations injection_log quality_gates dispatch_decisions task_queue \
+routines incidents plan_sessions memory_consolidation_runs archived_memories budgets"
+  local required_total
+  required_total=$(printf '%s\n' $required_tables | grep -c .)
   local missing_tables=""
   local found_count=0
   for tbl in $required_tables; do
@@ -1234,9 +1303,9 @@ _cmd_doctor() {
     fi
   done
   if [ -z "$missing_tables" ]; then
-    printf "%b Schema: %d tables present\n" "$OK" "$found_count"
+    printf "%b Schema: %d/%d provisioned tables present\n" "$OK" "$found_count" "$required_total"
   else
-    printf "%b Schema: %d/4 tables found — missing:%s\n" "$WARN" "$found_count" "$missing_tables"
+    printf "%b Schema: %d/%d tables found — missing:%s (run cast-db-init.sh)\n" "$WARN" "$found_count" "$required_total" "$missing_tables"
     overall_ok=0
   fi
 
