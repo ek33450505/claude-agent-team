@@ -99,3 +99,26 @@ print('OK')
 "
   assert_output "OK"
 }
+
+@test "broken git agent-hook is NOT present in PreToolUse hooks" {
+  run python3 -c "
+import json
+with open('$SETTINGS') as f:
+  s = json.load(f)
+pretool_hooks = s['hooks'].get('PreToolUse', [])
+# Verify no agent-type hook exists in PreToolUse
+for entry in pretool_hooks:
+  hooks = entry.get('hooks', [])
+  for hook in hooks:
+    assert hook.get('type') != 'agent', f'Found agent-type hook in PreToolUse (broken git-push hook): {hook}'
+print('OK')
+"
+  assert_output "OK"
+}
+
+@test "deterministic git push block remains in pre-tool-guard.sh" {
+  local guard="${BATS_TEST_DIRNAME}/../scripts/pre-tool-guard.sh"
+  # The deterministic guard must still block pushes and expose the CAST_PUSH_OK escape hatch.
+  grep -q 'git push block' "$guard"
+  grep -q 'CAST_PUSH_OK' "$guard"
+}
