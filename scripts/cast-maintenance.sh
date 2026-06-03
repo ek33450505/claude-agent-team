@@ -53,4 +53,10 @@ for logfile in "${CAST_DIR}"/logs/*.log; do
   fi
 done
 
+# 7. Run agent memory staleness sweep
+if [[ -f "${CAST_DIR}/scripts/cast-memory-staleness-sweep.sh" ]]; then
+  bash "${CAST_DIR}/scripts/cast-memory-staleness-sweep.sh" >> "${CAST_DIR}/logs/staleness-sweep.log" 2>&1 || true
+  log "Ran memory staleness sweep"
+fi
+
 log "Maintenance complete"
