@@ -150,6 +150,8 @@ Subcommands:
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
+  ${C_BOLD}files${C_RESET}                              File event tracking and analytics
+  ${C_BOLD}batch${C_RESET}                              Batch dispatch orchestration
 
 Global flags:
   --json        Machine-readable JSON output
@@ -2614,6 +2616,32 @@ _cmd_incidents() {
   CAST_DB_PATH="${CAST_DB_PATH}" exec python3 "$incidents_script" "$@"
 }
 
+# ── Subcommand: files ────────────────────────────────────────────────────────
+_cmd_files() {
+  local files_script="${CAST_SCRIPTS_DIR}/cast-files-api.sh"
+  if [ ! -f "$files_script" ]; then
+    files_script="${CAST_REPO_DIR}/scripts/cast-files-api.sh"
+  fi
+  if [ ! -f "$files_script" ]; then
+    _error "cast-files-api.sh not found. Run: bash install.sh"
+    exit 1
+  fi
+  exec bash "$files_script" "$@"
+}
+
+# ── Subcommand: batch ────────────────────────────────────────────────────────
+_cmd_batch() {
+  local batch_script="${CAST_SCRIPTS_DIR}/cast-batch-dispatch.sh"
+  if [ ! -f "$batch_script" ]; then
+    batch_script="${CAST_REPO_DIR}/scripts/cast-batch-dispatch.sh"
+  fi
+  if [ ! -f "$batch_script" ]; then
+    _error "cast-batch-dispatch.sh not found. Run: bash install.sh"
+    exit 1
+  fi
+  exec bash "$batch_script" "$@"
+}
+
 # ── Main dispatch ────────────────────────────────────────────────────────────
 if [ "$#" -gt 0 ]; then
   CAST_ARGS=("$@")
@@ -2666,6 +2694,8 @@ case "$SUBCOMMAND" in
   install-completions)  _cmd_install_completions "$@" ;;
   routines)             _cmd_routines "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
+  files)                _cmd_files "$@" ;;
+  batch)                _cmd_batch "$@" ;;
   ""|--help|-h)
     _usage
     exit 0

@@ -815,6 +815,66 @@ CONTRACT_TEST_RUNS_TABLE
   _columns_added=1
 fi
 
+# dispatch_events: cookbook drift dispatch telemetry (writer: cast-cookbook-drift.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "dispatch_events"; then
+  sqlite3 "$DB_PATH" <<'DISPATCH_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS dispatch_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT NOT NULL,
+  task_name TEXT,
+  triggered_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  status TEXT,
+  report_path TEXT
+);
+DISPATCH_EVENTS_TABLE
+  _columns_added=1
+fi
+
+# rate_limit_snapshots: Anthropic rate limit tracking (writer: cast-rate-check.py)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "rate_limit_snapshots"; then
+  sqlite3 "$DB_PATH" <<'RATE_LIMIT_SNAPSHOTS_TABLE'
+CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+  ts          INTEGER,
+  tpm_limit   INTEGER,
+  tpm_used    INTEGER,
+  rpm_limit   INTEGER,
+  rpm_used    INTEGER,
+  raw_json    TEXT
+);
+RATE_LIMIT_SNAPSHOTS_TABLE
+  _columns_added=1
+fi
+
+# files_api_events: file API observability (writer: cast-files-api.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "files_api_events"; then
+  sqlite3 "$DB_PATH" <<'FILES_API_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS files_api_events (
+  id TEXT PRIMARY KEY,
+  action TEXT,
+  file_id TEXT,
+  local_path TEXT,
+  agent TEXT,
+  created_at TEXT
+);
+FILES_API_EVENTS_TABLE
+  _columns_added=1
+fi
+
+# batch_dispatches: batch API invocation tracking (writer: cast-batch-dispatch.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "batch_dispatches"; then
+  sqlite3 "$DB_PATH" <<'BATCH_DISPATCHES_TABLE'
+CREATE TABLE IF NOT EXISTS batch_dispatches (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  custom_id TEXT NOT NULL,
+  prompt_preview TEXT,
+  submitted_at TEXT NOT NULL
+);
+BATCH_DISPATCHES_TABLE
+  _columns_added=1
+fi
+
 # schema_migrations: the migration ledger. Canonical shape shared by cast-migrate.sh
 # and cast-migrate.py. Provisioned here so it always exists even though the migration
 # runners are now redundant (init provisions all schema directly — see header).

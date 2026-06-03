@@ -59,4 +59,16 @@ if [[ -f "${CAST_DIR}/scripts/cast-memory-staleness-sweep.sh" ]]; then
   log "Ran memory staleness sweep"
 fi
 
+# 8. Collect cookbook drift dispatch events
+if [[ -f "${CAST_DIR}/scripts/cast-cookbook-drift.sh" ]]; then
+  bash "${CAST_DIR}/scripts/cast-cookbook-drift.sh" >> "${CAST_DIR}/logs/cookbook-drift.log" 2>&1 || true
+  log "Collected cookbook drift events"
+fi
+
+# 9. Snapshot Anthropic rate limits
+if [[ -f "${CAST_DIR}/scripts/cast-rate-check.py" ]]; then
+  python3 "${CAST_DIR}/scripts/cast-rate-check.py" >> "${CAST_DIR}/logs/rate-check.log" 2>&1 || true
+  log "Recorded rate limit snapshot"
+fi
+
 log "Maintenance complete"
