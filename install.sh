@@ -401,6 +401,20 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
             warn "  launchctl load failed for $PLIST_DEST — verify manually"
         fi
     fi
+
+    # Install cast-memory-embed.plist for nightly embedding generation
+    if [ -f "$SCRIPT_DIR/macos/cast-memory-embed.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.memory-embed.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-memory-embed.plist" > "$PLIST_DEST"
+
+        # Idempotently (re)load the plist
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.memory-embed)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
 fi
 
 # --- Wire pre-commit hook ---
