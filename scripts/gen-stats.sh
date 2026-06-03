@@ -39,20 +39,21 @@ fi
 # Routes removed in CAST v3 — model-driven dispatch via CLAUDE.md
 ROUTE_COUNT=0
 
-# DB tables: count CREATE TABLE IF NOT EXISTS across canonical schema sources
+# DB tables: count DISTINCT table names across canonical schema sources
 # (init script + both migration directories). This counts the tables the framework
 # ships with, not a particular user's live cast.db (which may have FTS sidecars
 # or accumulated state from past versions).
-DB_TABLE_COUNT=0
-for f in scripts/cast-db-init.sh scripts/migrations/*.sql migrations/*.sql; do
-  if [ -f "$f" ]; then
-    # grep -c emits a count on stdout AND exits 1 when count is 0;
-    # the `|| echo 0` shim re-prints "0", producing a multi-line value
-    # that breaks $(()). Suppress stderr, redirect to /dev/null on miss.
-    n=$(grep -cE "CREATE TABLE IF NOT EXISTS" "$f" 2>/dev/null) || n=0
-    DB_TABLE_COUNT=$((DB_TABLE_COUNT + n))
-  fi
-done
+#
+# Tables are idempotently declared with CREATE TABLE IF NOT EXISTS in multiple
+# files (and re-declared in init.sh's self-healing block), so we extract unique
+# table identifiers rather than summing CREATE statements across files.
+DB_TABLE_COUNT=$(
+  grep -rhoE 'CREATE TABLE IF NOT EXISTS[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(' \
+    scripts/cast-db-init.sh scripts/migrations/*.sql migrations/*.sql 2>/dev/null | \
+    sed -E 's/.*EXISTS[[:space:]]+//;s/[[:space:]]*\(//' | \
+    sort -u | wc -l
+) || DB_TABLE_COUNT=0
+DB_TABLE_COUNT=$(echo "$DB_TABLE_COUNT" | tr -d ' ')
 
 # --- Update sentinel tokens in README ---
 update_token() {

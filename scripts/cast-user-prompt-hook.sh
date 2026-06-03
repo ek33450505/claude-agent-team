@@ -48,8 +48,10 @@ prompt_preview = None
 
 if _redact_script and os.path.isfile(_redact_script):
     try:
+        # --engine regex: regex covers all credential/secret patterns; spaCy NER is
+        # lower-stakes for a prompt preview field — avoids 0.5–3s Presidio startup cost.
         _result = _sp.run(
-            ["python3", _redact_script],
+            ["python3", _redact_script, "--engine", "regex"],
             input=raw_preview,
             capture_output=True,
             text=True,

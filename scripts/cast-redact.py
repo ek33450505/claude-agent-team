@@ -71,6 +71,44 @@ FALLBACK_PATTERNS = [
     ("SLACK_WEBHOOK",   r"hooks\.slack\.com/[^\s]+"),
 ]
 
+# F2: Precompile FALLBACK_PATTERNS at module load to avoid per-call re.compile overhead.
+_COMPILED_PATTERNS: list[tuple[str, re.Pattern]] = [
+    (etype, re.compile(pat, re.IGNORECASE)) for etype, pat in FALLBACK_PATTERNS
+]
+
+# F3: Fast short-circuit — skip regex scan entirely when text contains none of the
+# characters/prefixes that any FALLBACK_PATTERNS entry can match.
+#
+# Superset coverage rationale (one entry per pattern):
+#   EMAIL_ADDRESS  → @
+#   PHONE_NUMBER   → \d
+#   US_SSN         → \d
+#   CREDIT_CARD    → \d
+#   IP_ADDRESS     → \d
+#   AWS_ACCESS_KEY → \d  (AKIA followed by [0-9A-Z] — numerics always present)
+#   GITHUB_TOKEN   → ghp_|gho_|ghu_|ghs_|ghr_|github_pat_  (pure-alpha prefix, no digits/@ required)
+#   ANTHROPIC_KEY  → sk-
+#   OPENAI_KEY     → sk-
+#   BEARER_TOKEN   → bearer\s  (keyword; value may be pure-alpha with no digit/@)
+#   JWT            → eyJ
+#   DATABASE_URL   → /  (scheme://user:pass@host always has /)
+#   PRIVATE_KEY    → BEGIN\s
+#   API_KEY        → api.{0,1}key or x-api-key  (keyword; value may be pure-alpha)
+#   ABSOLUTE_PATH  → /
+#   BITBUCKET_URL  → /
+#   SLACK_WEBHOOK  → /
+#
+# GITHUB_TOKEN, BEARER_TOKEN, and API_KEY can all match text with no @, digit, /, sk-, eyJ, or
+# BEGIN\s, so their keyword prefixes are added explicitly to ensure the candidate is a
+# strict superset of every pattern's trigger set.
+_PII_CANDIDATES: re.Pattern = re.compile(
+    r'[@\d/]|sk-|eyJ|BEGIN\s'
+    r'|(?:ghp|gho|ghu|ghs|ghr|github_pat)_'
+    r'|bearer\s'
+    r'|api[_\-]?key|x-api-key',
+    re.IGNORECASE,
+)
+
 
 def load_custom_patterns(patterns_file: str) -> list[dict]:
     """Load custom regex patterns from the CAST pii-patterns.json config."""
@@ -154,20 +192,33 @@ def redact_presidio(text: str, analyzer_results, mode: str) -> str:
 
 
 def analyze_regex(text: str, custom_patterns: list[dict]) -> list[dict]:
-    """Fallback: detect PII using built-in + custom regex patterns."""
-    all_patterns = list(FALLBACK_PATTERNS)
+    """Fallback: detect PII using built-in + custom regex patterns.
+
+    F3: short-circuits immediately when text lacks any characters that could
+    trigger a FALLBACK_PATTERNS match (see _PII_CANDIDATES superset rationale above).
+    F2: uses precompiled _COMPILED_PATTERNS rather than compiling per-call.
+    """
+    # F3: fast exit — no PII trigger characters present in text
+    if not _PII_CANDIDATES.search(text):
+        return []
+
+    # F2: use precompiled built-in patterns; compile custom patterns on demand
+    compiled: list[tuple[str, re.Pattern]] = list(_COMPILED_PATTERNS)
     for p in custom_patterns:
         entity_type = p.get("entity_type", "CUSTOM")
         regex = p.get("regex", "")
         if regex:
-            all_patterns.append((entity_type, regex))
+            try:
+                compiled.append((entity_type, re.compile(regex, re.IGNORECASE)))
+            except re.error:
+                continue
 
     entities = []
     seen_spans = set()
 
-    for entity_type, pattern in all_patterns:
+    for entity_type, pattern in compiled:
         try:
-            for m in re.finditer(pattern, text, re.IGNORECASE):
+            for m in pattern.finditer(text):
                 # Use group 1 if capturing group, else full match
                 start = m.start(1) if m.lastindex else m.start()
                 end = m.end(1) if m.lastindex else m.end()
@@ -345,6 +396,17 @@ def main():
         sys.exit(1)
 
     if not text.strip():
+        print(json.dumps({
+            "redacted_text": text,
+            "entities": [],
+            "entity_count": 0,
+            "mode": args.mode,
+            "engine": "none",
+        }))
+        return
+
+    # F4: texts under 10 chars cannot contain any supported PII pattern — skip engines entirely.
+    if len(text) < 10:
         print(json.dumps({
             "redacted_text": text,
             "entities": [],

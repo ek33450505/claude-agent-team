@@ -723,6 +723,158 @@ BUDGETS_TABLE
   _columns_added=1
 fi
 
+# agent_protocol_violations: protocol-violation tracking (writer: cast-agent-protocol-check.sh)
+# PRIORITY: its writer uses db_write with NO inline CREATE guard → silent write failures without this.
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "agent_protocol_violations"; then
+  sqlite3 "$DB_PATH" <<'AGENT_PROTOCOL_VIOLATIONS_TABLE'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id   TEXT,
+  agent_type   TEXT NOT NULL,
+  agent_id     TEXT,
+  batch_id     INTEGER,
+  violation    TEXT NOT NULL,
+  pattern      TEXT,
+  timestamp    TEXT NOT NULL,
+  raw_excerpt  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_apv_session ON agent_protocol_violations(session_id);
+CREATE INDEX IF NOT EXISTS idx_apv_agent_type ON agent_protocol_violations(agent_type);
+CREATE INDEX IF NOT EXISTS idx_apv_timestamp ON agent_protocol_violations(timestamp);
+AGENT_PROTOCOL_VIOLATIONS_TABLE
+  _columns_added=1
+fi
+
+# file_writes: IDE gutter annotation telemetry (writer: cast-post-tool.py)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "file_writes"; then
+  sqlite3 "$DB_PATH" <<'FILE_WRITES_TABLE'
+CREATE TABLE IF NOT EXISTS file_writes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id  TEXT,
+  agent_name  TEXT,
+  run_id      INTEGER,
+  file_path   TEXT NOT NULL,
+  tool_name   TEXT NOT NULL,
+  ts          TEXT NOT NULL DEFAULT (datetime('now')),
+  line_range  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_writes_path        ON file_writes(file_path);
+CREATE INDEX IF NOT EXISTS idx_file_writes_session_ts  ON file_writes(session_id, ts);
+CREATE INDEX IF NOT EXISTS idx_file_writes_run         ON file_writes(run_id);
+FILE_WRITES_TABLE
+  _columns_added=1
+fi
+
+# unstaged_warnings: git staging enforcement (writer: cast-post-tool.py at ~338)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "unstaged_warnings"; then
+  sqlite3 "$DB_PATH" <<'UNSTAGED_WARNINGS_TABLE'
+CREATE TABLE IF NOT EXISTS unstaged_warnings (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id      TEXT,
+  commit_sha      TEXT,
+  unstaged_files  TEXT,
+  in_scope_files  TEXT,
+  timestamp       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_uw_session ON unstaged_warnings(session_id);
+CREATE INDEX IF NOT EXISTS idx_uw_timestamp ON unstaged_warnings(timestamp);
+UNSTAGED_WARNINGS_TABLE
+  _columns_added=1
+fi
+
+# managed_agent_invocations: Managed Agents telemetry (writer: cast-managed-agent.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "managed_agent_invocations"; then
+  sqlite3 "$DB_PATH" <<'MANAGED_AGENT_INVOCATIONS_TABLE'
+CREATE TABLE IF NOT EXISTS managed_agent_invocations (
+  id TEXT PRIMARY KEY,
+  ts TEXT,
+  agent_name TEXT,
+  mode TEXT,
+  http_status INTEGER,
+  exit_code INTEGER,
+  session_duration_ms INTEGER
+);
+MANAGED_AGENT_INVOCATIONS_TABLE
+  _columns_added=1
+fi
+
+# contract_test_runs: agent contract testing (writer: cast-contract-runner.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "contract_test_runs"; then
+  sqlite3 "$DB_PATH" <<'CONTRACT_TEST_RUNS_TABLE'
+CREATE TABLE IF NOT EXISTS contract_test_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT,
+  fixture TEXT,
+  result TEXT,
+  timestamp TEXT
+);
+CONTRACT_TEST_RUNS_TABLE
+  _columns_added=1
+fi
+
+# dispatch_events: cookbook drift dispatch telemetry (writer: cast-cookbook-drift.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "dispatch_events"; then
+  sqlite3 "$DB_PATH" <<'DISPATCH_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS dispatch_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT NOT NULL,
+  task_name TEXT,
+  triggered_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  status TEXT,
+  report_path TEXT
+);
+DISPATCH_EVENTS_TABLE
+  _columns_added=1
+fi
+
+# rate_limit_snapshots: Anthropic rate limit tracking (writer: cast-rate-check.py)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "rate_limit_snapshots"; then
+  sqlite3 "$DB_PATH" <<'RATE_LIMIT_SNAPSHOTS_TABLE'
+CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+  ts          INTEGER,
+  tpm_limit   INTEGER,
+  tpm_used    INTEGER,
+  rpm_limit   INTEGER,
+  rpm_used    INTEGER,
+  raw_json    TEXT
+);
+RATE_LIMIT_SNAPSHOTS_TABLE
+  _columns_added=1
+fi
+
+# files_api_events: file API observability (writer: cast-files-api.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "files_api_events"; then
+  sqlite3 "$DB_PATH" <<'FILES_API_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS files_api_events (
+  id TEXT PRIMARY KEY,
+  action TEXT,
+  file_id TEXT,
+  local_path TEXT,
+  agent TEXT,
+  created_at TEXT
+);
+FILES_API_EVENTS_TABLE
+  _columns_added=1
+fi
+
+# batch_dispatches: batch API invocation tracking (writer: cast-batch-dispatch.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "batch_dispatches"; then
+  sqlite3 "$DB_PATH" <<'BATCH_DISPATCHES_TABLE'
+CREATE TABLE IF NOT EXISTS batch_dispatches (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  custom_id TEXT NOT NULL,
+  prompt_preview TEXT,
+  submitted_at TEXT NOT NULL
+);
+BATCH_DISPATCHES_TABLE
+  _columns_added=1
+fi
+
 # schema_migrations: the migration ledger. Canonical shape shared by cast-migrate.sh
 # and cast-migrate.py. Provisioned here so it always exists even though the migration
 # runners are now redundant (init provisions all schema directly — see header).

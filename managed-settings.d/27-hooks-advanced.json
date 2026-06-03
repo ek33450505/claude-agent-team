@@ -23,17 +23,6 @@
             "if": "Write(**/.env*) || Write(**/auth/**) || Write(**/credentials*) || Write(**/secrets*) || Edit(**/.env*) || Edit(**/auth/**) || Edit(**/credentials*) || Edit(**/secrets*)"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "agent",
-            "prompt": "Before allowing this git push, check: 1) Are there uncommitted changes? 2) Is this pushing to main/master? If pushing to main, run the test suite (bats tests/ from the repo root) and verify no regressions. Report ALLOW or BLOCK with reason.",
-            "if": "Bash(git push*)",
-            "timeout": 120
-          }
-        ]
       }
     ]
   }

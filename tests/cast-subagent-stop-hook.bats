@@ -172,3 +172,45 @@ print('\n'.join(lines))
   count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
   [[ "$count" -eq 0 ]]
 }
+
+# ---------------------------------------------------------------------------
+# Workflow/Structured-Output Agent Tests (Phase 3.8.H)
+#
+# workflow-subagent agents emit StructuredOutput tool results, NOT prose Status blocks.
+# They must NOT be subject to the truncation check (false-positive protection).
+# ---------------------------------------------------------------------------
+
+@test "workflow-subagent with no Status block is NOT flagged as truncated" {
+  # Workflow subagents legitimately complete via StructuredOutput tool call
+  # and do NOT emit a Status block. This must not trigger [CAST-TRUNCATED].
+  local output="Tool call: structured_output({result: ...})"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "workflow-subagent" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  # No truncation record should be written for workflow-subagents
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "code-writer with no Status block IS still flagged as truncated (CAST convention agents)" {
+  # Code-writer is a CAST convention agent — it MUST emit a Status block.
+  # Absence indicates truncation and should trigger the flag.
+  local output="Applied the requested changes to the source file."
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-writer" "$output")"
+  assert_success
+  assert_output --partial "[CAST-TRUNCATED]"
+  # Truncation record should be written for code-writer
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 1 ]]
+}
+
+@test "any agent WITH a Status block is not flagged (including workflow-subagent)" {
+  # Even though workflow-subagent normally uses StructuredOutput,
+  # if it does emit a Status block, no false positive is triggered.
+  local output="Tool call result. Status: DONE"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "workflow-subagent" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+}
