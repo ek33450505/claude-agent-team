@@ -323,6 +323,7 @@ for agent in sorted(agent_dirs):
         name = fields.get('name', '') or os.path.splitext(os.path.basename(fpath))[0]
         description = fields.get('description', '') or ''
         mem_type = fields.get('type', '') or ''
+        project_from_fm = fields.get('project') or None
         content = body
 
         if not name:
@@ -348,7 +349,7 @@ for agent in sorted(agent_dirs):
                     """INSERT INTO agent_memories
                        (agent, project, type, name, description, content, created_at, updated_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (agent, None, mem_type, name, description, content, now, now)
+                    (agent, project_from_fm, mem_type, name, description, content, now, now)
                 )
                 inserted += 1
 
