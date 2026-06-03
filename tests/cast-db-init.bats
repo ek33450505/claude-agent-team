@@ -255,3 +255,25 @@ teardown() {
   run sqlite3 "$TEST_DB" "INSERT INTO budgets (scope,scope_key,period,limit_usd,alert_at_pct,created_at) VALUES ('global','*','daily',10.0,0.8,'2026-06-03');"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# Phase 3 UNIT E: cast-db-init.sh owns schema_migrations with the canonical
+# (version/applied_at/checksum) shape. cast-migrate.py used a divergent
+# (migration_name) shape and errored against an init/sh-created table. Both
+# runners now agree with init.
+# ---------------------------------------------------------------------------
+
+@test "cast-db-init provisions schema_migrations with the canonical version column" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('schema_migrations') WHERE name='version';"
+  assert_output "1"
+  # The legacy divergent column must NOT be what init creates.
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('schema_migrations') WHERE name='migration_name';"
+  assert_output "0"
+}
+
+@test "cast-migrate.py runs clean against an init-provisioned schema_migrations (divergence fix)" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  run env CAST_DB_PATH="$TEST_DB" python3 "$REPO_DIR/scripts/cast-migrate.py"
+  assert_success
+}

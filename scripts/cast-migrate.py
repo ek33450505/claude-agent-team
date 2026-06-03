@@ -30,11 +30,16 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 
 def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
+    # Canonical schema_migrations shape — identical to cast-migrate.sh and the
+    # table cast-db-init.sh provisions (the single source of truth). The migration
+    # filename is stored in `version`. Previously this used a divergent
+    # (id, migration_name) shape, so whichever runner touched the table second
+    # errored on INSERT.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            migration_name TEXT UNIQUE NOT NULL,
-            applied_at     TEXT NOT NULL
+            version    TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+            checksum   TEXT
         )
     """)
     conn.commit()
@@ -42,7 +47,7 @@ def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
 
 def _already_applied(conn: sqlite3.Connection, migration_name: str) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM schema_migrations WHERE migration_name = ?",
+        "SELECT 1 FROM schema_migrations WHERE version = ?",
         (migration_name,)
     ).fetchone()
     return row is not None
@@ -51,8 +56,8 @@ def _already_applied(conn: sqlite3.Connection, migration_name: str) -> bool:
 def _record_applied(conn: sqlite3.Connection, migration_name: str) -> None:
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     conn.execute(
-        "INSERT OR IGNORE INTO schema_migrations (migration_name, applied_at) VALUES (?, ?)",
-        (migration_name, ts)
+        "INSERT OR IGNORE INTO schema_migrations (version, applied_at, checksum) VALUES (?, ?, ?)",
+        (migration_name, ts, 'py-applied')
     )
     conn.commit()
 

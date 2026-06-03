@@ -7,6 +7,12 @@
 # Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
 # Schema versioning via PRAGMA user_version (current = 8).
 #
+# SINGLE SOURCE OF TRUTH: this script (its fresh-install CREATEs plus the
+# unconditional self-healing block at the bottom) is the authoritative definition
+# of the cast.db schema. The migration runners (cast-migrate.sh / cast-migrate.py)
+# are secondary and do not run reliably at install time, so any table or column a
+# writer depends on MUST be provisioned here — not only in a migration file.
+#
 # KNOWN ORGANIC SCHEMA ADDITIONS (live DB may contain unprovisionable tables):
 # These exist in deployed instances but are added by external systems or
 # sessions outside this init script, and should NOT be included here:
@@ -714,6 +720,20 @@ CREATE TABLE IF NOT EXISTS budgets (
 );
 CREATE INDEX IF NOT EXISTS idx_budgets_scope ON budgets(scope, period);
 BUDGETS_TABLE
+  _columns_added=1
+fi
+
+# schema_migrations: the migration ledger. Canonical shape shared by cast-migrate.sh
+# and cast-migrate.py. Provisioned here so it always exists even though the migration
+# runners are now redundant (init provisions all schema directly — see header).
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "schema_migrations"; then
+  sqlite3 "$DB_PATH" <<'SCHEMA_MIGRATIONS_TABLE'
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+  checksum   TEXT
+);
+SCHEMA_MIGRATIONS_TABLE
   _columns_added=1
 fi
 
