@@ -193,3 +193,65 @@ teardown() {
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name='response';"
   assert_output "1"
 }
+
+# ---------------------------------------------------------------------------
+# Phase 3 UNIT B: provision the tables/columns that had live writers but were
+# only created by the now-defunct migration runners (init = source of truth).
+# ---------------------------------------------------------------------------
+
+@test "cast-db-init provisions all formerly-migration-only tables on a fresh DB" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  for tbl in routines incidents plan_sessions memory_consolidation_runs archived_memories budgets; do
+    run sqlite3 "$TEST_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='$tbl';"
+    assert_output "$tbl"
+  done
+}
+
+@test "cast-db-init adds sessions cost-rollup columns" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  for col in status deleted_at total_input_tokens total_output_tokens total_cost_usd; do
+    run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('sessions') WHERE name='$col';"
+    assert_output "1"
+  done
+  # The cast-session-end.sh cost-rollup UPDATE must succeed.
+  sqlite3 "$TEST_DB" "INSERT INTO sessions (id) VALUES ('s1');"
+  run sqlite3 "$TEST_DB" "UPDATE sessions SET total_input_tokens=1, total_output_tokens=2, total_cost_usd=0.5 WHERE id='s1';"
+  assert_success
+}
+
+@test "cast-db-init adds routing_events agent attribution columns" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('routing_events') WHERE name IN ('agent_id','agent_type');"
+  assert_output "2"
+  # The cast-db-log.py INSERT (11 columns incl. agent_id, agent_type) must succeed.
+  run sqlite3 "$TEST_DB" "INSERT INTO routing_events (session_id, timestamp, prompt_preview, action, matched_route, match_type, pattern, confidence, project, agent_id, agent_type) VALUES ('s','t','p','a','m','mt','pat','c','proj','aid','code-writer');"
+  assert_success
+}
+
+@test "cast-db-init adds agent_runs.owns_files column" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name='owns_files';"
+  assert_output "1"
+}
+
+@test "cast-db-init re-provisions formerly-migration-only tables on an existing v8 DB missing them" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  sqlite3 "$TEST_DB" "DROP TABLE routines; DROP TABLE incidents; DROP TABLE memory_consolidation_runs; DROP TABLE budgets; PRAGMA user_version=8;"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('routines','incidents','memory_consolidation_runs','budgets');"
+  assert_output "0"
+
+  run bash "$DB_INIT" --db "$TEST_DB"
+  assert_success
+  for tbl in routines incidents memory_consolidation_runs budgets; do
+    run sqlite3 "$TEST_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='$tbl';"
+    assert_output "$tbl"
+  done
+}
+
+@test "cast-db-init routines/budgets accept their live writer shapes" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  run sqlite3 "$TEST_DB" "INSERT INTO routines (id,name,trigger_type,agent_to_dispatch,prompt_template,output_dir,created_at) VALUES ('r1','nightly','cron','docs','do x','/tmp/out','2026-06-03');"
+  assert_success
+  run sqlite3 "$TEST_DB" "INSERT INTO budgets (scope,scope_key,period,limit_usd,alert_at_pct,created_at) VALUES ('global','*','daily',10.0,0.8,'2026-06-03');"
+  assert_success
+}
