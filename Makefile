@@ -23,9 +23,11 @@ test:
 test-ubuntu:
 	@echo "Running BATS in Docker Ubuntu (mirrors CI)..."
 	docker build -f Dockerfile.ci -t cast-ci-ubuntu . --quiet
+	# SAFETY: never mount the host ~/.claude into this container. A destructive test wiped the
+	# maintainer's live runtime through exactly that mount (audit §3.8.B). The container builds its
+	# own ephemeral ~/.claude from /repo below; it must have zero access to the host runtime.
 	docker run --rm \
 	  -v "$(PWD):/repo" \
-	  -v "$(HOME)/.claude:/root/.claude" \
 	  cast-ci-ubuntu bash -c " \
 	    mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status && \
 	    cp /repo/scripts/*.sh ~/.claude/scripts/ && \

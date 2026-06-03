@@ -81,6 +81,38 @@ for tm in teammates:
         print(f"  {role}: no worktree (read-only) — skipping")
         continue
 
+    # SAFETY GUARD (§3.8.A): refuse to delete any path that is not a non-empty
+    # absolute path under the allowed swarm worktree root (/tmp/cast-swarm-*).
+    # A manifest whose "worktree" value is empty, ".", "/", a home directory, or
+    # anything containing "/.claude" must never drive an unbounded delete.
+    # Path is canonicalized via os.path.realpath before checking, which:
+    #   (a) collapses ".." sequences (preventing directory traversal)
+    #   (b) resolves symlinks including macOS /tmp -> /private/tmp
+    def _is_safe_worktree(path):
+        if not path or not os.path.isabs(path):
+            return False
+        # Canonicalize: collapses '..' and resolves symlinks (incl. macOS /tmp -> /private/tmp)
+        real = os.path.realpath(path)
+        # Never touch anything that looks like a runtime/home path
+        if '/.claude' in real or '/.claude' in path:
+            return False
+        home = os.path.expanduser('~').rstrip('/')
+        if real in ('', '/', home):
+            return False
+        # Must live under the swarm worktree root (handle both /tmp and macOS /private/tmp)
+        allowed_roots = ('/tmp/cast-swarm-', '/private/tmp/cast-swarm-')
+        if not any(real.startswith(r) for r in allowed_roots):
+            return False
+        return True
+
+    if not _is_safe_worktree(worktree):
+        print(
+            f"  {role}: REFUSED — worktree path '{worktree}' is outside allowed "
+            f"/tmp/cast-swarm-* root; skipping to prevent accidental data loss (§3.8.A)",
+            file=sys.stderr
+        )
+        continue
+
     # Try graceful remove first, then force
     result = subprocess.run(
         ["git", "-C", git_root, "worktree", "remove", worktree],
@@ -96,7 +128,8 @@ for tm in teammates:
         print(f"  {role}: removed ({worktree})")
     else:
         print(f"  {role}: WARNING — could not remove {worktree}: {result.stderr.strip()}", file=sys.stderr)
-        # Try to clean up the directory directly as last resort
+        # Try to clean up the directory directly as last resort.
+        # SAFETY: path was validated by _is_safe_worktree above.
         try:
             if os.path.exists(worktree):
                 shutil.rmtree(worktree)
