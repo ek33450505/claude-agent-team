@@ -25,7 +25,9 @@ OUTPUT_LEN="${#HOOK_OUTPUT}"
 if [ "$OUTPUT_LEN" -gt "$MAX_BYTES" ]; then
   OVERFLOW_FILE="${HOME}/.claude/logs/hook-overflow-$(date -u +%Y%m%dT%H%M%SZ).txt"
   mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
-  REDACTED=$(printf '%s' "$HOOK_OUTPUT" | python3 "${HOME}/.claude/scripts/cast-redact.py" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("redacted_text",""))' 2>/dev/null)
+  # --engine regex: regex covers all credential/secret patterns; spaCy NER is lower-stakes
+  # for an overflow log field — avoids 0.5–3s Presidio startup cost on this hot path.
+  REDACTED=$(printf '%s' "$HOOK_OUTPUT" | python3 "${HOME}/.claude/scripts/cast-redact.py" --engine regex 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("redacted_text",""))' 2>/dev/null)
   if [ -n "$REDACTED" ]; then
     printf '%s' "$REDACTED" > "$OVERFLOW_FILE" 2>/dev/null || true
     REDACTED_OK="true"
