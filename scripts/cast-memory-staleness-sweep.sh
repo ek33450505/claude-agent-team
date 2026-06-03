@@ -84,7 +84,11 @@ try:
         # Update database: set new confidence and last_validated_at
         # Confidence: old + delta, clamped to [0.0, 1.0]
         cur.execute("SELECT confidence FROM agent_memories WHERE id = ?", (entry_id,))
-        old_confidence = cur.fetchone()[0] or 1.0
+        conf_row = cur.fetchone()
+        if conf_row is None:
+            # Row was deleted/superseded between the stale-scan and now — skip it.
+            continue
+        old_confidence = conf_row[0] or 1.0
         new_confidence = max(0.0, min(1.0, old_confidence + confidence_delta))
 
         cur.execute("""
