@@ -132,13 +132,13 @@ for (agent, project), summaries in blocked_groups.items():
 # Rule 2: code-reviewer flags same concern keyword 3+ times
 # -------------------------------------------------------------------------
 reviewer_params = []
-reviewer_where = "agent = 'code-reviewer' AND result_summary IS NOT NULL AND result_summary != ''"
+reviewer_where = "agent = 'code-reviewer' AND response IS NOT NULL AND response != ''"
 if project_filter:
     reviewer_where += " AND project = ?"
     reviewer_params.append(project_filter)
 
 cur.execute(
-    f"SELECT project, result_summary FROM agent_runs WHERE {reviewer_where}",
+    f"SELECT project, response FROM agent_runs WHERE {reviewer_where}",
     reviewer_params
 )
 reviewer_rows = cur.fetchall()
@@ -162,7 +162,7 @@ CONCERN_KEYWORDS = [
 project_keyword_counts = defaultdict(lambda: defaultdict(int))
 for row in reviewer_rows:
     proj = row["project"] or "unknown"
-    summary_lower = (row["result_summary"] or "").lower()
+    summary_lower = (row["response"] or "").lower()
     for kw in CONCERN_KEYWORDS:
         if kw in summary_lower:
             project_keyword_counts[proj][kw] += 1

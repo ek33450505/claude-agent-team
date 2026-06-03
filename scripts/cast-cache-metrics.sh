@@ -28,16 +28,18 @@ REPORT_FILE="${REPORTS_DIR}/cache-metrics-${REPORT_DATE}.json"
 # --- Ensure output dirs exist ---
 mkdir -p "$REPORTS_DIR"
 
-# --- Check if sessions table exists and has cache columns ---
+# --- Check if agent_runs table exists and has cache columns ---
+# Cache token counts live on agent_runs (per-agent-invocation), not sessions:
+#   cache_read_input_tokens, cache_creation_input_tokens, input_tokens.
 _check_schema() {
-  if ! sqlite3 "$CAST_DB_PATH" ".tables" 2>/dev/null | grep -q "sessions"; then
+  if ! sqlite3 "$CAST_DB_PATH" ".tables" 2>/dev/null | grep -q "agent_runs"; then
     return 1
   fi
 
   # Check for cache columns
   local columns
-  columns=$(sqlite3 "$CAST_DB_PATH" "PRAGMA table_info(sessions);" 2>/dev/null | cut -d'|' -f2 | tr '\n' ' ')
-  if [[ "$columns" =~ cache_read_tokens ]] && [[ "$columns" =~ cache_write_tokens ]] && [[ "$columns" =~ input_tokens ]]; then
+  columns=$(sqlite3 "$CAST_DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | cut -d'|' -f2 | tr '\n' ' ')
+  if [[ "$columns" =~ cache_read_input_tokens ]] && [[ "$columns" =~ cache_creation_input_tokens ]] && [[ "$columns" =~ input_tokens ]]; then
     return 0
   fi
   return 1
@@ -45,18 +47,18 @@ _check_schema() {
 
 # --- Main logic ---
 if ! _check_schema; then
-  echo "WARNING: cast.db sessions table missing or lacks cache columns (cache_read_tokens, cache_write_tokens, input_tokens). Skipping cache metrics." >&2
+  echo "WARNING: cast.db agent_runs table missing or lacks cache columns (cache_read_input_tokens, cache_creation_input_tokens, input_tokens). Skipping cache metrics." >&2
   echo "{\"status\": \"skipped\", \"reason\": \"schema missing\"}" > "$REPORT_FILE"
   exit 0
 fi
 
 # --- Query cache metrics for last 30 days ---
 QUERY="SELECT
-  COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
-  COALESCE(SUM(cache_write_tokens), 0) AS cache_write,
+  COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read,
+  COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_write,
   COALESCE(SUM(input_tokens), 0) AS input
-FROM sessions
-WHERE created_at > datetime('now', '-30 days');"
+FROM agent_runs
+WHERE started_at > datetime('now', '-30 days');"
 
 RESULT=$(sqlite3 "$CAST_DB_PATH" "$QUERY" 2>/dev/null || echo "0|0|0")
 
@@ -66,7 +68,10 @@ CACHE_WRITE=$(echo "$RESULT" | cut -d'|' -f2)
 INPUT=$(echo "$RESULT" | cut -d'|' -f3)
 
 # --- Compute cache hit rate ---
-DENOMINATOR=$((INPUT + CACHE_WRITE))
+# Hit rate = cache-read tokens / total prompt tokens. Total prompt tokens =
+# fresh input + cache writes (first-time cached) + cache reads (served from cache).
+# Omitting CACHE_READ from the denominator produced impossible rates >100%.
+DENOMINATOR=$((INPUT + CACHE_WRITE + CACHE_READ))
 CACHE_HIT_RATE="0.0"
 
 if [[ $DENOMINATOR -gt 0 ]]; then

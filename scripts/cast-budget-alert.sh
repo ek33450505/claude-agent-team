@@ -61,12 +61,14 @@ try:
         sys.exit(0)
 
     # -----------------------------------------------------------------------
-    # 2. Sum today's spend from sessions table
+    # 2. Sum today's spend from agent_runs (per-run cost — the same authoritative
+    #    source `cast budget` reports). Previously summed sessions.total_cost_usd,
+    #    which only populates when the session-end rollup runs and could lag/miss.
     # -----------------------------------------------------------------------
     today = datetime.date.today().isoformat()
     cur.execute('''
-        SELECT COALESCE(SUM(total_cost_usd), 0.0)
-        FROM sessions
+        SELECT COALESCE(SUM(cost_usd), 0.0)
+        FROM agent_runs
         WHERE started_at LIKE ? || '%'
     ''', (today,))
     today_spend = float(cur.fetchone()[0] or 0)

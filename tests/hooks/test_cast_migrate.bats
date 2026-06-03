@@ -67,7 +67,7 @@ db = os.environ['CAST_DB_PATH']
 name = sys.argv[1]
 con = sqlite3.connect(db)
 try:
-    row = con.execute('SELECT 1 FROM schema_migrations WHERE migration_name=?', (name,)).fetchone()
+    row = con.execute('SELECT 1 FROM schema_migrations WHERE version=?', (name,)).fetchone()
     print('yes' if row else 'no')
 except Exception:
     print('no')
@@ -97,7 +97,7 @@ con.close()
 import sqlite3, os
 db = os.environ['CAST_DB_PATH']
 con = sqlite3.connect(db)
-print(con.execute(\"SELECT COUNT(*) FROM schema_migrations WHERE migration_name='009_cast_framework_fixes.sql'\").fetchone()[0])
+print(con.execute(\"SELECT COUNT(*) FROM schema_migrations WHERE version='009_cast_framework_fixes.sql'\").fetchone()[0])
 con.close()
 ")
   [ "$count" -eq 1 ]
