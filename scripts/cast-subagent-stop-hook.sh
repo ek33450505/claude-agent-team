@@ -167,6 +167,12 @@ DURATION_MS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STO
 TOOL_USES="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('tool_uses',0))" 2>/dev/null || echo 0)"
 CACHE_READ_TOKENS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('cache_read_input_tokens') or '')" 2>/dev/null || echo "")"
 CACHE_CREATE_TOKENS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('cache_creation_input_tokens') or '')" 2>/dev/null || echo "")"
+
+# Detect structured-output (workflow) subagents — they emit StructuredOutput, not prose Status blocks
+IS_STRUCTURED_OUTPUT_AGENT="0"
+if [[ "$AGENT_NAME" == *"workflow-subagent"* ]]; then
+  IS_STRUCTURED_OUTPUT_AGENT="1"
+fi
 export CAST_STOP_AGENT_ID="$AGENT_ID"
 export CAST_STOP_DURATION_MS="$DURATION_MS"
 export CAST_STOP_TOOL_USES="$TOOL_USES"
@@ -320,7 +326,9 @@ fi
 # hook matcher: code-writer|debugger|test-writer|security|frontend-qa).
 # This step fills the gap: log truncations for ALL agents directly from this hook.
 # Uses response_text (already extracted above) — same payload, same detection logic.
-if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+# SKIP: structured-output agents (workflow-subagent) legitimately use StructuredOutput tool,
+# not prose Status blocks, so they are NOT subject to this check.
+if [[ "$IS_STRUCTURED_OUTPUT_AGENT" = "0" ]] && command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os, re, sys
 sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
@@ -646,10 +654,13 @@ fi
 # ── Step 3.5: Truncation detection ───────────────────────────────────────────
 # A well-formed agent output ends with a Status: <VALUE> line.
 # If missing, the agent was truncated mid-execution.
-CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
-export CAST_STOP_OUTPUT_FULL
+# SKIP: structured-output agents (workflow-subagent) legitimately emit StructuredOutput
+# tool results instead of prose Status blocks, so they are NOT subject to this check.
+if [[ "$IS_STRUCTURED_OUTPUT_AGENT" = "0" ]]; then
+  CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+  export CAST_STOP_OUTPUT_FULL
 
-TRUNCATED="$(python3 - <<'PYEOF' 2>/dev/null
+  TRUNCATED="$(python3 - <<'PYEOF' 2>/dev/null
 import re, os
 output = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
 # Search full output — no tail window (avoids FP for long Work Logs)
@@ -660,10 +671,10 @@ print('0' if (has_status or has_json_status) else '1')
 PYEOF
 )"
 
-if [[ "${TRUNCATED:-0}" = "1" ]] \
-   && [[ -n "$CAST_STOP_OUTPUT_FULL" ]] \
-   && [[ -n "${CAST_STOP_AGENT:-}" ]] \
-   && [[ "${CAST_STOP_AGENT:-}" != "unknown" ]]; then
+  if [[ "${TRUNCATED:-0}" = "1" ]] \
+     && [[ -n "$CAST_STOP_OUTPUT_FULL" ]] \
+     && [[ -n "${CAST_STOP_AGENT:-}" ]] \
+     && [[ "${CAST_STOP_AGENT:-}" != "unknown" ]]; then
   TRUNC_DIR="${HOME}/.claude/cast/truncated-agents"
   mkdir -p "$TRUNC_DIR" 2>/dev/null || true
 
@@ -691,9 +702,10 @@ with open(filepath, 'w') as f:
     json.dump(record, f, indent=2)
 PYEOF
 
-  # Emit directive to parent session — use SAFE_AGENT (not AGENT_NAME) to prevent JSON-breaking
-  # characters from hostile hook payloads (security hardening).
-  echo '{"hookSpecificOutput":{"hookEventName":"SubagentStop","additionalContext":"[CAST-TRUNCATED] Agent '"$SAFE_AGENT"' stopped without a valid Status block. Output may be incomplete. Re-dispatch the agent or review ~/.claude/cast/truncated-agents/ for the partial output. Do NOT auto-retry expensive agents — surface this as BLOCKED."}}'
+    # Emit directive to parent session — use SAFE_AGENT (not AGENT_NAME) to prevent JSON-breaking
+    # characters from hostile hook payloads (security hardening).
+    echo '{"hookSpecificOutput":{"hookEventName":"SubagentStop","additionalContext":"[CAST-TRUNCATED] Agent '"$SAFE_AGENT"' stopped without a valid Status block. Output may be incomplete. Re-dispatch the agent or review ~/.claude/cast/truncated-agents/ for the partial output. Do NOT auto-retry expensive agents — surface this as BLOCKED."}}'
+  fi
 fi
 
 # ── Step 4: Chain dispatch (pipeline automation) ──────────────────────────────
