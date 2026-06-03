@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # pre-push-ci-check.sh — CI safety checks before pushing
 # Catches the recurring failure classes documented in the 2026-04-16 insights report.
-# Extended (2026-06-01) to include PII / secret scanning of the full push diff.
+# Extended (2026-06-01) with PII / secret scanning of the push diff.
+# New-branch pushes scan the NET diff vs the upstream default branch's merge-base
+# (audit §3.8.E) — NOT the whole repo (which previously hung the gate). KNOWN LIMITATION:
+# a secret introduced and then removed across commits within the SAME push lands in history
+# without appearing in the net diff; full-history coverage would need `git log --patch`.
 set -euo pipefail
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -19,6 +23,7 @@ PII_ALLOWLIST=(
   "config/pii-patterns.json"
   "config/pii-denylist-local.txt.template"
   "tests/pre-push-ci-check.bats"
+  "tests/ci-pii-scan.bats"
   "tests/cast_cron_setup.bats"
 )
 
@@ -131,7 +136,18 @@ PUSH_DIFF=""
 while IFS=' ' read -r _local_ref local_sha _remote_ref remote_sha || [[ -n "${local_sha:-}" ]]; do
   [[ -z "${local_sha:-}" ]] && continue
   if [[ "${remote_sha:-}" == "0000000000000000000000000000000000000000" ]] || [[ -z "${remote_sha:-}" ]]; then
-    base="$EMPTY_TREE"
+    # New branch: the remote ref does not exist yet. Diffing against the empty tree
+    # would scan the ENTIRE repo (~540 files) and hang the gate (audit §3.8.D/E).
+    # Scan only what this branch adds over the shared upstream history: diff against
+    # the merge-base with the default branch.
+    base=""
+    for _ref in origin/main origin/master main master; do
+      git rev-parse --verify --quiet "$_ref" >/dev/null 2>&1 || continue
+      base="$(git merge-base "$_ref" "$local_sha" 2>/dev/null || true)"
+      [[ -n "$base" ]] && break
+    done
+    # Genuinely new repo with no upstream default branch → fall back to full history.
+    [[ -z "$base" ]] && base="$EMPTY_TREE"
   else
     base="$remote_sha"
   fi

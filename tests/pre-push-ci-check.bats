@@ -277,3 +277,79 @@ teardown() {
   refute_output --partial "PII/secret check failed"
   assert_output --partial "Skipping PII check"
 }
+
+# ---------------------------------------------------------------------------
+# Test: new-branch push (all-zeros remote SHA) uses merge-base, not empty tree
+# Regression for audit §3.8.D/E — empty-tree diff hung on ~540 files.
+# ---------------------------------------------------------------------------
+
+# Helper: simulate a new-branch push via stdin refs in an isolated repo.
+# Creates a repo with a 'main' branch (so merge-base resolution works),
+# then branches off, adds one commit, and feeds all-zeros remote SHA via stdin.
+# Sets $output, $status, and $elapsed_seconds.
+_run_new_branch_push() {
+  local filename="$1"
+  local content="$2"
+  local denylist="${3:-/nonexistent/path/pii-denylist-local.txt}"
+
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+
+  local out rc=0 elapsed=0
+  local start_ts end_ts
+  start_ts="$(date +%s)"
+  out=$(
+    cd "$tmpdir" || exit 1
+    git init -q
+    git config user.email "ci@example.com"
+    git config user.name "CI"
+    # Establish a 'main' branch so merge-base resolution finds it.
+    git commit -q --allow-empty -m "root"
+    git checkout -b main -q 2>/dev/null || true
+    git commit -q --allow-empty -m "main-base"
+    # Branch off main and add one small commit.
+    git checkout -b feature/regression-test -q
+    printf '%s' "$content" > "$filename"
+    git add "$filename"
+    git commit -q -m "branch commit"
+    local local_sha
+    local_sha="$(git rev-parse HEAD)"
+    # Feed the all-zeros remote SHA that a new-branch push produces.
+    printf 'refs/heads/feature/regression-test %s refs/heads/feature/regression-test 0000000000000000000000000000000000000000\n' \
+      "$local_sha" \
+      | CAST_PII_LOCAL_DENYLIST="$denylist" bash "$SCRIPT" 2>&1
+  ) || rc=$?
+  end_ts="$(date +%s)"
+  elapsed=$(( end_ts - start_ts ))
+
+  rm -rf "$tmpdir"
+
+  output="$out"
+  status="$rc"
+  elapsed_seconds="$elapsed"
+}
+
+@test "new-branch push (all-zeros remote SHA) exits 0 on clean small diff" {
+  _run_new_branch_push "safe.txt" "echo hello world"
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "new-branch push (all-zeros remote SHA) completes in under 10 seconds" {
+  _run_new_branch_push "safe.txt" "echo hello world"
+  # Guard: if elapsed is empty the helper failed to capture it; fail explicitly.
+  [[ -n "${elapsed_seconds:-}" ]] || fail "elapsed_seconds not set by helper"
+  if (( elapsed_seconds >= 10 )); then
+    fail "New-branch push scan took ${elapsed_seconds}s — expected < 10s (merge-base fix may have regressed)"
+  fi
+}
+
+@test "new-branch push still detects PII in the new commits" {
+  local fake_denylist
+  fake_denylist="$(mktemp)"
+  printf '# BATS regression deny-list\nacmecorp\n' > "$fake_denylist"
+  _run_new_branch_push "leak.txt" "remote: bitbucket.org/acmecorp/myrepo" "$fake_denylist"
+  rm -f "$fake_denylist"
+  assert_failure
+  assert_output --partial "local-denylist"
+}
