@@ -1,0 +1,32 @@
+{
+  "_comment": "Agent dispatch groups for [CAST-DISPATCH-GROUP] fan-out. Deployed to ~/.claude/config/ via install.sh. Read by cast-validate.sh Check 7 and the orchestrator session.",
+  "groups": [
+    {
+      "id": "full-feature-implementation",
+      "description": "Full feature implementation group: research + plan in parallel, then code, then review and commit.",
+      "patterns": [
+        "implement feature",
+        "add feature",
+        "build feature",
+        "new feature",
+        "scaffold"
+      ],
+      "confidence": "soft",
+      "waves": [
+        {
+          "id": "wave-1-plan",
+          "description": "Research and planning (parallel)",
+          "parallel": true,
+          "agents": ["planner", "researcher"]
+        },
+        {
+          "id": "wave-2-implement",
+          "description": "Implementation",
+          "parallel": false,
+          "agents": ["code-writer"]
+        }
+      ],
+      "post_chain": ["code-reviewer", "commit"]
+    }
+  ]
+}

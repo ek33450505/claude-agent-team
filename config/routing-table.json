@@ -1,5 +1,14 @@
 {
   "_comment": "Soft routing patterns. Maps keyword patterns to agent names for dispatch suggestions. Patterns are matched case-insensitively against user prompts.",
+  "routes": [
+    {
+      "agent": "security",
+      "patterns": ["auth", "authentication", "authorization", "api key", "token", "oauth", "jwt", "credential", "secret", "permission", "access control"],
+      "model": "sonnet",
+      "confidence": "soft",
+      "post_chain": ["security"]
+    }
+  ],
   "patterns": [
     { "keywords": ["migrate", "migration", "schema", "alter table", "create table"], "agent": "migration-reviewer" },
     { "keywords": ["api", "contract", "endpoint", "route", "breaking change", "openapi"], "agent": "api-contract" },

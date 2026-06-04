@@ -73,7 +73,22 @@ Run the push:
 CAST_PUSH_OK=1 git push [--set-upstream origin <branch>] 2>&1
 ```
 
-Capture exit code. On failure: report the git error verbatim and output Status: BLOCKED. On success: log pushed commit count and remote SHA.
+Capture exit code. On failure: report the git error verbatim and output Status: BLOCKED. On success: continue to the mandatory verification sub-step.
+
+**Step 3b — Verify push landed (mandatory)**
+
+Run the `ls-remote` check immediately after `git push` exits 0:
+
+```bash
+REMOTE_SHA=$(git ls-remote --heads origin $(git branch --show-current) | awk '{print $1}')
+LOCAL_SHA=$(git rev-parse HEAD)
+echo "local:  $LOCAL_SHA"
+echo "remote: $REMOTE_SHA"
+```
+
+- If `REMOTE_SHA` is empty: emit `Status: BLOCKED` — "ls-remote returned empty; push may not have registered on remote."
+- If `REMOTE_SHA != LOCAL_SHA`: emit `Status: BLOCKED` — "SHA mismatch: local `$LOCAL_SHA` vs remote `$REMOTE_SHA`."
+- If they match: proceed to Step 4 and log the confirmed remote SHA.
 
 **Step 4 — Show what was pushed**
 
@@ -124,6 +139,35 @@ If a git command appears to "hang," it is almost certainly waiting on credential
 
 The same applies to any final verification: do not background a verification command and "come back to it." Run it, parse the output, then emit your Status block.
 
+## Verify-before-claim (Anti-hallucination guard — MANDATORY)
+
+**Before asserting ANYTHING about push state — branch name, remote SHA, whether push succeeded — you MUST have run a git command in THIS run and read its output.**
+
+Prompts, task descriptions, and prior conversation context are NOT ground truth for push state. They describe intent. Only actual command output is ground truth.
+
+**Post-push verification is mandatory.** After every `git push`, run:
+
+```bash
+git ls-remote --heads origin <branch>
+git rev-parse HEAD
+```
+
+Compare the SHA returned by `ls-remote` against the local `HEAD` SHA:
+- If `ls-remote` returns empty (no output for the branch): the push did NOT land. Emit `Status: BLOCKED` with the verbatim `git push` stderr and the `ls-remote` output.
+- If the SHA from `ls-remote` does NOT match `git rev-parse HEAD`: the remote is behind. Emit `Status: BLOCKED` with both SHAs shown.
+- Only emit `Status: DONE` when the remote SHA exactly matches local HEAD.
+
+**Zero-tool-calls rule:** If you have made ZERO Bash tool calls in this run, you MUST NOT report `Status: DONE` or claim a push succeeded. A push claim requires having:
+- Actually run `CAST_PUSH_OK=1 git push` (or confirmed it was unnecessary), AND
+- Confirmed the push landed via `git ls-remote --heads origin <branch>` with matching SHA
+
+If you are about to write a Status block and you have not yet run any git commands, run the verification commands above first.
+
+**Verification failures to watch for:**
+- `git ls-remote --heads origin <branch>` returns empty → push did not register on remote; emit BLOCKED
+- SHA from `ls-remote` differs from `git rev-parse HEAD` → remote is stale or a different commit landed; emit BLOCKED
+- Branch name in `ls-remote` output differs from the branch name in the prompt → you pushed to the wrong branch; emit BLOCKED with both branch names shown
+
 ## Work Log
 
 Before the status block, always output a Work Log so the user can see what was pushed:
@@ -135,6 +179,7 @@ Before the status block, always output a Work Log so the user can see what was p
 - Commits pushed: N
 - Push result: [DONE | BLOCKED]
 - Remote SHA: [short hash of HEAD after push]
+- ls-remote verified: [SHA match | MISMATCH — see blockers]
 ```
 
 ## Response Budget
