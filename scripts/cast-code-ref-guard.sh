@@ -2,6 +2,7 @@
 # cast-code-ref-guard.sh — verify code references in agent output exist in repo
 #
 # Usage: echo "$agent_output" | bash scripts/cast-code-ref-guard.sh [--repo-root PATH]
+# NOT A HOOK — called via CLI only, not wired to any hook event
 #
 # Extracts function/import references from stdin (agent output text) and greps the repo
 # to verify they exist. Writes results to cast.db code_ref_checks table.
