@@ -6,8 +6,7 @@ description: >
   exposure, and stack-specific vulnerabilities.
 tools: Read, Glob, Grep, Bash
 model: sonnet
-color: hot-pink
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 skills: [cast-conventions]
 disallowedTools: Write, Edit

@@ -3,8 +3,7 @@ name: pr-reviewer
 description: "Holistic pull-request reviewer. Reads the full diff, commit history, and linked issues at PR-open time. Distinct from per-unit code-reviewer (which reviews single logical units mid-flight). Use proactively after `gh pr create` or when reviewing a PR end-to-end."
 tools: Read, Bash, Grep, Glob
 model: sonnet
-color: rose
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 25
 skills: [cast-conventions]
 ---

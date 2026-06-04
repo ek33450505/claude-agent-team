@@ -6,8 +6,7 @@ description: >
   Absorbs the former explore, data-scientist, and db-reader roles.
 tools: Read, Write, Bash, Glob, Grep, WebFetch, WebSearch
 model: sonnet
-color: indigo
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 30
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation

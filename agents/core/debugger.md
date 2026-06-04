@@ -3,9 +3,8 @@ name: debugger
 description: Debugging specialist for errors, test failures, and unexpected behavior. Use proactively when encountering any issues.
 tools: Read, Edit, Bash, Grep, Glob, Agent
 model: sonnet
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 # effort field is N/A on sonnet — only Opus reads it
-color: red
-memory: local
 maxTurns: 30
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation

@@ -6,9 +6,7 @@ description: >
   SQLite, PostgreSQL, and MS SQL Server. Read-only reviewer.
 tools: Read, Bash, Glob, Grep
 model: opus
-effort: high
-color: purple
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]

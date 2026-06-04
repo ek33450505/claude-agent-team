@@ -6,10 +6,8 @@ description: >
   Use at the start of each day or invoke via /morning on demand.
 tools: Read, Write, Bash, Glob, Grep
 model: haiku
-effort: low
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 initialPrompt: "Load memory index, check today's date, read last journal entry."
-color: bronze
-memory: local
 maxTurns: 25
 permissionMode: bypassPermissions
 skills: [git-activity, briefing-writer, cast-conventions]

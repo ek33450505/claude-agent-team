@@ -6,9 +6,7 @@ description: >
   existing conventions. Use after code-writer completes a logical unit.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
-effort: low
-color: fuchsia
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 skills: [cast-conventions]
 ---

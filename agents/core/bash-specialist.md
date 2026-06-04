@@ -7,9 +7,7 @@ description: >
   exit codes, escape hatches, hookSpecificOutput JSON format, and CLAUDE_SUBPROCESS guard patterns.
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: haiku
-effort: low
-color: amber
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation

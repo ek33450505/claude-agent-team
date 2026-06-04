@@ -2,10 +2,8 @@
 name: frontend-qa
 description: Frontend QA specialist for React/TypeScript dashboard projects. Reviews .tsx/.ts files for component prop correctness, API contract alignment (frontend hooks vs backend routes), Vitest test coverage gaps, and accessibility basics. Triggered automatically when .tsx/.ts files change in dashboard projects. Distinct from generic code-reviewer — go deeper on React patterns and type safety.
 model: haiku
-effort: low
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 tools: Read, Bash, Glob, Grep
-color: sky
-memory: local
 maxTurns: 20
 skills: [cast-conventions]
 disallowedTools:

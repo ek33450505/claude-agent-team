@@ -9,9 +9,7 @@ description: >
 keywords: [readme, docs, documentation, email, draft email, compose email, reply email, gmail, portfolio sync, readme stats, portfolio update, showcase, status report, changelog]
 tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch
 model: haiku
-effort: low
-color: emerald
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 skills: [git-activity, cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation

@@ -261,14 +261,12 @@ _cmd_new_agent() {
 ---
 name: ${agent_name}
 description: TODO — describe when to use this agent
-model: sonnet
-tools:
-  - Read
-  - Edit
-  - Write
-  - Bash
-  - Glob
-  - Grep
+tools: Read, Write, Edit, Bash, Glob, Grep
+model: haiku
+# ── CAST-extension fields ────────────────────────────────────────────────────
+maxTurns: 20
+skills: [cast-conventions]
+thinking_budget: 0
 ---
 
 # ${agent_name}
@@ -1604,7 +1602,7 @@ if os.path.isdir(agents_dir):
                 continue
             block = m.group(1)
             # Cheap key check (no yaml lib in stdlib)
-            for key in ('name', 'description', 'tools'):
+            for key in ('name', 'description', 'tools', 'model'):
                 if not re.search(rf'^{key}\s*:', block, re.MULTILINE):
                     errors.append(f"{fname}: missing '{key}'")
         except Exception as e:
@@ -1614,7 +1612,7 @@ for e in errors:
 PYEOF
 2>/dev/null || true)"
   if [ -z "$frontmatter_errors" ]; then
-    printf "%b Agent frontmatter: all %d parse cleanly\n" "$OK" "$agent_count"
+    printf "%b Agent frontmatter: all %d pass native format check\n" "$OK" "$agent_count"
   else
     printf "%b Agent frontmatter: errors found:\n" "$WARN"
     while IFS= read -r line; do

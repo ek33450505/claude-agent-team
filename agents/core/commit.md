@@ -5,9 +5,7 @@ description: >
   Reads staged changes, writes a semantic commit message, and commits cleanly.
 tools: Bash, Read
 model: haiku
-effort: low
-color: yellow
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 skills: [cast-conventions]
 includeGitInstructions: false

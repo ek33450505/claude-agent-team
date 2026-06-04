@@ -5,9 +5,7 @@ description: >
   version compatibility, and license concerns. Supports npm, pip, and Go modules.
 tools: Read, Bash, Glob, Grep
 model: haiku
-effort: low
-color: yellow
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 15
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
