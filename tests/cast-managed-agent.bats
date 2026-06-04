@@ -119,3 +119,16 @@ EOF
   [ "$status" -eq 2 ]
   assert_output --partial "Usage"
 }
+
+@test "CAST_MANAGED_AGENT_BETA_HEADER env override is accepted" {
+  export ANTHROPIC_API_KEY="test-key-12345"
+  export CAST_MANAGED_AGENT_BETA_HEADER="managed-agents-test"
+  # --define-only exits after the first curl call (agent definition).
+  # The mock curl returns HTTP 200 with a valid id so the shim succeeds.
+  cat > "${BATS_TMPDIR}/curl-response.json" <<'EOF'
+{"id":"agent_test123","type":"agent"}
+EOF
+  run bash "$SHIM" test-agent "do something" --define-only
+  assert_success
+  unset CAST_MANAGED_AGENT_BETA_HEADER
+}

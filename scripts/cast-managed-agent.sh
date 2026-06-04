@@ -8,8 +8,11 @@
 #   --fork             export CLAUDE_CODE_FORK_SUBAGENT=1 in agent environment
 #   --no-stream        disable SSE streaming (use synchronous polling; suitable for CI/non-TTY)
 # Env:
-#   ANTHROPIC_API_KEY   required (or stored in macOS keychain under 'anthropic-api-key')
-# Beta header: managed-agents-2026-04-01
+#   ANTHROPIC_API_KEY                required (or stored in macOS keychain under 'anthropic-api-key')
+#   CAST_MANAGED_AGENT_BETA_HEADER   optional — override the anthropic-beta header sent to the API
+#                                    (default: managed-agents-2026-04-01). Use when Anthropic releases
+#                                    a newer beta header generation (e.g. managed-agents-2026-XX-YY).
+# Beta header: managed-agents-2026-04-01 (overridable via CAST_MANAGED_AGENT_BETA_HEADER)
 set -euo pipefail
 # Disable xtrace globally — this script handles ANTHROPIC_API_KEY and must never echo it
 set +x
@@ -20,7 +23,7 @@ if [[ "${CLAUDE_SUBPROCESS:-}" == "1" ]]; then
 fi
 
 # --- Constants ---
-BETA_HEADER="managed-agents-2026-04-01"
+BETA_HEADER="${CAST_MANAGED_AGENT_BETA_HEADER:-managed-agents-2026-04-01}"
 API_BASE="${ANTHROPIC_API_BASE:-https://api.anthropic.com}"
 LOG_DIR="${HOME}/.claude/logs"
 LOG_FILE="${LOG_DIR}/managed-agent-invocations.log"
