@@ -130,3 +130,65 @@ Location: `~/.claude/task-board.json`
 The dashboard should poll routing-log.jsonl and agent-status/ for live session observability.
 Agent-level status files are append-only (never overwritten). Read newest file per agent by timestamp in filename.
 Task board is mutable — read task-board.json for current state, not history.
+
+---
+
+## Native OpenTelemetry (Phase 12)
+
+### Hybrid Observability Model
+
+CAST uses two complementary observability layers that serve different purposes:
+
+**cast.db — the curated CAST store (keep forever)**
+
+| Table | Purpose | OTel analog? |
+|---|---|---|
+| `routing_events` | Prompt-to-agent routing decisions, matched route, confidence | None |
+| `quality_gates` | Gate evaluations, pass/fail per unit | None |
+| `dispatch_decisions` | Agent selection rationale, batch context | None |
+| `swarm_sessions` | Multi-agent swarm metadata | None |
+| `parry_guard_events` | Guard-blocked tool calls (PreToolUse exit 2) | None |
+| `agent_truncations` | Context-limit truncation events | None |
+| `injection_log` | Memory and context injection audit trail | None |
+
+These tables capture CAST-specific semantics — routing logic, quality enforcement, swarm coordination — that have no equivalent in OpenTelemetry's generic data model. They are NOT candidates for replacement by native OTel.
+
+**Native OTel — generic session/token/latency primitives**
+
+Claude Code's built-in OpenTelemetry support (`CLAUDE_CODE_ENABLE_TELEMETRY=1`) exports generic session metrics (token counts, latency, model invocations) to any OTLP-compatible collector (Prometheus, Jaeger, Grafana, etc.). This is the layer Phase 12 enables.
+
+### How to Enable (Opt-In)
+
+Native OTel is **off by default**. To enable, set `OTEL_EXPORTER_OTLP_ENDPOINT` in your shell or environment:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```
+
+When the `SessionStart` hook fires, it detects the endpoint and writes to `CLAUDE_ENV_FILE`:
+
+```
+CLAUDE_CODE_ENABLE_TELEMETRY=1
+OTEL_METRICS_EXPORTER=otlp
+OTEL_LOGS_EXPORTER=otlp
+```
+
+**With no endpoint configured:** telemetry stays fully off. No `CLAUDE_CODE_ENABLE_TELEMETRY` is exported, no console metric dumps appear in interactive sessions.
+
+**For process-start telemetry** (before the `SessionStart` hook runs): operators can set `CLAUDE_CODE_ENABLE_TELEMETRY=1` directly in their shell profile or `settings.json` env block. The hook adds OTLP routing on top; it does not conflict.
+
+**Do NOT add `CLAUDE_CODE_ENABLE_TELEMETRY=1` to `settings.json`** for daily interactive use — without a collector running, this produces console metric noise on every session.
+
+### Deprecation Candidates
+
+The following cast.db columns track data that native OTel also covers (once a collector is running). They are **NOT dropped now** — 15+ scripts read/write them and the dashboard depends on them.
+
+| Column | Table | Why it's a candidate | Blocker before dropping |
+|---|---|---|---|
+| `total_input_tokens` | `sessions` | Duplicates OTel `claude_code.token.usage` (input dimension) | Collector confirmed running; dashboard reader migrated to OTel |
+| `total_output_tokens` | `sessions` | Duplicates OTel `claude_code.token.usage` (output dimension) | Collector confirmed running; dashboard reader migrated to OTel |
+| `input_tokens` | `agent_runs` | Per-dispatch token count, available via OTel span attributes | Collector confirmed running; dashboard reader migrated to OTel |
+| `output_tokens` | `agent_runs` | Per-dispatch token count, available via OTel span attributes | Collector confirmed running; dashboard reader migrated to OTel |
+| `cost_usd` | `agent_runs` | Cost derived from tokens; OTel has no cost semantic (compute locally from token counts) | Cost calculation migrated to dashboard layer; collector confirmed running |
+
+**Migration path:** A `migration-reviewer` pass is required before any schema change. The dashboard `/token-spend` and `/sessions` pages must be updated to read from OTel before any column is dropped. Until both conditions are met, the columns remain active.

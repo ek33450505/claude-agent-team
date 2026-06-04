@@ -12,7 +12,7 @@
 - MANDATORY: `code-reviewer` after every logical unit of changes
 - MANDATORY: Never `git commit` directly — use the `commit` agent
 - MANDATORY: Route errors to `debugger` agent, not inline triage
-- MANDATORY: Code-modifying agents self-dispatch `code-reviewer` internally
+- MANDATORY: Code-modifying agents attempt to self-dispatch `code-reviewer` via the Agent tool; when nesting depth prevents it, they emit DONE_WITH_CONCERNS and the orchestrator dispatches code-reviewer instead
 - MANDATORY: All agents end with Status: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
 
 ## Agent Selection

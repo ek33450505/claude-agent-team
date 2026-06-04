@@ -35,5 +35,20 @@ security add-generic-password -s anthropic-api-key -a "$USER" -w '<your-key>'
 
 The shim reads it automatically — no env var export needed.
 
+## Phase 11 Convergence — Shim as Native API Target
+
+The shim (`scripts/cast-managed-agent.sh`) is the convergence target toward Anthropic's native Managed Agents API. As of 2026-06-03 the shim is approximately two API generations behind: Multiagent Orchestration, Outcomes, webhooks, and self-hosted sandboxes shipped Apr–May 2026 under the same `managed-agents-*` beta-header family. Full native adoption is deferred until the current request schema is verifiable in a headless session.
+
+### Beta header override
+
+Operators who have verified a newer header generation can override the default without editing the script:
+
+```bash
+CAST_MANAGED_AGENT_BETA_HEADER=managed-agents-2026-XX-YY \
+  scripts/cast-managed-agent.sh <agent> <prompt>
+```
+
+The script resolves: `BETA_HEADER="${CAST_MANAGED_AGENT_BETA_HEADER:-managed-agents-2026-04-01}"`. When unset, the original default applies and behavior is unchanged.
+
 ## Status
-Phase 6b complete — full session flow, BATS coverage, cast.db telemetry, keychain fallback. Last seen: 2026-04-25.
+Phase 6b complete — full session flow, BATS coverage, cast.db telemetry, keychain fallback. Last seen: 2026-04-25. Phase 11 (convergence baseline + header override) added 2026-06-03.

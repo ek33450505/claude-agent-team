@@ -196,13 +196,14 @@ if [ -n "${CAST_DESKTOP_PANE_ID:-}" ]; then
     --max-time 2 >/dev/null 2>&1 || true
 fi
 
-# OTEL export wiring
-# If OTEL_EXPORTER_OTLP_ENDPOINT is set, configure OTLP exporters; otherwise use console.
+# OTEL export wiring (Phase 12 — native OpenTelemetry, opt-in via OTLP endpoint)
+# Native OTel is OFF by default. Setting OTEL_EXPORTER_OTLP_ENDPOINT turns it on and
+# routes telemetry to that collector. With no endpoint, telemetry stays disabled so
+# interactive sessions are never spammed with console metric dumps.
 if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" ]; then
+  echo "CLAUDE_CODE_ENABLE_TELEMETRY=1" >> "${CLAUDE_ENV_FILE:-/dev/null}" 2>/dev/null || true
   echo "OTEL_METRICS_EXPORTER=otlp" >> "${CLAUDE_ENV_FILE:-/dev/null}" 2>/dev/null || true
   echo "OTEL_LOGS_EXPORTER=otlp" >> "${CLAUDE_ENV_FILE:-/dev/null}" 2>/dev/null || true
-else
-  echo "OTEL_METRICS_EXPORTER=console" >> "${CLAUDE_ENV_FILE:-/dev/null}" 2>/dev/null || true
 fi
 
 exit 0

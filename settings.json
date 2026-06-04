@@ -18,7 +18,9 @@
         "*.npmjs.org",
         "registry.yarnpkg.com",
         "*.googleapis.com",
-        "api.anthropic.com"
+        "api.anthropic.com",
+        "localhost",
+        "127.0.0.1"
       ],
       "allowLocalBinding": true
     },

@@ -67,10 +67,10 @@ End with a summary verdict: APPROVED / APPROVED_WITH_CONCERNS / NEEDS_CHANGES
 ## Dispatch Chain
 
 If critical issues are found (NEEDS_CHANGES verdict, broken API contracts, or type safety failures that would cause runtime errors):
-- Dispatch `debugger` via the Agent tool with a structured findings summary
-- Include: affected file, issue category, specific line or pattern, and recommended fix direction
+- Report findings directly in the Status block with verdict NEEDS_CHANGES and a structured findings summary. Include: affected file, issue category, specific line or pattern, and recommended fix direction.
+- Do NOT attempt to dispatch `debugger` via the Agent tool — this agent runs on haiku and may lack Agent tool access at nesting depth. The calling/orchestrator session will dispatch `debugger` based on your findings summary.
 
-If only minor concerns (APPROVED_WITH_CONCERNS): do NOT dispatch debugger — note the concerns in the Status block and let the calling session decide.
+If only minor concerns (APPROVED_WITH_CONCERNS): note the concerns in the Status block and let the calling session decide.
 
 ## Output caps
 

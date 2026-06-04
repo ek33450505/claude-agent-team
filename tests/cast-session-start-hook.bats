@@ -126,7 +126,7 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 9. OTEL export wiring — OTLP endpoint set → writes otlp exporters
+# 9. OTEL export wiring — OTLP endpoint set → writes CLAUDE_CODE_ENABLE_TELEMETRY + otlp exporters
 # ---------------------------------------------------------------------------
 
 @test "OTEL_EXPORTER_OTLP_ENDPOINT set → writes OTEL_METRICS_EXPORTER=otlp to env file" {
@@ -135,20 +135,21 @@ print('ok')
   export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
   bash "$HOOK_SH" <<< "$(make_payload "sess-otel" "/tmp")"
   [ -f "$env_file" ]
+  grep -q "CLAUDE_CODE_ENABLE_TELEMETRY=1" "$env_file"
   grep -q "OTEL_METRICS_EXPORTER=otlp" "$env_file"
   grep -q "OTEL_LOGS_EXPORTER=otlp" "$env_file"
   unset OTEL_EXPORTER_OTLP_ENDPOINT
 }
 
 # ---------------------------------------------------------------------------
-# 10. OTEL export wiring — OTLP endpoint unset → writes console exporter
+# 10. OTEL export wiring — OTLP endpoint unset → telemetry stays off, no exporter written
 # ---------------------------------------------------------------------------
 
-@test "OTEL_EXPORTER_OTLP_ENDPOINT unset → writes OTEL_METRICS_EXPORTER=console to env file" {
-  local env_file="$HOME/otel-env-console.sh"
+@test "OTEL_EXPORTER_OTLP_ENDPOINT unset → telemetry stays off, no exporter written" {
+  local env_file="$HOME/otel-env-off.sh"
   export CLAUDE_ENV_FILE="$env_file"
   unset OTEL_EXPORTER_OTLP_ENDPOINT
-  bash "$HOOK_SH" <<< "$(make_payload "sess-console" "/tmp")"
-  [ -f "$env_file" ]
-  grep -q "OTEL_METRICS_EXPORTER=console" "$env_file"
+  bash "$HOOK_SH" <<< "$(make_payload "sess-off" "/tmp")"
+  ! grep -q "OTEL_METRICS_EXPORTER" "$env_file"
+  ! grep -q "CLAUDE_CODE_ENABLE_TELEMETRY" "$env_file"
 }

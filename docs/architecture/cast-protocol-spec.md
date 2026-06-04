@@ -223,6 +223,8 @@ A manifest lives inside a `## Agent Dispatch Manifest` section in a plan file. T
 ```
 ````
 
+> **Phase 10 convergence:** The Agent Dispatch Manifest JSON is the CAST *legacy* orchestration path. Native Dynamic Workflows (the Workflow tool, available & verified 2026-06-03) are the convergence target; the ADM path is retained as the stable fallback until a piloted migration. See `~/.claude/research/2026-06-03-anthropic-devs-claude-code-convergence.md` Phase 10.
+
 When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plans/` path that contains a `json dispatch` block, it injects a `[CAST-ORCHESTRATE]` directive telling Claude to invoke the `/orchestrate` skill with the plan file path.
 
 ### 3.2 Full Field Reference
@@ -427,6 +429,8 @@ Resolve the blocker before continuing. Do not retry the blocked operation.
 ### 4.6 `[CAST-DISPATCH-GROUP]`
 
 > **Historical (CAST v2):** This directive was removed in CAST v3. Agent groups and the routing table were eliminated in favor of model-driven dispatch.
+
+> **Phase 10:** `[CAST-DISPATCH-GROUP]` is a legacy directive; native Dynamic Workflows are the convergence target.
 
 `[CAST-DISPATCH-GROUP]` auto-generates an Agent Dispatch Manifest from the Payload JSON in the directive. The main session invokes the `/orchestrate` skill immediately with the plan file path. The main session executes waves in order: parallel agents fire simultaneously, a Fan-out Summary is prepended to the next wave's prompts, and post_chain agents run sequentially after all waves complete. Wave-based dispatch follows the same fan-out semantics defined in Section 3.4, with agents in each wave running in parallel before the next wave begins.
 
