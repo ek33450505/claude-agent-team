@@ -7,11 +7,13 @@ Generated 2026-05-17 from the 2026-05-16 audit (see `~/.claude/plans/cast-agent-
 
 The cast.db has three tables with overlapping names but non-overlapping concerns:
 
-| Table | Rows (snapshot) | Writer | What it tracks |
-|---|---|---|---|
-| `routing_events` | 3824 | All hook scripts | **General hook-event log** despite the name. The naming predates the dispatch refactor. |
-| `dispatch_decisions` | 12 | `/orchestrate` skill (LLM-driven) | One row per `/orchestrate` plan dispatched. Schema dropped richer fields in v6→v7. |
-| `dispatch_events` | 1 | `scripts/cast-cookbook-drift.sh` | Single cron-job audit trail. Currently invisible in /db browser. |
+| Table | Writer | What it tracks |
+|---|---|---|
+| `routing_events` | All hook scripts | **General hook-event log** despite the name. The naming predates the dispatch refactor. |
+| `dispatch_decisions` | `/orchestrate` skill (LLM-driven) | One row per `/orchestrate` plan dispatched. Schema dropped richer fields in v6→v7. |
+| `dispatch_events` | `scripts/cast-cookbook-drift.sh` | Single cron-job audit trail. Currently invisible in /db browser. |
+
+> **Note:** Row counts shown in earlier versions of this doc (routing_events 3824, dispatch_decisions 12, dispatch_events 1, incidents 17) were pre-wipe snapshots as of 2026-05-16. cast.db was reset to FRESH on 2026-06-02; those counts are stale. The qualitative active/dormant distinction per table is what matters.
 
 **Recommended long-term renames** (post v7.1 scope): `routing_events` → `hook_events`, `dispatch_decisions` → `orchestrate_invocations`, `dispatch_events` → `scheduled_dispatches`. Not done in v7.1 because rename migrations are riskier than warranted.
 
@@ -57,12 +59,7 @@ The live cast.db `schema_migrations` table has schema **`(version TEXT PRIMARY K
 
 **Backfill in Phase 2 #18:** uses the LIVE bash schema. Does NOT attempt to reconcile the two runners.
 
-**Phase 3 followup needed:** decide on one canonical runner. Options:
-1. Standardize on python runner — requires migrating live data from `(version, ...)` to `(migration_name, ...)` and updating bash runner to match.
-2. Standardize on bash runner — delete the python version, keep bash + add CI coverage.
-3. Make python runner schema-compatible with the existing bash table.
-
-Recommend option 3 — least disruption, preserves both runner code paths.
+**Resolved (PR #114):** `cast-db-init.sh` now provisions `schema_migrations` directly using the bash shape `(version TEXT PRIMARY KEY, applied_at TEXT, checksum TEXT)` and is the single source of truth for the schema. The dual-runner drift is closed — init handles schema migrations at install time; neither bash runner nor python runner needs to reconcile independently. The python runner's incompatible schema `(id INTEGER PK, migration_name TEXT UNIQUE, applied_at TEXT)` remains on disk but is not invoked by install. If the python runner is retained for other purposes, its CREATE TABLE statement should be made compatible with the bash shape to avoid confusion on fresh DBs.
 
 ---
 

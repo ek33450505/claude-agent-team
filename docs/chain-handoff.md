@@ -108,6 +108,8 @@ Files changed: scripts/cast-subagent-stop-hook.sh, tests/cast-subagent-stop-hook
 
 ## Enforcement
 
-The SubagentStop hook checks for the `## Handoff` block in each completed agent's output. If absent, it logs a warning to `cast.db` under the `agent_hallucinations` table (`claim_type='missing_handoff'`). This is observability-only in v1 — no blocking. Agents that repeatedly omit the block surface in the hallucination dashboard.
+The `## Handoff` block is **not** hook-enforced. `cast-subagent-stop-hook.sh` does not check for its presence, and there is no `claim_type='missing_handoff'` logging to `agent_hallucinations`.
 
-See also: `research/2026-05-07-hallucination-audit.md` § Category 2 for the full design rationale.
+The only related runtime behavior is in `cast-incident-record.sh`, which parses the Handoff block's `files_changed` field to populate `related_files` on incident records. Absent a Handoff block, that field is simply omitted from the incident record.
+
+Enforcement of Handoff-block presence is a convention enforced by agent prompting and orchestrator review, not by a hook. If you see an agent omit the block, flag it in the Work Log — the hook will not catch it automatically.

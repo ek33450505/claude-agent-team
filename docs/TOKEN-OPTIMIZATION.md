@@ -45,10 +45,10 @@ ollama pull nomic-embed-text  # for semantic search
 - `claude-sonnet-4-6` (write, plan) → claude-sonnet-4-6 (Claude API, no fallback)
 - **Fallback:** If Ollama unavailable, silently retry via Claude API
 
-`cast.db` tracks `model_used` in `agent_runs` — you can measure how many tokens stayed local vs. went to Claude.
+`cast.db` tracks `model` in `agent_runs` — you can measure how many tokens stayed local vs. went to Claude.
 
 ```bash
 # Cost breakdown: local vs Claude
-sqlite3 ~/.claude/cast.db "SELECT model_used, COUNT(*), SUM(tokens_in + tokens_out) as total_tokens \
-  FROM agent_runs WHERE created_at > datetime('now', '-7 days') GROUP BY model_used;"
+sqlite3 ~/.claude/cast.db "SELECT model, COUNT(*), SUM(input_tokens + output_tokens) AS total_tokens \
+  FROM agent_runs WHERE started_at > datetime('now', '-7 days') GROUP BY model;"
 ```

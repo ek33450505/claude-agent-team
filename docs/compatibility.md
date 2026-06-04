@@ -87,7 +87,11 @@ CAST's test suite requires `bats-core` (not the legacy `bats` package):
 
 ```bash
 brew install bats-core   # macOS
-apt-get install bats     # Ubuntu/Debian
+# Ubuntu/Debian: apt-get install bats installs the legacy package (bats < 1.0).
+# For bats-core (1.10+), use npm or install from source:
+#   npm install -g bats
+#   OR: git clone https://github.com/bats-core/bats-core && cd bats-core && sudo ./install.sh /usr/local
+# Verify: bats --version (must be >= 1.10)
 ```
 
 Tests are confirmed passing on bats-core 1.10+ and 1.11+.

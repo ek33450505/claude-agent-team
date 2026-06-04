@@ -22,10 +22,11 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 |---|---|---|
 | `cast-tool-failure-hook.sh` | `*` | Logs tool failure metadata to `tool-failures.jsonl` and `cast.db routing_events`. |
 
-## PostToolUse hooks (1)
+## PostToolUse hooks (2)
 
 | Script | Matcher | What it does |
 |---|---|---|
+| `post-tool-hook.sh` | `Write\|Edit\|Agent\|Bash` | Delegates to `cast-post-tool.py` — logs file modifications to cast.db and emits HTTP events to the dashboard. |
 | `cast-budget-alert.sh` | `*` | Reads today's total spend from `sessions` and emits `[CAST-BUDGET-WARN]` or `[CAST-BUDGET-HARD-LIMIT]` when thresholds are crossed. |
 
 ## InstructionsLoaded hooks (1)
@@ -34,14 +35,16 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 |---|---|---|
 | `cast-instructions-loaded-hook.sh` | `*` | Logs active `CLAUDE.md` files at session start to `instructions-loaded.jsonl`. |
 
-## PreToolUse hooks (4)
+## PreToolUse hooks (6)
 
 | Script | Matcher | What it does |
 |---|---|---|
-| `cast-audit-hook.sh` | `*` | Appends an audit record (tool name, file path, command hash) for every tool call to `audit.jsonl`. |
+| `cast-audit-hook.sh` | `Write\|Edit` | Appends an audit record (tool name, file path, command hash) to `audit.jsonl`; when PII redaction is enabled, conditionally blocks cloud-bound writes containing PII (exit 2). |
 | `cast-headless-guard.sh` | `AskUserQuestion` | Auto-responds to `AskUserQuestion` with a safe default to prevent pipeline stalls in headless runs. |
 | `cast-stat-claim-guard.sh` | `Write\|Edit` | Blocks `README.md` writes when the badge test count differs from the actual `git ls-files` count. |
 | `cast-no-fake-success-guard.sh` | `Write\|Edit` | Warns (never blocks) when try/catch blocks return sample/fake/mock data that could mask integration failures. |
+| `pre-tool-guard.sh` | `Bash` | Blocks `git commit`, `git push`, and `git stash` calls (and other policy violations) in agent sessions (exit 2). |
+| `cast-tilde-write-guard.sh` | `Write\|Edit` | Blocks writes to literal-tilde paths (e.g. `~/foo`) that would resolve incorrectly in non-interactive contexts (exit 2). |
 
 ## CwdChanged hooks (1)
 
@@ -108,4 +111,4 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 
 ## How hooks get installed
 
-Running `install.sh` at the repo root copies all scripts in `scripts/` to `~/.claude/scripts/` and merges the hook registrations into `~/.claude/settings.json` from the canonical `settings.json` template at the repo root. To add or remove a hook, edit `settings.json` in the repo and re-run `install.sh` — direct edits to `~/.claude/settings.json` will be overwritten on the next install.
+Running `install.sh` at the repo root copies all scripts in `scripts/` to `~/.claude/scripts/`, installs the `managed-settings.d/*.json` fragments, and regenerates `~/.claude/settings.json` from those fragments via `cast-merge-settings.sh`. To add or remove a hook, edit (or add) a fragment in `managed-settings.d/` and re-run `install.sh` — do not hand-edit `settings.json` directly, as it is a generated artifact and will be overwritten on the next install.

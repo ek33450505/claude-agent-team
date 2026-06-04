@@ -71,7 +71,6 @@
 |---|---|---|
 | [cast-site](https://github.com/ek33450505/cast-site) | Archived 2026-05-25 | [cast-website](https://github.com/ek33450505/cast-website) |
 | [jarvis](https://github.com/ek33450505/jarvis) | Archived 2026-04 | [cast-routines](https://github.com/ek33450505/cast-routines) |
-| [forge](https://github.com/ek33450505/forge) | Archived 2026-04 | [cast-desktop](https://github.com/ek33450505/cast-desktop) — Tauri terminal concept absorbed |
 
 ---
 

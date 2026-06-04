@@ -5,21 +5,20 @@ these in their `tools:` frontmatter to access them. Names are as confirmed.
 
 | Tool | What it does | CAST agents that should add it |
 |---|---|---|
-| `VerifyPlanExecutionTool` | Returns PASS/FAIL/PARTIAL verdict after plan execution | orchestrator |
-| `BriefTool` | Produces a brief/summarize output block | orchestrator, planner |
-| `WorkflowTool` | **Platform-native successor to the `/orchestrate` + ADM pattern (Phase 10 convergence target).** Claude authors a JS orchestration script; native Dynamic Workflows replace the Agent Dispatch Manifest for new dispatches. **Available & verified 2026-06-03 — used for a 7-agent fan-out in-session.** | orchestrator |
-| `SleepTool` | Deliberate pause — useful in orchestrated pipelines for rate-limiting | orchestrator, bash-specialist |
+| `VerifyPlanExecutionTool` | Returns PASS/FAIL/PARTIAL verdict after plan execution | `/orchestrate` skill (main session) |
+| `BriefTool` | Produces a brief/summarize output block | `/orchestrate` skill (main session), planner |
+| `WorkflowTool` | **Platform-native successor to the `/orchestrate` + ADM pattern (Phase 10 convergence target).** Claude authors a JS orchestration script; native Dynamic Workflows replace the Agent Dispatch Manifest for new dispatches. **Available & verified 2026-06-03 — used for a 7-agent fan-out in-session.** | `/orchestrate` skill (main session) |
+| `SleepTool` | Deliberate pause — useful in orchestrated pipelines for rate-limiting | `/orchestrate` skill (main session), bash-specialist |
 | `REPLTool` | REPL-style code execution | debugger, code-writer |
 | `ScheduleCronTool` | Schedule a cron job from within an agent | devops, bash-specialist |
-| `EnterPlanMode` / `ExitPlanMode` | Native plan mode gates | planner, orchestrator |
+| `EnterPlanMode` / `ExitPlanMode` | Native plan mode gates | planner, `/orchestrate` skill (main session) |
 | `EnterWorktree` / `ExitWorktree` | Native worktree management | code-writer, merge |
 
 ## Notes
 
 - **WorkflowTool (Dynamic Workflows)**: the platform-native successor to `/orchestrate` + ADM. Confirmed available and working 2026-06-03 (7-agent fan-out executed in-session). New non-critical multi-agent dispatches should prefer this over the ADM path. The ADM path is retained as the stable legacy fallback until a piloted migration validates native Workflows for CAST's critical dispatch paths. See Phase 10 in `~/.claude/research/2026-06-03-anthropic-devs-claude-code-convergence.md`.
-- **VerifyPlanExecutionTool**: the orchestrator should call this after all batches complete
-  to log a PASS/FAIL/PARTIAL verdict to cast.db `quality_gates`. Until added to the
-  orchestrator `tools:` frontmatter, it is unavailable.
+- **VerifyPlanExecutionTool**: the `/orchestrate` skill (main session) should call this after all batches complete
+  to log a PASS/FAIL/PARTIAL verdict to cast.db `quality_gates`. There is no `orchestrator` agent — orchestration runs in the main session via the `/orchestrate` skill. Until the skill explicitly invokes this tool, it is unavailable within orchestrate flows.
 - **AgentHook / PromptHook**: hook types beyond `BashCommandHook` are available. CAST
   currently only uses `BashCommandHook` (type: "command"). `PromptHook` (type: "prompt")
   is already used in the PostCompact fragment. `AgentHook` dispatches a sub-agent — useful

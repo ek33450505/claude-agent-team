@@ -3,6 +3,8 @@
 **Date:** 2026-05-04
 **Purpose:** Catalog which agents emit `## Work Log` in their Status Block and identify gaps for the Live Work-Log Stream feature.
 
+> **Historical snapshot (2026-05-04):** Agent counts in this document reflect the roster at the time of the audit. The canonical agent count is now 23. Figures like "All remaining 25 agents" and "all other 22 agents" reflect the roster as audited on this date and should not be read as current totals.
+
 ---
 
 ## Summary

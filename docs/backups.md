@@ -14,7 +14,7 @@
 | Sync metadata | `~/.claude/config/sync.json` | On-disk snapshot + overlay |
 | cast.db | `~/.claude/cast.db` | Via `cast-db-backup.py` (WAL-safe) |
 
-Secrets (API keys, `.env`, `.pem`, `.key` files) are explicitly excluded from both backups via basename pattern matching. The overlay script additionally runs a content-level secret scan using gitleaks before pushing.
+Secrets (API keys, `.env`, `.pem`, `.key` files) are explicitly excluded from both backups via basename pattern matching. The overlay script additionally runs a content-level secret scan (a grep-based denylist, plus gitleaks as an additive layer when installed) before pushing.
 
 ## On-disk snapshots
 

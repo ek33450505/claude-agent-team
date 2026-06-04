@@ -230,7 +230,7 @@ Fragment format:
 ```
 
 `install.sh` merges all fragments into `~/.claude/settings.json` using
-`scripts/cast-settings-merge.sh`. Adding your hook to an existing fragment (or a new
+`scripts/cast-merge-settings.sh`. Adding your hook to an existing fragment (or a new
 numbered fragment) is the correct install path — do not edit `settings.json` by hand.
 
 ### Adding a new hook
@@ -305,7 +305,7 @@ Do not add new entries to the baseline — fix new violations instead.
 - **SessionStart** — Now reads the latest `~/Documents/Claude/YYYY-MM/*.md` journal entry (if present) and injects a context banner for continuity. Sourced via `cast-claudes_journal` standalone repo.
 
 **Hook Matcher Pattern (REC-02):**
-All PreToolUse/PostToolUse hook entries in CAST agent definitions already use the `matcher` field as an equivalent pre-filter to the deprecated `if` field. No migration needed.
+PreToolUse/PostToolUse hook entries in CAST use both the `matcher` field and the legacy `if` field. Live fragments in `managed-settings.d/` still contain entries using the `if` field (e.g. `cast-audit-hook.sh`, `post-tool-hook.sh` in the telemetry and security fragments). If `if` is deprecated in a future Claude Code release, those entries will need migration. Do not assume all hooks have been migrated to `matcher`.
 
 **Trail of Bits Security Skills:**
 Install security audit skills via `/plugin marketplace add trailofbits/skills`. Integrated with `security` agent for enhanced vulnerability scanning. Requires Claude Code v2.1.118+.
