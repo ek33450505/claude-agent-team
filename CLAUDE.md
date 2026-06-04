@@ -11,7 +11,7 @@ Requires clean working tree in `agents/`, `scripts/`, `bin/`, `rules-core/` — 
 ## Test
 
 ```bash
-bats tests/
+bash tests/run.sh
 ```
 
 **HARD RULE:** Run only against an isolated temp HOME, never against real `~/.claude`. A test targeting real `$HOME` destroyed the live runtime on 2026-06-02. Phase 3.8.A destructive test is not yet fixed — do not run the full suite against real `$HOME` until it is.

@@ -1,6 +1,6 @@
 # CAST Agent Roster
 
-> Extracted from [README](../../README.md). See also: [Agent Contracts](agent-contracts.md) | [Quality Rubric](agent-quality-rubric.md)
+> Canonical agent roster (referenced by README). See also: [Agent Contracts](agent-contracts.md) | [Quality Rubric](agent-quality-rubric.md)
 
 Core specialists across 4 categories, with optional personal overlay. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
 

@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing to CAST — Claude Agent Specialist Team.
 
-CAST is part of a multi-repo ecosystem — see the [Ecosystem section](README.md#the-cast-ecosystem) for related projects.
+CAST is part of a multi-repo ecosystem — see the [Ecosystem section](README.md#cast-ecosystem) for related projects.
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ name: <agent-name>
 description: <one-line description used by Claude Code to select this agent>
 tools: Read, Write, Edit, Bash
 model: claude-haiku-4-5   # or claude-sonnet-4-5
-effort: low               # low | medium | high
+effort: low               # only honored when model: claude-opus-*; ignored for haiku/sonnet
 ---
 ```
 
@@ -111,9 +111,9 @@ correct, but do not commit the README badge update — CI handles it post-merge.
 
 ## PR Checklist
 
-- [ ] `bats tests/` passes locally (run `make test-ubuntu` for cross-platform check)
+- [ ] If touching test-affected code, run the relevant tests via `make test-ubuntu` (isolated temp HOME) — full green suite is batched before releases, not required per-PR. Never run `bats tests/` against the real `$HOME`.
 - [ ] New shell scripts have BATS test coverage in `tests/`
-- [ ] If adding a new agent: frontmatter complete (`name`, `description`, `tools`, `model`, `effort`), added to `CLAUDE.md` registry and `CHEATSHEET.md`
+- [ ] If adding a new agent: frontmatter complete (`name`, `description`, `tools`, `model`; `effort` only required when `model: claude-opus-*`), added to `CLAUDE.md` registry and `CHEATSHEET.md`
 - [ ] If adding a new hook script: wired in `settings.json`, script exists in `scripts/`, CI setup step copies it
 - [ ] README badge NOT manually edited — auto-syncs on merge to `main`
 - [ ] No `find tests/ -name "*.bats"` — use `git ls-files tests/*.bats` for test counts

@@ -813,6 +813,6 @@ Each entry in `routing-table.json` under the `routes` array:
 | Version | Changes |
 |---|---|
 | 2.1.0 | CAST v3.3 (Phase 11): WAL mode, structured error logging, SQL injection fix, PII advisory mode, orchestrator checkpoints + policy gate, TRUNCATED/BLOCKED classification split, approval gate removed. |
-| 2.0.0 | CAST v3: Removed routing table and route.sh. Model-driven dispatch via CLAUDE.md. Consolidated 42→15 agents. 4 hooks (pre-tool-guard, post-tool-hook, cast-cost-tracker, cast-session-end). Added cast.db observability. Replaced castd daemon with cron. |
+| 2.0.0 | CAST v3: Removed routing table and route.sh. Model-driven dispatch via CLAUDE.md. Consolidated 42→15 agents (registry now 23). 4 hooks (pre-tool-guard, post-tool-hook, cast-cost-tracker, cast-session-end). Added cast.db observability. Replaced castd daemon with cron. |
 | 1.5.0 | Added orchestrator, fan-out dispatch, task board, agent-status-reader, CAST-ORCHESTRATE and CAST-HALT directives |
 | 1.0.0 | Initial protocol: Status Blocks, escape hatches, route.sh, pre-tool-guard.sh, post-tool-hook.sh |

@@ -4,9 +4,9 @@
 
 | Version | Support Status |
 |---------|---------------|
-| 1.5.x (current) | Full support — security and bug fixes |
-| 1.4.x | Security fixes only |
-| < 1.4 | No longer supported |
+| 7.3.x (current) | Full support — security and bug fixes |
+| 7.2.x | Security fixes only |
+| < 7.2 | No longer supported |
 
 ## Reporting a Vulnerability
 
@@ -19,7 +19,7 @@ This keeps the details confidential until a fix is released.
 
 - CAST version (`cat ~/.claude/cast-version`)
 - Operating system and shell version
-- The hook or script involved (`route.sh`, `post-tool-hook.sh`, etc.)
+- The hook or script involved (`post-tool-hook.sh`, `cast-memory-router.py`, etc.)
 - Steps to reproduce
 - Potential impact assessment
 

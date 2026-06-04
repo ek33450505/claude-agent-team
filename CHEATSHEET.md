@@ -24,7 +24,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `/push` | Dispatch push agent to push committed work to remote |
 | `/research` | Dispatch researcher agent for technical research |
 | `/review` | Review code changes with size-appropriate strategy |
-| `/roadmap` | Resume the CAST backlog from research/cast-future-roadmap.md |
+| `/roadmap` | Resume the CAST backlog — see `~/.claude/research/2026-06-03-anthropic-devs-claude-code-convergence.md` for the current convergence roadmap (research/cast-future-roadmap.md no longer exists) |
 | `/secure` | Dispatch security agent for a security review |
 | `/ship` | Run ship workflow: tests → CI check → commit → push → journal |
 | `/test` | Dispatch test-writer agent to write tests |
@@ -36,6 +36,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | Agent | Model | Effort | Key Tools | Description |
 |---|---|---|---|---|
 | api-contract | sonnet | high | Read, Bash, Grep | API contract guardian, detects breaking changes |
+| merge | haiku 4.5 | low | Bash, Read | PR lifecycle / git merge, rebase, conflict resolution, worktree cleanup |
 | bash-specialist | haiku 4.5 | low | Bash, Edit, Grep | Shell scripting and BATS test specialist |
 | code-reviewer | haiku 4.5 | low | Bash, Grep, Read | Post-change code review |
 | code-writer | sonnet | high | Edit, Write, Agent | Primary code implementation agent |
@@ -68,7 +69,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | careful-mode | Require explicit confirmation before Write/Edit/Bash operations | Yes |
 | freeze-mode | Read-only session, no file modifications allowed | Yes |
 | git-activity | Scan project repos for yesterday's git activity | No |
-| merge | Git merge, rebase, and conflict resolution | Yes |
+| merge | Git merge, rebase, conflict resolution, worktree cleanup | Yes |
 | orchestrate | Execute a CAST plan via the /orchestrate skill (main session dispatches sub-agents inline) | Yes |
 | plan | Write a structured plan with Agent Dispatch Manifest | Yes |
 | wizard | Multi-step workflow with human-approval gates | Yes |
