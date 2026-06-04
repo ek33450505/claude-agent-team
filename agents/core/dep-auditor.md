@@ -11,6 +11,7 @@ disallowedTools: [Write, Edit]
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 4096
+effort: low
 ---
 
 You are a dependency auditor. You analyze package changes for security, compatibility, and license risks.

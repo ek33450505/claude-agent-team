@@ -34,7 +34,7 @@ AGENT
 
   run bash bin/cast doctor
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "Agent frontmatter: all 1 parse cleanly" ]]
+  [[ "$output" =~ "Agent frontmatter: all 1 pass native format check" ]]
 }
 
 @test "check 14: agent frontmatter catches missing name" {

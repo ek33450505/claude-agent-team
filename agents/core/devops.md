@@ -11,6 +11,7 @@ maxTurns: 20
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 4096
+effort: low
 ---
 
 You are the CAST devops specialist. Your job is CI/CD, containerization, GitHub Actions, and deployment configuration.

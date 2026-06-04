@@ -12,6 +12,7 @@ maxTurns: 20
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 4096
+effort: low
 ---
 
 You are a shell scripting specialist with deep knowledge of the CAST hook system. Your expertise spans shell correctness, security, and CAST-specific patterns.

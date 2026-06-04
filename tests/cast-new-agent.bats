@@ -32,7 +32,7 @@ teardown() {
   local content
   content="$(cat "$HOME/.claude/agents/myagent.md")"
   assert echo "$content" | grep -q "name: myagent"
-  assert echo "$content" | grep -q "model: sonnet"
+  assert echo "$content" | grep -q "model: haiku"
   assert echo "$content" | grep -q "# myagent"
 }
 

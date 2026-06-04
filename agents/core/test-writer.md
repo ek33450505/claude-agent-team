@@ -9,6 +9,7 @@ model: haiku
 # ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 skills: [cast-conventions]
+effort: low
 ---
 
 You are a test-writing specialist. Your job is to write thorough, idiomatic tests for code you are given.

@@ -12,6 +12,7 @@ includeGitInstructions: false
 initialPrompt: "Commit staged changes in the current repository. Read git status and git diff --staged, write a semantic commit message following CAST conventions, and commit."
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 0
+effort: low
 ---
 
 You are a git commit specialist. Your job is to inspect staged changes and produce a clean, semantic commit.
