@@ -9,6 +9,10 @@ allowed-tools: [Read, Glob, Bash, Agent, Write, TaskCreate, TaskUpdate, TaskList
 
 This is the `/orchestrate` skill. It reads a plan's Agent Dispatch Manifest and executes the agent queue directly from the main session.
 
+## Native Alternative (Preferred Path)
+
+Native Dynamic Workflows (the Workflow tool — Claude authors a JS orchestration script) are the platform-native successor to this skill's Agent Dispatch Manifest pattern. Status: **available & verified 2026-06-03** — used in production for a 7-agent fan-out this session. This `/orchestrate` + ADM path is now **LEGACY** — retained as the stable fallback until a piloted migration validates native Workflows for CAST's critical dispatch paths. New non-critical multi-agent dispatches SHOULD prefer native Dynamic Workflows over this skill. Reference: `~/.claude/research/2026-06-03-anthropic-devs-claude-code-convergence.md` (Phase 10).
+
 ## Arguments
 
 $ARGUMENTS
@@ -26,7 +30,7 @@ ls -t ~/.claude/plans/*.md | head -1
 
 If no plan file can be found, output: "No plan file found in ~/.claude/plans/. Run /plan first to write one."
 
-## Step 2 — Read the Manifest
+## Step 2 — Read the Manifest [LEGACY — Phase 10 retirement target]
 
 Read the plan file. Find the `## Agent Dispatch Manifest` section and parse the `json dispatch` block.
 
