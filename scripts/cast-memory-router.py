@@ -21,6 +21,20 @@ Output (retrieve mode):
   [{"score": 0.91, "agent": "shared", "type": "procedural", "name": "...", ...}, ...]
 """
 
+# ─── PHASE 15 CONVERGENCE MARKER ─────────────────────────────────────────────
+# Convergence target: native Claude Code auto-memory (MEMORY.md auto-load).
+# STATUS: BLOCKED — do NOT unwire this router from the UserPromptSubmit hook chain.
+# Native auto-memory is STATIC (session-start MEMORY.md load only); it cannot
+# replicate this router's DYNAMIC per-prompt FTS retrieval + relevance scoring.
+# Two-tier memory model:
+#   Tier 1 (native): MEMORY.md auto-load — static, session-start (project +
+#                    agent-memory-local/<agent>/MEMORY.md). First ~200 lines loaded.
+#   Tier 2 (this router): dynamic per-prompt FTS retrieval, scored, DB-backed.
+# Preferred WRITE path for new agent memories: agent-memory-local/<agent>/MEMORY.md.
+# Retire this router ONLY when Claude Code exposes a native per-prompt dynamic
+# context-injection API. See ~/.claude/research/2026-06-03-anthropic-devs-claude-code-convergence.md (Phase 15).
+# ─────────────────────────────────────────────────────────────────────────────
+
 import sys
 import os
 import json

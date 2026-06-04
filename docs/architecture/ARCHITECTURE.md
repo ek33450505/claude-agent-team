@@ -136,3 +136,19 @@ CAST persists agent-discovered knowledge across sessions via `cast-memory-router
 **Memory types:** `user`, `feedback`, `project`, `reference`, `procedural`
 
 **DB table:** `agent_memories` — columns: `name` (slug, unique), `type`, `content`, `description`, `confidence`, `created_at`, `updated_at`
+
+### Two-tier memory model (Phase 15 — convergence state)
+
+CAST runs two memory tiers in parallel by design:
+
+| | Tier 1 — Native auto-memory | Tier 2 — Dynamic router |
+|---|---|---|
+| **Mechanism** | Platform-level MEMORY.md auto-load | `cast-memory-router.py` via `UserPromptSubmit` hook |
+| **Timing** | Session start only (static) | Per-prompt (dynamic) |
+| **Source** | `memory/MEMORY.md` (project) + `agent-memory-local/<agent>/MEMORY.md` (agent-scoped) | `agent_memories` table in `cast.db` (FTS5-indexed) |
+| **Scope** | First ~200 lines loaded by the platform | Top-N entries scored by FTS relevance + confidence |
+| **Write path** | Direct file edits or auto-memory mechanism | `## Facts` block → SubagentStop hook → router upsert |
+
+**Preferred WRITE path for new agent memories:** `agent-memory-local/<agent>/MEMORY.md` (Tier 1, no DB dependency).
+
+**Phase 15 convergence (retiring Tier 2) is BLOCKED** until Claude Code exposes a native per-prompt dynamic context-injection API. Tier 1 (static) cannot replicate Tier 2's per-prompt FTS retrieval and relevance scoring. Both tiers coexist until that API surface exists. See `~/.claude/research/2026-06-03-anthropic-devs-claude-code-convergence.md` (Phase 15).
