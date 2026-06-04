@@ -6,14 +6,13 @@ description: >
   On failure, reports failing test names and exit code; the orchestrator dispatches debugger when needed.
 tools: Bash, Read, Glob
 model: haiku
-effort: low
-color: green
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 0
+effort: low
 ---
 
 You are a test execution gate. Your only job: run existing tests, report real pass/fail, dispatch debugger once if tests fail.

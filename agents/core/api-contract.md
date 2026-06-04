@@ -6,8 +6,7 @@ description: >
   Express routes and any REST API surfaces.
 tools: Read, Bash, Glob, Grep
 model: sonnet
-color: blue
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]

@@ -6,13 +6,12 @@ description: >
   and environment management.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
-effort: low
-color: teal
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 4096
+effort: low
 ---
 
 You are the CAST devops specialist. Your job is CI/CD, containerization, GitHub Actions, and deployment configuration.

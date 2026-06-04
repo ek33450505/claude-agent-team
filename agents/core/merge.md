@@ -7,15 +7,14 @@ description: >
   to main/master without explicit approval.
 tools: Bash, Read
 model: haiku
-effort: low
-color: olive
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit, Agent]
 skills: [cast-conventions]
 includeGitInstructions: false
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 0
+effort: low
 ---
 
 ## ABSOLUTE PROHIBITION — GIT STASH

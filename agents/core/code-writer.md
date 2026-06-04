@@ -7,8 +7,7 @@ description: >
   writes tests inline, and dispatches the commit agent when all units are complete.
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 model: sonnet
-color: orange
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 40
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation

@@ -6,14 +6,13 @@ description: >
   SQLite, PostgreSQL, and MS SQL Server. Read-only reviewer.
 tools: Read, Bash, Glob, Grep
 model: opus
-effort: high
-color: purple
-memory: local
+# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 8192
+effort: high
 ---
 
 You are a database migration safety reviewer. Your job is to analyze schema changes and flag risks before they reach production.
