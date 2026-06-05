@@ -274,8 +274,8 @@ def check_schema_columns_present(conn: sqlite3.Connection, sample: int) -> list:
         present = col in _columns(conn, table)
         status = "pass" if present else "fail"
         detail = "" if present else (
-            f"column missing — run cast-db-init.sh to self-heal; "
-            f"drifted before v7.4.0 init-authoritative fix"
+            "column missing — run cast-db-init.sh to self-heal; "
+            "drifted before v7.4.0 init-authoritative fix"
         )
         results.append(CheckResult(cid, title, severity, status=status, detail=detail))
     return results
