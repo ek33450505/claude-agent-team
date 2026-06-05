@@ -5,9 +5,9 @@
 # CAST
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-7.3.1-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-7.4.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-23-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-1154-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-1171-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
@@ -46,7 +46,7 @@ bash install.sh
 - **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a reviewer pass. You cannot skip this.
 - **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
 - **SQLite audit trail, fully local.** Every agent dispatch, tool call, and token spend logs to `cast.db` on your machine. No SaaS dashboard, no cloud lock-in.
-- **<!-- CAST_TEST_COUNT -->1154<!-- /CAST_TEST_COUNT --> BATS test cases (1153 passing, 1 exempt).** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
+- **<!-- CAST_TEST_COUNT -->1171<!-- /CAST_TEST_COUNT --> BATS test cases.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
 
 ---
 
@@ -98,17 +98,17 @@ Every CAST operation follows a four-stage flow: (1) **hook validation** — pre-
 
 ## Personal Overlay
 
-CAST ships in two layers: `core` (always installed) and `personal` (optional, `--personal` flag). New clones get a trustworthy, generic installation; `rules-personal/` ships empty for clones to populate. See [docs/personal-overlay.md](docs/personal-overlay.md).
+CAST ships in two layers: `core` (always installed) and `personal` (optional, `--personal` flag). New clones get a trustworthy, generic installation; the personal layer is optional configuration you populate locally. See [docs/personal-overlay.md](docs/personal-overlay.md).
 
 ## Swarm System
 
 CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Teams get isolated worktrees, agent identity, peer messaging, and quality gates. See [docs/swarm.md](docs/swarm.md).
 
-## Agent Constellation Dashboard
+## Observability Dashboards
 
-**Constellation** — force-directed graph showing agent nodes, task satellites, token heatmaps, peer messages, and hook audit trails in real time. Part of [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard). See [docs/dashboard.md](docs/dashboard.md).
+**[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** — a React 19 + Vite + Express observability UI fed live from `~/.claude/cast.db` (local-only, no cloud). ~21 views covering sessions, agent analytics & reliability, hook health and failures, memory browser, plans, incidents, swarm runs, file-write audits, injection log, and a SQLite explorer. See [docs/dashboard.md](docs/dashboard.md).
 
-**Cast Desktop** — Tauri 2 native app surfacing the same observability layer with an embedded PTY terminal, command palette, and 11 dashboard views. See [cast-desktop](https://github.com/ek33450505/cast-desktop) (v0.1.0).
+**[Cast Desktop](https://github.com/ek33450505/cast-desktop)** — Tauri 2 native macOS app surfacing the same observability layer with an embedded PTY terminal, command palette (Cmd+K), and 11 dashboard views.
 
 ---
 
@@ -166,7 +166,7 @@ Runtime installs to `~/.claude/` — agents, memory, plans, swarm sessions, cast
 
 ## Testing
 
-125 CAST-authored BATS test files (1154 test cases) covering core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. 1153 passing, 1 exempt. (`find tests -name '*.bats'` also counts ~28 vendored `bats-assert`/`bats-support` submodule self-tests.) BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats-core` (Ubuntu/Debian). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests).
+125 CAST-authored BATS test files (1171 test cases) covering core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. (`find tests -name '*.bats'` also counts ~28 vendored `bats-assert`/`bats-support` submodule self-tests.) BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats-core` (Ubuntu/Debian). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests).
 
 ---
 
@@ -196,7 +196,7 @@ CAST is one of 13 source repositories in a connected ecosystem — each solves a
 
 ## Used In / Built With CAST
 
-- [**claude-code-dashboard**](https://github.com/ek33450505/claude-code-dashboard) — React observability UI; Constellation 3D graph of agents and token spend
+- [**claude-code-dashboard**](https://github.com/ek33450505/claude-code-dashboard) — React observability UI — sessions, agent analytics, hook health, memory browser, SQLite explorer
 - [**cast-desktop**](https://github.com/ek33450505/cast-desktop) — Tauri 2 native app with embedded PTY terminal, command palette, 11 dashboard views
 - [**cast-claudes_journal**](https://github.com/ek33450505/cast-claudes_journal) — Session journaling; auto-injects prior-day context via SessionStart hook
 - [**cast-dash**](https://github.com/ek33450505/cast-dash) — TUI dashboard for live swarm monitoring
@@ -229,6 +229,6 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->1154<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->1171<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills

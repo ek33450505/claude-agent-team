@@ -257,6 +257,30 @@ def check_memory_completeness(conn: sqlite3.Connection, sample: int) -> list:
     return [res]
 
 
+def check_schema_columns_present(conn: sqlite3.Connection, sample: int) -> list:
+    """C10 — init-authoritative columns must exist: agent_runs.(duration_ms,tool_uses) and dispatch_decisions.outcome."""
+    results = []
+    checks = [
+        ("C10.agent_runs.duration_ms",      "agent_runs",        "duration_ms",  "error"),
+        ("C10.agent_runs.tool_uses",         "agent_runs",        "tool_uses",    "error"),
+        ("C10.dispatch_decisions.outcome",   "dispatch_decisions","outcome",      "error"),
+    ]
+    for cid, table, col, severity in checks:
+        title = f"{table}.{col} column present (init-authoritative)"
+        if not _table_exists(conn, table):
+            results.append(CheckResult(cid, title, severity, status="skip",
+                                       detail=f"{table} table absent"))
+            continue
+        present = col in _columns(conn, table)
+        status = "pass" if present else "fail"
+        detail = "" if present else (
+            "column missing — run cast-db-init.sh to self-heal; "
+            "drifted before v7.4.0 init-authoritative fix"
+        )
+        results.append(CheckResult(cid, title, severity, status=status, detail=detail))
+    return results
+
+
 CHECKS: list[Callable[[sqlite3.Connection, int], list]] = [
     check_fk_integrity,
     check_truncation_fp,
@@ -267,6 +291,7 @@ CHECKS: list[Callable[[sqlite3.Connection, int], list]] = [
     check_timestamp_format,
     check_memory_dedup,
     check_memory_completeness,
+    check_schema_columns_present,
 ]
 
 

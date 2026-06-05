@@ -4,13 +4,38 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
-### Added
-- **Backup subsystem refresh (§3.9)** — Deprecated flawed GitHub-release-asset backup approach (`cast-memory-backup.sh`). Replaced with:
-  - `scripts/cast-snapshot.py` — on-disk dated snapshots with 7-day + 4-week retention
-  - `scripts/cast-overlay-sync.sh` — version-controlled GitHub overlay (cast-private repo)
-  - `cast backup [--overlay]` — unified user-facing entry point
-  - `cast doctor` backup-freshness check — validates snapshot age and alerts on stale backups
-- `scripts/cast-memory-backup.sh` deprecated and converted to a no-op stub (exits 0 on first line, preserving call-site compatibility)
+---
+
+## [7.4.0] — 2026-06-05 — Audit, Convergence & Database Correctness
+
+**Strategic focus:** Close out the security/recovery audit, settle `cast.db` as a single source of truth, and begin convergence toward native Claude Code — shipped as an accurate, release-ready cut.
+
+### Security & Safety
+- Emergency security hardening + PII scrub across hooks (#104)
+- Removed the destructive test that wiped the live runtime; eliminated the worktree wipe vector and hardened the swarm-teardown `rmtree` guard (#106)
+- Drove the 35 Docker-only BATS failures green (#108)
+- git-agent reliability — `-C` guard tolerance + push-first ordering (#111)
+
+### Database Correctness (cast.db)
+- Endpoint hardening — silent-write fixes + phantom-table provisioning (#113)
+- Settled `cast.db` to a single source of truth: `cast-db-init.sh` declares all 38 tables, idempotent init, `user_version=8` (#114)
+- Systems-test pass — hook fixes, `cast-db-verify`, CI pins (#116)
+- `cast-db-init.sh` made authoritative for `agent_runs.duration_ms` / `agent_runs.tool_uses` and `dispatch_decisions.outcome` (previously created only by runtime `ALTER`s); added a `cast-db-verify` C10 check so the drift cannot silently return
+
+### Disaster Recovery
+- Backup subsystem refresh (§3.9): on-disk dated snapshots (`cast-snapshot.py`, 7-day + 4-week retention) plus a version-controlled private GitHub overlay (`cast-overlay-sync.sh`), unified under `cast backup [--overlay]`, with a `cast doctor` backup-freshness check (#107). Deprecated the flawed release-asset backup (`cast-memory-backup.sh` → no-op stub)
+
+### Native Convergence (Phases 9–15)
+- Phase 9 + Phase 14 + phase3-tail fixes (#117)
+- Convergence batch — Phases 9.5 / 10 / 11 / 12 / 15 (convergence markers + safe config; bespoke engines retained where native isn't ready yet) (#119)
+
+### Documentation & Accuracy
+- Phase 16a documentation audit + Anthropic job-search-readiness pass — 91 findings (#122)
+- Regenerated the rules-core manifest after the convergence merge (#121)
+- Removed the fictional "Agent Constellation Dashboard" from all docs; replaced with the real observability dashboards (claude-code-dashboard — React 19 + Vite + Express, ~21 cast.db-backed views; Cast Desktop — Tauri 2 native app, 11 views)
+
+### Fixed
+- SubagentStop truncation detector no longer false-flags workflow / built-in agents (`general-purpose`, `Explore`, `Plan`, …) that return StructuredOutput instead of a prose `Status:` block; real CAST roster agents are still checked
 
 ---
 

@@ -214,3 +214,97 @@ print('\n'.join(lines))
   assert_success
   refute_output --partial "[CAST-TRUNCATED]"
 }
+
+# ---------------------------------------------------------------------------
+# Bug Fix Tests: False-Positive in Truncation Detection (Phase 3.8.C / v7.4.0)
+#
+# ISSUE: Agents dispatched inside a Workflow arrive with agent_type set to
+# their actual Claude Code type (general-purpose, code-reviewer, Explore, etc.),
+# NOT the literal string "workflow-subagent". The old code only exempted
+# substring matches for "workflow-subagent", so healthy workflow agents
+# were falsely flagged as truncated.
+#
+# FIX: Broadened exemption to explicitly list Claude Code built-in types:
+#   general-purpose, Explore, Plan, claude, statusline-setup, output-style-setup
+# These agents legitimately emit StructuredOutput or other non-CAST output
+# patterns, not prose Status blocks.
+# ---------------------------------------------------------------------------
+
+@test "general-purpose agent with no Status block is NOT flagged as truncated" {
+  # general-purpose is a Claude Code built-in; it emits StructuredOutput, not Status blocks.
+  # This was a false-positive before the fix.
+  local output="I've completed the task using a tool call."
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "general-purpose" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  # Verify no truncation record was written
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "Explore agent with no Status block is NOT flagged as truncated" {
+  # Explore is a Claude Code built-in search/navigation tool; it doesn't emit CAST Status blocks.
+  local output="Found relevant files: src/foo.js, tests/foo.test.js"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "Explore" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  # Verify no truncation record was written
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "Plan agent with no Status block is NOT flagged as truncated" {
+  # Plan is a Claude Code built-in planning tool.
+  local output="Here is my plan: 1) Review code 2) Make changes 3) Run tests"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "Plan" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  # Verify no truncation record was written
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "REGRESSION: code-writer with no Status block IS still flagged as truncated" {
+  # CRITICAL: code-writer is a CAST convention agent — it MUST emit a Status block.
+  # This test ensures the fix didn't accidentally exempt CAST agents.
+  # (This test already exists above but we emphasize it as a regression guard.)
+  local output="Applied the requested changes to the source file."
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-writer" "$output")"
+  assert_success
+  assert_output --partial "[CAST-TRUNCATED]"
+  # Verify truncation record WAS written for code-writer
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 1 ]]
+}
+
+@test "code-writer with valid Status block is not flagged (sanity check)" {
+  # Verify normal operation: code-writer WITH Status block → no truncation flag.
+  local output="Applied the requested changes.
+
+Status: DONE
+Summary: task completed successfully"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-writer" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  # No truncation record
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "researcher (real CAST agent) with no Status block IS flagged" {
+  # researcher is a real CAST agent (not exempt). It must emit a Status block.
+  # This verifies that the exemption list is limited to non-CAST built-ins.
+  local output="Found interesting article on the topic. Will summarize in next message."
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "researcher" "$output")"
+  assert_success
+  assert_output --partial "[CAST-TRUNCATED]"
+  # Verify truncation record was written
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 1 ]]
+}

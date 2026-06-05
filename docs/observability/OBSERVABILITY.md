@@ -2,23 +2,28 @@
 
 > Extracted from [README](../../README.md).
 
-## Agent Constellation Dashboard
+## Observability Dashboard
 
-[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) ships **Constellation** — a force-directed graph visualization of your swarm:
+[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard) and [cast-desktop](https://github.com/ek33450505/cast-desktop) provide live observability into your CAST runtime via ~21 views, all fed from `~/.claude/cast.db`:
 
-| Feature | What It Shows |
+| Category | Views |
 |---|---|
-| **Agent Force Graph** | Core agents + task satellites, gravity physics, live updates |
-| **Swarm Sessions** | Active swarms, teammates, task assignments, peer messages |
-| **Worktree Isolation** | Per-teammate file ownership, no write conflicts |
-| **Token Heatmap** | Per-agent token spend, cost trends, local vs Claude |
-| **Hook Audit Trail** | TeammateIdle, TaskCreated, TaskCompleted lifecycle events |
-| **Peer Messages** | Task claims, status updates, query results flowing between teammates |
+| **Sessions & History** | Sessions, Session Detail, Work Log |
+| **Agent Observability** | Agents, Agent Reliability, Analytics, Agent Analytics Detail |
+| **Hook & Quality** | Hooks, Hook Failures |
+| **Memory & Planning** | Memory browser, Plans, Orchestration |
+| **Swarm Lifecycle** | Swarm runs, Routines, Incidents |
+| **Audit & Compliance** | File Writes, Injection Log, Hook Audit Trail |
+| **System Health** | System status, Database explorer (SQLite), Executive Summary |
 
 ```bash
+# Web UI
 cd ~/Projects/personal/claude-code-dashboard
 npm run dev    # Vite :5173 + Express :3001
-# Visit http://localhost:5173/constellation
+# Visit http://localhost:5173
+
+# Desktop app
+open /Applications/Cast\ Desktop.app
 ```
 
 ---

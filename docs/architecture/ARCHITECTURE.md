@@ -32,7 +32,7 @@ Agent Teams (Anthropic Native)
 | Hook system exists | Production-hardened hooks: TeammateIdle, TaskCreated, TaskCompleted, WorktreeCreate | Real-time swarm lifecycle events |
 | Model selection per-session | Per-task routing: Haiku → Ollama (cheap), Sonnet → Claude (smart) | Automatic cost optimization |
 | No persistent audit trail | `cast.db`: 38 tables including swarm_sessions, teammate_runs, teammate_messages, agent_runs, routing_events, agent_memories, quality_gates, parry_guard_events, worktree_anomalies, and more — with temporal indices | Queryable, immutable swarm history |
-| No visual observability | Constellation Dashboard: force-directed agent graph + task satellites (React 19 + D3) | Live swarm topology + task flow |
+| No visual observability | Observability dashboards: claude-code-dashboard (React 19 + Vite + Express, ~21 views) + cast-desktop (Tauri 2 native app, 11 views) | Live session history, agent performance, hook health, token spend, swarm monitoring |
 | No agent response schema | Structured Output JSON schemas (`schemas/`) defining status-block, work-log, routing-event contracts | Machine-readable agent response contract for API pipelines |
 
 ---
@@ -86,7 +86,7 @@ Under the hood:
 2. Each teammate gets a Claude Code terminal with agent identity preamble
 3. CAST runs each teammate in its own worktree-isolated Claude Code session in parallel; CAST emits lifecycle events
 4. Peer messages route through cast.db message bus
-5. Dashboard displays force-directed graph of all teammates + active tasks
+5. Dashboard displays session history, agent performance, and swarm status
 
 ---
 
