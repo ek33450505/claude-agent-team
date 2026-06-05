@@ -875,6 +875,132 @@ BATCH_DISPATCHES_TABLE
   _columns_added=1
 fi
 
+# agent_hallucinations: claim verification telemetry (writer: cast-hallucination-guard.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "agent_hallucinations"; then
+  sqlite3 "$DB_PATH" <<'AGENT_HALLUCINATIONS_TABLE'
+CREATE TABLE IF NOT EXISTS agent_hallucinations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
+    agent_name TEXT NOT NULL,
+    claim_type TEXT NOT NULL,
+    claimed_value TEXT,
+    actual_value TEXT,
+    verified INTEGER DEFAULT 0,
+    timestamp TEXT
+);
+AGENT_HALLUCINATIONS_TABLE
+  _columns_added=1
+fi
+
+# code_ref_checks: code reference verification (writer: cast-code-ref-check.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "code_ref_checks"; then
+  sqlite3 "$DB_PATH" <<'CODE_REF_CHECKS_TABLE'
+CREATE TABLE IF NOT EXISTS code_ref_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
+    agent_name TEXT,
+    ref_type TEXT,
+    ref_name TEXT,
+    verified INTEGER,
+    location TEXT,
+    timestamp TEXT
+);
+CODE_REF_CHECKS_TABLE
+  _columns_added=1
+fi
+
+# compaction_events: context compaction telemetry (writer: cast-post-compact-hook.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "compaction_events"; then
+  sqlite3 "$DB_PATH" <<'COMPACTION_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS compaction_events (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    timestamp TEXT,
+    trigger TEXT,
+    compaction_tier TEXT,
+    transcript_path TEXT
+);
+COMPACTION_EVENTS_TABLE
+  _columns_added=1
+fi
+
+# completeness_events: agent completeness tracking (writer: cast-completeness-check.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "completeness_events"; then
+  sqlite3 "$DB_PATH" <<'COMPLETENESS_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS completeness_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent TEXT NOT NULL,
+    truncated_at TEXT NOT NULL,
+    snippet TEXT,
+    severity TEXT DEFAULT 'MEDIUM',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+COMPLETENESS_EVENTS_TABLE
+  _columns_added=1
+fi
+
+# hook_failures: hook execution failure log (writer: cast-hook-monitor.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "hook_failures"; then
+  sqlite3 "$DB_PATH" <<'HOOK_FAILURES_TABLE'
+CREATE TABLE IF NOT EXISTS hook_failures (
+    id TEXT PRIMARY KEY,
+    hook_name TEXT NOT NULL,
+    exit_code INTEGER,
+    stderr TEXT,
+    session_id TEXT,
+    timestamp TEXT NOT NULL
+);
+HOOK_FAILURES_TABLE
+  _columns_added=1
+fi
+
+# pane_bindings: terminal pane session mapping (writer: cast-pane-tracker.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "pane_bindings"; then
+  sqlite3 "$DB_PATH" <<'PANE_BINDINGS_TABLE'
+CREATE TABLE IF NOT EXISTS pane_bindings (
+    pane_id TEXT PRIMARY KEY,
+    session_id TEXT,
+    started_at INTEGER,
+    ended_at INTEGER,
+    project_path TEXT
+);
+PANE_BINDINGS_TABLE
+  _columns_added=1
+fi
+
+# stop_failure_events: StopFailure hook telemetry (writer: cast-stop-failure-hook.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "stop_failure_events"; then
+  sqlite3 "$DB_PATH" <<'STOP_FAILURE_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS stop_failure_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    event_id TEXT UNIQUE,
+    agent_name TEXT,
+    session_id TEXT,
+    error_message TEXT,
+    source TEXT DEFAULT 'StopFailure',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+STOP_FAILURE_EVENTS_TABLE
+  _columns_added=1
+fi
+
+# worktree_anomalies: agent worktree isolation anomalies (writer: cast-subagent-worktree-check.sh)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "worktree_anomalies"; then
+  sqlite3 "$DB_PATH" <<'WORKTREE_ANOMALIES_TABLE'
+CREATE TABLE IF NOT EXISTS worktree_anomalies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT,
+    worktree_path TEXT,
+    detected_at TEXT,
+    repo_root TEXT,
+    state TEXT,
+    reason TEXT
+);
+WORKTREE_ANOMALIES_TABLE
+  _columns_added=1
+fi
+
 # schema_migrations: the migration ledger. Canonical shape shared by cast-migrate.sh
 # and cast-migrate.py. Provisioned here so it always exists even though the migration
 # runners are now redundant (init provisions all schema directly — see header).

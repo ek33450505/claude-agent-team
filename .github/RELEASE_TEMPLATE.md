@@ -17,5 +17,5 @@
 
 ### Stats
 - BATS tests: N
-- Agents: 16
+- Agents: N
 - Hook events wired: N

@@ -183,10 +183,23 @@ EOF
     return 1
   }
 
-  # Verify it's in the expected range (cast-db-init.sh has 32 CREATE statements for ~24 distinct tables)
-  # The fix should yield ~24 distinct tables, not the inflated sum of ~42
-  [[ "$DB_ACTUAL" -ge 20 && "$DB_ACTUAL" -le 26 ]] || {
-    echo "DB_TABLE_COUNT=$DB_ACTUAL is outside expected range [20,26]" >&2
+  # Independently derive the canonical DISTINCT table count from the same schema sources
+  # gen-stats reads (cast-db-init.sh is the single source of truth, plus migrations).
+  # This tracks schema growth automatically — no hardcoded range to bump on every table add.
+  DISTINCT_COUNT=$(grep -rhoE 'CREATE TABLE IF NOT EXISTS[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(' \
+    "$REPO_DIR/scripts/cast-db-init.sh" "$REPO_DIR"/scripts/migrations/*.sql "$REPO_DIR"/migrations/*.sql 2>/dev/null \
+    | sed -E 's/.*EXISTS[[:space:]]+//;s/[[:space:]]*\(//' | sort -u | grep -c .)
+
+  # gen-stats must emit EXACTLY the distinct count — proves dedup works (not the inflated
+  # sum of duplicate CREATE declarations) and that the badge tracks the real schema.
+  [[ "$DB_ACTUAL" -eq "$DISTINCT_COUNT" ]] || {
+    echo "DB_TABLE_COUNT=$DB_ACTUAL does not match distinct schema table count=$DISTINCT_COUNT" >&2
+    return 1
+  }
+
+  # Sanity floor: catch a total breakage (0 / garbage) without coupling to an exact number.
+  [[ "$DB_ACTUAL" -ge 20 ]] || {
+    echo "DB_TABLE_COUNT=$DB_ACTUAL is implausibly low (<20)" >&2
     return 1
   }
 

@@ -4,7 +4,7 @@
 
 ## Architecture
 
-CAST operates as the native Agent Teams companion — Anthropic handles execution parallelism, CAST handles definition, composition, and observability.
+CAST is designed as the Agent Teams companion (Agent Teams integration is gated on the still-experimental native API; CAST swarm currently runs on local git worktrees). CAST handles definition, composition, and observability. Native Agent Teams execution is a forward target — Phase 13 is not yet shipped.
 
 ```
 Agent Teams (Anthropic Native)
@@ -31,7 +31,7 @@ Agent Teams (Anthropic Native)
 | No cross-agent messaging | Peer gossip protocol (cast.db message bus) | Agents collaborate without central broker |
 | Hook system exists | Production-hardened hooks: TeammateIdle, TaskCreated, TaskCompleted, WorktreeCreate | Real-time swarm lifecycle events |
 | Model selection per-session | Per-task routing: Haiku → Ollama (cheap), Sonnet → Claude (smart) | Automatic cost optimization |
-| No persistent audit trail | `cast.db` v8: 31 tables including swarm_sessions, teammate_runs, teammate_messages, agent_runs, routing_events, agent_memories, quality_gates, parry_guard_events, worktree_anomalies, and more — with temporal indices | Queryable, immutable swarm history |
+| No persistent audit trail | `cast.db`: 38 tables including swarm_sessions, teammate_runs, teammate_messages, agent_runs, routing_events, agent_memories, quality_gates, parry_guard_events, worktree_anomalies, and more — with temporal indices | Queryable, immutable swarm history |
 | No visual observability | Constellation Dashboard: force-directed agent graph + task satellites (React 19 + D3) | Live swarm topology + task flow |
 | No agent response schema | Structured Output JSON schemas (`schemas/`) defining status-block, work-log, routing-event contracts | Machine-readable agent response contract for API pipelines |
 
@@ -84,7 +84,7 @@ cast swarm merge <swarm_id>
 Under the hood:
 1. CAST creates isolated git worktrees per teammate
 2. Each teammate gets a Claude Code terminal with agent identity preamble
-3. Agent Teams parallelizes execution; CAST emits lifecycle events
+3. CAST runs each teammate in its own worktree-isolated Claude Code session in parallel; CAST emits lifecycle events
 4. Peer messages route through cast.db message bus
 5. Dashboard displays force-directed graph of all teammates + active tasks
 

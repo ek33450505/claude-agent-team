@@ -44,7 +44,7 @@ TaskCreated and WorktreeCreate are production-hardened hooks capturing swarm lif
 
 ---
 
-## Observability & cast.db v8
+## Observability & cast.db
 
 `cast.db` at `~/.claude/cast.db` — SQLite WAL mode, append-only, never truncated.
 
@@ -54,7 +54,7 @@ TaskCreated and WorktreeCreate are production-hardened hooks capturing swarm lif
 | `teammate_runs` | Per-agent task tracking: swarm_id, agent_role, status, token counts |
 | `teammate_messages` | Peer gossip: from_agent, to_agent, message_type, JSON payload |
 
-**Existing tables** (v4.6):
+**Existing tables:**
 | Table | Contents |
 |---|---|
 | `sessions` | Session start/end, model, token counts |

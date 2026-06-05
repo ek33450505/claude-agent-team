@@ -1,4 +1,3 @@
-# NOTE: [HUMAN ACTION REQUIRED] Remove "CAST PR Review" from required status checks in GitHub branch protection settings.
 # This workflow is advisory only and runs after BATS tests pass via workflow_run trigger.
 
 name: CAST PR Review
@@ -29,5 +28,5 @@ jobs:
             Review the changed files in this PR. Focus on:
             1. BATS test coverage for any new shell scripts
             2. Hook script defensive coding (empty input handling, exit codes)
-            3. Agent frontmatter completeness (name, model, effort, memory fields)
+            3. Agent frontmatter completeness (name, model, memory fields; effort only when model is opus-tier)
             Post findings as a PR comment. Be specific — cite file:line.

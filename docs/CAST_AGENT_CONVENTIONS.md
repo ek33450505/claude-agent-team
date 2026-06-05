@@ -41,7 +41,7 @@ Summary: ...
 - Truncation drops from the bottom of the output buffer.
 - Status is the orchestrator's routing contract — without it, the next batch can't be dispatched.
 - Work Log is diagnostic for humans; useful but non-blocking if truncated.
-- All 8 core agent definitions enforce this order as of 2026-05-04.
+- All 23 core agent definitions enforce this order.
 
 ---
 
@@ -62,7 +62,7 @@ Verbose per-file enumeration (e.g., "src/auth.ts (142 lines)", "src/utils.ts (88
 
 ## `thinking_budget` on haiku agents
 
-> **Model name:** All haiku agents use `claude-haiku-4-5` (canonical since April 2026; Haiku 3 retired). When authoring or editing agent frontmatter, use `model: claude-haiku-4-5` — never `haiku-3` or `claude-haiku-3`.
+> **Model name:** All haiku agents use `model: haiku` in frontmatter (bare form — 13 agents verified in `agents/core/`). When authoring or editing agent frontmatter, use `model: haiku` — never `haiku-3`, `claude-haiku-3`, or `claude-haiku-4-5`. If a fully-qualified string is required by the API, use `claude-haiku-4.5` (dotted, matching CLAUDE.md registry), but the bare `model: haiku` is the established repo convention.
 
 Do NOT set `thinking_budget` on `model: haiku` agents. Thinking tokens count against the same output budget as response tokens. haiku's output budget is already tight; adding thinking overhead increases truncation risk.
 

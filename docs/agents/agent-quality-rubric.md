@@ -29,7 +29,7 @@ Each agent is scored across 5 dimensions. A production-grade agent scores 4-5 on
 - 3: Tools listed but `disallowedTools` not used where appropriate
 - 5: Minimal tool set; `disallowedTools` blocks writes for read-only agents
 
-## Scoring Sheet (CAST v3 — 15 agents)
+## Scoring Sheet (23 agents)
 
 | Agent | Model | Role | Workflow | Output | Error | Tools | Total | Notes |
 |---|---|---|---|---|---|---|---|---|
@@ -42,15 +42,14 @@ Each agent is scored across 5 dimensions. A production-grade agent scores 4-5 on
 | push | haiku | 4 | 4 | 4 | 3 | 4 | **19** | Safety checks, upstream detection |
 | test-runner | haiku | 4 | 4 | 4 | 3 | 4 | **19** | Runs jest, vitest, bats |
 | researcher | sonnet | 4 | 4 | 4 | 3 | 4 | **19** | Consolidated: explorer + data + db-reader |
-| docs | sonnet | 4 | 4 | 4 | 3 | 4 | **19** | Consolidated: readme + doc-updater + report |
-| bash-specialist | sonnet | 5 | 5 | 4 | 4 | 4 | **22** | Shell scripts and BATS tests |
-| merge | sonnet | 4 | 4 | 4 | 3 | 4 | **19** | Git merges, rebases, conflicts |
-| orchestrator | sonnet | 4 | 5 | 4 | 4 | 4 | **21** | Plan manifest execution |
-| morning-briefing | sonnet | 4 | 4 | 4 | 4 | 4 | **20** | Daily git activity briefing |
-| devops | sonnet | 4 | 4 | 4 | 3 | 4 | **19** | CI/CD, Docker, infrastructure |
+| docs | haiku | 4 | 4 | 4 | 3 | 4 | **19** | Consolidated: readme + doc-updater + report |
+| bash-specialist | haiku | 5 | 5 | 4 | 4 | 4 | **22** | Shell scripts and BATS tests |
+| merge | haiku | 4 | 4 | 4 | 3 | 4 | **19** | Git merges, rebases, conflicts |
+| morning-briefing | haiku | 4 | 4 | 4 | 4 | 4 | **20** | Daily git activity briefing |
+| devops | haiku | 4 | 4 | 4 | 3 | 4 | **19** | CI/CD, Docker, infrastructure |
 
 ## Notes
 
-- **v3 consolidation:** 42 agents reduced to 15. Many former agents (test-writer, data-scientist, db-reader, doc-updater, readme-writer, refactor-cleaner, etc.) were folded into the 15 specialists.
+- **v3 consolidation:** 42 agents reduced to 15 at the v3 consolidation point (registry has since grown to 23). Former agents (data-scientist, db-reader, doc-updater, readme-writer, refactor-cleaner, etc.) were folded into the specialists. Note: test-writer was NOT folded — it remains a standalone agent (`agents/core/test-writer.md`).
 - **Scoring carried forward** where the agent existed in v2. New/consolidated agents scored based on their v3 definitions.
-- All agents score 19+ — no priority fixes needed.
+- **Scoring above covers the original 15-agent set.** The 8 additional agents (dev-workflow tier: migration-reviewer, api-contract, dep-auditor, release-notes, perf-sentinel; plus eval-writer, pr-reviewer, frontend-qa) in the current 23-agent roster are unscored — re-score the full roster before asserting all agents score 19+. Orchestration is handled by the `/orchestrate` skill (main session), not a dispatched `orchestrator` agent.

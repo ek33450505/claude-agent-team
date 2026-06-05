@@ -27,17 +27,17 @@ Expected output:
 
 ```
 ==> Tapping ek33450505/cast
-==> Downloading https://github.com/ek33450505/cast/...
+==> Downloading https://github.com/ek33450505/claude-agent-team/...
 ==> Installing cast
-  CAST Installer (v7.0)
+  CAST Installer (v7.3.1)
 
   ✓ Installed <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents -> ~/.claude/agents/
   ✓ Installed <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> slash commands -> ~/.claude/commands/
   ✓ Installed <!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills -> ~/.claude/skills/
   ✓ Installed hook scripts -> ~/.claude/scripts/
-  ✓ Installed 12 rules -> ~/.claude/rules/
+  ✓ Installed 9 rules -> ~/.claude/rules/
   ✓ Wired settings.json (hooks, permissions)
-  CAST v6.0 installed.
+  Installation complete! (CAST v7.3.1)
 ```
 
 ### Alternative: clone + install
@@ -61,9 +61,9 @@ cast status
 Expected output (abbreviated):
 
 ```
-CAST v6.0
+CAST v7.3.1
 ======================================================================
-Agents      30 installed
+Agents      23 installed
 Hooks       29 active
 Spend       $0.00 today  $X.XX this week
 Budget      not configured (run cast init-repo)
@@ -96,7 +96,7 @@ code-writer.md       debugger.md       docs.md
 ...
 ```
 
-You should see 31 `.md` files. Each file is a fully-configured agent definition with
+You should see 23 `.md` files. Each file is a fully-configured agent definition with
 YAML frontmatter specifying the model, memory, and thinking budget for that specialist.
 
 ---
