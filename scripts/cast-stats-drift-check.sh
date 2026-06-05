@@ -129,7 +129,7 @@ check_field() {
 }
 
 # --- Check JSON files ---
-for json_file in "${JSON_FILES[@]}"; do
+for json_file in "${JSON_FILES[@]+"${JSON_FILES[@]}"}"; do
   if [[ ! -f "$json_file" ]]; then
     echo "[cast-stats-drift-check] ERROR: --json file not found: $json_file" >&2
     FAIL_COUNT=$(( FAIL_COUNT + 1 ))
@@ -156,19 +156,22 @@ for json_file in "${JSON_FILES[@]}"; do
   check_field "$json_file" "packages" "$C_PACKAGES" "$(echo "$LOCAL_JSON" | jq -r '.packages // empty')"
 done
 
-# Token -> canonical field mappings
-declare -A TOKEN_FIELD_MAP
-TOKEN_FIELD_MAP=(
-  [CAST_VERSION]="version"
-  [CAST_AGENT_COUNT]="agents"
-  [CAST_TEST_COUNT]="tests"
-  [CAST_DB_TABLE_COUNT]="tables"
-  [CAST_COMMAND_COUNT]="commands"
-  [CAST_SKILL_COUNT]="skills"
-)
+# Token -> canonical field mapping (Bash 3.2 compatible — no associative arrays)
+_token_field() {
+  case "$1" in
+    CAST_VERSION)        echo "version" ;;
+    CAST_AGENT_COUNT)    echo "agents" ;;
+    CAST_TEST_COUNT)     echo "tests" ;;
+    CAST_DB_TABLE_COUNT) echo "tables" ;;
+    CAST_COMMAND_COUNT)  echo "commands" ;;
+    CAST_SKILL_COUNT)    echo "skills" ;;
+    *)                   echo "" ;;
+  esac
+}
+ALL_TOKENS="CAST_VERSION CAST_AGENT_COUNT CAST_TEST_COUNT CAST_DB_TABLE_COUNT CAST_COMMAND_COUNT CAST_SKILL_COUNT"
 
 # --- Check sentinel files ---
-for sentinel_file in "${SENTINEL_FILES[@]}"; do
+for sentinel_file in "${SENTINEL_FILES[@]+"${SENTINEL_FILES[@]}"}"; do
   if [[ ! -f "$sentinel_file" ]]; then
     echo "[cast-stats-drift-check] ERROR: --sentinels file not found: $sentinel_file" >&2
     FAIL_COUNT=$(( FAIL_COUNT + 1 ))
@@ -178,8 +181,8 @@ for sentinel_file in "${SENTINEL_FILES[@]}"; do
   echo "Checking sentinels: $sentinel_file"
   FILE_CONTENT="$(cat "$sentinel_file")"
 
-  for token in "${!TOKEN_FIELD_MAP[@]}"; do
-    field="${TOKEN_FIELD_MAP[$token]}"
+  for token in $ALL_TOKENS; do
+    field="$(_token_field "$token")"
 
     # Extract sentinel value: <!-- TOKEN -->value<!-- /TOKEN -->
     # Use grep + sed; if token not present, skip (not an error)
