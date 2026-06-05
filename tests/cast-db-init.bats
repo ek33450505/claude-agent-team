@@ -277,3 +277,67 @@ teardown() {
   run env CAST_DB_PATH="$TEST_DB" python3 "$REPO_DIR/scripts/cast-migrate.py"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# v7.4.0: init-authoritative column hygiene
+# agent_runs.(duration_ms, tool_uses) and dispatch_decisions.outcome must be
+# declared in the fresh-install CREATE TABLE and self-healed on existing DBs.
+# ---------------------------------------------------------------------------
+
+@test "cast-db-init provisions agent_runs.duration_ms and tool_uses on fresh DB" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name IN ('duration_ms','tool_uses');"
+  assert_output "2"
+}
+
+@test "cast-db-init provisions dispatch_decisions.outcome on fresh DB" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name='outcome';"
+  assert_output "1"
+}
+
+@test "cast-db-init dispatch_decisions.outcome has default 'pending'" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  sqlite3 "$TEST_DB" "INSERT INTO dispatch_decisions (session_id, chosen_agent) VALUES ('s1','code-writer');"
+  run sqlite3 "$TEST_DB" "SELECT outcome FROM dispatch_decisions WHERE chosen_agent='code-writer';"
+  assert_output "pending"
+}
+
+@test "cast-db-init self-heals agent_runs.duration_ms + tool_uses on existing DB missing them" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  sqlite3 "$TEST_DB" "ALTER TABLE agent_runs DROP COLUMN duration_ms; ALTER TABLE agent_runs DROP COLUMN tool_uses;"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name IN ('duration_ms','tool_uses');"
+  assert_output "0"
+
+  run bash "$DB_INIT" --db "$TEST_DB"
+  assert_success
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name IN ('duration_ms','tool_uses');"
+  assert_output "2"
+}
+
+@test "cast-db-init self-heals dispatch_decisions.outcome on existing DB missing it" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  sqlite3 "$TEST_DB" "ALTER TABLE dispatch_decisions DROP COLUMN outcome;"
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name='outcome';"
+  assert_output "0"
+
+  run bash "$DB_INIT" --db "$TEST_DB"
+  assert_success
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('dispatch_decisions') WHERE name='outcome';"
+  assert_output "1"
+}
+
+@test "cast-db-init table count is exactly 38 on fresh DB" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  # Exclude sqlite_* internal tables (e.g. sqlite_sequence) to count only user tables.
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+  assert_output "38"
+}
+
+@test "cast-db-init table count stays 38 on second invocation (idempotent)" {
+  bash "$DB_INIT" --db "$TEST_DB"
+  run bash "$DB_INIT" --db "$TEST_DB"
+  assert_success
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
+  assert_output "38"
+}

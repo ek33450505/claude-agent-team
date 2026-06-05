@@ -299,7 +299,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   response        TEXT,
   cache_read_input_tokens INTEGER,
   cache_creation_input_tokens INTEGER,
-  owns_files      TEXT
+  owns_files      TEXT,
+  duration_ms     INTEGER,
+  tool_uses       INTEGER
 );
 
 -- Routing events: structured event log
@@ -542,7 +544,8 @@ CREATE TABLE IF NOT EXISTS dispatch_decisions (
   effort          TEXT,
   wave_id         TEXT,
   parallel        INTEGER DEFAULT 0,
-  created_at      TEXT DEFAULT (datetime('now'))
+  created_at      TEXT DEFAULT (datetime('now')),
+  outcome         TEXT DEFAULT 'pending'
 );
 CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_session    ON dispatch_decisions(session_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_agent      ON dispatch_decisions(chosen_agent);
@@ -579,6 +582,15 @@ fi
 # agent_runs.owns_files — agent file-scope tracking (reader: cast-post-tool.py). Was provisioned
 # only by the orphaned scripts/migrations/009, which never runs in the runtime.
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN owns_files TEXT;" 2>/dev/null || true
+
+# agent_runs.duration_ms + tool_uses — written by cast-subagent-stop-hook.sh's self-heal block and
+# read by cast-duration-check.sh. Were not in the fresh-install CREATE TABLE prior to v7.4.0.
+sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN duration_ms INTEGER;" 2>/dev/null || true
+sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN tool_uses INTEGER;" 2>/dev/null || true
+
+# dispatch_decisions.outcome — written by cast_db.py ensure_schema_columns(). Was not in the
+# fresh-install CREATE TABLE prior to v7.4.0. Must match default used by cast_db.py ('pending').
+sqlite3 "$DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN outcome TEXT DEFAULT 'pending';" 2>/dev/null || true
 
 # sessions cost-rollup + lifecycle columns (writers: cast-session-end.sh, cast-maintenance.sh,
 # cast-budget-alert.sh, cast-cache-metrics.sh). Their UPDATEs failed on fresh installs without these.
