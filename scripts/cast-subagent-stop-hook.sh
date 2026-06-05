@@ -168,11 +168,21 @@ TOOL_USES="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_
 CACHE_READ_TOKENS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('cache_read_input_tokens') or '')" 2>/dev/null || echo "")"
 CACHE_CREATE_TOKENS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('cache_creation_input_tokens') or '')" 2>/dev/null || echo "")"
 
-# Detect structured-output (workflow) subagents — they emit StructuredOutput, not prose Status blocks
-IS_STRUCTURED_OUTPUT_AGENT="0"
-if [[ "$AGENT_NAME" == *"workflow-subagent"* ]]; then
-  IS_STRUCTURED_OUTPUT_AGENT="1"
-fi
+# Detect agents that are exempt from the Status block contract.
+# These agents either emit StructuredOutput tool results instead of prose Status blocks,
+# or are Claude Code built-ins that don't follow the CAST agent protocol.
+# EXEMPT: Claude Code built-in types (general-purpose, Explore, Plan, etc.) + workflow-subagents
+STATUS_CONTRACT_EXEMPT="0"
+case "$AGENT_NAME" in
+  # Claude Code built-in agent types — never emit CAST Status blocks
+  general-purpose|Explore|Plan|claude|statusline-setup|output-style-setup)
+    STATUS_CONTRACT_EXEMPT="1"
+    ;;
+  # Workflow-subagent substring match (for any name containing it)
+  *workflow-subagent*)
+    STATUS_CONTRACT_EXEMPT="1"
+    ;;
+esac
 export CAST_STOP_AGENT_ID="$AGENT_ID"
 export CAST_STOP_DURATION_MS="$DURATION_MS"
 export CAST_STOP_TOOL_USES="$TOOL_USES"
@@ -326,9 +336,9 @@ fi
 # hook matcher: code-writer|debugger|test-writer|security|frontend-qa).
 # This step fills the gap: log truncations for ALL agents directly from this hook.
 # Uses response_text (already extracted above) — same payload, same detection logic.
-# SKIP: structured-output agents (workflow-subagent) legitimately use StructuredOutput tool,
-# not prose Status blocks, so they are NOT subject to this check.
-if [[ "$IS_STRUCTURED_OUTPUT_AGENT" = "0" ]] && command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+# SKIP: agents exempt from the Status block contract (Claude Code built-ins, workflow-subagents)
+# — they legitimately use StructuredOutput or other non-CAST completion patterns.
+if [[ "$STATUS_CONTRACT_EXEMPT" = "0" ]] && command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os, re, sys
 sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
@@ -654,9 +664,9 @@ fi
 # ── Step 3.5: Truncation detection ───────────────────────────────────────────
 # A well-formed agent output ends with a Status: <VALUE> line.
 # If missing, the agent was truncated mid-execution.
-# SKIP: structured-output agents (workflow-subagent) legitimately emit StructuredOutput
-# tool results instead of prose Status blocks, so they are NOT subject to this check.
-if [[ "$IS_STRUCTURED_OUTPUT_AGENT" = "0" ]]; then
+# SKIP: agents exempt from the Status block contract (Claude Code built-ins, workflow-subagents)
+# — they legitimately emit StructuredOutput or other non-CAST completion patterns.
+if [[ "$STATUS_CONTRACT_EXEMPT" = "0" ]]; then
   CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
   export CAST_STOP_OUTPUT_FULL
 
