@@ -98,17 +98,17 @@ Every CAST operation follows a four-stage flow: (1) **hook validation** — pre-
 
 ## Personal Overlay
 
-CAST ships in two layers: `core` (always installed) and `personal` (optional, `--personal` flag). New clones get a trustworthy, generic installation; `rules-personal/` ships empty for clones to populate. See [docs/personal-overlay.md](docs/personal-overlay.md).
+CAST ships in two layers: `core` (always installed) and `personal` (optional, `--personal` flag). New clones get a trustworthy, generic installation; the personal layer is optional configuration you populate locally. See [docs/personal-overlay.md](docs/personal-overlay.md).
 
 ## Swarm System
 
 CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Teams get isolated worktrees, agent identity, peer messaging, and quality gates. See [docs/swarm.md](docs/swarm.md).
 
-## Agent Constellation Dashboard
+## Observability Dashboards
 
-**Constellation** — force-directed graph showing agent nodes, task satellites, token heatmaps, peer messages, and hook audit trails in real time. Part of [claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard). See [docs/dashboard.md](docs/dashboard.md).
+**[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** — a React 19 + Vite + Express observability UI fed live from `~/.claude/cast.db` (local-only, no cloud). ~21 views covering sessions, agent analytics & reliability, hook health and failures, memory browser, plans, incidents, swarm runs, file-write audits, injection log, and a SQLite explorer. See [docs/dashboard.md](docs/dashboard.md).
 
-**Cast Desktop** — Tauri 2 native app surfacing the same observability layer with an embedded PTY terminal, command palette, and 11 dashboard views. See [cast-desktop](https://github.com/ek33450505/cast-desktop) (v0.1.0).
+**[Cast Desktop](https://github.com/ek33450505/cast-desktop)** — Tauri 2 native macOS app surfacing the same observability layer with an embedded PTY terminal, command palette (Cmd+K), and 11 dashboard views.
 
 ---
 
@@ -196,7 +196,7 @@ CAST is one of 13 source repositories in a connected ecosystem — each solves a
 
 ## Used In / Built With CAST
 
-- [**claude-code-dashboard**](https://github.com/ek33450505/claude-code-dashboard) — React observability UI; Constellation 3D graph of agents and token spend
+- [**claude-code-dashboard**](https://github.com/ek33450505/claude-code-dashboard) — React observability UI — sessions, agent analytics, hook health, memory browser, SQLite explorer
 - [**cast-desktop**](https://github.com/ek33450505/cast-desktop) — Tauri 2 native app with embedded PTY terminal, command palette, 11 dashboard views
 - [**cast-claudes_journal**](https://github.com/ek33450505/cast-claudes_journal) — Session journaling; auto-injects prior-day context via SessionStart hook
 - [**cast-dash**](https://github.com/ek33450505/cast-dash) — TUI dashboard for live swarm monitoring
