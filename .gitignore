@@ -2,6 +2,10 @@
 .mcp.json
 *.local
 *.env
+*.key
+*.pem
+*.p12
+*.pfx
 agent-memory-local/
 projects/
 plans/

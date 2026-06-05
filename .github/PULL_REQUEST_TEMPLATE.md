@@ -14,9 +14,9 @@
 
 ## Pre-Merge Checklist
 
-- [ ] `bats tests/` passes locally (run `make test-ubuntu` for cross-platform Ubuntu parity check)
+- [ ] Tests run via `make test-ubuntu` (isolated temp HOME) — never `bats tests/` against real `$HOME` (destructive)
 - [ ] New shell scripts have BATS test coverage in `tests/`
-- [ ] If adding a new agent: frontmatter complete (`name`, `description`, `tools`, `model`, `effort`), added to `CLAUDE.md` registry and `CHEATSHEET.md`
+- [ ] If adding a new agent: frontmatter complete (`name`, `description`, `tools`, `model`; `effort` only required when `model: claude-opus-*`), added to `CLAUDE.md` registry and `CHEATSHEET.md`
 - [ ] If adding a new hook script: wired in `settings.json`, script exists in `scripts/`, CI setup step in `bats-ci.yml` copies it
 - [ ] README badge NOT manually edited — auto-syncs on merge to `main`
 - [ ] No `find tests/ -name "*.bats"` — use `git ls-files tests/*.bats` for test counts

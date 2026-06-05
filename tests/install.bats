@@ -48,7 +48,7 @@ run_install() {
   [ "$count" -eq 23 ]
 }
 
-@test "Install: installs all 7 skills" {
+@test "Install: installs core skills (spot-check)" {
   run_install
 
   [ -d "$HOME/.claude/skills/briefing-writer" ]

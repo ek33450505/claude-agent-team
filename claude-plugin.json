@@ -1,7 +1,7 @@
 {
   "name": "cast",
-  "version": "5.0.0",
-  "description": "Claude Agent Specialist Team — swarm control plane for Anthropic Agent Teams with 17+ agents, hook-enforced quality gates, and SQLite observability",
+  "version": "7.3.1",
+  "description": "Claude Agent Specialist Team — swarm control plane for Anthropic Agent Teams with 23 specialist agents, hook-enforced quality gates, and SQLite observability",
   "author": "ek33450505",
   "repository": "https://github.com/ek33450505/claude-agent-team",
   "license": "MIT",

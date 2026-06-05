@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/cast-banner.png" alt="CAST — Swarm control plane for Anthropic Agent Teams" />
+  <img src="docs/cast-banner.png" alt="CAST — Swarm production-grade control plane for Anthropic Agent Teams" />
 </p>
 
 # CAST
@@ -11,7 +11,7 @@
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-> CAST is a production control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->38<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
+> CAST is a production-grade control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->38<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
 
 **[CAST Framework](https://castframework.dev)**
 
@@ -61,13 +61,6 @@ bash install.sh
 
 ---
 
-<!-- TODO(ed): record 10s asciinema of `cast status` + an orchestrate run, replace this block with the SVG/GIF -->
-<p align="center">
-  <em>Demo: <code>cast status</code> + orchestrate run — recording in progress</em>
-</p>
-
----
-
 ## Table of Contents
 
 [What is CAST?](#what-is-cast) · [Architecture](#architecture) · [Agents](#agents) · [Hooks](#hooks) · [Observability](#observability--castdb) · [Ecosystem](#cast-ecosystem) · [Testing](#testing) · [Contributing](#contributing) · [Stats](#stats)
@@ -76,7 +69,7 @@ bash install.sh
 
 ## What is CAST?
 
-CAST transforms Agent Teams into a **production control plane:**
+CAST transforms Agent Teams into a **production-grade control plane:**
 
 - **Swarm composition in YAML.** Define teams, assign roles, set quality gates. CAST bootstraps worktrees, seeds teammates with identity + prompts, manages peer messaging.
 - **Structural quality gates.** Code changes mandate a reviewer pass. Raw `git commit` and `git push` are hard-blocked by hooks.
@@ -173,7 +166,7 @@ Runtime installs to `~/.claude/` — agents, memory, plans, swarm sessions, cast
 
 ## Testing
 
-153 BATS test files covering core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. 1153 passing, 1 exempt. BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats-core` (Ubuntu/Debian). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests).
+125 CAST-authored BATS test files (1154 test cases) covering core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. 1153 passing, 1 exempt. (`find tests -name '*.bats'` also counts ~28 vendored `bats-assert`/`bats-support` submodule self-tests.) BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats-core` (Ubuntu/Debian). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests).
 
 ---
 
@@ -211,12 +204,6 @@ CAST is one of 13 source repositories in a connected ecosystem — each solves a
 
 ---
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=ek33450505/claude-agent-team&type=Date)](https://star-history.com/#ek33450505/claude-agent-team&Date)
-
----
-
 ## Contributing
 
 Contributions are welcome — CAST is built in the open and actively developed. New agents, shell script fixes, BATS test coverage, and documentation improvements are all fair game.
@@ -229,9 +216,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow. Open an issue firs
 
 ## Support & Portfolio
 
-**Star this repo** if CAST is useful — visibility helps.
-
-Built by [Ed Kubiak](https://github.com/ek33450505) as a showcase of production-grade multi-agent AI tooling. [Portfolio →](https://edkubiak.dev)
+Built by [Ed Kubiak](https://github.com/ek33450505) as a showcase of production-grade multi-agent AI tooling. [Portfolio →](https://edwardkubiak.com)
 
 ---
 

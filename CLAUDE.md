@@ -14,7 +14,7 @@ Requires clean working tree in `agents/`, `scripts/`, `bin/`, `rules-core/` — 
 bash tests/run.sh
 ```
 
-**HARD RULE:** Run only against an isolated temp HOME, never against real `~/.claude`. A test targeting real `$HOME` destroyed the live runtime on 2026-06-02. Phase 3.8.A destructive test is not yet fixed — do not run the full suite against real `$HOME` until it is.
+**HARD RULE:** Run only against an isolated temp HOME, never against real `~/.claude`. The suite's teardown deletes its HOME-scoped fixtures, so it must run only against an isolated temp HOME — never your real `~/.claude`. Use the `setup_temp_home` / `teardown_temp_home` helpers in `tests/helpers/setup.bash`.
 
 ## Run
 

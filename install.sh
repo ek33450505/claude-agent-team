@@ -1,5 +1,5 @@
 #!/bin/bash
-# CAST Installer (v5.0)
+# CAST Installer
 # Copies agents, commands, skills, scripts, and rules to ~/.claude/
 set -euo pipefail
 

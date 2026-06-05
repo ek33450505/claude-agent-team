@@ -45,6 +45,7 @@ Agents continue to emit the human-readable Status block first. Immediately after
 Status: DONE
 Summary: Implemented three new routes and wrote 12 tests.
 Files changed: src/routes/auth.ts, src/routes/auth.test.ts
+```
 
 ```json
 {

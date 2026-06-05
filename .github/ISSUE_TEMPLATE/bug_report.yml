@@ -8,7 +8,7 @@ body:
     attributes:
       label: CAST Version
       description: Run `cast --version` to get this
-      placeholder: "e.g. 6.0.1"
+      placeholder: "e.g. 7.3.1"
     validations:
       required: true
   - type: dropdown

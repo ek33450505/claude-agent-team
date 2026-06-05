@@ -278,7 +278,7 @@ If you need to commit despite a Lint 1 or 2 failure (e.g., mid-audit), prefix th
 commit with `CAST_SKIP_LINTS=1`:
 
 ```bash
-CAST_SKIP_LINTS=1 git commit -m "wip: ..."
+CAST_SKIP_LINTS=1 git commit -m "fix: <message>"
 ```
 
 This does NOT bypass the orphan-script lint or hook-contract validation.

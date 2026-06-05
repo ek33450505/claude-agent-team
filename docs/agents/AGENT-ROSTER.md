@@ -2,60 +2,44 @@
 
 > Canonical agent roster (referenced by README). See also: [Agent Contracts](agent-contracts.md) | [Quality Rubric](agent-quality-rubric.md)
 
-Core specialists across 4 categories, with optional personal overlay. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation.
+23 core specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation. Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
 
-Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
+### Core Implementation & Review
 
-### Core Agents
+| Agent | Model | Purpose |
+|---|---|---|
+| `code-writer` | sonnet | Implementation specialist for feature work, bug fixes, and planned changes |
+| `debugger` | sonnet | Debugging specialist for errors, test failures, and unexpected behavior |
+| `planner` | sonnet | Planning specialist that converts feature requests into specs and ordered task breakdowns |
+| `researcher` | sonnet | Multi-purpose research and analysis specialist for codebase exploration and synthesis |
+| `security` | sonnet | Security review specialist for auth, input validation, secrets, and vulnerability audit |
+| `code-reviewer` | haiku | Post-change code review — use immediately after writing or modifying code |
+| `test-writer` | haiku | Test design specialist — writes test suites covering happy path, edge cases, and error states |
+| `test-runner` | haiku | Test execution gate — runs the project test suite and gates the chain on real exit codes |
+| `eval-writer` | sonnet | Eval and benchmark fixture author for Claude API and CAST agent prompts |
+| `pr-reviewer` | sonnet | Holistic pull-request reviewer — reads full diff, commit history, and linked issues at PR-open time |
+| `frontend-qa` | haiku | Frontend QA specialist for React/TypeScript — prop correctness, API contract alignment, a11y |
 
-| Agent | Model | Effort | Purpose |
-|---|---|---|---|
-| `code-writer` | sonnet | high | Feature implementation across files or logical units |
-| `debugger` | sonnet | high | Root-cause diagnosis and fixes for failures |
-| `planner` | sonnet | high | Breaks features into sequenced task plans with ADM |
-| `researcher` | sonnet | high | Multi-source analysis, gap reports, data synthesis, source citations |
-| `security` | sonnet | high | Auth, input validation, secrets, vulnerability audit |
-| `merge` | haiku | low | Git merges, rebases, conflict resolution |
-| `test-writer` | haiku | low | Unit and integration tests |
-| `devops` | haiku | low | CI/CD, Docker, infrastructure |
-| `docs` | haiku | low | Documentation, READMEs, changelogs |
-| `morning-briefing` | haiku | low | Daily git activity summary |
-| `bash-specialist` | haiku | low | Shell scripts, BATS tests, hook scripts |
-| `code-reviewer` | haiku | low | Diff scan for correctness and conventions |
-| `test-runner` | haiku | low | Runs test suites (bats, jest, vitest) |
-| `commit` | haiku | low | Stages and commits with semantic messages |
-| `push` | haiku | low | Pushes to remote with safety checks |
-| `frontend-qa` | haiku | low | Frontend diff review, component audit |
+### Operations & Workflow
 
-### Dev Workflow Agents
+| Agent | Model | Purpose |
+|---|---|---|
+| `commit` | haiku | Git commit specialist — stages and commits with semantic messages |
+| `push` | haiku | Git push specialist — verifies branch safety and sets upstream |
+| `merge` | haiku | PR lifecycle agent — git merges, rebases, conflict resolution |
+| `devops` | haiku | CI/CD pipeline management, Docker, GitHub Actions workflow authoring |
+| `bash-specialist` | haiku | Shell scripting specialist for CAST hook scripts, BATS tests, and automation |
+| `docs` | haiku | Documentation specialist — README audits, doc updates, changelog entries |
+| `morning-briefing` | haiku | Daily briefing agent — gathers git activity, action items, and CAST health summary |
+| `release-notes` | haiku | Release notes generator — structured changelogs from git commits |
 
-| Agent | Model | Effort | Purpose |
-|---|---|---|---|
-| `migration-reviewer` | sonnet | high | Database schema change safety review, rollback plans |
-| `api-contract` | sonnet | high | REST API breaking change detection, OpenAPI-style diffs |
-| `adr-writer` | haiku | low | Architecture Decision Record drafting |
-| `dep-auditor` | haiku | low | Dependency audit: CVEs, licenses, version compatibility |
-| `release-notes` | haiku | low | Structured changelog generation from git history |
-| `perf-sentinel` | sonnet | high | Performance regression detection, git bisect suggestions |
+### Specialist Review
 
-### Productivity Agents
+| Agent | Model | Purpose |
+|---|---|---|
+| `migration-reviewer` | opus | Database schema change reviewer — analyzes migration files for safety and rollback plans |
+| `api-contract` | sonnet | API contract guardian — detects breaking changes in REST endpoints |
+| `dep-auditor` | haiku | Dependency auditor — reviews package changes for CVEs, licenses, version compatibility |
+| `perf-sentinel` | sonnet | Performance regression detector — runs benchmarks, interprets results in context |
 
-| Agent | Model | Effort | Purpose |
-|---|---|---|---|
-| `task-triage` | haiku | low | Todoist inbox triage, priority assignment, stale task surfacing |
-| `standup-writer` | haiku | low | Daily standup generation from git activity and completions |
-| `meeting-prep` | haiku | low | Calendar-aware meeting prep briefs via Google Calendar MCP |
-| `email-drafter` | haiku | low | Professional email drafting via Gmail MCP (never sends) |
-| `pr-narrator` | haiku | low | PR diffs translated to stakeholder-facing summaries |
-
-### Knowledge & Career Agents
-
-| Agent | Model | Effort | Purpose |
-|---|---|---|---|
-| `knowledge-curator` | haiku | low | Obsidian vault organization, orphan/stale note surfacing |
-| `learning-scout` | sonnet | high | Tech topic research and resource curation to Obsidian |
-| `portfolio-sync` | haiku | low | Syncs showcase repo READMEs with actual project stats |
-
-**Model tiering:** Most lightweight agents run on Haiku ($1/MTok); reasoning-heavy agents on Sonnet ($3/MTok). This cost savings scales across the swarm.
-
-**MCP integrations:** Todoist (task-triage), Google Calendar (meeting-prep), Gmail (email-drafter), Obsidian (knowledge-curator, learning-scout).
+**Model tiering:** Haiku (13 agents) for review, commit, ops, and doc work ($1/MTok); Sonnet (9 agents) for implementation, planning, and research ($3/MTok); Opus (1 agent) for high-stakes schema review. Tiering scales cost savings across the swarm.

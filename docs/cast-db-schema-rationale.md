@@ -13,7 +13,7 @@ The cast.db has three tables with overlapping names but non-overlapping concerns
 | `dispatch_decisions` | `/orchestrate` skill (LLM-driven) | One row per `/orchestrate` plan dispatched. Schema dropped richer fields in v6→v7. |
 | `dispatch_events` | `scripts/cast-cookbook-drift.sh` | Single cron-job audit trail. Currently invisible in /db browser. |
 
-> **Note:** Row counts shown in earlier versions of this doc (routing_events 3824, dispatch_decisions 12, dispatch_events 1, incidents 17) were pre-wipe snapshots as of 2026-05-16. cast.db was reset to FRESH on 2026-06-02; those counts are stale. The qualitative active/dormant distinction per table is what matters.
+> **Note:** Earlier revisions of this doc included absolute per-table row counts. Row counts are environment-specific and drift over time, so they have been removed — the qualitative active/dormant distinction per table is what matters here.
 
 **Recommended long-term renames** (post v7.1 scope): `routing_events` → `hook_events`, `dispatch_decisions` → `orchestrate_invocations`, `dispatch_events` → `scheduled_dispatches`. Not done in v7.1 because rename migrations are riskier than warranted.
 
@@ -55,7 +55,7 @@ The live cast.db `schema_migrations` table has schema **`(version TEXT PRIMARY K
 
 **Symptom:** the python runner's INSERT references `migration_name`, which doesn't exist on the bash-created live table. So `cast-migrate.py` only works on fresh DBs (CI test DB) and silently breaks on the live DB.
 
-**Why the live DB isn't broken:** migrations are only added occasionally; when they're applied via the python runner, the INSERT raises "no such column: migration_name" and gets caught somewhere or simply doesn't record. Migrations themselves DO apply (the ALTER/CREATE statements succeed), so schema drift doesn't accumulate — just the audit trail in `schema_migrations` stays out of date.
+**Impact on the live DB:** the migration's ALTER/CREATE statements still apply successfully; only the INSERT that records the migration into `schema_migrations` fails (no such column: migration_name). So schema drift does not accumulate — the audit trail simply lags. Migrations themselves apply cleanly; the `schema_migrations` table just does not log them via the python runner.
 
 **Backfill in Phase 2 #18:** uses the LIVE bash schema. Does NOT attempt to reconcile the two runners.
 

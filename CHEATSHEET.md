@@ -26,7 +26,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `/review` | Review code changes with size-appropriate strategy |
 | `/roadmap` | Resume the CAST backlog — see `~/.claude/research/2026-06-03-anthropic-devs-claude-code-convergence.md` for the current convergence roadmap (research/cast-future-roadmap.md no longer exists) |
 | `/secure` | Dispatch security agent for a security review |
-| `/ship` | Run ship workflow: tests → CI check → commit → push → journal |
+| `/ship` | Run ship workflow: tests → CI check → commit → push → journal _(skill-backed, not one of the 19 core commands)_ |
 | `/test` | Dispatch test-writer agent to write tests |
 
 ---
