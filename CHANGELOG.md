@@ -6,6 +6,13 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ---
 
+## [7.4.1] — 2026-06-05
+
+### Fixed
+- `cast-parallel` `_db_log` silently dropped every parallel lifecycle event (passed nonexistent `--event`/`--message` flags to `cast-db-log.py`, which reads JSON from stdin); now pipes a valid `routing_events` JSON entry built via `json.dumps` with values passed through `os.environ`.
+
+---
+
 ## [7.4.0] — 2026-06-05 — Audit, Convergence & Database Correctness
 
 **Strategic focus:** Close out the security/recovery audit, settle `cast.db` as a single source of truth, and begin convergence toward native Claude Code — shipped as an accurate, release-ready cut.

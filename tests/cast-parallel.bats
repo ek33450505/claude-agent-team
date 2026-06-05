@@ -132,3 +132,51 @@ FOOTER
   assert_output --partial 'Stream A (worktree-a): batches 1,2'
   assert_output --partial 'Stream B (worktree-b): batches 3,4,5,6'
 }
+
+@test "_db_log JSON builder emits parseable JSON with required routing_events fields" {
+  # Test the JSON-building Python snippet used by _db_log in cast-parallel.sh.
+  # This covers the fix: _db_log previously passed nonexistent --event/--message
+  # flags; it now builds JSON via json.dumps and pipes to cast-db-log.py stdin.
+  # We test the JSON-build leg in isolation using an isolated CAST_DB_PATH.
+
+  local tmp_db_dir
+  tmp_db_dir="$(mktemp -d)"
+  export CAST_DB_PATH="$tmp_db_dir/t.db"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" 2>/dev/null
+
+  # Build JSON the same way _db_log does (values via os.environ, json.dumps)
+  local json_out
+  json_out=$(
+    CAST_DB_LOG_ACTION="parallel_start" \
+    CAST_DB_LOG_MSG="BATS test message with 'quotes' and \"double\"" \
+    CAST_DB_LOG_SESSION="bats-test-session" \
+    CAST_DB_LOG_PROJECT="test-project" \
+    python3 -c '
+import json, os, datetime
+print(json.dumps({
+    "session_id":     os.environ["CAST_DB_LOG_SESSION"],
+    "timestamp":      datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "prompt_preview": os.environ["CAST_DB_LOG_MSG"],
+    "action":         os.environ["CAST_DB_LOG_ACTION"],
+    "project":        os.environ["CAST_DB_LOG_PROJECT"],
+}))'
+  )
+
+  # Must be valid JSON
+  run python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d['action'])" <<< "$json_out"
+  assert_success
+  assert_output "parallel_start"
+
+  # Pipe to cast-db-log.py and assert a row lands in routing_events
+  echo "$json_out" | python3 "$REPO_DIR/scripts/cast-db-log.py"
+  run python3 -c "
+import sqlite3, os
+db = sqlite3.connect(os.environ['CAST_DB_PATH'])
+rows = db.execute(\"SELECT action, session_id FROM routing_events WHERE action='parallel_start'\").fetchall()
+print(len(rows))
+"
+  assert_success
+  assert_output "1"
+
+  rm -rf "$tmp_db_dir"
+}

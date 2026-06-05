@@ -335,7 +335,20 @@ _db_log() {
   local db_log_script
   db_log_script="$(dirname "$0")/cast-db-log.py"
   if [ -f "$db_log_script" ]; then
-    python3 "$db_log_script" --event "$event_type" --message "$message" 2>/dev/null || true
+    CAST_DB_LOG_ACTION="$event_type" \
+    CAST_DB_LOG_MSG="$message" \
+    CAST_DB_LOG_SESSION="${CAST_SESSION_ID:-cast-parallel}" \
+    CAST_DB_LOG_PROJECT="$(basename "$PWD")" \
+    python3 - <<'_PYEOF' 2>/dev/null | python3 "$db_log_script" 2>/dev/null || true
+import json, os, datetime
+print(json.dumps({
+    "session_id":     os.environ["CAST_DB_LOG_SESSION"],
+    "timestamp":      datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "prompt_preview": os.environ["CAST_DB_LOG_MSG"],
+    "action":         os.environ["CAST_DB_LOG_ACTION"],
+    "project":        os.environ["CAST_DB_LOG_PROJECT"],
+}))
+_PYEOF
   fi
 }
 
