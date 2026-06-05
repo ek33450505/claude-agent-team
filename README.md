@@ -178,7 +178,7 @@ Full changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ## CAST Ecosystem
 
-CAST is one of 13 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source and actively maintained. See [docs/ecosystem.md](docs/ecosystem.md) for the full repo table and install commands.
+CAST is one of 13 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source. See [docs/ecosystem.md](docs/ecosystem.md) for the full repo table and install commands.
 
 <!-- ECOSYSTEM_START -->
 | Tier | Repos |

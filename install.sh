@@ -431,5 +431,5 @@ printf "  1. Run ${BOLD}cast status${NC} to verify\n"
 printf "  2. Run ${BOLD}cast doctor${NC} for health check\n"
 printf "  3. Run ${BOLD}cast agents${NC} to see installed agents\n\n"
 if [ "$INSTALL_PERSONAL" = false ]; then
-    printf "  Tip: Run ${BOLD}bash install.sh --personal${NC} to also install personal overlay files (portfolio-sync, personal rules).\n\n"
+    printf "  Tip: Run ${BOLD}bash install.sh --personal${NC} to also install personal-overlay files from agents/personal/ and rules-personal/ (for clones that populate them).\n\n"
 fi
