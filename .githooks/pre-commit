@@ -124,6 +124,17 @@ _lint_orphan_scripts || {
   exit 1
 }
 
+# Keep canonical cast-stats.json in sync with derived stats (git ls-files based → CI-consistent).
+# Only stages when a real stat field changed (--check ignores the volatile `updated` field),
+# so unrelated commits never churn the file. Never blocks the commit.
+if command -v jq >/dev/null 2>&1 && [[ -x scripts/gen-cast-stats.sh ]]; then
+  if ! bash scripts/gen-cast-stats.sh --check >/dev/null 2>&1; then
+    bash scripts/gen-cast-stats.sh >/dev/null 2>&1 || true
+    git add cast-stats.json 2>/dev/null || true
+    echo "[CAST pre-commit] refreshed cast-stats.json (stats changed)"
+  fi
+fi
+
 # NOTE: README badge updates are now handled by the post-merge job (readme-badge-sync.yml)
 # This ensures badges are always in sync on main without blocking PRs.
 

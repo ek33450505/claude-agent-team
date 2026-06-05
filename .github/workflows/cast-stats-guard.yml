@@ -1,0 +1,19 @@
+name: CAST Stats Guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  stats-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Ensure jq is present
+        run: which jq || sudo apt-get install -y jq
+
+      - name: Verify cast-stats.json is in sync
+        run: bash scripts/gen-cast-stats.sh --check
