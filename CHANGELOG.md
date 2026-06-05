@@ -11,6 +11,9 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 ### Fixed
 - `cast-parallel` `_db_log` silently dropped every parallel lifecycle event (passed nonexistent `--event`/`--message` flags to `cast-db-log.py`, which reads JSON from stdin); now pipes a valid `routing_events` JSON entry built via `json.dumps` with values passed through `os.environ`.
 
+### Security/Safety
+- **pre-push hook**: BATS test gate is now opt-in (set `CAST_RUN_BATS_PUSH=1`) and routes through the isolated `tests/run.sh` runner. Direct `bats tests/` invocation is the 2026-06-02 wipe vector (can delete `~/.claude/` if a test lacks proper isolation). Per the 2026-06-02 test policy, the full BATS suite is batched before releases, not gated per-push.
+
 ---
 
 ## [7.4.0] — 2026-06-05 — Audit, Convergence & Database Correctness
