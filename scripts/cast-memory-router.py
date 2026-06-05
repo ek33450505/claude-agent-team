@@ -44,7 +44,6 @@ import argparse
 import sqlite3
 import struct
 import urllib.parse
-import uuid
 import hashlib
 from datetime import datetime, timezone
 
