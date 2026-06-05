@@ -1,0 +1,73 @@
+# cast-stats-drift-check composite action
+#
+# Reusable action for consuming repos to verify their committed stats match
+# the canonical flagship cast-stats.json.
+#
+# AUTO-DISCOVERY: When both `json` and `sentinels` inputs are empty (the default),
+# the underlying script auto-discovers stat markers in the current working directory:
+#   - JSON:      cast-stats.json, public/cast-stats.json, src/data/cast-stats.json
+#   - Sentinels: README.md and docs/**/*.md containing a <!-- CAST_ token
+# If nothing is found, it exits 0 (safe no-op). This means zero-config wiring:
+#
+#   - uses: ek33450505/claude-agent-team/.github/actions/cast-stats-drift-check@main
+#
+# Explicit paths (override auto-discovery for one source):
+#
+#   - uses: ek33450505/claude-agent-team/.github/actions/cast-stats-drift-check@main
+#     with:
+#       json: public/cast-stats.json
+#
+#   - uses: ek33450505/claude-agent-team/.github/actions/cast-stats-drift-check@main
+#     with:
+#       sentinels: README.md
+#
+#   - uses: ek33450505/claude-agent-team/.github/actions/cast-stats-drift-check@main
+#     with:
+#       json: cast-stats.json
+#       sentinels: README.md
+
+name: "CAST Stats Drift Check"
+description: "Verify committed stats match canonical CAST flagship JSON"
+
+inputs:
+  canonical-url:
+    description: "URL or local path to canonical cast-stats.json"
+    required: false
+    default: "https://raw.githubusercontent.com/ek33450505/claude-agent-team/main/cast-stats.json"
+  json:
+    description: "Path to a local JSON stats file to compare (optional)"
+    required: false
+    default: ""
+  sentinels:
+    description: "Path to a markdown/text file with <!-- TOKEN --> sentinels to compare (optional)"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Ensure jq is present
+      shell: bash
+      run: which jq || sudo apt-get install -y jq
+
+    - name: Run CAST stats drift check
+      shell: bash
+      run: |
+        # NOTE: ${{ github.action_path }} resolves to
+        # <flagship-checkout>/.github/actions/cast-stats-drift-check/
+        # The script lives at <flagship-checkout>/scripts/cast-stats-drift-check.sh,
+        # so the relative path ../../../scripts/ navigates up from the action dir
+        # to the flagship repo root and then into scripts/.
+        SCRIPT="${{ github.action_path }}/../../../scripts/cast-stats-drift-check.sh"
+
+        ARGS=(--canonical "${{ inputs.canonical-url }}")
+
+        if [[ -n "${{ inputs.json }}" ]]; then
+          ARGS+=(--json "${{ inputs.json }}")
+        fi
+
+        if [[ -n "${{ inputs.sentinels }}" ]]; then
+          ARGS+=(--sentinels "${{ inputs.sentinels }}")
+        fi
+
+        bash "$SCRIPT" "${ARGS[@]}"

@@ -1,0 +1,235 @@
+name: CAST Ecosystem Doctor
+
+# Monthly stats drift auditor — covers ALL ek33450505 repos against the flagship
+# canonical cast-stats.json. Surfaces drift as a GitHub issue; never fails the job
+# (notification-only pattern). The issue is the signal, not CI red.
+
+on:
+  schedule:
+    - cron: '0 13 1 * *'   # first of month at 13:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  ecosystem-doctor:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout flagship (source of canonical cast-stats.json)
+        uses: actions/checkout@v5
+        # Gives us ./cast-stats.json locally — no network fetch needed for canonical.
+
+      - name: Ensure jq is present
+        run: which jq || sudo apt-get install -y jq
+
+      - name: Run ecosystem drift audit
+        id: audit
+        run: |
+          set -euo pipefail
+
+          CANONICAL="./cast-stats.json"
+          DRIFT_CHECK="bash scripts/cast-stats-drift-check.sh"
+
+          # -----------------------------------------------------------------------
+          # Skip list — repos whose absence of stats is expected / irrelevant.
+          # claude-agent-team: canonical, self-guarded by cast-stats-guard.yml.
+          # cast-site: archived.
+          # homebrew-*: Formula-only repos, no stats prose.
+          # -----------------------------------------------------------------------
+          SKIP_LIST=(
+            "claude-agent-team"
+            "cast-site"
+          )
+
+          is_skipped() {
+            local repo="$1"
+            # Skip homebrew- prefix repos
+            if [[ "$repo" == homebrew-* ]]; then
+              return 0
+            fi
+            for s in "${SKIP_LIST[@]}"; do
+              if [[ "$repo" == "$s" ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          # Enumerate repos (non-archived, up to 300)
+          echo "Enumerating repos for ek33450505..."
+          REPOS=$(gh repo list ek33450505 --no-archived --limit 300 --json name -q '.[].name' 2>/dev/null || true)
+
+          # Guard: empty enumeration (transient gh failure or zero repos) must NOT be
+          # treated as "no drift" — that would auto-close a legitimate open drift issue.
+          if [[ -z "${REPOS//[[:space:]]/}" ]]; then
+            echo "WARNING: repo enumeration returned nothing (gh failure or zero repos) — skipping audit, not modifying issues." >&2
+            {
+              echo "checked=0"
+              echo "skipped=0"
+              echo "drift_count=0"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TMPDIR_AUDIT="$(mktemp -d)"
+          trap 'rm -rf "$TMPDIR_AUDIT"' EXIT
+
+          DRIFT_REPOS=()
+          CHECKED=0
+          SKIPPED=0
+
+          while IFS= read -r repo; do
+            [[ -z "$repo" ]] && continue
+
+            # Defensive: GitHub repo names are [A-Za-z0-9._-]; skip anything else so an
+            # unexpected name can never reach mkdir/path/URL construction.
+            if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "Skipping unexpected repo name: $repo" >&2
+              continue
+            fi
+
+            if is_skipped "$repo"; then
+              SKIPPED=$(( SKIPPED + 1 ))
+              continue
+            fi
+
+            CHECKED=$(( CHECKED + 1 ))
+            REPO_TMPDIR="${TMPDIR_AUDIT}/${repo}"
+            mkdir -p "$REPO_TMPDIR"
+
+            REPO_JSON_ARGS=()
+            REPO_SENTINEL_ARGS=()
+            BASE_URL="https://raw.githubusercontent.com/ek33450505/${repo}/HEAD"
+
+            # Fetch candidate JSON stat files
+            for path in "cast-stats.json" "public/cast-stats.json" "src/data/cast-stats.json"; do
+              safe_name="${path//\//_}"
+              dest="${REPO_TMPDIR}/${safe_name}"
+              if curl -fsSL --max-time 10 "${BASE_URL}/${path}" -o "$dest" 2>/dev/null; then
+                REPO_JSON_ARGS+=(--json "$dest")
+              fi
+            done
+
+            # Fetch README.md; add as sentinel only if it has <!-- CAST_ tokens
+            readme_dest="${REPO_TMPDIR}/README.md"
+            if curl -fsSL --max-time 10 "${BASE_URL}/README.md" -o "$readme_dest" 2>/dev/null; then
+              if grep -q '<!-- CAST_' "$readme_dest" 2>/dev/null; then
+                REPO_SENTINEL_ARGS+=(--sentinels "$readme_dest")
+              fi
+            fi
+
+            # Nothing fetched → silently skip
+            if [[ ${#REPO_JSON_ARGS[@]} -eq 0 && ${#REPO_SENTINEL_ARGS[@]} -eq 0 ]]; then
+              continue
+            fi
+
+            # Run drift check; capture output + exit code (|| true so set -e doesn't fire)
+            check_output=""
+            check_exit=0
+            check_output=$(
+              $DRIFT_CHECK --canonical "$CANONICAL" \
+                "${REPO_JSON_ARGS[@]}" "${REPO_SENTINEL_ARGS[@]}" 2>&1
+            ) || check_exit=$?
+
+            if [[ "$check_exit" -ne 0 ]]; then
+              DRIFT_REPOS+=("$repo")
+              # Store per-repo output for the report
+              echo "$check_output" > "${TMPDIR_AUDIT}/${repo}.drift.txt"
+            fi
+          done <<< "$REPOS"
+
+          echo "checked=$CHECKED" >> "$GITHUB_OUTPUT"
+          echo "skipped=$SKIPPED" >> "$GITHUB_OUTPUT"
+          echo "drift_count=${#DRIFT_REPOS[@]}" >> "$GITHUB_OUTPUT"
+
+          # -----------------------------------------------------------------------
+          # Build markdown report (only when drift found)
+          # -----------------------------------------------------------------------
+          REPORT_FILE="${TMPDIR_AUDIT}/report.md"
+
+          if [[ ${#DRIFT_REPOS[@]} -gt 0 ]]; then
+            {
+              echo "## CAST Stats Drift — $(date +%Y-%m-%d)"
+              echo ""
+              echo "**Canonical version:** \`$(jq -r '.version' < "$CANONICAL")\`"
+              echo "**Repos checked:** $CHECKED | **Drifting:** ${#DRIFT_REPOS[@]}"
+              echo ""
+              echo "---"
+              echo ""
+              for repo in "${DRIFT_REPOS[@]}"; do
+                echo "### \`${repo}\`"
+                echo ""
+                echo "Fix hint: update the stale stat file(s) in \`${repo}\` to match canonical \`cast-stats.json\`."
+                echo ""
+                echo "<details><summary>Mismatch detail</summary>"
+                echo ""
+                echo '```'
+                grep 'FAIL' "${TMPDIR_AUDIT}/${repo}.drift.txt" 2>/dev/null || true
+                echo '```'
+                echo ""
+                echo "</details>"
+                echo ""
+              done
+              echo "---"
+              echo "_Generated by [cast-ecosystem-doctor.yml](https://github.com/ek33450505/claude-agent-team/blob/main/.github/workflows/cast-ecosystem-doctor.yml)_"
+            } > "$REPORT_FILE"
+
+            # Ensure stats-drift label exists
+            gh label create stats-drift \
+              --color FBCA04 \
+              --description "Ecosystem stat drift" \
+              --repo ek33450505/claude-agent-team 2>/dev/null || true
+
+            # Find existing open drift issue (idempotent: edit if exists, create if not)
+            EXISTING_ISSUE=$(
+              gh issue list \
+                --repo ek33450505/claude-agent-team \
+                --label stats-drift \
+                --state open \
+                --json number \
+                -q '.[0].number' 2>/dev/null || true
+            )
+
+            if [[ -n "$EXISTING_ISSUE" ]]; then
+              gh issue edit "$EXISTING_ISSUE" \
+                --repo ek33450505/claude-agent-team \
+                --body-file "$REPORT_FILE"
+              echo "Updated existing drift issue #${EXISTING_ISSUE}"
+            else
+              gh issue create \
+                --repo ek33450505/claude-agent-team \
+                --title "CAST stats drift — $(date +%Y-%m-%d)" \
+                --label stats-drift \
+                --body-file "$REPORT_FILE"
+              echo "Opened new drift issue"
+            fi
+          else
+            # No drift — close any existing open drift issue if present
+            EXISTING_ISSUE=$(
+              gh issue list \
+                --repo ek33450505/claude-agent-team \
+                --label stats-drift \
+                --state open \
+                --json number \
+                -q '.[0].number' 2>/dev/null || true
+            )
+            if [[ -n "$EXISTING_ISSUE" ]]; then
+              gh issue close "$EXISTING_ISSUE" \
+                --repo ek33450505/claude-agent-team \
+                --comment "All ecosystem repos are now in sync with canonical stats. Auto-closed by cast-ecosystem-doctor."
+              echo "Closed drift issue #${EXISTING_ISSUE} (no drift found)"
+            fi
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== CAST Ecosystem Doctor Summary ==="
+          echo "Repos checked: ${{ steps.audit.outputs.checked }}"
+          echo "Repos skipped: ${{ steps.audit.outputs.skipped }}"
+          echo "Repos drifting: ${{ steps.audit.outputs.drift_count }}"

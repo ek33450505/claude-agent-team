@@ -19,41 +19,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 README="${1:-$REPO_DIR/README.md}"
 
-# --- Counts ---
+# --- Counts (sourced from shared lib — single source of truth) ---
 # Use `git ls-files` to count only TRACKED files. Counting untracked or in-flight
 # files (find/ls) causes pre-commit-vs-CI divergence — the pre-commit auto-staged
 # stats reflect untracked-but-on-disk files that CI can't see, so readme-in-sync
 # fails. Tracked-only is the only deterministic, CI-stable count.
+# shellcheck source=scripts/cast-stats-lib.sh
+source "${SCRIPT_DIR}/cast-stats-lib.sh"
 cd "$REPO_DIR"
-AGENT_COUNT=$(git ls-files 'agents/core/*.md' | grep -cE '^agents/core/[^/]+\.md$' | tr -d ' ')
-CMD_COUNT=$(git ls-files 'commands/*.md' | wc -l | tr -d ' ')
-# Skills: count unique skill dirs (any tracked file under skills/<dir>/)
-SKILL_COUNT=$(git ls-files 'skills/*' | grep -oE '^skills/[^/]+' | sort -u | wc -l | tr -d ' ')
-# Tests: count individual @test functions across all tracked .bats files
-TEST_FILES=$(git ls-files 'tests/*.bats' 'tests/*/*.bats')
-if [ -n "$TEST_FILES" ]; then
-  TEST_COUNT=$(echo "$TEST_FILES" | xargs grep -h "^@test" 2>/dev/null | wc -l | tr -d ' ')
-else
-  TEST_COUNT=0
-fi
+AGENT_COUNT=$(cast_stat_agents)
+CMD_COUNT=$(cast_stat_commands)
+SKILL_COUNT=$(cast_stat_skills)
+TEST_COUNT=$(cast_stat_tests)
 # Routes removed in CAST v3 — model-driven dispatch via CLAUDE.md
 ROUTE_COUNT=0
-
-# DB tables: count DISTINCT table names across canonical schema sources
-# (init script + both migration directories). This counts the tables the framework
-# ships with, not a particular user's live cast.db (which may have FTS sidecars
-# or accumulated state from past versions).
-#
-# Tables are idempotently declared with CREATE TABLE IF NOT EXISTS in multiple
-# files (and re-declared in init.sh's self-healing block), so we extract unique
-# table identifiers rather than summing CREATE statements across files.
-DB_TABLE_COUNT=$(
-  grep -rhoE 'CREATE TABLE IF NOT EXISTS[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(' \
-    scripts/cast-db-init.sh scripts/migrations/*.sql migrations/*.sql 2>/dev/null | \
-    sed -E 's/.*EXISTS[[:space:]]+//;s/[[:space:]]*\(//' | \
-    sort -u | wc -l
-) || DB_TABLE_COUNT=0
-DB_TABLE_COUNT=$(echo "$DB_TABLE_COUNT" | tr -d ' ')
+DB_TABLE_COUNT=$(cast_stat_tables)
 
 # --- Update sentinel tokens in README ---
 update_token() {
@@ -95,8 +75,8 @@ fi
 
 # --- Update version badge sentinel ---
 VERSION_FILE="$REPO_DIR/VERSION"
+CAST_VERSION="$(cast_stat_version)"
 if [ -f "$VERSION_FILE" ]; then
-  CAST_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
   NEW_BADGE="![Version](https://img.shields.io/badge/version-${CAST_VERSION}-blue)"
   sed -i.bak "s|<!-- CAST_VERSION_BADGE -->.*<!-- /CAST_VERSION_BADGE -->|<!-- CAST_VERSION_BADGE -->${NEW_BADGE}<!-- /CAST_VERSION_BADGE -->|g" "$README"
 fi
