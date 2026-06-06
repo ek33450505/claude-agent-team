@@ -303,3 +303,124 @@ _create_branch_aged() {
   still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-old-xyz" | wc -l)"
   [ "$still_exists" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# Test 14: content-merged cast-swarm-* branch deleted regardless of age (fresh)
+# ---------------------------------------------------------------------------
+
+@test "groomer: deletes content-merged cast-swarm-* branch even when fresh (age 0)" {
+  # Create a swarm branch with actual file content (fresh — age 0)
+  git -C "$TEST_REPO" checkout -b cast-swarm-merged-fresh >/dev/null 2>&1
+  echo "swarm content" > "$TEST_REPO/swarm-file.txt"
+  git -C "$TEST_REPO" add swarm-file.txt
+  git -C "$TEST_REPO" commit -m "Swarm work" >/dev/null 2>&1
+
+  # Squash-merge into main so content is in main
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+  git -C "$TEST_REPO" merge --squash cast-swarm-merged-fresh >/dev/null 2>&1
+  git -C "$TEST_REPO" commit -m "Squash-merged cast-swarm-merged-fresh" >/dev/null 2>&1
+
+  # Run apply — should delete because content is merged, despite age 0
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  local still_exists
+  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-merged-fresh" | wc -l | tr -d ' ')"
+  [ "$still_exists" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 15: fresh NON-merged cast-swarm-* branch is kept (regression guard)
+# ---------------------------------------------------------------------------
+
+@test "groomer: keeps fresh NON-merged cast-swarm-* branch (<7d, unique commit)" {
+  # Create a swarm branch with a unique commit not on main (fresh — age 0)
+  git -C "$TEST_REPO" checkout -b cast-swarm-unmerged-fresh >/dev/null 2>&1
+  echo "unique swarm content" > "$TEST_REPO/unique-swarm-file.txt"
+  git -C "$TEST_REPO" add unique-swarm-file.txt
+  git -C "$TEST_REPO" commit -m "Unique swarm work not on main" >/dev/null 2>&1
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+
+  # Run apply — should keep because not merged and not stale
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  git -C "$TEST_REPO" branch --list | grep -q "cast-swarm-unmerged-fresh"
+}
+
+# ---------------------------------------------------------------------------
+# Test 16: stale NON-merged cast-swarm-* branch deleted via age path (age 8)
+# ---------------------------------------------------------------------------
+
+@test "groomer: deletes stale NON-merged cast-swarm-* branch via age path (age 8)" {
+  # Create a swarm branch with unique commits not on main, 8 days old
+  git -C "$TEST_REPO" checkout -b cast-swarm-stale-unmerged >/dev/null 2>&1
+  echo "stale unmerged swarm content" > "$TEST_REPO/stale-swarm-file.txt"
+  git -C "$TEST_REPO" add stale-swarm-file.txt
+  local fake_date
+  fake_date="$(date -v -8d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "8 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "2020-01-01T00:00:00")"
+  GIT_COMMITTER_DATE="$fake_date" GIT_AUTHOR_DATE="$fake_date" \
+    git -C "$TEST_REPO" commit -m "Stale unmerged swarm work" >/dev/null 2>&1
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+
+  # Run apply — should delete via age path (8 >= 7)
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  local still_exists
+  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-stale-unmerged" | wc -l | tr -d ' ')"
+  [ "$still_exists" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 17: CAST_GROOM_SWARM_DAYS knob — keeps 8d non-merged at 14, deletes at default
+# ---------------------------------------------------------------------------
+
+@test "groomer: CAST_GROOM_SWARM_DAYS=14 keeps 8d non-merged swarm; default deletes it" {
+  # Create a swarm branch with unique commits not on main, 8 days old
+  git -C "$TEST_REPO" checkout -b cast-swarm-knob-test >/dev/null 2>&1
+  echo "knob test content" > "$TEST_REPO/knob-swarm-file.txt"
+  git -C "$TEST_REPO" add knob-swarm-file.txt
+  local fake_date
+  fake_date="$(date -v -8d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "8 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "2020-01-01T00:00:00")"
+  GIT_COMMITTER_DATE="$fake_date" GIT_AUTHOR_DATE="$fake_date" \
+    git -C "$TEST_REPO" commit -m "Knob test swarm work" >/dev/null 2>&1
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+
+  # With CAST_GROOM_SWARM_DAYS=14, 8d branch should be KEPT
+  run env CAST_GROOM_SWARM_DAYS=14 bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+  git -C "$TEST_REPO" branch --list | grep -q "cast-swarm-knob-test"
+
+  # With default (7), the same 8d branch should be DELETED
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+  local still_exists
+  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-knob-test" | wc -l | tr -d ' ')"
+  [ "$still_exists" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 18: content-merged swarm deletion appears under "merged" in summary
+# ---------------------------------------------------------------------------
+
+@test "groomer: content-merged swarm branch counted under merged in summary" {
+  # Create a swarm branch with actual file content (fresh)
+  git -C "$TEST_REPO" checkout -b cast-swarm-summary-test >/dev/null 2>&1
+  echo "summary test content" > "$TEST_REPO/summary-swarm-file.txt"
+  git -C "$TEST_REPO" add summary-swarm-file.txt
+  git -C "$TEST_REPO" commit -m "Summary swarm work" >/dev/null 2>&1
+
+  # Squash-merge into main
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+  git -C "$TEST_REPO" merge --squash cast-swarm-summary-test >/dev/null 2>&1
+  git -C "$TEST_REPO" commit -m "Squash-merged cast-swarm-summary-test" >/dev/null 2>&1
+
+  # Run apply and check summary output
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  # Summary should show 1 merged (not 1 swarm) for the content-merged swarm branch
+  [[ "$output" =~ "0 swarm" ]]
+  [[ "$output" =~ "1 merged" ]]
+}

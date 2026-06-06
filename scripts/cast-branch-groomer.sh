@@ -5,7 +5,8 @@
 # Use --apply to actually delete.
 #
 # Branch deletion policy:
-#   cast-swarm-*    : committerdate < now-7d AND no open PR
+#   cast-swarm-*    : content-merged into main (any age) OR
+#                     (age >= CAST_GROOM_SWARM_DAYS AND no open PR)
 #   worktree-agent-*: committerdate < now-7d
 #   feature/* fix/* : merged into main AND remote tracking ref is gone ([gone])
 #
@@ -112,6 +113,23 @@ _days_since_commit() {
   echo $(( (now - commit_epoch) / 86400 ))
 }
 
+# _is_content_merged <branch> — 0 if every commit on <branch> is already on main
+# (true/ff merge OR squash merge), 1 otherwise.
+_is_content_merged() {
+  local branch="$1"
+  local ahead_count plus_count cherry_total
+  ahead_count="$(git rev-list --count "main..$branch" 2>/dev/null || echo 1)"
+  if [[ "$ahead_count" -eq 0 ]]; then
+    return 0
+  fi
+  plus_count=$(git cherry main "$branch" 2>/dev/null | grep -c '^+') || plus_count=0
+  cherry_total=$(git cherry main "$branch" 2>/dev/null | wc -l | tr -d ' ') || cherry_total=0
+  if [[ "$plus_count" -eq 0 ]] && [[ "$cherry_total" -gt 0 ]] && [[ "$cherry_total" -eq "$ahead_count" ]]; then
+    return 0
+  fi
+  return 1
+}
+
 # ── Deletion trackers ────────────────────────────────────────────────────
 DELETED_SWARM=0
 DELETED_WORKTREE_AGENT=0
@@ -132,7 +150,8 @@ _delete_branch() {
   fi
 }
 
-# ── Process cast-swarm-* branches (>7d, no open PR) ──────────────────────
+# ── Process cast-swarm-* branches (content-merged OR >CAST_GROOM_SWARM_DAYS, no open PR) ──
+CAST_GROOM_SWARM_DAYS="${CAST_GROOM_SWARM_DAYS:-7}"
 while IFS= read -r branch; do
   branch="${branch#  }"  # strip leading whitespace
   branch="${branch# }"
@@ -144,10 +163,17 @@ while IFS= read -r branch; do
   [[ "$branch" != cast-swarm-* ]] && continue
   _is_whitelisted "$branch" && continue
   _has_open_pr "$branch" && { printf '[groomer] Keeping %s — has open PR\n' "$branch"; continue; }
-  local_age=$(_days_since_commit "$branch")
-  if [[ "$local_age" -ge 7 ]]; then
+  # Content-merged swarm branches are local-only throwaway → delete regardless of age.
+  # Non-content-merged but stale (>= CAST_GROOM_SWARM_DAYS) → delete as age fallback.
+  if _is_content_merged "$branch"; then
     _delete_branch "$branch"
-    DELETED_SWARM=$((DELETED_SWARM + 1))
+    DELETED_MERGED=$((DELETED_MERGED + 1))
+  else
+    local_age=$(_days_since_commit "$branch")
+    if [[ "$local_age" -ge "$CAST_GROOM_SWARM_DAYS" ]]; then
+      _delete_branch "$branch"
+      DELETED_SWARM=$((DELETED_SWARM + 1))
+    fi
   fi
 done < <(git branch --list 'cast-swarm-*' 2>/dev/null || true)
 
@@ -172,26 +198,9 @@ while IFS= read -r vv_line; do
     [[ -z "$branch" ]] && continue
     if [[ "$branch" =~ ^feature/ ]] || [[ "$branch" =~ ^fix/ ]]; then
       _is_whitelisted "$branch" && continue
-
-      # Two-stage merge check:
-      # (1) ahead_count == 0  → fully merged via ff/true merge
-      # (2) ahead_count > 0 + git cherry shows all commits content-merged → squash merge
-      ahead_count="$(git rev-list --count main.."$branch" 2>/dev/null || echo 1)"
-
-      if [[ "$ahead_count" -eq 0 ]]; then
+      if _is_content_merged "$branch"; then
         _delete_branch "$branch"
         DELETED_MERGED=$((DELETED_MERGED + 1))
-      else
-        # cherry uses patch-id: '+' = unmerged content, '-' = content-equivalent commit in main
-        plus_count=$(git cherry main "$branch" 2>/dev/null | grep -c '^+') || plus_count=0
-        cherry_total=$(git cherry main "$branch" 2>/dev/null | wc -l | tr -d ' ') || cherry_total=0
-        # Delete only if: zero '+' lines AND cherry accounted for every ahead commit
-        # (cherry_total == ahead_count guard prevents deletion of branches with only
-        # empty commits, which produce no cherry output but rev-list counts them)
-        if [[ "$plus_count" -eq 0 ]] && [[ "$cherry_total" -gt 0 ]] && [[ "$cherry_total" -eq "$ahead_count" ]]; then
-          _delete_branch "$branch"
-          DELETED_MERGED=$((DELETED_MERGED + 1))
-        fi
       fi
     fi
   fi
