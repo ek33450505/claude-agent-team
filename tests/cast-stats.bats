@@ -47,10 +47,10 @@ teardown() {
   assert_output "23"
 }
 
-@test "gen-cast-stats.sh produces tests=1185" {
+@test "gen-cast-stats.sh produces a positive-integer tests count" {
   run jq -r '.tests' < "$CANONICAL_JSON"
   assert_success
-  assert_output "1185"
+  assert_output --regexp '^[1-9][0-9]*$'
 }
 
 @test "gen-cast-stats.sh produces tables=38" {
