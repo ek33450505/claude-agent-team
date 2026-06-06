@@ -1758,10 +1758,12 @@ except Exception:
   fi
 
   # 18. Homebrew tap count vs packages constant advisory
+  # CAST taps = homebrew-cast* (12) + homebrew-claudes-journal (1) = 13
+  # Excludes dropped non-CAST taps: homebrew-engram, homebrew-stratum, homebrew-jarvis
   local expected_packages=13  # keep in sync with cast_stat_packages in scripts/cast-stats-lib.sh
   if command -v gh >/dev/null 2>&1; then
     local live_packages
-    live_packages="$(gh repo list ek33450505 --limit 200 --json name -q '[.[].name|select(startswith("homebrew-"))]|length' 2>/dev/null || echo "")"
+    live_packages="$(gh repo list ek33450505 --no-archived --limit 200 --json name -q '[.[].name | select(startswith("homebrew-cast") or . == "homebrew-claudes-journal")] | length' 2>/dev/null || echo "")"
     if [[ "$live_packages" =~ ^[0-9]+$ ]] && [[ "$live_packages" -gt 0 ]]; then
       if [[ "$live_packages" -eq "$expected_packages" ]]; then
         printf "%b Homebrew taps: live=%d matches constant=%d\n" "$OK" "$live_packages" "$expected_packages"
