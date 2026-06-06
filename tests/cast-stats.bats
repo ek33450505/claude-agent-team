@@ -244,3 +244,72 @@ EOF
   assert_success
   assert_output --partial "nothing to check"
 }
+
+# ---------------------------------------------------------------------------
+# C1 structural guard — retry flags present in script source
+# ---------------------------------------------------------------------------
+
+@test "drift-check: --retry flag is present in script source" {
+  run grep -q -- '--retry' "$DRIFT_CHECK_SH"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# C2 --ignore: JSON field filtering
+# ---------------------------------------------------------------------------
+
+@test "--ignore tests: PASSES when only tests field drifts in JSON" {
+  local tampered="${TMPDIR_STATS}/tampered-tests.json"
+  jq '.tests = 99999' < "$CANONICAL_JSON" > "$tampered"
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --json "$tampered" --ignore tests
+  assert_success
+  assert_output --partial "All checks PASSED"
+}
+
+@test "without --ignore: FAILS when tests field drifts in JSON (regression guard)" {
+  local tampered="${TMPDIR_STATS}/tampered-tests-noignore.json"
+  jq '.tests = 99999' < "$CANONICAL_JSON" > "$tampered"
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --json "$tampered"
+  assert_failure
+  assert_output --partial "FAIL"
+  assert_output --partial "tests"
+}
+
+@test "--ignore tests,packages: skips both drifting fields" {
+  local tampered="${TMPDIR_STATS}/tampered-tests-pkgs.json"
+  jq '.tests = 99999 | .packages = 99999' < "$CANONICAL_JSON" > "$tampered"
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --json "$tampered" --ignore tests,packages
+  assert_success
+  assert_output --partial "All checks PASSED"
+}
+
+# ---------------------------------------------------------------------------
+# C2 --ignore: sentinel token filtering
+# ---------------------------------------------------------------------------
+
+@test "--ignore tests: PASSES when CAST_TEST_COUNT sentinel drifts" {
+  local tests
+  tests="$(jq -r '.tests' < "$CANONICAL_JSON")"
+  local fixture="${TMPDIR_STATS}/sentinel-tests-ignore.md"
+  cat > "$fixture" <<EOF
+Tests: <!-- CAST_TEST_COUNT -->99999<!-- /CAST_TEST_COUNT -->
+EOF
+  run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture" --ignore tests
+  assert_success
+  assert_output --partial "All checks PASSED"
+}
+
+# ---------------------------------------------------------------------------
+# C2 --ignore + auto-discovery: checks non-ignored fields
+# ---------------------------------------------------------------------------
+
+@test "--ignore tests + auto-discovery: still FAILs when agents drifts (other fields checked)" {
+  local fake_repo="${TMPDIR_STATS}/fake-repo-ignore-agents"
+  mkdir -p "$fake_repo"
+  jq '.tests = 99999 | .agents = 99999' < "$CANONICAL_JSON" > "${fake_repo}/cast-stats.json"
+
+  run bash -c "cd '${fake_repo}' && bash '${DRIFT_CHECK_SH}' --canonical '${CANONICAL_JSON}' --ignore tests"
+  assert_failure
+  assert_output --partial "FAIL"
+  assert_output --partial "agents"
+}

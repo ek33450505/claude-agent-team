@@ -42,6 +42,7 @@ inputs:
     description: "Path to a markdown/text file with <!-- TOKEN --> sentinels to compare (optional)"
     required: false
     default: ""
+  # Future: add an `ignore` input (e.g. ignore: "tests,packages") that passes --ignore to the script.
 
 runs:
   using: "composite"

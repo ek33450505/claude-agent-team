@@ -24,6 +24,12 @@
 #                                 CAST_COMMAND_COUNT  -> commands
 #                                 CAST_SKILL_COUNT    -> skills
 #                               Tokens absent from the file are skipped (not an error).
+#   --ignore <field>[,<field>]  Comma-separated list of fields to skip (subtractive).
+#                               Repeatable. Fields: version, agents, tests, tables,
+#                               commands, skills, packages.
+#                               Note: 'packages' is JSON-only (no CAST_* sentinel token),
+#                               so --ignore packages only affects JSON comparisons.
+#                               Empty (default) ⇒ all fields checked (identical to today).
 #
 # Exit codes: 0 = all checks passed, 1 = one or more mismatches or fetch error.
 
@@ -34,6 +40,10 @@ DEFAULT_CANONICAL="https://raw.githubusercontent.com/ek33450505/claude-agent-tea
 CANONICAL_SRC=""
 JSON_FILES=()
 SENTINEL_FILES=()
+IGNORE_FIELDS=""
+
+# Bash 3.2-safe field-ignore predicate (no declare -A)
+_field_ignored() { case " ${IGNORE_FIELDS} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # --- Argument parsing ---
 while [[ $# -gt 0 ]]; do
@@ -44,6 +54,8 @@ while [[ $# -gt 0 ]]; do
       JSON_FILES+=("$2"); shift 2 ;;
     --sentinels)
       SENTINEL_FILES+=("$2"); shift 2 ;;
+    --ignore)
+      IGNORE_FIELDS="${IGNORE_FIELDS} ${2//,/ }"; shift 2 ;;
     *)
       echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -85,7 +97,7 @@ fi
 fetch_canonical() {
   local src="$1"
   if [[ "$src" == http://* || "$src" == https://* ]]; then
-    if ! curl -fsSL "$src"; then
+    if ! curl -fsSL --retry 3 --retry-delay 1 --retry-connrefused --max-time 30 "$src"; then
       echo "[cast-stats-drift-check] ERROR: could not fetch canonical from: $src" >&2
       exit 1
     fi
@@ -140,20 +152,22 @@ for json_file in "${JSON_FILES[@]+"${JSON_FILES[@]}"}"; do
   LOCAL_JSON="$(cat "$json_file")"
 
   # version: accept matching either canonical version or versionTag
-  LOCAL_VERSION="$(echo "$LOCAL_JSON" | jq -r '.version // empty')"
-  if [[ "$LOCAL_VERSION" == "$C_VERSION" || "$LOCAL_VERSION" == "$C_VERSION_TAG" ]]; then
-    echo "  PASS  version: $LOCAL_VERSION  (source: $json_file)"
-  else
-    echo "  FAIL  version: expected=${C_VERSION} or ${C_VERSION_TAG} found=${LOCAL_VERSION}  (source: $json_file)"
-    FAIL_COUNT=$(( FAIL_COUNT + 1 ))
+  if ! _field_ignored version; then
+    LOCAL_VERSION="$(echo "$LOCAL_JSON" | jq -r '.version // empty')"
+    if [[ "$LOCAL_VERSION" == "$C_VERSION" || "$LOCAL_VERSION" == "$C_VERSION_TAG" ]]; then
+      echo "  PASS  version: $LOCAL_VERSION  (source: $json_file)"
+    else
+      echo "  FAIL  version: expected=${C_VERSION} or ${C_VERSION_TAG} found=${LOCAL_VERSION}  (source: $json_file)"
+      FAIL_COUNT=$(( FAIL_COUNT + 1 ))
+    fi
   fi
 
-  check_field "$json_file" "agents"   "$C_AGENTS"   "$(echo "$LOCAL_JSON" | jq -r '.agents   // empty')"
-  check_field "$json_file" "tests"    "$C_TESTS"    "$(echo "$LOCAL_JSON" | jq -r '.tests    // empty')"
-  check_field "$json_file" "tables"   "$C_TABLES"   "$(echo "$LOCAL_JSON" | jq -r '.tables   // empty')"
-  check_field "$json_file" "commands" "$C_COMMANDS" "$(echo "$LOCAL_JSON" | jq -r '.commands // empty')"
-  check_field "$json_file" "skills"   "$C_SKILLS"   "$(echo "$LOCAL_JSON" | jq -r '.skills   // empty')"
-  check_field "$json_file" "packages" "$C_PACKAGES" "$(echo "$LOCAL_JSON" | jq -r '.packages // empty')"
+  _field_ignored agents   || check_field "$json_file" "agents"   "$C_AGENTS"   "$(echo "$LOCAL_JSON" | jq -r '.agents   // empty')"
+  _field_ignored tests    || check_field "$json_file" "tests"    "$C_TESTS"    "$(echo "$LOCAL_JSON" | jq -r '.tests    // empty')"
+  _field_ignored tables   || check_field "$json_file" "tables"   "$C_TABLES"   "$(echo "$LOCAL_JSON" | jq -r '.tables   // empty')"
+  _field_ignored commands || check_field "$json_file" "commands" "$C_COMMANDS" "$(echo "$LOCAL_JSON" | jq -r '.commands // empty')"
+  _field_ignored skills   || check_field "$json_file" "skills"   "$C_SKILLS"   "$(echo "$LOCAL_JSON" | jq -r '.skills   // empty')"
+  _field_ignored packages || check_field "$json_file" "packages" "$C_PACKAGES" "$(echo "$LOCAL_JSON" | jq -r '.packages // empty')"
 done
 
 # Token -> canonical field mapping (Bash 3.2 compatible — no associative arrays)
@@ -183,6 +197,7 @@ for sentinel_file in "${SENTINEL_FILES[@]+"${SENTINEL_FILES[@]}"}"; do
 
   for token in $ALL_TOKENS; do
     field="$(_token_field "$token")"
+    _field_ignored "$field" && continue
 
     # Extract sentinel value: <!-- TOKEN -->value<!-- /TOKEN -->
     # Use grep + sed; if token not present, skip (not an error)
