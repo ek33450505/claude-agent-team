@@ -1757,6 +1757,25 @@ except Exception:
     fi
   fi
 
+  # 18. Homebrew tap count vs packages constant advisory
+  local expected_packages=13  # keep in sync with cast_stat_packages in scripts/cast-stats-lib.sh
+  if command -v gh >/dev/null 2>&1; then
+    local live_packages
+    live_packages="$(gh repo list ek33450505 --limit 200 --json name -q '[.[].name|select(startswith("homebrew-"))]|length' 2>/dev/null || echo "")"
+    if [[ "$live_packages" =~ ^[0-9]+$ ]] && [[ "$live_packages" -gt 0 ]]; then
+      if [[ "$live_packages" -eq "$expected_packages" ]]; then
+        printf "%b Homebrew taps: live=%d matches constant=%d\n" "$OK" "$live_packages" "$expected_packages"
+      else
+        printf "%b Homebrew taps: live=%d but constant=%d — update CAST_PACKAGES_COUNT / cast-stats-lib.sh\n" \
+          "$WARN" "$live_packages" "$expected_packages"
+      fi
+    else
+      printf "%b Homebrew taps: gh query returned no count — skipping advisory\n" "$INFO"
+    fi
+  else
+    printf "%b Homebrew taps: gh not available — skipping advisory\n" "$INFO"
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
