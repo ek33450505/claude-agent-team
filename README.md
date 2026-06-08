@@ -231,4 +231,4 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents |
 <!-- CAST_TEST_COUNT -->1199<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> commands |
-<!-- CAST_SKILL_COUNT -->16<!-- /CAST_SKILL_COUNT --> skills
+<!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> skills
