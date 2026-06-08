@@ -268,6 +268,7 @@ teardown() {
   out=$(
     export CAST_SKIP_PII_CHECK=1
     export CAST_SKIP_BATS_PUSH=1
+    export CAST_SKIP_UBUNTU_CHECK=1
     bash "$hook" < /dev/null 2>&1
   ) || rc=$?
 

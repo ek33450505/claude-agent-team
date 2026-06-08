@@ -1274,7 +1274,11 @@ _cmd_doctor() {
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
 
   # 1. cast.db accessible
-  if sqlite3 "$CAST_DB_PATH" 'SELECT 1' >/dev/null 2>&1; then
+  # Use sqlite_master (not SELECT 1) to force header validation — SELECT 1 is a
+  # constant expression that succeeds even on corrupt/non-database files on some
+  # sqlite versions (observed on Ubuntu sqlite 3.45: rc=0 on a "notadb" file).
+  # Querying sqlite_master returns SQLITE_NOTADB (rc 26) on both platforms.
+  if sqlite3 "$CAST_DB_PATH" 'SELECT count(*) FROM sqlite_master' >/dev/null 2>&1; then
     printf "%b cast.db accessible (%s)\n" "$OK" "$CAST_DB_PATH"
   else
     printf "%b cast.db not accessible (%s)\n" "$ERR" "$CAST_DB_PATH"
@@ -1572,12 +1576,115 @@ PYEOF
     done <<< "$slow_rows"
   fi
 
-  # 13. Updates Available
+  # 13. Honesty surface — reads agent_hallucinations, completeness_events,
+  #     agent_protocol_violations, code_ref_checks. Diagnostic only: failures
+  #     inside this block never flip overall_ok or exit cast doctor early.
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "${C_BOLD}Honesty signals (last 7d)${C_RESET}\n"
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    printf "%b honesty: cast.db unavailable (sqlite3 not found)\n" "$INFO"
+  else
+    # ── agent_hallucinations ─────────────────────────────────────────────────
+    local _ah_out _ah_rc
+    _ah_out="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT agent_name, COUNT(*) FROM agent_hallucinations \
+       WHERE timestamp >= datetime('now','-7 days') \
+       GROUP BY agent_name ORDER BY COUNT(*) DESC;" 2>&1)"
+    _ah_rc=$?
+    if echo "$_ah_out" | grep -qi "no such table"; then
+      printf "%b honesty: agent_hallucinations — no data yet\n" "$INFO"
+    elif [ $_ah_rc -ne 0 ]; then
+      printf "%b honesty: agent_hallucinations — unavailable (db query failed)\n" "$INFO"
+    elif [ -z "$_ah_out" ]; then
+      printf "%b honesty: agent_hallucinations — none in last 7d\n" "$OK"
+    else
+      local _ah_total=0
+      while IFS='|' read -r _ag _cnt; do
+        [ -z "$_ag" ] && continue
+        _ah_total=$((_ah_total + _cnt))
+      done <<< "$_ah_out"
+      printf "%b honesty: agent_hallucinations — %d flagged\n" "$WARN" "$_ah_total"
+      while IFS='|' read -r _ag _cnt; do
+        [ -z "$_ag" ] && continue
+        printf "    %-20s %d claim(s)\n" "$_ag" "$_cnt"
+      done <<< "$_ah_out"
+    fi
+
+    # ── completeness_events ──────────────────────────────────────────────────
+    local _ce_out _ce_rc
+    _ce_out="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT severity, COUNT(*) FROM completeness_events \
+       WHERE truncated_at >= datetime('now','-7 days') \
+       GROUP BY severity ORDER BY COUNT(*) DESC;" 2>&1)"
+    _ce_rc=$?
+    if echo "$_ce_out" | grep -qi "no such table"; then
+      printf "%b honesty: completeness_events — no data yet\n" "$INFO"
+    elif [ $_ce_rc -ne 0 ]; then
+      printf "%b honesty: completeness_events — unavailable (db query failed)\n" "$INFO"
+    elif [ -z "$_ce_out" ]; then
+      printf "%b honesty: completeness_events — none in last 7d\n" "$OK"
+    else
+      local _ce_total=0
+      while IFS='|' read -r _sev _cnt; do
+        [ -z "$_sev" ] && continue
+        _ce_total=$((_ce_total + _cnt))
+      done <<< "$_ce_out"
+      printf "%b honesty: completeness_events — %d flagged\n" "$WARN" "$_ce_total"
+      while IFS='|' read -r _sev _cnt; do
+        [ -z "$_sev" ] && continue
+        printf "    %-8s %d event(s)\n" "$_sev" "$_cnt"
+      done <<< "$_ce_out"
+    fi
+
+    # ── agent_protocol_violations ────────────────────────────────────────────
+    local _apv_out _apv_rc
+    _apv_out="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COALESCE(agent_type,'unknown'), COUNT(*) FROM agent_protocol_violations \
+       WHERE timestamp >= datetime('now','-7 days') \
+       GROUP BY agent_type ORDER BY COUNT(*) DESC;" 2>&1)"
+    _apv_rc=$?
+    if echo "$_apv_out" | grep -qi "no such table"; then
+      printf "%b honesty: agent_protocol_violations — no data yet\n" "$INFO"
+    elif [ $_apv_rc -ne 0 ]; then
+      printf "%b honesty: agent_protocol_violations — unavailable (db query failed)\n" "$INFO"
+    elif [ -z "$_apv_out" ]; then
+      printf "%b honesty: agent_protocol_violations — none in last 7d\n" "$OK"
+    else
+      local _apv_total=0
+      while IFS='|' read -r _at _cnt; do
+        [ -z "$_at" ] && continue
+        _apv_total=$((_apv_total + _cnt))
+      done <<< "$_apv_out"
+      printf "%b honesty: agent_protocol_violations — %d flagged\n" "$WARN" "$_apv_total"
+      while IFS='|' read -r _at _cnt; do
+        [ -z "$_at" ] && continue
+        printf "    %-20s %d violation(s)\n" "$_at" "$_cnt"
+      done <<< "$_apv_out"
+    fi
+
+    # ── code_ref_checks ──────────────────────────────────────────────────────
+    local _crc_out _crc_rc
+    _crc_out="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COUNT(*) FROM code_ref_checks \
+       WHERE verified=0 AND timestamp >= datetime('now','-7 days');" 2>&1)"
+    _crc_rc=$?
+    if echo "$_crc_out" | grep -qi "no such table"; then
+      printf "%b honesty: code_ref_checks — no data yet\n" "$INFO"
+    elif [ $_crc_rc -ne 0 ]; then
+      printf "%b honesty: code_ref_checks — unavailable (db query failed)\n" "$INFO"
+    elif [ -z "$_crc_out" ] || [ "$_crc_out" -eq 0 ] 2>/dev/null; then
+      printf "%b honesty: code_ref_checks — none in last 7d\n" "$OK"
+    else
+      printf "%b honesty: code_ref_checks — %d unverified ref(s)\n" "$WARN" "$_crc_out"
+    fi
+  fi
+
+  # 14. Updates Available
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
   _doctor_upgrades
 
-  # 14. Agent frontmatter parses
+  # 15. Agent frontmatter parses
   local frontmatter_errors
   frontmatter_errors="$(python3 - "$CAST_AGENTS_DIR" <<'PYEOF'
 import os, sys, re
@@ -1621,7 +1728,7 @@ PYEOF
     overall_ok=0
   fi
 
-  # 15. MCP servers reachable (best-effort)
+  # 16. MCP servers reachable (best-effort)
   local settings_file="${HOME}/.claude/settings.json"
   if [ -f "$settings_file" ]; then
     local mcp_status
@@ -1678,7 +1785,7 @@ PYEOF
     printf "%b MCP servers: settings.json not found\n" "$INFO"
   fi
 
-  # 16. Routines validate
+  # 17. Routines validate
   local routines_dir="${CAST_REPO_DIR}/routines"
   if [ -d "$routines_dir" ]; then
     local routine_status
@@ -1730,7 +1837,7 @@ PYEOF
     printf "%b Routines: directory not found (%s)\n" "$INFO" "$routines_dir"
   fi
 
-  # 17. Backup freshness
+  # 18. Backup freshness
   local backup_root
   backup_root="${CAST_BACKUP_ROOT:-${HOME}/Library/Application Support/cast/backups}"
   local backup_max_age_hours="${CAST_BACKUP_MAX_AGE_HOURS:-48}"
@@ -1757,7 +1864,7 @@ except Exception:
     fi
   fi
 
-  # 18. Homebrew tap count vs packages constant advisory
+  # 19. Homebrew tap count vs packages constant advisory
   # CAST taps = homebrew-cast* (12) + homebrew-claudes-journal (1) = 13
   # Excludes dropped non-CAST taps: homebrew-engram, homebrew-stratum, homebrew-jarvis
   local expected_packages=13  # keep in sync with cast_stat_packages in scripts/cast-stats-lib.sh
