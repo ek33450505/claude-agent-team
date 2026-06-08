@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 # BATS tests for .githooks/pre-commit regression lints
 
+load test_helper/bats-support/load
+load test_helper/bats-assert/load
+
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 
 setup() {
@@ -65,7 +68,7 @@ EOF
   chmod +x scripts/clean.sh
   git add scripts/clean.sh
   run bash .githooks/pre-commit
-  [[ "$output" == *"Running regression lints"* ]] || skip "Hook output mismatch"
+  assert_output --partial "Running regression lints"
   # Should not fail due to python cold-starts
 }
 
@@ -80,7 +83,7 @@ EOF
   chmod +x scripts/two-python.sh
   git add scripts/two-python.sh
   run bash .githooks/pre-commit
-  [[ "$output" == *"Running regression lints"* ]] || skip "Hook output mismatch"
+  assert_output --partial "Running regression lints"
   # Should not fail due to python count
 }
 
@@ -149,7 +152,7 @@ EOF
   chmod +x scripts/safe-sql.sh
   git add scripts/safe-sql.sh
   run bash .githooks/pre-commit
-  [[ "$output" == *"Running regression lints"* ]] || skip "Hook output mismatch"
+  assert_output --partial "Running regression lints"
 }
 
 @test "lint-sql-injection: warn on interpolated sqlite3 without guard" {
@@ -178,7 +181,7 @@ EOF
   chmod +x scripts/guarded-sql.sh
   git add scripts/guarded-sql.sh
   run bash .githooks/pre-commit
-  [[ "$output" == *"Running regression lints"* ]] || skip "Hook output mismatch"
+  assert_output --partial "Running regression lints"
 }
 
 # === LINT 3: Orphan script detector ===

@@ -17,7 +17,7 @@ jobs:
       - name: Install bats-core
         run: |
           sudo apt-get update
-          sudo apt-get install -y bats
+          sudo apt-get install -y bats python3-yaml
       - name: Set up CAST runtime dirs
         run: |
           mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
