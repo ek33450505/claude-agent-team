@@ -1274,7 +1274,11 @@ _cmd_doctor() {
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
 
   # 1. cast.db accessible
-  if sqlite3 "$CAST_DB_PATH" 'SELECT 1' >/dev/null 2>&1; then
+  # Use sqlite_master (not SELECT 1) to force header validation — SELECT 1 is a
+  # constant expression that succeeds even on corrupt/non-database files on some
+  # sqlite versions (observed on Ubuntu sqlite 3.45: rc=0 on a "notadb" file).
+  # Querying sqlite_master returns SQLITE_NOTADB (rc 26) on both platforms.
+  if sqlite3 "$CAST_DB_PATH" 'SELECT count(*) FROM sqlite_master' >/dev/null 2>&1; then
     printf "%b cast.db accessible (%s)\n" "$OK" "$CAST_DB_PATH"
   else
     printf "%b cast.db not accessible (%s)\n" "$ERR" "$CAST_DB_PATH"

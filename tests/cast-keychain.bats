@@ -7,6 +7,38 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CAST_KEYCHAIN_SH="$REPO_DIR/scripts/cast-keychain.sh"
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Run "$@" with a hard timeout (seconds). Returns the command's exit code, or
+# non-zero if it had to be killed (e.g. a Keychain GUI prompt blocked it).
+_kc_run_with_timeout() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+  # Portable fallback: background the command, watchdog kills it after $secs.
+  "$@" &
+  local cmd_pid=$!
+  (
+    sleep "$secs"
+    kill -TERM "$cmd_pid" 2>/dev/null || true
+  ) &
+  local wd_pid=$!
+  local rc=0
+  wait "$cmd_pid" 2>/dev/null || rc=$?
+  kill -TERM "$wd_pid" 2>/dev/null || true
+  wait "$wd_pid" 2>/dev/null || true
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # Setup / Teardown
 # ---------------------------------------------------------------------------
 
@@ -24,8 +56,10 @@ teardown() {
 }
 
 require_keychain_writes() {
-  if ! security add-generic-password -U -s "cast-test-bats-probe" -a cast -w "probe" 2>/dev/null; then
-    skip "Keychain writes unavailable in this environment"
+  # A Keychain authorization prompt blocks forever in automated runs; the timeout
+  # makes that degrade to a skip (the guard's original intent) instead of hanging.
+  if ! _kc_run_with_timeout 5 security add-generic-password -U -s "cast-test-bats-probe" -a cast -w "probe" 2>/dev/null; then
+    skip "Keychain writes unavailable in this environment (or auth prompt timed out)"
   fi
   security delete-generic-password -s "cast-test-bats-probe" -a cast 2>/dev/null || true
 }
