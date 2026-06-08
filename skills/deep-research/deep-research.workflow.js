@@ -256,7 +256,7 @@ const VERIFY_PROMPT = (claim, v) =>
   "**Supporting quote:** \"" + claim.quote + "\"\n\n" +
   "## Checklist\n" +
   "1. Is the claim actually supported by the quote, or is it an overreach/misread?\n" +
-  "2. If WebSearch is available, make at most one or two searches for contradicting evidence — does any credible source dispute or heavily qualify this? If WebSearch errors or returns nothing useful, do NOT get stuck retrying: adjudicate from the quote, the source quality, and your own knowledge.\n" +
+  "2. Do NOT use WebSearch — it drives the per-vote request count up and trips the service rate limiter. Adjudicate from the supporting quote, the source URL/quality, and your own knowledge of the field. Contradicting evidence may exist outside the already-collected sources, so weigh plausibility and source strength rather than searching.\n" +
   "3. Is the source quality sufficient for the claim's strength? (extraordinary claims need primary sources)\n" +
   "4. Is the claim outdated? (check dates — old claims about fast-moving fields are suspect)\n" +
   "5. Is this a marketing claim / press release / cherry-picked benchmark / forum speculation?\n\n" +
