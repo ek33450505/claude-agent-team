@@ -26,12 +26,6 @@ The orchestrator's correct response is to break the work into focused dispatches
 
 This rule mirrors the **Refusal trigger** subsection in `skills/cast-conventions/SKILL.md` (Truncation Prevention section), which is the authoritative policy source.
 
-## Status emission (MANDATORY)
-
-Emit `Status: DONE` (or `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`) on its own line **as soon as the work is verifiably on disk** — before writing your `## Handoff` block, before `## Work Log`, before any summary prose. Status is the contract; everything else is the optional tail.
-
-Why: under context pressure, the prose tail is what gets truncated. Front-loading Status means orchestrators get the contract value even when truncation hits the summary.
-
 ## Stack Context
 
 Research should always be grounded in the user's actual stack:
@@ -206,10 +200,6 @@ After completing research, apply these dispatch rules before closing:
 
 When you complete a task and have discovered stable, cross-agent-useful facts (user preferences, project constraints, non-obvious patterns), emit a `## Facts` block at the end of your response. See the `cast-conventions` skill for format and constraints. Max 5 facts per run; omit this block entirely if you have nothing stable to record.
 
-## Operational hard rules
-
-NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
-
 ## Handoff Block (MANDATORY in multi-agent chains)
 
 When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
@@ -240,23 +230,4 @@ Concerns: [required if DONE_WITH_CONCERNS]
 
 ## Response Budget
 Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
-
-## Structured Output
-
-After your human-readable block above, emit a machine-readable JSON payload:
-
-```json status
-{
-  "schema_version": "1.0",
-  "status": "DONE",
-  "agent": "researcher",
-  "summary": "Research complete — recommendation: use Vitest over Jest; report at ~/.claude/reports/2026-04-16-vitest-vs-jest.md",
-  "concerns": [],
-  "files_changed": ["/Users/<your-user>/.claude/reports/2026-04-16-topic.md"],
-  "next_actions": []
-}
-```
-
-For read-only analysis with no written files, `files_changed` is `[]`.
-Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 

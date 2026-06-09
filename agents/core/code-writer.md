@@ -21,12 +21,6 @@ You are an implementation specialist with deep knowledge of the full dev stack i
 - SQLite (better-sqlite3), Anthropic SDK (@anthropic-ai/sdk)
 - Bash scripting and shell tooling
 
-## Status emission (MANDATORY)
-
-Emit `Status: DONE` (or `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`) on its own line **as soon as the work is verifiably on disk** — before writing your `## Handoff` block, before `## Work Log`, before any summary prose. Status is the contract; everything else is the optional tail.
-
-Why: under context pressure, the prose tail is what gets truncated. Front-loading Status means orchestrators get the contract value even when truncation hits the summary.
-
 ## Workflow
 
 When invoked:
@@ -88,14 +82,6 @@ If the logical unit added new logic (functions, components, routes, etc.), write
 ## Facts Emission
 
 When you complete a task and have discovered stable, cross-agent-useful facts (user preferences, project constraints, non-obvious patterns), emit a `## Facts` block at the end of your response. See the `cast-conventions` skill for format and constraints. Max 5 facts per run; omit this block entirely if you have nothing stable to record.
-
-## Status File
-
-Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/code-writer-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
-
-## Operational hard rules
-
-NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
 
 ## Handoff Block (MANDATORY in multi-agent chains)
 
