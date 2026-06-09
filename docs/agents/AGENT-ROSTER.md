@@ -28,7 +28,7 @@
 | `push` | haiku | Git push specialist — verifies branch safety and sets upstream |
 | `merge` | haiku | PR lifecycle agent — git merges, rebases, conflict resolution |
 | `devops` | haiku | CI/CD pipeline management, Docker, GitHub Actions workflow authoring |
-| `bash-specialist` | haiku | Shell scripting specialist for CAST hook scripts, BATS tests, and automation |
+| `bash-specialist` | sonnet | Shell scripting specialist for CAST hook scripts, BATS tests, and automation |
 | `docs` | haiku | Documentation specialist — README audits, doc updates, changelog entries |
 | `morning-briefing` | haiku | Daily briefing agent — gathers git activity, action items, and CAST health summary |
 | `release-notes` | haiku | Release notes generator — structured changelogs from git commits |
@@ -38,7 +38,7 @@
 | Agent | Model | Purpose |
 |---|---|---|
 | `migration-reviewer` | opus | Database schema change reviewer — analyzes migration files for safety and rollback plans |
-| `api-contract` | sonnet | API contract guardian — detects breaking changes in REST endpoints |
+| `api-contract` | haiku | API contract guardian — detects breaking changes in REST endpoints |
 | `dep-auditor` | haiku | Dependency auditor — reviews package changes for CVEs, licenses, version compatibility |
 | `perf-sentinel` | sonnet | Performance regression detector — runs benchmarks, interprets results in context |
 
