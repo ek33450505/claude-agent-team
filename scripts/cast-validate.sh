@@ -42,7 +42,7 @@ fail()  { echo "✗ $*"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "⚠ $*"; WARNINGS=$((WARNINGS + 1)); }
 info()  { echo "ℹ $*"; }  # Optional/advisory — does not increment WARNINGS
 
-echo "CAST Validate v${VERSION} (11 checks)"
+echo "CAST Validate v${VERSION} (12 checks)"
 echo "══════════════════════════════"
 
 # --- Check 1: Hook wiring ---
@@ -537,6 +537,63 @@ if [[ -f "$CAST_DB" ]]; then
   fi
 else
   info "FTS5: cast.db not found"
+fi
+
+echo ""
+
+# --- Check 12: managed-settings.d fragment commands resolve to real scripts ---
+FRAGS_DIR="$HOME/.claude/managed-settings.d"
+SCRIPTS_DIR="$HOME/.claude/scripts"
+if [[ ! -d "$FRAGS_DIR" ]]; then
+  info "Fragment command check: $FRAGS_DIR not found (install not yet run)"
+else
+  FRAG_CHECK=$(python3 - "$FRAGS_DIR" "$SCRIPTS_DIR" <<'PYEOF'
+import sys, os, json, glob
+
+frags_dir = sys.argv[1]
+scripts_dir = sys.argv[2]
+missing = []
+
+for frag_path in sorted(glob.glob(os.path.join(frags_dir, "*.json"))):
+    frag_name = os.path.basename(frag_path)
+    try:
+        with open(frag_path) as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"ERROR:{frag_name}:{e}")
+        sys.exit(0)
+    hooks = data.get("hooks", {})
+    for event_hooks in hooks.values():
+        for entry in (event_hooks if isinstance(event_hooks, list) else []):
+            for h in entry.get("hooks", []):
+                cmd = h.get("command", "")
+                if not cmd:
+                    continue
+                # Extract tokens that look like script paths under ~/.claude/scripts/
+                for tok in cmd.split():
+                    basename = os.path.basename(tok)
+                    if (basename.endswith(".sh") or basename.endswith(".py")) and "scripts/" in tok:
+                        if not os.path.isfile(os.path.join(scripts_dir, basename)):
+                            missing.append(f"{frag_name}: {basename}")
+
+if missing:
+    print("MISSING:" + "|".join(missing))
+else:
+    print("OK")
+PYEOF
+)
+  if [[ "$FRAG_CHECK" == OK ]]; then
+    pass "Fragment commands: all managed-settings.d hook commands resolve to existing scripts"
+  elif [[ "$FRAG_CHECK" == MISSING:* ]]; then
+    DETAILS="${FRAG_CHECK#MISSING:}"
+    fail "Fragment commands: hook command(s) reference missing scripts"
+    IFS='|' read -ra MISSING_LIST <<< "$DETAILS"
+    for m in "${MISSING_LIST[@]}"; do
+      echo "  ✗ ${m}"
+    done
+  elif [[ "$FRAG_CHECK" == ERROR:* ]]; then
+    warn "Fragment commands: parse error — ${FRAG_CHECK#ERROR:}"
+  fi
 fi
 
 echo ""

@@ -281,3 +281,64 @@ PYEOF
   run bash "$VALIDATE_SH" -h
   assert_output --partial "Usage:"
 }
+
+# ---------------------------------------------------------------------------
+# 8. Check 12: managed-settings.d fragment command validation
+# ---------------------------------------------------------------------------
+
+@test "fragment commands: all commands resolve → pass" {
+  build_clean_install
+  mkdir -p "$HOME/.claude/managed-settings.d"
+  # Create a fragment whose command references a script that EXISTS
+  touch "$HOME/.claude/scripts/cast-real-hook.sh"
+  cat > "$HOME/.claude/managed-settings.d/20-hooks-test.json" <<'JSON'
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"type": "command", "command": "bash ~/.claude/scripts/cast-real-hook.sh"}
+        ]
+      }
+    ]
+  }
+}
+JSON
+  run_validate
+  assert_output --partial "all managed-settings.d hook commands resolve"
+}
+
+@test "fragment commands: missing script → error flagged" {
+  build_clean_install
+  mkdir -p "$HOME/.claude/managed-settings.d"
+  # Fragment references a script that does NOT exist
+  cat > "$HOME/.claude/managed-settings.d/25-hooks-bad.json" <<'JSON'
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "bash ~/.claude/scripts/cast-deleted-script.sh"}
+        ]
+      }
+    ]
+  }
+}
+JSON
+  run_validate
+  [ "$status" -eq 2 ]
+  assert_output --partial "cast-deleted-script.sh"
+}
+
+@test "fragment commands: no fragments dir → info only, no error" {
+  build_clean_install
+  # Ensure managed-settings.d does NOT exist
+  rm -rf "$HOME/.claude/managed-settings.d"
+  run_validate
+  # Missing dir is informational only — must not add errors
+  assert_output --partial "not found"
+  # Status should be 0 (clean install, dir just not present)
+  [ "$status" -eq 0 ]
+}
