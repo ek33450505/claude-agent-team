@@ -4,7 +4,7 @@ load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-HOOK_SH="$REPO_DIR/scripts/cast-tilde-write-guard.sh"
+HOOK_SH="$REPO_DIR/scripts/write-guards.sh"
 
 # ---------------------------------------------------------------------------
 # Helpers

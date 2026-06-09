@@ -203,6 +203,8 @@ if [ -d "$SCRIPT_DIR/scripts/migrations" ]; then
 fi
 # Remove scripts deleted in v4.1 (native feature adoption)
 rm -f "$CLAUDE_DIR/scripts/cast-route-install.sh"
+# Remove scripts consolidated into write-guards.sh in v7.5 Phase 4
+rm -f "$CLAUDE_DIR/scripts/cast-stat-claim-guard.sh" "$CLAUDE_DIR/scripts/cast-tilde-write-guard.sh" "$CLAUDE_DIR/scripts/cast-no-fake-success-guard.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-route-review.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-routing-feedback.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-mismatch-analyzer.sh"

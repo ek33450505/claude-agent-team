@@ -6,7 +6,7 @@ load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-GUARD="$REPO_DIR/scripts/cast-stat-claim-guard.sh"
+GUARD="$REPO_DIR/scripts/write-guards.sh"
 
 # Get the real test count the same way the script does (matching gen-stats.sh)
 setup() {
