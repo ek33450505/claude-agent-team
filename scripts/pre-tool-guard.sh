@@ -14,6 +14,9 @@
 # Invalid: git commit -m "CAST_COMMIT_AGENT=1"  (message injection — blocked)
 # Invalid: echo "CAST_COMMIT_AGENT=1" && git commit  (chained echo — blocked)
 
+# Skip for CAST-internal subprocesses (consistency with every other CAST hook; latency)
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
+
 set -euo pipefail
 
 mkdir -p ~/.claude/cast/hook-last-fired && touch ~/.claude/cast/hook-last-fired/PreToolUse.timestamp
@@ -151,10 +154,6 @@ fi
 FIRST_LINE="${CMD%%$'\n'*}"
 
 # --- git commit block ---
-# Allow commits from authorized subagent sessions (CLAUDE_SUBPROCESS=1 is set by Claude Code)
-if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
-  exit 0
-fi
 # Allow ONLY if escape hatch env var appears before git commit (tolerates leading cd chains and git global options)
 if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_COMMIT_AGENT=1[[:space:]]+git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+commit"; then
   exit 0
@@ -166,10 +165,6 @@ if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git([[:space:]]+(-C[[:space:]]+
 fi
 
 # --- git push block ---
-# Allow pushes from authorized subagent sessions (CLAUDE_SUBPROCESS=1 is set by Claude Code)
-if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
-  exit 0
-fi
 # Allow ONLY if escape hatch env var appears before git push (tolerates leading cd chains, additional
 # env-var assignments between CAST_PUSH_OK=1 and git, and git global options).
 # Pattern breakdown:
@@ -187,10 +182,6 @@ if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git([[:space:]]+(-C[[:space:]]+
 fi
 
 # --- git stash block ---
-# Allow stash operations from authorized subagent sessions (CLAUDE_SUBPROCESS=1 is set by Claude Code)
-if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then
-  exit 0
-fi
 # Allow ONLY if explicit escape hatch env var appears before git stash (tolerates git global options)
 if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_STASH_OK=1[[:space:]]+git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+stash"; then
   exit 0

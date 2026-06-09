@@ -27,7 +27,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Resolve cast_db.py from the real hook script directory.
 # CAST_HOOK_DIR is set by bash before the heredoc; __file__ == '<stdin>' in heredocs
@@ -64,7 +64,9 @@ agent_id    = data.get("agent_id") or data.get("subagent_id") or ""
 batch_id    = data.get("batch_id")
 session_id  = data.get("session_id") or ""
 
-# Extract text from the agent_response content array
+# Extract the agent's message text. Real SubagentStop payloads use the flat
+# last_assistant_message/output fields (same as cast-subagent-stop-hook.sh);
+# agent_response.content[] is supported as a fallback.
 agent_response = data.get("agent_response") or {}
 content_blocks = agent_response.get("content") or []
 
@@ -77,11 +79,23 @@ for block in content_blocks:
         elif block.get("type") == "tool_use":
             has_tool_use = True
 
-full_text = "\n".join(text_parts)
+# Flat-field message text — the format the harness actually sends.
+flat_text = data.get("last_assistant_message") or data.get("output") or data.get("response_text") or data.get("body") or ""
+if flat_text:
+    text_parts.append(flat_text)
 
-# Also check raw JSON for tool_use markers (belt-and-suspenders)
-raw_str = json.dumps(agent_response)
-if '"type": "tool_use"' in raw_str or '"type":"tool_use"' in raw_str:
+full_text = "\n".join(p for p in text_parts if p)
+
+# Detect real tool use from the flat payload too: a non-empty tool_uses list or a
+# positive tool_use_count means the agent actually called tools (not all-talk).
+tool_uses = data.get("tool_uses")
+if isinstance(tool_uses, list) and tool_uses:
+    has_tool_use = True
+if (data.get("tool_use_count") or 0) > 0:
+    has_tool_use = True
+
+# Belt-and-suspenders: tool_use markers anywhere in the raw payload.
+if '"type": "tool_use"' in raw_input or '"type":"tool_use"' in raw_input:
     has_tool_use = True
 
 if not full_text:
@@ -111,7 +125,7 @@ if match and not has_tool_use:
 
     matched_pattern = match.group(0).strip()[:120]  # cap to 120 chars
 
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
     payload = {
         "session_id":  session_id,

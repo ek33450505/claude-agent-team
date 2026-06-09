@@ -168,21 +168,23 @@ TOOL_USES="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_
 CACHE_READ_TOKENS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('cache_read_input_tokens') or '')" 2>/dev/null || echo "")"
 CACHE_CREATE_TOKENS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('cache_creation_input_tokens') or '')" 2>/dev/null || echo "")"
 
+# Shared Status-contract helper (single source of truth; inline fallback if absent)
+if [ -r "${HOME}/.claude/scripts/cast-status-contract.sh" ]; then
+  # shellcheck source=/dev/null
+  . "${HOME}/.claude/scripts/cast-status-contract.sh"
+fi
+if ! command -v cast_status_exempt_agent >/dev/null 2>&1; then
+  cast_status_exempt_agent() { case "${1:-}" in general-purpose|Explore|Plan|claude|statusline-setup|output-style-setup|unknown|"") return 0;; *workflow-subagent*) return 0;; *) return 1;; esac; }
+  cast_output_lacks_prose() { [ -z "$(printf '%s' "${1:-}" | tr -d '[:space:]')" ]; }
+fi
+
 # Detect agents that are exempt from the Status block contract.
 # These agents either emit StructuredOutput tool results instead of prose Status blocks,
-# or are Claude Code built-ins that don't follow the CAST agent protocol.
-# EXEMPT: Claude Code built-in types (general-purpose, Explore, Plan, etc.) + workflow-subagents
+# or are Claude Code built-ins / unidentifiable agents that don't follow the CAST agent protocol.
 STATUS_CONTRACT_EXEMPT="0"
-case "$AGENT_NAME" in
-  # Claude Code built-in agent types — never emit CAST Status blocks
-  general-purpose|Explore|Plan|claude|statusline-setup|output-style-setup)
-    STATUS_CONTRACT_EXEMPT="1"
-    ;;
-  # Workflow-subagent substring match (for any name containing it)
-  *workflow-subagent*)
-    STATUS_CONTRACT_EXEMPT="1"
-    ;;
-esac
+if cast_status_exempt_agent "$AGENT_NAME"; then
+  STATUS_CONTRACT_EXEMPT="1"
+fi
 export CAST_STOP_AGENT_ID="$AGENT_ID"
 export CAST_STOP_DURATION_MS="$DURATION_MS"
 export CAST_STOP_TOOL_USES="$TOOL_USES"

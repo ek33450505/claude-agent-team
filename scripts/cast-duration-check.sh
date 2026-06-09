@@ -26,7 +26,7 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 db_path = sys.argv[1]
 
@@ -45,7 +45,7 @@ agent_type = (
 )
 agent_id = payload.get("agent_id") or payload.get("subagent_id") or ""
 session_id = os.environ.get("CLAUDE_SESSION_ID", "unknown")
-now_iso = datetime.utcnow().isoformat() + 'Z'
+now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 try:
     conn = sqlite3.connect(db_path, timeout=5)

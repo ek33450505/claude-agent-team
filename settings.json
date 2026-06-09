@@ -18,9 +18,7 @@
         "*.npmjs.org",
         "registry.yarnpkg.com",
         "*.googleapis.com",
-        "api.anthropic.com",
-        "localhost",
-        "127.0.0.1"
+        "api.anthropic.com"
       ],
       "allowLocalBinding": true
     },
@@ -196,36 +194,13 @@
         ]
       },
       {
-        "id": "cast-stat-claim-guard",
+        "id": "cast-write-guards",
         "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-stat-claim-guard.sh",
-            "timeout": 3
-          }
-        ]
-      },
-      {
-        "id": "cast-tilde-write-guard",
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-tilde-write-guard.sh",
-            "timeout": 2
-          }
-        ]
-      },
-      {
-        "id": "cast-no-fake-success-guard",
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-no-fake-success-guard.sh",
-            "timeout": 3,
-            "async": true
+            "command": "bash ~/.claude/scripts/write-guards.sh",
+            "timeout": 5
           }
         ]
       },
@@ -299,16 +274,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-session-end.sh",
-            "timeout": 5,
-            "async": true
-          }
-        ]
       }
     ],
     "SessionEnd": [
@@ -354,6 +319,17 @@
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-response-completeness-hook.sh",
             "timeout": 5,
+            "async": true
+          }
+        ]
+      },
+      {
+        "id": "cast-subagent-worktree-check",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-subagent-worktree-check.sh",
+            "timeout": 10,
             "async": true
           }
         ]

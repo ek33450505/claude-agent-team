@@ -13,6 +13,9 @@
 
 set -euo pipefail
 
+# Skip per-subagent invocation — budget alerting is a session-level concern, not per-subprocess
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
+
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 
 # Nothing to do if db doesn't exist

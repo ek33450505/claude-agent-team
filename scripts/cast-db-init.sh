@@ -510,7 +510,7 @@ INJECTION_LOG_TABLE
   _columns_added=1
 fi
 
-# quality_gates: per-agent contract compliance (writers: cast-subagent-stop-hook.sh, cast-no-fake-success-guard.sh)
+# quality_gates: per-agent contract compliance (writers: cast-subagent-stop-hook.sh, write-guards.sh)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "quality_gates"; then
   sqlite3 "$DB_PATH" <<'QUALITY_GATES_TABLE'
 CREATE TABLE IF NOT EXISTS quality_gates (

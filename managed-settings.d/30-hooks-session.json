@@ -32,16 +32,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-session-end.sh",
-            "timeout": 5,
-            "async": true
-          }
-        ]
       }
     ],
     "SessionEnd": [
@@ -85,8 +75,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/Projects/personal/claude-agent-team/scripts/cast-response-completeness-hook.sh",
+            "command": "bash ~/.claude/scripts/cast-response-completeness-hook.sh",
             "timeout": 5,
+            "async": true
+          }
+        ]
+      },
+      {
+        "id": "cast-subagent-worktree-check",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-subagent-worktree-check.sh",
+            "timeout": 10,
             "async": true
           }
         ]
