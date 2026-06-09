@@ -10,16 +10,5 @@
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
       }
     }
-  },
-  "_cast_channel_server": {
-    "_note": "CAST channel event bus — HTTP server at http://127.0.0.1:9200. Start with: cast-channel-start.sh",
-    "_endpoints": {
-      "POST /publish": "Receive a JSON event from hook scripts",
-      "GET /events": "Return last N events as JSON (?limit=10)",
-      "GET /events/stream": "SSE stream of new events",
-      "GET /health": "Status and event count"
-    },
-    "_publish_from_bash": "source ~/.claude/scripts/cast-channel-publish.sh && cast_channel_publish '{\"type\":\"hook\",\"tool_name\":\"Bash\"}'",
-    "_upgrade_path": "This will be registered as a proper MCP server when the MCP spec supports local HTTP servers natively"
   }
 }
