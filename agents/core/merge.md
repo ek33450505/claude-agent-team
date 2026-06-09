@@ -14,7 +14,6 @@ skills: [cast-conventions]
 includeGitInstructions: false
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 0
-effort: low
 ---
 
 ## ABSOLUTE PROHIBITION — GIT STASH

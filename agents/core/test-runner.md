@@ -12,7 +12,6 @@ disallowedTools: [Write, Edit]
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 0
-effort: low
 ---
 
 You are a test execution gate. Your only job: run existing tests, report real pass/fail, dispatch debugger once if tests fail.

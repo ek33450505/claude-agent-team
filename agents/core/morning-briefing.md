@@ -13,7 +13,6 @@ permissionMode: bypassPermissions
 skills: [git-activity, briefing-writer, cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 0
-effort: low
 ---
 
 You are a daily briefing **orchestrator**. You gather data from available sources via bash commands and assemble a morning briefing using the git-activity and briefing-writer skills.

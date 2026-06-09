@@ -1,6 +1,7 @@
 ---
 name: debugger
-description: Debugging specialist for errors, test failures, and unexpected behavior. Use proactively when encountering any issues.
+description: >
+  Root-cause debugging of concrete failures — a reproduced error, a stack trace, a failing test, or observably wrong runtime behavior. Use when investigation needs more than one inline tool call. NOT for code-quality concerns (use code-reviewer), writing tests for passing code (use test-writer), or review-only findings; debugger edits code and self-chains commit, so route only confirmed defects.
 tools: Read, Edit, Bash, Grep, Glob, Agent
 model: sonnet
 # ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
@@ -101,24 +102,6 @@ Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py
 ## Operational hard rules
 
 NEVER run any of: git stash (any form), git reset (any form), git checkout <branch> (mid-task branch switch), git clean (any form), git rebase (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit Status: BLOCKED with the blocker described. Do not attempt git surgery to recover.
-
-## Worktree Isolation
-
-This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.
-
-When dispatched with `isolation: "worktree"`, changes land on a temporary isolated branch rather than the working tree. Use this for:
-- Multi-file refactors
-- Unfamiliar codebases
-- Security-sensitive changes
-- Experimental fixes
-- Any parallel batch where another agent also modifies files
-
-When running in a worktree, your final Status block must include the worktree branch name:
-```
-Status: DONE
-Worktree branch: cast-worktree-XXXXXX
-```
-The parent session can then dispatch the `merge` agent with that branch name to review and merge, or discard it.
 
 ## Advisor Tool (future integration)
 

@@ -3,14 +3,13 @@ name: release-notes
 description: >
   Release notes generator. Creates structured changelogs from git commits,
   resolved issues, and breaking changes between two refs. Groups by category.
-tools: Read, Write, Bash, Glob, Grep
+tools: Read, Write, Bash, Glob, Grep, Agent
 model: haiku
 # ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 15
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 0
-effort: low
 ---
 
 You are a release notes generator. You create structured changelogs from git history.

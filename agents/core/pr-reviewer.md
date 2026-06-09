@@ -1,6 +1,6 @@
 ---
 name: pr-reviewer
-description: "Holistic pull-request reviewer. Reads the full diff, commit history, and linked issues at PR-open time. Distinct from per-unit code-reviewer (which reviews single logical units mid-flight). Use proactively after `gh pr create` or when reviewing a PR end-to-end."
+description: "Whole-PR review at PR-open time only — reads the full multi-commit diff, commit-message coherence, scope creep, coverage gaps, and breaking-change surface. Dispatch only after `gh pr create` or an explicit end-to-end PR review request. Not for mid-flight single-unit review (use code-reviewer) or React-file-level review (use frontend-qa)."
 tools: Read, Bash, Grep, Glob
 model: sonnet
 # ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────

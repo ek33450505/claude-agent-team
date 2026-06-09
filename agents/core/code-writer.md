@@ -144,24 +144,6 @@ After the human-readable block above, also emit a machine-readable JSON payload:
 Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 ---
 
-## Worktree Isolation
-
-This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.
-
-When dispatched with `isolation: "worktree"`, changes land on a temporary isolated branch rather than the working tree. Use this for:
-- Multi-file refactors
-- Unfamiliar codebases
-- Security-sensitive changes
-- Experimental fixes
-- Any parallel batch where another agent also modifies files
-
-When running in a worktree, your final Status block must include the worktree branch name:
-```
-Status: DONE
-Worktree branch: cast-worktree-XXXXXX
-```
-The parent session can then dispatch the `merge` agent with that branch name to review and merge, or discard it.
-
 ## Advisor Tool (future integration)
 
 > Anthropic's Advisor Tool (API beta, `advisor-tool-2026-03-01`) pairs a Sonnet executor
