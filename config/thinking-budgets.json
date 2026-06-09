@@ -4,13 +4,13 @@
     "all": 1024
   },
   "overrides": {
-    "orchestrator": 8192,
     "planner": 8192,
     "researcher": 8192,
     "security": 4096,
     "migration-reviewer": 4096,
     "api-contract": 4096,
     "debugger": 4096,
+    "pr-reviewer": 4096,
     "code-writer": 2048,
     "code-reviewer": 0,
     "test-runner": 0,
@@ -22,18 +22,10 @@
     "docs": 0,
     "bash-specialist": 0,
     "morning-briefing": 0,
-    "standup-writer": 0,
-    "email-drafter": 0,
-    "pr-narrator": 0,
-    "knowledge-curator": 0,
-    "meeting-prep": 0,
-    "portfolio-sync": 0,
     "frontend-qa": 0,
     "dep-auditor": 0,
     "release-notes": 0,
-    "task-triage": 0,
-    "learning-scout": 4096,
-    "adr-writer": 0,
-    "perf-sentinel": 4096
+    "perf-sentinel": 4096,
+    "eval-writer": 0
   }
 }

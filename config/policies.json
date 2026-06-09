@@ -10,9 +10,9 @@
     },
     {
       "id": "migrations-require-db-agent",
-      "description": "DB migration files require db-reader agent review before modification",
+      "description": "DB migration files require migration-reviewer agent review before modification",
       "path_pattern": ".*migrations/.*",
-      "requires_agent": "db-reader",
+      "requires_agent": "migration-reviewer",
       "scope": "session",
       "severity": "warn"
     },
