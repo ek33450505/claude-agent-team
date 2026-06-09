@@ -32,6 +32,12 @@ Concerns: [required if DONE_WITH_CONCERNS]
 Context needed: [required if NEEDS_CONTEXT]
 ```
 
+## Status Emission (Front-Load)
+
+Emit `Status: DONE` (or `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`) on its own line **as soon as the work is verifiably on disk** — before writing your `## Handoff` block, before `## Work Log`, before any summary prose. Status is the contract; everything else is the optional tail.
+
+Why: under context pressure, the prose tail is what gets truncated. Front-loading Status means orchestrators get the contract value even when truncation hits the summary.
+
 ## Key Principles
 
 - **YAGNI:** Build only what was asked. No extra features or nice-to-haves.
@@ -42,6 +48,10 @@ Context needed: [required if NEEDS_CONTEXT]
 
 - Never run `git commit` directly — always use the `commit` agent.
 - Never use `--no-verify` or bypass hooks.
+
+## Operational hard rules
+
+NEVER run any of: `git stash` (any form), `git reset` (any form), `git checkout <branch>` (mid-task branch switch), `git clean` (any form), `git rebase` (unless explicitly authorized in your prompt). If you feel the urge to checkpoint your work, DON'T. Keep working in the working tree — the orchestrator handles staging and commits. If you hit a state you cannot proceed from, STOP and emit `Status: BLOCKED` with the blocker described. Do not attempt git surgery to recover.
 
 ## Error Routing
 
@@ -55,7 +65,36 @@ Context needed: [required if NEEDS_CONTEXT]
 
 ## Status File
 
-Write a machine-readable status file at `~/.claude/agent-status/<agent-name>-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp` (format: `YYYY-MM-DDTHH:MM:SSZ`). Source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
+Before emitting your prose Status line, write a machine-readable status file at `~/.claude/agent-status/<agent-name>-<timestamp>.json` — this is the truncation-resilient source of truth, so if your prose summary gets cut off the orchestrator falls back to the file. Keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp` (format: `YYYY-MM-DDTHH:MM:SSZ`).
+
+```bash
+source ~/.claude/scripts/status-writer.sh 2>/dev/null || true
+cast_write_status "<STATUS>" "<one-line summary>" "<your-agent-name>" "<concerns or empty>" 2>/dev/null || true
+```
+
+If the `cast_write_status` helper is unavailable, write the JSON directly. STATUS must be one of: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`.
+
+## Structured Output
+
+After your human-readable Status block, emit a machine-readable JSON payload. Set the `agent` field to **your own agent name**; fill `summary`, `concerns`, `files_changed`, and `next_actions` from your run.
+
+```json status
+{
+  "schema_version": "1.0",
+  "status": "DONE",
+  "agent": "<your-agent-name>",
+  "summary": "<one-line description of what was accomplished>",
+  "concerns": [],
+  "files_changed": [],
+  "next_actions": []
+}
+```
+
+Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
+
+Conditional fields (enforced by the validator): when `status` is `DONE_WITH_CONCERNS`, include a non-empty `concerns`; when `BLOCKED`, include a non-empty `blockers`; when `NEEDS_CONTEXT`, include a non-empty `context_needed`.
+
+Exceptions: `commit` adds two keys (`files_staged_count`, `files_unstaged_in_scope_count`). Agents whose contract is prose-only (`eval-writer`, `pr-reviewer`) emit the Status block without this JSON payload.
 
 ## Facts Emission
 
@@ -83,7 +122,15 @@ name: <slug-no-spaces> | type: <feedback> | content: <text> | description: <opti
 
 ## Response Budget
 
-Keep your final response under **2,000 tokens** (300 for lightweight agents). Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
+Each agent has its own token cap, declared in that agent's own `## Response Budget` section — **that per-agent cap is authoritative**. The tiers:
+
+- **~300 tokens** — reviewers / committers: `code-reviewer`, `commit`, `frontend-qa`, `release-notes`, `push`, `test-runner`
+- **~400 tokens** — `dep-auditor`
+- **~500 tokens** — `migration-reviewer`
+- **~800 tokens** — lightweight writers: `bash-specialist`, `docs`, `morning-briefing`, `test-writer`, `devops`, `merge`
+- **~3,000 tokens** — sonnet analysts: `api-contract`, `debugger`, `eval-writer`, `perf-sentinel`, `pr-reviewer`, `security`, `code-writer`, `planner`, `researcher`
+
+Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
 ## Output Discipline
 
