@@ -1,8 +1,13 @@
 #!/usr/bin/env bats
 # tests/agents/effort-frontmatter.bats — Task 2.5 / Task 4.x: effort field policy
-# Policy (Phase 4): effort field is only meaningful for opus-tier agents.
-# Non-opus agents MUST NOT have an effort: line in frontmatter.
-# Opus exemption: migration-reviewer.md (model: opus) may retain effort: high.
+# Policy (Phase 4 → Phase 3a): effort field is only meaningful for opus-tier agents.
+# Every non-opus agent (haiku AND sonnet) MUST NOT have an effort: line in frontmatter.
+# Opus exemption: migration-reviewer.md (model: opus) is the sole agent permitted to
+# retain an effort: field (currently effort: high).
+#
+# Phase 3a (2026-06-09): effort: low was removed from all haiku agents.
+# bash-specialist was moved haiku→sonnet; api-contract was moved sonnet→haiku.
+# Both remain effort-free under the uniform non-opus rule.
 
 bats_require_minimum_version 1.5.0
 
@@ -13,48 +18,49 @@ AGENTS_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/core" && pwd)"
 PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/dev/null && pwd)" || PERSONAL_DIR=""
 
 # ---------------------------------------------------------------------------
-# Haiku-tier agents: effort field is allowed (haiku ignores it harmlessly,
-# but the field was never removed from these agents in Phase 3/4).
+# Formerly-haiku agents that carried effort: low — Phase 3a removed it.
+# bash-specialist is sonnet as of Phase 3a; same negative assertion applies.
+# All agents in this section must NOT have an effort: line.
 # ---------------------------------------------------------------------------
 
-@test "bash-specialist has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/bash-specialist.md"
+@test "bash-specialist does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/bash-specialist.md"
 }
 
-@test "code-reviewer has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/code-reviewer.md"
+@test "code-reviewer does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/code-reviewer.md"
 }
 
-@test "commit has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/commit.md"
+@test "commit does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/commit.md"
 }
 
-@test "devops has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/devops.md"
+@test "devops does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/devops.md"
 }
 
-@test "docs has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/docs.md"
+@test "docs does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/docs.md"
 }
 
-@test "frontend-qa has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/frontend-qa.md"
+@test "frontend-qa does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/frontend-qa.md"
 }
 
-@test "morning-briefing has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/morning-briefing.md"
+@test "morning-briefing does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/morning-briefing.md"
 }
 
-@test "push has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/push.md"
+@test "push does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/push.md"
 }
 
-@test "test-runner has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/test-runner.md"
+@test "test-runner does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/test-runner.md"
 }
 
-@test "test-writer has effort field" {
-  grep -q "^effort:" "$AGENTS_DIR/test-writer.md"
+@test "test-writer does NOT have effort field" {
+  ! grep -q "^effort:" "$AGENTS_DIR/test-writer.md"
 }
 
 # ---------------------------------------------------------------------------
@@ -82,7 +88,7 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
   ! grep -q "^effort:" "$AGENTS_DIR/security.md"
 }
 
-@test "api-contract does NOT have effort field (sonnet — N/A)" {
+@test "api-contract does NOT have effort field (haiku — N/A)" {
   ! grep -q "^effort:" "$AGENTS_DIR/api-contract.md"
 }
 
@@ -107,14 +113,13 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
 }
 
 # ---------------------------------------------------------------------------
-# Comprehensive sweep: every sonnet-tier agent in agents/core/ and agents/personal/
+# Comprehensive sweep: every non-opus agent in agents/core/ and agents/personal/
 # must NOT contain an effort: line in its frontmatter.
-# Policy: effort field is only meaningful for opus. Sonnet agents must not have it.
-# Haiku agents are exempt from this sweep (field is harmless there and kept for
-# legacy/display purposes). Opus exemption: migration-reviewer.md.
+# Policy: effort field is only meaningful for opus. All non-opus agents (haiku
+# and sonnet) must not have it. Opus exemption: migration-reviewer.md.
 # ---------------------------------------------------------------------------
 
-@test "no sonnet agent in agents/core/ has an effort: field" {
+@test "no non-opus agent in agents/core/ has an effort: field" {
   local violations=()
   for f in "$AGENTS_DIR"/*.md; do
     local name
@@ -122,23 +127,23 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
     # Extract model from frontmatter (lines between first pair of --- markers)
     local model
     model="$(awk '/^---/{p++} p==1 && /^model:/{print; exit}' "$f" | awk '{print $2}')"
-    # Only check sonnet-tier agents
-    if [[ "$model" != "sonnet" ]]; then
+    # Skip opus agents — they are the sole permitted exemption
+    if [[ "$model" == "opus" ]]; then
       continue
     fi
-    # Sonnet agents must not have effort: in frontmatter
+    # Non-opus agents must not have effort: in frontmatter
     if awk '/^---/{p++} p>=2{exit} p==1 && /^effort:/{found=1} END{exit !found}' "$f"; then
       violations+=("$name (model: ${model:-unknown})")
     fi
   done
   if [[ ${#violations[@]} -gt 0 ]]; then
-    echo "Sonnet agents with forbidden effort: field:"
+    echo "Non-opus agents with forbidden effort: field:"
     printf '  %s\n' "${violations[@]}"
     return 1
   fi
 }
 
-@test "no sonnet agent in agents/personal/ has an effort: field" {
+@test "no non-opus agent in agents/personal/ has an effort: field" {
   [[ -n "$PERSONAL_DIR" && -d "$PERSONAL_DIR" ]] || skip "agents/personal/ not present (Phase 4.5.3 archive)"
   local violations=()
   for f in "$PERSONAL_DIR"/*.md; do
@@ -147,7 +152,8 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
     name="$(basename "$f")"
     local model
     model="$(awk '/^---/{p++} p==1 && /^model:/{print; exit}' "$f" | awk '{print $2}')"
-    if [[ "$model" != "sonnet" ]]; then
+    # Skip opus agents — they are the sole permitted exemption
+    if [[ "$model" == "opus" ]]; then
       continue
     fi
     if awk '/^---/{p++} p>=2{exit} p==1 && /^effort:/{found=1} END{exit !found}' "$f"; then
@@ -155,7 +161,7 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
     fi
   done
   if [[ ${#violations[@]} -gt 0 ]]; then
-    echo "Sonnet agents in personal/ with forbidden effort: field:"
+    echo "Non-opus agents in personal/ with forbidden effort: field:"
     printf '  %s\n' "${violations[@]}"
     return 1
   fi
