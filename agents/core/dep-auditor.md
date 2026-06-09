@@ -5,7 +5,7 @@ description: >
   version compatibility, and license concerns. Supports npm, pip, and Go modules.
 tools: Read, Bash, Glob, Grep
 model: haiku
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 15
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]

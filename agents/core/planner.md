@@ -6,7 +6,7 @@ description: >
   returns a task list ready for delegation to agent teams.
 tools: Read, Write, Glob, Grep
 model: sonnet
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 # effort field is N/A on sonnet — only Opus reads it
 maxTurns: 20
 disallowedTools: Bash

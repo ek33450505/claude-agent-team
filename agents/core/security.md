@@ -6,7 +6,7 @@ description: >
   exposure, and stack-specific vulnerabilities.
 tools: Read, Glob, Grep, Bash
 model: sonnet
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 20
 skills: [cast-conventions]
 disallowedTools: Write, Edit

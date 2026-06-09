@@ -7,7 +7,7 @@ description: >
   to main/master without explicit approval.
 tools: Bash, Read
 model: haiku
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit, Agent]
 skills: [cast-conventions]

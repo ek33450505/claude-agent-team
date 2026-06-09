@@ -6,7 +6,7 @@ description: >
   SQLite, PostgreSQL, and MS SQL Server. Read-only reviewer.
 tools: Read, Bash, Glob, Grep
 model: opus
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]

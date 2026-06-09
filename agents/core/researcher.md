@@ -6,7 +6,7 @@ description: >
   Absorbs the former explore, data-scientist, and db-reader roles.
 tools: Read, Write, Bash, Glob, Grep, WebFetch, WebSearch
 model: sonnet
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 30
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation

@@ -5,7 +5,7 @@ description: >
   of recent changes, and suggests git bisect targets for identified regressions.
 tools: Read, Bash, Glob, Grep
 model: sonnet
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 25
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
