@@ -41,11 +41,11 @@ import re
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 agent_id, repo_root, db_path = sys.argv[1], sys.argv[2], sys.argv[3]
-now_iso = datetime.utcnow().isoformat() + 'Z'
+now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 # Ensure DB + table exist (idempotent)
 Path(db_path).parent.mkdir(parents=True, exist_ok=True)

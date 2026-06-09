@@ -28,7 +28,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ── Resolve cast_db.py ────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ agent_type = data.get('agent_type') or data.get('subagent_type') or 'unknown'
 agent_id   = data.get('agent_id') or data.get('subagent_id') or ''
 batch_id   = data.get('batch_id')
 session_id = data.get('session_id') or ''
-now_iso    = datetime.utcnow().isoformat() + 'Z'
+now_iso    = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 # Fallback: if agent_type is "unknown" but agent_id is non-empty, query agent_runs
 if (agent_type == 'unknown' or not agent_type) and agent_id:
