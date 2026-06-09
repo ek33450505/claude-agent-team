@@ -10,7 +10,7 @@ model: sonnet
 # effort field is N/A on sonnet — only Opus reads it
 maxTurns: 20
 disallowedTools: Bash
-skills: [cast-conventions]
+skills: [cast-conventions, stack-reference]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 8192
 ---

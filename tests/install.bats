@@ -60,6 +60,41 @@ run_install() {
   [ -d "$HOME/.claude/skills/wizard" ]
 }
 
+@test "Install: user-data skill (swarm) is preserved on reinstall" {
+  # First install — stub is written because destination does not exist yet
+  run_install
+  [ -f "$HOME/.claude/skills/swarm/SKILL.md" ]
+
+  # Simulate user populating the skill with custom content
+  echo "USER_SWARM_SENTINEL" > "$HOME/.claude/skills/swarm/SKILL.md"
+
+  # Second install — user content must NOT be overwritten
+  run_install
+  grep -q "USER_SWARM_SENTINEL" "$HOME/.claude/skills/swarm/SKILL.md"
+}
+
+@test "Install: user-data skill (project-catalog) is preserved on reinstall" {
+  # First install — stub is written because destination does not exist yet
+  run_install
+  [ -f "$HOME/.claude/skills/project-catalog/SKILL.md" ]
+
+  # Simulate user populating the catalog with real project data
+  echo "MY_REAL_PROJECT_CATALOG_SENTINEL" > "$HOME/.claude/skills/project-catalog/SKILL.md"
+
+  # Second install — user content must NOT be overwritten
+  run_install
+  grep -q "MY_REAL_PROJECT_CATALOG_SENTINEL" "$HOME/.claude/skills/project-catalog/SKILL.md"
+}
+
+@test "Install: user-data skill (project-catalog) stub is written on fresh install" {
+  # No pre-existing skill — fresh install must copy the stub from the repo
+  run_install
+
+  [ -f "$HOME/.claude/skills/project-catalog/SKILL.md" ]
+  # The installed file must not be empty
+  [ -s "$HOME/.claude/skills/project-catalog/SKILL.md" ]
+}
+
 @test "Install: .template extension stripped from rules" {
   run_install
 

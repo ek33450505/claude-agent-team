@@ -31,7 +31,7 @@ allowed-tools: []
 # CAST
 cast status          # health dashboard
 cast exec            # run cast plan executor
-bats tests/          # run all shell tests
+bash tests/run.sh    # run shell tests (isolated temp HOME — NEVER 'bats tests/' on real $HOME)
 bash install.sh      # reinstall CAST into ~/.claude/
 ```
 

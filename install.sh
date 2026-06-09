@@ -127,12 +127,28 @@ done
 success "  $CMD_COUNT commands installed"
 
 # --- Install skills ---
+# Skills listed in USER_DATA_SKILLS are treated as user-data: if SKILL.md already
+# exists in the destination, the copy is skipped so user-populated content is
+# preserved.  A fresh install (no destination yet) still copies the stub.
+USER_DATA_SKILLS="swarm project-catalog"
 info "Installing skills..."
 for skill_dir in "$SCRIPT_DIR"/skills/*/; do
     [ -d "$skill_dir" ] || continue
     skill_name="$(basename "$skill_dir")"
     mkdir -p "$CLAUDE_DIR/skills/$skill_name"
-    cp -R "$skill_dir"* "$CLAUDE_DIR/skills/$skill_name/"
+    # Check if this skill is in the user-data set
+    is_user_data=false
+    for ud in $USER_DATA_SKILLS; do
+        if [ "$skill_name" = "$ud" ]; then
+            is_user_data=true
+            break
+        fi
+    done
+    if [ "$is_user_data" = true ] && [ -f "$CLAUDE_DIR/skills/$skill_name/SKILL.md" ]; then
+        info "  Skipped (exists, user-data): skills/$skill_name"
+    else
+        cp -R "$skill_dir"* "$CLAUDE_DIR/skills/$skill_name/"
+    fi
     SKILL_COUNT=$((SKILL_COUNT + 1))
 done
 success "  $SKILL_COUNT skills installed"
@@ -323,19 +339,6 @@ if [ -d "$SCRIPT_DIR/swarm-configs" ]; then
             success "  Installed: swarm-configs/$base"
         fi
     done
-fi
-
-# --- Install swarm skill (skip if destination exists) ---
-if [ -f "$SCRIPT_DIR/skills/swarm/SKILL.md" ]; then
-    info "Installing swarm skill..."
-    mkdir -p "$CLAUDE_DIR/skills/swarm"
-    dest="$CLAUDE_DIR/skills/swarm/SKILL.md"
-    if [ -f "$dest" ]; then
-        info "  Skipped (exists): skills/swarm/SKILL.md"
-    else
-        cp "$SCRIPT_DIR/skills/swarm/SKILL.md" "$dest"
-        success "  Installed: skills/swarm/SKILL.md"
-    fi
 fi
 
 # --- Setup Python venv for TUI dashboard ---
