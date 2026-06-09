@@ -62,7 +62,7 @@ except Exception:
     sys.exit(0)
 
 agent_status_dir = os.path.expanduser('~/.claude/agent-status')
-now = datetime.datetime.utcnow().timestamp()
+now = datetime.datetime.now(datetime.timezone.utc).timestamp()
 SESSION_TIMEOUT = 7200  # 2 hours
 
 def agent_completed_this_session(required_agent):
@@ -112,7 +112,7 @@ for policy in config.get('policies', []):
             audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
             os.makedirs(os.path.dirname(audit_path), exist_ok=True)
             event = {
-                'timestamp': _dt.datetime.utcnow().isoformat() + 'Z',
+                'timestamp': _dt.datetime.now(_dt.timezone.utc).isoformat().replace('+00:00', 'Z'),
                 'event': 'POLICY_OVERRIDE',
                 'policy_id': policy_id,
                 'file_path': file_path,

@@ -142,7 +142,7 @@ chain_dispatched = d.get('chain_dispatched') or []
 # --- Persist status to routing-log ---
 import datetime as _dt
 _log_entry = json.dumps({
-    'timestamp': _dt.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'timestamp': _dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     'session_id': os.environ.get('CLAUDE_SESSION_ID', ''),
     'action': 'agent_complete',
     'matched_route': agent,

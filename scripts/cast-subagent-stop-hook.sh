@@ -475,7 +475,7 @@ if not m:
     raise SystemExit(0)
 
 status = m.group(1)
-ts = datetime.datetime.utcnow().isoformat() + 'Z'
+ts = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
 
 try:
     conn = sqlite3.connect(db, timeout=5)

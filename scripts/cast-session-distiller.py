@@ -162,7 +162,7 @@ def check_duplicate(name):
 
 def insert_memory(candidate):
     """Insert a candidate memory into agent_memories as agent='shared'."""
-    now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+    now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     # Check if valid_from column exists
     col_rows = db_query("PRAGMA table_info(agent_memories)")
     col_names = {row[1] for row in col_rows}

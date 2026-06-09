@@ -293,7 +293,7 @@ except Exception as e:
     print(f"[CAST-WARN] cast-session-end: cannot connect to {db_path}: {e}", file=sys.stderr)
     sys.exit(1)
 
-now = datetime.datetime.utcnow().isoformat() + 'Z'
+now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
 
 agent_dirs = [
     d for d in os.listdir(memory_dir)

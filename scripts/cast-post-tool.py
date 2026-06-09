@@ -418,7 +418,7 @@ def part6_file_writes(data: dict, tool_name: str, file_path: str) -> None:
             import datetime as _dt
             log_path = os.path.expanduser("~/.claude/logs/hook-errors.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
-            ts = _dt.datetime.utcnow().isoformat() + 'Z'
+            ts = _dt.datetime.now(_dt.timezone.utc).isoformat().replace('+00:00', 'Z')
             with open(log_path, 'a') as f:
                 f.write(f'[{ts}] ERROR cast-post-tool.py part6_file_writes: {e}\n')
         except Exception:

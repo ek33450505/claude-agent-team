@@ -181,7 +181,7 @@ def _log_error(msg: str) -> None:
     try:
         log_path = Path.home() / '.claude' / 'logs' / 'db-write-errors.log'
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        ts = datetime.datetime.utcnow().isoformat() + 'Z'
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
         with open(log_path, 'a') as f:
             f.write(f'[{ts}] ERROR cast_db.py: {msg}\n')
     except Exception:
@@ -252,7 +252,7 @@ def log_hook_failure(hook_name: str, exit_code: int, stderr: str, session_id: st
             'exit_code': exit_code,
             'stderr': (stderr or '')[:2000],
             'session_id': session_id,
-            'timestamp': datetime.datetime.utcnow().isoformat() + 'Z',
+            'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'),
         })
     except Exception as e:
         import sys
