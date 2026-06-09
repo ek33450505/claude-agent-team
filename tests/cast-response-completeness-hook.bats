@@ -32,6 +32,17 @@ print(json.dumps(payload))
 " "$output_text"
 }
 
+# Helper: build a SubagentStop JSON payload with a given agent_type and output string
+_make_input_for_agent() {
+  local agent_type="$1"
+  local output_text="$2"
+  python3 -c "
+import json, sys
+payload = {'agent_type': sys.argv[1], 'last_assistant_message': sys.argv[2]}
+print(json.dumps(payload))
+" "$agent_type" "$output_text"
+}
+
 # Helper: generate N lines of filler text (simulates a large files_changed array)
 _filler_lines() {
   local n="$1"
@@ -126,6 +137,57 @@ _filler_lines() {
   local severity
   severity="$(sqlite3 "$TEMP_DB" "SELECT severity FROM completeness_events LIMIT 1;" 2>/dev/null || echo "")"
   assert_equal "$severity" "HIGH"
+}
+
+# ---------------------------------------------------------------------------
+# Status-contract exemption tests (Phase v7.5 — cast-status-contract.sh)
+# ---------------------------------------------------------------------------
+
+@test "completeness hook: exempt agent_type (general-purpose) with no Status block produces NO completeness_events row" {
+  # general-purpose is a Claude Code built-in — NOT under the CAST Status contract.
+  # Even with substantive prose and no Status block, no row should be written.
+  local input
+  input="$(_make_input_for_agent "general-purpose" "I have completed the lookup using a tool call.")"
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+  local row_count
+  row_count="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM completeness_events;" 2>/dev/null || echo 0)"
+  assert_equal "$row_count" "0"
+}
+
+@test "completeness hook: exempt agent_type (unknown) with no Status block produces NO completeness_events row" {
+  # unknown agent_type resolves when Claude Code cannot identify the subagent.
+  # Must be exempt from the Status contract — no DB row written.
+  local input
+  input="$(_make_input_for_agent "unknown" "Some substantive prose that lacks a Status block entirely.")"
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+  local row_count
+  row_count="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM completeness_events;" 2>/dev/null || echo 0)"
+  assert_equal "$row_count" "0"
+}
+
+@test "completeness hook: exempt agent_type (x-workflow-subagent-y) with no Status block produces NO completeness_events row" {
+  # workflow-subagent substring match — exempt from the Status contract.
+  local input
+  input="$(_make_input_for_agent "x-workflow-subagent-y" "Structured output result from workflow step.")"
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+  local row_count
+  row_count="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM completeness_events;" 2>/dev/null || echo 0)"
+  assert_equal "$row_count" "0"
+}
+
+@test "completeness hook: identifiable CAST agent (researcher) with prose and no Status block IS still flagged" {
+  # researcher is a real CAST agent — it MUST emit a Status block.
+  # This verifies we did not over-suppress: the real-truncation signal must survive.
+  local input
+  input="$(_make_input_for_agent "researcher" "Found several relevant sources on the topic. The analysis suggests that further investigation is needed and I will now")"
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+  local row_count
+  row_count="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM completeness_events;" 2>/dev/null || echo 0)"
+  assert_equal "$row_count" "1"
 }
 
 @test "completeness hook: parses cleanly under /bin/bash (Bash 3.2 regression)" {

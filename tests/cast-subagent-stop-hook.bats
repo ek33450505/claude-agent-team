@@ -308,3 +308,33 @@ Summary: task completed successfully"
   count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
   [[ "$count" -eq 1 ]]
 }
+
+# ---------------------------------------------------------------------------
+# Status-contract exemption tests (Phase v7.5 — cast-status-contract.sh)
+#
+# Agents with agent_type "unknown" are NOT under the CAST Status contract.
+# They must NOT emit [CAST-TRUNCATED] even with substantive prose + no Status block.
+# Identifiable CAST agents (code-writer, researcher) remain under contract.
+# ---------------------------------------------------------------------------
+
+@test "unknown agent_type with no Status block does NOT emit [CAST-TRUNCATED] banner" {
+  # agent_type "unknown" fires when Claude Code cannot identify the subagent.
+  # These are not bound by the CAST protocol — suppress the banner.
+  local output="This is some substantive prose output without a Status block at all."
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "unknown" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  # No truncation record should be written
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "code-writer agent_type with prose + no Status block STILL emits [CAST-TRUNCATED] banner" {
+  # Identifiable CAST agents remain under contract after the unknown-exemption fix.
+  # A real truncation for code-writer must still surface.
+  local output="I am applying the changes to the file now. Let me read it first and then I will"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-writer" "$output")"
+  assert_success
+  assert_output --partial "[CAST-TRUNCATED]"
+}

@@ -97,6 +97,21 @@ AGENT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_COMP_PARS
 OUTPUT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_COMP_PARSED','{}')); print(d.get('output',''))" 2>/dev/null || echo "")"
 OUTPUT_SNIPPET="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_COMP_PARSED','{}')); print(d.get('output_snippet',''))" 2>/dev/null || echo "")"
 
+# Shared Status-contract helper (single source of truth; inline fallback if absent)
+if [ -r "${HOME}/.claude/scripts/cast-status-contract.sh" ]; then
+  # shellcheck source=/dev/null
+  . "${HOME}/.claude/scripts/cast-status-contract.sh"
+fi
+if ! command -v cast_status_exempt_agent >/dev/null 2>&1; then
+  cast_status_exempt_agent() { case "${1:-}" in general-purpose|Explore|Plan|claude|statusline-setup|output-style-setup|unknown|"") return 0;; *workflow-subagent*) return 0;; *) return 1;; esac; }
+  cast_output_lacks_prose() { [ -z "$(printf '%s' "${1:-}" | tr -d '[:space:]')" ]; }
+fi
+
+STATUS_CONTRACT_EXEMPT="0"
+if cast_status_exempt_agent "$AGENT"; then
+  STATUS_CONTRACT_EXEMPT="1"
+fi
+
 # Check for Status block in the full output text
 # Matches either the human-readable form (Status: DONE) or the JSON form ("status": "DONE")
 # NOTE: Searches the full response — no line-count window — so Status blocks near the top
@@ -117,7 +132,7 @@ print('1' if has_status else '0')
 PYEOF
 )" || echo "0"
 
-if [ "$HAS_STATUS" != "1" ] && [ -n "$OUTPUT" ]; then
+if [ "$STATUS_CONTRACT_EXEMPT" = "0" ] && [ "$HAS_STATUS" != "1" ] && [ -n "$OUTPUT" ]; then
   # Missing Status block — log warning and write to database
   TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat().replace('+00:00','')+'Z')")"
 
