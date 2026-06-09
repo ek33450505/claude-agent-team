@@ -17,11 +17,11 @@ def load_input():
     if not raw:
         try:
             raw = sys.stdin.read().strip()
-        except:
+        except Exception:
             raw = '{}'
     try:
         return json.loads(raw)
-    except:
+    except Exception:
         return {}
 
 def extract_metadata(data):
@@ -38,7 +38,7 @@ def write_log(log_path, message):
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, 'a') as f:
             f.write(f"[{datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}] {message}\n")
-    except:
+    except Exception:
         pass
 
 def check_tilde_write(file_path, home):
@@ -93,7 +93,7 @@ def check_stat_claim(file_path, content, home):
             real_count = len([l for l in grep_result.stdout.split('\n') if l.strip()])
         else:
             real_count = 0
-    except:
+    except Exception:
         real_count = 0
     
     # Extract claimed count
@@ -127,9 +127,9 @@ def record_no_fake_success(file_path, pattern, home, session_id):
             )
             conn.commit()
             conn.close()
-        except:
+        except Exception:
             pass
-    
+
     return json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
