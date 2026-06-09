@@ -226,6 +226,12 @@ rm -f "$CLAUDE_DIR/scripts/cast-routing-feedback.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-mismatch-analyzer.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-security-guard.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-cost-tracker.sh"
+# Remove dead scripts + settings-canonical retired in v7.5 Phase 6 (dead-surface sweep)
+rm -f "$CLAUDE_DIR/scripts/cast-memory-backup.sh" "$CLAUDE_DIR/scripts/cast-db-migrate-v32.sh" "$CLAUDE_DIR/scripts/cast-ollama.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-proactive-intel.sh" "$CLAUDE_DIR/scripts/cast-weekly-tuner.sh" "$CLAUDE_DIR/scripts/cast-weekly-report.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-resume-watcher.sh" "$CLAUDE_DIR/scripts/cast-output-adapter.py" "$CLAUDE_DIR/scripts/cast-sync-check.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-session-status-cleanup.py" "$CLAUDE_DIR/scripts/cast-pre-compact-hook.sh" "$CLAUDE_DIR/scripts/pa-weather-prefetch.sh"
+rm -f "$CLAUDE_DIR/config/settings-canonical.json"
 success "  Scripts installed (including cast_db.py)"
 
 # --- Install managed-settings.d fragments ---

@@ -67,26 +67,6 @@ teardown() {
   [[ "$OUTPUT" =~ "already existing" ]]
 }
 
-@test "proactive intel script exits 0 on empty DB" {
-  run bash scripts/cast-proactive-intel.sh
-
-  # Should always exit 0 (non-blocking)
-  [ "$status" -eq 0 ]
-}
-
-@test "proactive intel script surfaces stale facts" {
-  # Insert a user_profile fact created > 30 days ago
-  sqlite3 "$TEST_DB" \
-    "INSERT INTO agent_memories (agent, type, name, content, created_at, updated_at)
-     VALUES ('global', 'user_profile', 'work-style', 'long sessions', datetime('now', '-31 days'), datetime('now', '-31 days'))"
-
-  run bash scripts/cast-proactive-intel.sh
-
-  [ "$status" -eq 0 ]
-  # Should surface advisory about stale profiles
-  [[ "$output" =~ "user profile patterns" ]] || [[ "$output" =~ "haven't been reviewed" ]]
-}
-
 @test "cast-memory-router.py VALID_TYPES includes user_profile" {
   # Check that VALID_TYPES in Python file includes user_profile
   GREP_RESULT=$(grep "user_profile" scripts/cast-memory-router.py || true)

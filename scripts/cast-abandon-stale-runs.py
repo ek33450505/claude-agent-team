@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""cast-abandon-stale-runs.py — Flip stale 'running' agent_runs to 'abandoned'.
+"""cast-abandon-stale-runs.py — Flip stale agent_runs and sessions to terminal states.
 
-Runs daily via cron. Finds agent_runs rows that have been stuck in status='running'
-for more than 2 hours and flips them to status='abandoned', recording abandoned_at.
+Runs daily via launchd (com.cast.abandon-stale-runs). Two symmetric steps:
 
-Schema migration (idempotent — performed on first run):
+  Step 1 — agent_runs: rows stuck in status='running' for more than
+  CAST_ABANDON_STALE_HOURS (default 2h) are flipped to 'abandoned'.
+
+  Step 2 — sessions: rows stuck in status='active' for more than
+  CAST_SESSION_CRASH_HOURS (default 4h) are flipped to 'crashed'.
+  This mirrors the former cast-session-status-cleanup.py (deleted v7.5-phase6),
+  which was never wired; the logic now lives here in the already-wired reaper.
+  NOTE: nothing currently reads sessions.status='crashed' — this is data-hygiene
+  (keeps the sessions table honest, symmetric with agent_runs 'abandoned' marking).
+
+Schema migrations (idempotent — performed on first run):
   ALTER TABLE agent_runs ADD COLUMN abandoned_at TIMESTAMP;
 
-Exit: always 0 (non-blocking; cron must not be broken by this script).
+Exit: always 0 (non-blocking; cron/launchd must not be broken by this script).
 
 One-time backfill (review before executing — DO NOT automate):
   UPDATE agent_runs
@@ -18,8 +27,7 @@ One-time backfill (review before executing — DO NOT automate):
 
 Usage:
   python3 ~/.claude/scripts/cast-abandon-stale-runs.py
-  # Or via cron (add to crontab -e):
-  # 0 4 * * * python3 ~/.claude/scripts/cast-abandon-stale-runs.py
+  # Or via launchd plist (com.cast.abandon-stale-runs — runs daily).
 """
 
 import os
@@ -30,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 # --- Config ---
 DB_PATH = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
 STALE_HOURS = int(os.environ.get('CAST_ABANDON_STALE_HOURS', '2'))
+SESSION_CRASH_HOURS = int(os.environ.get('CAST_SESSION_CRASH_HOURS', '4'))
 LOG_PATH = os.path.expanduser('~/.claude/logs/cast-abandon-stale-runs.log')
 
 
@@ -86,25 +95,48 @@ def main() -> None:
 
         if not stale_rows:
             _log('No stale running rows found')
-            conn.close()
-            sys.exit(0)
+        else:
+            row_ids = [row[0] for row in stale_rows]
+            conn.execute(
+                f'''
+                UPDATE agent_runs
+                SET status = 'abandoned', abandoned_at = ?
+                WHERE id IN ({",".join("?" * len(row_ids))})
+                ''',
+                [now_iso] + row_ids
+            )
+            conn.commit()
 
-        row_ids = [row[0] for row in stale_rows]
-        conn.execute(
-            f'''
-            UPDATE agent_runs
-            SET status = 'abandoned', abandoned_at = ?
-            WHERE id IN ({",".join("?" * len(row_ids))})
-            ''',
-            [now_iso] + row_ids
-        )
-        conn.commit()
+            for row_id, agent, started_at in stale_rows:
+                _log(f'Abandoned: id={row_id} agent={agent} started_at={started_at}')
 
-        for row_id, agent, started_at in stale_rows:
-            _log(f'Abandoned: id={row_id} agent={agent} started_at={started_at}')
+            _log(f'Flipped {len(stale_rows)} stale running row(s) to abandoned')
+            print(f'[cast-abandon-stale-runs] Abandoned {len(stale_rows)} stale run(s)', file=sys.stderr)
 
-        _log(f'Flipped {len(stale_rows)} stale running row(s) to abandoned')
-        print(f'[cast-abandon-stale-runs] Abandoned {len(stale_rows)} stale run(s)', file=sys.stderr)
+        # --- Step 2: Flip stale active sessions to 'crashed' ---
+        # Symmetric with step 1. Sessions stuck in 'active' for more than
+        # CAST_SESSION_CRASH_HOURS are considered crashed (process died without
+        # recording an end). Best-effort: a missing sessions table or missing
+        # status column on older DBs must not break the wired launchd job.
+        try:
+            session_threshold_iso = (now_utc - timedelta(hours=SESSION_CRASH_HOURS)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            session_result = conn.execute(
+                '''
+                UPDATE sessions
+                SET status = 'crashed'
+                WHERE status = 'active'
+                  AND started_at < ?
+                ''',
+                (session_threshold_iso,)
+            )
+            crashed_count = session_result.rowcount
+            conn.commit()
+            _log(f'Flipped {crashed_count} active session(s) to crashed (threshold={SESSION_CRASH_HOURS}h)')
+            if crashed_count:
+                print(f'[cast-abandon-stale-runs] Crashed {crashed_count} stale session(s)', file=sys.stderr)
+        except Exception as e:
+            # Older DBs may lack the sessions table or status column — not fatal.
+            _log(f'Session crash-marking skipped (best-effort): {e}')
 
     except Exception as e:
         _log(f'Error during cleanup: {e}')
