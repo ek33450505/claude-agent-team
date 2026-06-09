@@ -6,7 +6,7 @@ description: >
   On failure, reports failing test names and exit code; the orchestrator dispatches debugger when needed.
 tools: Bash, Read, Glob
 model: haiku
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]

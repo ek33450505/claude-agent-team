@@ -6,7 +6,7 @@ description: >
   to main/master. Use after commit agent completes.
 tools: Bash, Read
 model: haiku
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 8
 disallowedTools: [Write, Edit, Agent]
 skills: [cast-conventions]

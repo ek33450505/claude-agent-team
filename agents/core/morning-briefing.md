@@ -6,7 +6,7 @@ description: >
   Use at the start of each day or invoke via /morning on demand.
 tools: Read, Write, Bash, Glob, Grep
 model: haiku
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 initialPrompt: "Load memory index, check today's date, read last journal entry."
 maxTurns: 25
 permissionMode: bypassPermissions

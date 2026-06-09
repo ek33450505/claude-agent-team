@@ -5,7 +5,7 @@ description: >
   resolved issues, and breaking changes between two refs. Groups by category.
 tools: Read, Write, Bash, Glob, Grep, Agent
 model: haiku
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 15
 skills: [cast-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation

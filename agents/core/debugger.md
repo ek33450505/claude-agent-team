@@ -4,7 +4,7 @@ description: >
   Root-cause debugging of concrete failures — a reproduced error, a stack trace, a failing test, or observably wrong runtime behavior. Use when investigation needs more than one inline tool call. NOT for code-quality concerns (use code-reviewer), writing tests for passing code (use test-writer), or review-only findings; debugger edits code and self-chains commit, so route only confirmed defects.
 tools: Read, Edit, Bash, Grep, Glob, Agent
 model: sonnet
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 # effort field is N/A on sonnet — only Opus reads it
 maxTurns: 30
 skills: [cast-conventions]

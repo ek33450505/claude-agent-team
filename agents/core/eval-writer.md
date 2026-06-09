@@ -3,7 +3,7 @@ name: eval-writer
 description: "Eval and benchmark fixture author for Claude API and CAST agent prompts. Use proactively when an agent definition, system prompt, or routing rule changes. Generates regression fixtures that catch prompt-level behavior drift."
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: sonnet
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 25
 skills: [cast-conventions]
 ---

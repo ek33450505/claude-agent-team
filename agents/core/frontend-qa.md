@@ -2,7 +2,7 @@
 name: frontend-qa
 description: "Deep React 19 and TypeScript review of .tsx/.ts files in dashboard projects only — prop typing, TanStack Query hook usage, frontend-to-backend API-contract alignment, Vitest coverage gaps, and a11y basics. Auto-fires when .tsx/.ts change. Does NOT cover style/naming/formatting or non-React/backend/shell code (use code-reviewer) or whole-PR review (use pr-reviewer)."
 model: haiku
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 tools: Read, Bash, Glob, Grep
 maxTurns: 20
 skills: [cast-conventions]

@@ -3,7 +3,7 @@ name: code-reviewer
 description: "Per-unit code-quality and security review of a single logical change mid-flight, any language. Use immediately after each code-writer or debugger unit, before commit. Not for full-PR review (use pr-reviewer) and not for deep React/TypeScript or accessibility review (use frontend-qa)."
 tools: Bash, Glob, Grep, Read
 model: haiku
-# ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
+# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 background: true
 maxTurns: 25
 disallowedTools: Write, Edit
