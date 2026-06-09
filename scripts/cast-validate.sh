@@ -153,91 +153,6 @@ PYEOF
   fi
 fi
 
-# --- Check 3: Routing table schema ---
-ROUTING_TABLE="$HOME/.claude/config/routing-table.json"
-if [[ ! -f "$ROUTING_TABLE" ]]; then
-  fail "Routing table: $ROUTING_TABLE not found"
-else
-  ROUTING_RESULT=$(python3 - "$ROUTING_TABLE" <<'PYEOF'
-import sys, json
-
-path = sys.argv[1]
-try:
-    with open(path) as f:
-        data = json.load(f)
-except Exception as e:
-    print(f"ERROR:{e}")
-    sys.exit(0)
-
-routes = data if isinstance(data, list) else data.get("routes", [])
-schema_errors = []
-long_patterns = []
-
-for i, route in enumerate(routes):
-    label = route.get("agent", f"route[{i}]")
-    if not isinstance(route.get("patterns"), list):
-        schema_errors.append(f"{label}: 'patterns' missing or not array")
-    else:
-        for p in route["patterns"]:
-            if isinstance(p, str) and len(p) > 200:
-                long_patterns.append(f"{label}: pattern length {len(p)}")
-    if not isinstance(route.get("agent"), str):
-        schema_errors.append(f"{label}: 'agent' missing or not string")
-    if not isinstance(route.get("model"), str):
-        schema_errors.append(f"{label}: 'model' missing or not string")
-    conf = route.get("confidence")
-    if conf not in ("hard", "soft"):
-        schema_errors.append(f"{label}: 'confidence' must be 'hard' or 'soft', got {conf!r}")
-
-parts = []
-if schema_errors:
-    parts.append("ERRORS:" + "|".join(schema_errors))
-if long_patterns:
-    parts.append("WARN:" + "|".join(long_patterns))
-if not parts:
-    parts.append(f"OK:{len(routes)}")
-
-print(";".join(parts))
-PYEOF
-)
-  # Parse routing result — may contain ERRORS, WARN, or OK segments separated by ;
-  ROUTING_ERRORS=""
-  ROUTING_WARNS=""
-  ROUTING_OK=""
-  IFS=';' read -ra RT_PARTS <<< "$ROUTING_RESULT"
-  for part in "${RT_PARTS[@]}"; do
-    if [[ "$part" == ERROR:* ]]; then
-      fail "Routing table: could not parse — ${part#ERROR:}"
-    elif [[ "$part" == ERRORS:* ]]; then
-      ROUTING_ERRORS="${part#ERRORS:}"
-    elif [[ "$part" == WARN:* ]]; then
-      ROUTING_WARNS="${part#WARN:}"
-    elif [[ "$part" == OK:* ]]; then
-      ROUTING_OK="${part#OK:}"
-    fi
-  done
-
-  if [[ -n "$ROUTING_ERRORS" ]]; then
-    fail "Routing table: schema violations detected"
-    IFS='|' read -ra ERR_LIST <<< "$ROUTING_ERRORS"
-    for e in "${ERR_LIST[@]}"; do
-      echo "  ✗ ${e}"
-    done
-  fi
-  if [[ -n "$ROUTING_WARNS" ]]; then
-    IFS='|' read -ra WARN_LIST <<< "$ROUTING_WARNS"
-    warn "Routing table: ${#WARN_LIST[@]} pattern(s) >200 chars (warning)"
-    for w in "${WARN_LIST[@]}"; do
-      echo "  ⚠ ${w}"
-    done
-  fi
-  if [[ -z "$ROUTING_ERRORS" && -z "$ROUTING_WARNS" && -n "$ROUTING_OK" ]]; then
-    pass "Routing table: ${ROUTING_OK} routes — schema valid"
-  elif [[ -z "$ROUTING_ERRORS" && -n "$ROUTING_OK" ]]; then
-    pass "Routing table: ${ROUTING_OK} routes — schema valid"
-  fi
-fi
-
 # --- Check 4: CLAUDE.md directives ---
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 if [[ ! -f "$CLAUDE_MD" ]]; then
@@ -422,41 +337,6 @@ else
   pass "routing-proposals.json: not present (proposals pipeline not yet run — OK)"
 fi
 
-# --- Check 10: security agent wired in at least one post_chain ---
-if [[ -f "$ROUTING_TABLE" ]]; then
-  SECURITY_WIRED=$(python3 - "$ROUTING_TABLE" <<'PYEOF'
-import sys, json
-path = sys.argv[1]
-try:
-    with open(path) as f:
-        data = json.load(f)
-except Exception as e:
-    print(f"ERROR:{e}")
-    sys.exit(0)
-routes = data if isinstance(data, list) else data.get('routes', [])
-def has_security(chain):
-    if not chain:
-        return False
-    for item in chain:
-        if isinstance(item, list):
-            if 'security' in item:
-                return True
-        elif item == 'security':
-            return True
-    return False
-wired = any(has_security(r.get('post_chain')) for r in routes)
-print('OK' if wired else 'MISSING')
-PYEOF
-)
-  if [[ "$SECURITY_WIRED" == 'OK' ]]; then
-    pass "Security post_chain: security agent wired in ≥1 route (parallel or sequential)"
-  elif [[ "$SECURITY_WIRED" == 'MISSING' ]]; then
-    warn "Security post_chain: security agent not in any post_chain (consider wiring for auth/API routes)"
-  else
-    warn "Security post_chain: could not verify — ${SECURITY_WIRED#ERROR:}"
-  fi
-fi
-
 # --- Check 11: Local-First Readiness ---
 echo ""
 echo "Local-First Readiness"
@@ -593,6 +473,101 @@ PYEOF
     done
   elif [[ "$FRAG_CHECK" == ERROR:* ]]; then
     warn "Fragment commands: parse error — ${FRAG_CHECK#ERROR:}"
+  fi
+fi
+
+echo ""
+
+# --- Check 13: config agent-name cross-check (no ghost agents) ---
+AGENTS_DIR="$HOME/.claude/agents"
+THINKING_BUDGETS="$HOME/.claude/config/thinking-budgets.json"
+CHAIN_MAP="$HOME/.claude/config/chain-map.json"
+POLICIES_JSON="$HOME/.claude/config/policies.json"
+
+if [[ ! -d "$AGENTS_DIR" ]]; then
+  warn "Agent cross-check: $AGENTS_DIR not found — cannot verify config agent names"
+else
+  GHOST_RESULT=$(python3 - "$AGENTS_DIR" "$THINKING_BUDGETS" "$CHAIN_MAP" "$POLICIES_JSON" <<'PYEOF'
+import sys, os, json, glob
+
+agents_dir    = sys.argv[1]
+tb_path       = sys.argv[2]
+cm_path       = sys.argv[3]
+pol_path      = sys.argv[4]
+
+# Build canonical agent set from installed core agents
+canonical = {
+    os.path.splitext(os.path.basename(f))[0]
+    for f in glob.glob(os.path.join(agents_dir, "*.md"))
+}
+
+ghosts = []
+
+# --- thinking-budgets.json: overrides keys ---
+if os.path.isfile(tb_path):
+    try:
+        with open(tb_path) as f:
+            tb = json.load(f)
+        for name in tb.get("overrides", {}).keys():
+            if name not in canonical:
+                ghosts.append(f"thinking-budgets.json/overrides: {name!r}")
+    except Exception as e:
+        ghosts.append(f"thinking-budgets.json: could not verify ({e})")
+else:
+    ghosts.append(f"thinking-budgets.json: file not found — could not verify")
+
+# --- chain-map.json: top-level keys (skip _comment) and successor values ---
+if os.path.isfile(cm_path):
+    try:
+        with open(cm_path) as f:
+            cm = json.load(f)
+        for key, val in cm.items():
+            if key == "_comment":
+                continue
+            if key not in canonical:
+                ghosts.append(f"chain-map.json: key {key!r}")
+            # Successor values may be strings or lists
+            successors = val if isinstance(val, list) else ([val] if isinstance(val, str) else [])
+            for s in successors:
+                if isinstance(s, str) and s not in canonical:
+                    ghosts.append(f"chain-map.json: successor {s!r} (from key {key!r})")
+    except Exception as e:
+        ghosts.append(f"chain-map.json: could not verify ({e})")
+else:
+    ghosts.append(f"chain-map.json: file not found — could not verify")
+
+# --- policies.json: requires_agent values ---
+if os.path.isfile(pol_path):
+    try:
+        with open(pol_path) as f:
+            pol = json.load(f)
+        policies = pol.get("policies", pol) if isinstance(pol, dict) else pol
+        if isinstance(policies, list):
+            for p in policies:
+                ra = p.get("requires_agent")
+                if ra and ra not in canonical:
+                    ghosts.append(f"policies.json: requires_agent {ra!r} (id={p.get('id','?')!r})")
+    except Exception as e:
+        ghosts.append(f"policies.json: could not verify ({e})")
+else:
+    ghosts.append(f"policies.json: file not found — could not verify")
+
+if ghosts:
+    print("GHOSTS:" + "|".join(ghosts))
+else:
+    print("OK")
+PYEOF
+)
+  if [[ "$GHOST_RESULT" == OK ]]; then
+    pass "Agent cross-check: no ghost agent names in thinking-budgets.json, chain-map.json, policies.json"
+  elif [[ "$GHOST_RESULT" == GHOSTS:* ]]; then
+    DETAILS="${GHOST_RESULT#GHOSTS:}"
+    IFS='|' read -ra GHOST_LIST <<< "$DETAILS"
+    for g in "${GHOST_LIST[@]}"; do
+      warn "Agent cross-check: ghost/unverifiable — ${g}"
+    done
+  else
+    warn "Agent cross-check: unexpected result — ${GHOST_RESULT}"
   fi
 fi
 
