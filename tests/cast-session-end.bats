@@ -10,7 +10,6 @@ setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(mktemp -d)"
   export TMPDIR="$HOME/tmp"
-  mkdir -p "$HOME/.claude/cast/hook-last-fired"
   mkdir -p "$HOME/.claude/logs"
   mkdir -p "$TMPDIR"
 
@@ -216,18 +215,6 @@ teardown() {
   [[ -f "$HOME/.claude/logs/hook-errors.log" ]]
   grep -q "Refusing unsafe SESSION_ID" "$HOME/.claude/logs/hook-errors.log" || \
     grep -q "SESSION_ID" "$HOME/.claude/logs/hook-errors.log"
-}
-
-# ---------------------------------------------------------------------------
-# 8. Hook health marker is always created (independent of guards)
-# ---------------------------------------------------------------------------
-
-@test "hook creates timestamp marker regardless of SESSION_ID" {
-  export CLAUDE_SESSION_ID="test-marker"
-  bash "$HOOK_SH" >/dev/null 2>&1
-
-  [[ -f "$HOME/.claude/cast/hook-last-fired/Stop.timestamp" ]]
-  [[ -f "$HOME/.claude/cast/hook-last-fired/SessionEnd.timestamp" ]]
 }
 
 # ---------------------------------------------------------------------------

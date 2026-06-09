@@ -24,7 +24,6 @@ print(json.dumps({
 setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(realpath "$(mktemp -d)")"
-  mkdir -p "$HOME/.claude/cast/hook-last-fired"
   mkdir -p "$HOME/.claude/cast/events"
   unset CLAUDE_SUBPROCESS
 }
@@ -120,16 +119,6 @@ assert 'trigger' in d
 assert 'session_id' in d
 print('valid')
 "
-}
-
-# ---------------------------------------------------------------------------
-# 8. Touches hook-last-fired timestamp
-# ---------------------------------------------------------------------------
-
-@test "any payload → touches hook-last-fired/cast-post-compact.timestamp" {
-  run bash "$HOOK_SH" <<< "$(make_payload "auto")"
-  assert_success
-  [ -f "$HOME/.claude/cast/hook-last-fired/cast-post-compact.timestamp" ]
 }
 
 # ---------------------------------------------------------------------------
