@@ -8,7 +8,7 @@ tools: Read, Write, Bash, Glob, Grep, WebFetch, WebSearch
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 30
-skills: [cast-conventions]
+skills: [cast-conventions, stack-reference]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 8192
 ---

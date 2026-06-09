@@ -4,7 +4,7 @@ Codifies the test → CI-safety-check → commit → push → journal loop.
 
 ## Steps
 
-1. **Run full test suite** — for CAST repos: `bats tests/ | tail -20`. For Node repos: `npm test`. Abort if any test fails. Do NOT proceed to commit if tests are red.
+1. **Run full test suite** — for CAST repos: `bash tests/run.sh` (isolated temp HOME — NEVER `bats tests/` on real $HOME). For Node repos: `npm test`. Abort if any test fails. Do NOT proceed to commit if tests are red.
 
 2. **Pre-push CI sanity check** — run `bash ~/.claude/scripts/pre-push-ci-check.sh` and review output. Fix any findings before pushing. The script checks for:
    - Hardcoded `/Users/` absolute paths in test files
