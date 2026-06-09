@@ -2,6 +2,10 @@ Review code changes with size-appropriate strategy.
 
 $ARGUMENTS
 
+## PR Routing (check before scope sizing)
+
+If `$ARGUMENTS` references a pull request (a PR number like #123, a PR URL, or an explicit request to review a whole PR end-to-end), dispatch the `pr-reviewer` agent (holistic: full multi-commit diff, commit-message coherence, scope creep, breaking-change surface) and SKIP the size-based buckets below.
+
 ## Step 1: Determine Scope
 
 If no specific files are mentioned, run:
@@ -29,9 +33,11 @@ Dispatch **parallel specialized reviews** using agent teams:
 |-------|-----------|
 | `code-reviewer` | Readability, duplication, conventions |
 | `security` | OWASP top 10, secrets, injection, XSS |
-| `qa-reviewer` | Functional correctness, edge cases, regression risk |
+| `frontend-qa` | React/TS correctness, prop typing, a11y — ONLY if the diff contains .tsx/.ts files; skip otherwise |
 
-After all three complete, synthesize findings:
+Note: there is no general-purpose functional-QA agent for non-frontend code; for backend/shell, code-reviewer + security cover the large bucket.
+
+After all complete, synthesize findings:
 - Deduplicate overlapping issues
 - Prioritize: Critical → Warning → Suggestion
 - Present a unified review summary
