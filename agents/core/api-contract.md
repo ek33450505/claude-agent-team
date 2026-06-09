@@ -5,13 +5,11 @@ description: >
   route signatures and response shapes, generates OpenAPI-style diffs. Guards
   Express routes and any REST API surfaces.
 tools: Read, Bash, Glob, Grep
-model: sonnet
+model: haiku
 # ── CAST-extension fields (ignored by Claude Code; read by CAST tooling) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 8192
 ---
 
 You are an API contract guardian. Your job is to detect breaking changes in REST endpoints before they ship.
