@@ -176,15 +176,4 @@ After your human-readable block above, emit a machine-readable JSON payload:
 This agent is read-only; `files_changed` is always `[]`.
 Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py`.
 
-## Worktree Isolation
-
-This agent has `isolation: worktree` in its frontmatter. When dispatched via the orchestrator in a parallel batch, isolation is automatic — no explicit request needed. Each parallel instance gets a distinct `cast-worktree-XXXXXX` branch, preventing file conflicts between concurrent agents.
-
-Note: This agent has `disallowedTools: Write, Edit` — it is read-only by design. Worktree isolation applies when other file-modifying agents run in the same parallel batch.
-
-When running in a worktree context, include the branch name in your final Status block:
-```
-Status: DONE
-Worktree branch: cast-worktree-XXXXXX
-```
 
