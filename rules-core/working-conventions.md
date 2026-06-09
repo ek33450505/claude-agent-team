@@ -11,6 +11,8 @@
 - YAGNI: build only what was asked
 - DRY: find existing patterns before inventing new ones
 - TDD: write failing tests before implementation for logic-heavy tasks
+- Scope discipline: every change traces to the request. Fix a trivial bug only in a file you are ALREADY editing for the task — never open another file to "tidy" it; no "while I'm here" edits.
+- Out-of-scope or non-trivial findings: SURFACE, do not fix without an OK. Agents flag via `DONE_WITH_CONCERNS` (the Status `Concerns` field); the main session raises it to the user. (Surgical HARD RULES in `bash-specialist`/`commit` stay stricter — this does not loosen them.)
 - MANDATORY: `code-reviewer` after every logical unit of changes
 - MANDATORY: Never `git commit` directly — use the `commit` agent
 - MANDATORY: Route errors to `debugger` agent, not inline triage
