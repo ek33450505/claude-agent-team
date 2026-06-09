@@ -1,7 +1,13 @@
 {
-  "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-03-26.",
-  "_note": "Cloud costs reflect Anthropic published pricing.",
+  "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-06-09.",
+  "_note": "Cloud costs reflect Anthropic published pricing. _default is used when a model id is not in the table (approximate-but-nonzero).",
   "models": {
+    "_default": {
+      "cost_per_million_input": 3.00,
+      "cost_per_million_output": 15.00,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
     "claude-opus-4-5": {
       "cost_per_million_input": 15.00,
       "cost_per_million_output": 75.00,
@@ -33,6 +39,12 @@
       "provider": "anthropic"
     },
     "claude-opus-4-6": {
+      "cost_per_million_input": 15.00,
+      "cost_per_million_output": 75.00,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-opus-4-8": {
       "cost_per_million_input": 15.00,
       "cost_per_million_output": 75.00,
       "tier": "cloud",
