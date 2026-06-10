@@ -100,8 +100,21 @@ When the signal IS present:
 gh pr merge <number> --squash --delete-branch
 ```
 
-Emit `Status: DONE` with the merged SHA and confirmation that the branch was deleted.
+`--delete-branch` deletes the **remote** branch only. After a successful merge, also delete the **local** branch:
+
+```bash
+# Confirm merge succeeded (gh pr merge exits 0) before deleting locally.
+# Never delete the currently-checked-out branch.
+git checkout main
+git branch -d <headRefName>
+```
+
+Only run `git branch -d` after `gh pr merge` exits 0. If the local branch is not present (already pruned), that is not an error — skip silently.
+
+Emit `Status: DONE` with the merged SHA and confirmation that both the remote and local branches were deleted.
 On failure, emit `Status: BLOCKED` with the gh error verbatim.
+
+> **Note for install:** this file lives in `agents/core/merge.md`. Run `bash install.sh` to propagate to `~/.claude/agents/merge.md`.
 
 ## Secondary Workflow — Direct Invocation (local merge/rebase)
 
