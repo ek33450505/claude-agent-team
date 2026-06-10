@@ -31,8 +31,35 @@ mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
 
 CAST_DIR="${HOME}/.claude/cast"
-SESSION_ID="${CLAUDE_SESSION_ID:-default}"
 CAST_SCRIPTS_DIR="${HOME}/.claude/scripts"
+
+# === SESSION_ID RESOLUTION ===
+# Priority: (1) stdin JSON session_id, (2) CAST_SESSION_ID env (set by start-hook via CLAUDE_ENV_FILE),
+# (3) CLAUDE_SESSION_ID env, (4) literal 'default'.
+# This mirrors cast-session-start-hook.sh which reads session_id from stdin JSON and
+# exports CAST_SESSION_ID — using CLAUDE_SESSION_ID alone missed all workflow-dispatched sessions.
+_INPUT="$(cat 2>/dev/null || true)"
+_STDIN_SESSION_ID="$(CAST_INPUT="${_INPUT}" python3 -c "
+import json, os, sys
+raw = os.environ.get('CAST_INPUT', '')
+try:
+    d = json.loads(raw)
+    v = d.get('session_id', '')
+    if v:
+        print(v)
+except Exception:
+    pass
+" 2>/dev/null || true)"
+
+if [[ -n "${_STDIN_SESSION_ID:-}" ]]; then
+  SESSION_ID="${_STDIN_SESSION_ID}"
+elif [[ -n "${CAST_SESSION_ID:-}" ]]; then
+  SESSION_ID="${CAST_SESSION_ID}"
+elif [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
+  SESSION_ID="${CLAUDE_SESSION_ID}"
+else
+  SESSION_ID="default"
+fi
 
 # === SESSION_ID SAFETY GUARD ===
 # Reject any SESSION_ID that contains characters outside [a-zA-Z0-9_-] to prevent
@@ -172,7 +199,7 @@ archive_category() {
 ) &
 
 # === UPDATE sessions.ended_at + FINAL COST CAPTURE ===
-DB="${CLAUDE_DIR}/cast.db"
+DB="${CAST_DB_PATH:-${CLAUDE_DIR}/cast.db}"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   sqlite3 "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}', status = 'ended' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   started_at TEXT NOT NULL,
   ended_at TEXT,
+  status TEXT,
   project TEXT,
   total_input_tokens INTEGER DEFAULT 0,
   total_output_tokens INTEGER DEFAULT 0,
@@ -227,4 +228,91 @@ teardown() {
 
   # Hook must always exit 0 (never blocks)
   assert_success
+}
+
+# ---------------------------------------------------------------------------
+# Regression: Bug 2 — sessions.ended_at 100% NULL (session_id mismatch)
+# (was: hook read CLAUDE_SESSION_ID only; start-hook exports CAST_SESSION_ID)
+# ---------------------------------------------------------------------------
+
+@test "session_id from stdin JSON populates sessions.ended_at (Bug 2 fix)" {
+  local session_uuid="test-stdin-uuid-${BATS_TEST_NUMBER}"
+
+  # Pre-insert the session row with no ended_at
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO sessions (id, started_at) VALUES ('${session_uuid}', datetime('now'));"
+
+  # Pipe the stdin JSON payload (as the real hook receives it)
+  run bash "$HOOK_SH" <<< "{\"session_id\":\"${session_uuid}\"}"
+  assert_success
+
+  # ended_at must now be set
+  local ended_at
+  ended_at="$(sqlite3 "$TEST_DB" "SELECT ended_at FROM sessions WHERE id='${session_uuid}';" 2>/dev/null || echo "")"
+  [[ -n "$ended_at" ]]
+}
+
+@test "CAST_SESSION_ID env fallback populates sessions.ended_at when no stdin" {
+  local session_uuid="test-cast-env-uuid-${BATS_TEST_NUMBER}"
+
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO sessions (id, started_at) VALUES ('${session_uuid}', datetime('now'));"
+
+  # No stdin; CAST_SESSION_ID is set (as start-hook exports it)
+  export CAST_SESSION_ID="$session_uuid"
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+
+  local ended_at
+  ended_at="$(sqlite3 "$TEST_DB" "SELECT ended_at FROM sessions WHERE id='${session_uuid}';" 2>/dev/null || echo "")"
+  [[ -n "$ended_at" ]]
+  unset CAST_SESSION_ID
+}
+
+@test "stdin JSON session_id takes priority over CAST_SESSION_ID env" {
+  local stdin_uuid="test-priority-stdin-${BATS_TEST_NUMBER}"
+  local env_uuid="test-priority-env-${BATS_TEST_NUMBER}"
+
+  # Insert both rows; only the stdin one should get ended_at
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO sessions (id, started_at) VALUES ('${stdin_uuid}', datetime('now'));"
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO sessions (id, started_at) VALUES ('${env_uuid}', datetime('now'));"
+
+  export CAST_SESSION_ID="$env_uuid"
+  run bash "$HOOK_SH" <<< "{\"session_id\":\"${stdin_uuid}\"}"
+  assert_success
+
+  # stdin_uuid row must have ended_at
+  local ended_stdin
+  ended_stdin="$(sqlite3 "$TEST_DB" "SELECT ended_at FROM sessions WHERE id='${stdin_uuid}';" 2>/dev/null || echo "")"
+  [[ -n "$ended_stdin" ]]
+
+  # env_uuid row must NOT have ended_at (stdin took priority)
+  local ended_env
+  ended_env="$(sqlite3 "$TEST_DB" "SELECT ended_at FROM sessions WHERE id='${env_uuid}';" 2>/dev/null || echo "null")"
+  [[ -z "$ended_env" ]] || [[ "$ended_env" == "null" ]]
+  unset CAST_SESSION_ID
+}
+
+@test "old CLAUDE_SESSION_ID-only resolution fails to update row (demonstrates pre-fix behavior)" {
+  # This test documents that CLAUDE_SESSION_ID alone does NOT match the
+  # session_id written by the start-hook (which uses stdin JSON + CAST_SESSION_ID).
+  # With the fix in place this test confirms the OLD path is NOT the primary path.
+  local real_uuid="real-session-${BATS_TEST_NUMBER}"
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO sessions (id, started_at) VALUES ('${real_uuid}', datetime('now'));"
+
+  # Set CLAUDE_SESSION_ID to a DIFFERENT value (simulates the pre-fix mismatch)
+  export CLAUDE_SESSION_ID="wrong-session-id-${BATS_TEST_NUMBER}"
+  # No stdin and no CAST_SESSION_ID — so only CLAUDE_SESSION_ID is available
+  unset CAST_SESSION_ID
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+
+  # The real row must NOT have ended_at (CLAUDE_SESSION_ID didn't match)
+  local ended_at
+  ended_at="$(sqlite3 "$TEST_DB" "SELECT ended_at FROM sessions WHERE id='${real_uuid}';" 2>/dev/null || echo "")"
+  [[ -z "$ended_at" ]]
+  unset CLAUDE_SESSION_ID
 }

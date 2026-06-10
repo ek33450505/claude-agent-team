@@ -338,3 +338,92 @@ Summary: task completed successfully"
   assert_success
   assert_output --partial "[CAST-TRUNCATED]"
 }
+
+# ---------------------------------------------------------------------------
+# Regression: Bug 1 — recursive glob finds workflow-nested transcripts
+# (was: flat glob returned 0 matches for workflow/orchestrator-dispatched agents)
+# ---------------------------------------------------------------------------
+
+@test "transcript glob: flat path still resolves (non-recursive path unbroken)" {
+  # Create a flat transcript at the traditional location
+  local session_dir="$HOME/.claude/projects/proj/${BATS_TEST_NUMBER}-sess"
+  mkdir -p "$session_dir/subagents"
+  local agent_id="agent-flat-regression-001"
+  local transcript="$session_dir/subagents/agent-${agent_id}.jsonl"
+  echo '{}' > "$transcript"
+
+  result="$(CAST_STOP_AGENT_ID="$agent_id" CAST_STOP_SESSION="${BATS_TEST_NUMBER}-sess" python3 -c "
+import glob, os, sys
+agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
+session_id = os.environ.get('CAST_STOP_SESSION', '')
+if not agent_id or not session_id:
+    sys.exit(1)
+pattern = os.path.expanduser(f'~/.claude/projects/*/{session_id}/subagents/**/agent-{agent_id}.jsonl')
+matches = glob.glob(pattern, recursive=True)
+if matches:
+    print(max(matches, key=os.path.getmtime))
+")"
+  [[ "$result" == "$transcript" ]]
+}
+
+@test "transcript glob: workflow-nested path resolves with recursive=True (Bug 1 fix)" {
+  # Create a workflow-nested transcript (the path that previously returned 0 matches)
+  local session_id="wf-regression-sess-${BATS_TEST_NUMBER}"
+  local agent_id="agent-wf-regression-${BATS_TEST_NUMBER}"
+  local nested_dir="$HOME/.claude/projects/proj/$session_id/subagents/workflows/wf_abc123def"
+  mkdir -p "$nested_dir"
+  local transcript="$nested_dir/agent-${agent_id}.jsonl"
+  echo '{}' > "$transcript"
+
+  # OLD pattern (non-recursive) — must return 0 matches
+  old_count="$(CAST_STOP_AGENT_ID="$agent_id" CAST_STOP_SESSION="$session_id" python3 -c "
+import glob, os
+agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
+session_id = os.environ.get('CAST_STOP_SESSION', '')
+pattern = os.path.expanduser(f'~/.claude/projects/*/{session_id}/subagents/agent-{agent_id}.jsonl')
+print(len(glob.glob(pattern)))
+")"
+  [[ "$old_count" -eq 0 ]]
+
+  # NEW pattern (recursive) — must return 1 match
+  new_result="$(CAST_STOP_AGENT_ID="$agent_id" CAST_STOP_SESSION="$session_id" python3 -c "
+import glob, os
+agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
+session_id = os.environ.get('CAST_STOP_SESSION', '')
+pattern = os.path.expanduser(f'~/.claude/projects/*/{session_id}/subagents/**/agent-{agent_id}.jsonl')
+matches = glob.glob(pattern, recursive=True)
+if matches:
+    print(max(matches, key=os.path.getmtime))
+")"
+  [[ "$new_result" == "$transcript" ]]
+}
+
+@test "transcript glob: tiebreak selects newest by mtime when multiple matches exist" {
+  local session_id="mtime-sess-${BATS_TEST_NUMBER}"
+  local agent_id="agent-mtime-${BATS_TEST_NUMBER}"
+
+  # Create two matches — flat and nested
+  local flat_dir="$HOME/.claude/projects/proj/$session_id/subagents"
+  local nested_dir="$HOME/.claude/projects/proj/$session_id/subagents/workflows/wf_xyz"
+  mkdir -p "$flat_dir" "$nested_dir"
+
+  local flat_transcript="$flat_dir/agent-${agent_id}.jsonl"
+  local nested_transcript="$nested_dir/agent-${agent_id}.jsonl"
+
+  # Write flat first, then nested (nested is newer)
+  echo '{}' > "$flat_transcript"
+  sleep 0.05
+  echo '{}' > "$nested_transcript"
+
+  result="$(CAST_STOP_AGENT_ID="$agent_id" CAST_STOP_SESSION="$session_id" python3 -c "
+import glob, os
+agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
+session_id = os.environ.get('CAST_STOP_SESSION', '')
+pattern = os.path.expanduser(f'~/.claude/projects/*/{session_id}/subagents/**/agent-{agent_id}.jsonl')
+matches = glob.glob(pattern, recursive=True)
+if matches:
+    print(max(matches, key=os.path.getmtime))
+")"
+  # Should pick the newest (nested)
+  [[ "$result" == "$nested_transcript" ]]
+}

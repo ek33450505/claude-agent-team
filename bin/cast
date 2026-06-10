@@ -1898,6 +1898,45 @@ except Exception:
     printf "%b Homebrew taps: gh not available — skipping advisory\n" "$INFO"
   fi
 
+  # 21. Tool-call failures (last 7d) — collected-but-read surface
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "${C_BOLD}Tool-call failures (last 7d)${C_RESET}\n"
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    printf "%b tool_call_failures: cast.db unavailable (sqlite3 not found)\n" "$INFO"
+  else
+    local _tcf_count_out _tcf_count_rc
+    _tcf_count_out="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COUNT(*) FROM tool_call_failures \
+       WHERE timestamp >= datetime('now','-7 days');" 2>&1)"
+    _tcf_count_rc=$?
+    if echo "$_tcf_count_out" | grep -qi "no such table"; then
+      printf "%b tool_call_failures: table absent — no data yet\n" "$INFO"
+    elif [ $_tcf_count_rc -ne 0 ]; then
+      printf "%b tool_call_failures: unavailable (db query failed)\n" "$INFO"
+    else
+      local _tcf_count="${_tcf_count_out:-0}"
+      local _tcf_recent_out
+      _tcf_recent_out="$(sqlite3 "$CAST_DB_PATH" \
+        "SELECT tool_name, error, timestamp \
+         FROM tool_call_failures \
+         ORDER BY timestamp DESC LIMIT 1;" 2>/dev/null || true)"
+      if [ "${_tcf_count:-0}" -eq 0 ]; then
+        printf "%b tool_call_failures: no failures in last 7d\n" "$INFO"
+      else
+        if [[ -n "$_tcf_recent_out" ]]; then
+          local _tcf_tool _tcf_err _tcf_ts
+          IFS='|' read -r _tcf_tool _tcf_err _tcf_ts <<< "$_tcf_recent_out"
+          # Truncate error to first 80 chars
+          _tcf_err="${_tcf_err:0:80}"
+          printf "%b tool_call_failures (last 7d): %d  ·  most recent: %s — %s (%s)\n" \
+            "$WARN" "$_tcf_count" "$_tcf_tool" "$_tcf_err" "$_tcf_ts"
+        else
+          printf "%b tool_call_failures (last 7d): %d\n" "$WARN" "$_tcf_count"
+        fi
+      fi
+    fi
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then

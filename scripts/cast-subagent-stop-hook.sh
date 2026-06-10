@@ -255,17 +255,19 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
   # Prefer agent_transcript_path from payload; else glob by session_id + agent_id.
   CAST_STOP_TRANSCRIPT_PATH=""
   if [ -n "$AGENT_ID" ] && [ -n "$SESSION_ID" ]; then
-    # Try glob: ~/.claude/projects/*/<session_id>/subagents/agent-<agent_id>.jsonl
+    # Try recursive glob: covers flat AND workflow-nested paths
+    # Flat:   ~/.claude/projects/*/<session_id>/subagents/agent-<agent_id>.jsonl
+    # Nested: ~/.claude/projects/*/<session_id>/subagents/workflows/wf_*/agent-<agent_id>.jsonl
     CAST_STOP_TRANSCRIPT_PATH="$(python3 -c "
 import glob, os, sys
 agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
 session_id = os.environ.get('CAST_STOP_SESSION', '')
 if not agent_id or not session_id:
     sys.exit(0)
-pattern = os.path.expanduser(f'~/.claude/projects/*/{session_id}/subagents/agent-{agent_id}.jsonl')
-matches = glob.glob(pattern)
+pattern = os.path.expanduser(f'~/.claude/projects/*/{session_id}/subagents/**/agent-{agent_id}.jsonl')
+matches = glob.glob(pattern, recursive=True)
 if matches:
-    print(matches[0])
+    print(max(matches, key=os.path.getmtime))
 " 2>/dev/null || echo "")"
   fi
   export CAST_STOP_TRANSCRIPT_PATH
