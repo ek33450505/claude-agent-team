@@ -352,7 +352,7 @@ fi
 # Encryption: is age installed? Memory file state?
 if command -v age >/dev/null 2>&1; then
   MEMORY_DIR="$HOME/.claude/agent-memory-local"
-  AGE_COUNT=$(find "$MEMORY_DIR" -name "*.age" -type f 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+  AGE_COUNT=$(find "$MEMORY_DIR" -name "*.age" -type f 2>/dev/null | wc -l | tr -d '[:space:]' || echo 0)
   if [[ "$AGE_COUNT" -gt 0 ]]; then
     pass "Encryption: age installed, $AGE_COUNT encrypted memory file(s)"
   else
@@ -514,7 +514,7 @@ if os.path.isfile(tb_path):
     except Exception as e:
         ghosts.append(f"thinking-budgets.json: could not verify ({e})")
 else:
-    ghosts.append(f"thinking-budgets.json: file not found — could not verify")
+    pass  # Optional file — absence is OK, nothing to cross-check
 
 # --- chain-map.json: top-level keys (skip _comment) and successor values ---
 if os.path.isfile(cm_path):
@@ -534,7 +534,7 @@ if os.path.isfile(cm_path):
     except Exception as e:
         ghosts.append(f"chain-map.json: could not verify ({e})")
 else:
-    ghosts.append(f"chain-map.json: file not found — could not verify")
+    pass  # Optional file — absence is OK, nothing to cross-check
 
 # --- policies.json: requires_agent values ---
 if os.path.isfile(pol_path):
@@ -550,7 +550,7 @@ if os.path.isfile(pol_path):
     except Exception as e:
         ghosts.append(f"policies.json: could not verify ({e})")
 else:
-    ghosts.append(f"policies.json: file not found — could not verify")
+    pass  # Optional file — absence is OK, nothing to cross-check
 
 if ghosts:
     print("GHOSTS:" + "|".join(ghosts))

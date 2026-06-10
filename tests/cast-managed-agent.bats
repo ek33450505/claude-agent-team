@@ -103,6 +103,23 @@ EOF
   [ -n "$output" ]
 }
 
+@test "success path 200 (full flow) → stdout is non-empty without relying on stderr" {
+  # Regression test for Phase 6b utcnow→timezone-aware fix:
+  # Prior to the script fix, the only output was a Python DeprecationWarning on stderr
+  # (from datetime.utcnow()). BATS `run` captures both streams into $output, so the
+  # test appeared to pass. After removing utcnow() the warning disappeared and $output
+  # became empty. The script must emit real stdout content on the streaming success path.
+  export ANTHROPIC_API_KEY="test-key-12345"
+  cat > "${BATS_TMPDIR}/curl-response.json" <<'EOF'
+{"id":"agent_test123","type":"agent"}
+EOF
+  run bash "$SHIM" test-agent "do something"
+  assert_success
+  # Capture stdout only (not stderr) to verify real stdout output exists
+  stdout_only="$(bash "$SHIM" test-agent "do something" 2>/dev/null)"
+  [ -n "$stdout_only" ]
+}
+
 @test "--define-only mode → exits 0" {
   export ANTHROPIC_API_KEY="test-key-12345"
   cat > "${BATS_TMPDIR}/curl-response.json" <<'EOF'

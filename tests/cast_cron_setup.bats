@@ -5,7 +5,6 @@
 #   (a) make_cron_line produces a crontab entry that references a script file,
 #       NOT an inline -p prompt
 #   (b) the generated script file exists and is executable after install
-#   (c) the pa-backup rsync command contains --exclude="cast.db"
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -98,51 +97,18 @@ teardown() {
   assert [ -x "${HOME}/.cast/cron/morning.sh" ]
 }
 
-@test "install: generates pa-backup.sh script file" {
-  run bash "$CRON_SH"
-  assert_success
-  assert [ -f "${HOME}/.cast/cron/pa-backup.sh" ]
-}
-
 @test "install: generates tidy.sh script file" {
   run bash "$CRON_SH"
   assert_success
   assert [ -f "${HOME}/.cast/cron/tidy.sh" ]
 }
 
-@test "install: all 8 cron script files are generated" {
+@test "install: all 7 cron script files are generated" {
   run bash "$CRON_SH"
   assert_success
   local count
   count=$(ls "${HOME}/.cast/cron/"*.sh 2>/dev/null | wc -l | tr -d ' ')
-  [ "$count" -eq 8 ]
-}
-
-# ---------------------------------------------------------------------------
-# (c) pa-backup rsync command contains --exclude="cast.db"
-# ---------------------------------------------------------------------------
-
-@test "pa-backup.sh: rsync includes --exclude=cast.db" {
-  run bash "$CRON_SH"
-  assert_success
-  run grep -F 'cast.db' "${HOME}/.cast/cron/pa-backup.sh"
-  assert_success
-  assert_output --partial '--exclude="cast.db"'
-}
-
-@test "pa-backup.sh: does not contain any hardcoded /Users/ path" {
-  run bash "$CRON_SH"
-  assert_success
-  run grep -E '/Users/[a-zA-Z]' "${HOME}/.cast/cron/pa-backup.sh"
-  # grep returns 1 when no match found — we want no match
-  assert_failure
-}
-
-@test "pa-backup.sh: uses \${HOME} for backup destination" {
-  run bash "$CRON_SH"
-  assert_success
-  run grep -F '${HOME}/Backups' "${HOME}/.cast/cron/pa-backup.sh"
-  assert_success
+  [ "$count" -eq 7 ]
 }
 
 # ---------------------------------------------------------------------------
