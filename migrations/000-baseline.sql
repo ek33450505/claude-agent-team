@@ -1,2 +1,0 @@
--- Baseline marker: migrations 001-010 are implicit (the existing schema as it stood before formal migrations existed).
--- This file does not execute; it is recorded as applied on first run via the migration runner to document the schema starting point.

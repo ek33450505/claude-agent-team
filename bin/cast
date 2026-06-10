@@ -1414,21 +1414,35 @@ PYEOF
   fi
 
   # 8. Database migrations
-  local migrate_script="${CAST_SCRIPTS_DIR}/cast-migrate.sh"
+  local migrate_script="${CAST_SCRIPTS_DIR}/cast-migrate.py"
   if [ ! -f "$migrate_script" ]; then
-    migrate_script="${CAST_REPO_DIR}/scripts/cast-migrate.sh"
+    migrate_script="${CAST_REPO_DIR}/scripts/cast-migrate.py"
   fi
   if [ -f "$migrate_script" ]; then
     local migration_output
-    migration_output=$(bash "$migrate_script" 2>&1 || true)
+    migration_output=$(python3 "$migrate_script" 2>&1 || true)
     local applied_count
-    applied_count=$(echo "$migration_output" | grep -c "^\[migrate\] applied" 2>/dev/null)
+    applied_count=$(echo "$migration_output" | grep -c "^\[cast-migrate\].*[0-9]* applied" 2>/dev/null || echo 0)
     applied_count=${applied_count:-0}
     local total_count
     total_count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
-    printf "%b Migrations: %d applied this run, %d total recorded\n" "$INFO" "$applied_count" "$total_count"
+    # Count migration files on disk to detect empty-ledger-with-files condition
+    local migrations_dir="${CAST_SCRIPTS_DIR}/migrations"
+    local files_on_disk=0
+    if [ -d "$migrations_dir" ]; then
+      files_on_disk=$(find "$migrations_dir" -maxdepth 1 -name '[0-9]*_*.sql' | wc -l | tr -d ' ')
+    fi
+    if [ "$total_count" -eq 0 ] && [ "$files_on_disk" -gt 0 ]; then
+      printf "%b Migrations: ledger empty (%d files on disk) — run: cast migrate\n" "$WARN" "$files_on_disk"
+      overall_ok=0
+    elif [ "$applied_count" -gt 0 ]; then
+      printf "%b Migrations: %d applied this run, %d total recorded\n" "$OK" "$applied_count" "$total_count"
+    else
+      printf "%b Migrations: up to date (%d recorded)\n" "$OK" "$total_count"
+    fi
   else
-    printf "%b Migrations: script not found\n" "$WARN"
+    printf "%b Migrations: cast-migrate.py not found — run: bash install.sh\n" "$WARN"
+    overall_ok=0
   fi
 
   # 9. Stale auto-memory check

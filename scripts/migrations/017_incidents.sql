@@ -1,3 +1,6 @@
+-- Migration 017: incidents table.
+-- Previously in repo-root migrations/011-incidents.sql (read by neither installed path).
+
 CREATE TABLE IF NOT EXISTS incidents (
   id TEXT PRIMARY KEY,
   occurred_at TEXT NOT NULL,

@@ -9,8 +9,8 @@
 #
 # SINGLE SOURCE OF TRUTH: this script (its fresh-install CREATEs plus the
 # unconditional self-healing block at the bottom) is the authoritative definition
-# of the cast.db schema. The migration runners (cast-migrate.sh / cast-migrate.py)
-# are secondary and do not run reliably at install time, so any table or column a
+# of the cast.db schema. The migration runner (cast-migrate.py)
+# is secondary and does not run reliably at install time, so any table or column a
 # writer depends on MUST be provisioned here — not only in a migration file.
 #
 # KNOWN ORGANIC SCHEMA ADDITIONS (live DB may contain unprovisionable tables):
@@ -1013,8 +1013,8 @@ WORKTREE_ANOMALIES_TABLE
   _columns_added=1
 fi
 
-# schema_migrations: the migration ledger. Canonical shape shared by cast-migrate.sh
-# and cast-migrate.py. Provisioned here so it always exists even though the migration
+# schema_migrations: the migration ledger. Canonical shape — cast-migrate.py is the
+# single runner. Provisioned here so it always exists even though the migration
 # runners are now redundant (init provisions all schema directly — see header).
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "schema_migrations"; then
   sqlite3 "$DB_PATH" <<'SCHEMA_MIGRATIONS_TABLE'
