@@ -46,17 +46,6 @@
             "async": true
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-budget-alert.sh",
-            "if": "Bash|Edit|Write|Agent",
-            "timeout": 3,
-            "async": true
-          }
-        ]
       }
     ],
     "InstructionsLoaded": [

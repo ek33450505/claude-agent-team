@@ -1,20 +1,20 @@
 #!/bin/bash
 # cast-budget-alert.sh — CAST budget guard hook
-# Called after cast-cost-tracker.sh updates the DB.
-# Reads today's total spend from sessions table and compares against
-# budgets table (scope='global', period='daily').
+# Wired as a SubagentStop hook, running AFTER cast-subagent-stop-hook.sh which writes
+# cost_usd to agent_runs. Reads the daily SUM(cost_usd) from agent_runs and warns
+# at most once per calendar day if today's spend exceeds the configured budget threshold.
 #
-# Outputs:
+# Outputs (to stdout as hookSpecificOutput JSON):
 #   [CAST-BUDGET-WARN]       — when spend >= alert_at_pct of limit
 #   [CAST-BUDGET-HARD-LIMIT] — when spend >= limit (route only to local models)
 #
-# Silent on error or when no budget is configured.
+# Silent on error, when no budget is configured, or when today's alert already fired.
 # Never blocks Claude Code (exits 0 always).
 
-set -euo pipefail
-
-# Skip per-subagent invocation — budget alerting is a session-level concern, not per-subprocess
+# Subprocess guard must come before set -euo pipefail
 if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
+
+set -euo pipefail
 
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 
@@ -23,14 +23,25 @@ if [ ! -f "$DB_PATH" ]; then
   exit 0
 fi
 
+# Once-per-day dedup: skip if today's alert marker already exists
+CAST_STATE_DIR="${HOME}/.claude/cast"
+ALERT_MARKER="${CAST_STATE_DIR}/budget-alert-$(date -u +%Y%m%d).flag"
+if [ -f "$ALERT_MARKER" ]; then
+  exit 0
+fi
+
 DB_PATH_VAL="$DB_PATH" \
 CLAUDE_SESSION_ID_VAL="${CLAUDE_SESSION_ID:-unknown}" \
+ALERT_MARKER_VAL="$ALERT_MARKER" \
+CAST_STATE_DIR_VAL="$CAST_STATE_DIR" \
 python3 - <<'PYEOF' 2>/dev/null || true
 
 import json, os, sys, sqlite3, datetime
 
-db_path    = os.environ.get('DB_PATH_VAL', '')
-session_id = os.environ.get('CLAUDE_SESSION_ID_VAL', 'unknown')
+db_path       = os.environ.get('DB_PATH_VAL', '')
+session_id    = os.environ.get('CLAUDE_SESSION_ID_VAL', 'unknown')
+alert_marker  = os.environ.get('ALERT_MARKER_VAL', '')
+state_dir     = os.environ.get('CAST_STATE_DIR_VAL', '')
 
 if not db_path or not os.path.exists(db_path):
     sys.exit(0)
@@ -103,9 +114,34 @@ try:
     else:
         sys.exit(0)
 
+    # Atomically claim today's alert slot (O_EXCL = exactly one winner per day).
+    # Concurrent SubagentStop hooks both passing the bash fast-path race here instead.
+    if alert_marker and state_dir:
+        try:
+            os.makedirs(state_dir, exist_ok=True)
+            fd = os.open(alert_marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+        except FileExistsError:
+            sys.exit(0)   # another concurrent hook already claimed today's alert — stay silent
+        except Exception:
+            pass          # marker dir unwritable etc. — degrade gracefully, still allow the alert
+
+        # Opportunistically remove stale markers from prior days (best-effort; never breaks hook)
+        try:
+            import glob
+            today_flag = os.path.basename(alert_marker)
+            for stale in glob.glob(os.path.join(state_dir, 'budget-alert-*.flag')):
+                if os.path.basename(stale) != today_flag:
+                    try:
+                        os.remove(stale)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     output = {
         'hookSpecificOutput': {
-            'hookEventName': 'PostToolUse',
+            'hookEventName': 'SubagentStop',
             'additionalContext': msg
         }
     }
