@@ -39,6 +39,7 @@ ALLOWED_TABLES = {
     'tool_call_failures',
     'swarm_sessions',
     'task_queue',
+    'managed_agent_invocations',
     'teammate_messages',
     'teammate_runs',
     'unstaged_warnings',

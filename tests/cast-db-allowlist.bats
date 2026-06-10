@@ -108,6 +108,29 @@ PYEOF
 # 3. Return contract: db_write truthy on success, falsy on disallowed path
 # ---------------------------------------------------------------------------
 
+@test "allowlist: managed_agent_invocations is in ALLOWED_TABLES and db_write succeeds" {
+  # Regression: managed_agent_invocations was written by cast-managed-agent.sh but not
+  # in ALLOWED_TABLES, so writes silently no-op'd. Verify it is now allowlisted and
+  # a db_write to a temp schema-initialized DB succeeds.
+  run python3 - <<PYEOF
+import sys, os
+sys.path.insert(0, '$REPO_DIR/scripts')
+os.environ['CAST_DB_PATH'] = '$TEST_DB'
+from cast_db import ALLOWED_TABLES, db_write
+if 'managed_agent_invocations' not in ALLOWED_TABLES:
+    print('FAIL: not in ALLOWED_TABLES')
+    sys.exit(1)
+result = db_write('managed_agent_invocations', {
+    'id': 'test-mai-1',
+    'agent_name': 'test-agent',
+    'ts': '2026-01-01T00:00:00Z',
+})
+print('ok' if result else 'fail')
+PYEOF
+  assert_success
+  assert_output "ok"
+}
+
 @test "allowlist: db_write returns truthy on success, falsy on disallowed path" {
   run python3 - <<PYEOF
 import sys, os

@@ -59,47 +59,6 @@ _log_error() {
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [CAST FILES API] ${msg}" >> "$error_log"
 }
 
-# --- Helper: write to cast.db ---
-_db_write_event() {
-  local action="$1"
-  local file_id="$2"
-  local local_path="${3:-}"
-  local agent="${4:-}"
-
-  CAST_FA_ACTION="$action" \
-  CAST_FA_FILE_ID="$file_id" \
-  CAST_FA_LOCAL_PATH="$local_path" \
-  CAST_FA_AGENT="$agent" \
-  python3 - <<'PYDB' 2>/dev/null || true
-import sys, os
-sys.path.insert(0, os.path.expanduser('~/Projects/personal/claude-agent-team/scripts'))
-sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
-try:
-    from cast_db import db_execute, db_write
-    import datetime
-    db_execute('''
-        CREATE TABLE IF NOT EXISTS files_api_events (
-            id TEXT PRIMARY KEY,
-            action TEXT,
-            file_id TEXT,
-            local_path TEXT,
-            agent TEXT,
-            created_at TEXT
-        )
-    ''')
-    db_write('files_api_events', {
-        'id': os.urandom(8).hex(),
-        'action': os.environ.get('CAST_FA_ACTION', ''),
-        'file_id': os.environ.get('CAST_FA_FILE_ID', ''),
-        'local_path': os.environ.get('CAST_FA_LOCAL_PATH', ''),
-        'agent': os.environ.get('CAST_FA_AGENT', ''),
-        'created_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-    })
-except Exception as e:
-    pass
-PYDB
-}
-
 # --- Parse subcommand ---
 if [[ $# -lt 1 ]]; then
   echo "Usage: cast-files-api.sh upload|download|delete [args]" >&2
@@ -194,9 +153,6 @@ case "$SUBCOMMAND" in
       exit 1
     fi
 
-    # Log to cast.db
-    _db_write_event "upload" "$FILE_ID" "$LOCAL_FILE_PATH" "${CAST_AGENT_NAME:-}"
-
     _log "upload" "$FILE_ID" "$LOCAL_FILE_PATH" "${CAST_AGENT_NAME:-}" "success"
 
     # Return JSON with file_id
@@ -237,7 +193,6 @@ case "$SUBCOMMAND" in
       exit 1
     }
 
-    _db_write_event "download" "$FILE_ID" "$DEST_PATH" "${CAST_AGENT_NAME:-}"
     _log "download" "$FILE_ID" "$DEST_PATH" "${CAST_AGENT_NAME:-}" "success"
 
     echo "Downloaded file_id=$FILE_ID to $DEST_PATH"
@@ -267,7 +222,6 @@ case "$SUBCOMMAND" in
       exit 1
     }
 
-    _db_write_event "delete" "$FILE_ID" "" "${CAST_AGENT_NAME:-}"
     _log "delete" "$FILE_ID" "" "${CAST_AGENT_NAME:-}" "success"
 
     echo "Deleted file_id=$FILE_ID"
