@@ -117,3 +117,107 @@ teardown() {
   assert_success
   [[ "$output" == *"[PENDING]"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Migration 020: agent_runs empty session_id → NULL (Phase 5 Wave 2)
+# ---------------------------------------------------------------------------
+
+@test "migration 020: rewrites empty-string session_id to NULL in agent_runs" {
+  # Seed a DB with agent_runs table and a bad row (session_id='')
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT,
+  session_id TEXT,
+  status TEXT
+);
+INSERT INTO agent_runs (agent, session_id, status) VALUES ('bad-agent', '', 'running');
+SQL
+
+  # Run migration 020 directly
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/020_agent_runs_null_session_id.sql"
+
+  local val
+  val=$(sqlite3 "$TEST_DB" "SELECT COALESCE(session_id, 'IS_NULL') FROM agent_runs WHERE agent='bad-agent';")
+  [[ "$val" == "IS_NULL" ]]
+}
+
+@test "migration 020: is idempotent (re-run leaves no empty-string rows)" {
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT,
+  session_id TEXT,
+  status TEXT
+);
+INSERT INTO agent_runs (agent, session_id, status) VALUES ('ok-agent', 'sess-abc', 'running');
+SQL
+
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/020_agent_runs_null_session_id.sql"
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/020_agent_runs_null_session_id.sql"
+
+  local count
+  count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs WHERE session_id='';")
+  [[ "$count" -eq 0 ]]
+}
+
+# ---------------------------------------------------------------------------
+# Migration 021: sessions with NULL/empty id → deleted (Phase 5 Wave 2)
+# ---------------------------------------------------------------------------
+
+@test "migration 021: deletes sessions rows where id IS NULL" {
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  project TEXT,
+  started_at TEXT
+);
+INSERT INTO sessions (id, project, started_at) VALUES ('sess-good', 'proj', '2026-06-10T00:00:00Z');
+SQL
+  # SQLite TEXT PRIMARY KEY allows NULL insertions; force it via INSERT OR IGNORE bypass
+  sqlite3 "$TEST_DB" "INSERT OR REPLACE INTO sessions (id, project) VALUES (NULL, 'bad');"
+
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/021_sessions_delete_null_id.sql"
+
+  local null_count
+  null_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sessions WHERE id IS NULL;")
+  [[ "$null_count" -eq 0 ]]
+  # Good row untouched
+  local good_count
+  good_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sessions WHERE id='sess-good';")
+  [[ "$good_count" -eq 1 ]]
+}
+
+@test "migration 021: deletes sessions rows where id is empty-string" {
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  project TEXT,
+  started_at TEXT
+);
+INSERT INTO sessions (id, project, started_at) VALUES ('', 'bad-project', '2026-06-10T00:00:00Z');
+SQL
+
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/021_sessions_delete_null_id.sql"
+
+  local count
+  count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sessions WHERE id='' OR id IS NULL;")
+  [[ "$count" -eq 0 ]]
+}
+
+@test "migration 021: is idempotent (second run is a no-op)" {
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  project TEXT
+);
+INSERT INTO sessions (id, project) VALUES ('sess-ok', 'proj');
+SQL
+
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/021_sessions_delete_null_id.sql"
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/021_sessions_delete_null_id.sql"
+
+  local count
+  count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sessions WHERE id='sess-ok';")
+  [[ "$count" -eq 1 ]]
+}

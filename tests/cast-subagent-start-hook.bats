@@ -159,3 +159,15 @@ print('ok')
   count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs;" | tr -d ' ')
   [[ "$count" -eq 2 ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 7: Unset session_id → DB row gets NULL not empty-string (FK-orphan fix)
+# Phase 5 Wave 2: writers must emit NULL when CAST_SESSION_ID is unresolved.
+# ---------------------------------------------------------------------------
+
+@test "JSON missing session_id → agent_runs.session_id is NULL not empty-string" {
+  bash "$HOOK_SH" <<< '{"agent_type": "no-sess-agent"}'
+  local val
+  val=$(sqlite3 "$CAST_DB_PATH" "SELECT COALESCE(session_id, 'IS_NULL') FROM agent_runs WHERE agent='no-sess-agent' LIMIT 1;")
+  [[ "$val" == "IS_NULL" ]]
+}

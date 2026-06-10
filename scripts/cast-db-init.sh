@@ -267,7 +267,7 @@ PRAGMA foreign_keys = ON;
 
 -- Sessions: one row per Claude Code session
 CREATE TABLE IF NOT EXISTS sessions (
-  id                    TEXT PRIMARY KEY,
+  id                    TEXT PRIMARY KEY NOT NULL,
   project               TEXT,
   project_root          TEXT,
   started_at            TEXT,

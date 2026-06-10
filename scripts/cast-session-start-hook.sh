@@ -91,10 +91,15 @@ try:
 except Exception:
     import sys; sys.exit(0)
 
-session_id = data.get("session_id", "unknown")
+session_id = data.get("session_id", "")
 cwd        = data.get("cwd", "")
 now        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 project    = os.path.basename(cwd.rstrip('/')) if cwd else "unknown"
+
+# Guard: skip INSERT when session_id is missing/empty — a NULL or empty PK
+# produces unresolvable rows (4 found in live DB audit, Phase 5 Wave 2)
+if not session_id:
+    import sys; sys.exit(0)
 
 db_path = os.path.expanduser("~/.claude/cast.db")
 if not os.path.exists(db_path):

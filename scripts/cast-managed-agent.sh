@@ -323,7 +323,7 @@ try:
         )
     ''')
     db_write('agent_runs', {
-        'session_id': os.environ.get('CAST_SESSION_ID', 'unknown'),
+        'session_id': os.environ.get('CAST_SESSION_ID') or None,   # NULL > '' to avoid FK orphans
         'agent': os.environ.get('CAST_AGENT_NAME', 'unknown'),
         'started_at': os.environ.get('CAST_STARTED_AT', ''),
         'ended_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
