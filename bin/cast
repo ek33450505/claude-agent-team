@@ -1864,7 +1864,20 @@ except Exception:
     fi
   fi
 
-  # 19. Homebrew tap count vs packages constant advisory
+  # 19. Stale cast-swarm-* branch count early-warning
+  local swarm_branch_warn_threshold=25
+  local swarm_branch_count=0
+  if git -C "${CAST_REPO_DIR:-$HOME/.claude}" branch --list 'cast-swarm-*' >/dev/null 2>&1; then
+    swarm_branch_count="$(git -C "${CAST_REPO_DIR:-$HOME/.claude}" branch --list 'cast-swarm-*' 2>/dev/null | wc -l | tr -d ' ')"
+  fi
+  if [[ "${swarm_branch_count:-0}" -gt "$swarm_branch_warn_threshold" ]]; then
+    printf "%b cast-swarm-* branches: %d (exceeds threshold of %d) — run \`cast clean --apply\` or set CAST_GROOM_AUTO_APPLY=1\n" \
+      "$WARN" "$swarm_branch_count" "$swarm_branch_warn_threshold"
+  else
+    printf "%b cast-swarm-* branches: %d\n" "$INFO" "${swarm_branch_count:-0}"
+  fi
+
+  # 20. Homebrew tap count vs packages constant advisory
   # CAST taps = homebrew-cast* (12) + homebrew-claudes-journal (1) = 13
   # Excludes dropped non-CAST taps: homebrew-engram, homebrew-stratum, homebrew-jarvis
   local expected_packages=13  # keep in sync with cast_stat_packages in scripts/cast-stats-lib.sh
@@ -2186,9 +2199,6 @@ USAGE
       *) shift ;;
     esac
   done
-
-  local cleanup_days
-  cleanup_days="$(_config_get cleanupPeriodDays 14)"
 
   local label="Cleaning"
   [ "$dry_run" -eq 1 ] && label="Dry run"
