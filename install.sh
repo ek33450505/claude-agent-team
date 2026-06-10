@@ -431,6 +431,57 @@ fi
 # --- Wire pre-commit hook ---
 git -C "$SCRIPT_DIR" config core.hooksPath .githooks 2>/dev/null || true
 
+# --- Prune old install-snapshot backups (keep last 5) ---
+# Matches only timestamped dirs created by this script: YYYYMMDD-HHMMSS
+# Never touches cast-db-*.db files, _*backup* ad-hoc snapshots, or any
+# non-timestamp entry — safety guard validated before each rm -rf.
+_prune_install_snapshots() {
+  local backup_base="$CLAUDE_DIR/backups"
+  [ -d "$backup_base" ] || return 0
+  local keep_n=5
+  # Collect only dirs matching the timestamp pattern (install.sh creates these)
+  local snapshot_dirs=()
+  while IFS= read -r -d '' d; do
+    local dname
+    dname="$(basename "$d")"
+    if [[ "$dname" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+      snapshot_dirs+=("$d")
+    fi
+  done < <(find "$backup_base" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null | sort -z)
+
+  local total="${#snapshot_dirs[@]}"
+  if [[ "$total" -le "$keep_n" ]]; then
+    return 0
+  fi
+
+  # Delete oldest dirs beyond keep_n (array is sorted ascending by name = chronological)
+  local delete_count=$(( total - keep_n ))
+  local pruned=0
+  for (( i=0; i<delete_count; i++ )); do
+    local target="${snapshot_dirs[$i]}"
+    local tname
+    tname="$(basename "$target")"
+    # Final safety: re-validate pattern + ensure strictly inside backup_base
+    if [[ ! "$tname" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+      warn "  Skipping prune — unexpected dir name: $tname"
+      continue
+    fi
+    local real_target real_base
+    real_target="$(cd "$target" && pwd)"
+    real_base="$(cd "$backup_base" && pwd)"
+    if [[ "$real_target" != "$real_base"/* ]]; then
+      warn "  Skipping prune — $tname is not inside backup base"
+      continue
+    fi
+    rm -rf "$target"
+    pruned=$(( pruned + 1 ))
+  done
+  if [[ "$pruned" -gt 0 ]]; then
+    info "  Pruned $pruned old install snapshot(s) (keeping $keep_n most recent)"
+  fi
+}
+_prune_install_snapshots
+
 # --- Update README stats ---
 bash "$SCRIPT_DIR/scripts/gen-stats.sh" 2>/dev/null || true
 

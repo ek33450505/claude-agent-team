@@ -225,3 +225,44 @@ run_install() {
 
   rm -rf "$tmp_repo"
 }
+
+@test "Backup retention: keeps only the 5 most recent install snapshots" {
+  # Pre-populate 7 fake timestamp dirs in the isolated temp HOME backups dir
+  local backup_base="$HOME/.claude/backups"
+  mkdir -p "$backup_base"
+
+  # Create 7 dirs with valid YYYYMMDD-HHMMSS names (8+6 digits)
+  local dirs=()
+  for ts in 20260601-120001 20260602-120002 20260603-120003 20260604-120004 \
+            20260605-120005 20260606-120006 20260607-120007; do
+    local d="$backup_base/$ts"
+    mkdir -p "$d"
+    dirs+=("$d")
+  done
+
+  # Also create a cast-db file and an ad-hoc snapshot — these must survive
+  touch "$backup_base/cast-db-2026-06-01.db"
+  mkdir -p "$backup_base/_phase1-backup-manual"
+
+  # Run install (creates one more timestamped dir, total snapshot dirs becomes 8)
+  run_install
+
+  # Count surviving timestamp-pattern dirs (macOS-safe: no -regextype)
+  local count=0
+  while IFS= read -r -d '' d; do
+    local dname
+    dname="$(basename "$d")"
+    if [[ "$dname" =~ ^[0-9]{8}-[0-9]{6}$ ]]; then
+      count=$(( count + 1 ))
+    fi
+  done < <(find "$backup_base" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+
+  # Must keep exactly 5 (keep-last-N=5)
+  [ "$count" -eq 5 ]
+
+  # cast-db file must survive
+  [ -f "$backup_base/cast-db-2026-06-01.db" ]
+
+  # Ad-hoc snapshot must survive
+  [ -d "$backup_base/_phase1-backup-manual" ]
+}
