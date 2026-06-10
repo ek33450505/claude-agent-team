@@ -32,7 +32,7 @@ Expected output:
   CAST Installer (v7.3.1)
 
   ✓ Installed <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents -> ~/.claude/agents/
-  ✓ Installed <!-- CAST_COMMAND_COUNT -->19<!-- /CAST_COMMAND_COUNT --> slash commands -> ~/.claude/commands/
+  ✓ Installed <!-- CAST_COMMAND_COUNT -->20<!-- /CAST_COMMAND_COUNT --> slash commands -> ~/.claude/commands/
   ✓ Installed <!-- CAST_SKILL_COUNT -->18<!-- /CAST_SKILL_COUNT --> skills -> ~/.claude/skills/
   ✓ Installed hook scripts -> ~/.claude/scripts/
   ✓ Installed 9 rules -> ~/.claude/rules/
