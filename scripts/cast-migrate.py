@@ -148,6 +148,18 @@ def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
                 # operations only; other "no such table" errors (e.g. on SELECT,
                 # INSERT, CREATE INDEX) are NOT tolerated and will still raise.
                 print(f'  [NOTE] Table absent for ALTER COLUMN op (skipping): {effective[:60]}...')
+            elif (
+                'no such table' in err
+                and (stmt_lower.lstrip().startswith('update ')
+                     or stmt_lower.lstrip().startswith('delete '))
+            ):
+                # UPDATE/DELETE on a table owned by cast-db-init.sh (e.g.
+                # migrations 020/021 touch agent_runs/sessions). On a
+                # migrations-only test DB those tables don't exist yet, but the
+                # intent is already satisfied: zero rows to mutate = no-op.
+                # Scoped strictly to UPDATE and DELETE — SELECT, INSERT, CREATE
+                # INDEX, and DDL errors are NOT tolerated and will still raise.
+                print(f'  [NOTE] Table absent for UPDATE/DELETE op (skipping): {effective[:60]}...')
             else:
                 raise
 
@@ -166,6 +178,34 @@ def main() -> int:
         return 0
 
     conn = _connect(db_path)
+
+    if dry_run:
+        # READ-ONLY path: do NOT call _ensure_migrations_table — that would
+        # create schema_migrations even on an un-initialised DB. Instead,
+        # query the ledger if it already exists, else treat all as pending.
+        try:
+            rows = conn.execute("SELECT version FROM schema_migrations").fetchall()
+            applied_set = {row[0] for row in rows}
+        except sqlite3.OperationalError:
+            applied_set = set()
+
+        pending = []
+        skipped = []
+        for _num, name, _path in migrations:
+            if name in applied_set:
+                skipped.append(name)
+            else:
+                pending.append(name)
+
+        print(f'[cast-migrate] Dry run against {db_path}')
+        for name in pending:
+            print(f'  [PENDING] {name}')
+        for name in skipped:
+            print(f'  [SKIPPED] {name} (already applied)')
+        print(f'[cast-migrate] {len(pending)} pending, {len(skipped)} already applied')
+        conn.close()
+        return 0
+
     _ensure_migrations_table(conn)
 
     pending = []
@@ -175,16 +215,6 @@ def main() -> int:
             skipped.append(name)
         else:
             pending.append((name, path))
-
-    if dry_run:
-        print(f'[cast-migrate] Dry run against {db_path}')
-        for name, _ in pending:
-            print(f'  [PENDING] {name}')
-        for name in skipped:
-            print(f'  [SKIPPED] {name} (already applied)')
-        print(f'[cast-migrate] {len(pending)} pending, {len(skipped)} already applied')
-        conn.close()
-        return 0
 
     for name, path in pending:
         print(f'  [APPLYING] {name}')

@@ -4,7 +4,7 @@ load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-MIGRATE_SCRIPT="$REPO_DIR/scripts/cast-migrate.sh"
+MIGRATE_SCRIPT="$REPO_DIR/scripts/cast-migrate.py"
 INCIDENTS_SCRIPT="$REPO_DIR/scripts/cast-db-incidents.py"
 
 setup() {
@@ -16,8 +16,8 @@ setup() {
   export TEST_DB="$BATS_TEST_TMPDIR/test-incidents-$$.db"
   export CAST_DB_PATH="$TEST_DB"
 
-  # Initialize schema (baseline + incidents table)
-  bash "$MIGRATE_SCRIPT" --db "$TEST_DB" > /dev/null 2>&1
+  # Initialize schema (baseline + incidents table) via Python migration runner
+  CAST_DB_PATH="$TEST_DB" python3 "$MIGRATE_SCRIPT" > /dev/null 2>&1 || true
 }
 
 teardown() {

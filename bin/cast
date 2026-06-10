@@ -1419,11 +1419,12 @@ PYEOF
     migrate_script="${CAST_REPO_DIR}/scripts/cast-migrate.py"
   fi
   if [ -f "$migrate_script" ]; then
+    # Use --dry-run so doctor is READ-ONLY — it must never apply migrations.
     local migration_output
-    migration_output=$(python3 "$migrate_script" 2>&1 || true)
-    local applied_count
-    applied_count=$(echo "$migration_output" | grep -c "^\[cast-migrate\].*[0-9]* applied" 2>/dev/null || echo 0)
-    applied_count=${applied_count:-0}
+    migration_output=$(python3 "$migrate_script" --dry-run 2>&1 || true)
+    local pending_count
+    pending_count=$(echo "$migration_output" | grep -c '^\s*\[PENDING\]' 2>/dev/null || echo 0)
+    pending_count=${pending_count:-0}
     local total_count
     total_count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
     # Count migration files on disk to detect empty-ledger-with-files condition
@@ -1435,8 +1436,9 @@ PYEOF
     if [ "$total_count" -eq 0 ] && [ "$files_on_disk" -gt 0 ]; then
       printf "%b Migrations: ledger empty (%d files on disk) — run: cast migrate\n" "$WARN" "$files_on_disk"
       overall_ok=0
-    elif [ "$applied_count" -gt 0 ]; then
-      printf "%b Migrations: %d applied this run, %d total recorded\n" "$OK" "$applied_count" "$total_count"
+    elif [ "$pending_count" -gt 0 ]; then
+      printf "%b Migrations: %d pending — run: cast migrate\n" "$WARN" "$pending_count"
+      overall_ok=0
     else
       printf "%b Migrations: up to date (%d recorded)\n" "$OK" "$total_count"
     fi
