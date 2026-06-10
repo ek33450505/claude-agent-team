@@ -44,7 +44,7 @@ try:
         'timestamp': iso_ts,
         'trigger': trigger,
         'compaction_tier': 'PreCompact',
-        'transcript_path': '',
+        'transcript_path': data.get('transcript_path', ''),
     })
 except Exception as e:
     try:
