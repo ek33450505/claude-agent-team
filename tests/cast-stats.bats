@@ -59,10 +59,10 @@ teardown() {
   assert_output "38"
 }
 
-@test "gen-cast-stats.sh produces commands=19" {
+@test "gen-cast-stats.sh produces commands=20" {
   run jq -r '.commands' < "$CANONICAL_JSON"
   assert_success
-  assert_output "19"
+  assert_output "20"
 }
 
 @test "gen-cast-stats.sh produces skills=18" {

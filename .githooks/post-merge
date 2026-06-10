@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# CAST post-merge hook
+#
+# Fires after `git merge` and the merge half of `git pull` (NOT after rebase).
+# Gates `install.sh` on actual CAST source changes (agents/, scripts/, bin/, rules-core/).
+# If none of those directories changed, the hook exits silently.
+#
+# Logs to: ~/.claude/logs/auto-install.log
+#
+# Escape hatch: CAST_SKIP_POST_MERGE_INSTALL=1 git pull
+#
+# Testability seam: set CAST_POST_MERGE_INSTALL_CMD to override the install
+# command. The hook evaluates this variable as a shell command string via
+# bash -c, so keep it simple (no shell metacharacters in the value).
+# Example: CAST_POST_MERGE_INSTALL_CMD='touch /tmp/installed.marker'
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+LOG_DIR="$HOME/.claude/logs"
+LOG_FILE="$LOG_DIR/auto-install.log"
+TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+_log() {
+  mkdir -p "$LOG_DIR"
+  echo "[$TIMESTAMP] $*" >> "$LOG_FILE"
+}
+
+# Escape hatch
+if [[ "${CAST_SKIP_POST_MERGE_INSTALL:-0}" == "1" ]]; then
+  _log "skipped (escape hatch: CAST_SKIP_POST_MERGE_INSTALL=1)"
+  exit 0
+fi
+
+# ORIG_HEAD guard — squash merges and initial clones may lack ORIG_HEAD
+if ! git rev-parse --verify -q ORIG_HEAD >/dev/null 2>&1; then
+  _log "no ORIG_HEAD — cannot diff, skipping"
+  exit 0
+fi
+
+# Gate: check whether any CAST source directories changed
+CHANGED="$(git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD 2>/dev/null || echo "")"
+
+if ! echo "$CHANGED" | grep -qE "^(agents|scripts|bin|rules-core)/"; then
+  _log "no CAST source changes — skip reinstall"
+  exit 0
+fi
+
+# CAST source changed — run install
+_log "CAST source changed — starting reinstall"
+echo "[CAST post-merge] CAST source changed → reinstalling (log: ~/.claude/logs/auto-install.log)" >&2
+
+# Testability seam: override via CAST_POST_MERGE_INSTALL_CMD
+# Default is built first so REPO_ROOT (which may contain spaces) is properly quoted
+# when passed to eval. Tests override this by setting CAST_POST_MERGE_INSTALL_CMD.
+_default_install_cmd="bash ${REPO_ROOT@Q}/install.sh"
+INSTALL_CMD="${CAST_POST_MERGE_INSTALL_CMD:-$_default_install_cmd}"
+
+_log "running: $INSTALL_CMD"
+# shellcheck disable=SC2294
+if eval "$INSTALL_CMD" >> "$LOG_FILE" 2>&1; then
+  _log "install complete"
+else
+  _install_rc=$?
+  _log "install FAILED (exit ${_install_rc}) — see log above; cleanup will still run"
+  echo "[CAST post-merge] install.sh FAILED (exit ${_install_rc}) — check ~/.claude/logs/auto-install.log" >&2
+fi
+
+# Drop gen-stats churn: revert files dirtied by install.sh stats injection
+GEN_STATS_FILES=(
+  "README.md"
+  "docs/README.md"
+  "docs/tutorial/getting-started.md"
+)
+
+for f in "${GEN_STATS_FILES[@]}"; do
+  # Only revert if the file is tracked AND currently dirty
+  if git ls-files --error-unmatch "$f" >/dev/null 2>&1 && \
+     ! git diff --quiet -- "$f" 2>/dev/null; then
+    git checkout -- "$f"
+    _log "reverted gen-stats churn: $f"
+    echo "[CAST post-merge] reverted gen-stats churn: $f" >&2
+  fi
+done
+
+_log "post-merge hook done"
+
+# post-merge exit code is advisory — never break the merge
+exit 0

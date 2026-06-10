@@ -428,7 +428,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     fi
 fi
 
-# --- Wire pre-commit hook ---
+# --- Wire git hooks (pre-commit, pre-push, post-merge auto-install) ---
 git -C "$SCRIPT_DIR" config core.hooksPath .githooks 2>/dev/null || true
 
 # --- Prune old install-snapshot backups (keep last 5) ---

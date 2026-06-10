@@ -20,6 +20,16 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "id": "cast-session-start-health",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-session-start-health.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Stop": [
