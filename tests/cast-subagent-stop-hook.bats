@@ -44,7 +44,16 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   started_at TEXT,
   ended_at TEXT,
   agent_id TEXT,
-  batch_id INTEGER
+  batch_id INTEGER,
+  duration_ms INTEGER,
+  tool_uses INTEGER,
+  response TEXT,
+  cost_usd REAL,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  model TEXT,
+  cache_read_input_tokens INTEGER,
+  cache_creation_input_tokens INTEGER
 );
 SQL
   unset CLAUDE_SUBPROCESS
@@ -396,6 +405,88 @@ if matches:
     print(max(matches, key=os.path.getmtime))
 ")"
   [[ "$new_result" == "$transcript" ]]
+}
+
+# ---------------------------------------------------------------------------
+# Bug Fix Tests: fan-out sibling clobber (BUG 1) and duration_ms from timestamps (BUG 2)
+# ---------------------------------------------------------------------------
+
+@test "BUG1: only ONE running row is closed when two rows share the same agent_id" {
+  # Insert two running rows with the same agent_id — simulates parallel fan-out
+  local shared_agent_id="shared-agent-fanout-001"
+  sqlite3 "$CAST_DB_PATH" <<SQL
+INSERT INTO agent_runs (agent, session_id, status, started_at, ended_at, agent_id)
+VALUES ('code-writer', 'sess-fanout', 'running', '2026-01-01T10:00:00Z', NULL, '${shared_agent_id}');
+INSERT INTO agent_runs (agent, session_id, status, started_at, ended_at, agent_id)
+VALUES ('code-writer', 'sess-fanout', 'running', '2026-01-01T10:01:00Z', NULL, '${shared_agent_id}');
+SQL
+
+  # Verify we have 2 running rows with that agent_id before the hook fires
+  local before
+  before="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE status='running' AND agent_id='${shared_agent_id}'")"
+  [[ "$before" -eq 2 ]]
+
+  # Fire the hook with a stop payload carrying that agent_id
+  local payload
+  payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type': 'code-writer',
+    'agent_id':   sys.argv[1],
+    'session_id': 'sess-fanout',
+    'stop_reason': 'end_turn',
+    'last_assistant_message': 'Status: DONE\nSummary: done',
+}))
+" "$shared_agent_id")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # Exactly ONE row should now be DONE — the other must stay running
+  local done_count running_count
+  done_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE status='DONE' AND agent_id='${shared_agent_id}'")"
+  running_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE status='running' AND agent_id='${shared_agent_id}'")"
+  [[ "$done_count" -eq 1 ]]
+  [[ "$running_count" -eq 1 ]]
+}
+
+@test "BUG2: duration_ms is computed > 0 from started_at/ended_at timestamps" {
+  # Insert a running row with a known started_at; the hook sets ended_at=now and
+  # computes duration_ms = julianday(ended_at) - julianday(started_at) in ms.
+  local agent_id="duration-test-agent-001"
+  # started_at 60 seconds in the past
+  local started_at
+  started_at="$(python3 -c "
+from datetime import datetime, timezone, timedelta
+t = datetime.now(timezone.utc) - timedelta(seconds=60)
+print(t.strftime('%Y-%m-%dT%H:%M:%SZ'))
+")"
+
+  sqlite3 "$CAST_DB_PATH" <<SQL
+INSERT INTO agent_runs (agent, session_id, status, started_at, ended_at, agent_id)
+VALUES ('code-writer', 'sess-dur', 'running', '${started_at}', NULL, '${agent_id}');
+SQL
+
+  local payload
+  payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type':  'code-writer',
+    'agent_id':    sys.argv[1],
+    'session_id':  'sess-dur',
+    'stop_reason': 'end_turn',
+    'last_assistant_message': 'Status: DONE\nSummary: done',
+}))
+" "$agent_id")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # duration_ms must be > 0 (computed from timestamps, not from payload which is always 0)
+  local duration_ms
+  duration_ms="$(sqlite3 "$CAST_DB_PATH" "SELECT duration_ms FROM agent_runs WHERE agent_id='${agent_id}' LIMIT 1")"
+  [[ -n "$duration_ms" ]]
+  [[ "$duration_ms" -gt 0 ]]
 }
 
 @test "transcript glob: tiebreak selects newest by mtime when multiple matches exist" {
