@@ -57,14 +57,14 @@ cast_stat_tests() {
 }
 
 # cast_stat_tables — count DISTINCT table names across canonical schema sources.
-# Covers cast-db-init.sh + scripts/migrations/*.sql + migrations/*.sql.
+# Covers cast-db-init.sh + scripts/migrations/*.sql.
 # Must yield 38.
 cast_stat_tables() {
   (
     cd "${CAST_STATS_REPO_ROOT}"
     COUNT=$(
       grep -rhoE 'CREATE TABLE IF NOT EXISTS[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(' \
-        scripts/cast-db-init.sh scripts/migrations/*.sql migrations/*.sql 2>/dev/null | \
+        scripts/cast-db-init.sh scripts/migrations/*.sql 2>/dev/null | \
         sed -E 's/.*EXISTS[[:space:]]+//;s/[[:space:]]*\(//' | \
         sort -u | wc -l
     ) || COUNT=0
