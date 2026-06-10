@@ -94,8 +94,10 @@ CAST distinguishes between **core** (ships to all installs) and **personal** (ma
 | `agents/personal/` | Personal — `--personal` flag | Standard |
 | `rules-core/` | Core | High |
 | `rules-personal/` | Personal | Standard |
+| `skills/` | Core | High — public framework features only |
+| `skills-personal/` | Personal — `--personal` flag | Standard |
 
-PRs targeting `agents/core/` or `rules-core/` should focus on generic, widely-useful features.
+PRs targeting `agents/core/`, `rules-core/`, or `skills/` should focus on generic, widely-useful features. Private content (personal catalogs, local paths, personal workflow skills) belongs in the personal overlays.
 
 ---
 

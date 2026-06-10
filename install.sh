@@ -130,7 +130,7 @@ success "  $CMD_COUNT commands installed"
 # Skills listed in USER_DATA_SKILLS are treated as user-data: if SKILL.md already
 # exists in the destination, the copy is skipped so user-populated content is
 # preserved.  A fresh install (no destination yet) still copies the stub.
-USER_DATA_SKILLS="swarm project-catalog"
+USER_DATA_SKILLS="swarm"
 info "Installing skills..."
 for skill_dir in "$SCRIPT_DIR"/skills/*/; do
     [ -d "$skill_dir" ] || continue
@@ -152,6 +152,22 @@ for skill_dir in "$SCRIPT_DIR"/skills/*/; do
     SKILL_COUNT=$((SKILL_COUNT + 1))
 done
 success "  $SKILL_COUNT skills installed"
+
+# Personal skills overlay (non-destructive — only adds files not already present)
+if [ "$INSTALL_PERSONAL" = true ] && [ -d "$SCRIPT_DIR/skills-personal" ]; then
+    for skill_dir in "$SCRIPT_DIR"/skills-personal/*/; do
+        [ -d "$skill_dir" ] || continue
+        skill_name="$(basename "$skill_dir")"
+        mkdir -p "$CLAUDE_DIR/skills/$skill_name"
+        if [ -f "$CLAUDE_DIR/skills/$skill_name/SKILL.md" ]; then
+            info "  Skipped (exists, personal): skills-personal/$skill_name"
+        else
+            cp -R "$skill_dir"* "$CLAUDE_DIR/skills/$skill_name/"
+            success "  Installed (personal): skills-personal/$skill_name"
+            SKILL_COUNT=$((SKILL_COUNT + 1))
+        fi
+    done
+fi
 
 # --- Install rules (skip if destination exists) ---
 info "Installing rules..."
@@ -232,6 +248,8 @@ rm -f "$CLAUDE_DIR/scripts/cast-proactive-intel.sh" "$CLAUDE_DIR/scripts/cast-we
 rm -f "$CLAUDE_DIR/scripts/cast-resume-watcher.sh" "$CLAUDE_DIR/scripts/cast-output-adapter.py" "$CLAUDE_DIR/scripts/cast-sync-check.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-session-status-cleanup.py" "$CLAUDE_DIR/scripts/cast-pre-compact-hook.sh" "$CLAUDE_DIR/scripts/pa-weather-prefetch.sh"
 rm -f "$CLAUDE_DIR/config/settings-canonical.json"
+# v7.5 Phase 7: removed dead reference skills
+rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budget"
 success "  Scripts installed (including cast_db.py)"
 
 # --- Install managed-settings.d fragments ---
@@ -493,5 +511,5 @@ printf "  1. Run ${BOLD}cast status${NC} to verify\n"
 printf "  2. Run ${BOLD}cast doctor${NC} for health check\n"
 printf "  3. Run ${BOLD}cast agents${NC} to see installed agents\n\n"
 if [ "$INSTALL_PERSONAL" = false ]; then
-    printf "  Tip: Run ${BOLD}bash install.sh --personal${NC} to also install personal-overlay files from agents/personal/ and rules-personal/ (for clones that populate them).\n\n"
+    printf "  Tip: Run ${BOLD}bash install.sh --personal${NC} to also install personal-overlay files from agents/personal/, rules-personal/, and skills-personal/ (for clones that populate them).\n\n"
 fi

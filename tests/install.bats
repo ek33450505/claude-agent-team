@@ -21,6 +21,11 @@ run_install() {
   return $?
 }
 
+run_install_personal() {
+  CAST_INSTALL_FORCE=1 bash "$REPO_DIR/install.sh" --personal 2>&1
+  return $?
+}
+
 # =============================================================================
 # Install (v3 — flat, non-interactive)
 # =============================================================================
@@ -73,26 +78,44 @@ run_install() {
   grep -q "USER_SWARM_SENTINEL" "$HOME/.claude/skills/swarm/SKILL.md"
 }
 
-@test "Install: user-data skill (project-catalog) is preserved on reinstall" {
-  # First install — stub is written because destination does not exist yet
+@test "Install: default install (no --personal) does NOT install project-catalog" {
+  # project-catalog is now personal-gated; core install must not write it
   run_install
+  [ ! -e "$HOME/.claude/skills/project-catalog/SKILL.md" ]
+}
+
+@test "Install: --personal install writes project-catalog stub on fresh HOME" {
+  # No pre-existing skill; --personal install must copy the stub
+  run_install_personal
+  [ -f "$HOME/.claude/skills/project-catalog/SKILL.md" ]
+  # The installed file must not be empty
+  [ -s "$HOME/.claude/skills/project-catalog/SKILL.md" ]
+}
+
+@test "Install: --personal install preserves user-populated project-catalog on reinstall" {
+  # First personal install — stub is written
+  run_install_personal
   [ -f "$HOME/.claude/skills/project-catalog/SKILL.md" ]
 
   # Simulate user populating the catalog with real project data
   echo "MY_REAL_PROJECT_CATALOG_SENTINEL" > "$HOME/.claude/skills/project-catalog/SKILL.md"
 
-  # Second install — user content must NOT be overwritten
-  run_install
+  # Second personal install — user content must NOT be overwritten (skip-if-exists)
+  run_install_personal
   grep -q "MY_REAL_PROJECT_CATALOG_SENTINEL" "$HOME/.claude/skills/project-catalog/SKILL.md"
 }
 
-@test "Install: user-data skill (project-catalog) stub is written on fresh install" {
-  # No pre-existing skill — fresh install must copy the stub from the repo
+@test "Install: dead skills (compact-discipline, thinking-budget) are absent after install" {
+  # Pre-create them in the temp HOME to verify the rm cleanup removes them
+  mkdir -p "$HOME/.claude/skills/compact-discipline"
+  echo "stale" > "$HOME/.claude/skills/compact-discipline/SKILL.md"
+  mkdir -p "$HOME/.claude/skills/thinking-budget"
+  echo "stale" > "$HOME/.claude/skills/thinking-budget/SKILL.md"
+
   run_install
 
-  [ -f "$HOME/.claude/skills/project-catalog/SKILL.md" ]
-  # The installed file must not be empty
-  [ -s "$HOME/.claude/skills/project-catalog/SKILL.md" ]
+  [ ! -e "$HOME/.claude/skills/compact-discipline" ]
+  [ ! -e "$HOME/.claude/skills/thinking-budget" ]
 }
 
 @test "Install: .template extension stripped from rules" {
