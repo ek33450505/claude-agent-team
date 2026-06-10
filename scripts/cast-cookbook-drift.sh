@@ -22,6 +22,11 @@ set -euo pipefail
 # --- Config ---
 REPO_PATH="${REPO_PATH:-$HOME/Projects/personal/claude-agent-team}"
 CAST_DB_PATH="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
+
+# shellcheck source=cast-sqlite-lib.sh
+CAST_SCRIPTS_DIR="${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}"
+# shellcheck disable=SC1091
+source "${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh" 2>/dev/null || source "$(dirname "$0")/cast-sqlite-lib.sh" 2>/dev/null || true
 LOG_DIR="${HOME}/.claude/logs"
 REPORTS_DIR="${HOME}/.claude/reports"
 
@@ -40,7 +45,7 @@ _emit_dispatch_event() {
   report_date=$(date +%Y-%m-%d)
 
   # Create dispatch_events table if missing (idempotent)
-  sqlite3 "$CAST_DB_PATH" << 'EOF' 2>/dev/null || true
+  cast_sqlite "$CAST_DB_PATH" << 'EOF' 2>/dev/null || true
 CREATE TABLE IF NOT EXISTS dispatch_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   agent TEXT NOT NULL,
@@ -52,7 +57,7 @@ CREATE TABLE IF NOT EXISTS dispatch_events (
 EOF
 
   # Log the dispatch
-  sqlite3 "$CAST_DB_PATH" "INSERT INTO dispatch_events (agent, task_name, status, report_path) VALUES ('researcher', 'cookbook-drift', 'dispatched', '~/.claude/reports/cookbook-drift-${report_date}.md');" 2>/dev/null || true
+  cast_sqlite "$CAST_DB_PATH" "INSERT INTO dispatch_events (agent, task_name, status, report_path) VALUES ('researcher', 'cookbook-drift', 'dispatched', '~/.claude/reports/cookbook-drift-${report_date}.md');" 2>/dev/null || true
 }
 
 # --- Dispatch researcher agent ---

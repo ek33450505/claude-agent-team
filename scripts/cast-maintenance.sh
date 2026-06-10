@@ -7,14 +7,19 @@ CAST_DIR="${HOME}/.claude"
 DB="${CAST_DIR}/cast.db"
 LOG="${CAST_DIR}/logs/maintenance.log"
 
+# shellcheck source=cast-sqlite-lib.sh
+CAST_SCRIPTS_DIR="${CAST_SCRIPTS_DIR:-${CAST_DIR}/scripts}"
+# shellcheck disable=SC1091
+source "${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh" 2>/dev/null || source "$(dirname "$0")/cast-sqlite-lib.sh" 2>/dev/null || true
+
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG"; }
 
 log "Starting maintenance run"
 
 # 1. Mark stale running agents as failed (>2h old)
-stale=$(sqlite3 "$DB" "SELECT COUNT(*) FROM agent_runs WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');" 2>/dev/null || echo 0)
+stale=$(cast_sqlite "$DB" "SELECT COUNT(*) FROM agent_runs WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');" 2>/dev/null || echo 0)
 if [ "$stale" -gt 0 ]; then
-  sqlite3 "$DB" "UPDATE agent_runs SET status='failed', ended_at=datetime('now') WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');"
+  cast_sqlite "$DB" "UPDATE agent_runs SET status='failed', ended_at=datetime('now') WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');"
   log "Cleaned $stale stale running agents"
 fi
 
@@ -37,7 +42,7 @@ find /private/tmp -maxdepth 1 -name "cast-swarm-*" -type d -mtime +3 -exec rm -r
 log "Pruned stale worktrees"
 
 # 5. Aggregate session costs from agent_runs (backfill any gaps)
-sqlite3 "$DB" "
+cast_sqlite "$DB" "
 UPDATE sessions SET
   total_cost_usd = COALESCE((SELECT SUM(cost_usd) FROM agent_runs WHERE agent_runs.session_id = sessions.id), 0.0)
 WHERE (total_cost_usd = 0.0 OR total_cost_usd IS NULL)
