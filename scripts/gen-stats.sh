@@ -35,6 +35,12 @@ TEST_COUNT=$(cast_stat_tests)
 ROUTE_COUNT=0
 DB_TABLE_COUNT=$(cast_stat_tables)
 
+# Plausibility floor (same guard as gen-cast-stats.sh) — fail loudly on silent-0.
+if ! cast_stats_assert_floors "$AGENT_COUNT" "$TEST_COUNT" "$DB_TABLE_COUNT" "$CMD_COUNT" "$SKILL_COUNT" "$(cast_stat_packages)" "$(cast_stat_version)"; then
+  echo "[gen-stats] ABORT: derived stats failed plausibility floor (see above)." >&2
+  exit 1
+fi
+
 # --- Update sentinel tokens in README ---
 update_token() {
   local token="$1" value="$2" file="$3"

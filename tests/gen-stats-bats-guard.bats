@@ -187,7 +187,7 @@ EOF
   # gen-stats reads (cast-db-init.sh is the single source of truth, plus migrations).
   # This tracks schema growth automatically — no hardcoded range to bump on every table add.
   DISTINCT_COUNT=$(grep -rhoE 'CREATE TABLE IF NOT EXISTS[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*\(' \
-    "$REPO_DIR/scripts/cast-db-init.sh" "$REPO_DIR"/scripts/migrations/*.sql "$REPO_DIR"/migrations/*.sql 2>/dev/null \
+    "$REPO_DIR/scripts/cast-db-init.sh" "$REPO_DIR"/scripts/migrations/*.sql 2>/dev/null \
     | sed -E 's/.*EXISTS[[:space:]]+//;s/[[:space:]]*\(//' | sort -u | grep -c .)
 
   # gen-stats must emit EXACTLY the distinct count — proves dedup works (not the inflated
