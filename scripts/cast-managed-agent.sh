@@ -460,6 +460,11 @@ else
   # Accumulate full agent output for telemetry summary
   STEP3_AGENT_OUTPUT="$raw_sse"
   _log "success" "http=${STEP3_HTTP_STATUS} duration_ms=${SESSION_DURATION_MS} streaming=true"
+  # Emit the raw session response body to stdout (parallel to the non-streaming path's
+  # `echo "$STEP3_RESPONSE"`). In real SSE usage _parse_sse_lines already streamed
+  # text deltas live; this ensures callers always receive something on success
+  # regardless of whether the response contained SSE text-delta events.
+  echo "${STEP3_AGENT_OUTPUT%%__HTTP_STATUS__*}"
 fi
 
 # --- cast.db: agent_runs (Task 2.3) ---

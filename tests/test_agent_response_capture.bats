@@ -28,7 +28,11 @@ _make_db() {
       tool_uses INTEGER,
       response TEXT,
       cache_read_input_tokens INTEGER,
-      cache_creation_input_tokens INTEGER
+      cache_creation_input_tokens INTEGER,
+      cost_usd REAL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      model TEXT
     );
     CREATE TABLE agent_truncations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
