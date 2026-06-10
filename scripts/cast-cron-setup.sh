@@ -94,9 +94,7 @@ SCRIPT
       cat > "$script_file" <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
-sqlite3 "${HOME}/.claude/cast.db" \
-  "DELETE FROM routing_events WHERE created_at < datetime('now', '-90 days');
-   DELETE FROM agent_runs WHERE started_at < datetime('now', '-90 days');"
+exec python3 "${HOME}/.claude/scripts/cast-db-prune.py"
 SCRIPT
       ;;
     log-compress)
