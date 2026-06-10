@@ -49,48 +49,12 @@ Read `dispatch_backend` from `~/.claude/config/cast-cli.json`:
 ```bash
 DISPATCH_BACKEND=$(python3 -c "import json,os; d=json.load(open(os.path.expanduser('~/.claude/config/cast-cli.json'))); print(d.get('dispatch_backend', 'cast'))" 2>/dev/null || echo 'cast')
 ```
-Log the backend to cast.db **and** write the active plan_sessions binding (cast-desktop's `plans.ts` uses this to resolve session_id → active plan) — kept in a single `python3 -c` invocation so the LLM cannot run one write and skip the other:
+Log the backend to cast.db **and** write the active plan_sessions binding (cast-desktop's `plans.ts` uses this to resolve session_id → active plan):
 ```bash
-python3 -c "
-import sys; sys.path.insert(0, '$HOME/.claude/scripts')
-from cast_db import db_write, db_execute
-import datetime, os
-SESSION_ID = os.environ.get('CAST_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or 'unknown'
-NOW = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-db_execute('''
-    CREATE TABLE IF NOT EXISTS dispatch_decisions (
-        id TEXT PRIMARY KEY,
-        session_id TEXT,
-        timestamp TEXT,
-        dispatch_backend TEXT,
-        plan_file TEXT
-    )
-''')
-db_write('dispatch_decisions', {
-    'id': os.urandom(8).hex(),
-    'session_id': SESSION_ID,
-    'timestamp': NOW,
-    'dispatch_backend': '$DISPATCH_BACKEND',
-    'plan_file': '$PLAN_FILE_PATH'
-})
-try:
-    db_execute('''
-        CREATE TABLE IF NOT EXISTS plan_sessions (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            plan_file  TEXT NOT NULL,
-            started_at TEXT NOT NULL
-        )
-    ''')
-    db_write('plan_sessions', {
-        'session_id': SESSION_ID,
-        'plan_file': '$PLAN_FILE_PATH',
-        'started_at': NOW,
-    })
-except Exception:
-    pass
-" 2>/dev/null || true
+python3 ~/.claude/scripts/orchestrate-dispatch.py log-dispatch \
+  --backend "$DISPATCH_BACKEND" --plan "$PLAN_FILE_PATH" 2>/dev/null || true
 ```
+
 If `DISPATCH_BACKEND` is `"coordinator"` or `"auto"`, print a notice: `[CAST] dispatch_backend=$DISPATCH_BACKEND — COORDINATOR_MODE not yet supported; falling back to cast dispatch.` and continue with standard dispatch. This stub is intentional — coordinator dispatch logic will be added when COORDINATOR_MODE ships publicly.
 
 Create one TaskCreate entry per batch (subject = "Batch N: [description]").
@@ -131,17 +95,6 @@ Log `[CAST-ORCHESTRATE] Branch check passed: $CURRENT_BRANCH` and continue.
 Switch to the target branch before continuing? [y/N]
 ```
 Stop and wait. Do not proceed to Step 3 unless the user explicitly confirms (replies "y" or "yes"). This prevents the C3-on-C2-branch class of errors documented in the 2026-04-16 insights report.
-
-Inline shell reference for the cutover check (for runtime implementation):
-```bash
-if [[ "$(date +%Y%m%d)" -ge "20260603" ]]; then
-  echo "BLOCKED: target_branch is required in the manifest (enforced since 2026-06-03)."
-  # stop
-else
-  echo "[CAST-ORCHESTRATE] DEPRECATION WARNING: This plan omits target_branch. Plans without target_branch will fail to orchestrate from 2026-06-03. Add target_branch to the manifest. Continuing with no branch check."
-  # proceed
-fi
-```
 
 ## Step 3 — Present the Queue
 
@@ -218,35 +171,15 @@ Apply the appropriate preamble tier to ALL agent dispatches — both parallel an
    - Valid values: `Status: DONE`, `Status: DONE_WITH_CONCERNS`, `Status: BLOCKED`, `Status: NEEDS_CONTEXT`
    - If no valid Status line is found AND response length > 50 chars, retry once with: "Your response is missing a Status block. End your response with Status: DONE (or DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT)."
    - On retry, if still missing: attempt status file fallback before declaring BLOCKED (see below).
-   - **Status file fallback (truncation resilience — Phase 4.9):** Before declaring BLOCKED, check for a recent status file at `~/.claude/agent-status/<agent>-*.json`. Find the most recent matching file with `mtime` within the last 300 seconds:
+   - **Status file fallback (truncation resilience — Phase 4.9):** Before declaring BLOCKED, check for a recent status file using the backend script:
      ```bash
      AGENT_NAME="<agent name or subagent_type from the ADM entry>"
-     STATUS_FILE=$(python3 -c "
-import os, glob, sys
-files = glob.glob(os.path.expanduser('~/.claude/agent-status/'+sys.argv[1]+'-*.json'))
-if files:
-    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
-    print(files[0])
-" "$AGENT_NAME" 2>/dev/null)
-     if [ -n "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ]; then
-       FILE_MTIME=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$STATUS_FILE" 2>/dev/null || echo 0)
-       NOW=$(date +%s)
-       AGE=$((NOW - FILE_MTIME))
-       if [ "$AGE" -le 300 ]; then
-         FILE_STATUS=$(python3 -c "
-     import json, sys
-     try:
-         d = json.load(open('$STATUS_FILE'))
-         print(d.get('status', ''))
-     except Exception:
-         pass
-     " 2>/dev/null)
-         if [ -n "$FILE_STATUS" ]; then
-           # Use file-status as authoritative; skip the BLOCKED path
-           STATUS_LINE="Status: $FILE_STATUS (recovered from status file)"
-           # Proceed to step 4 routing with the recovered status
-         fi
-       fi
+     FILE_STATUS=$(python3 ~/.claude/scripts/orchestrate-dispatch.py \
+       recent-status --agent "$AGENT_NAME" --max-age 300 2>/dev/null)
+     if [ -n "$FILE_STATUS" ]; then
+       # Use file-status as authoritative; skip the BLOCKED path
+       STATUS_LINE="Status: $FILE_STATUS (recovered from status file)"
+       # Proceed to step 4 routing with the recovered status
      fi
      ```
    - If the status file fallback recovers a Status, log to cast.db `quality_gates` with `contract_passed = -1` (special sentinel meaning "recovered via file fallback").
@@ -255,24 +188,13 @@ if files:
    - **Test-runner authoritative file truth (Phase 4.11):** When the dispatched agent is `test-runner` (or `subagent_type=test-runner`), the file at `~/.claude/agent-status/test-runner-*.json` is treated as MORE authoritative than the prose Status line — even when prose is present. This guards against the hallucination class observed 2026-05-11 where test-runner reported false BLOCKED on a green suite. Implementation:
      ```bash
      if [[ "$AGENT_NAME" == "test-runner" ]]; then
-       STATUS_FILE=$(python3 -c "
-import os, glob
-files = glob.glob(os.path.expanduser('~/.claude/agent-status/test-runner-*.json'))
-if files:
-    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
-    print(files[0])
-" 2>/dev/null)
-       if [[ -n "$STATUS_FILE" && -f "$STATUS_FILE" ]]; then
-         FILE_MTIME=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$STATUS_FILE" 2>/dev/null || echo 0)
-         NOW=$(date +%s)
-         AGE=$((NOW - FILE_MTIME))
-         if [[ "$AGE" -le 300 ]]; then
-           FILE_STATUS=$(python3 -c "import json; d=json.load(open('$STATUS_FILE')); print(d.get('status',''))" 2>/dev/null)
-           # If file status differs from prose status, trust the file
-           if [[ -n "$FILE_STATUS" && "$FILE_STATUS" != "$(echo "$STATUS_LINE" | grep -oE 'DONE|BLOCKED|DONE_WITH_CONCERNS|NEEDS_CONTEXT' | head -1)" ]]; then
-             echo "[CAST] test-runner prose said $STATUS_LINE but file says $FILE_STATUS — trusting file."
-             STATUS_LINE="Status: $FILE_STATUS (file-authoritative)"
-           fi
+       FILE_STATUS=$(python3 ~/.claude/scripts/orchestrate-dispatch.py \
+         recent-status --agent test-runner --max-age 300 2>/dev/null)
+       if [[ -n "$FILE_STATUS" ]]; then
+         PROSE_STATUS=$(echo "$STATUS_LINE" | grep -oE 'DONE|BLOCKED|DONE_WITH_CONCERNS|NEEDS_CONTEXT' | head -1)
+         if [[ "$FILE_STATUS" != "$PROSE_STATUS" ]]; then
+           echo "[CAST] test-runner prose said $STATUS_LINE but file says $FILE_STATUS — trusting file."
+           STATUS_LINE="Status: $FILE_STATUS (file-authoritative)"
          fi
        fi
      fi
@@ -281,33 +203,12 @@ if files:
 
 3. Log validation result to cast.db:
    ```bash
-   python3 -c "
-   import sys; sys.path.insert(0, '$HOME/.claude/scripts')
-   from cast_db import db_write, db_execute
-   import datetime, os
-   db_execute('''
-       CREATE TABLE IF NOT EXISTS quality_gates (
-           id TEXT PRIMARY KEY,
-           session_id TEXT,
-           batch_id INTEGER,
-           agent_name TEXT,
-           timestamp TEXT,
-           status_line TEXT,
-           contract_passed INTEGER,
-           retry_count INTEGER
-       )
-   ''')
-   db_write('quality_gates', {
-       'id': os.urandom(8).hex(),
-       'session_id': os.environ.get('CLAUDE_SESSION_ID', 'unknown'),
-       'batch_id': $BATCH_ID,
-       'agent_name': '$AGENT_NAME',
-       'timestamp': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-       'status_line': '$STATUS_LINE',
-       'contract_passed': $CONTRACT_PASSED,
-       'retry_count': $RETRY_COUNT
-   })
-   " 2>/dev/null || true
+   python3 ~/.claude/scripts/orchestrate-dispatch.py log-quality-gate \
+     --batch-id "$BATCH_ID" \
+     --agent "$AGENT_NAME" \
+     --status "$STATUS_LINE" \
+     --contract-passed "$CONTRACT_PASSED" \
+     --retry-count "$RETRY_COUNT" 2>/dev/null || true
    ```
    Where:
    - `$BATCH_ID` = current batch id integer
