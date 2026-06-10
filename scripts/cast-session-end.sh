@@ -33,6 +33,10 @@ _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/
 CAST_DIR="${HOME}/.claude/cast"
 CAST_SCRIPTS_DIR="${HOME}/.claude/scripts"
 
+# shellcheck source=cast-sqlite-lib.sh
+# shellcheck disable=SC1091
+source "${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh" 2>/dev/null || source "$(dirname "$0")/cast-sqlite-lib.sh" 2>/dev/null || true
+
 # === SESSION_ID RESOLUTION ===
 # Priority: (1) stdin JSON session_id, (2) CAST_SESSION_ID env (set by start-hook via CLAUDE_ENV_FILE),
 # (3) CLAUDE_SESSION_ID env, (4) literal 'default'.
@@ -202,31 +206,32 @@ archive_category() {
 DB="${CAST_DB_PATH:-${CLAUDE_DIR}/cast.db}"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  sqlite3 "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}', status = 'ended' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
+  cast_sqlite "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}', status = 'ended' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
 
   # Aggregate token counts and cost from agent_runs for this session
-  sqlite3 "$DB" "UPDATE sessions SET
+  cast_sqlite "$DB" "UPDATE sessions SET
     total_input_tokens = COALESCE((SELECT SUM(input_tokens) FROM agent_runs WHERE session_id = '${SESSION_ID}'), 0),
     total_output_tokens = COALESCE((SELECT SUM(output_tokens) FROM agent_runs WHERE session_id = '${SESSION_ID}'), 0),
     total_cost_usd = COALESCE((SELECT SUM(cost_usd) FROM agent_runs WHERE session_id = '${SESSION_ID}'), 0)
     WHERE id = '${SESSION_ID}';" 2>/dev/null || true
 fi
 
-# === DB PRUNING ===
+# === DB PRUNING (atomic — one lock acquisition for all 11 deletes/updates) ===
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
-  sqlite3 "$DB" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
-  sqlite3 "$DB" "DELETE FROM sessions WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');" 2>/dev/null || true
-  # Prompt/routing data is more sensitive — hard-capped at 30 days regardless of TTL_DB_ROWS
-  sqlite3 "$DB" "DELETE FROM routing_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
-  # Additional tables with 30-day retention (audit remediation 2026-04-16)
-  sqlite3 "$DB" "DELETE FROM dispatch_decisions WHERE created_at < datetime('now', '-30 days');" 2>/dev/null || true
-  sqlite3 "$DB" "DELETE FROM quality_gates WHERE created_at < datetime('now', '-30 days');" 2>/dev/null || true
-  sqlite3 "$DB" "DELETE FROM stream_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
-  sqlite3 "$DB" "DELETE FROM stream_hook_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
-  sqlite3 "$DB" "DELETE FROM worktree_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
-  sqlite3 "$DB" "DELETE FROM cast_events WHERE timestamp < datetime('now', '-30 days');" 2>/dev/null || true
-  # Convert ghost rows (stuck 'running') older than 2 hours to 'failed'
-  sqlite3 "$DB" "UPDATE agent_runs SET status='failed' WHERE status='running' AND started_at < datetime('now', '-2 hours');" 2>/dev/null || true
+  cast_sqlite "$DB" << PRUNE_SQL 2>/dev/null || true
+BEGIN;
+DELETE FROM agent_runs       WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');
+DELETE FROM sessions         WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');
+DELETE FROM routing_events   WHERE timestamp  < datetime('now', '-30 days');
+DELETE FROM dispatch_decisions WHERE created_at < datetime('now', '-30 days');
+DELETE FROM quality_gates    WHERE created_at < datetime('now', '-30 days');
+DELETE FROM stream_events    WHERE timestamp  < datetime('now', '-30 days');
+DELETE FROM stream_hook_events WHERE timestamp < datetime('now', '-30 days');
+DELETE FROM worktree_events  WHERE timestamp  < datetime('now', '-30 days');
+DELETE FROM cast_events      WHERE timestamp  < datetime('now', '-30 days');
+UPDATE agent_runs SET status='failed' WHERE status='running' AND started_at < datetime('now', '-2 hours');
+COMMIT;
+PRUNE_SQL
 fi
 
 # === PANE BINDINGS UPDATE ===

@@ -80,7 +80,7 @@ if db_path and os.path.exists(db_path):
                 INSERT INTO task_queue
                   (created_at, project, project_root, agent, task, status)
                 VALUES (?, ?, ?, ?, ?, ?)
-            ''', (iso_ts, project, cwd, "background", task_subject or task_id, "running"))
+            ''', (iso_ts, project, cwd, "background", task_subject or task_id, "pending"))
             conn.commit()
         conn.close()
     except Exception:

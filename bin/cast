@@ -1414,21 +1414,37 @@ PYEOF
   fi
 
   # 8. Database migrations
-  local migrate_script="${CAST_SCRIPTS_DIR}/cast-migrate.sh"
+  local migrate_script="${CAST_SCRIPTS_DIR}/cast-migrate.py"
   if [ ! -f "$migrate_script" ]; then
-    migrate_script="${CAST_REPO_DIR}/scripts/cast-migrate.sh"
+    migrate_script="${CAST_REPO_DIR}/scripts/cast-migrate.py"
   fi
   if [ -f "$migrate_script" ]; then
+    # Use --dry-run so doctor is READ-ONLY — it must never apply migrations.
     local migration_output
-    migration_output=$(bash "$migrate_script" 2>&1 || true)
-    local applied_count
-    applied_count=$(echo "$migration_output" | grep -c "^\[migrate\] applied" 2>/dev/null)
-    applied_count=${applied_count:-0}
+    migration_output=$(python3 "$migrate_script" --dry-run 2>&1 || true)
+    local pending_count
+    pending_count=$(echo "$migration_output" | grep -c '^\s*\[PENDING\]' 2>/dev/null || echo 0)
+    pending_count=${pending_count:-0}
     local total_count
     total_count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
-    printf "%b Migrations: %d applied this run, %d total recorded\n" "$INFO" "$applied_count" "$total_count"
+    # Count migration files on disk to detect empty-ledger-with-files condition
+    local migrations_dir="${CAST_SCRIPTS_DIR}/migrations"
+    local files_on_disk=0
+    if [ -d "$migrations_dir" ]; then
+      files_on_disk=$(find "$migrations_dir" -maxdepth 1 -name '[0-9]*_*.sql' | wc -l | tr -d ' ')
+    fi
+    if [ "$total_count" -eq 0 ] && [ "$files_on_disk" -gt 0 ]; then
+      printf "%b Migrations: ledger empty (%d files on disk) — run: cast migrate\n" "$WARN" "$files_on_disk"
+      overall_ok=0
+    elif [ "$pending_count" -gt 0 ]; then
+      printf "%b Migrations: %d pending — run: cast migrate\n" "$WARN" "$pending_count"
+      overall_ok=0
+    else
+      printf "%b Migrations: up to date (%d recorded)\n" "$OK" "$total_count"
+    fi
   else
-    printf "%b Migrations: script not found\n" "$WARN"
+    printf "%b Migrations: cast-migrate.py not found — run: bash install.sh\n" "$WARN"
+    overall_ok=0
   fi
 
   # 9. Stale auto-memory check
@@ -1676,6 +1692,39 @@ PYEOF
       printf "%b honesty: code_ref_checks — none in last 7d\n" "$OK"
     else
       printf "%b honesty: code_ref_checks — %d unverified ref(s)\n" "$WARN" "$_crc_out"
+    fi
+
+    # ── silent truncations (maxTurns) ────────────────────────────────────────
+    # Detects agent_runs rows that were silently cut off by the maxTurns cap:
+    #   - stuck running > 2h (pre-reaper, not yet abandoned)
+    #   - status='abandoned' in the last 7d (reaped by cast-abandon-stale-runs.py)
+    # Note: abandoned_at column is added by the reaper on first run; if it is
+    # absent the UNION query fails and we degrade gracefully via the rc-ne-0 branch.
+    local _st_out _st_rc
+    _st_out="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COALESCE(agent,'unknown'), COUNT(*) FROM agent_runs \
+       WHERE (status='running' AND started_at < datetime('now','-2 hours')) \
+          OR (status='abandoned' AND abandoned_at >= datetime('now','-7 days')) \
+       GROUP BY agent ORDER BY COUNT(*) DESC;" 2>&1)"
+    _st_rc=$?
+    if echo "$_st_out" | grep -qi "no such table"; then
+      printf "%b honesty: silent truncations (maxTurns) — no data yet\n" "$INFO"
+    elif [ "$_st_rc" -ne 0 ]; then
+      printf "%b honesty: silent truncations (maxTurns) — unavailable (db query failed)\n" "$INFO"
+    elif [ -z "$_st_out" ]; then
+      printf "%b honesty: silent truncations (maxTurns) — none in last 7d\n" "$OK"
+    else
+      local _st_total=0
+      while IFS='|' read -r _ag _cnt; do
+        [ -z "$_ag" ] && continue
+        _st_total=$((_st_total + _cnt))
+      done <<< "$_st_out"
+      printf "%b honesty: silent truncations (maxTurns) — %d suspected truncation(s)\n" "$WARN" "$_st_total"
+      while IFS='|' read -r _ag _cnt; do
+        [ -z "$_ag" ] && continue
+        printf "    %-20s %d\n" "$_ag" "$_cnt"
+      done <<< "$_st_out"
+      printf "    likely maxTurns cap hit — agent stopped without Status; see rules working-conventions 'Agent Turn Limits'\n"
     fi
   fi
 

@@ -153,3 +153,22 @@ print('ok')
   ! grep -q "OTEL_METRICS_EXPORTER" "$env_file"
   ! grep -q "CLAUDE_CODE_ENABLE_TELEMETRY" "$env_file"
 }
+
+# ---------------------------------------------------------------------------
+# 11. Missing/empty session_id → INSERT is skipped (NULL PK guard)
+# Phase 5 Wave 2: sessions writer must NOT insert when id is empty/missing.
+# ---------------------------------------------------------------------------
+
+@test "payload missing session_id → no sessions row inserted" {
+  bash "$HOOK_SH" <<< '{"cwd": "/tmp/project"}'
+  local count
+  count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM sessions;" | tr -d ' ')
+  [[ "$count" -eq 0 ]]
+}
+
+@test "payload with empty-string session_id → no sessions row inserted" {
+  bash "$HOOK_SH" <<< '{"session_id": "", "cwd": "/tmp/project"}'
+  local count
+  count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM sessions;" | tr -d ' ')
+  [[ "$count" -eq 0 ]]
+}

@@ -51,7 +51,8 @@ def main():
         if operation == 'start':
             agent       = payload.get('agent', 'unknown')
             agent_id    = payload.get('agent_id', '')
-            session_id  = payload.get('session_id', '')
+            _sid_raw    = payload.get('session_id', '')
+            session_id  = _sid_raw if _sid_raw else None   # NULL > '' to avoid FK orphans
             batch_id    = payload.get('batch_id', 0)
             task_summary = (payload.get('task_summary') or '')[:200]
             model       = payload.get('model') or None

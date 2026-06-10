@@ -5,9 +5,9 @@ that exist in scripts/migrations/ but aren't recorded.
 Live schema: (version TEXT PK, applied_at TEXT, checksum TEXT)
 Idempotent: INSERT OR IGNORE on PK (version column).
 
-The live schema_migrations table was created by cast-migrate.sh and uses a
-DIFFERENT schema than the newer cast-migrate.py (which uses migration_name).
-This script targets the live bash-created schema only.
+The live schema_migrations table is created by cast-migrate.py and cast-db-init.sh.
+Schema: (version TEXT PK, applied_at TEXT, checksum TEXT).
+cast-migrate.sh has been removed; cast-migrate.py is now the single runner.
 
 Usage:
   python3 cast-backfill-schema-migrations.py [--db PATH] [--dry-run]

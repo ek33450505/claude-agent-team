@@ -55,7 +55,9 @@ echo "[CAST post-merge] CAST source changed → reinstalling (log: ~/.claude/log
 # Testability seam: override via CAST_POST_MERGE_INSTALL_CMD
 # Default is built first so REPO_ROOT (which may contain spaces) is properly quoted
 # when passed to eval. Tests override this by setting CAST_POST_MERGE_INSTALL_CMD.
-_default_install_cmd="bash ${REPO_ROOT@Q}/install.sh"
+# Use printf %q (bash 3.2-portable) instead of ${var@Q} (bash 4.4+ only) so the
+# hook runs on macOS's system bash 3.2 — see cast-post-merge-hook.bats.
+printf -v _default_install_cmd 'bash %q/install.sh' "$REPO_ROOT"
 INSTALL_CMD="${CAST_POST_MERGE_INSTALL_CMD:-$_default_install_cmd}"
 
 _log "running: $INSTALL_CMD"

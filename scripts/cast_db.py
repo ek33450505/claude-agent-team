@@ -39,6 +39,7 @@ ALLOWED_TABLES = {
     'tool_call_failures',
     'swarm_sessions',
     'task_queue',
+    'managed_agent_invocations',
     'teammate_messages',
     'teammate_runs',
     'unstaged_warnings',
@@ -106,6 +107,14 @@ def _connect():
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=5)
     conn.row_factory = sqlite3.Row
+    # Harden against lock contention and ensure WAL mode (idempotent if already WAL).
+    # Never raise — a PRAGMA failure must not crash the hook pipeline.
+    try:
+        conn.execute('PRAGMA busy_timeout=5000;')
+        conn.execute('PRAGMA journal_mode=WAL;')
+        conn.execute('PRAGMA synchronous=NORMAL;')
+    except Exception as e:
+        _log_error(f'_connect PRAGMA setup failed (non-fatal): {e}')
     return conn
 
 

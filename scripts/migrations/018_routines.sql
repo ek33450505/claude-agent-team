@@ -1,3 +1,6 @@
+-- Migration 018: routines table.
+-- Previously in repo-root migrations/012-routines.sql (read by neither installed path).
+
 CREATE TABLE IF NOT EXISTS routines (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,

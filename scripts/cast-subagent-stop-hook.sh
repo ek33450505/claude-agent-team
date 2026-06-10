@@ -285,7 +285,6 @@ agent = os.environ.get('CAST_STOP_AGENT', '')
 sess  = os.environ.get('CAST_STOP_SESSION', '')
 ts    = os.environ.get('CAST_STOP_TS_ISO', '')
 st    = os.environ.get('CAST_STOP_DB_STATUS', 'DONE')
-duration_ms   = int(os.environ.get('CAST_STOP_DURATION_MS', '0') or '0')
 tool_uses     = int(os.environ.get('CAST_STOP_TOOL_USES', '0') or '0')
 response_text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '') or None
 cache_read    = os.environ.get('CAST_STOP_CACHE_READ_TOKENS', '') or None
@@ -415,22 +414,29 @@ for attempt in range(3):
         cur  = conn.cursor()
         if agent_id:
             cur.execute(
-                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=?, response=?, "
+                "UPDATE agent_runs SET status=?, ended_at=?, "
+                "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
+                "tool_uses=?, response=?, "
                 "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                 "cost_usd=?, input_tokens=?, output_tokens=?, model=? "
-                "WHERE status='running' AND agent_id=?",
-                (st, ts, duration_ms, tool_uses, response_text, cache_read, cache_create,
+                "WHERE id=("
+                "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?"
+                ")",
+                (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                  cost_usd, input_tokens, output_tokens, transcript_model, agent_id),
             )
         else:
             cur.execute(
-                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=?, response=?, "
+                "UPDATE agent_runs SET status=?, ended_at=?, "
+                "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
+                "tool_uses=?, response=?, "
                 "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                 "cost_usd=?, input_tokens=?, output_tokens=?, model=? "
-                "WHERE status='running' AND agent=? AND session_id=? "
-                "AND id=(SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
-                (st, ts, duration_ms, tool_uses, response_text, cache_read, cache_create,
-                 cost_usd, input_tokens, output_tokens, transcript_model, agent, sess, agent, sess),
+                "WHERE id=("
+                "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?"
+                ")",
+                (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
+                 cost_usd, input_tokens, output_tokens, transcript_model, agent, sess),
             )
         rows_affected = conn.execute("SELECT changes()").fetchone()[0]
         conn.commit()

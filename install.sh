@@ -313,12 +313,12 @@ if [ -f "$DB_INIT_SCRIPT" ]; then
 fi
 
 # --- Run migrations ---
-MIGRATE_SCRIPT="$CLAUDE_DIR/scripts/cast-migrate.sh"
+MIGRATE_SCRIPT="$CLAUDE_DIR/scripts/cast-migrate.py"
 if [ -f "$MIGRATE_SCRIPT" ]; then
-    if bash "$MIGRATE_SCRIPT" 2>/dev/null; then
+    if python3 "$MIGRATE_SCRIPT" 2>/dev/null; then
         success "  Database migrations applied"
     else
-        warn "  Database migrations failed — run cast-migrate.sh manually"
+        warn "  Database migrations failed — run: python3 ~/.claude/scripts/cast-migrate.py"
     fi
 fi
 
