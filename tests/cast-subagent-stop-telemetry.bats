@@ -35,24 +35,30 @@ teardown() {
   [ -n "${TEST_TMPDIR:-}" ] && rm -rf "$TEST_TMPDIR"
 }
 
-@test "SubagentStop: writes duration_ms and tool_uses to agent_runs" {
+@test "SubagentStop: computes duration_ms from timestamps and counts tool_uses" {
   sqlite3 "$TEMP_DB" "INSERT INTO agent_runs (agent, session_id, agent_id, status, started_at) VALUES ('test-agent','s1','aid1','running','2026-01-01T00:00:00Z');"
-  local payload='{"agent_type":"test-agent","session_id":"s1","agent_id":"aid1","stop_reason":"end_turn","duration_ms":4200,"tool_uses":[{},{}]}'
+  # Payload carries no duration_ms: production SubagentStop payloads don't; the hook
+  # computes duration from started_at->ended_at. tool_uses is still counted from the array.
+  local payload='{"agent_type":"test-agent","session_id":"s1","agent_id":"aid1","stop_reason":"end_turn","tool_uses":[{},{}]}'
   run bash -c "echo '$payload' | CAST_DB_PATH='$TEMP_DB' bash '$HOOK_SH'"
   assert_success
-  local result
-  result=$(sqlite3 "$TEMP_DB" "SELECT duration_ms, tool_uses FROM agent_runs WHERE agent_id='aid1';")
-  [ "$result" = "4200|2" ]
+  local duration tool_uses
+  duration=$(sqlite3 "$TEMP_DB" "SELECT duration_ms FROM agent_runs WHERE agent_id='aid1';")
+  tool_uses=$(sqlite3 "$TEMP_DB" "SELECT tool_uses FROM agent_runs WHERE agent_id='aid1';")
+  [ "$tool_uses" = "2" ]
+  [ -n "$duration" ] && [ "$duration" -gt 0 ]
 }
 
-@test "SubagentStop: missing duration_ms writes 0 (not NULL)" {
+@test "SubagentStop: missing payload duration_ms still computes duration from timestamps (not NULL)" {
   sqlite3 "$TEMP_DB" "INSERT INTO agent_runs (agent, session_id, agent_id, status, started_at) VALUES ('test-agent','s2','aid2','running','2026-01-01T00:00:00Z');"
   local payload='{"agent_type":"test-agent","session_id":"s2","agent_id":"aid2","stop_reason":"end_turn"}'
   run bash -c "echo '$payload' | CAST_DB_PATH='$TEMP_DB' bash '$HOOK_SH'"
   assert_success
-  local result
-  result=$(sqlite3 "$TEMP_DB" "SELECT duration_ms, tool_uses FROM agent_runs WHERE agent_id='aid2';")
-  [ "$result" = "0|0" ]
+  local duration tool_uses
+  duration=$(sqlite3 "$TEMP_DB" "SELECT duration_ms FROM agent_runs WHERE agent_id='aid2';")
+  tool_uses=$(sqlite3 "$TEMP_DB" "SELECT tool_uses FROM agent_runs WHERE agent_id='aid2';")
+  [ "$tool_uses" = "0" ]
+  [ -n "$duration" ] && [ "$duration" -gt 0 ]
 }
 
 @test "SubagentStop: empty stdin exits 0 without error" {

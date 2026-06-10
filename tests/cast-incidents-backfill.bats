@@ -5,7 +5,7 @@ load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 SCRIPT="$REPO_DIR/scripts/cast-incidents-backfill.py"
-INCIDENTS_MIGRATION="$REPO_DIR/migrations/011-incidents.sql"
+INCIDENTS_MIGRATION="$REPO_DIR/scripts/migrations/017_incidents.sql"
 
 setup() {
   export TEST_DB

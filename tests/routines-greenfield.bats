@@ -4,7 +4,7 @@ load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-MIGRATION_FILE="$REPO_DIR/migrations/012-routines.sql"
+MIGRATION_FILE="$REPO_DIR/scripts/migrations/018_routines.sql"
 CAST_BIN="$REPO_DIR/bin/cast"
 RUNNER="$REPO_DIR/scripts/cast-routine-runner.sh"
 
