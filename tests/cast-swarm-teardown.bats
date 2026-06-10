@@ -76,3 +76,97 @@ bootstrap_swarm() {
   db_status=$(sqlite3 "$TEST_DB" "SELECT status FROM swarm_sessions WHERE id='$swarm_id' LIMIT 1;")
   [ "$db_status" = "failed" ]
 }
+
+# ---------------------------------------------------------------------------
+# teardown: deletes associated cast-swarm-* branch after worktree removal
+# ---------------------------------------------------------------------------
+
+@test "cast-swarm-teardown: deletes cast-swarm-* branch after worktree removal" {
+  # Use a temp isolated git repo so we never touch the live repo's branches
+  local tmp_repo
+  tmp_repo="$(mktemp -d /tmp/cast-swarm-teardown-brtest.XXXXXXXX)"
+
+  git init "$tmp_repo" --initial-branch=main >/dev/null 2>&1
+  git -C "$tmp_repo" config user.email "test@example.com"
+  git -C "$tmp_repo" config user.name "Test"
+  git -C "$tmp_repo" commit --allow-empty -m "init" >/dev/null 2>&1
+
+  local swarm_id="test-br-$$"
+  local role="backend"
+  local branch_name="cast-swarm-${swarm_id}-${role}"
+
+  # Create the branch that teardown should delete
+  git -C "$tmp_repo" branch "$branch_name" >/dev/null 2>&1
+
+  # Verify branch exists before teardown
+  git -C "$tmp_repo" branch --list "$branch_name" | grep -q "$branch_name"
+
+  # Build a minimal manifest pointing at tmp_repo as git_root
+  local manifest_dir="$HOME/.claude/cast/swarms"
+  mkdir -p "$manifest_dir"
+  local manifest_file="$manifest_dir/${swarm_id}.json"
+  cat > "$manifest_file" <<EOF
+{
+  "swarm_id": "${swarm_id}",
+  "team_name": "test-team",
+  "merge_strategy": "squash",
+  "teammates": [
+    {"role": "${role}", "branch": "${branch_name}", "worktree": null}
+  ]
+}
+EOF
+
+  # Run teardown with synthetic git_root pointing at our tmp repo.
+  # We override GIT_ROOT by injecting it via a wrapper: teardown.sh derives
+  # GIT_ROOT via `git rev-parse --show-toplevel`, so we run from inside tmp_repo.
+  (cd "$tmp_repo" && CAST_DB_PATH="$TEST_DB" bash "$TEARDOWN_SH" --force "$swarm_id") > /dev/null 2>&1 || true
+
+  # Branch must be gone after teardown — git branch --list returns nothing when branch is absent
+  run git -C "$tmp_repo" branch --list "$branch_name"
+  [ -z "$output" ]
+
+  rm -rf "$tmp_repo"
+}
+
+# ---------------------------------------------------------------------------
+# teardown: prefix guard — never deletes a non-cast-swarm-* branch
+# ---------------------------------------------------------------------------
+
+@test "cast-swarm-teardown: prefix guard prevents deletion of non-swarm branch" {
+  local tmp_repo
+  tmp_repo="$(mktemp -d /tmp/cast-swarm-teardown-guard.XXXXXXXX)"
+
+  git init "$tmp_repo" --initial-branch=main >/dev/null 2>&1
+  git -C "$tmp_repo" config user.email "test@example.com"
+  git -C "$tmp_repo" config user.name "Test"
+  git -C "$tmp_repo" commit --allow-empty -m "init" >/dev/null 2>&1
+
+  local swarm_id="test-guard-$$"
+  # Craft a manifest where role produces a branch name that does NOT start with cast-swarm-
+  # (This is a defense-in-depth test — in practice bootstrap always produces cast-swarm-* names,
+  # but the guard must hold regardless of manifest content.)
+  local role="../../../../main"  # adversarial role value
+  local branch_name="safe-branch-that-should-survive"
+  git -C "$tmp_repo" branch "$branch_name" >/dev/null 2>&1
+
+  local manifest_dir="$HOME/.claude/cast/swarms"
+  mkdir -p "$manifest_dir"
+  cat > "$manifest_dir/${swarm_id}.json" <<EOF
+{
+  "swarm_id": "${swarm_id}",
+  "team_name": "test-guard",
+  "merge_strategy": "squash",
+  "teammates": [
+    {"role": "${role}", "branch": "${branch_name}", "worktree": null}
+  ]
+}
+EOF
+
+  (cd "$tmp_repo" && CAST_DB_PATH="$TEST_DB" bash "$TEARDOWN_SH" --force "$swarm_id") > /dev/null 2>&1 || true
+
+  # safe-branch-that-should-survive must still exist — the guard should have blocked its deletion
+  run git -C "$tmp_repo" branch --list "$branch_name"
+  assert_output --partial "$branch_name"
+
+  rm -rf "$tmp_repo"
+}
