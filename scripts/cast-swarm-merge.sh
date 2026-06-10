@@ -177,6 +177,50 @@ for tm in teammates:
     else:
         print(f"Warning: could not remove worktree {worktree}: {result.stderr.strip()}", file=sys.stderr)
 
+# Delete merged source branches (cast-swarm-* only, prefix-guarded).
+# Only delete branches that merged without error — leave errored branches
+# in place so the operator can inspect and retry.
+errored_branches = {e["branch"] for e in merge_errors}
+
+# Collect checked-out branches to avoid deleting an active worktree HEAD.
+wt_list = subprocess.run(
+    ["git", "-C", git_root, "worktree", "list", "--porcelain"],
+    capture_output=True, text=True
+)
+checked_out_branches = set()
+for wt_line in wt_list.stdout.splitlines():
+    if wt_line.startswith("branch "):
+        checked_out_branches.add(wt_line.split("/")[-1])
+
+for tm in teammates:
+    branch = tm.get("branch")
+    role   = tm.get("role", "unknown")
+    if not branch:
+        continue
+    # PREFIX GUARD: only ever delete cast-swarm-* branches.
+    if not branch.startswith("cast-swarm-"):
+        print(f"  {role}: SKIP branch deletion — '{branch}' is not a cast-swarm-* branch", file=sys.stderr)
+        continue
+    if branch in errored_branches:
+        print(f"  {role}: SKIP branch deletion — merge had errors, leaving '{branch}' for inspection")
+        continue
+    if branch in checked_out_branches:
+        print(f"  {role}: SKIP branch deletion — '{branch}' is currently checked out in a worktree")
+        continue
+    del_result = subprocess.run(
+        ["git", "-C", git_root, "branch", "-D", branch],
+        capture_output=True, text=True
+    )
+    if del_result.returncode == 0:
+        print(f"  {role}: deleted merged branch '{branch}'")
+    else:
+        # Defensive: failed delete must not abort merge script
+        print(
+            f"  {role}: WARNING — could not delete branch '{branch}': "
+            f"{del_result.stderr.strip()}",
+            file=sys.stderr
+        )
+
 if merge_errors:
     print()
     print(f"Merge completed with {len(merge_errors)} error(s). Review above output.", file=sys.stderr)

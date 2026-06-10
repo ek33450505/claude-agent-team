@@ -65,7 +65,14 @@ DATE_STAMP="$(date +%Y-%m-%d)"
 REPORT_FILE="${REPORTS_DIR}/branch-grooming-${DATE_STAMP}.md"
 
 # ── Build groomer flags ───────────────────────────────────────────────────
-GROOMER_FLAGS=("--dry-run" "--worktrees")
+# Default: dry-run (report only, no deletions).
+# Set CAST_GROOM_AUTO_APPLY=1 to enable live deletions.
+# The audit report is always written regardless of mode.
+if [[ "${CAST_GROOM_AUTO_APPLY:-0}" == "1" ]]; then
+  GROOMER_FLAGS=("--apply" "--worktrees")
+else
+  GROOMER_FLAGS=("--dry-run" "--worktrees")
+fi
 if [[ -n "$REPO_DIR" ]]; then
   GROOMER_FLAGS+=("--repo" "$REPO_DIR")
 fi
