@@ -7,7 +7,7 @@ description: >
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
 # ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
-maxTurns: 20
+maxTurns: 50
 skills: [cast-conventions]
 ---
 

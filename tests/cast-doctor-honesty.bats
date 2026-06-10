@@ -235,3 +235,46 @@ SQL
   assert_output --partial "agent_hallucinations — none in last 7d"
   refute_output --partial "agent_hallucinations — 1 flagged"
 }
+
+# ── Test 5: silent truncations (maxTurns) — WARN path ───────────────────────
+@test "silent truncations: WARN when stuck-running row older than 2h exists" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # The minimal DDL uses agent_name; add the production column names idempotently
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+
+  # Insert a row stuck in running state for 3h (pre-reaper, not yet abandoned)
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, status)
+VALUES ('test-writer', datetime('now', '-3 hours'), 'running');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "silent truncations (maxTurns) — 1 suspected truncation(s)"
+  assert_output --partial "test-writer"
+  assert_output --partial "likely maxTurns cap hit"
+}
+
+# ── Test 6: silent truncations (maxTurns) — OK path ─────────────────────────
+@test "silent truncations: OK when no qualifying rows exist" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Add production column names the minimal DDL omits (idempotent)
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+
+  # Insert a recent running row (only 30 minutes old — within the 2h threshold)
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, status)
+VALUES ('code-writer', datetime('now', '-30 minutes'), 'running');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "silent truncations (maxTurns) — none in last 7d"
+  refute_output --partial "silent truncations (maxTurns) — 1 suspected truncation"
+}

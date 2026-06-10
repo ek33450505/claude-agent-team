@@ -1677,6 +1677,39 @@ PYEOF
     else
       printf "%b honesty: code_ref_checks — %d unverified ref(s)\n" "$WARN" "$_crc_out"
     fi
+
+    # ── silent truncations (maxTurns) ────────────────────────────────────────
+    # Detects agent_runs rows that were silently cut off by the maxTurns cap:
+    #   - stuck running > 2h (pre-reaper, not yet abandoned)
+    #   - status='abandoned' in the last 7d (reaped by cast-abandon-stale-runs.py)
+    # Note: abandoned_at column is added by the reaper on first run; if it is
+    # absent the UNION query fails and we degrade gracefully via the rc-ne-0 branch.
+    local _st_out _st_rc
+    _st_out="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COALESCE(agent,'unknown'), COUNT(*) FROM agent_runs \
+       WHERE (status='running' AND started_at < datetime('now','-2 hours')) \
+          OR (status='abandoned' AND abandoned_at >= datetime('now','-7 days')) \
+       GROUP BY agent ORDER BY COUNT(*) DESC;" 2>&1)"
+    _st_rc=$?
+    if echo "$_st_out" | grep -qi "no such table"; then
+      printf "%b honesty: silent truncations (maxTurns) — no data yet\n" "$INFO"
+    elif [ "$_st_rc" -ne 0 ]; then
+      printf "%b honesty: silent truncations (maxTurns) — unavailable (db query failed)\n" "$INFO"
+    elif [ -z "$_st_out" ]; then
+      printf "%b honesty: silent truncations (maxTurns) — none in last 7d\n" "$OK"
+    else
+      local _st_total=0
+      while IFS='|' read -r _ag _cnt; do
+        [ -z "$_ag" ] && continue
+        _st_total=$((_st_total + _cnt))
+      done <<< "$_st_out"
+      printf "%b honesty: silent truncations (maxTurns) — %d suspected truncation(s)\n" "$WARN" "$_st_total"
+      while IFS='|' read -r _ag _cnt; do
+        [ -z "$_ag" ] && continue
+        printf "    %-20s %d\n" "$_ag" "$_cnt"
+      done <<< "$_st_out"
+      printf "    likely maxTurns cap hit — agent stopped without Status; see rules working-conventions 'Agent Turn Limits'\n"
+    fi
   fi
 
   # 14. Updates Available
