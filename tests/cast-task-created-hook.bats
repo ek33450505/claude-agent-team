@@ -132,3 +132,39 @@ print('ok')
   run bash "$HOOK_SH" <<< "$(make_payload)"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# 8. task_queue INSERT uses status='pending' (not 'running')
+# ---------------------------------------------------------------------------
+
+@test "hook inserts task_queue row with status='pending'" {
+  # Seed a minimal cast.db with the task_queue table
+  python3 -c "
+import sqlite3, os
+db = os.environ['CAST_DB_PATH']
+conn = sqlite3.connect(db)
+conn.execute('''
+  CREATE TABLE IF NOT EXISTS task_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT, project TEXT, project_root TEXT,
+    agent TEXT, task TEXT, status TEXT,
+    priority INTEGER DEFAULT 5, retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3, claimed_at TEXT, completed_at TEXT
+  )
+''')
+conn.commit()
+conn.close()
+"
+  bash "$HOOK_SH" <<< "$(make_payload "task-pending-check" "Pending status test")"
+  python3 -c "
+import sqlite3, os, sys
+db = os.environ['CAST_DB_PATH']
+conn = sqlite3.connect(db)
+rows = conn.execute(\"SELECT status FROM task_queue WHERE task='Pending status test'\").fetchall()
+conn.close()
+assert rows, 'no row inserted'
+status = rows[0][0]
+assert status == 'pending', f'expected pending, got {status!r}'
+print('ok: status=' + status)
+"
+}
