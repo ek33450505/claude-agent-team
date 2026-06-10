@@ -11,9 +11,6 @@ set -euo pipefail
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
 
-# D5: Touch marker file for hook health tracking
-mkdir -p ~/.claude/cast/hook-last-fired && touch ~/.claude/cast/hook-last-fired/PostToolUse.timestamp
-
 INPUT="$(cat)"
 
 # Delegate all logic to cast-post-tool.py — reads stdin JSON once, handles all parts

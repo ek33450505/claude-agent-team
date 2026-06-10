@@ -137,7 +137,7 @@ try:
     ''')
     db_write('managed_agent_invocations', {
         'id': os.urandom(8).hex(),
-        'ts': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'ts': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'agent_name': os.environ.get('CAST_MA_AGENT_NAME', ''),
         'mode': os.environ.get('CAST_MA_MODE', ''),
         'http_status': int(os.environ.get('CAST_MA_HTTP_STATUS', '0') or 0),
@@ -326,7 +326,7 @@ try:
         'session_id': os.environ.get('CAST_SESSION_ID', 'unknown'),
         'agent': os.environ.get('CAST_AGENT_NAME', 'unknown'),
         'started_at': os.environ.get('CAST_STARTED_AT', ''),
-        'ended_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'ended_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'status': os.environ.get('CAST_AGENT_STATUS', 'unknown'),
         'execution_mode': 'managed',
         'task_summary': (os.environ.get('CAST_TASK_SUMMARY', '') or '')[:500],
@@ -377,7 +377,7 @@ print(json.dumps(body))
 ')"
 
 SESSION_START_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
-SESSION_STARTED_AT="$(python3 -c 'import datetime; print(datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+SESSION_STARTED_AT="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 LAST_HTTP_STATUS="0"
 STEP3_RESPONSE=""
 STEP3_AGENT_OUTPUT=""

@@ -124,6 +124,26 @@ _lint_orphan_scripts || {
   exit 1
 }
 
+# Lint 4: utcnow regression guard — fail if any staged .py or .sh file introduces datetime.utcnow()
+# Unit 3 swept all utcnow() calls; this lint prevents re-introduction.
+# Fix: replace datetime.utcnow() with datetime.now(timezone.utc)
+_lint_utcnow() {
+  local matches
+  matches=$(git diff --cached -U0 -- '*.py' '*.sh' | grep '^+' | grep -E 'datetime\.utcnow\(|\.utcnow\(\)' || true)
+  if [[ -n "$matches" ]]; then
+    echo "ERROR [lint-utcnow]: staged change introduces datetime.utcnow() (deprecated naive UTC)."
+    echo "  Fix: replace with datetime.now(timezone.utc)"
+    echo "  Matches:"
+    echo "$matches" | sed 's/^/    /'
+    return 1
+  fi
+  return 0
+}
+_lint_utcnow || {
+  echo "ERROR [pre-commit]: utcnow lint failed. See above."
+  exit 1
+}
+
 # Keep canonical cast-stats.json in sync with derived stats (git ls-files based → CI-consistent).
 # Only stages when a real stat field changed (--check ignores the volatile `updated` field),
 # so unrelated commits never churn the file. Never blocks the commit.

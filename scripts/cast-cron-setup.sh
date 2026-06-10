@@ -14,7 +14,6 @@
 #   30 3 * * *   db-prune  — prune old DB rows at 03:30
 #   45 3 * * *   log-compress — compress old event logs at 03:45
 #   47 3  * * *  cast-maintenance — daily CAST maintenance at 03:47
-#   47 22 * * *  pa-backup — backup Claude/.claude and JARVIS vault at 22:47
 #   0 8  * * 0   cron-health — weekly cron job health check on Sunday 08:00
 #
 # Usage:
@@ -49,7 +48,6 @@ declare -a CRON_ENTRIES=(
   "0 3 * * *|tidy"
   "30 3 * * *|db-prune"
   "45 3 * * *|log-compress"
-  "47 22 * * *|pa-backup"
   "47 3 * * *|cast-maintenance"
   "0 8 * * 0|cron-health"
 )
@@ -106,25 +104,6 @@ SCRIPT
 #!/bin/bash
 set -euo pipefail
 find "${HOME}/.claude/cast/events" -name '*.jsonl' -mtime +7 -exec gzip {} \;
-SCRIPT
-      ;;
-    pa-backup)
-      cat > "$script_file" <<'SCRIPT'
-#!/bin/bash
-set -euo pipefail
-rsync -a --delete \
-  --exclude="node_modules/" \
-  --exclude=".claude/worktrees/" \
-  --exclude="cast.db" \
-  --exclude="cast.db-wal" \
-  --exclude="cast.db-shm" \
-  --exclude="projects/*/subagents/" \
-  "${HOME}/.claude/" \
-  "${HOME}/Backups/jarvis/claude/"
-rsync -a --delete \
-  --exclude=".obsidian/plugins/*/node_modules/" \
-  "${HOME}/JARVIS/" \
-  "${HOME}/Backups/jarvis/vault/"
 SCRIPT
       ;;
     cast-maintenance)

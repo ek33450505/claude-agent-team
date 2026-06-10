@@ -11,7 +11,6 @@ setup() {
   export HOME="$(mktemp -d)"
   export CLAUDE_DIR="$HOME/.claude"
   mkdir -p "$CLAUDE_DIR/agent-status"
-  mkdir -p "$CLAUDE_DIR/cast/hook-last-fired"
 
   # Unset guard bypass env vars
   unset CLAUDE_SUBPROCESS
@@ -201,16 +200,6 @@ print(json.dumps({
   export CLAUDE_SUBPROCESS=1
   run bash "$HOOK_SH" <<< "$(make_write_payload "/tmp/test.txt")"
   assert_success
-}
-
-# ---------------------------------------------------------------------------
-# Hook Health Marker
-# ---------------------------------------------------------------------------
-
-@test "hook creates PreToolUse timestamp marker" {
-  bash "$HOOK_SH" <<< "$(make_bash_payload "echo test")" >/dev/null 2>&1 || true
-
-  [[ -f "$CLAUDE_DIR/cast/hook-last-fired/PreToolUse.timestamp" ]]
 }
 
 # ---------------------------------------------------------------------------

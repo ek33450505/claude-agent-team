@@ -13,10 +13,6 @@ _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/
 
 INPUT="$(cat 2>/dev/null || true)"
 
-# Touch marker for dashboard hook health
-mkdir -p "${HOME}/.claude/cast/hook-last-fired"
-touch "${HOME}/.claude/cast/hook-last-fired/cast-post-compact.timestamp"
-
 CAST_INPUT="$INPUT" python3 - <<'PYEOF' || true
 import json, os, uuid
 from datetime import datetime, timezone

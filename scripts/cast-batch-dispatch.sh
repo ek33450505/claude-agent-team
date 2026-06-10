@@ -151,7 +151,7 @@ try:
   ''')
 
   # Insert row
-  submitted_at = datetime.datetime.utcnow().isoformat() + 'Z'
+  submitted_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
   row_id = f"{agent}_{batch_id}"
   conn.execute(
     'INSERT OR REPLACE INTO batch_dispatches (id, batch_id, agent, custom_id, prompt_preview, submitted_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -164,7 +164,7 @@ except Exception as e:
   log_path = Path.home() / '.claude' / 'logs' / 'batch-dispatch-errors.log'
   log_path.parent.mkdir(parents=True, exist_ok=True)
   with open(log_path, 'a') as f:
-    f.write(f'[{datetime.datetime.utcnow().isoformat()}Z] ERROR: {e}\n')
+    f.write(f'[{datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")}] ERROR: {e}\n')
 PYEOF
 
 # Success: print batch_id to stdout

@@ -251,8 +251,27 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
   export CAST_STOP_DB_STATUS="$DB_STATUS"
   CAST_STOP_RESPONSE_TEXT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('response_text','') or d.get('output_full',''))" 2>/dev/null || echo "")"
   export CAST_STOP_RESPONSE_TEXT
+  # Resolve agent transcript path for cost computation.
+  # Prefer agent_transcript_path from payload; else glob by session_id + agent_id.
+  CAST_STOP_TRANSCRIPT_PATH=""
+  if [ -n "$AGENT_ID" ] && [ -n "$SESSION_ID" ]; then
+    # Try glob: ~/.claude/projects/*/<session_id>/subagents/agent-<agent_id>.jsonl
+    CAST_STOP_TRANSCRIPT_PATH="$(python3 -c "
+import glob, os, sys
+agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
+session_id = os.environ.get('CAST_STOP_SESSION', '')
+if not agent_id or not session_id:
+    sys.exit(0)
+pattern = os.path.expanduser(f'~/.claude/projects/*/{session_id}/subagents/agent-{agent_id}.jsonl')
+matches = glob.glob(pattern)
+if matches:
+    print(matches[0])
+" 2>/dev/null || echo "")"
+  fi
+  export CAST_STOP_TRANSCRIPT_PATH
+  export CAST_PRICING_PATH="${HOME}/.claude/config/model-pricing.json"
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
-import sqlite3, os, sys
+import sqlite3, os, sys, json, glob
 sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
 try:
     from cast_db import log_hook_failure
@@ -277,6 +296,95 @@ if cache_create:
 if not agent or not db:
     raise SystemExit(0)
 
+# ── Cost computation from transcript ────────────────────────────────────────
+# Defensive: all errors yield NULL cost; hook never aborts.
+cost_usd = None
+input_tokens = None
+output_tokens = None
+transcript_model = None
+
+try:
+    transcript_path = os.environ.get('CAST_STOP_TRANSCRIPT_PATH', '').strip()
+    if transcript_path and os.path.isfile(transcript_path):
+        total_input = 0
+        total_output = 0
+        total_cache_read = 0
+        total_cache_create = 0
+        found_usage = False
+
+        with open(transcript_path, 'r', errors='replace') as f:
+            for raw_line in f:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    obj = json.loads(raw_line)
+                except Exception:
+                    continue
+                msg = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+                usage = msg.get('usage') if isinstance(msg.get('usage'), dict) else obj.get('usage')
+                if not isinstance(usage, dict):
+                    continue
+                total_input += usage.get('input_tokens', 0) or 0
+                total_output += usage.get('output_tokens', 0) or 0
+                total_cache_read += usage.get('cache_read_input_tokens', 0) or 0
+                total_cache_create += usage.get('cache_creation_input_tokens', 0) or 0
+                found_usage = True
+                if not transcript_model and isinstance(msg.get('model'), str):
+                    transcript_model = msg['model']
+
+        if found_usage:
+            input_tokens = total_input
+            output_tokens = total_output
+            # Transcript is authoritative for ALL token types — overrides payload values.
+            # The SubagentStop payload's cache fields reflect only the last message, not
+            # the full subagent session. For multi-message agents cache tokens dominate cost
+            # and the payload would understate them by a large factor.
+            cache_read = total_cache_read
+            cache_create = total_cache_create
+
+            # Load pricing table
+            pricing_path = os.environ.get('CAST_PRICING_PATH', '')
+            pricing_path = os.path.expanduser(pricing_path) if pricing_path else ''
+            rate_in = 3.0
+            rate_out = 15.0
+            try:
+                if pricing_path and os.path.isfile(pricing_path):
+                    with open(pricing_path, 'r') as pf:
+                        pricing = json.load(pf)
+                    models = pricing.get('models', {})
+                    model_key = transcript_model or ''
+                    entry = models.get(model_key) or models.get('_default') or {}
+                    rate_in = entry.get('cost_per_million_input', 3.0)
+                    rate_out = entry.get('cost_per_million_output', 15.0)
+            except Exception as _pe:
+                if log_hook_failure:
+                    log_hook_failure('cast-subagent-stop-hook:pricing_load', -1, str(_pe), sess)
+
+            # Anthropic full cost formula (cache tokens dominate)
+            cr = cache_read or 0
+            cc = cache_create or 0
+            cost_usd = round(
+                (total_input * rate_in + total_output * rate_out + cc * rate_in * 1.25 + cr * rate_in * 0.1)
+                / 1_000_000,
+                6
+            )
+        else:
+            if log_hook_failure:
+                log_hook_failure('cast-subagent-stop-hook:cost_no_usage', 0,
+                                 f'no usage blocks found in transcript {transcript_path}', sess)
+    else:
+        if transcript_path:
+            # path was resolved but file doesn't exist — log it
+            if log_hook_failure:
+                log_hook_failure('cast-subagent-stop-hook:cost_no_transcript', 0,
+                                 f'transcript not found: {transcript_path}', sess)
+        # No transcript path at all — silent NULL (common for agents dispatched without agent_id)
+except Exception as _ce:
+    cost_usd = None
+    if log_hook_failure:
+        log_hook_failure('cast-subagent-stop-hook:cost_exception', -1, str(_ce), sess)
+
 # Add new telemetry columns if they don't exist (idempotent — migration 011)
 try:
     conn = sqlite3.connect(db, timeout=5)
@@ -297,6 +405,7 @@ except Exception:
 # Update the running row for this agent. Use agent_id for precise matching when
 # available; fall back to MIN(id) FIFO heuristic when agent_id is absent.
 # FIFO: oldest started row of this type is the one that just finished first.
+# cost_usd, input_tokens, output_tokens, model are written atomically in the same UPDATE.
 agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
 for attempt in range(3):
     try:
@@ -304,16 +413,22 @@ for attempt in range(3):
         cur  = conn.cursor()
         if agent_id:
             cur.execute(
-                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=?, response=?, cache_read_input_tokens=?, cache_creation_input_tokens=? "
+                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=?, response=?, "
+                "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
+                "cost_usd=?, input_tokens=?, output_tokens=?, model=? "
                 "WHERE status='running' AND agent_id=?",
-                (st, ts, duration_ms, tool_uses, response_text, cache_read, cache_create, agent_id),
+                (st, ts, duration_ms, tool_uses, response_text, cache_read, cache_create,
+                 cost_usd, input_tokens, output_tokens, transcript_model, agent_id),
             )
         else:
             cur.execute(
-                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=?, response=?, cache_read_input_tokens=?, cache_creation_input_tokens=? "
+                "UPDATE agent_runs SET status=?, ended_at=?, duration_ms=?, tool_uses=?, response=?, "
+                "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
+                "cost_usd=?, input_tokens=?, output_tokens=?, model=? "
                 "WHERE status='running' AND agent=? AND session_id=? "
                 "AND id=(SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?)",
-                (st, ts, duration_ms, tool_uses, response_text, cache_read, cache_create, agent, sess, agent, sess),
+                (st, ts, duration_ms, tool_uses, response_text, cache_read, cache_create,
+                 cost_usd, input_tokens, output_tokens, transcript_model, agent, sess, agent, sess),
             )
         rows_affected = conn.execute("SELECT changes()").fetchone()[0]
         conn.commit()
@@ -475,7 +590,7 @@ if not m:
     raise SystemExit(0)
 
 status = m.group(1)
-ts = datetime.datetime.utcnow().isoformat() + 'Z'
+ts = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
 
 try:
     conn = sqlite3.connect(db, timeout=5)

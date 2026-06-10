@@ -93,7 +93,7 @@ try:
         'file_id': os.environ.get('CAST_FA_FILE_ID', ''),
         'local_path': os.environ.get('CAST_FA_LOCAL_PATH', ''),
         'agent': os.environ.get('CAST_FA_AGENT', ''),
-        'created_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'created_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     })
 except Exception as e:
     pass

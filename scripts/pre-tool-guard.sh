@@ -19,8 +19,6 @@ if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 
 set -euo pipefail
 
-mkdir -p ~/.claude/cast/hook-last-fired && touch ~/.claude/cast/hook-last-fired/PreToolUse.timestamp
-
 INPUT="$(cat)"
 TOOL="$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")"
 CMD="$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")"
@@ -62,7 +60,7 @@ except Exception:
     sys.exit(0)
 
 agent_status_dir = os.path.expanduser('~/.claude/agent-status')
-now = datetime.datetime.utcnow().timestamp()
+now = datetime.datetime.now(datetime.timezone.utc).timestamp()
 SESSION_TIMEOUT = 7200  # 2 hours
 
 def agent_completed_this_session(required_agent):
@@ -112,7 +110,7 @@ for policy in config.get('policies', []):
             audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
             os.makedirs(os.path.dirname(audit_path), exist_ok=True)
             event = {
-                'timestamp': _dt.datetime.utcnow().isoformat() + 'Z',
+                'timestamp': _dt.datetime.now(_dt.timezone.utc).isoformat().replace('+00:00', 'Z'),
                 'event': 'POLICY_OVERRIDE',
                 'policy_id': policy_id,
                 'file_path': file_path,

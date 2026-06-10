@@ -26,7 +26,7 @@ if [ ! -d "$EVENTS_DIR" ]; then
   python3 -c "
 import json, datetime
 board = {
-  'updated_at': datetime.datetime.utcnow().isoformat() + 'Z',
+  'updated_at': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'),
   'event_count': 0,
   'blocked_tasks': [],
   'in_flight_tasks': [],
@@ -130,7 +130,7 @@ for event in events:
                 'message': msg
             }
 
-now = datetime.datetime.utcnow()
+now = datetime.datetime.now(datetime.timezone.utc)
 
 # Derive categories
 blocked_tasks = []
@@ -140,7 +140,7 @@ for task_id, state in task_state.items():
     if state['status'] == 'blocked':
         # Calculate age
         try:
-            last_dt = datetime.datetime.fromisoformat(state['last_ts'].rstrip('Z'))
+            last_dt = datetime.datetime.fromisoformat(state['last_ts'].rstrip('Z')).replace(tzinfo=datetime.timezone.utc)
             age_hours = (now - last_dt).total_seconds() / 3600
         except Exception:
             age_hours = 0
@@ -150,7 +150,7 @@ for task_id, state in task_state.items():
         })
     elif state['status'] == 'in_flight':
         try:
-            last_dt = datetime.datetime.fromisoformat(state['last_ts'].rstrip('Z'))
+            last_dt = datetime.datetime.fromisoformat(state['last_ts'].rstrip('Z')).replace(tzinfo=datetime.timezone.utc)
             age_hours = (now - last_dt).total_seconds() / 3600
         except Exception:
             age_hours = 0

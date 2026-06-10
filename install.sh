@@ -187,17 +187,17 @@ fi
 # --- Install rules-core (haiku-tier subset) ---
 info "Installing rules-core (haiku-tier subset)..."
 mkdir -p "$CLAUDE_DIR/rules-core"
-if [ -d "$SCRIPT_DIR/rules/core" ]; then
-    for rule_file in "$SCRIPT_DIR"/rules/core/*; do
-        [ -f "$rule_file" ] || continue
-        base="$(basename "$rule_file")"
-        dest="$CLAUDE_DIR/rules-core/$base"
-        cp "$rule_file" "$dest"
+# Curated slim subset loaded by haiku-tier agents (code-reviewer, commit, push, merge).
+# Source: authoritative rules-core/ at repo root (stale nested rules/core/ removed in v7.5 Phase 6b).
+for base in working-conventions.md shell.md agents.md; do
+    src="$SCRIPT_DIR/rules-core/$base"
+    if [ -f "$src" ]; then
+        cp "$src" "$CLAUDE_DIR/rules-core/$base"
         success "  Synced: rules-core/$base"
-    done
-else
-    info "  rules/core/ directory not found (non-fatal)"
-fi
+    else
+        info "  Missing source: rules-core/$base (skipped)"
+    fi
+done
 
 # --- Install scripts (chmod +x) ---
 info "Installing scripts..."

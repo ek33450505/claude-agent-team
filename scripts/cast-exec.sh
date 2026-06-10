@@ -159,7 +159,7 @@ plan_id, plan_file, checkpoint_file = sys.argv[1], sys.argv[2], sys.argv[3]
 state = {
     "plan_id": plan_id,
     "plan_file": plan_file,
-    "started_at": datetime.datetime.utcnow().isoformat() + "Z",
+    "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'),
     "batches": {}
 }
 Path(checkpoint_file).write_text(json.dumps(state, indent=2))
@@ -205,7 +205,7 @@ except Exception:
     d = {"plan_id": "", "batches": {}}
 if "batches" not in d or not isinstance(d["batches"], dict):
     d["batches"] = {}
-now = datetime.datetime.utcnow().isoformat() + "Z"
+now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
 batch_entry = d["batches"].get(str(batch_id), {})
 batch_entry["status"] = status
 if status == "running":

@@ -30,9 +30,6 @@ set +e
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
 
-# === HOOK HEALTH MARKER ===
-mkdir -p "${HOME}/.claude/cast/hook-last-fired" && touch "${HOME}/.claude/cast/hook-last-fired/Stop.timestamp" "${HOME}/.claude/cast/hook-last-fired/SessionEnd.timestamp"
-
 CAST_DIR="${HOME}/.claude/cast"
 SESSION_ID="${CLAUDE_SESSION_ID:-default}"
 CAST_SCRIPTS_DIR="${HOME}/.claude/scripts"
@@ -293,7 +290,7 @@ except Exception as e:
     print(f"[CAST-WARN] cast-session-end: cannot connect to {db_path}: {e}", file=sys.stderr)
     sys.exit(1)
 
-now = datetime.datetime.utcnow().isoformat() + 'Z'
+now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
 
 agent_dirs = [
     d for d in os.listdir(memory_dir)

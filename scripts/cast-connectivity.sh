@@ -68,13 +68,13 @@ case "$SUBCMD" in
 
     python3 - "$AGENT" "$TASK" "$QUEUE_FILE" <<'PYEOF'
 import sys, json
-from datetime import datetime
+from datetime import datetime, timezone
 
 agent, task, filepath = sys.argv[1:]
 entry = {
     "agent": agent,
     "task": task,
-    "queued_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    "queued_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 }
 with open(filepath, 'w') as f:
     json.dump(entry, f, indent=2)
