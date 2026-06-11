@@ -19,7 +19,6 @@ print(json.dumps({
     'agent_type': sys.argv[1],
     'session_id': sys.argv[2],
     'agent_id': 'agent-' + sys.argv[2][:8],
-    'batch_id': '1',
 }))
 " "$agent_name" "$session_id"
 }
@@ -39,8 +38,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   session_id TEXT,
   status TEXT,
   started_at TEXT,
-  agent_id TEXT,
-  batch_id INTEGER
+  agent_id TEXT
 );
 SQL
 }

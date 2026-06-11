@@ -226,7 +226,7 @@ MIGRATE_V8
   CURRENT_VERSION=8
 fi
 
-# Migrate v6 → v7: drop empty tables, add batch_id to agent_runs
+# Migrate v6 → v7: drop empty tables
 if [ "$CURRENT_VERSION" -eq 6 ]; then
   sqlite3 "$DB_PATH" <<'MIGRATE_V7'
 DROP TABLE IF EXISTS task_queue;
@@ -234,11 +234,6 @@ DROP TABLE IF EXISTS budgets;
 DROP TABLE IF EXISTS mismatch_signals;
 DROP TABLE IF EXISTS quality_gates;
 DROP TABLE IF EXISTS dispatch_decisions;
-
--- Add batch_id column if missing
-ALTER TABLE agent_runs ADD COLUMN batch_id INTEGER;
--- Note: model_used column dropped via migration 014 (audit 2026-05-16 #3)
-CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);
 
 -- Drop stale indexes
 DROP INDEX IF EXISTS idx_task_queue_status;
@@ -256,7 +251,7 @@ DROP INDEX IF EXISTS idx_dispatch_decisions_created_at;
 
 PRAGMA user_version = 7;
 MIGRATE_V7
-  echo "cast.db migrated v6 → v7 (dropped 5 empty tables, added batch_id)" >&2
+  echo "cast.db migrated v6 → v7 (dropped 5 empty tables)" >&2
   CURRENT_VERSION=7
 fi
 
@@ -272,7 +267,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   project_root          TEXT,
   started_at            TEXT,
   ended_at              TEXT,
-  model                 TEXT,
   status                TEXT,
   deleted_at            TEXT
 );
@@ -289,9 +283,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   input_tokens    INTEGER,
   output_tokens   INTEGER,
   cost_usd        REAL,
-  task_summary    TEXT,
   agent_id        TEXT,
-  batch_id        INTEGER,
   response        TEXT,
   cache_read_input_tokens INTEGER,
   cache_creation_input_tokens INTEGER,
@@ -340,7 +332,6 @@ CREATE TABLE IF NOT EXISTS agent_memories (
 CREATE INDEX IF NOT EXISTS idx_agent_runs_session       ON agent_runs(session_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent         ON agent_runs(agent);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_status        ON agent_runs(status);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id      ON agent_runs(batch_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id      ON agent_runs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_ended_at      ON agent_runs(ended_at);
 CREATE INDEX IF NOT EXISTS idx_routing_events_session   ON routing_events(session_id);
@@ -444,12 +435,6 @@ _columns_added=0
 # Check if agent_id column exists
 if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*agent_id"; then
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent_id TEXT;" 2>/dev/null || true
-  _columns_added=1
-fi
-
-# Check if batch_id column exists
-if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*batch_id"; then
-  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN batch_id INTEGER;" 2>/dev/null || true
   _columns_added=1
 fi
 
@@ -966,8 +951,7 @@ SCHEMA_MIGRATIONS_TABLE
   _columns_added=1
 fi
 
-# Ensure batch_id and agent_id indexes exist
-sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_batch_id ON agent_runs(batch_id);" 2>/dev/null || true
+# Ensure agent_id index exists
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
 
 # Phase 3: drop the legacy agent_runs.status CHECK on existing DBs. The enum
@@ -980,7 +964,7 @@ if [ -f "$_DROP_CHECK_HELPER" ] && command -v python3 >/dev/null 2>&1; then
 fi
 
 if [ "$_columns_added" -eq 1 ]; then
-  echo "[cast-db-init] self-healed: added missing agent_id, batch_id, and/or response columns to agent_runs" >&2
+  echo "[cast-db-init] self-healed: added missing agent_id and/or response columns to agent_runs" >&2
 fi
 
 echo "cast.db initialized (v8, WAL mode, swarm tables included)" >&2

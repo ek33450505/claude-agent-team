@@ -472,7 +472,7 @@ conn = sqlite3.connect(db)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 cur.execute("""
-    SELECT agent, status, model, ended_at, batch_id
+    SELECT agent, status, model, ended_at
     FROM agent_runs
     WHERE agent IS NOT NULL AND agent != '' AND agent != 'unknown'
     ORDER BY id DESC LIMIT 5
@@ -495,8 +495,7 @@ for r in rows:
             ago = ''
     status_sym = '+' if r['status'] == 'DONE' else ('x' if r['status'] in ('BLOCKED','NEEDS_CONTEXT') else '~')
     model = r['model'] or ''
-    batch = f" [batch:{r['batch_id']}]" if r['batch_id'] else ''
-    print(f"  {status_sym} {(r['agent'] or ''):<22} [{model:<24}] {ago}{batch}")
+    print(f"  {status_sym} {(r['agent'] or ''):<22} [{model:<24}] {ago}")
 PYEOF
     2>/dev/null || echo "")"
   fi

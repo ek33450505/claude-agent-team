@@ -180,9 +180,10 @@ teardown() {
 }
 
 @test "cast-db-init self-heals a missing agent_runs column on an existing v8 DB" {
-  # Regression companion: the agent_runs column self-heal (response/agent_id/batch_id)
+  # Regression companion: the agent_runs column self-heal (response/agent_id)
   # also lived past the early exit and was unreachable for v8 DBs. Drop ONLY the
   # 'response' column (a later additive column) to reproduce a realistic old-v8 DB.
+  # batch_id was dropped in migration 024 (wave-3 inc3) and is no longer self-healed.
   bash "$DB_INIT" --db "$TEST_DB"
   sqlite3 "$TEST_DB" "ALTER TABLE agent_runs DROP COLUMN response; PRAGMA user_version=8;"
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name='response';"
