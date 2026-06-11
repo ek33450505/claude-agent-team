@@ -45,6 +45,15 @@ SKILLS="$(cast_stat_skills)"
 PACKAGES="$(cast_stat_packages)"
 UPDATED="${CAST_STATS_DATE:-$(date +%F)}"
 
+# Plausibility floor — abort if any derived stat is implausibly low. Runs in BOTH
+# write and --check mode so a silent-0 can never pass (breaks the green-while-broken
+# tautology where --check re-derives the same broken value and compares it to itself).
+if ! cast_stats_assert_floors "$AGENTS" "$TESTS" "$TABLES" "$COMMANDS" "$SKILLS" "$PACKAGES" "$VER"; then
+  echo "[gen-cast-stats] ABORT: derived stats failed plausibility floor (see above)." >&2
+  echo "  A stat derivation likely broke silently. Fix the derivation — do NOT lower the floor." >&2
+  exit 1
+fi
+
 # Build JSON (all numeric fields as JSON numbers, not strings)
 JSON="$(jq -n \
   --arg version "$VER" \

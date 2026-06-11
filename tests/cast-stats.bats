@@ -235,6 +235,44 @@ EOF
   assert_output --partial "FAIL"
 }
 
+# ---------------------------------------------------------------------------
+# Floor unit tests — cast_stats_assert_floors (direct lib tests)
+# ---------------------------------------------------------------------------
+
+@test "cast_stats_assert_floors: valid stats return 0" {
+  source "$REPO_DIR/scripts/cast-stats-lib.sh"
+  run cast_stats_assert_floors 23 1258 38 20 15 13 7.4.1
+  assert_success
+}
+
+@test "cast_stats_assert_floors: tables=0 returns 1 and stderr contains FLOOR VIOLATION" {
+  source "$REPO_DIR/scripts/cast-stats-lib.sh"
+  run cast_stats_assert_floors 23 1258 0 20 15 13 7.4.1
+  assert_failure
+  assert_output --partial "FLOOR VIOLATION"
+}
+
+@test "cast_stats_assert_floors: empty version returns 1 and stderr contains FLOOR VIOLATION" {
+  source "$REPO_DIR/scripts/cast-stats-lib.sh"
+  run cast_stats_assert_floors 23 1258 38 20 15 13 ""
+  assert_failure
+  assert_output --partial "FLOOR VIOLATION"
+}
+
+@test "floor fires in write mode when CAST_PACKAGES_COUNT=0" {
+  run env -u BATS_TEST_NAME -u BATS_TEST_FILENAME -u BATS_TMPDIR \
+    CAST_PACKAGES_COUNT=0 bash "$GEN_STATS_SH"
+  assert_failure
+  assert_output --partial "FLOOR VIOLATION"
+}
+
+@test "floor fires in --check mode when CAST_PACKAGES_COUNT=0 (tautology-breaker)" {
+  run env -u BATS_TEST_NAME -u BATS_TEST_FILENAME -u BATS_TMPDIR \
+    CAST_PACKAGES_COUNT=0 bash "$GEN_STATS_SH" --check
+  assert_failure
+  assert_output --partial "FLOOR VIOLATION"
+}
+
 @test "auto-discovery: exits 0 with 'nothing to check' when dir has no CAST markers" {
   local empty_repo="${TMPDIR_STATS}/empty-repo"
   mkdir -p "$empty_repo"
