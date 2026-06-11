@@ -207,13 +207,7 @@ DB="${CAST_DB_PATH:-${CLAUDE_DIR}/cast.db}"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   cast_sqlite "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}', status = 'ended' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
-
-  # Aggregate token counts and cost from agent_runs for this session
-  cast_sqlite "$DB" "UPDATE sessions SET
-    total_input_tokens = COALESCE((SELECT SUM(input_tokens) FROM agent_runs WHERE session_id = '${SESSION_ID}'), 0),
-    total_output_tokens = COALESCE((SELECT SUM(output_tokens) FROM agent_runs WHERE session_id = '${SESSION_ID}'), 0),
-    total_cost_usd = COALESCE((SELECT SUM(cost_usd) FROM agent_runs WHERE session_id = '${SESSION_ID}'), 0)
-    WHERE id = '${SESSION_ID}';" 2>/dev/null || true
+  # Aggregate token counts and cost columns dropped in migration 022 (wave-3)
 fi
 
 # === DB PRUNING (atomic — one lock acquisition for all 11 deletes/updates) ===

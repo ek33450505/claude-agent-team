@@ -41,14 +41,7 @@ done
 find /private/tmp -maxdepth 1 -name "cast-swarm-*" -type d -mtime +3 -exec rm -rf {} + 2>/dev/null
 log "Pruned stale worktrees"
 
-# 5. Aggregate session costs from agent_runs (backfill any gaps)
-cast_sqlite "$DB" "
-UPDATE sessions SET
-  total_cost_usd = COALESCE((SELECT SUM(cost_usd) FROM agent_runs WHERE agent_runs.session_id = sessions.id), 0.0)
-WHERE (total_cost_usd = 0.0 OR total_cost_usd IS NULL)
-AND id IN (SELECT DISTINCT session_id FROM agent_runs WHERE cost_usd > 0);
-" 2>/dev/null
-log "Backfilled session costs"
+# 5. sessions.total_cost_usd dropped in migration 022 (wave-3); backfill removed
 
 # 6. Rotate large log files (>512KB)
 for logfile in "${CAST_DIR}"/logs/*.log; do

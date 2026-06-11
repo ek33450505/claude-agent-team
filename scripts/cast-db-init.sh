@@ -117,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
 -- Indexes added 2026-04-16 audit remediation
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
+-- idx_agent_runs_project removed (agent_runs.project dropped in migration 022 wave-3)
 CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 
 CREATE TABLE IF NOT EXISTS tool_call_failures (
@@ -206,7 +206,7 @@ CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
 -- Indexes added 2026-04-16 audit remediation
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
+-- idx_agent_runs_project removed (agent_runs.project dropped in migration 022 wave-3)
 CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 
 -- Tool call failures: PostToolUseFailure hook events (separate from routing_events)
@@ -274,10 +274,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   ended_at              TEXT,
   model                 TEXT,
   status                TEXT,
-  deleted_at            TEXT,
-  total_input_tokens    INTEGER,
-  total_output_tokens   INTEGER,
-  total_cost_usd        REAL
+  deleted_at            TEXT
 );
 
 -- Agent runs: one row per agent invocation
@@ -293,7 +290,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   output_tokens   INTEGER,
   cost_usd        REAL,
   task_summary    TEXT,
-  project         TEXT,
   agent_id        TEXT,
   batch_id        INTEGER,
   response        TEXT,
@@ -312,14 +308,11 @@ CREATE TABLE IF NOT EXISTS routing_events (
   prompt_preview  TEXT,
   action          TEXT,
   matched_route   TEXT,
-  match_type      TEXT,
   pattern         TEXT,
   confidence      TEXT,
   project         TEXT,
   event_type      TEXT,
-  data            TEXT,
-  agent_id        TEXT,
-  agent_type      TEXT
+  data            TEXT
 );
 
 -- Agent memories: queryable agent state
@@ -338,8 +331,6 @@ CREATE TABLE IF NOT EXISTS agent_memories (
   decay_rate  REAL DEFAULT 0.0,
   valid_from  TEXT,
   valid_to    TEXT,
-  superseded_by INTEGER,
-  source_type TEXT,
   embedding BLOB,
   last_validated_at TEXT,
   retrieval_count INTEGER DEFAULT 0
@@ -360,7 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_memories_agent     ON agent_memories(agent)
 -- Indexes added 2026-04-16 audit remediation
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project);
+-- idx_agent_runs_project removed (agent_runs.project dropped in migration 022 wave-3)
 CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 
 -- Stream events: stream-JSON observability pipeline (v4.6)
@@ -516,7 +507,6 @@ if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "quality_gates"; then
 CREATE TABLE IF NOT EXISTS quality_gates (
   id              TEXT PRIMARY KEY,
   session_id      TEXT,
-  batch_id        INTEGER,
   agent_name      TEXT,
   timestamp       TEXT,
   status_line     TEXT,
@@ -596,13 +586,8 @@ sqlite3 "$DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN outcome TEXT DEFAU
 # cast-budget-alert.sh, cast-cache-metrics.sh). Their UPDATEs failed on fresh installs without these.
 sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN status TEXT;" 2>/dev/null || true
 sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN deleted_at TEXT;" 2>/dev/null || true
-sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER;" 2>/dev/null || true
-sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER;" 2>/dev/null || true
-sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN total_cost_usd REAL;" 2>/dev/null || true
-
-# routing_events agent-attribution columns (writer: cast-db-log.py INSERTs them).
-sqlite3 "$DB_PATH" "ALTER TABLE routing_events ADD COLUMN agent_id TEXT;" 2>/dev/null || true
-sqlite3 "$DB_PATH" "ALTER TABLE routing_events ADD COLUMN agent_type TEXT;" 2>/dev/null || true
+# total_input_tokens / total_output_tokens / total_cost_usd dropped in migration 022 (wave-3)
+# routing_events agent_id / agent_type dropped in migration 022 (wave-3)
 
 # ── Phase 3: provision tables that have live writers but were only created by the now-defunct
 # migration runners. cast-db-init.sh is the single source of truth (migrations don't run at install). ──
@@ -705,8 +690,6 @@ CREATE TABLE IF NOT EXISTS archived_memories (
   decay_rate  REAL,
   valid_from  TEXT,
   valid_to    TEXT,
-  superseded_by INTEGER,
-  source_type TEXT,
   embedding   BLOB,
   last_validated_at TEXT,
   retrieval_count INTEGER,
