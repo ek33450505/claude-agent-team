@@ -218,7 +218,6 @@ fi
 # Abstention rule: feedback files with body < 30 chars are skipped entirely.
 CAST_INPUT="$INPUT" CAST_STACK_PROFILE="${CAST_STACK_PROFILE:-}" python3 - <<'PYEOF4' || _log_error "session-start banner block failed (exit $?)"
 import json, os, glob, sys
-from datetime import datetime, timezone
 
 # ── Section A: Stack banner ────────────────────────────────────────────────────
 stack_profile_raw = os.environ.get("CAST_STACK_PROFILE", "").strip()
