@@ -276,7 +276,7 @@ teardown() {
 
 @test "cast-migrate.py runs clean against an init-provisioned schema_migrations (divergence fix)" {
   bash "$DB_INIT" --db "$TEST_DB"
-  run env CAST_DB_PATH="$TEST_DB" python3 "$REPO_DIR/scripts/cast-migrate.py"
+  run env CAST_DB_PATH="$TEST_DB" python3 "$REPO_DIR/scripts/cast-migrate.py" --confirm
   assert_success
 }
 

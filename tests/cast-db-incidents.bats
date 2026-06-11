@@ -17,7 +17,7 @@ setup() {
   export CAST_DB_PATH="$TEST_DB"
 
   # Initialize schema (baseline + incidents table) via Python migration runner
-  CAST_DB_PATH="$TEST_DB" python3 "$MIGRATE_SCRIPT" > /dev/null 2>&1 || true
+  CAST_DB_PATH="$TEST_DB" python3 "$MIGRATE_SCRIPT" --confirm > /dev/null 2>&1 || true
 }
 
 teardown() {
