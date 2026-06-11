@@ -42,7 +42,19 @@ source "${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh" 2>/dev/null || source "$(dirname
 # (3) CLAUDE_SESSION_ID env, (4) literal 'default'.
 # This mirrors cast-session-start-hook.sh which reads session_id from stdin JSON and
 # exports CAST_SESSION_ID — using CLAUDE_SESSION_ID alone missed all workflow-dispatched sessions.
-_INPUT="$(cat 2>/dev/null || true)"
+# Read stdin non-blocking: prevent cat from hanging on TTY or open pipes with no data.
+# On macOS native, BATS test processes inherit the terminal (TTY) as stdin — cat blocks.
+# In CI/Docker, stdin is /dev/null or a closed pipe — cat returns immediately.
+# Guard: (1) skip if stdin is a terminal; (2) only read if data is immediately available.
+_INPUT=""
+if [[ ! -t 0 ]]; then
+  # Not a terminal — check if data is available right now (bash 4.0+ feature).
+  # read -t 0 returns 0 when input is ready (including EOF from /dev/null or here-string)
+  # and non-zero when stdin is an open pipe with nothing written yet.
+  if IFS= read -r -t 0 _ 2>/dev/null; then
+    _INPUT="$(cat 2>/dev/null || true)"
+  fi
+fi
 _STDIN_SESSION_ID="$(CAST_INPUT="${_INPUT}" python3 -c "
 import json, os, sys
 raw = os.environ.get('CAST_INPUT', '')

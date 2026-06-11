@@ -96,7 +96,7 @@ teardown() {
 
   # Run the hook with a malicious SESSION_ID
   export CLAUDE_SESSION_ID="'; DROP TABLE sessions; --"
-  run bash "$HOOK_SH"
+  run bash "$HOOK_SH" <<< ""
 
   # Must exit 0 (never block)
   assert_success
@@ -123,7 +123,7 @@ teardown() {
     "INSERT INTO sessions (id, started_at, ended_at) VALUES ('test-safe-2', datetime('now'), NULL);"
 
   export CLAUDE_SESSION_ID="test|whoami; echo hacked"
-  run bash "$HOOK_SH"
+  run bash "$HOOK_SH" <<< ""
 
   assert_success
 
@@ -140,7 +140,7 @@ teardown() {
 
 @test "safe SESSION_ID (sess-abc123) → passes guard (no rejection)" {
   export CLAUDE_SESSION_ID="sess-abc123"
-  run bash "$HOOK_SH"
+  run bash "$HOOK_SH" <<< ""
 
   # Hook must exit 0 (never block)
   assert_success
@@ -157,7 +157,7 @@ teardown() {
 
 @test "SESSION_ID with mixed valid chars (Sess_Test-123) → passes guard" {
   export CLAUDE_SESSION_ID="Sess_Test-123"
-  run bash "$HOOK_SH"
+  run bash "$HOOK_SH" <<< ""
 
   assert_success
 
@@ -177,7 +177,7 @@ teardown() {
 
   export CLAUDE_SUBPROCESS=1
   export CLAUDE_SESSION_ID="sub-test"
-  run bash "$HOOK_SH"
+  run bash "$HOOK_SH" <<< ""
 
   assert_success
 
@@ -194,7 +194,7 @@ teardown() {
 
 @test "unset CLAUDE_SESSION_ID → defaults to 'default', passes guard" {
   unset CLAUDE_SESSION_ID
-  run bash "$HOOK_SH"
+  run bash "$HOOK_SH" <<< ""
 
   assert_success
 
@@ -210,7 +210,7 @@ teardown() {
 
 @test "malformed SESSION_ID → _log_error appends to hook-errors.log" {
   export CLAUDE_SESSION_ID="'; DROP --"
-  bash "$HOOK_SH" >/dev/null 2>&1 || true
+  bash "$HOOK_SH" <<< "" >/dev/null 2>&1 || true
 
   # Check that hook-errors.log was written
   [[ -f "$HOME/.claude/logs/hook-errors.log" ]]
@@ -224,7 +224,7 @@ teardown() {
 
 @test "hook executes successfully on clean database" {
   export CLAUDE_SESSION_ID="test-db-clean"
-  run bash "$HOOK_SH"
+  run bash "$HOOK_SH" <<< ""
 
   # Hook must always exit 0 (never blocks)
   assert_success
@@ -293,6 +293,48 @@ teardown() {
   ended_env="$(sqlite3 "$TEST_DB" "SELECT ended_at FROM sessions WHERE id='${env_uuid}';" 2>/dev/null || echo "null")"
   [[ -z "$ended_env" ]] || [[ "$ended_env" == "null" ]]
   unset CAST_SESSION_ID
+}
+
+# ---------------------------------------------------------------------------
+# Regression: macOS TTY hang — cat blocked when stdin was a terminal
+# Root cause: _INPUT="$(cat ...)" blocks when BATS inherits TTY stdin on macOS.
+# Fix: (1) hook guards with [[ -t 0 ]]; (2) all tests use '<<< ""' explicitly.
+# ---------------------------------------------------------------------------
+
+@test "hook completes within 3s when stdin is an open non-TTY pipe (macOS TTY-hang regression)" {
+  # Regression for: cast-session-end.sh hung on macOS native BATS because BATS
+  # test processes inherit the terminal (TTY) as stdin — cat in the hook blocks
+  # indefinitely. On Ubuntu/Docker CI, stdin is /dev/null so cat returns immediately.
+  #
+  # Fix: (1) skip cat when stdin is a TTY ([[ -t 0 ]]); (2) skip cat when stdin is
+  # an open non-TTY pipe with no data ready (read -t 0 returns false). Tests also get
+  # explicit <<< "" to prevent relying on ambient stdin.
+  #
+  # This test simulates the hang via process substitution (< <(sleep 10)) which keeps
+  # the pipe's write end open with no data — identical semantics to an open terminal.
+  # Pre-fix: cat blocks → hook never exits → wait loop times out → test FAILS.
+  # Post-fix: read -t 0 detects "no data ready" → skips cat → hook exits → PASSES.
+  export CLAUDE_SESSION_ID="hang-regress-$$"
+
+  # Launch hook in background with stdin from an open pipe that never sends data.
+  # < <(sleep 10): write end held by 'sleep', no data written, no EOF — like a TTY.
+  HOME="$HOME" CAST_DB_PATH="$TEST_DB" bash "$HOOK_SH" < <(sleep 10) &
+  local hook_pid=$!
+
+  # Give hook up to 3 seconds to complete (6 × 0.5s polls)
+  local i=0
+  while [[ $i -lt 6 ]] && kill -0 "$hook_pid" 2>/dev/null; do
+    sleep 0.5
+    i=$((i + 1))
+  done
+
+  if kill -0 "$hook_pid" 2>/dev/null; then
+    kill "$hook_pid" 2>/dev/null || true
+    wait "$hook_pid" 2>/dev/null || true
+    fail "Hook hung reading stdin (macOS TTY-hang regression — cat blocked on open pipe)"
+  fi
+
+  wait "$hook_pid" 2>/dev/null || true
 }
 
 @test "old CLAUDE_SESSION_ID-only resolution fails to update row (demonstrates pre-fix behavior)" {
