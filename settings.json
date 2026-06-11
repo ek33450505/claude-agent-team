@@ -401,7 +401,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "bash ~/.claude/scripts/cast-stats.sh --brief 2>/dev/null | head -1 || echo 'CAST ready'"
+    "command": "bash ~/.claude/scripts/cast-statusline.sh 2>/dev/null || echo 'CAST ready'"
   },
   "autoUpdatesChannel": "stable",
   "plansDirectory": "~/.claude/plans/",
