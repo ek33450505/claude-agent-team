@@ -795,28 +795,55 @@ if [[ "$STATUS_CONTRACT_EXEMPT" = "0" ]]; then
   CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
   export CAST_STOP_OUTPUT_FULL
 
-  TRUNCATED="$(python3 - <<'PYEOF' 2>/dev/null
+  # Three-value truncation classifier:
+  #   0 = well-formed        (Status block present)
+  #   1 = missing_formality  (>=200 chars, clean ending, no Status block — e.g. push-agent "all done")
+  #   2 = actual_truncation  (structural signals: short, mid-word ending, trailing colon, odd code fence)
+  TRUNC_CLASS="$(python3 - <<'PYEOF' 2>/dev/null
 import re, os
 output = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
-# Search full output — no tail window (avoids FP for long Work Logs)
-# Also accept markdown emphasis around Status verb and JSON status form
+# Well-formed: Status block present (full output search, avoids FP for long Work Logs)
 has_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', output))
-has_json_status = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"', output))
-print('0' if (has_status or has_json_status) else '1')
+has_json = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"', output))
+if has_status or has_json:
+    print('0')
+    raise SystemExit(0)
+# No Status block — classify via structural truncation signals
+length = len(output)
+# Signal 1: short output (< 200 chars) — no room for a complete response
+if length < 200:
+    print('2')
+    raise SystemExit(0)
+tail = output[-100:]
+# Signal 2: trailing colon suggests an incomplete statement
+if re.search(r':\s*$', tail):
+    print('2')
+    raise SystemExit(0)
+# Signal 3: unclosed code fence (odd count of triple backticks)
+if output.count('```') % 2 != 0:
+    print('2')
+    raise SystemExit(0)
+# Signal 4: mid-word ending — no terminal punctuation or whitespace before EOF
+if not re.search(r'[.!?)\]}\s]\s*$', tail):
+    print('2')
+    raise SystemExit(0)
+# Clean ending, long enough, no structural truncation signals → MISSING FORMALITY only
+print('1')
 PYEOF
-)"
+  )"
 
-  if [[ "${TRUNCATED:-0}" = "1" ]] \
+  if [[ "${TRUNC_CLASS:-0}" = "2" ]] \
      && [[ -n "$CAST_STOP_OUTPUT_FULL" ]] \
      && [[ -n "${CAST_STOP_AGENT:-}" ]] \
      && [[ "${CAST_STOP_AGENT:-}" != "unknown" ]]; then
-  TRUNC_DIR="${HOME}/.claude/cast/truncated-agents"
-  mkdir -p "$TRUNC_DIR" 2>/dev/null || true
+    # ACTUAL TRUNCATION: write file + fire banner
+    TRUNC_DIR="${HOME}/.claude/cast/truncated-agents"
+    mkdir -p "$TRUNC_DIR" 2>/dev/null || true
 
-  export CAST_TRUNC_DIR="$TRUNC_DIR"
-  export CAST_TRUNC_SAFE_AGENT="$SAFE_AGENT"
+    export CAST_TRUNC_DIR="$TRUNC_DIR"
+    export CAST_TRUNC_SAFE_AGENT="$SAFE_AGENT"
 
-  python3 - <<'PYEOF' 2>/dev/null || true
+    python3 - <<'PYEOF' 2>/dev/null || true
 import json, os
 trunc_dir = os.environ.get('CAST_TRUNC_DIR', '')
 agent_raw = os.environ.get('CAST_STOP_AGENT', 'unknown')
@@ -840,6 +867,41 @@ PYEOF
     # Emit directive to parent session — use SAFE_AGENT (not AGENT_NAME) to prevent JSON-breaking
     # characters from hostile hook payloads (security hardening).
     echo '{"hookSpecificOutput":{"hookEventName":"SubagentStop","additionalContext":"[CAST-TRUNCATED] Agent '"$SAFE_AGENT"' stopped without a valid Status block. Output may be incomplete. Re-dispatch the agent or review ~/.claude/cast/truncated-agents/ for the partial output. Do NOT auto-retry expensive agents — surface this as BLOCKED."}}'
+
+  elif [[ "${TRUNC_CLASS:-0}" = "1" ]] \
+       && [[ -n "$CAST_STOP_OUTPUT_FULL" ]] \
+       && [[ -n "${CAST_STOP_AGENT:-}" ]] \
+       && [[ "${CAST_STOP_AGENT:-}" != "unknown" ]]; then
+    # MISSING FORMALITY: suppress banner, log protocol violation (best-effort — never crash)
+    python3 - <<'PYEOF' 2>/dev/null || true
+import sqlite3, os
+db    = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
+agent = os.environ.get('CAST_STOP_AGENT', 'unknown')
+sess  = os.environ.get('CAST_STOP_SESSION', '')
+ts    = os.environ.get('CAST_STOP_TS_ISO', '')
+out   = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
+try:
+    # Table-existence guard: skip silently if DB absent or table not yet created
+    if not os.path.isfile(db):
+        raise SystemExit(0)
+    conn = sqlite3.connect(db, timeout=2)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'agent_protocol_violations' not in tables:
+        conn.close()
+        raise SystemExit(0)
+    conn.execute(
+        'INSERT INTO agent_protocol_violations '
+        '(session_id, agent_type, violation, pattern, timestamp, raw_excerpt) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        (sess, agent, 'missing_formality', 'no_status_block', ts, out[-200:] if out else None),
+    )
+    conn.commit()
+    conn.close()
+except SystemExit:
+    pass
+except Exception:
+    pass  # benign: never crash the hook pipeline on a protocol-violation write
+PYEOF
   fi
 fi
 

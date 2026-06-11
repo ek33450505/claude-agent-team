@@ -129,29 +129,35 @@ def cmd_log_quality_gate(
     batch_int = _to_int(batch_id, default=0)
     retry_int = _to_int(retry_count, default=0)
 
+    # HONESTY-FIX: private CREATE TABLE formerly included batch_id, absent from the canonical
+    # cast-db-init.sh quality_gates schema. When the table already existed (created by
+    # cast-db-init.sh), CREATE IF NOT EXISTS was a no-op, then db_write silently returned False
+    # because the column didn't exist. Fix: align with canonical schema — no batch_id.
     try:
         db_execute('''
             CREATE TABLE IF NOT EXISTS quality_gates (
                 id               TEXT PRIMARY KEY,
                 session_id       TEXT,
-                batch_id         INTEGER,
                 agent_name       TEXT,
                 timestamp        TEXT,
                 status_line      TEXT,
                 contract_passed  INTEGER,
-                retry_count      INTEGER
+                retry_count      INTEGER,
+                gate_type        TEXT,  -- NULL here; no reader filters on gate_type (cast-dash/doctor query all rows)
+                created_at       TEXT DEFAULT (datetime('now'))
             )
         ''')
-        db_write('quality_gates', {
+        ok = db_write('quality_gates', {
             'id': os.urandom(8).hex(),
             'session_id': session_id,
-            'batch_id': batch_int,
             'agent_name': agent,
             'timestamp': now,
             'status_line': status,
             'contract_passed': cp_int,
             'retry_count': retry_int,
         })
+        if not ok:
+            sys.stderr.write('[orchestrate-dispatch] quality_gates write failed (db_write returned False)\n')
     except Exception as e:
         sys.stderr.write(f'[orchestrate-dispatch] quality_gates write failed: {e}\n')
 

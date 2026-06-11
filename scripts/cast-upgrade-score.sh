@@ -65,7 +65,7 @@ SCORED_OUTPUT="$(claude -p "$USER_CONTENT" \
   --print \
   --dangerously-skip-permissions \
   --model claude-haiku-4-5 \
-  2>/dev/null || echo "[]")"
+  2>/dev/null || echo "[]")"  # benign: optional AI scoring step; [] means no scores recorded, not a gate failure
 
 # Validate JSON output — fall back to empty array on parse failure
 python3 -c "
@@ -77,4 +77,4 @@ try:
     print(json.dumps(data))
 except Exception:
     print('[]')
-" "$SCORED_OUTPUT" 2>/dev/null || echo "[]"
+" "$SCORED_OUTPUT" 2>/dev/null || echo "[]"  # benign: cosmetic JSON validation fallback

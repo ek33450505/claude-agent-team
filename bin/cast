@@ -1211,10 +1211,10 @@ cur = conn.cursor()
 today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d')
 
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?", (today,))
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))=?", (today,))
 today_spend = cur.fetchone()[0] or 0.0
 
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?", (week_ago,))
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))>=?", (week_ago,))
 week_spend = cur.fetchone()[0] or 0.0
 
 cur.execute("SELECT COUNT(*) FROM agent_runs")
@@ -1228,8 +1228,8 @@ if project_f:
 week_rows = []
 if show_week:
     cur.execute(
-        """SELECT DATE(started_at) as day, COALESCE(SUM(cost_usd),0) as spend
-           FROM agent_runs WHERE DATE(started_at)>=? GROUP BY day ORDER BY day DESC""",
+        """SELECT date(replace(replace(started_at,'T',' '),'Z','')) as day, COALESCE(SUM(cost_usd),0) as spend
+           FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))>=? GROUP BY day ORDER BY day DESC""",
         (week_ago,)
     )
     week_rows = [{"date": r["day"], "spend": r["spend"]} for r in cur.fetchall()]
@@ -1727,6 +1727,95 @@ PYEOF
         printf "    %-20s %d\n" "$_ag" "$_cnt"
       done <<< "$_st_out"
       printf "    likely maxTurns cap hit — agent stopped without Status; see rules working-conventions 'Agent Turn Limits'\n"
+    fi
+
+    # ── spend-consistency ────────────────────────────────────────────────────
+    # Runs both the LIKE-based query (cast-budget-alert.sh behavior) and the
+    # normalized DATE-based query (cast budget / cast-dash.py behavior) and
+    # flags when they diverge > $0.01 — the root cause of the 2026-06-11
+    # incident where cast budget reported $0 while the hard-limit fired $375.83.
+    # Honest degradation: absent table or column → INFO, never ERR.
+    local _sc_out _sc_rc
+    _sc_out="$(python3 - "$CAST_DB_PATH" <<'PYEOF'
+import sqlite3, sys, datetime
+from datetime import timezone
+
+db = sys.argv[1]
+today = datetime.datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+try:
+    conn = sqlite3.connect(db, timeout=5)
+    conn.row_factory = sqlite3.Row
+    # LIKE-based (matches cast-budget-alert.sh)
+    like_row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at LIKE ? || '%'",
+        (today,)
+    ).fetchone()
+    like_spend = float(like_row[0]) if like_row else 0.0
+    # Normalized DATE-based (matches fixed cast budget query)
+    date_row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs "
+        "WHERE date(replace(replace(started_at,'T',' '),'Z',''))=?",
+        (today,)
+    ).fetchone()
+    date_spend = float(date_row[0]) if date_row else 0.0
+    conn.close()
+    if like_spend == 0.0 and date_spend == 0.0:
+        print("INFO:no cost data today")
+    elif abs(like_spend - date_spend) > 0.01:
+        print("WARN:LIKE=${:.4f} DATE=${:.4f}".format(like_spend, date_spend))
+    else:
+        print("OK:{:.4f}".format(like_spend))
+except sqlite3.OperationalError as e:
+    err = str(e).lower()
+    if 'no such table' in err or 'no such column' in err:
+        print("INFO:agent_runs table or cost_usd column not available")
+    else:
+        print("INFO:db query failed ({})".format(e))
+except Exception as e:
+    print("INFO:unavailable ({})".format(e))
+PYEOF
+    2>&1)"
+    _sc_rc=$?
+    if [ $_sc_rc -ne 0 ] || echo "$_sc_out" | grep -qi "traceback"; then
+      printf "%b spend-consistency: check failed (python3 error)\n" "$INFO"
+    elif echo "$_sc_out" | grep -q "^INFO:"; then
+      _sc_msg="${_sc_out#INFO:}"
+      printf "%b spend-consistency: %s\n" "$INFO" "$_sc_msg"
+    elif echo "$_sc_out" | grep -q "^WARN:"; then
+      _sc_msg="${_sc_out#WARN:}"
+      printf "%b spend-consistency: %s — mismatch >$0.01 (timestamp format divergence)\n" "$WARN" "$_sc_msg"
+      overall_ok=0
+    elif echo "$_sc_out" | grep -q "^OK:"; then
+      _sc_msg="${_sc_out#OK:}"
+      printf "%b spend-consistency: \$%s (LIKE ≈ DATE, within \$0.01)\n" "$OK" "$_sc_msg"
+    else
+      printf "%b spend-consistency: unexpected output — %s\n" "$INFO" "$_sc_out"
+    fi
+
+    # ── crashed sessions ─────────────────────────────────────────────────────
+    # cast-abandon-stale-runs.py writes status='crashed' but doctor never reads
+    # it. Surface here alongside the abandoned/truncation block.
+    # Use started_at (live schema: id, project, project_root, started_at,
+    # ended_at, status, deleted_at — no updated_at column exists).
+    # apply replace() normalization: started_at is ISO-8601 T/Z form while
+    # datetime('now','-7 days') returns space-separated form — lexicographic
+    # comparison of mixed separators is unreliable at the sub-day boundary.
+    local _cs_out _cs_rc
+    _cs_out="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COALESCE(COUNT(*),0) FROM sessions \
+       WHERE status='crashed' \
+         AND replace(replace(started_at,'T',' '),'Z','') >= datetime('now','-7 days');" 2>&1)"
+    _cs_rc=$?
+    if echo "$_cs_out" | grep -qi "no such table\|no such column"; then
+      printf "%b crashed-sessions: sessions table not queryable\n" "$INFO"
+    elif [ $_cs_rc -ne 0 ]; then
+      printf "%b crashed-sessions: unavailable (db query failed)\n" "$INFO"
+    elif [ "${_cs_out:-0}" -gt 0 ] 2>/dev/null; then
+      printf "%b crashed-sessions: %s session(s) crashed in last 7d — check ~/.claude/logs/\n" "$WARN" "$_cs_out"
+      overall_ok=0
+    else
+      printf "%b crashed-sessions: none in last 7d\n" "$OK"
     fi
   fi
 

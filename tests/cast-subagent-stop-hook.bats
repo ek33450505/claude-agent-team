@@ -318,6 +318,67 @@ Summary: task completed successfully"
 }
 
 # ---------------------------------------------------------------------------
+# Three-value truncation classifier tests (Phase 14 — TRUNC_CLASS 0/1/2)
+#
+# TRUNC_CLASS=0: well-formed (Status block present)            → no action
+# TRUNC_CLASS=1: missing_formality (>=200 chars, clean ending) → suppress banner, write protocol-violation
+# TRUNC_CLASS=2: actual_truncation (structural signals)        → fire [CAST-TRUNCATED] banner
+# ---------------------------------------------------------------------------
+
+@test "missing formality — clean long output without Status block suppresses banner" {
+  # TRUNC_CLASS=1: >=200 chars, ends with period, no Status block.
+  # push-agent "The push succeeded." class must NOT fire [CAST-TRUNCATED].
+  local output
+  output="$(python3 -c "
+lines = ['The push to origin main completed successfully. All checks passed.'] * 6
+lines.append('The branch is now fully up to date with the remote repository.')
+print('\n'.join(lines))
+")"
+  # Wire agent_protocol_violations so we can verify the row is written
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "push" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  # No truncation file written (banner suppressed for missing formality)
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+  # Protocol violation row IS written for observability
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='missing_formality';")"
+  [[ "$rows" -ge 1 ]]
+}
+
+@test "actual truncation — trailing colon fires [CAST-TRUNCATED] banner" {
+  # TRUNC_CLASS=2 via signal 2: long output (>=200 chars) ending with ":"
+  # Classic "Now I'll run the tests:" pattern — clearly truncated mid-step.
+  local output
+  output="$(python3 -c "
+lines = ['Starting analysis of the codebase to identify potential issues.'] * 4
+lines.append('Now running the following validation checks to verify correctness:')
+print('\n'.join(lines))
+")"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-writer" "$output")"
+  assert_success
+  assert_output --partial "[CAST-TRUNCATED]"
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -ge 1 ]]
+}
+
+# ---------------------------------------------------------------------------
 # Status-contract exemption tests (Phase v7.5 — cast-status-contract.sh)
 #
 # Agents with agent_type "unknown" are NOT under the CAST Status contract.
