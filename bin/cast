@@ -152,6 +152,7 @@ Subcommands:
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
   ${C_BOLD}files${C_RESET}                              File event tracking and analytics
   ${C_BOLD}batch${C_RESET}                              Batch dispatch orchestration
+  ${C_BOLD}ci-local${C_RESET}                           Run PR-gating CI workflows locally via act
 
 Global flags:
   --json        Machine-readable JSON output
@@ -2827,6 +2828,23 @@ PYEOF
   esac
 }
 
+# ── Subcommand: ci-local ─────────────────────────────────────────────────────
+_cmd_ci_local() {
+  # Detect flagship repo by verifying a Makefile with a ci-local target is present.
+  # CAST_REPO_DIR resolves to the repo root via the readlink -f symlink resolution at
+  # script startup, so this works whether cast is run from the repo or from a PATH symlink.
+  local makefile="${CAST_REPO_DIR}/Makefile"
+  if [ ! -f "$makefile" ] || ! grep -q '^ci-local:' "$makefile"; then
+    _error "cast ci-local requires the flagship claude-agent-team repo."
+    printf "  Expected Makefile with a ci-local target at: %s\n" "$CAST_REPO_DIR" >&2
+    printf "  Ensure cast was installed from the claude-agent-team repo and retry.\n" >&2
+    exit 1
+  fi
+
+  # Delegate to make ci-local from the repo root
+  exec make -C "$CAST_REPO_DIR" ci-local
+}
+
 # ── Subcommand: incidents ────────────────────────────────────────────────────
 _cmd_incidents() {
   local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
@@ -2920,6 +2938,7 @@ case "$SUBCOMMAND" in
   incidents)            _cmd_incidents "$@" ;;
   files)                _cmd_files "$@" ;;
   batch)                _cmd_batch "$@" ;;
+  ci-local)             _cmd_ci_local "$@" ;;
   ""|--help|-h)
     _usage
     exit 0

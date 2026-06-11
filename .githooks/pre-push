@@ -37,6 +37,79 @@ else
   echo "[CAST pre-push] Skipping stats-drift check (CAST_SKIP_STATS_PUSH=1)" >&2
 fi
 
+# Rules-drift gate — block push when rules-core manifest is out of sync.
+# Mirrors .github/workflows/rules-drift.yml semantics: runs the canonical generator
+# (gen-rules-manifest.sh), then diffs freshly generated vs. committed HEAD version.
+if [ "${CAST_SKIP_RULES_DRIFT:-0}" != "1" ]; then
+  echo "[CAST pre-push] Checking rules-core manifest drift..."
+  _MANIFEST="$REPO_ROOT/.github/rules-core.manifest"
+  _MANIFEST_SAVED="$(mktemp)"
+  _MANIFEST_EXISTED=0
+  if [ -f "$_MANIFEST" ]; then
+    cp "$_MANIFEST" "$_MANIFEST_SAVED"
+    _MANIFEST_EXISTED=1
+  fi
+  # Restore manifest to its pre-gate state on any exit — hook leaves no working-tree side effects.
+  # shellcheck disable=SC2064
+  trap '
+    if [ "$_MANIFEST_EXISTED" = "1" ]; then
+      cp "$_MANIFEST_SAVED" "$_MANIFEST" 2>/dev/null || true
+    else
+      rm -f "$_MANIFEST"
+    fi
+    rm -f "$_MANIFEST_SAVED"
+  ' EXIT
+
+  # Run canonical generator — fail loud if it fails (no || true, no stderr suppression).
+  if ! bash "$REPO_ROOT/scripts/gen-rules-manifest.sh"; then
+    echo "" >&2
+    echo "ERROR: gen-rules-manifest.sh failed. Cannot verify rules-core drift." >&2
+    echo "To skip this gate: CAST_SKIP_RULES_DRIFT=1 git push" >&2
+    exit 1
+  fi
+
+  # Compare freshly generated manifest against committed HEAD version (mirrors CI diff step).
+  _TMPCOMMITTED="$(mktemp)"
+  if ! git -C "$REPO_ROOT" show HEAD:.github/rules-core.manifest > "$_TMPCOMMITTED" 2>/dev/null; then
+    # First-time run — no committed manifest yet; matches CI first-time escape.
+    rm -f "$_TMPCOMMITTED"
+    echo "[CAST pre-push] rules-core manifest not yet committed (first-time run). Skipping drift check."
+  elif ! diff -q "$_TMPCOMMITTED" "$_MANIFEST" > /dev/null 2>&1; then
+    rm -f "$_TMPCOMMITTED"
+    echo "" >&2
+    echo "ERROR: rules-core manifest is out of sync. Regenerate and commit it:" >&2
+    echo "  bash scripts/gen-rules-manifest.sh && git add .github/rules-core.manifest && git commit --amend --no-edit" >&2
+    echo "To skip this gate: CAST_SKIP_RULES_DRIFT=1 git push" >&2
+    exit 1
+  else
+    rm -f "$_TMPCOMMITTED"
+    echo "[CAST pre-push] rules-core manifest in sync ✓"
+  fi
+else
+  echo "[CAST pre-push] Skipping rules-drift check (CAST_SKIP_RULES_DRIFT=1)" >&2
+fi
+
+# README-structure gate — block push when required README sections are missing
+if [ "${CAST_SKIP_README_STRUCTURE:-0}" != "1" ]; then
+  echo "[CAST pre-push] Checking README structure..."
+  _MISSING_SECTIONS=""
+  for _section in "## Installation" "## Agents" "## Hooks" "## Testing"; do
+    if ! grep -q "$_section" "$REPO_ROOT/README.md" 2>/dev/null; then
+      _MISSING_SECTIONS="${_MISSING_SECTIONS} '${_section}'"
+    fi
+  done
+  if [ -n "$_MISSING_SECTIONS" ]; then
+    echo "" >&2
+    echo "ERROR: README.md is missing required sections:${_MISSING_SECTIONS}" >&2
+    echo "Add the missing sections to README.md to fix." >&2
+    echo "To skip this gate: CAST_SKIP_README_STRUCTURE=1 git push" >&2
+    exit 1
+  fi
+  echo "[CAST pre-push] README structure OK ✓"
+else
+  echo "[CAST pre-push] Skipping README-structure check (CAST_SKIP_README_STRUCTURE=1)" >&2
+fi
+
 # BATS regression gate — OPT-IN ONLY, via isolated runner
 # SAFETY NOTE (2026-06-02 incident): The full BATS suite MUST NOT run directly against the real $HOME.
 # A test that runs `bats tests/` without isolation can delete ~/.claude/ and other critical paths.

@@ -38,6 +38,19 @@ test-ubuntu:
 
 # Run real GitHub Actions CI locally via act (simulates PR event)
 # Requires: act (https://nektosact.com) and Docker
+#
+# Jobs included (mirrors the full PR-gating workflow set):
+#   bats, contract-test, hook-contract-validation — bats-ci.yml (full suite + contracts)
+#   stats-guard           — cast-stats-guard.yml
+#   rules-drift           — rules-drift.yml
+#   readme-structure      — docs-check.yml
+#   pii-scan, shellcheck  — security-scan.yml
+#
+# Excluded (cannot run under act):
+#   gitleaks   — uses gitleaks/gitleaks-action which requires a live GITHUB_TOKEN secret;
+#                run the local equivalent manually: bash scripts/ci-pii-scan.sh
+#   bats-macos — act cannot run macOS runners (macos-latest); covered by: make test
+#   bats-ubuntu — duplicates the bats job's full-suite run on ubuntu-latest; expensive
 ci-local:
 	@command -v act >/dev/null || { \
 		echo "Error: act not found. Install from https://nektosact.com"; \
@@ -50,7 +63,10 @@ ci-local:
 	@echo "Running PR-gating workflows locally via act..."
 	@echo "This simulates the exact CI checks that block PR merges."
 	@echo ""
-	act pull_request --container-architecture linux/amd64 -j bats -j stats-guard -j rules-drift -j readme-structure
+	act pull_request --container-architecture linux/amd64 \
+	  -j bats -j contract-test -j hook-contract-validation \
+	  -j stats-guard -j rules-drift -j readme-structure \
+	  -j pii-scan -j shellcheck
 
 # Sync docs then validate
 sync: docs validate
