@@ -22,6 +22,21 @@ else
   echo "[CAST pre-push] Skipping PII check (CAST_SKIP_PII_CHECK=1)" >&2
 fi
 
+# Stats-drift gate — block push when cast-stats.json is out of sync with the repo
+if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
+  echo "[CAST pre-push] Checking cast-stats.json drift..."
+  if ! bash "$REPO_ROOT/scripts/gen-cast-stats.sh" --check; then
+    echo "" >&2
+    echo "ERROR: cast-stats.json is out of sync. Regenerate and commit it:" >&2
+    echo "  bash scripts/gen-cast-stats.sh && git add cast-stats.json && git commit --amend --no-edit" >&2
+    echo "To skip this gate: CAST_SKIP_STATS_PUSH=1 git push" >&2
+    exit 1
+  fi
+  echo "[CAST pre-push] cast-stats.json in sync ✓"
+else
+  echo "[CAST pre-push] Skipping stats-drift check (CAST_SKIP_STATS_PUSH=1)" >&2
+fi
+
 # BATS regression gate — OPT-IN ONLY, via isolated runner
 # SAFETY NOTE (2026-06-02 incident): The full BATS suite MUST NOT run directly against the real $HOME.
 # A test that runs `bats tests/` without isolation can delete ~/.claude/ and other critical paths.
