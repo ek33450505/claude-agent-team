@@ -314,6 +314,13 @@ teardown() {
   # the pipe's write end open with no data — identical semantics to an open terminal.
   # Pre-fix: cat blocks → hook never exits → wait loop times out → test FAILS.
   # Post-fix: read -t 0 detects "no data ready" → skips cat → hook exits → PASSES.
+  #
+  # On bash <4 (macOS system bash 3.2): read -t 0 is unsupported; the hook falls
+  # back to plain cat, which blocks on an open pipe with no data. Skip this test
+  # when the test runner (and therefore the hook via 'bash $HOOK_SH') is bash <4.
+  if (( BASH_VERSINFO[0] < 4 )); then
+    skip "read -t 0 unavailable on bash <4; open-pipe guard not active on this runtime"
+  fi
   export CLAUDE_SESSION_ID="hang-regress-$$"
 
   # Launch hook in background with stdin from an open pipe that never sends data.
