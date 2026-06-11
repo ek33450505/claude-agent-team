@@ -27,7 +27,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "cast-migrate.py: fresh DB creates schema_migrations table on first run" {
-  run python3 "$MIGRATE_SCRIPT"
+  run python3 "$MIGRATE_SCRIPT" --confirm
   assert_success
 
   local count
@@ -36,7 +36,7 @@ teardown() {
 }
 
 @test "cast-migrate.py: applies all NNN_*.sql files and records rows in schema_migrations" {
-  run python3 "$MIGRATE_SCRIPT"
+  run python3 "$MIGRATE_SCRIPT" --confirm
   assert_success
 
   local row_count
@@ -46,7 +46,7 @@ teardown() {
 }
 
 @test "cast-migrate.py: incidents table exists after migration run" {
-  run python3 "$MIGRATE_SCRIPT"
+  run python3 "$MIGRATE_SCRIPT" --confirm
   assert_success
 
   local count
@@ -55,7 +55,7 @@ teardown() {
 }
 
 @test "cast-migrate.py: routines table exists after migration run" {
-  run python3 "$MIGRATE_SCRIPT"
+  run python3 "$MIGRATE_SCRIPT" --confirm
   assert_success
 
   local count
@@ -64,7 +64,7 @@ teardown() {
 }
 
 @test "cast-migrate.py: plan_sessions table exists after migration run" {
-  run python3 "$MIGRATE_SCRIPT"
+  run python3 "$MIGRATE_SCRIPT" --confirm
   assert_success
 
   local count
@@ -77,12 +77,12 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "cast-migrate.py: second run is idempotent (no dupes, no errors)" {
-  python3 "$MIGRATE_SCRIPT" > /dev/null
+  python3 "$MIGRATE_SCRIPT" --confirm > /dev/null
 
   local count_before
   count_before=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;")
 
-  run python3 "$MIGRATE_SCRIPT"
+  run python3 "$MIGRATE_SCRIPT" --confirm
   assert_success
 
   local count_after
@@ -91,9 +91,9 @@ teardown() {
 }
 
 @test "cast-migrate.py: second run output says 0 applied" {
-  python3 "$MIGRATE_SCRIPT" > /dev/null
+  python3 "$MIGRATE_SCRIPT" --confirm > /dev/null
 
-  run python3 "$MIGRATE_SCRIPT"
+  run python3 "$MIGRATE_SCRIPT" --confirm
   assert_success
   [[ "$output" == *"0 applied"* ]]
 }
@@ -274,4 +274,66 @@ DRIVER_EOF
   [[ "$output" == *"PASS: no syntax error"* ]]
 
   rm -rf "$tmp_migrations"
+}
+
+# ---------------------------------------------------------------------------
+# Argparse safety guard — footgun tests added with --confirm flag
+# ---------------------------------------------------------------------------
+
+@test "cast-migrate.py: --help exits 0, prints usage, applies nothing to DB" {
+  run python3 "$MIGRATE_SCRIPT" --help
+  assert_success
+
+  # --help must print usage keywords
+  [[ "$output" == *"usage"* ]] || [[ "$output" == *"Usage"* ]]
+
+  # The DB must be untouched (schema_migrations not created by --help)
+  local row_count
+  row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
+  [ "$row_count" -eq 0 ]
+}
+
+@test "cast-migrate.py: unknown arg exits non-zero and applies nothing" {
+  run python3 "$MIGRATE_SCRIPT" --bogus
+  # argparse standard error exit code is 2
+  [ "$status" -eq 2 ]
+
+  # DB must be untouched
+  local row_count
+  row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
+  [ "$row_count" -eq 0 ]
+}
+
+@test "cast-migrate.py: no args defaults to dry-run, prints hint, applies nothing" {
+  run python3 "$MIGRATE_SCRIPT"
+  assert_success
+
+  # Must print the dry-run hint
+  [[ "$output" == *"pass --confirm to apply"* ]]
+
+  # DB must be untouched
+  local row_count
+  row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
+  [ "$row_count" -eq 0 ]
+}
+
+@test "cast-migrate.py: --confirm applies pending migrations" {
+  run python3 "$MIGRATE_SCRIPT" --confirm
+  assert_success
+
+  # At least one migration must have been applied
+  local row_count
+  row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;")
+  [ "$row_count" -ge 1 ]
+}
+
+@test "cast-migrate.py: --dry-run --confirm together exit 2 (mutual exclusion)" {
+  run python3 "$MIGRATE_SCRIPT" --dry-run --confirm
+  # argparse mutually exclusive group error exit code is 2
+  [ "$status" -eq 2 ]
+
+  # DB must be untouched
+  local row_count
+  row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
+  [ "$row_count" -eq 0 ]
 }

@@ -2,11 +2,16 @@
 """CAST migration runner — applies versioned SQL migrations to cast.db idempotently.
 
 Usage:
-    python3 scripts/cast-migrate.py [--dry-run]
+    python3 scripts/cast-migrate.py [--dry-run]   # default: list pending, no DB changes
+    python3 scripts/cast-migrate.py --confirm      # actually apply pending migrations
+    python3 scripts/cast-migrate.py --dry-run      # explicit read-only listing
 
 Migrations live in scripts/migrations/NNN_name.sql and are applied in numeric order.
 A schema_migrations table tracks applied migrations. Safe to run multiple times.
+
+Flags are mutually exclusive. Any unrecognised argument is an error (exit 2).
 """
+import argparse
 import os
 import re
 import sqlite3
@@ -169,7 +174,29 @@ def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
 
 
 def main() -> int:
-    dry_run = '--dry-run' in sys.argv
+    parser = argparse.ArgumentParser(
+        prog='cast-migrate',
+        description='Apply versioned SQL migrations to cast.db idempotently.',
+        epilog=(
+            'Migrations live in scripts/migrations/NNN_name.sql and are applied in '
+            'numeric order. Safe to run multiple times — already-applied migrations are '
+            'skipped. Default (no flags) performs a dry run; pass --confirm to apply.'
+        ),
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Show pending migrations without applying them (read-only, default).',
+    )
+    mode.add_argument(
+        '--confirm',
+        action='store_true',
+        help='Actually apply pending migrations to the database.',
+    )
+    args = parser.parse_args()
+    # Dry-run is the default when neither flag is passed.
+    dry_run = not args.confirm
 
     db_path = _get_db_path()
     # Resolve migrations dir relative to this script's location
@@ -207,6 +234,9 @@ def main() -> int:
         for name in skipped:
             print(f'  [SKIPPED] {name} (already applied)')
         print(f'[cast-migrate] {len(pending)} pending, {len(skipped)} already applied')
+        if not args.dry_run:
+            # Hint only when we defaulted to dry-run (no explicit flag given).
+            print('[cast-migrate] Dry run by default — pass --confirm to apply.')
         conn.close()
         return 0
 

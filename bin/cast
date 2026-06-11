@@ -2244,7 +2244,7 @@ USAGE
   if [ -n "$dry_run_flag" ]; then
     python3 "$migrate_script" --dry-run
   else
-    python3 "$migrate_script"
+    python3 "$migrate_script" --confirm
   fi
 }
 

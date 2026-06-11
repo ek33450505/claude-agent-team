@@ -79,7 +79,7 @@ con.close()
 
 # 1. First run on fresh DB → applies migration, schema_migrations gets a row
 @test "migrate: first run on fresh DB applies 009 migration" {
-  run python3 "$MIGRATE"
+  run python3 "$MIGRATE" --confirm
   assert_success
   assert_output --partial "[APPLIED]"
   [ "$(migration_applied '009_cast_framework_fixes.sql')" = "yes" ]
@@ -87,8 +87,8 @@ con.close()
 
 # 2. Second run → already-applied, idempotent
 @test "migrate: second run skips already-applied migration (idempotent)" {
-  python3 "$MIGRATE" >/dev/null 2>&1  # first run
-  run python3 "$MIGRATE"              # second run
+  python3 "$MIGRATE" --confirm >/dev/null 2>&1  # first run
+  run python3 "$MIGRATE" --confirm              # second run
   assert_success
   assert_output --partial "[SKIPPED]"
   # Still exactly 1 row for this migration
@@ -115,25 +115,25 @@ con.close()
 
 # 4. agent_protocol_violations table exists after apply
 @test "migrate: agent_protocol_violations table exists after apply" {
-  python3 "$MIGRATE" >/dev/null 2>&1
+  python3 "$MIGRATE" --confirm >/dev/null 2>&1
   [ "$(table_exists 'agent_protocol_violations')" = "yes" ]
 }
 
 # 4b. agent_truncations table exists after apply
 @test "migrate: agent_truncations table exists after apply" {
-  python3 "$MIGRATE" >/dev/null 2>&1
+  python3 "$MIGRATE" --confirm >/dev/null 2>&1
   [ "$(table_exists 'agent_truncations')" = "yes" ]
 }
 
 # 4c. unstaged_warnings table exists after apply
 @test "migrate: unstaged_warnings table exists after apply" {
-  python3 "$MIGRATE" >/dev/null 2>&1
+  python3 "$MIGRATE" --confirm >/dev/null 2>&1
   [ "$(table_exists 'unstaged_warnings')" = "yes" ]
 }
 
 # 5. agent_runs.owns_files column exists after apply
 @test "migrate: agent_runs.owns_files column exists after apply" {
-  python3 "$MIGRATE" >/dev/null 2>&1
+  python3 "$MIGRATE" --confirm >/dev/null 2>&1
   [ "$(column_exists 'agent_runs' 'owns_files')" = "yes" ]
 }
 
