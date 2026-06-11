@@ -1,4 +1,4 @@
-.PHONY: docs validate test test-ubuntu sync hooks
+.PHONY: docs validate test test-ubuntu ci-local sync hooks
 
 # Regenerate README stats from live counts
 docs:
@@ -35,6 +35,22 @@ test-ubuntu:
 	    chmod +x ~/.claude/scripts/*.sh && \
 	    bats /repo/tests/*.bats /repo/tests/hooks/*.bats /repo/tests/agents/*.bats /repo/tests/scripts/*.bats --tap \
 	  "
+
+# Run real GitHub Actions CI locally via act (simulates PR event)
+# Requires: act (https://nektosact.com) and Docker
+ci-local:
+	@command -v act >/dev/null || { \
+		echo "Error: act not found. Install from https://nektosact.com"; \
+		exit 1; \
+	}
+	@docker info >/dev/null 2>&1 || { \
+		echo "Error: Docker daemon not running. Start Docker and retry."; \
+		exit 1; \
+	}
+	@echo "Running PR-gating workflows locally via act..."
+	@echo "This simulates the exact CI checks that block PR merges."
+	@echo ""
+	act pull_request --container-architecture linux/amd64 -j bats -j stats-guard -j rules-drift -j readme-structure
 
 # Sync docs then validate
 sync: docs validate
