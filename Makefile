@@ -45,6 +45,7 @@ test-ubuntu:
 #   rules-drift           — rules-drift.yml
 #   readme-structure      — docs-check.yml
 #   pii-scan, shellcheck  — security-scan.yml
+#   db-contract           — db-contract.yml
 #
 # Excluded (cannot run under act):
 #   gitleaks   — uses gitleaks/gitleaks-action which requires a live GITHUB_TOKEN secret;
@@ -66,7 +67,7 @@ ci-local:
 	act pull_request --container-architecture linux/amd64 \
 	  -j bats -j contract-test -j hook-contract-validation \
 	  -j stats-guard -j rules-drift -j readme-structure \
-	  -j pii-scan -j shellcheck
+	  -j pii-scan -j shellcheck -j db-contract
 
 # Sync docs then validate
 sync: docs validate

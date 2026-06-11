@@ -37,6 +37,27 @@ else
   echo "[CAST pre-push] Skipping stats-drift check (CAST_SKIP_STATS_PUSH=1)" >&2
 fi
 
+# DB-contract ratchet gate — block push when new schema-contract violations appear.
+# Runs without --db (no live cast.db) so the check is fast and side-effect-free.
+if [ "${CAST_SKIP_DB_CONTRACT:-0}" != "1" ]; then
+  echo "[CAST pre-push] Checking db-contract ratchet..."
+  _DBC_SCRIPT="$REPO_ROOT/scripts/cast-db-contract.py"
+  if [ -f "$_DBC_SCRIPT" ]; then
+    if ! python3 "$_DBC_SCRIPT" --check > /dev/null 2>&1; then
+      echo "" >&2
+      echo "ERROR: New schema-contract violations detected (not in .github/db-contract-baseline.json)." >&2
+      echo "  Fix: python3 scripts/cast-db-contract.py --update-baseline" >&2
+      echo "To skip this gate: CAST_SKIP_DB_CONTRACT=1 git push" >&2
+      exit 1
+    fi
+    echo "[CAST pre-push] db-contract ratchet OK ✓"
+  else
+    echo "[CAST pre-push] db-contract script not found — skipping (run: bash install.sh)" >&2
+  fi
+else
+  echo "[CAST pre-push] Skipping db-contract check (CAST_SKIP_DB_CONTRACT=1)" >&2
+fi
+
 # Rules-drift gate — block push when rules-core manifest is out of sync.
 # Mirrors .github/workflows/rules-drift.yml semantics: runs the canonical generator
 # (gen-rules-manifest.sh), then diffs freshly generated vs. committed HEAD version.

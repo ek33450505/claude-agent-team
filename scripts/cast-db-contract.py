@@ -14,9 +14,14 @@ Ratchet decision: --check uses a committed baseline file
 absent from that baseline. This is simpler and more deterministic than a
 time-based grace window (clock-skew-free, rebase-safe).
 
-Desktop-absent policy: if cast-desktop is not found at the configured path,
-all desktop verdicts are UNCHECKED. "Unreachable" is never treated as
-"no reads" (CAST honest-degradation principle).
+Desktop-absent ratchet: when cast-desktop is not reachable (UNCHECKED),
+--check ratchets CONTRADICTIONS only and SKIPS safe-drop-candidate
+ratcheting. Reason: without the desktop source, columns that would be
+DESKTOP-COUPLED (and therefore NOT SAFE-DROP) degrade to SAFE-DROP-CANDIDATE.
+Ratcheting those as "new" safe-drops would produce false CI failures.
+The --check output always states which mode is active — it never silently
+changes scope. "Unreachable" is never treated as "no reads" (CAST
+honest-degradation principle).
 
 Usage:
   scripts/cast-db-contract.py [--json] [--db PATH] [--desktop-path PATH]
@@ -746,10 +751,16 @@ def format_json_output(contracts: list[ColumnContract], desktop_found: bool) -> 
     tables: dict[str, list[dict]] = {}
     for c in contracts:
         tables.setdefault(c.table, []).append(c.to_dict())
+    check_mode = (
+        "full (contradictions + safe-drop candidates)"
+        if desktop_found
+        else "contradictions-only (desktop: UNCHECKED — safe-drop ratchet skipped)"
+    )
     manifest = {
         "schema_version": "1.0",
         "generated_from": _get_git_sha(),
         "desktop_checked": desktop_found,
+        "check_mode": check_mode,
         "tables": tables,
     }
     return json.dumps(manifest, indent=2)
@@ -770,12 +781,28 @@ def _load_baseline(baseline_path: Path) -> dict:
 def check_against_baseline(
     contracts: list[ColumnContract],
     baseline_path: Path,
-) -> tuple[list[dict], list[dict]]:
+    desktop_found: bool,
+) -> tuple[list[dict], list[dict], str]:
     """Compare current state against the committed ratchet baseline.
 
-    Returns (new_contradictions, new_safe_drops) — entries present now but
-    absent from the baseline. Caller should exit 1 if either list is non-empty.
+    When desktop_found is False (UNCHECKED), safe-drop-candidate ratcheting
+    is skipped entirely. Columns that would be DESKTOP-COUPLED with a real
+    desktop degrade to SAFE-DROP-CANDIDATE when desktop is absent; ratcheting
+    those as "new" would produce false CI failures. Contradictions are always
+    checked regardless of desktop availability.
+
+    Returns (new_contradictions, new_safe_drops, check_mode) where check_mode
+    is a human-readable string stating the active ratchet scope.
+    Caller should exit 1 if new_contradictions or new_safe_drops are non-empty.
     """
+    if desktop_found:
+        check_mode = "full (contradictions + safe-drop candidates)"
+    else:
+        check_mode = (
+            "contradictions-only "
+            "(desktop: UNCHECKED — safe-drop ratchet skipped)"
+        )
+
     baseline = _load_baseline(baseline_path)
     known_contras = {
         (e["table"], e["column"]) for e in baseline.get("contradictions", [])
@@ -783,15 +810,23 @@ def check_against_baseline(
     known_drops = {
         (e["table"], e["column"]) for e in baseline.get("safe_drop_candidates", [])
     }
+
     new_contras: list[dict] = []
-    new_drops: list[dict] = []
     for c in contracts:
-        key = (c.table, c.column)
-        if c.classification == "CONTRADICTION" and key not in known_contras:
+        if c.classification == "CONTRADICTION" and (c.table, c.column) not in known_contras:
             new_contras.append(c.to_dict())
-        elif c.classification == "SAFE-DROP-CANDIDATE" and key not in known_drops:
-            new_drops.append(c.to_dict())
-    return new_contras, new_drops
+
+    # Safe-drop ratcheting requires desktop evidence. Without it, skip entirely.
+    new_drops: list[dict] = []
+    if desktop_found:
+        for c in contracts:
+            if (
+                c.classification == "SAFE-DROP-CANDIDATE"
+                and (c.table, c.column) not in known_drops
+            ):
+                new_drops.append(c.to_dict())
+
+    return new_contras, new_drops, check_mode
 
 
 def write_baseline(contracts: list[ColumnContract], baseline_path: Path) -> None:
@@ -916,11 +951,14 @@ def main() -> int:
 
     # ── 5. Ratchet check ────────────────────────────────────────────────────
     if args.check:
-        new_contras, new_drops = check_against_baseline(contracts, baseline_path)
+        new_contras, new_drops, check_mode = check_against_baseline(
+            contracts, baseline_path, desktop_found
+        )
+        print(f"[CHECK] mode: {check_mode}", file=sys.stderr)
         if new_contras or new_drops:
-            print("\n[FAIL] New entries not in baseline:", file=sys.stderr)
+            print("[FAIL] New entries not in baseline:", file=sys.stderr)
             for e in new_contras:
-                print(f"  CONTRADICTION    : {e['table']}.{e['column']}", file=sys.stderr)
+                print(f"  CONTRADICTION      : {e['table']}.{e['column']}", file=sys.stderr)
             for e in new_drops:
                 print(
                     f"  SAFE-DROP-CANDIDATE: {e['table']}.{e['column']}",
