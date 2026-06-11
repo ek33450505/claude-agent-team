@@ -2889,6 +2889,11 @@ _cmd_db_contract() {
     _error "cast-db-contract.py not found. Run: bash install.sh"
     exit 1
   fi
+  # --json is consumed globally by _parse_global_flags (sets CAST_JSON=1) and
+  # never reaches $@. Re-inject it so the python script receives it.
+  if [ "${CAST_JSON:-0}" -eq 1 ]; then
+    set -- "--json" "$@"
+  fi
   exec python3 "$_dbc_script" "$@"
 }
 
