@@ -1,4 +1,4 @@
-name: Sync README Badges
+name: Sync README Badges & Heal Stats
 
 # REQUIRES MANUAL REPO SETTING:
 #   Settings → Actions → General → Workflow permissions:
@@ -51,3 +51,42 @@ jobs:
           labels: |
             automated
             docs
+
+  heal-cast-stats:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check for stats drift
+        id: drift
+        run: |
+          # Use --check mode to detect drift; ignores 'updated' field to avoid
+          # daily churn commits. Exit code 0 = in sync, non-zero = drift detected.
+          if bash scripts/gen-cast-stats.sh --check 2>/dev/null; then
+            echo "drifted=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "drifted=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Regenerate and push heal if drifted
+        if: steps.drift.outputs.drifted == 'true'
+        run: |
+          # Regenerate the file
+          bash scripts/gen-cast-stats.sh
+
+          # Configure git bot identity
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Stage and commit
+          git add cast-stats.json
+          git commit -m "chore: regenerate cast-stats.json"
+
+          # Sync with main before push to handle concurrent pushes (e.g., sync-badges)
+          git pull --rebase origin main
+
+          # Push the heal commit
+          git push
