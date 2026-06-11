@@ -46,7 +46,9 @@ When invoked:
 
 After each logical unit, dispatch `code-reviewer` (haiku) via Agent tool with this prompt template:
 
-> "Review changes to [file list]. Focus: [specific concern from task]. Source of truth: plan at [path] task N."
+> "Review changes to [file list]. Focus: [specific concern from task]. Source of truth: plan at [path] task N. Task context: TASK_ID=[your current TASK_ID env var value, or 'batch-manual' if unset]."
+
+<!-- BONUS (phase14): Including TASK_ID in the prompt enables future harness versions to propagate the correct task_id to the reviewer's TASK_ID env var, so cast_write_review writes the approval under the right key. Without this, cast_check_approvals finds no approval record (see ~/.claude/reports/phase14-review-plumbing.md). -->
 
 Do NOT proceed to the next logical unit or write tests until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
 

@@ -44,11 +44,12 @@ The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only 
 
 **How to pass the task_id:** The orchestrator passes it in the prompt when dispatching commit. It matches the batch ID of the implementation batch being committed.
 
-**Fallback when task_id is absent:** If the task_id is an empty string, "none", or not provided in the prompt, skip the `cast_check_approvals` script check. Instead:
-- If "DONE" and "code-reviewer" appear in the prompt context, treat as approved and proceed with commit
-- If not found, output a soft warning (do NOT block): "No task_id provided — proceeding without script-based approval gate. Ensure code-reviewer has run before committing." and proceed
+**Fallback when task_id is absent or state file not found:**
+- Emit a visible WARN (not a block, not a silent pass): `[WARN] No approval record found for task_id=<value> — proceeding with commit. Ensure code-reviewer ran before this commit. If this is a repeated miss, the review-dispatch plumbing may need investigation (see docs/phase14-review-plumbing.md).`
+- Include the warn text in the commit message body (not the subject line) so it is visible in `git log`
+- Continue with the commit — do not block on a missing approval record when task_id was not explicitly provided
 
-This enables direct commit invocation (without orchestrator) while still encouraging review best practices.
+This surfaces the gap without creating a hard block for every direct-dispatch commit (which legitimately won't have a task_id).
 
 ## Repo Class Detection
 
