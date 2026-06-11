@@ -328,17 +328,17 @@ teardown() {
   assert_output "1"
 }
 
-@test "cast-db-init table count is exactly 38 on fresh DB" {
+@test "cast-db-init table count is exactly 35 on fresh DB" {
   bash "$DB_INIT" --db "$TEST_DB"
   # Exclude sqlite_* internal tables (e.g. sqlite_sequence) to count only user tables.
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
-  assert_output "38"
+  assert_output "35"
 }
 
-@test "cast-db-init table count stays 38 on second invocation (idempotent)" {
+@test "cast-db-init table count stays 35 on second invocation (idempotent)" {
   bash "$DB_INIT" --db "$TEST_DB"
   run bash "$DB_INIT" --db "$TEST_DB"
   assert_success
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"
-  assert_output "38"
+  assert_output "35"
 }

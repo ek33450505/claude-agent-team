@@ -82,54 +82,35 @@ teardown() {
   assert_failure
 }
 
-@test "dispatch: writes to batch_dispatches table in cast.db" {
+@test "dispatch: does not create batch_dispatches table in cast.db" {
+  # Regression guard: the batch_dispatches table was dropped in Wave-3 Inc 2.
+  # Verify the writer no longer re-accretes it.
   run bash "$CAST_BATCH_DISPATCH_SH" commit "$PROMPT_FILE"
   assert_success
 
-  # Verify database row was created
-  QUERY="SELECT batch_id, agent, custom_id FROM batch_dispatches WHERE agent='commit'"
-  python3 - "$CAST_DB_PATH" "$QUERY" <<'PYEOF'
-import sys
-import sqlite3
-db_path = sys.argv[1]
-query = sys.argv[2]
-try:
-  conn = sqlite3.connect(db_path)
-  rows = conn.execute(query).fetchall()
-  if rows:
-    batch_id, agent, custom_id = rows[0]
-    print(f"batch_id={batch_id} agent={agent} custom_id={custom_id}")
-  else:
-    print("NO_ROWS")
-  conn.close()
-except Exception as e:
-  print(f"ERROR: {e}")
-PYEOF
-}
+  # If no DB was created at all, the table obviously doesn't exist — pass.
+  if [ ! -f "$CAST_DB_PATH" ]; then
+    return 0
+  fi
 
-@test "dispatch: custom_id format is cast-<agent>-<timestamp>" {
-  run bash "$CAST_BATCH_DISPATCH_SH" myagent "$PROMPT_FILE"
-  assert_success
-
-  # Verify database row custom_id matches pattern
   python3 - "$CAST_DB_PATH" <<'PYEOF'
-import sys
-import sqlite3
-import re
+import sys, sqlite3
 db_path = sys.argv[1]
 try:
   conn = sqlite3.connect(db_path)
-  rows = conn.execute("SELECT custom_id FROM batch_dispatches WHERE agent='myagent'").fetchall()
-  if rows:
-    custom_id = rows[0][0]
-    # Should match cast-<agent>-<digits>
-    if re.match(r'^cast-myagent-\d+$', custom_id):
-      print("OK")
-    else:
-      print(f"FAIL: {custom_id}")
+  rows = conn.execute(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='batch_dispatches'"
+  ).fetchall()
   conn.close()
+  if rows:
+    print("FAIL: batch_dispatches table exists")
+    sys.exit(1)
+  else:
+    print("OK: batch_dispatches table absent")
+    sys.exit(0)
 except Exception as e:
   print(f"ERROR: {e}")
+  sys.exit(1)
 PYEOF
 }
 

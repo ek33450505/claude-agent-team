@@ -7,17 +7,6 @@ setup() {
   export CAST_DB_PATH="${BATS_TMPDIR}/test-cast.db"
   export HOME="${BATS_TMPDIR}/home"
   mkdir -p "$HOME/.claude/scripts" "$HOME/.claude/logs"
-
-  # Create test database with contract_test_runs table
-  sqlite3 "$CAST_DB_PATH" <<'SQL'
-CREATE TABLE IF NOT EXISTS contract_test_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    agent TEXT,
-    fixture TEXT,
-    result TEXT,
-    timestamp TEXT
-);
-SQL
 }
 
 teardown() {
@@ -51,7 +40,38 @@ CONTRACT
 
   run bash "${REPO_ROOT}/scripts/cast-contract-runner.sh" test-pass
   [ "$status" -eq 0 ]
-  [ -f "$CAST_DB_PATH" ]
+}
+
+# Regression guard: contract_test_runs was dropped in Wave-3 Inc 2; runner must not re-accrete it.
+@test "runner does not create contract_test_runs table in cast.db" {
+  local fixture_dir="${REPO_ROOT}/agent-contracts/fixtures"
+  mkdir -p "$fixture_dir"
+
+  cat > "$fixture_dir/test-pass-basic.txt" <<'FIXTURE'
+Status: DONE
+Summary: Created a commit
+
+## Work Log
+- Commit created successfully
+FIXTURE
+
+  cat > "${REPO_ROOT}/agent-contracts/test-pass.contract.yaml" <<'CONTRACT'
+agent: test-pass
+version: "1.0"
+assertions:
+  - type: output_contains
+    pattern: "Status: DONE"
+fixtures:
+  - name: "basic"
+CONTRACT
+
+  run bash "${REPO_ROOT}/scripts/cast-contract-runner.sh" test-pass
+
+  # DB must not exist at all, or if it does (other writes), must lack the table
+  if [ -f "$CAST_DB_PATH" ]; then
+    result="$(sqlite3 "$CAST_DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='contract_test_runs';")"
+    [ -z "$result" ]
+  fi
 }
 
 # Test 2: Runner with failing assertion exits 1
