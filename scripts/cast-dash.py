@@ -360,13 +360,16 @@ class CastDashboard(App):
         )
 
         # Today's stats
+        # started_at is stored as ISO-8601 T/Z (e.g. '2026-06-11T10:00:00Z').
+        # replace() strips the T and Z so date() parses correctly on all SQLite
+        # versions. This matches the LIKE-form used in cast-budget-alert.sh.
         stats = self.db.query_one(
             """SELECT COUNT(*) AS runs,
                  COALESCE(SUM(cost_usd), 0) AS cost,
                  COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens,
                  SUM(CASE WHEN UPPER(status) = 'BLOCKED' THEN 1 ELSE 0 END) AS errors
                FROM agent_runs
-               WHERE date(started_at) = date('now')"""
+               WHERE date(replace(replace(started_at,'T',' '),'Z','')) = date('now')"""
         )
 
         # Hourly cost sparkline
@@ -374,7 +377,7 @@ class CastDashboard(App):
             """SELECT strftime('%H', started_at) AS hour,
                  COALESCE(SUM(cost_usd), 0) AS cost
                FROM agent_runs
-               WHERE date(started_at) = date('now')
+               WHERE date(replace(replace(started_at,'T',' '),'Z','')) = date('now')
                GROUP BY hour ORDER BY hour"""
         )
 
