@@ -48,10 +48,20 @@ source "${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh" 2>/dev/null || source "$(dirname
 # Guard: (1) skip if stdin is a terminal; (2) only read if data is immediately available.
 _INPUT=""
 if [[ ! -t 0 ]]; then
-  # Not a terminal — check if data is available right now (bash 4.0+ feature).
-  # read -t 0 returns 0 when input is ready (including EOF from /dev/null or here-string)
-  # and non-zero when stdin is an open pipe with nothing written yet.
-  if IFS= read -r -t 0 _ 2>/dev/null; then
+  # Not a terminal — guard against open pipes with no data.
+  # bash 4.0+: use read -t 0 to probe whether data is ready right now.
+  #   Returns 0 (data ready, including EOF from /dev/null or here-string) or
+  #   non-zero (pipe open but nothing written yet). This prevents blocking on
+  #   open non-TTY pipes that have no data.
+  # bash <4 (macOS system bash 3.2): read -t 0 is unsupported; fall back to
+  #   plain cat after the TTY guard above. Tradeoff: an open pipe with no data
+  #   will block indefinitely on bash <4, but the TTY guard already covers the
+  #   primary native-terminal hang case. bash <4 is not the primary CAST runtime.
+  if (( BASH_VERSINFO[0] >= 4 )); then
+    if IFS= read -r -t 0 _ 2>/dev/null; then
+      _INPUT="$(cat 2>/dev/null || true)"
+    fi
+  else
     _INPUT="$(cat 2>/dev/null || true)"
   fi
 fi
