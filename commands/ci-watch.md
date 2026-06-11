@@ -16,6 +16,7 @@ Opt-in, self-paced loop: watch the current branch's PR and auto-merge once **all
    - **MERGE** → `gh pr merge <pr> --squash --delete-branch` → `bash ~/.claude/scripts/cast-ci-watch.sh stop <pr>` → report the merge → **END (do not ScheduleWakeup).**
    - **FAIL** → report which check(s) failed → `bash ~/.claude/scripts/cast-ci-watch.sh stop <pr>` → **END.** (Do not loop on red. If the user asked, dispatch `debugger` here.)
    - **EXPIRED** → report "90-min cap reached, PR still not mergeable" → `stop` → **END.**
+   - **ERROR** → the status pipeline itself failed (gh fetch / GraphQL / parse — see `.error` reason code and `~/.claude/logs/hook-errors.log`). Report it → `stop` → **END.** Never keep polling on ERROR — a broken pipeline wearing WAIT is how green PRs idle to EXPIRED.
    - **WAIT** → schedule the next poll and re-enter `/ci-watch`:
      - checks actively running → `ScheduleWakeup(delaySeconds: 180, prompt: "/ci-watch")` (cache-warm).
      - checks queued / idle / waiting on review → `ScheduleWakeup(delaySeconds: 1800, prompt: "/ci-watch")`.

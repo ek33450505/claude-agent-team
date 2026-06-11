@@ -11,14 +11,26 @@ Modes (sys.argv[1]):
       Prints nothing on success; error text to stderr on failure.
 
   parse-status <pr_json_string>
-      Parse the JSON returned by `gh pr view --json mergeable,...`.
+      Parse the JSON returned by `gh pr view --json mergeable,mergeStateStatus,statusCheckRollup`.
       Prints a single pipe-delimited line:
           checks|mergeable|unresolved|merge_state
+      unresolved is always 0 when reviewThreads is not in the JSON (threads are
+      fetched separately via the parse-threads mode below).
       Special sentinel prefixes on error:
           PARSE_ERROR|UNKNOWN|0|UNKNOWN   — JSON decode failed
           NO_PR|UNKNOWN|0|UNKNOWN         — JSON has no 'mergeable' key
       checks values: green | pending | failed
-      Falls back to pending|UNKNOWN|0|UNKNOWN on unexpected exceptions.
+
+  parse-repo <repo_json_string>
+      Parse the JSON returned by `gh repo view --json owner,name`.
+      Prints: owner|name
+      Prints PARSE_ERROR (and exits 0) on any parse failure — never a silently
+      valid value.
+
+  parse-threads <graphql_json_string>
+      Parse the GraphQL response for reviewThreads nodes.
+      Prints the integer count of unresolved threads (e.g. 0 or 1).
+      Prints PARSE_ERROR (and exits 0) on any parse failure — never 0 on error.
 """
 
 import json
@@ -102,6 +114,44 @@ def cmd_parse_status(pr_json_string: str) -> None:
     print(f"{checks}|{mergeable}|{unresolved}|{merge_state}")
 
 
+def cmd_parse_repo(json_string: str) -> None:
+    """Parse `gh repo view --json owner,name` output → prints owner|name or PARSE_ERROR."""
+    try:
+        data = json.loads(json_string)
+    except Exception:
+        print("PARSE_ERROR")
+        return
+
+    try:
+        owner = (data.get("owner") or {}).get("login", "")
+        name = data.get("name", "")
+    except Exception:
+        print("PARSE_ERROR")
+        return
+
+    if not owner or not name:
+        print("PARSE_ERROR")
+        return
+
+    print(f"{owner}|{name}")
+
+
+def cmd_parse_threads(json_string: str) -> None:
+    """Parse GraphQL reviewThreads response → prints unresolved count int or PARSE_ERROR."""
+    try:
+        data = json.loads(json_string)
+    except Exception:
+        print("PARSE_ERROR")
+        return
+
+    try:
+        nodes = data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+        unresolved = sum(1 for n in nodes if not n.get("isResolved", True))
+        print(unresolved)
+    except (KeyError, TypeError):
+        print("PARSE_ERROR")
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         print("usage: cast-ci-watch.py <mode> [args...]", file=sys.stderr)
@@ -129,6 +179,18 @@ def main() -> None:
             print("usage: cast-ci-watch.py parse-status <pr_json_string>", file=sys.stderr)
             sys.exit(1)
         cmd_parse_status(sys.argv[2])
+
+    elif mode == "parse-repo":
+        if len(sys.argv) < 3:
+            print("usage: cast-ci-watch.py parse-repo <repo_json_string>", file=sys.stderr)
+            sys.exit(1)
+        cmd_parse_repo(sys.argv[2])
+
+    elif mode == "parse-threads":
+        if len(sys.argv) < 3:
+            print("usage: cast-ci-watch.py parse-threads <graphql_json_string>", file=sys.stderr)
+            sys.exit(1)
+        cmd_parse_threads(sys.argv[2])
 
     else:
         print(f"unknown mode: {mode}", file=sys.stderr)
