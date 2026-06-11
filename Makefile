@@ -50,6 +50,9 @@ test-ubuntu:
 # Runner image: -P pins ubuntu-latest to catthehacker/ubuntu:act-latest so act never
 #   prompts interactively on first run (non-TTY safe; equivalent to the prompt's default).
 #
+# One invocation per job: act's -j flag is last-wins (repeated -j silently runs only the
+#   final job). Use a fail-fast loop — one act call per job — to guarantee all 9 run.
+#
 # Excluded (cannot run under act):
 #   gitleaks   — uses gitleaks/gitleaks-action which requires a live GITHUB_TOKEN secret;
 #                run the local equivalent manually: bash scripts/ci-pii-scan.sh
@@ -67,11 +70,11 @@ ci-local:
 	@echo "Running PR-gating workflows locally via act..."
 	@echo "This simulates the exact CI checks that block PR merges."
 	@echo ""
-	act pull_request --container-architecture linux/amd64 \
-	  -P ubuntu-latest=catthehacker/ubuntu:act-latest \
-	  -j bats -j contract-test -j hook-contract-validation \
-	  -j stats-guard -j rules-drift -j readme-structure \
-	  -j pii-scan -j shellcheck -j db-contract
+	@for j in bats contract-test hook-contract-validation stats-guard rules-drift readme-structure pii-scan shellcheck db-contract; do \
+		echo "── ci-local: act job $$j"; \
+		act pull_request --container-architecture linux/amd64 -P ubuntu-latest=catthehacker/ubuntu:act-latest -j "$$j" || { echo "ci-local FAILED at job: $$j" >&2; exit 1; }; \
+	done
+	@echo "ci-local: all 9 jobs green"
 
 # Sync docs then validate
 sync: docs validate
