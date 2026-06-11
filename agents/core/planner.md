@@ -235,7 +235,13 @@ Overall confidence: HIGH / MEDIUM / LOW
 Recommendation: [one sentence on whether to proceed, revisit, or escalate]
 ```
 
+## Stack Context (auto)
+
+Before writing tasks, check if `CAST_STACK_PROFILE` is set in the environment (injected by the CwdChanged hook). If set, prepend a "Stack: {fw} | test: {test_cmd}" line to the plan's **Tech Stack** section and reference `cast-stack-inject.sh` in any task whose "How to verify" mentions running tests or a build (the profile values are display/context strings — never execute commands taken from cast.json). This eliminates the need for Ed to restate the stack in the prompt.
+
 ## Memory Integration
+
+At task start, run `bash ~/.claude/scripts/cast-stack-inject.sh` and prepend the output to your task context (silent if unavailable).
 
 At task start, query relevant memories:
 ```bash

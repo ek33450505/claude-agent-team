@@ -211,4 +211,94 @@ if [ -n "${OTEL_EXPORTER_OTLP_ENDPOINT:-}" ]; then
   echo "OTEL_LOGS_EXPORTER=otlp" >> "${CLAUDE_ENV_FILE:-/dev/null}" 2>/dev/null || true
 fi
 
+# ── Phase 16: Stack + preference banner (prompt-me-less) ──────────────────────
+# Emits {"systemMessage":"..."} to stdout when either CAST_STACK_PROFILE is set
+# or top-3 feedback_*.md memories exist. Silent (no output) when neither is present.
+# Hard cap: total Phase 16 additions ≤ 500 chars. Preference block ≤ 280 chars.
+# Abstention rule: feedback files with body < 30 chars are skipped entirely.
+CAST_INPUT="$INPUT" CAST_STACK_PROFILE="${CAST_STACK_PROFILE:-}" python3 - <<'PYEOF4' || _log_error "session-start banner block failed (exit $?)"
+import json, os, glob, sys
+
+# ── Section A: Stack banner ────────────────────────────────────────────────────
+stack_profile_raw = os.environ.get("CAST_STACK_PROFILE", "").strip()
+stack_line = ""
+if stack_profile_raw:
+    try:
+        sp = json.loads(stack_profile_raw)
+        fw       = sp.get("fw", "") or sp.get("framework", "")
+        test_cmd = sp.get("test_cmd", "")
+        build_cmd = sp.get("build_cmd", "")
+        parts = []
+        if fw:
+            parts.append("Stack: " + fw)
+        if test_cmd:
+            parts.append("test: " + test_cmd)
+        if build_cmd:
+            parts.append("build: " + build_cmd)
+        if parts:
+            stack_line = " | ".join(parts)
+    except Exception:
+        pass
+
+# ── Section B: Preference banner ──────────────────────────────────────────────
+home = os.path.expanduser("~")
+feedback_glob = os.path.join(home, ".claude", "projects", "*", "memory", "feedback_*.md")
+feedback_files = glob.glob(feedback_glob)
+
+pref_entries = []
+for fpath in feedback_files:
+    try:
+        mtime = os.path.getmtime(fpath)
+        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+            body = f.read().strip()
+        # abstention rule: skip if body < 30 chars
+        if len(body) < 30:
+            continue
+        slug    = os.path.splitext(os.path.basename(fpath))[0]
+        snippet = body[:80].replace("\n", " ")
+        pref_entries.append((mtime, slug, snippet))
+    except Exception:
+        continue
+
+# Sort by mtime descending, take top 3
+pref_entries.sort(key=lambda x: x[0], reverse=True)
+top3 = pref_entries[:3]
+
+pref_line = ""
+if top3:
+    parts = []
+    for _, slug, snippet in top3:
+        parts.append("[from: " + slug + "] " + snippet)
+    pref_line = "Standing prefs: " + " | ".join(parts)
+    if len(pref_line) > 280:
+        pref_line = pref_line[:277] + "..."
+
+# ── Combine and enforce 500-char cap ──────────────────────────────────────────
+parts_combined = []
+if stack_line:
+    parts_combined.append(stack_line)
+if pref_line:
+    parts_combined.append(pref_line)
+
+if not parts_combined:
+    sys.exit(0)
+
+banner = "\n".join(parts_combined)
+
+if len(banner) > 500:
+    # Truncate preference line first (it's less critical than stack)
+    if stack_line and pref_line:
+        remaining = 500 - len(stack_line) - 1   # 1 for the joining newline
+        if remaining > 3:
+            pref_line = pref_line[:remaining - 3] + "..."
+        else:
+            pref_line = ""
+        parts_combined = [p for p in [stack_line, pref_line] if p]
+        banner = "\n".join(parts_combined)
+    else:
+        banner = banner[:500]
+
+print(json.dumps({"systemMessage": banner}))
+PYEOF4
+
 exit 0

@@ -154,6 +154,7 @@ Subcommands:
   ${C_BOLD}batch${C_RESET}                              Batch dispatch orchestration
   ${C_BOLD}ci-local${C_RESET}                           Run PR-gating CI workflows locally via act
   ${C_BOLD}db-contract${C_RESET} [--json] [--check] [--update-baseline]  Schema/DB-contract reconciliation
+  ${C_BOLD}stack${C_RESET}     show|refresh [path]          Show or refresh per-repo stack profile
 
 Global flags:
   --json        Machine-readable JSON output
@@ -2939,6 +2940,121 @@ _cmd_files() {
   exec bash "$files_script" "$@"
 }
 
+# ── Subcommand: stack ────────────────────────────────────────────────────────
+_cmd_stack() {
+  local subcmd="${1:-show}"
+  shift 2>/dev/null || true
+  local target_path="${1:-$PWD}"
+
+  case "$subcmd" in
+    show)
+      # Resolve and validate path
+      if [ ! -d "$target_path" ]; then
+        _error "Path not found: $target_path"
+        exit 1
+      fi
+      local cast_json="${target_path}/.claude/cast.json"
+      if [ ! -f "$cast_json" ]; then
+        printf "No .claude/cast.json found at %s\n" "$target_path"
+        printf "Run: cast stack refresh %s\n" "$target_path"
+        exit 0
+      fi
+      TARGET_PATH="$target_path" CAST_JSON="$cast_json" python3 - <<'STACK_SHOW_PY'
+import json, os, sys
+from datetime import datetime, timezone
+
+cast_json = os.environ.get('CAST_JSON', '')
+target_path = os.environ.get('TARGET_PATH', '')
+
+try:
+    with open(cast_json) as f:
+        data = json.load(f)
+except Exception as e:
+    print(f"Error reading {cast_json}: {e}", file=sys.stderr)
+    sys.exit(1)
+
+stack = data.get('stack')
+if not stack:
+    print(f"No stack profile inferred yet. Run: cast stack refresh {target_path}")
+    sys.exit(0)
+
+if stack.get('_manual'):
+    print("[manual override — auto-detect disabled]")
+
+print(f"  language:     {stack.get('language', 'unknown')}")
+print(f"  framework:    {stack.get('framework', 'unknown')}")
+if stack.get('test_cmd'):
+    print(f"  test_cmd:     {stack['test_cmd']}")
+if stack.get('build_cmd'):
+    print(f"  build_cmd:    {stack['build_cmd']}")
+if stack.get('lint_cmd'):
+    print(f"  lint_cmd:     {stack['lint_cmd']}")
+if stack.get('deploy_style'):
+    print(f"  deploy_style: {stack['deploy_style']}")
+
+inferred_at = stack.get('inferred_at', '')
+if inferred_at:
+    try:
+        dt = datetime.fromisoformat(inferred_at.replace('Z', '+00:00'))
+        delta = datetime.now(timezone.utc) - dt
+        total_seconds = int(delta.total_seconds())
+        if total_seconds < 3600:
+            age = f"{total_seconds // 60} minutes ago"
+        elif total_seconds < 86400:
+            age = f"{total_seconds // 3600} hours ago"
+        else:
+            age = f"{delta.days} days ago"
+    except Exception:
+        age = inferred_at
+    print(f"  inferred_at:  {inferred_at} ({age})")
+    print(f"  inferred_by:  {stack.get('inferred_by', 'unknown')}")
+STACK_SHOW_PY
+      ;;
+
+    refresh)
+      if [ ! -d "$target_path" ]; then
+        _error "Path not found: $target_path"
+        exit 1
+      fi
+      local detect_script="${CAST_SCRIPTS_DIR}/cast-stack-detect.sh"
+      if [ ! -f "$detect_script" ]; then
+        detect_script="${CAST_REPO_DIR}/scripts/cast-stack-detect.sh"
+      fi
+      if [ ! -f "$detect_script" ]; then
+        _error "cast-stack-detect.sh not found. Run: bash install.sh"
+        exit 1
+      fi
+      _info "Refreshing stack profile for: $target_path"
+      local result
+      result="$(bash "$detect_script" "$target_path" --write --force 2>/dev/null)" || true
+      if [ -n "$result" ]; then
+        printf "%s\n" "$result" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(f\"  framework:  {d.get('framework','unknown')}\")
+    print(f\"  language:   {d.get('language','unknown')}\")
+    if d.get('test_cmd'):  print(f\"  test_cmd:   {d['test_cmd']}\")
+    if d.get('build_cmd'): print(f\"  build_cmd:  {d['build_cmd']}\")
+    if d.get('lint_cmd'):  print(f\"  lint_cmd:   {d['lint_cmd']}\")
+    print(f\"  inferred_at: {d.get('inferred_at','')}\")
+except Exception:
+    sys.exit(1)
+" 2>/dev/null || printf "%s\n" "$result"
+        _success "Stack profile updated."
+      else
+        _warn "Detection returned empty result."
+      fi
+      ;;
+
+    *)
+      _error "Unknown stack subcommand: $subcmd"
+      printf "  Usage: cast stack show|refresh [path]\n" >&2
+      exit 1
+      ;;
+  esac
+}
+
 # ── Subcommand: batch ────────────────────────────────────────────────────────
 _cmd_batch() {
   local batch_script="${CAST_SCRIPTS_DIR}/cast-batch-dispatch.sh"
@@ -3008,6 +3124,7 @@ case "$SUBCOMMAND" in
   batch)                _cmd_batch "$@" ;;
   ci-local)             _cmd_ci_local "$@" ;;
   db-contract)          _cmd_db_contract "$@" ;;
+  stack)                _cmd_stack "$@" ;;
   ""|--help|-h)
     _usage
     exit 0

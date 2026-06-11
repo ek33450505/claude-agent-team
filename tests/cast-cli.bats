@@ -342,3 +342,61 @@ GHSTUB
   rm -rf "$fake_bin"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# cast stack
+# ---------------------------------------------------------------------------
+
+@test "cast stack show: no cast.json prints 'No .claude/cast.json' message" {
+  local fake_repo
+  fake_repo="$(mktemp -d)"
+  run bash "$CAST_CLI" stack show "$fake_repo"
+  rm -rf "$fake_repo"
+  assert_success
+  assert_output --partial "No .claude/cast.json"
+}
+
+@test "cast stack show: cast.json without stack block prints 'No stack profile' message" {
+  local fake_repo
+  fake_repo="$(mktemp -d)"
+  mkdir -p "$fake_repo/.claude"
+  echo '{"repo_class":"personal"}' > "$fake_repo/.claude/cast.json"
+  run bash "$CAST_CLI" stack show "$fake_repo"
+  rm -rf "$fake_repo"
+  assert_success
+  assert_output --partial "No stack profile inferred yet"
+}
+
+@test "cast stack show: cast.json with stack block pretty-prints framework and test_cmd" {
+  local fake_repo
+  fake_repo="$(mktemp -d)"
+  mkdir -p "$fake_repo/.claude"
+  python3 -c "
+import json
+data = {
+  'repo_class': 'personal',
+  'stack': {
+    'language': 'bash',
+    'framework': 'cast-shell',
+    'test_cmd': 'bash tests/run.sh',
+    'build_cmd': '',
+    'lint_cmd': '',
+    'deploy_style': 'dev-server',
+    'inferred_at': '2026-06-11T20:00:00Z',
+    'inferred_by': 'cast-stack-detect.sh'
+  }
+}
+print(json.dumps(data))
+" > "$fake_repo/.claude/cast.json"
+  run bash "$CAST_CLI" stack show "$fake_repo"
+  rm -rf "$fake_repo"
+  assert_success
+  assert_output --partial "cast-shell"
+  assert_output --partial "bash tests/run.sh"
+}
+
+@test "cast stack: unknown subcommand prints error" {
+  run bash "$CAST_CLI" stack badcmd
+  assert_failure
+  assert_output --partial "Unknown stack subcommand"
+}

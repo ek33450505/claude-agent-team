@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # cast-cwdchanged-hook.sh — observability hook fired by Claude Code when cwd changes.
 # Logs the cwd change to cast.db via cast-events.sh.
-# Also detects repo_class from <new_cwd>/.claude/cast.json and exports CAST_REPO_CLASS.
+# Detects repo_class from <new_cwd>/.claude/cast.json and exports CAST_REPO_CLASS.
+# Detects per-repo stack profile via cast-stack-detect.sh and exports CAST_STACK_PROFILE.
 # Always exits 0 (async hook contract).
 set -euo pipefail
 
@@ -44,18 +45,47 @@ PYTHON_BLOCK
 ) || REPO_CLASS="personal"
 fi
 
-# ── Step 3: Export CAST_REPO_CLASS via hookSpecificOutput ──────────────
-# Emit JSON to stdout so Claude Code can set CAST_REPO_CLASS in the session environment.
-# hookEventName must match the hook event type triggering this script (CwdChanged).
-REPO_CLASS="$REPO_CLASS" python3 << 'PYTHON_END'
+# ── Step 2b: Detect per-repo stack profile (best-effort) ──────────────
+STACK_JSON=""
+CAST_STACK_PROFILE=""
+if [[ -n "$NEW_CWD" ]] && [[ -f "${HOME}/.claude/scripts/cast-stack-detect.sh" ]]; then
+  STACK_JSON="$(bash "${HOME}/.claude/scripts/cast-stack-detect.sh" "$NEW_CWD" --write 2>/dev/null || true)"
+fi
+
+if [[ -n "$STACK_JSON" ]]; then
+  CAST_STACK_PROFILE="$(STACK_JSON="$STACK_JSON" python3 << 'PYTHON_COMPACT'
 import json, os
+try:
+    d = json.loads(os.environ.get('STACK_JSON', '{}'))
+    compact = {
+        'fw':        d.get('framework', 'unknown'),
+        'test_cmd':  d.get('test_cmd',  ''),
+        'lint_cmd':  d.get('lint_cmd',  ''),
+        'build_cmd': d.get('build_cmd', ''),
+    }
+    print(json.dumps(compact))
+except Exception:
+    print('')
+PYTHON_COMPACT
+  2>/dev/null || true)"
+fi
+
+# ── Step 3: Export CAST_REPO_CLASS + CAST_STACK_PROFILE via hookSpecificOutput ──
+# Emit JSON to stdout so Claude Code can set env vars in the session.
+# hookEventName must match the hook event type (CwdChanged).
+REPO_CLASS="$REPO_CLASS" CAST_STACK_PROFILE="$CAST_STACK_PROFILE" python3 << 'PYTHON_END'
+import json, os
+env_block = {
+    "CAST_REPO_CLASS": os.environ.get("REPO_CLASS", "personal"),
+}
+stack_profile = os.environ.get("CAST_STACK_PROFILE", "")
+if stack_profile:
+    env_block["CAST_STACK_PROFILE"] = stack_profile
 output = {
     "hookSpecificOutput": {
         "hookEventName": "CwdChanged",
         "additionalContext": "",
-        "environment": {
-            "CAST_REPO_CLASS": os.environ.get("REPO_CLASS", "personal")
-        }
+        "environment": env_block,
     }
 }
 print(json.dumps(output))
@@ -66,6 +96,10 @@ if [[ -f "${HOME}/.claude/scripts/cast-events.sh" ]]; then
   # shellcheck source=/dev/null
   source "${HOME}/.claude/scripts/cast-events.sh"
   cast_emit_event 'repo_class_detected' 'cwdchanged-hook' "$REPO_CLASS" '' "cwd=${NEW_CWD}" 'INFO' 2>/dev/null || true
+  # Log stack_profile event when available
+  if [[ -n "$CAST_STACK_PROFILE" ]]; then
+    cast_emit_event 'stack_profile' 'cwdchanged-hook' "$CAST_STACK_PROFILE" '' "cwd=${NEW_CWD}" 'INFO' 2>/dev/null || true
+  fi
 fi
 
 exit 0
