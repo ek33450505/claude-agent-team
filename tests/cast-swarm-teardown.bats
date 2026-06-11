@@ -18,9 +18,19 @@ setup() {
   export TEST_DB="/tmp/test-cast-$$.db"
   export CAST_DB_PATH="$TEST_DB"
   bash "$DB_INIT" --db "$TEST_DB"
+
+  # Isolated git repo so bootstrap's `git rev-parse --show-toplevel` resolves
+  # here instead of the flagship checkout — prevents cast-swarm-* branch leak.
+  export TEST_GIT_REPO="$(realpath "$(mktemp -d)")"
+  git init "$TEST_GIT_REPO" --initial-branch=main >/dev/null 2>&1
+  git -C "$TEST_GIT_REPO" config user.email "test@example.com"
+  git -C "$TEST_GIT_REPO" config user.name "Test"
+  git -C "$TEST_GIT_REPO" commit --allow-empty -m "init" >/dev/null 2>&1
+  cd "$TEST_GIT_REPO"
 }
 
 teardown() {
+  cd / 2>/dev/null || true
   rm -f "$TEST_DB"
   # Only remove the temp HOME if setup() actually created it (i.e., ORIG_HOME was set).
   # If setup() called skip before setting ORIG_HOME, HOME still points at the real user
@@ -29,8 +39,11 @@ teardown() {
     rm -rf "$HOME"
     export HOME="$ORIG_HOME"
   fi
-  # Clean up any swarm worktrees created during tests (F10)
-  git -C "$REPO_DIR" worktree list --porcelain 2>/dev/null | grep "^worktree /tmp/cast-swarm-" | sed 's/^worktree //' | xargs -I{} git -C "$REPO_DIR" worktree remove --force {} 2>/dev/null || true
+  # Clean up worktrees and temp git repo (TEST_GIT_REPO, not flagship).
+  if [ -n "${TEST_GIT_REPO:-}" ]; then
+    git -C "$TEST_GIT_REPO" worktree list --porcelain 2>/dev/null | grep "^worktree /tmp/cast-swarm-" | sed 's/^worktree //' | xargs -I{} git -C "$TEST_GIT_REPO" worktree remove --force {} 2>/dev/null || true
+    rm -rf "$TEST_GIT_REPO"
+  fi
   rm -rf /tmp/cast-swarm-* 2>/dev/null || true
 }
 
