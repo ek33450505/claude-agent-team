@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # cast-sqlite-lib.sh — Shared sqlite3 wrapper for CAST shell scripts
 #
-# Provides cast_sqlite(): a drop-in sqlite3 wrapper that prepends
-# PRAGMA busy_timeout=5000 so every invocation waits up to 5 s for
-# a WAL write-lock instead of failing immediately with SQLITE_BUSY.
+# Provides cast_sqlite(): a drop-in sqlite3 wrapper that sets
+# .timeout 5000 (via sqlite3's -cmd flag) so every invocation waits
+# up to 5 s for a WAL write-lock instead of failing immediately with
+# SQLITE_BUSY. The dot-command is silent — unlike PRAGMA busy_timeout,
+# it produces no stdout output.
 #
 # Usage:
 #   source "$(dirname "$0")/cast-sqlite-lib.sh"   # or full path
@@ -29,11 +31,11 @@ cast_sqlite() {
   shift
 
   if [[ $# -gt 0 ]]; then
-    # Inline SQL mode: prepend busy_timeout pragma and pass remaining args.
-    sqlite3 "$db_path" "PRAGMA busy_timeout=5000;" "$@"
+    # Inline SQL mode: set busy-timeout via dot-command (-cmd runs before any
+    # SQL, is silent, and does not appear in stdout).
+    sqlite3 -cmd ".timeout 5000" "$db_path" "$@"
   else
-    # Stdin / heredoc mode: prepend pragma via process substitution so the
-    # caller's heredoc is not consumed twice.
-    { printf 'PRAGMA busy_timeout=5000;\n'; cat; } | sqlite3 "$db_path"
+    # Stdin / heredoc mode: read SQL from stdin; busy-timeout set via -cmd.
+    sqlite3 -cmd ".timeout 5000" "$db_path"
   fi
 }
