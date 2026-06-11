@@ -27,7 +27,8 @@ setup() {
   cat > "$STUB_GH" << 'STUBEOF'
 #!/bin/bash
 # Stub gh — branches on GH_STUB_MODE
-# Handles: probe call (--json number) and full call (--json mergeable,...)
+# Handles: probe call (--json number), full call (--json mergeable,...),
+#          repo view, and api graphql.
 
 MODE="${GH_STUB_MODE:-green}"
 
@@ -56,31 +57,43 @@ case "$1" in
             exit 1
             ;;
         esac
+        # Regression guard: reviewThreads was dropped from the gh pr view call.
+        # If anyone re-adds it, real gh rejects it — this stub enforces the same.
+        for arg in "$@"; do
+          if [[ "$arg" == *"reviewThreads"* ]]; then
+            echo 'Unknown JSON field: "reviewThreads"' >&2
+            exit 1
+          fi
+        done
         # For all non-error modes: probe returns just {number} or full JSON
         if $is_probe; then
           echo '{"number":42}'
         else
           case "$MODE" in
-            green)
-              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/test"},{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/lint"}],"reviewThreads":[]}'
+            green | graphql_error)
+              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/test"},{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/lint"}]}'
               ;;
             pending)
-              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"conclusion":null,"status":"IN_PROGRESS","name":"ci/test"},{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/lint"}],"reviewThreads":[]}'
+              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"conclusion":null,"status":"IN_PROGRESS","name":"ci/test"},{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/lint"}]}'
               ;;
             unresolved)
-              # green checks but unresolved threads
-              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/test"}],"reviewThreads":[{"isResolved":false}]}'
+              # green checks; unresolved thread count comes from the api/graphql branch below
+              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/test"}]}'
               ;;
             conflicting)
-              # green checks, no threads, but CONFLICTING
-              echo '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/test"}],"reviewThreads":[]}'
+              # green checks, 0 unresolved threads, but CONFLICTING
+              echo '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/test"}]}'
               ;;
             failed)
-              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED","name":"ci/test"},{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/lint"}],"reviewThreads":[]}'
+              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED","name":"ci/test"},{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/lint"}]}'
               ;;
             merge_state_blocked)
               # green checks + 0 threads + MERGEABLE but mergeStateStatus=BLOCKED (branch protection)
-              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/test"}],"reviewThreads":[]}'
+              echo '{"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED","name":"ci/test"}]}'
+              ;;
+            malformed_json)
+              # Return unparseable output to exercise the parse-status PARSE_ERROR path
+              echo 'not valid json {incomplete'
               ;;
           esac
         fi
@@ -91,11 +104,23 @@ case "$1" in
     esac
     ;;
   repo)
+    # gh repo view --json owner,name
     echo '{"owner":{"login":"testowner"},"name":"testrepo"}'
     ;;
   api)
-    # GraphQL fallback — return 0 unresolved threads
-    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
+    # gh api graphql — mode-aware thread response
+    case "$MODE" in
+      graphql_error)
+        echo "error: GraphQL request failed" >&2
+        exit 1
+        ;;
+      unresolved)
+        echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false}]}}}}}'
+        ;;
+      *)
+        echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}'
+        ;;
+    esac
     ;;
 esac
 STUBEOF
@@ -310,10 +335,10 @@ with open('$HOME/.claude/cast/ci-watch/99.json', 'w') as f:
 }
 
 # ---------------------------------------------------------------------------
-# gh error → WAIT (transient failure must NOT produce FAIL)
+# gh probe error → ERROR (transient failure must NOT produce FAIL or WAIT)
 # ---------------------------------------------------------------------------
 
-@test "status: degrades to WAIT on gh error (never FAIL)" {
+@test "status: returns ERROR on transient gh probe failure (never FAIL)" {
   export GH_STUB_MODE="gh_error"
   mkdir -p "$HOME/.claude/cast/ci-watch"
   local future=$(( $(date +%s) + 5000 ))
@@ -327,7 +352,7 @@ with open('$HOME/.claude/cast/ci-watch/42.json', 'w') as f:
   assert_success
   local verdict
   verdict="$(_json_field "$output" verdict)"
-  [ "$verdict" = "WAIT" ]
+  [ "$verdict" = "ERROR" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -389,4 +414,67 @@ with open('$HOME/.claude/cast/ci-watch/42.json', 'w') as f:
   local stopped
   stopped="$(_json_field "$output" stopped)"
   [ "$stopped" = "True" ]
+}
+
+# ---------------------------------------------------------------------------
+# GraphQL api call fails → verdict ERROR with error code
+# ---------------------------------------------------------------------------
+
+@test "status: returns ERROR when GraphQL api call fails" {
+  export GH_STUB_MODE="graphql_error"
+  mkdir -p "$HOME/.claude/cast/ci-watch"
+  local future=$(( $(date +%s) + 5000 ))
+  python3 -c "
+import json
+d = {'pr': 42, 'start_epoch': $(date +%s), 'deadline_epoch': ${future}}
+with open('$HOME/.claude/cast/ci-watch/42.json', 'w') as f:
+    json.dump(d, f)
+"
+  run bash "$SCRIPT" status 42
+  assert_success
+  local verdict
+  verdict="$(_json_field "$output" verdict)"
+  [ "$verdict" = "ERROR" ]
+}
+
+# ---------------------------------------------------------------------------
+# Full fetch returns malformed JSON → verdict ERROR (never "pending" swallow)
+# ---------------------------------------------------------------------------
+
+@test "status: returns ERROR (not pending) when full fetch returns malformed JSON" {
+  export GH_STUB_MODE="malformed_json"
+  mkdir -p "$HOME/.claude/cast/ci-watch"
+  local future=$(( $(date +%s) + 5000 ))
+  python3 -c "
+import json
+d = {'pr': 42, 'start_epoch': $(date +%s), 'deadline_epoch': ${future}}
+with open('$HOME/.claude/cast/ci-watch/42.json', 'w') as f:
+    json.dump(d, f)
+"
+  run bash "$SCRIPT" status 42
+  assert_success
+  local verdict
+  verdict="$(_json_field "$output" verdict)"
+  [ "$verdict" = "ERROR" ]
+}
+
+# ---------------------------------------------------------------------------
+# ERROR JSON shape must contain an 'error' field with a non-empty reason code
+# ---------------------------------------------------------------------------
+
+@test "status: ERROR verdict JSON contains an 'error' field with a reason code" {
+  export GH_STUB_MODE="graphql_error"
+  mkdir -p "$HOME/.claude/cast/ci-watch"
+  local future=$(( $(date +%s) + 5000 ))
+  python3 -c "
+import json
+d = {'pr': 42, 'start_epoch': $(date +%s), 'deadline_epoch': ${future}}
+with open('$HOME/.claude/cast/ci-watch/42.json', 'w') as f:
+    json.dump(d, f)
+"
+  run bash "$SCRIPT" status 42
+  assert_success
+  local error_field
+  error_field="$(_json_field "$output" error)"
+  [ -n "$error_field" ]
 }
