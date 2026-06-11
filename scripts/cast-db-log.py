@@ -77,19 +77,16 @@ if not os.path.exists(db_path):
 db_execute(
     '''INSERT INTO routing_events
        (session_id, timestamp, prompt_preview, action, matched_route,
-        match_type, pattern, confidence, project, agent_id, agent_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        pattern, confidence, project)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
     (
         entry.get('session_id', 'unknown'),
         entry.get('timestamp', ''),
         entry.get('prompt_preview', entry.get('prompt_preview', ''))[:80],
         entry.get('action', ''),
         entry.get('matched_route'),
-        entry.get('match_type'),
         entry.get('pattern'),
         entry.get('confidence'),
         entry.get('project'),
-        entry.get('agent_id'),
-        entry.get('agent_type'),
     )
 )
