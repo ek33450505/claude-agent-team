@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_from": "e7e3600",
+  "generated_from": "3709f6c",
   "note": "Ratchet baseline for cast-db-contract --check. Exit 1 only on NEW entries absent from this file. Regenerate with: python3 scripts/cast-db-contract.py --update-baseline",
   "contradictions": [
     {
@@ -181,11 +181,6 @@
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
-      "table": "contract_test_runs",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
       "table": "dispatch_decisions",
       "column": "chosen_agent",
       "classification": "SAFE-DROP-CANDIDATE"
@@ -243,36 +238,6 @@
     {
       "table": "file_writes",
       "column": "session_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "files_api_events",
-      "column": "action",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "files_api_events",
-      "column": "agent",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "files_api_events",
-      "column": "created_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "files_api_events",
-      "column": "file_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "files_api_events",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "files_api_events",
-      "column": "local_path",
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
