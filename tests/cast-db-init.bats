@@ -207,24 +207,25 @@ teardown() {
   done
 }
 
-@test "cast-db-init adds sessions cost-rollup columns" {
+@test "cast-db-init sessions: status+deleted_at present, wave-3 cost-rollup columns absent" {
   bash "$DB_INIT" --db "$TEST_DB"
-  for col in status deleted_at total_input_tokens total_output_tokens total_cost_usd; do
+  # status and deleted_at survive wave-3 — assert present
+  for col in status deleted_at; do
     run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('sessions') WHERE name='$col';"
     assert_output "1"
   done
-  # The cast-session-end.sh cost-rollup UPDATE must succeed.
-  sqlite3 "$TEST_DB" "INSERT INTO sessions (id) VALUES ('s1');"
-  run sqlite3 "$TEST_DB" "UPDATE sessions SET total_input_tokens=1, total_output_tokens=2, total_cost_usd=0.5 WHERE id='s1';"
-  assert_success
+  # total_input_tokens / total_output_tokens / total_cost_usd dropped in migration 022 (wave-3)
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('sessions') WHERE name IN ('total_input_tokens','total_output_tokens','total_cost_usd');"
+  assert_output "0"
 }
 
-@test "cast-db-init adds routing_events agent attribution columns" {
+@test "cast-db-init routing_events: wave-3 attribution columns absent from fresh init" {
   bash "$DB_INIT" --db "$TEST_DB"
-  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('routing_events') WHERE name IN ('agent_id','agent_type');"
-  assert_output "2"
-  # The cast-db-log.py INSERT (11 columns incl. agent_id, agent_type) must succeed.
-  run sqlite3 "$TEST_DB" "INSERT INTO routing_events (session_id, timestamp, prompt_preview, action, matched_route, match_type, pattern, confidence, project, agent_id, agent_type) VALUES ('s','t','p','a','m','mt','pat','c','proj','aid','code-writer');"
+  # agent_id / agent_type / match_type dropped in migration 022 (wave-3)
+  run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('routing_events') WHERE name IN ('agent_id','agent_type','match_type');"
+  assert_output "0"
+  # INSERT using only the surviving columns must succeed
+  run sqlite3 "$TEST_DB" "INSERT INTO routing_events (session_id, timestamp, prompt_preview, action, matched_route, pattern, confidence, project) VALUES ('s','t','p','a','m','pat','c','proj');"
   assert_success
 }
 

@@ -116,12 +116,16 @@ def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
         if not any(pat in err for pat in _IDEMPOTENCY_ERRORS):
             raise
 
-    # Per-statement fallback: strip comment-only lines and tolerate known errors.
-    statements = [s.strip() for s in sql_text.split(';') if s.strip()]
+    # Per-statement fallback: strip -- line comments before splitting on ';' so that
+    # semicolons inside comments (e.g. migration 022: "guarantees run-once; no guard
+    # needed here") don't produce spurious invalid statement fragments.
+    comment_free = '\n'.join(
+        line for line in sql_text.splitlines()
+        if not line.strip().startswith('--')
+    )
+    statements = [s.strip() for s in comment_free.split(';') if s.strip()]
     for stmt in statements:
-        # Strip leading comment lines
-        sql_lines = [ln for ln in stmt.splitlines() if not ln.strip().startswith('--')]
-        effective = '\n'.join(sql_lines).strip()
+        effective = stmt
         if not effective:
             continue
         try:

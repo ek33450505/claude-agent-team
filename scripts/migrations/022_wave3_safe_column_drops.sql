@@ -2,7 +2,7 @@
 -- All columns verified 100% NULL in cast.db (pre-migration backup held by orchestrator).
 -- Verified against cast-desktop server SQL layer: none of these columns are read.
 -- SQLite 3.35+ required (ALTER TABLE DROP COLUMN). CAST runtime: SQLite 3.51.
--- Migration ledger (schema_migrations) guarantees run-once; no guard needed here
+-- Migration ledger (schema_migrations) guarantees run-once (no guard needed here)
 -- (mirrors precedent in 014_drop_agent_runs_model_used.sql and 015).
 
 -- routing_events: agent-attribution + match_type never wired to a writer
