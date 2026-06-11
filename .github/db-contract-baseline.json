@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_from": "fe20984",
+  "generated_from": "e7e3600",
   "note": "Ratchet baseline for cast-db-contract --check. Exit 1 only on NEW entries absent from this file. Regenerate with: python3 scripts/cast-db-contract.py --update-baseline",
   "contradictions": [
     {
@@ -11,11 +11,6 @@
     {
       "table": "agent_runs",
       "column": "confidence",
-      "classification": "CONTRADICTION"
-    },
-    {
-      "table": "agent_runs",
-      "column": "project",
       "classification": "CONTRADICTION"
     },
     {
