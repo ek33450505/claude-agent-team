@@ -62,8 +62,8 @@ TaskCreated and WorktreeCreate are production-hardened hooks capturing swarm lif
 **Existing tables:**
 | Table | Contents |
 |---|---|
-| `sessions` | Session start/end, model, token counts |
-| `agent_runs` | Every dispatch: agent, model, duration, status, batch_id |
+| `sessions` | Session start/end, token counts |
+| `agent_runs` | Every dispatch: agent, model, duration, status |
 | `routing_events` | Prompt routing records |
 | `agent_memories` | Synced from `~/.claude/agent-memory-local/` with temporal validity |
 | `stream_events` | Real-time tool events from stream-json pipeline |

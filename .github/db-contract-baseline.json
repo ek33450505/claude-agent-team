@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_from": "3709f6c",
+  "generated_from": "87fbe40",
   "note": "Ratchet baseline for cast-db-contract --check. Exit 1 only on NEW entries absent from this file. Regenerate with: python3 scripts/cast-db-contract.py --update-baseline",
   "contradictions": [
     {

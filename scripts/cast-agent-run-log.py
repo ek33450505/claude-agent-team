@@ -10,10 +10,8 @@ Operations:
 Input JSON fields:
   operation    : "start" or "finish"
   agent        : agent type string (e.g. "code-writer")
-  agent_id     : unique correlation ID (e.g. "{session_id}-{batch_id}-{agent_type}")
+  agent_id     : unique correlation ID (e.g. "{session_id}-{agent_type}")
   session_id   : parent session ID
-  batch_id     : integer batch number
-  task_summary : brief description (max 200 chars)
   model        : (optional) model string
   status       : (finish only) DONE | BLOCKED | DONE_WITH_CONCERNS
 
@@ -53,22 +51,20 @@ def main():
             agent_id    = payload.get('agent_id', '')
             _sid_raw    = payload.get('session_id', '')
             session_id  = _sid_raw if _sid_raw else None   # NULL > '' to avoid FK orphans
-            batch_id    = payload.get('batch_id', 0)
-            task_summary = (payload.get('task_summary') or '')[:200]
             model       = payload.get('model') or None
             # project dropped from agent_runs in migration 022 (wave-3)
+            # task_summary and batch_id dropped from agent_runs in migration 024 (wave-3 inc3)
 
             cur.execute(
                 '''INSERT INTO agent_runs
-                   (session_id, agent, model, started_at, status, task_summary, agent_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                   (session_id, agent, model, started_at, status, agent_id)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
                 (
                     session_id,
                     agent,
                     model,
                     now_iso(),
                     'running',
-                    f"[batch-{batch_id}] {task_summary}",
                     agent_id,
                 )
             )

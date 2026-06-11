@@ -291,15 +291,14 @@ if [[ -z "$ENVIRONMENT_ID" ]]; then
 fi
 
 # --- agent_runs telemetry helper (Task 2.3) ---
-# Usage: _write_agent_runs <status> <task_summary>
+# Usage: _write_agent_runs <status>
 # All dynamic values passed via env vars — single-quoted heredoc is CRITICAL.
+# task_summary dropped from agent_runs in migration 024 (wave-3 inc3 — 100% NULL).
 _write_agent_runs() {
   local run_status="$1"
-  local task_summary="${2:-}"
   CAST_AGENT_NAME="${AGENT_NAME}" \
   CAST_STARTED_AT="${SESSION_STARTED_AT:-}" \
   CAST_AGENT_STATUS="$run_status" \
-  CAST_TASK_SUMMARY="$task_summary" \
   python3 - <<'PYEOF' 2>/dev/null || true
 import sys, os, datetime
 sys.path.insert(0, os.path.expanduser('~/Projects/personal/claude-agent-team/scripts'))
@@ -318,7 +317,6 @@ try:
             input_tokens INTEGER,
             output_tokens INTEGER,
             cost_usd REAL,
-            task_summary TEXT,
             execution_mode TEXT DEFAULT 'local'
         )
     ''')
@@ -329,7 +327,6 @@ try:
         'ended_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'status': os.environ.get('CAST_AGENT_STATUS', 'unknown'),
         'execution_mode': 'managed',
-        'task_summary': (os.environ.get('CAST_TASK_SUMMARY', '') or '')[:500],
     })
 except Exception:
     pass

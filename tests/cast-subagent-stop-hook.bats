@@ -44,7 +44,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   started_at TEXT,
   ended_at TEXT,
   agent_id TEXT,
-  batch_id INTEGER,
   duration_ms INTEGER,
   tool_uses INTEGER,
   response TEXT,

@@ -10,8 +10,7 @@
 #   cast-memory-escalation.sh [--project <name>] [--db /path/to/cast.db]
 #
 # Detection rules:
-#   1. Same agent in same project has BLOCKED status 3+ times with similar task_summary
-#   2. code-reviewer flags same concern keyword 3+ times in same project
+#   1. code-reviewer flags same concern keyword 3+ times in same project
 #
 # Output: writes memories via cast-memory-write.sh + human-readable auto-rules.md
 
@@ -58,7 +57,7 @@ fi
 # Pattern detection via Python
 # ---------------------------------------------------------------------------
 AUTO_RULES="$(python3 - "$DB_PATH" "$PROJECT_FILTER" <<'PYEOF' 2>/dev/null || echo "[]"
-import sys, sqlite3, json, re
+import sys, sqlite3, json
 from collections import defaultdict
 
 db_path = sys.argv[1]
@@ -71,68 +70,7 @@ cur = conn.cursor()
 rules = []
 
 # -------------------------------------------------------------------------
-# Rule 1: agent BLOCKED 3+ times with similar task_summary
-# agent_runs.project was dropped in migration 022 (wave-3); recover via sessions JOIN
-# -------------------------------------------------------------------------
-params = []
-where_clause = "ar.status = 'BLOCKED' AND ar.task_summary IS NOT NULL AND ar.task_summary != ''"
-if project_filter:
-    where_clause += " AND COALESCE(s.project, '') = ?"
-    params.append(project_filter)
-
-cur.execute(
-    f"SELECT ar.agent, COALESCE(s.project, '') AS project, ar.task_summary "
-    f"FROM agent_runs ar LEFT JOIN sessions s ON ar.session_id = s.id "
-    f"WHERE {where_clause} ORDER BY ar.agent, COALESCE(s.project, '')",
-    params
-)
-blocked_rows = cur.fetchall()
-
-# Group by (agent, project)
-blocked_groups = defaultdict(list)
-for row in blocked_rows:
-    key = (row["agent"], row["project"] or "")
-    blocked_groups[key].append(row["task_summary"])
-
-def word_overlap(a, b):
-    """Return fraction of words in common between two strings."""
-    words_a = set(re.findall(r'\w+', (a or "").lower()))
-    words_b = set(re.findall(r'\w+', (b or "").lower()))
-    if not words_a or not words_b:
-        return 0.0
-    return len(words_a & words_b) / min(len(words_a), len(words_b))
-
-for (agent, project), summaries in blocked_groups.items():
-    # Find clusters of similar summaries (word overlap > 0.4)
-    clusters = []
-    for summary in summaries:
-        placed = False
-        for cluster in clusters:
-            if word_overlap(summary, cluster[0]) > 0.4:
-                cluster.append(summary)
-                placed = True
-                break
-        if not placed:
-            clusters.append([summary])
-
-    for cluster in clusters:
-        if len(cluster) >= 3:
-            representative = cluster[0][:80]
-            rules.append({
-                "type": "project",
-                "agent": agent,
-                "project": project,
-                "name": f"auto-rule: {agent} repeatedly blocked on '{representative[:40]}'",
-                "content": (
-                    f"Agent '{agent}' has been BLOCKED {len(cluster)} times on similar tasks in project '{project}'. "
-                    f"Representative task: \"{representative}\". "
-                    f"Consider: pre-loading required context, updating agent definition, or breaking the task into smaller units."
-                ),
-                "pattern": "repeated_blocked"
-            })
-
-# -------------------------------------------------------------------------
-# Rule 2: code-reviewer flags same concern keyword 3+ times
+# Rule 1: code-reviewer flags same concern keyword 3+ times
 # agent_runs.project was dropped in migration 022 (wave-3); recover via sessions JOIN
 # -------------------------------------------------------------------------
 reviewer_params = []
