@@ -7,11 +7,11 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-7.4.1-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-23-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-1258-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-1268-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 
-> CAST is a production-grade control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->0<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
+> CAST is a production-grade control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->38<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
 
 **[CAST Framework](https://castframework.dev)**
 
@@ -46,7 +46,7 @@ bash install.sh
 - **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a reviewer pass. You cannot skip this.
 - **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
 - **SQLite audit trail, fully local.** Every agent dispatch, tool call, and token spend logs to `cast.db` on your machine. No SaaS dashboard, no cloud lock-in.
-- **<!-- CAST_TEST_COUNT -->1258<!-- /CAST_TEST_COUNT --> BATS test cases.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
+- **<!-- CAST_TEST_COUNT -->1268<!-- /CAST_TEST_COUNT --> BATS test cases.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
 
 ---
 
@@ -166,7 +166,7 @@ Runtime installs to `~/.claude/` — agents, memory, plans, swarm sessions, cast
 
 ## Testing
 
-125 CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->1258<!-- /CAST_TEST_COUNT --> test cases) covering core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. (`find tests -name '*.bats'` also counts ~28 vendored `bats-assert`/`bats-support` submodule self-tests.) BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats-core` (Ubuntu/Debian). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests).
+125 CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->1268<!-- /CAST_TEST_COUNT --> test cases) covering core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. (`find tests -name '*.bats'` also counts ~28 vendored `bats-assert`/`bats-support` submodule self-tests.) BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats-core` (Ubuntu/Debian). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests).
 
 ---
 
@@ -229,6 +229,6 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->1258<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->1268<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->20<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->15<!-- /CAST_SKILL_COUNT --> skills
