@@ -56,12 +56,12 @@ def main():
             batch_id    = payload.get('batch_id', 0)
             task_summary = (payload.get('task_summary') or '')[:200]
             model       = payload.get('model') or None
-            project     = os.path.basename(os.getcwd()) or None
+            # project dropped from agent_runs in migration 022 (wave-3)
 
             cur.execute(
                 '''INSERT INTO agent_runs
-                   (session_id, agent, model, started_at, status, task_summary, agent_id, project)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (session_id, agent, model, started_at, status, task_summary, agent_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
                 (
                     session_id,
                     agent,
@@ -70,7 +70,6 @@ def main():
                     'running',
                     f"[batch-{batch_id}] {task_summary}",
                     agent_id,
-                    project,
                 )
             )
 

@@ -221,3 +221,57 @@ SQL
   count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sessions WHERE id='sess-ok';")
   [[ "$count" -eq 1 ]]
 }
+
+# ---------------------------------------------------------------------------
+# Regression: semicolons inside -- comments must not produce spurious fragments
+# (PR #175 / migration 022 shipped a comment "guarantees run-once; no guard
+# needed here" that caused the per-statement fallback to execute "no guard
+# needed here" as SQL, crashing with "near 'no': syntax error").
+# ---------------------------------------------------------------------------
+
+@test "cast-migrate.py: semicolon inside -- comment does not produce a syntax error" {
+  # Write a throwaway migration SQL that has a semicolon inside a -- comment
+  # and an idempotency-class DROP COLUMN that will trigger the per-statement fallback.
+  local tmp_migrations tmp_sql
+  tmp_migrations="$(mktemp -d)"
+  tmp_sql="$tmp_migrations/099_comment_semicolon_regression.sql"
+  cat > "$tmp_sql" <<'SQLEOF'
+-- Regression guard: semicolon inside a comment; should not execute as SQL
+ALTER TABLE _absent_table DROP COLUMN _absent_col;
+SQLEOF
+
+  # Point cast-migrate.py at the throwaway migrations dir via a driver
+  local driver
+  driver="$BATS_TEST_TMPDIR/regression_driver.py"
+  cat > "$driver" << DRIVER_EOF
+import sys, importlib.util, pathlib, os, sqlite3
+
+# Patch the migrations directory to our throwaway dir
+migrate_path = sys.argv[1]
+tmp_dir = pathlib.Path(sys.argv[2])
+db_path  = os.environ['CAST_DB_PATH']
+
+spec = importlib.util.spec_from_file_location("cast_migrate", migrate_path)
+mod  = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+conn = mod._connect(db_path)
+mod._ensure_migrations_table(conn)
+
+# Apply only the throwaway migration directly
+sql_path = tmp_dir / "099_comment_semicolon_regression.sql"
+try:
+    mod._apply_migration(conn, sql_path)
+    print("PASS: no syntax error")
+    sys.exit(0)
+except Exception as e:
+    print(f"FAIL: {e}", file=sys.stderr)
+    sys.exit(1)
+DRIVER_EOF
+
+  run python3 "$driver" "$MIGRATE_SCRIPT" "$tmp_migrations"
+  assert_success
+  [[ "$output" == *"PASS: no syntax error"* ]]
+
+  rm -rf "$tmp_migrations"
+}

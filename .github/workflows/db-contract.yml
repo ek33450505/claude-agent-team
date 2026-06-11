@@ -1,0 +1,18 @@
+name: DB Contract Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  db-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check schema contract vs baseline
+        # No --db: live cast.db is absent in CI (honest UNCHECKED degradation, not a failure).
+        # No --desktop-path: cast-desktop is absent in CI (UNCHECKED degradation, not a failure).
+        # Exit 1 only on NEW violations absent from .github/db-contract-baseline.json.
+        run: python3 scripts/cast-db-contract.py --check

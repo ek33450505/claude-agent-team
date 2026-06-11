@@ -1,0 +1,444 @@
+{
+  "schema_version": "1.0",
+  "generated_from": "e7e3600",
+  "note": "Ratchet baseline for cast-db-contract --check. Exit 1 only on NEW entries absent from this file. Regenerate with: python3 scripts/cast-db-contract.py --update-baseline",
+  "contradictions": [
+    {
+      "table": "agent_runs",
+      "column": "abandoned_at",
+      "classification": "CONTRADICTION"
+    },
+    {
+      "table": "agent_runs",
+      "column": "confidence",
+      "classification": "CONTRADICTION"
+    },
+    {
+      "table": "agent_truncations",
+      "column": "title",
+      "classification": "CONTRADICTION"
+    },
+    {
+      "table": "sessions",
+      "column": "session_id",
+      "classification": "CONTRADICTION"
+    }
+  ],
+  "safe_drop_candidates": [
+    {
+      "table": "agent_protocol_violations",
+      "column": "agent_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_protocol_violations",
+      "column": "agent_type",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_protocol_violations",
+      "column": "batch_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_protocol_violations",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_protocol_violations",
+      "column": "pattern",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_protocol_violations",
+      "column": "raw_excerpt",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_protocol_violations",
+      "column": "session_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_protocol_violations",
+      "column": "violation",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_runs",
+      "column": "tool_uses",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "agent_truncations",
+      "column": "batch_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "agent",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "confidence",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "content",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "created_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "decay_rate",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "description",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "embedding",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "importance",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "last_validated_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "name",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "project",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "retrieval_count",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "type",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "updated_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "valid_from",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "archived_memories",
+      "column": "valid_to",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "budgets",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "code_ref_checks",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "completeness_events",
+      "column": "created_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "completeness_events",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "contract_test_runs",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_decisions",
+      "column": "chosen_agent",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_decisions",
+      "column": "created_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_decisions",
+      "column": "effort",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_decisions",
+      "column": "model",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_decisions",
+      "column": "outcome",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_decisions",
+      "column": "parallel",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_decisions",
+      "column": "prompt_snippet",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_decisions",
+      "column": "wave_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_events",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "dispatch_events",
+      "column": "triggered_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "file_writes",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "file_writes",
+      "column": "session_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "files_api_events",
+      "column": "action",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "files_api_events",
+      "column": "agent",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "files_api_events",
+      "column": "created_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "files_api_events",
+      "column": "file_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "files_api_events",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "files_api_events",
+      "column": "local_path",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "injection_log",
+      "column": "score_breakdown",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "managed_agent_invocations",
+      "column": "agent_name",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "managed_agent_invocations",
+      "column": "exit_code",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "managed_agent_invocations",
+      "column": "http_status",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "managed_agent_invocations",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "managed_agent_invocations",
+      "column": "mode",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "managed_agent_invocations",
+      "column": "session_duration_ms",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "managed_agent_invocations",
+      "column": "ts",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "memory_consolidation_runs",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "plan_sessions",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "plan_sessions",
+      "column": "started_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "quality_gates",
+      "column": "created_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "quality_gates",
+      "column": "gate_type",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "rate_limit_snapshots",
+      "column": "raw_json",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "rate_limit_snapshots",
+      "column": "rpm_limit",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "rate_limit_snapshots",
+      "column": "rpm_used",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "rate_limit_snapshots",
+      "column": "tpm_limit",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "rate_limit_snapshots",
+      "column": "tpm_used",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "rate_limit_snapshots",
+      "column": "ts",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stop_failure_events",
+      "column": "created_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stop_failure_events",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stop_failure_events",
+      "column": "source",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stream_events",
+      "column": "duration_ms",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stream_events",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stream_events",
+      "column": "raw_json",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stream_events",
+      "column": "status",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stream_events",
+      "column": "tool_input_preview",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "swarm_sessions",
+      "column": "project",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "swarm_sessions",
+      "column": "session_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_runs",
+      "column": "ended_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_runs",
+      "column": "task_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "tool_call_failures",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "worktree_anomalies",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    }
+  ]
+}

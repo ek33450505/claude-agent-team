@@ -38,6 +38,26 @@ test-ubuntu:
 
 # Run real GitHub Actions CI locally via act (simulates PR event)
 # Requires: act (https://nektosact.com) and Docker
+#
+# Jobs included (mirrors the full PR-gating workflow set):
+#   bats, contract-test, hook-contract-validation — bats-ci.yml (full suite + contracts)
+#   stats-guard           — cast-stats-guard.yml
+#   rules-drift           — rules-drift.yml
+#   readme-structure      — docs-check.yml
+#   pii-scan, shellcheck  — security-scan.yml
+#   db-contract           — db-contract.yml
+#
+# Runner image: -P pins ubuntu-latest to catthehacker/ubuntu:act-latest so act never
+#   prompts interactively on first run (non-TTY safe; equivalent to the prompt's default).
+#
+# One invocation per job: act's -j flag is last-wins (repeated -j silently runs only the
+#   final job). Use a fail-fast loop — one act call per job — to guarantee all 9 run.
+#
+# Excluded (cannot run under act):
+#   gitleaks   — uses gitleaks/gitleaks-action which requires a live GITHUB_TOKEN secret;
+#                run the local equivalent manually: bash scripts/ci-pii-scan.sh
+#   bats-macos — act cannot run macOS runners (macos-latest); covered by: make test
+#   bats-ubuntu — duplicates the bats job's full-suite run on ubuntu-latest; expensive
 ci-local:
 	@command -v act >/dev/null || { \
 		echo "Error: act not found. Install from https://nektosact.com"; \
@@ -50,7 +70,11 @@ ci-local:
 	@echo "Running PR-gating workflows locally via act..."
 	@echo "This simulates the exact CI checks that block PR merges."
 	@echo ""
-	act pull_request --container-architecture linux/amd64 -j bats -j stats-guard -j rules-drift -j readme-structure
+	@for j in bats contract-test hook-contract-validation stats-guard rules-drift readme-structure pii-scan shellcheck db-contract; do \
+		echo "── ci-local: act job $$j"; \
+		act pull_request --container-architecture linux/amd64 -P ubuntu-latest=catthehacker/ubuntu:act-latest -j "$$j" || { echo "ci-local FAILED at job: $$j" >&2; exit 1; }; \
+	done
+	@echo "ci-local: all 9 jobs green"
 
 # Sync docs then validate
 sync: docs validate

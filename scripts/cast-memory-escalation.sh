@@ -72,15 +72,18 @@ rules = []
 
 # -------------------------------------------------------------------------
 # Rule 1: agent BLOCKED 3+ times with similar task_summary
+# agent_runs.project was dropped in migration 022 (wave-3); recover via sessions JOIN
 # -------------------------------------------------------------------------
 params = []
-where_clause = "status = 'BLOCKED' AND task_summary IS NOT NULL AND task_summary != ''"
+where_clause = "ar.status = 'BLOCKED' AND ar.task_summary IS NOT NULL AND ar.task_summary != ''"
 if project_filter:
-    where_clause += " AND project = ?"
+    where_clause += " AND COALESCE(s.project, '') = ?"
     params.append(project_filter)
 
 cur.execute(
-    f"SELECT agent, project, task_summary FROM agent_runs WHERE {where_clause} ORDER BY agent, project",
+    f"SELECT ar.agent, COALESCE(s.project, '') AS project, ar.task_summary "
+    f"FROM agent_runs ar LEFT JOIN sessions s ON ar.session_id = s.id "
+    f"WHERE {where_clause} ORDER BY ar.agent, COALESCE(s.project, '')",
     params
 )
 blocked_rows = cur.fetchall()
@@ -130,15 +133,18 @@ for (agent, project), summaries in blocked_groups.items():
 
 # -------------------------------------------------------------------------
 # Rule 2: code-reviewer flags same concern keyword 3+ times
+# agent_runs.project was dropped in migration 022 (wave-3); recover via sessions JOIN
 # -------------------------------------------------------------------------
 reviewer_params = []
-reviewer_where = "agent = 'code-reviewer' AND response IS NOT NULL AND response != ''"
+reviewer_where = "ar.agent = 'code-reviewer' AND ar.response IS NOT NULL AND ar.response != ''"
 if project_filter:
-    reviewer_where += " AND project = ?"
+    reviewer_where += " AND COALESCE(s.project, '') = ?"
     reviewer_params.append(project_filter)
 
 cur.execute(
-    f"SELECT project, response FROM agent_runs WHERE {reviewer_where}",
+    f"SELECT COALESCE(s.project, '') AS project, ar.response "
+    f"FROM agent_runs ar LEFT JOIN sessions s ON ar.session_id = s.id "
+    f"WHERE {reviewer_where}",
     reviewer_params
 )
 reviewer_rows = cur.fetchall()
