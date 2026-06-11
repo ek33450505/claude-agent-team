@@ -59,7 +59,7 @@ DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 if [ -n "$session_id" ] && [ -f "$DB_PATH" ] && command -v python3 >/dev/null 2>&1; then
   export CAST_SL_DB="$DB_PATH"
   export CAST_SL_SESSION="$session_id"
-  read -r active_agents dispatch_count <<< "$(python3 - <<'PYEOF' 2>/dev/null
+  IFS='|' read -r active_agents dispatch_count <<< "$(python3 - <<'PYEOF' 2>/dev/null
 import sqlite3, os
 db   = os.environ.get('CAST_SL_DB', '')
 sess = os.environ.get('CAST_SL_SESSION', '')
@@ -78,9 +78,9 @@ try:
     conn.close()
     names = [r[0] for r in rows if r[0]]
     total = count_row[0] if count_row else 0
-    print(','.join(names) if names else '', total)
+    print('%s|%s' % (','.join(names), total))
 except Exception:
-    print('', 0)
+    print('|0')
 PYEOF
   )" || true
 fi
@@ -106,21 +106,22 @@ else
 fi
 reset="\033[0m"
 
-# Build output
+# ── Line 1 (primary): branch + agent + cost + ctx + uptime ───────────────────
 agent_color=$(get_agent_color "$agent")
 # Prefix with git branch if available and different from agent name
 if [ -n "$git_branch" ] && [ "$git_branch" != "$agent" ]; then
-  out="⚡ ${git_branch} ${agent_color}${agent}${reset} | ${cost_fmt} | ctx: ${ctx_color}${ctx_pct}%${reset}"
+  line1="⚡ ${git_branch} ${agent_color}${agent}${reset} | ${cost_fmt} | ctx: ${ctx_color}${ctx_pct}%${reset}"
 else
-  out="⚡ ${agent_color}${agent}${reset} | ${cost_fmt} | ctx: ${ctx_color}${ctx_pct}%${reset}"
+  line1="⚡ ${agent_color}${agent}${reset} | ${cost_fmt} | ctx: ${ctx_color}${ctx_pct}%${reset}"
 fi
 
 # Add uptime if available
 if [ -n "$uptime_str" ]; then
-  out="${out} | 🕐 ${uptime_str}"
+  line1="${line1} | 🕐 ${uptime_str}"
 fi
 
-# Add active CAST agents if any are running
+# ── Line 2 (secondary): agents + rate + session + model ──────────────────────
+# Build active CAST agents section
 agents_section=""
 if [ -n "$active_agents" ]; then
   agents_colored=""
@@ -143,22 +144,20 @@ if [ -n "$dispatch_count" ] && [ "$dispatch_count" != "0" ] && [ "$dispatch_coun
     agents_section="(${dispatch_count} dispatched)"
   fi
 fi
+
+# Assemble line2 segments, join with " | ", skipping empty ones
+line2=""
 if [ -n "$agents_section" ]; then
-  out="${out} | agents: ${agents_section}"
+  line2="agents: ${agents_section}"
 fi
-
-# Add rate limit if present
 if [ -n "$rate_pct" ] && [ "$rate_pct" != "null" ]; then
-  out="${out} | rate: ${rate_pct}%"
+  [ -n "$line2" ] && line2="${line2} | rate: ${rate_pct}%" || line2="rate: ${rate_pct}%"
 fi
-
-# Add session name if present
 if [ -n "$session" ] && [ "$session" != "null" ]; then
-  out="${out} | ${session}"
+  [ -n "$line2" ] && line2="${line2} | ${session}" || line2="${session}"
 fi
+# Model always appears on line2
+[ -n "$line2" ] && line2="${line2} | ${model}" || line2="${model}"
 
-# Add model
-out="${out} | ${model}"
-
-printf '%b\n' "$out"
+printf '%b\n%b\n' "$line1" "$line2"
 exit 0
