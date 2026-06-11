@@ -323,9 +323,14 @@ teardown() {
   fi
   export CLAUDE_SESSION_ID="hang-regress-$$"
 
-  # Launch hook in background with stdin from an open pipe that never sends data.
-  # < <(sleep 10): write end held by 'sleep', no data written, no EOF — like a TTY.
-  HOME="$HOME" CAST_DB_PATH="$TEST_DB" bash "$HOOK_SH" < <(sleep 10) &
+  # Hard outer bound: perl alarm(10) kills the entire hook process if it blocks.
+  # This converts a potential infinite hang into a bounded FAIL — a hang must
+  # never make the whole BATS suite hang (which stalls CI indefinitely).
+  # perl is available on macOS and Linux; gtimeout/timeout are not reliably present.
+  # The alarm wraps both the hook invocation and the open-pipe stdin source.
+  local hook_exit
+  perl -e 'alarm 10; exec @ARGV' -- \
+    bash -c 'HOME="$HOME" CAST_DB_PATH="$TEST_DB" bash "$HOOK_SH" < <(sleep 10)' &
   local hook_pid=$!
 
   # Give hook up to 3 seconds to complete (6 × 0.5s polls)
@@ -336,6 +341,8 @@ teardown() {
   done
 
   if kill -0 "$hook_pid" 2>/dev/null; then
+    # Hook did not complete within 3s — kill it and report an honest FAIL.
+    # The perl alarm(10) also terminates the process if kill misses something.
     kill "$hook_pid" 2>/dev/null || true
     wait "$hook_pid" 2>/dev/null || true
     fail "Hook hung reading stdin (macOS TTY-hang regression — cat blocked on open pipe)"
