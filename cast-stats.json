@@ -3,11 +3,11 @@
   "versionTag": "v7.4.1",
   "agents": 23,
   "tests": 1275,
-  "tables": 38,
+  "tables": 35,
   "commands": 20,
   "skills": 15,
   "packages": 13,
-  "updated": "2026-06-10",
+  "updated": "2026-06-11",
   "_source": "https://raw.githubusercontent.com/ek33450505/claude-agent-team/main/cast-stats.json",
   "_generator": "scripts/gen-cast-stats.sh"
 }

@@ -796,20 +796,6 @@ MANAGED_AGENT_INVOCATIONS_TABLE
   _columns_added=1
 fi
 
-# contract_test_runs: agent contract testing (writer: cast-contract-runner.sh)
-if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "contract_test_runs"; then
-  sqlite3 "$DB_PATH" <<'CONTRACT_TEST_RUNS_TABLE'
-CREATE TABLE IF NOT EXISTS contract_test_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  agent TEXT,
-  fixture TEXT,
-  result TEXT,
-  timestamp TEXT
-);
-CONTRACT_TEST_RUNS_TABLE
-  _columns_added=1
-fi
-
 # dispatch_events: cookbook drift dispatch telemetry (writer: cast-cookbook-drift.sh)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "dispatch_events"; then
   sqlite3 "$DB_PATH" <<'DISPATCH_EVENTS_TABLE'
@@ -837,36 +823,6 @@ CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
   raw_json    TEXT
 );
 RATE_LIMIT_SNAPSHOTS_TABLE
-  _columns_added=1
-fi
-
-# files_api_events: file API observability (writer: cast-files-api.sh)
-if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "files_api_events"; then
-  sqlite3 "$DB_PATH" <<'FILES_API_EVENTS_TABLE'
-CREATE TABLE IF NOT EXISTS files_api_events (
-  id TEXT PRIMARY KEY,
-  action TEXT,
-  file_id TEXT,
-  local_path TEXT,
-  agent TEXT,
-  created_at TEXT
-);
-FILES_API_EVENTS_TABLE
-  _columns_added=1
-fi
-
-# batch_dispatches: batch API invocation tracking (writer: cast-batch-dispatch.sh)
-if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "batch_dispatches"; then
-  sqlite3 "$DB_PATH" <<'BATCH_DISPATCHES_TABLE'
-CREATE TABLE IF NOT EXISTS batch_dispatches (
-  id TEXT PRIMARY KEY,
-  batch_id TEXT NOT NULL,
-  agent TEXT NOT NULL,
-  custom_id TEXT NOT NULL,
-  prompt_preview TEXT,
-  submitted_at TEXT NOT NULL
-);
-BATCH_DISPATCHES_TABLE
   _columns_added=1
 fi
 

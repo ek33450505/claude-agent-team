@@ -138,19 +138,6 @@ except ImportError:
 PYEOF
 }
 
-# ── Create contract_test_runs table if missing ────────────────────────────────
-_ensure_contract_table() {
-  sqlite3 "$CAST_DB_PATH" <<'SQL' 2>/dev/null || true
-CREATE TABLE IF NOT EXISTS contract_test_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    agent TEXT,
-    fixture TEXT,
-    result TEXT,
-    timestamp TEXT
-);
-SQL
-}
-
 # ── Run assertions against fixture content ───────────────────────────────────
 _run_assertions() {
   local agent_name="$1"
@@ -208,8 +195,7 @@ except Exception as e:
     print(f"Error parsing results: {e}", file=sys.stderr)
 PYEOF
 
-  # Record to DB
-  _ensure_contract_table
+  # Determine overall pass/fail
   local result_status="FAIL"
   python3 - "$result_json" <<'PYEOF'
 import sys, json
@@ -226,21 +212,10 @@ PYEOF
     result_status="PASS"
   fi
 
-  sqlite3 "$CAST_DB_PATH" <<SQL 2>/dev/null || true
-INSERT INTO contract_test_runs (agent, fixture, result, timestamp)
-VALUES (
-  '$agent_name',
-  '$fixture_name',
-  '$result_status',
-  datetime('now')
-);
-SQL
-
   [ "$result_status" = "PASS" ]
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-_ensure_contract_table
 
 # Parse fixtures from contract
 fixture_list="$(python3 - "$CONTRACT_FILE" <<'PYEOF'

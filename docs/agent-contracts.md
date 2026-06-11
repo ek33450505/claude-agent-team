@@ -165,6 +165,6 @@ cast test --record commit    # record a new fixture from a live run
 cast test --ci               # no ANSI color, machine-readable exit codes
 ```
 
-Results are written to `cast.db` table `contract_test_runs` and shown in `cast status`.
+Results are printed to the terminal (pass/fail per assertion). No DB write occurs.
 
 See also: `scripts/cast-contract-runner.sh`, `scripts/cast_contract_runner.py`.
