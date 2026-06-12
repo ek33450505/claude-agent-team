@@ -51,11 +51,15 @@ teardown() {
   # that same baseline: no new violations can appear → exit 0.
   local TEMP_BASELINE="$BATS_TEST_TMPDIR/fresh-baseline.json"
 
-  # Suppress stdout/stderr from the baseline-generation step
-  python3 "$CONTRACT_SCRIPT" \
-    --update-baseline --baseline "$TEMP_BASELINE" \
-    >/dev/null 2>&1 \
-    || skip "db-contract --update-baseline failed; cannot generate fresh baseline"
+  # Suppress stdout/stderr from the baseline-generation step;
+  # --update-baseline MUST succeed — failure here is a contract-script regression,
+  # not an environment gap. Hard-fail so the regression is visible.
+  if ! python3 "$CONTRACT_SCRIPT" \
+      --update-baseline --baseline "$TEMP_BASELINE" \
+      >/dev/null 2>&1; then
+    echo "FAIL: cast-db-contract.py --update-baseline exited non-zero; this is a contract-script regression" >&2
+    false
+  fi
 
   run python3 "$CONTRACT_SCRIPT" --check --baseline "$TEMP_BASELINE"
   [ "$status" -eq 0 ]
@@ -91,13 +95,17 @@ teardown() {
 @test "--check exits 0 with desktop absent (safe-drop ratchet skipped)" {
   local TEMP_BASELINE="$BATS_TEST_TMPDIR/no-desktop-baseline.json"
 
-  # Step 1: generate baseline in no-desktop mode
-  python3 "$CONTRACT_SCRIPT" \
-    --update-baseline \
-    --baseline "$TEMP_BASELINE" \
-    --desktop-path /tmp/nonexistent \
-    >/dev/null 2>&1 \
-    || skip "db-contract --update-baseline failed; cannot generate fresh baseline"
+  # Step 1: generate baseline in no-desktop mode.
+  # --update-baseline MUST succeed — failure here is a contract-script regression,
+  # not an environment gap. Hard-fail so the regression is visible.
+  if ! python3 "$CONTRACT_SCRIPT" \
+      --update-baseline \
+      --baseline "$TEMP_BASELINE" \
+      --desktop-path /tmp/nonexistent \
+      >/dev/null 2>&1; then
+    echo "FAIL: cast-db-contract.py --update-baseline (no-desktop mode) exited non-zero; this is a contract-script regression" >&2
+    false
+  fi
 
   # Step 2: --check must pass (exit 0) with desktop still absent
   run python3 "$CONTRACT_SCRIPT" \
