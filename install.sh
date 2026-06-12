@@ -444,6 +444,21 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
             warn "  launchctl load failed for $PLIST_DEST — verify manually"
         fi
     fi
+
+    # Install cast-wipe-canary.plist — WatchPaths canary that captures forensic
+    # evidence outside ~/.claude the instant the directory disappears.
+    if [ -f "$SCRIPT_DIR/macos/cast-wipe-canary.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.wipe-canary.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-wipe-canary.plist" > "$PLIST_DEST"
+
+        # Idempotently (re)load the plist
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.wipe-canary)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
 fi
 
 # --- Wire git hooks (pre-commit, pre-push, post-merge auto-install) ---
