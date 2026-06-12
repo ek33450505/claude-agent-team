@@ -138,6 +138,37 @@ def main() -> None:
             # Older DBs may lack the sessions table or status column — not fatal.
             _log(f'Session crash-marking skipped (best-effort): {e}')
 
+        # --- Step 3: Age out stale task_queue rows ---
+        # No live consumer exists for task_queue (cast-queue-processor.sh is not
+        # wired to launchd). Rows accumulate indefinitely. Drain rows older than
+        # CAST_TASK_QUEUE_ABANDON_DAYS (default 7d for pending, 1d for running).
+        # NO schema change — status value 'abandoned' already exists in the table
+        # (TEXT DEFAULT 'pending' with no CHECK constraint — verified 2026-06-11).
+        try:
+            # NOTE: created_at holds MIXED formats ('2026-06-03 17:35:42' AND
+            # '2026-06-11T20:51:18Z' — live-verified 2026-06-11). Normalize via
+            # replace() in SQL and use the space-form threshold, or string
+            # comparison misorders same-day rows.
+            tq_pending_threshold = (now_utc - timedelta(days=int(os.environ.get('CAST_TASK_QUEUE_ABANDON_DAYS', '7')))).strftime('%Y-%m-%d %H:%M:%S')
+            tq_running_threshold = (now_utc - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+            tq_result = conn.execute(
+                '''
+                UPDATE task_queue
+                SET status = 'abandoned'
+                WHERE (status = 'pending' AND replace(replace(created_at,'T',' '),'Z','') < ?)
+                   OR (status = 'running' AND replace(replace(created_at,'T',' '),'Z','') < ?)
+                ''',
+                (tq_pending_threshold, tq_running_threshold)
+            )
+            tq_count = tq_result.rowcount
+            conn.commit()
+            _log(f'task_queue aged out {tq_count} stale row(s) (pending threshold={tq_pending_threshold})')
+            if tq_count:
+                print(f'[cast-abandon-stale-runs] Aged out {tq_count} stale task_queue row(s)', file=sys.stderr)
+        except Exception as e:
+            # task_queue may not exist on older DBs — not fatal.
+            _log(f'task_queue age-out skipped (best-effort): {e}')
+
     except Exception as e:
         _log(f'Error during cleanup: {e}')
     finally:
