@@ -24,8 +24,8 @@ print(json.dumps({
 }
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/cast"
   unset CLAUDE_SUBPROCESS
   # Create a real cast.db with the tool_call_failures schema for DB tests
@@ -43,8 +43,7 @@ con.commit(); con.close()
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

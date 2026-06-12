@@ -11,12 +11,12 @@ GEN_STATS="$REPO_DIR/scripts/gen-stats.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
+  load 'helpers/setup'
   export ORIG_BATS_TEST_NAME="${BATS_TEST_NAME:-}"
   export ORIG_BATS_TEST_FILENAME="${BATS_TEST_FILENAME:-}"
   export ORIG_BATS_TMPDIR="${BATS_TMPDIR:-}"
 
-  export HOME="$(mktemp -d)"
+  setup_temp_home
 
   # Create a fake README with sentinel values
   FAKE_README="$HOME/README.md"
@@ -36,8 +36,7 @@ EOF
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
   # Restore original BATS env vars
   if [[ -n "$ORIG_BATS_TEST_NAME" ]]; then
     export BATS_TEST_NAME="$ORIG_BATS_TEST_NAME"

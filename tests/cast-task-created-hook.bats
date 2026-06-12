@@ -22,16 +22,15 @@ print(json.dumps({
 }
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/cast/events"
   unset CLAUDE_SUBPROCESS
   export CAST_DB_PATH="$HOME/test-cast.db"
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------
