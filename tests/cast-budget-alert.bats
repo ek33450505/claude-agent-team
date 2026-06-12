@@ -12,8 +12,8 @@ ALERT_SH="$REPO_DIR/scripts/cast-budget-alert.sh"
 CAST_BIN="$REPO_DIR/bin/cast"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude"
   export TEST_DB="/tmp/test-cast-budget-$$.db"
   export CAST_DB_PATH="$TEST_DB"
@@ -22,8 +22,7 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 _set_budget() {  # $1=limit_usd  $2=alert_at_pct

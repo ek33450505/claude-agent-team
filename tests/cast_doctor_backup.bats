@@ -5,8 +5,8 @@
 # isolated HOME, cast.db auto-created on first access, temp CAST_BACKUP_ROOT
 
 setup() {
-  # Isolated HOME (exactly like cast-doctor-expansion.bats)
-  export HOME=$(mktemp -d)
+  load 'helpers/setup'
+  setup_temp_home
 
   # Create .claude/cast/events so sqlite3 can auto-create cast.db there
   mkdir -p "${HOME}/.claude/cast/events"
@@ -16,7 +16,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
+  teardown_temp_home
 }
 
 @test "doctor WARN when no snapshots found" {
