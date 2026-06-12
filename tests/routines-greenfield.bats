@@ -9,8 +9,8 @@ CAST_BIN="$REPO_DIR/bin/cast"
 RUNNER="$REPO_DIR/scripts/cast-routine-runner.sh"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/logs"
 
   export TEST_DB="$BATS_TEST_TMPDIR/test-routines-greenfield-$$.db"
@@ -21,8 +21,7 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

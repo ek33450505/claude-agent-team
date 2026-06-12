@@ -10,8 +10,8 @@ load '../test_helper/bats-assert/load'
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load '../helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude"
   export TEST_DB="$(mktemp -p /tmp cast-dash-date-filter-XXXXXX.db)"
   export CAST_DB_PATH="$TEST_DB"
@@ -35,8 +35,7 @@ _insert_crashed() {  # $1=days_ago
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 @test "normalized date(replace()) query returns 2 rows for the test date" {

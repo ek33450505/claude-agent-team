@@ -11,8 +11,8 @@
 # tests to the schema the sweep actually runs against.
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   export CAST_DB_PATH="$HOME/.claude/cast.db"
   export CAST_SCRIPTS_DIR="${BATS_TEST_DIRNAME}/../scripts"
 
@@ -21,8 +21,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 @test "agent_memories uses canonical last_validated_at column (not legacy last_verified)" {

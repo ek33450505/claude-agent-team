@@ -8,8 +8,8 @@ load 'test_helper/bats-assert/load'
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/agent-status"
 
   # We'll test the bash snippet from SKILL.md directly
@@ -18,8 +18,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

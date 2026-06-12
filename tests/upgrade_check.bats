@@ -79,8 +79,8 @@ SCORESTUB
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   export ORIG_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
   # Redirect TMPDIR into the fake HOME so mktemp calls from the script under
   # test are cleaned up by teardown() instead of accumulating in the real
@@ -101,14 +101,13 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
   export ANTHROPIC_API_KEY="$ORIG_ANTHROPIC_API_KEY"
   if [ -n "$ORIG_TMPDIR" ]; then
     export TMPDIR="$ORIG_TMPDIR"
   else
     unset TMPDIR
   fi
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------
