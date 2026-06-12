@@ -72,7 +72,7 @@ DB_PATH = os.environ.get("CAST_DB_PATH", os.path.expanduser("~/.claude/cast.db")
 
 def _connect() -> sqlite3.Connection:
     """Return a sqlite3 connection with row_factory set."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5)
     conn.row_factory = sqlite3.Row
     return conn
 

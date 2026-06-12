@@ -53,8 +53,8 @@ def _do_backup(db_src: Path, backup_dir: Path) -> Path:
     today_str = date.today().strftime("%Y-%m-%d")
     dest_path = backup_dir / f"cast-db-{today_str}.db"
 
-    with sqlite3.connect(str(db_src)) as src:
-        with sqlite3.connect(str(dest_path)) as dst:
+    with sqlite3.connect(str(db_src), timeout=5) as src:
+        with sqlite3.connect(str(dest_path), timeout=5) as dst:
             src.backup(dst)
 
     return dest_path

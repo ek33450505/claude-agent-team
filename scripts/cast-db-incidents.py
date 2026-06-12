@@ -69,7 +69,8 @@ def _run_query(sql: str, params: tuple) -> Optional[list]:
     try:
         import os
         db_path = os.environ.get("CAST_DB_PATH", os.path.expanduser("~/.claude/cast.db"))
-        with sqlite3.connect(db_path) as probe:
+        # Read probe only — fail-fast at 2 s is intentional (probe should not stall the pipeline)
+        with sqlite3.connect(db_path, timeout=2) as probe:
             probe.execute("SELECT 1 FROM incidents LIMIT 1")
         rows = db_query(sql, params)
         if rows is None:

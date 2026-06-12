@@ -19,6 +19,10 @@
 
 set -euo pipefail
 
+# shellcheck source=cast-sqlite-lib.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/cast-sqlite-lib.sh" 2>/dev/null || true
+
 AGENTS_DIR="${HOME}/.claude/agents"
 CAST_DB="${HOME}/.claude/cast.db"
 
@@ -154,7 +158,7 @@ project      = sys.argv[6] if sys.argv[6] else None
 project_root = sys.argv[7] if sys.argv[7] else None
 
 try:
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(db_path, timeout=5)
     cur = con.cursor()
     cur.execute("""
         INSERT INTO task_queue

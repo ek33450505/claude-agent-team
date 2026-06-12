@@ -13,6 +13,10 @@ _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/
 
 set -euo pipefail
 
+# shellcheck source=cast-sqlite-lib.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/cast-sqlite-lib.sh" 2>/dev/null || true
+
 INPUT="$(cat 2>/dev/null || true)"
 
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
@@ -72,7 +76,7 @@ if task_subject:
 # Log to cast.db task_queue if the DB and table exist
 if db_path and os.path.exists(db_path):
     try:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=5)
         cur  = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='task_queue'")
         if cur.fetchone():
