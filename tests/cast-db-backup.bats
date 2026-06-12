@@ -14,7 +14,8 @@ setup() {
   load 'helpers/setup'
   setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
   export TEST_DB="$HOME/.claude/cast.db"
-  export TEST_BACKUP_DIR="$HOME/.claude/backups"
+  # New default matches cast-db-backup.py's updated default path (wipe-#2 retarget)
+  export TEST_BACKUP_DIR="$HOME/Library/Application Support/cast/db-backups"
 
   mkdir -p "$HOME/.claude"
 
@@ -131,4 +132,26 @@ assert data['backup_path'] is None, 'backup_path should be None on error'
   TODAY=$(date +%Y-%m-%d)
   COUNT=$(ls "$TEST_BACKUP_DIR"/cast-db-${TODAY}.db 2>/dev/null | wc -l | tr -d ' ')
   [ "$COUNT" -eq 1 ]
+}
+
+@test "cast-db-backup.py: default backup dir is Library/Application Support/cast/db-backups" {
+  # Do not set CAST_BACKUP_DIR — script must use the new default path
+  run env -u CAST_BACKUP_DIR python3 "$CAST_DB_BACKUP_PY"
+  assert_success
+
+  BACKUP_PATH=$(echo "$output" | python3 -c "import sys,json; print(json.load(sys.stdin)['backup_path'])")
+  # Must be under the new default dir (not ~/.claude/backups)
+  [[ "$BACKUP_PATH" == */Library/Application\ Support/cast/db-backups/* ]]
+  [[ "$BACKUP_PATH" != */.claude/backups/* ]]
+}
+
+@test "cast-db-backup.py: CAST_BACKUP_DIR env override is respected" {
+  CUSTOM_BACKUP_DIR="$HOME/custom-backups-override"
+  run env CAST_BACKUP_DIR="$CUSTOM_BACKUP_DIR" python3 "$CAST_DB_BACKUP_PY"
+  assert_success
+
+  BACKUP_PATH=$(echo "$output" | python3 -c "import sys,json; print(json.load(sys.stdin)['backup_path'])")
+  # Must be under the custom override dir
+  [[ "$BACKUP_PATH" == "$CUSTOM_BACKUP_DIR"/* ]]
+  [ -f "$BACKUP_PATH" ]
 }

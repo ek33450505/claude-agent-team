@@ -2012,6 +2012,59 @@ except Exception:
     fi
   fi
 
+  # Litestream replica freshness (opt-in continuous replication outside blast radius)
+  local _ls_root="${CAST_LITESTREAM_ROOT:-${HOME}/Library/Application Support/cast}"
+  local _ls_config="${_ls_root}/litestream.yml"
+  local _ls_replica="${_ls_root}/litestream/cast-db"
+  if ! command -v litestream >/dev/null 2>&1; then
+    printf "%b Litestream: not installed (opt-in — brew install benbjohnson/litestream/litestream)\n" "$INFO"
+  elif [[ ! -f "$_ls_config" ]]; then
+    printf "%b Litestream: installed but config missing — run: bash scripts/cast-litestream-setup.sh\n" "$WARN"
+  else
+    # Daemon status — macOS-only via launchctl; degrade gracefully on Linux/CI
+    if command -v launchctl >/dev/null 2>&1; then
+      if ! launchctl list com.cast.litestream >/dev/null 2>&1; then
+        printf "%b Litestream: daemon not loaded (check ~/Library/LaunchAgents/com.cast.litestream.plist)\n" "$WARN"
+      fi
+    else
+      printf "%b Litestream: daemon check skipped (launchctl not available)\n" "$INFO"
+    fi
+    # Replica directory presence + freshness
+    if [[ ! -d "$_ls_replica" ]] || [[ -z "$(ls -A "$_ls_replica" 2>/dev/null)" ]]; then
+      printf "%b Litestream: replica dir missing or empty (%s)\n" "$WARN" "$_ls_replica"
+    else
+      local _ls_lag_s="-1"
+      _ls_lag_s="$(python3 - "$_ls_replica" "$CAST_DB_PATH" <<'PYEOF'
+import os, sys
+replica_dir = sys.argv[1]
+db_path = sys.argv[2]
+try:
+    newest = max(
+        (os.path.getmtime(os.path.join(root, fn))
+         for root, _dirs, files in os.walk(replica_dir)
+         for fn in files),
+        default=None
+    )
+    if newest is None:
+        print(-1)
+        sys.exit(0)
+    db_mtime = os.path.getmtime(db_path) if os.path.exists(db_path) else newest
+    lag = int(db_mtime - newest)
+    print(max(lag, 0))
+except Exception:
+    print(-1)
+PYEOF
+      2>/dev/null || echo -1)"
+      if [[ "${_ls_lag_s}" -lt 0 ]]; then
+        printf "%b Litestream: could not determine replica age\n" "$WARN"
+      elif [[ "${_ls_lag_s}" -gt 3600 ]]; then
+        printf "%b Litestream: replica stale — lag %ds (>1h behind cast.db)\n" "$WARN" "${_ls_lag_s}"
+      else
+        printf "%b Litestream: replica fresh (lag %ds)\n" "$OK" "${_ls_lag_s}"
+      fi
+    fi
+  fi
+
   # 19. Stale cast-swarm-* branch count early-warning
   local swarm_branch_warn_threshold=25
   local swarm_branch_count=0

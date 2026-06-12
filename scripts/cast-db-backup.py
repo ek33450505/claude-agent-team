@@ -8,7 +8,7 @@ Retention: 7 daily + 4 weekly (ISO-week anchor = newest file from each week).
 
 Environment variables:
   CAST_DB_PATH   — path to source DB (default: ~/.claude/cast.db)
-  CAST_BACKUP_DIR — directory for backups (default: ~/.claude/backups)
+  CAST_BACKUP_DIR — directory for backups (default: ~/Library/Application Support/cast/db-backups)
 
 JSON output (single line to stdout):
   Success: {"backup_path": "/abs/path/cast-db-YYYY-MM-DD.db",
@@ -30,7 +30,7 @@ from pathlib import Path
 def _resolve_paths():
     """Resolve DB source, backup dir, and log paths from env or defaults."""
     db_src = Path(os.environ.get("CAST_DB_PATH", "~/.claude/cast.db")).expanduser()
-    backup_dir = Path(os.environ.get("CAST_BACKUP_DIR", "~/.claude/backups")).expanduser()
+    backup_dir = Path(os.environ.get("CAST_BACKUP_DIR", "~/Library/Application Support/cast/db-backups")).expanduser()
     log_path = Path("~/.claude/logs/cast-db-backup.log").expanduser()
     return db_src, backup_dir, log_path
 

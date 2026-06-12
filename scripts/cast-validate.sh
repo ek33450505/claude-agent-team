@@ -363,7 +363,8 @@ else
 fi
 
 # Backup: freshness check
-BACKUP_DIR="$HOME/.claude/backups"
+BACKUP_DIR="${CAST_BACKUP_DIR:-${HOME}/Library/Application Support/cast/db-backups}"
+LEGACY_BACKUP_DIR="${HOME}/.claude/backups"
 if [[ -d "$BACKUP_DIR" ]]; then
   LATEST_BACKUP=$(find "$BACKUP_DIR" -name "cast-db-*.db" -type f 2>/dev/null | sort -r | head -1)
   if [[ -n "$LATEST_BACKUP" ]]; then
@@ -378,7 +379,11 @@ print(f'{age:.0f}')
     info "Backup: $BACKUP_DIR exists but no cast-db-*.db snapshots found"
   fi
 else
-  info "Backup: ~/.claude/backups/ not found (run: cast-db-backup.py)"
+  info "Backup: dir not found at $BACKUP_DIR (run: cast-db-backup.py)"
+fi
+# Legacy advisory: old colocated backups from before wipe-#2 retarget
+if [[ -d "$LEGACY_BACKUP_DIR" ]] && [[ -n "$(ls -A "$LEGACY_BACKUP_DIR" 2>/dev/null)" ]]; then
+  info "Backup: legacy colocated backups present in ~/.claude/backups — migrate to $BACKUP_DIR"
 fi
 
 # Ollama: is it running?

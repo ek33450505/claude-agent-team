@@ -341,3 +341,46 @@ JSON
   # Status should be 0 (clean install, dir just not present)
   [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# Backup: retarget to Library/Application Support/cast/db-backups
+# ---------------------------------------------------------------------------
+
+@test "backup: uses new default ~/Library/Application Support/cast/db-backups when dir absent" {
+  build_clean_install
+  # New default dir does not exist in temp HOME — should print info advisory
+  run env -u CAST_BACKUP_DIR bash "$VALIDATE_SH"
+  # INFO about dir not found at the new default path (not the old ~/.claude/backups path)
+  assert_output --partial "Library/Application Support/cast/db-backups"
+}
+
+@test "backup: CAST_BACKUP_DIR env override is respected" {
+  build_clean_install
+  CUSTOM_DIR="$HOME/custom-backup-dir"
+  mkdir -p "$CUSTOM_DIR"
+  # Populate with a fake backup so the freshness check finds it
+  touch "$CUSTOM_DIR/cast-db-2026-01-01.db"
+
+  run env CAST_BACKUP_DIR="$CUSTOM_DIR" bash "$VALIDATE_SH"
+  assert_output --partial "cast-db-2026-01-01.db"
+}
+
+@test "backup: legacy ~/.claude/backups advisory when old dir is present and non-empty" {
+  build_clean_install
+  # Simulate legacy colocated backups surviving from before wipe-#2 retarget
+  mkdir -p "$HOME/.claude/backups"
+  touch "$HOME/.claude/backups/cast-db-2025-12-01.db"
+
+  run env -u CAST_BACKUP_DIR bash "$VALIDATE_SH"
+  assert_output --partial "legacy colocated backups"
+  assert_output --partial "migrate"
+}
+
+@test "backup: no legacy advisory when ~/.claude/backups is absent" {
+  build_clean_install
+  # Ensure old dir does NOT exist
+  rm -rf "$HOME/.claude/backups"
+
+  run env -u CAST_BACKUP_DIR bash "$VALIDATE_SH"
+  refute_output --partial "legacy colocated backups"
+}
