@@ -11,16 +11,15 @@ MERGE_SH="$REPO_DIR/scripts/cast-merge-settings.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/managed-settings.d"
   export FRAGMENTS_DIR="$HOME/.claude/managed-settings.d"
   export OUTPUT_FILE="$HOME/merged-output.json"
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

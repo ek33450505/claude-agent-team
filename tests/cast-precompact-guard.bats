@@ -7,10 +7,10 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOK_SH="$REPO_DIR/scripts/cast-precompact-guard.sh"
 
 setup() {
-  export ORIG_HOME="$HOME"
+  load 'helpers/setup'
   export ORIG_CAST_DB_PATH="${CAST_DB_PATH:-}"
   # Isolated temp HOME so the hardcoded KNOWN_PROJECTS in $HOME/Projects/... miss real repos
-  export HOME="$(mktemp -d)"
+  setup_temp_home
   mkdir -p "$HOME/.claude/logs"
   unset CLAUDE_SUBPROCESS
   unset CAST_EXTRA_PROJECT
@@ -18,8 +18,7 @@ setup() {
 
 teardown() {
   [ -n "${TEMP_GIT_REPO:-}" ] && rm -rf "$TEMP_GIT_REPO"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
   if [ -n "$ORIG_CAST_DB_PATH" ]; then
     export CAST_DB_PATH="$ORIG_CAST_DB_PATH"
   else

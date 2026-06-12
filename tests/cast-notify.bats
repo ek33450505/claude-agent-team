@@ -12,12 +12,13 @@ NOTIFY_SH="$REPO_DIR/scripts/cast-notify.sh"
 
 # Setup temp HOME for isolation
 setup() {
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/cast"
 }
 
 teardown() {
-  rm -rf "$HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

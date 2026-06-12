@@ -14,14 +14,13 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CAST_CLI="$REPO_ROOT/bin/cast"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/agents"
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 @test "creates ~/.claude/agents/<name>.md with correct frontmatter" {
