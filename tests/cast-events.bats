@@ -11,8 +11,8 @@ CAST_EVENTS_SH="$REPO_DIR/scripts/cast-events.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
 
   # Override all CAST dirs to use the temp home so we never touch ~/.claude
   export CAST_DIR="$HOME/.claude/cast"
@@ -27,8 +27,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

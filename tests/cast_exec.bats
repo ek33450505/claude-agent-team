@@ -91,8 +91,8 @@ PYEOF
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
 
   # cast-exec.sh writes checkpoints under $HOME/.claude/cast/exec-state
   mkdir -p "$HOME/.claude/cast/exec-state"
@@ -109,8 +109,7 @@ STUB
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

@@ -24,8 +24,8 @@ DISTILLER_PY="$REPO_DIR/scripts/cast-session-distiller.py"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   export CAST_DB_PATH="$HOME/.claude/cast-test.db"
 
   mkdir -p "$HOME/.claude"
@@ -42,8 +42,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
   unset CAST_DB_PATH
 }
 

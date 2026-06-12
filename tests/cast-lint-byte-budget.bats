@@ -11,15 +11,14 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 LINT_SH="$REPO_DIR/scripts/cast-lint-byte-budget.sh"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   FIXTURE_DIR="$(mktemp -d)"
 }
 
 teardown() {
   rm -rf "$FIXTURE_DIR"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

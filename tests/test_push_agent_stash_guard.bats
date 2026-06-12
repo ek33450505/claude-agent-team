@@ -12,8 +12,8 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOK_SH="$REPO_DIR/scripts/pre-tool-guard.sh"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   export CLAUDE_DIR="$HOME/.claude"
   mkdir -p "$CLAUDE_DIR/agent-status"
   mkdir -p "$CLAUDE_DIR/cast/hook-last-fired"
@@ -26,9 +26,8 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
   unset CLAUDE_DIR
+  teardown_temp_home
 }
 
 # Helper: build a Bash tool payload for a given command

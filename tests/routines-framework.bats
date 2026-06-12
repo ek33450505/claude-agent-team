@@ -9,8 +9,8 @@ ROUTINES_SCRIPT="$REPO_DIR/scripts/cast-db-routines.py"
 CAST_BIN="$REPO_DIR/bin/cast"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/logs"
 
   export TEST_DB="$BATS_TEST_TMPDIR/test-routines-$$.db"
@@ -19,8 +19,7 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

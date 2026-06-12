@@ -16,8 +16,8 @@ LINT_PY="$REPO_DIR/scripts/cast-lint-write-only-tables.py"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   FAKE_ROOT="$(mktemp -d)"
   mkdir -p "$FAKE_ROOT/scripts" "$FAKE_ROOT/agents" "$FAKE_ROOT/bin" "$FAKE_ROOT/skills"
 }
@@ -26,8 +26,7 @@ teardown() {
   [[ "$FAKE_ROOT" == "$HOME"* || "$FAKE_ROOT" == /tmp/* || "$FAKE_ROOT" == /var/folders/* ]] \
     || { echo "refusing to rm outside tmp: $FAKE_ROOT" >&2; return 1; }
   rm -rf "$FAKE_ROOT"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

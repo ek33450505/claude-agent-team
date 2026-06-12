@@ -11,8 +11,8 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 LINT_PY="$REPO_DIR/scripts/cast-lint-hook-wiring.py"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   FIXTURE_DIR="$(mktemp -d)"
   FIXTURE_FRAGS="${FIXTURE_DIR}/frags"
   mkdir -p "${FIXTURE_FRAGS}"
@@ -20,8 +20,7 @@ setup() {
 
 teardown() {
   rm -rf "${FIXTURE_DIR}"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

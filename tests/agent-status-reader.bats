@@ -46,8 +46,8 @@ run_hook() {
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   export CAST_STATUS_DIR="$HOME/.claude/agent-status"
   # Use a unique session ID per test run to isolate cast-blocked-* and
   # cast-session-start-*.epoch files, preventing state leakage from real sessions.
@@ -59,8 +59,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
   unset TMPDIR
 }
 

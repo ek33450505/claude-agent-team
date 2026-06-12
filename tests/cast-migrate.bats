@@ -8,8 +8,8 @@ MIGRATE_SCRIPT="$REPO_DIR/scripts/cast-migrate.py"
 MIGRATIONS_DIR="$REPO_DIR/scripts/migrations"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude"
 
   export TEST_DB="$BATS_TEST_TMPDIR/test-migrate-$$.db"
@@ -18,8 +18,7 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

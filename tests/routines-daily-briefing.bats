@@ -9,8 +9,8 @@ RUNNER="$REPO_DIR/scripts/cast-routine-runner.sh"
 DAILY_BRIEFING_YAML="$REPO_DIR/routines/daily-briefing.yaml"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/logs"
   mkdir -p "$HOME/.claude/routines-output"
 
@@ -23,9 +23,8 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
   unset CAST_MANAGED_AGENT_CMD
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

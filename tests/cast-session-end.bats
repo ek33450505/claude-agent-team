@@ -7,8 +7,8 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOK_SH="$REPO_DIR/scripts/cast-session-end.sh"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   export TMPDIR="$HOME/tmp"
   mkdir -p "$HOME/.claude/logs"
   mkdir -p "$TMPDIR"
@@ -79,8 +79,7 @@ EOF
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
   unset CAST_DB_PATH
   unset TEST_DB
 }

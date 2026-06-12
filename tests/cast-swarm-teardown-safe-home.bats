@@ -12,6 +12,15 @@
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
+setup() {
+  load 'helpers/setup'
+  setup_temp_home
+}
+
+teardown() {
+  teardown_temp_home
+}
+
 @test "teardown guard: ORIG_HOME unset → HOME is not deleted" {
   # Simulate the failure mode: create a sentinel in a fake "runtime" directory.
   FAKE_RUNTIME="$(mktemp -d)"

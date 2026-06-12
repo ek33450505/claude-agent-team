@@ -42,9 +42,10 @@ log_line_count() {
 }
 
 setup() {
-  export ORIG_HOME="$HOME"
-  # Resolve symlinks so realpath inside the hook matches $HOME (macOS /var -> /private/var quirk)
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
+  # Resolve symlinks: hook canonicalizes paths; on macOS /var/folders -> /private/var/folders
+  HOME="$(realpath "$HOME")"; export HOME
   mkdir -p "$HOME/.claude/config"
   mkdir -p "$HOME/.claude/scripts"
   # Create cast-log-append.py stub that just appends the JSON to routing-log.jsonl
@@ -63,8 +64,7 @@ PYEOF
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

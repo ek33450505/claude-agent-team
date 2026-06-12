@@ -14,9 +14,9 @@ REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CAST_CLI="$REPO_ROOT/bin/cast"
 
 setup() {
-  export ORIG_HOME="$HOME"
+  load 'helpers/setup'
+  setup_temp_home
   export TEST_DIR="$(mktemp -d)"
-  export HOME="$(mktemp -d)"
   cd "$TEST_DIR"
   git init -q
   git config user.email "test@test.com"
@@ -25,8 +25,8 @@ setup() {
 
 teardown() {
   cd /
-  rm -rf "$TEST_DIR" "$HOME"
-  export HOME="$ORIG_HOME"
+  rm -rf "$TEST_DIR"
+  teardown_temp_home
 }
 
 @test "clean dir: creates .claude/cast.json with required fields, exits 0" {

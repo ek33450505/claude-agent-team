@@ -3,15 +3,16 @@
 # Fixture-based contract testing — no live API calls
 
 setup() {
+  load 'helpers/setup'
+  setup_temp_home
   export REPO_ROOT="${BATS_TEST_DIRNAME}/.."
   export CAST_DB_PATH="${BATS_TMPDIR}/test-cast.db"
-  export HOME="${BATS_TMPDIR}/home"
   mkdir -p "$HOME/.claude/scripts" "$HOME/.claude/logs"
 }
 
 teardown() {
+  teardown_temp_home
   rm -f "$CAST_DB_PATH"
-  rm -rf "$HOME"
 }
 
 # Test 1: Runner with passing fixture exits 0

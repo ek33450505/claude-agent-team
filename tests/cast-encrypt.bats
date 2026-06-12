@@ -7,6 +7,19 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CAST_ENCRYPT_SH="$REPO_DIR/scripts/cast-encrypt.sh"
 
 # ---------------------------------------------------------------------------
+# Setup / Teardown
+# ---------------------------------------------------------------------------
+
+setup() {
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
+}
+
+teardown() {
+  teardown_temp_home
+}
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -45,25 +58,19 @@ CAST_ENCRYPT_SH="$REPO_DIR/scripts/cast-encrypt.sh"
   if ! command -v age >/dev/null 2>&1; then
     skip "age not installed"
   fi
-  # Use a temp home so no real keys exist
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  # HOME is already a fresh temp via setup_temp_home; no real keys exist
   mkdir -p "$HOME/.claude/agent-memory-local"
 
   run bash "$CAST_ENCRYPT_SH" encrypt
   assert_failure
   assert_output --partial "No public key found"
-
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
 }
 
 @test "cast-encrypt.sh: setup generates keypair when age is installed" {
   if ! command -v age >/dev/null 2>&1; then
     skip "age not installed"
   fi
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  # HOME is already a fresh temp via setup_temp_home
   mkdir -p "$HOME/.claude/config"
 
   run bash "$CAST_ENCRYPT_SH" setup
@@ -72,7 +79,4 @@ CAST_ENCRYPT_SH="$REPO_DIR/scripts/cast-encrypt.sh"
 
   # Verify public key was created
   [ -f "$HOME/.claude/cast-security.pub" ]
-
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
 }

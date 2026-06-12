@@ -24,8 +24,8 @@ DB_INIT_SH="$REPO_DIR/scripts/cast-db-init.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   export CAST_DB_PATH="$HOME/.claude/cast-test.db"
 
   mkdir -p "$HOME/.claude/agents" "$HOME/.claude/config" "$HOME/.claude/logs" "$HOME/.claude/scripts"
@@ -73,8 +73,7 @@ MD
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
   unset CAST_DB_PATH
 }
 

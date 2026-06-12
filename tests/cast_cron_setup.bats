@@ -17,8 +17,8 @@ CRON_SH="$REPO_DIR/scripts/cast-cron-setup.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
 
   # Directories the script creates
   mkdir -p "${HOME}/.claude/logs"
@@ -45,8 +45,7 @@ STUB
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

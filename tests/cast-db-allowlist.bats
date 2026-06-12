@@ -18,8 +18,8 @@ DB_INIT_SH="$REPO_DIR/scripts/cast-db-init.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
   mkdir -p "$HOME/.claude/logs"
 
   # Create a temp dir via mktemp (may resolve to /var/folders/... on macOS)
@@ -33,8 +33,7 @@ setup() {
 
 teardown() {
   rm -rf "$TEST_TMPDIR"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
   unset CAST_DB_PATH
 }
 

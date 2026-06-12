@@ -11,15 +11,14 @@ CAST_CONNECTIVITY_SH="$REPO_DIR/scripts/cast-connectivity.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   export CAST_OFFLINE_QUEUE_DIR="$HOME/.claude/cast/offline-queue"
   mkdir -p "$HOME/.claude/cast"
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

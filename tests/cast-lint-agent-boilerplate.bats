@@ -17,8 +17,8 @@ LINT_SH="$REPO_DIR/scripts/cast-lint-agent-boilerplate.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   FAKE_AGENTS="$(mktemp -d)"
 }
 
@@ -26,8 +26,7 @@ teardown() {
   [[ "$FAKE_AGENTS" == /tmp/* || "$FAKE_AGENTS" == /var/folders/* ]] \
     || { echo "refusing to rm outside tmp: $FAKE_AGENTS" >&2; return 1; }
   rm -rf "$FAKE_AGENTS"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------
