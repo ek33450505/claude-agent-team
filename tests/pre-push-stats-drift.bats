@@ -40,7 +40,7 @@ _make_fixture_repo() {
   tmpdir="$(mktemp -d)"
 
   git init -q "$tmpdir"
-  git -C "$tmpdir" config user.email "test@cast.local"
+  git -C "$tmpdir" config user.email "test@example.com"
   git -C "$tmpdir" config user.name "CAST Test"
 
   mkdir -p "$tmpdir/scripts"
