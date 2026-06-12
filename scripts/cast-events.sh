@@ -72,9 +72,9 @@ cast_emit_event() {
   _cast_init_dirs
 
   local ts
-  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  ts="${CAST_EVENT_TS:-$(date -u +%Y%m%dT%H%M%SZ)}"  # test seam: inject for deterministic filename ordering
   local ts_iso
-  ts_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  ts_iso="${CAST_EVENT_TS_ISO:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"  # test seam: inject ISO timestamp
   local safe_task_id="${task_id//\//-}"
   local event_file="${CAST_EVENTS_DIR}/${ts}-${agent}-${safe_task_id}.json"
 

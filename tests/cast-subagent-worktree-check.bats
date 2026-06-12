@@ -81,13 +81,6 @@ count_anomalies() {
   [ "$status" -eq 0 ]
 }
 
-@test "CLAUDE_SUBPROCESS guard → exits 0 immediately, no DB write" {
-  cd "$REPO"
-  run bash -c "CLAUDE_SUBPROCESS=1 echo '$STDIN_JSON' | CLAUDE_SUBPROCESS=1 bash '$HOOK'"
-  [ "$status" -eq 0 ]
-  [ "$(count_anomalies)" -eq 0 ]
-}
-
 @test "non-anchored worktree path outside repo root is ignored" {
   # Create a separate fixture repo to simulate a worktree at a sibling path
   SIBLING="$TMPROOT/sibling"

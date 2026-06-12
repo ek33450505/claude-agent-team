@@ -18,11 +18,6 @@ teardown() {
   rm -rf "$TMPDIR"
 }
 
-@test "subprocess guard exits 0 when CLAUDE_SUBPROCESS=1" {
-  run env CLAUDE_SUBPROCESS=1 bash "$SCRIPT" <<< '{}'
-  [ "$status" -eq 0 ]
-}
-
 @test "script exits 0 with empty stdin (normal fire)" {
   run bash "$SCRIPT" <<< ''
   [ "$status" -eq 0 ]

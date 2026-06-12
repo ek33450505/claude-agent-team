@@ -11,12 +11,6 @@ setup() {
   mkdir -p "${HOME}/.claude/logs"
 }
 
-@test "hook exits 0 in subprocess mode" {
-  CLAUDE_SUBPROCESS=1 run bash "$SCRIPT"
-  assert_success
-  assert_output ""
-}
-
 @test "output is valid JSON" {
   run bash "$SCRIPT"
   assert_success

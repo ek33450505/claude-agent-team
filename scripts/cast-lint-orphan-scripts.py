@@ -12,6 +12,7 @@ Exit codes:
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -34,7 +35,9 @@ def extract_script_paths(settings_dict):
         if isinstance(obj, dict):
             for key, val in obj.items():
                 if key == "command" and isinstance(val, str):
-                    # Look for bash script invocations: bash scripts/...
+                    # Look for bash script invocations: bash scripts/... or bash ~/.claude/scripts/...
+                    # Also capture bash /absolute/... so the absolute-path guard in the
+                    # resolver can reject it as a contract violation.
                     if "bash scripts/" in val or "bash ~/.claude/scripts/" in val:
                         # Extract the script path
                         if "bash scripts/" in val:
@@ -47,6 +50,11 @@ def extract_script_paths(settings_dict):
                             if len(parts) > 1:
                                 script_name = parts[1].split()[0]
                                 scripts.add(f"~/.claude/scripts/{script_name}")
+                    else:
+                        # Detect bare absolute-path invocations: `bash /some/path.sh`
+                        m = re.search(r"bash\s+(/[^\s]+\.sh)", val)
+                        if m:
+                            scripts.add(m.group(1))
                 traverse_hooks(val)
         elif isinstance(obj, list):
             for item in obj:
@@ -75,18 +83,37 @@ def main():
     if not referenced_scripts:
         return 0
 
+    invalid = []
     missing = []
     for script in sorted(referenced_scripts):
-        expanded_path = os.path.expanduser(script)
-        full_path = os.path.join(repo_root, expanded_path) if not expanded_path.startswith(repo_root) else expanded_path
+        if script.startswith("~/.claude/scripts/"):
+            # ~/.claude/scripts/ paths are sourced from the repo's scripts/ directory.
+            # Resolve against the repo (not the live installed location) so this check
+            # is hermetic — independent of whether install.sh has been run.
+            script_name = os.path.basename(script)
+            full_path = os.path.join(repo_root, "scripts", script_name)
+        elif os.path.isabs(script):
+            # Absolute paths are a contract violation for a hermetic repo lint —
+            # they would silently consult the live filesystem (the bug class fixed above).
+            invalid.append(script)
+            continue
+        else:
+            full_path = os.path.join(repo_root, script)
 
         if not os.path.exists(full_path):
             missing.append(script)
+
+    if invalid:
+        print(f"ERROR [lint-orphan-scripts]: {len(invalid)} absolute path reference(s) in settings.json hooks (must be repo-relative or ~/.claude/scripts/):", file=sys.stderr)
+        for script in invalid:
+            print(f"  - {script}", file=sys.stderr)
 
     if missing:
         print(f"ERROR [lint-orphan-scripts]: {len(missing)} referenced script(s) missing from repo:", file=sys.stderr)
         for script in missing:
             print(f"  - {script}", file=sys.stderr)
+
+    if invalid or missing:
         return 1
 
     return 0

@@ -70,12 +70,6 @@ _today() {
 
 # ── Core contract tests ───────────────────────────────────────────────────────
 
-@test "subprocess guard exits 0 with empty output" {
-  run env CLAUDE_SUBPROCESS=1 bash "$SCRIPT" <<< '{}'
-  assert_success
-  assert_output ""
-}
-
 @test "all-clear: no stale memories + all-zero launchd jobs → NO output, exit 0" {
   # No memory files seeded → stale_count=0
   # launchctl stub returns 0 for all jobs

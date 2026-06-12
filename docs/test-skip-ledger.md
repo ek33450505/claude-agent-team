@@ -14,20 +14,27 @@ A skip without a recorded rationale is indistinguishable from lost coverage — 
 | `cast-swarm-bootstrap.bats` / `cast-swarm-teardown.bats` | Skipped in GitHub CI job when `python3 -c "import yaml"` failed (pyyaml missing) | Added `python3-yaml` to the CI job's apt install; both test suites now run (8/8 pass, 0 skips) |
 | `pre-commit.bats` | 4 tests had dead `\|\| skip "Hook output mismatch"` guard that would silently skip on regression | Converted to real `assert_output --partial` assertions (15/15 pass, 0 skips) |
 
+### 2026-06-11 batch (Phase 8 test-suite lean)
+
+| File | Issue | Resolution |
+|------|-------|-----------|
+| `tests/scripts/cast-memory-backup.bats` | Row removed — file was deleted in v7.5 Phase 6 when the stub was removed (prerequisite for un-skip satisfied; tests archived with the feature) | Ledger entry removed; test file no longer exists |
+| `tests/skills/deep-research.bats` | New conditional skip added for the network-free deep-research regression harness (PR #133 honesty fix) | Requires `node` for harness execution; skip at line 19 degrades gracefully in non-Node environments; runs in GitHub CI (node included) and on development machines with Node installed |
+
 ---
 
 ## Remaining Intentional Skips
 
 | File | # Skips | Reason | Category | Un-skip Condition |
 |------|---------|--------|----------|------------------|
-| `tests/scripts/cast-memory-backup.bats` | 8 | Script deprecated in §3.9 (replaced by `cast-snapshot.py` + `cast-overlay-sync.sh`); now a no-op stub | Permanent (deprecated feature) | Won't un-skip — delete tests if/when the stub is removed |
-| `tests/cast-keychain.bats` | up to 2 | macOS Keychain is macOS-only; write tests skip on non-Darwin or when Keychain writes are unavailable/headless (timed out) | Environment (platform) | Runs automatically on an interactive macOS with Keychain access |
+| `tests/cast-keychain.bats` | 2 | macOS Keychain is macOS-only; write tests skip on non-Darwin or when Keychain writes are unavailable/headless (timed out) | Environment (platform) | Runs automatically on an interactive macOS with Keychain access |
 | `tests/install-personal.bats` | 2 | `agents/personal/` archived in v7 Phase 4.5 (portfolio-sync agent removed); directory does not exist | Conditional (archived feature) | Un-skip when a personal-overlay agent is re-added to the codebase |
 | `tests/agents/effort-frontmatter.bats` | 1 | Same as above — `agents/personal/` absent | Conditional (archived feature) | Same as above |
 | `tests/cast-encrypt.bats` | 2 | `age` binary not installed in CI environment | Environment (optional dependency) | Install `age` in CI and confirm 2 tests pass (not yet verified); or leave as honest optional-dep skip |
-| `tests/test_cast_memory_persistence.bats` | 1 (setup-gated) | SQLite FTS5 module not available | Environment (sqlite build) | Runs where sqlite3 has FTS5 (macOS system sqlite, Ubuntu apt sqlite both include it); CI runners may lack FTS5 in older sqlite versions |
+| `tests/test_cast_memory_persistence.bats` | 1 | SQLite FTS5 module not available | Environment (sqlite build) | Runs where sqlite3 has FTS5 (macOS system sqlite, Ubuntu apt sqlite both include it); CI runners may lack FTS5 in older sqlite versions |
 | `tests/cast-session-start-journal.bats` | 1 | Requires actual journal entries in `~/Documents/Claude/` directory | Environment (real vault) | Could be un-skipped by seeding a fixture vault under the temp HOME (not yet implemented) |
 | `tests/cast-precompact-guard.bats` | 1 | Guards bash 3.2 compat code path; skips if `/bin/bash` unavailable | Environment (interpreter) | Runs wherever `/bin/bash` exists (virtually all macOS and Linux systems) |
+| `tests/skills/deep-research.bats` | 1 | Network-free regression harness for deep-research skill (PR #133); requires `node` binary | Environment (optional dependency) | Runs where `node` is installed (GitHub CI runners include it; development machines with Node) |
 
 ---
 

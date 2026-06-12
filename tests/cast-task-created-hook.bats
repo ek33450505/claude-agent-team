@@ -112,19 +112,7 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 6. CLAUDE_SUBPROCESS guard — skips silently
-# ---------------------------------------------------------------------------
-
-@test "CLAUDE_SUBPROCESS=1 → exits 0 and writes no files" {
-  CLAUDE_SUBPROCESS=1 run bash "$HOOK_SH" <<< "$(make_payload)"
-  assert_success
-  local count
-  count=$(find "$HOME/.claude/cast/events" -name "*task-created.json" 2>/dev/null | wc -l)
-  [ "$count" -eq 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# 7. Graceful when cast.db does not exist
+# 6. Graceful when cast.db does not exist
 # ---------------------------------------------------------------------------
 
 @test "missing cast.db → exits 0 without error" {

@@ -39,14 +39,54 @@ print(json.dumps({
 setup() {
   export ORIG_HOME="$HOME"
   export HOME="$(realpath "$(mktemp -d)")"
+  # Sentinel: teardown() will refuse to delete any HOME that lacks this marker
+  touch "$HOME/.cast-test-home"
   mkdir -p "$HOME/.claude/logs"
   unset CLAUDE_SUBPROCESS
   unset CAST_HEADLESS
 }
 
 teardown() {
-  rm -rf "$HOME"
+  local target="$HOME"
+
+  # Always restore HOME first so later tests are not broken even if guard fires
   export HOME="$ORIG_HOME"
+
+  # Guard (a): sentinel marker must exist
+  if [[ ! -f "$target/.cast-test-home" ]]; then
+    echo "FATAL [teardown cast-headless-guard]: refusing to delete '$target' — not a verified test fixture (missing .cast-test-home)" >&2
+    return 1
+  fi
+
+  # Guard (b): path must begin with a known temp prefix
+  local is_tmp=0
+  case "$target" in
+    /tmp/*)                  is_tmp=1 ;;
+    /private/tmp/*)          is_tmp=1 ;;
+    /var/folders/*)          is_tmp=1 ;;
+    /private/var/folders/*)  is_tmp=1 ;;
+  esac
+  if [[ "$is_tmp" -eq 0 ]]; then
+    echo "FATAL [teardown cast-headless-guard]: refusing to delete '$target' — not a verified test fixture (not under /tmp, /private/tmp, or /var/folders)" >&2
+    return 1
+  fi
+
+  # Guard (c): must not equal the invoking user's real home
+  local real_home="${ORIG_HOME:-}"
+  if [[ -n "$real_home" && "$target" = "$real_home" ]]; then
+    echo "FATAL [teardown cast-headless-guard]: refusing to delete '$target' — matches ORIG_HOME (real user home)" >&2
+    return 1
+  fi
+  if [[ -z "$real_home" ]]; then
+    case "$target" in
+      /Users/*)
+        echo "FATAL [teardown cast-headless-guard]: refusing to delete '$target' — looks like a real home directory (ORIG_HOME unset)" >&2
+        return 1
+        ;;
+    esac
+  fi
+
+  rm -rf "$target"
 }
 
 # ---------------------------------------------------------------------------
@@ -64,7 +104,7 @@ teardown() {
   run bash "$HOOK_SH" <<< "$(make_ask_user_payload)"
   assert_success
   # The hook should output JSON allowing the tool
-  echo "$output" | grep -q "permissionDecision" || true
+  echo "$output" | grep -q "permissionDecision"
 }
 
 @test "non-AskUserQuestion tool in interactive mode → exits 0" {
@@ -192,4 +232,46 @@ teardown() {
   CAST_HEADLESS=0 run bash "$HOOK_SH" <<< "$(make_ask_user_payload)"
   assert_success
   echo "$output" | grep -q "updatedInput" || true
+}
+
+# ---------------------------------------------------------------------------
+# Test 8: Ported unique assertions from tests/hooks/cast-headless-guard.bats
+# ---------------------------------------------------------------------------
+
+@test "non-AskUserQuestion tool → exits 0 with empty output" {
+  run bash "$HOOK_SH" <<< "$(make_other_tool_payload "Bash")"
+  assert_success
+  assert_output ""
+}
+
+@test "AskUserQuestion → JSON response has required fields and permissionDecision=allow" {
+  CAST_HEADLESS=1 run bash "$HOOK_SH" <<< "$(make_ask_user_payload)"
+  assert_success
+  python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+assert 'updatedInput' in d, 'missing updatedInput'
+assert 'answer' in d['updatedInput'], 'missing answer'
+assert 'permissionDecision' in d, 'missing permissionDecision'
+assert d['permissionDecision'] == 'allow', f'expected allow, got {d[\"permissionDecision\"]}'
+print('ok')
+" "$output"
+}
+
+@test "AskUserQuestion → answer text instructs proceed with defaults" {
+  CAST_HEADLESS=1 run bash "$HOOK_SH" <<< "$(make_ask_user_payload "Use default config?")"
+  assert_success
+  python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+answer = d.get('updatedInput', {}).get('answer', '')
+assert len(answer) > 0, 'answer is empty'
+assert 'default' in answer.lower() or 'proceed' in answer.lower(), f'unexpected answer: {answer}'
+print('ok')
+" "$output"
+}
+
+@test "CLAUDE_SUBPROCESS=1 with AskUserQuestion → writes no log" {
+  CLAUDE_SUBPROCESS=1 bash "$HOOK_SH" <<< "$(make_ask_user_payload "Do something?")"
+  [[ ! -f "$HOME/.claude/logs/headless-stalls.log" ]]
 }

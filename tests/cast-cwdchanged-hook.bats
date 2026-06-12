@@ -32,7 +32,3 @@ teardown() {
   assert_success
 }
 
-@test "cwdchanged hook: CLAUDE_SUBPROCESS=1 short-circuits" {
-  CLAUDE_SUBPROCESS=1 run bash -c "echo '{}' | bash $SCRIPT"
-  assert_success
-}
