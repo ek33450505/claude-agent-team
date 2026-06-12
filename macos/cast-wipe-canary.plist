@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cast.wipe-canary</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HOME__/.claude/scripts/cast-wipe-canary.sh</string>
+  </array>
+
+  <!-- Fire when ~/.claude is created, modified, or deleted.
+       The script exits 0 immediately when ~/.claude exists (fast path).
+       Forensic capture only runs when ~/.claude is absent. -->
+  <key>WatchPaths</key>
+  <array>
+    <string>__HOME__/.claude</string>
+  </array>
+
+  <!-- Do not run on agent load — only on WatchPaths events -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Launchd stdout/stderr: goes to ~/.claude/logs when the dir is present.
+       When ~/.claude is wiped, launchd silently drops these log lines, which is
+       acceptable — the canary writes forensic data to CAST_INCIDENT_DIR outside
+       the blast radius. -->
+  <key>StandardOutPath</key>
+  <string>__HOME__/.claude/logs/wipe-canary-launchd.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.claude/logs/wipe-canary-launchd.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+  </dict>
+</dict>
+</plist>
