@@ -62,22 +62,154 @@ _lint_python_cold_starts() {
   return $failed
 }
 
-# Lint 2: SQL injection detector — flag scripts that interpolate env vars into sqlite3 strings
+# Lint 2: SQL injection detector — flag scripts that interpolate env vars into sqlite3 strings.
+# Covers: sqlite3 and cast_sqlite (wrapper), braced ${var} and bare $var interpolation,
+# inline SQL strings, unquoted heredoc bodies, and both scripts/*.sh and bin/cast.
+# Guard: interpolation wrapped in SQL single quotes ('$var' or '${var}') is considered safe.
+# Per-invocation judgment: each sqlite3/cast_sqlite call is evaluated independently.
 _lint_sql_injection() {
   local failed=0
-  local script
-  for script in scripts/*.sh; do
-    [[ -f "$script" ]] || continue
-    # Pattern: sqlite3 with ${...} interpolation; check if any guard exists in same file
-    if grep -q 'sqlite3.*\${' "$script" 2>/dev/null; then
-      # Check for a guard pattern (parameterized query, escaping, or explicit var binding)
-      # Guards: single quotes around vars, $() with processing, or PRAGMA ignore_check_constraint
-      if ! grep -q '\$([^)]*"' "$script" 2>/dev/null && \
-         ! grep -q "'\$" "$script" 2>/dev/null && \
-         ! grep -q 'PRAGMA.*constraint' "$script" 2>/dev/null; then
-        echo "ERROR [lint-sql-injection]: $script interpolates env vars into sqlite3 (potential SQL injection). Use parameterized queries or wrap in single quotes."
-        failed=1
-      fi
+  local file
+
+  # Build the list of files to scan: scripts/*.sh + bin/cast
+  local scan_files=()
+  for f in scripts/*.sh; do
+    [[ -f "$f" ]] && scan_files+=("$f")
+  done
+  [[ -f "bin/cast" ]] && scan_files+=("bin/cast")
+
+  for file in "${scan_files[@]}"; do
+    # Use awk for stateful multi-line scanning.
+    # Rules:
+    #   1. Inline SQL: a (sqlite3|cast_sqlite) line has a double-quoted SQL argument
+    #      containing $var or ${var} outside SQL single-quoted context.
+    #      The db-path argument ("$DB" etc.) is skipped to avoid false positives.
+    #   2. Unquoted heredoc: a (sqlite3|cast_sqlite) call opens an unquoted heredoc
+    #      (<<MARKER, not <<'MARKER'). Within that body, $var or ${var} outside SQL
+    #      single-quoted context is flagged.
+    # A $ is "inside SQL single quotes" when scanning from the SQL start position,
+    # the count of single-quote chars seen so far is odd.
+    local violations
+    violations=$(awk '
+      # Returns position of closing " of a double-quoted string starting at open_pos.
+      function find_dq_close(line, open_pos,    i, len) {
+        len = length(line)
+        for (i = open_pos + 1; i <= len; i++) {
+          if (substr(line, i, 1) == "\"") return i
+        }
+        return 0
+      }
+
+      # Returns 1 if line[start_col..end_col] contains $var or ${var} outside SQL
+      # single-quoted context. Single-quote depth is tracked from start_col onward.
+      function has_unsafe_dollar(line, start_col, end_col,    i, c, sq_count, nc) {
+        sq_count = 0
+        for (i = start_col; i <= end_col; i++) {
+          c = substr(line, i, 1)
+          if (c == "'"'"'") {
+            sq_count++
+          } else if (c == "$") {
+            if (sq_count % 2 == 1) continue  # inside SQL single-quoted string — safe
+            nc = substr(line, i+1, 1)
+            if (nc ~ /[a-zA-Z_{]/) return 1   # bare $var or ${var} outside SQL quotes
+          }
+        }
+        return 0
+      }
+
+      # Find the SQL argument in an inline sqlite3/cast_sqlite call from cmd_end.
+      # Skips db-path args ("$DB", "${DB_PATH}", "~/path") and dot-cmd args (".timeout").
+      # Returns the opening " position of the SQL argument, or 0 if not found.
+      # When skipping an arg, the entire "..." group is consumed to avoid mis-parsing.
+      function find_sql_arg(line, cmd_end,    i, c, len, in_dq, arg_start, arg_char, skip_arg) {
+        len = length(line)
+        in_dq = 0; skip_arg = 0; i = cmd_end
+        while (i <= len) {
+          c = substr(line, i, 1)
+          if (!in_dq) {
+            if (c == "\"") {
+              in_dq = 1; arg_start = i
+              arg_char = substr(line, i+1, 1)
+              # Determine if this arg should be skipped (db path, flag value, indirection)
+              if (arg_char ~ /[$~\/]/ || arg_char == ".") {
+                skip_arg = 1  # consume this "..." group but do not return it
+              } else {
+                skip_arg = 0  # candidate SQL arg
+              }
+            }
+          } else {
+            if (c == "\"") {
+              in_dq = 0
+              if (!skip_arg) return arg_start  # this was a SQL arg
+              # else: continue scanning for the next "..." group
+            }
+          }
+          i++
+        }
+        return 0
+      }
+
+      BEGIN { in_heredoc = 0; heredoc_marker = ""; heredoc_safe = 0; lineno = 0 }
+
+      {
+        lineno++
+        line = $0
+
+        # --- Heredoc body processing ---
+        if (in_heredoc) {
+          stripped = line
+          gsub(/^[[:space:]]+/, "", stripped); gsub(/[[:space:]]+$/, "", stripped)
+          if (stripped == heredoc_marker) { in_heredoc = 0; heredoc_marker = ""; heredoc_safe = 0; next }
+          if (!heredoc_safe) {
+            if (has_unsafe_dollar(line, 1, length(line))) {
+              print FILENAME ":" lineno ": heredoc body has unquoted $-interpolation outside SQL single quotes: " line
+            }
+          }
+          next
+        }
+
+        # --- Only process lines with a sqlite3 or cast_sqlite invocation ---
+        if (line !~ /(sqlite3|cast_sqlite)/) next
+
+        # Skip existence checks (command -v sqlite3 / if sqlite3 ...)
+        if (line ~ /command -v sqlite3/) next
+
+        # --- Detect heredoc opening ---
+        if (match(line, /<<[[:space:]]*/)) {
+          heredoc_start = RSTART + RLENGTH
+          marker_candidate = substr(line, heredoc_start)
+          gsub(/[[:space:]].*$/, "", marker_candidate)
+          if (marker_candidate != "") {
+            if (marker_candidate ~ /^'"'"'.*'"'"'$/ || marker_candidate ~ /^".*"$/) {
+              in_heredoc = 1; m = marker_candidate; gsub(/['"'"'"]/, "", m)
+              heredoc_marker = m; heredoc_safe = 1
+            } else {
+              in_heredoc = 1; heredoc_marker = marker_candidate; heredoc_safe = 0
+            }
+          }
+          next
+        }
+
+        # --- Inline SQL check ---
+        if (match(line, /(sqlite3|cast_sqlite)/)) {
+          cmd_end = RSTART + RLENGTH
+          sql_pos = find_sql_arg(line, cmd_end)
+          if (sql_pos == 0) next
+          sql_end = find_dq_close(line, sql_pos)
+          if (sql_end == 0) sql_end = length(line)
+          if (has_unsafe_dollar(line, sql_pos + 1, sql_end - 1)) {
+            print FILENAME ":" lineno ": inline SQL has unquoted $-interpolation outside SQL single quotes: " line
+          }
+        }
+      }
+    ' "$file" 2>/dev/null)
+
+    if [[ -n "$violations" ]]; then
+      echo "ERROR [lint-sql-injection]: $file has potential SQL injection:"
+      while IFS= read -r v; do
+        echo "  $v"
+      done <<< "$violations"
+      failed=1
     fi
   done
   return $failed
