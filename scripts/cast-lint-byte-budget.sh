@@ -34,7 +34,11 @@ if [[ ! -d "${RULES_DIR}" ]]; then
 fi
 
 # Collect matching files (.md and .md.template)
-mapfile -t FILES < <(find "${RULES_DIR}" -maxdepth 1 -type f \( -name "*.md" -o -name "*.md.template" \) | sort)
+# bash-3.2 compatible (macOS CI): mapfile/readarray are bash-4+ only
+FILES=()
+while IFS= read -r f; do
+  FILES+=("$f")
+done < <(find "${RULES_DIR}" -maxdepth 1 -type f \( -name "*.md" -o -name "*.md.template" \) | sort)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "WARNING [lint-byte-budget]: no *.md or *.md.template files found in ${RULES_DIR}" >&2
