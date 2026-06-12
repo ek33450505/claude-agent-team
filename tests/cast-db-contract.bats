@@ -21,13 +21,12 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CONTRACT_SCRIPT="$REPO_DIR/scripts/cast-db-contract.py"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ── Test 1: --json emits valid JSON ─────────────────────────────────────────

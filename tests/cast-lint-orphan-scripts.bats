@@ -21,8 +21,8 @@ LINT_PY="$REPO_DIR/scripts/cast-lint-orphan-scripts.py"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"   # isolate: real ~/.claude/scripts/ must not interfere
+  load 'helpers/setup'
+  setup_temp_home  # isolate: real ~/.claude/scripts/ must not interfere
   FAKE_REPO="$(mktemp -d)"
   mkdir -p "$FAKE_REPO/scripts"
   git -C "$FAKE_REPO" init -q
@@ -32,8 +32,7 @@ setup() {
 
 teardown() {
   rm -rf "$FAKE_REPO"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

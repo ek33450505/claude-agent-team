@@ -11,8 +11,10 @@ VALID_CONFIG="$REPO_DIR/swarm-configs/fullstack-team.yml"
 
 setup() {
   command -v python3 >/dev/null && python3 -c "import yaml" 2>/dev/null || skip "pyyaml not available"
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
+  # Resolve symlinks: on macOS /var/folders -> /private/var/folders
+  HOME="$(realpath "$HOME")"; export HOME
   mkdir -p "$HOME/.claude/cast/swarms" "$HOME/.claude/logs"
 
   export TEST_DB="/tmp/test-cast-$$.db"
@@ -35,9 +37,10 @@ teardown() {
   # Only remove the temp HOME if setup() actually created it (i.e., ORIG_HOME was set).
   # If setup() called skip before setting ORIG_HOME, HOME still points at the real user
   # home and rm -rf "$HOME" would destroy the live runtime (§3.8.A root cause).
+  # Skip-before-setup leaves HOME at the real user home (§3.8.A root cause) —
+  # only tear down a temp home setup() actually created; helper guards the deletion.
   if [ -n "${ORIG_HOME:-}" ] && [ "$HOME" != "$ORIG_HOME" ]; then
-    rm -rf "$HOME"
-    export HOME="$ORIG_HOME"
+    teardown_temp_home
   fi
   # Clean up worktrees and temp git repo (TEST_GIT_REPO, not flagship).
   if [ -n "${TEST_GIT_REPO:-}" ]; then
