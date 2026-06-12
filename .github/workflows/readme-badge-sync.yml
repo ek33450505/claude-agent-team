@@ -57,6 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v5
 
@@ -71,22 +72,53 @@ jobs:
             echo "drifted=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Regenerate and push heal if drifted
+      - name: Regenerate stats if drifted
         if: steps.drift.outputs.drifted == 'true'
+        run: bash scripts/gen-cast-stats.sh
+
+      - name: Open PR to heal stats drift
+        if: steps.drift.outputs.drifted == 'true'
+        id: create-pr
+        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6.0.5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: heal cast-stats.json drift"
+          title: "chore: heal cast-stats.json drift"
+          body: |
+            Automated cast-stats.json self-heal.
+
+            Main branch detected stats drift; regenerated from `scripts/gen-cast-stats.sh`.
+
+            **Note:** PRs created by GitHub Actions do not trigger CI workflows on the PR itself.
+            This is acceptable for the 1-file generated artifact. The heal PR replaces the old
+            direct push which branch protection (GH013) now rejects.
+          branch: chore/heal-cast-stats
+          delete-branch: true
+          base: main
+          labels: |
+            automated
+
+      - name: Auto-merge heal PR or squash on fallback
+        if: steps.drift.outputs.drifted == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Regenerate the file
-          bash scripts/gen-cast-stats.sh
+          PR_NUMBER="${{ steps.create-pr.outputs.pull-request-number }}"
 
-          # Configure git bot identity
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Attempt auto-merge first (requires --auto flag and branch protection configured)
+          if gh pr merge "$PR_NUMBER" --auto --squash 2>/dev/null; then
+            echo "✓ Heal PR auto-merge queued"
+            exit 0
+          fi
 
-          # Stage and commit
-          git add cast-stats.json
-          git commit -m "chore: regenerate cast-stats.json"
+          # Fallback: immediate squash-merge (if auto-merge not available)
+          if gh pr merge "$PR_NUMBER" --squash 2>/dev/null; then
+            echo "✓ Heal PR squash-merged (auto-merge not available)"
+            exit 0
+          fi
 
-          # Sync with main before push to handle concurrent pushes (e.g., sync-badges)
-          git pull --rebase origin main
-
-          # Push the heal commit
-          git push
+          # Both failed: log loudly but exit cleanly
+          # The open PR is itself a heal signal; human review is acceptable for corner cases
+          echo "⚠ Auto-merge and squash both unavailable. Heal PR remains open for review."
+          echo "   PR #$PR_NUMBER: chore/heal-cast-stats → main"
+          exit 0
