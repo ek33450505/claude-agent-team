@@ -20,6 +20,13 @@ load 'helpers/setup'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
+# Portable timestamp for touch -t: returns a YYYYMMDDHHmm string N days in the past.
+# Uses python3 (stdlib) to avoid the BSD-vs-GNU date -v/-d incompatibility.
+_backdate_timestamp() {
+  local days="${1:-4}"
+  python3 -c "import time; print(time.strftime('%Y%m%d%H%M', time.localtime(time.time() - ${days}*86400)))"
+}
+
 setup() {
   # Isolate HOME so cast-maintenance.sh sets CAST_DIR to a temp path
   setup_temp_home
@@ -47,7 +54,7 @@ teardown() {
   touch "$stale_dir/marker"
 
   # Backdate the directory mtime to 4 days ago so find -mtime +3 matches it
-  touch -t "$(date -v -4d '+%Y%m%d%H%M')" "$stale_dir"
+  touch -t "$(_backdate_timestamp 4)" "$stale_dir"
 
   CAST_MAINT_SWARM_TMP_ROOT="$scan_root" cleanup_stale_swarm_dirs
 
@@ -83,7 +90,7 @@ teardown() {
 
   stale_dir="${scan_root}/cast-swarm-launchd-$$"
   mkdir "$stale_dir"
-  touch -t "$(date -v -4d '+%Y%m%d%H%M')" "$stale_dir"
+  touch -t "$(_backdate_timestamp 4)" "$stale_dir"
 
   # Run inside an explicit strict-mode subshell; non-zero exit would fail the test
   (
