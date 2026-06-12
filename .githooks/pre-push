@@ -7,13 +7,19 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Consume git push refs from stdin ONCE at the top of the hook.
+# git passes "<local_ref> <local_sha> <remote_ref> <remote_sha>" lines via stdin.
+# Capturing here ensures every gate that needs push-ref data reads from this variable;
+# subprocesses that also need refs (pre-push-ci-check.sh) receive them via a pipe.
+_PUSH_STDIN="$(cat)"
+
 # Run ubuntu check (non-blocking; exits 0 if Docker is unavailable)
 bash "$REPO_ROOT/scripts/pre-push-ubuntu-check.sh" || true
 
 # PII / secret gate — fail fast before spending time on tests
 if [ "${CAST_SKIP_PII_CHECK:-0}" != "1" ]; then
   echo "[CAST pre-push] Running PII/secret gate..."
-  if ! bash "$REPO_ROOT/scripts/pre-push-ci-check.sh"; then
+  if ! printf '%s' "$_PUSH_STDIN" | bash "$REPO_ROOT/scripts/pre-push-ci-check.sh"; then
     echo "ERROR: PII/secret check failed. Fix the issues above and try again." >&2
     echo "To skip this gate, set: CAST_SKIP_PII_CHECK=1 git push" >&2
     exit 1
@@ -22,16 +28,71 @@ else
   echo "[CAST pre-push] Skipping PII check (CAST_SKIP_PII_CHECK=1)" >&2
 fi
 
-# Stats-drift gate — block push when cast-stats.json is out of sync with the repo
+# Stats-drift gate — validate the PUSHED tree (not the working tree) against cast-stats.json.
+# Reads push refs from $_PUSH_STDIN to identify the SHAs being sent to the remote.
+# For each unique non-deletion SHA a throwaway detached worktree is created so that
+# gen-cast-stats.sh --check derives all stats from the exact committed tree git push
+# will send.  Working-tree state (regenerated-but-uncommitted files, dirty index) is
+# completely invisible to the check.
 if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
   echo "[CAST pre-push] Checking cast-stats.json drift..."
-  if ! bash "$REPO_ROOT/scripts/gen-cast-stats.sh" --check; then
-    echo "" >&2
-    echo "ERROR: cast-stats.json is out of sync. Regenerate and commit it:" >&2
-    echo "  bash scripts/gen-cast-stats.sh && git add cast-stats.json && git commit --amend --no-edit" >&2
-    echo "To skip this gate: CAST_SKIP_STATS_PUSH=1 git push" >&2
-    exit 1
+
+  # Extract unique non-deletion local SHAs from push refs.
+  # Deletion pushes (local_sha = 40 zeros) are skipped — nothing is being pushed.
+  # Bash 3.2 compatible: accumulate SHAs in a space-separated string; dedup via case.
+  _ZERO_SHA="0000000000000000000000000000000000000000"
+  _STATS_SHAS=""
+  if [ -n "${_PUSH_STDIN:-}" ]; then
+    while IFS=' ' read -r _lref _lsha _rref _rsha; do
+      [ -z "${_lsha:-}" ] && continue
+      [ "$_lsha" = "$_ZERO_SHA" ] && continue
+      case "$_STATS_SHAS" in
+        *"$_lsha"*) ;;
+        *) _STATS_SHAS="${_STATS_SHAS}${_lsha} " ;;
+      esac
+    done <<< "$_PUSH_STDIN"
   fi
+
+  # Fall back to HEAD when invoked manually (no push refs on stdin).
+  if [ -z "${_STATS_SHAS:-}" ]; then
+    _STATS_SHAS="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  fi
+
+  # For each pushed SHA spin up a throwaway detached worktree and run
+  # gen-cast-stats.sh --check from that exact committed tree.
+  _STATS_WT_BASE=""
+  _stats_wt_cleanup() {
+    if [ -n "${_STATS_WT_BASE:-}" ]; then
+      git -C "$REPO_ROOT" worktree remove --force "${_STATS_WT_BASE}/wt" 2>/dev/null || true
+      git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+      rm -rf "${_STATS_WT_BASE}" 2>/dev/null || true
+      _STATS_WT_BASE=""
+    fi
+  }
+  # shellcheck disable=SC2064
+  trap '_stats_wt_cleanup' EXIT
+
+  # SC2086: intentional word-split on space-separated SHA string (bash 3.2, no mapfile).
+  # shellcheck disable=SC2086
+  for _sha in $_STATS_SHAS; do
+    _STATS_WT_BASE="$(mktemp -d)"
+    if ! git -C "$REPO_ROOT" worktree add --detach "${_STATS_WT_BASE}/wt" "$_sha" 2>/dev/null; then
+      echo "ERROR: Could not create stats-check worktree for ${_sha}" >&2
+      exit 1
+    fi
+    if ! bash "${_STATS_WT_BASE}/wt/scripts/gen-cast-stats.sh" --check; then
+      _stats_wt_cleanup
+      trap - EXIT
+      echo "" >&2
+      echo "ERROR: cast-stats.json is out of sync. Regenerate and commit it:" >&2
+      echo "  bash scripts/gen-cast-stats.sh && git add cast-stats.json && git commit --amend --no-edit" >&2
+      echo "To skip this gate: CAST_SKIP_STATS_PUSH=1 git push" >&2
+      exit 1
+    fi
+    _stats_wt_cleanup
+  done
+  trap - EXIT
+
   echo "[CAST pre-push] cast-stats.json in sync ✓"
 else
   echo "[CAST pre-push] Skipping stats-drift check (CAST_SKIP_STATS_PUSH=1)" >&2
