@@ -196,11 +196,13 @@ json_field() {
 
 @test "multiple events: latest status reflected in derived state" {
   # Emit a sequence: created -> claimed -> completed
-  cast_emit_event "task_created"   "orchestrator" "multi-1" "" "Created"   ""     ""
-  sleep 1  # ensure timestamps differ so sort order is deterministic
-  cast_emit_event "task_claimed"   "planner"      "multi-1" "" "Claimed"   ""     ""
-  sleep 1
-  cast_emit_event "task_completed" "planner"      "multi-1" "" "Completed" "DONE" ""
+  # Injected timestamps ensure strictly-increasing filename sort order without sleep
+  CAST_EVENT_TS="20260101T000001Z" CAST_EVENT_TS_ISO="2026-01-01T00:00:01Z" \
+    cast_emit_event "task_created"   "orchestrator" "multi-1" "" "Created"   ""     ""
+  CAST_EVENT_TS="20260101T000002Z" CAST_EVENT_TS_ISO="2026-01-01T00:00:02Z" \
+    cast_emit_event "task_claimed"   "planner"      "multi-1" "" "Claimed"   ""     ""
+  CAST_EVENT_TS="20260101T000003Z" CAST_EVENT_TS_ISO="2026-01-01T00:00:03Z" \
+    cast_emit_event "task_completed" "planner"      "multi-1" "" "Completed" "DONE" ""
   cast_derive_state "multi-1"
   local status
   status=$(json_field "$CAST_STATE_DIR/multi-1.json" "status")
