@@ -26,7 +26,7 @@ setup() {
   FAKE_REPO="$(mktemp -d)"
   mkdir -p "$FAKE_REPO/scripts"
   git -C "$FAKE_REPO" init -q
-  git -C "$FAKE_REPO" config user.email "test@cast.local"
+  git -C "$FAKE_REPO" config user.email "test@example.com"
   git -C "$FAKE_REPO" config user.name "CAST Test"
 }
 
