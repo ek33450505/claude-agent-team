@@ -459,6 +459,26 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
             warn "  launchctl load failed for $PLIST_DEST — verify manually"
         fi
     fi
+
+    # Install cast-litestream.plist — continuous DB replication daemon (opt-in).
+    # Only wired if the plist source exists; litestream itself is optional.
+    if [ -f "$SCRIPT_DIR/macos/cast-litestream.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.litestream.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-litestream.plist" > "$PLIST_DEST"
+
+        # Idempotently (re)load the plist
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.litestream)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Best-effort: run litestream setup (advisory — non-fatal if litestream not installed).
+    if [ -f "$CLAUDE_DIR/scripts/cast-litestream-setup.sh" ]; then
+        bash "$CLAUDE_DIR/scripts/cast-litestream-setup.sh" || true
+    fi
 fi
 
 # --- Wire git hooks (pre-commit, pre-push, post-merge auto-install) ---
