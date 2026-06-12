@@ -461,9 +461,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     fi
 
     # Install cast-litestream.plist — continuous DB replication daemon (opt-in).
-    # Only wired if the plist source exists; litestream itself is optional.
-    if [ -f "$SCRIPT_DIR/macos/cast-litestream.plist" ]; then
-        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.litestream.plist"
+    # Gated on litestream being installed; idempotently removes the plist when absent.
+    PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.litestream.plist"
+    if command -v litestream >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/macos/cast-litestream.plist" ]; then
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-litestream.plist" > "$PLIST_DEST"
 
         # Idempotently (re)load the plist
@@ -473,6 +473,12 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         else
             warn "  launchctl load failed for $PLIST_DEST — verify manually"
         fi
+    else
+        info "  litestream not installed — replication daemon not registered (opt-in: brew install benbjohnson/litestream/litestream)"
+        # Idempotent cleanup: remove any previously installed plist so the daemon
+        # does not run on a machine that no longer has litestream.
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        rm -f "$PLIST_DEST"
     fi
 
     # Best-effort: run litestream setup (advisory — non-fatal if litestream not installed).

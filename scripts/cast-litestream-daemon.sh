@@ -4,8 +4,10 @@
 # Resolves the litestream binary (Homebrew-aware PATH), then execs
 # `litestream replicate -config <config>`.
 #
-# Missing binary or config → log one line to stderr + exit 1.
-# launchd KeepAlive handles back-off / retry.
+# Preflight failures (missing binary or missing config) → log one advisory line
+# and exit 0 (clean exit = launchd stops retrying since KeepAlive is dict form
+# with SuccessfulExit=false). Real litestream crashes still exit non-zero and
+# will trigger a restart.
 #
 # Environment:
 #   CAST_LITESTREAM_ROOT  — root for AppSupport layout (default: ~/Library/Application Support/cast)
@@ -29,14 +31,14 @@ CONFIG_FILE="${CAST_LITESTREAM_ROOT}/litestream.yml"
 # ---- Resolve litestream binary -------------------------------------------
 LITESTREAM_BIN="$(command -v litestream 2>/dev/null || true)"
 if [[ -z "${LITESTREAM_BIN}" ]]; then
-  echo "ERROR [cast-litestream-daemon]: litestream binary not found in PATH. Install via Homebrew." >&2
-  exit 1
+  echo "ADVISORY [cast-litestream-daemon]: litestream binary not found in PATH — install via: brew install benbjohnson/litestream/litestream" >&2
+  exit 0
 fi
 
 # ---- Verify config exists -------------------------------------------------
 if [[ ! -f "${CONFIG_FILE}" ]]; then
-  echo "ERROR [cast-litestream-daemon]: config not found at ${CONFIG_FILE}. Run cast-litestream-setup.sh first." >&2
-  exit 1
+  echo "ADVISORY [cast-litestream-daemon]: config not found at ${CONFIG_FILE} — run: bash scripts/cast-litestream-setup.sh" >&2
+  exit 0
 fi
 
 # ---- Exec (replace this shell with litestream) ----------------------------

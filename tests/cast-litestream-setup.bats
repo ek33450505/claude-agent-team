@@ -150,9 +150,10 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# 7. daemon: missing litestream binary → error message + exit 1
+# 7. daemon: missing litestream binary → advisory message + exit 0 (clean exit
+#    prevents launchd KeepAlive restart loop on machines without litestream)
 # ---------------------------------------------------------------------------
-@test "daemon: missing litestream binary exits 1 with error message" {
+@test "daemon: missing litestream binary exits 0 with advisory message" {
   # Override the PATH prefix the daemon prepends so it resolves to an empty
   # test-owned dir that contains no litestream binary. Combined with a safe
   # system PATH, this guarantees litestream cannot be found.
@@ -164,20 +165,32 @@ teardown() {
     PATH="$safe_path" \
     CAST_LITESTREAM_PATH_PREFIX="$empty_prefix" \
     bash "$DAEMON_SCRIPT"
-  assert_failure
-  assert_output --partial "ERROR"
+  assert_success
+  assert_output --partial "ADVISORY"
   assert_output --partial "not found"
 }
 
 # ---------------------------------------------------------------------------
-# 8. daemon: binary present but config missing → error message + exit 1
+# 8. daemon: binary present but config missing → advisory message + exit 0
+#    (clean exit prevents launchd restart loop before setup.sh is run)
 # ---------------------------------------------------------------------------
-@test "daemon: config missing exits 1 with error message" {
+@test "daemon: config missing exits 0 with advisory message" {
   # litestream is available (fake binary in PATH) but config does not exist
   run bash "$DAEMON_SCRIPT"
-  assert_failure
-  assert_output --partial "ERROR"
+  assert_success
+  assert_output --partial "ADVISORY"
   assert_output --partial "config not found"
+}
+
+# ---------------------------------------------------------------------------
+# 11. plist KeepAlive uses dict form (SuccessfulExit=false, not bare <true/>)
+# ---------------------------------------------------------------------------
+@test "plist: KeepAlive uses SuccessfulExit dict form" {
+  local plist="${REPO_DIR}/macos/cast-litestream.plist"
+  [ -f "$plist" ] || skip "plist source not present in this checkout"
+  grep -q "SuccessfulExit" "$plist"
+  # Ensure the bare <true/> form for KeepAlive is NOT present (replaced by dict)
+  ! grep -q "<key>KeepAlive</key>[[:space:]]*<true/>" "$plist"
 }
 
 # ---------------------------------------------------------------------------

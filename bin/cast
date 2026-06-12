@@ -2022,15 +2022,22 @@ except Exception:
     printf "%b Litestream: installed but config missing — run: bash scripts/cast-litestream-setup.sh\n" "$WARN"
   else
     # Daemon status — macOS-only via launchctl; degrade gracefully on Linux/CI
+    local _daemon_state="unknown"
     if command -v launchctl >/dev/null 2>&1; then
-      if ! launchctl list com.cast.litestream >/dev/null 2>&1; then
+      if launchctl list com.cast.litestream >/dev/null 2>&1; then
+        _daemon_state="loaded"
+      else
+        _daemon_state="not_loaded"
         printf "%b Litestream: daemon not loaded (check ~/Library/LaunchAgents/com.cast.litestream.plist)\n" "$WARN"
       fi
     else
       printf "%b Litestream: daemon check skipped (launchctl not available)\n" "$INFO"
     fi
     # Replica directory presence + freshness
-    if [[ ! -d "$_ls_replica" ]] || [[ -z "$(ls -A "$_ls_replica" 2>/dev/null)" ]]; then
+    # Use find to exclude hidden files (.DS_Store etc) when probing for real content
+    local _has_real_files
+    _has_real_files="$(find "$_ls_replica" -type f ! -name '.*' -print -quit 2>/dev/null || true)"
+    if [[ ! -d "$_ls_replica" ]] || [[ -z "$_has_real_files" ]]; then
       printf "%b Litestream: replica dir missing or empty (%s)\n" "$WARN" "$_ls_replica"
     else
       local _ls_lag_s="-1"
@@ -2042,7 +2049,8 @@ try:
     newest = max(
         (os.path.getmtime(os.path.join(root, fn))
          for root, _dirs, files in os.walk(replica_dir)
-         for fn in files),
+         for fn in files
+         if not fn.startswith('.')),
         default=None
     )
     if newest is None:
@@ -2060,7 +2068,13 @@ PYEOF
       elif [[ "${_ls_lag_s}" -gt 3600 ]]; then
         printf "%b Litestream: replica stale — lag %ds (>1h behind cast.db)\n" "$WARN" "${_ls_lag_s}"
       else
-        printf "%b Litestream: replica fresh (lag %ds)\n" "$OK" "${_ls_lag_s}"
+        # Fresh replica — output depends on daemon state
+        if [[ "$_daemon_state" == "not_loaded" ]]; then
+          printf "%b Litestream: replica present (lag %ds) but daemon not loaded — replication will go stale\n" "$WARN" "${_ls_lag_s}"
+        else
+          # loaded or unknown — freshness evidence is sufficient for OK
+          printf "%b Litestream: replica fresh (lag %ds)\n" "$OK" "${_ls_lag_s}"
+        fi
       fi
     fi
   fi

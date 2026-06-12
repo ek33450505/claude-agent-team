@@ -15,7 +15,10 @@
   <true/>
 
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
 
   <key>StandardOutPath</key>
   <string>__HOME__/Library/Application Support/cast/logs/litestream.log</string>

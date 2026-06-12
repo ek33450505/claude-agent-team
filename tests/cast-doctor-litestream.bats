@@ -214,6 +214,39 @@ os.utime(p, (stale_time, stale_time))
 }
 
 # ---------------------------------------------------------------------------
+# 3b. Fresh replica + daemon NOT loaded → WARN about stale replication; no [ok]
+# ---------------------------------------------------------------------------
+@test "fresh replica + daemon not loaded: WARN about stale replication, no OK line" {
+  _install_fake_litestream
+  _install_fake_launchctl_not_loaded
+  _write_fake_config
+  _create_fresh_replica
+
+  _run_doctor_with_path "$FAKE_BIN"
+  # Must contain the new WARN about replication going stale
+  assert_output --partial "replica present"
+  assert_output --partial "daemon not loaded"
+  assert_output --partial "replication will go stale"
+  # Must NOT contain an [ok] Litestream line (the fresh-OK message)
+  refute_output --partial "[ok] Litestream"
+}
+
+# ---------------------------------------------------------------------------
+# 3c. Replica dir containing ONLY a .DS_Store → treated as missing/empty → WARN
+# ---------------------------------------------------------------------------
+@test "replica dir with only .DS_Store: treated as empty, prints WARN" {
+  _install_fake_litestream
+  _install_fake_launchctl_loaded
+  _write_fake_config
+  # Create replica dir with only a hidden junk file
+  mkdir -p "${CAST_LITESTREAM_ROOT}/litestream/cast-db"
+  touch "${CAST_LITESTREAM_ROOT}/litestream/cast-db/.DS_Store"
+
+  _run_doctor_with_path "$FAKE_BIN"
+  assert_output --partial "Litestream: replica dir missing or empty"
+}
+
+# ---------------------------------------------------------------------------
 # 4. No launchctl available (Linux/CI) → INFO about skipped check
 #    Skipped on macOS where /bin/launchctl is present and cannot be excluded
 #    from PATH without breaking other tool lookups.
