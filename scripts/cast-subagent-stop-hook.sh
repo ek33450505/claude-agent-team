@@ -149,24 +149,79 @@ print(json.dumps(result))
 PYEOF
 )" || true
 
-if [ -z "$PARSED" ] || echo "$PARSED" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); sys.exit(0 if 'error' not in d else 1)" 2>/dev/null; then
-  : # parsed ok or we'll fall through
-else
+# Guard: exit if PARSED is empty or signals a parse error.
+if [ -z "$PARSED" ]; then
   exit 0
 fi
 
-# Extract individual fields via env var
+# Export PARSED so the single-extraction python3 can read it.
 export CAST_STOP_PARSED="$PARSED"
 
-AGENT_NAME="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('agent_name','unknown'))" 2>/dev/null || echo "unknown")"
-SESSION_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('session_id',''))" 2>/dev/null || echo "")"
-STOP_REASON="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('stop_reason',''))" 2>/dev/null || echo "")"
-HAS_TURN_CEILING="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print('1' if d.get('has_turn_ceiling') else '0')" 2>/dev/null || echo "0")"
-AGENT_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('agent_id',''))" 2>/dev/null || echo "")"
-DURATION_MS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('duration_ms',0))" 2>/dev/null || echo 0)"
-TOOL_USES="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('tool_uses',0))" 2>/dev/null || echo 0)"
-CACHE_READ_TOKENS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('cache_read_input_tokens') or '')" 2>/dev/null || echo "")"
-CACHE_CREATE_TOKENS="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('cache_creation_input_tokens') or '')" 2>/dev/null || echo "")"
+# ── Single-python field extraction (collapses 9+ spawns into one) ─────────────
+# Emits eval-able KEY='shlex-quoted-value' lines for every field needed downstream.
+# Failure leaves all vars at safe defaults (|| assignments below); hook never aborts.
+_FIELDS_RAW="$(python3 - <<'PYEOF' 2>/dev/null
+import json, os, sys
+try:
+    import shlex
+except ImportError:
+    # shlex is stdlib; this branch is unreachable in practice
+    sys.exit(1)
+
+raw = os.environ.get('CAST_STOP_PARSED', '')
+try:
+    d = json.loads(raw)
+except Exception:
+    # Emit error sentinel so the shell guard below can exit early
+    print("CAST_FIELDS_ERROR=1")
+    sys.exit(0)
+
+if 'error' in d:
+    print("CAST_FIELDS_ERROR=1")
+    sys.exit(0)
+
+output_full   = d.get('output_full', '') or d.get('last_assistant_message', '') or ''
+response_text = d.get('response_text', '') or output_full
+
+fields = {
+    'AGENT_NAME':         d.get('agent_name', 'unknown') or 'unknown',
+    'SESSION_ID':         d.get('session_id', '') or '',
+    'STOP_REASON':        d.get('stop_reason', '') or '',
+    'HAS_TURN_CEILING':   '1' if d.get('has_turn_ceiling') else '0',
+    'AGENT_ID':           d.get('agent_id', '') or '',
+    'DURATION_MS':        str(d.get('duration_ms', 0) or 0),
+    'TOOL_USES':          str(d.get('tool_uses', 0) or 0),
+    'CACHE_READ_TOKENS':  str(d.get('cache_read_input_tokens') or ''),
+    'CACHE_CREATE_TOKENS': str(d.get('cache_creation_input_tokens') or ''),
+    'OUTPUT_FULL':        output_full,
+    'RESPONSE_TEXT':      response_text,
+    'CAST_FIELDS_ERROR':  '0',
+}
+
+for key, val in fields.items():
+    print(key + '=' + shlex.quote(str(val)))
+PYEOF
+)" || true
+
+# Apply extracted fields; safe defaults apply if extraction failed or was empty.
+eval "${_FIELDS_RAW:-CAST_FIELDS_ERROR=1}" 2>/dev/null || true
+
+if [ "${CAST_FIELDS_ERROR:-1}" = "1" ]; then
+  exit 0
+fi
+
+# Apply defaults for any field that eval may have left unset
+AGENT_NAME="${AGENT_NAME:-unknown}"
+SESSION_ID="${SESSION_ID:-}"
+STOP_REASON="${STOP_REASON:-}"
+HAS_TURN_CEILING="${HAS_TURN_CEILING:-0}"
+AGENT_ID="${AGENT_ID:-}"
+DURATION_MS="${DURATION_MS:-0}"
+TOOL_USES="${TOOL_USES:-0}"
+CACHE_READ_TOKENS="${CACHE_READ_TOKENS:-}"
+CACHE_CREATE_TOKENS="${CACHE_CREATE_TOKENS:-}"
+OUTPUT_FULL="${OUTPUT_FULL:-}"
+RESPONSE_TEXT="${RESPONSE_TEXT:-}"
 
 # Shared Status-contract helper (single source of truth; inline fallback if absent)
 if [ -r "${HOME}/.claude/scripts/cast-status-contract.sh" ]; then
@@ -249,7 +304,7 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ];
     DB_STATUS="BLOCKED"
   fi
   export CAST_STOP_DB_STATUS="$DB_STATUS"
-  CAST_STOP_RESPONSE_TEXT="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('response_text','') or d.get('output_full',''))" 2>/dev/null || echo "")"
+  CAST_STOP_RESPONSE_TEXT="${RESPONSE_TEXT}"
   export CAST_STOP_RESPONSE_TEXT
   # Resolve agent transcript path for cost computation.
   # Prefer agent_transcript_path from payload; else glob by session_id + agent_id.
@@ -570,7 +625,7 @@ fi
 # Other agents are skipped.
 # Export the full agent output up-front — Step 3.5 (truncation detection)
 # exports it again below; this earlier export lets quality-gate logging read it.
-CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+CAST_STOP_OUTPUT_FULL="${OUTPUT_FULL}"
 export CAST_STOP_OUTPUT_FULL
 
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
@@ -792,7 +847,8 @@ fi
 # SKIP: agents exempt from the Status block contract (Claude Code built-ins, workflow-subagents)
 # — they legitimately emit StructuredOutput or other non-CAST completion patterns.
 if [[ "$STATUS_CONTRACT_EXEMPT" = "0" ]]; then
-  CAST_STOP_OUTPUT_FULL="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_STOP_PARSED','{}')); print(d.get('output_full','') or d.get('last_assistant_message',''))" 2>/dev/null || echo "")"
+  # OUTPUT_FULL already extracted by the consolidated field-extraction block above.
+  CAST_STOP_OUTPUT_FULL="${OUTPUT_FULL}"
   export CAST_STOP_OUTPUT_FULL
 
   # Three-value truncation classifier:
