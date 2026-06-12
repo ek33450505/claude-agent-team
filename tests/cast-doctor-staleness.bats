@@ -10,8 +10,11 @@ BACKFILL_SCRIPT="$REPO_DIR/scripts/cast-memory-backfill-verified.sh"
 
 # Setup a temporary projects directory with test memories
 setup() {
-  # Create temporary home
-  TEST_HOME="/tmp/test-cast-doctor-staleness-$$"
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
+  # TEST_HOME is an alias for the isolated HOME used in @test body references
+  TEST_HOME="$HOME"
+  export TEST_HOME
   mkdir -p "$TEST_HOME/.claude/projects/proj-a/memory"
 
   # Memory 1: stale, with /scripts/ reference (should flag)
@@ -70,11 +73,10 @@ EOF
 EOF
 
   export CLAUDE_SUBPROCESS=0
-  export HOME="$TEST_HOME"
 }
 
 teardown() {
-  rm -rf "$TEST_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

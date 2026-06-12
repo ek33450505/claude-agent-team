@@ -10,8 +10,8 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HELPER="$REPO_DIR/scripts/cast-db-drop-status-check.py"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
   export TEST_DB="/tmp/test-drop-check-$$.db"
   # A realistic legacy agent_runs WITH the status CHECK, a FK, organic columns,
   # data, and a custom index.
@@ -32,8 +32,7 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 @test "helper removes the status CHECK and preserves row count" {

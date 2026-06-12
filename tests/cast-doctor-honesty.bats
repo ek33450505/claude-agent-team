@@ -84,17 +84,17 @@ SQL
 }
 
 setup() {
-  TEST_HOME="$(mktemp -d /tmp/test-cast-honesty-XXXXXX)"
-  mkdir -p "$TEST_HOME/.claude"
-  export HOME="$TEST_HOME"
-  export CAST_DB_PATH="$TEST_HOME/.claude/cast.db"
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
+  mkdir -p "$HOME/.claude"
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
   export CLAUDE_SUBPROCESS=0
   # Point to the repo's agents dir so doctor doesn't error on missing agents
   export CAST_AGENTS_DIR="$REPO_DIR/agents/core"
 }
 
 teardown() {
-  rm -rf "$TEST_HOME"
+  teardown_temp_home
 }
 
 # ── Helper: run cast doctor and capture combined stdout+stderr ───────────────

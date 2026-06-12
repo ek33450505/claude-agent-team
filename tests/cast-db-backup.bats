@@ -11,8 +11,8 @@ CAST_DB_BACKUP_PY="$REPO_DIR/scripts/cast-db-backup.py"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
   export TEST_DB="$HOME/.claude/cast.db"
   export TEST_BACKUP_DIR="$HOME/.claude/backups"
 
@@ -32,8 +32,7 @@ conn.close()
 }
 
 teardown() {
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

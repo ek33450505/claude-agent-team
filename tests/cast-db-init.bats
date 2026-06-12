@@ -7,8 +7,8 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 DB_INIT="$REPO_DIR/scripts/cast-db-init.sh"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
   mkdir -p "$HOME/.claude"
 
   export TEST_DB="/tmp/test-cast-init-$$.db"
@@ -17,8 +17,7 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

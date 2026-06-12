@@ -10,8 +10,8 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 SCRIPT="$REPO_DIR/scripts/cast-db-prune.py"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
   mkdir -p "$HOME/.claude/logs"
   export TEST_DB="$HOME/cast-test-$$.db"
   export CAST_DB_PATH="$TEST_DB"
@@ -32,8 +32,7 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # --- exit-0 guarantee ---

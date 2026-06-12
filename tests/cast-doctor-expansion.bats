@@ -6,7 +6,8 @@
 # - Check 16: Routines validate
 
 setup() {
-  export HOME=$(mktemp -d)
+  load 'helpers/setup'
+  setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
   export CAST_AGENTS_DIR="${HOME}/.claude/agents"
   # Use an isolated temp dir as the "repo" — never touch the real repo's routines/
   export CAST_REPO_DIR="${HOME}/fake-repo"
@@ -16,7 +17,7 @@ setup() {
 }
 
 teardown() {
-  rm -rf "$HOME"
+  teardown_temp_home
 }
 
 @test "check 14: agent frontmatter validates valid agent" {
