@@ -33,6 +33,8 @@
 - Tests alongside source: `Foo.jsx` -> `Foo.test.jsx`
 - Test behavior (`getByRole`/`getByText`), not implementation
 - Cover: happy path, edge cases, error states
+- A new gate (lint, hook, CI check) isn't done until probed on its REAL default path: plant a violation, run with no env overrides, watch it bite. Passing only via the test/override path is false green (blast-radius lint scanned 0 files and exited 0, 2026-06-12).
+- New BATS files using `date`/`stat`/`sed` get a Docker Ubuntu pass before push, not just macOS — BSD/GNU flag divergence (e.g. BSD-only `date -v`) breaks CI (2026-06-12).
 
 ## Accessibility (UI projects)
 - Every icon-only button/link gets `aria-label`; decorative icons get `aria-hidden="true"`
