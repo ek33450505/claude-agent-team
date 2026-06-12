@@ -1807,15 +1807,23 @@ PYEOF
        WHERE status='crashed' \
          AND replace(replace(started_at,'T',' '),'Z','') >= datetime('now','-7 days');" 2>&1)"
     _cs_rc=$?
+    # Threshold: CAST_CRASH_WARN_THRESHOLD (default 100 per 7d).
+    # Background: sessions killed without a clean exit (terminal kill, hung agent,
+    # bats hang) accumulate as bookkeeping crashes — cast-session-end.sh:231 writes
+    # ended_at only on clean exit. Data-calibrated 2026-06-11: observed ~89/7d at
+    # current CAST usage (20x Max, heavy agent work); 100 filters noise while still
+    # catching genuine crash spikes. Override via CAST_CRASH_WARN_THRESHOLD env var.
+    # See docs/crashed-sessions-analysis-2026-06-11.md for full rationale.
+    _cs_threshold="${CAST_CRASH_WARN_THRESHOLD:-100}"
     if echo "$_cs_out" | grep -qi "no such table\|no such column"; then
       printf "%b crashed-sessions: sessions table not queryable\n" "$INFO"
     elif [ $_cs_rc -ne 0 ]; then
       printf "%b crashed-sessions: unavailable (db query failed)\n" "$INFO"
-    elif [ "${_cs_out:-0}" -gt 0 ] 2>/dev/null; then
-      printf "%b crashed-sessions: %s session(s) crashed in last 7d — check ~/.claude/logs/\n" "$WARN" "$_cs_out"
+    elif [ "${_cs_out:-0}" -gt "${_cs_threshold}" ] 2>/dev/null; then
+      printf "%b crashed-sessions: %s session(s) crashed in last 7d (threshold %s) — check ~/.claude/logs/\n" "$WARN" "$_cs_out" "$_cs_threshold"
       overall_ok=0
     else
-      printf "%b crashed-sessions: none in last 7d\n" "$OK"
+      printf "%b crashed-sessions: %s in last 7d (below threshold %s)\n" "$OK" "${_cs_out:-0}" "$_cs_threshold"
     fi
   fi
 

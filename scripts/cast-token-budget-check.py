@@ -20,7 +20,7 @@ def get_token_usage(session_id: str = None) -> dict:
     if not DB_PATH.exists():
         return {"error": "cast.db not found", "total_tokens": 0}
 
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=5)
     conn.row_factory = sqlite3.Row
     try:
         if session_id:

@@ -11,6 +11,10 @@
 
 set -euo pipefail
 
+# shellcheck source=cast-sqlite-lib.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/cast-sqlite-lib.sh" 2>/dev/null || true
+
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 
 # Ensure DB exists
@@ -36,14 +40,14 @@ SKIPPED=0
 for fact in "${FACTS[@]}"; do
   IFS='|' read -r mem_type name agent project content confidence <<< "$fact"
 
-  # Check if this fact already exists (by type, name, and agent)
+  # Read probe — intentionally raw sqlite3 (fail-fast read; no write lock needed)
   EXISTING=$(sqlite3 "$DB_PATH" \
     "SELECT id FROM agent_memories WHERE type='$mem_type' AND name='$name' AND agent='$agent' LIMIT 1;" 2>/dev/null || echo "")
 
   if [ -z "$EXISTING" ]; then
     # Insert new fact
     NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    sqlite3 "$DB_PATH" <<EOF
+    cast_sqlite "$DB_PATH" <<EOF
 INSERT INTO agent_memories (type, name, agent, project, content, confidence, created_at, updated_at)
 VALUES ('$mem_type', '$name', '$agent', NULL, '$content', $confidence, '$NOW', '$NOW');
 EOF
