@@ -54,34 +54,20 @@ git log @{u}..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-c
 
 <!-- Pre-push test gate removed per §3.8.G (test policy 2026-06-02 — tests run in batches before releases, not per-push). §3.8.C will add a ~30s smoke-tag subset once test tags exist. -->
 
-**Step 3 — Push**
-
-Determine the push command:
-- If branch has no upstream (`git rev-parse --abbrev-ref @{u}` fails): use `CAST_PUSH_OK=1 git push --set-upstream origin <branch>`
-- Otherwise: use `CAST_PUSH_OK=1 git push`
-
-Run the push:
+**Step 3 — Delegate push to cast-push.sh (mandatory)**
 
 ```bash
-CAST_PUSH_OK=1 git push [--set-upstream origin <branch>] 2>&1
+# Installed canonical path — the push agent runs in ANY personal repo, where
+# scripts/cast-push.sh does not exist. Repo-checkout fallback covers the CAST
+# repo pre-install case.
+CAST_PUSH_SH="$HOME/.claude/scripts/cast-push.sh"
+[ -f "$CAST_PUSH_SH" ] || CAST_PUSH_SH="scripts/cast-push.sh"
+bash "$CAST_PUSH_SH" "$(git branch --show-current)" 2>&1
+exit_code=$?
 ```
 
-Capture exit code. On failure: report the git error verbatim and output Status: BLOCKED. On success: continue to the mandatory verification sub-step.
-
-**Step 3b — Verify push landed (mandatory)**
-
-Run the `ls-remote` check immediately after `git push` exits 0:
-
-```bash
-REMOTE_SHA=$(git ls-remote --heads origin $(git branch --show-current) | awk '{print $1}')
-LOCAL_SHA=$(git rev-parse HEAD)
-echo "local:  $LOCAL_SHA"
-echo "remote: $REMOTE_SHA"
-```
-
-- If `REMOTE_SHA` is empty: emit `Status: BLOCKED` — "ls-remote returned empty; push may not have registered on remote."
-- If `REMOTE_SHA != LOCAL_SHA`: emit `Status: BLOCKED` — "SHA mismatch: local `$LOCAL_SHA` vs remote `$REMOTE_SHA`."
-- If they match: proceed to Step 4 and log the confirmed remote SHA.
+- Exit 0: push succeeded and ls-remote verified — proceed to Step 4.
+- Exit 1: emit `Status: BLOCKED` with the stderr message verbatim.
 
 **Step 4 — Show what was pushed**
 
@@ -134,32 +120,11 @@ The same applies to any final verification: do not background a verification com
 
 ## Verify-before-claim (Anti-hallucination guard — MANDATORY)
 
-**Before asserting ANYTHING about push state — branch name, remote SHA, whether push succeeded — you MUST have run a git command in THIS run and read its output.**
+**Before asserting ANYTHING about push state, you MUST have made at least one Bash tool call in THIS run and read its output.** Prompts, task descriptions, and prior context are NOT ground truth — only command output is.
 
-Prompts, task descriptions, and prior conversation context are NOT ground truth for push state. They describe intent. Only actual command output is ground truth.
+**Verification via cast-push.sh:** The script runs `git ls-remote` internally and prints the verified remote SHA. Its exit 0 means SHA match confirmed — no separate `git ls-remote` call needed. The script exits 1 on mismatch or empty ls-remote.
 
-**Post-push verification is mandatory.** After every `git push`, run:
-
-```bash
-git ls-remote --heads origin <branch>
-git rev-parse HEAD
-```
-
-Compare the SHA returned by `ls-remote` against the local `HEAD` SHA:
-- If `ls-remote` returns empty (no output for the branch): the push did NOT land. Emit `Status: BLOCKED` with the verbatim `git push` stderr and the `ls-remote` output.
-- If the SHA from `ls-remote` does NOT match `git rev-parse HEAD`: the remote is behind. Emit `Status: BLOCKED` with both SHAs shown.
-- Only emit `Status: DONE` when the remote SHA exactly matches local HEAD.
-
-**Zero-tool-calls rule:** If you have made ZERO Bash tool calls in this run, you MUST NOT report `Status: DONE` or claim a push succeeded. A push claim requires having:
-- Actually run `CAST_PUSH_OK=1 git push` (or confirmed it was unnecessary), AND
-- Confirmed the push landed via `git ls-remote --heads origin <branch>` with matching SHA
-
-If you are about to write a Status block and you have not yet run any git commands, run the verification commands above first.
-
-**Verification failures to watch for:**
-- `git ls-remote --heads origin <branch>` returns empty → push did not register on remote; emit BLOCKED
-- SHA from `ls-remote` differs from `git rev-parse HEAD` → remote is stale or a different commit landed; emit BLOCKED
-- Branch name in `ls-remote` output differs from the branch name in the prompt → you pushed to the wrong branch; emit BLOCKED with both branch names shown
+**Zero-tool-calls rule:** Never report `Status: DONE` or claim a push succeeded if you have made ZERO Bash calls in this run. A push claim requires having delegated to `cast-push.sh` and read its output.
 
 ## Work Log
 
@@ -199,8 +164,9 @@ blockers: [describe if BLOCKED, else "none"]
 - NEVER push directly to main or master UNLESS: prompt contains `--force-main` OR personal repo heuristic matches (`.claude/cast.json` has `"repo_class": "personal"` OR `CAST_REPO_CLASS=personal`)
 - NEVER modify files — this agent is read-and-push only
 - NEVER run `git stash` in any form — see ABSOLUTE PROHIBITION at the top of this file
+- Never run git push directly — always delegate to cast-push.sh (installed at `~/.claude/scripts/cast-push.sh`; repo-checkout fallback: `scripts/cast-push.sh`)
 - Always show the commit list after pushing so the user knows what was sent
-- Use `CAST_PUSH_OK=1` as the LEADING prefix on every git push command
+- Use `CAST_PUSH_OK=1` as the LEADING prefix on every git push command (cast-push.sh handles this; if invoking git push directly in an emergency, prefix it)
 - For personal repos where the push agent is unavailable: use `CAST_PUSH_OK=1 git -C <repo-path> push origin main` directly.
 - After a successful push to a feature branch, open a PR (if none exists) and emit `[CAST-CHAIN] merge` to hand off CI watching to the merge agent
 

@@ -178,30 +178,8 @@ Add to `crontab -e` on macOS/Linux (adjust for your timezone):
 0 8 * * 1 [ $(date +\%d) -le 7 ] && cd ${HOME}/Projects/personal/claude-agent-team && bash scripts/cast-audit-cron.sh
 ```
 
-Requires `scripts/cast-audit-cron.sh` helper (see below).
+Requires a `scripts/cast-audit-cron.sh` helper (not shipped — create one if cron scheduling is actually adopted).
 
-## Helper Scripts
-
-Optional: If the cron/RemoteTrigger scheduling is used, create `scripts/cast-audit-cron.sh`:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Emit the /cast-audit command to Claude Code
-# This script is intended to run via cron and does not require a live session
-
-# Read plan and dispatch manually via your chosen remote trigger method
-echo "[cast-audit] Scheduled audit trigger fired at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-# Log to audit event file
-AUDIT_LOG="${HOME}/.claude/cast-audit-scheduled.log"
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) audit triggered" >> "$AUDIT_LOG"
-
-# Note: Actual invocation requires a Claude Code session.
-# This script is a placeholder for cron to trigger a notification or webhook.
-# The user's Claude Code instance will pick up the scheduled task via RemoteTrigger.
-```
 
 ## Integration with CAST Ecosystem
 

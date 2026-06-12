@@ -79,7 +79,7 @@ try:
     #    source `cast budget` reports). Previously summed sessions.total_cost_usd,
     #    which only populates when the session-end rollup runs and could lag/miss.
     # -----------------------------------------------------------------------
-    today = datetime.date.today().isoformat()
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     # LIKE-form works for both T/Z ISO-8601 (e.g. '2026-06-11T10:00:00Z') and
     # space-form (e.g. '2026-06-11 10:00:00') timestamps — the '%' wildcard
     # absorbs everything after the date prefix regardless of separator.
