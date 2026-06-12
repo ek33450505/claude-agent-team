@@ -240,6 +240,11 @@ _lint_agent_boilerplate() {
   bash scripts/cast-lint-agent-boilerplate.sh
 }
 
+# Lint 9 (self): Blast-radius guard — any bare rm -rf / shutil.rmtree in scripts/ is a violation
+_lint_blast_radius() {
+  bash scripts/blast-radius-lint.sh
+}
+
 # --- Hook contract validation ---
 # Exit code semantics: 0=all pass, 1=warn-only (benign), 2=errors found.
 # Only block (exit 1) when the validator reports ERRORS (exit 2). Warns let the commit proceed.
@@ -308,6 +313,7 @@ else
   _lint_hook_wiring       || self_lint_failed=1
   _lint_agent_roster      || self_lint_failed=1
   _lint_agent_boilerplate || self_lint_failed=1
+  _lint_blast_radius      || self_lint_failed=1
   if [[ "$self_lint_failed" -ne 0 ]]; then
     echo ""
     echo "ERROR [pre-commit]: One or more self-lints failed. See above for details."

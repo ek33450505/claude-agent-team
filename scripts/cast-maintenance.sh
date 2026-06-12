@@ -11,8 +11,56 @@ LOG="${CAST_DIR}/logs/maintenance.log"
 CAST_SCRIPTS_DIR="${CAST_SCRIPTS_DIR:-${CAST_DIR}/scripts}"
 # shellcheck disable=SC1091
 source "${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh" 2>/dev/null || source "$(dirname "$0")/cast-sqlite-lib.sh" 2>/dev/null || true
+# shellcheck source=cast-guard-lib.sh
+# shellcheck disable=SC1091
+source "${CAST_SCRIPTS_DIR}/cast-guard-lib.sh" 2>/dev/null || source "$(dirname "$0")/cast-guard-lib.sh" 2>/dev/null || true
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG"; }
+
+# cleanup_stale_swarm_dirs — remove cast-swarm-* worktree dirs older than 3 days.
+#
+# Scan root: CAST_MAINT_SWARM_TMP_ROOT env var (default: /private/tmp).
+# Override is used by tests to point at a fixture directory.
+#
+# Blast radius when no override: /private/tmp/cast-swarm- + /tmp/cast-swarm-
+# Blast radius with override: ${root}/cast-swarm- only
+# (the guard lib's hard deny-list for /, HOME, and ~/.claude still backstops any override)
+#
+# Refusals from cast_safe_rm are logged and skipped — the function always returns 0
+# so a refused delete never aborts the maintenance run (launchd-safe).
+cleanup_stale_swarm_dirs() {
+  local root="${CAST_MAINT_SWARM_TMP_ROOT:-/private/tmp}"
+
+  if ! declare -f cast_safe_rm >/dev/null 2>&1; then
+    log "WARN: cast-guard-lib.sh not loaded; skipping guarded worktree cleanup"
+    return 0
+  fi
+
+  # Declare blast radius scoped to the scan root.
+  # Production runs (no override) also include /tmp (macOS symlink alias).
+  if [[ -z "${CAST_MAINT_SWARM_TMP_ROOT:-}" ]]; then
+    cast_declare_blast_radius "/private/tmp/cast-swarm-" "/tmp/cast-swarm-"
+  else
+    cast_declare_blast_radius "${root}/cast-swarm-"
+  fi
+
+  while IFS= read -r -d '' stale_dir; do
+    cast_safe_rm "$stale_dir" 2>&1 || log "WARN: cast_safe_rm refused '${stale_dir}' — skipping"
+  done < <(find "$root" -maxdepth 1 -name "cast-swarm-*" -type d -mtime +3 -print0 2>/dev/null)
+}
+
+# ---------------------------------------------------------------------------
+# Source guard: allow tests to load the functions above without running the
+# main execution body. Byte-identical launchd behavior when executed directly.
+# ---------------------------------------------------------------------------
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  # shellcheck disable=SC2317  # reachable when sourced: top-level return is valid there; || true guards the executed-context edge
+  return 0 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# Main execution (only runs when executed, not when sourced)
+# ---------------------------------------------------------------------------
 
 log "Starting maintenance run"
 
@@ -37,8 +85,8 @@ for repo in ~/Projects/personal/claude-agent-team ~/Projects/personal/claude-cod
     git -C "$repo" worktree prune 2>/dev/null
   fi
 done
-# Clean up orphaned swarm worktree dirs in /tmp
-find /private/tmp -maxdepth 1 -name "cast-swarm-*" -type d -mtime +3 -exec rm -rf {} + 2>/dev/null
+# Clean up orphaned swarm worktree dirs in /tmp (guarded)
+cleanup_stale_swarm_dirs
 log "Pruned stale worktrees"
 
 # 5. sessions.total_cost_usd dropped in migration 022 (wave-3); backfill removed
