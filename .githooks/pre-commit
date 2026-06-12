@@ -4,6 +4,9 @@
 # One-time bypass: prefix the commit command with CAST_SKIP_LINTS=1 to skip
 # Lints 1 and 2 (cold-start counter and SQL injection). This does NOT bypass
 # the orphan-script lint or hook-contract validation.
+# Self-lints bypass: CAST_SKIP_SELF_LINTS=1 skips the 4 self-lint gates
+# (byte-budget, hook-wiring, agent-roster, agent-boilerplate). For one-time
+# emergencies only — address violations before the next merge.
 
 set -euo pipefail
 
@@ -85,6 +88,26 @@ _lint_orphan_scripts() {
   python3 scripts/cast-lint-orphan-scripts.py
 }
 
+# Lint 5 (self): Byte budget — fail if rules-core/ cumulative size exceeds budget
+_lint_byte_budget() {
+  bash scripts/cast-lint-byte-budget.sh
+}
+
+# Lint 6 (self): Hook wiring — fail on duplicate hook wiring in settings/fragments
+_lint_hook_wiring() {
+  python3 scripts/cast-lint-hook-wiring.py
+}
+
+# Lint 7 (self): Agent roster — fail if docs/agents/AGENT-ROSTER.md diverges from agents/core/
+_lint_agent_roster() {
+  python3 scripts/cast-lint-agent-roster.py
+}
+
+# Lint 8 (self): Agent boilerplate — fail if any agent def inlines verbatim skill prose
+_lint_agent_boilerplate() {
+  bash scripts/cast-lint-agent-boilerplate.sh
+}
+
 # --- Hook contract validation ---
 # Exit code semantics: 0=all pass, 1=warn-only (benign), 2=errors found.
 # Only block (exit 1) when the validator reports ERRORS (exit 2). Warns let the commit proceed.
@@ -143,6 +166,24 @@ _lint_utcnow || {
   echo "ERROR [pre-commit]: utcnow lint failed. See above."
   exit 1
 }
+
+# Self-lints: byte-budget, hook-wiring, agent-roster, agent-boilerplate
+if [[ "${CAST_SKIP_SELF_LINTS:-0}" == "1" ]]; then
+  echo "[CAST pre-commit] WARNING: CAST_SKIP_SELF_LINTS=1 — self-lints (byte-budget, hook-wiring, agent-roster, agent-boilerplate) skipped. This bypass is for one-time emergencies only." >&2
+else
+  self_lint_failed=0
+  _lint_byte_budget       || self_lint_failed=1
+  _lint_hook_wiring       || self_lint_failed=1
+  _lint_agent_roster      || self_lint_failed=1
+  _lint_agent_boilerplate || self_lint_failed=1
+  if [[ "$self_lint_failed" -ne 0 ]]; then
+    echo ""
+    echo "ERROR [pre-commit]: One or more self-lints failed. See above for details."
+    echo "  To bypass for a one-time emergency: CAST_SKIP_SELF_LINTS=1 git commit ..."
+    echo "  CAST_SKIP_SELF_LINTS is NOT a permanent fix — address the lint violations."
+    exit 1
+  fi
+fi
 
 # Keep canonical cast-stats.json in sync with derived stats (git ls-files based → CI-consistent).
 # Only stages when a real stat field changed (--check ignores the volatile `updated` field),

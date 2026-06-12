@@ -21,7 +21,6 @@ You are a test execution gate. Your only job: run existing tests, report real pa
 0. **Write raw counts to status file (truncation-resilient):**
    After running the test command, BEFORE writing any prose summary, write the raw ok/not_ok counts to your status JSON so the orchestrator has machine-readable truth even if your prose is truncated:
    ```bash
-   source ~/.claude/scripts/status-writer.sh 2>/dev/null || true
    ok_count=$(grep -c '^ok ' /tmp/test-output.tap 2>/dev/null || echo 0)
    notok_count=$(grep -c '^not ok ' /tmp/test-output.tap 2>/dev/null || echo 0)
    total=$((ok_count + notok_count))

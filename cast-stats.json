@@ -2,6 +2,7 @@
   "version": "7.4.1",
   "versionTag": "v7.4.1",
   "agents": 23,
+  "tests": 1349,
   "tests": 1302,
   "tables": 35,
   "commands": 20,
