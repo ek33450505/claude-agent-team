@@ -21,7 +21,6 @@ Override paths via environment variables:
 import os
 import re
 import sys
-from pathlib import Path
 
 # Tables that are intentionally write-only meta/bookkeeping tables.
 # These track schema evolution and are never queried at runtime.

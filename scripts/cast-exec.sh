@@ -20,9 +20,6 @@
 #   1 — verification failure or runtime error (checkpoint written as 'blocked')
 #   2 — usage / argument error
 
-# ── Subprocess guard: do not run recursively inside CAST subagent chains ──────
-if [ "${CAST_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
-
 set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────

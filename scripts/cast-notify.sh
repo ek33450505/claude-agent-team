@@ -16,9 +16,6 @@
 
 set -euo pipefail
 
-# Guards
-if [ "${CAST_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
-
 # --- Help handler ---
 for arg in "$@"; do
   case "$arg" in

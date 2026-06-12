@@ -5,8 +5,6 @@ Idempotent: INSERT OR IGNORE on primary key.
 Run once: python3 scripts/cast-incidents-backfill.py
 """
 import os
-import sys
-import sqlite3
 from pathlib import Path
 
 # Resolve cast_db.py from script directory or ~/.claude/scripts fallback

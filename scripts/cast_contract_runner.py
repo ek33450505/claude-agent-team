@@ -19,7 +19,6 @@ from pathlib import Path
 
 # Import identifier validation from cast_db when available; fall back to inline.
 try:
-    import sys as _sys
     import importlib.util as _ilu
     _spec = _ilu.spec_from_file_location(
         'cast_db',

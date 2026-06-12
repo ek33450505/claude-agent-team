@@ -16,9 +16,6 @@
 
 set -euo pipefail
 
-# Guard: do not run recursively inside CAST subprocess chains
-if [ "${CAST_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
-
 CAST_DIR="${HOME}/.claude/cast"
 CLAUDE_DIR="${HOME}/.claude"
 SYNC_CONFIG="${HOME}/.claude/config/sync.json"

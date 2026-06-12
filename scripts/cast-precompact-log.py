@@ -9,7 +9,6 @@ import os
 import sys
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 raw = os.environ.get("CAST_INPUT", "")
 try:

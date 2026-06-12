@@ -10,7 +10,6 @@ import os
 import sys
 import json
 import re
-from pathlib import Path
 
 def extract_paths_and_functions(content: str) -> tuple:
     """Extract file paths and function names from memory content."""
