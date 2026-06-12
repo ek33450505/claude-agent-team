@@ -26,7 +26,7 @@ jobs:
           cp scripts/*.py ~/.claude/scripts/
           chmod +x ~/.claude/scripts/*.sh
       - name: Run BATS tests
-        run: bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats --tap
+        run: bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats tests/skills/*.bats --tap
 
   contract-test:
     needs: bats

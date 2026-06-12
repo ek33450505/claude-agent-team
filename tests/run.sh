@@ -21,5 +21,5 @@ export HOME="$TEST_HOME"
 echo "tests/run.sh: isolated temp HOME=$HOME — real ~/.claude untouched" >&2
 
 # Run BATS with the same glob list as CI
-bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats "$@"
+bats tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats tests/skills/*.bats "$@"
 exit "$?"
