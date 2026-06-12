@@ -4,7 +4,7 @@
 # The guard is a three-layer defense against wipe-class incidents:
 # 1. Sentinel check (.cast-test-home must exist)
 # 2. Temp-prefix check (path must be under /tmp, /private/tmp, /var/folders, etc.)
-# 3. Real-home shape rejection (/Users/... pattern without temp markers)
+# 3. Real-home shape rejection (/Users/<name> pattern without temp markers)
 #
 # This file tests all guard refusal paths and the happy path.
 
@@ -27,7 +27,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 # Helper: Create a directory that does NOT match temp prefixes
 # The guard checks: /tmp/*, /private/tmp/*, /var/folders/*, /private/var/folders/*
-# We create under the repo's tests directory, which is at a /Users/.../path
+# We create under the repo's tests directory, which is at a /Users/<name>/path
 # This path doesn't match any of the temp prefixes
 # ---------------------------------------------------------------------------
 _make_non_temp_home() {
@@ -152,9 +152,9 @@ _cleanup_non_temp_home() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 4: REFUSAL — /Users/* shape when ORIG_HOME unset
+# Test 4: REFUSAL — /Users/<name> shape when ORIG_HOME unset
 # Guard (c) fallback: reject anything matching /Users/* if ORIG_HOME is unset.
-# We create a fake /Users/edkubiak structure at a non-temp path to trigger
+# We create a fake /Users/testuser structure at a non-temp path to trigger
 # this specific check.
 # ---------------------------------------------------------------------------
 @test "refusal: /Users/* shape when ORIG_HOME unset — directory preserved, nonzero exit" {
@@ -163,13 +163,13 @@ _cleanup_non_temp_home() {
   local orig_home="$HOME"
   local saved_orig_home="$ORIG_HOME"
 
-  # Create a fake /Users/edkubiak structure under repo's test fixtures
-  # This path looks like /Users but is actually under the repo
+  # Create a fake /Users/testuser structure under repo's test fixtures
+  # This path looks like /Users/<name> but is actually under the repo
   local fake_base="${REPO_DIR}/tests/fixtures/fake-users-test"
   mkdir -p "$fake_base" || exit 1
 
-  # Create the /Users/edkubiak structure (the guard checks /Users/*)
-  local fake_users="${fake_base}/Users/edkubiak"
+  # Create the /Users/testuser structure (the guard checks /Users/<name>)
+  local fake_users="${fake_base}/Users/testuser"
   mkdir -p "$fake_users" || exit 1
 
   # Create the sentinel (guard a passes)
@@ -179,7 +179,7 @@ _cleanup_non_temp_home() {
   local marker_file="$fake_users/marker.txt"
   echo "test marker" > "$marker_file"
 
-  # Set HOME to this fake /Users/... path
+  # Set HOME to this fake /Users/<name> path
   export HOME="$fake_users"
 
   # Explicitly unset ORIG_HOME to trigger the /Users/* fallback guard
@@ -307,6 +307,7 @@ _cleanup_non_temp_home() {
   grep -q '\.cast-test-home' "$headless_test" || exit 1
 
   # Both should check /Users/* pattern
-  grep -q "/Users/\*" "$setup_guard" || exit 1
-  grep -q "/Users/\*" "$headless_test" || exit 1
+  local users_glob='/Users/*'
+  grep -qF "$users_glob" "$setup_guard" || exit 1
+  grep -qF "$users_glob" "$headless_test" || exit 1
 }
