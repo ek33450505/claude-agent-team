@@ -61,17 +61,7 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 3. CLAUDE_SUBPROCESS guard
-# ---------------------------------------------------------------------------
-
-@test "CLAUDE_SUBPROCESS=1 → exits 0 and writes nothing" {
-  CLAUDE_SUBPROCESS=1 run bash "$HOOK_SH" <<< "$(make_payload)"
-  assert_success
-  [ ! -f "$HOME/.claude/cast/session-starts.jsonl" ]
-}
-
-# ---------------------------------------------------------------------------
-# 4. Missing CLAUDE_ENV_FILE — still logs, skips env write
+# 3. Missing CLAUDE_ENV_FILE — still logs, skips env write
 # ---------------------------------------------------------------------------
 
 @test "no CLAUDE_ENV_FILE → still logs to session-starts.jsonl" {

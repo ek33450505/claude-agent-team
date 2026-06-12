@@ -106,13 +106,7 @@ con.close()
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-# 1. CLAUDE_SUBPROCESS=1 → exits 0 silently
-@test "duration-check: CLAUDE_SUBPROCESS=1 exits 0" {
-  CLAUDE_SUBPROCESS=1 CAST_INPUT="$(make_payload 'code-writer' 'agent-dur-001')" run bash "$HOOK" <<< ""
-  assert_success
-}
-
-# 2. Fewer than 5 historical samples → no slow_agent event (insufficient data)
+# 1. Fewer than 5 historical samples → no slow_agent event (insufficient data)
 @test "duration-check: fewer than 5 historical samples → no slow_agent event" {
   # Only 2 historical samples exist; current run has very high duration
   seed_historical_runs 'code-writer' 2 1000

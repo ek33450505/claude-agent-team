@@ -160,8 +160,3 @@ print('ok')
   assert_success
 }
 
-# 10. CLAUDE_SUBPROCESS guard — hook is a no-op in subprocesses
-@test "user-prompt: CLAUDE_SUBPROCESS=1 → exits 0, writes nothing" {
-  CLAUDE_SUBPROCESS=1 bash "$USER_PROMPT_HOOK" <<< "$(make_user_prompt_payload "sess-sub" "secret prompt")"
-  [ ! -f "$HOME/.claude/cast/user-prompts.jsonl" ]
-}

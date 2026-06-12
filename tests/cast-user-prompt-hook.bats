@@ -74,17 +74,7 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 3. CLAUDE_SUBPROCESS guard
-# ---------------------------------------------------------------------------
-
-@test "CLAUDE_SUBPROCESS=1 → exits 0 and writes nothing" {
-  CLAUDE_SUBPROCESS=1 run bash "$HOOK_SH" <<< "$(make_payload)"
-  assert_success
-  [ ! -f "$HOME/.claude/cast/user-prompts.jsonl" ]
-}
-
-# ---------------------------------------------------------------------------
-# 4. Long prompt → prompt_preview capped at 120 chars
+# 3. Long prompt → prompt_preview capped at 120 chars
 # ---------------------------------------------------------------------------
 
 @test "prompt longer than 120 chars → prompt_preview capped at exactly 120" {

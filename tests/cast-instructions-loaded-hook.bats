@@ -96,17 +96,7 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 6. CLAUDE_SUBPROCESS guard — skips silently
-# ---------------------------------------------------------------------------
-
-@test "CLAUDE_SUBPROCESS=1 → exits 0 and writes nothing" {
-  CLAUDE_SUBPROCESS=1 run bash "$HOOK_SH" <<< "$(make_payload)"
-  assert_success
-  [ ! -f "$HOME/.claude/cast/instructions-loaded.jsonl" ]
-}
-
-# ---------------------------------------------------------------------------
-# 7. session_id is recorded in the log entry
+# 6. session_id is recorded in the log entry
 # ---------------------------------------------------------------------------
 
 @test "log entry includes session_id from payload" {

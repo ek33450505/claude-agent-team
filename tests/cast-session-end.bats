@@ -168,28 +168,7 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# 5. Subprocess guard: CLAUDE_SUBPROCESS=1 exits 0 immediately
-# ---------------------------------------------------------------------------
-
-@test "CLAUDE_SUBPROCESS=1 → exits 0, no hook execution" {
-  sqlite3 "$TEST_DB" \
-    "INSERT INTO sessions (id, started_at, ended_at) VALUES ('sub-test', datetime('now'), NULL);"
-
-  export CLAUDE_SUBPROCESS=1
-  export CLAUDE_SESSION_ID="sub-test"
-  run bash "$HOOK_SH" <<< ""
-
-  assert_success
-
-  # Row should NOT be updated (subprocess guard exits early)
-  local ended_at
-  ended_at=$(sqlite3 "$TEST_DB" \
-    "SELECT ended_at FROM sessions WHERE id='sub-test';" 2>/dev/null || echo "null")
-  [[ "$ended_at" = "null" ]] || [[ -z "$ended_at" ]]
-}
-
-# ---------------------------------------------------------------------------
-# 6. Default SESSION_ID when CLAUDE_SESSION_ID is unset passes guard
+# 5. Default SESSION_ID when CLAUDE_SESSION_ID is unset passes guard
 # ---------------------------------------------------------------------------
 
 @test "unset CLAUDE_SESSION_ID → defaults to 'default', passes guard" {

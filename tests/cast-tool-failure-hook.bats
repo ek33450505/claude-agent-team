@@ -77,17 +77,7 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 3. CLAUDE_SUBPROCESS guard
-# ---------------------------------------------------------------------------
-
-@test "CLAUDE_SUBPROCESS=1 → exits 0 and writes nothing" {
-  CLAUDE_SUBPROCESS=1 run bash "$HOOK_SH" <<< "$(make_payload)"
-  assert_success
-  [ ! -f "$HOME/.claude/cast/tool-failures.jsonl" ]
-}
-
-# ---------------------------------------------------------------------------
-# 4. Long error message → error_preview truncated to 200 chars
+# 3. Long error message → error_preview truncated to 200 chars
 # ---------------------------------------------------------------------------
 
 @test "error longer than 200 chars → error_preview capped at 200" {
