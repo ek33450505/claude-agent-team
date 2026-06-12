@@ -165,6 +165,22 @@ def cmd_log_quality_gate(
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: get-dispatch-backend
+# ---------------------------------------------------------------------------
+
+def cmd_get_dispatch_backend() -> None:
+    """Read ~/.claude/config/cast-cli.json and print dispatch_backend (default: 'cast')."""
+    config_path = Path.home() / '.claude' / 'config' / 'cast-cli.json'
+    try:
+        with open(config_path) as f:
+            d = json.load(f)
+        print(d.get('dispatch_backend', 'cast'))
+    except Exception:
+        print('cast')
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: recent-status
 # ---------------------------------------------------------------------------
 
@@ -223,6 +239,12 @@ def main() -> None:
     p_qg.add_argument('--contract-passed', required=True, dest='contract_passed')
     p_qg.add_argument('--retry-count', required=True, dest='retry_count')
 
+    # get-dispatch-backend
+    subparsers.add_parser(
+        'get-dispatch-backend',
+        help='Print dispatch_backend from cast-cli.json (default: cast)',
+    )
+
     # recent-status
     p_rs = subparsers.add_parser('recent-status', help='Return fresh status from status file')
     p_rs.add_argument('--agent', required=True)
@@ -232,7 +254,9 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        if args.command == 'log-dispatch':
+        if args.command == 'get-dispatch-backend':
+            cmd_get_dispatch_backend()
+        elif args.command == 'log-dispatch':
             cmd_log_dispatch(args.backend, args.plan)
         elif args.command == 'log-quality-gate':
             cmd_log_quality_gate(
