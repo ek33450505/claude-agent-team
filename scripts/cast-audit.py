@@ -2,7 +2,7 @@
 """
 cast-audit.py — CAST audit hook consolidation script.
 
-Reads the PreToolUse hook JSON from stdin in one pass and performs:
+Reads the hook JSON from stdin in one pass and performs:
   1. Parses tool-specific fields (file_path, command_preview, hashes, etc.)
   2. Builds the JSONL audit record
   3. Appends the record to ~/.claude/logs/audit.jsonl
@@ -10,15 +10,25 @@ Reads the PreToolUse hook JSON from stdin in one pass and performs:
   5. Annotates the record with redaction metadata
   6. Stores redaction map files
   7. Emits hookSpecificOutput JSON (warning) or block JSON to stdout
-  8. Exits 2 to block the tool call in strict+redact_pii mode
+  8. Exits 2 to block the tool call in strict+redact_pii mode (pre mode only)
+
+Usage:
+  cast-audit.py [--mode pre|post]
+
+  --mode pre  (default) PreToolUse: can exit 2 to block cloud-bound calls
+              with PII when CAST_PII_ENFORCEMENT=strict. Intended for
+              WebFetch|WebSearch matcher only.
+  --mode post PostToolUse: audit-log-only path. Never exits 2. Intended as
+              async catch-all logger for all tool events.
 
 Interface:
   stdin  — raw hook JSON (tool_name, tool_input, session_id, etc.)
   stdout — hook output JSON (hookSpecificOutput warning, block decision, or empty)
   stderr — silent (errors are logged to hook-errors.log, never raised)
-  env    — CLAUDE_SESSION_ID, CLAUDE_PROJECT_PATH, CAST_PII_ENFORCEMENT
+  env    — CLAUDE_SESSION_ID, CLAUDE_PROJECT_PATH, CLAUDE_PROJECT_DIR,
+           CAST_PII_ENFORCEMENT
   exit 0 — continue (pass-through)
-  exit 2 — block (strict mode + PII detected in cloud-bound call)
+  exit 2 — block (strict mode + PII detected in cloud-bound call; pre mode only)
 
 Never crashes — all errors are caught and logged silently.
 """
@@ -168,32 +178,40 @@ def build_record(parsed: dict, timestamp: str, session_id: str, project: str) ->
 # ---------------------------------------------------------------------------
 
 def resolve_project() -> str:
-    project = os.environ.get("CLAUDE_PROJECT_PATH", "")
-    if project:
-        return os.path.basename(project)
-    # Try git remote
+    # Prefer CLAUDE_PROJECT_DIR (provided by Claude Code to hooks) — no subprocess
+    for env_key in ("CLAUDE_PROJECT_DIR", "CLAUDE_PROJECT_PATH"):
+        val = os.environ.get(env_key, "")
+        if val:
+            return os.path.basename(val.rstrip("/"))
+    # Cheap memoization: cache result in a temp file keyed by cwd so we pay
+    # the git subprocess cost at most once per working directory per session.
     try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True, text=True, timeout=3
-        )
-        if result.returncode == 0:
-            url = result.stdout.strip()
-            name = url.rstrip("/").split("/")[-1]
-            if name.endswith(".git"):
-                name = name[:-4]
-            if name:
-                return name
+        cwd = os.getcwd()
+        import tempfile
+        cache_key = hashlib.sha256(cwd.encode()).hexdigest()[:16]
+        cache_path = os.path.join(tempfile.gettempdir(), f"cast-audit-project-{cache_key}.txt")
+        if os.path.isfile(cache_path):
+            cached = open(cache_path).read().strip()
+            if cached:
+                return cached
     except Exception:
-        pass
-    # Try git toplevel
+        cache_path = ""
+        cwd = ""
+    # Try git toplevel (single cheap subprocess — no network)
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=3
         )
         if result.returncode == 0:
-            return os.path.basename(result.stdout.strip())
+            name = os.path.basename(result.stdout.strip())
+            if name and cache_path:
+                try:
+                    with open(cache_path, "w") as f:
+                        f.write(name)
+                except Exception:
+                    pass
+            return name
     except Exception:
         pass
     return ""
@@ -241,6 +259,18 @@ def write_redact_map(session_id: str, timestamp: str, redact_result: dict) -> No
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    # Parse --mode pre|post argument
+    # pre  (default): PreToolUse — may exit 2 to block cloud-bound PII calls
+    # post          : PostToolUse — audit-log only, never exits 2
+    mode = "pre"
+    args = sys.argv[1:]
+    if "--mode" in args:
+        idx = args.index("--mode")
+        if idx + 1 < len(args):
+            mode = args[idx + 1]
+    if mode not in ("pre", "post"):
+        mode = "pre"
+
     # Read stdin once
     try:
         raw = sys.stdin.read()
@@ -327,8 +357,8 @@ def main() -> int:
                                 )
                         except Exception:
                             pass
-                    elif ENFORCEMENT_MODE == "strict" and cfg.get("redact_pii"):
-                        # Strict mode: append record before blocking
+                    elif mode == "pre" and ENFORCEMENT_MODE == "strict" and cfg.get("redact_pii"):
+                        # Strict pre-tool mode: append record before blocking
                         try:
                             os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
                             with open(AUDIT_LOG, "a") as f:

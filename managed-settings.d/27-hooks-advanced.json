@@ -15,12 +15,22 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write",
         "hooks": [
           {
             "type": "prompt",
             "prompt": "Evaluate whether this file change could expose secrets, weaken authentication, or leak sensitive data. If the change is dangerous, respond with BLOCK and explain why. If safe, respond with ALLOW.",
-            "if": "Write(**/.env*) || Write(**/auth/**) || Write(**/credentials*) || Write(**/secrets*) || Edit(**/.env*) || Edit(**/auth/**) || Edit(**/credentials*) || Edit(**/secrets*)"
+            "if": "Write(**/.env*|**/auth/**|**/credentials*|**/secrets*)"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Evaluate whether this file change could expose secrets, weaken authentication, or leak sensitive data. If the change is dangerous, respond with BLOCK and explain why. If safe, respond with ALLOW.",
+            "if": "Edit(**/.env*|**/auth/**|**/credentials*|**/secrets*)"
           }
         ]
       }
