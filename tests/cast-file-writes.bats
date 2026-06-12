@@ -10,8 +10,8 @@ POST_TOOL_PY="$REPO_DIR/scripts/cast-post-tool.py"
 SCRIPTS_DIR="$REPO_DIR/scripts"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export HOME="$(realpath "$(mktemp -d)")"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/logs"
 
   export TEST_DB="$BATS_TEST_TMPDIR/cast-file-writes-$$.db"
@@ -28,8 +28,7 @@ setup() {
 
 teardown() {
   rm -f "$TEST_DB"
-  rm -rf "$HOME"
-  export HOME="$ORIG_HOME"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------
