@@ -14,9 +14,6 @@
 
 set -euo pipefail
 
-# Guard: do not run recursively inside CAST subprocess chains
-if [ "${CAST_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
-
 CAST_DIR="${HOME}/.claude/cast"
 DEFAULT_CONFIG="${HOME}/.claude/config/fs-watchers.json"
 PIDFILE="${CAST_DIR}/fswatcher.pid"

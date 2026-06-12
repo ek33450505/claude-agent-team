@@ -6,7 +6,6 @@ Parses PreToolUse input ONCE, extracts tool metadata, validates against three gu
 import json
 import os
 import sys
-import base64
 import sqlite3
 import uuid
 from datetime import datetime, timezone

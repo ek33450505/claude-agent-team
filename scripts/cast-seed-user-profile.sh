@@ -40,6 +40,14 @@ SKIPPED=0
 for fact in "${FACTS[@]}"; do
   IFS='|' read -r mem_type name agent project content confidence <<< "$fact"
 
+  # Validate confidence is strictly numeric before use in SQL (guards against
+  # accidental non-numeric values from the FACTS array — safe even though the
+  # array is hardcoded, because the lint and good hygiene both require it).
+  if [[ ! "$confidence" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "Warning: skipping fact '$name' — confidence '$confidence' is not numeric" >&2
+    continue
+  fi
+
   # Read probe — intentionally raw sqlite3 (fail-fast read; no write lock needed)
   EXISTING=$(sqlite3 "$DB_PATH" \
     "SELECT id FROM agent_memories WHERE type='$mem_type' AND name='$name' AND agent='$agent' LIMIT 1;" 2>/dev/null || echo "")
@@ -49,7 +57,7 @@ for fact in "${FACTS[@]}"; do
     NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     cast_sqlite "$DB_PATH" <<EOF
 INSERT INTO agent_memories (type, name, agent, project, content, confidence, created_at, updated_at)
-VALUES ('$mem_type', '$name', '$agent', NULL, '$content', $confidence, '$NOW', '$NOW');
+VALUES ('$mem_type', '$name', '$agent', NULL, '$content', '$confidence', '$NOW', '$NOW');
 EOF
     ((INSERTED++)) || true
   else

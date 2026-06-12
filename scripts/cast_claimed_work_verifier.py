@@ -21,7 +21,6 @@ Output: summary line to stderr, detailed findings to stderr
 
 import os
 import sys
-import json
 import re
 import sqlite3
 from datetime import datetime

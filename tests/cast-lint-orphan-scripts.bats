@@ -108,3 +108,103 @@ _write_settings() {
   run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# managed-settings.d fragment tests
+# ---------------------------------------------------------------------------
+
+_write_fragment() {
+  # Usage: _write_fragment "bash ~/.claude/scripts/hook.sh"
+  local cmd="$1"
+  mkdir -p "$FAKE_REPO/managed-settings.d"
+  printf '{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "%s",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}\n' "$cmd" > "$FAKE_REPO/managed-settings.d/30-test.json"
+}
+
+@test "exit 0 on real repo with no settings.json (fragments only)" {
+  # Verifies the real repo's managed-settings.d passes the lint.
+  # This is the "gate must be proven to bite" positive-case on the live tree.
+  run bash -c "cd '$REPO_DIR' && python3 '$LINT_PY' 2>&1"
+  assert_success
+}
+
+@test "exit 1 when fragment references a nonexistent script" {
+  # Plant a fragment referencing a ghost script — the gate must catch it.
+  _write_fragment "bash ~/.claude/scripts/totally-nonexistent-fragment-hook.sh"
+  # Do NOT create the script in fake_repo/scripts/
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_failure
+  assert_output --partial "totally-nonexistent-fragment-hook.sh"
+}
+
+@test "exit 0 when fragment references a script that exists in repo scripts/" {
+  # The existence check maps fragment tilde-paths back to repo scripts/ —
+  # not to the live ~/.claude/scripts/ (which is absent in isolated HOME).
+  _write_fragment "bash ~/.claude/scripts/cast-headless-guard.sh"
+  touch "$FAKE_REPO/scripts/cast-headless-guard.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+}
+
+@test "fragment type:http entries are ignored (no script check)" {
+  mkdir -p "$FAKE_REPO/managed-settings.d"
+  printf '{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:3001/api/hook-events",
+            "method": "POST",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}\n' > "$FAKE_REPO/managed-settings.d/27-http.json"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+}
+
+@test "fragment type:prompt entries are ignored (no script check)" {
+  mkdir -p "$FAKE_REPO/managed-settings.d"
+  printf '{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Evaluate this change."
+          }
+        ]
+      }
+    ]
+  }
+}\n' > "$FAKE_REPO/managed-settings.d/27-prompt.json"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+}
+
+@test "error message names the fragment file for traceability" {
+  _write_fragment "bash ~/.claude/scripts/ghost-in-fragment.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_failure
+  assert_output --partial "30-test.json"
+  assert_output --partial "ghost-in-fragment.sh"
+}

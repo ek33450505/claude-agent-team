@@ -412,10 +412,23 @@ fi
 
 # === SESSION DISTILLER — extract memories from transcript ===
 DISTILLER="${HOME}/.claude/scripts/cast-session-distiller.py"
-if [[ -f "$DISTILLER" && -n "$CAST_SESSION_TRANSCRIPT" ]]; then
-  echo "$CAST_SESSION_TRANSCRIPT" | \
-    python3 "$DISTILLER" --min-importance 0.7 \
-    >> "${HOME}/.claude/logs/distiller.log" 2>&1 || true
+if [[ -f "$DISTILLER" ]]; then
+  _TRANSCRIPT_PATH="$(CAST_INPUT="${_INPUT}" python3 -c "
+import json, os
+raw = os.environ.get('CAST_INPUT', '')
+try:
+    d = json.loads(raw)
+    v = d.get('transcript_path', '')
+    if v:
+        print(v)
+except Exception:
+    pass
+" 2>/dev/null || true)"
+  if [[ -f "${_TRANSCRIPT_PATH:-}" ]]; then
+    python3 "$DISTILLER" --input "$_TRANSCRIPT_PATH" --min-importance 0.7 \
+      >> "${HOME}/.claude/logs/distiller.log" 2>&1 || \
+      _log_error "cast-session-end: distiller failed for $_TRANSCRIPT_PATH"
+  fi
 fi
 
 # === TEMP FILE CLEANUP ===

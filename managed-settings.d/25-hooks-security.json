@@ -1,12 +1,24 @@
 {
   "hooks": {
-    "PreToolUse": [
+    "PostToolUse": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-audit-hook.sh",
-            "if": "Write|Edit",
+            "command": "bash ~/.claude/scripts/cast-audit-hook.sh --mode post",
+            "timeout": 3,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-audit-hook.sh --mode pre",
             "timeout": 5
           }
         ]

@@ -17,7 +17,6 @@ import json
 import sqlite3
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 # cast_db is co-located in scripts/ — import guardedly for hook failure logging.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

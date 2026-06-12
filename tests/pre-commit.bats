@@ -155,19 +155,20 @@ EOF
   assert_output --partial "Running regression lints"
 }
 
-@test "lint-sql-injection: warn on interpolated sqlite3 without guard" {
+@test "lint-sql-injection: fail on braced \${var} in sqlite3 string without SQL single-quote guard" {
   cd "$TEST_REPO"
+  # Unguarded: ${SESSION_ID} is NOT wrapped in SQL single quotes — lint must flag this.
   cat > scripts/unsafe-sql.sh <<'EOF'
 #!/bin/bash
 set -euo pipefail
 SESSION_ID="session123"
-sqlite3 ~/.claude/cast.db "INSERT INTO logs VALUES('${SESSION_ID}')"
+DB="$HOME/.claude/cast.db"
+sqlite3 "$DB" "INSERT INTO logs VALUES(${SESSION_ID})"
 EOF
   chmod +x scripts/unsafe-sql.sh
   git add scripts/unsafe-sql.sh
   run bash .githooks/pre-commit
-  # Lint should detect this pattern and warn
-  [[ "$output" == *"SQL injection"* ]] || [[ $status -eq 0 ]]
+  [[ "$output" == *"SQL injection"* ]]
 }
 
 @test "lint-sql-injection: pass when interpolation is guarded with single quotes" {
@@ -182,6 +183,127 @@ EOF
   git add scripts/guarded-sql.sh
   run bash .githooks/pre-commit
   assert_output --partial "Running regression lints"
+}
+
+# === LINT 2 (widened): bare $var, heredoc, cast_sqlite, bin/cast ===
+
+@test "lint-sql-injection: fail on bare (unbraced) \$var in sqlite3 inline string" {
+  cd "$TEST_REPO"
+  # DB path is double-quoted so the awk can identify the SQL argument (second "...")
+  cat > scripts/bare-var-sql.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+TABLE="sessions"
+DB="$HOME/.claude/cast.db"
+sqlite3 "$DB" "SELECT * FROM $TABLE WHERE status='active'"
+EOF
+  chmod +x scripts/bare-var-sql.sh
+  git add scripts/bare-var-sql.sh
+  run bash .githooks/pre-commit
+  [[ "$output" == *"SQL injection"* ]]
+}
+
+@test "lint-sql-injection: fail on unbraced \$var in cast_sqlite inline string" {
+  cd "$TEST_REPO"
+  cat > scripts/bare-var-cast.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+AGENT="my-agent"
+DB="$HOME/.claude/cast.db"
+cast_sqlite "$DB" "SELECT * FROM agent_runs WHERE agent=$AGENT"
+EOF
+  chmod +x scripts/bare-var-cast.sh
+  git add scripts/bare-var-cast.sh
+  run bash .githooks/pre-commit
+  [[ "$output" == *"SQL injection"* ]]
+}
+
+@test "lint-sql-injection: fail on \${var} in unquoted heredoc body outside SQL single quotes" {
+  cd "$TEST_REPO"
+  # shellcheck disable=SC2016
+  cat > scripts/heredoc-unsafe.sh << 'BATSEOF'
+#!/bin/bash
+set -euo pipefail
+TABLE="injected"
+DB="$HOME/.claude/cast.db"
+sqlite3 "$DB" << SQEOF
+SELECT * FROM $TABLE
+SQEOF
+BATSEOF
+  chmod +x scripts/heredoc-unsafe.sh
+  git add scripts/heredoc-unsafe.sh
+  run bash .githooks/pre-commit
+  [[ "$output" == *"SQL injection"* ]]
+}
+
+@test "lint-sql-injection: fail on \${var} in unquoted heredoc body (cast_sqlite)" {
+  cd "$TEST_REPO"
+  cat > scripts/cast-heredoc-unsafe.sh << 'BATSEOF'
+#!/bin/bash
+set -euo pipefail
+VALUE="injected"
+DB="$HOME/.claude/cast.db"
+cast_sqlite "$DB" << HSQL
+INSERT INTO t (col) VALUES($VALUE)
+HSQL
+BATSEOF
+  chmod +x scripts/cast-heredoc-unsafe.sh
+  git add scripts/cast-heredoc-unsafe.sh
+  run bash .githooks/pre-commit
+  [[ "$output" == *"SQL injection"* ]]
+}
+
+@test "lint-sql-injection: fail when unsafe sqlite3 interpolation is in bin/cast" {
+  cd "$TEST_REPO"
+  mkdir -p bin
+  cat > bin/cast << 'BATSEOF'
+#!/usr/bin/env bash
+AGENT="test-agent"
+sqlite3 "$CAST_DB_PATH" "SELECT * FROM agent_runs WHERE agent=$AGENT"
+BATSEOF
+  chmod +x bin/cast
+  git add bin/cast
+  run bash .githooks/pre-commit
+  [[ "$output" == *"SQL injection"* ]]
+}
+
+@test "lint-sql-injection: pass when heredoc uses single-quoted delimiter (no shell expansion)" {
+  cd "$TEST_REPO"
+  # Safe: single-quoted heredoc delimiter prevents shell expansion — no lint flag expected.
+  # We only assert no SQL injection warning (other unrelated lints may fail in test env).
+  cat > scripts/safe-heredoc.sh << 'BATSEOF'
+#!/bin/bash
+set -euo pipefail
+DB="$HOME/.claude/cast.db"
+sqlite3 "$DB" << 'SQEOF'
+SELECT * FROM $raw_identifier_not_interpolated
+SQEOF
+BATSEOF
+  chmod +x scripts/safe-heredoc.sh
+  git add scripts/safe-heredoc.sh
+  run bash .githooks/pre-commit
+  assert_output --partial "Running regression lints"
+  [[ "$output" != *"SQL injection"* ]]
+}
+
+@test "lint-sql-injection: pass when \${var} is inside SQL single quotes in heredoc body" {
+  cd "$TEST_REPO"
+  # Safe: $SESSION_ID appears inside SQL '...' so it is guarded against injection.
+  # We only assert no SQL injection warning (other unrelated lints may fail in test env).
+  cat > scripts/safe-heredoc-quoted.sh << 'BATSEOF'
+#!/bin/bash
+set -euo pipefail
+SESSION_ID="sess-abc"
+DB="$HOME/.claude/cast.db"
+sqlite3 "$DB" << SQEOF
+UPDATE sessions SET status='ended' WHERE id='$SESSION_ID'
+SQEOF
+BATSEOF
+  chmod +x scripts/safe-heredoc-quoted.sh
+  git add scripts/safe-heredoc-quoted.sh
+  run bash .githooks/pre-commit
+  assert_output --partial "Running regression lints"
+  [[ "$output" != *"SQL injection"* ]]
 }
 
 # === LINT 3: Orphan script detector ===
