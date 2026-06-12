@@ -1,0 +1,33 @@
+name: Self-Lints
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  self-lints:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Byte budget
+        run: bash scripts/cast-lint-byte-budget.sh
+
+      - name: Hook wiring
+        run: python3 scripts/cast-lint-hook-wiring.py
+
+      - name: Agent roster
+        run: python3 scripts/cast-lint-agent-roster.py
+
+      - name: Agent boilerplate
+        run: bash scripts/cast-lint-agent-boilerplate.sh
+
+      # Advisory — always exits 0; warnings appear in the log only.
+      # continue-on-error: true guards against unexpected Python failures (import
+      # error, missing file) that would otherwise fail the workflow, contradicting
+      # the advisory intent.
+      - name: Write-only tables (advisory)
+        continue-on-error: true
+        run: python3 scripts/cast-lint-write-only-tables.py
