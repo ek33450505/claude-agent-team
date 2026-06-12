@@ -64,7 +64,7 @@ teardown() {
   run bash "$HOOK_SH" <<< "$(make_ask_user_payload)"
   assert_success
   # The hook should output JSON allowing the tool
-  echo "$output" | grep -q "permissionDecision" || true
+  echo "$output" | grep -q "permissionDecision"
 }
 
 @test "non-AskUserQuestion tool in interactive mode → exits 0" {
@@ -192,4 +192,46 @@ teardown() {
   CAST_HEADLESS=0 run bash "$HOOK_SH" <<< "$(make_ask_user_payload)"
   assert_success
   echo "$output" | grep -q "updatedInput" || true
+}
+
+# ---------------------------------------------------------------------------
+# Test 8: Ported unique assertions from tests/hooks/cast-headless-guard.bats
+# ---------------------------------------------------------------------------
+
+@test "non-AskUserQuestion tool → exits 0 with empty output" {
+  run bash "$HOOK_SH" <<< "$(make_other_tool_payload "Bash")"
+  assert_success
+  assert_output ""
+}
+
+@test "AskUserQuestion → JSON response has required fields and permissionDecision=allow" {
+  CAST_HEADLESS=1 run bash "$HOOK_SH" <<< "$(make_ask_user_payload)"
+  assert_success
+  python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+assert 'updatedInput' in d, 'missing updatedInput'
+assert 'answer' in d['updatedInput'], 'missing answer'
+assert 'permissionDecision' in d, 'missing permissionDecision'
+assert d['permissionDecision'] == 'allow', f'expected allow, got {d[\"permissionDecision\"]}'
+print('ok')
+" "$output"
+}
+
+@test "AskUserQuestion → answer text instructs proceed with defaults" {
+  CAST_HEADLESS=1 run bash "$HOOK_SH" <<< "$(make_ask_user_payload "Use default config?")"
+  assert_success
+  python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+answer = d.get('updatedInput', {}).get('answer', '')
+assert len(answer) > 0, 'answer is empty'
+assert 'default' in answer.lower() or 'proceed' in answer.lower(), f'unexpected answer: {answer}'
+print('ok')
+" "$output"
+}
+
+@test "CLAUDE_SUBPROCESS=1 with AskUserQuestion → writes no log" {
+  CLAUDE_SUBPROCESS=1 bash "$HOOK_SH" <<< "$(make_ask_user_payload "Do something?")"
+  [[ ! -f "$HOME/.claude/logs/headless-stalls.log" ]]
 }
