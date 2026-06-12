@@ -26,6 +26,7 @@ PII_ALLOWLIST=(
   "tests/ci-pii-scan.bats"
   "tests/cast_cron_setup.bats"
   "tests/scripts/cast-overlay-sync.bats"
+  "tests/cast-lint-orphan-scripts.bats"
 )
 
 # Build an ERE that matches any allowlisted file in grep's "file:line:content" output.
@@ -56,8 +57,9 @@ echo "=== Check 1: Hardcoded /Users/ paths in test files ==="
 #   /Users/janedoe   — fake user for PII-scan test payloads
 #   /Users/[         — grep ERE regex literals in assertions (e.g. /Users/[a-zA-Z])
 #   /Users/<...>     — doc-style placeholder strings
+#   /Users/*         — case-glob literal in teardown safety guards (a pattern, not a path)
 # Files in PII_ALLOWLIST are also excluded (they intentionally embed trigger strings).
-_CHECK1_EXCLUSION='/Users/testuser\b|/Users/runner\b|/Users/janedoe\b|/Users/\[|/Users/<'
+_CHECK1_EXCLUSION='/Users/testuser\b|/Users/runner\b|/Users/janedoe\b|/Users/\[|/Users/<|/Users/\*'
 HARDCODED=$(grep -rn "/Users/" "$REPO_ROOT/tests" "$REPO_ROOT/test" "$REPO_ROOT/src" \
   --include="*.sh" --include="*.bats" --include="*.test.*" --include="*.spec.*" \
   --exclude-dir=".git" --exclude-dir="worktrees" \
