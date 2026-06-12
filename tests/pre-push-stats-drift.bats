@@ -118,14 +118,28 @@ teardown() {
 
 @test "(a) drift in pushed SHA fails the gate even with a clean working tree" {
   local repo
-  repo="$(_make_fixture_repo 1)"  # stub exits 1 → drift
+  repo="$(_make_fixture_repo 1)"  # committed stub exits 1 → drift in pushed tree
   TEST_FIXTURES+=("$repo")
 
   local sha
   sha="$(git -C "$repo" rev-parse HEAD)"
 
-  # Simulate: working tree is "clean" (no dirty state); we push the committed SHA.
-  # The gate must still catch the drift because it validates the committed tree.
+  # Discriminating condition: overwrite the working-tree copy of gen-cast-stats.sh
+  # with an exit-0 stub WITHOUT committing.  This creates a divergence between what
+  # the working tree says (clean / exit 0) and what the committed pushed tree says
+  # (drift / exit 1).
+  #
+  # Old implementation (runs gen-cast-stats.sh from the working tree):
+  #   sees exit 0 → would let the push through → assert_failure FAILS.
+  # New implementation (runs gen-cast-stats.sh from a detached worktree of the pushed SHA):
+  #   sees exit 1 → blocks the push → assert_failure PASSES.
+  #
+  # The test is therefore non-discriminating against the old implementation and
+  # discriminating (passing only) against the new one.
+  printf '#!/usr/bin/env bash\n# working-tree stub: regenerated clean — exit 0\nexit 0\n' \
+    > "$repo/scripts/gen-cast-stats.sh"
+  # Do NOT commit — the dirty working-tree state is the discriminating condition.
+
   local ref_line="refs/heads/main ${sha} refs/heads/main 0000000000000000000000000000000000000000"
 
   _run_hook_in_fixture "$repo" "$ref_line"
@@ -160,22 +174,24 @@ teardown() {
 
 @test "(c) deletion push (local_sha = zeros) is skipped without error" {
   local repo
-  repo="$(_make_fixture_repo 1)"  # stub would fail — but deletion is skipped
+  repo="$(_make_fixture_repo 0)"  # stub exits 0 — HEAD fallback validates cleanly
   TEST_FIXTURES+=("$repo")
 
   local sha
   sha="$(git -C "$repo" rev-parse HEAD)"
 
-  # Deletion push: local ref is being deleted (local_sha = zeros).
+  # Deletion push: the local ref is being deleted (local_sha = all zeros).
+  # The gate must skip the zeros SHA — never pass it to git worktree add.
+  # With no non-zero SHA to validate the gate falls back to HEAD; HEAD's stub
+  # exits 0, so the overall gate passes.
   local ref_line="refs/heads/feature 0000000000000000000000000000000000000000 refs/heads/feature ${sha}"
 
   _run_hook_in_fixture "$repo" "$ref_line"
 
-  # Deletion provides no SHA to validate; gate falls back to HEAD.
-  # HEAD's worktree uses the stub which exits 1, so this correctly re-validates HEAD.
-  # We verify the gate did NOT error on the deletion ref itself (no worktree-create
-  # error for zeros SHA), and the output does not contain "worktree" error text.
+  # Zeros SHA was never used as a worktree target.
   refute_output --partial "Could not create stats-check worktree for 000000"
+  # Gate exits 0 — deletion push is not blocked.
+  assert_success
 }
 
 # ---------------------------------------------------------------------------
