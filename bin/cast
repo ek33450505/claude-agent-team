@@ -426,21 +426,60 @@ PYEOF
     [ -n "$_mem_lv" ] && mem_last_verified="$_mem_lv"
   fi
 
-  # Budget limit from .claude/cast.json
-  local budget_limit=""
-  local repo_cast_json="${PWD}/.claude/cast.json"
-  if [ -f "$repo_cast_json" ] && command -v python3 >/dev/null 2>&1; then
-    budget_limit="$(python3 -c "
+  # Budget — primary: budgets table (global row); secondary: repo cast.json per-dispatch
+  local _budget_primary="" _budget_secondary="" _budget_degraded=""
+
+  if [ ! -f "$CAST_DB_PATH" ]; then
+    _budget_degraded="cast.db not found — budget data unavailable"
+  elif command -v python3 >/dev/null 2>&1; then
+    _budget_primary="$(python3 - "$CAST_DB_PATH" "$today_spend" <<'PYEOF'
+import sys, sqlite3
+db, spend_str = sys.argv[1], sys.argv[2]
+try:
+    spend = float(spend_str)
+except ValueError:
+    spend = 0.0
+try:
+    conn = sqlite3.connect(db, timeout=5)
+    cur = conn.cursor()
+    cur.execute("SELECT limit_usd, period FROM budgets WHERE scope='global' ORDER BY id DESC LIMIT 1")
+    row = cur.fetchone()
+    conn.close()
+    if row and row[0] is not None:
+        limit_usd, period = float(row[0]), str(row[1])
+        pct = int(spend / limit_usd * 100) if limit_usd > 0 else 0
+        exceeded = " EXCEEDED" if pct >= 100 else ""
+        print(f"${spend:.2f} / ${limit_usd:.2f} {period} ({pct}%){exceeded}")
+except sqlite3.OperationalError:
+    print("__UNREADABLE__")
+except Exception:
+    pass
+PYEOF
+    2>/dev/null || echo "__UNAVAILABLE__")"
+    case "$_budget_primary" in
+      __UNREADABLE__|__UNAVAILABLE__)
+        _budget_degraded="budget table unreadable"
+        _budget_primary="" ;;
+      *) ;;
+    esac
+  fi
+
+  # Secondary (or sole source when no global row): repo per-dispatch from cast.json
+  local _repo_cast_json="${PWD}/.claude/cast.json"
+  if [ -f "$_repo_cast_json" ] && command -v python3 >/dev/null 2>&1; then
+    local _repo_limit
+    _repo_limit="$(python3 -c "
 import json
 try:
-    with open('$repo_cast_json') as f:
+    with open('$_repo_cast_json') as f:
         cfg = json.load(f)
     limit = cfg.get('budget', {}).get('per_dispatch_limit_usd')
     if limit is not None:
-        print(f'\${limit:.2f} per dispatch limit')
+        print(f'\${limit:.2f}')
 except Exception:
     pass
 " 2>/dev/null || true)"
+    [ -n "$_repo_limit" ] && _budget_secondary="${_repo_limit} per dispatch limit"
   fi
 
   # Agent count
@@ -510,8 +549,13 @@ PYEOF
   printf "Agents      %d in ~/.claude/agents/\n" "$agent_count"
   printf "Hooks       %d active\n" "$hook_count"
   printf "Spend       \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
-  if [ -n "$budget_limit" ]; then
-    printf "Budget      %s\n" "$budget_limit"
+  if [ -n "$_budget_degraded" ]; then
+    printf "Budget      %s\n" "$_budget_degraded"
+  elif [ -n "$_budget_primary" ]; then
+    printf "Budget      %s\n" "$_budget_primary"
+    [ -n "$_budget_secondary" ] && printf "Budget (repo) %s\n" "$_budget_secondary"
+  elif [ -n "$_budget_secondary" ]; then
+    printf "Budget      %s\n" "$_budget_secondary"
   else
     printf "Budget      not configured (run cast init-repo)\n"
   fi
