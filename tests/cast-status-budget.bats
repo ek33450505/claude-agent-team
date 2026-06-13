@@ -70,6 +70,9 @@ _insert_spend() {
   _insert_budget 100.0
   _insert_spend 30.0
 
+  local tmpwd
+  tmpwd="$(mktemp -d)"
+  cd "$tmpwd"
   run bash "$CAST_CLI" status
   assert_success
   assert_output --partial "Budget"
@@ -90,6 +93,9 @@ _insert_spend() {
   _insert_budget 100.0
   _insert_spend 202.19
 
+  local tmpwd
+  tmpwd="$(mktemp -d)"
+  cd "$tmpwd"
   run bash "$CAST_CLI" status
   assert_success
   assert_output --partial "EXCEEDED"
@@ -109,7 +115,10 @@ _insert_spend() {
 # ---------------------------------------------------------------------------
 
 @test "budget not configured shows not configured message" {
-  # No budgets row, no repo cast.json limit present
+  # No budgets row; cd to an isolated tmpdir so no .claude/cast.json is in the ancestry
+  local tmpwd
+  tmpwd="$(mktemp -d)"
+  cd "$tmpwd"
   run bash "$CAST_CLI" status
   assert_success
   assert_output --partial "not configured"
@@ -122,6 +131,9 @@ _insert_spend() {
 @test "cast.db absent produces honest degradation line and exits 0" {
   rm -f "$CAST_DB_PATH"
 
+  local tmpwd
+  tmpwd="$(mktemp -d)"
+  cd "$tmpwd"
   run bash "$CAST_CLI" status
   assert_success  # exit code must be 0
   # Should show a Budget line that is NOT the "not configured (run cast init-repo)" message

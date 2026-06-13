@@ -453,7 +453,7 @@ try:
 except sqlite3.OperationalError:
     print("__UNREADABLE__")
 except Exception:
-    pass
+    print("__UNREADABLE__")
 PYEOF
     2>/dev/null || echo "__UNAVAILABLE__")"
     case "$_budget_primary" in
