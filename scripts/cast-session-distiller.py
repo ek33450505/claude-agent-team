@@ -2,23 +2,29 @@
 """
 cast-session-distiller.py — Extract worth-keeping facts from a session transcript.
 
-Reads a session transcript from stdin or --input file, applies regex/keyword
-extraction rules to find feedback/project/user/reference memories, deduplicates
-against existing agent_memories rows (valid_to IS NULL), and writes matches to cast.db.
+Reads a session transcript (JSONL or plain-text fallback) from --input file or
+stdin, filters to genuine user-authored prose only, applies extraction rules to
+find feedback/project/user/reference memory candidates, and writes them as
+frontmatter-bearing markdown files to a judgment-gated _pending/ queue.
+
+No database writes are performed.  Candidates are reviewed and promoted via
+`cast memory review`.
 
 Usage:
-  cat transcript.txt | python3 cast-session-distiller.py [options]
-  python3 cast-session-distiller.py --input transcript.txt [options]
+  python3 cast-session-distiller.py --input transcript.jsonl [options]
+  cat transcript.txt | python3 cast-session-distiller.py --dry-run [options]
 
 Options:
-  --input <file>          Read transcript from file instead of stdin
-  --db <path>             Path to cast.db (default: ~/.claude/cast.db or $CAST_DB_PATH)
-  --dry-run               Print candidates as JSON without writing to DB
-  --min-importance <f>    Minimum importance threshold (default: 0.6)
+  --input <file>           Read transcript from file instead of stdin
+  --pending-dir <path>     Directory to write pending markdown files
+                           (default: <dirname(abspath(input))>/memory/_pending)
+  --dry-run                Print candidates as JSON without writing files
+  --min-importance <f>     Minimum importance threshold (default: 0.7)
+  --max-candidates <n>     Maximum candidates to write per run (default: 5)
 
 Exit codes:
   0 — success (even if no candidates found)
-  1 — unrecoverable error (DB connection failure on non-dry-run)
+  1 — unrecoverable error
 """
 
 import sys
@@ -26,15 +32,37 @@ import os
 import re
 import json
 import argparse
-import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cast_db import db_query, db_execute
+
+# ---------------------------------------------------------------------------
+# Harness/command chrome markers — turns containing these are not user prose
+# ---------------------------------------------------------------------------
+_CHROME_MARKERS = [
+    '<command-name>',
+    '<command-message>',
+    '<command-args>',
+    '<local-command-stdout>',
+    '<local-command-caveat>',
+    '<system-reminder>',
+    '<bash-stdout>',
+    '<bash-stderr>',
+]
+
+
+def _is_chrome(text):
+    """Return True if text contains harness/command chrome markers (case-insensitive)."""
+    lower = text.lower()
+    for marker in _CHROME_MARKERS:
+        if marker in lower:
+            return True
+    if text.strip().startswith('Caveat:'):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
 # Extraction patterns — (compiled_regex, memory_type, importance)
-# Patterns are evaluated in order; first match per sentence wins.
+# Evaluated in order; first match per sentence wins.
 # ---------------------------------------------------------------------------
 EXTRACTION_PATTERNS = [
     (re.compile(
@@ -85,7 +113,6 @@ def split_sentences(text):
         sentence = sentence.strip()
         if not sentence:
             continue
-        # Gather up to 1 sentence before and 1 after for context
         parts = [sentence]
         if i > 0:
             parts = [sentences[i - 1].strip()] + parts
@@ -96,120 +123,197 @@ def split_sentences(text):
     return result
 
 
-def extract_candidates(text, min_importance=0.6):
+def parse_user_prose(text):
     """
-    Extract memory candidates from transcript text.
+    Parse JSONL transcript and return genuine user-prose strings.
+
+    Filters out: assistant turns, isMeta turns, isSidechain turns,
+    tool_result content (list), and harness/command chrome.
+
+    Falls back to [text] if the input does not look like JSONL
+    (first non-empty line does not start with '{').  This preserves
+    dry-run / plain-text usage from stdin.
+    """
+    lines = text.splitlines()
+
+    first_non_empty = next((l.strip() for l in lines if l.strip()), '')
+    if not first_non_empty.startswith('{'):
+        # Plain-text fallback — treat whole input as one prose blob
+        return [text] if text.strip() else []
+
+    prose_turns = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue  # skip malformed lines silently
+
+        if not isinstance(obj, dict):
+            continue
+
+        if obj.get('type') != 'user':
+            continue
+        if obj.get('isMeta'):
+            continue
+        if obj.get('isSidechain'):
+            continue
+
+        message = obj.get('message', {})
+        if not isinstance(message, dict):
+            continue
+
+        content = message.get('content', '')
+
+        # tool_result turns carry a list for content — skip entirely
+        if isinstance(content, list):
+            continue
+
+        if not isinstance(content, str):
+            continue
+
+        content = content.strip()
+        if not content:
+            continue
+
+        if _is_chrome(content):
+            continue
+
+        prose_turns.append(content)
+
+    return prose_turns
+
+
+def extract_candidates(prose_turns, min_importance=0.7, max_candidates=None):
+    """
+    Extract memory candidates from cleaned user-prose turns.
 
     Returns list of dicts: {name, description, content, type, importance}
+
+    max_candidates: when set, stop generating after 4× that count so dedup
+    still has options without processing an unbounded transcript.
     """
     candidates = []
     seen_names = set()
 
-    sentence_tuples = split_sentences(text)
-
-    for sentence, context in sentence_tuples:
-        for pattern, mem_type, importance in EXTRACTION_PATTERNS:
-            if importance < min_importance:
-                continue
-            match = pattern.search(sentence)
-            if match:
-                # Use the full sentence as description (truncated to 200 chars)
-                description = sentence[:200]
-
-                # Generate slug name from matched sentence
-                name = slugify(sentence, max_words=8)
-
-                # Avoid duplicate names within this run
-                if name in seen_names:
+    for prose in prose_turns:
+        for sentence, context in split_sentences(prose):
+            for pattern, mem_type, importance in EXTRACTION_PATTERNS:
+                if importance < min_importance:
                     continue
-                seen_names.add(name)
+                if pattern.search(sentence):
+                    description = sentence[:140]
+                    name = slugify(sentence, max_words=8)
 
-                candidates.append({
-                    'name': name,
-                    'description': description,
-                    'content': context[:500],  # up to 2 surrounding sentences for context
-                    'type': mem_type,
-                    'importance': importance,
-                })
-                break  # first pattern match wins per sentence
+                    if name in seen_names:
+                        continue
+                    seen_names.add(name)
+
+                    candidates.append({
+                        'name': name,
+                        'description': description,
+                        'content': context[:500],
+                        'type': mem_type,
+                        'importance': importance,
+                    })
+                    # L1: bound extraction — stop at 4× cap for dedup headroom
+                    if max_candidates is not None and len(candidates) >= max_candidates * 4:
+                        return candidates
+                    break  # first pattern match wins per sentence
 
     return candidates
 
 
-def check_duplicate(name):
-    """Return True if a non-superseded shared memory with this name exists."""
-    try:
-        # Check if valid_to column exists
-        col_rows = db_query("PRAGMA table_info(agent_memories)")
-        col_names = {row[1] for row in col_rows}
-
-        if 'valid_to' in col_names:
-            rows = db_query(
-                "SELECT id FROM agent_memories WHERE agent = 'shared' AND name = ? "
-                "AND valid_to IS NULL LIMIT 1",
-                (name,)
-            )
-        else:
-            # Migration not yet run — check without temporal filter
-            rows = db_query(
-                "SELECT id FROM agent_memories WHERE agent = 'shared' AND name = ? LIMIT 1",
-                (name,)
-            )
-        return len(rows) > 0
-    except Exception:
+def _slug_exists_in_dir(slug, directory):
+    """Return True if any file named <type>_<slug>.md exists in directory."""
+    if not os.path.isdir(directory):
         return False
+    for fname in os.listdir(directory):
+        if not fname.endswith('.md'):
+            continue
+        stem = fname[:-3]
+        parts = stem.split('_', 1)
+        if len(parts) == 2 and parts[1] == slug:
+            return True
+    return False
 
 
-def insert_memory(candidate):
-    """Insert a candidate memory into agent_memories as agent='shared'."""
-    now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    # Check if valid_from column exists
-    col_rows = db_query("PRAGMA table_info(agent_memories)")
-    col_names = {row[1] for row in col_rows}
+def _is_duplicate(candidate, pending_dir, canonical_dir):
+    """Return True if a file with this slug already exists in pending or canonical dirs."""
+    slug = candidate['name']
+    return (
+        _slug_exists_in_dir(slug, pending_dir) or
+        _slug_exists_in_dir(slug, canonical_dir)
+    )
 
-    if 'valid_from' in col_names:
-        db_execute("""
-            INSERT INTO agent_memories
-            (agent, type, name, description, content, importance, valid_from, created_at, updated_at)
-            VALUES ('shared', ?, ?, ?, ?, ?, datetime('now'), ?, ?)
-        """, (
-            candidate['type'],
-            candidate['name'],
-            candidate['description'],
-            candidate['content'],
-            candidate['importance'],
-            now,
-            now,
-        ))
-    else:
-        # valid_from column may not exist yet (migration not run) — insert without it
-        db_execute("""
-            INSERT INTO agent_memories
-            (agent, type, name, description, content, importance, created_at, updated_at)
-            VALUES ('shared', ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            candidate['type'],
-            candidate['name'],
-            candidate['description'],
-            candidate['content'],
-            candidate['importance'],
-            now,
-            now,
-        ))
+
+def _derive_session_id(input_path):
+    """Derive session ID from transcript filename stem, if available."""
+    if not input_path:
+        return None
+    stem = os.path.basename(input_path).split('.')[0]
+    return stem if len(stem) >= 8 else None
+
+
+def _write_pending_file(candidate, pending_dir, session_id=None):
+    """Write a candidate as a frontmatter markdown file to pending_dir."""
+    mem_type = candidate['type']
+    slug = candidate['name']
+    fname = f"{mem_type}_{slug}.md"
+    fpath = os.path.join(pending_dir, fname)
+
+    # M1: strip CR/LF to prevent YAML newline injection via description
+    description = (candidate['description']
+                   .replace('"', '\\"')
+                   .replace('\n', ' ')
+                   .replace('\r', ' '))
+
+    lines = [
+        '---',
+        f'name: {slug}',
+        f'description: "{description}"',
+        'metadata:',
+        '  node_type: memory',
+        f'  type: {mem_type}',
+        '  origin: session-distiller',
+        '  confidence: low',
+    ]
+    if session_id:
+        # L3: quote and strip CR/LF to prevent frontmatter injection via session ID
+        safe_sid = session_id.replace(chr(10), '').replace(chr(13), '')
+        lines.append(f'  originSessionId: "{safe_sid}"')
+    lines += [
+        '---',
+        '',
+        candidate['content'],
+        '',
+        '> ⚠️ Auto-extracted candidate (session-distiller). Unverified — review with `cast memory review`, then add `verified_at` on approval.',
+        '',
+    ]
+
+    with open(fpath, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+
+    return fpath
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Extract worth-keeping facts from a session transcript'
+        description='Extract worth-keeping facts from a session transcript and write to _pending/ queue'
     )
     parser.add_argument('--input', type=str, default=None,
                         help='Read transcript from file instead of stdin')
-    parser.add_argument('--db', type=str, default=None,
-                        help='Path to cast.db (default: ~/.claude/cast.db or $CAST_DB_PATH)')
+    parser.add_argument('--pending-dir', type=str, default=None,
+                        help='Directory to write pending markdown files '
+                             '(default: <dirname(abspath(input))>/memory/_pending)')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Print candidates as JSON without writing to DB')
-    parser.add_argument('--min-importance', type=float, default=0.6,
-                        help='Minimum importance threshold (default: 0.6)')
+                        help='Print candidates as JSON without writing files')
+    parser.add_argument('--min-importance', type=float, default=0.7,
+                        help='Minimum importance threshold (default: 0.7)')
+    parser.add_argument('--max-candidates', type=int, default=5,
+                        help='Maximum candidates to write per run (default: 5)')
     args = parser.parse_args()
 
     # Read transcript
@@ -227,46 +331,73 @@ def main():
             text = ''
 
     if not text or not text.strip():
-        # Empty input — exit cleanly
         if args.dry_run:
             print(json.dumps([]))
         sys.exit(0)
 
-    candidates = extract_candidates(text, min_importance=args.min_importance)
+    prose_turns = parse_user_prose(text)
+
+    if not prose_turns:
+        if args.dry_run:
+            print(json.dumps([]))
+        sys.exit(0)
+
+    candidates = extract_candidates(prose_turns, min_importance=args.min_importance,
+                                   max_candidates=args.max_candidates)
 
     if args.dry_run:
         print(json.dumps(candidates, indent=2))
         sys.exit(0)
 
     if not candidates:
+        print("[distiller] 0 candidates extracted", file=sys.stderr)
         sys.exit(0)
 
-    # Resolve DB path — set env var so cast_db._get_db_path() picks it up
-    db_path = args.db or os.environ.get('CAST_DB_PATH',
-                                         os.path.expanduser('~/.claude/cast.db'))
+    # Determine pending dir
+    pending_dir = args.pending_dir
+    if not pending_dir:
+        if args.input:
+            pending_dir = os.path.join(
+                os.path.dirname(os.path.abspath(args.input)), 'memory', '_pending'
+            )
+        else:
+            # stdin with no --pending-dir — no write location, exit cleanly
+            print("[distiller] stdin input with no --pending-dir — skipping write",
+                  file=sys.stderr)
+            sys.exit(0)
 
-    if not os.path.exists(db_path):
-        print(f"[distiller] DB not found at {db_path} — skipping write", file=sys.stderr)
-        sys.exit(0)
+    try:
+        os.makedirs(pending_dir, exist_ok=True)
+    except Exception as e:
+        print(f"[distiller] ERROR: cannot create pending dir {pending_dir}: {e}",
+              file=sys.stderr)
+        sys.exit(1)
 
-    # Override CAST_DB_PATH so cast_db functions use the resolved path
-    os.environ['CAST_DB_PATH'] = db_path
+    # Canonical memory dir is the parent of _pending/
+    canonical_dir = os.path.dirname(pending_dir)
+    session_id = _derive_session_id(args.input)
 
-    inserted = 0
-    skipped = 0
+    written = 0
+    skipped_dup = 0
+    skipped_cap = 0
+
     for candidate in candidates:
-        if check_duplicate(candidate['name']):
-            skipped += 1
+        if written >= args.max_candidates:
+            skipped_cap += 1
+            continue
+        if _is_duplicate(candidate, pending_dir, canonical_dir):
+            skipped_dup += 1
             continue
         try:
-            insert_memory(candidate)
-            inserted += 1
+            fpath = _write_pending_file(candidate, pending_dir, session_id=session_id)
+            written += 1
+            print(f"[distiller] wrote {fpath}", file=sys.stderr)
         except Exception as e:
-            print(f"[distiller] WARN: failed to insert '{candidate['name']}': {e}",
+            print(f"[distiller] WARN: failed to write '{candidate['name']}': {e}",
                   file=sys.stderr)
 
-    print(f"[distiller] {inserted} inserted, {skipped} skipped (duplicates)",
-          file=sys.stderr)
+    print(f"[distiller] {written} written to _pending/, {skipped_dup} skipped (duplicates), "
+          f"{skipped_cap} skipped (cap)", file=sys.stderr)
     sys.exit(0)
 
 
