@@ -234,3 +234,28 @@ run_validator() {
   assert_output "VALID"
   rm -f "$tmpfile"
 }
+
+# ---------------------------------------------------------------------------
+# F19 regression: APPROVE and REQUEST_CHANGES must be VALID statuses
+# (code-reviewer / pr-reviewer use these as terminal statuses)
+# PENDING must stay invalid (not a recognized CAST status).
+# ---------------------------------------------------------------------------
+
+@test "F19 valid: APPROVE status exits 0 and prints VALID" {
+  run_validator <<< '{"status":"APPROVE","summary":"Code review passed — implementation is correct.","agent":"code-reviewer"}'
+  assert_success
+  assert_output "VALID"
+}
+
+@test "F19 valid: REQUEST_CHANGES status exits 0 and prints VALID" {
+  run_validator <<< '{"status":"REQUEST_CHANGES","summary":"Two type safety issues found — see concerns.","agent":"code-reviewer"}'
+  assert_success
+  assert_output "VALID"
+}
+
+@test "F19 invalid: PENDING status still exits 1 (not a recognized CAST status)" {
+  run_validator <<< '{"status":"PENDING","summary":"Did something","agent":"commit"}'
+  assert_failure
+  assert_output --partial "INVALID:"
+  assert_output --partial "PENDING"
+}

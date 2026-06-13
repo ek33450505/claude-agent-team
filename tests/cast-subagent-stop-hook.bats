@@ -577,3 +577,83 @@ if matches:
   # Should pick the newest (nested)
   [[ "$result" == "$nested_transcript" ]]
 }
+
+# ---------------------------------------------------------------------------
+# F19 regression: APPROVE and REQUEST_CHANGES must NOT produce missing_formality
+# (corpus failure F19 — code-reviewer/pr-reviewer reviewer statuses were false-flagged)
+# ---------------------------------------------------------------------------
+
+@test "F19: code-reviewer Status: APPROVE does NOT produce missing_formality violation" {
+  # Wire agent_protocol_violations table
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Reviewed the implementation changes carefully.'] * 6
+lines.append('')
+lines.append('The implementation looks correct. No issues found.')
+lines.append('')
+lines.append('Status: APPROVE')
+lines.append('Summary: Code review passed — changes are correct and well-structured.')
+print('\n'.join(lines))
+")"
+
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-reviewer" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+
+  # No missing_formality violation should be written
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='missing_formality';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "F19: code-reviewer Status: REQUEST_CHANGES does NOT produce missing_formality violation" {
+  # Wire agent_protocol_violations table
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Reviewed the implementation changes carefully.'] * 6
+lines.append('')
+lines.append('Found issues that must be resolved before merging.')
+lines.append('')
+lines.append('Status: REQUEST_CHANGES')
+lines.append('Summary: Two type safety issues found — see concerns.')
+lines.append('Concerns: Missing return type annotation on parseResult(), unused import in utils.ts')
+print('\n'.join(lines))
+")"
+
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-reviewer" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+
+  # No missing_formality violation should be written
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='missing_formality';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}

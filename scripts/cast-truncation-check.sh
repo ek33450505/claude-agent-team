@@ -136,8 +136,10 @@ char_count = len(response_text)
 last_line  = response_text[-200:] if len(response_text) > 200 else response_text
 
 # ── Detection: prose Status block ─────────────────────────────────────────────
+# Recognized values: standard four + reviewer statuses (APPROVE|REQUEST_CHANGES)
+# used by code-reviewer and pr-reviewer as valid terminal statuses.
 status_pattern = re.compile(
-    r'^Status:\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)\b',
+    r'^Status:\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)\b',
     re.MULTILINE | re.IGNORECASE,
 )
 has_status = bool(status_pattern.search(response_text))
@@ -145,7 +147,7 @@ has_status = bool(status_pattern.search(response_text))
 # ── Detection: JSON fenced status block ───────────────────────────────────────
 # Matches ```json status ... ``` with a "status" key set to a valid value
 json_status_pattern = re.compile(
-    r'```json\s+status[\s\S]*?"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"',
+    r'```json\s+status[\s\S]*?"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)"',
     re.IGNORECASE,
 )
 has_json = bool(json_status_pattern.search(response_text))

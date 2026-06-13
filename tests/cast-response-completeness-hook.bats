@@ -199,3 +199,40 @@ _filler_lines() {
   refute_output --partial "syntax error"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# F19 regression: APPROVE and REQUEST_CHANGES must NOT be flagged as truncated
+# (code-reviewer / pr-reviewer use these as terminal statuses)
+# ---------------------------------------------------------------------------
+
+@test "F19: completeness hook: Status: APPROVE is recognized as valid completion" {
+  local output_text
+  output_text="$(printf 'Reviewed the implementation changes carefully.\n\nThe implementation looks correct and follows project conventions.\n\nStatus: APPROVE\nSummary: Code review passed — implementation is correct.\n')"
+
+  local input
+  input="$(_make_input_for_agent "code-reviewer" "$output_text")"
+
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+
+  # No completeness_events row should be written (APPROVE is a valid terminal status)
+  local row_count
+  row_count="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM completeness_events;" 2>/dev/null || echo 0)"
+  assert_equal "$row_count" "0"
+}
+
+@test "F19: completeness hook: Status: REQUEST_CHANGES is recognized as valid completion" {
+  local output_text
+  output_text="$(printf 'Reviewed the implementation changes carefully.\n\nFound issues that must be resolved before merging.\n\nStatus: REQUEST_CHANGES\nSummary: Two type safety issues found — see concerns.\nConcerns: Missing return type on parseResult()\n')"
+
+  local input
+  input="$(_make_input_for_agent "code-reviewer" "$output_text")"
+
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+
+  # No completeness_events row should be written
+  local row_count
+  row_count="$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM completeness_events;" 2>/dev/null || echo 0)"
+  assert_equal "$row_count" "0"
+}
