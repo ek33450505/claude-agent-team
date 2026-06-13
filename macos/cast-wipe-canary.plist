@@ -8,7 +8,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>__HOME__/.claude/scripts/cast-wipe-canary.sh</string>
+    <string>__HOME__/Library/Application Support/cast/bin/cast-wipe-canary.sh</string>
   </array>
 
   <!-- Fire when ~/.claude is created, modified, or deleted.

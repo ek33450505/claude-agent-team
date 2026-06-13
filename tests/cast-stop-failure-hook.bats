@@ -19,6 +19,18 @@ setup() {
     mkdir -p "${FAKE_HOME}/.claude/logs"
     export BATS_FAKE_HOME="$FAKE_HOME"
     export BATS_EVENTS_DIR="${FAKE_HOME}/.claude/cast/events"
+
+    # Stub notification binaries so tests never fire real desktop alerts.
+    # The stub dir lives under $TMPDIR_TEST; the existing teardown rm -rf cleans it.
+    local stub_bin="${TMPDIR_TEST}/bin/stubs"
+    mkdir -p "$stub_bin"
+    for _cmd in osascript notify-send; do
+        printf '#!/bin/sh\nexit 0\n' > "$stub_bin/$_cmd"
+        chmod +x "$stub_bin/$_cmd"
+    done
+    # Export PATH so the subshell spawned by tests (bash -c "HOME=... bash '${HOOK}'")
+    # inherits the stub dir ahead of the real system binaries.
+    export PATH="$stub_bin:$PATH"
 }
 
 teardown() {

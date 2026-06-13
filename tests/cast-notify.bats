@@ -15,6 +15,17 @@ setup() {
   load 'helpers/setup'
   setup_temp_home
   mkdir -p "$HOME/.claude/cast"
+
+  # Stub notification binaries so tests never fire real desktop alerts.
+  # The stub dir lives under $HOME (isolated temp dir); teardown_temp_home
+  # removes it automatically.
+  local stub_bin="$HOME/bin/stubs"
+  mkdir -p "$stub_bin"
+  for _cmd in osascript notify-send terminal-notifier; do
+    printf '#!/bin/sh\nexit 0\n' > "$stub_bin/$_cmd"
+    chmod +x "$stub_bin/$_cmd"
+  done
+  export PATH="$stub_bin:$PATH"
 }
 
 teardown() {

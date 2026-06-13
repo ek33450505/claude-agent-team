@@ -448,6 +448,15 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     # Install cast-wipe-canary.plist — WatchPaths canary that captures forensic
     # evidence outside ~/.claude the instant the directory disappears.
     if [ -f "$SCRIPT_DIR/macos/cast-wipe-canary.plist" ]; then
+        # Pillar-2: the invoked script must live OUTSIDE ~/.claude so it survives
+        # the very wipe it is meant to detect.  Copy to the off-blast-radius bin
+        # dir before registering the plist (script must exist when launchd fires).
+        CANARY_BIN_DIR="$HOME/Library/Application Support/cast/bin"
+        mkdir -p "$CANARY_BIN_DIR"
+        cp "$CLAUDE_DIR/scripts/cast-wipe-canary.sh" "$CANARY_BIN_DIR/cast-wipe-canary.sh"
+        chmod +x "$CANARY_BIN_DIR/cast-wipe-canary.sh"
+        success "  Installed: $CANARY_BIN_DIR/cast-wipe-canary.sh (off-blast-radius canary script)"
+
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.wipe-canary.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-wipe-canary.plist" > "$PLIST_DEST"
 
@@ -455,6 +464,20 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         launchctl unload "$PLIST_DEST" 2>/dev/null || true
         if launchctl load "$PLIST_DEST" 2>/dev/null; then
             success "  Installed: $PLIST_DEST (com.cast.wipe-canary)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-integrity.plist — daily regression-aware integrity check (9:15 AM).
+    if [ -f "$SCRIPT_DIR/macos/cast-integrity.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.integrity.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-integrity.plist" > "$PLIST_DEST"
+
+        # Idempotently (re)load the plist
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.integrity)"
         else
             warn "  launchctl load failed for $PLIST_DEST — verify manually"
         fi
