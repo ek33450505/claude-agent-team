@@ -845,23 +845,40 @@ _cmd_eval() {
       CAST_REPO_DIR="$CAST_REPO_DIR" python3 "$runner" list "$@"
       return $?
       ;;
+    report)
+      CAST_REPO_DIR="$CAST_REPO_DIR" python3 "$runner" report "$@"
+      return $?
+      ;;
+    record)
+      CAST_REPO_DIR="$CAST_REPO_DIR" python3 "$runner" record "$@"
+      return $?
+      ;;
     --help|-h|"")
       cat <<USAGE
 Usage: cast eval <subcommand> [args]
 
 Subcommands:
-  run <eval-id|--all> [--output-file FILE] [--dry-run] [--k N]
+  run <eval-id|--all> [--output-file FILE] [--dry-run] [--k N] [--expensive]
                             Run one or all eval cases
   list [--agent NAME] [--failure-type TYPE]
                             List available eval cases
+  report [eval-id|all] [--format table|json]
+                            Show latest run per eval (reads eval_runs)
+  record <eval-id> [--output-file FILE]
+                            Run eval live and save agent transcript
 
 Examples:
   cast eval run commit-missing-status-block --output-file /tmp/agent-output.txt
   cast eval run commit-missing-status-block --dry-run
   cast eval run --all
+  cast eval run commit-missing-status-block --k 3
+  cast eval run commit-missing-status-block --expensive
   cast eval list
   cast eval list --agent commit
   cast eval list --failure-type missing_status_block
+  cast eval report
+  cast eval report commit-missing-status-block --format json
+  cast eval record commit-missing-status-block
 USAGE
       return 0
       ;;

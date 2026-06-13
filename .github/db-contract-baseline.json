@@ -232,11 +232,6 @@
     },
     {
       "table": "eval_runs",
-      "column": "agent",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
       "column": "agent_run_id",
       "classification": "SAFE-DROP-CANDIDATE"
     },
@@ -257,16 +252,6 @@
     },
     {
       "table": "eval_runs",
-      "column": "ended_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "eval_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
       "column": "grader_results",
       "classification": "SAFE-DROP-CANDIDATE"
     },
@@ -282,17 +267,7 @@
     },
     {
       "table": "eval_runs",
-      "column": "pass_at_k",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
       "column": "started_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "status",
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
