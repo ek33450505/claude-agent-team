@@ -7,7 +7,7 @@
 #   1-3.  cast-memory-embed: --text, --backfill, graceful on Ollama down
 #   4-6.  cast-memory-validate: --check, JSON, --archive-stale
 #   7-8.  cast-memory-router: hybrid search, Ollama fallback
-#   9-11. cast-session-distiller: --dry-run, JSON, feedback pattern write
+#   9-11. cast-session-distiller: --dry-run, JSON, feedback pattern → pending candidate
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -184,11 +184,16 @@ PYEOF
   echo "$output" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list)'
 }
 
-@test "cast-session-distiller: writes memory for feedback pattern" {
-  run bash -c "echo \"don't mock the database in tests\" | python3 '$DISTILLER_PY' --db '$CAST_DB_PATH'"
+@test "cast-session-distiller: writes _pending candidate for feedback pattern (no DB write)" {
+  local pend="$HOME/.claude/distiller-pending"
+  run bash -c "echo \"don't mock the database in tests\" | python3 '$DISTILLER_PY' --pending-dir '$pend'"
   assert_success
 
-  # Verify a feedback memory was inserted into agent_memories
-  mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE agent='shared' AND type='feedback';" 2>/dev/null)"
-  [ "$mem_count" -ge 1 ]
+  # A feedback candidate markdown file landed in the _pending/ queue
+  run bash -c "ls '$pend'/feedback_*.md 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" -ge 1 ]
+
+  # The distiller no longer writes to the DB
+  mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE agent='shared';" 2>/dev/null)"
+  [ "$mem_count" -eq 0 ]
 }
