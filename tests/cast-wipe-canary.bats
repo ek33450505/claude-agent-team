@@ -27,6 +27,18 @@ setup() {
   load 'helpers/setup'
   setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
 
+  # GUI isolation: stub out desktop notification tools so that the trigger path
+  # (which calls osascript on the wipe path, script lines ~123-129) does NOT
+  # fire a real macOS notification during the test suite.
+  STUB_BIN_DIR="${BATS_TEST_TMPDIR}/stub-bin"
+  mkdir -p "${STUB_BIN_DIR}"
+  for _stub_cmd in osascript notify-send terminal-notifier; do
+    printf '#!/bin/sh\nexit 0\n' > "${STUB_BIN_DIR}/${_stub_cmd}"
+    chmod +x "${STUB_BIN_DIR}/${_stub_cmd}"
+  done
+  export PATH="${STUB_BIN_DIR}:${PATH}"
+  export STUB_BIN_DIR
+
   # Separate incident dir OUTSIDE HOME — the canary writes here
   TEST_INCIDENT_DIR="$(mktemp -d)"
   export TEST_INCIDENT_DIR
@@ -214,4 +226,20 @@ teardown() {
   local wipe_count
   wipe_count="$(find "${TEST_INCIDENT_DIR}" -maxdepth 1 -name 'wipe-*' -type d 2>/dev/null | wc -l | tr -d ' ')"
   [ "${wipe_count}" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# (e) Pillar-2: plist ProgramArguments script path is outside ~/.claude
+# ---------------------------------------------------------------------------
+
+@test "pillar-2: plist ProgramArguments script path is outside ~/.claude blast radius" {
+  local plist="${REPO_DIR}/macos/cast-wipe-canary.plist"
+  [ -f "${plist}" ]
+
+  # Must reference the off-blast-radius location
+  grep -q 'Library/Application Support/cast/bin/cast-wipe-canary.sh' "${plist}"
+
+  # Must NOT point into the blast-radius (~/.claude)
+  run grep '\.claude.*cast-wipe-canary\.sh' "${plist}"
+  assert_failure
 }
