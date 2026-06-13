@@ -13,7 +13,7 @@
 #   5b. hallucination grader — unverified row (verified=0) within --since window → FAIL
 #   5c. hallucination grader — verified=1 row → does NOT count → PASS
 #   5d. hallucination grader — row before --since window → does NOT count → PASS
-#   6.  list → prints all 5 case IDs
+#   6.  list → prints Phase-A anchor case IDs
 #   7.  list --agent commit → only commit eval
 #   8.  run non-existent id → exit 2
 #   9.  tail grader — Status in last 200 lines → PASS
@@ -403,10 +403,10 @@ YAML
 }
 
 # ---------------------------------------------------------------------------
-# 6. list → all 5 case IDs
+# 6. list → Phase-A anchor case IDs present, total count ≥ 5
 # ---------------------------------------------------------------------------
 
-@test "list: returns all 5 eval case IDs" {
+@test "list: returns all Phase-A anchor eval case IDs" {
   run python3 "$RUNNER" list
 
   assert_success
@@ -415,7 +415,10 @@ YAML
   assert_output --partial "protocol-violation-prose-dispatch"
   assert_output --partial "missing-handoff-block"
   assert_output --partial "silent-truncation-no-status-tail"
-  assert_output --partial "5 case(s) found"
+  assert_output --partial "case(s) found"
+  # corpus grows over time; assert at least the 5 Phase-A anchor cases are counted
+  count="$(printf '%s\n' "$output" | sed -n 's/^\([0-9]\{1,\}\) case(s) found.*/\1/p' | head -1)"
+  [ "${count:-0}" -ge 5 ]
 }
 
 # ---------------------------------------------------------------------------
