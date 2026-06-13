@@ -142,6 +142,7 @@ Subcommands:
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}backup${C_RESET}    [--overlay]               On-disk snapshot (+ GitHub overlay with --overlay)
   ${C_BOLD}doctor${C_RESET}                          Run system health check
+  ${C_BOLD}integrity${C_RESET}                       Data-integrity guarantees live status
   ${C_BOLD}upgrade-check${C_RESET}                   Check configured repos for new releases
   ${C_BOLD}migrate${C_RESET}   [--dry-run]               Apply pending DB schema migrations
   ${C_BOLD}tidy${C_RESET}      [--dry-run]               Clean up old plans, events, logs, briefings
@@ -2251,6 +2252,350 @@ PYEOF
   fi
 }
 
+# ── Subcommand: integrity ────────────────────────────────────────────────────
+# Read-only surface answering "are my data-integrity guarantees live right now?"
+# Design rules (PR #217 lessons):
+#   - Never [ok] on absent evidence (a green line requires positive proof in the
+#     same run — never "replica fresh" while the daemon isn't loaded).
+#   - Honest degradation: missing tool/config → labelled INFO/WARN, not silence.
+#   - Zero writes, zero migrations, zero probe-writes. [ -w ] for writability.
+_cmd_integrity() {
+  local ok_count=0
+  local warn_count=0
+  local info_count=0
+
+  local OK="[${C_GREEN}ok${C_RESET}]"
+  local WARN="[${C_YELLOW}!!${C_RESET}]"
+  local INFO="[${C_CYAN}--${C_RESET}]"
+
+  printf "${C_BOLD}CAST Integrity${C_RESET}\n"
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+
+  # ── 1. Write guards live ──────────────────────────────────────────────────
+  # Check runtime guard scripts installed to ~/.claude/scripts/.
+  local _guard_lib="${CAST_SCRIPTS_DIR}/cast-guard-lib.sh"
+  local _guard_py="${CAST_SCRIPTS_DIR}/cast_guard.py"
+  local _write_guards="${CAST_SCRIPTS_DIR}/write-guards.sh"
+  local _missing_guards=""
+  [[ -f "$_guard_lib" ]]    || _missing_guards="${_missing_guards} cast-guard-lib.sh"
+  [[ -f "$_guard_py" ]]     || _missing_guards="${_missing_guards} cast_guard.py"
+  [[ -f "$_write_guards" ]] || _missing_guards="${_missing_guards} write-guards.sh"
+  if [[ -z "$_missing_guards" ]]; then
+    ok_count=$((ok_count + 1))
+    printf "%b Write guards: all guard scripts present\n" "$OK"
+  else
+    warn_count=$((warn_count + 1))
+    printf "%b Write guards: missing —%s — run: bash install.sh\n" "$WARN" "$_missing_guards"
+  fi
+
+  # ── 2. Blast-radius lint wired (repo context) ─────────────────────────────
+  # Only relevant when running from within the CAST repo (scripts/blast-radius-lint.sh
+  # exists in cwd). INFO-skip otherwise — the lint is a repo-level tool, not a runtime
+  # guarantee checked everywhere.
+  # Resolve hooks path: git may wire hooks via core.hooksPath (e.g., .githooks/) rather
+  # than the default .git/hooks. Read the configured path first; fall back to .git/hooks.
+  local _cwd_lint="${PWD}/scripts/blast-radius-lint.sh"
+  if [[ ! -f "$_cwd_lint" ]]; then
+    info_count=$((info_count + 1))
+    printf "%b Blast-radius lint: not a CAST repo (run from repo root for this check)\n" "$INFO"
+  else
+    local _hooks_dir
+    _hooks_dir="$(git -C "$PWD" config core.hooksPath 2>/dev/null || echo "")"
+    local _pre_commit
+    if [[ -n "$_hooks_dir" ]]; then
+      # hooksPath may be relative to repo root or absolute
+      if [[ "$_hooks_dir" = /* ]]; then
+        _pre_commit="${_hooks_dir}/pre-commit"
+      else
+        _pre_commit="${PWD}/${_hooks_dir}/pre-commit"
+      fi
+    else
+      _pre_commit="${PWD}/.git/hooks/pre-commit"
+    fi
+    if [[ -f "$_pre_commit" ]] && grep -q "blast-radius-lint" "$_pre_commit" 2>/dev/null; then
+      ok_count=$((ok_count + 1))
+      printf "%b Blast-radius lint: pre-commit hook references blast-radius-lint.sh\n" "$OK"
+    else
+      warn_count=$((warn_count + 1))
+      printf "%b Blast-radius lint: pre-commit hook not wired (%s)\n" "$WARN" "$_pre_commit"
+    fi
+  fi
+
+  # ── 3a. Snapshot pillar ───────────────────────────────────────────────────
+  # Daily launchd job — stale if >26h old (24h schedule + 2h grace).
+  local _snap_root="${CAST_BACKUP_ROOT:-${HOME}/Library/Application Support/cast/backups}"
+  local _snap_max_age_hours=26
+  local _newest_snap=""
+  if [[ -d "$_snap_root" ]]; then
+    _newest_snap="$(ls -dt "${_snap_root}"/cast-snapshot-* 2>/dev/null | head -1 || true)"
+  fi
+  if [[ -z "$_newest_snap" ]]; then
+    warn_count=$((warn_count + 1))
+    printf "%b Snapshot: no snapshot found in %s — run: cast backup\n" "$WARN" "$_snap_root"
+  else
+    local _snap_age_h
+    _snap_age_h="$(python3 -c 'import os,sys,time
+try:
+    print(int((time.time()-os.path.getmtime(sys.argv[1]))//3600))
+except Exception:
+    print(9999)' "$_newest_snap" 2>/dev/null || echo 9999)"
+    if [[ "${_snap_age_h:-9999}" -lt "$_snap_max_age_hours" ]]; then
+      ok_count=$((ok_count + 1))
+      printf "%b Snapshot: %s (%sh old)\n" "$OK" "$(basename "$_newest_snap")" "$_snap_age_h"
+    else
+      warn_count=$((warn_count + 1))
+      printf "%b Snapshot: newest is %sh old (threshold: %sh) — run: cast backup\n" \
+        "$WARN" "$_snap_age_h" "$_snap_max_age_hours"
+    fi
+  fi
+
+  # ── 3b. db-backups ────────────────────────────────────────────────────────
+  # Post-#217 default: ~/Library/Application Support/cast/db-backups (off blast radius).
+  local _db_backup_dir="${CAST_BACKUP_DIR:-${HOME}/Library/Application Support/cast/db-backups}"
+  local _db_bak_max_age_hours=26
+  local _db_bak_age_h=9999
+  if [[ ! -d "$_db_backup_dir" ]]; then
+    warn_count=$((warn_count + 1))
+    printf "%b DB backups: dir not found (%s) — run: bash install.sh\n" "$WARN" "$_db_backup_dir"
+  else
+    _db_bak_age_h="$(python3 -c '
+import os, sys, time
+d = sys.argv[1]
+try:
+    files = [os.path.join(d, f) for f in os.listdir(d)
+             if os.path.isfile(os.path.join(d, f))]
+    if not files:
+        print(9999)
+        sys.exit()
+    newest = max(files, key=os.path.getmtime)
+    print(int((time.time() - os.path.getmtime(newest)) // 3600))
+except Exception:
+    print(9999)
+' "$_db_backup_dir" 2>/dev/null || echo 9999)"
+    if [[ "${_db_bak_age_h:-9999}" -eq 9999 ]]; then
+      warn_count=$((warn_count + 1))
+      printf "%b DB backups: no backup files found in %s\n" "$WARN" "$_db_backup_dir"
+    elif [[ "${_db_bak_age_h}" -lt "$_db_bak_max_age_hours" ]]; then
+      ok_count=$((ok_count + 1))
+      printf "%b DB backups: fresh (%sh old)\n" "$OK" "$_db_bak_age_h"
+    else
+      warn_count=$((warn_count + 1))
+      printf "%b DB backups: newest is %sh old (threshold: %sh)\n" \
+        "$WARN" "$_db_bak_age_h" "$_db_bak_max_age_hours"
+    fi
+  fi
+
+  # ── 3c. Litestream replica ────────────────────────────────────────────────
+  # Daemon-state gate: never [ok] when daemon is not loaded (PR #217 rule).
+  # launchctl absent (Linux/CI) → INFO skipped rung.
+  local _ls_root="${CAST_LITESTREAM_ROOT:-${HOME}/Library/Application Support/cast}"
+  local _ls_config="${_ls_root}/litestream.yml"
+  local _ls_replica="${_ls_root}/litestream/cast-db"
+  if ! command -v litestream >/dev/null 2>&1; then
+    info_count=$((info_count + 1))
+    printf "%b Litestream: not installed (opt-in — brew install benbjohnson/litestream/litestream)\n" "$INFO"
+  elif [[ ! -f "$_ls_config" ]]; then
+    warn_count=$((warn_count + 1))
+    printf "%b Litestream: installed but config missing — run: bash scripts/cast-litestream-setup.sh\n" "$WARN"
+  else
+    # Daemon state — macOS-only; degrade gracefully on Linux/CI
+    local _daemon_state="unknown"
+    if command -v launchctl >/dev/null 2>&1; then
+      if launchctl list com.cast.litestream >/dev/null 2>&1; then
+        _daemon_state="loaded"
+      else
+        _daemon_state="not_loaded"
+        warn_count=$((warn_count + 1))
+        printf "%b Litestream: daemon not loaded (check ~/Library/LaunchAgents/com.cast.litestream.plist)\n" "$WARN"
+      fi
+    else
+      info_count=$((info_count + 1))
+      printf "%b Litestream: daemon check skipped (launchctl not available)\n" "$INFO"
+    fi
+    # Replica directory presence + freshness
+    local _ls_has_files
+    _ls_has_files="$(find "$_ls_replica" -type f ! -name '.*' -print -quit 2>/dev/null || true)"
+    if [[ ! -d "$_ls_replica" ]] || [[ -z "$_ls_has_files" ]]; then
+      warn_count=$((warn_count + 1))
+      printf "%b Litestream: replica dir missing or empty (%s)\n" "$WARN" "$_ls_replica"
+    else
+      local _ls_lag_s="-1"
+      _ls_lag_s="$(python3 - "$_ls_replica" "${CAST_DB_PATH}" <<'INTPYEOF'
+import os, sys
+replica_dir = sys.argv[1]
+db_path = sys.argv[2]
+try:
+    newest = max(
+        (os.path.getmtime(os.path.join(root, fn))
+         for root, _dirs, files in os.walk(replica_dir)
+         for fn in files
+         if not fn.startswith('.')),
+        default=None
+    )
+    if newest is None:
+        print(-1)
+        sys.exit(0)
+    db_mtime = os.path.getmtime(db_path) if os.path.exists(db_path) else newest
+    lag = int(db_mtime - newest)
+    print(max(lag, 0))
+except Exception:
+    print(-1)
+INTPYEOF
+      2>/dev/null || echo -1)"
+      if [[ "${_ls_lag_s}" -lt 0 ]]; then
+        warn_count=$((warn_count + 1))
+        printf "%b Litestream: could not determine replica age\n" "$WARN"
+      elif [[ "${_ls_lag_s}" -gt 3600 ]]; then
+        warn_count=$((warn_count + 1))
+        printf "%b Litestream: replica stale — lag %ds (>1h behind cast.db)\n" "$WARN" "${_ls_lag_s}"
+      else
+        # Fresh replica — only [ok] when daemon is loaded or unknown (never when not_loaded)
+        if [[ "$_daemon_state" == "not_loaded" ]]; then
+          warn_count=$((warn_count + 1))
+          printf "%b Litestream: replica present (lag %ds) but daemon not loaded — replication will go stale\n" "$WARN" "${_ls_lag_s}"
+        else
+          ok_count=$((ok_count + 1))
+          printf "%b Litestream: replica fresh (lag %ds)\n" "$OK" "${_ls_lag_s}"
+        fi
+      fi
+    fi
+  fi
+
+  # ── 3d. Colocation audit ──────────────────────────────────────────────────
+  # Any backup under ~/.claude/backups/ fresh (<7d) = colocated inside blast radius.
+  # This is the monitoring answer to the known install-snapshot copy issue (resume 1c).
+  # Do NOT retarget anything here — just detect and warn.
+  local _coloc_dir="${HOME}/.claude/backups"
+  local _coloc_fresh_count=0
+  if [[ -d "$_coloc_dir" ]]; then
+    _coloc_fresh_count="$(python3 -c '
+import os, sys, time
+d = sys.argv[1]
+threshold = time.time() - 7 * 86400
+count = 0
+try:
+    for entry in os.scandir(d):
+        try:
+            if entry.stat().st_mtime > threshold:
+                count += 1
+        except Exception:
+            pass
+except Exception:
+    pass
+print(count)
+' "$_coloc_dir" 2>/dev/null || echo 0)"
+  fi
+  if [[ "${_coloc_fresh_count:-0}" -gt 0 ]]; then
+    warn_count=$((warn_count + 1))
+    printf "%b Colocation: %d backup(s) inside blast radius (~/.claude/backups) fresh <7d\n" \
+      "$WARN" "$_coloc_fresh_count"
+  else
+    ok_count=$((ok_count + 1))
+    printf "%b Colocation: no recent backups inside blast radius (~/.claude/backups)\n" "$OK"
+  fi
+
+  # Compute canonical ~/.claude path once — used in both check 4 (canary script
+  # blast-radius sub-rung) and check 5 (evidence dir off-blast-radius check).
+  local _claude_real
+  _claude_real="$(python3 -c "import os; print(os.path.realpath(os.path.expanduser('~/.claude')))" \
+    2>/dev/null || echo "${HOME}/.claude")"
+
+  # ── 4. Wipe canary loaded ─────────────────────────────────────────────────
+  # The canary is a launchd WatchPaths agent (com.cast.wipe-canary), NOT a
+  # settings.json hook. Real check: `launchctl list com.cast.wipe-canary` succeeds
+  # (loaded) AND the plist's ProgramArguments script path exists.
+  # Sub-rung: if the script path resolves inside ~/.claude → WARN (the wipe would
+  # delete the canary script before it can fire — detected on this machine right now).
+  # launchctl absent (Linux/CI) → INFO skip, same pattern as litestream rung.
+  local _canary_label="com.cast.wipe-canary"
+  local _canary_plist="${HOME}/Library/LaunchAgents/${_canary_label}.plist"
+  if ! command -v launchctl >/dev/null 2>&1; then
+    info_count=$((info_count + 1))
+    printf "%b Wipe canary: launchctl not available (Linux/CI) — skipping\n" "$INFO"
+  elif ! launchctl list "$_canary_label" >/dev/null 2>&1; then
+    warn_count=$((warn_count + 1))
+    printf "%b Wipe canary: daemon not loaded (launchctl list %s failed)\n" "$WARN" "$_canary_label"
+  else
+    # Daemon is loaded. Parse the plist for the script path.
+    local _canary_script_path=""
+    if [[ -f "$_canary_plist" ]]; then
+      _canary_script_path="$(python3 - "$_canary_plist" <<'CANPYEOF'
+import plistlib, sys
+try:
+    with open(sys.argv[1], 'rb') as f:
+        d = plistlib.load(f)
+    args = d.get('ProgramArguments', [])
+    sh_args = [a for a in args if a.endswith('.sh')]
+    print(sh_args[0] if sh_args else '')
+except Exception:
+    print('')
+CANPYEOF
+      2>/dev/null || echo "")"
+    fi
+    if [[ -z "$_canary_script_path" ]]; then
+      warn_count=$((warn_count + 1))
+      printf "%b Wipe canary: daemon loaded but plist not found or has no .sh arg (%s)\n" \
+        "$WARN" "$_canary_plist"
+    elif [[ ! -f "$_canary_script_path" ]]; then
+      warn_count=$((warn_count + 1))
+      printf "%b Wipe canary: daemon loaded but script not found at %s\n" \
+        "$WARN" "$_canary_script_path"
+    else
+      # Sub-rung: is the canary script inside the blast radius?
+      local _canary_script_real
+      _canary_script_real="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" \
+        "$_canary_script_path" 2>/dev/null || echo "$_canary_script_path")"
+      local _canary_inside_blast=0
+      case "$_canary_script_real" in
+        "${_claude_real}"|"${_claude_real}"/*)
+          _canary_inside_blast=1 ;;
+      esac
+      if [[ "$_canary_inside_blast" -eq 1 ]]; then
+        warn_count=$((warn_count + 1))
+        printf "%b Wipe canary: daemon loaded but script inside blast radius (%s) — wipe deletes canary before it can fire\n" \
+          "$WARN" "$_canary_script_path"
+      else
+        ok_count=$((ok_count + 1))
+        printf "%b Wipe canary: daemon loaded, script present and off blast radius\n" "$OK"
+      fi
+    fi
+  fi
+
+  # ── 5. Evidence path writable + off blast radius ──────────────────────────
+  # Canary writes forensic evidence outside ~/.claude so it survives a wipe.
+  # If the evidence dir resolves inside ~/.claude, it defeats the purpose.
+  local _evidence_dir="${CAST_INCIDENT_DIR:-${HOME}/Library/Application Support/cast/incidents}"
+  if [[ ! -e "$_evidence_dir" ]]; then
+    info_count=$((info_count + 1))
+    printf "%b Evidence dir: not yet created (%s) — created on first wipe event\n" "$INFO" "$_evidence_dir"
+  else
+    local _evidence_real
+    _evidence_real="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" \
+      "$_evidence_dir" 2>/dev/null || echo "$_evidence_dir")"
+    # Check if evidence dir is inside blast radius
+    local _inside_blast=0
+    case "$_evidence_real" in
+      "${_claude_real}"|"${_claude_real}"/*)
+        _inside_blast=1
+        ;;
+    esac
+    if [[ "$_inside_blast" -eq 1 ]]; then
+      warn_count=$((warn_count + 1))
+      printf "%b Evidence dir: inside blast radius (%s) — defeats wipe detection purpose\n" \
+        "$WARN" "$_evidence_dir"
+    elif [[ ! -w "$_evidence_dir" ]]; then
+      warn_count=$((warn_count + 1))
+      printf "%b Evidence dir: not writable (%s)\n" "$WARN" "$_evidence_dir"
+    else
+      ok_count=$((ok_count + 1))
+      printf "%b Evidence dir: writable and off blast radius (%s)\n" "$OK" "$_evidence_dir"
+    fi
+  fi
+
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "integrity: %d ok, %d warn, %d info\n" "$ok_count" "$warn_count" "$info_count"
+}
+
 # ── Doctor helper: upgrades block ────────────────────────────────────────────
 _doctor_upgrades() {
   local CAST_STATE_DIR="${HOME}/.claude/cast"
@@ -3320,6 +3665,7 @@ case "$SUBCOMMAND" in
   hooks)                _cmd_hooks "$@" ;;
   backup)               _cmd_backup "$@" ;;
   doctor)               _cmd_doctor "$@" ;;
+  integrity)            _cmd_integrity "$@" ;;
   upgrade-check)        _cmd_upgrade_check "$@" ;;
   migrate)              _cmd_migrate "$@" ;;
   tidy)                 _cmd_tidy "$@" ;;
