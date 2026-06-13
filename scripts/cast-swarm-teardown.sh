@@ -44,15 +44,26 @@ fi
 
 MANIFEST_CONTENT="$(cat "$MANIFEST_FILE")"
 GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Resolve the scripts directory from BASH_SOURCE so the Python heredoc can locate
+# cast_guard.py without relying on __file__ (which resolves to stdin in heredocs).
+SCRIPTS_DIR_VAL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MANIFEST_CONTENT="$MANIFEST_CONTENT" \
 DB_PATH_VAL="$DB_PATH" \
 SWARM_ID_VAL="$SWARM_ID" \
 GIT_ROOT_VAL="$GIT_ROOT" \
 MANIFEST_FILE_VAL="$MANIFEST_FILE" \
+SCRIPTS_DIR_VAL="$SCRIPTS_DIR_VAL" \
 python3 - <<'PYEOF'
-import json, os, sqlite3, sys, subprocess, shutil
+import json, os, sqlite3, sys, subprocess
 from datetime import datetime, timezone
+
+# Inject the scripts dir (resolved in bash via BASH_SOURCE) so cast_guard is importable.
+# __file__ is not usable inside a heredoc — it resolves to stdin.
+_scripts_dir = os.environ.get("SCRIPTS_DIR_VAL", "")
+if _scripts_dir:
+    sys.path.insert(0, _scripts_dir)
+from cast_guard import safe_rmtree
 
 manifest_raw  = os.environ.get("MANIFEST_CONTENT", "")
 db_path       = os.environ.get("DB_PATH_VAL", "")
@@ -138,10 +149,11 @@ for tm in teammates:
         else:
             print(f"  {role}: WARNING — could not remove {worktree}: {result.stderr.strip()}", file=sys.stderr)
             # Try to clean up the directory directly as last resort.
-            # SAFETY: path was validated by _is_safe_worktree above.
+            # SAFETY: path was validated by _is_safe_worktree above;
+            # safe_rmtree enforces the swarm blast-radius as an additional layer.
             try:
                 if os.path.exists(worktree):
-                    shutil.rmtree(worktree)
+                    safe_rmtree(worktree, f"/tmp/cast-swarm-{swarm_id}", label="swarm-teardown")
                     print(f"  {role}: forcibly removed directory {worktree}")
             except Exception as rm_err:
                 print(f"  {role}: ERROR — could not remove directory: {rm_err}", file=sys.stderr)
