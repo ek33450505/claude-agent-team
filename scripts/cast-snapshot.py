@@ -186,7 +186,7 @@ def _enforce_retention(
     ISO weeks outside the daily window.
 
     Directories are sorted by name (ISO date = alphabetical = chronological).
-    Each rmtree is guarded via _assert_safe_to_delete.
+    Each rmtree is guarded via cast_guard.safe_rmtree.
 
     Returns (retained_count, pruned_count).
     """
