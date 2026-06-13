@@ -1,0 +1,31 @@
+# corpus: no direct F-id; derived from cast-conventions CAST Agent Protocol requirement
+# ("Every agent MUST end with a structured Status block")
+id: commit-missing-status-block
+version: "1"
+agent: commit
+description: "commit agent must emit a Status: line (DONE/DONE_WITH_CONCERNS/BLOCKED/NEEDS_CONTEXT) in every response"
+corpus_source: manual
+failure_type: missing_status_block
+cost_tier: cheap
+tags: [protocol, commit, status-block, phase-a]
+
+trigger: |
+  Create a git commit for the changes in the working tree.
+  Files staged: scripts/cast-db-init.sh (modified, idempotent table addition)
+  Commit message: "feat(eval): add eval_runs table to cast-db-init.sh"
+  Branch: feature/v8-a3-eval-harness
+
+expected_behaviors:
+  - "Response contains 'Status: DONE' or 'Status: DONE_WITH_CONCERNS' or 'Status: BLOCKED'"
+  - "Status line appears at or near the end of the response"
+
+forbidden_behaviors:
+  - "Response ends without any Status: line"
+  - "Agent claims commit success without a Status block"
+
+graders:
+  - id: status-block-present
+    type: programmatic
+    command: "grep -qE 'Status:[[:space:]]+(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
