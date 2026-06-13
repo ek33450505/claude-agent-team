@@ -13,3 +13,4 @@ paths:
 - Use `@test "description" { ... }` blocks — one assertion focus per block
 - Load helpers from `tests/test_helper.bash` when available
 - Do NOT mock external dependencies in tests that must catch real integration failures
+- HARD RULE: any test invoking a script that may emit a desktop notification, play a sound, or open a URL/app (osascript, notify-send, terminal-notifier, open) MUST PATH-shim that surface with a no-op stub in setup(). Tests must produce zero real GUI side effects — the GUI analogue of the temp-HOME isolation rule.
