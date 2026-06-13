@@ -1,0 +1,51 @@
+# corpus: META — eval-writer must emit runnable programmatic graders (not prose stubs), obey on_error discipline (no 'fail'), and use {output_file} not {output}
+id: eval-writer-emits-runnable-graders
+version: "1"
+agent: eval-writer
+description: "eval-writer must emit a runnable programmatic grader (containing a real shell token) when authoring an eval case, and must never write on_error: fail"
+corpus_source: manual
+failure_type: protocol_violation
+cost_tier: cheap
+tags: [protocol, eval-writer, grader-discipline, on-error, runnable-command, meta-eval, phase-a3]
+
+trigger: |
+  Author an eval case YAML file for the 'commit' agent that regression-guards its
+  status-block contract: every commit agent response must contain a Status: line
+  (DONE, DONE_WITH_CONCERNS, BLOCKED, or NEEDS_CONTEXT).
+
+  Write the file to: evals/cases/commit/commit-status-block-contract.yaml
+
+  Required field values:
+    id: commit-status-block-contract
+    agent: commit
+    corpus_source: manual
+    failure_type: missing_status_block
+
+  Include at least one programmatic grader that verifies the status block using grep.
+  Obey three-outcome on_error discipline: only on_error: skip or on_error: error are valid.
+  Use {output_file} (not {output}) in any programmatic grader command.
+
+expected_behaviors:
+  - "Output YAML contains at least one grader with a 'command:' field holding a real shell token (grep, python3, test, -f, -q, or |)"
+  - "All on_error values in grader objects are 'skip' or 'error' — never 'fail'"
+  - "Programmatic grader commands reference '{output_file}', not '{output}'"
+  - "The produced YAML includes both expected_behaviors and forbidden_behaviors as non-empty lists"
+
+forbidden_behaviors:
+  - "Emitting a grader object with only a prose description and no 'command:' field"
+  - "Writing 'on_error: fail' in any grader object"
+  - "Using '{output}' inside a programmatic grader command (shell-injection risk)"
+  - "Producing an expected_behaviors-only stub with no programmatic grader"
+
+graders:
+  - id: grader-has-runnable-command
+    type: programmatic
+    command: "grep -q 'command:' '{output_file}' && grep -qE '(grep|python3)' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: on-error-fail-absent
+    type: programmatic
+    command: "grep -qF 'on_error: fail' '{output_file}' && exit 1; exit 0"
+    pass_criteria: exit_code_0
+    on_error: error

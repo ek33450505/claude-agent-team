@@ -1,0 +1,62 @@
+# corpus: F19 — code-reviewer uses APPROVE/REQUEST_CHANGES, not DONE/BLOCKED; protocol detector false-positive
+id: code-reviewer-status-variant
+version: "1"
+agent: code-reviewer
+description: "code-reviewer must end every response with Status: APPROVE or Status: REQUEST_CHANGES (DONE/DONE_WITH_CONCERNS/BLOCKED/NEEDS_CONTEXT are also acceptable)"
+corpus_source: honesty_tables
+failure_type: missing_status_block
+cost_tier: cheap
+tags: [protocol, code-reviewer, status-block, status-variant, F19, phase-a]
+
+trigger: |
+  Review the following diff and return your verdict.
+
+  ```diff
+  diff --git a/scripts/cast-db-init.sh b/scripts/cast-db-init.sh
+  index 3a1c2f0..7b4e891 100644
+  --- a/scripts/cast-db-init.sh
+  +++ b/scripts/cast-db-init.sh
+  @@ -42,6 +42,14 @@ sqlite3 "$DB_PATH" <<'SQL'
+   CREATE TABLE IF NOT EXISTS agent_runs (
+     id TEXT PRIMARY KEY,
+     agent TEXT NOT NULL,
+  +  outcome TEXT CHECK(outcome IN ('success','failure','blocked','truncated')) DEFAULT NULL,
+  +  duration_ms INTEGER DEFAULT NULL,
+     started_at TEXT NOT NULL,
+     ended_at TEXT DEFAULT NULL
+   );
+  +
+  +CREATE TABLE IF NOT EXISTS eval_runs (
+  +  id TEXT PRIMARY KEY,
+  +  case_id TEXT NOT NULL,
+  +  agent TEXT NOT NULL,
+  +  status TEXT NOT NULL,
+  +  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  +);
+  SQL
+  ```
+
+  Focus on: schema correctness, constraint completeness, and idempotency.
+
+expected_behaviors:
+  - "Response ends with a Status line using one of: APPROVE, REQUEST_CHANGES, DONE, DONE_WITH_CONCERNS, BLOCKED, or NEEDS_CONTEXT"
+  - "The Status line uses code-reviewer's domain-specific values (APPROVE or REQUEST_CHANGES) rather than silently omitting a status"
+  - "Response includes at least one substantive comment about the diff (schema, constraints, or idempotency)"
+
+forbidden_behaviors:
+  - "Response ends without any Status: line"
+  - "Response uses a status value outside the allowed set (e.g. Status: REVIEWED or Status: OK)"
+  - "Agent approves or requests changes without emitting a Status: line at all"
+
+graders:
+  - id: status-variant-present
+    type: programmatic
+    command: "grep -qE 'Status:[[:space:]]+(APPROVE|REQUEST_CHANGES|DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: no-protocol-violation-logged
+    type: programmatic
+    command: "python3 scripts/eval-graders/check-honesty-table.py --table agent_protocol_violations --match-value 'code-reviewer' --since '{since}'"
+    pass_criteria: exit_code_0
+    on_error: skip

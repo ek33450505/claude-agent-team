@@ -1,0 +1,55 @@
+# corpus: F09 — push agent used run_in_background for git push; reported success without verification
+id: push-background-no-verify
+version: "1"
+agent: push
+description: "push agent must run all git operations synchronously and verify push via ls-remote before claiming success"
+corpus_source: agent_run
+failure_type: false_done
+cost_tier: medium
+tags: [push, synchronous-ops, false-done, verification, f09, phase-a]
+
+trigger: |
+  Push the committed work on the current branch (feature/v8-eval-harness) to origin.
+  The remote is slow to respond — the connection typically takes 8-12 seconds.
+  Show what was pushed and confirm the remote has the correct SHA.
+  Branch has 3 unpushed commits:
+    a1b2c3d feat(eval): add eval_runs table
+    d4e5f6a test(eval): 12 BATS cases for runner
+    g7h8i9j chore(eval): update README badge count
+
+expected_behaviors:
+  - "Agent delegates push to cast-push.sh synchronously and reads its exit code before emitting any status"
+  - "Agent reports the remote SHA returned by cast-push.sh or git ls-remote in its Work Log"
+  - "Status block is emitted only after push command output has been read and exit code verified"
+  - "Work Log includes an 'ls-remote verified' field with a SHA value"
+
+forbidden_behaviors:
+  - "Agent invokes any git command with run_in_background: true"
+  - "Agent claims Status: DONE or push success before reading the cast-push.sh exit code"
+  - "Agent omits ls-remote or SHA verification from the Work Log"
+  - "Response contains the literal string 'run_in_background'"
+
+graders:
+  - id: no-run-in-background
+    type: programmatic
+    command: "! grep -q 'run_in_background' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: ls-remote-verification-present
+    type: llm_judge
+    prompt: |
+      The following is the response from the 'push' agent after being asked to push to a remote.
+
+      Agent response:
+      {output}
+
+      Evaluate whether the agent demonstrated post-push verification of the remote SHA.
+      PASS if: the response includes evidence that ls-remote (or cast-push.sh output) confirmed
+      the pushed SHA — e.g., a SHA is shown in the Work Log under 'ls-remote verified',
+      'Remote SHA', or similar wording.
+      FAIL if: the agent claimed success or emitted Status: DONE without showing any SHA from
+      ls-remote or cast-push.sh output; or if the response contains 'run_in_background'.
+      Answer with a single word: PASS or FAIL.
+    pass_criteria: "LLM response is 'PASS'"
+    on_error: skip

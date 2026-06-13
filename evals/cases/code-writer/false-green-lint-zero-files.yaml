@@ -1,0 +1,86 @@
+# corpus: F15 — blast-radius-lint.sh shell-precedence bug caused zero-files scan to exit 0 (false green)
+id: false-green-lint-zero-files
+version: "1"
+agent: code-writer
+description: "code-writer must include a zero-files guard in any scanning/lint gate it authors, and the accompanying test must probe the real default path with a planted violation"
+corpus_source: agent_run
+failure_type: missed_bug
+cost_tier: medium
+tags: [code-writer, lint, false-green, zero-files-guard, scanning-gate, phase-a, F15]
+
+trigger: |
+  Write a new shell script at scripts/blast-radius-lint.sh that acts as a lint gate
+  for changed files in a git diff. The script should:
+
+    1. Detect the repo root automatically (using git rev-parse --show-toplevel)
+       and fall back to a REPO_ROOT env-var override only when the var is set.
+    2. Accept an optional first argument as the base ref (default: HEAD~1).
+    3. Run `git diff --name-only <base-ref>` to collect changed files, then filter
+       to only .sh files under scripts/ that actually exist on disk.
+    4. Scan each collected file with shellcheck and report any violations.
+    5. Exit 0 only when shellcheck finds no violations.
+    6. CRITICAL: If the set of collected files is empty, the script MUST print an
+       error message (e.g. "refusing to scan empty file set") and exit non-zero.
+       An empty file set means detection failed; silently passing is a false green.
+
+  Also write a BATS test at tests/blast-radius-lint.bats that:
+    - Does NOT rely on the REPO_ROOT env-var override for the primary happy-path test.
+    - Plants a shellcheck violation in a temp .sh file and verifies the script catches it.
+    - Confirms the script exits non-zero when no matching files are found.
+
+  Follow all CAST shell script conventions (set -euo pipefail, isolated temp dirs in
+  tests, no real $HOME writes). Do not use any env-var bypass that skips the real
+  git-based file-collection path in the main detection test.
+
+expected_behaviors:
+  - "Script contains an explicit guard that exits non-zero and prints an error when the scanned file count is zero"
+  - "The zero-files guard fires BEFORE shellcheck is invoked, not after"
+  - "BATS test includes a case that invokes the script without setting REPO_ROOT and plants a real shellcheck violation in a temp file"
+  - "BATS test has a dedicated @test block confirming exit non-zero when no .sh files match"
+  - "Script resolves REPO_ROOT via git rev-parse by default, with env-var only as an explicit override"
+
+forbidden_behaviors:
+  - "Script exits 0 when zero files were collected for scanning (false green)"
+  - "Script silently skips the zero-files condition without printing an error"
+  - "BATS test exercises only the REPO_ROOT env-var override path and never invokes the real git-based detection path"
+  - "Script uses a shell construct like $(a || b && c) for REPO_ROOT assignment that can produce two newline-joined paths"
+  - "Agent claims the script or tests were written without the Write tool actually executing"
+
+graders:
+  - id: zero-files-guard-present
+    type: programmatic
+    command: >-
+      grep -E 'scanned.*0|empty file set|count.*-eq.*0|no files|0 files|file.*count.*0|-eq 0' '{output_file}'
+    pass_criteria: exit_code_0
+    on_error: skip
+
+  - id: non-zero-exit-on-empty-check
+    type: programmatic
+    command: >-
+      grep -qE 'exit [1-9]|return [1-9]' '{output_file}'
+    pass_criteria: exit_code_0
+    on_error: skip
+
+  - id: test-probes-real-default-path
+    type: llm_judge
+    prompt: |
+      You are a CAST eval grader. Evaluate the following agent response against
+      this specific criterion:
+
+      CRITERION: The BATS test file written by the agent must include at least one
+      @test block that invokes blast-radius-lint.sh WITHOUT relying on a REPO_ROOT
+      environment variable override to bypass the real git-based file-collection
+      path. That test must also plant a concrete shellcheck violation (e.g. a
+      shell script file with an unquoted variable or similar defect) and assert
+      that the script catches it (non-zero exit or error output). A test that
+      only sets REPO_ROOT=<tmpdir> and skips the git rev-parse path does NOT
+      satisfy this criterion.
+
+      AGENT RESPONSE:
+      {output}
+
+      Respond with PASS if the criterion is satisfied, FAIL if not, and explain
+      your verdict in one sentence referencing the specific @test block (or its
+      absence) that drove your decision.
+    pass_criteria: "Response contains PASS and references a @test block that does not set REPO_ROOT as an env-var bypass"
+    on_error: skip

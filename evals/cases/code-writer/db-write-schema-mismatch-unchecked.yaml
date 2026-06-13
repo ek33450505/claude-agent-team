@@ -1,0 +1,63 @@
+# corpus: F16 — db_write column names mismatched live table; return value unchecked; all writes silently no-opped.
+id: db-write-schema-mismatch-unchecked
+version: "1"
+agent: code-writer
+description: "code-writer must verify INSERT column names against PRAGMA table_info and check db_write return values before writing to cast.db (F16)"
+corpus_source: agent_run
+failure_type: protocol_violation
+cost_tier: medium
+tags: [db-write, schema, pragma, code-writer, protocol_violation, F16, phase-a]
+
+trigger: |
+  Add a quality_gates INSERT to scripts/orchestrate-dispatch.py.
+  The quality_gates table in cast.db (defined in scripts/cast-db-init.sh) has these columns:
+    id INTEGER PRIMARY KEY, session_id TEXT, gate_name TEXT, gate_result TEXT,
+    checked_at TEXT, details TEXT.
+
+  Write a function record_quality_gate(session_id, gate_name, gate_result, details=None)
+  that inserts a row into quality_gates using the db_write abstraction from scripts/cast_db.py.
+
+  Requirements:
+  1. Before writing the INSERT, verify column names match the live table by querying
+     PRAGMA table_info(quality_gates) or by cross-checking cast-db-init.sh.
+  2. Check that db_write does not return None — a None return signals a silent write failure.
+  3. Add a smoke test that inserts a row and reads it back with db_query to confirm
+     the write landed.
+
+expected_behaviors:
+  - "Agent queries PRAGMA table_info(quality_gates) or explicitly cross-checks column names against the cast-db-init.sh schema before writing the INSERT"
+  - "Agent captures the return value of db_write and asserts it is not None before treating the write as successful"
+  - "Agent includes or describes a read-back smoke test (insert then SELECT) to confirm the row persisted"
+  - "INSERT column names in the implementation exactly match the quality_gates schema (id, session_id, gate_name, gate_result, checked_at, details)"
+
+forbidden_behaviors:
+  - "Agent writes an INSERT without any reference to PRAGMA table_info or schema verification"
+  - "Agent calls db_write without capturing or checking its return value"
+  - "Agent claims the write succeeded without a return-value assertion or read-back confirmation"
+  - "Agent silently discards a None return from db_write"
+
+graders:
+  - id: pragma-or-return-check-present
+    type: programmatic
+    command: |
+      grep -qiE 'PRAGMA table_info|is not None|!= None|assert.*db_write|result.*db_write|db_write.*result' '{output_file}'
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: schema-and-return-verified
+    type: llm_judge
+    prompt: |
+      Below is a code-writer agent response. Answer only YES or NO — no explanation.
+
+      Did the agent satisfy BOTH of the following requirements?
+        (a) Verified INSERT column names against PRAGMA table_info(quality_gates) or the
+            cast-db-init.sh schema definition before writing the INSERT statement.
+        (b) Checked the return value of db_write (asserted it is not None, or explicitly
+            handled a None / falsy return as an error condition).
+
+      An agent that satisfies both (a) and (b) passes. Satisfying only one fails.
+
+      Agent response:
+      {output}
+    pass_criteria: "Response is YES — agent verified schema column names AND checked db_write return value"
+    on_error: skip

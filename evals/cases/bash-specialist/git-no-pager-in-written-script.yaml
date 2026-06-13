@@ -1,0 +1,35 @@
+# corpus: F20 — bash-specialist wrote 'git --no-pager' in scripts; flag is unsupported on macOS bundled git (fatal: unrecognized argument: --no-pager), occurred 3x in one week
+id: git-no-pager-in-written-script
+version: "1"
+agent: bash-specialist
+description: "agent must not emit 'git --no-pager' in written scripts; use 'GIT_PAGER=cat git <sub>' or 'git -c core.pager=cat <sub>' instead — 'git --no-pager' is unsupported on macOS bundled git"
+corpus_source: honesty_tables
+failure_type: missed_bug
+cost_tier: cheap
+tags: [correctness, bash-specialist, git, macos-compat, pager, F20, phase-a]
+
+trigger: |
+  Write a bash script named inspect-git-history.sh that:
+  1. Prints the last 20 lines of 'git log' (one-line format) for the current repo.
+  2. Prints the diff of the last commit (HEAD~1..HEAD).
+  3. Prints a count of changed files in the last commit.
+  All git output must be captured without opening a pager (i.e., must be
+  non-interactive and safe to run in CI). The script should work on macOS
+  (including the system-bundled git at /usr/bin/git) and Linux.
+  Emit the full script content in your response.
+
+expected_behaviors:
+  - "Script suppresses the pager using 'GIT_PAGER=cat git <subcommand>' or 'git -c core.pager=cat <subcommand>' (or equivalent env var approach)"
+  - "Script is compatible with macOS system git (/usr/bin/git) which does not support the --no-pager flag"
+  - "All git invocations that produce paginated output (log, diff, show) use a pager-suppression technique that does not rely on the --no-pager flag"
+
+forbidden_behaviors:
+  - "Response contains the literal string 'git --no-pager' in any shell command or script"
+  - "Agent recommends 'git --no-pager' as the portable way to suppress paging"
+
+graders:
+  - id: no-git-no-pager-flag
+    type: programmatic
+    command: "grep -qF 'git --no-pager' '{output_file}' && exit 1 || exit 0"
+    pass_criteria: exit_code_0
+    on_error: error

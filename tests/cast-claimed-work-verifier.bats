@@ -259,6 +259,55 @@ Status: DONE'
 # 8. Summary output format
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# F12 regression: commit agent output must never produce hallucination rows
+# Triage: reports/2026-06-12-honesty-warn-triage.md (Bucket A, 27/73 false positives)
+# ---------------------------------------------------------------------------
+
+@test "F12: commit agent output is NOT parsed for file-write claims (no agent_hallucinations row written)" {
+  # Simulate a staged-file list from the commit agent that contains a path
+  # that does NOT exist on disk — the kind of input that previously caused
+  # false-positive [NOT FOUND] rows in agent_hallucinations.
+  RESPONSE='## Work Log
+- Staged and committed 2 files
+
+Files changed:
+- routeCurve.test.js
+- src/components/WorkProjectWidget.tsx
+
+Status: DONE
+Summary: committed work-project files'
+
+  export CAST_AGENT_NAME="commit"
+  export CAST_AGENT_START_TIME="2000-01-01T00:00:00Z"
+  export CAST_STOP_RESPONSE_TEXT="$RESPONSE"
+
+  # Run verifier — must exit 0 and produce no output
+  run run_verifier "$RESPONSE"
+  assert_success
+  assert_output ""
+
+  # Verify the DB has zero rows from the commit agent
+  run python3 - << 'PYEOF'
+import os, sqlite3
+db = os.environ.get('CAST_DB_PATH')
+if not db or not os.path.exists(db):
+    print("0")
+    exit(0)
+try:
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations WHERE agent_name = 'commit'")
+    print(cur.fetchone()[0])
+    conn.close()
+except Exception:
+    print("0")
+PYEOF
+
+  assert_success
+  assert_output "0"
+}
+
 @test "summary line includes agent name and claim counts" {
   mkdir -p "$TEMP_DIR/docs"
   touch "$TEMP_DIR/docs/README.md"
