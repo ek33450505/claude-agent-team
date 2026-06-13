@@ -43,12 +43,8 @@ EXEMPTIONS=(
   "cast_guard.py"      # Python guard primitive: contains the authoritative rmtree call
 )
 
-# ── Allowlist (b): guarded legacy callsites (T7-deferred) ────────────────────
+# ── Allowlist (b): guarded legacy callsites ──────────────────────────────────
 ALLOWLIST=(
-  # T7-deferred: has own _is_safe_worktree() point-solution guard; migrate in follow-up
-  "cast-swarm-teardown.sh"
-  # T7-deferred: has own _assert_safe_to_delete() point-solution guard; migrate in follow-up
-  "cast-snapshot.py"
   # Safe: rm -rf in EXIT trap on its own mktemp -d — low-risk self-contained pattern
   "ci-pii-scan.sh"
 )

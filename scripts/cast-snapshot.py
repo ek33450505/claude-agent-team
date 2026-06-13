@@ -32,49 +32,7 @@ import re
 import subprocess
 from datetime import date
 from pathlib import Path
-
-
-# ---------------------------------------------------------------------------
-# Safety guard — MUST be called immediately before every shutil.rmtree call.
-# ---------------------------------------------------------------------------
-
-_SNAPSHOT_DIR_PATTERN = re.compile(r"^cast-snapshot-\d{4}-\d{2}-\d{2}$")
-
-
-def _assert_safe_to_delete(path: Path, backup_root: Path) -> bool:
-    """
-    Return True only if it is safe to rmtree `path`.
-
-    Checks:
-    1. path basename matches ^cast-snapshot-YYYY-MM-DD$
-    2. realpath(path) starts with realpath(backup_root) + sep (i.e., is strictly inside root)
-    3. realpath(path) != realpath(backup_root)  (never delete the root itself)
-
-    Returns False (with a log warning) for any failing check — caller MUST skip the rmtree.
-    """
-    logger = logging.getLogger("cast-snapshot")
-    real_target = os.path.realpath(str(path))
-    real_root = os.path.realpath(str(backup_root))
-
-    if not _SNAPSHOT_DIR_PATTERN.match(path.name):
-        logger.warning(
-            f"SKIPPING rmtree — basename does not match snapshot pattern: {path.name!r}"
-        )
-        return False
-
-    if real_target == real_root:
-        logger.warning(
-            f"SKIPPING rmtree — target resolves to backup root itself: {real_target}"
-        )
-        return False
-
-    if not real_target.startswith(real_root + os.sep):
-        logger.warning(
-            f"SKIPPING rmtree — target is outside backup root: {real_target!r} not inside {real_root!r}"
-        )
-        return False
-
-    return True
+from cast_guard import safe_rmtree
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +129,10 @@ def _do_snapshot(backup_root: Path, claude_dir: Path) -> tuple[Path, int]:
 
     # If the day dir already exists, wipe it to get a fresh snapshot.
     if snapshot_dir.exists():
-        if _assert_safe_to_delete(snapshot_dir, backup_root):
-            shutil.rmtree(str(snapshot_dir))
+        try:
+            safe_rmtree(snapshot_dir, backup_root, label="snapshot-rotate")
+        except RuntimeError as e:
+            logging.getLogger("cast-snapshot").warning(f"snapshot-rotate blocked (safety guard): {e}")
         # If the guard blocked deletion, we fall through and merge into the
         # existing dir (safe — copy2 overwrites individual files).
 
@@ -226,7 +186,7 @@ def _enforce_retention(
     ISO weeks outside the daily window.
 
     Directories are sorted by name (ISO date = alphabetical = chronological).
-    Each rmtree is guarded via _assert_safe_to_delete.
+    Each rmtree is guarded via cast_guard.safe_rmtree.
 
     Returns (retained_count, pruned_count).
     """
@@ -273,14 +233,13 @@ def _enforce_retention(
     for d in all_dirs:
         if d not in keep_set:
             target = Path(d)
-            if _assert_safe_to_delete(target, backup_root):
-                try:
-                    shutil.rmtree(str(target))
-                    pruned += 1
-                except OSError as e:
-                    logger.warning(f"failed to prune {d}: {e}")
-            else:
-                logger.warning(f"retention skip (safety guard): {d}")
+            try:
+                safe_rmtree(target, backup_root, label="snapshot-retention")
+                pruned += 1
+            except RuntimeError as e:
+                logger.warning(f"retention skip (safety guard): {e}")
+            except OSError as e:
+                logger.warning(f"failed to prune {d}: {e}")
 
     retained = len(keep_set)
     return retained, pruned
