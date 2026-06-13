@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_from": "38f4c9c",
+  "generated_from": "13d87b0",
   "note": "Ratchet baseline for cast-db-contract --check. Exit 1 only on NEW entries absent from this file. Regenerate with: python3 scripts/cast-db-contract.py --update-baseline",
   "contradictions": [
     {
@@ -16,6 +16,16 @@
     {
       "table": "agent_truncations",
       "column": "title",
+      "classification": "CONTRADICTION"
+    },
+    {
+      "table": "routing_events",
+      "column": "ended_at",
+      "classification": "CONTRADICTION"
+    },
+    {
+      "table": "routing_events",
+      "column": "eval_id",
       "classification": "CONTRADICTION"
     },
     {
@@ -232,11 +242,6 @@
     },
     {
       "table": "eval_runs",
-      "column": "agent",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
       "column": "agent_run_id",
       "classification": "SAFE-DROP-CANDIDATE"
     },
@@ -257,16 +262,6 @@
     },
     {
       "table": "eval_runs",
-      "column": "ended_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "eval_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
       "column": "grader_results",
       "classification": "SAFE-DROP-CANDIDATE"
     },
@@ -282,17 +277,7 @@
     },
     {
       "table": "eval_runs",
-      "column": "pass_at_k",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
       "column": "started_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "status",
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
