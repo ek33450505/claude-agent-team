@@ -51,7 +51,7 @@ fi
 
 echo "cast-push: pushed and verified: $BRANCH → origin ($PUSH_SHA)"
 
-source ~/.claude/scripts/cast-events.sh 2>/dev/null || true
-cast_emit_event "task_completed" "cast-push" "push-$(date +%Y%m%d)" "" "Pushed $BRANCH" "DONE" 2>/dev/null || true
+# Event tail must never affect exit status: bash 3.2 exits on source-of-missing-file even with || true outside a subshell.
+( source ~/.claude/scripts/cast-events.sh 2>/dev/null && cast_emit_event "task_completed" "cast-push" "push-$(date +%Y%m%d)" "" "Pushed $BRANCH" "DONE" 2>/dev/null ) || true
 
 exit 0

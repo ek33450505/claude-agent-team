@@ -131,3 +131,17 @@ SHIM
   assert_failure
   assert_output --partial "could not determine current branch"
 }
+
+# ---------------------------------------------------------------------------
+# Test 4 — bash 3.2 regression: source-of-missing-file must not kill the script.
+# On macOS /bin/bash is 3.2; under set -e, `source <missing> 2>/dev/null || true`
+# exits the shell with status 1 — the || true never fires outside a subshell.
+# The fix wraps the event tail in a subshell so its failure never propagates.
+# ---------------------------------------------------------------------------
+@test "bash 3.2 regression: missing cast-events.sh does not cause non-zero exit under /bin/bash" {
+  # HOME is already the temp dir from setup_temp_home — no cast-events.sh present.
+  run bash -c "cd '$WORK_DIR' && HOME='$HOME' /bin/bash '$SCRIPT'"
+
+  assert_success
+  assert_output --partial "pushed and verified"
+}
