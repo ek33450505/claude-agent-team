@@ -951,6 +951,31 @@ SCHEMA_MIGRATIONS_TABLE
   _columns_added=1
 fi
 
+# eval_runs: A3 eval harness pass@k result storage (writer: scripts/cast-eval-runner.py).
+# One row per attempt per eval case. grader_results stores JSON array of per-grader outcomes.
+# pass_at_k is only set on the final attempt of a k-run batch.
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "eval_runs"; then
+  sqlite3 "$DB_PATH" <<'EVAL_RUNS_TABLE'
+CREATE TABLE IF NOT EXISTS eval_runs (
+  id             TEXT PRIMARY KEY,
+  eval_id        TEXT NOT NULL,
+  agent          TEXT NOT NULL,
+  attempt        INTEGER NOT NULL,
+  agent_run_id   TEXT,
+  status         TEXT NOT NULL,
+  grader_results TEXT,
+  pass_at_k      REAL,
+  k              INTEGER,
+  duration_ms    INTEGER,
+  started_at     TEXT,
+  ended_at       TEXT,
+  model          TEXT,
+  cost_tier      TEXT
+);
+EVAL_RUNS_TABLE
+  _columns_added=1
+fi
+
 # Ensure agent_id index exists
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
 

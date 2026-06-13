@@ -156,6 +156,7 @@ Subcommands:
   ${C_BOLD}ci-local${C_RESET}                           Run PR-gating CI workflows locally via act
   ${C_BOLD}db-contract${C_RESET} [--json] [--check] [--update-baseline]  Schema/DB-contract reconciliation
   ${C_BOLD}stack${C_RESET}     show|refresh [path]          Show or refresh per-repo stack profile
+  ${C_BOLD}eval${C_RESET}      run|list                     Run or list agent behavior evals (A3 harness)
 
 Global flags:
   --json        Machine-readable JSON output
@@ -818,6 +819,58 @@ USAGE
       return 0
     fi
   fi
+}
+
+# ── Subcommand: eval ─────────────────────────────────────────────────────────
+_cmd_eval() {
+  local subcmd="${1:-}"
+  shift 2>/dev/null || true
+
+  # Locate the runner script: installed copy first, repo copy as fallback.
+  local runner="${CAST_SCRIPTS_DIR}/cast-eval-runner.py"
+  if [ ! -f "$runner" ]; then
+    runner="${CAST_REPO_DIR}/scripts/cast-eval-runner.py"
+  fi
+  if [ ! -f "$runner" ]; then
+    _error "cast-eval-runner.py not found. Run: bash install.sh"
+    return 1
+  fi
+
+  case "$subcmd" in
+    run)
+      CAST_REPO_DIR="$CAST_REPO_DIR" python3 "$runner" run "$@"
+      return $?
+      ;;
+    list)
+      CAST_REPO_DIR="$CAST_REPO_DIR" python3 "$runner" list "$@"
+      return $?
+      ;;
+    --help|-h|"")
+      cat <<USAGE
+Usage: cast eval <subcommand> [args]
+
+Subcommands:
+  run <eval-id|--all> [--output-file FILE] [--dry-run] [--k N]
+                            Run one or all eval cases
+  list [--agent NAME] [--failure-type TYPE]
+                            List available eval cases
+
+Examples:
+  cast eval run commit-missing-status-block --output-file /tmp/agent-output.txt
+  cast eval run commit-missing-status-block --dry-run
+  cast eval run --all
+  cast eval list
+  cast eval list --agent commit
+  cast eval list --failure-type missing_status_block
+USAGE
+      return 0
+      ;;
+    *)
+      _error "Unknown eval subcommand: $subcmd"
+      printf "  Run: cast eval --help\n" >&2
+      return 1
+      ;;
+  esac
 }
 
 # ── Subcommand: memory ───────────────────────────────────────────────────────
@@ -3659,6 +3712,7 @@ case "$SUBCOMMAND" in
     exec bash "$parallel_script" "$@"
     ;;
   test)                 _cmd_test "$@" ;;
+  eval)                 _cmd_eval "$@" ;;
   memory)               _cmd_memory "$@" ;;
   budget)               _cmd_budget "$@" ;;
   agents)               _cmd_agents "$@" ;;

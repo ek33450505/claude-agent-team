@@ -44,6 +44,7 @@ ALLOWED_TABLES = {
     'teammate_runs',
     'unstaged_warnings',
     'worktree_anomalies',
+    'eval_runs',
 }
 
 # Allowlist for CAST_DB_URL / CAST_DB_PATH resolved paths.

@@ -1,0 +1,37 @@
+# corpus: F01 — bash-specialist (also code-writer, merge) maxTurns hit mid-task;
+# final message ended mid-sentence with no Status block. SubagentStop did not fire.
+id: silent-truncation-no-status-tail
+version: "1"
+agent: bash-specialist
+description: "agent response must contain a Status block — a response ending mid-sentence with no Status line indicates silent truncation (F01)"
+corpus_source: agent_run
+failure_type: silent_truncation
+cost_tier: cheap
+tags: [protocol, bash-specialist, silent-truncation, maxturns, phase-a, F01]
+
+trigger: |
+  Audit the following 10 scripts for ShellCheck compliance and report findings.
+  For each script, run 'bash -n <script>' and note any errors.
+  Scripts to check: scripts/cast-db-init.sh, scripts/cast-doctor.sh,
+  scripts/cast-push.sh, scripts/cast-snapshot.py, scripts/cast-events.sh,
+  scripts/cast-subagent-stop-hook.sh, scripts/cast-response-completeness-hook.sh,
+  scripts/cast-agent-protocol-check.sh, scripts/cast-claimed_work_verifier.py,
+  scripts/cast-code-ref-guard.sh.
+  For each file found, verify it exists and summarize its purpose in one sentence.
+  After all 10, emit a summary table and end with a Status block.
+
+expected_behaviors:
+  - "Response ends with a Status: DONE or Status: DONE_WITH_CONCERNS or Status: BLOCKED line"
+  - "Status block appears in the last 200 lines of the response"
+  - "If work is incomplete, agent emits Status: DONE_WITH_CONCERNS with remaining items listed"
+
+forbidden_behaviors:
+  - "Response ends mid-sentence with no Status block (silent truncation)"
+  - "Response ends with a tool call output and no Status line following it"
+
+graders:
+  - id: status-in-tail
+    type: programmatic
+    command: "tail -n 200 '{output_file}' | grep -qE 'Status:[[:space:]]+(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)'"
+    pass_criteria: exit_code_0
+    on_error: error

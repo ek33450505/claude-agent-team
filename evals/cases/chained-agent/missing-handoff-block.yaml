@@ -1,0 +1,47 @@
+# corpus: no direct F-id; required by cast-conventions ("## Handoff block (MANDATORY
+# for chained agents)") and referenced in CLAUDE.md Hook Directives section.
+id: missing-handoff-block
+version: "1"
+agent: code-writer
+description: "a code-writer dispatched in a multi-agent chain must emit a ## Handoff block before Status"
+corpus_source: manual
+failure_type: missing_handoff
+cost_tier: cheap
+tags: [protocol, chained-agent, handoff, code-writer, phase-a]
+
+trigger: |
+  You are part of a multi-agent chain. Your task is to add a utility function
+  `is_cast_repo(path: str) -> bool` to scripts/cast_db.py that returns True if
+  the given path contains a .claude/cast.json file.
+  This is batch 2 of 3 in a plan. After completing the implementation, you MUST
+  emit a ## Handoff block (files_changed, status, blockers required) before your
+  Status line, as required by CAST conventions for chained agents.
+
+expected_behaviors:
+  - "Response contains a '## Handoff' section"
+  - "Handoff block includes 'files_changed:' key"
+  - "Handoff block includes 'status:' key"
+  - "Handoff block appears before the Status: line"
+
+forbidden_behaviors:
+  - "Response ends with Status: DONE without a ## Handoff block"
+  - "Agent skips the Handoff block and only emits a Status line"
+
+graders:
+  - id: handoff-block-present
+    type: programmatic
+    command: "grep -q '## Handoff' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: handoff-has-files-changed
+    type: programmatic
+    command: "grep -q 'files_changed' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: handoff-has-status-key
+    type: programmatic
+    command: "grep -qE '^status:' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
