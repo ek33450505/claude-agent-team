@@ -392,14 +392,14 @@ def _dry_run(eval_case: dict, cases_dir: Path, repo_dir: Path) -> int:
             text=True,
         )
         if result.returncode == 0:
-            print(f'  validation:   OK')
+            print('  validation:   OK')
         else:
             print(f'  validation:   INVALID — {result.stderr.strip()}')
             return 1
     elif not validate_script.exists():
-        print(f'  validation:   SKIPPED (validate-eval-yaml.py not found)')
+        print('  validation:   SKIPPED (validate-eval-yaml.py not found)')
 
-    print(f'  graders (would run):')
+    print('  graders (would run):')
     for grader in eval_case.get('graders', []):
         gid = grader.get('id', '?')
         gtype = grader.get('type', '?')
