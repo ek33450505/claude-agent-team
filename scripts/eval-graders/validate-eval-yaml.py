@@ -52,6 +52,10 @@ ALLOWED_COST_TIERS = {'cheap', 'medium', 'expensive'}
 # Allowed grader types.
 ALLOWED_GRADER_TYPES = {'programmatic', 'llm_judge'}
 
+# Allowed on_error values — 'fail' is explicitly forbidden (three-outcome discipline:
+# an infra error must never be recorded as 'fail'; only 'skip' or 'error' are valid).
+ALLOWED_ON_ERROR = {'skip', 'error'}
+
 
 def _fail(message: str) -> int:
     print(f'INVALID: {message}', file=sys.stderr)
@@ -142,6 +146,14 @@ def validate(path: str) -> int:
         if 'on_error' not in grader:
             return _fail(
                 f'graders[{i}] ({grader_id!r}) missing required field: on_error'
+            )
+
+        on_error_val = grader.get('on_error', '')
+        if on_error_val not in ALLOWED_ON_ERROR:
+            return _fail(
+                f"graders[{i}] ({grader_id!r}) on_error={on_error_val!r} is not allowed — "
+                f"three-outcome discipline: only {sorted(ALLOWED_ON_ERROR)} are valid "
+                f"(on_error: fail would let an infra error masquerade as a verdict)"
             )
 
         grader_type = grader.get('type', '')

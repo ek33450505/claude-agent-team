@@ -23,6 +23,7 @@ Phase B: LLM judge (type: llm_judge), pass@k, cast eval report, cast eval record
 import argparse
 import json
 import os
+import re
 import shlex
 import sqlite3
 import subprocess
@@ -258,10 +259,12 @@ def _invoke_judge(prompt: str, model: str, repo_dir: Path) -> str:
     judge_cmd = os.environ.get('CAST_EVAL_JUDGE_CMD', '')
     if judge_cmd:
         # Testability path: run the stub command with prompt on stdin.
+        # Security: shlex.split + shell=False prevents shell injection — the prompt
+        # flows via stdin (input=), never interpolated into the command string.
         try:
             result = subprocess.run(
-                judge_cmd,
-                shell=True,
+                shlex.split(judge_cmd),
+                shell=False,
                 input=prompt,
                 capture_output=True,
                 text=True,
@@ -477,13 +480,11 @@ def _run_grader(
             status = _STATUS_FAIL
         elif exit_code == 2:
             # DB/table absent or infrastructure error: apply on_error policy.
-            # Three-outcome discipline: error ≠ fail.
-            policy_map = {
-                'skip': _STATUS_SKIP,
-                'error': _STATUS_ERROR,
-                'fail': _STATUS_FAIL,
-            }
-            status = policy_map.get(on_error, _STATUS_ERROR)
+            # Three-outcome discipline: exit-code-2 is an infra error and MUST
+            # NEVER become 'fail'.  Drop 'fail' from the map so unknown/invalid
+            # on_error values also collapse to error.
+            policy_map = {'skip': _STATUS_SKIP, 'error': _STATUS_ERROR}
+            status = policy_map.get(on_error, _STATUS_ERROR)  # 'fail' or unknown → error
         else:
             # Unexpected exit code → error (never fail without explicit grader verdict).
             status = _STATUS_ERROR
@@ -778,7 +779,9 @@ def _run_case(
         # Save recording to evals/recordings/ on attempt 1 if requested.
         if recording_dir is not None and attempt_num == 1:
             ts = now.strftime('%Y%m%dT%H%M%SZ')
-            rec_file = recording_dir / f'{eval_id}-{ts}.txt'
+            # Sanitize eval_id before use as a path component (path traversal guard).
+            safe_eval_id = re.sub(r'[^A-Za-z0-9_.-]', '_', eval_id)
+            rec_file = recording_dir / f'{safe_eval_id}-{ts}.txt'
             try:
                 rec_file.write_text(captured_output)
                 print(f'Recording saved: {rec_file}', file=sys.stderr)

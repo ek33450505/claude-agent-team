@@ -32,6 +32,8 @@
 #   20. cast eval report: seeded row → shows table output, exit 0
 #   21. cast eval report --format json: seeded row → valid JSON, exit 0
 #   22. cast eval record: creates recording file in evals/recordings/
+#   23. cost_tier expensive → default k=1 without --expensive flag (cost guard)
+#   24. cost_tier expensive → k=5 with --expensive flag
 #
 # Real schema proof: tables come from cast-db-init.sh — NO ALTER TABLE workarounds.
 # Test 4a explicitly asserts agent_id present AND agent_run_id absent.
@@ -151,6 +153,38 @@ corpus_source: manual
 failure_type: missing_status_block
 cost_tier: cheap
 tags: [test, passatk]
+pass_threshold: 0.5
+trigger: |
+  Do something.
+expected_behaviors:
+  - "Contains PASS_MARKER"
+forbidden_behaviors:
+  - "Missing PASS_MARKER"
+graders:
+  - id: marker-present
+    type: programmatic
+    command: "grep -q PASS_MARKER '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+YAML
+
+  export CAST_EVAL_DIR="$tmpdir"
+}
+
+# Write an expensive-tier eval YAML (default k=5, but gated behind --expensive).
+_setup_expensive_tier_eval_dir() {
+  local tmpdir
+  tmpdir="$(mktemp -d "$HOME/eval_expensive_XXXXXX")"
+
+  cat > "$tmpdir/expensive-test.yaml" <<YAML
+id: expensive-test
+version: "1"
+agent: code-writer
+description: "expensive tier default k test"
+corpus_source: manual
+failure_type: missing_status_block
+cost_tier: expensive
+tags: [test, expensive]
 pass_threshold: 0.5
 trigger: |
   Do something.
@@ -700,4 +734,46 @@ print('Status: DONE')
 
   # Clean up the recording file created by this test
   find "$REPO_DIR/evals/recordings" -name "commit-missing-status-block-*.txt" -delete 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# 23. cost_tier expensive → default k=1 WITHOUT --expensive (gated)
+# Without --expensive the runner falls back to k=1 (not k=5) as a cost guard.
+# ---------------------------------------------------------------------------
+
+@test "cost_tier expensive → default k=1 without --expensive flag" {
+  _setup_expensive_tier_eval_dir
+
+  local fixture="$HOME/fixture_expensive_no_flag.txt"
+  printf 'PASS_MARKER\n' > "$fixture"
+
+  # No --expensive flag → should resolve k=1
+  run python3 "$RUNNER" run expensive-test --output-file "$fixture"
+
+  assert_success
+
+  local row_count
+  row_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM eval_runs WHERE eval_id='expensive-test';")"
+  assert_equal "$row_count" "1"
+}
+
+# ---------------------------------------------------------------------------
+# 24. cost_tier expensive → k=5 WITH --expensive flag
+# Verifies the --expensive gate opens k=5 for expensive-tier evals.
+# ---------------------------------------------------------------------------
+
+@test "cost_tier expensive → k=5 with --expensive flag" {
+  _setup_expensive_tier_eval_dir
+
+  local fixture="$HOME/fixture_expensive_with_flag.txt"
+  printf 'PASS_MARKER\n' > "$fixture"
+
+  # --expensive flag → should resolve k=5
+  run python3 "$RUNNER" run expensive-test --output-file "$fixture" --expensive
+
+  assert_success
+
+  local row_count
+  row_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM eval_runs WHERE eval_id='expensive-test';")"
+  assert_equal "$row_count" "5"
 }
