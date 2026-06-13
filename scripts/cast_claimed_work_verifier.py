@@ -160,6 +160,13 @@ def main():
     repo_root = os.environ.get('CAST_REPO_ROOT', os.getcwd())
     db_path = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
 
+    # F12 guard (2026-06-13): skip commit agent entirely — it stages files via
+    # `git add`/`git commit`, never via the Write tool. Parsing its staged-file
+    # inventory for "claimed file writes" produces 100% false positives.
+    # Triage source: reports/2026-06-12-honesty-warn-triage.md (Bucket A, 27/73).
+    if (os.environ.get('CAST_AGENT_NAME') or '').strip().lower() == 'commit':
+        sys.exit(0)
+
     # If no response text, exit silently
     if not response_text or len(response_text.strip()) < 50:
         sys.exit(0)
