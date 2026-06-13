@@ -58,7 +58,7 @@ cast_stat_tests() {
 
 # cast_stat_tables — count DISTINCT table names across canonical schema sources.
 # Covers cast-db-init.sh + scripts/migrations/*.sql.
-# Must yield 39 (38 + eval_runs added in v8-A3).
+# Must yield 36 (35 + eval_runs added in v8-A3).
 cast_stat_tables() {
   (
     cd "${CAST_STATS_REPO_ROOT}"
