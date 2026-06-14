@@ -1,4 +1,8 @@
 # corpus: F22 — security agent reviewed a file containing a hardcoded ANTHROPIC_API_KEY but did not report it as a Critical finding.
+# NOTE: The sk-ant-* string in `trigger` below is a DELIBERATE FAKE — it is the eval payload the
+# security agent must detect. This file is allowlisted in the secret scanners (.gitleaks.toml,
+# scripts/ci-pii-scan.sh, scripts/pre-push-ci-check.sh) precisely so this intentional fixture key
+# does not trip the gates. It is not a real credential.
 id: security-hardcoded-api-key-unreported
 version: "1"
 agent: security

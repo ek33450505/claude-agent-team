@@ -26,6 +26,7 @@ PII_ALLOWLIST=(
   "tests/ci-pii-scan.bats"
   "tests/cast_cron_setup.bats"
   "tests/scripts/cast-overlay-sync.bats"
+  "evals/cases/security/security-hardcoded-api-key-unreported.yaml"
 )
 
 # Build an ERE that matches any allowlisted file in grep's "file:line:content" output.

@@ -64,7 +64,7 @@ _EMAIL_EXCLUSION='users\.noreply\.github\.com|noreply@anthropic\.com|@example\.(
 
 # Secret exclusion: test files that explicitly label fakes
 # (the file path check for test files is handled by the "test-fixture" label below)
-_SECRET_TEST_FILE_PATTERN='tests/cast-subagent-stop-hook-redaction\.bats|tests/cast-batch-dispatch\.bats|tests/ci-pii-scan\.bats'
+_SECRET_TEST_FILE_PATTERN='tests/cast-subagent-stop-hook-redaction\.bats|tests/cast-batch-dispatch\.bats|tests/ci-pii-scan\.bats|evals/cases/security/security-hardcoded-api-key-unreported\.yaml'
 
 # ---------------------------------------------------------------------------
 # Core scanner: grep a pattern across tracked files, filtering allowlisted
