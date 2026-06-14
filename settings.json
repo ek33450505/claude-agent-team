@@ -184,6 +184,17 @@
         ]
       },
       {
+        "id": "cast-command-guard",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-command-guard.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "AskUserQuestion",
         "hooks": [
           {
