@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+# gen-plugin.sh — Generate the CAST plugin build artifact at dist/cast-plugin/.
+#
+# Usage:
+#   bash scripts/gen-plugin.sh [--with-extras] [<output-dir>]
+#
+# Options:
+#   --with-extras    Include the opt-in agent tier (perf-sentinel, release-notes,
+#                    api-contract, dep-auditor)
+#   <output-dir>     Destination directory (default: <repo-root>/dist/cast-plugin)
+#
+# The generated plugin is a git-ignored build artifact — do NOT commit it.
+# Run once; beta users load via: claude --plugin-dir dist/cast-plugin
+
+set -euo pipefail
+
+# --- Parse args ---
+WITH_EXTRAS=false
+POSITIONAL_OUT=""
+
+for arg in "$@"; do
+  case "$arg" in
+    --with-extras) WITH_EXTRAS=true ;;
+    -*) printf 'Unknown option: %s\n' "$arg" >&2; exit 1 ;;
+    *)  POSITIONAL_OUT="$arg" ;;
+  esac
+done
+
+# --- Step 1: Resolve paths ---
+REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+OUT="${POSITIONAL_OUT:-${REPO_ROOT}/dist/cast-plugin}"
+VERSION="$(cat "${REPO_ROOT}/VERSION" 2>/dev/null || echo "8.0.0")"
+
+# Load the cast-guard-lib for safe destructive operations (data-integrity pillar)
+# shellcheck source=cast-guard-lib.sh
+# shellcheck disable=SC1091
+source "$(dirname "$0")/cast-guard-lib.sh" 2>/dev/null \
+  || source "${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}/cast-guard-lib.sh" 2>/dev/null \
+  || true
+if ! declare -f cast_safe_rm >/dev/null 2>&1; then
+  printf 'ERROR: cast-guard-lib.sh not loaded — cannot safely remove output dir\n' >&2
+  exit 1
+fi
+
+printf 'Generating CAST plugin v%s → %s\n' "$VERSION" "$OUT"
+[[ "$WITH_EXTRAS" == "true" ]] && printf '  (--with-extras: opt-in tier included)\n'
+
+# --- Step 2: Clean + recreate output dirs ---
+if [[ -d "$OUT" ]]; then
+  cast_declare_blast_radius "$(dirname "$OUT")"
+  cast_safe_rm "$OUT"
+fi
+mkdir -p \
+  "${OUT}/agents" \
+  "${OUT}/skills" \
+  "${OUT}/commands" \
+  "${OUT}/hooks" \
+  "${OUT}/scripts" \
+  "${OUT}/.claude-plugin"
+
+# --- Step 3: Agents (curated keep-list) ---
+LEAN_AGENTS=(
+  code-writer
+  code-reviewer
+  commit
+  debugger
+  test-runner
+  test-writer
+  bash-specialist
+  researcher
+  security
+  eval-writer
+  planner
+  docs
+  merge
+  pr-reviewer
+  devops
+  frontend-qa
+  migration-reviewer
+)
+
+EXTRAS_AGENTS=(
+  perf-sentinel
+  release-notes
+  api-contract
+  dep-auditor
+)
+
+# Commands whose target agent is NOT in the curated plugin agent set — exclude so no
+# /command dangles to a missing agent (push → push agent; morning → morning-briefing agent).
+EXCLUDE_COMMANDS=(push morning)
+
+COPY_AGENTS=("${LEAN_AGENTS[@]}")
+if [[ "$WITH_EXTRAS" == "true" ]]; then
+  COPY_AGENTS+=("${EXTRAS_AGENTS[@]}")
+fi
+
+AGENT_COUNT=0
+for agent_name in "${COPY_AGENTS[@]}"; do
+  src="${REPO_ROOT}/agents/core/${agent_name}.md"
+  dst="${OUT}/agents/${agent_name}.md"
+  if [[ ! -f "$src" ]]; then
+    printf '[WARN] Agent not found, skipping: %s\n' "$src" >&2
+    continue
+  fi
+
+  # Strip forbidden plugin frontmatter fields (hooks, mcpServers, permissionMode)
+  # and their nested block lines (YAML block scalars under those keys).
+  python3 - "$src" "$dst" <<'PYEOF'
+import sys, re
+
+src, dst = sys.argv[1], sys.argv[2]
+with open(src) as f:
+    content = f.read()
+
+# Split into frontmatter + body
+FRONTMATTER_RE = re.compile(r'^---\n(.*?)\n---\n', re.DOTALL)
+m = FRONTMATTER_RE.match(content)
+if not m:
+    # No frontmatter — copy as-is
+    with open(dst, 'w') as f:
+        f.write(content)
+    sys.exit(0)
+
+fm_text = m.group(1)
+body = content[m.end():]
+forbidden = {'hooks', 'mcpServers', 'permissionMode'}
+warned = []
+out_lines = []
+skip_key_indent = None  # int: indent width of the forbidden key we're skipping under
+
+for line in fm_text.splitlines():
+    # If we're inside an indented block belonging to a forbidden key, skip any
+    # line whose leading-space count is GREATER than the key's own indent (its
+    # block children), regardless of whether that child uses 2-space, 4-space, or
+    # a block-scalar (| / >) continuation. Blank lines inside the block are also
+    # skipped. We stop skipping at the next line whose indent is <= key indent.
+    if skip_key_indent is not None:
+        stripped = line.lstrip(' ')
+        line_indent = len(line) - len(stripped)
+        if line == '' or line_indent > skip_key_indent:
+            continue
+        else:
+            skip_key_indent = None  # next sibling key or end-of-frontmatter
+
+    # Check if this line starts a forbidden top-level key (indent 0 for agent fm)
+    key_match = re.match(r'^( *)([A-Za-z_][A-Za-z0-9_]*):', line)
+    if key_match:
+        key_indent = len(key_match.group(1))
+        key = key_match.group(2)
+        if key in forbidden:
+            warned.append(key)
+            # Record this key's indent so child lines (indent > key_indent) are skipped
+            skip_key_indent = key_indent
+            continue
+
+    out_lines.append(line)
+
+if warned:
+    print('[WARN] Stripped forbidden plugin frontmatter from %s: %s' % (
+        src.split('/')[-1], ', '.join(warned)), file=sys.stderr)
+
+new_fm = '\n'.join(out_lines)
+with open(dst, 'w') as f:
+    f.write('---\n' + new_fm + '\n---\n' + body)
+PYEOF
+
+  AGENT_COUNT=$((AGENT_COUNT + 1))
+done
+
+printf '  Agents: %d copied\n' "$AGENT_COUNT"
+
+# --- Step 4: Skills ---
+SKILL_COUNT=0
+if [[ -d "${REPO_ROOT}/skills" ]]; then
+  cp -r "${REPO_ROOT}/skills/." "${OUT}/skills/"
+
+  # Delete PII overlay files
+  find "${OUT}/skills" -name "SKILL-personal.md" -delete
+
+  # Assert every directory under OUT/skills/ contains a SKILL.md
+  # Also ensure each SKILL.md has valid YAML frontmatter (required by --strict validate)
+  while IFS= read -r -d '' skill_dir; do
+    skill_md="${skill_dir}/SKILL.md"
+    if [[ ! -f "$skill_md" ]]; then
+      printf 'ERROR: Skill directory missing SKILL.md: %s\n' "$skill_dir" >&2
+      exit 1
+    fi
+    # Prepend minimal frontmatter if missing
+    first_line="$(head -1 "$skill_md")"
+    if [[ "$first_line" != "---" ]]; then
+      skill_name="$(basename "$skill_dir")"
+      {
+        printf -- '---\ndescription: CAST %s skill\n---\n\n' "$skill_name"
+        cat "$skill_md"
+      } > "${skill_md}.tmp" && mv "${skill_md}.tmp" "$skill_md"
+    fi
+    SKILL_COUNT=$((SKILL_COUNT + 1))
+  done < <(find "${OUT}/skills" -mindepth 1 -maxdepth 1 -type d -print0)
+fi
+
+printf '  Skills: %d directories\n' "$SKILL_COUNT"
+
+# --- Step 5: Commands ---
+CMD_COUNT=0
+if [[ -d "${REPO_ROOT}/commands" ]]; then
+  for cmd_src in "${REPO_ROOT}/commands/"*.md; do
+    [[ -f "$cmd_src" ]] || continue
+    fname="$(basename "$cmd_src")"
+    cmd_name="${fname%.md}"
+    cmd_dst="${OUT}/commands/${fname}"
+
+    skip_cmd=false
+    for ex in "${EXCLUDE_COMMANDS[@]}"; do
+      [[ "$cmd_name" == "$ex" ]] && { skip_cmd=true; break; }
+    done
+    if [[ "$skip_cmd" == true ]]; then
+      continue
+    fi
+
+    cp "$cmd_src" "$cmd_dst"
+
+    # Normalize the command file: ensure valid YAML frontmatter.
+    # Uses Python to parse + rewrite frontmatter, quoting description if needed.
+    python3 - "$cmd_dst" "$cmd_name" <<'PYEOF'
+import sys, re
+
+dst, cmd_name = sys.argv[1], sys.argv[2]
+with open(dst) as f:
+    content = f.read()
+
+FRONTMATTER_RE = re.compile(r'^---\n(.*?)\n---\n', re.DOTALL)
+m = FRONTMATTER_RE.match(content)
+
+if not m:
+    # No frontmatter — prepend minimal one
+    desc = 'CAST %s command' % cmd_name
+    with open(dst, 'w') as f:
+        f.write('---\ndescription: %s\n---\n\n' % desc + content)
+    sys.exit(0)
+
+# Has frontmatter — ensure description is YAML-safe (quote if contains : [ ] { } # & * ! | > ' " %)
+fm_text = m.group(1)
+body = content[m.end():]
+out_lines = []
+for line in fm_text.splitlines():
+    if line.startswith('description:'):
+        val = line[len('description:'):].strip()
+        # Quote if value contains YAML-special characters or leading/trailing spaces
+        if val and (re.search(r'[:\[\]{}&*!|>"\'%@`#,]', val) or val.startswith(' ')):
+            val = '"' + val.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        out_lines.append('description: ' + val)
+    else:
+        out_lines.append(line)
+
+with open(dst, 'w') as f:
+    f.write('---\n' + '\n'.join(out_lines) + '\n---\n' + body)
+PYEOF
+
+    CMD_COUNT=$((CMD_COUNT + 1))
+  done
+fi
+
+printf '  Commands: %d copied\n' "$CMD_COUNT"
+
+# --- Step 6: Scripts ---
+SCRIPT_COUNT=0
+if [[ -d "${REPO_ROOT}/scripts" ]]; then
+  find "${REPO_ROOT}/scripts" -maxdepth 1 -type f | while IFS= read -r f; do
+    cp "$f" "${OUT}/scripts/"
+    SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+  done
+  SCRIPT_COUNT=$(find "${OUT}/scripts" -maxdepth 1 -type f | wc -l | tr -d ' ')
+fi
+
+printf '  Scripts: %d copied\n' "$SCRIPT_COUNT"
+
+# --- Step 7: Hooks ---
+python3 - "$REPO_ROOT" "$OUT" <<'PYEOF'
+import json, glob, re, sys, os
+repo = sys.argv[1]; out = sys.argv[2]
+frags = sorted(glob.glob(os.path.join(repo, "managed-settings.d", "*.json")))
+merged = {}
+for f in frags:
+    d = json.load(open(f))
+    h = d.get("hooks")
+    if not isinstance(h, dict):
+        continue  # skip non-hook fragments (env/permissions/model/mcp/meta = Bucket B)
+    for ev, arr in h.items():
+        merged.setdefault(ev, [])
+        merged[ev] += arr
+def rewrite(o):
+    if isinstance(o, dict):  return {k: rewrite(v) for k, v in o.items()}
+    if isinstance(o, list):  return [rewrite(x) for x in o]
+    if isinstance(o, str):
+        return re.sub(r'bash ~/\.claude/scripts/(\S+)',
+                      r'bash "${CLAUDE_PLUGIN_ROOT}/scripts/\1"', o)
+    return o
+merged = rewrite(merged)
+boot = {"hooks": [{"type": "command",
+                   "command": 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/cast-plugin-bootstrap.sh"',
+                   "timeout": 15}]}
+merged.setdefault("SessionStart", [])
+merged["SessionStart"] = [boot] + merged["SessionStart"]
+json.dump({"hooks": merged}, open(os.path.join(out, "hooks", "hooks.json"), "w"), indent=2)
+print("hooks.json: %d events" % len(merged))
+PYEOF
+
+# --- Step 8: Manifest ---
+cat > "${OUT}/.claude-plugin/plugin.json" <<MANIFEST
+{
+  "\$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "cast",
+  "displayName": "CAST — Claude Agent Specialist Team",
+  "version": "${VERSION}",
+  "description": "Swarm control plane for Claude Code: curated specialist agents, hook-enforced quality gates, and SQLite observability.",
+  "author": { "name": "ek33450505" },
+  "homepage": "https://github.com/ek33450505/claude-agent-team",
+  "repository": "https://github.com/ek33450505/claude-agent-team",
+  "license": "MIT",
+  "keywords": ["agents", "multi-agent", "observability", "quality-gates"],
+  "defaultEnabled": false,
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "\${user_config.GITHUB_TOKEN}" }
+    }
+  },
+  "userConfig": {
+    "GITHUB_TOKEN": { "type": "string", "title": "GitHub token", "description": "GitHub PAT for the github MCP server.", "sensitive": true, "required": false }
+  }
+}
+MANIFEST
+
+# --- Step 9: Summary ---
+printf '\n=== CAST plugin generation complete ===\n'
+printf '  Version:   %s\n' "$VERSION"
+printf '  Output:    %s\n' "$OUT"
+printf '  Agents:    %d\n' "$AGENT_COUNT"
+printf '  Skills:    %d\n' "$SKILL_COUNT"
+printf '  Commands:  %d\n' "$CMD_COUNT"
+printf '  Extras:    %s\n' "$WITH_EXTRAS"
+
+# --- Step 10: Validate (skipped if the claude CLI is unavailable, e.g. CI) ---
+if command -v claude >/dev/null 2>&1; then
+  printf '\nRunning: claude plugin validate "%s" --strict\n' "$OUT"
+  if claude plugin validate "$OUT" --strict; then
+    printf 'Validation: PASSED\n'
+  else
+    printf 'Validation: FAILED — see output above\n' >&2
+    exit 1
+  fi
+else
+  printf '\nclaude CLI not found — skipping plugin validation (run locally with the claude CLI to validate)\n'
+fi
