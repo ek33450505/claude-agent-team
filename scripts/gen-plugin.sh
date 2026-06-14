@@ -86,6 +86,10 @@ EXTRAS_AGENTS=(
   dep-auditor
 )
 
+# Commands whose target agent is NOT in the curated plugin agent set — exclude so no
+# /command dangles to a missing agent (push → push agent; morning → morning-briefing agent).
+EXCLUDE_COMMANDS=(push morning)
+
 COPY_AGENTS=("${LEAN_AGENTS[@]}")
 if [[ "$WITH_EXTRAS" == "true" ]]; then
   COPY_AGENTS+=("${EXTRAS_AGENTS[@]}")
@@ -205,6 +209,14 @@ if [[ -d "${REPO_ROOT}/commands" ]]; then
     fname="$(basename "$cmd_src")"
     cmd_name="${fname%.md}"
     cmd_dst="${OUT}/commands/${fname}"
+
+    skip_cmd=false
+    for ex in "${EXCLUDE_COMMANDS[@]}"; do
+      [[ "$cmd_name" == "$ex" ]] && { skip_cmd=true; break; }
+    done
+    if [[ "$skip_cmd" == true ]]; then
+      continue
+    fi
 
     cp "$cmd_src" "$cmd_dst"
 
@@ -330,11 +342,15 @@ printf '  Skills:    %d\n' "$SKILL_COUNT"
 printf '  Commands:  %d\n' "$CMD_COUNT"
 printf '  Extras:    %s\n' "$WITH_EXTRAS"
 
-# --- Step 10: Validate ---
-printf '\nRunning: claude plugin validate "%s" --strict\n' "$OUT"
-if claude plugin validate "$OUT" --strict; then
-  printf 'Validation: PASSED\n'
+# --- Step 10: Validate (skipped if the claude CLI is unavailable, e.g. CI) ---
+if command -v claude >/dev/null 2>&1; then
+  printf '\nRunning: claude plugin validate "%s" --strict\n' "$OUT"
+  if claude plugin validate "$OUT" --strict; then
+    printf 'Validation: PASSED\n'
+  else
+    printf 'Validation: FAILED — see output above\n' >&2
+    exit 1
+  fi
 else
-  printf 'Validation: FAILED — see output above\n' >&2
-  exit 1
+  printf '\nclaude CLI not found — skipping plugin validation (run locally with the claude CLI to validate)\n'
 fi
