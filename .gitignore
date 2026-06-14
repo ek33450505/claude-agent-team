@@ -26,3 +26,5 @@ config/*credential*
 .codex/
 # install.sh regenerates AGENTS.md (generic-agent mirror of CLAUDE.md) on every run — generated artifact, not tracked
 AGENTS.md
+# gen-plugin.sh output — generated build artifact, not tracked
+dist/
