@@ -49,7 +49,6 @@
   "autoUpdatesChannel": "stable",
   "plansDirectory": "~/.claude/plans/",
   "_permissions_warning": "REVIEW CAREFULLY: Bash/Write/Edit let Claude act without asking. Remove any you're not comfortable with.",
-  "_routing_note": "Model routing: haiku for commit/push/code-reviewer/test-runner. sonnet for all others. Set CLAUDE_CODE_SUBAGENT_MODEL to override globally. Effort levels: see agent frontmatter.",
-  "teammateMode": "in-process",
-  "model": "sonnet"
+  "_routing_note": "Model routing: haiku for commit/push/code-reviewer/test-runner. opus is the default (set in 16-model-defaults.json). Set CLAUDE_CODE_SUBAGENT_MODEL to override globally. Effort levels: see agent frontmatter.",
+  "teammateMode": "in-process"
 }

@@ -1,4 +1,5 @@
 {
+  "_note": "[PHASE B / ASPIRATIONAL 2026-06-13] The cast-memory server below was never built. This example describes future Phase B architecture. Only the github entry is live today. See docs/mcp-resources-decision.md.",
   "mcpServers": {
     "github": {
       "command": "npx",
