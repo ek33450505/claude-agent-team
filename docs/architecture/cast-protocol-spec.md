@@ -162,7 +162,7 @@ Rules:
 
 ## Section 2 — Escape Hatch Pattern
 
-The CAST PreToolUse hook (`pre-tool-guard.sh`) hard-blocks certain Bash operations that must go through designated agents. Escape hatches allow trusted contexts (such as agent internals) to bypass these blocks.
+Two CAST PreToolUse hooks hard-block destructive Bash operations: `pre-tool-guard.sh` (git commit/push/stash + policy-protected writes) and `cast-command-guard.sh` (process mass-kills + `rm -rf` of protected roots). Escape hatches allow a trusted context — a designated agent, or a human-authorized override — to bypass a specific block.
 
 ### 2.1 Defined Escape Hatches
 
@@ -170,6 +170,10 @@ The CAST PreToolUse hook (`pre-tool-guard.sh`) hard-blocks certain Bash operatio
 |---|---|---|
 | `CAST_COMMIT_AGENT=1` | `git commit` | `commit` agent exclusively |
 | `CAST_PUSH_OK=1` | `git push` | Post-review push workflows |
+| `CAST_STASH_OK=1` | `git stash` (all variants) | Rare authorized stash use, documented in the agent |
+| `CAST_KILL_OK=1` | `pkill`/`killall`/process-group kill | Rare authorized process-kill |
+| `CAST_RM_OK=1` | `rm -rf` of a protected root/subtree | Rare authorized destructive delete |
+| `CAST_POLICY_OVERRIDE=1` | Write/Edit to a policy-protected file | Human-authorized override (audit-logged) |
 
 ### 2.2 Syntax Requirements
 
@@ -204,6 +208,46 @@ To add a new escape hatch for a blocked operation:
 4. The escape hatch MUST only be used by the designated agent — document that constraint in the agent's definition
 
 Exit code semantics: exit 0 = allow, exit 2 = hard-block. Never use exit 1 in pre-tool-guard.sh.
+
+### 2.5 Irreversibility Interrupt Ledger
+
+CAST treats a defined set of operations as **irreversible or destructive** — they delete data, publish history, or kill processes in ways that cannot be cheaply undone. This ledger is the canonical list: what each op is, what gates it, and — the load-bearing column — **whether that gate still fires in an unattended auto-chain.**
+
+**Three execution contexts, decreasing supervision** (this is *why* the last column matters):
+
+| Context | `CLAUDE_SUBPROCESS` | PreToolUse hooks | `AskUserQuestion` |
+|---|---|---|---|
+| Interactive main session **and in-session Agent-tool subagents** (incl. a `planner`→`/orchestrate` chain) | unset | **fire** | prompts the user |
+| Headless / managed sub-claude (`claude -p`, `cast-managed-agent.sh`) | `1` | **skip** (guards `exit 0` on the `CLAUDE_SUBPROCESS` check) | auto-answered "safest default" (`cast-headless-guard.sh`) |
+| Cron / launchd direct (`cast-db-prune.py`, `cast-migrate.py`) | n/a | **absent** — no Claude in the loop | n/a |
+
+> Verified 2026-06-14: a native Agent-tool subagent runs with `CLAUDE_SUBPROCESS` **unset**, so the hook guards DO fire for it (a subagent's `pkill` is hard-blocked, exit 2). The "subagents run with `CLAUDE_SUBPROCESS=1`" notes elsewhere in this spec describe the older headless/managed dispatch model, not native Agent-tool subagents.
+
+**Design rule — auto-chain safety:** a hook-based hard-block or a confirm-pause protects the interactive context (row 1) but is **bypassed** in headless/managed (row 2) and absent in cron/launchd (row 3). An irreversible op is **auto-chain-safe only if it is protected by a fail-closed script-level gate** (back-up-or-abort inside the script itself) **or an agent text-refusal.** New destructive automation MUST carry its own fail-closed gate rather than relying on a hook.
+
+**The ledger:**
+
+| Op class | Operation(s) | Enforced by | Type | Escape hatch | Auto-chain-safe? |
+|---|---|---|---|---|---|
+| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) | hard-block | `CAST_COMMIT_AGENT=1` | ✗ hook-only |
+| Git push | raw `git push` | `pre-tool-guard.sh` (push block) | hard-block | `CAST_PUSH_OK=1` | ✗ hook-only |
+| Force-push | `git push --force` | `push.md` (agent refusal) | refuse | none | ◑ agent-refusal |
+| Push to main (work repo) | push to `main`/`master` | `push.md` (branch rule) | refuse | `--force-main` / `repo_class=personal` | ◑ agent-refusal |
+| PR merge | squash-merge; force-merge to main | `merge.md` (confirm / hard-block) | confirm / hard-block | text confirmation | ◑ agent-only |
+| Git stash | all `git stash` variants | `pre-tool-guard.sh` (stash block) | hard-block | `CAST_STASH_OK=1` | ✗ hook-only |
+| Schema migration | destructive DDL/DML via `cast-migrate.py` | `cast-migrate.py` (`_pre_migration_backup`) | **fail-closed backup** | none | ✓ **script gate** |
+| DB row prune | nightly `DELETE` of old rows | `cast-db-prune.py` (`_pre_prune_backup`) | **fail-closed backup** | none | ✓ **script gate** |
+| Process mass-kill | `pkill`/`killall`/`kill -1`/`kill 0` | `cast-command-guard.py` (kill rule) | hard-block | `CAST_KILL_OK=1` | ✗ hook-only |
+| Destructive delete | `rm -rf`/rmtree of protected roots | `cast-command-guard.py` (rm rule) + `cast_guard.safe_rmtree` + `blast-radius-lint.sh` | hard-block + scoped lib + CI lint | `CAST_RM_OK=1` | ◑ hook ✗ / lib + lint ✓ |
+| Risky write | literal-`~` path, policy-protected file, badge mismatch | `write-guards.py` + `pre-tool-guard.sh` (policy rule) | hard-block | `CAST_POLICY_OVERRIDE=1` (audited) | ✗ hook-only |
+| Orchestration pause | batch interrupt window; freeze/careful mode | `skills/orchestrate`, `skills/freeze-mode` | confirm-pause | abort / deactivate | ✗ confirm-only |
+
+Legend: **✓** survives an unattended auto-chain · **◑** survives only via its non-hook layer (agent refusal, guard-lib, or CI lint) · **✗** interactive-context only (bypassed headless, absent in cron).
+
+**Notes / gaps (2026-06-14):**
+- The two recurring **DB destructive paths now both fail-closed-back-up** (migration `_pre_migration_backup`; nightly prune `_pre_prune_backup`). `cast-db-prune.py` runs via `launchd` (`com.cast.db-prune`, 03:30) with no Claude in the loop, so its script-level gate is the *only* protection that can apply — the row-3 case made concrete.
+- `cast-memory-consolidate.py` dedup deletes are recoverable only on the low-importance path (archives to `archived_memories` first); the dedup-of-duplicates path hard-deletes (manual-only, low risk — deferred).
+- Hook-based interrupts and confirm-pauses are **interactive-context guarantees, not auto-chain guarantees** — by design (hook loop guard; cron has no hook layer). That asymmetry is the reason the design rule above exists.
 
 ---
 
