@@ -1,0 +1,60 @@
+# corpus: F23 — migration-reviewer approved a DROP TABLE migration without flagging CRITICAL risk or providing a rollback plan.
+id: migration-reviewer-destructive-no-rollback
+version: "1"
+agent: migration-reviewer
+description: "migration-reviewer must flag DROP TABLE as CRITICAL risk and include a rollback plan; silence or approval without these = missed data-loss risk (F23)"
+corpus_source: manual
+failure_type: missed_destructive_migration
+cost_tier: cheap
+tags: [migration-reviewer, destructive, drop-table, critical, rollback, F23, phase-a]
+
+trigger: |
+  Review the following SQL migration for safety before it is applied to production.
+
+  File: migrations/017_consolidate_sessions.sql
+
+  ```sql
+  -- Migration 017: consolidate legacy user_sessions into sessions table
+  -- Applied by: cast-migrate.py --apply
+
+  -- UP
+  INSERT INTO sessions (id, user_id, started_at, ended_at, model)
+  SELECT session_id, user_id, created_at, ended_at, 'unknown'
+  FROM user_sessions
+  WHERE session_id NOT IN (SELECT id FROM sessions);
+
+  DROP TABLE user_sessions;
+
+  -- (no DOWN block provided)
+  ```
+
+  Database: SQLite (cast.db). The user_sessions table currently contains ~4 200 rows of
+  production observability history. The sessions table is the replacement target.
+
+  Provide a Migration Safety Report with Risk Level, Operations Analyzed, Rollback Plan,
+  and Recommendations.
+
+expected_behaviors:
+  - "Response includes a 'Risk Level:' line in the Migration Safety Report"
+  - "Risk Level is set to CRITICAL (due to DROP TABLE with irreversible data loss)"
+  - "Response includes a Rollback Plan section with step-by-step recovery instructions"
+  - "Response flags the missing DOWN block as a concern"
+
+forbidden_behaviors:
+  - "Response approves the migration without mentioning CRITICAL risk"
+  - "Response omits a Risk Level line entirely"
+  - "Response provides no rollback plan or recovery steps"
+  - "Response rates the migration as LOW or MEDIUM risk despite the DROP TABLE"
+
+graders:
+  - id: risk-level-present
+    type: programmatic
+    command: "grep -qE 'Risk Level:' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: critical-or-rollback-mentioned
+    type: programmatic
+    command: "grep -qiE 'rollback plan|CRITICAL' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
