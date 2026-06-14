@@ -2,8 +2,10 @@
 name: planner
 description: >
   Planning specialist that converts feature requests into specs and ordered task breakdowns.
-  Use when starting any new feature, refactor, or complex change. Writes plan files and
-  returns a task list ready for delegation to agent teams.
+  Reserve for genuinely multi-file / multi-hour / multi-agent work (large refactors, migrations,
+  features spanning many files). For single-session-sized work (one or a few files), use built-in
+  plan mode (shift-tab) with a single agent instead. Writes plan files and returns a task list
+  ready for delegation to agent teams.
 tools: Read, Write, Glob, Grep
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────

@@ -3,7 +3,13 @@
 > Operational/recovery procedures (worktree recovery, multi-terminal coordination, post-push CI checks, branch grooming, workflow closures) live in `docs/operational-playbook.md`.
 
 ## Planning
-- Run `planner` before any non-trivial change
+- Match planning ceremony to task size — three tiers:
+  - **Trivial** (typo, single-value config tweak, ≤3-line doc trim): no formal plan — just make the change. (Code still routes to a specialist per `## Code Quality` — "no plan" never means "no dispatch".)
+  - **Single-session-sized** (one or a few files, finishable in one session): use native plan mode (Claude Code's built-in, in-session plan-then-act via shift-tab — no plan file, no manifest) with a single agent. This is the DEFAULT for ordinary code work.
+  - **Genuinely multi-file / multi-hour / multi-agent** (large refactors, migrations, features spanning many files): dispatch the `planner` agent to write a plan file + Agent Dispatch Manifest, then run `/orchestrate` to execute it in waves.
+- Don't reflexively spin up the `planner`→`/orchestrate` chain: most coding work has limited parallelizable components (single-agent is better), and multi-agent orchestration costs ~15x the tokens — reserve the chain for work that genuinely fans out.
+- Softening *planning* does NOT soften *review* or *dispatch*: the `code-reviewer` gate after every logical unit stays MANDATORY (see `## Code Quality`) — this is the Writer/Reviewer pattern, untouched here. Code changes still route to `code-writer`/specialists per global CLAUDE.md, even single-line ones.
+- `/orchestrate` consumes a manifest from the `planner` agent OR native plan mode — `planner` need not run first.
 - Tasks: 15-30 min max; break larger work into chunks
 - Each logical unit gets its own commit
 
@@ -20,6 +26,8 @@
 - MANDATORY: All agents end with Status: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
 
 ## Agent Selection
+- Native plan mode vs the `planner` agent: native plan mode is Claude Code's built-in, in-session plan-then-act (shift-tab — no plan file, no manifest), the single-agent default for single-session work. The `planner` agent is a dispatched sonnet agent that writes a plan file + Agent Dispatch Manifest for `/orchestrate` to execute in waves — reserve it for genuinely multi-file / multi-agent work. (Note: the `/plan` skill IS that heavy `planner`→`/orchestrate` chain, not built-in plan mode.)
+- Single-agent inline is the default — prefer one agent (yourself in native plan mode, or a single specialist dispatch) unless the work genuinely fans out across many files/agents; only then take on the `/orchestrate` overhead.
 - `researcher` (sonnet): deep investigation, external sources, recommendations
 - `Explore` subagent: fast codebase navigation, file/grep searches
 
