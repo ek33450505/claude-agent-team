@@ -27,6 +27,9 @@ jobs:
       - name: Blast radius lint
         run: bash scripts/blast-radius-lint.sh
 
+      - name: Plugin drift check
+        run: bash scripts/check-plugin-drift.sh
+
       # Advisory — always exits 0; warnings appear in the log only.
       # continue-on-error: true guards against unexpected Python failures (import
       # error, missing file) that would otherwise fail the workflow, contradicting
