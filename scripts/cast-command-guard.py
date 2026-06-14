@@ -679,7 +679,10 @@ def main():
 
         blocked, message = safe_is_blocked(command)
         if blocked:
-            print(message)
+            # Block reason goes to STDERR: Claude Code feeds a PreToolUse hook's stderr
+            # back to the model as the block reason on exit 2 (verified via live bite-test
+            # — a stdout-only message surfaced only as "hook error: No stderr output").
+            print(message, file=sys.stderr)
             log_path = os.path.join(os.path.expanduser('~'), '.claude', 'logs', 'command-guard.log')
             write_log(log_path, f"BLOCK: {command}")
             sys.exit(2)
