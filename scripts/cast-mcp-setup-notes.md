@@ -1,3 +1,10 @@
+> **[PHASE B / ASPIRATIONAL — 2026-06-13]** The `cast-mcp-memory-server.py` referenced
+> below was never built. This document describes the intended future architecture for a
+> CAST-authored MCP memory server. Do not treat any setup step here as live. See
+> `docs/mcp-resources-decision.md` for the current decision on MCP resources.
+
+---
+
 # CAST MCP Memory Server — Setup Notes
 
 ## Prerequisites
