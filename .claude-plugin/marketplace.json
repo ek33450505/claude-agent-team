@@ -1,0 +1,12 @@
+{
+  "name": "cast",
+  "owner": { "name": "ek33450505" },
+  "description": "CAST — curated specialist agents, hook-enforced quality gates, and SQLite observability for Claude Code.",
+  "plugins": [
+    {
+      "name": "cast",
+      "source": "./plugin",
+      "description": "Swarm control plane for Claude Code: curated specialist agents, hook-enforced quality gates, and SQLite observability."
+    }
+  ]
+}
