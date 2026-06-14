@@ -31,7 +31,7 @@ from typing import Any
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 DEFAULT_SCHEMA_PATH = os.path.join(SCRIPT_DIR, "..", "schemas", "agent-status.json")
 
-VALID_STATUSES = {"DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT"}
+VALID_STATUSES = {"DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT", "APPROVE", "REQUEST_CHANGES"}
 
 # Fields that must be arrays when present
 ARRAY_FIELDS = {"concerns", "files_changed", "next_actions", "blockers", "context_needed"}

@@ -8,8 +8,8 @@
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT"],
-      "description": "Terminal status of the agent's task execution."
+      "enum": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT", "APPROVE", "REQUEST_CHANGES"],
+      "description": "Terminal status of the agent's task execution. APPROVE/REQUEST_CHANGES are the reviewer-agent (code-reviewer, pr-reviewer) terminal statuses."
     },
     "summary": {
       "type": "string",

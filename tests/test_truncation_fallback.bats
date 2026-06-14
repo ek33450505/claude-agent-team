@@ -453,3 +453,55 @@ print(json.dumps(payload))
 
   assert_equal "$agent_type_in_db" "code-writer"
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F19 regression: APPROVE and REQUEST_CHANGES must NOT be written to
+# agent_truncations (corpus failure F19 — reviewer statuses were unrecognized)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "F19: truncation hook: Status: APPROVE is NOT written to agent_truncations" {
+  local output_text="Reviewed the implementation changes carefully.
+
+The code looks correct and follows all project conventions. No issues found.
+
+Status: APPROVE
+Summary: Code review passed — implementation is correct and well-structured."
+
+  local input
+  input="$(_make_truncated_input "$output_text")"
+
+  run bash "$TRUNCATION_HOOK" <<< "$input"
+  assert_success
+
+  # Must NOT emit [CAST-TRUNCATED] banner
+  refute_output --partial "[CAST-TRUNCATED]"
+
+  # Must NOT write a row to agent_truncations
+  local row_count
+  row_count=$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM agent_truncations;" 2>/dev/null || echo "0")
+  assert_equal "$row_count" "0"
+}
+
+@test "F19: truncation hook: Status: REQUEST_CHANGES is NOT written to agent_truncations" {
+  local output_text="Reviewed the implementation changes carefully.
+
+Found issues that must be resolved before merging. Type safety gaps in two places.
+
+Status: REQUEST_CHANGES
+Summary: Two type safety issues found — see concerns.
+Concerns: Missing return type annotation on parseResult(), unused import in utils.ts"
+
+  local input
+  input="$(_make_truncated_input "$output_text")"
+
+  run bash "$TRUNCATION_HOOK" <<< "$input"
+  assert_success
+
+  # Must NOT emit [CAST-TRUNCATED] banner
+  refute_output --partial "[CAST-TRUNCATED]"
+
+  # Must NOT write a row to agent_truncations
+  local row_count
+  row_count=$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM agent_truncations;" 2>/dev/null || echo "0")
+  assert_equal "$row_count" "0"
+}

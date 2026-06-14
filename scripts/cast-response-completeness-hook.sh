@@ -7,7 +7,7 @@
 #
 # Responsibilities:
 #   1. Parse agent response from SubagentStop stdin
-#   2. Check for Status: (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT) pattern
+#   2. Check for Status: (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES) pattern
 #   3. If missing: log warning to ~/.claude/logs/hook-errors.log
 #   4. Write completeness_events entry to cast.db (CREATE TABLE IF NOT EXISTS)
 #   5. Exit 0 always (do not block the pipeline)
@@ -116,6 +116,7 @@ fi
 # Matches either the human-readable form (Status: DONE) or the JSON form ("status": "DONE")
 # NOTE: Searches the full response — no line-count window — so Status blocks near the top
 # (before a long Work Log section) are not missed.
+# Recognized values: standard four + reviewer statuses (APPROVE|REQUEST_CHANGES)
 HAS_STATUS="$(python3 - <<'PYEOF' 2>/dev/null
 import re, os, json
 output = os.environ.get('CAST_COMP_PARSED', '{}')
@@ -125,8 +126,8 @@ try:
 except Exception:
     text = ''
 
-human_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', text))
-json_status = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"', text))
+human_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)', text))
+json_status = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)"', text))
 has_status = human_status or json_status
 print('1' if has_status else '0')
 PYEOF

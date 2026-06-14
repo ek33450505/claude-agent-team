@@ -557,13 +557,15 @@ if len(response_text.strip()) < 50:
 # agent='unknown' — no hook_failure needed for this expected gap.
 
 # Detection: prose Status block
+# Recognized values: standard four (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT) plus
+# reviewer statuses (APPROVE|REQUEST_CHANGES) used by code-reviewer and pr-reviewer.
 has_status = bool(re.search(
-    r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)',
+    r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)',
     response_text,
 ))
 # Detection: JSON fenced status block
 has_json = bool(re.search(
-    r'```json\s+status[\s\S]*?"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"',
+    r'```json\s+status[\s\S]*?"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)"',
     response_text, re.IGNORECASE,
 ))
 
@@ -618,8 +620,10 @@ fi
 # ── Step 2.5: Quality gate logging ──────────────────────────────────────────
 # When a gate agent (code-reviewer, test-runner, security) finishes, extract its
 # Status line and insert a row into quality_gates for dashboard observability.
-#   DONE                 → pass
+#   DONE                 → pass  (contract_passed=1)
+#   APPROVE              → pass  (contract_passed=1, reviewer alias for DONE)
 #   DONE_WITH_CONCERNS   → warn
+#   REQUEST_CHANGES      → warn  (reviewer alias for DONE_WITH_CONCERNS)
 #   BLOCKED              → block
 #   NEEDS_CONTEXT        → warn
 # Other agents are skipped.
@@ -648,7 +652,8 @@ if not agent or not db:
     raise SystemExit(0)
 
 # Extract Status line from full output (no tail window — avoids FP for long Work Logs)
-m = re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)', out)
+# Recognized: standard four + reviewer statuses (APPROVE|REQUEST_CHANGES)
+m = re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)', out)
 if not m:
     raise SystemExit(0)
 
@@ -660,7 +665,8 @@ try:
     conn.execute(
         'INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count) '
         'VALUES (?, ?, ?, ?, ?, ?, ?)',
-        (str(uuid.uuid4()), sess, agent, ts, status, 1 if status == 'DONE' else 0, 0),
+        # APPROVE is pass-like (reviewer's DONE equivalent); REQUEST_CHANGES is non-pass
+        (str(uuid.uuid4()), sess, agent, ts, status, 1 if status in ('DONE', 'APPROVE') else 0, 0),
     )
     conn.commit()
     conn.close()
@@ -859,8 +865,9 @@ if [[ "$STATUS_CONTRACT_EXEMPT" = "0" ]]; then
 import re, os
 output = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
 # Well-formed: Status block present (full output search, avoids FP for long Work Logs)
-has_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)', output))
-has_json = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"', output))
+# Recognized values: standard four + reviewer statuses (APPROVE|REQUEST_CHANGES)
+has_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)', output))
+has_json = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)"', output))
 if has_status or has_json:
     print('0')
     raise SystemExit(0)
