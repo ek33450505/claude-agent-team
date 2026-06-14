@@ -172,6 +172,11 @@ _is_allowed() {
   for p in "${PII_ALLOWLIST[@]}"; do
     [[ "$file" == "$p" ]] && return 0
   done
+  # Generated plugin build artifact — a curated mirror of already-scanned source
+  # (scripts/, agents/core/, skills/); the check-plugin-drift gate guarantees it
+  # equals regenerated source, so scanning it only false-positives on copies of
+  # the scanner self-test fixtures. (Check 1 already scans only tests/test/src.)
+  [[ "$file" == plugin/* ]] && return 0
   return 1
 }
 

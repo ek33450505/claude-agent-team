@@ -42,13 +42,17 @@ bash "$GEN_SCRIPT" "$TMP" 2>/dev/null || true
 
 printf '\n--- Running drift checks ---\n'
 
-# (a) claude plugin validate --strict
-if claude plugin validate "$TMP" --strict >/dev/null 2>&1; then
-  _ok "claude plugin validate --strict: passed"
+# (a) claude plugin validate --strict (skipped if the CLI is unavailable, e.g. CI)
+if command -v claude >/dev/null 2>&1; then
+  if claude plugin validate "$TMP" --strict >/dev/null 2>&1; then
+    _ok "claude plugin validate --strict: passed"
+  else
+    VALIDATE_OUT="$(claude plugin validate "$TMP" --strict 2>&1 || true)"
+    _fail "claude plugin validate --strict: FAILED"
+    printf '%s\n' "$VALIDATE_OUT" >&2
+  fi
 else
-  VALIDATE_OUT="$(claude plugin validate "$TMP" --strict 2>&1 || true)"
-  _fail "claude plugin validate --strict: FAILED"
-  printf '%s\n' "$VALIDATE_OUT" >&2
+  printf '[SKIP] claude CLI not found — skipping plugin validate (checks b-e still enforced)\n'
 fi
 
 # (b) No ~/.claude/scripts paths in hooks.json
@@ -90,6 +94,19 @@ if [[ "$FORBIDDEN_FOUND" -eq 0 ]]; then
   _ok "agents/: no forbidden frontmatter (hooks|mcpServers|permissionMode)"
 else
   FAIL=$((FAIL + 1))
+fi
+
+# (e) Committed plugin/ artifact is not stale (byte-identical to a fresh regeneration)
+COMMITTED_PLUGIN="${REPO_ROOT}/plugin"
+if [[ -d "$COMMITTED_PLUGIN" ]]; then
+  if diff -rq "$TMP" "$COMMITTED_PLUGIN" >/dev/null 2>&1; then
+    _ok "committed plugin/ matches regenerated output (no drift)"
+  else
+    _fail "committed plugin/ is STALE — regenerate and recommit: bash scripts/gen-plugin.sh \"\${REPO_ROOT}/plugin\" && git add plugin/"
+    diff -rq "$TMP" "$COMMITTED_PLUGIN" >&2 || true
+  fi
+else
+  _fail "committed plugin/ not found at ${COMMITTED_PLUGIN}"
 fi
 
 # --- Final result ---
