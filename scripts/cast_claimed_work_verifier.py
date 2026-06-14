@@ -23,6 +23,7 @@ import os
 import sys
 import re
 import sqlite3
+import subprocess
 from datetime import datetime
 
 def parse_iso_timestamp(ts_str: str) -> float:
@@ -71,6 +72,65 @@ def extract_file_paths(response_text: str) -> list:
 
     return list(paths)
 
+def _resolve_basename_via_git(repo_root: str, path: str, agent_start_time_unix: float) -> str:
+    """Fallback: resolve basename against git-tracked files when exact path not found.
+
+    Agents frequently list files_changed by BASENAME only (e.g. 'cast-litestream-setup.sh')
+    while the file lives in a subdirectory ('scripts/cast-litestream-setup.sh'). This caused
+    ~46 of 73 false [NOT FOUND] WARNs (2026-06-12 triage, Bucket A).
+
+    Strategy:
+      1. Run `git -C <repo_root> ls-files` to get all tracked paths.
+      2. Match any tracked path that equals <path> OR ends with '/<basename-of-path>'.
+      3. If one or more match, apply mtime logic to the most-recently-modified match.
+      4. If none match, return '[NOT FOUND]' (genuine — preserves true-positive detection).
+
+    Non-fatal: any subprocess/git error falls back to '[NOT FOUND]'.
+    """
+    basename = os.path.basename(path)
+    if not basename:
+        return '[NOT FOUND]'
+
+    try:
+        result = subprocess.run(
+            ['git', '-C', repo_root, 'ls-files'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return '[NOT FOUND]'
+
+        tracked_files = result.stdout.splitlines()
+
+        # Match: exact path OR any tracked file whose basename equals the claimed basename
+        matches = [f for f in tracked_files if f == path or f.endswith('/' + basename)]
+
+        if not matches:
+            return '[NOT FOUND]'
+
+        # Pick the most-recently-modified match and apply the existing mtime logic
+        best_mtime = -1.0
+        for match in matches:
+            full_match_path = os.path.join(repo_root, match)
+            try:
+                mtime = os.path.getmtime(full_match_path)
+                if mtime > best_mtime:
+                    best_mtime = mtime
+            except Exception:
+                continue
+
+        if best_mtime < 0:
+            return '[NOT FOUND]'
+
+        if agent_start_time_unix > 0 and best_mtime < agent_start_time_unix:
+            return '[PRE_EXISTING]'
+        return '[VERIFIED]'
+
+    except Exception:
+        return '[NOT FOUND]'
+
+
 def verify_file(repo_root: str, path: str, agent_start_time_unix: float) -> str:
     """Verify if file exists and was modified after agent start time.
 
@@ -88,7 +148,8 @@ def verify_file(repo_root: str, path: str, agent_start_time_unix: float) -> str:
         return '[NOT FOUND]'
 
     if not os.path.exists(full_path):
-        return '[NOT FOUND]'
+        # Exact path not found — fallback: resolve basename against git-tracked files
+        return _resolve_basename_via_git(repo_root, path, agent_start_time_unix)
 
     # File exists — check mtime
     try:

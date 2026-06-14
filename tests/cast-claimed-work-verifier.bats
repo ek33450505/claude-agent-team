@@ -330,3 +330,166 @@ Status: DONE'
   # Summary must include agent name, counts, and status
   assert_line "[CAST-VERIFY] agent=docs files_claimed=1 verified=1 not_found=0 pre_existing=0"
 }
+
+# ---------------------------------------------------------------------------
+# O4 basename-fallback tests (fix for ~46 false [NOT FOUND] WARNs per
+# 2026-06-12 honesty-warn triage, Bucket A)
+# Each test that needs git ls-files builds a temp git repo fixture inside
+# TEMP_DIR so teardown() cleans it up automatically.
+# ---------------------------------------------------------------------------
+
+@test "O4-B1: basename of file in subdir resolves to [VERIFIED] — false-positive eliminated" {
+  # Build a temp git repo with a file nested in scripts/
+  local GIT_REPO="$TEMP_DIR/git_repo"
+  mkdir -p "$GIT_REPO/scripts"
+  git -C "$GIT_REPO" init -q
+  touch "$GIT_REPO/scripts/cast-litestream-setup.sh"
+  git -C "$GIT_REPO" add scripts/cast-litestream-setup.sh
+
+  export CAST_REPO_ROOT="$GIT_REPO"
+  export CAST_AGENT_NAME="code-writer"
+  export CAST_AGENT_START_TIME="2000-01-01T00:00:00Z"
+
+  # Agent claims only the basename — the common false-positive pattern
+  RESPONSE='## Work Log
+- Updated litestream setup script
+
+Files changed:
+- cast-litestream-setup.sh
+
+Status: DONE'
+
+  run run_verifier "$RESPONSE"
+  assert_success
+  assert_line --partial "verified=1"
+  assert_line --partial "not_found=0"
+
+  # No hallucination row — the false-positive is gone
+  run python3 - << 'PYEOF'
+import os, sqlite3
+db = os.environ.get('CAST_DB_PATH')
+if not db or not os.path.exists(db):
+    print("0"); exit(0)
+try:
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations")
+    print(cur.fetchone()[0])
+    conn.close()
+except Exception:
+    print("0")
+PYEOF
+  assert_success
+  assert_output "0"
+}
+
+@test "O4-B2: basename not present in repo → [NOT FOUND], hallucination row written (true-positive preserved)" {
+  # Build a temp git repo with an UNRELATED file only
+  local GIT_REPO="$TEMP_DIR/git_repo"
+  mkdir -p "$GIT_REPO/scripts"
+  git -C "$GIT_REPO" init -q
+  touch "$GIT_REPO/scripts/other-file.sh"
+  git -C "$GIT_REPO" add scripts/other-file.sh
+
+  export CAST_REPO_ROOT="$GIT_REPO"
+  export CAST_AGENT_NAME="code-writer"
+  export CAST_AGENT_START_TIME="2000-01-01T00:00:00Z"
+
+  RESPONSE='## Work Log
+- Created phantom script
+
+Files changed:
+- totally-nonexistent-basename.sh
+
+Status: DONE'
+
+  run run_verifier "$RESPONSE"
+  assert_success
+  assert_line --partial "not_found=1"
+  assert_line --partial "[NOT FOUND]"
+
+  # Hallucination row IS written (genuine miss preserved)
+  run python3 - << 'PYEOF'
+import os, sqlite3
+db = os.environ.get('CAST_DB_PATH')
+if not db or not os.path.exists(db):
+    print("0"); exit(0)
+try:
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations WHERE actual_value = '[NOT FOUND]'")
+    print(cur.fetchone()[0])
+    conn.close()
+except Exception:
+    print("0")
+PYEOF
+  assert_success
+  assert_output "1"
+}
+
+@test "O4-B3: full relative path resolves via exact check → [VERIFIED] (unchanged behavior)" {
+  # TEMP_DIR is already CAST_REPO_ROOT (set by setup); no git repo needed
+  mkdir -p "$TEMP_DIR/scripts"
+  touch "$TEMP_DIR/scripts/foo.sh"
+
+  export CAST_AGENT_NAME="bash-specialist"
+  export CAST_AGENT_START_TIME="2000-01-01T00:00:00Z"
+
+  RESPONSE='## Work Log
+- Updated foo script
+
+Files changed:
+- scripts/foo.sh
+
+Status: DONE'
+
+  run run_verifier "$RESPONSE"
+  assert_success
+  assert_line --partial "verified=1"
+  assert_line --partial "not_found=0"
+}
+
+@test "O4-B4: commit agent skip holds even when basename fallback would match (regression guard)" {
+  # Build a git repo where routeCurve.test.js WOULD be matched by basename fallback
+  local GIT_REPO="$TEMP_DIR/git_repo"
+  mkdir -p "$GIT_REPO/scripts"
+  git -C "$GIT_REPO" init -q
+  touch "$GIT_REPO/scripts/routeCurve.test.js"
+  git -C "$GIT_REPO" add scripts/routeCurve.test.js
+
+  export CAST_REPO_ROOT="$GIT_REPO"
+  export CAST_AGENT_NAME="commit"
+  export CAST_AGENT_START_TIME="2000-01-01T00:00:00Z"
+
+  RESPONSE='## Work Log
+- Staged and committed 2 files
+
+Files changed:
+- routeCurve.test.js
+- src/components/WorkProjectWidget.tsx
+
+Status: DONE'
+
+  # Must exit 0 with zero output — commit skip fires before basename fallback
+  run run_verifier "$RESPONSE"
+  assert_success
+  assert_output ""
+
+  # Zero rows — commit agent writes nothing
+  run python3 - << 'PYEOF'
+import os, sqlite3
+db = os.environ.get('CAST_DB_PATH')
+if not db or not os.path.exists(db):
+    print("0"); exit(0)
+try:
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations")
+    print(cur.fetchone()[0])
+    conn.close()
+except Exception:
+    print("0")
+PYEOF
+  assert_success
+  assert_output "0"
+}
