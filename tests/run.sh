@@ -1,10 +1,44 @@
 #!/usr/bin/env bash
-# Run all BATS tests — matches CI glob list exactly (BATS 1.13.0 is non-recursive)
-# MANDATORY: runs against an isolated temp $HOME to prevent real ~/.claude damage
+# Run BATS tests — full suite (CI glob) or a scoped subset via --files.
+# MANDATORY: runs against an isolated temp $HOME to prevent real ~/.claude damage.
+#
+# Usage:
+#   bash tests/run.sh [--tap]                                    # full suite (CI glob)
+#   bash tests/run.sh --files tests/a.bats tests/b.bats [--tap]  # scoped subset
+#
+# In --files mode the listed files REPLACE the glob (they are never appended), so
+# BATS runs ONLY those files. Each --files argument must be an existing regular file
+# matching a tests/*.bats path; absolute paths, '..' traversal and non-.bats paths
+# are rejected (exit 1). Other flags (e.g. --tap) flow through to bats unchanged.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
+
+# ── Parse args: peel off an optional scoped "--files <f1> <f2> ..." list. ──────────────
+# Anything that is not part of --files (e.g. --tap) is collected into PASSTHRU and
+# forwarded to bats verbatim. bash-3.2 safe: plain arrays + while/case, guarded
+# empty-array expansion ("${arr[@]+"${arr[@]}"}").
+SCOPED_MODE=0
+SCOPED_FILES=()
+PASSTHRU=()
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --files)
+      SCOPED_MODE=1
+      shift
+      # Consume the following non-flag args as scoped test files.
+      while [[ "$#" -gt 0 && "$1" != -* ]]; do
+        SCOPED_FILES+=("$1")
+        shift
+      done
+      ;;
+    *)
+      PASSTHRU+=("$1")
+      shift
+      ;;
+  esac
+done
 
 # Create isolated temp HOME + TAP capture file; register combined cleanup
 TEST_HOME="$(mktemp -d)"
@@ -17,40 +51,83 @@ cp "$REPO"/scripts/*.sh "$TEST_HOME"/.claude/scripts/
 cp "$REPO"/scripts/*.py "$TEST_HOME"/.claude/scripts/ 2>/dev/null || true
 chmod +x "$TEST_HOME"/.claude/scripts/*.sh
 
-# Switch to isolated HOME and print banner
+# Switch to isolated HOME and print banner (BOTH paths stay isolated)
 export HOME="$TEST_HOME"
-echo "tests/run.sh: isolated temp HOME=$HOME — real ~/.claude untouched" >&2
+if [[ "$SCOPED_MODE" -eq 1 ]]; then
+  echo "tests/run.sh: SCOPED run (${#SCOPED_FILES[@]} file(s)) — isolated temp HOME=$HOME — real ~/.claude untouched" >&2
+else
+  echo "tests/run.sh: isolated temp HOME=$HOME — real ~/.claude untouched" >&2
+fi
 
-# Expand the same glob list CI uses into an array for both counting and bats
+# Build the list of .bats files to run.
 BATS_FILE_ARGS=()
-for _pat in tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats tests/skills/*.bats; do
-  [[ -f "$_pat" ]] && BATS_FILE_ARGS+=("$_pat")
-done
+if [[ "$SCOPED_MODE" -eq 1 ]]; then
+  # SCOPED: run ONLY the validated --files list (replaces the glob, never appends).
+  if [[ "${#SCOPED_FILES[@]}" -eq 0 ]]; then
+    echo "tests/run.sh: --files requires at least one tests/*.bats argument" >&2
+    exit 1
+  fi
+  for _f in "${SCOPED_FILES[@]}"; do
+    # Shape: must be a relative tests/*.bats path (rejects absolute escapes + non-.bats).
+    case "$_f" in
+      tests/*.bats) : ;;
+      *)
+        echo "tests/run.sh: --files arg must be a tests/*.bats path, got: '$_f'" >&2
+        exit 1
+        ;;
+    esac
+    # Reject parent-dir traversal even if it would resolve back under tests/.
+    case "$_f" in
+      *..*)
+        echo "tests/run.sh: --files arg must not contain '..': '$_f'" >&2
+        exit 1
+        ;;
+    esac
+    # Must be an existing regular file.
+    if [[ ! -f "$_f" ]]; then
+      echo "tests/run.sh: --files arg is not an existing file: '$_f'" >&2
+      exit 1
+    fi
+    BATS_FILE_ARGS+=("$_f")
+  done
+else
+  # FULL: expand the same glob list CI uses (BATS 1.13.0 is non-recursive).
+  for _pat in tests/*.bats tests/hooks/*.bats tests/agents/*.bats tests/scripts/*.bats tests/skills/*.bats; do
+    [[ -f "$_pat" ]] && BATS_FILE_ARGS+=("$_pat")
+  done
+fi
 
 if [[ "${#BATS_FILE_ARGS[@]}" -eq 0 ]]; then
   echo "tests/run.sh: no .bats files found" >&2
   exit 1
 fi
 
-# Count planned tests statically from @test lines (before execution)
+# Count planned tests statically from @test lines (before execution).
+# PLANNED derives from BATS_FILE_ARGS, so it auto-scopes to the --files subset.
 PLANNED="$("$REPO/scripts/cast-count-planned-tests.sh" "${BATS_FILE_ARGS[@]}")"
 
 # Run BATS; stream output via tee so the user sees it live.
 # stdout is a pipe here, so bats defaults to TAP formatter (readable + parseable).
 # set +o pipefail: let tee succeed even when bats exits non-zero; capture via PIPESTATUS.
 set +o pipefail
-bats "${BATS_FILE_ARGS[@]}" "$@" | tee "$TAP_OUT"
+bats "${BATS_FILE_ARGS[@]}" ${PASSTHRU[@]+"${PASSTHRU[@]}"} | tee "$TAP_OUT"
 BATS_EXIT="${PIPESTATUS[0]}"
 set -o pipefail
 
 # Parse executed count from TAP plan line (1..N)
 EXECUTED="$(grep -m1 "^1\.\." "$TAP_OUT" | sed 's/^1\.\.//' | tr -d '[:space:]' || true)"
 if [[ -z "$EXECUTED" ]]; then
-  # Fallback: count ok / not ok result lines
-  EXECUTED="$(grep -cE "^(ok|not ok) " "$TAP_OUT" 2>/dev/null || echo 0)"
+  # Fallback: count ok / not ok result lines.
+  # grep -c prints "0" and exits 1 on zero matches; "|| true" keeps that single "0".
+  # (A bare "|| echo 0" would append a SECOND line -> "0\n0" -> arithmetic error in
+  # the gate below. This bites when bats emits its plan to stderr, e.g. a load error
+  # that aborts gather-tests, leaving TAP_OUT empty.)
+  EXECUTED="$(grep -cE "^(ok|not ok) " "$TAP_OUT" 2>/dev/null || true)"
+  EXECUTED="${EXECUTED:-0}"
 fi
 
 # Gate: fail loudly when executed != planned — detects dropped files or truncated runs.
+# Applies to BOTH full and scoped runs: a requested-but-dropped file is caught here.
 # Skipped tests count as executed (ok N # skip); this catches only missing files.
 if [[ "$EXECUTED" -ne "$PLANNED" ]]; then
   printf '\n[cast-count-gate] FAIL: planned=%s executed=%s\n' "$PLANNED" "$EXECUTED" >&2
