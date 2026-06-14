@@ -37,6 +37,10 @@ print(ti.get('file_path', ti.get('path', '')))" 2>/dev/null || echo "")"
     # TTL sweep: remove agent-status files older than 2 hours (matches SESSION_TIMEOUT=7200)
     find "${CLAUDE_DIR:-$HOME/.claude}/agent-status/" -name "*.json" -mmin +120 -delete 2>/dev/null || true
 
+    # Policy engine. The block path is the engine's ONLY stdout write; the closing
+    # redirect (1>&2 2>/dev/null) routes that block message to the hook stderr so
+    # Claude Code surfaces it as the block reason on exit 2, while still suppressing
+    # the engine's own stderr noise. Comment kept free of apostrophes/backticks (bash 3.2).
     CAST_FILE_PATH="$FILE_PATH" CAST_POLICY_OVERRIDE="${CAST_POLICY_OVERRIDE:-0}" python3 -c "
 import json, os, re, sys, datetime
 
@@ -135,7 +139,7 @@ for policy in config.get('policies', []):
     else:
         # severity == warn
         print(f'[CAST-POLICY-WARN] Policy \"{policy_id}\": {description}. Consider dispatching \`{required_agent}\` first.', file=sys.stderr)
-" 2>/dev/null
+" 1>&2 2>/dev/null
     EXIT_CODE=$?
     if [ $EXIT_CODE -eq 2 ]; then
       exit 2
@@ -158,7 +162,7 @@ if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_COMMIT_AGENT=1[[:space:
 fi
 # Block any other git commit invocation (including those with git global options)
 if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+commit"; then
-  echo "**[CAST]** Raw \`git commit\` blocked. Dispatch the \`commit\` agent instead (Agent tool, subagent_type: 'commit')."
+  echo "**[CAST]** Raw \`git commit\` blocked. Dispatch the \`commit\` agent instead (Agent tool, subagent_type: 'commit')." >&2
   exit 2
 fi
 
@@ -175,7 +179,7 @@ if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_PUSH_OK=1[[:space:]]+([
 fi
 # Block any other git push invocation (including those with git global options)
 if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+push"; then
-  echo "**[CAST]** Raw \`git push\` blocked. Ensure code-reviewer has run, then use \`CAST_PUSH_OK=1 git push\` or dispatch via the commit agent workflow."
+  echo "**[CAST]** Raw \`git push\` blocked. Ensure code-reviewer has run, then use \`CAST_PUSH_OK=1 git push\` or dispatch via the commit agent workflow." >&2
   exit 2
 fi
 
@@ -188,7 +192,7 @@ fi
 # Guards against the 2026-05-19 push-agent bug where bare 'git stash pop/apply' resurrected abandoned stashes.
 # Includes git global options tolerance.
 if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+stash([[:space:]]|$)"; then
-  echo "**[CAST]** Raw \`git stash\` blocked. Stash operations are prohibited for agents — they risk resurrecting abandoned stashes from other sessions. If you genuinely need stash, use \`CAST_STASH_OK=1 git stash\` (document your reason). See: 2026-05-19 push-agent stash incident."
+  echo "**[CAST]** Raw \`git stash\` blocked. Stash operations are prohibited for agents — they risk resurrecting abandoned stashes from other sessions. If you genuinely need stash, use \`CAST_STASH_OK=1 git stash\` (document your reason). See: 2026-05-19 push-agent stash incident." >&2
   exit 2
 fi
 
