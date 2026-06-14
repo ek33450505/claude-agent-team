@@ -151,16 +151,23 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
     },
     {
       "id": 3,
-      "description": "Code quality review + test run + security",
+      "description": "Code quality review + security",
       "parallel": true,
       "agents": [
         {"subagent_type": "code-reviewer", "prompt": "Code quality review for <feature>. Check: correctness, edge cases, security, naming, error handling, and conventions. The spec compliance review (Batch 2) already confirmed the right things were built — focus only on HOW they were built."},
-        {"subagent_type": "test-runner", "prompt": "Run the full test suite for the <feature> changes. Report pass/fail with exit code."},
         {"subagent_type": "security", "prompt": "Security review for <feature>. Check: injection risks, auth bypass, secrets in code, unsafe shell interpolation, and path traversal. The spec compliance review (Batch 2) already confirmed correct scope — focus only on security properties of the implementation."}
       ]
     },
     {
       "id": 4,
+      "description": "Test run (own batch — never co-scheduled with review agents)",
+      "parallel": false,
+      "agents": [
+        {"subagent_type": "test-runner", "prompt": "Run the tests covering the <feature> changes (scoped to the changed files via tests/run.sh --files; full suite only if scope can't be determined). Report pass/fail with exit code."}
+      ]
+    },
+    {
+      "id": 5,
       "description": "Commit",
       "parallel": false,
       "agents": [
@@ -168,7 +175,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
       ]
     },
     {
-      "id": 5,
+      "id": 6,
       "description": "Push",
       "parallel": false,
       "agents": [
@@ -193,8 +200,9 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - Maximum parallel batch size: 4 agents
 - Include security agent if auth/API/input handling is touched
 - Batch 2 (spec compliance) MUST always run sequentially BEFORE Batch 3 (code quality) — never merge these into a parallel batch
+- test-runner MUST NOT share a parallel batch with any review agent (code-reviewer/security/frontend-qa) — give it its own sequential batch (its suite-timeout/kill path can reap co-scheduled siblings)
 - Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
-- Include push as Batch 5 in every plan manifest
+- Include push as the final batch (Batch 6 in the template above) in every plan manifest
 - **Commit-batch separation (mandatory).** When a batch dispatches `code-writer`, `bash-specialist`, `debugger`, or any code-modifying agent, the manifest MUST include a SEPARATE following batch with `subagent_type: commit`. Do NOT instruct the code-modifying agent to "then dispatch the commit agent" inside its prompt — managed-agent dispatch from subagent context bails on the `CLAUDE_SUBPROCESS=1` guard, forcing the agent to either skip commit or fall back to the `CAST_COMMIT_AGENT=1` escape hatch (which bypasses the commit agent's canonical trailer and message templates). The escape hatch is reserved for the commit agent itself, not as a substitute for dispatching it. Correct pattern: `Batch N: code-writer (implements + leaves staged)` → `Batch N+1: commit (composes message + trailer + commits)`
 
 **Optional agent-level metadata for conflict detection:**
