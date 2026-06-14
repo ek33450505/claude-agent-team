@@ -1,13 +1,13 @@
 ---
 name: plan
-description: Activate plan mode — write a structured plan file with Agent Dispatch Manifest, then invoke the /orchestrate skill to execute it. Use for any non-trivial feature, refactor, or multi-step task.
+description: Activate the heavy planner→/orchestrate chain — write a structured plan file with Agent Dispatch Manifest, then invoke the /orchestrate skill to execute it in waves. Reserve for genuinely multi-file / multi-hour / multi-agent work (large refactors, migrations, features spanning many files). For single-session-sized work (one or a few files), use built-in plan mode (shift-tab) instead — not this skill.
 user-invocable: true
 allowed-tools: [Write, Read, Glob, Grep, Agent]
 ---
 
 # Plan Mode
 
-This is the `/plan` skill. You are entering plan mode to write a structured implementation plan.
+This is the `/plan` skill — the heavy `planner`→`/orchestrate` chain, reserved for genuinely multi-file / multi-hour / multi-agent work. For single-session-sized tasks (one or a few files, finishable in one session), use built-in plan mode (shift-tab) with a single agent instead of this skill. You are entering plan mode to write a structured implementation plan.
 
 ## Step 1 — Write the plan file
 

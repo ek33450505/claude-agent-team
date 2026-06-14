@@ -80,7 +80,7 @@ CAST transforms Agent Teams into a **production-grade control plane:**
 
 ## Your First Workflow
 
-1. **Plan** — `/plan add user auth feature` → planner writes an Agent Dispatch Manifest.
+1. **Plan** (multi-file / multi-agent work) — `/plan add user auth feature` → the `planner`→`/orchestrate` chain writes an Agent Dispatch Manifest. (Single-session-sized changes skip this — use built-in plan mode via shift-tab.)
 2. **Execute** — `/orchestrate next` → code-writer implements, code-reviewer checks, test-runner verifies, commit agent stages.
 3. **Ship** — `/ship` → tests, CI sanity check, push, journal entry.
 
