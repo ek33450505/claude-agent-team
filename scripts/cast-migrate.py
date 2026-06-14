@@ -12,9 +12,11 @@ A schema_migrations table tracks applied migrations. Safe to run multiple times.
 Flags are mutually exclusive. Any unrecognised argument is an error (exit 2).
 """
 import argparse
+import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -173,6 +175,73 @@ def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
                 raise
 
 
+def _pre_migration_backup(db_path: str) -> int:
+    """Run cast-db-backup.py before applying any migration.
+
+    Fatal gate: if the backup subprocess exits non-zero, times out, or cannot
+    be invoked, print a clear error to stderr and return 1.  The caller must
+    abort the migration run before touching the database.
+
+    On success, print a one-line confirmation and return 0.
+    """
+    script_dir = Path(__file__).resolve().parent
+    backup_script = script_dir / 'cast-db-backup.py'
+
+    if not backup_script.exists():
+        print(
+            f'[cast-migrate] ERROR: Pre-migration backup script not found: {backup_script}',
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(backup_script)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            '[cast-migrate] ERROR: Pre-migration backup timed out after 120s — aborting.',
+            file=sys.stderr,
+        )
+        return 1
+    except Exception as e:
+        print(
+            f'[cast-migrate] ERROR: Pre-migration backup invocation failed: {e}',
+            file=sys.stderr,
+        )
+        return 1
+
+    if result.returncode != 0:
+        raw = result.stdout.strip()
+        error_detail = ''
+        if raw:
+            try:
+                payload = json.loads(raw)
+                error_detail = payload.get('error', raw)
+            except json.JSONDecodeError:
+                error_detail = raw
+        if not error_detail and result.stderr.strip():
+            error_detail = result.stderr.strip()
+        print(
+            f'[cast-migrate] ERROR: Pre-migration backup failed: {error_detail}',
+            file=sys.stderr,
+        )
+        return 1
+
+    raw = result.stdout.strip()
+    try:
+        payload = json.loads(raw)
+        backup_path = payload.get('backup_path', '(unknown)')
+    except json.JSONDecodeError:
+        backup_path = '(unparseable output)'
+
+    print(f'[cast-migrate] Pre-migration backup: {backup_path}')
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog='cast-migrate',
@@ -249,6 +318,12 @@ def main() -> int:
             skipped.append(name)
         else:
             pending.append((name, path))
+
+    if pending:
+        rc = _pre_migration_backup(db_path)
+        if rc != 0:
+            conn.close()
+            return 1
 
     for name, path in pending:
         print(f'  [APPLYING] {name}')
