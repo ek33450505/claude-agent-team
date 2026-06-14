@@ -35,6 +35,11 @@ PII_ALLOWLIST=(
 PII_ALLOWLIST_DIRS=(
   "docs/"
   "tests/test_helper/"
+  # Generated plugin build artifact — a curated mirror of already-scanned source
+  # (scripts/, agents/core/, skills/). The check-plugin-drift gate guarantees it
+  # equals regenerated source, so re-scanning it only false-positives on copies of
+  # this scanner's own fake-secret self-test fixture.
+  "plugin/"
 )
 
 # Return 0 if the given file path (relative to REPO_ROOT) is allowlisted.
