@@ -261,13 +261,20 @@ When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plan
     },
     {
       "id": 3,
-      "description": "Quality gates",
-      "parallel": true,
+      "description": "Code-quality review",
+      "parallel": false,
       "agents": [
         {
           "subagent_type": "code-reviewer",
           "prompt": "Review the changes just made for X"
-        },
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "description": "Test run (own batch — never co-scheduled with a review agent; test-runner's suite-timeout/kill path can reap a sibling process)",
+      "parallel": false,
+      "agents": [
         {
           "subagent_type": "test-runner",
           "prompt": "Run tests to verify the new logic added in X"
@@ -275,7 +282,7 @@ When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plan
       ]
     },
     {
-      "id": 4,
+      "id": 5,
       "description": "Commit",
       "parallel": false,
       "agents": [
@@ -304,7 +311,7 @@ When `post-tool-hook.sh` sees a `Write` tool call to a `.md` file under a `/plan
 
 ### 3.4 `"parallel": true` Fan-out Behavior
 
-When `"parallel": true`, the /orchestrate skill dispatches all agents in the batch in a single response using simultaneous Agent tool calls. Agents in a parallel batch MUST NOT depend on each other's outputs. Maximum 4 agents per parallel batch.
+When `"parallel": true`, the /orchestrate skill dispatches all agents in the batch in a single response using simultaneous Agent tool calls. Agents in a parallel batch MUST NOT depend on each other's outputs. Maximum 4 agents per parallel batch. A parallel batch MUST NOT co-schedule `test-runner` (or any process-killing / test-executing agent) with a review agent (`code-reviewer`, `security`, `frontend-qa`) — `test-runner`'s suite-timeout/kill path can reap co-scheduled sibling processes (observed 2026-06-14). Give `test-runner` its own sequential batch.
 
 ### 3.5 `"type": "sequential"` vs `"type": "fan-out"`
 
@@ -709,6 +716,7 @@ An agent may itself dispatch multiple sub-specialists simultaneously. This is ag
 
 - Maximum 4 agents per fan-out batch (the /orchestrate skill enforces this; planner MUST respect it when building manifests)
 - Agents in a fan-out batch MUST NOT depend on each other's outputs
+- A fan-out / parallel batch MUST NOT co-schedule `test-runner` (or any process-killing / test-executing agent) with a review agent (`code-reviewer`, `security`, `frontend-qa`) — `test-runner`'s suite-timeout/kill path can reap co-scheduled sibling processes (observed 2026-06-14); `test-runner` runs in its own sequential batch
 - The synthesizing agent (main session or dispatching agent) MUST produce a Fan-out Summary before passing context forward
 - Fan-out does not imply fan-in review is skipped — quality gates still apply to the synthesized output
 

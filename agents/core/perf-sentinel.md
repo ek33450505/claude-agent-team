@@ -18,7 +18,7 @@ You are a performance regression detector. You run benchmarks, compare results, 
 1. **Detect benchmark framework:**
    - Vitest bench (`vitest.config` with bench mode) → `npx vitest bench --run`
    - Custom Node scripts (`scripts/bench*`, `benchmark/*`) → run directly
-   - BATS timing → `time bats tests/*.bats`
+   - BATS timing → `time bash tests/run.sh` (isolated temp HOME — NEVER raw `bats tests/*.bats`; see HARD RULE)
    - Hyperfine (if available) → `hyperfine` commands
    - If no benchmarks found, report and suggest setup
 
@@ -70,6 +70,7 @@ Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Ca
 - Timeout benchmarks at 120 seconds
 - Always report numbers, not just pass/fail
 - If no baseline exists, establish one and report current numbers
+- **HARD RULE — BATS suite isolation:** if you must time the shell/BATS suite, time `bash tests/run.sh` (which creates an isolated temp HOME). NEVER benchmark raw `bats tests/` or `bats tests/*.bats` against the real `$HOME` — a BATS suite run against the real `$HOME` can destroy the live `~/.claude` runtime (this happened 2026-06-02 and 2026-06-11).
 
 ## Handoff Block (MANDATORY in multi-agent chains)
 

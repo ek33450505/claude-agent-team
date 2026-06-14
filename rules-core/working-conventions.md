@@ -29,6 +29,10 @@
 - Symptom of a hit cap: agent's final message ends mid-sentence (e.g. "Now let me run the tests:") with no Status line. Treat as truncation, not completion — never relay it as done.
 - For tasks that legitimately need more turns (large migrations, multi-file sweeps), split into smaller dispatches rather than raising caps further — the cap is a runaway-loop guard.
 
+## Parallel Dispatch
+- `test-runner` (and any process-killing / test-executing agent) MUST run in its OWN sequential batch. It MUST NEVER share a `"parallel": true` batch or a dispatch-group wave with any other agent — most critically the review agents (`code-reviewer`, `security`, `frontend-qa`).
+- Reason: `test-runner`'s suite-timeout/kill path can reap co-scheduled sibling processes — a co-scheduled `code-reviewer` was killed this way on 2026-06-14. Isolating `test-runner` in its own batch keeps the kill blast radius to itself.
+
 ## Testing
 - Tests alongside source: `Foo.jsx` -> `Foo.test.jsx`
 - Test behavior (`getByRole`/`getByText`), not implementation

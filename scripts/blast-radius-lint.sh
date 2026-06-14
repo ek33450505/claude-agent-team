@@ -41,6 +41,9 @@ SCRIPTS_DIR="${CAST_LINT_SCRIPTS_DIR:-${REPO_ROOT}/scripts}"
 EXEMPTIONS=(
   "cast-guard-lib.sh"  # Shell guard primitive: contains the authoritative recursive-delete
   "cast_guard.py"      # Python guard primitive: contains the authoritative rmtree call
+  "cast-command-guard.py"  # Command-layer guard primitive: references rm-rf/pkill patterns as
+                           # docstring examples, the user-facing block message, and regex match-data.
+                           # It is a read-only analyzer — executes NO destructive call itself.
 )
 
 # ── Allowlist (b): guarded legacy callsites ──────────────────────────────────

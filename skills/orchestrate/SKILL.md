@@ -98,6 +98,7 @@ Before each batch:
 - Mark its task `in_progress`
 - Check turn budget: if fewer than 5 turns remain, write checkpoint and stop: "TURN LIMIT APPROACHING: paused at Batch N. Resume with `/orchestrate resume`."
 - For parallel batches: check `owns_files` — if two agents claim the same file, report FILE OWNERSHIP CONFLICT and stop.
+- For parallel batches: check co-scheduling — if the batch contains `test-runner` AND any of {`code-reviewer`, `security`, `frontend-qa`}, report CO-SCHEDULING CONFLICT and either stop or auto-serialize `test-runner` into its own sequential batch before dispatching the rest. (test-runner's suite-timeout/kill path can reap co-scheduled sibling review processes — observed 2026-06-14.)
 
 **Prompt construction for Agent tool calls:**
 Before passing the `prompt` field from the ADM to the Agent tool, prepend a context preamble. Use the **full preamble** for implementation agents and the **minimal preamble** for lightweight agents:

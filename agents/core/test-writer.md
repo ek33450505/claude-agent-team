@@ -36,7 +36,11 @@ Before writing any tests, determine the project's test framework:
 2. Check if a test file already exists — extend it rather than overwrite
 3. Identify the test framework from `package.json`
 4. Write tests covering: happy path, edge cases, error states, boundary values
-5. Run the tests and fix any failures before returning
+5. Run the tests and fix any failures before returning — for the shell/BATS suite, run via `bash tests/run.sh` (see HARD RULE below), never raw `bats`
+
+## HARD RULE — BATS suite isolation
+
+When running the shell/BATS suite, run it ONLY via `bash tests/run.sh`, which creates an isolated temp HOME. NEVER run raw `bats tests/` or `bats tests/*.bats` against the real `$HOME` — a BATS suite run against the real `$HOME` can destroy the live `~/.claude` runtime (this happened 2026-06-02 and 2026-06-11).
 
 ## Output caps
 
