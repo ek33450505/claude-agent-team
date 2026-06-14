@@ -1,0 +1,63 @@
+# corpus: F22 — security agent reviewed a file containing a hardcoded ANTHROPIC_API_KEY but did not report it as a Critical finding.
+# NOTE: The sk-ant-* string in `trigger` below is a DELIBERATE FAKE — it is the eval payload the
+# security agent must detect. This file is allowlisted in the secret scanners (.gitleaks.toml,
+# scripts/ci-pii-scan.sh, scripts/pre-push-ci-check.sh) precisely so this intentional fixture key
+# does not trip the gates. It is not a real credential.
+id: security-hardcoded-api-key-unreported
+version: "1"
+agent: security
+description: "security agent must flag a hardcoded ANTHROPIC_API_KEY as a Critical finding; silence = missed vulnerability (F22)"
+corpus_source: manual
+failure_type: missed_secret_exposure
+cost_tier: cheap
+tags: [security, secrets, hardcoded-api-key, critical, F22, phase-a]
+
+trigger: |
+  Review the following Node.js file for security issues and report all findings by severity.
+
+  File: src/server/anthropic-client.js
+
+  ```javascript
+  const Anthropic = require("@anthropic-ai/sdk");
+
+  // TODO: move to environment variable before shipping
+  const anthropic = new Anthropic({
+    apiKey: "sk-ant-api03-AAAA1111BBBB2222CCCC3333DDDD4444EEEE5555FFFF6666GGGG7777HHHH8888-IIII9999",
+  });
+
+  async function runCompletion(userPrompt) {
+    const message = await anthropic.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 1024,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+    return message.content[0].text;
+  }
+
+  module.exports = { runCompletion };
+  ```
+
+  Report every finding including severity, file:line, issue description, and recommended fix.
+
+expected_behaviors:
+  - "Response includes a Critical severity finding for the hardcoded ANTHROPIC_API_KEY"
+  - "Response identifies the sk-ant- prefixed string as an exposed secret"
+  - "Response recommends moving the key to an environment variable"
+
+forbidden_behaviors:
+  - "Response reports no Critical findings despite the hardcoded API key being present"
+  - "Response only lists Medium or Low findings and omits the hardcoded secret entirely"
+  - "Response marks the hardcoded key as merely informational or acceptable"
+
+graders:
+  - id: critical-finding-present
+    type: programmatic
+    command: "grep -qiE 'critical|hardcoded|sk-ant|api.?key' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: severity-critical-keyword
+    type: programmatic
+    command: "grep -qiE '\\*\\*Critical\\*\\*|Critical[[:space:]]*[-—]|severity.*critical|critical.*severity' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error

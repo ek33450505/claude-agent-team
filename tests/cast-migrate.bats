@@ -336,3 +336,87 @@ DRIVER_EOF
   row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
   [ "$row_count" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# Pre-migration backup gate (Track 1 v8 prework)
+# ---------------------------------------------------------------------------
+
+@test "cast-migrate.py: dry-run does NOT create backup even with pending migrations" {
+  # Setup backup dir and track if anything is created
+  export CAST_BACKUP_DIR="$BATS_TEST_TMPDIR/backups"
+  mkdir -p "$CAST_BACKUP_DIR"
+
+  # Run with --dry-run (no migrations applied yet = pending migrations exist)
+  run python3 "$MIGRATE_SCRIPT" --dry-run
+  assert_success
+
+  # Dry-run must NOT invoke backup — backup dir should be empty
+  local backup_count
+  backup_count=$(find "$CAST_BACKUP_DIR" -type f | wc -l | tr -d ' ')
+  [ "$backup_count" -eq 0 ]
+}
+
+@test "cast-migrate.py: --confirm backs up BEFORE applying migrations" {
+  # Setup backup dir
+  export CAST_BACKUP_DIR="$BATS_TEST_TMPDIR/backups"
+  mkdir -p "$CAST_BACKUP_DIR"
+
+  # Run --confirm with pending migrations
+  run python3 "$MIGRATE_SCRIPT" --confirm
+  assert_success
+
+  # Backup must have been created
+  local backup_count
+  backup_count=$(find "$CAST_BACKUP_DIR" -type f | wc -l | tr -d ' ')
+  [ "$backup_count" -ge 1 ]
+
+  # Migrations must have been applied
+  local row_count
+  row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;")
+  [ "$row_count" -ge 1 ]
+}
+
+@test "cast-migrate.py: backup failure ABORTS migration (gate is fail-closed)" {
+  # Force backup failure by making CAST_BACKUP_DIR a file instead of directory
+  # When cast-db-backup.py tries mkdir, it will fail
+  export CAST_BACKUP_DIR="$BATS_TEST_TMPDIR/backup-is-file"
+  touch "$CAST_BACKUP_DIR"  # Create as file, not directory
+
+  # Run --confirm; backup gate should fail and abort before applying
+  run python3 "$MIGRATE_SCRIPT" --confirm
+  # Must exit non-zero
+  [ "$status" -ne 0 ]
+
+  # ERROR message must be in output or stderr
+  [[ "$output" == *"ERROR"* ]] || [[ "$output" == *"error"* ]]
+
+  # CRITICAL: no migrations must have been applied (gate worked)
+  local row_count
+  row_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM schema_migrations;" 2>/dev/null || echo 0)
+  [ "$row_count" -eq 0 ]
+}
+
+@test "cast-migrate.py: --confirm with no pending migrations does NOT back up" {
+  # Setup backup dir
+  export CAST_BACKUP_DIR="$BATS_TEST_TMPDIR/backups"
+  mkdir -p "$CAST_BACKUP_DIR"
+
+  # First run: apply all migrations
+  python3 "$MIGRATE_SCRIPT" --confirm > /dev/null
+  local first_backup_count
+  first_backup_count=$(find "$CAST_BACKUP_DIR" -type f | wc -l | tr -d ' ')
+  [ "$first_backup_count" -ge 1 ]
+
+  # Clean backups dir for clean comparison
+  rm -f "$CAST_BACKUP_DIR"/*
+
+  # Second run: no pending migrations, so no backup needed
+  run python3 "$MIGRATE_SCRIPT" --confirm
+  assert_success
+  [[ "$output" == *"0 applied"* ]]
+
+  # No new backup created (dir should still be empty)
+  local second_backup_count
+  second_backup_count=$(find "$CAST_BACKUP_DIR" -type f | wc -l | tr -d ' ')
+  [ "$second_backup_count" -eq 0 ]
+}

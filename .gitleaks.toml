@@ -22,4 +22,5 @@ paths = [
   '''tests/pre-push-ci-check\.bats''',
   '''tests/cast-batch-dispatch\.bats''',
   '''tests/cast-subagent-stop-hook-redaction\.bats''',
+  '''evals/cases/security/security-hardcoded-api-key-unreported\.yaml''',
 ]

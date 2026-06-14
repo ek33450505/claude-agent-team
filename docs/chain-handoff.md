@@ -108,8 +108,26 @@ Files changed: scripts/cast-subagent-stop-hook.sh, tests/cast-subagent-stop-hook
 
 ## Enforcement
 
-The `## Handoff` block is **not** hook-enforced. `cast-subagent-stop-hook.sh` does not check for its presence, and there is no `claim_type='missing_handoff'` logging to `agent_hallucinations`.
+The `## Handoff` block is validated by `cast-subagent-stop-hook.sh` at **WARN level** (Step 2.4). Violations are logged to the `agent_protocol_violations` table in `cast.db` and emitted to stderr — the hook never blocks.
 
-The only related runtime behavior is in `cast-incident-record.sh`, which parses the Handoff block's `files_changed` field to populate `related_files` on incident records. Absent a Handoff block, that field is simply omitted from the incident record.
+### Validation rules (Step 2.4)
 
-Enforcement of Handoff-block presence is a convention enforced by agent prompting and orchestrator review, not by a hook. If you see an agent omit the block, flag it in the Work Log — the hook will not catch it automatically.
+| Condition | Violation logged |
+|---|---|
+| Block absent + agent was **chained** (`batch_id` present in SubagentStop payload) | `missing_handoff` |
+| Block absent + agent was a **solo dispatch** (`batch_id` absent) | nothing — solo agents legitimately omit the block |
+| Block present but unparseable / no `key: value` lines found | `invalid_handoff_format` |
+| Block present + required field missing (`files_changed`, `status`, `blockers`) | `handoff_schema_violation` with `pattern=missing_field:<name>` |
+| Block present + `status` value not in allowed set | `handoff_schema_violation` with `pattern=invalid_value:status=<value>` |
+
+The typed schema that the validator mirrors is in `schemas/agent-handoff.json`. The runtime validator is `scripts/cast_handoff_parser.py` (importable as a module; also runnable as a CLI for smoke-testing).
+
+### What is NOT enforced
+
+- Agents that are exempt from the Status block contract (`STATUS_CONTRACT_EXEMPT=1` — Claude Code built-ins, workflow subagents) are also skipped by the Handoff validator.
+- Optional fields (`agent`, `key_decisions`, `next_agent_needs`) are never flagged as violations.
+- Content quality of field values is not checked — any non-empty string satisfies `files_changed` and `blockers`.
+
+### Incident-record integration
+
+`cast-incident-record.sh` still parses the Handoff block's `files_changed` field to populate `related_files` on incident records. Absent a Handoff block, that field is omitted from the incident record (unchanged from prior behavior).

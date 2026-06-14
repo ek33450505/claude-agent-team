@@ -199,11 +199,19 @@ fields = {
 }
 
 for key, val in fields.items():
+    # shlex.quote is MANDATORY here — the eval below is safe ONLY because every
+    # emitted field is quoted. Removing shlex.quote would open a shell-injection
+    # path: arbitrary agent output flows into an evaluated string downstream.
+    # NOTE keep this comment free of apostrophes, backticks and dollar-paren:
+    # it sits inside a command-substitution-nested heredoc that bash 3.2
+    # mis-parses on the macOS CI runner.
     print(key + '=' + shlex.quote(str(val)))
 PYEOF
 )" || true
 
 # Apply extracted fields; safe defaults apply if extraction failed or was empty.
+# Safety contract: shlex.quote() is applied to every field in the Python block
+# above — do NOT eval _FIELDS_RAW from any source that skips that quoting step.
 eval "${_FIELDS_RAW:-CAST_FIELDS_ERROR=1}" 2>/dev/null || true
 
 if [ "${CAST_FIELDS_ERROR:-1}" = "1" ]; then
@@ -614,6 +622,176 @@ except Exception as e:
     except Exception: pass
     if log_hook_failure:
         log_hook_failure('cast-subagent-stop-hook:truncation', -1, str(e), sess)
+PYEOF
+fi
+
+# ── Step 2.4: Handoff block validation (WARN-only) ──────────────────────────
+# Validates the typed ## Handoff schema in chained agent responses and logs
+# violations to agent_protocol_violations for dashboard observability.
+#
+# False-positive guard (CRITICAL):
+#   Block ABSENT + batch_id present  → violation="missing_handoff"   (chained, expected block)
+#   Block ABSENT + batch_id absent   → log NOTHING                   (solo dispatch is fine)
+#   Block PRESENT but unparseable    → violation="invalid_handoff_format"
+#   Block PRESENT + bad schema       → violation="handoff_schema_violation", pattern=<field>
+#
+# Exemptions: agents in STATUS_CONTRACT_EXEMPT=1 are skipped entirely (same guard as
+# Steps 2.1 / 3.5). Always exits 0 — warn-only, never blocks the hook pipeline.
+if [[ "$STATUS_CONTRACT_EXEMPT" = "0" ]] && [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]]; then
+  python3 - 2>>"$HOOK_ERROR_LOG" <<'PYEOF' || true
+import os, sys, re, json, importlib.util, subprocess
+from datetime import datetime, timezone
+
+# Resolved once here — used by all importlib.util loads and the redaction call below.
+_hook_dir = os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts'))
+
+# ── Load cast_db for db_write ────────────────────────────────────────────────
+def _noop_db_write(table, payload):
+    return False
+
+db_write = _noop_db_write
+try:
+    _db_spec = importlib.util.spec_from_file_location(
+        'cast_db', os.path.join(_hook_dir, 'cast_db.py')
+    )
+    if _db_spec and _db_spec.loader:
+        _cast_db = importlib.util.module_from_spec(_db_spec)
+        _db_spec.loader.exec_module(_cast_db)
+        db_write = _cast_db.db_write
+except Exception:
+    pass  # fall back to no-op; must not crash the hook pipeline
+
+# ── Load cast_handoff_parser for validate_handoff ───────────────────────────
+validate_handoff = None
+try:
+    _hp_spec = importlib.util.spec_from_file_location(
+        'cast_handoff_parser', os.path.join(_hook_dir, 'cast_handoff_parser.py')
+    )
+    if _hp_spec and _hp_spec.loader:
+        _hp_mod = importlib.util.module_from_spec(_hp_spec)
+        _hp_spec.loader.exec_module(_hp_mod)
+        validate_handoff = _hp_mod.validate_handoff
+except Exception:
+    pass
+
+if validate_handoff is None:
+    # Minimal inline fallback so the hook degrades gracefully if the file is missing
+    _HANDOFF_RE = re.compile(r'## Handoff\s*\n([\s\S]+?)(?=\n## |\Z)')
+    def validate_handoff(text):
+        m = _HANDOFF_RE.search(text)
+        if not m:
+            return {'block_present': False, 'ok': False, 'violation': 'missing_handoff',
+                    'pattern': None, 'detail': 'No ## Handoff block found', 'raw_excerpt': ''}
+        block = m.group(1)
+        # Minimal: check parseable and required fields present
+        fields = {}
+        for line in block.splitlines():
+            line = line.strip()
+            if ':' in line:
+                k, _, v = line.partition(':')
+                fields[k.strip().lower()] = v.strip()
+        for req in ('files_changed', 'status', 'blockers'):
+            if req not in fields or not fields[req]:
+                return {'block_present': True, 'ok': False,
+                        'violation': 'handoff_schema_violation',
+                        'pattern': f'missing_field:{req}', 'detail': f'Missing {req}',
+                        'raw_excerpt': block[:500]}
+        if fields.get('status') not in ('DONE', 'DONE_WITH_CONCERNS', 'BLOCKED'):
+            return {'block_present': True, 'ok': False,
+                    'violation': 'handoff_schema_violation',
+                    'pattern': f'invalid_value:status={fields.get("status", "")}',
+                    'detail': 'Invalid status value', 'raw_excerpt': block[:500]}
+        return {'block_present': True, 'ok': True, 'violation': None,
+                'pattern': None, 'detail': None, 'raw_excerpt': block[:500]}
+
+# ── Read environment ─────────────────────────────────────────────────────────
+response_text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '') or ''
+if not response_text.strip():
+    sys.exit(0)
+
+agent_type = os.environ.get('CAST_STOP_AGENT', 'unknown') or 'unknown'
+agent_id   = os.environ.get('CAST_STOP_AGENT_ID', '') or ''
+session_id = os.environ.get('CAST_STOP_SESSION', '') or ''
+
+# Detect whether this agent was chained: batch_id present in raw SubagentStop input
+# (same signal used by cast-agent-protocol-check.sh).
+batch_id = None
+raw_input = os.environ.get('CAST_STOP_INPUT', '') or ''
+if raw_input:
+    try:
+        batch_id = json.loads(raw_input).get('batch_id')
+    except Exception:
+        pass
+
+# ── Run validation ───────────────────────────────────────────────────────────
+try:
+    result = validate_handoff(response_text)
+except Exception:
+    sys.exit(0)  # parser error → degrade gracefully, no violation logged
+
+block_present = result.get('block_present', False)
+ok            = result.get('ok', True)
+violation     = result.get('violation')
+pattern       = result.get('pattern')
+detail        = result.get('detail', '')
+raw_excerpt   = result.get('raw_excerpt', '')
+
+# Solo dispatch with absent block: not an error — log nothing.
+# Only flag a missing block when the agent was part of a chain (batch_id set).
+if not block_present and not batch_id:
+    sys.exit(0)
+
+# No violation: all good — nothing to log.
+if ok:
+    sys.exit(0)
+
+# ── Redact raw_excerpt before storing (matches lines 1183-1191 in this hook) ──
+# Same mechanism as the summary/concerns redaction: pipe through cast-redact.py
+# --engine regex, extract redacted_text from JSON output. Falls back to the
+# original text on any subprocess/parse failure — hook pipeline never blocked.
+_excerpt_raw = (raw_excerpt or detail or '')[:500]
+_excerpt_for_db = _excerpt_raw
+try:
+    _redact_result = subprocess.run(
+        ['python3', os.path.join(_hook_dir, 'cast-redact.py'), '--engine', 'regex'],
+        input=_excerpt_raw.encode(),
+        capture_output=True,
+        timeout=5,
+    )
+    if _redact_result.returncode == 0:
+        _redacted = json.loads(_redact_result.stdout.decode())
+        _excerpt_for_db = _redacted.get('redacted_text', _excerpt_raw)
+except Exception:
+    pass  # fall back to unredacted on any subprocess or parse failure
+
+# ── Log violation ────────────────────────────────────────────────────────────
+now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+payload = {
+    'session_id': session_id,
+    'agent_type': agent_type,
+    'agent_id':   agent_id,
+    'batch_id':   batch_id,
+    'violation':  violation,
+    'pattern':    pattern,
+    'timestamp':  now_iso,
+    'raw_excerpt': _excerpt_for_db,
+}
+# Remove None values to avoid SQLite type coercion issues
+payload = {k: v for k, v in payload.items() if v is not None}
+
+try:
+    db_write('agent_protocol_violations', payload)
+except Exception:
+    pass  # never crash the hook pipeline
+
+# Stderr WARN — no hookSpecificOutput banner (WARN-only contract)
+print(
+    f'[CAST-WARN] handoff_validation: {agent_type} {violation}'
+    + (f' ({pattern})' if pattern else '')
+    + ' — logged to cast.db',
+    file=sys.stderr,
+)
 PYEOF
 fi
 

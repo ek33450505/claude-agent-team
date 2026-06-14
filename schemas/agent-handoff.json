@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ek33450505/claude-agent-team/schemas/agent-handoff.json",
+  "title": "CAST Agent Handoff Block",
+  "description": "Typed schema for the ## Handoff key-value block that agents emit in multi-agent chains. The block is the machine-readable contract between sequential agents in an orchestrated wave. Runtime validation of this schema is performed by scripts/cast_handoff_parser.py inside the SubagentStop hook (WARN-only, never blocks).",
+  "type": "object",
+  "required": ["files_changed", "status", "blockers"],
+  "properties": {
+    "files_changed": {
+      "type": "string",
+      "description": "Comma-separated list of relative paths the agent wrote, edited, or deleted. Use the literal string 'none' if no files were changed.",
+      "examples": [
+        "scripts/cast-subagent-stop-hook.sh, schemas/agent-handoff.json",
+        "none"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED"],
+      "description": "Mirrors the agent's prose Status line. NEEDS_CONTEXT is not valid here — an agent that needs context is BLOCKED from the chain's perspective."
+    },
+    "blockers": {
+      "type": "string",
+      "description": "Anything that must be resolved before the chain continues. Use the literal string 'none' if there are no blockers.",
+      "examples": [
+        "CI is failing on test_foo — downstream agent should not merge",
+        "none"
+      ]
+    },
+    "agent": {
+      "type": "string",
+      "description": "Which agent emitted this block. Optional but recommended for observability."
+    },
+    "key_decisions": {
+      "type": "string",
+      "description": "Non-obvious choices the next agent should know. Max 3 points; use semicolons to separate. Optional."
+    },
+    "next_agent_needs": {
+      "type": "string",
+      "description": "Specific commands or checks the downstream agent should run. Optional."
+    }
+  },
+  "additionalProperties": {
+    "type": "string",
+    "description": "Any additional free-form key: value fields the next agent needs to know."
+  },
+  "examples": [
+    {
+      "agent": "code-writer",
+      "status": "DONE",
+      "files_changed": "scripts/cast-subagent-stop-hook.sh, schemas/agent-handoff.json",
+      "key_decisions": "used importlib.util to load cast_handoff_parser.py — avoids sys.path pollution",
+      "next_agent_needs": "run bats tests/cast-subagent-stop-hook.bats to verify new step",
+      "blockers": "none"
+    }
+  ]
+}

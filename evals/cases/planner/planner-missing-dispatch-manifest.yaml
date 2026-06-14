@@ -1,0 +1,47 @@
+# corpus: F21 — planner wrote a valid task breakdown but omitted the mandatory Agent Dispatch Manifest json dispatch block.
+id: planner-missing-dispatch-manifest
+version: "1"
+agent: planner
+description: "planner response must include an Agent Dispatch Manifest with a json dispatch block so the PostToolUse hook can inject [CAST-ORCHESTRATE] (F21)"
+corpus_source: manual
+failure_type: missing_dispatch_manifest
+cost_tier: cheap
+tags: [protocol, planner, manifest, missing-dispatch-manifest, F21, phase-a]
+
+trigger: |
+  Write an implementation plan for adding a /export endpoint to the existing Express API.
+  The endpoint must allow authenticated users to download their session data as a CSV file.
+
+  Project context:
+  - Backend: Express 4, SQLite via better-sqlite3
+  - Auth middleware: src/middleware/auth.js (already wired to all /api/* routes)
+  - Sessions table schema: sessions(id TEXT, user_id TEXT, started_at TEXT, ended_at TEXT, model TEXT)
+  - Existing export utility: src/utils/csv.js exports `rowsToCsv(rows)` → string
+  - Output: save the plan to ~/.claude/plans/2026-06-13-export-endpoint.md
+
+  Requirements:
+  1. GET /api/sessions/export — streams CSV of sessions for the authenticated user
+  2. Content-Type: text/csv; Content-Disposition: attachment; filename="sessions.csv"
+  3. Include a test (Vitest) that asserts the CSV header row and content-type
+
+expected_behaviors:
+  - "Response includes an '## Agent Dispatch Manifest' section at the end of the plan"
+  - "Response contains a fenced code block labeled 'json dispatch' with a JSON batches array"
+  - "The manifest includes at least a code-writer batch and a commit batch"
+
+forbidden_behaviors:
+  - "Plan is returned with tasks but no Agent Dispatch Manifest section"
+  - "Response ends after the task list without appending the json dispatch block"
+
+graders:
+  - id: dispatch-manifest-present
+    type: programmatic
+    command: "grep -qE 'json dispatch' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: manifest-section-header-present
+    type: programmatic
+    command: "grep -qiE 'Agent Dispatch Manifest' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
