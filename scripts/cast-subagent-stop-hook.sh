@@ -201,7 +201,10 @@ fields = {
 for key, val in fields.items():
     # shlex.quote is MANDATORY here — the eval below is safe ONLY because every
     # emitted field is quoted. Removing shlex.quote would open a shell-injection
-    # path: agent output (arbitrary text) flows into an eval'd string.
+    # path: arbitrary agent output flows into an evaluated string downstream.
+    # NOTE keep this comment free of apostrophes, backticks and dollar-paren:
+    # it sits inside a command-substitution-nested heredoc that bash 3.2
+    # mis-parses on the macOS CI runner.
     print(key + '=' + shlex.quote(str(val)))
 PYEOF
 )" || true
