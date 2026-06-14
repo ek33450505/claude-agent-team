@@ -27,6 +27,25 @@ print(json.dumps({
 " "$agent_type" "$output"
 }
 
+# Helper: make a SubagentStop payload with optional batch_id
+make_handoff_payload() {
+  local agent_type="${1:-test-agent}"
+  local output="${2:-}"
+  local batch_id="${3:-}"
+  python3 -c "
+import json, sys
+payload = {
+    'agent_type':             sys.argv[1],
+    'session_id':             'sess-test-handoff',
+    'stop_reason':            'end_turn',
+    'last_assistant_message': sys.argv[2],
+}
+if sys.argv[3]:
+    payload['batch_id'] = sys.argv[3]
+print(json.dumps(payload))
+" "$agent_type" "$output" "$batch_id"
+}
+
 setup() {
   load 'helpers/setup'
   setup_temp_home
@@ -655,5 +674,765 @@ print('\n'.join(lines))
   # No missing_formality violation should be written
   local rows
   rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='missing_formality';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+# ---------------------------------------------------------------------------
+# Handoff Block Validation Tests (Step 2.4 — CAST v8)
+#
+# Validates the typed ## Handoff schema in chained agent responses.
+# Required fields: files_changed, status (DONE|DONE_WITH_CONCERNS|BLOCKED), blockers
+# Exemptions: agents in STATUS_CONTRACT_EXEMPT (Claude Code built-ins) are skipped.
+# False-positive guard: absent block + no batch_id → log NOTHING (solo dispatch)
+#
+# Writer: cast-subagent-stop-hook.sh Step 2.4
+# Target table: agent_protocol_violations (violation column)
+# ---------------------------------------------------------------------------
+
+@test "Handoff: valid block present + chained agent → NO violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['The task has been completed successfully.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed: src/foo.js, src/bar.js')
+lines.append('status: DONE')
+lines.append('blockers: none')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "test-writer" "$output" "batch-001")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "Handoff: malformed block → invalid_handoff_format violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['The task is complete.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('this is complete garbage')
+lines.append('no actual structure here')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "test-writer" "$output" "batch-002")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='invalid_handoff_format';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 1 ]]
+}
+
+@test "Handoff: missing required field (status) → handoff_schema_violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['The task is complete.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed: src/foo.js')
+lines.append('blockers: none')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "test-writer" "$output" "batch-003")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='handoff_schema_violation' AND pattern='missing_field:status';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 1 ]]
+}
+
+@test "Handoff: invalid status enum value → handoff_schema_violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Task finished.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed: src/foo.js')
+lines.append('status: INVALID_STATUS')
+lines.append('blockers: none')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "test-writer" "$output" "batch-005")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='handoff_schema_violation' AND pattern LIKE 'invalid_value:status=%';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 1 ]]
+}
+
+@test "Handoff: absent block + chained (batch_id) → missing_handoff violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output="The work is complete but no Handoff block present."
+
+  local payload
+  payload="$(make_handoff_payload "test-writer" "$output" "batch-006")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='missing_handoff';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 1 ]]
+}
+
+@test "Handoff: absent block + solo (no batch_id) → NO violation (critical false-positive guard)" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output="The task is complete but no Handoff block here."
+
+  local payload
+  payload="$(make_handoff_payload "test-writer" "$output")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "Handoff: exempt agent (general-purpose) chained without block → NO violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output="Tool call result data. No Status block."
+
+  local payload
+  payload="$(make_handoff_payload "general-purpose" "$output" "batch-007")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "Handoff: CAST agent valid block with all required fields → NO violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Completed the code review.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed: src/index.ts, tests/index.test.ts')
+lines.append('status: DONE_WITH_CONCERNS')
+lines.append('blockers: Minor style issue on line 42')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "code-reviewer" "$output" "batch-008")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+# ---------------------------------------------------------------------------
+# Unit tests for cast_handoff_parser.py CLI
+# ---------------------------------------------------------------------------
+
+@test "cast_handoff_parser.py: valid block → ok=true" {
+  local input
+  input="$(python3 -c "
+text = '''Some work done.
+
+## Handoff
+files_changed: src/main.py, src/utils.py
+status: DONE
+blockers: none
+'''
+print(text)
+")"
+
+  run python3 scripts/cast_handoff_parser.py <<< "$input"
+  assert_success
+  assert_output --partial '"ok": true'
+  assert_output --partial '"violation": null'
+}
+
+@test "cast_handoff_parser.py: missing field → violation=handoff_schema_violation" {
+  local input="$(python3 -c "
+text = '''Work complete.
+
+## Handoff
+files_changed: src/main.py
+blockers: none
+'''
+print(text)
+")"
+
+  run python3 scripts/cast_handoff_parser.py <<< "$input"
+  assert_failure
+  assert_output --partial '"violation": "handoff_schema_violation"'
+  assert_output --partial '"pattern": "missing_field:status"'
+}
+
+@test "cast_handoff_parser.py: invalid status enum → violation=handoff_schema_violation" {
+  local input="$(python3 -c "
+text = '''Done.
+
+## Handoff
+files_changed: src/main.py
+status: BAD_STATUS
+blockers: none
+'''
+print(text)
+")"
+
+  run python3 scripts/cast_handoff_parser.py <<< "$input"
+  assert_failure
+  assert_output --partial '"violation": "handoff_schema_violation"'
+  assert_output --partial '"pattern": "invalid_value:status=BAD_STATUS"'
+}
+
+@test "cast_handoff_parser.py: no Handoff block → violation=missing_handoff" {
+  local input="Work completed without Handoff block."
+
+  run python3 scripts/cast_handoff_parser.py <<< "$input"
+  assert_failure
+  assert_output --partial '"violation": "missing_handoff"'
+}
+
+@test "cast_handoff_parser.py: malformed block (garbage lines) → violation=invalid_handoff_format" {
+  local input="$(python3 -c "
+text = '''Done.
+
+## Handoff
+completely unstructured junk here
+no colons or proper structure here
+'''
+print(text)
+")"
+
+  run python3 scripts/cast_handoff_parser.py <<< "$input"
+  assert_failure
+  assert_output --partial '"violation": "invalid_handoff_format"'
+}
+
+# ---------------------------------------------------------------------------
+# Additional Handoff Validation Cases (Comprehensive Coverage)
+# ---------------------------------------------------------------------------
+
+@test "Handoff: missing files_changed field → handoff_schema_violation with pattern" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Work completed.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('status: DONE')
+lines.append('blockers: none')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "code-writer" "$output" "batch-fc1")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='handoff_schema_violation' AND pattern='missing_field:files_changed';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 1 ]]
+}
+
+@test "Handoff: missing blockers field → handoff_schema_violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Work finished.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed: src/app.py')
+lines.append('status: BLOCKED')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "debugger" "$output" "batch-fc2")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='handoff_schema_violation' AND pattern='missing_field:blockers';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 1 ]]
+}
+
+@test "Handoff: empty files_changed value → handoff_schema_violation (empty_field)" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Complete.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed:')
+lines.append('status: DONE')
+lines.append('blockers: none')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "code-writer" "$output" "batch-fc3")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations WHERE violation='handoff_schema_violation' AND pattern='empty_field:files_changed';" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 1 ]]
+}
+
+@test "Handoff: status with extra whitespace is trimmed and validated correctly" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Work done.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed: src/main.py')
+lines.append('status:   DONE_WITH_CONCERNS  ')
+lines.append('blockers: minor inconsistency')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "code-reviewer" "$output" "batch-fc4")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "Handoff: chained agent with NO response text → gracefully skip validation (response_text empty)" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local payload
+  payload="$(python3 -c "
+import json
+print(json.dumps({
+    'agent_type': 'test-writer',
+    'session_id': 'sess-empty',
+    'stop_reason': 'end_turn',
+    'batch_id': 'batch-fc5',
+    'last_assistant_message': '',
+}))
+")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "Handoff: solo agent (no batch_id, absent block) correctly exits without logging" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  # Make a payload with NO batch_id (solo dispatch), no Handoff block
+  local payload
+  payload="$(python3 -c "
+import json
+print(json.dumps({
+    'agent_type': 'researcher',
+    'session_id': 'sess-solo-123',
+    'stop_reason': 'end_turn',
+    'last_assistant_message': 'Task completed. This is solo dispatch without a Handoff block and no batch_id.',
+}))
+")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # CRITICAL: Zero violations logged (false-positive guard)
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "Handoff: solo agent with valid block (nice-to-have, not required) → NO violation" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = ['Task complete.'] * 5
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed: src/analysis.py')
+lines.append('status: DONE')
+lines.append('blockers: none')
+print('\n'.join(lines))
+")"
+
+  # No batch_id — solo dispatch
+  local payload
+  payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type': 'researcher',
+    'session_id': 'sess-solo-456',
+    'stop_reason': 'end_turn',
+    'last_assistant_message': '''$output''',
+}))
+")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # No violations (solo dispatch is not required to have Handoff)
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "Handoff: batch_id null vs absent — both treated as solo (guard for variant payloads)" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  # Payload with batch_id: null (JSON null, not absent)
+  local payload
+  payload="$(python3 -c "
+import json
+print(json.dumps({
+    'agent_type': 'test-writer',
+    'session_id': 'sess-null-batch',
+    'stop_reason': 'end_turn',
+    'batch_id': None,
+    'last_assistant_message': 'Work done without Handoff block.',
+}))
+")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # Should NOT log missing_handoff (null batch_id treated as solo)
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
+  [[ "$rows" -eq 0 ]]
+}
+
+@test "cast_handoff_parser.py: empty file content → violation=missing_handoff" {
+  local input=""
+
+  run python3 scripts/cast_handoff_parser.py <<< "$input"
+  assert_failure
+  assert_output --partial '"violation": "missing_handoff"'
+}
+
+@test "cast_handoff_parser.py: block with extra optional fields (not validated) → ok=true" {
+  local input
+  input="$(python3 -c "
+text = '''Work complete.
+
+## Handoff
+files_changed: src/main.py
+status: DONE
+blockers: none
+agent: my-agent
+key_decisions: used approach X
+next_agent_needs: stage-gate approval
+extra_field: allowed as-is
+'''
+print(text)
+")"
+
+  run python3 scripts/cast_handoff_parser.py <<< "$input"
+  assert_success
+  assert_output --partial '"ok": true'
+}
+
+@test "cast_handoff_parser.py: status enum case-sensitive validation" {
+  # "done" (lowercase) should fail — enum values are uppercase
+  local input
+  input="$(python3 -c "
+text = '''Done.
+
+## Handoff
+files_changed: src/main.py
+status: done
+blockers: none
+'''
+print(text)
+")"
+
+  run python3 scripts/cast_handoff_parser.py <<< "$input"
+  assert_failure
+  assert_output --partial '"violation": "handoff_schema_violation"'
+  assert_output --partial '"pattern": "invalid_value:status=done"'
+}
+
+@test "Handoff: complex real-world block with multi-line values parses correctly" {
+  sqlite3 "$CAST_DB_PATH" <<'TBSQL'
+CREATE TABLE IF NOT EXISTS agent_protocol_violations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent_type TEXT NOT NULL,
+  agent_id TEXT,
+  batch_id INTEGER,
+  violation TEXT NOT NULL,
+  pattern TEXT,
+  timestamp TEXT NOT NULL,
+  raw_excerpt TEXT
+);
+TBSQL
+
+  local output
+  output="$(python3 -c "
+lines = []
+lines.append('Task completed after multiple iterations.')
+lines.append('')
+lines.append('Status: DONE_WITH_CONCERNS')
+lines.append('Summary: Completed with minor concerns.')
+lines.append('')
+lines.append('## Handoff')
+lines.append('files_changed: src/index.ts, src/components/Button.tsx, tests/button.test.ts')
+lines.append('status: DONE_WITH_CONCERNS')
+lines.append('blockers: TypeScript strict mode warnings in ButtonComponent: expected to fix in PR review')
+lines.append('key_decisions: Used React.FC pattern for consistency with codebase')
+lines.append('agent: code-writer')
+print('\n'.join(lines))
+")"
+
+  local payload
+  payload="$(make_handoff_payload "code-writer" "$output" "batch-complex")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # Valid block with multi-line values → no violations
+  local rows
+  rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
   [[ "$rows" -eq 0 ]]
 }
