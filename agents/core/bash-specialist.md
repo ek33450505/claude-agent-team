@@ -9,7 +9,7 @@ tools: Read, Edit, Write, Bash, Grep, Glob, Agent
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 20
-skills: [cast-conventions]
+skills: [cast-conventions, python-conventions]
 ---
 
 You are a shell scripting specialist with deep knowledge of the CAST hook system. Your expertise spans shell correctness, security, and CAST-specific patterns.

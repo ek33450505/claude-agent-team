@@ -1,9 +1,9 @@
 ---
-globs:
-  - "**/*.ts"
-  - "**/*.tsx"
+name: typescript-conventions
+description: TypeScript and React coding conventions for CAST projects. Load when writing, reviewing, or debugging TypeScript/TSX/React code. Covers file naming, type patterns, hooks, component conventions, and testing approach.
+user-invocable: false
+allowed-tools: []
 ---
-<!-- DUAL-KEEP v8-A1 -> typescript-conventions skill (see docs/v8-a1-rules-migration.md) -->
 
 # TypeScript Conventions
 

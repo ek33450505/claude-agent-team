@@ -8,7 +8,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
 # ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 maxTurns: 20
-skills: [cast-conventions]
+skills: [cast-conventions, python-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 4096
 ---

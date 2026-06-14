@@ -7,7 +7,7 @@ model: haiku
 background: true
 maxTurns: 25
 disallowedTools: Write, Edit
-skills: [cast-conventions]
+skills: [cast-conventions, typescript-conventions, python-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 0
 ---
