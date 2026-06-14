@@ -82,18 +82,25 @@ _new_fake() {
 }
 
 # ---------------------------------------------------------------------------
-# (3) count-gate still fires in scoped mode when a requested file's tests are
-#     dropped at run time (counted as planned, but bats does not execute them)
+# (3) count-gate fires in scoped mode when fewer tests execute than the
+#     requested files statically declare (the dropped-file / truncation guard)
 # ---------------------------------------------------------------------------
 
-@test "scoped: count-gate FAILS when a requested file is silently dropped" {
+@test "scoped: count-gate FAILS when fewer tests run than the requested files declare" {
   local fake; fake="$(_new_fake)"
   printf '@test "ok1" { true; }\n' > "$fake/tests/good.bats"
-  # broken.bats has 2 @test lines (counted as planned=2 here) but a load error
-  # makes bats drop them at run time -> executed != planned -> gate must fire.
-  printf 'load "this_helper_does_not_exist"\n@test "drop1" { true; }\n@test "drop2" { true; }\n' > "$fake/tests/broken.bats"
+  # phantom.bats: THREE lines match the planned-count grep (^@test) but only TWO are
+  # real bats test blocks — `@testnoop()` is a no-op function definition (free code),
+  # which cast-count-planned-tests counts yet bats excludes from its plan. So
+  # planned (1+3=4) > executed (1+2=3) while bats itself stays GREEN (all real tests
+  # pass) — isolating the count-gate as the SOLE failure path (exit 1 from the gate,
+  # not from BATS_EXIT). Deterministic + cross-platform: this deliberately avoids a
+  # bats load-error, whose plan-counting differs between macOS and Linux bats (macOS
+  # drops the unloadable tests so executed<planned; Linux counts them as
+  # setup_file-failed so executed==planned and the gate never fires).
+  printf '@test "p1" { true; }\n@testnoop() { :; }\n@test "p2" { true; }\n' > "$fake/tests/phantom.bats"
 
-  run bash "$fake/tests/run.sh" --files tests/good.bats tests/broken.bats --tap
+  run bash "$fake/tests/run.sh" --files tests/good.bats tests/phantom.bats --tap
   assert_failure
   assert_output --partial "[cast-count-gate] FAIL"
 }
