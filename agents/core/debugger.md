@@ -7,7 +7,7 @@ model: sonnet
 # ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
 # effort field is N/A on sonnet — only Opus reads it
 maxTurns: 50
-skills: [cast-conventions]
+skills: [cast-conventions, typescript-conventions, python-conventions]
 # thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
 thinking_budget: 8192
 ---

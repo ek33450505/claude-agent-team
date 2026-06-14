@@ -2,6 +2,7 @@
 globs:
   - "**/*.py"
 ---
+<!-- DUAL-KEEP v8-A1 -> python-conventions skill (see docs/v8-a1-rules-migration.md) -->
 
 # Python Conventions
 
