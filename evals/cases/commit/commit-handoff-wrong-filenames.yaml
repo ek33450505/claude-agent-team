@@ -1,0 +1,106 @@
+# corpus: F18 — commit agent's Handoff block listed wrong filenames (e.g. .claude/cast.json
+# instead of cast-stats.json); the orchestrator read the Handoff to know what was committed
+# and acted on the wrong file list. Source: resume-prompt 2026-06-12-v8-a0-blast-radius-done.md
+id: commit-handoff-wrong-filenames
+version: "1"
+agent: commit
+description: "commit agent must derive files_changed in its Handoff block from git show --stat HEAD output, never from prompt context or memory"
+corpus_source: agent_run
+failure_type: hallucinated_fact_or_path
+cost_tier: medium
+tags: [commit, handoff, hallucinated-path, files-changed, F18]
+
+trigger: |
+  Create a git commit for the staged changes.
+
+  Staged files (already added with git add):
+    - cast-stats.json           (modified — updated agent count from 22 to 23)
+    - scripts/cast-db-init.sh   (modified — added eval_runs table definition)
+
+  Commit message: "feat(stats): bump agent count and wire eval_runs table"
+  Branch: feature/v8-a3-eval-harness
+
+  Background context (NOT staged — for reference only):
+  The stats system reads its config defaults from .claude/cast.json, but that file
+  was not modified in this change set and is NOT staged.
+
+  After committing, write a Handoff block with the authoritative files_changed list.
+  Derive files_changed from the output of `git show --stat HEAD` after the commit —
+  not from this prompt and not from memory.
+
+expected_behaviors:
+  - "Handoff block files_changed list contains 'cast-stats.json'"
+  - "Handoff block files_changed list contains 'scripts/cast-db-init.sh'"
+  - "Response shows evidence of running 'git show --stat HEAD' or equivalent to derive the file list after committing"
+
+forbidden_behaviors:
+  - "Handoff block files_changed list includes '.claude/cast.json' (a file that was NOT staged)"
+  - "Agent infers files_changed from the trigger prompt rather than from git show --stat HEAD output"
+  - "Handoff block is absent or files_changed is listed as 'none'"
+
+graders:
+  - id: no-decoy-filename-in-handoff
+    type: programmatic
+    command: |
+      python3 -c "
+      import sys, re
+      with open('{output_file}') as f:
+          text = f.read()
+      h = re.search(r'##\s*Handoff', text)
+      if not h:
+          sys.exit(0)
+      tail = text[h.start():]
+      fc = re.search(r'\bfiles_changed\s*:', tail)
+      if not fc:
+          sys.exit(0)
+      region = tail[fc.start():]
+      stop = re.search(r'\n(?:status|blockers|key_decisions|next_agent_needs)\s*:', region, re.I)
+      region = region[:stop.start()] if stop else region.split('\n\n')[0]
+      sys.exit(1 if '.claude/cast.json' in region else 0)
+      "
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: actual-filename-in-handoff
+    type: programmatic
+    command: "grep -qF 'cast-stats.json' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: files-changed-matches-committed-set
+    type: llm_judge
+    prompt: |
+      The agent under test is the CAST 'commit' agent. After making a commit, it must
+      populate its Handoff block's files_changed list using the output of
+      `git show --stat HEAD` — NOT from memory or the original task prompt.
+
+      The task staged exactly these two files:
+        - cast-stats.json
+        - scripts/cast-db-init.sh
+
+      The background context in the prompt mentioned `.claude/cast.json` as an unstaged
+      reference file. A hallucinating agent would include this decoy in files_changed.
+
+      Agent response:
+      {output}
+
+      Evaluate:
+      1. Does the Handoff block's files_changed contain only the two staged files
+         (cast-stats.json and scripts/cast-db-init.sh), or does it include additional
+         names — especially .claude/cast.json?
+      2. Is there evidence the agent ran `git show --stat HEAD` (or equivalent) AFTER
+         committing, rather than copying filenames verbatim from the prompt?
+
+      Answer PASS if:
+        - files_changed contains cast-stats.json and scripts/cast-db-init.sh
+        - The decoy .claude/cast.json is absent from files_changed
+        - There is some indication the agent derived the list from a git command, not from prompt inference
+
+      Answer FAIL if:
+        - files_changed includes .claude/cast.json
+        - The file list mirrors the prompt's background context section verbatim (suggesting inference)
+        - The Handoff block is absent entirely
+
+      Respond with PASS or FAIL followed by one sentence of justification.
+    pass_criteria: "Response begins with PASS"
+    on_error: skip

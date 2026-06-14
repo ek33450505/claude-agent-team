@@ -139,3 +139,83 @@ teardown() {
   remaining=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")
   [ "$remaining" -eq 0 ]
 }
+
+# --- fail-closed backup gate ---
+
+@test "real prune: backup artifact created before rows are deleted" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+    INSERT INTO agent_runs (agent, started_at) VALUES ('bot', datetime('now', '-200 days'));
+  "
+  local backup_dir
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+
+  run python3 "$SCRIPT"
+  assert_success
+
+  # Backup artifact must exist
+  local backup_count
+  backup_count=$(ls "$backup_dir"/cast-db-*.db 2>/dev/null | wc -l | tr -d ' ')
+  [ "$backup_count" -ge 1 ]
+
+  # Old rows must have been deleted
+  re_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")
+  ar_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;")
+  [ "$re_count" -eq 0 ]
+  [ "$ar_count" -eq 0 ]
+
+  rm -rf "$backup_dir"
+}
+
+@test "fail-closed: backup failure skips prune and exits 0" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+    INSERT INTO agent_runs (agent, started_at) VALUES ('bot', datetime('now', '-200 days'));
+  "
+  # Force backup to fail: parent is a regular FILE, so mkdir -p inside it raises
+  # NotADirectoryError for everyone — including root (root-proof).
+  local blocker
+  blocker="$(mktemp -d)/blocker"
+  touch "$blocker"
+  export CAST_BACKUP_DIR="$blocker/sub"
+
+  run python3 "$SCRIPT"
+  assert_success  # must always exit 0 (cron/launchd contract)
+
+  # Rows must NOT have been deleted (fail-closed)
+  re_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")
+  ar_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;")
+  [ "$re_count" -eq 1 ]
+  [ "$ar_count" -eq 1 ]
+
+  # Output must mention ERROR
+  assert_output --partial "ERROR"
+}
+
+@test "dry-run does not invoke backup and deletes nothing" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+    INSERT INTO agent_runs (agent, started_at) VALUES ('bot', datetime('now', '-200 days'));
+  "
+  # Force backup to fail (root-proof): parent is a regular FILE so mkdir -p
+  # raises NotADirectoryError regardless of uid.  Correct dry-run behaviour
+  # skips the gate entirely, so the script must still exit 0 here.
+  local blocker
+  blocker="$(mktemp -d)/blocker"
+  touch "$blocker"
+  export CAST_BACKUP_DIR="$blocker/sub"
+  export CAST_DB_PRUNE_DRY_RUN=1
+
+  run python3 "$SCRIPT"
+  assert_success
+
+  # Rows must still exist (dry-run never deletes)
+  re_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")
+  ar_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;")
+  [ "$re_count" -eq 1 ]
+  [ "$ar_count" -eq 1 ]
+
+  # Output must mention "would delete" (dry-run reporting)
+  assert_output --partial "would delete"
+}

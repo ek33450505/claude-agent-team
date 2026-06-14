@@ -41,6 +41,12 @@
 - `test-runner` (and any process-killing / test-executing agent) MUST run in its OWN sequential batch. It MUST NEVER share a `"parallel": true` batch or a dispatch-group wave with any other agent — most critically the review agents (`code-reviewer`, `security`, `frontend-qa`).
 - Reason: `test-runner`'s suite-timeout/kill path can reap co-scheduled sibling processes — a co-scheduled `code-reviewer` was killed this way on 2026-06-14. Isolating `test-runner` in its own batch keeps the kill blast radius to itself.
 
+## Irreversibility Interrupts
+- Irreversible/destructive ops that always gate (never run ad hoc): `git push` & force-push, PR/force-merge, schema migration, DB row deletion (prune), destructive `rm -rf`/rmtree, process mass-kill (`pkill`/`killall`), raw `git commit`/`git stash`.
+- Auto-chain rule: hook guards and confirm-pauses protect interactive sessions but are BYPASSED in headless/managed runs and ABSENT in cron/launchd. An irreversible op is auto-chain-safe ONLY via a fail-closed script gate (back-up-or-abort, e.g. `cast-migrate.py`, `cast-db-prune.py`) or an agent text-refusal — never rely on a hook for unattended safety.
+- New destructive automation MUST carry its own fail-closed gate (declare blast radius; back up or abort before deleting).
+- Canonical per-op ledger (enforcement + auto-chain-safety column): `docs/architecture/cast-protocol-spec.md` §2.5.
+
 ## Testing
 - Tests alongside source: `Foo.jsx` -> `Foo.test.jsx`
 - Test behavior (`getByRole`/`getByText`), not implementation
