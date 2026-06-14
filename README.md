@@ -33,6 +33,26 @@ cd claude-agent-team
 bash install.sh
 ```
 
+### Install as a plugin (beta)
+
+CAST also ships as a Claude Code plugin. Two ways to load it:
+
+**From the marketplace (recommended):**
+```bash
+/plugin marketplace add ek33450505/claude-agent-team
+/plugin install cast
+```
+
+**From a local checkout:**
+```bash
+git clone https://github.com/ek33450505/claude-agent-team.git
+claude --plugin-dir claude-agent-team/plugin
+```
+
+The plugin bundles CAST's curated agents, skills, commands, hooks, and the GitHub MCP server (set a token when prompted). It is **opt-in** (`defaultEnabled: false`) and **complements** `install.sh` rather than replacing it: `install.sh` remains authoritative for the runtime layer (`~/.claude/scripts`, `cast.db`, launchd jobs, git hooks). A SessionStart bootstrap hook in the plugin symlinks its scripts into `~/.claude` and initializes `cast.db` on first run, so the two installs coexist safely.
+
+> **Note:** the `push` agent is **not** bundled (it depends on the install.sh-managed runtime). Plugin users push with `bash ~/.claude/scripts/cast-push.sh <branch>` (symlinked by the bootstrap) or via a full `install.sh`. To include the opt-in extras tier (perf-sentinel, release-notes, api-contract, dep-auditor), regenerate locally: `bash scripts/gen-plugin.sh --with-extras dist/cast-plugin` then `claude --plugin-dir dist/cast-plugin`.
+
 ---
 
 ## Quick Start
