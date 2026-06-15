@@ -337,4 +337,25 @@ fi
 # NOTE: README badge updates are now handled by the post-merge job (readme-badge-sync.yml)
 # This ensures badges are always in sync on main without blocking PRs.
 
+# Plugin-drift guard — only runs when bundled-source files are staged.
+# Catches the "passes locally (disk-vs-disk), fails in CI (committed-vs-regen)" trap.
+# Bypass: CAST_SKIP_PLUGIN_DRIFT=1 git commit ... (one-time emergency only)
+if git diff --cached --name-only | grep -qE '^(agents/core/|skills/|commands/|scripts/|managed-settings\.d/)'; then
+    if [[ "${CAST_SKIP_PLUGIN_DRIFT:-0}" != "1" ]]; then
+        drift_exit=0
+        bash scripts/check-plugin-drift.sh || drift_exit=$?
+        if [[ $drift_exit -ne 0 ]]; then
+            echo "" >&2
+            echo "ERROR [pre-commit]: plugin/ is out of sync with bundled source (plugin drift detected)." >&2
+            echo "  Regenerate and stage plugin/ before committing:" >&2
+            # shellcheck disable=SC2016  # single quotes intentional: literal command for user to paste
+            echo '    bash scripts/gen-plugin.sh "$(git rev-parse --show-toplevel)/plugin" && git add plugin/' >&2
+            echo "  To bypass for a one-time emergency: CAST_SKIP_PLUGIN_DRIFT=1 git commit ..." >&2
+            exit 1
+        fi
+    else
+        echo "[CAST pre-commit] WARNING: CAST_SKIP_PLUGIN_DRIFT=1 — plugin-drift guard skipped. Regenerate plugin/ before the next merge." >&2
+    fi
+fi
+
 exit 0
