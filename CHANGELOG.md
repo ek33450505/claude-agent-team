@@ -2,15 +2,27 @@
 
 All notable changes to CAST are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [8.0.0] — 2026-06-15 — Native CAST
+
+v8 is a convergence release — *less bespoke, more platform.* CAST retires custom code where Claude Code now ships a native primitive, and ships as a native **plugin** (the breaking change behind the major bump). It is organized around two differentiating pillars: **local-first by construction** and **data integrity by construction**, both earned from repeated full `~/.claude` wipe incidents.
 
 ### Added
-- **Plugin dual-ship:** CAST v8 ships both (a) a committed `plugin/` artifact installable via `claude --plugin-dir plugin` (local dev path) and (b) a marketplace-distributed plugin installable via `/plugin marketplace add ek33450505/claude-agent-team` + `/plugin install cast` + `/plugin enable cast@cast`. Both paths coexist and serve the same curated agents, skills, hooks, and commands; the `cast-hook-owner` sentinel blocks double-initialization.
-- **CAST as a Claude Code plugin:** All native surfaces (agent definitions, skills, `SKILL.md` autodiscovery, slash commands, `command`-type PreToolUse hooks, stdio MCP servers with `${user_config.*}` substitution, and SessionStart bootstrap) are plugin-loadable. Deterministic enforcement hooks (`command`-type) fire correctly from the plugin; `prompt`-type hooks load as advisory (same as settings form). Scripts remain shell-scoped at `~/.claude/scripts/` (prose-layer symlinks).
-- **Plugin validation CI gate:** `claude plugin validate --strict <plugin.json>` integrated into the pre-release checklist. Curated agent list enforces v8 Lean guidelines (17 canonical agents vs. all 23 in the full install); agent definitions exclude illegal `permissionMode: bypassPermissions` from plugin context.
+- **Native plugin packaging (dual-ship):** CAST ships both (a) a committed `plugin/` artifact installable via `claude --plugin-dir plugin` and (b) a marketplace-distributed plugin (`/plugin marketplace add ek33450505/claude-agent-team` → `/plugin install cast` → `/plugin enable cast@cast`). Both paths serve the same curated surface; `install.sh` stays authoritative for the runtime layer, and the `cast-hook-owner` sentinel prevents double-firing when both coexist. All native surfaces (agents, skills, slash commands, `command`-type PreToolUse hooks, stdio MCP with `${user_config.*}`, SessionStart bootstrap) are plugin-loadable. `claude plugin validate --strict` is wired into CI via the plugin drift gate. The curated build ships **17 lean agents** (+4 opt-in extras via `--with-extras`; `push`/`morning-briefing` excluded) of the 23 in the full install.
+- **Data-integrity stack (Pillar 2):** Litestream continuous replication of `cast.db` to `~/Library/Application Support/cast/` (outside the `~/.claude` blast radius) + dated snapshots; the wipe canary relocated off the blast radius; a fail-closed migration backup-gate (`cast-migrate.py --confirm`); the `blast-radius-lint` ratchet; and a `cast integrity` read surface with a daily regression-aware monitor.
+- **PreToolUse command-guard:** blocks `pkill`/`killall`/`kill -9` and `rm -rf` of protected roots from agents (the command-layer analogue of write-guards), exit 2, with `CAST_KILL_OK`/`CAST_RM_OK` escapes. Fires for native Agent-tool subagents.
+- **Eval harness (`cast eval`):** an agent-behavior corpus mined from real CAST failures, three-outcome programmatic + LLM-judge graders, `pass@k`, and an `eval_runs` table — closing the largest documented gap versus Anthropic guidance. `cast eval run|list|report|record`; the `eval-writer` agent produces graders.
+- **Typed Handoff contract:** `schemas/agent-handoff.json` (required `files_changed`/`status`/`blockers`) validated WARN-only in the SubagentStop hook (`cast_handoff_parser.py`), killing the silent-cascade-failure class.
+- **Rules → on-demand skills:** language conventions (TypeScript, Python) demand-loaded as skills for plugin portability; behavioral and HARD-RULE files stay always-on (DUAL-KEEP).
+- **Regenerable architecture diagram:** Mermaid source (`docs/architecture/cast-architecture.mmd`) + `scripts/gen-arch-diagram.sh`, replacing the hand-drawn SVG.
+- **Plugin bootstrap smoke test:** `tests/cast-plugin-smoke.bats` proves the clean-machine bootstrap path (dirs, symlinks, `cast.db` init, 17 lean agents, idempotency, `plugin validate`) under an isolated temp HOME.
 
 ### Changed
 - **Strategic pivot to "Native CAST":** v8 represents convergence toward Claude Code native capabilities (plugins, native agents, native skills, native hooks) over bespoke infrastructure. Remaining bespoke components (`cast.db`, SessionStart bootstrap, observability dashboards) stay in place where native equivalents don't yet exist.
+- **Softened planner doctrine:** planning ceremony now matches task size — trivial → no plan; single-session → native plan mode (shift-tab); multi-file/multi-agent → the `planner`→`/orchestrate` chain. The fresh-context `code-reviewer` gate stays **mandatory**.
+- **Portfolio README + architecture refresh:** the README leads with the two pillars and the full v8 surface; `docs/architecture/ARCHITECTURE.md` is rewritten to the v8 control plane.
+
+### Fixed
+- **protocol-spec:** reconciled stale `CLAUDE_SUBPROCESS` assumptions (the `agent-status-reader.sh` / §5.5 references) with the verified finding that native Agent-tool subagents run with `CLAUDE_SUBPROCESS` **unset**, so the enforcement guards fire for them.
 
 ---
 
