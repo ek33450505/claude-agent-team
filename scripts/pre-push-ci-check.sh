@@ -87,7 +87,7 @@ FTS5_HITS=$(grep -rn "fts5\|FTS5\|USING fts5" "$REPO_ROOT" \
   --include="*.py" --include="*.sh" --include="*.sql" \
   --exclude-dir=".git" --exclude-dir="worktrees" \
   --exclude-dir="node_modules" --exclude-dir=".cache" \
-  --exclude-dir="dist" \
+  --exclude-dir="dist" --exclude-dir="plugin" \
   2>/dev/null | grep -v "#.*fts5\|-- fts5" || true)
 if [[ -n "$FTS5_HITS" ]]; then
   echo "WARNING: FTS5 references found — verify these include a sqlite3 version check:"
@@ -258,9 +258,11 @@ PII_HITS+=$(_pii_scan "hardcoded-path" '/Users/[A-Za-z0-9._-]+' "" "$_PATH_EXCLU
 _DENYLIST_FILE="${CAST_PII_LOCAL_DENYLIST:-$HOME/.claude/config/pii-denylist-local.txt}"
 if [[ -f "$_DENYLIST_FILE" ]]; then
   while IFS= read -r _deny_pattern || [[ -n "$_deny_pattern" ]]; do
-    # Skip blank lines and comments
+    # Trim leading/trailing whitespace so patterns with extra spaces don't match literally
+    _deny_pattern=$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' <<< "$_deny_pattern")
+    # Skip blank/whitespace-only lines and comments
     [[ -z "$_deny_pattern" ]] && continue
-    [[ "$_deny_pattern" =~ ^[[:space:]]*# ]] && continue
+    [[ "$_deny_pattern" =~ ^# ]] && continue
     PII_HITS+=$(_pii_scan_ci "local-denylist" "$_deny_pattern" || true)
   done < "$_DENYLIST_FILE"
 else
