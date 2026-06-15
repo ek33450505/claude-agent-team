@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# cast-overlay-sync.sh — sync irreplaceable ~/.claude files to ek33450505/cast-private
+# cast-overlay-sync.sh — sync irreplaceable ~/.claude files to your private overlay repo
 #
 # Purpose:
-#   Maintains a local git clone of ek33450505/cast-private as a version-controlled
+#   Maintains a local git clone of your private overlay repo as a version-controlled
 #   overlay of irreplaceable local-only ~/.claude files. Runs daily via launchd.
 #
 # Usage:
 #   bash cast-overlay-sync.sh [--dry-run]
 #
 # Environment overrides:
-#   CAST_OVERLAY_REPO    — private repo URL (default: https://github.com/ek33450505/cast-private.git)
+#   CAST_OVERLAY_REPO    — private repo URL (required; no default — set via env or
+#                          ~/.claude/config/cast-overlay-repo, first non-empty non-comment line)
 #   CAST_OVERLAY_DIR     — clone directory (default: ~/.local/share/cast/overlay)
 #   CAST_CLAUDE_DIR      — source dir (default: ~/.claude)
 
@@ -22,7 +23,28 @@ set -euo pipefail
 # Configuration
 # ============================================================================
 
-CAST_OVERLAY_REPO="${CAST_OVERLAY_REPO:-https://github.com/ek33450505/cast-private.git}"
+CAST_OVERLAY_REPO="${CAST_OVERLAY_REPO:-}"
+
+# If CAST_OVERLAY_REPO is not set via env, try reading from local config file (gitignored)
+if [[ -z "$CAST_OVERLAY_REPO" ]]; then
+  _config_file="${HOME}/.claude/config/cast-overlay-repo"
+  if [[ -f "$_config_file" ]]; then
+    # Read first non-empty, non-comment line
+    while IFS= read -r _line; do
+      [[ -z "$_line" || "$_line" == \#* ]] && continue
+      CAST_OVERLAY_REPO="$_line"
+      break
+    done < "$_config_file"
+  fi
+  unset _config_file _line
+fi
+
+# If still empty, print advisory and exit 0 (opt-in tool, not an error)
+if [[ -z "$CAST_OVERLAY_REPO" ]]; then
+  echo "ADVISORY [cast-overlay-sync]: no overlay repo configured. Set CAST_OVERLAY_REPO=<your-private-repo-url> (or add the URL to ~/.claude/config/cast-overlay-repo) to enable off-machine overlay sync." >&2
+  exit 0
+fi
+
 CAST_OVERLAY_DIR="${CAST_OVERLAY_DIR:-${HOME}/.local/share/cast/overlay}"
 CAST_CLAUDE_DIR="${CAST_CLAUDE_DIR:-${HOME}/.claude}"
 

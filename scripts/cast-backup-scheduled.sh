@@ -5,7 +5,7 @@
 # Runs as the user (not as a Claude Code agent), so it has legitimate access to gh/ssh auth.
 #
 # Step 1: Take an on-disk snapshot (must succeed)
-# Step 2: Push overlay to cast-private repo (best-effort; non-fatal failure)
+# Step 2: Push overlay to the configured private overlay repo, if any (best-effort; non-fatal failure)
 #
 # Exit status: Always 0 (daemon-style logging). Per-step success/failure is recorded in the log.
 
