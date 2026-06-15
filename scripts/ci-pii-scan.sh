@@ -71,17 +71,29 @@ _EMAIL_EXCLUSION='users\.noreply\.github\.com|noreply@anthropic\.com|@example\.(
 _SECRET_TEST_FILE_PATTERN='tests/cast-subagent-stop-hook-redaction\.bats|tests/cast-batch-dispatch\.bats|tests/ci-pii-scan\.bats|evals/cases/security/security-hardcoded-api-key-unreported\.yaml'
 
 # ---------------------------------------------------------------------------
-# Core scanner: grep a pattern across tracked files, filtering allowlisted
-# paths and applying an optional exclusion regex on the matching line.
-# Appends hits to the FINDINGS array.
-# Args: $1=label $2=grep-content-pattern $3=exclusion-ere (optional) $4=skip-file-pattern (optional)
+# Combined pattern for a single-pass scan over all six PII/secret classes.
+# IMPORTANT: every sub-pattern is preserved verbatim (security-critical).
+#   1. /Users/[A-Za-z0-9._-]+                              hardcoded-path
+#   2. [A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}    email
+#   3. GOCSPX-[A-Za-z0-9_-]+                               google-oauth
+#   4. sk-ant-[A-Za-z0-9_-]{32,}                           anthropic-key
+#   5. (ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}              github-pat
+#      |github_pat_[A-Za-z0-9_]{22,}
+#   6. AKIA[0-9A-Z]{16}                                    aws-key
 # ---------------------------------------------------------------------------
-_scan_tracked() {
-  local label="$1"
-  local content_pattern="$2"
-  local exclusion="${3:-}"
-  local skip_file_pat="${4:-}"
+_COMBINED_PATTERN='/Users/[A-Za-z0-9._-]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|GOCSPX-[A-Za-z0-9_-]+|sk-ant-[A-Za-z0-9_-]{32,}|(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|AKIA[0-9A-Z]{16}'
 
+# Per-category hit buffers — populated by _scan_all, merged into FINDINGS.
+_HITS_PATH=()
+_HITS_EMAIL=()
+_HITS_SECRETS=()
+
+# ---------------------------------------------------------------------------
+# Single-pass scanner: one git ls-files | xargs grep pass with the combined
+# pattern above.  Each matching line is classified into the three category
+# arrays and the appropriate exclusion is applied.
+# ---------------------------------------------------------------------------
+_scan_all() {
   # Use PCRE if available, else ERE
   local grep_flag="-E"
   echo "" | grep -qP "." 2>/dev/null && grep_flag="-P"
@@ -92,12 +104,10 @@ _scan_tracked() {
   local raw_hits
   # shellcheck disable=SC2086
   raw_hits="$(cd "$REPO_ROOT" && git ls-files -z \
-    | xargs -0 grep -InH $grep_flag "$content_pattern" \
+    | xargs -0 grep -InH $grep_flag "$_COMBINED_PATTERN" \
     2>/dev/null || true)"
 
-  if [[ -z "$raw_hits" ]]; then
-    return 0
-  fi
+  [[ -z "$raw_hits" ]] && return 0
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
@@ -110,17 +120,40 @@ _scan_tracked() {
     # Skip allowlisted files and directories
     _is_allowed "$relpath" && continue
 
-    # Skip by per-scan file pattern (e.g., known test fixture files for secrets)
-    if [[ -n "$skip_file_pat" ]] && echo "$relpath" | grep -qE "$skip_file_pat" 2>/dev/null; then
-      continue
+    # Pre-compute whether this file matches the secret-fixture skip pattern
+    local is_secret_fixture=0
+    echo "$relpath" | grep -qE "$_SECRET_TEST_FILE_PATTERN" 2>/dev/null && is_secret_fixture=1
+
+    # --- hardcoded-path (exclusion: $_PATH_EXCLUSION) ---
+    if echo "$content" | grep -qE '/Users/[A-Za-z0-9._-]+' 2>/dev/null; then
+      if ! echo "$content" | grep -qE "$_PATH_EXCLUSION" 2>/dev/null; then
+        _HITS_PATH+=("  [hardcoded-path] $relpath: $content")
+      fi
     fi
 
-    # Apply optional exclusion regex to the content
-    if [[ -n "$exclusion" ]] && echo "$content" | grep -qE "$exclusion" 2>/dev/null; then
-      continue
+    # --- email (exclusion: $_EMAIL_EXCLUSION) ---
+    if echo "$content" | grep -qE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' 2>/dev/null; then
+      if ! echo "$content" | grep -qE "$_EMAIL_EXCLUSION" 2>/dev/null; then
+        _HITS_EMAIL+=("  [email] $relpath: $content")
+      fi
     fi
 
-    FINDINGS+=("  [$label] $relpath: $content")
+    # --- secret keys (skip if test-fixture file) ---
+    if [[ "$is_secret_fixture" -eq 0 ]]; then
+      if echo "$content" | grep -qE 'GOCSPX-[A-Za-z0-9_-]+' 2>/dev/null; then
+        _HITS_SECRETS+=("  [google-oauth] $relpath: $content")
+      fi
+      if echo "$content" | grep -qE 'sk-ant-[A-Za-z0-9_-]{32,}' 2>/dev/null; then
+        _HITS_SECRETS+=("  [anthropic-key] $relpath: $content")
+      fi
+      if echo "$content" | grep -qE '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}' 2>/dev/null; then
+        _HITS_SECRETS+=("  [github-pat] $relpath: $content")
+      fi
+      if echo "$content" | grep -qE 'AKIA[0-9A-Z]{16}' 2>/dev/null; then
+        _HITS_SECRETS+=("  [aws-key] $relpath: $content")
+      fi
+    fi
+
   done <<< "$raw_hits"
 }
 
@@ -149,42 +182,37 @@ if [[ "${1:-}" == "--self-test" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Normal scan mode
+# Normal scan mode: single combined pass, per-category reporting
 # ---------------------------------------------------------------------------
 echo "[ci-pii-scan] Scanning tracked files: $REPO_ROOT"
 echo ""
 
+_scan_all
+
 # --- Hardcoded home paths ---
 echo "=== Check: Hardcoded /Users/<realname> paths ==="
-BEFORE="${#FINDINGS[@]}"
-_scan_tracked "hardcoded-path" '/Users/[A-Za-z0-9._-]+' "$_PATH_EXCLUSION"
-AFTER="${#FINDINGS[@]}"
-if [[ "$AFTER" -eq "$BEFORE" ]]; then
+if [[ "${#_HITS_PATH[@]}" -eq 0 ]]; then
   echo "PASS: No hardcoded /Users/ paths found"
+else
+  FINDINGS+=("${_HITS_PATH[@]}")
 fi
 
 # --- Email addresses ---
 echo ""
 echo "=== Check: Email addresses ==="
-BEFORE="${#FINDINGS[@]}"
-_scan_tracked "email" '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$_EMAIL_EXCLUSION"
-AFTER="${#FINDINGS[@]}"
-if [[ "$AFTER" -eq "$BEFORE" ]]; then
+if [[ "${#_HITS_EMAIL[@]}" -eq 0 ]]; then
   echo "PASS: No unexpected email addresses found"
+else
+  FINDINGS+=("${_HITS_EMAIL[@]}")
 fi
 
 # --- Secret keys ---
 echo ""
 echo "=== Check: Secret keys ==="
-BEFORE="${#FINDINGS[@]}"
-# Secret scans skip test fixture files that explicitly label their keys as fakes
-_scan_tracked "google-oauth"  'GOCSPX-[A-Za-z0-9_-]+'         "" "$_SECRET_TEST_FILE_PATTERN"
-_scan_tracked "anthropic-key" 'sk-ant-[A-Za-z0-9_-]{32,}'      "" "$_SECRET_TEST_FILE_PATTERN"
-_scan_tracked "github-pat"    '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}' "" "$_SECRET_TEST_FILE_PATTERN"
-_scan_tracked "aws-key"       'AKIA[0-9A-Z]{16}'                "" "$_SECRET_TEST_FILE_PATTERN"
-AFTER="${#FINDINGS[@]}"
-if [[ "$AFTER" -eq "$BEFORE" ]]; then
+if [[ "${#_HITS_SECRETS[@]}" -eq 0 ]]; then
   echo "PASS: No secret key patterns found"
+else
+  FINDINGS+=("${_HITS_SECRETS[@]}")
 fi
 
 # ---------------------------------------------------------------------------
