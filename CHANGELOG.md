@@ -4,6 +4,14 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+### Added
+- **Plugin dual-ship:** CAST v8 ships both (a) a committed `plugin/` artifact installable via `claude --plugin-dir plugin` (local dev path) and (b) a marketplace-distributed plugin installable via `/plugin marketplace add ek33450505/claude-agent-team` + `/plugin install cast` + `/plugin enable cast@cast`. Both paths coexist and serve the same curated agents, skills, hooks, and commands; the `cast-hook-owner` sentinel blocks double-initialization.
+- **CAST as a Claude Code plugin:** All native surfaces (agent definitions, skills, `SKILL.md` autodiscovery, slash commands, `command`-type PreToolUse hooks, stdio MCP servers with `${user_config.*}` substitution, and SessionStart bootstrap) are plugin-loadable. Deterministic enforcement hooks (`command`-type) fire correctly from the plugin; `prompt`-type hooks load as advisory (same as settings form). Scripts remain shell-scoped at `~/.claude/scripts/` (prose-layer symlinks).
+- **Plugin validation CI gate:** `claude plugin validate --strict <plugin.json>` integrated into the pre-release checklist. Curated agent list enforces v8 Lean guidelines (17 canonical agents vs. all 23 in the full install); agent definitions exclude illegal `permissionMode: bypassPermissions` from plugin context.
+
+### Changed
+- **Strategic pivot to "Native CAST":** v8 represents convergence toward Claude Code native capabilities (plugins, native agents, native skills, native hooks) over bespoke infrastructure. Remaining bespoke components (`cast.db`, SessionStart bootstrap, observability dashboards) stay in place where native equivalents don't yet exist.
+
 ---
 
 ## [7.4.1] — 2026-06-05

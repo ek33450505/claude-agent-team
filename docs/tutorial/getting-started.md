@@ -48,6 +48,22 @@ cd claude-agent-team
 bash install.sh
 ```
 
+### Alternative: install as a Claude Code plugin
+
+```text
+# Marketplace install — run these slash commands inside a Claude Code session:
+/plugin marketplace add ek33450505/claude-agent-team
+/plugin install cast
+/plugin enable cast@cast
+```
+
+```bash
+# OR local dev path (CLI flag, from a clone):
+claude --plugin-dir ./plugin
+```
+
+Both paths install the same curated agents, skills, and hooks. See the README "[Install as a plugin (beta)](../../README.md#install-as-a-plugin-beta)" section for details.
+
 ---
 
 ## Step 2: Run `cast status`

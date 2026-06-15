@@ -6,7 +6,9 @@ This is the DUAL-SHIP "prove it" gate from the plugin spike (`~/.claude/plans/ca
 
 ## Tooling discovered (de-risks the whole effort)
 
-Claude Code ships first-class plugin CLI — the LOCKED "local `--plugin-dir`, no marketplace" design is directly supported:
+Claude Code ships first-class plugin CLI — the empirically validated design supports BOTH local development and marketplace distribution:
+
+> **Superseded (2026-06-14):** This research initially concluded "LOCKED: local `--plugin-dir` only, no marketplace." The shipped decision (merged to main) is **dual-ship:** both `--plugin-dir plugin` (local path) AND marketplace install (`/plugin marketplace add`) are wired and coexist. The design leverages native Claude Code support for both paths, with the `cast-hook-owner` sentinel preventing double-init. See CHANGELOG v8 entry for shipped surface.
 
 - **`claude --plugin-dir <path>`** — load a local plugin per session (session-scoped, no persistent config mutation). This is the beta distribution mechanism.
 - **`claude plugin validate <path> [--strict]`** — validates a plugin OR marketplace manifest. `--strict` fails on unrecognized fields / missing metadata. **This is the Stage 3 CI gate** (replaces hand-rolled `jq` checks).
