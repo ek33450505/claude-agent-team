@@ -96,6 +96,10 @@ mkdir -p "$CLAUDE_DIR/config"
 mkdir -p "$CLAUDE_DIR/logs"
 mkdir -p "$CLAUDE_DIR/scripts"
 
+# Hook-ownership sentinel: when present, the CAST plugin's hooks defer to install.sh
+# (prevents double-firing when both install.sh and the plugin are active on one machine).
+printf 'install.sh\n' > "$CLAUDE_DIR/config/cast-hook-owner"
+
 # --- Install agents ---
 info "Installing agents..."
 for agent_file in "$SCRIPT_DIR"/agents/core/*.md; do

@@ -355,6 +355,24 @@ boot = {"hooks": [{"type": "command",
                    "timeout": 15}]}
 merged.setdefault("SessionStart", [])
 merged["SessionStart"] = [boot] + merged["SessionStart"]
+
+# Defer-guard pass: prepend a sentinel check to every command-type hook so that on
+# machines where install.sh owns the runtime (~/.claude/config/cast-hook-owner exists),
+# plugin hooks exit 0 immediately — preventing double-firing of CAST hooks.
+# Plugin-only machines (no sentinel) are unaffected and run normally.
+# prompt-type hooks are NOT guarded (they use a different execution model).
+GUARD = 'if [ -f "$HOME/.claude/config/cast-hook-owner" ]; then exit 0; fi; '
+for ev in merged:
+    for group in merged[ev]:
+        if not (isinstance(group, dict) and "hooks" in group):
+            continue
+        for hook in group["hooks"]:
+            if (isinstance(hook, dict)
+                    and hook.get("type") == "command"
+                    and "command" in hook
+                    and not hook["command"].startswith(GUARD)):
+                hook["command"] = GUARD + hook["command"]
+
 json.dump({"hooks": merged}, open(os.path.join(out, "hooks", "hooks.json"), "w"), indent=2)
 print("hooks.json: %d events" % len(merged))
 PYEOF
