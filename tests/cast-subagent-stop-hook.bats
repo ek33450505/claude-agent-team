@@ -1436,3 +1436,31 @@ print('\n'.join(lines))
   rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_protocol_violations;" 2>/dev/null || echo 0)"
   [[ "$rows" -eq 0 ]]
 }
+
+# ---------------------------------------------------------------------------
+# U12: Verdict-keyword exemption (short output with known CAST keyword is well-formed)
+# ---------------------------------------------------------------------------
+
+@test "U12: short bare verdict output is NOT flagged as truncated (VERDICT: APPROVE)" {
+  # A code-reviewer legitimately ends with a bare short verdict such as "VERDICT: APPROVE".
+  # The verdict-keyword exemption must classify this as well-formed (no [CAST-TRUNCATED]).
+  local output="VERDICT: APPROVE"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-reviewer" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "U12: short mid-sentence output WITHOUT verdict keyword IS still flagged as truncated" {
+  # A genuinely truncated output (mid-sentence, no verdict keyword) must still fire the banner.
+  # Signal 1 (<200 chars) must not be weakened by the exemption.
+  local output="Now let me run the tests:"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-writer" "$output")"
+  assert_success
+  assert_output --partial "[CAST-TRUNCATED]"
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -ge 1 ]]
+}

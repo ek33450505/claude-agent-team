@@ -1049,6 +1049,13 @@ has_json = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEE
 if has_status or has_json:
     print('0')
     raise SystemExit(0)
+# Verdict-keyword exemption: deliberate short verdicts (e.g. "VERDICT: APPROVE",
+# "Status: DONE") are well-formed even when under 200 chars.
+# DONE_WITH_CONCERNS must be listed first in the alternation (longer match wins over bare DONE).
+has_verdict = bool(re.search(r'\b(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)\b', output))
+if has_verdict:
+    print('0')
+    raise SystemExit(0)
 # No Status block — classify via structural truncation signals
 length = len(output)
 # Signal 1: short output (< 200 chars) — no room for a complete response
