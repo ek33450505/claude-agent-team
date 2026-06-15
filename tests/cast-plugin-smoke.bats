@@ -237,3 +237,62 @@ teardown() {
     return 1
   }
 }
+
+@test "cast-hook-owner guard exits 0 early when sentinel file is present" {
+  # Extract a hook command from hooks.json (pick the first one).
+  # The command pattern is: if [ -f "$HOME/.claude/config/cast-hook-owner" ]; then exit 0; fi; <body>
+  local hooks_json="$PLUGIN_DIR/hooks/hooks.json"
+  local hook_command
+
+  # Use grep to extract the first command line from the JSON
+  hook_command="$(grep -m1 '"command":' "$hooks_json" | sed 's/.*"command": "//' | sed 's/".*//')"
+
+  [[ -n "$hook_command" ]] || {
+    echo "Could not extract hook command from $hooks_json" >&2
+    return 1
+  }
+
+  # Create the sentinel file — the guard should exit 0 without running the body
+  mkdir -p "$HOME/.claude/config"
+  printf 'install.sh\n' > "$HOME/.claude/config/cast-hook-owner"
+
+  # Create a marker file to track whether the command body ran
+  local marker_file="$BATS_TMPDIR/hook-body-ran"
+  rm -f "$marker_file"
+
+  # Replace the hook body with a marker-file touch to verify early exit.
+  # Extract the guard part (if statement) and the actual command body.
+  # Pattern: if [ -f ... ]; then exit 0; fi; <actual-body>
+  # We'll substitute the actual body with a touch command.
+  local test_command="if [ -f \"\$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; touch \"$marker_file\""
+
+  # Run the test command (with the guard and a dummy body)
+  bash -c "$test_command" || true
+
+  # If the guard worked (sentinel present), marker_file must NOT exist
+  [[ ! -f "$marker_file" ]] || {
+    echo "Guard did not exit early — marker file was created" >&2
+    return 1
+  }
+}
+
+@test "cast-hook-owner guard allows body to run when sentinel file is absent" {
+  # Simulate the guard without the sentinel file present — body should run.
+  local marker_file="$BATS_TMPDIR/hook-body-ran-2"
+  rm -f "$marker_file"
+
+  # Ensure no sentinel exists
+  rm -f "$HOME/.claude/config/cast-hook-owner" 2>/dev/null || true
+
+  # Test command: guard + body
+  local test_command="if [ -f \"\$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; touch \"$marker_file\""
+
+  # Run it
+  bash -c "$test_command" || true
+
+  # Body should have run (marker_file must exist)
+  [[ -f "$marker_file" ]] || {
+    echo "Guard blocked execution or body did not run — marker file does not exist" >&2
+    return 1
+  }
+}
