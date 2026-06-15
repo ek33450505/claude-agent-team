@@ -68,17 +68,16 @@ _bootstrap_main() {
       printf '[CAST bootstrap] Warning: cast-db-init.sh not found at %s\n' "$db_init" >&2
     fi
   else
-    # DB exists — do a lightweight schema-version probe; run init only if stale
+    # DB exists — probe PRAGMA user_version (set by cast-db-init.sh); run init only if 0
     local schema_ver
-    schema_ver="$(sqlite3 "${CAST_DB_PATH}" \
-      "SELECT MAX(version) FROM schema_migrations;" 2>/dev/null || echo "0")"
+    schema_ver="$(sqlite3 "${CAST_DB_PATH}" "PRAGMA user_version;" 2>/dev/null || echo "0")"
     if [[ -z "$schema_ver" || "$schema_ver" == "0" ]]; then
       if [[ -f "$db_init" ]]; then
         CAST_DB_PATH="$CAST_DB_PATH" bash "$db_init" 2>/dev/null \
           || printf '[CAST bootstrap] Warning: cast-db-init.sh failed during schema update\n' >&2
       fi
     fi
-    # Warm path: schema_ver > 0 → skip (near-no-op)
+    # Warm path: user_version > 0 → skip (near-no-op)
   fi
 }
 

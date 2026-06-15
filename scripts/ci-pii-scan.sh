@@ -86,10 +86,12 @@ _scan_tracked() {
   local grep_flag="-E"
   echo "" | grep -qP "." 2>/dev/null && grep_flag="-P"
 
-  # Get tracked text files; -I skips binary files
+  # Get tracked text files; -I skips binary files.
+  # Run from REPO_ROOT so that ls-files' repo-relative paths resolve correctly
+  # regardless of the caller's cwd.
   local raw_hits
   # shellcheck disable=SC2086
-  raw_hits="$(git -C "$REPO_ROOT" ls-files -z \
+  raw_hits="$(cd "$REPO_ROOT" && git ls-files -z \
     | xargs -0 grep -InH $grep_flag "$content_pattern" \
     2>/dev/null || true)"
 

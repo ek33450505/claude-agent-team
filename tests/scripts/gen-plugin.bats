@@ -55,7 +55,7 @@ teardown() {
   bash "$REPO_DIR/scripts/gen-plugin.sh" "$OUT" >/dev/null 2>&1
 
   # Assert that NO agent file contains these keys at the top level
-  result=$(grep -r '^(hooks|mcpServers|permissionMode):' "$OUT/agents" 2>/dev/null || true)
+  result=$(grep -rE '^(hooks|mcpServers|permissionMode):' "$OUT/agents" 2>/dev/null || true)
   [ -z "$result" ]
 }
 
