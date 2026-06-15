@@ -24,7 +24,9 @@ config/*oauth*
 config/*secret*
 config/*credential*
 .codex/
-# install.sh regenerates AGENTS.md (generic-agent mirror of CLAUDE.md) on every run — generated artifact, not tracked
-AGENTS.md
+# install.sh regenerates AGENTS.md (generic-agent mirror of CLAUDE.md) on every run — generated artifact, not tracked.
+# Anchored to repo root so it does NOT also ignore nested files like plugin/commands/agents.md
+# (git matches case-insensitively on macOS, so an unanchored rule swallowed the plugin command).
+/AGENTS.md
 # gen-plugin.sh output — generated build artifact, not tracked
 dist/
