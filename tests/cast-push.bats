@@ -138,6 +138,66 @@ SHIM
 # exits the shell with status 1 — the || true never fires outside a subshell.
 # The fix wraps the event tail in a subshell so its failure never propagates.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Test 5 — set-upstream race: push --set-upstream fails but remote already at
+# HEAD SHA → exits 0 (concurrent double-push race handled gracefully).
+# ---------------------------------------------------------------------------
+@test "set-upstream race: origin already at HEAD SHA after failed --set-upstream exits 0" {
+  local head_sha
+  head_sha=$(git -C "$WORK_DIR" rev-parse HEAD)
+
+  SHIM_DIR="$(mktemp -d)"
+  export SHIM_DIR
+
+  cat > "$SHIM_DIR/git" <<'SHIM'
+#!/usr/bin/env bash
+# Shim: no upstream → fail set-upstream push → ls-remote returns HEAD SHA.
+REAL_GIT=""
+IFS=: read -ra _DIRS <<< "$PATH"
+for _d in "${_DIRS[@]}"; do
+  if [[ "$_d" != "$SHIM_DIR" && -x "$_d/git" ]]; then
+    REAL_GIT="$_d/git"
+    break
+  fi
+done
+if [[ -z "$REAL_GIT" ]]; then
+  echo "git-shim: cannot locate real git" >&2
+  exit 1
+fi
+
+# Intercept rev-parse --abbrev-ref @{u} → no upstream configured.
+for _arg in "$@"; do
+  if [[ "$_arg" == "@{u}" ]]; then
+    echo "fatal: no upstream configured" >&2
+    exit 128
+  fi
+done
+
+# Intercept push --set-upstream → simulate concurrent-push failure.
+for _arg in "$@"; do
+  if [[ "$_arg" == "--set-upstream" ]]; then
+    echo "error: failed to push some refs (simulated race)" >&2
+    exit 1
+  fi
+done
+
+# Intercept ls-remote → return the pre-push SHA (race-success scenario).
+if [[ "$1" == "ls-remote" ]]; then
+  printf '%s\trefs/heads/main\n' "$CAST_RACE_SHA"
+  exit 0
+fi
+
+exec "$REAL_GIT" "$@"
+SHIM
+  chmod +x "$SHIM_DIR/git"
+
+  run bash -c "export SHIM_DIR='$SHIM_DIR' CAST_RACE_SHA='$head_sha'; cd '$WORK_DIR' && PATH='$SHIM_DIR:$PATH' bash '$SCRIPT'"
+
+  assert_success
+  assert_output --partial "set-upstream race"
+}
+
+# ---------------------------------------------------------------------------
 @test "bash 3.2 regression: missing cast-events.sh does not cause non-zero exit under /bin/bash" {
   # HOME is already the temp dir from setup_temp_home — no cast-events.sh present.
   run bash -c "cd '$WORK_DIR' && HOME='$HOME' /bin/bash '$SCRIPT'"
