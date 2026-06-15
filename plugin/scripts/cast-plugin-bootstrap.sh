@@ -46,7 +46,6 @@ _bootstrap_main() {
     "${CLAUDE_DIR}/cast/reviews" \
     "${CLAUDE_DIR}/cast/artifacts" \
     "${CLAUDE_DIR}/config" \
-    "${CLAUDE_DIR}/backups" \
     "${CAST_SCRIPTS_DIR}"
   do
     mkdir -p "$dir" || _warn "mkdir failed for $dir"

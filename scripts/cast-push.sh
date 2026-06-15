@@ -25,6 +25,11 @@ PUSH_SHA=$(git rev-parse HEAD)
 # Set upstream if none is configured; otherwise plain push.
 if ! git rev-parse --abbrev-ref "@{u}" &>/dev/null; then
   CAST_PUSH_OK=1 git push --set-upstream origin "$BRANCH" 2>&1 || {
+    RACE_SHA=$(git ls-remote origin "refs/heads/$BRANCH" 2>/dev/null | awk '{print $1}')
+    if [ -n "$RACE_SHA" ] && [ "$RACE_SHA" = "$PUSH_SHA" ]; then
+      echo "[cast-push] origin/$BRANCH already at $PUSH_SHA — set-upstream race, treating as success"
+      exit 0
+    fi
     echo "cast-push: push --set-upstream failed" >&2
     exit 1
   }

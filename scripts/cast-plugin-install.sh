@@ -50,8 +50,7 @@ for dir in \
   "${CLAUDE_DIR}/cast/offline-queue" \
   "${CLAUDE_DIR}/cast/reviews" \
   "${CLAUDE_DIR}/cast/artifacts" \
-  "${CLAUDE_DIR}/config" \
-  "${CLAUDE_DIR}/backups"
+  "${CLAUDE_DIR}/config"
 do
   mkdir -p "$dir"
 done

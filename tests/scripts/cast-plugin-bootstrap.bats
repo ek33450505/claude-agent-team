@@ -60,7 +60,6 @@ teardown() {
   [ -d "$HOME/.claude/cast/reviews" ]
   [ -d "$HOME/.claude/cast/artifacts" ]
   [ -d "$HOME/.claude/config" ]
-  [ -d "$HOME/.claude/backups" ]
 }
 
 @test "cast-plugin-bootstrap.sh symlinks plugin scripts into ~/.claude/scripts/" {
@@ -111,4 +110,88 @@ teardown() {
   # Verify that the symlink target is correct
   link_target=$(readlink "$HOME/.claude/scripts/stub-a.sh")
   [ "$link_target" = "$CLAUDE_PLUGIN_ROOT/scripts/stub-a.sh" ]
+}
+
+@test "cast-plugin-bootstrap.sh prunes broken symlink pointing INTO plugin scripts dir" {
+  # Pre-create ~/.claude/scripts directory
+  mkdir -p "$HOME/.claude/scripts"
+
+  # Create a broken symlink pointing INTO the plugin scripts dir
+  # The target should be non-existent
+  ln -s "$CLAUDE_PLUGIN_ROOT/scripts/nonexistent-script.sh" "$HOME/.claude/scripts/broken-into-plugin.sh"
+
+  # Verify it's a broken symlink before bootstrap
+  [ -L "$HOME/.claude/scripts/broken-into-plugin.sh" ]
+  [ ! -e "$HOME/.claude/scripts/broken-into-plugin.sh" ]
+
+  # Run bootstrap
+  bash "$REPO_DIR/scripts/cast-plugin-bootstrap.sh"
+
+  # The broken symlink should be removed
+  [ ! -e "$HOME/.claude/scripts/broken-into-plugin.sh" ]
+  [ ! -L "$HOME/.claude/scripts/broken-into-plugin.sh" ]
+}
+
+@test "cast-plugin-bootstrap.sh preserves valid (non-broken) symlinks" {
+  # Pre-create ~/.claude/scripts directory
+  mkdir -p "$HOME/.claude/scripts"
+
+  # Create a valid external script and symlink to it
+  external_script="$BATS_TEST_TMPDIR/external-script.sh"
+  printf '#!/usr/bin/env bash\n' > "$external_script"
+  chmod +x "$external_script"
+
+  ln -s "$external_script" "$HOME/.claude/scripts/valid-symlink.sh"
+
+  # Verify it's a valid symlink before bootstrap
+  [ -L "$HOME/.claude/scripts/valid-symlink.sh" ]
+  [ -e "$HOME/.claude/scripts/valid-symlink.sh" ]
+
+  # Run bootstrap
+  bash "$REPO_DIR/scripts/cast-plugin-bootstrap.sh"
+
+  # The valid symlink should still exist
+  [ -L "$HOME/.claude/scripts/valid-symlink.sh" ]
+  [ -e "$HOME/.claude/scripts/valid-symlink.sh" ]
+  target=$(readlink "$HOME/.claude/scripts/valid-symlink.sh")
+  [ "$target" = "$external_script" ]
+}
+
+@test "cast-plugin-bootstrap.sh does NOT prune broken symlink pointing OUTSIDE plugin dir (safety guard)" {
+  # Pre-create ~/.claude/scripts directory
+  mkdir -p "$HOME/.claude/scripts"
+
+  # Create a broken symlink pointing OUTSIDE the plugin scripts dir
+  ln -s "/tmp/nonexistent-outside-plugin/script.sh" "$HOME/.claude/scripts/broken-outside-plugin.sh"
+
+  # Verify it's a broken symlink before bootstrap
+  [ -L "$HOME/.claude/scripts/broken-outside-plugin.sh" ]
+  [ ! -e "$HOME/.claude/scripts/broken-outside-plugin.sh" ]
+
+  # Run bootstrap
+  bash "$REPO_DIR/scripts/cast-plugin-bootstrap.sh"
+
+  # The broken symlink pointing outside should NOT be removed (safety guard)
+  [ -L "$HOME/.claude/scripts/broken-outside-plugin.sh" ]
+  [ ! -e "$HOME/.claude/scripts/broken-outside-plugin.sh" ]
+}
+
+@test "cast-plugin-bootstrap.sh leaves real (non-symlink) files untouched" {
+  # Pre-create ~/.claude/scripts directory
+  mkdir -p "$HOME/.claude/scripts"
+
+  # Create a real file (non-symlink) in ~/.claude/scripts/
+  real_file="$HOME/.claude/scripts/real-file.sh"
+  printf '#!/usr/bin/env bash\necho REAL\n' > "$real_file"
+  chmod +x "$real_file"
+
+  original_content=$(cat "$real_file")
+
+  # Run bootstrap
+  bash "$REPO_DIR/scripts/cast-plugin-bootstrap.sh"
+
+  # The real file should still exist, be unchanged, and remain a real file (not a symlink)
+  [ -f "$real_file" ]
+  [ ! -L "$real_file" ]
+  [ "$(cat "$real_file")" = "$original_content" ]
 }

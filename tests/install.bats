@@ -289,3 +289,25 @@ run_install_personal() {
   # Ad-hoc snapshot must survive
   [ -d "$backup_base/_phase1-backup-manual" ]
 }
+
+# =============================================================================
+# Hook-ownership sentinel
+# =============================================================================
+
+@test "Install: creates ~/.claude/config/cast-hook-owner with content 'install.sh'" {
+  run_install
+
+  # File must exist
+  [ -f "$HOME/.claude/config/cast-hook-owner" ] || {
+    echo "File not found: $HOME/.claude/config/cast-hook-owner" >&2
+    return 1
+  }
+
+  # Content must be exactly 'install.sh\n'
+  local content
+  content="$(cat "$HOME/.claude/config/cast-hook-owner")"
+  [ "$content" = "install.sh" ] || {
+    echo "Expected content 'install.sh', got '$content'" >&2
+    return 1
+  }
+}

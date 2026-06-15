@@ -1,13 +1,13 @@
 ---
 name: agent-registry
-description: Full CAST agent registry — 23 agents with model assignments. Load when building an Agent Dispatch Manifest, orchestrating multi-agent workflows, or when you need to verify which model a specific agent runs on.
+description: Full CAST agent registry with model assignments. Load when building an Agent Dispatch Manifest, orchestrating multi-agent workflows, or when you need to verify which model a specific agent runs on.
 user-invocable: true
 allowed-tools: []
 ---
 
 # CAST Agent Registry
 
-All 23 CAST agents with their model tier and one-line role description.
+The full CAST agent roster with model tier and one-line role description. The plugin installs a curated subset — run `cast status` or `cast doctor` for the live installed count.
 
 | Agent | Model | Role |
 |---|---|---|

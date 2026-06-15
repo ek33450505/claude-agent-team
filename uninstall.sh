@@ -36,7 +36,7 @@ fi
 
 # Create timestamped backup
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-BACKUP_DIR="$HOME/.claude/backups/uninstall-${TIMESTAMP}"
+BACKUP_DIR="${HOME}/Library/Application Support/cast/backups/uninstall-${TIMESTAMP}"
 
 echo ""
 echo -e "${YELLOW}Creating backup at: ${BACKUP_DIR}${NC}"

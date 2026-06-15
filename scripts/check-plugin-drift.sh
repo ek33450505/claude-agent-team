@@ -96,16 +96,72 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# (e) Committed plugin/ artifact is not stale (byte-identical to a fresh regeneration)
-# Drift target: the committed plugin/ by default; overridable for hermetic testing.
+# (e) Committed plugin/ artifact is not stale
+# Content-hash comparison: sha256 of file content for regular files; sha256 of
+# "SYMLINK:<target>" for symlinks — captures target-path drift that diff -rq misses
+# (diff follows symlinks and compares resolved content; a changed target is invisible).
+# Drift target: the committed plugin/ by default; overridable via CAST_PLUGIN_DIR.
 COMMITTED_PLUGIN="${CAST_PLUGIN_DIR:-${REPO_ROOT}/plugin}"
 if [[ -d "$COMMITTED_PLUGIN" ]]; then
-  if diff -rq "$TMP" "$COMMITTED_PLUGIN" >/dev/null 2>&1; then
+
+  # Build a stable sorted manifest: one line per entry "<relpath> <type:f|l> <sha256>"
+  # Sorted by full line so identical trees produce bit-identical manifests.
+  _build_manifest() {
+    local base="${1%/}"
+    {
+      find "$base" -mindepth 1 -type f -print0 \
+        | while IFS= read -r -d '' f; do
+            rel="${f#"${base}/"}"
+            _chk="$(shasum -a 256 "$f" 2>/dev/null | awk '{print $1}')"
+            printf '%s f %s\n' "$rel" "$_chk"
+          done
+      find "$base" -mindepth 1 -type l -print0 \
+        | while IFS= read -r -d '' l; do
+            rel="${l#"${base}/"}"
+            _tgt="$(readlink "$l")"
+            _chk="$(printf 'SYMLINK:%s' "$_tgt" | shasum -a 256 | awk '{print $1}')"
+            printf '%s l %s\n' "$rel" "$_chk"
+          done
+    } | sort
+  }
+
+  _MF_REGEN="$(mktemp)"
+  _MF_COMMIT="$(mktemp)"
+  _build_manifest "$TMP"              > "$_MF_REGEN"
+  _build_manifest "$COMMITTED_PLUGIN" > "$_MF_COMMIT"
+
+  if cmp -s "$_MF_REGEN" "$_MF_COMMIT"; then
     _ok "committed plugin/ matches regenerated output (no drift)"
   else
     _fail "committed plugin/ is STALE — regenerate and recommit: bash scripts/gen-plugin.sh \"\${REPO_ROOT}/plugin\" && git add plugin/"
-    diff -rq "$TMP" "$COMMITTED_PLUGIN" >&2 || true
+    {
+      # Paths only in regen (missing from committed): added
+      comm -23 <(awk '{print $1}' "$_MF_REGEN" | sort) \
+               <(awk '{print $1}' "$_MF_COMMIT" | sort) \
+        | while IFS= read -r p; do printf '  added: %s\n' "$p"; done
+      # Paths only in committed (missing from regen): removed
+      comm -13 <(awk '{print $1}' "$_MF_REGEN" | sort) \
+               <(awk '{print $1}' "$_MF_COMMIT" | sort) \
+        | while IFS= read -r p; do printf '  removed: %s\n' "$p"; done
+      # Paths in both but entry differs: changed or symlink-target-changed
+      comm -12 <(awk '{print $1}' "$_MF_REGEN" | sort) \
+               <(awk '{print $1}' "$_MF_COMMIT" | sort) \
+        | while IFS= read -r p; do
+            _rl="$(awk -v q="$p" '$1 == q {print; exit}' "$_MF_REGEN")"
+            _cl="$(awk -v q="$p" '$1 == q {print; exit}' "$_MF_COMMIT")"
+            [[ "$_rl" = "$_cl" ]] && continue
+            _rt="$(printf '%s\n' "$_rl" | awk '{print $2}')"
+            _ct="$(printf '%s\n' "$_cl" | awk '{print $2}')"
+            if [[ "$_rt" = "l" && "$_ct" = "l" ]]; then
+              printf '  symlink-target-changed: %s\n' "$p"
+            else
+              printf '  changed: %s\n' "$p"
+            fi
+          done
+    } >&2
   fi
+  rm -f "$_MF_REGEN" "$_MF_COMMIT"
+
 else
   _fail "committed plugin/ not found at ${COMMITTED_PLUGIN}"
 fi
