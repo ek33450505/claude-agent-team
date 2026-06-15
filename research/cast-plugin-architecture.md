@@ -2,7 +2,9 @@
 
 **Date:** 2026-04-10
 **Author:** CAST Researcher Agent
-**Status:** Research Complete
+**Status:** Research Complete (Superseded 2026-06-14)
+
+> **Superseded:** This research describes a single-file `claude-plugin.json` manifest at repo root. The shipped v8 design uses a **committed `plugin/` artifact** with `.claude-plugin/plugin.json` (for local development) **and** a repo-root `.claude-plugin/marketplace.json` (for marketplace distribution). For the current plugin architecture, see CHANGELOG v8 entry and the actual manifest at `plugin/.claude-plugin/plugin.json`.
 
 ---
 

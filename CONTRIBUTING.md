@@ -111,6 +111,21 @@ correct, but do not commit the README badge update — CI handles it post-merge.
 
 ---
 
+## Regenerating the Plugin Artifact
+
+The `plugin/` directory is a **generated build artifact** (output of `scripts/gen-plugin.sh`), committed to the repo so users can install via `/plugin marketplace add`. Do NOT hand-edit plugin sources directly.
+
+After changing any source that the plugin bundles (`agents/core/`, `skills/`, `commands/`, `scripts/`, or hook fragments in `managed-settings.d/`), regenerate the plugin and commit:
+
+```bash
+bash scripts/gen-plugin.sh "$(git rev-parse --show-toplevel)/plugin"
+git add plugin/
+```
+
+A CI gate (`scripts/check-plugin-drift.sh`, wired into the Self-Lints workflow) fails if `plugin/` drifts from a fresh regeneration.
+
+---
+
 ## PR Checklist
 
 - [ ] If touching test-affected code, run the relevant tests via `make test-ubuntu` (isolated temp HOME) — full green suite is batched before releases, not required per-PR. Never run `bats tests/` against the real `$HOME`.

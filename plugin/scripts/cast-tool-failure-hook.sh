@@ -1,0 +1,94 @@
+#!/bin/bash
+# cast-tool-failure-hook.sh — PostToolUseFailure hook
+# Fires when a tool call fails.
+# Responsibilities:
+#   1. Guard against subprocess invocations
+#   2. Log failure metadata to ~/.claude/cast/tool-failures.jsonl
+#   3. Log to cast.db tool_call_failures table
+#
+# Stdin JSON fields (PostToolUseFailure):
+#   session_id  — current session ID
+#   tool_name   — name of the tool that failed
+#   tool_input  — input passed to the tool (may be large)
+#   error       — the failure message
+#
+# Exit codes:
+#   0 — always
+
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
+
+set +e
+
+# _log_error: append a structured error line to hook-errors.log (never fails itself)
+mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+
+INPUT="$(cat 2>/dev/null || true)"
+
+CAST_INPUT="$INPUT" python3 - <<'PYEOF' || true
+import json, os
+from datetime import datetime, timezone
+
+raw = os.environ.get("CAST_INPUT", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    import sys; sys.exit(0)
+
+session_id    = data.get("session_id", "unknown")
+tool_name     = data.get("tool_name", "unknown")
+tool_input    = str(data.get("tool_input", ""))[:200]
+error_text    = str(data.get("error", ""))
+error_preview = error_text[:200]
+input_preview = tool_input[:100]
+
+now    = datetime.now(timezone.utc)
+iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# Log to tool-failures.jsonl
+entry = {
+    "timestamp":     iso_ts,
+    "session_id":    session_id,
+    "tool_name":     tool_name,
+    "error_preview": error_preview,
+    "input_preview": input_preview,
+}
+
+log_path = os.path.expanduser("~/.claude/cast/tool-failures.jsonl")
+os.makedirs(os.path.dirname(log_path), exist_ok=True)
+try:
+    with open(log_path, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+except Exception:
+    pass
+
+# Log to cast.db tool_call_failures
+db_path = os.path.expanduser("~/.claude/cast.db")
+project = os.path.basename(os.getcwd().rstrip('/')) or "unknown"
+data_json = json.dumps({"tool_name": tool_name, "error_preview": error_preview})
+try:
+    import sqlite3 as _sqlite3
+    con = _sqlite3.connect(db_path, timeout=3)
+    # Ensure table exists (idempotent) — hooks are standalone and may run before init
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS tool_call_failures (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp  TEXT    NOT NULL,
+            session_id TEXT,
+            tool_name  TEXT    NOT NULL,
+            error      TEXT,
+            project    TEXT,
+            data       TEXT
+        )
+    """)
+    con.execute(
+        "INSERT INTO tool_call_failures (timestamp, session_id, tool_name, error, project, data) VALUES (?, ?, ?, ?, ?, ?)",
+        (iso_ts, session_id, tool_name, error_preview, project, data_json),
+    )
+    con.commit()
+    con.close()
+except Exception:
+    pass
+PYEOF
+
+exit 0

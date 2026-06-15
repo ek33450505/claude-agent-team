@@ -154,13 +154,18 @@ while IFS=' ' read -r _local_ref local_sha _remote_ref remote_sha || [[ -n "${lo
   else
     base="$remote_sha"
   fi
-  PUSH_DIFF+=$(git diff "$base" "$local_sha" 2>/dev/null || true)
+  # Exclude plugin/ from the diff: it is a generated build artifact (mirror of scanned
+  # source) that is drift-gated by CI. Including it caused a ~43k-line diff that made
+  # _pii_scan loop hang at 99% CPU for 18+ min — same hang class as the §3.8.D/E
+  # empty-tree note above. plugin/ is excluded here; _is_allowed() retains its
+  # plugin/* skip as a defensive belt-and-suspenders guard.
+  PUSH_DIFF+=$(git diff "$base" "$local_sha" -- . ':(exclude)plugin/' 2>/dev/null || true)
   PUSH_DIFF+=$'\n'
 done
 
 # Standalone fallback (called directly, not from a hook with stdin refs).
 if [[ -z "${PUSH_DIFF// }" ]]; then
-  PUSH_DIFF=$(git diff HEAD~1 HEAD 2>/dev/null || git diff "$EMPTY_TREE" HEAD 2>/dev/null || true)
+  PUSH_DIFF=$(git diff HEAD~1 HEAD -- . ':(exclude)plugin/' 2>/dev/null || git diff "$EMPTY_TREE" HEAD -- . ':(exclude)plugin/' 2>/dev/null || true)
 fi
 
 # ---- Helpers ----------------------------------------------------------------
@@ -172,6 +177,11 @@ _is_allowed() {
   for p in "${PII_ALLOWLIST[@]}"; do
     [[ "$file" == "$p" ]] && return 0
   done
+  # Generated plugin build artifact — a curated mirror of already-scanned source
+  # (scripts/, agents/core/, skills/); the check-plugin-drift gate guarantees it
+  # equals regenerated source, so scanning it only false-positives on copies of
+  # the scanner self-test fixtures. (Check 1 already scans only tests/test/src.)
+  [[ "$file" == plugin/* ]] && return 0
   return 1
 }
 

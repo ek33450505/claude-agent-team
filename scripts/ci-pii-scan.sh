@@ -32,6 +32,10 @@ PII_ALLOWLIST=(
 
 # Directory prefixes whose tracked files are always skipped (docs, test helpers).
 # These contain intentional placeholder paths and third-party package metadata.
+# NOTE: plugin/ is intentionally NOT listed here — the curated plugin artifact is
+# now scanned directly. The dev/CI/personal scripts (ci-pii-scan.sh,
+# pre-push-ci-check.sh, cast-overlay-sync.sh, etc.) that previously caused
+# false-positives are no longer shipped inside plugin/, so the scan is clean.
 PII_ALLOWLIST_DIRS=(
   "docs/"
   "tests/test_helper/"
@@ -82,10 +86,12 @@ _scan_tracked() {
   local grep_flag="-E"
   echo "" | grep -qP "." 2>/dev/null && grep_flag="-P"
 
-  # Get tracked text files; -I skips binary files
+  # Get tracked text files; -I skips binary files.
+  # Run from REPO_ROOT so that ls-files' repo-relative paths resolve correctly
+  # regardless of the caller's cwd.
   local raw_hits
   # shellcheck disable=SC2086
-  raw_hits="$(git -C "$REPO_ROOT" ls-files -z \
+  raw_hits="$(cd "$REPO_ROOT" && git ls-files -z \
     | xargs -0 grep -InH $grep_flag "$content_pattern" \
     2>/dev/null || true)"
 

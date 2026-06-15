@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "cast",
+  "displayName": "CAST — Claude Agent Specialist Team",
+  "version": "7.4.1",
+  "description": "Swarm control plane for Claude Code: curated specialist agents, hook-enforced quality gates, and SQLite observability.",
+  "author": { "name": "ek33450505" },
+  "homepage": "https://github.com/ek33450505/claude-agent-team",
+  "repository": "https://github.com/ek33450505/claude-agent-team",
+  "license": "MIT",
+  "keywords": ["agents", "multi-agent", "observability", "quality-gates"],
+  "defaultEnabled": false,
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${user_config.GITHUB_TOKEN}" }
+    }
+  },
+  "userConfig": {
+    "GITHUB_TOKEN": { "type": "string", "title": "GitHub token", "description": "GitHub PAT for the github MCP server.", "sensitive": true, "required": false }
+  }
+}
