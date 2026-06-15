@@ -95,17 +95,6 @@
             "async": true
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://localhost:3001/api/hook-events",
-            "method": "POST",
-            "timeout": 3,
-            "async": true
-          }
-        ]
       }
     ],
     "InstructionsLoaded": [
