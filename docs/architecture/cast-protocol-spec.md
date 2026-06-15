@@ -127,7 +127,7 @@ cast_write_status "BLOCKED" "Could not complete implementation" "code-writer" \
 
 **How `agent-status-reader.sh` processes the file:**
 
-The `agent-status-reader.sh` PostToolUse hook runs inside subagent context (`CLAUDE_SUBPROCESS=1`). It locates the latest JSON file in `~/.claude/agent-status/` by lexicographic sort of filenames (which encode UTC timestamp). It then:
+The `agent-status-reader.sh` PostToolUse hook (CAST v2 — **no longer registered in v3**; see §5.5, where status propagation moved to the model reading Status blocks directly) locates the latest JSON file in `~/.claude/agent-status/` by lexicographic sort of filenames (which encode UTC timestamp). It then:
 
 | Status | Hook action | Exit code |
 |---|---|---|
@@ -599,7 +599,7 @@ Note: `pre-tool-guard.sh` does not output `hookSpecificOutput` JSON — it outpu
 
 > **Note:** In CAST v3, `agent-status-reader.sh` is no longer registered as a hook. Status propagation is handled by the model reading agent Status blocks directly. This section is preserved for protocol reference.
 
-This hook runs only in subagent context. It inverts the standard CLAUDE_SUBPROCESS guard:
+This legacy (v2) hook ran only in subagent context under the older headless/managed dispatch model, where subagents carried `CLAUDE_SUBPROCESS=1`. It inverts the standard guard (per §2.5, native Agent-tool subagents instead run with `CLAUDE_SUBPROCESS` **unset**, so this inversion no longer matches how in-session subagents execute):
 
 ```bash
 if [ "${CLAUDE_SUBPROCESS:-0}" != "1" ]; then exit 0; fi
