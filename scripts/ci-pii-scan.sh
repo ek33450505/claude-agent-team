@@ -32,14 +32,13 @@ PII_ALLOWLIST=(
 
 # Directory prefixes whose tracked files are always skipped (docs, test helpers).
 # These contain intentional placeholder paths and third-party package metadata.
+# NOTE: plugin/ is intentionally NOT listed here — the curated plugin artifact is
+# now scanned directly. The dev/CI/personal scripts (ci-pii-scan.sh,
+# pre-push-ci-check.sh, cast-overlay-sync.sh, etc.) that previously caused
+# false-positives are no longer shipped inside plugin/, so the scan is clean.
 PII_ALLOWLIST_DIRS=(
   "docs/"
   "tests/test_helper/"
-  # Generated plugin build artifact — a curated mirror of already-scanned source
-  # (scripts/, agents/core/, skills/). The check-plugin-drift gate guarantees it
-  # equals regenerated source, so re-scanning it only false-positives on copies of
-  # this scanner's own fake-secret self-test fixture.
-  "plugin/"
 )
 
 # Return 0 if the given file path (relative to REPO_ROOT) is allowlisted.
