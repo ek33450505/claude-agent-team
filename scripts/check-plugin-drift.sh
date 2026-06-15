@@ -97,7 +97,8 @@ else
 fi
 
 # (e) Committed plugin/ artifact is not stale (byte-identical to a fresh regeneration)
-COMMITTED_PLUGIN="${REPO_ROOT}/plugin"
+# Drift target: the committed plugin/ by default; overridable for hermetic testing.
+COMMITTED_PLUGIN="${CAST_PLUGIN_DIR:-${REPO_ROOT}/plugin}"
 if [[ -d "$COMMITTED_PLUGIN" ]]; then
   if diff -rq "$TMP" "$COMMITTED_PLUGIN" >/dev/null 2>&1; then
     _ok "committed plugin/ matches regenerated output (no drift)"
