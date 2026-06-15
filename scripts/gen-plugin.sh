@@ -118,6 +118,7 @@ EXCLUDE_SCRIPTS=(
   cast-litestream-setup.sh
   cast-litestream-verify.sh
   cast-snapshot.py
+  try-plugin-isolated.sh
 )
 
 COPY_AGENTS=("${LEAN_AGENTS[@]}")
