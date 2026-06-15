@@ -1,0 +1,54 @@
+%% CAST v8 control-plane request lifecycle.
+%% Source of truth for docs/architecture/cast-architecture.svg.
+%% Regenerate the SVG with: bash scripts/gen-arch-diagram.sh
+%% GitHub renders this file inline when embedded as a ```mermaid block.
+flowchart TD
+    U(["User prompt"]) --> R["CLAUDE.md routing<br/>3-tier planner doctrine"]
+
+    R --> GATES
+
+    subgraph GATES["PreToolUse enforcement · deterministic · exit 2 = block"]
+        direction LR
+        WG["write-guard<br/>protected paths"]
+        CG["command-guard<br/>pkill · kill -9 · rm -rf roots"]
+        CMG["commit-guard<br/>raw git commit / push"]
+    end
+
+    GATES --> D["Agent dispatch<br/>haiku 4.5 · sonnet · opus tiers"]
+    D --> CR{"code-reviewer gate<br/>MANDATORY for code"}
+    CR -->|changes requested| D
+    CR -->|approved| SS
+
+    subgraph SS["SubagentStop"]
+        direction LR
+        HO["typed Handoff<br/>validation"]
+        HS["honesty<br/>sensors"]
+        MW["memory<br/>write"]
+    end
+
+    SS --> DB
+
+    subgraph BR["blast radius · ~/.claude"]
+        DB[("cast.db<br/>local SQLite · WAL · append-only")]
+    end
+
+    subgraph OFF["off blast radius · ~/Library/Application Support/cast"]
+        LS["Litestream replica<br/>(continuous)"]
+        SN["dated snapshots"]
+    end
+
+    DB -.->|"continuous replication"| LS
+    DB -.->|"snapshot"| SN
+    LS --> INT["cast integrity<br/>guards live · backups fresh · canary loaded · evidence writable"]
+    SN --> INT
+
+    D -.->|"opt-in · never a dependency"| CLOUD(["Managed agents · cross-LLM router"])
+
+    classDef gate fill:#fde2e2,stroke:#c0392b,color:#7b241c;
+    classDef store fill:#e8f4fd,stroke:#2471a3,color:#1a5276;
+    classDef integ fill:#e9f7ef,stroke:#1e8449,color:#145a32;
+    classDef cloud fill:#f4ecf7,stroke:#7d3c98,color:#512e5f,stroke-dasharray:4 3;
+    class WG,CG,CMG gate;
+    class DB,LS,SN store;
+    class INT integ;
+    class CLOUD cloud;

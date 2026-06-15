@@ -97,6 +97,7 @@ EXCLUDE_COMMANDS=(push morning)
 # infra and tooling.
 EXCLUDE_SCRIPTS=(
   gen-plugin.sh
+  gen-arch-diagram.sh
   check-plugin-drift.sh
   ci-pii-scan.sh
   pre-push-ci-check.sh
