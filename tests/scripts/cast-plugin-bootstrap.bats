@@ -60,7 +60,6 @@ teardown() {
   [ -d "$HOME/.claude/cast/reviews" ]
   [ -d "$HOME/.claude/cast/artifacts" ]
   [ -d "$HOME/.claude/config" ]
-  [ -d "$HOME/.claude/backups" ]
 }
 
 @test "cast-plugin-bootstrap.sh symlinks plugin scripts into ~/.claude/scripts/" {

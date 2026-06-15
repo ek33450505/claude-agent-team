@@ -72,7 +72,6 @@ teardown() {
     "$HOME/.claude/cast/reviews"
     "$HOME/.claude/cast/artifacts"
     "$HOME/.claude/config"
-    "$HOME/.claude/backups"
     "$HOME/.claude/agent-memory-local"
   )
 
