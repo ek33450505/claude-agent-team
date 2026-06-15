@@ -50,6 +50,7 @@ EXEMPTIONS=(
 ALLOWLIST=(
   # Safe: rm -rf in EXIT trap on its own mktemp -d — low-risk self-contained pattern
   "ci-pii-scan.sh"
+  "gen-arch-diagram.sh"
 )
 
 _is_exempt_or_allowed() {

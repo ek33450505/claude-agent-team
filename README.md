@@ -1,19 +1,24 @@
 <p align="center">
-  <img src="docs/cast-banner.png" alt="CAST — Swarm production-grade control plane for Anthropic Agent Teams" />
+  <img src="docs/cast-banner.png" alt="CAST — a local-first, data-integrity control plane for Claude Code" />
 </p>
 
 # CAST
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-7.4.1-blue)<!-- /CAST_VERSION_BADGE -->
+![Version](https://img.shields.io/badge/version-8.0.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-23-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-1556-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-1721-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
+![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)
 
-> CAST is a production-grade control plane for Claude Code built on three pillars: **hook enforcement** (every agent change is gated by validators — `cast-validate-all-hooks.sh` runs in CI and hookSpecificOutput shape is contract-validated), **audit trail** (cast.db with <!-- CAST_DB_TABLE_COUNT -->36<!-- /CAST_DB_TABLE_COUNT --> tables records every session, agent run, routing decision, quality gate, and memory write), and a **typed agent registry** (<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents, model-assigned across haiku 4.5 / sonnet / opus tiers, quality-gated, with frontmatter contracts). Define a workflow once; specialist agents plan, implement, review, test, and commit — automatically.
+> **CAST v8 — "Native CAST."** A production-grade control plane for Claude Code, built on two convictions: the core development loop should never have to leave your machine, and an agent platform should be structurally unable to destroy its own evidence. Those are the two pillars — **local-first by construction** and **data integrity by construction** — and they are enforced by hooks, guards, and a local SQLite audit trail (<!-- CAST_DB_TABLE_COUNT -->36<!-- /CAST_DB_TABLE_COUNT -->+ tables), not by convention. <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents plan, implement, review, test, and commit; raw `git commit` and `git push` are hard-blocked; every dispatch is logged. Define a workflow once; the team runs it.
 
 **[CAST Framework](https://castframework.dev)**
+
+CAST is the system I'd want if I were building production software with Claude Code every day — so I built it, broke it, and hardened it until it earned trust. The hard part wasn't wiring agents together; it was making the platform **honest** (it tells you when work is unverified) and **safe** (it cannot delete its own runtime). Pillar 2 wasn't designed on a whiteboard — it was earned through repeated full `~/.claude` wipes, including one that took out the colocated backups with it. The engineering response *is* the story: backups moved outside the failure domain (continuous Litestream replication + dated snapshots to `~/Library`), the wipe canary relocated off the blast radius so forensics survive the event that triggers them, and a PreToolUse command-guard plus write-guards that make `rm -rf ~/.claude` or a machine-wide `pkill` structurally impossible from an agent. The destructive paths are tested by **proving the system refuses them**, not by proving the happy path works.
+
+Where Claude Code now ships a native primitive, v8 **retires** CAST's bespoke version (language rules became on-demand skills; heavy planning yields to native plan mode for single-session work; the whole thing ships as a **native plugin**). Where the platform still has a gap, CAST fills it and is, in places, ahead of Anthropic's own published guidance: a fresh-context `code-reviewer` gate (the Writer/Reviewer pattern, mandatory here), an honesty/verification doctrine (`DONE_WITH_CONCERNS`, a typed Handoff contract, a Pre-existing-Failure-Evidence rule), and an **eval harness mined from real agent failures** — closing what is arguably Anthropic's largest documented gap.
 
 ---
 
@@ -33,9 +38,9 @@ cd claude-agent-team
 bash install.sh
 ```
 
-### Install as a plugin (beta)
+### Install as a plugin (v8)
 
-CAST also ships as a Claude Code plugin. Two ways to load it:
+CAST ships as a native Claude Code plugin (**dual-ship** — the plugin coexists with `install.sh`, it does not replace it). Two ways to load it:
 
 **From the marketplace (recommended):**
 ```bash
@@ -50,9 +55,9 @@ git clone https://github.com/ek33450505/claude-agent-team.git
 claude --plugin-dir claude-agent-team/plugin
 ```
 
-The plugin bundles CAST's curated agents, skills, commands, hooks, and the GitHub MCP server (provide a GitHub token via the plugin's `GITHUB_TOKEN` config to enable it; without a token the MCP server simply won't connect). It is **opt-in** (`defaultEnabled: false`) and **complements** `install.sh` rather than replacing it: `install.sh` remains authoritative for the runtime layer (`~/.claude/scripts`, `cast.db`, launchd jobs, git hooks). **Until you run `/plugin enable cast@cast`, the SessionStart bootstrap does not run and hook symlinking + cast.db initialization will not occur.** When both installs are present, the plugin's command hooks automatically defer to install.sh via a `~/.claude/config/cast-hook-owner` sentinel that install.sh writes, so the two coexist safely without double-firing hooks.
+The plugin bundles CAST's curated agents, skills, commands, `command`-type enforcement hooks, and the GitHub MCP server (provide a token via the plugin's `GITHUB_TOKEN` config to enable it). It is **opt-in** (`defaultEnabled: false`) — **until you run `/plugin enable cast@cast`, the SessionStart bootstrap does not run.** `install.sh` remains authoritative for the runtime layer (`~/.claude/scripts`, `cast.db`, launchd jobs, git hooks); when both are present, the plugin's hooks defer to install.sh via a `~/.claude/config/cast-hook-owner` sentinel so nothing double-fires.
 
-> **Note:** the `push` agent is **not** bundled (it depends on the install.sh-managed runtime). Plugin users push with `bash ~/.claude/scripts/cast-push.sh <branch>` (symlinked by the bootstrap) or via a full `install.sh`. To include the opt-in extras tier (perf-sentinel, release-notes, api-contract, dep-auditor), regenerate locally: `bash scripts/gen-plugin.sh --with-extras dist/cast-plugin` then `claude --plugin-dir dist/cast-plugin`.
+> **Curated payload:** the plugin ships **17 lean agents**; the `push` agent (needs the install.sh runtime) and `morning-briefing` are excluded. Add the 4 opt-in extras (perf-sentinel, release-notes, api-contract, dep-auditor) by regenerating with `bash scripts/gen-plugin.sh --with-extras dist/cast-plugin` then `claude --plugin-dir dist/cast-plugin`. The full `install.sh` carries all <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents.
 
 ---
 
@@ -62,12 +67,44 @@ The plugin bundles CAST's curated agents, skills, commands, hooks, and the GitHu
 
 ---
 
-## What Makes CAST Different
+## Why CAST
 
-- **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a reviewer pass. You cannot skip this.
-- **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope, a model tier, and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
-- **SQLite audit trail, fully local.** Every agent dispatch, tool call, and token spend logs to `cast.db` on your machine. No SaaS dashboard, no cloud lock-in.
-- **<!-- CAST_TEST_COUNT -->1556<!-- /CAST_TEST_COUNT --> BATS test cases.** Every hook script and utility is covered. CI runs on both macOS and Ubuntu on every push.
+- **Local-first by construction.** Your code, prompts, memory, and the full audit trail (`cast.db`, SQLite) live on your disk. No SaaS dashboard, no telemetry egress, no "sign in to use it." Every cloud feature is strictly opt-in.
+- **Data integrity by construction.** Backups live outside the blast radius; the failure detector lives outside it too; CAST cannot delete its own runtime. Born from real `~/.claude` wipes.
+- **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a fresh-context reviewer pass. You cannot skip this.
+- **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope, a model tier (haiku 4.5 / sonnet / opus), and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
+- **Agent behavior is tested, not hoped for.** The `cast eval` harness runs an agent-behavior corpus mined from real failures — with LLM-judge graders and `pass@k`.
+- **<!-- CAST_TEST_COUNT -->1721<!-- /CAST_TEST_COUNT --> BATS test cases** across the hook and utility layer. CI runs on macOS and Ubuntu on every push.
+
+---
+
+## The v8 Thesis: Less Bespoke, More Platform
+
+CAST's organizing principle is convergence: **retire custom code wherever Claude Code now ships a native primitive, and keep only what the platform still lacks.** v8 acts on it — language-specific rules became demand-loaded skills, the mandatory planner chain softened to native plan mode for single-session work, and distribution moved to a native plugin (the breaking change behind the major version bump). What stays bespoke is what the platform doesn't yet provide: deterministic enforcement, a local audit trail, data-integrity guarantees, and agent-behavior evals. The flagship comes out *smaller*. See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
+
+---
+
+## Pillar 1 — Local-First by Construction
+
+The core loop never requires leaving the machine. Observability is local SQLite (`cast.db`); memory is local files + a local FTS5 index; enforcement is local hooks. Every cloud capability is an *additive convenience*, clearly labelled and never a dependency:
+
+- **Managed Agents** (`--cloud`) — dispatch parallel agents on Anthropic infrastructure instead of git worktrees. Opt-in.
+- **Cross-LLM routing** — route Haiku-tier work to a local Ollama model via [claude-code-router](https://github.com/musistudio/claude-code-router) (`ccr`). Opt-in, per session.
+
+A CAST user with no network still has a fully working system. *Design rule: no feature may make the core dev loop depend on a remote service — if it would, it ships as an opt-in track.*
+
+---
+
+## Pillar 2 — Data Integrity by Construction
+
+The thing that bit me three to four times (full `~/.claude` wipes) is now a headline guarantee. Hard-won lessons made into invariants:
+
+- **Backups live outside the failure domain.** [Litestream](docs/backups.md) replicates `cast.db` continuously to `~/Library/Application Support/cast/` (off the `~/.claude` blast radius); dated snapshots land there too. The colocated `~/.claude/backups` that died with its host is gone.
+- **The detector survives the blast radius.** The wipe canary runs from `~/Library/.../cast/bin/`, so it captures forensics the instant `~/.claude` vanishes — the detector can't be deleted by the event it detects.
+- **CAST cannot destroy its own runtime.** Write-guards block writes outside a declared blast radius; a PreToolUse **command-guard** blocks `pkill`/`killall`/`kill -9` and `rm -rf` of protected roots; a `blast-radius-lint` ratchet fails CI on any bare `rm -rf` in `scripts/`; teardown guards isolate every test to a temp HOME.
+- **Destructive ops are tested by proving refusal**, not just success. Schema migrations and prune jobs back up fail-closed before they touch data (`cast-migrate.py --confirm`).
+
+`cast integrity` is the read surface — one honest command answering "are my guards live, backups fresh and off-radius, canary loaded, evidence path writable, *right now*?" — and a daily monitor notifies only when something regresses. Full design: [docs/backups.md](docs/backups.md).
 
 ---
 
@@ -76,118 +113,116 @@ The plugin bundles CAST's curated agents, skills, commands, hooks, and the GitHu
 | Guide | Description |
 |---|---|
 | [Tutorial](docs/tutorial/getting-started.md) | Install CAST and run your first agent dispatch |
-| [Compatibility Matrix](docs/compatibility.md) | Claude Code version requirements and known breakages |
+| [Architecture](docs/architecture/ARCHITECTURE.md) | The v8 control plane, enforcement, data-integrity stack, evals |
+| [Backups & Recovery](docs/backups.md) | Litestream, off-radius snapshots, `cast integrity` |
 | [Hook Authoring Guide](docs/hooks/authoring-guide.md) | Write, test, and install custom hook scripts |
+| [Compatibility Matrix](docs/compatibility.md) | Claude Code version requirements and known breakages |
 | [Full Docs Index](docs/README.md) | All documentation with one-line descriptions |
-
----
-
-## Table of Contents
-
-[What is CAST?](#what-is-cast) · [Architecture](#architecture) · [Agents](#agents) · [Hooks](#hooks) · [Observability](#observability--castdb) · [Ecosystem](#cast-ecosystem) · [Testing](#testing) · [Contributing](#contributing) · [Stats](#stats)
 
 ---
 
 ## What is CAST?
 
-CAST transforms Agent Teams into a **production-grade control plane:**
+CAST transforms Claude Code's agent loop into a **production-grade control plane:**
 
-- **Swarm composition in YAML.** Define teams, assign roles, set quality gates. CAST bootstraps worktrees, seeds teammates with identity + prompts, manages peer messaging.
-- **Structural quality gates.** Code changes mandate a reviewer pass. Raw `git commit` and `git push` are hard-blocked by hooks.
-- **Full observability.** Every session, task, peer message, and token spend logs to `cast.db` (SQLite).
-- **Local model routing.** Haiku agents can route to a local Ollama model via claude-code-router (opt-in); token spend drops ~30-50%.
+- **Structural quality gates.** Code changes mandate a reviewer pass; raw `git commit` and `git push` are hard-blocked by hooks.
+- **Full, local observability.** Every session, task, routing decision, quality gate, peer message, and token spend logs to `cast.db` (SQLite, on your machine).
+- **Typed agent contracts.** Agents emit a typed `## Handoff` block (JSON-schema-validated) so multi-agent chains don't fail silently.
+- **Swarm composition in YAML.** Define teams, assign roles, set quality gates; CAST bootstraps worktrees and manages peer messaging.
 
 ---
 
 ## Your First Workflow
 
-1. **Plan** (multi-file / multi-agent work) — `/plan add user auth feature` → the `planner`→`/orchestrate` chain writes an Agent Dispatch Manifest. (Single-session-sized changes skip this — use built-in plan mode via shift-tab.)
-2. **Execute** — `/orchestrate next` → code-writer implements, code-reviewer checks, test-runner verifies, commit agent stages.
-3. **Ship** — `/ship` → tests, CI sanity check, push, journal entry.
+CAST matches planning ceremony to task size (the softened v8 planner doctrine):
+
+1. **Trivial** (a typo, a one-value tweak) — just make the change. (Code still routes to a specialist; "no plan" never means "no review.")
+2. **Single-session** (one or a few files) — native plan mode (shift-tab), single agent. The default for ordinary work.
+3. **Multi-file / multi-agent** — `/plan add user auth feature` → the `planner`→`/orchestrate` chain writes an Agent Dispatch Manifest and runs it in waves.
+
+Then **execute** — code-writer implements, code-reviewer checks (**mandatory**, fresh context), test-runner verifies, the commit agent stages — and **ship** (`/ship` → tests, CI sanity, push, journal entry).
 
 ---
 
 ## Architecture
 
-Every CAST operation follows a four-stage flow: (1) **hook validation** — pre-tool hooks enforce quality gates and block non-compliant writes before any change lands; (2) **agent dispatch** — the typed agent registry routes work to the correct model tier (haiku 4.5 for review/commit, sonnet for implementation, opus for migration review); (3) **memory injection** — each agent receives relevant prior-session context from its `~/.claude/agent-memory-local/<name>/MEMORY.md` on startup; (4) **cast.db audit** — every session, routing decision, quality gate result, and token spend is appended to the local SQLite database. See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) for the full guide including Agent Teams comparison table.
+Every CAST operation follows the same gated pipeline: a user prompt is routed by `CLAUDE.md`; **PreToolUse guards** (write-guard, command-guard, commit-guard) block non-compliant actions before they land; the **typed agent registry** dispatches to the right model tier; a **mandatory `code-reviewer` gate** reviews code in fresh context; the **SubagentStop** hook validates the typed Handoff, runs honesty sensors, and writes memory; and every step is appended to the local `cast.db` — which Litestream replicates *outside* the blast radius. Full guide: [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
 
 <p align="center">
-  <img src="docs/architecture/cast-architecture.svg" alt="CAST swarm architecture" />
+  <img src="docs/architecture/cast-architecture.svg" alt="CAST v8 control-plane request lifecycle" />
 </p>
-
----
-
-## Personal Overlay
-
-CAST ships in two layers: `core` (always installed) and `personal` (optional, `--personal` flag). New clones get a trustworthy, generic installation; the personal layer is optional configuration you populate locally. See [docs/personal-overlay.md](docs/personal-overlay.md).
-
-## Swarm System
-
-CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Teams get isolated worktrees, agent identity, peer messaging, and quality gates. See [docs/swarm.md](docs/swarm.md).
-
-## Observability Dashboards
-
-**[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** — a React 19 + Vite + Express observability UI fed live from `~/.claude/cast.db` (local-only, no cloud). ~21 views covering sessions, agent analytics & reliability, hook health and failures, memory browser, plans, incidents, swarm runs, file-write audits, injection log, and a SQLite explorer. See [docs/dashboard.md](docs/dashboard.md).
-
-**[Cast Desktop](https://github.com/ek33450505/cast-desktop)** — Tauri 2 native macOS app surfacing the same observability layer with an embedded PTY terminal, command palette (Cmd+K), and 11 dashboard views.
 
 ---
 
 ## Agents
 
-23 core specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, isolation, and thinking budget tier. Agent responses validate against JSON schemas in `schemas/`. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the full table with model tiers and thinking budgets.
+<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> core specialists, each a markdown file in `~/.claude/agents/` with YAML frontmatter defining model tier, memory, isolation, and thinking budget. Agent responses validate against JSON schemas in `schemas/` (including the typed `## Handoff` contract). The plugin curates **17 lean agents** for distribution (+4 opt-in extras); the full `install.sh` carries all <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT -->. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the full table with model tiers.
 
-Key agents: `code-writer`, `debugger`, `planner`, `researcher`, `security`, `code-reviewer`, `commit`, `push`, `test-writer`, `devops`, `bash-specialist`, `migration-reviewer`, `api-contract`, `dep-auditor`, `perf-sentinel`.
-
----
-
-## Token Efficiency & Cost Optimization
-
-Model tiering, response budgets, Ollama local routing, laconic mode, and RTK compression achieve ~30-50% token spend reduction. See [docs/TOKEN-OPTIMIZATION.md](docs/TOKEN-OPTIMIZATION.md).
-
-### Optional: Local-first cheap-mode (claude-code-router)
-
-For local Haiku-tier work without API spend, install [claude-code-router](https://github.com/musistudio/claude-code-router) and run `ccr` instead of `claude`. CCR proxies all model calls to local Ollama (default: `deepseek-coder:latest`). Opt-in per session — vanilla `claude` continues to use Anthropic API.
+Key agents: `code-writer`, `debugger`, `planner`, `researcher`, `security`, `code-reviewer`, `commit`, `push`, `test-writer`, `devops`, `bash-specialist`, `migration-reviewer`, `eval-writer`, `pr-reviewer`.
 
 ---
 
 ## Hooks
 
-Hooks cover the full swarm lifecycle: SessionStart, TaskCreated, WorktreeCreate, PreToolUse:Bash (commit guard), PostToolUse, PostCompact, SessionEnd. See [docs/hooks/authoring-guide.md](docs/hooks/authoring-guide.md).
+Deterministic `command`-type hooks enforce; `prompt`-type hooks are advisory. The lifecycle: **SessionStart** (bootstrap + context banner), **UserPromptSubmit** (memory recall + routing), **PreToolUse:Bash** (commit/push/stash block + the `pkill`/`rm -rf` command-guard), **PreToolUse:Write|Edit** (write-guards + reviewer injection), **PostToolUse**, **SubagentStop** (truncation detection + typed Handoff validation + honesty sensors + memory write), **PostCompact**, **SessionEnd** (memory distiller). See [docs/hooks/authoring-guide.md](docs/hooks/authoring-guide.md).
+
+---
+
+## Eval Harness
+
+CAST has thousands of BATS *script* tests but, until v8, zero agent-*behavior* evals — the largest documented gap versus Anthropic's guidance. `cast eval` closes it: a corpus in `evals/cases/<agent>/*.yaml` mined from real failures (missed bugs, false `DONE`s, ignored scope), three-outcome graders (a grader that can't decide never false-fails), an LLM-judge grader, and `pass@k` for probabilistic behavior. Runs land in the `eval_runs` table.
+
+```bash
+cast eval list                 # available cases
+cast eval run --all            # run the corpus
+cast eval report               # latest verdict per case
+```
+
+---
 
 ## Observability & cast.db
 
-SQLite WAL mode at `~/.claude/cast.db` — append-only, never truncated. Stores swarm_sessions, teammate_runs, agent_runs, routing_events, stream_events. See [docs/observability/OBSERVABILITY.md](docs/observability/OBSERVABILITY.md).
+SQLite (WAL mode) at `~/.claude/cast.db` — append-only, never truncated, **fully local**. Stores sessions, agent_runs, routing_events, quality_gates, agent_memories, eval_runs, agent_protocol_violations, swarm_sessions, teammate_runs, and more. Surfaced by two read-only dashboards:
 
-## Peer Messaging & Gossip Protocol
+**[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** — React 19 + Vite + Express, ~21 views (sessions, agent analytics & reliability, hook health, memory browser, plans, incidents, swarm runs, file-write audits, a SQLite explorer). **[Cast Desktop](https://github.com/ek33450505/cast-desktop)** — Tauri 2 native macOS app with an embedded PTY terminal, command palette, and 11 views. Both read `cast.db` locally — no cloud. See [docs/observability/OBSERVABILITY.md](docs/observability/OBSERVABILITY.md).
 
-Teammates communicate via cast.db message bus — no central broker, fully decentralized. See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md#peer-messaging--gossip-protocol).
+---
 
-## Multi-Agent Pipelines
+## Swarm System
 
-The `/orchestrate` skill executes **Agent Dispatch Manifests (ADM)** — JSON plan files defining sequential/parallel agent batches. `owns_files` prevents write conflicts between parallel agents. See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md#multi-agent-pipelines).
+CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Teams get isolated worktrees, agent identity, peer messaging (a decentralized cast.db message bus, no central broker), and quality gates. See [docs/swarm.md](docs/swarm.md) and [the architecture guide](docs/architecture/ARCHITECTURE.md#swarm-system).
+
+---
 
 ## Agent Memory & Persistence
 
-Each agent accumulates domain knowledge in `~/.claude/agent-memory-local/<name>/MEMORY.md`. Features: FTS5 full-text search, relevance scoring, shared pool, procedural memory, session distiller. See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md#agent-memory).
+Each agent accumulates domain knowledge in `~/.claude/agent-memory-local/<name>/MEMORY.md` (Tier 1, native auto-load) alongside a dynamic per-prompt router over the `agent_memories` table (Tier 2, FTS5 relevance + confidence scoring). Language conventions load on demand as skills. See [the architecture guide](docs/architecture/ARCHITECTURE.md#memory-pipeline).
+
+---
 
 ## Routines: Scheduled Workflows
 
-11 built-in time-triggered or event-triggered agent jobs — daily briefings, inbox triage, standup, weekly cost reports, and more. Manage with `cast routines list` / `cast routines trigger <name>`. Full guide: [docs/routines.md](docs/routines.md).
+Time- and event-triggered agent jobs — daily briefings, inbox triage, standup, weekly cost reports, the daily `cast integrity` monitor, and more. Manage with `cast routines list` / `cast routines trigger <name>`. Full guide: [docs/routines.md](docs/routines.md).
+
+---
+
+## Token Efficiency & Cost Optimization
+
+Model tiering, response budgets, optional local Ollama routing (opt-in, never a dependency — Pillar 1), and laconic mode reduce token spend. See [docs/TOKEN-OPTIMIZATION.md](docs/TOKEN-OPTIMIZATION.md).
 
 ---
 
 ## Project Structure
 
-`agents/` · `rules-{core,personal}/` · `docs/` · `schemas/` · `scripts/` · `swarm-configs/` · `tests/` · `.github/workflows/`
+`agents/core/` · `rules-{core,personal}/` · `skills/` · `commands/` · `docs/` · `schemas/` · `scripts/` · `swarm-configs/` · `evals/` · `plugin/` · `.claude-plugin/` · `tests/` · `.github/workflows/`
 
-Runtime installs to `~/.claude/` — agents, memory, plans, swarm sessions, cast.db, scripts.
+Runtime installs to `~/.claude/` — agents, memory, plans, swarm sessions, `cast.db`, scripts.
 
 ---
 
 ## Testing
 
-125 CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->1556<!-- /CAST_TEST_COUNT --> test cases) covering core hooks, swarm bootstrap, message bus, database migrations, guard logic, event emission, and memory persistence. (`find tests -name '*.bats'` also counts ~28 vendored `bats-assert`/`bats-support` submodule self-tests.) BATS is installed via package manager — `brew install bats-core` (macOS) or `apt-get install bats-core` (Ubuntu/Debian). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests).
+163 CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->1721<!-- /CAST_TEST_COUNT --> test cases) covering hooks, swarm bootstrap, the message bus, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
 
 ---
 
@@ -231,7 +266,7 @@ Contributions are welcome — CAST is built in the open and actively developed. 
 
 **Good first issues:** [`good first issue` label](https://github.com/ek33450505/claude-agent-team/issues?q=label%3A%22good+first+issue%22) — curated entry points with clear scope and test expectations.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow. Open an issue first for non-trivial changes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow (including how to regenerate the plugin artifact). Open an issue first for non-trivial changes.
 
 ---
 
@@ -250,6 +285,6 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->1556<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->1721<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->20<!-- /CAST_COMMAND_COUNT --> commands |
-<!-- CAST_SKILL_COUNT -->15<!-- /CAST_SKILL_COUNT --> skills
+<!-- CAST_SKILL_COUNT -->18<!-- /CAST_SKILL_COUNT --> skills
