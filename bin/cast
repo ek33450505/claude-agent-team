@@ -2313,6 +2313,72 @@ PYEOF
     fi
   fi
 
+  # 23. Hook double-wiring / stale sentinel
+  # Detects two edge cases for installs that combine install.sh hooks with a CAST plugin:
+  #   (a) Dual install with sentinel absent  → double-fire risk (WARN)
+  #   (b) Sentinel present but no install.sh hooks → stale sentinel (WARN)
+  #   (c) Dual install with sentinel present → healthy (INFO/PASS)
+  #   (d) Single install (either side only)  → no warning (INFO/PASS)
+  local _hw_sentinel="${HOME}/.claude/config/cast-hook-owner"
+  local _hw_sentinel_exists=0
+  [ -f "$_hw_sentinel" ] && _hw_sentinel_exists=1
+
+  # Does settings.json reference any cast- hook scripts?
+  local _hw_has_install_hooks=0
+  if [ -f "$settings_file" ]; then
+    _hw_has_install_hooks="$(python3 - "$settings_file" <<'PYEOF'
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        cfg = json.load(fh)
+    hooks = cfg.get("hooks", {})
+    for entries in hooks.values():
+        if not isinstance(entries, list):
+            entries = [entries]
+        for entry in entries:
+            inner = entry.get("hooks", []) if isinstance(entry, dict) else []
+            for h in inner:
+                if isinstance(h, dict) and "cast-" in h.get("command", ""):
+                    print(1)
+                    sys.exit(0)
+    print(0)
+except Exception:
+    print(0)
+PYEOF
+    2>/dev/null || echo 0)"
+  fi
+
+  # Plugin detection: rely solely on `claude plugin list` (authoritative).
+  # The plugins/data marker directory is NOT used — it false-positives on defunct/spike
+  # markers (e.g. cast-mini-inline P0) that are not enabled plugins.
+  # Stay silent (_hw_plugin_present=0) when the claude CLI is absent so CI stays clean.
+  local _hw_plugin_present=0
+  if command -v claude >/dev/null 2>&1; then
+    # Match the `cast` plugin specifically: word-boundary anchors exclude `cast-mini`, etc.
+    if claude plugin list 2>/dev/null | grep -qiE '(^|[^a-z-])cast([^a-z-]|$)'; then
+      _hw_plugin_present=1
+    fi
+  fi
+
+  if [ "$_hw_has_install_hooks" -eq 1 ] && [ "$_hw_plugin_present" -eq 1 ]; then
+    # Dual install: healthy only if sentinel exists
+    if [ "$_hw_sentinel_exists" -eq 1 ]; then
+      printf "%b hook wiring: dual install detected; plugin hooks defer to install.sh via cast-hook-owner sentinel\n" "$INFO"
+    else
+      printf "%b hook wiring: double-fire risk — cast-hook-owner sentinel MISSING; plugin + install.sh hooks may both fire\n" "$WARN"
+      printf "      Fix: touch %s  (or re-run: bash install.sh)\n" "$_hw_sentinel"
+      overall_ok=0
+    fi
+  elif [ "$_hw_sentinel_exists" -eq 1 ] && [ "$_hw_has_install_hooks" -eq 0 ]; then
+    # Stale sentinel: no install.sh hooks but sentinel is deferring plugin hooks
+    printf "%b hook wiring: stale cast-hook-owner sentinel — plugin hooks are deferring but no install.sh hooks found\n" "$WARN"
+    printf "      Fix: rm %s  (or re-run: bash install.sh to restore hooks)\n" "$_hw_sentinel"
+    overall_ok=0
+  else
+    # Single install (or neither): no cross-wiring concern
+    printf "%b hook wiring: no double-fire risk\n" "$INFO"
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
