@@ -1,0 +1,16 @@
+{
+  "_generator": "scripts/gen-ecosystem-versions.sh",
+  "cast-agents": "0.6.0",
+  "cast-claudes_journal": "0.3.0",
+  "cast-dash": "0.3.0",
+  "cast-desktop": "1.2.12",
+  "cast-doctor": "0.1.2",
+  "cast-hooks": "0.3.0",
+  "cast-memory": "0.4.0",
+  "cast-observe": "0.3.0",
+  "cast-parallel": "0.1.1",
+  "cast-routines": "0.1.2",
+  "cast-security": "0.4.0",
+  "cast-time": "0.1.1",
+  "cast-website": "1.0.0"
+}

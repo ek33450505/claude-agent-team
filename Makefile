@@ -1,8 +1,9 @@
-.PHONY: docs validate test test-ubuntu ci-local sync hooks
+.PHONY: docs validate test test-ubuntu ci-local sync hooks ecosystem-versions
 
-# Regenerate README stats from live counts
+# Regenerate README stats and ecosystem versions from live counts
 docs:
 	bash scripts/gen-stats.sh
+	bash scripts/gen-ecosystem-versions.sh
 
 # Run CAST validation script (checks installed config integrity)
 validate:
@@ -85,3 +86,7 @@ hooks:
 	git config core.hooksPath .githooks
 	chmod +x .githooks/pre-commit .githooks/pre-push
 	@echo "Pre-commit and pre-push hooks installed."
+
+# Regenerate ecosystem-versions.json from local sibling repos
+ecosystem-versions:
+	bash scripts/gen-ecosystem-versions.sh
