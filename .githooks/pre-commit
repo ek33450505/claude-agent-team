@@ -334,6 +334,17 @@ if command -v jq >/dev/null 2>&1 && [[ -x scripts/gen-cast-stats.sh ]]; then
   fi
 fi
 
+# Keep ecosystem-versions.json in sync with local sibling repos.
+# Runs in --local mode (reads sibling repos under ~/Projects/personal/); if siblings are absent
+# the script reuses committed values and --check passes — safe no-op. Never blocks the commit.
+if command -v jq >/dev/null 2>&1 && [[ -x scripts/gen-ecosystem-versions.sh ]]; then
+  if ! bash scripts/gen-ecosystem-versions.sh --check >/dev/null 2>&1; then
+    bash scripts/gen-ecosystem-versions.sh >/dev/null 2>&1 || true
+    git add ecosystem-versions.json 2>/dev/null || true
+    echo "[CAST pre-commit] refreshed ecosystem-versions.json"
+  fi
+fi
+
 # NOTE: README badge updates are now handled by the post-merge job (readme-badge-sync.yml)
 # This ensures badges are always in sync on main without blocking PRs.
 
