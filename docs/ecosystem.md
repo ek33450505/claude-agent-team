@@ -1,6 +1,6 @@
 # CAST Ecosystem
 
-> Canonical reference for all CAST repositories. Last updated: 2026-05-25.
+> Canonical reference for all CAST repositories. Last updated: 2026-06-16.
 
 ## Core Framework
 
@@ -15,7 +15,7 @@
 | Repo | Description | Latest | Install |
 |---|---|---|---|
 | [cast-hooks](https://github.com/ek33450505/cast-hooks) | 13 auditable hook scripts — observability, safety guards, quality gates. SessionStart, PreToolUse, PostToolUse, PostCompact. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-hooks%22%5D&label=cast-hooks&style=flat-square) | `brew tap ek33450505/cast-hooks && brew install cast-hooks` |
-| [cast-agents](https://github.com/ek33450505/cast-agents) | 23 specialist agents — commit, debug, review, plan, test, research, and more. Agent definitions with YAML frontmatter. v7-synced. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-agents%22%5D&label=cast-agents&style=flat-square) | `brew tap ek33450505/cast-agents && brew install cast-agents` |
+| [cast-agents](https://github.com/ek33450505/cast-agents) | 23 specialist agents — commit, debug, review, plan, test, research, and more. Agent definitions with YAML frontmatter. v8-synced. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-agents%22%5D&label=cast-agents&style=flat-square) | `brew tap ek33450505/cast-agents && brew install cast-agents` |
 | [cast-memory](https://github.com/ek33450505/cast-memory) | Persistent agent memory with FTS5 search, relevance scoring, shared pool, semantic embeddings. Per-agent knowledge accumulation. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-memory%22%5D&label=cast-memory&style=flat-square) | `brew tap ek33450505/cast-memory && brew install cast-memory` |
 | [cast-routines](https://github.com/ek33450505/cast-routines) | Scheduled autonomous Claude Code routines via YAML + cron. Daily briefings, inbox triage, release celebration, weekly cost reports. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-routines%22%5D&label=cast-routines&style=flat-square) | `brew tap ek33450505/cast-routines && brew install cast-routines` |
 | [cast-parallel](https://github.com/ek33450505/cast-parallel) | Parallel agent execution across worktree sessions. Agent Dispatch Manifest (ADM) support. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-parallel%22%5D&label=cast-parallel&style=flat-square) | `brew tap ek33450505/cast-parallel && brew install cast-parallel` |
@@ -26,7 +26,7 @@
 | [cast-dash](https://github.com/ek33450505/cast-dash) | Terminal UI dashboard for live swarm monitoring. 4-panel real-time display (Textual framework). | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-dash%22%5D&label=cast-dash&style=flat-square) | `brew tap ek33450505/cast-dash && brew install cast-dash` |
 | [cast-claudes_journal](https://github.com/ek33450505/cast-claudes_journal) | Session continuity — Claude's Journal auto-injects prior-day context via SessionStart hook. Obsidian vault sync. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-claudes_journal%22%5D&label=cast-claudes_journal&style=flat-square) | `brew tap ek33450505/homebrew-claudes-journal && brew install claudes-journal` |
 | [cast-website](https://github.com/ek33450505/cast-website) | castframework.dev — marketing site and docs portal for the CAST ecosystem. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-website%22%5D&label=cast-website&style=flat-square) | — |
-| [cast-desktop](https://github.com/ek33450505/cast-desktop) | Tauri 2 native app — embedded PTY terminal, command palette, 11 dashboard views. NEW. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-desktop%22%5D&label=cast-desktop&style=flat-square) | `brew tap ek33450505/homebrew-cast-desktop && brew install cast-desktop` |
+| [cast-desktop](https://github.com/ek33450505/cast-desktop) | Tauri 2 native app — embedded PTY terminal, command palette, ~20 dashboard views. v8-synced. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-desktop%22%5D&label=cast-desktop&style=flat-square) | `brew tap ek33450505/homebrew-cast-desktop && brew install cast-desktop` |
 <!-- ECOSYSTEM_END -->
 
 ## Apps & Dashboards
@@ -39,7 +39,7 @@
 
 | Repo | Description | Status |
 |---|---|---|
-| [cast-desktop](https://github.com/ek33450505/cast-desktop) | Tauri 2 native desktop app. Surfaces the CAST observability layer with an embedded PTY terminal, command palette, and 11 dashboard views. Makes the runtime watchable, not inferrable. | NEW — v0.1.0 |
+| [cast-desktop](https://github.com/ek33450505/cast-desktop) | Tauri 2 native desktop app. Surfaces the CAST observability layer with an embedded PTY terminal, command palette, and ~20 dashboard views. Makes the runtime watchable, not inferrable. | Shipping — v1.2.12 |
 
 ## Meta / Portfolio
 
