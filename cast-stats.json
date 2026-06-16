@@ -2,12 +2,12 @@
   "version": "8.0.0",
   "versionTag": "v8.0.0",
   "agents": 23,
-  "tests": 1736,
+  "tests": 1752,
   "tables": 36,
   "commands": 20,
   "skills": 18,
   "packages": 13,
-  "updated": "2026-06-15",
+  "updated": "2026-06-16",
   "_source": "https://raw.githubusercontent.com/ek33450505/claude-agent-team/main/cast-stats.json",
   "_generator": "scripts/gen-cast-stats.sh"
 }
