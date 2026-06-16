@@ -15,7 +15,7 @@
 #   - CAST_ECOSYSTEM_DOC, CAST_ECOSYSTEM_ROOT, CAST_ECOSYSTEM_VERSIONS_OUT all
 #     point into per-test mktemp dirs — the real ecosystem-versions.json is never read
 #     or written
-#   - No --remote flag is ever invoked (offline, hermetic)
+#   - All --remote invocations use a PATH-shimmed curl stub (offline, hermetic) — no real network
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -244,4 +244,172 @@ _run_script() {
   _run_script --check
   assert_failure
   assert_output --partial "not found"
+}
+
+# ---------------------------------------------------------------------------
+# Remote test helpers
+# ---------------------------------------------------------------------------
+
+# Create a PATH-shimmed curl stub and three fixture ecosystem docs.
+# Sets: STUB_DIR, REMOTE_DOC_AB, REMOTE_DOC_A, REMOTE_DOC_UNRESOLVABLE
+#
+# Stub behaviour:
+#   cast-remote-a  /VERSION         → "3.0.0", exit 0   (VERSION path)
+#   cast-remote-b  /VERSION         → exit 22            (simulate HTTP 404 / -f fail)
+#   cast-remote-b  /package.json    → {"version":"4.0.0"}, exit 0  (pkg fallback)
+#   cast-remote-unresolvable / *    → exit 22            (fully unresolvable)
+_init_remote_fixtures() {
+  STUB_DIR="${FIXTURE_DIR}/stub-bin"
+  mkdir -p "$STUB_DIR"
+  cat > "${STUB_DIR}/curl" <<'STUB'
+#!/usr/bin/env bash
+# Hermetic curl stub — parses URL arg, returns fixture data, zero network calls.
+url=""
+for arg in "$@"; do
+  case "$arg" in
+    -*) ;;
+    *)  url="$arg" ;;
+  esac
+done
+slug="" ; file=""
+if [[ "$url" =~ raw\.githubusercontent\.com/ek33450505/([^/]+)/HEAD/([^/]+) ]]; then
+  slug="${BASH_REMATCH[1]}"
+  file="${BASH_REMATCH[2]}"
+fi
+case "${slug}/${file}" in
+  "cast-remote-a/VERSION")
+    printf '3.0.0\n'; exit 0 ;;
+  "cast-remote-b/VERSION")
+    exit 22 ;;
+  "cast-remote-b/package.json")
+    printf '{"name":"cast-remote-b","version":"4.0.0"}\n'; exit 0 ;;
+  "cast-remote-unresolvable/VERSION"|"cast-remote-unresolvable/package.json")
+    exit 22 ;;
+  *)
+    exit 22 ;;
+esac
+STUB
+  chmod +x "${STUB_DIR}/curl"
+
+  # Two slugs: one VERSION-based, one package.json-based
+  REMOTE_DOC_AB="${FIXTURE_DIR}/remote-ecosystem-ab.md"
+  cat > "$REMOTE_DOC_AB" <<'EOF'
+# CAST Ecosystem (remote fixture)
+
+<!-- ECOSYSTEM_START -->
+| [cast-remote-a](https://github.com/ek33450505/cast-remote-a) | VERSION-based |
+| [cast-remote-b](https://github.com/ek33450505/cast-remote-b) | package.json fallback |
+<!-- ECOSYSTEM_END -->
+EOF
+
+  # Single slug: VERSION-based only (for --check tests)
+  REMOTE_DOC_A="${FIXTURE_DIR}/remote-ecosystem-a.md"
+  cat > "$REMOTE_DOC_A" <<'EOF'
+# CAST Ecosystem (remote fixture, single slug)
+
+<!-- ECOSYSTEM_START -->
+| [cast-remote-a](https://github.com/ek33450505/cast-remote-a) | VERSION-based |
+<!-- ECOSYSTEM_END -->
+EOF
+
+  # Single slug: fully unresolvable (for committed-fallback test)
+  REMOTE_DOC_UNRESOLVABLE="${FIXTURE_DIR}/remote-ecosystem-unresolvable.md"
+  cat > "$REMOTE_DOC_UNRESOLVABLE" <<'EOF'
+# CAST Ecosystem (unresolvable fixture)
+
+<!-- ECOSYSTEM_START -->
+| [cast-remote-unresolvable](https://github.com/ek33450505/cast-remote-unresolvable) | always fails |
+<!-- ECOSYSTEM_END -->
+EOF
+}
+
+# Run the script in --remote mode with the PATH-shimmed curl stub.
+# Requires _init_remote_fixtures to have been called in the same test.
+# Usage: _run_remote <doc_path> [extra_script_flags...]
+_run_remote() {
+  local doc="$1"; shift
+  run env \
+    PATH="${STUB_DIR}:${PATH}" \
+    CAST_ECOSYSTEM_DOC="$doc" \
+    CAST_ECOSYSTEM_ROOT="$FIXTURE_REPOS" \
+    CAST_ECOSYSTEM_VERSIONS_OUT="$FIXTURE_OUT" \
+    bash "$SCRIPT" --remote "$@"
+}
+
+# ---------------------------------------------------------------------------
+# (h) --remote write mode: VERSION path resolved via curl stub
+# ---------------------------------------------------------------------------
+
+@test "--remote: resolves cast-remote-a via VERSION stub and writes correct version" {
+  _init_remote_fixtures
+  _run_remote "$REMOTE_DOC_AB"
+  assert_success
+  run jq -r '."cast-remote-a"' < "$FIXTURE_OUT"
+  assert_output "3.0.0"
+}
+
+@test "--remote: output JSON has _generator field (write mode)" {
+  _init_remote_fixtures
+  _run_remote "$REMOTE_DOC_AB"
+  assert_success
+  run jq -r '."_generator"' < "$FIXTURE_OUT"
+  assert_output "scripts/gen-ecosystem-versions.sh"
+}
+
+# ---------------------------------------------------------------------------
+# (i) --remote: package.json fallback (VERSION stub exits 22, pkg stub succeeds)
+# ---------------------------------------------------------------------------
+
+@test "--remote: resolves cast-remote-b via package.json when VERSION returns 404 (exit 22)" {
+  _init_remote_fixtures
+  _run_remote "$REMOTE_DOC_AB"
+  assert_success
+  run jq -r '."cast-remote-b"' < "$FIXTURE_OUT"
+  assert_output "4.0.0"
+}
+
+# ---------------------------------------------------------------------------
+# (j) --remote --check: exits 0 when in sync, exits 1 on drift
+# ---------------------------------------------------------------------------
+
+@test "--remote --check: exits 0 when stub-resolved versions match committed output" {
+  _init_remote_fixtures
+  # Write first so committed output holds the stub-resolved version
+  _run_remote "$REMOTE_DOC_A"
+  assert_success
+
+  # --check re-resolves via stub (3.0.0) and compares to committed (3.0.0) → in sync
+  _run_remote "$REMOTE_DOC_A" --check
+  assert_success
+  assert_output --partial "in sync"
+}
+
+@test "--remote --check: exits 1 (DRIFT) when committed output differs from stub-resolved version" {
+  _init_remote_fixtures
+  # Pre-seed committed file with wrong version for cast-remote-a
+  printf '{"_generator":"scripts/gen-ecosystem-versions.sh","cast-remote-a":"9.9.9"}\n' \
+    > "$FIXTURE_OUT"
+
+  # Stub resolves 3.0.0; committed says 9.9.9 → drift detected
+  _run_remote "$REMOTE_DOC_A" --check
+  assert_failure
+  assert_output --partial "DRIFT"
+}
+
+# ---------------------------------------------------------------------------
+# (k) Committed-fallback SUCCESS: unresolvable slug reuses committed value
+# ---------------------------------------------------------------------------
+
+@test "--remote: unresolvable slug falls back to committed value without failing" {
+  _init_remote_fixtures
+  # Pre-seed committed file with the last-known version for the unresolvable slug
+  printf '{"_generator":"scripts/gen-ecosystem-versions.sh","cast-remote-unresolvable":"0.1.0"}\n' \
+    > "$FIXTURE_OUT"
+
+  # Stub returns exit 22 for both VERSION and package.json on this slug;
+  # script must fall back to the committed value ("0.1.0") and exit 0
+  _run_remote "$REMOTE_DOC_UNRESOLVABLE"
+  assert_success
+  run jq -r '."cast-remote-unresolvable"' < "$FIXTURE_OUT"
+  assert_output "0.1.0"
 }
