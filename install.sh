@@ -474,7 +474,11 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     fi
 
     # Install cast-integrity.plist — daily regression-aware integrity check (9:15 AM).
-    if [ -f "$SCRIPT_DIR/macos/cast-integrity.plist" ]; then
+    # Sunset guard: this is a jarvis/noisy-infra job disabled by default on personal machines.
+    # Set CAST_JARVIS_LOCAL=1 to re-enable:
+    #   CAST_JARVIS_LOCAL=1 bash install.sh
+    if [[ "${CAST_JARVIS_LOCAL:-0}" == "1" ]]; then
+      if [ -f "$SCRIPT_DIR/macos/cast-integrity.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.integrity.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-integrity.plist" > "$PLIST_DEST"
 
@@ -485,6 +489,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         else
             warn "  launchctl load failed for $PLIST_DEST — verify manually"
         fi
+      fi
+    else
+      info "  Skipped (sunset — set CAST_JARVIS_LOCAL=1 to enable): com.cast.integrity"
     fi
 
     # Install cast-log-compress.plist — daily runtime rotation (events/logs/legacy
@@ -502,7 +509,10 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 
     # Install cast-cron-summary.plist — daily read-only cast.db summary at 18:00.
     # Replaces the orphaned job that shelled out to the interactive claude CLI (401 + sandbox).
-    if [ -f "$SCRIPT_DIR/macos/cast-cron-summary.plist" ]; then
+    # Sunset guard: jarvis/noisy-infra job — disabled by default on personal machines.
+    # Set CAST_JARVIS_LOCAL=1 to re-enable.
+    if [[ "${CAST_JARVIS_LOCAL:-0}" == "1" ]]; then
+      if [ -f "$SCRIPT_DIR/macos/cast-cron-summary.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.cron-summary.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-cron-summary.plist" > "$PLIST_DEST"
         launchctl unload "$PLIST_DEST" 2>/dev/null || true
@@ -511,6 +521,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         else
             warn "  launchctl load failed for $PLIST_DEST — verify manually"
         fi
+      fi
+    else
+      info "  Skipped (sunset — set CAST_JARVIS_LOCAL=1 to enable): com.cast.cron-summary"
     fi
 
     # Install cast-branch-groomer.plist — weekly (Sun 06:00) multi-repo grooming with
