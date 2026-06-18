@@ -487,6 +487,45 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         fi
     fi
 
+    # Install cast-log-compress.plist — daily runtime rotation (events/logs/legacy
+    # backups) at 03:45. Replaces the orphaned, broken hand-installed log-compress.
+    if [ -f "$SCRIPT_DIR/macos/cast-log-compress.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.log-compress.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-log-compress.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.log-compress)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-cron-summary.plist — daily read-only cast.db summary at 18:00.
+    # Replaces the orphaned job that shelled out to the interactive claude CLI (401 + sandbox).
+    if [ -f "$SCRIPT_DIR/macos/cast-cron-summary.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.cron-summary.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-cron-summary.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.cron-summary)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-branch-groomer.plist — weekly (Sun 06:00) multi-repo grooming with
+    # live auto-apply on LIVE repos (CAST_GROOM_AUTO_APPLY=1 set in the plist env).
+    if [ -f "$SCRIPT_DIR/macos/cast-branch-groomer.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.branch-groomer.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-branch-groomer.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.branch-groomer)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
     # Install cast-litestream.plist — continuous DB replication daemon (opt-in).
     # Gated on litestream being installed; idempotently removes the plist when absent.
     PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.litestream.plist"

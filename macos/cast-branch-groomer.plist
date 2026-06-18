@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cast.branch-groomer</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HOME__/.claude/scripts/cast-branch-groomer-schedule.sh</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>6</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.claude/logs/groomer.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.claude/logs/groomer.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    <!-- Scheduled grooming applies live deletions on LIVE repos only.
+         The script default stays dry-run; this env enables --apply. -->
+    <key>CAST_GROOM_AUTO_APPLY</key>
+    <string>1</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
