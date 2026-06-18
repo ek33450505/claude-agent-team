@@ -38,6 +38,33 @@ MARKER="# CAST-MANAGED"
 mkdir -p "$LOGS_DIR"
 mkdir -p "$CRON_SCRIPTS_DIR"
 
+# ── Sunset guard — jarvis + noisy-infra jobs ─────────────────────────────────
+# These cron jobs correspond to launchd-managed tasks that are disabled on this
+# personal machine by default (jarvis / noisy-infra sunset, 2026-06-18).
+# Re-running cast-cron-setup.sh will NOT reinstall them unless CAST_JARVIS_LOCAL=1
+# is explicitly set in the environment.
+#
+# The jobs remain in the repo as a feature — this guard is local-machine policy only.
+#
+# To re-enable locally:
+#   CAST_JARVIS_LOCAL=1 bash ~/.claude/scripts/cast-cron-setup.sh
+#
+# Labels covered (Group A / Group B from the disable plan):
+#   morning      → com.cast.cron-morning
+#   summary      → com.cast.cron-summary
+#   cron-health  → com.cast.cron-health
+declare -a SUNSET_LABELS=(morning summary cron-health)
+
+# Helper: returns 0 if job_name is in the sunset list
+_is_sunset() {
+  local name="$1"
+  local sl
+  for sl in "${SUNSET_LABELS[@]}"; do
+    [[ "$name" == "$sl" ]] && return 0
+  done
+  return 1
+}
+
 # ── Cron entry definitions ────────────────────────────────────────────────────
 # Each entry: "schedule|job_name"
 # The actual command for each job is defined in _write_cron_script() below.
@@ -189,6 +216,14 @@ cmd_install() {
 
   for entry in "${CRON_ENTRIES[@]}"; do
     IFS='|' read -r schedule job_name <<< "$entry"
+
+    # Sunset guard: skip jarvis/noisy-infra jobs unless explicitly opted in.
+    # Set CAST_JARVIS_LOCAL=1 to override on this machine.
+    if [[ "${CAST_JARVIS_LOCAL:-0}" != "1" ]] && _is_sunset "$job_name"; then
+      echo "  skipped (sunset — set CAST_JARVIS_LOCAL=1 to enable): ${job_name}"
+      skipped=$((skipped + 1))
+      continue
+    fi
 
     # Always (re)write the script file to keep it current
     _write_cron_script "$job_name"
