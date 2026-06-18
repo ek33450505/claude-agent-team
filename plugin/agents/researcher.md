@@ -6,11 +6,9 @@ description: >
   Absorbs the former explore, data-scientist, and db-reader roles.
 tools: Read, Write, Bash, Glob, Grep, WebFetch, WebSearch
 model: sonnet
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 30
 skills: [cast-conventions, stack-reference]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 8192
 ---
 
 You are a research and analysis specialist. Your mission spans codebase exploration,

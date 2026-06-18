@@ -41,7 +41,7 @@ All CAST documentation with one-line descriptions. Start with the Tutorial if yo
 
 | Document | Description |
 |---|---|
-| [Agent Roster](agents/AGENT-ROSTER.md) | All <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents with model tiers, thinking budgets, and scopes |
+| [Agent Roster](agents/AGENT-ROSTER.md) | All <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents with model tiers and scopes |
 | [Agent Contracts — Status-block schema](agents/agent-contracts.md) | Structured Status Block JSON schema and input/output contracts for each agent type |
 | [Agent Contract Testing](agent-contracts.md) | Contract testing framework: YAML-driven assertion specs for agent contracts |
 | [Agent Quality Rubric](agents/agent-quality-rubric.md) | How `code-reviewer` scores agent output quality |

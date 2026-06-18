@@ -113,7 +113,7 @@ code-writer.md       debugger.md       docs.md
 ```
 
 You should see 23 `.md` files. Each file is a fully-configured agent definition with
-YAML frontmatter specifying the model, memory, and thinking budget for that specialist.
+YAML frontmatter specifying the model and memory for that specialist.
 
 ---
 

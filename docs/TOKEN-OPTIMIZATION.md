@@ -17,7 +17,7 @@ CAST uses multiple optimization layers to reduce token spend without sacrificing
 | **RTK Hook** | `scripts/cast-rtk-install.sh` — 60-89% compression on tool outputs; optional install | [OPEN] opt-in |
 | **Context Audit** | `scripts/audit-context-size.sh` — measures always-loaded context; warns if >500 lines | [OPEN] manual |
 | **Compact Discipline** | Auto-trigger at 40 tool calls/session — suggests `/compact` via reminder hook | [PIPELINE] |
-| **Thinking Budgets** | `config/thinking-budgets.json` — per-agent extended thinking tiers (0–8192 tokens) | [PIPELINE] |
+| **Thinking Budgets** | Removed — `config/thinking-budgets.json` and `thinking_budget:` frontmatter were dead code (Claude Code does not read them); use native `effort:` frontmatter instead | [REMOVED] |
 
 **Net result:** ~30-50% reduction in swarm token spend vs. naive multi-agent dispatch.
 

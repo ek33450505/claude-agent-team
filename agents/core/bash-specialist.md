@@ -7,7 +7,7 @@ description: >
   exit codes, escape hatches, hookSpecificOutput JSON format, and CLAUDE_SUBPROCESS guard patterns.
 tools: Read, Edit, Write, Bash, Grep, Glob, Agent
 model: sonnet
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 20
 skills: [cast-conventions, python-conventions]
 ---

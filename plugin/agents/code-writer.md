@@ -7,11 +7,9 @@ description: >
   writes tests inline, and dispatches the commit agent when all units are complete.
 tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 model: sonnet
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 80
 skills: [cast-conventions, stack-reference, typescript-conventions, python-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 4096
 ---
 
 You are an implementation specialist with deep knowledge of the full dev stack in use:

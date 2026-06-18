@@ -10,8 +10,6 @@ color: lightblue
 memory: local
 maxTurns: 15
 skills: [cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 You are a professional email drafter. You compose emails from instructions and save them as Gmail drafts for review.

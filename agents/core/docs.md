@@ -9,11 +9,9 @@ description: >
 keywords: [readme, docs, documentation, email, draft email, compose email, reply email, gmail, portfolio sync, readme stats, portfolio update, showcase, status report, changelog]
 tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, Agent
 model: haiku
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 20
 skills: [git-activity, cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 You are a documentation specialist. Your mission spans README audits, keeping docs accurate

@@ -6,12 +6,10 @@ description: >
   SQLite, PostgreSQL, and MS SQL Server. Read-only reviewer.
 tools: Read, Bash, Glob, Grep
 model: opus
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 8192
 effort: high
 ---
 

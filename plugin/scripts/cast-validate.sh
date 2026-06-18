@@ -485,20 +485,18 @@ echo ""
 
 # --- Check 13: config agent-name cross-check (no ghost agents) ---
 AGENTS_DIR="$HOME/.claude/agents"
-THINKING_BUDGETS="$HOME/.claude/config/thinking-budgets.json"
 CHAIN_MAP="$HOME/.claude/config/chain-map.json"
 POLICIES_JSON="$HOME/.claude/config/policies.json"
 
 if [[ ! -d "$AGENTS_DIR" ]]; then
   warn "Agent cross-check: $AGENTS_DIR not found — cannot verify config agent names"
 else
-  GHOST_RESULT=$(python3 - "$AGENTS_DIR" "$THINKING_BUDGETS" "$CHAIN_MAP" "$POLICIES_JSON" <<'PYEOF'
+  GHOST_RESULT=$(python3 - "$AGENTS_DIR" "$CHAIN_MAP" "$POLICIES_JSON" <<'PYEOF'
 import sys, os, json, glob
 
 agents_dir    = sys.argv[1]
-tb_path       = sys.argv[2]
-cm_path       = sys.argv[3]
-pol_path      = sys.argv[4]
+cm_path       = sys.argv[2]
+pol_path      = sys.argv[3]
 
 # Build canonical agent set from installed core agents
 canonical = {
@@ -507,19 +505,6 @@ canonical = {
 }
 
 ghosts = []
-
-# --- thinking-budgets.json: overrides keys ---
-if os.path.isfile(tb_path):
-    try:
-        with open(tb_path) as f:
-            tb = json.load(f)
-        for name in tb.get("overrides", {}).keys():
-            if name not in canonical:
-                ghosts.append(f"thinking-budgets.json/overrides: {name!r}")
-    except Exception as e:
-        ghosts.append(f"thinking-budgets.json: could not verify ({e})")
-else:
-    pass  # Optional file — absence is OK, nothing to cross-check
 
 # --- chain-map.json: top-level keys (skip _comment) and successor values ---
 if os.path.isfile(cm_path):
@@ -564,7 +549,7 @@ else:
 PYEOF
 )
   if [[ "$GHOST_RESULT" == OK ]]; then
-    pass "Agent cross-check: no ghost agent names in thinking-budgets.json, chain-map.json, policies.json"
+    pass "Agent cross-check: no ghost agent names in chain-map.json, policies.json"
   elif [[ "$GHOST_RESULT" == GHOSTS:* ]]; then
     DETAILS="${GHOST_RESULT#GHOSTS:}"
     IFS='|' read -ra GHOST_LIST <<< "$DETAILS"

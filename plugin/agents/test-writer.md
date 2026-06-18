@@ -6,7 +6,7 @@ description: >
   existing conventions. Use after code-writer completes a logical unit.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 50
 skills: [cast-conventions, typescript-conventions, python-conventions]
 ---

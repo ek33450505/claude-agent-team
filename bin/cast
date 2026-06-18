@@ -271,7 +271,6 @@ model: haiku
 # ── CAST-extension fields ────────────────────────────────────────────────────
 maxTurns: 20
 skills: [cast-conventions]
-thinking_budget: 0
 ---
 
 # ${agent_name}

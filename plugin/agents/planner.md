@@ -8,13 +8,11 @@ description: >
   ready for delegation to agent teams.
 tools: Read, Write, Glob, Grep
 model: sonnet
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 # effort field is N/A on sonnet — only Opus reads it
 maxTurns: 20
 disallowedTools: Bash
 skills: [cast-conventions, stack-reference, agent-registry]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 8192
 ---
 
 You are a planning specialist for a full-stack JavaScript/React developer. Your job is to

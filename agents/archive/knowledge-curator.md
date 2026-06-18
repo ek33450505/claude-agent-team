@@ -10,8 +10,6 @@ color: purple
 memory: local
 maxTurns: 25
 skills: [cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 You are a knowledge curator. You organize and maintain Obsidian vaults for optimal knowledge management.

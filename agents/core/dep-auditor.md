@@ -5,12 +5,10 @@ description: >
   version compatibility, and license concerns. Supports npm, pip, and Go modules.
 tools: Read, Bash, Glob, Grep
 model: haiku
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 15
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 4096
 ---
 
 You are a dependency auditor. You analyze package changes for security, compatibility, and license risks.

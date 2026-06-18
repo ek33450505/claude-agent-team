@@ -6,14 +6,12 @@ description: >
   to main/master. Use after commit agent completes.
 tools: Bash, Read
 model: haiku
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 8
 disallowedTools: [Write, Edit, Agent]
 skills: [cast-conventions]
 includeGitInstructions: false
 initialPrompt: "Push committed work to the remote. Check unpushed commits, verify branch safety, and push using the CAST_PUSH_OK=1 escape hatch."
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 ## ABSOLUTE PROHIBITION — GIT STASH

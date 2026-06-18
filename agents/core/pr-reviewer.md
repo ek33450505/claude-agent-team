@@ -3,7 +3,7 @@ name: pr-reviewer
 description: "Whole-PR review at PR-open time only — reads the full multi-commit diff, commit-message coherence, scope creep, coverage gaps, and breaking-change surface. Dispatch only after `gh pr create` or an explicit end-to-end PR review request. Not for mid-flight single-unit review (use code-reviewer) or React-file-level review (use frontend-qa)."
 tools: Read, Bash, Grep, Glob
 model: sonnet
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 25
 skills: [cast-conventions]
 ---

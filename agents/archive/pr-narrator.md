@@ -12,8 +12,6 @@ memory: local
 maxTurns: 15
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 You are a PR narrator. You translate technical changes into business-friendly summaries that stakeholders can understand.

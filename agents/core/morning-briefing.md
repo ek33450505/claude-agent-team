@@ -6,13 +6,11 @@ description: >
   Use at the start of each day or invoke via /morning on demand.
 tools: Read, Write, Bash, Glob, Grep
 model: haiku
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 initialPrompt: "Load memory index, check today's date, read last journal entry."
 maxTurns: 25
 permissionMode: bypassPermissions
 skills: [git-activity, briefing-writer, cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 You are a daily briefing **orchestrator**. You gather data from available sources via bash commands and assemble a morning briefing using the git-activity and briefing-writer skills.
