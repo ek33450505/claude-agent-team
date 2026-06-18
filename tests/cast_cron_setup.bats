@@ -54,7 +54,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "install: crontab entry for morning references .sh script file, not inline -p" {
-  run bash "$CRON_SH"
+  run env CAST_JARVIS_LOCAL=1 bash "$CRON_SH"
   assert_success
   # The stub crontab captures what was piped in
   assert [ -f "${HOME}/.stub-crontab" ]
@@ -85,13 +85,13 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "install: generates morning.sh script file" {
-  run bash "$CRON_SH"
+  run env CAST_JARVIS_LOCAL=1 bash "$CRON_SH"
   assert_success
   assert [ -f "${HOME}/.cast/cron/morning.sh" ]
 }
 
 @test "install: generated morning.sh is executable" {
-  run bash "$CRON_SH"
+  run env CAST_JARVIS_LOCAL=1 bash "$CRON_SH"
   assert_success
   assert [ -x "${HOME}/.cast/cron/morning.sh" ]
 }
@@ -103,7 +103,7 @@ teardown() {
 }
 
 @test "install: all 7 cron script files are generated" {
-  run bash "$CRON_SH"
+  run env CAST_JARVIS_LOCAL=1 bash "$CRON_SH"
   assert_success
   local count
   count=$(ls "${HOME}/.cast/cron/"*.sh 2>/dev/null | wc -l | tr -d ' ')
@@ -126,4 +126,34 @@ teardown() {
   assert_success
   run grep -F '${HOME}/.local/bin/cast' "${HOME}/.cast/cron/tidy.sh"
   assert_success
+}
+
+# ---------------------------------------------------------------------------
+# Default-behavior coverage: sunset guard (CAST_JARVIS_LOCAL not set)
+# Proves jarvis/noisy-infra jobs stay off unless explicitly opted in.
+# ---------------------------------------------------------------------------
+
+@test "install (default): sunset scripts are NOT generated without CAST_JARVIS_LOCAL" {
+  run bash "$CRON_SH"
+  assert_success
+  assert [ ! -f "${HOME}/.cast/cron/morning.sh" ]
+  assert [ ! -f "${HOME}/.cast/cron/summary.sh" ]
+  assert [ ! -f "${HOME}/.cast/cron/cron-health.sh" ]
+}
+
+@test "install (default): generates exactly 4 non-sunset scripts without CAST_JARVIS_LOCAL" {
+  run bash "$CRON_SH"
+  assert_success
+  local count
+  count=$(ls "${HOME}/.cast/cron/"*.sh 2>/dev/null | wc -l | tr -d ' ')
+  [ "$count" -eq 4 ]
+}
+
+@test "install (default): morning is not scheduled in crontab without CAST_JARVIS_LOCAL" {
+  run bash "$CRON_SH"
+  assert_success
+  # non-sunset jobs still write the stub-crontab
+  assert [ -f "${HOME}/.stub-crontab" ]
+  run grep 'morning' "${HOME}/.stub-crontab"
+  assert_failure
 }
