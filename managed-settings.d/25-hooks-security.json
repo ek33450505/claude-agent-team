@@ -24,13 +24,12 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Write|Edit",
         "hooks": [
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/pre-tool-guard.sh",
-            "if": "Bash(git *)",
-            "timeout": 3
+            "timeout": 5
           }
         ]
       },

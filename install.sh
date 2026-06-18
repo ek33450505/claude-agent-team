@@ -289,6 +289,11 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
     esac
 done
 
+# Harden fragment permissions — fragments may contain tokens/paths; 644 is too open
+chmod 600 "$CLAUDE_DIR"/managed-settings.d/*.json 2>/dev/null || true
+# settings.local.json holds per-install secrets/overrides; tighten if present
+[ -f "$CLAUDE_DIR/settings.local.json" ] && chmod 600 "$CLAUDE_DIR/settings.local.json" || true
+
 # --- Regenerate ~/.claude/settings.json from fragments ---
 if [ -x "$CLAUDE_DIR/scripts/cast-merge-settings.sh" ]; then
     if bash "$CLAUDE_DIR/scripts/cast-merge-settings.sh" "$CLAUDE_DIR/settings.json" 2>&1 | tail -1; then
