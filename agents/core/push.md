@@ -7,7 +7,7 @@ description: >
 tools: Bash, Read
 model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────
-maxTurns: 8
+maxTurns: 15
 disallowedTools: [Write, Edit, Agent]
 skills: [cast-conventions]
 includeGitInstructions: false
