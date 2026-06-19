@@ -69,6 +69,20 @@ elif stack_profile_raw:
 else:
     sys.exit(0)
 
+# ── Sanitize field values ─────────────────────────────────────────────────────
+import re as _re
+
+def _sanitize(s: str) -> str:
+    """Cap at 80 chars and neutralize [CAST- directive tokens."""
+    s = s[:80]
+    s = _re.sub(r'\[CAST-', '[CAST_', s)
+    return s
+
+fw         = _sanitize(fw)
+test_cmd   = _sanitize(test_cmd)
+lint_cmd   = _sanitize(lint_cmd)
+repo_class = _sanitize(repo_class)
+
 # ── Line 1: stack info ────────────────────────────────────────────────────────
 parts = []
 if fw:

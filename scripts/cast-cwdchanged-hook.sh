@@ -38,7 +38,8 @@ import json, os
 try:
     with open(os.environ['CAST_JSON_PATH']) as f:
         d = json.load(f)
-        print(d.get('repo_class', 'personal'))
+        val = d.get('repo_class', 'personal')
+        print(val if val in ('personal', 'work') else 'personal')
 except Exception:
     print('personal')
 PYTHON_BLOCK

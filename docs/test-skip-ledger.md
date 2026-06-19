@@ -32,7 +32,7 @@ A skip without a recorded rationale is indistinguishable from lost coverage — 
 
 ## Remaining Intentional Skips
 
-**Total call sites: 18** across 12 files (as of 2026-06-12 post-foundation-tail fix).
+**Total call sites: 25** across 16 files (as of 2026-06-19 audit documentation fix, includes 7 newly-documented sites from 2026-06-18 audit).
 
 Note: a single `setup()`-level skip gates every `@test` in a file with one call. Those are marked **[setup-level]** and the gated test count is noted — a single ledger line represents multiple suppressed tests.
 
@@ -56,6 +56,13 @@ Note: a single `setup()`-level skip gates every `@test` in a file with one call.
 | `tests/install-personal.bats` | 86 | 1 | Same — `agents/personal/` absent | Conditional (archived feature) | Same as above |
 | `tests/agents/effort-frontmatter.bats` | 147 | 1 | `agents/personal/` absent (same Phase 4.5 archive) | Conditional (archived feature) | Same as above |
 | `tests/skills/deep-research.bats` | 19 | 1 | Network-free regression harness requires `node` binary | Environment (optional dependency) | Runs where `node` is installed (GitHub CI runners include it; development machines with Node) |
+| `tests/cast-integrity.bats` | 350 | 1 | `launchctl` command available on macOS; skip gates a Linux/CI-only test path that verifies INFO-skip behavior when launchctl is absent | Environment (platform) | Runs automatically on Linux systems without launchctl; manually testable on CI runners |
+| `tests/cast-integrity.bats` | 366 | 1 | Same as above — `launchctl` present on macOS, test only meaningful on systems without it | Environment (platform) | Same as above |
+| `tests/cast-litestream-setup.bats` | 190 | 1 | plist source file (`macos/cast-litestream.plist`) not present in checkout — test validates plist structure but fixture is in version control | Conditional (fixture path) | Fires when `macos/cast-litestream.plist` exists in the repo (standard in all releases) |
+| `tests/cast-litestream-verify.bats` | 173 | 1 | `litestream` binary not installed in environment | Environment (optional dependency) | Runs on systems with litestream installed; included in GitHub CI runners; un-skip requires `litestream` install |
+| `tests/cast-litestream-verify.bats` | 174 | 1 | `sqlite3` binary not installed in environment | Environment (optional dependency) | Runs on systems with sqlite3 installed (virtually all macOS and Linux systems) |
+| `tests/cast-litestream-verify.bats` | 204 | 1 | Litestream did not create replica files within 3 seconds (environment timing/I/O slow) — test allows replica creation delay, skips if deadline not met | Conditional (environment timing) | Fires when litestream can create replica files within 3s on the test harness |
+| `tests/cast-plugin-smoke.bats` | 185 | 1 | `claude` CLI command not available in environment | Environment (optional dependency) | Runs on systems with Claude CLI installed; included in GitHub CI runners; un-skip requires `claude` CLI install |
 
 ---
 

@@ -20,19 +20,19 @@ if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 set -euo pipefail
 
 INPUT="$(cat)"
-TOOL="$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")"
-CMD="$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")"
+# Extract tool_name, command, and file_path in one python3 cold-start (saves ~2 spawns vs prior 3).
+# NUL-delimited read preserves multiline CMD without truncation; bash-3.2-compatible.
+{ IFS= read -r -d '' TOOL; IFS= read -r -d '' CMD; IFS= read -r -d '' FILE_PATH; } < <(printf '%s' "$INPUT" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+ti = d.get('tool_input', {})
+sys.stdout.write(d.get('tool_name','') + '\0' + ti.get('command','') + '\0' + ti.get('file_path', ti.get('path','')) + '\0')
+" 2>/dev/null) || { TOOL=''; CMD=''; FILE_PATH=''; }
 
 # --- Policy engine: path-based guard for Write/Edit tool calls ---
 # Evaluates config/policies.json rules. Blocks or warns based on severity.
 # Escape hatch: set CAST_POLICY_OVERRIDE=1 in env to skip block (not warn) policies.
 if [ "$TOOL" = "Write" ] || [ "$TOOL" = "Edit" ]; then
-  FILE_PATH="$(echo "$INPUT" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-ti = d.get('tool_input', {})
-print(ti.get('file_path', ti.get('path', '')))" 2>/dev/null || echo "")"
-
   if [ -n "$FILE_PATH" ]; then
     # TTL sweep: remove agent-status files older than 2 hours (matches SESSION_TIMEOUT=7200)
     find "${CLAUDE_DIR:-$HOME/.claude}/agent-status/" -name "*.json" -mmin +120 -delete 2>/dev/null || true

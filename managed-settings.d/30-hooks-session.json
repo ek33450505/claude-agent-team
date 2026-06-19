@@ -75,7 +75,7 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-subagent-stop-hook.sh",
-            "timeout": 5,
+            "timeout": 10,
             "async": true
           }
         ]
