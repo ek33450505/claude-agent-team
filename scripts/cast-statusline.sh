@@ -13,13 +13,18 @@ INPUT="$(cat 2>/dev/null || true)"
 
 # Try jq first, fall back to python3
 if command -v jq >/dev/null 2>&1; then
-  agent=$(echo "$INPUT" | jq -r '.agent.name // "main"' 2>/dev/null)
-  cost=$(echo "$INPUT" | jq -r '.cost.total_cost_usd // 0' 2>/dev/null)
-  ctx_pct=$(echo "$INPUT" | jq -r '.context_window.used_percentage // 0' 2>/dev/null)
-  rate_pct=$(echo "$INPUT" | jq -r '.rate_limits.five_hour.used_percentage // empty' 2>/dev/null)
-  model=$(echo "$INPUT" | jq -r '.model.display_name // "n/a"' 2>/dev/null)
-  session=$(echo "$INPUT" | jq -r '.session_name // empty' 2>/dev/null)
-  session_id=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+  # One jq call; join with SOH (\x01 — non-whitespace so IFS does not collapse
+  # consecutive delimiters) to preserve empty field positions for absent keys.
+  IFS=$'\x01' read -r agent cost ctx_pct rate_pct model session session_id <<< \
+    "$(echo "$INPUT" | jq -r '[
+        (.agent.name // "main"),
+        (.cost.total_cost_usd // 0),
+        (.context_window.used_percentage // 0),
+        (.rate_limits.five_hour.used_percentage // ""),
+        (.model.display_name // "n/a"),
+        (.session_name // ""),
+        (.session_id // "")
+      ] | join("\u0001")' 2>/dev/null || printf 'main\0010\0010\001\001n/a\001\001')"
 else
   # jq not available — use safe static defaults
   agent="main"; cost="0"; ctx_pct="0"; rate_pct=""; model="n/a"; session=""; session_id=""

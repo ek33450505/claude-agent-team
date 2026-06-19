@@ -11,19 +11,10 @@
       "cooldown_seconds": 30
     },
     {
-      "pattern": "**/*.sql",
-      "event": "modified",
-      "action": "enqueue",
-      "agent": "db-architect",
-      "task": "Review SQL changes in: {file}",
-      "priority": 5,
-      "cooldown_seconds": 60
-    },
-    {
       "pattern": "CLAUDE.md",
       "event": "modified",
       "action": "enqueue",
-      "agent": "doc-updater",
+      "agent": "docs",
       "task": "Review CLAUDE.md changes and update agent documentation: {file}",
       "priority": 7,
       "cooldown_seconds": 300
