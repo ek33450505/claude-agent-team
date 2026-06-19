@@ -333,11 +333,8 @@ assert 'EMAIL_ADDRESS' in entity_types, f'EMAIL_ADDRESS not in {entity_types}'
 @test "--field redacted_text: absent field exits non-zero and prints nothing" {
   # The error path emits {\"error\": ...} which has no redacted_text key.
   # Simulate by passing a non-existent --file so the error path fires.
-  local output exit_code
+  run python3 "$REDACT_PY" --engine regex --field redacted_text --file /nonexistent/path/that/cannot/exist.txt
 
-  output="$(python3 "$REDACT_PY" --engine regex --field redacted_text --file /nonexistent/path/that/cannot/exist.txt 2>/dev/null)"
-  exit_code=$?
-
-  [[ "$exit_code" -ne 0 ]] || fail "expected non-zero exit when field is absent, got 0"
+  [ "$status" -ne 0 ] || fail "expected non-zero exit when field is absent, got 0"
   assert_equal "$output" ""
 }

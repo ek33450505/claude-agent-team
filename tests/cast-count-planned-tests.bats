@@ -22,23 +22,23 @@ teardown() {
 
 @test "cast-count-planned-tests.sh: counts @test lines at start of line" {
   local fixture="$FIXTURE_DIR/sample.bats"
-  cat > "$fixture" <<'BATS_EOF'
-#!/usr/bin/env bats
-
-load 'test_helper'
-
-@test "first test" {
-  echo "test 1"
-}
-
-@test "second test" {
-  echo "test 2"
-}
-
-@test "third test" {
-  echo "test 3"
-}
-BATS_EOF
+  printf '%s\n' \
+    '#!/usr/bin/env bats' \
+    '' \
+    'load '"'"'test_helper'"'"'' \
+    '' \
+    '@test "first test" {' \
+    '  echo "test 1"' \
+    '}' \
+    '' \
+    '@test "second test" {' \
+    '  echo "test 2"' \
+    '}' \
+    '' \
+    '@test "third test" {' \
+    '  echo "test 3"' \
+    '}' \
+    > "$fixture"
 
   run bash "$COUNT_SCRIPT" "$fixture"
   assert_success
@@ -51,24 +51,24 @@ BATS_EOF
 
 @test "cast-count-planned-tests.sh: ignores @test in comments" {
   local fixture="$FIXTURE_DIR/with_comments.bats"
-  cat > "$fixture" <<'BATS_EOF'
-#!/usr/bin/env bats
-
-# This is a comment that mentions @test inside the comment
-# but @test should not be counted here
-
-@test "real test 1" {
-  echo "test 1"
-}
-
-# @test "fake test in comment" {
-#   this should not count
-# }
-
-@test "real test 2" {
-  echo "test 2"
-}
-BATS_EOF
+  printf '%s\n' \
+    '#!/usr/bin/env bats' \
+    '' \
+    '# This is a comment that mentions @test inside the comment' \
+    '# but @test should not be counted here' \
+    '' \
+    '@test "real test 1" {' \
+    '  echo "test 1"' \
+    '}' \
+    '' \
+    '# @test "fake test in comment" {' \
+    '#   this should not count' \
+    '# }' \
+    '' \
+    '@test "real test 2" {' \
+    '  echo "test 2"' \
+    '}' \
+    > "$fixture"
 
   run bash "$COUNT_SCRIPT" "$fixture"
   assert_success
@@ -118,16 +118,16 @@ BATS_EOF
   local file1="$FIXTURE_DIR/file1.bats"
   local file2="$FIXTURE_DIR/file2.bats"
 
-  cat > "$file1" <<'BATS_EOF'
-@test "test 1" { true; }
-@test "test 2" { true; }
-BATS_EOF
+  printf '%s\n' \
+    '@test "test 1" { true; }' \
+    '@test "test 2" { true; }' \
+    > "$file1"
 
-  cat > "$file2" <<'BATS_EOF'
-@test "test 3" { true; }
-@test "test 4" { true; }
-@test "test 5" { true; }
-BATS_EOF
+  printf '%s\n' \
+    '@test "test 3" { true; }' \
+    '@test "test 4" { true; }' \
+    '@test "test 5" { true; }' \
+    > "$file2"
 
   run bash "$COUNT_SCRIPT" "$file1" "$file2"
   assert_success
@@ -140,19 +140,19 @@ BATS_EOF
 
 @test "cast-count-planned-tests.sh: ignores indented @test lines" {
   local fixture="$FIXTURE_DIR/indented.bats"
-  cat > "$fixture" <<'BATS_EOF'
-#!/usr/bin/env bats
-
-@test "real test" {
-  # This @test inside a function should not count
-  echo "test"
-}
-
-  @test "indented test" {
-    # This is indented, so should not count
-    true
-  }
-BATS_EOF
+  printf '%s\n' \
+    '#!/usr/bin/env bats' \
+    '' \
+    '@test "real test" {' \
+    '  # This @test inside a function should not count' \
+    '  echo "test"' \
+    '}' \
+    '' \
+    '  @test "indented test" {' \
+    '    # This is indented, so should not count' \
+    '    true' \
+    '  }' \
+    > "$fixture"
 
   run bash "$COUNT_SCRIPT" "$fixture"
   assert_success
