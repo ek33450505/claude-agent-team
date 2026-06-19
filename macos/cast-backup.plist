@@ -19,6 +19,9 @@
     <integer>30</integer>
   </dict>
 
+  <key>StartInterval</key>
+  <integer>21600</integer>
+
   <key>StandardOutPath</key>
   <string>__HOME__/.claude/logs/cast-backup-scheduled.log</string>
 

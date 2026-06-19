@@ -94,7 +94,7 @@ def _collect_files(claude_dir: Path) -> list[Path]:
     candidates: list[Path] = []
 
     # Explicit single files
-    for rel in ["config/pii-denylist-local.txt", "config/sync.json", "CLAUDE.md", "settings.local.json"]:
+    for rel in ["config/pii-denylist-local.txt", "config/sync.json", "CLAUDE.md", "settings.local.json", "settings.json"]:
         p = claude_dir / rel
         if p.exists() and not _is_secret(p.name):
             candidates.append(p)
@@ -105,12 +105,16 @@ def _collect_files(claude_dir: Path) -> list[Path]:
         "agent-memory-local/**/*.md",
         "rules/*.md",
         "agents/personal/*.md",
+        "managed-settings.d/*.json",
+        "config/*.json",
     ]
     for pattern in glob_patterns:
         for match in claude_dir.glob(pattern):
             if match.is_file() and not _is_secret(match.name):
                 candidates.append(match)
 
+    # Dedup while preserving insertion order (explicit entries take priority, globs fill in the rest).
+    candidates = list(dict.fromkeys(candidates))
     return candidates
 
 
