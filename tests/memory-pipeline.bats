@@ -147,13 +147,21 @@ name: dup-test | type: project | content: Version 2 of this fact.
 
     echo "$payload2" | bash "${STOP_HOOK}" >/dev/null 2>&1
 
-    # Total count should still be 1 (updated, not inserted)
-    local count2=$(sqlite3 "${TEST_DB}" "SELECT COUNT(*) FROM agent_memories WHERE agent='agent-x' AND name='dup-test'")
-    [ "$count2" -eq 1 ] || { echo "Expected 1 deduplicated row, got $count2"; exit 1; }
+    # CURRENT-row count: exactly 1 row with valid_to IS NULL (dedup intent preserved)
+    local count2=$(sqlite3 "${TEST_DB}" "SELECT COUNT(*) FROM agent_memories WHERE agent='agent-x' AND name='dup-test' AND valid_to IS NULL")
+    [ "$count2" -eq 1 ] || { echo "Expected 1 current row (valid_to IS NULL), got $count2"; exit 1; }
 
-    # Content should be updated
-    local content2=$(sqlite3 "${TEST_DB}" "SELECT content FROM agent_memories WHERE agent='agent-x' AND name='dup-test'")
-    [[ "$content2" =~ "Version 2" ]] || { echo "Content not updated to Version 2"; exit 1; }
+    # CURRENT content must be updated to Version 2
+    local content2=$(sqlite3 "${TEST_DB}" "SELECT content FROM agent_memories WHERE agent='agent-x' AND name='dup-test' AND valid_to IS NULL")
+    [[ "$content2" =~ "Version 2" ]] || { echo "Current content not updated to Version 2"; exit 1; }
+
+    # HISTORY preservation: total count is 2 (old superseded row + new current row)
+    local total_count=$(sqlite3 "${TEST_DB}" "SELECT COUNT(*) FROM agent_memories WHERE agent='agent-x' AND name='dup-test'")
+    [ "$total_count" -eq 2 ] || { echo "Expected 2 total rows (history preserved), got $total_count"; exit 1; }
+
+    # Old superseded row still contains Version 1 (audit trail proof that old content was NOT destroyed)
+    local old_content=$(sqlite3 "${TEST_DB}" "SELECT content FROM agent_memories WHERE agent='agent-x' AND name='dup-test' AND valid_to IS NOT NULL")
+    [[ "$old_content" =~ "Version 1" ]] || { echo "Old superseded row does not contain Version 1"; exit 1; }
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
