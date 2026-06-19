@@ -13,6 +13,9 @@
 #                          ~/.claude/config/cast-overlay-repo, first non-empty non-comment line)
 #   CAST_OVERLAY_DIR     — clone directory (default: ~/.local/share/cast/overlay)
 #   CAST_CLAUDE_DIR      — source dir (default: ~/.claude)
+#   CAST_OVERLAY_EXCLUDE — whitespace/newline-separated substrings; any copied file whose
+#                          relative path contains one of these substrings is skipped.
+#                          Additive with ~/.claude/config/overlay-exclude.txt (see template).
 
 set -euo pipefail
 
@@ -44,6 +47,34 @@ if [[ -z "$CAST_OVERLAY_REPO" ]]; then
   echo "ADVISORY [cast-overlay-sync]: no overlay repo configured. Set CAST_OVERLAY_REPO=<your-private-repo-url> (or add the URL to ~/.claude/config/cast-overlay-repo) to enable off-machine overlay sync." >&2
   exit 0
 fi
+
+# ============================================================================
+# Exclude list (project memory dirs to skip from overlay sync)
+# ============================================================================
+
+declare -a OVERLAY_EXCLUDE=()
+
+# Source 1: CAST_OVERLAY_EXCLUDE env var (whitespace/newline-separated substrings).
+# Each line is further word-split so "foo bar" and $'foo\nbar' both yield two entries.
+if [[ -n "${CAST_OVERLAY_EXCLUDE:-}" ]]; then
+  while IFS= read -r _excl_line; do
+    for _excl_word in $_excl_line; do
+      [[ -z "$_excl_word" ]] && continue
+      OVERLAY_EXCLUDE+=("$_excl_word")
+    done
+  done <<< "${CAST_OVERLAY_EXCLUDE}"
+fi
+
+# Source 2: ~/.claude/config/overlay-exclude.txt (one substring per line; skip blank + # comments)
+# Matches the same first-non-comment-line style used for cast-overlay-repo above.
+_excl_file="${HOME}/.claude/config/overlay-exclude.txt"
+if [[ -f "$_excl_file" ]]; then
+  while IFS= read -r _excl_line; do
+    [[ -z "$_excl_line" || "$_excl_line" == \#* ]] && continue
+    OVERLAY_EXCLUDE+=("$_excl_line")
+  done < "$_excl_file"
+fi
+unset _excl_file _excl_line
 
 CAST_OVERLAY_DIR="${CAST_OVERLAY_DIR:-${HOME}/.local/share/cast/overlay}"
 CAST_CLAUDE_DIR="${CAST_CLAUDE_DIR:-${HOME}/.claude}"
@@ -209,6 +240,23 @@ for pattern in "${COPY_PATTERNS[@]}"; do
 
     # Skip if source doesn't exist
     [[ ! -f "$full_srcfile" ]] && continue
+
+    # Skip excluded paths (OVERLAY_EXCLUDE substrings matched against relative srcfile path)
+    _skip_excluded=0
+    if [[ ${#OVERLAY_EXCLUDE[@]} -gt 0 ]]; then
+      for _excl in "${OVERLAY_EXCLUDE[@]}"; do
+        if [[ "$srcfile" == *"$_excl"* ]]; then
+          _skip_excluded=1
+          break
+        fi
+      done
+    fi
+    if [[ "$_skip_excluded" -eq 1 ]]; then
+      info "Skipping excluded (overlay-exclude): $srcfile"
+      unset _skip_excluded
+      continue
+    fi
+    unset _skip_excluded
 
     # Skip secrets
     if _is_secret "$full_srcfile"; then

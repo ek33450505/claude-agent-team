@@ -1,0 +1,20 @@
+# overlay-exclude.txt
+#
+# Copy this file to ~/.claude/config/overlay-exclude.txt and add one substring
+# per line. cast-overlay-sync.sh skips any file whose relative path (from
+# ~/.claude/) contains a listed substring. This keeps work-project memory dirs
+# out of your personal cloud backup.
+#
+# Format:
+#   - One substring per line
+#   - Lines beginning with # are comments (skipped)
+#   - Blank lines are skipped
+#   - Substrings are matched with shell glob (*substring*)
+#     against the relative path (e.g. projects/my-project/memory/foo.md)
+#
+# You can also set CAST_OVERLAY_EXCLUDE="substring1 substring2" in your
+# environment; both sources are combined (union).
+#
+# Examples (all commented out — add your own below):
+# work-project-dir-name
+# another-work-project
