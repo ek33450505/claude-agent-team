@@ -131,7 +131,14 @@ def tokenize(text):
 
 
 def relevance_score(mem_row, fts_rank, column_names, cosine_sim=0.0):
-    """Weighted score: 0.3*recency + 0.2*importance + 0.25*fts_rank_norm + 0.25*cosine_sim"""
+    """Weighted score: 0.3*recency + 0.2*importance + 0.25*fts_rank_norm + 0.25*cosine_sim
+
+    Confidence and verification freshness are folded in as a composite multiplier so that
+    a verified high-confidence memory is not out-ranked by a freshly-injected hostile one:
+      - confidence: maps [0, 1] → [0.7, 1.0] damping factor on the total score
+      - verified_at / last_validated_at: absent → 0.6× recency; fresh (≤30d) → 1.0×;
+        stale (>30d) → decays from 1.0 to 0.5 over the subsequent 60 days
+    """
     # Recency
     created_at_str = mem_row[column_names.index('created_at')] if 'created_at' in column_names else None
     if created_at_str:
@@ -158,14 +165,53 @@ def relevance_score(mem_row, fts_rank, column_names, cosine_sim=0.0):
     # rank of 0.0 means no FTS match was used (fallback path)
     fts_norm = max(0.0, min(1.0, 1.0 + fts_rank / 10.0)) if fts_rank != 0.0 else 0.5
 
-    return 0.3 * recency + 0.2 * importance + 0.25 * fts_norm + 0.25 * cosine_sim
+    # Confidence (normalized to [0, 1]; default 0.5 when column absent or NULL)
+    confidence = 0.5
+    if 'confidence' in column_names:
+        c = mem_row[column_names.index('confidence')]
+        if c is not None:
+            try:
+                confidence = max(0.0, min(1.0, float(c)))
+            except (TypeError, ValueError):
+                confidence = 0.5
+
+    # verified_at / last_validated_at freshness — dampen recency for stale/absent entries.
+    # Hostile freshly-injected memories have no verification record; this reduces their
+    # effective recency advantage without affecting well-verified older memories.
+    #   absent    → 0.6× (aggressive dampening)
+    #   ≤30 days  → 1.0× (no penalty)
+    #   >30 days  → decays from 1.0 to 0.5 over the next 60 days, floor at 0.5
+    verified_recency_mul = 0.6  # default: no verification data found
+    for col in ('verified_at', 'last_validated_at'):
+        if col in column_names:
+            v = mem_row[column_names.index(col)]
+            if v:
+                try:
+                    vt = datetime.fromisoformat(str(v).replace('Z', '+00:00'))
+                    days_since = (datetime.now(timezone.utc) - vt).total_seconds() / 86400
+                    if days_since <= 30:
+                        verified_recency_mul = 1.0
+                    else:
+                        verified_recency_mul = max(0.5, 1.0 - 0.5 * (days_since - 30) / 60)
+                except Exception:
+                    pass
+                break  # use first non-null verification column found
+
+    effective_recency = recency * verified_recency_mul
+
+    # Confidence multiplier: maps [0, 1] → [0.7, 1.0].  Low-confidence entries are
+    # dampened proportionally; entries at full confidence (1.0) are unpenalized.
+    confidence_factor = 0.7 + 0.3 * confidence
+
+    return (0.3 * effective_recency + 0.2 * importance + 0.25 * fts_norm + 0.25 * cosine_sim) * confidence_factor
 
 
 def sanitize_fts_query(prompt):
     """Sanitize prompt for FTS5 MATCH to avoid syntax errors with special chars."""
-    # Strip FTS5 special characters/operators that could cause parse errors
-    # Remove: " * ^ ( ) OR AND NOT -
-    sanitized = re.sub(r'["\*\^\(\)]+', ' ', prompt)
+    # Strip FTS5 special characters/operators that could cause parse errors.
+    # Removed: " * ^ ( ) : + — the last two are FTS5 column-filter and phrase-distance
+    # operators that can still raise sqlite3.OperationalError when present.
+    sanitized = re.sub(r'["\*\^\(\):+]+', ' ', prompt)
     # Remove bare FTS5 boolean operators as whole words
     sanitized = re.sub(r'\b(AND|OR|NOT)\b', ' ', sanitized)
     # Collapse whitespace

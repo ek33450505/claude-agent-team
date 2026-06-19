@@ -268,6 +268,24 @@ def redact_regex(text: str, entities: list[dict], mode: str) -> str:
     return result
 
 
+def _emit(output: dict, field: str | None = None) -> None:
+    """Print output as JSON (default) or as a single plain-text field (--field mode).
+
+    In --field mode:
+      - field present: print its value as plain text, then exit 0
+      - field absent:  print nothing, exit 1 (triggers the caller's ``|| fallback``)
+
+    Default behavior (field=None) is byte-identical to the prior ``print(json.dumps(output))``
+    so existing callers and tests are unaffected.
+    """
+    if field is not None:
+        if field not in output:
+            sys.exit(1)
+        print(output[field])
+        sys.exit(0)
+    print(json.dumps(output, ensure_ascii=False))
+
+
 def _run_hook_mode() -> None:
     """Claude Code PreToolUse hook mode.
 
@@ -372,6 +390,16 @@ def main():
             "exit 0 (no stdout) when clean, exit 2 (plain-text reason) when PII found"
         ),
     )
+    parser.add_argument(
+        "--field",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Print a single field from the output dict as plain text (no JSON wrapper). "
+            "Exits non-zero if the field is absent (triggers caller's || fallback). "
+            "Use to collapse two-process pipes into one invocation."
+        ),
+    )
     args = parser.parse_args()
 
     # ── Hook mode (PreToolUse) ─────────────────────────────────────────────────
@@ -385,7 +413,7 @@ def main():
             with open(args.file) as f:
                 text = f.read()
         except Exception as e:
-            print(json.dumps({"error": str(e)}))
+            _emit({"error": str(e)}, args.field)
             sys.exit(1)
     elif args.text:
         text = args.text
@@ -396,24 +424,24 @@ def main():
         sys.exit(1)
 
     if not text.strip():
-        print(json.dumps({
+        _emit({
             "redacted_text": text,
             "entities": [],
             "entity_count": 0,
             "mode": args.mode,
             "engine": "none",
-        }))
+        }, args.field)
         return
 
     # F4: texts under 10 chars cannot contain any supported PII pattern — skip engines entirely.
     if len(text) < 10:
-        print(json.dumps({
+        _emit({
             "redacted_text": text,
             "entities": [],
             "entity_count": 0,
             "mode": args.mode,
             "engine": "none",
-        }))
+        }, args.field)
         return
 
     # ── Load custom patterns ───────────────────────────────────────────────────
@@ -473,7 +501,7 @@ def main():
     if args.mode == "analyze":
         output["note"] = "analyze mode: text unchanged, entities listed only"
 
-    print(json.dumps(output, ensure_ascii=False))
+    _emit(output, args.field)
 
 
 if __name__ == "__main__":

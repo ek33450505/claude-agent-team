@@ -33,7 +33,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 # Add the scripts directory to sys.path so cast_db can be imported.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -455,6 +455,22 @@ def _run_grader(
             'grader_id': grader_id,
             'status': _STATUS_ERROR,
             'output': 'grader has no command field',
+            'duration_ms': 0,
+        }
+
+    # Defense-in-depth: grader templates must not contain bare shell variable expansions
+    # ($var / ${var}).  All value substitution goes through _substitute() which applies
+    # shlex.quote() to every placeholder value.  Templates use {placeholder} form
+    # (Python format-style), not shell $var form.  A bare "$" in the committed template
+    # is a sign the template is doing its own shell expansion, bypassing the safe path.
+    if '$' in cmd_template:
+        return {
+            'grader_id': grader_id,
+            'status': _STATUS_ERROR,
+            'output': (
+                'grader command template contains bare shell variable expansion "$"; '
+                'use {placeholder} form instead. Template: ' + repr(cmd_template[:120])
+            ),
             'duration_ms': 0,
         }
 

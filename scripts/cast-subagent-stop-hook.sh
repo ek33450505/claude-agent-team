@@ -1219,8 +1219,8 @@ print(json.dumps(concerns))
   # Fallback: if cast-redact.py is unavailable, use raw values (|| passthrough is intentional).
   # --engine regex: regex covers all credential/secret patterns; spaCy NER (person/org) is
   # lower-stakes for a DB summary field — avoids 0.5–3s Presidio startup cost on this hot path.
-  SUMMARY_REDACTED="$(echo "${CAST_STOP_SUMMARY}" | python3 "${HOOK_DIR}/cast-redact.py" --engine regex 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("redacted_text",""))' 2>/dev/null || echo "${CAST_STOP_SUMMARY}")"
-  CONCERNS_REDACTED="$(echo "${CAST_STOP_CONCERNS}" | python3 "${HOOK_DIR}/cast-redact.py" --engine regex 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("redacted_text",""))' 2>/dev/null || echo "${CAST_STOP_CONCERNS}")"
+  SUMMARY_REDACTED="$(echo "${CAST_STOP_SUMMARY}" | python3 "${HOOK_DIR}/cast-redact.py" --engine regex --field redacted_text 2>/dev/null || echo "${CAST_STOP_SUMMARY}")"
+  CONCERNS_REDACTED="$(echo "${CAST_STOP_CONCERNS}" | python3 "${HOOK_DIR}/cast-redact.py" --engine regex --field redacted_text 2>/dev/null || echo "${CAST_STOP_CONCERNS}")"
   export CAST_STOP_SUMMARY_REDACTED="$SUMMARY_REDACTED"
   export CAST_STOP_CONCERNS_REDACTED="$CONCERNS_REDACTED"
 

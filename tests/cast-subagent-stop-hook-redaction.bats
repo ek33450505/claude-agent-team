@@ -311,3 +311,30 @@ assert 'EMAIL_ADDRESS' in entity_types, f'EMAIL_ADDRESS not in {entity_types}'
   # Must be valid JSON even on empty input
   echo "$output" | python3 -c "import sys, json; d=json.load(sys.stdin); assert d.get('entity_count') == 0"
 }
+
+# ---------------------------------------------------------------------------
+# Test D: --field flag (P6 perf fix — single python process for field extraction)
+# ---------------------------------------------------------------------------
+
+@test "--field redacted_text: present field prints plain text and exits 0" {
+  # Input with no PII — redacted_text equals the input (pass-through)
+  local input="Agent completed task successfully."
+  local output exit_code
+
+  output="$(echo "$input" | python3 "$REDACT_PY" --engine regex --field redacted_text 2>/dev/null)"
+  exit_code=$?
+
+  assert_equal "$exit_code" "0"
+  # Output must be plain text (not JSON-wrapped)
+  [[ "$output" != "{"* ]] || fail "output looks like JSON, expected plain text: $output"
+  [[ -n "$output" ]] || fail "output is empty"
+}
+
+@test "--field redacted_text: absent field exits non-zero and prints nothing" {
+  # The error path emits {\"error\": ...} which has no redacted_text key.
+  # Simulate by passing a non-existent --file so the error path fires.
+  run python3 "$REDACT_PY" --engine regex --field redacted_text --file /nonexistent/path/that/cannot/exist.txt
+
+  [ "$status" -ne 0 ] || fail "expected non-zero exit when field is absent, got 0"
+  assert_equal "$output" ""
+}

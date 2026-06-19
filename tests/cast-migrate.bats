@@ -420,3 +420,114 @@ DRIVER_EOF
   second_backup_count=$(find "$CAST_BACKUP_DIR" -type f | wc -l | tr -d ' ')
   [ "$second_backup_count" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# Migration 014: agent_runs DROP COLUMN model_used
+# ---------------------------------------------------------------------------
+
+@test "migration 014: drops model_used column from agent_runs" {
+  # Create agent_runs table WITH the model_used column
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT,
+  model_used TEXT,
+  status TEXT,
+  duration_ms INTEGER DEFAULT 0,
+  tool_uses INTEGER DEFAULT 0,
+  outcome TEXT
+);
+INSERT INTO agent_runs (agent, model_used, status) VALUES ('test-agent', 'claude-3-sonnet', 'done');
+SQL
+
+  # Verify model_used exists before migration
+  local has_col_before
+  has_col_before=$(sqlite3 "$TEST_DB" "PRAGMA table_info(agent_runs);" | grep -c "model_used") || has_col_before=0
+  [ "$has_col_before" -eq 1 ]
+
+  # Apply migration 014
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/014_drop_agent_runs_model_used.sql"
+
+  # Verify model_used is gone after migration
+  local has_col_after
+  has_col_after=$(sqlite3 "$TEST_DB" "PRAGMA table_info(agent_runs);" | grep -c "model_used") || has_col_after=0
+  [ "$has_col_after" -eq 0 ]
+
+  # Verify other columns are intact
+  local col_count
+  col_count=$(sqlite3 "$TEST_DB" "PRAGMA table_info(agent_runs);" | wc -l | tr -d ' ')
+  [ "$col_count" -ge 6 ]  # id, agent, status, duration_ms, tool_uses, outcome
+}
+
+@test "migration 014: is idempotent (second DROP is a no-op)" {
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT,
+  status TEXT
+);
+SQL
+
+  # Apply migration 014 twice (DROP COLUMN ... is idempotent in SQLite 3.35+)
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/014_drop_agent_runs_model_used.sql" 2>/dev/null || true
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/014_drop_agent_runs_model_used.sql" 2>/dev/null || true
+
+  # Table should still exist and be intact
+  local count
+  count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_runs';")
+  [ "$count" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# Migration 023: DROP TABLE batch_dispatches, contract_test_runs, files_api_events
+# ---------------------------------------------------------------------------
+
+@test "migration 023: drops batch_dispatches table" {
+  # Create the three tier-3 tables
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS batch_dispatches (
+  id INTEGER PRIMARY KEY,
+  dispatch_id TEXT
+);
+CREATE TABLE IF NOT EXISTS contract_test_runs (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT
+);
+CREATE TABLE IF NOT EXISTS files_api_events (
+  id INTEGER PRIMARY KEY,
+  event_id TEXT
+);
+INSERT INTO batch_dispatches (dispatch_id) VALUES ('disp-1');
+INSERT INTO contract_test_runs (run_id) VALUES ('run-1');
+INSERT INTO files_api_events (event_id) VALUES ('evt-1');
+SQL
+
+  # Verify all three tables exist
+  local count_before
+  count_before=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (name='batch_dispatches' OR name='contract_test_runs' OR name='files_api_events');")
+  [ "$count_before" -eq 3 ]
+
+  # Apply migration 023
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/023_wave3_tier3_table_drops.sql"
+
+  # Verify all three tables are dropped
+  local count_after
+  count_after=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (name='batch_dispatches' OR name='contract_test_runs' OR name='files_api_events');")
+  [ "$count_after" -eq 0 ]
+}
+
+@test "migration 023: is idempotent (DROP TABLE IF EXISTS)" {
+  # Create one table to start
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS batch_dispatches (id INTEGER PRIMARY KEY);
+SQL
+
+  # Apply migration 023 twice
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/023_wave3_tier3_table_drops.sql"
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/023_wave3_tier3_table_drops.sql"
+
+  # Should still succeed (no error on second run)
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='batch_dispatches';"
+  assert_success
+  [ "$output" -eq 0 ]
+}
