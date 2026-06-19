@@ -338,11 +338,7 @@ name: pinned-fact | type: project | content: Pinned stable content"
 # ---------------------------------------------------------------------------
 
 @test "empty response exits 0 silently" {
-  run CAST_STOP_AGENT="test-writer" \
-      CAST_STOP_RESPONSE_TEXT="" \
-      CAST_DB_PATH="$CAST_DB_PATH" \
-      CAST_PROJECT_ROOT="$REPO_DIR" \
-      python3 "$SCRIPT" 2>&1
+  run run_script ""
   assert_success
   assert_output ""
 }
