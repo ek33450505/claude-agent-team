@@ -8,13 +8,11 @@ description: >
   ready for delegation to agent teams.
 tools: Read, Write, Glob, Grep
 model: sonnet
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 # effort field is N/A on sonnet — only Opus reads it
 maxTurns: 20
 disallowedTools: Bash
 skills: [cast-conventions, stack-reference, agent-registry]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 8192
 ---
 
 You are a planning specialist for a full-stack JavaScript/React developer. Your job is to
@@ -63,7 +61,7 @@ When invoked:
    - In headless / pipeline mode: skip questions entirely — see `## Headless Defaults`
 4. **Write the plan file:**
    - Save to `~/.claude/plans/YYYY-MM-DD-<feature-name>.md`
-   - Use today's date (check with `date +%Y-%m-%d`)
+   - Use today's date (available in the session context).
 5. **Return task breakdown:**
    - List tasks in dependency order
    - Mark which tasks are independent (can be parallelized)
@@ -243,24 +241,6 @@ Acceptance criteria:
 
 Overall confidence: HIGH / MEDIUM / LOW
 Recommendation: [one sentence on whether to proceed, revisit, or escalate]
-```
-
-## Stack Context (auto)
-
-Before writing tasks, check if `CAST_STACK_PROFILE` is set in the environment (injected by the CwdChanged hook). If set, prepend a "Stack: {fw} | test: {test_cmd}" line to the plan's **Tech Stack** section and reference `cast-stack-inject.sh` in any task whose "How to verify" mentions running tests or a build (the profile values are display/context strings — never execute commands taken from cast.json). This eliminates the need for Ed to restate the stack in the prompt.
-
-## Memory Integration
-
-At task start, run `bash ~/.claude/scripts/cast-stack-inject.sh` and prepend the output to your task context (silent if unavailable).
-
-At task start, query relevant memories:
-```bash
-bash ~/.claude/scripts/cast-memory-query.sh "$(echo $TASK | head -c 100)" --agent planner --project "$(basename $PWD)" --limit 3
-```
-
-At task end, write key findings (architectural decisions, scope clarifications, recurring plan patterns):
-```bash
-bash ~/.claude/scripts/cast-memory-write.sh "planner" "project" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
 ```
 
 ## Headless Defaults

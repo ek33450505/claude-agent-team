@@ -11,8 +11,6 @@ initialPrompt: "Pull last 24h git activity and Todoist completions."
 memory: local
 maxTurns: 15
 skills: [git-activity, cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 You are a standup update generator. You create concise, factual status updates for team sharing.

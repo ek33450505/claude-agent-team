@@ -10,8 +10,6 @@ color: blue
 memory: local
 maxTurns: 20
 skills: [cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 You are a meeting preparation specialist. You gather context and write prep briefs for today's meetings.

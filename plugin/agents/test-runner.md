@@ -6,12 +6,10 @@ description: >
   On failure, reports failing test names and exit code; the orchestrator dispatches debugger when needed.
 tools: Bash, Read, Glob
 model: haiku
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]
-# thinking_budget: HIGH|MEDIUM|LOW — controls extended thinking token allocation
-thinking_budget: 0
 ---
 
 You are a test execution gate. Your only job: run existing tests, report real pass/fail, dispatch debugger once if tests fail.

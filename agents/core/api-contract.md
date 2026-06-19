@@ -6,7 +6,7 @@ description: >
   Express routes and any REST API surfaces.
 tools: Read, Bash, Glob, Grep
 model: haiku
-# ── Claude Code subagent frontmatter (natively read; thinking_budget is CAST-only) ──────
+# ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 20
 disallowedTools: [Write, Edit]
 skills: [cast-conventions]

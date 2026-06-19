@@ -39,10 +39,11 @@ The `cast-memory` MCP entry in `.mcp.json.example` and the `cast-mcp-memory-serv
 server design are **valid aspirational architecture** for Phase B. They should be kept
 as reference, clearly marked aspirational, and not acted on until Phase B is scoped.
 
-## Deferred: effort / thinking_budget Reconciliation
+## Completed: thinking_budget Dead Code Removal (v8 fireproof)
 
 Doc-verified 2026-06-13: `effort` IS a native Claude Code subagent-frontmatter field
 (works on Sonnet; not Opus-only as CAST claimed). `thinking_budget:` is NOT native —
-Claude Code reads no such field. Dead bespoke code (config/thinking-budgets.json,
-thinking_budget annotations in agents/core/{code-writer,debugger,planner}.md) is deferred
-for cleanup in a dedicated future cycle to avoid scope creep here.
+Claude Code reads no such field. The dead bespoke code has been removed in CAST v8:
+`config/thinking-budgets.json` deleted, `thinking_budget:` frontmatter lines stripped from
+all agent files, Check 13 in `cast-validate.sh` updated to drop the now-absent file,
+and the scaffold template in `bin/cast` updated. Use native `effort:` for compute control.

@@ -1,18 +1,5 @@
 {
   "hooks": {
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://localhost:3001/api/hook-events",
-            "method": "POST",
-            "timeout": 3,
-            "async": true
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Write",
