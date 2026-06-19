@@ -411,18 +411,20 @@ PYEOF
 fi
 
 # === SESSION DISTILLER — extract memories from transcript ===
+# SessionEnd/Stop hook payloads do NOT carry transcript_path (only PostCompact does),
+# so resolve the main-session transcript by globbing on the resolved SESSION_ID.
+# Mirrors cast-subagent-stop-hook.sh's subagent-transcript glob. Layout:
+#   ~/.claude/projects/<project-slug>/<session_id>.jsonl
 DISTILLER="${HOME}/.claude/scripts/cast-session-distiller.py"
-if [[ -f "$DISTILLER" ]]; then
-  _TRANSCRIPT_PATH="$(CAST_INPUT="${_INPUT}" python3 -c "
-import json, os
-raw = os.environ.get('CAST_INPUT', '')
-try:
-    d = json.loads(raw)
-    v = d.get('transcript_path', '')
-    if v:
-        print(v)
-except Exception:
-    pass
+if [[ -f "$DISTILLER" && -n "${SESSION_ID:-}" && "${SESSION_ID}" != "default" ]]; then
+  _TRANSCRIPT_PATH="$(CAST_SESSION="${SESSION_ID}" python3 -c "
+import glob, os, sys
+sid = os.environ.get('CAST_SESSION', '')
+if not sid:
+    sys.exit(0)
+matches = glob.glob(os.path.expanduser('~/.claude/projects/*/' + sid + '.jsonl'))
+if matches:
+    print(max(matches, key=os.path.getmtime))
 " 2>/dev/null || true)"
   if [[ -f "${_TRANSCRIPT_PATH:-}" ]]; then
     python3 "$DISTILLER" --input "$_TRANSCRIPT_PATH" --min-importance 0.7 \

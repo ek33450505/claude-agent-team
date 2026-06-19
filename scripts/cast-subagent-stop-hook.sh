@@ -1182,11 +1182,10 @@ PYEOF
 fi
 
 # ── Step 4.5: Worktree anomaly check ─────────────────────────────────────────
-# Detects unexpected agent worktrees, auto-removes clean ones, escalates dirty
-# ones, and logs all anomalies to cast.db worktree_anomalies. Always exits 0.
-if [[ -x "$(dirname "$0")/cast-subagent-worktree-check.sh" ]]; then
-  bash "$(dirname "$0")/cast-subagent-worktree-check.sh" <<< "${INPUT:-}" 2>/dev/null || true
-fi
+# Handled by the dedicated `cast-subagent-worktree-check` SubagentStop hook entry
+# (managed-settings.d/30-hooks-session.json). The previous inline invocation here
+# caused a double-fire (double `git worktree list` + double worktree_anomalies write)
+# per SubagentStop; removed 2026-06-18 (audit follow-up).
 
 # ── Emit compressed hookSpecificOutput ───────────────────────────────────────
 # Only emit when there is response text to parse. Excludes full response body
