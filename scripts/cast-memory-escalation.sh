@@ -141,11 +141,12 @@ fi
 # ---------------------------------------------------------------------------
 RULE_COUNT="$(echo "$AUTO_RULES" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
 
-CAST_AUTO_RULES="$AUTO_RULES" python3 - "$SCRIPTS_DIR" "$AGENT_MEMORY_DIR" <<'PYEOF' 2>/dev/null || true
-import json, sys, os, subprocess, datetime
+CAST_AUTO_RULES="$AUTO_RULES" python3 - "$SCRIPTS_DIR" "$AGENT_MEMORY_DIR" "$DB_PATH" <<'PYEOF' 2>/dev/null || true
+import json, sys, os, subprocess, datetime, sqlite3
 
 scripts_dir = sys.argv[1]
 memory_dir = sys.argv[2]
+db_path = sys.argv[3]
 rules = json.loads(os.environ.get("CAST_AUTO_RULES", "[]"))
 write_script = os.path.join(scripts_dir, "cast-memory-write.sh")
 
@@ -156,11 +157,35 @@ for rule in rules:
     content = rule.get("content", "")
     project = rule.get("project", "")
 
-    # Write to cast.db via cast-memory-write.sh
-    cmd = ["bash", write_script, agent, mem_type, name, content]
-    if project:
-        cmd += ["--project", project]
-    subprocess.run(cmd, capture_output=True, timeout=10)
+    # Upsert keyed on (agent, name): SELECT-then-UPDATE-or-INSERT to prevent
+    # stale duplicate rows when recurrence count increments change content.
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db_updated = False
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM agent_memories WHERE agent = ? AND name = ? LIMIT 1",
+            (agent, name)
+        )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "UPDATE agent_memories SET content = ?, description = ?, updated_at = ? WHERE id = ?",
+                (content, content[:100], now, row[0])
+            )
+            conn.commit()
+            db_updated = True
+        conn.close()
+    except Exception:
+        pass
+
+    if not db_updated:
+        # No existing (agent, name) row — INSERT via cast-memory-write.sh
+        cmd = ["bash", write_script, agent, mem_type, name, content]
+        if project:
+            cmd += ["--project", project]
+        subprocess.run(cmd, capture_output=True, timeout=10)
 
     # Write human-readable auto-rules.md
     if project:

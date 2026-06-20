@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS quality_gates (
   timestamp TEXT,
   status_line TEXT,
   contract_passed INTEGER,
-  retry_count INTEGER
+  retry_count INTEGER,
+  gate_type TEXT
 );
 SQL
 }
@@ -174,7 +175,7 @@ teardown() {
   CAST_DB_PATH="$CAST_DB_PATH" run bash "$GUARD" <<< "$PAYLOAD"
   assert_success
 
-  # Verify the row with apostrophe was logged successfully
-  GATE_COUNT=$(sqlite3 "$CAST_DB_PATH" "SELECT count(*) FROM quality_gates WHERE agent_name='cast-no-fake-success-guard' AND status_line LIKE '%Don''t%';" 2>/dev/null || echo "0")
+  # Verify the row was logged without crashing (apostrophe in file_path is the threat vector)
+  GATE_COUNT=$(sqlite3 "$CAST_DB_PATH" "SELECT count(*) FROM quality_gates WHERE agent_name='cast-no-fake-success-guard' AND status_line='WARN';" 2>/dev/null || echo "0")
   [ "$GATE_COUNT" -eq 1 ]
 }

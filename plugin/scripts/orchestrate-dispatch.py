@@ -16,6 +16,7 @@ import glob
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 
 
@@ -121,8 +122,14 @@ def cmd_log_quality_gate(
         sys.stderr.write(f'[orchestrate-dispatch] import cast_db failed: {e}\n')
         sys.exit(0)
 
-    session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
+    session_id = os.environ.get('CAST_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or 'unknown'
     now = _now_utc()
+
+    # Normalize status: strip optional "Status: " prefix that orchestrator LLMs sometimes
+    # include verbatim (e.g. "Status: DONE" → "DONE"). C3 fix — column must hold enum only.
+    _prefix = 'status:'
+    if status.lower().startswith(_prefix):
+        status = status[len(_prefix):].strip()
 
     # contract_passed allows the special sentinel -1 (file-recovered status)
     cp_int = _to_int(contract_passed, default=0)
@@ -148,7 +155,7 @@ def cmd_log_quality_gate(
             )
         ''')
         ok = db_write('quality_gates', {
-            'id': os.urandom(8).hex(),
+            'id': str(uuid.uuid4()),
             'session_id': session_id,
             'agent_name': agent,
             'timestamp': now,

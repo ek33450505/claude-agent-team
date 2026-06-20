@@ -83,6 +83,22 @@ SQL_KEYWORDS = frozenset({
     "ATTACH", "DETACH", "ANALYZE", "EXPLAIN", "QUERY", "PLAN",
 })
 
+# Python stdlib module names that are never valid DB column names.
+# Prevents false-positive CONTRADICTION entries when a .sh file embeds a
+# Python heredoc that contains both `import X, Y, Z` and a SQL SELECT …
+# FROM table, causing the DOTALL lazy select_re to span across the import
+# line and misattribute module names as bare column reads.
+# EXCLUDED from this list: 'time', 'type', 'data' — could plausibly be
+# real column names (verified: none currently declared in cast-db-init.sh,
+# but kept out as a precaution per denylist-design convention).
+NON_COLUMN_IDENTIFIERS: frozenset[str] = frozenset({
+    "os", "sys", "subprocess", "json", "re", "datetime", "sqlite3",
+    "argparse", "pathlib", "glob", "typing", "dataclasses",
+    "collections", "math", "random", "shutil", "tempfile", "hashlib",
+    "base64", "io", "traceback", "logging", "functools", "itertools",
+    "contextlib",
+})
+
 # Well-known table aliases used consistently in cast-desktop server SQL.
 # Used to attribute alias.col references to the correct table.
 TABLE_ALIASES: dict[str, str] = {
@@ -437,13 +453,16 @@ def _parse_sql_ops(
             for (alias_or_tbl, col) in re.findall(r"\b(\w+)\.(\w+)\b", tok):
                 resolved = alias_map.get(alias_or_tbl.lower())
                 col = col.lower()
-                if resolved and _COL_RE.match(col) and col.upper() not in SQL_KEYWORDS:
+                if (resolved and _COL_RE.match(col)
+                        and col.upper() not in SQL_KEYWORDS
+                        and col not in NON_COLUMN_IDENTIFIERS):
                     readers.setdefault(resolved, set()).add(col)
             # Bare column name → attribute to primary table
             bare = re.match(r"^\s*(\w+)\s*$", tok)
             if bare:
                 col = bare.group(1).lower()
-                if _COL_RE.match(col) and col.upper() not in SQL_KEYWORDS and col != "*":
+                if (_COL_RE.match(col) and col.upper() not in SQL_KEYWORDS
+                        and col != "*" and col not in NON_COLUMN_IDENTIFIERS):
                     readers.setdefault(primary_table, set()).add(col)
 
         # 2. Alias.col scan limited to SQL keywords context — captures
@@ -460,7 +479,9 @@ def _parse_sql_ops(
             alias_or_tbl = sm.group(1).lower()
             col = sm.group(2).lower()
             resolved = alias_map.get(alias_or_tbl)
-            if resolved and _COL_RE.match(col) and col.upper() not in SQL_KEYWORDS:
+            if (resolved and _COL_RE.match(col)
+                    and col.upper() not in SQL_KEYWORDS
+                    and col not in NON_COLUMN_IDENTIFIERS):
                 readers.setdefault(resolved, set()).add(col)
 
         # 3. Bare WHERE/AND/OR column references (for single-table queries)
@@ -473,7 +494,8 @@ def _parse_sql_ops(
         )
         for wm in where_col_re.finditer(context):
             col = wm.group(1).lower()
-            if _COL_RE.match(col) and col.upper() not in SQL_KEYWORDS:
+            if (_COL_RE.match(col) and col.upper() not in SQL_KEYWORDS
+                    and col not in NON_COLUMN_IDENTIFIERS):
                 readers.setdefault(primary_table, set()).add(col)
 
     return writers, readers

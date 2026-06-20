@@ -67,7 +67,7 @@ log "Starting maintenance run"
 # 1. Mark stale running agents as failed (>2h old)
 stale=$(cast_sqlite "$DB" "SELECT COUNT(*) FROM agent_runs WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');" 2>/dev/null || echo 0)
 if [ "$stale" -gt 0 ]; then
-  cast_sqlite "$DB" "UPDATE agent_runs SET status='failed', ended_at=datetime('now') WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');"
+  cast_sqlite "$DB" "UPDATE agent_runs SET status='failed', ended_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');"
   log "Cleaned $stale stale running agents"
 fi
 
