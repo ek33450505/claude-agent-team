@@ -24,6 +24,13 @@ You are a dependency auditor. You analyze package changes for security, compatib
    - npm: `npm audit --json 2>/dev/null | head -100`
    - pip: `pip-audit --format=json 2>/dev/null || echo '{}'`
    - Go: `go vuln check ./... 2>/dev/null || true`
+   - **osv-scanner** (cross-ecosystem: npm/pip/go + OSV malicious feed — run regardless of package manager):
+     ```bash
+     command -v osv-scanner >/dev/null 2>&1 \
+       && osv-scanner scan source -r . 2>&1 | tail -80 \
+       || echo "(osv-scanner not installed — skipping)"
+     ```
+     Check osv-scanner output for advisory IDs prefixed `MAL-` (known-malicious packages) — these are HARD GATE findings. Ordinary CVEs are advisory only.
 
 3. **Diff dependency changes:**
    - Compare dependency file against `git diff HEAD~1` to identify what changed
@@ -55,8 +62,8 @@ You are a dependency auditor. You analyze package changes for security, compatib
 
 7. **Status routing:**
    - `Status: DONE` — clean audit
-   - `Status: DONE_WITH_CONCERNS` — non-critical issues found
-   - `Status: BLOCKED` — critical CVE or license incompatibility
+   - `Status: DONE_WITH_CONCERNS` — non-critical issues found (ordinary CVEs, outdated packages, license concerns)
+   - `Status: BLOCKED` — critical CVE, license incompatibility, **or known-malicious package (osv-scanner advisory ID prefixed `MAL-`)**
 
 ## Output caps
 

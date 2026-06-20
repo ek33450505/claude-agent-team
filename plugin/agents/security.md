@@ -48,6 +48,25 @@ You are a security review specialist focused on the OWASP Top 10 and stack-speci
 ### Dependencies
 - `npm audit` findings (run and report)
 - Outdated packages with known CVEs
+- **Supply-chain scan (osv-scanner + trufflehog):** Run both tools on the repo under review. Graceful-degrade if either is absent.
+
+  **osv-scanner** (cross-ecosystem: npm/pip/go + OSV malicious feed):
+  ```bash
+  command -v osv-scanner >/dev/null 2>&1 \
+    && osv-scanner scan source -r . 2>&1 | tail -80 \
+    || echo "(osv-scanner not installed — skipping)"
+  ```
+  - **HARD GATE:** A *known-malicious package* advisory (OSV advisory ID prefixed `MAL-`) → set approval marker to `rejected` and return `Status: BLOCKED`.
+  - Ordinary CVEs (non-MAL advisories) → advisory only; include in findings at the appropriate severity level. Do NOT block on CVEs alone (matches project's relaxed CVE-gate policy).
+
+  **trufflehog** (secret detection):
+  ```bash
+  command -v trufflehog >/dev/null 2>&1 \
+    && trufflehog filesystem . --only-verified --json 2>&1 | tail -50 \
+    || echo "(trufflehog not installed — skipping)"
+  ```
+  - **HARD GATE:** A *verified* (live, confirmed) secret found by `--only-verified` → set approval marker to `rejected` and return `Status: BLOCKED`.
+  - Unverified or potential findings (not confirmed live) → advisory only; report as High or Medium depending on sensitivity.
 
 ### Anthropic SDK specific
 - API keys never sent to the frontend
@@ -94,6 +113,12 @@ cast_derive_state "${TASK_ID:-batch-manual}"
 
 If your decision is BLOCKED (critical/high findings that must be fixed), use `"rejected"`.
 This step is NOT optional. The commit agent's security gate reads this record. Without it, the gate blocks.
+
+**Supply-chain hard gates (set `"rejected"` and `Status: BLOCKED` when ANY of the following are true):**
+- trufflehog `--only-verified` reports at least one verified (live, confirmed) secret
+- osv-scanner reports at least one advisory with an ID prefixed `MAL-` (known-malicious package)
+
+Unverified trufflehog findings and ordinary CVEs (non-MAL osv-scanner advisories) do NOT set `rejected` — they are advisory findings reported at appropriate severity levels.
 
 ## Trail of Bits Security Skills
 
