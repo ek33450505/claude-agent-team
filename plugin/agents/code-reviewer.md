@@ -48,6 +48,10 @@ Review checklist:
 - Input validation implemented
 - Good test coverage
 - Performance considerations addressed
+- **Shell formatting (shfmt — advisory):** For any shell files in the diff, check formatting with `shfmt -d <file>` and report unformatted files as a *Warning/Suggestion*. Never run `shfmt -w` (this agent is read-only). Graceful-degrade if shfmt absent:
+  ```bash
+  command -v shfmt >/dev/null 2>&1 && shfmt -d "$FILE" | tail -50 || echo "(shfmt not installed — skipping format check)"
+  ```
 
 Provide feedback organized by priority:
 - Critical issues (must fix)

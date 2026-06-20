@@ -185,6 +185,10 @@ Write BATS tests for all hook scripts. Test file location: `tests/<script-name>.
 - Log via `~/.claude/scripts/cast-log-append.py`
 - Exit codes: 0=success, 1=validation error, 2=hard block
 - Graceful degradation: exit 0 silently when optional tools (Ollama, Prettier) are unavailable
+- **Auto-format (shfmt):** After writing or modifying a shell script, run `shfmt -w` on scripts you authored in this task. Graceful-degrade if shfmt absent:
+  ```bash
+  command -v shfmt >/dev/null 2>&1 && shfmt -w "$FILE" || echo "(shfmt not installed — skipping auto-format)"
+  ```
 
 ## Handoff
 
