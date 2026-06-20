@@ -11,6 +11,15 @@
       "cooldown_seconds": 30
     },
     {
+      "pattern": "**/*.sql",
+      "event": "modified",
+      "action": "enqueue",
+      "agent": "migration-reviewer",
+      "task": "Review SQL changes in: {file}",
+      "priority": 5,
+      "cooldown_seconds": 60
+    },
+    {
       "pattern": "CLAUDE.md",
       "event": "modified",
       "action": "enqueue",
