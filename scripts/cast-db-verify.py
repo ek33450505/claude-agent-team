@@ -33,7 +33,8 @@ DEFAULT_DB = os.environ.get("CAST_DB_PATH", os.path.expanduser("~/.claude/cast.d
 
 # Value domains (kept in sync with the writers; '' tolerated where writers emit empties).
 VALID_GATE_STATUS = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT", "TRUNCATED", "",
-                    "APPROVE", "REQUEST_CHANGES")  # reviewer verdicts from cast-subagent-stop-hook.sh
+                    "APPROVE", "REQUEST_CHANGES",  # reviewer verdicts from cast-subagent-stop-hook.sh
+                    "WARN")  # advisory gate outcome from write-guards.py no-fake-success guard
 VALID_RUN_STATUS = ("DONE", "running", "BLOCKED", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "abandoned",
                     "failed")  # written by stale-running cleanup (cast-session-end.sh / cast-maintenance.sh)
 STALE_RUN_HOURS = 6  # a 'running' row older than this is almost certainly orphaned

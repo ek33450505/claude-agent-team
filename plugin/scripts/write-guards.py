@@ -117,12 +117,11 @@ def record_no_fake_success(file_path, pattern, home, session_id):
         try:
             gate_id = str(uuid.uuid4())
             timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-            summary = f"fake-success warn: {pattern} in {file_path}"
-            
+
             conn = sqlite3.connect(db_path, timeout=5)
             conn.execute(
-                "INSERT OR IGNORE INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed) VALUES (?, ?, ?, ?, ?, ?)",
-                (gate_id, session_id, 'cast-no-fake-success-guard', timestamp, summary, 0)
+                "INSERT OR IGNORE INTO quality_gates (id, session_id, agent_name, timestamp, status_line, gate_type, contract_passed) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (gate_id, session_id, 'cast-no-fake-success-guard', timestamp, 'WARN', 'no-fake-success', 0)
             )
             conn.commit()
             conn.close()
