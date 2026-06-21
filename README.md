@@ -268,6 +268,10 @@ Contributions are welcome — CAST is built in the open and actively developed. 
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow (including how to regenerate the plugin artifact). Open an issue first for non-trivial changes.
 
+### Community
+
+**Start here:** the pinned [start-here issue (#284)](https://github.com/ek33450505/claude-agent-team/issues/284) indexes every open good-first issue. [**GitHub Discussions**](https://github.com/ek33450505/claude-agent-team/discussions) is now open for questions and ideas. There are 8 scoped good-first issues right now — test-writing and documentation — and development is active.
+
 ---
 
 ## Support & Portfolio
