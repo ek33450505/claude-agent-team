@@ -30,7 +30,7 @@ All CAST documentation with one-line descriptions. Start with the Tutorial if yo
 
 | Document | Description |
 |---|---|
-| [Architecture Overview](architecture/ARCHITECTURE.md) | Full system architecture: swarms, quality gates, peer messaging, worktrees |
+| [Architecture Overview](architecture/ARCHITECTURE.md) | Full system architecture: enforcement gates, data-integrity stack, agent contracts, worktrees |
 | [Observability Guide](observability/OBSERVABILITY.md) | cast.db schema, observability dashboard, hook event coverage |
 | [CAST Protocol Spec](architecture/cast-protocol-spec.md) | Agent dispatch protocol, ADM format, and SubagentStop payload contract |
 | [Dispatch DAG Decision](dispatch-dag-decision.md) | ADR: why CAST uses a manifest-driven DAG over a centralized orchestrator |

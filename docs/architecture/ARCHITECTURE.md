@@ -7,7 +7,7 @@ CAST is a **control plane for Claude Code** — a layer of deterministic enforce
 1. **Local-first by construction** — the core development loop never has to leave the machine. Your code, prompts, memory, and the full audit trail (`cast.db`, SQLite) live on your disk. Every cloud capability (Managed Agents, cross-LLM routing) is strictly opt-in and is never a dependency of the core loop.
 2. **Data integrity by construction** — earned through repeated full `~/.claude` wipes. Backups live *outside* the failure domain they protect, the failure detector lives outside the blast radius too, and CAST is structurally prevented from destroying its own runtime.
 
-The rest of this document maps the v8 surface: the request lifecycle, the enforcement gates, the data-integrity stack, the typed agent contracts, the eval harness, and the plugin packaging — then the still-current swarm, peer-messaging, and memory subsystems.
+The rest of this document maps the v8 surface: the request lifecycle, the enforcement gates, the data-integrity stack, the typed agent contracts, the eval harness, the plugin packaging, and the memory subsystem.
 
 ---
 
@@ -160,73 +160,6 @@ To make the conventions plugin-portable, v8 migrated language-specific rules (Ty
 | Prose agent output | Typed Handoff JSON schema + Structured Output schemas (`schemas/`) | Machine-readable agent contracts; no silent cascade failures |
 | No agent-behavior testing | `cast eval` harness (real-failure corpus, LLM-judge graders, pass@k) | Closes Anthropic's largest documented gap |
 | No visual observability | claude-code-dashboard (React 19 + Vite + Express) + cast-desktop (Tauri 2) | Live, local-only session/agent/hook insight |
-
----
-
-## Swarm System
-
-CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Each teammate gets an isolated git worktree, an agent-identity preamble, peer messaging, and quality gates.
-
-### Define a Team (YAML)
-
-```yaml
-# swarm-configs/fullstack-team.yml
-team_name: fullstack
-description: "Full-stack feature implementation with review loop"
-
-teammates:
-  - role: frontend
-    agent_def: code-writer
-    task: "Implement React component for feature X"
-    model: claude-sonnet-4-6
-  - role: backend
-    agent_def: code-writer
-    task: "Implement Express API route and database migration"
-    model: claude-sonnet-4-6
-  - role: reviewer
-    agent_def: code-reviewer
-    task: "Review all changes from frontend and backend before merge"
-    model: claude-haiku-4-5
-
-quality_gates:
-  require_reviewer: true
-  commit_agent_only: true
-  pre_merge_review: true
-
-merge_strategy: squash  # squash | merge | rebase
-```
-
-### Bootstrap and Run
-
-```bash
-cast swarm bootstrap swarm-configs/fullstack-team.yml   # spawn the swarm
-cast swarm status <swarm_id>                            # monitor in real time
-cast swarm merge <swarm_id>                             # merge results when done
-```
-
-Under the hood: CAST creates isolated git worktrees per teammate, gives each a Claude Code session with an identity preamble, runs them in parallel while emitting lifecycle events, routes peer messages through the `cast.db` message bus, and surfaces history in the dashboards. (Swarm is one mode of the control plane; the gates and observability above apply to every dispatch, swarm or not.)
-
----
-
-## Peer Messaging & Gossip Protocol
-
-Teammates communicate via the cast.db message bus — no central broker, fully decentralized:
-
-```json
-{
-  "message_type": "task_claim",
-  "from_agent": "backend",
-  "to_agent": "reviewer",
-  "payload": {
-    "task_id": "task-123",
-    "subject": "Implement POST /users route",
-    "status": "complete",
-    "files_changed": ["/src/routes/users.ts"]
-  }
-}
-```
-
-Message types: **task_claim** (starting a task), **status_update** (progress/completion), **peer_query** (ask a teammate), **idle_event** (waiting). All messages log to the `teammate_messages` table with timestamps, enabling full swarm replay and debugging.
 
 ---
 

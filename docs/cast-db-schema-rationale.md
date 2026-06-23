@@ -43,7 +43,7 @@ Kept separate to allow different remediation paths (hallucinations are usually a
 
 ## Swarm tables (closes Correction #21)
 
-`swarm_sessions`, `teammate_messages`, `teammate_runs` are intentionally dormant until `cast swarm` runs. Zero rows is CORRECT — these only populate when a swarm bootstrap occurs. The /db browser should show a tooltip indicating "populates only during active swarm sessions."
+`swarm_sessions`, `teammate_messages`, `teammate_runs` are permanently dormant — the `/swarm` writers were retired in v9. Tables are retained as historical schema record; zero rows is CORRECT. The /db browser should show a tooltip indicating "dormant — /swarm writers retired in v9."
 
 ## `dispatch_events` placement (closes Correction #5)
 
