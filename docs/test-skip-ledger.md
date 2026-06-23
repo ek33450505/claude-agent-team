@@ -32,14 +32,12 @@ A skip without a recorded rationale is indistinguishable from lost coverage — 
 
 ## Remaining Intentional Skips
 
-**Total call sites: 25** across 16 files (as of 2026-06-19 audit documentation fix, includes 7 newly-documented sites from 2026-06-18 audit).
+**Total call sites: 23** across 14 files (as of the v9 `/swarm` retirement, which removed the 2 setup-level swarm-test skips with their deleted files; prior baseline was 25 across 16 files from the 2026-06-19 audit, including 7 newly-documented sites from 2026-06-18).
 
 Note: a single `setup()`-level skip gates every `@test` in a file with one call. Those are marked **[setup-level]** and the gated test count is noted — a single ledger line represents multiple suppressed tests.
 
 | File | Line | # Tests Gated | Reason | Category | Un-skip Condition |
 |------|------|--------------|--------|----------|------------------|
-| `tests/cast-swarm-bootstrap.bats` | 12 | ~8 **[setup-level]** | `pyyaml` not available — setup() bails before any test can run | Environment (optional dependency) | pyyaml available in environment; `python3 -c "import yaml"` succeeds |
-| `tests/cast-swarm-teardown.bats` | 13 | ~8 **[setup-level]** | Same pyyaml guard in setup() | Environment (optional dependency) | Same as above |
 | `tests/cast-session-start-journal.bats` | 15 | ~all **[setup-level]** | Requires actual journal entries in `~/Documents/Claude/`; setup() skips if absent | Environment (real vault) | Could be un-skipped by seeding a fixture vault under the temp HOME (not yet implemented) |
 | `tests/cast-encrypt.bats` | 46 | 1 | `age` binary not installed | Environment (optional dependency) | Install `age` in CI and confirm test passes |
 | `tests/cast-encrypt.bats` | 63 | 1 | `age` binary not installed | Environment (optional dependency) | Same as above |

@@ -1,8 +1,8 @@
 #!/bin/bash
-# cast-db-init.sh — CAST SQLite State Foundation (v8 — swarm tables)
-# Creates ~/.claude/cast.db with core tables + swarm observability tables:
+# cast-db-init.sh — CAST SQLite State Foundation
+# Creates ~/.claude/cast.db with core tables + (dormant) swarm observability tables:
 #   sessions, agent_runs, routing_events, agent_memories
-#   swarm_sessions, teammate_runs, teammate_messages
+#   swarm_sessions, teammate_runs, teammate_messages  (dormant — /swarm writers retired in v9; tables retained as historical record)
 #
 # Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
 # Schema versioning via PRAGMA user_version (current = 8).
