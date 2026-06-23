@@ -10,7 +10,11 @@
 # (the lesson tests that prove the ported guarantees). The LIVE hook wiring now
 # routes through cast-pretool-dispatch.py.
 #
-# Exit 2 = hard block (Claude cannot bypass). Exit 0 = allow.
+# Exit 2 = block (model-facing, interactive). Exit 0 = allow. NOTE: this is an
+# ADVISORY-grade guard, not the non-bypassable wall — the OS sandbox (permissions +
+# sandbox.{filesystem,network}) is the real boundary for credentials/network/fs.
+# This hook is the path-aware + escape-hatch layer native rules can't express.
+# See docs/architecture/enforcement-awareness-split.md.
 # Escape hatches (leading env-var assignment): CAST_COMMIT_AGENT=1 git commit,
 # CAST_PUSH_OK=1 git push, CAST_STASH_OK=1 git stash, CAST_POLICY_OVERRIDE=1.
 

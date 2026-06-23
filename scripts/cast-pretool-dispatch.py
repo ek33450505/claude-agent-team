@@ -40,8 +40,16 @@ guard is always evaluated for Bash unless git-guard already hard-blocked — whi
 prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 → skip. Any
 unhandled error → exit 0 (allow); a guard crash must never block all tool use.
 
-CONTRACT (identical to the wrappers): exit 2 + stderr = hard block; stdout
+CONTRACT (identical to the wrappers): exit 2 + stderr = block; stdout
 hookSpecificOutput JSON = egress advisory/ask/deny; exit 0 = allow.
+
+ENFORCEMENT vs AWARENESS (master_v9.md §0.3): these guards are ADVISORY-grade — the
+model-facing block in an interactive session, NOT the non-bypassable wall. The real
+boundary for the catastrophic classes (credential reads, network egress, filesystem)
+is the OS sandbox (sandbox.filesystem.denyRead / network.allowedDomains) + permissions.
+deny, which native rules enforce for all subprocesses. These hooks remain the path-aware
+/ escape-hatch / indirection-robust layer native rules cannot express, and the record.
+See docs/architecture/enforcement-awareness-split.md for the full classification.
 """
 import importlib.util
 import json
