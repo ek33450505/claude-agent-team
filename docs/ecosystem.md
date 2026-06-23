@@ -26,7 +26,7 @@
 | [cast-dash](https://github.com/ek33450505/cast-dash) | Terminal UI dashboard for live swarm monitoring. 4-panel real-time display (Textual framework). | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-dash%22%5D&label=cast-dash&style=flat-square) | `brew tap ek33450505/cast-dash && brew install cast-dash` |
 | [cast-claudes_journal](https://github.com/ek33450505/cast-claudes_journal) | Session continuity — Claude's Journal auto-injects prior-day context via SessionStart hook. Obsidian vault sync. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-claudes_journal%22%5D&label=cast-claudes_journal&style=flat-square) | `brew tap ek33450505/homebrew-claudes-journal && brew install claudes-journal` |
 | [cast-website](https://github.com/ek33450505/cast-website) | castframework.dev — marketing site and docs portal for the CAST ecosystem. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-website%22%5D&label=cast-website&style=flat-square) | — |
-| [cast-desktop](https://github.com/ek33450505/cast-desktop) | Tauri 2 native app — embedded PTY terminal, command palette, ~20 dashboard views. v8-synced. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-desktop%22%5D&label=cast-desktop&style=flat-square) | `brew tap ek33450505/homebrew-cast-desktop && brew install cast-desktop` |
+| [cast-desktop](https://github.com/ek33450505/cast-desktop) | Tauri 2 native app — embedded PTY terminal, command palette, 11 dashboard views. v8-synced. | ![](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fek33450505%2Fclaude-agent-team%2Fmain%2Fecosystem-versions.json&query=%24%5B%22cast-desktop%22%5D&label=cast-desktop&style=flat-square) | `brew tap ek33450505/homebrew-cast-desktop && brew install cast-desktop` |
 <!-- ECOSYSTEM_END -->
 
 ## Apps & Dashboards
@@ -39,7 +39,7 @@
 
 | Repo | Description | Status |
 |---|---|---|
-| [cast-desktop](https://github.com/ek33450505/cast-desktop) | Tauri 2 native desktop app. Surfaces the CAST observability layer with an embedded PTY terminal, command palette, and ~20 dashboard views. Makes the runtime watchable, not inferrable. | Shipping — v1.2.12 |
+| [cast-desktop](https://github.com/ek33450505/cast-desktop) | Tauri 2 native desktop app. Surfaces the CAST observability layer with an embedded PTY terminal, command palette, and 11 dashboard views. Makes the runtime watchable, not inferrable. | Shipping — v1.2.12 |
 
 ## Meta / Portfolio
 
