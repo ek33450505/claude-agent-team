@@ -390,7 +390,7 @@ cat > "${OUT}/.claude-plugin/plugin.json" <<MANIFEST
   "name": "cast",
   "displayName": "CAST — Claude Agent Specialist Team",
   "version": "${VERSION}",
-  "description": "Swarm control plane for Claude Code: curated specialist agents, hook-enforced quality gates, and SQLite observability.",
+  "description": "Multi-agent control plane for Claude Code: curated specialist agents, hook-enforced quality gates, and SQLite observability.",
   "author": { "name": "ek33450505" },
   "homepage": "https://github.com/ek33450505/claude-agent-team",
   "repository": "https://github.com/ek33450505/claude-agent-team",

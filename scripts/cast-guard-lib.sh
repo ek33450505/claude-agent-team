@@ -8,7 +8,7 @@
 #     source "$(dirname "$0")/cast-guard-lib.sh" 2>/dev/null || true
 #
 # Usage:
-#   cast_declare_blast_radius "/private/tmp/cast-swarm-" "/tmp/cast-swarm-"
+#   cast_declare_blast_radius "/private/tmp/cast-snapshot-" "/tmp/cast-snapshot-"
 #   cast_safe_rm "$target_dir"
 
 # Internal: array of declared blast-radius prefixes.
@@ -41,7 +41,7 @@ cast_declare_blast_radius() {
       # Existing directory: realpath resolves symlinks (e.g. /tmp → /private/tmp)
       canonical_prefix="$(realpath "$_prefix_stripped" 2>/dev/null)" || canonical_prefix="$_prefix_stripped"
     else
-      # Non-directory (e.g. /private/tmp/cast-swarm- string prefix):
+      # Non-directory (e.g. /private/tmp/cast-snapshot- string prefix):
       # canonicalize parent dir and re-append basename
       local _pdir _pbase _pdir_canon
       _pdir="$(dirname "$_prefix_stripped")"
