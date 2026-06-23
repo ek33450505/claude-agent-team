@@ -1,199 +1,24 @@
-#!/bin/bash
-# pre-tool-guard.sh — CAST PreToolUse hook for Bash tool
-# Blocks operations that must go through designated agents.
-# Exit 2 = hard block (Claude cannot bypass). Exit 0 = allow.
+#!/usr/bin/env bash
+# pre-tool-guard.sh — thin wrapper for the PreToolUse git + policy guard.
 #
-# Blocked operations:
-#   git commit  → use commit agent (escape hatch: CAST_COMMIT_AGENT=1 git commit ...)
-#   git push    → use commit agent workflow (escape hatch: CAST_PUSH_OK=1 git push ...)
+# CAST v9 P0: the logic (git commit/push/stash blocks + Write/Edit policy engine)
+# was ported to cast-git-guard.py so it can run in-process inside the unified
+# cast-pretool-dispatch.py — ONE source of truth, no bash/python duplication.
 #
-# SECURITY: Escape hatch MUST appear as a leading env var assignment before the git command.
-# It cannot appear only inside a commit message, comment, or echo — those are blocked.
-# Valid:   CAST_COMMIT_AGENT=1 git commit -m "message"
-# Valid:   CAST_COMMIT_AGENT=1 git -C /path commit -m "message"  (global options tolerated)
-# Invalid: git commit -m "CAST_COMMIT_AGENT=1"  (message injection — blocked)
-# Invalid: echo "CAST_COMMIT_AGENT=1" && git commit  (chained echo — blocked)
+# This wrapper is retained as the standalone PreToolUse entrypoint and as the
+# test entrypoint for tests/pre-tool-guard.bats + tests/test_push_agent_stash_guard.bats
+# (the lesson tests that prove the ported guarantees). The LIVE hook wiring now
+# routes through cast-pretool-dispatch.py.
+#
+# Exit 2 = block (model-facing, interactive). Exit 0 = allow. NOTE: this is an
+# ADVISORY-grade guard, not the non-bypassable wall — the OS sandbox (permissions +
+# sandbox.{filesystem,network}) is the real boundary for credentials/network/fs.
+# This hook is the path-aware + escape-hatch layer native rules can't express.
+# See docs/architecture/enforcement-awareness-split.md.
+# Escape hatches (leading env-var assignment): CAST_COMMIT_AGENT=1 git commit,
+# CAST_PUSH_OK=1 git push, CAST_STASH_OK=1 git stash, CAST_POLICY_OVERRIDE=1.
 
 # Skip for CAST-internal subprocesses (consistency with every other CAST hook; latency)
 if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 
-set -euo pipefail
-
-INPUT="$(cat)"
-# Extract tool_name, command, and file_path in one python3 cold-start (saves ~2 spawns vs prior 3).
-# NUL-delimited read preserves multiline CMD without truncation; bash-3.2-compatible.
-{ IFS= read -r -d '' TOOL; IFS= read -r -d '' CMD; IFS= read -r -d '' FILE_PATH; } < <(printf '%s' "$INPUT" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-ti = d.get('tool_input', {})
-sys.stdout.write(d.get('tool_name','') + '\0' + ti.get('command','') + '\0' + ti.get('file_path', ti.get('path','')) + '\0')
-" 2>/dev/null) || { TOOL=''; CMD=''; FILE_PATH=''; }
-
-# --- Policy engine: path-based guard for Write/Edit tool calls ---
-# Evaluates config/policies.json rules. Blocks or warns based on severity.
-# Escape hatch: set CAST_POLICY_OVERRIDE=1 in env to skip block (not warn) policies.
-if [ "$TOOL" = "Write" ] || [ "$TOOL" = "Edit" ]; then
-  if [ -n "$FILE_PATH" ]; then
-    # TTL sweep: remove agent-status files older than 2 hours (matches SESSION_TIMEOUT=7200)
-    find "${CLAUDE_DIR:-$HOME/.claude}/agent-status/" -name "*.json" -mmin +120 -delete 2>/dev/null || true
-
-    # Policy engine. The block path is the engine's ONLY stdout write; the closing
-    # redirect (1>&2 2>/dev/null) routes that block message to the hook stderr so
-    # Claude Code surfaces it as the block reason on exit 2, while still suppressing
-    # the engine's own stderr noise. Comment kept free of apostrophes/backticks (bash 3.2).
-    CAST_FILE_PATH="$FILE_PATH" CAST_POLICY_OVERRIDE="${CAST_POLICY_OVERRIDE:-0}" python3 -c "
-import json, os, re, sys, datetime
-
-file_path = os.environ.get('CAST_FILE_PATH', '')
-override = os.environ.get('CAST_POLICY_OVERRIDE', '0') == '1'
-session_id = os.environ.get('CLAUDE_SESSION_ID', 'default')
-
-# Load policies config — skip gracefully if not found
-repo_root = os.getcwd()
-policies_path = os.path.join(repo_root, 'config', 'policies.json')
-# Also check ~/.claude/config/policies.json as fallback
-if not os.path.exists(policies_path):
-    policies_path = os.path.expanduser('~/.claude/config/policies.json')
-if not os.path.exists(policies_path):
-    sys.exit(0)
-
-try:
-    with open(policies_path) as f:
-        config = json.load(f)
-except Exception:
-    sys.exit(0)
-
-agent_status_dir = os.path.expanduser('~/.claude/agent-status')
-now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-SESSION_TIMEOUT = 7200  # 2 hours
-
-def agent_completed_this_session(required_agent):
-    '''Check ~/.claude/agent-status/ for a recent completion of the required agent.'''
-    if not os.path.isdir(agent_status_dir):
-        return False
-    for fname in os.listdir(agent_status_dir):
-        if required_agent in fname:
-            fpath = os.path.join(agent_status_dir, fname)
-            age = now - os.path.getmtime(fpath)
-            if age < SESSION_TIMEOUT:
-                try:
-                    with open(fpath) as f:
-                        content = f.read()
-                    if 'DONE' in content or 'DONE_WITH_CONCERNS' in content:
-                        return True
-                except Exception:
-                    pass
-    return False
-
-for policy in config.get('policies', []):
-    pattern = policy.get('path_pattern', '')
-    if not pattern:
-        continue
-    try:
-        if not re.search(pattern, file_path, re.IGNORECASE):
-            continue
-    except re.error:
-        continue
-
-    policy_id = policy.get('id', 'unknown')
-    required_agent = policy.get('requires_agent', '')
-    severity = policy.get('severity', 'warn')
-    description = policy.get('description', '')
-
-    if not required_agent:
-        continue
-
-    if agent_completed_this_session(required_agent):
-        # Agent already completed — policy satisfied
-        continue
-
-    if severity == 'block':
-        if override:
-            print(f'[CAST-POLICY-WARN] Policy \"{policy_id}\" bypassed via CAST_POLICY_OVERRIDE=1. Requires: {required_agent}', file=sys.stderr)
-            import datetime as _dt, json as _json
-            audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
-            os.makedirs(os.path.dirname(audit_path), exist_ok=True)
-            event = {
-                'timestamp': _dt.datetime.now(_dt.timezone.utc).isoformat().replace('+00:00', 'Z'),
-                'event': 'POLICY_OVERRIDE',
-                'policy_id': policy_id,
-                'file_path': file_path,
-                'session_id': session_id,
-                'override_env': 'CAST_POLICY_OVERRIDE'
-            }
-            try:
-                with open(audit_path, 'a') as _af:
-                    _af.write(_json.dumps(event) + '\n')
-            except Exception:
-                pass
-            sys.exit(0)
-        else:
-            msg = (
-                f'**[CAST-POLICY-BLOCK]** Policy \"{policy_id}\" blocks this edit.\\n'
-                f'Reason: {description}\\n'
-                f'Required: Dispatch the \`{required_agent}\` agent before editing \`{file_path}\`.\\n'
-                f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
-            )
-            print(msg)
-            sys.exit(2)
-    else:
-        # severity == warn
-        print(f'[CAST-POLICY-WARN] Policy \"{policy_id}\": {description}. Consider dispatching \`{required_agent}\` first.', file=sys.stderr)
-" 1>&2 2>/dev/null
-    EXIT_CODE=$?
-    if [ $EXIT_CODE -eq 2 ]; then
-      exit 2
-    fi
-  fi
-fi
-
-# Only intercept Bash tool for git guards below
-[ "$TOOL" != "Bash" ] && exit 0
-
-# Extract only the first line of $CMD to prevent multiline escape hatch bypass.
-# A multiline command with CAST_COMMIT_AGENT=1 on line 2 would otherwise pass
-# the ^ anchor check while the actual git command is on line 1.
-FIRST_LINE="${CMD%%$'\n'*}"
-
-# --- git commit block ---
-# Allow ONLY if escape hatch env var appears before git commit (tolerates leading cd chains and git global options)
-if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_COMMIT_AGENT=1[[:space:]]+git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+commit"; then
-  exit 0
-fi
-# Block any other git commit invocation (including those with git global options)
-if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+commit"; then
-  echo "**[CAST]** Raw \`git commit\` blocked. Dispatch the \`commit\` agent instead (Agent tool, subagent_type: 'commit')." >&2
-  exit 2
-fi
-
-# --- git push block ---
-# Allow ONLY if escape hatch env var appears before git push (tolerates leading cd chains, additional
-# env-var assignments between CAST_PUSH_OK=1 and git, and git global options).
-# Pattern breakdown:
-#   (^|&&\s*)             — start of line or after a && chain
-#   CAST_PUSH_OK=1\s+     — the required escape hatch
-#   ([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+\s+)*  — zero or more extra VAR=value assignments (e.g. CAST_SKIP_BATS_PUSH=1)
-#   git(global-opts)*\s+push — the actual git push command
-if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_PUSH_OK=1[[:space:]]+([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+push"; then
-  exit 0
-fi
-# Block any other git push invocation (including those with git global options)
-if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+push"; then
-  echo "**[CAST]** Raw \`git push\` blocked. Ensure code-reviewer has run, then use \`CAST_PUSH_OK=1 git push\` or dispatch via the commit agent workflow." >&2
-  exit 2
-fi
-
-# --- git stash block ---
-# Allow ONLY if explicit escape hatch env var appears before git stash (tolerates git global options)
-if echo "$FIRST_LINE" | grep -qE "(^|&&[[:space:]]*)CAST_STASH_OK=1[[:space:]]+git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+stash"; then
-  exit 0
-fi
-# Block any git stash invocation (push, pop, apply, drop, clear, list, save, show, create, store, branch)
-# Guards against the 2026-05-19 push-agent bug where bare 'git stash pop/apply' resurrected abandoned stashes.
-# Includes git global options tolerance.
-if echo "$FIRST_LINE" | grep -qE "(^|[[:space:]])git([[:space:]]+(-C[[:space:]]+[^[:space:]]+|--no-pager|-c[[:space:]]+[^[:space:]]+|--git-dir=[^[:space:]]+|--work-tree=[^[:space:]]+))*[[:space:]]+stash([[:space:]]|$)"; then
-  echo "**[CAST]** Raw \`git stash\` blocked. Stash operations are prohibited for agents — they risk resurrecting abandoned stashes from other sessions. If you genuinely need stash, use \`CAST_STASH_OK=1 git stash\` (document your reason). See: 2026-05-19 push-agent stash incident." >&2
-  exit 2
-fi
-
-exit 0
+exec python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cast-git-guard.py"

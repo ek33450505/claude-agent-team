@@ -332,8 +332,11 @@ def rewrite(o):
     if isinstance(o, dict):  return {k: rewrite(v) for k, v in o.items()}
     if isinstance(o, list):  return [rewrite(x) for x in o]
     if isinstance(o, str):
-        return re.sub(r'bash ~/\.claude/scripts/(\S+)',
-                      r'bash "${CLAUDE_PLUGIN_ROOT}/scripts/\1"', o)
+        # Rewrite any interpreter (bash/python3/sh) — CAST v9 P0 added the first
+        # python3-interpreter hook (cast-pretool-dispatch.py); the prior bash-only
+        # pattern left its ~/.claude/scripts path unrewritten (plugin-drift fail).
+        return re.sub(r'\b(bash|python3|sh) ~/\.claude/scripts/(\S+)',
+                      r'\1 "${CLAUDE_PLUGIN_ROOT}/scripts/\2"', o)
     return o
 merged = rewrite(merged)
 # Drop http-type hook entries — these POST to the maintainer's local dashboard

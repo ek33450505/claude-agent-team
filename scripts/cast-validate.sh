@@ -72,7 +72,7 @@ for event_hooks in hooks.values():
             commands.append(cmd)
 
 missing = []
-for script in ["pre-tool-guard.sh", "post-tool-hook.sh"]:
+for script in ["cast-pretool-dispatch.py", "post-tool-hook.sh"]:
     found = any(
         script in cmd or
         any(os.path.basename(tok) == script for tok in cmd.split())
@@ -88,7 +88,7 @@ else:
 PYEOF
 )
   if [[ "$WIRING" == OK ]]; then
-    pass "Hook wiring: pre-tool-guard.sh, post-tool-hook.sh wired"
+    pass "Hook wiring: cast-pretool-dispatch.py, post-tool-hook.sh wired"
   elif [[ "$WIRING" == MISSING:* ]]; then
     MISSING_SCRIPTS="${WIRING#MISSING:}"
     fail "Hook wiring: missing scripts not wired — ${MISSING_SCRIPTS}"

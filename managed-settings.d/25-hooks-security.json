@@ -24,33 +24,12 @@
         ]
       },
       {
-        "id": "cast-egress-sentinel",
-        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read",
+        "id": "cast-pretool-dispatch",
+        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read|Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/scripts/cast-egress-hook.sh",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash|Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/pre-tool-guard.sh",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "id": "cast-command-guard",
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-command-guard.sh",
+            "command": "python3 ~/.claude/scripts/cast-pretool-dispatch.py",
             "timeout": 5
           }
         ]
