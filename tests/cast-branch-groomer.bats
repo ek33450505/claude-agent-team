@@ -424,3 +424,40 @@ _create_branch_aged() {
   [[ "$output" =~ "0 swarm" ]]
   [[ "$output" =~ "1 merged" ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 19: prefix guard — branches outside ALL deletion patterns are protected
+#          This is the defense-in-depth regression guard (§3.8.B analogue):
+#          the groomer only deletes branches matching explicit patterns, never
+#          an arbitrary branch outside those patterns.
+# ---------------------------------------------------------------------------
+
+@test "groomer prefix guard: non-matching branches are never deleted" {
+  # Create a branch that doesn't match ANY deletion pattern:
+  # - not cast-swarm-*
+  # - not feature/* (except merged ones)
+  # - not fix/* (except merged ones)
+  # - not worktree-agent-*
+  # - not in the whitelist (main, feature/cast-v7-*, etc.)
+  git -C "$TEST_REPO" checkout -b safe-keep-do-not-delete >/dev/null 2>&1
+  echo "important data" > "$TEST_REPO/important-file.txt"
+  git -C "$TEST_REPO" add important-file.txt
+  git -C "$TEST_REPO" commit -m "Important work in non-deletable branch" >/dev/null 2>&1
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+
+  # Also create an aged but unmatched branch to ensure age alone doesn't trigger deletion
+  git -C "$TEST_REPO" checkout -b random-old-branch >/dev/null 2>&1
+  local fake_date
+  fake_date="$(date -v -30d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "30 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "2020-01-01T00:00:00")"
+  GIT_COMMITTER_DATE="$fake_date" GIT_AUTHOR_DATE="$fake_date" \
+    git -C "$TEST_REPO" commit --allow-empty -m "Old random branch" >/dev/null 2>&1
+  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
+
+  # Run groomer in apply mode
+  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
+  [ "$status" -eq 0 ]
+
+  # Both branches should survive because they don't match any deletion pattern
+  git -C "$TEST_REPO" branch --list | grep -q "safe-keep-do-not-delete"
+  git -C "$TEST_REPO" branch --list | grep -q "random-old-branch"
+}
