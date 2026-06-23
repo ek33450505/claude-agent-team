@@ -24,6 +24,17 @@
         ]
       },
       {
+        "id": "cast-egress-sentinel",
+        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-egress-hook.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Bash|Write|Edit",
         "hooks": [
           {

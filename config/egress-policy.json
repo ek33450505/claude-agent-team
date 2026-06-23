@@ -1,0 +1,39 @@
+{
+  "_comment": "CAST v9 A1 — Egress / Privacy Sentinel policy data (SCAFFOLD — Ed owns the final values).",
+  "_thesis": "Make 'know what leaves the machine' enforceable. The sentinel RECORDS every off-machine-bound tool call locally (the record-deepening thesis) and can advise/ask/block on sensitive content. Native permissions.deny/ask handle coarse tool+domain access; this layer adds local audit + content-sensitivity + credential-read correlation.",
+  "_mode_note": "Enforcement MODE lives in ~/.claude/config/cast-cli.json -> egress_enforcement (advisory|ask|strict) or env CAST_EGRESS_ENFORCEMENT (takes precedence). This file holds POLICY DATA only.",
+
+  "mcp_servers": {
+    "_doc": "Per-server cloud-bound classification. Transport (stdio vs http) is NOT a reliable signal: github uses local stdio (npx) yet calls api.github.com. Key = the <server> segment of mcp__<server>__<tool>.",
+    "_default_unknown": "cloud_bound",
+    "cloud_bound": ["github", "ms365", "todoist", "claude_ai_Gmail", "claude_ai_Google_Calendar", "claude_ai_Google_Drive"],
+    "local_only": ["obsidian", "obsidian-claude"],
+    "anthropic_brokered": ["claude_ai_Gmail", "claude_ai_Google_Calendar", "claude_ai_Google_Drive"]
+  },
+
+  "credential_path_globs": {
+    "_doc": "File paths that, when Read (or cat'd in Bash), count as a credential read. Logged always; escalated only if correlated with an egress event in the same session (compound detection = Ed's build).",
+    "globs": [
+      "**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx",
+      "~/.aws/credentials", "~/.aws/config",
+      "~/.ssh/id_*", "~/.ssh/*.pem", "~/.ssh/*.key",
+      "~/.netrc", "~/.npmrc", "~/.pypirc",
+      "~/.claude/config/*secret*", "~/.claude/config/*token*", "~/.claude/config/*cred*"
+    ]
+  },
+
+  "bash_network_commands": {
+    "_doc": "Bash binaries that can move data off-machine. git push is intentionally OMITTED (already gated by pre-tool-guard.sh CAST_PUSH_OK). Detection heuristics + exfil-pipe parsing are Ed's build — see docs/v9-a1-egress-sentinel.md Surface 3.",
+    "commands": ["curl", "wget", "scp", "rsync", "ssh", "nc", "ncat", "telnet", "ftp", "sftp"]
+  },
+
+  "safelist_hosts": {
+    "_doc": "Hosts/domains that suppress ADVISORY noise (still recorded, never warned/blocked unless sensitive content is detected). Loopback is always safe.",
+    "hosts": ["localhost", "127.0.0.1", "::1", "anthropic.com", "claude.ai", "docs.anthropic.com", "docs.claude.com", "github.com", "api.github.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
+  },
+
+  "telemetry": {
+    "_doc": "OTEL/telemetry exporters pointing off-machine. localhost/127.0.0.1 endpoints are local feeds (allowed by the thesis: OTEL is only ever a LOCAL feed).",
+    "env_keys": ["OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"]
+  }
+}
