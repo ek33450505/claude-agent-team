@@ -5,8 +5,6 @@
 # Use --apply to actually delete.
 #
 # Branch deletion policy:
-#   cast-swarm-*    : content-merged into main (any age) OR
-#                     (age >= CAST_GROOM_SWARM_DAYS AND no open PR)
 #   worktree-agent-*: committerdate < now-7d
 #   feature/* fix/* : merged into main AND remote tracking ref is gone ([gone])
 #
@@ -131,7 +129,6 @@ _is_content_merged() {
 }
 
 # ── Deletion trackers ────────────────────────────────────────────────────
-DELETED_SWARM=0
 DELETED_WORKTREE_AGENT=0
 DELETED_MERGED=0
 WARN_COUNT=0
@@ -149,33 +146,6 @@ _delete_branch() {
     fi
   fi
 }
-
-# ── Process cast-swarm-* branches (content-merged OR >CAST_GROOM_SWARM_DAYS, no open PR) ──
-CAST_GROOM_SWARM_DAYS="${CAST_GROOM_SWARM_DAYS:-7}"
-while IFS= read -r branch; do
-  branch="${branch#  }"  # strip leading whitespace
-  branch="${branch# }"
-  branch="${branch#* }"  # strip any * marker for current branch
-  branch="${branch#  }"
-  # Normalize: remove leading whitespace and asterisk
-  branch="$(printf '%s' "$branch" | sed 's/^[* ]*//')"
-  [[ -z "$branch" ]] && continue
-  [[ "$branch" != cast-swarm-* ]] && continue
-  _is_whitelisted "$branch" && continue
-  _has_open_pr "$branch" && { printf '[groomer] Keeping %s — has open PR\n' "$branch"; continue; }
-  # Content-merged swarm branches are local-only throwaway → delete regardless of age.
-  # Non-content-merged but stale (>= CAST_GROOM_SWARM_DAYS) → delete as age fallback.
-  if _is_content_merged "$branch"; then
-    _delete_branch "$branch"
-    DELETED_MERGED=$((DELETED_MERGED + 1))
-  else
-    local_age=$(_days_since_commit "$branch")
-    if [[ "$local_age" -ge "$CAST_GROOM_SWARM_DAYS" ]]; then
-      _delete_branch "$branch"
-      DELETED_SWARM=$((DELETED_SWARM + 1))
-    fi
-  fi
-done < <(git branch --list 'cast-swarm-*' 2>/dev/null || true)
 
 # ── Process worktree-agent-* branches (>7d) ───────────────────────────────
 while IFS= read -r branch; do
@@ -248,8 +218,8 @@ fi
 # ── Summary ───────────────────────────────────────────────────────────────
 DRY_LABEL=""
 [[ "$DRY_RUN" -eq 1 ]] && DRY_LABEL=" (dry-run)"
-printf '\nGroomed%s: %d swarm + %d worktree-agent + %d merged feature/fix branches' \
-  "$DRY_LABEL" "$DELETED_SWARM" "$DELETED_WORKTREE_AGENT" "$DELETED_MERGED"
+printf '\nGroomed%s: %d worktree-agent + %d merged feature/fix branches' \
+  "$DRY_LABEL" "$DELETED_WORKTREE_AGENT" "$DELETED_MERGED"
 if [[ "$DO_WORKTREES" -eq 1 ]]; then
   printf ', %d worktrees' "$DELETED_WORKTREES"
 fi

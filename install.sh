@@ -131,28 +131,12 @@ done
 success "  $CMD_COUNT commands installed"
 
 # --- Install skills ---
-# Skills listed in USER_DATA_SKILLS are treated as user-data: if SKILL.md already
-# exists in the destination, the copy is skipped so user-populated content is
-# preserved.  A fresh install (no destination yet) still copies the stub.
-USER_DATA_SKILLS="swarm"
 info "Installing skills..."
 for skill_dir in "$SCRIPT_DIR"/skills/*/; do
     [ -d "$skill_dir" ] || continue
     skill_name="$(basename "$skill_dir")"
     mkdir -p "$CLAUDE_DIR/skills/$skill_name"
-    # Check if this skill is in the user-data set
-    is_user_data=false
-    for ud in $USER_DATA_SKILLS; do
-        if [ "$skill_name" = "$ud" ]; then
-            is_user_data=true
-            break
-        fi
-    done
-    if [ "$is_user_data" = true ] && [ -f "$CLAUDE_DIR/skills/$skill_name/SKILL.md" ]; then
-        info "  Skipped (exists, user-data): skills/$skill_name"
-    else
-        cp -R "$skill_dir"* "$CLAUDE_DIR/skills/$skill_name/"
-    fi
+    cp -R "$skill_dir"* "$CLAUDE_DIR/skills/$skill_name/"
     SKILL_COUNT=$((SKILL_COUNT + 1))
 done
 success "  $SKILL_COUNT skills installed"
@@ -354,24 +338,6 @@ if [ -f "$SCRIPT_DIR/cast/permission-rules.json" ]; then
         cp "$SCRIPT_DIR/cast/permission-rules.json" "$CLAUDE_DIR/cast/permission-rules.json"
         success "  Installed: cast/permission-rules.json"
     fi
-fi
-
-# --- Install swarm-configs (skip if destination exists — don't overwrite user customizations) ---
-if [ -d "$SCRIPT_DIR/swarm-configs" ]; then
-    info "Installing swarm configs..."
-    mkdir -p "$CLAUDE_DIR/swarm-configs"
-    mkdir -p "$CLAUDE_DIR/cast/swarms"
-    for config_file in "$SCRIPT_DIR"/swarm-configs/*.yml; do
-        [ -f "$config_file" ] || continue
-        base="$(basename "$config_file")"
-        dest="$CLAUDE_DIR/swarm-configs/$base"
-        if [ -f "$dest" ]; then
-            info "  Skipped (exists): swarm-configs/$base"
-        else
-            cp "$config_file" "$dest"
-            success "  Installed: swarm-configs/$base"
-        fi
-    done
 fi
 
 # --- Setup Python venv for TUI dashboard ---

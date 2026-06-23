@@ -1,31 +1,17 @@
 #!/usr/bin/env bats
-# tests/cast-maintenance-guard.bats — Integration tests for cleanup_stale_swarm_dirs()
-# in scripts/cast-maintenance.sh.
+# tests/cast-maintenance-guard.bats — Integration tests for cast-maintenance.sh guard behaviour.
 #
-# These tests SOURCE the real cast-maintenance.sh (source guard fires, skipping
-# the main body) and call cleanup_stale_swarm_dirs() directly with
-# CAST_MAINT_SWARM_TMP_ROOT pointed at a mktemp fixture root.
+# Tests SOURCE cast-maintenance.sh (source guard fires, skipping the main body)
+# and exercise the cast-guard-lib.sh / cast_safe_rm refusal-tolerance path.
 #
 # Coverage:
-#   1. Stale cast-swarm-* dir (backdated via touch -t) is removed
-#   2. Fresh cast-swarm-* dir (current mtime) survives (-mtime +3 semantics)
-#   3. Function returns 0 under set -euo pipefail (launchd regression)
-#   4. Refusal: lib-level test confirming the || log tolerance path works
-#      (direct cast_safe_rm call since engineering a refusal through the function's
-#       find -type d is contrived — symlinks aren't matched by -type d)
+#   1. cast_safe_rm refusal is non-fatal — || log pattern works (lib-level)
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 load 'helpers/setup'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-
-# Portable timestamp for touch -t: returns a YYYYMMDDHHmm string N days in the past.
-# Uses python3 (stdlib) to avoid the BSD-vs-GNU date -v/-d incompatibility.
-_backdate_timestamp() {
-  local days="${1:-4}"
-  python3 -c "import time; print(time.strftime('%Y%m%d%H%M', time.localtime(time.time() - ${days}*86400)))"
-}
 
 setup() {
   # Isolate HOME so cast-maintenance.sh sets CAST_DIR to a temp path
@@ -42,73 +28,7 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. Stale dir removed — mtime older than 3 days → find -mtime +3 matches → deleted
-# ---------------------------------------------------------------------------
-@test "cleanup_stale_swarm_dirs removes stale cast-swarm-* dir (mtime > 3 days)" {
-  local scan_root stale_dir
-  scan_root="$BATS_TEST_TMPDIR/fake-tmp-$$"
-  mkdir -p "$scan_root"
-
-  stale_dir="${scan_root}/cast-swarm-stale-$$"
-  mkdir "$stale_dir"
-  touch "$stale_dir/marker"
-
-  # Backdate the directory mtime to 4 days ago so find -mtime +3 matches it
-  touch -t "$(_backdate_timestamp 4)" "$stale_dir"
-
-  CAST_MAINT_SWARM_TMP_ROOT="$scan_root" cleanup_stale_swarm_dirs
-
-  [ ! -d "$stale_dir" ]
-}
-
-# ---------------------------------------------------------------------------
-# 2. Fresh dir survives — current mtime does NOT match find -mtime +3
-# ---------------------------------------------------------------------------
-@test "cleanup_stale_swarm_dirs leaves fresh cast-swarm-* dir untouched (mtime ≤ 3 days)" {
-  local scan_root fresh_dir
-  scan_root="$BATS_TEST_TMPDIR/fake-tmp-fresh-$$"
-  mkdir -p "$scan_root"
-
-  fresh_dir="${scan_root}/cast-swarm-fresh-$$"
-  mkdir "$fresh_dir"
-  touch "$fresh_dir/marker"
-  # mtime is now (default) — should NOT match -mtime +3
-
-  CAST_MAINT_SWARM_TMP_ROOT="$scan_root" cleanup_stale_swarm_dirs
-
-  [ -d "$fresh_dir" ]
-}
-
-# ---------------------------------------------------------------------------
-# 3. Launchd regression — function returns 0 under set -euo pipefail
-#    A stale dir is cleaned successfully; the function must not abort.
-# ---------------------------------------------------------------------------
-@test "cleanup_stale_swarm_dirs returns 0 under set -euo pipefail (launchd regression)" {
-  local scan_root stale_dir
-  scan_root="$BATS_TEST_TMPDIR/fake-tmp-launchd-$$"
-  mkdir -p "$scan_root"
-
-  stale_dir="${scan_root}/cast-swarm-launchd-$$"
-  mkdir "$stale_dir"
-  touch -t "$(_backdate_timestamp 4)" "$stale_dir"
-
-  # Run inside an explicit strict-mode subshell; non-zero exit would fail the test
-  (
-    set -euo pipefail
-    CAST_MAINT_SWARM_TMP_ROOT="$scan_root" cleanup_stale_swarm_dirs
-  )
-
-  [ ! -d "$stale_dir" ]
-}
-
-# ---------------------------------------------------------------------------
-# 4. Refusal tolerance — cast_safe_rm refused path is logged, not fatal.
-#
-#    Honest caveat: engineering a refusal THROUGH the function's find -type d
-#    is contrived (find -type d skips symlinks, the only cheap escape mechanism).
-#    This test therefore exercises the lib-level refusal path directly via
-#    cast_safe_rm, then confirms that the || log pattern in cleanup_stale_swarm_dirs
-#    mirrors that tolerance (the function's while-loop body: cast_safe_rm ... || log).
+# 1. Refusal tolerance — cast_safe_rm refused path is logged, not fatal.
 # ---------------------------------------------------------------------------
 @test "cast_safe_rm refusal is non-fatal — || log pattern works (lib-level)" {
   local outside_dir
@@ -116,16 +36,16 @@ teardown() {
   mkdir "$outside_dir"
   touch "$outside_dir/canary"
 
-  # Source the guard lib (already loaded via cast-maintenance.sh source in setup)
-  cast_declare_blast_radius "/private/tmp/cast-swarm-" "/tmp/cast-swarm-"
+  # Declare a blast radius that doesn't include outside_dir
+  cast_declare_blast_radius "/private/tmp/cast-guard-test-" "/tmp/cast-guard-test-"
 
-  # Replicate the function's || log pattern — refusal must not propagate as error
+  # Replicate the || log pattern — refusal must not propagate as error
   local result=0
   cast_safe_rm "$outside_dir" 2>/dev/null || result=$?
   [ "$result" -ne 0 ]            # refusal happened
   [ -f "$outside_dir/canary" ]   # target survived
 
-  # Confirm the || tolerance: simulating the function body with set -e active
+  # Confirm the || tolerance: simulating a maintenance-style body with set -e active
   (
     set -euo pipefail
     cast_safe_rm "$outside_dir" 2>/dev/null || true   # mirrors: ... || log "WARN..."

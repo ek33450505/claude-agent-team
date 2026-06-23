@@ -65,19 +65,6 @@ run_install_personal() {
   [ -d "$HOME/.claude/skills/wizard" ]
 }
 
-@test "Install: user-data skill (swarm) is preserved on reinstall" {
-  # First install — stub is written because destination does not exist yet
-  run_install
-  [ -f "$HOME/.claude/skills/swarm/SKILL.md" ]
-
-  # Simulate user populating the skill with custom content
-  echo "USER_SWARM_SENTINEL" > "$HOME/.claude/skills/swarm/SKILL.md"
-
-  # Second install — user content must NOT be overwritten
-  run_install
-  grep -q "USER_SWARM_SENTINEL" "$HOME/.claude/skills/swarm/SKILL.md"
-}
-
 @test "Install: default install (no --personal) does NOT install project-catalog" {
   # project-catalog is now personal-gated; core install must not write it
   run_install
