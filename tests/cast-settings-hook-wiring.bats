@@ -116,9 +116,11 @@ print('OK')
   assert_output "OK"
 }
 
-@test "deterministic git push block remains in pre-tool-guard.sh" {
-  local guard="${BATS_TEST_DIRNAME}/../scripts/pre-tool-guard.sh"
-  # The deterministic guard must still block pushes and expose the CAST_PUSH_OK escape hatch.
+@test "deterministic git push block remains in cast-git-guard.py" {
+  # CAST v9 P0: the git/push logic moved from pre-tool-guard.sh into the importable
+  # cast-git-guard.py (now shared by the wrapper + cast-pretool-dispatch.py). The
+  # guarantee is unchanged — re-proven in its new home.
+  local guard="${BATS_TEST_DIRNAME}/../scripts/cast-git-guard.py"
   grep -q 'git push block' "$guard"
   grep -q 'CAST_PUSH_OK' "$guard"
 }

@@ -121,33 +121,12 @@
         ]
       },
       {
-        "id": "cast-egress-sentinel",
-        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read",
+        "id": "cast-pretool-dispatch",
+        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read|Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-egress-hook.sh\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash|Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-guard.sh\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "id": "cast-command-guard",
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-command-guard.sh\"",
+            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-pretool-dispatch.py\"",
             "timeout": 5
           }
         ]

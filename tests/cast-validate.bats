@@ -37,9 +37,9 @@ build_clean_install() {
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read|Write|Edit",
         "hooks": [
-          {"type": "command", "command": "bash ~/.claude/scripts/pre-tool-guard.sh"}
+          {"type": "command", "command": "python3 ~/.claude/scripts/cast-pretool-dispatch.py"}
         ]
       }
     ],
@@ -241,7 +241,7 @@ MD
 # 6. Hook wiring checks
 # ---------------------------------------------------------------------------
 
-@test "hook wiring: missing pre-tool-guard.sh wiring → exits 2" {
+@test "hook wiring: missing cast-pretool-dispatch.py wiring → exits 2" {
   build_clean_install
   python3 - "$HOME/.claude/settings.local.json" <<'PYEOF'
 import json, sys
@@ -254,7 +254,7 @@ with open(path, "w") as f:
 PYEOF
   run_validate
   [ "$status" -eq 2 ]
-  assert_output --partial "pre-tool-guard.sh"
+  assert_output --partial "cast-pretool-dispatch.py"
 }
 
 # ---------------------------------------------------------------------------
