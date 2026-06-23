@@ -12,6 +12,9 @@ on:
       - 'rules-core/**'
       - '.github/rules-core.manifest'
 
+permissions:
+  contents: read
+
 jobs:
   rules-drift:
     runs-on: ubuntu-latest
