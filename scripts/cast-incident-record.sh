@@ -23,21 +23,29 @@ fi
 # Resolve DB path
 DB_PATH="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
 
-# Parse JSON fields via python3 inline
-# Extract agent_type, agent_id, last_message_text, original_prompt
-read -r agent_type agent_id last_message_text original_prompt < <(python3 << 'PYEOF'
-import sys, json, os
+# Parse JSON fields from CAST_INPUT. Keep each field on its own read so spaces
+# and newlines in prompts/handoff text do not corrupt the guard conditions.
+json_field() {
+  local field="$1"
+  FIELD="$field" python3 << 'PYEOF'
+import json
+import os
+
 try:
-    data = json.loads(os.environ.get('CAST_INPUT', ''))
-    agent_type = data.get('agent_type', '')
-    agent_id = data.get('agent_id', '')
-    last_message_text = data.get('last_message_text', '')
-    original_prompt = data.get('original_prompt', '')
-    print(f"{agent_type} {agent_id} {last_message_text[:100]} {original_prompt[:100]}")
-except Exception as e:
-    print(f"error parsing json")
+    data = json.loads(os.environ.get("CAST_INPUT", ""))
+    value = data.get(os.environ["FIELD"], "")
+    if value is None:
+        value = ""
+    print(str(value), end="")
+except Exception:
+    raise SystemExit(1)
 PYEOF
-) 2>/dev/null || { _log_error "Failed to parse CAST_INPUT"; exit 0; }
+}
+
+agent_type="$(json_field agent_type)" || { _log_error "Failed to parse CAST_INPUT"; exit 0; }
+agent_id="$(json_field agent_id)" || { _log_error "Failed to parse CAST_INPUT"; exit 0; }
+last_message_text="$(json_field last_message_text)" || { _log_error "Failed to parse CAST_INPUT"; exit 0; }
+original_prompt="$(json_field original_prompt)" || { _log_error "Failed to parse CAST_INPUT"; exit 0; }
 
 # Guard: only process debugger agent with Status: DONE
 if [[ "$agent_type" != "debugger" ]]; then
