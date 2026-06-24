@@ -11,10 +11,15 @@ readonly SETTINGS_JSON="${CAST_SETTINGS_JSON:-${HOME}/.claude/settings.json}"
 readonly DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 readonly LAUNCHCTL="${CAST_OTEL_LAUNCHCTL_CMD:-launchctl}"
 
+# Fragment path — the durable source of truth for env keys (survives reinstall)
+readonly CLAUDE_DIR="${CAST_CLAUDE_DIR:-${HOME}/.claude}"
+readonly FRAGMENT_PATH="${CAST_OTEL_FRAGMENT:-${CLAUDE_DIR}/managed-settings.d/00-env.json}"
+readonly MERGE_SCRIPT="${CLAUDE_DIR}/scripts/cast-merge-settings.sh"
+
 # For testing: allow dry-run via env var
 readonly DRY_RUN="${CAST_OTEL_DRY_RUN:-0}"
 
-# 5 telemetry env keys
+# 5 telemetry env keys (does NOT include DISABLE_TELEMETRY — that stays always-on)
 readonly TELEMETRY_KEYS=(
   "CLAUDE_CODE_ENABLE_TELEMETRY"
   "OTEL_METRICS_EXPORTER"
@@ -32,12 +37,13 @@ readonly TELEMETRY_VALUES=(
 )
 
 # ============================================================================
-# JSON mutation helpers (python)
+# Fragment JSON mutation helpers (python)
 # ============================================================================
 
-# Add or update telemetry keys in settings.json (via env vars)
-_ensure_env_vars() {
-  local settings_path="$1"
+# Add or update telemetry keys in the managed-settings.d fragment (durable source of truth).
+# Falls back to settings.json mutation if the fragment does not exist.
+_ensure_env_vars_in_fragment() {
+  local fragment_path="$1"
   shift
 
   # Build pipe-delimited K=V pairs from remaining args (key, value, key, value, ...)
@@ -52,14 +58,14 @@ _ensure_env_vars() {
     fi
   done
 
-  _CAST_SETTINGS_PATH="${settings_path}" \
+  _CAST_FRAGMENT_PATH="${fragment_path}" \
   _CAST_ENV_KEYS="${pairs}" \
   python3 << 'PYEOF'
 import json
 import os
 import sys
 
-settings_path = os.environ.get('_CAST_SETTINGS_PATH')
+fragment_path = os.environ.get('_CAST_FRAGMENT_PATH')
 keys_str = os.environ.get('_CAST_ENV_KEYS', '')
 
 if not keys_str:
@@ -73,8 +79,8 @@ for pair in keys_str.split('|'):
     env_dict[k] = v
 
 try:
-  if os.path.exists(settings_path):
-    with open(settings_path, 'r') as f:
+  if fragment_path and os.path.exists(fragment_path):
+    with open(fragment_path, 'r') as f:
       data = json.load(f)
   else:
     data = {}
@@ -82,35 +88,35 @@ try:
   if 'env' not in data:
     data['env'] = {}
 
-  # Only add keys that don't already exist
+  # Add or overwrite keys
   for key, val in env_dict.items():
-    if key not in data['env']:
-      data['env'][key] = val
+    data['env'][key] = val
 
-  with open(settings_path, 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
+  if fragment_path:
+    with open(fragment_path, 'w') as f:
+      json.dump(data, f, indent=2)
+      f.write('\n')
 
 except Exception as e:
-  print(f"Error updating settings.json: {e}", file=sys.stderr)
+  print(f"Error updating fragment: {e}", file=sys.stderr)
   sys.exit(1)
 PYEOF
 }
 
-# Remove telemetry keys from settings.json (preserve other env keys)
-_remove_env_vars() {
-  local settings_path="$1"
+# Remove telemetry keys from the managed-settings.d fragment (preserve other env keys).
+_remove_env_vars_from_fragment() {
+  local fragment_path="$1"
   shift
-  local keys="$@"
+  local keys="$*"
 
-  _CAST_SETTINGS_PATH="${settings_path}" \
+  _CAST_FRAGMENT_PATH="${fragment_path}" \
   _CAST_KEYS_TO_REMOVE="${keys}" \
   python3 << 'PYEOF'
 import json
 import os
 import sys
 
-settings_path = os.environ.get('_CAST_SETTINGS_PATH')
+fragment_path = os.environ.get('_CAST_FRAGMENT_PATH')
 keys_str = os.environ.get('_CAST_KEYS_TO_REMOVE', '')
 
 if not keys_str:
@@ -119,34 +125,76 @@ if not keys_str:
 keys_to_remove = keys_str.split()
 
 try:
-  if not os.path.exists(settings_path):
+  if not fragment_path or not os.path.exists(fragment_path):
     sys.exit(0)
 
-  with open(settings_path, 'r') as f:
+  with open(fragment_path, 'r') as f:
     data = json.load(f)
 
   if 'env' not in data:
     sys.exit(0)
 
-  # Remove only the specified keys
+  # Remove only the specified keys (leave everything else including DISABLE_TELEMETRY)
   for key in keys_to_remove:
     data['env'].pop(key, None)
 
-  with open(settings_path, 'w') as f:
+  with open(fragment_path, 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
 
 except Exception as e:
-  print(f"Error updating settings.json: {e}", file=sys.stderr)
+  print(f"Error updating fragment: {e}", file=sys.stderr)
   sys.exit(1)
 PYEOF
 }
 
-# Check if telemetry env keys are present in settings.json
+# Check if telemetry env keys are present in the fragment
+_check_env_vars_in_fragment() {
+  local fragment_path="$1"
+  shift
+  local keys="$*"
+
+  _CAST_FRAGMENT_PATH="${fragment_path}" \
+  _CAST_KEYS_TO_CHECK="${keys}" \
+  python3 << 'PYEOF'
+import json
+import os
+import sys
+
+fragment_path = os.environ.get('_CAST_FRAGMENT_PATH')
+keys_str = os.environ.get('_CAST_KEYS_TO_CHECK', '')
+
+if not keys_str:
+    print("0")
+    sys.exit(0)
+
+keys_to_check = keys_str.split()
+
+try:
+  if not fragment_path or not os.path.exists(fragment_path):
+    print("0")
+    sys.exit(0)
+
+  with open(fragment_path, 'r') as f:
+    data = json.load(f)
+
+  if 'env' not in data:
+    print("0")
+    sys.exit(0)
+
+  count = sum(1 for key in keys_to_check if key in data['env'])
+  print(str(count))
+
+except Exception:
+  print("0")
+PYEOF
+}
+
+# Backward-compat: check settings.json directly (used by status when fragment absent)
 _check_env_vars() {
   local settings_path="$1"
   shift
-  local keys="$@"
+  local keys="$*"
 
   _CAST_SETTINGS_PATH="${settings_path}" \
   _CAST_KEYS_TO_CHECK="${keys}" \
@@ -165,7 +213,7 @@ if not keys_str:
 keys_to_check = keys_str.split()
 
 try:
-  if not os.path.exists(settings_path):
+  if not settings_path or not os.path.exists(settings_path):
     print("0")
     sys.exit(0)
 
@@ -184,12 +232,34 @@ except Exception:
 PYEOF
 }
 
+# Regenerate settings.json from fragments (durable merge step)
+_regenerate_settings() {
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    echo "[DRY RUN] would regenerate settings.json via cast-merge-settings.sh"
+    return 0
+  fi
+  if [[ -f "${MERGE_SCRIPT}" ]]; then
+    bash "${MERGE_SCRIPT}" "${SETTINGS_JSON}" 2>/dev/null || true
+  fi
+}
+
 # ============================================================================
 # Subcommands
 # ============================================================================
 
 _enable() {
   echo "Enabling CAST OpenTelemetry collector..."
+
+  # Ensure telemetry env keys are present in the fragment (durable — survives reinstall)
+  _ensure_env_vars_in_fragment "${FRAGMENT_PATH}" \
+    "${TELEMETRY_KEYS[0]}" "${TELEMETRY_VALUES[0]}" \
+    "${TELEMETRY_KEYS[1]}" "${TELEMETRY_VALUES[1]}" \
+    "${TELEMETRY_KEYS[2]}" "${TELEMETRY_VALUES[2]}" \
+    "${TELEMETRY_KEYS[3]}" "${TELEMETRY_VALUES[3]}" \
+    "${TELEMETRY_KEYS[4]}" "${TELEMETRY_VALUES[4]}"
+
+  # Regenerate settings.json from fragments
+  _regenerate_settings
 
   # Guard launchctl for test mode
   if [[ "${DRY_RUN}" != "1" ]]; then
@@ -205,22 +275,17 @@ _enable() {
     echo "[DRY RUN] would load: ${LAUNCHCTL} load ${PLIST_PATH}"
   fi
 
-  # Add telemetry env keys to settings.json
-  _ensure_env_vars "${SETTINGS_JSON}" \
-    "${TELEMETRY_KEYS[0]}" "${TELEMETRY_VALUES[0]}" \
-    "${TELEMETRY_KEYS[1]}" "${TELEMETRY_VALUES[1]}" \
-    "${TELEMETRY_KEYS[2]}" "${TELEMETRY_VALUES[2]}" \
-    "${TELEMETRY_KEYS[3]}" "${TELEMETRY_VALUES[3]}" \
-    "${TELEMETRY_KEYS[4]}" "${TELEMETRY_VALUES[4]}"
-
   echo "Restart Claude Code sessions for telemetry to take effect."
 }
 
 _disable() {
   echo "Disabling CAST OpenTelemetry collector..."
 
-  # Remove telemetry env keys from settings.json
-  _remove_env_vars "${SETTINGS_JSON}" "${TELEMETRY_KEYS[@]}"
+  # Remove telemetry env keys from the fragment (leave DISABLE_TELEMETRY intact)
+  _remove_env_vars_from_fragment "${FRAGMENT_PATH}" "${TELEMETRY_KEYS[@]}"
+
+  # Regenerate settings.json from fragments
+  _regenerate_settings
 
   # Unload the plist
   if [[ "${DRY_RUN}" != "1" ]]; then
@@ -231,7 +296,7 @@ _disable() {
     echo "[DRY RUN] would unload: ${LAUNCHCTL} unload ${PLIST_PATH}"
   fi
 
-  echo "OTEL collector disabled."
+  echo "OTEL collector disabled. Run 'cast-otel.sh enable' to re-enable."
 }
 
 _status() {
@@ -259,15 +324,23 @@ _status() {
 
   echo ""
 
-  # (2) Telemetry env keys
-  echo "Environment keys in settings.json:"
+  # (2) Telemetry env keys — check fragment first, fall back to settings.json
+  echo "Environment keys:"
   local env_count
-  env_count=$(_check_env_vars "${SETTINGS_JSON}" "${TELEMETRY_KEYS[@]}")
   local total_keys="${#TELEMETRY_KEYS[@]}"
+
+  if [[ -f "${FRAGMENT_PATH}" ]]; then
+    env_count=$(_check_env_vars_in_fragment "${FRAGMENT_PATH}" "${TELEMETRY_KEYS[@]}")
+    echo "  Source: fragment (${FRAGMENT_PATH})"
+  else
+    env_count=$(_check_env_vars "${SETTINGS_JSON}" "${TELEMETRY_KEYS[@]}")
+    echo "  Source: settings.json (fragment not found)"
+  fi
+
   if [[ "${env_count}" == "${total_keys}" ]]; then
     echo "  ✓ All ${total_keys} telemetry keys present"
   elif [[ "${env_count}" == "0" ]]; then
-    echo "  ✗ No telemetry keys found"
+    echo "  ✗ No telemetry keys found (run 'cast-otel.sh enable' to activate)"
   else
     echo "  ⚠ ${env_count}/${total_keys} telemetry keys present"
   fi
@@ -352,17 +425,19 @@ main() {
 Usage: cast-otel.sh <subcommand>
 
 Subcommands:
-  enable    Enable OTEL collector daemon and set telemetry env keys
-  disable   Disable OTEL collector daemon and remove telemetry env keys
-  status    Show daemon status, env keys, and row counts
+  enable    Ensure telemetry keys in fragment + regenerate settings.json + load daemon
+  disable   Remove telemetry keys from fragment + regenerate settings.json + unload daemon
+  status    Show daemon status, env keys (fragment-first), and row counts
   start     Start the daemon (launchctl load only, no settings.json mutation)
   stop      Stop the daemon (launchctl unload only, no settings.json mutation)
 
 Environment overrides:
-  CAST_SETTINGS_JSON     Path to settings.json (default: ~/.claude/settings.json)
-  CAST_DB_PATH           Path to cast.db (default: ~/.claude/cast.db)
-  CAST_OTEL_DRY_RUN      If set to "1", skip launchctl calls (for testing)
-  CAST_OTEL_LAUNCHCTL_CMD Override launchctl binary (for testing)
+  CAST_SETTINGS_JSON       Path to settings.json (default: ~/.claude/settings.json)
+  CAST_OTEL_FRAGMENT       Path to 00-env.json fragment (default: ~/.claude/managed-settings.d/00-env.json)
+  CAST_CLAUDE_DIR          Path to ~/.claude dir (default: $HOME/.claude)
+  CAST_DB_PATH             Path to cast.db (default: ~/.claude/cast.db)
+  CAST_OTEL_DRY_RUN        If set to "1", skip launchctl calls (for testing)
+  CAST_OTEL_LAUNCHCTL_CMD  Override launchctl binary (for testing)
 EOF
       return 1
       ;;

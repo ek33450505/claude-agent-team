@@ -139,8 +139,11 @@ def main() -> None:
             _log(f'Session crash-marking skipped (best-effort): {e}')
 
         # --- Step 3: Age out stale task_queue rows ---
-        # No live consumer exists for task_queue (cast-queue-processor.sh is not
-        # wired to launchd). Rows accumulate indefinitely. Drain rows older than
+        # No live consumer exists for task_queue (cast-queue-processor.sh was
+        # removed in CAST v9 I9 — it dispatched via Anthropic cloud, violating
+        # local-first, and was never wired to launchd; git history preserves it).
+        # The task_queue table is kept dormant (record-is-product).
+        # Rows accumulate indefinitely. Drain rows older than
         # CAST_TASK_QUEUE_ABANDON_DAYS (default 7d for pending, 1d for running).
         # NO schema change — status value 'abandoned' already exists in the table
         # (TEXT DEFAULT 'pending' with no CHECK constraint — verified 2026-06-11).

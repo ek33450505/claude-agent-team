@@ -3,8 +3,11 @@
 #
 # Auto-detects network status via ping to api.anthropic.com. When offline,
 # provides queue functionality to store pending requests for later replay.
-# Works alongside existing cast-queue-add.sh / cast-queue-processor.sh and
-# cast-airgap.sh (manual air-gap toggle).
+# Works alongside existing cast-queue-add.sh and cast-airgap.sh (manual
+# air-gap toggle). Note: cast-queue-processor.sh (the queue consumer) was
+# removed in CAST v9 I9 — it dispatched via Anthropic cloud (violates
+# local-first) and was never wired to launchd. The task_queue table is kept
+# dormant (record-is-product).
 #
 # Usage:
 #   cast-connectivity.sh check                   Check if online (exit 0) or offline (exit 1)

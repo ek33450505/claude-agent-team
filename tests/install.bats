@@ -281,6 +281,70 @@ run_install_personal() {
 # Hook-ownership sentinel
 # =============================================================================
 
+# =============================================================================
+# OTEL collector plist — opt-in install (v9 B3)
+# =============================================================================
+
+@test "Install: otel-collector plist is installed AND auto-loaded on fresh install" {
+  if [[ "$(uname)" != "Darwin" ]]; then skip "macOS-only: launchd plist installation"; fi
+  # Stub launchctl: record every invocation; always succeeds (simulates no prior load)
+  local stub_bin
+  stub_bin="$(mktemp -d)"
+  local call_log="$stub_bin/launchctl-calls.log"
+  cat > "$stub_bin/launchctl" <<STUBEOF
+#!/bin/bash
+# Stub launchctl — records calls, always succeeds
+echo "\$@" >> "$call_log"
+exit 0
+STUBEOF
+  chmod +x "$stub_bin/launchctl"
+
+  PATH="$stub_bin:$PATH" CAST_INSTALL_FORCE=1 bash "$REPO_DIR/install.sh" 2>&1
+
+  # Assertion 1: plist file must exist in LaunchAgents
+  local plist_dest="$HOME/Library/LaunchAgents/com.cast.otel-collector.plist"
+  [ -f "$plist_dest" ] || {
+    echo "FAIL: plist not found at $plist_dest" >&2
+    return 1
+  }
+
+  # Assertion 2: __HOME__ token must be replaced with the real HOME path
+  grep -q "__HOME__" "$plist_dest" && {
+    echo "FAIL: __HOME__ token not substituted in $plist_dest" >&2
+    return 1
+  }
+
+  # Assertion 3: MUST have issued 'launchctl load' for com.cast.otel-collector
+  # (daemon is ON BY DEFAULT — telemetry is local-first, no data leaves localhost)
+  if ! grep -q "^load .*otel-collector" "$call_log" 2>/dev/null; then
+    echo "FAIL: launchctl load was NOT called for otel-collector on a fresh install (daemon should be ON by default)" >&2
+    echo "Call log contents:" >&2
+    cat "$call_log" >&2 || echo "(empty)" >&2
+    return 1
+  fi
+
+  rm -rf "$stub_bin"
+}
+
+@test "Install: 50-mcp.json is overwritten on reinstall (CAST-owned fragment — propagates removals)" {
+  # First install — seeds 50-mcp.json from repo source
+  run_install
+
+  # Simulate a stale fragment containing a dummy MCP server (e.g. pre-github-MCP-drop)
+  local mcp_dest="$HOME/.claude/managed-settings.d/50-mcp.json"
+  printf '{"mcpServers":{"stale-server":{"command":"never-existed"}}}\n' > "$mcp_dest"
+
+  # Second install — 50-mcp.json must be overwritten with the repo source ({"mcpServers": {}})
+  run_install
+
+  # The dummy server must NOT be present — repo's empty mcpServers wins
+  if grep -q "stale-server" "$mcp_dest"; then
+    echo "FAIL: stale 50-mcp.json was NOT overwritten on reinstall" >&2
+    cat "$mcp_dest" >&2
+    return 1
+  fi
+}
+
 @test "Install: creates ~/.claude/config/cast-hook-owner with content 'install.sh'" {
   run_install
 

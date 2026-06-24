@@ -494,6 +494,21 @@
       "table": "teammate_runs",
       "column": "worktree",
       "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "task_queue",
+      "column": "claimed_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "task_queue",
+      "column": "completed_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "task_queue",
+      "column": "max_retries",
+      "classification": "SAFE-DROP-CANDIDATE"
     }
   ]
 }

@@ -241,3 +241,25 @@ PYEOF
   # Rows should double
   [[ "$second_count" -eq $((first_count * 2)) ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 9: Subtraction Safety Gate — native OTEL feed captures compaction events
+# (v9 B3 recorder-subtraction: cast-post-compact-hook.sh DB write retired;
+# the native 'compaction' event now covers this via otel_events)
+# Audit: plans/b3-hook-feed-coverage-audit.md
+# ---------------------------------------------------------------------------
+@test "subtraction-safety: compaction event lands in otel_events (covers retired cast-post-compact-hook.sh DB write)" {
+  # Build compaction fixture path (tests/fixtures/otel/compaction.json)
+  local fixture_path
+  fixture_path="$FIXTURES_DIR/compaction.json"
+
+  # Ingest through the collector's offline mode
+  run python3 "$COLLECTOR_PY" --ingest-file "$fixture_path"
+  assert_success
+
+  # Summary line must report at least 1 event
+  assert_output --regexp "events=[1-9]"
+
+  # The compaction event must be findable in otel_events by event_name
+  _event_exists "claude_code.compaction"
+}

@@ -1,0 +1,41 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "session.id", "value": {"stringValue": "sess-compact-test-001"}},
+          {"key": "service.name", "value": {"stringValue": "claude-code"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "claude_code",
+            "version": "1.0.0"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1719216100000000000",
+              "observedTimeUnixNano": "1719216100001000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "Context compaction completed"
+              },
+              "attributes": [
+                {"key": "event.name", "value": {"stringValue": "claude_code.compaction"}},
+                {"key": "trigger", "value": {"stringValue": "auto"}},
+                {"key": "duration_ms", "value": {"intValue": "342"}},
+                {"key": "pre_tokens", "value": {"intValue": "85000"}},
+                {"key": "post_tokens", "value": {"intValue": "12000"}},
+                {"key": "success", "value": {"boolValue": true}}
+              ],
+              "traceId": "",
+              "spanId": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
