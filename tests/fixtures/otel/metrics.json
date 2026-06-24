@@ -1,0 +1,63 @@
+{
+  "resourceMetrics": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "session.id", "value": {"stringValue": "sess-test-abc123"}},
+          {"key": "service.name", "value": {"stringValue": "claude-code"}},
+          {"key": "service.version", "value": {"stringValue": "1.0.0"}}
+        ]
+      },
+      "scopeMetrics": [
+        {
+          "scope": {
+            "name": "claude_code",
+            "version": "1.0.0"
+          },
+          "metrics": [
+            {
+              "name": "claude_code.cost.usage",
+              "description": "Cumulative cost of Claude Code API usage in USD",
+              "unit": "USD",
+              "sum": {
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {"key": "model", "value": {"stringValue": "claude-sonnet-4-6"}},
+                      {"key": "type", "value": {"stringValue": "api_call"}}
+                    ],
+                    "startTimeUnixNano": "1719216000000000000",
+                    "timeUnixNano": "1719216060000000000",
+                    "asDouble": 0.0234
+                  }
+                ],
+                "aggregationTemporality": 2,
+                "isMonotonic": true
+              }
+            },
+            {
+              "name": "claude_code.token.usage",
+              "description": "Number of tokens used by Claude Code",
+              "unit": "tokens",
+              "sum": {
+                "dataPoints": [
+                  {
+                    "attributes": [
+                      {"key": "model", "value": {"stringValue": "claude-sonnet-4-6"}},
+                      {"key": "token.type", "value": {"stringValue": "input"}}
+                    ],
+                    "startTimeUnixNano": "1719216000000000000",
+                    "timeUnixNano": "1719216060000000000",
+                    "asInt": "1500"
+                  }
+                ],
+                "aggregationTemporality": 2,
+                "isMonotonic": true
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

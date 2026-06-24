@@ -1,0 +1,53 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "session.id", "value": {"stringValue": "sess-test-abc123"}},
+          {"key": "service.name", "value": {"stringValue": "claude-code"}}
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "claude_code",
+            "version": "1.0.0"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1719216000000000000",
+              "observedTimeUnixNano": "1719216000001000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "User submitted a prompt"
+              },
+              "attributes": [
+                {"key": "event.name", "value": {"stringValue": "claude_code.user_prompt"}},
+                {"key": "prompt.id", "value": {"stringValue": "prompt-test-001"}},
+                {"key": "model", "value": {"stringValue": "claude-sonnet-4-6"}}
+              ],
+              "traceId": "",
+              "spanId": ""
+            },
+            {
+              "timeUnixNano": "1719216001000000000",
+              "observedTimeUnixNano": "1719216001001000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": {
+                "stringValue": "API request initiated"
+              },
+              "attributes": [
+                {"key": "event.name", "value": {"stringValue": "claude_code.api_request"}},
+                {"key": "prompt.id", "value": {"stringValue": "prompt-test-001"}},
+                {"key": "model", "value": {"stringValue": "claude-sonnet-4-6"}},
+                {"key": "request.id", "value": {"stringValue": "req-test-001"}}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
