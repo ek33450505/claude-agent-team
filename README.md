@@ -7,12 +7,12 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-8.0.0-blue)<!-- /CAST_VERSION_BADGE -->
 ![Agents](https://img.shields.io/badge/agents-23-green)<!-- CAST_AGENT_COUNT -->
-![Tests](https://img.shields.io/badge/tests-1821-brightgreen)<!-- CAST_TEST_COUNT -->
+![Tests](https://img.shields.io/badge/tests-1849-brightgreen)<!-- CAST_TEST_COUNT -->
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)
 
-> **CAST v8 — "Native CAST."** A production-grade control plane for Claude Code, built on two convictions: the core development loop should never have to leave your machine, and an agent platform should be structurally unable to destroy its own evidence. Those are the two pillars — **local-first by construction** and **data integrity by construction** — and they are enforced by hooks, guards, and a local SQLite audit trail (<!-- CAST_DB_TABLE_COUNT -->36<!-- /CAST_DB_TABLE_COUNT -->+ tables), not by convention. <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents plan, implement, review, test, and commit; raw `git commit` and `git push` are hard-blocked; every dispatch is logged. Define a workflow once; the team runs it.
+> **CAST v8 — "Native CAST."** A production-grade control plane for Claude Code, built on two convictions: the core development loop should never have to leave your machine, and an agent platform should be structurally unable to destroy its own evidence. Those are the two pillars — **local-first by construction** and **data integrity by construction** — and they are enforced by hooks, guards, and a local SQLite audit trail (<!-- CAST_DB_TABLE_COUNT -->38<!-- /CAST_DB_TABLE_COUNT -->+ tables), not by convention. <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents plan, implement, review, test, and commit; raw `git commit` and `git push` are hard-blocked; every dispatch is logged. Define a workflow once; the team runs it.
 
 **[CAST Framework](https://castframework.dev)**
 
@@ -74,7 +74,7 @@ The plugin bundles CAST's curated agents, skills, commands, `command`-type enfor
 - **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a fresh-context reviewer pass. You cannot skip this.
 - **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope, a model tier (haiku 4.5 / sonnet / opus), and a thinking budget. `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
 - **Agent behavior is tested, not hoped for.** The `cast eval` harness runs an agent-behavior corpus mined from real failures — with LLM-judge graders and `pass@k`.
-- **<!-- CAST_TEST_COUNT -->1821<!-- /CAST_TEST_COUNT --> BATS test cases** across the hook and utility layer. CI runs on macOS and Ubuntu on every push.
+- **<!-- CAST_TEST_COUNT -->1849<!-- /CAST_TEST_COUNT --> BATS test cases** across the hook and utility layer. CI runs on macOS and Ubuntu on every push.
 
 ---
 
@@ -218,7 +218,7 @@ Runtime installs to `~/.claude/` — agents, memory, plans, `cast.db`, scripts.
 
 ## Testing
 
-163 CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->1821<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
+163 CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->1849<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
 
 ---
 
@@ -285,6 +285,6 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->1821<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->1849<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->20<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> skills
