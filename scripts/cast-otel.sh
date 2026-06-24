@@ -12,14 +12,17 @@ readonly DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 readonly LAUNCHCTL="${CAST_OTEL_LAUNCHCTL_CMD:-launchctl}"
 
 # Fragment path — the durable source of truth for env keys (survives reinstall)
+# Defaults to 12-otel.json (the dedicated telemetry fragment); CAST_OTEL_FRAGMENT overrides.
 readonly CLAUDE_DIR="${CAST_CLAUDE_DIR:-${HOME}/.claude}"
-readonly FRAGMENT_PATH="${CAST_OTEL_FRAGMENT:-${CLAUDE_DIR}/managed-settings.d/00-env.json}"
+readonly FRAGMENT_PATH="${CAST_OTEL_FRAGMENT:-${CLAUDE_DIR}/managed-settings.d/12-otel.json}"
 readonly MERGE_SCRIPT="${CLAUDE_DIR}/scripts/cast-merge-settings.sh"
 
 # For testing: allow dry-run via env var
 readonly DRY_RUN="${CAST_OTEL_DRY_RUN:-0}"
 
-# 5 telemetry env keys (does NOT include DISABLE_TELEMETRY — that stays always-on)
+# 5 telemetry env keys managed by enable/disable (does NOT include DISABLE_TELEMETRY —
+# DISABLE_TELEMETRY lives in the personal overlay, managed-settings-personal/12-otel.json,
+# and is set for the maintainer only; it is NOT added by cast-otel.sh enable)
 readonly TELEMETRY_KEYS=(
   "CLAUDE_CODE_ENABLE_TELEMETRY"
   "OTEL_METRICS_EXPORTER"
@@ -258,10 +261,13 @@ _enable() {
     "${TELEMETRY_KEYS[3]}" "${TELEMETRY_VALUES[3]}" \
     "${TELEMETRY_KEYS[4]}" "${TELEMETRY_VALUES[4]}"
 
+  # Secure the fragment (may contain env keys) — matches install.sh chmod 600 on personal overlays
+  chmod 600 "${FRAGMENT_PATH}" 2>/dev/null || true
+
   # Regenerate settings.json from fragments
   _regenerate_settings
 
-  # Guard launchctl for test mode
+  # Guard launchctl and PlistBuddy for test mode
   if [[ "${DRY_RUN}" != "1" ]]; then
     if [[ ! -f "${PLIST_PATH}" ]]; then
       echo "Error: plist not found at ${PLIST_PATH}" >&2
@@ -269,9 +275,13 @@ _enable() {
       return 1
     fi
 
-    # Load the plist
+    # Set RunAtLoad=true so the daemon persists across reboots
+    /usr/libexec/PlistBuddy -c "Set :RunAtLoad true" "${PLIST_PATH}" 2>/dev/null || true
+
+    # Load the plist (starts the daemon now)
     "${LAUNCHCTL}" load "${PLIST_PATH}" 2>/dev/null || true
   else
+    echo "[DRY RUN] would set RunAtLoad true in ${PLIST_PATH}"
     echo "[DRY RUN] would load: ${LAUNCHCTL} load ${PLIST_PATH}"
   fi
 
@@ -287,13 +297,16 @@ _disable() {
   # Regenerate settings.json from fragments
   _regenerate_settings
 
-  # Unload the plist
+  # Unload the plist and set RunAtLoad=false so it stays dormant across reboots
   if [[ "${DRY_RUN}" != "1" ]]; then
     if [[ -f "${PLIST_PATH}" ]]; then
       "${LAUNCHCTL}" unload "${PLIST_PATH}" 2>/dev/null || true
+      # Keep plist dormant across reboots (install.sh ships RunAtLoad=false; restore it here)
+      /usr/libexec/PlistBuddy -c "Set :RunAtLoad false" "${PLIST_PATH}" 2>/dev/null || true
     fi
   else
     echo "[DRY RUN] would unload: ${LAUNCHCTL} unload ${PLIST_PATH}"
+    echo "[DRY RUN] would set RunAtLoad false in ${PLIST_PATH}"
   fi
 
   echo "OTEL collector disabled. Run 'cast-otel.sh enable' to re-enable."
@@ -433,7 +446,7 @@ Subcommands:
 
 Environment overrides:
   CAST_SETTINGS_JSON       Path to settings.json (default: ~/.claude/settings.json)
-  CAST_OTEL_FRAGMENT       Path to 00-env.json fragment (default: ~/.claude/managed-settings.d/00-env.json)
+  CAST_OTEL_FRAGMENT       Path to telemetry fragment (default: ~/.claude/managed-settings.d/12-otel.json)
   CAST_CLAUDE_DIR          Path to ~/.claude dir (default: $HOME/.claude)
   CAST_DB_PATH             Path to cast.db (default: ~/.claude/cast.db)
   CAST_OTEL_DRY_RUN        If set to "1", skip launchctl calls (for testing)

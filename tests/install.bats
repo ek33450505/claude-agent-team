@@ -285,9 +285,9 @@ run_install_personal() {
 # OTEL collector plist — opt-in install (v9 B3)
 # =============================================================================
 
-@test "Install: otel-collector plist is installed AND auto-loaded on fresh install" {
+@test "Install: otel-collector plist is installed as dormant (NO launchctl load) on fresh install" {
   if [[ "$(uname)" != "Darwin" ]]; then skip "macOS-only: launchd plist installation"; fi
-  # Stub launchctl: record every invocation; always succeeds (simulates no prior load)
+  # Stub launchctl: record every invocation so we can assert it was NOT called for otel-collector
   local stub_bin
   stub_bin="$(mktemp -d)"
   local call_log="$stub_bin/launchctl-calls.log"
@@ -314,14 +314,20 @@ STUBEOF
     return 1
   }
 
-  # Assertion 3: MUST have issued 'launchctl load' for com.cast.otel-collector
-  # (daemon is ON BY DEFAULT — telemetry is local-first, no data leaves localhost)
-  if ! grep -q "^load .*otel-collector" "$call_log" 2>/dev/null; then
-    echo "FAIL: launchctl load was NOT called for otel-collector on a fresh install (daemon should be ON by default)" >&2
+  # Assertion 3: install.sh MUST NOT call launchctl load for otel-collector
+  # (telemetry is opt-in; activation must go through cast-otel.sh enable only)
+  if grep -q "^load .*otel-collector" "$call_log" 2>/dev/null; then
+    echo "FAIL: install.sh called launchctl load for otel-collector — consent violation (daemon must be dormant until cast-otel.sh enable)" >&2
     echo "Call log contents:" >&2
-    cat "$call_log" >&2 || echo "(empty)" >&2
+    cat "$call_log" >&2
     return 1
   fi
+
+  # Assertion 4: plist must have RunAtLoad=false (dormant by default)
+  grep -q "<false/>" "$plist_dest" || {
+    echo "FAIL: plist does not contain RunAtLoad=false (dormant default)" >&2
+    return 1
+  }
 
   rm -rf "$stub_bin"
 }
@@ -388,4 +394,78 @@ STUBEOF
     echo "Expected content 'install.sh', got '$content'" >&2
     return 1
   }
+}
+
+# =============================================================================
+# Telemetry personal overlay: --personal installs 12-otel.json; plain install does NOT
+# =============================================================================
+
+@test "Install --personal: copies managed-settings-personal/12-otel.json into managed-settings.d/" {
+  if [[ ! -f "$REPO_DIR/managed-settings-personal/12-otel.json" ]]; then
+    skip "managed-settings-personal/12-otel.json not present in repo"
+  fi
+
+  run_install_personal
+
+  local dest="$HOME/.claude/managed-settings.d/12-otel.json"
+  [ -f "$dest" ] || {
+    echo "FAIL: 12-otel.json not found in managed-settings.d/ after --personal install" >&2
+    return 1
+  }
+
+  # Must be valid JSON
+  python3 -m json.tool "$dest" >/dev/null 2>&1 || {
+    echo "FAIL: $dest is not valid JSON" >&2
+    return 1
+  }
+
+  # Must contain CLAUDE_CODE_ENABLE_TELEMETRY
+  python3 -c "
+import json, sys
+with open('$dest') as f:
+    data = json.load(f)
+env = data.get('env', {})
+if 'CLAUDE_CODE_ENABLE_TELEMETRY' not in env:
+    print('FAIL: CLAUDE_CODE_ENABLE_TELEMETRY missing from 12-otel.json', file=sys.stderr)
+    sys.exit(1)
+" || return 1
+}
+
+@test "Install (no --personal): does NOT copy 12-otel.json into managed-settings.d/" {
+  run_install
+
+  local dest="$HOME/.claude/managed-settings.d/12-otel.json"
+  [ ! -f "$dest" ] || {
+    echo "FAIL: 12-otel.json was copied into managed-settings.d/ by a plain install (no --personal) — consent violation" >&2
+    return 1
+  }
+}
+
+@test "Install (no --personal): 00-env.json contains none of the 6 telemetry keys" {
+  run_install
+
+  local fragment="$HOME/.claude/managed-settings.d/00-env.json"
+  [ -f "$fragment" ] || {
+    echo "FAIL: 00-env.json not found after install" >&2
+    return 1
+  }
+
+  python3 << PYEOF
+import json, sys
+TELEMETRY_KEYS = [
+    "CLAUDE_CODE_ENABLE_TELEMETRY",
+    "OTEL_METRICS_EXPORTER",
+    "OTEL_LOGS_EXPORTER",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "DISABLE_TELEMETRY",
+]
+with open("$fragment") as f:
+    data = json.load(f)
+env = data.get("env", {})
+found = [k for k in TELEMETRY_KEYS if k in env]
+if found:
+    print(f"FAIL: 00-env.json must not ship telemetry keys, found: {found}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
 }

@@ -107,3 +107,51 @@ run_install_personal() {
 
   grep -q "CUSTOM_MARKER_PERSONAL" "$HOME/.claude/rules/working-conventions.md"
 }
+
+# =============================================================================
+# managed-settings-personal overlay
+# =============================================================================
+
+@test "Personal install: copies managed-settings-personal/12-otel.json (if present in repo)" {
+  if [[ ! -f "$REPO_DIR/managed-settings-personal/12-otel.json" ]]; then
+    skip "managed-settings-personal/12-otel.json not present in repo"
+  fi
+
+  run_install_personal
+
+  [ -f "$HOME/.claude/managed-settings.d/12-otel.json" ] || {
+    echo "FAIL: 12-otel.json not installed into managed-settings.d/ by --personal" >&2
+    return 1
+  }
+}
+
+@test "Core install: does NOT install managed-settings-personal/ files" {
+  run_install_core
+
+  # 12-otel.json must NOT appear from a plain install
+  [ ! -f "$HOME/.claude/managed-settings.d/12-otel.json" ] || {
+    echo "FAIL: 12-otel.json was installed by a core (non-personal) install — consent violation" >&2
+    return 1
+  }
+}
+
+@test "Personal install: managed-settings-personal files are skip-if-exists (non-destructive)" {
+  if [[ ! -f "$REPO_DIR/managed-settings-personal/12-otel.json" ]]; then
+    skip "managed-settings-personal/12-otel.json not present in repo"
+  fi
+
+  # First --personal install
+  run_install_personal
+
+  # Simulate user customization of the file
+  local dest="$HOME/.claude/managed-settings.d/12-otel.json"
+  printf 'CUSTOM_MARKER\n' >> "$dest"
+
+  # Second --personal install — must NOT overwrite (skip-if-exists)
+  run_install_personal
+
+  grep -q "CUSTOM_MARKER" "$dest" || {
+    echo "FAIL: 12-otel.json was overwritten on reinstall — expected skip-if-exists" >&2
+    return 1
+  }
+}

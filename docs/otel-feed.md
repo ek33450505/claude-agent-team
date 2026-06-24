@@ -40,22 +40,24 @@ Claude Code emits native OpenTelemetry signals (metrics + events/logs) continuou
      honesty checks, doctor)
 ```
 
-## Default State: ON (Local-First)
+## Default State: OFF (Opt-In)
 
-**Default state:** ON. The OTEL feed is active after a fresh `bash install.sh`.
+**Default state:** OFF. A plain `bash install.sh` does NOT activate the OTLP feed.
 
-All telemetry goes **only to localhost:4318** — enforced at the socket level. Nothing is sent to Anthropic or any remote endpoint. This is separate from Anthropic's own operational telemetry (governed by `DISABLE_TELEMETRY`, which CAST sets to `1` simultaneously to opt out of that).
+This is a consent and least-surprise decision: the feed keys (`CLAUDE_CODE_ENABLE_TELEMETRY` and the four `OTEL_*` keys) and the Anthropic-operational-telemetry opt-out (`DISABLE_TELEMETRY`) are NOT imposed on other people's machines by default.
+
+**Maintainer (Ed):** run `bash install.sh --personal` to deploy `managed-settings-personal/12-otel.json`, which enables the local feed. Opt in explicitly via `bash scripts/cast-otel.sh enable`.
+
+All telemetry goes **only to localhost:4318** — enforced at the socket level. Nothing is sent to Anthropic or any remote endpoint.
 
 **Privacy guarantee (doc-verified against code.claude.com):**
-- `CLAUDE_CODE_ENABLE_TELEMETRY` and the `OTEL_*` exporter keys control where Claude Code sends its native OTLP signals — these go to our local collector at `127.0.0.1:4318`, never off-machine.
-- `DISABLE_TELEMETRY=1` opts out of Anthropic's separate operational telemetry. CAST sets this in the same fragment so both concerns are covered.
+- `CLAUDE_CODE_ENABLE_TELEMETRY` and the `OTEL_*` exporter keys control where Claude Code sends its native OTLP signals — these go to the local collector at `127.0.0.1:4318`, never off-machine.
+- `DISABLE_TELEMETRY=1` opts out of Anthropic's separate operational telemetry. This key lives in the personal overlay (`managed-settings-personal/12-otel.json`) for the maintainer; it is NOT added by `cast-otel.sh enable` and is NOT shipped to other users.
 - Content logging (prompt text, tool arguments, API response bodies) requires explicit `OTEL_LOG_*` opt-in keys. CAST does NOT set these. What lands in `cast.db` is **metadata only** — counts, durations, event names.
-
-To turn the local feed off: `bash scripts/cast-otel.sh disable`
 
 ## Verified Environment Variables
 
-These 6 keys ship in `managed-settings.d/00-env.json` (the durable source of truth — survives reinstall):
+The 6 telemetry keys live in `managed-settings-personal/12-otel.json` (maintainer personal overlay, deployed by `install.sh --personal`):
 
 | Key | Value | Purpose |
 |-----|-------|---------|
@@ -64,7 +66,9 @@ These 6 keys ship in `managed-settings.d/00-env.json` (the durable source of tru
 | `OTEL_LOGS_EXPORTER` | `otlp` | Sends events/logs to the OTLP endpoint |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/json` | Wire format |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | Local collector only |
-| `DISABLE_TELEMETRY` | `1` | Opts out of Anthropic operational telemetry |
+| `DISABLE_TELEMETRY` | `1` | Opts out of Anthropic operational telemetry (maintainer only) |
+
+`managed-settings.d/00-env.json` (shipped to everyone) contains NONE of these keys.
 
 **Note:** No `OTEL_LOG_*` content-logging keys are set. Metadata only.
 
@@ -72,7 +76,22 @@ These 6 keys ship in `managed-settings.d/00-env.json` (the durable source of tru
 
 ## Enable / Disable
 
-The feed is **ON by default** after install. The daemon (`com.cast.otel-collector`) auto-starts at login via launchd (`RunAtLoad=true`).
+The feed is **OFF by default**. The daemon plist (`com.cast.otel-collector`) is installed with `RunAtLoad=false` (dormant) and does NOT start automatically. Activate the daemon and telemetry together with `bash scripts/cast-otel.sh enable`; that command sets `RunAtLoad=true` (persists across reboots) and starts the daemon immediately.
+
+### Enable collector and telemetry
+
+```bash
+bash scripts/cast-otel.sh enable
+```
+
+This command:
+1. Ensures the 5 OTEL feed keys are present in `~/.claude/managed-settings.d/12-otel.json` (the durable fragment)
+2. Sets fragment permissions to `600` (contains env keys)
+3. Regenerates `~/.claude/settings.json` from fragments
+4. Sets `RunAtLoad=true` in the plist (daemon survives reboots)
+5. Loads the launchd agent (starts the daemon immediately)
+
+**Note:** `enable` does NOT add `DISABLE_TELEMETRY`. That key is set separately in the personal overlay (`managed-settings-personal/12-otel.json`) for the maintainer.
 
 ### Disable collector and telemetry
 
@@ -81,22 +100,12 @@ bash scripts/cast-otel.sh disable
 ```
 
 This command:
-1. Removes the 5 OTEL telemetry keys from `~/.claude/managed-settings.d/00-env.json` (the durable fragment)
+1. Removes the 5 OTEL feed keys from `~/.claude/managed-settings.d/12-otel.json` (the durable fragment)
 2. Regenerates `~/.claude/settings.json` from fragments
-3. Unloads the launchd agent
+3. Unloads the launchd agent (stops the daemon)
+4. Sets `RunAtLoad=false` in the plist (daemon stays dormant across reboots)
 
 The change survives reinstall because `disable` writes to the fragment, not just `settings.json`.
-
-### Re-enable collector and telemetry
-
-```bash
-bash scripts/cast-otel.sh enable
-```
-
-This command:
-1. Ensures the 5 OTEL telemetry keys are present in `~/.claude/managed-settings.d/00-env.json`
-2. Regenerates `~/.claude/settings.json` from fragments
-3. Loads the launchd agent
 
 ### Check status
 
