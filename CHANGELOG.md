@@ -6,6 +6,7 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ### Removed
 - **Retired the dormant `/swarm` subsystem** (v9 P0 · B1): removed the `/swarm` skill, the `cast-swarm-{bootstrap,merge,teardown}` scripts, `swarm-configs/`, `docs/swarm.md`, and the swarm BATS tests. `swarm_sessions` carried zero rows and the subsystem held the highest wipe blast-radius in the repo (its teardown `rmtree` was the 2026-06-02 wipe culprit). The `swarm_sessions` / `teammate_runs` / `teammate_messages` cast.db tables are **retained as dormant historical record** (the record is the product) — only the writers were removed, no `DROP TABLE`. All §1 containment guarantees (rmtree blast-radius scoping, directory-traversal refusal, temp-HOME isolation, branch-prefix guard) were **re-anchored to general guard tests before any deletion** (Subtraction Safety Gate). Forward path for parallel teammates is native `isolation: worktree` subagents + (experimental) Agent Teams.
+- **Removed the dead `cast-research-cache.py` URL cache** (v9 P-grain · I7): the 1-hour-TTL research URL cache and the `researcher` agent's URL-caching instruction are retired — the cache had no cast.db table, no hook wiring, and no guarding test; Claude Code's native WebFetch in-session cache covers it. Subtraction per the §0.2 Safety Gate.
 
 ## [8.0.0] — 2026-06-15 — Native CAST
 
