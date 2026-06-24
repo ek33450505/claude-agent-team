@@ -414,18 +414,7 @@
       }
     ]
   },
-  "mcpServers": {
-    "github": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-github"
-      ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      }
-    }
-  },
+  "mcpServers": {},
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "worktree": {
     "symlinkDirectories": [

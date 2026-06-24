@@ -55,7 +55,7 @@ git clone https://github.com/ek33450505/claude-agent-team.git
 claude --plugin-dir claude-agent-team/plugin
 ```
 
-The plugin bundles CAST's curated agents, skills, commands, `command`-type enforcement hooks, and the GitHub MCP server (provide a token via the plugin's `GITHUB_TOKEN` config to enable it). It is **opt-in** (`defaultEnabled: false`) — **until you run `/plugin enable cast@cast`, the SessionStart bootstrap does not run.** `install.sh` remains authoritative for the runtime layer (`~/.claude/scripts`, `cast.db`, launchd jobs, git hooks); when both are present, the plugin's hooks defer to install.sh via a `~/.claude/config/cast-hook-owner` sentinel so nothing double-fires.
+The plugin bundles CAST's curated agents, skills, commands, and `command`-type enforcement hooks. It is **opt-in** (`defaultEnabled: false`) — **until you run `/plugin enable cast@cast`, the SessionStart bootstrap does not run.** `install.sh` remains authoritative for the runtime layer (`~/.claude/scripts`, `cast.db`, launchd jobs, git hooks); when both are present, the plugin's hooks defer to install.sh via a `~/.claude/config/cast-hook-owner` sentinel so nothing double-fires.
 
 > **Curated payload:** the plugin ships **17 lean agents**; the `push` agent (needs the install.sh runtime) and `morning-briefing` are excluded. Add the 4 opt-in extras (perf-sentinel, release-notes, api-contract, dep-auditor) by regenerating with `bash scripts/gen-plugin.sh --with-extras dist/cast-plugin` then `claude --plugin-dir dist/cast-plugin`. The full `install.sh` carries all <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents.
 
