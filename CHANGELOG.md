@@ -4,6 +4,9 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+### Added
+- **`cast doctor` model-retirement health check (v9 C9):** `cast-validate.sh` now queries `/v1/models` (when `ANTHROPIC_API_KEY` is available) and warns if a Claude model tier CAST dispatches — opus, sonnet, or haiku — is absent from the live list. Fail-open and advisory: no network call when the key is missing, and a failed or unreachable endpoint emits `info` (not `warn`) so `cast doctor` stays green. Tier-level check only (not per-id) to avoid false alarms from retired historical IDs kept in `config/model-pricing.json` for cost backfill.
+
 ### Removed
 - **Retired the dormant `/swarm` subsystem** (v9 P0 · B1): removed the `/swarm` skill, the `cast-swarm-{bootstrap,merge,teardown}` scripts, `swarm-configs/`, `docs/swarm.md`, and the swarm BATS tests. `swarm_sessions` carried zero rows and the subsystem held the highest wipe blast-radius in the repo (its teardown `rmtree` was the 2026-06-02 wipe culprit). The `swarm_sessions` / `teammate_runs` / `teammate_messages` cast.db tables are **retained as dormant historical record** (the record is the product) — only the writers were removed, no `DROP TABLE`. All §1 containment guarantees (rmtree blast-radius scoping, directory-traversal refusal, temp-HOME isolation, branch-prefix guard) were **re-anchored to general guard tests before any deletion** (Subtraction Safety Gate). Forward path for parallel teammates is native `isolation: worktree` subagents + (experimental) Agent Teams.
 - **Removed the dead `cast-research-cache.py` URL cache** (v9 P-grain · I7): the 1-hour-TTL research URL cache and the `researcher` agent's URL-caching instruction are retired — the cache had no cast.db table, no hook wiring, and no guarding test; Claude Code's native WebFetch in-session cache covers it. Subtraction per the §0.2 Safety Gate.

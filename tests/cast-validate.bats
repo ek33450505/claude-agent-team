@@ -136,6 +136,14 @@ run_validate() {
 setup() {
   load 'helpers/setup'
   setup_temp_home
+  # Prepend stub-bin to PATH to prevent real network/keychain calls in ALL tests.
+  # Default stubs: security exits 1 (no key found), curl exits 7 (unreachable).
+  # Individual tests that need specific curl behaviour rewrite the stub before calling run_validate.
+  mkdir -p "$HOME/.stub-bin"
+  printf '#!/bin/bash\nexit 1\n' > "$HOME/.stub-bin/security"
+  printf '#!/bin/bash\nexit 7\n' > "$HOME/.stub-bin/curl"
+  chmod +x "$HOME/.stub-bin/security" "$HOME/.stub-bin/curl"
+  export PATH="$HOME/.stub-bin:$PATH"
 }
 
 teardown() {
@@ -383,4 +391,55 @@ JSON
 
   run env -u CAST_BACKUP_DIR bash "$VALIDATE_SH"
   refute_output --partial "legacy colocated backups"
+}
+
+# ---------------------------------------------------------------------------
+# Model tier availability check (new — C9)
+# All tests rely on setup()'s default stubs: security exits 1, curl exits 7.
+# Tests that need curl to return a fixture rewrite the stub first.
+# ---------------------------------------------------------------------------
+
+@test "model availability: no API key → info skip, exits 0" {
+  build_clean_install
+  # Default security stub exits 1 (no keychain key).
+  # Explicitly unset ANTHROPIC_API_KEY so key resolution finds nothing.
+  run env -u ANTHROPIC_API_KEY bash "$VALIDATE_SH"
+  assert_output --partial "Model availability: skipped (no ANTHROPIC_API_KEY"
+  assert_success
+}
+
+@test "model availability: all tiers present → three pass lines, exits 0" {
+  build_clean_install
+  # Write fixture JSON to a file; curl stub cats it so the check gets valid data.
+  FIXTURE_FILE="$HOME/.stub-bin/_models.json"
+  printf '%s' '{"data":[{"type":"model","id":"claude-opus-4-8"},{"type":"model","id":"claude-sonnet-4-6"},{"type":"model","id":"claude-haiku-4-5"}],"has_more":false}' > "$FIXTURE_FILE"
+  printf '#!/bin/bash\ncat "%s"\n' "$FIXTURE_FILE" > "$HOME/.stub-bin/curl"
+  chmod +x "$HOME/.stub-bin/curl"
+  run env ANTHROPIC_API_KEY=test CAST_MODELS_ENDPOINT=https://api.anthropic.com/v1/models bash "$VALIDATE_SH"
+  assert_output --partial "Model tier 'opus': available"
+  assert_output --partial "Model tier 'sonnet': available"
+  assert_output --partial "Model tier 'haiku': available"
+  assert_success
+}
+
+@test "model availability: haiku tier absent → warn about retired tier, exits 1" {
+  build_clean_install
+  # Fixture has opus and sonnet but no haiku → haiku tier gets a warn.
+  FIXTURE_FILE="$HOME/.stub-bin/_models.json"
+  printf '%s' '{"data":[{"type":"model","id":"claude-opus-4-8"},{"type":"model","id":"claude-sonnet-4-6"}],"has_more":false}' > "$FIXTURE_FILE"
+  printf '#!/bin/bash\ncat "%s"\n' "$FIXTURE_FILE" > "$HOME/.stub-bin/curl"
+  chmod +x "$HOME/.stub-bin/curl"
+  run env ANTHROPIC_API_KEY=test CAST_MODELS_ENDPOINT=https://api.anthropic.com/v1/models bash "$VALIDATE_SH"
+  assert_output --partial "Model tier 'haiku': no claude-haiku-* model"
+  # Warnings only → exit 1; errors would be exit 2.
+  [ "$status" -eq 1 ]
+}
+
+@test "model availability: endpoint unreachable → info skip, exits 0" {
+  build_clean_install
+  # Default curl stub exits 7 — simulates a network failure.
+  # ANTHROPIC_API_KEY is set so the check attempts the call, then gracefully skips.
+  run env ANTHROPIC_API_KEY=test CAST_MODELS_ENDPOINT=https://api.anthropic.com/v1/models bash "$VALIDATE_SH"
+  assert_output --partial "Model availability: skipped (could not reach"
+  assert_success
 }

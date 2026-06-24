@@ -42,7 +42,7 @@ fail()  { echo "✗ $*"; ERRORS=$((ERRORS + 1)); }
 warn()  { echo "⚠ $*"; WARNINGS=$((WARNINGS + 1)); }
 info()  { echo "ℹ $*"; }  # Optional/advisory — does not increment WARNINGS
 
-echo "CAST Validate v${VERSION} (12 checks)"
+echo "CAST Validate v${VERSION} (13 checks)"
 echo "══════════════════════════════"
 
 # --- Check 1: Hook wiring ---
@@ -347,6 +347,31 @@ if [[ "$(uname -s)" == "Darwin" ]] && security find-generic-password -s cast-ant
   pass "Keychain: ANTHROPIC_API_KEY stored in macOS Keychain"
 else
   info "Keychain: ANTHROPIC_API_KEY not in Keychain (opt-in: cast-keychain.sh set anthropic-api-key)"
+fi
+
+# Model tier availability: warn if opus/sonnet/haiku are absent from /v1/models
+KEY="${ANTHROPIC_API_KEY:-}"
+if [[ -z "$KEY" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+  KEY="$(security find-generic-password -s cast-anthropic-api-key -a cast -w 2>/dev/null || true)"
+fi
+if [[ -z "$KEY" ]]; then
+  info "Model availability: skipped (no ANTHROPIC_API_KEY; opt-in: export it or cast-keychain.sh set anthropic-api-key)"
+else
+  MODELS_URL="${CAST_MODELS_ENDPOINT:-https://api.anthropic.com/v1/models}"
+  MODELS_JSON="$({ curl -s --connect-timeout 5 --max-time 10 "$MODELS_URL" \
+      -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" 2>/dev/null || true; })"
+  if [[ -z "$MODELS_JSON" ]] || ! printf '%s' "$MODELS_JSON" | grep -q '"data"'; then
+    info "Model availability: skipped (could not reach $MODELS_URL)"
+  else
+    for tier in opus sonnet haiku; do
+      if printf '%s' "$MODELS_JSON" | grep -qE "claude-${tier}-[a-zA-Z0-9._-]+"; then
+        newest="$(printf '%s' "$MODELS_JSON" | grep -oE "claude-${tier}-[a-zA-Z0-9._-]+" | sort -u | tail -1)"
+        pass "Model tier '${tier}': available (newest: ${newest})"
+      else
+        warn "Model tier '${tier}': no claude-${tier}-* model returned by /v1/models — CAST dispatches this tier; it may be retired"
+      fi
+    done
+  fi
 fi
 
 # Encryption: is age installed? Memory file state?
