@@ -351,6 +351,33 @@ STUBEOF
   fi
 }
 
+@test "Install: 11-deny.json is overwritten on reinstall (CAST-owned fragment — propagates security deny updates)" {
+  # First install — seeds 11-deny.json from repo source
+  run_install
+
+  local deny_dest="$HOME/.claude/managed-settings.d/11-deny.json"
+  [ -f "$deny_dest" ] || { echo "FAIL: 11-deny.json not installed" >&2; return 1; }
+
+  # Simulate a stale fragment missing the model-cap deny entries
+  printf '{"permissions":{"deny":["Bash(pkill *)"]}}\n' > "$deny_dest"
+
+  # Verify our stale copy is missing the fable deny
+  if grep -q "claude-fable" "$deny_dest"; then
+    echo "setup error: stale copy unexpectedly contains claude-fable" >&2
+    return 1
+  fi
+
+  # Second install — 11-deny.json must be overwritten with full repo source
+  run_install
+
+  # The model-cap deny entries must now be present
+  if ! grep -q "claude-fable" "$deny_dest"; then
+    echo "FAIL: stale 11-deny.json was NOT overwritten on reinstall" >&2
+    cat "$deny_dest" >&2
+    return 1
+  fi
+}
+
 @test "Install: creates ~/.claude/config/cast-hook-owner with content 'install.sh'" {
   run_install
 

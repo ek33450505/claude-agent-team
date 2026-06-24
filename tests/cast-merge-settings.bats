@@ -172,3 +172,72 @@ print('ok')
 
   [ -f "$CUSTOM_OUT" ]
 }
+
+@test "permissions deny+allow merge: 10-permissions.json (allow) + 11-deny.json (deny) produce a permissions object with BOTH allow and deny arrays" {
+  printf '%s\n' '{"permissions":{"allow":["Bash","Write","Edit"]}}' \
+    > "$FRAGMENTS_DIR/10-permissions.json"
+  printf '%s\n' '{"permissions":{"deny":["Agent(model:claude-fable*)","Agent(model:claude-mythos*)","Agent(model:fable*)","Agent(model:mythos*)","Bash(pkill *)","Bash(killall *)","Bash(rm -rf ~)","Bash(rm -rf ~/)","Bash(rm -rf ~/.claude*)"]}}' \
+    > "$FRAGMENTS_DIR/11-deny.json"
+
+  run bash "$MERGE_SH" "$OUTPUT_FILE"
+  assert_success
+
+  run python3 -c "
+import json
+with open('$OUTPUT_FILE') as f:
+    d = json.load(f)
+perms = d.get('permissions', {})
+allow = perms.get('allow', [])
+deny = perms.get('deny', [])
+assert 'Bash' in allow, f'allow missing Bash: {allow}'
+assert 'Write' in allow, f'allow missing Write: {allow}'
+assert 'Edit' in allow, f'allow missing Edit: {allow}'
+# 9 entries after FIX A+B (v9 security review)
+assert len(deny) == 9, f'Expected 9 deny entries, got {len(deny)}: {deny}'
+# Model cap entries — claude-fable* (broad) supersedes the former claude-fable-5*
+assert 'Agent(model:claude-fable*)' in deny, 'claude-fable* model deny missing'
+assert 'Agent(model:claude-mythos*)' in deny, 'mythos model deny missing'
+assert 'Agent(model:fable*)' in deny, 'fable bare alias deny missing'
+assert 'Agent(model:mythos*)' in deny, 'mythos bare alias deny missing'
+# Process kill
+assert 'Bash(pkill *)' in deny, 'pkill deny missing'
+assert 'Bash(killall *)' in deny, 'killall deny missing'
+# Destructive rm — exact home-root entries (FIX A: narrowed from over-broad ~*)
+assert 'Bash(rm -rf ~)' in deny, 'rm -rf ~ exact deny missing'
+assert 'Bash(rm -rf ~/)' in deny, 'rm -rf ~/ exact deny missing'
+assert 'Bash(rm -rf ~/.claude*)' in deny, 'rm -rf ~/.claude deny missing'
+# Regression guard: the over-broad ~* pattern must NOT be present
+assert 'Bash(rm -rf ~*)' not in deny, 'over-broad rm -rf ~* must not be present'
+print('ok')
+"
+  assert_success
+  assert_output "ok"
+}
+
+@test "permissions deny merge: allow array is unchanged when deny fragment is merged on top" {
+  printf '%s\n' '{"permissions":{"allow":["Bash","Write","Edit","WebSearch"]}}' \
+    > "$FRAGMENTS_DIR/10-permissions.json"
+  printf '%s\n' '{"permissions":{"deny":["Bash(pkill *)"]}}' \
+    > "$FRAGMENTS_DIR/11-deny.json"
+
+  run bash "$MERGE_SH" "$OUTPUT_FILE"
+  assert_success
+
+  run python3 -c "
+import json
+with open('$OUTPUT_FILE') as f:
+    d = json.load(f)
+allow = d.get('permissions', {}).get('allow', [])
+assert allow == ['Bash', 'Write', 'Edit', 'WebSearch'], f'allow clobbered: {allow}'
+print('ok')
+"
+  assert_success
+  assert_output "ok"
+}
+
+@test "11-deny.json is valid JSON" {
+  DENY_FRAG="$REPO_DIR/managed-settings.d/11-deny.json"
+  [ -f "$DENY_FRAG" ]
+  run python3 -m json.tool "$DENY_FRAG"
+  assert_success
+}

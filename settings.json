@@ -52,6 +52,17 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:api.github.com)"
+    ],
+    "deny": [
+      "Agent(model:claude-fable*)",
+      "Agent(model:claude-mythos*)",
+      "Agent(model:fable*)",
+      "Agent(model:mythos*)",
+      "Bash(pkill *)",
+      "Bash(killall *)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/)",
+      "Bash(rm -rf ~/.claude*)"
     ]
   },
   "modelOverrides": {
