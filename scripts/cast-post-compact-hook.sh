@@ -9,7 +9,7 @@ set -euo pipefail
 
 # _log_error: append a structured error line to hook-errors.log (never fails itself)
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
-_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >>"${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
 
 INPUT="$(cat 2>/dev/null || true)"
 
@@ -77,35 +77,10 @@ except Exception as e:
     import sys
     print(f"[cast-post-compact-hook] Failed to append to compact-log: {e}", file=sys.stderr)
 
-# Write compaction tier to cast.db (best-effort — errors logged to hook_failures)
-import sys
-sys.path.insert(0, os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')))
-try:
-    from cast_db import db_execute, db_write
-    db_execute('''
-        CREATE TABLE IF NOT EXISTS compaction_events (
-            id TEXT PRIMARY KEY,
-            session_id TEXT,
-            timestamp TEXT,
-            trigger TEXT,
-            compaction_tier TEXT,
-            transcript_path TEXT
-        )
-    ''')
-    db_write('compaction_events', {
-        'id': event['id'],
-        'session_id': session_id,
-        'timestamp': iso_ts,
-        'trigger': trigger,
-        'compaction_tier': compaction_tier,
-        'transcript_path': transcript_path,
-    })
-except Exception as e:
-    try:
-        from cast_db import log_hook_failure
-        log_hook_failure('cast-post-compact-hook.sh:compaction_events', 1, str(e), session_id)
-    except Exception:
-        pass  # Fallback: silently fail, hook must not crash
+# compaction_events DB write retired (v9 B3 recorder-subtraction): the native OTEL
+# 'compaction' event now lands in otel_events (telemetry on by default).
+# Table still populated by cast-precompact-log.py (PreCompact).
+# Audit: plans/b3-hook-feed-coverage-audit.md
 PYEOF
 
 exit 0

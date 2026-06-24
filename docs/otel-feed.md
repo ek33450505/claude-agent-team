@@ -40,34 +40,39 @@ Claude Code emits native OpenTelemetry signals (metrics + events/logs) continuou
      honesty checks, doctor)
 ```
 
+## Default State: ON (Local-First)
+
+**Default state:** ON. The OTEL feed is active after a fresh `bash install.sh`.
+
+All telemetry goes **only to localhost:4318** — enforced at the socket level. Nothing is sent to Anthropic or any remote endpoint. This is separate from Anthropic's own operational telemetry (governed by `DISABLE_TELEMETRY`, which CAST sets to `1` simultaneously to opt out of that).
+
+**Privacy guarantee (doc-verified against code.claude.com):**
+- `CLAUDE_CODE_ENABLE_TELEMETRY` and the `OTEL_*` exporter keys control where Claude Code sends its native OTLP signals — these go to our local collector at `127.0.0.1:4318`, never off-machine.
+- `DISABLE_TELEMETRY=1` opts out of Anthropic's separate operational telemetry. CAST sets this in the same fragment so both concerns are covered.
+- Content logging (prompt text, tool arguments, API response bodies) requires explicit `OTEL_LOG_*` opt-in keys. CAST does NOT set these. What lands in `cast.db` is **metadata only** — counts, durations, event names.
+
+To turn the local feed off: `bash scripts/cast-otel.sh disable`
+
 ## Verified Environment Variables
 
-When you enable CAST OTLP collection, these 5 keys are written to `~/.claude/settings.json` → `env`:
+These 6 keys ship in `managed-settings.d/00-env.json` (the durable source of truth — survives reinstall):
 
-| Key | Value |
-|-----|-------|
-| `CLAUDE_CODE_ENABLE_TELEMETRY` | `1` |
-| `OTEL_METRICS_EXPORTER` | `otlp` |
-| `OTEL_LOGS_EXPORTER` | `otlp` |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/json` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` |
+| Key | Value | Purpose |
+|-----|-------|---------|
+| `CLAUDE_CODE_ENABLE_TELEMETRY` | `1` | Activates Claude Code's native OTLP emission |
+| `OTEL_METRICS_EXPORTER` | `otlp` | Sends metrics to the OTLP endpoint |
+| `OTEL_LOGS_EXPORTER` | `otlp` | Sends events/logs to the OTLP endpoint |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/json` | Wire format |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | Local collector only |
+| `DISABLE_TELEMETRY` | `1` | Opts out of Anthropic operational telemetry |
 
-**Default state:** OFF (opt-in). Claude Code does NOT emit telemetry unless `CLAUDE_CODE_ENABLE_TELEMETRY=1` is set.
+**Note:** No `OTEL_LOG_*` content-logging keys are set. Metadata only.
 
 **Port override:** Set `CAST_OTEL_PORT` to bind to a different port (default: 4318).
 
 ## Enable / Disable
 
-### Enable collector and telemetry
-
-```bash
-bash scripts/cast-otel.sh enable
-```
-
-This command:
-1. Loads the launchd agent (`com.cast.otel-collector`)
-2. Writes the 5 telemetry env keys into `~/.claude/settings.json` → `env`
-3. Restarts Claude Code sessions for the keys to take effect
+The feed is **ON by default** after install. The daemon (`com.cast.otel-collector`) auto-starts at login via launchd (`RunAtLoad=true`).
 
 ### Disable collector and telemetry
 
@@ -76,8 +81,22 @@ bash scripts/cast-otel.sh disable
 ```
 
 This command:
-1. Unloads the launchd agent
-2. Removes the 5 telemetry env keys from `~/.claude/settings.json`
+1. Removes the 5 OTEL telemetry keys from `~/.claude/managed-settings.d/00-env.json` (the durable fragment)
+2. Regenerates `~/.claude/settings.json` from fragments
+3. Unloads the launchd agent
+
+The change survives reinstall because `disable` writes to the fragment, not just `settings.json`.
+
+### Re-enable collector and telemetry
+
+```bash
+bash scripts/cast-otel.sh enable
+```
+
+This command:
+1. Ensures the 5 OTEL telemetry keys are present in `~/.claude/managed-settings.d/00-env.json`
+2. Regenerates `~/.claude/settings.json` from fragments
+3. Loads the launchd agent
 
 ### Check status
 

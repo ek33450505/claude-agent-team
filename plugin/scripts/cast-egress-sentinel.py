@@ -177,6 +177,11 @@ def classify(tool_name: str, tool_input: dict, policy: dict) -> dict | None:
         cmd = tool_input.get("command", "") or ""
         net = _bash_network_hits(cmd, policy)
         if net:
+            # Suppress loopback-only calls — they are on-machine by definition.
+            # Fail-closed: if the target host can't be parsed confidently as
+            # loopback, treat it as off-machine (record it).
+            if _bash_all_targets_loopback(cmd):
+                return None
             return {"surface": "bash", "commands": net,
                     "command_preview": cmd[:120].replace("\n", " ")}
         return None
@@ -199,6 +204,103 @@ def _is_credential_path(file_path: str, policy: dict) -> bool:
         if fnmatch.fnmatch(target, pat) or fnmatch.fnmatch(file_path, glob):
             return True
     return False
+
+
+def _parse_url_host(token: str) -> str:
+    """Extract the host (no port) from a URL token or bare host:port string.
+    Returns the lowercased host string, or '' on parse failure."""
+    try:
+        from urllib.parse import urlsplit
+        t = token.strip("'\"`")
+        if t.startswith("//") or "://" in t:
+            parsed = urlsplit(t if "://" in t else "http:" + t)
+            host = parsed.hostname or ""  # hostname strips port + lowercases
+        elif t.startswith("["):
+            # bare [::1] or [::1]:port
+            bracket_end = t.find("]")
+            host = t[1:bracket_end] if bracket_end > 0 else ""
+        elif ":" in t and not t.startswith("-"):
+            # bare host:port (no scheme). Guard against flag-like tokens.
+            host = t.rsplit(":", 1)[0]
+        else:
+            host = t
+        return host.lower()
+    except Exception:
+        return ""
+
+
+# Exact loopback hosts — not substring checks.
+# NOTE: 0.0.0.0 is intentionally excluded — it is the wildcard/all-interfaces
+# bind address and IS network-reachable, not a true loopback. Fail-closed.
+_LOOPBACK_HOSTS: frozenset = frozenset({"localhost", "::1", "[::1]"})
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return True iff 'host' (already lowercased, port-stripped) is a loopback
+    address. Uses exact-set membership for names and prefix-check for the
+    127.0.0.0/8 range. Does NOT do substring search — 'localhost.evil.com' is
+    NOT loopback."""
+    if not host:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    # 127.0.0.0/8: must be exactly four dot-separated octets starting with 127.
+    parts = host.split(".")
+    if len(parts) == 4 and parts[0] == "127":
+        return all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
+    return False
+
+
+def _bash_extract_url_args(command: str) -> list[str]:
+    """Pull tokens that look like URL or host:port arguments from a command.
+    Conservative: only tokens that start with http/https/ftp scheme or contain
+    '://', or bare host:port tokens that follow a network binary.  We also
+    capture the token immediately after common URL-carrying flags (-H, -d, -o,
+    --url, --output, --header are excluded; positional-arg tokens are captured).
+    Returns a list of candidate host-bearing tokens."""
+    skip_next = False
+    skip_flags = {
+        "-H", "--header", "-d", "--data", "--data-raw", "--data-binary",
+        "-o", "--output", "-e", "--referer", "-u", "--user",
+        "-F", "--form", "-X", "--request", "--cacert", "--cert",
+    }
+    tokens = command.replace("|", " ").replace("&", " ").replace(";", " ").split()
+    url_args: list[str] = []
+    for tok in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in skip_flags:
+            skip_next = True
+            continue
+        if tok.startswith("-"):
+            continue
+        # Accept URLs with scheme or bare tokens containing a dot (domain-like)
+        # or IPv6 brackets — but NOT short alphanumeric tokens (likely filenames).
+        t = tok.strip("'\"`")
+        if "://" in t or t.startswith("//"):
+            url_args.append(t)
+        elif t.startswith("[") and "]" in t:
+            url_args.append(t)
+    return url_args
+
+
+def _bash_all_targets_loopback(command: str) -> bool:
+    """Return True iff every URL/host argument in the command resolves to a
+    loopback address. Returns False (fail-closed) when no URL arguments are
+    found (we can't confirm the target is on-machine).
+
+    SECURITY: DNS/connection-override flags (--resolve, --connect-to) can
+    redirect a loopback URL to a remote IP at the network layer, making the
+    parsed host meaningless. Fail-closed immediately on their presence."""
+    # --resolve and --connect-to override DNS/connection routing — a curl that
+    # looks like localhost may actually connect to an off-machine IP.
+    if "--resolve" in command or "--connect-to" in command:
+        return False
+    args = _bash_extract_url_args(command)
+    if not args:
+        return False  # fail-closed: can't parse target, treat as off-machine
+    return all(_is_loopback_host(_parse_url_host(a)) for a in args)
 
 
 def _bash_network_hits(command: str, policy: dict) -> list:

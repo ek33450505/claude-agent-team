@@ -241,10 +241,13 @@ rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budg
 success "  Scripts installed (including cast_db.py)"
 
 # --- Install managed-settings.d fragments ---
-# Policy: CAST-owned hook fragments (*-hooks-*.json) overwrite — they ship behavior changes
-# that must reach the deployed copy. User-customizable fragments (env, permissions, MCP, etc.)
-# skip-if-exists. Downstream-only fragments (filenames not in source) are preserved by
-# virtue of never being touched. Backup of the prior CAST-owned copy goes to backups/.
+# Policy: CAST-owned fragments overwrite — they ship behavior changes that must reach the
+# deployed copy. CAST-owned set: *-hooks-*.json (hook wiring) and 50-mcp.json (MCP server
+# list; managed to propagate removals such as the github-MCP drop). User MCP servers belong
+# in ~/.claude.json (user/project scope), NOT in the managed fragment.
+# User-customizable fragments (env, permissions, etc.) skip-if-exists.
+# Downstream-only fragments (filenames not in source) are preserved by virtue of never being
+# touched. Backup of the prior CAST-owned copy goes to backups/.
 info "Installing settings fragments..."
 mkdir -p "$CLAUDE_DIR/managed-settings.d"
 for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
@@ -252,7 +255,7 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
     base="$(basename "$fragment")"
     dest="$CLAUDE_DIR/managed-settings.d/$base"
     case "$base" in
-        *-hooks-*.json)
+        *-hooks-*.json|50-mcp.json)
             # CAST-owned: overwrite to propagate source updates
             if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
                 mkdir -p "$BACKUP_DIR/managed-settings.d"
@@ -536,23 +539,20 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         bash "$CLAUDE_DIR/scripts/cast-litestream-setup.sh" || true
     fi
 
-    # Install cast-otel-collector.plist — native OTLP→cast.db collector daemon (OPT-IN).
-    # CRITICAL: install the plist file but DO NOT auto-load/start the daemon.
-    # The daemon is opt-in, OFF by default. Users enable it explicitly via:
-    #   bash scripts/cast-otel.sh enable
-    # which sets telemetry env keys AND performs the launchctl load.
-    # Idempotency: if the daemon is ALREADY loaded (user previously enabled it),
-    # reload it so the refreshed plist takes effect.
+    # Install and auto-load cast-otel-collector.plist — native OTLP→cast.db collector daemon.
+    # Telemetry is ON BY DEFAULT (local-first): all signals go to localhost:4318 only,
+    # never to Anthropic or any remote endpoint. The env keys live in managed-settings.d/00-env.json.
+    # To turn it off: bash scripts/cast-otel.sh disable
     if [ -f "$SCRIPT_DIR/macos/cast-otel-collector.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.otel-collector.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-otel-collector.plist" > "$PLIST_DEST"
-        # Only reload if the daemon is already loaded (user previously enabled it).
-        # This ensures the refreshed plist file takes effect without auto-starting it.
-        if launchctl list com.cast.otel-collector >/dev/null 2>&1; then
-            launchctl unload "$PLIST_DEST" 2>/dev/null || true
-            launchctl load "$PLIST_DEST" 2>/dev/null || true
+        # Always (re)load so the refreshed plist takes effect.
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            info "  Loaded: $PLIST_DEST (com.cast.otel-collector — telemetry on by default, local-first)"
+        else
+            warn "  Installed but failed to load: $PLIST_DEST — run 'bash scripts/cast-otel.sh enable' to retry"
         fi
-        info "  Installed (opt-in — run 'cast-otel.sh enable' to start): $PLIST_DEST (com.cast.otel-collector)"
     fi
 fi
 

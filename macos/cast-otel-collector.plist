@@ -16,7 +16,7 @@
   <true/>
 
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
 
   <key>StandardOutPath</key>
   <string>__HOME__/.claude/logs/otel-collector.log</string>

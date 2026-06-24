@@ -2,9 +2,12 @@
 # cast-otel.bats — BATS tests for cast-otel.sh
 #
 # Tests the control surface (enable/disable/status) for the CAST OpenTelemetry
-# collector daemon, focusing on settings.json mutation and env key management.
+# collector daemon, focusing on fragment mutation and env key management.
 #
-# All tests use an isolated temp HOME, temp settings.json, and stub launchctl/pgrep
+# With the ON-BY-DEFAULT change, enable/disable now target the managed-settings.d/00-env.json
+# FRAGMENT (the durable source of truth) rather than settings.json directly.
+#
+# All tests use an isolated temp HOME, temp fragment, and stub launchctl/pgrep
 # to avoid any real daemon/system interactions.
 
 load 'test_helper/bats-support/load'
@@ -13,7 +16,7 @@ load 'test_helper/bats-assert/load'
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 OTEL_SH="$REPO_DIR/scripts/cast-otel.sh"
 
-# The 5 telemetry keys that should be managed
+# The 5 telemetry keys that enable/disable manages (DISABLE_TELEMETRY is NOT in this list)
 TELEMETRY_KEYS=(
   "CLAUDE_CODE_ENABLE_TELEMETRY"
   "OTEL_METRICS_EXPORTER"
@@ -26,11 +29,22 @@ setup() {
   load 'helpers/setup'
   setup_temp_home
 
-  # Temp settings.json
+  # Fragment path (the durable source of truth)
+  mkdir -p "$HOME/.claude/managed-settings.d"
+  export FRAGMENT_FILE="$HOME/.claude/managed-settings.d/00-env.json"
+
+  # Initialize fragment with base keys (mirrors managed-settings.d/00-env.json)
+  python3 << PYEOF
+import json
+data = {"env": {"DISABLE_TELEMETRY": "1", "CLAUDE_CODE_SCRIPT_CAPS": "100"}}
+with open("$FRAGMENT_FILE", "w") as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+PYEOF
+
+  # Temp settings.json (generated from fragment — not the source of truth)
   export SETTINGS_FILE="$HOME/.claude/settings.json"
   mkdir -p "$(dirname "$SETTINGS_FILE")"
-
-  # Initialize empty settings.json
   echo '{}' > "$SETTINGS_FILE"
 
   # Stub launchctl (GUI side-effect isolation — never call real launchctl)
@@ -53,28 +67,31 @@ STUBEOF
   # Override PATH to use stubs first
   export PATH="$HOME/.claude/stubs:$PATH"
 
-  # Override env vars to use temp settings and disable launchctl
+  # Override env vars to use temp paths and disable launchctl
   export CAST_SETTINGS_JSON="$SETTINGS_FILE"
+  export CAST_OTEL_FRAGMENT="$FRAGMENT_FILE"
+  export CAST_CLAUDE_DIR="$HOME/.claude"
   export CAST_OTEL_LAUNCHCTL_CMD="$HOME/.claude/stubs/launchctl"
   export CAST_OTEL_DRY_RUN="1"  # Prevent any real launchctl calls
 }
 
 teardown() {
   teardown_temp_home
-  unset SETTINGS_FILE CAST_SETTINGS_JSON CAST_OTEL_LAUNCHCTL_CMD CAST_OTEL_DRY_RUN
+  unset FRAGMENT_FILE SETTINGS_FILE CAST_SETTINGS_JSON CAST_OTEL_FRAGMENT \
+        CAST_CLAUDE_DIR CAST_OTEL_LAUNCHCTL_CMD CAST_OTEL_DRY_RUN
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Count occurrences of a key in the env block of settings.json
+# Helper: Count occurrences of a key in the env block of the FRAGMENT
 # ---------------------------------------------------------------------------
-_key_count() {
+_key_count_in_fragment() {
   local key="$1"
   python3 << PYEOF
 import json
 import sys
 
 try:
-    with open("$SETTINGS_FILE", "r") as f:
+    with open("$FRAGMENT_FILE", "r") as f:
         data = json.load(f)
     env = data.get("env", {})
     count = 1 if "$key" in env else 0
@@ -85,26 +102,26 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Check if a key exists in settings.json env block
+# Helper: Check if a key exists in the fragment env block
 # ---------------------------------------------------------------------------
 _key_exists() {
   local key="$1"
   local count
-  count=$(_key_count "$key")
+  count=$(_key_count_in_fragment "$key")
   count=$(echo "$count" | tr -d ' ')
   [[ "$count" -gt 0 ]]
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Get all keys in settings.json env block
+# Helper: Get all keys in the fragment env block
 # ---------------------------------------------------------------------------
-_get_env_keys() {
+_get_fragment_env_keys() {
   python3 << PYEOF
 import json
 import sys
 
 try:
-    with open("$SETTINGS_FILE", "r") as f:
+    with open("$FRAGMENT_FILE", "r") as f:
         data = json.load(f)
     env = data.get("env", {})
     for key in sorted(env.keys()):
@@ -115,21 +132,21 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Helper: Check if settings.json is valid JSON
+# Helper: Check if fragment is valid JSON
 # ---------------------------------------------------------------------------
-_json_valid() {
-  python3 -m json.tool "$SETTINGS_FILE" >/dev/null 2>&1
+_fragment_json_valid() {
+  python3 -m json.tool "$FRAGMENT_FILE" >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
-# Test 1: Enable adds 5 telemetry keys to settings.json
+# Test 1: Enable adds 5 telemetry keys to the FRAGMENT
 # ---------------------------------------------------------------------------
-@test "enable command adds 5 telemetry env keys to settings.json" {
+@test "enable command adds 5 telemetry env keys to the fragment" {
   run bash "$OTEL_SH" enable
   assert_success
   assert_output --partial "Enabling CAST OpenTelemetry"
 
-  # All 5 keys must be present
+  # All 5 keys must be present in the fragment
   _key_exists "CLAUDE_CODE_ENABLE_TELEMETRY"
   _key_exists "OTEL_METRICS_EXPORTER"
   _key_exists "OTEL_LOGS_EXPORTER"
@@ -137,49 +154,35 @@ _json_valid() {
   _key_exists "OTEL_EXPORTER_OTLP_ENDPOINT"
 }
 
-@test "enable command preserves pre-existing env keys" {
-  # Add a pre-existing key
-  python3 << PYEOF
-import json
-
-with open("$SETTINGS_FILE", "r") as f:
-    data = json.load(f)
-
-if "env" not in data:
-    data["env"] = {}
-
-data["env"]["MY_CUSTOM_KEY"] = "my_value"
-
-with open("$SETTINGS_FILE", "w") as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-PYEOF
+@test "enable command preserves pre-existing env keys in fragment" {
+  # Pre-existing keys (DISABLE_TELEMETRY + CLAUDE_CODE_SCRIPT_CAPS) already in fragment from setup
 
   # Run enable
   bash "$OTEL_SH" enable >/dev/null 2>&1
 
-  # Pre-existing key must still be there
+  # Pre-existing keys must still be there
   python3 << PYEOF
 import json
 
-with open("$SETTINGS_FILE", "r") as f:
+with open("$FRAGMENT_FILE", "r") as f:
     data = json.load(f)
 
 env = data.get("env", {})
-assert "MY_CUSTOM_KEY" in env
-assert env["MY_CUSTOM_KEY"] == "my_value"
+assert "DISABLE_TELEMETRY" in env, "DISABLE_TELEMETRY missing after enable"
+assert env["DISABLE_TELEMETRY"] == "1", f"DISABLE_TELEMETRY wrong value: {env['DISABLE_TELEMETRY']}"
+assert "CLAUDE_CODE_SCRIPT_CAPS" in env, "CLAUDE_CODE_SCRIPT_CAPS missing after enable"
 PYEOF
 }
 
-@test "enable produces valid JSON in settings.json" {
+@test "enable produces valid JSON in fragment" {
   bash "$OTEL_SH" enable >/dev/null 2>&1
-  _json_valid
+  _fragment_json_valid
 }
 
 # ---------------------------------------------------------------------------
-# Test 2: Disable removes exactly 5 telemetry keys
+# Test 2: Disable removes exactly 5 telemetry keys from the FRAGMENT
 # ---------------------------------------------------------------------------
-@test "disable command removes all 5 telemetry env keys from settings.json" {
+@test "disable command removes all 5 telemetry env keys from the fragment" {
   # First enable
   bash "$OTEL_SH" enable >/dev/null 2>&1
 
@@ -188,7 +191,7 @@ PYEOF
   assert_success
   assert_output --partial "Disabling CAST OpenTelemetry"
 
-  # All 5 keys must be gone
+  # All 5 OTEL keys must be gone from fragment
   ! _key_exists "CLAUDE_CODE_ENABLE_TELEMETRY"
   ! _key_exists "OTEL_METRICS_EXPORTER"
   ! _key_exists "OTEL_LOGS_EXPORTER"
@@ -196,47 +199,30 @@ PYEOF
   ! _key_exists "OTEL_EXPORTER_OTLP_ENDPOINT"
 }
 
-@test "disable preserves pre-existing env keys" {
-  # Add a pre-existing key
-  python3 << PYEOF
-import json
-
-with open("$SETTINGS_FILE", "r") as f:
-    data = json.load(f)
-
-if "env" not in data:
-    data["env"] = {}
-
-data["env"]["KEEP_THIS_KEY"] = "keep_this_value"
-
-with open("$SETTINGS_FILE", "w") as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-PYEOF
-
+@test "disable preserves DISABLE_TELEMETRY and other fragment keys" {
   # Enable telemetry
   bash "$OTEL_SH" enable >/dev/null 2>&1
 
   # Disable telemetry
   bash "$OTEL_SH" disable >/dev/null 2>&1
 
-  # Pre-existing key must still be there
+  # DISABLE_TELEMETRY must still be in the fragment (it is NOT managed by enable/disable)
   python3 << PYEOF
 import json
 
-with open("$SETTINGS_FILE", "r") as f:
+with open("$FRAGMENT_FILE", "r") as f:
     data = json.load(f)
 
 env = data.get("env", {})
-assert "KEEP_THIS_KEY" in env
-assert env["KEEP_THIS_KEY"] == "keep_this_value"
+assert "DISABLE_TELEMETRY" in env, "DISABLE_TELEMETRY was removed by disable — it should be preserved"
+assert "CLAUDE_CODE_SCRIPT_CAPS" in env, "CLAUDE_CODE_SCRIPT_CAPS was removed by disable — it should be preserved"
 PYEOF
 }
 
-@test "disable produces valid JSON in settings.json" {
+@test "disable produces valid JSON in fragment" {
   bash "$OTEL_SH" enable >/dev/null 2>&1
   bash "$OTEL_SH" disable >/dev/null 2>&1
-  _json_valid
+  _fragment_json_valid
 }
 
 # ---------------------------------------------------------------------------
@@ -248,7 +234,7 @@ PYEOF
   local first_enable_count
   first_enable_count=$(python3 -c "
 import json
-with open('$SETTINGS_FILE', 'r') as f:
+with open('$FRAGMENT_FILE', 'r') as f:
     data = json.load(f)
 print(len(data.get('env', {})))
 ")
@@ -261,14 +247,15 @@ print(len(data.get('env', {})))
   local second_enable_count
   second_enable_count=$(python3 -c "
 import json
-with open('$SETTINGS_FILE', 'r') as f:
+with open('$FRAGMENT_FILE', 'r') as f:
     data = json.load(f)
 print(len(data.get('env', {})))
 ")
 
-  # Counts must be exactly the same (5 telemetry keys, no duplicates)
+  # Counts must be exactly the same (5 telemetry keys + 2 pre-existing = 7, no duplicates)
   [[ "$first_enable_count" -eq "$second_enable_count" ]]
-  [[ "$first_enable_count" -eq 5 ]]
+  # 5 OTEL keys + DISABLE_TELEMETRY + CLAUDE_CODE_SCRIPT_CAPS = 7
+  [[ "$first_enable_count" -eq 7 ]]
 }
 
 @test "enable twice produces no duplicate keys" {
@@ -277,7 +264,7 @@ print(len(data.get('env', {})))
   local first_count
   first_count=$(python3 -c "
 import json
-with open('$SETTINGS_FILE', 'r') as f:
+with open('$FRAGMENT_FILE', 'r') as f:
     data = json.load(f)
 print(len(data.get('env', {})))
 ")
@@ -287,14 +274,15 @@ print(len(data.get('env', {})))
   local second_count
   second_count=$(python3 -c "
 import json
-with open('$SETTINGS_FILE', 'r') as f:
+with open('$FRAGMENT_FILE', 'r') as f:
     data = json.load(f)
 print(len(data.get('env', {})))
 ")
 
   # Counts must be exactly the same (no duplicates)
   [[ "$first_count" -eq "$second_count" ]]
-  [[ "$first_count" -eq 5 ]]
+  # 5 OTEL keys + DISABLE_TELEMETRY + CLAUDE_CODE_SCRIPT_CAPS = 7
+  [[ "$first_count" -eq 7 ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -305,30 +293,46 @@ print(len(data.get('env', {})))
   assert_success
 }
 
-@test "status shows 'Not loaded' when disabled" {
-  bash "$OTEL_SH" disable >/dev/null 2>&1
-  run bash "$OTEL_SH" status
+@test "status shows 'Not loaded' when daemon is not loaded" {
+  # Stub launchctl exits 1 for 'list' (daemon not loaded)
+  cat > "$HOME/.claude/stubs/launchctl" <<'STUBEOF'
+#!/bin/bash
+if [[ "$1" == "list" ]]; then
+  exit 1
+fi
+exit 0
+STUBEOF
+  # Override to use real launchctl for status path but non-DRY_RUN
+  CAST_OTEL_DRY_RUN="0" run bash "$OTEL_SH" status
   assert_success
-  # Note: our stub launchctl always fails, so status shows "Not loaded"
+  assert_output --partial "Not loaded"
 }
 
-@test "status shows env key count when enabled" {
+@test "status shows env key count after enable" {
   bash "$OTEL_SH" enable >/dev/null 2>&1
   run bash "$OTEL_SH" status
   assert_success
   assert_output --partial "telemetry keys"
 }
 
+@test "status reflects fragment when fragment is present" {
+  bash "$OTEL_SH" enable >/dev/null 2>&1
+  run bash "$OTEL_SH" status
+  assert_success
+  assert_output --partial "fragment"
+}
+
 # ---------------------------------------------------------------------------
 # Test 5: Round-trip enable → disable → enable
 # ---------------------------------------------------------------------------
 @test "full round-trip: enable → disable → enable produces consistent state" {
-  # Initial state: empty
+  # Initial state: only base keys (DISABLE_TELEMETRY + CLAUDE_CODE_SCRIPT_CAPS)
   python3 << PYEOF
 import json
-with open("$SETTINGS_FILE", "r") as f:
+with open("$FRAGMENT_FILE", "r") as f:
     data = json.load(f)
-assert data.get("env", {}) == {}
+env = data.get("env", {})
+assert "CLAUDE_CODE_ENABLE_TELEMETRY" not in env
 PYEOF
 
   # Enable
@@ -336,7 +340,7 @@ PYEOF
   local enabled_state
   enabled_state=$(python3 -c "
 import json
-with open('$SETTINGS_FILE', 'r') as f:
+with open('$FRAGMENT_FILE', 'r') as f:
     data = json.load(f)
 print(json.dumps(data.get('env', {}), sort_keys=True))
 ")
@@ -345,9 +349,10 @@ print(json.dumps(data.get('env', {}), sort_keys=True))
   bash "$OTEL_SH" disable >/dev/null 2>&1
   python3 << PYEOF
 import json
-with open("$SETTINGS_FILE", "r") as f:
+with open("$FRAGMENT_FILE", "r") as f:
     data = json.load(f)
-assert data.get("env", {}) == {}
+env = data.get("env", {})
+assert "CLAUDE_CODE_ENABLE_TELEMETRY" not in env
 PYEOF
 
   # Re-enable
@@ -355,7 +360,7 @@ PYEOF
   local reenabled_state
   reenabled_state=$(python3 -c "
 import json
-with open('$SETTINGS_FILE', 'r') as f:
+with open('$FRAGMENT_FILE', 'r') as f:
     data = json.load(f)
 print(json.dumps(data.get('env', {}), sort_keys=True))
 ")
@@ -382,4 +387,17 @@ print(json.dumps(data.get('env', {}), sort_keys=True))
   run bash "$OTEL_SH"
   assert_failure
   assert_output --partial "Usage:"
+}
+
+# ---------------------------------------------------------------------------
+# Test 8: DISABLE_TELEMETRY survives full enable/disable cycle
+# ---------------------------------------------------------------------------
+@test "DISABLE_TELEMETRY is never removed by enable or disable" {
+  # Enable
+  bash "$OTEL_SH" enable >/dev/null 2>&1
+  _key_exists "DISABLE_TELEMETRY"
+
+  # Disable
+  bash "$OTEL_SH" disable >/dev/null 2>&1
+  _key_exists "DISABLE_TELEMETRY"
 }
