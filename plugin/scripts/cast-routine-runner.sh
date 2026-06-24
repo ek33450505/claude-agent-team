@@ -289,23 +289,29 @@ fi
 # ── Step 7: Ensure output dir exists ─────────────────────────────────────────
 mkdir -p "$OUTPUT_DIR_REAL"
 
-# ── Step 8: Dispatch agent via cast-managed-agent.sh ─────────────────────────
-# CAST_MANAGED_AGENT_CMD overrides the dispatch command (used in BATS tests to mock dispatch)
-MANAGED_AGENT_SCRIPT="${CAST_MANAGED_AGENT_CMD:-}"
-if [[ -z "$MANAGED_AGENT_SCRIPT" ]]; then
-  MANAGED_AGENT_SCRIPT="$SCRIPTS_DIR/cast-managed-agent.sh"
-  if [[ ! -f "$MANAGED_AGENT_SCRIPT" ]]; then
-    MANAGED_AGENT_SCRIPT="$REPO_DIR/scripts/cast-managed-agent.sh"
-  fi
-fi
-
+# ── Step 8: Dispatch agent (local-first) ─────────────────────────────────────
+# CAST_MANAGED_AGENT_CMD overrides the dispatch command (used in BATS tests to mock dispatch).
+# When not set, dispatch runs the agent locally via the claude CLI — NO cloud API attempt.
+# This satisfies CAST's local-first non-negotiable (2026-06-23 pivot).
 RUN_STATUS="success"
 
 AGENT_OUTPUT=""
-if AGENT_OUTPUT="$(bash "$MANAGED_AGENT_SCRIPT" "$AGENT" "$RENDERED_PROMPT" --local-fallback 2>&1)"; then
-  RUN_STATUS="success"
+if [[ -n "${CAST_MANAGED_AGENT_CMD:-}" ]]; then
+  # Test override: call the mock command with <agent> <prompt> positional args
+  if AGENT_OUTPUT="$(bash "$CAST_MANAGED_AGENT_CMD" "$AGENT" "$RENDERED_PROMPT" 2>&1)"; then
+    RUN_STATUS="success"
+  else
+    RUN_STATUS="failure"
+  fi
 else
-  RUN_STATUS="failure"
+  # Local-first dispatch: invoke claude CLI directly, no cloud API.
+  # --dangerously-skip-permissions skips only the interactive approval dialog;
+  # PreToolUse command-guard hooks + fail-closed script gates still fire.
+  if AGENT_OUTPUT="$(claude --agent "$AGENT" --print --dangerously-skip-permissions -p "$RENDERED_PROMPT" 2>&1)"; then
+    RUN_STATUS="success"
+  else
+    RUN_STATUS="failure"
+  fi
 fi
 
 # ── Step 9: Write agent output to file ───────────────────────────────────────

@@ -396,17 +396,7 @@ cat > "${OUT}/.claude-plugin/plugin.json" <<MANIFEST
   "repository": "https://github.com/ek33450505/claude-agent-team",
   "license": "MIT",
   "keywords": ["agents", "multi-agent", "observability", "quality-gates"],
-  "defaultEnabled": false,
-  "mcpServers": {
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "\${user_config.GITHUB_TOKEN}" }
-    }
-  },
-  "userConfig": {
-    "GITHUB_TOKEN": { "type": "string", "title": "GitHub token", "description": "GitHub PAT for the github MCP server.", "sensitive": true, "required": false }
-  }
+  "defaultEnabled": false
 }
 MANIFEST
 
