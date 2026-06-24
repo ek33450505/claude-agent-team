@@ -53,7 +53,17 @@ import json
 import sys
 
 def merge(base, override):
-    """Deep-merge override into base. Hooks arrays are concatenated. All other keys are merged recursively."""
+    """Deep-merge override into base. Hooks arrays are concatenated. All other keys are merged recursively.
+
+    IMPORTANT — last-fragment-wins for non-hooks keys:
+    permissions.allow and permissions.deny are plain arrays (not hooks), so they follow
+    the standard dict-override path: the LAST fragment that defines a given key wins and
+    REPLACES (does not concatenate) any earlier value for that key.
+    Consequence: deny rules must stay in a single fragment (11-deny.json) and allow rules
+    in a single fragment (10-permissions.json). A second fragment that also defines
+    permissions.deny would silently override the first — the earlier deny rules would be
+    dropped without warning.
+    """
     if not isinstance(base, dict) or not isinstance(override, dict):
         return override
     result = dict(base)
