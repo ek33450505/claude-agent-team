@@ -535,6 +535,25 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     if [ -f "$CLAUDE_DIR/scripts/cast-litestream-setup.sh" ]; then
         bash "$CLAUDE_DIR/scripts/cast-litestream-setup.sh" || true
     fi
+
+    # Install cast-otel-collector.plist — native OTLP→cast.db collector daemon (OPT-IN).
+    # CRITICAL: install the plist file but DO NOT auto-load/start the daemon.
+    # The daemon is opt-in, OFF by default. Users enable it explicitly via:
+    #   bash scripts/cast-otel.sh enable
+    # which sets telemetry env keys AND performs the launchctl load.
+    # Idempotency: if the daemon is ALREADY loaded (user previously enabled it),
+    # reload it so the refreshed plist takes effect.
+    if [ -f "$SCRIPT_DIR/macos/cast-otel-collector.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.otel-collector.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-otel-collector.plist" > "$PLIST_DEST"
+        # Only reload if the daemon is already loaded (user previously enabled it).
+        # This ensures the refreshed plist file takes effect without auto-starting it.
+        if launchctl list com.cast.otel-collector >/dev/null 2>&1; then
+            launchctl unload "$PLIST_DEST" 2>/dev/null || true
+            launchctl load "$PLIST_DEST" 2>/dev/null || true
+        fi
+        info "  Installed (opt-in — run 'cast-otel.sh enable' to start): $PLIST_DEST (com.cast.otel-collector)"
+    fi
 fi
 
 # --- Wire git hooks (pre-commit, pre-push, post-merge auto-install) ---

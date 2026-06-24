@@ -281,6 +281,53 @@ run_install_personal() {
 # Hook-ownership sentinel
 # =============================================================================
 
+# =============================================================================
+# OTEL collector plist — opt-in install (v9 B3)
+# =============================================================================
+
+@test "Install: otel-collector plist is installed but NOT auto-loaded on fresh install" {
+  # Stub launchctl: record every invocation; simulates daemon NOT currently loaded
+  # (launchctl list com.cast.otel-collector exits 1 = "not loaded" on a fresh machine)
+  local stub_bin
+  stub_bin="$(mktemp -d)"
+  local call_log="$stub_bin/launchctl-calls.log"
+  cat > "$stub_bin/launchctl" <<STUBEOF
+#!/bin/bash
+# Stub launchctl — records calls, simulates daemon not running
+echo "\$@" >> "$call_log"
+# 'list com.cast.otel-collector' exits 1 (not loaded) on a fresh install
+if [[ "\$1" == "list" && "\$2" == "com.cast.otel-collector" ]]; then
+  exit 1
+fi
+exit 0
+STUBEOF
+  chmod +x "$stub_bin/launchctl"
+
+  PATH="$stub_bin:$PATH" CAST_INSTALL_FORCE=1 bash "$REPO_DIR/install.sh" 2>&1
+
+  # Assertion 1: plist file must exist in LaunchAgents
+  local plist_dest="$HOME/Library/LaunchAgents/com.cast.otel-collector.plist"
+  [ -f "$plist_dest" ] || {
+    echo "FAIL: plist not found at $plist_dest" >&2
+    return 1
+  }
+
+  # Assertion 2: __HOME__ token must be replaced with the real HOME path
+  grep -q "__HOME__" "$plist_dest" && {
+    echo "FAIL: __HOME__ token not substituted in $plist_dest" >&2
+    return 1
+  }
+
+  # Assertion 3: must NOT have issued 'launchctl load' for com.cast.otel-collector (daemon is opt-in)
+  if grep -q "^load .*otel-collector" "$call_log" 2>/dev/null; then
+    echo "FAIL: launchctl load was called for otel-collector on a fresh install (daemon is opt-in/off by default)" >&2
+    grep "^load .*otel-collector" "$call_log" >&2
+    return 1
+  fi
+
+  rm -rf "$stub_bin"
+}
+
 @test "Install: creates ~/.claude/config/cast-hook-owner with content 'install.sh'" {
   run_install
 
