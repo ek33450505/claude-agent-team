@@ -396,7 +396,7 @@ print(json.dumps(data.get('env', {}), sort_keys=True))
   bash "$OTEL_SH" enable >/dev/null 2>&1
   # chmod 600 runs unconditionally (fragment always exists after enable)
   local perms
-  perms="$(stat -f '%OLp' "$FRAGMENT_FILE" 2>/dev/null || stat -c '%a' "$FRAGMENT_FILE" 2>/dev/null)"
+  perms="$(stat -c '%a' "$FRAGMENT_FILE" 2>/dev/null || stat -f '%OLp' "$FRAGMENT_FILE" 2>/dev/null)"
   [[ "$perms" == "600" ]] || {
     echo "FAIL: fragment permissions are $perms (expected 600)" >&2
     return 1
