@@ -4,8 +4,10 @@
 # Tests the control surface (enable/disable/status) for the CAST OpenTelemetry
 # collector daemon, focusing on fragment mutation and env key management.
 #
-# With the ON-BY-DEFAULT change, enable/disable now target the managed-settings.d/00-env.json
-# FRAGMENT (the durable source of truth) rather than settings.json directly.
+# Telemetry is OFF by default. enable/disable target managed-settings.d/12-otel.json
+# (the dedicated telemetry fragment, separate from the shared 00-env.json).
+# DISABLE_TELEMETRY is NOT managed by enable/disable — it lives in the personal
+# overlay (managed-settings-personal/12-otel.json) for the maintainer only.
 #
 # All tests use an isolated temp HOME, temp fragment, and stub launchctl/pgrep
 # to avoid any real daemon/system interactions.
@@ -29,14 +31,16 @@ setup() {
   load 'helpers/setup'
   setup_temp_home
 
-  # Fragment path (the durable source of truth)
+  # Fragment path — dedicated telemetry fragment (enable/disable target 12-otel.json)
   mkdir -p "$HOME/.claude/managed-settings.d"
-  export FRAGMENT_FILE="$HOME/.claude/managed-settings.d/00-env.json"
+  export FRAGMENT_FILE="$HOME/.claude/managed-settings.d/12-otel.json"
 
-  # Initialize fragment with base keys (mirrors managed-settings.d/00-env.json)
+  # Initialize fragment with pre-existing keys (simulates personal overlay on maintainer's machine).
+  # DISABLE_TELEMETRY is set here to verify enable/disable never touch it.
+  # A_SEPARATE_KEY simulates any non-telemetry key that might coexist in the fragment.
   python3 << PYEOF
 import json
-data = {"env": {"DISABLE_TELEMETRY": "1", "CLAUDE_CODE_SCRIPT_CAPS": "100"}}
+data = {"env": {"DISABLE_TELEMETRY": "1", "A_SEPARATE_KEY": "preserved"}}
 with open("$FRAGMENT_FILE", "w") as f:
     json.dump(data, f, indent=2)
     f.write('\n')
@@ -155,7 +159,7 @@ _fragment_json_valid() {
 }
 
 @test "enable command preserves pre-existing env keys in fragment" {
-  # Pre-existing keys (DISABLE_TELEMETRY + CLAUDE_CODE_SCRIPT_CAPS) already in fragment from setup
+  # Pre-existing keys (DISABLE_TELEMETRY + A_SEPARATE_KEY) already in fragment from setup
 
   # Run enable
   bash "$OTEL_SH" enable >/dev/null 2>&1
@@ -170,7 +174,7 @@ with open("$FRAGMENT_FILE", "r") as f:
 env = data.get("env", {})
 assert "DISABLE_TELEMETRY" in env, "DISABLE_TELEMETRY missing after enable"
 assert env["DISABLE_TELEMETRY"] == "1", f"DISABLE_TELEMETRY wrong value: {env['DISABLE_TELEMETRY']}"
-assert "CLAUDE_CODE_SCRIPT_CAPS" in env, "CLAUDE_CODE_SCRIPT_CAPS missing after enable"
+assert "A_SEPARATE_KEY" in env, "A_SEPARATE_KEY missing after enable"
 PYEOF
 }
 
@@ -215,7 +219,7 @@ with open("$FRAGMENT_FILE", "r") as f:
 
 env = data.get("env", {})
 assert "DISABLE_TELEMETRY" in env, "DISABLE_TELEMETRY was removed by disable — it should be preserved"
-assert "CLAUDE_CODE_SCRIPT_CAPS" in env, "CLAUDE_CODE_SCRIPT_CAPS was removed by disable — it should be preserved"
+assert "A_SEPARATE_KEY" in env, "A_SEPARATE_KEY was removed by disable — it should be preserved"
 PYEOF
 }
 
@@ -254,7 +258,7 @@ print(len(data.get('env', {})))
 
   # Counts must be exactly the same (5 telemetry keys + 2 pre-existing = 7, no duplicates)
   [[ "$first_enable_count" -eq "$second_enable_count" ]]
-  # 5 OTEL keys + DISABLE_TELEMETRY + CLAUDE_CODE_SCRIPT_CAPS = 7
+  # 5 OTEL keys + DISABLE_TELEMETRY + A_SEPARATE_KEY = 7
   [[ "$first_enable_count" -eq 7 ]]
 }
 
@@ -281,7 +285,7 @@ print(len(data.get('env', {})))
 
   # Counts must be exactly the same (no duplicates)
   [[ "$first_count" -eq "$second_count" ]]
-  # 5 OTEL keys + DISABLE_TELEMETRY + CLAUDE_CODE_SCRIPT_CAPS = 7
+  # 5 OTEL keys + DISABLE_TELEMETRY + A_SEPARATE_KEY = 7
   [[ "$first_count" -eq 7 ]]
 }
 
@@ -326,7 +330,7 @@ STUBEOF
 # Test 5: Round-trip enable → disable → enable
 # ---------------------------------------------------------------------------
 @test "full round-trip: enable → disable → enable produces consistent state" {
-  # Initial state: only base keys (DISABLE_TELEMETRY + CLAUDE_CODE_SCRIPT_CAPS)
+  # Initial state: only pre-existing keys (DISABLE_TELEMETRY + A_SEPARATE_KEY); no OTEL feed keys
   python3 << PYEOF
 import json
 with open("$FRAGMENT_FILE", "r") as f:
@@ -370,6 +374,36 @@ print(json.dumps(data.get('env', {}), sort_keys=True))
 }
 
 # ---------------------------------------------------------------------------
+# Test 5b: DRY_RUN mode emits PlistBuddy intent messages
+# ---------------------------------------------------------------------------
+@test "enable in DRY_RUN emits 'would set RunAtLoad true' message" {
+  # DRY_RUN=1 is set in setup; PlistBuddy must NOT run (it's in non-DRY_RUN block)
+  run bash "$OTEL_SH" enable
+  assert_success
+  assert_output --partial "would set RunAtLoad true"
+  assert_output --partial "would load:"
+}
+
+@test "disable in DRY_RUN emits 'would set RunAtLoad false' message" {
+  bash "$OTEL_SH" enable >/dev/null 2>&1
+  run bash "$OTEL_SH" disable
+  assert_success
+  assert_output --partial "would unload:"
+  assert_output --partial "would set RunAtLoad false"
+}
+
+@test "enable sets fragment permissions to 600" {
+  bash "$OTEL_SH" enable >/dev/null 2>&1
+  # chmod 600 runs unconditionally (fragment always exists after enable)
+  local perms
+  perms="$(stat -f '%OLp' "$FRAGMENT_FILE" 2>/dev/null || stat -c '%a' "$FRAGMENT_FILE" 2>/dev/null)"
+  [[ "$perms" == "600" ]] || {
+    echo "FAIL: fragment permissions are $perms (expected 600)" >&2
+    return 1
+  }
+}
+
+# ---------------------------------------------------------------------------
 # Test 6: Unknown subcommand shows usage
 # ---------------------------------------------------------------------------
 @test "unknown subcommand shows usage and returns error" {
@@ -400,4 +434,69 @@ print(json.dumps(data.get('env', {}), sort_keys=True))
   # Disable
   bash "$OTEL_SH" disable >/dev/null 2>&1
   _key_exists "DISABLE_TELEMETRY"
+}
+
+# ---------------------------------------------------------------------------
+# Test 9: Repo source 00-env.json contains NONE of the 6 telemetry keys
+# ---------------------------------------------------------------------------
+@test "repo 00-env.json contains none of the 6 telemetry keys" {
+  local repo_fragment="$REPO_DIR/managed-settings.d/00-env.json"
+  [ -f "$repo_fragment" ] || { echo "FAIL: $repo_fragment not found" >&2; return 1; }
+
+  python3 << PYEOF
+import json
+import sys
+
+TELEMETRY_KEYS = [
+    "CLAUDE_CODE_ENABLE_TELEMETRY",
+    "OTEL_METRICS_EXPORTER",
+    "OTEL_LOGS_EXPORTER",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "DISABLE_TELEMETRY",
+]
+
+with open("$repo_fragment", "r") as f:
+    data = json.load(f)
+
+env = data.get("env", {})
+found = [k for k in TELEMETRY_KEYS if k in env]
+if found:
+    print(f"FAIL: 00-env.json must not contain telemetry keys, but found: {found}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# Test 10: Repo personal overlay 12-otel.json exists and contains all 6 telemetry keys
+# ---------------------------------------------------------------------------
+@test "repo managed-settings-personal/12-otel.json exists and contains all 6 telemetry keys" {
+  local personal_fragment="$REPO_DIR/managed-settings-personal/12-otel.json"
+  [ -f "$personal_fragment" ] || {
+    echo "FAIL: $personal_fragment not found — create it with the 6 telemetry keys" >&2
+    return 1
+  }
+
+  python3 << PYEOF
+import json
+import sys
+
+TELEMETRY_KEYS = [
+    "CLAUDE_CODE_ENABLE_TELEMETRY",
+    "OTEL_METRICS_EXPORTER",
+    "OTEL_LOGS_EXPORTER",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "DISABLE_TELEMETRY",
+]
+
+with open("$personal_fragment", "r") as f:
+    data = json.load(f)
+
+env = data.get("env", {})
+missing = [k for k in TELEMETRY_KEYS if k not in env]
+if missing:
+    print(f"FAIL: managed-settings-personal/12-otel.json missing telemetry keys: {missing}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
 }
