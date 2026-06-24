@@ -47,6 +47,7 @@ agent_id   = data.get("agent_id", "") or ""
 agent_type = data.get("agent_type", "") or ""
 team_name  = data.get("team_name", "") or ""
 cwd = data.get("cwd", ""); project = os.path.basename(cwd) if cwd else ""
+# team_id: prefer the (deprecated) session-derived team_name — present in both Task* and TeammateIdle payloads — so all team activity groups under ONE swarm_sessions row; fall back to session-derived id when absent. cast-task-completed-hook.sh uses the identical derivation.
 team_id = team_name or ("session-" + session_id[:8] if session_id and session_id != "unknown" else "")
 now = datetime.now(timezone.utc); iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 

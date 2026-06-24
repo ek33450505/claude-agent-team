@@ -42,10 +42,13 @@ except Exception:
     import sys; sys.exit(0)
 
 session_id = data.get("session_id", "unknown")
+team_name = data.get("team_name", "") or ""
 task_id = data.get("task_id", "") or ""
+# 200-char cap for a fuller record (sibling cast-task-created-hook.sh caps task_queue subjects at 80).
 task_subject = (data.get("task_subject") or data.get("task_description") or "")[:200]
 cwd = data.get("cwd", ""); project = os.path.basename(cwd) if cwd else ""
-team_id = "session-" + session_id[:8] if session_id and session_id != "unknown" else ""
+# team_id: prefer the (deprecated) session-derived team_name — present in both Task* and TeammateIdle payloads — so all team activity groups under ONE swarm_sessions row; fall back to session-derived id when absent. Mirrors cast-teammate-idle-hook.sh.
+team_id = team_name or ("session-" + session_id[:8] if session_id and session_id != "unknown" else "")
 now = datetime.now(timezone.utc); iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # 1) immutable event log
