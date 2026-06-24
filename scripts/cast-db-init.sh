@@ -3,6 +3,7 @@
 # Creates ~/.claude/cast.db with core tables + (dormant) swarm observability tables:
 #   sessions, agent_runs, routing_events, agent_memories
 #   swarm_sessions, teammate_runs, teammate_messages  (writers: /swarm retired v9; experimental native Agent Teams hooks re-populate these when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 — dormant otherwise)
+#   otel_metrics, otel_events  (writer: cast-otel-collector.py; native OTLP feed, opt-in OFF by default)
 #
 # Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
 # Schema versioning via PRAGMA user_version (current = 8).
@@ -414,6 +415,28 @@ CREATE TABLE IF NOT EXISTS tool_call_failures (
     error      TEXT,
     project    TEXT,
     data       TEXT
+);
+
+-- Native OTLP feed tables (v9 B3; writer: cast-otel-collector.py; opt-in OFF by default)
+CREATE TABLE IF NOT EXISTS otel_metrics (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id     TEXT,
+  metric_name    TEXT NOT NULL,
+  value          REAL,
+  unit           TEXT,
+  attributes     TEXT,            -- JSON: merged resource + datapoint attributes
+  time_unix_nano INTEGER,         -- datapoint timestamp (int64 as INTEGER)
+  received_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS otel_events (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id     TEXT,
+  event_name     TEXT,            -- from event.name attribute / log record
+  prompt_id      TEXT,            -- prompt.id correlation attribute
+  severity       TEXT,
+  body           TEXT,            -- JSON: log body + all attributes
+  time_unix_nano INTEGER,
+  received_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
 PRAGMA user_version = 8;
@@ -973,6 +996,40 @@ CREATE TABLE IF NOT EXISTS eval_runs (
   cost_tier      TEXT
 );
 EVAL_RUNS_TABLE
+  _columns_added=1
+fi
+
+# otel_metrics: native OTLP metrics feed (writer: cast-otel-collector.py; opt-in OFF by default)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "otel_metrics"; then
+  sqlite3 "$DB_PATH" <<'OTEL_METRICS_TABLE'
+CREATE TABLE IF NOT EXISTS otel_metrics (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id     TEXT,
+  metric_name    TEXT NOT NULL,
+  value          REAL,
+  unit           TEXT,
+  attributes     TEXT,            -- JSON: merged resource + datapoint attributes
+  time_unix_nano INTEGER,         -- datapoint timestamp (int64 as INTEGER)
+  received_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+OTEL_METRICS_TABLE
+  _columns_added=1
+fi
+
+# otel_events: native OTLP log/event feed (writer: cast-otel-collector.py; opt-in OFF by default)
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "otel_events"; then
+  sqlite3 "$DB_PATH" <<'OTEL_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS otel_events (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id     TEXT,
+  event_name     TEXT,            -- from event.name attribute / log record
+  prompt_id      TEXT,            -- prompt.id correlation attribute
+  severity       TEXT,
+  body           TEXT,            -- JSON: log body + all attributes
+  time_unix_nano INTEGER,
+  received_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+OTEL_EVENTS_TABLE
   _columns_added=1
 fi
 

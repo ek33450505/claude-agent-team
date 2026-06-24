@@ -336,6 +336,26 @@
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
+      "table": "otel_events",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "otel_events",
+      "column": "received_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "otel_metrics",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "otel_metrics",
+      "column": "received_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
       "table": "plan_sessions",
       "column": "id",
       "classification": "SAFE-DROP-CANDIDATE"
