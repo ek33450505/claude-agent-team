@@ -243,3 +243,57 @@ PYEOF
 
   rm -rf "$target" "$radius" "$py"
 }
+
+# ---------------------------------------------------------------------------
+# 7. Refuse directory-traversal path — path uses ".." to escape blast radius → FATAL
+#    Regression for §3.8.A: a path that looks like it's inside the radius (starts
+#    with it) but resolves outside via realpath-collapse of ".." must be refused.
+# ---------------------------------------------------------------------------
+@test "safe_rmtree refuses directory-traversal path that escapes blast radius (sentinel survives)" {
+  local radius sentinel_dir py traversal_path depth dotdots
+
+  radius="/tmp/cast-swarm-traversal-test-$$"
+  mkdir -p "$radius"
+
+  # Create sentinel outside the radius
+  sentinel_dir="$(mktemp -d)"
+  touch "$sentinel_dir/__MUST_SURVIVE__"
+
+  # Build traversal path: /tmp/cast-swarm-traversal-test-$$/../../.../sentinel_dir
+  # Count '/' in sentinel_dir to determine how many ".." we need to reach /
+  depth=$(echo "$sentinel_dir" | tr -cd '/' | wc -c | tr -d ' ')
+  dotdots=""
+  local i
+  for i in $(seq 1 "$depth"); do
+    dotdots="${dotdots}/.."
+  done
+  traversal_path="${radius}${dotdots}${sentinel_dir}"
+
+  py="$(mktemp)"
+  cat > "$py" << 'PYEOF'
+import os, sys
+sys.path.insert(0, os.environ['REPO_DIR'] + '/scripts')
+from cast_guard import safe_rmtree
+target = os.environ['TARGET_PATH']
+radius = os.environ['RADIUS_PATH']
+try:
+    safe_rmtree(target, radius, label="test")
+    print("ERROR: no exception raised")
+    sys.exit(1)
+except RuntimeError as e:
+    msg = str(e)
+    if 'FATAL' not in msg:
+        print(f"ERROR: 'FATAL' not in message: {msg}")
+        sys.exit(1)
+    sys.exit(0)
+PYEOF
+
+  TARGET_PATH="$traversal_path" RADIUS_PATH="$radius" REPO_DIR="$REPO_DIR" \
+    run python3 "$py"
+  assert_success
+
+  # Sentinel must survive the refused delete
+  [ -f "$sentinel_dir/__MUST_SURVIVE__" ]
+
+  rm -rf "$radius" "$sentinel_dir" "$py"
+}

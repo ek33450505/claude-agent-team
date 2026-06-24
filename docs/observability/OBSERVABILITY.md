@@ -12,7 +12,7 @@
 | **Agent Observability** | Agents, Agent Reliability, Analytics, Agent Analytics Detail |
 | **Hook & Quality** | Hooks, Hook Failures |
 | **Memory & Planning** | Memory browser, Plans, Orchestration |
-| **Swarm Lifecycle** | Swarm runs, Routines, Incidents |
+| **Routines & Incidents** | Routines, Incidents |
 | **Audit & Compliance** | File Writes, Injection Log, Hook Audit Trail |
 | **System Health** | System status, Database explorer (SQLite), Executive Summary |
 
@@ -30,7 +30,7 @@ open /Applications/Cast\ Desktop.app
 
 ## Hook Event Coverage
 
-TaskCreated and WorktreeCreate are production-hardened hooks capturing swarm lifecycle. All responses validate against JSON schemas in `schemas/`.
+TaskCreated and WorktreeCreate are production-hardened hooks capturing background-task and worktree lifecycle. All responses validate against JSON schemas in `schemas/`.
 
 | Event | Hook Script | What It Does |
 |---|---|---|
@@ -39,7 +39,7 @@ TaskCreated and WorktreeCreate are production-hardened hooks capturing swarm lif
 | `WorktreeCreate` | `cast-worktree-create-hook.sh` | Creates isolated worktree; seeds agent identity preamble |
 | `PreToolUse:Bash` | `pre-tool-guard.sh` | Hard-blocks `git commit` / `git push` (exit 2) |
 | `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Logs file modifications; emits HTTP event to dashboard |
-| `PostCompact` | `cast-post-compact-hook.sh` | Reinjects swarm context after compaction |
+| `PostCompact` | `cast-post-compact-hook.sh` | Logs context-compaction events |
 | `SessionEnd` | `cast-session-end.sh` | Archives session, syncs peer messages, closes cast.db rows |
 
 **Exit code convention:**
@@ -67,6 +67,8 @@ TaskCreated and WorktreeCreate are production-hardened hooks capturing swarm lif
 | `routing_events` | Prompt routing records |
 | `agent_memories` | Synced from `~/.claude/agent-memory-local/` with temporal validity |
 | `stream_events` | Real-time tool events from stream-json pipeline |
+
+> Note: the `swarm_*`/`teammate_*` tables are dormant — the /swarm writers were retired in v9; retained as historical schema record (zero rows is correct).
 
 ```bash
 # Query active swarms
@@ -151,12 +153,12 @@ CAST uses two complementary observability layers that serve different purposes:
 | `routing_events` | Prompt-to-agent routing decisions, matched route, confidence | None |
 | `quality_gates` | Gate evaluations, pass/fail per unit | None |
 | `dispatch_decisions` | Agent selection rationale, batch context | None |
-| `swarm_sessions` | Multi-agent swarm metadata | None |
+| `swarm_sessions` | Multi-agent swarm metadata (dormant — writers retired v9) | None |
 | `parry_guard_events` | Guard-blocked tool calls (PreToolUse exit 2) | None |
 | `agent_truncations` | Context-limit truncation events | None |
 | `injection_log` | Memory and context injection audit trail | None |
 
-These tables capture CAST-specific semantics — routing logic, quality enforcement, swarm coordination — that have no equivalent in OpenTelemetry's generic data model. They are NOT candidates for replacement by native OTel.
+These tables capture CAST-specific semantics — routing logic, quality enforcement, (now-dormant) swarm coordination — that have no equivalent in OpenTelemetry's generic data model. They are NOT candidates for replacement by native OTel.
 
 **Native OTel — generic session/token/latency primitives**
 

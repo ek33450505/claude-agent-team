@@ -1408,7 +1408,7 @@ _cmd_doctor() {
   # agent_hallucinations, etc.) are intentionally excluded — their writers create
   # them lazily, so they may legitimately be absent on a fresh install.
   local required_tables="sessions agent_runs routing_events agent_memories \
-stream_events swarm_sessions teammate_runs teammate_messages tool_call_failures \
+stream_events tool_call_failures \
 agent_truncations injection_log quality_gates dispatch_decisions task_queue \
 routines incidents plan_sessions memory_consolidation_runs archived_memories budgets"
   local required_total
@@ -2191,19 +2191,6 @@ PYEOF
         fi
       fi
     fi
-  fi
-
-  # 19. Stale cast-swarm-* branch count early-warning
-  local swarm_branch_warn_threshold=25
-  local swarm_branch_count=0
-  if git -C "${CAST_REPO_DIR:-$HOME/.claude}" branch --list 'cast-swarm-*' >/dev/null 2>&1; then
-    swarm_branch_count="$(git -C "${CAST_REPO_DIR:-$HOME/.claude}" branch --list 'cast-swarm-*' 2>/dev/null | wc -l | tr -d ' ')"
-  fi
-  if [[ "${swarm_branch_count:-0}" -gt "$swarm_branch_warn_threshold" ]]; then
-    printf "%b cast-swarm-* branches: %d (exceeds threshold of %d) — run \`cast clean --apply\` or set CAST_GROOM_AUTO_APPLY=1\n" \
-      "$WARN" "$swarm_branch_count" "$swarm_branch_warn_threshold"
-  else
-    printf "%b cast-swarm-* branches: %d\n" "$INFO" "${swarm_branch_count:-0}"
   fi
 
   # 20. Homebrew tap count vs packages constant advisory
@@ -3256,7 +3243,6 @@ Usage: cast clean [--apply] [--worktrees]
   --worktrees    Also prune dead worktree directories
 
 Branch deletion policy:
-  cast-swarm-*    : last commit > 7 days ago AND no open PR
   worktree-agent-*: last commit > 7 days ago
   feature/* fix/* : merged into main AND remote tracking ref is [gone]
 

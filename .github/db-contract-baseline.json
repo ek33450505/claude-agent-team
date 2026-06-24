@@ -454,6 +454,86 @@
       "table": "worktree_anomalies",
       "column": "id",
       "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "swarm_sessions",
+      "column": "config_path",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "swarm_sessions",
+      "column": "ended_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "swarm_sessions",
+      "column": "notes",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "swarm_sessions",
+      "column": "status",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "swarm_sessions",
+      "column": "team_name",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_messages",
+      "column": "from_agent",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_messages",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_messages",
+      "column": "message_type",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_messages",
+      "column": "payload",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_messages",
+      "column": "to_agent",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_runs",
+      "column": "agent_def",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_runs",
+      "column": "agent_role",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_runs",
+      "column": "started_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_runs",
+      "column": "status",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_runs",
+      "column": "task_subject",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "teammate_runs",
+      "column": "worktree",
+      "classification": "SAFE-DROP-CANDIDATE"
     }
   ]
 }

@@ -144,3 +144,42 @@ setup() {
 
   rm -rf "$target"
 }
+
+# ---------------------------------------------------------------------------
+# 7. Refuse directory-traversal path — path uses ".." to escape blast radius → FATAL
+#    Regression for §3.8.A: a path that looks like it's inside the radius (starts
+#    with it) but resolves outside via realpath-collapse of ".." must be refused.
+#    This is the shell parity test for cast-guard-py.bats test 7.
+# ---------------------------------------------------------------------------
+@test "cast_safe_rm refuses directory-traversal path that escapes blast radius (sentinel survives)" {
+  local radius sentinel_dir traversal_path depth dotdots i
+
+  # Create blast radius
+  radius="$(mktemp -d)"
+
+  # Create sentinel outside the radius
+  sentinel_dir="$(mktemp -d)"
+  touch "$sentinel_dir/__MUST_SURVIVE__"
+
+  # Build traversal path: radius/../../.../sentinel_dir
+  # Count '/' in sentinel_dir to determine how many ".." we need to reach /
+  depth=$(echo "$sentinel_dir" | tr -cd '/' | wc -c | tr -d ' ')
+  dotdots=""
+  for i in $(seq 1 "$depth"); do
+    dotdots="${dotdots}/.."
+  done
+  traversal_path="${radius}${dotdots}${sentinel_dir}"
+
+  # Declare the radius
+  cast_declare_blast_radius "$radius"
+
+  # Try to delete the traversal path — should refuse (FATAL)
+  run cast_safe_rm "$traversal_path"
+  assert_failure
+  assert_output --partial "FATAL"
+
+  # Sentinel must survive the refused delete
+  [ -f "$sentinel_dir/__MUST_SURVIVE__" ]
+
+  rm -rf "$radius" "$sentinel_dir"
+}

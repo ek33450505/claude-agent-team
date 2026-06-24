@@ -2,6 +2,11 @@
 
 All notable changes to CAST are documented here. This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Removed
+- **Retired the dormant `/swarm` subsystem** (v9 P0 · B1): removed the `/swarm` skill, the `cast-swarm-{bootstrap,merge,teardown}` scripts, `swarm-configs/`, `docs/swarm.md`, and the swarm BATS tests. `swarm_sessions` carried zero rows and the subsystem held the highest wipe blast-radius in the repo (its teardown `rmtree` was the 2026-06-02 wipe culprit). The `swarm_sessions` / `teammate_runs` / `teammate_messages` cast.db tables are **retained as dormant historical record** (the record is the product) — only the writers were removed, no `DROP TABLE`. All §1 containment guarantees (rmtree blast-radius scoping, directory-traversal refusal, temp-HOME isolation, branch-prefix guard) were **re-anchored to general guard tests before any deletion** (Subtraction Safety Gate). Forward path for parallel teammates is native `isolation: worktree` subagents + (experimental) Agent Teams.
+
 ## [8.0.0] — 2026-06-15 — Native CAST
 
 v8 is a convergence release — *less bespoke, more platform.* CAST retires custom code where Claude Code now ships a native primitive, and ships as a native **plugin** (the breaking change behind the major bump). It is organized around two differentiating pillars: **local-first by construction** and **data integrity by construction**, both earned from repeated full `~/.claude` wipe incidents.

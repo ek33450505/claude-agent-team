@@ -45,12 +45,12 @@ _create_branch_aged() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 1: dry-run prints expected deletions and changes nothing
+# Test 1: dry-run changes nothing and prints summary
 # ---------------------------------------------------------------------------
 
 @test "groomer dry-run: prints what would be deleted, changes nothing" {
-  # Create a stale cast-swarm-* branch (30d old)
-  _create_branch_aged "cast-swarm-test-abcd1234" 30
+  # Create a stale worktree-agent-* branch (30d old)
+  _create_branch_aged "worktree-agent-test-abcd1234" 30
 
   local branches_before
   branches_before="$(git -C "$TEST_REPO" branch --list | wc -l | tr -d ' ')"
@@ -66,29 +66,8 @@ _create_branch_aged() {
   # Branch count should not change
   [ "$branches_before" -eq "$branches_after" ]
 
-  # Should mention the branch
-  [[ "$output" =~ "cast-swarm-test-abcd1234" ]] || [[ "$output" =~ "dry-run" ]] || [[ "$output" =~ "would" ]] || [[ "$output" =~ "Groomed" ]]
-}
-
-# ---------------------------------------------------------------------------
-# Test 2: --apply deletes only matched branches
-# ---------------------------------------------------------------------------
-
-@test "groomer --apply: deletes stale cast-swarm-* branches" {
-  # Create a stale cast-swarm-* branch (30d old)
-  _create_branch_aged "cast-swarm-stale-abcd" 30
-
-  # Verify it exists
-  git -C "$TEST_REPO" branch --list | grep -q "cast-swarm-stale-abcd"
-
-  # Apply — should delete it
-  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
-  [ "$status" -eq 0 ]
-
-  # Branch should be gone
-  local still_exists
-  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-stale-abcd" | wc -l | tr -d ' ')"
-  [ "$still_exists" -eq 0 ]
+  # Should mention the branch or print dry-run/Groomed
+  [[ "$output" =~ "worktree-agent-test-abcd1234" ]] || [[ "$output" =~ "dry-run" ]] || [[ "$output" =~ "would" ]] || [[ "$output" =~ "Groomed" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -279,148 +258,37 @@ _create_branch_aged() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 12: cast-swarm-* threshold is 7 days (not 14) — 6d kept, 8d deleted
+# Test 12: prefix guard — branches outside ALL deletion patterns are protected
+#          This is the defense-in-depth regression guard (§3.8.B analogue):
+#          the groomer only deletes branches matching explicit patterns, never
+#          an arbitrary branch outside those patterns.
 # ---------------------------------------------------------------------------
 
-@test "groomer: keeps fresh cast-swarm-* branch at 6 days old" {
-  _create_branch_aged "cast-swarm-young-xyz" 6
-
-  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
-  [ "$status" -eq 0 ]
-
-  # Should still exist because it's < 7 days old
-  git -C "$TEST_REPO" branch --list | grep -q "cast-swarm-young-xyz"
-}
-
-@test "groomer: deletes stale cast-swarm-* branch at 8 days old" {
-  _create_branch_aged "cast-swarm-old-xyz" 8
-
-  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
-  [ "$status" -eq 0 ]
-
-  # Should be deleted because it's >= 7 days old
-  local still_exists
-  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-old-xyz" | wc -l)"
-  [ "$still_exists" -eq 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# Test 14: content-merged cast-swarm-* branch deleted regardless of age (fresh)
-# ---------------------------------------------------------------------------
-
-@test "groomer: deletes content-merged cast-swarm-* branch even when fresh (age 0)" {
-  # Create a swarm branch with actual file content (fresh — age 0)
-  git -C "$TEST_REPO" checkout -b cast-swarm-merged-fresh >/dev/null 2>&1
-  echo "swarm content" > "$TEST_REPO/swarm-file.txt"
-  git -C "$TEST_REPO" add swarm-file.txt
-  git -C "$TEST_REPO" commit -m "Swarm work" >/dev/null 2>&1
-
-  # Squash-merge into main so content is in main
-  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
-  git -C "$TEST_REPO" merge --squash cast-swarm-merged-fresh >/dev/null 2>&1
-  git -C "$TEST_REPO" commit -m "Squash-merged cast-swarm-merged-fresh" >/dev/null 2>&1
-
-  # Run apply — should delete because content is merged, despite age 0
-  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
-  [ "$status" -eq 0 ]
-
-  local still_exists
-  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-merged-fresh" | wc -l | tr -d ' ')"
-  [ "$still_exists" -eq 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# Test 15: fresh NON-merged cast-swarm-* branch is kept (regression guard)
-# ---------------------------------------------------------------------------
-
-@test "groomer: keeps fresh NON-merged cast-swarm-* branch (<7d, unique commit)" {
-  # Create a swarm branch with a unique commit not on main (fresh — age 0)
-  git -C "$TEST_REPO" checkout -b cast-swarm-unmerged-fresh >/dev/null 2>&1
-  echo "unique swarm content" > "$TEST_REPO/unique-swarm-file.txt"
-  git -C "$TEST_REPO" add unique-swarm-file.txt
-  git -C "$TEST_REPO" commit -m "Unique swarm work not on main" >/dev/null 2>&1
+@test "groomer prefix guard: non-matching branches are never deleted" {
+  # Create a branch that doesn't match ANY deletion pattern:
+  # - not feature/* (except merged ones)
+  # - not fix/* (except merged ones)
+  # - not worktree-agent-*
+  # - not in the whitelist (main, feature/cast-v7-*, etc.)
+  git -C "$TEST_REPO" checkout -b safe-keep-do-not-delete >/dev/null 2>&1
+  echo "important data" > "$TEST_REPO/important-file.txt"
+  git -C "$TEST_REPO" add important-file.txt
+  git -C "$TEST_REPO" commit -m "Important work in non-deletable branch" >/dev/null 2>&1
   git -C "$TEST_REPO" checkout main >/dev/null 2>&1
 
-  # Run apply — should keep because not merged and not stale
-  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
-  [ "$status" -eq 0 ]
-
-  git -C "$TEST_REPO" branch --list | grep -q "cast-swarm-unmerged-fresh"
-}
-
-# ---------------------------------------------------------------------------
-# Test 16: stale NON-merged cast-swarm-* branch deleted via age path (age 8)
-# ---------------------------------------------------------------------------
-
-@test "groomer: deletes stale NON-merged cast-swarm-* branch via age path (age 8)" {
-  # Create a swarm branch with unique commits not on main, 8 days old
-  git -C "$TEST_REPO" checkout -b cast-swarm-stale-unmerged >/dev/null 2>&1
-  echo "stale unmerged swarm content" > "$TEST_REPO/stale-swarm-file.txt"
-  git -C "$TEST_REPO" add stale-swarm-file.txt
+  # Also create an aged but unmatched branch to ensure age alone doesn't trigger deletion
+  git -C "$TEST_REPO" checkout -b random-old-branch >/dev/null 2>&1
   local fake_date
-  fake_date="$(date -v -8d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "8 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "2020-01-01T00:00:00")"
+  fake_date="$(date -v -30d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "30 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "2020-01-01T00:00:00")"
   GIT_COMMITTER_DATE="$fake_date" GIT_AUTHOR_DATE="$fake_date" \
-    git -C "$TEST_REPO" commit -m "Stale unmerged swarm work" >/dev/null 2>&1
+    git -C "$TEST_REPO" commit --allow-empty -m "Old random branch" >/dev/null 2>&1
   git -C "$TEST_REPO" checkout main >/dev/null 2>&1
 
-  # Run apply — should delete via age path (8 >= 7)
+  # Run groomer in apply mode
   run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
   [ "$status" -eq 0 ]
 
-  local still_exists
-  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-stale-unmerged" | wc -l | tr -d ' ')"
-  [ "$still_exists" -eq 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# Test 17: CAST_GROOM_SWARM_DAYS knob — keeps 8d non-merged at 14, deletes at default
-# ---------------------------------------------------------------------------
-
-@test "groomer: CAST_GROOM_SWARM_DAYS=14 keeps 8d non-merged swarm; default deletes it" {
-  # Create a swarm branch with unique commits not on main, 8 days old
-  git -C "$TEST_REPO" checkout -b cast-swarm-knob-test >/dev/null 2>&1
-  echo "knob test content" > "$TEST_REPO/knob-swarm-file.txt"
-  git -C "$TEST_REPO" add knob-swarm-file.txt
-  local fake_date
-  fake_date="$(date -v -8d +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "8 days ago" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "2020-01-01T00:00:00")"
-  GIT_COMMITTER_DATE="$fake_date" GIT_AUTHOR_DATE="$fake_date" \
-    git -C "$TEST_REPO" commit -m "Knob test swarm work" >/dev/null 2>&1
-  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
-
-  # With CAST_GROOM_SWARM_DAYS=14, 8d branch should be KEPT
-  run env CAST_GROOM_SWARM_DAYS=14 bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
-  [ "$status" -eq 0 ]
-  git -C "$TEST_REPO" branch --list | grep -q "cast-swarm-knob-test"
-
-  # With default (7), the same 8d branch should be DELETED
-  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
-  [ "$status" -eq 0 ]
-  local still_exists
-  still_exists="$(git -C "$TEST_REPO" branch --list "cast-swarm-knob-test" | wc -l | tr -d ' ')"
-  [ "$still_exists" -eq 0 ]
-}
-
-# ---------------------------------------------------------------------------
-# Test 18: content-merged swarm deletion appears under "merged" in summary
-# ---------------------------------------------------------------------------
-
-@test "groomer: content-merged swarm branch counted under merged in summary" {
-  # Create a swarm branch with actual file content (fresh)
-  git -C "$TEST_REPO" checkout -b cast-swarm-summary-test >/dev/null 2>&1
-  echo "summary test content" > "$TEST_REPO/summary-swarm-file.txt"
-  git -C "$TEST_REPO" add summary-swarm-file.txt
-  git -C "$TEST_REPO" commit -m "Summary swarm work" >/dev/null 2>&1
-
-  # Squash-merge into main
-  git -C "$TEST_REPO" checkout main >/dev/null 2>&1
-  git -C "$TEST_REPO" merge --squash cast-swarm-summary-test >/dev/null 2>&1
-  git -C "$TEST_REPO" commit -m "Squash-merged cast-swarm-summary-test" >/dev/null 2>&1
-
-  # Run apply and check summary output
-  run bash "$GROOMER" --apply --repo "$TEST_REPO" 2>&1
-  [ "$status" -eq 0 ]
-
-  # Summary should show 1 merged (not 1 swarm) for the content-merged swarm branch
-  [[ "$output" =~ "0 swarm" ]]
-  [[ "$output" =~ "1 merged" ]]
+  # Both branches should survive because they don't match any deletion pattern
+  git -C "$TEST_REPO" branch --list | grep -q "safe-keep-do-not-delete"
+  git -C "$TEST_REPO" branch --list | grep -q "random-old-branch"
 }

@@ -6,7 +6,7 @@
     {
       "name": "cast",
       "source": "./plugin",
-      "description": "Swarm control plane for Claude Code: curated specialist agents, hook-enforced quality gates, and SQLite observability."
+      "description": "Multi-agent control plane for Claude Code: curated specialist agents, hook-enforced quality gates, and SQLite observability."
     }
   ]
 }

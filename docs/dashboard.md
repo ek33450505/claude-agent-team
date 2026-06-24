@@ -21,7 +21,6 @@ Core observability pages:
 - **Memory** — agent-accumulated knowledge from the memory system
 - **Plans** — Agent Dispatch Manifest history and orchestration execution
 - **Incidents** — critical events and anomalies
-- **Swarm** — multi-agent swarm runs with team composition and peer messaging
 - **Routines** — scheduled workflow execution and trigger history
 - **File Writes** — audit trail of all file modifications with agent and timestamp
 - **Injection Log** — memory and context injection events

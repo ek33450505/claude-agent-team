@@ -126,9 +126,8 @@ The thing that bit me three to four times (full `~/.claude` wipes) is now a head
 CAST transforms Claude Code's agent loop into a **production-grade control plane:**
 
 - **Structural quality gates.** Code changes mandate a reviewer pass; raw `git commit` and `git push` are hard-blocked by hooks.
-- **Full, local observability.** Every session, task, routing decision, quality gate, peer message, and token spend logs to `cast.db` (SQLite, on your machine).
+- **Full, local observability.** Every session, task, routing decision, quality gate, and token spend logs to `cast.db` (SQLite, on your machine).
 - **Typed agent contracts.** Agents emit a typed `## Handoff` block (JSON-schema-validated) so multi-agent chains don't fail silently.
-- **Swarm composition in YAML.** Define teams, assign roles, set quality gates; CAST bootstraps worktrees and manages peer messaging.
 
 ---
 
@@ -182,15 +181,12 @@ cast eval report               # latest verdict per case
 
 ## Observability & cast.db
 
-SQLite (WAL mode) at `~/.claude/cast.db` — append-only, never truncated, **fully local**. Stores sessions, agent_runs, routing_events, quality_gates, agent_memories, eval_runs, agent_protocol_violations, swarm_sessions, teammate_runs, and more. Surfaced by two read-only dashboards:
+SQLite (WAL mode) at `~/.claude/cast.db` — append-only, never truncated, **fully local**. Stores sessions, agent_runs, routing_events, quality_gates, agent_memories, eval_runs, agent_protocol_violations, and more. Surfaced by two read-only dashboards:
 
-**[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** — React 19 + Vite + Express, ~21 views (sessions, agent analytics & reliability, hook health, memory browser, plans, incidents, swarm runs, file-write audits, a SQLite explorer). **[Cast Desktop](https://github.com/ek33450505/cast-desktop)** — Tauri 2 native macOS app with an embedded PTY terminal, command palette, and 11 views. Both read `cast.db` locally — no cloud. See [docs/observability/OBSERVABILITY.md](docs/observability/OBSERVABILITY.md).
+**[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** — React 19 + Vite + Express, ~21 views (sessions, agent analytics & reliability, hook health, memory browser, plans, incidents, file-write audits, a SQLite explorer). **[Cast Desktop](https://github.com/ek33450505/cast-desktop)** — Tauri 2 native macOS app with an embedded PTY terminal, command palette, and 11 views. Both read `cast.db` locally — no cloud. See [docs/observability/OBSERVABILITY.md](docs/observability/OBSERVABILITY.md).
 
 ---
 
-## Swarm System
-
-CAST swarms are defined in YAML and bootstrapped with `cast swarm bootstrap`. Teams get isolated worktrees, agent identity, peer messaging (a decentralized cast.db message bus, no central broker), and quality gates. See [docs/swarm.md](docs/swarm.md) and [the architecture guide](docs/architecture/ARCHITECTURE.md#swarm-system).
 
 ---
 
@@ -214,15 +210,15 @@ Model tiering, response budgets, optional local Ollama routing (opt-in, never a 
 
 ## Project Structure
 
-`agents/core/` · `rules-{core,personal}/` · `skills/` · `commands/` · `docs/` · `schemas/` · `scripts/` · `swarm-configs/` · `evals/` · `plugin/` · `.claude-plugin/` · `tests/` · `.github/workflows/`
+`agents/core/` · `rules-{core,personal}/` · `skills/` · `commands/` · `docs/` · `schemas/` · `scripts/` · `evals/` · `plugin/` · `.claude-plugin/` · `tests/` · `.github/workflows/`
 
-Runtime installs to `~/.claude/` — agents, memory, plans, swarm sessions, `cast.db`, scripts.
+Runtime installs to `~/.claude/` — agents, memory, plans, `cast.db`, scripts.
 
 ---
 
 ## Testing
 
-163 CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->1797<!-- /CAST_TEST_COUNT --> test cases) covering hooks, swarm bootstrap, the message bus, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
+163 CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->1797<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
 
 ---
 
@@ -255,7 +251,7 @@ CAST is one of 13 source repositories in a connected ecosystem — each solves a
 - [**claude-code-dashboard**](https://github.com/ek33450505/claude-code-dashboard) — React observability UI — sessions, agent analytics, hook health, memory browser, SQLite explorer
 - [**cast-desktop**](https://github.com/ek33450505/cast-desktop) — Tauri 2 native app with embedded PTY terminal, command palette, 11 dashboard views
 - [**cast-claudes_journal**](https://github.com/ek33450505/cast-claudes_journal) — Session journaling; auto-injects prior-day context via SessionStart hook
-- [**cast-dash**](https://github.com/ek33450505/cast-dash) — TUI dashboard for live swarm monitoring
+- [**cast-dash**](https://github.com/ek33450505/cast-dash) — TUI dashboard for live cast.db session & agent-run monitoring
 - [**cast-hooks**](https://github.com/ek33450505/cast-hooks) · [**cast-routines**](https://github.com/ek33450505/cast-routines) · [**cast-doctor**](https://github.com/ek33450505/cast-doctor)
 
 ---
