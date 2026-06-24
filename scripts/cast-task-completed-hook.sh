@@ -1,0 +1,85 @@
+#!/bin/bash
+# cast-task-completed-hook.sh — TaskCompleted hook (Claude Code experimental Agent Teams)
+#
+# EXPERIMENTAL: gated by CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS; dormant until that flag
+# is enabled in a session. This hook is logging-only / advisory / fail-open — it NEVER
+# exits 2 (exit 2 would PREVENT task completion — this hook must never block the harness).
+#
+# Verified payload fields (docs.claude.com/en/hooks TaskCompleted):
+#   session_id, transcript_path, cwd, hook_event_name,
+#   task_id, task_subject, task_description
+#   NO agent_id / agent_type / teammate_name in this event.
+#
+# Writes to:
+#   - ~/.claude/cast/events/<ts>-<id>-task-completed.json  (immutable event log)
+#   - cast.db swarm_sessions + teammate_runs (dormant tables re-populated when enabled)
+
+if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
+
+set +e
+
+# _log_error: append a structured error line to hook-errors.log (never fails itself)
+mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
+_log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
+
+set -euo pipefail
+
+# shellcheck source=cast-sqlite-lib.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/cast-sqlite-lib.sh" 2>/dev/null || true
+
+INPUT="$(cat 2>/dev/null || true)"
+
+DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
+
+CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 - <<'PYEOF' || true
+import json, os, sqlite3, uuid
+from datetime import datetime, timezone
+
+raw = os.environ.get("CAST_INPUT", ""); db_path = os.environ.get("DB_PATH_VAL", "")
+try: data = json.loads(raw)
+except Exception:
+    import sys; sys.exit(0)
+
+session_id = data.get("session_id", "unknown")
+team_name = data.get("team_name", "") or ""
+task_id = data.get("task_id", "") or ""
+# 200-char cap for a fuller record (sibling cast-task-created-hook.sh caps task_queue subjects at 80).
+task_subject = (data.get("task_subject") or data.get("task_description") or "")[:200]
+cwd = data.get("cwd", ""); project = os.path.basename(cwd) if cwd else ""
+# team_id: prefer the (deprecated) session-derived team_name — present in both Task* and TeammateIdle payloads — so all team activity groups under ONE swarm_sessions row; fall back to session-derived id when absent. Mirrors cast-teammate-idle-hook.sh.
+team_id = team_name or ("session-" + session_id[:8] if session_id and session_id != "unknown" else "")
+now = datetime.now(timezone.utc); iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# 1) immutable event log
+events_dir = os.path.expanduser("~/.claude/cast/events")
+try:
+    os.makedirs(events_dir, exist_ok=True)
+    event = {"id": str(uuid.uuid4()), "timestamp": iso_ts, "type": "task_completed",
+             "session_id": session_id, "team_id": team_id, "task_id": task_id,
+             "task_subject": task_subject, "project": project,
+             "schema_version": 1, "source": "native-agent-teams"}
+    short_id = str(uuid.uuid4())[:8]
+    with open(os.path.join(events_dir, f"{iso_ts}-{short_id}-task-completed.json"), "w") as f:
+        json.dump(event, f, indent=2); f.write("\n")
+except Exception: pass
+
+# 2) record into dormant swarm_sessions + teammate_runs
+NOTES = json.dumps({"source": "native-agent-teams", "schema_version": 1})
+if db_path and os.path.exists(db_path) and team_id:
+    try:
+        conn = sqlite3.connect(db_path, timeout=5); cur = conn.cursor()
+        def has(t):
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,)); return cur.fetchone() is not None
+        if has("swarm_sessions"):
+            cur.execute("INSERT OR IGNORE INTO swarm_sessions (id, team_name, session_id, project, status, started_at, notes) VALUES (?, ?, ?, ?, 'running', ?, ?)",
+                        (team_id, team_id, session_id, project, iso_ts, NOTES))
+        if has("teammate_runs") and task_id:
+            run_id = "task-" + task_id
+            cur.execute("INSERT INTO teammate_runs (id, swarm_id, task_id, task_subject, status, ended_at) VALUES (?, ?, ?, ?, 'completed', ?) ON CONFLICT(id) DO UPDATE SET status='completed', ended_at=excluded.ended_at, task_subject=excluded.task_subject",
+                        (run_id, team_id, task_id, task_subject, iso_ts))
+        conn.commit(); conn.close()
+    except Exception: pass
+PYEOF
+
+exit 0
