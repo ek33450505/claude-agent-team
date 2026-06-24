@@ -188,6 +188,30 @@ if [ "$INSTALL_PERSONAL" = true ] && [ -d "$SCRIPT_DIR/rules-personal" ]; then
     done
 fi
 
+# Personal managed-settings overlay (non-destructive — only adds files not already present)
+# Contains maintainer-specific fragments (e.g. 12-otel.json for the local OTLP feed).
+# Other users do NOT get these keys on a plain install.sh run.
+if [ "$INSTALL_PERSONAL" = true ] && [ -d "$SCRIPT_DIR/managed-settings-personal" ]; then
+    mkdir -p "$CLAUDE_DIR/managed-settings.d"
+    for overlay_file in "$SCRIPT_DIR"/managed-settings-personal/*.json; do
+        [ -f "$overlay_file" ] || continue
+        base="$(basename "$overlay_file")"
+        # Validate naming convention: NN-name.json (prevents unrelated files landing in managed-settings.d/)
+        if ! [[ "$base" =~ ^[0-9][0-9]-.*\.json$ ]]; then
+            warn "  Skipped non-conforming overlay: $base"
+            continue
+        fi
+        dest="$CLAUDE_DIR/managed-settings.d/$base"
+        if [ -f "$dest" ]; then
+            info "  Skipped (exists): managed-settings-personal/$base"
+        else
+            cp "$overlay_file" "$dest"
+            chmod 600 "$dest"
+            success "  Installed (personal): managed-settings-personal/$base"
+        fi
+    done
+fi
+
 # --- Install rules-core (haiku-tier subset) ---
 info "Installing rules-core (haiku-tier subset)..."
 mkdir -p "$CLAUDE_DIR/rules-core"
@@ -539,20 +563,15 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         bash "$CLAUDE_DIR/scripts/cast-litestream-setup.sh" || true
     fi
 
-    # Install and auto-load cast-otel-collector.plist — native OTLP→cast.db collector daemon.
-    # Telemetry is ON BY DEFAULT (local-first): all signals go to localhost:4318 only,
-    # never to Anthropic or any remote endpoint. The env keys live in managed-settings.d/00-env.json.
-    # To turn it off: bash scripts/cast-otel.sh disable
+    # Install cast-otel-collector.plist (dormant) — native OTLP→cast.db collector daemon.
+    # Telemetry is OFF BY DEFAULT. The plist is written with RunAtLoad=false so it does
+    # NOT auto-start at login. Activate explicitly with: bash scripts/cast-otel.sh enable
+    # Maintainer: run install.sh --personal to deploy managed-settings-personal/12-otel.json
+    # which sets the env keys; then run cast-otel.sh enable to start the daemon.
     if [ -f "$SCRIPT_DIR/macos/cast-otel-collector.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.otel-collector.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-otel-collector.plist" > "$PLIST_DEST"
-        # Always (re)load so the refreshed plist takes effect.
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            info "  Loaded: $PLIST_DEST (com.cast.otel-collector — telemetry on by default, local-first)"
-        else
-            warn "  Installed but failed to load: $PLIST_DEST — run 'bash scripts/cast-otel.sh enable' to retry"
-        fi
+        info "  Installed (dormant): $PLIST_DEST — activate with: bash scripts/cast-otel.sh enable"
     fi
 fi
 
@@ -621,5 +640,5 @@ printf "  1. Run ${BOLD}cast status${NC} to verify\n"
 printf "  2. Run ${BOLD}cast doctor${NC} for health check\n"
 printf "  3. Run ${BOLD}cast agents${NC} to see installed agents\n\n"
 if [ "$INSTALL_PERSONAL" = false ]; then
-    printf "  Tip: Run ${BOLD}bash install.sh --personal${NC} to also install personal-overlay files from agents/personal/, rules-personal/, and skills-personal/ (for clones that populate them).\n\n"
+    printf "  Tip: Run ${BOLD}bash install.sh --personal${NC} to also install personal-overlay files from agents/personal/, rules-personal/, skills-personal/, and managed-settings-personal/ (for clones that populate them).\n\n"
 fi
