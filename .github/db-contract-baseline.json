@@ -426,26 +426,6 @@
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
-      "table": "swarm_sessions",
-      "column": "project",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "swarm_sessions",
-      "column": "session_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_runs",
-      "column": "ended_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_runs",
-      "column": "task_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
       "table": "tool_call_failures",
       "column": "id",
       "classification": "SAFE-DROP-CANDIDATE"
@@ -463,21 +443,6 @@
     {
       "table": "swarm_sessions",
       "column": "ended_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "swarm_sessions",
-      "column": "notes",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "swarm_sessions",
-      "column": "status",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "swarm_sessions",
-      "column": "team_name",
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
@@ -503,31 +468,6 @@
     {
       "table": "teammate_messages",
       "column": "to_agent",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_runs",
-      "column": "agent_def",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_runs",
-      "column": "agent_role",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_runs",
-      "column": "started_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_runs",
-      "column": "status",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_runs",
-      "column": "task_subject",
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {

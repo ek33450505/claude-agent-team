@@ -83,6 +83,8 @@ PAYLOAD_PreCompact='{"session_id":"test"}'
 PAYLOAD_PostCompact='{"session_id":"test"}'
 PAYLOAD_StopFailure='{"session_id":"test"}'
 PAYLOAD_TaskCreated='{"session_id":"test"}'
+PAYLOAD_TeammateIdle='{"session_id":"test","agent_id":"agent_test","agent_type":"code-reviewer","teammate_name":"code-reviewer","team_name":"session-test"}'
+PAYLOAD_TaskCompleted='{"session_id":"test","task_id":"task_test","task_subject":"Test task"}'
 PAYLOAD_SubagentStart='{"agent_type":"test","session_id":"test"}'
 
 # ── Enumerate hooks from settings.json ───────────────────────────────────
