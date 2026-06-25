@@ -399,3 +399,33 @@ print(json.dumps(data))
   assert_failure
   assert_output --partial "Unknown stack subcommand"
 }
+
+# ── cast restore ─────────────────────────────────────────────────────────────
+
+@test "cast restore --help: prints usage" {
+  run bash "$CAST_CLI" restore --help
+  assert_success
+  assert_output --partial "restore"
+  assert_output --partial "Usage"
+}
+
+@test "cast restore --list: no snapshots found when backup root is empty" {
+  export CAST_BACKUP_ROOT="$HOME/.claude/test-backups"
+  run bash "$CAST_CLI" restore --list
+  assert_success
+  assert_output --partial "No snapshots found"
+}
+
+@test "cast restore --list: lists available snapshot when one exists" {
+  export CAST_BACKUP_ROOT="$HOME/.claude/test-backups"
+  mkdir -p "${CAST_BACKUP_ROOT}/cast-snapshot-2026-06-01"
+  run bash "$CAST_CLI" restore --list
+  assert_success
+  assert_output --partial "cast-snapshot-2026-06-01"
+}
+
+@test "cast restore: nonexistent date ref exits failure" {
+  export CAST_BACKUP_ROOT="$HOME/.claude/test-backups"
+  run bash "$CAST_CLI" restore 2026-01-01
+  assert_failure
+}
