@@ -195,7 +195,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - `"parallel": true` → agents in batch don't depend on each other's output
 - `"type": "fan-out"` → dispatch all agents simultaneously, synthesize their outputs into a Fan-out Summary, and prepend that summary as additional context to every agent in the immediately following batch. Max 4 agents per fan-out batch.
 - `"subagent_type": "main"` → Claude itself implements (no Agent tool call needed)
-- Prompts must be specific — include context the agent needs
+- **Dispatch-prompt contract (context-at-dispatch).** Each agent prompt MUST inline the context the agent needs to start producing output immediately — never "read/study these N files first." Include (a) exact file paths plus the key snippets or `file:line` anchors, (b) acceptance criteria / the expected artifact, (c) an artifact-first instruction ("write a skeleton in your first 1–2 tool calls, then refine"), and (d) a scope boundary. If an agent would need to read 4+ files just to begin, compress that context into the prompt before dispatch — the read-heavy burn is an authoring failure, not an agent failure. (See `cast-conventions` → Truncation Prevention.)
 - Minimum manifest: implement → code-reviewer → commit
 - Maximum parallel batch size: 4 agents
 - Include security agent if auth/API/input handling is touched
