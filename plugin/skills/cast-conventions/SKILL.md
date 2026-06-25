@@ -164,6 +164,11 @@ Truncate all Bash command output to the last 50 lines using `| tail -50` unless 
 
 The Response Budget exists to keep the prose tail intact through the model's output limit. These structural rules make the budget reachable.
 
+**Artifact-first (write before you read):**
+- In your first 1–2 tool calls, produce a *skeleton* of your deliverable — write the target file with placeholder structure, an outline, or a first partial implementation — **then** read and refine. A run that truncates after writing a skeleton leaves a salvageable artifact; a run that truncates mid-exploration leaves nothing.
+- Never spend your first third of turns reading files without emitting output. The failure this prevents: a bash-specialist read 8 files (~95K tokens), wrote nothing, hit maxTurns, and produced zero artifact — a dispatch/orchestration miss, not a turn-cap problem.
+- **Turn budget (self-pace against it):** bash-specialist ≈ 20 turns · researcher ≈ 30 · test-writer/debugger ≈ 50 · code-writer ≈ 80 · most others 15–25. Once you have consumed roughly a third of your turns without a committed artifact (a file on disk or your Status block drafted), stop reading and write a partial draft now.
+
 **Findings format for audit/research dispatches:**
 - Lead with a one-line headline per finding. One bullet per finding, no narration of the search path.
 - Cap findings at the top N requested (default 5). If more exist, write the full list to disk at `~/.claude/reports/<agent>-<task>-full.md` and reference the path.
@@ -173,10 +178,11 @@ The Response Budget exists to keep the prose tail intact through the model's out
 - A single agent dispatched to audit/sync/review more than one repo is a truncation risk. Split into one dispatch per target.
 - If you receive a multi-target prompt and the union of expected output exceeds your response budget, return `Status: NEEDS_CONTEXT` with: "Multi-target scope — request a separate dispatch per target."
 
-**Refusal trigger (when to invoke NEEDS_CONTEXT):**
+**Refusal trigger (when to invoke NEEDS_CONTEXT) — applies to every agent, not just audit/research:**
 - 5+ distinct numbered checks / audit items in a single dispatch → refuse and ask for split.
 - 3+ heterogeneous output targets (e.g., "audit repo A AND repo B AND generate report") → refuse.
 - An explicit "comprehensive audit" / "full sweep" / "exhaustive review" framing → refuse and propose narrower passes.
+- **Read-before-write overload (any agent, including implementation agents):** if the prompt requires reading/studying 4+ files before you can produce any output, refuse and ask the orchestrator to inline the key snippets/anchors (file + line-range) instead. Reading your way to an artifact is the read-heavy burn pattern — push the context back to dispatch time.
 - The agent's first response after receiving the prompt MUST either (a) emit the refusal, or (b) immediately begin scoped work on the first target. There is no "I'll try it and see if it fits" path.
 - See also: `agents/core/researcher.md` Pre-flight scope check — the researcher's hard rule mirrors this trigger and cites it as the authoritative source.
 
