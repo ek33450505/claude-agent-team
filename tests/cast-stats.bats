@@ -53,10 +53,10 @@ teardown() {
   assert_output --regexp '^[1-9][0-9]*$'
 }
 
-@test "gen-cast-stats.sh produces tables=38" {
+@test "gen-cast-stats.sh produces tables=39" {
   run jq -r '.tables' < "$CANONICAL_JSON"
   assert_success
-  assert_output "38"
+  assert_output "39"
 }
 
 @test "gen-cast-stats.sh produces commands=20" {
@@ -241,7 +241,7 @@ EOF
 
 @test "cast_stats_assert_floors: valid stats return 0" {
   source "$REPO_DIR/scripts/cast-stats-lib.sh"
-  run cast_stats_assert_floors 23 1258 38 20 15 13 7.4.1
+  run cast_stats_assert_floors 23 1258 39 20 15 13 7.4.1
   assert_success
 }
 
@@ -254,7 +254,7 @@ EOF
 
 @test "cast_stats_assert_floors: empty version returns 1 and stderr contains FLOOR VIOLATION" {
   source "$REPO_DIR/scripts/cast-stats-lib.sh"
-  run cast_stats_assert_floors 23 1258 38 20 15 13 ""
+  run cast_stats_assert_floors 23 1258 39 20 15 13 ""
   assert_failure
   assert_output --partial "FLOOR VIOLATION"
 }

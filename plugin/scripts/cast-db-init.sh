@@ -1033,6 +1033,22 @@ OTEL_EVENTS_TABLE
   _columns_added=1
 fi
 
+# attestations — completion-attestation verdicts mirrored by the `attest` plugin's
+# SubagentStop hook (zero-LLM DONE-gate). attest owns the writer; CAST declares the
+# schema here so the table is a known/owned surface (not a db-contract safe-drop phantom).
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "attestations"; then
+  sqlite3 "$DB_PATH" <<'ATTESTATIONS_TABLE'
+CREATE TABLE IF NOT EXISTS attestations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_key   TEXT,
+    false_done  INTEGER DEFAULT 0,
+    payload     TEXT,
+    created_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+ATTESTATIONS_TABLE
+  _columns_added=1
+fi
+
 # Ensure agent_id index exists
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
 

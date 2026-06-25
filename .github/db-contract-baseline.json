@@ -509,6 +509,31 @@
       "table": "task_queue",
       "column": "max_retries",
       "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "attestations",
+      "column": "agent_key",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "attestations",
+      "column": "created_at",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "attestations",
+      "column": "false_done",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "attestations",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "attestations",
+      "column": "payload",
+      "classification": "SAFE-DROP-CANDIDATE"
     }
   ]
 }
