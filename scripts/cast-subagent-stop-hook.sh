@@ -885,6 +885,42 @@ if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]] && command -v python3 >/dev/null 2>&1
   fi
 fi
 
+# ── Step 2.8: Policy-gate completion record (v9 P-trust) ─────────────────────
+# Records the agent's real self-reported terminal verdict (DONE/DONE_WITH_CONCERNS/
+# BLOCKED/NEEDS_CONTEXT) to ~/.claude/agent-status/<agent>-<ts>.json.
+# cast-git-guard.py (_agent_completed_this_session) is authoritative: it reads the
+# MOST RECENT such record and clears requires_agent BLOCK policies only when that
+# record has status DONE or DONE_WITH_CONCERNS.  A truncated agent (no recognized
+# status) writes nothing → gate stays blocked.
+if [[ "${STATUS_CONTRACT_EXEMPT:-1}" = "0" ]]; then
+  # Take the LAST status of EITHER form across the whole output — prose
+  # "Status: X" or JSON "status": "X" — so the true terminal verdict wins and an
+  # earlier quoted status cannot pre-empt a later one (security: no prose/JSON pre-empt).
+  # Longest-first order: DONE_WITH_CONCERNS before DONE prevents short-circuit.
+  _GATE_MATCH=""
+  _GATE_MATCH="$(printf '%s' "${OUTPUT_FULL}" |
+    grep -oE '([*_]{0,2}[[:space:]]*Status:[[:space:]]*[*_]{0,2}[[:space:]]*|"status"[[:space:]]*:[[:space:]]*")(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)' 2>/dev/null |
+    grep -oE 'DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT' | tail -1 || true)"
+
+  # Write ONLY when a recognized status is found.  No match = no file = gate stays blocked.
+  if [[ -n "$_GATE_MATCH" ]]; then
+    if [[ -r "${HOME}/.claude/scripts/status-writer.sh" ]]; then
+      # shellcheck source=/dev/null
+      . "${HOME}/.claude/scripts/status-writer.sh" 2>/dev/null || true
+    fi
+    if command -v cast_write_status >/dev/null 2>&1; then
+      # Neutral summary (defense-in-depth; the reader checks the structured
+      # status field).  'subagent completion record' avoids any status keyword.
+      cast_write_status \
+        "$_GATE_MATCH" \
+        "subagent completion record" \
+        "$SAFE_AGENT" \
+        "" \
+        "" 2>/dev/null || true
+    fi
+  fi
+fi
+
 # ── Step 3: Turn ceiling checkpoint ──────────────────────────────────────────
 if [ "$HAS_TURN_CEILING" = "1" ]; then
   mkdir -p "$TURN_CEILING_DIR" 2>/dev/null || true

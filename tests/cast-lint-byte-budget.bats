@@ -34,10 +34,10 @@ _make_file() {
 # Tests
 # ---------------------------------------------------------------------------
 
-@test "pass on current repo (real rules-core within 20480 budget)" {
-  run bash "${LINT_SH}"
+@test "advisory on current repo (rules-core over 20480-byte soft target)" {
+  run bash -c "bash '${LINT_SH}' 2>&1"
   assert_success
-  assert_output --partial "OK [lint-byte-budget]:"
+  assert_output --partial "ADVISORY [lint-byte-budget]:"
 }
 
 @test "pass when fixture dir is within budget" {
@@ -48,23 +48,24 @@ _make_file() {
   assert_output --partial "OK [lint-byte-budget]:"
 }
 
-@test "fail when fixture dir exceeds budget" {
+@test "advisory when fixture dir exceeds budget soft target" {
   _make_file "${FIXTURE_DIR}/big.md" 8000
   _make_file "${FIXTURE_DIR}/also-big.md" 7000
-  # Total = 15000 bytes; budget = 10000 → should fail
-  run env CAST_RULES_DIR="${FIXTURE_DIR}" CAST_RULES_BYTE_BUDGET=10000 bash "${LINT_SH}"
-  assert_failure
-  assert_output --partial "ERROR [lint-byte-budget]:"
-  assert_output --partial "15000 bytes > 10000 bytes"
+  # Total = 15000 bytes; budget = 10000 → advisory (not blocked)
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_BUDGET=10000 bash '${LINT_SH}' 2>&1"
+  assert_success
+  assert_output --partial "ADVISORY [lint-byte-budget]:"
+  assert_output --partial "15000 bytes"
 }
 
-@test "fail output includes per-file sizes sorted desc" {
+@test "advisory output includes per-file sizes sorted desc" {
   _make_file "${FIXTURE_DIR}/small.md" 100
   _make_file "${FIXTURE_DIR}/large.md" 500
-  run env CAST_RULES_DIR="${FIXTURE_DIR}" CAST_RULES_BYTE_BUDGET=100 bash "${LINT_SH}"
-  assert_failure
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_BUDGET=100 bash '${LINT_SH}' 2>&1"
+  assert_success
+  assert_output --partial "ADVISORY [lint-byte-budget]:"
   # large.md (500) must appear before small.md (100) in output
-  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_BUDGET=100 bash '${LINT_SH}' | grep -n 'large.md\|small.md'"
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_BUDGET=100 bash '${LINT_SH}' 2>&1 | grep -n 'large.md\|small.md'"
   large_line=$(echo "$output" | grep large.md | cut -d: -f1)
   small_line=$(echo "$output" | grep small.md | cut -d: -f1)
   [[ "${large_line}" -lt "${small_line}" ]]
@@ -72,21 +73,23 @@ _make_file() {
 
 @test "env override of budget threshold works" {
   _make_file "${FIXTURE_DIR}/a.md" 1000
-  # Should pass with a high budget
+  # Should pass with a high budget (OK message)
   run env CAST_RULES_DIR="${FIXTURE_DIR}" CAST_RULES_BYTE_BUDGET=99999 bash "${LINT_SH}"
   assert_success
-  # Should fail with a very low budget
-  run env CAST_RULES_DIR="${FIXTURE_DIR}" CAST_RULES_BYTE_BUDGET=1 bash "${LINT_SH}"
-  assert_failure
+  assert_output --partial "OK [lint-byte-budget]:"
+  # Should emit advisory with a very low budget (but still exit 0)
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_BUDGET=1 bash '${LINT_SH}' 2>&1"
+  assert_success
+  assert_output --partial "ADVISORY [lint-byte-budget]:"
 }
 
 @test "includes .md.template files in byte count" {
   _make_file "${FIXTURE_DIR}/a.md" 500
   _make_file "${FIXTURE_DIR}/b.md.template" 600
-  # Total = 1100; budget = 1000 → fail (template counted)
-  run env CAST_RULES_DIR="${FIXTURE_DIR}" CAST_RULES_BYTE_BUDGET=1000 bash "${LINT_SH}"
-  assert_failure
-  assert_output --partial "1100 bytes > 1000 bytes"
+  # Total = 1100; budget = 1000 → advisory (template counted)
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_BUDGET=1000 bash '${LINT_SH}' 2>&1"
+  assert_success
+  assert_output --partial "ADVISORY [lint-byte-budget]:"
 }
 
 @test "exit 1 when rules dir does not exist" {

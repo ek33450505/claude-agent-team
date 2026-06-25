@@ -101,21 +101,43 @@ def _ttl_sweep_agent_status() -> None:
 
 
 def _agent_completed_this_session(required_agent: str, agent_status_dir: str, now: float) -> bool:
-    """A recent (< SESSION_TIMEOUT) agent-status file naming required_agent with DONE."""
+    """The MOST RECENT fresh (< SESSION_TIMEOUT) agent-status file for required_agent
+    reports DONE / DONE_WITH_CONCERNS.
+
+    Picks the newest matching file by mtime so a later BLOCKED/NEEDS_CONTEXT review
+    supersedes an earlier DONE (re-run safety). The filename written by
+    status-writer.sh is ``<agent>-<ts>.json``, so an exact ``<agent>-`` prefix match
+    avoids spurious hits from agent names that merely contain required_agent. Reads
+    the structured ``status`` field (not a substring scan) and fails CLOSED (keeps
+    the block) on any read/parse error. Mirrors orchestrate-dispatch.py
+    cmd_recent_status.
+    """
     if not os.path.isdir(agent_status_dir):
         return False
+    prefix = required_agent + '-'
+    newest_path = None
+    newest_mtime = -1.0
     for fname in os.listdir(agent_status_dir):
-        if required_agent in fname:
-            fpath = os.path.join(agent_status_dir, fname)
-            try:
-                if now - os.path.getmtime(fpath) < SESSION_TIMEOUT:
-                    with open(fpath) as f:
-                        content = f.read()
-                    if 'DONE' in content or 'DONE_WITH_CONCERNS' in content:
-                        return True
-            except Exception:
-                pass
-    return False
+        if not fname.startswith(prefix):
+            continue
+        fpath = os.path.join(agent_status_dir, fname)
+        try:
+            mtime = os.path.getmtime(fpath)
+        except OSError:
+            continue
+        if now - mtime >= SESSION_TIMEOUT:
+            continue
+        if mtime > newest_mtime:
+            newest_mtime = mtime
+            newest_path = fpath
+    if newest_path is None:
+        return False
+    try:
+        with open(newest_path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return data.get('status') in ('DONE', 'DONE_WITH_CONCERNS')
 
 
 def _policy_evaluate(file_path: str):

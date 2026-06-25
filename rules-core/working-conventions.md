@@ -4,7 +4,7 @@
 
 ## Planning
 - Match planning ceremony to task size — three tiers:
-  - **Trivial** (typo, single-value config tweak, ≤3-line doc trim): no formal plan — just make the change. (Code still routes to a specialist per `## Code Quality` — "no plan" never means "no dispatch".)
+  - **Trivial → inline-eligible** (typo, doc/comment fix, single-value non-protected-config tweak, ≤3-line doc trim): no formal plan, and when ALL **Inline tier** criteria below hold the main session may apply it **inline** — no specialist dispatch, no `code-reviewer`. Anything failing a criterion keeps the dispatch + review ceremony ("no plan" still never means "no dispatch" for it).
   - **Single-session-sized** (one or a few files, finishable in one session): use native plan mode (Claude Code's built-in, in-session plan-then-act via shift-tab — no plan file, no manifest) with a single agent. This is the DEFAULT for ordinary code work.
   - **Genuinely multi-file / multi-hour / multi-agent** (large refactors, migrations, features spanning many files): dispatch the `planner` agent to write a plan file + Agent Dispatch Manifest, then run `/orchestrate` to execute it in waves.
 - Don't reflexively spin up the `planner`→`/orchestrate` chain: most coding work has limited parallelizable components (single-agent is better), and multi-agent orchestration costs ~15x the tokens — reserve the chain for work that genuinely fans out.
@@ -13,13 +13,24 @@
 - Tasks: 15-30 min max; break larger work into chunks
 - Each logical unit gets its own commit
 
+## Inline tier (ceremony right-sizing by blast radius)
+The main session MAY apply a change **inline** — no specialist dispatch, no `code-reviewer` gate — ONLY when **every** condition holds:
+1. **Change class:** documentation/prose (`*.md`, `docs/`), code-comments-only, a typo/wording fix, or a single-value tweak to a non-protected config.
+2. **Not a protected surface:** the file is NOT under `scripts/`, `bin/`, any hook, `.githooks/`, `config/policies.json`, `config/egress-policy.json`, `managed-settings.d/`, `install.sh`, a cast.db schema/migration, a §1 hard-won-core file, or a test that guards a hard-won lesson.
+3. **No behavior change:** mechanical only — no logic or control-flow change.
+4. **Small & self-evident:** ≤ ~10 lines as a rule of thumb — but **blast radius is the real gate**: a one-line edit to a guard, hook, or enforcement file is NOT inline-eligible.
+
+Fail ANY condition → the standard ceremony applies (dispatch the specialist + mandatory `code-reviewer`). Applying trivial work inline also avoids the dispatch-spawned failure modes (maxTurns silent-truncation; the nested-agent review hop) for that work.
+
+**Never relaxed, regardless of size** (the §1 hard-won core + the record): executable-code changes → specialist + `code-reviewer`; enforcement / security / destructive config → also `security`; the `commit` agent (record-feeding + irreversibility); the irreversibility interrupts; record-feeding cast.db hooks; destructive-test containment HARD RULES; the Status / Handoff / Facts protocol; `test-runner` isolation.
+
 ## Code Quality
 - YAGNI: build only what was asked
 - DRY: find existing patterns before inventing new ones
 - TDD: write failing tests before implementation for logic-heavy tasks
 - Scope discipline: every change traces to the request. Fix a trivial bug only in a file you are ALREADY editing for the task — never open another file to "tidy" it; no "while I'm here" edits.
 - Out-of-scope or non-trivial findings: SURFACE, do not fix without an OK. Agents flag via `DONE_WITH_CONCERNS` (the Status `Concerns` field); the main session raises it to the user. (Surgical HARD RULES in `bash-specialist`/`commit` stay stricter — this does not loosen them.)
-- MANDATORY: `code-reviewer` after every logical unit of changes
+- MANDATORY: `code-reviewer` after every logical unit of changes **above the Inline tier** (trivial doc/comment/non-protected-config edits the main session applies inline are exempt — see **Inline tier**; anything touching code, enforcement/security/destructive config, or a §1 hard-won-core file is never exempt)
 - MANDATORY: Never `git commit` directly — use the `commit` agent
 - MANDATORY: Route errors to `debugger` agent, not inline triage
 - MANDATORY: Code-modifying agents attempt to self-dispatch `code-reviewer` via the Agent tool; when nesting depth prevents it, they emit DONE_WITH_CONCERNS and the orchestrator dispatches code-reviewer instead
