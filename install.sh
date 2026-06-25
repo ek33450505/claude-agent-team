@@ -572,8 +572,21 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     # which sets the env keys; then run cast-otel.sh enable to start the daemon.
     if [ -f "$SCRIPT_DIR/macos/cast-otel-collector.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.otel-collector.plist"
+        # Preserve an already opt-in-enabled collector (§10.12): cast-otel.sh enable sets
+        # RunAtLoad=true via PlistBuddy. A plain reinstall must NOT silently regress an enabled
+        # collector back to dormant. Fresh / non-maintainer installs have no prior plist (or
+        # RunAtLoad=false) so they stay dormant — telemetry is opt-in OFF by default (§4.1).
+        _otel_was_enabled=false
+        if [ -f "$PLIST_DEST" ] && /usr/libexec/PlistBuddy -c "Print :RunAtLoad" "$PLIST_DEST" 2>/dev/null | grep -q "true"; then
+            _otel_was_enabled=true
+        fi
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-otel-collector.plist" > "$PLIST_DEST"
-        info "  Installed (dormant): $PLIST_DEST — activate with: bash scripts/cast-otel.sh enable"
+        if [ "$_otel_was_enabled" = "true" ]; then
+            /usr/libexec/PlistBuddy -c "Set :RunAtLoad true" "$PLIST_DEST" 2>/dev/null || true
+            info "  Reinstalled (enabled): $PLIST_DEST — RunAtLoad preserved (was opt-in enabled)"
+        else
+            info "  Installed (dormant): $PLIST_DEST — activate with: bash scripts/cast-otel.sh enable"
+        fi
     fi
 fi
 

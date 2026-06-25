@@ -2365,6 +2365,42 @@ PYEOF
     printf "%b hook wiring: no double-fire risk\n" "$INFO"
   fi
 
+  # Rules drift — main-session rules/ vs the CAST-owned rules-core/ baseline.
+  # install.sh copies rules-core/* -> ~/.claude/rules/ SKIP-IF-EXISTS (never refreshed once
+  # present, and ~/.claude/rules/ is what the MAIN orchestrator session loads), while it
+  # OVERWRITES the curated subset into ~/.claude/rules-core/ on every run. So a freshly
+  # installed baseline can silently diverge from the stale rules/ copy (the daily-driver
+  # hazard, master_v9 §10.15). Compare the two LIVE dirs — no repo-path dependency, and
+  # iterating rules-core/ (CAST-owned files only) skips personal rules/ files (work-projects.md,
+  # *.bak) so there are no false positives.
+  local _rc_dir="${HOME}/.claude/rules-core"
+  local _rules_dir="${HOME}/.claude/rules"
+  local _drift="" _rc_any=0 _rc _base _live
+  if [ -d "$_rc_dir" ]; then
+    for _rc in "$_rc_dir"/*; do
+      [ -f "$_rc" ] || continue
+      _rc_any=1
+      _base="$(basename "$_rc")"
+      _live="${_rules_dir}/${_base}"
+      if [ ! -f "$_live" ]; then
+        _drift="${_drift} ${_base}(missing)"
+      elif ! diff -q "$_rc" "$_live" >/dev/null 2>&1; then
+        _drift="${_drift} ${_base}"
+      fi
+    done
+  fi
+  if [ "$_rc_any" -eq 0 ]; then
+    printf "%b rules drift: no CAST rules-core baseline found (skip)\n" "$INFO"
+  elif [ -z "$_drift" ]; then
+    printf "%b rules drift: main-session rules in sync with CAST baseline\n" "$OK"
+  else
+    printf "%b rules drift:%s differ from the freshly-installed CAST baseline\n" "$WARN" "$_drift"
+    printf "      ~/.claude/rules/ (loaded by the main session) is skip-if-exists and lagged a CAST update.\n"
+    printf "      Reconcile (live may hold hard-won content — review, do NOT blind-overwrite):\n"
+    printf "        diff ~/.claude/rules-core/<file> ~/.claude/rules/<file>\n"
+    overall_ok=0
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
