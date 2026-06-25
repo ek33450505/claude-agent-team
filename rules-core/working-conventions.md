@@ -66,6 +66,14 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 - Canonical per-op ledger (enforcement + auto-chain-safety column): `docs/architecture/cast-protocol-spec.md` §2.5.
 
 ## Testing
+
+> **POLICY CHANGE (Ed, 2026-06-02):** Passing tests are NO LONGER a per-merge/per-push requirement.
+> Tests are fixed in batches before version releases. Rationale: gate failures unrelated to changes
+> cost half a day on PR #104. The old "all tests green before push" rule is retired.
+> EXCEPTIONS that still block immediately: (1) destructive tests (anything that can damage the live
+> runtime — see project_cast_recovery_state memory), (2) failures clearly caused by the change being made.
+> **NEVER run the full BATS suite against a real $HOME until the destructive test (Phase 3.8.A) is fixed.**
+
 - Tests alongside source: `Foo.jsx` -> `Foo.test.jsx`
 - Test behavior (`getByRole`/`getByText`), not implementation
 - Cover: happy path, edge cases, error states
@@ -88,7 +96,7 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 - Optimized queries with filters; BigQuery via `bq query` CLI
 
 ## Commits
-- MANDATORY: Use `commit` agent — never raw `git commit`
+- MANDATORY: Use `commit` agent — never raw `git commit` (escape hatch when agent unavailable: `CAST_COMMIT_AGENT=1 git commit`)
 - Imperative mood, concise (`Add feature X`, `Fix bug in Y`)
 
 ## Context Management
