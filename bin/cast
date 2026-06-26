@@ -2402,6 +2402,23 @@ PYEOF
     overall_ok=0
   fi
 
+  # Ollama (local embeddings) — advisory only; never blocks overall_ok
+  local _embed_plist="${HOME}/Library/LaunchAgents/com.cast.memory-embed.plist"
+  local _agent_mem_db_col
+  _agent_mem_db_col="$(sqlite3 "${CAST_DB_PATH}" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_memories') WHERE name='embedding';" \
+    2>/dev/null || echo "0")"
+  if [[ -f "$_embed_plist" ]] || [[ "${_agent_mem_db_col:-0}" -gt 0 ]]; then
+    if command -v curl >/dev/null 2>&1; then
+      local _ollama_url="${CAST_OLLAMA_URL:-http://localhost:11434}"
+      if curl -fsS --max-time 2 -- "${_ollama_url}/api/version" >/dev/null 2>&1; then
+        printf "%b Ollama: reachable (local embeddings)\n" "$OK"
+      else
+        printf "%b Ollama: not running (local embeddings will backfill when it's up — cast-ollama-ensure auto-opens it)\n" "$INFO"
+      fi
+    fi
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
