@@ -44,7 +44,7 @@ def _session_id(env_var: str = 'CAST_SESSION_ID') -> str:
 # ---------------------------------------------------------------------------
 
 def cmd_log_dispatch(backend: str, plan: str) -> None:
-    """Write dispatch_decisions and plan_sessions rows (Step 2 of orchestrate)."""
+    """Write plan_sessions row (Step 2 of orchestrate)."""
     _setup_cast_db()
     try:
         from cast_db import db_write, db_execute  # type: ignore
@@ -55,25 +55,7 @@ def cmd_log_dispatch(backend: str, plan: str) -> None:
     session_id = _session_id()
     now = _now_utc()
 
-    try:
-        db_execute('''
-            CREATE TABLE IF NOT EXISTS dispatch_decisions (
-                id               TEXT PRIMARY KEY,
-                session_id       TEXT,
-                timestamp        TEXT,
-                dispatch_backend TEXT,
-                plan_file        TEXT
-            )
-        ''')
-        db_write('dispatch_decisions', {
-            'id': os.urandom(8).hex(),
-            'session_id': session_id,
-            'timestamp': now,
-            'dispatch_backend': backend,
-            'plan_file': plan,
-        })
-    except Exception as e:
-        sys.stderr.write(f'[orchestrate-dispatch] dispatch_decisions write failed: {e}\n')
+    # dispatch_decisions write removed (S3): 3-way schema fork, run captured via plan_sessions; full reconcile deferred to S4
 
     try:
         db_execute('''
@@ -234,7 +216,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     # log-dispatch
-    p_ld = subparsers.add_parser('log-dispatch', help='Log dispatch_decisions + plan_sessions')
+    p_ld = subparsers.add_parser('log-dispatch', help='Log plan_sessions row')
     p_ld.add_argument('--backend', required=True, help='dispatch_backend value')
     p_ld.add_argument('--plan', required=True, help='plan file path')
 
