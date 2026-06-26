@@ -2,6 +2,16 @@
   "hooks": {
     "SessionStart": [
       {
+        "id": "cast-plan-resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-plan-resume-hook.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "id": "cast-time-context",
         "hooks": [
           {
