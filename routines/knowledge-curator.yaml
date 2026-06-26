@@ -7,7 +7,7 @@ agent: docs
 prompt_template: |
   Curate the knowledge base in ~/Documents/.
 
-  Use the Obsidian MCP tool (mcp__obsidian__search_notes) to:
+  Use the Obsidian MCP tool (mcp__obsidian-claude__search_notes) to:
   1. Search for recently modified notes (modified in the last 7 days)
   2. Identify notes with no outbound [[wiki-links]] (potential orphans)
   3. Look for recurring topics across recent entries that lack a dedicated note
@@ -23,9 +23,9 @@ prompt_template: |
 output_dir: "~/.claude/routines-output/knowledge-curator"
 enabled: true
 mcp_required:
-  - obsidian
+  - obsidian-claude
 notes: |
-  Requires the Obsidian MCP server ('obsidian') wired in ~/.claude/settings.json
+  Requires the Obsidian MCP server ('obsidian-claude') wired in ~/.claude/settings.json
   mcpServers. The Obsidian MCP must be pointed at ~/Documents/ (or the user's
   configured vault root).
 
