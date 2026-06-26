@@ -11,12 +11,10 @@ scripts/cast-parallel.sh:4
 scripts/cast-stop-failure-hook.sh:6
 scripts/cast-subagent-start-hook.sh:6
 scripts/cast-subagent-stop-hook.sh:20
-scripts/cast-tmux-session.sh:7
 scripts/cast-upgrade-check.sh:13
 scripts/cast-validate.sh:3
 scripts/pre-tool-guard.sh:4
 scripts/cast-batch-dispatch.sh:3
 scripts/cast-managed-agent.sh:11
-scripts/cast-parry-guard-monitor.sh:4
 scripts/cast-response-completeness-hook.sh:4
 scripts/cast-routine-runner.sh:7

@@ -141,6 +141,7 @@ Subcommands:
   ${C_BOLD}agents${C_RESET}                          List installed CAST agents
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}backup${C_RESET}    [--overlay]               On-disk snapshot (+ GitHub overlay with --overlay)
+  ${C_BOLD}restore${C_RESET}   <date|dir> [--force]      Restore files from a snapshot (--list to see them)
   ${C_BOLD}doctor${C_RESET}                          Run system health check
   ${C_BOLD}integrity${C_RESET}                       Data-integrity guarantees live status
   ${C_BOLD}upgrade-check${C_RESET}                   Check configured repos for new releases
@@ -2401,6 +2402,23 @@ PYEOF
     overall_ok=0
   fi
 
+  # Ollama (local embeddings) — advisory only; never blocks overall_ok
+  local _embed_plist="${HOME}/Library/LaunchAgents/com.cast.memory-embed.plist"
+  local _agent_mem_db_col
+  _agent_mem_db_col="$(sqlite3 "${CAST_DB_PATH}" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_memories') WHERE name='embedding';" \
+    2>/dev/null || echo "0")"
+  if [[ -f "$_embed_plist" ]] || [[ "${_agent_mem_db_col:-0}" -gt 0 ]]; then
+    if command -v curl >/dev/null 2>&1; then
+      local _ollama_url="${CAST_OLLAMA_URL:-http://localhost:11434}"
+      if curl -fsS --max-time 2 -- "${_ollama_url}/api/version" >/dev/null 2>&1; then
+        printf "%b Ollama: reachable (local embeddings)\n" "$OK"
+      else
+        printf "%b Ollama: not running (local embeddings will backfill when it's up — cast-ollama-ensure auto-opens it)\n" "$INFO"
+      fi
+    fi
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
@@ -2897,6 +2915,67 @@ _cmd_backup() {
         printf "${C_YELLOW}[!!] Overlay sync failed — on-disk snapshot was successful.${C_RESET}\n"
       fi
     fi
+  fi
+}
+
+# ── Subcommand: restore ──────────────────────────────────────────────────────
+_cmd_restore() {
+  # cast restore <date|YYYY-MM-DD|dir> [--target DIR] [--force]   restore from a snapshot
+  # cast restore --list  /  cast restore  (no args)               list available snapshots
+  local show_help=0 do_list=0
+  for arg in "$@"; do
+    case "$arg" in
+      --help|-h) show_help=1 ;;
+      --list)    do_list=1 ;;
+    esac
+  done
+
+  if [[ "$show_help" -eq 1 ]]; then
+    printf "Usage: cast restore <date|YYYY-MM-DD|dir> [--target DIR] [--force]\n"
+    printf "       cast restore --list\n\n"
+    printf "  Restore ~/.claude files from an on-disk snapshot created by 'cast backup'.\n"
+    printf "  Existing files are SKIPPED unless --force is supplied.\n\n"
+    printf "  --target DIR  Restore into DIR instead of ~/.claude (default).\n"
+    printf "  --force       Overwrite existing files.\n"
+    printf "  --list        List available snapshots (no restore).\n"
+    return 0
+  fi
+
+  # --list or bare invocation: show available snapshots; never error when none exist.
+  if [[ "$do_list" -eq 1 || "$#" -eq 0 ]]; then
+    local backup_root="${CAST_BACKUP_ROOT:-${HOME}/Library/Application Support/cast/backups}"
+    local snapshots
+    snapshots="$(ls -dt "${backup_root}"/cast-snapshot-* 2>/dev/null || true)"
+    if [[ -z "$snapshots" ]]; then
+      printf "No snapshots found in %s — run: cast backup\n" "$backup_root"
+    else
+      printf "${C_BOLD}Available snapshots:${C_RESET}\n"
+      while IFS= read -r snap; do
+        printf "  %s\n" "$(basename "$snap")"
+      done <<< "$snapshots"
+    fi
+    return 0
+  fi
+
+  # Resolve snapshot script with the same two-path fallback as _cmd_backup.
+  local snapshot_script="${CAST_SCRIPTS_DIR}/cast-snapshot.py"
+  if [[ ! -f "$snapshot_script" ]]; then
+    snapshot_script="${CAST_REPO_DIR}/scripts/cast-snapshot.py"
+  fi
+  if [[ ! -f "$snapshot_script" ]]; then
+    _error "cast-snapshot.py not found. Run: bash install.sh"
+    return 1
+  fi
+
+  printf "${C_BOLD}Running cast restore...${C_RESET}\n"
+  local restore_output
+  if restore_output="$(python3 "$snapshot_script" restore "$@" 2>/dev/null)"; then
+    python3 -m json.tool <<< "$restore_output" 2>/dev/null || printf "%s\n" "$restore_output"
+    printf "${C_GREEN}Restore complete.${C_RESET}\n"
+  else
+    [[ -n "$restore_output" ]] && printf "%s\n" "$restore_output"
+    printf "${C_RED}Restore failed.${C_RESET}\n"
+    return 1
   fi
 }
 
@@ -3822,6 +3901,7 @@ case "$SUBCOMMAND" in
   agents)               _cmd_agents "$@" ;;
   hooks)                _cmd_hooks "$@" ;;
   backup)               _cmd_backup "$@" ;;
+  restore)              _cmd_restore "$@" ;;
   doctor)               _cmd_doctor "$@" ;;
   integrity)            _cmd_integrity "$@" ;;
   upgrade-check)        _cmd_upgrade_check "$@" ;;

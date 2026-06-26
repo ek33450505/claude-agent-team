@@ -67,7 +67,7 @@ fi
 
 # --- EVENT_TYPE whitelist validation ---
 case "$EVENT_TYPE" in
-  blocked|queue_complete|budget_alert|briefing_ready|ci_failure) ;;
+  blocked|queue_complete|budget_alert|briefing_ready|ci_failure|ollama_down) ;;
   *)
     echo "Unknown event type: $EVENT_TYPE" >&2
     exit 1
@@ -160,6 +160,7 @@ if [ -z "$MESSAGE" ]; then
     queue_complete) MESSAGE="All queued tasks have completed." ;;
     budget_alert)   MESSAGE="CAST budget threshold exceeded." ;;
     briefing_ready) MESSAGE="Your morning briefing is ready." ;;
+    ollama_down)    MESSAGE="Ollama isn't running — CAST needs it for local embeddings." ;;
     *)              MESSAGE="$EVENT_TYPE" ;;
   esac
 fi

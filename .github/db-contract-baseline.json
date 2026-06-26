@@ -534,6 +534,21 @@
       "table": "attestations",
       "column": "payload",
       "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stream_events",
+      "column": "event_type",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stream_events",
+      "column": "session_id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "stream_events",
+      "column": "tool_name",
+      "classification": "SAFE-DROP-CANDIDATE"
     }
   ]
 }

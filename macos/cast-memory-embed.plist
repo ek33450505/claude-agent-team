@@ -9,7 +9,7 @@
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>python3 __HOME__/.claude/scripts/cast-memory-embed.py --backfill</string>
+    <string>bash __HOME__/.claude/scripts/cast-ollama-ensure.sh; python3 __HOME__/.claude/scripts/cast-memory-embed.py --backfill</string>
   </array>
 
   <key>StartCalendarInterval</key>
