@@ -46,6 +46,7 @@ SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT = SCRIPT_DIR.parent
 INIT_SCRIPT = SCRIPT_DIR / "cast-db-init.sh"
 MIGRATIONS_DIR = SCRIPT_DIR / "migrations"
+CAST_DB_PY = SCRIPT_DIR / "cast_db.py"
 DEFAULT_DESKTOP_PATH = Path.home() / "Projects" / "personal" / "cast-desktop"
 DEFAULT_BASELINE = REPO_ROOT / ".github" / "db-contract-baseline.json"
 DEFAULT_DB = Path(os.environ.get("CAST_DB_PATH", str(Path.home() / ".claude" / "cast.db")))
@@ -126,6 +127,9 @@ class ColumnContract:
     desktop_checked: bool = True   # False when desktop repo is absent
     fill_rate: Optional[float] = None
     db_checked: bool = False
+    # Dynamic-writer fields: populated by scan_db_write_calls()
+    dynamic_writer_table: bool = False   # table is in ALLOWED_TABLES or any db_write call
+    dynamic_writer_cols: list[str] = field(default_factory=list)  # cols proven via literal dict
 
     @property
     def classification(self) -> str:
@@ -135,9 +139,15 @@ class ColumnContract:
           1. CONTRADICTION — init-declared but migration-dropped, OR
              referenced in scripts but never declared anywhere
           2. DESKTOP-COUPLED — desktop reads it (only when desktop is reachable)
-          3. KEEP — at least one CAST script writer found
-          4. FIX-WRITER — read by scripts but no writer
-          5. SAFE-DROP-CANDIDATE — nothing writes or reads it
+          3. KEEP — at least one CAST script writer found, OR column proven
+             via a literal db_write dict
+          4. KEEP (dynamic) — table is a db_write target (ALLOWED_TABLES or
+             call-site found); columns written at runtime, unproven at column
+             granularity — honest KEEP, not implying a literal writer
+          5. FIX-WRITER — read by scripts but no writer and not a dynamic-writer
+             table (the table is not a db_write target)
+          6. SAFE-DROP-CANDIDATE — nothing writes or reads it and table is not
+             a dynamic-writer target
         """
         # CONTRADICTION: init declares it but migration drops it → init is stale
         if self.declared_in_init and self.migration_dropped:
@@ -149,12 +159,21 @@ class ColumnContract:
         # DESKTOP-COUPLED overrides (only when desktop was reachable)
         if self.desktop_readers and self.desktop_checked:
             return "DESKTOP-COUPLED"
+        # KEEP: at least one literal SQL writer (INSERT/UPDATE) found
+        if self.script_writers:
+            return "KEEP"
+        # KEEP: column proven via a literal db_write({'col': ...}) call
+        if self.column in self.dynamic_writer_cols:
+            return "KEEP"
+        # KEEP (dynamic): table is a db_write target; column is written at
+        # runtime. We don't have column-level proof, but the table is in
+        # ALLOWED_TABLES or has a confirmed db_write call site. Mark KEEP so
+        # the tool never proposes dropping a live dynamic-writer column.
+        if self.dynamic_writer_table:
+            return "KEEP"
         # FIX-WRITER: something reads it but nothing writes it
         if self.script_readers and not self.script_writers:
             return "FIX-WRITER"
-        # KEEP: at least one writer (column is being collected)
-        if self.script_writers:
-            return "KEEP"
         # SAFE-DROP-CANDIDATE: no evidence of use
         return "SAFE-DROP-CANDIDATE"
 
@@ -172,6 +191,8 @@ class ColumnContract:
             "desktop_checked": self.desktop_checked,
             "fill_rate": self.fill_rate,
             "db_checked": self.db_checked,
+            "dynamic_writer_table": self.dynamic_writer_table,
+            "dynamic_writer_cols": sorted(self.dynamic_writer_cols),
         }
 
 
@@ -542,6 +563,139 @@ def scan_cast_scripts(
     return writers, readers
 
 
+# ─── Source Extraction: ALLOWED_TABLES + db_write call sites ─────────────────
+
+def extract_allowed_tables(cast_db_path: Path) -> set[str]:
+    """Extract ALLOWED_TABLES from cast_db.py without importing it.
+
+    Parses the set literal `ALLOWED_TABLES = { 'table', ... }` using a regex.
+    This is a static read — the module is NOT imported (avoids import side-effects
+    and path issues from running inside a different working directory).
+
+    Returns the set of table name strings, or empty set if the file is missing
+    or the pattern is not found.
+    """
+    try:
+        content = cast_db_path.read_text(errors="replace")
+    except OSError as e:
+        print(f"[WARN] Cannot read {cast_db_path}: {e}", file=sys.stderr)
+        return set()
+
+    m = re.search(r"ALLOWED_TABLES\s*=\s*\{([^}]+)\}", content, re.DOTALL)
+    if not m:
+        print(
+            f"[WARN] ALLOWED_TABLES not found in {cast_db_path}",
+            file=sys.stderr,
+        )
+        return set()
+
+    return {s for s in re.findall(r"['\"](\w+)['\"]", m.group(1))}
+
+
+def scan_db_write_calls(
+    scripts_dir: Path,
+    bin_cast: Path,
+    allowed_tables: set[str],
+    known_tables: set[str],
+) -> tuple[set[str], dict[str, dict[str, set[str]]]]:
+    """Scan CAST scripts for db_write() call sites.
+
+    Detects two patterns:
+      1. Literal dict:  db_write('table', {'col1': v, 'col2': v})
+         → extracts table + columns (column-level precision)
+      2. Non-literal:   db_write('table', payload) / cast_db.db_write('table', row)
+         → extracts table only (table-granularity evidence)
+
+    Also pre-seeds `dynamic_tables` from `allowed_tables` — any table in
+    ALLOWED_TABLES is a dynamic-writer target by definition, even if no
+    literal call site was found in the scanned files (e.g. the call is inside
+    a shell heredoc that the scanner misses).
+
+    Args:
+        scripts_dir:    directory of CAST .py/.sh scripts to scan
+        bin_cast:       path to bin/cast (scanned if it exists)
+        allowed_tables: tables from ALLOWED_TABLES in cast_db.py
+        known_tables:   tables declared in init/migrations (scoped to avoid
+                        registering references to unrelated table names)
+
+    Returns:
+        dynamic_tables:      set of table names that are db_write targets
+        dynamic_col_writers: {table: {col: {file_labels}}} for literal-dict calls
+    """
+    # Seed from ALLOWED_TABLES — these are dynamic-writer targets regardless
+    # of whether a literal call site is found.
+    dynamic_tables: set[str] = set(allowed_tables & known_tables)
+    dynamic_col_writers: dict[str, dict[str, set[str]]] = {}
+
+    paths: list[Path] = []
+    if scripts_dir.exists():
+        paths.extend(scripts_dir.glob("*.sh"))
+        paths.extend(scripts_dir.glob("*.py"))
+    if bin_cast.exists():
+        paths.append(bin_cast)
+
+    # Matches:  db_write('TABLE', ...  or  cast_db.db_write("TABLE", ...
+    call_re = re.compile(
+        r"(?:cast_db\.)?db_write\s*\(\s*['\"](\w+)['\"]\s*,\s*",
+    )
+    # Dict key pattern:  'colname':  or  "colname":
+    dict_key_re = re.compile(r"""['"]([\w]+)['"]\s*:""")
+
+    for fpath in paths:
+        try:
+            content = fpath.read_text(errors="replace")
+        except OSError:
+            continue
+
+        # Relative label for provenance (falls back to full path if outside REPO_ROOT)
+        try:
+            label = str(fpath.relative_to(REPO_ROOT))
+        except ValueError:
+            label = str(fpath)
+
+        for m in call_re.finditer(content):
+            table = m.group(1).lower()
+            if table not in known_tables:
+                continue
+
+            # Register as a dynamic-writer table (call-site evidence)
+            dynamic_tables.add(table)
+
+            # Check whether the second argument is a literal dict `{ ... }`
+            rest = content[m.end():m.end() + 600]
+            rest_stripped = rest.lstrip()
+            if not rest_stripped.startswith("{"):
+                continue  # non-literal payload — table registered above, done
+
+            # Walk forward to find the matching closing brace
+            depth = 0
+            dict_end = 0
+            for i, ch in enumerate(rest_stripped):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        dict_end = i + 1
+                        break
+
+            if dict_end == 0:
+                continue  # unmatched brace — skip
+
+            dict_body = rest_stripped[:dict_end]
+            for km in dict_key_re.finditer(dict_body):
+                col = km.group(1).lower()
+                if _COL_RE.match(col) and col.upper() not in SQL_KEYWORDS:
+                    (
+                        dynamic_col_writers
+                        .setdefault(table, {})
+                        .setdefault(col, set())
+                        .add(label)
+                    )
+
+    return dynamic_tables, dynamic_col_writers
+
+
 # ─── Source Extraction: cast-desktop ──────────────────────────────────────────
 
 def scan_desktop(
@@ -648,6 +802,8 @@ def build_contracts(
     desktop_found: bool,
     fill_rates: dict[tuple[str, str], Optional[float]],
     db_found: bool,
+    dynamic_tables: set[str] | None = None,
+    dynamic_col_writers: dict[str, dict[str, set[str]]] | None = None,
 ) -> list[ColumnContract]:
     """Assemble ColumnContract objects for all currently-relevant columns.
 
@@ -655,7 +811,16 @@ def build_contracts(
     init_schema, migration net-adds (excluding dropped), script references,
     or desktop references. Pure migration-history drops (already removed from
     init and unreferenced by any script/desktop) are excluded.
+
+    dynamic_tables and dynamic_col_writers come from scan_db_write_calls().
+    When a table is in dynamic_tables, all its declared columns are marked
+    dynamic_writer_table=True so they are never classified SAFE-DROP-CANDIDATE.
+    When a column appears in dynamic_col_writers, it also gets
+    dynamic_writer_cols set for column-level proven evidence.
     """
+    _dynamic_tables = dynamic_tables or set()
+    _dynamic_col_writers = dynamic_col_writers or {}
+
     all_tables: set[str] = set()
     for d in (init_schema, migration_added, script_writers, script_readers, desktop_readers):
         all_tables.update(d.keys())
@@ -681,6 +846,13 @@ def build_contracts(
                 all_cols.add(col)
 
         for col in sorted(all_cols):
+            # Determine dynamic-writer fields for this (table, col) pair.
+            # dynamic_writer_table: True if the table is a db_write target.
+            # dynamic_writer_cols: list of columns proven via literal dict args.
+            is_dynamic_table = table in _dynamic_tables
+            proven_cols = list(
+                _dynamic_col_writers.get(table, {}).get(col, set())
+            )
             contracts.append(
                 ColumnContract(
                     table=table,
@@ -700,6 +872,8 @@ def build_contracts(
                     desktop_checked=desktop_found,
                     fill_rate=fill_rates.get((table, col)),
                     db_checked=db_found,
+                    dynamic_writer_table=is_dynamic_table,
+                    dynamic_writer_cols=[col] if proven_cols else [],
                 )
             )
 
@@ -932,6 +1106,16 @@ def main() -> int:
     script_writers, script_readers = scan_cast_scripts(
         SCRIPT_DIR, REPO_ROOT / "bin" / "cast", known_tables
     )
+
+    # ── db_write() dynamic writer detection ────────────────────────────────
+    allowed_tables = extract_allowed_tables(CAST_DB_PY)
+    dynamic_tables, dynamic_col_writers = scan_db_write_calls(
+        SCRIPT_DIR,
+        REPO_ROOT / "bin" / "cast",
+        allowed_tables,
+        known_tables,
+    )
+
     desktop_readers, desktop_found = scan_desktop(desktop_path, known_tables)
 
     if not desktop_found:
@@ -959,6 +1143,8 @@ def main() -> int:
         desktop_found=desktop_found,
         fill_rates=fill_rates,
         db_found=db_found,
+        dynamic_tables=dynamic_tables,
+        dynamic_col_writers=dynamic_col_writers,
     )
 
     # ── 3. Output ───────────────────────────────────────────────────────────

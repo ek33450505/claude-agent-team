@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "generated_from": "13d87b0",
+  "generated_from": "693b20a",
   "note": "Ratchet baseline for cast-db-contract --check. Exit 1 only on NEW entries absent from this file. Regenerate with: python3 scripts/cast-db-contract.py --update-baseline",
   "contradictions": [
     {
@@ -35,56 +35,6 @@
     }
   ],
   "safe_drop_candidates": [
-    {
-      "table": "agent_protocol_violations",
-      "column": "agent_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_protocol_violations",
-      "column": "agent_type",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_protocol_violations",
-      "column": "batch_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_protocol_violations",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_protocol_violations",
-      "column": "pattern",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_protocol_violations",
-      "column": "raw_excerpt",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_protocol_violations",
-      "column": "session_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_protocol_violations",
-      "column": "violation",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_runs",
-      "column": "tool_uses",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "agent_truncations",
-      "column": "batch_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
     {
       "table": "archived_memories",
       "column": "agent",
@@ -171,346 +121,6 @@
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
-      "table": "budgets",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "code_ref_checks",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "completeness_events",
-      "column": "created_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "completeness_events",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_decisions",
-      "column": "chosen_agent",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_decisions",
-      "column": "created_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_decisions",
-      "column": "effort",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_decisions",
-      "column": "model",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_decisions",
-      "column": "outcome",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_decisions",
-      "column": "parallel",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_decisions",
-      "column": "prompt_snippet",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_decisions",
-      "column": "wave_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_events",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "dispatch_events",
-      "column": "triggered_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "agent_run_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "attempt",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "cost_tier",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "duration_ms",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "grader_results",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "model",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "eval_runs",
-      "column": "started_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "file_writes",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "file_writes",
-      "column": "session_id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "injection_log",
-      "column": "score_breakdown",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "managed_agent_invocations",
-      "column": "agent_name",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "managed_agent_invocations",
-      "column": "exit_code",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "managed_agent_invocations",
-      "column": "http_status",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "managed_agent_invocations",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "managed_agent_invocations",
-      "column": "mode",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "managed_agent_invocations",
-      "column": "session_duration_ms",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "managed_agent_invocations",
-      "column": "ts",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "memory_consolidation_runs",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "otel_events",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "otel_events",
-      "column": "received_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "otel_metrics",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "otel_metrics",
-      "column": "received_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "plan_sessions",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "plan_sessions",
-      "column": "started_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "quality_gates",
-      "column": "created_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "quality_gates",
-      "column": "gate_type",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "rate_limit_snapshots",
-      "column": "raw_json",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "rate_limit_snapshots",
-      "column": "rpm_limit",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "rate_limit_snapshots",
-      "column": "rpm_used",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "rate_limit_snapshots",
-      "column": "tpm_limit",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "rate_limit_snapshots",
-      "column": "tpm_used",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "rate_limit_snapshots",
-      "column": "ts",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "stop_failure_events",
-      "column": "created_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "stop_failure_events",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "stop_failure_events",
-      "column": "source",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "stream_events",
-      "column": "duration_ms",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "stream_events",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "stream_events",
-      "column": "raw_json",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "stream_events",
-      "column": "status",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "stream_events",
-      "column": "tool_input_preview",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "tool_call_failures",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "worktree_anomalies",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "swarm_sessions",
-      "column": "config_path",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "swarm_sessions",
-      "column": "ended_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_messages",
-      "column": "from_agent",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_messages",
-      "column": "id",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_messages",
-      "column": "message_type",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_messages",
-      "column": "payload",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_messages",
-      "column": "to_agent",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "teammate_runs",
-      "column": "worktree",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "task_queue",
-      "column": "claimed_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "task_queue",
-      "column": "completed_at",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
-      "table": "task_queue",
-      "column": "max_retries",
-      "classification": "SAFE-DROP-CANDIDATE"
-    },
-    {
       "table": "attestations",
       "column": "agent_key",
       "classification": "SAFE-DROP-CANDIDATE"
@@ -536,18 +146,23 @@
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
-      "table": "stream_events",
-      "column": "event_type",
+      "table": "otel_events",
+      "column": "id",
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
-      "table": "stream_events",
-      "column": "session_id",
+      "table": "otel_events",
+      "column": "received_at",
       "classification": "SAFE-DROP-CANDIDATE"
     },
     {
-      "table": "stream_events",
-      "column": "tool_name",
+      "table": "otel_metrics",
+      "column": "id",
+      "classification": "SAFE-DROP-CANDIDATE"
+    },
+    {
+      "table": "otel_metrics",
+      "column": "received_at",
       "classification": "SAFE-DROP-CANDIDATE"
     }
   ]
