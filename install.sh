@@ -505,6 +505,66 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         fi
     fi
 
+    # Install cast-abandon-stale-runs.plist — nightly stale agent_runs cleanup (04:00)
+    if [ -f "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.abandon-stale-runs.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.abandon-stale-runs)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-maintenance.plist — daily maintenance sweep (03:47)
+    if [ -f "$SCRIPT_DIR/macos/cast-maintenance.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.cast-maintenance.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-maintenance.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.cast-maintenance)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-db-backup.plist — daily cast.db backup to off-radius dir (02:00)
+    if [ -f "$SCRIPT_DIR/macos/cast-db-backup.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.db-backup.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-db-backup.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.db-backup)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-db-prune.plist — daily cast.db retention prune (03:30)
+    if [ -f "$SCRIPT_DIR/macos/cast-db-prune.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.db-prune.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-db-prune.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.db-prune)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-tidy.plist — daily cast tidy housekeeping (03:00)
+    if [ -f "$SCRIPT_DIR/macos/cast-tidy.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.tidy.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-tidy.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.tidy)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
     # Install cast-litestream.plist — continuous DB replication daemon (opt-in).
     # Gated on litestream being installed; idempotently removes the plist when absent.
     PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.litestream.plist"
