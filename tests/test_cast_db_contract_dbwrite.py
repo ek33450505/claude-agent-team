@@ -28,6 +28,7 @@ _spec.loader.exec_module(_mod)
 extract_allowed_tables = _mod.extract_allowed_tables
 scan_db_write_calls = _mod.scan_db_write_calls
 ColumnContract = _mod.ColumnContract
+_parse_sql_ops = _mod._parse_sql_ops
 
 
 class TestExtractAllowedTables(unittest.TestCase):
@@ -252,6 +253,111 @@ class TestColumnContractClassification(unittest.TestCase):
             dynamic_writer_table=True,
         )
         self.assertEqual(c.classification, "DESKTOP-COUPLED")
+
+
+class TestReadAttributionNoMisattribution(unittest.TestCase):
+    """Regression tests for read-attribution false-positive fixes.
+
+    The checker read-attribution fix was applied to _parse_sql_ops to prevent
+    misattributing column reads to the wrong table. These tests lock in the
+    correct behavior so the 5 false-positives never regress.
+    """
+
+    def test_confidence_not_misattributed_from_agent_runs(self):
+        """confidence: sql joining should not misattribute column to agent_runs.
+
+        Previously, COALESCE(SUM(cost_usd),0) FROM agent_runs would cause
+        'confidence' from the next SELECT to be misattributed as agent_runs reader.
+        """
+        sql = (
+            "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE date(started_at)>=?\n"
+            "SELECT COUNT(*) FROM agent_memories WHERE confidence < 0.4"
+        )
+        known_tables = {"agent_runs", "agent_memories"}
+        writers, readers = _parse_sql_ops(sql, known_tables)
+
+        # confidence should NOT be in agent_runs readers (was misattributed)
+        self.assertNotIn("confidence", readers.get("agent_runs", set()))
+        # confidence SHOULD be in agent_memories readers
+        self.assertIn("confidence", readers.get("agent_memories", set()))
+
+    def test_title_not_misattributed_from_agent_truncations(self):
+        """title: f-string placeholder should not cause misattribution.
+
+        An f-string "FROM {child} WHERE 1=1" followed by Python comment/code
+        should not cause 'title' to be misattributed as agent_truncations reader.
+        """
+        sql = (
+            "SELECT count(*) FROM {child} WHERE 1=1\n"
+            "CheckResult(cid, title, 'error')\n"
+            "SELECT id FROM agent_truncations WHERE agent_type LIKE ? ORDER BY id DESC LIMIT ?"
+        )
+        known_tables = {"agent_truncations"}
+        writers, readers = _parse_sql_ops(sql, known_tables)
+
+        # title should NOT be in agent_truncations readers (was misattributed)
+        self.assertNotIn("title", readers.get("agent_truncations", set()))
+
+    def test_eval_runs_eval_id_not_leaked_to_routing_events(self):
+        """eval_runs (eval_id): eval_id should not bleed to routing_events.
+
+        An INNER JOIN with a subquery should not cause eval_id from eval_runs
+        to be misattributed as a routing_events reader when routing_events is
+        in known_tables but not actually referenced in this statement.
+        """
+        sql = (
+            "SELECT r.eval_id, r.agent, r.ended_at FROM eval_runs r "
+            "INNER JOIN (SELECT eval_id, MAX(ended_at) AS max_ended FROM eval_runs "
+            "GROUP BY eval_id) latest ON r.eval_id=latest.eval_id AND "
+            "r.ended_at=latest.max_ended WHERE r.eval_id=?"
+        )
+        known_tables = {"eval_runs", "routing_events"}
+        writers, readers = _parse_sql_ops(sql, known_tables)
+
+        # eval_id should NOT be in routing_events readers
+        self.assertNotIn("eval_id", readers.get("routing_events", set()))
+        # But eval_id SHOULD be in eval_runs readers
+        self.assertIn("eval_id", readers.get("eval_runs", set()))
+
+    def test_eval_runs_ended_at_not_leaked_to_routing_events(self):
+        """eval_runs (ended_at): ended_at should not bleed to routing_events.
+
+        An INNER JOIN with a subquery should not cause ended_at from eval_runs
+        to be misattributed as a routing_events reader when routing_events is
+        in known_tables but not actually referenced in this statement.
+        """
+        sql = (
+            "SELECT r.eval_id, r.agent, r.ended_at FROM eval_runs r "
+            "INNER JOIN (SELECT eval_id, MAX(ended_at) AS max_ended FROM eval_runs "
+            "GROUP BY eval_id) latest ON r.eval_id=latest.eval_id AND "
+            "r.ended_at=latest.max_ended WHERE r.eval_id=?"
+        )
+        known_tables = {"eval_runs", "routing_events"}
+        writers, readers = _parse_sql_ops(sql, known_tables)
+
+        # ended_at should NOT be in routing_events readers
+        self.assertNotIn("ended_at", readers.get("routing_events", set()))
+        # But ended_at SHOULD be in eval_runs readers
+        self.assertIn("ended_at", readers.get("eval_runs", set()))
+
+    def test_session_id_not_misattributed_from_sessions(self):
+        """session_id: SELECT AS renaming should not confuse attribution.
+
+        "SELECT id AS session_id FROM sessions" should not cause session_id
+        to be incorrectly added as a reader of the sessions table. The renamed
+        alias is not a column read; only actual column reads should be attributed.
+        """
+        sql = (
+            "SELECT id AS session_id FROM sessions WHERE id = ? LIMIT 1\n"
+            "SELECT COALESCE(SUM(input_tokens),0) FROM agent_runs WHERE session_id = ?"
+        )
+        known_tables = {"sessions", "agent_runs"}
+        writers, readers = _parse_sql_ops(sql, known_tables)
+
+        # session_id should NOT be in sessions readers (it's a renamed alias, not a read)
+        self.assertNotIn("session_id", readers.get("sessions", set()))
+        # But session_id SHOULD be in agent_runs readers
+        self.assertIn("session_id", readers.get("agent_runs", set()))
 
 
 if __name__ == "__main__":

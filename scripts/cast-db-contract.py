@@ -437,10 +437,34 @@ def _parse_sql_ops(
         re.IGNORECASE,
     )
 
+    # EDIT B2 pre-scan: build a map of aliases that are explicitly bound to a
+    # specific table in this SQL fragment (overrides TABLE_ALIASES defaults).
+    # E.g. if the SQL says "FROM eval_runs r", then r->eval_runs and the
+    # TABLE_ALIASES r->routing_events default must NOT be injected.
+    _explicit_bind_re = re.compile(
+        r"\b(?:FROM|JOIN)\s+(\w+)\s+(?:AS\s+)?(\w+)\b",
+        re.IGNORECASE,
+    )
+    _fragment_explicit_bindings: dict[str, str] = {}
+    for _em in _explicit_bind_re.finditer(sql):
+        _tbl = _em.group(1).lower()
+        _alias = _em.group(2).lower()
+        if _alias in TABLE_ALIASES and _tbl in known_tables:
+            _fragment_explicit_bindings[_alias] = _tbl
+
     for m in select_re.finditer(sql):
         select_list = m.group(1)
+        # EDIT C: guard against .*? DOTALL over-span past an intermediate FROM
+        # (e.g. an f-string "FROM {child}" placeholder); a well-formed SELECT
+        # list never contains a FROM keyword.
+        if re.search(r'\bFROM\b', select_list, re.IGNORECASE):
+            continue
         primary_table = m.group(2).lower()
         explicit_alias = m.group(3)
+        # EDIT B1: null explicit_alias if it captured a SQL keyword
+        # (e.g. "FROM eval_runs GROUP BY ..." captures "GROUP" as alias)
+        if explicit_alias and explicit_alias.upper() in SQL_KEYWORDS:
+            explicit_alias = None
         primary_alias = (explicit_alias or primary_table).lower()
 
         if primary_table not in known_tables:
@@ -451,14 +475,29 @@ def _parse_sql_ops(
             primary_alias: primary_table,
             primary_table: primary_table,
         }
-        # Apply well-known aliases
+        # Apply well-known aliases — EDIT B2: skip any alias explicitly bound
+        # to a different table in this SQL fragment (prevents r->routing_events
+        # from being injected when the fragment uses r as eval_runs's alias).
         for alias, tbl in TABLE_ALIASES.items():
             if tbl in known_tables:
+                if (alias in _fragment_explicit_bindings
+                        and _fragment_explicit_bindings[alias] != tbl):
+                    continue
                 alias_map.setdefault(alias, tbl)
         # Parse JOINs and WHERE column refs in a 600-char context window.
-        # Larger windows cause cross-contamination from adjacent SQL blocks in
-        # large files (e.g. bin/cast), attributing columns to the wrong table.
+        # EDIT A: clip at the next statement boundary (semicolon or next FROM
+        # keyword) after the current match so WHERE/column refs from adjacent
+        # statements cannot bleed into this statement's primary_table.
         context = sql[m.start() : min(m.start() + 600, len(sql))]
+        _match_end_ctx = m.end() - m.start()
+        _after_match = context[_match_end_ctx:]
+        _semi = _after_match.find(';')
+        _next_from = re.search(r'\bFROM\b', _after_match, re.IGNORECASE)
+        _clip = min(
+            _semi if _semi != -1 else len(_after_match),
+            _next_from.start() if _next_from else len(_after_match),
+        )
+        context = context[:_match_end_ctx + _clip]
         for jm in join_re.finditer(context):
             jt = jm.group(1).lower()
             ja = (jm.group(2) or jt).lower()
