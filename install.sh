@@ -263,6 +263,9 @@ rm -f "$CLAUDE_DIR/config/settings-canonical.json"
 # Remove dead scripts retired in v9 §5.1 dead-surface sweep
 rm -f "$CLAUDE_DIR/scripts/cast-cron-summary.py" "$CLAUDE_DIR/scripts/cast-integrity-check.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-agent-run-log.py" "$CLAUDE_DIR/scripts/cast-parry-guard-monitor.sh"
+# Remove dead scripts retired in v9 §5.1 Unit D (zero-live-use helpers)
+rm -f "$CLAUDE_DIR/scripts/cast-plugin-install.sh" "$CLAUDE_DIR/scripts/cast-tmux-session.sh"
+rm -f "$CLAUDE_DIR/scripts/sync-ecosystem-readme.sh" "$CLAUDE_DIR/scripts/cast-morning-briefing-sdk.py"
 # v7.5 Phase 7: removed dead reference skills
 rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budget"
 success "  Scripts installed (including cast_db.py)"
