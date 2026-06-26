@@ -1,39 +1,8 @@
 {
   "schema_version": "1.0",
-  "generated_from": "693b20a",
+  "generated_from": "899ccdf",
   "note": "Ratchet baseline for cast-db-contract --check. Exit 1 only on NEW entries absent from this file. Regenerate with: python3 scripts/cast-db-contract.py --update-baseline",
-  "contradictions": [
-    {
-      "table": "agent_runs",
-      "column": "abandoned_at",
-      "classification": "CONTRADICTION"
-    },
-    {
-      "table": "agent_runs",
-      "column": "confidence",
-      "classification": "CONTRADICTION"
-    },
-    {
-      "table": "agent_truncations",
-      "column": "title",
-      "classification": "CONTRADICTION"
-    },
-    {
-      "table": "routing_events",
-      "column": "ended_at",
-      "classification": "CONTRADICTION"
-    },
-    {
-      "table": "routing_events",
-      "column": "eval_id",
-      "classification": "CONTRADICTION"
-    },
-    {
-      "table": "sessions",
-      "column": "session_id",
-      "classification": "CONTRADICTION"
-    }
-  ],
+  "contradictions": [],
   "safe_drop_candidates": [
     {
       "table": "archived_memories",
