@@ -366,6 +366,22 @@ if [ -d "$SCRIPT_DIR/config" ]; then
     done
 fi
 
+# --- Install ccr (claude-code-router) local-routing config (skip-if-exists) ---
+# First-class local cheap-mode (cast cheap) routes via ccr -> Ollama. Deploy a
+# working CAST template only if the user has no ccr config yet; never clobber a
+# user-customized router config (repair with: cast cheap config).
+if [ -f "$SCRIPT_DIR/config/cast-ccr-config.json" ]; then
+    CCR_DIR="$HOME/.claude-code-router"
+    CCR_DEST="$CCR_DIR/config.json"
+    if [ -f "$CCR_DEST" ]; then
+        info "  Skipped (exists): ccr config ($CCR_DEST) — repair with: cast cheap config"
+    else
+        mkdir -p "$CCR_DIR"
+        cp "$SCRIPT_DIR/config/cast-ccr-config.json" "$CCR_DEST"
+        success "  Installed: ccr local-routing config -> $CCR_DEST"
+    fi
+fi
+
 # --- Seed permission-rules.json ---
 if [ -f "$SCRIPT_DIR/cast/permission-rules.json" ]; then
     mkdir -p "$CLAUDE_DIR/cast"

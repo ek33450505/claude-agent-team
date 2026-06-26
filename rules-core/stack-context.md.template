@@ -24,6 +24,11 @@
 ## AI / LLM (if applicable)
 <!-- e.g. Anthropic SDK, OpenAI SDK, LangChain -->
 
+## Optional: Local Cheap Mode
+<!-- `cast cheap` launches local Claude Code sessions via ccr + Ollama (qwen2.5:7b).
+     First-class entry point for prose/review/docs — NOT for complex agentic work (7B fidelity).
+     Privacy (code stays local) + cost (replaces cloud calls). Setup: ccr + Ollama. Docs: docs/local-cheap-mode.md -->
+
 ## Infrastructure
 <!-- e.g. Docker, AWS, GCP, Vercel, GitHub Actions -->
 
