@@ -441,6 +441,45 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
     mkdir -p "$LAUNCH_AGENTS_DIR"
 
+    # launchd registers jobs into the per-USER gui/$uid domain — which $HOME does
+    # NOT isolate. A `launchctl load` run under a BATS temp HOME (or any install
+    # against a non-real HOME) leaks com.cast.* jobs into the REAL user's launchd,
+    # where they outlive the temp dir and hijack the real daemon labels (2026-06-26:
+    # one leaked test run displaced 11 live daemons). Guard: skip launchctl
+    # registration under a test/CI/temp HOME. Plists are still written below, so the
+    # install is otherwise complete.
+    _cast_skip_launchctl() {
+        [ -n "${CAST_INSTALL_NO_LAUNCHCTL:-}" ] && return 0
+        [ -n "${CI:-}" ] && return 0
+        [ -n "${CLAUDE_SUBPROCESS:-}" ] && return 0
+        [ -f "$HOME/.cast-test-home" ] && return 0   # BATS temp-HOME sentinel
+        case "$HOME" in
+            /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) return 0 ;;
+        esac
+        return 1
+    }
+
+    # (Re)load a plist into the user launchd domain, honoring the test/CI guard.
+    cast_launchctl_reload() {
+        local plist="$1" label="$2"
+        if _cast_skip_launchctl; then
+            warn "  launchd registration skipped for $label (test/CI/temp HOME — plist written, not loaded)"
+            return 0
+        fi
+        launchctl unload "$plist" 2>/dev/null || true
+        if launchctl load "$plist" 2>/dev/null; then
+            success "  Installed: $plist ($label)"
+        else
+            warn "  launchctl load failed for $plist — verify manually"
+        fi
+    }
+
+    # Evict a plist from the user launchd domain, honoring the test/CI guard.
+    cast_launchctl_unload() {
+        _cast_skip_launchctl && return 0
+        launchctl unload "$1" 2>/dev/null || true
+    }
+
     # Install cast-backup.plist for daily snapshot
     if [ -f "$SCRIPT_DIR/macos/cast-backup.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.backup.plist"
@@ -448,13 +487,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         # Matches the convention in scripts/com.cast.daemon.plist.
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-backup.plist" > "$PLIST_DEST"
 
-        # Idempotently (re)load the plist
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.backup)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.backup"
     fi
 
     # Install cast-memory-embed.plist for nightly embedding generation
@@ -462,13 +495,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.memory-embed.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-memory-embed.plist" > "$PLIST_DEST"
 
-        # Idempotently (re)load the plist
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.memory-embed)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.memory-embed"
     fi
 
     # Install cast-wipe-canary.plist — WatchPaths canary that captures forensic
@@ -486,13 +513,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.wipe-canary.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-wipe-canary.plist" > "$PLIST_DEST"
 
-        # Idempotently (re)load the plist
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.wipe-canary)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.wipe-canary"
     fi
 
     # Install cast-log-compress.plist — daily runtime rotation (events/logs/legacy
@@ -500,12 +521,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     if [ -f "$SCRIPT_DIR/macos/cast-log-compress.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.log-compress.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-log-compress.plist" > "$PLIST_DEST"
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.log-compress)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.log-compress"
     fi
 
     # Install cast-branch-groomer.plist — weekly (Sun 06:00) multi-repo grooming with
@@ -513,72 +529,42 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     if [ -f "$SCRIPT_DIR/macos/cast-branch-groomer.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.branch-groomer.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-branch-groomer.plist" > "$PLIST_DEST"
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.branch-groomer)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.branch-groomer"
     fi
 
     # Install cast-abandon-stale-runs.plist — nightly stale agent_runs cleanup (04:00)
     if [ -f "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.abandon-stale-runs.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" > "$PLIST_DEST"
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.abandon-stale-runs)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.abandon-stale-runs"
     fi
 
     # Install cast-maintenance.plist — daily maintenance sweep (03:47)
     if [ -f "$SCRIPT_DIR/macos/cast-maintenance.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.cast-maintenance.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-maintenance.plist" > "$PLIST_DEST"
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.cast-maintenance)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.cast-maintenance"
     fi
 
     # Install cast-db-backup.plist — daily cast.db backup to off-radius dir (02:00)
     if [ -f "$SCRIPT_DIR/macos/cast-db-backup.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.db-backup.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-db-backup.plist" > "$PLIST_DEST"
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.db-backup)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.db-backup"
     fi
 
     # Install cast-db-prune.plist — daily cast.db retention prune (03:30)
     if [ -f "$SCRIPT_DIR/macos/cast-db-prune.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.db-prune.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-db-prune.plist" > "$PLIST_DEST"
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.db-prune)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.db-prune"
     fi
 
     # Install cast-tidy.plist — daily cast tidy housekeeping (03:00)
     if [ -f "$SCRIPT_DIR/macos/cast-tidy.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.tidy.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-tidy.plist" > "$PLIST_DEST"
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.tidy)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.tidy"
     fi
 
     # Retire com.cast.mlx-server (dead local-model-routing daemon, removed v9 A6).
@@ -586,7 +572,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     # routes to Ollama directly (see config/cast-ccr-config.json).
     _mlx_plist_dest="$LAUNCH_AGENTS_DIR/com.cast.mlx-server.plist"
     if [ -f "$_mlx_plist_dest" ]; then
-        launchctl unload "$_mlx_plist_dest" 2>/dev/null || true
+        cast_launchctl_unload "$_mlx_plist_dest"
         rm -f "$_mlx_plist_dest"
         info "  Removed retired daemon plist: $_mlx_plist_dest (com.cast.mlx-server)"
     fi
@@ -597,18 +583,12 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     if command -v litestream >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/macos/cast-litestream.plist" ]; then
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-litestream.plist" > "$PLIST_DEST"
 
-        # Idempotently (re)load the plist
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
-        if launchctl load "$PLIST_DEST" 2>/dev/null; then
-            success "  Installed: $PLIST_DEST (com.cast.litestream)"
-        else
-            warn "  launchctl load failed for $PLIST_DEST — verify manually"
-        fi
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.litestream"
     else
         info "  litestream not installed — replication daemon not registered (opt-in: brew install benbjohnson/litestream/litestream)"
         # Idempotent cleanup: remove any previously installed plist so the daemon
         # does not run on a machine that no longer has litestream.
-        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        cast_launchctl_unload "$PLIST_DEST"
         rm -f "$PLIST_DEST"
     fi
 

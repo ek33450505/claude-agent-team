@@ -51,6 +51,24 @@ teardown_temp_home() {
     esac
   fi
 
+  # Defensive: evict any com.cast.* launchd jobs registered FROM this temp HOME
+  # before deleting it. launchd is a per-user (gui/$uid) domain that $HOME cannot
+  # isolate, so a leaked job would outlive this dir and hijack the real daemon's
+  # label. CRITICAL: only boot out a label whose CURRENTLY-LOADED job path is under
+  # $target — NEVER the real daemon (whose plist lives in the real ~/Library).
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    local _uid; _uid="$(id -u)"
+    local _plist _label _loaded
+    for _plist in "$target"/Library/LaunchAgents/com.cast.*.plist; do
+      [[ -e "$_plist" ]] || continue
+      _label="$(basename "$_plist" .plist)"
+      _loaded="$(launchctl print "gui/$_uid/$_label" 2>/dev/null | awk -F' = ' '/^\tpath = /{print $2; exit}')"
+      if [[ -n "$_loaded" && "$_loaded" == "$target/"* ]]; then
+        launchctl bootout "gui/$_uid/$_label" 2>/dev/null || true
+      fi
+    done
+  fi
+
   rm -rf "$target"
   export HOME="$ORIG_HOME"
 }
