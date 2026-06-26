@@ -290,7 +290,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   cache_creation_input_tokens INTEGER,
   owns_files      TEXT,
   duration_ms     INTEGER,
-  tool_uses       INTEGER
+  tool_uses       INTEGER,
+  abandoned_at    TIMESTAMP
 );
 
 -- Routing events: structured event log
