@@ -565,6 +565,16 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         fi
     fi
 
+    # Retire com.cast.mlx-server (dead local-model-routing daemon, removed v9 A6).
+    # Idempotently remove any stale plist left by the pre-retirement setup; ccr now
+    # routes to Ollama directly (see config/cast-ccr-config.json).
+    _mlx_plist_dest="$LAUNCH_AGENTS_DIR/com.cast.mlx-server.plist"
+    if [ -f "$_mlx_plist_dest" ]; then
+        launchctl unload "$_mlx_plist_dest" 2>/dev/null || true
+        rm -f "$_mlx_plist_dest"
+        info "  Removed retired daemon plist: $_mlx_plist_dest (com.cast.mlx-server)"
+    fi
+
     # Install cast-litestream.plist — continuous DB replication daemon (opt-in).
     # Gated on litestream being installed; idempotently removes the plist when absent.
     PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.litestream.plist"
