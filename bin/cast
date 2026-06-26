@@ -4,7 +4,7 @@
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: status, exec, parallel, memory, budget, agents, hooks, doctor, upgrade-check, tidy, clean, dash, install-completions
+# Subcommands: status, exec, parallel, memory, budget, agents, hooks, doctor, upgrade-check, tidy, clean, dash, install-completions, plan-doctor
 #
 # Config: ~/.claude/config/cast-cli.json
 # DB:     $CAST_DB_PATH or ~/.claude/cast.db
@@ -157,6 +157,7 @@ Subcommands:
   ${C_BOLD}batch${C_RESET}                              Batch dispatch orchestration
   ${C_BOLD}ci-local${C_RESET}                           Run PR-gating CI workflows locally via act
   ${C_BOLD}db-contract${C_RESET} [--json] [--check] [--update-baseline]  Schema/DB-contract reconciliation
+  ${C_BOLD}plan-doctor${C_RESET} [--check] [--json] [--resume]  Reconcile the plan ledger vs git/settings ground truth
   ${C_BOLD}stack${C_RESET}     show|refresh [path]          Show or refresh per-repo stack profile
   ${C_BOLD}eval${C_RESET}      run|list                     Run or list agent behavior evals (A3 harness)
 
@@ -3715,6 +3716,20 @@ _cmd_db_contract() {
   exec python3 "$_dbc_script" "$@"
 }
 
+# ── Subcommand: plan-doctor ──────────────────────────────────────────────────
+_cmd_plan_doctor() {
+  local _pd_script="${CAST_REPO_DIR}/scripts/cast-plan-doctor.py"
+  if [ ! -f "$_pd_script" ]; then _pd_script="${CAST_SCRIPTS_DIR}/cast-plan-doctor.py"; fi
+  if [ ! -f "$_pd_script" ]; then
+    _error "cast-plan-doctor.py not found. Run: bash install.sh"
+    exit 1
+  fi
+  # --json is consumed globally by _parse_global_flags (sets CAST_JSON=1) and
+  # never reaches $@. Re-inject it so the python script receives it.
+  if [ "${CAST_JSON:-0}" -eq 1 ]; then set -- "--json" "$@"; fi
+  exec python3 "$_pd_script" "$@"
+}
+
 # ── Subcommand: ci-local ─────────────────────────────────────────────────────
 _cmd_ci_local() {
   # Detect flagship repo by verifying a Makefile with a ci-local target is present.
@@ -3946,6 +3961,7 @@ case "$SUBCOMMAND" in
   batch)                _cmd_batch "$@" ;;
   ci-local)             _cmd_ci_local "$@" ;;
   db-contract)          _cmd_db_contract "$@" ;;
+  plan-doctor)          _cmd_plan_doctor "$@" ;;
   stack)                _cmd_stack "$@" ;;
   ""|--help|-h)
     _usage
