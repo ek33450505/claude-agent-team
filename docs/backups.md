@@ -12,7 +12,7 @@
 | PII denylist | `~/.claude/config/pii-denylist-local.txt` | On-disk snapshot + overlay |
 | Personal agents | `~/.claude/agents/personal/*.md` | On-disk snapshot + overlay |
 | Sync metadata | `~/.claude/config/sync.json` | On-disk snapshot + overlay |
-| cast.db | `~/.claude/cast.db` | Via continuous replication (Litestream) + daily snapshots |
+| cast.db | `~/.claude/cast.db` | Via continuous replication (Litestream) + daily snapshots (both same-disk) + Time Machine (off-disk) |
 
 Secrets (API keys, `.env`, `.pem`, `.key` files) are explicitly excluded from both backups via basename pattern matching. The overlay script additionally runs a content-level secret scan (a grep-based denylist, plus gitleaks as an additive layer when installed) before pushing.
 
@@ -105,6 +105,29 @@ Version-controlled working tree with full git history — not GitHub release ass
 **Caveat — authentication in launchd:** The overlay push requires working `gh` and `ssh` credentials in the launchd environment. If the scheduled push fails (e.g., due to auth timeouts or SSH key passphrases), it is logged as non-fatal — the on-disk snapshot still succeeds. To manually trigger the overlay push or verify that it succeeded, run `cast backup --overlay` from your terminal (where `gh` and `ssh` auth are fully configured). If the scheduled job hasn't pushed recently, run this command to catch up.
 
 **Security note:** Claude Code agents are intentionally hard-blocked from pushing to the private overlay repo by the platform's data-exfiltration guard. The overlay push is always a user-initiated or user-scheduled action (via launchd as your user, not as an agent).
+
+## Off-disk physical copy (Time Machine)
+
+**Why this pillar exists:** Litestream (continuous replica) and `cast-db-backup.py` (dated snapshots) both write to `~/Library/Application Support/cast/` — outside the `~/.claude` wipe radius, but **on the same physical disk**. The off-machine git overlay (above) deliberately **excludes `cast.db`** (too large for a version-controlled working tree); it carries memories/rules/config, not the database. Net effect: the irreplaceable `cast.db` corpus survives a `~/.claude` wipe, but **not a disk failure, theft, or filesystem corruption** — any of which would take the live DB and every same-disk replica at once. A Time Machine destination on a separate physical drive closes that gap.
+
+**Inclusion (verified 2026-06-26):** both moat paths are Time Machine *included* (not excluded) by default. Confirm any time:
+```bash
+tmutil isexcluded "$HOME/Library/Application Support/cast"
+tmutil isexcluded "$HOME/.claude/cast.db"
+```
+Each should report `[Included]`. No action is needed unless a path shows `[Excluded]` (fix: `tmutil removeexclusion <path>`).
+
+**Restore drill (run once after first connecting the drive):**
+1. Restore a copy of the DB from the Time Machine snapshot to a scratch path — Finder → *Enter Time Machine* → browse to `~/.claude/cast.db`, or `tmutil restore` — e.g. to `/tmp/cast-restore/cast.db`.
+2. Verify it **before** trusting it:
+   ```bash
+   sqlite3 /tmp/cast-restore/cast.db "PRAGMA integrity_check;"        # expect: ok
+   sqlite3 /tmp/cast-restore/cast.db "SELECT count(*) FROM agent_runs;"
+   ```
+3. Only then, if recovering for real, copy it over the live DB. **This overwrites `~/.claude/cast.db` and discards any session history written since the snapshot.** Back up the current file first (`cp ~/.claude/cast.db ~/.claude/cast.db.pre-restore`) and quit all Claude Code sessions before replacing.
+4. Confirm guarantees are live afterward: `cast integrity`.
+
+Time Machine **complements, does not replace** the lower-RPO pillars: prefer Litestream (`litestream restore`, freshest point-in-time) or a dated `db-backups/cast-db-YYYY-MM-DD.db` copy when the disk is intact; fall back to Time Machine when the local disk itself is gone.
 
 ## Running a backup manually
 
