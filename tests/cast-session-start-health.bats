@@ -36,7 +36,7 @@ EOF
 # one failing job
 echo "-	0	com.cast.backup"
 echo "-	127	com.cast.cron-meeting-postnotes"
-echo "1665	0	com.cast.mlx-server"
+echo "1665	0	com.cast.example-daemon"
 EOF
   chmod +x "${STUB_DIR}/launchctl-failing.sh"
 

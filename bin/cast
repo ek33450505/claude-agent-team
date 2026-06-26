@@ -151,6 +151,7 @@ Subcommands:
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
+  ${C_BOLD}cheap${C_RESET}     [status|config|check]         Local cheap-mode session via ccr + Ollama
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
   ${C_BOLD}files${C_RESET}                              File event tracking and analytics
   ${C_BOLD}batch${C_RESET}                              Batch dispatch orchestration
@@ -2419,6 +2420,22 @@ PYEOF
     fi
   fi
 
+  # ccr local-routing (cast cheap) — advisory; never blocks overall_ok
+  local _ccr_cfg="${CAST_CCR_CONFIG:-$HOME/.claude-code-router/config.json}"
+  if command -v ccr >/dev/null 2>&1 || [[ -f "$_ccr_cfg" ]]; then
+    if [[ -f "$_ccr_cfg" ]]; then
+      if grep -Eq 'mlx-local|:8080' "$_ccr_cfg" 2>/dev/null; then
+        printf "%b ccr routing: config still targets the retired mlx-server — repair: cast cheap config\n" "$WARN"
+      elif grep -Eq '"[A-Za-z0-9._/-]+:cloud"' "$_ccr_cfg" 2>/dev/null; then
+        printf "%b ccr routing: config targets a :cloud model (leaves the machine) — review %s\n" "$WARN" "$_ccr_cfg"
+      else
+        printf "%b ccr routing: local config present (cast cheap)\n" "$OK"
+      fi
+    else
+      printf "%b ccr installed; no CAST routing config yet (run: cast cheap config)\n" "$INFO"
+    fi
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
@@ -3429,6 +3446,18 @@ _cmd_dash() {
 }
 
 # ── Subcommand: routines ─────────────────────────────────────────────────────
+_cmd_cheap() {
+  local cheap_script="${CAST_SCRIPTS_DIR}/cast-cheap.sh"
+  if [ ! -f "$cheap_script" ]; then
+    cheap_script="${CAST_REPO_DIR}/scripts/cast-cheap.sh"
+  fi
+  if [ ! -f "$cheap_script" ]; then
+    _error "cast-cheap.sh not found. Run: bash install.sh"
+    exit 1
+  fi
+  bash "$cheap_script" "$@"
+}
+
 _cmd_routines() {
   local routines_script="${CAST_SCRIPTS_DIR}/cast-db-routines.py"
   if [ ! -f "$routines_script" ]; then
@@ -3910,6 +3939,7 @@ case "$SUBCOMMAND" in
   clean)                _cmd_clean "$@" ;;
   dash)                 _cmd_dash "$@" ;;
   install-completions)  _cmd_install_completions "$@" ;;
+  cheap)                _cmd_cheap "$@" ;;
   routines)             _cmd_routines "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
   files)                _cmd_files "$@" ;;

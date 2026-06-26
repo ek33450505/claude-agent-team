@@ -6,10 +6,9 @@ agent: researcher
 prompt_template: |
   Triage unread Gmail messages and draft replies for starred items.
 
-  Step 1 — Fetch unread threads (Gmail MCP primary):
+  Step 1 — Fetch unread threads (Gmail MCP):
   Search for unread threads using mcp__claude_ai_Gmail__search_threads with query
-  "is:unread". If the Gmail MCP is unavailable, fall back to the MS365 MCP equivalent
-  (mcp__ms365__list-messages with $filter=isRead eq false on the inbox folder).
+  "is:unread".
 
   Step 2 — Categorize each thread into one of four buckets:
   - URGENT: requires action within 24 hours (e.g. meeting requests, deadlines, escalations)
@@ -18,9 +17,8 @@ prompt_template: |
   - NEWSLETTER: automated digests, marketing, or subscription content
 
   Step 3 — Draft replies for starred items:
-  For any thread that is starred (Gmail) or flagged (MS365), draft a concise,
-  professional reply using the Gmail MCP draft API
-  (mcp__claude_ai_Gmail__create_draft) or MS365 equivalent. Include a note in the
+  For any thread that is starred, draft a concise, professional reply using the
+  Gmail MCP draft API (mcp__claude_ai_Gmail__create_draft). Include a note in the
   output summary listing which drafts were created.
 
   Step 4 — Write a triage summary to {{routine_output_path}}:
@@ -28,8 +26,8 @@ prompt_template: |
   the sender, subject, and a one-sentence description of the required action or topic.
   Append a "Drafts Created" section at the end listing any draft replies generated.
 
-  If both MCP servers are unavailable, exit gracefully with a message explaining
-  how to wire the Gmail MCP or MS365 MCP before re-triggering this routine.
+  If the Gmail MCP is unavailable, exit gracefully with a message explaining
+  how to wire the Gmail MCP before re-triggering this routine.
 
 output_dir: "~/.claude/routines-output/email-triage"
 enabled: true
@@ -37,19 +35,11 @@ mcp_required:
   - claude_ai_Gmail
 notes: |
   Primary MCP: claude_ai_Gmail (Gmail API via MCP).
-  Fallback MCP: ms365 (Microsoft Graph mail API).
 
   The mcp_required pre-flight checks for 'claude_ai_Gmail'. If that MCP is absent,
-  set CAST_ROUTINE_SKIP_MCP_CHECK=1 to bypass the check and let the prompt fall
-  through to the MS365 MCP (if wired):
+  set CAST_ROUTINE_SKIP_MCP_CHECK=1 to bypass the check:
 
     CAST_ROUTINE_SKIP_MCP_CHECK=1 cast routines trigger email-triage
 
   First failed run after install is expected — it signals "wire the MCP, then
-  re-trigger." Configure Gmail MCP in ~/.claude/settings.json mcpServers, or wire
-  MS365 MCP for work accounts.
-
-  Gmail webhook trigger (real-time inbox push) is deferred to v8. This routine is
-  manual-only for now. Trigger at any time with:
-
-    cast routines trigger email-triage
+  re-trigger." Configure the Gmail MCP in ~/.claude/settings.json mcpServers.

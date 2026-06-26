@@ -366,6 +366,22 @@ if [ -d "$SCRIPT_DIR/config" ]; then
     done
 fi
 
+# --- Install ccr (claude-code-router) local-routing config (skip-if-exists) ---
+# First-class local cheap-mode (cast cheap) routes via ccr -> Ollama. Deploy a
+# working CAST template only if the user has no ccr config yet; never clobber a
+# user-customized router config (repair with: cast cheap config).
+if [ -f "$SCRIPT_DIR/config/cast-ccr-config.json" ]; then
+    CCR_DIR="$HOME/.claude-code-router"
+    CCR_DEST="$CCR_DIR/config.json"
+    if [ -f "$CCR_DEST" ]; then
+        info "  Skipped (exists): ccr config ($CCR_DEST) — repair with: cast cheap config"
+    else
+        mkdir -p "$CCR_DIR"
+        cp "$SCRIPT_DIR/config/cast-ccr-config.json" "$CCR_DEST"
+        success "  Installed: ccr local-routing config -> $CCR_DEST"
+    fi
+fi
+
 # --- Seed permission-rules.json ---
 if [ -f "$SCRIPT_DIR/cast/permission-rules.json" ]; then
     mkdir -p "$CLAUDE_DIR/cast"
@@ -503,6 +519,76 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         else
             warn "  launchctl load failed for $PLIST_DEST — verify manually"
         fi
+    fi
+
+    # Install cast-abandon-stale-runs.plist — nightly stale agent_runs cleanup (04:00)
+    if [ -f "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.abandon-stale-runs.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.abandon-stale-runs)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-maintenance.plist — daily maintenance sweep (03:47)
+    if [ -f "$SCRIPT_DIR/macos/cast-maintenance.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.cast-maintenance.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-maintenance.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.cast-maintenance)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-db-backup.plist — daily cast.db backup to off-radius dir (02:00)
+    if [ -f "$SCRIPT_DIR/macos/cast-db-backup.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.db-backup.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-db-backup.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.db-backup)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-db-prune.plist — daily cast.db retention prune (03:30)
+    if [ -f "$SCRIPT_DIR/macos/cast-db-prune.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.db-prune.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-db-prune.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.db-prune)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Install cast-tidy.plist — daily cast tidy housekeeping (03:00)
+    if [ -f "$SCRIPT_DIR/macos/cast-tidy.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.tidy.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-tidy.plist" > "$PLIST_DEST"
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        if launchctl load "$PLIST_DEST" 2>/dev/null; then
+            success "  Installed: $PLIST_DEST (com.cast.tidy)"
+        else
+            warn "  launchctl load failed for $PLIST_DEST — verify manually"
+        fi
+    fi
+
+    # Retire com.cast.mlx-server (dead local-model-routing daemon, removed v9 A6).
+    # Idempotently remove any stale plist left by the pre-retirement setup; ccr now
+    # routes to Ollama directly (see config/cast-ccr-config.json).
+    _mlx_plist_dest="$LAUNCH_AGENTS_DIR/com.cast.mlx-server.plist"
+    if [ -f "$_mlx_plist_dest" ]; then
+        launchctl unload "$_mlx_plist_dest" 2>/dev/null || true
+        rm -f "$_mlx_plist_dest"
+        info "  Removed retired daemon plist: $_mlx_plist_dest (com.cast.mlx-server)"
     fi
 
     # Install cast-litestream.plist — continuous DB replication daemon (opt-in).
