@@ -290,7 +290,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   cache_creation_input_tokens INTEGER,
   owns_files      TEXT,
   duration_ms     INTEGER,
-  tool_uses       INTEGER
+  tool_uses       INTEGER,
+  abandoned_at    TIMESTAMP
 );
 
 -- Routing events: structured event log
@@ -530,9 +531,13 @@ QUALITY_GATES_TABLE
   _columns_added=1
 fi
 
-# dispatch_decisions: routing telemetry (writer: cast-session-end.sh, cast-subagent-stop-hook.sh)
+# dispatch_decisions: routing telemetry. NO live writer — the orchestrate writer was removed in v9 S3
+# (3-way schema fork); each run is captured via plan_sessions instead. cast-session-end.sh only prunes
+# (DELETE) old rows; the line-534 claim of write hooks was stale. Writer deferred to the §12 P-reliability
+# packet. Declared-reserved (record-is-product — never dropped).
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "dispatch_decisions"; then
   sqlite3 "$DB_PATH" <<'DISPATCH_DECISIONS_TABLE'
+-- db-contract: reserved table=dispatch_decisions
 CREATE TABLE IF NOT EXISTS dispatch_decisions (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id      TEXT,
@@ -679,10 +684,13 @@ MEM_CONSOLIDATION_TABLE
   _columns_added=1
 fi
 
-# archived_memories: low-importance memories moved out of agent_memories (writer: cast-memory-consolidate.py).
-# Mirrors agent_memories columns + archived_at; the writer copies whatever columns intersect.
+# archived_memories: low-importance memories moved out of agent_memories. Writer cast-memory-consolidate.py
+# EXISTS but is DORMANT (0 rows) and builds a dynamic PRAGMA-derived column list the db-contract checker
+# cannot see statically. Part of the dead consolidate/decay feedback layer slated for §12 P-reliability
+# revival. Declared-reserved (record-is-product — never dropped). Mirrors agent_memories columns + archived_at.
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "archived_memories"; then
   sqlite3 "$DB_PATH" <<'ARCHIVED_MEMORIES_TABLE'
+-- db-contract: reserved table=archived_memories
 CREATE TABLE IF NOT EXISTS archived_memories (
   id          INTEGER PRIMARY KEY,
   agent       TEXT,
@@ -1038,6 +1046,7 @@ fi
 # schema here so the table is a known/owned surface (not a db-contract safe-drop phantom).
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "attestations"; then
   sqlite3 "$DB_PATH" <<'ATTESTATIONS_TABLE'
+-- db-contract: external-writer table=attestations source=attest
 CREATE TABLE IF NOT EXISTS attestations (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_key   TEXT,

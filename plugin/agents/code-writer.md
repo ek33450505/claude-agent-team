@@ -135,8 +135,7 @@ Schema: `schemas/agent-status.json`. Validator: `scripts/cast-validate-status.py
 > with an Opus advisor in a single API call. This is currently API-only and not available
 > through Claude Code's Agent tool. When CAST moves to custom API pipelines, code-writer
 > should be configured with Opus advisory for complex architectural decisions, giving
-> near-Opus quality at Sonnet cost. Track: `schemas/routing-event.schema.json` includes
-> a `dispatch_backend` field to distinguish dispatch mechanisms.
+> near-Opus quality at Sonnet cost.
 
 ## Response Budget
 Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Cap file reads at 200 lines. Use `git --no-pager` on log/diff/show. Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.

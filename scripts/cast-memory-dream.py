@@ -113,6 +113,12 @@ RELATIVE_DATE_RE = re.compile(
 # Path reference pattern (mirrored from cast-memory-validate.py)
 PATH_REGEX = re.compile(r'(?:^|[\s(\'"](/[^\s\'")\]]+))', re.MULTILINE)
 
+# Claude Code silently only partially loads MEMORY.md when it exceeds the native
+# auto-load limit of ~24.4 KB (24576 bytes). We enforce a hard 23000-byte budget
+# for the generated index, leaving ~1.4 KB of headroom for file-system encoding
+# variance and Claude Code's internal framing overhead.
+MEMORY_INDEX_MAX_BYTES = 23000
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Frontmatter parsing (stdlib only, no yaml)
@@ -609,25 +615,18 @@ def phase_consolidate(mem_files, signals, stale_paths, contradiction_policy,
 def _build_memory_index(candidates):
     """
     Rebuild MEMORY.md content from candidate files.
-    Groups by frontmatter 'type'. Caps at 200 lines.
+
+    Groups by frontmatter 'type' in SECTION_ORDER priority. Enforces a hard
+    MEMORY_INDEX_MAX_BYTES byte budget so the file stays within Claude Code's
+    native auto-load limit (~24.4 KB). When over budget, lowest-priority entries
+    (feedback → reference → project → goals → user, last-added-first within each
+    section) are dropped until the encoded output fits. A footer is emitted when
+    any entries are spilled, informing readers that the FTS memory router serves
+    spilled content per-prompt.
+
+    Pure and deterministic — never raises.
     """
     SECTION_ORDER = ['user', 'goals', 'project', 'reference', 'feedback']
-    groups = {s: [] for s in SECTION_ORDER}
-    other = []
-
-    for c in candidates:
-        fm = c['frontmatter']
-        name = fm.get('name', os.path.splitext(c['filename'])[0])
-        description = fm.get('description', '')
-        mem_type = fm.get('type', '').lower()
-        fname = c['filename']
-        entry = f'- [{name}]({fname}) — {description}'
-        if mem_type in groups:
-            groups[mem_type].append(entry)
-        else:
-            other.append(entry)
-
-    lines = ['# CAST Project Memory\n', '\n']
     section_labels = {
         'user': '## User',
         'goals': '## Goals',
@@ -635,26 +634,79 @@ def _build_memory_index(candidates):
         'reference': '## References',
         'feedback': '## Feedback',
     }
-    for sec in SECTION_ORDER:
-        entries = groups[sec]
-        if entries:
-            lines.append(f'{section_labels[sec]}\n\n')
-            for e in entries:
-                lines.append(f'{e}\n')
-            lines.append('\n')
 
-    if other:
-        lines.append('## Other\n\n')
-        for e in other:
-            lines.append(f'{e}\n')
+    # Build a flat ordered list: (priority_rank, section, entry_line)
+    # Lower rank = higher priority = kept last when spilling from the tail.
+    all_entries = []  # List[Tuple[int, str, str]]
+    groups = {s: [] for s in SECTION_ORDER}
+    other = []
 
-    # Cap at 200 lines
-    if len(lines) > 200:
-        hidden = len(lines) - 199
-        lines = lines[:199]
-        lines.append(f'... {hidden} more entries hidden\n')
+    for c in candidates:
+        fm = c.get('frontmatter', {})
+        fname = c.get('filename', '')
+        name = fm.get('name', os.path.splitext(fname)[0] if fname else '')
+        description = fm.get('description', '')
+        mem_type = fm.get('type', '').lower()
+        entry = f'- [{name}]({fname}) — {description}'
+        if mem_type in groups:
+            groups[mem_type].append(entry)
+        else:
+            other.append(entry)
 
-    return ''.join(lines)
+    for rank, sec in enumerate(SECTION_ORDER):
+        for entry in groups[sec]:
+            all_entries.append((rank, sec, entry))
+    for entry in other:
+        all_entries.append((len(SECTION_ORDER), 'other', entry))
+
+    total_entries = len(all_entries)
+
+    def _render(included, omitted_count):
+        """Render the MEMORY.md index from the included entries list."""
+        sec_map = {s: [] for s in SECTION_ORDER}
+        sec_map['other'] = []
+        for _rank, sec, entry in included:
+            sec_map[sec].append(entry)
+
+        parts = ['# CAST Project Memory\n\n']
+        for sec in SECTION_ORDER:
+            if sec_map[sec]:
+                parts.append(f'{section_labels[sec]}\n\n')
+                for e in sec_map[sec]:
+                    parts.append(f'{e}\n')
+                parts.append('\n')
+        if sec_map['other']:
+            parts.append('## Other\n\n')
+            for e in sec_map['other']:
+                parts.append(f'{e}\n')
+
+        if omitted_count > 0:
+            parts.append(
+                f'\n> {omitted_count} lower-priority entries omitted to fit the '
+                f'{MEMORY_INDEX_MAX_BYTES}-byte auto-load budget — all remain on disk '
+                f'and are recalled per-prompt by the FTS memory router.\n'
+            )
+
+        return ''.join(parts)
+
+    # Fast path: all entries fit within the budget
+    result = _render(all_entries, 0)
+    if len(result.encode('utf-8')) <= MEMORY_INDEX_MAX_BYTES:
+        return result
+
+    # Over budget: drop from the lowest-priority tail one entry at a time until
+    # the rendered output fits. The list is ordered highest→lowest priority, so
+    # pop() always removes the least important remaining entry.
+    included = list(all_entries)
+    while included:
+        omitted = total_entries - len(included)
+        result = _render(included, omitted)
+        if len(result.encode('utf-8')) <= MEMORY_INDEX_MAX_BYTES:
+            return result
+        included.pop()
+
+    # Edge case: even an empty index with the footer should fit (header ~25B + footer ~175B)
+    return _render([], total_entries)
 
 
 def phase_prune(candidates, review_entries, changes_log,

@@ -64,18 +64,45 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
-# ── Test 3: ratchet exits 1 when baseline is missing known violations ────────
+# ── Test 3: ratchet flags a NEW contradiction absent from the baseline ───────
 
-@test "ratchet exits 1 when baseline does not contain known violations" {
-  # An empty baseline treats all violations found by the scan as "new".
-  # Even without the desktop (UNCHECKED mode), contradictions and
-  # safe-drop-candidates are found → exit 1.
+@test "ratchet flags a new contradiction absent from the baseline (exit-1 path)" {
+  # The live schema is clean (S1–S6 drove violations to 0), so the subprocess
+  # --check cannot reach the exit-1 path naturally without deliberately corrupting
+  # the repo schema. Instead, drive the ratchet comparison directly with a SYNTHETIC
+  # contradiction: check_against_baseline() must report it as a NEW violation (the
+  # condition on which the caller exits 1). Deterministic and schema-independent.
   local EMPTY_BASELINE="$BATS_TEST_TMPDIR/empty-baseline.json"
   printf '{"schema_version":"1.0","contradictions":[],"safe_drop_candidates":[]}\n' \
     > "$EMPTY_BASELINE"
 
-  run python3 "$CONTRACT_SCRIPT" --check --baseline "$EMPTY_BASELINE"
-  [ "$status" -eq 1 ]
+  run python3 - "$CONTRACT_SCRIPT" "$EMPTY_BASELINE" <<'PY'
+import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("cdc", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+sys.modules["cdc"] = m
+spec.loader.exec_module(m)
+# declared_in_init=True + migration_dropped=True → classification == "CONTRADICTION"
+# (highest-priority rule in cast-db-contract.py's classification property).
+c = m.ColumnContract(
+    table="synthetic_t", column="synthetic_c",
+    declared_in_init=True, migration_added=False, migration_dropped=True,
+)
+assert c.classification == "CONTRADICTION", f"setup error: {c.classification}"
+empty = Path(sys.argv[2])
+# Empty baseline → the synthetic contradiction is NEW → exit-1 condition holds.
+new_contras, new_drops, _ = m.check_against_baseline([c], empty, desktop_found=False)
+assert len(new_contras) == 1, f"expected 1 new contradiction, got {new_contras}"
+# Symmetric: when the SAME contradiction is already baselined, it is NOT re-flagged.
+seeded = empty.parent / "seeded.json"
+seeded.write_text('{"schema_version":"1.0","contradictions":[{"table":"synthetic_t","column":"synthetic_c"}],"safe_drop_candidates":[]}')
+new2, _, _ = m.check_against_baseline([c], seeded, desktop_found=False)
+assert len(new2) == 0, f"baselined contradiction must not re-flag, got {new2}"
+print("RATCHET_OK")
+PY
+  assert_success
+  assert_output --partial RATCHET_OK
 }
 
 # ── Test 4: desktop-absent --check exits 0 (safe-drop ratchet skipped) ──────

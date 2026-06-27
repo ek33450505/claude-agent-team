@@ -22,7 +22,6 @@
 | `cast-precompact-memory-save.sh` | PreCompact | exit 0 | **(b) OBS** | YES |
 | `cast-response-completeness-hook.sh` | SubagentStop | exit 0 | **(b) OBS** | YES |
 | `cast-subagent-stop-hook.sh` | SubagentStop | exit 0 | **(b) OBS** | YES |
-| `cast-code-ref-guard.sh` | (CLI only — see below) | exit 0 | **(b) OBS** | NOT WIRED |
 | `post-tool-hook.sh` | PostToolUse (Write/Edit/Agent/Bash) | exit 0 (delegates to cast-post-tool.py) | **(c) ROUTING** | YES |
 | `cast-budget-alert.sh` | PostToolUse | exit 0 | **(b) OBS** | YES |
 | `cast-tool-failure-hook.sh` | PostToolUseFailure | exit 0 | **(b) OBS** | YES |
@@ -52,4 +51,3 @@
 
 - **`bin/cast` has no hook runner.** The roadmap item "remove custom hook runner from bin/cast" is a confirmed no-op. All hooks are wired natively via `managed-settings.d/*.json` fragments.
 - **No gates to retire.** All wired gates are correct and non-overlapping. The roadmap item "retire 5-8 quality gates" found no candidates.
-- **`cast-code-ref-guard.sh` is CLI-only.** Called as `echo "$output" | bash scripts/cast-code-ref-guard.sh`. Not a hook; intentionally not wired. The header comment in the script documents this explicitly.

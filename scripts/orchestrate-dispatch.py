@@ -2,7 +2,7 @@
 """orchestrate-dispatch.py — CLI backend for the /orchestrate skill.
 
 Subcommands:
-  log-dispatch        Log backend + plan session to cast.db (Step 2)
+  log-dispatch        Log plan session to cast.db (Step 2)
   log-quality-gate    Log agent contract validation result (Step 4)
   recent-status       Return fresh status from agent status file (Step 4 fallback)
 
@@ -43,8 +43,8 @@ def _session_id(env_var: str = 'CAST_SESSION_ID') -> str:
 # Subcommand: log-dispatch
 # ---------------------------------------------------------------------------
 
-def cmd_log_dispatch(backend: str, plan: str) -> None:
-    """Write dispatch_decisions and plan_sessions rows (Step 2 of orchestrate)."""
+def cmd_log_dispatch(plan: str) -> None:
+    """Write plan_sessions row (Step 2 of orchestrate)."""
     _setup_cast_db()
     try:
         from cast_db import db_write, db_execute  # type: ignore
@@ -55,25 +55,7 @@ def cmd_log_dispatch(backend: str, plan: str) -> None:
     session_id = _session_id()
     now = _now_utc()
 
-    try:
-        db_execute('''
-            CREATE TABLE IF NOT EXISTS dispatch_decisions (
-                id               TEXT PRIMARY KEY,
-                session_id       TEXT,
-                timestamp        TEXT,
-                dispatch_backend TEXT,
-                plan_file        TEXT
-            )
-        ''')
-        db_write('dispatch_decisions', {
-            'id': os.urandom(8).hex(),
-            'session_id': session_id,
-            'timestamp': now,
-            'dispatch_backend': backend,
-            'plan_file': plan,
-        })
-    except Exception as e:
-        sys.stderr.write(f'[orchestrate-dispatch] dispatch_decisions write failed: {e}\n')
+    # dispatch_decisions write removed (S3): 3-way schema fork, run captured via plan_sessions; full reconcile deferred to S4
 
     try:
         db_execute('''
@@ -172,22 +154,6 @@ def cmd_log_quality_gate(
 
 
 # ---------------------------------------------------------------------------
-# Subcommand: get-dispatch-backend
-# ---------------------------------------------------------------------------
-
-def cmd_get_dispatch_backend() -> None:
-    """Read ~/.claude/config/cast-cli.json and print dispatch_backend (default: 'cast')."""
-    config_path = Path.home() / '.claude' / 'config' / 'cast-cli.json'
-    try:
-        with open(config_path) as f:
-            d = json.load(f)
-        print(d.get('dispatch_backend', 'cast'))
-    except Exception:
-        print('cast')
-    sys.exit(0)
-
-
-# ---------------------------------------------------------------------------
 # Subcommand: recent-status
 # ---------------------------------------------------------------------------
 
@@ -234,8 +200,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     # log-dispatch
-    p_ld = subparsers.add_parser('log-dispatch', help='Log dispatch_decisions + plan_sessions')
-    p_ld.add_argument('--backend', required=True, help='dispatch_backend value')
+    p_ld = subparsers.add_parser('log-dispatch', help='Log plan_sessions row')
     p_ld.add_argument('--plan', required=True, help='plan file path')
 
     # log-quality-gate
@@ -246,12 +211,6 @@ def main() -> None:
     p_qg.add_argument('--contract-passed', required=True, dest='contract_passed')
     p_qg.add_argument('--retry-count', required=True, dest='retry_count')
 
-    # get-dispatch-backend
-    subparsers.add_parser(
-        'get-dispatch-backend',
-        help='Print dispatch_backend from cast-cli.json (default: cast)',
-    )
-
     # recent-status
     p_rs = subparsers.add_parser('recent-status', help='Return fresh status from status file')
     p_rs.add_argument('--agent', required=True)
@@ -261,10 +220,8 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        if args.command == 'get-dispatch-backend':
-            cmd_get_dispatch_backend()
-        elif args.command == 'log-dispatch':
-            cmd_log_dispatch(args.backend, args.plan)
+        if args.command == 'log-dispatch':
+            cmd_log_dispatch(args.plan)
         elif args.command == 'log-quality-gate':
             cmd_log_quality_gate(
                 args.batch_id,

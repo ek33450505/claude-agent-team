@@ -5,7 +5,6 @@ load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CAST_BATCH_DISPATCH_SH="$REPO_DIR/scripts/cast-batch-dispatch.sh"
-CAST_BATCH_STATUS_SH="$REPO_DIR/scripts/cast-batch-status.sh"
 
 # ---------------------------------------------------------------------------
 # Setup / Teardown
@@ -112,52 +111,4 @@ except Exception as e:
   print(f"ERROR: {e}")
   sys.exit(1)
 PYEOF
-}
-
-# ---------------------------------------------------------------------------
-# Tests for cast-batch-status.sh
-# ---------------------------------------------------------------------------
-
-@test "status: with valid batch_id, returns tab-separated counts" {
-  # Set up mock response for status call
-  cat > "${BATS_TMPDIR}/curl-response.json" <<'RESPONSE'
-{"id":"msgbatch_test123","type":"message_batch","processing_status":"in_progress","request_counts":{"processing":1,"succeeded":0,"errored":0,"canceled":0},"created_at":"2024-01-15T10:30:00Z","expires_at":"2024-01-16T10:30:00Z"}
-RESPONSE
-
-  run bash "$CAST_BATCH_STATUS_SH" msgbatch_test123
-  assert_success
-  assert_output --partial "in_progress"
-}
-
-@test "status: with ended batch, includes results_url in output" {
-  cat > "${BATS_TMPDIR}/curl-response.json" <<'RESPONSE'
-{"id":"msgbatch_test456","type":"message_batch","processing_status":"ended","request_counts":{"processing":0,"succeeded":1,"errored":0,"canceled":0},"results_url":"https://storage.googleapis.com/...","created_at":"2024-01-15T10:30:00Z","expires_at":"2024-01-16T10:30:00Z"}
-RESPONSE
-
-  run bash "$CAST_BATCH_STATUS_SH" msgbatch_test456
-  assert_success
-  assert_output --partial "ended"
-  assert_output --partial "https://storage.googleapis.com"
-}
-
-@test "status: missing ANTHROPIC_API_KEY exits 1" {
-  unset ANTHROPIC_API_KEY
-  run bash "$CAST_BATCH_STATUS_SH" msgbatch_test123
-  assert_failure
-  assert_output --partial "ANTHROPIC_API_KEY environment variable not set"
-}
-
-@test "status: missing batch_id exits 1" {
-  run bash "$CAST_BATCH_STATUS_SH"
-  assert_failure
-}
-
-@test "status: API error response exits 1 with error to stderr" {
-  # Set mock to return invalid JSON
-  cat > "${BATS_TMPDIR}/curl-response.json" <<'RESPONSE'
-{"error":{"type":"invalid_request_error","message":"Batch not found"}}
-RESPONSE
-
-  run bash "$CAST_BATCH_STATUS_SH" msgbatch_invalid
-  assert_failure
 }

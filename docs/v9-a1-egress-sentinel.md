@@ -100,7 +100,7 @@ Starting classification (Ed: confirm/extend):
   4-surface classification, per-server MCP map, credential-path globbing,
   coarse bash network-command name-matching, egress-ledger recording,
   advisory/ask/deny output plumbing.
-- `scripts/cast-egress-hook.sh` — thin PreToolUse wrapper.
+- `scripts/cast-pretool-dispatch.py` — the unified PreToolUse dispatcher that runs the egress sentinel (the former thin `cast-egress-hook.sh` shim was folded into it; removed v9 S5).
 - `config/egress-policy.json` — starter policy data.
 - Hook registration in `managed-settings.d/25-hooks-security.json` (inert until
   `bash install.sh`; **advisory by default**).
