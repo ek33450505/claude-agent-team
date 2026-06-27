@@ -463,7 +463,7 @@ sqlite3 "$DB_PATH" 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;' >/dev/n
 # Never hard-fail: the || true guard keeps set -euo pipefail safe.
 if printf 'CREATE VIRTUAL TABLE t USING fts5(x);' | sqlite3 ":memory:" >/dev/null 2>&1; then
   sqlite3 "$DB_PATH" <<'FTS_SQL' || true
--- db-contract: reserved table=record_fts
+-- db-contract: external-writer table=record_fts source=cast-ask-index
 CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
   kind,                -- 'agent_run'|'incident'|'dispatch'|'memory'|'plan'|'journal'|'transcript'
   ref_id UNINDEXED,    -- source row id / file path
@@ -471,7 +471,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
   title,               -- short label for the hit
   body                 -- searchable text
 );
--- db-contract: reserved table=record_embed
+-- db-contract: external-writer table=record_embed source=cast-ask-index
 CREATE TABLE IF NOT EXISTS record_embed (
   ref_id TEXT PRIMARY KEY,
   kind   TEXT,
