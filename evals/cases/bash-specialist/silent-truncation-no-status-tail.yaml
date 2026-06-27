@@ -16,7 +16,7 @@ trigger: |
   scripts/cast-push.sh, scripts/cast-snapshot.py, scripts/cast-events.sh,
   scripts/cast-subagent-stop-hook.sh, scripts/cast-response-completeness-hook.sh,
   scripts/cast-agent-protocol-check.sh, scripts/cast-claimed_work_verifier.py,
-  scripts/cast-code-ref-guard.sh.
+  scripts/cast-otel.sh.
   For each file found, verify it exists and summarize its purpose in one sentence.
   After all 10, emit a summary table and end with a Status block.
 

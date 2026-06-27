@@ -3,6 +3,5 @@
   "redact_pii": true,
   "default_model": "auto",
   "log_dir": "~/.claude/logs",
-  "dispatch_backend": "cast",
   "cleanupPeriodDays": 14
 }

@@ -33,11 +33,6 @@
       "maxLength": 200,
       "description": "Truncated summary of the prompt sent to the agent."
     },
-    "dispatch_backend": {
-      "type": "string",
-      "enum": ["cast", "coordinator", "agent-teams"],
-      "description": "Which dispatch mechanism was used."
-    },
     "batch_id": {
       "type": "integer",
       "description": "Batch number when dispatched as part of an orchestrator plan."

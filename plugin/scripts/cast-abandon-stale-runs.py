@@ -81,7 +81,7 @@ def main() -> None:
         # against ISO-formatted started_at values (YYYY-MM-DDTHH:MM:SSZ) is
         # lexicographically correct.  SQLite's datetime('now') produces
         # 'YYYY-MM-DD HH:MM:SS' (space separator, no Z) which does NOT sort
-        # correctly against ISO-8601 strings and would break cast-db-verify C5/C7.
+        # correctly against ISO-8601 strings.
         cursor = conn.execute(
             '''
             SELECT id, agent, started_at

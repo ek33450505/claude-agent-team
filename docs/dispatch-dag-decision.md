@@ -19,6 +19,8 @@ dispatch_backend TEXT
 plan_file TEXT
 ```
 
+> **Superseded (v9 S6):** the `dispatch_backend` selection concept was removed — native Agent Teams supersedes coordinator-mode. This block is retained as a historical record.
+
 Sample rows:
 - One row per `/orchestrate` plan invocation (e.g., `2026-05-04-live-work-log-stream.md`)
 - Written by the `/orchestrate` skill once per plan dispatch
