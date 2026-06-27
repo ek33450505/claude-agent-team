@@ -286,6 +286,7 @@ SOURCES: List[Dict[str, Any]] = [
         "ts_col": "COALESCE(updated_at, created_at)",
         "title_expr": "name",
         "body_parts": ["name", "description", "content"],
+        "meta_cols": {"agent": "agent", "project": "project", "mtype": "type"},
     },
     {
         "kind": "plan",
@@ -336,14 +337,26 @@ def _get_high_water(kind: str) -> Optional[str]:
     return None
 
 
-def _upsert_row(kind: str, ref_id: str, ts: str, title: str, body: str) -> None:
-    """Delete-then-insert to keep record_fts deduplicated on (kind, ref_id)."""
+def _record_fts_columns() -> set:
+    """Return the set of record_fts column names, or empty set if the table is absent."""
+    rows = cast_db.db_query("PRAGMA table_info(record_fts)", ())
+    if not rows:
+        return set()
+    return {str(_row_to_dict(r).get("name") or "") for r in rows}
+
+
+def _upsert_row(kind: str, ref_id: str, ts: str, title: str, body: str,
+                agent: str = "", project: str = "", mtype: str = "") -> None:
+    """Delete-then-insert to keep record_fts deduplicated on (kind, ref_id).
+
+    agent/project/mtype are UNINDEXED filter columns (populated for memory rows; empty otherwise).
+    """
     cast_db.db_execute(
         "DELETE FROM record_fts WHERE kind = ? AND ref_id = ?", (kind, ref_id)
     )
     cast_db.db_execute(
-        "INSERT INTO record_fts(kind, ref_id, ts, title, body) VALUES (?, ?, ?, ?, ?)",
-        (kind, ref_id, ts, title, body),
+        "INSERT INTO record_fts(kind, ref_id, ts, title, body, agent, project, mtype) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (kind, ref_id, ts, title, body, agent, project, mtype),
     )
 
 
@@ -369,16 +382,25 @@ def _index_source(src: Dict[str, Any], rebuild: bool) -> int:
     for _col in body_parts:
         cast_db._validate_identifier(_col)
 
+    meta_cols: Dict[str, str] = src.get("meta_cols", {})
+    for _fts_col, _src_col in meta_cols.items():
+        cast_db._validate_identifier(_fts_col)
+        cast_db._validate_identifier(_src_col)
+
     # Build SELECT — ts/title evaluated in SQL; body parts capped at the SQL level via
     # SUBSTR so large rows (e.g. agent_runs.response) are never fully loaded into memory.
     body_selects = ", ".join(
         f"CAST(SUBSTR({col}, 1, {MAX_BODY + 1}) AS TEXT) AS {col}" for col in body_parts
     )
+    meta_selects = "".join(
+        f", CAST({_src_col} AS TEXT) AS {_fts_col}" for _fts_col, _src_col in meta_cols.items()
+    )
     select_sql = (
         f"SELECT CAST({ref_id_col} AS TEXT) AS ref_id, "
         f"({ts_col}) AS ts, "
         f"({title_expr}) AS title, "
-        f"{body_selects} "
+        f"{body_selects}"
+        f"{meta_selects} "
         f"FROM {table}"
     )
 
@@ -410,7 +432,12 @@ def _index_source(src: Dict[str, Any], rebuild: bool) -> int:
         if not body_val.strip():
             continue  # skip rows whose body is entirely NULL/empty after concat
 
-        _upsert_row(kind, ref_id, ts_val, title_val, body_val)
+        _upsert_row(
+            kind, ref_id, ts_val, title_val, body_val,
+            agent=str(row.get("agent") or ""),
+            project=str(row.get("project") or ""),
+            mtype=str(row.get("mtype") or ""),
+        )
         count += 1
 
     return count
@@ -565,6 +592,19 @@ def main() -> int:
     # Apply --db override before cast_db is used (CAST_DB_PATH read lazily)
     if args.db:
         os.environ["CAST_DB_PATH"] = args.db
+
+    # Schema-freshness guard: if record_fts EXISTS but lacks the U6 filter columns, the schema is
+    # stale (cast-db-init.sh / install.sh hasn't upgraded it). Fail honestly instead of printing
+    # false "indexed N" counts while every 8-column INSERT silently no-ops.
+    _EXPECTED_FTS_COLS = {"kind", "ref_id", "ts", "title", "body", "agent", "project", "mtype"}
+    _fts_cols = _record_fts_columns()
+    if _fts_cols and not _EXPECTED_FTS_COLS.issubset(_fts_cols):
+        print(
+            "cast-ask-index: record_fts schema is stale (missing filter columns). "
+            "Run 'bash scripts/cast-db-init.sh' (or install.sh) to upgrade, then re-run with --rebuild.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Filter both SOURCES and FILE_SOURCES by --kind
     db_sources = SOURCES

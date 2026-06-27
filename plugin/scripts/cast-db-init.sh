@@ -466,10 +466,13 @@ if printf 'CREATE VIRTUAL TABLE t USING fts5(x);' | sqlite3 ":memory:" >/dev/nul
 -- db-contract: external-writer table=record_fts source=cast-ask-index
 CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
   kind,                -- 'agent_run'|'incident'|'dispatch'|'memory'|'plan'|'journal'|'transcript'
-  ref_id UNINDEXED,    -- source row id / file path
-  ts     UNINDEXED,    -- ISO timestamp
+  ref_id  UNINDEXED,   -- source row id / file path
+  ts      UNINDEXED,   -- ISO timestamp
   title,               -- short label for the hit
-  body                 -- searchable text
+  body,                -- searchable text
+  agent   UNINDEXED,   -- filter metadata (memory rows; empty otherwise)
+  project UNINDEXED,   -- filter metadata
+  mtype   UNINDEXED    -- filter metadata (agent_memories.type)
 );
 -- db-contract: external-writer table=record_embed source=cast-ask-index
 CREATE TABLE IF NOT EXISTS record_embed (
@@ -494,6 +497,23 @@ if sqlite3 "$DB_PATH" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "record_emb
   if [ "${_re_pk_cols:-0}" != "2" ]; then
     sqlite3 "$DB_PATH" "DROP TABLE IF EXISTS record_embed;" 2>/dev/null || true
     sqlite3 "$DB_PATH" "CREATE TABLE IF NOT EXISTS record_embed (ref_id TEXT, kind TEXT, vec BLOB, ts TEXT, PRIMARY KEY (kind, ref_id));" 2>/dev/null || true
+  fi
+fi
+
+# ===== A3 U6: record_fts filter-column self-heal =====
+# U1–U5 created record_fts with 5 columns; U6 adds agent/project/mtype filter columns. FTS5 has no
+# ALTER ADD COLUMN, so recreate when the legacy column set is detected. SAFE: record_fts is regenerable
+# (cast-ask-index.py --rebuild) — dropping it discards only the index, never source data.
+if printf 'CREATE VIRTUAL TABLE t USING fts5(x);' | sqlite3 ":memory:" >/dev/null 2>&1 \
+   && sqlite3 "$DB_PATH" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "record_fts"; then
+  if ! sqlite3 "$DB_PATH" "PRAGMA table_info(record_fts);" 2>/dev/null | grep -qw "agent"; then
+    sqlite3 "$DB_PATH" "DROP TABLE IF EXISTS record_fts;" 2>/dev/null || true
+    sqlite3 "$DB_PATH" <<'REFTS_SQL' 2>/dev/null || true
+CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
+  kind, ref_id UNINDEXED, ts UNINDEXED, title, body,
+  agent UNINDEXED, project UNINDEXED, mtype UNINDEXED
+);
+REFTS_SQL
   fi
 fi
 
