@@ -4,6 +4,8 @@
 #   sessions, agent_runs, routing_events, agent_memories
 #   swarm_sessions, teammate_runs, teammate_messages  (writers: /swarm retired v9; experimental native Agent Teams hooks re-populate these when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 — dormant otherwise)
 #   otel_metrics, otel_events  (writer: cast-otel-collector.py; native OTLP feed, opt-in OFF by default)
+#   record_fts (FTS5 full-text index over the whole record; writer: cast-ask-index — v9 A3)
+#   record_embed (semantic sidecar for vector search; writer: cast-ask-index — v9 A3)
 #
 # Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
 # Schema versioning via PRAGMA user_version (current = 8).
@@ -17,9 +19,11 @@
 # KNOWN ORGANIC SCHEMA ADDITIONS (live DB may contain unprovisionable tables):
 # These exist in deployed instances but are added by external systems or
 # sessions outside this init script, and should NOT be included here:
-#   - agent_memories_fts (FTS5 full-text search index)
+#   - agent_memories_fts (FTS5 full-text search index — organic, not provisioned here)
 #   - memory_decay_log (temporal decay tracking for memory expiry)
-#   - agent_memory_embeddings (semantic search vectors)
+#   - agent_memory_embeddings (semantic search vectors — organic, not provisioned here)
+# NOTE: record_fts and record_embed ARE deliberately provisioned here (v9 A3 additions),
+# distinct from the organic FTS tables listed above.
 # To audit live DB: sqlite3 ~/.claude/cast.db ".tables"
 #
 # Usage:
@@ -448,6 +452,36 @@ chmod 600 "$DB_PATH"
 
 # Enable WAL mode for concurrent write safety
 sqlite3 "$DB_PATH" 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;' >/dev/null 2>&1 || true
+
+# ===== A3 Ask-Your-Record: record_fts + record_embed (v9) =====
+# record_fts  = FTS5 full-text index over the whole record (agent_runs, incidents, dispatches,
+#               memories, plans, journal, transcripts).
+# record_embed = optional semantic sidecar (vector BLOBs from cast-ask-index).
+# Both tables are provisioned UNCONDITIONALLY so they reach fresh installs AND existing v8 DBs.
+# FTS5 may be absent in some sqlite3 builds — pre-flight probe; if unavailable, skip + advise.
+# 'cast ask' degrades to a LIKE path in that case (see plans/cast-v9-a3-ask-your-record.md §3.1).
+# Never hard-fail: the || true guard keeps set -euo pipefail safe.
+if printf 'CREATE VIRTUAL TABLE t USING fts5(x);' | sqlite3 ":memory:" >/dev/null 2>&1; then
+  sqlite3 "$DB_PATH" <<'FTS_SQL' || true
+-- db-contract: reserved table=record_fts
+CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
+  kind,                -- 'agent_run'|'incident'|'dispatch'|'memory'|'plan'|'journal'|'transcript'
+  ref_id UNINDEXED,    -- source row id / file path
+  ts     UNINDEXED,    -- ISO timestamp
+  title,               -- short label for the hit
+  body                 -- searchable text
+);
+-- db-contract: reserved table=record_embed
+CREATE TABLE IF NOT EXISTS record_embed (
+  ref_id TEXT PRIMARY KEY,
+  kind   TEXT,
+  vec    BLOB,
+  ts     TEXT
+);
+FTS_SQL
+else
+  echo "cast-db-init: FTS5 unavailable in this sqlite3 build — record_fts not created; 'cast ask' will use the LIKE fallback." >&2
+fi
 
 # ===== SELF-HEALING SCHEMA BLOCK (runs unconditionally on every invocation) =====
 # This block ensures critical columns exist in agent_runs, regardless of version history.
