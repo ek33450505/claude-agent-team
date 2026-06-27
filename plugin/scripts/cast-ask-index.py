@@ -17,6 +17,7 @@ Per-source failures are logged to stderr; one bad source does not abort the rest
 import argparse
 import datetime
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -27,12 +28,27 @@ from typing import Any, Callable, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cast_db  # type: ignore
 
+
+def _load_embed_module():
+    """Lazy-load cast-memory-embed.py (hyphenated filename → importlib). Returns module or None on any failure (fail-open)."""
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cast-memory-embed.py')
+        spec = importlib.util.spec_from_file_location('cast_memory_embed', path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 MAX_BODY = 4_000       # chars — bounds large DB rows
 MAX_FILE_BODY = 8_000  # chars per chunk — files are split into chunks for full-content indexing
+MAX_EMBED_INPUT = 8_000  # chars fed to the embedder (nomic context safety)
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +210,8 @@ def _derive_file_title(path: str, title_strategy: str) -> str:
     if title_strategy == 'stem':
         return stem
     if title_strategy == 'project_stem':
-        # project dirs are dash-encoded paths (Claude Code convention):
-        # /Users/foo/bar → -Users-foo-bar; use the raw encoded name as-is
+        # project dirs are dash-encoded absolute paths (Claude Code convention):
+        # the leading slash and each path separator become dashes; use the raw encoded name as-is
         project_dir = os.path.basename(os.path.dirname(path))
         return f'{project_dir} · {stem}'
     return stem
@@ -475,6 +491,54 @@ def _index_file_source(src: Dict[str, Any], rebuild: bool) -> int:
     return count
 
 
+def _embed_pending(rebuild: bool) -> int:
+    """Populate record_embed for record_fts rows lacking an embedding. Opt-in (--embed); fail-open.
+
+    Reuses cast-memory-embed.py (embed_text + pack_embedding). Ollama down / module missing →
+    embeds 0 rows, prints an advisory to stderr, returns 0 (never raises). Incremental: only rows
+    missing from record_embed, keyed on (kind, ref_id). rebuild=True clears record_embed first.
+    """
+    cme = _load_embed_module()
+    if cme is None:
+        print("embed: cast-memory-embed.py unavailable — semantic layer skipped", file=sys.stderr)
+        return 0
+
+    if rebuild:
+        cast_db.db_execute("DELETE FROM record_embed", ())
+
+    rows = cast_db.db_query(
+        "SELECT f.kind AS kind, f.ref_id AS ref_id, f.ts AS ts, f.title AS title, f.body AS body "
+        "FROM record_fts f "
+        "WHERE NOT EXISTS (SELECT 1 FROM record_embed e WHERE e.kind = f.kind AND e.ref_id = f.ref_id)",
+        (),
+    )
+    embedded = 0
+    skipped = 0
+    for raw in rows:
+        row = _row_to_dict(raw)
+        kind = str(row.get("kind") or "")
+        ref_id = str(row.get("ref_id") or "")
+        if not kind or not ref_id:
+            continue
+        ts = str(row.get("ts") or "")
+        text = (str(row.get("title") or "") + " " + str(row.get("body") or "")).strip()[:MAX_EMBED_INPUT]
+        if not text:
+            continue
+        vec = cme.embed_text(text)
+        if vec is None:
+            skipped += 1
+            continue
+        blob = cme.pack_embedding(vec)
+        cast_db.db_execute(
+            "INSERT OR REPLACE INTO record_embed(kind, ref_id, vec, ts) VALUES (?, ?, ?, ?)",
+            (kind, ref_id, blob, ts),
+        )
+        embedded += 1
+    if skipped and embedded == 0:
+        print(f"embed: 0 embedded, {skipped} skipped (Ollama unavailable?)", file=sys.stderr)
+    return embedded
+
+
 def main() -> int:
     all_kinds = [s["kind"] for s in SOURCES] + [s["kind"] for s in FILE_SOURCES]
     parser = argparse.ArgumentParser(
@@ -491,6 +555,10 @@ def main() -> int:
     parser.add_argument(
         "--db", metavar="PATH",
         help="Override CAST_DB_PATH for this run",
+    )
+    parser.add_argument(
+        "--embed", action="store_true",
+        help="Also populate record_embed (semantic sidecar) via Ollama; opt-in, fail-open if Ollama is down",
     )
     args = parser.parse_args()
 
@@ -534,6 +602,14 @@ def main() -> int:
         except Exception as exc:
             print(f"ERROR indexing {src['kind']}: {exc}", file=sys.stderr)
             exit_code = 1  # flag error but continue remaining sources
+
+    if args.embed:
+        try:
+            n_emb = _embed_pending(rebuild=args.rebuild)
+            print(f"embedded {n_emb} record_embed rows")
+        except Exception as exc:
+            print(f"ERROR embedding: {exc}", file=sys.stderr)
+            exit_code = 1
 
     return exit_code
 

@@ -473,14 +473,28 @@ CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
 );
 -- db-contract: external-writer table=record_embed source=cast-ask-index
 CREATE TABLE IF NOT EXISTS record_embed (
-  ref_id TEXT PRIMARY KEY,
+  ref_id TEXT,
   kind   TEXT,
   vec    BLOB,
-  ts     TEXT
+  ts     TEXT,
+  PRIMARY KEY (kind, ref_id)
 );
 FTS_SQL
 else
   echo "cast-db-init: FTS5 unavailable in this sqlite3 build — record_fts not created; 'cast ask' will use the LIKE fallback." >&2
+fi
+
+# ===== A3 U5: record_embed composite-PK self-heal =====
+# U1 created record_embed keyed on (ref_id) alone, but record identity is (kind, ref_id):
+# DB-source ref_ids are bare row ids that collide across kinds (agent_run#5 vs incident#5).
+# Recreate with the composite PK when the legacy single-column PK is detected. SAFE: record_embed
+# has no writer before A3 U5 (empty on every pre-U5 DB) and is regenerable (cast-ask-index.py --embed).
+if sqlite3 "$DB_PATH" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "record_embed"; then
+  _re_pk_cols=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM pragma_table_info('record_embed') WHERE pk > 0;" 2>/dev/null || echo 0)
+  if [ "${_re_pk_cols:-0}" != "2" ]; then
+    sqlite3 "$DB_PATH" "DROP TABLE IF EXISTS record_embed;" 2>/dev/null || true
+    sqlite3 "$DB_PATH" "CREATE TABLE IF NOT EXISTS record_embed (ref_id TEXT, kind TEXT, vec BLOB, ts TEXT, PRIMARY KEY (kind, ref_id));" 2>/dev/null || true
+  fi
 fi
 
 # ===== SELF-HEALING SCHEMA BLOCK (runs unconditionally on every invocation) =====

@@ -150,7 +150,7 @@ Subcommands:
   ${C_BOLD}clean${C_RESET}     [--apply] [--worktrees]   Prune stale branches (dry-run by default)
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
-  ${C_BOLD}ask${C_RESET}       "<query>" [--kind K] [--since DATE] [--limit N]  Search the full audit record via FTS5
+  ${C_BOLD}ask${C_RESET}       "<query>" [--kind K] [--since DATE] [--limit N] [--semantic]  Search the full audit record via FTS5
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
   ${C_BOLD}cheap${C_RESET}     [status|config|check]         Local cheap-mode session via ccr + Ollama
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
@@ -3755,6 +3755,7 @@ _cmd_ask() {
   local since_filter=""
   local limit=10
   local no_refresh=0
+  local semantic=0
 
   while [ "${#}" -gt 0 ]; do
     case "$1" in
@@ -3762,6 +3763,7 @@ _cmd_ask() {
       --since)      since_filter="${2:-}"; shift 2 ;;
       --limit)      limit="${2:-10}"; shift 2 ;;
       --no-refresh) no_refresh=1; shift ;;
+      --semantic)   semantic=1; shift ;;
       *)
         if [ -z "$query" ]; then query="$1"; fi
         shift
@@ -3770,7 +3772,7 @@ _cmd_ask() {
   done
 
   if [ -z "$query" ]; then
-    _error "Usage: cast ask \"<query>\" [--kind K] [--since YYYY-MM-DD] [--limit N] [--no-refresh]"
+    _error "Usage: cast ask \"<query>\" [--kind K] [--since YYYY-MM-DD] [--limit N] [--no-refresh] [--semantic]"
     return 1
   fi
 
@@ -3799,6 +3801,7 @@ _cmd_ask() {
   [ -n "$kind_filter" ]  && args+=("--kind"  "$kind_filter")
   [ -n "$since_filter" ] && args+=("--since" "$since_filter")
   args+=("--limit" "$limit")
+  [ "$semantic" -eq 1 ] && args+=("--semantic")
 
   local result
   result="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"

@@ -8,12 +8,32 @@ On degraded/FTS5-unavailable path: JSON {"degraded": true, "rows": []}.
 On no results: [].
 Never crashes.
 """
+import importlib.util
 import json
 import os
 import re
 import sqlite3
 import sys
 from pathlib import Path
+
+
+# ── Embed module loader ──────────────────────────────────────────────────────
+
+def _load_embed_module():
+    """Lazy-load cast-memory-embed.py (hyphenated filename → importlib). Returns module or None on any failure (fail-open)."""
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cast-memory-embed.py')
+        spec = importlib.util.spec_from_file_location('cast_memory_embed', path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+SEMANTIC_CANDIDATE_FLOOR = 50  # re-rank at least this many FTS hits when --semantic
 
 
 # ── DB path resolution (mirrors cast_db._get_db_path) ───────────────────────
@@ -87,28 +107,75 @@ def _build_sql_and_params(
     return sql, params
 
 
+def _semantic_rerank(conn, rows, query, limit):
+    """Cosine re-rank FTS candidate rows by similarity to the query embedding.
+
+    Returns a re-ordered list (length<=limit) on success, or None to signal fail-open
+    (caller then keeps pure FTS order). Fail-open triggers: no embeddings yet, Ollama down,
+    module missing, or any exception. One Ollama call total (embeds the query, not the corpus).
+    """
+    try:
+        cur = conn.execute("SELECT count(*) AS n FROM record_embed")
+        r0 = cur.fetchone()
+        if not r0 or (r0["n"] or 0) == 0:
+            return None  # no embeddings → skip the Ollama round-trip entirely
+        cme = _load_embed_module()
+        if cme is None:
+            return None
+        qvec = cme.embed_text(query)
+        if qvec is None:
+            return None  # Ollama unreachable → fail-open
+        scored = []
+        for r in rows:
+            er = conn.execute(
+                "SELECT vec FROM record_embed WHERE kind = ? AND ref_id = ?",
+                (r.get("kind"), r.get("ref_id")),
+            ).fetchone()
+            if er is None or er["vec"] is None:
+                score = -1.0  # no embedding for this hit → sinks below scored ones (stable sort keeps FTS order among ties)
+            else:
+                score = cme.cosine_similarity(qvec, cme.unpack_embedding(er["vec"]))
+            scored.append((score, r))
+        scored.sort(key=lambda t: t[0], reverse=True)  # Python sort is stable → FTS rank order preserved within equal scores
+        return [r for _, r in scored[:limit]]
+    except Exception:
+        return None
+
+
 def search(
     query: str,
     kind: str = "",
     since: str = "",
     limit: int = 10,
     db_path: str = "",
+    semantic: bool = False,
 ) -> dict:
     """Return {"rows": [...]} or {"degraded": True, "rows": []} on error."""
+    # Guard invalid limits: <=0 (and the non-int default handled in main()) fall back to the default.
+    if limit <= 0:
+        limit = 10
     path = _get_db_path(db_path)
     try:
         conn = _connect(path)
     except Exception as e:
         return {"degraded": True, "rows": [], "note": f"DB connect failed: {e}"}
 
+    # When semantic re-rank is requested, fetch a larger candidate pool then re-rank+slice.
+    fetch_limit = max(limit, SEMANTIC_CANDIDATE_FLOOR) if semantic else limit
+
     def _execute(fts_query: str) -> list:
-        sql, params = _build_sql_and_params(fts_query, kind, since, limit)
+        sql, params = _build_sql_and_params(fts_query, kind, since, fetch_limit)
         cur = conn.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
 
     # First attempt: raw query
     try:
         rows = _execute(query)
+        if semantic and rows:
+            reranked = _semantic_rerank(conn, rows, query, limit)
+            rows = reranked if reranked is not None else rows[:limit]
+        else:
+            rows = rows[:limit]
         conn.close()
         return {"rows": rows}
     except sqlite3.OperationalError as first_err:
@@ -130,6 +197,11 @@ def search(
         sanitized = _sanitize_query(query)
         try:
             rows = _execute(sanitized)
+            if semantic and rows:
+                reranked = _semantic_rerank(conn, rows, query, limit)
+                rows = reranked if reranked is not None else rows[:limit]
+            else:
+                rows = rows[:limit]
             conn.close()
             return {"rows": rows}
         except sqlite3.OperationalError as second_err:
@@ -159,6 +231,7 @@ def main() -> None:
     since = ""
     limit = 10
     db_path = ""
+    semantic = False
 
     i = 0
     while i < len(args):
@@ -178,6 +251,9 @@ def main() -> None:
         elif a == "--db" and i + 1 < len(args):
             db_path = args[i + 1]
             i += 2
+        elif a == "--semantic":
+            semantic = True
+            i += 1
         elif not a.startswith("--"):
             query = a
             i += 1
@@ -188,7 +264,7 @@ def main() -> None:
         print(json.dumps([]), flush=True)
         sys.exit(0)
 
-    result = search(query, kind=kind, since=since, limit=limit, db_path=db_path)
+    result = search(query, kind=kind, since=since, limit=limit, db_path=db_path, semantic=semantic)
 
     # degraded → emit the full object so the caller can print an advisory
     if result.get("degraded"):
