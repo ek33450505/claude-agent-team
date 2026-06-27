@@ -150,6 +150,7 @@ Subcommands:
   ${C_BOLD}clean${C_RESET}     [--apply] [--worktrees]   Prune stale branches (dry-run by default)
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
+  ${C_BOLD}ask${C_RESET}       "<query>" [--kind K] [--since DATE] [--limit N]  Search the full audit record via FTS5
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
   ${C_BOLD}cheap${C_RESET}     [status|config|check]         Local cheap-mode session via ccr + Ollama
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
@@ -3747,6 +3748,99 @@ _cmd_ci_local() {
   exec make -C "$CAST_REPO_DIR" ci-local
 }
 
+# ── Subcommand: ask ─────────────────────────────────────────────────────────
+_cmd_ask() {
+  local query=""
+  local kind_filter=""
+  local since_filter=""
+  local limit=10
+  local no_refresh=0
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --kind)       kind_filter="${2:-}"; shift 2 ;;
+      --since)      since_filter="${2:-}"; shift 2 ;;
+      --limit)      limit="${2:-10}"; shift 2 ;;
+      --no-refresh) no_refresh=1; shift ;;
+      *)
+        if [ -z "$query" ]; then query="$1"; fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$query" ]; then
+    _error "Usage: cast ask \"<query>\" [--kind K] [--since YYYY-MM-DD] [--limit N] [--no-refresh]"
+    return 1
+  fi
+
+  # Resolve indexer (lazy-refresh unless --no-refresh)
+  local index_script="${CAST_SCRIPTS_DIR}/cast-ask-index.py"
+  if [ ! -f "$index_script" ]; then
+    index_script="${CAST_REPO_DIR}/scripts/cast-ask-index.py"
+  fi
+
+  if [ "$no_refresh" -eq 0 ] && [ -f "$index_script" ]; then
+    bash -c "python3 \"$index_script\" >/dev/null 2>&1" || true
+  fi
+
+  # Resolve query backend
+  local query_script="${CAST_SCRIPTS_DIR}/cast-ask-query.py"
+  if [ ! -f "$query_script" ]; then
+    query_script="${CAST_REPO_DIR}/scripts/cast-ask-query.py"
+  fi
+
+  if [ ! -f "$query_script" ]; then
+    _error "cast-ask-query.py not found. Run: bash install.sh"
+    return 1
+  fi
+
+  local args=("$query")
+  [ -n "$kind_filter" ]  && args+=("--kind"  "$kind_filter")
+  [ -n "$since_filter" ] && args+=("--since" "$since_filter")
+  args+=("--limit" "$limit")
+
+  local result
+  result="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
+
+  if [ "${CAST_JSON:-0}" -eq 1 ]; then
+    echo "$result"
+    return 0
+  fi
+
+  python3 - "$result" <<'PYEOF'
+import sys, json
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    data = []
+
+# Degraded object: {"degraded": true, "rows": [...], "note": "..."}
+if isinstance(data, dict):
+    note = data.get("note", "record_fts unavailable — FTS5 not supported in this sqlite build")
+    print(f"Advisory: {note}")
+    rows = data.get("rows", [])
+else:
+    rows = data
+
+if not rows:
+    print("No results.")
+    sys.exit(0)
+
+for r in rows:
+    kind = r.get("kind", "")
+    ts   = (r.get("ts") or "")[:19]
+    title = r.get("title", "")
+    snippet = (r.get("snippet") or "").strip()
+    print(f"{kind} · {ts} · {title}")
+    if snippet:
+        print(f"   {snippet}")
+    print()
+PYEOF
+}
+
 # ── Subcommand: incidents ────────────────────────────────────────────────────
 _cmd_incidents() {
   local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
@@ -3956,6 +4050,7 @@ case "$SUBCOMMAND" in
   install-completions)  _cmd_install_completions "$@" ;;
   cheap)                _cmd_cheap "$@" ;;
   routines)             _cmd_routines "$@" ;;
+  ask)                  _cmd_ask "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
   files)                _cmd_files "$@" ;;
   batch)                _cmd_batch "$@" ;;
