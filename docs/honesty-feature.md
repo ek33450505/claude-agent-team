@@ -31,9 +31,9 @@ Four real sensors write to `cast.db` on live hook events. **Nothing reads them y
 - **Current state:** Row writes work. Observability: none.
 
 ### Table 4: `code_ref_checks`
-- **Source:** `scripts/cast-code-ref-guard.sh` (exists but NOT wired to any hook)
+- **Source:** _(removed in v9 S5)_ — the unwired `cast-code-ref-guard.sh` guard was purged as dead code; the `code_ref_checks` table is retained (record-is-product).
 - **Signals:** Agent claimed a function/file/path exists (e.g., "`foo()` in scripts/") but grep found nothing.
-- **Current state:** Table is empty. Guard is present but never fires. Deferred.
+- **Current state:** Table is empty; the guard script was removed (it never fired on any hook).
 
 ### Key Finding (Blunt)
 
@@ -73,11 +73,9 @@ Extend `cast_claimed_work_verifier.py` to flag when an agent's Status block says
 
 ---
 
-**Rank 3 — `cast-code-ref-guard.sh` wiring** (DEFERRED)
+**Rank 3 — `cast-code-ref-guard.sh` wiring** (REMOVED v9 S5)
 
-The script exists but fires on no hook. It extracts tokens like `foo()` and greps `scripts/`+`bin/`, so it would manufacture false `NOT_FOUND` rows for legit external / other-directory references.
-
-**Why deferred:** High cry-wolf risk. Safe to wire only after tightening the extractor — require explicit `scripts/foo.sh` syntax, not bare `foo()` tokens. De-prioritize.
+The script was never wired to any hook (high cry-wolf risk: it extracted bare tokens like `foo()` and grepped `scripts/`+`bin/`, manufacturing false `NOT_FOUND` rows for legit external references). It was purged as dead code in the v9 S5 sweep rather than wired. The `code_ref_checks` table is retained per record-is-product.
 
 ---
 

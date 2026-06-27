@@ -5,17 +5,12 @@
 #   1. cast-memory-router.py --mode route returns JSON with agent field (backward compat)
 #   2. cast-memory-router.py --mode route returns valid JSON even with no match
 #   3. cast-memory-router.py route mode: backward compat via stdin
-#   4. cast-memory-seed-procedural.py exits 0
-#   5. cast-memory-seed-procedural.py seeds exactly 5 memories
-#   6. cast-memory-seed-procedural.py all memories have agent=shared
-#   7. cast-memory-seed-procedural.py is idempotent
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 ROUTER_SCRIPT="$REPO_DIR/scripts/cast-memory-router.py"
-SEED_SCRIPT="$REPO_DIR/scripts/cast-memory-seed-procedural.py"
 
 # Use a temp DB for all tests — never touch real cast.db
 TEST_DB="/tmp/test_cast_memory_$$.db"
@@ -81,32 +76,4 @@ teardown() {
     run bash -c "echo 'BATS debugging test failure wc output' | python3 '$ROUTER_SCRIPT'"
     assert_success
     echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'agent' in d"
-}
-
-# ---------------------------------------------------------------------------
-# cast-memory-seed-procedural: seeds procedural memories
-# ---------------------------------------------------------------------------
-
-@test "cast-memory-seed-procedural: exits 0" {
-    run python3 "$SEED_SCRIPT"
-    assert_success
-}
-
-@test "cast-memory-seed-procedural: seeds exactly 5 memories" {
-    python3 "$SEED_SCRIPT" >/dev/null 2>&1
-    count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_memories WHERE type='procedural'" | tr -d ' ')
-    [ "$count" -eq "5" ]
-}
-
-@test "cast-memory-seed-procedural: all memories have agent=shared" {
-    python3 "$SEED_SCRIPT" >/dev/null 2>&1
-    non_shared=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_memories WHERE type='procedural' AND agent != 'shared'" | tr -d ' ')
-    [ "$non_shared" -eq "0" ]
-}
-
-@test "cast-memory-seed-procedural: is idempotent (second run reports already present)" {
-    python3 "$SEED_SCRIPT" >/dev/null 2>&1
-    run python3 "$SEED_SCRIPT"
-    assert_success
-    assert_output --partial "already present"
 }

@@ -1,8 +1,7 @@
 #!/usr/bin/env bats
 # test-cast-memory-dream.bats — BATS tests for cast-memory-dream.py and friends
 #
-# Tests (11 total):
-#   1. Migration idempotency
+# Tests (10 total):
 #   2. Orient phase (dry-run) — memory_files_read >= 3
 #   3. No canonical mutation — fixture .md files unchanged after full run
 #   4. Output isolation — _dream-output-*/ dir + _dream-manifest.json keys
@@ -17,7 +16,6 @@ load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 DREAM_SCRIPT="$REPO_DIR/scripts/cast-memory-dream.py"
-MIGRATION_SCRIPT="$REPO_DIR/scripts/cast-memory-dream-migration.py"
 PROMOTE_SCRIPT="$REPO_DIR/scripts/cast-memory-dream-promote.py"
 
 FIXTURE_MEMORY_DIR="$REPO_DIR/tests/fixtures/dream-memory"
@@ -41,36 +39,13 @@ setup() {
     # Copy JSONL transcripts into the project dir (not inside memory/)
     cp "$FIXTURE_TRANSCRIPTS_DIR/"*.jsonl "$BATS_TEST_TMPDIR/projects/$TEST_PROJECT_ID/"
 
-    # Run migration so the DB schema is ready
-    python3 "$MIGRATION_SCRIPT" --db "$CAST_DB_PATH" >/dev/null
+    # Provision the DB schema via the canonical source of truth (cast-db-init.sh)
+    bash "$REPO_DIR/scripts/cast-db-init.sh" --db "$CAST_DB_PATH" >/dev/null 2>&1 || true
 }
 
 teardown() {
     unset CAST_DB_PATH
     unset CLAUDE_PROJECTS_DIR
-}
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Test 1: Migration idempotency
-# ──────────────────────────────────────────────────────────────────────────────
-@test "migration idempotency: table exists after two runs; column count is 14" {
-    local fresh_db="$BATS_TEST_TMPDIR/idem_test.db"
-
-    # First run
-    run python3 "$MIGRATION_SCRIPT" --db "$fresh_db"
-    assert_success
-
-    # Second run — must succeed without error
-    run python3 "$MIGRATION_SCRIPT" --db "$fresh_db"
-    assert_success
-
-    # Verify table exists
-    table_check=$(sqlite3 "$fresh_db" "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_consolidation_runs';" 2>/dev/null)
-    [ "$table_check" = "memory_consolidation_runs" ]
-
-    # Verify column count is 14
-    col_count=$(sqlite3 "$fresh_db" "SELECT COUNT(*) FROM pragma_table_info('memory_consolidation_runs');" 2>/dev/null | tr -d ' ')
-    [ "$col_count" -eq 14 ]
 }
 
 # ──────────────────────────────────────────────────────────────────────────────

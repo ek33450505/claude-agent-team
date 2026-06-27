@@ -50,23 +50,6 @@ teardown() {
   [[ "$output" =~ "user_profile" ]] || [[ "$output" =~ "comm-style" ]]
 }
 
-@test "seeder script is idempotent (second run inserts 0 rows)" {
-  # First run: insert all facts
-  bash scripts/cast-seed-user-profile.sh >/dev/null 2>&1
-  COUNT_FIRST=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_memories WHERE type='user_profile'")
-
-  # Second run: should skip all (idempotent)
-  OUTPUT=$(bash scripts/cast-seed-user-profile.sh 2>&1)
-
-  # Verify idempotency: same count after second run
-  COUNT_SECOND=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_memories WHERE type='user_profile'")
-  [ "$COUNT_FIRST" -eq "$COUNT_SECOND" ]
-  [ "$COUNT_FIRST" -gt 0 ]  # We expect at least 6 facts
-
-  # Check output mentions skipped facts
-  [[ "$OUTPUT" =~ "already existing" ]]
-}
-
 @test "cast-memory-router.py VALID_TYPES includes user_profile" {
   # Check that VALID_TYPES in Python file includes user_profile
   GREP_RESULT=$(grep "user_profile" scripts/cast-memory-router.py || true)

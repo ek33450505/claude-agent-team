@@ -260,6 +260,13 @@ rm -f "$CLAUDE_DIR/scripts/cast-proactive-intel.sh" "$CLAUDE_DIR/scripts/cast-we
 rm -f "$CLAUDE_DIR/scripts/cast-resume-watcher.sh" "$CLAUDE_DIR/scripts/cast-output-adapter.py" "$CLAUDE_DIR/scripts/cast-sync-check.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-session-status-cleanup.py" "$CLAUDE_DIR/scripts/cast-pre-compact-hook.sh" "$CLAUDE_DIR/scripts/pa-weather-prefetch.sh"
 rm -f "$CLAUDE_DIR/config/settings-canonical.json"
+# Remove dead scripts retired in v9 S5 dead-code purge (probe-confirmed unreferenced)
+rm -f "$CLAUDE_DIR/scripts/cast-agent-stats.sh" "$CLAUDE_DIR/scripts/cast-backfill-schema-migrations.py" "$CLAUDE_DIR/scripts/cast-batch-status.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-ci-monitor.sh" "$CLAUDE_DIR/scripts/cast-code-ref-guard.sh" "$CLAUDE_DIR/scripts/cast-db-verify.py"
+rm -f "$CLAUDE_DIR/scripts/cast-egress-hook.sh" "$CLAUDE_DIR/scripts/cast-fswatcher.sh" "$CLAUDE_DIR/scripts/cast-memory-backfill-verified.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-memory-dream-migration.py" "$CLAUDE_DIR/scripts/cast-memory-seed-procedural.py" "$CLAUDE_DIR/scripts/cast-rtk-install.sh"
+rm -f "$CLAUDE_DIR/scripts/cast-seed-user-profile.sh" "$CLAUDE_DIR/scripts/cast-stack-inject.sh" "$CLAUDE_DIR/scripts/cast-sync.sh"
+rm -f "$CLAUDE_DIR/config/fs-watchers.json.template"
 # Remove dead scripts retired in v9 §5.1 dead-surface sweep
 rm -f "$CLAUDE_DIR/scripts/cast-cron-summary.py" "$CLAUDE_DIR/scripts/cast-integrity-check.sh"
 rm -f "$CLAUDE_DIR/scripts/cast-agent-run-log.py" "$CLAUDE_DIR/scripts/cast-parry-guard-monitor.sh"
