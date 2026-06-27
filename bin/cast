@@ -912,7 +912,7 @@ _cmd_memory() {
       cat <<USAGE
 Usage: cast memory <subcommand> [args]
 
-  search "<query>"  [--agent <name>] [--project <name>] [--limit 10]
+  search "<query>"  [--agent <name>] [--project <name>] [--type <type>] [--limit 10]
   list              [--agent <name>] [--type feedback|project|user|reference]
   verify            [--agent <name>]  Run staleness sweep
   show <id>                           Print full memory entry
@@ -958,16 +958,14 @@ _memory_dream() {
 }
 
 _memory_search() {
-  local query=""
-  local agent_filter=""
-  local project_filter=""
-  local limit=10
+  local query="" agent_filter="" project_filter="" type_filter="" limit=10
 
   while [ "${#}" -gt 0 ]; do
     case "$1" in
-      --agent)    agent_filter="${2:-}"; shift 2 ;;
-      --project)  project_filter="${2:-}"; shift 2 ;;
-      --limit)    limit="${2:-10}"; shift 2 ;;
+      --agent)   agent_filter="${2:-}"; shift 2 ;;
+      --project) project_filter="${2:-}"; shift 2 ;;
+      --type)    type_filter="${2:-}"; shift 2 ;;
+      --limit)   limit="${2:-10}"; shift 2 ;;
       *)
         if [ -z "$query" ]; then query="$1"; fi
         shift
@@ -976,44 +974,66 @@ _memory_search() {
   done
 
   if [ -z "$query" ]; then
-    _error "Usage: cast memory search \"<query>\" [--agent <name>] [--limit 10]"
+    _error "Usage: cast memory search \"<query>\" [--agent <name>] [--project <name>] [--type <type>] [--limit 10]"
     return 1
   fi
 
-  local query_script="${CAST_SCRIPTS_DIR}/cast-memory-query.sh"
+  # A3 U6: memory search rides the unified record_fts FTS5 index via cast-ask-query.py
+  # (BM25 ranking + agent/project/type filters), retiring the bespoke LIKE path.
+  local index_script="${CAST_SCRIPTS_DIR}/cast-ask-index.py"
+  [ -f "$index_script" ] || index_script="${CAST_REPO_DIR}/scripts/cast-ask-index.py"
+  local query_script="${CAST_SCRIPTS_DIR}/cast-ask-query.py"
+  [ -f "$query_script" ] || query_script="${CAST_REPO_DIR}/scripts/cast-ask-query.py"
   if [ ! -f "$query_script" ]; then
-    query_script="${CAST_REPO_DIR}/scripts/cast-memory-query.sh"
-  fi
-
-  if [ ! -f "$query_script" ]; then
-    _error "cast-memory-query.sh not found"
+    _error "cast-ask-query.py not found. Run: bash install.sh"
     return 1
   fi
 
-  local args=("$query" "--limit" "$limit")
+  # Lazy-refresh the memory index so freshly-written memories are searchable (fail-open).
+  if [ -f "$index_script" ]; then
+    bash -c "python3 \"$index_script\" --kind memory >/dev/null 2>&1" || true
+  fi
+
+  local args=("$query" "--kind" "memory" "--limit" "$limit")
   [ -n "$agent_filter" ]   && args+=("--agent"   "$agent_filter")
   [ -n "$project_filter" ] && args+=("--project" "$project_filter")
+  [ -n "$type_filter" ]    && args+=("--type"    "$type_filter")
 
   local result
-  result="$(bash "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
+  result="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
 
-  if [ "$CAST_JSON" -eq 1 ]; then
-    echo "$result"
-    return 0
-  fi
-
-  python3 - "$result" <<'PYEOF'
-import sys, json
+  # Adapt the unified record_fts row shape → the memory-search contract so the reroute is transparent.
+  CAST_JSON="${CAST_JSON:-0}" python3 - "$result" <<'PYEOF'
+import os, sys, json
+cast_json = os.environ.get("CAST_JSON", "0") == "1"
 try:
-    rows = json.loads(sys.argv[1])
+    data = json.loads(sys.argv[1])
 except Exception:
-    rows = []
-if not rows:
+    data = []
+# degraded object (FTS5 unavailable) → advisory / empty json
+if isinstance(data, dict):
+    note = data.get("note", "record_fts unavailable — FTS5 not supported in this sqlite build")
+    if cast_json:
+        print(json.dumps([]))
+    else:
+        print(f"Advisory: {note}")
+    sys.exit(0)
+adapted = [{
+    "id": r.get("ref_id"),
+    "agent": r.get("agent", ""),
+    "type": r.get("mtype", ""),
+    "name": r.get("title", ""),
+    "content": (r.get("snippet") or "").strip(),
+    "created_at": r.get("ts", ""),
+} for r in data]
+if cast_json:
+    print(json.dumps(adapted, indent=2))
+    sys.exit(0)
+if not adapted:
     print("No memories found.")
     sys.exit(0)
-for r in rows:
-    score = f"  [score:{r['score']:.2f}]" if 'score' in r else ""
-    print(f"[{r['id']}] {r['agent']} / {r['type']} — {r['name']}{score}")
+for r in adapted:
+    print(f"[{r['id']}] {r['agent']} / {r['type']} — {r['name']}")
     content = (r['content'] or '')[:200]
     print(f"  {content}")
     print()

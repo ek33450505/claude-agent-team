@@ -85,11 +85,15 @@ def _build_sql_and_params(
     kind: str,
     since: str,
     limit: int,
+    agent: str = "",
+    project: str = "",
+    mtype: str = "",
 ) -> tuple:
     """Build parameterized SQL + bound params list. Returns (sql, params)."""
     sql = (
         "SELECT kind, ref_id, ts, title, "
-        "snippet(record_fts, 4, '[', ']', '…', 12) AS snippet "
+        "snippet(record_fts, 4, '[', ']', '…', 12) AS snippet, "
+        "agent, mtype "
         "FROM record_fts "
         "WHERE record_fts MATCH ?"
     )
@@ -101,6 +105,15 @@ def _build_sql_and_params(
     if since:
         sql += " AND ts >= ?"
         params.append(since)
+    if agent:
+        sql += " AND agent = ?"
+        params.append(agent)
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
+    if mtype:
+        sql += " AND mtype = ?"
+        params.append(mtype)
 
     sql += " ORDER BY rank LIMIT ?"
     params.append(limit)
@@ -149,6 +162,9 @@ def search(
     limit: int = 10,
     db_path: str = "",
     semantic: bool = False,
+    agent: str = "",
+    project: str = "",
+    mtype: str = "",
 ) -> dict:
     """Return {"rows": [...]} or {"degraded": True, "rows": []} on error."""
     # Guard invalid limits: <=0 (and the non-int default handled in main()) fall back to the default.
@@ -164,7 +180,7 @@ def search(
     fetch_limit = max(limit, SEMANTIC_CANDIDATE_FLOOR) if semantic else limit
 
     def _execute(fts_query: str) -> list:
-        sql, params = _build_sql_and_params(fts_query, kind, since, fetch_limit)
+        sql, params = _build_sql_and_params(fts_query, kind, since, fetch_limit, agent, project, mtype)
         cur = conn.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
 
@@ -232,6 +248,9 @@ def main() -> None:
     limit = 10
     db_path = ""
     semantic = False
+    agent = ""
+    project = ""
+    mtype = ""
 
     i = 0
     while i < len(args):
@@ -254,6 +273,15 @@ def main() -> None:
         elif a == "--semantic":
             semantic = True
             i += 1
+        elif a == "--agent" and i + 1 < len(args):
+            agent = args[i + 1]
+            i += 2
+        elif a == "--project" and i + 1 < len(args):
+            project = args[i + 1]
+            i += 2
+        elif a == "--type" and i + 1 < len(args):
+            mtype = args[i + 1]
+            i += 2
         elif not a.startswith("--"):
             query = a
             i += 1
@@ -264,7 +292,7 @@ def main() -> None:
         print(json.dumps([]), flush=True)
         sys.exit(0)
 
-    result = search(query, kind=kind, since=since, limit=limit, db_path=db_path, semantic=semantic)
+    result = search(query, kind=kind, since=since, limit=limit, db_path=db_path, semantic=semantic, agent=agent, project=project, mtype=mtype)
 
     # degraded → emit the full object so the caller can print an advisory
     if result.get("degraded"):
