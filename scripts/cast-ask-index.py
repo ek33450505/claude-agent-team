@@ -6,7 +6,8 @@ Usage:
 
 Options:
     --rebuild       Delete all record_fts rows then full-reindex (leaves record_embed untouched)
-    --kind <k>      Only index this kind (agent_run, incident, dispatch, memory, plan)
+    --kind <k>      Only index this kind (agent_run, incident, dispatch, memory, plan,
+                    journal, transcript)
     --db <path>     Override CAST_DB_PATH for this run
 
 Exit codes: 0 = success, 1 = error
@@ -14,9 +15,13 @@ Per-source failures are logged to stderr; one bad source does not abort the rest
 """
 
 import argparse
+import datetime
+import glob
+import json
 import os
+import re
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # --- DB import (match existing scripts pattern) ---
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,13 +31,211 @@ import cast_db  # type: ignore
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_BODY = 4_000  # chars — bounds large rows; Unit 3 transcripts will rely on this
+MAX_BODY = 4_000       # chars — bounds large DB rows
+MAX_FILE_BODY = 8_000  # chars per chunk — files are split into chunks for full-content indexing
+
+
+# ---------------------------------------------------------------------------
+# Chrome marker filtering (mirrored from cast-session-distiller.py)
+# Harness/command chrome markers — turns containing these are not user prose
+# ---------------------------------------------------------------------------
+
+_CHROME_MARKERS = [
+    '<command-name>',
+    '<command-message>',
+    '<command-args>',
+    '<local-command-stdout>',
+    '<local-command-caveat>',
+    '<system-reminder>',
+    '<bash-stdout>',
+    '<bash-stderr>',
+]
+
+_DATE_STEM_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def _is_chrome(text: str) -> bool:
+    """Return True if text contains harness/command chrome markers."""
+    lower = text.lower()
+    for marker in _CHROME_MARKERS:
+        if marker in lower:
+            return True
+    if text.strip().startswith('Caveat:'):
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Root resolvers for file-based sources
+# ---------------------------------------------------------------------------
+
+
+def _get_journal_root() -> str:
+    """Resolve journal root. Honors CAST_JOURNAL_DIR env var for test isolation."""
+    override = os.environ.get('CAST_JOURNAL_DIR', '')
+    if override:
+        real = os.path.realpath(override)
+        if not os.path.isdir(real):
+            raise ValueError(f'CAST_JOURNAL_DIR is not a directory: {override!r}')
+        return real
+    return os.path.expanduser('~/Documents/Claude')
+
+
+def _get_projects_root() -> str:
+    """Resolve ~/.claude/projects root. Mirrors cast-memory-dream.py's get_projects_root().
+    Honors CLAUDE_PROJECTS_DIR env var for test isolation."""
+    override = os.environ.get('CLAUDE_PROJECTS_DIR', '')
+    if override:
+        real = os.path.realpath(override)
+        if not os.path.isdir(real):
+            raise ValueError(f'CLAUDE_PROJECTS_DIR is not a directory: {override!r}')
+        return real
+    return os.path.expanduser('~/.claude/projects')
+
+
+# ---------------------------------------------------------------------------
+# Body parsers for file-based sources
+# ---------------------------------------------------------------------------
+
+
+def _parse_journal_body(path: str) -> str:
+    """Read full markdown journal file content (verbatim, no redaction)."""
+    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        return f.read()
+
+
+def _parse_transcript_body(path: str) -> str:
+    """Extract text content from a JSONL transcript file (user + assistant turns).
+
+    Preserves file order (user and assistant interleaved). Extends
+    cast-session-distiller.py's parse_user_prose logic to assistant turns.
+    Not imported because the module name contains a hyphen.
+    Tolerates a partially-written last line via per-line try/except.
+
+    Extraction rules:
+    - type=='user'      + content is str  → keep (user prompts)
+    - type=='user'      + content is list → skip (tool_result turns)
+    - type=='assistant' + content is list → extract text-typed blocks only;
+      skip tool_use / thinking blocks
+    - type=='assistant' + content is str  → keep
+    - isMeta / isSidechain                → always skip
+    - chrome markers                      → skip
+    """
+    parts: List[str] = []
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue  # tolerate partially-written last line
+                if not isinstance(obj, dict):
+                    continue
+                turn_type = obj.get('type')
+                if turn_type not in ('user', 'assistant'):
+                    continue
+                if obj.get('isMeta') or obj.get('isSidechain'):
+                    continue
+                msg = obj.get('message', {})
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get('content', '')
+
+                if turn_type == 'user':
+                    # tool_result turns carry a list for content — skip entirely
+                    if isinstance(content, list):
+                        continue
+                    if not isinstance(content, str):
+                        continue
+                    text = content.strip()
+                    if text and not _is_chrome(text):
+                        parts.append(text)
+
+                else:  # turn_type == 'assistant'
+                    if isinstance(content, list):
+                        # Extract only text-typed blocks; skip tool_use, thinking, etc.
+                        for block in content:
+                            if isinstance(block, dict) and block.get('type') == 'text':
+                                text = block.get('text', '').strip()
+                                if text and not _is_chrome(text):
+                                    parts.append(text)
+                    elif isinstance(content, str):
+                        text = content.strip()
+                        if text and not _is_chrome(text):
+                            parts.append(text)
+
+    except OSError:
+        return ''
+    return ' '.join(parts)
+
+
+# ---------------------------------------------------------------------------
+# File timestamp and title helpers
+# ---------------------------------------------------------------------------
+
+
+def _derive_file_ts(path: str, ts_strategy: str) -> str:
+    """Derive an ISO timestamp string for a file."""
+    if ts_strategy == 'stem_date':
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if _DATE_STEM_RE.match(stem):
+            return stem  # YYYY-MM-DD — valid ISO date; used directly
+        # Fallback to mtime if stem is not a plain date
+    mtime = os.path.getmtime(path)
+    return datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _derive_file_title(path: str, title_strategy: str) -> str:
+    """Derive a human-readable title for a file."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    if title_strategy == 'stem':
+        return stem
+    if title_strategy == 'project_stem':
+        # project dirs are dash-encoded paths (Claude Code convention):
+        # /Users/foo/bar → -Users-foo-bar; use the raw encoded name as-is
+        project_dir = os.path.basename(os.path.dirname(path))
+        return f'{project_dir} · {stem}'
+    return stem
+
+
+# ---------------------------------------------------------------------------
+# FILE_SOURCES config — parallel to SOURCES but for file-based kinds.
+# Each entry drives _index_file_source for one kind.
+# Fields:
+#   kind          — kind tag stored in record_fts
+#   root_resolver — callable() -> str (raises ValueError on bad config)
+#   glob_pattern  — glob relative to the root (non-recursive by convention)
+#   ts_strategy   — 'stem_date' or 'mtime'
+#   title_strategy— 'stem' or 'project_stem'
+#   parse         — callable(path: str) -> str body extractor
+# ---------------------------------------------------------------------------
+
+FILE_SOURCES: List[Dict[str, Any]] = [
+    {
+        'kind': 'journal',
+        'root_resolver': _get_journal_root,
+        'glob_pattern': '*/*.md',       # layout: YYYY-MM/YYYY-MM-DD.md
+        'ts_strategy': 'stem_date',
+        'title_strategy': 'stem',
+        'parse': _parse_journal_body,
+    },
+    {
+        'kind': 'transcript',
+        'root_resolver': _get_projects_root,
+        'glob_pattern': '*/*.jsonl',    # top-level per-project dir; NOT recursive
+        'ts_strategy': 'mtime',
+        'title_strategy': 'project_stem',
+        'parse': _parse_transcript_body,
+    },
+]
 
 
 # ---------------------------------------------------------------------------
 # SOURCES config
 # Each entry drives the incremental-index logic for one kind.
-# Unit 3 can append additional kinds (journal, transcript) to this list.
 # ---------------------------------------------------------------------------
 
 SOURCES: List[Dict[str, Any]] = [
@@ -129,7 +332,7 @@ def _upsert_row(kind: str, ref_id: str, ts: str, title: str, body: str) -> None:
 
 
 def _index_source(src: Dict[str, Any], rebuild: bool) -> int:
-    """Index one source; return count of rows inserted."""
+    """Index one SQL source; return count of rows inserted."""
     kind = src["kind"]
     table = src["table"]
     ref_id_col = src["ref_id_col"]
@@ -197,7 +400,83 @@ def _index_source(src: Dict[str, Any], rebuild: bool) -> int:
     return count
 
 
+def _chunk(text: str, size: int) -> List[str]:
+    """Split text into chunks of at most `size` chars."""
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+
+def _index_file_source(src: Dict[str, Any], rebuild: bool) -> int:
+    """Index one file-based source; return count of chunk-rows inserted.
+
+    Mirrors _index_source's contract:
+    - Uses _get_high_water / _upsert_row for consistency.
+    - Skips files whose ts < high_water on incremental runs (tie-safe: indexes ts >= hw).
+    - Chunks large files at MAX_FILE_BODY chars per chunk so full content is searchable.
+      ref_id per chunk = "<path>#<i>"; all chunks share the file's ts.
+    - Before inserting, deletes ALL existing chunks for the file via a range predicate
+      over ref_id (`<path>#<int>`) so a shrunk/modified file leaves no orphaned high-index chunks.
+    - Per-file try/except: one corrupt file does not abort the whole source.
+    """
+    kind: str = src['kind']
+    root_resolver: Callable[[], str] = src['root_resolver']
+    glob_pattern: str = src['glob_pattern']
+    ts_strategy: str = src['ts_strategy']
+    title_strategy: str = src['title_strategy']
+    parse: Callable[[str], str] = src['parse']
+
+    root = root_resolver()  # raises ValueError on bad config — caught by caller
+    pattern = os.path.join(root, glob_pattern)
+    paths = sorted(glob.glob(pattern))
+
+    high_water: Optional[str] = None
+    if not rebuild:
+        high_water = _get_high_water(kind)
+
+    count = 0
+    for path in paths:
+        try:
+            ts = _derive_file_ts(path, ts_strategy)
+
+            # Incremental skip: index ts >= high_water (tie-safe, same convention as SQL path)
+            if high_water and ts < high_water:
+                continue
+
+            title = _derive_file_title(path, title_strategy)
+            body = parse(path)
+
+            if not body or not body.strip():
+                continue  # skip files with no extractable content
+
+            chunks = _chunk(body, MAX_FILE_BODY)
+            n_chunks = len(chunks)
+
+            # Delete ALL existing chunks for this file before re-inserting so a
+            # shrunk/modified file leaves no orphaned high-index chunks.
+            # Range predicate (not GLOB/LIKE) so filesystem paths containing SQLite glob
+            # metacharacters (* ? [) can never over- or under-delete other files' chunks.
+            # All chunk ref_ids are "<path>#<int>"; '#'..'#\U0010ffff' bounds every suffix.
+            cast_db.db_execute(
+                "DELETE FROM record_fts WHERE kind = ? AND ref_id >= ? AND ref_id < ?",
+                (kind, path + '#', path + '#\U0010ffff'),
+            )
+
+            for i, chunk_body in enumerate(chunks):
+                if not chunk_body.strip():
+                    continue
+                chunk_ref_id = f'{path}#{i}'
+                chunk_title = title if n_chunks == 1 else f'{title} [{i + 1}/{n_chunks}]'
+                _upsert_row(kind, chunk_ref_id, ts, chunk_title, chunk_body)
+                count += 1
+
+        except Exception as exc:
+            print(f"ERROR indexing file {path} (kind={kind}): {exc}", file=sys.stderr)
+            # continue with remaining files — one bad file must not abort the source
+
+    return count
+
+
 def main() -> int:
+    all_kinds = [s["kind"] for s in SOURCES] + [s["kind"] for s in FILE_SOURCES]
     parser = argparse.ArgumentParser(
         description="Populate record_fts from cast.db sources."
     )
@@ -207,7 +486,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--kind", metavar="K",
-        help="Only index this kind (agent_run, incident, dispatch, memory, plan)",
+        help=f"Only index this kind ({', '.join(all_kinds)})",
     )
     parser.add_argument(
         "--db", metavar="PATH",
@@ -219,12 +498,14 @@ def main() -> int:
     if args.db:
         os.environ["CAST_DB_PATH"] = args.db
 
-    sources = SOURCES
+    # Filter both SOURCES and FILE_SOURCES by --kind
+    db_sources = SOURCES
+    file_sources = FILE_SOURCES
     if args.kind:
-        sources = [s for s in SOURCES if s["kind"] == args.kind]
-        if not sources:
-            valid = [s["kind"] for s in SOURCES]
-            print(f"Unknown kind: {args.kind!r}. Valid: {valid}", file=sys.stderr)
+        db_sources = [s for s in SOURCES if s["kind"] == args.kind]
+        file_sources = [s for s in FILE_SOURCES if s["kind"] == args.kind]
+        if not db_sources and not file_sources:
+            print(f"Unknown kind: {args.kind!r}. Valid: {all_kinds}", file=sys.stderr)
             return 1
 
     if args.rebuild:
@@ -235,9 +516,20 @@ def main() -> int:
         print("record_fts cleared for full rebuild")
 
     exit_code = 0
-    for src in sources:
+
+    # Index SQL-backed sources
+    for src in db_sources:
         try:
             n = _index_source(src, rebuild=args.rebuild)
+            print(f"indexed {n} {src['kind']} rows")
+        except Exception as exc:
+            print(f"ERROR indexing {src['kind']}: {exc}", file=sys.stderr)
+            exit_code = 1  # flag error but continue remaining sources
+
+    # Index file-based sources
+    for src in file_sources:
+        try:
+            n = _index_file_source(src, rebuild=args.rebuild)
             print(f"indexed {n} {src['kind']} rows")
         except Exception as exc:
             print(f"ERROR indexing {src['kind']}: {exc}", file=sys.stderr)
