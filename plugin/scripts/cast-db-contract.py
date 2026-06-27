@@ -130,6 +130,9 @@ class ColumnContract:
     # Dynamic-writer fields: populated by scan_db_write_calls()
     dynamic_writer_table: bool = False   # table is in ALLOWED_TABLES or any db_write call
     dynamic_writer_cols: list[str] = field(default_factory=list)  # cols proven via literal dict
+    # Schema-population fields: populated by parse_auto_populated() / parse_contract_directives()
+    auto_populated: bool = False         # column has AUTOINCREMENT / PRIMARY KEY / DEFAULT in schema
+    provenance: Optional[str] = None     # 'reserved' | 'external-writer' | None
 
     @property
     def classification(self) -> str:
@@ -171,6 +174,17 @@ class ColumnContract:
         # the tool never proposes dropping a live dynamic-writer column.
         if self.dynamic_writer_table:
             return "KEEP"
+        # Provenance directive from cast-db-init.sh (machine-readable -- db-contract: ...).
+        # Upgrades what would otherwise be SAFE-DROP/FIX-WRITER. Never masks CONTRADICTION
+        # (checked first) or a real writer (KEEP, checked above).
+        if self.provenance == "external-writer":
+            return "EXTERNAL-WRITER"
+        if self.provenance == "reserved":
+            return "DECLARED-RESERVED"
+        # Auto-populated by the schema (AUTOINCREMENT / INTEGER PRIMARY KEY / DEFAULT):
+        # never written by application code, but never an orphan.
+        if self.auto_populated:
+            return "KEEP"
         # FIX-WRITER: something reads it but nothing writes it
         if self.script_readers and not self.script_writers:
             return "FIX-WRITER"
@@ -193,6 +207,8 @@ class ColumnContract:
             "db_checked": self.db_checked,
             "dynamic_writer_table": self.dynamic_writer_table,
             "dynamic_writer_cols": sorted(self.dynamic_writer_cols),
+            "auto_populated": self.auto_populated,
+            "provenance": self.provenance,
         }
 
 
@@ -265,6 +281,110 @@ def _parse_create_table_columns(block: str) -> set[str]:
             if _COL_RE.match(col) and col.upper() not in SQL_KEYWORDS:
                 cols.add(col)
     return cols
+
+
+def parse_auto_populated(init_path: Path) -> dict[str, set[str]]:
+    """Parse auto-populated columns from CREATE TABLE and ALTER TABLE in cast-db-init.sh.
+
+    A column is considered auto-populated when its definition line in a CREATE TABLE
+    block carries AUTOINCREMENT, INTEGER PRIMARY KEY (implicit rowid alias), or a
+    DEFAULT clause — meaning the DB engine populates it and app code never writes it.
+
+    Also handles ALTER TABLE ... ADD COLUMN lines that carry a DEFAULT clause.
+
+    Returns {table_lower: set(col_lower)}.
+    """
+    try:
+        content = init_path.read_text(errors="replace")
+    except OSError as e:
+        print(f"[ERROR] Cannot read {init_path}: {e}", file=sys.stderr)
+        return {}
+
+    auto_populated: dict[str, set[str]] = {}
+    _auto_re = re.compile(
+        r"\bAUTOINCREMENT\b|\bDEFAULT\b|\bPRIMARY\s+KEY\b",
+        re.IGNORECASE,
+    )
+    skip_prefixes = frozenset({
+        "PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT",
+        "CREATE", "ALTER", "DROP", "INSERT", "UPDATE", "SELECT", "PRAGMA",
+    })
+
+    table_re = re.compile(
+        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(",
+        re.IGNORECASE,
+    )
+    for match in table_re.finditer(content):
+        table = match.group(1).lower()
+        block = _extract_paren_block(content, match.end())
+        for line in block.split("\n"):
+            stripped = line.strip().rstrip(",")
+            if not stripped or stripped.startswith("--"):
+                continue
+            first = stripped.split()[0].upper() if stripped.split() else ""
+            if first in skip_prefixes:
+                continue
+            col_m = re.match(r"^(\w+)\s", stripped)
+            if col_m:
+                col = col_m.group(1).lower()
+                if _COL_RE.match(col) and col.upper() not in SQL_KEYWORDS:
+                    if _auto_re.search(stripped):
+                        auto_populated.setdefault(table, set()).add(col)
+
+    # ALTER TABLE ... ADD COLUMN col TYPE ... DEFAULT ...
+    for m in re.finditer(
+        r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)([^\n]*)",
+        content, re.IGNORECASE,
+    ):
+        if re.search(r"\bDEFAULT\b", m.group(3), re.IGNORECASE):
+            table = m.group(1).lower()
+            col = m.group(2).lower()
+            auto_populated.setdefault(table, set()).add(col)
+
+    return auto_populated
+
+
+def parse_contract_directives(init_path: Path) -> dict[str, dict]:
+    """Parse machine-readable db-contract directives from cast-db-init.sh.
+
+    Recognises two directive forms on comment lines:
+      -- db-contract: reserved table=<t>
+      -- db-contract: external-writer table=<t> source=<name>
+
+    Returns {table_lower: {'kind': 'reserved'|'external-writer', 'source': str|None}}.
+    If a table name appears more than once, the last directive wins.
+    Lines that are missing the required ``table=`` token are silently skipped.
+    """
+    try:
+        content = init_path.read_text(errors="replace")
+    except OSError as e:
+        print(f"[ERROR] Cannot read {init_path}: {e}", file=sys.stderr)
+        return {}
+
+    directives: dict[str, dict] = {}
+    kind_re = re.compile(
+        r"--\s*db-contract:\s*(reserved|external-writer)\b",
+        re.IGNORECASE,
+    )
+    table_token_re = re.compile(r"\btable=(\w+)", re.IGNORECASE)
+    source_token_re = re.compile(r"\bsource=(\S+)", re.IGNORECASE)
+
+    for line in content.splitlines():
+        kind_m = kind_re.search(line)
+        if not kind_m:
+            continue
+        kind = kind_m.group(1).lower()
+        tbl_m = table_token_re.search(line)
+        if not tbl_m:
+            continue  # table= is required; skip silently
+        table = tbl_m.group(1).lower()
+        src_m = source_token_re.search(line)
+        directives[table] = {
+            "kind": kind,
+            "source": src_m.group(1) if src_m else None,
+        }
+
+    return directives
 
 
 # ─── Source Extraction: migrations ────────────────────────────────────────────
@@ -843,6 +963,8 @@ def build_contracts(
     db_found: bool,
     dynamic_tables: set[str] | None = None,
     dynamic_col_writers: dict[str, dict[str, set[str]]] | None = None,
+    auto_populated_cols: dict[str, set[str]] | None = None,
+    directives: dict[str, dict] | None = None,
 ) -> list[ColumnContract]:
     """Assemble ColumnContract objects for all currently-relevant columns.
 
@@ -913,6 +1035,8 @@ def build_contracts(
                     db_checked=db_found,
                     dynamic_writer_table=is_dynamic_table,
                     dynamic_writer_cols=[col] if proven_cols else [],
+                    auto_populated=col in (auto_populated_cols or {}).get(table, set()),
+                    provenance=((directives or {}).get(table) or {}).get("kind"),
                 )
             )
 
@@ -927,6 +1051,8 @@ _CLASS_ORDER = {
     "SAFE-DROP-CANDIDATE": 2,
     "DESKTOP-COUPLED": 3,
     "KEEP": 4,
+    "EXTERNAL-WRITER": 5,
+    "DECLARED-RESERVED": 6,
 }
 
 
@@ -1136,6 +1262,8 @@ def main() -> int:
 
     # ── 1. Extract sources ──────────────────────────────────────────────────
     init_schema = parse_init_schema(INIT_SCRIPT)
+    auto_populated_cols = parse_auto_populated(INIT_SCRIPT)
+    directives = parse_contract_directives(INIT_SCRIPT)
     migration_added, migration_dropped = parse_migrations(MIGRATIONS_DIR)
 
     known_tables: set[str] = set(init_schema.keys())
@@ -1184,6 +1312,8 @@ def main() -> int:
         db_found=db_found,
         dynamic_tables=dynamic_tables,
         dynamic_col_writers=dynamic_col_writers,
+        auto_populated_cols=auto_populated_cols,
+        directives=directives,
     )
 
     # ── 3. Output ───────────────────────────────────────────────────────────

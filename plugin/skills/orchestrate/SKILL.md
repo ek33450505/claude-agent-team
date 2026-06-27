@@ -46,7 +46,7 @@ If the checkpoint exists, read the last completed batch ID and skip batches with
 ```bash
 DISPATCH_BACKEND=$(python3 ~/.claude/scripts/orchestrate-dispatch.py get-dispatch-backend 2>/dev/null || echo 'cast')
 python3 ~/.claude/scripts/orchestrate-dispatch.py log-dispatch \
-  --backend "$DISPATCH_BACKEND" --plan "$PLAN_FILE_PATH" 2>/dev/null || true
+  --plan "$PLAN_FILE_PATH" 2>/dev/null || true
 ```
 
 If `DISPATCH_BACKEND` is `"coordinator"` or `"auto"`, print: `[CAST] dispatch_backend=$DISPATCH_BACKEND — COORDINATOR_MODE not yet supported; falling back to cast dispatch.` and continue.

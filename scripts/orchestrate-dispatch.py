@@ -2,7 +2,7 @@
 """orchestrate-dispatch.py — CLI backend for the /orchestrate skill.
 
 Subcommands:
-  log-dispatch        Log backend + plan session to cast.db (Step 2)
+  log-dispatch        Log plan session to cast.db (Step 2)
   log-quality-gate    Log agent contract validation result (Step 4)
   recent-status       Return fresh status from agent status file (Step 4 fallback)
 
@@ -43,7 +43,7 @@ def _session_id(env_var: str = 'CAST_SESSION_ID') -> str:
 # Subcommand: log-dispatch
 # ---------------------------------------------------------------------------
 
-def cmd_log_dispatch(backend: str, plan: str) -> None:
+def cmd_log_dispatch(plan: str) -> None:
     """Write plan_sessions row (Step 2 of orchestrate)."""
     _setup_cast_db()
     try:
@@ -217,7 +217,6 @@ def main() -> None:
 
     # log-dispatch
     p_ld = subparsers.add_parser('log-dispatch', help='Log plan_sessions row')
-    p_ld.add_argument('--backend', required=True, help='dispatch_backend value')
     p_ld.add_argument('--plan', required=True, help='plan file path')
 
     # log-quality-gate
@@ -246,7 +245,7 @@ def main() -> None:
         if args.command == 'get-dispatch-backend':
             cmd_get_dispatch_backend()
         elif args.command == 'log-dispatch':
-            cmd_log_dispatch(args.backend, args.plan)
+            cmd_log_dispatch(args.plan)
         elif args.command == 'log-quality-gate':
             cmd_log_quality_gate(
                 args.batch_id,
