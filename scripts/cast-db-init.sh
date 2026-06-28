@@ -461,6 +461,22 @@ sqlite3 "$DB_PATH" 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;' >/dev/n
 # FTS5 may be absent in some sqlite3 builds — pre-flight probe; if unavailable, skip + advise.
 # 'cast ask' degrades to a LIKE path in that case (see plans/cast-v9-a3-ask-your-record.md §3.1).
 # Never hard-fail: the || true guard keeps set -euo pipefail safe.
+# record_embed is a plain table (no FTS5 dependency) — create it UNCONDITIONALLY so the
+# semantic sidecar schema exists on every sqlite build, including ones without FTS5
+# (e.g. some macOS system sqlite). This also keeps the fresh-DB table count stable
+# regardless of FTS5 availability.
+sqlite3 "$DB_PATH" <<'EMBED_SQL' || true
+-- db-contract: external-writer table=record_embed source=cast-ask-index
+CREATE TABLE IF NOT EXISTS record_embed (
+  ref_id TEXT,
+  kind   TEXT,
+  vec    BLOB,
+  ts     TEXT,
+  PRIMARY KEY (kind, ref_id)
+);
+EMBED_SQL
+
+# record_fts requires FTS5 — gate on availability; degrade to an advisory if absent.
 if printf 'CREATE VIRTUAL TABLE t USING fts5(x);' | sqlite3 ":memory:" >/dev/null 2>&1; then
   sqlite3 "$DB_PATH" <<'FTS_SQL' || true
 -- db-contract: external-writer table=record_fts source=cast-ask-index
@@ -473,14 +489,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
   agent   UNINDEXED,   -- filter metadata (memory rows; empty otherwise)
   project UNINDEXED,   -- filter metadata
   mtype   UNINDEXED    -- filter metadata (agent_memories.type)
-);
--- db-contract: external-writer table=record_embed source=cast-ask-index
-CREATE TABLE IF NOT EXISTS record_embed (
-  ref_id TEXT,
-  kind   TEXT,
-  vec    BLOB,
-  ts     TEXT,
-  PRIMARY KEY (kind, ref_id)
 );
 FTS_SQL
 else
