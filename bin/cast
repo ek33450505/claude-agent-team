@@ -3923,7 +3923,7 @@ _cmd_ledger() {
     [ "$has_json" -eq 0 ] && args+=("--json")
   fi
 
-  CAST_DB_PATH="${CAST_DB_PATH}" python3 "$ledger_script" "${args[@]}"
+  CAST_DB_PATH="${CAST_DB_PATH}" python3 "$ledger_script" "${args[@]+"${args[@]}"}"
 }
 
 # ── Subcommand: provenance ──────────────────────────────────────────────────
