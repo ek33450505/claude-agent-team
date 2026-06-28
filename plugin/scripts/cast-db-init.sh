@@ -1134,6 +1134,27 @@ ATTESTATIONS_TABLE
   _columns_added=1
 fi
 
+# provenance_chain — tamper-evident hash-chain of per-session A5 ledger digests
+# (v9 A7). Writer: cast-provenance-chain.py (append/backfill), wired into
+# cast-session-end.sh. NEVER pruned — stores each session's A5 digest at
+# append-time so the chain survives pruning of the live `sessions` table.
+# Created UNCONDITIONALLY (plain table, no FTS5 dependency).
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "provenance_chain"; then
+  sqlite3 "$DB_PATH" <<'PROVENANCE_CHAIN_TABLE'
+-- db-contract: external-writer table=provenance_chain source=cast-provenance-chain
+CREATE TABLE IF NOT EXISTS provenance_chain (
+  seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id     TEXT NOT NULL,
+  prev_hash      TEXT NOT NULL DEFAULT '',
+  session_digest TEXT NOT NULL,
+  chain_hash     TEXT NOT NULL,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_provenance_chain_session_uniq ON provenance_chain(session_id);
+PROVENANCE_CHAIN_TABLE
+  _columns_added=1
+fi
+
 # Ensure agent_id index exists
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
 

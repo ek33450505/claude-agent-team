@@ -232,6 +232,14 @@ if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   # Aggregate token counts and cost columns dropped in migration 022 (wave-3)
 fi
 
+# === A7 PROVENANCE CHAIN — append this session's A5 digest before any pruning (fail-open) ===
+if command -v python3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
+  PROV_SCRIPT="${CAST_SCRIPTS_DIR}/cast-provenance-chain.py"
+  if [ -f "$PROV_SCRIPT" ]; then
+    python3 "$PROV_SCRIPT" append "$SESSION_ID" --db "$DB" >/dev/null 2>&1 || true
+  fi
+fi
+
 # === DB PRUNING (atomic — one lock acquisition for all 11 deletes/updates) ===
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   cast_sqlite "$DB" << PRUNE_SQL 2>/dev/null || true
