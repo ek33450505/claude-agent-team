@@ -285,7 +285,7 @@ CAST_DB_URL="sqlite:///path/to/custom.db" cast ledger
 
 **v9 A5 (Current):** Session ledger and digest.
 
-**v9 A7 (Planned):** Provenance hash-chain. Extend the digest to chain across sessions, creating a tamper-evident audit trail of your entire work history (session N references a digest of session N-1).
+**v9 A7 (Shipped):** Provenance hash-chain. Extend the digest to chain across sessions, creating a tamper-evident audit trail of your entire work history (session N references a digest of session N-1). Shipped — see [Provenance Chain](v9-a7-provenance-chain.md).
 
 ---
 

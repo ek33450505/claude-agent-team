@@ -152,6 +152,8 @@ Subcommands:
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
   ${C_BOLD}ask${C_RESET}       "<query>" [--kind K] [--since DATE] [--limit N] [--semantic]  Search the full audit record via FTS5
   ${C_BOLD}ledger${C_RESET}    [SESSION] [--last N] [--since DATE] [--json] [--out FILE] [--verify FILE]  Render a signed per-session audit receipt from cast.db
+  ${C_BOLD}verify-chain${C_RESET}                        Verify the tamper-evident provenance chain (PASS/BROKEN)
+  ${C_BOLD}provenance${C_RESET} <cmd>                    Provenance chain ops: verify | status | backfill | append <id>
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
   ${C_BOLD}cheap${C_RESET}     [status|config|check]         Local cheap-mode session via ccr + Ollama
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
@@ -3924,6 +3926,34 @@ _cmd_ledger() {
   CAST_DB_PATH="${CAST_DB_PATH}" python3 "$ledger_script" "${args[@]}"
 }
 
+# ── Subcommand: provenance ──────────────────────────────────────────────────
+_cmd_provenance() {
+  local prov_script="${CAST_SCRIPTS_DIR}/cast-provenance-chain.py"
+  if [ ! -f "$prov_script" ]; then
+    prov_script="${CAST_REPO_DIR}/scripts/cast-provenance-chain.py"
+  fi
+  if [ ! -f "$prov_script" ]; then
+    _error "cast-provenance-chain.py not found. Run: bash install.sh"
+    return 1
+  fi
+  CAST_DB_PATH="${CAST_DB_PATH}" python3 "$prov_script" "$@"
+  return $?
+}
+
+# ── Subcommand: verify-chain ─────────────────────────────────────────────────
+_cmd_verify_chain() {
+  local prov_script="${CAST_SCRIPTS_DIR}/cast-provenance-chain.py"
+  if [ ! -f "$prov_script" ]; then
+    prov_script="${CAST_REPO_DIR}/scripts/cast-provenance-chain.py"
+  fi
+  if [ ! -f "$prov_script" ]; then
+    _error "cast-provenance-chain.py not found. Run: bash install.sh"
+    return 1
+  fi
+  CAST_DB_PATH="${CAST_DB_PATH}" python3 "$prov_script" verify "$@"
+  return $?
+}
+
 # ── Subcommand: incidents ────────────────────────────────────────────────────
 _cmd_incidents() {
   local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
@@ -4135,6 +4165,8 @@ case "$SUBCOMMAND" in
   routines)             _cmd_routines "$@" ;;
   ask)                  _cmd_ask "$@" ;;
   ledger)               _cmd_ledger "$@" ;;
+  verify-chain)         _cmd_verify_chain "$@" ;;
+  provenance)           _cmd_provenance "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
   files)                _cmd_files "$@" ;;
   batch)                _cmd_batch "$@" ;;

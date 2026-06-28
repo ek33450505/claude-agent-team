@@ -28,6 +28,7 @@ ALLOWED_TABLES = {
     'parry_guard_events',
     'memory_consolidation_runs',
     'plan_sessions',
+    'provenance_chain',
     'quality_gates',
     'rate_limit_snapshots',
     'routines',
