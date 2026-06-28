@@ -18,6 +18,7 @@ All CAST documentation with one-line descriptions. Start with the Tutorial if yo
 
 | Document | Description |
 |---|---|
+| [Ask-Your-Record](ask-your-record.md) | Full-text query engine over your CAST record (agent runs, decisions, journal, transcripts) using FTS5 + optional semantic re-rank |
 | [Compatibility Matrix](compatibility.md) | Claude Code version requirements for each CAST feature and known breakages |
 | [Hook Authoring Guide](hooks/authoring-guide.md) | Write, test, and install custom hook scripts end-to-end |
 | [Known Limitations](known-limitations.md) | Documented constraints and workarounds |

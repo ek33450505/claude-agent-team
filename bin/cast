@@ -1965,6 +1965,41 @@ PYEOF
     fi
   fi
 
+  # 13b. Ask-Your-Record (A3 U7)
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "${C_BOLD}Ask-Your-Record${C_RESET}\n"
+  # record_fts — FTS5 search index; optional (FTS5 may not be compiled into this sqlite build)
+  local _ar_out _ar_rc _ar_count _ar_newest _are_out _are_rc _are_count
+  _ar_out="$(sqlite3 "$CAST_DB_PATH" "SELECT count(*) FROM record_fts;" 2>&1)"
+  _ar_rc=$?
+  if echo "$_ar_out" | grep -qi "no such table"; then
+    printf "%b ask-record: record_fts not present — run cast-db-init.sh then cast-ask-index.py (FTS5 may be unavailable in this sqlite build)\n" "$INFO"
+  elif [ "$_ar_rc" -ne 0 ]; then
+    printf "%b ask-record: record_fts unavailable (db query failed)\n" "$INFO"
+  else
+    _ar_count="${_ar_out:-0}"
+    if [ "${_ar_count}" -eq 0 ] 2>/dev/null; then
+      printf "%b ask-record: record_fts present but empty (0 rows) — run: cast-ask-index.py --rebuild\n" "$INFO"
+    else
+      _ar_newest="$(sqlite3 "$CAST_DB_PATH" "SELECT max(ts) FROM record_fts;" 2>/dev/null || echo "?")"
+      _ar_newest="${_ar_newest:-?}"
+      printf "%b ask-record: record_fts %s rows indexed (newest %s)\n" "$OK" "$_ar_count" "$_ar_newest"
+    fi
+  fi
+  # record_embed — optional semantic layer; advisory only, never blocks overall_ok
+  _are_out="$(sqlite3 "$CAST_DB_PATH" "SELECT count(*) FROM record_embed;" 2>&1)"
+  _are_rc=$?
+  if echo "$_are_out" | grep -qi "no such table" || [ "$_are_rc" -ne 0 ]; then
+    printf "%b ask-record: semantic layer not populated (opt-in) — run: cast-ask-index.py --embed\n" "$INFO"
+  else
+    _are_count="${_are_out:-0}"
+    if [ "${_are_count}" -eq 0 ] 2>/dev/null; then
+      printf "%b ask-record: semantic layer not populated (opt-in) — run: cast-ask-index.py --embed\n" "$INFO"
+    else
+      printf "%b ask-record: record_embed %s embeddings\n" "$OK" "$_are_count"
+    fi
+  fi
+
   # 14. Updates Available
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
