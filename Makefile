@@ -48,12 +48,13 @@ test-ubuntu:
 #   pii-scan, shellcheck  — security-scan.yml
 #   db-contract           — db-contract.yml
 #   self-lints            — self-lints.yml
+#   python-unit           — python-unit.yml
 #
 # Runner image: -P pins ubuntu-latest to catthehacker/ubuntu:act-latest so act never
 #   prompts interactively on first run (non-TTY safe; equivalent to the prompt's default).
 #
 # One invocation per job: act's -j flag is last-wins (repeated -j silently runs only the
-#   final job). Use a fail-fast loop — one act call per job — to guarantee all 10 run.
+#   final job). Use a fail-fast loop — one act call per job — to guarantee all 11 run.
 #
 # Excluded (cannot run under act):
 #   gitleaks   — uses gitleaks/gitleaks-action which requires a live GITHUB_TOKEN secret;
@@ -72,11 +73,11 @@ ci-local:
 	@echo "Running PR-gating workflows locally via act..."
 	@echo "This simulates the exact CI checks that block PR merges."
 	@echo ""
-	@for j in bats contract-test hook-contract-validation stats-guard rules-drift readme-structure pii-scan shellcheck db-contract self-lints; do \
+	@for j in bats contract-test hook-contract-validation stats-guard rules-drift readme-structure pii-scan shellcheck db-contract self-lints python-unit; do \
 		echo "── ci-local: act job $$j"; \
 		act pull_request --container-architecture linux/amd64 -P ubuntu-latest=catthehacker/ubuntu:act-latest -j "$$j" || { echo "ci-local FAILED at job: $$j" >&2; exit 1; }; \
 	done
-	@echo "ci-local: all 10 jobs green"
+	@echo "ci-local: all 11 jobs green"
 
 # Sync docs then validate
 sync: docs validate

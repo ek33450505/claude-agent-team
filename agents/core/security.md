@@ -93,7 +93,7 @@ For each finding include: file:line, what the issue is, and the fix.
 
 At task start, query relevant memories:
 ```bash
-bash ~/.claude/scripts/cast-memory-query.sh "$(echo $TASK | head -c 100)" --agent security --project "$(basename $PWD)" --limit 3
+cast memory search "$(echo $TASK | head -c 100)" --agent security --project "$(basename $PWD)" --limit 3
 ```
 
 At task end, write key findings:

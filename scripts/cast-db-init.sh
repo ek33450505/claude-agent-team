@@ -4,6 +4,8 @@
 #   sessions, agent_runs, routing_events, agent_memories
 #   swarm_sessions, teammate_runs, teammate_messages  (writers: /swarm retired v9; experimental native Agent Teams hooks re-populate these when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 — dormant otherwise)
 #   otel_metrics, otel_events  (writer: cast-otel-collector.py; native OTLP feed, opt-in OFF by default)
+#   record_fts (FTS5 full-text index over the whole record; writer: cast-ask-index — v9 A3)
+#   record_embed (semantic sidecar for vector search; writer: cast-ask-index — v9 A3)
 #
 # Idempotent: uses CREATE TABLE IF NOT EXISTS; safe to run repeatedly.
 # Schema versioning via PRAGMA user_version (current = 8).
@@ -17,9 +19,11 @@
 # KNOWN ORGANIC SCHEMA ADDITIONS (live DB may contain unprovisionable tables):
 # These exist in deployed instances but are added by external systems or
 # sessions outside this init script, and should NOT be included here:
-#   - agent_memories_fts (FTS5 full-text search index)
+#   - agent_memories_fts (FTS5 full-text search index — organic, not provisioned here)
 #   - memory_decay_log (temporal decay tracking for memory expiry)
-#   - agent_memory_embeddings (semantic search vectors)
+#   - agent_memory_embeddings (semantic search vectors — organic, not provisioned here)
+# NOTE: record_fts and record_embed ARE deliberately provisioned here (v9 A3 additions),
+# distinct from the organic FTS tables listed above.
 # To audit live DB: sqlite3 ~/.claude/cast.db ".tables"
 #
 # Usage:
@@ -448,6 +452,78 @@ chmod 600 "$DB_PATH"
 
 # Enable WAL mode for concurrent write safety
 sqlite3 "$DB_PATH" 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;' >/dev/null 2>&1 || true
+
+# ===== A3 Ask-Your-Record: record_fts + record_embed (v9) =====
+# record_fts  = FTS5 full-text index over the whole record (agent_runs, incidents, dispatches,
+#               memories, plans, journal, transcripts).
+# record_embed = optional semantic sidecar (vector BLOBs from cast-ask-index).
+# Both tables are provisioned UNCONDITIONALLY so they reach fresh installs AND existing v8 DBs.
+# FTS5 may be absent in some sqlite3 builds — pre-flight probe; if unavailable, skip + advise.
+# 'cast ask' degrades to a LIKE path in that case (see plans/cast-v9-a3-ask-your-record.md §3.1).
+# Never hard-fail: the || true guard keeps set -euo pipefail safe.
+# record_embed is a plain table (no FTS5 dependency) — create it UNCONDITIONALLY so the
+# semantic sidecar schema exists on every sqlite build, including ones without FTS5
+# (e.g. some macOS system sqlite). This also keeps the fresh-DB table count stable
+# regardless of FTS5 availability.
+sqlite3 "$DB_PATH" <<'EMBED_SQL' || true
+-- db-contract: external-writer table=record_embed source=cast-ask-index
+CREATE TABLE IF NOT EXISTS record_embed (
+  ref_id TEXT,
+  kind   TEXT,
+  vec    BLOB,
+  ts     TEXT,
+  PRIMARY KEY (kind, ref_id)
+);
+EMBED_SQL
+
+# record_fts requires FTS5 — gate on availability; degrade to an advisory if absent.
+if printf 'CREATE VIRTUAL TABLE t USING fts5(x);' | sqlite3 ":memory:" >/dev/null 2>&1; then
+  sqlite3 "$DB_PATH" <<'FTS_SQL' || true
+-- db-contract: external-writer table=record_fts source=cast-ask-index
+CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
+  kind,                -- 'agent_run'|'incident'|'dispatch'|'memory'|'plan'|'journal'|'transcript'
+  ref_id  UNINDEXED,   -- source row id / file path
+  ts      UNINDEXED,   -- ISO timestamp
+  title,               -- short label for the hit
+  body,                -- searchable text
+  agent   UNINDEXED,   -- filter metadata (memory rows; empty otherwise)
+  project UNINDEXED,   -- filter metadata
+  mtype   UNINDEXED    -- filter metadata (agent_memories.type)
+);
+FTS_SQL
+else
+  echo "cast-db-init: FTS5 unavailable in this sqlite3 build — record_fts not created; 'cast ask' will use the LIKE fallback." >&2
+fi
+
+# ===== A3 U5: record_embed composite-PK self-heal =====
+# U1 created record_embed keyed on (ref_id) alone, but record identity is (kind, ref_id):
+# DB-source ref_ids are bare row ids that collide across kinds (agent_run#5 vs incident#5).
+# Recreate with the composite PK when the legacy single-column PK is detected. SAFE: record_embed
+# has no writer before A3 U5 (empty on every pre-U5 DB) and is regenerable (cast-ask-index.py --embed).
+if sqlite3 "$DB_PATH" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "record_embed"; then
+  _re_pk_cols=$(sqlite3 "$DB_PATH" "SELECT count(*) FROM pragma_table_info('record_embed') WHERE pk > 0;" 2>/dev/null || echo 0)
+  if [ "${_re_pk_cols:-0}" != "2" ]; then
+    sqlite3 "$DB_PATH" "DROP TABLE IF EXISTS record_embed;" 2>/dev/null || true
+    sqlite3 "$DB_PATH" "CREATE TABLE IF NOT EXISTS record_embed (ref_id TEXT, kind TEXT, vec BLOB, ts TEXT, PRIMARY KEY (kind, ref_id));" 2>/dev/null || true
+  fi
+fi
+
+# ===== A3 U6: record_fts filter-column self-heal =====
+# U1–U5 created record_fts with 5 columns; U6 adds agent/project/mtype filter columns. FTS5 has no
+# ALTER ADD COLUMN, so recreate when the legacy column set is detected. SAFE: record_fts is regenerable
+# (cast-ask-index.py --rebuild) — dropping it discards only the index, never source data.
+if printf 'CREATE VIRTUAL TABLE t USING fts5(x);' | sqlite3 ":memory:" >/dev/null 2>&1 \
+   && sqlite3 "$DB_PATH" ".tables" 2>/dev/null | tr ' ' '\n' | grep -qx "record_fts"; then
+  if ! sqlite3 "$DB_PATH" "PRAGMA table_info(record_fts);" 2>/dev/null | grep -qw "agent"; then
+    sqlite3 "$DB_PATH" "DROP TABLE IF EXISTS record_fts;" 2>/dev/null || true
+    sqlite3 "$DB_PATH" <<'REFTS_SQL' 2>/dev/null || true
+CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
+  kind, ref_id UNINDEXED, ts UNINDEXED, title, body,
+  agent UNINDEXED, project UNINDEXED, mtype UNINDEXED
+);
+REFTS_SQL
+  fi
+fi
 
 # ===== SELF-HEALING SCHEMA BLOCK (runs unconditionally on every invocation) =====
 # This block ensures critical columns exist in agent_runs, regardless of version history.

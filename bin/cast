@@ -150,6 +150,7 @@ Subcommands:
   ${C_BOLD}clean${C_RESET}     [--apply] [--worktrees]   Prune stale branches (dry-run by default)
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
+  ${C_BOLD}ask${C_RESET}       "<query>" [--kind K] [--since DATE] [--limit N] [--semantic]  Search the full audit record via FTS5
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
   ${C_BOLD}cheap${C_RESET}     [status|config|check]         Local cheap-mode session via ccr + Ollama
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
@@ -911,7 +912,7 @@ _cmd_memory() {
       cat <<USAGE
 Usage: cast memory <subcommand> [args]
 
-  search "<query>"  [--agent <name>] [--project <name>] [--limit 10]
+  search "<query>"  [--agent <name>] [--project <name>] [--type <type>] [--limit 10]
   list              [--agent <name>] [--type feedback|project|user|reference]
   verify            [--agent <name>]  Run staleness sweep
   show <id>                           Print full memory entry
@@ -957,16 +958,14 @@ _memory_dream() {
 }
 
 _memory_search() {
-  local query=""
-  local agent_filter=""
-  local project_filter=""
-  local limit=10
+  local query="" agent_filter="" project_filter="" type_filter="" limit=10
 
   while [ "${#}" -gt 0 ]; do
     case "$1" in
-      --agent)    agent_filter="${2:-}"; shift 2 ;;
-      --project)  project_filter="${2:-}"; shift 2 ;;
-      --limit)    limit="${2:-10}"; shift 2 ;;
+      --agent)   agent_filter="${2:-}"; shift 2 ;;
+      --project) project_filter="${2:-}"; shift 2 ;;
+      --type)    type_filter="${2:-}"; shift 2 ;;
+      --limit)   limit="${2:-10}"; shift 2 ;;
       *)
         if [ -z "$query" ]; then query="$1"; fi
         shift
@@ -975,44 +974,66 @@ _memory_search() {
   done
 
   if [ -z "$query" ]; then
-    _error "Usage: cast memory search \"<query>\" [--agent <name>] [--limit 10]"
+    _error "Usage: cast memory search \"<query>\" [--agent <name>] [--project <name>] [--type <type>] [--limit 10]"
     return 1
   fi
 
-  local query_script="${CAST_SCRIPTS_DIR}/cast-memory-query.sh"
+  # A3 U6: memory search rides the unified record_fts FTS5 index via cast-ask-query.py
+  # (BM25 ranking + agent/project/type filters), retiring the bespoke LIKE path.
+  local index_script="${CAST_SCRIPTS_DIR}/cast-ask-index.py"
+  [ -f "$index_script" ] || index_script="${CAST_REPO_DIR}/scripts/cast-ask-index.py"
+  local query_script="${CAST_SCRIPTS_DIR}/cast-ask-query.py"
+  [ -f "$query_script" ] || query_script="${CAST_REPO_DIR}/scripts/cast-ask-query.py"
   if [ ! -f "$query_script" ]; then
-    query_script="${CAST_REPO_DIR}/scripts/cast-memory-query.sh"
-  fi
-
-  if [ ! -f "$query_script" ]; then
-    _error "cast-memory-query.sh not found"
+    _error "cast-ask-query.py not found. Run: bash install.sh"
     return 1
   fi
 
-  local args=("$query" "--limit" "$limit")
+  # Lazy-refresh the memory index so freshly-written memories are searchable (fail-open).
+  if [ -f "$index_script" ]; then
+    bash -c "python3 \"$index_script\" --kind memory >/dev/null 2>&1" || true
+  fi
+
+  local args=("$query" "--kind" "memory" "--limit" "$limit")
   [ -n "$agent_filter" ]   && args+=("--agent"   "$agent_filter")
   [ -n "$project_filter" ] && args+=("--project" "$project_filter")
+  [ -n "$type_filter" ]    && args+=("--type"    "$type_filter")
 
   local result
-  result="$(bash "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
+  result="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
 
-  if [ "$CAST_JSON" -eq 1 ]; then
-    echo "$result"
-    return 0
-  fi
-
-  python3 - "$result" <<'PYEOF'
-import sys, json
+  # Adapt the unified record_fts row shape → the memory-search contract so the reroute is transparent.
+  CAST_JSON="${CAST_JSON:-0}" python3 - "$result" <<'PYEOF'
+import os, sys, json
+cast_json = os.environ.get("CAST_JSON", "0") == "1"
 try:
-    rows = json.loads(sys.argv[1])
+    data = json.loads(sys.argv[1])
 except Exception:
-    rows = []
-if not rows:
+    data = []
+# degraded object (FTS5 unavailable) → advisory / empty json
+if isinstance(data, dict):
+    note = data.get("note", "record_fts unavailable — FTS5 not supported in this sqlite build")
+    if cast_json:
+        print(json.dumps([]))
+    else:
+        print(f"Advisory: {note}")
+    sys.exit(0)
+adapted = [{
+    "id": r.get("ref_id"),
+    "agent": r.get("agent", ""),
+    "type": r.get("mtype", ""),
+    "name": r.get("title", ""),
+    "content": (r.get("snippet") or "").strip(),
+    "created_at": r.get("ts", ""),
+} for r in data]
+if cast_json:
+    print(json.dumps(adapted, indent=2))
+    sys.exit(0)
+if not adapted:
     print("No memories found.")
     sys.exit(0)
-for r in rows:
-    score = f"  [score:{r['score']:.2f}]" if 'score' in r else ""
-    print(f"[{r['id']}] {r['agent']} / {r['type']} — {r['name']}{score}")
+for r in adapted:
+    print(f"[{r['id']}] {r['agent']} / {r['type']} — {r['name']}")
     content = (r['content'] or '')[:200]
     print(f"  {content}")
     print()
@@ -1941,6 +1962,41 @@ PYEOF
       overall_ok=0
     else
       printf "%b crashed-sessions: %s in last 7d (below threshold %s)\n" "$OK" "${_cs_out:-0}" "$_cs_threshold"
+    fi
+  fi
+
+  # 13b. Ask-Your-Record (A3 U7)
+  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "${C_BOLD}Ask-Your-Record${C_RESET}\n"
+  # record_fts — FTS5 search index; optional (FTS5 may not be compiled into this sqlite build)
+  local _ar_out _ar_rc _ar_count _ar_newest _are_out _are_rc _are_count
+  _ar_out="$(sqlite3 "$CAST_DB_PATH" "SELECT count(*) FROM record_fts;" 2>&1)"
+  _ar_rc=$?
+  if echo "$_ar_out" | grep -qi "no such table"; then
+    printf "%b ask-record: record_fts not present — run cast-db-init.sh then cast-ask-index.py (FTS5 may be unavailable in this sqlite build)\n" "$INFO"
+  elif [ "$_ar_rc" -ne 0 ]; then
+    printf "%b ask-record: record_fts unavailable (db query failed)\n" "$INFO"
+  else
+    _ar_count="${_ar_out:-0}"
+    if [ "${_ar_count}" -eq 0 ] 2>/dev/null; then
+      printf "%b ask-record: record_fts present but empty (0 rows) — run: cast-ask-index.py --rebuild\n" "$INFO"
+    else
+      _ar_newest="$(sqlite3 "$CAST_DB_PATH" "SELECT max(ts) FROM record_fts;" 2>/dev/null || echo "?")"
+      _ar_newest="${_ar_newest:-?}"
+      printf "%b ask-record: record_fts %s rows indexed (newest %s)\n" "$OK" "$_ar_count" "$_ar_newest"
+    fi
+  fi
+  # record_embed — optional semantic layer; advisory only, never blocks overall_ok
+  _are_out="$(sqlite3 "$CAST_DB_PATH" "SELECT count(*) FROM record_embed;" 2>&1)"
+  _are_rc=$?
+  if echo "$_are_out" | grep -qi "no such table" || [ "$_are_rc" -ne 0 ]; then
+    printf "%b ask-record: semantic layer not populated (opt-in) — run: cast-ask-index.py --embed\n" "$INFO"
+  else
+    _are_count="${_are_out:-0}"
+    if [ "${_are_count}" -eq 0 ] 2>/dev/null; then
+      printf "%b ask-record: semantic layer not populated (opt-in) — run: cast-ask-index.py --embed\n" "$INFO"
+    else
+      printf "%b ask-record: record_embed %s embeddings\n" "$OK" "$_are_count"
     fi
   fi
 
@@ -3747,6 +3803,102 @@ _cmd_ci_local() {
   exec make -C "$CAST_REPO_DIR" ci-local
 }
 
+# ── Subcommand: ask ─────────────────────────────────────────────────────────
+_cmd_ask() {
+  local query=""
+  local kind_filter=""
+  local since_filter=""
+  local limit=10
+  local no_refresh=0
+  local semantic=0
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --kind)       kind_filter="${2:-}"; shift 2 ;;
+      --since)      since_filter="${2:-}"; shift 2 ;;
+      --limit)      limit="${2:-10}"; shift 2 ;;
+      --no-refresh) no_refresh=1; shift ;;
+      --semantic)   semantic=1; shift ;;
+      *)
+        if [ -z "$query" ]; then query="$1"; fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$query" ]; then
+    _error "Usage: cast ask \"<query>\" [--kind K] [--since YYYY-MM-DD] [--limit N] [--no-refresh] [--semantic]"
+    return 1
+  fi
+
+  # Resolve indexer (lazy-refresh unless --no-refresh)
+  local index_script="${CAST_SCRIPTS_DIR}/cast-ask-index.py"
+  if [ ! -f "$index_script" ]; then
+    index_script="${CAST_REPO_DIR}/scripts/cast-ask-index.py"
+  fi
+
+  if [ "$no_refresh" -eq 0 ] && [ -f "$index_script" ]; then
+    bash -c "python3 \"$index_script\" >/dev/null 2>&1" || true
+  fi
+
+  # Resolve query backend
+  local query_script="${CAST_SCRIPTS_DIR}/cast-ask-query.py"
+  if [ ! -f "$query_script" ]; then
+    query_script="${CAST_REPO_DIR}/scripts/cast-ask-query.py"
+  fi
+
+  if [ ! -f "$query_script" ]; then
+    _error "cast-ask-query.py not found. Run: bash install.sh"
+    return 1
+  fi
+
+  local args=("$query")
+  [ -n "$kind_filter" ]  && args+=("--kind"  "$kind_filter")
+  [ -n "$since_filter" ] && args+=("--since" "$since_filter")
+  args+=("--limit" "$limit")
+  [ "$semantic" -eq 1 ] && args+=("--semantic")
+
+  local result
+  result="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
+
+  if [ "${CAST_JSON:-0}" -eq 1 ]; then
+    echo "$result"
+    return 0
+  fi
+
+  python3 - "$result" <<'PYEOF'
+import sys, json
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw)
+except Exception:
+    data = []
+
+# Degraded object: {"degraded": true, "rows": [...], "note": "..."}
+if isinstance(data, dict):
+    note = data.get("note", "record_fts unavailable — FTS5 not supported in this sqlite build")
+    print(f"Advisory: {note}")
+    rows = data.get("rows", [])
+else:
+    rows = data
+
+if not rows:
+    print("No results.")
+    sys.exit(0)
+
+for r in rows:
+    kind = r.get("kind", "")
+    ts   = (r.get("ts") or "")[:19]
+    title = r.get("title", "")
+    snippet = (r.get("snippet") or "").strip()
+    print(f"{kind} · {ts} · {title}")
+    if snippet:
+        print(f"   {snippet}")
+    print()
+PYEOF
+}
+
 # ── Subcommand: incidents ────────────────────────────────────────────────────
 _cmd_incidents() {
   local incidents_script="${CAST_SCRIPTS_DIR}/cast-db-incidents.py"
@@ -3956,6 +4108,7 @@ case "$SUBCOMMAND" in
   install-completions)  _cmd_install_completions "$@" ;;
   cheap)                _cmd_cheap "$@" ;;
   routines)             _cmd_routines "$@" ;;
+  ask)                  _cmd_ask "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
   files)                _cmd_files "$@" ;;
   batch)                _cmd_batch "$@" ;;

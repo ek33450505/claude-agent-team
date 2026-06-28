@@ -136,7 +136,7 @@ I confirmed route.sh is executable and routing-table.json has the entry.
 
 At task start, query relevant memories:
 ```bash
-bash ~/.claude/scripts/cast-memory-query.sh "$(echo $TASK | head -c 100)" --agent debugger --project "$(basename $PWD)" --limit 3
+cast memory search "$(echo $TASK | head -c 100)" --agent debugger --project "$(basename $PWD)" --limit 3
 ```
 
 At task end, write key findings:
