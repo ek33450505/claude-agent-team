@@ -43,15 +43,18 @@ build_plan_md() {
 
 # ---------------------------------------------------------------------------
 # Test 1: Well-formed ledger (S1 done, S2 next, S3 todo)
-# Uses real repo branch (feature/v9-foundation) which exists locally
+# Self-contained: the DONE row uses `main` (present in every checkout, incl. a
+# fresh CI clone). A done-row branch that is absent + unmerged would be flagged
+# as a CONTRADICTION by probe_branch_reconcile; NEXT/Todo rows on absent feature
+# branches are only INFO, so they don't affect --check.
 # ---------------------------------------------------------------------------
 
 @test "plan-doctor --check: well-formed ledger exits 0" {
   local plan_md plan_path
   plan_path="$BATS_TMPDIR/test-plan.md"
-  plan_md="$(build_plan_md "| 1 | Phase A | U1 | P0 | feature/v9-foundation | ✅ Done |
-| 2 | Phase B | U2 | P1 | feature/v9-foundation | ☐ NEXT |
-| 3 | Phase C | U3 | P2 | feature/v9-foundation | ☐ Todo |")"
+  plan_md="$(build_plan_md "| 1 | Phase A | U1 | P0 | main | ✅ Done |
+| 2 | Phase B | U2 | P1 | feature/b1 | ☐ NEXT |
+| 3 | Phase C | U3 | P2 | feature/c1 | ☐ Todo |")"
   printf '%s\n' "$plan_md" > "$plan_path"
 
   run python3 "$DOCTOR" --check --plan "$plan_path" --baseline /dev/null

@@ -50,6 +50,7 @@ teardown() {
 }
 
 @test "helper: skips unreadable file, counts readable ones only" {
+  if [ "$(id -u)" -eq 0 ]; then skip "chmod 000 does not restrict root; unreadable-file scenario is untestable as root"; fi
   printf '@test "a1" { true; }\n' > "$FIXTURE_DIR/a.bats"
   printf '@test "b1" { true; }\n@test "b2" { true; }\n' > "$FIXTURE_DIR/b.bats"
   chmod 000 "$FIXTURE_DIR/b.bats"
