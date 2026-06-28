@@ -226,7 +226,7 @@ def search(
             except Exception:
                 pass
             return {
-                "degraded": False,
+                "degraded": True,
                 "rows": [],
                 "note": f"FTS5 query failed after sanitization: {second_err}",
             }

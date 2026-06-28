@@ -319,3 +319,58 @@ SQL
   assert_output --partial "pattern_a"
   refute_output --partial "pattern_b"
 }
+
+@test "cast ask: indexes journal markdown files (kind=journal)" {
+  _fts5_ok || skip "FTS5 not available in this sqlite build"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  mkdir -p "$CAST_JOURNAL_DIR/2026-06"
+  printf '# June 27\n\nToday I debugged the znordle widget failure.\n' > "$CAST_JOURNAL_DIR/2026-06/2026-06-27.md"
+  python3 "$REPO_DIR/scripts/cast-ask-index.py" --kind journal >/dev/null 2>&1
+  run bash "$CAST_BIN" ask "znordle" --kind journal --no-refresh
+  assert_success
+  assert_output --partial "znordle"
+}
+
+@test "cast ask: indexes JSONL transcripts (kind=transcript)" {
+  _fts5_ok || skip "FTS5 not available in this sqlite build"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  mkdir -p "$CLAUDE_PROJECTS_DIR/-some-project"
+  # one user turn (string content) + one assistant text block; both carry the term
+  printf '%s\n' '{"type":"user","message":{"content":"please fix the qwizbar timeout"}}' > "$CLAUDE_PROJECTS_DIR/-some-project/sess1.jsonl"
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"fixed the qwizbar timeout"}]}}' >> "$CLAUDE_PROJECTS_DIR/-some-project/sess1.jsonl"
+  python3 "$REPO_DIR/scripts/cast-ask-index.py" --kind transcript >/dev/null 2>&1
+  run bash "$CAST_BIN" ask "qwizbar" --kind transcript --no-refresh
+  assert_success
+  assert_output --partial "qwizbar"
+}
+
+@test "cast ask: --since filters out records before the cutoff date" {
+  _fts5_ok || skip "FTS5 not available in this sqlite build"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO incidents (id, occurred_at, problem_summary, fix_summary) VALUES
+  ('old', '2026-01-15T10:00:00Z', 'plonkbug in the old subsystem', 'patched old'),
+  ('new', '2026-06-20T10:00:00Z', 'plonkbug in the new subsystem', 'patched new');
+SQL
+  python3 "$REPO_DIR/scripts/cast-ask-index.py" >/dev/null 2>&1
+  run bash "$CAST_BIN" ask "plonkbug" --since 2026-06-01 --no-refresh
+  assert_success
+  assert_output --partial "new subsystem"
+  refute_output --partial "old subsystem"
+}
+
+@test "cast ask: incremental reindex adds new rows without duplicating old ones" {
+  _fts5_ok || skip "FTS5 not available in this sqlite build"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" "INSERT INTO incidents (id, occurred_at, problem_summary, fix_summary) VALUES ('a', '2026-06-01T10:00:00Z', 'flarn one', 'fix a');"
+  python3 "$REPO_DIR/scripts/cast-ask-index.py" --kind incident >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" "INSERT INTO incidents (id, occurred_at, problem_summary, fix_summary) VALUES ('b', '2026-06-02T10:00:00Z', 'flarn two', 'fix b');"
+  python3 "$REPO_DIR/scripts/cast-ask-index.py" --kind incident >/dev/null 2>&1
+  local n
+  n=$(sqlite3 "$CAST_DB_PATH" "SELECT count(*) FROM record_fts WHERE kind='incident';")
+  [ "$n" -eq 2 ]
+  run bash "$CAST_BIN" ask "flarn" --kind incident --no-refresh
+  assert_success
+  assert_output --partial "flarn one"
+  assert_output --partial "flarn two"
+}
