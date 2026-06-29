@@ -33,6 +33,8 @@ graders:
     on_error: error          # error | skip | fail
 ```
 
+> **`on_error` values:** `skip`, `error`, and — for **programmatic** graders only — `fail`. `llm_judge` graders cap at `error` (an LLM verifier erroring is infrastructure, not a test failure). The eval-writer authoring discipline prefers `skip`/`error` and avoids `fail` — see `evals/cases/eval-writer/eval-writer-emits-runnable-graders.yaml`.
+
 ## Grader Commands
 
 All `type: programmatic` graders must have a `command` that is directly executable.

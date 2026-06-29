@@ -54,6 +54,16 @@ CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo
 
 # If already at v8+, ensure version-specific additive tables exist, then FALL THROUGH
 # to the unconditional self-healing block at the bottom (do NOT exit here).
+#
+# NOTE — INTENTIONAL TRIPLICATION: several tables (stream_events, swarm_sessions,
+# teammate_runs, teammate_messages, tool_call_failures) are defined in THREE heredocs:
+#   (1) this v8+ additive-guarantee block (STREAM_TABLES, just below),
+#   (2) the v7→v8 migration block (MIGRATE_V8, ~L152), and
+#   (3) the fresh-install canonical SQL block (SQL, ~L265).
+# All three copies must remain byte-consistent with each other. The triplication is
+# required so every code path — a v8+ DB that missed an earlier run, a v7 upgrade,
+# or a fresh install — lands on the same schema. Do NOT collapse them; removing any
+# copy silently breaks the corresponding self-heal or migration path.
 if [ "$CURRENT_VERSION" -ge 8 ]; then
   # Additive migration: create stream_events if missing (stream_hook_events retired via migration 015)
   # Also add cache token columns if missing (Task 0a: token optimization)
@@ -148,6 +158,7 @@ fi
 
 # Migrate v7 → v8: add swarm tables (additive only — no drops)
 # Note: model_used column was dropped via migration 014 (audit 2026-05-16 #3)
+# (2/3 of intentional triplication — see explanation near the v8+ STREAM_TABLES block above)
 if [ "$CURRENT_VERSION" -eq 7 ]; then
   sqlite3 "$DB_PATH" <<'MIGRATE_V8'
 CREATE TABLE IF NOT EXISTS stream_events (
@@ -261,6 +272,7 @@ MIGRATE_V7
 fi
 
 # Fresh install (no existing DB or version 0-6)
+# (3/3 of intentional triplication — see explanation near the v8+ STREAM_TABLES block above)
 if [ "$CURRENT_VERSION" -lt 7 ]; then
   sqlite3 "$DB_PATH" <<'SQL'
 PRAGMA foreign_keys = ON;
@@ -1120,6 +1132,9 @@ fi
 # attestations — completion-attestation verdicts mirrored by the `attest` plugin's
 # SubagentStop hook (zero-LLM DONE-gate). attest owns the writer; CAST declares the
 # schema here so the table is a known/owned surface (not a db-contract safe-drop phantom).
+# Status: intentionally dormant — no `attest` plugin writer ships in this repo yet;
+# table is schema-reserved for the future attest integration (grep scripts/ bin/ .githooks/
+# confirms zero INSERT writers as of 2026-06-29).
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "attestations"; then
   sqlite3 "$DB_PATH" <<'ATTESTATIONS_TABLE'
 -- db-contract: external-writer table=attestations source=attest

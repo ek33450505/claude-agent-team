@@ -227,8 +227,17 @@ def cmd_verify(args: argparse.Namespace, ledger) -> int:
         if ledger is not None:
             try:
                 ledger_ro_conn = ledger._connect(db_path)
-            except Exception:
+            except Exception as e:
+                print(
+                    f"WARNING: level-2 attestation skipped — provenance ledger unavailable (connect failed: {e})",
+                    file=sys.stderr,
+                )
                 ledger_ro_conn = None
+        else:
+            print(
+                "WARNING: level-2 attestation skipped — provenance ledger unavailable (module load failed)",
+                file=sys.stderr,
+            )
 
         broken = False
         pruned_skipped = 0
