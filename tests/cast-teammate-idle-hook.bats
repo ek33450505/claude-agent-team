@@ -11,7 +11,6 @@ make_payload() {
   local agent_id="${2:-agent_test_001}"
   local agent_type="${3:-code-reviewer}"
   local teammate="${4:-code-reviewer}"
-  local team_name="${5:-session-test1234}"
   python3 -c "
 import json, sys
 print(json.dumps({
@@ -20,10 +19,9 @@ print(json.dumps({
     'agent_id': sys.argv[2],
     'agent_type': sys.argv[3],
     'teammate_name': sys.argv[4],
-    'team_name': sys.argv[5],
     'cwd': '/tmp/test-project',
 }))
-" "$session_id" "$agent_id" "$agent_type" "$teammate" "$team_name"
+" "$session_id" "$agent_id" "$agent_type" "$teammate"
 }
 
 seed_db() {
@@ -112,7 +110,7 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "event file has type=teammate_idle and correct agent_id" {
-  bash "$HOOK_SH" <<< "$(make_payload "sess-1234" "agent_xyz" "debugger" "debugger" "session-sess1234")"
+  bash "$HOOK_SH" <<< "$(make_payload "sess-1234" "agent_xyz" "debugger" "debugger")"
   local event_file
   event_file=$(find "$HOME/.claude/cast/events" -name "*teammate-idle.json" | head -1)
   python3 -c "
@@ -141,7 +139,7 @@ print('ok')
 
 @test "seeded DB → teammate_runs row has status=idle, agent_role=teammate_name, agent_def=agent_type, swarm_id=team_id" {
   seed_db
-  bash "$HOOK_SH" <<< "$(make_payload "test-session-ab" "agent_role_test" "commit" "commit" "session-test12")"
+  bash "$HOOK_SH" <<< "$(make_payload "test-session-ab" "agent_role_test" "commit" "commit")"
   python3 -c "
 import sqlite3, os, sys
 db = os.environ['CAST_DB_PATH']
@@ -153,7 +151,7 @@ status, agent_role, agent_def, swarm_id = rows[0]
 assert status == 'idle', f'expected idle, got {status!r}'
 assert agent_role == 'commit', f'expected commit, got {agent_role!r}'
 assert agent_def == 'commit', f'expected commit (agent_type), got {agent_def!r}'
-assert swarm_id == 'session-test12', f'expected session-test12, got {swarm_id!r}'
+assert swarm_id == 'session-test-ses', f'expected session-test-ses, got {swarm_id!r}'
 print('ok: status=%s role=%s def=%s swarm=%s' % (status, agent_role, agent_def, swarm_id))
 "
 }
@@ -164,12 +162,12 @@ print('ok: status=%s role=%s def=%s swarm=%s' % (status, agent_role, agent_def, 
 
 @test "seeded DB → swarm_sessions row created with notes containing schema_version" {
   seed_db
-  bash "$HOOK_SH" <<< "$(make_payload "test-session-ss" "agent_ss" "code-writer" "code-writer" "session-test56ss")"
+  bash "$HOOK_SH" <<< "$(make_payload "test-session-ss" "agent_ss" "code-writer" "code-writer")"
   python3 -c "
 import sqlite3, os, json
 db = os.environ['CAST_DB_PATH']
 conn = sqlite3.connect(db)
-rows = conn.execute(\"SELECT notes FROM swarm_sessions WHERE id='session-test56ss'\").fetchall()
+rows = conn.execute(\"SELECT notes FROM swarm_sessions WHERE id='session-test-ses'\").fetchall()
 conn.close()
 assert rows, 'no swarm_sessions row created'
 notes = json.loads(rows[0][0])
@@ -185,7 +183,7 @@ print('ok: schema_version=%d' % notes['schema_version'])
 @test "idempotent — firing twice yields exactly one teammate_runs row for agent_id" {
   seed_db
   local payload
-  payload="$(make_payload "test-session-id" "agent_idem" "bash-specialist" "bash-specialist" "session-test1234")"
+  payload="$(make_payload "test-session-id" "agent_idem" "bash-specialist" "bash-specialist")"
   bash "$HOOK_SH" <<< "$payload"
   bash "$HOOK_SH" <<< "$payload"
   python3 -c "
