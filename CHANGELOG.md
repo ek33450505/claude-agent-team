@@ -14,6 +14,7 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 ### Removed
 - **Retired the dormant `/swarm` subsystem** (v9 P0 · B1): removed the `/swarm` skill, the `cast-swarm-{bootstrap,merge,teardown}` scripts, `swarm-configs/`, `docs/swarm.md`, and the swarm BATS tests. `swarm_sessions` carried zero rows and the subsystem held the highest wipe blast-radius in the repo (its teardown `rmtree` was the 2026-06-02 wipe culprit). The `swarm_sessions` / `teammate_runs` / `teammate_messages` cast.db tables are **retained as dormant historical record** (the record is the product) — only the writers were removed, no `DROP TABLE`. All §1 containment guarantees (rmtree blast-radius scoping, directory-traversal refusal, temp-HOME isolation, branch-prefix guard) were **re-anchored to general guard tests before any deletion** (Subtraction Safety Gate). Forward path for parallel teammates is native `isolation: worktree` subagents + (experimental) Agent Teams.
 - **Removed the dead `cast-research-cache.py` URL cache** (v9 P-grain · I7): the 1-hour-TTL research URL cache and the `researcher` agent's URL-caching instruction are retired — the cache had no cast.db table, no hook wiring, and no guarding test; Claude Code's native WebFetch in-session cache covers it. Subtraction per the §0.2 Safety Gate.
+- **Removed `scripts/cast-token-budget-check.py`** (v9 W3): dead feature — no `bin/cast` subcommand, no hook wiring, no test references; advisory token-alerting coverage is superseded by native Claude Code context indicators.
 
 ### Fixed
 - **Policy-gate completion-recording (v9 P-trust):** the Write/Edit policy gate (`cast-git-guard.py`) clears a `requires_agent` block by matching the agent name in an `agent-status/*.json` filename, but review agents (e.g. `devops`, `security`) never wrote one — so `block`-severity policies (`workflows-require-devops`, `auth-requires-security`, `env-files-require-security`) could misfire and block the orchestrator from applying a reviewed change. The `SubagentStop` hook now writes a per-agent completion record with the agent's **real** final status (fail-open, non-exempt agents only), so the block clears on a genuine `DONE`/`DONE_WITH_CONCERNS` review and correctly stays blocked on `BLOCKED`/truncated reviews. The hard block is preserved.
@@ -320,7 +321,6 @@ Systematic token cost optimization across all 17 agents.
 - Response Budget sections on all 17 agents (300/800/2000 token tiers)
 - WebFetch Efficiency guidance in researcher agent
 - `scripts/cast-research-cache.py` — URL result cache for researcher (1-hour TTL)
-- `scripts/cast-token-budget-check.py` — token budget alerting for orchestrator sessions
 - Token Efficiency section in README documenting all optimizations
 
 ### Impact
