@@ -53,7 +53,7 @@ per-server map** (`config/egress-policy.json → mcp_servers`), unknown servers
 default to `cloud_bound` (fail-closed *classification*, fail-open *enforcement*).
 
 Starting classification (Ed: confirm/extend):
-- **cloud-bound:** `github`, `ms365`, `todoist`, `claude_ai_Gmail/Calendar/Drive`
+- **cloud-bound:** `github`, `ms365`, `claude_ai_Gmail/Calendar/Drive`
 - **local-only:** `obsidian`, `obsidian-claude`
 - `claude_ai_*` are Anthropic-brokered (flagged, but Anthropic-sanctioned).
 

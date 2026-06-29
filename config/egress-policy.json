@@ -6,7 +6,7 @@
   "mcp_servers": {
     "_doc": "Per-server cloud-bound classification. Transport (stdio vs http) is NOT a reliable signal: github uses local stdio (npx) yet calls api.github.com. Key = the <server> segment of mcp__<server>__<tool>.",
     "_default_unknown": "cloud_bound",
-    "cloud_bound": ["github", "ms365", "todoist", "claude_ai_Gmail", "claude_ai_Google_Calendar", "claude_ai_Google_Drive"],
+    "cloud_bound": ["github", "ms365", "claude_ai_Gmail", "claude_ai_Google_Calendar", "claude_ai_Google_Drive"],
     "local_only": ["obsidian", "obsidian-claude"],
     "anthropic_brokered": ["claude_ai_Gmail", "claude_ai_Google_Calendar", "claude_ai_Google_Drive"]
   },

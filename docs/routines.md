@@ -40,7 +40,6 @@ enabled: true
 ```yaml
 mcp_required:                  # List of MCP servers required; pre-flight check fails if absent
   - claude_ai_Gmail
-  - todoist
 
 notes: |                       # Documentation, escape hatches, setup instructions
   This routine requires...
@@ -81,7 +80,6 @@ If `mcp_required` lists MCP servers, the routine runner verifies they are reacha
 ```yaml
 mcp_required:
   - claude_ai_Gmail
-  - todoist
 ```
 
 If a required MCP is unavailable, dispatch fails with a clear error. Skip the check with:
