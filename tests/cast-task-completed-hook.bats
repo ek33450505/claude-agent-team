@@ -237,33 +237,3 @@ assert count == 0, f'expected 0 teammate_runs rows, got {count}'
 print('ok: no teammate_runs row written when task_id absent')
 "
 }
-
-# ---------------------------------------------------------------------------
-# 10. payload with team_name → swarm_sessions keyed by team_name
-# ---------------------------------------------------------------------------
-
-@test "payload with team_name → swarm_sessions keyed by team_name" {
-  seed_db
-  local payload
-  payload=$(python3 -c "
-import json
-print(json.dumps({
-    'hook_event_name': 'TaskCompleted',
-    'session_id': 'sess-teamname-test',
-    'task_id': 'task_teamname_001',
-    'task_subject': 'Team name grouping test',
-    'team_name': 'session-teamXY',
-    'cwd': '/tmp/test-project',
-}))
-")
-  bash "$HOOK_SH" <<< "$payload"
-  python3 -c "
-import sqlite3, os
-db = os.environ['CAST_DB_PATH']
-conn = sqlite3.connect(db)
-rows = conn.execute(\"SELECT id FROM swarm_sessions WHERE id='session-teamXY'\").fetchall()
-conn.close()
-assert rows, 'no swarm_sessions row with id=session-teamXY'
-print('ok: swarm_sessions keyed by team_name ' + rows[0][0])
-"
-}

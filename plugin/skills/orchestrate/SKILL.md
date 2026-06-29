@@ -171,8 +171,6 @@ mkdir -p ~/.claude/cast && echo "[BATCH $BATCH_ID COMPLETE] $(date -u +%Y-%m-%dT
 source ~/.claude/scripts/cast-events.sh && cast_emit_event 'task_completed' 'orchestrate-skill' "batch-$BATCH_ID" '' '<summary>' '<STATUS>'
 ```
 
-**Token budget check (between batches):** `python3 ~/.claude/scripts/cast-token-budget-check.py --threshold 50000 2>/dev/null` — if exit 1, log warning. Advisory; do not stop.
-
 After all batches or early exit: `unset CAST_ORCHESTRATE_ACTIVE`.
 
 ## Step 5 — Summarize

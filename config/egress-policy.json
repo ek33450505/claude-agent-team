@@ -1,12 +1,12 @@
 {
-  "_comment": "CAST v9 A1 — Egress / Privacy Sentinel policy data (SCAFFOLD — Ed owns the final values).",
-  "_thesis": "Make 'know what leaves the machine' enforceable. The sentinel RECORDS every off-machine-bound tool call locally (the record-deepening thesis) and can advise/ask/block on sensitive content. Native permissions.deny/ask handle coarse tool+domain access; this layer adds local audit + content-sensitivity + credential-read correlation.",
-  "_mode_note": "Enforcement MODE lives in ~/.claude/config/cast-cli.json -> egress_enforcement (advisory|ask|strict) or env CAST_EGRESS_ENFORCEMENT (takes precedence). This file holds POLICY DATA only.",
+  "_comment": "CAST v9 A1 — Egress audit-record classification data (log-only; advisory).",
+  "_thesis": "Make 'know what leaves the machine' OBSERVABLE (log-only). The sentinel RECORDS every off-machine-bound tool call locally (the record-deepening thesis) and warns advisory-only on sensitive content — it never blocks or asks. Native permissions.deny/ask handle coarse tool+domain access; this layer adds local audit + content-sensitivity + credential-read correlation.",
+  "_mode_note": "No enforcement mode exists: the sentinel is log-only/advisory. The advise/ask/strict modes + CAST_EGRESS_ENFORCEMENT env + cast-cli.json egress_enforcement were removed in v9 W1b (they never fired). This file holds POLICY DATA (classification) only.",
 
   "mcp_servers": {
     "_doc": "Per-server cloud-bound classification. Transport (stdio vs http) is NOT a reliable signal: github uses local stdio (npx) yet calls api.github.com. Key = the <server> segment of mcp__<server>__<tool>.",
     "_default_unknown": "cloud_bound",
-    "cloud_bound": ["github", "ms365", "todoist", "claude_ai_Gmail", "claude_ai_Google_Calendar", "claude_ai_Google_Drive"],
+    "cloud_bound": ["github", "ms365", "claude_ai_Gmail", "claude_ai_Google_Calendar", "claude_ai_Google_Drive"],
     "local_only": ["obsidian", "obsidian-claude"],
     "anthropic_brokered": ["claude_ai_Gmail", "claude_ai_Google_Calendar", "claude_ai_Google_Drive"]
   },
@@ -28,7 +28,7 @@
   },
 
   "safelist_hosts": {
-    "_doc": "Hosts/domains that suppress ADVISORY noise (still recorded, never warned/blocked unless sensitive content is detected). Loopback is always safe.",
+    "_doc": "Hosts/domains that suppress ADVISORY noise (still recorded, never warned unless sensitive content is detected). Loopback is always safe.",
     "hosts": ["localhost", "127.0.0.1", "::1", "anthropic.com", "claude.ai", "docs.anthropic.com", "docs.claude.com", "github.com", "api.github.com", "registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
   },
 

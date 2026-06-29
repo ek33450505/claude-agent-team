@@ -1,47 +1,37 @@
 #!/usr/bin/env python3
 """
-cast-egress-sentinel.py — CAST v9 A1 Egress / Privacy Sentinel (SCAFFOLD).
+cast-egress-sentinel.py — CAST v9 A1 Egress Audit Record (log-only).
 
-A PreToolUse brain that RECORDS every off-machine-bound tool call to a local
-egress ledger (the record-deepening thesis) and can advise / ask / block on
-sensitive content leaving the machine.
+A PreToolUse classifier that RECORDS every off-machine-bound tool call to a
+local egress ledger (logs/egress.jsonl) — the record-deepening / data-sovereignty
+thesis. It is ADVISORY and LOG-ONLY: it never blocks and never asks. For hard
+access control use native permissions.deny (WebFetch(domain:...), mcp__<server>)
+and the OS sandbox (Bash network/filesystem) — those enforce for all subprocesses.
+This sentinel's net-new value is the local, inspectable audit record of WHAT
+leaves the machine across surfaces native rules don't record together:
 
-  Surfaces watched (matcher: "mcp__.*|WebFetch|WebSearch|Bash|Read"):
+  Surfaces recorded (matcher: "mcp__.*|WebFetch|WebSearch|Bash|Read"):
     1. Cloud-bound MCP calls   (mcp__<server>__<tool>, classified per-server)
-    2. WebFetch / WebSearch    (URL/query, with content sensitivity)
-    3. Bash network egress     (curl/wget/scp/rsync/ssh/nc/... carrying data)
-    4. Credential reads        (Read/cat of .env, ~/.ssh/id_*, *.pem, tokens)
+    2. WebFetch / WebSearch    (URL host/path only; query/tokens never stored)
+    3. Bash network egress     (curl/wget/scp/rsync/ssh/nc/... — name-matched)
+    4. Credential reads        (Read of .env, ~/.ssh/id_*, *.pem) for local
+                                correlation
 
 DESIGN BOUNDARY (local-first thesis):
-  Native Claude Code `permissions.deny`/`ask` already handle COARSE access
-  control — `WebFetch(domain:...)`, `mcp__github`, blunt `WebSearch`. Prefer
-  those for access control. This sentinel's NET-NEW value is:
-    (a) a local, inspectable audit record of what leaves     (sovereignty)
-    (b) content sensitivity — WHAT is being sent (creds/PII)  (native can't see)
-    (c) credential-read -> egress compound correlation        (native can't see)
-    (d) CAST_REPO_CLASS work/personal awareness               (native has no concept)
-  It is NOT a sandbox. PreToolUse hooks are bypassed in headless/cron runs, so
-  `strict` blocking is advisory-grade only — hard guarantees need native
-  permissions.deny (API-layer). See docs/v9-a1-egress-sentinel.md.
-
-ENFORCEMENT MODES (env CAST_EGRESS_ENFORCEMENT overrides cast-cli.json egress_enforcement):
-  advisory (default) — record + warn via additionalContext; exit 0, never block.
-  ask                — emit permissionDecision "ask" (interactive confirm).
-  strict             — block (permissionDecision "deny") on HIGH-confidence hits only.
+  Native Claude Code permissions.deny handles COARSE access control; the OS
+  sandbox is the real Bash-egress / filesystem boundary. This sentinel does NOT
+  enforce — it is the local record those layers don't keep. PreToolUse hooks are
+  also bypassed in headless/cron runs, so it could never be a hard guarantee.
+  See docs/v9-a1-egress-sentinel.md.
 
 CONTRACT:
   stdin  — raw PreToolUse hook JSON (tool_name, tool_input, session_id, cwd...)
-  stdout — PreToolUse hookSpecificOutput JSON (additionalContext / permissionDecision)
-  exit 0 — always, in advisory/ask; or strict-allow. (exit 2 reserved; we prefer
-           the JSON permissionDecision form for blocks — see emit_decision().)
+  stdout — PreToolUse hookSpecificOutput JSON (additionalContext advisory only)
+  exit 0 — always. *** FAIL-OPEN: any internal error -> exit 0, log to
+           hook-errors.log, never interrupt the user's work. ***
 
-  *** FAIL-OPEN: any internal error -> exit 0, log to hook-errors.log, never
-      interrupt the user's work. Mirrors cast-command-guard.py. ***
-
-STATUS: SCAFFOLD. Classification + recording are wired (advisory works today).
-  The ENFORCEMENT POLICY (what is sensitive enough to ask/block, bash exfil
-  parsing, compound correlation) is intentionally left as TODO(ed) markers —
-  Ed owns those design calls and the build.
+The coarse Bash name-matcher and the info/warn severity labels are awareness
+aids for the advisory line, NOT an enforcement decision — there is no block path.
 """
 import sys
 import os
@@ -57,16 +47,11 @@ HOME = os.path.expanduser("~")
 CLAUDE_DIR = os.environ.get("CLAUDE_DIR", os.path.join(HOME, ".claude"))
 EGRESS_LOG = os.path.join(CLAUDE_DIR, "logs", "egress.jsonl")
 ERROR_LOG = os.path.join(CLAUDE_DIR, "logs", "hook-errors.log")
-CAST_CLI_CFG = os.path.join(CLAUDE_DIR, "config", "cast-cli.json")
-REDACT_SCRIPT = os.path.join(CLAUDE_DIR, "scripts", "cast-redact.py")
-
 # Policy data: prefer repo cwd (dev), fall back to installed ~/.claude.
 _POLICY_CANDIDATES = [
     os.path.join(os.getcwd(), "config", "egress-policy.json"),
     os.path.join(CLAUDE_DIR, "config", "egress-policy.json"),
 ]
-
-VALID_MODES = ("advisory", "ask", "strict")
 
 
 # --------------------------------------------------------------------------
@@ -95,22 +80,6 @@ def _load_policy() -> dict:
         except Exception as e:
             _log_error(f"policy load failed ({path}): {e}")
     return {}
-
-
-def _resolve_mode() -> str:
-    """env CAST_EGRESS_ENFORCEMENT > cast-cli.json egress_enforcement > advisory."""
-    env_mode = os.environ.get("CAST_EGRESS_ENFORCEMENT", "").strip().lower()
-    if env_mode in VALID_MODES:
-        return env_mode
-    try:
-        with open(CAST_CLI_CFG) as f:
-            cfg = json.load(f)
-        cfg_mode = str(cfg.get("egress_enforcement", "")).strip().lower()
-        if cfg_mode in VALID_MODES:
-            return cfg_mode
-    except Exception:
-        pass
-    return "advisory"
 
 
 def _expand(path: str) -> str:
@@ -161,8 +130,9 @@ def classify(tool_name: str, tool_input: dict, policy: dict) -> dict | None:
         return {"surface": "webfetch", "url": url,
                 "safelisted": _host_safelisted(url, policy)}
     if tool_name == "WebSearch":
-        query = (tool_input.get("query") or tool_input.get("q") or "")[:200]
-        return {"surface": "websearch", "query": query}
+        # The search query is intentionally NOT carried in the event dict — it must
+        # never reach the ledger (no-payload invariant). Record the surface only.
+        return {"surface": "websearch"}
 
     # --- Surface 4: credential Read ---------------------------------------
     if tool_name == "Read":
@@ -319,21 +289,11 @@ def _bash_network_hits(command: str, policy: dict) -> list:
 
 
 # --------------------------------------------------------------------------
-# Sensitivity — TODO(ed): the core enforcement decision lives here
+# Sensitivity — awareness labels for the advisory line
 # --------------------------------------------------------------------------
-def assess_sensitivity(event: dict, tool_input: dict, mode: str) -> dict:
-    """Score how sensitive this egress is and decide advise/ask/block.
-
-    SCAFFOLD: returns advisory-only. The real policy is Ed's build:
-      - reuse cast-redact.py (--mode analyze) on url/query/command to catch
-        credential/PII content being sent off-machine (DRY — do not reimplement)
-      - HIGH confidence (-> strict block candidate): private key / token in an
-        outbound curl payload; scp of a credential file to a remote host
-      - compound: credential_read earlier this session + bash egress now
-      - CAST_REPO_CLASS=work: tighten thresholds for work-repo content
-    Returns: {"severity": "info|warn|high", "reason": str, "block": bool}
-    """
-    # TODO(ed): wire cast-redact.py content scan + thresholds. For now:
+def assess_sensitivity(event: dict, tool_input: dict) -> dict:
+    """Label the egress for the advisory line. AWARENESS ONLY — no block path.
+    Returns {'severity': 'info|warn', 'reason': str}."""
     severity = "info"
     reason = f"off-machine-bound {event.get('surface')} call recorded"
     if event.get("surface") == "credential_read":
@@ -344,9 +304,7 @@ def assess_sensitivity(event: dict, tool_input: dict, mode: str) -> dict:
     if event.get("surface") == "mcp" and event.get("unknown_server"):
         severity = "warn"
         reason = f"UNKNOWN MCP server '{event.get('server')}' (classify it in egress-policy.json)"
-    # SCAFFOLD never blocks. Strict-mode blocking is Ed's to enable per-rule.
-    block = False
-    return {"severity": severity, "reason": reason, "block": block}
+    return {"severity": severity, "reason": reason}
 
 
 # --------------------------------------------------------------------------
@@ -398,18 +356,7 @@ def emit_advisory(verdict: dict) -> None:
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "additionalContext": f"[CAST-EGRESS:{verdict['severity']}] {verdict['reason']} "
-                                 f"(recorded to logs/egress.jsonl; mode=advisory).",
-        }
-    }))
-
-
-def emit_decision(decision: str, reason: str) -> None:
-    """decision in {deny, ask}. Uses the modern permissionDecision form."""
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": f"[CAST-EGRESS] {reason}",
+                                 f"(recorded to logs/egress.jsonl).",
         }
     }))
 
@@ -435,24 +382,15 @@ def main() -> int:
     session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
 
     policy = _load_policy()
-    mode = _resolve_mode()
 
     event = classify(tool_name, tool_input, policy)
     if event is None:
         return 0  # on-machine / not egress — say nothing
 
-    verdict = assess_sensitivity(event, tool_input, mode)
+    verdict = assess_sensitivity(event, tool_input)
     record(event, verdict, tool_name, session_id)
 
-    # Decision routing.
-    if mode == "strict" and verdict.get("block"):
-        emit_decision("deny", verdict["reason"])
-        return 0
-    if mode == "ask" and verdict.get("severity") in ("warn", "high"):
-        emit_decision("ask", verdict["reason"])
-        return 0
-    # advisory (default) — record + surface context, never block
-    if verdict.get("severity") in ("warn", "high"):
+    if verdict.get("severity") == "warn":
         emit_advisory(verdict)
     return 0
 

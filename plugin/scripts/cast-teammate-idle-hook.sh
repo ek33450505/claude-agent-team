@@ -7,7 +7,7 @@
 #
 # Verified payload fields (docs.claude.com/en/hooks TeammateIdle):
 #   session_id, transcript_path, cwd, hook_event_name,
-#   teammate_name, team_name (deprecated), agent_id, agent_type
+#   teammate_name, agent_id, agent_type
 #   NO task_id / task_subject in this event.
 #
 # Writes to:
@@ -45,10 +45,9 @@ session_id = data.get("session_id", "unknown")
 teammate   = data.get("teammate_name", "") or ""
 agent_id   = data.get("agent_id", "") or ""
 agent_type = data.get("agent_type", "") or ""
-team_name  = data.get("team_name", "") or ""
 cwd = data.get("cwd", ""); project = os.path.basename(cwd) if cwd else ""
-# team_id: prefer the (deprecated) session-derived team_name — present in both Task* and TeammateIdle payloads — so all team activity groups under ONE swarm_sessions row; fall back to session-derived id when absent. cast-task-completed-hook.sh uses the identical derivation.
-team_id = team_name or ("session-" + session_id[:8] if session_id and session_id != "unknown" else "")
+# team_id: session-derived id (team_name deprecated in v2.1.178; no longer emitted by native). cast-task-completed-hook.sh uses the identical derivation.
+team_id = "session-" + session_id[:8] if session_id and session_id != "unknown" else ""
 now = datetime.now(timezone.utc); iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # 1) immutable event log (works even without cast.db)

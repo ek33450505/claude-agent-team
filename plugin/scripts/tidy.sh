@@ -53,7 +53,7 @@ echo -e "${CYAN}  ── Stale Downloads (>30 days) ──${NC}"
 STALE=$(find "$DOWNLOADS" -maxdepth 1 -not -name '.*' -mtime +30 -type f 2>/dev/null)
 if [ -n "$STALE" ]; then
     echo "$STALE" | while read -r f; do
-        echo -e "${YELLOW}  ⚠  $(basename "$f") — $(stat -f '%Sm' -t '%Y-%m-%d' "$f")${NC}"
+        echo -e "${YELLOW}  ⚠  $(basename "$f") — $(stat -c '%y' "$f" 2>/dev/null | cut -d' ' -f1 || stat -f '%Sm' -t '%Y-%m-%d' "$f" 2>/dev/null)${NC}"
     done
 else
     echo -e "${GREEN}  ✓ Downloads folder is clean${NC}"
