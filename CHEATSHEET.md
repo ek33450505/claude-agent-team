@@ -87,6 +87,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `cast memory forget <id>` | Delete a memory entry | |
 | `cast memory export` | Export all memories as JSON | |
 | `cast budget` | View cost summary | `--week`, `--project` |
+| `cast cost` | Per-task/feature cost attribution (token totals + cache-read share) | `--by-task`, `--by-branch`, `--by-agent`, `--project`, `--limit`, `--json` |
 | `cast agents` | List installed CAST agents | `--json` |
 | `cast hooks` | Show active hooks with health status | `--json` |
 | `cast doctor` | Run system health check | |
