@@ -2,9 +2,10 @@
 """
 CAST Orphan Script Detector
 
-Scans two sources for hook→script references and fails if any referenced
-script is missing from the repo's scripts/ directory:
+Two passes:
 
+FORWARD PASS — Fails (exit 1) if any script *referenced* in hook config is
+missing from scripts/:
   1. settings.json       — repo-relative commands (``bash scripts/...``) and
                            tilde-prefixed installs (``bash ~/.claude/scripts/...``)
   2. managed-settings.d/*.json fragments — installed config; fragment commands
@@ -14,6 +15,21 @@ script is missing from the repo's scripts/ directory:
                            referenced script *basenames* back to repo scripts/ — same
                            hermetic invariant as settings.json tilde paths.
 
+REVERSE PASS — Warns (exit 0) if any script in scripts/ is not referenced
+anywhere in the reachability set.  A WARNING does not block commits; it helps
+developers notice scripts that were added but never wired.
+
+Reachability set (surfaces searched for each script basename):
+  - settings.json, managed-settings.d/*.json
+  - bin/cast, install.sh
+  - .githooks/*, .github/workflows/*
+  - agents/**, macos/*.plist, completions/*, skills/**
+  - scripts/* (scripts calling scripts)
+  - tests/**, plugin/**, config/**, docs/**
+
+Self-references (a script's own content) are excluded from the check so that
+a script that only mentions its own name in comments/shebang is still flagged.
+
 Hermeticity rule: this script MUST read only repo files, never the live
 ~/.claude install. Every path resolution bottoms out at repo_root/scripts/<name>.
 Absolute paths (``/usr/...``) are treated as contract violations in settings.json.
@@ -21,8 +37,9 @@ In fragments they are simply not matched (fragment paths are always tilde or
 HOME-env forms).
 
 Exit codes:
-  0 — all referenced scripts exist in repo
-  1 — one or more referenced scripts are missing (or contract violation found)
+  0 — all referenced scripts exist in repo; orphan warnings are printed but
+      do NOT change the exit code
+  1 — one or more referenced scripts are missing (forward-pass violation)
 """
 
 import glob
@@ -197,6 +214,90 @@ def check_fragments(repo_root: str) -> list[str]:
     return missing_with_source
 
 
+# ---------------------------------------------------------------------------
+# Reverse pass — orphan scripts (no caller found)
+# ---------------------------------------------------------------------------
+
+# Glob patterns (relative to repo_root) whose text content is searched
+# for each script's basename.  Self-references are excluded per-script.
+#
+# Why include tests/, plugin/, config/, docs/:
+#   cast-count-planned-tests.sh is only called from tests/run.sh;
+#   cast-cron-setup.sh is only in config/upgrade-sources.json + docs/;
+#   tidy.sh is only referenced in tests/install.bats + docs/.
+#   Without these surfaces those three emit false positives.
+_REVERSE_SURFACE_PATTERNS: list[str] = [
+    "settings.json",
+    "managed-settings.d/*.json",
+    "bin/cast",
+    "install.sh",
+    ".githooks/*",
+    ".github/workflows/*",
+    "agents/**/*",
+    "macos/*.plist",
+    "completions/*",
+    "skills/**/*",
+    "scripts/*.sh",
+    "scripts/*.py",
+    "tests/**/*",
+    "plugin/**/*",
+    "config/**/*",
+    "docs/**/*",
+    "Makefile",
+]
+
+
+def _collect_surface_files(repo_root: str) -> list[str]:
+    """Return the list of files in the reachability set (text files only)."""
+    files: list[str] = []
+    for pattern in _REVERSE_SURFACE_PATTERNS:
+        full_pattern = os.path.join(repo_root, pattern)
+        for path in glob.glob(full_pattern, recursive=True):
+            if os.path.isfile(path):
+                files.append(os.path.abspath(path))
+    return files
+
+
+def check_orphan_scripts(repo_root: str) -> list[str]:
+    """Return basenames of scripts/ not referenced anywhere outside themselves.
+
+    Does NOT raise or exit — returns a (possibly empty) list of warnings.
+    Self-references are excluded: if the only mention of 'foo.sh' is inside
+    'foo.sh' itself, it is still flagged.
+    """
+    script_pattern_sh = os.path.join(repo_root, "scripts", "*.sh")
+    script_pattern_py = os.path.join(repo_root, "scripts", "*.py")
+    all_script_paths: list[str] = sorted(
+        glob.glob(script_pattern_sh) + glob.glob(script_pattern_py)
+    )
+
+    surface_files = _collect_surface_files(repo_root)
+    # Pre-read surface file contents keyed by absolute path for speed
+    surface_content: dict[str, str] = {}
+    for f in surface_files:
+        try:
+            with open(f, "r", errors="replace") as fh:
+                surface_content[f] = fh.read()
+        except OSError:
+            surface_content[f] = ""
+
+    orphans: list[str] = []
+    for script_path in all_script_paths:
+        basename = os.path.basename(script_path)
+        abs_script = os.path.abspath(script_path)
+        found = False
+        for abs_surface, content in surface_content.items():
+            if abs_surface == abs_script:
+                continue  # skip self
+            if basename in content:
+                found = True
+                break
+        if not found:
+            orphans.append(basename)
+
+    return orphans
+
+
 def main() -> int:
     repo_root = get_repo_root()
 
@@ -232,6 +333,24 @@ def main() -> int:
         )
         for entry in missing_fragments:
             print(f"  - {entry}", file=sys.stderr)
+
+    # --- reverse pass: orphan scripts ---
+    orphan_scripts = check_orphan_scripts(repo_root)
+
+    if orphan_scripts:
+        print(
+            f"WARN [lint-orphan-scripts]: {len(orphan_scripts)} script(s) in scripts/ "
+            f"not referenced anywhere in the reachability set (warning only — does not "
+            f"block commit):",
+            file=sys.stderr,
+        )
+        for name in orphan_scripts:
+            print(f"  - scripts/{name}", file=sys.stderr)
+        print(
+            "  To suppress: wire the script into a caller, or add it to the "
+            "documented allowlist in check_orphan_scripts() if it is a standalone tool.",
+            file=sys.stderr,
+        )
 
     if invalid or missing_settings or missing_fragments:
         return 1
