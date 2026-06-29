@@ -1,9 +1,7 @@
 #!/usr/bin/env bats
-# cast-egress-sentinel.bats — CAST v9 A1 Egress / Privacy Sentinel (SCAFFOLD tests).
+# cast-egress-sentinel.bats — CAST v9 A1 Egress audit record (log-only) tests.
 #
-# Covers the advisory + fail-open contract that the skeleton already satisfies.
-# TODO(ed / test-writer): add strict-mode block tests + content-sensitivity
-# tests once assess_sensitivity() wires cast-redact.py and high-confidence rules.
+# Covers the advisory + fail-open contract of the log-only audit recorder.
 #
 # HARD RULES honored: temp-HOME isolation (setup_temp_home); zero real GUI side
 # effects (the sentinel emits no notifications/sounds/URLs).
@@ -42,7 +40,7 @@ setup() {
   # Deterministic policy regardless of cwd.
   cp "$REPO_DIR/config/egress-policy.json" "$HOME/.claude/config/egress-policy.json"
   export EGRESS_LOG="$HOME/.claude/logs/egress.jsonl"
-  unset CLAUDE_SESSION_ID CAST_EGRESS_ENFORCEMENT CAST_REPO_CLASS
+  unset CLAUDE_SESSION_ID CAST_REPO_CLASS
 }
 
 teardown() {
@@ -204,9 +202,3 @@ teardown() {
   run tail -1 "$EGRESS_LOG"
   assert_output --partial '"surface":"bash"'
 }
-
-# TODO(ed / test-writer):
-#   @test "strict mode + high-confidence rule → permissionDecision deny" { ... }
-#   @test "cast-redact detects token in outbound curl payload → severity high" { ... }
-#   @test "credential_read then bash egress same session → compound escalation" { ... }
-#   @test "CAST_REPO_CLASS=work tightens WebFetch thresholds" { ... }

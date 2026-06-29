@@ -9,7 +9,7 @@ Bash hot path: 6 spawns (3 bash shims + 3 python cold-starts, ~78 ms measured)
 
 SUBTRACTION SAFETY GATE (master_v9.md §0.2): this dispatcher REUSES the exact
 logic modules the standalone wrappers wrap —
-  cast-egress-sentinel.py   (classify / assess_sensitivity / record / emit_*)
+  cast-egress-sentinel.py   (classify / assess_sensitivity / record / emit_advisory)
   cast-git-guard.py         (evaluate: git commit/push/stash + Write/Edit policy)
   cast-command-guard.py     (safe_is_blocked: pkill/killall/mass-kill/catastrophic-rm)
 so cast-egress-sentinel.bats / pre-tool-guard.bats / test_push_agent_stash_guard.bats
@@ -27,7 +27,7 @@ ROUTING (by tool_name):
      First hard block wins → block reason to stderr + exit 2.
   2. EGRESS scope (mcp__*, WebFetch, WebSearch, Bash, Read), reached only when
      nothing hard-blocked: classify + RECORD to the local egress ledger (the KEEP
-     value — master_v9.md §1) + emit advisory/ask/deny. The hard-block set
+     value — master_v9.md §1) + emit advisory (record-only). The hard-block set
      (git/kill/rm) and the egress-record set (network/credential) are DISJOINT for
      Bash (verified: the egress sentinel records none of the blocked commands), so
      evaluating blocks first loses no audit record while making command-guard
@@ -41,7 +41,7 @@ prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 → skip. 
 unhandled error → exit 0 (allow); a guard crash must never block all tool use.
 
 CONTRACT (identical to the wrappers): exit 2 + stderr = block; stdout
-hookSpecificOutput JSON = egress advisory/ask/deny; exit 0 = allow.
+hookSpecificOutput JSON = egress advisory; exit 0 = allow.
 
 ENFORCEMENT vs AWARENESS (master_v9.md §0.3): these guards are ADVISORY-grade — the
 model-facing block in an interactive session, NOT the non-bypassable wall. The real
@@ -105,7 +105,7 @@ def _run_egress(sentinel, data):
     """Replicate cast-egress-sentinel.main()'s body with pre-parsed data.
 
     RECORDS (the KEEP value); returns an action tuple or None.
-    ("deny"|"ask", reason) or ("advisory", verdict). Never raises."""
+    ("advisory", verdict) or None. Never raises."""
     try:
         tool_name = data.get("tool_name", "") or ""
         tool_input = data.get("tool_input", {}) or {}
@@ -113,17 +113,12 @@ def _run_egress(sentinel, data):
             tool_input = {}
         session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
         policy = sentinel._load_policy()
-        mode = sentinel._resolve_mode()
         event = sentinel.classify(tool_name, tool_input, policy)
         if event is None:
             return None
-        verdict = sentinel.assess_sensitivity(event, tool_input, mode)
+        verdict = sentinel.assess_sensitivity(event, tool_input)
         sentinel.record(event, verdict, tool_name, session_id)
-        if mode == "strict" and verdict.get("block"):
-            return ("deny", verdict.get("reason", ""))
-        if mode == "ask" and verdict.get("severity") in ("warn", "high"):
-            return ("ask", verdict.get("reason", ""))
-        if verdict.get("severity") in ("warn", "high"):
+        if verdict.get("severity") == "warn":
             return ("advisory", verdict)
         return None
     except Exception:
@@ -135,8 +130,6 @@ def _emit_egress(sentinel, action):
         kind, payload = action
         if kind == "advisory":
             sentinel.emit_advisory(payload)
-        elif kind in ("deny", "ask"):
-            sentinel.emit_decision(kind, payload)
     except Exception:
         pass
 

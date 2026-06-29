@@ -39,7 +39,7 @@ setup() {
   cp "$REPO_DIR/config/egress-policy.json" "$HOME/.claude/config/egress-policy.json"
   export EGRESS_LOG="$HOME/.claude/logs/egress.jsonl"
   unset CLAUDE_SUBPROCESS CAST_COMMIT_AGENT CAST_PUSH_OK CAST_STASH_OK \
-        CAST_RM_OK CAST_KILL_OK CAST_EGRESS_ENFORCEMENT CLAUDE_SESSION_ID
+        CAST_RM_OK CAST_KILL_OK CLAUDE_SESSION_ID
 }
 
 teardown() { teardown_temp_home; }

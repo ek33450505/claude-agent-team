@@ -1,5 +1,5 @@
 {
-  "_comment": "CAST v9 A1 — Egress / Privacy Sentinel policy data (SCAFFOLD — Ed owns the final values).",
+  "_comment": "CAST v9 A1 — Egress audit-record classification data (log-only; advisory).",
   "_thesis": "Make 'know what leaves the machine' enforceable. The sentinel RECORDS every off-machine-bound tool call locally (the record-deepening thesis) and can advise/ask/block on sensitive content. Native permissions.deny/ask handle coarse tool+domain access; this layer adds local audit + content-sensitivity + credential-read correlation.",
   "_mode_note": "Enforcement MODE lives in ~/.claude/config/cast-cli.json -> egress_enforcement (advisory|ask|strict) or env CAST_EGRESS_ENFORCEMENT (takes precedence). This file holds POLICY DATA only.",
 

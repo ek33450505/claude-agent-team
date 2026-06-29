@@ -277,7 +277,7 @@ CAST_DB_URL="sqlite:///path/to/custom.db" cast ledger
 - **Read-only:** Cast ledger never writes to cast.db — it is a pure query and serialization tool
 - **Fail-open:** Every section is wrapped in try/except. Missing tables or columns result in honest "0 recorded" counts, not crashes
 - **Deterministic:** The SHA-256 digest is reproducible on any machine with the same cast.db
-- **Privacy-preserving export:** Because the receipt is a portable artifact, raw agent-output columns (`raw_excerpt`, `partial_work_log`, `last_line`, etc.) are excluded from integrity rows — only counts and safe descriptors are rendered. cast.db itself stays local inside `~/.claude`; off-machine sync is gated by the v9 A1 egress sentinel
+- **Privacy-preserving export:** Because the receipt is a portable artifact, raw agent-output columns (`raw_excerpt`, `partial_work_log`, `last_line`, etc.) are excluded from integrity rows — only counts and safe descriptors are rendered. cast.db itself stays local inside `~/.claude`; off-machine sync is recorded by the v9 A1 egress audit ledger (it logs egress; hard egress control is native permissions.deny + the OS sandbox)
 
 ---
 
