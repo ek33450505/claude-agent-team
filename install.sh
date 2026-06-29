@@ -447,6 +447,20 @@ if [ -f "$CAST_BIN_SRC" ]; then
     rm -f "$CAST_BIN_DEST"
     ln -s "$CAST_BIN_SRC" "$CAST_BIN_DEST"
     success "  Symlinked bin/cast -> $CAST_BIN_DEST"
+    # Guard: warn when the symlink source is an ephemeral path (temp clone scenario)
+    _cast_src_ephemeral=0
+    case "$SCRIPT_DIR" in
+        /var/folders/* | /tmp/* | *-clone | *-clone/*)
+            _cast_src_ephemeral=1 ;;
+    esac
+    if [[ "$_cast_src_ephemeral" -eq 0 && -n "${TMPDIR:-}" && "$SCRIPT_DIR" == "${TMPDIR%/}/"* ]]; then
+        _cast_src_ephemeral=1
+    fi
+    if [[ "$_cast_src_ephemeral" -eq 1 ]]; then
+        warn "  WARNING: cast symlink points into an ephemeral path ($SCRIPT_DIR) and will BREAK when the OS reaps it"
+        warn "  Re-run install.sh from a PERMANENT clone (e.g. ~/Projects/...) so cast resolves to a stable checkout"
+    fi
+    unset _cast_src_ephemeral
     if ! echo "$PATH" | tr ':' '\n' | grep -q "$LOCAL_BIN"; then
         warn "  Note: $LOCAL_BIN is not in your PATH"
     fi
