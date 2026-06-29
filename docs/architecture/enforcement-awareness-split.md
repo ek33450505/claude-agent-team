@@ -1,7 +1,8 @@
 # Enforcement vs. Awareness — the guard classification (CAST v9 P0)
 
 > **Principle (`master_v9.md` §0.3):** *Enforcement* = native `permissions.deny` + the OS
-> sandbox (the real, non-bypassable boundary). *Awareness* = hooks (advisory, fail-open,
+> sandbox (the real, non-bypassable boundary **where Claude Code engages its sandbox — see the
+> Platform engagement caveat below**). *Awareness* = hooks (advisory, fail-open,
 > feed the record). **No guard claims to be both. Advisory hooks never masquerade as
 > enforcement.**
 
@@ -17,6 +18,24 @@ Every guard that remains a hook does so because the official docs confirm native
 express its guarantee — and in several cases the docs **explicitly recommend a PreToolUse
 hook** for exactly that job. This unit therefore ships the *documented* classification plus
 honesty relabeling, not a migration.
+
+## ⚠️ Platform engagement caveat (the honest qualifier)
+
+**Verified on this maintainer's machine (macOS 26.5.1, 2026-06-29):** the `sandbox.*` flags
+classified as "enforcement / ALREADY NATIVE" below are **configured** and would enforce on a
+platform where Claude Code engages its OS sandbox — but on macOS 26.5.1 the CC sandbox
+**engagement gate declines** (the `f1n()` / SRT `isSupportedPlatform`-or-`checkDependencies`
+short-circuit returns false; the OS Seatbelt layer itself works, but CC never hands the command
+to it). A direct probe (W1a, CAST v9) confirmed `curl` to a non-allowlisted domain returned
+`200` from a sandboxed Bash call. **So on this machine the sandbox boundary is INERT and the
+egress hook (advisory, log-only) is the only live recording layer.**
+
+The classification below is therefore the **design** — what a native primitive *can* express
+and is *configured* to express — not a claim that the boundary is currently active here. Where
+this document says a guard is "enforced" by the sandbox, read it as *"enforced where CC engages
+the sandbox; otherwise the hook is the live layer."* CAST does **not** relabel the
+egress/credential hooks as redundant on the strength of configured-but-inert flags — the record
+is the product, and on this platform it is also the only enforcement signal.
 
 ## What native CAN and CANNOT express (verified against official docs)
 
@@ -49,8 +68,8 @@ once a permission allows the command. A broad deny cannot carry a narrower allow
 | `cast-egress-sentinel` — off-machine-bound recording | **awareness** | partial (coarse access is native; the *record* + content-sensitivity is net-new) | **KEEP as hook** — the record is the product (§1) |
 | `cast-audit-hook` — web/PII audit record | **awareness** | partial | **KEEP as hook** (audit record) |
 | `cast-headless-guard` — AskUserQuestion auto-answer | awareness | ❌ | **KEEP as hook** |
-| Credential reads | **enforcement** | ✅ `sandbox.filesystem.denyRead` | **ALREADY NATIVE** (egress hook adds the record) |
-| Network egress | **enforcement** | ✅ `sandbox.network.allowedDomains` | **ALREADY NATIVE** (egress hook adds the record) |
+| Credential reads | **enforcement** (engagement-gated) | ✅ `sandbox.filesystem.denyRead` *(configured; inert where CC's sandbox doesn't engage — see caveat)* | **NATIVE WHERE ENGAGED** — egress hook is the live record, and the only layer where the sandbox is inert |
+| Network egress | **enforcement** (engagement-gated) | ✅ `sandbox.network.allowedDomains` *(configured; inert where CC's sandbox doesn't engage — see caveat)* | **NATIVE WHERE ENGAGED** — egress hook is the live record, and the only layer where the sandbox is inert |
 | Subagent model cap | **enforcement** | ✅ `Agent(model:)` deny | **ALREADY NATIVE** (shipped via `11-deny.json`; supersedes the direct `settings.json` edit from `73d0db1` — see §11-deny layer below) |
 
 ## The honesty correction (§0.3)
@@ -60,7 +79,9 @@ non-bypassable boundaries (e.g. *"Exit 2 = hard block (Claude cannot bypass)"*).
 over-claims: a PreToolUse hook is **advisory-grade** — it is the model-facing block in an
 interactive session, but the **non-bypassable** boundary for the catastrophic classes
 (credential reads, network egress, filesystem) is the **OS sandbox**, which the docs confirm
-is enforced for all subprocesses. The guards' comments are relabeled to say so. The hooks
+is enforced for all subprocesses **on a platform where CC engages it** (on this maintainer's
+macOS 26.5.1 the engagement gate declines, so in practice the egress hook remains the live
+layer — see the Platform engagement caveat above). The guards' comments are relabeled to say so. The hooks
 remain valuable as the *path-aware / escape-hatch / indirection-robust* layer the sandbox
 cannot express, and as the **record** — but they no longer masquerade as the wall.
 

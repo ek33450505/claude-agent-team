@@ -112,7 +112,7 @@ Scheduled autonomous agent jobs for daily tasks, triage, and reports.
 | `pr-narrator` | 30min after webhook | PR storyteller, change summary |
 | `release-celebration` | Manual | Release notes + stakeholder brief |
 | `standup-writer` | 4pm UTC daily | Daily standup summary |
-| `task-triage` | 8am UTC daily | Todoist overdue, BLOCKED agents |
+| `task-triage` | 8am UTC daily | BLOCKED/overdue `agent_runs` from cast.db |
 | `weekly-cost-report` | Mon 9am UTC | API cost breakdown by agent |
 
 ### Routine Commands
