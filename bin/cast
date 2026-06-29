@@ -1364,7 +1364,7 @@ total_runs = cur.fetchone()[0] or 0
 
 project_spend = None
 if project_f:
-    cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE project=?", (project_f,))
+    cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs ar LEFT JOIN sessions s ON s.id = ar.session_id WHERE s.project=?", (project_f,))
     project_spend = cur.fetchone()[0] or 0.0
 
 week_rows = []
@@ -1450,21 +1450,46 @@ conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
-DATE_FN = "date(replace(replace(started_at,'T',' '),'Z',''))"
+# Detect optional columns once — agent_runs.project and agent_runs.prompt were
+# dropped from the canonical schema (migration 022). Use sessions.project as the
+# canonical project source, and degrade gracefully when prompt is absent.
+cur.execute("PRAGMA table_info(agent_runs)")
+_ar_cols = {row["name"] for row in cur.fetchall()}
+HAS_PROMPT = "prompt" in _ar_cols
+PROMPT_SUBQ = (
+    "(SELECT ar2.prompt FROM agent_runs ar2"
+    " WHERE ar2.session_id = ar.session_id AND ar2.prompt IS NOT NULL"
+    " ORDER BY ar2.started_at ASC LIMIT 1)"
+    if HAS_PROMPT else "NULL"
+)
+
+# Unqualified form (no join) and table-aliased form (when joining sessions).
+DATE_FN    = "date(replace(replace(started_at,'T',' '),'Z',''))"
+DATE_FN_AR = "date(replace(replace(ar.started_at,'T',' '),'Z',''))"
 
 if view == "agent":
-    where = "WHERE project=?" if project_f else ""
-    params = ([project_f] if project_f else []) + [limit_n]
-    cur.execute(f"""
-        SELECT agent,
-               COALESCE(SUM(cost_usd),0) AS cost,
-               COUNT(*) AS runs
-        FROM agent_runs
-        {where}
-        GROUP BY agent
-        ORDER BY cost DESC
-        LIMIT ?
-    """, params)
+    if project_f:
+        cur.execute(f"""
+            SELECT ar.agent,
+                   COALESCE(SUM(ar.cost_usd),0) AS cost,
+                   COUNT(*) AS runs
+            FROM agent_runs ar
+            LEFT JOIN sessions s ON s.id = ar.session_id
+            WHERE s.project = ?
+            GROUP BY ar.agent
+            ORDER BY cost DESC
+            LIMIT ?
+        """, [project_f, limit_n])
+    else:
+        cur.execute(f"""
+            SELECT agent,
+                   COALESCE(SUM(cost_usd),0) AS cost,
+                   COUNT(*) AS runs
+            FROM agent_runs
+            GROUP BY agent
+            ORDER BY cost DESC
+            LIMIT ?
+        """, [limit_n])
     rows = [{"agent": r["agent"], "cost": r["cost"], "runs": r["runs"]} for r in cur.fetchall()]
     conn.close()
 
@@ -1479,33 +1504,38 @@ if view == "agent":
         print(f"{(r['agent'] or '?'):<30}  ${r['cost']:>9.2f}  {r['runs']:>6,}")
 
 elif view == "branch":
-    cur.execute("PRAGMA table_info(agent_runs)")
-    cols = {row["name"] for row in cur.fetchall()}
-    conn.close()
-    if "branch" not in cols:
+    if "branch" not in _ar_cols:
+        conn.close()
         if json_out:
             print(json.dumps({"branch_capture_active": False, "rows": []}, indent=2))
             sys.exit(0)
         print("branch attribution is not active yet (capture hook lands in F1 Unit 2) — no branch data.")
         sys.exit(0)
 
-    conn2 = sqlite3.connect(db_path)
-    conn2.row_factory = sqlite3.Row
-    cur2 = conn2.cursor()
-    where = "WHERE project=?" if project_f else ""
-    params = ([project_f] if project_f else []) + [limit_n]
-    cur2.execute(f"""
-        SELECT COALESCE(branch,'(pre-capture)') AS branch,
-               COALESCE(SUM(cost_usd),0) AS cost,
-               COUNT(*) AS runs
-        FROM agent_runs
-        {where}
-        GROUP BY COALESCE(branch,'(pre-capture)')
-        ORDER BY cost DESC
-        LIMIT ?
-    """, params)
-    rows = [{"branch": r["branch"], "cost": r["cost"], "runs": r["runs"]} for r in cur2.fetchall()]
-    conn2.close()
+    if project_f:
+        cur.execute(f"""
+            SELECT COALESCE(ar.branch,'(pre-capture)') AS branch,
+                   COALESCE(SUM(ar.cost_usd),0) AS cost,
+                   COUNT(*) AS runs
+            FROM agent_runs ar
+            LEFT JOIN sessions s ON s.id = ar.session_id
+            WHERE s.project = ?
+            GROUP BY COALESCE(ar.branch,'(pre-capture)')
+            ORDER BY cost DESC
+            LIMIT ?
+        """, [project_f, limit_n])
+    else:
+        cur.execute(f"""
+            SELECT COALESCE(branch,'(pre-capture)') AS branch,
+                   COALESCE(SUM(cost_usd),0) AS cost,
+                   COUNT(*) AS runs
+            FROM agent_runs
+            GROUP BY COALESCE(branch,'(pre-capture)')
+            ORDER BY cost DESC
+            LIMIT ?
+        """, [limit_n])
+    rows = [{"branch": r["branch"], "cost": r["cost"], "runs": r["runs"]} for r in cur.fetchall()]
+    conn.close()
 
     if json_out:
         out = {"branch_capture_active": True, "rows": [{"branch": r["branch"], "cost_usd": round(r["cost"], 4), "runs": r["runs"]} for r in rows]}
@@ -1519,7 +1549,7 @@ elif view == "branch":
 
 elif view == "task":
     if project_f:
-        where = "WHERE COALESCE(s.project, ar.project) = ?"
+        where = "WHERE s.project = ?"
         base_params = [project_f]
     else:
         where = ""
@@ -1529,14 +1559,12 @@ elif view == "task":
         SELECT ar.session_id,
                COALESCE(SUM(ar.cost_usd),0) AS cost,
                COUNT(*) AS runs,
-               COALESCE(s.project, ar.project, '?') AS project,
+               COALESCE(s.project, '?') AS project,
                COALESCE(
                    date(replace(replace(s.started_at,'T',' '),'Z','')),
-                   date(replace(replace(ar.started_at,'T',' '),'Z',''))
+                   {DATE_FN_AR}
                ) AS session_date,
-               (SELECT ar2.prompt FROM agent_runs ar2
-                WHERE ar2.session_id = ar.session_id AND ar2.prompt IS NOT NULL
-                ORDER BY ar2.started_at ASC LIMIT 1) AS first_prompt
+               {PROMPT_SUBQ} AS first_prompt
         FROM agent_runs ar
         LEFT JOIN sessions s ON s.id = ar.session_id
         {where}
@@ -1572,20 +1600,36 @@ elif view == "task":
 
 else:
     # SUMMARY view
-    where = "WHERE project=?" if project_f else ""
-    p_sum = [project_f] if project_f else []
-    cur.execute(f"""
-        SELECT
-            MIN({DATE_FN}) AS first_date,
-            MAX({DATE_FN}) AS last_date,
-            COUNT(*) AS runs,
-            COALESCE(SUM(cost_usd),0) AS total_cost,
-            COALESCE(SUM(input_tokens),0) AS input_tok,
-            COALESCE(SUM(output_tokens),0) AS output_tok,
-            COALESCE(SUM(cache_read_input_tokens),0) AS cache_read_tok,
-            COALESCE(SUM(cache_creation_input_tokens),0) AS cache_write_tok
-        FROM agent_runs {where}
-    """, p_sum)
+    # sessions.project is canonical — filter via join when --project is set to
+    # avoid referencing the dropped agent_runs.project column.
+    if project_f:
+        cur.execute(f"""
+            SELECT
+                MIN({DATE_FN_AR}) AS first_date,
+                MAX({DATE_FN_AR}) AS last_date,
+                COUNT(*) AS runs,
+                COALESCE(SUM(ar.cost_usd),0) AS total_cost,
+                COALESCE(SUM(ar.input_tokens),0) AS input_tok,
+                COALESCE(SUM(ar.output_tokens),0) AS output_tok,
+                COALESCE(SUM(ar.cache_read_input_tokens),0) AS cache_read_tok,
+                COALESCE(SUM(ar.cache_creation_input_tokens),0) AS cache_write_tok
+            FROM agent_runs ar
+            LEFT JOIN sessions s ON s.id = ar.session_id
+            WHERE s.project = ?
+        """, [project_f])
+    else:
+        cur.execute(f"""
+            SELECT
+                MIN({DATE_FN}) AS first_date,
+                MAX({DATE_FN}) AS last_date,
+                COUNT(*) AS runs,
+                COALESCE(SUM(cost_usd),0) AS total_cost,
+                COALESCE(SUM(input_tokens),0) AS input_tok,
+                COALESCE(SUM(output_tokens),0) AS output_tok,
+                COALESCE(SUM(cache_read_input_tokens),0) AS cache_read_tok,
+                COALESCE(SUM(cache_creation_input_tokens),0) AS cache_write_tok
+            FROM agent_runs
+        """, [])
     row = cur.fetchone()
     first_date  = row["first_date"]  or "?"
     last_date   = row["last_date"]   or "?"
@@ -1600,20 +1644,18 @@ else:
     cache_share = (cache_read_tok / input_side * 100) if input_side > 0 else 0.0
 
     # Top 5 sessions by cost
-    top_where = "WHERE COALESCE(s.project, ar.project) = ?" if project_f else ""
+    top_where = "WHERE s.project = ?" if project_f else ""
     top_p     = [project_f] if project_f else []
     cur.execute(f"""
         SELECT ar.session_id,
                COALESCE(SUM(ar.cost_usd),0) AS cost,
                COUNT(*) AS cnt,
-               COALESCE(s.project, ar.project, '?') AS project,
+               COALESCE(s.project, '?') AS project,
                COALESCE(
                    date(replace(replace(s.started_at,'T',' '),'Z','')),
-                   date(replace(replace(ar.started_at,'T',' '),'Z',''))
+                   {DATE_FN_AR}
                ) AS session_date,
-               (SELECT ar2.prompt FROM agent_runs ar2
-                WHERE ar2.session_id = ar.session_id AND ar2.prompt IS NOT NULL
-                ORDER BY ar2.started_at ASC LIMIT 1) AS first_prompt
+               {PROMPT_SUBQ} AS first_prompt
         FROM agent_runs ar
         LEFT JOIN sessions s ON s.id = ar.session_id
         {top_where}
