@@ -307,7 +307,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   owns_files      TEXT,
   duration_ms     INTEGER,
   tool_uses       INTEGER,
-  abandoned_at    TIMESTAMP
+  abandoned_at    TIMESTAMP,
+  branch          TEXT
 );
 
 -- Routing events: structured event log
@@ -678,6 +679,9 @@ sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN owns_files TEXT;" 2>/dev/n
 # read by cast-duration-check.sh. Were not in the fresh-install CREATE TABLE prior to v7.4.0.
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN duration_ms INTEGER;" 2>/dev/null || true
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN tool_uses INTEGER;" 2>/dev/null || true
+
+# agent_runs.branch — git branch at capture time (writer: cast-subagent-stop-hook.sh; reader: cast cost --by-branch). F1.
+sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN branch TEXT;" 2>/dev/null || true
 
 # dispatch_decisions.outcome — written by cast_db.py ensure_schema_columns(). Was not in the
 # fresh-install CREATE TABLE prior to v7.4.0. Must match default used by cast_db.py ('pending').

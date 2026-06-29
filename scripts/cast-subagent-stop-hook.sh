@@ -335,6 +335,9 @@ if matches:
   fi
   export CAST_STOP_TRANSCRIPT_PATH
   export CAST_PRICING_PATH="${HOME}/.claude/config/model-pricing.json"
+  # Capture the git branch of the agent's working tree for per-feature cost attribution (F1).
+  CAST_STOP_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  export CAST_STOP_BRANCH
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os, sys, json, glob
 sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
@@ -356,6 +359,7 @@ if cache_read:
     cache_read = int(cache_read)
 if cache_create:
     cache_create = int(cache_create)
+branch = os.environ.get('CAST_STOP_BRANCH', '') or None
 
 if not agent or not db:
     raise SystemExit(0)
@@ -456,6 +460,7 @@ try:
         ('duration_ms', 'INTEGER'),
         ('tool_uses',   'INTEGER'),
         ('response',    'TEXT'),
+        ('branch',      'TEXT'),
     ]:
         try:
             conn.execute(f'ALTER TABLE agent_runs ADD COLUMN {col} {coltype}')
@@ -481,12 +486,12 @@ for attempt in range(3):
                 "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
                 "tool_uses=?, response=?, "
                 "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
-                "cost_usd=?, input_tokens=?, output_tokens=?, model=? "
+                "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=? "
                 "WHERE id=("
                 "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?"
                 ")",
                 (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
-                 cost_usd, input_tokens, output_tokens, transcript_model, agent_id),
+                 cost_usd, input_tokens, output_tokens, transcript_model, branch, agent_id),
             )
         else:
             cur.execute(
@@ -494,12 +499,12 @@ for attempt in range(3):
                 "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
                 "tool_uses=?, response=?, "
                 "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
-                "cost_usd=?, input_tokens=?, output_tokens=?, model=? "
+                "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=? "
                 "WHERE id=("
                 "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?"
                 ")",
                 (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
-                 cost_usd, input_tokens, output_tokens, transcript_model, agent, sess),
+                 cost_usd, input_tokens, output_tokens, transcript_model, branch, agent, sess),
             )
         rows_affected = conn.execute("SELECT changes()").fetchone()[0]
         conn.commit()
