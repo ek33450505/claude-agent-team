@@ -14,16 +14,19 @@
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
     "network": {
       "allowedDomains": [
         "github.com",
         "*.github.com",
+        "*.githubusercontent.com",
         "*.npmjs.org",
         "registry.yarnpkg.com",
         "*.googleapis.com",
         "api.anthropic.com"
       ],
-      "allowLocalBinding": true
+      "allowLocalBinding": true,
+      "allowManagedDomainsOnly": true
     },
     "filesystem": {
       "allowWrite": [
@@ -44,7 +47,25 @@
       "docker",
       "bq",
       "osascript"
-    ]
+    ],
+    "credentials": {
+      "files": [
+        {"path": "~/.aws/credentials", "mode": "deny"},
+        {"path": "~/.aws/config", "mode": "deny"},
+        {"path": "~/.ssh", "mode": "deny"},
+        {"path": "~/.gnupg", "mode": "deny"},
+        {"path": "~/.kube/config", "mode": "deny"},
+        {"path": "~/.netrc", "mode": "deny"}
+      ],
+      "envVars": [
+        {"name": "GITHUB_TOKEN", "mode": "deny"},
+        {"name": "GH_TOKEN", "mode": "deny"},
+        {"name": "NPM_TOKEN", "mode": "deny"},
+        {"name": "AWS_ACCESS_KEY_ID", "mode": "deny"},
+        {"name": "AWS_SECRET_ACCESS_KEY", "mode": "deny"},
+        {"name": "OPENAI_API_KEY", "mode": "deny"}
+      ]
+    }
   },
   "autoUpdatesChannel": "stable",
   "plansDirectory": "~/.claude/plans/",
