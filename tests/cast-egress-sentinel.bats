@@ -120,6 +120,16 @@ teardown() {
   assert_output --partial '"url_query_hash"'
 }
 
+@test "WebSearch → recorded as surface websearch with NO query/search-terms persisted" {
+  run python3 "$DISPATCH" <<< "$(payload WebSearch 'my secret search terms')"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"surface":"websearch"'
+  refute_output --partial 'secret search terms'
+  refute_output --partial '"query"'
+}
+
 # --- Read fast-path (security review M2) ----------------------------------
 
 @test "Read fast-path: normal file → no ledger, no error" {

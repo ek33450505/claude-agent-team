@@ -44,7 +44,7 @@ The live `github` MCP uses **local stdio** (`command: npx …server-github`) yet
 calls `api.github.com` → it is **cloud-bound by behavior**. Transport (stdio vs
 http) is therefore *not* a valid egress signal. Classification is a **named
 per-server map** (`config/egress-policy.json → mcp_servers`), unknown servers
-default to `cloud_bound` (fail-closed *classification*; log-only (no enforcement)).
+default to `cloud_bound` (fail-closed *classification*; log-only — no enforcement).
 
 Starting classification (Ed: confirm/extend):
 - **cloud-bound:** `github`, `ms365`, `claude_ai_Gmail/Calendar/Drive`
@@ -76,8 +76,9 @@ never asks, and exits 0 unconditionally.
    env expansion); `GITHUB_TOKEN` is absent from `settings.json env` and the
    checked shell profiles. So: revisit *whether the server should be wired at all*
    (a policy call), not an exposed-credential emergency. → Ed's call.
-2. **Todoist plaintext token** (from memory `project_github_mcp_dropped`) — still
-   pending rotation/keychain. Pairs with **A2 Local Secrets Vault**.
+2. **Todoist plaintext token — RESOLVED 2026-06-28:** the unused `mcpServers.todoist`
+   entry + plaintext token were removed from `~/.claude/.claude.json` (live config now
+   has zero todoist refs). Optional leftover: revoke the old token Todoist-side.
 3. **OTEL exporters** — confirm any `OTEL_EXPORTER_OTLP_ENDPOINT` points at
    `localhost` (OTEL is a *local* feed per the thesis).
 

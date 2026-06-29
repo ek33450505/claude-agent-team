@@ -130,8 +130,9 @@ def classify(tool_name: str, tool_input: dict, policy: dict) -> dict | None:
         return {"surface": "webfetch", "url": url,
                 "safelisted": _host_safelisted(url, policy)}
     if tool_name == "WebSearch":
-        query = (tool_input.get("query") or tool_input.get("q") or "")[:200]
-        return {"surface": "websearch", "query": query}
+        # The search query is intentionally NOT carried in the event dict — it must
+        # never reach the ledger (no-payload invariant). Record the surface only.
+        return {"surface": "websearch"}
 
     # --- Surface 4: credential Read ---------------------------------------
     if tool_name == "Read":
