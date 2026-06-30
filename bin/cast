@@ -139,7 +139,7 @@ Subcommands:
   ${C_BOLD}memory${C_RESET}    search|list|forget|export   Query and manage agent memories
   ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
   ${C_BOLD}cost${C_RESET}      [--by-task|--by-branch|--by-agent] [--project N] [--limit N]  Per-task/feature cost attribution
-  ${C_BOLD}agents${C_RESET}                          List installed CAST agents
+  ${C_BOLD}agents${C_RESET}    [--usage] [--json]            List installed agents, or per-agent runtime usage with --usage
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}backup${C_RESET}    [--overlay]               On-disk snapshot (+ GitHub overlay with --overlay)
   ${C_BOLD}restore${C_RESET}   <date|dir> [--force]      Restore files from a snapshot (--list to see them)
@@ -588,6 +588,64 @@ PYEOF
 
 # ── Subcommand: agents ───────────────────────────────────────────────────────
 _cmd_agents() {
+  local usage_mode=0
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --usage) usage_mode=1; shift ;;
+      *) shift ;;
+    esac
+  done
+
+  if [ "$usage_mode" -eq 1 ]; then
+    _require_db
+    python3 - "$CAST_DB_PATH" "$CAST_JSON" <<'PYEOF'
+import sys, sqlite3, json
+
+db_path, json_mode = sys.argv[1], sys.argv[2]
+json_out = json_mode == '1'
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+
+cur.execute("""
+    SELECT agent,
+           COUNT(*) AS dispatches,
+           AVG(cost_usd) AS avg_cost,
+           AVG(CASE WHEN status = 'DONE' THEN 1.0 ELSE 0.0 END) AS success_rate
+    FROM agent_runs
+    GROUP BY agent
+    ORDER BY dispatches DESC, agent ASC
+""")
+
+data = [
+    {
+        'agent': r['agent'] or '?',
+        'dispatches': r['dispatches'],
+        'avg_cost_usd': round(r['avg_cost'] or 0.0, 4),
+        'success_rate': round(r['success_rate'] or 0.0, 4),
+    }
+    for r in cur.fetchall()
+]
+conn.close()
+
+if json_out:
+    print(json.dumps({'view': 'by_agent_usage', 'rows': data}, indent=2))
+    sys.exit(0)
+
+if not data:
+    print('No agent runs recorded yet — agent_runs is empty.')
+    sys.exit(0)
+
+print(f"{'AGENT':<24} {'DISPATCHES':>10} {'AVG COST':>10} {'SUCCESS':>8}")
+print('-' * 56)
+for d in data:
+    print(f"{d['agent']:<24} {d['dispatches']:>10,} ${d['avg_cost_usd']:>8.2f} {d['success_rate']*100:>6.0f}%")
+print(f"\n{len(data)} agents with runtime data")
+PYEOF
+    return
+  fi
+
   if [ ! -d "$CAST_AGENTS_DIR" ]; then
     _error "Agents directory not found: $CAST_AGENTS_DIR"
     return 1
