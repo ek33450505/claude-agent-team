@@ -101,3 +101,12 @@ teardown() {
   run env CAST_DB_PATH="$CAST_DB_PATH" CAST_SCRIPTS_DIR="$CAST_SCRIPTS_DIR" CAST_REPO_DIR="$CAST_REPO_DIR" bash "$CAST_BIN" mcp bogus
   assert_failure
 }
+
+# -----------------------------------------------------------------------
+# 6. Global --help advertises the mcp subcommand (regression guard)
+# -----------------------------------------------------------------------
+@test "cast --help lists the mcp subcommand" {
+  run bash "$REPO_DIR/bin/cast" --help
+  assert_success
+  assert_output --partial 'mcp'
+}

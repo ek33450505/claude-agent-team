@@ -158,6 +158,7 @@ Subcommands:
   ${C_BOLD}verify-chain${C_RESET}                        Verify the tamper-evident provenance chain (PASS/BROKEN)
   ${C_BOLD}provenance${C_RESET} <cmd>                    Provenance chain ops: verify | status | backfill | append <id>
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
+  ${C_BOLD}mcp${C_RESET}       serve|config|status              Expose the cast.db record read-only over MCP (stdio, opt-in)
   ${C_BOLD}cheap${C_RESET}     [status|config|check]         Local cheap-mode session via ccr + Ollama
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
   ${C_BOLD}files${C_RESET}                              File event tracking and analytics
