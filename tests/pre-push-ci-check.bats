@@ -268,7 +268,6 @@ teardown() {
   out=$(
     export CAST_SKIP_PII_CHECK=1
     export CAST_SKIP_BATS_PUSH=1
-    export CAST_SKIP_UBUNTU_CHECK=1
     bash "$hook" < /dev/null 2>&1
   ) || rc=$?
 
@@ -277,6 +276,76 @@ teardown() {
 
   refute_output --partial "PII/secret check failed"
   assert_output --partial "Skipping PII check"
+}
+
+# ---------------------------------------------------------------------------
+# Tests: ubuntu CI-parity check is OPT-IN (2026-06-02 policy / 2026-06-30 fix)
+# The hook no longer calls pre-push-ubuntu-check.sh by default; CAST_RUN_UBUNTU_PUSH=1
+# is required. PATH-shims docker/make prevent any real container from spinning.
+# ---------------------------------------------------------------------------
+
+@test "ubuntu check is opt-in by default — prints opt-in message, does not invoke check" {
+  local hook="$REPO_DIR/.githooks/pre-push"
+  local fake_bin
+  fake_bin="$(mktemp -d)"
+  # Stub docker so the shim is there but the check is never reached (belt+suspenders).
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fake_bin/docker"
+  chmod +x "$fake_bin/docker"
+
+  local out rc=0
+  out=$(
+    export CAST_SKIP_PII_CHECK=1
+    export CAST_SKIP_STATS_PUSH=1
+    export CAST_SKIP_DB_CONTRACT=1
+    export CAST_SKIP_RULES_DRIFT=1
+    export CAST_SKIP_README_STRUCTURE=1
+    export PATH="$fake_bin:$PATH"
+    bash "$hook" < /dev/null 2>&1
+  ) || rc=$?
+
+  rm -rf "$fake_bin"
+  output="$out"
+  status="$rc"
+
+  assert_success
+  assert_output --partial "opt-in"
+  refute_output --partial "Running Ubuntu"
+  refute_output --partial "Docker daemon not running"
+}
+
+@test "CAST_RUN_UBUNTU_PUSH=1 invokes the ubuntu check script (docker-shimmed to not run)" {
+  local hook="$REPO_DIR/.githooks/pre-push"
+  local fake_bin
+  fake_bin="$(mktemp -d)"
+  # Stub docker: command found but 'docker info' fails → "daemon not running" graceful exit 0.
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fake_bin/docker"
+  chmod +x "$fake_bin/docker"
+  # Stub make: must not be reached since docker daemon is shimmed to fail.
+  printf '#!/usr/bin/env bash\necho "make: must not run in test" >&2; exit 1\n' > "$fake_bin/make"
+  chmod +x "$fake_bin/make"
+
+  local out rc=0
+  out=$(
+    export CAST_RUN_UBUNTU_PUSH=1
+    export CAST_SKIP_PII_CHECK=1
+    export CAST_SKIP_STATS_PUSH=1
+    export CAST_SKIP_DB_CONTRACT=1
+    export CAST_SKIP_RULES_DRIFT=1
+    export CAST_SKIP_README_STRUCTURE=1
+    export PATH="$fake_bin:$PATH"
+    bash "$hook" < /dev/null 2>&1
+  ) || rc=$?
+
+  rm -rf "$fake_bin"
+  output="$out"
+  status="$rc"
+
+  assert_success
+  # Ubuntu-specific opt-in reminder must NOT appear — the check was attempted, not skipped.
+  refute_output --partial "CAST_RUN_UBUNTU_PUSH=1 git push"
+  # pre-push-ubuntu-check.sh should have fired and printed its graceful-skip message.
+  assert_output --partial "Docker"
+  refute_output --partial "make: must not run in test"
 }
 
 # ---------------------------------------------------------------------------
