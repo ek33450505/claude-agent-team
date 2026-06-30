@@ -618,6 +618,14 @@ def _parse_sql_ops(
             _next_from.start() if _next_from else len(_after_match),
         )
         context = context[:_match_end_ctx + _clip]
+        # The 600-char window (above) can bisect a column name at its boundary —
+        # e.g. a truncated "s.project" leaves "...WHERE s.proj", which the alias.col
+        # regex below would mis-capture as a phantom column ("sessions.proj"). Drop
+        # any trailing partial word token so truncation never invents a column.
+        # Safe given the checker's "over-capture is_used" bias: a real column at the
+        # exact clip edge is captured by its other references; the 600-char window is
+        # heuristic, not authoritative.
+        context = re.sub(r"\w+$", "", context)
         for jm in join_re.finditer(context):
             jt = jm.group(1).lower()
             ja = (jm.group(2) or jt).lower()
