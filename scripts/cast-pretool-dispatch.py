@@ -140,6 +140,52 @@ def _block(message):
     return 2
 
 
+def _record_dispatch(data):
+    """Record a dispatch_decisions row (outcome='pending') for a Task dispatch.
+    Record-only, fail-soft — must never raise or block the dispatch."""
+    try:
+        ti = data.get("tool_input", {}) or {}
+        if not isinstance(ti, dict):
+            return
+        chosen_agent = ti.get("subagent_type") or "unknown"
+        prompt = (ti.get("prompt") or ti.get("description") or "")[:500]
+        # Redact PII/secrets before storage (consistency with cast-incident-record.sh;
+        # cast.db can sync off-machine). Fail-soft: never block a dispatch on redaction.
+        try:
+            import subprocess as _sp
+            _r = _sp.run(
+                ["python3", os.path.join(SCRIPT_DIR, "cast-redact.py"),
+                 "--engine", "regex", "--field", "redacted_text"],
+                input=prompt, capture_output=True, text=True, timeout=3,
+            )
+            _out = _r.stdout.strip()
+            if _r.returncode == 0 and _out:
+                prompt = _out
+        except Exception:
+            pass  # passthrough — redaction must never block dispatch capture
+        model = ti.get("model")  # usually absent in tool_input → NULL
+        effort = ti.get("effort")  # usually absent → NULL
+        session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
+        db = os.path.expanduser(os.environ.get("CAST_DB_PATH", "~/.claude/cast.db"))
+        if not os.path.isfile(db):
+            return
+        import sqlite3
+
+        conn = sqlite3.connect(db, timeout=1)
+        try:
+            conn.execute(
+                "INSERT INTO dispatch_decisions "
+                "(session_id, prompt_snippet, chosen_agent, model, effort, outcome) "
+                "VALUES (?, ?, ?, ?, ?, 'pending')",
+                (session_id, prompt, chosen_agent, model, effort),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        _log_error(f"dispatch_decisions record failed: {e}")
+
+
 def main():
     if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
         return 0
@@ -202,6 +248,10 @@ def main():
             action = _run_egress(sentinel, data)
             if action is not None:
                 _emit_egress(sentinel, action)
+
+    # F2: record the dispatch decision (record-only; NEVER blocks a dispatch)
+    if tool == "Task":
+        _record_dispatch(data)
     return 0
 
 

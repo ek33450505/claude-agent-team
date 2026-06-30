@@ -132,7 +132,7 @@
       },
       {
         "id": "cast-pretool-dispatch",
-        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read|Write|Edit",
+        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read|Write|Edit|Task",
         "hooks": [
           {
             "type": "command",

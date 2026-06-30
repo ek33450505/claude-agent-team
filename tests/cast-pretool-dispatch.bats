@@ -179,6 +179,36 @@ teardown() { teardown_temp_home; }
 # the dispatcher's total wall time must be less than running the three legacy
 # wrapper hooks serially on the same payload. Proves the 3-spawn -> 1-spawn win
 # without a flaky absolute millisecond threshold.
+# --- Task routing: dispatch_decisions record ---------------------------------
+
+@test "Task dispatch → exit 0 (NEVER blocks)" {
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  run_dispatch '{"tool_name":"Task","session_id":"s1","tool_input":{"subagent_type":"debugger","prompt":"fix the X bug","description":"debug X"}}'
+  assert_success
+}
+
+@test "Task dispatch → dispatch_decisions row with correct fields" {
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  run_dispatch '{"tool_name":"Task","session_id":"s1","tool_input":{"subagent_type":"debugger","prompt":"fix the X bug","description":"debug X"}}'
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" \
+    "SELECT chosen_agent || '|' || prompt_snippet || '|' || outcome FROM dispatch_decisions WHERE session_id='s1' LIMIT 1"
+  assert_output --partial "debugger"
+  assert_output --partial "fix the X bug"
+  assert_output --partial "pending"
+}
+
+@test "non-Task payload (WebFetch) → zero dispatch_decisions rows written" {
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  run_dispatch '{"tool_name":"WebFetch","session_id":"s2","tool_input":{"url":"https://example.com"}}'
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM dispatch_decisions WHERE session_id='s2'"
+  assert_output "0"
+}
+
 @test "latency: dispatcher is faster than the 3 legacy hooks serially" {
   run python3 - "$REPO_DIR" <<'PY'
 import json, os, subprocess, sys, time
@@ -206,4 +236,31 @@ sys.exit(0 if dispatch < serial else 1)
 PY
   assert_success
   assert_output --partial "dispatcher="
+}
+
+# --- redaction: PII/secrets stripped from prompt_snippet before storage ------
+
+@test "Task dispatch → prompt_snippet is redacted before storage" {
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  local payload
+  payload=$(python3 -c "
+import json
+print(json.dumps({
+    'tool_name': 'Task',
+    'session_id': 'redact-s1',
+    'tool_input': {
+        'subagent_type': 'debugger',
+        'prompt': 'fix bug, key sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000 in /Users/edkubiak/x.py'
+    }
+}))
+")
+  run_dispatch "$payload"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" \
+    "SELECT prompt_snippet FROM dispatch_decisions WHERE session_id='redact-s1' LIMIT 1"
+  assert_success
+  # Raw secret token and raw home path must NOT appear in the stored snippet
+  refute_output --partial "sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  refute_output --partial "/Users/edkubiak/x.py"
 }
