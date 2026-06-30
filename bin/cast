@@ -153,6 +153,7 @@ Subcommands:
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
   ${C_BOLD}ask${C_RESET}       "<query>" [--kind K] [--since DATE] [--limit N] [--semantic]  Search the full audit record via FTS5
   ${C_BOLD}predict${C_RESET}   "<task>" [--limit N] [--json]          Predict cost + suggest agents from the record
+  ${C_BOLD}feature${C_RESET}   "<desc>"                             App-build: decompose + gated writer/reviewer/test/commit
   ${C_BOLD}ledger${C_RESET}    [SESSION] [--last N] [--since DATE] [--json] [--out FILE] [--verify FILE]  Render a signed per-session audit receipt from cast.db
   ${C_BOLD}verify-chain${C_RESET}                        Verify the tamper-evident provenance chain (PASS/BROKEN)
   ${C_BOLD}provenance${C_RESET} <cmd>                    Provenance chain ops: verify | status | backfill | append <id>
@@ -4434,6 +4435,23 @@ for r in rows:
 PYEOF
 }
 
+# ── Subcommand: feature ──────────────────────────────────────────────────────
+_cmd_feature() {
+  local desc="${1:-}"
+  if [ -z "$desc" ]; then
+    printf 'usage: cast feature "<feature description>"\n' >&2
+    return 1
+  fi
+
+  printf '── pre-flight cost estimate ──\n'
+  ( _cmd_predict "$desc" ) || true
+
+  printf '\n[CAST-FEATURE] Build this feature via the CAST app-build engine. In the orchestrating session, invoke the Workflow tool:\n'
+  printf '  Workflow({ scriptPath: "%s/workflows/cast-feature.workflow.js", args: { desc: "%s", project: "%s" } })\n' \
+    "${CAST_REPO_DIR}" "${desc//\"/\\\"}" "${PWD}"
+  printf 'When it returns, run:  cast cost --by-task --limit 1   # actual spend for this run\n'
+}
+
 # ── Subcommand: ledger ──────────────────────────────────────────────────────
 _cmd_ledger() {
   local ledger_script="${CAST_SCRIPTS_DIR}/cast-ledger.py"
@@ -4698,6 +4716,7 @@ case "$SUBCOMMAND" in
   routines)             _cmd_routines "$@" ;;
   ask)                  _cmd_ask "$@" ;;
   predict)              _cmd_predict "$@" ;;
+  feature)              _cmd_feature "$@" ;;
   ledger)               _cmd_ledger "$@" ;;
   verify-chain)         _cmd_verify_chain "$@" ;;
   provenance)           _cmd_provenance "$@" ;;
