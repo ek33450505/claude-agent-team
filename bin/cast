@@ -1422,7 +1422,7 @@ _cmd_cost() {
         cat <<USAGE
 Usage: cast cost [options]
 
-  --by-task              Group by session (project · date · prompt snippet)
+  --by-task              Group by session (project · date · session id)
   --by-agent             Group by agent name
   --by-branch            Group by branch (requires branch capture hook)
   --project <name>       Filter to a specific project
@@ -1450,18 +1450,11 @@ conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
-# Detect optional columns once — agent_runs.project and agent_runs.prompt were
-# dropped from the canonical schema (migration 022). Use sessions.project as the
-# canonical project source, and degrade gracefully when prompt is absent.
+# Detect optional columns once — used to check for branch capture (view == "branch").
+# sessions.project is the canonical project source (agent_runs.project was dropped
+# in migration 022; agent_runs.prompt was also dropped and is no longer read here).
 cur.execute("PRAGMA table_info(agent_runs)")
 _ar_cols = {row["name"] for row in cur.fetchall()}
-HAS_PROMPT = "prompt" in _ar_cols
-PROMPT_SUBQ = (
-    "(SELECT ar2.prompt FROM agent_runs ar2"
-    " WHERE ar2.session_id = ar.session_id AND ar2.prompt IS NOT NULL"
-    " ORDER BY ar2.started_at ASC LIMIT 1)"
-    if HAS_PROMPT else "NULL"
-)
 
 # Unqualified form (no join) and table-aliased form (when joining sessions).
 DATE_FN    = "date(replace(replace(started_at,'T',' '),'Z',''))"
@@ -1563,8 +1556,7 @@ elif view == "task":
                COALESCE(
                    date(replace(replace(s.started_at,'T',' '),'Z','')),
                    {DATE_FN_AR}
-               ) AS session_date,
-               {PROMPT_SUBQ} AS first_prompt
+               ) AS session_date
         FROM agent_runs ar
         LEFT JOIN sessions s ON s.id = ar.session_id
         {where}
@@ -1576,16 +1568,12 @@ elif view == "task":
     conn.close()
     rows = []
     for r in raw:
-        prompt = r["first_prompt"] or ""
-        snippet = (prompt[:40] + "…") if len(prompt) > 40 else prompt
-        if not snippet:
-            sid = r["session_id"] or ""
-            snippet = sid[:8] if sid else "?"
+        sid8 = (r["session_id"][:8] if r["session_id"] else "?")
         rows.append({
             "session_id": r["session_id"],
             "cost": r["cost"],
             "runs": r["runs"],
-            "label": f"{r['project']} · {r['session_date'] or '?'} · {snippet}",
+            "label": f"{r['project']} · {r['session_date'] or '?'} · {sid8}",
         })
 
     if json_out:
@@ -1654,8 +1642,7 @@ else:
                COALESCE(
                    date(replace(replace(s.started_at,'T',' '),'Z','')),
                    {DATE_FN_AR}
-               ) AS session_date,
-               {PROMPT_SUBQ} AS first_prompt
+               ) AS session_date
         FROM agent_runs ar
         LEFT JOIN sessions s ON s.id = ar.session_id
         {top_where}
@@ -1665,16 +1652,12 @@ else:
     """, top_p)
     top_rows = []
     for r in cur.fetchall():
-        prompt  = r["first_prompt"] or ""
-        snippet = (prompt[:40] + "…") if len(prompt) > 40 else prompt
-        if not snippet:
-            sid = r["session_id"] or ""
-            snippet = sid[:8] if sid else "?"
+        sid8 = (r["session_id"][:8] if r["session_id"] else "?")
         top_rows.append({
             "session_id": r["session_id"],
             "cost": r["cost"],
             "runs": r["cnt"],
-            "label": f"{r['project']} · {r['session_date'] or '?'} · {snippet}",
+            "label": f"{r['project']} · {r['session_date'] or '?'} · {sid8}",
         })
     conn.close()
 
