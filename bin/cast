@@ -4510,6 +4510,54 @@ _cmd_feature() {
   printf 'When it returns, run:  cast cost --by-task --limit 1   # actual spend for this run\n'
 }
 
+# ── Subcommand: mcp ─────────────────────────────────────────────────────────
+_cmd_mcp() {
+  local sub="${1:-}"; shift 2>/dev/null || true
+  local server="${CAST_SCRIPTS_DIR}/cast-mcp-server.py"
+  [[ -f "$server" ]] || server="${CAST_REPO_DIR}/scripts/cast-mcp-server.py"
+  case "$sub" in
+    serve)
+      [[ -f "$server" ]] || { _error "cast-mcp-server.py not found. Run: bash install.sh"; exit 1; }
+      exec python3 "$server" "$@"
+      ;;
+    config)
+      cat <<'EOF'
+Opt in by adding CAST's read-only record server to a project .mcp.json:
+
+  { "mcpServers": { "cast-record": { "type": "stdio", "command": "cast", "args": ["mcp", "serve"] } } }
+
+Or register via the Claude Code CLI:
+
+  claude mcp add cast-record -- cast mcp serve
+
+Read-only (cast.db mode=ro) and local-only (stdio, no network). 5 tools + 5 resources.
+EOF
+      ;;
+    status)
+      local db="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
+      [[ -f "$db" ]] || { printf 'cast mcp: cast.db not found at %s\n' "$db"; exit 1; }
+      [[ -f "$server" ]] || { _error "cast-mcp-server.py not found"; exit 1; }
+      printf 'cast mcp: server %s\ncast mcp: cast.db %s\n' "$server" "$db"
+      local out=""
+      out="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | python3 "$server" 2>/dev/null | head -1 || true)"
+      if printf '%s' "$out" | grep -q '2025-06-18'; then
+        printf 'cast mcp: handshake OK (protocol 2025-06-18)\n'
+      else
+        printf 'cast mcp: handshake FAILED\n'; exit 1
+      fi
+      ;;
+    ""|--help|-h|help)
+      cat <<'EOF'
+usage: cast mcp <serve|config|status>
+  serve    Run the read-only MCP stdio server (invoked by MCP clients via .mcp.json)
+  config   Print the .mcp.json entry / `claude mcp add` line to opt in
+  status   Check cast.db is present and the server handshake succeeds
+EOF
+      ;;
+    *) _error "Unknown 'cast mcp' subcommand: $sub"; exit 1 ;;
+  esac
+}
+
 # ── Subcommand: ledger ──────────────────────────────────────────────────────
 _cmd_ledger() {
   local ledger_script="${CAST_SCRIPTS_DIR}/cast-ledger.py"
@@ -4779,6 +4827,7 @@ case "$SUBCOMMAND" in
   verify-chain)         _cmd_verify_chain "$@" ;;
   provenance)           _cmd_provenance "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
+  mcp)                  _cmd_mcp "$@" ;;
   files)                _cmd_files "$@" ;;
   batch)                _cmd_batch "$@" ;;
   ci-local)             _cmd_ci_local "$@" ;;
