@@ -270,7 +270,7 @@ print(json.dumps({
     'session_id': 'redact-s1',
     'tool_input': {
         'subagent_type': 'debugger',
-        'prompt': 'fix bug, key sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000 in /Users/edkubiak/x.py'
+        'prompt': 'fix bug, key sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000 in /Users/testuser/x.py'
     }
 }))
 ")
@@ -281,5 +281,5 @@ print(json.dumps({
   assert_success
   # Raw secret token and raw home path must NOT appear in the stored snippet
   refute_output --partial "sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-  refute_output --partial "/Users/edkubiak/x.py"
+  refute_output --partial "/Users/testuser/x.py"
 }

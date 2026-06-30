@@ -130,7 +130,7 @@ _write_fixture() {
   local fake_secret="sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000"
   local fixture
   fixture="$(mktemp)"
-  printf '{"agent_type":"debugger","session_id":"s-redact","agent_id":"a-redact","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Summary: leaked %s and /Users/edkubiak/secret.txt\\n## Handoff\\nfiles_changed: []\\nStatus: DONE"}]}}' \
+  printf '{"agent_type":"debugger","session_id":"s-redact","agent_id":"a-redact","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Summary: leaked %s and /Users/testuser/secret.txt\\n## Handoff\\nfiles_changed: []\\nStatus: DONE"}]}}' \
     "$fake_secret" >"$fixture"
 
   run bash "$SCRIPT" <"$fixture"
