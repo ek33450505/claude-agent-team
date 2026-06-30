@@ -152,6 +152,7 @@ Subcommands:
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
   ${C_BOLD}ask${C_RESET}       "<query>" [--kind K] [--since DATE] [--limit N] [--semantic]  Search the full audit record via FTS5
+  ${C_BOLD}predict${C_RESET}   "<task>" [--limit N] [--json]          Predict cost + suggest agents from the record
   ${C_BOLD}ledger${C_RESET}    [SESSION] [--last N] [--since DATE] [--json] [--out FILE] [--verify FILE]  Render a signed per-session audit receipt from cast.db
   ${C_BOLD}verify-chain${C_RESET}                        Verify the tamper-evident provenance chain (PASS/BROKEN)
   ${C_BOLD}provenance${C_RESET} <cmd>                    Provenance chain ops: verify | status | backfill | append <id>
@@ -1695,6 +1696,243 @@ else:
         print("  " + "-" * 68)
         for r in top_rows:
             print(f"  ${r['cost']:>9.2f}  {r['runs']:>5,}  {r['label']}")
+PYEOF
+}
+
+# ── Subcommand: predict ──────────────────────────────────────────────────────
+_cmd_predict() {
+  local task_desc=""
+  local limit_n=5
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --limit)  limit_n="${2:-5}"; shift 2 ;;
+      --json)   CAST_JSON=1; shift ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast predict "<task description>" [--limit N] [--json]
+
+  Reads cast.db to predict cost, suggest agents, and surface related incidents.
+
+  --limit <n>    Max agents / incidents to show (default 5)
+  --json         Machine-readable JSON output
+USAGE
+        return 0
+        ;;
+      *)
+        if [ -z "$task_desc" ]; then task_desc="$1"; fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$task_desc" ]; then
+    _error "Usage: cast predict \"<task description>\" [--limit N] [--json]"
+    return 1
+  fi
+
+  _require_db
+
+  python3 - "$CAST_DB_PATH" "$task_desc" "$limit_n" "$CAST_JSON" <<'PYEOF'
+import sys, sqlite3, json, re
+from statistics import median, mean
+
+db_path, task, limit_arg, json_mode = sys.argv[1:5]
+json_out = json_mode == "1"
+try:
+    limit_n = int(limit_arg)
+except (ValueError, TypeError):
+    limit_n = 5
+
+STOP = {"the","and","for","with","this","that","from","into","you","your","are","was","its","but","not"}
+keywords = [w for w in re.findall(r'[a-z0-9]+', task.lower()) if len(w) >= 3 and w not in STOP]
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+
+# ── Section 1: Cost prediction via routing_events keyword scoring ─────────────
+try:
+    cur.execute("SELECT session_id, prompt_preview FROM routing_events WHERE prompt_preview IS NOT NULL AND prompt_preview != ''")
+    re_rows = cur.fetchall()
+except Exception:
+    re_rows = []
+
+total_sessions_searched = 0
+session_scores = {}
+if keywords and re_rows:
+    session_previews = {}
+    for row in re_rows:
+        sid = row["session_id"]
+        if sid:
+            session_previews.setdefault(sid, []).append((row["prompt_preview"] or "").lower())
+    total_sessions_searched = len(session_previews)
+    for sid, previews in session_previews.items():
+        combined = " ".join(previews)
+        score = sum(1 for kw in set(keywords) if kw in combined)
+        if score > 0:
+            session_scores[sid] = score
+
+matched_sids = list(session_scores.keys())
+
+cost_data = {"median": None, "mean": None, "min": None, "max": None, "count": 0}
+session_costs = []
+if matched_sids:
+    placeholders = ",".join("?" * len(matched_sids))
+    cur.execute(f"""
+        SELECT ar.session_id, COALESCE(SUM(ar.cost_usd), 0) AS total_cost
+        FROM agent_runs ar
+        WHERE ar.session_id IN ({placeholders})
+        GROUP BY ar.session_id
+    """, matched_sids)
+    for r in cur.fetchall():
+        session_costs.append(r["total_cost"])
+    if session_costs:
+        cost_data["median"] = median(session_costs)
+        cost_data["mean"]   = mean(session_costs)
+        cost_data["min"]    = min(session_costs)
+        cost_data["max"]    = max(session_costs)
+        cost_data["count"]  = len(session_costs)
+
+# ── Section 2: Suggested agents ──────────────────────────────────────────────
+agent_rows = []
+if matched_sids:
+    placeholders = ",".join("?" * len(matched_sids))
+    cur.execute(f"""
+        SELECT ar.agent,
+               COUNT(*) AS runs,
+               COALESCE(AVG(ar.cost_usd), 0) AS avg_cost,
+               SUM(CASE WHEN ar.status='DONE' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS success_rate
+        FROM agent_runs ar
+        WHERE ar.session_id IN ({placeholders})
+          AND ar.agent IS NOT NULL
+        GROUP BY ar.agent
+        ORDER BY runs DESC
+        LIMIT ?
+    """, matched_sids + [limit_n])
+    agent_rows = [{"agent": r["agent"], "runs": r["runs"], "avg_cost": r["avg_cost"], "success_rate": r["success_rate"]} for r in cur.fetchall()]
+
+# dispatch_decisions signal (may be absent/empty — PRAGMA-guard)
+dd_rows = []
+try:
+    cur.execute("PRAGMA table_info(dispatch_decisions)")
+    dd_cols = {row["name"] for row in cur.fetchall()}
+    if dd_cols and keywords:
+        conditions = " OR ".join(["prompt_snippet LIKE ?" for _ in keywords])
+        params = [f"%{kw}%" for kw in keywords]
+        cur.execute(f"""
+            SELECT chosen_agent, outcome, COUNT(*) AS cnt
+            FROM dispatch_decisions
+            WHERE {conditions}
+            GROUP BY chosen_agent, outcome
+            ORDER BY cnt DESC
+            LIMIT ?
+        """, params + [limit_n])
+        dd_rows = [{"chosen_agent": r["chosen_agent"], "outcome": r["outcome"], "cnt": r["cnt"]} for r in cur.fetchall()]
+except Exception:
+    dd_rows = []
+
+# ── Section 3: Related incidents ──────────────────────────────────────────────
+incident_rows = []
+try:
+    cur.execute("PRAGMA table_info(incidents)")
+    inc_cols = {row["name"] for row in cur.fetchall()}
+    if inc_cols and keywords:
+        conditions = " OR ".join(
+            ["(problem_summary LIKE ? OR COALESCE(fix_summary,'') LIKE ?)" for _ in keywords]
+        )
+        params = []
+        for kw in keywords:
+            params += [f"%{kw}%", f"%{kw}%"]
+        cur.execute(f"""
+            SELECT problem_summary, fix_summary, related_commit
+            FROM incidents
+            WHERE {conditions}
+            LIMIT ?
+        """, params + [limit_n])
+        incident_rows = [
+            {"problem_summary": r["problem_summary"], "fix_summary": r["fix_summary"], "related_commit": r["related_commit"]}
+            for r in cur.fetchall()
+        ]
+except Exception:
+    incident_rows = []
+
+conn.close()
+
+# ── JSON output ───────────────────────────────────────────────────────────────
+if json_out:
+    out = {
+        "task": task,
+        "keywords": keywords,
+        "sessions_searched": total_sessions_searched,
+        "matched_sessions": len(matched_sids),
+        "cost_prediction": {
+            "median_usd":   round(cost_data["median"], 4) if cost_data["median"] is not None else None,
+            "mean_usd":     round(cost_data["mean"],   4) if cost_data["mean"]   is not None else None,
+            "min_usd":      round(cost_data["min"],    4) if cost_data["min"]    is not None else None,
+            "max_usd":      round(cost_data["max"],    4) if cost_data["max"]    is not None else None,
+            "sample_count": cost_data["count"],
+        },
+        "suggested_agents": agent_rows,
+        "dispatch_decision_signal": dd_rows,
+        "related_incidents": incident_rows,
+    }
+    print(json.dumps(out, indent=2))
+    sys.exit(0)
+
+# ── Formatted output ──────────────────────────────────────────────────────────
+print(f"predict: {task!r}")
+print(f"Keywords: {', '.join(keywords) if keywords else '(none extracted)'}")
+print()
+
+print("── Cost Prediction ──────────────────────────────────────────────────────")
+if not keywords:
+    print("No usable keywords extracted from task description — cannot predict.")
+elif cost_data["count"] == 0:
+    print(f"No similar tasks found in the record ({total_sessions_searched} sessions searched) — cannot predict.")
+else:
+    conf = " (low confidence — only {k} matched session{s})".format(
+        k=cost_data["count"], s="" if cost_data["count"]==1 else "s"
+    ) if cost_data["count"] < 3 else ""
+    med = cost_data["median"]
+    avg = cost_data["mean"]
+    lo  = cost_data["min"]
+    hi  = cost_data["max"]
+    k   = cost_data["count"]
+    print(f"Tasks like this: ≈ ${med:.4f} median  (mean ${avg:.4f}, range ${lo:.4f}–${hi:.4f}) over {k} similar session{'s' if k!=1 else ''}{conf}")
+print()
+
+print("── Suggested Agents ─────────────────────────────────────────────────────")
+if not agent_rows:
+    if not matched_sids:
+        print("  No similar sessions found — no agent suggestions.")
+    else:
+        print("  No agent run data for matched sessions.")
+else:
+    for a in agent_rows:
+        pct = round((a["success_rate"] or 0) * 100)
+        print(f"  Suggested: {a['agent']:<22} ({a['runs']} run{'s' if a['runs']!=1 else ''} on similar tasks, {pct}% DONE, ≈${a['avg_cost']:.4f} avg)")
+if dd_rows:
+    print()
+    print("  Dispatch-decision signal:")
+    for d in dd_rows:
+        print(f"    {d['chosen_agent']} · outcome={d['outcome']} · {d['cnt']} match{'es' if d['cnt']!=1 else ''}")
+else:
+    print("  (no dispatch-decision history yet)")
+print()
+
+print("── Related Incidents ────────────────────────────────────────────────────")
+if not incident_rows:
+    print("  (no incident history yet)")
+else:
+    for inc in incident_rows:
+        prob   = (inc["problem_summary"] or "")[:80]
+        fix    = (inc["fix_summary"] or "")[:80]
+        commit = inc["related_commit"]
+        commit_str = f"  [{commit[:8]}]" if commit else ""
+        print(f"  {prob}{commit_str}")
+        if fix:
+            print(f"    → {fix}")
 PYEOF
 }
 
@@ -4459,6 +4697,7 @@ case "$SUBCOMMAND" in
   cheap)                _cmd_cheap "$@" ;;
   routines)             _cmd_routines "$@" ;;
   ask)                  _cmd_ask "$@" ;;
+  predict)              _cmd_predict "$@" ;;
   ledger)               _cmd_ledger "$@" ;;
   verify-chain)         _cmd_verify_chain "$@" ;;
   provenance)           _cmd_provenance "$@" ;;
