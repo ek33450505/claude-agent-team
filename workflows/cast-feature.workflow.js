@@ -40,35 +40,42 @@ const projectRoot = (args && args.project) ? String(args.project) : 'the current
 log(`cast feature: "${desc}"` + (args && args.estimate ? ` · pre-flight estimate: ${args.estimate}` : ''))
 
 // ── Phase 1: Decompose (stack-ADAPTIVE) ──────────────────────────────────────
+// We ask for a JSON object as TEXT and parse it here rather than forcing a
+// StructuredOutput schema: the nested decomposition shape proved too brittle for
+// forced StructuredOutput (it retried to the cap with payloads missing `units`).
+// Fence-strip + one stricter retry + normalization is far more robust here.
 phase('Decompose')
-const DECOMP_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['summary', 'stack', 'units'],
-  properties: {
-    summary: { type: 'string' },
-    stack: { type: 'string' },
-    units: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['id', 'title', 'layer', 'instructions', 'needs_security'],
-        properties: {
-          id: { type: 'integer' },
-          title: { type: 'string' },
-          layer: { type: 'string' },
-          files: { type: 'array', items: { type: 'string' } },
-          instructions: { type: 'string' },
-          needs_security: { type: 'boolean' },
-          depends_on: { type: 'array', items: { type: 'integer' } },
-        },
-      },
-    },
-  },
+
+function _extractJson(text) {
+  if (!text || typeof text !== 'string') return null
+  let s = text.trim()
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) s = fence[1].trim()
+  if (s[0] !== '{') {
+    const i = s.indexOf('{')
+    const j = s.lastIndexOf('}')
+    if (i >= 0 && j > i) s = s.slice(i, j + 1)
+  }
+  try { return JSON.parse(s) } catch (e) { return null }
 }
 
-const plan = await agent(
+function _normalizeUnits(p) {
+  if (!p || !Array.isArray(p.units)) return null
+  const out = p.units
+    .filter(u => u && typeof u === 'object' && (u.title || u.instructions))
+    .map((u, i) => ({
+      id: Number.isInteger(u.id) ? u.id : i + 1,
+      title: String(u.title || `unit ${i + 1}`),
+      layer: String(u.layer || 'code'),
+      files: Array.isArray(u.files) ? u.files : [],
+      instructions: String(u.instructions || u.title || ''),
+      needs_security: u.needs_security === true,
+      depends_on: Array.isArray(u.depends_on) ? u.depends_on : [],
+    }))
+  return out.length ? out : null
+}
+
+const DECOMP_PROMPT =
   `You are a CAST planner performing a stack-ADAPTIVE app-build decomposition.\n` +
   `Feature request: "${desc}"\n` +
   `Target project root: ${projectRoot}\n\n` +
@@ -76,25 +83,39 @@ const plan = await agent(
   `It may be a CLI / bash / python project, a React + Express app, or something else — ADAPT to what you find; ` +
   `do NOT assume a frontend/API/migration shape.\n` +
   `Decompose the feature into the SMALLEST set of gated build units (typically 1-4), each ~15-30 min, in dependency order. ` +
-  `For each unit provide: concrete file paths, artifact-first instructions a code-writer can begin from immediately, ` +
-  `the layer (e.g. data, cli, api, frontend, test, docs), needs_security (true only if it touches auth / user input / ` +
-  `secrets / shell interpolation / enforcement / destructive ops), and depends_on (ids of prerequisite units).\n` +
-  `YAGNI — only what the request literally needs; do not invent scope. Return ONLY the structured object.`,
-  { label: 'decompose', phase: 'Decompose', schema: DECOMP_SCHEMA }
-)
+  `YAGNI — only what the request literally needs; do not invent scope.\n\n` +
+  `Output ONLY a single JSON object — no prose before or after (a \`\`\`json fence is allowed) — with EXACTLY this shape:\n` +
+  `{"summary":"one line","stack":"detected stack","units":[{"id":1,"title":"short title",` +
+  `"layer":"data|cli|api|frontend|test|docs","files":["path/to/file"],` +
+  `"instructions":"concrete artifact-first steps a code-writer can start from immediately",` +
+  `"needs_security":false,"depends_on":[]}]}\n` +
+  `needs_security is true ONLY if the unit touches auth / user input / secrets / shell interpolation / enforcement / destructive ops.`
 
-if (!plan || !Array.isArray(plan.units) || plan.units.length === 0) {
-  log('cast-feature: decomposition produced no units — aborting (nothing built)')
-  return { error: 'no-units', plan: plan || null, units: [] }
+let raw = await agent(DECOMP_PROMPT, { label: 'decompose', phase: 'Decompose' })
+let plan = _extractJson(raw)
+let units = _normalizeUnits(plan)
+if (!units) {
+  log('decompose: first reply was not parseable JSON with units — retrying once (stricter)')
+  raw = await agent(
+    DECOMP_PROMPT + `\n\nYour previous reply could not be parsed as JSON. Reply with ONLY the JSON object, nothing else — no explanation.`,
+    { label: 'decompose-retry', phase: 'Decompose' }
+  )
+  plan = _extractJson(raw)
+  units = _normalizeUnits(plan)
 }
-log(`stack: ${plan.stack} · ${plan.units.length} unit(s): ${plan.units.map(u => u.title).join(' | ')}`)
+if (!units) {
+  log('cast-feature: decomposition did not yield parseable units — aborting (nothing built)')
+  return { error: 'no-units', raw: (raw || '').slice(0, 500), units: [] }
+}
+const stack = (plan && plan.stack) ? String(plan.stack) : 'unknown'
+log(`stack: ${stack} · ${units.length} unit(s): ${units.map(u => u.title).join(' | ')}`)
 
 // ── Phase 2: Build each unit through the gated pipeline ───────────────────────
 phase('Build')
 const BLOCKER_RE = /^\s*BLOCKER\b/m
 const results = []
 
-for (const unit of plan.units) {
+for (const unit of units) {
   const tag = `u${unit.id} [${unit.layer}] ${unit.title}`
   log(`build ${tag}`)
 
@@ -163,5 +184,5 @@ for (const unit of plan.units) {
 }
 
 const done = results.filter(r => r.status === 'DONE').length
-log(`cast feature: ${done}/${plan.units.length} unit(s) committed`)
-return { desc, stack: plan.stack, summary: plan.summary, units: results }
+log(`cast feature: ${done}/${units.length} unit(s) committed`)
+return { desc, stack, summary: (plan && plan.summary) || '', units: results }
