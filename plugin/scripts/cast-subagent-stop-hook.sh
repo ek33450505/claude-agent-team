@@ -524,6 +524,55 @@ for attempt in range(3):
 PYEOF
 fi
 
+# ── Step 2b: dispatch_decisions outcome update (F2 record→decision loop) ─────
+# Resolve the PreToolUse(Task)-captured pending decision row for this agent+session
+# to its terminal outcome. FIFO MIN(id) match mirrors the agent_runs match heuristic
+# (dispatch_decisions has no agent_id linkage — captured at PreToolUse before agent_id
+# exists — so session_id+chosen_agent FIFO is the available key; parallel same-type
+# dispatches in one session may resolve out of order — acceptable for v1).
+# Best-effort, fail-soft: never blocks/crashes the hook. No pending row → no-op.
+if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+  if [ "$EVENT_TYPE" = "task_blocked" ]; then
+    CAST_STOP_DD_OUTCOME="BLOCKED"
+  else
+    CAST_STOP_DD_OUTCOME="DONE"
+  fi
+  export CAST_STOP_DD_OUTCOME
+  export CAST_DB_PATH="$DB_PATH"
+  python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
+import sqlite3, os, sys
+sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
+try:
+    from cast_db import log_hook_failure
+except Exception:
+    log_hook_failure = None
+db      = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
+agent   = os.environ.get('CAST_STOP_AGENT', '')
+sess    = os.environ.get('CAST_STOP_SESSION', '')
+outcome = os.environ.get('CAST_STOP_DD_OUTCOME', 'DONE')
+if not agent or not sess:
+    raise SystemExit(0)
+conn = None
+try:
+    conn = sqlite3.connect(db, timeout=2)
+    conn.execute(
+        "UPDATE dispatch_decisions SET outcome=? "
+        "WHERE id=(SELECT MIN(id) FROM dispatch_decisions "
+        "          WHERE outcome='pending' AND chosen_agent=? AND session_id=?)",
+        (outcome, agent, sess),
+    )
+    conn.commit()
+    conn.close()
+except Exception as e:
+    try:
+        if conn: conn.close()
+    except Exception:
+        pass
+    if log_hook_failure:
+        log_hook_failure('cast-subagent-stop-hook:dispatch_decisions', -1, str(e), sess)
+PYEOF
+fi
+
 # ── Step 2.1: Truncation logging for all agents ───────────────────────────────
 # cast-truncation-check.sh only fires for a subset of agents (via worktree-check
 # hook matcher: code-writer|debugger|test-writer|security|frontend-qa).

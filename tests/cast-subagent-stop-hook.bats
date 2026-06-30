@@ -1464,3 +1464,93 @@ print('\n'.join(lines))
   count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
   [[ "$count" -ge 1 ]]
 }
+
+# ---------------------------------------------------------------------------
+# F2 Step 2b: dispatch_decisions OUTCOME-UPDATE (v9 F2 record→decision loop)
+#
+# The SubagentStop hook resolves a pending dispatch_decisions row to DONE or
+# BLOCKED when the agent stops.  FIFO MIN(id) match on session_id+chosen_agent.
+# No matching row → no-op (hook still exits 0, unrelated rows untouched).
+# ---------------------------------------------------------------------------
+
+@test "F2 Step2b: pending dispatch_decisions row resolves to DONE on task_completed" {
+  # Wire the dispatch_decisions table (minimal schema matching the real db-init shape).
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+CREATE TABLE IF NOT EXISTS dispatch_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  prompt_snippet TEXT,
+  chosen_agent TEXT,
+  outcome TEXT
+);
+SQL
+
+  # Pre-insert the pending row that a PreToolUse(Task) hook would have written.
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO dispatch_decisions (session_id, prompt_snippet, chosen_agent, outcome) \
+     VALUES ('s-dd', 'fix X', 'debugger', 'pending')"
+
+  # Build a payload with matching agent_type + session_id and a Status: DONE response.
+  local output="Investigated the failure and applied the fix.
+
+Status: DONE
+Summary: root cause found and resolved"
+  local payload
+  payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type':             'debugger',
+    'session_id':             's-dd',
+    'stop_reason':            'end_turn',
+    'last_assistant_message': sys.argv[1],
+}))
+" "$output")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # The pending row must now be 'DONE'.
+  local resolved
+  resolved="$(sqlite3 "$CAST_DB_PATH" \
+    "SELECT outcome FROM dispatch_decisions WHERE session_id='s-dd' AND chosen_agent='debugger' LIMIT 1")"
+  [[ "$resolved" = "DONE" ]]
+}
+
+@test "F2 Step2b: no matching pending row → hook exits 0, unrelated row stays pending" {
+  # Wire the dispatch_decisions table.
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+CREATE TABLE IF NOT EXISTS dispatch_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  prompt_snippet TEXT,
+  chosen_agent TEXT,
+  outcome TEXT
+);
+SQL
+
+  # Insert a pending row for a DIFFERENT session/agent — must remain untouched.
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO dispatch_decisions (session_id, prompt_snippet, chosen_agent, outcome) \
+     VALUES ('s-unrelated', 'other task', 'researcher', 'pending')"
+
+  # Fire hook with a session+agent that has NO matching pending row.
+  local payload
+  payload="$(python3 -c "
+import json
+print(json.dumps({
+    'agent_type':             'code-writer',
+    'session_id':             's-nomatch',
+    'stop_reason':            'end_turn',
+    'last_assistant_message': 'Status: DONE\nSummary: done',
+}))
+")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # The unrelated row must still be 'pending'.
+  local still_pending
+  still_pending="$(sqlite3 "$CAST_DB_PATH" \
+    "SELECT outcome FROM dispatch_decisions WHERE session_id='s-unrelated' AND chosen_agent='researcher' LIMIT 1")"
+  [[ "$still_pending" = "pending" ]]
+}
