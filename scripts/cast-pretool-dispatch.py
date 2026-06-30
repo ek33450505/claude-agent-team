@@ -249,8 +249,10 @@ def main():
             if action is not None:
                 _emit_egress(sentinel, action)
 
-    # F2: record the dispatch decision (record-only; NEVER blocks a dispatch)
-    if tool == "Task":
+    # F2: record the dispatch decision (record-only; NEVER blocks a dispatch).
+    # The subagent-dispatch tool is "Agent" in current Claude Code and "Task" in
+    # older builds — accept both so capture works across harness versions.
+    if tool in ("Task", "Agent"):
         _record_dispatch(data)
     return 0
 

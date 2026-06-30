@@ -200,6 +200,25 @@ teardown() { teardown_temp_home; }
   assert_output --partial "pending"
 }
 
+@test "Agent dispatch → exit 0 (current Claude Code tool name; NEVER blocks)" {
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  run_dispatch '{"tool_name":"Agent","session_id":"agent-s1","tool_input":{"subagent_type":"debugger","prompt":"fix the X bug","description":"debug X"}}'
+  assert_success
+}
+
+@test "Agent dispatch → dispatch_decisions row with correct fields (current Claude Code tool name)" {
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  run_dispatch '{"tool_name":"Agent","session_id":"agent-s2","tool_input":{"subagent_type":"debugger","prompt":"fix the X bug","description":"debug X"}}'
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" \
+    "SELECT chosen_agent || '|' || prompt_snippet || '|' || outcome FROM dispatch_decisions WHERE session_id='agent-s2' LIMIT 1"
+  assert_output --partial "debugger"
+  assert_output --partial "fix the X bug"
+  assert_output --partial "pending"
+}
+
 @test "non-Task payload (WebFetch) → zero dispatch_decisions rows written" {
   export CAST_DB_PATH="$HOME/.claude/cast.db"
   bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
