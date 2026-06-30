@@ -312,6 +312,17 @@
             "async": true
           }
         ]
+      },
+      {
+        "id": "cast-incident-record",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-incident-record.sh\"",
+            "timeout": 5,
+            "async": true
+          }
+        ]
       }
     ],
     "StopFailure": [

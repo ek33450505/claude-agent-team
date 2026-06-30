@@ -10,112 +10,161 @@ _log_error() {
   local msg="$1"
   local log_file="$HOME/.claude/logs/hook-errors.log"
   mkdir -p "$(dirname "$log_file")"
-  echo "[$(date +'%Y-%m-%d %H:%M:%S')] [cast-incident-record] $msg" >> "$log_file"
+  echo "[$(date +'%Y-%m-%d %H:%M:%S')] [cast-incident-record] $msg" >>"$log_file"
 }
 
-# Read CAST_INPUT from stdin (fallback to empty if unavailable)
+# Read stdin once
 INPUT="$(cat 2>/dev/null || true)"
 if [[ -z "$INPUT" ]]; then
-  _log_error "No input received from hook system"
   exit 0
 fi
 
-# Resolve DB path
+# Export for python3 inline (Bug 1 fix: same pattern as cast-subagent-stop-hook.sh)
+export CAST_INPUT="$INPUT"
+
+# Resolve hook directory for cast-redact.py (heredoc-safe: __file__ is not usable in <<'PYEOF')
+HOOK_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "${HOME}/.claude/scripts")"
+export HOOK_DIR
+
+# Resolve DB path and export for python3
 DB_PATH="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
 
-# Parse JSON fields via python3 inline
-# Extract agent_type, agent_id, last_message_text, original_prompt
-read -r agent_type agent_id last_message_text original_prompt < <(python3 << 'PYEOF'
-import sys, json, os
+# Parse payload, validate guards, and insert — all in one python3 block
+# with bound parameters (Bug 2+3 fix: correct fields + parameterized query)
+CAST_DB_PATH="$DB_PATH" python3 <<'PYEOF'
+import sys, json, os, re, sqlite3, uuid
+from datetime import datetime, timezone
+
+
+def log_error(msg):
+    log_file = os.path.expanduser("~/.claude/logs/hook-errors.log")
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    with open(log_file, "a") as f:
+        f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] [cast-incident-record] {msg}\n")
+
+
 try:
-    data = json.loads(os.environ.get('CAST_INPUT', ''))
-    agent_type = data.get('agent_type', '')
-    agent_id = data.get('agent_id', '')
-    last_message_text = data.get('last_message_text', '')
-    original_prompt = data.get('original_prompt', '')
-    print(f"{agent_type} {agent_id} {last_message_text[:100]} {original_prompt[:100]}")
+    raw = os.environ.get("CAST_INPUT", "")
+    data = json.loads(raw)
 except Exception as e:
-    print(f"error parsing json")
+    log_error(f"JSON parse failed: {e}")
+    sys.exit(0)
+
+# Guard: only process debugger agent
+agent_type = data.get("agent_type", "")
+if agent_type != "debugger":
+    sys.exit(0)
+
+# Extract response text: content[] blocks → last_assistant_message → output
+response_text = ""
+ar = data.get("agent_response", {})
+content = ar.get("content", [])
+if isinstance(content, list):
+    parts = [
+        b.get("text", "")
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    response_text = "\n".join(parts)
+if not response_text:
+    response_text = (
+        data.get("last_assistant_message", "") or data.get("output", "") or ""
+    )
+
+# Guard: only record when Status: DONE or DONE_WITH_CONCERNS present
+if not re.search(r"Status:\s*(DONE|DONE_WITH_CONCERNS)", response_text):
+    sys.exit(0)
+
+# problem_summary: "Summary: <text>" first match; else first 200 non-empty chars
+m = re.search(r"Summary:\s*(.+)", response_text)
+if m:
+    problem_summary = m.group(1).strip()[:500]
+else:
+    problem_summary = " ".join(response_text.split())[:200]
+if not problem_summary:
+    problem_summary = "(no summary)"
+
+# fix_summary: ## Handoff block content if present; else last 1000 chars
+handoff_m = re.search(
+    r"## Handoff\s*\n([\s\S]+?)(?=\n## |\Z)", response_text
+)
+if handoff_m:
+    fix_summary = handoff_m.group(1).strip()[:1000]
+else:
+    fix_summary = response_text[-1000:].strip()
+
+# related_files: files_changed: value from Handoff block; else "[]"
+related_files = "[]"
+if handoff_m:
+    fc_m = re.search(r"files_changed:\s*(.+)", handoff_m.group(1))
+    if fc_m:
+        related_files = fc_m.group(1).strip()
+
+# related_commit: latest git commit hash in cwd
+related_commit = ""
+try:
+    import subprocess
+    r = subprocess.run(
+        ["git", "log", "-1", "--format=%H"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if r.returncode == 0:
+        related_commit = r.stdout.strip()
+except Exception:
+    pass
+
+# Redact PII/secrets from summaries before DB write (mirrors cast-subagent-stop-hook.sh)
+import subprocess as _sp
+
+
+def _redact(text):
+    if not text:
+        return text
+    try:
+        hook_dir = os.environ.get("HOOK_DIR") or os.path.expanduser("~/.claude/scripts")
+        r = _sp.run(
+            ["python3", os.path.join(hook_dir, "cast-redact.py"),
+             "--engine", "regex", "--field", "redacted_text"],
+            input=text, capture_output=True, text=True, timeout=3,
+        )
+        out = r.stdout.strip()
+        return out if (r.returncode == 0 and out) else text
+    except Exception:
+        return text  # passthrough on any failure — never block the hook
+
+
+problem_summary = _redact(problem_summary)
+fix_summary = _redact(fix_summary)
+
+# Insert into incidents with bound parameters (Bug 3 fix: no string interpolation)
+db_path = os.environ.get("CAST_DB_PATH", os.path.expanduser("~/.claude/cast.db"))
+incident_id = str(uuid.uuid4())
+occurred_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+try:
+    conn = sqlite3.connect(db_path, timeout=5)
+    conn.execute(
+        """INSERT INTO incidents
+           (id, occurred_at, problem_summary, fix_summary, related_files,
+            related_commit, resolution_status, surfaced_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            incident_id,
+            occurred_at,
+            problem_summary,
+            fix_summary,
+            related_files,
+            related_commit,
+            "open",
+            "debugger",
+        ),
+    )
+    conn.commit()
+    conn.close()
+except Exception as e:
+    log_error(f"DB insert failed: {e}")
+    sys.exit(0)
 PYEOF
-) 2>/dev/null || { _log_error "Failed to parse CAST_INPUT"; exit 0; }
-
-# Guard: only process debugger agent with Status: DONE
-if [[ "$agent_type" != "debugger" ]]; then
-  exit 0
-fi
-
-if [[ ! "$last_message_text" =~ Status:\ DONE ]]; then
-  exit 0
-fi
-
-# Extract problem_summary: first 200 chars of original prompt
-problem_summary="${original_prompt:0:200}"
-if [[ -z "$problem_summary" ]]; then
-  problem_summary="(unable to extract)"
-fi
-
-# Extract fix_summary: last 30 lines of last_message_text, truncated to 1000 chars
-fix_summary=$(echo "$last_message_text" | tail -30 | head -c 1000)
-if [[ -z "$fix_summary" ]]; then
-  fix_summary="(unable to extract)"
-fi
-
-# Extract related_files: parse Handoff block for files_changed
-# Look for "files_changed: [...]" or "files_changed:" YAML-style
-related_files="[]"
-if echo "$last_message_text" | grep -q "files_changed"; then
-  # Simple extraction: find the line, extract bracketed content
-  related_files=$(echo "$last_message_text" | grep -A 5 "files_changed" | head -1 | sed 's/.*files_changed:[[:space:]]*//' || echo "[]")
-fi
-
-# Extract related_commit: latest git commit hash from cwd
-related_commit=""
-if command -v git &>/dev/null && git rev-parse --git-dir >/dev/null 2>&1; then
-  related_commit=$(git log -1 --format=%H 2>/dev/null || echo "")
-fi
-
-# Generate UUID. Internally generated — safe to interpolate into SQL without escaping.
-id=$(python3 -c "import uuid; print(uuid.uuid4())" 2>/dev/null || uuidgen 2>/dev/null || echo "")
-if [[ -z "$id" ]]; then
-  _log_error "Failed to generate UUID"
-  exit 0
-fi
-
-# Escape single quotes in strings for SQL
-escape_sql() {
-  echo "$1" | sed "s/'/''/g"
-}
-
-problem_summary_esc=$(escape_sql "$problem_summary")
-fix_summary_esc=$(escape_sql "$fix_summary")
-related_files_esc=$(escape_sql "$related_files")
-related_commit_esc=$(escape_sql "$related_commit")
-
-# Insert into incidents table
-if sqlite3 -cmd ".timeout 5000" "$DB_PATH" <<EOF 2>/dev/null
-INSERT INTO incidents (
-  id,
-  occurred_at,
-  problem_summary,
-  fix_summary,
-  related_files,
-  related_commit,
-  resolution_status,
-  surfaced_by
-) VALUES (
-  '$id',
-  datetime('now'),
-  '$problem_summary_esc',
-  '$fix_summary_esc',
-  '$related_files_esc',
-  '$related_commit_esc',
-  'open',
-  'debugger'
-);
-EOF
-then
-  exit 0
-else
-  _log_error "Failed to insert incident record: $id"
-  exit 0
-fi
+exit 0
