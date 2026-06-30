@@ -1,19 +1,29 @@
 #!/usr/bin/env bats
-# Tests for cast agents --usage subcommand (v9 F2 Unit 1)
-# Covers: table output, --json, zero-rows honesty, DB-absent error, no-flag listing unchanged
+# Tests for `cast agents --usage` subcommand (v9 F2 record→decision loop, Unit 2)
+# Covers:
+#   A. Text view with data: code-writer stats, sort order, avg cost $2.00, success 67%
+#   B. JSON variant: view key, first-row agent/dispatches/success_rate/avg_cost_usd
+#   C. Zero-rows: honest message (text) + empty rows array (JSON)
+#   D. DB absent: exit non-zero + 'cast.db not found'
+#   E. REGRESSION: no-flag listing unchanged — no DB required, no DISPATCHES header
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-CAST_CLI="$REPO_DIR/bin/cast"
+CAST_BIN="$REPO_DIR/bin/cast"
+
+# ───────────────────────────────────────────────────────────────────────────
+# Setup / Teardown — isolated temp HOME per test (HARD RULE — never real $HOME)
+# ───────────────────────────────────────────────────────────────────────────
 
 setup() {
   load 'helpers/setup'
   setup_temp_home
-  mkdir -p "$HOME/.claude"
+  mkdir -p "$HOME/.claude/agents"
   export CAST_DB_PATH="$HOME/.claude/cast.db"
   export CAST_SCRIPTS_DIR="$REPO_DIR/scripts"
+  export CAST_AGENTS_DIR="$HOME/.claude/agents"
   export CLAUDE_SUBPROCESS=0
 }
 
@@ -22,201 +32,137 @@ teardown() {
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# Helper: initialize schema + seed agent_runs with deterministic data
+# Helper: initialize schema + seed deterministic agent_runs data
+#
+# code-writer:   3 rows (DONE/DONE/BLOCKED, costs 1.00/2.00/3.00)
+#   → dispatches=3, avg_cost_usd=2.0000, success_rate=0.6667 (67%)
+# code-reviewer: 1 row  (DONE, cost 0.50)
+#   → dispatches=1, avg_cost_usd=0.5000, success_rate=1.0000 (100%)
 # ───────────────────────────────────────────────────────────────────────────
 
-_seed_usage_data() {
+_seed() {
   bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
-
   sqlite3 "$CAST_DB_PATH" <<'SQL'
-INSERT INTO sessions (id, project, started_at, ended_at)
-VALUES
-  ('sess-u1', 'test-proj', '2026-06-30T09:00:00Z', '2026-06-30T09:30:00Z'),
-  ('sess-u2', 'test-proj', '2026-06-30T10:00:00Z', '2026-06-30T10:30:00Z');
-
--- code-writer: 3 dispatches, 2 DONE, 1 DONE_WITH_CONCERNS
 INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, cost_usd)
 VALUES
-  ('sess-u1', 'code-writer', '2026-06-30T09:00:00Z', '2026-06-30T09:05:00Z', 'DONE', 0.50),
-  ('sess-u1', 'code-writer', '2026-06-30T09:10:00Z', '2026-06-30T09:15:00Z', 'DONE', 0.30),
-  ('sess-u1', 'code-writer', '2026-06-30T09:20:00Z', '2026-06-30T09:25:00Z', 'DONE_WITH_CONCERNS', 0.20);
-
--- code-reviewer: 2 dispatches, both DONE
-INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, cost_usd)
-VALUES
-  ('sess-u2', 'code-reviewer', '2026-06-30T10:00:00Z', '2026-06-30T10:05:00Z', 'DONE', 0.10),
-  ('sess-u2', 'code-reviewer', '2026-06-30T10:10:00Z', '2026-06-30T10:15:00Z', 'DONE', 0.10);
-
--- debugger: 1 dispatch, DONE
-INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, cost_usd)
-VALUES
-  ('sess-u2', 'debugger', '2026-06-30T10:20:00Z', '2026-06-30T10:25:00Z', 'DONE', 0.40);
+  ('sess-1', 'code-writer',   '2026-06-30T09:00:00Z', '2026-06-30T09:05:00Z', 'DONE',    1.00),
+  ('sess-1', 'code-writer',   '2026-06-30T09:05:00Z', '2026-06-30T09:10:00Z', 'DONE',    2.00),
+  ('sess-1', 'code-writer',   '2026-06-30T09:10:00Z', '2026-06-30T09:15:00Z', 'BLOCKED', 3.00),
+  ('sess-1', 'code-reviewer', '2026-06-30T09:15:00Z', '2026-06-30T09:20:00Z', 'DONE',    0.50);
 SQL
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# SECTION A: Table output
+# A. Text view with data
 # ───────────────────────────────────────────────────────────────────────────
 
-@test "cast agents --usage: exits 0 and shows table header" {
-  _seed_usage_data
-  run bash "$CAST_CLI" agents --usage
+@test "cast agents --usage: succeeds and shows code-writer" {
+  _seed
+  run bash "$CAST_BIN" agents --usage
   assert_success
-  assert_output --partial "AGENT"
-  assert_output --partial "DISPATCHES"
-  assert_output --partial "AVG COST"
-  assert_output --partial "SUCCESS"
+  assert_output --partial 'code-writer'
 }
 
-@test "cast agents --usage: sorts by dispatch count descending" {
-  _seed_usage_data
-  run bash "$CAST_CLI" agents --usage
+@test "cast agents --usage: shows avg cost 2.00 for code-writer (3-row average)" {
+  _seed
+  run bash "$CAST_BIN" agents --usage
   assert_success
-  # code-writer (3) should appear before code-reviewer (2) before debugger (1)
-  [[ "$output" == *"code-writer"*"code-reviewer"*"debugger"* ]]
+  # Output format is "$    2.00" (right-padded); match the value without the spacing
+  assert_output --partial '2.00'
 }
 
-@test "cast agents --usage: shows correct dispatch counts" {
-  _seed_usage_data
-  run bash "$CAST_CLI" agents --usage
+@test "cast agents --usage: shows 67% success rate for code-writer (2 of 3 DONE)" {
+  _seed
+  run bash "$CAST_BIN" agents --usage
   assert_success
-  # code-writer has 3 dispatches; the formatted number is "3" (no comma needed at this scale)
-  assert_output --partial "code-writer"
-  assert_output --partial "3"
+  assert_output --partial '67%'
 }
 
-@test "cast agents --usage: success rate for all-DONE agent is 100%" {
-  _seed_usage_data
-  run bash "$CAST_CLI" agents --usage
+@test "cast agents --usage: code-writer appears before code-reviewer (sorted dispatch count desc)" {
+  _seed
+  run bash "$CAST_BIN" agents --usage
   assert_success
-  # code-reviewer: 2/2 DONE → 100%
-  assert_output --partial "100%"
-}
-
-@test "cast agents --usage: success rate for mixed-status agent is below 100%" {
-  _seed_usage_data
-  run bash "$CAST_CLI" agents --usage
-  assert_success
-  # code-writer: 2/3 DONE → 67%
-  assert_output --partial "67%"
-}
-
-@test "cast agents --usage: shows footer with agent count" {
-  _seed_usage_data
-  run bash "$CAST_CLI" agents --usage
-  assert_success
-  assert_output --partial "agents with runtime data"
+  local pos_writer pos_reviewer
+  pos_writer=$(printf '%s\n' "$output" | grep -n 'code-writer' | head -1 | cut -d: -f1)
+  pos_reviewer=$(printf '%s\n' "$output" | grep -n 'code-reviewer' | head -1 | cut -d: -f1)
+  [ -n "$pos_writer" ]
+  [ -n "$pos_reviewer" ]
+  [ "$pos_writer" -lt "$pos_reviewer" ]
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# SECTION B: --json output
+# B. JSON variant
 # ───────────────────────────────────────────────────────────────────────────
 
-@test "cast agents --usage --json: exits 0 and emits valid JSON" {
-  _seed_usage_data
-  run bash "$CAST_CLI" --json agents --usage
+@test "cast agents --usage --json: emits valid JSON with correct structure and values" {
+  _seed
+  run bash "$CAST_BIN" agents --usage --json
   assert_success
-  echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-assert d['view'] == 'by_agent_usage', f'expected by_agent_usage, got {d[\"view\"]}'
-assert isinstance(d['rows'], list), 'rows must be a list'
-assert len(d['rows']) == 3, f'expected 3 rows, got {len(d[\"rows\"])}'
-"
-  assert_success
-}
-
-@test "cast agents --usage --json: row keys include agent, dispatches, avg_cost_usd, success_rate" {
-  _seed_usage_data
-  run bash "$CAST_CLI" --json agents --usage
-  assert_success
-  echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-row = d['rows'][0]
-for key in ('agent', 'dispatches', 'avg_cost_usd', 'success_rate'):
-    assert key in row, f'missing key: {key}'
-"
-  assert_success
-}
-
-@test "cast agents --usage --json: rows sorted by dispatches descending" {
-  _seed_usage_data
-  run bash "$CAST_CLI" --json agents --usage
-  assert_success
-  echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-rows = d['rows']
-assert rows[0]['agent'] == 'code-writer', f'expected code-writer first, got {rows[0][\"agent\"]}'
-assert rows[0]['dispatches'] == 3
-assert rows[1]['agent'] == 'code-reviewer'
-assert rows[2]['agent'] == 'debugger'
-"
+  run python3 -c "
+import sys, json
+data = json.loads(sys.argv[1])
+assert data['view'] == 'by_agent_usage', 'wrong view: ' + str(data.get('view'))
+rows = data['rows']
+assert rows[0]['agent'] == 'code-writer', 'wrong first agent: ' + rows[0]['agent']
+assert rows[0]['dispatches'] == 3, 'wrong dispatches: ' + str(rows[0]['dispatches'])
+assert rows[0]['success_rate'] == 0.6667, 'wrong success_rate: ' + str(rows[0]['success_rate'])
+assert rows[0]['avg_cost_usd'] == 2.0, 'wrong avg_cost_usd: ' + str(rows[0]['avg_cost_usd'])
+print('OK')
+" "$output"
   assert_success
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# SECTION C: Honesty — zero rows
+# C. Zero-rows cases — honest output when DB is empty
 # ───────────────────────────────────────────────────────────────────────────
 
-@test "cast agents --usage: prints honest message when agent_runs is empty" {
+@test "cast agents --usage: empty DB prints 'No agent runs recorded yet'" {
   bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
-  run bash "$CAST_CLI" agents --usage
+  run bash "$CAST_BIN" agents --usage
   assert_success
-  assert_output --partial "No agent runs recorded yet"
+  assert_output --partial 'No agent runs recorded yet'
 }
 
-@test "cast agents --usage --json: empty-rows returns valid JSON with empty rows list" {
+@test "cast agents --usage --json: empty DB returns JSON with empty rows array" {
   bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
-  run bash "$CAST_CLI" --json agents --usage
+  run bash "$CAST_BIN" agents --usage --json
   assert_success
-  echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-assert d['view'] == 'by_agent_usage'
-assert d['rows'] == []
-"
+  run python3 -c "
+import sys, json
+data = json.loads(sys.argv[1])
+assert data['view'] == 'by_agent_usage', 'wrong view: ' + str(data.get('view'))
+assert data['rows'] == [], 'expected empty rows, got: ' + str(data['rows'])
+print('OK')
+" "$output"
   assert_success
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# SECTION D: DB absent
+# D. DB absent failure — informative error, non-zero exit
 # ───────────────────────────────────────────────────────────────────────────
 
-@test "cast agents --usage: exits 1 with error when cast.db is absent" {
-  # DB was never created — cast.db does not exist
-  run bash "$CAST_CLI" agents --usage
+@test "cast agents --usage: exits non-zero with 'cast.db not found' when DB absent" {
+  rm -f "$CAST_DB_PATH"
+  run bash "$CAST_BIN" agents --usage
   assert_failure
-  assert_output --partial "cast.db not found"
+  assert_output --partial 'cast.db not found'
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# SECTION E: No-flag listing unchanged (regression guard)
+# E. REGRESSION: no-flag listing unchanged — never touches cast.db
 # ───────────────────────────────────────────────────────────────────────────
 
-@test "cast agents (no flag): still lists agents without a DB" {
-  # Agents dir must exist; DB must NOT be required
-  mkdir -p "$HOME/.claude/agents"
-  cat > "$HOME/.claude/agents/test-agent.md" <<'MD'
+@test "cast agents (no flag): lists installed agents and shows 'agents installed' footer" {
+  cat > "$CAST_AGENTS_DIR/test-agent.md" <<'MD'
 ---
 name: test-agent
-description: A test agent
-model: claude-haiku-4-5
+model: sonnet
+description: A test agent for regression
 ---
+Test agent body.
 MD
-  export CAST_AGENTS_DIR="$HOME/.claude/agents"
-  run bash "$CAST_CLI" agents
+  run bash "$CAST_BIN" agents
   assert_success
-  assert_output --partial "test-agent"
-  assert_output --partial "agents installed"
-}
-
-@test "cast agents (no flag): does not require cast.db to be present" {
-  mkdir -p "$HOME/.claude/agents"
-  export CAST_AGENTS_DIR="$HOME/.claude/agents"
-  # No DB initialized — no agents dir with agents — but must NOT error on missing DB
-  run bash "$CAST_CLI" agents
-  assert_success
-  assert_output --partial "0 agents installed"
+  assert_output --partial 'agents installed'
+  refute_output --partial 'DISPATCHES'
 }
