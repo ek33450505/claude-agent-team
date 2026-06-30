@@ -90,6 +90,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `cast cost` | Per-task/feature cost attribution (token totals + cache-read share) | `--by-task`, `--by-branch`, `--by-agent`, `--project`, `--limit`, `--json` |
 | `cast predict "<task>"` | Predict cost + suggest agents from the record (reads past runs/incidents) | `--limit`, `--json` |
 | `cast feature "<desc>"` | App-build: decompose a feature into gated units, build each via code-writer→code-reviewer→test→commit | |
+| `cast mcp serve\|config\|status` | Expose the cast.db record read-only over MCP (stdio, local-only) so any CC session can query decisions/incidents/cost/sessions | |
 | `cast agents` | List installed agents; with `--usage`, per-agent runtime stats (dispatches, avg cost, success rate) | `--usage`, `--json` |
 | `cast hooks` | Show active hooks with health status | `--json` |
 | `cast doctor` | Run system health check | |
