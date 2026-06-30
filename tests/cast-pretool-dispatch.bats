@@ -270,7 +270,7 @@ print(json.dumps({
     'session_id': 'redact-s1',
     'tool_input': {
         'subagent_type': 'debugger',
-        'prompt': 'fix bug, key sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000 in /Users/testuser/x.py'
+        'prompt': 'fix bug, key ' 'sk-ant-' 'api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000' ' in /Users/testuser/x.py'
     }
 }))
 ")
@@ -280,6 +280,7 @@ print(json.dumps({
     "SELECT prompt_snippet FROM dispatch_decisions WHERE session_id='redact-s1' LIMIT 1"
   assert_success
   # Raw secret token and raw home path must NOT appear in the stored snippet
-  refute_output --partial "sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  local _k="sk-ant-""api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  refute_output --partial "$_k"
   refute_output --partial "/Users/testuser/x.py"
 }

@@ -127,7 +127,7 @@ _write_fixture() {
 @test "redaction strips secret token from problem_summary before DB insert" {
   # Point HOOK_DIR at the repo scripts/ so cast-redact.py is reachable in the temp HOME
   export HOOK_DIR="$REPO_DIR/scripts"
-  local fake_secret="sk-ant-api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  local fake_secret="sk-ant-""api03-FAKE0000000000000000000000000000000000000000000000000000000000000000000000000000000000"
   local fixture
   fixture="$(mktemp)"
   printf '{"agent_type":"debugger","session_id":"s-redact","agent_id":"a-redact","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Summary: leaked %s and /Users/testuser/secret.txt\\n## Handoff\\nfiles_changed: []\\nStatus: DONE"}]}}' \
