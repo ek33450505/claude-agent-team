@@ -88,7 +88,9 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `cast memory export` | Export all memories as JSON | |
 | `cast budget` | View cost summary | `--week`, `--project` |
 | `cast cost` | Per-task/feature cost attribution (token totals + cache-read share) | `--by-task`, `--by-branch`, `--by-agent`, `--project`, `--limit`, `--json` |
-| `cast agents` | List installed CAST agents | `--json` |
+| `cast predict "<task>"` | Predict cost + suggest agents from the record (reads past runs/incidents) | `--limit`, `--json` |
+| `cast feature "<desc>"` | App-build: decompose a feature into gated units, build each via code-writer→code-reviewer→test→commit | |
+| `cast agents` | List installed agents; with `--usage`, per-agent runtime stats (dispatches, avg cost, success rate) | `--usage`, `--json` |
 | `cast hooks` | Show active hooks with health status | `--json` |
 | `cast doctor` | Run system health check | |
 | `cast tidy` | Clean up old plans, events, logs, briefings | `--dry-run` |
