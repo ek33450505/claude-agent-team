@@ -154,8 +154,8 @@ def _fetch_cost(by: str, limit: int) -> str:
                 (limit,),
             )
         elif by == "branch":
-            # branch column is absent from fresh db-init schema (migration-only).
-            # Check it exists before querying.
+            # branch is canonical since F1 (cast-db-init.sh CREATE TABLE agent_runs),
+            # but absent on DBs predating it — PRAGMA-guard before querying.
             pragma = conn.execute("PRAGMA table_info(agent_runs)").fetchall()
             cols = {row["name"] for row in pragma}
             if "branch" not in cols:
@@ -412,7 +412,7 @@ TOOL_DEFS = [
     },
     {
         "name": "cast_sessions",
-        "description": "Recent CAST sessions with token and cost totals from cast.db (read-only).",
+        "description": "Recent CAST sessions (id, project, project_root, started_at, ended_at, status) from cast.db (read-only). For per-session cost, use cast_cost with by=session.",
         "inputSchema": {
             "type": "object",
             "properties": {

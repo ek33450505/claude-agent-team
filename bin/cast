@@ -1563,7 +1563,7 @@ elif view == "branch":
         if json_out:
             print(json.dumps({"branch_capture_active": False, "rows": []}, indent=2))
             sys.exit(0)
-        print("branch attribution is not active yet (capture hook lands in F1 Unit 2) — no branch data.")
+        print("branch attribution is not active on this DB (branch column absent) — run bash install.sh to enable it.")
         sys.exit(0)
 
     if project_f:
@@ -2675,7 +2675,7 @@ for name, server in servers.items():
 PYEOF
   2>/dev/null || echo "")"
     if [ -z "$mcp_status" ]; then
-      printf "%b MCP servers: none configured\n" "$INFO"
+      printf "%b MCP servers: none in settings.json (project .mcp.json + user-scope not checked here)\n" "$INFO"
     else
       local mcp_ok=0 mcp_bad=0
       while IFS='|' read -r name status target; do
@@ -4541,8 +4541,9 @@ EOF
       printf 'cast mcp: server %s\ncast mcp: cast.db %s\n' "$server" "$db"
       local out=""
       out="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | python3 "$server" 2>/dev/null | head -1 || true)"
-      if printf '%s' "$out" | grep -q '2025-06-18'; then
-        printf 'cast mcp: handshake OK (protocol 2025-06-18)\n'
+      if printf '%s' "$out" | grep -q '"protocolVersion"'; then
+        local pv; pv="$(printf '%s' "$out" | sed -n 's/.*"protocolVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        printf 'cast mcp: handshake OK (protocol %s)\n' "${pv:-unknown}"
       else
         printf 'cast mcp: handshake FAILED\n'; exit 1
       fi
