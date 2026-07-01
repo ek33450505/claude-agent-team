@@ -4512,7 +4512,15 @@ _cmd_mcp() {
       cat <<'EOF'
 Opt in by adding CAST's read-only record server to a project .mcp.json:
 
-  { "mcpServers": { "cast-record": { "type": "stdio", "command": "cast", "args": ["mcp", "serve"] } } }
+  {
+    "mcpServers": {
+      "cast-record": {
+        "type": "stdio",
+        "command": "cast",
+        "args": ["mcp", "serve"]
+      }
+    }
+  }
 
 Or register via the Claude Code CLI:
 

@@ -46,7 +46,7 @@ claude mcp add cast-record -- cast mcp serve
 cast mcp status
 ```
 
-Output (the server path resolves to your install location):
+Output (the runtime prints fully-resolved absolute paths; shown here with `~` for brevity):
 
 ```
 cast mcp: server ~/.claude/scripts/cast-mcp-server.py
@@ -75,11 +75,11 @@ Five tools expose the record. Each returns a one-line row count followed by a JS
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `cast_decisions` | `limit` (1–200, default 10) | Recent agent-dispatch routing decisions (from `dispatch_decisions`). Fields: `chosen_agent`, `model`, `effort`, `parallel`, `prompt_snippet`, `outcome`, `created_at`, `session_id`. |
+| `cast_decisions` | `limit` (1–200, default 10) | Recent agent-dispatch routing decisions (from `dispatch_decisions`). Fields: `id`, `session_id`, `prompt_snippet`, `chosen_agent`, `model`, `effort`, `parallel`, `created_at`, `outcome`. |
 | `cast_incidents` | `limit` (1–200, default 10), optional `query` keyword filter | Past incident log — error classes and fixes (from `incidents`). The `query` filter matches `problem_summary` or `fix_summary`. |
 | `cast_cost` | `by` (`agent`\|`session`\|`branch`, default `agent`), `limit` (1–200, default 10) | Cost aggregation from `agent_runs`, grouped by the requested dimension. Per group: total `cost_usd` and run count. `by=branch` reports "branch attribution unavailable" on DBs predating the `branch` column. |
 | `cast_sessions` | `limit` (1–200, default 10) | Recent session metadata (from `sessions`). Fields: `id`, `project`, `project_root`, `started_at`, `ended_at`, `status`. (Per-session cost is available via `cast_cost by=session`, which reads `agent_runs`.) |
-| `cast_ask` | `query` (required), `limit` (1–200, default 10) | FTS5 full-text search over the indexed CAST record (`record_fts`), BM25-ranked. Each match includes `kind`, `ref_id`, `title`, and a highlighted `snippet`. Reports "full-text index unavailable" if `record_fts` is absent. |
+| `cast_ask` | `query` (required), `limit` (1–200, default 10) | FTS5 full-text search over the indexed CAST record (`record_fts`), BM25-ranked. Each match includes `kind`, `ref_id`, `ts`, `title`, a highlighted `snippet`, `agent`, and `mtype`. Reports "full-text index unavailable" if `record_fts` is absent. |
 
 ---
 
