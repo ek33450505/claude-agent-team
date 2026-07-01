@@ -3,15 +3,15 @@
 # Tests for cast-notify.sh EVENT_TYPE whitelist validation
 
 setup() {
-  export HOME="${BATS_TEST_TMPDIR}/home"
+  load '../helpers/setup'
+  setup_temp_home
   mkdir -p "$HOME/.claude/cast"
   export NOTIFICATIONS_CONFIG="$HOME/.claude/config/notifications.json"
   mkdir -p "$HOME/.claude/config"
 }
 
 teardown() {
-  # cleanup handled by bats tmpdir
-  true
+  teardown_temp_home
 }
 
 @test "subprocess guard exits 0 when CLAUDE_SUBPROCESS=1" {

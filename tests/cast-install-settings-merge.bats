@@ -2,10 +2,12 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
 setup() {
+  setup_temp_home
   export TEST_TMPDIR="$(mktemp -d /tmp/cast-install-merge-test.XXXXXXXX)"
   export TEST_CLAUDE_DIR="$TEST_TMPDIR/.claude"
   mkdir -p "$TEST_CLAUDE_DIR/scripts"
@@ -18,6 +20,7 @@ setup() {
 
 teardown() {
   [ -n "${TEST_TMPDIR:-}" ] && rm -rf "$TEST_TMPDIR"
+  teardown_temp_home
 }
 
 # Helper: run the fragment-copy + merge-regen block from install.sh

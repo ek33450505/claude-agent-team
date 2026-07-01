@@ -17,9 +17,10 @@ print(json.dumps({'hook_event_name':'SessionStart','session_id':sys.argv[1],'cwd
 }
 
 setup() {
-    FAKE_HOME="$BATS_TEST_TMPDIR/fake-home"
+    load '../helpers/setup'
+    setup_temp_home
+    FAKE_HOME="$HOME"
     mkdir -p "$FAKE_HOME/.claude/cast"
-    export HOME="$FAKE_HOME"
     unset CLAUDE_SUBPROCESS
     unset CAST_STACK_PROFILE
     unset CLAUDE_ENV_FILE
@@ -27,7 +28,8 @@ setup() {
 }
 
 teardown() {
-    unset HOME CLAUDE_SUBPROCESS CAST_STACK_PROFILE CLAUDE_ENV_FILE OTEL_EXPORTER_OTLP_ENDPOINT
+    unset CLAUDE_SUBPROCESS CAST_STACK_PROFILE CLAUDE_ENV_FILE OTEL_EXPORTER_OTLP_ENDPOINT
+    teardown_temp_home
 }
 
 # ── Test 1: No stack profile, no feedback memories → no Phase 16 output ───────

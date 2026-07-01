@@ -30,6 +30,9 @@ print(json.dumps({
 # ── Setup / teardown ─────────────────────────────────────────────────────────
 
 setup() {
+  load '../helpers/setup'
+  setup_temp_home
+
   TEST_DB="$BATS_TEST_TMPDIR/test-trunc.db"
   export CAST_DB_PATH="$TEST_DB"
 
@@ -53,6 +56,7 @@ PYEOF
 
 teardown() {
   rm -f "$CAST_DB_PATH"
+  teardown_temp_home
 }
 
 # ── Helper ────────────────────────────────────────────────────────────────────
