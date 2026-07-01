@@ -2631,19 +2631,35 @@ PYEOF
     overall_ok=0
   fi
 
-  # 16. MCP servers reachable (best-effort)
-  local settings_file="${HOME}/.claude/settings.json"
-  if [ -f "$settings_file" ]; then
+  # 16. MCP servers reachable (best-effort, multi-scope: settings.json, settings.local.json, .mcp.json)
+  local mcp_scope_1="${HOME}/.claude/settings.json"
+  local mcp_scope_2="${HOME}/.claude/settings.local.json"
+  local mcp_scope_3="${PWD}/.mcp.json"
+  local mcp_scopes=()
+  [ -f "$mcp_scope_1" ] && mcp_scopes+=("$mcp_scope_1")
+  [ -f "$mcp_scope_2" ] && mcp_scopes+=("$mcp_scope_2")
+  [ -f "$mcp_scope_3" ] && mcp_scopes+=("$mcp_scope_3")
+  if [ "${#mcp_scopes[@]}" -eq 0 ]; then
+    printf "%b MCP servers: no config found (settings.json / settings.local.json / ./.mcp.json)\n" "$INFO"
+  else
+    local mcp_checked="" mcp_p
+    for mcp_p in "${mcp_scopes[@]}"; do
+      local mcp_bn
+      mcp_bn="$(basename "$mcp_p")"
+      mcp_checked="${mcp_checked:+${mcp_checked}, }${mcp_bn}"
+    done
     local mcp_status
-    mcp_status="$(python3 - "$settings_file" <<'PYEOF'
+    mcp_status="$(python3 - "${mcp_scopes[@]}" <<'PYEOF'
 import json, sys, os, shutil, subprocess
-try:
-    with open(sys.argv[1]) as f:
-        cfg = json.load(f)
-    servers = cfg.get("mcpServers", {})
-except Exception:
-    sys.exit(0)
-for name, server in servers.items():
+merged = {}
+for path in sys.argv[1:]:
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+        merged.update(cfg.get("mcpServers", {}))
+    except Exception:
+        pass
+for name, server in merged.items():
     url = server.get("url")
     cmd = server.get("command")
     if url:
@@ -2662,7 +2678,7 @@ for name, server in servers.items():
 PYEOF
   2>/dev/null || echo "")"
     if [ -z "$mcp_status" ]; then
-      printf "%b MCP servers: none in settings.json (project .mcp.json + user-scope not checked here)\n" "$INFO"
+      printf "%b MCP servers: none configured (checked %s)\n" "$INFO" "$mcp_checked"
     else
       local mcp_ok=0 mcp_bad=0
       while IFS='|' read -r name status target; do
@@ -2684,8 +2700,6 @@ PYEOF
         done <<< "$mcp_status"
       fi
     fi
-  else
-    printf "%b MCP servers: settings.json not found\n" "$INFO"
   fi
 
   # 17. Routines validate
