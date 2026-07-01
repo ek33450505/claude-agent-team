@@ -1,0 +1,28 @@
+name: Docs Destroy Guard
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  docs-destroy-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch origin "$BASE_REF"
+
+      - name: Check for large doc deletions
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.sha }}
+        run: bash scripts/check-docs-deletion.sh "origin/$BASE_REF" "$HEAD_SHA"

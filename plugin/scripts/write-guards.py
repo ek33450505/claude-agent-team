@@ -24,12 +24,13 @@ def load_input():
         return {}
 
 def extract_metadata(data):
-    """Extract tool, file_path, and content from PreToolUse JSON."""
+    """Extract tool, file_path, content, and old_string from PreToolUse JSON."""
     ti = data.get('tool_input', {}) or {}
     tool = data.get('tool_name', '')
     file_path = ti.get('file_path', ti.get('path', ''))
     content = ti.get('content', ti.get('new_string', ''))
-    return tool, file_path, content
+    old_string = ti.get('old_string', '')
+    return tool, file_path, content, old_string
 
 def write_log(log_path, message):
     """Write a timestamped message to a log file."""
@@ -135,6 +136,66 @@ def record_no_fake_success(file_path, pattern, home, session_id):
         }
     })
 
+def check_destructive_docs_edit(tool: str, file_path: str, content: str, old_string: str, home: str):
+    """Block Write/Edit that destroys large swaths of append-only docs. Returns (should_block, message)."""
+    if not file_path:
+        return False, ""
+
+    # Determine if path is a guarded doc
+    basename = os.path.basename(file_path)
+    is_changelog = (basename == 'CHANGELOG.md')
+    is_docs_md = ('/docs/' in file_path and file_path.endswith('.md'))
+    if not (is_changelog or is_docs_md):
+        return False, ""
+
+    # Parse threshold (fail-open on bad value)
+    try:
+        threshold = int(os.environ.get('CAST_DOCS_DELETE_THRESHOLD', '30'))
+    except (ValueError, TypeError):
+        threshold = 30
+
+    # Compute net_deleted
+    try:
+        if tool == 'Write':
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as fh:
+                    disk_content = fh.read()
+                net_deleted = disk_content.count('\n') - content.count('\n')
+            except FileNotFoundError:
+                return False, ""  # new file — nothing to destroy
+        else:
+            # Edit: compare old_string vs new_string (content)
+            net_deleted = old_string.count('\n') - content.count('\n')
+    except Exception as _e:
+        # fail-open — never crash the hook pipeline (python.md convention) — but LOG, don't swallow silently.
+        try:
+            write_log(os.path.join(home, '.claude/logs/destroy-guard.log'),
+                      f"guard-error (fail-open): {tool} {file_path}: {_e}")
+        except Exception:
+            pass
+        return False, ""
+
+    if net_deleted < threshold:
+        return False, ""
+
+    # Author acknowledged with the ack token — allow but log
+    if '[docs-destroy-ok]' in content:
+        log_path = os.path.join(home, '.claude/logs/destroy-guard.log')
+        write_log(log_path, f"ACK docs-destroy allowed: {tool} {file_path} net_deleted={net_deleted}")
+        return False, ""
+
+    # Block
+    log_path = os.path.join(home, '.claude/logs/destroy-guard.log')
+    write_log(log_path, f"BLOCK docs-destroy: {tool} {file_path} net_deleted={net_deleted}")
+    msg = (
+        f"[CAST DESTROY GUARD] This {tool} removes {net_deleted} lines of append-only "
+        f"content from {file_path}.\n"
+        f"If intentional, add [docs-destroy-ok] to the new content or preserve the history.\n"
+        f"Logged to: ~/.claude/logs/destroy-guard.log"
+    )
+    return True, msg
+
+
 def check_no_fake_success(file_path, content, home, session_id):
     """Check for fake-success patterns. Returns hookSpecificOutput JSON if matched, else empty string."""
     # Skip tests, specs, fixtures
@@ -168,7 +229,7 @@ def check_no_fake_success(file_path, content, home, session_id):
 
 if __name__ == '__main__':
     data = load_input()
-    tool, file_path, content = extract_metadata(data)
+    tool, file_path, content, old_string = extract_metadata(data)
     # Early filter: only Write/Edit (defense-in-depth; harness matcher also gates)
     if tool not in ('Write', 'Edit'):
         sys.exit(0)
@@ -185,6 +246,12 @@ if __name__ == '__main__':
     block2, msg2 = check_stat_claim(file_path, content, home)
     if block2:
         sys.stderr.write(msg2 + "\n")
+        sys.exit(2)
+
+    # BLOCK 2.5 — destructive-docs guard (blocking)
+    block25, msg25 = check_destructive_docs_edit(tool, file_path, content, old_string, home)
+    if block25:
+        sys.stderr.write(msg25 + "\n")
         sys.exit(2)
 
     # BLOCK 3 — no-fake-success (advisory; never blocks)
