@@ -322,7 +322,7 @@ print(json.dumps({
     'session_id': 'redact-fail-s1',
     'tool_input': {
         'subagent_type': 'debugger',
-        'prompt': 'my secret is sk-ant-api03-SUPERSECRET and path /Users/real/file.py'
+        'prompt': 'my secret is sk-ant-api03-SUPERSECRET and path /Users/testuser/file.py'
     }
 }))
 ")
@@ -356,5 +356,5 @@ PYEOF
   assert_output --partial "[REDACTION_FAILED]"
   # Must NOT store the raw prompt content
   refute_output --partial "SUPERSECRET"
-  refute_output --partial "/Users/real/file.py"
+  refute_output --partial "/Users/testuser/file.py"
 }
