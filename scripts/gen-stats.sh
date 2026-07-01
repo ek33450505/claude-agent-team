@@ -81,13 +81,9 @@ if [ -d "$REPO_DIR/docs" ]; then
   done < <(find "$REPO_DIR/docs" -name '*.md' -type f 2>/dev/null)
 fi
 
-# --- Update version badge sentinel ---
+# --- Version badge is updated via the shields.io URL sed below (no sentinels needed) ---
 VERSION_FILE="$REPO_DIR/VERSION"
 CAST_VERSION="$(cast_stat_version)"
-if [ -f "$VERSION_FILE" ]; then
-  NEW_BADGE="![Version](https://img.shields.io/badge/version-${CAST_VERSION}-blue)"
-  sed -i.bak "s|<!-- CAST_VERSION_BADGE -->.*<!-- /CAST_VERSION_BADGE -->|<!-- CAST_VERSION_BADGE -->${NEW_BADGE}<!-- /CAST_VERSION_BADGE -->|g" "$README"
-fi
 
 # --- Update shields.io badge URLs ---
 # Agents: matches /badge/agents-<N>-<color>
