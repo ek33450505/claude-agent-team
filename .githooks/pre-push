@@ -242,8 +242,9 @@ if [ "${CAST_RUN_BATS_PUSH:-0}" = "1" ]; then
     exit 1
   fi
 else
-  echo "[CAST pre-push] BATS test gate is opt-in (per 2026-06-02 policy). Full suite is batched before releases." >&2
-  echo "[CAST pre-push]   To opt in: CAST_RUN_BATS_PUSH=1 git push" >&2
+  echo "[CAST pre-push] ⚠ Full BATS suite NOT run — this push is BACKED UP, not CI-VERIFIED." >&2
+  echo "[CAST pre-push]   A clean push ≠ green. Run 'make ci-local' (or CAST_RUN_BATS_PUSH=1 git push) before opening a PR." >&2
+  echo "[CAST pre-push]   (Full suite is batched before releases — 2026-06-02 policy.)" >&2
 fi
 
 exit 0
