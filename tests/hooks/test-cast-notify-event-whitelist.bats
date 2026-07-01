@@ -8,6 +8,15 @@ setup() {
   mkdir -p "$HOME/.claude/cast"
   export NOTIFICATIONS_CONFIG="$HOME/.claude/config/notifications.json"
   mkdir -p "$HOME/.claude/config"
+  # GUI isolation (HARD RULE): stub notification binaries so tests never fire
+  # real desktop alerts. Stubs live under the temp $HOME → auto-cleaned by teardown_temp_home.
+  local stub_bin="$HOME/bin/stubs"
+  mkdir -p "$stub_bin"
+  for _cmd in osascript notify-send; do
+    printf '#!/bin/sh\nexit 0\n' > "$stub_bin/$_cmd"
+    chmod +x "$stub_bin/$_cmd"
+  done
+  export PATH="$stub_bin:$PATH"
 }
 
 teardown() {
