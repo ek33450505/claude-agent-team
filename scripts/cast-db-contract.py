@@ -58,6 +58,12 @@ DEFAULT_DB = Path(os.environ.get("CAST_DB_PATH", str(Path.home() / ".claude" / "
 # and other parsing artifacts while keeping all valid CAST column names.
 _COL_RE = re.compile(r"^[a-zA-Z]\w+$")
 
+# Permissive bare-word matcher for validating REAL schema identifiers
+# (table/column names from sqlite_master/PRAGMA), where single-char names
+# like FTS config's `k`/`v` are legitimate — unlike _COL_RE, which is a
+# source-parsing heuristic that intentionally drops single letters.
+_SCHEMA_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*\Z')
+
 SQL_KEYWORDS = frozenset({
     "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL",
     "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE",
@@ -932,6 +938,8 @@ def get_fill_rates(
             ).fetchall()
         ]
         for table in tables:
+            if not _SCHEMA_IDENT_RE.match(table):
+                continue
             try:
                 cols = [
                     r[1] for r in conn.execute(
@@ -944,6 +952,8 @@ def get_fill_rates(
                         fill_rates[(table, col)] = 0.0
                     continue
                 for col in cols:
+                    if not _SCHEMA_IDENT_RE.match(col):
+                        continue
                     non_null = conn.execute(
                         f"SELECT COUNT(*) FROM [{table}]"
                         f" WHERE [{col}] IS NOT NULL AND [{col}] != ''"

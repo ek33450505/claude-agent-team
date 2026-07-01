@@ -37,6 +37,7 @@ Usage:
 
 import json
 import os
+import re
 import subprocess
 import sys
 import sqlite3
@@ -48,6 +49,18 @@ DB_PATH: str = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast
 DAYS: int = int(os.environ.get('CAST_DB_PRUNE_DAYS', '90'))
 DRY_RUN: bool = os.environ.get('CAST_DB_PRUNE_DRY_RUN', '0') == '1'
 LOG_PATH: str = os.path.expanduser('~/.claude/logs/cron-db-prune.log')
+
+
+_SQL_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*\Z')
+
+
+def _safe_ident(name: str) -> str:
+    """Reject any SQL identifier that isn't a bare word before f-string
+    interpolation. Table/column names here are trusted (hardcoded), so this
+    is defense-in-depth against a future untrusted caller — not a live fix."""
+    if not _SQL_IDENT_RE.match(name):
+        raise ValueError(f'unsafe SQL identifier: {name!r}')
+    return name
 
 
 def _log(msg: str) -> None:
@@ -128,6 +141,8 @@ def _prune_table(
     Uses SQLite's datetime('now', '-N days') inline so the comparison is
     evaluated inside SQLite against its own stored timestamp format.
     """
+    table = _safe_ident(table)
+    ts_col = _safe_ident(ts_col)
     days_expr = f"datetime('now', '-{DAYS} days')"
     if DRY_RUN:
         cursor = conn.execute(
