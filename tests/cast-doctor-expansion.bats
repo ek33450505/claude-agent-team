@@ -107,7 +107,7 @@ JSON
 
   run bash bin/cast doctor
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "MCP servers: none in settings.json" ]]
+  [[ "$output" =~ "MCP servers: none configured" ]]
 }
 
 @test "check 15: MCP servers reports healthy HTTP server" {

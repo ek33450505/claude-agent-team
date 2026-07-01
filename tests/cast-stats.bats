@@ -53,16 +53,16 @@ teardown() {
   assert_output --regexp '^[1-9][0-9]*$'
 }
 
-@test "gen-cast-stats.sh produces tables=41" {
+@test "gen-cast-stats.sh produces tables=38" {
   run jq -r '.tables' < "$CANONICAL_JSON"
   assert_success
-  assert_output "41"
+  assert_output "38"
 }
 
-@test "gen-cast-stats.sh produces commands=20" {
+@test "gen-cast-stats.sh produces commands=21" {
   run jq -r '.commands' < "$CANONICAL_JSON"
   assert_success
-  assert_output "20"
+  assert_output "21"
 }
 
 @test "gen-cast-stats.sh produces skills=17" {
