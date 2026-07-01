@@ -2027,7 +2027,7 @@ _cmd_doctor() {
   # agent_hallucinations, etc.) are intentionally excluded — their writers create
   # them lazily, so they may legitimately be absent on a fresh install.
   local required_tables="sessions agent_runs routing_events agent_memories \
-stream_events tool_call_failures \
+tool_call_failures \
 agent_truncations injection_log quality_gates dispatch_decisions task_queue \
 routines incidents plan_sessions memory_consolidation_runs archived_memories budgets"
   local required_total

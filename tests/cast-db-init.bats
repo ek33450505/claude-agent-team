@@ -328,18 +328,20 @@ teardown() {
   assert_output "1"
 }
 
-@test "cast-db-init table count is exactly 41 on fresh DB" {
+@test "cast-db-init table count is exactly 39 on fresh DB" {
   bash "$DB_INIT" --db "$TEST_DB"
   # Exclude sqlite_* internals AND the record_fts% FTS5 apparatus (virtual table + shadow tables = a full-text index, not data tables; record_embed IS counted). Source of truth: scripts/cast-db-init.sh.
+  # Count: 41 → 39 after retiring stream_events + teammate_messages (v9 Phase C U7a).
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'record_fts%';"
-  assert_output "41"
+  assert_output "39"
 }
 
-@test "cast-db-init table count stays 41 on second invocation (idempotent)" {
+@test "cast-db-init table count stays 39 on second invocation (idempotent)" {
   bash "$DB_INIT" --db "$TEST_DB"
   run bash "$DB_INIT" --db "$TEST_DB"
   assert_success
   # Exclude sqlite_* internals AND the record_fts% FTS5 apparatus (virtual table + shadow tables = a full-text index, not data tables; record_embed IS counted). Source of truth: scripts/cast-db-init.sh.
+  # Count: 41 → 39 after retiring stream_events + teammate_messages (v9 Phase C U7a).
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'record_fts%';"
-  assert_output "41"
+  assert_output "39"
 }
