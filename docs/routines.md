@@ -103,7 +103,7 @@ CAST_ROUTINE_SKIP_MCP_CHECK=1 cast routines trigger email-triage
 | `pr-narrator` | 30min after GitHub webhook | PR storyteller: summarize changes, flag risks, suggest reviewers |
 | `release-celebration` | Manual | Release notes + celebration brief for stakeholders |
 | `standup-writer` | 4pm daily | Daily standup summary (blockers, wins, next 24h) |
-| `task-triage` | 8am daily | Todoist overdue surfacing, BLOCKED agents from cast.db, priority summary |
+| `task-triage` | 8am daily | BLOCKED/overdue `agent_runs` from cast.db (last 48h), priority summary |
 | `weekly-cost-report` | Mon 9am | Claude API cost breakdown by agent, week-over-week trends |
 
 ---

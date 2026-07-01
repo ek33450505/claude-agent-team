@@ -132,7 +132,7 @@
       },
       {
         "id": "cast-pretool-dispatch",
-        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read|Write|Edit",
+        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read|Write|Edit|Task|Agent",
         "hooks": [
           {
             "type": "command",
@@ -309,6 +309,17 @@
             "type": "command",
             "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-subagent-worktree-check.sh\"",
             "timeout": 10,
+            "async": true
+          }
+        ]
+      },
+      {
+        "id": "cast-incident-record",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-incident-record.sh\"",
+            "timeout": 5,
             "async": true
           }
         ]

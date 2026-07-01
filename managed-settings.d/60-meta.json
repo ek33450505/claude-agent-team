@@ -71,5 +71,6 @@
   "plansDirectory": "~/.claude/plans/",
   "_permissions_warning": "REVIEW CAREFULLY: Bash/Write/Edit let Claude act without asking. Remove any you're not comfortable with.",
   "_routing_note": "Model routing: haiku for commit/push/code-reviewer/test-runner. opus is the default (set in 16-model-defaults.json). Set CLAUDE_CODE_SUBAGENT_MODEL to override globally. Effort levels: see agent frontmatter.",
+  "_sandbox_note": "INERT as of macOS 26.5.1 / Claude Code 2.1.195: this `sandbox` block does NOT enforce. CC's engagement gate (f1n -> isSupportedPlatform/checkDependencies) short-circuits and never invokes the OS Seatbelt sandbox, so Bash runs unsandboxed and `failIfUnavailable` is never consulted. The OS Seatbelt primitive itself works; the gap is CC's SRT declining to engage, so this config is aspirational until CC engages it. The egress PreToolUse hook (logs/egress.jsonl) is the only LIVE egress enforcement. Note: CC does not natively read managed-settings.d/; cast-merge-settings.sh merges this into ~/.claude/settings.json (user layer, not tamper-proof MDM). Verify ENFORCEMENT, not key-presence.",
   "teammateMode": "in-process"
 }

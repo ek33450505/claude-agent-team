@@ -37,7 +37,7 @@ FAIL-OPEN per guard: a crash/missing module in one guard never suppresses anothe
 (each load + call is independently guarded), and any load failure is logged to
 hook-errors.log so `cast doctor` can surface a silently-disabled guard. command-
 guard is always evaluated for Bash unless git-guard already hard-blocked — which
-prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 → skip. Any
+prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 skips ONLY the Write/Edit policy + egress record + dispatch capture; the git commit/push/stash and destructive-command guards run in EVERY context (a subagent must not bypass the irreversibility/destructive guards). Any
 unhandled error → exit 0 (allow); a guard crash must never block all tool use.
 
 CONTRACT (identical to the wrappers): exit 2 + stderr = block; stdout
@@ -140,9 +140,62 @@ def _block(message):
     return 2
 
 
+def _record_dispatch(data):
+    """Record a dispatch_decisions row (outcome='pending') for a Task dispatch.
+    Record-only, fail-soft — must never raise or block the dispatch."""
+    try:
+        ti = data.get("tool_input", {}) or {}
+        if not isinstance(ti, dict):
+            return
+        chosen_agent = ti.get("subagent_type") or "unknown"
+        prompt = (ti.get("prompt") or ti.get("description") or "")[:500]
+        # Redact PII/secrets before storage (consistency with cast-incident-record.sh;
+        # cast.db can sync off-machine). FAIL-CLOSED: if redaction does not succeed on a
+        # non-empty prompt, store a [REDACTION_FAILED] marker rather than raw text — never
+        # leak unredacted content into cast.db. Still never blocks the dispatch.
+        if prompt:
+            _redacted = None
+            try:
+                import subprocess as _sp
+                _r = _sp.run(
+                    ["python3", os.path.join(SCRIPT_DIR, "cast-redact.py"),
+                     "--engine", "regex", "--field", "redacted_text"],
+                    input=prompt, capture_output=True, text=True, timeout=3,
+                )
+                _out = _r.stdout.strip()
+                if _r.returncode == 0 and _out:
+                    _redacted = _out
+            except Exception:
+                _redacted = None
+            if _redacted is None:
+                _log_error("dispatch redaction failed — storing [REDACTION_FAILED] marker")
+                prompt = "[REDACTION_FAILED]"
+            else:
+                prompt = _redacted
+        model = ti.get("model")  # usually absent in tool_input → NULL
+        effort = ti.get("effort")  # usually absent → NULL
+        session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
+        db = os.path.expanduser(os.environ.get("CAST_DB_PATH", "~/.claude/cast.db"))
+        if not os.path.isfile(db):
+            return
+        import sqlite3
+
+        conn = sqlite3.connect(db, timeout=1)
+        try:
+            conn.execute(
+                "INSERT INTO dispatch_decisions "
+                "(session_id, prompt_snippet, chosen_agent, model, effort, outcome) "
+                "VALUES (?, ?, ?, ?, ?, 'pending')",
+                (session_id, prompt, chosen_agent, model, effort),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        _log_error(f"dispatch_decisions record failed: {e}")
+
+
 def main():
-    if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
-        return 0
     try:
         raw = sys.stdin.read()
     except Exception:
@@ -161,19 +214,21 @@ def main():
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    # 1. HARD BLOCKS first (CPU-bound; run before any egress I/O).
-    #    git-guard covers Bash git guards AND Write/Edit policy (mirrors pre-tool-guard).
-    if tool in ("Bash", "Write", "Edit"):
+    # 0. IRREVERSIBLE + DESTRUCTIVE Bash ops are guarded in EVERY context —
+    #    including dispatched subagents (CLAUDE_SUBPROCESS=1) and headless runs.
+    #    The recursion-prevention skip below must NOT exempt a subagent from these
+    #    guards, or a dispatched agent could bypass the git commit/push/stash blocks
+    #    (the 2026-06 self-commit recurrence) OR the destructive-command guard
+    #    (rm -rf etc.). Escape hatches still apply — the guards check allow patterns first.
+    if tool == "Bash":
         git_guard = _load("cast_git_guard", "cast-git-guard.py")
         if git_guard is not None:
             try:
-                code, msg = git_guard.evaluate(tool, tool_input)
+                gcode, gmsg = git_guard.evaluate("Bash", tool_input)
             except Exception:
-                code, msg = 0, ""
-            if code == 2:
-                return _block(msg)
-
-    if tool == "Bash":
+                gcode, gmsg = 0, ""
+            if gcode == 2:
+                return _block(gmsg)
         command = tool_input.get("command", "") or ""
         if command:
             cg = _load("cast_command_guard", "cast-command-guard.py")
@@ -194,6 +249,23 @@ def main():
                         pass
                     return _block(message)
 
+    # Recursion-prevention skip: the REST of the dispatcher (Write/Edit path policy
+    # engine + TTL sweep, egress I/O, dispatch_decisions capture) is suppressed for
+    # managed/headless sub-claude to avoid hook recursion.
+    if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
+        return 0
+
+    # 1. Write/Edit path policy (top-level sessions only).
+    if tool in ("Write", "Edit"):
+        git_guard = _load("cast_git_guard", "cast-git-guard.py")
+        if git_guard is not None:
+            try:
+                code, msg = git_guard.evaluate(tool, tool_input)
+            except Exception:
+                code, msg = 0, ""
+            if code == 2:
+                return _block(msg)
+
     # 2. EGRESS — record + emit (only reached when nothing hard-blocked; blocked
     #    commands are never off-machine-bound, so no egress record is lost).
     if _is_egress_tool(tool):
@@ -202,6 +274,12 @@ def main():
             action = _run_egress(sentinel, data)
             if action is not None:
                 _emit_egress(sentinel, action)
+
+    # F2: record the dispatch decision (record-only; NEVER blocks a dispatch).
+    # The subagent-dispatch tool is "Agent" in current Claude Code and "Task" in
+    # older builds — accept both so capture works across harness versions.
+    if tool in ("Task", "Agent"):
+        _record_dispatch(data)
     return 0
 
 

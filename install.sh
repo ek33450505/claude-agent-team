@@ -357,18 +357,38 @@ if [ -f "$MIGRATE_SCRIPT" ]; then
     fi
 fi
 
-# --- Install config/ (only if not present) ---
+# --- Install config/ (update if changed, backup on drift) ---
 if [ -d "$SCRIPT_DIR/config" ]; then
     info "Installing config files..."
     for config_file in "$SCRIPT_DIR"/config/*; do
         [ -f "$config_file" ] || continue
         base="$(basename "$config_file")"
         dest="$CLAUDE_DIR/config/$base"
-        if [ -f "$dest" ]; then
-            info "  Skipped (exists): $base"
-        else
+        if [ ! -f "$dest" ]; then
             cp "$config_file" "$dest"
             success "  Installed: $base"
+        elif cmp -s "$config_file" "$dest"; then
+            info "  Unchanged: $base"
+        else
+            # Find a non-conflicting backup name (dest.bak, dest.bak.1, ...)
+            bak="$dest.bak"
+            _i=1
+            while [ -f "$bak" ]; do
+                bak="$dest.bak.$_i"
+                _i=$((_i + 1))
+            done
+            cp "$dest" "$bak"
+            cp "$config_file" "$dest"
+            case "$base" in
+                *polic*)
+                    # Enforcement config (policies.json / egress-policy.json): a silent
+                    # downgrade of locally-hardened rules would violate honest-degradation.
+                    warn "  [updated] ENFORCEMENT config/$base — prior version backed up to $bak; diff it against the new version in case you had local hardening"
+                    ;;
+                *)
+                    info "  [updated] config/$base (backup: $bak)"
+                    ;;
+            esac
         fi
     done
 fi
@@ -427,6 +447,20 @@ if [ -f "$CAST_BIN_SRC" ]; then
     rm -f "$CAST_BIN_DEST"
     ln -s "$CAST_BIN_SRC" "$CAST_BIN_DEST"
     success "  Symlinked bin/cast -> $CAST_BIN_DEST"
+    # Guard: warn when the symlink source is an ephemeral path (temp clone scenario)
+    _cast_src_ephemeral=0
+    case "$SCRIPT_DIR" in
+        /var/folders/* | /tmp/* | *-clone | *-clone/*)
+            _cast_src_ephemeral=1 ;;
+    esac
+    if [[ "$_cast_src_ephemeral" -eq 0 && -n "${TMPDIR:-}" && "$SCRIPT_DIR" == "${TMPDIR%/}/"* ]]; then
+        _cast_src_ephemeral=1
+    fi
+    if [[ "$_cast_src_ephemeral" -eq 1 ]]; then
+        warn "  WARNING: cast symlink points into an ephemeral path ($SCRIPT_DIR) and will BREAK when the OS reaps it"
+        warn "  Re-run install.sh from a PERMANENT clone (e.g. ~/Projects/...) so cast resolves to a stable checkout"
+    fi
+    unset _cast_src_ephemeral
     if ! echo "$PATH" | tr ':' '\n' | grep -q "$LOCAL_BIN"; then
         warn "  Note: $LOCAL_BIN is not in your PATH"
     fi

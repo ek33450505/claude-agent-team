@@ -11,10 +11,11 @@ CAST_BATCH_DISPATCH_SH="$REPO_DIR/scripts/cast-batch-dispatch.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
+  load 'helpers/setup'
+  setup_temp_home
+
   export ORIG_PATH="$PATH"
 
-  export HOME="$(mktemp -d)"
   export BATS_TMPDIR="${HOME}/bats-tmp"
   mkdir -p "$BATS_TMPDIR"
 
@@ -49,8 +50,8 @@ CURL_MOCK
 
 teardown() {
   export PATH="$ORIG_PATH"
-  export HOME="$ORIG_HOME"
   unset BATS_TMPDIR MOCK_BIN_DIR PROMPT_FILE ANTHROPIC_API_KEY CAST_DB_PATH
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

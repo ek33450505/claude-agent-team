@@ -53,16 +53,16 @@ teardown() {
   assert_output --regexp '^[1-9][0-9]*$'
 }
 
-@test "gen-cast-stats.sh produces tables=41" {
+@test "gen-cast-stats.sh produces tables=38" {
   run jq -r '.tables' < "$CANONICAL_JSON"
   assert_success
-  assert_output "41"
+  assert_output "38"
 }
 
-@test "gen-cast-stats.sh produces commands=20" {
+@test "gen-cast-stats.sh produces commands=21" {
   run jq -r '.commands' < "$CANONICAL_JSON"
   assert_success
-  assert_output "20"
+  assert_output "21"
 }
 
 @test "gen-cast-stats.sh produces skills=17" {
@@ -271,6 +271,14 @@ EOF
     CAST_PACKAGES_COUNT=0 bash "$GEN_STATS_SH" --check
   assert_failure
   assert_output --partial "FLOOR VIOLATION"
+}
+
+@test "cast_stat_test_files: returns a numeric value at or above floor of 150" {
+  source "$REPO_DIR/scripts/cast-stats-lib.sh"
+  run cast_stat_test_files
+  assert_success
+  assert_output --regexp '^[0-9]+$'
+  [ "$output" -ge 150 ]
 }
 
 @test "auto-discovery: exits 0 with 'nothing to check' when dir has no CAST markers" {

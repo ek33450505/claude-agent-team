@@ -60,9 +60,14 @@ for proj in "${KNOWN_PROJECTS[@]}"; do
   fi
 done
 
-# Deduplicate (guard empty-array expansion for bash 3.2 compatibility on macOS)
+# Deduplicate (guard empty-array expansion for bash 3.2 compatibility on macOS;
+# use while-read to avoid unquoted-$() word-splitting on paths with spaces)
 if [ ${#DIRTY_REPOS[@]} -gt 0 ]; then
-  DIRTY_REPOS=($(printf '%s\n' "${DIRTY_REPOS[@]}" | sort -u))
+  DEDUP=()
+  while IFS= read -r _line; do
+    DEDUP+=("$_line")
+  done < <(printf '%s\n' "${DIRTY_REPOS[@]}" | sort -u)
+  DIRTY_REPOS=("${DEDUP[@]}")
 fi
 
 if [ ${#DIRTY_REPOS[@]} -eq 0 ]; then

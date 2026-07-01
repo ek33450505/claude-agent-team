@@ -54,11 +54,6 @@ CREATE TABLE IF NOT EXISTS quality_gates (
   created_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS stream_events (
-  id TEXT PRIMARY KEY,
-  timestamp TEXT
-);
-
 CREATE TABLE IF NOT EXISTS stream_hook_events (
   id TEXT PRIMARY KEY,
   timestamp TEXT

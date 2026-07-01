@@ -29,13 +29,11 @@ Both capture "incomplete agent responses" but via different writer paths:
 
 The two tables answer slightly different questions. Kept separate to preserve writer simplicity.
 
-### `agent_hallucinations` vs `code_ref_checks`
+### `agent_hallucinations` _(and the retired `code_ref_checks`)_
 
-Both capture "agent claim vs reality" mismatches but at different granularity:
-- `agent_hallucinations` — file-level: agent claimed to write `/path/to/file` but the file doesn't exist post-stop.
-- `code_ref_checks` — symbol-level: agent referenced a function/class name that doesn't exist in the codebase.
+`agent_hallucinations` — file-level: agent claimed to write `/path/to/file` but the file doesn't exist post-stop.
 
-Kept separate to allow different remediation paths (hallucinations are usually agent errors; code_ref mismatches can be stale memory).
+`code_ref_checks` was **RETIRED in v9 Phase C U7b** — it was intended to capture symbol-level mismatches (agent referenced a function/class name that doesn't exist in the codebase), but its writer (`cast-code-ref-guard.sh`) was never wired to a hook (high false-positive rate) and was purged in v9 S5. With 0 rows and no writer, the table was removed from the canonical schema (`cast-db-init.sh`). Physical DROP from the live DB is a separate gated maintenance step.
 
 ## `incidents` table (closes Correction #17)
 
@@ -43,7 +41,11 @@ Kept separate to allow different remediation paths (hallucinations are usually a
 
 ## Swarm tables (closes Correction #21)
 
-`swarm_sessions`, `teammate_messages`, `teammate_runs` are permanently dormant — the `/swarm` writers were retired in v9. Tables are retained as historical schema record; zero rows is CORRECT. The /db browser should show a tooltip indicating "dormant — /swarm writers retired in v9."
+`swarm_sessions` and `teammate_runs` are dormant — the `/swarm` writers were retired in v9. Tables are retained as historical schema record; zero rows is CORRECT. The /db browser should show a tooltip indicating "dormant — /swarm writers retired in v9."
+
+`teammate_messages` was **retired in v9 Phase C (U7a)** — removed from canonical schema (`cast-db-init.sh`) and all script references. Physical DROP from the live DB is a separate gated maintenance step (the empty table may linger on existing installs; `cast-db-contract.py` stays GREEN once all code references are removed).
+
+`stream_events` was also **retired in v9 Phase C (U7a)** — 0 rows, no writers since the stream-JSON pipeline was decommissioned.
 
 ## `dispatch_events` placement (closes Correction #5)
 
@@ -60,6 +62,15 @@ The live cast.db `schema_migrations` table has schema **`(version TEXT PRIMARY K
 **Backfill in Phase 2 #18:** uses the LIVE bash schema. Does NOT attempt to reconcile the two runners.
 
 **Resolved (PR #114):** `cast-db-init.sh` now provisions `schema_migrations` directly using the bash shape `(version TEXT PRIMARY KEY, applied_at TEXT, checksum TEXT)` and is the single source of truth for the schema. The dual-runner drift is closed — init handles schema migrations at install time; neither bash runner nor python runner needs to reconcile independently. The python runner's incompatible schema `(id INTEGER PK, migration_name TEXT UNIQUE, applied_at TEXT)` remains on disk but is not invoked by install. If the python runner is retained for other purposes, its CREATE TABLE statement should be made compatible with the bash shape to avoid confusion on fresh DBs.
+
+## Orphan columns (v9 Phase C note)
+
+Several columns were **dropped from the canonical schema** (`cast-db-init.sh`) but **linger empty on existing live DBs** because SQLite column-drop requires a full table rebuild (DDL: `ALTER TABLE DROP COLUMN` is SQLite ≥ 3.35, but the rebuild risk is high for observability tables). Code sources these columns via `PRAGMA table_info()` guards rather than hard-referencing them. They are intentionally NOT physically dropped:
+
+- `sessions.total_input_tokens`, `sessions.total_output_tokens`, `sessions.total_cost_usd`, `sessions.model` — dropped from canonical in migration 022 wave-3; zero values on live.
+- `agent_runs.project`, `agent_runs.prompt` — dropped from canonical in migration 022 wave-3; code uses `sessions JOIN` to source project instead.
+
+These are not SAFE-DROP candidates in `db-contract` because they exist only on live DBs, not in the canonical init (they never appear as missing writers/readers). If physical column removal is ever needed, it requires a backed-up table-rebuild step.
 
 ---
 

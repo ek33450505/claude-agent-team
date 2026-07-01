@@ -11,10 +11,11 @@ SHIM="${REPO_DIR}/scripts/cast-managed-agent.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export ORIG_HOME="$HOME"
+  load 'helpers/setup'
+  setup_temp_home
+
   export ORIG_PATH="$PATH"
 
-  export HOME="$(mktemp -d)"
   export BATS_TMPDIR="${HOME}/bats-tmp"
   mkdir -p "$BATS_TMPDIR"
 
@@ -53,9 +54,9 @@ SEC_MOCK
 
 teardown() {
   export PATH="$ORIG_PATH"
-  export HOME="$ORIG_HOME"
   unset BATS_TMPDIR MOCK_BIN_DIR CAST_DB_PATH
   unset ANTHROPIC_API_KEY 2>/dev/null || true
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

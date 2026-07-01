@@ -12,9 +12,8 @@ SCRIPT="${BATS_TEST_DIRNAME}/../scripts/cast-session-start-health.sh"
 setup() {
   # Isolate every test in its own temp HOME so memory globs and logs never
   # touch the live ~/.claude tree (see HARD RULE in tests.md / setup.bash).
-  export ORIG_HOME="$HOME"
-  export HOME
-  HOME="$(mktemp -d)"
+  load 'helpers/setup'
+  setup_temp_home
   mkdir -p "${HOME}/.claude/projects/test-project/memory"
   mkdir -p "${HOME}/.claude/logs"
 
@@ -45,8 +44,7 @@ EOF
 
 teardown() {
   rm -rf "${STUB_DIR}"
-  rm -rf "${HOME}"
-  export HOME="${ORIG_HOME}"
+  teardown_temp_home
 }
 
 # Write a minimal memory file with YAML frontmatter

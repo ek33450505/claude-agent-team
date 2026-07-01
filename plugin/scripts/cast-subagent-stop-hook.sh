@@ -335,6 +335,9 @@ if matches:
   fi
   export CAST_STOP_TRANSCRIPT_PATH
   export CAST_PRICING_PATH="${HOME}/.claude/config/model-pricing.json"
+  # Capture the git branch of the agent's working tree for per-feature cost attribution (F1).
+  CAST_STOP_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  export CAST_STOP_BRANCH
   python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
 import sqlite3, os, sys, json, glob
 sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
@@ -356,6 +359,7 @@ if cache_read:
     cache_read = int(cache_read)
 if cache_create:
     cache_create = int(cache_create)
+branch = os.environ.get('CAST_STOP_BRANCH', '') or None
 
 if not agent or not db:
     raise SystemExit(0)
@@ -456,6 +460,7 @@ try:
         ('duration_ms', 'INTEGER'),
         ('tool_uses',   'INTEGER'),
         ('response',    'TEXT'),
+        ('branch',      'TEXT'),
     ]:
         try:
             conn.execute(f'ALTER TABLE agent_runs ADD COLUMN {col} {coltype}')
@@ -481,12 +486,12 @@ for attempt in range(3):
                 "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
                 "tool_uses=?, response=?, "
                 "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
-                "cost_usd=?, input_tokens=?, output_tokens=?, model=? "
+                "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=? "
                 "WHERE id=("
                 "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?"
                 ")",
                 (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
-                 cost_usd, input_tokens, output_tokens, transcript_model, agent_id),
+                 cost_usd, input_tokens, output_tokens, transcript_model, branch, agent_id),
             )
         else:
             cur.execute(
@@ -494,12 +499,12 @@ for attempt in range(3):
                 "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
                 "tool_uses=?, response=?, "
                 "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
-                "cost_usd=?, input_tokens=?, output_tokens=?, model=? "
+                "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=? "
                 "WHERE id=("
                 "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?"
                 ")",
                 (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
-                 cost_usd, input_tokens, output_tokens, transcript_model, agent, sess),
+                 cost_usd, input_tokens, output_tokens, transcript_model, branch, agent, sess),
             )
         rows_affected = conn.execute("SELECT changes()").fetchone()[0]
         conn.commit()
@@ -516,6 +521,55 @@ for attempt in range(3):
             if log_hook_failure:
                 log_hook_failure('cast-subagent-stop-hook:agent_runs', -1, str(e), sess if 'sess' in dir() else None)
         break
+PYEOF
+fi
+
+# ── Step 2b: dispatch_decisions outcome update (F2 record→decision loop) ─────
+# Resolve the PreToolUse(Task)-captured pending decision row for this agent+session
+# to its terminal outcome. FIFO MIN(id) match mirrors the agent_runs match heuristic
+# (dispatch_decisions has no agent_id linkage — captured at PreToolUse before agent_id
+# exists — so session_id+chosen_agent FIFO is the available key; parallel same-type
+# dispatches in one session may resolve out of order — acceptable for v1).
+# Best-effort, fail-soft: never blocks/crashes the hook. No pending row → no-op.
+if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
+  if [ "$EVENT_TYPE" = "task_blocked" ]; then
+    CAST_STOP_DD_OUTCOME="BLOCKED"
+  else
+    CAST_STOP_DD_OUTCOME="DONE"
+  fi
+  export CAST_STOP_DD_OUTCOME
+  export CAST_DB_PATH="$DB_PATH"
+  python3 - <<'PYEOF' 2>>"$HOOK_ERROR_LOG" || true
+import sqlite3, os, sys
+sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
+try:
+    from cast_db import log_hook_failure
+except Exception:
+    log_hook_failure = None
+db      = os.path.expanduser(os.environ.get('CAST_DB_PATH', '~/.claude/cast.db'))
+agent   = os.environ.get('CAST_STOP_AGENT', '')
+sess    = os.environ.get('CAST_STOP_SESSION', '')
+outcome = os.environ.get('CAST_STOP_DD_OUTCOME', 'DONE')
+if not agent or not sess:
+    raise SystemExit(0)
+conn = None
+try:
+    conn = sqlite3.connect(db, timeout=2)
+    conn.execute(
+        "UPDATE dispatch_decisions SET outcome=? "
+        "WHERE id=(SELECT MIN(id) FROM dispatch_decisions "
+        "          WHERE outcome='pending' AND chosen_agent=? AND session_id=?)",
+        (outcome, agent, sess),
+    )
+    conn.commit()
+    conn.close()
+except Exception as e:
+    try:
+        if conn: conn.close()
+    except Exception:
+        pass
+    if log_hook_failure:
+        log_hook_failure('cast-subagent-stop-hook:dispatch_decisions', -1, str(e), sess)
 PYEOF
 fi
 

@@ -63,13 +63,6 @@ teardown() {
   [ "$count" -eq 1 ]
 }
 
-@test "cast-db-init: creates teammate_messages table" {
-  bash "$DB_INIT" --db "$TEST_DB"
-
-  local count
-  count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='teammate_messages';")
-  [ "$count" -eq 1 ]
-}
 
 # ---------------------------------------------------------------------------
 # Schema version: PRAGMA user_version >= 8
@@ -121,17 +114,3 @@ teardown() {
   [[ "$info" == *"worktree"* ]]
 }
 
-# ---------------------------------------------------------------------------
-# Schema: teammate_messages columns present
-# ---------------------------------------------------------------------------
-
-@test "cast-db-init: teammate_messages has required columns" {
-  bash "$DB_INIT" --db "$TEST_DB"
-
-  local info
-  info=$(sqlite3 "$TEST_DB" "PRAGMA table_info(teammate_messages);")
-  [[ "$info" == *"swarm_id"* ]]
-  [[ "$info" == *"from_agent"* ]]
-  [[ "$info" == *"message_type"* ]]
-  [[ "$info" == *"payload"* ]]
-}

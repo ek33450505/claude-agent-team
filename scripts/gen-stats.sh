@@ -31,6 +31,7 @@ AGENT_COUNT=$(cast_stat_agents)
 CMD_COUNT=$(cast_stat_commands)
 SKILL_COUNT=$(cast_stat_skills)
 TEST_COUNT=$(cast_stat_tests)
+TEST_FILE_COUNT=$(cast_stat_test_files)
 # Routes removed in CAST v3 — model-driven dispatch via CLAUDE.md
 ROUTE_COUNT=0
 DB_TABLE_COUNT=$(cast_stat_tables)
@@ -59,6 +60,7 @@ update_all_tokens() {
   update_token "CAST_COMMAND_COUNT"  "$CMD_COUNT"      "$file"
   update_token "CAST_SKILL_COUNT"    "$SKILL_COUNT"    "$file"
   update_token "CAST_TEST_COUNT"     "$TEST_COUNT"     "$file"
+  update_token "CAST_TEST_FILE_COUNT" "$TEST_FILE_COUNT" "$file"
   update_token "CAST_ROUTE_COUNT"    "$ROUTE_COUNT"    "$file"
   update_token "CAST_DB_TABLE_COUNT" "$DB_TABLE_COUNT" "$file"
 }

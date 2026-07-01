@@ -249,7 +249,6 @@ DELETE FROM sessions         WHERE started_at < datetime('now', '-${TTL_DB_ROWS}
 DELETE FROM routing_events   WHERE timestamp  < datetime('now', '-30 days');
 DELETE FROM dispatch_decisions WHERE created_at < datetime('now', '-30 days');
 DELETE FROM quality_gates    WHERE created_at < datetime('now', '-30 days');
-DELETE FROM stream_events    WHERE timestamp  < datetime('now', '-30 days');
 DELETE FROM stream_hook_events WHERE timestamp < datetime('now', '-30 days');
 DELETE FROM worktree_events  WHERE timestamp  < datetime('now', '-30 days');
 DELETE FROM cast_events      WHERE timestamp  < datetime('now', '-30 days');

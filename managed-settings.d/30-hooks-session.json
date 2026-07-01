@@ -122,6 +122,17 @@
             "async": true
           }
         ]
+      },
+      {
+        "id": "cast-incident-record",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-incident-record.sh",
+            "timeout": 5,
+            "async": true
+          }
+        ]
       }
     ],
     "StopFailure": [

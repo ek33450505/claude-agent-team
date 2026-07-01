@@ -11,12 +11,20 @@ VALIDATOR="$REPO_DIR/scripts/cast-validate-hook-contracts.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
+  load 'helpers/setup'
+  setup_temp_home
   export TEST_TMPDIR="$(mktemp -d /tmp/cast-hook-contracts-test.XXXXXXXX)"
-  export ORIG_HOME="$HOME"
+  # Seed the isolated HOME with the repo hook scripts so Test 1's `--source`
+  # validation resolves ~/.claude/scripts/* into the temp HOME and executes
+  # the seeded copies there — never the real ~/.claude (mirrors tests/run.sh).
+  mkdir -p "$HOME/.claude/scripts"
+  cp "$REPO_DIR"/scripts/*.sh "$HOME/.claude/scripts/" 2>/dev/null || true
+  chmod +x "$HOME/.claude/scripts/"*.sh 2>/dev/null || true
 }
 
 teardown() {
   [ -n "${TEST_TMPDIR:-}" ] && rm -rf "$TEST_TMPDIR"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------
@@ -229,4 +237,35 @@ _run_validator_with_settings() {
   local combined
   combined="$(env HOME="$fake_home" bash "$VALIDATOR" 2>&1 || true)"
   [[ "$combined" =~ "[fail]" ]]
+}
+
+# ---------------------------------------------------------------------------
+# Test 6: Task|Agent matcher for cast-pretool-dispatch
+# ---------------------------------------------------------------------------
+
+@test "cast-pretool-dispatch matcher includes both Task and Agent" {
+  # The F2 dispatch-capture hook must match BOTH "Task" (older Claude Code)
+  # and "Agent" (current Claude Code) subagent-dispatch tool names.
+  # This test ensures the regex matcher never regresses to match only one.
+  local settings_file="$REPO_DIR/managed-settings.d/25-hooks-security.json"
+
+  # Extract the matcher regex for cast-pretool-dispatch hook
+  local matcher
+  matcher=$(python3 -c "
+import json
+with open('$settings_file') as f:
+    data = json.load(f)
+hooks = data.get('hooks', {}).get('PreToolUse', [])
+for hook in hooks:
+    if hook.get('id') == 'cast-pretool-dispatch':
+        print(hook.get('matcher', ''))
+        break
+" 2>/dev/null || echo "")
+
+  # Verify matcher is non-empty
+  [ -n "$matcher" ]
+
+  # Verify matcher regex contains both Task and Agent (literal strings in alternation)
+  [[ "$matcher" =~ "Task" ]]
+  [[ "$matcher" =~ "Agent" ]]
 }

@@ -26,7 +26,7 @@ SECURITY (unchanged from the bash original):
 
 CONTRACT: exit 2 + stderr message = block; exit 0 = allow. FAIL-OPEN — any
 internal error allows the tool (a guard crash must never block all work).
-CLAUDE_SUBPROCESS=1 (managed/headless sub-claude) is skipped in the .sh wrapper.
+CLAUDE_SUBPROCESS=1 (managed/headless sub-claude) skips ONLY the Write/Edit policy engine + TTL sweep; the git commit/push/stash guards run in EVERY context (a subagent must not bypass the irreversibility guards).
 """
 import datetime
 import json
@@ -273,8 +273,6 @@ def evaluate(tool_name: str, tool_input: dict):
 
 
 def main() -> int:
-    if os.environ.get('CLAUDE_SUBPROCESS', '0') == '1':
-        return 0
     try:
         raw = sys.stdin.read()
     except Exception:
@@ -290,6 +288,25 @@ def main() -> int:
 
     tool_name = data.get('tool_name', '') or ''
     tool_input = data.get('tool_input', {}) or {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+
+    # Irreversible git ops (commit/push/stash) are guarded in EVERY context,
+    # including dispatched subagents and headless runs — see the matching note in
+    # cast-pretool-dispatch.py. Escape hatches still apply (_git_evaluate checks the
+    # *_ALLOW patterns first). The CLAUDE_SUBPROCESS skip below covers ONLY the
+    # Write/Edit policy engine + agent-status TTL sweep (recursion prevention).
+    if tool_name == 'Bash':
+        command = tool_input.get('command', '') or ''
+        gcode, gmsg = _git_evaluate(command)
+        if gcode == 2:
+            if gmsg:
+                print(gmsg, file=sys.stderr)
+            return 2
+
+    if os.environ.get('CLAUDE_SUBPROCESS', '0') == '1':
+        return 0
+
     code, msg = evaluate(tool_name, tool_input)
     if code == 2:
         if msg:

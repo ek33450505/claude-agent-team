@@ -8,7 +8,8 @@ load 'test_helper/bats-assert/load'
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CAST_BIN="$REPO_DIR/bin/cast"
 
-# DDL for the four honesty tables (sourced from scripts/cast-db-init.sh)
+# DDL for the three honesty tables (sourced from scripts/cast-db-init.sh)
+# code_ref_checks was RETIRED in v9 Phase C U7b — removed from fixture.
 _create_honesty_tables() {
   local db="$1"
   sqlite3 "$db" <<'SQL'
@@ -40,16 +41,6 @@ CREATE TABLE IF NOT EXISTS agent_protocol_violations (
     pattern      TEXT,
     timestamp    TEXT NOT NULL,
     raw_excerpt  TEXT
-);
-CREATE TABLE IF NOT EXISTS code_ref_checks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT,
-    agent_name TEXT,
-    ref_type TEXT,
-    ref_name TEXT,
-    verified INTEGER,
-    location TEXT,
-    timestamp TEXT
 );
 SQL
 }
@@ -105,28 +96,28 @@ _run_doctor() {
 # ── Test 1: Tables absent — no honesty tables provisioned ───────────────────
 @test "tables absent: reports INFO 'no data yet' for each honesty table" {
   _create_minimal_core_tables "$CAST_DB_PATH"
-  # Do NOT create any of the four honesty tables
+  # Do NOT create any of the three honesty tables
 
   _run_doctor
 
-  # Should contain the INFO 'no data yet' pattern for all four tables
+  # Should contain the INFO 'no data yet' pattern for all three honesty tables
+  # (code_ref_checks was retired in v9 Phase C U7b)
   assert_output --partial "agent_hallucinations — no data yet"
   assert_output --partial "completeness_events — no data yet"
   assert_output --partial "agent_protocol_violations — no data yet"
-  assert_output --partial "code_ref_checks — no data yet"
 }
 
 @test "tables absent: does NOT print green OK for honesty tables" {
   _create_minimal_core_tables "$CAST_DB_PATH"
-  # Do NOT create any of the four honesty tables
+  # Do NOT create any of the three honesty tables
 
   _run_doctor
 
   # Must not report a clean OK for these tables (that would be the deep-research bug)
+  # (code_ref_checks was retired in v9 Phase C U7b)
   refute_output --partial "agent_hallucinations — none in last 7d"
   refute_output --partial "completeness_events — none in last 7d"
   refute_output --partial "agent_protocol_violations — none in last 7d"
-  refute_output --partial "code_ref_checks — none in last 7d"
 }
 
 # ── Test 2: DB unreadable — cast.db is not a valid SQLite file ───────────────
@@ -159,7 +150,7 @@ _run_doctor() {
   assert_output --partial "agent_hallucinations — none in last 7d"
   assert_output --partial "completeness_events — none in last 7d"
   assert_output --partial "agent_protocol_violations — none in last 7d"
-  assert_output --partial "code_ref_checks — none in last 7d"
+  # code_ref_checks was retired in v9 Phase C U7b — not asserted
 }
 
 @test "present empty tables: does NOT show INFO 'no data yet'" {
@@ -171,7 +162,7 @@ _run_doctor() {
   refute_output --partial "agent_hallucinations — no data yet"
   refute_output --partial "completeness_events — no data yet"
   refute_output --partial "agent_protocol_violations — no data yet"
-  refute_output --partial "code_ref_checks — no data yet"
+  # code_ref_checks was retired in v9 Phase C U7b — not asserted
 }
 
 # ── Test 4: Tables present and populated ────────────────────────────────────

@@ -138,7 +138,8 @@ Subcommands:
   ${C_BOLD}test${C_RESET}      [agent-name] [--record] [--ci]  Run agent contract tests
   ${C_BOLD}memory${C_RESET}    search|list|forget|export   Query and manage agent memories
   ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
-  ${C_BOLD}agents${C_RESET}                          List installed CAST agents
+  ${C_BOLD}cost${C_RESET}      [--by-task|--by-branch|--by-agent] [--project N] [--limit N]  Per-task/feature cost attribution
+  ${C_BOLD}agents${C_RESET}    [--usage] [--json]            List installed agents, or per-agent runtime usage with --usage
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}backup${C_RESET}    [--overlay]               On-disk snapshot (+ GitHub overlay with --overlay)
   ${C_BOLD}restore${C_RESET}   <date|dir> [--force]      Restore files from a snapshot (--list to see them)
@@ -151,10 +152,13 @@ Subcommands:
   ${C_BOLD}dash${C_RESET}                            Live TUI dashboard (htop for CAST)
   ${C_BOLD}install-completions${C_RESET}             Install shell tab completions
   ${C_BOLD}ask${C_RESET}       "<query>" [--kind K] [--since DATE] [--limit N] [--semantic]  Search the full audit record via FTS5
+  ${C_BOLD}predict${C_RESET}   "<task>" [--limit N] [--json]          Predict cost + suggest agents from the record
+  ${C_BOLD}feature${C_RESET}   "<desc>"                             App-build: decompose + gated writer/reviewer/test/commit
   ${C_BOLD}ledger${C_RESET}    [SESSION] [--last N] [--since DATE] [--json] [--out FILE] [--verify FILE]  Render a signed per-session audit receipt from cast.db
   ${C_BOLD}verify-chain${C_RESET}                        Verify the tamper-evident provenance chain (PASS/BROKEN)
   ${C_BOLD}provenance${C_RESET} <cmd>                    Provenance chain ops: verify | status | backfill | append <id>
   ${C_BOLD}incidents${C_RESET} recent|search              Query episodic incident history
+  ${C_BOLD}mcp${C_RESET}       serve|config|status              Expose the cast.db record read-only over MCP (stdio, opt-in)
   ${C_BOLD}cheap${C_RESET}     [status|config|check]         Local cheap-mode session via ccr + Ollama
   ${C_BOLD}routines${C_RESET} list|status|get|trigger|install|uninstall|enable|disable|validate  Manage scheduled agent routines
   ${C_BOLD}files${C_RESET}                              File event tracking and analytics
@@ -585,6 +589,64 @@ PYEOF
 
 # ── Subcommand: agents ───────────────────────────────────────────────────────
 _cmd_agents() {
+  local usage_mode=0
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --usage) usage_mode=1; shift ;;
+      *) shift ;;
+    esac
+  done
+
+  if [ "$usage_mode" -eq 1 ]; then
+    _require_db
+    python3 - "$CAST_DB_PATH" "$CAST_JSON" <<'PYEOF'
+import sys, sqlite3, json
+
+db_path, json_mode = sys.argv[1], sys.argv[2]
+json_out = json_mode == '1'
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+
+cur.execute("""
+    SELECT agent,
+           COUNT(*) AS dispatches,
+           AVG(cost_usd) AS avg_cost,
+           AVG(CASE WHEN status = 'DONE' THEN 1.0 ELSE 0.0 END) AS success_rate
+    FROM agent_runs
+    GROUP BY agent
+    ORDER BY dispatches DESC, agent ASC
+""")
+
+data = [
+    {
+        'agent': r['agent'] or '?',
+        'dispatches': r['dispatches'],
+        'avg_cost_usd': round(r['avg_cost'] or 0.0, 4),
+        'success_rate': round(r['success_rate'] or 0.0, 4),
+    }
+    for r in cur.fetchall()
+]
+conn.close()
+
+if json_out:
+    print(json.dumps({'view': 'by_agent_usage', 'rows': data}, indent=2))
+    sys.exit(0)
+
+if not data:
+    print('No agent runs recorded yet — agent_runs is empty.')
+    sys.exit(0)
+
+print(f"{'AGENT':<24} {'DISPATCHES':>10} {'AVG COST':>10} {'SUCCESS':>8}")
+print('-' * 56)
+for d in data:
+    print(f"{d['agent']:<24} {d['dispatches']:>10,} ${d['avg_cost_usd']:>8.2f} {d['success_rate']*100:>6.0f}%")
+print(f"\n{len(data)} agents with runtime data")
+PYEOF
+    return
+  fi
+
   if [ ! -d "$CAST_AGENTS_DIR" ]; then
     _error "Agents directory not found: $CAST_AGENTS_DIR"
     return 1
@@ -1363,7 +1425,7 @@ total_runs = cur.fetchone()[0] or 0
 
 project_spend = None
 if project_f:
-    cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE project=?", (project_f,))
+    cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs ar LEFT JOIN sessions s ON s.id = ar.session_id WHERE s.project=?", (project_f,))
     project_spend = cur.fetchone()[0] or 0.0
 
 week_rows = []
@@ -1404,6 +1466,536 @@ elif show_week:
 PYEOF
 }
 
+# ── Subcommand: cost ─────────────────────────────────────────────────────────
+_cmd_cost() {
+  local view=""
+  local project_filter=""
+  local limit_n=20
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --by-task)   view="task"; shift ;;
+      --by-agent)  view="agent"; shift ;;
+      --by-branch) view="branch"; shift ;;
+      --project)   project_filter="${2:-}"; shift 2 ;;
+      --limit)     limit_n="${2:-20}"; shift 2 ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast cost [options]
+
+  --by-task              Group by session (project · date · session id)
+  --by-agent             Group by agent name
+  --by-branch            Group by branch (requires branch capture hook)
+  --project <name>       Filter to a specific project
+  --limit <n>            Max rows to show (default 20)
+USAGE
+        return 0
+        ;;
+      *) shift ;;
+    esac
+  done
+
+  _require_db
+
+  python3 - "$CAST_DB_PATH" "$view" "$project_filter" "$limit_n" "$CAST_JSON" <<'PYEOF'
+import sys, sqlite3, json
+
+db_path, view, project_f, limit_arg, json_mode = sys.argv[1:6]
+json_out = json_mode == "1"
+try:
+    limit_n = int(limit_arg)
+except (ValueError, TypeError):
+    limit_n = 20
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+
+# Detect optional columns once — used to check for branch capture (view == "branch").
+# sessions.project is the canonical project source (agent_runs.project was dropped
+# in migration 022; agent_runs.prompt was also dropped and is no longer read here).
+cur.execute("PRAGMA table_info(agent_runs)")
+_ar_cols = {row["name"] for row in cur.fetchall()}
+
+# Unqualified form (no join) and table-aliased form (when joining sessions).
+DATE_FN    = "date(replace(replace(started_at,'T',' '),'Z',''))"
+DATE_FN_AR = "date(replace(replace(ar.started_at,'T',' '),'Z',''))"
+
+if view == "agent":
+    if project_f:
+        cur.execute(f"""
+            SELECT ar.agent,
+                   COALESCE(SUM(ar.cost_usd),0) AS cost,
+                   COUNT(*) AS runs
+            FROM agent_runs ar
+            LEFT JOIN sessions s ON s.id = ar.session_id
+            WHERE s.project = ?
+            GROUP BY ar.agent
+            ORDER BY cost DESC
+            LIMIT ?
+        """, [project_f, limit_n])
+    else:
+        cur.execute(f"""
+            SELECT agent,
+                   COALESCE(SUM(cost_usd),0) AS cost,
+                   COUNT(*) AS runs
+            FROM agent_runs
+            GROUP BY agent
+            ORDER BY cost DESC
+            LIMIT ?
+        """, [limit_n])
+    rows = [{"agent": r["agent"], "cost": r["cost"], "runs": r["runs"]} for r in cur.fetchall()]
+    conn.close()
+
+    if json_out:
+        out = {"view": "by_agent", "rows": [{"agent": r["agent"], "cost_usd": round(r["cost"], 4), "runs": r["runs"]} for r in rows]}
+        print(json.dumps(out, indent=2))
+        sys.exit(0)
+
+    print(f"{'Agent':<30}  {'Cost':>10}  {'Runs':>6}")
+    print("-" * 52)
+    for r in rows:
+        print(f"{(r['agent'] or '?'):<30}  ${r['cost']:>9.2f}  {r['runs']:>6,}")
+
+elif view == "branch":
+    if "branch" not in _ar_cols:
+        conn.close()
+        if json_out:
+            print(json.dumps({"branch_capture_active": False, "rows": []}, indent=2))
+            sys.exit(0)
+        print("branch attribution is not active on this DB (branch column absent) — run bash install.sh to enable it.")
+        sys.exit(0)
+
+    if project_f:
+        cur.execute(f"""
+            SELECT COALESCE(ar.branch,'(pre-capture)') AS branch,
+                   COALESCE(SUM(ar.cost_usd),0) AS cost,
+                   COUNT(*) AS runs
+            FROM agent_runs ar
+            LEFT JOIN sessions s ON s.id = ar.session_id
+            WHERE s.project = ?
+            GROUP BY COALESCE(ar.branch,'(pre-capture)')
+            ORDER BY cost DESC
+            LIMIT ?
+        """, [project_f, limit_n])
+    else:
+        cur.execute(f"""
+            SELECT COALESCE(branch,'(pre-capture)') AS branch,
+                   COALESCE(SUM(cost_usd),0) AS cost,
+                   COUNT(*) AS runs
+            FROM agent_runs
+            GROUP BY COALESCE(branch,'(pre-capture)')
+            ORDER BY cost DESC
+            LIMIT ?
+        """, [limit_n])
+    rows = [{"branch": r["branch"], "cost": r["cost"], "runs": r["runs"]} for r in cur.fetchall()]
+    conn.close()
+
+    if json_out:
+        out = {"branch_capture_active": True, "rows": [{"branch": r["branch"], "cost_usd": round(r["cost"], 4), "runs": r["runs"]} for r in rows]}
+        print(json.dumps(out, indent=2))
+        sys.exit(0)
+
+    print(f"{'Branch':<40}  {'Cost':>10}  {'Runs':>6}")
+    print("-" * 62)
+    for r in rows:
+        print(f"{r['branch']:<40}  ${r['cost']:>9.2f}  {r['runs']:>6,}")
+
+elif view == "task":
+    if project_f:
+        where = "WHERE s.project = ?"
+        base_params = [project_f]
+    else:
+        where = ""
+        base_params = []
+    params = base_params + [limit_n]
+    cur.execute(f"""
+        SELECT ar.session_id,
+               COALESCE(SUM(ar.cost_usd),0) AS cost,
+               COUNT(*) AS runs,
+               COALESCE(s.project, '?') AS project,
+               COALESCE(
+                   date(replace(replace(s.started_at,'T',' '),'Z','')),
+                   {DATE_FN_AR}
+               ) AS session_date
+        FROM agent_runs ar
+        LEFT JOIN sessions s ON s.id = ar.session_id
+        {where}
+        GROUP BY ar.session_id
+        ORDER BY cost DESC
+        LIMIT ?
+    """, params)
+    raw = cur.fetchall()
+    conn.close()
+    rows = []
+    for r in raw:
+        sid8 = (r["session_id"][:8] if r["session_id"] else "?")
+        rows.append({
+            "session_id": r["session_id"],
+            "cost": r["cost"],
+            "runs": r["runs"],
+            "label": f"{r['project']} · {r['session_date'] or '?'} · {sid8}",
+        })
+
+    if json_out:
+        out_rows = [{"session_id": r["session_id"], "cost_usd": round(r["cost"], 4), "runs": r["runs"], "label": r["label"]} for r in rows]
+        print(json.dumps({"view": "by_task", "rows": out_rows}, indent=2))
+        sys.exit(0)
+
+    print(f"{'Cost':>10}  {'Runs':>5}  Label")
+    print("-" * 70)
+    for r in rows:
+        print(f"${r['cost']:>9.2f}  {r['runs']:>5,}  {r['label']}")
+
+else:
+    # SUMMARY view
+    # sessions.project is canonical — filter via join when --project is set to
+    # avoid referencing the dropped agent_runs.project column.
+    if project_f:
+        cur.execute(f"""
+            SELECT
+                MIN({DATE_FN_AR}) AS first_date,
+                MAX({DATE_FN_AR}) AS last_date,
+                COUNT(*) AS runs,
+                COALESCE(SUM(ar.cost_usd),0) AS total_cost,
+                COALESCE(SUM(ar.input_tokens),0) AS input_tok,
+                COALESCE(SUM(ar.output_tokens),0) AS output_tok,
+                COALESCE(SUM(ar.cache_read_input_tokens),0) AS cache_read_tok,
+                COALESCE(SUM(ar.cache_creation_input_tokens),0) AS cache_write_tok
+            FROM agent_runs ar
+            LEFT JOIN sessions s ON s.id = ar.session_id
+            WHERE s.project = ?
+        """, [project_f])
+    else:
+        cur.execute(f"""
+            SELECT
+                MIN({DATE_FN}) AS first_date,
+                MAX({DATE_FN}) AS last_date,
+                COUNT(*) AS runs,
+                COALESCE(SUM(cost_usd),0) AS total_cost,
+                COALESCE(SUM(input_tokens),0) AS input_tok,
+                COALESCE(SUM(output_tokens),0) AS output_tok,
+                COALESCE(SUM(cache_read_input_tokens),0) AS cache_read_tok,
+                COALESCE(SUM(cache_creation_input_tokens),0) AS cache_write_tok
+            FROM agent_runs
+        """, [])
+    row = cur.fetchone()
+    first_date  = row["first_date"]  or "?"
+    last_date   = row["last_date"]   or "?"
+    runs        = row["runs"]        or 0
+    total_cost  = row["total_cost"]  or 0.0
+    input_tok   = row["input_tok"]   or 0
+    output_tok  = row["output_tok"]  or 0
+    cache_read_tok  = row["cache_read_tok"]  or 0
+    cache_write_tok = row["cache_write_tok"] or 0
+
+    input_side  = input_tok + cache_write_tok + cache_read_tok
+    cache_share = (cache_read_tok / input_side * 100) if input_side > 0 else 0.0
+
+    # Top 5 sessions by cost
+    top_where = "WHERE s.project = ?" if project_f else ""
+    top_p     = [project_f] if project_f else []
+    cur.execute(f"""
+        SELECT ar.session_id,
+               COALESCE(SUM(ar.cost_usd),0) AS cost,
+               COUNT(*) AS cnt,
+               COALESCE(s.project, '?') AS project,
+               COALESCE(
+                   date(replace(replace(s.started_at,'T',' '),'Z','')),
+                   {DATE_FN_AR}
+               ) AS session_date
+        FROM agent_runs ar
+        LEFT JOIN sessions s ON s.id = ar.session_id
+        {top_where}
+        GROUP BY ar.session_id
+        ORDER BY cost DESC
+        LIMIT 5
+    """, top_p)
+    top_rows = []
+    for r in cur.fetchall():
+        sid8 = (r["session_id"][:8] if r["session_id"] else "?")
+        top_rows.append({
+            "session_id": r["session_id"],
+            "cost": r["cost"],
+            "runs": r["cnt"],
+            "label": f"{r['project']} · {r['session_date'] or '?'} · {sid8}",
+        })
+    conn.close()
+
+    if json_out:
+        out = {
+            "period": {"first": first_date, "last": last_date},
+            "runs": runs,
+            "total_cost_usd": round(total_cost, 4),
+            "tokens": {
+                "input": input_tok,
+                "output": output_tok,
+                "cache_read": cache_read_tok,
+                "cache_write": cache_write_tok,
+            },
+            "cache_read_share_pct": round(cache_share, 1),
+            "top_tasks": [{"session_id": r["session_id"], "cost_usd": round(r["cost"], 4), "runs": r["runs"], "label": r["label"]} for r in top_rows],
+        }
+        if project_f:
+            out["project_filter"] = project_f
+        print(json.dumps(out, indent=2))
+        sys.exit(0)
+
+    print(f"Period: {first_date} → {last_date}  |  Runs: {runs:,}  |  Total: ${total_cost:.2f}")
+    print()
+    print("Tokens:")
+    print(f"  Input:       {input_tok:>14,}")
+    print(f"  Output:      {output_tok:>14,}")
+    print(f"  Cache-read:  {cache_read_tok:>14,}")
+    print(f"  Cache-write: {cache_write_tok:>14,}")
+    print(f"Cache-read share of input-side tokens: {cache_share:.1f}%  (input-side = input + cache-write + cache-read)")
+    if top_rows:
+        print()
+        print("Top 5 sessions by cost:")
+        print(f"  {'Cost':>10}  {'Runs':>5}  Label")
+        print("  " + "-" * 68)
+        for r in top_rows:
+            print(f"  ${r['cost']:>9.2f}  {r['runs']:>5,}  {r['label']}")
+PYEOF
+}
+
+# ── Subcommand: predict ──────────────────────────────────────────────────────
+_cmd_predict() {
+  local task_desc=""
+  local limit_n=5
+
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --limit)  limit_n="${2:-5}"; shift 2 ;;
+      --json)   CAST_JSON=1; shift ;;
+      --help|-h)
+        cat <<USAGE
+Usage: cast predict "<task description>" [--limit N] [--json]
+
+  Reads cast.db to predict cost, suggest agents, and surface related incidents.
+
+  --limit <n>    Max agents / incidents to show (default 5)
+  --json         Machine-readable JSON output
+USAGE
+        return 0
+        ;;
+      *)
+        if [ -z "$task_desc" ]; then task_desc="$1"; fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$task_desc" ]; then
+    _error "Usage: cast predict \"<task description>\" [--limit N] [--json]"
+    return 1
+  fi
+
+  _require_db
+
+  python3 - "$CAST_DB_PATH" "$task_desc" "$limit_n" "$CAST_JSON" <<'PYEOF'
+import sys, sqlite3, json, re
+from statistics import median, mean
+
+db_path, task, limit_arg, json_mode = sys.argv[1:5]
+json_out = json_mode == "1"
+try:
+    limit_n = int(limit_arg)
+except (ValueError, TypeError):
+    limit_n = 5
+
+STOP = {"the","and","for","with","this","that","from","into","you","your","are","was","its","but","not"}
+keywords = [w for w in re.findall(r'[a-z0-9]+', task.lower()) if len(w) >= 3 and w not in STOP]
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+
+# ── Section 1: Cost prediction via routing_events keyword scoring ─────────────
+try:
+    cur.execute("SELECT session_id, prompt_preview FROM routing_events WHERE prompt_preview IS NOT NULL AND prompt_preview != ''")
+    re_rows = cur.fetchall()
+except Exception:
+    re_rows = []
+
+total_sessions_searched = 0
+session_scores = {}
+if keywords and re_rows:
+    session_previews = {}
+    for row in re_rows:
+        sid = row["session_id"]
+        if sid:
+            session_previews.setdefault(sid, []).append((row["prompt_preview"] or "").lower())
+    total_sessions_searched = len(session_previews)
+    for sid, previews in session_previews.items():
+        combined = " ".join(previews)
+        score = sum(1 for kw in set(keywords) if kw in combined)
+        if score > 0:
+            session_scores[sid] = score
+
+matched_sids = list(session_scores.keys())
+
+cost_data = {"median": None, "mean": None, "min": None, "max": None, "count": 0}
+session_costs = []
+if matched_sids:
+    placeholders = ",".join("?" * len(matched_sids))
+    cur.execute(f"""
+        SELECT ar.session_id, COALESCE(SUM(ar.cost_usd), 0) AS total_cost
+        FROM agent_runs ar
+        WHERE ar.session_id IN ({placeholders})
+        GROUP BY ar.session_id
+    """, matched_sids)
+    for r in cur.fetchall():
+        session_costs.append(r["total_cost"])
+    if session_costs:
+        cost_data["median"] = median(session_costs)
+        cost_data["mean"]   = mean(session_costs)
+        cost_data["min"]    = min(session_costs)
+        cost_data["max"]    = max(session_costs)
+        cost_data["count"]  = len(session_costs)
+
+# ── Section 2: Suggested agents ──────────────────────────────────────────────
+agent_rows = []
+if matched_sids:
+    placeholders = ",".join("?" * len(matched_sids))
+    cur.execute(f"""
+        SELECT ar.agent,
+               COUNT(*) AS runs,
+               COALESCE(AVG(ar.cost_usd), 0) AS avg_cost,
+               SUM(CASE WHEN ar.status='DONE' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS success_rate
+        FROM agent_runs ar
+        WHERE ar.session_id IN ({placeholders})
+          AND ar.agent IS NOT NULL
+        GROUP BY ar.agent
+        ORDER BY runs DESC
+        LIMIT ?
+    """, matched_sids + [limit_n])
+    agent_rows = [{"agent": r["agent"], "runs": r["runs"], "avg_cost": r["avg_cost"], "success_rate": r["success_rate"]} for r in cur.fetchall()]
+
+# dispatch_decisions signal (may be absent/empty — PRAGMA-guard)
+dd_rows = []
+try:
+    cur.execute("PRAGMA table_info(dispatch_decisions)")
+    dd_cols = {row["name"] for row in cur.fetchall()}
+    if dd_cols and keywords:
+        conditions = " OR ".join(["prompt_snippet LIKE ?" for _ in keywords])
+        params = [f"%{kw}%" for kw in keywords]
+        cur.execute(f"""
+            SELECT chosen_agent, outcome, COUNT(*) AS cnt
+            FROM dispatch_decisions
+            WHERE {conditions}
+            GROUP BY chosen_agent, outcome
+            ORDER BY cnt DESC
+            LIMIT ?
+        """, params + [limit_n])
+        dd_rows = [{"chosen_agent": r["chosen_agent"], "outcome": r["outcome"], "cnt": r["cnt"]} for r in cur.fetchall()]
+except Exception:
+    dd_rows = []
+
+# ── Section 3: Related incidents ──────────────────────────────────────────────
+incident_rows = []
+try:
+    cur.execute("PRAGMA table_info(incidents)")
+    inc_cols = {row["name"] for row in cur.fetchall()}
+    if inc_cols and keywords:
+        conditions = " OR ".join(
+            ["(problem_summary LIKE ? OR COALESCE(fix_summary,'') LIKE ?)" for _ in keywords]
+        )
+        params = []
+        for kw in keywords:
+            params += [f"%{kw}%", f"%{kw}%"]
+        cur.execute(f"""
+            SELECT problem_summary, fix_summary, related_commit
+            FROM incidents
+            WHERE {conditions}
+            LIMIT ?
+        """, params + [limit_n])
+        incident_rows = [
+            {"problem_summary": r["problem_summary"], "fix_summary": r["fix_summary"], "related_commit": r["related_commit"]}
+            for r in cur.fetchall()
+        ]
+except Exception:
+    incident_rows = []
+
+conn.close()
+
+# ── JSON output ───────────────────────────────────────────────────────────────
+if json_out:
+    out = {
+        "task": task,
+        "keywords": keywords,
+        "sessions_searched": total_sessions_searched,
+        "matched_sessions": len(matched_sids),
+        "cost_prediction": {
+            "median_usd":   round(cost_data["median"], 4) if cost_data["median"] is not None else None,
+            "mean_usd":     round(cost_data["mean"],   4) if cost_data["mean"]   is not None else None,
+            "min_usd":      round(cost_data["min"],    4) if cost_data["min"]    is not None else None,
+            "max_usd":      round(cost_data["max"],    4) if cost_data["max"]    is not None else None,
+            "sample_count": cost_data["count"],
+        },
+        "suggested_agents": agent_rows,
+        "dispatch_decision_signal": dd_rows,
+        "related_incidents": incident_rows,
+    }
+    print(json.dumps(out, indent=2))
+    sys.exit(0)
+
+# ── Formatted output ──────────────────────────────────────────────────────────
+print(f"predict: {task!r}")
+print(f"Keywords: {', '.join(keywords) if keywords else '(none extracted)'}")
+print()
+
+print("── Cost Prediction ──────────────────────────────────────────────────────")
+if not keywords:
+    print("No usable keywords extracted from task description — cannot predict.")
+elif cost_data["count"] == 0:
+    print(f"No similar tasks found in the record ({total_sessions_searched} sessions searched) — cannot predict.")
+else:
+    conf = " (low confidence — only {k} matched session{s})".format(
+        k=cost_data["count"], s="" if cost_data["count"]==1 else "s"
+    ) if cost_data["count"] < 3 else ""
+    med = cost_data["median"]
+    avg = cost_data["mean"]
+    lo  = cost_data["min"]
+    hi  = cost_data["max"]
+    k   = cost_data["count"]
+    print(f"Tasks like this: ≈ ${med:.4f} median  (mean ${avg:.4f}, range ${lo:.4f}–${hi:.4f}) over {k} similar session{'s' if k!=1 else ''}{conf}")
+print()
+
+print("── Suggested Agents ─────────────────────────────────────────────────────")
+if not agent_rows:
+    if not matched_sids:
+        print("  No similar sessions found — no agent suggestions.")
+    else:
+        print("  No agent run data for matched sessions.")
+else:
+    for a in agent_rows:
+        pct = round((a["success_rate"] or 0) * 100)
+        print(f"  Suggested: {a['agent']:<22} ({a['runs']} run{'s' if a['runs']!=1 else ''} on similar tasks, {pct}% DONE, ≈${a['avg_cost']:.4f} avg)")
+if dd_rows:
+    print()
+    print("  Dispatch-decision signal:")
+    for d in dd_rows:
+        print(f"    {d['chosen_agent']} · outcome={d['outcome']} · {d['cnt']} match{'es' if d['cnt']!=1 else ''}")
+else:
+    print("  (no dispatch-decision history yet)")
+print()
+
+print("── Related Incidents ────────────────────────────────────────────────────")
+if not incident_rows:
+    print("  (no incident history yet)")
+else:
+    for inc in incident_rows:
+        prob   = (inc["problem_summary"] or "")[:80]
+        fix    = (inc["fix_summary"] or "")[:80]
+        commit = inc["related_commit"]
+        commit_str = f"  [{commit[:8]}]" if commit else ""
+        print(f"  {prob}{commit_str}")
+        if fix:
+            print(f"    → {fix}")
+PYEOF
+}
+
 # ── Subcommand: doctor ───────────────────────────────────────────────────────
 _cmd_doctor() {
   local overall_ok=1
@@ -1435,7 +2027,7 @@ _cmd_doctor() {
   # agent_hallucinations, etc.) are intentionally excluded — their writers create
   # them lazily, so they may legitimately be absent on a fresh install.
   local required_tables="sessions agent_runs routing_events agent_memories \
-stream_events tool_call_failures \
+tool_call_failures \
 agent_truncations injection_log quality_gates dispatch_decisions task_queue \
 routines incidents plan_sessions memory_consolidation_runs archived_memories budgets"
   local required_total
@@ -1736,7 +2328,7 @@ PYEOF
   fi
 
   # 13. Honesty surface — reads agent_hallucinations, completeness_events,
-  #     agent_protocol_violations, code_ref_checks. Diagnostic only: failures
+  #     agent_protocol_violations. Diagnostic only: failures
   #     inside this block never flip overall_ok or exit cast doctor early.
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Honesty signals (last 7d)${C_RESET}\n"
@@ -1821,21 +2413,8 @@ PYEOF
       done <<< "$_apv_out"
     fi
 
-    # ── code_ref_checks ──────────────────────────────────────────────────────
-    local _crc_out _crc_rc
-    _crc_out="$(sqlite3 "$CAST_DB_PATH" \
-      "SELECT COUNT(*) FROM code_ref_checks \
-       WHERE verified=0 AND timestamp >= datetime('now','-7 days');" 2>&1)"
-    _crc_rc=$?
-    if echo "$_crc_out" | grep -qi "no such table"; then
-      printf "%b honesty: code_ref_checks — no data yet\n" "$INFO"
-    elif [ $_crc_rc -ne 0 ]; then
-      printf "%b honesty: code_ref_checks — unavailable (db query failed)\n" "$INFO"
-    elif [ -z "$_crc_out" ] || [ "$_crc_out" -eq 0 ] 2>/dev/null; then
-      printf "%b honesty: code_ref_checks — none in last 7d\n" "$OK"
-    else
-      printf "%b honesty: code_ref_checks — %d unverified ref(s)\n" "$WARN" "$_crc_out"
-    fi
+    # ── code_ref_checks — RETIRED v9 Phase C U7b (writer purged in v9 S5) ───────
+    # Table removed from canonical schema; no longer reported in honesty surface.
 
     # ── silent truncations (maxTurns) ────────────────────────────────────────
     # Detects agent_runs rows that were silently cut off by the maxTurns cap:
@@ -2052,19 +2631,35 @@ PYEOF
     overall_ok=0
   fi
 
-  # 16. MCP servers reachable (best-effort)
-  local settings_file="${HOME}/.claude/settings.json"
-  if [ -f "$settings_file" ]; then
+  # 16. MCP servers reachable (best-effort, multi-scope: settings.json, settings.local.json, .mcp.json)
+  local mcp_scope_1="${HOME}/.claude/settings.json"
+  local mcp_scope_2="${HOME}/.claude/settings.local.json"
+  local mcp_scope_3="${PWD}/.mcp.json"
+  local mcp_scopes=()
+  [ -f "$mcp_scope_1" ] && mcp_scopes+=("$mcp_scope_1")
+  [ -f "$mcp_scope_2" ] && mcp_scopes+=("$mcp_scope_2")
+  [ -f "$mcp_scope_3" ] && mcp_scopes+=("$mcp_scope_3")
+  if [ "${#mcp_scopes[@]}" -eq 0 ]; then
+    printf "%b MCP servers: no config found (settings.json / settings.local.json / ./.mcp.json)\n" "$INFO"
+  else
+    local mcp_checked="" mcp_p
+    for mcp_p in "${mcp_scopes[@]}"; do
+      local mcp_bn
+      mcp_bn="$(basename "$mcp_p")"
+      mcp_checked="${mcp_checked:+${mcp_checked}, }${mcp_bn}"
+    done
     local mcp_status
-    mcp_status="$(python3 - "$settings_file" <<'PYEOF'
+    mcp_status="$(python3 - "${mcp_scopes[@]}" <<'PYEOF'
 import json, sys, os, shutil, subprocess
-try:
-    with open(sys.argv[1]) as f:
-        cfg = json.load(f)
-    servers = cfg.get("mcpServers", {})
-except Exception:
-    sys.exit(0)
-for name, server in servers.items():
+merged = {}
+for path in sys.argv[1:]:
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+        merged.update(cfg.get("mcpServers", {}))
+    except Exception:
+        pass
+for name, server in merged.items():
     url = server.get("url")
     cmd = server.get("command")
     if url:
@@ -2083,7 +2678,7 @@ for name, server in servers.items():
 PYEOF
   2>/dev/null || echo "")"
     if [ -z "$mcp_status" ]; then
-      printf "%b MCP servers: none configured\n" "$INFO"
+      printf "%b MCP servers: none configured (checked %s)\n" "$INFO" "$mcp_checked"
     else
       local mcp_ok=0 mcp_bad=0
       while IFS='|' read -r name status target; do
@@ -2105,8 +2700,6 @@ PYEOF
         done <<< "$mcp_status"
       fi
     fi
-  else
-    printf "%b MCP servers: settings.json not found\n" "$INFO"
   fi
 
   # 17. Routines validate
@@ -3902,6 +4495,80 @@ for r in rows:
 PYEOF
 }
 
+# ── Subcommand: feature ──────────────────────────────────────────────────────
+_cmd_feature() {
+  local desc="${1:-}"
+  if [ -z "$desc" ]; then
+    printf 'usage: cast feature "<feature description>"\n' >&2
+    return 1
+  fi
+
+  printf '── pre-flight cost estimate ──\n'
+  ( _cmd_predict "$desc" ) || true
+
+  printf '\n[CAST-FEATURE] Build this feature via the CAST app-build engine. In the orchestrating session, invoke the Workflow tool:\n'
+  printf '  Workflow({ scriptPath: "%s/workflows/cast-feature.workflow.js", args: { desc: "%s", project: "%s" } })\n' \
+    "${CAST_REPO_DIR}" "${desc//\"/\\\"}" "${PWD}"
+  printf 'When it returns, run:  cast cost --by-task --limit 1   # actual spend for this run\n'
+}
+
+# ── Subcommand: mcp ─────────────────────────────────────────────────────────
+_cmd_mcp() {
+  local sub="${1:-}"; shift 2>/dev/null || true
+  local server="${CAST_SCRIPTS_DIR}/cast-mcp-server.py"
+  [[ -f "$server" ]] || server="${CAST_REPO_DIR}/scripts/cast-mcp-server.py"
+  case "$sub" in
+    serve)
+      [[ -f "$server" ]] || { _error "cast-mcp-server.py not found. Run: bash install.sh"; exit 1; }
+      exec python3 "$server" "$@"
+      ;;
+    config)
+      cat <<'EOF'
+Opt in by adding CAST's read-only record server to a project .mcp.json:
+
+  {
+    "mcpServers": {
+      "cast-record": {
+        "type": "stdio",
+        "command": "cast",
+        "args": ["mcp", "serve"]
+      }
+    }
+  }
+
+Or register via the Claude Code CLI:
+
+  claude mcp add cast-record -- cast mcp serve
+
+Read-only (cast.db mode=ro) and local-only (stdio, no network). 5 tools + 5 resources.
+EOF
+      ;;
+    status)
+      local db="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
+      [[ -f "$db" ]] || { printf 'cast mcp: cast.db not found at %s\n' "$db"; exit 1; }
+      [[ -f "$server" ]] || { _error "cast-mcp-server.py not found"; exit 1; }
+      printf 'cast mcp: server %s\ncast mcp: cast.db %s\n' "$server" "$db"
+      local out=""
+      out="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | python3 "$server" 2>/dev/null | head -1 || true)"
+      if printf '%s' "$out" | grep -q '"protocolVersion"'; then
+        local pv; pv="$(printf '%s' "$out" | sed -n 's/.*"protocolVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        printf 'cast mcp: handshake OK (protocol %s)\n' "${pv:-unknown}"
+      else
+        printf 'cast mcp: handshake FAILED\n'; exit 1
+      fi
+      ;;
+    ""|--help|-h|help)
+      cat <<'EOF'
+usage: cast mcp <serve|config|status>
+  serve    Run the read-only MCP stdio server (invoked by MCP clients via .mcp.json)
+  config   Print the .mcp.json entry / `claude mcp add` line to opt in
+  status   Check cast.db is present and the server handshake succeeds
+EOF
+      ;;
+    *) _error "Unknown 'cast mcp' subcommand: $sub"; exit 1 ;;
+  esac
+}
+
 # ── Subcommand: ledger ──────────────────────────────────────────────────────
 _cmd_ledger() {
   local ledger_script="${CAST_SCRIPTS_DIR}/cast-ledger.py"
@@ -4149,6 +4816,7 @@ case "$SUBCOMMAND" in
   eval)                 _cmd_eval "$@" ;;
   memory)               _cmd_memory "$@" ;;
   budget)               _cmd_budget "$@" ;;
+  cost)                 _cmd_cost "$@" ;;
   agents)               _cmd_agents "$@" ;;
   hooks)                _cmd_hooks "$@" ;;
   backup)               _cmd_backup "$@" ;;
@@ -4164,10 +4832,13 @@ case "$SUBCOMMAND" in
   cheap)                _cmd_cheap "$@" ;;
   routines)             _cmd_routines "$@" ;;
   ask)                  _cmd_ask "$@" ;;
+  predict)              _cmd_predict "$@" ;;
+  feature)              _cmd_feature "$@" ;;
   ledger)               _cmd_ledger "$@" ;;
   verify-chain)         _cmd_verify_chain "$@" ;;
   provenance)           _cmd_provenance "$@" ;;
   incidents)            _cmd_incidents "$@" ;;
+  mcp)                  _cmd_mcp "$@" ;;
   files)                _cmd_files "$@" ;;
   batch)                _cmd_batch "$@" ;;
   ci-local)             _cmd_ci_local "$@" ;;

@@ -1,0 +1,12 @@
+# CAST optional dependencies
+# ---------------------------
+# CAST's core (hooks, cast.db, agents, the `cast` CLI) is Python-stdlib-only and needs
+# nothing here. These packages unlock optional surfaces only. Install all, or just the
+# one you need:
+#   pip install -r requirements-optional.txt
+#   pip install PyYAML            # smallest common case (routines + evals)
+
+PyYAML                 # `cast routine` YAML parsing + eval-runner + contract-runner   (import yaml)
+textual                # `cast dash` terminal dashboard                                (scripts/cast-dash.py)
+presidio-analyzer      # optional enhanced PII detection for cast-redact.py
+presidio-anonymizer    # optional enhanced PII anonymization for cast-redact.py

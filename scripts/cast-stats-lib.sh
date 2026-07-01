@@ -56,9 +56,20 @@ cast_stat_tests() {
   )
 }
 
+# cast_stat_test_files — count tracked BATS test FILES (not @test cases).
+# Mirrors cast_stat_tests's file corpus so file-count and case-count describe
+# the same set. Feeds the README CAST_TEST_FILE_COUNT marker (fixes the old
+# hand-typed, drift-prone "163 test files" prose).
+cast_stat_test_files() {
+  (
+    cd "${CAST_STATS_REPO_ROOT}"
+    git ls-files 'tests/*.bats' 'tests/*/*.bats' | wc -l | tr -d ' '
+  )
+}
+
 # cast_stat_tables — count DISTINCT table names across canonical schema sources.
 # Covers cast-db-init.sh + scripts/migrations/*.sql.
-# Must yield 36 (35 + eval_runs added in v8-A3).
+# Must yield 38 (canonical count after v9 Phase C retired stream_events, teammate_messages, code_ref_checks).
 cast_stat_tables() {
   (
     cd "${CAST_STATS_REPO_ROOT}"

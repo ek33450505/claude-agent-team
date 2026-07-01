@@ -469,3 +469,33 @@ if found:
     sys.exit(1)
 PYEOF
 }
+
+# =============================================================================
+# Config backup safety (commit fe343ab)
+# =============================================================================
+
+@test "Install: backs up existing config before overwriting (safety)" {
+  # Pre-create a config file with old content
+  mkdir -p "$HOME/.claude/config"
+  local old_content="old_config_content_v1"
+  printf '%s' "$old_content" > "$HOME/.claude/config/egress-policy.json"
+
+  # Run install (which should overwrite the config)
+  run_install
+
+  # Verify new config was installed
+  [ -f "$HOME/.claude/config/egress-policy.json" ]
+
+  # Verify old config was backed up to .bak
+  [ -f "$HOME/.claude/config/egress-policy.json.bak" ]
+
+  # Verify backup contains the old content
+  local backup_content
+  backup_content="$(cat "$HOME/.claude/config/egress-policy.json.bak")"
+  [ "$backup_content" = "$old_content" ]
+
+  # Verify new config is different from old
+  local new_content
+  new_content="$(cat "$HOME/.claude/config/egress-policy.json")"
+  [ "$new_content" != "$old_content" ]
+}

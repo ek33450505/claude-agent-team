@@ -58,6 +58,12 @@ DEFAULT_DB = Path(os.environ.get("CAST_DB_PATH", str(Path.home() / ".claude" / "
 # and other parsing artifacts while keeping all valid CAST column names.
 _COL_RE = re.compile(r"^[a-zA-Z]\w+$")
 
+# Permissive bare-word matcher for validating REAL schema identifiers
+# (table/column names from sqlite_master/PRAGMA), where single-char names
+# like FTS config's `k`/`v` are legitimate — unlike _COL_RE, which is a
+# source-parsing heuristic that intentionally drops single letters.
+_SCHEMA_IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*\Z')
+
 SQL_KEYWORDS = frozenset({
     "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL",
     "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE",
@@ -618,6 +624,14 @@ def _parse_sql_ops(
             _next_from.start() if _next_from else len(_after_match),
         )
         context = context[:_match_end_ctx + _clip]
+        # The 600-char window (above) can bisect a column name at its boundary —
+        # e.g. a truncated "s.project" leaves "...WHERE s.proj", which the alias.col
+        # regex below would mis-capture as a phantom column ("sessions.proj"). Drop
+        # any trailing partial word token so truncation never invents a column.
+        # Safe given the checker's "over-capture is_used" bias: a real column at the
+        # exact clip edge is captured by its other references; the 600-char window is
+        # heuristic, not authoritative.
+        context = re.sub(r"\w+$", "", context)
         for jm in join_re.finditer(context):
             jt = jm.group(1).lower()
             ja = (jm.group(2) or jt).lower()
@@ -924,6 +938,8 @@ def get_fill_rates(
             ).fetchall()
         ]
         for table in tables:
+            if not _SCHEMA_IDENT_RE.match(table):
+                continue
             try:
                 cols = [
                     r[1] for r in conn.execute(
@@ -936,6 +952,8 @@ def get_fill_rates(
                         fill_rates[(table, col)] = 0.0
                     continue
                 for col in cols:
+                    if not _SCHEMA_IDENT_RE.match(col):
+                        continue
                     non_null = conn.execute(
                         f"SELECT COUNT(*) FROM [{table}]"
                         f" WHERE [{col}] IS NOT NULL AND [{col}] != ''"

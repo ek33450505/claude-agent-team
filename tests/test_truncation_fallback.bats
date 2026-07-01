@@ -8,11 +8,10 @@ DB_INIT="$REPO_DIR/scripts/cast-db-init.sh"
 TRUNCATION_HOOK="$REPO_DIR/scripts/cast-truncation-check.sh"
 
 setup() {
-  export ORIG_HOME="$HOME"
-  export TEMP_HOME="$(mktemp -d "${TMPDIR:-/tmp}/cast-trunc-test-home-XXXX")"
-  export HOME="$TEMP_HOME"
-  mkdir -p "$TEMP_HOME/.claude/logs"
-  export TEMP_DB="$TEMP_HOME/cast.db"
+  load 'helpers/setup'
+  setup_temp_home
+  mkdir -p "$HOME/.claude/logs"
+  export TEMP_DB="$HOME/cast.db"
   export CAST_DB_PATH="$TEMP_DB"
   unset CLAUDE_SUBPROCESS
 
@@ -25,8 +24,7 @@ setup() {
 }
 
 teardown() {
-  export HOME="$ORIG_HOME"
-  [ -n "${TEMP_HOME:-}" ] && rm -rf "$TEMP_HOME"
+  teardown_temp_home
 }
 
 # Helper: build a SubagentStop JSON payload with truncation markers

@@ -95,14 +95,16 @@ print(json.dumps({
 }
 
 # ---------------------------------------------------------------------------
-# Test 5: CLAUDE_SUBPROCESS=1 allows stash — subprocess bypass applies
+# Test 5: CLAUDE_SUBPROCESS=1 no longer bypasses git stash — the irreversibility
+# guard runs in EVERY context (subprocess bypass was the bug, now fixed).
 # ---------------------------------------------------------------------------
 
-@test "pre-tool-guard allows 'git stash' from CLAUDE_SUBPROCESS=1 context (exit 0)" {
+@test "pre-tool-guard blocks 'git stash' even from CLAUDE_SUBPROCESS=1 context (exit 2)" {
   export CLAUDE_SUBPROCESS=1
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git stash list")"
 
-  assert_success
+  assert_failure
+  assert_output --partial "stash"
 }
 
 # ---------------------------------------------------------------------------

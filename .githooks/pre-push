@@ -13,8 +13,38 @@ cd "$REPO_ROOT"
 # subprocesses that also need refs (pre-push-ci-check.sh) receive them via a pipe.
 _PUSH_STDIN="$(cat)"
 
-# Run ubuntu check (non-blocking; exits 0 if Docker is unavailable)
-bash "$REPO_ROOT/scripts/pre-push-ubuntu-check.sh" || true
+# Determine if ALL refs being pushed are deletions (local_sha = 40 zeros).
+# Deletion pushes carry nothing to the remote — skip slow build/check steps.
+_ZERO_SHA="0000000000000000000000000000000000000000"
+_ALL_DELETIONS="0"
+if [ -n "${_PUSH_STDIN:-}" ]; then
+  _del_has_refs=0
+  _del_all=1
+  while IFS=' ' read -r _lref _lsha _rref _rsha; do
+    [ -z "${_lsha:-}" ] && continue
+    _del_has_refs=1
+    if [ "$_lsha" != "$_ZERO_SHA" ]; then
+      _del_all=0
+      break
+    fi
+  done <<< "$_PUSH_STDIN"
+  if [ "$_del_has_refs" = "1" ] && [ "$_del_all" = "1" ]; then
+    _ALL_DELETIONS="1"
+  fi
+fi
+
+# Ubuntu CI-parity check — OPT-IN ONLY (per the 2026-06-02 test policy: the full suite is
+# batched before releases, NOT a per-push gate). When Docker is up, pre-push-ubuntu-check.sh
+# runs `make test-ubuntu` (docker build + the full BATS suite in a container, several minutes);
+# running it on every push hung the push pipeline (2026-06-30, F3). Opt in with
+# CAST_RUN_UBUNTU_PUSH=1. Deletion-only pushes always skip.
+if [ "$_ALL_DELETIONS" = "1" ]; then
+  echo "[CAST pre-push] Skipping ubuntu check (deletion-only push)" >&2
+elif [ "${CAST_RUN_UBUNTU_PUSH:-0}" = "1" ]; then
+  bash "$REPO_ROOT/scripts/pre-push-ubuntu-check.sh" || true
+else
+  echo "[CAST pre-push] Ubuntu CI-parity check is opt-in (2026-06-02 policy). Opt in: CAST_RUN_UBUNTU_PUSH=1 git push" >&2
+fi
 
 # PII / secret gate — fail fast before spending time on tests
 if [ "${CAST_SKIP_PII_CHECK:-0}" != "1" ]; then

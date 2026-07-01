@@ -2,7 +2,8 @@
 # cast-db-init.sh — CAST SQLite State Foundation
 # Creates ~/.claude/cast.db with core tables + (dormant) swarm observability tables:
 #   sessions, agent_runs, routing_events, agent_memories
-#   swarm_sessions, teammate_runs, teammate_messages  (writers: /swarm retired v9; experimental native Agent Teams hooks re-populate these when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 — dormant otherwise)
+#   swarm_sessions, teammate_runs  (writers: /swarm retired v9; experimental native Agent Teams hooks re-populate these when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 — dormant otherwise)
+#   teammate_messages, stream_events: retired v9 Phase C (U7a) — removed from canonical; physical DROP from live DB is a separate gated step
 #   otel_metrics, otel_events  (writer: cast-otel-collector.py; native OTLP feed, opt-in OFF by default)
 #   record_fts (FTS5 full-text index over the whole record; writer: cast-ask-index — v9 A3)
 #   record_embed (semantic sidecar for vector search; writer: cast-ask-index — v9 A3)
@@ -54,30 +55,25 @@ CURRENT_VERSION="$(sqlite3 "$DB_PATH" 'PRAGMA user_version;' 2>/dev/null || echo
 
 # If already at v8+, ensure version-specific additive tables exist, then FALL THROUGH
 # to the unconditional self-healing block at the bottom (do NOT exit here).
+#
+# NOTE — INTENTIONAL TRIPLICATION: several tables (swarm_sessions,
+# teammate_runs, tool_call_failures) are defined in THREE heredocs:
+#   (1) this v8+ additive-guarantee block (STREAM_TABLES, just below),
+#   (2) the v7→v8 migration block (MIGRATE_V8, ~L152), and
+#   (3) the fresh-install canonical SQL block (SQL, ~L265).
+# All three copies must remain byte-consistent with each other. The triplication is
+# required so every code path — a v8+ DB that missed an earlier run, a v7 upgrade,
+# or a fresh install — lands on the same schema. Do NOT collapse them; removing any
+# copy silently breaks the corresponding self-heal or migration path.
+# Note: stream_events and teammate_messages were retired in v9 Phase C (U7a) —
+# removed from all three heredocs; physical DROP from live DB is a separate gated step.
 if [ "$CURRENT_VERSION" -ge 8 ]; then
-  # Additive migration: create stream_events if missing (stream_hook_events retired via migration 015)
-  # Also add cache token columns if missing (Task 0a: token optimization)
+  # Additive migration: add cache token columns if missing (Task 0a: token optimization)
+  # Note: stream_events retired v9 Phase C (U7a); stream_hook_events retired via migration 015
   # Note: model_used column was dropped via migration 014 (audit 2026-05-16 #3)
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cache_read_input_tokens INTEGER;" 2>/dev/null || true
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cache_creation_input_tokens INTEGER;" 2>/dev/null || true
   sqlite3 "$DB_PATH" <<'STREAM_TABLES'
-CREATE TABLE IF NOT EXISTS stream_events (
-  id                  TEXT PRIMARY KEY,
-  session_id          TEXT,
-  timestamp           TEXT,
-  event_type          TEXT,
-  tool_name           TEXT,
-  tool_input_preview  TEXT,
-  status              TEXT,
-  duration_ms         INTEGER,
-  raw_json            TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_stream_events_session
-  ON stream_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
-  ON stream_events(timestamp);
-
 CREATE TABLE IF NOT EXISTS swarm_sessions (
   id           TEXT PRIMARY KEY,
   team_name    TEXT NOT NULL,
@@ -105,18 +101,7 @@ CREATE TABLE IF NOT EXISTS teammate_runs (
   tokens_out   INTEGER DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS teammate_messages (
-  id           TEXT PRIMARY KEY,
-  swarm_id     TEXT REFERENCES swarm_sessions(id),
-  from_agent   TEXT,
-  to_agent     TEXT,
-  message_type TEXT,
-  payload      TEXT,
-  timestamp    TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
-CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
 
 -- Indexes added 2026-04-16 audit remediation
@@ -148,25 +133,9 @@ fi
 
 # Migrate v7 → v8: add swarm tables (additive only — no drops)
 # Note: model_used column was dropped via migration 014 (audit 2026-05-16 #3)
+# (2/3 of intentional triplication — see explanation near the v8+ STREAM_TABLES block above)
 if [ "$CURRENT_VERSION" -eq 7 ]; then
   sqlite3 "$DB_PATH" <<'MIGRATE_V8'
-CREATE TABLE IF NOT EXISTS stream_events (
-  id                  TEXT PRIMARY KEY,
-  session_id          TEXT,
-  timestamp           TEXT,
-  event_type          TEXT,
-  tool_name           TEXT,
-  tool_input_preview  TEXT,
-  status              TEXT,
-  duration_ms         INTEGER,
-  raw_json            TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_stream_events_session
-  ON stream_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
-  ON stream_events(timestamp);
-
 CREATE TABLE IF NOT EXISTS swarm_sessions (
   id           TEXT PRIMARY KEY,
   team_name    TEXT NOT NULL,
@@ -194,18 +163,7 @@ CREATE TABLE IF NOT EXISTS teammate_runs (
   tokens_out   INTEGER DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS teammate_messages (
-  id           TEXT PRIMARY KEY,
-  swarm_id     TEXT REFERENCES swarm_sessions(id),
-  from_agent   TEXT,
-  to_agent     TEXT,
-  message_type TEXT,
-  payload      TEXT,
-  timestamp    TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
-CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
 
 -- Indexes added 2026-04-16 audit remediation
@@ -227,7 +185,7 @@ CREATE TABLE IF NOT EXISTS tool_call_failures (
 
 PRAGMA user_version = 8;
 MIGRATE_V8
-  echo "cast.db migrated v7 → v8 (added swarm_sessions, teammate_runs, teammate_messages)" >&2
+  echo "cast.db migrated v7 → v8 (added swarm_sessions, teammate_runs)" >&2
   CURRENT_VERSION=8
 fi
 
@@ -261,6 +219,7 @@ MIGRATE_V7
 fi
 
 # Fresh install (no existing DB or version 0-6)
+# (3/3 of intentional triplication — see explanation near the v8+ STREAM_TABLES block above)
 if [ "$CURRENT_VERSION" -lt 7 ]; then
   sqlite3 "$DB_PATH" <<'SQL'
 PRAGMA foreign_keys = ON;
@@ -295,7 +254,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   owns_files      TEXT,
   duration_ms     INTEGER,
   tool_uses       INTEGER,
-  abandoned_at    TIMESTAMP
+  abandoned_at    TIMESTAMP,
+  branch          TEXT
 );
 
 -- Routing events: structured event log
@@ -351,25 +311,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 -- idx_agent_runs_project removed (agent_runs.project dropped in migration 022 wave-3)
 CREATE INDEX IF NOT EXISTS idx_routing_events_event_type ON routing_events(event_type);
 
--- Stream events: stream-JSON observability pipeline (v4.6)
-CREATE TABLE IF NOT EXISTS stream_events (
-  id                  TEXT PRIMARY KEY,
-  session_id          TEXT,
-  timestamp           TEXT,
-  event_type          TEXT,
-  tool_name           TEXT,
-  tool_input_preview  TEXT,
-  status              TEXT,
-  duration_ms         INTEGER,
-  raw_json            TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_stream_events_session
-  ON stream_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp
-  ON stream_events(timestamp);
-
--- Swarm observability tables (v8)
+-- Swarm observability tables (v8; stream_events retired v9 Phase C U7a)
 CREATE TABLE IF NOT EXISTS swarm_sessions (
   id           TEXT PRIMARY KEY,
   team_name    TEXT NOT NULL,
@@ -397,18 +339,7 @@ CREATE TABLE IF NOT EXISTS teammate_runs (
   tokens_out   INTEGER DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS teammate_messages (
-  id           TEXT PRIMARY KEY,
-  swarm_id     TEXT REFERENCES swarm_sessions(id),
-  from_agent   TEXT,
-  to_agent     TEXT,
-  message_type TEXT,
-  payload      TEXT,
-  timestamp    TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_teammate_runs_swarm ON teammate_runs(swarm_id);
-CREATE INDEX IF NOT EXISTS idx_teammate_messages_swarm ON teammate_messages(swarm_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_sessions_team ON swarm_sessions(team_name);
 
 -- Tool call failures: PostToolUseFailure hook events (separate from routing_events)
@@ -666,6 +597,9 @@ sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN owns_files TEXT;" 2>/dev/n
 # read by cast-duration-check.sh. Were not in the fresh-install CREATE TABLE prior to v7.4.0.
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN duration_ms INTEGER;" 2>/dev/null || true
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN tool_uses INTEGER;" 2>/dev/null || true
+
+# agent_runs.branch — git branch at capture time (writer: cast-subagent-stop-hook.sh; reader: cast cost --by-branch). F1.
+sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN branch TEXT;" 2>/dev/null || true
 
 # dispatch_decisions.outcome — written by cast_db.py ensure_schema_columns(). Was not in the
 # fresh-install CREATE TABLE prior to v7.4.0. Must match default used by cast_db.py ('pending').
@@ -935,22 +869,9 @@ AGENT_HALLUCINATIONS_TABLE
   _columns_added=1
 fi
 
-# code_ref_checks: code reference verification (writer: cast-code-ref-check.sh)
-if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "code_ref_checks"; then
-  sqlite3 "$DB_PATH" <<'CODE_REF_CHECKS_TABLE'
-CREATE TABLE IF NOT EXISTS code_ref_checks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT,
-    agent_name TEXT,
-    ref_type TEXT,
-    ref_name TEXT,
-    verified INTEGER,
-    location TEXT,
-    timestamp TEXT
-);
-CODE_REF_CHECKS_TABLE
-  _columns_added=1
-fi
+# code_ref_checks: RETIRED in v9 Phase C (U7b) — writer cast-code-ref-guard.sh was purged in v9 S5
+# (high false-positive rate); table was empty (0 rows) with no writers. Physical DROP from live DB
+# is a separate gated maintenance step; canonical schema no longer provisions this table.
 
 # compaction_events: context compaction telemetry (writer: cast-post-compact-hook.sh)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "compaction_events"; then
@@ -1117,9 +1038,11 @@ OTEL_EVENTS_TABLE
   _columns_added=1
 fi
 
-# attestations — completion-attestation verdicts mirrored by the `attest` plugin's
+# attestations — completion-attestation verdicts written by the `attest` plugin's
 # SubagentStop hook (zero-LLM DONE-gate). attest owns the writer; CAST declares the
 # schema here so the table is a known/owned surface (not a db-contract safe-drop phantom).
+# Status: LIVE — the external `attest` plugin's SubagentStop hook IS the writer (~408 rows).
+# The db-contract: external-writer directive below is correct; table is active, not dormant.
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "attestations"; then
   sqlite3 "$DB_PATH" <<'ATTESTATIONS_TABLE'
 -- db-contract: external-writer table=attestations source=attest

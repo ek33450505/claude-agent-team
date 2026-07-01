@@ -11,33 +11,38 @@ The principle: **a verification system that cannot distinguish "I checked and it
 
 Honesty about completion is now a first-class CAST concern: a false "done" breaks trust in every output and wastes real money on hallucinated evidence.
 
-## What Already Exists: The Dormant Honesty Layer
+## What Already Exists: The Active Honesty Layer
 
-Four real sensors write to `cast.db` on live hook events. **Nothing reads them yet.** They are the foundation; the work this session is surfacing them.
+Four real sensors write to `cast.db` on live hook events. **`cast doctor` reads all three active tables and derives the fourth check.** They are the foundation; this session surfaced them.
 
 ### Table 1: `agent_hallucinations`
 - **Source:** `scripts/cast_claimed_work_verifier.py` (SubagentStop hook)
-- **Signals:** An agent claimed to create a file (e.g., "wrote `/path/to/results.json`") but the file does not exist after the subagent returned.
-- **Current state:** Row writes work. Observability: none. Doctor surface will surface "N agents hallucinated file creation."
+- **Signals:** An agent claimed to create a file (e.g., "wrote `~/path/to/results.json`") but the file does not exist after the subagent returned.
+- **Current state:** Row writes work. Observability: live via `cast doctor` — surfaces "N agents hallucinated file creation" with per-agent breakdown.
 
 ### Table 2: `completeness_events`
 - **Source:** `scripts/cast-response-completeness-hook.sh` (SubagentStop hook)
 - **Signals:** Agent returned without a Status block (protocol violation) or output was truncated at the model's token limit.
-- **Current state:** Row writes work. Observability: none. Doctor surface will read this and flag "truncation detected" in orange/warn color.
+- **Current state:** Row writes work. Observability: live via `cast doctor` — reads and flags truncation events with per-severity breakdown.
 
 ### Table 3: `agent_protocol_violations`
 - **Source:** `scripts/cast-agent-protocol-check.sh` (SubagentStop hook)
 - **Signals:** Agent prose says "dispatching agent X" but never actually called the dispatch tool. Prose-only dispatch claims with zero tool evidence.
-- **Current state:** Row writes work. Observability: none.
+- **Current state:** Row writes work. Observability: live via `cast doctor` — reads and flags protocol violations with per-agent breakdown.
 
-### Table 4: `code_ref_checks`
-- **Source:** _(removed in v9 S5)_ — the unwired `cast-code-ref-guard.sh` guard was purged as dead code; the `code_ref_checks` table is retained (record-is-product).
+### Check 4: `silent truncations` (maxTurns) — Derived, not a table
+- **Source:** Derived from `agent_runs` table (no dedicated hook required)
+- **Signals:** An agent_runs row remains stuck in `status='running'` for >2 hours (pre-reaper), or bears `status='abandoned'` with an `abandoned_at` timestamp in the last 7 days (reaped by the cast-abandon-stale-runs.py reaper). Indicates the agent hit the maxTurns cap and was stopped silently without emitting a Status block.
+- **Current state:** Row reads work. Observability: live via `cast doctor` — detects and flags suspected maxTurns truncations with per-agent count.
+
+### Table 4: `code_ref_checks` _(RETIRED — v9 Phase C U7b)_
+- **Source:** _(removed in v9 S5)_ — the unwired `cast-code-ref-guard.sh` guard was purged as dead code (high false-positive rate: it extracted bare tokens like `foo()` and grepped `scripts/`+`bin/`, manufacturing false `NOT_FOUND` rows for legit external references).
 - **Signals:** Agent claimed a function/file/path exists (e.g., "`foo()` in scripts/") but grep found nothing.
-- **Current state:** Table is empty; the guard script was removed (it never fired on any hook).
+- **Current state:** **RETIRED in v9 Phase C U7b.** Table removed from canonical schema (`cast-db-init.sh`), honesty doctor surface, and `check-honesty-table.py` allowlist. No writer has ever existed in a wired hook; 0 rows at time of retirement. Physical DROP from live DB is a separate gated maintenance step.
 
-### Key Finding (Blunt)
+### Key Finding (Shipped)
 
-**All four sensors are digital dead-drops.** They write into a database that nothing reads. The honesty feature is not missing — it is **invisible**.
+**All three active honesty tables are now read by `cast doctor`.** They write into a database that is actively queried and surfaced to the user. The honesty feature is **live and observable**. (The fourth sensor class — `code_ref_checks` — had no wired writer and was retired in v9 Phase C U7b.)
 
 ## Design Principle: Honest Degradation
 
@@ -47,17 +52,17 @@ Encode it everywhere: **when a check cannot run, it must report that it couldn't
 
 Concretely: if `agent_hallucinations` is empty because the SubagentStop hook never fired (not because no hallucinations occurred), the doctor surface prints `INFO agent_hallucinations: 0 rows (hook may not have fired)`, not `OK 0 hallucinations detected`.
 
-## Decision: What We're Building NOW
+## Decision: What We Built
 
-**Rank 1 — `cast doctor` honesty surface** (THIS SESSION)
+**Rank 1 — `cast doctor` honesty surface** (SHIPPED — PR #135, extended v9 Phase C)
 
-A new read-only block in `bin/cast _cmd_doctor` that aggregates the four tables (`agent_hallucinations`, `completeness_events`, `agent_protocol_violations`, `code_ref_checks`) and prints them with honest degradation:
+A read-only block in `bin/cast _cmd_doctor` (lines 2330–2449) that aggregates the three active tables (`agent_hallucinations`, `completeness_events`, `agent_protocol_violations`) and derives the fourth check (silent truncations via agent_runs). Prints results with honest degradation. (`code_ref_checks` was retired in v9 Phase C U7b — writer never wired; 0 rows.)
 
-- **Green (OK):** Table has 0 rows and the hook is confirmed wired.
-- **Orange (WARN):** Table has N rows; list affected agents + dates.
-- **Blue (INFO):** Table is empty but hook status is unknown; admit the uncertainty.
+- **Green (OK):** Table has 0 rows (or no qualifying rows in the 7-day window).
+- **Orange (WARN):** Table has N rows in the last 7 days; lists affected agents + counts.
+- **Blue (INFO):** Table is absent or hook status is unknown; admits the uncertainty.
 
-**Leverage:** Activates all four dormant signals *at once* with zero new failure surface (it is a read-only query, never a hook). Tested via `tests/cast-doctor-honesty.bats` on an isolated temp HOME.
+**Status:** Activates all four checks with zero new failure surface (read-only queries, never a hook). Tested via `tests/cast-doctor-honesty.bats` on an isolated temp HOME. Shipped and live in current releases.
 
 ## Deferred: And Why (Honest About the Risk)
 
@@ -73,9 +78,9 @@ Extend `cast_claimed_work_verifier.py` to flag when an agent's Status block says
 
 ---
 
-**Rank 3 — `cast-code-ref-guard.sh` wiring** (REMOVED v9 S5)
+**Rank 3 — `cast-code-ref-guard.sh` wiring** (REMOVED v9 S5; TABLE RETIRED v9 Phase C U7b)
 
-The script was never wired to any hook (high cry-wolf risk: it extracted bare tokens like `foo()` and grepped `scripts/`+`bin/`, manufacturing false `NOT_FOUND` rows for legit external references). It was purged as dead code in the v9 S5 sweep rather than wired. The `code_ref_checks` table is retained per record-is-product.
+The script was never wired to any hook (high cry-wolf risk: it extracted bare tokens like `foo()` and grepped `scripts/`+`bin/`, manufacturing false `NOT_FOUND` rows for legit external references). It was purged as dead code in the v9 S5 sweep rather than wired. The `code_ref_checks` table (always 0 rows) was subsequently retired from the canonical schema in v9 Phase C U7b — removed from `cast-db-init.sh`, the honesty doctor surface, and `check-honesty-table.py`. Physical DROP from the live DB is a separate gated maintenance step.
 
 ---
 
@@ -118,4 +123,4 @@ False positives erode trust as fast as false "done": an agent flagged for honest
 
 ---
 
-**Status:** Design freeze. Rank 1 implementation in progress (session 2026-06-08).
+**Status:** Shipped. Rank 1 implemented and live (PR #135, extended v9 Phase C, `cast doctor` §13 active).

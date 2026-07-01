@@ -8,21 +8,23 @@ HOOK_SCRIPT="$REPO_DIR/scripts/cast-cwdchanged-hook.sh"
 DETECT_SCRIPT="$REPO_DIR/scripts/cast-stack-detect.sh"
 
 setup() {
-  # Isolated HOME with detect script seeded
-  FAKE_HOME="$BATS_TEST_TMPDIR/fake-home"
-  mkdir -p "$FAKE_HOME/.claude/scripts"
-  cp "$DETECT_SCRIPT" "$FAKE_HOME/.claude/scripts/cast-stack-detect.sh"
+  load '../helpers/setup'
+  setup_temp_home
+
+  # Seed detect script into isolated HOME
+  mkdir -p "$HOME/.claude/scripts"
+  cp "$DETECT_SCRIPT" "$HOME/.claude/scripts/cast-stack-detect.sh"
 
   # Fake repo root
   FAKE_REPO="$BATS_TEST_TMPDIR/fake-repo"
   mkdir -p "$FAKE_REPO"
 
-  export HOME="$FAKE_HOME"
   unset CLAUDE_SUBPROCESS
 }
 
 teardown() {
-  unset HOME CLAUDE_SUBPROCESS
+  unset CLAUDE_SUBPROCESS
+  teardown_temp_home
 }
 
 # ── Test 1: vite repo → CAST_STACK_PROFILE in environment ────────────────

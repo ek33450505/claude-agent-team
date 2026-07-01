@@ -57,7 +57,8 @@ TaskCreated and WorktreeCreate are production-hardened hooks capturing backgroun
 |---|---|
 | `swarm_sessions` | Swarm metadata: team_name, started_at, status, merge_strategy |
 | `teammate_runs` | Per-agent task tracking: swarm_id, agent_role, status, token counts |
-| `teammate_messages` | Peer gossip: from_agent, to_agent, message_type, JSON payload |
+
+> Note: `swarm_sessions` and `teammate_runs` are dormant — the /swarm writers were retired in v9; retained as historical schema record (zero rows is correct). `teammate_messages` and `stream_events` were retired and removed from canonical schema in v9 Phase C (U7a).
 
 **Existing tables:**
 | Table | Contents |
@@ -66,19 +67,12 @@ TaskCreated and WorktreeCreate are production-hardened hooks capturing backgroun
 | `agent_runs` | Every dispatch: agent, model, duration, status |
 | `routing_events` | Prompt routing records |
 | `agent_memories` | Synced from `~/.claude/agent-memory-local/` with temporal validity |
-| `stream_events` | Real-time tool events from stream-json pipeline |
-
-> Note: the `swarm_*`/`teammate_*` tables are dormant — the /swarm writers were retired in v9; retained as historical schema record (zero rows is correct).
 
 ```bash
 # Query active swarms
 sqlite3 ~/.claude/cast.db "SELECT swarm_id, team_name, status, COUNT(*) FROM swarm_sessions \
   JOIN teammate_runs ON swarm_sessions.id = teammate_runs.swarm_id \
   WHERE status='running' GROUP BY swarm_id;"
-
-# Export swarm timeline
-sqlite3 ~/.claude/cast.db "SELECT timestamp, from_agent, to_agent, message_type \
-  FROM teammate_messages WHERE swarm_id = ? ORDER BY timestamp;"
 
 # Cast health check
 cast doctor

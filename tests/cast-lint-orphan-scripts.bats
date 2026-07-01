@@ -207,3 +207,58 @@ _write_fragment() {
   assert_output --partial "30-test.json"
   assert_output --partial "ghost-in-fragment.sh"
 }
+
+# ---------------------------------------------------------------------------
+# Reverse-pass tests (orphan scripts — WARN, exit 0)
+# ---------------------------------------------------------------------------
+
+@test "reverse: unreferenced script is flagged as WARN (exit 0)" {
+  # Plant a script that is NOT referenced from any surface file.
+  # The reverse pass must warn but not fail (exit 0).
+  touch "$FAKE_REPO/scripts/cast-orphan-unused.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  assert_output --partial "WARN"
+  assert_output --partial "cast-orphan-unused.sh"
+}
+
+@test "reverse: referenced script is NOT flagged" {
+  # Plant a script whose basename appears in install.sh — must not appear in warnings.
+  touch "$FAKE_REPO/scripts/cast-my-referenced.sh"
+  # Reference it from install.sh (one of the reachability surfaces)
+  printf '#!/bin/bash\nbash "$HOME/.claude/scripts/cast-my-referenced.sh"\n' \
+    > "$FAKE_REPO/install.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  refute_output --partial "cast-my-referenced.sh"
+}
+
+@test "reverse: self-reference in script header does NOT count as reachable" {
+  # A script that only mentions its own name in its own shebang/header must
+  # still be flagged — self-references are excluded from the check.
+  printf '#!/usr/bin/env bash\n# cast-self-only.sh — does something\necho hi\n' \
+    > "$FAKE_REPO/scripts/cast-self-only.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  assert_output --partial "cast-self-only.sh"
+}
+
+@test "reverse: script referenced from tests/ is NOT flagged" {
+  # Regression guard: cast-count-planned-tests.sh is only called from tests/run.sh.
+  # Expanding the surface to include tests/ prevents the false positive.
+  touch "$FAKE_REPO/scripts/cast-count-planned-tests.sh"
+  mkdir -p "$FAKE_REPO/tests"
+  printf '#!/usr/bin/env bash\nbash scripts/cast-count-planned-tests.sh\n' \
+    > "$FAKE_REPO/tests/run.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  refute_output --partial "cast-count-planned-tests.sh"
+}
+
+@test "reverse: python script unreferenced is flagged as WARN (exit 0)" {
+  touch "$FAKE_REPO/scripts/cast-unused-helper.py"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  assert_output --partial "WARN"
+  assert_output --partial "cast-unused-helper.py"
+}
