@@ -1554,3 +1554,92 @@ print(json.dumps({
     "SELECT outcome FROM dispatch_decisions WHERE session_id='s-unrelated' AND chosen_agent='researcher' LIMIT 1")"
   [[ "$still_pending" = "pending" ]]
 }
+
+# ---------------------------------------------------------------------------
+# Security: eval injection protection (cast-subagent-stop-hook.sh line 215)
+# ---------------------------------------------------------------------------
+
+@test "eval injection: backticks in agent_name does NOT execute" {
+  # The hook uses `eval` on shlex-quoted fields. This test verifies that
+  # malicious input (backticks in agent output) does NOT execute.
+  # shlex.quote() must protect against command injection.
+
+  # Create a marker file path inside the temp HOME to track injection attempts
+  local marker="$HOME/.cast-test-injection-marker-$$"
+
+  # Payload with backticks in agent_type (which becomes AGENT_NAME after eval)
+  local payload
+  payload="$(python3 -c "
+import json
+# Attempt injection via agent_type: backticks that would execute 'touch' if not quoted
+print(json.dumps({
+    'agent_type':             'test-\`touch ${marker}\`',
+    'session_id':             'sess-inject-test',
+    'stop_reason':            'end_turn',
+    'last_assistant_message': 'Status: DONE',
+}))
+")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+
+  # Hook must exit 0 (never blocks)
+  assert_success
+
+  # Marker file must NOT exist (injection was blocked by shlex.quote)
+  [ ! -f "$marker" ]
+
+  # Cleanup
+  rm -f "$marker"
+}
+
+@test "eval injection: dollar-paren in output does NOT execute" {
+  # Injection attempt via $(...) syntax in agent output
+  local marker="$HOME/.cast-test-injection-marker-$$"
+
+  local payload
+  payload="$(python3 -c "
+import json
+# Attempt injection via output: \$(...) that would touch marker if not quoted
+print(json.dumps({
+    'agent_type':             'test-agent',
+    'session_id':             'sess-inject-test-2',
+    'stop_reason':            'end_turn',
+    'last_assistant_message': 'Status: DONE\n\$(touch ${marker})',
+}))
+")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+
+  assert_success
+
+  # Marker file must NOT exist
+  [ ! -f "$marker" ]
+
+  rm -f "$marker"
+}
+
+@test "eval injection: semicolon-command in stop_reason does NOT execute" {
+  # Injection attempt via stop_reason field: ; touch marker
+  local marker="$HOME/.cast-test-injection-marker-$$"
+
+  local payload
+  payload="$(python3 -c "
+import json
+# Attempt injection via stop_reason
+print(json.dumps({
+    'agent_type':             'test-agent',
+    'session_id':             'sess-inject-test-3',
+    'stop_reason':            'end_turn; touch ${marker}',
+    'last_assistant_message': 'Status: DONE',
+}))
+")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+
+  assert_success
+
+  # Marker file must NOT exist
+  [ ! -f "$marker" ]
+
+  rm -f "$marker"
+}

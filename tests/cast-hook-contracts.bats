@@ -230,3 +230,34 @@ _run_validator_with_settings() {
   combined="$(env HOME="$fake_home" bash "$VALIDATOR" 2>&1 || true)"
   [[ "$combined" =~ "[fail]" ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 6: Task|Agent matcher for cast-pretool-dispatch
+# ---------------------------------------------------------------------------
+
+@test "cast-pretool-dispatch matcher includes both Task and Agent" {
+  # The F2 dispatch-capture hook must match BOTH "Task" (older Claude Code)
+  # and "Agent" (current Claude Code) subagent-dispatch tool names.
+  # This test ensures the regex matcher never regresses to match only one.
+  local settings_file="$REPO_DIR/managed-settings.d/25-hooks-security.json"
+
+  # Extract the matcher regex for cast-pretool-dispatch hook
+  local matcher
+  matcher=$(python3 -c "
+import json
+with open('$settings_file') as f:
+    data = json.load(f)
+hooks = data.get('hooks', {}).get('PreToolUse', [])
+for hook in hooks:
+    if hook.get('id') == 'cast-pretool-dispatch':
+        print(hook.get('matcher', ''))
+        break
+" 2>/dev/null || echo "")
+
+  # Verify matcher is non-empty
+  [ -n "$matcher" ]
+
+  # Verify matcher regex contains both Task and Agent (literal strings in alternation)
+  [[ "$matcher" =~ "Task" ]]
+  [[ "$matcher" =~ "Agent" ]]
+}
