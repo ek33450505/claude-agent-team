@@ -5,6 +5,10 @@
 # to avoid touching the real ~/.claude or backup locations.
 
 setup() {
+  load '../helpers/setup'
+  setup_temp_home
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  export CAST_BACKUP_DIR="$BATS_TEST_TMPDIR/db-backups"
   # Create isolated temp directories for each test
   BATS_BACKUP_ROOT="$BATS_TEST_TMPDIR/backups"
   BATS_CLAUDE_DIR="$BATS_TEST_TMPDIR/dot-claude"
@@ -29,7 +33,7 @@ setup() {
 
 teardown() {
   # Cleanup is automatic via BATS_TEST_TMPDIR removal
-  true
+  teardown_temp_home
 }
 
 @test "snapshot creates a cast-snapshot-YYYY-MM-DD directory" {

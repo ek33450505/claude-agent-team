@@ -7,7 +7,8 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOK_SH="$REPO_DIR/scripts/cast-subagent-stop-hook.sh"
 
 setup() {
-  export ORIG_HOME="$HOME"
+  load 'helpers/setup'
+  setup_temp_home
   export TEST_TMPDIR="$(mktemp -d /tmp/cast-stop-test.XXXXXXXX)"
   export TEMP_DB="$TEST_TMPDIR/test.db"
   sqlite3 "$TEMP_DB" "CREATE TABLE agent_runs (
@@ -33,6 +34,7 @@ setup() {
 
 teardown() {
   [ -n "${TEST_TMPDIR:-}" ] && rm -rf "$TEST_TMPDIR"
+  teardown_temp_home
 }
 
 @test "SubagentStop: computes duration_ms from timestamps and counts tool_uses" {
