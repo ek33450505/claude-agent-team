@@ -310,3 +310,51 @@ print(json.dumps({
   refute_output --partial "$_k"
   refute_output --partial "/Users/testuser/x.py"
 }
+
+@test "Task dispatch → redaction failure → [REDACTION_FAILED] stored, never raw prompt" {
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  local payload
+  payload=$(python3 -c "
+import json
+print(json.dumps({
+    'tool_name': 'Task',
+    'session_id': 'redact-fail-s1',
+    'tool_input': {
+        'subagent_type': 'debugger',
+        'prompt': 'my secret is sk-ant-api03-SUPERSECRET and path /Users/real/file.py'
+    }
+}))
+")
+  # Shim cast-redact.py to always exit 1 (force redaction failure)
+  local fake_redact_dir
+  fake_redact_dir=$(mktemp -d)
+  cat > "$fake_redact_dir/cast-redact.py" <<'PYEOF'
+import sys; sys.exit(1)
+PYEOF
+  # Override SCRIPT_DIR by placing a shim cast-redact.py where the dispatcher looks.
+  # The dispatcher resolves cast-redact.py relative to its own SCRIPT_DIR (scripts/).
+  # Temporarily replace with a wrapper that shadows it via PATH (python3 -c path injection
+  # is not available), so instead copy the real dispatcher and patch SCRIPT_DIR via env.
+  # Simplest: stub the scripts/ cast-redact.py, run, restore.
+  local real_redact="$REPO_DIR/scripts/cast-redact.py"
+  local backup_redact="$fake_redact_dir/cast-redact.py.bak"
+  cp "$real_redact" "$backup_redact"
+  cp "$fake_redact_dir/cast-redact.py" "$real_redact"
+
+  run_dispatch "$payload"
+
+  # Restore immediately
+  cp "$backup_redact" "$real_redact"
+  rm -rf "$fake_redact_dir"
+
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" \
+    "SELECT prompt_snippet FROM dispatch_decisions WHERE session_id='redact-fail-s1' LIMIT 1"
+  assert_success
+  # Must store the marker, not the raw prompt
+  assert_output --partial "[REDACTION_FAILED]"
+  # Must NOT store the raw prompt content
+  refute_output --partial "SUPERSECRET"
+  refute_output --partial "/Users/real/file.py"
+}

@@ -142,3 +142,37 @@ _write_fixture() {
   # Redaction must have run — raw secret token must NOT appear in stored summary
   [[ "$stored_summary" != *"$fake_secret"* ]]
 }
+
+# B2 wiring tests (Unit U2)
+
+@test "SubagentStop wiring: cast-incident-record is registered under SubagentStop in 30-hooks-session.json" {
+  local config="$REPO_DIR/managed-settings.d/30-hooks-session.json"
+  run python3 - "$config" <<'PYEOF'
+import sys, json
+with open(sys.argv[1]) as f:
+    cfg = json.load(f)
+hooks = cfg.get("hooks", {}).get("SubagentStop", [])
+ids = [h.get("id", "") for h in hooks]
+cmds = [h2.get("command", "") for h in hooks for h2 in h.get("hooks", [])]
+assert "cast-incident-record" in ids, f"id not found, ids={ids}"
+assert any("cast-incident-record.sh" in c for c in cmds), f"command not found in cmds={cmds}"
+print("OK")
+PYEOF
+  assert_success
+  assert_output "OK"
+}
+
+@test "script exits 0 even when DB is unwritable (exit-0 fix: pipeline-safety contract)" {
+  # Force sqlite3 insert to fail by pointing to /dev/null (not a valid SQLite file).
+  # The Python except block calls sys.exit(0); the || true on the heredoc invocation
+  # also guards against any unexpected non-zero exit.
+  local payload
+  payload='{"agent_type":"debugger","session_id":"s1","agent_id":"a1","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Summary: test\nStatus: DONE"}]}}'
+  local fixture
+  fixture="$(_write_fixture "$payload")"
+
+  run env CAST_DB_PATH="/dev/null" bash "$SCRIPT" <"$fixture"
+  rm -f "$fixture"
+
+  assert_success
+}

@@ -21,6 +21,7 @@ import os
 import json
 import sqlite3
 import datetime
+import contextlib
 from pathlib import Path
 from typing import Optional, Any
 
@@ -90,15 +91,14 @@ def _is_error_text(text: str) -> bool:
 # ---------------------------------------------------------------------------
 def _fetch_decisions(limit: int) -> str:
     try:
-        conn = _ro_connect()
-        cursor = conn.execute(
-            "SELECT id, session_id, prompt_snippet, chosen_agent, model, effort, "
-            "parallel, created_at, outcome "
-            "FROM dispatch_decisions ORDER BY id DESC LIMIT ?",
-            (limit,),
-        )
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
+        with contextlib.closing(_ro_connect()) as conn:
+            cursor = conn.execute(
+                "SELECT id, session_id, prompt_snippet, chosen_agent, model, effort, "
+                "parallel, created_at, outcome "
+                "FROM dispatch_decisions ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            rows = [dict(r) for r in cursor.fetchall()]
         return _rows_to_text(rows)
     except sqlite3.OperationalError as e:
         _log(f"fetch_decisions OperationalError: {e}", level="WARN")
@@ -110,30 +110,29 @@ def _fetch_decisions(limit: int) -> str:
 
 def _fetch_incidents(limit: int, query: str = "") -> str:
     try:
-        conn = _ro_connect()
-        base_cols = (
-            "id, occurred_at, problem_summary, fix_summary, related_files, "
-            "related_commit, resolution_status, surfaced_by"
-        )
-        if query:
-            # Escape LIKE metacharacters so a literal % or _ matches literally (and can't
-            # broaden to a full scan). ESCAPE '\' activates the backslash escapes below.
-            esc = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            like = f"%{esc}%"
-            cursor = conn.execute(
-                f"SELECT {base_cols} FROM incidents "
-                "WHERE problem_summary LIKE ? ESCAPE '\\' OR fix_summary LIKE ? ESCAPE '\\' "
-                "ORDER BY occurred_at DESC LIMIT ?",
-                (like, like, limit),
+        with contextlib.closing(_ro_connect()) as conn:
+            base_cols = (
+                "id, occurred_at, problem_summary, fix_summary, related_files, "
+                "related_commit, resolution_status, surfaced_by"
             )
-        else:
-            cursor = conn.execute(
-                f"SELECT {base_cols} FROM incidents "
-                "ORDER BY occurred_at DESC LIMIT ?",
-                (limit,),
-            )
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
+            if query:
+                # Escape LIKE metacharacters so a literal % or _ matches literally (and can't
+                # broaden to a full scan). ESCAPE '\' activates the backslash escapes below.
+                esc = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                like = f"%{esc}%"
+                cursor = conn.execute(
+                    f"SELECT {base_cols} FROM incidents "
+                    "WHERE problem_summary LIKE ? ESCAPE '\\' OR fix_summary LIKE ? ESCAPE '\\' "
+                    "ORDER BY occurred_at DESC LIMIT ?",
+                    (like, like, limit),
+                )
+            else:
+                cursor = conn.execute(
+                    f"SELECT {base_cols} FROM incidents "
+                    "ORDER BY occurred_at DESC LIMIT ?",
+                    (limit,),
+                )
+            rows = [dict(r) for r in cursor.fetchall()]
         return _rows_to_text(rows)
     except sqlite3.OperationalError as e:
         _log(f"fetch_incidents OperationalError: {e}", level="WARN")
@@ -145,37 +144,35 @@ def _fetch_incidents(limit: int, query: str = "") -> str:
 
 def _fetch_cost(by: str, limit: int) -> str:
     try:
-        conn = _ro_connect()
-        if by == "session":
-            cursor = conn.execute(
-                "SELECT session_id, COALESCE(SUM(cost_usd),0) AS cost_usd, "
-                "COUNT(*) AS runs FROM agent_runs "
-                "GROUP BY session_id ORDER BY cost_usd DESC LIMIT ?",
-                (limit,),
-            )
-        elif by == "branch":
-            # branch is canonical since F1 (cast-db-init.sh CREATE TABLE agent_runs),
-            # but absent on DBs predating it — PRAGMA-guard before querying.
-            pragma = conn.execute("PRAGMA table_info(agent_runs)").fetchall()
-            cols = {row["name"] for row in pragma}
-            if "branch" not in cols:
-                conn.close()
-                return "branch attribution unavailable on this DB (column absent from schema)"
-            cursor = conn.execute(
-                "SELECT COALESCE(branch,'(none)') AS branch, "
-                "COALESCE(SUM(cost_usd),0) AS cost_usd, COUNT(*) AS runs "
-                "FROM agent_runs GROUP BY branch ORDER BY cost_usd DESC LIMIT ?",
-                (limit,),
-            )
-        else:  # by == "agent" (default)
-            cursor = conn.execute(
-                "SELECT agent, COALESCE(SUM(cost_usd),0) AS cost_usd, "
-                "COUNT(*) AS runs FROM agent_runs "
-                "GROUP BY agent ORDER BY cost_usd DESC LIMIT ?",
-                (limit,),
-            )
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
+        with contextlib.closing(_ro_connect()) as conn:
+            if by == "session":
+                cursor = conn.execute(
+                    "SELECT session_id, COALESCE(SUM(cost_usd),0) AS cost_usd, "
+                    "COUNT(*) AS runs FROM agent_runs "
+                    "GROUP BY session_id ORDER BY cost_usd DESC LIMIT ?",
+                    (limit,),
+                )
+            elif by == "branch":
+                # branch is canonical since F1 (cast-db-init.sh CREATE TABLE agent_runs),
+                # but absent on DBs predating it — PRAGMA-guard before querying.
+                pragma = conn.execute("PRAGMA table_info(agent_runs)").fetchall()
+                cols = {row["name"] for row in pragma}
+                if "branch" not in cols:
+                    return "branch attribution unavailable on this DB (column absent from schema)"
+                cursor = conn.execute(
+                    "SELECT COALESCE(branch,'(none)') AS branch, "
+                    "COALESCE(SUM(cost_usd),0) AS cost_usd, COUNT(*) AS runs "
+                    "FROM agent_runs GROUP BY branch ORDER BY cost_usd DESC LIMIT ?",
+                    (limit,),
+                )
+            else:  # by == "agent" (default)
+                cursor = conn.execute(
+                    "SELECT agent, COALESCE(SUM(cost_usd),0) AS cost_usd, "
+                    "COUNT(*) AS runs FROM agent_runs "
+                    "GROUP BY agent ORDER BY cost_usd DESC LIMIT ?",
+                    (limit,),
+                )
+            rows = [dict(r) for r in cursor.fetchall()]
         return _rows_to_text(rows)
     except sqlite3.OperationalError as e:
         _log(f"fetch_cost OperationalError: {e}", level="WARN")
@@ -187,19 +184,18 @@ def _fetch_cost(by: str, limit: int) -> str:
 
 def _fetch_sessions(limit: int) -> str:
     try:
-        conn = _ro_connect()
-        # Canonical sessions columns only (cast-db-init.sh is the single source of truth).
-        # total_input_tokens/total_output_tokens/total_cost_usd/model were dropped from the
-        # canonical schema in migration 022 and are absent on fresh installs; per-session cost
-        # is served by cast_cost(by=session), which reads agent_runs (the canonical cost source).
-        cursor = conn.execute(
-            "SELECT id, project, project_root, started_at, ended_at, status "
-            "FROM sessions WHERE deleted_at IS NULL "
-            "ORDER BY started_at DESC LIMIT ?",
-            (limit,),
-        )
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
+        with contextlib.closing(_ro_connect()) as conn:
+            # Canonical sessions columns only (cast-db-init.sh is the single source of truth).
+            # total_input_tokens/total_output_tokens/total_cost_usd/model were dropped from the
+            # canonical schema in migration 022 and are absent on fresh installs; per-session cost
+            # is served by cast_cost(by=session), which reads agent_runs (the canonical cost source).
+            cursor = conn.execute(
+                "SELECT id, project, project_root, started_at, ended_at, status "
+                "FROM sessions WHERE deleted_at IS NULL "
+                "ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            )
+            rows = [dict(r) for r in cursor.fetchall()]
         return _rows_to_text(rows)
     except sqlite3.OperationalError as e:
         _log(f"fetch_sessions OperationalError: {e}", level="WARN")
@@ -226,16 +222,15 @@ def _sanitize_fts5_query(raw: str) -> str:
 def _fetch_ask(raw_query: str, limit: int) -> str:
     fts_query = _sanitize_fts5_query(raw_query)
     try:
-        conn = _ro_connect()
-        cursor = conn.execute(
-            "SELECT kind, ref_id, ts, title, "
-            "snippet(record_fts, 4, '[', ']', '…', 12) AS snippet, "
-            "agent, mtype FROM record_fts "
-            "WHERE record_fts MATCH ? ORDER BY rank LIMIT ?",
-            (fts_query, limit),
-        )
-        rows = [dict(r) for r in cursor.fetchall()]
-        conn.close()
+        with contextlib.closing(_ro_connect()) as conn:
+            cursor = conn.execute(
+                "SELECT kind, ref_id, ts, title, "
+                "snippet(record_fts, 4, '[', ']', '…', 12) AS snippet, "
+                "agent, mtype FROM record_fts "
+                "WHERE record_fts MATCH ? ORDER BY rank LIMIT ?",
+                (fts_query, limit),
+            )
+            rows = [dict(r) for r in cursor.fetchall()]
         return _rows_to_text(rows)
     except sqlite3.OperationalError as e:
         err = str(e)
@@ -304,15 +299,14 @@ def _resource_schema() -> str:
     """Return a text overview: exposed tables and their current row counts."""
     lines = ["cast.db exposed tables and row counts:"]
     try:
-        conn = _ro_connect()
-        for t in _EXPOSED_TABLES:
-            try:
-                # Table names are hardcoded literals — not user input — so f-string is safe here.
-                row = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()  # noqa: S608
-                lines.append(f"  {t}: {row[0]} rows")
-            except sqlite3.OperationalError:
-                lines.append(f"  {t}: unavailable")
-        conn.close()
+        with contextlib.closing(_ro_connect()) as conn:
+            for t in _EXPOSED_TABLES:
+                try:
+                    # Table names are hardcoded literals — not user input — so f-string is safe here.
+                    row = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()  # noqa: S608
+                    lines.append(f"  {t}: {row[0]} rows")
+                except sqlite3.OperationalError:
+                    lines.append(f"  {t}: unavailable")
     except sqlite3.OperationalError as e:
         return f"cast.db unavailable: {e}"
     return "\n".join(lines)
@@ -464,10 +458,14 @@ def handle(msg: dict) -> Optional[dict]:
     msg_id = msg["id"]
 
     if method == "initialize":
+        params = msg.get("params") or {}
+        client_version = params.get("protocolVersion")
+        # Echo client version if server supports it; fall back to server's version.
+        negotiated_version = client_version if client_version == PROTOCOL_VERSION else PROTOCOL_VERSION
         return _ok(
             msg_id,
             {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": negotiated_version,
                 "capabilities": {"tools": {}, "resources": {}},
                 "serverInfo": {"name": "cast-record", "version": SERVER_VERSION},
             },
@@ -485,7 +483,7 @@ def handle(msg: dict) -> Optional[dict]:
         arguments = params.get("arguments") or {}
         fn = _TOOL_DISPATCH.get(name)
         if fn is None:
-            return _ok(msg_id, _tool_result(f"Unknown tool: {name}", is_error=True))
+            return _err(msg_id, -32602, f"Unknown tool: {name}")
         try:
             text = fn(arguments)
             is_error = _is_error_text(text)

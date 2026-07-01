@@ -239,3 +239,55 @@ teardown() {
   refute_output --partial 'Traceback'
   refute_output --partial 'error'
 }
+
+# -----------------------------------------------------------------------
+# (U3-F1) conn-leak: failing tool call returns proper error and server
+# continues to serve the next request (verifies contextlib.closing guard)
+# -----------------------------------------------------------------------
+@test "conn-leak: failing tool call returns error then server continues serving" {
+  # Drop incidents table so _fetch_incidents raises OperationalError mid-flight.
+  # Then immediately send a ping — the server must handle it cleanly (no crash,
+  # no leaked-connection hang), proving the finally/closing guard works.
+  sqlite3 "$CAST_DB_PATH" "DROP TABLE IF EXISTS incidents;"
+  run env CAST_DB_PATH="$CAST_DB_PATH" bash -c "printf '%s\n%s\n' \
+    '{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"cast_incidents\",\"arguments\":{}}}' \
+    '{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"ping\",\"params\":{}}' \
+    | python3 '$SERVER_PY'"
+  assert_success
+  # First response: honest "unavailable" (no traceback)
+  assert_output --partial 'unavailable'
+  refute_output --partial 'Traceback'
+  # Second response: server still alive and answers ping
+  assert_output --partial '"result": {}'
+}
+
+# -----------------------------------------------------------------------
+# (U3-F2) unknown tool → JSON-RPC error -32602, NOT isError-in-content
+# -----------------------------------------------------------------------
+@test "unknown tool name returns JSON-RPC protocol error -32602" {
+  run env CAST_DB_PATH="$CAST_DB_PATH" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tools/call\",\"params\":{\"name\":\"nonexistent_tool\",\"arguments\":{}}}' | python3 '$SERVER_PY'"
+  assert_success
+  # Must be a top-level JSON-RPC error object with code -32602
+  assert_output --partial '-32602'
+  assert_output --partial 'Unknown tool'
+  assert_output --partial '"error"'
+  # Must NOT be an isError-in-content result (those have "content" + "isError" at top)
+  refute_output --partial 'isError'
+}
+
+# -----------------------------------------------------------------------
+# (U3-F3) initialize: honor client protocolVersion negotiation
+# -----------------------------------------------------------------------
+@test "initialize echoes matching client protocolVersion" {
+  run env CAST_DB_PATH="$CAST_DB_PATH" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}' | python3 '$SERVER_PY'"
+  assert_success
+  assert_output --partial '2025-06-18'
+}
+
+@test "initialize returns server version for mismatched client protocolVersion" {
+  run env CAST_DB_PATH="$CAST_DB_PATH" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"9999-99-99\"}}' | python3 '$SERVER_PY'"
+  assert_success
+  # Server version returned, not the unknown client version
+  assert_output --partial '2025-06-18'
+  refute_output --partial '9999-99-99'
+}

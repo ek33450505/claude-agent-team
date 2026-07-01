@@ -150,19 +150,28 @@ def _record_dispatch(data):
         chosen_agent = ti.get("subagent_type") or "unknown"
         prompt = (ti.get("prompt") or ti.get("description") or "")[:500]
         # Redact PII/secrets before storage (consistency with cast-incident-record.sh;
-        # cast.db can sync off-machine). Fail-soft: never block a dispatch on redaction.
-        try:
-            import subprocess as _sp
-            _r = _sp.run(
-                ["python3", os.path.join(SCRIPT_DIR, "cast-redact.py"),
-                 "--engine", "regex", "--field", "redacted_text"],
-                input=prompt, capture_output=True, text=True, timeout=3,
-            )
-            _out = _r.stdout.strip()
-            if _r.returncode == 0 and _out:
-                prompt = _out
-        except Exception:
-            pass  # passthrough — redaction must never block dispatch capture
+        # cast.db can sync off-machine). FAIL-CLOSED: if redaction does not succeed on a
+        # non-empty prompt, store a [REDACTION_FAILED] marker rather than raw text — never
+        # leak unredacted content into cast.db. Still never blocks the dispatch.
+        if prompt:
+            _redacted = None
+            try:
+                import subprocess as _sp
+                _r = _sp.run(
+                    ["python3", os.path.join(SCRIPT_DIR, "cast-redact.py"),
+                     "--engine", "regex", "--field", "redacted_text"],
+                    input=prompt, capture_output=True, text=True, timeout=3,
+                )
+                _out = _r.stdout.strip()
+                if _r.returncode == 0 and _out:
+                    _redacted = _out
+            except Exception:
+                _redacted = None
+            if _redacted is None:
+                _log_error("dispatch redaction failed — storing [REDACTION_FAILED] marker")
+                prompt = "[REDACTION_FAILED]"
+            else:
+                prompt = _redacted
         model = ti.get("model")  # usually absent in tool_input → NULL
         effort = ti.get("effort")  # usually absent → NULL
         session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")

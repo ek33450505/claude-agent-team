@@ -31,7 +31,7 @@ DB_PATH="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
 
 # Parse payload, validate guards, and insert — all in one python3 block
 # with bound parameters (Bug 2+3 fix: correct fields + parameterized query)
-CAST_DB_PATH="$DB_PATH" python3 <<'PYEOF'
+CAST_DB_PATH="$DB_PATH" python3 <<'PYEOF' || true
 import sys, json, os, re, sqlite3, uuid
 from datetime import datetime, timezone
 
@@ -130,9 +130,19 @@ def _redact(text):
             input=text, capture_output=True, text=True, timeout=3,
         )
         out = r.stdout.strip()
-        return out if (r.returncode == 0 and out) else text
+        if r.returncode == 0 and out:
+            return out
+        try:
+            log_error("WARN: redaction failed — storing [REDACTION_FAILED] marker")
+        except Exception:
+            pass
+        return "[REDACTION_FAILED]" if text else text
     except Exception:
-        return text  # passthrough on any failure — never block the hook
+        try:
+            log_error("WARN: redaction failed (exception) — storing [REDACTION_FAILED] marker")
+        except Exception:
+            pass
+        return "[REDACTION_FAILED]" if text else text  # fail-closed: never passthrough raw content
 
 
 problem_summary = _redact(problem_summary)
