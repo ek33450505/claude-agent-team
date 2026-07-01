@@ -273,6 +273,14 @@ EOF
   assert_output --partial "FLOOR VIOLATION"
 }
 
+@test "cast_stat_test_files: returns a numeric value at or above floor of 150" {
+  source "$REPO_DIR/scripts/cast-stats-lib.sh"
+  run cast_stat_test_files
+  assert_success
+  assert_output --regexp '^[0-9]+$'
+  [ "$output" -ge 150 ]
+}
+
 @test "auto-discovery: exits 0 with 'nothing to check' when dir has no CAST markers" {
   local empty_repo="${TMPDIR_STATS}/empty-repo"
   mkdir -p "$empty_repo"
