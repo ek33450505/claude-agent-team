@@ -30,14 +30,14 @@ Four real sensors write to `cast.db` on live hook events. **Nothing reads them y
 - **Signals:** Agent prose says "dispatching agent X" but never actually called the dispatch tool. Prose-only dispatch claims with zero tool evidence.
 - **Current state:** Row writes work. Observability: none.
 
-### Table 4: `code_ref_checks`
-- **Source:** _(removed in v9 S5)_ — the unwired `cast-code-ref-guard.sh` guard was purged as dead code; the `code_ref_checks` table is retained (record-is-product).
+### Table 4: `code_ref_checks` _(RETIRED — v9 Phase C U7b)_
+- **Source:** _(removed in v9 S5)_ — the unwired `cast-code-ref-guard.sh` guard was purged as dead code (high false-positive rate: it extracted bare tokens like `foo()` and grepped `scripts/`+`bin/`, manufacturing false `NOT_FOUND` rows for legit external references).
 - **Signals:** Agent claimed a function/file/path exists (e.g., "`foo()` in scripts/") but grep found nothing.
-- **Current state:** Table is empty; the guard script was removed (it never fired on any hook).
+- **Current state:** **RETIRED in v9 Phase C U7b.** Table removed from canonical schema (`cast-db-init.sh`), honesty doctor surface, and `check-honesty-table.py` allowlist. No writer has ever existed in a wired hook; 0 rows at time of retirement. Physical DROP from live DB is a separate gated maintenance step.
 
 ### Key Finding (Blunt)
 
-**All four sensors are digital dead-drops.** They write into a database that nothing reads. The honesty feature is not missing — it is **invisible**.
+**Three of the four original sensors are digital dead-drops.** They write into a database that nothing reads. The honesty feature is not missing — it is **invisible**. (The fourth — `code_ref_checks` — had no wired writer and was retired in v9 Phase C U7b.)
 
 ## Design Principle: Honest Degradation
 
@@ -51,7 +51,7 @@ Concretely: if `agent_hallucinations` is empty because the SubagentStop hook nev
 
 **Rank 1 — `cast doctor` honesty surface** (THIS SESSION)
 
-A new read-only block in `bin/cast _cmd_doctor` that aggregates the four tables (`agent_hallucinations`, `completeness_events`, `agent_protocol_violations`, `code_ref_checks`) and prints them with honest degradation:
+A new read-only block in `bin/cast _cmd_doctor` that aggregates the three active tables (`agent_hallucinations`, `completeness_events`, `agent_protocol_violations`) and prints them with honest degradation. (`code_ref_checks` was retired in v9 Phase C U7b — writer never wired; 0 rows.)
 
 - **Green (OK):** Table has 0 rows and the hook is confirmed wired.
 - **Orange (WARN):** Table has N rows; list affected agents + dates.
@@ -73,9 +73,9 @@ Extend `cast_claimed_work_verifier.py` to flag when an agent's Status block says
 
 ---
 
-**Rank 3 — `cast-code-ref-guard.sh` wiring** (REMOVED v9 S5)
+**Rank 3 — `cast-code-ref-guard.sh` wiring** (REMOVED v9 S5; TABLE RETIRED v9 Phase C U7b)
 
-The script was never wired to any hook (high cry-wolf risk: it extracted bare tokens like `foo()` and grepped `scripts/`+`bin/`, manufacturing false `NOT_FOUND` rows for legit external references). It was purged as dead code in the v9 S5 sweep rather than wired. The `code_ref_checks` table is retained per record-is-product.
+The script was never wired to any hook (high cry-wolf risk: it extracted bare tokens like `foo()` and grepped `scripts/`+`bin/`, manufacturing false `NOT_FOUND` rows for legit external references). It was purged as dead code in the v9 S5 sweep rather than wired. The `code_ref_checks` table (always 0 rows) was subsequently retired from the canonical schema in v9 Phase C U7b — removed from `cast-db-init.sh`, the honesty doctor surface, and `check-honesty-table.py`. Physical DROP from the live DB is a separate gated maintenance step.
 
 ---
 

@@ -869,22 +869,9 @@ AGENT_HALLUCINATIONS_TABLE
   _columns_added=1
 fi
 
-# code_ref_checks: code reference verification (writer: cast-code-ref-check.sh)
-if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "code_ref_checks"; then
-  sqlite3 "$DB_PATH" <<'CODE_REF_CHECKS_TABLE'
-CREATE TABLE IF NOT EXISTS code_ref_checks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT,
-    agent_name TEXT,
-    ref_type TEXT,
-    ref_name TEXT,
-    verified INTEGER,
-    location TEXT,
-    timestamp TEXT
-);
-CODE_REF_CHECKS_TABLE
-  _columns_added=1
-fi
+# code_ref_checks: RETIRED in v9 Phase C (U7b) — writer cast-code-ref-guard.sh was purged in v9 S5
+# (high false-positive rate); table was empty (0 rows) with no writers. Physical DROP from live DB
+# is a separate gated maintenance step; canonical schema no longer provisions this table.
 
 # compaction_events: context compaction telemetry (writer: cast-post-compact-hook.sh)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "compaction_events"; then

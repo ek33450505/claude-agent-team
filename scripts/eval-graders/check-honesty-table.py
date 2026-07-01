@@ -21,11 +21,12 @@ Per-table column map:
   agent_protocol_violations  → key: agent_id,   time: timestamp,  every row = violation
   agent_hallucinations       → key: agent_name,  time: timestamp,  violation = verified falsey
   completeness_events        → key: agent,       time: created_at, every row = violation
-  code_ref_checks            → key: agent_name,  time: timestamp,  violation = verified falsey
+
+  (code_ref_checks was RETIRED in v9 Phase C U7b — writer purged in v9 S5; table removed from canonical schema.)
 
 Allowed tables (validated against allowlist to prevent SQL injection via --table):
   agent_protocol_violations, agent_hallucinations,
-  completeness_events, code_ref_checks
+  completeness_events
 """
 
 import argparse
@@ -36,11 +37,11 @@ import sys
 from pathlib import Path
 
 # Allowlist prevents SQL injection via the --table argument.
+# code_ref_checks was RETIRED in v9 Phase C U7b (writer purged in v9 S5).
 ALLOWED_TABLES = frozenset({
     'agent_protocol_violations',
     'agent_hallucinations',
     'completeness_events',
-    'code_ref_checks',
 })
 
 # Per-table schema configuration.
@@ -63,12 +64,7 @@ TABLE_CONFIG = {
         'time_col': 'created_at',
         'has_verified': False,
     },
-    'code_ref_checks': {
-        'key_col': 'agent_name',
-        'time_col': 'timestamp',
-        'has_verified': True,
-        'verified_col': 'verified',
-    },
+    # code_ref_checks was RETIRED in v9 Phase C U7b — removed from ALLOWED_TABLES.
 }
 
 # SQLite fragment that matches falsey values for a verified INTEGER/TEXT column.

@@ -2328,7 +2328,7 @@ PYEOF
   fi
 
   # 13. Honesty surface — reads agent_hallucinations, completeness_events,
-  #     agent_protocol_violations, code_ref_checks. Diagnostic only: failures
+  #     agent_protocol_violations. Diagnostic only: failures
   #     inside this block never flip overall_ok or exit cast doctor early.
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Honesty signals (last 7d)${C_RESET}\n"
@@ -2413,21 +2413,8 @@ PYEOF
       done <<< "$_apv_out"
     fi
 
-    # ── code_ref_checks ──────────────────────────────────────────────────────
-    local _crc_out _crc_rc
-    _crc_out="$(sqlite3 "$CAST_DB_PATH" \
-      "SELECT COUNT(*) FROM code_ref_checks \
-       WHERE verified=0 AND timestamp >= datetime('now','-7 days');" 2>&1)"
-    _crc_rc=$?
-    if echo "$_crc_out" | grep -qi "no such table"; then
-      printf "%b honesty: code_ref_checks — no data yet\n" "$INFO"
-    elif [ $_crc_rc -ne 0 ]; then
-      printf "%b honesty: code_ref_checks — unavailable (db query failed)\n" "$INFO"
-    elif [ -z "$_crc_out" ] || [ "$_crc_out" -eq 0 ] 2>/dev/null; then
-      printf "%b honesty: code_ref_checks — none in last 7d\n" "$OK"
-    else
-      printf "%b honesty: code_ref_checks — %d unverified ref(s)\n" "$WARN" "$_crc_out"
-    fi
+    # ── code_ref_checks — RETIRED v9 Phase C U7b (writer purged in v9 S5) ───────
+    # Table removed from canonical schema; no longer reported in honesty surface.
 
     # ── silent truncations (maxTurns) ────────────────────────────────────────
     # Detects agent_runs rows that were silently cut off by the maxTurns cap:

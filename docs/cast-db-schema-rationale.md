@@ -29,13 +29,11 @@ Both capture "incomplete agent responses" but via different writer paths:
 
 The two tables answer slightly different questions. Kept separate to preserve writer simplicity.
 
-### `agent_hallucinations` vs `code_ref_checks`
+### `agent_hallucinations` _(and the retired `code_ref_checks`)_
 
-Both capture "agent claim vs reality" mismatches but at different granularity:
-- `agent_hallucinations` — file-level: agent claimed to write `/path/to/file` but the file doesn't exist post-stop.
-- `code_ref_checks` — symbol-level: agent referenced a function/class name that doesn't exist in the codebase.
+`agent_hallucinations` — file-level: agent claimed to write `/path/to/file` but the file doesn't exist post-stop.
 
-Kept separate to allow different remediation paths (hallucinations are usually agent errors; code_ref mismatches can be stale memory).
+`code_ref_checks` was **RETIRED in v9 Phase C U7b** — it was intended to capture symbol-level mismatches (agent referenced a function/class name that doesn't exist in the codebase), but its writer (`cast-code-ref-guard.sh`) was never wired to a hook (high false-positive rate) and was purged in v9 S5. With 0 rows and no writer, the table was removed from the canonical schema (`cast-db-init.sh`). Physical DROP from the live DB is a separate gated maintenance step.
 
 ## `incidents` table (closes Correction #17)
 

@@ -15,7 +15,7 @@ ALLOWED_TABLES = {
     'agent_runs',
     'agent_truncations',
     'budgets',
-    'code_ref_checks',
+    # 'code_ref_checks' — RETIRED v9 Phase C U7b (writer purged in v9 S5; 0 rows)
     'compaction_events',
     'completeness_events',
     'dispatch_decisions',
