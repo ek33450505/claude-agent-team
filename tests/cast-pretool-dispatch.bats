@@ -56,9 +56,35 @@ teardown() { teardown_temp_home; }
   assert_success
 }
 
-@test "CLAUDE_SUBPROCESS=1 → skip even a blockable git commit" {
+@test "CLAUDE_SUBPROCESS=1 + git commit → blocks (irreversibility guard not skipped)" {
   export CLAUDE_SUBPROCESS=1
   run_dispatch "$(payload Bash command='git commit -m x')"
+  assert_failure
+  assert_output --partial "git commit"
+}
+
+@test "CLAUDE_SUBPROCESS=1 + CAST_COMMIT_AGENT=1 git commit → escape hatch allows" {
+  export CLAUDE_SUBPROCESS=1
+  run_dispatch "$(payload Bash command='CAST_COMMIT_AGENT=1 git commit -m x')"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git push → blocks" {
+  export CLAUDE_SUBPROCESS=1
+  run_dispatch "$(payload Bash command='git push origin main')"
+  assert_failure
+  assert_output --partial "git push"
+}
+
+@test "CLAUDE_SUBPROCESS=1 + destructive pkill → blocks (command guard not skipped)" {
+  export CLAUDE_SUBPROCESS=1
+  run_dispatch "$(payload Bash command='pkill bash')"
+  assert_failure
+}
+
+@test "CLAUDE_SUBPROCESS=1 + Write tool → allows (subprocess-skip preserved for Write/Edit)" {
+  export CLAUDE_SUBPROCESS=1
+  run_dispatch "$(payload Write file_path='scripts/foo.sh')"
   assert_success
 }
 

@@ -171,18 +171,47 @@ print(json.dumps({
 }
 
 # ---------------------------------------------------------------------------
-# Subprocess Guard Tests
+# Subprocess Guard Tests — git commit/push/stash still block in subprocess
+# (CLAUDE_SUBPROCESS skip moved inside cast-git-guard.py; only Write/Edit policy
+#  + TTL sweep are subprocess-skipped; irreversibility guards are ALWAYS on)
 # ---------------------------------------------------------------------------
 
-@test "CLAUDE_SUBPROCESS=1 → Bash tool with git commit allowed (subprocess bypass)" {
+@test "CLAUDE_SUBPROCESS=1 + git commit → still blocks (bypass removed for irreversibles)" {
   export CLAUDE_SUBPROCESS=1
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git commit -m 'test'")"
+  assert_failure
+  assert_output --partial "git commit"
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git push → still blocks" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git push origin main")"
+  assert_failure
+  assert_output --partial "git push"
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git stash → still blocks" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git stash")"
+  assert_failure
+  assert_output --partial "stash"
+}
+
+@test "CLAUDE_SUBPROCESS=1 + CAST_COMMIT_AGENT=1 git commit → escape hatch still allows" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m 'test'")"
   assert_success
 }
 
-@test "CLAUDE_SUBPROCESS=1 → Bash tool with git push allowed (subprocess bypass)" {
+@test "CLAUDE_SUBPROCESS=1 + CAST_PUSH_OK=1 git push → escape hatch still allows" {
   export CLAUDE_SUBPROCESS=1
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "git push origin main")"
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 git push origin main")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + Write tool → still allows (subprocess-skip preserved for Write/Edit)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/tmp/test.txt")"
   assert_success
 }
 

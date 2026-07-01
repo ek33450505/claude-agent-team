@@ -18,7 +18,7 @@
 # Escape hatches (leading env-var assignment): CAST_COMMIT_AGENT=1 git commit,
 # CAST_PUSH_OK=1 git push, CAST_STASH_OK=1 git stash, CAST_POLICY_OVERRIDE=1.
 
-# Skip for CAST-internal subprocesses (consistency with every other CAST hook; latency)
-if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
-
+# CLAUDE_SUBPROCESS handling moved into cast-git-guard.py:main() so the git
+# commit/push/stash guards fire even in subagent/headless context (only the
+# Write/Edit policy + TTL sweep are subprocess-skipped). Always exec the module.
 exec python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cast-git-guard.py"

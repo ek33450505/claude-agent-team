@@ -37,7 +37,7 @@ FAIL-OPEN per guard: a crash/missing module in one guard never suppresses anothe
 (each load + call is independently guarded), and any load failure is logged to
 hook-errors.log so `cast doctor` can surface a silently-disabled guard. command-
 guard is always evaluated for Bash unless git-guard already hard-blocked — which
-prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 → skip. Any
+prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 skips ONLY the Write/Edit policy + egress record + dispatch capture; the git commit/push/stash and destructive-command guards run in EVERY context (a subagent must not bypass the irreversibility/destructive guards). Any
 unhandled error → exit 0 (allow); a guard crash must never block all tool use.
 
 CONTRACT (identical to the wrappers): exit 2 + stderr = block; stdout
@@ -187,8 +187,6 @@ def _record_dispatch(data):
 
 
 def main():
-    if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
-        return 0
     try:
         raw = sys.stdin.read()
     except Exception:
@@ -207,19 +205,21 @@ def main():
     if not isinstance(tool_input, dict):
         tool_input = {}
 
-    # 1. HARD BLOCKS first (CPU-bound; run before any egress I/O).
-    #    git-guard covers Bash git guards AND Write/Edit policy (mirrors pre-tool-guard).
-    if tool in ("Bash", "Write", "Edit"):
+    # 0. IRREVERSIBLE + DESTRUCTIVE Bash ops are guarded in EVERY context —
+    #    including dispatched subagents (CLAUDE_SUBPROCESS=1) and headless runs.
+    #    The recursion-prevention skip below must NOT exempt a subagent from these
+    #    guards, or a dispatched agent could bypass the git commit/push/stash blocks
+    #    (the 2026-06 self-commit recurrence) OR the destructive-command guard
+    #    (rm -rf etc.). Escape hatches still apply — the guards check allow patterns first.
+    if tool == "Bash":
         git_guard = _load("cast_git_guard", "cast-git-guard.py")
         if git_guard is not None:
             try:
-                code, msg = git_guard.evaluate(tool, tool_input)
+                gcode, gmsg = git_guard.evaluate("Bash", tool_input)
             except Exception:
-                code, msg = 0, ""
-            if code == 2:
-                return _block(msg)
-
-    if tool == "Bash":
+                gcode, gmsg = 0, ""
+            if gcode == 2:
+                return _block(gmsg)
         command = tool_input.get("command", "") or ""
         if command:
             cg = _load("cast_command_guard", "cast-command-guard.py")
@@ -239,6 +239,23 @@ def main():
                     except Exception:
                         pass
                     return _block(message)
+
+    # Recursion-prevention skip: the REST of the dispatcher (Write/Edit path policy
+    # engine + TTL sweep, egress I/O, dispatch_decisions capture) is suppressed for
+    # managed/headless sub-claude to avoid hook recursion.
+    if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
+        return 0
+
+    # 1. Write/Edit path policy (top-level sessions only).
+    if tool in ("Write", "Edit"):
+        git_guard = _load("cast_git_guard", "cast-git-guard.py")
+        if git_guard is not None:
+            try:
+                code, msg = git_guard.evaluate(tool, tool_input)
+            except Exception:
+                code, msg = 0, ""
+            if code == 2:
+                return _block(msg)
 
     # 2. EGRESS — record + emit (only reached when nothing hard-blocked; blocked
     #    commands are never off-machine-bound, so no egress record is lost).
