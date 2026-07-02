@@ -84,13 +84,12 @@ cast_stat_tables() {
 }
 
 # cast_stat_packages — count of CAST Homebrew taps (not derivable from this repo's filesystem).
-# Taps: homebrew-cast, homebrew-cast-dash, homebrew-cast-hooks, homebrew-cast-agents,
-#       homebrew-cast-desktop, homebrew-cast-doctor, homebrew-cast-memory,
-#       homebrew-cast-observe, homebrew-cast-parallel, homebrew-cast-routines,
-#       homebrew-cast-security, homebrew-cast-time, homebrew-claudes-journal = 13.
+# Taps: homebrew-cast, homebrew-cast-desktop, homebrew-cast-doctor, homebrew-cast-ledger,
+#       homebrew-cast-mcp, homebrew-cast-memory, homebrew-cast-predict, homebrew-cast-time,
+#       homebrew-claudes-journal = 9. (2026-07-01 ecosystem consolidation: 13 -> 9.)
 # Update CAST_PACKAGES_COUNT when the tap set changes.
 cast_stat_packages() {
-  echo "${CAST_PACKAGES_COUNT:-13}"
+  echo "${CAST_PACKAGES_COUNT:-9}"
 }
 
 # cast_stats_assert_floors — plausibility guard against silent stat breakage.
@@ -113,7 +112,7 @@ cast_stats_assert_floors() {
   _cast_stats_floor tables   "$tables"   30
   _cast_stats_floor commands "$commands" 10
   _cast_stats_floor skills   "$skills"   5
-  _cast_stats_floor packages "$packages" 10
+  _cast_stats_floor packages "$packages" 8
   if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     printf '[cast-stats] FLOOR VIOLATION: version=%s is not a valid semver\n' "$version" >&2
     violations=$((violations + 1))

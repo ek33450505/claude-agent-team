@@ -3,8 +3,8 @@
 #
 # Coverage:
 #   - gh absent  ⇒ doctor prints skip INFO line, does NOT hard-fail
-#   - gh stub returns 13 (matches expected_packages=13) ⇒ "matches" OK line
-#   - gh stub returns 14 (mismatch) ⇒ WARN line with "live=14 but constant=13"
+#   - gh stub returns 9 (matches expected_packages=9) ⇒ "matches" OK line
+#   - gh stub returns 14 (mismatch) ⇒ WARN line with "live=14 but constant=9"
 #
 # Uses isolated temp HOME (required — cast doctor reads $HOME/.claude).
 # Stubs gh on PATH to avoid real network calls.
@@ -110,11 +110,11 @@ GHSTUB
 }
 
 # ---------------------------------------------------------------------------
-# Test: gh stub returns 13 ⇒ OK "matches" line
+# Test: gh stub returns 9 ⇒ OK "matches" line
 # ---------------------------------------------------------------------------
 
-@test "cast doctor: Homebrew taps OK when gh returns count matching constant (13)" {
-  _install_gh_stub "$HOME/bin" 13
+@test "cast doctor: Homebrew taps OK when gh returns count matching constant (9)" {
+  _install_gh_stub "$HOME/bin" 9
   export PATH="$HOME/bin:$PATH"
 
   run bash "$CAST_CLI" doctor
@@ -124,7 +124,7 @@ GHSTUB
 }
 
 # ---------------------------------------------------------------------------
-# Test: gh stub returns 14 ⇒ WARN with "live=14 but constant=13"
+# Test: gh stub returns 14 ⇒ WARN with "live=14 but constant=9"
 # ---------------------------------------------------------------------------
 
 @test "cast doctor: Homebrew taps WARN when gh returns count mismatching constant" {
@@ -136,5 +136,5 @@ GHSTUB
   # The new check is advisory-only — overall doctor still exits 0
   assert_output --partial "Homebrew taps"
   assert_output --partial "live=14"
-  assert_output --partial "constant=13"
+  assert_output --partial "constant=9"
 }

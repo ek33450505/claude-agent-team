@@ -268,14 +268,14 @@ Full changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ## CAST Ecosystem
 
-CAST is one of 14 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source. See [docs/ecosystem.md](docs/ecosystem.md) for the full repo table and install commands.
+CAST is one of 10 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source. See [docs/ecosystem.md](docs/ecosystem.md) for the full repo table and install commands.
 
 <!-- ECOSYSTEM_START -->
 | Tier | Repos |
 |---|---|
-| Core Framework | cast-hooks, cast-agents, cast-memory, cast-observe, cast-security, cast-parallel |
-| Tooling | cast-claudes_journal, cast-dash, cast-time, cast-routines, cast-doctor |
 | Observability | claude-code-dashboard, cast-desktop |
+| Record extractions | cast-mcp, cast-ledger, cast-predict |
+| Tooling | cast-memory, cast-doctor, cast-time, cast-claudes_journal |
 <!-- ECOSYSTEM_END -->
 
 **New to CAST?** [Quick Start](docs/tutorial/getting-started.md) · [Agent Roster](docs/agents/AGENT-ROSTER.md) · [Architecture](docs/architecture/ARCHITECTURE.md)
@@ -289,8 +289,8 @@ CAST is one of 14 source repositories in a connected ecosystem — each solves a
 - [**claude-code-dashboard**](https://github.com/ek33450505/claude-code-dashboard) — React observability UI — sessions, agent analytics, hook health, memory browser, SQLite explorer
 - [**cast-desktop**](https://github.com/ek33450505/cast-desktop) — Tauri 2 native app with embedded PTY terminal, command palette, 11 dashboard views
 - [**cast-claudes_journal**](https://github.com/ek33450505/cast-claudes_journal) — Session journaling; auto-injects prior-day context via SessionStart hook
-- [**cast-dash**](https://github.com/ek33450505/cast-dash) — TUI dashboard for live cast.db session & agent-run monitoring
-- [**cast-hooks**](https://github.com/ek33450505/cast-hooks) · [**cast-routines**](https://github.com/ek33450505/cast-routines) · [**cast-doctor**](https://github.com/ek33450505/cast-doctor)
+- [**cast-mcp**](https://github.com/ek33450505/cast-mcp) · [**cast-ledger**](https://github.com/ek33450505/cast-ledger) · [**cast-predict**](https://github.com/ek33450505/cast-predict) — the record, extracted: MCP access, tamper-evident receipts, dispatch prediction
+- [**cast-memory**](https://github.com/ek33450505/cast-memory) · [**cast-doctor**](https://github.com/ek33450505/cast-doctor) · [**cast-time**](https://github.com/ek33450505/cast-time)
 
 ---
 
