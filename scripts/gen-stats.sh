@@ -62,7 +62,7 @@ VERSION_FILE="$REPO_DIR/VERSION"
 CAST_VERSION="$(cast_stat_version)"
 
 # Plausibility floor (same guard as gen-cast-stats.sh) — fail loudly on silent-0.
-if ! cast_stats_assert_floors "$AGENT_COUNT" "$TEST_COUNT" "$DB_TABLE_COUNT" "$CMD_COUNT" "$SKILL_COUNT" "$(cast_stat_packages)" "$CAST_VERSION"; then
+if ! cast_stats_assert_floors "$AGENT_COUNT" "$TEST_COUNT" "$DB_TABLE_COUNT" "$CMD_COUNT" "$SKILL_COUNT" "$(cast_stat_packages)" "$CAST_VERSION" "$TEST_FILE_COUNT"; then
   echo "[gen-stats] ABORT: derived stats failed plausibility floor (see above)." >&2
   exit 1
 fi
