@@ -40,6 +40,9 @@
         "~/.claude/history.jsonl",
         "~/.claude/logs/**",
         "~/.claude/routing-log.jsonl"
+      ],
+      "allowRead": [
+        "~/.claude/cast.db"
       ]
     },
     "excludedCommands": [
@@ -71,6 +74,6 @@
   "plansDirectory": "~/.claude/plans/",
   "_permissions_warning": "REVIEW CAREFULLY: Bash/Write/Edit let Claude act without asking. Remove any you're not comfortable with.",
   "_routing_note": "Model routing: haiku for commit/push/code-reviewer/test-runner. opus is the default (set in 16-model-defaults.json). Set CLAUDE_CODE_SUBAGENT_MODEL to override globally. Effort levels: see agent frontmatter.",
-  "_sandbox_note": "INERT as of macOS 26.5.1 / Claude Code 2.1.195: this `sandbox` block does NOT enforce. CC's engagement gate (f1n -> isSupportedPlatform/checkDependencies) short-circuits and never invokes the OS Seatbelt sandbox, so Bash runs unsandboxed and `failIfUnavailable` is never consulted. The OS Seatbelt primitive itself works; the gap is CC's SRT declining to engage, so this config is aspirational until CC engages it. The egress PreToolUse hook (logs/egress.jsonl) is the only LIVE egress enforcement. Note: CC does not natively read managed-settings.d/; cast-merge-settings.sh merges this into ~/.claude/settings.json (user layer, not tamper-proof MDM). Verify ENFORCEMENT, not key-presence.",
+  "_sandbox_note": "PARTIALLY LIVE (updated 2026-07-02, CC 2.1.195): filesystem denyRead DOES enforce in sessions where CC engages the Seatbelt sandbox — proven by EPERM on cast.db reads in a live interactive session (2026-07-02 doctor probe). Enforcement is session/permission-mode-dependent: explicitly-allowed and bypass-permissions commands run unsandboxed, so probes from autonomous sessions may observe no denial — verify from an interactive default-mode session. excludedCommands does NOT bypass filesystem.denyRead. filesystem.allowRead wins over denyRead: cast.db is allowlisted (Ed decision 2026-07-02) so cast status and /doctor read real data; history.jsonl, logs/**, and routing-log.jsonl stay denied. The egress PreToolUse hook (logs/egress.jsonl) remains the only live egress enforcement. Note: CC does not natively read managed-settings.d/; cast-merge-settings.sh merges this into ~/.claude/settings.json (user layer, not tamper-proof MDM). Verify ENFORCEMENT, not key-presence.",
   "teammateMode": "in-process"
 }
