@@ -227,6 +227,63 @@ SQL
   refute_output --partial "agent_hallucinations — 1 flagged"
 }
 
+# ── Test 7: redaction failures — WARN path ──────────────────────────────────
+@test "redaction failures: WARN when [REDACTION_FAILED] row exists in dispatch_decisions" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Minimal fixture uses simplified dispatch_decisions schema; add prompt_snippet
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN prompt_snippet TEXT;" 2>/dev/null || true
+
+  # Plant a [REDACTION_FAILED] marker row
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO dispatch_decisions (prompt_snippet) VALUES ('[REDACTION_FAILED]');"
+
+  _run_doctor
+
+  assert_output --partial "redaction failures recorded"
+  assert_output --partial "cast-redact fell back to marker"
+  assert_output --partial "dispatch_decisions: 1"
+  assert_output --partial "incidents: 0"
+}
+
+@test "redaction failures: WARN when [REDACTION_FAILED] row exists in incidents" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Minimal fixture uses simplified incidents schema; add redacted-text columns
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN problem_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN fix_summary TEXT;" 2>/dev/null || true
+
+  # Plant a [REDACTION_FAILED] marker in problem_summary
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO incidents (problem_summary) VALUES ('[REDACTION_FAILED]');"
+
+  _run_doctor
+
+  assert_output --partial "redaction failures recorded"
+  assert_output --partial "cast-redact fell back to marker"
+  assert_output --partial "incidents: 1"
+}
+
+# ── Test 8: redaction failures — quiet pass ──────────────────────────────────
+@test "redaction failures: silent when no [REDACTION_FAILED] rows exist" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Add prompt_snippet column (minimal fixture omits it)
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN prompt_snippet TEXT;" 2>/dev/null || true
+
+  # Plant a normal (non-marker) row
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO dispatch_decisions (prompt_snippet) VALUES ('normal prompt snippet');"
+
+  _run_doctor
+
+  refute_output --partial "redaction failures recorded"
+  refute_output --partial "cast-redact fell back to marker"
+}
+
 # ── Test 5: silent truncations (maxTurns) — WARN path ───────────────────────
 @test "silent truncations: WARN when stuck-running row older than 2h exists" {
   _create_minimal_core_tables "$CAST_DB_PATH"
@@ -268,4 +325,87 @@ SQL
 
   assert_output --partial "silent truncations (maxTurns) — none in last 7d"
   refute_output --partial "silent truncations (maxTurns) — 1 suspected truncation"
+}
+
+# ── Test 9: cast status with nonexistent cast.db ──────────────────────────────
+@test "cast status: nonexistent cast.db outputs 'cast.db not found' in Spend line" {
+  # CAST_DB_PATH set in setup() but we intentionally do NOT create the db file
+  run env CAST_DB_PATH="$BATS_TEST_TMPDIR/nope.db" bash "$CAST_BIN" status
+
+  assert_success
+  assert_output --partial "cast.db not found"
+}
+
+# ── Test 10: cast status with unreadable cast.db ─────────────────────────────
+@test "cast status: chmod 000 cast.db outputs 'present but unreadable' in Spend line" {
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "chmod-000 unreadable simulation requires non-root"
+  fi
+
+  # Create and then make unreadable
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  chmod 000 "$CAST_DB_PATH"
+
+  run env CAST_DB_PATH="$CAST_DB_PATH" bash "$CAST_BIN" status
+
+  assert_success
+  assert_output --partial "present but unreadable"
+}
+
+# ── Test 11: cast memory list with missing cast.db ────────────────────────────
+@test "cast memory list: missing cast.db fails with 'cast.db not found' and init hint" {
+  # CAST_DB_PATH intentionally not created
+  run env CAST_DB_PATH="$BATS_TEST_TMPDIR/nope.db" bash "$CAST_BIN" memory list
+
+  assert_failure
+  assert_output --partial "cast.db not found"
+  assert_output --partial "cast-db-init.sh"
+}
+
+# ── Test 12: cast memory list with unreadable cast.db ─────────────────────────
+@test "cast memory list: chmod 000 cast.db fails with 'present but unreadable' hint" {
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "chmod-000 unreadable simulation requires non-root"
+  fi
+
+  # Create tables then make unreadable
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  chmod 000 "$CAST_DB_PATH"
+
+  run env CAST_DB_PATH="$CAST_DB_PATH" bash "$CAST_BIN" memory list
+
+  assert_failure
+  assert_output --partial "present but unreadable"
+  assert_output --partial "allowRead"
+}
+
+# ── Test 13: cast-validate.sh FTS5 honesty - missing cast.db ──────────────────
+@test "cast-validate.sh FTS5: missing cast.db outputs 'cast.db not found'" {
+  # HOME points to temp dir with no .claude subdirectory
+  run env HOME="$BATS_TEST_TMPDIR/home" bash "$REPO_DIR/scripts/cast-validate.sh" 2>&1
+
+  # Do NOT assert overall exit code; other checks may warn/fail
+  # Only check for the FTS5 substring
+  assert_output --partial "FTS5: cast.db not found"
+}
+
+# ── Test 14: cast-validate.sh FTS5 honesty - unreadable cast.db ───────────────
+@test "cast-validate.sh FTS5: chmod 000 cast.db outputs 'present but unreadable'" {
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "chmod-000 unreadable simulation requires non-root"
+  fi
+
+  # Create .claude dir and unreadable cast.db
+  local test_home="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$test_home/.claude"
+  local test_db="$test_home/.claude/cast.db"
+
+  # Create a minimal sqlite3 db then make unreadable
+  sqlite3 "$test_db" "CREATE TABLE t (id INT);" 2>/dev/null
+  chmod 000 "$test_db"
+
+  run env HOME="$test_home" bash "$REPO_DIR/scripts/cast-validate.sh" 2>&1
+
+  # Do NOT assert overall exit code
+  assert_output --partial "FTS5: cast.db present but unreadable"
 }

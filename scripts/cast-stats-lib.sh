@@ -69,7 +69,7 @@ cast_stat_test_files() {
 
 # cast_stat_tables — count DISTINCT table names across canonical schema sources.
 # Covers cast-db-init.sh + scripts/migrations/*.sql.
-# Must yield 38 (canonical count after v9 Phase C retired stream_events, teammate_messages, code_ref_checks).
+# Must yield 39 (38 after v9 Phase C retired stream_events/teammate_messages/code_ref_checks; +1 commit_provenance D5).
 cast_stat_tables() {
   (
     cd "${CAST_STATS_REPO_ROOT}"
@@ -93,12 +93,13 @@ cast_stat_packages() {
 }
 
 # cast_stats_assert_floors — plausibility guard against silent stat breakage.
-# Args: AGENTS TESTS TABLES COMMANDS SKILLS PACKAGES VERSION
+# Args: AGENTS TESTS TABLES COMMANDS SKILLS PACKAGES VERSION [TEST_FILES]
+# TEST_FILES is optional (positional arg 8) — callers that omit it skip the floor.
 # Prints one "[cast-stats] FLOOR VIOLATION: ..." line per failure to stderr.
 # Returns 0 if every stat meets its floor, 1 otherwise. Never exits (sourcing-safe).
 cast_stats_assert_floors() {
   local agents="${1:-}" tests="${2:-}" tables="${3:-}" commands="${4:-}" \
-        skills="${5:-}" packages="${6:-}" version="${7:-}"
+        skills="${5:-}" packages="${6:-}" version="${7:-}" test_files="${8:-}"
   local violations=0
   _cast_stats_floor() { # name value min
     local name="$1" value="$2" min="$3"
@@ -113,6 +114,10 @@ cast_stats_assert_floors() {
   _cast_stats_floor commands "$commands" 10
   _cast_stats_floor skills   "$skills"   5
   _cast_stats_floor packages "$packages" 8
+  # test_files floor: 170 (~10% below 189, consistent with headroom style of other floors)
+  if [[ -n "$test_files" ]]; then
+    _cast_stats_floor test_files "$test_files" 170
+  fi
   if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     printf '[cast-stats] FLOOR VIOLATION: version=%s is not a valid semver\n' "$version" >&2
     violations=$((violations + 1))

@@ -3,7 +3,7 @@
 # Creates ~/.claude/cast.db with core tables + (dormant) swarm observability tables:
 #   sessions, agent_runs, routing_events, agent_memories
 #   swarm_sessions, teammate_runs  (writers: /swarm retired v9; experimental native Agent Teams hooks re-populate these when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 — dormant otherwise)
-#   teammate_messages, stream_events: retired v9 Phase C (U7a) — removed from canonical; physical DROP from live DB is a separate gated step
+#   teammate_messages, stream_events: retired v9 Phase C (U7a) — removed from canonical; physical DROP from live DB = migration 025
 #   otel_metrics, otel_events  (writer: cast-otel-collector.py; native OTLP feed, opt-in OFF by default)
 #   record_fts (FTS5 full-text index over the whole record; writer: cast-ask-index — v9 A3)
 #   record_embed (semantic sidecar for vector search; writer: cast-ask-index — v9 A3)
@@ -1075,6 +1075,30 @@ CREATE TABLE IF NOT EXISTS provenance_chain (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_provenance_chain_session_uniq ON provenance_chain(session_id);
 PROVENANCE_CHAIN_TABLE
+  _columns_added=1
+fi
+
+# commit_provenance: D5 self-commit enforcement substrate — records the SHA of every
+# commit made by the `commit` agent so the pre-push reconciler can flag unauthorized
+# in-session self-commits (COMMIT_HATCH_USED without a matching provenance row).
+# Writer: scripts/cast-commit-provenance.py record <sha>
+# Deliberate init-only choice: added to the self-healing block rather than as a
+# numbered migration because migrations don't run reliably at install; this
+# unconditional block covers both fresh installs and existing live DBs without
+# requiring `cast-migrate.py --confirm`.
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "commit_provenance"; then
+  sqlite3 "$DB_PATH" <<'COMMIT_PROVENANCE_TABLE'
+CREATE TABLE IF NOT EXISTS commit_provenance (
+  sha         TEXT PRIMARY KEY,
+  session_id  TEXT,
+  agent       TEXT NOT NULL DEFAULT 'commit',
+  branch      TEXT,
+  repo        TEXT,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_commit_provenance_session ON commit_provenance(session_id);
+CREATE INDEX IF NOT EXISTS idx_commit_provenance_recorded ON commit_provenance(recorded_at);
+COMMIT_PROVENANCE_TABLE
   _columns_added=1
 fi
 

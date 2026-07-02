@@ -39,6 +39,7 @@ done
 VER="$(cast_stat_version)"
 AGENTS="$(cast_stat_agents)"
 TESTS="$(cast_stat_tests)"
+TEST_FILES="$(cast_stat_test_files)"
 TABLES="$(cast_stat_tables)"
 COMMANDS="$(cast_stat_commands)"
 SKILLS="$(cast_stat_skills)"
@@ -48,7 +49,7 @@ UPDATED="${CAST_STATS_DATE:-$(date +%F)}"
 # Plausibility floor — abort if any derived stat is implausibly low. Runs in BOTH
 # write and --check mode so a silent-0 can never pass (breaks the green-while-broken
 # tautology where --check re-derives the same broken value and compares it to itself).
-if ! cast_stats_assert_floors "$AGENTS" "$TESTS" "$TABLES" "$COMMANDS" "$SKILLS" "$PACKAGES" "$VER"; then
+if ! cast_stats_assert_floors "$AGENTS" "$TESTS" "$TABLES" "$COMMANDS" "$SKILLS" "$PACKAGES" "$VER" "$TEST_FILES"; then
   echo "[gen-cast-stats] ABORT: derived stats failed plausibility floor (see above)." >&2
   echo "  A stat derivation likely broke silently. Fix the derivation — do NOT lower the floor." >&2
   exit 1
@@ -60,6 +61,7 @@ JSON="$(jq -n \
   --arg versionTag "v${VER}" \
   --argjson agents "$AGENTS" \
   --argjson tests "$TESTS" \
+  --argjson test_files "$TEST_FILES" \
   --argjson tables "$TABLES" \
   --argjson commands "$COMMANDS" \
   --argjson skills "$SKILLS" \
@@ -72,6 +74,7 @@ JSON="$(jq -n \
     versionTag: $versionTag,
     agents: $agents,
     tests: $tests,
+    test_files: $test_files,
     tables: $tables,
     commands: $commands,
     skills: $skills,
@@ -107,11 +110,12 @@ fi
 # Default: write the file
 echo "$JSON" > "$STATS_FILE"
 echo "[gen-cast-stats] wrote ${STATS_FILE}" >&2
-echo "  version:  $VER" >&2
-echo "  agents:   $AGENTS" >&2
-echo "  tests:    $TESTS" >&2
-echo "  tables:   $TABLES" >&2
-echo "  commands: $COMMANDS" >&2
-echo "  skills:   $SKILLS" >&2
-echo "  packages: $PACKAGES" >&2
-echo "  updated:  $UPDATED" >&2
+echo "  version:    $VER" >&2
+echo "  agents:     $AGENTS" >&2
+echo "  tests:      $TESTS" >&2
+echo "  test_files: $TEST_FILES" >&2
+echo "  tables:     $TABLES" >&2
+echo "  commands:   $COMMANDS" >&2
+echo "  skills:     $SKILLS" >&2
+echo "  packages:   $PACKAGES" >&2
+echo "  updated:    $UPDATED" >&2

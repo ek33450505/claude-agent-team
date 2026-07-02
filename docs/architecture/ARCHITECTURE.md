@@ -154,7 +154,7 @@ To make the conventions plugin-portable, v8 migrated language-specific rules (Ty
 |---|---|---|
 | Plugins, agents, skills, hooks | Curated dual-ship plugin + install.sh runtime; deterministic `command`-hook enforcement | Native distribution, but with gates the platform leaves advisory |
 | Per-session model selection | Per-task routing across haiku 4.5 / sonnet / opus tiers | Automatic cost/capability matching |
-| No persistent audit trail | `cast.db`: <!-- CAST_DB_TABLE_COUNT -->38<!-- /CAST_DB_TABLE_COUNT -->+ tables — sessions, agent_runs, routing_events, quality_gates, agent_memories, eval_runs, agent_protocol_violations, and more, with temporal indices | Queryable, immutable, **local** run history |
+| No persistent audit trail | `cast.db`: <!-- CAST_DB_TABLE_COUNT -->39<!-- /CAST_DB_TABLE_COUNT -->+ tables — sessions, agent_runs, routing_events, quality_gates, agent_memories, eval_runs, agent_protocol_violations, and more, with temporal indices | Queryable, immutable, **local** run history |
 | No backup/recovery story | Litestream off-radius replication + dated snapshots + wipe canary + `cast integrity` | Data integrity by construction |
 | No cross-agent messaging | Peer gossip protocol (cast.db message bus) | Agents collaborate without a central broker |
 | Prose agent output | Typed Handoff JSON schema + Structured Output schemas (`schemas/`) | Machine-readable agent contracts; no silent cascade failures |

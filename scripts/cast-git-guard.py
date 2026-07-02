@@ -192,7 +192,9 @@ def _policy_evaluate(file_path: str):
             msg = (
                 f'**[CAST-POLICY-BLOCK]** Policy "{policy_id}" blocks this edit.\n'
                 f'Reason: {description}\n'
-                f'Required: Dispatch the `{required_agent}` agent before editing `{file_path}`.\n'
+                f'Required flow: dispatch `{required_agent}` REVIEW-ONLY — it must NOT apply this edit itself '
+                f'(its own edits stay blocked until its completion marker exists, which deadlocks). '
+                f'When it ends DONE its agent-status marker unblocks the session; then the ORCHESTRATOR applies the edit to `{file_path}`.\n'
                 f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
             )
             return 2, msg
@@ -234,6 +236,7 @@ def _audit_commit_hatch() -> None:
             'override_env': 'CAST_COMMIT_AGENT',
             'git_op': 'commit',
             'session_id': os.environ.get('CLAUDE_SESSION_ID', ''),
+            'in_claude_session': os.environ.get('CLAUDECODE') == '1',
         }
         with open(audit_path, 'a') as af:
             af.write(json.dumps(event) + '\n')

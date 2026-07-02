@@ -531,3 +531,173 @@ SQL
   assert_success
   [ "$output" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# Migration 025: DROP TABLE stream_events, teammate_messages, code_ref_checks
+# ---------------------------------------------------------------------------
+
+@test "migration 025: drops stream_events, teammate_messages, code_ref_checks tables" {
+  # Create the three retired v9 Phase C tables
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS stream_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  event_type TEXT,
+  data TEXT,
+  timestamp TEXT
+);
+CREATE TABLE IF NOT EXISTS teammate_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  sender TEXT,
+  content TEXT,
+  timestamp TEXT
+);
+CREATE TABLE IF NOT EXISTS code_ref_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  ref TEXT,
+  status TEXT,
+  timestamp TEXT
+);
+INSERT INTO stream_events (session_id, event_type) VALUES ('s-1', 'test');
+INSERT INTO teammate_messages (session_id, sender) VALUES ('s-1', 'agent');
+INSERT INTO code_ref_checks (session_id, ref) VALUES ('s-1', 'ref-1');
+SQL
+
+  # Verify all three tables exist before migration
+  local count_before
+  count_before=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (name='stream_events' OR name='teammate_messages' OR name='code_ref_checks');")
+  [ "$count_before" -eq 3 ]
+
+  # Apply migration 025
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/025_drop_retired_v9_phase_c_tables.sql"
+
+  # Verify all three tables are dropped
+  local count_after
+  count_after=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (name='stream_events' OR name='teammate_messages' OR name='code_ref_checks');")
+  [ "$count_after" -eq 0 ]
+}
+
+@test "migration 025: is idempotent (DROP TABLE IF EXISTS)" {
+  # Create one table to start
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE IF NOT EXISTS stream_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT);
+SQL
+
+  # Apply migration 025 twice
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/025_drop_retired_v9_phase_c_tables.sql"
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/025_drop_retired_v9_phase_c_tables.sql"
+
+  # Should still succeed (no error on second run)
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='stream_events';"
+  assert_success
+  [ "$output" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Migration 026: re-drop six orphan columns from agent_runs and sessions
+# ---------------------------------------------------------------------------
+
+@test "migration 026: drops orphan columns from agent_runs and sessions" {
+  # Create both tables WITH the six orphan columns to be dropped
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE agent_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent      TEXT,
+  status     TEXT,
+  project    TEXT,
+  prompt     TEXT
+);
+CREATE TABLE sessions (
+  id                  TEXT PRIMARY KEY,
+  project             TEXT,
+  total_input_tokens  INTEGER DEFAULT 0,
+  total_output_tokens INTEGER DEFAULT 0,
+  total_cost_usd      REAL DEFAULT 0.0,
+  model               TEXT
+);
+INSERT INTO agent_runs (session_id, agent, status, project, prompt)
+  VALUES ('s-1', 'code-writer', 'done', 'my-project', 'do the thing');
+INSERT INTO sessions (id, project, total_input_tokens, total_output_tokens, total_cost_usd, model)
+  VALUES ('sess-1', 'cast', 100, 200, 0.005, 'claude-sonnet-4-6');
+SQL
+
+  # Apply migration 026 directly
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/026_redrop_orphan_columns.sql"
+
+  # Orphan columns must be gone from agent_runs
+  local ar_orphan_count
+  ar_orphan_count=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_runs') WHERE name IN ('project','prompt');")
+  [ "$ar_orphan_count" -eq 0 ]
+
+  # Orphan columns must be gone from sessions
+  local sess_orphan_count
+  sess_orphan_count=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN ('total_input_tokens','total_output_tokens','total_cost_usd','model');")
+  [ "$sess_orphan_count" -eq 0 ]
+
+  # Kept columns must still be present in agent_runs
+  local ar_kept
+  ar_kept=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_runs') WHERE name='agent';")
+  [ "$ar_kept" -eq 1 ]
+
+  # Kept columns must still be present in sessions
+  local sess_kept
+  sess_kept=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='project';")
+  [ "$sess_kept" -eq 1 ]
+}
+
+@test "migration 026: is idempotent via runner fallback (no such column tolerated)" {
+  # Create schema_migrations with 009-025 already applied + tables WITHOUT orphan
+  # columns — so only 026 is pending when the runner executes.
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE schema_migrations (
+  version    TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+  checksum   TEXT
+);
+INSERT INTO schema_migrations (version) VALUES
+  ('009_cast_framework_fixes.sql'),
+  ('010_work_log_stream.sql'),
+  ('011_agent_response_capture.sql'),
+  ('012_file_writes.sql'),
+  ('013_agent_memories_validation_columns.sql'),
+  ('014_drop_agent_runs_model_used.sql'),
+  ('015_retire_stream_hook_events.sql'),
+  ('016_baseline_no_op.sql'),
+  ('017_incidents.sql'),
+  ('018_routines.sql'),
+  ('019_plan_sessions.sql'),
+  ('020_agent_runs_null_session_id.sql'),
+  ('021_sessions_delete_null_id.sql'),
+  ('022_wave3_safe_column_drops.sql'),
+  ('023_wave3_tier3_table_drops.sql'),
+  ('024_wave3_inc3_coupled_column_drops.sql'),
+  ('025_drop_retired_v9_phase_c_tables.sql');
+CREATE TABLE agent_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent      TEXT,
+  status     TEXT
+);
+CREATE TABLE sessions (
+  id      TEXT PRIMARY KEY,
+  project TEXT
+);
+SQL
+
+  # Runner sees only 026 pending; cast-migrate.py tolerates 'no such column'
+  run python3 "$MIGRATE_SCRIPT" --confirm
+  assert_success
+
+  # Migration 026 must be recorded in the ledger
+  local recorded
+  recorded=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM schema_migrations WHERE version='026_redrop_orphan_columns.sql';")
+  [ "$recorded" -eq 1 ]
+}

@@ -5,14 +5,14 @@
 # CAST
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-9.0.0-blue)
+![Version](https://img.shields.io/badge/version-9.1.0-blue)
 ![Agents](https://img.shields.io/badge/agents-23-green)
-![Tests](https://img.shields.io/badge/tests-2068-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2113-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)
 
-> **CAST v9 — "The record that acts."** Claude Code keeps a transcript. CAST keeps a **record** — a complete, local, inspectable SQLite trail (<!-- CAST_DB_TABLE_COUNT -->38<!-- /CAST_DB_TABLE_COUNT --> typed governance tables at `~/.claude/cast.db`) — and then *uses* it: it predicts your next dispatch, recalls the incident you're about to re-cause, attributes your spend per task, and gates your commits. A governance layer built entirely on Claude Code's native primitives — hooks, subagents, skills, permissions, MCP — with <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents that plan, implement, review, test, and commit. Raw `git commit` and `git push` are hard-blocked; every dispatch is logged. **The record is the product.**
+> **CAST v9 — "The record that acts."** Claude Code keeps a transcript. CAST keeps a **record** — a complete, local, inspectable SQLite trail (<!-- CAST_DB_TABLE_COUNT -->39<!-- /CAST_DB_TABLE_COUNT --> typed governance tables at `~/.claude/cast.db`) — and then *uses* it: it predicts your next dispatch, recalls the incident you're about to re-cause, attributes your spend per task, and gates your commits. A governance layer built entirely on Claude Code's native primitives — hooks, subagents, skills, permissions, MCP — with <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents that plan, implement, review, test, and commit. Raw `git commit` and `git push` are hard-blocked; every dispatch is logged. **The record is the product.**
 
 **[CAST Framework](https://castframework.dev)** · *Keep using Anthropic's native tools. Own the record.*
 
@@ -75,7 +75,7 @@ The plugin bundles CAST's curated agents, skills, commands, and `command`-type e
 - **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a fresh-context reviewer pass. You cannot skip this.
 - **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope and a model tier (haiku 4.5 / sonnet / opus). `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
 - **Agent behavior is tested, not hoped for.** The `cast eval` harness runs an agent-behavior corpus mined from real failures — with LLM-judge graders and `pass@k`.
-- **<!-- CAST_TEST_COUNT -->2068<!-- /CAST_TEST_COUNT --> BATS test cases** across the hook and utility layer. CI runs on macOS and Ubuntu.
+- **<!-- CAST_TEST_COUNT -->2113<!-- /CAST_TEST_COUNT --> BATS test cases** across the hook and utility layer. CI runs on macOS and Ubuntu.
 
 ---
 
@@ -222,7 +222,7 @@ cast eval report               # latest verdict per case
 
 ## Observability & cast.db
 
-SQLite (WAL mode) at `~/.claude/cast.db` — append-only, never truncated, **fully local**. <!-- CAST_DB_TABLE_COUNT -->38<!-- /CAST_DB_TABLE_COUNT --> typed governance tables store sessions, agent_runs, routing_events, quality_gates, dispatch_decisions, agent_memories, eval_runs, incidents, provenance_chain, and more. Query it three ways: `sqlite3` directly, `cast ask` (FTS5 over the whole record), or the read-only `cast mcp serve` MCP server. Surfaced by two read-only dashboards:
+SQLite (WAL mode) at `~/.claude/cast.db` — append-only, never truncated, **fully local**. <!-- CAST_DB_TABLE_COUNT -->39<!-- /CAST_DB_TABLE_COUNT --> typed governance tables store sessions, agent_runs, routing_events, quality_gates, dispatch_decisions, agent_memories, eval_runs, incidents, provenance_chain, and more. Query it three ways: `sqlite3` directly, `cast ask` (FTS5 over the whole record), or the read-only `cast mcp serve` MCP server. Surfaced by two read-only dashboards:
 
 **[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** — React 19 + Vite + Express, ~21 views (sessions, agent analytics & reliability, hook health, memory browser, plans, incidents, file-write audits, a SQLite explorer). **[Cast Desktop](https://github.com/ek33450505/cast-desktop)** — Tauri 2 native macOS app with an embedded PTY terminal, command palette, and 11 views. Both read `cast.db` locally — no cloud. See [docs/observability/OBSERVABILITY.md](docs/observability/OBSERVABILITY.md).
 
@@ -256,7 +256,7 @@ Runtime installs to `~/.claude/` — agents, memory, plans, `cast.db`, scripts.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->188<!-- /CAST_TEST_FILE_COUNT --> CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->2068<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
+<!-- CAST_TEST_FILE_COUNT -->191<!-- /CAST_TEST_FILE_COUNT --> CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->2113<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
 
 ---
 
@@ -323,6 +323,6 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->2068<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->2113<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> skills

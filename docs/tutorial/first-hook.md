@@ -102,10 +102,18 @@ After any agent dispatch or tool call, you can query `cast.db` to confirm the ho
 
 ```bash
 sqlite3 ~/.claude/cast.db \
-  "SELECT event_type, payload, created_at
-   FROM routing_events
-   ORDER BY created_at DESC
-   LIMIT 5;"
+  "SELECT id, project, started_at, status
+   FROM sessions
+   ORDER BY started_at DESC
+   LIMIT 3;"
+```
+
+Expected output:
+
+```
+1614e68d-6b78-4151-8483-a7bcbb07c6c8|my-project|2026-05-06T14:20:00Z|active
+4e16af30-7fc0-4d38-94b8-dfdaa0d0df34|another-project|2026-05-06T14:10:00Z|ended
+9c2b7a51-0d4e-4f3a-8e21-5b6c3d9f0a12|my-project|2026-05-06T14:00:00Z|ended
 ```
 
 For session starts specifically:
@@ -117,7 +125,7 @@ cat ~/.claude/cast/session-starts.jsonl | tail -3
 Expected output (one JSON object per line):
 
 ```json
-{"session_id":"ses_01Xabc...","cwd":"/Users/you/project","ts":"2026-05-06T14:20:00Z"}
+{"timestamp": "2026-05-06T14:20:00Z", "session_id": "1614e68d-6b78-4151-8483-a7bcbb07c6c8", "cwd": "~/project"}
 ```
 
 ---

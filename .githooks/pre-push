@@ -33,6 +33,34 @@ if [ -n "${_PUSH_STDIN:-}" ]; then
   fi
 fi
 
+# Commit-provenance reconcile gate — block push when unauthorized in-session
+# self-commits (COMMIT_HATCH_USED with in_claude_session==true, no provenance row)
+# are detected since the last reconcile checkpoint.
+# Missing python3 or missing script: warn and continue (infra absence ≠ violation).
+if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
+  _RECONCILE_SCRIPT="$REPO_ROOT/scripts/cast-commit-reconcile.py"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[CAST pre-push] python3 not found — skipping reconcile gate (install python3 to enable)" >&2
+  elif [ ! -f "$_RECONCILE_SCRIPT" ]; then
+    echo "[CAST pre-push] cast-commit-reconcile.py not found — skipping reconcile gate (run: bash install.sh)" >&2
+  else
+    echo "[CAST pre-push] Running commit-provenance reconcile gate..."
+    _RECONCILE_TMPSTDERR="$(mktemp)"
+    if ! python3 "$_RECONCILE_SCRIPT" 2>"$_RECONCILE_TMPSTDERR"; then
+      cat "$_RECONCILE_TMPSTDERR" >&2
+      rm -f "$_RECONCILE_TMPSTDERR"
+      echo "" >&2
+      echo "[CAST pre-push] Blocked: unauthorized in-session self-commit detected." >&2
+      echo "To skip this gate (human-approved exception): CAST_RECONCILE_ACK=1 git push" >&2
+      exit 1
+    fi
+    rm -f "$_RECONCILE_TMPSTDERR"
+    echo "[CAST pre-push] commit-provenance reconcile OK ✓"
+  fi
+else
+  echo "[CAST pre-push] Skipping commit-provenance reconcile (CAST_SKIP_RECONCILE=1)" >&2
+fi
+
 # Ubuntu CI-parity check — OPT-IN ONLY (per the 2026-06-02 test policy: the full suite is
 # batched before releases, NOT a per-push gate). When Docker is up, pre-push-ubuntu-check.sh
 # runs `make test-ubuntu` (docker build + the full BATS suite in a container, several minutes);

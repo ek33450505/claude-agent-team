@@ -53,10 +53,10 @@ teardown() {
   assert_output --regexp '^[1-9][0-9]*$'
 }
 
-@test "gen-cast-stats.sh produces tables=38" {
+@test "gen-cast-stats.sh produces tables=39" {
   run jq -r '.tables' < "$CANONICAL_JSON"
   assert_success
-  assert_output "38"
+  assert_output "39"
 }
 
 @test "gen-cast-stats.sh produces commands=21" {
@@ -206,6 +206,48 @@ EOF
   printf '<!-- CAST_AGENT_COUNT -->%s<!-- /CAST_AGENT_COUNT -->\n' "$agents" > "$fixture"
 
   run bash "$DRIFT_CHECK_SH" --canonical "$CANONICAL_JSON" --sentinels "$fixture"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# test_files field — new key added M1-B convergence
+# ---------------------------------------------------------------------------
+
+@test "gen-cast-stats.sh: test_files is a JSON number in cast-stats.json" {
+  run jq -e 'if (.test_files | type) == "number" then true else error("test_files not a number") end' < "$CANONICAL_JSON"
+  assert_success
+}
+
+@test "gen-cast-stats.sh: test_files is a positive integer" {
+  run jq -r '.test_files' < "$CANONICAL_JSON"
+  assert_success
+  assert_output --regexp '^[1-9][0-9]*$'
+}
+
+@test "gen-cast-stats.sh: test_files matches cast_stat_test_files output" {
+  # Load the lib and compare canonical JSON value against the live function output.
+  # Both run from the same repo root so they should agree.
+  source "$REPO_DIR/scripts/cast-stats-lib.sh"
+  local live_count
+  live_count="$(cast_stat_test_files)"
+  local json_count
+  json_count="$(jq -r '.test_files' < "$CANONICAL_JSON")"
+  assert [ "$live_count" = "$json_count" ]
+}
+
+@test "cast_stats_assert_floors: test_files below floor returns 1 and emits FLOOR VIOLATION" {
+  source "$REPO_DIR/scripts/cast-stats-lib.sh"
+  # Pass valid values for positions 1-7 but test_files=100 (below 170 floor)
+  run cast_stats_assert_floors 23 1258 39 20 15 9 9.0.0 100
+  assert_failure
+  assert_output --partial "FLOOR VIOLATION"
+  assert_output --partial "test_files"
+}
+
+@test "cast_stats_assert_floors: omitting test_files arg still passes for valid stats" {
+  source "$REPO_DIR/scripts/cast-stats-lib.sh"
+  # 7-arg call (original signature) must still succeed — backward-compat
+  run cast_stats_assert_floors 23 1258 39 20 15 9 9.0.0
   assert_success
 }
 

@@ -280,9 +280,12 @@ success "  Scripts installed (including cast_db.py)"
 # --- Install managed-settings.d fragments ---
 # Policy: CAST-owned fragments overwrite — they ship behavior changes that must reach the
 # deployed copy. CAST-owned set: *-hooks-*.json (hook wiring), 50-mcp.json (MCP server
-# list; managed to propagate removals such as the github-MCP drop), and 11-deny.json
+# list; managed to propagate removals such as the github-MCP drop), 11-deny.json
 # (categorical security-enforcement deny rules for model cap + destructive Bash patterns;
-# must reach existing installs on reinstall). User MCP servers belong in ~/.claude.json
+# must reach existing installs on reinstall), and 61-sandbox.json (sandbox/security
+# enforcement config — network allowlist, filesystem denyRead/allowRead, credentials deny;
+# must reach existing installs on reinstall: 2026-07-02 allowRead change failed to deploy
+# while sandbox lived in skip-if-exists 60-meta). User MCP servers belong in ~/.claude.json
 # (user/project scope), NOT in the managed fragment.
 # User-customizable fragments (env, permissions, etc.) skip-if-exists.
 # Downstream-only fragments (filenames not in source) are preserved by virtue of never being
@@ -294,7 +297,7 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
     base="$(basename "$fragment")"
     dest="$CLAUDE_DIR/managed-settings.d/$base"
     case "$base" in
-        *-hooks-*.json|50-mcp.json|11-deny.json)
+        *-hooks-*.json|50-mcp.json|11-deny.json|61-sandbox.json)
             # CAST-owned: overwrite to propagate source updates
             if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
                 mkdir -p "$BACKUP_DIR/managed-settings.d"

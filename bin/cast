@@ -77,12 +77,35 @@ _warn()    { printf "${C_YELLOW}%s${C_RESET}\n" "$*" >&2; }
 _error()   { printf "${C_RED}Error: %s${C_RESET}\n" "$*" >&2; }
 _verbose() { [ "$CAST_VERBOSE" -eq 1 ] && printf "${C_DIM}[verbose] %s${C_RESET}\n" "$*" >&2; }
 
-_require_db() {
-  if [ ! -f "$CAST_DB_PATH" ]; then
-    _error "cast.db not found at $CAST_DB_PATH"
-    printf "  Run: bash %s/cast-db-init.sh\n" "$CAST_SCRIPTS_DIR" >&2
-    exit 1
+# _db_state — prints "ok" | "unreadable" | "missing". A read probe, NOT [ -f ]:
+# sandbox denyRead blocks stat(), so [ -f ] reports a present file as missing.
+_db_state() {
+  local err
+  if err="$( { : < "$CAST_DB_PATH"; } 2>&1 )"; then
+    printf 'ok'
+  else
+    case "$err" in
+      *"Operation not permitted"*|*"Permission denied"*) printf 'unreadable' ;;
+      *) printf 'missing' ;;
+    esac
   fi
+}
+
+_require_db() {
+  case "$(_db_state)" in
+    missing)
+      _error "cast.db not found at $CAST_DB_PATH"
+      printf "  Run: bash %s/cast-db-init.sh\n" "$CAST_SCRIPTS_DIR" >&2
+      exit 1
+      ;;
+    unreadable)
+      _error "cast.db present but unreadable at $CAST_DB_PATH (sandboxed session?)"
+      printf "  Add \"~/.claude/cast.db\" to sandbox.filesystem.allowRead in ~/.claude/settings.json, then start a fresh session\n" >&2
+      exit 1
+      ;;
+    ok)
+      ;;
+  esac
   if ! command -v sqlite3 >/dev/null 2>&1; then
     _error "sqlite3 not found in PATH"
     exit 1
@@ -407,9 +430,11 @@ _cmd_status() {
   fi
   if [ "$width" -gt 70 ]; then width=70; fi
 
+  local db_state; db_state="$(_db_state)"
+
   # Budget
-  local today_spend=0 week_spend=0
-  if [ -f "$CAST_DB_PATH" ] && command -v python3 >/dev/null 2>&1; then
+  local today_spend=0 week_spend=0 _spend_note=""
+  if [ "$db_state" = "ok" ] && command -v python3 >/dev/null 2>&1; then
     read -r today_spend week_spend <<< "$(python3 - "$CAST_DB_PATH" <<'PYEOF'
 import sys, sqlite3
 from datetime import datetime, timedelta, timezone
@@ -426,25 +451,35 @@ conn.close()
 print(f"{today_s:.2f} {week_s:.2f}")
 PYEOF
     2>/dev/null || echo "0.00 0.00")"
+  elif [ "$db_state" = "unreadable" ]; then
+    _spend_note="unavailable — cast.db unreadable (sandboxed session?)"
   fi
 
   # Memory count + stale count + last verified
-  local mem_count=0 mem_stale=0 mem_last_verified="never"
-  if [ -f "$CAST_DB_PATH" ] && command -v sqlite3 >/dev/null 2>&1; then
+  local mem_count=0 mem_stale=0 mem_last_verified="never" _mem_note=""
+  if [ "$db_state" = "ok" ] && command -v sqlite3 >/dev/null 2>&1; then
     mem_count="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories;" 2>/dev/null || echo 0)"
     mem_stale="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_memories WHERE confidence < 0.4;" 2>/dev/null || echo 0)"
     local _mem_lv
     _mem_lv="$(sqlite3 "$CAST_DB_PATH" "SELECT MAX(last_validated_at) FROM agent_memories;" 2>/dev/null || true)"
     [ -n "$_mem_lv" ] && mem_last_verified="$_mem_lv"
+  elif [ "$db_state" = "unreadable" ]; then
+    _mem_note="unavailable — cast.db unreadable (sandboxed session?)"
   fi
 
   # Budget — primary: budgets table (global row); secondary: repo cast.json per-dispatch
   local _budget_primary="" _budget_secondary="" _budget_degraded=""
 
-  if [ ! -f "$CAST_DB_PATH" ]; then
-    _budget_degraded="cast.db not found — budget data unavailable"
-  elif command -v python3 >/dev/null 2>&1; then
-    _budget_primary="$(python3 - "$CAST_DB_PATH" "$today_spend" <<'PYEOF'
+  case "$db_state" in
+    missing)
+      _budget_degraded="cast.db not found — budget data unavailable"
+      ;;
+    unreadable)
+      _budget_degraded="cast.db present but unreadable (sandboxed session? add ~/.claude/cast.db to sandbox.filesystem.allowRead) — budget data unavailable"
+      ;;
+    ok)
+      if command -v python3 >/dev/null 2>&1; then
+        _budget_primary="$(python3 - "$CAST_DB_PATH" "$today_spend" <<'PYEOF'
 import sys, sqlite3
 db, spend_str = sys.argv[1], sys.argv[2]
 try:
@@ -467,14 +502,16 @@ except sqlite3.OperationalError:
 except Exception:
     print("__UNREADABLE__")
 PYEOF
-    2>/dev/null || echo "__UNAVAILABLE__")"
-    case "$_budget_primary" in
-      __UNREADABLE__|__UNAVAILABLE__)
-        _budget_degraded="budget table unreadable"
-        _budget_primary="" ;;
-      *) ;;
-    esac
-  fi
+        2>/dev/null || echo "__UNAVAILABLE__")"
+        case "$_budget_primary" in
+          __UNREADABLE__|__UNAVAILABLE__)
+            _budget_degraded="budget table unreadable"
+            _budget_primary="" ;;
+          *) ;;
+        esac
+      fi
+      ;;
+  esac
 
   # Secondary (or sole source when no global row): repo per-dispatch from cast.json
   local _repo_cast_json="${PWD}/.claude/cast.json"
@@ -515,7 +552,7 @@ print(sum(len(v) if isinstance(v, list) else 1 for v in hooks.values()))
 
   # Recent agent runs (last 5)
   local recent_runs=""
-  if [ -f "$CAST_DB_PATH" ] && command -v python3 >/dev/null 2>&1; then
+  if [ "$db_state" = "ok" ] && command -v python3 >/dev/null 2>&1; then
     recent_runs="$(python3 - "$CAST_DB_PATH" <<'PYEOF'
 import sys, sqlite3
 from datetime import datetime, timezone
@@ -550,6 +587,8 @@ for r in rows:
     print(f"  {status_sym} {(r['agent'] or ''):<22} [{model:<24}] {ago}")
 PYEOF
     2>/dev/null || echo "")"
+  elif [ "$db_state" = "unreadable" ]; then
+    recent_runs="  (cast.db unreadable — agent run history unavailable in sandboxed session)"
   fi
 
   # Render dashboard
@@ -560,7 +599,11 @@ PYEOF
   printf "%s\n" "$sep"
   printf "Agents      %d in ~/.claude/agents/\n" "$agent_count"
   printf "Hooks       %d active\n" "$hook_count"
-  printf "Spend       \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
+  if [ -n "$_spend_note" ]; then
+    printf "Spend       %s\n" "$_spend_note"
+  else
+    printf "Spend       \$%s today  \$%s this week\n" "$today_spend" "$week_spend"
+  fi
   if [ -n "$_budget_degraded" ]; then
     printf "Budget      %s\n" "$_budget_degraded"
   elif [ -n "$_budget_primary" ]; then
@@ -571,7 +614,9 @@ PYEOF
   else
     printf "Budget      not configured (run cast init-repo)\n"
   fi
-  if [ "${mem_count:-0}" -gt 0 ]; then
+  if [ -n "$_mem_note" ]; then
+    printf "Memory      %s\n" "$_mem_note"
+  elif [ "${mem_count:-0}" -gt 0 ]; then
     printf "Memory      %d entries | %d stale (confidence < 0.4) | last verified: %s\n" \
       "$mem_count" "$mem_stale" "$mem_last_verified"
   else
@@ -2545,6 +2590,27 @@ PYEOF
     else
       printf "%b crashed-sessions: %s in last 7d (below threshold %s)\n" "$OK" "${_cs_out:-0}" "$_cs_threshold"
     fi
+
+    # ── redaction_failures ────────────────────────────────────────────────────
+    # Quiet-pass check: silent on 0 rows; WARN when [REDACTION_FAILED] marker rows found.
+    # Tables: dispatch_decisions.prompt_snippet, incidents.problem_summary / fix_summary.
+    local _rf_dd _rf_inc _rf_total
+    _rf_dd="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COUNT(*) FROM dispatch_decisions WHERE prompt_snippet = '[REDACTION_FAILED]';" \
+      2>/dev/null || echo 0)"
+    _rf_inc="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COUNT(*) FROM incidents WHERE problem_summary = '[REDACTION_FAILED]' OR fix_summary = '[REDACTION_FAILED]';" \
+      2>/dev/null || echo 0)"
+    _rf_dd="${_rf_dd:-0}"
+    _rf_inc="${_rf_inc:-0}"
+    _rf_total=0
+    if [[ "${_rf_dd}" =~ ^[0-9]+$ ]] && [[ "${_rf_inc}" =~ ^[0-9]+$ ]]; then
+      _rf_total=$(( _rf_dd + _rf_inc ))
+    fi
+    if [ "${_rf_total:-0}" -gt 0 ] 2>/dev/null; then
+      printf "%b redaction failures recorded — cast-redact fell back to marker; inspect why (dispatch_decisions: %d, incidents: %d)\n" \
+        "$WARN" "$_rf_dd" "$_rf_inc"
+    fi
   fi
 
   # 13b. Ask-Your-Record (A3 U7)
@@ -3871,23 +3937,27 @@ USAGE
   fi
 
   # 4. cast.db — prune old agent_runs, VACUUM
-  if [ -f "$CAST_DB_PATH" ]; then
-    local old_rows
-    old_rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE started_at < datetime('now', '-30 days');" 2>/dev/null || echo 0)"
-    if [ "${old_rows:-0}" -gt 0 ]; then
-      if [ "$dry_run" -eq 1 ]; then
-        _info "  Would prune: $old_rows agent_runs older than 30 days"
-      else
-        sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-30 days');" 2>/dev/null
+  case "$(_db_state)" in
+    ok)
+      local old_rows
+      old_rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE started_at < datetime('now', '-30 days');" 2>/dev/null || echo 0)"
+      if [ "${old_rows:-0}" -gt 0 ]; then
+        if [ "$dry_run" -eq 1 ]; then
+          _info "  Would prune: $old_rows agent_runs older than 30 days"
+        else
+          sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-30 days');" 2>/dev/null
+        fi
+        db_pruned=$old_rows
       fi
-      db_pruned=$old_rows
-    fi
-    if [ "$dry_run" -eq 0 ]; then
-      sqlite3 "$CAST_DB_PATH" "VACUUM;" 2>/dev/null
-    else
-      _info "  Would VACUUM cast.db"
-    fi
-  fi
+      if [ "$dry_run" -eq 0 ]; then
+        sqlite3 "$CAST_DB_PATH" "VACUUM;" 2>/dev/null
+      else
+        _info "  Would VACUUM cast.db"
+      fi
+      ;;
+    unreadable) _warn "cast.db present but unreadable — skipping DB maintenance" ;;
+    missing) ;;
+  esac
 
   # 5. Briefings — archive files older than 14 days
   local briefings_dir="${HOME}/.claude/briefings"
