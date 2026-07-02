@@ -1,6 +1,7 @@
 #!/bin/bash
-# SubagentStop hook fragment: capture debugger-agent incidents into cast.db
-# Triggered on SubagentStop event when agent_type == "debugger" and Status: DONE is present
+# SubagentStop hook: capture incidents into cast.db for two classes —
+#   (1) debugger agent + Status: DONE/DONE_WITH_CONCERNS; (2) ANY agent with Status: BLOCKED or a BLOCKER verdict line.
+# Triggered on SubagentStop event (async, 5s timeout).
 
 if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
 set -euo pipefail
@@ -50,10 +51,7 @@ except Exception as e:
     log_error(f"JSON parse failed: {e}")
     sys.exit(0)
 
-# Guard: only process debugger agent
-agent_type = data.get("agent_type", "")
-if agent_type != "debugger":
-    sys.exit(0)
+agent_type = data.get("agent_type", "") or "unknown"
 
 # Extract response text: content[] blocks → last_assistant_message → output
 response_text = ""
@@ -71,27 +69,14 @@ if not response_text:
         data.get("last_assistant_message", "") or data.get("output", "") or ""
     )
 
-# Guard: only record when Status: DONE or DONE_WITH_CONCERNS present
-if not re.search(r"Status:\s*(DONE|DONE_WITH_CONCERNS)", response_text):
-    sys.exit(0)
+# Stripped text for MATCHING ONLY (removes markdown emphasis like ** and __ padding)
+# Original response_text is always used for summary extraction.
+stripped_text = re.sub(r'[*_]{1,3}', '', response_text)
 
-# problem_summary: "Summary: <text>" first match; else first 200 non-empty chars
-m = re.search(r"Summary:\s*(.+)", response_text)
-if m:
-    problem_summary = m.group(1).strip()[:500]
-else:
-    problem_summary = " ".join(response_text.split())[:200]
-if not problem_summary:
-    problem_summary = "(no summary)"
-
-# fix_summary: ## Handoff block content if present; else last 1000 chars
+# Pre-extract handoff block (reused in both capture paths)
 handoff_m = re.search(
     r"## Handoff\s*\n([\s\S]+?)(?=\n## |\Z)", response_text
 )
-if handoff_m:
-    fix_summary = handoff_m.group(1).strip()[:1000]
-else:
-    fix_summary = response_text[-1000:].strip()
 
 # related_files: files_changed: value from Handoff block; else "[]"
 related_files = "[]"
@@ -145,36 +130,95 @@ def _redact(text):
         return "[REDACTION_FAILED]" if text else text  # fail-closed: never passthrough raw content
 
 
-problem_summary = _redact(problem_summary)
-fix_summary = _redact(fix_summary)
-
-# Insert into incidents with bound parameters (Bug 3 fix: no string interpolation)
 db_path = os.environ.get("CAST_DB_PATH", os.path.expanduser("~/.claude/cast.db"))
-incident_id = str(uuid.uuid4())
-occurred_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-try:
-    conn = sqlite3.connect(db_path, timeout=5)
-    conn.execute(
-        """INSERT INTO incidents
-           (id, occurred_at, problem_summary, fix_summary, related_files,
-            related_commit, resolution_status, surfaced_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            incident_id,
-            occurred_at,
-            problem_summary,
-            fix_summary,
-            related_files,
-            related_commit,
-            "open",
-            "debugger",
-        ),
-    )
-    conn.commit()
-    conn.close()
-except Exception as e:
-    log_error(f"DB insert failed: {e}")
-    sys.exit(0)
+
+def _do_insert(problem_summary, fix_summary, surfaced_by):
+    """Redact summaries and insert one incidents row with bound parameters."""
+    p_sum = _redact(problem_summary)
+    f_sum = _redact(fix_summary)
+    incident_id = str(uuid.uuid4())
+    occurred_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+        conn.execute(
+            """INSERT INTO incidents
+               (id, occurred_at, problem_summary, fix_summary, related_files,
+                related_commit, resolution_status, surfaced_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                incident_id,
+                occurred_at,
+                p_sum,
+                f_sum,
+                related_files,
+                related_commit,
+                # surfaced_by (agent_type) is deliberately NOT redacted: it is a CAST runtime
+                # enum from the hook payload, not response-derived text, and is a bound parameter.
+                "open",
+                surfaced_by,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error(f"DB insert failed: {e}")
+
+
+# ── PATH 1: debugger + Status: DONE/DONE_WITH_CONCERNS ───────────────────────
+# Evaluated first; if this inserts, PATH 2 is skipped entirely.
+inserted = False
+
+if agent_type == "debugger" and re.search(
+    r"Status:\s*(DONE|DONE_WITH_CONCERNS)", stripped_text
+):
+    m = re.search(r"Summary:\s*(.+)", response_text)
+    if m:
+        problem_summary = m.group(1).strip()[:500]
+    else:
+        problem_summary = " ".join(response_text.split())[:200]
+    if not problem_summary:
+        problem_summary = "(no summary)"
+
+    if handoff_m:
+        fix_summary = handoff_m.group(1).strip()[:1000]
+    else:
+        fix_summary = response_text[-1000:].strip()
+
+    _do_insert(problem_summary, fix_summary, "debugger")
+    inserted = True
+
+# ── PATH 2: BLOCKED / BLOCKER verdict — any agent (only if PATH 1 did not insert) ──
+# Matches: Status: BLOCKED (stripped) OR a line starting with BLOCKER (stripped).
+# A debugger that ends BLOCKED reaches this path (PATH 1 requires DONE/DONE_WITH_CONCERNS).
+if not inserted:
+    is_blocked = bool(re.search(r"Status:\s*BLOCKED", stripped_text))
+    # Broad ^BLOCKER line anchor is intentional — it is the F3 review-verdict convention
+    # ("output a line beginning with the literal token BLOCKER"); requiring a colon would
+    # miss real verdicts, and over-recording is bounded (max one row per SubagentStop).
+    blocker_match = re.search(r"^\s*BLOCKER\b(.*)", stripped_text, re.MULTILINE)
+
+    if is_blocked or blocker_match:
+        # problem_summary: prefer first BLOCKER line content, else Summary: line, else first 200 chars
+        if blocker_match:
+            blocker_content = blocker_match.group(1).strip()
+            base_summary = blocker_content if blocker_content else "(blocker)"
+        else:
+            sm = re.search(r"Summary:\s*(.+)", response_text)
+            if sm:
+                base_summary = sm.group(1).strip()[:500]
+            else:
+                base_summary = " ".join(response_text.split())[:200] or "(no summary)"
+
+        problem_summary = f"[{agent_type} BLOCKED] {base_summary}"[:500]
+
+        # fix_summary: Handoff block if present, else empty string
+        if handoff_m:
+            fix_summary = handoff_m.group(1).strip()[:1000]
+        else:
+            fix_summary = ""
+
+        _do_insert(problem_summary, fix_summary, agent_type)
+        inserted = True  # noqa: F841 — kept for clarity; no further paths
 PYEOF
 exit 0

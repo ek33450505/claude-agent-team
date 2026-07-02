@@ -86,9 +86,30 @@ _write_fixture() {
   [ "$count" -eq 0 ]
 }
 
-@test "debugger agent without Status: DONE inserts 0 incident rows" {
+@test "debugger agent with Status: BLOCKED inserts 1 row via BLOCKED class" {
+  # Per spec: a debugger ending BLOCKED gets a BLOCKED-class row (old code skipped it entirely).
   local payload
   payload='{"agent_type":"debugger","session_id":"s1","agent_id":"a3","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Summary: still investigating\n## Handoff\nfiles_changed: []\nStatus: BLOCKED"}]}}'
+  local fixture
+  fixture="$(_write_fixture "$payload")"
+
+  run bash "$SCRIPT" <"$fixture"
+  rm -f "$fixture"
+
+  assert_success
+  local count
+  count="$(_count_incidents)"
+  [ "$count" -eq 1 ]
+
+  local surfaced_by
+  surfaced_by="$(sqlite3 "$TEST_DB" "SELECT surfaced_by FROM incidents LIMIT 1;" 2>/dev/null)"
+  [ "$surfaced_by" = "debugger" ]
+}
+
+@test "debugger agent with no terminal status inserts 0 rows" {
+  # Response has neither DONE nor BLOCKED — should produce zero incidents.
+  local payload
+  payload='{"agent_type":"debugger","session_id":"s1","agent_id":"a3b","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Summary: still investigating — no verdict yet"}]}}'
   local fixture
   fixture="$(_write_fixture "$payload")"
 
@@ -143,6 +164,26 @@ _write_fixture() {
   [[ "$stored_summary" != *"$fake_secret"* ]]
 }
 
+@test "debugger with markdown-bold **Status: DONE** inserts 1 debugger-class row" {
+  # PATH 1 matches on stripped_text, so bold markup is stripped before matching.
+  local payload
+  payload='{"agent_type":"debugger","session_id":"s20","agent_id":"a20","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Summary: fixed the thing\n## Handoff\nfiles_changed: [b.py]\n**Status: DONE**"}]}}'
+  local fixture
+  fixture="$(_write_fixture "$payload")"
+
+  run bash "$SCRIPT" <"$fixture"
+  rm -f "$fixture"
+
+  assert_success
+  local count
+  count="$(_count_incidents)"
+  [ "$count" -eq 1 ]
+
+  local surfaced_by
+  surfaced_by="$(sqlite3 "$TEST_DB" "SELECT surfaced_by FROM incidents LIMIT 1;" 2>/dev/null)"
+  [ "$surfaced_by" = "debugger" ]
+}
+
 # B2 wiring tests (Unit U2)
 
 @test "SubagentStop wiring: cast-incident-record is registered under SubagentStop in 30-hooks-session.json" {
@@ -160,6 +201,76 @@ print("OK")
 PYEOF
   assert_success
   assert_output "OK"
+}
+
+# ── BLOCKED/BLOCKER capture class (LF-4 audit: widen to any-agent) ──────────
+
+@test "code-reviewer with Status: BLOCKED inserts 1 row with correct surfaced_by and prefix" {
+  local payload
+  payload='{"agent_type":"code-reviewer","session_id":"s10","agent_id":"a10","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Status: BLOCKED\nSummary: cannot proceed without type info\n## Handoff\nfiles_changed: []\nblockers: missing context"}]}}'
+  local fixture
+  fixture="$(_write_fixture "$payload")"
+
+  run bash "$SCRIPT" <"$fixture"
+  rm -f "$fixture"
+
+  assert_success
+  local count
+  count="$(_count_incidents)"
+  [ "$count" -eq 1 ]
+
+  local surfaced_by
+  surfaced_by="$(sqlite3 "$TEST_DB" "SELECT surfaced_by FROM incidents LIMIT 1;" 2>/dev/null)"
+  [ "$surfaced_by" = "code-reviewer" ]
+
+  local summary
+  summary="$(sqlite3 "$TEST_DB" "SELECT problem_summary FROM incidents LIMIT 1;" 2>/dev/null)"
+  [[ "$summary" == "[code-reviewer BLOCKED]"* ]]
+}
+
+@test "BLOCKER line without Status inserts 1 row" {
+  local payload
+  payload='{"agent_type":"code-writer","session_id":"s11","agent_id":"a11","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Review complete.\nBLOCKER missing test coverage for auth module\nSome other text."}]}}'
+  local fixture
+  fixture="$(_write_fixture "$payload")"
+
+  run bash "$SCRIPT" <"$fixture"
+  rm -f "$fixture"
+
+  assert_success
+  local count
+  count="$(_count_incidents)"
+  [ "$count" -eq 1 ]
+}
+
+@test "markdown-bold Status: BLOCKED (stripped) inserts 1 row" {
+  local payload
+  payload='{"agent_type":"bash-specialist","session_id":"s12","agent_id":"a12","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"**Status: BLOCKED**\nSummary: hook script broken"}]}}'
+  local fixture
+  fixture="$(_write_fixture "$payload")"
+
+  run bash "$SCRIPT" <"$fixture"
+  rm -f "$fixture"
+
+  assert_success
+  local count
+  count="$(_count_incidents)"
+  [ "$count" -eq 1 ]
+}
+
+@test "Status: BLOCKED and BLOCKER line together insert exactly 1 row" {
+  local payload
+  payload='{"agent_type":"code-reviewer","session_id":"s13","agent_id":"a13","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Status: BLOCKED\nBLOCKER missing auth check\nSummary: review failed"}]}}'
+  local fixture
+  fixture="$(_write_fixture "$payload")"
+
+  run bash "$SCRIPT" <"$fixture"
+  rm -f "$fixture"
+
+  assert_success
+  local count
+  count="$(_count_incidents)"
+  [ "$count" -eq 1 ]
 }
 
 @test "script exits 0 even when DB is unwritable (exit-0 fix: pipeline-safety contract)" {
