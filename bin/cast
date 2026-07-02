@@ -2545,6 +2545,27 @@ PYEOF
     else
       printf "%b crashed-sessions: %s in last 7d (below threshold %s)\n" "$OK" "${_cs_out:-0}" "$_cs_threshold"
     fi
+
+    # ── redaction_failures ────────────────────────────────────────────────────
+    # Quiet-pass check: silent on 0 rows; WARN when [REDACTION_FAILED] marker rows found.
+    # Tables: dispatch_decisions.prompt_snippet, incidents.problem_summary / fix_summary.
+    local _rf_dd _rf_inc _rf_total
+    _rf_dd="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COUNT(*) FROM dispatch_decisions WHERE prompt_snippet = '[REDACTION_FAILED]';" \
+      2>/dev/null || echo 0)"
+    _rf_inc="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COUNT(*) FROM incidents WHERE problem_summary = '[REDACTION_FAILED]' OR fix_summary = '[REDACTION_FAILED]';" \
+      2>/dev/null || echo 0)"
+    _rf_dd="${_rf_dd:-0}"
+    _rf_inc="${_rf_inc:-0}"
+    _rf_total=0
+    if [[ "${_rf_dd}" =~ ^[0-9]+$ ]] && [[ "${_rf_inc}" =~ ^[0-9]+$ ]]; then
+      _rf_total=$(( _rf_dd + _rf_inc ))
+    fi
+    if [ "${_rf_total:-0}" -gt 0 ] 2>/dev/null; then
+      printf "%b redaction failures recorded — cast-redact fell back to marker; inspect why (dispatch_decisions: %d, incidents: %d)\n" \
+        "$WARN" "$_rf_dd" "$_rf_inc"
+    fi
   fi
 
   # 13b. Ask-Your-Record (A3 U7)

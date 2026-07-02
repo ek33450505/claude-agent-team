@@ -227,6 +227,63 @@ SQL
   refute_output --partial "agent_hallucinations — 1 flagged"
 }
 
+# ── Test 7: redaction failures — WARN path ──────────────────────────────────
+@test "redaction failures: WARN when [REDACTION_FAILED] row exists in dispatch_decisions" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Minimal fixture uses simplified dispatch_decisions schema; add prompt_snippet
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN prompt_snippet TEXT;" 2>/dev/null || true
+
+  # Plant a [REDACTION_FAILED] marker row
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO dispatch_decisions (prompt_snippet) VALUES ('[REDACTION_FAILED]');"
+
+  _run_doctor
+
+  assert_output --partial "redaction failures recorded"
+  assert_output --partial "cast-redact fell back to marker"
+  assert_output --partial "dispatch_decisions: 1"
+  assert_output --partial "incidents: 0"
+}
+
+@test "redaction failures: WARN when [REDACTION_FAILED] row exists in incidents" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Minimal fixture uses simplified incidents schema; add redacted-text columns
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN problem_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN fix_summary TEXT;" 2>/dev/null || true
+
+  # Plant a [REDACTION_FAILED] marker in problem_summary
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO incidents (problem_summary) VALUES ('[REDACTION_FAILED]');"
+
+  _run_doctor
+
+  assert_output --partial "redaction failures recorded"
+  assert_output --partial "cast-redact fell back to marker"
+  assert_output --partial "incidents: 1"
+}
+
+# ── Test 8: redaction failures — quiet pass ──────────────────────────────────
+@test "redaction failures: silent when no [REDACTION_FAILED] rows exist" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Add prompt_snippet column (minimal fixture omits it)
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN prompt_snippet TEXT;" 2>/dev/null || true
+
+  # Plant a normal (non-marker) row
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO dispatch_decisions (prompt_snippet) VALUES ('normal prompt snippet');"
+
+  _run_doctor
+
+  refute_output --partial "redaction failures recorded"
+  refute_output --partial "cast-redact fell back to marker"
+}
+
 # ── Test 5: silent truncations (maxTurns) — WARN path ───────────────────────
 @test "silent truncations: WARN when stuck-running row older than 2h exists" {
   _create_minimal_core_tables "$CAST_DB_PATH"
