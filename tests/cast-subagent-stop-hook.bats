@@ -1643,3 +1643,54 @@ print(json.dumps({
 
   rm -f "$marker"
 }
+
+# ---------------------------------------------------------------------------
+# LF-8: markdown-bold Status regression tests
+#
+# Bug (a): DONE|DONE_WITH_CONCERNS alternation matches "DONE" prefix of
+#          "DONE_WITH_CONCERNS", causing WITH_CONCERNS agents to be recorded
+#          as plain DONE.
+# Bug (b): Status:\s*(\S+) captures trailing ** (e.g. "DONE**").
+#
+# Both bugs are fixed in every Status-value regex in the hook. These tests
+# verify the two live-observed failure cases.
+# ---------------------------------------------------------------------------
+
+@test "LF-8(a): **Status: DONE_WITH_CONCERNS** is recognized as DONE_WITH_CONCERNS (not DONE)" {
+  # Regression: DONE|DONE_WITH_CONCERNS alternation short-circuits to DONE.
+  # After the fix the hook must treat this as well-formed (not truncated).
+  local output
+  output="$(python3 -c "
+lines = ['Reviewed changes and found minor concerns.'] * 5
+lines.append('')
+lines.append('**Status: DONE_WITH_CONCERNS**')
+lines.append('Summary: review complete with concerns')
+lines.append('Concerns: one minor type annotation missing')
+print('\n'.join(lines))
+")"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-reviewer" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}
+
+@test "LF-8(b): Status: DONE** (trailing bold) is recognized as well-formed" {
+  # Regression: Status:\s*(\S+) captures "DONE**" including trailing emphasis.
+  # After the fix trailing ** is stripped; the hook must treat this as well-formed.
+  local output
+  output="$(python3 -c "
+lines = ['All changes look correct.'] * 5
+lines.append('')
+lines.append('Status: DONE**')
+lines.append('Summary: review passed')
+print('\n'.join(lines))
+")"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload "code-reviewer" "$output")"
+  assert_success
+  refute_output --partial "[CAST-TRUNCATED]"
+  local count
+  count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ "$count" -eq 0 ]]
+}

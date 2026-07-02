@@ -41,6 +41,12 @@ def write_log(log_path, message):
     except Exception:
         pass
 
+def _line_count(s):
+    """Count lines in s using splitlines() — correct for content with or without trailing newline."""
+    if not s:
+        return 0
+    return len(s.splitlines())
+
 def check_tilde_write(file_path, home):
     if not file_path:
         return False, ""
@@ -160,12 +166,12 @@ def check_destructive_docs_edit(tool: str, file_path: str, content: str, old_str
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='replace') as fh:
                     disk_content = fh.read()
-                net_deleted = disk_content.count('\n') - content.count('\n')
+                net_deleted = _line_count(disk_content) - _line_count(content)
             except FileNotFoundError:
                 return False, ""  # new file — nothing to destroy
         else:
             # Edit: compare old_string vs new_string (content)
-            net_deleted = old_string.count('\n') - content.count('\n')
+            net_deleted = _line_count(old_string) - _line_count(content)
     except Exception as _e:
         # fail-open — never crash the hook pipeline (python.md convention) — but LOG, don't swallow silently.
         try:

@@ -622,12 +622,12 @@ if len(response_text.strip()) < 50:
 # Recognized values: standard four (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT) plus
 # reviewer statuses (APPROVE|REQUEST_CHANGES) used by code-reviewer and pr-reviewer.
 has_status = bool(re.search(
-    r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)',
+    r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)',
     response_text,
 ))
 # Detection: JSON fenced status block
 has_json = bool(re.search(
-    r'```json\s+status[\s\S]*?"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)"',
+    r'```json\s+status[\s\S]*?"status"\s*:\s*"(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)"',
     response_text, re.IGNORECASE,
 ))
 
@@ -1026,8 +1026,8 @@ import re, os
 output = os.environ.get('CAST_STOP_OUTPUT_FULL', '')
 # Well-formed: Status block present (full output search, avoids FP for long Work Logs)
 # Recognized values: standard four + reviewer statuses (APPROVE|REQUEST_CHANGES)
-has_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)', output))
-has_json = bool(re.search(r'"status"\s*:\s*"(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)"', output))
+has_status = bool(re.search(r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)', output))
+has_json = bool(re.search(r'"status"\s*:\s*"(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)"', output))
 if has_status or has_json:
     print('0')
     raise SystemExit(0)
@@ -1211,8 +1211,11 @@ import os, sys, re, json
 
 text = os.environ.get('CAST_STOP_RESPONSE_TEXT', '')
 
-# Extract Status
-status_match = re.search(r'Status:\s*(\S+)', text)
+# Extract Status — longest-first alternation; leading/trailing emphasis tolerated
+status_match = re.search(
+    r'[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT|APPROVE|REQUEST_CHANGES)[*_]{0,2}',
+    text,
+)
 status = status_match.group(1) if status_match else 'UNKNOWN'
 
 # Use pre-redacted summary and concerns (PII already stripped by cast-redact.py)
