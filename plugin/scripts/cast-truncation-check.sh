@@ -47,21 +47,10 @@ for _d in _SCRIPTS_DIRS:
         _mod = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
         db_write = _mod.db_write
-        db_execute = _mod.db_execute
         break
 else:
     def db_write(table, payload):
         pass  # graceful no-op if cast_db.py not found
-    def db_execute(sql, params=None):
-        pass
-
-# ── Idempotent schema migration: add partial_work_log column ─────────────────
-try:
-    db_execute(
-        'ALTER TABLE agent_truncations ADD COLUMN partial_work_log TEXT'
-    )
-except Exception:
-    pass  # column already exists — safe to ignore
 
 
 def extract_work_log(text: str):

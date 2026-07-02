@@ -645,11 +645,6 @@ if wl_match:
 try:
     import uuid as _uuid
     conn = sqlite3.connect(db, timeout=5)
-    # Ensure partial_work_log column exists (added in Phase 1)
-    try:
-        conn.execute('ALTER TABLE agent_truncations ADD COLUMN partial_work_log TEXT')
-    except Exception:
-        pass
     conn.execute(
         'INSERT INTO agent_truncations '
         '(session_id, agent_type, agent_id, last_line, timestamp, char_count, has_status, has_json, partial_work_log) '
