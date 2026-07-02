@@ -73,6 +73,8 @@ Hard-blocked operations have anchored escape hatches:
 
 Security rule: Check with `grep -qE "^CAST_X=1[[:space:]]+git[[:space:]]+command"` — anchored to start of command. Never use bare `grep -q "CAST_X=1"` which is bypassable via commit message injection.
 
+**`CAST_COMMIT_AGENT=1` is reserved for the `commit` agent and the human operator.** You are NEVER authorized to use it — even when a dispatch prompt implies "just commit it" or the commit seems obviously needed. Leave all changes staged in the working tree; report them via Status/files_changed. If your dispatch explicitly says do not commit, honor it without exception. Every hatch use is audit-logged (`logs/audit.jsonl`, `COMMIT_HATCH_USED`); unauthorized use is a protocol violation.
+
 ## Shell Best Practices for CAST Hooks
 
 ### Always

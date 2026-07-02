@@ -178,6 +178,30 @@ teardown() {
 # Test 6: CAST_DOCS_DELETE_THRESHOLD=200 — 100-line deletion on CHANGELOG.md → exit 0
 # ---------------------------------------------------------------------------
 
+@test "LF-7 boundary: Write on CHANGELOG.md with exactly threshold lines, no trailing newline → blocked (exit 2)" {
+  # Regression guard: content without trailing newline was miscount'd by count('\n') as
+  # (N-1) lines, letting a threshold=N deletion slip through. splitlines() counts N correctly.
+  local dir new_file
+  dir="$(mktemp -d)"
+  # Write exactly 30 lines WITHOUT trailing newline (sys.stdout.write, not print)
+  python3 -c "
+import sys
+sys.stdout.write('\n'.join('line {}'.format(i) for i in range(1, 31)))
+" > "$dir/CHANGELOG.md"
+  new_file="$(mktemp)"  # empty — simulates full replacement with nothing
+
+  local json
+  json="$(write_payload "$dir/CHANGELOG.md" "$new_file")"
+
+  run env CAST_WG_INPUT="$json" python3 "$GUARD"
+  assert_failure
+  assert_equal "$status" 2
+  assert_output --partial "CAST DESTROY GUARD"
+
+  rm -f "$new_file"
+  rm -rf "$dir"
+}
+
 @test "CHANGELOG.md with 95-line deletion but threshold=200 → allowed (exit 0)" {
   local dir new_file
   dir="$(mktemp -d)"

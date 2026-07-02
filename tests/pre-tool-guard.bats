@@ -324,6 +324,14 @@ print(json.dumps({
   assert_output --partial "git commit"
 }
 
+@test "CAST_COMMIT_AGENT=1 git commit → exits 0 and appends COMMIT_HATCH_USED to audit.jsonl without leaking commit message" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m 'test hatch'")"
+  assert_success
+  [[ -f "$HOME/.claude/logs/audit.jsonl" ]]
+  grep -q 'COMMIT_HATCH_USED' "$HOME/.claude/logs/audit.jsonl"
+  ! grep -q 'test hatch' "$HOME/.claude/logs/audit.jsonl"
+}
+
 @test "CAST_STASH_OK=1 git -C /tmp/repo stash → allows (exit 0)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_STASH_OK=1 git -C /tmp/repo stash")"
   assert_success

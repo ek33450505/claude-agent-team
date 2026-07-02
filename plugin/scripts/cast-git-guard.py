@@ -222,6 +222,25 @@ def _audit_policy_override(policy_id: str, file_path: str, session_id: str) -> N
 # --------------------------------------------------------------------------
 # Bash: git commit / push / stash guards
 # --------------------------------------------------------------------------
+def _audit_commit_hatch() -> None:
+    """Append a COMMIT_HATCH_USED line to audit.jsonl — best-effort, never blocks."""
+    try:
+        audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
+        os.makedirs(os.path.dirname(audit_path), exist_ok=True)
+        event = {
+            'timestamp': datetime.datetime.now(datetime.timezone.utc)
+            .isoformat().replace('+00:00', 'Z'),
+            'event': 'COMMIT_HATCH_USED',
+            'override_env': 'CAST_COMMIT_AGENT',
+            'git_op': 'commit',
+            'session_id': os.environ.get('CLAUDE_SESSION_ID', ''),
+        }
+        with open(audit_path, 'a') as af:
+            af.write(json.dumps(event) + '\n')
+    except Exception:
+        pass
+
+
 def _git_evaluate(command: str):
     """Evaluate the FIRST LINE of a Bash command for git commit/push/stash.
 
@@ -231,6 +250,7 @@ def _git_evaluate(command: str):
     first_line = command.split('\n', 1)[0]
 
     if _COMMIT_ALLOW.search(first_line):
+        _audit_commit_hatch()
         return 0, None
     if _COMMIT_BLOCK.search(first_line):
         return 2, _COMMIT_MSG

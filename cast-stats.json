@@ -2,7 +2,7 @@
   "version": "9.0.0",
   "versionTag": "v9.0.0",
   "agents": 23,
-  "tests": 2055,
+  "tests": 2068,
   "tables": 38,
   "commands": 21,
   "skills": 17,

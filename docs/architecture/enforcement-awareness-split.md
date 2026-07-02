@@ -85,6 +85,33 @@ layer — see the Platform engagement caveat above). The guards' comments are re
 remain valuable as the *path-aware / escape-hatch / indirection-robust* layer the sandbox
 cannot express, and as the **record** — but they no longer masquerade as the wall.
 
+## Headless-context skip: the Write/Edit policy layer (GOV-1 residual — by design)
+
+`write-guards.sh` (the PreToolUse `Write|Edit` wrapper) exits 0 immediately when
+`CLAUDE_SUBPROCESS=1` (line 5), and `cast-git-guard.py` applies the same skip to its
+Write/Edit `requires_agent` policy engine and agent-status TTL sweep. The entire
+Write/Edit policy layer — including the G1 docs-destroy guard (PR #320) — therefore does
+not run in managed/headless sub-claude contexts.
+
+**This is intended, not a hole** (v9 live-fire audit, probe B6, 2026-07-01):
+
+- `CLAUDE_SUBPROCESS=1` marks managed/headless sub-claude processes ONLY. Agent-tool
+  subagents do NOT carry it — probe B6 behaviorally proved that a subagent docs-delete
+  without ack is BLOCKED (exit 2, fixture unmodified). The static-audit claim that
+  `write-guards.sh:5` lets subagents bypass G1 was REFUTED live.
+- The skip exists for recursion prevention: hook-spawned sub-claude processes must not
+  re-enter the hook pipeline.
+- The irreversible git/destructive command guards are NOT part of this skip — post-U6 they
+  run in EVERY context (see the note in `cast-git-guard.py main()` and probes B1/B5/B6).
+
+**Residual (accepted + mitigated):** a genuinely headless run (`CLAUDE_SUBPROCESS=1`
+automation, cron/launchd) performs Write/Edit without the policy layer, so the G1
+docs-destroy guard does not bite there. The backstop is CI: the `docs-destroy-guard`
+workflow re-runs the same net-deletion check on every PR to `main` and is a protect-main
+REQUIRED status check (added 2026-07-01), so a headless docs destruction cannot reach
+`main` unacknowledged. This matches the irreversibility-interrupt rule: hooks are never
+the unattended-safety layer — fail-closed script gates and CI carry that job.
+
 ## Net change from this unit
 
 - **Code:** none moves to native (the analysis above shows nothing *can* move that isn't

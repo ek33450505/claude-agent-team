@@ -638,7 +638,7 @@ ROUTINES_TABLE
   _columns_added=1
 fi
 
-# incidents: incident log (writers: cast-incident-record.sh, cast-incidents-backfill.py)
+# incidents: incident log (writers: cast-incident-record.sh, cast-incidents-backfill.py, cast-abandon-stale-runs.py)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "incidents"; then
   sqlite3 "$DB_PATH" <<'INCIDENTS_TABLE'
 CREATE TABLE IF NOT EXISTS incidents (
