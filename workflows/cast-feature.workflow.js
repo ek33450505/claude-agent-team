@@ -17,7 +17,11 @@
  * Units build SEQUENTIALLY (they commonly share files → no parallel conflict). The two
  * reviewers may run in parallel; test-runner gets its OWN isolated stage and is NEVER
  * co-scheduled with a reviewer (its suite-timeout/kill path can reap siblings). Commits
- * go through the `commit` agent (ceremony preserved); the engine NEVER pushes.
+ * go through the `commit` agent (ceremony preserved); the engine NEVER pushes. The commit
+ * stage is GATED on a machine-checkable verdict from test-runner: the agent must end its
+ * reply with exactly "TEST_VERDICT: PASS" or "TEST_VERDICT: FAIL". A null reply or FAIL
+ * verdict leaves changes UNCOMMITTED for a human and stops the build (mirrors the review
+ * BLOCKER pattern).
  */
 
 export const meta = {
@@ -166,12 +170,32 @@ for (const unit of units) {
   }
 
   // Stage C — test-runner in its OWN isolated stage (never parallel with a reviewer).
+  // The prompt requires a machine-checkable final verdict line so Stage D can gate on it.
   const testOut = await agent(
+    `Project root: ${projectRoot} — run all tests from there.\n` +
     `Run the tests covering CAST unit ${unit.id} (${unit.title}). Scope to the changed files where possible ` +
     `(e.g. tests/run.sh --files <changed>); run the full suite only if scope cannot be determined — and NEVER run ` +
-    `any destructive / real-HOME-touching test against the real HOME. Report pass/fail and the exit code plainly.`,
+    `any destructive / real-HOME-touching test against the real HOME. ` +
+    `If no tests exist that cover this scope, that counts as PASS — still include the verdict line.\n` +
+    `Near the end of your reply, before your Status block, output exactly one line: TEST_VERDICT: PASS or TEST_VERDICT: FAIL.`,
     { label: `test:${unit.id}`, phase: 'Build', agentType: 'test-runner' }
   )
+
+  // Gate: require TEST_VERDICT: PASS before proceeding to commit.
+  // Strip markdown bold markers agents sometimes wrap around status lines (e.g. **TEST_VERDICT: PASS**).
+  // Use the LAST matching verdict line so a Status block (or quoted-context echo like
+  // "Expected TEST_VERDICT: PASS but got TEST_VERDICT: FAIL") after the verdict doesn't
+  // flip a real FAIL into a false PASS.
+  const testStripped = testOut ? testOut.replace(/\*+/g, '') : null
+  const verdictMatches = testStripped ? Array.from(testStripped.matchAll(/TEST_VERDICT:\s*(PASS|FAIL)/gi)) : []
+  const lastVerdict = verdictMatches.length > 0 ? verdictMatches[verdictMatches.length - 1][1].toUpperCase() : null
+  const testPassed = lastVerdict === 'PASS'
+  if (!testPassed) {
+    const reason = testOut === null ? 'test-runner-null' : 'tests-failed'
+    log(`  ${tag}: ${reason} — leaving changes UNCOMMITTED for a human, stopping the build`)
+    results.push({ unit, status: 'BLOCKED', reason, test: testOut })
+    break
+  }
 
   // Stage D — commit via the commit agent (ceremony preserved). NEVER pushes.
   const commitOut = await agent(
