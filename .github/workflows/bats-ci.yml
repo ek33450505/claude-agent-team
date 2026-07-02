@@ -22,6 +22,10 @@ jobs:
           sudo apt-get update
           # sqlite3 and xxd are no-ops on GitHub-hosted runners (preinstalled) but required for act/ci-local parity
           sudo apt-get install -y bats python3-yaml sqlite3 xxd
+      - name: Assert SQLite has FTS5 (real-path capability probe)
+        run: |
+          echo "CREATE VIRTUAL TABLE t USING fts5(x);" | sqlite3 ":memory:" \
+            || { echo "::error::runner sqlite3 lacks FTS5 — FTS-dependent tests would false-pass"; exit 1; }
       - name: Set up CAST runtime dirs
         run: |
           mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
@@ -40,6 +44,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bats sqlite3
+      - name: Assert SQLite has FTS5 (real-path capability probe)
+        run: |
+          echo "CREATE VIRTUAL TABLE t USING fts5(x);" | sqlite3 ":memory:" \
+            || { echo "::error::runner sqlite3 lacks FTS5 — FTS-dependent tests would false-pass"; exit 1; }
       - name: Set up CAST runtime dirs
         run: |
           mkdir -p ~/.claude/scripts ~/.claude/logs ~/.claude/cast/events ~/.claude/agent-status
