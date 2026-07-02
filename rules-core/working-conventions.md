@@ -54,6 +54,9 @@ The 95K-token zero-yield burn (a bash-specialist read 8 files, wrote nothing, hi
 - **Demand artifact-first.** "Write a skeleton of the deliverable in your first 1–2 tool calls, then refine" — so a truncated run leaves a salvageable artifact, never zero output.
 - **Scope to the turn cap.** One logical unit per dispatch, sized to the agent's maxTurns (bash-specialist 20, code-writer 80). Split big bites; never rely on a resume.
 Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention: artifact-first + read-before-write refusal).
+- **Scope the commit agent explicitly.** Every `commit` dispatch lists the exact files to stage AND states "exclude everything else" — the agent stages nothing outside the list. An unscoped dispatch swept `docs/decision-log.md` into an unrelated commit (LF-5, 2026-07-01).
+- **Per-unit review gates need per-unit diffs.** When multiple units' uncommitted work coexists, scope each `code-reviewer` dispatch to the unit's files (or commit prior units first) — a reviewer shown the whole tree false-BLOCKs on other units' legitimate work (LF-9, 2026-07-01).
+- **Commit dispatches without a `task_id` log an expected "no approval record" WARN.** When dispatching `commit` outside an orchestrated task, state the review provenance in the prompt (which reviewers passed); the WARN is informational, not a failure.
 
 ## Parallel Dispatch
 - `test-runner` (and any process-killing / test-executing agent) MUST run in its OWN sequential batch. It MUST NEVER share a `"parallel": true` batch or a dispatch-group wave with any other agent — most critically the review agents (`code-reviewer`, `security`, `frontend-qa`).

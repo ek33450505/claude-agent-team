@@ -10,3 +10,8 @@ PyYAML                 # `cast routine` YAML parsing + eval-runner + contract-ru
 textual                # `cast dash` terminal dashboard                                (scripts/cast-dash.py)
 presidio-analyzer      # optional enhanced PII detection for cast-redact.py
 presidio-anonymizer    # optional enhanced PII anonymization for cast-redact.py
+
+# --- Security floors (transitive deps; osv-scanner advisories 2026-07-01) ---
+setuptools>=78.1.1     # PYSEC-2022-43012 / PYSEC-2025-49 / GHSA-cx63-2mw6-8hw5
+idna>=3.15             # PYSEC-2026-215
+filelock>=3.20.3       # GHSA-qmgc-5h2g-mvrw / GHSA-w853-jp5j-5j7f
