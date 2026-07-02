@@ -22,6 +22,29 @@ setup() {
   load 'helpers/setup'
   setup_temp_home
   mkdir -p "$HOME/.claude/config" "$HOME/.claude/logs"
+
+  # Self-contained fixture plan with an active ☐ NEXT session.
+  # Tests 4 & 7 use this instead of the gitignored live plan file
+  # (cast-v9-foundation.md has no "NEXT" rows once v9 is complete).
+  # Layout matters: the hook resolves cast-plan-doctor.py REPO-FIRST from the
+  # plan's grandparent (<repo>/plans/<file> → <repo>/scripts/), falling back to
+  # $HOME/.claude/scripts — both empty around a bare tmp fixture, so the hook
+  # silent-degrades to no output. Build a fake repo around the fixture plan.
+  FIXTURE_REPO="$BATS_TMPDIR/fixture-repo"
+  mkdir -p "$FIXTURE_REPO/plans" "$FIXTURE_REPO/scripts"
+  cp "$REPO/scripts/cast-plan-doctor.py" "$FIXTURE_REPO/scripts/cast-plan-doctor.py"
+  FIXTURE_PLAN="$FIXTURE_REPO/plans/fixture-plan.md"
+  printf '%s\n' \
+    '# Fixture Plan (BATS test artifact — do not edit)' \
+    '' \
+    '## §11 Session Ledger' \
+    '' \
+    '| S# | Goal | Units | Phase | Branch | Status |' \
+    '|---|---|---|---|---|---|' \
+    '| 1 | Bootstrap | unit-1a | P0 | feature/fix-1 | ✅ |' \
+    '| 2 | Core work | unit-2a | P0 | feature/fix-2 | ☐ NEXT |' \
+    '| 3 | Cleanup | unit-3a | P1 | feature/fix-3 | ☐ |' \
+    > "$FIXTURE_PLAN"
 }
 
 teardown() {
@@ -65,11 +88,9 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "plan-resume-hook: marker to real plan exits 0 with JSON" {
-  # Point to the real repo plan (verified to exist)
-  local plan_path="$REPO/plans/cast-v9-foundation.md"
-  if [[ ! -f "$plan_path" ]]; then
-    skip "repo plan absent: $plan_path"
-  fi
+  # Use the self-contained fixture plan (created in setup) so this test
+  # is independent of the gitignored live plan file which may have no NEXT row.
+  local plan_path="$FIXTURE_PLAN"
 
   printf '%s\n' "$plan_path" > "$HOME/.claude/config/active-plan"
 
@@ -121,10 +142,8 @@ teardown() {
 # ---------------------------------------------------------------------------
 
 @test "plan-resume-hook: JSON output includes systemMessage" {
-  local plan_path="$REPO/plans/cast-v9-foundation.md"
-  if [[ ! -f "$plan_path" ]]; then
-    skip "repo plan absent: $plan_path"
-  fi
+  # Use the self-contained fixture plan (created in setup).
+  local plan_path="$FIXTURE_PLAN"
 
   printf '%s\n' "$plan_path" > "$HOME/.claude/config/active-plan"
 

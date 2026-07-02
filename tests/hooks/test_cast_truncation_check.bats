@@ -46,7 +46,8 @@ con.execute('''CREATE TABLE IF NOT EXISTS agent_truncations (
   agent_id TEXT, batch_id INTEGER,
   last_line TEXT, timestamp TEXT NOT NULL,
   char_count INTEGER, has_status INTEGER DEFAULT 0,
-  has_json INTEGER DEFAULT 0
+  has_json INTEGER DEFAULT 0,
+  partial_work_log TEXT
 )''')
 con.commit(); con.close()
 PYEOF
