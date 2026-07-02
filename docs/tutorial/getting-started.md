@@ -29,7 +29,7 @@ Expected output:
 ==> Tapping ek33450505/cast
 ==> Downloading https://github.com/ek33450505/claude-agent-team/...
 ==> Installing cast
-  CAST Installer (v7.3.1)
+  CAST Installer (v9.0.0)
 
   ✓ Installed <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents -> ~/.claude/agents/
   ✓ Installed <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash commands -> ~/.claude/commands/
@@ -37,7 +37,7 @@ Expected output:
   ✓ Installed hook scripts -> ~/.claude/scripts/
   ✓ Installed 9 rules -> ~/.claude/rules/
   ✓ Wired settings.json (hooks, permissions)
-  Installation complete! (CAST v7.3.1)
+  Installation complete! (CAST v9.0.0)
 ```
 
 ### Alternative: clone + install
@@ -77,13 +77,13 @@ cast status
 Expected output (abbreviated):
 
 ```
-CAST v7.3.1
+CAST v9.0.0
 ======================================================================
-Agents      23 installed
-Hooks       29 active
-Spend       $0.00 today  $X.XX this week
-Budget      not configured (run cast init-repo)
-Memory      N entries | ...
+Agents      23 in ~/.claude/agents/
+Hooks       34 active
+Spend       $X.XX today  $X.XX this week
+Budget      $X.XX / $500.00 daily (NN%)
+Memory      N entries | N stale (confidence < 0.4) | last verified: YYYY-MM-DD HH:MM:SS
 ======================================================================
 ```
 
