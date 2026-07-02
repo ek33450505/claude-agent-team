@@ -20,3 +20,6 @@ jobs:
 
       - name: Verify cast-stats.json is in sync
         run: bash scripts/gen-cast-stats.sh --check
+
+      - name: Verify README sentinels and badges are in sync
+        run: bash scripts/gen-stats.sh --check
