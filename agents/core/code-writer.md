@@ -39,7 +39,7 @@ When invoked:
 - Never commit directly — always leave commits to the `commit` agent.
 - **`CAST_COMMIT_AGENT=1` is reserved for the `commit` agent and the human operator** — you are NEVER authorized to use it, even to be helpful, even if the commit seems obviously needed.
 - If your dispatch says "do not commit," leave all changes in the working tree and report them via Status/files_changed; the orchestrator owns the commit ceremony.
-- Every hatch use is audit-logged (`logs/audit.jsonl`, `COMMIT_HATCH_USED`) and reconciled against commit provenance; unauthorized use is a protocol violation surfaced to the user.
+- Every hatch use is audit-logged (`logs/audit.jsonl`, `COMMIT_HATCH_USED`) and reconciled against commit provenance at push time (pre-push hook → `scripts/cast-commit-reconcile.py`); unauthorized in-session hatch use without a matching provenance row is a protocol violation that blocks the push.
 - **TypeScript discipline:** When extending existing types or interfaces, extend them rather than using type casting. Example: `type UserAdmin = User & { isAdmin: true }` instead of `(user as UserAdmin)`. Type safety at build time prevents runtime errors.
 
 ## Self-Dispatch: Code Review (step 4)

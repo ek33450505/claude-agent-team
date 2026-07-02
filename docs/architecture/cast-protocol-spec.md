@@ -229,7 +229,7 @@ CAST treats a defined set of operations as **irreversible or destructive** — t
 
 | Op class | Operation(s) | Enforced by | Type | Escape hatch | Auto-chain-safe? |
 |---|---|---|---|---|---|
-| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) | hard-block | `CAST_COMMIT_AGENT=1` | ✗ hook-only |
+| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record`) + pre-push reconcile (`cast-commit-reconcile.py`) | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✗ hook-only |
 | Git push | raw `git push` | `pre-tool-guard.sh` (push block) | hard-block | `CAST_PUSH_OK=1` | ✗ hook-only |
 | Force-push | `git push --force` | `push.md` (agent refusal) | refuse | none | ◑ agent-refusal |
 | Push to main (work repo) | push to `main`/`master` | `push.md` (branch rule) | refuse | `--force-main` / `repo_class=personal` | ◑ agent-refusal |
