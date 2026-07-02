@@ -5,6 +5,11 @@ Runs daily via launchd (com.cast.abandon-stale-runs). Two symmetric steps:
 
   Step 1 — agent_runs: rows stuck in status='running' for more than
   CAST_ABANDON_STALE_HOURS (default 2h) are flipped to 'abandoned'.
+  For each reaped row, one incidents row is inserted so that API-killed agents
+  and maxTurns-truncated runs (which never fire SubagentStop) become visible in
+  the incident record.  Incident insertion is best-effort — a missing incidents
+  table on older DBs logs a warning and does NOT interrupt the reap or the
+  always-exit-0 contract.
 
   Step 2 — sessions: rows stuck in status='active' for more than
   CAST_SESSION_CRASH_HOURS (default 4h) are flipped to 'crashed'.
@@ -33,6 +38,7 @@ Usage:
 import os
 import sys
 import sqlite3
+import uuid
 from datetime import datetime, timedelta, timezone
 
 # --- Config ---
@@ -112,6 +118,34 @@ def main() -> None:
 
             _log(f'Flipped {len(stale_rows)} stale running row(s) to abandoned')
             print(f'[cast-abandon-stale-runs] Abandoned {len(stale_rows)} stale run(s)', file=sys.stderr)
+
+            # Emit one incidents row per reaped run so that API-killed agents and
+            # maxTurns-truncated runs (which never fire SubagentStop) become visible
+            # in the incident record (live-fire audit finding LF-4: INCIDENT-BLIND).
+            # No PII concern: summaries contain only agent name + timestamps, never
+            # agent output or user content.
+            for row_id, agent, started_at in stale_rows:
+                try:
+                    incident_id = str(uuid.uuid4())
+                    problem_summary = (
+                        f"Stale agent_run reaped: agent={agent} run_id={row_id} "
+                        f"stuck 'running' since {started_at} (threshold {STALE_HOURS}h) "
+                        f"— SubagentStop never fired (likely API-killed or maxTurns truncation)"
+                    )
+                    fix_summary = "Auto-flipped to status='abandoned' by cast-abandon-stale-runs.py"
+                    conn.execute(
+                        """INSERT INTO incidents
+                           (id, occurred_at, problem_summary, fix_summary, related_files,
+                            related_commit, resolution_status, surfaced_by)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (incident_id, now_iso, problem_summary, fix_summary, '[]', '', 'open', 'stale-run-reaper')
+                    )
+                    conn.commit()
+                    _log(f'Incident recorded: id={incident_id} for reaped run_id={row_id}')
+                except Exception as inc_err:
+                    # Best-effort: a missing incidents table on older DBs or any insert
+                    # failure must not break the reap or the always-exit-0 contract.
+                    _log(f'Incident insert skipped for run_id={row_id}: {inc_err}')
 
         # --- Step 2: Flip stale active sessions to 'crashed' ---
         # Symmetric with step 1. Sessions stuck in 'active' for more than

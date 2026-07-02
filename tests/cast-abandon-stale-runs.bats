@@ -82,3 +82,37 @@ teardown() {
   status=$(sqlite3 "$TEST_DB" "SELECT status FROM sessions WHERE id='sess-ended';")
   [ "$status" = "ended" ]
 }
+
+# --- incident emission (LF-4: INCIDENT-BLIND fix) ---
+
+@test "reaped stale run inserts one incidents row with correct surfaced_by and resolution_status" {
+  old_ts=$(python3 -c "from datetime import datetime,timedelta,timezone; print((datetime.now(timezone.utc)-timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+  sqlite3 "$TEST_DB" "INSERT INTO agent_runs (agent, status, started_at) VALUES ('reaper-bot','running','$old_ts');"
+  export CAST_ABANDON_STALE_HOURS=2
+  run python3 "$SCRIPT"
+  assert_success
+  inc_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM incidents WHERE surfaced_by='stale-run-reaper';")
+  [ "$inc_count" -eq 1 ]
+  res_status=$(sqlite3 "$TEST_DB" "SELECT resolution_status FROM incidents WHERE surfaced_by='stale-run-reaper';")
+  [ "$res_status" = "open" ]
+}
+
+@test "no incidents row when nothing is stale" {
+  sqlite3 "$TEST_DB" "INSERT INTO agent_runs (agent, status, started_at) VALUES ('fresh-bot','running', strftime('%Y-%m-%dT%H:%M:%SZ','now'));"
+  run python3 "$SCRIPT"
+  assert_success
+  inc_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM incidents WHERE surfaced_by='stale-run-reaper';")
+  [ "$inc_count" -eq 0 ]
+}
+
+@test "reap still succeeds when incidents table is missing" {
+  old_ts=$(python3 -c "from datetime import datetime,timedelta,timezone; print((datetime.now(timezone.utc)-timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+  sqlite3 "$TEST_DB" "INSERT INTO agent_runs (agent, status, started_at) VALUES ('bot-no-inc','running','$old_ts');"
+  sqlite3 "$TEST_DB" "DROP TABLE IF EXISTS incidents;"
+  export CAST_ABANDON_STALE_HOURS=2
+  run python3 "$SCRIPT"
+  assert_success
+  # agent_runs row must still be flipped despite missing incidents table
+  count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs WHERE status='abandoned';")
+  [ "$count" -eq 1 ]
+}
