@@ -234,6 +234,7 @@ def _audit_commit_hatch() -> None:
             'override_env': 'CAST_COMMIT_AGENT',
             'git_op': 'commit',
             'session_id': os.environ.get('CLAUDE_SESSION_ID', ''),
+            'in_claude_session': os.environ.get('CLAUDECODE') == '1',
         }
         with open(audit_path, 'a') as af:
             af.write(json.dumps(event) + '\n')

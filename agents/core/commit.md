@@ -109,7 +109,8 @@ git status --porcelain
 
 **Zero-tool-calls rule:** If you have made ZERO Bash tool calls in this run, you MUST NOT report `Status: DONE` or claim a commit succeeded. A commit claim requires having:
 - Actually run `CAST_COMMIT_AGENT=1 git commit` (or confirmed it was unnecessary), AND
-- Confirmed the commit landed via `git log --oneline -1` or `git rev-parse HEAD`
+- Confirmed the commit landed via `git log --oneline -1` or `git rev-parse HEAD`, AND
+- Attempted the provenance record step (step 8) — even if it failed, it must have been attempted
 
 If you are about to write a Status block and you have not yet run any git commands, run the three verification commands above first.
 
@@ -139,7 +140,14 @@ After staging, run `git status --short` and inspect remaining lines.
 
 6. Write a commit message following the conventions below
 7. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` (the inline env var bypasses the CAST PreToolUse hook)
-8. Confirm success: run `git log --oneline -1` and `git rev-parse HEAD` to verify the commit landed, then show the commit hash
+8. Record provenance (best-effort — do NOT retry or block if absent/failed):
+   ```bash
+   python3 ~/.claude/scripts/cast-commit-provenance.py record "$(git rev-parse HEAD)" 2>/dev/null \
+     && echo "provenance: recorded" \
+     || echo "provenance: not-recorded (script absent or failed)"
+   ```
+   If the script is missing or fails, add `provenance: not-recorded (<reason>)` to the Work Log and include a concern in the JSON status block. Do NOT re-attempt or block the commit result.
+9. Confirm success: run `git log --oneline -1` and `git rev-parse HEAD` to verify the commit landed, then show the commit hash
 
 ## Commit Message Format
 

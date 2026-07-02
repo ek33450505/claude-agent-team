@@ -69,7 +69,7 @@ cast_stat_test_files() {
 
 # cast_stat_tables — count DISTINCT table names across canonical schema sources.
 # Covers cast-db-init.sh + scripts/migrations/*.sql.
-# Must yield 38 (canonical count after v9 Phase C retired stream_events, teammate_messages, code_ref_checks).
+# Must yield 39 (38 after v9 Phase C retired stream_events/teammate_messages/code_ref_checks; +1 commit_provenance D5).
 cast_stat_tables() {
   (
     cd "${CAST_STATS_REPO_ROOT}"

@@ -1078,6 +1078,30 @@ PROVENANCE_CHAIN_TABLE
   _columns_added=1
 fi
 
+# commit_provenance: D5 self-commit enforcement substrate — records the SHA of every
+# commit made by the `commit` agent so the pre-push reconciler can flag unauthorized
+# in-session self-commits (COMMIT_HATCH_USED without a matching provenance row).
+# Writer: scripts/cast-commit-provenance.py record <sha>
+# Deliberate init-only choice: added to the self-healing block rather than as a
+# numbered migration because migrations don't run reliably at install; this
+# unconditional block covers both fresh installs and existing live DBs without
+# requiring `cast-migrate.py --confirm`.
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "commit_provenance"; then
+  sqlite3 "$DB_PATH" <<'COMMIT_PROVENANCE_TABLE'
+CREATE TABLE IF NOT EXISTS commit_provenance (
+  sha         TEXT PRIMARY KEY,
+  session_id  TEXT,
+  agent       TEXT NOT NULL DEFAULT 'commit',
+  branch      TEXT,
+  repo        TEXT,
+  recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_commit_provenance_session ON commit_provenance(session_id);
+CREATE INDEX IF NOT EXISTS idx_commit_provenance_recorded ON commit_provenance(recorded_at);
+COMMIT_PROVENANCE_TABLE
+  _columns_added=1
+fi
+
 # Ensure agent_id index exists
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
 
