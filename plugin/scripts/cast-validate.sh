@@ -437,14 +437,17 @@ else
 fi
 
 # FTS5: agent_memories_fts table present?
+# Read-probe, not [[ -f ]]: sandbox denyRead blocks stat(), so -f reports a present file as missing.
 CAST_DB="$HOME/.claude/cast.db"
-if [[ -f "$CAST_DB" ]]; then
+if _fts_db_err="$( { : < "$CAST_DB"; } 2>&1 )"; then
   FTS5_CHECK=$(sqlite3 "$CAST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='agent_memories_fts';" 2>/dev/null || echo "0")
   if [[ "$FTS5_CHECK" -gt 0 ]]; then
     pass "FTS5: agent_memories_fts table present in cast.db"
   else
     info "FTS5: agent_memories_fts table not found (run: cast-memory-fts5-migrate.py)"
   fi
+elif [[ "$_fts_db_err" == *"Operation not permitted"* || "$_fts_db_err" == *"Permission denied"* ]]; then
+  warn "FTS5: cast.db present but unreadable (sandboxed session? add ~/.claude/cast.db to sandbox.filesystem.allowRead)"
 else
   info "FTS5: cast.db not found"
 fi
