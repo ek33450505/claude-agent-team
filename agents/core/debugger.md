@@ -47,6 +47,7 @@ Focus on fixing the underlying issue, not the symptoms.
 8. After code-reviewer returns DONE, dispatch `commit` via Agent tool:
    > "Create a semantic commit for the bug fix: [describe the root cause and fix]."
    Do NOT return to the calling session before dispatching commit.
+   **`CAST_COMMIT_AGENT=1` is reserved for the `commit` agent and the human operator — never use it directly.** If your dispatch says "do not commit," leave changes staged and report via Status/files_changed. Every hatch use is audit-logged (`logs/audit.jsonl`, `COMMIT_HATCH_USED`); unauthorized use is a protocol violation.
 9. When this agent is part of a chain, include a `## Handoff` block BEFORE your Status block:
    ```
    ## Handoff
