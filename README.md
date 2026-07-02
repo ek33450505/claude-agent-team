@@ -268,14 +268,14 @@ Full changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ## CAST Ecosystem
 
-CAST is one of 11 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source. See [docs/ecosystem.md](docs/ecosystem.md) for the full repo table and install commands.
+CAST is one of 10 source repositories in a connected ecosystem — each solves a piece of the multi-agent workflow puzzle. All are open-source. See [docs/ecosystem.md](docs/ecosystem.md) for the full repo table and install commands.
 
 <!-- ECOSYSTEM_START -->
 | Tier | Repos |
 |---|---|
+| Observability | claude-code-dashboard, cast-desktop |
 | Record extractions | cast-mcp, cast-ledger, cast-predict |
 | Tooling | cast-memory, cast-doctor, cast-time, cast-claudes_journal |
-| Apps & Site | claude-code-dashboard, cast-desktop, cast-website |
 <!-- ECOSYSTEM_END -->
 
 **New to CAST?** [Quick Start](docs/tutorial/getting-started.md) · [Agent Roster](docs/agents/AGENT-ROSTER.md) · [Architecture](docs/architecture/ARCHITECTURE.md)
