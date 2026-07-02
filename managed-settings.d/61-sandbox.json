@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "*.github.com",
+        "*.githubusercontent.com",
+        "*.npmjs.org",
+        "registry.yarnpkg.com",
+        "*.googleapis.com",
+        "api.anthropic.com"
+      ],
+      "allowLocalBinding": true,
+      "allowManagedDomainsOnly": true
+    },
+    "filesystem": {
+      "allowWrite": [
+        "/tmp"
+      ],
+      "denyRead": [
+        "~/.aws/credentials",
+        "~/.ssh/id_*",
+        "~/.gnupg",
+        "~/.claude/cast.db",
+        "~/.claude/history.jsonl",
+        "~/.claude/logs/**",
+        "~/.claude/routing-log.jsonl"
+      ],
+      "allowRead": [
+        "~/.claude/cast.db"
+      ]
+    },
+    "excludedCommands": [
+      "git",
+      "docker",
+      "bq",
+      "osascript"
+    ],
+    "credentials": {
+      "files": [
+        {"path": "~/.aws/credentials", "mode": "deny"},
+        {"path": "~/.aws/config", "mode": "deny"},
+        {"path": "~/.ssh", "mode": "deny"},
+        {"path": "~/.gnupg", "mode": "deny"},
+        {"path": "~/.kube/config", "mode": "deny"},
+        {"path": "~/.netrc", "mode": "deny"}
+      ],
+      "envVars": [
+        {"name": "GITHUB_TOKEN", "mode": "deny"},
+        {"name": "GH_TOKEN", "mode": "deny"},
+        {"name": "NPM_TOKEN", "mode": "deny"},
+        {"name": "AWS_ACCESS_KEY_ID", "mode": "deny"},
+        {"name": "AWS_SECRET_ACCESS_KEY", "mode": "deny"},
+        {"name": "OPENAI_API_KEY", "mode": "deny"}
+      ]
+    }
+  },
+  "_sandbox_note": "PARTIALLY LIVE (updated 2026-07-02, CC 2.1.195): filesystem denyRead DOES enforce in sessions where CC engages the Seatbelt sandbox — proven by EPERM on cast.db reads in a live interactive session (2026-07-02 doctor probe). Enforcement is session/permission-mode-dependent: explicitly-allowed and bypass-permissions commands run unsandboxed, so probes from autonomous sessions may observe no denial — verify from an interactive default-mode session. excludedCommands does NOT bypass filesystem.denyRead. filesystem.allowRead wins over denyRead: cast.db is allowlisted (Ed decision 2026-07-02) so cast status and /doctor read real data; history.jsonl, logs/**, and routing-log.jsonl stay denied. The egress PreToolUse hook (logs/egress.jsonl) remains the only live egress enforcement. Note: CC does not natively read managed-settings.d/; cast-merge-settings.sh merges this into ~/.claude/settings.json (user layer, not tamper-proof MDM). Verify ENFORCEMENT, not key-presence."
+}

@@ -378,6 +378,33 @@ STUBEOF
   fi
 }
 
+@test "Install: 61-sandbox.json is overwritten on reinstall (CAST-owned fragment — propagates sandbox/security config)" {
+  # First install — seeds 61-sandbox.json from repo source
+  run_install
+
+  local sandbox_dest="$HOME/.claude/managed-settings.d/61-sandbox.json"
+  [ -f "$sandbox_dest" ] || { echo "FAIL: 61-sandbox.json not installed" >&2; return 1; }
+
+  # Simulate a stale fragment missing the allowRead allowlist (e.g. pre-2026-07-02 config)
+  printf '{"sandbox":{"enabled":true,"filesystem":{"denyRead":["~/.aws/credentials"]}}}\n' > "$sandbox_dest"
+
+  # Verify our stale copy is missing api.anthropic.com (present in repo source)
+  if grep -q "api.anthropic.com" "$sandbox_dest"; then
+    echo "setup error: stale copy unexpectedly contains api.anthropic.com" >&2
+    return 1
+  fi
+
+  # Second install — 61-sandbox.json must be overwritten with full repo source
+  run_install
+
+  # The repo-source network allowlist entry must now be present
+  if ! grep -q "api.anthropic.com" "$sandbox_dest"; then
+    echo "FAIL: stale 61-sandbox.json was NOT overwritten on reinstall" >&2
+    cat "$sandbox_dest" >&2
+    return 1
+  fi
+}
+
 @test "Install: creates ~/.claude/config/cast-hook-owner with content 'install.sh'" {
   run_install
 
