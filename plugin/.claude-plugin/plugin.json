@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin.json",
   "name": "cast",
   "displayName": "CAST — Claude Agent Specialist Team",
-  "version": "9.0.0",
+  "version": "9.1.0",
   "description": "Multi-agent control plane for Claude Code: curated specialist agents, hook-enforced quality gates, and SQLite observability.",
   "author": { "name": "ek33450505" },
   "homepage": "https://github.com/ek33450505/claude-agent-team",
