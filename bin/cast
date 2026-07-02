@@ -2849,9 +2849,9 @@ PYEOF
   fi
 
   # 20. Homebrew tap count vs packages constant advisory
-  # CAST taps = homebrew-cast* (12) + homebrew-claudes-journal (1) = 13
+  # CAST taps = homebrew-cast* (8) + homebrew-claudes-journal (1) = 9 (2026-07-01 consolidation)
   # Excludes dropped non-CAST taps: homebrew-engram, homebrew-stratum, homebrew-jarvis
-  local expected_packages=13  # keep in sync with cast_stat_packages in scripts/cast-stats-lib.sh
+  local expected_packages=9  # keep in sync with cast_stat_packages in scripts/cast-stats-lib.sh
   if command -v gh >/dev/null 2>&1; then
     local live_packages
     live_packages="$(gh repo list ek33450505 --no-archived --limit 200 --json name -q '[.[].name | select(startswith("homebrew-cast") or . == "homebrew-claudes-journal")] | length' 2>/dev/null || echo "")"

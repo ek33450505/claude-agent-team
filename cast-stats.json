@@ -6,7 +6,7 @@
   "tables": 38,
   "commands": 21,
   "skills": 17,
-  "packages": 13,
+  "packages": 9,
   "updated": "2026-07-01",
   "_source": "https://raw.githubusercontent.com/ek33450505/claude-agent-team/main/cast-stats.json",
   "_generator": "scripts/gen-cast-stats.sh"
