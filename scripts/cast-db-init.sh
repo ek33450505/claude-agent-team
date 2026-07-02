@@ -3,7 +3,7 @@
 # Creates ~/.claude/cast.db with core tables + (dormant) swarm observability tables:
 #   sessions, agent_runs, routing_events, agent_memories
 #   swarm_sessions, teammate_runs  (writers: /swarm retired v9; experimental native Agent Teams hooks re-populate these when CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 — dormant otherwise)
-#   teammate_messages, stream_events: retired v9 Phase C (U7a) — removed from canonical; physical DROP from live DB is a separate gated step
+#   teammate_messages, stream_events: retired v9 Phase C (U7a) — removed from canonical; physical DROP from live DB = migration 025
 #   otel_metrics, otel_events  (writer: cast-otel-collector.py; native OTLP feed, opt-in OFF by default)
 #   record_fts (FTS5 full-text index over the whole record; writer: cast-ask-index — v9 A3)
 #   record_embed (semantic sidecar for vector search; writer: cast-ask-index — v9 A3)
