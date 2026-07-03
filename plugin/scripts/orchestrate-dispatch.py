@@ -43,7 +43,7 @@ def _session_id(env_var: str = 'CAST_SESSION_ID') -> str:
 # Subcommand: log-dispatch
 # ---------------------------------------------------------------------------
 
-def cmd_log_dispatch(plan: str) -> None:
+def cmd_log_dispatch(plan: str, explicit_session_id: str = '') -> None:
     """Write plan_sessions row (Step 2 of orchestrate)."""
     _setup_cast_db()
     try:
@@ -52,7 +52,7 @@ def cmd_log_dispatch(plan: str) -> None:
         sys.stderr.write(f'[orchestrate-dispatch] import cast_db failed: {e}\n')
         sys.exit(0)
 
-    session_id = _session_id()
+    session_id = explicit_session_id or _session_id()
     now = _now_utc()
 
     # dispatch_decisions write removed (S3): 3-way schema fork, run captured via plan_sessions; full reconcile deferred to S4
@@ -202,6 +202,8 @@ def main() -> None:
     # log-dispatch
     p_ld = subparsers.add_parser('log-dispatch', help='Log plan_sessions row')
     p_ld.add_argument('--plan', required=True, help='plan file path')
+    p_ld.add_argument('--session-id', default='', dest='session_id',
+                      help='explicit session ID (falls back to CAST_SESSION_ID/CLAUDE_SESSION_ID env)')
 
     # log-quality-gate
     p_qg = subparsers.add_parser('log-quality-gate', help='Log quality_gates row')
@@ -221,7 +223,7 @@ def main() -> None:
 
     try:
         if args.command == 'log-dispatch':
-            cmd_log_dispatch(args.plan)
+            cmd_log_dispatch(args.plan, args.session_id)
         elif args.command == 'log-quality-gate':
             cmd_log_quality_gate(
                 args.batch_id,
