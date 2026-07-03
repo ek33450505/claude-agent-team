@@ -370,7 +370,7 @@ def part6_file_writes(data: dict, tool_name: str, file_path: str) -> None:
 
     import datetime
     try:
-        from cast_db import db_write, db_execute
+        from cast_db import db_write, db_execute, db_query
         # Ensure the table exists (idempotent — safe on every call)
         db_execute(
             "CREATE TABLE IF NOT EXISTS file_writes ("
@@ -405,6 +405,21 @@ def part6_file_writes(data: dict, tool_name: str, file_path: str) -> None:
         sid = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID")
         run_id = os.environ.get("CAST_AGENT_RUN_ID")
         agent = os.environ.get("CAST_AGENT_NAME")
+
+        # DB fallback: attribute only when exactly one agent is running in this session —
+        # misattribution is worse than NULL (concurrent agents → leave run_id NULL, never guess).
+        if not run_id and sid:
+            try:
+                _rows = db_query(
+                    "SELECT id, agent FROM agent_runs WHERE session_id = ? AND status = 'running'",
+                    (sid,)
+                )
+                if len(_rows) == 1:
+                    run_id = str(_rows[0][0])
+                    if not agent:
+                        agent = _rows[0][1]
+            except Exception:
+                pass
 
         db_write('file_writes', {
             'session_id': sid,
