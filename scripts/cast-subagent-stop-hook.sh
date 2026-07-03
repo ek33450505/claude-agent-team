@@ -657,9 +657,9 @@ try:
     # does not roll back the primary agent_truncations write.
     try:
         conn.execute(
-            'INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (str(_uuid.uuid4()), sess, agent, ts, 'TRUNCATED', 0, 0),
+            'INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count, gate_type) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (str(_uuid.uuid4()), sess, agent, ts, 'TRUNCATED', 0, 0, 'truncation_detected'),
         )
         conn.commit()
     except Exception as _e:
@@ -890,10 +890,10 @@ ts = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 
 try:
     conn = sqlite3.connect(db, timeout=5)
     conn.execute(
-        'INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count, gate_type) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         # APPROVE is pass-like (reviewer's DONE equivalent); REQUEST_CHANGES is non-pass
-        (str(uuid.uuid4()), sess, agent, ts, status, 1 if status in ('DONE', 'APPROVE') else 0, 0),
+        (str(uuid.uuid4()), sess, agent, ts, status, 1 if status in ('DONE', 'APPROVE') else 0, 0, 'status_contract'),
     )
     conn.commit()
     conn.close()
