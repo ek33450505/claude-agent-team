@@ -125,16 +125,16 @@ con.close()
   [ "$(table_exists 'agent_truncations')" = "yes" ]
 }
 
-# 4c. unstaged_warnings table exists after apply
-@test "migrate: unstaged_warnings table exists after apply" {
+# 4c. unstaged_warnings table is absent after apply (retired in migration 028)
+@test "migrate: unstaged_warnings table is absent after apply (migration 028 retirement)" {
   python3 "$MIGRATE" --confirm >/dev/null 2>&1
-  [ "$(table_exists 'unstaged_warnings')" = "yes" ]
+  [ "$(table_exists 'unstaged_warnings')" = "no" ]
 }
 
-# 5. agent_runs.owns_files column exists after apply
-@test "migrate: agent_runs.owns_files column exists after apply" {
+# 5. agent_runs.owns_files column is absent after apply (retired in migration 028)
+@test "migrate: agent_runs.owns_files column is absent after apply (migration 028 retirement)" {
   python3 "$MIGRATE" --confirm >/dev/null 2>&1
-  [ "$(column_exists 'agent_runs' 'owns_files')" = "yes" ]
+  [ "$(column_exists 'agent_runs' 'owns_files')" = "no" ]
 }
 
 # 6. Symlink guard: a symlink in migrations dir is NOT included in discovered migrations
