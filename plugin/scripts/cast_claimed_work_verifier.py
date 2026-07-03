@@ -24,16 +24,18 @@ import sys
 import re
 import sqlite3
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 
 def parse_iso_timestamp(ts_str: str) -> float:
     """Parse ISO8601 to Unix timestamp. Return 0 on failure."""
     if not ts_str:
         return 0.0
     try:
-        # Handle 'Z' suffix and fractional seconds
-        ts_str = ts_str.rstrip('Z').replace('+00:00', '')
+        # Normalize 'Z' to '+00:00' to preserve UTC offset (not strip it)
+        ts_str = ts_str.replace('Z', '+00:00')
         dt = datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         return dt.timestamp()
     except Exception:
         return 0.0
@@ -164,16 +166,18 @@ def write_hallucination_record(db_path: str, session_id: str, agent_name: str,
                                 claim_type: str, claimed_value: str, actual_value: str) -> None:
     """Write a hallucination record to cast.db agent_hallucinations table.
 
-    Write-gate: only INSERT when actual_value == '[NOT FOUND]'. [PRE_EXISTING]
-    and [VERIFIED] results are not actionable noise — skip them.
+    Write-gate: INSERT when actual_value is '[NOT FOUND]' (genuine hallucination,
+    verified=0) OR '[VERIFIED]' (confirmed claim, verified=1). [PRE_EXISTING] is
+    still skipped as noise — it means the claimed file/value already existed before
+    the agent run and carries no signal.
     See: cast.db hygiene plan 2026-05-15, Task 1.1.
 
     One-time cleanup (review before executing — DO NOT automate):
       DELETE FROM agent_hallucinations WHERE actual_value = '[PRE_EXISTING]';
       -- Expected: ~2,767 rows. Verify count before committing.
     """
-    if actual_value != '[NOT FOUND]':
-        return  # write-gate: only genuine hallucinations are worth recording
+    if actual_value not in ('[NOT FOUND]', '[VERIFIED]'):
+        return  # write-gate: skip [PRE_EXISTING] noise; record hallucinations AND confirmations
 
     if not db_path or not os.path.exists(db_path):
         return
@@ -199,7 +203,6 @@ def write_hallucination_record(db_path: str, session_id: str, agent_name: str,
         # Determine verified status
         verified = 1 if actual_value == '[VERIFIED]' else 0
 
-        from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
         cur.execute(

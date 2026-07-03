@@ -13,8 +13,8 @@ observability table and should accept whatever status a writer records.
 
 SQLite cannot ALTER a CHECK in place, so this recreates agent_runs WITHOUT the
 CHECK while preserving EVERY column (including organically-added ones such as
-prompt, duration_ms, tool_uses, abandoned_at, owns_files), all data, the
-session_id foreign key, and all indexes.
+duration_ms, tool_uses, abandoned_at), all data, the session_id foreign key,
+and all indexes.
 
 Idempotent: a no-op (exit 0) when agent_runs has no status CHECK. Safe to call on
 every cast-db-init.sh run. Transactional with row-count verification + rollback.

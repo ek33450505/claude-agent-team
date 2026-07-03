@@ -173,7 +173,6 @@ def _record_dispatch(data):
             else:
                 prompt = _redacted
         model = ti.get("model")  # usually absent in tool_input → NULL
-        effort = ti.get("effort")  # usually absent → NULL
         session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
         db = os.path.expanduser(os.environ.get("CAST_DB_PATH", "~/.claude/cast.db"))
         if not os.path.isfile(db):
@@ -184,9 +183,9 @@ def _record_dispatch(data):
         try:
             conn.execute(
                 "INSERT INTO dispatch_decisions "
-                "(session_id, prompt_snippet, chosen_agent, model, effort, outcome) "
-                "VALUES (?, ?, ?, ?, ?, 'pending')",
-                (session_id, prompt, chosen_agent, model, effort),
+                "(session_id, prompt_snippet, chosen_agent, model, outcome) "
+                "VALUES (?, ?, ?, ?, 'pending')",
+                (session_id, prompt, chosen_agent, model),
             )
             conn.commit()
         finally:

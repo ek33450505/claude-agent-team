@@ -133,7 +133,7 @@ def _fetch_agent_runs(conn: sqlite3.Connection, session_id: str) -> List[Dict]:
             "SELECT agent, model, status, started_at, ended_at, "
             "input_tokens, output_tokens, cost_usd, "
             "cache_read_input_tokens, cache_creation_input_tokens, "
-            "owns_files, duration_ms, tool_uses "
+            "duration_ms, tool_uses "
             "FROM agent_runs "
             "WHERE session_id = ? "
             "ORDER BY started_at, rowid",

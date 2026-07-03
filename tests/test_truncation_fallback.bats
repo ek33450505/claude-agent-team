@@ -53,6 +53,7 @@ print(json.dumps(payload))
 # Helper: insert a truncated row directly into agent_truncations
 # (simulates what the hook writes when it detects truncation)
 _insert_truncated_row() {
+  # batch_id/has_status/has_json retired in migration 028; INSERT uses surviving columns only
   local agent_type="$1"
   local last_line="$2"
   local partial_work_log="$3"
@@ -62,23 +63,17 @@ INSERT INTO agent_truncations (
     session_id,
     agent_type,
     agent_id,
-    batch_id,
     last_line,
     timestamp,
     char_count,
-    has_status,
-    has_json,
     partial_work_log
 ) VALUES (
     'sess-test',
     '$agent_type',
     'test-001',
-    1,
     '$last_line',
     datetime('now'),
     100,
-    0,
-    0,
     $partial_work_log
 );
 EOF
@@ -303,16 +298,15 @@ Got interrupted here"
   run bash "$TRUNCATION_HOOK" <<< "$input"
   assert_success
 
-  # Query back the row and verify all columns
+  # Query back the row and verify surviving columns (has_status/has_json retired in migration 028)
   local sql
-  sql="SELECT agent_type, has_status, has_json, partial_work_log FROM agent_truncations LIMIT 1;"
+  sql="SELECT agent_type, partial_work_log FROM agent_truncations LIMIT 1;"
 
   local result
   result=$(sqlite3 "$TEMP_DB" "$sql" 2>/dev/null || echo "")
 
-  # Result should be: test-agent|0|0|<partial_work_log_text>
+  # Result should be: test-agent|<partial_work_log_text>
   [[ "$result" == *"test-agent"* ]]
-  [[ "$result" == *"|0|0|"* ]]  # has_status=0, has_json=0
   [[ "$result" == *"Opened file"* ]]
 }
 

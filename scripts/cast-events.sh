@@ -114,13 +114,12 @@ ts      = os.environ.get('CAST_TS', '')
 action  = 'agent_dispatch' if etype == 'task_claimed' else ('agent_complete' if etype == 'task_completed' else 'agent_blocked')
 entry = {
     'timestamp':      ts,
+    'event_type':     etype,
     'action':         action,
     'matched_route':  agent,
     'agent_name':     agent,
     'prompt_preview': summary[:80] if summary else task_id,
     'command':        None,
-    'pattern':        'cast_event',
-    'confidence':     'hard',
     'status':         status if status else None,
     'task_id':        task_id,
 }

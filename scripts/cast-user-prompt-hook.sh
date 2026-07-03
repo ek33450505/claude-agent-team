@@ -128,7 +128,8 @@ try:
     import subprocess as _subprocess
     result = _subprocess.run(
         ['python3', router, '--mode', 'retrieve', '--agent', 'shared',
-         '--prompt', prompt_text[:500], '--top-n', '5', '--fts-only'],
+         '--prompt', prompt_text[:500], '--top-n', '5', '--fts-only',
+         '--session-id', session_id],
         capture_output=True, text=True, timeout=5
     )
     memories = json.loads(result.stdout or '[]')

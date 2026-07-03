@@ -364,7 +364,9 @@ Status: DONE'
   assert_line --partial "verified=1"
   assert_line --partial "not_found=0"
 
-  # No hallucination row — the false-positive is gone
+  # u5 write-gate change: verified results are now recorded as confirmation rows
+  # (verified=1). Assert no false-positive hallucination (verified=0) AND that
+  # the confirmation row exists (actual_value='[VERIFIED]', verified=1).
   run python3 - << 'PYEOF'
 import os, sqlite3
 db = os.environ.get('CAST_DB_PATH')
@@ -373,7 +375,7 @@ if not db or not os.path.exists(db):
 try:
     conn = sqlite3.connect(db)
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM agent_hallucinations")
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations WHERE verified = 0")
     print(cur.fetchone()[0])
     conn.close()
 except Exception:
@@ -381,6 +383,24 @@ except Exception:
 PYEOF
   assert_success
   assert_output "0"
+
+  # Confirmation row must be recorded (new u5 write-gate contract)
+  run python3 - << 'PYEOF'
+import os, sqlite3
+db = os.environ.get('CAST_DB_PATH')
+if not db or not os.path.exists(db):
+    print("0"); exit(0)
+try:
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations WHERE actual_value = '[VERIFIED]' AND verified = 1")
+    print(cur.fetchone()[0])
+    conn.close()
+except Exception:
+    print("0")
+PYEOF
+  assert_success
+  assert_output "1"
 }
 
 @test "O4-B2: basename not present in repo → [NOT FOUND], hallucination row written (true-positive preserved)" {
@@ -447,6 +467,18 @@ Status: DONE'
   assert_success
   assert_line --partial "verified=1"
   assert_line --partial "not_found=0"
+}
+
+# ---------------------------------------------------------------------------
+# UTC-timezone regression: parse_iso_timestamp must interpret 'Z' as UTC,
+# not local time. On UTC-offset machines the old rstrip('Z') path inflated
+# every start-time by the local offset, causing all files to appear [PRE_EXISTING].
+# ---------------------------------------------------------------------------
+
+@test "parse_iso_timestamp: '1970-01-01T00:00:01Z' returns exactly 1.0 (UTC-anchored, tz-proof)" {
+  run python3 -c "import importlib.util; spec=importlib.util.spec_from_file_location('v','$VERIFIER'); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); result=mod.parse_iso_timestamp('1970-01-01T00:00:01Z'); assert result==1.0, 'Expected 1.0 got %s'%result; print('PASS')"
+  assert_success
+  assert_output "PASS"
 }
 
 @test "O4-B4: commit agent skip holds even when basename fallback would match (regression guard)" {

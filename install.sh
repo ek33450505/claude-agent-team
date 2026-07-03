@@ -421,6 +421,13 @@ if [ -f "$SCRIPT_DIR/cast/permission-rules.json" ]; then
     fi
 fi
 
+# --- Deploy producer-contract.json to cast/ (pipeline-health consumer) ---
+if [ -f "$SCRIPT_DIR/config/producer-contract.json" ]; then
+    mkdir -p "$CLAUDE_DIR/cast"
+    cp "$SCRIPT_DIR/config/producer-contract.json" "$CLAUDE_DIR/cast/producer-contract.json"
+    info "  Installed: cast/producer-contract.json"
+fi
+
 # --- Setup Python venv for TUI dashboard ---
 info "Setting up Python venv..."
 VENV_DIR="$CLAUDE_DIR/venv"

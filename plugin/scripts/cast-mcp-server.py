@@ -93,8 +93,8 @@ def _fetch_decisions(limit: int) -> str:
     try:
         with contextlib.closing(_ro_connect()) as conn:
             cursor = conn.execute(
-                "SELECT id, session_id, prompt_snippet, chosen_agent, model, effort, "
-                "parallel, created_at, outcome "
+                "SELECT id, session_id, prompt_snippet, chosen_agent, model, "
+                "created_at, outcome "
                 "FROM dispatch_decisions ORDER BY id DESC LIMIT ?",
                 (limit,),
             )

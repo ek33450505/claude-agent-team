@@ -163,11 +163,11 @@ try:
     cur.execute("""
         INSERT INTO task_queue
           (created_at, project, project_root, agent, task,
-           priority, status, scheduled_for)
+           priority, status)
         VALUES
           (datetime('now'), ?, ?, ?, ?,
-           ?, 'pending', ?)
-    """, (project, project_root, agent, task, priority, sched_for))
+           ?, 'pending')
+    """, (project, project_root, agent, task, priority))
     con.commit()
     print(cur.lastrowid)
     con.close()

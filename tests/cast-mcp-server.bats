@@ -28,7 +28,7 @@ setup() {
   # so the test exercises the real fresh-install path, not an ALTER-faked live shape).
   sqlite3 "$CAST_DB_PATH" "INSERT OR IGNORE INTO sessions (id, project, project_root, started_at, ended_at, status, deleted_at) VALUES ('sess-001', 'claude-agent-team', '/tmp/repo', '2026-06-30T00:00:00Z', NULL, 'active', NULL);"
 
-  sqlite3 "$CAST_DB_PATH" "INSERT OR IGNORE INTO dispatch_decisions (id, session_id, prompt_snippet, chosen_agent, model, effort, parallel, created_at, outcome) VALUES (1, 'sess-001', 'test prompt snippet', 'code-writer', 'claude-sonnet-4-6', 'normal', 0, '2026-06-30T00:00:00Z', 'success');"
+  sqlite3 "$CAST_DB_PATH" "INSERT OR IGNORE INTO dispatch_decisions (id, session_id, prompt_snippet, chosen_agent, model, created_at, outcome) VALUES (1, 'sess-001', 'test prompt snippet', 'code-writer', 'claude-sonnet-4-6', '2026-06-30T00:00:00Z', 'success');"
 
   sqlite3 "$CAST_DB_PATH" "INSERT OR IGNORE INTO incidents (id, occurred_at, problem_summary, fix_summary, related_files, related_commit, resolution_status, surfaced_by) VALUES ('inc-001', '2026-06-30T00:00:00Z', 'test problem happened', 'test fix applied', 'scripts/foo.py', 'abc1234', 'closed', 'code-writer');"
 

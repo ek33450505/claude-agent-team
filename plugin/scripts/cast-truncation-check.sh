@@ -148,12 +148,9 @@ if not has_status and not has_json:
         'session_id':       session_id,
         'agent_type':       agent_type,
         'agent_id':         agent_id,
-        'batch_id':         batch_id,
         'last_line':        last_line,
         'timestamp':        now_iso,
         'char_count':       char_count,
-        'has_status':       0,
-        'has_json':         0,
         'partial_work_log': partial_work_log,
     })
     print(

@@ -45,7 +45,7 @@ If the checkpoint exists, read the last completed batch ID and skip batches with
 
 ```bash
 python3 ~/.claude/scripts/orchestrate-dispatch.py log-dispatch \
-  --plan "$PLAN_FILE_PATH" 2>/dev/null || true
+  --plan "$PLAN_FILE_PATH" --session-id "${CAST_SESSION_ID:-${CLAUDE_SESSION_ID:-}}" 2>/dev/null || true
 ```
 
 Create one TaskCreate entry per batch (subject = "Batch N: [description]").

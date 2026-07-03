@@ -73,9 +73,13 @@ if db_path and os.path.exists(db_path) and team_id:
         if has("swarm_sessions"):
             cur.execute("INSERT OR IGNORE INTO swarm_sessions (id, team_name, session_id, project, status, started_at, notes) VALUES (?, ?, ?, ?, 'running', ?, ?)",
                         (team_id, team_id, session_id, project, iso_ts, NOTES))
-        if has("teammate_runs") and agent_id:
-            cur.execute("INSERT INTO teammate_runs (id, swarm_id, agent_role, agent_def, status, started_at, ended_at) VALUES (?, ?, ?, ?, 'idle', ?, ?) ON CONFLICT(id) DO UPDATE SET ended_at=excluded.ended_at, status='idle', agent_role=excluded.agent_role, agent_def=excluded.agent_def",
-                        (agent_id, team_id, teammate, agent_type, iso_ts, iso_ts))
+        # Native TeammateIdle payloads carry empty agent_id/agent_type (verified 2026-07-03,
+        # 97/97 events); teammate_name is always populated — keyed by session+name instead.
+        # worktree/tokens are unavailable at this hook event.
+        if has("teammate_runs") and teammate and team_id:
+            row_id = f"{team_id}-{teammate}"
+            cur.execute("INSERT INTO teammate_runs (id, swarm_id, agent_role, agent_def, status, started_at, ended_at) VALUES (?, ?, ?, ?, 'idle', ?, ?) ON CONFLICT(id) DO UPDATE SET ended_at=excluded.ended_at, status='idle'",
+                        (row_id, team_id, teammate, agent_type, iso_ts, iso_ts))
         conn.commit(); conn.close()
     except Exception: pass
 PYEOF

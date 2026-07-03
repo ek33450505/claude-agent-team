@@ -77,7 +77,7 @@ if [ "$CURRENT_VERSION" -ge 8 ]; then
 CREATE TABLE IF NOT EXISTS swarm_sessions (
   id           TEXT PRIMARY KEY,
   team_name    TEXT NOT NULL,
-  config_path  TEXT,
+  config_path  TEXT,  -- NULL-accepted: native Agent Teams (#294 hooks) have no config file
   started_at   TEXT,
   ended_at     TEXT,
   status       TEXT DEFAULT 'running',
@@ -251,7 +251,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   response        TEXT,
   cache_read_input_tokens INTEGER,
   cache_creation_input_tokens INTEGER,
-  owns_files      TEXT,
   duration_ms     INTEGER,
   tool_uses       INTEGER,
   abandoned_at    TIMESTAMP,
@@ -484,12 +483,9 @@ CREATE TABLE IF NOT EXISTS agent_truncations (
   session_id   TEXT,
   agent_type   TEXT NOT NULL,
   agent_id     TEXT,
-  batch_id     INTEGER,
   last_line    TEXT,
   timestamp    TEXT NOT NULL,
   char_count   INTEGER,
-  has_status   INTEGER DEFAULT 0,
-  has_json     INTEGER DEFAULT 0,
   partial_work_log TEXT
 );
 
@@ -551,9 +547,6 @@ CREATE TABLE IF NOT EXISTS dispatch_decisions (
   prompt_snippet  TEXT,
   chosen_agent    TEXT,
   model           TEXT,
-  effort          TEXT,
-  wave_id         TEXT,
-  parallel        INTEGER DEFAULT 0,
   created_at      TEXT DEFAULT (datetime('now')),
   outcome         TEXT DEFAULT 'pending'
 );
@@ -574,13 +567,10 @@ CREATE TABLE IF NOT EXISTS task_queue (
   priority      INTEGER DEFAULT 5,
   status        TEXT DEFAULT 'pending',
   created_at    TEXT DEFAULT (datetime('now')),
-  claimed_at    TEXT,
-  completed_at  TEXT,
   retry_count   INTEGER DEFAULT 0,
   max_retries   INTEGER DEFAULT 3,
   project       TEXT,
-  project_root  TEXT,
-  scheduled_for TEXT
+  project_root  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_task_queue_status     ON task_queue(status);
 CREATE INDEX IF NOT EXISTS idx_task_queue_created_at ON task_queue(created_at);
@@ -589,10 +579,6 @@ TASK_QUEUE_TABLE
 fi
 
 # ── Phase 3: additive columns on core tables (idempotent; duplicate-column errors suppressed) ──
-# agent_runs.owns_files — agent file-scope tracking (reader: cast-post-tool.py). Was provisioned
-# only by the orphaned scripts/migrations/009, which never runs in the runtime.
-sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN owns_files TEXT;" 2>/dev/null || true
-
 # agent_runs.duration_ms + tool_uses — written by cast-subagent-stop-hook.sh's self-heal block and
 # read by cast-duration-check.sh. Were not in the fresh-install CREATE TABLE prior to v7.4.0.
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN duration_ms INTEGER;" 2>/dev/null || true
@@ -609,7 +595,8 @@ sqlite3 "$DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN outcome TEXT DEFAU
 # cast-budget-alert.sh, cast-cache-metrics.sh). Their UPDATEs failed on fresh installs without these.
 sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN status TEXT;" 2>/dev/null || true
 sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN deleted_at TEXT;" 2>/dev/null || true
-# total_input_tokens / total_output_tokens / total_cost_usd dropped in migration 022 (wave-3)
+# total_input_tokens / total_output_tokens / total_cost_usd dropped in migration 022 (wave-3);
+# re-dropped in migration 026 after the v9 dashboard self-heal re-added them.
 # routing_events agent_id / agent_type dropped in migration 022 (wave-3)
 
 # ── Phase 3: provision tables that have live writers but were only created by the now-defunct
@@ -753,7 +740,6 @@ CREATE TABLE IF NOT EXISTS agent_protocol_violations (
   session_id   TEXT,
   agent_type   TEXT NOT NULL,
   agent_id     TEXT,
-  batch_id     INTEGER,
   violation    TEXT NOT NULL,
   pattern      TEXT,
   timestamp    TEXT NOT NULL,
@@ -785,24 +771,6 @@ CREATE INDEX IF NOT EXISTS idx_file_writes_path        ON file_writes(file_path)
 CREATE INDEX IF NOT EXISTS idx_file_writes_session_ts  ON file_writes(session_id, ts);
 CREATE INDEX IF NOT EXISTS idx_file_writes_run         ON file_writes(run_id);
 FILE_WRITES_TABLE
-  _columns_added=1
-fi
-
-# unstaged_warnings: git staging enforcement (writer: cast-post-tool.py at ~338)
-if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "unstaged_warnings"; then
-  sqlite3 "$DB_PATH" <<'UNSTAGED_WARNINGS_TABLE'
-CREATE TABLE IF NOT EXISTS unstaged_warnings (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id      TEXT,
-  commit_sha      TEXT,
-  unstaged_files  TEXT,
-  in_scope_files  TEXT,
-  timestamp       TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_uw_session ON unstaged_warnings(session_id);
-CREATE INDEX IF NOT EXISTS idx_uw_timestamp ON unstaged_warnings(timestamp);
-UNSTAGED_WARNINGS_TABLE
   _columns_added=1
 fi
 
@@ -903,7 +871,9 @@ COMPLETENESS_EVENTS_TABLE
   _columns_added=1
 fi
 
-# hook_failures: hook execution failure log (writer: cast-hook-monitor.sh)
+# hook_failures: hook execution failure log (distributed writers: cast_db.py:log_hook_failure,
+# called from cast-subagent-stop-hook.sh, cast-subagent-start-hook.sh, cast-memory-router.py,
+# cast-precompact-log.py, and other hook error paths)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "hook_failures"; then
   sqlite3 "$DB_PATH" <<'HOOK_FAILURES_TABLE'
 CREATE TABLE IF NOT EXISTS hook_failures (

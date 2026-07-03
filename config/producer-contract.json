@@ -1,0 +1,275 @@
+{
+  "schema_version": "1.0",
+  "generated": "2026-07-03",
+  "source": "producer audit master_post_v9 §3.b",
+  "consumers": "cast-desktop pipeline-health E2, dashboard",
+  "tables": [
+    {
+      "table": "sessions",
+      "writers": ["cast-session-start-hook.sh:117"],
+      "cadence": "per_session",
+      "status": "live"
+    },
+    {
+      "table": "agent_runs",
+      "writers": ["cast-subagent-start-hook.sh:155", "cast-subagent-start-hook.sh:160"],
+      "cadence": "per_agent_run",
+      "status": "live"
+    },
+    {
+      "table": "agent_truncations",
+      "writers": ["cast-subagent-stop-hook.sh:649"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "agent_protocol_violations",
+      "writers": ["cast-subagent-stop-hook.sh:1118"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "quality_gates",
+      "writers": ["cast-subagent-stop-hook.sh:660", "cast-subagent-stop-hook.sh:893", "write-guards.py:130"],
+      "cadence": "per_agent_run",
+      "status": "live",
+      "notes": "gate_type populated from 2026-07-03"
+    },
+    {
+      "table": "agent_hallucinations",
+      "writers": ["cast_claimed_work_verifier.py:206"],
+      "cadence": "per_agent_run",
+      "status": "live",
+      "notes": "records [VERIFIED] confirmations from 2026-07-03"
+    },
+    {
+      "table": "agent_memories",
+      "writers": [
+        "cast-memory-write.sh",
+        "cast-memory-router.py:374",
+        "cast-session-end.sh:401",
+        "cast-memory-facts-write.py"
+      ],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "injection_log",
+      "writers": ["cast-memory-router.py:242"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "routing_events",
+      "writers": [
+        "cast-user-prompt-hook.sh:109",
+        "cast-duration-check.sh:123",
+        "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"
+      ],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "dispatch_decisions",
+      "writers": ["cast-pretool-dispatch.py:186"],
+      "cadence": "per_agent_run",
+      "status": "live"
+    },
+    {
+      "table": "dispatch_events",
+      "writers": ["cast-cookbook-drift.sh:60"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "file_writes",
+      "writers": ["cast-post-tool.py:409"],
+      "cadence": "per_tool_call",
+      "status": "live",
+      "notes": "run_id attributable from 2026-07-03"
+    },
+    {
+      "table": "tool_call_failures",
+      "writers": ["cast-tool-failure-hook.sh:85"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "completeness_events",
+      "writers": ["cast-response-completeness-hook.sh:202"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "stop_failure_events",
+      "writers": ["cast-stop-failure-hook.sh:184"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "worktree_anomalies",
+      "writers": ["cast-subagent-worktree-check.sh"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "swarm_sessions",
+      "writers": [
+        "cast-teammate-idle-hook.sh:74",
+        "cast-task-completed-hook.sh:74"
+      ],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "closer: cast-session-end.sh; reaper: cast-maintenance.sh; closer added 2026-07-03"
+    },
+    {
+      "table": "teammate_runs",
+      "writers": ["cast-teammate-idle-hook.sh", "cast-task-completed-hook.sh"],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "TeammateIdle keyed by name from 2026-07-03"
+    },
+    {
+      "table": "task_queue",
+      "writers": ["cast-queue-add.sh:164", "cast-task-created-hook.sh:84"],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "write-only by design; consumer removed v9 I9"
+    },
+    {
+      "table": "plan_sessions",
+      "writers": ["orchestrate-dispatch.py:69"],
+      "cadence": "on_demand",
+      "status": "live"
+    },
+    {
+      "table": "commit_provenance",
+      "writers": ["cast-commit-provenance.py:50"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "provenance_chain",
+      "writers": ["cast-provenance-chain.py:141"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "incidents",
+      "writers": ["cast-incident-record.sh:145", "cast-abandon-stale-runs.py:137"],
+      "cadence": "per_event",
+      "status": "live"
+    },
+    {
+      "table": "schema_migrations",
+      "writers": ["cast-db-init.sh"],
+      "cadence": "on_demand",
+      "status": "live"
+    },
+    {
+      "table": "otel_events",
+      "writers": ["cast-otel-collector.py:296"],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "max received_at 2026-07-02 — collector possibly stalled; flagged 2026-07-03"
+    },
+    {
+      "table": "otel_metrics",
+      "writers": ["cast-otel-collector.py:279"],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "max received_at 2026-07-02 — collector possibly stalled; flagged 2026-07-03"
+    },
+    {
+      "table": "pane_bindings",
+      "writers": ["cast-session-start-hook.sh:176"],
+      "cadence": "per_session",
+      "status": "live",
+      "notes": "started_at is INTEGER epoch, not ISO"
+    },
+    {
+      "table": "eval_runs",
+      "writers": ["cast-eval-runner.py:600"],
+      "cadence": "on_demand",
+      "status": "live"
+    },
+    {
+      "table": "budgets",
+      "writers": ["bin/cast:1417"],
+      "cadence": "on_demand",
+      "status": "live"
+    },
+    {
+      "table": "hook_failures",
+      "writers": ["cast_db.py:log_hook_failure (distributed error paths)"],
+      "cadence": "per_event",
+      "status": "live",
+      "notes": "live-but-empty: 0 rows = no hook errors since last reset"
+    },
+    {
+      "table": "rate_limit_snapshots",
+      "writers": ["cast-rate-check.py:145"],
+      "cadence": "daily",
+      "status": "dormant",
+      "notes": "dormant until keychain credentials set (org id/API key)"
+    },
+    {
+      "table": "record_embed",
+      "writers": ["cast-ask-index.py:560 (--embed)"],
+      "cadence": "daily",
+      "status": "live",
+      "notes": "live from 2026-07-03 (maintenance step)"
+    },
+    {
+      "table": "record_fts",
+      "writers": ["cast-ask-index.py"],
+      "cadence": "on_demand",
+      "status": "live",
+      "notes": "includes 5 FTS shadow tables; treated as one unit"
+    },
+    {
+      "table": "archived_memories",
+      "writers": ["cast-memory-consolidate.py:213"],
+      "cadence": "on_demand",
+      "status": "dormant"
+    },
+    {
+      "table": "memory_consolidation_runs",
+      "writers": ["cast-memory-dream.py:158"],
+      "cadence": "on_demand",
+      "status": "dormant"
+    },
+    {
+      "table": "managed_agent_invocations",
+      "writers": ["cast-managed-agent.sh:138"],
+      "cadence": "on_demand",
+      "status": "dormant"
+    },
+    {
+      "table": "routines",
+      "writers": ["cast-db-routines.py:285"],
+      "cadence": "on_demand",
+      "status": "dormant"
+    },
+    {
+      "table": "attestations",
+      "writers": ["external attest plugin"],
+      "cadence": "external",
+      "status": "external"
+    },
+    {
+      "table": "compaction_events",
+      "writers": [],
+      "cadence": "none",
+      "status": "dead_writer_retired",
+      "notes": "writer retired v9 B3 (cast-post-compact-hook.sh:80); 77 historical rows remain"
+    },
+    {
+      "table": "unstaged_warnings",
+      "writers": [],
+      "cadence": "none",
+      "status": "retired_this_session",
+      "notes": "retired this session, migration 028"
+    }
+  ]
+}

@@ -38,11 +38,41 @@ def _git(*args: str) -> str:
         return ""
 
 
+def _resolve_session_id(repo: str) -> str:
+    """Resolve the current session ID using a three-tier fallback.
+
+    Resolution order:
+    1. CAST_SESSION_ID env var (preferred — propagated by CAST dispatch wrappers)
+    2. CLAUDE_SESSION_ID env var (native Claude Code env var; not propagated into
+       Bash subprocesses spawned by the commit agent)
+    3. DB fallback: most recent 'active' sessions row for this repo. Trade-off: with
+       concurrent active sessions in the SAME repo, this may attribute the commit to
+       the newer sibling session — bounded same-user ambiguity, preferred over the
+       empty value that trips the D5 pre-push reconcile gate.
+    4. Fail-open to '' on any exception (never block the commit).
+    """
+    session_id = os.environ.get("CAST_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID", "")
+    if session_id:
+        return session_id
+    # DB fallback — reuses the same db_query connection the INSERT path uses
+    try:
+        rows = db_query(
+            "SELECT id FROM sessions WHERE status = 'active' AND project_root = ?"
+            " ORDER BY started_at DESC LIMIT 1",
+            (repo,),
+        )
+        if rows:
+            return rows[0]["id"]
+    except Exception:
+        pass
+    return ""
+
+
 def cmd_record(sha: str) -> int:
     """Insert a provenance row. INSERT OR IGNORE for idempotency."""
-    session_id = os.environ.get("CLAUDE_SESSION_ID", "")
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
     repo = _git("rev-parse", "--show-toplevel")
+    session_id = _resolve_session_id(repo)
     recorded_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     try:
