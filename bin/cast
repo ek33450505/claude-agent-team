@@ -2385,6 +2385,7 @@ PYEOF
     _ah_out="$(sqlite3 "$CAST_DB_PATH" \
       "SELECT agent_name, COUNT(*) FROM agent_hallucinations \
        WHERE timestamp >= datetime('now','-7 days') \
+       AND (verified IS NULL OR verified = 0) \
        GROUP BY agent_name ORDER BY COUNT(*) DESC;" 2>&1)"
     _ah_rc=$?
     if echo "$_ah_out" | grep -qi "no such table"; then
