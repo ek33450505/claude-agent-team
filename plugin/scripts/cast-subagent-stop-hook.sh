@@ -911,9 +911,12 @@ fi
 # Extracts claimed paths from Work Log and checks if files were actually modified
 # after the agent started. Logs discrepancies to agent_hallucinations table (no block).
 if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]] && command -v python3 >/dev/null 2>&1; then
+  # Resolve real agent start time from DB; fall back to stop-time if absent
+  START_TIME="$(sqlite3 "$DB_PATH" "SELECT started_at FROM agent_runs WHERE session_id='${SESSION_ID}' AND agent='${SAFE_AGENT}' ORDER BY id DESC LIMIT 1;" 2>/dev/null || true)"
+  [[ -z "$START_TIME" ]] && START_TIME="$TIMESTAMP_ISO"
   CAST_AGENT_NAME="${AGENT_NAME}" \
   CAST_SESSION_ID="${SESSION_ID}" \
-  CAST_AGENT_START_TIME="${TIMESTAMP_ISO}" \
+  CAST_AGENT_START_TIME="${START_TIME}" \
   CAST_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")" \
   CAST_DB_PATH="${DB_PATH}" \
   python3 "$(dirname "$0")/cast_claimed_work_verifier.py" 2>/dev/null || true
