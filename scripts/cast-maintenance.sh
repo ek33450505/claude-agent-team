@@ -91,4 +91,10 @@ if [[ -f "${CAST_DIR}/scripts/cast-rate-check.py" ]]; then
   log "Ran rate-limit check (see logs/rate-check.log)"
 fi
 
+# 10. Embed pending record_fts rows for semantic search (local Ollama; fail-open if not running)
+if [[ -f "${CAST_DIR}/scripts/cast-ask-index.py" ]]; then
+  python3 "${CAST_DIR}/scripts/cast-ask-index.py" --embed >> "${CAST_DIR}/logs/ask-embed.log" 2>&1 || true
+  log "Ran record_embed pass (see logs/ask-embed.log)"
+fi
+
 log "Maintenance complete"
