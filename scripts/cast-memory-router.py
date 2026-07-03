@@ -498,6 +498,14 @@ def main():
                 for i, col in enumerate(column_names):
                     mem_dict[col] = row_list[i] if i < len(row_list) else None
                 mem_dict['score'] = round(score, 4)
+                if mem_dict.get('id') is not None:
+                    try:
+                        db_execute(
+                            "UPDATE agent_memories SET retrieval_count = COALESCE(retrieval_count, 0) + 1 WHERE id = ?",
+                            (mem_dict['id'],)
+                        )
+                    except Exception:
+                        pass
                 output.append(mem_dict)
                 # Log each injected fact to injection_log for observability
                 _log_injection(
