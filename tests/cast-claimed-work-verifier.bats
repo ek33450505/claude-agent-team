@@ -469,6 +469,18 @@ Status: DONE'
   assert_line --partial "not_found=0"
 }
 
+# ---------------------------------------------------------------------------
+# UTC-timezone regression: parse_iso_timestamp must interpret 'Z' as UTC,
+# not local time. On UTC-offset machines the old rstrip('Z') path inflated
+# every start-time by the local offset, causing all files to appear [PRE_EXISTING].
+# ---------------------------------------------------------------------------
+
+@test "parse_iso_timestamp: '1970-01-01T00:00:01Z' returns exactly 1.0 (UTC-anchored, tz-proof)" {
+  run python3 -c "import importlib.util; spec=importlib.util.spec_from_file_location('v','$VERIFIER'); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); result=mod.parse_iso_timestamp('1970-01-01T00:00:01Z'); assert result==1.0, 'Expected 1.0 got %s'%result; print('PASS')"
+  assert_success
+  assert_output "PASS"
+}
+
 @test "O4-B4: commit agent skip holds even when basename fallback would match (regression guard)" {
   # Build a git repo where routeCurve.test.js WOULD be matched by basename fallback
   local GIT_REPO="$TEMP_DIR/git_repo"
