@@ -42,7 +42,6 @@ ALLOWED_TABLES = {
     'task_queue',
     'managed_agent_invocations',
     'teammate_runs',
-    'unstaged_warnings',
     'worktree_anomalies',
     'eval_runs',
 }

@@ -647,9 +647,9 @@ try:
     conn = sqlite3.connect(db, timeout=5)
     conn.execute(
         'INSERT INTO agent_truncations '
-        '(session_id, agent_type, agent_id, last_line, timestamp, char_count, has_status, has_json, partial_work_log) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (sess, agent, agent_id or None, last_line, ts, char_count, 0, 0, partial_work_log or None),
+        '(session_id, agent_type, agent_id, last_line, timestamp, char_count, partial_work_log) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (sess, agent, agent_id or None, last_line, ts, char_count, partial_work_log or None),
     )
     conn.commit()
     # P1 #1: also write a quality_gates row so truncation telemetry has a single source of truth.
@@ -820,7 +820,6 @@ payload = {
     'session_id': session_id,
     'agent_type': agent_type,
     'agent_id':   agent_id,
-    'batch_id':   batch_id,
     'violation':  violation,
     'pattern':    pattern,
     'timestamp':  now_iso,

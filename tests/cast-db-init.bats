@@ -44,7 +44,7 @@ teardown() {
 @test "cast-db-init agent_truncations has required columns and indexes" {
   bash "$DB_INIT" --db "$TEST_DB"
 
-  # Check all required columns exist
+  # Check all required columns exist (batch_id/has_status/has_json retired in migration 028)
   local schema
   schema=$(sqlite3 "$TEST_DB" ".schema agent_truncations")
 
@@ -52,13 +52,15 @@ teardown() {
   [[ "$schema" == *"session_id"* ]]
   [[ "$schema" == *"agent_type"* ]]
   [[ "$schema" == *"agent_id"* ]]
-  [[ "$schema" == *"batch_id"* ]]
   [[ "$schema" == *"last_line"* ]]
   [[ "$schema" == *"timestamp"* ]]
   [[ "$schema" == *"char_count"* ]]
-  [[ "$schema" == *"has_status"* ]]
-  [[ "$schema" == *"has_json"* ]]
   [[ "$schema" == *"partial_work_log"* ]]
+
+  # Retired columns must be absent
+  [[ "$schema" != *"batch_id"* ]]
+  [[ "$schema" != *"has_status"* ]]
+  [[ "$schema" != *"has_json"* ]]
 
   # Check indexes exist
   [[ "$schema" == *"idx_at_session"* ]]
@@ -229,10 +231,11 @@ teardown() {
   assert_success
 }
 
-@test "cast-db-init adds agent_runs.owns_files column" {
+@test "cast-db-init: agent_runs.owns_files retired (migration 028 — col absent)" {
+  # owns_files was retired in migration 028 per wave-2 schema cleanup; must not exist
   bash "$DB_INIT" --db "$TEST_DB"
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM pragma_table_info('agent_runs') WHERE name='owns_files';"
-  assert_output "1"
+  assert_output "0"
 }
 
 @test "cast-db-init re-provisions formerly-migration-only tables on an existing v8 DB missing them" {
@@ -328,20 +331,20 @@ teardown() {
   assert_output "1"
 }
 
-@test "cast-db-init table count is exactly 39 on fresh DB" {
+@test "cast-db-init table count is exactly 38 on fresh DB" {
   bash "$DB_INIT" --db "$TEST_DB"
   # Exclude sqlite_* internals AND the record_fts% FTS5 apparatus (virtual table + shadow tables = a full-text index, not data tables; record_embed IS counted). Source of truth: scripts/cast-db-init.sh.
-  # Count: 41 → 39 after retiring stream_events + teammate_messages (v9 Phase C U7a) → 38 after retiring code_ref_checks (v9 Phase C U7b) → 39 after adding commit_provenance (D5).
+  # Count: 41 → 39 after retiring stream_events + teammate_messages (v9 Phase C U7a) → 38 after retiring code_ref_checks (v9 Phase C U7b) → 39 after adding commit_provenance (D5) → 38 after retiring unstaged_warnings (migration 028 wave-2).
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'record_fts%';"
-  assert_output "39"
+  assert_output "38"
 }
 
-@test "cast-db-init table count stays 39 on second invocation (idempotent)" {
+@test "cast-db-init table count stays 38 on second invocation (idempotent)" {
   bash "$DB_INIT" --db "$TEST_DB"
   run bash "$DB_INIT" --db "$TEST_DB"
   assert_success
   # Exclude sqlite_* internals AND the record_fts% FTS5 apparatus (virtual table + shadow tables = a full-text index, not data tables; record_embed IS counted). Source of truth: scripts/cast-db-init.sh.
-  # Count: 41 → 39 after retiring stream_events + teammate_messages (v9 Phase C U7a) → 38 after retiring code_ref_checks (v9 Phase C U7b) → 39 after adding commit_provenance (D5).
+  # Count: 41 → 39 after retiring stream_events + teammate_messages (v9 Phase C U7a) → 38 after retiring code_ref_checks (v9 Phase C U7b) → 39 after adding commit_provenance (D5) → 38 after retiring unstaged_warnings (migration 028 wave-2).
   run sqlite3 "$TEST_DB" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'record_fts%';"
-  assert_output "39"
+  assert_output "38"
 }
