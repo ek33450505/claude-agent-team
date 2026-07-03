@@ -157,11 +157,11 @@ def main() -> None:
             session_result = conn.execute(
                 '''
                 UPDATE sessions
-                SET status = 'crashed'
+                SET status = 'crashed', ended_at = ?
                 WHERE status = 'active'
                   AND started_at < ?
                 ''',
-                (session_threshold_iso,)
+                (now_iso, session_threshold_iso)
             )
             crashed_count = session_result.rowcount
             conn.commit()
