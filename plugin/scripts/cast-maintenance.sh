@@ -40,6 +40,13 @@ if [ "$stale" -gt 0 ]; then
   log "Cleaned $stale stale running agents"
 fi
 
+# 1b. Mark stale running swarm sessions as ended (>1 day old)
+stale_swarms=$(cast_sqlite "$DB" "SELECT COUNT(*) FROM swarm_sessions WHERE status='running' AND datetime(started_at) < datetime('now','-1 day');" 2>/dev/null || echo 0)
+if [ "$stale_swarms" -gt 0 ]; then
+  cast_sqlite "$DB" "UPDATE swarm_sessions SET status='ended', ended_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE status='running' AND datetime(started_at) < datetime('now','-1 day');"
+  log "Closed $stale_swarms stale swarm sessions"
+fi
+
 # 2. Prune event files older than 30 days (both .json and .jsonl.gz)
 pruned=$(find "${CAST_DIR}/cast/events/" \( -name "*.json" -o -name "*.jsonl.gz" \) -mtime +30 -delete -print 2>/dev/null | wc -l | tr -d ' ')
 log "Pruned $pruned event files (>30d)"
@@ -81,7 +88,7 @@ fi
 # 9. Snapshot Anthropic rate limits
 if [[ -f "${CAST_DIR}/scripts/cast-rate-check.py" ]]; then
   python3 "${CAST_DIR}/scripts/cast-rate-check.py" >> "${CAST_DIR}/logs/rate-check.log" 2>&1 || true
-  log "Recorded rate limit snapshot"
+  log "Ran rate-limit check (see logs/rate-check.log)"
 fi
 
 log "Maintenance complete"

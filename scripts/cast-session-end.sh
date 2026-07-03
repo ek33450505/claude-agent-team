@@ -229,6 +229,8 @@ DB="${CAST_DB_PATH:-${CLAUDE_DIR}/cast.db}"
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   cast_sqlite "$DB" "UPDATE sessions SET ended_at = '${ENDED_AT}', status = 'ended' WHERE id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
+  # swarm_sessions has no other closer — #294 hooks only INSERT status='running'
+  cast_sqlite "$DB" "UPDATE swarm_sessions SET ended_at = '${ENDED_AT}', status = 'ended' WHERE session_id = '${SESSION_ID}' AND ended_at IS NULL;" 2>/dev/null || true
   # Aggregate token counts and cost columns dropped in migration 022 (wave-3)
 fi
 
