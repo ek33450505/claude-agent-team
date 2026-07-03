@@ -6,10 +6,14 @@ Usage:
     python3 cast-rate-check.py --json   # print latest snapshot as JSON (for morning-briefing)
 
 Env:
-    ANTHROPIC_API_KEY       — API key (required; or macOS Keychain 'anthropic-api-key')
-    CAST_ANTHROPIC_ORG_ID   — Organization ID (required; logs warning and exits 0 if missing)
+    ANTHROPIC_API_KEY       — API key (env or macOS Keychain service 'anthropic-api-key')
+    CAST_ANTHROPIC_ORG_ID   — Organization ID (env or macOS Keychain service 'anthropic-org-id')
     CAST_SCRIPTS_DIR        — override path to scripts dir for cast_db import
     CAST_DB_PATH            — override path to cast.db
+
+One-time keychain setup (run once; no values stored in code or config):
+    security add-generic-password -s anthropic-org-id -a "$USER" -w '<org-id>'
+    security add-generic-password -s anthropic-api-key -a "$USER" -w '<admin-api-key>'
 """
 
 import argparse
@@ -65,6 +69,29 @@ def _resolve_api_key() -> str | None:
             keychain_key = result.stdout.strip()
             if keychain_key:
                 return keychain_key
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
+def _resolve_org_id() -> str | None:
+    """Return CAST_ANTHROPIC_ORG_ID from env or macOS Keychain service 'anthropic-org-id', or None."""
+    org_id = os.environ.get("CAST_ANTHROPIC_ORG_ID", "")
+    if org_id:
+        return org_id
+    # macOS Keychain fallback — mirrors _resolve_api_key / cast-files-api.sh pattern
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "anthropic-org-id", "-w"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            keychain_org_id = result.stdout.strip()
+            if keychain_org_id:
+                _log("INFO", "org id resolved from keychain")
+                return keychain_org_id
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
     return None
@@ -208,9 +235,9 @@ def main() -> None:
         return
 
     # --- fetch path ---
-    org_id = os.environ.get("CAST_ANTHROPIC_ORG_ID", "")
+    org_id = _resolve_org_id()
     if not org_id:
-        _log("WARNING", "CAST_ANTHROPIC_ORG_ID not set — skipping rate limit fetch")
+        _log("WARNING", "CAST_ANTHROPIC_ORG_ID not set (env or keychain service 'anthropic-org-id') — skipping rate limit fetch")
         sys.exit(0)
 
     api_key = _resolve_api_key()
