@@ -364,7 +364,9 @@ Status: DONE'
   assert_line --partial "verified=1"
   assert_line --partial "not_found=0"
 
-  # No hallucination row — the false-positive is gone
+  # u5 write-gate change: verified results are now recorded as confirmation rows
+  # (verified=1). Assert no false-positive hallucination (verified=0) AND that
+  # the confirmation row exists (actual_value='[VERIFIED]', verified=1).
   run python3 - << 'PYEOF'
 import os, sqlite3
 db = os.environ.get('CAST_DB_PATH')
@@ -373,7 +375,7 @@ if not db or not os.path.exists(db):
 try:
     conn = sqlite3.connect(db)
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM agent_hallucinations")
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations WHERE verified = 0")
     print(cur.fetchone()[0])
     conn.close()
 except Exception:
@@ -381,6 +383,24 @@ except Exception:
 PYEOF
   assert_success
   assert_output "0"
+
+  # Confirmation row must be recorded (new u5 write-gate contract)
+  run python3 - << 'PYEOF'
+import os, sqlite3
+db = os.environ.get('CAST_DB_PATH')
+if not db or not os.path.exists(db):
+    print("0"); exit(0)
+try:
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations WHERE actual_value = '[VERIFIED]' AND verified = 1")
+    print(cur.fetchone()[0])
+    conn.close()
+except Exception:
+    print("0")
+PYEOF
+  assert_success
+  assert_output "1"
 }
 
 @test "O4-B2: basename not present in repo → [NOT FOUND], hallucination row written (true-positive preserved)" {

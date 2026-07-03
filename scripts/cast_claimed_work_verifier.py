@@ -164,16 +164,18 @@ def write_hallucination_record(db_path: str, session_id: str, agent_name: str,
                                 claim_type: str, claimed_value: str, actual_value: str) -> None:
     """Write a hallucination record to cast.db agent_hallucinations table.
 
-    Write-gate: only INSERT when actual_value == '[NOT FOUND]'. [PRE_EXISTING]
-    and [VERIFIED] results are not actionable noise — skip them.
+    Write-gate: INSERT when actual_value is '[NOT FOUND]' (genuine hallucination,
+    verified=0) OR '[VERIFIED]' (confirmed claim, verified=1). [PRE_EXISTING] is
+    still skipped as noise — it means the claimed file/value already existed before
+    the agent run and carries no signal.
     See: cast.db hygiene plan 2026-05-15, Task 1.1.
 
     One-time cleanup (review before executing — DO NOT automate):
       DELETE FROM agent_hallucinations WHERE actual_value = '[PRE_EXISTING]';
       -- Expected: ~2,767 rows. Verify count before committing.
     """
-    if actual_value != '[NOT FOUND]':
-        return  # write-gate: only genuine hallucinations are worth recording
+    if actual_value not in ('[NOT FOUND]', '[VERIFIED]'):
+        return  # write-gate: skip [PRE_EXISTING] noise; record hallucinations AND confirmations
 
     if not db_path or not os.path.exists(db_path):
         return
