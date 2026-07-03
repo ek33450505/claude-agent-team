@@ -139,12 +139,15 @@ print('ok')
 
 @test "seeded DB → teammate_runs row has status=idle, agent_role=teammate_name, agent_def=agent_type, swarm_id=team_id" {
   seed_db
+  # New contract (B): row keyed by {team_id}-{teammate}, not agent_id.
+  # session_id="test-session-ab" → [:8]="test-ses" → team_id="session-test-ses"; teammate="commit"
+  # → row id = "session-test-ses-commit"
   bash "$HOOK_SH" <<< "$(make_payload "test-session-ab" "agent_role_test" "commit" "commit")"
   python3 -c "
 import sqlite3, os, sys
 db = os.environ['CAST_DB_PATH']
 conn = sqlite3.connect(db)
-rows = conn.execute(\"SELECT status, agent_role, agent_def, swarm_id FROM teammate_runs WHERE id='agent_role_test'\").fetchall()
+rows = conn.execute(\"SELECT status, agent_role, agent_def, swarm_id FROM teammate_runs WHERE id='session-test-ses-commit'\").fetchall()
 conn.close()
 assert rows, 'no teammate_runs row inserted'
 status, agent_role, agent_def, swarm_id = rows[0]
@@ -180,8 +183,11 @@ print('ok: schema_version=%d' % notes['schema_version'])
 # 8. Idempotent — firing twice yields exactly ONE teammate_runs row for that agent_id
 # ---------------------------------------------------------------------------
 
-@test "idempotent — firing twice yields exactly one teammate_runs row for agent_id" {
+@test "idempotent — firing twice yields exactly one teammate_runs row for teammate_name" {
   seed_db
+  # New contract (B): row keyed by {team_id}-{teammate}.
+  # session_id="test-session-id" → [:8]="test-ses" → team_id="session-test-ses"; teammate="bash-specialist"
+  # → row id = "session-test-ses-bash-specialist"
   local payload
   payload="$(make_payload "test-session-id" "agent_idem" "bash-specialist" "bash-specialist")"
   bash "$HOOK_SH" <<< "$payload"
@@ -190,9 +196,43 @@ print('ok: schema_version=%d' % notes['schema_version'])
 import sqlite3, os
 db = os.environ['CAST_DB_PATH']
 conn = sqlite3.connect(db)
-count = conn.execute(\"SELECT COUNT(*) FROM teammate_runs WHERE id='agent_idem'\").fetchone()[0]
+count = conn.execute(\"SELECT COUNT(*) FROM teammate_runs WHERE id='session-test-ses-bash-specialist'\").fetchone()[0]
 conn.close()
 assert count == 1, f'expected 1 row, got {count}'
 print('ok: exactly 1 row after 2 fires')
+"
+}
+
+# ---------------------------------------------------------------------------
+# 9. Empty teammate_name → no teammate_runs row (guard contract B)
+# ---------------------------------------------------------------------------
+
+@test "empty teammate_name → no teammate_runs row inserted" {
+  seed_db
+  # Native payloads with empty teammate_name must be silently skipped.
+  # Guard contract (B): `if has("teammate_runs") and teammate and team_id:`
+  # Note: make_payload uses ${4:-default} so passing "" triggers the default;
+  # build the payload directly to guarantee empty teammate_name.
+  local payload
+  payload=$(python3 -c "
+import json
+print(json.dumps({
+    'hook_event_name': 'TeammateIdle',
+    'session_id': 'test-session-empty',
+    'agent_id': 'agent_empty',
+    'agent_type': 'code-writer',
+    'teammate_name': '',
+    'cwd': '/tmp/test-project',
+}))
+")
+  bash "$HOOK_SH" <<< "$payload"
+  python3 -c "
+import sqlite3, os
+db = os.environ['CAST_DB_PATH']
+conn = sqlite3.connect(db)
+count = conn.execute('SELECT COUNT(*) FROM teammate_runs').fetchone()[0]
+conn.close()
+assert count == 0, f'expected 0 rows for empty teammate, got {count}'
+print('ok: no row for empty teammate_name')
 "
 }
