@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout flagship (source of canonical cast-stats.json)
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
         # Gives us ./cast-stats.json locally — no network fetch needed for canonical.
 
       - name: Ensure jq is present

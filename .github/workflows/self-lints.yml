@@ -13,7 +13,7 @@ jobs:
   self-lints:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Byte budget
         run: bash scripts/cast-lint-byte-budget.sh
@@ -32,6 +32,9 @@ jobs:
 
       - name: Plugin drift check
         run: bash scripts/check-plugin-drift.sh
+
+      - name: Python 3.9 annotations lint
+        run: bash scripts/ci-py39-annotations-lint.sh
 
       # Advisory — always exits 0; warnings appear in the log only.
       # continue-on-error: true guards against unexpected Python failures (import
