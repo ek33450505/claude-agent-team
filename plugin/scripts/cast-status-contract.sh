@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # cast-status-contract.sh — shared CAST Status-block contract helper.
 # Single source of truth for which subagents are bound by the CAST protocol
-# (must end with `Status: DONE|...`). Sourced by cast-subagent-stop-hook.sh and
-# cast-response-completeness-hook.sh so the exempt set cannot drift between them.
+# (must end with `Status: DONE|...`). Sourced by cast-subagent-stop-hook.sh;
+# the exempt logic is also ported into cast_subagent_stop.py (completeness stage) — keep in sync.
 #
 # Principle: a missing-Status event is only REAL for an IDENTIFIABLE CAST agent
 # that produced substantive prose. Built-ins, workflow subagents, and

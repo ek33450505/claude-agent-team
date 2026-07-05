@@ -27,7 +27,8 @@
 #   agent-status-reader inverted guard: agent-status-reader.bats — guard exits
 #     non-zero intentionally (inverted semantics).
 #
-# OBSERVER SCRIPT LIST (15 scripts whose per-file guard tests were removed):
+# OBSERVER SCRIPT LIST (14 scripts whose per-file guard tests were removed):
+#   (cast-duration-check.sh removed at W2-1 — consolidated into cast_subagent_stop.py stage 13)
 #   scripts/cast-session-end.sh
 #   scripts/cast-user-prompt-hook.sh
 #   scripts/cast-task-created-hook.sh
@@ -42,7 +43,6 @@
 #   scripts/cast-post-compact-hook.sh
 #   scripts/cast-session-start-journal.sh
 #   scripts/cast-precompact-memory-save.sh
-#   scripts/cast-duration-check.sh
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -66,7 +66,6 @@ OBSERVER_SCRIPTS=(
   "scripts/cast-post-compact-hook.sh"
   "scripts/cast-session-start-journal.sh"
   "scripts/cast-precompact-memory-save.sh"
-  "scripts/cast-duration-check.sh"
 )
 
 setup() {

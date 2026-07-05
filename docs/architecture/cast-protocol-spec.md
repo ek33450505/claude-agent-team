@@ -499,6 +499,8 @@ CAST uses three Claude Code hook events. Each hook script reads a JSON payload f
 | `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Claude just wrote or edited a file |
 | `PostToolUse:Agent` | `cast-cost-tracker.sh` | Claude just dispatched an agent |
 | `Stop` | `cast-session-end.sh` | Session ends |
+| `SubagentStop` | `cast-subagent-stop-hook.sh` + `cast_subagent_stop.py` | A subagent has finished — updates agent_runs, detects truncation/completeness/protocol violations, records incidents, emits budget alerts, and compresses hookSpecificOutput; single python process, no sub-hook fan-out |
+| `SubagentStop` | `cast-subagent-worktree-check.sh` | Scans for stale git worktrees left by the subagent and prunes them; isolated from main hook so git mutations get their own 10s budget |
 
 ### 5.2 `UserPromptSubmit` — `route.sh`
 

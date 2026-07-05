@@ -81,6 +81,18 @@ count_anomalies() {
   [ "$status" -eq 0 ]
 }
 
+@test "worktree-check: no longer invokes the 3 deleted sub-hooks" {
+  # Pre-consolidation (Phase 5b block, lines 167-182), cast-subagent-worktree-check.sh
+  # dispatched cast-agent-protocol-check.sh, cast-truncation-check.sh, and
+  # cast-duration-check.sh. Their logic moved into cast_subagent_stop.py (stages 7, 4,
+  # 13 respectively). Assert that none of those script names appear in the current
+  # worktree-check script — a regression guard against fragment resurrection.
+  local script="$BATS_TEST_DIRNAME/../scripts/cast-subagent-worktree-check.sh"
+  # grep exits 1 when no match — proves none of the deleted hooks are referenced
+  run grep -E "cast-agent-protocol-check|cast-truncation-check|cast-duration-check" "$script"
+  [ "$status" -ne 0 ]
+}
+
 @test "non-anchored worktree path outside repo root is ignored" {
   # Create a separate fixture repo to simulate a worktree at a sibling path
   SIBLING="$TMPROOT/sibling"

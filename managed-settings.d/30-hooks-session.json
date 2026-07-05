@@ -85,29 +85,7 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-subagent-stop-hook.sh",
-            "timeout": 10,
-            "async": true
-          }
-        ]
-      },
-      {
-        "id": "cast-budget-alert",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-budget-alert.sh",
-            "timeout": 5,
-            "async": true
-          }
-        ]
-      },
-      {
-        "id": "cast-response-completeness",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-response-completeness-hook.sh",
-            "timeout": 5,
+            "timeout": 15,
             "async": true
           }
         ]
@@ -119,17 +97,6 @@
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-subagent-worktree-check.sh",
             "timeout": 10,
-            "async": true
-          }
-        ]
-      },
-      {
-        "id": "cast-incident-record",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-incident-record.sh",
-            "timeout": 5,
             "async": true
           }
         ]

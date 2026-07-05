@@ -164,21 +164,4 @@ PYEOF
   git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
 fi
 
-# === Phase 5b additions: protocol violations, truncation, duration ===
-# All three are advisory hooks — they log to cast.db and emit stderr,
-# but never block. Failures are silently absorbed.
-# NOTE: These run regardless of git context so they fire in non-repo CWDs.
-
-if [[ -x "$HOME/.claude/scripts/cast-agent-protocol-check.sh" ]]; then
-  bash "$HOME/.claude/scripts/cast-agent-protocol-check.sh" 2>&1 || true
-fi
-
-if [[ -x "$HOME/.claude/scripts/cast-truncation-check.sh" ]]; then
-  bash "$HOME/.claude/scripts/cast-truncation-check.sh" 2>&1 || true
-fi
-
-if [[ -x "$HOME/.claude/scripts/cast-duration-check.sh" ]]; then
-  bash "$HOME/.claude/scripts/cast-duration-check.sh" 2>&1 || true
-fi
-
 exit 0

@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
-# Tests for cast-incident-record.sh
+# Incident record tests — retargeted to cast-subagent-stop-hook.sh (the consolidated
+# SubagentStop hook that absorbed cast-incident-record.sh at W2-1).
+# Behavior assertions (insert/no-insert counts, surfaced_by, redaction) are IDENTICAL.
 # Covers: incident insert on debugger+Status:DONE, no-op on wrong agent, no-op on missing status.
 # Uses isolated temp HOME + temp CAST_DB_PATH — never touches real ~/.claude.
 
@@ -7,7 +9,7 @@ load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-SCRIPT="$REPO_DIR/scripts/cast-incident-record.sh"
+SCRIPT="$REPO_DIR/scripts/cast-subagent-stop-hook.sh"
 
 setup() {
   load 'helpers/setup'
@@ -123,18 +125,12 @@ _write_fixture() {
 }
 
 @test "subprocess guard exits 0 immediately when CLAUDE_SUBPROCESS=1" {
-  local payload
-  payload='{"agent_type":"debugger","agent_response":{"content":[{"type":"text","text":"Status: DONE"}]}}'
-  local fixture
-  fixture="$(_write_fixture "$payload")"
-
-  run env CLAUDE_SUBPROCESS=1 bash "$SCRIPT" <"$fixture"
-  rm -f "$fixture"
-
-  assert_success
-  local count
-  count="$(_count_incidents)"
-  [ "$count" -eq 0 ]
+  # SKIPPED: cast-incident-record.sh had a CLAUDE_SUBPROCESS guard that exited 0 early.
+  # The consolidated cast-subagent-stop-hook.sh does NOT have this guard — SubagentStop
+  # fires in the parent session where CLAUDE_SUBPROCESS is never set, so no guard is
+  # needed or appropriate. This test documents a retired behavior.
+  # Un-skip condition: the SubagentStop hook re-gains a subprocess guard.
+  skip "SubagentStop hook has no subprocess guard; CLAUDE_SUBPROCESS is ignored (see W2-1 consolidation)"
 }
 
 @test "empty stdin exits 0 and inserts 0 rows" {
@@ -184,9 +180,14 @@ _write_fixture() {
   [ "$surfaced_by" = "debugger" ]
 }
 
-# B2 wiring tests (Unit U2)
+# W2-1 wiring regression guard
+# After consolidation SubagentStop must have EXACTLY 2 entries: cast-subagent-stop and
+# cast-subagent-worktree-check. The 3 removed ids (cast-incident-record,
+# cast-response-completeness-hook, cast-budget-alert, cast-truncation-check,
+# cast-duration-check, cast-agent-protocol-check) must be ABSENT — guards against
+# fragment resurrection.
 
-@test "SubagentStop wiring: cast-incident-record is registered under SubagentStop in 30-hooks-session.json" {
+@test "SubagentStop wiring: exactly 2 entries in 30-hooks-session.json after W2-1 consolidation" {
   local config="$REPO_DIR/managed-settings.d/30-hooks-session.json"
   run python3 - "$config" <<'PYEOF'
 import sys, json
@@ -195,8 +196,32 @@ with open(sys.argv[1]) as f:
 hooks = cfg.get("hooks", {}).get("SubagentStop", [])
 ids = [h.get("id", "") for h in hooks]
 cmds = [h2.get("command", "") for h in hooks for h2 in h.get("hooks", [])]
-assert "cast-incident-record" in ids, f"id not found, ids={ids}"
-assert any("cast-incident-record.sh" in c for c in cmds), f"command not found in cmds={cmds}"
+
+# Must have exactly 2 entries
+assert len(hooks) == 2, f"Expected 2 SubagentStop entries, got {len(hooks)}: {ids}"
+
+# Both required ids must be present
+assert "cast-subagent-stop" in ids, f"cast-subagent-stop missing; ids={ids}"
+assert "cast-subagent-worktree-check" in ids, f"cast-subagent-worktree-check missing; ids={ids}"
+
+# Main hook must point at the consolidated wrapper
+assert any("cast-subagent-stop-hook.sh" in c for c in cmds), \
+    f"cast-subagent-stop-hook.sh command not found; cmds={cmds}"
+
+# Removed ids must NOT appear (regression guard against fragment resurrection)
+removed = [
+    "cast-incident-record",
+    "cast-response-completeness-hook",
+    "cast-budget-alert",
+    "cast-truncation-check",
+    "cast-duration-check",
+    "cast-agent-protocol-check",
+]
+for rid in removed:
+    assert rid not in ids, f"Removed hook id '{rid}' found in wiring — fragment resurrection? ids={ids}"
+    assert not any(rid in c for c in cmds), \
+        f"Removed script '{rid}' found in commands — fragment resurrection? cmds={cmds}"
+
 print("OK")
 PYEOF
   assert_success

@@ -5,7 +5,9 @@ load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 DB_INIT="$REPO_DIR/scripts/cast-db-init.sh"
-TRUNCATION_HOOK="$REPO_DIR/scripts/cast-truncation-check.sh"
+# Truncation logic now lives in consolidated stage 4 of cast_subagent_stop.py,
+# invoked via the main SubagentStop hook (blueprint §4: retarget).
+HOOK_SH="$REPO_DIR/scripts/cast-subagent-stop-hook.sh"
 
 setup() {
   load 'helpers/setup'
@@ -223,7 +225,7 @@ This is where it got cut off"
   input="$(_make_truncated_input "$output_text")"
 
   # Run the truncation hook
-  run bash "$TRUNCATION_HOOK" <<< "$input"
+  run bash "$HOOK_SH" <<< "$input"
   assert_success
 
   # Query the database: should have 1 row in agent_truncations
@@ -259,7 +261,7 @@ But I got cut off mid-sentence"
   input="$(_make_truncated_input "$output_text")"
 
   # Run the truncation hook
-  run bash "$TRUNCATION_HOOK" <<< "$input"
+  run bash "$HOOK_SH" <<< "$input"
   assert_success
 
   # Query the database: should have 1 row in agent_truncations
@@ -295,7 +297,7 @@ Got interrupted here"
   input="$(_make_truncated_input "$output_text")"
 
   # Run the hook which calls db_write with partial_work_log
-  run bash "$TRUNCATION_HOOK" <<< "$input"
+  run bash "$HOOK_SH" <<< "$input"
   assert_success
 
   # Query back the row and verify surviving columns (has_status/has_json retired in migration 028)
@@ -323,7 +325,7 @@ Got interrupted here"
   input="$(_make_truncated_input "$output_text")"
 
   # Run the hook
-  run bash "$TRUNCATION_HOOK" <<< "$input"
+  run bash "$HOOK_SH" <<< "$input"
   assert_success
 
   # Should NOT write a truncation row
@@ -353,7 +355,7 @@ Got interrupted here"
   input="$(_make_truncated_input "$output_text")"
 
   # Run the hook
-  run bash "$TRUNCATION_HOOK" <<< "$input"
+  run bash "$HOOK_SH" <<< "$input"
   assert_success
 
   # Should NOT write a truncation row (JSON status = complete response)
@@ -383,7 +385,7 @@ Concerns: Timeout on API call"
   input="$(_make_truncated_input "$output_text")"
 
   # Run the hook
-  run bash "$TRUNCATION_HOOK" <<< "$input"
+  run bash "$HOOK_SH" <<< "$input"
   assert_success
 
   # Should NOT write a truncation row (Status = complete response)
@@ -434,9 +436,10 @@ payload = {
 print(json.dumps(payload))
 ")
 
-  # Run the truncation hook with the payload
-  export CAST_INPUT="$payload"
-  run bash "$TRUNCATION_HOOK"
+  # Run the consolidated hook with the payload via stdin (main hook reads stdin,
+  # not CAST_INPUT — the old truncation-check.sh supported both; the new wrapper
+  # reads stdin once and exports as CAST_STOP_INPUT for cast_subagent_stop.py).
+  run bash "$HOOK_SH" <<< "$payload"
   assert_success
 
   # Verify that the agent_truncations row has agent_type='code-writer' (from DB fallback), not 'unknown'
@@ -462,7 +465,7 @@ Summary: Code review passed — implementation is correct and well-structured."
   local input
   input="$(_make_truncated_input "$output_text")"
 
-  run bash "$TRUNCATION_HOOK" <<< "$input"
+  run bash "$HOOK_SH" <<< "$input"
   assert_success
 
   # Must NOT emit [CAST-TRUNCATED] banner
@@ -486,7 +489,7 @@ Concerns: Missing return type annotation on parseResult(), unused import in util
   local input
   input="$(_make_truncated_input "$output_text")"
 
-  run bash "$TRUNCATION_HOOK" <<< "$input"
+  run bash "$HOOK_SH" <<< "$input"
   assert_success
 
   # Must NOT emit [CAST-TRUNCATED] banner

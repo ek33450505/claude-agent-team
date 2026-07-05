@@ -20,10 +20,9 @@
 | `cast-no-fake-success-guard.sh` | PreToolUse (Write/Edit) | NO — exit 0, emits warn only | **(b) OBS** | YES (async) |
 | `cast-precompact-guard.sh` | PreCompact | NO exit 2 — returns `{"decision":"block"}` JSON | **(a) GATE** (native PreCompact protocol) | YES |
 | `cast-precompact-memory-save.sh` | PreCompact | exit 0 | **(b) OBS** | YES |
-| `cast-response-completeness-hook.sh` | SubagentStop | exit 0 | **(b) OBS** | YES |
 | `cast-subagent-stop-hook.sh` | SubagentStop | exit 0 | **(b) OBS** | YES |
 | `post-tool-hook.sh` | PostToolUse (Write/Edit/Agent/Bash) | exit 0 (delegates to cast-post-tool.py) | **(c) ROUTING** | YES |
-| `cast-budget-alert.sh` | PostToolUse | exit 0 | **(b) OBS** | YES |
+| — (budget-alert consolidated into `cast_subagent_stop.py`) | SubagentStop | — | **(b) OBS** | — |
 | `cast-tool-failure-hook.sh` | PostToolUseFailure | exit 0 | **(b) OBS** | YES |
 | `cast-session-start-hook.sh` | SessionStart | exit 0 | **(b) OBS** | YES |
 | `cast-session-start-journal.sh` | SessionStart | exit 0 | **(b) OBS** | YES |

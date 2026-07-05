@@ -27,7 +27,7 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 | Script | Matcher | What it does |
 |---|---|---|
 | `post-tool-hook.sh` | `Write\|Edit\|Agent\|Bash` | Delegates to `cast-post-tool.py` — logs file modifications to cast.db and emits HTTP events to the dashboard. |
-| `cast-budget-alert.sh` | `*` | Reads today's total spend from `sessions` and emits `[CAST-BUDGET-WARN]` or `[CAST-BUDGET-HARD-LIMIT]` when thresholds are crossed. |
+| `post-tool-hook.sh` (budget-alert stage via `cast_subagent_stop.py`) | — | Budget-alert logic consolidated into the SubagentStop python process; no longer a separate PostToolUse hook. |
 
 ## InstructionsLoaded hooks (1)
 
@@ -88,8 +88,8 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 
 | Script | Matcher | What it does |
 |---|---|---|
-| `cast-subagent-stop-hook.sh` | `*` | Emits `task_completed` or `task_blocked` and updates `cast.db agent_runs`; logs turn-ceiling events when detected. |
-| `cast-response-completeness-hook.sh` | `*` | Checks every subagent response for a valid `Status:` block and logs missing ones as truncation warnings. |
+| `cast-subagent-stop-hook.sh` | `*` | Thin bash wrapper: captures stdin once, invokes `cast_subagent_stop.py` which runs all observability stages in a single python process (agent_runs update, truncation, completeness, protocol, handoff, budget-alert, duration, incidents, facts, redaction). |
+| `cast-subagent-worktree-check.sh` | `*` | Performs git-worktree staleness scan and opportunistic prune; runs in its own 10s budget so git mutations don't race the main hook. |
 
 ## StopFailure hooks (1)
 

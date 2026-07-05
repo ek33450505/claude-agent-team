@@ -32,7 +32,7 @@ A skip without a recorded rationale is indistinguishable from lost coverage — 
 
 ## Remaining Intentional Skips
 
-**Total call sites: 56** across 23 files (as of 2026-07-04 full re-enumeration; prior count of 23 across 14 files was under-counted — missed `cast-ask.bats` FTS5/JSON cluster, `cast-doctor-ask.bats`, `cast-doctor-honesty.bats`, `cast-doctor-litestream.bats`, `cast-commit-reconcile.bats`, `run-sh-count-gate.bats`, `install.bats`, and the two extra `install-personal.bats` sites. +2 same-day: `cast-pretool-dispatch-guardfail.bats` interpreter guards, added with the py3.9 hook-compat fixes).
+**Total call sites: 57** across 23 files (as of 2026-07-04 full re-enumeration; prior count of 23 across 14 files was under-counted — missed `cast-ask.bats` FTS5/JSON cluster, `cast-doctor-ask.bats`, `cast-doctor-honesty.bats`, `cast-doctor-litestream.bats`, `cast-commit-reconcile.bats`, `run-sh-count-gate.bats`, `install.bats`, and the two extra `install-personal.bats` sites. +2 same-day: `cast-pretool-dispatch-guardfail.bats` interpreter guards, added with the py3.9 hook-compat fixes; +1 2026-07-05: `cast-incident-record.bats` subprocess-guard skip, W2-1 consolidation).
 
 **Enumeration command** (run from repo root; catches all 4 skip forms: `|| skip "`, `&& skip "`, line-leading `skip "`, if-then inline `skip "`; excludes comment lines and the self-referential guard file):
 
@@ -104,6 +104,7 @@ Note: a single `setup()`-level skip gates every `@test` in a file with one call.
 | `tests/skills/deep-research.bats` | 19 | 1 | Network-free regression harness requires `node` binary | Environment (optional dependency) | Runs where `node` is installed (GitHub CI runners include it) |
 | `tests/cast-pretool-dispatch-guardfail.bats` | 211 | 1 | py3.9-compat smoke test requires `/usr/bin/python3` (system interpreter); absent on Homebrew/nix-only runners | Environment (interpreter) | Runs where the macOS/Linux system python3 exists at `/usr/bin/python3` |
 | `tests/cast-pretool-dispatch-guardfail.bats` | 220 | 1 | Same smoke test: `/usr/bin/python3` >= 3.10 makes PEP-604 natively valid — the annotation-crash regression is unobservable on that interpreter | Environment (interpreter) | Runs where `/usr/bin/python3` is < 3.10 (e.g. macOS system python 3.9.6, the environment that broke the guards on 2026-07-04) |
+| `tests/cast-incident-record.bats` | (subprocess guard test) | 1 | `cast-incident-record.sh` had a `CLAUDE_SUBPROCESS=1` guard that exited early; the consolidated `cast-subagent-stop-hook.sh` has no such guard — SubagentStop fires in the parent session where `CLAUDE_SUBPROCESS` is never set (W2-1 consolidation, 2026-07-05) | Permanent (retired behavior) | Un-skip only if the SubagentStop hook re-gains a subprocess guard |
 
 ---
 

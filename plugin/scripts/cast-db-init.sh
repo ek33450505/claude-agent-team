@@ -585,8 +585,8 @@ TASK_QUEUE_TABLE
 fi
 
 # ── Phase 3: additive columns on core tables (idempotent; duplicate-column errors suppressed) ──
-# agent_runs.duration_ms + tool_uses — written by cast-subagent-stop-hook.sh's self-heal block and
-# read by cast-duration-check.sh. Were not in the fresh-install CREATE TABLE prior to v7.4.0.
+# agent_runs.duration_ms + tool_uses — written by cast-subagent-stop-hook.sh's self-heal block;
+# duration_ms is also consumed in-process by cast_subagent_stop.py (duration stage). Were not in the fresh-install CREATE TABLE prior to v7.4.0.
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN duration_ms INTEGER;" 2>/dev/null || true
 sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN tool_uses INTEGER;" 2>/dev/null || true
 
@@ -598,7 +598,7 @@ sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN branch TEXT;" 2>/dev/null 
 sqlite3 "$DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN outcome TEXT DEFAULT 'pending';" 2>/dev/null || true
 
 # sessions cost-rollup + lifecycle columns (writers: cast-session-end.sh, cast-maintenance.sh,
-# cast-budget-alert.sh, cast-cache-metrics.sh). Their UPDATEs failed on fresh installs without these.
+# cast-cache-metrics.sh; budget-alert stage now in cast_subagent_stop.py). Their UPDATEs failed on fresh installs without these.
 sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN status TEXT;" 2>/dev/null || true
 sqlite3 "$DB_PATH" "ALTER TABLE sessions ADD COLUMN deleted_at TEXT;" 2>/dev/null || true
 # total_input_tokens / total_output_tokens / total_cost_usd dropped in migration 022 (wave-3);
@@ -631,7 +631,7 @@ ROUTINES_TABLE
   _columns_added=1
 fi
 
-# incidents: incident log (writers: cast-incident-record.sh, cast-incidents-backfill.py, cast-abandon-stale-runs.py)
+# incidents: incident log (writers: cast_subagent_stop.py incident stage, cast-incidents-backfill.py, cast-abandon-stale-runs.py)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "incidents"; then
   sqlite3 "$DB_PATH" <<'INCIDENTS_TABLE'
 CREATE TABLE IF NOT EXISTS incidents (
@@ -719,7 +719,7 @@ ARCHIVED_MEMORIES_TABLE
   _columns_added=1
 fi
 
-# budgets: per-scope cost limits (reader: cast-budget-alert.sh; writer: `cast budget set`).
+# budgets: per-scope cost limits (reader: cast_subagent_stop.py budget-alert stage; writer: `cast budget set`).
 # Was DROPPED in the v6→v7 migration and never re-provisioned.
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "budgets"; then
   sqlite3 "$DB_PATH" <<'BUDGETS_TABLE'
@@ -737,7 +737,7 @@ BUDGETS_TABLE
   _columns_added=1
 fi
 
-# agent_protocol_violations: protocol-violation tracking (writer: cast-agent-protocol-check.sh)
+# agent_protocol_violations: protocol-violation tracking (writer: cast_subagent_stop.py protocol/handoff stages)
 # PRIORITY: its writer uses db_write with NO inline CREATE guard → silent write failures without this.
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "agent_protocol_violations"; then
   sqlite3 "$DB_PATH" <<'AGENT_PROTOCOL_VIOLATIONS_TABLE'

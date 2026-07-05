@@ -1,10 +1,14 @@
 #!/usr/bin/env bats
+# Completeness event tests — retargeted to cast-subagent-stop-hook.sh (the consolidated
+# SubagentStop hook that absorbed cast-response-completeness-hook.sh at W2-1).
+# completeness_events assertions are IDENTICAL to the original suite; the Bash-3.2
+# parse regression test runs against the new wrapper.
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-HOOK_SH="$REPO_DIR/scripts/cast-response-completeness-hook.sh"
+HOOK_SH="$REPO_DIR/scripts/cast-subagent-stop-hook.sh"
 
 setup() {
   load 'helpers/setup'

@@ -362,7 +362,7 @@ class CastDashboard(App):
         # Today's stats
         # started_at is stored as ISO-8601 T/Z (e.g. '2026-06-11T10:00:00Z').
         # replace() strips the T and Z so date() parses correctly on all SQLite
-        # versions. This matches the LIKE-form used in cast-budget-alert.sh.
+        # versions. This matches the LIKE-form used in cast_subagent_stop.py budget-alert stage.
         stats = self.db.query_one(
             """SELECT COUNT(*) AS runs,
                  COALESCE(SUM(cost_usd), 0) AS cost,

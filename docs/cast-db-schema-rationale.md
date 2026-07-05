@@ -25,7 +25,7 @@ Two pairs of conceptually overlapping tables:
 
 Both capture "incomplete agent responses" but via different writer paths:
 - `agent_truncations` — written by `cast-subagent-stop-hook.sh` when no Status block is detected in a sub-agent response.
-- `completeness_events` — written by `cast-response-completeness-hook.sh` on `SubagentStop`, broader heuristic that includes response shape, not just Status block presence.
+- `completeness_events` — written by `cast_subagent_stop.py` (completeness stage) on `SubagentStop`, broader heuristic that includes response shape, not just Status block presence.
 
 The two tables answer slightly different questions. Kept separate to preserve writer simplicity.
 
