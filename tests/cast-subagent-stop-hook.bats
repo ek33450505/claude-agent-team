@@ -1694,3 +1694,85 @@ print('\n'.join(lines))
   count="$(find "$HOME/.claude/cast/truncated-agents" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')"
   [[ "$count" -eq 0 ]]
 }
+
+# ---------------------------------------------------------------------------
+# Audit 2026-07-04: agent_runs crash-safety + SESSION_ID SQL sanitization
+#
+# FINDING 1 (fast status write + transcript size guard): a hard-kill during the
+# multi-MB transcript read must not strand the row status='running'. The size
+# guard skips the read for oversized transcripts and the fast write closes the
+# row out of 'running' before the read begins.
+# FINDING 2 (SAFE_SESSION_ID): the claimed-work verifier's shell-level sqlite3
+# query must not be injectable via an unsanitized session_id from the payload.
+# ---------------------------------------------------------------------------
+
+@test "oversized transcript: running row is closed and cost stays NULL (size guard skips read)" {
+  local session_id="sess-oversized-${BATS_TEST_NUMBER}"
+  local agent_id="agent-oversized-${BATS_TEST_NUMBER}"
+
+  # A running row that the hook must close out even when the transcript read is skipped.
+  sqlite3 "$CAST_DB_PATH" <<SQL
+INSERT INTO agent_runs (agent, session_id, status, started_at, ended_at, agent_id)
+VALUES ('code-writer', '${session_id}', 'running', '2026-01-01T10:00:00Z', NULL, '${agent_id}');
+SQL
+
+  # Transcript with a usage block at the glob-resolved path. If the read were NOT
+  # skipped, cost_usd would be computed (non-NULL) from this usage block.
+  local tdir="$HOME/.claude/projects/proj/${session_id}/subagents"
+  mkdir -p "$tdir"
+  printf '%s\n' '{"message":{"usage":{"input_tokens":1000,"output_tokens":500},"model":"claude-x"}}' \
+    > "$tdir/agent-${agent_id}.jsonl"
+
+  local payload
+  payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type':             'code-writer',
+    'agent_id':               sys.argv[1],
+    'session_id':             sys.argv[2],
+    'stop_reason':            'end_turn',
+    'last_assistant_message': 'Status: DONE\nSummary: done',
+}))
+" "$agent_id" "$session_id")"
+
+  # Tiny cap forces the oversized branch (transcript is far larger than 10 bytes).
+  run env CAST_TRANSCRIPT_MAX_BYTES=10 bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # Row must NOT be 'running' — the fast write closed it out before the (skipped) read.
+  local status
+  status="$(sqlite3 "$CAST_DB_PATH" "SELECT status FROM agent_runs WHERE agent_id='${agent_id}' LIMIT 1")"
+  [[ "$status" != "running" ]]
+
+  # cost_usd stays NULL — proves the oversized guard skipped the transcript read.
+  local cost
+  cost="$(sqlite3 "$CAST_DB_PATH" "SELECT COALESCE(cost_usd,'NULL') FROM agent_runs WHERE agent_id='${agent_id}' LIMIT 1")"
+  [[ "$cost" = "NULL" ]]
+}
+
+@test "SESSION_ID with SQL metacharacters does not inject the claimed-work query (:915)" {
+  # A raw interpolation of this session_id into the shell-level sqlite3 CLI would run
+  # a second statement dropping agent_runs. SAFE_SESSION_ID must strip the quote and
+  # semicolon so the table survives.
+  local malicious="x'; DROP TABLE agent_runs; --"
+
+  # Non-trivial response text so Step 2.6 (claimed-work verifier) path is reached.
+  local payload
+  payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type':             'code-writer',
+    'session_id':             sys.argv[1],
+    'stop_reason':            'end_turn',
+    'last_assistant_message': 'Applied the changes to the file.\n\nStatus: DONE\nSummary: done',
+}))
+" "$malicious")"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+
+  # agent_runs must still exist — proves the quote/semicolon were sanitized, not injected.
+  local table_exists
+  table_exists="$(sqlite3 "$CAST_DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_runs';")"
+  [[ "$table_exists" = "agent_runs" ]]
+}
