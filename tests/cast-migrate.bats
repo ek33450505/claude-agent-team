@@ -701,3 +701,241 @@ SQL
     "SELECT COUNT(*) FROM schema_migrations WHERE version='026_redrop_orphan_columns.sql';")
   [ "$recorded" -eq 1 ]
 }
+
+# ---------------------------------------------------------------------------
+# Migration 027: zombie final drop — DROP INDEX idx_agent_runs_project +
+#   DROP COLUMN agent_runs.project, agent_runs.prompt,
+#               sessions.total_input_tokens, sessions.total_output_tokens,
+#               sessions.total_cost_usd, sessions.model
+# ---------------------------------------------------------------------------
+
+@test "migration 027: drops zombie columns and blocking index from agent_runs and sessions" {
+  # Create both tables WITH the zombie columns + the blocking index + data rows
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE agent_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent      TEXT,
+  status     TEXT,
+  project    TEXT,
+  prompt     TEXT
+);
+CREATE INDEX idx_agent_runs_project ON agent_runs(project);
+CREATE TABLE sessions (
+  id                  TEXT PRIMARY KEY,
+  project             TEXT,
+  total_input_tokens  INTEGER DEFAULT 0,
+  total_output_tokens INTEGER DEFAULT 0,
+  total_cost_usd      REAL DEFAULT 0.0,
+  model               TEXT
+);
+INSERT INTO agent_runs (session_id, agent, status, project, prompt)
+  VALUES ('s-1', 'code-writer', 'done', 'cast', 'write the thing');
+INSERT INTO sessions (id, project, total_input_tokens, total_output_tokens, total_cost_usd, model)
+  VALUES ('sess-1', 'cast', 100, 200, 0.005, 'claude-sonnet-4-6');
+SQL
+
+  # Apply migration 027
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/027_zombie_final_drop.sql"
+
+  # Blocking index must be gone
+  local idx_count
+  idx_count=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_agent_runs_project';")
+  [ "$idx_count" -eq 0 ]
+
+  # Zombie columns must be gone from agent_runs
+  local ar_zombie
+  ar_zombie=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_runs') WHERE name IN ('project','prompt');")
+  [ "$ar_zombie" -eq 0 ]
+
+  # Zombie columns must be gone from sessions
+  local sess_zombie
+  sess_zombie=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN ('total_input_tokens','total_output_tokens','total_cost_usd','model');")
+  [ "$sess_zombie" -eq 0 ]
+
+  # Kept columns must still be present in agent_runs
+  local ar_kept
+  ar_kept=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_runs') WHERE name='agent';")
+  [ "$ar_kept" -eq 1 ]
+
+  # Kept columns must still be present in sessions
+  local sess_kept
+  sess_kept=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='project';")
+  [ "$sess_kept" -eq 1 ]
+}
+
+@test "migration 027: is idempotent (second apply tolerates no such column)" {
+  # Create both tables WITHOUT the zombie columns
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE agent_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  agent      TEXT,
+  status     TEXT
+);
+CREATE TABLE sessions (
+  id      TEXT PRIMARY KEY,
+  project TEXT
+);
+SQL
+
+  # Apply migration 027 twice — SQLite 'no such column' errors are tolerated
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/027_zombie_final_drop.sql" 2>/dev/null || true
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/027_zombie_final_drop.sql" 2>/dev/null || true
+
+  # Both tables must still exist and be intact
+  local ar_count
+  ar_count=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_runs';")
+  [ "$ar_count" -eq 1 ]
+
+  local sess_count
+  sess_count=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions';")
+  [ "$sess_count" -eq 1 ]
+
+  # Column-existence spot-check: 'agent' must still be present in agent_runs
+  # after a double-apply of the zombie-drop migration
+  local agent_col
+  agent_col=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_runs') WHERE name='agent';")
+  [ "$agent_col" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
+# Migration 028: retire dead columns + unstaged_warnings table
+# ---------------------------------------------------------------------------
+
+@test "migration 028: drops unstaged_warnings table, indexes, and all dead columns" {
+  # Create ALL affected tables: unstaged_warnings (with indexes) + five column-bearing tables
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE unstaged_warnings (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  timestamp  TEXT,
+  warning    TEXT
+);
+CREATE INDEX idx_uw_session   ON unstaged_warnings(session_id);
+CREATE INDEX idx_uw_timestamp ON unstaged_warnings(timestamp);
+INSERT INTO unstaged_warnings (session_id, timestamp, warning)
+  VALUES ('s-1', '2026-07-03T00:00:00Z', 'test warning');
+CREATE TABLE dispatch_decisions (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent    TEXT,
+  effort   TEXT,
+  wave_id  TEXT,
+  parallel INTEGER DEFAULT 0
+);
+CREATE TABLE task_queue (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  task          TEXT,
+  claimed_at    TEXT,
+  completed_at  TEXT,
+  scheduled_for TEXT
+);
+CREATE TABLE agent_truncations (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  has_status INTEGER DEFAULT 0,
+  has_json   INTEGER DEFAULT 0,
+  batch_id   TEXT
+);
+CREATE TABLE agent_protocol_violations (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent    TEXT,
+  batch_id TEXT
+);
+CREATE TABLE agent_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent      TEXT,
+  status     TEXT,
+  owns_files INTEGER DEFAULT 0
+);
+INSERT INTO dispatch_decisions (agent, effort, wave_id, parallel)
+  VALUES ('code-writer', 'medium', 'wave-1', 0);
+INSERT INTO task_queue (task, claimed_at, completed_at, scheduled_for)
+  VALUES ('do-thing', '2026-07-03T00:00:00Z', NULL, '2026-07-04T00:00:00Z');
+INSERT INTO agent_truncations (session_id, has_status, has_json, batch_id)
+  VALUES ('s-1', 0, 0, NULL);
+INSERT INTO agent_protocol_violations (agent, batch_id)
+  VALUES ('code-writer', NULL);
+INSERT INTO agent_runs (agent, status, owns_files)
+  VALUES ('code-writer', 'done', 0);
+SQL
+
+  # Apply migration 028
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/028_retire_dead_columns.sql"
+
+  # unstaged_warnings table must be gone
+  local uw_tbl
+  uw_tbl=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='unstaged_warnings';")
+  [ "$uw_tbl" -eq 0 ]
+
+  # unstaged_warnings indexes must be gone
+  local uw_idx
+  uw_idx=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_uw_session','idx_uw_timestamp');")
+  [ "$uw_idx" -eq 0 ]
+
+  # dispatch_decisions dead columns must be gone
+  local dd_dead
+  dd_dead=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('dispatch_decisions') WHERE name IN ('effort','wave_id','parallel');")
+  [ "$dd_dead" -eq 0 ]
+
+  # task_queue dead columns must be gone
+  local tq_dead
+  tq_dead=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('task_queue') WHERE name IN ('claimed_at','completed_at','scheduled_for');")
+  [ "$tq_dead" -eq 0 ]
+
+  # agent_truncations dead columns must be gone
+  local at_dead
+  at_dead=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_truncations') WHERE name IN ('has_status','has_json','batch_id');")
+  [ "$at_dead" -eq 0 ]
+
+  # agent_protocol_violations.batch_id must be gone
+  local apv_dead
+  apv_dead=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_protocol_violations') WHERE name='batch_id';")
+  [ "$apv_dead" -eq 0 ]
+
+  # agent_runs.owns_files must be gone
+  local ar_dead
+  ar_dead=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('agent_runs') WHERE name='owns_files';")
+  [ "$ar_dead" -eq 0 ]
+
+  # Kept columns must still be present (spot-check dispatch_decisions.agent)
+  local dd_kept
+  dd_kept=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM pragma_table_info('dispatch_decisions') WHERE name='agent';")
+  [ "$dd_kept" -eq 1 ]
+}
+
+@test "migration 028: is idempotent (second apply tolerates no such column and no such table)" {
+  # Create all affected tables WITHOUT the dead columns
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE dispatch_decisions        (id INTEGER PRIMARY KEY, agent TEXT);
+CREATE TABLE task_queue                (id INTEGER PRIMARY KEY, task TEXT);
+CREATE TABLE agent_truncations         (id INTEGER PRIMARY KEY, session_id TEXT);
+CREATE TABLE agent_protocol_violations (id INTEGER PRIMARY KEY, agent TEXT);
+CREATE TABLE agent_runs                (id INTEGER PRIMARY KEY, agent TEXT, status TEXT);
+SQL
+
+  # Apply migration 028 twice — 'no such column' / 'no such table' are tolerated
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/028_retire_dead_columns.sql" 2>/dev/null || true
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/028_retire_dead_columns.sql" 2>/dev/null || true
+
+  # All five tables must still exist
+  local tbl_count
+  tbl_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('dispatch_decisions','task_queue','agent_truncations','agent_protocol_violations','agent_runs');")
+  [ "$tbl_count" -eq 5 ]
+}
