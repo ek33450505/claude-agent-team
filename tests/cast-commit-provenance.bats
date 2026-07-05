@@ -133,3 +133,81 @@ teardown() {
   run sqlite3 "$TEST_DB" "SELECT session_id, agent FROM commit_provenance WHERE sha='$sha';"
   assert_output "testsession42|commit"
 }
+
+# ---------------------------------------------------------------------------
+# Session-id resolution (E4/E5 — D5 hardening)
+# ---------------------------------------------------------------------------
+
+@test "cast-commit-provenance: CAST_SESSION_ID beats CLAUDE_SESSION_ID (tier-1 wins)" {
+  local sha="aa001234abcdef"  # valid hex, 14 chars
+
+  run env CAST_DB_PATH="$TEST_DB" \
+      CAST_SESSION_ID="cast-sess-xyz" \
+      CLAUDE_SESSION_ID="claude-sess-abc" \
+      python3 "$SCRIPT" record "$sha"
+  assert_success
+
+  run sqlite3 "$TEST_DB" "SELECT session_id FROM commit_provenance WHERE sha='$sha';"
+  assert_output "cast-sess-xyz"
+}
+
+@test "cast-commit-provenance: DB fallback uses session when exactly one active session exists" {
+  local sha="bb001234abcdef"  # valid hex, 14 chars
+  # Create a temp git repo so _git('rev-parse','--show-toplevel') returns a known path.
+  local repo="$HOME/test-repo-single"
+  git init "$repo" >/dev/null 2>&1
+  local real_repo
+  real_repo="$(python3 -c 'import os; print(os.path.realpath("'"$repo"'"))')"
+  # Insert exactly one active session whose project_root matches the git repo path.
+  python3 -c "
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute('INSERT INTO sessions (id, project_root, status, started_at) VALUES (?,?,?,?)',
+             ('sess-single-001', sys.argv[2], 'active', '2026-07-05T10:00:00'))
+conn.commit()
+conn.close()
+" "$TEST_DB" "$real_repo"
+  # Run without either session env — DB tier should resolve to the unique active session.
+  run env -u CAST_SESSION_ID -u CLAUDE_SESSION_ID \
+      CAST_DB_PATH="$TEST_DB" \
+      bash -c "cd '$repo' && python3 '$SCRIPT' record '$sha'"
+  assert_success
+
+  run sqlite3 "$TEST_DB" "SELECT session_id FROM commit_provenance WHERE sha='$sha';"
+  assert_output "sess-single-001"
+}
+
+@test "cast-commit-provenance: DB fallback returns empty when two active sessions (Defect-3 regression)" {
+  local sha="dd001234abcdef"  # valid hex, 14 chars
+  # Create a temp git repo so _git('rev-parse','--show-toplevel') returns a known path.
+  local repo="$HOME/test-repo-double"
+  git init "$repo" >/dev/null 2>&1
+  local real_repo
+  real_repo="$(python3 -c 'import os; print(os.path.realpath("'"$repo"'"))')"
+  # Insert TWO active sessions — the wave-1 incident scenario (stuck teammate rows).
+  python3 -c "
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute('INSERT INTO sessions (id, project_root, status, started_at) VALUES (?,?,?,?)',
+             ('sess-dead-001', sys.argv[2], 'active', '2026-07-04T22:40:22'))
+conn.execute('INSERT INTO sessions (id, project_root, status, started_at) VALUES (?,?,?,?)',
+             ('sess-dead-002', sys.argv[2], 'active', '2026-07-04T22:40:30'))
+conn.commit()
+conn.close()
+" "$TEST_DB" "$real_repo"
+  # Run without either session env — DB tier should return '' (ambiguous), not the newest row.
+  run env -u CAST_SESSION_ID -u CLAUDE_SESSION_ID \
+      CAST_DB_PATH="$TEST_DB" \
+      bash -c "cd '$repo' && python3 '$SCRIPT' record '$sha'"
+  assert_success
+
+  # session_id must be empty (honest '' not confabulated attribution)
+  run python3 -c "
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+row = conn.execute(\"SELECT session_id FROM commit_provenance WHERE sha='$sha'\").fetchone()
+conn.close()
+print('EMPTY' if (not row or not row[0]) else 'NONEMPTY')
+" "$TEST_DB"
+  assert_output "EMPTY"
+}

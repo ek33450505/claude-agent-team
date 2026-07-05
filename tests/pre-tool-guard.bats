@@ -325,11 +325,99 @@ print(json.dumps({
 }
 
 @test "CAST_COMMIT_AGENT=1 git commit → exits 0 and appends COMMIT_HATCH_USED to audit.jsonl without leaking commit message" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m 'test hatch'")"
+  # Run from inside a git-init'd repo so _repo_toplevel() returns a non-empty path (E1).
+  # Supply CAST_SESSION_ID so the event carries the expected session_id (E4).
+  local test_repo="$HOME/hatch-test-repo"
+  git init "$test_repo" >/dev/null 2>&1
+  local payload
+  payload="$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m 'test hatch'")"
+  run env CAST_SESSION_ID="hatch-sess-001" bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
   assert_success
   [[ -f "$HOME/.claude/logs/audit.jsonl" ]]
   grep -q 'COMMIT_HATCH_USED' "$HOME/.claude/logs/audit.jsonl"
   ! grep -q 'test hatch' "$HOME/.claude/logs/audit.jsonl"
+  # E1: repo field must be non-empty (populated by _repo_toplevel() inside git repo)
+  # E4: session_id must match CAST_SESSION_ID
+  python3 -c "
+import json, sys
+lines = [l.strip() for l in open(sys.argv[1]) if 'COMMIT_HATCH_USED' in l]
+assert lines, 'no COMMIT_HATCH_USED event found'
+d = json.loads(lines[-1])
+assert d.get('repo'), 'repo field missing or empty in hatch event: ' + repr(d)
+assert d.get('session_id') == 'hatch-sess-001', 'session_id mismatch: ' + repr(d)
+" "$HOME/.claude/logs/audit.jsonl"
+}
+
+# ---------------------------------------------------------------------------
+# Hatch event session_id resolution (E4 — D5 hardening)
+# ---------------------------------------------------------------------------
+
+@test "hatch event: CLAUDE_SESSION_ID alone populates session_id when CAST_SESSION_ID absent" {
+  local test_repo="$HOME/hatch-claude-repo"
+  git init "$test_repo" >/dev/null 2>&1
+  local payload
+  payload="$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m 'test'")"
+  run env -u CAST_SESSION_ID CLAUDE_SESSION_ID="claude-only-sess" \
+      bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
+  assert_success
+  python3 -c "
+import json, sys
+lines = [l.strip() for l in open(sys.argv[1]) if 'COMMIT_HATCH_USED' in l]
+assert lines, 'no COMMIT_HATCH_USED event found'
+d = json.loads(lines[-1])
+assert d.get('session_id') == 'claude-only-sess', 'session_id mismatch: ' + repr(d)
+" "$HOME/.claude/logs/audit.jsonl"
+}
+
+@test "hatch event: both session envs unset + 2 active DB sessions → session_id empty (Defect-3 guard)" {
+  local test_repo="$HOME/hatch-2sess-repo"
+  git init "$test_repo" >/dev/null 2>&1
+  local real_repo
+  real_repo="$(python3 -c 'import os; print(os.path.realpath("'"$test_repo"'"))')"
+  # Provision a DB and insert 2 active sessions for this repo's project_root.
+  local test_db="$HOME/.claude/cast.db"
+  mkdir -p "$HOME/.claude"
+  env CAST_DB_PATH="$test_db" bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  python3 -c "
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute('INSERT INTO sessions (id, project_root, status, started_at) VALUES (?,?,?,?)',
+             ('sess-dead-a', sys.argv[2], 'active', '2026-07-04T22:40:00'))
+conn.execute('INSERT INTO sessions (id, project_root, status, started_at) VALUES (?,?,?,?)',
+             ('sess-dead-b', sys.argv[2], 'active', '2026-07-04T22:40:30'))
+conn.commit()
+conn.close()
+" "$test_db" "$real_repo"
+  local payload
+  payload="$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m 'test'")"
+  run env -u CAST_SESSION_ID -u CLAUDE_SESSION_ID \
+      CAST_DB_PATH="$test_db" \
+      bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
+  assert_success
+  python3 -c "
+import json, sys
+lines = [l.strip() for l in open(sys.argv[1]) if 'COMMIT_HATCH_USED' in l]
+assert lines, 'no COMMIT_HATCH_USED event found'
+d = json.loads(lines[-1])
+assert d.get('session_id') == '', 'expected empty session_id with 2 active sessions, got: ' + repr(d)
+" "$HOME/.claude/logs/audit.jsonl"
+}
+
+@test "hatch event: not inside git repo → repo field empty string, event still written (fail-open)" {
+  # Run hook from $HOME (temp dir, not a git repo) → _repo_toplevel() returns '' gracefully.
+  local payload
+  payload="$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m 'test'")"
+  run bash -c "cd '$HOME' && bash '$HOOK_SH'" <<< "$payload"
+  assert_success
+  [[ -f "$HOME/.claude/logs/audit.jsonl" ]]
+  grep -q 'COMMIT_HATCH_USED' "$HOME/.claude/logs/audit.jsonl"
+  python3 -c "
+import json, sys
+lines = [l.strip() for l in open(sys.argv[1]) if 'COMMIT_HATCH_USED' in l]
+assert lines, 'no COMMIT_HATCH_USED event found'
+d = json.loads(lines[-1])
+assert d.get('repo') == '', 'expected empty repo outside git repo, got: ' + repr(d)
+" "$HOME/.claude/logs/audit.jsonl"
 }
 
 @test "CAST_STASH_OK=1 git -C /tmp/repo stash → allows (exit 0)" {

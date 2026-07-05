@@ -23,10 +23,12 @@ Cooperative-tier limitations (D5 threat model — accepted traceless bypasses):
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 
 # cast_db abstraction — mirrors pattern used in cast-commit-provenance.py
@@ -46,10 +48,54 @@ DB_PATH = os.environ.get(
     "CAST_DB_PATH",
     os.path.expanduser("~/.claude/cast.db"),
 )
-CHECKPOINT_PATH = os.environ.get(
-    "CAST_RECONCILE_CHECKPOINT",
-    os.path.expanduser("~/.claude/run/commit-reconcile-checkpoint"),
-)
+
+
+def _git_toplevel() -> str:
+    """Return the cwd repo's git toplevel, or '' on failure (best-effort).
+
+    pre-push already cd's to the repo root before invoking this script, and
+    passes CAST_RECONCILE_REPO explicitly; this is the fallback for manual runs.
+    """
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+# CURRENT_REPO: the repo this reconcile run is scoped to. CAST_RECONCILE_REPO
+# (set by pre-push) wins; else the cwd git toplevel. realpath-normalized so it
+# matches provenance/hatch repo values across the macOS /tmp symlink. '' when
+# undeterminable → full legacy-global behavior (fail-closed, no filtering).
+_RAW_REPO = os.environ.get("CAST_RECONCILE_REPO") or _git_toplevel()
+CURRENT_REPO = os.path.realpath(_RAW_REPO) if _RAW_REPO else ""
+
+# Legacy global checkpoint (pre-hardening single-file location). Still read as a
+# seeding fallback so the first per-repo run does not trigger a 30-day re-scan.
+_LEGACY_CHECKPOINT_PATH = os.path.expanduser("~/.claude/run/commit-reconcile-checkpoint")
+
+# Per-repo checkpoint (D5 hardening, required — a global checkpoint + repo
+# filtering is a trivial bypass: a clean push in repo A would advance the global
+# checkpoint past repo B's pending violations). CAST_RECONCILE_CHECKPOINT, when
+# set, is used verbatim (test/back-compat, no seeding). Otherwise derive a
+# per-repo path; fall back to the legacy global path when the repo is unknown.
+_EXPLICIT_CHECKPOINT = "CAST_RECONCILE_CHECKPOINT" in os.environ
+
+
+def _derive_checkpoint_path() -> str:
+    if _EXPLICIT_CHECKPOINT:
+        return os.environ["CAST_RECONCILE_CHECKPOINT"]
+    if CURRENT_REPO:
+        digest = hashlib.sha256(CURRENT_REPO.encode()).hexdigest()[:8]
+        base = os.path.basename(CURRENT_REPO.rstrip("/")) or "repo"
+        return os.path.expanduser(
+            f"~/.claude/run/commit-reconcile-checkpoint.d/{base}-{digest}"
+        )
+    return _LEGACY_CHECKPOINT_PATH
+
+
+CHECKPOINT_PATH = _derive_checkpoint_path()
 ACK_MODE = os.environ.get("CAST_RECONCILE_ACK", "0") == "1"
 
 # CLAUDECODE is set in every Claude Code harness shell; absent in Ed's terminal.
@@ -65,6 +111,9 @@ DEFAULT_LOOKBACK_DAYS = 30
 
 # Regex for L1 sanitization: strip non-safe chars from audit-derived terminal output
 _SAFE_CHARS_RE = re.compile(r"[^a-zA-Z0-9._:TZ+\-]")
+# Path-tolerant variant: additionally allows '/' for repo-root paths. Kept SEPARATE
+# so session/timestamp values keep the stricter terminal-escape stripping above.
+_SAFE_PATH_RE = re.compile(r"[^a-zA-Z0-9._:+\-/]")
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +131,14 @@ class _DBError(Exception):
 def _sanitize(s: str) -> str:
     """Strip terminal-escape-unsafe characters from audit-derived strings."""
     return _SAFE_CHARS_RE.sub("?", str(s))
+
+
+def _sanitize_path(s: str) -> str:
+    """Like _sanitize but tolerates '/' for filesystem paths (repo roots).
+
+    Do NOT use for session/timestamp values — those keep the stricter _sanitize.
+    """
+    return _SAFE_PATH_RE.sub("?", str(s))
 
 
 # ---------------------------------------------------------------------------
@@ -104,10 +161,10 @@ def _append_audit_event(record: dict) -> None:
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
 
-def read_checkpoint() -> datetime.datetime | None:
-    """Return the checkpoint datetime (UTC-naive), or None if absent/malformed."""
+def _read_checkpoint_file(path: str) -> datetime.datetime | None:
+    """Read a single checkpoint file → UTC-naive datetime, or None if absent/malformed."""
     try:
-        with open(CHECKPOINT_PATH) as f:
+        with open(path) as f:
             raw = f.read().strip()
         ts = datetime.datetime.fromisoformat(raw)
         # Normalise to UTC-naive
@@ -116,6 +173,22 @@ def read_checkpoint() -> datetime.datetime | None:
         return ts
     except (FileNotFoundError, ValueError):
         return None
+
+
+def read_checkpoint() -> datetime.datetime | None:
+    """Return the checkpoint datetime (UTC-naive), or None if absent/malformed.
+
+    Per-repo seeding: when a derived per-repo checkpoint file is absent, fall back
+    to the legacy global checkpoint once (prevents a 30-day re-evaluation storm on
+    the first per-repo run). No seeding when CAST_RECONCILE_CHECKPOINT is explicit
+    (test/back-compat) or when the path already IS the legacy global file.
+    """
+    ts = _read_checkpoint_file(CHECKPOINT_PATH)
+    if ts is not None:
+        return ts
+    if not _EXPLICIT_CHECKPOINT and CHECKPOINT_PATH != _LEGACY_CHECKPOINT_PATH:
+        return _read_checkpoint_file(_LEGACY_CHECKPOINT_PATH)
+    return None
 
 
 def write_checkpoint(ts: datetime.datetime, old_ts: datetime.datetime | None = None) -> None:
@@ -140,6 +213,7 @@ def write_checkpoint(ts: datetime.datetime, old_ts: datetime.datetime | None = N
         "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "old_checkpoint": old_ts.isoformat() if old_ts is not None else None,
         "new_checkpoint": ts.isoformat(),
+        "repo": CURRENT_REPO,
         "in_claude_session": IN_CLAUDE_SESSION,
     })
 
@@ -169,6 +243,13 @@ def load_hatch_events(since: datetime.datetime) -> list[dict]:
       - Events lacking in_claude_session field entirely → ignored (pre-feature lines).
       - Events with in_claude_session==false → not suspicious, skipped.
     Garbage / non-JSON lines are silently skipped.
+
+    Repo scoping (D5 hardening), applied per event:
+      - event repo non-empty AND CURRENT_REPO non-empty AND realpath(repo) !=
+        CURRENT_REPO → skip (a foreign repo's event, not ours to enforce).
+      - event repo non-empty and matching → evaluate, repo-scoped.
+      - event repo empty/missing → evaluate as legacy-global (fail-closed grandfather).
+      - CURRENT_REPO == '' (repo undeterminable) → no filtering, full legacy behavior.
     """
     events: list[dict] = []
     try:
@@ -194,6 +275,12 @@ def load_hatch_events(since: datetime.datetime) -> list[dict]:
                 if not obj["in_claude_session"]:
                     continue
 
+                # Repo scoping: skip ONLY a foreign repo's scoped event. Empty
+                # event repo (legacy) or empty CURRENT_REPO → no filtering.
+                repo = obj.get("repo") or ""
+                if repo and CURRENT_REPO and os.path.realpath(repo) != CURRENT_REPO:
+                    continue
+
                 # Parse timestamp
                 raw_ts = obj.get("timestamp") or obj.get("ts") or ""
                 evt_ts = _parse_ts(raw_ts)
@@ -207,6 +294,7 @@ def load_hatch_events(since: datetime.datetime) -> list[dict]:
                 events.append({
                     "timestamp": raw_ts,
                     "session_id": obj.get("session_id", "unknown"),
+                    "repo": repo,
                     "_ts": evt_ts,
                 })
     except FileNotFoundError:
@@ -246,10 +334,18 @@ def provenance_table_exists() -> bool:
         raise _DBError(f"DB query failed: {exc}") from exc
 
 
-def has_provenance(event_ts: datetime.datetime) -> bool:
+def has_provenance(event_ts: datetime.datetime, repo: str = "") -> bool:
     """
     Return True if commit_provenance has a row with recorded_at inside
     [event_ts - WINDOW_BEFORE_SEC, event_ts + WINDOW_AFTER_SEC].
+
+    For a repo-scoped event (repo non-empty), additionally require the provenance
+    row's repo to match — closing the cross-repo masking hole where a row from
+    repo A within the window falsely satisfied an event from repo B. The
+    (repo = ? OR repo = '' OR repo IS NULL) leniency lets a provenance row whose
+    record-time git call failed (repo stored as '') still match — a bounded
+    fail-open sliver per the D5 compat table. Legacy events (repo == '') keep the
+    unscoped query (today's exact behavior).
     """
     window_start = (
         event_ts - datetime.timedelta(seconds=WINDOW_BEFORE_SEC)
@@ -257,10 +353,13 @@ def has_provenance(event_ts: datetime.datetime) -> bool:
     window_end = (
         event_ts + datetime.timedelta(seconds=WINDOW_AFTER_SEC)
     ).strftime("%Y-%m-%dT%H:%M:%S")
-    rows = db_query(
-        "SELECT 1 FROM commit_provenance WHERE recorded_at >= ? AND recorded_at <= ? LIMIT 1",
-        (window_start, window_end),
-    )
+    sql = "SELECT 1 FROM commit_provenance WHERE recorded_at >= ? AND recorded_at <= ?"
+    params: list = [window_start, window_end]
+    if repo:
+        sql += " AND (repo = ? OR repo = '' OR repo IS NULL)"
+        params.append(repo)
+    sql += " LIMIT 1"
+    rows = db_query(sql, tuple(params))
     return bool(rows)
 
 
@@ -282,6 +381,7 @@ def append_ack_event(acked_events: list[dict]) -> None:
             {
                 "timestamp": e["timestamp"],
                 "session_id": e["session_id"],
+                "repo": e.get("repo", ""),
                 "in_claude_session": True,
             }
             for e in acked_events
@@ -373,10 +473,11 @@ def main() -> int:
     checked = 0
     for evt in events:
         checked += 1
-        if not has_provenance(evt["_ts"]):
+        if not has_provenance(evt["_ts"], evt["repo"]):
             violations.append({
                 "timestamp": evt["timestamp"],
                 "session_id": evt["session_id"],
+                "repo": evt["repo"],
             })
             violation_events.append(evt)
 
@@ -399,7 +500,8 @@ def main() -> int:
     print(json.dumps(result))
 
     offenders = "".join(
-        f"  - session={_sanitize(v['session_id'])}  ts={_sanitize(v['timestamp'])}\n"
+        f"  - session={_sanitize(v['session_id'])}  ts={_sanitize(v['timestamp'])}"
+        f"  repo={_sanitize_path(v.get('repo', ''))}\n"
         for v in violations
     )
     print(

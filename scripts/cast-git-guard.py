@@ -32,6 +32,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 
 # --- git global-option tolerance (shared by every git pattern) --------------
@@ -224,9 +225,48 @@ def _audit_policy_override(policy_id: str, file_path: str, session_id: str) -> N
 # --------------------------------------------------------------------------
 # Bash: git commit / push / stash guards
 # --------------------------------------------------------------------------
+def _repo_toplevel() -> str:
+    """Return the cwd repo's git toplevel, or '' on any failure (best-effort).
+
+    A '' result degrades the hatch event to legacy-global handling in the
+    reconcile gate (fail-closed, per the D5 hardening compat table)."""
+    try:
+        r = subprocess.run(['git', 'rev-parse', '--show-toplevel'],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() if r.returncode == 0 else ''
+    except Exception:
+        return ''
+
+
+def _hatch_session_id(repo: str) -> str:
+    """Resolve the session id for a hatch event, mirroring cast-commit-provenance.
+
+    Order: CAST_SESSION_ID → CLAUDE_SESSION_ID → DB unique-active-or-refuse
+    fallback (exactly one active session for this repo → use it, else honest '').
+    The DB tier is required for parity: neither env var reliably reaches the
+    commit-agent Bash subprocess. Ambiguity yields '' rather than a confabulated
+    attribution (wave-1 dead-teammate incident)."""
+    sid = os.environ.get('CAST_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID', '')
+    if sid:
+        return sid
+    try:
+        import sqlite3
+        db = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        conn.execute("PRAGMA busy_timeout = 2000")
+        rows = conn.execute(
+            "SELECT id FROM sessions WHERE status='active' AND project_root=? "
+            "ORDER BY started_at DESC LIMIT 2", (repo,)).fetchall()
+        conn.close()
+        return rows[0][0] if len(rows) == 1 else ''   # unique-active or honest ''
+    except Exception:
+        return ''
+
+
 def _audit_commit_hatch() -> None:
     """Append a COMMIT_HATCH_USED line to audit.jsonl — best-effort, never blocks."""
     try:
+        repo = _repo_toplevel()
         audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
         os.makedirs(os.path.dirname(audit_path), exist_ok=True)
         event = {
@@ -235,7 +275,8 @@ def _audit_commit_hatch() -> None:
             'event': 'COMMIT_HATCH_USED',
             'override_env': 'CAST_COMMIT_AGENT',
             'git_op': 'commit',
-            'session_id': os.environ.get('CLAUDE_SESSION_ID', ''),
+            'repo': repo,
+            'session_id': _hatch_session_id(repo),
             'in_claude_session': os.environ.get('CLAUDECODE') == '1',
         }
         with open(audit_path, 'a') as af:
