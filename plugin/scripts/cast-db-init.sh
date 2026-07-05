@@ -373,6 +373,12 @@ CREATE TABLE IF NOT EXISTS otel_events (
   time_unix_nano INTEGER,
   received_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+-- OTLP feed indexes: session_id correlation + received_at range/retention scans
+-- (otel_events/otel_metrics are the largest live tables; see migration 029).
+CREATE INDEX IF NOT EXISTS idx_otel_events_session   ON otel_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_otel_events_received  ON otel_events(received_at);
+CREATE INDEX IF NOT EXISTS idx_otel_metrics_session  ON otel_metrics(session_id);
+CREATE INDEX IF NOT EXISTS idx_otel_metrics_received ON otel_metrics(received_at);
 
 PRAGMA user_version = 8;
 SQL
@@ -1005,6 +1011,21 @@ CREATE TABLE IF NOT EXISTS otel_events (
   received_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 OTEL_EVENTS_TABLE
+  _columns_added=1
+fi
+
+# otel_events + otel_metrics indexes: session_id correlation + received_at range/retention scans.
+# Covers the incremental-upgrade path where a pre-v9-B3 DB received the otel tables via the
+# blocks above but was missing the 4 companion indexes (added to the fresh-install heredoc and
+# to migration 029; this block closes the tables-without-indexes drift window).
+# Guard sentinel: idx_otel_events_received (created together with all 4 — one check suffices).
+if ! sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_otel_events_received';" 2>/dev/null | grep -q "idx_otel_events_received"; then
+  sqlite3 "$DB_PATH" <<'OTEL_INDEXES'
+CREATE INDEX IF NOT EXISTS idx_otel_events_session   ON otel_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_otel_events_received  ON otel_events(received_at);
+CREATE INDEX IF NOT EXISTS idx_otel_metrics_session  ON otel_metrics(session_id);
+CREATE INDEX IF NOT EXISTS idx_otel_metrics_received ON otel_metrics(received_at);
+OTEL_INDEXES
   _columns_added=1
 fi
 

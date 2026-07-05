@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""cast-db-prune.py — Delete rows older than CAST_DB_PRUNE_DAYS from cast.db.
+"""cast-db-prune.py — Delete rows older than the retention window from cast.db.
 
-Runs nightly via launchd (com.cast.db-prune). Two symmetric steps:
+Runs nightly via launchd (com.cast.db-prune). Four symmetric steps:
 
   Step 1 — routing_events: rows whose `timestamp` is older than DAYS days
   are deleted. (Column name is `timestamp`, NOT `created_at`.)
@@ -9,13 +9,19 @@ Runs nightly via launchd (com.cast.db-prune). Two symmetric steps:
   Step 2 — agent_runs: rows whose `started_at` is older than DAYS days
   are deleted.
 
+  Step 3 — otel_events: rows whose `received_at` is older than OTEL_DAYS
+  days are deleted. (OTLP feed — the largest table on the live DB.)
+
+  Step 4 — otel_metrics: rows whose `received_at` is older than OTEL_DAYS
+  days are deleted. (OTLP feed.)
+
 Each table's delete is wrapped in an independent try/except so a missing
-table or column does NOT abort the other step or crash the script.
+table or column does NOT abort the other steps or crash the script.
 
 Fail-closed backup gate (real prune only):
   Before any destructive DELETE, cast-db-backup.py is invoked as a
   subprocess.  If the backup exits non-zero, times out, or cannot be found,
-  BOTH delete steps are skipped entirely and a loud ERROR is logged.  The
+  ALL delete steps are skipped entirely and a loud ERROR is logged.  The
   script still exits 0 to preserve the cron/launchd contract.  There is NO
   escape hatch — a real prune never proceeds without a successful backup.
 
@@ -23,14 +29,21 @@ Dry-run mode: set CAST_DB_PRUNE_DRY_RUN=1 to report would-delete counts
 without actually deleting (useful for safe verification and tests).  Dry-run
 skips the backup gate because it performs no destructive operations.
 
-Retention: controlled by CAST_DB_PRUNE_DAYS (default 90). Set lower to
-prune more aggressively; set higher to retain more history.
+Retention:
+  CAST_DB_PRUNE_DAYS  (default 90) — routing_events + agent_runs (steps 1-2).
+  CAST_PRUNE_OTEL_DAYS (default 30) — otel_events + otel_metrics (steps 3-4).
+  The OTLP feed is high-volume and low-half-life, so it defaults to a tighter
+  window. Set either lower to prune more aggressively, higher to retain more.
 
-Exit: always 0 — never break cron/launchd.
+Exit: 0 on success or non-destructive skip (backup failure, dry-run);
+  1 on invalid retention-days env var (CAST_DB_PRUNE_DAYS or CAST_PRUNE_OTEL_DAYS
+  < 1 or non-numeric) — aborting is safer than silently reinterpreting a bad value
+  for a destructive script.
 
 Usage:
   python3 ~/.claude/scripts/cast-db-prune.py
   CAST_DB_PRUNE_DAYS=30 python3 ~/.claude/scripts/cast-db-prune.py
+  CAST_PRUNE_OTEL_DAYS=14 python3 ~/.claude/scripts/cast-db-prune.py
   CAST_DB_PRUNE_DRY_RUN=1 python3 ~/.claude/scripts/cast-db-prune.py
   # Or via launchd plist (com.cast.db-prune — runs nightly at 03:30).
 """
@@ -44,9 +57,39 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+def _parse_retention_days(env_var: str, default: int) -> int:
+    """Parse a retention-days env var, aborting on invalid values.
+
+    A value of 0 computes datetime('now','-0 days') which deletes everything
+    including today; a negative value computes a FUTURE cutoff that deletes
+    all rows including the freshest ones.  Both are almost certainly operator
+    errors, so we abort (exit 1) rather than silently clamp — a wrong env var
+    should stop the prune, not reinterpret it.
+    """
+    raw = os.environ.get(env_var, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f'ERROR: {env_var}={raw!r} is not a valid integer — aborting prune',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if value < 1:
+        print(
+            f'ERROR: {env_var}={value} is < 1 (would delete all rows or compute a'
+            f' future cutoff) — aborting prune',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return value
+
+
 # --- Config ---
 DB_PATH: str = os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
-DAYS: int = int(os.environ.get('CAST_DB_PRUNE_DAYS', '90'))
+DAYS: int = _parse_retention_days('CAST_DB_PRUNE_DAYS', 90)
+# OTLP feed (otel_events/otel_metrics) is high-volume; default to a tighter window.
+OTEL_DAYS: int = _parse_retention_days('CAST_PRUNE_OTEL_DAYS', 30)
 DRY_RUN: bool = os.environ.get('CAST_DB_PRUNE_DRY_RUN', '0') == '1'
 LOG_PATH: str = os.path.expanduser('~/.claude/logs/cron-db-prune.log')
 
@@ -135,15 +178,19 @@ def _prune_table(
     conn: sqlite3.Connection,
     table: str,
     ts_col: str,
+    days: int = DAYS,
 ) -> int:
-    """Delete (or count for dry-run) rows older than DAYS days. Returns row count.
+    """Delete (or count for dry-run) rows older than `days` days. Returns row count.
+
+    `days` defaults to the module-level DAYS (routing_events/agent_runs window);
+    the OTLP steps pass OTEL_DAYS for a tighter, independent retention window.
 
     Uses SQLite's datetime('now', '-N days') inline so the comparison is
     evaluated inside SQLite against its own stored timestamp format.
     """
     table = _safe_ident(table)
     ts_col = _safe_ident(ts_col)
-    days_expr = f"datetime('now', '-{DAYS} days')"
+    days_expr = f"datetime('now', '-{days} days')"
     if DRY_RUN:
         cursor = conn.execute(
             f"SELECT COUNT(*) FROM {table} WHERE {ts_col} < {days_expr}",
@@ -197,6 +244,24 @@ def main() -> None:
         except Exception as e:
             print(f'[cast-db-prune] agent_runs step failed: {e}', file=sys.stderr)
             _log(f'agent_runs step failed (non-fatal): {e}')
+
+        # --- Step 3: otel_events (column: received_at, window: OTEL_DAYS) ---
+        try:
+            count = _prune_table(conn, 'otel_events', 'received_at', days=OTEL_DAYS)
+            action = 'would delete' if DRY_RUN else 'deleted'
+            _log(f'{mode_label}otel_events: {action} {count} row(s) older than {OTEL_DAYS} days')
+        except Exception as e:
+            print(f'[cast-db-prune] otel_events step failed: {e}', file=sys.stderr)
+            _log(f'otel_events step failed (non-fatal): {e}')
+
+        # --- Step 4: otel_metrics (column: received_at, window: OTEL_DAYS) ---
+        try:
+            count = _prune_table(conn, 'otel_metrics', 'received_at', days=OTEL_DAYS)
+            action = 'would delete' if DRY_RUN else 'deleted'
+            _log(f'{mode_label}otel_metrics: {action} {count} row(s) older than {OTEL_DAYS} days')
+        except Exception as e:
+            print(f'[cast-db-prune] otel_metrics step failed: {e}', file=sys.stderr)
+            _log(f'otel_metrics step failed (non-fatal): {e}')
 
     except Exception as e:
         print(f'[cast-db-prune] Unexpected error: {e}', file=sys.stderr)
