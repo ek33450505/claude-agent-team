@@ -11,19 +11,8 @@ set -euo pipefail
 INPUT="$(cat 2>/dev/null || true)"
 LOG_FILE="${HOME}/.claude/logs/headless-stalls.log"
 
-# Parse tool_name from hook input
-TOOL=$(echo "$INPUT" | python3 -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    print(d.get('tool_name', ''))
-except Exception:
-    print('')
-" 2>/dev/null || true)
-
-if [[ "$TOOL" == "AskUserQuestion" ]]; then
-    # Parse the question text for logging
-    QUESTION=$(echo "$INPUT" | python3 -c "
+# Parse the question text for logging
+QUESTION=$(echo "$INPUT" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -32,13 +21,10 @@ except Exception:
     print('(parse error)')
 " 2>/dev/null || true)
 
-    # Log the intercepted stall attempt
-    mkdir -p "$(dirname "$LOG_FILE")"
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] HEADLESS STALL INTERCEPTED: $QUESTION" >> "$LOG_FILE"
+# Log the intercepted stall attempt
+mkdir -p "$(dirname "$LOG_FILE")"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] HEADLESS STALL INTERCEPTED: $QUESTION" >> "$LOG_FILE"
 
-    # Return a safe default answer — proceed without further clarification
-    echo '{"updatedInput": {"answer": "Proceed with the safest default option. Do not ask for further clarification."}, "permissionDecision": "allow"}'
-    exit 0
-fi
-
+# Return a safe default answer — proceed without further clarification
+echo '{"updatedInput": {"answer": "Proceed with the safest default option. Do not ask for further clarification."}, "permissionDecision": "allow"}'
 exit 0

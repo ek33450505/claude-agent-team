@@ -136,9 +136,9 @@ teardown() {
   assert_success
 }
 
-@test "non-AskUserQuestion tools → no log created if no AskUserQuestion" {
-  bash "$HOOK_SH" <<< "$(make_other_tool_payload "Bash")"
-  [[ ! -f "$HOME/.claude/logs/headless-stalls.log" ]]
+@test "settings matcher ensures only AskUserQuestion triggers the hook" {
+  local settings_file="$REPO_DIR/managed-settings.d/25-hooks-security.json"
+  grep -q '"matcher": "AskUserQuestion"' "$settings_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -169,9 +169,10 @@ teardown() {
   assert_success
 }
 
-@test "empty stdin → no log created" {
-  bash "$HOOK_SH" <<< ""
-  [[ ! -f "$HOME/.claude/logs/headless-stalls.log" ]]
+@test "empty stdin → exits 0 with valid JSON response" {
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+  echo "$output" | python3 -m json.tool > /dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -197,10 +198,10 @@ teardown() {
 # Test 8: Ported unique assertions from tests/hooks/cast-headless-guard.bats
 # ---------------------------------------------------------------------------
 
-@test "non-AskUserQuestion tool → exits 0 with empty output" {
+@test "non-AskUserQuestion tool → exits 0 with JSON response" {
   run bash "$HOOK_SH" <<< "$(make_other_tool_payload "Bash")"
   assert_success
-  assert_output ""
+  assert_output --partial 'updatedInput'
 }
 
 @test "AskUserQuestion → JSON response has required fields and permissionDecision=allow" {

@@ -1,6 +1,6 @@
 ---
 name: cast-audit
-description: Comprehensive CAST codebase audit — bugs, security, performance, test coverage. Dispatches 4 parallel researchers to scan the codebase and collates findings into a dated report. Runs monthly (first Monday, 08:00 local).
+description: Comprehensive CAST codebase audit — bugs, security, performance, test coverage. Dispatches 4 parallel researchers to scan the codebase and collates findings into a dated report. Manual invocation only; monthly scheduling is a design intention (helper not yet shipped).
 user-invocable: true
 allowed-tools: [Agent, Read, Glob, Grep]
 ---
@@ -31,7 +31,7 @@ Runs full audit and writes report to `~/.claude/reports/cast-audit-YYYY-MM-DD.md
 
 ### Scheduled execution
 
-**First Monday of each month, 08:00 local time.** Configured via RemoteTrigger or cron (see "Scheduling" below).
+**Design intention: first Monday of each month, 08:00 local time.** Scheduling via RemoteTrigger or cron requires a helper script that is not yet shipped (see "Scheduling" below). Manual invocation only until then.
 
 The scheduled run:
 1. Dispatches the 4 researchers in parallel
@@ -170,15 +170,15 @@ claude-code \
 
 Schedule: **First Monday of each month at 08:00 local time**
 
-### Via cron (fallback)
+### Via cron (fallback — illustrative, helper not yet shipped)
 
-Add to `crontab -e` on macOS/Linux (adjust for your timezone):
-```bash
-# First Monday of month at 08:00 local — CAST audit
-0 8 * * 1 [ $(date +\%d) -le 7 ] && cd ${HOME}/Projects/personal/claude-agent-team && bash scripts/cast-audit-cron.sh
+Example crontab entry (not yet functional — requires `scripts/cast-audit-cron.sh` which has not been shipped):
+```
+# First Monday of month at 08:00 local — CAST audit (illustrative only)
+# 0 8 * * 1 [ $(date +\%d) -le 7 ] && cd ${HOME}/Projects/personal/claude-agent-team && bash scripts/cast-audit-cron.sh
 ```
 
-Requires a `scripts/cast-audit-cron.sh` helper (not shipped — create one if cron scheduling is actually adopted).
+Create `scripts/cast-audit-cron.sh` first if cron scheduling is actually adopted.
 
 
 ## Integration with CAST Ecosystem
