@@ -54,6 +54,7 @@ See docs/architecture/enforcement-awareness-split.md for the full classification
 import importlib.util
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -77,11 +78,48 @@ def _log_error(msg):
         pass
 
 
+def _record_guard_failure(mod_name: str, err_msg: str) -> None:
+    """Write one hook_failures row for a guard module load failure.
+
+    Deduplication: at most one row per (session_id, module) per session, enforced
+    via a marker file under TMPDIR.  Never raises — must not crash the hook.
+    """
+    try:
+        import tempfile
+        session_id = os.environ.get("CLAUDE_SESSION_ID", "unknown")
+        safe_session = re.sub(r'[^A-Za-z0-9_\-]', '', (session_id or "unknown"))[:64]
+        safe_mod = re.sub(r'[^A-Za-z0-9_\-]', '', mod_name)[:32]
+        tmpdir = tempfile.gettempdir()
+        marker = os.path.join(tmpdir, f"cast-pretool-guard-{safe_session}-{safe_mod}.marker")
+        # Atomic exclusive create: avoids TOCTOU between exists-check and open.
+        try:
+            fd = open(marker, 'x')
+            fd.close()
+        except FileExistsError:
+            return  # already recorded for this (session, module) pair
+        # Import cast_db lazily — only on failure path; keeps the hot path free of
+        # an extra module load on every call.
+        if SCRIPT_DIR not in sys.path:
+            sys.path.insert(0, SCRIPT_DIR)
+        from cast_db import log_hook_failure
+        log_hook_failure(
+            f"cast-pretool-dispatch/{mod_name}",
+            -1,
+            (f"guard module failed to load — guard DISABLED: {err_msg}")[:2000],
+            session_id,
+        )
+    except Exception as exc:
+        _log_error(f"_record_guard_failure: {exc}")
+
+
 def _load(mod_name, filename):
     """Load a hyphen-named sibling script as a module, cached. Fail-soft → None.
 
     A None return means a guard is silently disabled for this process — log it
-    (M2) so `cast doctor` / hook-errors.log surfaces the lost protection."""
+    (M2) so `cast doctor` / hook-errors.log surfaces the lost protection.
+    Also writes one durable hook_failures row per (session, module) so the
+    failure is visible to cast.db queries and `cast doctor`, not only to
+    hook-errors.log."""
     if mod_name in _MODULE_CACHE:
         return _MODULE_CACHE[mod_name]
     mod = None
@@ -92,7 +130,9 @@ def _load(mod_name, filename):
         spec.loader.exec_module(mod)
     except Exception as e:
         mod = None
-        _log_error(f"guard module failed to load ({filename}) — guard DISABLED this call: {e}")
+        err_str = str(e)
+        _log_error(f"guard module failed to load ({filename}) — guard DISABLED this call: {err_str}")
+        _record_guard_failure(mod_name, err_str)
     _MODULE_CACHE[mod_name] = mod
     return mod
 

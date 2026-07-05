@@ -33,6 +33,8 @@ CONTRACT:
 The coarse Bash name-matcher and the info/warn severity labels are awareness
 aids for the advisory line, NOT an enforcement decision — there is no block path.
 """
+from __future__ import annotations
+
 import sys
 import os
 import json

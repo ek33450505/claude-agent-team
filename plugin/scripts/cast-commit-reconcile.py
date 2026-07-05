@@ -20,6 +20,7 @@ Cooperative-tier limitations (D5 threat model — accepted traceless bypasses):
   (3) CAST_SKIP_RECONCILE=1 git push, (4) git push --no-verify.
   These require direct filesystem/repo access and are outside the model's scope.
 """
+from __future__ import annotations
 
 import datetime
 import json
