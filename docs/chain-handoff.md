@@ -130,4 +130,4 @@ The typed schema that the validator mirrors is in `schemas/agent-handoff.json`. 
 
 ### Incident-record integration
 
-`cast-incident-record.sh` still parses the Handoff block's `files_changed` field to populate `related_files` on incident records. Absent a Handoff block, that field is omitted from the incident record (unchanged from prior behavior).
+The incident-record stage in `cast_subagent_stop.py` parses the Handoff block's `files_changed` field to populate `related_files` on incident records. Absent a Handoff block, that field is omitted from the incident record (unchanged from prior behavior).

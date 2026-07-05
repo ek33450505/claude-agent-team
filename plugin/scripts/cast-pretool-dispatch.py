@@ -189,7 +189,7 @@ def _record_dispatch(data):
             return
         chosen_agent = ti.get("subagent_type") or "unknown"
         prompt = (ti.get("prompt") or ti.get("description") or "")[:500]
-        # Redact PII/secrets before storage (consistency with cast-incident-record.sh;
+        # Redact PII/secrets before storage (consistency with cast_subagent_stop.py incident stage;
         # cast.db can sync off-machine). FAIL-CLOSED: if redaction does not succeed on a
         # non-empty prompt, store a [REDACTION_FAILED] marker rather than raw text — never
         # leak unredacted content into cast.db. Still never blocks the dispatch.

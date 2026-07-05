@@ -1364,8 +1364,8 @@ _cmd_budget() {
   local show_week=0
   local project_filter=""
 
-  # `cast budget set ...` — configure a budget limit (writer). cast-budget-alert.sh
-  # reads the scope='global'/period='daily' row to fire spend warnings.
+  # `cast budget set ...` — configure a budget limit (writer). The consolidated
+  # cast_subagent_stop.py (budget-alert stage) reads the scope='global'/period='daily' row to fire spend warnings.
   if [ "${1:-}" = "set" ]; then
     shift
     local b_scope="global" b_period="daily" b_limit="" b_alert="0.80"
@@ -2496,7 +2496,7 @@ PYEOF
     fi
 
     # ── spend-consistency ────────────────────────────────────────────────────
-    # Runs both the LIKE-based query (cast-budget-alert.sh behavior) and the
+    # Runs both the LIKE-based query (consolidated budget-alert stage behavior) and the
     # normalized DATE-based query (cast budget / cast-dash.py behavior) and
     # flags when they diverge > $0.01 — the root cause of the 2026-06-11
     # incident where cast budget reported $0 while the hard-limit fired $375.83.
@@ -2512,7 +2512,7 @@ today = datetime.datetime.now(timezone.utc).strftime('%Y-%m-%d')
 try:
     conn = sqlite3.connect(db, timeout=5)
     conn.row_factory = sqlite3.Row
-    # LIKE-based (matches cast-budget-alert.sh)
+    # LIKE-based (matches consolidated budget-alert stage)
     like_row = conn.execute(
         "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at LIKE ? || '%'",
         (today,)

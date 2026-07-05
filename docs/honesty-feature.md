@@ -21,12 +21,12 @@ Four real sensors write to `cast.db` on live hook events. **`cast doctor` reads 
 - **Current state:** Row writes work. Observability: live via `cast doctor` — surfaces "N agents hallucinated file creation" with per-agent breakdown.
 
 ### Table 2: `completeness_events`
-- **Source:** `scripts/cast-response-completeness-hook.sh` (SubagentStop hook)
+- **Source:** `cast_subagent_stop.py` completeness stage (SubagentStop hook, invoked via `cast-subagent-stop-hook.sh`)
 - **Signals:** Agent returned without a Status block (protocol violation) or output was truncated at the model's token limit.
 - **Current state:** Row writes work. Observability: live via `cast doctor` — reads and flags truncation events with per-severity breakdown.
 
 ### Table 3: `agent_protocol_violations`
-- **Source:** `scripts/cast-agent-protocol-check.sh` (SubagentStop hook)
+- **Source:** `cast_subagent_stop.py` protocol-check stage (SubagentStop hook, invoked via `cast-subagent-stop-hook.sh`)
 - **Signals:** Agent prose says "dispatching agent X" but never actually called the dispatch tool. Prose-only dispatch claims with zero tool evidence.
 - **Current state:** Row writes work. Observability: live via `cast doctor` — reads and flags protocol violations with per-agent breakdown.
 

@@ -1,16 +1,27 @@
 #!/usr/bin/env bats
-# cast-budget-alert-nodc.bats — Tests for cast-budget-alert.sh when cast.db is
-# absent or empty. "nodc" = "no database connection" scenarios.
+# cast-budget-alert-nodc.bats — Tests for the budget-alert path when cast.db is
+# absent or empty. "nodc" = "no database connection" scenarios. Retargeted to
+# cast-subagent-stop-hook.sh (the consolidated SubagentStop hook that absorbed
+# cast-budget-alert.sh at W2-1; the standalone script is deleted). Budget-alert
+# behavior now runs as stage 14 of cast_subagent_stop.py; the silent-exit
+# assertions are IDENTICAL.
 #
 # These tests complement cast-budget-alert.bats (which tests the happy-path with
-# a fully populated DB). Here we verify the script's silent-exit contract when the
-# database is missing or has no budget data.
+# a fully populated DB). Here we verify the hook's silent-exit contract when the
+# database is missing or has no budget data. Each invocation feeds $PAYLOAD on
+# stdin (the hook exits early on empty stdin, so a payload is required to reach
+# the budget stage at all).
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-ALERT_SH="$REPO_DIR/scripts/cast-budget-alert.sh"
+HOOK_SH="$REPO_DIR/scripts/cast-subagent-stop-hook.sh"
+
+# Minimal SubagentStop payload: a non-exempt agent that reported a terminal
+# Status, so stages 4/5/12 (truncation/completeness) stay silent and only the
+# budget stage can emit a banner.
+PAYLOAD='{"agent_type":"x","session_id":"s1","agent_id":"a1","stop_reason":"end_turn","agent_response":{"content":[{"type":"text","text":"Summary: did work\nStatus: DONE"}]}}'
 
 setup() {
   load 'helpers/setup'
@@ -29,7 +40,7 @@ teardown() {
 @test "exits 0 when CAST_DB_PATH points to a nonexistent file" {
   export CAST_DB_PATH="/tmp/cast-no-such-db-$$.db"
 
-  run bash "$ALERT_SH"
+  run bash "$HOOK_SH" <<< "$PAYLOAD"
 
   assert_success
 }
@@ -43,7 +54,7 @@ teardown() {
 
   # Capture stderr separately by redirecting
   local stderr_out
-  stderr_out="$(bash "$ALERT_SH" 2>&1 >/dev/null)"
+  stderr_out="$(bash "$HOOK_SH" 2>&1 >/dev/null <<< "$PAYLOAD")"
 
   # Stderr should be empty — no error messages
   [ -z "$stderr_out" ]
@@ -59,7 +70,7 @@ teardown() {
   sqlite3 "$temp_db" "PRAGMA journal_mode=WAL;"
   export CAST_DB_PATH="$temp_db"
 
-  run bash "$ALERT_SH"
+  run bash "$HOOK_SH" <<< "$PAYLOAD"
 
   assert_success
   refute_output --partial "[CAST-BUDGET"
@@ -84,7 +95,7 @@ teardown() {
      INSERT INTO sessions VALUES ('s1', 'proj', '$(date +%Y-%m-%d)T10:00:00Z', 99.99);"
   export CAST_DB_PATH="$temp_db"
 
-  run bash "$ALERT_SH"
+  run bash "$HOOK_SH" <<< "$PAYLOAD"
 
   assert_success
   refute_output --partial "[CAST-BUDGET"
