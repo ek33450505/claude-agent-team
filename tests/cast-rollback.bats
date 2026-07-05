@@ -20,7 +20,7 @@ _make_test_repo() {
   export TEST_REPO="$BATS_TEST_TMPDIR/rollback-repo"
   mkdir -p "$TEST_REPO"
   git -C "$TEST_REPO" init -q
-  git -C "$TEST_REPO" config user.email "test@cast.test"
+  git -C "$TEST_REPO" config user.email "test@example.com"
   git -C "$TEST_REPO" config user.name "CAST Test"
 
   # Initial commit so HEAD is valid
