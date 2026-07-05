@@ -14,7 +14,7 @@ jobs:
   bats:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
         with:
           submodules: recursive
       - name: Install bats-core and dependencies
@@ -39,7 +39,7 @@ jobs:
     needs: bats
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
       - name: Install bats-core and sqlite3
         run: |
           sudo apt-get update
@@ -65,7 +65,7 @@ jobs:
     needs: bats
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
         with:
           submodules: recursive
       - name: Set up CAST runtime dirs

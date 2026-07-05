@@ -269,6 +269,10 @@ TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "from dat
 # The agent name originates from Claude Code's trusted SubagentStop payload;
 # this sanitization guards against future input-source changes, not current untrusted input.
 SAFE_AGENT="${AGENT_NAME//[^a-zA-Z0-9_-]/}"
+# SESSION_ID originates from the SubagentStop payload (unsanitized). Sanitize it
+# the same way as SAFE_AGENT so it can be safely interpolated into shell-level
+# sqlite3 SQL literals (see Step 2.6). UUID-shaped session ids keep hyphens.
+SAFE_SESSION_ID="${SESSION_ID//[^a-zA-Z0-9-]/}"
 EVENT_FILE="${EVENTS_DIR}/${TIMESTAMP}-${SAFE_AGENT}-subagent-stop.json"
 
 export CAST_STOP_EVENT_TYPE="$EVENT_TYPE"
@@ -364,6 +368,45 @@ branch = os.environ.get('CAST_STOP_BRANCH', '') or None
 if not agent or not db:
     raise SystemExit(0)
 
+# ── Fast status write (crash-safety, BEFORE the transcript read) ─────────────
+# The transcript read below iterates the full agent .jsonl (multi-MB transcripts
+# exist). This hook runs async with a hard timeout — a kill mid-read means the
+# enrichment UPDATE never executes and the row is stranded status='running' (the
+# dashboard phantom-active class). Write status + ended_at NOW so the row leaves
+# 'running' regardless, and capture its id so the enrichment UPDATE after the read
+# targets the SAME row. Best-effort: never crash the hook pipeline.
+fast_row_id = None
+_fast_agent_id = os.environ.get('CAST_STOP_AGENT_ID', '')
+_fconn = None
+try:
+    _fconn = sqlite3.connect(db, timeout=5)
+    if _fast_agent_id:
+        _frow = _fconn.execute(
+            "SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?",
+            (_fast_agent_id,),
+        ).fetchone()
+    else:
+        _frow = _fconn.execute(
+            "SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?",
+            (agent, sess),
+        ).fetchone()
+    fast_row_id = _frow[0] if _frow and _frow[0] is not None else None
+    if fast_row_id is not None:
+        _fconn.execute(
+            "UPDATE agent_runs SET status=?, ended_at=? WHERE id=?",
+            (st, ts, fast_row_id),
+        )
+        _fconn.commit()
+    _fconn.close()
+except Exception as _fe:
+    try:
+        if _fconn is not None:
+            _fconn.close()
+    except Exception:
+        pass
+    if log_hook_failure:
+        log_hook_failure('cast-subagent-stop-hook:agent_runs_fast', -1, str(_fe), sess)
+
 # ── Cost computation from transcript ────────────────────────────────────────
 # Defensive: all errors yield NULL cost; hook never aborts.
 cost_usd = None
@@ -373,7 +416,27 @@ transcript_model = None
 
 try:
     transcript_path = os.environ.get('CAST_STOP_TRANSCRIPT_PATH', '').strip()
-    if transcript_path and os.path.isfile(transcript_path):
+    try:
+        _max_bytes = int(os.environ.get('CAST_TRANSCRIPT_MAX_BYTES', '20971520') or '20971520')
+    except (ValueError, TypeError):
+        _max_bytes = 20971520
+    _transcript_size = os.path.getsize(transcript_path) if transcript_path and os.path.isfile(transcript_path) else 0
+    _transcript_oversized = _transcript_size > _max_bytes
+    if _transcript_oversized:
+        # Oversized transcript — SKIP the full line-by-line read. This hook is async
+        # with a hard timeout; iterating a multi-MB .jsonl risks a kill mid-read that
+        # strands the row 'running'. Fall back to the payload's cache tokens (already
+        # in cache_read / cache_create); input/output tokens and cost_usd stay NULL.
+        # Honest degradation over a silently wrong cost — one log line records it.
+        if log_hook_failure:
+            log_hook_failure(
+                'cast-subagent-stop-hook:cost_transcript_oversized', 0,
+                f'transcript {_transcript_size} bytes exceeds '
+                f'CAST_TRANSCRIPT_MAX_BYTES={_max_bytes}; cost fields partial '
+                f'(payload cache tokens only): {transcript_path}',
+                sess,
+            )
+    elif transcript_path and os.path.isfile(transcript_path):
         total_input = 0
         total_output = 0
         total_cache_read = 0
@@ -480,7 +543,21 @@ for attempt in range(3):
     try:
         conn = sqlite3.connect(db, timeout=5)
         cur  = conn.cursor()
-        if agent_id:
+        if fast_row_id is not None:
+            # The fast status write above already closed this row out of 'running';
+            # enrich the SAME row by id (its status is no longer 'running', so the
+            # status='running' subqueries below would not re-find it).
+            cur.execute(
+                "UPDATE agent_runs SET status=?, ended_at=?, "
+                "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
+                "tool_uses=?, response=?, "
+                "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
+                "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=? "
+                "WHERE id=?",
+                (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
+                 cost_usd, input_tokens, output_tokens, transcript_model, branch, fast_row_id),
+            )
+        elif agent_id:
             cur.execute(
                 "UPDATE agent_runs SET status=?, ended_at=?, "
                 "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
@@ -912,7 +989,7 @@ fi
 # after the agent started. Logs discrepancies to agent_hallucinations table (no block).
 if [[ -n "${CAST_STOP_RESPONSE_TEXT:-}" ]] && command -v python3 >/dev/null 2>&1; then
   # Resolve real agent start time from DB; fall back to stop-time if absent
-  START_TIME="$(sqlite3 "$DB_PATH" "SELECT started_at FROM agent_runs WHERE session_id='${SESSION_ID}' AND agent='${SAFE_AGENT}' ORDER BY id DESC LIMIT 1;" 2>/dev/null || true)"
+  START_TIME="$(sqlite3 "$DB_PATH" "SELECT started_at FROM agent_runs WHERE session_id='${SAFE_SESSION_ID}' AND agent='${SAFE_AGENT}' ORDER BY id DESC LIMIT 1;" 2>/dev/null || true)"
   [[ -z "$START_TIME" ]] && START_TIME="$TIMESTAMP_ISO"
   CAST_AGENT_NAME="${AGENT_NAME}" \
   CAST_SESSION_ID="${SESSION_ID}" \
@@ -1155,7 +1232,7 @@ PYEOF
   )"
   if [ -n "$SUCCESSORS" ]; then
     while IFS= read -r successor; do
-      [ -n "$successor" ] && bash "$QUEUE_ADD" "$successor" "$SESSION_ID" 2>/dev/null || true
+      [ -n "$successor" ] && bash "$QUEUE_ADD" "$successor" "$SAFE_SESSION_ID" 2>/dev/null || true
     done <<< "$SUCCESSORS"
   fi
 fi

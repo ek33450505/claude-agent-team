@@ -32,35 +32,78 @@ A skip without a recorded rationale is indistinguishable from lost coverage — 
 
 ## Remaining Intentional Skips
 
-**Total call sites: 23** across 14 files (as of the v9 `/swarm` retirement, which removed the 2 setup-level swarm-test skips with their deleted files; prior baseline was 25 across 16 files from the 2026-06-19 audit, including 7 newly-documented sites from 2026-06-18).
+**Total call sites: 56** across 23 files (as of 2026-07-04 full re-enumeration; prior count of 23 across 14 files was under-counted — missed `cast-ask.bats` FTS5/JSON cluster, `cast-doctor-ask.bats`, `cast-doctor-honesty.bats`, `cast-doctor-litestream.bats`, `cast-commit-reconcile.bats`, `run-sh-count-gate.bats`, `install.bats`, and the two extra `install-personal.bats` sites. +2 same-day: `cast-pretool-dispatch-guardfail.bats` interpreter guards, added with the py3.9 hook-compat fixes).
+
+**Enumeration command** (run from repo root; catches all 4 skip forms: `|| skip "`, `&& skip "`, line-leading `skip "`, if-then inline `skip "`; excludes comment lines and the self-referential guard file):
+
+```
+grep -rEn '(\|\| skip "|&& skip "|[[:space:]]skip ")' tests/ --include="*.bats" \
+  | grep -vF 'skip-ledger-drift.bats' \
+  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+```
+
+A companion BATS guard (`tests/skip-ledger-drift.bats`) re-runs this command and fails if the actual count diverges from the number recorded in this document.
 
 Note: a single `setup()`-level skip gates every `@test` in a file with one call. Those are marked **[setup-level]** and the gated test count is noted — a single ledger line represents multiple suppressed tests.
 
 | File | Line | # Tests Gated | Reason | Category | Un-skip Condition |
 |------|------|--------------|--------|----------|------------------|
-| `tests/cast-session-start-journal.bats` | 15 | ~all **[setup-level]** | Requires actual journal entries in `~/Documents/Claude/`; setup() skips if absent | Environment (real vault) | Could be un-skipped by seeding a fixture vault under the temp HOME (not yet implemented) |
-| `tests/cast-encrypt.bats` | 46 | 1 | `age` binary not installed | Environment (optional dependency) | Install `age` in CI and confirm test passes |
-| `tests/cast-encrypt.bats` | 63 | 1 | `age` binary not installed | Environment (optional dependency) | Same as above |
+| `tests/cast-session-start-journal.bats` | 15 | 6 **[setup-level]** | Requires actual journal entries in `~/Documents/Claude/`; setup() skips if absent | Environment (real vault) | Could be un-skipped by seeding a fixture vault under the temp HOME (not yet implemented) |
+| `tests/test_cast_memory_persistence.bats` | 22 | 3 **[setup-level]** | SQLite FTS5 module not available; checked in setup() | Environment (sqlite build) | Runs where sqlite3 has FTS5 (macOS system sqlite, Ubuntu apt sqlite both include it); older CI sqlite versions may lack FTS5 |
+| `tests/cast-ask.bats` | 67 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 92 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 121 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 142 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 167 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 203 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 227 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 249 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 270 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 284 | 1 | JSON structure check: `"name"` key absent in `cast memory search --json` output (earlier step failed to populate DB) | Conditional (prior step outcome) | Fires when DB population and `cast ask` command succeed; the skip guards against a confusing failure cascade when earlier assertions would already have caught the root issue |
+| `tests/cast-ask.bats` | 285 | 1 | JSON structure check: `"content"` key absent | Conditional (prior step outcome) | Same as line 284 |
+| `tests/cast-ask.bats` | 286 | 1 | JSON structure check: `"created_at"` key absent | Conditional (prior step outcome) | Same as line 284 |
+| `tests/cast-ask.bats` | 303 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 324 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 335 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 348 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-ask.bats` | 363 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-doctor-ask.bats` | 74 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-doctor-ask.bats` | 88 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-doctor-ask.bats` | 111 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
+| `tests/cast-encrypt.bats` | 59 | 1 | `age` binary not installed | Environment (optional dependency) | Install `age` in CI and confirm test passes |
+| `tests/cast-encrypt.bats` | 71 | 1 | `age` binary not installed | Environment (optional dependency) | Same as above |
 | `tests/cast-keychain.bats` | 48 | 1 | macOS Keychain is macOS-only; skips on non-Darwin | Environment (platform) | Runs automatically on macOS |
 | `tests/cast-keychain.bats` | 62 | 1 | Keychain writes unavailable (headless/CI or auth-prompt timed out) | Environment (platform) | Runs on interactive macOS with Keychain access granted |
 | `tests/teardown-guard.bats` | 58 | 1 | Sentinel `.cast-test-home` not created by `setup_temp_home` — guards a positive-path teardown test | Conditional (harness state) | Fires automatically when `setup_temp_home` creates the sentinel correctly |
 | `tests/teardown-guard.bats` | 61 | 1 | HOME not under a recognized temp prefix (`/tmp/`, `/private/tmp/`, `/var/folders/`, `/private/var/folders/`) — guards prefix validation test | Conditional (harness state) | Fires when HOME is correctly set to a temp path by the harness |
 | `tests/teardown-guard.bats` | 64 | 1 | Temp HOME directory not created — guards existence check | Conditional (harness state) | Fires when temp HOME is created successfully |
 | `tests/teardown-guard.bats` | 123 | 1 | Cannot create a non-temp test directory (helper `_make_non_temp_home` failed) | Environment (runtime) | Passes when the helper can create a directory outside recognized temp prefixes |
-| `tests/test_cast_memory_persistence.bats` | 27 | 1 | SQLite FTS5 module not available | Environment (sqlite build) | Runs where sqlite3 has FTS5 (macOS system sqlite, Ubuntu apt sqlite both include it); older CI sqlite versions may lack FTS5 |
-| `tests/cast-session-end.bats` | 301 | 1 | `read -t 0` unavailable on bash <4; open-pipe guard not active on this runtime | Environment (interpreter version) | Runs on bash 4+ (most Linux CI runners; macOS ships bash 3.2) |
-| `tests/cast-precompact-guard.bats` | 125 | 1 | Guards bash 3.2 compat code path; skips if `/bin/bash` unavailable | Environment (interpreter) | Runs wherever `/bin/bash` exists (virtually all macOS and Linux systems) |
-| `tests/install-personal.bats` | 60 | 1 | `agents/personal/` archived in v7 Phase 4.5 (portfolio-sync agent removed); directory does not exist | Conditional (archived feature) | Un-skip when a personal-overlay agent is re-added to the codebase |
-| `tests/install-personal.bats` | 86 | 1 | Same — `agents/personal/` absent | Conditional (archived feature) | Same as above |
-| `tests/agents/effort-frontmatter.bats` | 147 | 1 | `agents/personal/` absent (same Phase 4.5 archive) | Conditional (archived feature) | Same as above |
-| `tests/skills/deep-research.bats` | 19 | 1 | Network-free regression harness requires `node` binary | Environment (optional dependency) | Runs where `node` is installed (GitHub CI runners include it; development machines with Node) |
+| `tests/cast-session-end.bats` | 295 | 1 | `read -t 0` unavailable on bash <4; open-pipe guard not active on this runtime | Environment (interpreter version) | Runs on bash 4+ (most Linux CI runners; macOS ships bash 3.2) |
+| `tests/cast-precompact-guard.bats` | 124 | 1 | Guards bash 3.2 compat code path; skips if `/bin/bash` unavailable | Environment (interpreter) | Runs wherever `/bin/bash` exists (virtually all macOS and Linux systems) |
 | `tests/cast-integrity.bats` | 350 | 1 | `launchctl` command available on macOS; skip gates a Linux/CI-only test path that verifies INFO-skip behavior when launchctl is absent | Environment (platform) | Runs automatically on Linux systems without launchctl; manually testable on CI runners |
 | `tests/cast-integrity.bats` | 366 | 1 | Same as above — `launchctl` present on macOS, test only meaningful on systems without it | Environment (platform) | Same as above |
+| `tests/cast-doctor-litestream.bats` | 257 | 1 | `launchctl` present on macOS; this rung (daemon check skipped with INFO) is only reachable when launchctl is absent from PATH | Environment (platform) | Runs on Linux/CI runners where launchctl is not installed |
+| `tests/install-launchctl-isolation.bats` | 23 | 1 | `launchd` is macOS-only; test requires Darwin to be meaningful | Environment (platform) | Runs automatically on macOS |
+| `tests/install.bats` | 289 | 1 | macOS-only: launchd plist installation; test requires `uname == Darwin` | Environment (platform) | Runs automatically on macOS |
+| `tests/install.bats` | 432 | 1 | `managed-settings-personal/12-otel.json` not present in repo (personal overlay not committed) | Conditional (optional file) | Fires when `managed-settings-personal/12-otel.json` is added to the repo |
+| `tests/install-personal.bats` | 60 | 1 | `portfolio-sync` agent archived in v7 Phase 4.5; `agents/personal/` directory is empty | Conditional (archived feature) | Un-skip when a personal-overlay agent is re-added to the codebase |
+| `tests/install-personal.bats` | 86 | 1 | Same — `agents/personal/` absent after Phase 4.5 archive | Conditional (archived feature) | Same as above |
+| `tests/install-personal.bats` | 117 | 1 | `managed-settings-personal/12-otel.json` not present in repo | Conditional (optional file) | Fires when `managed-settings-personal/12-otel.json` is added to the repo |
+| `tests/install-personal.bats` | 140 | 1 | `managed-settings-personal/12-otel.json` not present in repo | Conditional (optional file) | Same as above |
 | `tests/cast-litestream-setup.bats` | 190 | 1 | plist source file (`macos/cast-litestream.plist`) not present in checkout — test validates plist structure but fixture is in version control | Conditional (fixture path) | Fires when `macos/cast-litestream.plist` exists in the repo (standard in all releases) |
-| `tests/cast-litestream-verify.bats` | 173 | 1 | `litestream` binary not installed in environment | Environment (optional dependency) | Runs on systems with litestream installed; included in GitHub CI runners; un-skip requires `litestream` install |
+| `tests/cast-litestream-verify.bats` | 173 | 1 | `litestream` binary not installed in environment | Environment (optional dependency) | Runs on systems with litestream installed; included in GitHub CI runners |
 | `tests/cast-litestream-verify.bats` | 174 | 1 | `sqlite3` binary not installed in environment | Environment (optional dependency) | Runs on systems with sqlite3 installed (virtually all macOS and Linux systems) |
 | `tests/cast-litestream-verify.bats` | 204 | 1 | Litestream did not create replica files within 3 seconds (environment timing/I/O slow) — test allows replica creation delay, skips if deadline not met | Conditional (environment timing) | Fires when litestream can create replica files within 3s on the test harness |
-| `tests/cast-plugin-smoke.bats` | 185 | 1 | `claude` CLI command not available in environment | Environment (optional dependency) | Runs on systems with Claude CLI installed; included in GitHub CI runners; un-skip requires `claude` CLI install |
+| `tests/cast-plugin-smoke.bats` | 185 | 1 | `claude` CLI command not available in environment | Environment (optional dependency) | Runs on systems with Claude CLI installed |
+| `tests/cast-doctor-honesty.bats` | 342 | 1 | `chmod 000` unreadable simulation requires non-root; root bypasses file permission checks | Environment (privilege) | Runs as non-root (standard in CI and developer machines) |
+| `tests/cast-doctor-honesty.bats` | 368 | 1 | Same — `chmod 000` unreadable simulation requires non-root | Environment (privilege) | Same as above |
+| `tests/cast-doctor-honesty.bats` | 395 | 1 | Same — `chmod 000` unreadable simulation requires non-root | Environment (privilege) | Same as above |
+| `tests/cast-commit-reconcile.bats` | 238 | 1 | `chmod 000` has no effect as root; test verifies permission-denied path | Environment (privilege) | Runs as non-root |
+| `tests/run-sh-count-gate.bats` | 53 | 1 | `chmod 000` does not restrict root; unreadable-file scenario is untestable as root (if-then inline form) | Environment (privilege) | Runs as non-root |
+| `tests/agents/effort-frontmatter.bats` | 147 | 1 | `agents/personal/` not present — archived in Phase 4.5.3 | Conditional (archived feature) | Un-skip when a personal-overlay agent is re-added |
+| `tests/skills/deep-research.bats` | 19 | 1 | Network-free regression harness requires `node` binary | Environment (optional dependency) | Runs where `node` is installed (GitHub CI runners include it) |
+| `tests/cast-pretool-dispatch-guardfail.bats` | 211 | 1 | py3.9-compat smoke test requires `/usr/bin/python3` (system interpreter); absent on Homebrew/nix-only runners | Environment (interpreter) | Runs where the macOS/Linux system python3 exists at `/usr/bin/python3` |
+| `tests/cast-pretool-dispatch-guardfail.bats` | 220 | 1 | Same smoke test: `/usr/bin/python3` >= 3.10 makes PEP-604 natively valid — the annotation-crash regression is unobservable on that interpreter | Environment (interpreter) | Runs where `/usr/bin/python3` is < 3.10 (e.g. macOS system python 3.9.6, the environment that broke the guards on 2026-07-04) |
 
 ---
 

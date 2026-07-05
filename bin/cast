@@ -3156,6 +3156,131 @@ PYEOF
     fi
   fi
 
+  # Orphaned agent sessions — transcripts whose last recorded entry is a
+  # tool_result awaiting the next model turn, with a stale mtime.  This
+  # indicates the session was externally killed mid-tool-loop with no
+  # session-end entry ever appended.
+  # Default threshold: 60 min; override via CAST_ORPHAN_SESSION_MIN.
+  # Read-only: only stat + tail-reads; never writes or mutates anything.
+  local _orphan_threshold_min="${CAST_ORPHAN_SESSION_MIN:-60}"
+  local _orphan_out
+  _orphan_out="$(python3 - "$_orphan_threshold_min" <<'PYEOF' 2>/dev/null || echo "ERROR:python3 failed"
+import os
+import json
+import time
+import sys
+
+try:
+    threshold_min = int(sys.argv[1]) if len(sys.argv) > 1 else 60
+    if threshold_min < 0:
+        threshold_min = 60
+except ValueError:
+    threshold_min = 60
+threshold_sec = threshold_min * 60
+tail_bytes = 8192   # read only the last 8 KB to locate the last JSON entry
+
+projects_dir = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+now = time.time()
+
+if not os.path.isdir(projects_dir):
+    print("ABSENT")
+    sys.exit(0)
+
+orphaned = []
+
+try:
+    for proj in os.listdir(projects_dir):
+        proj_path = os.path.join(projects_dir, proj)
+        if not os.path.isdir(proj_path):
+            continue
+        for fname in os.listdir(proj_path):
+            if not fname.endswith(".jsonl"):
+                continue
+            fpath = os.path.join(proj_path, fname)
+            try:
+                st = os.stat(fpath)
+            except OSError:
+                continue
+            # Must be old enough to be suspicious
+            if (now - st.st_mtime) < threshold_sec:
+                continue
+            # Empty transcripts are not orphaned
+            if st.st_size == 0:
+                continue
+            # Read only the tail (bounded read — never loads the whole file)
+            try:
+                with open(fpath, "rb") as fh:
+                    if st.st_size > tail_bytes:
+                        fh.seek(-tail_bytes, 2)
+                    raw = fh.read()
+            except OSError:
+                continue
+            # Walk lines in reverse to find the last non-empty JSON line
+            last_entry = None
+            for line in reversed(raw.decode("utf-8", errors="replace").splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    last_entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                break
+            if last_entry is None:
+                continue
+            # Classify the last entry
+            role = last_entry.get("role", "") or ""
+            content = last_entry.get("content", [])
+            if not isinstance(content, list):
+                content = []
+            has_tool_result = any(
+                isinstance(c, dict) and c.get("type") == "tool_result"
+                for c in content
+            )
+            # Dangling pattern 1: user message whose only content is tool results
+            # (assistant turn was never delivered — loop died awaiting the model)
+            if role == "user" and has_tool_result:
+                orphaned.append((st.st_mtime, fpath))
+                continue
+            # Dangling pattern 2: setup/attachment/system entry before any
+            # assistant turn was ever written (session bootstrapped but never ran)
+            entry_type = last_entry.get("type", "") or ""
+            if entry_type in ("system", "attachment") or role == "system":
+                orphaned.append((st.st_mtime, fpath))
+except Exception as e:
+    print("ERROR:{}".format(e))
+    sys.exit(0)
+
+# Sort newest-stale first so the report highlights the most recent victims
+orphaned.sort(key=lambda x: -x[0])
+print("COUNT:{}".format(len(orphaned)))
+for _mtime, _path in orphaned[:5]:
+    print("PATH:{}".format(_path))
+PYEOF
+  )"
+
+  if echo "$_orphan_out" | grep -q "^ABSENT"; then
+    printf "%b orphaned sessions: projects dir absent — no transcript data\n" "$INFO"
+  elif echo "$_orphan_out" | grep -q "^ERROR:"; then
+    local _orphan_err="${_orphan_out#ERROR:}"
+    printf "%b orphaned sessions: check unavailable (%s)\n" "$INFO" "$_orphan_err"
+  else
+    local _orphan_count=0
+    _orphan_count="$(echo "$_orphan_out" | grep '^COUNT:' | head -1 | cut -d: -f2)"
+    _orphan_count="${_orphan_count:-0}"
+    if [[ "${_orphan_count}" -gt 0 ]] 2>/dev/null; then
+      printf "%b orphaned sessions: %d transcript(s) died mid-tool-loop (last entry = tool_result, no session-end, mtime > %s min)\n" \
+        "$WARN" "$_orphan_count" "$_orphan_threshold_min"
+      while IFS= read -r _opath; do
+        [[ "$_opath" =~ ^PATH: ]] || continue
+        printf "    %s\n" "${_opath#PATH:}"
+      done <<< "$_orphan_out"
+      overall_ok=0
+    else
+      printf "%b orphaned sessions: none detected (threshold: %s min)\n" "$OK" "$_orphan_threshold_min"
+    fi
+  fi
+
   # Summary
   printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then

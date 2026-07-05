@@ -11,6 +11,8 @@ Subcommands:
 
 All subcommands write JSON to stdout. Errors go to stderr. Exit 0 on success, 1 on error.
 """
+from __future__ import annotations
+
 import sys
 import os
 import json

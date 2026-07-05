@@ -16,6 +16,8 @@ One-time keychain setup (run once; no values stored in code or config):
     security add-generic-password -s anthropic-api-key -a "$USER" -w '<admin-api-key>'
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

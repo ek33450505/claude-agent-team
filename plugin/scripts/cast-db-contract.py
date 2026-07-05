@@ -220,6 +220,15 @@ class ColumnContract:
 
 # ─── Source Extraction: init schema ───────────────────────────────────────────
 
+def _strip_sql_line_comments(sql: str) -> str:
+    """Strip SQL '--' line comments (everything from '--' to end of line).
+
+    Used before CREATE TABLE regex runs so that prose comments containing
+    'CREATE TABLE foo (' do not produce phantom table entries.
+    """
+    return re.sub(r"--[^\n]*", "", sql)
+
+
 def parse_init_schema(init_path: Path) -> dict[str, set[str]]:
     """Parse CREATE TABLE blocks and ALTER TABLE ADD COLUMN from cast-db-init.sh.
 
@@ -232,21 +241,25 @@ def parse_init_schema(init_path: Path) -> dict[str, set[str]]:
         print(f"[ERROR] Cannot read {init_path}: {e}", file=sys.stderr)
         return {}
 
+    # Strip '--' line comments so prose comments containing 'CREATE TABLE foo ('
+    # do not produce phantom table entries in the schema dict.
+    content_sql = _strip_sql_line_comments(content)
+
     schema: dict[str, set[str]] = {}
     table_re = re.compile(
         r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(",
         re.IGNORECASE,
     )
-    for match in table_re.finditer(content):
+    for match in table_re.finditer(content_sql):
         table = match.group(1).lower()
-        block = _extract_paren_block(content, match.end())
+        block = _extract_paren_block(content_sql, match.end())
         cols = _parse_create_table_columns(block)
         schema.setdefault(table, set()).update(cols)
 
     # Self-healing ALTER TABLE ADD COLUMN in the init also constitutes a declaration
     for m in re.finditer(
         r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)",
-        content, re.IGNORECASE,
+        content_sql, re.IGNORECASE,
     ):
         schema.setdefault(m.group(1).lower(), set()).add(m.group(2).lower())
 
@@ -306,6 +319,10 @@ def parse_auto_populated(init_path: Path) -> dict[str, set[str]]:
         print(f"[ERROR] Cannot read {init_path}: {e}", file=sys.stderr)
         return {}
 
+    # Strip '--' line comments so prose comments containing 'CREATE TABLE foo ('
+    # do not produce phantom table entries (mirrors parse_init_schema).
+    content_sql = _strip_sql_line_comments(content)
+
     auto_populated: dict[str, set[str]] = {}
     _auto_re = re.compile(
         r"\bAUTOINCREMENT\b|\bDEFAULT\b|\bPRIMARY\s+KEY\b",
@@ -320,9 +337,9 @@ def parse_auto_populated(init_path: Path) -> dict[str, set[str]]:
         r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(",
         re.IGNORECASE,
     )
-    for match in table_re.finditer(content):
+    for match in table_re.finditer(content_sql):
         table = match.group(1).lower()
-        block = _extract_paren_block(content, match.end())
+        block = _extract_paren_block(content_sql, match.end())
         for line in block.split("\n"):
             stripped = line.strip().rstrip(",")
             if not stripped or stripped.startswith("--"):
@@ -340,7 +357,7 @@ def parse_auto_populated(init_path: Path) -> dict[str, set[str]]:
     # ALTER TABLE ... ADD COLUMN col TYPE ... DEFAULT ...
     for m in re.finditer(
         r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)([^\n]*)",
-        content, re.IGNORECASE,
+        content_sql, re.IGNORECASE,
     ):
         if re.search(r"\bDEFAULT\b", m.group(3), re.IGNORECASE):
             table = m.group(1).lower()
@@ -432,22 +449,26 @@ def parse_migrations(
         except OSError:
             continue
 
+        # Strip '--' line comments so prose comments containing 'CREATE TABLE foo ('
+        # (e.g. explanatory headers in migration files) do not produce phantom tables.
+        content_sql = _strip_sql_line_comments(content)
+
         # CREATE TABLE in migrations: track columns
-        for match in table_re.finditer(content):
+        for match in table_re.finditer(content_sql):
             table = match.group(1).lower()
-            block = _extract_paren_block(content, match.end())
+            block = _extract_paren_block(content_sql, match.end())
             for col in _parse_create_table_columns(block):
                 added.setdefault(table, set()).add(col)
                 dropped.get(table, set()).discard(col)
 
         # ADD COLUMN
-        for m in add_re.finditer(content):
+        for m in add_re.finditer(content_sql):
             table, col = m.group(1).lower(), m.group(2).lower()
             added.setdefault(table, set()).add(col)
             dropped.get(table, set()).discard(col)
 
         # DROP COLUMN
-        for m in drop_re.finditer(content):
+        for m in drop_re.finditer(content_sql):
             table, col = m.group(1).lower(), m.group(2).lower()
             dropped.setdefault(table, set()).add(col)
             added.get(table, set()).discard(col)

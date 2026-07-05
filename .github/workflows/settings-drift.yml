@@ -1,0 +1,36 @@
+name: Settings Drift
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  settings-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: Merge fragments into temp file
+        # cast-merge-settings.sh reads fragments from $HOME/.claude/managed-settings.d/ —
+        # HOME is overridden to a temp dir seeded with the REPO fragments so the gate
+        # compares committed-vs-repo, never the runner's (nonexistent) live settings.
+        run: |
+          MERGE_HOME=$(mktemp -d)
+          mkdir -p "$MERGE_HOME/.claude/managed-settings.d"
+          cp managed-settings.d/*.json "$MERGE_HOME/.claude/managed-settings.d/"
+          MERGED_OUT="$MERGE_HOME/merged-settings.json"
+          HOME="$MERGE_HOME" bash scripts/cast-merge-settings.sh "$MERGED_OUT"
+          echo "MERGED_OUT=$MERGED_OUT" >> "$GITHUB_ENV"
+
+      - name: Diff committed settings.json against merged fragments
+        run: |
+          if ! diff -u settings.json "$MERGED_OUT"; then
+            echo ""
+            echo "::error::committed settings.json drifted from fragments — run: bash scripts/cast-merge-settings.sh <output_path>"
+            exit 1
+          fi
+          echo "settings.json is up to date with managed-settings.d fragments."

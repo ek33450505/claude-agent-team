@@ -2,6 +2,7 @@
   "hooks": {
     "PostToolUse": [
       {
+        "matcher": "Write|Edit|Bash|Agent|Task|WebFetch|WebSearch|NotebookEdit|mcp__.*",
         "hooks": [
           {
             "type": "command",

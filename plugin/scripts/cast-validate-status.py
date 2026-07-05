@@ -19,6 +19,8 @@ Examples:
   python3 cast-validate-status.py --schema /custom/schema.json /path/to/status.json
 """
 
+from __future__ import annotations
+
 import sys
 import json
 import os

@@ -612,5 +612,116 @@ class TestProvenanceClassification(unittest.TestCase):
         self.assertEqual(c.classification, "KEEP")
 
 
+class TestParseInitSchemaCommentStripping(unittest.TestCase):
+    """parse_init_schema() must not treat '--' comment lines as real DDL.
+
+    Regression guard for the phantom-table bug: a prose comment of the form
+    '-- CREATE TABLE foo (bar TEXT)' inside a migration or init file must NOT
+    produce a 'foo' entry in the parsed schema.
+    """
+
+    def _write_init(self, content: str) -> Path:
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+        f.write(content)
+        f.flush()
+        f.close()
+        return Path(f.name)
+
+    def test_comment_create_table_yields_no_table(self):
+        """'-- CREATE TABLE foo (bar TEXT)' comment line must NOT produce a table."""
+        init = self._write_init(textwrap.dedent("""\
+            -- CREATE TABLE guards (id INTEGER PRIMARY KEY, name TEXT);
+            sqlite3 "$DB" <<'SQL'
+            CREATE TABLE IF NOT EXISTS real_table (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              value TEXT
+            );
+            SQL
+        """))
+        try:
+            result = parse_init_schema(init)
+            self.assertNotIn("guards", result,
+                             "phantom table 'guards' must not appear from a comment line")
+            self.assertIn("real_table", result,
+                          "real_table declared in SQL block must still be parsed")
+        finally:
+            init.unlink()
+
+    def test_inline_comment_after_real_ddl_does_not_add_phantom(self):
+        """Real CREATE TABLE followed by an inline comment must only yield real table."""
+        init = self._write_init(textwrap.dedent("""\
+            sqlite3 "$DB" <<'SQL'
+            -- This table guards query results: CREATE TABLE phantom (x TEXT)
+            CREATE TABLE IF NOT EXISTS sessions (
+              id TEXT PRIMARY KEY
+            );
+            SQL
+        """))
+        try:
+            result = parse_init_schema(init)
+            self.assertNotIn("phantom", result,
+                             "phantom table from inline comment must not appear")
+            self.assertIn("sessions", result)
+        finally:
+            init.unlink()
+
+    def test_real_create_table_still_parsed_after_comment_stripping(self):
+        """After stripping comments, real CREATE TABLE statements are unaffected."""
+        init = self._write_init(textwrap.dedent("""\
+            -- just a comment mentioning CREATE TABLE foo (bar TEXT)
+            sqlite3 "$DB" <<'SQL'
+            CREATE TABLE IF NOT EXISTS otel_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT,
+              received_at TEXT
+            );
+            SQL
+        """))
+        try:
+            result = parse_init_schema(init)
+            self.assertNotIn("foo", result)
+            self.assertIn("otel_events", result)
+            self.assertIn("session_id", result["otel_events"])
+            self.assertIn("received_at", result["otel_events"])
+        finally:
+            init.unlink()
+
+
+class TestParseAutoPopulatedCommentStripping(unittest.TestCase):
+    """parse_auto_populated() must not treat '--' comment lines as real DDL.
+
+    Regression guard for the same phantom-table bug fixed in parse_init_schema:
+    a prose comment of the form '-- CREATE TABLE foo (id INTEGER PRIMARY KEY)'
+    must NOT produce an auto-populated entry for a phantom table.
+    """
+
+    def _write_init(self, content: str) -> Path:
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+        f.write(content)
+        f.flush()
+        f.close()
+        return Path(f.name)
+
+    def test_comment_create_table_yields_no_auto_populated_entry(self):
+        """'-- CREATE TABLE phantom (id INTEGER PRIMARY KEY)' must not produce phantom."""
+        init = self._write_init(textwrap.dedent("""\
+            -- CREATE TABLE phantom (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT);
+            sqlite3 "$DB" <<'SQL'
+            CREATE TABLE IF NOT EXISTS real_auto (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT
+            );
+            SQL
+        """))
+        try:
+            result = parse_auto_populated(init)
+            self.assertNotIn("phantom", result,
+                             "phantom table from comment must not appear in auto_populated")
+            self.assertIn("id", result.get("real_auto", set()),
+                          "real autoincrement column must still be detected")
+        finally:
+            init.unlink()
+
+
 if __name__ == "__main__":
     unittest.main()
