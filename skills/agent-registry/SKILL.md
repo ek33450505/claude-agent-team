@@ -25,7 +25,6 @@ The full CAST agent roster with model tier and one-line role description. The pl
 | `merge` | haiku 4.5 | PR lifecycle agent — watches CI checks on the current PR and stops for confirmation before squash-merging after approval |
 | `migration-reviewer` | opus | Database schema change reviewer — analyzes migration files for safety, generates rollback plans, validates ordering, and checks for destructive operations |
 | `morning-briefing` | haiku 4.5 | Daily briefing agent that gathers git activity, action items, and CAST system intelligence, then assembles a structured morning report |
-| `perf-sentinel` | sonnet | Performance regression detector — runs benchmarks, interprets results in context of recent changes, and suggests git bisect ranges for regressions |
 | `planner` | sonnet | Planning specialist that converts feature requests into specs and ordered task breakdowns — reserve for genuinely multi-file/multi-agent work requiring an Agent Dispatch Manifest |
 | `pr-reviewer` | sonnet | Whole-PR review at PR-open time — reads the full multi-commit diff, commit-message coherence, scope creep, coverage gaps, and breaking-change surface |
 | `push` | haiku 4.5 | Git push specialist — verifies branch safety, shows unpushed commits, sets upstream if needed, then pushes using the CAST workflow |
@@ -38,7 +37,7 @@ The full CAST agent roster with model tier and one-line role description. The pl
 ## Model Tier Summary
 
 - **haiku 4.5** — api-contract, code-reviewer, commit, dep-auditor, devops, docs, frontend-qa, merge, morning-briefing, push, release-notes, test-runner, test-writer
-- **Sonnet** — bash-specialist, code-writer, debugger, eval-writer, perf-sentinel, planner, pr-reviewer, researcher, security
+- **Sonnet** — bash-specialist, code-writer, debugger, eval-writer, planner, pr-reviewer, researcher, security
 - **Opus** — migration-reviewer
 
 Agent definitions: `~/.claude/agents/`

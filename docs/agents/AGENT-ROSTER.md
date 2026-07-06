@@ -2,7 +2,7 @@
 
 > Canonical agent roster (referenced by README). See also: [Agent Contracts](agent-contracts.md) | [Quality Rubric](agent-quality-rubric.md)
 
-23 core specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation. Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
+22 core specialists. Each is a markdown file in `~/.claude/agents/` with YAML frontmatter defining model, memory, and isolation. Agent responses validate against JSON schemas in `schemas/` — status-block contract, work-log entries, and routing events are machine-readable for API pipelines and validation tools.
 
 ### Core Implementation & Review
 
@@ -40,6 +40,5 @@
 | `migration-reviewer` | opus | Database schema change reviewer — analyzes migration files for safety and rollback plans |
 | `api-contract` | haiku | API contract guardian — detects breaking changes in REST endpoints |
 | `dep-auditor` | haiku | Dependency auditor — reviews package changes for CVEs, licenses, version compatibility |
-| `perf-sentinel` | sonnet | Performance regression detector — runs benchmarks, interprets results in context |
 
-**Model tiering:** Haiku (13 agents) for review, commit, ops, and doc work ($1/MTok); Sonnet (9 agents) for implementation, planning, and research ($3/MTok); Opus (1 agent) for high-stakes schema review. Tiering scales cost savings across the swarm.
+**Model tiering:** Haiku (13 agents) for review, commit, ops, and doc work ($1/MTok); Sonnet (8 agents) for implementation, planning, and research ($3/MTok); Opus (1 agent) for high-stakes schema review. Tiering scales cost savings across the swarm.

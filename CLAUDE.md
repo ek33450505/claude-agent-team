@@ -27,7 +27,7 @@ cast status   # health check after install
 
 ## Non-obvious
 
-- `agents/core/` holds the 23 canonical agent definitions — edit there, then reinstall.
+- `agents/core/` holds the 22 canonical agent definitions — edit there, then reinstall.
 - `.claude/` at repo root is a runtime install artifact (output of `install.sh`), not a config location for development.
 - `CAST_DB_PATH` overrides the default SQLite path (`~/.claude/cast.db`).
 - `CAST_COMMIT_AGENT=1` escape-hatch prefix allows raw `git commit` when the commit agent is unavailable.
