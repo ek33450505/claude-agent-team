@@ -30,6 +30,16 @@
         ]
       },
       {
+        "id": "cast-resume-inject",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-resume-inject-hook.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "id": "cast-time-context",
         "hooks": [
           {
