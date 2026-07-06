@@ -507,6 +507,7 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             total_output = 0
             total_cache_read = 0
             total_cache_create = 0
+            total_tool_uses = 0
             found_usage = False
 
             with open(transcript_path, "r", errors="replace") as f:
@@ -519,6 +520,11 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     except Exception:
                         continue
                     msg = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
+                    _content = msg.get("content")
+                    if isinstance(_content, list):
+                        for _blk in _content:
+                            if isinstance(_blk, dict) and _blk.get("type") == "tool_use":
+                                total_tool_uses += 1
                     usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else obj.get("usage")
                     if not isinstance(usage, dict):
                         continue
@@ -539,6 +545,11 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                 # and the payload would understate them by a large factor.
                 cache_read = total_cache_read
                 cache_create = total_cache_create
+                # Transcript is authoritative for tool_use count — overrides payload zero.
+                # The SubagentStop payload never carries tool_use counts; the transcript
+                # content blocks are the only source. Mirrors the cache-token override above.
+                if total_tool_uses > 0:
+                    tool_uses = total_tool_uses
 
                 # Load pricing table
                 rate_in = 3.0

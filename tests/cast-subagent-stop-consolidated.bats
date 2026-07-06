@@ -397,3 +397,63 @@ Files changed: src/foo.py"
      WHERE agent_type='code-writer' AND violation='prose_dispatch';")"
   [[ "$viol_count" -eq 0 ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 8: transcript tool_use count — stage2_transcript_cost populates tool_uses
+#
+# Before this fix, tool_uses was a dead producer: only 2 of 6798 rows were non-zero
+# because the SubagentStop payload never carries tool_use data. stage2_transcript_cost
+# now counts type:"tool_use" content blocks from the transcript JSONL and overrides
+# the payload zero, mirroring the existing cache-token override pattern.
+# ---------------------------------------------------------------------------
+
+@test "consolidated: transcript tool_use count — tool_uses populated from transcript blocks not payload" {
+  local sess_id="sess-transcript-tool-uses"
+  local agent_id="aid-transcript-tu-001"
+
+  # Seed a running row with the matching agent_id so stage 0 can close it and
+  # stage 2 can update it (the UPDATE targets fast_row_id or agent_id match).
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO agent_runs (agent, session_id, agent_id, status, started_at)
+     VALUES ('test-agent','$sess_id','$agent_id','running','2026-01-01T00:00:00Z');"
+
+  # Create transcript file at the glob path:
+  # ~/.claude/projects/*/{session_id}/subagents/**/agent-{agent_id}.jsonl
+  local transcript_dir="$HOME/.claude/projects/test-proj/$sess_id/subagents"
+  mkdir -p "$transcript_dir"
+  local transcript_file="$transcript_dir/agent-$agent_id.jsonl"
+
+  # 3 messages: msg1 has 1 tool_use, msg2 has 2 tool_uses, msg3 has text only.
+  # Total = 3. Use printf (not heredoc) to avoid BATS @test line-rewrite gotcha.
+  printf '%s\n' \
+    '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Read","input":{}}],"usage":{"input_tokens":100,"output_tokens":20}}}' \
+    '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"tu2","name":"Edit","input":{}},{"type":"tool_use","id":"tu3","name":"Bash","input":{}}],"usage":{"input_tokens":80,"output_tokens":30}}}' \
+    '{"message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"usage":{"input_tokens":60,"output_tokens":10}}}' \
+    > "$transcript_file"
+
+  # Payload carries NO tool_use fields — the production SubagentStop never does.
+  local payload
+  payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type':             'test-agent',
+    'session_id':             sys.argv[1],
+    'agent_id':               sys.argv[2],
+    'stop_reason':            'end_turn',
+    'last_assistant_message': 'Status: DONE\nSummary: completed task.',
+}))
+" "$sess_id" "$agent_id")"
+
+  run env CAST_DB_PATH="$TEST_DB" CAST_HOOK_DIR="$REPO_DIR/scripts" \
+    CAST_STOP_INPUT="$payload" \
+    python3 "$PY_MOD"
+
+  assert_success
+
+  local tool_uses
+  tool_uses="$(sqlite3 "$TEST_DB" \
+    "SELECT tool_uses FROM agent_runs WHERE agent_id='$agent_id';")"
+
+  # Must be 3 (from transcript), not 0 (payload default before this fix).
+  [[ "$tool_uses" -eq 3 ]]
+}
