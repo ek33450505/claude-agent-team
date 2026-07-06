@@ -11,7 +11,7 @@ allowed-tools: [Agent, Read, Glob, Grep]
 
 The `/cast-audit` skill automates the 4-way codebase audit that was run manually on 2026-04-16, surfacing accumulating drift and regressions before they compound. It dispatches 4 parallel researchers (bugs/dead code, security, performance, test coverage), collates findings, and writes a report to `~/.claude/reports/cast-audit-YYYY-MM-DD.md`.
 
-**Does NOT auto-fix.** This skill surfaces findings only. Remediation happens via follow-up agent dispatch (`debugger`, `security`, `perf-sentinel`, `test-writer`).
+**Does NOT auto-fix.** This skill surfaces findings only. Remediation happens via follow-up agent dispatch (`debugger`, `security`, `test-writer`).
 
 ## Usage
 
@@ -183,7 +183,7 @@ Create `scripts/cast-audit-cron.sh` first if cron scheduling is actually adopted
 
 ## Integration with CAST Ecosystem
 
-- **Findings are diagnostic only** — remediation requires explicit follow-up dispatch of debugger, security, perf-sentinel, test-writer.
+- **Findings are diagnostic only** — remediation requires explicit follow-up dispatch of debugger, security, test-writer.
 - **Report location** — Always `~/.claude/reports/cast-audit-YYYY-MM-DD.md`. Updated README documents this path.
 - **Comparison logic** — If prior audit exists in `~/.claude/reports/cast-audit-YYYY-MM-*.md`, collation step compares finding counts by severity and flags regressions (e.g., "+3 HIGH since last month").
 - **No auto-fix** — This is a discovery tool. Prevents "invisible" drift from accumulating.

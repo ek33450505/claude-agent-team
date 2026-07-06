@@ -10,6 +10,5 @@
   "migration-reviewer": [],
   "api-contract": [],
   "dep-auditor": [],
-  "release-notes": [],
-  "perf-sentinel": []
+  "release-notes": []
 }

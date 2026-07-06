@@ -102,19 +102,18 @@ assert d['name']=='cast', 'plugin name is not cast'
   [ "$result" -eq 0 ]
 }
 
-@test "gen-plugin.sh with --with-extras includes 4 extra agents (21 total)" {
+@test "gen-plugin.sh with --with-extras includes 3 extra agents (20 total)" {
   OUT="$BATS_TEST_TMPDIR/plugin-extras"
   bash "$REPO_DIR/scripts/gen-plugin.sh" --with-extras "$OUT" >/dev/null 2>&1
 
   agent_count=$(find "$OUT/agents" -maxdepth 1 -type f | wc -l | tr -d ' ')
-  [ "$agent_count" -eq 21 ]
+  [ "$agent_count" -eq 20 ]
 }
 
-@test "gen-plugin.sh with --with-extras includes perf-sentinel, release-notes, api-contract, dep-auditor" {
+@test "gen-plugin.sh with --with-extras includes release-notes, api-contract, dep-auditor" {
   OUT="$BATS_TEST_TMPDIR/plugin-extras"
   bash "$REPO_DIR/scripts/gen-plugin.sh" --with-extras "$OUT" >/dev/null 2>&1
 
-  [ -f "$OUT/agents/perf-sentinel.md" ]
   [ -f "$OUT/agents/release-notes.md" ]
   [ -f "$OUT/agents/api-contract.md" ]
   [ -f "$OUT/agents/dep-auditor.md" ]
@@ -124,7 +123,6 @@ assert d['name']=='cast', 'plugin name is not cast'
   OUT="$BATS_TEST_TMPDIR/plugin"
   bash "$REPO_DIR/scripts/gen-plugin.sh" "$OUT" >/dev/null 2>&1
 
-  [ ! -f "$OUT/agents/perf-sentinel.md" ]
   [ ! -f "$OUT/agents/release-notes.md" ]
   [ ! -f "$OUT/agents/api-contract.md" ]
   [ ! -f "$OUT/agents/dep-auditor.md" ]

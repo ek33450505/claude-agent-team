@@ -5,7 +5,7 @@
 #   bash scripts/gen-plugin.sh [--with-extras] [<output-dir>]
 #
 # Options:
-#   --with-extras    Include the opt-in agent tier (perf-sentinel, release-notes,
+#   --with-extras    Include the opt-in agent tier (release-notes,
 #                    api-contract, dep-auditor)
 #   <output-dir>     Destination directory (default: <repo-root>/dist/cast-plugin)
 #
@@ -82,7 +82,6 @@ LEAN_AGENTS=(
 )
 
 EXTRAS_AGENTS=(
-  perf-sentinel
   release-notes
   api-contract
   dep-auditor

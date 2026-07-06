@@ -31,6 +31,5 @@ Show:
 | `planner` | sonnet | `push` | haiku |
 | `security` | sonnet | `test-runner` | haiku |
 | `merge` | sonnet | `bash-specialist` | sonnet |
-| `researcher` | sonnet | `perf-sentinel` | sonnet |
-| `docs` | sonnet | `morning-briefing` | sonnet |
-| `devops` | sonnet | | |
+| `researcher` | sonnet | `docs` | sonnet |
+| `morning-briefing` | sonnet | `devops` | sonnet |

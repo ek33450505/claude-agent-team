@@ -49,7 +49,6 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | frontend-qa | haiku 4.5 | low | Bash, Grep, Read | Frontend quality assurance |
 | migration-reviewer | opus | high | Read, Bash, Grep | Database schema change reviewer |
 | morning-briefing | haiku 4.5 | low | Bash, Write, Grep | Daily morning briefing orchestrator |
-| perf-sentinel | sonnet | high | Read, Bash, Grep | Performance regression detector |
 | planner | sonnet | high | Read, Write, Grep | Implementation plan creation |
 | pr-reviewer | sonnet | — | Read, Bash, Grep | Holistic PR-level reviewer at PR-open time; distinct from per-unit code-reviewer |
 | push | haiku 4.5 | low | Bash, Read | Push commits to remote repository |

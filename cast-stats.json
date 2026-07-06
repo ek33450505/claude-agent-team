@@ -1,8 +1,8 @@
 {
   "version": "9.2.0",
   "versionTag": "v9.2.0",
-  "agents": 23,
-  "tests": 2280,
+  "agents": 22,
+  "tests": 2279,
   "test_files": 198,
   "tables": 39,
   "commands": 21,

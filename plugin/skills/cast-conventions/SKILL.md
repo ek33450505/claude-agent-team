@@ -152,7 +152,7 @@ Each agent has its own token cap, declared in that agent's own `## Response Budg
 - **~400 tokens** — `dep-auditor`
 - **~500 tokens** — `migration-reviewer`
 - **~800 tokens** — lightweight writers: `bash-specialist`, `docs`, `morning-briefing`, `test-writer`, `devops`, `merge`
-- **~3,000 tokens** — sonnet analysts: `api-contract`, `debugger`, `eval-writer`, `perf-sentinel`, `pr-reviewer`, `security`, `code-writer`, `planner`, `researcher`
+- **~3,000 tokens** — sonnet analysts: `api-contract`, `debugger`, `eval-writer`, `pr-reviewer`, `security`, `code-writer`, `planner`, `researcher`
 
 Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 

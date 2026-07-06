@@ -41,7 +41,7 @@ Summary: ...
 - Truncation drops from the bottom of the output buffer.
 - Status is the orchestrator's routing contract — without it, the next batch can't be dispatched.
 - Work Log is diagnostic for humans; useful but non-blocking if truncated.
-- All 23 core agent definitions enforce this order.
+- All 22 core agent definitions enforce this order.
 
 ---
 

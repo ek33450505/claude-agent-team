@@ -41,10 +41,10 @@ teardown() {
   assert_success
 }
 
-@test "gen-cast-stats.sh produces agents=23" {
+@test "gen-cast-stats.sh produces agents=22" {
   run jq -r '.agents' < "$CANONICAL_JSON"
   assert_success
-  assert_output "23"
+  assert_output "22"
 }
 
 @test "gen-cast-stats.sh produces a positive-integer tests count" {
@@ -238,7 +238,7 @@ EOF
 @test "cast_stats_assert_floors: test_files below floor returns 1 and emits FLOOR VIOLATION" {
   source "$REPO_DIR/scripts/cast-stats-lib.sh"
   # Pass valid values for positions 1-7 but test_files=100 (below 170 floor)
-  run cast_stats_assert_floors 23 1258 39 20 15 9 9.0.0 100
+  run cast_stats_assert_floors 22 1258 39 20 15 9 9.0.0 100
   assert_failure
   assert_output --partial "FLOOR VIOLATION"
   assert_output --partial "test_files"
@@ -247,7 +247,7 @@ EOF
 @test "cast_stats_assert_floors: omitting test_files arg still passes for valid stats" {
   source "$REPO_DIR/scripts/cast-stats-lib.sh"
   # 7-arg call (original signature) must still succeed — backward-compat
-  run cast_stats_assert_floors 23 1258 39 20 15 9 9.0.0
+  run cast_stats_assert_floors 22 1258 39 20 15 9 9.0.0
   assert_success
 }
 
@@ -283,20 +283,20 @@ EOF
 
 @test "cast_stats_assert_floors: valid stats return 0" {
   source "$REPO_DIR/scripts/cast-stats-lib.sh"
-  run cast_stats_assert_floors 23 1258 39 20 15 13 7.4.1
+  run cast_stats_assert_floors 22 1258 39 20 15 13 7.4.1
   assert_success
 }
 
 @test "cast_stats_assert_floors: tables=0 returns 1 and stderr contains FLOOR VIOLATION" {
   source "$REPO_DIR/scripts/cast-stats-lib.sh"
-  run cast_stats_assert_floors 23 1258 0 20 15 13 7.4.1
+  run cast_stats_assert_floors 22 1258 0 20 15 13 7.4.1
   assert_failure
   assert_output --partial "FLOOR VIOLATION"
 }
 
 @test "cast_stats_assert_floors: empty version returns 1 and stderr contains FLOOR VIOLATION" {
   source "$REPO_DIR/scripts/cast-stats-lib.sh"
-  run cast_stats_assert_floors 23 1258 39 20 15 13 ""
+  run cast_stats_assert_floors 22 1258 39 20 15 13 ""
   assert_failure
   assert_output --partial "FLOOR VIOLATION"
 }

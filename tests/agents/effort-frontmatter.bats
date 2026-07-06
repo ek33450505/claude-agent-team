@@ -92,10 +92,6 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
   ! grep -q "^effort:" "$AGENTS_DIR/api-contract.md"
 }
 
-@test "perf-sentinel does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/perf-sentinel.md"
-}
-
 @test "eval-writer does NOT have effort field (sonnet — N/A)" {
   ! grep -q "^effort:" "$AGENTS_DIR/eval-writer.md"
 }
