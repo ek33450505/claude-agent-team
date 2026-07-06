@@ -30,3 +30,7 @@ config/*credential*
 /AGENTS.md
 # gen-plugin.sh output — generated build artifact, not tracked
 dist/
+# Local strategy artifacts under the otherwise-tracked research/ dir — keep off the public repo (cf. plans/, projects/)
+research/2026-07-agent-audit.md
+research/2026-07-portfolio-audit.md
+research/2026-07-frontier-hunt-v2/
