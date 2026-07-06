@@ -44,7 +44,7 @@ Fail ANY condition → the standard ceremony applies (dispatch the specialist + 
 
 ## Agent Turn Limits (maxTurns)
 - Every CAST agent has a `maxTurns` frontmatter cap (natively enforced by Claude Code). Hitting it stops the agent SILENTLY mid-task: no Status/Handoff block, no SubagentStop hook fire, and the `agent_runs` row stays stuck in `running` (discovered 2026-06-10, crosscheck_2.0 help-docs migration).
-- A SendMessage resume grants a fresh turn budget — but scope dispatch prompts to fit the cap instead of relying on resumes. Implementation class: code-writer 80, test-writer 50, debugger 50; most others 15–25.
+- A SendMessage resume grants a fresh turn budget — but scope dispatch prompts to fit the cap instead of relying on resumes. Caps are data-fit to each agent's truncation rate (B4 retune 2026-07-06): reviewers/researchers that truncate mid-output run higher (code-reviewer 40, researcher 45, docs 30); implementers stay scoped (code-writer 80, test-writer 50, debugger 50); most others 15–25.
 - Symptom of a hit cap: agent's final message ends mid-sentence (e.g. "Now let me run the tests:") with no Status line. Treat as truncation, not completion — never relay it as done.
 - For tasks that legitimately need more turns (large migrations, multi-file sweeps), split into smaller dispatches rather than raising caps further — the cap is a runaway-loop guard.
 
