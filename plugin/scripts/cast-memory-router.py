@@ -46,6 +46,7 @@ import struct
 import urllib.parse
 import hashlib
 from datetime import datetime, timezone
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cast_db import db_query, db_execute, db_write, _connect
@@ -255,7 +256,7 @@ def _log_injection(session_id: str, prompt: str, fact_id: int, score: float,
             pass
 
 
-def _safe_int(v) -> int | None:
+def _safe_int(v) -> Optional[int]:
     """Convert v to int if possible; return None on TypeError/ValueError.
 
     Needed because record_fts.ref_id is TEXT and incidents use UUID strings,
