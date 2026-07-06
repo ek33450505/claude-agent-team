@@ -33,8 +33,8 @@ evals/
       silent-truncation-no-status-tail.yaml
     code-writer/
       ...
-  graders/           # shared grader helper scripts
   README.md
+# grader helper scripts live at scripts/eval-graders/ (not under evals/)
 ```
 
 ## Eval Case Schema
