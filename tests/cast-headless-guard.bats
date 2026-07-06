@@ -72,32 +72,36 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Test 2: Headless mode (CAST_HEADLESS=1) — AskUserQuestion is blocked
+# Test 2: AskUserQuestion is always intercepted + logged (unconditionally).
+#   The guard reads CLAUDE_SUBPROCESS only — it does NOT read CAST_HEADLESS.
+#   Interception is scoped by the settings matcher ("matcher": "AskUserQuestion"),
+#   not by an env var, so these cases assert the always-on intercept/auto-respond
+#   behavior with no decorative CAST_HEADLESS prefix.
 # ---------------------------------------------------------------------------
 
-@test "AskUserQuestion with CAST_HEADLESS=1 → intercepts and auto-responds" {
-  CAST_HEADLESS=1 run bash "$HOOK_SH" <<< "$(make_ask_user_payload)"
+@test "AskUserQuestion → intercepts and auto-responds (always, not env-gated)" {
+  run bash "$HOOK_SH" <<< "$(make_ask_user_payload)"
   assert_success
 }
 
-@test "AskUserQuestion in headless mode → logs to headless-stalls.log" {
-  CAST_HEADLESS=1 bash "$HOOK_SH" <<< "$(make_ask_user_payload "Should we continue?")"
+@test "AskUserQuestion → logs to headless-stalls.log" {
+  bash "$HOOK_SH" <<< "$(make_ask_user_payload "Should we continue?")"
   [[ -f "$HOME/.claude/logs/headless-stalls.log" ]]
 }
 
-@test "AskUserQuestion in headless mode → log contains HEADLESS STALL INTERCEPTED" {
-  CAST_HEADLESS=1 bash "$HOOK_SH" <<< "$(make_ask_user_payload "Should we continue?")"
+@test "AskUserQuestion → log contains HEADLESS STALL INTERCEPTED" {
+  bash "$HOOK_SH" <<< "$(make_ask_user_payload "Should we continue?")"
   grep -q "HEADLESS STALL INTERCEPTED" "$HOME/.claude/logs/headless-stalls.log"
 }
 
-@test "AskUserQuestion in headless mode → log contains the question text" {
-  CAST_HEADLESS=1 bash "$HOOK_SH" <<< "$(make_ask_user_payload "Should we continue with the deployment?")"
+@test "AskUserQuestion → log contains the question text" {
+  bash "$HOOK_SH" <<< "$(make_ask_user_payload "Should we continue with the deployment?")"
   grep -q "Should we continue with the deployment" "$HOME/.claude/logs/headless-stalls.log"
 }
 
-@test "multiple AskUserQuestion calls in headless mode → each logged separately" {
-  CAST_HEADLESS=1 bash "$HOOK_SH" <<< "$(make_ask_user_payload "Question 1?")"
-  CAST_HEADLESS=1 bash "$HOOK_SH" <<< "$(make_ask_user_payload "Question 2?")"
+@test "multiple AskUserQuestion calls → each logged separately" {
+  bash "$HOOK_SH" <<< "$(make_ask_user_payload "Question 1?")"
+  bash "$HOOK_SH" <<< "$(make_ask_user_payload "Question 2?")"
   local count
   count=$(wc -l < "$HOME/.claude/logs/headless-stalls.log")
   [[ "$count" -ge 2 ]]

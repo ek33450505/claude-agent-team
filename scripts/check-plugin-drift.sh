@@ -106,16 +106,19 @@ if [[ -d "$COMMITTED_PLUGIN" ]]; then
 
   # Build a stable sorted manifest: one line per entry "<relpath> <type:f|l> <sha256>"
   # Sorted by full line so identical trees produce bit-identical manifests.
+  # __pycache__/*.pyc are gitignored ephemeral bytecode (created whenever a plugin
+  # python script executes); they are never committed nor emitted by gen-plugin.sh,
+  # so excluding them keeps the drift check from false-firing on that transient junk.
   _build_manifest() {
     local base="${1%/}"
     {
-      find "$base" -mindepth 1 -type f -print0 \
+      find "$base" -mindepth 1 -type f -not -path '*/__pycache__/*' -print0 \
         | while IFS= read -r -d '' f; do
             rel="${f#"${base}/"}"
             _chk="$(shasum -a 256 "$f" 2>/dev/null | awk '{print $1}')"
             printf '%s f %s\n' "$rel" "$_chk"
           done
-      find "$base" -mindepth 1 -type l -print0 \
+      find "$base" -mindepth 1 -type l -not -path '*/__pycache__/*' -print0 \
         | while IFS= read -r -d '' l; do
             rel="${l#"${base}/"}"
             _tgt="$(readlink "$l")"

@@ -225,6 +225,12 @@ def _strip_sql_line_comments(sql: str) -> str:
 
     Used before CREATE TABLE regex runs so that prose comments containing
     'CREATE TABLE foo (' do not produce phantom table entries.
+
+    LIMITATION: a '--' occurring INSIDE a quoted string literal (e.g.
+    ``DEFAULT '--'``) is treated as a comment and everything after it on the
+    line is stripped. There are zero such occurrences in cast-db-init.sh today,
+    so this is a documented boundary, not a live bug — revisit only if a schema
+    string literal ever needs an embedded '--'.
     """
     return re.sub(r"--[^\n]*", "", sql)
 

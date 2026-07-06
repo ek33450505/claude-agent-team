@@ -3172,6 +3172,10 @@ import sys
 
 try:
     threshold_min = int(sys.argv[1]) if len(sys.argv) > 1 else 60
+    # 0 is a VALID sentinel: "no freshness floor — flag every dangling transcript
+    # regardless of age" (threshold_sec == 0 makes the age skip below never fire).
+    # Only a NEGATIVE threshold is nonsensical (it computes a future cutoff), so fall
+    # back to the 60 min default there.
     if threshold_min < 0:
         threshold_min = 60
 except ValueError:

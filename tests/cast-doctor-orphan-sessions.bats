@@ -153,6 +153,22 @@ _run_doctor() {
   assert_output --partial "orphaned sessions: none detected"
 }
 
+# ── Test 3b: threshold 0 = flag everything stale (no freshness floor) ─────────
+@test "orphaned sessions: threshold 0 flags a fresh dangling transcript (no freshness floor)" {
+  _create_minimal_db "$CAST_DB_PATH"
+
+  local proj_dir="$HOME/.claude/projects/proj-zero"
+  mkdir -p "$proj_dir"
+  local transcript="$proj_dir/session-zero.jsonl"
+  _write_dangling_transcript "$transcript"
+  # Fresh file (mtime ~now, no backdate). Threshold 0 means "flag every dangling
+  # transcript regardless of age" — the honest sentinel semantics, not a degenerate.
+
+  run env CAST_ORPHAN_SESSION_MIN=0 bash "$CAST_BIN" doctor 2>&1
+  assert_output --partial "1 transcript(s) died mid-tool-loop"
+  assert_output --partial "session-zero.jsonl"
+}
+
 # ── Test 4: missing projects dir -> INFO, never green ────────────────────────
 @test "orphaned sessions: missing projects dir reports INFO, not OK/green" {
   _create_minimal_db "$CAST_DB_PATH"

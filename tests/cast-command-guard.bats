@@ -626,3 +626,110 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
   run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ./build>out.txt')"
   assert_success
 }
+
+# ===========================================================================
+# RULE 4 — workflow-write via Bash redirection (evades workflows-require-devops).
+#   Output redirects (>, >>, | tee) targeting .github/workflows/ are BLOCKED;
+#   plain reads and redirects to non-workflow paths are ALLOWED. Probed on the
+#   real default path (no env overrides) so the block bites where it matters.
+# ===========================================================================
+
+@test "RULE4 BLOCK: echo x > .github/workflows/ci.yml → blocks (spaced redirect, repo-relative)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x > .github/workflows/ci.yml')"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+  assert_output --partial ".github/workflows/"
+}
+
+@test "RULE4 BLOCK: printf ... >> .github/workflows/deploy.yml → blocks (append redirect)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'printf "on: push" >> .github/workflows/deploy.yml')"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+}
+
+@test "RULE4 BLOCK: cat src > /repo/.github/workflows/x.yml → blocks (absolute path)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cat src > /repo/.github/workflows/x.yml')"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+}
+
+@test "RULE4 BLOCK: echo x > \$PWD/.github/workflows/ci.yml → blocks (PWD-composed path)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x > $PWD/.github/workflows/ci.yml')"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+}
+
+@test "RULE4 BLOCK: echo x >.github/workflows/ci.yml → blocks (attached redirect, no space)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x >.github/workflows/ci.yml')"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+}
+
+@test "RULE4 BLOCK: cmd | tee .github/workflows/ci.yml → blocks (tee sink)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x | tee .github/workflows/ci.yml')"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+}
+
+@test "RULE4 BLOCK: cmd | tee -a .github/workflows/ci.yml → blocks (tee append, flag skipped)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x | tee -a .github/workflows/ci.yml')"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+}
+
+@test "RULE4 BLOCK: heredoc-fed cat > .github/workflows/x.yml → blocks (intro line scanned)" {
+  CMD=$'cat > .github/workflows/x.yml <<EOF\non: push\nEOF'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+}
+
+@test "RULE4 ALLOW: cat .github/workflows/ci.yml → allows (plain read, no redirect)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cat .github/workflows/ci.yml')"
+  assert_success
+}
+
+@test "RULE4 ALLOW: grep -n jobs .github/workflows/ci.yml → allows (plain read)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'grep -n jobs .github/workflows/ci.yml')"
+  assert_success
+}
+
+@test "RULE4 ALLOW: cat .github/workflows/ci.yml > /tmp/out.yml → allows (read workflow, write /tmp)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cat .github/workflows/ci.yml > /tmp/out.yml')"
+  assert_success
+}
+
+@test "RULE4 ALLOW: echo x > /tmp/notes.txt → allows (redirect to non-workflow path)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x > /tmp/notes.txt')"
+  assert_success
+}
+
+@test "RULE4 ALLOW: echo x > docs/workflows/guide.md → allows (not .github/workflows/)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x > docs/workflows/guide.md')"
+  assert_success
+}
+
+@test "RULE4 BLOCK: cd .github/workflows && echo x > ci.yml → blocks (cd-evasion: redirect target lacks marker)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cd .github/workflows && echo x > ci.yml')"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
+}
+
+@test "RULE4 ALLOW: cd .github/workflows && cat ci.yml → allows (cd-evasion path, but no output redirect)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cd .github/workflows && cat ci.yml')"
+  assert_success
+}
+
+@test "RULE4 ALLOW: cd docs && echo x > notes.md → allows (cd to non-workflow dir)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cd docs && echo x > notes.md')"
+  assert_success
+}

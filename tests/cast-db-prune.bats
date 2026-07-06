@@ -193,6 +193,83 @@ teardown() {
   assert_output --partial "ERROR"
 }
 
+# --- CLI argument parsing (argparse) ---
+# A stray/unknown flag must NEVER fall through and run the prune (2026-07-05 footgun).
+
+@test "--help exits 0 WITHOUT pruning (no backup, no deletion)" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+    INSERT INTO agent_runs (agent, started_at) VALUES ('bot', datetime('now', '-200 days'));
+  "
+  local backup_dir
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+
+  run python3 "$SCRIPT" --help
+  assert_success
+  assert_output --partial "usage:"
+
+  # No backup artifact created (backup runs only on a real prune path)
+  local backup_count
+  backup_count=$(ls "$backup_dir"/cast-db-*.db 2>/dev/null | wc -l | tr -d ' ')
+  [ "$backup_count" -eq 0 ]
+
+  # Old rows untouched (nothing was pruned)
+  re_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")
+  ar_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;")
+  [ "$re_count" -eq 1 ]
+  [ "$ar_count" -eq 1 ]
+
+  rm -rf "$backup_dir"
+}
+
+@test "unknown flag exits 2 WITHOUT pruning" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+    INSERT INTO agent_runs (agent, started_at) VALUES ('bot', datetime('now', '-200 days'));
+  "
+  run python3 "$SCRIPT" --bogus-flag
+  [ "$status" -eq 2 ]
+
+  # Old rows untouched — a typo must never reach the delete path
+  re_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")
+  ar_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;")
+  [ "$re_count" -eq 1 ]
+  [ "$ar_count" -eq 1 ]
+}
+
+@test "--dry-run flag deletes nothing and reports would-delete" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+    INSERT INTO agent_runs (agent, started_at) VALUES ('bot', datetime('now', '-200 days'));
+  "
+  run python3 "$SCRIPT" --dry-run
+  assert_success
+  assert_output --partial "would delete"
+
+  re_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")
+  ar_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;")
+  [ "$re_count" -eq 1 ]
+  [ "$ar_count" -eq 1 ]
+}
+
+@test "--days flag overrides retention window" {
+  # 10-day-old row: kept by default 90, pruned by --days 7
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-10 days'));
+  "
+  local backup_dir
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+
+  run python3 "$SCRIPT" --days 7
+  assert_success
+  remaining=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events;")
+  [ "$remaining" -eq 0 ]
+
+  rm -rf "$backup_dir"
+}
+
 @test "dry-run does not invoke backup and deletes nothing" {
   sqlite3 "$TEST_DB" "
     INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));

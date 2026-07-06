@@ -18,6 +18,17 @@ filesystem WRITE surface (Write/Edit tool), this protects the Bash COMMAND surfa
     `kill -0 "$VAR"` etc. are ALLOWED (test-runner's timeout guard depends on them).
     Escape hatch: `CAST_KILL_OK=1`.
 
+  RULE 4 — WORKFLOW-WRITE VIA BASH REDIRECTION:
+    A Bash command that WRITES under `.github/workflows/` via output redirection
+    (`>`, `>>`, fd-numbered forms like `2>`, `1>>`) or a `tee` sink is blocked — it
+    evades the `workflows-require-devops` Write/Edit policy (a workflow agent used
+    `tee` to bypass the gate on 2026-07-04). Detection is write-only: input
+    redirects (`<`) and plain reads (`cat`/`grep` of a workflow file) are NEVER
+    blocked. Target paths are matched by the `.github/workflows/` marker, so
+    absolute, repo-relative, and `$PWD`-composed targets are all caught. There is
+    NO escape hatch here — route the change through the devops agent (edit via the
+    Write/Edit tool so the policy gate applies).
+
   RULE 3 — CATASTROPHIC rm (recursive rm of a protected root):
     A command-position `rm` with a recursive flag (-r/-R/--recursive or a combined
     short flag containing r, e.g. -rf) whose TARGET is a protected path is blocked.
@@ -124,6 +135,16 @@ RM_MSG = (
     "**[CAST]** Catastrophic `rm -rf` of a protected path blocked. "
     "Escape hatch: prefix the command with CAST_RM_OK=1."
 )
+WORKFLOW_MSG = (
+    "**[CAST]** Writing to .github/workflows/ via Bash redirection (>, >>, | tee) is "
+    "blocked — it evades the workflows-require-devops Write/Edit policy. Route the change "
+    "through the devops agent and edit via the Write/Edit tool so the policy gate applies."
+)
+
+# RULE 4 — workflow-write markers.
+# A target path anywhere under `.github/workflows/` — the substring covers absolute,
+# repo-relative, and $PWD-composed forms (e.g. `$PWD/.github/workflows/ci.yml`).
+WORKFLOW_PATH_MARK = ".github/workflows/"
 
 
 def load_input():
@@ -615,10 +636,184 @@ def rm_is_catastrophic(args):
     return any(rm_target_protected(t) for t in targets)
 
 
+# --- RULE 4 helpers ---------------------------------------------------------
+
+def _out_redirect_suffix(tok):
+    """If a token carries an unquoted OUTPUT redirect (`>` / `>>`, incl. fd-numbered
+    `2>` `1>>`), return the target substring that follows the `>` run; else None.
+
+    - Returns '' for a BARE operator (`>`, `>>`, `2>`) whose target is the FOLLOWING
+      token.
+    - Returns the glued path for `>path` / `2>>path` / `word>path`.
+    - Returns None for an input redirect (`<`, scanned past) and for an fd-dup
+      (`>&2`, `2>&1`) whose suffix starts with `&` — neither is a file target.
+    Quote-aware: a `>`/`<` inside quotes is a literal filename char, not a redirect.
+    """
+    i = 0
+    n = len(tok)
+    in_single = in_double = False
+    while i < n:
+        c = tok[i]
+        if in_single:
+            if c == "'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if c == '\\' and i + 1 < n:
+                i += 2
+                continue
+            if c == '"':
+                in_double = False
+            i += 1
+            continue
+        if c == "'":
+            in_single = True
+            i += 1
+            continue
+        if c == '"':
+            in_double = True
+            i += 1
+            continue
+        if c == '\\' and i + 1 < n:
+            i += 2
+            continue
+        if c == '<':
+            i += 1  # input redirect — skip, keep scanning for a later `>`
+            continue
+        if c == '>':
+            j = i + 1
+            while j < n and tok[j] == '>':
+                j += 1
+            suffix = tok[j:]
+            if suffix.startswith('&'):
+                return None  # fd-dup (>&2, 2>&1), not a file target
+            return suffix
+        i += 1
+    return None
+
+
+def _is_cd_to_workflows(segment):
+    """True if this segment is a literal 'cd' whose target contains .github/workflows.
+
+    Matches 'cd .github/workflows' (exact), 'cd .github/workflows/' (trailing slash),
+    and any path containing '.github/workflows/' as a substring (absolute, $PWD-composed).
+    Quote-strips the first non-flag argument. Does NOT track cwd state — pure literal detection.
+    """
+    tokens = tokenize(segment)
+    _, cmd, args = command_and_args(tokens)
+    if cmd is None or basename(cmd) != 'cd' or not args:
+        return False
+    target = strip_all_quotes(args[0])
+    return target == '.github/workflows' or WORKFLOW_PATH_MARK in target
+
+
+def _segment_has_output_redirect(segment):
+    """True if this segment contains any output redirect (>, >>, or tee in command position).
+
+    Reuses _out_redirect_suffix for `>`/`>>` detection and the tee-sink pattern from
+    workflow_write_via_bash. Input redirects (<) are never flagged.
+    """
+    tokens = tokenize(segment)
+    _assignments, cmd, args = command_and_args(tokens)
+    while cmd is not None and basename(cmd) in WRAPPERS and args:
+        cmd = args[0]
+        args = args[1:]
+    if cmd is not None and basename(cmd) == 'tee':
+        return True
+    for tok in tokens:
+        if _out_redirect_suffix(tok) is not None:
+            return True
+    return False
+
+
+def workflow_write_via_bash(command):
+    """True if the command WRITES under `.github/workflows/` via output redirection
+    (`>`/`>>`, fd-numbered forms) or a `tee` sink. Reads (`cat`/`grep`, `<` input
+    redirects) are never flagged. Quote/segment-aware; heredoc bodies are inert.
+
+    Literal-cd evasion is also detected: a compound command where a segment is a
+    literal `cd .github/workflows` (with or without trailing slash) followed by any
+    segment containing an output redirect is blocked even when the redirect target
+    (e.g. `ci.yml`) lacks the workflow marker. Detection is literal-cd only — no
+    stateful cwd tracking. Handles `;`, `&&`, `||`, and any other separator that
+    split_segments already yields as separate segments.
+
+    KNOWN OUT-OF-SCOPE EVASION (documented, NOT fixed — same deliberate class as
+    sudo/env/xargs variable-indirection out-of-scope in RULE 3):
+      - cp/mv destinations: `cp src .github/workflows/ci.yml` is not an output
+        redirect operator and is not caught here.
+      - dd of= targets: `dd if=src of=.github/workflows/ci.yml` uses a non-redirect
+        write mechanism not scanned by this guard.
+      - bash -c quoted subshell: a redirect inside a single-quoted bash -c argument
+        (`bash -c 'echo x > .github/workflows/ci.yml'`) is literal data inside a
+        quoted segment and is not split or scanned.
+      - sed -i in-place: `sed -i '' 's/a/b/' .github/workflows/ci.yml` modifies the
+        file in-place via the -i flag, not via an output redirect.
+      - Variable indirection: `echo x > "$WFPATH"` where WFPATH resolves to a
+        workflow path at runtime — only literal path markers are checked, no env
+        expansion.
+      - git apply / git checkout: git commands that write workflow files from an
+        object store or patch are not Bash redirects and are not caught here.
+      - rsync / install: `rsync src .github/workflows/ci.yml` or
+        `install -m 644 src .github/workflows/ci.yml` are file-copy commands, not
+        redirect operators.
+    This is defense-in-depth for the redirect-evasion class, not a complete sandbox.
+    The devops Write/Edit policy gate is the primary enforcement surface.
+    """
+    segments = split_segments(strip_heredocs(command))
+
+    # Literal-cd evasion: 'cd .github/workflows && echo x > ci.yml' evades the
+    # per-segment redirect check because the redirect target 'ci.yml' lacks the
+    # marker. Detect a literal cd to .github/workflows followed by any output
+    # redirect in any later segment; block the full compound command.
+    cd_wf_seen = False
+    for segment in segments:
+        if not cd_wf_seen and _is_cd_to_workflows(segment):
+            cd_wf_seen = True
+        elif cd_wf_seen and _segment_has_output_redirect(segment):
+            return True
+
+    for segment in segments:
+        tokens = tokenize(segment)
+
+        # `tee` sink: every non-flag argument is a write target.
+        _assignments, cmd, args = command_and_args(tokens)
+        while cmd is not None and basename(cmd) in WRAPPERS and args:
+            cmd = args[0]
+            args = args[1:]
+        if cmd is not None and basename(cmd) == 'tee':
+            for a in args:
+                if a.startswith('-') and a != '-':
+                    continue  # flag (-a, -i, --)
+                if WORKFLOW_PATH_MARK in strip_all_quotes(a):
+                    return True
+
+        # Output redirect operators anywhere in the token stream.
+        i = 0
+        n = len(tokens)
+        while i < n:
+            suffix = _out_redirect_suffix(tokens[i])
+            if suffix is not None:
+                if suffix == '':
+                    if i + 1 < n and WORKFLOW_PATH_MARK in strip_all_quotes(tokens[i + 1]):
+                        return True
+                elif WORKFLOW_PATH_MARK in strip_all_quotes(suffix):
+                    return True
+            i += 1
+    return False
+
+
 # --- top-level detection ----------------------------------------------------
 
 def is_blocked(command):
     """Return (blocked, message) for a raw Bash command string."""
+    # RULE 4 — workflow-write via Bash redirection (scans the raw command; it does
+    # its own heredoc-strip + segment split). Checked first: a workflow write is a
+    # policy-evasion class independent of the kill/rm rules.
+    if workflow_write_via_bash(command):
+        return True, WORKFLOW_MSG
+
     command = strip_heredocs(command)
 
     for segment in split_segments(command):
