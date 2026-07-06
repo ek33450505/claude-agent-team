@@ -255,13 +255,8 @@ def _log_injection(session_id: str, prompt: str, fact_id: int, score: float,
             pass
 
 
-def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False,
-                      fts_only=False, agent_type=None, global_scope=False):
+def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False, fts_only=False, agent_type=None):
     """Return top-N memories for agent, ranked by relevance. Includes shared pool and user_profile (global) facts.
-
-    If global_scope=True, drops the agent filter and instead ranks the full validated pool
-    (last_validated_at IS NOT NULL, valid_to IS NULL, confidence >= 0.5) by prompt-relevance.
-    Use global_scope for main-session decision-point injection where no per-agent tag exists.
 
     If agent_type is one of (commit, push, merge, code-reviewer), exclude type IN ('project', 'reference').
     For other agent types, no filtering is applied.
@@ -299,20 +294,6 @@ def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=
     else:
         type_clause = ""
 
-    # Scope filter: agent-scoped (default) or global validated pool
-    if global_scope:
-        _scope_where = (
-            "AND am.last_validated_at IS NOT NULL\n"
-            "                    AND am.valid_to IS NULL\n"
-            "                    AND am.confidence >= 0.5"
-        )
-        _fts_params_prefix = ()       # no agent param in FTS query
-        _fallback_params_prefix = ()  # no agent param in fallback
-    else:
-        _scope_where = "AND (am.agent = ? OR am.agent = 'shared' OR (am.agent = 'global' AND am.type = 'user_profile'))"
-        _fts_params_prefix = (agent,)
-        _fallback_params_prefix = (agent,)
-
     rows = []
 
     if has_fts:
@@ -324,41 +305,28 @@ def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=
                     FROM agent_memories am
                     JOIN agent_memories_fts fts ON am.id = fts.rowid
                     WHERE agent_memories_fts MATCH ?
-                    {_scope_where}
+                    AND (am.agent = ? OR am.agent = 'shared' OR (am.agent = 'global' AND am.type = 'user_profile'))
                     {temporal_clause}
                     {type_clause}
                     ORDER BY fts.rank
                     LIMIT 50
                 """
-                params = (safe_prompt,) + _fts_params_prefix + type_params
+                params = (safe_prompt, agent) + type_params
                 rows = conn.execute(sql, params).fetchall()
             except sqlite3.OperationalError:
                 # FTS query failed — fall through to full scan
                 rows = []
 
     if not rows:
-        if global_scope:
-            # Fallback: full table scan — global validated pool
-            sql = f"""
-                SELECT am.*, 0 AS rank
-                FROM agent_memories am
-                WHERE am.last_validated_at IS NOT NULL
-                AND am.valid_to IS NULL
-                AND am.confidence >= 0.5
-                {temporal_clause}
-                {type_clause}
-            """
-            params = _fallback_params_prefix + type_params
-        else:
-            # Fallback: full table scan — agent-scoped (byte-for-byte unchanged)
-            sql = f"""
-                SELECT am.*, 0 AS rank
-                FROM agent_memories am
-                WHERE (am.agent = ? OR am.agent = 'shared' OR (am.agent = 'global' AND am.type = 'user_profile'))
-                {temporal_clause}
-                {type_clause}
-            """
-            params = (agent,) + type_params
+        # Fallback: full table scan
+        sql = f"""
+            SELECT am.*, 0 AS rank
+            FROM agent_memories am
+            WHERE (am.agent = ? OR am.agent = 'shared' OR (am.agent = 'global' AND am.type = 'user_profile'))
+            {temporal_clause}
+            {type_clause}
+        """
+        params = (agent,) + type_params
         rows = conn.execute(sql, params).fetchall()
 
     # Build column_names + 'rank' for scoring
@@ -438,8 +406,6 @@ def main():
                         help='Max memories to return in retrieve mode (default: 5)')
     parser.add_argument('--mode', type=str, default='route', choices=['route', 'retrieve'],
                         help='route: return best agent; retrieve: return ranked memory list')
-    parser.add_argument('--scope', type=str, default='agent', choices=['agent', 'global'],
-                        help="'agent' = scope to --agent's memories (default); 'global' = prompt-relevance over the full validated pool (main-session decision-point injection)")
     parser.add_argument('--history', action='store_true',
                         help='Include superseded (valid_to IS NOT NULL) memories in retrieve mode')
     parser.add_argument('--fts-only', action='store_true', default=False,
@@ -519,8 +485,7 @@ def main():
                                         type_filter=type_filter,
                                         include_history=args.history,
                                         fts_only=args.fts_only,
-                                        agent_type=args.agent_type,
-                                        global_scope=(args.scope == 'global'))
+                                        agent_type=args.agent_type)
 
             # Get column names for building output dicts
             col_rows = db_query("PRAGMA table_info(agent_memories)")
