@@ -144,7 +144,7 @@ def _seed_memories(conn: sqlite3.Connection):
     # Incident row (no confidence gate needed)
     conn.execute("""
         INSERT INTO record_fts (kind, ref_id, ts, title, body, agent, project, mtype)
-        VALUES ('incident', '10', '2026-07-01T00:00:00Z',
+        VALUES ('incident', '890a9e51-1a65-400b-919c-6f9eeb7e4b39', '2026-07-01T00:00:00Z',
                 'session wipe incident',
                 'The ~/.claude directory was wiped unexpectedly during a test run.',
                 'shared', '', 'incident')
@@ -352,6 +352,80 @@ class TestRetrieveRecordGlobal(unittest.TestCase):
         finally:
             os.unlink(tmp2.name)
             os.environ['CAST_DB_PATH'] = self._tmp.name  # restore
+
+
+class TestUuidRefId(unittest.TestCase):
+    """Fixture-hardening tests: proves UUID ref_id incidents are returned without crashing.
+
+    Real incidents.id is a UUID string. The original code did `int(ref_id)` unconditionally
+    → ValueError → outer try/except swallowed it → fell through to route mode → null_result.
+    These tests pin the _safe_int() fix: UUID-id incident is returned with id=None and no
+    injection_log row is written for it.
+    """
+
+    UUID_REF = '890a9e51-1a65-400b-919c-6f9eeb7e4b39'
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        self._tmp.close()
+        os.environ['CAST_DB_PATH'] = self._tmp.name
+        conn = _create_test_db(self._tmp.name)
+        # Seed a UUID-id incident only
+        conn.execute(f"""
+            INSERT INTO record_fts (kind, ref_id, ts, title, body, agent, project, mtype)
+            VALUES ('incident', '{self.UUID_REF}', '2026-07-01T00:00:00Z',
+                    'uuid incident wipe crash',
+                    'Catastrophic wipe of the claude directory during a crash event.',
+                    'shared', '', 'incident')
+        """)
+        conn.commit()
+        conn.close()
+        self.router = _import_router()
+
+    def tearDown(self):
+        os.unlink(self._tmp.name)
+        os.environ.pop('CAST_DB_PATH', None)
+
+    def test_uuid_incident_is_returned(self):
+        """A UUID-ref_id incident must be returned (not crash) when the prompt matches."""
+        results = self.router.retrieve_record_global('wipe crash claude directory', top_n=5)
+        self.assertTrue(len(results) > 0, 'UUID-id incident must be returned, not crash')
+        self.assertEqual(results[0]['kind'], 'incident')
+
+    def test_uuid_incident_has_id_none(self):
+        """UUID ref_id cannot be converted to int → id must be None."""
+        results = self.router.retrieve_record_global('wipe crash claude directory', top_n=5)
+        incidents = [r for r in results if r['kind'] == 'incident']
+        self.assertTrue(len(incidents) > 0, 'Expected at least one incident in results')
+        for inc in incidents:
+            self.assertIsNone(inc['id'],
+                              'UUID-id incident must have id=None (not raise ValueError)')
+
+    def test_uuid_incident_no_injection_log_row(self):
+        """UUID-id incident (id=None) must produce NO injection_log row."""
+        conn = sqlite3.connect(self._tmp.name)
+        before = conn.execute('SELECT COUNT(*) FROM injection_log').fetchone()[0]
+
+        self.router._log_injection(
+            session_id='test-uuid',
+            prompt='wipe crash',
+            fact_id=None,  # what id=None produces
+            score=0.5,
+            score_breakdown_dict={'fts_rank': 0.5, 'kind': 'incident'},
+        )
+
+        after = conn.execute('SELECT COUNT(*) FROM injection_log').fetchone()[0]
+        conn.close()
+        self.assertEqual(after, before,
+                         'No injection_log row for UUID-id incident (id=None)')
+
+    def test_retrieve_returns_list_not_raises(self):
+        """retrieve_record_global must return a list (not raise) even for UUID-id incidents."""
+        try:
+            results = self.router.retrieve_record_global('wipe crash claude directory', top_n=5)
+            self.assertIsInstance(results, list)
+        except (ValueError, TypeError) as exc:
+            self.fail(f'retrieve_record_global raised {type(exc).__name__} on UUID ref_id: {exc}')
 
 
 class TestRetrieveGlobalMainMode(unittest.TestCase):

@@ -255,6 +255,19 @@ def _log_injection(session_id: str, prompt: str, fact_id: int, score: float,
             pass
 
 
+def _safe_int(v) -> int | None:
+    """Convert v to int if possible; return None on TypeError/ValueError.
+
+    Needed because record_fts.ref_id is TEXT and incidents use UUID strings,
+    not integer PK strings. Callers that need an integer id (e.g. injection_log.fact_id
+    which is INTEGER NOT NULL) receive None and skip logging gracefully.
+    """
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def retrieve_record_global(prompt: str, top_n: int = 3) -> list:
     """Global prompt-relevance retrieval over record_fts (memories+incidents+distillates).
 
@@ -312,7 +325,7 @@ def retrieve_record_global(prompt: str, top_n: int = 3) -> list:
             'type': mtype if kind == 'memory' else kind,
             'name': title,
             'content': body,
-            'id': int(ref_id) if kind in ('memory', 'incident') and ref_id is not None else None,
+            'id': _safe_int(ref_id) if kind in ('memory', 'incident') else None,
             'kind': kind,
         })
 
