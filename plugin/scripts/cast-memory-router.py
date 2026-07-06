@@ -255,6 +255,62 @@ def _log_injection(session_id: str, prompt: str, fact_id: int, score: float,
             pass
 
 
+def retrieve_record_global(prompt: str, top_n: int = 3) -> list:
+    """Global prompt-relevance retrieval over record_fts (memories+incidents+distillates).
+
+    Verified gate applies to memories only (they carry confidence/last_validated_at);
+    incidents/distillates are injected on FTS relevance alone. Returns list of dicts:
+    {score, type, name, content, id, kind}. Silent-degrades to [] on any error.
+    """
+    # Guard: sanitize prompt
+    safe_prompt = sanitize_fts_query(prompt)
+    if not safe_prompt:
+        return []
+
+    conn = _connect()
+
+    # Guard: record_fts must exist
+    has_table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='record_fts'"
+    ).fetchone()
+    if not has_table:
+        return []
+
+    sql = """
+        SELECT rf.kind, rf.ref_id, rf.title, rf.body, rf.mtype, rf.rank,
+               am.confidence AS conf, am.last_validated_at AS lva
+        FROM record_fts rf
+        LEFT JOIN agent_memories am
+          ON rf.kind='memory' AND am.id = CAST(rf.ref_id AS INTEGER)
+        WHERE record_fts MATCH ?
+          AND rf.kind IN ('memory','incident','distillate')
+          AND (rf.kind != 'memory' OR (am.confidence >= 0.5 AND am.last_validated_at IS NOT NULL))
+        ORDER BY rf.rank
+        LIMIT ?
+    """
+
+    try:
+        rows = conn.execute(sql, (safe_prompt, top_n)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+    results = []
+    for row in rows:
+        kind, ref_id, title, body, mtype, rank, conf, lva = row
+        # Bounded, monotonic score: 1.0 - 1/(1+|rank|). More negative rank = stronger match = higher score.
+        score = round(1.0 - 1.0 / (1.0 + abs(rank)), 4) if rank is not None else 0.3
+        results.append({
+            'score': score,
+            'type': mtype if kind == 'memory' else kind,
+            'name': title,
+            'content': body,
+            'id': int(ref_id) if kind in ('memory', 'incident') and ref_id is not None else None,
+            'kind': kind,
+        })
+
+    return results
+
+
 def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False, fts_only=False, agent_type=None):
     """Return top-N memories for agent, ranked by relevance. Includes shared pool and user_profile (global) facts.
 
@@ -404,8 +460,8 @@ def main():
                         help='Filter by memory type (retrieve mode)')
     parser.add_argument('--top-n', type=int, default=5,
                         help='Max memories to return in retrieve mode (default: 5)')
-    parser.add_argument('--mode', type=str, default='route', choices=['route', 'retrieve'],
-                        help='route: return best agent; retrieve: return ranked memory list')
+    parser.add_argument('--mode', type=str, default='route', choices=['route', 'retrieve', 'retrieve-global'],
+                        help='route: return best agent; retrieve: return ranked memory list; retrieve-global: record_fts prompt-relevance retrieval')
     parser.add_argument('--history', action='store_true',
                         help='Include superseded (valid_to IS NOT NULL) memories in retrieve mode')
     parser.add_argument('--fts-only', action='store_true', default=False,
@@ -443,21 +499,21 @@ def main():
         if not sys.stdin.isatty():
             prompt = sys.stdin.read().strip()
         else:
-            if args.mode == 'retrieve':
+            if args.mode in ('retrieve', 'retrieve-global'):
                 print(json.dumps([]))
             else:
                 print(null_result)
             return
 
     if not prompt:
-        if args.mode == 'retrieve':
+        if args.mode in ('retrieve', 'retrieve-global'):
             print(json.dumps([]))
         else:
             print(null_result)
         return
 
     if not os.path.exists(db_path):
-        if args.mode == 'retrieve':
+        if args.mode in ('retrieve', 'retrieve-global'):
             print(json.dumps([]))
         else:
             print(null_result)
@@ -470,7 +526,7 @@ def main():
         )
 
         if not table_rows:
-            if args.mode == 'retrieve':
+            if args.mode in ('retrieve', 'retrieve-global'):
                 print(json.dumps([]))
             else:
                 print(null_result)
@@ -520,6 +576,26 @@ def main():
                     },
                 )
 
+            print(json.dumps(output, default=str))
+            return
+
+        # --- RETRIEVE-GLOBAL MODE ---
+        if args.mode == 'retrieve-global':
+            session_id = args.session_id or os.environ.get('CAST_SESSION_ID', '')
+            global_results = retrieve_record_global(prompt, top_n=args.top_n)
+            output = []
+            for d in global_results:
+                output.append(d)
+                _log_injection(
+                    session_id=session_id,
+                    prompt=prompt,
+                    fact_id=d['id'],
+                    score=d['score'],
+                    score_breakdown_dict={
+                        'fts_rank': d.get('score', 0.0),
+                        'kind': d['kind'],
+                    },
+                )
             print(json.dumps(output, default=str))
             return
 
