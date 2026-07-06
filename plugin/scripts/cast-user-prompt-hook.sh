@@ -24,7 +24,8 @@ _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/
 INPUT="$(cat 2>/dev/null || true)"
 
 _CAST_REDACT_SCRIPT="$(dirname "$0")/cast-redact.py"
-CAST_INPUT="$INPUT" _CAST_REDACT_SCRIPT="$_CAST_REDACT_SCRIPT" python3 - <<'PYEOF' || true
+_CAST_ROUTER="${_CAST_ROUTER:-"$(dirname "$0")/cast-memory-router.py"}"
+CAST_INPUT="$INPUT" _CAST_REDACT_SCRIPT="$_CAST_REDACT_SCRIPT" _CAST_ROUTER="$_CAST_ROUTER" python3 - <<'PYEOF' || true
 import json, os
 from datetime import datetime, timezone
 
@@ -118,8 +119,7 @@ except Exception:
 if not prompt_text or len(prompt_text.strip()) < 10:
     raise SystemExit(0)
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-router = os.path.join(script_dir, 'cast-memory-router.py')
+router = os.environ.get("_CAST_ROUTER", "")
 
 if not os.path.isfile(router):
     raise SystemExit(0)

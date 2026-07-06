@@ -225,7 +225,7 @@ memories = [{
 print(json.dumps(memories))
 STUBEOF
 
-  run bash -c 'cd "$1" && bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
+  run bash -c 'cd "$1" && _CAST_ROUTER="$1/cast-memory-router.py" bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
   assert_success
 
   echo "$output" | python3 -c "
@@ -261,7 +261,7 @@ memories = [{"score": 0.8, "type": "reference", "name": "test-fact", "content": 
 print(json.dumps(memories))
 STUBEOF
 
-  run bash -c 'cd "$1" && bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
+  run bash -c 'cd "$1" && _CAST_ROUTER="$1/cast-memory-router.py" bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
   assert_success
 
   echo "$output" | python3 -c "
@@ -293,7 +293,7 @@ memories = [{"score": 0.85, "type": "reference", "name": "breakout-test",
 print(json.dumps(memories))
 STUBEOF
 
-  run bash -c 'cd "$1" && bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
+  run bash -c 'cd "$1" && _CAST_ROUTER="$1/cast-memory-router.py" bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
   assert_success
 
   echo "$output" | python3 -c "
@@ -328,7 +328,7 @@ import json
 print(json.dumps([]))
 STUBEOF
 
-  run bash -c 'cd "$1" && bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
+  run bash -c 'cd "$1" && _CAST_ROUTER="$1/cast-memory-router.py" bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
   assert_success
   refute_output --partial '<memory-recall'
   rm -rf "$tmpdir"
@@ -345,7 +345,7 @@ import sys
 sys.exit(1)
 STUBEOF
 
-  run bash -c 'cd "$1" && bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
+  run bash -c 'cd "$1" && _CAST_ROUTER="$1/cast-memory-router.py" bash "$2" < "$1/input.json"' _ "$tmpdir" "$HOOK_SH"
   assert_success
   refute_output --partial '<memory-recall'
   rm -rf "$tmpdir"
@@ -422,7 +422,7 @@ PYEOF
   input_file="$(mktemp)"
   make_payload "sess-rg-mem" "query about ${distinctive}" > "$input_file"
 
-  run bash -c 'cd "$1" && bash "$2" < "$3"' _ "$REPO_DIR/scripts" "$HOOK_SH" "$input_file"
+  run bash -c 'cd "$1" && bash "$2" < "$3"' _ "$BATS_TMPDIR" "$HOOK_SH" "$input_file"
   assert_success
 
   echo "$output" | python3 -c "
@@ -447,7 +447,7 @@ print('ok')
   input_file="$(mktemp)"
   make_payload "sess-rg-inc" "query about ${distinctive}" > "$input_file"
 
-  run bash -c 'cd "$1" && bash "$2" < "$3"' _ "$REPO_DIR/scripts" "$HOOK_SH" "$input_file"
+  run bash -c 'cd "$1" && bash "$2" < "$3"' _ "$BATS_TMPDIR" "$HOOK_SH" "$input_file"
   assert_success
 
   echo "$output" | python3 -c "
@@ -505,7 +505,7 @@ PYEOF
   input_file="$(mktemp)"
   make_payload "sess-rg-fence" "query about ${distinctive}" > "$input_file"
 
-  run bash -c 'cd "$1" && bash "$2" < "$3"' _ "$REPO_DIR/scripts" "$HOOK_SH" "$input_file"
+  run bash -c 'cd "$1" && bash "$2" < "$3"' _ "$BATS_TMPDIR" "$HOOK_SH" "$input_file"
   assert_success
 
   echo "$output" | python3 -c "
@@ -533,7 +533,7 @@ print('ok')
   input_file="$(mktemp)"
   make_payload "sess-rg-noout" "query about xyzzyb2u3nomatch irrelevant topic" > "$input_file"
 
-  run bash -c 'cd "$1" && bash "$2" < "$3"' _ "$REPO_DIR/scripts" "$HOOK_SH" "$input_file"
+  run bash -c 'cd "$1" && bash "$2" < "$3"' _ "$BATS_TMPDIR" "$HOOK_SH" "$input_file"
   assert_success
   refute_output --partial '<memory-recall'
   rm -f "$input_file"
