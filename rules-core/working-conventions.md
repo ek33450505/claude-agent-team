@@ -62,6 +62,14 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 - `test-runner` (and any process-killing / test-executing agent) MUST run in its OWN sequential batch. It MUST NEVER share a `"parallel": true` batch or a dispatch-group wave with any other agent — most critically the review agents (`code-reviewer`, `security`, `frontend-qa`).
 - Reason: `test-runner`'s suite-timeout/kill path can reap co-scheduled sibling processes — a co-scheduled `code-reviewer` was killed this way on 2026-06-14. Isolating `test-runner` in its own batch keeps the kill blast radius to itself.
 
+## Workflow Authoring (stage model selection)
+`Workflow` stages inherit the **session model (opus) by default** — the tool's own guidance is to omit `model` and let stages inherit. For CAST that default is the dominant cost: `workflow-subagent` runs are **64.6% of all recorded agent cost** (~$5.3K; ~69% opus-by-inheritance at ~$6.56/run — 2026-07-06 agent audit). Choose the model per stage instead:
+- **Mechanical / scout / gather** (file collection, grep/scan, formatting, mechanical transforms) → `model: 'haiku'`.
+- **Analytical middle** (per-item review, single-source synthesis) → `model: 'sonnet'`.
+- **Synthesis / verify / adversarial-judge tops** (final report, refute-a-finding, cross-item ranking) → `model: 'opus'` (or `fable` where breadth helps).
+- Omit `model` (inherit opus) ONLY when the whole workflow is genuinely opus-hard — never let a mechanical fan-out inherit opus. Mirror this for `effort` (`low` for mechanical stages, higher tiers only for the hardest tops).
+- Pin a `label`/stage name when you set a model, so the record can measure the before/after (feeds B5).
+
 ## Irreversibility Interrupts
 - Irreversible/destructive ops that always gate (never run ad hoc): `git push` & force-push, PR/force-merge, schema migration, DB row deletion (prune), destructive `rm -rf`/rmtree, process mass-kill (`pkill`/`killall`), raw `git commit`/`git stash`.
 - Auto-chain rule: hook guards and confirm-pauses protect interactive sessions but are BYPASSED in headless/managed runs and ABSENT in cron/launchd. An irreversible op is auto-chain-safe ONLY via a fail-closed script gate (back-up-or-abort, e.g. `cast-migrate.py`, `cast-db-prune.py`) or an agent text-refusal — never rely on a hook for unattended safety.

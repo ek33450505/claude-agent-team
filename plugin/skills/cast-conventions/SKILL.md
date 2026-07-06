@@ -167,7 +167,7 @@ The Response Budget exists to keep the prose tail intact through the model's out
 **Artifact-first (write before you read):**
 - In your first 1–2 tool calls, produce a *skeleton* of your deliverable — write the target file with placeholder structure, an outline, or a first partial implementation — **then** read and refine. A run that truncates after writing a skeleton leaves a salvageable artifact; a run that truncates mid-exploration leaves nothing.
 - Never spend your first third of turns reading files without emitting output. The failure this prevents: a bash-specialist read 8 files (~95K tokens), wrote nothing, hit maxTurns, and produced zero artifact — a dispatch/orchestration miss, not a turn-cap problem.
-- **Turn budget (self-pace against it):** bash-specialist ≈ 20 turns · researcher ≈ 30 · test-writer/debugger ≈ 50 · code-writer ≈ 80 · most others 15–25. Once you have consumed roughly a third of your turns without a committed artifact (a file on disk or your Status block drafted), stop reading and write a partial draft now.
+- **Turn budget (self-pace against it):** bash-specialist ≈ 30 turns · researcher ≈ 45 · code-reviewer ≈ 40 · docs ≈ 30 · test-writer/debugger ≈ 50 · code-writer ≈ 80 · most others 15–25. Once you have consumed roughly a third of your turns without a committed artifact (a file on disk or your Status block drafted), stop reading and write a partial draft now.
 
 **Deliver incrementally (never one massive response):**
 - Land your deliverable in pieces as you go — file edits, partial drafts, interim Status notes — instead of accumulating everything for a single giant final message. Output-token deaths kill the whole response; incremental delivery caps the blast radius of any one truncation. (I1, /insights 2026-07-02.)
