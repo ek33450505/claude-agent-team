@@ -408,5 +408,81 @@ class TestRetrieveGlobalMainMode(unittest.TestCase):
             self.assertIsInstance(m['id'], int, 'Memory hit must have integer id')
 
 
+class TestOrSemantics(unittest.TestCase):
+    """Blind-spot tests: proves OR semantics, not AND, for multi-term prompts.
+
+    The original implementation passed safe_prompt (space-joined) directly to MATCH,
+    giving implicit AND semantics — so 'settings drift fragment' requires ALL 3 terms
+    in one doc → 0 hits on realistic corpora. These tests pin the OR-join fix.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        self._tmp.close()
+        os.environ['CAST_DB_PATH'] = self._tmp.name
+
+        # Seed: two docs that each contain ONLY ONE of the query terms.
+        # Under AND semantics both would return 0 hits; under OR, each returns its doc.
+        conn = _create_test_db(self._tmp.name)
+        # Passing agent_memory for "partial" doc — only contains "fragment"
+        conn.execute("""
+            INSERT INTO agent_memories (id, agent, type, name, content, confidence, last_validated_at)
+            VALUES (201, 'shared', 'procedural', 'fragment-only memory',
+                    'Fragment of a settings note.', 0.9, '2026-07-01T00:00:00Z')
+        """)
+        conn.execute("""
+            INSERT INTO record_fts (kind, ref_id, ts, title, body, agent, project, mtype)
+            VALUES ('memory', '201', '2026-07-01T00:00:00Z',
+                    'fragment-only memory',
+                    'Fragment of a settings note.',
+                    'shared', '', 'procedural')
+        """)
+        # Passing agent_memory for "drift" doc — only contains "drift"
+        conn.execute("""
+            INSERT INTO agent_memories (id, agent, type, name, content, confidence, last_validated_at)
+            VALUES (202, 'shared', 'procedural', 'drift-only memory',
+                    'Drift detection for managed settings.', 0.9, '2026-07-01T00:00:00Z')
+        """)
+        conn.execute("""
+            INSERT INTO record_fts (kind, ref_id, ts, title, body, agent, project, mtype)
+            VALUES ('memory', '202', '2026-07-01T00:00:00Z',
+                    'drift-only memory',
+                    'Drift detection for managed settings.',
+                    'shared', '', 'procedural')
+        """)
+        conn.commit()
+        conn.close()
+        self.router = _import_router()
+
+    def tearDown(self):
+        os.unlink(self._tmp.name)
+        os.environ.pop('CAST_DB_PATH', None)
+
+    def test_multi_term_prompt_matches_partial_doc(self):
+        """A multi-term prompt matches a doc containing only ONE of the query terms (OR, not AND)."""
+        # "fragment settings drift" — doc 201 has "fragment", doc 202 has "drift"+"settings"
+        # Under AND: 0 hits (no doc has all 3). Under OR: both docs match.
+        results = self.router.retrieve_record_global('fragment settings drift', top_n=5)
+        names = [r['name'] for r in results]
+        self.assertTrue(
+            'fragment-only memory' in names or 'drift-only memory' in names,
+            f'Expected at least one partial-match doc under OR semantics; got: {names}'
+        )
+
+    def test_or_semantics_returns_both_partial_docs(self):
+        """OR-semantics: both single-term docs appear when queried with a multi-term prompt."""
+        results = self.router.retrieve_record_global('fragment drift', top_n=5)
+        names = [r['name'] for r in results]
+        self.assertIn('fragment-only memory', names,
+                      'fragment-only doc must match "fragment drift" under OR')
+        self.assertIn('drift-only memory', names,
+                      'drift-only doc must match "fragment drift" under OR')
+
+    def test_no_match_returns_empty(self):
+        """Prompt with no matching term in any indexed doc → []."""
+        results = self.router.retrieve_record_global('xyzzy plugh frobnicate', top_n=5)
+        self.assertEqual(results, [], 'Unmatched prompt must return []')
+
+
 if __name__ == '__main__':
     unittest.main()

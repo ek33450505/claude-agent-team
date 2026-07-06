@@ -262,10 +262,18 @@ def retrieve_record_global(prompt: str, top_n: int = 3) -> list:
     incidents/distillates are injected on FTS relevance alone. Returns list of dicts:
     {score, type, name, content, id, kind}. Silent-degrades to [] on any error.
     """
-    # Guard: sanitize prompt
+    # Guard: sanitize prompt and build OR-joined MATCH expression.
+    # FTS5 treats bare space-separated terms as implicit AND, which kills realistic
+    # multi-term prompts (e.g. 'settings drift fragment' requires ALL 3 in one doc → 0 hits).
+    # Wrapping each token in double-quotes and OR-joining gives per-token relevance with bm25
+    # ranking, while also neutralising any token that is an FTS5 reserved word (AND/OR/NOT/NEAR).
     safe_prompt = sanitize_fts_query(prompt)
     if not safe_prompt:
         return []
+    tokens = safe_prompt.split()
+    if not tokens:
+        return []
+    fts_match = ' OR '.join(f'"{t}"' for t in tokens)
 
     conn = _connect()
 
@@ -290,7 +298,7 @@ def retrieve_record_global(prompt: str, top_n: int = 3) -> list:
     """
 
     try:
-        rows = conn.execute(sql, (safe_prompt, top_n)).fetchall()
+        rows = conn.execute(sql, (fts_match, top_n)).fetchall()
     except sqlite3.OperationalError:
         return []
 
