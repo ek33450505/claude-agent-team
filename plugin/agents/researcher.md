@@ -7,7 +7,7 @@ description: >
 tools: Read, Write, Bash, Glob, Grep, WebFetch, WebSearch
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
-maxTurns: 30
+maxTurns: 45
 skills: [cast-conventions, stack-reference]
 ---
 

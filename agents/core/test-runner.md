@@ -142,7 +142,7 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 - Files API is optional: only use if `CAST_FILES_API=1` is set in environment
 - **Post-run truncation check:** After every BATS run, query cast.db for recent truncation events:
   ```bash
-  sqlite3 ~/.claude/cast.db "SELECT COUNT(*) FROM agent_truncations WHERE agent='test-runner' AND created_at > datetime('now','-1 hour');" 2>/dev/null || true
+  sqlite3 ~/.claude/cast.db "SELECT COUNT(*) FROM agent_truncations WHERE agent_type='test-runner' AND timestamp > datetime('now','-1 hour');" 2>/dev/null || true
   ```
   If count > 0, report as a concern in your Status block.
 

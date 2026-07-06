@@ -111,16 +111,16 @@ gh pr list --author "@me" --state open --json title,repository,url,createdAt \
 **3c. Yesterday's CAST spend** — query cast.db:
 ```bash
 sqlite3 ~/.claude/cast.db \
-  "SELECT printf('Sessions: %d | Tokens: %d | Cost: $%.4f',
-    COUNT(*), SUM(total_tokens), SUM(total_cost))
-   FROM sessions
+  "SELECT printf('Runs: %d | Tokens: %d | Cost: $%.4f',
+    COUNT(*), COALESCE(SUM(input_tokens+output_tokens),0), COALESCE(SUM(cost_usd),0))
+   FROM agent_runs
    WHERE DATE(started_at) = DATE('now', '-1 day');" 2>/dev/null
 ```
 
 **3d. Unresolved BLOCKED agents** — any stuck tasks:
 ```bash
 sqlite3 ~/.claude/cast.db \
-  "SELECT agent || ': ' || COALESCE(result_summary,'no detail')
+  "SELECT agent || ': ' || COALESCE(task,'no detail')
    FROM task_queue
    WHERE status = 'failed' AND DATE(created_at) >= DATE('now', '-3 days')
    LIMIT 5;" 2>/dev/null

@@ -44,7 +44,7 @@ Fail ANY condition → the standard ceremony applies (dispatch the specialist + 
 
 ## Agent Turn Limits (maxTurns)
 - Every CAST agent has a `maxTurns` frontmatter cap (natively enforced by Claude Code). Hitting it stops the agent SILENTLY mid-task: no Status/Handoff block, no SubagentStop hook fire, and the `agent_runs` row stays stuck in `running` (discovered 2026-06-10, crosscheck_2.0 help-docs migration).
-- A SendMessage resume grants a fresh turn budget — but scope dispatch prompts to fit the cap instead of relying on resumes. Implementation class: code-writer 80, test-writer 50, debugger 50; most others 15–25.
+- A SendMessage resume grants a fresh turn budget — but scope dispatch prompts to fit the cap instead of relying on resumes. Caps are data-fit to each agent's truncation rate (B4 retune 2026-07-06): reviewers/researchers that truncate mid-output run higher (code-reviewer 40, researcher 45, docs 30); implementers stay scoped (code-writer 80, test-writer 50, debugger 50); most others 15–25.
 - Symptom of a hit cap: agent's final message ends mid-sentence (e.g. "Now let me run the tests:") with no Status line. Treat as truncation, not completion — never relay it as done.
 - For tasks that legitimately need more turns (large migrations, multi-file sweeps), split into smaller dispatches rather than raising caps further — the cap is a runaway-loop guard.
 
@@ -52,7 +52,7 @@ Fail ANY condition → the standard ceremony applies (dispatch the specialist + 
 The 95K-token zero-yield burn (a bash-specialist read 8 files, wrote nothing, hit maxTurns) was an *authoring* failure, not a cap failure. Every dispatch MUST give the agent enough inlined context to start producing output immediately:
 - **Inline the context, don't defer it.** Paste the exact `file:line` anchors / snippets / old→new strings the agent needs — never "study/read these N files first." If the agent would need to read 4+ files just to begin, compress that context into the prompt before dispatch.
 - **Demand artifact-first.** "Write a skeleton of the deliverable in your first 1–2 tool calls, then refine" — so a truncated run leaves a salvageable artifact, never zero output.
-- **Scope to the turn cap.** One logical unit per dispatch, sized to the agent's maxTurns (bash-specialist 20, code-writer 80). Split big bites; never rely on a resume.
+- **Scope to the turn cap.** One logical unit per dispatch, sized to the agent's maxTurns (bash-specialist 30, code-writer 80). Split big bites; never rely on a resume.
 Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention: artifact-first + read-before-write refusal).
 - **Scope the commit agent explicitly.** Every `commit` dispatch lists the exact files to stage AND states "exclude everything else" — the agent stages nothing outside the list. An unscoped dispatch swept `docs/decision-log.md` into an unrelated commit (LF-5, 2026-07-01).
 - **Per-unit review gates need per-unit diffs.** When multiple units' uncommitted work coexists, scope each `code-reviewer` dispatch to the unit's files (or commit prior units first) — a reviewer shown the whole tree false-BLOCKs on other units' legitimate work (LF-9, 2026-07-01).
@@ -61,6 +61,14 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 ## Parallel Dispatch
 - `test-runner` (and any process-killing / test-executing agent) MUST run in its OWN sequential batch. It MUST NEVER share a `"parallel": true` batch or a dispatch-group wave with any other agent — most critically the review agents (`code-reviewer`, `security`, `frontend-qa`).
 - Reason: `test-runner`'s suite-timeout/kill path can reap co-scheduled sibling processes — a co-scheduled `code-reviewer` was killed this way on 2026-06-14. Isolating `test-runner` in its own batch keeps the kill blast radius to itself.
+
+## Workflow Authoring (stage model selection)
+`Workflow` stages inherit the **session model (opus) by default** — the tool's own guidance is to omit `model` and let stages inherit. For CAST that default is the dominant cost: `workflow-subagent` runs are **64.6% of all recorded agent cost** (~$5.3K; ~69% opus-by-inheritance at ~$6.56/run — 2026-07-06 agent audit). Choose the model per stage instead:
+- **Mechanical / scout / gather** (file collection, grep/scan, formatting, mechanical transforms) → `model: 'haiku'`.
+- **Analytical middle** (per-item review, single-source synthesis) → `model: 'sonnet'`.
+- **Synthesis / verify / adversarial-judge tops** (final report, refute-a-finding, cross-item ranking) → `model: 'opus'` (or `fable` where breadth helps).
+- Omit `model` (inherit opus) ONLY when the whole workflow is genuinely opus-hard — never let a mechanical fan-out inherit opus. Mirror this for `effort` (`low` for mechanical stages, higher tiers only for the hardest tops).
+- Pin a `label`/stage name when you set a model, so the record can measure the before/after (feeds B5).
 
 ## Irreversibility Interrupts
 - Irreversible/destructive ops that always gate (never run ad hoc): `git push` & force-push, PR/force-merge, schema migration, DB row deletion (prune), destructive `rm -rf`/rmtree, process mass-kill (`pkill`/`killall`), raw `git commit`/`git stash`.

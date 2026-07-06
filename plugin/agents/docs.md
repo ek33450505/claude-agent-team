@@ -10,7 +10,7 @@ keywords: [readme, docs, documentation, email, draft email, compose email, reply
 tools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, Agent
 model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────
-maxTurns: 20
+maxTurns: 30
 skills: [git-activity, cast-conventions]
 ---
 
