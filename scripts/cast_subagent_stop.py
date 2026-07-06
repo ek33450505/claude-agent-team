@@ -167,6 +167,68 @@ def compute_successors(agent_name: str, event_type: str) -> List[str]:
         return []
 
 
+# ── File-class classifier (F2) ───────────────────────────────────────────────
+def classify_files(paths: list) -> str:
+    """Return the highest-severity class present across all edited file paths.
+
+    Precedence (first match per file wins), rank taken across all files:
+      enforcement (5) > test (4) > code (3) > config (2) > docs (1) > other (0)
+
+    Returns "" for an empty list. Defensive: skips non-str entries.
+    """
+    _RANKS = {
+        "enforcement": 5,
+        "test": 4,
+        "code": 3,
+        "config": 2,
+        "docs": 1,
+        "other": 0,
+    }
+    max_rank = -1
+    max_label = ""
+    for p in paths:
+        if not isinstance(p, str):
+            continue
+        base = os.path.basename(p)
+        # enforcement: protected paths / install / guard/hook in name
+        if (
+            "/scripts/" in p
+            or "/bin/" in p
+            or "/hooks/" in p
+            or "/.githooks/" in p
+            or "/migrations/" in p
+            or "managed-settings" in p
+            or "config/policies" in p
+            or "config/egress" in p
+            or base in ("install.sh",)
+            or base.startswith("cast-db-init")
+            or "guard" in base
+            or "hook" in base
+        ):
+            label = "enforcement"
+        elif (
+            "/tests/" in p
+            or "test_" in p
+            or p.endswith(".bats")
+            or re.search(r"\.test\.[^.]+$", p)
+            or re.search(r"\.spec\.[^.]+$", p)
+        ):
+            label = "test"
+        elif p.endswith((".py", ".js", ".ts", ".tsx", ".jsx", ".sh", ".rb", ".go")):
+            label = "code"
+        elif p.endswith((".json", ".yaml", ".yml", ".toml")):
+            label = "config"
+        elif p.endswith((".md", ".txt")) or "/docs/" in p:
+            label = "docs"
+        else:
+            label = "other"
+        rank = _RANKS[label]
+        if rank > max_rank:
+            max_rank = rank
+            max_label = label
+    return max_label
+
+
 # ── Parse-once context ───────────────────────────────────────────────────────
 class Ctx:
     """Holds the once-parsed payload + one-time classification for every stage."""
@@ -182,6 +244,8 @@ class Ctx:
         self.has_turn_ceiling: bool = False
         self.duration_ms: int = 0
         self.tool_uses: int = 0
+        self.edited_files: list = []
+        self.file_class: str = ""
         self.cache_read: Optional[int] = None
         self.cache_create: Optional[int] = None
         self.branch: Optional[str] = None
@@ -508,6 +572,7 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             total_cache_read = 0
             total_cache_create = 0
             total_tool_uses = 0
+            edited = set()
             found_usage = False
 
             with open(transcript_path, "r", errors="replace") as f:
@@ -525,6 +590,13 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                         for _blk in _content:
                             if isinstance(_blk, dict) and _blk.get("type") == "tool_use":
                                 total_tool_uses += 1
+                                _name = _blk.get("name")
+                                if _name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+                                    _inp = _blk.get("input") or {}
+                                    _key = "notebook_path" if _name == "NotebookEdit" else "file_path"
+                                    _fpath = _inp.get(_key)
+                                    if isinstance(_fpath, str) and _fpath:
+                                        edited.add(_fpath)
                     usage = msg.get("usage") if isinstance(msg.get("usage"), dict) else obj.get("usage")
                     if not isinstance(usage, dict):
                         continue
@@ -550,6 +622,10 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                 # content blocks are the only source. Mirrors the cache-token override above.
                 if total_tool_uses > 0:
                     tool_uses = total_tool_uses
+
+                # F2: collect edited file paths and derive severity class.
+                ctx.edited_files = sorted(edited)
+                ctx.file_class = classify_files(ctx.edited_files)
 
                 # Load pricing table
                 rate_in = 3.0
@@ -607,6 +683,8 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             ("tool_uses", "INTEGER"),
             ("response", "TEXT"),
             ("branch", "TEXT"),
+            ("files", "TEXT"),
+            ("file_class", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {col} {coltype}")
@@ -622,6 +700,8 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
     # FIFO: oldest started row of this type is the one that just finished first.
     # cost_usd, input_tokens, output_tokens, model are written atomically in the same UPDATE.
     agent_id = ctx.agent_id
+    files_val = json.dumps(ctx.edited_files) if ctx.edited_files else None
+    file_class_val = ctx.file_class or None
     for attempt in range(3):
         try:
             conn = sqlite3.connect(db, timeout=5)
@@ -635,10 +715,12 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
-                    "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=? "
+                    "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
+                    "files=?, file_class=? "
                     "WHERE id=?",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
-                     cost_usd, input_tokens, output_tokens, transcript_model, branch, fast_row_id),
+                     cost_usd, input_tokens, output_tokens, transcript_model, branch,
+                     files_val, file_class_val, fast_row_id),
                 )
             elif agent_id:
                 cur.execute(
@@ -646,12 +728,14 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
-                    "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=? "
+                    "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
+                    "files=?, file_class=? "
                     "WHERE id=("
                     "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
-                     cost_usd, input_tokens, output_tokens, transcript_model, branch, agent_id),
+                     cost_usd, input_tokens, output_tokens, transcript_model, branch,
+                     files_val, file_class_val, agent_id),
                 )
             else:
                 cur.execute(
@@ -659,12 +743,14 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "duration_ms=CAST((julianday(replace(replace(?,'T',' '),'Z','')) - julianday(replace(replace(started_at,'T',' '),'Z',''))) * 86400000 AS INTEGER), "
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
-                    "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=? "
+                    "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
+                    "files=?, file_class=? "
                     "WHERE id=("
                     "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
-                     cost_usd, input_tokens, output_tokens, transcript_model, branch, agent, sess),
+                     cost_usd, input_tokens, output_tokens, transcript_model, branch,
+                     files_val, file_class_val, agent, sess),
                 )
             rows_affected = conn.execute("SELECT changes()").fetchone()[0]
             conn.commit()

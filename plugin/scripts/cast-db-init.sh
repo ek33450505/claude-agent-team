@@ -253,6 +253,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   cache_creation_input_tokens INTEGER,
   duration_ms     INTEGER,
   tool_uses       INTEGER,
+  files           TEXT,
+  file_class      TEXT,
   abandoned_at    TIMESTAMP,
   branch          TEXT
 );
@@ -478,6 +480,18 @@ fi
 # Check if response column exists (migration 011 — agent response capture)
 if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*	response	"; then
   sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+  _columns_added=1
+fi
+
+# Check if files column exists (F2 — edited file paths per agent run)
+if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*	files	"; then
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN files TEXT;" 2>/dev/null || true
+  _columns_added=1
+fi
+
+# Check if file_class column exists (F2 — severity label derived from edited files)
+if ! sqlite3 "$DB_PATH" "PRAGMA table_info(agent_runs);" 2>/dev/null | grep -q "^[0-9].*	file_class	"; then
+  sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN file_class TEXT;" 2>/dev/null || true
   _columns_added=1
 fi
 

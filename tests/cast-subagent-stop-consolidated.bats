@@ -457,3 +457,119 @@ print(json.dumps({
   # Must be 3 (from transcript), not 0 (payload default before this fix).
   [[ "$tool_uses" -eq 3 ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 9: transcript edited files — stage2_transcript_cost populates files + file_class
+#
+# F2: when the transcript contains Edit/Write tool_use blocks, stage 2 extracts
+# the file_path values, stores them as a JSON array in agent_runs.files, and
+# derives a severity class in agent_runs.file_class.  A .py + .md → "code" wins.
+# ---------------------------------------------------------------------------
+
+@test "consolidated: transcript edited files — files and file_class populated from transcript Edit/Write blocks" {
+  local sess_id="sess-transcript-files"
+  local agent_id="aid-transcript-files-001"
+
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO agent_runs (agent, session_id, agent_id, status, started_at)
+     VALUES ('test-agent','$sess_id','$agent_id','running','2026-01-01T00:00:00Z');"
+
+  local transcript_dir="$HOME/.claude/projects/test-proj/$sess_id/subagents"
+  mkdir -p "$transcript_dir"
+  local transcript_file="$transcript_dir/agent-$agent_id.jsonl"
+
+  # Two Edit blocks (distinct file_paths), one Write block (same .py file), one Bash (no file).
+  # Use printf to avoid BATS @test heredoc line-rewrite gotcha.
+  printf '%s\n' \
+    '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":"/repo/src/foo.py","old_string":"a","new_string":"b"}}],"usage":{"input_tokens":100,"output_tokens":20}}}' \
+    '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"e2","name":"Write","input":{"file_path":"/repo/docs/README.md","content":"x"}}],"usage":{"input_tokens":50,"output_tokens":10}}}' \
+    '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"e3","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":30,"output_tokens":5}}}' \
+    > "$transcript_file"
+
+  local payload
+  payload="$(python3 -c "
+import json, sys
+print(json.dumps({
+    'agent_type':             'test-agent',
+    'session_id':             sys.argv[1],
+    'agent_id':               sys.argv[2],
+    'stop_reason':            'end_turn',
+    'last_assistant_message': 'Status: DONE\nSummary: task done.',
+}))
+" "$sess_id" "$agent_id")"
+
+  run env CAST_DB_PATH="$TEST_DB" CAST_HOOK_DIR="$REPO_DIR/scripts" \
+    CAST_STOP_INPUT="$payload" \
+    python3 "$PY_MOD"
+
+  assert_success
+
+  local files_json file_class
+  files_json="$(sqlite3 "$TEST_DB" \
+    "SELECT files FROM agent_runs WHERE agent_id='$agent_id';")"
+  file_class="$(sqlite3 "$TEST_DB" \
+    "SELECT file_class FROM agent_runs WHERE agent_id='$agent_id';")"
+
+  # Both edited paths must appear in the JSON array.
+  [[ "$files_json" == *"foo.py"* ]]
+  [[ "$files_json" == *"README.md"* ]]
+  # .py is "code" (rank 3), .md is "docs" (rank 1) → highest = "code".
+  [[ "$file_class" == "code" ]]
+}
+
+# ---------------------------------------------------------------------------
+# Test 10: classify_files unit assertions (pure-function, no DB required)
+# ---------------------------------------------------------------------------
+
+@test "consolidated: classify_files — enforcement wins over test and code" {
+  run python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts')
+from cast_subagent_stop import classify_files
+# scripts/ path → enforcement
+r = classify_files(['/repo/x/scripts/h.py'])
+assert r == 'enforcement', f'expected enforcement, got {r!r}'
+# .bats → test
+r2 = classify_files(['/repo/tests/a.bats'])
+assert r2 == 'test', f'expected test, got {r2!r}'
+# .md → docs
+r3 = classify_files(['a.md'])
+assert r3 == 'docs', f'expected docs, got {r3!r}'
+print('ok')
+"
+  assert_success
+  assert_output 'ok'
+}
+
+@test "consolidated: classify_files — mixed paths yield highest-rank class" {
+  run python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts')
+from cast_subagent_stop import classify_files
+# mix: docs + enforcement → enforcement
+r = classify_files(['a.md', '/repo/x/scripts/h.py'])
+assert r == 'enforcement', f'expected enforcement, got {r!r}'
+# mix: docs + test → test
+r2 = classify_files(['README.md', '/proj/tests/foo.test.ts'])
+assert r2 == 'test', f'expected test, got {r2!r}'
+print('ok')
+"
+  assert_success
+  assert_output 'ok'
+}
+
+@test "consolidated: classify_files — empty list returns empty string" {
+  run python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts')
+from cast_subagent_stop import classify_files
+r = classify_files([])
+assert r == '', f'expected empty string, got {r!r}'
+# Non-str entries skipped defensively
+r2 = classify_files([None, 42, 'a.json'])
+assert r2 == 'config', f'expected config, got {r2!r}'
+print('ok')
+"
+  assert_success
+  assert_output 'ok'
+}
