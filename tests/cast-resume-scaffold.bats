@@ -15,6 +15,7 @@
 #   7. gh failure → still exit 0, still writes file with commit data + note.
 #   8. --dry-run prints markdown to stdout, writes NO file.
 #   9. Not-a-git repo → exit 0, no crash, no file.
+#  10. Newest plan that self-declares SUPERSEDED is skipped for the current one.
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -201,4 +202,28 @@ EOF
   run python3 "$SCRIPT" --repo "$notrepo" --out-dir "$OUT_DIR" --now "$FIXED_NOW"
   assert_success
   [ ! -f "$OUT_DIR/2026-07-05-notarepo-auto.md" ]
+}
+
+# ---------------------------------------------------------------------------
+# 10. SUPERSEDED plan skip — newest self-superseded plan is NOT chosen as seed
+# ---------------------------------------------------------------------------
+
+@test "section 5 / 8 skip a self-declared SUPERSEDED plan for the current one" {
+  # A NEWER plan that self-declares SUPERSEDED must be skipped; the OLDER
+  # unmarked plan must win. Both are committed so they don't surface in §3's
+  # uncommitted list (which would false-positive the negative grep below).
+  # Year-2099 mtimes keep both newer than setup's some-plan.md regardless of
+  # wall-clock time; `touch -t CCYYMMDDhhmm` is portable across BSD + GNU.
+  printf '# Current plan\n' > "$FIXTURE_REPO/plans/current-plan.md"
+  printf '> **⛔ SUPERSEDED by newer**\n' > "$FIXTURE_REPO/plans/old-superseded.md"
+  git -C "$FIXTURE_REPO" add plans/current-plan.md plans/old-superseded.md
+  git -C "$FIXTURE_REPO" commit -q -m "Add current + superseded plans"
+  touch -t 209901010000 "$FIXTURE_REPO/plans/current-plan.md"    # older
+  touch -t 209901020000 "$FIXTURE_REPO/plans/old-superseded.md"  # newer
+
+  run_scaffold
+  assert_success
+  local f="$OUT_DIR/$OUT_FILE_NAME"
+  grep -q "current-plan.md" "$f"
+  ! grep -q "old-superseded.md" "$f"
 }

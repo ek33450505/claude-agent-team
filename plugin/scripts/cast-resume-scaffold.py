@@ -90,8 +90,29 @@ def _default_branch(repo: str) -> str:
     return "main"
 
 
+def _is_superseded(path: str) -> bool:
+    """True if the plan's header declares itself SUPERSEDED (skip as a seed).
+
+    Matches 'superseded' case-insensitively (the passive status marker) but NOT
+    'supersedes' — the active verb the *current* plan uses to point at the old
+    one. 'supersedes' does not contain the substring 'superseded' (…sede+s vs
+    …sede+d), so a plain lowercase substring test discriminates correctly.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            head = "".join(fh.readline() for _ in range(10))
+    except OSError:
+        return False
+    return "superseded" in head.lower()
+
+
 def _newest_plan(repo: str) -> Optional[str]:
-    """Return the basename of the newest *.md under <repo>/plans, or None."""
+    """Return the basename of the newest non-superseded *.md under <repo>/plans, or None.
+
+    Ranks candidates by mtime (newest first) and returns the first whose header
+    does not self-declare SUPERSEDED; if every plan is superseded, falls back to
+    the newest (a stale seed beats no seed).
+    """
     plans_dir = os.path.join(repo, "plans")
     if not os.path.isdir(plans_dir):
         return None
@@ -107,10 +128,14 @@ def _newest_plan(repo: str) -> Optional[str]:
     if not candidates:
         return None
     try:
-        newest = max(candidates, key=os.path.getmtime)
+        candidates.sort(key=os.path.getmtime, reverse=True)
     except OSError:
         return None
-    return os.path.basename(newest)
+    for path in candidates:
+        if not _is_superseded(path):
+            return os.path.basename(path)
+    # All plans self-declare superseded — a stale seed beats no seed.
+    return os.path.basename(candidates[0])
 
 
 def _prior_resume(out_dir: str, slug: str, target_name: str) -> str:

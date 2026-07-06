@@ -65,17 +65,28 @@ if [[ ! -t 0 ]]; then
     _INPUT="$(cat 2>/dev/null || true)"
   fi
 fi
-_STDIN_SESSION_ID="$(CAST_INPUT="${_INPUT}" python3 -c "
-import json, os, sys
-raw = os.environ.get('CAST_INPUT', '')
+# Parse session_id + cwd from the captured stdin JSON in a SINGLE python
+# invocation (one interpreter cold-start, not two — stays within the
+# cold-start lint budget). Emits exactly two lines: session_id then cwd
+# (either may be empty); an unparseable payload yields two empty lines.
+_STDIN_FIELDS="$(CAST_INPUT="${_INPUT}" python3 -c "
+import json, os
+sid = cwd = ''
 try:
-    d = json.loads(raw)
-    v = d.get('session_id', '')
-    if v:
-        print(v)
+    d = json.loads(os.environ.get('CAST_INPUT', ''))
+    sid = d.get('session_id', '') or ''
+    cwd = d.get('cwd', '') or ''
 except Exception:
     pass
+print(sid)
+print(cwd)
 " 2>/dev/null || true)"
+_STDIN_SESSION_ID=""
+_STDIN_CWD=""
+if [[ -n "$_STDIN_FIELDS" ]]; then
+  # set +e is in effect (see top); the second read hitting EOF is harmless.
+  { IFS= read -r _STDIN_SESSION_ID; IFS= read -r _STDIN_CWD; } <<< "$_STDIN_FIELDS"
+fi
 
 if [[ -n "${_STDIN_SESSION_ID:-}" ]]; then
   SESSION_ID="${_STDIN_SESSION_ID}"
@@ -440,6 +451,18 @@ if matches:
       >> "${HOME}/.claude/logs/distiller.log" 2>&1 || \
       _log_error "cast-session-end: distiller failed for $_TRANSCRIPT_PATH"
   fi
+fi
+
+# === RESUME SCAFFOLD — deterministic floor for next-session resume (B1) ===
+# Writes ~/.claude/resume-prompts/<date>-<repo>-auto.md from git/gh ground truth.
+# Repo resolved from stdin cwd (fallback $PWD); the scaffold self-guards non-repos
+# and is exit-0 hook-safe. Idempotent per day (overwrites the same-day file).
+SCAFFOLD="${HOME}/.claude/scripts/cast-resume-scaffold.py"
+if [[ -f "$SCAFFOLD" ]]; then
+  _REPO_CWD="${_STDIN_CWD:-$PWD}"
+  python3 "$SCAFFOLD" --repo "$_REPO_CWD" \
+    >> "${HOME}/.claude/logs/resume-scaffold.log" 2>&1 || \
+    _log_error "cast-session-end: resume-scaffold failed for $_REPO_CWD"
 fi
 
 # === TEMP FILE CLEANUP ===
