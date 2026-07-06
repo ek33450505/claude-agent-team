@@ -7,16 +7,16 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-9.2.0-blue)
 ![Agents](https://img.shields.io/badge/agents-23-green)
-![Tests](https://img.shields.io/badge/tests-2152-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2247-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)
 
-> **CAST v9 — "The record that acts."** Claude Code keeps a transcript. CAST keeps a **record** — a complete, local, inspectable SQLite trail (<!-- CAST_DB_TABLE_COUNT -->39<!-- /CAST_DB_TABLE_COUNT --> typed governance tables at `~/.claude/cast.db`) — and then *uses* it: it predicts your next dispatch, recalls the incident you're about to re-cause, attributes your spend per task, and gates your commits. A governance layer built entirely on Claude Code's native primitives — hooks, subagents, skills, permissions, MCP — with <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents that plan, implement, review, test, and commit. Raw `git commit` and `git push` are hard-blocked; every dispatch is logged. **The record is the product.**
+> **CAST v9 — "The record that acts."** Claude Code keeps a transcript. CAST keeps a **record** — a complete, local, inspectable SQLite trail (<!-- CAST_DB_TABLE_COUNT -->39<!-- /CAST_DB_TABLE_COUNT --> typed governance tables at `~/.claude/cast.db`) — and then *uses* it: it predicts your next dispatch, recalls the incident you're about to re-cause, attributes your spend per task, and gates your commits. A governance layer built entirely on Claude Code's native primitives — hooks, subagents, skills, permissions, MCP — with <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents that plan, implement, review, test, and commit. Raw `git commit` and `git push` are **hard-blocked** by hooks; every dispatch is recorded. **The record is the product.** Not the agents, not the prompts — the enforcement and the data sovereignty. Every agent failure, every code review, every truncation is captured and usable. The system is honest about its own limits.
 
 **[CAST Framework](https://castframework.dev)** · *Keep using Anthropic's native tools. Own the record.*
 
-CAST is the system I'd want if I were building production software with Claude Code every day — so I built it, broke it, and hardened it until it earned trust. The hard part wasn't wiring agents together; it was making the platform **honest** (it tells you when work is unverified) and **safe** (it cannot delete its own runtime). Those scars became invariants: Pillar 2 — data integrity — was earned through repeated full `~/.claude` wipes, including one that took out the colocated backups with it. The engineering response *is* the story: backups moved outside the failure domain (continuous Litestream replication + dated snapshots to `~/Library`), the wipe canary relocated off the blast radius so forensics survive the event that triggers them, and a PreToolUse command-guard plus write-guards that make `rm -rf ~/.claude` or a machine-wide `pkill` structurally impossible from an agent.
+CAST is the system I'd want if I were building production software with Claude Code every day — so I built it, broke it, and hardened it until it earned trust. The hard part wasn't wiring agents together; it was making the platform **honest** (it tells you when work is unverified) and **safe** (it cannot delete its own runtime). Those lessons came from real incidents: a full `~/.claude` wipe (twice) that took out colocated backups, a destructive BATS test that ran `rm -rf` from the repo root unguarded, silent hook failures that ate data without trace. Each incident became an invariant in code: backups live outside the failure domain (Litestream replication to `~/Library`, off the `~/.claude` blast radius); the wipe forensics canary runs from an isolated path so it survives what it detects; a PreToolUse command-guard makes `rm -rf ~/.claude` and `pkill` structurally impossible from an agent; every test runs in a temp HOME, never the real one; and when a hook fails, it records that failure in the `hook_failures` table instead of eating the error silently.
 
 Where Claude Code ships a native primitive, CAST **adopts it and deletes the bespoke version** (language rules became on-demand skills; heavy planning yields to native plan mode for single-session work; the whole thing ships as a **native plugin**). Where the platform still has a gap, CAST fills it: a fresh-context `code-reviewer` gate (the Writer/Reviewer pattern, mandatory here), an honesty/verification doctrine (`DONE_WITH_CONCERNS`, a typed Handoff contract, a Pre-existing-Failure-Evidence rule), an **eval harness mined from real agent failures**, and — new in v9 — a record that reads back: `cast cost`, `cast predict`, `cast ask`, `cast feature`, and a read-only `cast mcp` server over the whole trail.
 
@@ -69,13 +69,23 @@ The plugin bundles CAST's curated agents, skills, commands, and `command`-type e
 
 ## Why CAST
 
-- **The record acts, it doesn't just accumulate.** `cast predict` surfaces "you've routed work like this before — here's how it went"; `cast ask` recalls prior incidents; `cast cost --by-task` attributes spend; the commit gate reads the review record before it lets a change land. Most observability is write-only — CAST closes the loop.
-- **Local-first by construction.** Your code, prompts, memory, and the full audit trail (`cast.db`, SQLite) live on your disk. No SaaS dashboard, no telemetry egress, no "sign in to use it." Every cloud feature is strictly opt-in.
-- **Data integrity by construction.** Backups live outside the blast radius; the failure detector lives outside it too; CAST cannot delete its own runtime. Born from real `~/.claude` wipes.
-- **Quality gates that actually enforce.** Raw `git commit` and `git push` are hard-blocked by hooks. Code changes mandate a fresh-context reviewer pass. You cannot skip this.
-- **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents, pre-configured.** Each has a bounded scope and a model tier (haiku 4.5 / sonnet / opus). `code-writer` implements; `code-reviewer` reviews; `commit` commits. They don't cross lanes.
+**The fundamental insight:** observability systems produce data, but data alone is powerless. The record only matters when it *acts* — when it changes the next decision. CAST inverts the typical observability stack: instead of "instrument → ship data → hope someone reads a dashboard," CAST implements "record → query → inject → enforce." Every dispatch, every code review, every truncation, every agent hallucination lands in a typed SQLite schema at `~/.claude/cast.db`. That record is not a logbook — it is the control plane.
+
+**Enforcement that actually bites:**
+- Raw `git commit` and `git push` are **hard-blocked** by PreToolUse hooks (`scripts/cast-git-guard.py`). No honor system, no flags you can ignore. Commits route through a `commit` agent that records provenance; a pre-push gate audits that every commit traces to a recorded session.
+- Code changes mandate a fresh-context `code-reviewer` gate — you cannot merge without it. The mandatory Writer/Reviewer separation is enforced in the agent registry, not in your discipline.
+- Destructive operations (`rm -rf` of tracked roots, `pkill` of protected processes) are blocked by a command-guard in PreToolUse, with path-tier specificity that native glob permissions cannot express.
+
+**The system audits itself:**
+- A `SubagentStop` hook runs on every agent completion, parsing the typed `## Handoff` contract, detecting truncations (agents cut off mid-task get flagged, not silently relayed as done), checking `claimed_work` against actual file changes via `cast_claimed_work_verifier.py`, and recording its findings in `agent_hallucinations` and `agent_truncations` tables. The system records *its own failures*.
+- `cast doctor` surfaces the honest verdict: collected-but-unread observability tables (a 50-row `incidents` table with zero `cast ask` queries is NOT "all green"), fresh/stale backups, decoder/canary health, writable evidence paths. No false-green.
+
+**Concrete capabilities:**
+- **<!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> specialist agents** — `code-writer`, `code-reviewer`, `debugger`, `planner`, `test-writer`, `commit`, `push`, and 16 others. Each has a bounded scope and model tier (Haiku 4.5 / Sonnet / Opus). They don't cross lanes.
+- **The record acts:** `cast predict` joins past outcomes to agent cost/success rates; `cast ask` runs full-text search over the whole record; `cast cost --by-task` attributes spend per unit of work; the pre-push gate reads `quality_gates` to enforce review.
+- **Local-first by construction.** Your code, prompts, memory, and the full audit trail live on your disk. No SaaS dashboard, no telemetry egress, no sign-in. Every cloud feature is strictly opt-in — a CAST user with no network still has a fully working system.
 - **Agent behavior is tested, not hoped for.** The `cast eval` harness runs an agent-behavior corpus mined from real failures — with LLM-judge graders and `pass@k`.
-- **<!-- CAST_TEST_COUNT -->2152<!-- /CAST_TEST_COUNT --> BATS test cases** across the hook and utility layer. CI runs on macOS and Ubuntu.
+- **<!-- CAST_TEST_COUNT -->2247<!-- /CAST_TEST_COUNT --> BATS test cases** proving the guards work — including tests that *prove destructive ops refuse*. Runs on macOS and Ubuntu.
 
 ---
 
@@ -256,7 +266,7 @@ Runtime installs to `~/.claude/` — agents, memory, plans, `cast.db`, scripts.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->194<!-- /CAST_TEST_FILE_COUNT --> CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->2152<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
+<!-- CAST_TEST_FILE_COUNT -->196<!-- /CAST_TEST_FILE_COUNT --> CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->2247<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
 
 ---
 
@@ -323,6 +333,6 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->23<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->2152<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->2247<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> skills

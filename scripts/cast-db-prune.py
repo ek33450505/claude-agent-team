@@ -35,19 +35,29 @@ Retention:
   The OTLP feed is high-volume and low-half-life, so it defaults to a tighter
   window. Set either lower to prune more aggressively, higher to retain more.
 
-Exit: 0 on success or non-destructive skip (backup failure, dry-run);
-  1 on invalid retention-days env var (CAST_DB_PRUNE_DAYS or CAST_PRUNE_OTEL_DAYS
-  < 1 or non-numeric) — aborting is safer than silently reinterpreting a bad value
-  for a destructive script.
+CLI flags (argparse — parsed BEFORE any destructive work):
+  --days N    override the routing_events/agent_runs window (else CAST_DB_PRUNE_DAYS).
+  --dry-run   report would-delete counts, delete nothing (same as CAST_DB_PRUNE_DRY_RUN=1).
+  -h/--help   print usage and exit 0 WITHOUT pruning.
+  An UNKNOWN flag (argparse default) exits 2 WITHOUT pruning — a fat-fingered flag
+  (e.g. a stray `--help` typo) must never fall through and run the prune (2026-07-05
+  live footgun: unparsed flags previously reached the delete path).
+
+Exit: 0 on success, non-destructive skip (backup failure, dry-run), or --help;
+  1 on invalid retention-days value (CAST_DB_PRUNE_DAYS / CAST_PRUNE_OTEL_DAYS / --days
+  < 1 or non-numeric) — aborting is safer than silently reinterpreting a bad value for
+  a destructive script; 2 on an unknown CLI flag (argparse) — never prune on a typo.
 
 Usage:
   python3 ~/.claude/scripts/cast-db-prune.py
+  python3 ~/.claude/scripts/cast-db-prune.py --days 30 --dry-run
   CAST_DB_PRUNE_DAYS=30 python3 ~/.claude/scripts/cast-db-prune.py
   CAST_PRUNE_OTEL_DAYS=14 python3 ~/.claude/scripts/cast-db-prune.py
   CAST_DB_PRUNE_DRY_RUN=1 python3 ~/.claude/scripts/cast-db-prune.py
   # Or via launchd plist (com.cast.db-prune — runs nightly at 03:30).
 """
 
+import argparse
 import json
 import os
 import re
@@ -83,6 +93,29 @@ def _parse_retention_days(env_var: str, default: int) -> int:
         )
         sys.exit(1)
     return value
+
+
+def _parse_args(argv) -> argparse.Namespace:
+    """Parse CLI flags. argparse gives -h/--help (exit 0) and rejects unknown flags
+    (exit 2) FOR FREE — the fail-safe that stops a stray flag from reaching the prune.
+
+    --days defaults to None (env CAST_DB_PRUNE_DAYS wins); --dry-run OR's with the
+    CAST_DB_PRUNE_DRY_RUN env var. Neither flag weakens the fail-closed backup gate.
+    """
+    parser = argparse.ArgumentParser(
+        prog='cast-db-prune.py',
+        description='Delete rows older than the retention window from cast.db.',
+    )
+    parser.add_argument(
+        '--days', type=int, default=None, metavar='N',
+        help='Retention window (days) for routing_events + agent_runs; '
+             'overrides CAST_DB_PRUNE_DAYS (default 90).',
+    )
+    parser.add_argument(
+        '--dry-run', action='store_true', default=False,
+        help='Report would-delete counts without deleting anything.',
+    )
+    return parser.parse_args(argv)
 
 
 # --- Config ---
@@ -206,6 +239,22 @@ def _prune_table(
 
 
 def main() -> None:
+    # Parse CLI flags FIRST — before the backup gate or any DELETE. --help exits 0
+    # and an unknown flag exits 2 here, so neither can fall through to the prune.
+    global DAYS, DRY_RUN
+    args = _parse_args(sys.argv[1:])
+    if args.days is not None:
+        if args.days < 1:
+            print(
+                f'ERROR: --days={args.days} is < 1 (would delete all rows or compute a'
+                f' future cutoff) — aborting prune',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        DAYS = args.days
+    if args.dry_run:
+        DRY_RUN = True
+
     mode_label = '[DRY-RUN] ' if DRY_RUN else ''
     _log(f'{mode_label}cast-db-prune starting — DAYS={DAYS} db={DB_PATH}')
 
@@ -228,8 +277,10 @@ def main() -> None:
                 sys.exit(0)
 
         # --- Step 1: routing_events (column: timestamp) ---
+        # Pass days=DAYS explicitly: a --days override reassigns the module global,
+        # but _prune_table's default param binds DAYS at def-time (stale otherwise).
         try:
-            count = _prune_table(conn, 'routing_events', 'timestamp')
+            count = _prune_table(conn, 'routing_events', 'timestamp', days=DAYS)
             action = 'would delete' if DRY_RUN else 'deleted'
             _log(f'{mode_label}routing_events: {action} {count} row(s) older than {DAYS} days')
         except Exception as e:
@@ -238,7 +289,7 @@ def main() -> None:
 
         # --- Step 2: agent_runs (column: started_at) ---
         try:
-            count = _prune_table(conn, 'agent_runs', 'started_at')
+            count = _prune_table(conn, 'agent_runs', 'started_at', days=DAYS)
             action = 'would delete' if DRY_RUN else 'deleted'
             _log(f'{mode_label}agent_runs: {action} {count} row(s) older than {DAYS} days')
         except Exception as e:

@@ -46,7 +46,7 @@ if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
   else
     echo "[CAST pre-push] Running commit-provenance reconcile gate..."
     _RECONCILE_TMPSTDERR="$(mktemp)"
-    if ! python3 "$_RECONCILE_SCRIPT" 2>"$_RECONCILE_TMPSTDERR"; then
+    if ! CAST_RECONCILE_REPO="$REPO_ROOT" python3 "$_RECONCILE_SCRIPT" 2>"$_RECONCILE_TMPSTDERR"; then
       cat "$_RECONCILE_TMPSTDERR" >&2
       rm -f "$_RECONCILE_TMPSTDERR"
       echo "" >&2

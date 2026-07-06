@@ -41,24 +41,33 @@ teardown() {
 # ---------------------------------------------------------------------------
 # Helper: write a COMMIT_HATCH_USED event to the audit file
 # Use printf (NOT heredoc) — BATS heredoc @test lines get rewritten.
+# Optional 4th arg: repo path. When provided, the event carries a "repo" field;
+# when omitted, the event has no repo field (legacy format).
 # ---------------------------------------------------------------------------
 write_hatch_event() {
-    local ts="$1" session_id="$2" in_claude_session="$3"
-    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"%s","in_claude_session":%s}\n' \
-        "$ts" "$session_id" "$in_claude_session" >> "$AUDIT_FILE"
+    local ts="$1" session_id="$2" in_claude_session="$3" repo="${4:-}"
+    if [ -n "$repo" ]; then
+        printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"%s","in_claude_session":%s,"repo":"%s"}\n' \
+            "$ts" "$session_id" "$in_claude_session" "$repo" >> "$AUDIT_FILE"
+    else
+        printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"%s","in_claude_session":%s}\n' \
+            "$ts" "$session_id" "$in_claude_session" >> "$AUDIT_FILE"
+    fi
 }
 
 # Helper: insert a commit_provenance row using Python parameterized query.
 # Uses sys.argv to pass values — no SQL interpolation, mirrors cast_db.py pattern.
+# Optional 3rd arg: repo. When omitted (or empty), row carries repo='' (legacy).
 insert_provenance() {
-    local recorded_at="$1" sha="${2:-abc123}"
+    local recorded_at="$1" sha="${2:-abc123}" repo="${3:-}"
     python3 -c "
 import sqlite3, sys
 conn = sqlite3.connect(sys.argv[1])
-conn.execute('INSERT INTO commit_provenance (sha, recorded_at) VALUES (?, ?)', (sys.argv[2], sys.argv[3]))
+conn.execute('INSERT INTO commit_provenance (sha, recorded_at, repo) VALUES (?, ?, ?)',
+             (sys.argv[2], sys.argv[3], sys.argv[4]))
 conn.commit()
 conn.close()
-" "$CAST_DB" "$sha" "$recorded_at"
+" "$CAST_DB" "$sha" "$recorded_at" "$repo"
 }
 
 # ---------------------------------------------------------------------------
@@ -247,4 +256,178 @@ assert d['in_claude_session'] == False, f'expected False (CLAUDECODE unset), got
     [ "$status" -eq 1 ]
     result="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"])')"
     [ "$result" = "error" ]
+}
+
+# ===========================================================================
+# Repo-scoping tests (D5 hardening — E1/E2/E3)
+# These tests do NOT set CAST_RECONCILE_CHECKPOINT (T18/T19) or set it
+# explicitly (T13-T17). Paths use $HOME subdirs so realpath is consistent
+# across both sides of the comparison (avoids macOS /tmp symlink divergence).
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# R1: Foreign-repo event skipped — the Ed incident regression test.
+#     Event carries repo=REPO_B; gate runs for REPO_A → event filtered → exit 0,
+#     checked=0 (foreign-repo false-block cannot happen again).
+# ---------------------------------------------------------------------------
+@test "R1: foreign-repo event skipped (exit 0, checked=0)" {
+    local REPO_A="$HOME/repo-a-r1"
+    local REPO_B="$HOME/repo-b-r1"
+    write_hatch_event "$T1" "sess-foreign" "true" "$REPO_B"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           CAST_RECONCILE_REPO="$REPO_A" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    checked="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["checked"])')"
+    [ "$checked" = "0" ]
+}
+
+# ---------------------------------------------------------------------------
+# R2: Same-repo event without provenance → violation, exit 1, violation includes repo.
+# ---------------------------------------------------------------------------
+@test "R2: same-repo event without provenance → exit 1, violation contains repo" {
+    local REPO="$HOME/repo-r2"
+    write_hatch_event "$T1" "sess-noprov" "true" "$REPO"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           CAST_RECONCILE_REPO="$REPO" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    result="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"])')"
+    [ "$result" = "violations" ]
+    # violation list must carry a non-empty repo field
+    echo "$output" | python3 -c \
+        'import sys,json; d=json.load(sys.stdin); assert any(v.get("repo") for v in d["violations"]), d'
+}
+
+# ---------------------------------------------------------------------------
+# R3: Cross-repo masking closed — provenance row for REPO_B does NOT satisfy
+#     a REPO_A event (the pre-hardening fail-open hole is shut).
+# ---------------------------------------------------------------------------
+@test "R3: cross-repo masking closed — repo-B provenance does not satisfy repo-A event" {
+    local REPO_A="$HOME/repo-a-r3"
+    local REPO_B="$HOME/repo-b-r3"
+    write_hatch_event "$T1" "sess-masking" "true" "$REPO_A"
+    insert_provenance "$PROV_MATCH" "abc12300" "$REPO_B"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           CAST_RECONCILE_REPO="$REPO_A" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    result="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"])')"
+    [ "$result" = "violations" ]
+}
+
+# ---------------------------------------------------------------------------
+# R4: Provenance repo='' (record-time git failure) matches a scoped event →
+#     exit 0 (documented fail-open leniency per the D5 compat table).
+# ---------------------------------------------------------------------------
+@test "R4: provenance repo='' (record-time git failure) matches scoped event → exit 0" {
+    local REPO="$HOME/repo-r4"
+    write_hatch_event "$T1" "sess-emptyprov" "true" "$REPO"
+    insert_provenance "$PROV_MATCH" "abc12301" ""   # repo='' → legacy/degraded row
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           CAST_RECONCILE_REPO="$REPO" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    result="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"])')"
+    [ "$result" = "clean" ]
+}
+
+# ---------------------------------------------------------------------------
+# R5a: Legacy event (no repo field) still evaluated under CAST_RECONCILE_REPO=<X>
+#      and matched by unscoped provenance → exit 0 (fail-closed grandfather kept).
+# ---------------------------------------------------------------------------
+@test "R5a: legacy event (no repo) with matching provenance → exit 0 under CAST_RECONCILE_REPO" {
+    local REPO="$HOME/repo-r5a"
+    # write_hatch_event without 4th arg → event has no repo field (legacy)
+    write_hatch_event "$T1" "sess-legacyclean" "true"
+    insert_provenance "$PROV_MATCH" "abc12302"   # repo='' (unscoped)
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           CAST_RECONCILE_REPO="$REPO" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    result="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"])')"
+    [ "$result" = "clean" ]
+}
+
+# ---------------------------------------------------------------------------
+# R5b: Legacy event (no repo field) without provenance → exit 1 under
+#      CAST_RECONCILE_REPO=<X> (fail-closed — legacy events are NOT grandfathered
+#      as foreign; they keep today's global evaluation).
+# ---------------------------------------------------------------------------
+@test "R5b: legacy event (no repo) without provenance → exit 1 under CAST_RECONCILE_REPO" {
+    local REPO="$HOME/repo-r5b"
+    write_hatch_event "$T1" "sess-legacyviol" "true"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           CAST_RECONCILE_REPO="$REPO" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    result="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"])')"
+    [ "$result" = "violations" ]
+}
+
+# ---------------------------------------------------------------------------
+# R6: Per-repo checkpoint isolation — a clean push in REPO_A (advancing REPO_A's
+#     per-repo checkpoint) must NOT cause REPO_B's pending violation to be skipped.
+#     Two-invocation test; CAST_RECONCILE_CHECKPOINT is intentionally UNSET so the
+#     script derives its own per-repo checkpoint paths.
+# ---------------------------------------------------------------------------
+@test "R6: per-repo checkpoint isolation — REPO_A clean does not skip REPO_B pending event" {
+    local REPO_A="$HOME/repo-a-isol"
+    local REPO_B="$HOME/repo-b-isol"
+    # Seed the legacy global checkpoint at T0 (no CAST_RECONCILE_CHECKPOINT env here).
+    mkdir -p "$HOME/.claude/run"
+    printf '%s' "$T0" > "$HOME/.claude/run/commit-reconcile-checkpoint"
+    # Violation event for REPO_B at T1 (after T0).
+    write_hatch_event "$T1" "sess-repo-b" "true" "$REPO_B"
+    # Invocation 1: REPO_A — REPO_B's event is filtered; clean run advances REPO_A's checkpoint.
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_REPO="$REPO_A" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    checked1="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["checked"])')"
+    [ "$checked1" = "0" ]
+    # Invocation 2: REPO_B — per-repo checkpoint absent → seeds from legacy T0 →
+    # evaluates T1 event → no provenance → violation.  REPO_A's checkpoint advance
+    # must NOT have affected this result.
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_REPO="$REPO_B" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    result2="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"])')"
+    [ "$result2" = "violations" ]
+}
+
+# ---------------------------------------------------------------------------
+# R7: Legacy-checkpoint seeding — when only the global checkpoint file is present
+#     (no per-repo file), the per-repo run must honor it.  A pre-checkpoint event
+#     must be filtered (checked=0) — no 30-day re-evaluation storm on first deploy.
+# ---------------------------------------------------------------------------
+@test "R7: legacy-checkpoint seeding — pre-checkpoint event filtered on first per-repo run" {
+    local REPO="$HOME/repo-r7"
+    # Seed legacy global checkpoint at T0 (no CAST_RECONCILE_CHECKPOINT env).
+    mkdir -p "$HOME/.claude/run"
+    printf '%s' "$T0" > "$HOME/.claude/run/commit-reconcile-checkpoint"
+    # Write event BEFORE T0 (should be filtered once legacy is seeded).
+    write_hatch_event "2026-01-01T10:00:00" "sess-pre-ckpt" "true" "$REPO"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_REPO="$REPO" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    checked="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["checked"])')"
+    [ "$checked" = "0" ]
 }

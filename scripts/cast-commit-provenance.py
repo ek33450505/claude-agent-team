@@ -45,10 +45,15 @@ def _resolve_session_id(repo: str) -> str:
     1. CAST_SESSION_ID env var (preferred — propagated by CAST dispatch wrappers)
     2. CLAUDE_SESSION_ID env var (native Claude Code env var; not propagated into
        Bash subprocesses spawned by the commit agent)
-    3. DB fallback: most recent 'active' sessions row for this repo. Trade-off: with
-       concurrent active sessions in the SAME repo, this may attribute the commit to
-       the newer sibling session — bounded same-user ambiguity, preferred over the
-       empty value that trips the D5 pre-push reconcile gate.
+    3. DB fallback: unique-active-or-refuse — attribute ONLY when exactly one
+       'active' sessions row exists for this repo; on ambiguity (>1 active) return
+       '' rather than guessing the newest sibling. The earlier "bounded same-user
+       ambiguity, preferred over empty" trade-off is RETRACTED: the 2026-07-05
+       wave-1 incident proved wrong attribution is worse than empty — a killed
+       teammate's stuck-'active' row (flipped to 'crashed' only later by
+       cast-abandon-stale-runs.py's 4h threshold) got attributed to an hour of
+       commits. Empty session_id does not trip the D5 reconcile gate (it matches
+       on recorded_at/repo only), so honesty here is enforcement-safe.
     4. Fail-open to '' on any exception (never block the commit).
     """
     session_id = os.environ.get("CAST_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID", "")
@@ -58,11 +63,12 @@ def _resolve_session_id(repo: str) -> str:
     try:
         rows = db_query(
             "SELECT id FROM sessions WHERE status = 'active' AND project_root = ?"
-            " ORDER BY started_at DESC LIMIT 1",
+            " ORDER BY started_at DESC LIMIT 2",
             (repo,),
         )
-        if rows:
+        if len(rows) == 1:
             return rows[0]["id"]
+        return ""   # ambiguous (>1 active) or none → honest empty, never confabulated
     except Exception:
         pass
     return ""
