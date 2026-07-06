@@ -13,17 +13,29 @@ teardown() {
     :
 }
 
-@test "UserPromptSubmit hook calls cast-memory-router in retrieve mode" {
-    # Verify cast-user-prompt-hook.sh calls memory router with correct args
-    [ -f "scripts/cast-user-prompt-hook.sh" ]
+@test "UserPromptSubmit hook calls cast-memory-router in retrieve-global mode" {
+    # Verify cast-user-prompt-hook.sh calls memory router with --mode retrieve-global
+    # (B2: hook switched from --mode retrieve --agent shared to --mode retrieve-global --top-n 3)
+    local hook_path
+    hook_path="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)/scripts/cast-user-prompt-hook.sh"
+    [ -f "$hook_path" ]
 
-    # Check that the hook uses --mode retrieve
-    grep -q "'--mode', 'retrieve'" scripts/cast-user-prompt-hook.sh || false
+    # Check that the hook uses --mode retrieve-global
+    grep -q "'--mode', 'retrieve-global'" "$hook_path" || false
 }
 
-@test "cast-user-prompt-hook.sh uses --agent shared for memory retrieval" {
-    # Verify agent is set to 'shared' (not hardcoded to something else)
-    grep -q "'--agent', 'shared'" scripts/cast-user-prompt-hook.sh || false
+@test "cast-user-prompt-hook.sh uses --top-n 3 for global retrieval (no --agent flag)" {
+    # B2 switched from agent-scoped retrieve to global retrieve-global with a fixed top-n.
+    # No --agent argument is passed in the new interface.
+    local hook_path
+    hook_path="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)/scripts/cast-user-prompt-hook.sh"
+    [ -f "$hook_path" ]
+
+    # Verify --top-n 3 is present
+    grep -q "'--top-n', '3'" "$hook_path" || false
+
+    # Verify --agent is no longer passed to the router call
+    ! grep -q "'--agent'" "$hook_path" || false
 }
 
 @test "cast-user-prompt-hook.sh formats memory output as context block" {

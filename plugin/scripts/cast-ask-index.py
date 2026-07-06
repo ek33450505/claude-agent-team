@@ -109,6 +109,17 @@ def _get_projects_root() -> str:
     return os.path.expanduser('~/.claude/projects')
 
 
+def _get_resume_prompts_dir() -> str:
+    """Resolve the resume-distillate dir. Honors CAST_RESUME_PROMPTS_DIR for test isolation."""
+    override = os.environ.get('CAST_RESUME_PROMPTS_DIR', '')
+    if override:
+        real = os.path.realpath(override)
+        if not os.path.isdir(real):
+            raise ValueError(f'CAST_RESUME_PROMPTS_DIR is not a directory: {override!r}')
+        return real
+    return os.path.expanduser('~/.claude/resume-prompts')
+
+
 # ---------------------------------------------------------------------------
 # Body parsers for file-based sources
 # ---------------------------------------------------------------------------
@@ -245,6 +256,14 @@ FILE_SOURCES: List[Dict[str, Any]] = [
         'ts_strategy': 'mtime',
         'title_strategy': 'project_stem',
         'parse': _parse_transcript_body,
+    },
+    {
+        'kind': 'distillate',
+        'root_resolver': _get_resume_prompts_dir,
+        'glob_pattern': '*.md',         # flat dir — stems like 2026-07-06-foo-auto; NOT recursive
+        'ts_strategy': 'mtime',         # stems are '<date>-<repo>-auto', not plain dates; mtime is correct
+        'title_strategy': 'stem',
+        'parse': _parse_journal_body,   # generic verbatim md reader — reuse, do not duplicate
     },
 ]
 
