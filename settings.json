@@ -156,6 +156,16 @@
         ]
       },
       {
+        "id": "cast-resume-inject",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-resume-inject-hook.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "id": "cast-time-context",
         "hooks": [
           {
