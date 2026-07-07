@@ -181,12 +181,13 @@ def _fetch_routing_events(conn: sqlite3.Connection, session_id: str) -> List[Dic
 
 
 def _fetch_quality_gates(conn: sqlite3.Connection, session_id: str) -> List[Dict]:
-    """Fetch quality_gates rows ordered by created_at."""
+    """Fetch quality_gates rows ordered by created_at (excludes truncation-mirror rows, status_line='TRUNCATED')."""
     try:
         rows = conn.execute(
             "SELECT agent_name, gate_type, contract_passed, retry_count, created_at "
             "FROM quality_gates "
             "WHERE session_id = ? "
+            "AND status_line IS NOT 'TRUNCATED' "
             "ORDER BY created_at",
             (session_id,),
         ).fetchall()

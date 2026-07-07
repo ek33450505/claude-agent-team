@@ -935,9 +935,8 @@ def stage4_truncation_record(ctx: Ctx) -> None:
     Merges main-hook Step 2.1 (L653-751) with cast-truncation-check.sh's
     extract_work_log semantics. Guard: non-exempt agent, response >=50 chars, and
     NO Status/JSON-status block (the main hook's unanchored, test-locked detection —
-    blueprint R5). Writes agent_truncations + the quality_gates(truncation_detected)
-    dashboard mirror. The old cast-truncation-check.sh path is deleted, so this is
-    now the ONE writer.
+    blueprint R5). Writes agent_truncations (the authoritative truncation record).
+    The old cast-truncation-check.sh path is deleted, so this is now the ONE writer.
     """
     if ctx.is_exempt or not ctx.db_present:
         return
@@ -957,7 +956,6 @@ def stage4_truncation_record(ctx: Ctx) -> None:
 
     conn = None
     try:
-        import uuid as _uuid
         conn = sqlite3.connect(ctx.db_path, timeout=5)
         conn.execute(
             "INSERT INTO agent_truncations (session_id, agent_type, agent_id, last_line, timestamp, char_count, partial_work_log) "
@@ -965,18 +963,6 @@ def stage4_truncation_record(ctx: Ctx) -> None:
             (sess, agent, agent_id or None, last_line, ts, char_count, partial_work_log or None),
         )
         conn.commit()
-        # quality_gates mirror (dashboard single source of truth for truncation
-        # telemetry). Isolated so a missing quality_gates table does not roll back
-        # the primary agent_truncations write.
-        try:
-            conn.execute(
-                "INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count, gate_type) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (str(_uuid.uuid4()), sess, agent, ts, "TRUNCATED", 0, 0, "truncation_detected"),
-            )
-            conn.commit()
-        except Exception as _e:
-            _log_fail("truncation_qg", -1, str(_e), sess)
         conn.close()
     except Exception as e:
         try:
