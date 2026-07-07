@@ -500,3 +500,35 @@ Concerns: Missing return type annotation on parseResult(), unused import in util
   row_count=$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM agent_truncations;" 2>/dev/null || echo "0")
   assert_equal "$row_count" "0"
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test: P5 regression — truncation hook must NOT write quality_gates mirror row
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "P5: truncation hook writes agent_truncations but NOT quality_gates mirror row" {
+  local output_text="Implementing the requested feature.
+
+## Work Log
+
+- Read source files: done
+- Analyzed patterns: done
+- Starting implementation now
+
+Got interrupted before finishing"
+
+  local input
+  input="$(_make_truncated_input "$output_text")"
+
+  run bash "$HOOK_SH" <<< "$input"
+  assert_success
+
+  # agent_truncations must have exactly 1 row (authoritative truncation record)
+  local at_count
+  at_count=$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM agent_truncations;" 2>/dev/null || echo "0")
+  assert_equal "$at_count" "1"
+
+  # quality_gates must have ZERO rows with status_line='TRUNCATED' (mirror removed)
+  local qg_count
+  qg_count=$(sqlite3 "$TEMP_DB" "SELECT COUNT(*) FROM quality_gates WHERE status_line='TRUNCATED';" 2>/dev/null || echo "0")
+  assert_equal "$qg_count" "0"
+}

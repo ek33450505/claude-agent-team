@@ -204,3 +204,29 @@ SQL
   refute_output --partial "TRUNC_LASTLINE_SENTINEL_QRS"
   refute_output --partial "PARTIAL_WORKLOG_SENTINEL_TUV"
 }
+
+# ── Test 12: P5 regression — quality_gates reader excludes truncation-mirror rows ──
+
+@test "ledger: quality_gates reader excludes truncation-mirror rows (P5 fix)" {
+  # Seed a distinct session with one real gate + one truncation-mirror row
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO sessions (id, project, project_root, started_at, ended_at, status)
+VALUES ('sess-p5', 'cast', '/p5', '2026-07-06T10:00:00', '2026-07-06T10:30:00', 'completed');
+
+INSERT INTO agent_runs (session_id, agent, model, started_at, ended_at, status, input_tokens, output_tokens, cost_usd, cache_read_input_tokens, cache_creation_input_tokens, duration_ms, tool_uses)
+VALUES ('sess-p5', 'code-writer', 'claude-sonnet-4-6', '2026-07-06T10:01:00', '2026-07-06T10:10:00', 'completed', 500, 200, 0.001, 0, 0, 120000, 5);
+
+INSERT INTO quality_gates (id, session_id, agent_name, status_line, contract_passed, retry_count, gate_type, created_at)
+VALUES
+  ('p5-gate-1', 'sess-p5', 'code-reviewer', 'DONE', 1, 0, 'status_contract', '2026-07-06T10:15:00'),
+  ('p5-gate-2', 'sess-p5', 'code-writer',   'TRUNCATED', 0, 0, 'truncation_detected', '2026-07-06T10:16:00');
+SQL
+
+  run bash "$CAST_BIN" ledger sess-p5
+  assert_success
+  # Real gate row must appear in the Gates section
+  assert_output --partial "code-reviewer"
+  assert_output --partial "status_contract"
+  # Truncation mirror row must NOT appear
+  refute_output --partial "truncation_detected"
+}
