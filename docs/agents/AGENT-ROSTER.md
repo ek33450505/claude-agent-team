@@ -43,7 +43,7 @@
 
 **Model tiering:** Haiku (13 agents) for review, commit, ops, and doc work ($1/MTok); Sonnet (8 agents) for implementation, planning, and research ($3/MTok); Opus (1 agent) for high-stakes schema review. Tiering scales cost savings across the swarm.
 
-**Main-loop default (inline session):** `claude-sonnet-5` — set in `managed-settings.d/16-model-defaults.json` (pinned ID, not the `sonnet` alias, to prevent silent model drift). Chosen for ≈Opus-4.8 capability at ~half the cost ($2/$10 per 1M vs $15/$75). Intro pricing through 2026-08-31; steady-state $3/$15 afterward — bump the pricing entry in `config/model-pricing.json` when pricing changes.
+**Main-loop default (inline session):** `claude-sonnet-5` — set in `managed-settings.d/16-model-defaults.json` (pinned ID, not the `sonnet` alias, to prevent silent model drift). Chosen for documented near-Opus-4.8 capability at a fraction of the cost ($2/$10 per 1M vs Opus 4.8's $15/$75 — 7.5x cheaper on both input and output). Intro pricing through 2026-08-31; steady-state $3/$15 afterward — bump the pricing entry in `config/model-pricing.json` when pricing changes.
 
 **Manual escalation:** `/model opus` for the hardest reasoning tasks, within the standing Opus-4.8 subagent cap; `/model fable` for the very hardest **solo** work only (no fan-outs — see warning below).
 
