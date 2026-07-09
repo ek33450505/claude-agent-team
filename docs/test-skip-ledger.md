@@ -32,7 +32,7 @@ A skip without a recorded rationale is indistinguishable from lost coverage — 
 
 ## Remaining Intentional Skips
 
-**Total call sites: 57** across 23 files (as of 2026-07-04 full re-enumeration; prior count of 23 across 14 files was under-counted — missed `cast-ask.bats` FTS5/JSON cluster, `cast-doctor-ask.bats`, `cast-doctor-honesty.bats`, `cast-doctor-litestream.bats`, `cast-commit-reconcile.bats`, `run-sh-count-gate.bats`, `install.bats`, and the two extra `install-personal.bats` sites. +2 same-day: `cast-pretool-dispatch-guardfail.bats` interpreter guards, added with the py3.9 hook-compat fixes; +1 2026-07-05: `cast-incident-record.bats` subprocess-guard skip, W2-1 consolidation).
+**Total call sites: 60** across 24 files (as of 2026-07-04 full re-enumeration; prior count of 23 across 14 files was under-counted — missed `cast-ask.bats` FTS5/JSON cluster, `cast-doctor-ask.bats`, `cast-doctor-honesty.bats`, `cast-doctor-litestream.bats`, `cast-commit-reconcile.bats`, `run-sh-count-gate.bats`, `install.bats`, and the two extra `install-personal.bats` sites. +2 same-day: `cast-pretool-dispatch-guardfail.bats` interpreter guards, added with the py3.9 hook-compat fixes; +1 2026-07-05: `cast-incident-record.bats` subprocess-guard skip, W2-1 consolidation; +3 2026-07-09: `cast-record-review.bats` (new file, B5) — 2 real-cast.db-required guards + 1 eval-case-fixture-not-found guard).
 
 **Enumeration command** (run from repo root; catches all 4 skip forms: `|| skip "`, `&& skip "`, line-leading `skip "`, if-then inline `skip "`; excludes comment lines and the self-referential guard file):
 
