@@ -196,6 +196,17 @@ fi
 
 cd "$CAST_OVERLAY_DIR"
 
+# Set local git identity on every run (repo-local config only — never global).
+# Root cause (confirmed 2026-07-09): GitHub's push-protection rejects commits
+# authored with a real email address ("GH007: Your push would publish a
+# private email address") once the account enforces private-email
+# protection. A one-time manual `git config` fix applied directly to the
+# existing clone is NOT durable — a fresh clone (e.g. after a machine
+# wipe/recovery) reintroduces the bug. Set it unconditionally here, before
+# any commit happens below.
+git config user.email "97137083+ek33450505@users.noreply.github.com"
+git config user.name "Edward Kubiak"
+
 # Check if remote main branch exists; if not, just use local main
 if git ls-remote --exit-code --heads origin main &>/dev/null 2>&1; then
   info "Pulling from origin main..."
