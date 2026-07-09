@@ -1,5 +1,5 @@
 {
   "_ultracode_note": "ultracode is session-only — cannot persist in effortLevel or --effort. Optional alias: claude --settings '{\"ultracode\":true}' for a single ultracode session.",
   "model": "claude-sonnet-5",
-  "effortLevel": "xhigh"
+  "effortLevel": "high"
 }
