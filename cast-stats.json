@@ -1,9 +1,9 @@
 {
-  "version": "9.5.1",
-  "versionTag": "v9.5.1",
+  "version": "9.5.2",
+  "versionTag": "v9.5.2",
   "agents": 22,
-  "tests": 2300,
-  "test_files": 200,
+  "tests": 2338,
+  "test_files": 203,
   "tables": 39,
   "commands": 21,
   "skills": 17,

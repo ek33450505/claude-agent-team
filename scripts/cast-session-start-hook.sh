@@ -23,65 +23,11 @@ mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 
 INPUT="$(cat 2>/dev/null || true)"
 
-CAST_INPUT="$INPUT" python3 - <<'PYEOF' || _log_error "session-start JSONL block failed (exit $?)"
-import json, os
-from datetime import datetime, timezone
-
-raw = os.environ.get("CAST_INPUT", "")
-try:
-    data = json.loads(raw)
-except Exception:
-    import sys; sys.exit(0)
-
-session_id = data.get("session_id", "unknown")
-cwd        = data.get("cwd", "")
-
-now    = datetime.now(timezone.utc)
-iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-# Write env vars to $CLAUDE_ENV_FILE if set
-env_file = os.environ.get("CLAUDE_ENV_FILE", "")
-if env_file:
-    try:
-        parent = os.path.dirname(env_file)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(env_file, "a") as f:
-            f.write(f"CAST_SESSION_ID={session_id}\n")
-            f.write(f"CAST_SESSION_CWD={cwd}\n")
-            f.write(f"CAST_SESSION_START_TS={iso_ts}\n")
-    except Exception as e:
-        import sys, os as _os
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        log_dir = _os.path.expanduser("~/.claude/logs")
-        _os.makedirs(log_dir, exist_ok=True)
-        with open(_os.path.join(log_dir, "hook-errors.log"), "a") as lf:
-            lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: env_file write failed: {e}\n")
-
-# Log to session-starts.jsonl
-entry = {
-    "timestamp":  iso_ts,
-    "session_id": session_id,
-    "cwd":        cwd,
-}
-
-log_path = os.path.expanduser("~/.claude/cast/session-starts.jsonl")
-os.makedirs(os.path.dirname(log_path), exist_ok=True)
-try:
-    with open(log_path, "a") as f:
-        f.write(json.dumps(entry) + "\n")
-except Exception as e:
-    import os as _os
-    from datetime import datetime, timezone
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    log_dir = _os.path.expanduser("~/.claude/logs")
-    _os.makedirs(log_dir, exist_ok=True)
-    with open(_os.path.join(log_dir, "hook-errors.log"), "a") as lf:
-        lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: session-starts.jsonl write failed: {e}\n")
-PYEOF
-
-CAST_INPUT="$INPUT" python3 - <<'PYEOF2' || _log_error "session-start DB block failed (exit $?)"
+# Merged JSONL + DB block: both halves parse the same CAST_INPUT for
+# session_id/cwd on the unconditional hot path, so they share one python3
+# cold start instead of two. Each half keeps its own try/except so a failure
+# in one does not skip the other (matches prior two-process independence).
+CAST_INPUT="$INPUT" python3 - <<'PYEOF' || _log_error "session-start JSONL+DB block failed (exit $?)"
 import json, os, sqlite3 as _sqlite3
 from datetime import datetime, timezone
 
@@ -91,9 +37,51 @@ try:
 except Exception:
     import sys; sys.exit(0)
 
+now    = datetime.now(timezone.utc)
+iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# ── Half 1: env-file write + session-starts.jsonl (session_id defaults 'unknown') ──
+session_id_log = data.get("session_id", "unknown")
+cwd_log        = data.get("cwd", "")
+
+env_file = os.environ.get("CLAUDE_ENV_FILE", "")
+if env_file:
+    try:
+        parent = os.path.dirname(env_file)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(env_file, "a") as f:
+            f.write(f"CAST_SESSION_ID={session_id_log}\n")
+            f.write(f"CAST_SESSION_CWD={cwd_log}\n")
+            f.write(f"CAST_SESSION_START_TS={iso_ts}\n")
+    except Exception as e:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        log_dir = os.path.expanduser("~/.claude/logs")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
+            lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: env_file write failed: {e}\n")
+
+entry = {
+    "timestamp":  iso_ts,
+    "session_id": session_id_log,
+    "cwd":        cwd_log,
+}
+
+log_path = os.path.expanduser("~/.claude/cast/session-starts.jsonl")
+os.makedirs(os.path.dirname(log_path), exist_ok=True)
+try:
+    with open(log_path, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+except Exception as e:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    log_dir = os.path.expanduser("~/.claude/logs")
+    os.makedirs(log_dir, exist_ok=True)
+    with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
+        lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: session-starts.jsonl write failed: {e}\n")
+
+# ── Half 2: sessions DB insert (session_id empty string, not 'unknown') ──
 session_id = data.get("session_id", "")
 cwd        = data.get("cwd", "")
-now        = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 project    = os.path.basename(cwd.rstrip('/')) if cwd else "unknown"
 
 # Guard: skip INSERT when session_id is missing/empty — a NULL or empty PK
@@ -115,7 +103,7 @@ try:
         pass
     con.execute(
         "INSERT OR IGNORE INTO sessions (id, project, project_root, started_at, status) VALUES (?, ?, ?, ?, 'active')",
-        (session_id, project, cwd, now),
+        (session_id, project, cwd, now.strftime("%Y-%m-%dT%H:%M:%SZ")),
     )
     # If row already existed (OR IGNORE), update status to active
     con.execute(
@@ -130,7 +118,7 @@ except Exception as e:
     os.makedirs(log_dir, exist_ok=True)
     with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
         lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: DB INSERT failed: {type(e).__name__}: {e}\n")
-PYEOF2
+PYEOF
 
 # Export pane_id for use in the next python block
 export CAST_PANE_ID_FOR_HOOK="${CAST_DESKTOP_PANE_ID:-}"

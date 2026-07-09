@@ -165,6 +165,23 @@ print(json.dumps({
   assert_success
 }
 
+@test "CAST_COMMIT_AGENT=1 with extra VAR=value before git commit → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_COMMIT_AGENT=1 CAST_SKIP_PLUGIN_DRIFT=1 git commit -m 'test'")"
+  assert_success
+}
+
+@test "extra VAR=value without CAST_COMMIT_AGENT hatch before git commit → still blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_SKIP_PLUGIN_DRIFT=1 git commit -m 'test'")"
+  assert_failure
+  assert_output --partial "git commit"
+}
+
+@test "plain git commit with no escape hatch → still blocks (exit 2) [regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git commit -m 'test'")"
+  assert_failure
+  assert_output --partial "git commit"
+}
+
 @test "git push with CAST_PUSH_OK escape hatch → allows (exit 0)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 git push origin main")"
   assert_success

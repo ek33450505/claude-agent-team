@@ -6,6 +6,30 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 _Nothing yet._
 
+## [9.5.2] — 2026-07-09 — maintenance fixes (evening audit remediation)
+
+Same-day follow-up to v9.5.1: an evening `/cast-audit` re-run (**0 HIGH after adversarial verification — third consecutive zero-HIGH audit**) plus remediation of every actionable finding it and the `/doctor` pass surfaced. Every unit individually code-reviewed; landed as one batched commit (per-unit commits were blocked by the plugin-drift × commit-hatch guard collision this release also fixes).
+
+### Fixed
+- **`cast-validate.sh` stale FTS5 check.** The doctor check validated the dead pre-B2 `agent_memories_fts` table and suggested an obsolete migration; it now checks `record_fts` (the table the B2 memory router actually uses) with a correct remediation hint.
+- **Stale-run reaper cadence.** `com.cast.abandon-stale-runs` ran once daily at 04:00 while its staleness threshold is 2h, so stuck-`running` `agent_runs` rows sat visible up to 24h (the recurring "stuck rows WORSENED" audit alarm was this cadence mismatch, not a leak). Now `StartInterval 7200`.
+- **`cast-git-guard.py` composed-hatch regexes.** `_COMMIT_ALLOW`/`_STASH_ALLOW` didn't tolerate additional `VAR=value` assignments between the hatch var and `git` (unlike `_PUSH_ALLOW`), making sanctioned hatches impossible to compose (e.g. `CAST_COMMIT_AGENT=1 CAST_SKIP_PLUGIN_DRIFT=1 git commit`). Discovered live when it blocked this release's own commit pipeline. 3 regression tests.
+
+### Hardened
+- **`cast-db-backup.py` retention.** Existing 7-daily/4-weekly retention gained `CAST_SNAPSHOT_KEEP` override, refuse-if-keep<1, strict filename-pattern + parent-dir containment before any delete, `-wal`/`-shm` sibling cleanup, and verify-new-snapshot-before-prune (fail-closed: on any doubt, skip pruning).
+
+### Performance
+- **SubagentStart hook: 3 python3 cold-starts → 1** (tab-separated single-spawn extraction); **SessionStart hook: 4 → 3** (the two unconditional hot-path spawns merged; conditional/differently-sourced spawns left intact). Zero behavioral drift, verified by review + 24 existing BATS tests.
+- **Migration 031: `idx_agent_runs_started_at`** — `cast-record-review.py`'s 21-day cost-trend query no longer full-scans `agent_runs`. Mirrored in `cast-db-init.sh` (single source of truth). `cast-migrate.py` gained a narrowly-scoped `CREATE INDEX`+`no such column` idempotency-fallback branch (the same class any future index migration would hit).
+
+### Added
+- **3 new test suites (26 cases)** for previously-untested v9.5.1 surfaces: `cast-stale-memories.py` (9 — including the indented-`verified_at` parser-regression fixture), `.githooks/post-commit` (7 — fail-open contract proven: commit exits 0 across missing/crashing recorder and escape hatch), `cast-memory-dream-review.py` (10). Suite: 2300 → **2338** @tests / 203 files.
+- **otel-collector chunked-framing regression test.** The evening audit's one HIGH candidate ("parse errors persist post-fix") was **refuted** by restart-boundary analysis — errors stop at exactly the first restart on `d86578e`'s fixed code, zero since; the failure signature is now pinned by a parser-level test.
+
+### Audit / process notes
+- Evening audit corrected two morning-report claims via live probes: the OTEL feed is **live** (+3.7k rows/day; "stopped 2026-07-02" was wrong — cast.db retention decision reopened) and the B3 dream pipeline was only half-untested (promote had 11 tests).
+- Deferred with rationale (backlog): egress-sentinel TODO tracking (classifier denied issue-creation this session), cold-start hotspots in non-hot-path scripts (`cast-exec.sh`/`cast-upgrade-check.sh`/`cast-managed-agent.sh`), the ~40% script-coverage ratio, `12-otel.json` contradictory telemetry env pair, `eval-runner shell=True` (documented accepted risk).
+
 ## [9.5.1] — 2026-07-09 — v9.5 close-out (maintenance)
 
 A same-day maintenance pass closing out v9.5: a fresh `cast-audit` (second consecutive zero-HIGH audit), memory-state reconciliation, and the fixes that audit and the first B5 record-review surfaced. No new capability — hardening, correctness, and the two long-pending D5 provenance fixes.

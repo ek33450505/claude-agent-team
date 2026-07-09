@@ -372,3 +372,35 @@ print(resp.status)
   assert_success
   assert_output "200"
 }
+
+@test "ingest-file: raw un-dechunked chunk-framing bytes fail open (0,0), matching the exact pre-fix error shapes seen live (Expecting value char 0 / Extra data char 1-7)" {
+  # Regression for the 2026-07-07..09 silent-telemetry-loss incident: before
+  # d86578e, do_POST handed raw Transfer-Encoding: chunked framing bytes
+  # (hex chunk-size + CRLF + data + CRLF ... + "0\r\n\r\n") straight to
+  # ingest_bytes()->json.loads(). This proves that exact byte shape is
+  # unparseable JSON (matching otel-collector.log's observed "Expecting
+  # value: line 1 column 1 (char 0)" / "Extra data: line 1/2 column N
+  # (char 0-7)" signatures) and that ingest_bytes() fails open (0,0)
+  # rather than crashing. do_POST's de-chunking itself is covered at the
+  # HTTP level by the three "HTTP: ..." tests above; this locks in the
+  # parser-level symptom directly (bypassing do_POST) so a future
+  # regression that reintroduces raw chunk bytes reaching json.loads()
+  # is caught even if the HTTP-level tests are skipped/modified.
+  local chunked_file="$BATS_TEST_TMPDIR/raw-chunked.bin"
+  python3 -c "
+body = b'{\"resourceLogs\":[]}'
+mid = len(body) // 2
+raw_chunked = (
+    b'%x\r\n' % mid + body[:mid] + b'\r\n' +
+    b'%x\r\n' % (len(body) - mid) + body[mid:] + b'\r\n' +
+    b'0\r\n\r\n'
+)
+with open('$chunked_file', 'wb') as fh:
+    fh.write(raw_chunked)
+"
+
+  run python3 "$COLLECTOR_PY" --ingest-file "$chunked_file"
+
+  assert_success
+  assert_output "metrics=0 events=0"
+}

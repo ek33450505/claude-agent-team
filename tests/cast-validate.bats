@@ -172,6 +172,38 @@ teardown() {
   assert_output --partial "0 warnings"
 }
 
+@test "FTS5 check: references record_fts, not the stale agent_memories_fts name" {
+  build_clean_install
+  run_validate
+  refute_output --partial "agent_memories_fts"
+}
+
+@test "FTS5 check: cast.db present without record_fts reports not-found hint" {
+  build_clean_install
+  python3 -c "
+import sqlite3
+conn = sqlite3.connect('$HOME/.claude/cast.db')
+conn.execute('CREATE TABLE placeholder (id INTEGER)')
+conn.commit()
+conn.close()
+"
+  run_validate
+  assert_output --partial "record_fts table not found (run: cast-db-init.sh then cast-ask-index.py --rebuild)"
+}
+
+@test "FTS5 check: record_fts present in cast.db passes" {
+  build_clean_install
+  python3 -c "
+import sqlite3
+conn = sqlite3.connect('$HOME/.claude/cast.db')
+conn.execute('CREATE VIRTUAL TABLE record_fts USING fts5(kind, ref_id, ts, title, body, agent, project, mtype)')
+conn.commit()
+conn.close()
+"
+  run_validate
+  assert_output --partial "FTS5: record_fts table present in cast.db"
+}
+
 # ---------------------------------------------------------------------------
 # 2. Missing CLAUDE.md
 # ---------------------------------------------------------------------------
