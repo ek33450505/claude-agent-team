@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# CAST post-commit hook — D5 provenance fix
+#
+# Records commit provenance (SHA → session) deterministically on every
+# in-session commit. This is the symmetric counterpart to the pre-push D5
+# gate: if the commit agent's step-8 recording is skipped under truncation
+# or outage, this hook fills the gap so the gate never false-blocks.
+#
+# Fires ONLY when CLAUDECODE=1 (in-session). Human terminal commits
+# (CLAUDECODE unset) are silently skipped — no side effects.
+#
+# NO CLAUDE_SUBPROCESS guard: this hook MUST fire inside subagent shells
+# (the commit agent is a subagent — that is precisely where the miss occurs).
+#
+# Logs to: ~/.claude/logs/post-commit-provenance.log
+#
+# Escape hatch: CAST_SKIP_POST_COMMIT_PROVENANCE=1 git commit -m "..."
+
+set -euo pipefail
+
+LOG_DIR="$HOME/.claude/logs"
+LOG_FILE="$LOG_DIR/post-commit-provenance.log"
+TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+_log() {
+	mkdir -p "$LOG_DIR" 2>/dev/null || true
+	echo "[$TIMESTAMP] $*" >>"$LOG_FILE"
+}
+
+# Escape hatch
+if [[ "${CAST_SKIP_POST_COMMIT_PROVENANCE:-0}" == "1" ]]; then
+	_log "skipped (escape hatch: CAST_SKIP_POST_COMMIT_PROVENANCE=1)"
+	exit 0
+fi
+
+# Gate: only record in-session (CLAUDECODE=1). Human terminal → silent skip.
+if [[ "${CLAUDECODE:-0}" != "1" ]]; then
+	exit 0
+fi
+
+# Capture the full 40-char SHA
+SHA="$(git rev-parse HEAD 2>/dev/null)" || {
+	_log "ERROR: git rev-parse HEAD failed — skipping provenance record"
+	exit 0
+}
+
+# Locate the recorder — prefer installed copy, fall back to repo-relative
+INSTALLED_RECORDER="$HOME/.claude/scripts/cast-commit-provenance.py"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT=""
+REPO_RECORDER=""
+if [[ -n "$REPO_ROOT" ]]; then
+	REPO_RECORDER="$REPO_ROOT/scripts/cast-commit-provenance.py"
+fi
+
+RECORDER=""
+if [[ -f "$INSTALLED_RECORDER" ]]; then
+	RECORDER="$INSTALLED_RECORDER"
+elif [[ -n "$REPO_RECORDER" && -f "$REPO_RECORDER" ]]; then
+	RECORDER="$REPO_RECORDER"
+fi
+
+if [[ -z "$RECORDER" ]]; then
+	_log "recorder absent — skipping provenance record for $SHA"
+	exit 0
+fi
+
+# Record provenance — best-effort, never block the commit
+if python3 "$RECORDER" record "$SHA" 2>>"$LOG_FILE"; then
+	_log "recorded provenance for $SHA (recorder: $RECORDER)"
+else
+	_rc=$?
+	_log "recorder exited $_rc for $SHA — non-fatal, commit proceeds"
+fi
+
+# post-commit exit code is advisory — never break the commit
+exit 0

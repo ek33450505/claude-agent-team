@@ -478,6 +478,20 @@ def _run_grader(
 
     start = time.monotonic()
     try:
+        # shell=True is intentional: grader templates in evals/cases/ use shell
+        # features (pipes "|", "&&", "||", ";") that require a shell interpreter.
+        # Switching to shell=False + shlex.split() would silently break those
+        # graders (grep audit 2026-07-09: found pipes and && in multiple templates
+        # under evals/cases/).
+        #
+        # Injection mitigations already in place:
+        #   1. Bare "$" in the template is rejected above (the $ guard, line ~466).
+        #   2. All substituted VALUES go through shlex.quote() in _substitute().
+        #   3. Templates are committed to the repo (evals/cases/**/*.yaml); they
+        #      are not constructed from untrusted runtime input.
+        #
+        # If grader templates are ever refactored to drop shell features, switch
+        # this to:  subprocess.run(shlex.split(cmd), shell=False, ...)
         result = subprocess.run(
             cmd,
             shell=True,

@@ -22,88 +22,72 @@ INPUT="$(cat 2>/dev/null || true)"
 LAUNCHCTL="${CAST_HEALTH_LAUNCHCTL_CMD:-launchctl}"
 LAUNCHCTL_OUTPUT="$("$LAUNCHCTL" list 2>/dev/null || true)"
 
+_HEALTH_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CAST_HEALTH_SCRIPT_DIR="$_HEALTH_SCRIPT_DIR"
 export CAST_INPUT="$INPUT"
 export CAST_LAUNCHCTL_OUTPUT="$LAUNCHCTL_OUTPUT"
 export CAST_HOME="$HOME"
 
 python3 - <<'PYEOF' || _log_error "session-start-health python block failed (exit $?)"
-import json, os, re, glob
-from datetime import date, datetime
+import json, os, subprocess, sys
 
 home = os.environ.get("CAST_HOME", os.path.expanduser("~"))
 launchctl_out = os.environ.get("CAST_LAUNCHCTL_OUTPUT", "")
 
 # ── Stale memory detection ────────────────────────────────────────────────────
-STALE_DAYS = 30
-today = date.today()
+# Canonical logic lives in cast-stale-memories.py (shared with bin/cast doctor).
+# Output format: line 1 = count, lines 2+ = filepath|verified_at|age_days
+_scanner = os.path.join(home, ".claude", "scripts", "cast-stale-memories.py")
+if not os.path.isfile(_scanner):
+    # Fall back to sibling in same directory (repo/CI context)
+    _sib = os.path.join(os.environ.get("CAST_HEALTH_SCRIPT_DIR", ""), "cast-stale-memories.py")
+    if _sib and os.path.isfile(_sib):
+        _scanner = _sib
+if not os.path.isfile(_scanner):
+    # Final fallback: explicit repo dir env var
+    _repo = os.environ.get("CAST_REPO_DIR", "")
+    if _repo:
+        _scanner = os.path.join(_repo, "scripts", "cast-stale-memories.py")
 
-# Patterns that indicate a concrete path/function/flag reference in the body
-CONCRETE_PATTERNS = [
-    re.compile(r'/scripts/'),
-    re.compile(r'~/\.claude/'),
-    re.compile(r'~/.claude/'),
-    re.compile(r'\b\w+\(\)'),
-    re.compile(r'--[a-z]'),
-]
-
-stale_memories = []
-memory_glob = os.path.join(home, ".claude", "projects", "*", "memory", "*.md")
-for filepath in sorted(glob.glob(memory_glob)):
+stale_memories = []  # list of (display_name, age_days)
+if os.path.isfile(_scanner):
     try:
-        with open(filepath, "r", errors="replace") as fh:
-            content = fh.read()
-
-        # Parse verified_at from YAML-ish frontmatter
-        verified_at = None
-        in_frontmatter = False
-        lines = content.splitlines()
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if i == 0 and stripped == "---":
-                in_frontmatter = True
+        result = subprocess.run(
+            [sys.executable, _scanner],
+            capture_output=True, text=True, timeout=10,
+        )
+        scanner_lines = result.stdout.splitlines()
+        stale_count_raw = int(scanner_lines[0].strip()) if scanner_lines else 0
+        for row in scanner_lines[1:]:
+            parts = row.split("|", 2)
+            if len(parts) < 3:
                 continue
-            if in_frontmatter:
-                if stripped == "---":
-                    break  # end of frontmatter
-                if stripped.startswith("verified_at:"):
-                    val = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-                    try:
-                        verified_at = datetime.strptime(val, "%Y-%m-%d").date()
-                    except ValueError:
-                        pass
-                    break
-
-        if verified_at is None:
-            continue
-
-        age_days = (today - verified_at).days
-        if age_days <= STALE_DAYS:
-            continue
-
-        # Check body for concrete path/function/flag references
-        body_has_concrete = any(p.search(content) for p in CONCRETE_PATTERNS)
-        if not body_has_concrete:
-            continue
-
-        # Extract name: from frontmatter, or fall back to filename stem
-        mem_name = os.path.splitext(os.path.basename(filepath))[0]
-        for line in lines:
-            stripped = line.strip()
-            if in_frontmatter and stripped.startswith("name:"):
-                mem_name = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-                break
-            # Re-scan frontmatter for name
-        for line in lines[1:]:
-            stripped = line.strip()
-            if stripped == "---":
-                break
-            if stripped.startswith("name:"):
-                mem_name = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-                break
-
-        stale_memories.append((mem_name, age_days))
+            filepath, _vdate, age_str = parts
+            # Use the frontmatter name field if readable; fall back to filename stem
+            mem_name = os.path.splitext(os.path.basename(filepath))[0]
+            try:
+                with open(filepath, "r", errors="replace") as fh:
+                    in_fm = False
+                    for i2, line in enumerate(fh):
+                        stripped = line.strip()
+                        if i2 == 0 and stripped == "---":
+                            in_fm = True
+                            continue
+                        if not in_fm:
+                            break
+                        if stripped == "---":
+                            break  # end of frontmatter
+                        if stripped.startswith("name:"):
+                            mem_name = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+                            break
+            except OSError:
+                pass
+            try:
+                stale_memories.append((mem_name, int(age_str)))
+            except ValueError:
+                pass
     except Exception:
-        continue  # defensive: skip unreadable files
+        pass  # scanner unavailable — silently skip stale memory check
 
 # ── Failing launchd jobs ──────────────────────────────────────────────────────
 failing_jobs = []

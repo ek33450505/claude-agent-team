@@ -1,6 +1,6 @@
 {
-  "version": "9.5.0",
-  "versionTag": "v9.5.0",
+  "version": "9.5.1",
+  "versionTag": "v9.5.1",
   "agents": 22,
   "tests": 2292,
   "test_files": 199,

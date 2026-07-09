@@ -321,7 +321,8 @@ def section_mine_propose(conn, evals_dir: str, lookback_days: int = 7) -> tuple:
 
     halluc = safe_query(conn, """
         SELECT agent_name, claim_type, COUNT(*) n FROM agent_hallucinations
-        WHERE timestamp >= datetime('now', ?) GROUP BY agent_name, claim_type ORDER BY n DESC LIMIT 10
+        WHERE timestamp >= datetime('now', ?) AND verified = 0
+        GROUP BY agent_name, claim_type ORDER BY n DESC LIMIT 10
     """, (f'-{lookback_days} days',))
     violations = safe_query(conn, """
         SELECT agent_type, violation, COUNT(*) n FROM agent_protocol_violations

@@ -102,11 +102,23 @@ printf 'install.sh\n' > "$CLAUDE_DIR/config/cast-hook-owner"
 
 # --- Install agents ---
 info "Installing agents..."
+
+# MANIFEST-BASED PRUNE: build the set of basenames this run will install so that
+# retired CAST-managed agents are removed without ever touching hand-made agents
+# that Ed keeps in ~/.claude/agents/ but that are NOT in this repo.
+# Safety guarantee: only filenames that appear in a PREVIOUS cast-installed-agents.txt
+# (written by a prior install) are candidates for pruning — files never tracked by
+# that manifest are NEVER touched.
+CAST_AGENT_MANIFEST="$CLAUDE_DIR/config/cast-installed-agents.txt"
+NEW_MANIFEST_LINES=""
+
 for agent_file in "$SCRIPT_DIR"/agents/core/*.md; do
     [ -f "$agent_file" ] || continue
     base="$(basename "$agent_file")"
     cp "$agent_file" "$CLAUDE_DIR/agents/$base"
     AGENT_COUNT=$((AGENT_COUNT + 1))
+    NEW_MANIFEST_LINES="$NEW_MANIFEST_LINES$base
+"
 done
 
 # Personal agent overlay (non-destructive — only adds files)
@@ -116,8 +128,37 @@ if [ "$INSTALL_PERSONAL" = true ] && [ -d "$SCRIPT_DIR/agents/personal" ]; then
         base="$(basename "$agent_file")"
         cp "$agent_file" "$CLAUDE_DIR/agents/$base"
         AGENT_COUNT=$((AGENT_COUNT + 1))
+        NEW_MANIFEST_LINES="$NEW_MANIFEST_LINES$base
+"
     done
 fi
+
+# Prune agents that were CAST-managed (in old manifest) but no longer installed
+# (retired from the roster). Never touches files absent from the old manifest.
+if [ -f "$CAST_AGENT_MANIFEST" ]; then
+    # Guard: CLAUDE_DIR must be non-empty or we refuse to rm anything
+    : "${CLAUDE_DIR:?CLAUDE_DIR is unset — refusing agent prune}"
+    while IFS= read -r old_base; do
+        [ -n "$old_base" ] || continue
+        old_base="$(basename "$old_base")"        # strip any path components — never rm outside agents/
+        case "$old_base" in *.md) ;; *) continue ;; esac  # only ever prune .md agent files
+        # Check if this basename is in the new installed set
+        case "$NEW_MANIFEST_LINES" in
+            *"$old_base"*) ;;  # still installed — keep
+            *)
+                target="$CLAUDE_DIR/agents/$old_base"
+                if [ -f "$target" ]; then
+                    rm -f "$target"
+                    info "  Pruned retired agent: $old_base"
+                fi
+                ;;
+        esac
+    done < "$CAST_AGENT_MANIFEST"
+fi
+
+# Write the new manifest (overwrites previous; first run creates it)
+printf '%s' "$NEW_MANIFEST_LINES" > "$CAST_AGENT_MANIFEST"
+
 success "  $AGENT_COUNT agents installed"
 
 # --- Install commands ---

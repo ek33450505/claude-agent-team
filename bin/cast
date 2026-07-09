@@ -2228,86 +2228,16 @@ PYEOF
   fi
 
   # 9. Stale auto-memory check
+  # Canonical logic lives in scripts/cast-stale-memories.py (shared with
+  # cast-session-start-health.sh) — do NOT inline a different implementation here.
+  local _stale_scanner="${CAST_SCRIPTS_DIR}/cast-stale-memories.py"
+  [ -f "$_stale_scanner" ] || _stale_scanner="${CAST_REPO_DIR}/scripts/cast-stale-memories.py"
   local stale_output
-  stale_output=$(python3 << 'PYEOF' 2>/dev/null || echo "0"
-import os
-import re
-from datetime import datetime
-
-home = os.path.expanduser("~")
-projects_dir = os.path.join(home, ".claude", "projects")
-
-stale = []
-try:
-  for proj_dir in os.listdir(projects_dir):
-    memory_dir = os.path.join(projects_dir, proj_dir, "memory")
-    if not os.path.isdir(memory_dir):
-      continue
-
-    for fname in os.listdir(memory_dir):
-      if fname == "MEMORY.md" or not fname.endswith(".md"):
-        continue
-
-      fpath = os.path.join(memory_dir, fname)
-      try:
-        with open(fpath, 'r') as f:
-          content = f.read()
-      except:
-        continue
-
-      # Parse frontmatter
-      if not content.startswith('---'):
-        continue
-
-      parts = content.split('---')
-      if len(parts) < 3:
-        continue
-
-      frontmatter = parts[1]
-      body = '---'.join(parts[2:])
-
-      # Extract verified_at
-      verified_at = None
-      for line in frontmatter.split('\n'):
-        if line.startswith('verified_at:'):
-          match = re.search(r'(\d{4}-\d{2}-\d{2})', line)
-          if match:
-            verified_at = match.group(1)
-          break
-
-      if not verified_at:
-        continue
-
-      # Check age
-      try:
-        vdate = datetime.strptime(verified_at, '%Y-%m-%d')
-        today = datetime.utcnow()
-        age_days = (today - vdate).days
-      except:
-        continue
-
-      if age_days <= 30:
-        continue
-
-      # Check if body names paths/functions/flags
-      has_specific = bool(
-        re.search(r'/scripts/', body) or
-        re.search(r'~/.claude/', body) or
-        re.search(r'\w+\(\)', body) or
-        re.search(r'--\w+', body)
-      )
-
-      if has_specific:
-        stale.append((fpath, verified_at, age_days))
-
-except:
-  pass
-
-print(len(stale))
-for fpath, vdate, age in sorted(stale)[:10]:
-  print(f"{fpath}|{vdate}|{age}")
-PYEOF
-)
+  if [ -f "$_stale_scanner" ]; then
+    stale_output=$(python3 "$_stale_scanner" 2>/dev/null || echo "0")
+  else
+    stale_output="0"
+  fi
 
   local stale_count
   stale_count=$(echo "$stale_output" | head -1 | tr -d ' ')
@@ -2318,7 +2248,7 @@ PYEOF
     while IFS='|' read -r fpath vdate age; do
       [[ -z "$fpath" ]] && continue
       printf "      %s (verified %s, %d days ago)\n" "$fpath" "$vdate" "$age"
-    done <<< "$(echo "$stale_output" | tail -n +2)"
+    done <<< "$(echo "$stale_output" | tail -n +2 | head -10)"
     if [ "$stale_count" -gt 10 ]; then
       printf "      ... and %d more\n" $((stale_count - 10))
     fi
