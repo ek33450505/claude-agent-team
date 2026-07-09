@@ -33,6 +33,16 @@ import re
 import json
 import argparse
 
+# ---------------------------------------------------------------------------
+# Size guard — transcripts from SessionEnd can reach 50-80MB. Reading
+# unbounded risks OOM / latency spikes.  When a file exceeds the cap we read
+# only the LAST MAX_TRANSCRIPT_BYTES (most recent session content is the most
+# memory-worthy).  Overridable via env var for CI / large-context use.
+# ---------------------------------------------------------------------------
+MAX_TRANSCRIPT_BYTES: int = int(
+    os.environ.get('CAST_DISTILLER_MAX_BYTES', str(20 * 1024 * 1024))
+)
+
 
 # ---------------------------------------------------------------------------
 # Harness/command chrome markers — turns containing these are not user prose
@@ -316,17 +326,57 @@ def main():
                         help='Maximum candidates to write per run (default: 5)')
     args = parser.parse_args()
 
-    # Read transcript
+    # Read transcript (bounded — see MAX_TRANSCRIPT_BYTES)
     if args.input:
         try:
-            with open(args.input, 'r', encoding='utf-8') as f:
-                text = f.read()
-        except Exception as e:
+            file_size = os.path.getsize(args.input)
+            with open(args.input, 'rb') as fb:
+                if file_size > MAX_TRANSCRIPT_BYTES:
+                    # Read only the tail; drop the leading partial line so that
+                    # downstream json.loads()-per-line stays valid.
+                    fb.seek(-MAX_TRANSCRIPT_BYTES, 2)
+                    raw = fb.read()
+                    # Drop bytes up to (and including) the first newline so we
+                    # don't start mid-JSONL-record.
+                    newline_pos = raw.find(b'\n')
+                    if newline_pos != -1:
+                        raw = raw[newline_pos + 1:]
+                    text = raw.decode('utf-8', errors='replace')
+                    print(
+                        f"[distiller] transcript tail-truncated: "
+                        f"file={file_size} bytes > cap={MAX_TRANSCRIPT_BYTES} bytes "
+                        f"(CAST_DISTILLER_MAX_BYTES)",
+                        file=sys.stderr,
+                    )
+                else:
+                    text = fb.read().decode('utf-8', errors='replace')
+        except OSError as e:
             print(f"ERROR: Cannot read input file {args.input}: {e}", file=sys.stderr)
             sys.exit(1)
     else:
         try:
-            text = sys.stdin.read()
+            # stdin: read in chunks to bound memory; discard leading bytes if
+            # the stream exceeds the cap (keep the tail, same rationale).
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in iter(lambda: sys.stdin.buffer.read(65536), b''):
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > MAX_TRANSCRIPT_BYTES:
+                    # Keep only the last MAX_TRANSCRIPT_BYTES worth of data.
+                    combined = b''.join(chunks)
+                    combined = combined[-MAX_TRANSCRIPT_BYTES:]
+                    newline_pos = combined.find(b'\n')
+                    if newline_pos != -1:
+                        combined = combined[newline_pos + 1:]
+                    chunks = [combined]
+                    total = len(combined)
+                    print(
+                        f"[distiller] stdin tail-truncated at cap={MAX_TRANSCRIPT_BYTES} bytes "
+                        f"(CAST_DISTILLER_MAX_BYTES)",
+                        file=sys.stderr,
+                    )
+            text = b''.join(chunks).decode('utf-8', errors='replace')
         except Exception:
             text = ''
 
