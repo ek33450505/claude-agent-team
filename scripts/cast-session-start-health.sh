@@ -22,6 +22,8 @@ INPUT="$(cat 2>/dev/null || true)"
 LAUNCHCTL="${CAST_HEALTH_LAUNCHCTL_CMD:-launchctl}"
 LAUNCHCTL_OUTPUT="$("$LAUNCHCTL" list 2>/dev/null || true)"
 
+_HEALTH_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CAST_HEALTH_SCRIPT_DIR="$_HEALTH_SCRIPT_DIR"
 export CAST_INPUT="$INPUT"
 export CAST_LAUNCHCTL_OUTPUT="$LAUNCHCTL_OUTPUT"
 export CAST_HOME="$HOME"
@@ -37,7 +39,12 @@ launchctl_out = os.environ.get("CAST_LAUNCHCTL_OUTPUT", "")
 # Output format: line 1 = count, lines 2+ = filepath|verified_at|age_days
 _scanner = os.path.join(home, ".claude", "scripts", "cast-stale-memories.py")
 if not os.path.isfile(_scanner):
-    # Fall back to repo copy (dev/CI context)
+    # Fall back to sibling in same directory (repo/CI context)
+    _sib = os.path.join(os.environ.get("CAST_HEALTH_SCRIPT_DIR", ""), "cast-stale-memories.py")
+    if _sib and os.path.isfile(_sib):
+        _scanner = _sib
+if not os.path.isfile(_scanner):
+    # Final fallback: explicit repo dir env var
     _repo = os.environ.get("CAST_REPO_DIR", "")
     if _repo:
         _scanner = os.path.join(_repo, "scripts", "cast-stale-memories.py")
