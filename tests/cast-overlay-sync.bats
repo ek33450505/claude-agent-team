@@ -33,7 +33,7 @@ setup() {
 
   # Seed a real (non-noreply) identity + an initial commit, mirroring the
   # confirmed-buggy pre-fix state, so we can prove the script corrects it.
-  git -C "$OVERLAY_DIR" config user.email "edward.kubiak.dev@gmail.com"
+  git -C "$OVERLAY_DIR" config user.email "test-real-address@example.com"
   git -C "$OVERLAY_DIR" config user.name "Edward Kubiak (real)"
   git -C "$OVERLAY_DIR" checkout -q -b main
   touch "$OVERLAY_DIR/.keep"
@@ -83,7 +83,7 @@ teardown() {
 @test "cast-overlay-sync corrects a pre-existing real-email local config (regression for GH007)" {
   # Pre-condition sanity check: setup() seeded the real (buggy) identity.
   pre_email="$(git -C "$OVERLAY_DIR" config user.email)"
-  [ "$pre_email" = "edward.kubiak.dev@gmail.com" ]
+  [ "$pre_email" = "test-real-address@example.com" ]
 
   run bash "$SCRIPT" --dry-run
   [ "$status" -eq 0 ]
