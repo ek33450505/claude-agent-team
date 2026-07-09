@@ -44,7 +44,7 @@ Fail ANY condition → the standard ceremony applies (dispatch the specialist + 
 
 ## Agent Turn Limits (maxTurns)
 - Every CAST agent has a `maxTurns` frontmatter cap (natively enforced by Claude Code). Hitting it stops the agent SILENTLY mid-task: no Status/Handoff block, no SubagentStop hook fire, and the `agent_runs` row stays stuck in `running` (discovered 2026-06-10, crosscheck_2.0 help-docs migration).
-- A SendMessage resume grants a fresh turn budget — but scope dispatch prompts to fit the cap instead of relying on resumes. Caps are data-fit to each agent's truncation rate (B4 retune 2026-07-06): reviewers/researchers that truncate mid-output run higher (code-reviewer 40, researcher 45, docs 30); implementers stay scoped (code-writer 80, test-writer 50, debugger 50); most others 15–25.
+- A SendMessage resume grants a fresh turn budget — but scope dispatch prompts to fit the cap instead of relying on resumes. Caps are data-fit to each agent's truncation rate (B4 retune 2026-07-06; B5 retune 2026-07-09): reviewers/researchers that truncate mid-output run higher (code-reviewer 50, researcher 45, docs 30); implementers stay scoped (code-writer 100, test-writer 50, debugger 50); most others 15–25.
 - Symptom of a hit cap: agent's final message ends mid-sentence (e.g. "Now let me run the tests:") with no Status line. Treat as truncation, not completion — never relay it as done.
 - For tasks that legitimately need more turns (large migrations, multi-file sweeps), split into smaller dispatches rather than raising caps further — the cap is a runaway-loop guard.
 
@@ -52,7 +52,7 @@ Fail ANY condition → the standard ceremony applies (dispatch the specialist + 
 The 95K-token zero-yield burn (a bash-specialist read 8 files, wrote nothing, hit maxTurns) was an *authoring* failure, not a cap failure. Every dispatch MUST give the agent enough inlined context to start producing output immediately:
 - **Inline the context, don't defer it.** Paste the exact `file:line` anchors / snippets / old→new strings the agent needs — never "study/read these N files first." If the agent would need to read 4+ files just to begin, compress that context into the prompt before dispatch.
 - **Demand artifact-first.** "Write a skeleton of the deliverable in your first 1–2 tool calls, then refine" — so a truncated run leaves a salvageable artifact, never zero output.
-- **Scope to the turn cap.** One logical unit per dispatch, sized to the agent's maxTurns (bash-specialist 30, code-writer 80). Split big bites; never rely on a resume.
+- **Scope to the turn cap.** One logical unit per dispatch, sized to the agent's maxTurns (bash-specialist 30, code-writer 100). Split big bites; never rely on a resume.
 Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention: artifact-first + read-before-write refusal).
 - **Scope the commit agent explicitly.** Every `commit` dispatch lists the exact files to stage AND states "exclude everything else" — the agent stages nothing outside the list. An unscoped dispatch swept `docs/decision-log.md` into an unrelated commit (LF-5, 2026-07-01).
 - **Per-unit review gates need per-unit diffs.** When multiple units' uncommitted work coexists, scope each `code-reviewer` dispatch to the unit's files (or commit prior units first) — a reviewer shown the whole tree false-BLOCKs on other units' legitimate work (LF-9, 2026-07-01).
