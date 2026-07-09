@@ -26,6 +26,12 @@
       "tier": "cloud",
       "provider": "anthropic"
     },
+    "claude-sonnet-5": {
+      "cost_per_million_input": 2.00,
+      "cost_per_million_output": 10.00,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
     "claude-haiku-4-5": {
       "cost_per_million_input": 0.80,
       "cost_per_million_output": 4.00,

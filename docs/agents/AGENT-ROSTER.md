@@ -42,3 +42,9 @@
 | `dep-auditor` | haiku | Dependency auditor — reviews package changes for CVEs, licenses, version compatibility |
 
 **Model tiering:** Haiku (13 agents) for review, commit, ops, and doc work ($1/MTok); Sonnet (8 agents) for implementation, planning, and research ($3/MTok); Opus (1 agent) for high-stakes schema review. Tiering scales cost savings across the swarm.
+
+**Main-loop default (inline session):** `claude-sonnet-5` — set in `managed-settings.d/16-model-defaults.json` (pinned ID, not the `sonnet` alias, to prevent silent model drift). Chosen for ≈Opus-4.8 capability at ~half the cost ($2/$10 per 1M vs $15/$75). Intro pricing through 2026-08-31; steady-state $3/$15 afterward — bump the pricing entry in `config/model-pricing.json` when pricing changes.
+
+**Manual escalation:** `/model opus` for the hardest reasoning tasks, within the standing Opus-4.8 subagent cap; `/model fable` for the very hardest **solo** work only (no fan-outs — see warning below).
+
+> **⚠ Workflow / Explore / Plan / general-purpose subagents INHERIT the main-loop model.** A `/model fable` session that fans out a Workflow spawns *Fable* subagents — which violates the "no Fable dispatches / no subagents beyond Opus 4.8" rule. Keep `/model fable` to solo work only; for fan-outs stay on Sonnet 5 or Opus (or set per-agent model overrides in the Workflow script). `migration-reviewer` is unaffected — its frontmatter `model: opus` is explicit and does not inherit from the main-loop setting.
