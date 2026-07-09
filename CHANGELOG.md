@@ -6,6 +6,28 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 _Nothing yet._
 
+## [9.5.1] — 2026-07-09 — v9.5 close-out (maintenance)
+
+A same-day maintenance pass closing out v9.5: a fresh `cast-audit` (second consecutive zero-HIGH audit), memory-state reconciliation, and the fixes that audit and the first B5 record-review surfaced. No new capability — hardening, correctness, and the two long-pending D5 provenance fixes.
+
+### Added
+- **`.githooks/post-commit` — the D5 provenance recorder (finally shipped).** Records `commit_provenance` automatically on every in-session (`CLAUDECODE=1`) commit — the symmetric counterpart to the pre-push provenance gate, so commit-agent truncation or a classifier outage can no longer skip the record and cause a false pre-push block. Idempotent (`INSERT OR IGNORE`), always `exit 0` (never blocks the commit), no `CLAUDE_SUBPROCESS` guard-out (the commit agent is a subagent — exactly where the miss occurred). Human-terminal commits are silent no-ops. Approved by code-reviewer + security and live-verified recording its own commits.
+- **Manifest-based agent-prune in `install.sh`.** Installs now track the set of CAST-installed agent basenames and remove agents retired from the roster on the next install, while never touching hand-made agents absent from the manifest. Closes the drift that left the P6-retired `perf-sentinel.md` lingering live (23 installed vs 22 canonical). Path-traversal-hardened on the manifest read.
+
+### Changed
+- **`commit` agent: classifier outage is now a HARD BLOCK.** A transiently-unavailable safety classifier makes the commit agent stop and report `BLOCKED`, never self-authorize the `CAST_COMMIT_AGENT=1` escape hatch. `CAST_COMMIT_AGENT=1` presupposes an already-passed gate; classifier-unavailable ≠ classifier-approved.
+
+### Fixed
+- **Stale-memory count unified.** `cast doctor` reported "none" while the SessionStart health surface reported ~12 — same stated definition, divergent results, because `bin/cast` matched `verified_at:` without stripping leading whitespace (the field is indented under `metadata:`). A shared `scripts/cast-stale-memories.py` scanner now backs both surfaces; they always agree (14). The distinct `confidence < 0.4` metric in `cast status` is intentionally left separate.
+- **Record-review hallucination over-count (~30×).** The B5 record-review counted every `agent_hallucinations` row — including `verified=1` confirmed writes — as a hallucination, inflating `code-writer`'s file-write "hallucination" rate to ~86%. Added `AND verified = 0` (the true rate is ~3%, matching `cast doctor`), making the report's Mine→Propose section trustworthy.
+
+### Performance / Hardening
+- **Session distiller bounded read.** `cast-session-distiller.py` capped transcript reads at 20 MB (`CAST_DISTILLER_MAX_BYTES`) with JSONL-safe tail-truncation, removing an unbounded `f.read()` on SessionEnd transcripts that can reach 50–80 MB.
+- **eval-runner `shell=True` documented as accepted-risk.** Investigated switching to `shell=False`; the grader corpus legitimately uses shell features (`|`, `&&`, `;`) across 10+ templates, so the existing `$`-expansion-rejection guard + `shlex.quote` on all substituted values (committed-template, non-runtime-user input) remain the mitigation, now documented inline.
+
+### Investigated (no code change — documented finding)
+- **`agent_runs.model` unreliability root-caused.** Pre-2026-07-02 rows with a NULL `agent_id` reflect the *main-loop* model bleeding in (no transcript was resolved), not the subagent's model — e.g. the haiku `commit` agent logged as `"sonnet"`. A blanket alias→resolved-ID backfill would corrupt these rows; the forward capture path is already correct now that `agent_id` is consistently supplied. The B5 model-tier proposals that compared a model against itself stay rejected.
+
 ## [9.5.0] — 2026-07-09 — The Record Runs the System
 
 v9.5 is the last release under the optimization-sprint framing that began at v9.0 — after this, CAST enters maintenance mode. The theme: v9 built the record; v9.5 makes the system run on it. Three routines close the loop: a weekly memory-consolidation pass that was scheduled nowhere before, a main-loop model change that cuts the cost of everything Workflow-shaped inherits, and — the release's thesis — a weekly report that mines the record for its own maintenance and asks a human to approve or reject each line.
