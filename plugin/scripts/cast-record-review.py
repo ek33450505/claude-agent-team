@@ -669,14 +669,14 @@ def section_trend_alert(conn, repo_root: str, lookback_days: int = 7) -> tuple:
     """, (f'-{lookback_days} days',))
     if hf_rows:
         total = sum(r['n'] for r in hf_rows)
-        lines.append(f"### hook_failures: WATCH")
+        lines.append("### hook_failures: WATCH")
         lines.append(f"- This week vs last week: N/A (see per-hook counts) — {total} failures "
                       f"across {len(hf_rows)} hook(s) in the last {lookback_days}d")
         for r in hf_rows:
             lines.append(f"  - `{r['hook_name']}`: {r['n']}")
     else:
         site_count = _count_log_hook_failure_sites(repo_root)
-        lines.append(f"### hook_failures: INFO")
+        lines.append("### hook_failures: INFO")
         lines.append(f"- hook_failures has 0 rows in this window — verify this is genuine (no "
                       f"failures) not a dead producer; {site_count} documented "
                       f"`log_hook_failure` writer call sites exist in scripts/")

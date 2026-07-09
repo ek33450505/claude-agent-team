@@ -132,8 +132,8 @@
     "local-fast": "ollama/qwen2.5-coder:7b"
   },
   "_ultracode_note": "ultracode is session-only \u2014 cannot persist in effortLevel or --effort. Optional alias: claude --settings '{\"ultracode\":true}' for a single ultracode session.",
-  "model": "opus",
-  "effortLevel": "xhigh",
+  "model": "claude-sonnet-5",
+  "effortLevel": "high",
   "hooks": {
     "SessionStart": [
       {
