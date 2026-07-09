@@ -197,3 +197,37 @@ EOF
   assert_output --partial "hook_failures has 0 rows in this window"
   assert_output --partial "documented"
 }
+
+# ---------------------------------------------------------------------------
+# (7) Section 1 NULL gate_type regression — 2026-07-09 crash
+#     ('<' not supported between instances of 'str' and 'NoneType')
+#
+# Root cause: the crash occurred against a pre-guard draft of this script
+# (prior to commit e181d06, which added the `_shares()` None->'(none)' coercion
+# at build/scripts/cast-record-review.py ~line 251-256) during same-morning
+# feature development, not against the current guarded code. This test pins
+# the guard: quality_gates rows with gate_type IS NULL must not crash
+# build_report()'s ceremony-mix drift comparison/sort in section 1.
+# ---------------------------------------------------------------------------
+
+@test "(7) section 1: quality_gates row with NULL gate_type does not crash build_report" {
+  init_db
+  local now; now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+  # NULL gate_type rows this week AND prior week so both _shares() calls see NULL,
+  # and the sorted(set(...) | set(...)) union includes the coerced '(none)' key.
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count, gate_type, created_at)
+     VALUES ('qg-null-1', 'sess-null-1', 'some-agent', '$now', 'Status: DONE', 1, 0, NULL, '$now');"
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO quality_gates (id, session_id, agent_name, timestamp, status_line, contract_passed, retry_count, gate_type, created_at)
+     VALUES ('qg-typed-1', 'sess-typed-1', 'some-agent', '$now', 'Status: DONE', 1, 0, 'status_contract', '$now');"
+
+  run_record_review_debug
+  assert_success
+  refute_output --partial "not supported between instances"
+
+  local report_path; report_path="$(report_path_from_output)"
+  run cat "$report_path"
+  assert_output --partial "\`(none)\`"
+}
