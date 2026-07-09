@@ -93,24 +93,6 @@ def _log(msg: str, level: str = 'INFO') -> None:
         pass  # Never crash — logging failure is silent
 
 
-# TEMP DIAGNOSTIC — remove after root-cause
-def _log_diag(msg: str) -> None:
-    """Append a timestamped entry to ~/.claude/logs/otel-debug.log.
-
-    TEMP DIAGNOSTIC — remove after root-cause. Deliberately a SEPARATE file
-    from otel-collector.log so it's trivial to delete/ignore and never
-    pollutes production logs permanently. Never raises.
-    """
-    try:
-        log_path = Path.home() / '.claude' / 'logs' / 'otel-debug.log'
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        with open(str(log_path), 'a') as fh:
-            fh.write(f'[{ts}] DIAG cast-otel-collector: {msg}\n')
-    except Exception:
-        pass  # Never crash — logging failure is silent
-
-
 # ---------------------------------------------------------------------------
 # Database — parameterized writes, no string interpolation of user data
 # ---------------------------------------------------------------------------
@@ -480,24 +462,6 @@ class OTLPHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """Handle POST /v1/metrics, /v1/logs, /v1/traces."""
-        # TEMP DIAGNOSTIC — remove after root-cause.
-        # Pure observation: logs headers/request-line/raw-body-prefix to a
-        # SEPARATE file (otel-debug.log) before any parsing is attempted.
-        # Must not alter parsing/response behavior.
-        try:
-            _headers_dump = '; '.join(f'{k}={v!r}' for k, v in self.headers.items())
-            _log_diag(
-                f'command={self.command!r} path={self.path!r} '
-                f'request_version={self.request_version!r} '
-                f'Transfer-Encoding={self.headers.get("Transfer-Encoding")!r} '
-                f'Content-Length={self.headers.get("Content-Length")!r} '
-                f'Content-Encoding={self.headers.get("Content-Encoding")!r} '
-                f'Content-Type={self.headers.get("Content-Type")!r} '
-                f'all_headers=[{_headers_dump}]'
-            )
-        except Exception as _diag_e:
-            _log_diag(f'header dump failed: {_diag_e}')
-
         transfer_encoding: str = self.headers.get('Transfer-Encoding', '')
         is_chunked: bool = 'chunked' in transfer_encoding.lower()
 
@@ -539,18 +503,6 @@ class OTLPHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(b'{}')
                     return
-
-        # TEMP DIAGNOSTIC — remove after root-cause.
-        # Log the raw body prefix (binary-safe repr) BEFORE any decompression
-        # or JSON parsing is attempted. Pure observation only.
-        try:
-            _log_diag(
-                f'path={self.path!r} is_chunked={is_chunked} '
-                f'raw_body_len={len(raw_body)} '
-                f'raw_body_prefix80={raw_body[:80]!r}'
-            )
-        except Exception as _diag_e:
-            _log_diag(f'raw body dump failed: {_diag_e}')
 
         # Decompress when Content-Encoding: gzip is set.
         # Track whether we decompressed here so ingest_bytes() can skip its
