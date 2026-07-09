@@ -5,7 +5,7 @@ tools: Bash, Glob, Grep, Read
 model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────
 background: true
-maxTurns: 40
+maxTurns: 50
 disallowedTools: Write, Edit
 skills: [cast-conventions, typescript-conventions, python-conventions]
 ---

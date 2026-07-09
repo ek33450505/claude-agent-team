@@ -5,9 +5,9 @@
 # CAST
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-9.2.0-blue)
+![Version](https://img.shields.io/badge/version-9.5.0-blue)
 ![Agents](https://img.shields.io/badge/agents-22-green)
-![Tests](https://img.shields.io/badge/tests-2281-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2292-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)
@@ -19,6 +19,8 @@
 CAST is the system I'd want if I were building production software with Claude Code every day — so I built it, broke it, and hardened it until it earned trust. The hard part wasn't wiring agents together; it was making the platform **honest** (it tells you when work is unverified) and **safe** (it cannot delete its own runtime). Those lessons came from real incidents: a full `~/.claude` wipe (twice) that took out colocated backups, a destructive BATS test that ran `rm -rf` from the repo root unguarded, silent hook failures that ate data without trace. Each incident became an invariant in code: backups live outside the failure domain (Litestream replication to `~/Library`, off the `~/.claude` blast radius); the wipe forensics canary runs from an isolated path so it survives what it detects; a PreToolUse command-guard makes `rm -rf ~/.claude` and `pkill` structurally impossible from an agent; every test runs in a temp HOME, never the real one; and when a hook fails, it records that failure in the `hook_failures` table instead of eating the error silently.
 
 Where Claude Code ships a native primitive, CAST **adopts it and deletes the bespoke version** (language rules became on-demand skills; heavy planning yields to native plan mode for single-session work; the whole thing ships as a **native plugin**). Where the platform still has a gap, CAST fills it: a fresh-context `code-reviewer` gate (the Writer/Reviewer pattern, mandatory here), an honesty/verification doctrine (`DONE_WITH_CONCERNS`, a typed Handoff contract, a Pre-existing-Failure-Evidence rule), an **eval harness mined from real agent failures**, and — new in v9 — a record that reads back: `cast cost`, `cast predict`, `cast ask`, `cast feature`, and a read-only `cast mcp` server over the whole trail.
+
+**Where the project is now:** v9.5 (2026-07-09) is the last release under that hardening push. From here CAST is in maintenance mode — bug fixes, the monthly audit, dependency/CI upkeep, and whatever the weekly record-review loop proposes and a human accepts. Full history: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -85,7 +87,7 @@ The plugin bundles CAST's curated agents, skills, commands, and `command`-type e
 - **The record acts:** `cast predict` joins past outcomes to agent cost/success rates; `cast ask` runs full-text search over the whole record; `cast cost --by-task` attributes spend per unit of work; the pre-push gate reads `quality_gates` to enforce review.
 - **Local-first by construction.** Your code, prompts, memory, and the full audit trail live on your disk. No SaaS dashboard, no telemetry egress, no sign-in. Every cloud feature is strictly opt-in — a CAST user with no network still has a fully working system.
 - **Agent behavior is tested, not hoped for.** The `cast eval` harness runs an agent-behavior corpus mined from real failures — with LLM-judge graders and `pass@k`.
-- **<!-- CAST_TEST_COUNT -->2281<!-- /CAST_TEST_COUNT --> BATS test cases** proving the guards work — including tests that *prove destructive ops refuse*. Runs on macOS and Ubuntu.
+- **<!-- CAST_TEST_COUNT -->2292<!-- /CAST_TEST_COUNT --> BATS test cases** proving the guards work — including tests that *prove destructive ops refuse*. Runs on macOS and Ubuntu.
 
 ---
 
@@ -133,6 +135,8 @@ Most observability is write-only. You instrument a system, ship telemetry to a d
 The native primitive underneath is **hooks**. Claude Code fires structured JSON on `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `SubagentStop`, and `Stop`; CAST wires each as a recorder that writes a typed row, and wires `UserPromptSubmit` as the *injection* path that feeds prior rows back into the next turn. Record → query → inject → influence is exactly what hooks are for.
 
 CAST is honest about this: the hooks-as-recorders mechanism is native plumbing — a community plugin could subscribe to the same events. What a generic plugin *cannot* produce is the **content**. `dispatch_decisions`, `provenance_chain`, `quality_gates`, `injection_log`, `incidents` — these rows don't exist in vanilla Claude Code because the *events* don't exist there. They are the exhaust of CAST's governance architecture. A record is only as rich as the events its host emits.
+
+As of v9.5, the record reads back on itself, not just on the next dispatch. A weekly routine (`cast-record-review.py`, read-only `mode=ro` against `cast.db`) mines `agent_runs`, `agent_hallucinations`, `agent_protocol_violations`, and hatch-event logs into a proposals report — cost-per-success by agent×model, truncation rates worth a `maxTurns` change, recurring hallucinations worth an eval case, friction that looks like a false guard block. A human approves or rejects each line; nothing acts automatically. The first report, run the day it shipped, produced 32 proposals from real data and caught its own measurement bug in the process (an alias vs. resolved-model-ID mismatch it flagged before recommending against acting on it) — two proposals were accepted and shipped the same day.
 
 ---
 
@@ -240,7 +244,7 @@ SQLite (WAL mode) at `~/.claude/cast.db` — append-only, never truncated, **ful
 
 ## Agent Memory & Persistence
 
-Each agent accumulates domain knowledge in `~/.claude/agent-memory-local/<name>/MEMORY.md` (Tier 1, native auto-load) alongside a dynamic per-prompt router over the `agent_memories` table (Tier 2, FTS5 relevance + confidence scoring). Language conventions load on demand as skills. See [the architecture guide](docs/architecture/ARCHITECTURE.md#memory-pipeline).
+Each agent accumulates domain knowledge in `~/.claude/agent-memory-local/<name>/MEMORY.md` (Tier 1, native auto-load) alongside a dynamic per-prompt router over the `agent_memories` table (Tier 2, FTS5 relevance + confidence scoring). Language conventions load on demand as skills. See [the architecture guide](docs/architecture/ARCHITECTURE.md#memory-pipeline). A weekly `com.cast.memory-consolidate` routine (Sundays 05:30) decays, dedups, archives, and promotes Tier 2 memories — confidence-gated and, since v9.5, usage-aware (a memory injected often decays slower than one nobody's recalled) rather than age-only.
 
 ---
 
@@ -248,9 +252,13 @@ Each agent accumulates domain knowledge in `~/.claude/agent-memory-local/<name>/
 
 Time- and event-triggered agent jobs — daily briefings, inbox triage, standup, weekly cost reports, the daily `cast integrity` monitor, and more. Manage with `cast routines list` / `cast routines trigger <name>`. Full guide: [docs/routines.md](docs/routines.md).
 
+Not every routine is YAML-defined — two run as direct launchd jobs outside that schema: the weekly memory-consolidation pass (`com.cast.memory-consolidate`, Sundays 05:30) and the weekly record-review loop (`com.cast.record-review`, Sundays 07:00). See [CHANGELOG.md](CHANGELOG.md#950--2026-07-09--the-record-runs-the-system).
+
 ---
 
 ## Token Efficiency & Cost Optimization
+
+Since v9.5, the main-loop model defaults to `claude-sonnet-5` ($2/$10 per million tokens against Opus 4.8's $15/$75) — because Workflow, Explore, Plan, and general-purpose subagents inherit whatever model is driving the main loop, this one setting moved the framework's largest recorded cost driver (`workflow-subagent`, 64.6% of agent spend, ~69% Opus-by-inheritance) off Opus by default. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the escalation path (`/model opus`, `/model fable`) and its one sharp edge (a Fable main loop that fans out spawns Fable subagents).
 
 Model tiering, response budgets, optional local Ollama routing (opt-in, never a dependency — Pillar 1), demand-loaded skills, and laconic mode reduce token spend; `cast cost` makes the result legible per task, branch, and agent. See [Proven economics](#proven-economics--with-the-honest-attribution) and [docs/TOKEN-OPTIMIZATION.md](docs/TOKEN-OPTIMIZATION.md).
 
@@ -266,7 +274,7 @@ Runtime installs to `~/.claude/` — agents, memory, plans, `cast.db`, scripts.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->198<!-- /CAST_TEST_FILE_COUNT --> CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->2281<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
+<!-- CAST_TEST_FILE_COUNT -->199<!-- /CAST_TEST_FILE_COUNT --> CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->2292<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
 
 ---
 
@@ -333,6 +341,6 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->2281<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->2292<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> commands |
 <!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> skills

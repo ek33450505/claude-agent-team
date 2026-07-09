@@ -156,6 +156,10 @@ setup() {
   setup_temp_home
   mkdir -p "$HOME/.claude/logs"
   export CAST_DB_PATH="$HOME/.claude/cast.db"
+  # Skip backup gate in tests — real backup subprocess is not available in CI temp env.
+  # CAST_CONSOLIDATE_SKIP_BACKUP=1 is a test/CI-only escape hatch; the launchd plist
+  # does NOT set it, so unattended scheduled runs always invoke the backup gate.
+  export CAST_CONSOLIDATE_SKIP_BACKUP=1
 }
 
 teardown() {
@@ -561,4 +565,156 @@ for key in ("decayed", "merged", "archived", "promoted"):
     v = d[key]
     assert isinstance(v, int) and v >= 0, f"{key}={v!r} is not a non-negative int"
 '
+}
+
+# ---------------------------------------------------------------------------
+# (i) injection-usage-aware decay — B3 confidence-gated lifecycle
+# ---------------------------------------------------------------------------
+
+# Create injection_log table for injection-aware decay tests.
+init_injection_log() {
+  sqlite3 "$CAST_DB_PATH" 'CREATE TABLE IF NOT EXISTS injection_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT,
+    prompt_hash TEXT,
+    fact_id     INTEGER,
+    score       REAL,
+    score_breakdown TEXT,
+    injected_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );'
+}
+
+# Insert recent injection_log rows for a given fact_id.
+# $1=fact_id  $2=count (inserts $2 rows with injected_at=now)
+insert_recent_injections() {
+  local fact_id="$1"
+  local count="$2"
+  local now; now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  local i
+  for i in $(seq 1 "$count"); do
+    sqlite3 "$CAST_DB_PATH" \
+      "INSERT INTO injection_log (session_id, prompt_hash, fact_id, score, injected_at)
+       VALUES ('sess-$i', 'hash-$i', $fact_id, 0.9, '$now');"
+  done
+}
+
+@test "(i) injected memory decays slower than un-injected memory (same age and decay_rate)" {
+  init_db
+  init_injection_log
+
+  # Two identical old memories — only mem-A gets injection history.
+  local old_date="2024-01-01T00:00:00Z"
+  insert_memory "injected-mem"   "0.8" "0.1" "$old_date"
+  insert_memory "uninjected-mem" "0.8" "0.1" "$old_date"
+
+  # Retrieve the IDs we just inserted.
+  local id_a; id_a="$(db_query "SELECT id FROM agent_memories WHERE name='injected-mem';")"
+  local id_b; id_b="$(db_query "SELECT id FROM agent_memories WHERE name='uninjected-mem';")"
+
+  # Insert 10 recent injections for mem-A only.
+  insert_recent_injections "$id_a" "10"
+
+  run_consolidate
+  assert_success
+
+  local imp_a; imp_a="$(db_query "SELECT importance FROM agent_memories WHERE name='injected-mem';")"
+  local imp_b; imp_b="$(db_query "SELECT importance FROM agent_memories WHERE name='uninjected-mem';")"
+
+  # Injected memory must retain strictly higher importance than un-injected one.
+  python3 -c "
+import sys
+a = float('$imp_a')
+b = float('$imp_b')
+if not (a > b):
+    print(f'FAIL: injected={a} should be > uninjected={b}', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+@test "(i) backward compat: no injection_log table → decay behaves as age-only formula" {
+  # DB with agent_memories but WITHOUT injection_log.
+  init_db
+
+  local old_date="2024-01-01T00:00:00Z"
+  insert_memory "compat-mem" "0.8" "0.1" "$old_date"
+
+  local before; before="$(db_query "SELECT importance FROM agent_memories WHERE name='compat-mem';")"
+  run_consolidate
+  assert_success
+  local after; after="$(db_query "SELECT importance FROM agent_memories WHERE name='compat-mem';")"
+
+  # No crash AND importance was reduced (age-only decay still applied).
+  python3 -c "
+import sys
+b = float('$before')
+a = float('$after')
+if not (a < b):
+    print(f'FAIL: importance should have decayed; before={b} after={a}', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+@test "(i) un-injected memory in presence of injection_log still decays (no injection_log rows for it)" {
+  init_db
+  init_injection_log
+
+  local old_date="2024-01-01T00:00:00Z"
+  insert_memory "no-injection-mem" "0.8" "0.1" "$old_date"
+
+  local before; before="$(db_query "SELECT importance FROM agent_memories WHERE name='no-injection-mem';")"
+  run_consolidate
+  assert_success
+  local after; after="$(db_query "SELECT importance FROM agent_memories WHERE name='no-injection-mem';")"
+
+  # No injection rows for this memory → usage_damp=1.0 → normal age-only decay.
+  python3 -c "
+import sys
+b = float('$before')
+a = float('$after')
+if not (a < b):
+    print(f'FAIL: importance should have decayed; before={b} after={a}', file=sys.stderr)
+    sys.exit(1)
+"
+}
+
+# ---------------------------------------------------------------------------
+# (j) Fail-closed backup gate
+# ---------------------------------------------------------------------------
+
+@test "(j) backup gate: no cast-db-backup.py → skips all ops, exit 0, skipped JSON" {
+  # Copy the script alone into a temp dir that has no cast-db-backup.py sibling.
+  # The script resolves siblings via its own __file__, so the copy is isolated.
+  local tmp_dir; tmp_dir="$(mktemp -d)"
+  cp "$SCRIPT" "$tmp_dir/cast-memory-consolidate.py"
+
+  # Also copy cast_db.py to keep the import guard happy (optional; ignore import errors).
+  cp "$(dirname "$SCRIPT")/cast_db.py" "$tmp_dir/cast_db.py" 2>/dev/null || true
+
+  # Populate the DB with one low-importance row that op_archive would normally delete.
+  init_db
+  insert_memory "gate-test-mem" "0.05" "0.0"
+  local before_count; before_count="$(db_query "SELECT COUNT(*) FROM agent_memories WHERE name='gate-test-mem';")"
+
+  # Run with gate active (unset the hatch we set in setup()).
+  run bash -c "
+    unset CAST_CONSOLIDATE_SKIP_BACKUP
+    python3 '$tmp_dir/cast-memory-consolidate.py' --db '$CAST_DB_PATH' 2>/dev/null
+  "
+
+  # (a) exit 0 — non-destructive skip, not a crash
+  assert_success
+
+  # (b) JSON output contains skipped=backup_failed
+  printf '%s' "$output" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d.get("skipped") == "backup_failed", f"expected skipped=backup_failed, got: {d}"
+assert d["decayed"] == 0 and d["merged"] == 0 and d["archived"] == 0 and d["promoted"] == 0
+'
+
+  # (c) low-importance row was NOT archived (mutations were skipped)
+  local after_count; after_count="$(db_query "SELECT COUNT(*) FROM agent_memories WHERE name='gate-test-mem';")"
+  [ "$after_count" -eq "$before_count" ]
+
+  rm -rf "$tmp_dir"
 }

@@ -61,7 +61,7 @@ teardown() {
   #   (b) if somehow loaded, does NOT point to the temp HOME
   local uid
   uid="$(id -u)"
-  local labels=("com.cast.backup" "com.cast.log-compress" "com.cast.wipe-canary" "com.cast.memory-embed" "com.cast.db-prune")
+  local labels=("com.cast.backup" "com.cast.log-compress" "com.cast.wipe-canary" "com.cast.memory-embed" "com.cast.db-prune" "com.cast.memory-consolidate" "com.cast.record-review")
 
   for label in "${labels[@]}"; do
     local loaded_path
