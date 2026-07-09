@@ -91,6 +91,14 @@ if [[ -f "${CAST_DIR}/scripts/cast-rate-check.py" ]]; then
   log "Ran rate-limit check (see logs/rate-check.log)"
 fi
 
+# 9.5 Index new memory/incident/distillate rows into record_fts so fresh facts become injectable
+if [[ -f "${CAST_DIR}/scripts/cast-ask-index.py" ]]; then
+  for _k in memory incident distillate; do
+    python3 "${CAST_DIR}/scripts/cast-ask-index.py" --kind "$_k" >> "${CAST_DIR}/logs/ask-index.log" 2>&1 || true
+  done
+  log "Indexed injection kinds into record_fts (see logs/ask-index.log)"
+fi
+
 # 10. Embed pending record_fts rows for semantic search (local Ollama; fail-open if not running)
 if [[ -f "${CAST_DIR}/scripts/cast-ask-index.py" ]]; then
   python3 "${CAST_DIR}/scripts/cast-ask-index.py" --embed >> "${CAST_DIR}/logs/ask-embed.log" 2>&1 || true

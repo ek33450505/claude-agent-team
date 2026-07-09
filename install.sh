@@ -583,6 +583,14 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         cast_launchctl_reload "$PLIST_DEST" "com.cast.branch-groomer"
     fi
 
+    # Install cast-memory-consolidate.plist — weekly (Sun 05:30) memory lifecycle:
+    # decay/dedup/archive/promote of agent_memories (B3 confidence-gated lifecycle).
+    if [ -f "$SCRIPT_DIR/macos/cast-memory-consolidate.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.memory-consolidate.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-memory-consolidate.plist" > "$PLIST_DEST"
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.memory-consolidate"
+    fi
+
     # Install cast-abandon-stale-runs.plist — nightly stale agent_runs cleanup (04:00)
     if [ -f "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.abandon-stale-runs.plist"

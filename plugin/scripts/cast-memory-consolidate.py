@@ -8,6 +8,21 @@ Performs four sequential operations:
   3. Archive low-value memories (importance < 0.1) to archived_memories
   4. Promote frequently retrieved memories (retrieval_count >= 5)
 
+Fail-closed backup gate (real runs only):
+  Before any destructive operation, cast-db-backup.py is invoked as a subprocess.
+  If the backup exits non-zero, times out, or cannot be found, ALL operations are
+  skipped and a JSON result with skipped="backup_failed" is emitted to stdout.
+  The script still exits 0 (non-destructive skip, mirroring prune's skip-not-crash
+  semantics — a weekly job skipping one cycle is harmless).
+
+  Escape hatch (test/CI only):
+    CAST_CONSOLIDATE_SKIP_BACKUP=1  — skips the backup gate entirely.
+    The launchd plist does NOT set this env var, so unattended scheduled runs
+    always back up before writing.
+
+  Dry-run mode (--dry-run):
+    Skips the backup gate because no destructive writes are performed.
+
 Output: JSON summary to stdout.
 
 Cron entry (weekly Sunday 3am):
@@ -25,6 +40,7 @@ import re
 import struct
 import argparse
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 
 # cast_db is co-located in scripts/ — import for hook failure logging.
@@ -37,6 +53,72 @@ except Exception:
 def _maybe_log_failure(*args, **kwargs):
     if log_hook_failure:
         log_hook_failure(*args, **kwargs)
+
+
+def _pre_consolidate_backup(db_path: str) -> int:
+    """Run cast-db-backup.py before performing any destructive consolidation operations.
+
+    Fail-closed gate: if the backup subprocess exits non-zero, times out, or cannot be
+    invoked, log a loud ERROR to stderr and return 1. The caller MUST skip all ops when
+    this returns non-zero — never consolidate (write/delete) without a successful backup.
+
+    On success, print a one-line confirmation to stderr and return 0.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    backup_script = os.path.join(script_dir, 'cast-db-backup.py')
+
+    if not os.path.exists(backup_script):
+        msg = f'ERROR: Pre-consolidate backup script not found: {backup_script} — skipping consolidation'
+        print(msg, file=sys.stderr)
+        _maybe_log_failure('cast-memory-consolidate', 1, msg)
+        return 1
+
+    try:
+        result = subprocess.run(
+            [sys.executable, backup_script],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        msg = 'ERROR: Pre-consolidate backup timed out after 120s — skipping consolidation'
+        print(msg, file=sys.stderr)
+        _maybe_log_failure('cast-memory-consolidate', 1, msg)
+        return 1
+    except Exception as e:
+        msg = f'ERROR: Pre-consolidate backup invocation failed: {e} — skipping consolidation'
+        print(msg, file=sys.stderr)
+        _maybe_log_failure('cast-memory-consolidate', 1, msg)
+        return 1
+
+    if result.returncode != 0:
+        raw = result.stdout.strip()
+        error_detail = ''
+        if raw:
+            try:
+                payload = json.loads(raw)
+                error_detail = payload.get('error', raw)
+            except json.JSONDecodeError:
+                error_detail = raw
+        if not error_detail and result.stderr.strip():
+            error_detail = result.stderr.strip()
+        msg = f'ERROR: Pre-consolidate backup failed: {error_detail} — skipping consolidation'
+        print(msg, file=sys.stderr)
+        _maybe_log_failure('cast-memory-consolidate', 1, msg)
+        return 1
+
+    # Parse backup_path from stdout JSON if available
+    raw = result.stdout.strip()
+    backup_path = ''
+    if raw:
+        try:
+            payload = json.loads(raw)
+            backup_path = payload.get('backup_path', '')
+        except json.JSONDecodeError:
+            backup_path = raw
+    print(f'Pre-consolidate backup OK: {backup_path}', file=sys.stderr)
+    return 0
+
 
 SAFE_COL = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
@@ -89,9 +171,40 @@ def column_exists(conn, table_name, column_name):
     return any(row[1] == column_name for row in rows)
 
 
+def _build_recent_injection_counts(conn):
+    """Return {fact_id: injection_count} for injection_log rows in the last 30 days.
+
+    Memories injected frequently are used actively — their decay should be dampened
+    so the system retains high-utility context rather than discarding it on age alone.
+    Guards for the injection_log table not existing (backward compat: returns {}).
+    """
+    if not table_exists(conn, 'injection_log'):
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT fact_id, COUNT(*) FROM injection_log"
+            " WHERE injected_at >= datetime('now', '-30 days')"
+            " GROUP BY fact_id"
+        ).fetchall()
+        return {row[0]: row[1] for row in rows}
+    except Exception:
+        return {}
+
+
 def op_decay(conn, dry_run=False):
-    """Operation 1: Apply exponential decay to importance scores."""
+    """Operation 1: Apply exponential decay to importance scores.
+
+    Decay is damped for memories that have been injected recently: a memory injected
+    N times in the last 30 days uses a multiplier of 1/(1+min(N,10)), so a memory
+    injected 10+ times barely decays while an un-injected one decays at the full rate
+    (usage_damp=1.0 when injection count=0 → identical to the prior age-only formula).
+
+    Uses injection_log.fact_id to track usage. Table absence → pure age-only decay
+    (backward compatible with DBs that predate the injection_log table).
+    """
     now = datetime.now(timezone.utc)
+    recent_inj = _build_recent_injection_counts(conn)
+
     rows = conn.execute(
         "SELECT id, importance, decay_rate, updated_at FROM agent_memories"
     ).fetchall()
@@ -112,7 +225,13 @@ def op_decay(conn, dry_run=False):
             continue
 
         hours_since = (now - updated_at).total_seconds() / 3600
-        new_importance = importance * math.exp(-decay_rate * hours_since / 8760)
+
+        # Injection-usage damping: frequent recent injections slow decay.
+        # usage_damp in (0.09, 1.0]: 1.0 when never injected (no damping), ~0.09 when 10+.
+        inj_count = recent_inj.get(row_id, 0)
+        usage_damp = 1.0 / (1.0 + min(inj_count, 10))
+
+        new_importance = importance * math.exp(-decay_rate * hours_since / 8760 * usage_damp)
         new_importance = round(new_importance, 6)
 
         if new_importance != importance:
@@ -272,6 +391,24 @@ def main():
             print(f"ERROR: agent_memories table not found in {db_path}", file=sys.stderr)
             conn.close()
             sys.exit(1)
+
+        # Fail-closed backup gate — runs before any destructive op.
+        # Skipped in --dry-run mode (no writes) and when CAST_CONSOLIDATE_SKIP_BACKUP=1
+        # (test/CI escape hatch only — the launchd plist does NOT set this var, so
+        # unattended scheduled runs always back up).
+        if not args.dry_run and os.environ.get('CAST_CONSOLIDATE_SKIP_BACKUP', '') != '1':
+            if _pre_consolidate_backup(db_path) != 0:
+                conn.close()
+                result = {
+                    "skipped": "backup_failed",
+                    "decayed": 0,
+                    "merged": 0,
+                    "archived": 0,
+                    "promoted": 0,
+                    "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                }
+                print(json.dumps(result))
+                sys.exit(0)
 
         decayed = op_decay(conn, dry_run=args.dry_run)
         merged = op_deduplicate(conn, dry_run=args.dry_run)
