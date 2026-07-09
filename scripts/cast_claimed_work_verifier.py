@@ -26,6 +26,14 @@ import sqlite3
 import subprocess
 from datetime import datetime, timezone
 
+# Prose tokens that match the "known-extension" path filter (they end in
+# '.js') but are framework/library names, never real file paths in this
+# codebase's context. Excluded case-insensitively in extract_file_paths().
+_PROSE_FALSE_POSITIVES = {
+    'next.js', 'vue.js', 'nuxt.js', 'ember.js', 'node.js', 'express.js',
+    'chart.js', 'three.js', 'd3.js', 'backbone.js', 'react.js', 'angular.js',
+}
+
 def parse_iso_timestamp(ts_str: str) -> float:
     """Parse ISO8601 to Unix timestamp. Return 0 on failure."""
     if not ts_str:
@@ -59,7 +67,11 @@ def extract_file_paths(response_text: str) -> list:
         paths.update(path_matches)
         # Also try relative paths (no leading slash)
         path_matches = re.findall(r'(?:^|\s)[-*]?\s*([a-zA-Z0-9_][a-zA-Z0-9_./\-]*\.[a-zA-Z0-9]+)\b', section, re.MULTILINE)
-        paths.update(p for p in path_matches if '/' in p or p.endswith(('.sh', '.py', '.md', '.yml', '.yaml', '.json', '.bats', '.ts', '.js', '.rb')))
+        paths.update(
+            p for p in path_matches
+            if p.lower() not in _PROSE_FALSE_POSITIVES
+            and ('/' in p or p.endswith(('.sh', '.py', '.md', '.yml', '.yaml', '.json', '.bats', '.ts', '.js', '.rb')))
+        )
 
     # Pattern 2: files_changed array in JSON status block
     json_match = re.search(r'```json\s+status[\s\S]*?"files_changed"\s*:\s*\[([\s\S]*?)\]', response_text)
