@@ -392,6 +392,68 @@ def ingest_bytes(raw: bytes, already_decompressed: bool = False) -> tuple:
 # ---------------------------------------------------------------------------
 # HTTP request handler
 # ---------------------------------------------------------------------------
+class ChunkedBodyError(Exception):
+    """Raised when a Transfer-Encoding: chunked body is malformed or oversized."""
+
+
+def _read_chunked_body(rfile: Any, max_bytes: int) -> bytes:
+    """De-chunk an HTTP/1.1 `Transfer-Encoding: chunked` request body.
+
+    http.server (BaseHTTPRequestHandler) does NOT auto-dechunk request
+    bodies — it only exposes the raw socket via self.rfile.  Without this,
+    do_POST would hand raw chunk-framing bytes (hex chunk-size + CRLF +
+    chunk-data + CRLF + ... + "0\\r\\n\\r\\n") straight to json.loads(),
+    which fails immediately (root cause of the silent-telemetry-loss bug:
+    "JSON parse error: Expecting value... char 0" / "Extra data... char 1-7"
+    matches variable-length hex chunk-size lines being misparsed as JSON).
+
+    Enforces max_bytes (MAX_BODY_BYTES) across the reassembled body so a
+    malicious/malformed chunked sender cannot bypass the existing size cap.
+    Also caps the number of chunks and the hex chunk-size line length so a
+    malformed size line (missing CRLF, garbage) cannot spin an unbounded
+    read loop.
+
+    Raises ChunkedBodyError on any framing violation or size overrun.
+    """
+    body = bytearray()
+    max_chunks = 100_000  # generous; guards against a malformed infinite stream
+    for _ in range(max_chunks):
+        # Read the chunk-size line (hex digits, optional ;extensions, CRLF).
+        # Bound the line length so a sender that never sends CRLF can't hang
+        # rfile.readline() forever accumulating memory.
+        size_line: bytes = rfile.readline(64)
+        if not size_line:
+            raise ChunkedBodyError('unexpected EOF reading chunk size')
+        if not size_line.endswith(b'\n'):
+            raise ChunkedBodyError('chunk size line too long or unterminated')
+        size_field = size_line.split(b';', 1)[0].strip()
+        try:
+            chunk_size = int(size_field, 16)
+        except ValueError:
+            raise ChunkedBodyError(f'invalid chunk size line: {size_field!r}')
+        if chunk_size < 0:
+            raise ChunkedBodyError(f'negative chunk size: {chunk_size}')
+        if chunk_size == 0:
+            # Final chunk — consume trailing headers (if any) up to blank line.
+            while True:
+                trailer = rfile.readline(1024)
+                if not trailer or trailer in (b'\r\n', b'\n'):
+                    break
+            return bytes(body)
+        if len(body) + chunk_size > max_bytes:
+            raise ChunkedBodyError(
+                f'chunked body exceeds {max_bytes} byte limit'
+            )
+        chunk_data = rfile.read(chunk_size)
+        if len(chunk_data) != chunk_size:
+            raise ChunkedBodyError('unexpected EOF reading chunk data')
+        body.extend(chunk_data)
+        trailing_crlf = rfile.read(2)
+        if trailing_crlf != b'\r\n':
+            raise ChunkedBodyError('missing CRLF after chunk data')
+    raise ChunkedBodyError('too many chunks — possible malformed stream')
+
+
 class OTLPHandler(BaseHTTPRequestHandler):
     """OTLP/HTTP receiver.  Server is bound to 127.0.0.1 ONLY."""
 
@@ -400,32 +462,47 @@ class OTLPHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """Handle POST /v1/metrics, /v1/logs, /v1/traces."""
-        content_length_str: str = self.headers.get('Content-Length', '0')
-        try:
-            content_length: int = int(content_length_str)
-        except (ValueError, TypeError):
-            content_length = 0
+        transfer_encoding: str = self.headers.get('Transfer-Encoding', '')
+        is_chunked: bool = 'chunked' in transfer_encoding.lower()
 
-        # Reject oversized compressed body early
-        if content_length > MAX_BODY_BYTES:
-            self.send_response(413)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(b'{}')
-            return
-
-        # Read body
-        if content_length > 0:
-            raw_body: bytes = self.rfile.read(content_length)
+        if is_chunked:
+            # http.server does not auto-dechunk; de-chunk manually.
+            try:
+                raw_body: bytes = _read_chunked_body(self.rfile, MAX_BODY_BYTES)
+            except ChunkedBodyError as e:
+                _log(f'Chunked body error on {self.path}: {e}')
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{}')
+                return
         else:
-            # No Content-Length — read up to cap + 1 to detect oversized body
-            raw_body = self.rfile.read(MAX_BODY_BYTES + 1)
-            if len(raw_body) > MAX_BODY_BYTES:
+            content_length_str: str = self.headers.get('Content-Length', '0')
+            try:
+                content_length: int = int(content_length_str)
+            except (ValueError, TypeError):
+                content_length = 0
+
+            # Reject oversized compressed body early
+            if content_length > MAX_BODY_BYTES:
                 self.send_response(413)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
                 self.wfile.write(b'{}')
                 return
+
+            # Read body
+            if content_length > 0:
+                raw_body = self.rfile.read(content_length)
+            else:
+                # No Content-Length — read up to cap + 1 to detect oversized body
+                raw_body = self.rfile.read(MAX_BODY_BYTES + 1)
+                if len(raw_body) > MAX_BODY_BYTES:
+                    self.send_response(413)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(b'{}')
+                    return
 
         # Decompress when Content-Encoding: gzip is set.
         # Track whether we decompressed here so ingest_bytes() can skip its

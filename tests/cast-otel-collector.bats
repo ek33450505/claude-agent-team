@@ -263,3 +263,112 @@ PYEOF
   # The compaction event must be findable in otel_events by event_name
   _event_exists "claude_code.compaction"
 }
+
+# ---------------------------------------------------------------------------
+# Test 10: HTTP-level Transfer-Encoding: chunked regression
+#
+# Root cause (2026-07-09): do_POST only read the body via Content-Length.
+# http.server does not auto-dechunk request bodies, so a client sending
+# Transfer-Encoding: chunked (no/zero Content-Length) had its raw chunk
+# framing bytes (hex chunk-size + CRLF + data + CRLF ...) handed straight
+# to json.loads(), which failed on every single request — silently
+# discarding 100% of telemetry for ~7 days (~/.claude/logs/otel-collector.log
+# showed continuous "JSON parse error: Expecting value.../Extra data..."
+# at small char offsets 0-7, matching hex chunk-size line lengths).
+#
+# These tests spawn the real HTTP daemon (--serve) on a scratch port against
+# the isolated temp-HOME CAST_DB_PATH and drive it with genuine chunked
+# framing via Python's http.client (curl's chunked encoder does not exercise
+# the same code path reliably).
+# ---------------------------------------------------------------------------
+_start_collector_http() {
+  local port="$1"
+  CAST_OTEL_PORT="$port" CAST_DB_PATH="$CAST_DB_PATH" \
+    python3 "$COLLECTOR_PY" --serve >"$BATS_TEST_TMPDIR/collector-http.log" 2>&1 &
+  COLLECTOR_HTTP_PID=$!
+  # Wait for the port to accept connections (bounded poll, avoids fixed sleep flakiness)
+  for _ in $(seq 1 50); do
+    if python3 -c "import socket; s=socket.create_connection(('127.0.0.1', $port), timeout=0.2); s.close()" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+_stop_collector_http() {
+  if [[ -n "${COLLECTOR_HTTP_PID:-}" ]]; then
+    kill "$COLLECTOR_HTTP_PID" 2>/dev/null || true
+    wait "$COLLECTOR_HTTP_PID" 2>/dev/null || true
+    unset COLLECTOR_HTTP_PID
+  fi
+}
+
+@test "HTTP: chunked POST to /v1/logs is de-chunked, parsed, and lands in otel_events" {
+  local port=48391
+  _start_collector_http "$port"
+
+  run python3 -c "
+import http.client
+conn = http.client.HTTPConnection('127.0.0.1', $port, timeout=5)
+body = (b'{\"resourceLogs\":[{\"resource\":{\"attributes\":['
+        b'{\"key\":\"session.id\",\"value\":{\"stringValue\":\"chunked-bats-sess\"}}]},'
+        b'\"scopeLogs\":[{\"logRecords\":[{\"timeUnixNano\":\"1719216100000000000\",'
+        b'\"severityText\":\"INFO\",\"attributes\":['
+        b'{\"key\":\"event.name\",\"value\":{\"stringValue\":\"test.chunked\"}}],'
+        b'\"body\":{\"stringValue\":\"hello chunked\"}}]}]}]}')
+conn.putrequest('POST', '/v1/logs')
+conn.putheader('Transfer-Encoding', 'chunked')
+conn.putheader('Content-Type', 'application/json')
+conn.endheaders()
+mid = len(body) // 2
+conn.send(b'%x\r\n' % mid + body[:mid] + b'\r\n')
+conn.send(b'%x\r\n' % (len(body) - mid) + body[mid:] + b'\r\n')
+conn.send(b'0\r\n\r\n')
+resp = conn.getresponse()
+print(resp.status)
+"
+  _stop_collector_http
+
+  assert_success
+  assert_output "200"
+
+  _event_exists "test.chunked"
+}
+
+@test "HTTP: malformed chunk-size line is rejected with 400 (no hang, no crash)" {
+  local port=48392
+  _start_collector_http "$port"
+
+  # Client-side socket timeout (5s) bounds this call — no shell `timeout` wrapper
+  # (GNU coreutils `timeout` is absent on stock macOS/BSD userland).
+  run python3 -c "
+import http.client
+conn = http.client.HTTPConnection('127.0.0.1', $port, timeout=5)
+conn.putrequest('POST', '/v1/logs')
+conn.putheader('Transfer-Encoding', 'chunked')
+conn.endheaders()
+conn.send(b'ZZZZ-not-hex\r\n')
+resp = conn.getresponse()
+print(resp.status)
+"
+  _stop_collector_http
+
+  assert_success
+  assert_output "400"
+}
+
+@test "HTTP: non-chunked Content-Length POST still works after chunked-decoding fix" {
+  local port=48393
+  _start_collector_http "$port"
+
+  run curl -s -o /dev/null -w '%{http_code}' -X POST \
+    "http://127.0.0.1:${port}/v1/logs" \
+    -H 'Content-Type: application/json' \
+    -d '{"resourceLogs":[]}'
+
+  _stop_collector_http
+
+  assert_success
+  assert_output "200"
+}
