@@ -591,6 +591,13 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         cast_launchctl_reload "$PLIST_DEST" "com.cast.memory-consolidate"
     fi
 
+    # Install cast-record-review.plist — weekly (Sun 07:00) record-review proposals report
+    if [ -f "$SCRIPT_DIR/macos/cast-record-review.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.record-review.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-record-review.plist" > "$PLIST_DEST"
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.record-review"
+    fi
+
     # Install cast-abandon-stale-runs.plist — nightly stale agent_runs cleanup (04:00)
     if [ -f "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.abandon-stale-runs.plist"
