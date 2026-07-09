@@ -5,9 +5,9 @@
 # CAST
 
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
-![Version](https://img.shields.io/badge/version-9.5.1-blue)
+![Version](https://img.shields.io/badge/version-9.5.2-blue)
 ![Agents](https://img.shields.io/badge/agents-22-green)
-![Tests](https://img.shields.io/badge/tests-2300-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2338-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)
