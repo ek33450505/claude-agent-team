@@ -285,6 +285,28 @@ def _audit_commit_hatch() -> None:
         pass
 
 
+def _audit_push_hatch() -> None:
+    """Append a PUSH_HATCH_USED line to audit.jsonl — best-effort, never blocks."""
+    try:
+        repo = _repo_toplevel()
+        audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
+        os.makedirs(os.path.dirname(audit_path), exist_ok=True)
+        event = {
+            'timestamp': datetime.datetime.now(datetime.timezone.utc)
+            .isoformat().replace('+00:00', 'Z'),
+            'event': 'PUSH_HATCH_USED',
+            'override_env': 'CAST_PUSH_OK',
+            'git_op': 'push',
+            'repo': repo,
+            'session_id': _hatch_session_id(repo),
+            'in_claude_session': os.environ.get('CLAUDECODE') == '1',
+        }
+        with open(audit_path, 'a') as af:
+            af.write(json.dumps(event) + '\n')
+    except Exception:
+        pass
+
+
 def _git_evaluate(command: str):
     """Evaluate the FIRST LINE of a Bash command for git commit/push/stash.
 
@@ -299,6 +321,7 @@ def _git_evaluate(command: str):
     if _COMMIT_BLOCK.search(first_line):
         return 2, _COMMIT_MSG
     if _PUSH_ALLOW.search(first_line):
+        _audit_push_hatch()
         return 0, None
     if _PUSH_BLOCK.search(first_line):
         return 2, _PUSH_MSG

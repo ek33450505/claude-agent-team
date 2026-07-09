@@ -348,6 +348,29 @@ assert d.get('session_id') == 'hatch-sess-001', 'session_id mismatch: ' + repr(d
 " "$HOME/.claude/logs/audit.jsonl"
 }
 
+@test "CAST_PUSH_OK=1 git push → exits 0 and appends PUSH_HATCH_USED to audit.jsonl" {
+  # Run from inside a git-init'd repo so _repo_toplevel() returns a non-empty path.
+  # Supply CAST_SESSION_ID so the event carries the expected session_id.
+  local test_repo="$HOME/push-hatch-test-repo"
+  git init "$test_repo" >/dev/null 2>&1
+  local payload
+  payload="$(make_bash_payload "CAST_PUSH_OK=1 git push origin main")"
+  run env CAST_SESSION_ID="push-hatch-sess-001" bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
+  assert_success
+  [[ -f "$HOME/.claude/logs/audit.jsonl" ]]
+  grep -q 'PUSH_HATCH_USED' "$HOME/.claude/logs/audit.jsonl"
+  python3 -c "
+import json, sys
+lines = [l.strip() for l in open(sys.argv[1]) if 'PUSH_HATCH_USED' in l]
+assert lines, 'no PUSH_HATCH_USED event found'
+d = json.loads(lines[-1])
+assert d.get('repo'), 'repo field missing or empty in hatch event: ' + repr(d)
+assert d.get('session_id') == 'push-hatch-sess-001', 'session_id mismatch: ' + repr(d)
+assert d.get('git_op') == 'push', 'git_op mismatch: ' + repr(d)
+assert d.get('override_env') == 'CAST_PUSH_OK', 'override_env mismatch: ' + repr(d)
+" "$HOME/.claude/logs/audit.jsonl"
+}
+
 # ---------------------------------------------------------------------------
 # Hatch event session_id resolution (E4 — D5 hardening)
 # ---------------------------------------------------------------------------
