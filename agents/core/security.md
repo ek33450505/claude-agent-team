@@ -148,7 +148,7 @@ When this agent is part of a chain, include a `## Handoff` block BEFORE your Sta
 ```
 ## Handoff
 files_changed: []
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: none | [describe blocker — critical findings that must be fixed]
 key_decisions: [optional — highest-severity finding summary]
 ```

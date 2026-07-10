@@ -189,7 +189,7 @@ When this agent is part of a chain, include a `## Handoff` block BEFORE your Sta
 ```
 ## Handoff
 files_changed: [list eval case files written]
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: none | [describe blocker]
 key_decisions: [optional — non-obvious grader design choices]
 ```

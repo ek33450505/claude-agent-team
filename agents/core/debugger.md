@@ -52,7 +52,7 @@ Focus on fixing the underlying issue, not the symptoms.
    ```
    ## Handoff
    files_changed: [list all files modified or created]
-   status: DONE | DONE_WITH_CONCERNS | BLOCKED
+   status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
    blockers: none | [describe blocker]
    key_decisions: [root cause summary — useful for downstream reviewers]
    ```
