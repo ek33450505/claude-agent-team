@@ -101,7 +101,7 @@ When this agent is part of a chain, include a `## Handoff` block BEFORE your Sta
 ```
 ## Handoff
 files_changed: [list all files modified or created]
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: none | [describe blocker]
 key_decisions: [optional — non-obvious implementation choices]
 next_agent_needs: [optional — what the next agent should know]

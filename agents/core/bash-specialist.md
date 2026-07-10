@@ -177,6 +177,15 @@ Write BATS tests for all hook scripts. Test file location: `tests/<script-name>.
 }
 ```
 
+## CI Runner Log Triage (GH Actions-only failures)
+
+Some failures only reproduce on the GitHub Actions runner, never locally. When a failure is CI-only (passes locally, fails on the runner):
+
+1. **Pull the full run log, not just the failing step:** `gh run list --limit 5` then `gh run view <run-id> --log-failed` for the failing step, or `gh run view <run-id> --log` for everything.
+2. **Check the job-cleanup tail specifically** — GitHub Actions logs an "orphan process" line when it force-kills leftover background processes at job end. A "frozen"/timed-out suite with no clear test-level error is often a leaked background process holding a pipe open, not a hanging test. Grep the log for `Terminate orphan process` or similar cleanup markers.
+3. **Diff runner environment against local:** OS/tool versions (`uname`, `git --version`, `bash --version`), whether the failure is timing-sensitive (daemon-start races are common on shared CI hardware), and whether `$GITHUB_ACTIONS`/`$RUNNER_OS` should gate behavior differently than local.
+4. **If root-causing isn't tractable this session:** guard with an env-detect skip (e.g. `[ "$GITHUB_ACTIONS" = true ] && [ "$(uname)" = Darwin ]`), record it in `docs/test-skip-ledger.md` with a concrete un-skip condition, and prefer attempt-first-then-skip over an unconditional skip so a real regression elsewhere still fails.
+
 ## Files and Paths
 
 | File | Path |
@@ -205,7 +214,7 @@ Every response MUST include a `## Handoff` block before the Status block. Requir
 ```
 ## Handoff
 files_changed: [list of scripts written or modified]
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: [describe if BLOCKED, else "none"]
 ```
 

@@ -153,7 +153,7 @@ Every response MUST include a `## Handoff` block before the Status block. Requir
 ```
 ## Handoff
 files_changed: [list of doc files written or modified]
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: [describe if BLOCKED, else "none"]
 ```
 
