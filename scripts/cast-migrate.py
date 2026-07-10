@@ -145,6 +145,14 @@ def _apply_migration(conn: sqlite3.Connection, sql_path: Path) -> None:
                 print(f'  [NOTE] Column already exists (skipping): {effective[:60]}...')
             elif 'no such column' in err and 'drop column' in stmt_lower:
                 print(f'  [NOTE] Column already absent (skipping DROP): {effective[:60]}...')
+            elif 'no such column' in err and stmt_lower.lstrip().startswith('create index'):
+                # CREATE INDEX on a column owned by cast-db-init.sh that a legacy/
+                # narrow agent_runs (or similar) fixture predates (e.g. migration
+                # 031's idx_agent_runs_started_at on a pre-started_at agent_runs
+                # shape). Column absent on that narrow schema, but the intent
+                # (indexing it, once present) is not applicable — skip rather than
+                # fail the whole migration file. Scoped strictly to CREATE INDEX.
+                print(f'  [NOTE] Column absent for CREATE INDEX (skipping): {effective[:60]}...')
             elif 'already exists' in err:
                 print(f'  [NOTE] Object already exists (skipping): {effective[:60]}...')
             elif (

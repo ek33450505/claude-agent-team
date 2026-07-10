@@ -10,13 +10,8 @@
 		<string>-c</string>
 		<string>python3 __HOME__/.claude/scripts/cast-abandon-stale-runs.py</string>
 	</array>
-	<key>StartCalendarInterval</key>
-	<dict>
-		<key>Hour</key>
-		<integer>4</integer>
-		<key>Minute</key>
-		<integer>0</integer>
-	</dict>
+	<key>StartInterval</key>
+	<integer>7200</integer>
 	<key>StandardOutPath</key>
 	<string>__HOME__/.claude/logs/abandon-stale-runs-launchd.log</string>
 	<key>StandardErrorPath</key>

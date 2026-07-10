@@ -939,3 +939,46 @@ SQL
   tbl_count=$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('dispatch_decisions','task_queue','agent_truncations','agent_protocol_violations','agent_runs');")
   [ "$tbl_count" -eq 5 ]
 }
+
+@test "migration 031: creates idx_agent_runs_started_at on agent_runs(started_at)" {
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE agent_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent      TEXT,
+  status     TEXT,
+  started_at TEXT
+);
+SQL
+
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/031_agent_runs_started_at_index.sql"
+
+  local idx_count
+  idx_count=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_agent_runs_started_at';")
+  [ "$idx_count" -eq 1 ]
+
+  # Index must target the correct column
+  local idx_col
+  idx_col=$(sqlite3 "$TEST_DB" "SELECT name FROM pragma_index_info('idx_agent_runs_started_at');")
+  [ "$idx_col" = "started_at" ]
+}
+
+@test "migration 031: is idempotent (second apply is a no-op)" {
+  sqlite3 "$TEST_DB" <<'SQL'
+CREATE TABLE agent_runs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent      TEXT,
+  status     TEXT,
+  started_at TEXT
+);
+SQL
+
+  sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/031_agent_runs_started_at_index.sql"
+  run sqlite3 "$TEST_DB" < "$MIGRATIONS_DIR/031_agent_runs_started_at_index.sql"
+  assert_success
+
+  local idx_count
+  idx_count=$(sqlite3 "$TEST_DB" \
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_agent_runs_started_at';")
+  [ "$idx_count" -eq 1 ]
+}

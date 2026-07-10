@@ -70,18 +70,41 @@ def _parse_date_from_filename(filepath: Path):
         return None
 
 
-def _enforce_retention(backup_dir: Path, keep_daily: int = 7, keep_weekly: int = 4):
+def _enforce_retention(backup_dir: Path, keep_daily: int = None, keep_weekly: int = 4):
     """
-    Retention: keep 7 most-recent dailies + up to 4 weekly anchors.
+    Retention: keep `keep_daily` most-recent dailies + up to 4 weekly anchors.
+
+    keep_daily defaults to 7, overridable via CAST_SNAPSHOT_KEEP. A keep_daily
+    < 1 is refused (returns 0 pruned) — pruning is optional, backups are not,
+    so any doubt about the configured count skips pruning rather than risking
+    over-deletion.
 
     Weekly anchor = the newest file from each ISO week number that is NOT
-    already represented in the 7 dailies, across the 4 most-recent distinct
+    already represented in the daily window, across the 4 most-recent distinct
     ISO weeks outside the daily window.
+
+    Only files strictly matching cast-db-YYYY-MM-DD.db (plus -wal/-shm
+    siblings) inside backup_dir are ever candidates for deletion.
 
     Returns (retained_count, pruned_count).
     """
+    _logger = logging.getLogger("cast-db-backup")
+
+    if keep_daily is None:
+        raw_keep = os.environ.get("CAST_SNAPSHOT_KEEP", "7")
+        try:
+            keep_daily = int(raw_keep)
+        except ValueError:
+            _logger.warning(f"CAST_SNAPSHOT_KEEP={raw_keep!r} is not an integer — skipping prune")
+            keep_daily = None
+
     pattern = str(backup_dir / "cast-db-*.db")
     all_files = sorted(glob.glob(pattern))  # ascending by ISO date (alphabetical = chronological)
+
+    if keep_daily is None or keep_daily < 1:
+        if keep_daily is not None:
+            _logger.warning(f"keep_daily={keep_daily} < 1 — refusing to prune, retention skipped")
+        return len(all_files), 0
 
     if len(all_files) <= keep_daily:
         return len(all_files), 0
@@ -118,15 +141,24 @@ def _enforce_retention(backup_dir: Path, keep_daily: int = 7, keep_weekly: int =
 
     keep_set = daily_window | weekly_anchor_set
 
-    _logger = logging.getLogger("cast-db-backup")
     pruned = 0
     for f in all_files:
         if f not in keep_set:
-            try:
-                os.remove(f)
-                pruned += 1
-            except OSError as e:
-                _logger.warning(f"failed to prune {f}: {e}")
+            fpath = Path(f)
+            # Guard: only touch files whose name matches the exact snapshot
+            # pattern, resolved inside backup_dir — never trust the glob alone.
+            if _parse_date_from_filename(fpath) is None:
+                continue
+            if fpath.resolve().parent != backup_dir.resolve():
+                continue
+            for candidate in (fpath, fpath.with_suffix(fpath.suffix + "-wal"), fpath.with_suffix(fpath.suffix + "-shm")):
+                if candidate.exists():
+                    try:
+                        os.remove(str(candidate))
+                        if candidate == fpath:
+                            pruned += 1
+                    except OSError as e:
+                        _logger.warning(f"failed to prune {candidate}: {e}")
 
     retained = len(keep_set)
     return retained, pruned
@@ -154,10 +186,21 @@ def main():
 
     try:
         size_bytes = dest_path.stat().st_size
-        retained, pruned = _enforce_retention(backup_dir)
     except Exception as e:
         _fail(f"post-backup error: {e}")
         return
+
+    # Only prune if the snapshot we just created is verified present on disk —
+    # pruning is optional, the backup itself is not.
+    if dest_path.exists():
+        try:
+            retained, pruned = _enforce_retention(backup_dir)
+        except Exception as e:
+            logger.warning(f"retention error (backup already succeeded): {e}")
+            retained, pruned = -1, 0
+    else:
+        logger.warning("new snapshot not verified present — skipping prune")
+        retained, pruned = -1, 0
 
     print(json.dumps({
         "backup_path": str(dest_path),

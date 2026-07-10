@@ -155,3 +155,51 @@ assert data['backup_path'] is None, 'backup_path should be None on error'
   [[ "$BACKUP_PATH" == "$CUSTOM_BACKUP_DIR"/* ]]
   [ -f "$BACKUP_PATH" ]
 }
+
+@test "cast-db-backup.py: CAST_SNAPSHOT_KEEP env override lowers retained count" {
+  mkdir -p "$TEST_BACKUP_DIR"
+  for i in $(seq 1 10); do
+    DAY=$(printf "%02d" $i)
+    touch "$TEST_BACKUP_DIR/cast-db-2025-01-${DAY}.db"
+  done
+
+  run env CAST_SNAPSHOT_KEEP=2 python3 "$CAST_DB_BACKUP_PY"
+  assert_success
+
+  RETAINED=$(echo "$output" | python3 -c "import sys,json; print(json.load(sys.stdin)['retained'])")
+  # today's fresh backup + 2 kept dailies (no weekly anchors possible since
+  # all fixtures fall inside the tiny daily window here)
+  [ "$RETAINED" -le 3 ]
+}
+
+@test "cast-db-backup.py: CAST_SNAPSHOT_KEEP < 1 refuses to prune" {
+  mkdir -p "$TEST_BACKUP_DIR"
+  for i in $(seq 1 10); do
+    DAY=$(printf "%02d" $i)
+    touch "$TEST_BACKUP_DIR/cast-db-2025-01-${DAY}.db"
+  done
+
+  run env CAST_SNAPSHOT_KEEP=0 python3 "$CAST_DB_BACKUP_PY"
+  assert_success
+
+  PRUNED=$(echo "$output" | python3 -c "import sys,json; print(json.load(sys.stdin)['pruned'])")
+  [ "$PRUNED" -eq 0 ]
+  # all 10 fixtures plus today's real backup must still be present
+  COUNT=$(ls "$TEST_BACKUP_DIR"/cast-db-*.db 2>/dev/null | wc -l | tr -d ' ')
+  [ "$COUNT" -eq 11 ]
+}
+
+@test "cast-db-backup.py: retention prune leaves a non-matching decoy file untouched" {
+  mkdir -p "$TEST_BACKUP_DIR"
+  for i in $(seq 1 10); do
+    DAY=$(printf "%02d" $i)
+    touch "$TEST_BACKUP_DIR/cast-db-2025-01-${DAY}.db"
+  done
+  DECOY="$TEST_BACKUP_DIR/cast-db-notes.txt"
+  touch "$DECOY"
+
+  run python3 "$CAST_DB_BACKUP_PY"
+  assert_success
+
+  [ -f "$DECOY" ]
+}

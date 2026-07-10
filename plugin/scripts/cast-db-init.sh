@@ -301,6 +301,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_agent         ON agent_runs(agent);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_status        ON agent_runs(status);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id      ON agent_runs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_ended_at      ON agent_runs(ended_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_started_at    ON agent_runs(started_at);
 CREATE INDEX IF NOT EXISTS idx_routing_events_session   ON routing_events(session_id);
 CREATE INDEX IF NOT EXISTS idx_routing_events_timestamp ON routing_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_routing_events_route     ON routing_events(matched_route);

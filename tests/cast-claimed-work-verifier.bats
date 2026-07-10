@@ -481,6 +481,57 @@ Status: DONE'
   assert_output "PASS"
 }
 
+# ---------------------------------------------------------------------------
+# Regression: "Next.js" prose in a Files changed section must not be
+# extracted as a claimed file path. The token ends in '.js' (a known
+# extension) so it previously passed the Pattern 1 extension filter even
+# without a '/', producing a false [NOT FOUND] hallucination row.
+# ---------------------------------------------------------------------------
+
+@test "prose framework name 'Next.js' in Files changed section is NOT extracted as a path" {
+  mkdir -p "$TEMP_DIR/src"
+  touch "$TEMP_DIR/src/App.tsx"
+
+  RESPONSE='## Work Log
+- Migrated the frontend
+
+Files changed:
+- Migrated the frontend to Next.js
+- src/App.tsx
+
+Status: DONE'
+
+  export CAST_AGENT_START_TIME="2000-01-01T00:00:00Z"
+  export CAST_STOP_RESPONSE_TEXT="$RESPONSE"
+  export CAST_AGENT_NAME="code-writer"
+
+  run run_verifier "$RESPONSE"
+  assert_success
+
+  # Only the real path is claimed — Next.js is excluded from extraction
+  assert_line --partial "files_claimed=1"
+  assert_line --partial "verified=1"
+  assert_line --partial "not_found=0"
+
+  # No hallucination/NOT-FOUND row for "Next.js" specifically
+  run python3 - << 'PYEOF'
+import os, sqlite3
+db = os.environ.get('CAST_DB_PATH')
+if not db or not os.path.exists(db):
+    print("0"); exit(0)
+try:
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM agent_hallucinations WHERE claimed_value LIKE '%Next.js%' OR claimed_value LIKE '%next.js%'")
+    print(cur.fetchone()[0])
+    conn.close()
+except Exception:
+    print("0")
+PYEOF
+  assert_success
+  assert_output "0"
+}
+
 @test "O4-B4: commit agent skip holds even when basename fallback would match (regression guard)" {
   # Build a git repo where routeCurve.test.js WOULD be matched by basename fallback
   local GIT_REPO="$TEMP_DIR/git_repo"

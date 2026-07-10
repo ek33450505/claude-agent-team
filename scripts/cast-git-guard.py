@@ -40,7 +40,11 @@ import sys
 _GIT_OPTS = r'(\s+(-C\s+\S+|--no-pager|-c\s+\S+|--git-dir=\S+|--work-tree=\S+))*'
 
 # --- git commit block -------------------------------------------------------
-_COMMIT_ALLOW = re.compile(r'(^|&&\s*)CAST_COMMIT_AGENT=1\s+git' + _GIT_OPTS + r'\s+commit')
+# Tolerates extra VAR=value assignments between CAST_COMMIT_AGENT=1 and git
+# (e.g. CAST_COMMIT_AGENT=1 CAST_SKIP_PLUGIN_DRIFT=1 git commit ...).
+_COMMIT_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_COMMIT_AGENT=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+commit'
+)
 _COMMIT_BLOCK = re.compile(r'(^|\s)git' + _GIT_OPTS + r'\s+commit')
 
 # --- git push block ---------------------------------------------------------
@@ -52,7 +56,11 @@ _PUSH_ALLOW = re.compile(
 _PUSH_BLOCK = re.compile(r'(^|\s)git' + _GIT_OPTS + r'\s+push')
 
 # --- git stash block --------------------------------------------------------
-_STASH_ALLOW = re.compile(r'(^|&&\s*)CAST_STASH_OK=1\s+git' + _GIT_OPTS + r'\s+stash')
+# Tolerates extra VAR=value assignments between CAST_STASH_OK=1 and git
+# (e.g. CAST_STASH_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git stash ...).
+_STASH_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_STASH_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+stash'
+)
 _STASH_BLOCK = re.compile(r'(^|\s)git' + _GIT_OPTS + r'\s+stash(\s|$)')
 
 _COMMIT_MSG = (

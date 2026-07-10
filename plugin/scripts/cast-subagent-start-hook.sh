@@ -75,12 +75,22 @@ if [ -z "$PARSED" ]; then
   exit 0
 fi
 
-# Extract fields
+# Extract fields — single python3 call emits a tab-separated line to avoid
+# five separate cold-start invocations that each re-parse the same input.
 export CAST_START_PARSED="$PARSED"
 
-AGENT_NAME="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_START_PARSED','{}')); print(d.get('agent_name','unknown'))" 2>/dev/null || echo "unknown")"
-SESSION_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_START_PARSED','{}')); v=d.get('session_id'); print(v if v else '')" 2>/dev/null || echo "")"
-AGENT_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_START_PARSED','{}')); print(d.get('agent_id',''))" 2>/dev/null || echo "")"
+IFS=$'\t' read -r AGENT_NAME SESSION_ID AGENT_ID <<<"$(python3 -c "
+import json, os
+d = json.loads(os.environ.get('CAST_START_PARSED', '{}'))
+
+def clean(v):
+    return str(v).replace('\t', ' ').replace('\n', ' ') if v else ''
+
+agent_name = clean(d.get('agent_name')) or 'unknown'
+session_id = clean(d.get('session_id'))
+agent_id   = clean(d.get('agent_id'))
+print(f'{agent_name}\t{session_id}\t{agent_id}')
+" 2>/dev/null || printf 'unknown\t\t\n')"
 export CAST_START_AGENT_ID="$AGENT_ID"
 
 # ── Step 1: Write task_claimed event to ~/.claude/cast/events/ ────────────────
