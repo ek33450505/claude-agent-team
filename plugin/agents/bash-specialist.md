@@ -222,6 +222,8 @@ blockers: [describe if BLOCKED, else "none"]
 
 After writing or modifying any production shell or BATS code, self-dispatch `code-reviewer` via the Agent tool before reporting DONE. Do NOT proceed to commit until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
 
+If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a review that did not happen. Instead return `Status: DONE_WITH_CONCERNS` noting the dispatch failure explicitly, so the orchestrating session can dispatch code-reviewer.
+
 ## Final Step (MANDATORY)
 
 After all scripts are written and reviewed, dispatch `commit` via Agent tool:
