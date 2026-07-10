@@ -6,42 +6,44 @@
 
 ### Core Implementation & Review
 
-| Agent | Model | Purpose |
-|---|---|---|
-| `code-writer` | sonnet | Implementation specialist for feature work, bug fixes, and planned changes |
-| `debugger` | sonnet | Debugging specialist for errors, test failures, and unexpected behavior |
-| `planner` | sonnet | Planning specialist that converts feature requests into specs and ordered task breakdowns |
-| `researcher` | sonnet | Multi-purpose research and analysis specialist for codebase exploration and synthesis |
-| `security` | sonnet | Security review specialist for auth, input validation, secrets, and vulnerability audit |
-| `code-reviewer` | haiku | Post-change code review — use immediately after writing or modifying code |
-| `test-writer` | haiku | Test design specialist — writes test suites covering happy path, edge cases, and error states |
-| `test-runner` | haiku | Test execution gate — runs the project test suite and gates the chain on real exit codes |
-| `eval-writer` | sonnet | Eval and benchmark fixture author for Claude API and CAST agent prompts |
-| `pr-reviewer` | sonnet | Holistic pull-request reviewer — reads full diff, commit history, and linked issues at PR-open time |
-| `frontend-qa` | haiku | Frontend QA specialist for React/TypeScript — prop correctness, API contract alignment, a11y |
+| Agent | Model | MaxTurns | Purpose |
+|---|---|---|---|
+| `code-writer` | sonnet | 100 | Implementation specialist for feature work, bug fixes, and planned changes |
+| `debugger` | sonnet | 50 | Debugging specialist for errors, test failures, and unexpected behavior |
+| `planner` | sonnet | 20 | Planning specialist that converts feature requests into specs and ordered task breakdowns |
+| `researcher` | sonnet | 45 | Multi-purpose research and analysis specialist for codebase exploration and synthesis |
+| `security` | sonnet | 20 | Security review specialist for auth, input validation, secrets, and vulnerability audit |
+| `code-reviewer` | haiku | 50 | Post-change code review — use immediately after writing or modifying code |
+| `test-writer` | haiku | 50 | Test design specialist — writes test suites covering happy path, edge cases, and error states |
+| `test-runner` | haiku | 20 | Test execution gate — runs the project test suite and gates the chain on real exit codes |
+| `eval-writer` | sonnet | 25 | Eval and benchmark fixture author for Claude API and CAST agent prompts |
+| `pr-reviewer` | sonnet | 25 | Holistic pull-request reviewer — reads full diff, commit history, and linked issues at PR-open time |
+| `frontend-qa` | haiku | 20 | Frontend QA specialist for React/TypeScript — prop correctness, API contract alignment, a11y |
 
 ### Operations & Workflow
 
-| Agent | Model | Purpose |
-|---|---|---|
-| `commit` | haiku | Git commit specialist — stages and commits with semantic messages |
-| `push` | haiku | Git push specialist — verifies branch safety and sets upstream |
-| `merge` | haiku | PR lifecycle agent — git merges, rebases, conflict resolution |
-| `devops` | haiku | CI/CD pipeline management, Docker, GitHub Actions workflow authoring |
-| `bash-specialist` | sonnet | Shell scripting specialist for CAST hook scripts, BATS tests, and automation |
-| `docs` | haiku | Documentation specialist — README audits, doc updates, changelog entries |
-| `morning-briefing` | haiku | Daily briefing agent — gathers git activity, action items, and CAST health summary |
-| `release-notes` | haiku | Release notes generator — structured changelogs from git commits |
+| Agent | Model | MaxTurns | Purpose |
+|---|---|---|---|
+| `commit` | haiku | 20 | Git commit specialist — stages and commits with semantic messages |
+| `push` | haiku | 15 | Git push specialist — verifies branch safety and sets upstream |
+| `merge` | haiku | 20 | PR lifecycle agent — git merges, rebases, conflict resolution |
+| `devops` | haiku | 20 | CI/CD pipeline management, Docker, GitHub Actions workflow authoring |
+| `bash-specialist` | sonnet | 30 | Shell scripting specialist for CAST hook scripts, BATS tests, and automation |
+| `docs` | haiku | 30 | Documentation specialist — README audits, doc updates, changelog entries |
+| `morning-briefing` | haiku | 25 | Daily briefing agent — gathers git activity, action items, and CAST health summary |
+| `release-notes` | haiku | 15 | Release notes generator — structured changelogs from git commits |
 
 ### Specialist Review
 
-| Agent | Model | Purpose |
-|---|---|---|
-| `migration-reviewer` | opus | Database schema change reviewer — analyzes migration files for safety and rollback plans |
-| `api-contract` | haiku | API contract guardian — detects breaking changes in REST endpoints |
-| `dep-auditor` | haiku | Dependency auditor — reviews package changes for CVEs, licenses, version compatibility |
+| Agent | Model | MaxTurns | Purpose |
+|---|---|---|---|
+| `migration-reviewer` | opus | 20 | Database schema change reviewer — analyzes migration files for safety and rollback plans |
+| `api-contract` | haiku | 20 | API contract guardian — detects breaking changes in REST endpoints |
+| `dep-auditor` | haiku | 15 | Dependency auditor — reviews package changes for CVEs, licenses, version compatibility |
 
 **Model tiering:** Haiku (13 agents) for review, commit, ops, and doc work ($1/MTok); Sonnet (8 agents) for implementation, planning, and research ($3/MTok); Opus (1 agent) for high-stakes schema review. Tiering scales cost savings across the swarm.
+
+**Note on turn budgets:** `code-reviewer` carries a maxTurns of 50 — notably higher than the 15–25 band most non-implementation agents occupy — which may correlate with its `background: true` frontmatter flag (background/async execution), though the exact rationale for this distinction is not documented elsewhere, so treat this as an observed asymmetry rather than a confirmed causal link.
 
 **Main-loop default (inline session):** `claude-sonnet-5` — set in `managed-settings.d/16-model-defaults.json` (pinned ID, not the `sonnet` alias, to prevent silent model drift). Chosen for documented near-Opus-4.8 capability at a fraction of the cost ($2/$10 per 1M vs Opus 4.8's $15/$75 — 7.5x cheaper on both input and output). Intro pricing through 2026-08-31; steady-state $3/$15 afterward — bump the pricing entry in `config/model-pricing.json` when pricing changes.
 
