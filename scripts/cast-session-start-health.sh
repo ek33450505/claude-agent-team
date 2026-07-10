@@ -102,7 +102,7 @@ for line in launchctl_out.splitlines():
         status_int = int(status_col)
     except ValueError:
         continue
-    if status_int != 0:
+    if pid_col == "-" and status_int != 0:
         short = label_col.replace("com.cast.", "")
         failing_jobs.append((short, status_int))
 
