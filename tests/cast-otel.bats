@@ -468,12 +468,12 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Test 10: Repo personal overlay 12-otel.json exists and contains all 6 telemetry keys
+# Test 10: Repo personal overlay 12-otel.json exists and contains all 5 telemetry keys
 # ---------------------------------------------------------------------------
-@test "repo managed-settings-personal/12-otel.json exists and contains all 6 telemetry keys" {
+@test "repo managed-settings-personal/12-otel.json exists and contains all 5 telemetry keys" {
   local personal_fragment="$REPO_DIR/managed-settings-personal/12-otel.json"
   [ -f "$personal_fragment" ] || {
-    echo "FAIL: $personal_fragment not found — create it with the 6 telemetry keys" >&2
+    echo "FAIL: $personal_fragment not found — create it with the 5 telemetry keys" >&2
     return 1
   }
 
@@ -487,7 +487,6 @@ TELEMETRY_KEYS = [
     "OTEL_LOGS_EXPORTER",
     "OTEL_EXPORTER_OTLP_PROTOCOL",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "DISABLE_TELEMETRY",
 ]
 
 with open("$personal_fragment", "r") as f:

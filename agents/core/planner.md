@@ -265,7 +265,7 @@ When this agent is part of a chain, include a `## Handoff` block BEFORE your Sta
 ```
 ## Handoff
 files_changed: [plan file path written]
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: none | [describe blocker]
 key_decisions: [optional — non-obvious scoping or ordering choices]
 next_agent_needs: [optional — e.g., "orchestrate the plan at <path>"]

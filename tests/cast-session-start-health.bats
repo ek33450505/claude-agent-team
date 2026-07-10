@@ -162,6 +162,23 @@ assert '127' in ctx, f'Exit status missing from context: {ctx}'
 " <<< "$output"
 }
 
+@test "currently-running job with stale non-zero exit status is NOT flagged" {
+  # A job that IS running (real pid) but carries a stale non-zero
+  # last-exit-status from a prior restart (e.g. SIGTERM on sleep/wake)
+  # must never appear in the failing-jobs output.
+  cat > "${STUB_DIR}/launchctl-running-stale-exit.sh" <<'EOF'
+#!/bin/bash
+echo "-	0	com.cast.backup"
+echo "63445	-15	com.cast.otel-collector"
+EOF
+  chmod +x "${STUB_DIR}/launchctl-running-stale-exit.sh"
+  export CAST_HEALTH_LAUNCHCTL_CMD="${STUB_DIR}/launchctl-running-stale-exit.sh"
+
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output ""
+}
+
 @test "all-zero launchd stub + no stale memories → NO output" {
   export CAST_HEALTH_LAUNCHCTL_CMD="${STUB_DIR}/launchctl-ok.sh"
 

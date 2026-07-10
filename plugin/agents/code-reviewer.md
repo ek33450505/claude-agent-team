@@ -27,7 +27,7 @@ Every response MUST include a `## Handoff` block before the Status block. Requir
 ```
 ## Handoff
 files_changed: ["none — read-only reviewer"]
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: [describe if BLOCKED, else "none"]
 ```
 

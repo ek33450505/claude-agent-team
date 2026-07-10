@@ -21,7 +21,7 @@ You review:
 - **Hook usage:** Are TanStack Query v5 hooks used correctly (queryKey arrays, staleTime, enabled flags)?
 - **Type safety:** Are `as` casts hiding real type errors? Are `unknown` returns from API calls properly narrowed?
 - **Vitest test gaps:** Does the component have a `.test.tsx` file? Are the happy path, error state, and loading state covered?
-- **Accessibility basics:** Interactive elements have accessible labels? Form inputs have associated labels? Images have alt text?
+- **Accessibility:** Icon-only buttons/links have `aria-label`; decorative icons have `aria-hidden="true"`. Visible `:focus-visible` state on every interactive element (not just a browser default ring). Color contrast ≥4.5:1 for text and meaningful icons. Hit targets ≥44×44px on touch surfaces. Form inputs have `<label>`, `autoComplete`, and `aria-describedby` for errors. Animation respects `prefers-reduced-motion`. Keyboard navigation works end-to-end — logical tab order, modal focus trap, Escape closes overlays.
 
 ## What you do NOT review
 
@@ -74,7 +74,7 @@ Every response MUST include a `## Handoff` block before the Status block. Requir
 ```
 ## Handoff
 files_changed: ["none — read-only reviewer"]
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: [describe if BLOCKED, else "none"]
 ```
 

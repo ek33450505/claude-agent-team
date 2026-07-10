@@ -148,12 +148,14 @@ Cap Bash output at 100 lines (`| tail -100`). Cap file reads at 200 lines (use o
 
 ## Handoff
 
+This agent's Status is always one of `DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT`.
+
 Every response MUST include a `## Handoff` block before the Status block. Required fields:
 
 ```
 ## Handoff
 files_changed: [list of doc files written or modified]
-status: DONE | DONE_WITH_CONCERNS | BLOCKED
+status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 blockers: [describe if BLOCKED, else "none"]
 ```
 
