@@ -28,6 +28,9 @@ setup() {
 }
 
 teardown() {
+  if [[ -n "${COLLECTOR_HTTP_PID:-}" ]]; then
+    _stop_collector_http "${COLLECTOR_HTTP_PORT:-}"
+  fi
   teardown_temp_home
   unset CAST_DB_PATH
 }
@@ -284,8 +287,9 @@ PYEOF
 _start_collector_http() {
   local port="$1"
   CAST_OTEL_PORT="$port" CAST_DB_PATH="$CAST_DB_PATH" \
-    python3 "$COLLECTOR_PY" --serve >"$BATS_TEST_TMPDIR/collector-http.log" 2>&1 &
+    python3 "$COLLECTOR_PY" --serve >"$BATS_TEST_TMPDIR/collector-http.log" 2>&1 3>&- 4>&- &
   COLLECTOR_HTTP_PID=$!
+  COLLECTOR_HTTP_PORT="$port"
   # Wait for the port to accept connections (bounded poll, avoids fixed sleep flakiness)
   for _ in $(seq 1 50); do
     if python3 -c "import socket; s=socket.create_connection(('127.0.0.1', $port), timeout=0.2); s.close()" 2>/dev/null; then
@@ -297,10 +301,25 @@ _start_collector_http() {
 }
 
 _stop_collector_http() {
+  local port="${1:-}"
   if [[ -n "${COLLECTOR_HTTP_PID:-}" ]]; then
     kill "$COLLECTOR_HTTP_PID" 2>/dev/null || true
+    for _i in $(seq 1 10); do
+      kill -0 "$COLLECTOR_HTTP_PID" 2>/dev/null || break
+      sleep 0.2
+    done
+    kill -9 "$COLLECTOR_HTTP_PID" 2>/dev/null || true
     wait "$COLLECTOR_HTTP_PID" 2>/dev/null || true
     unset COLLECTOR_HTTP_PID
+  fi
+  unset COLLECTOR_HTTP_PORT
+  # Port-scoped sweep for shim-child survivors (runner-only $! detachment).
+  # NEVER pkill by script name/pattern — Ed's live production collector runs
+  # the same script on port 4318; lsof-by-port only ever hits scratch-port test daemons.
+  if [[ -n "$port" ]] && command -v lsof >/dev/null 2>&1; then
+    local strays
+    strays="$(lsof -ti "tcp:$port" 2>/dev/null || true)"
+    [[ -n "$strays" ]] && kill -9 $strays 2>/dev/null || true
   fi
 }
 
@@ -328,7 +347,7 @@ conn.send(b'0\r\n\r\n')
 resp = conn.getresponse()
 print(resp.status)
 "
-  _stop_collector_http
+  _stop_collector_http "$port"
 
   assert_success
   assert_output "200"
@@ -352,7 +371,7 @@ conn.send(b'ZZZZ-not-hex\r\n')
 resp = conn.getresponse()
 print(resp.status)
 "
-  _stop_collector_http
+  _stop_collector_http "$port"
 
   assert_success
   assert_output "400"
@@ -367,7 +386,7 @@ print(resp.status)
     -H 'Content-Type: application/json' \
     -d '{"resourceLogs":[]}'
 
-  _stop_collector_http
+  _stop_collector_http "$port"
 
   assert_success
   assert_output "200"
