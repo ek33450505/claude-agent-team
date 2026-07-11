@@ -338,7 +338,7 @@ YAML
   local fixture="$HOME/fixture_any.txt"
   printf 'placeholder\n' > "$fixture"
 
-  run python3 "$RUNNER" run hallucination-claimed-file-write --output-file "$fixture"
+  run python3 "$RUNNER" run backend-writer-hallucination-claimed-file-write --output-file "$fixture"
 
   assert_success   # 0 rows → PASS
 }
@@ -352,12 +352,12 @@ YAML
   sqlite3 "$CAST_DB_PATH" \
     "INSERT INTO agent_hallucinations \
        (agent_name, claim_type, claimed_value, verified, timestamp) \
-     VALUES ('code-writer', 'file_write', 'scripts/ghost.py', 0, '2099-12-31T23:59:59Z');"
+     VALUES ('backend-writer', 'file_write', 'scripts/ghost.py', 0, '2099-12-31T23:59:59Z');"
 
   local fixture="$HOME/fixture_any.txt"
   printf 'placeholder\n' > "$fixture"
 
-  run python3 "$RUNNER" run hallucination-claimed-file-write --output-file "$fixture"
+  run python3 "$RUNNER" run backend-writer-hallucination-claimed-file-write --output-file "$fixture"
 
   assert_failure   # exit 1: 1 unverified row
   assert_output --partial "FAIL"
@@ -372,12 +372,12 @@ YAML
   sqlite3 "$CAST_DB_PATH" \
     "INSERT INTO agent_hallucinations \
        (agent_name, claim_type, claimed_value, verified, timestamp) \
-     VALUES ('code-writer', 'file_write', 'scripts/verified.py', 1, '2099-12-31T23:59:59Z');"
+     VALUES ('backend-writer', 'file_write', 'scripts/verified.py', 1, '2099-12-31T23:59:59Z');"
 
   local fixture="$HOME/fixture_any.txt"
   printf 'placeholder\n' > "$fixture"
 
-  run python3 "$RUNNER" run hallucination-claimed-file-write --output-file "$fixture"
+  run python3 "$RUNNER" run backend-writer-hallucination-claimed-file-write --output-file "$fixture"
 
   assert_success   # verified=1 → not a violation → PASS
 }
@@ -392,12 +392,12 @@ YAML
   sqlite3 "$CAST_DB_PATH" \
     "INSERT INTO agent_hallucinations \
        (agent_name, claim_type, claimed_value, verified, timestamp) \
-     VALUES ('code-writer', 'file_write', 'scripts/old.py', 0, '2000-01-01T00:00:00Z');"
+     VALUES ('backend-writer', 'file_write', 'scripts/old.py', 0, '2000-01-01T00:00:00Z');"
 
   local fixture="$HOME/fixture_any.txt"
   printf 'placeholder\n' > "$fixture"
 
-  run python3 "$RUNNER" run hallucination-claimed-file-write --output-file "$fixture"
+  run python3 "$RUNNER" run backend-writer-hallucination-claimed-file-write --output-file "$fixture"
 
   assert_success   # old row outside --since window → 0 counted → PASS
 }

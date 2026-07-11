@@ -26,12 +26,12 @@ teardown() {
   [ -d "$OUT" ]
 }
 
-@test "gen-plugin.sh creates exactly 17 agent files (LEAN_AGENTS)" {
+@test "gen-plugin.sh creates exactly 22 agent files (LEAN_AGENTS)" {
   OUT="$BATS_TEST_TMPDIR/plugin"
   bash "$REPO_DIR/scripts/gen-plugin.sh" "$OUT" >/dev/null 2>&1
 
   agent_count=$(find "$OUT/agents" -maxdepth 1 -type f | wc -l | tr -d ' ')
-  [ "$agent_count" -eq 17 ]
+  [ "$agent_count" -eq 22 ]
 }
 
 @test "gen-plugin.sh excludes push.md and morning-briefing.md from agents/" {
@@ -102,12 +102,12 @@ assert d['name']=='cast', 'plugin name is not cast'
   [ "$result" -eq 0 ]
 }
 
-@test "gen-plugin.sh with --with-extras includes 3 extra agents (20 total)" {
+@test "gen-plugin.sh with --with-extras includes 3 extra agents (25 total)" {
   OUT="$BATS_TEST_TMPDIR/plugin-extras"
   bash "$REPO_DIR/scripts/gen-plugin.sh" --with-extras "$OUT" >/dev/null 2>&1
 
   agent_count=$(find "$OUT/agents" -maxdepth 1 -type f | wc -l | tr -d ' ')
-  [ "$agent_count" -eq 20 ]
+  [ "$agent_count" -eq 25 ]
 }
 
 @test "gen-plugin.sh with --with-extras includes release-notes, api-contract, dep-auditor" {

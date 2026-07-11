@@ -8,7 +8,7 @@
 #   1. Empty temp HOME → bootstrap exits 0 + all runtime dirs created
 #   2. After bootstrap, ~/.claude/scripts/ contains symlinks into plugin/scripts/
 #   3. cast.db initialized (PRAGMA user_version > 0)
-#   4. Plugin curates exactly 17 agents; push + morning-briefing excluded
+#   4. Plugin curates exactly 22 agents; push + morning-briefing excluded
 #   5. claude plugin validate --strict (skipped if claude CLI absent)
 #   6. Idempotency: second bootstrap is a no-op (exits 0, DB version unchanged)
 #   7. cast-hook-owner sentinel: hooks.json defer-guard references the sentinel file
@@ -150,16 +150,16 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Plugin curates exactly 17 agents; push + morning-briefing excluded
+# 4. Plugin curates exactly 22 agents; push + morning-briefing excluded
 # ---------------------------------------------------------------------------
 
-@test "plugin/agents/ contains exactly 17 agent files" {
+@test "plugin/agents/ contains exactly 22 agent files" {
   local count
   count="$(find "$PLUGIN_DIR/agents" -maxdepth 1 -name '*.md' | wc -l)"
   count="${count// /}"  # strip whitespace from wc -l output (macOS pads)
 
-  [[ "$count" -eq 17 ]] || {
-    echo "Expected 17 agents in plugin/agents/, got $count" >&2
+  [[ "$count" -eq 22 ]] || {
+    echo "Expected 22 agents in plugin/agents/, got $count" >&2
     find "$PLUGIN_DIR/agents" -maxdepth 1 -name '*.md' >&2
     return 1
   }

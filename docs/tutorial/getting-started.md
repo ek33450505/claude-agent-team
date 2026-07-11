@@ -31,7 +31,7 @@ Expected output:
 ==> Installing cast
   CAST Installer (v9.0.0)
 
-  ✓ Installed <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents -> ~/.claude/agents/
+  ✓ Installed <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents -> ~/.claude/agents/
   ✓ Installed <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash commands -> ~/.claude/commands/
   ✓ Installed <!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> skills -> ~/.claude/skills/
   ✓ Installed hook scripts -> ~/.claude/scripts/
@@ -120,7 +120,7 @@ YAML frontmatter specifying the model and memory for that specialist.
 ## What just happened
 
 `brew install cast` ran `install.sh`, which:
-1. Copied <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agent definition files into `~/.claude/agents/` — Claude Code loads these automatically
+1. Copied <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agent definition files into `~/.claude/agents/` — Claude Code loads these automatically
 2. Installed slash commands (e.g., `/commit`, `/review`, `/plan`) into `~/.claude/commands/`
 3. Wired hook scripts into `~/.claude/settings.json` so hook events (SessionStart, PreToolUse, SubagentStop, etc.) fire on every session
 4. Created the `cast` CLI at `~/.local/bin/cast`

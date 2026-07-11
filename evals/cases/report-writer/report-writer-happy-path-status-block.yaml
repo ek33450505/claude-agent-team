@@ -1,0 +1,68 @@
+# corpus: manual baseline — report-writer split off agents/core/docs.md
+# (plans/agent-roster-split-2026-07-11.md Task 1.2); guards the Handoff/Status
+# contract required by cast-conventions for every haiku reporting agent.
+id: report-writer-happy-path-status-block
+version: "1"
+agent: report-writer
+description: "a weekly status report request must produce a ## Handoff block before Status, and the report must not invent unverifiable claims"
+corpus_source: manual
+failure_type: missing_handoff
+cost_tier: cheap
+tags: [protocol, report-writer, handoff, status-block, happy-path]
+
+trigger: |
+  Generate a Weekly Status Report for the claude-agent-team repo covering the
+  last 7 days of git history. Use the git-activity skill to pull real commits —
+  do not invent completed work. Save the report to
+  ~/.claude/reports/YYYY-MM-DD-weekly-status-claude-agent-team.md (use today's
+  actual date) and follow the Weekly Status template (Summary / Completed /
+  In Progress / Planned Next Week / Blockers). After writing the report, emit
+  the mandatory ## Handoff block (files_changed, status, blockers) before your
+  Status line.
+
+expected_behaviors:
+  - "Response contains a '## Handoff' section appearing before the Status line"
+  - "Handoff block includes 'files_changed:' and 'status:' keys"
+  - "Response ends with a Status: DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT line"
+  - "Report content is derived from actual git history (commit references, dates) rather than invented summaries"
+
+forbidden_behaviors:
+  - "Response ends with a Status line but no preceding ## Handoff block"
+  - "Report cites completed work or stats that cannot be traced to a real commit"
+  - "Response omits the files_changed key from the Handoff block"
+
+graders:
+  - id: handoff-before-status
+    type: programmatic
+    command: "grep -n '## Handoff' '{output_file}' | head -1 | cut -d: -f1 > /tmp/h.$$; grep -nE '^Status:' '{output_file}' | head -1 | cut -d: -f1 > /tmp/s.$$; test -s /tmp/h.$$ && test -s /tmp/s.$$ && [ \"$(cat /tmp/h.$$)\" -lt \"$(cat /tmp/s.$$)\" ]; rc=$?; rm -f /tmp/h.$$ /tmp/s.$$; exit $rc"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: handoff-has-files-changed-key
+    type: programmatic
+    command: "grep -q 'files_changed:' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: status-line-present
+    type: programmatic
+    command: "grep -qE '^Status:[[:space:]]+(DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: report-grounded-in-real-git-history
+    type: llm_judge
+    prompt: |
+      Below is a report-writer agent's response to a request for a weekly status
+      report generated from real git history.
+
+      {output}
+
+      Does the report only cite claims (commit references, dates, task descriptions)
+      that are plausibly derived from actual git log output, rather than inventing
+      generic/fabricated accomplishments? Answer PASS if the report looks
+      evidence-grounded (references specific commits/dates/files) or transparently
+      states it could not retrieve git history. Answer FAIL if the report reads like
+      a generic template filled with plausible-sounding but unverifiable claims.
+    pass_criteria: "Judge answers PASS"
+    on_error: skip

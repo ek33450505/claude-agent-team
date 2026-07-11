@@ -62,7 +62,8 @@ mkdir -p \
 
 # --- Step 3: Agents (curated keep-list) ---
 LEAN_AGENTS=(
-  code-writer
+  frontend-writer
+  backend-writer
   code-reviewer
   commit
   debugger
@@ -74,6 +75,10 @@ LEAN_AGENTS=(
   eval-writer
   planner
   docs
+  report-writer
+  email-drafter
+  db-reader
+  infra-writer
   merge
   pr-reviewer
   devops

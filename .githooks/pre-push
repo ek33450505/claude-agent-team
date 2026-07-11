@@ -147,11 +147,22 @@ if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
       echo "To skip this gate: CAST_SKIP_STATS_PUSH=1 git push" >&2
       exit 1
     fi
+
+    if ! (cd "${_STATS_WT_BASE}/wt" && bash scripts/gen-stats.sh --check); then
+      _stats_wt_cleanup
+      trap - EXIT
+      echo "" >&2
+      echo "ERROR: README/docs sentinels are out of sync. Regenerate and commit them:" >&2
+      echo "  bash scripts/gen-stats.sh && git add -A && git commit --amend --no-edit" >&2
+      echo "To skip this gate: CAST_SKIP_STATS_PUSH=1 git push" >&2
+      exit 1
+    fi
     _stats_wt_cleanup
   done
   trap - EXIT
 
   echo "[CAST pre-push] cast-stats.json in sync ✓"
+  echo "[CAST pre-push] README/docs sentinels in sync ✓"
 else
   echo "[CAST pre-push] Skipping stats-drift check (CAST_SKIP_STATS_PUSH=1)" >&2
 fi
