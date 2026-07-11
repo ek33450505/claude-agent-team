@@ -8,7 +8,7 @@ All CAST documentation with one-line descriptions. Start with the Tutorial if yo
 
 | Document | Description |
 |---|---|
-| [Tutorial: Getting Started](tutorial/getting-started.md) | Install CAST via Homebrew and verify `cast status` loads <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents |
+| [Tutorial: Getting Started](tutorial/getting-started.md) | Install CAST via Homebrew and verify `cast status` loads <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents |
 | [Tutorial: First Agent Dispatch](tutorial/first-agent-dispatch.md) | Dispatch `code-reviewer` on a file and read the Work Log output |
 | [Tutorial: How Hooks Work](tutorial/first-hook.md) | Conceptual intro to hook events, the CLAUDE_SUBPROCESS guard, and cast.db verification |
 
@@ -43,7 +43,7 @@ All CAST documentation with one-line descriptions. Start with the Tutorial if yo
 
 | Document | Description |
 |---|---|
-| [Agent Roster](agents/AGENT-ROSTER.md) | All <!-- CAST_AGENT_COUNT -->22<!-- /CAST_AGENT_COUNT --> agents with model tiers and scopes |
+| [Agent Roster](agents/AGENT-ROSTER.md) | All <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents with model tiers and scopes |
 | [Agent Contracts — Status-block schema](agents/agent-contracts.md) | Structured Status Block JSON schema and input/output contracts for each agent type |
 | [Agent Contract Testing](agent-contracts.md) | Contract testing framework: YAML-driven assertion specs for agent contracts |
 | [Agent Quality Rubric](agents/agent-quality-rubric.md) | How `code-reviewer` scores agent output quality |
