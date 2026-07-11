@@ -13,33 +13,40 @@ setup() {
 @test "manifest matches current rules-core" {
   # Generate twice and verify they match
   bash scripts/gen-rules-manifest.sh
-  cp .github/rules-core.manifest /tmp/manifest1.txt
+  cp .github/rules-core.manifest "$BATS_TEST_TMPDIR/manifest1.txt"
 
   bash scripts/gen-rules-manifest.sh
-  cp .github/rules-core.manifest /tmp/manifest2.txt
+  cp .github/rules-core.manifest "$BATS_TEST_TMPDIR/manifest2.txt"
 
   # Should be identical
-  diff /tmp/manifest1.txt /tmp/manifest2.txt
+  diff "$BATS_TEST_TMPDIR/manifest1.txt" "$BATS_TEST_TMPDIR/manifest2.txt"
 }
 
 @test "manifest flags drift after a file edit" {
-  # Generate baseline
-  bash scripts/gen-rules-manifest.sh
-  cp .github/rules-core.manifest /tmp/manifest_before.txt
+  # Isolate in a disposable worktree: gen-rules-manifest.sh internally does
+  # `cd "$(git rev-parse --show-toplevel)"`, so only a worktree (a real repo
+  # root of its own) keeps the edit+regenerate+checkout off the real tree.
+  local worktree
+  worktree="$(mktemp -d)"
+  git worktree add "$worktree" HEAD >/dev/null
 
-  # Modify a rules-core file
-  echo "# drift test" >> rules-core/working-conventions.md
+  (
+    cd "$worktree"
 
-  # Regenerate manifest
-  bash scripts/gen-rules-manifest.sh
-  cp .github/rules-core.manifest /tmp/manifest_after.txt
+    # Generate baseline
+    bash scripts/gen-rules-manifest.sh
+    cp .github/rules-core.manifest "$BATS_TEST_TMPDIR/manifest_before.txt"
+
+    # Modify a rules-core file (in the worktree only)
+    echo "# drift test" >>rules-core/working-conventions.md
+
+    # Regenerate manifest
+    bash scripts/gen-rules-manifest.sh
+    cp .github/rules-core.manifest "$BATS_TEST_TMPDIR/manifest_after.txt"
+  )
+
+  git worktree remove "$worktree" --force
 
   # Should differ (negation test)
-  ! diff /tmp/manifest_before.txt /tmp/manifest_after.txt > /dev/null
-
-  # Restore the file
-  git checkout rules-core/working-conventions.md
-
-  # Regenerate to clean state
-  bash scripts/gen-rules-manifest.sh
+  ! diff "$BATS_TEST_TMPDIR/manifest_before.txt" "$BATS_TEST_TMPDIR/manifest_after.txt" >/dev/null
 }
