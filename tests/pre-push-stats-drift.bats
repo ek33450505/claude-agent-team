@@ -52,10 +52,19 @@ _make_fixture_repo() {
     "$stub_exit" "$stub_exit" > "$tmpdir/scripts/gen-cast-stats.sh"
   chmod +x "$tmpdir/scripts/gen-cast-stats.sh"
 
+  # Stub gen-stats.sh — the gate also runs this from the pushed SHA's worktree
+  # (added when .githooks/pre-push started checking README/docs sentinel drift
+  # in addition to cast-stats.json). None of these tests exercise ITS drift logic
+  # (that's covered elsewhere) — it always exits 0 so it never interferes with the
+  # cast-stats.json-focused assertions this file makes.
+  printf '#!/usr/bin/env bash\n# stats-drift stub: always clean\nexit 0\n' \
+    > "$tmpdir/scripts/gen-stats.sh"
+  chmod +x "$tmpdir/scripts/gen-stats.sh"
+
   # Placeholder cast-stats.json so the pushed tree looks realistic.
   printf '{"version":"stub"}\n' > "$tmpdir/cast-stats.json"
 
-  git -C "$tmpdir" add scripts/gen-cast-stats.sh cast-stats.json
+  git -C "$tmpdir" add scripts/gen-cast-stats.sh scripts/gen-stats.sh cast-stats.json
   git -C "$tmpdir" commit -q -m "init"
 
   echo "$tmpdir"
