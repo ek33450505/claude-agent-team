@@ -41,10 +41,10 @@ teardown() {
   assert_success
 }
 
-@test "gen-cast-stats.sh produces agents=22" {
+@test "gen-cast-stats.sh produces agents=27" {
   run jq -r '.agents' < "$CANONICAL_JSON"
   assert_success
-  assert_output "22"
+  assert_output "27"
 }
 
 @test "gen-cast-stats.sh produces a positive-integer tests count" {

@@ -67,7 +67,7 @@ run_install_personal() {
   run_install_personal
 
   # A representative core agent should be present
-  [ -f "$HOME/.claude/agents/code-writer.md" ]
+  [ -f "$HOME/.claude/agents/frontend-writer.md" ]
   [ -f "$HOME/.claude/agents/commit.md" ]
 }
 
