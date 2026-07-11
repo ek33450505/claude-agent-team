@@ -740,6 +740,30 @@ def section_trend_alert(conn, repo_root: str, lookback_days: int = 7) -> tuple:
     else:
         lines.append("- No agent_runs rows in the last 21d.")
 
+    # --- workflow-subagent opus-share trend (S3 cost lever, cast-workflow-model-audit.py) ---
+    lines.append("\n### Workflow-subagent opus-share trend")
+    audit_script = os.path.join(repo_root, 'scripts', 'cast-workflow-model-audit.py')
+    if os.path.isfile(audit_script):
+        try:
+            result = subprocess.run(
+                ['python3', audit_script], capture_output=True, text=True, timeout=15
+            )
+            lines.append(result.stdout.strip() or "(no output from audit script)")
+            if result.returncode != 0:
+                proposals.append(Proposal(
+                    section="4. Trend→Alert",
+                    title="Workflow-subagent opus-share not trending down",
+                    evidence=(result.stdout.strip() or result.stderr.strip())[-500:],
+                    recommendation="Review recent Workflow scripts for missing per-stage `model:` "
+                                    "overrides per the S3 cost lever guidance in "
+                                    "rules-core/working-conventions.md.",
+                    strength="Medium",
+                ))
+        except Exception as e:
+            lines.append(f"- WATCH — audit script failed to run: {e}")
+    else:
+        lines.append("- INFO — scripts/cast-workflow-model-audit.py not found")
+
     return "\n".join(lines), proposals
 
 
