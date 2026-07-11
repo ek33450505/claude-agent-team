@@ -6,6 +6,21 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 _Nothing yet._
 
+## [9.5.3] — 2026-07-11 — agent roster split + workflow-cost audit + CI hardening
+
+Closes out the v9.5 line. Started as a review of whether any agent should escalate to Opus now that Sonnet 5 is the main-loop driver (answer: no — the escalation bar is irreversibility + infrequency, not raw capability, and only `migration-reviewer` clears it); grew into a full roster split plus two systemic bug fixes surfaced along the way.
+
+### Changed
+- **Agent roster split, 22 → 27 agents.** `code-writer` retired, split into `frontend-writer` + `backend-writer` (React/Vite/TS vs. Express/Node/SQLite). `docs` trimmed to README/doc-update only, spinning off `report-writer` (status/chain-summary reports) and `email-drafter` (email drafting + portfolio-sync). `researcher` trimmed to codebase/tech-research, spinning off `db-reader` (read-only SQL analysis — also fixes a stale reference in the personal rules config that named `db-reader` as an agent no longer wired). `devops` trimmed to CI/CD, spinning off `infra-writer` (Docker/Terraform/deployment/env-hygiene). Model tiering recomputed: Haiku 16 / Sonnet 10 / Opus 1 = 27. All cross-cutting surfaces (README, `docs/agents/AGENT-ROSTER.md`, agent-registry skill, plugin curation, eval fixtures) updated in step.
+
+### Added
+- **`scripts/cast-workflow-model-audit.py`** — fleet-level opus-share trend detector for the `Workflow`-tool cost lever (a 2026-07-06 fix added per-stage model guidance to `working-conventions.md`, but it was advisory-only with no enforcement). Wired into the existing weekly record-review report rather than a new schedule. Documented limitation: the SubagentStop hook doesn't expose per-stage labels, so this verifies fleet-level trend only, not true per-stage compliance.
+
+### Fixed
+- **`tests/rules-drift.bats` destructive test-isolation bug.** Its drift test mutated and `git checkout`'d the real tracked `rules-core/working-conventions.md` as its own cleanup — reverting any legitimate uncommitted edits present when the suite ran, not just its own scratch edit. Now isolated to a disposable `git worktree`.
+- **`.githooks/pre-push` stats-drift gate gap.** CI's `stats-guard` workflow runs two checks (`gen-cast-stats.sh --check` for `cast-stats.json`, `gen-stats.sh --check` for README/`docs/*.md` sentinels); the pre-push hook only ever ran the first, so a clean local push could still fail CI — the root cause of a stats-guard failure recurring across several PRs. Hook now runs both checks inside the same per-pushed-SHA worktree.
+- **3 CI regressions from the roster split, caught by the full BATS suite:** an eval-case ID collision (`frontend-writer` and `backend-writer` both shipped an eval case named `hallucination-claimed-file-write.yaml`, which `cast-eval-runner.py` resolves by filename stem across the whole tree — non-deterministic, resolved by renaming both to agent-scoped IDs); two stale hardcoded agent-count assertions (`tests/scripts/gen-plugin.bats`, `tests/cast-plugin-smoke.bats`, `tests/cast-stats.bats`); one stale reference to the retired `code-writer.md` in `tests/install-personal.bats`.
+
 ## [9.5.2] — 2026-07-09 — maintenance fixes (evening audit remediation)
 
 Same-day follow-up to v9.5.1: an evening `/cast-audit` re-run (**0 HIGH after adversarial verification — third consecutive zero-HIGH audit**) plus remediation of every actionable finding it and the `/doctor` pass surfaced. Every unit individually code-reviewed; landed as one batched commit (per-unit commits were blocked by the plugin-drift × commit-hatch guard collision this release also fixes).
