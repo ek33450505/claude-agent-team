@@ -9,10 +9,11 @@ get_agent_color() {
   local agent="${1:-main}"
   local code
   case "$agent" in
-    code-writer)       code="38;5;208" ;;  # orange
+    backend-writer)    code="38;5;166" ;;  # burnt orange (writer class)
     code-reviewer)     code="36"       ;;  # cyan
     commit)            code="38;5;220" ;;  # yellow
     push)              code="38;5;33"  ;;  # blue
+    db-reader)         code="38;5;64"  ;;  # sage (reader class)
     debugger)          code="38;5;196" ;;  # red
     test-runner)       code="32"       ;;  # green (standard ANSI)
     test-writer)       code="38;5;201" ;;  # fuchsia
@@ -25,11 +26,13 @@ get_agent_color() {
     docs)              code="38;5;48"  ;;  # emerald
     merge)             code="38;5;142" ;;  # olive
     frontend-qa)       code="38;5;45"  ;;  # sky blue
+    frontend-writer)   code="38;5;213" ;;  # magenta (writer class)
     morning-briefing)  code="38;5;172" ;;  # bronze
     adr-writer)        code="38;5;37"  ;;  # teal (distinct from devops 30)
     api-contract)      code="38;5;27"  ;;  # blue (distinct from push 33)
     dep-auditor)       code="38;5;226" ;;  # yellow (distinct from commit 220)
     email-drafter)     code="38;5;153" ;;  # light blue
+    infra-writer)      code="38;5;66"  ;;  # teal-green (writer class)
     knowledge-curator) code="38;5;141" ;;  # purple (distinct from orchestrator 135)
     learning-scout)    code="38;5;178" ;;  # gold
     meeting-prep)      code="38;5;39"  ;;  # blue (distinct from push 33 and api-contract 27)
@@ -37,6 +40,7 @@ get_agent_color() {
     portfolio-sync)    code="38;5;81"  ;;  # aqua (sync/writer class)
     pr-narrator)       code="38;5;218" ;;  # pink
     release-notes)     code="38;5;51"  ;;  # cyan (distinct from code-reviewer 36)
+    report-writer)     code="38;5;228" ;;  # lemon (writer class)
     standup-writer)    code="38;5;112" ;;  # green (distinct from test-runner 32)
     task-triage)       code="38;5;202" ;;  # orange (distinct from code-writer 208)
     eval-writer)       code="38;5;93"  ;;  # violet (Phase 4.5.4 add)

@@ -1,0 +1,88 @@
+# corpus: manual — infra-writer split off agents/core/devops.md (plans/agent-roster-split-2026-07-11.md
+# Task 1.5), carrying forward the hadolint graceful-degrade contract verbatim. Guard against regression
+# where a hard-block on missing hadolint is reintroduced during future edits.
+id: hadolint-absent-graceful-degrade
+version: "1"
+agent: infra-writer
+description: "infra-writer must not hard-block when hadolint is absent from PATH after writing a Dockerfile — report the gap and continue, DONE_WITH_CONCERNS at most"
+corpus_source: manual
+failure_type: false_hard_block
+cost_tier: cheap
+tags: [infra-writer, docker, hadolint, graceful-degrade, agent-roster-split, F-none]
+
+trigger: |
+  You are working in a repo with no Dockerfile yet. `hadolint` is NOT installed on this
+  machine (it is absent from PATH).
+
+  TASK: Write a Dockerfile at `docker/app.Dockerfile` for a simple Node 20 Express app:
+  - Base image `node:20-slim`
+  - WORKDIR /app
+  - Copy package.json and package-lock.json, run `npm ci --omit=dev`
+  - Copy the rest of the source
+  - Expose port 3000
+  - CMD ["node", "server.js"]
+
+  After writing the Dockerfile, run your normal hadolint lint step. hadolint is not
+  installed on this machine, so the lint command will not find the binary. Do NOT
+  treat this as a blocking failure — follow your graceful-degrade behavior for a
+  missing hadolint binary, note the gap in your output, and finish with a Status line
+  and Handoff block. Do not return Status: BLOCKED solely because hadolint is missing.
+
+expected_behaviors:
+  - "Agent writes the Dockerfile to docker/app.Dockerfile as specified"
+  - "Agent attempts to run hadolint and detects it is absent from PATH (e.g. via 'command -v hadolint')"
+  - "Agent reports the missing hadolint as a note/gap in its output rather than as a fatal error"
+  - "Agent finishes with Status: DONE or Status: DONE_WITH_CONCERNS and includes a Handoff block"
+
+forbidden_behaviors:
+  - "Agent returns Status: BLOCKED because hadolint is not installed"
+  - "Agent refuses to write the Dockerfile pending hadolint installation"
+  - "Agent's response ends without a Status line (silent truncation) when only a missing lint tool was encountered"
+
+graders:
+  - id: no-blocked-status-for-missing-hadolint
+    type: programmatic
+    command: "grep -qE 'Status:[[:space:]]+BLOCKED' '{output_file}' && exit 1 || exit 0"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: status-block-present
+    type: programmatic
+    command: "grep -qE 'Status:[[:space:]]+(DONE|DONE_WITH_CONCERNS)' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: dockerfile-written
+    type: programmatic
+    command: "grep -qiE 'docker/app\\.Dockerfile' '{output_file}'"
+    pass_criteria: exit_code_0
+    on_error: error
+
+  - id: llm-judge-graceful-degrade
+    type: llm_judge
+    prompt: |
+      You are grading an AI agent's response for a CAST eval case testing infra-writer's
+      hadolint graceful-degrade contract.
+
+      The agent was told hadolint is absent from PATH and was instructed to write a
+      Dockerfile, attempt to lint it, and NOT hard-block solely because hadolint is missing.
+
+      PASS this response if ALL of the following are true:
+        1. The agent produced the requested Dockerfile content.
+        2. The agent's handling of the missing hadolint binary reads as a graceful skip/note
+           (e.g. "hadolint not installed — skipping Dockerfile lint") rather than a fatal error.
+        3. The agent did not treat the missing lint tool as grounds to stop the task or ask
+           the user to install hadolint before proceeding.
+        4. The final Status is DONE or DONE_WITH_CONCERNS, not BLOCKED.
+
+      FAIL this response if ANY of the following are true:
+        1. The agent stops the task or returns BLOCKED because hadolint isn't installed.
+        2. The agent fabricates hadolint output as if the tool had actually run.
+        3. The Dockerfile is missing or incomplete relative to the request.
+
+      Agent response:
+      {output}
+
+      Verdict (PASS or FAIL) followed by one sentence of reasoning:
+    pass_criteria: "Response begins with PASS and the agent gracefully degraded on missing hadolint without hard-blocking"
+    on_error: skip
