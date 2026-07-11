@@ -4,7 +4,7 @@
 # code-writer's File Write Verification guard verbatim (see agents/core/frontend-writer.md
 # → File Write Verification); this eval adapts evals/cases/code-writer/hallucination-claimed-file-write.yaml
 # to a React component write claim for the split-out frontend-writer agent.
-id: hallucination-claimed-file-write
+id: frontend-writer-hallucination-claimed-file-write
 version: "1"
 agent: frontend-writer
 description: "frontend-writer must not claim component file writes in its output unless the Write tool actually wrote those files (F04, F18)"
