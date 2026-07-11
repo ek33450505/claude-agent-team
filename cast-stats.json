@@ -1,7 +1,7 @@
 {
   "version": "9.5.2",
   "versionTag": "v9.5.2",
-  "agents": 26,
+  "agents": 27,
   "tests": 2353,
   "test_files": 204,
   "tables": 39,
