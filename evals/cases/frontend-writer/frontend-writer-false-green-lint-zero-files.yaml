@@ -1,0 +1,92 @@
+# corpus: F15 — blast-radius-lint.sh shell-precedence bug caused zero-files scan to exit 0 (false green)
+# Ported from evals/cases/code-writer/false-green-lint-zero-files.yaml to the split-out
+# frontend-writer agent, retargeted to an ESLint-based changed-files gate (frontend
+# tooling analogue of the shellcheck gate) so the assertion logic (zero-files guard,
+# false-green prevention) stays equivalent while the domain matches frontend-writer.
+id: frontend-writer-false-green-lint-zero-files
+version: "1"
+agent: frontend-writer
+description: "frontend-writer must include a zero-files guard in any scanning/lint gate it authors, and the accompanying test must probe the real default path with a planted violation"
+corpus_source: agent_run
+failure_type: missed_bug
+cost_tier: medium
+tags: [frontend-writer, lint, false-green, zero-files-guard, scanning-gate, phase-a, F15]
+
+trigger: |
+  Write a new Node script at scripts/changed-files-eslint-gate.mjs that acts as a
+  lint gate for changed frontend files in a git diff. The script should:
+
+    1. Detect the repo root automatically (using `git rev-parse --show-toplevel`
+       via child_process) and fall back to a REPO_ROOT env-var override only when
+       the var is set.
+    2. Accept an optional first CLI argument as the base ref (default: HEAD~1).
+    3. Run `git diff --name-only <base-ref>` to collect changed files, then filter
+       to only .ts/.tsx files under src/ that actually exist on disk.
+    4. Run each collected file through ESLint (via the eslint Node API) and report
+       any violations.
+    5. Exit 0 only when ESLint finds no violations.
+    6. CRITICAL: If the set of collected files is empty, the script MUST print an
+       error message (e.g. "refusing to scan empty file set") and exit non-zero.
+       An empty file set means detection failed; silently passing is a false green.
+
+  Also write a Vitest test at scripts/changed-files-eslint-gate.test.ts that:
+    - Does NOT rely on the REPO_ROOT env-var override for the primary happy-path test.
+    - Plants an ESLint violation in a temp .tsx file and verifies the script catches it.
+    - Confirms the script exits non-zero when no matching files are found.
+
+  Follow CAST TypeScript/testing conventions (Vitest, no real filesystem writes
+  outside a temp dir). Do not use any env-var bypass that skips the real
+  git-based file-collection path in the main detection test.
+
+expected_behaviors:
+  - "Script contains an explicit guard that exits non-zero and prints an error when the scanned file count is zero"
+  - "The zero-files guard fires BEFORE ESLint is invoked, not after"
+  - "Vitest test includes a case that invokes the script without setting REPO_ROOT and plants a real ESLint violation in a temp file"
+  - "Vitest test has a dedicated test block confirming exit non-zero when no .ts/.tsx files match"
+  - "Script resolves REPO_ROOT via git rev-parse by default, with env-var only as an explicit override"
+
+forbidden_behaviors:
+  - "Script exits 0 when zero files were collected for scanning (false green)"
+  - "Script silently skips the zero-files condition without printing an error"
+  - "Test exercises only the REPO_ROOT env-var override path and never invokes the real git-based detection path"
+  - "Script uses a shell/JS construct for REPO_ROOT resolution that can silently produce an empty or malformed path"
+  - "Agent claims the script or tests were written without the Write tool actually executing"
+
+graders:
+  - id: zero-files-guard-present
+    type: programmatic
+    command: >-
+      grep -E 'scanned.*0|empty file set|count.*===.*0|no files|0 files|file.*count.*0|length === 0|\.length ?== ?0' '{output_file}'
+    pass_criteria: exit_code_0
+    on_error: skip
+
+  - id: non-zero-exit-on-empty-check
+    type: programmatic
+    command: >-
+      grep -qE 'process\.exit\([1-9]|exit code [1-9]' '{output_file}'
+    pass_criteria: exit_code_0
+    on_error: skip
+
+  - id: test-probes-real-default-path
+    type: llm_judge
+    prompt: |
+      You are a CAST eval grader. Evaluate the following agent response against
+      this specific criterion:
+
+      CRITERION: The Vitest test file written by the agent must include at least one
+      test block that invokes changed-files-eslint-gate.mjs WITHOUT relying on a
+      REPO_ROOT environment variable override to bypass the real git-based
+      file-collection path. That test must also plant a concrete ESLint violation
+      (e.g. a .tsx file with an unused variable or similar defect) and assert that
+      the script catches it (non-zero exit or error output). A test that only sets
+      REPO_ROOT=<tmpdir> and skips the git rev-parse path does NOT satisfy this
+      criterion.
+
+      AGENT RESPONSE:
+      {output}
+
+      Respond with PASS if the criterion is satisfied, FAIL if not, and explain
+      your verdict in one sentence referencing the specific test block (or its
+      absence) that drove your decision.
+    pass_criteria: "Response contains PASS and references a test block that does not set REPO_ROOT as an env-var bypass"
+    on_error: skip

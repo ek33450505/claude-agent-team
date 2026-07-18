@@ -1,4 +1,4 @@
-agent: code-writer
+agent: backend-writer
 version: "1.0"
 assertions:
   - type: output_contains
@@ -10,8 +10,8 @@ assertions:
   - type: cast_db_write
     table: agent_runs
     field: agent_name
-    expected: code-writer
+    expected: backend-writer
 fixtures:
   - name: "basic implementation"
-    input: "Add a hello function to scripts/cast-hello.sh that prints 'Hello from CAST'"
+    input: "Add a /health route to the Express server that returns 200 with body 'ok'"
     expected_status: DONE

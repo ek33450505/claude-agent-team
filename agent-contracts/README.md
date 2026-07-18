@@ -13,7 +13,8 @@ See [docs/agent-contracts.md](../docs/agent-contracts.md) for the full spec: ass
 | `commit` | [commit.contract.yaml](commit.contract.yaml) | Asserts Status block, Work Log, cast_db write, and no raw `git commit` commands |
 | `code-reviewer` | [code-reviewer.contract.yaml](code-reviewer.contract.yaml) | Asserts Status block, severity word (CRITICAL/WARNING/INFO/PASS), and cast_db write |
 | `planner` | [planner.contract.yaml](planner.contract.yaml) | Asserts Status block, JSON dispatch block with `batches`, `target_branch`, and cast_db write |
-| `code-writer` | [code-writer.contract.yaml](code-writer.contract.yaml) | Asserts Status block, Work Log, files changed list, and cast_db write |
+| `backend-writer` | [backend-writer.contract.yaml](backend-writer.contract.yaml) | Asserts Status block, Work Log, files changed list, and cast_db write |
+| `frontend-writer` | [frontend-writer.contract.yaml](frontend-writer.contract.yaml) | Asserts Status block, Work Log, files changed list, and cast_db write |
 | `push` | [push.contract.yaml](push.contract.yaml) | Asserts Status block, `origin` reference, and cast_db write |
 
 ## Fixtures

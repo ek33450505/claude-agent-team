@@ -9,7 +9,7 @@ CAST ships in two layers: `core` (always installed) and `personal` (optional, `-
 | Directory | Contents |
 |---|---|
 | `rules-core/` | Generic conventions (shell, python, typescript) |
-| `agents/core/` | Specialist agents (code-writer, debugger, planner, …) |
+| `agents/core/` | Specialist agents (backend-writer, frontend-writer, debugger, planner, …) |
 
 ## Personal Layer (optional, created on `--personal` flag)
 

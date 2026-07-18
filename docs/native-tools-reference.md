@@ -9,10 +9,10 @@ these in their `tools:` frontmatter to access them. Names are as confirmed.
 | `BriefTool` | Produces a brief/summarize output block | `/orchestrate` skill (main session), planner |
 | `WorkflowTool` | **Platform-native successor to the `/orchestrate` + ADM pattern (Phase 10 convergence target).** Claude authors a JS orchestration script; native Dynamic Workflows replace the Agent Dispatch Manifest for new dispatches. **Available & verified 2026-06-03 — used for a 7-agent fan-out in-session.** | `/orchestrate` skill (main session) |
 | `SleepTool` | Deliberate pause — useful in orchestrated pipelines for rate-limiting | `/orchestrate` skill (main session), bash-specialist |
-| `REPLTool` | REPL-style code execution | debugger, code-writer |
+| `REPLTool` | REPL-style code execution | debugger, backend-writer, frontend-writer |
 | `ScheduleCronTool` | Schedule a cron job from within an agent | devops, bash-specialist |
 | `EnterPlanMode` / `ExitPlanMode` | Native plan mode gates | planner, `/orchestrate` skill (main session) |
-| `EnterWorktree` / `ExitWorktree` | Native worktree management | code-writer, merge |
+| `EnterWorktree` / `ExitWorktree` | Native worktree management | backend-writer, frontend-writer, merge |
 
 ## Notes
 

@@ -37,7 +37,7 @@ This document records framework-level limitations that are not bugs but rather c
 
 **Workaround:**
 - The main session acts as fallback enforcer: it checks each agent's response for the expected downstream dispatch confirmation.
-- If an agent finishes without its mandatory chain (e.g., `code-writer` completes without dispatching `code-reviewer`), the main session re-dispatches the missing agent.
+- If an agent finishes without its mandatory chain (e.g., `backend-writer` completes without dispatching `code-reviewer`), the main session re-dispatches the missing agent.
 - The `post-tool-hook.sh` injects a `DEEP NESTING WARNING` when `SUBAGENT_DEPTH >= 2` to alert the agent.
 
 **Detection:** Parse the agent's `Status:` block. If no chain confirmation is present and the agent was expected to self-dispatch, re-dispatch inline.

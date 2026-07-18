@@ -46,7 +46,7 @@
   },
   "examples": [
     {
-      "agent": "code-writer",
+      "agent": "backend-writer",
       "status": "DONE",
       "files_changed": "scripts/cast-subagent-stop-hook.sh, schemas/agent-handoff.json",
       "key_decisions": "used importlib.util to load cast_handoff_parser.py — avoids sys.path pollution",

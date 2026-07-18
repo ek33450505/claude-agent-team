@@ -1,0 +1,17 @@
+agent: frontend-writer
+version: "1.0"
+assertions:
+  - type: output_contains
+    pattern: "Status: (DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT)"
+  - type: output_contains
+    pattern: "## Work Log"
+  - type: output_contains
+    pattern: "Files changed:"
+  - type: cast_db_write
+    table: agent_runs
+    field: agent_name
+    expected: frontend-writer
+fixtures:
+  - name: "basic implementation"
+    input: "Add a LoadingSpinner component in src/components/LoadingSpinner.tsx"
+    expected_status: DONE

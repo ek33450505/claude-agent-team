@@ -93,7 +93,7 @@ Note: `thinking_budget:` frontmatter was removed in CAST v8 as dead code — Cla
 
 - Never run `git commit` directly — always use the `commit` agent.
 - Never use `--no-verify` or bypass hooks.
-- When code-writer returns `DONE`, a separate `commit` batch dispatches the commit agent.
+- When backend-writer or frontend-writer returns `DONE`, a separate `commit` batch dispatches the commit agent.
 
 ---
 
