@@ -42,7 +42,7 @@ get_agent_color() {
     release-notes)     code="38;5;51"  ;;  # cyan (distinct from code-reviewer 36)
     report-writer)     code="38;5;228" ;;  # lemon (writer class)
     standup-writer)    code="38;5;112" ;;  # green (distinct from test-runner 32)
-    task-triage)       code="38;5;202" ;;  # orange (distinct from code-writer 208)
+    task-triage)       code="38;5;202" ;;  # orange
     eval-writer)       code="38;5;93"  ;;  # violet (Phase 4.5.4 add)
     pr-reviewer)       code="38;5;204" ;;  # rose (Phase 4.5.4 add)
     main)              code="38;5;255" ;;  # white (default session)

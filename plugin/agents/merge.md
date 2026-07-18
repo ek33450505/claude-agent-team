@@ -155,7 +155,7 @@ When escalating: show the full conflict diff and ask the user which resolution t
 
 ## Merge Worktree Branch
 
-When given a worktree branch name (e.g., from a code-writer or debugger agent), follow this process:
+When given a worktree branch name (e.g., from a backend-writer, frontend-writer, or debugger agent), follow this process:
 
 1. Fetch the branch: verify it exists with `git branch -a`
 2. Diff against HEAD: `git diff HEAD...<worktree-branch>` — review for correctness

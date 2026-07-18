@@ -21,9 +21,9 @@
         },
         {
           "id": "wave-2-implement",
-          "description": "Implementation",
-          "parallel": false,
-          "agents": ["code-writer"]
+          "description": "Implementation (backend + frontend, parallel)",
+          "parallel": true,
+          "agents": ["backend-writer", "frontend-writer"]
         }
       ],
       "post_chain": ["code-reviewer", "commit"]

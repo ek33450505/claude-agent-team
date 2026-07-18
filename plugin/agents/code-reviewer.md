@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: "Per-unit code-quality and security review of a single logical change mid-flight, any language. Use immediately after each code-writer or debugger unit, before commit. Not for full-PR review (use pr-reviewer) and not for deep React/TypeScript or accessibility review (use frontend-qa)."
+description: "Per-unit code-quality and security review of a single logical change mid-flight, any language. Use immediately after each backend-writer, frontend-writer, or debugger unit, before commit. Not for full-PR review (use pr-reviewer) and not for deep React/TypeScript or accessibility review (use frontend-qa)."
 tools: Bash, Glob, Grep, Read
 model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────
@@ -100,7 +100,7 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 
 **When to re-run:** After any fix touching reviewed files.
 
-**Do NOT dispatch** from orchestrating session if change was made by code-writer or debugger — these self-dispatch code-reviewer internally.
+**Do NOT dispatch** from orchestrating session if change was made by backend-writer, frontend-writer, or debugger — these self-dispatch code-reviewer internally.
 
 **Parallel post-chain note:** When routing-table post_chain fires code-reviewer and security in parallel, both run independently. If either returns BLOCKED, surface to user before dispatching commit.
 

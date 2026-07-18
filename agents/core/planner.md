@@ -138,7 +138,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
       "description": "Implementation",
       "parallel": false,
       "agents": [
-        {"subagent_type": "code-writer", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. For each logical unit: write code, dispatch code-reviewer, write tests inline if logic was added. Do NOT commit directly — commit agent handles that."}
+        {"subagent_type": "backend-writer", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. For each logical unit: write code, dispatch code-reviewer, write tests inline if logic was added. Do NOT commit directly — commit agent handles that."}
       ]
     },
     {
@@ -203,7 +203,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
 - test-runner MUST NOT share a parallel batch with any review agent (code-reviewer/security/frontend-qa) — give it its own sequential batch (its suite-timeout/kill path can reap co-scheduled siblings)
 - Spec compliance reviewer checks WHAT was built against the plan; code quality reviewer checks HOW it was built
 - Include push as the final batch (Batch 6 in the template above) in every plan manifest
-- **Commit-batch separation (mandatory).** When a batch dispatches `code-writer`, `bash-specialist`, `debugger`, or any code-modifying agent, the manifest MUST include a SEPARATE following batch with `subagent_type: commit`. Do NOT instruct the code-modifying agent to "then dispatch the commit agent" inside its prompt — managed-agent dispatch from subagent context bails on the `CLAUDE_SUBPROCESS=1` guard, forcing the agent to either skip commit or fall back to the `CAST_COMMIT_AGENT=1` escape hatch (which bypasses the commit agent's canonical trailer and message templates). The escape hatch is reserved for the commit agent itself, not as a substitute for dispatching it. Correct pattern: `Batch N: code-writer (implements + leaves staged)` → `Batch N+1: commit (composes message + trailer + commits)`
+- **Commit-batch separation (mandatory).** When a batch dispatches `backend-writer`, `frontend-writer`, `bash-specialist`, `debugger`, or any code-modifying agent, the manifest MUST include a SEPARATE following batch with `subagent_type: commit`. Do NOT instruct the code-modifying agent to "then dispatch the commit agent" inside its prompt — managed-agent dispatch from subagent context bails on the `CLAUDE_SUBPROCESS=1` guard, forcing the agent to either skip commit or fall back to the `CAST_COMMIT_AGENT=1` escape hatch (which bypasses the commit agent's canonical trailer and message templates). The escape hatch is reserved for the commit agent itself, not as a substitute for dispatching it. Correct pattern: `Batch N: backend-writer/frontend-writer (implements + leaves staged)` → `Batch N+1: commit (composes message + trailer + commits)`
 
 **Optional agent-level metadata for conflict detection:**
 - `"owns_files": ["absolute/path/to/file1.js", ...]` — files this agent will create or modify. Allows the `/orchestrate` skill to detect parallel agents touching the same file.
@@ -252,7 +252,7 @@ When running in a pipeline (no human in the loop), never ask clarifying question
 - **Missing target branch:** Default to `main`.
 - **Missing output path:** Default to `~/.claude/plans/YYYY-MM-DD-<slug>.md`.
 - **Unclear parallelism:** Default to sequential batches (safer, no file conflict risk).
-- **Unknown agent assignment:** Default to `code-writer` for implementation, `code-reviewer` for review.
+- **Unknown agent assignment:** Choose `backend-writer` (Node/Express/SQLite/Python/CAST scripts) or `frontend-writer` (React/Vite/TSX/UI) by the files the task touches; flag if genuinely ambiguous. `code-reviewer` for review.
 
 ## Facts Emission
 

@@ -155,7 +155,7 @@ def _substitute(
       {output}        — agent response as a string (for LLM judge prompts)
       {agent_run_id}  — agent_runs.agent_id from live dispatch ('' in --output-file mode)
       {session_id}    — current CAST session ID
-      {agent}         — the eval case's target agent name (e.g. 'code-writer')
+      {agent}         — the eval case's target agent name (e.g. 'backend-writer')
       {since}         — run start time as ISO8601 UTC string (for time-windowed DB queries)
 
     Two template forms:

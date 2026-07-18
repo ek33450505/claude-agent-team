@@ -3,7 +3,7 @@ name: test-writer
 description: >
   Test design specialist. Writes test suites for existing code — happy path,
   edge cases, and error states. Detects the project's test framework and follows
-  existing conventions. Use after code-writer completes a logical unit.
+  existing conventions. Use after backend-writer or frontend-writer completes a logical unit.
 tools: Read, Write, Edit, Bash, Glob, Grep
 model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────

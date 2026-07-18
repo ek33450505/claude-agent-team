@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # cast-subagent-worktree-check.sh — SubagentStop hook
 #
-# Detects unexpected agent worktrees after code-writer / debugger / test-writer /
+# Detects unexpected agent worktrees after backend-writer / frontend-writer / debugger / test-writer /
 # security / frontend-qa dispatches. Auto-removes empty/clean worktrees; escalates
 # dirty ones (banner + DB row). Logs anomalies to cast.db worktree_anomalies table.
 # Always exits 0.
