@@ -118,8 +118,8 @@ Keep your final response under **3000 tokens**. Cap Bash output at 100 lines. Ca
 
 **Good prompt example:**
 ```
-The BATS test 'route dispatches code-writer' is failing:
-  ✗ route dispatches code-writer
+The BATS test 'route dispatches backend-writer' is failing:
+  ✗ route dispatches backend-writer
     (in test file tests/route.bats, line 142)
     'assert_output --partial [CAST-DISPATCH]' failed
   actual output: (empty)

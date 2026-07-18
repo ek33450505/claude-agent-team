@@ -22,7 +22,7 @@ Show:
 
 | Agent | Model | Agent | Model |
 |---|---|---|---|
-| `code-writer` | sonnet | `code-reviewer` | haiku |
+| `backend-writer` | sonnet | `code-reviewer` | haiku |
 | `debugger` | sonnet | `commit` | haiku |
 | `planner` | sonnet | `push` | haiku |
 | `security` | sonnet | `test-runner` | haiku |

@@ -100,7 +100,7 @@ Before each batch:
 **Prompt construction for Agent tool calls:**
 Before passing the `prompt` field from the ADM to the Agent tool, prepend a context preamble. Use the **full preamble** for implementation agents and the **minimal preamble** for lightweight agents:
 
-**Full preamble** — use for: code-writer, debugger, security, researcher, planner, test-writer, bash-specialist
+**Full preamble** — use for: backend-writer, frontend-writer, debugger, security, researcher, planner, test-writer, bash-specialist
 ```
 [CAST SHARED CONTEXT]
 Project: claude-agent-team
@@ -187,7 +187,8 @@ cast_emit_event 'task_completed' 'orchestrate-skill' 'session' '' 'All batches c
 
 The following agents automatically dispatch their successor agents when status = DONE:
 
-- **code-writer** → code-reviewer
+- **backend-writer** → code-reviewer
+- **frontend-writer** → code-reviewer
 - **bash-specialist** → code-reviewer
 - **debugger** → test-runner
 - **security** → code-reviewer

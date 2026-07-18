@@ -35,7 +35,7 @@ All CAST documentation with one-line descriptions. Start with the Tutorial if yo
 | [Observability Guide](observability/OBSERVABILITY.md) | cast.db schema, observability dashboard, hook event coverage |
 | [CAST Protocol Spec](architecture/cast-protocol-spec.md) | Agent dispatch protocol, ADM format, and SubagentStop payload contract |
 | [Dispatch DAG Decision](dispatch-dag-decision.md) | ADR: why CAST uses a manifest-driven DAG over a centralized orchestrator |
-| [Attest DONE-Gate](attest-donegate.md) | SubagentStop completion-gate plugin: what it is, status (OFF by default), opt-in steps, scope (`code-writer,bash-specialist`), cast.db `attestations` table |
+| [Attest DONE-Gate](attest-donegate.md) | SubagentStop completion-gate plugin: what it is, status (OFF by default), opt-in steps, scope (`backend-writer,frontend-writer,bash-specialist`), cast.db `attestations` table |
 
 ---
 

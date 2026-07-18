@@ -14,7 +14,7 @@ Interface:
   exit 1 — invalid or error
 
 Examples:
-  echo '{"status":"DONE","summary":"ok","agent":"code-writer"}' | python3 cast-validate-status.py
+  echo '{"status":"DONE","summary":"ok","agent":"backend-writer"}' | python3 cast-validate-status.py
   python3 cast-validate-status.py /path/to/status.json
   python3 cast-validate-status.py --schema /custom/schema.json /path/to/status.json
 """

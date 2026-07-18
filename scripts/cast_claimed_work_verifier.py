@@ -10,7 +10,7 @@ This is Category 1 of the hallucination audit: observability-only guard
 Exit: always 0 (non-blocking)
 Env input:
   - CAST_STOP_RESPONSE_TEXT: agent output text
-  - CAST_AGENT_NAME: agent type (e.g., 'code-writer')
+  - CAST_AGENT_NAME: agent type (e.g., 'backend-writer')
   - CAST_SESSION_ID: session ID
   - CAST_AGENT_START_TIME: ISO8601 timestamp when agent started
   - CAST_REPO_ROOT: repo root for relative path resolution (default cwd)

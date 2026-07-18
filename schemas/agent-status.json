@@ -20,7 +20,7 @@
     "agent": {
       "type": "string",
       "minLength": 1,
-      "description": "Name of the agent that produced this status block (e.g. 'code-writer', 'debugger')."
+      "description": "Name of the agent that produced this status block (e.g. 'backend-writer', 'debugger')."
     },
     "concerns": {
       "type": "array",

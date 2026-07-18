@@ -80,7 +80,7 @@ NEVER run any of: `git stash` (any form), `git reset` (any form), `git checkout 
 ## Error Routing
 
 - Route any error/failure to the `debugger` agent rather than inline triage.
-- Agents that modify code (`test-writer`, `debugger`, `code-writer`) self-dispatch `code-reviewer` internally — do not double-dispatch from the main session.
+- Agents that modify code (`test-writer`, `debugger`, `backend-writer`, `frontend-writer`) self-dispatch `code-reviewer` internally — do not double-dispatch from the main session.
 
 ## Code Review Requirement
 
@@ -152,7 +152,7 @@ Each agent has its own token cap, declared in that agent's own `## Response Budg
 - **~400 tokens** — `dep-auditor`
 - **~500 tokens** — `migration-reviewer`
 - **~800 tokens** — lightweight writers: `bash-specialist`, `docs`, `morning-briefing`, `test-writer`, `devops`, `merge`
-- **~3,000 tokens** — sonnet analysts: `api-contract`, `debugger`, `eval-writer`, `pr-reviewer`, `security`, `code-writer`, `planner`, `researcher`
+- **~3,000 tokens** — sonnet analysts: `api-contract`, `debugger`, `eval-writer`, `pr-reviewer`, `security`, `backend-writer`, `frontend-writer`, `planner`, `researcher`
 
 Summarize findings rather than reproducing raw tool output. Write verbose results to disk and reference the file path instead.
 
@@ -167,7 +167,7 @@ The Response Budget exists to keep the prose tail intact through the model's out
 **Artifact-first (write before you read):**
 - In your first 1–2 tool calls, produce a *skeleton* of your deliverable — write the target file with placeholder structure, an outline, or a first partial implementation — **then** read and refine. A run that truncates after writing a skeleton leaves a salvageable artifact; a run that truncates mid-exploration leaves nothing.
 - Never spend your first third of turns reading files without emitting output. The failure this prevents: a bash-specialist read 8 files (~95K tokens), wrote nothing, hit maxTurns, and produced zero artifact — a dispatch/orchestration miss, not a turn-cap problem.
-- **Turn budget (self-pace against it):** bash-specialist ≈ 30 turns · researcher ≈ 45 · code-reviewer ≈ 50 · docs ≈ 30 · test-writer/debugger ≈ 50 · code-writer ≈ 100 · most others 15–25. Once you have consumed roughly a third of your turns without a committed artifact (a file on disk or your Status block drafted), stop reading and write a partial draft now.
+- **Turn budget (self-pace against it):** bash-specialist ≈ 30 turns · researcher ≈ 45 · code-reviewer ≈ 50 · docs ≈ 30 · test-writer/debugger ≈ 50 · backend-writer/frontend-writer ≈ 80 · most others 15–25. Once you have consumed roughly a third of your turns without a committed artifact (a file on disk or your Status block drafted), stop reading and write a partial draft now.
 
 **Deliver incrementally (never one massive response):**
 - Land your deliverable in pieces as you go — file edits, partial drafts, interim Status notes — instead of accumulating everything for a single giant final message. Output-token deaths kill the whole response; incremental delivery caps the blast radius of any one truncation. (I1, /insights 2026-07-02.)

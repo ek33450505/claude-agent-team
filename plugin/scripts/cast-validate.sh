@@ -516,15 +516,19 @@ echo ""
 AGENTS_DIR="$HOME/.claude/agents"
 CHAIN_MAP="$HOME/.claude/config/chain-map.json"
 POLICIES_JSON="$HOME/.claude/config/policies.json"
+AGENT_GROUPS="$HOME/.claude/config/agent-groups.json"
+SETTINGS_JSON="$HOME/.claude/settings.json"
 if [[ ! -d "$AGENTS_DIR" ]]; then
   warn "Agent cross-check: $AGENTS_DIR not found — cannot verify config agent names"
 else
-  GHOST_RESULT=$(python3 - "$AGENTS_DIR" "$CHAIN_MAP" "$POLICIES_JSON" <<'PYEOF'
+  GHOST_RESULT=$(python3 - "$AGENTS_DIR" "$CHAIN_MAP" "$POLICIES_JSON" "$AGENT_GROUPS" "$SETTINGS_JSON" <<'PYEOF'
 import sys, os, json, glob
 
 agents_dir    = sys.argv[1]
 cm_path       = sys.argv[2]
 pol_path      = sys.argv[3]
+ag_path       = sys.argv[4]
+settings_path = sys.argv[5]
 
 # Build canonical agent set from installed core agents
 canonical = {
@@ -570,6 +574,35 @@ if os.path.isfile(pol_path):
 else:
     pass  # Optional file — absence is OK, nothing to cross-check
 
+# --- agent-groups.json: wave agents + post_chain across all groups ---
+if os.path.isfile(ag_path):
+    try:
+        with open(ag_path) as f:
+            ag = json.load(f)
+        for grp in ag.get("groups", []):
+            gid = grp.get("id", "?")
+            for wave in grp.get("waves", []):
+                for a in wave.get("agents", []):
+                    if isinstance(a, str) and a not in canonical:
+                        ghosts.append(f"agent-groups.json: wave agent {a!r} (group={gid!r}, wave={wave.get('id','?')!r})")
+            for a in grp.get("post_chain", []):
+                if isinstance(a, str) and a not in canonical:
+                    ghosts.append(f"agent-groups.json: post_chain {a!r} (group={gid!r})")
+    except Exception as e:
+        ghosts.append(f"agent-groups.json: could not verify ({e})")
+
+# --- settings.json: ATTEST_ENFORCE_AGENTS allowlist ---
+if os.path.isfile(settings_path):
+    try:
+        with open(settings_path) as f:
+            st = json.load(f)
+        allowlist = st.get("env", {}).get("ATTEST_ENFORCE_AGENTS", "")
+        for a in [x.strip() for x in allowlist.split(",") if x.strip()]:
+            if a not in canonical:
+                ghosts.append(f"settings.json: ATTEST_ENFORCE_AGENTS {a!r}")
+    except Exception as e:
+        ghosts.append(f"settings.json: could not verify ({e})")
+
 if ghosts:
     print("GHOSTS:" + "|".join(ghosts))
 else:
@@ -577,7 +610,7 @@ else:
 PYEOF
 )
   if [[ "$GHOST_RESULT" == OK ]]; then
-    pass "Agent cross-check: no ghost agent names in chain-map.json, policies.json"
+    pass "Agent cross-check: no ghost agent names in chain-map.json, policies.json, agent-groups.json, ATTEST_ENFORCE_AGENTS"
   elif [[ "$GHOST_RESULT" == GHOSTS:* ]]; then
     DETAILS="${GHOST_RESULT#GHOSTS:}"
     IFS='|' read -ra GHOST_LIST <<< "$DETAILS"

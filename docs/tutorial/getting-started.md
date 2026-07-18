@@ -108,7 +108,7 @@ Expected output (partial):
 ```
 api-contract.md      commit.md         dep-auditor.md
 bash-specialist.md   code-reviewer.md  devops.md
-code-writer.md       debugger.md       docs.md
+backend-writer.md    debugger.md       docs.md
 ...
 ```
 

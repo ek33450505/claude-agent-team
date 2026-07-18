@@ -69,7 +69,7 @@ cast cheap check              # Quiet one-line verdict (used by `cast doctor`)
 
 **Do NOT use for:**
 - Complex CAST multi-agent work (dispatch still routes to Anthropic)
-- Tasks requiring Opus/Sonnet capability (debugger, code-writer on hard problems, planner, researcher)
+- Tasks requiring Opus/Sonnet capability (debugger, backend-writer/frontend-writer on hard problems, planner, researcher)
 - Anything with heavy tool use or agentic iteration
 
 **Ollama Silent Failure:** Ollama's curl-timeout default can mask network issues. Keep `LOG: true` in your ccr config and monitor `~/.claude-code-router.log`.

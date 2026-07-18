@@ -25,7 +25,7 @@ Draft: JSON Schema 2020-12
 |---|---|---|---|
 | `status` | string enum | **Yes** | `DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT` |
 | `summary` | string | **Yes** | 1–300 chars. One-line description of outcome. |
-| `agent` | string | **Yes** | Agent name, e.g. `code-writer`, `debugger`. |
+| `agent` | string | **Yes** | Agent name, e.g. `backend-writer`, `debugger`. |
 | `concerns` | string[] | Conditional | Required (non-empty) when `status` is `DONE_WITH_CONCERNS`. |
 | `blockers` | string[] | Conditional | Required (non-empty) when `status` is `BLOCKED`. |
 | `context_needed` | string[] | Conditional | Required (non-empty) when `status` is `NEEDS_CONTEXT`. |
@@ -51,7 +51,7 @@ Files changed: src/routes/auth.ts, src/routes/auth.test.ts
 {
   "status": "DONE",
   "summary": "Implemented three new routes and wrote 12 tests.",
-  "agent": "code-writer",
+  "agent": "backend-writer",
   "files_changed": [
     "/Users/yourname/Projects/personal/my-project/src/routes/auth.ts",
     "/Users/yourname/Projects/personal/my-project/src/routes/auth.test.ts"
@@ -64,13 +64,13 @@ The JSON block is the machine-readable contract. The human-readable block above 
 
 ---
 
-## Example: Passing Status Block (code-writer)
+## Example: Passing Status Block (backend-writer)
 
 ```json
 {
   "status": "DONE",
   "summary": "Added cast-validate-status.py with stdin/file input, --schema override, and structured error messages.",
-  "agent": "code-writer",
+  "agent": "backend-writer",
   "files_changed": [
     "/Users/yourname/Projects/personal/claude-agent-team/schemas/agent-status.json",
     "/Users/yourname/Projects/personal/claude-agent-team/scripts/cast-validate-status.py",

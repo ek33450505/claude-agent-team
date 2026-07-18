@@ -70,7 +70,7 @@ The preamble hook injects procedural memories into Agent tool calls. Add this to
 To test the hook manually:
 
 ```bash
-echo '{"tool_name":"Task","tool_input":{"description":"Run code-writer agent"}}' | bash scripts/cast-agent-preamble-hook.sh
+echo '{"tool_name":"Task","tool_input":{"description":"Run backend-writer agent"}}' | bash scripts/cast-agent-preamble-hook.sh
 ```
 
 ## Verification

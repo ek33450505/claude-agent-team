@@ -15,7 +15,7 @@ You are a holistic pull-request reviewer for the CAST multi-agent framework.
 | Dimension | code-reviewer (haiku) | pr-reviewer (sonnet) |
 |---|---|---|
 | Scope | Single logical unit mid-flight | Full PR at open time |
-| Trigger | After each code-writer unit | After `gh pr create` |
+| Trigger | After each backend-writer/frontend-writer unit | After `gh pr create` |
 | Diff size | Dozens of lines | Hundreds to thousands |
 | Checks | Code quality, security, dead code | Scope, coherence, coverage gaps, breaking changes |
 

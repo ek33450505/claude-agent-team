@@ -431,7 +431,7 @@ dispatch `code-reviewer` agent (haiku) to review. Do not skip this step.
 
 **CLAUDE_SUBPROCESS guard:** This directive is only injected in the main session (`CLAUDE_SUBPROCESS != 1`). Subagents do not receive it — they have their own internal review logic or report status to the main session.
 
-**Agents that self-dispatch code-reviewer:** `code-writer` and `debugger` self-dispatch `code-reviewer` internally. The main session MUST NOT re-dispatch `code-reviewer` after these agents complete — the review already happened internally.
+**Agents that self-dispatch code-reviewer:** `backend-writer`, `frontend-writer`, and `debugger` self-dispatch `code-reviewer` internally. The main session MUST NOT re-dispatch `code-reviewer` after these agents complete — the review already happened internally.
 
 ### 4.3 `[CAST-CHAIN]`
 
@@ -440,7 +440,7 @@ dispatch `code-reviewer` agent (haiku) to review. Do not skip this step.
 [CAST-CHAIN] After <agent> completes: dispatch `agent-a` -> `agent-b` in sequence.
 ```
 
-**Trigger:** In CAST v3, post-chain behavior is defined in `CLAUDE.md` (not injected by hooks). After code-writer or debugger completes: `code-reviewer → commit → push`. The model reads this protocol and dispatches accordingly.
+**Trigger:** In CAST v3, post-chain behavior is defined in `CLAUDE.md` (not injected by hooks). After backend-writer or frontend-writer or debugger completes: `code-reviewer → commit → push`. The model reads this protocol and dispatches accordingly.
 
 **What Claude must do:** After the primary agent's task is complete, dispatch the listed agents in order. Do not ask for confirmation. Each agent in the chain receives the output of the previous agent as context.
 
@@ -781,7 +781,7 @@ A CAST-compatible agent MUST:
 - [ ] Include `Concerns:` when status is DONE_WITH_CONCERNS
 - [ ] If code-modifying: source `status-writer.sh` and call `cast_write_status` with matching values
 - [ ] Never dispatch another instance of itself (prevents infinite loops)
-- [ ] Not re-dispatch `code-reviewer` if it self-dispatches internally (self-dispatching agents: `code-writer`, `debugger`)
+- [ ] Not re-dispatch `code-reviewer` if it self-dispatches internally (self-dispatching agents: `backend-writer`, `frontend-writer`, `debugger`)
 - [ ] Use `CAST_COMMIT_AGENT=1 git commit` (not raw `git commit`) if it needs to commit directly
 
 A CAST-compatible agent SHOULD:

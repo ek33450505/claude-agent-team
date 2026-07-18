@@ -2,7 +2,7 @@
 name: test-runner
 description: >
   Test execution gate. Runs the project test suite and gates the chain on real exit codes.
-  Dispatched by the orchestrator before commit. Does NOT write tests — use code-writer for that.
+  Dispatched by the orchestrator before commit. Does NOT write tests — use backend-writer/frontend-writer for that.
   On failure, reports failing test names and exit code; the orchestrator dispatches debugger when needed.
 tools: Bash, Read, Glob
 model: haiku

@@ -32,7 +32,7 @@ set -euo pipefail
 #
 # Two sentinels currently match real agent files (known findings):
 #   S1 — matches agents/core/test-runner.md   (infra boilerplate inlined)
-#   S2 — matches agents/core/code-writer.md   (Key Principles inlined)
+#   S2 — matches agents/core/backend-writer.md   (Key Principles inlined)
 # ---------------------------------------------------------------------------
 SENTINELS=(
   # S1 — Status File section: verbatim infrastructure call template

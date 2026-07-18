@@ -8,7 +8,7 @@
 
 ## Worktree Recovery
 
-- `code-writer`, `debugger`, `test-writer`, `security`, and `frontend-qa` no longer auto-isolate into git worktrees (`isolation: worktree` removed from frontmatter). The agent runs in the orchestrator's working tree.
+- `backend-writer`, `frontend-writer`, `debugger`, `test-writer`, `security`, and `frontend-qa` no longer auto-isolate into git worktrees (`isolation: worktree` removed from frontmatter). The agent runs in the orchestrator's working tree.
 - A `SubagentStop` detection hook (`cast-subagent-worktree-check.sh`) fires after every dispatch of these agents. If the harness still spawns a worktree as a side effect, the hook auto-removes it when clean (banner: `✓ AGENT-WORKTREE CLEANUP`) and escalates when dirty (banner: `⚠ AGENT-WORKTREE DETECTED (DIRTY)`). All anomalies log to `cast.db worktree_anomalies`.
 - If the dirty banner appears, copy the listed files from the worktree path to the active branch, then `git worktree remove --force --force <path>`.
 - Always verify agent-reported file changes by reading the files after the agent completes.

@@ -40,8 +40,8 @@ Once the plugin is **enabled but `ATTEST_ENFORCE` is unset** (detect mode):
 - SubagentStop computes verdicts and writes them to `cast.db`
 - **No subagent is ever blocked** — detect/no-block mode
 
-The scope is **pre-wired**: `ATTEST_ENFORCE_AGENTS=code-writer,bash-specialist` is set in
-`managed-settings.d/00-env.json`. When enforcement is enabled, only those two
+The scope is **pre-wired**: `ATTEST_ENFORCE_AGENTS=backend-writer,frontend-writer,bash-specialist` is set in
+`managed-settings.d/00-env.json`. When enforcement is enabled, only those three
 artifact-producing agents are ever blockable; every other agent (code-reviewer, security,
 commit, researcher, devops, etc.) fails open by construction — the scope key is evaluated
 before any block decision is made. **Scope evaluation requires the attest plugin to be
@@ -88,7 +88,7 @@ is intentionally NOT committed to the repo — it is a per-operator decision.
 | Variable | Default | Effect |
 |---|---|---|
 | `ATTEST_ENFORCE` | unset | Master on-switch. Must be `1` to block. |
-| `ATTEST_ENFORCE_AGENTS` | `code-writer,bash-specialist` | Comma-separated allowlist of agent types that can be blocked. Already set in `managed-settings.d/00-env.json`. |
+| `ATTEST_ENFORCE_AGENTS` | `backend-writer,frontend-writer,bash-specialist` | Comma-separated allowlist of agent types that can be blocked. Already set in `managed-settings.d/00-env.json`. |
 | `ATTEST_MAX_RETRIES` | `1` | Per-agent block cap before attest stops blocking that agent in the session. Set to `0` for a kill-switch (attest never blocks). |
 | `ATTEST_SESSION_BLOCK_CEILING` | `10` | Session-wide backstop: after this many total blocks, attest fails open for the rest of the session. |
 
@@ -106,7 +106,7 @@ orthogonal fields in the hook response envelope. Attest is registered with
 `async: true`. The two co-exist without interference.
 
 **Smoke-test before trusting it live.** Run a synthetic subagent that claims a file it
-never wrote, confirm the block fires, then confirm a real code-writer dispatch that
+never wrote, confirm the block fires, then confirm a real backend-writer or frontend-writer dispatch that
 actually writes files passes through unblocked.
 
 ---

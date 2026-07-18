@@ -2,8 +2,8 @@
 # for chained agents)") and referenced in CLAUDE.md Hook Directives section.
 id: missing-handoff-block
 version: "1"
-agent: code-writer
-description: "a code-writer dispatched in a multi-agent chain must emit a ## Handoff block before Status"
+agent: backend-writer
+description: "a backend-writer dispatched in a multi-agent chain must emit a ## Handoff block before Status"
 corpus_source: manual
 failure_type: missing_handoff
 cost_tier: cheap
