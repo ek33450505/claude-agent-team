@@ -39,7 +39,8 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | merge | haiku 4.5 | low | Bash, Read | PR lifecycle / git merge, rebase, conflict resolution, worktree cleanup |
 | bash-specialist | haiku 4.5 | low | Bash, Edit, Grep | Shell scripting and BATS test specialist |
 | code-reviewer | haiku 4.5 | low | Bash, Grep, Read | Post-change code review |
-| code-writer | sonnet | high | Edit, Write, Agent | Primary code implementation agent |
+| backend-writer | sonnet | high | Edit, Write, Agent | Backend implementation specialist (Express/Node/SQLite/Anthropic SDK) |
+| frontend-writer | sonnet | high | Edit, Write, Agent | Frontend implementation specialist (React/TypeScript/Vite) |
 | commit | haiku 4.5 | low | Bash, Read | Semantic git commit creation |
 | debugger | sonnet | high | Edit, Bash, Agent | Error investigation and fix |
 | dep-auditor | haiku 4.5 | low | Read, Bash, Grep | Dependency auditor for CVEs and licenses |
@@ -88,7 +89,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `cast budget` | View cost summary | `--week`, `--project` |
 | `cast cost` | Per-task/feature cost attribution (token totals + cache-read share) | `--by-task`, `--by-branch`, `--by-agent`, `--project`, `--limit`, `--json` |
 | `cast predict "<task>"` | Predict cost + suggest agents from the record (reads past runs/incidents) | `--limit`, `--json` |
-| `cast feature "<desc>"` | App-build: decompose a feature into gated units, build each via code-writer→code-reviewer→test→commit | |
+| `cast feature "<desc>"` | App-build: decompose a feature into gated units, build each via backend-writer/frontend-writer→code-reviewer→test→commit | |
 | `cast mcp serve\|config\|status` | Expose the cast.db record read-only over MCP (stdio, local-only) so any CC session can query decisions/incidents/cost/sessions | |
 | `cast agents` | List installed agents; with `--usage`, per-agent runtime stats (dispatches, avg cost, success rate) | `--usage`, `--json` |
 | `cast hooks` | Show active hooks with health status | `--json` |

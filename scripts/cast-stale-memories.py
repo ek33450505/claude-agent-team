@@ -22,7 +22,6 @@ Env overrides (for testing):
 
 import os
 import re
-import sys
 import glob
 from datetime import date, datetime
 

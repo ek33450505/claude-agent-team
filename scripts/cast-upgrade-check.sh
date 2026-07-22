@@ -114,8 +114,15 @@ while IFS= read -r REPO; do
 
   # Find releases newer than last check; fetch notes and score each
   while IFS= read -r RELEASE_LINE; do
-    TAG="$(echo "$RELEASE_LINE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('tagName',''))" 2>/dev/null || echo "")"
-    PUBLISHED="$(echo "$RELEASE_LINE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('publishedAt',''))" 2>/dev/null || echo "")"
+    # Single python3 call emits tab-separated fields to avoid two separate
+    # cold-start invocations that each re-parse the same RELEASE_LINE.
+    IFS=$'\t' read -r TAG PUBLISHED <<<"$(echo "$RELEASE_LINE" | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+def clean(v):
+    return str(v).replace('\t', ' ').replace('\n', ' ') if v else ''
+print(f\"{clean(d.get('tagName'))}\t{clean(d.get('publishedAt'))}\")
+" 2>/dev/null || printf '\t')"
 
     [ -z "$TAG" ] && continue
 
@@ -270,12 +277,15 @@ with open(f, 'w') as fh:
 fi
 
 # ── Summary ────────────────────────────────────────────────────────────────────
-TOTAL="$(python3 -c "import json; d=json.loads(open('$CANDIDATES_FILE').read()); print(len(d))" 2>/dev/null || echo 0)"
-CRITICAL="$(python3 -c "
+# Single python3 call emits tab-separated TOTAL/CRITICAL to avoid two separate
+# cold-start invocations that each re-read and re-parse CANDIDATES_FILE.
+IFS=$'\t' read -r TOTAL CRITICAL <<<"$(python3 -c "
 import json
 d = json.loads(open('$CANDIDATES_FILE').read())
-print(sum(1 for v in d.values() if v.get('category') == 'CRITICAL'))
-" 2>/dev/null || echo 0)"
+total = len(d)
+critical = sum(1 for v in d.values() if v.get('category') == 'CRITICAL')
+print(f'{total}\t{critical}')
+" 2>/dev/null || printf '0\t0')"
 
 printf "[cast-upgrade-check] Done. Candidates: %s total, %s CRITICAL\n" "$TOTAL" "$CRITICAL"
 if [ "$CRITICAL" -gt 0 ]; then

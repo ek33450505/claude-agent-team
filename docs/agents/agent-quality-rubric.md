@@ -29,13 +29,12 @@ Each agent is scored across 5 dimensions. A production-grade agent scores 4-5 on
 - 3: Tools listed but `disallowedTools` not used where appropriate
 - 5: Minimal tool set; `disallowedTools` blocks writes for read-only agents
 
-## Scoring Sheet (22 agents)
+## Scoring Sheet (original 15-agent baseline)
 
 | Agent | Model | Role | Workflow | Output | Error | Tools | Total | Notes |
 |---|---|---|---|---|---|---|---|---|
 | planner | sonnet | 5 | 5 | 5 | 4 | 5 | **24** | Battle-tested, exemplary |
 | debugger | sonnet | 5 | 5 | 5 | 4 | 5 | **24** | Battle-tested, exemplary |
-| code-writer | sonnet | 5 | 5 | 4 | 4 | 4 | **22** | Self-dispatches code-reviewer + commit |
 | code-reviewer | haiku | 5 | 4 | 5 | 3 | 5 | **22** | Haiku-optimized, efficient |
 | security | sonnet | 5 | 5 | 5 | 4 | 4 | **23** | Comprehensive OWASP coverage |
 | commit | haiku | 5 | 4 | 5 | 3 | 4 | **21** | Simple and effective |
@@ -50,6 +49,6 @@ Each agent is scored across 5 dimensions. A production-grade agent scores 4-5 on
 
 ## Notes
 
-- **v3 consolidation:** 42 agents reduced to 15 at the v3 consolidation point (registry has since grown to 22). Former agents (data-scientist, db-reader, doc-updater, readme-writer, refactor-cleaner, etc.) were folded into the specialists. Note: test-writer was NOT folded — it remains a standalone agent (`agents/core/test-writer.md`).
+- **v3 consolidation:** 42 agents reduced to 15 at the v3 consolidation point (registry has since grown to 27). Former agents (data-scientist, doc-updater, readme-writer, refactor-cleaner, etc.) were folded into the specialists. Note: test-writer was NOT folded — it remains a standalone agent (`agents/core/test-writer.md`).
 - **Scoring carried forward** where the agent existed in v2. New/consolidated agents scored based on their v3 definitions.
-- **Scoring above covers the original 15-agent set.** The 7 additional agents (dev-workflow tier: migration-reviewer, api-contract, dep-auditor, release-notes; plus eval-writer, pr-reviewer, frontend-qa) in the current 22-agent roster are unscored — re-score the full roster before asserting all agents score 19+. Orchestration is handled by the `/orchestrate` skill (main session), not a dispatched `orchestrator` agent.
+- **Scoring above covers the original 15-agent set.** The 12 additional agents in the current 27-agent roster are unscored (backend-writer, frontend-writer, db-reader, email-drafter, infra-writer, report-writer; plus dev-workflow tier: migration-reviewer, api-contract, dep-auditor, release-notes; plus eval-writer, pr-reviewer, frontend-qa) — re-score the full roster before asserting all agents score 19+. Orchestration is handled by the `/orchestrate` skill (main session), not a dispatched `orchestrator` agent.
