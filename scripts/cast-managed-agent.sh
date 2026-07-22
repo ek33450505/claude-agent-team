@@ -373,8 +373,14 @@ body = {
 print(json.dumps(body))
 ')"
 
-SESSION_START_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
-SESSION_STARTED_AT="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+# Single cold start for both session-start values instead of two separate
+# python3 invocations (tab-separated read, mirrors cast-subagent-start-hook.sh).
+IFS=$'\t' read -r SESSION_START_MS SESSION_STARTED_AT <<<"$(python3 -c '
+import time, datetime
+ms = int(time.time() * 1000)
+iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+print(f"{ms}\t{iso}")
+')"
 LAST_HTTP_STATUS="0"
 STEP3_RESPONSE=""
 STEP3_AGENT_OUTPUT=""
