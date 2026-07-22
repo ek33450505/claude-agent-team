@@ -520,12 +520,15 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
     # Branch of the agent's working tree (F1 per-feature cost attribution).
     branch = None
     try:
+        _payload_cwd = os.path.expanduser((ctx.data.get("cwd") or "").strip())
+        _git_cwd = _payload_cwd if _payload_cwd and os.path.isdir(_payload_cwd) else None
         branch = (
             subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 capture_output=True,
                 text=True,
                 timeout=5,
+                cwd=_git_cwd,
             ).stdout.strip()
             or None
         )
