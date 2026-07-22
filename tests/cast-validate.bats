@@ -475,3 +475,62 @@ JSON
   assert_output --partial "Model availability: skipped (could not reach"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# Check 13: agent-name cross-check (no ghost agents)
+# ---------------------------------------------------------------------------
+
+@test "Check 13 POSITIVE: agent-groups wave names within ATTEST_ENFORCE_AGENTS allowlist → passes" {
+  build_clean_install
+  # Create an additional agent 'security' so it exists in canonical set
+  cat > "$HOME/.claude/agents/security.md" <<'MD'
+---
+name: security
+description: Security review agent
+tools: Read,Write
+model: claude-haiku-4-5
+---
+Review for security.
+MD
+  # Overlay ATTEST_ENFORCE_AGENTS into settings.local.json (which already has all hook wiring).
+  # This avoids unrelated validation errors from missing hook wiring.
+  SETTINGS_LOCAL="$HOME/.claude/settings.local.json"
+  python3 -c "
+import json
+with open('$SETTINGS_LOCAL') as f:
+    d = json.load(f)
+d.setdefault('env', {})['ATTEST_ENFORCE_AGENTS'] = 'planner,security'
+with open('$SETTINGS_LOCAL', 'w') as f:
+    json.dump(d, f)
+"
+  # agent-groups.json already has wave agents: ["planner"] from build_clean_install
+  # Both 'planner' and 'security' exist, so Check 13 should PASS the cross-check
+  run_validate
+  # Verify that Check 13 passed (not warning about ghost agents)
+  assert_output --partial "Agent cross-check: no ghost agent names in chain-map.json, policies.json, agent-groups.json, ATTEST_ENFORCE_AGENTS"
+  refute_output --partial "Agent cross-check: ghost"
+  # Explicitly assert the exit code is 0 (no errors or warnings)
+  [ "$status" -eq 0 ]
+}
+
+@test "Check 13 NEGATIVE: ATTEST_ENFORCE_AGENTS contains non-canonical agents → warns" {
+  build_clean_install
+  # Create the canonical agent 'planner' (already done by build_clean_install).
+  # Create a settings.json with non-canonical agent names in ATTEST_ENFORCE_AGENTS
+  # This tests: allowlist contains agents that are not in the canonical set
+  cat > "$HOME/.claude/settings.json" <<'JSON'
+{
+  "env": {
+    "ATTEST_ENFORCE_AGENTS": "nonexistent-agent-a,nonexistent-agent-b"
+  }
+}
+JSON
+  # Run validation - should warn about ghost agents in ATTEST_ENFORCE_AGENTS
+  run_validate
+  # Should warn about the non-canonical agents in the allowlist
+  assert_output --partial "Agent cross-check: ghost"
+  # The warnings specifically mention ATTEST_ENFORCE_AGENTS
+  assert_output --partial "settings.json: ATTEST_ENFORCE_AGENTS"
+  # Explicitly assert the exit code is non-zero (warnings detected)
+  [ "$status" -ne 0 ]
+}
