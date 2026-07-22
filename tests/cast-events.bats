@@ -262,3 +262,99 @@ json_field() {
   run cast_read_board
   assert_output --partial "board-visible-task"
 }
+
+# ---------------------------------------------------------------------------
+# 7. cast_check_approvals — session-scoped agent_runs fallback (Root Cause 4)
+# ---------------------------------------------------------------------------
+# Exercises the fallback that lets an ad-hoc Agent-tool dispatch's hook-populated
+# agent_runs row satisfy the commit gate when no file-based review record exists.
+# See docs/phase14-review-plumbing.md (Root Cause 4).
+
+# Build an isolated cast.db with an agent_runs table inside the temp HOME.
+_setup_fallback_db() {
+  export CAST_DB_PATH="$HOME/.claude/cast.db"
+  mkdir -p "$(dirname "$CAST_DB_PATH")"
+  bash "$REPO_DIR/scripts/cast-db-init.sh" --db "$CAST_DB_PATH" >/dev/null 2>&1 || true
+}
+
+# Insert an agent_runs row. Args: session_id agent status ended_at_SQL_expr branch
+# Uses a parameterized sqlite3 INSERT (via python3) rather than shell-interpolated SQL,
+# matching the production query pattern in cast_check_approvals (code-reviewer finding).
+_insert_run() {
+  python3 - "$1" "$2" "$3" "$4" "$5" "$CAST_DB_PATH" <<'PYEOF'
+import sqlite3, sys
+session_id, agent, status, ended_at_expr, branch, db_path = sys.argv[1:]
+conn = sqlite3.connect(db_path, timeout=5)
+try:
+    ended_at = conn.execute(f"SELECT {ended_at_expr}").fetchone()[0]
+    conn.execute(
+        "INSERT INTO agent_runs (session_id, agent, status, started_at, ended_at, branch) "
+        "VALUES (?, ?, ?, datetime('now','-2 minutes'), ?, ?)",
+        (session_id, agent, status, ended_at, branch),
+    )
+    conn.commit()
+finally:
+    conn.close()
+PYEOF
+}
+
+@test "fallback: session code-reviewer DONE (blank branch) approves (exit 0)" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+}
+
+@test "fallback: session code-reviewer BLOCKED rejects (exit 2)" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+}
+
+@test "fallback: review in a DIFFERENT session is missing (exit 1)" {
+  _setup_fallback_db
+  _insert_run "sess-OTHER" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 1 ]
+}
+
+@test "fallback: review older than the window is missing (exit 1)" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now','-5 hours')" ""
+  export CAST_SESSION_ID="sess-A"
+  export CAST_APPROVAL_WINDOW_MIN=120
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 1 ]
+}
+
+@test "fallback: branch mismatch is missing (exit 1)" {
+  _setup_fallback_db
+  cd "$REPO_DIR"
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" "definitely-not-current-branch-xyz"
+  export CAST_SESSION_ID="sess-A"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 1 ]
+}
+
+@test "fallback: branch match approves (exit 0)" {
+  _setup_fallback_db
+  cd "$REPO_DIR"
+  local cur; cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" "$cur"
+  export CAST_SESSION_ID="sess-A"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+}
+
+@test "fallback: no session id fails closed, missing (exit 1)" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  unset CAST_SESSION_ID
+  unset CLAUDE_SESSION_ID
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 1 ]
+}
