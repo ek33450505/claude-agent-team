@@ -31,8 +31,8 @@ evals/
   cases/
     bash-specialist/
       silent-truncation-no-status-tail.yaml
-    code-writer/
-      ...
+    backend-writer/
+      backend-writer-hallucination-claimed-file-write.yaml
   README.md
 # grader helper scripts live at scripts/eval-graders/ (not under evals/)
 ```

@@ -59,7 +59,7 @@ claude --plugin-dir claude-agent-team/plugin
 
 The plugin bundles CAST's curated agents, skills, commands, and `command`-type enforcement hooks. It is **opt-in** (`defaultEnabled: false`) — **until you run `/plugin enable cast@cast`, the SessionStart bootstrap does not run.** `install.sh` remains authoritative for the runtime layer (`~/.claude/scripts`, `cast.db`, launchd jobs, git hooks); when both are present, the plugin's hooks defer to install.sh via a `~/.claude/config/cast-hook-owner` sentinel so nothing double-fires.
 
-> **Curated payload:** the plugin ships **17 lean agents**; the `push` agent (needs the install.sh runtime) and `morning-briefing` are excluded. Add the 3 opt-in extras (release-notes, api-contract, dep-auditor) by regenerating with `bash scripts/gen-plugin.sh --with-extras dist/cast-plugin` then `claude --plugin-dir dist/cast-plugin`. The full `install.sh` carries all <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents.
+> **Curated payload:** the plugin ships **22 lean agents**; the `push` agent (needs the install.sh runtime) and `morning-briefing` are excluded. Add the 3 opt-in extras (release-notes, api-contract, dep-auditor) by regenerating with `bash scripts/gen-plugin.sh --with-extras dist/cast-plugin` then `claude --plugin-dir dist/cast-plugin`. The full `install.sh` carries all <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents.
 
 ---
 
@@ -210,7 +210,7 @@ Every CAST operation follows the same gated pipeline: a user prompt is routed by
 
 ## Agents
 
-<!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> core specialists, each a markdown file in `~/.claude/agents/` with YAML frontmatter defining model tier, memory, isolation, and effort. Agent responses validate against JSON schemas in `schemas/` (including the typed `## Handoff` contract). The plugin curates **17 lean agents** for distribution (+3 opt-in extras); the full `install.sh` carries all <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT -->. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the full table with model tiers.
+<!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> core specialists, each a markdown file in `~/.claude/agents/` with YAML frontmatter defining model tier, memory, isolation, and effort. Agent responses validate against JSON schemas in `schemas/` (including the typed `## Handoff` contract). The plugin curates **22 lean agents** for distribution (+3 opt-in extras); the full `install.sh` carries all <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT -->. See [docs/agents/AGENT-ROSTER.md](docs/agents/AGENT-ROSTER.md) for the full table with model tiers.
 
 Key agents: `frontend-writer`, `backend-writer`, `debugger`, `planner`, `researcher`, `security`, `code-reviewer`, `commit`, `push`, `test-writer`, `devops`, `bash-specialist`, `migration-reviewer`, `eval-writer`, `pr-reviewer`.
 

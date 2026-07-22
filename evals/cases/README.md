@@ -66,7 +66,8 @@ whose `command` does not contain at least one of: `grep`, `python3`, `test `, `-
 evals/cases/
   commit/                  # Commit agent evals
   bash-specialist/         # Bash-specialist evals
-  code-writer/             # Code-writer evals
+  backend-writer/          # Backend-writer evals
+  frontend-writer/         # Frontend-writer evals
   chained-agent/           # Evals for any agent in a chain
 ```
 
