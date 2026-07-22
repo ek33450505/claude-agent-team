@@ -32,7 +32,7 @@ When invoked:
 
 ## File Write Verification (mandatory)
 
-`backend-writer`/`file_write` is the single most common hallucination pattern recorded against this agent lineage (`agent_hallucinations` table, claim_type='file_write' — see `evals/cases/code-writer/hallucination-claimed-file-write.yaml`, corpus F04/F18). Guard against it explicitly:
+`backend-writer`/`file_write` is the single most common hallucination pattern recorded against this agent lineage (`agent_hallucinations` table, claim_type='file_write' — see `evals/cases/backend-writer/backend-writer-hallucination-claimed-file-write.yaml`, corpus F04/F18). Guard against it explicitly:
 
 - Never state a file was written, created, or modified — in prose, in "Files changed," in the Handoff block, or in the `files_changed` JSON field — unless the corresponding Write or Edit tool call in THIS turn actually returned success. Intent, a plan, or "I will write X next" is not a claim of completion.
 - If a Write/Edit call errored, was truncated, or was never actually issued, do NOT list that file as changed.
