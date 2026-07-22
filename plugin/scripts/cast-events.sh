@@ -253,33 +253,129 @@ PYEOF
 # Check if a task_id has all required approvals (for commit gating).
 # Usage: cast_check_approvals <task_id> <required_reviewer1> [required_reviewer2 ...]
 # Returns 0 if all required approvals present, 1 if missing, 2 if any unanswered rejections
+#
+# Two-tier resolution per required reviewer:
+#   1. File-based state (cast_derive_state): a recorded approved/rejected decision keyed to
+#      the task's artifact_ids. This is the DB-tracked /orchestrate path; tried first, unchanged.
+#   2. Session-scoped agent_runs fallback (when the file path yields no approval): the
+#      hook-populated agent_runs row for the most-recent same-session run of that reviewer,
+#      within CAST_APPROVAL_WINDOW_MIN minutes (default 120), guarded by branch match. Covers
+#      ad-hoc Agent-tool dispatches that never thread a TASK_ID or emit artifact_written events.
+#      Fails CLOSED (missing) when no session id is resolvable. See docs/phase14-review-plumbing.md
+#      (Root Cause 4).
 cast_check_approvals() {
   local task_id="$1"
   shift
   local required=("$@")
+  [ "${#required[@]}" -eq 0 ] && { echo "All required approvals present (none required)"; return 0; }
 
   cast_derive_state "$task_id" >/dev/null 2>&1
 
   local safe_task="${task_id//\//-}"
   local state_file="${CAST_STATE_DIR}/${safe_task}.json"
-  [ -f "$state_file" ] || { echo "No state for task: $task_id" >&2; return 1; }
 
-  python3 - "$state_file" "${required[@]}" <<'PYEOF'
-import json, sys
+  # Session + branch context for the agent_runs fallback (best-effort; empty when unknown)
+  local sid="${CAST_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+  local cur_branch
+  cur_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+  local window_min="${CAST_APPROVAL_WINDOW_MIN:-120}"
+  local db_path="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
+
+  python3 - "$state_file" "$sid" "$cur_branch" "$window_min" "$db_path" "${required[@]}" <<'PYEOF'
+import json, os, sqlite3, sys
+from datetime import datetime, timedelta, timezone
+
 state_file = sys.argv[1]
-required = sys.argv[2:]
-with open(state_file) as f:
-    state = json.load(f)
-approvals = set(state.get("approvals", []))
-rejections = set(state.get("rejections", []))
+session_id = sys.argv[2]
+cur_branch = sys.argv[3]
+try:
+    window_min = int(sys.argv[4])
+except (ValueError, IndexError):
+    window_min = 120
+db_path = sys.argv[5]
+required = sys.argv[6:]
+
+# ── Tier 1: file-based decisions (DB-tracked /orchestrate path) ───────────────
+approvals, rejections = set(), set()
+try:
+    with open(state_file) as f:
+        state = json.load(f)
+    approvals = set(state.get("approvals", []))
+    rejections = set(state.get("rejections", []))
+except Exception:
+    pass  # no/unreadable state file → empty, fall through to the fallback
+
+# A recorded rejection is authoritative — never overridden by the fallback.
 if rejections:
-    print(f"REJECTED by: {', '.join(rejections)}", file=sys.stderr)
+    print(f"REJECTED by: {', '.join(sorted(rejections))}", file=sys.stderr)
     sys.exit(2)
+
 missing = [r for r in required if r not in approvals]
-if missing:
-    print(f"Missing approvals from: {', '.join(missing)}", file=sys.stderr)
+if not missing:
+    print("All required approvals present")
+    sys.exit(0)
+
+# ── Tier 2: session-scoped agent_runs fallback for still-missing reviewers ────
+# Requires a session id to scope safely; without one we cannot tell this session's
+# reviews from any other, so we fail CLOSED (missing), never open.
+if not session_id:
+    print(f"Missing approvals from: {', '.join(sorted(missing))}", file=sys.stderr)
     sys.exit(1)
-print("All required approvals present")
+
+def parse_ts(s):
+    # Tolerant: accept 'T' or space separators, drop fractional/'Z' beyond 19 chars.
+    s = (s or "").strip().replace("T", " ")[:19]
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_min)
+REJECT = {"BLOCKED"}  # decisive statuses selected in SQL; everything non-REJECT here = approve
+
+still_missing, fallback_rejections = [], []
+try:
+    conn = sqlite3.connect(db_path, timeout=5)
+    try:
+        for r in missing:
+            row = conn.execute(
+                "SELECT status, branch, ended_at FROM agent_runs "
+                "WHERE session_id=? AND agent=? "
+                "AND ended_at IS NOT NULL AND ended_at != '' "
+                "AND status IN ('DONE','DONE_WITH_CONCERNS','completed','BLOCKED') "
+                "ORDER BY replace(ended_at, 'T', ' ') DESC LIMIT 1",
+                (session_id, r),
+            ).fetchone()
+            if row is None:
+                still_missing.append(r); continue
+            status = (row[0] or "").strip()
+            row_branch = (row[1] or "").strip()
+            ts = parse_ts(row[2])
+            # Freshness window (UTC-to-UTC; robust to timestamp-format variants).
+            if ts is None or ts < cutoff:
+                still_missing.append(r); continue
+            # Branch guard: only when both branches are known and differ.
+            if cur_branch and row_branch and row_branch != cur_branch:
+                still_missing.append(r); continue
+            if status in REJECT:
+                fallback_rejections.append(r)
+            # else: DONE / DONE_WITH_CONCERNS / completed → satisfied
+    finally:
+        conn.close()
+except Exception as e:
+    # DB unavailable/locked → fail CLOSED (do not spuriously approve).
+    print(f"Missing approvals from: {', '.join(sorted(missing))} "
+          f"(agent_runs fallback unavailable: {e})", file=sys.stderr)
+    sys.exit(1)
+
+if fallback_rejections:
+    print(f"REJECTED by: {', '.join(sorted(set(fallback_rejections)))} (session agent_runs)",
+          file=sys.stderr)
+    sys.exit(2)
+if still_missing:
+    print(f"Missing approvals from: {', '.join(sorted(set(still_missing)))}", file=sys.stderr)
+    sys.exit(1)
+print(f"All required approvals present (session-scoped agent_runs fallback, window={window_min}m)")
 sys.exit(0)
 PYEOF
 }
