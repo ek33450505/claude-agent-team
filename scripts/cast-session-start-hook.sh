@@ -23,11 +23,14 @@ mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 
 INPUT="$(cat 2>/dev/null || true)"
 
-# Merged JSONL + DB block: both halves parse the same CAST_INPUT for
-# session_id/cwd on the unconditional hot path, so they share one python3
-# cold start instead of two. Each half keeps its own try/except so a failure
-# in one does not skip the other (matches prior two-process independence).
-CAST_INPUT="$INPUT" python3 - <<'PYEOF' || _log_error "session-start JSONL+DB block failed (exit $?)"
+# Export pane_id for the single consolidated python3 block below
+export CAST_PANE_ID_FOR_HOOK="${CAST_DESKTOP_PANE_ID:-}"
+
+# Consolidated block: session upsert (JSONL + DB) and pane-bindings both parse
+# the same CAST_INPUT on the unconditional hot path, so they share ONE python3
+# cold start instead of two. Each responsibility keeps its own try/except so a
+# failure in one does not skip the other (matches prior process independence).
+CAST_INPUT="$INPUT" python3 - <<'PYEOF' || _log_error "session-start JSONL+DB+pane-bindings block failed (exit $?)"
 import json, os, sqlite3 as _sqlite3
 from datetime import datetime, timezone
 
@@ -40,7 +43,7 @@ except Exception:
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-# ── Half 1: env-file write + session-starts.jsonl (session_id defaults 'unknown') ──
+# ── Part 1: env-file write + session-starts.jsonl (session_id defaults 'unknown') ──
 session_id_log = data.get("session_id", "unknown")
 cwd_log        = data.get("cwd", "")
 
@@ -79,107 +82,80 @@ except Exception as e:
     with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
         lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: session-starts.jsonl write failed: {e}\n")
 
-# ── Half 2: sessions DB insert (session_id empty string, not 'unknown') ──
+# ── Part 2: sessions DB insert (session_id empty string, not 'unknown') ──
 session_id = data.get("session_id", "")
 cwd        = data.get("cwd", "")
 project    = os.path.basename(cwd.rstrip('/')) if cwd else "unknown"
 
+db_path = os.path.expanduser("~/.claude/cast.db")
+
 # Guard: skip INSERT when session_id is missing/empty — a NULL or empty PK
 # produces unresolvable rows (4 found in live DB audit, Phase 5 Wave 2)
-if not session_id:
-    import sys; sys.exit(0)
-
-db_path = os.path.expanduser("~/.claude/cast.db")
-if not os.path.exists(db_path):
-    import sys; sys.exit(0)
-
-try:
-    con = _sqlite3.connect(db_path, timeout=3)
-    # Add status column if missing (idempotent — silently ignored if already present)
+if session_id and os.path.exists(db_path):
     try:
-        con.execute("ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'ended'")
-        con.commit()
-    except Exception:
-        pass
-    con.execute(
-        "INSERT OR IGNORE INTO sessions (id, project, project_root, started_at, status) VALUES (?, ?, ?, ?, 'active')",
-        (session_id, project, cwd, now.strftime("%Y-%m-%dT%H:%M:%SZ")),
-    )
-    # If row already existed (OR IGNORE), update status to active
-    con.execute(
-        "UPDATE sessions SET status = 'active' WHERE id = ? AND status != 'active'",
-        (session_id,),
-    )
-    con.commit()
-    con.close()
-except Exception as e:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    log_dir = os.path.expanduser("~/.claude/logs")
-    os.makedirs(log_dir, exist_ok=True)
-    with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
-        lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: DB INSERT failed: {type(e).__name__}: {e}\n")
-PYEOF
-
-# Export pane_id for use in the next python block
-export CAST_PANE_ID_FOR_HOOK="${CAST_DESKTOP_PANE_ID:-}"
-
-CAST_INPUT="$INPUT" python3 - <<'PYEOF3' || _log_error "session-start pane-bindings block failed (exit $?)"
-import json, os, sqlite3 as _sqlite3
-from datetime import datetime, timezone
-
-# Early exit if no pane_id provided
-pane_id = os.environ.get("CAST_PANE_ID_FOR_HOOK", "").strip()
-if not pane_id:
-    import sys; sys.exit(0)
-
-# Parse session_id and cwd from CAST_INPUT
-raw = os.environ.get("CAST_INPUT", "")
-try:
-    data = json.loads(raw)
-except Exception:
-    import sys; sys.exit(0)
-
-session_id = data.get("session_id", "unknown")
-cwd = data.get("cwd", "")
-
-db_path = os.path.expanduser("~/.claude/cast.db")
-if not os.path.exists(db_path):
-    import sys; sys.exit(0)
-
-try:
-    con = _sqlite3.connect(db_path, timeout=3)
-    # Create pane_bindings table if missing
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS pane_bindings (
-            pane_id TEXT PRIMARY KEY,
-            session_id TEXT,
-            started_at INTEGER,
-            ended_at INTEGER,
-            project_path TEXT
+        con = _sqlite3.connect(db_path, timeout=3)
+        # Add status column if missing (idempotent — silently ignored if already present)
+        try:
+            con.execute("ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'ended'")
+            con.commit()
+        except Exception:
+            pass
+        con.execute(
+            "INSERT OR IGNORE INTO sessions (id, project, project_root, started_at, status) VALUES (?, ?, ?, ?, 'active')",
+            (session_id, project, cwd, now.strftime("%Y-%m-%dT%H:%M:%SZ")),
         )
-    """)
-    # Insert or update pane binding
-    con.execute(
-        """
-        INSERT INTO pane_bindings (pane_id, session_id, started_at, project_path)
-        VALUES (?, ?, strftime('%s','now'), ?)
-        ON CONFLICT(pane_id) DO UPDATE SET
-            session_id=excluded.session_id,
-            started_at=excluded.started_at,
-            project_path=excluded.project_path,
-            ended_at=NULL
-        """,
-        (pane_id, session_id, cwd),
-    )
-    con.commit()
-    con.close()
-except Exception as e:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    log_dir = os.path.expanduser("~/.claude/logs")
-    os.makedirs(log_dir, exist_ok=True)
-    with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
-        lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: pane-bindings INSERT failed: {type(e).__name__}: {e}\n")
-PYEOF3
+        # If row already existed (OR IGNORE), update status to active
+        con.execute(
+            "UPDATE sessions SET status = 'active' WHERE id = ? AND status != 'active'",
+            (session_id,),
+        )
+        con.commit()
+        con.close()
+    except Exception as e:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        log_dir = os.path.expanduser("~/.claude/logs")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
+            lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: DB INSERT failed: {type(e).__name__}: {e}\n")
+
+# ── Part 3: pane_bindings upsert (session_id defaults 'unknown', separate from Part 2) ──
+pane_id = os.environ.get("CAST_PANE_ID_FOR_HOOK", "").strip()
+if pane_id and os.path.exists(db_path):
+    pane_session_id = data.get("session_id", "unknown")
+    try:
+        con = _sqlite3.connect(db_path, timeout=3)
+        # Create pane_bindings table if missing
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS pane_bindings (
+                pane_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                started_at INTEGER,
+                ended_at INTEGER,
+                project_path TEXT
+            )
+        """)
+        # Insert or update pane binding
+        con.execute(
+            """
+            INSERT INTO pane_bindings (pane_id, session_id, started_at, project_path)
+            VALUES (?, ?, strftime('%s','now'), ?)
+            ON CONFLICT(pane_id) DO UPDATE SET
+                session_id=excluded.session_id,
+                started_at=excluded.started_at,
+                project_path=excluded.project_path,
+                ended_at=NULL
+            """,
+            (pane_id, pane_session_id, cwd),
+        )
+        con.commit()
+        con.close()
+    except Exception as e:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        log_dir = os.path.expanduser("~/.claude/logs")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
+            lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: pane-bindings INSERT failed: {type(e).__name__}: {e}\n")
+PYEOF
 
 # Notify the Cast Desktop backend of the pane binding
 if [ -n "${CAST_DESKTOP_PANE_ID:-}" ]; then
