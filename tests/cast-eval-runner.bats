@@ -303,7 +303,7 @@ YAML
   printf 'placeholder\n' > "$fixture"
 
   # --output-file mode → agent_run_id='' → grader queries WHERE agent_id=''
-  run python3 "$RUNNER" run protocol-violation-prose-dispatch --output-file "$fixture"
+  run python3 "$RUNNER" run backend-writer-protocol-violation-prose-dispatch --output-file "$fixture"
 
   assert_success   # 0 rows → PASS
 }
@@ -323,7 +323,7 @@ YAML
   local fixture="$HOME/fixture_any.txt"
   printf 'placeholder\n' > "$fixture"
 
-  run python3 "$RUNNER" run protocol-violation-prose-dispatch --output-file "$fixture"
+  run python3 "$RUNNER" run backend-writer-protocol-violation-prose-dispatch --output-file "$fixture"
 
   assert_failure   # exit 1: 1 violation found
   assert_output --partial "FAIL"
