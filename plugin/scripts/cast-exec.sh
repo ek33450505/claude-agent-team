@@ -350,38 +350,37 @@ sys.exit(result.returncode)
 _run_batch() {
   local batch_json="$1"
 
-  # Extract batch fields
-  local batch_id parallel description
-  batch_id=$(printf '%s' "$batch_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
-  parallel=$(printf '%s' "$batch_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('parallel') else 'false')" 2>/dev/null || echo "false")
-  description=$(printf '%s' "$batch_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('description',''))" 2>/dev/null || echo "")
+  # Extract batch fields — single python3 call emits a tab-separated header line
+  # (id, parallel, description, agent_count) followed by verify_files entries,
+  # one per line, instead of five separate cold-start invocations that each
+  # re-parse the same $batch_json.
+  local batch_id parallel description agent_count
+  local _batch_fields
+  _batch_fields=$(printf '%s' "$batch_json" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+bid = d.get('id', '')
+parallel = 'true' if d.get('parallel') else 'false'
+desc = d.get('description', '').replace('\t', ' ').replace('\n', ' ')
+count = len(d.get('agents', []))
+print(f'{bid}\t{parallel}\t{desc}\t{count}')
+for f in d.get('verify_files', []):
+    print(f)
+" 2>/dev/null || echo "")
+
+  IFS=$'\t' read -r batch_id parallel description agent_count <<< "$(printf '%s\n' "$_batch_fields" | head -1)"
+  agent_count="${agent_count:-0}"
+  parallel="${parallel:-false}"
 
   _header "Batch ${batch_id}: ${description}"
 
   _checkpoint_write_batch "$batch_id" "running"
 
-  # Extract verify_files as newline-separated list
-  local verify_files_raw
-  verify_files_raw=$(printf '%s' "$batch_json" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-for f in d.get('verify_files', []):
-    print(f)
-" 2>/dev/null || echo "")
-
-  # Build verify_files array
+  # Build verify_files array from the remaining lines of _batch_fields
   local verify_files=()
   while IFS= read -r vf; do
     [ -n "$vf" ] && verify_files+=("$vf")
-  done <<< "$verify_files_raw"
-
-  # Extract number of agents
-  local agent_count
-  agent_count=$(printf '%s' "$batch_json" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(len(d.get('agents', [])))
-" 2>/dev/null || echo "0")
+  done < <(printf '%s\n' "$_batch_fields" | tail -n +2)
 
   if [ "$agent_count" -eq 0 ]; then
     _warn "  Batch ${batch_id}: no agents defined, skipping."
@@ -398,16 +397,19 @@ print(len(d.get('agents', [])))
 
     for idx in $(seq 0 $((agent_count - 1))); do
       local agent_type agent_prompt
-      agent_type=$(printf '%s' "$batch_json" | python3 -c "
+      # Single python3 call emits "subagent_type\n" on the first line and the
+      # (possibly multi-line) prompt on all remaining lines, instead of two
+      # separate cold-start invocations that each re-parse the same batch_json.
+      local _agent_fields
+      _agent_fields=$(printf '%s' "$batch_json" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-print(d['agents'][$idx].get('subagent_type', ''))
+a = d['agents'][$idx]
+print(a.get('subagent_type', ''))
+print(a.get('prompt', ''), end='')
 " 2>/dev/null || echo "")
-      agent_prompt=$(printf '%s' "$batch_json" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d['agents'][$idx].get('prompt', ''))
-" 2>/dev/null || echo "")
+      agent_type=$(printf '%s\n' "$_agent_fields" | head -1)
+      agent_prompt=$(printf '%s\n' "$_agent_fields" | tail -n +2)
 
       if [ -z "$agent_type" ]; then
         _warn "  Agent at index ${idx} has no subagent_type, skipping."
@@ -450,16 +452,19 @@ print(d['agents'][$idx].get('prompt', ''))
 
     for idx in $(seq 0 $((agent_count - 1))); do
       local agent_type agent_prompt
-      agent_type=$(printf '%s' "$batch_json" | python3 -c "
+      # Single python3 call emits "subagent_type\n" on the first line and the
+      # (possibly multi-line) prompt on all remaining lines, instead of two
+      # separate cold-start invocations that each re-parse the same batch_json.
+      local _agent_fields
+      _agent_fields=$(printf '%s' "$batch_json" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-print(d['agents'][$idx].get('subagent_type', ''))
+a = d['agents'][$idx]
+print(a.get('subagent_type', ''))
+print(a.get('prompt', ''), end='')
 " 2>/dev/null || echo "")
-      agent_prompt=$(printf '%s' "$batch_json" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d['agents'][$idx].get('prompt', ''))
-" 2>/dev/null || echo "")
+      agent_type=$(printf '%s\n' "$_agent_fields" | head -1)
+      agent_prompt=$(printf '%s\n' "$_agent_fields" | tail -n +2)
 
       if [ -z "$agent_type" ]; then
         _warn "  Agent at index ${idx} has no subagent_type, skipping."

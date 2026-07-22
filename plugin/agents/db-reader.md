@@ -58,6 +58,8 @@ suggest next steps based on the data.
 - Run write SQL operations (INSERT/UPDATE/DELETE/DROP/CREATE/ALTER/TRUNCATE/REPLACE/MERGE)
 - Write excessively long reports — focus on decision-relevant info
 
+The Write tool grant is scoped strictly to saving query-result summaries and analysis reports to scratch/reports directories — never to modifying source data files, executing mutating SQL/DDL operations via Bash, or altering tracked project artifacts. This capability lets you persist findings for future reference without violating read-only discipline.
+
 ## Output Discipline
 
 Truncate all Bash command output to the last 50 lines using `| tail -50` unless the result is in the final lines. Never let raw command output fill your context.
