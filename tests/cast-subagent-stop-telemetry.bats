@@ -27,7 +27,8 @@ setup() {
     cost_usd REAL,
     input_tokens INTEGER,
     output_tokens INTEGER,
-    model TEXT
+    model TEXT,
+    branch TEXT
   );"
   unset CLAUDE_SUBPROCESS
 }
@@ -76,4 +77,25 @@ teardown() {
   local result
   result=$(sqlite3 "$TEMP_DB" "SELECT tool_uses FROM agent_runs WHERE agent_id='aid3';")
   [ "$result" = "5" ]
+}
+
+@test "SubagentStop: branch is resolved from payload cwd, not process cwd" {
+  local repo="$TEST_TMPDIR/probe-repo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email "test@example.com"
+  git -C "$repo" config user.name "Test User"
+  git -C "$repo" commit -q --allow-empty -m "init"
+  git -C "$repo" checkout -q -b feature/branch-probe
+
+  sqlite3 "$TEMP_DB" "INSERT INTO agent_runs (agent, session_id, agent_id, status, started_at) VALUES ('test-agent','s4','aid4','running','2026-01-01T00:00:00Z');"
+  local payload
+  payload=$(printf '{"agent_type":"test-agent","session_id":"s4","agent_id":"aid4","stop_reason":"end_turn","cwd":"%s"}' "$repo")
+
+  # Process cwd is TEST_TMPDIR (not a git repo) to prove the payload cwd wins.
+  run bash -c "cd '$TEST_TMPDIR' && echo '$payload' | CAST_DB_PATH='$TEMP_DB' bash '$HOOK_SH'"
+  assert_success
+  local branch
+  branch=$(sqlite3 "$TEMP_DB" "SELECT branch FROM agent_runs WHERE agent_id='aid4';")
+  [ "$branch" = "feature/branch-probe" ]
 }
