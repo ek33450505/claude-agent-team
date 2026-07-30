@@ -57,7 +57,11 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Install ruff
-        run: pip install ruff
+        # Pinned: unpinned `pip install ruff` floats to latest; ruff 0.16.0
+        # enabled new default rules (EXE001/I001/S110) not covered by ruff.toml's
+        # ignore-list baseline, turning the gate red repo-wide. Bump deliberately
+        # (and fix/ignore the new rules) rather than tracking every ruff release.
+        run: pip install ruff==0.15.14
 
       - name: Lint Python scripts
         run: ruff check scripts/*.py

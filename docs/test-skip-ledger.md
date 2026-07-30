@@ -32,7 +32,7 @@ A skip without a recorded rationale is indistinguishable from lost coverage — 
 
 ## Remaining Intentional Skips
 
-**Total call sites: 66** across 25 files (as of 2026-07-04 full re-enumeration; prior count of 23 across 14 files was under-counted — missed `cast-ask.bats` FTS5/JSON cluster, `cast-doctor-ask.bats`, `cast-doctor-honesty.bats`, `cast-doctor-litestream.bats`, `cast-commit-reconcile.bats`, `run-sh-count-gate.bats`, `install.bats`, and the two extra `install-personal.bats` sites. +2 same-day: `cast-pretool-dispatch-guardfail.bats` interpreter guards, added with the py3.9 hook-compat fixes; +1 2026-07-05: `cast-incident-record.bats` subprocess-guard skip, W2-1 consolidation; +3 2026-07-09: `cast-record-review.bats` (new file, B5) — 2 real-cast.db-required guards + 1 eval-case-fixture-not-found guard; +6 2026-07-10: `cast-otel-collector.bats` (3 HTTP-daemon-start guards) + `cast-overlay-sync.bats` (3 empty-clone-identity guards, incl. the GH007-regression test found in the follow-up pass) — GH macOS runner incompatibilities, v9.5.2).
+**Total call sites: 72** across 25 files (as of 2026-07-04 full re-enumeration; prior count of 23 across 14 files was under-counted — missed `cast-ask.bats` FTS5/JSON cluster, `cast-doctor-ask.bats`, `cast-doctor-honesty.bats`, `cast-doctor-litestream.bats`, `cast-commit-reconcile.bats`, `run-sh-count-gate.bats`, `install.bats`, and the two extra `install-personal.bats` sites. +2 same-day: `cast-pretool-dispatch-guardfail.bats` interpreter guards, added with the py3.9 hook-compat fixes; +1 2026-07-05: `cast-incident-record.bats` subprocess-guard skip, W2-1 consolidation; +3 2026-07-09: `cast-record-review.bats` (new file, B5) — 2 real-cast.db-required guards + 1 eval-case-fixture-not-found guard; +6 2026-07-10: `cast-otel-collector.bats` (3 HTTP-daemon-start guards) + `cast-overlay-sync.bats` (3 empty-clone-identity guards, incl. the GH007-regression test found in the follow-up pass) — GH macOS runner incompatibilities, v9.5.2; +6 2026-07-30: `cast-encrypt.bats` grew 2→8 `age`-guard skips with the Secure Enclave lockout fix (#348) — encrypt/decrypt round-trip, SE-stub, software/SE overwrite-guard, and 600/700 permission tests).
 
 **Enumeration command** (run from repo root; catches all 4 skip forms: `|| skip "`, `&& skip "`, line-leading `skip "`, if-then inline `skip "`; excludes comment lines and the self-referential guard file):
 
@@ -70,8 +70,14 @@ Note: a single `setup()`-level skip gates every `@test` in a file with one call.
 | `tests/cast-doctor-ask.bats` | 74 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
 | `tests/cast-doctor-ask.bats` | 88 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
 | `tests/cast-doctor-ask.bats` | 111 | 1 | SQLite FTS5 module not available in this build | Environment (sqlite build) | Runs where sqlite3 has FTS5 |
-| `tests/cast-encrypt.bats` | 59 | 1 | `age` binary not installed | Environment (optional dependency) | Install `age` in CI and confirm test passes |
-| `tests/cast-encrypt.bats` | 71 | 1 | `age` binary not installed | Environment (optional dependency) | Same as above |
+| `tests/cast-encrypt.bats` | 60 | 1 | `age` binary not installed (encrypt-without-setup) | Environment (optional dependency) | Install `age` in CI and confirm test passes |
+| `tests/cast-encrypt.bats` | 72 | 1 | `age` binary not installed (setup keypair) | Environment (optional dependency) | Same as above |
+| `tests/cast-encrypt.bats` | 97 | 1 | `age` binary not installed (software-key overwrite guard) | Environment (optional dependency) | Same as above |
+| `tests/cast-encrypt.bats` | 125 | 1 | `age` binary not installed (software-key 600/700 perms) | Environment (optional dependency) | Same as above |
+| `tests/cast-encrypt.bats` | 153 | 1 | `age` binary not installed (SE overwrite guard) | Environment (optional dependency) | Same as above |
+| `tests/cast-encrypt.bats` | 188 | 1 | `age` binary not installed (SE identity 600/700 perms) | Environment (optional dependency) | Same as above |
+| `tests/cast-encrypt.bats` | 223 | 1 | `age` binary not installed (encrypt/decrypt round-trip) | Environment (optional dependency) | Same as above |
+| `tests/cast-encrypt.bats` | 261 | 1 | `age` binary not installed (SE identity outside ~/.claude + `-i`) | Environment (optional dependency) | Same as above |
 | `tests/cast-keychain.bats` | 48 | 1 | macOS Keychain is macOS-only; skips on non-Darwin | Environment (platform) | Runs automatically on macOS |
 | `tests/cast-keychain.bats` | 62 | 1 | Keychain writes unavailable (headless/CI or auth-prompt timed out) | Environment (platform) | Runs on interactive macOS with Keychain access granted |
 | `tests/teardown-guard.bats` | 58 | 1 | Sentinel `.cast-test-home` not created by `setup_temp_home` — guards a positive-path teardown test | Conditional (harness state) | Fires automatically when `setup_temp_home` creates the sentinel correctly |
