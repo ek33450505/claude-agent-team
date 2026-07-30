@@ -53,15 +53,17 @@ check_age() {
 # Read private key path from config
 get_key_path() {
   if [[ -f "$CONFIG_FILE" ]]; then
-    python3 -c "
-import json, os
+    python3 - "$CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo ""
+import sys, json, os
+
+config_file = sys.argv[1]
 try:
-    with open('$CONFIG_FILE') as f:
+    with open(config_file) as f:
         cfg = json.load(f)
     print(os.path.expanduser(cfg.get('encryption', {}).get('key_path', '')))
 except Exception:
     print('')
-" 2>/dev/null || echo ""
+PYEOF
   else
     echo ""
   fi
@@ -93,6 +95,51 @@ with open(config_file, 'w') as f:
 PYEOF
 }
 
+# Read Secure Enclave identity file path from config
+get_identity_path() {
+  if [[ -f "$CONFIG_FILE" ]]; then
+    python3 - "$CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo ""
+import sys, json, os
+
+config_file = sys.argv[1]
+try:
+    with open(config_file) as f:
+        cfg = json.load(f)
+    print(os.path.expanduser(cfg.get('encryption', {}).get('identity_path', '')))
+except Exception:
+    print('')
+PYEOF
+  else
+    echo ""
+  fi
+}
+
+# Save Secure Enclave identity file path to config
+save_identity_path() {
+  local identity_path="$1"
+  python3 - "$CONFIG_FILE" "$identity_path" <<'PYEOF'
+import sys, json, os
+
+config_file = sys.argv[1]
+identity_path = sys.argv[2]
+
+try:
+    with open(config_file) as f:
+        cfg = json.load(f)
+except Exception:
+    cfg = {}
+
+if 'encryption' not in cfg:
+    cfg['encryption'] = {}
+cfg['encryption']['identity_path'] = identity_path
+
+os.makedirs(os.path.dirname(config_file), exist_ok=True)
+with open(config_file, 'w') as f:
+    json.dump(cfg, f, indent=2)
+    f.write('\n')
+PYEOF
+}
+
 case "$SUBCMD" in
   setup)
     check_age
@@ -102,25 +149,57 @@ case "$SUBCMD" in
       echo "Secure Enclave plugin (age-plugin-se) detected."
       echo "Using Secure Enclave for key generation."
       echo ""
-      # Generate SE-backed key
-      RECIPIENT=$(age-plugin-se keygen 2>/dev/null | grep "# public key:" | sed 's/# public key: //')
+      # Generate SE-backed key. The identity file written by `keygen -o`
+      # contains the AGE-PLUGIN-SE-1... handle — the ONLY reference to the
+      # enclave key. It MUST live outside ~/.claude (wiped twice historically)
+      # so a ~/.claude wipe never orphans the enclave key.
+      SE_IDENTITY_FILE="${CAST_SE_IDENTITY_PATH:-${HOME}/Library/Application Support/cast/cast-se-identity.txt}"
+
+      if [[ -f "$SE_IDENTITY_FILE" ]]; then
+        echo "Error: Identity file already exists at $SE_IDENTITY_FILE." >&2
+        echo "Encryption is already set up. To re-key, back up and remove it first, then re-run setup." >&2
+        exit 1
+      fi
+
+      SE_IDENTITY_DIR="$(dirname "$SE_IDENTITY_FILE")"
+      mkdir -p "$SE_IDENTITY_DIR"
+      chmod 700 "$SE_IDENTITY_DIR"
+      # umask 077 closes the world-readable window between file creation and
+      # the explicit chmod 600 below; set -e can abort mid-window otherwise.
+      (umask 077; age-plugin-se keygen -o "$SE_IDENTITY_FILE")
+      chmod 600 "$SE_IDENTITY_FILE"
+      RECIPIENT=$(grep "public key:" "$SE_IDENTITY_FILE" | sed 's/.*public key: //')
       if [[ -n "$RECIPIENT" ]]; then
         echo "$RECIPIENT" > "$PUB_KEY_PATH"
         echo "Public key saved to: $PUB_KEY_PATH"
         echo "Private key is stored in Secure Enclave (hardware-backed)."
+        echo "Identity file: $SE_IDENTITY_FILE"
+        echo ""
+        echo "IMPORTANT: Back up $SE_IDENTITY_FILE. It references the Secure"
+        echo "Enclave key; without it, encrypted data cannot be decrypted."
         save_key_path "secure-enclave"
+        save_identity_path "$SE_IDENTITY_FILE"
       else
         echo "Error: Secure Enclave key generation failed" >&2
         exit 1
       fi
     else
-      echo "Generating age keypair..."
       KEY_DIR="${HOME}/.claude/keys"
+      KEY_FILE="${KEY_DIR}/cast-age-key.txt"
+
+      if [[ -f "$KEY_FILE" ]]; then
+        echo "Error: Identity file already exists at $KEY_FILE." >&2
+        echo "Encryption is already set up. To re-key, back up and remove it first, then re-run setup." >&2
+        exit 1
+      fi
+
+      echo "Generating age keypair..."
       mkdir -p "$KEY_DIR"
       chmod 700 "$KEY_DIR"
 
-      KEY_FILE="${KEY_DIR}/cast-age-key.txt"
-      age-keygen -o "$KEY_FILE" 2>/dev/null
+      # umask 077 closes the world-readable window between file creation and
+      # the explicit chmod 600 below; set -e can abort mid-window otherwise.
+      (umask 077; age-keygen -o "$KEY_FILE")
       chmod 600 "$KEY_FILE"
 
       # Extract public key
@@ -197,8 +276,14 @@ case "$SUBCMD" in
     KEY_PATH=$(get_key_path)
     if [[ -z "$KEY_PATH" || "$KEY_PATH" == "secure-enclave" ]]; then
       if [[ "$KEY_PATH" == "secure-enclave" ]]; then
-        # SE-backed decryption uses the plugin automatically
-        KEY_FLAG=""
+        # SE-backed decryption still requires the identity file handle so age
+        # can hand it to age-plugin-se; the plugin does not locate it on its own.
+        SE_IDENTITY_FILE=$(get_identity_path)
+        if [[ -z "$SE_IDENTITY_FILE" || ! -f "$SE_IDENTITY_FILE" ]]; then
+          echo "Error: Identity file not found at ${SE_IDENTITY_FILE:-<unset>}; re-run setup." >&2
+          exit 1
+        fi
+        KEY_FLAGS=(-i "$SE_IDENTITY_FILE")
       else
         echo "Error: No private key path configured." >&2
         echo "Run 'cast-encrypt.sh setup' first." >&2
@@ -209,7 +294,7 @@ case "$SUBCMD" in
         echo "Error: Private key not found at $KEY_PATH" >&2
         exit 1
       fi
-      KEY_FLAG="-i $KEY_PATH"
+      KEY_FLAGS=(-i "$KEY_PATH")
     fi
 
     # Count .age files
@@ -225,8 +310,7 @@ case "$SUBCMD" in
     FAILED=0
     while IFS= read -r -d '' file; do
       PLAINTEXT="${file%.age}"
-      # shellcheck disable=SC2086
-      if age --decrypt $KEY_FLAG -o "$PLAINTEXT" "$file" 2>/dev/null; then
+      if age --decrypt "${KEY_FLAGS[@]}" -o "$PLAINTEXT" "$file" 2>/dev/null; then
         rm -f "$file"
         DECRYPTED=$((DECRYPTED + 1))
       else
@@ -269,6 +353,12 @@ case "$SUBCMD" in
     KEY_PATH=$(get_key_path)
     if [[ "$KEY_PATH" == "secure-enclave" ]]; then
       echo "  Private key: Secure Enclave (hardware-backed)"
+      SE_IDENTITY_FILE=$(get_identity_path)
+      if [[ -n "$SE_IDENTITY_FILE" && -f "$SE_IDENTITY_FILE" ]]; then
+        echo "  Identity file: $SE_IDENTITY_FILE (present)"
+      else
+        echo "  Identity file: ${SE_IDENTITY_FILE:-not configured} (missing)"
+      fi
     elif [[ -n "$KEY_PATH" && -f "$KEY_PATH" ]]; then
       echo "  Private key: $KEY_PATH (present)"
     else
