@@ -18,7 +18,7 @@
 CAST_STATUS_DIR="${HOME}/.claude/agent-status"
 
 cast_write_status() {
-  local status="$1"
+  local _status="$1"
   local summary="$2"
   local agent="$3"
   local concerns="${4:-}"
@@ -34,7 +34,7 @@ cast_write_status() {
   # Use python3 stdlib only — no pip packages required.
   # Pass all values as positional argv to avoid shell-quoting pitfalls with
   # heredoc variables and to keep the inline script readable.
-  written_path=$(python3 - "$agent" "$status" "$summary" "$concerns" "$recommended" "$ts" "$filepath" <<'PYEOF'
+  written_path=$(python3 - "$agent" "$_status" "$summary" "$concerns" "$recommended" "$ts" "$filepath" <<'PYEOF'
 import json, sys
 
 agent, status, summary, concerns, recommended, ts, filepath = sys.argv[1:]
