@@ -23,9 +23,11 @@ fi
 PUSH_SHA=$(git rev-parse HEAD)
 
 # Audit-log the escape-hatch use (CAST_PUSH_OK=1) before either push path below —
-# records regardless of which branch is taken. Never fail the push if logging fails.
-mkdir -p "$HOME/.claude/logs" 2>/dev/null || true
-printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$BRANCH" "$PUSH_SHA" >>"$HOME/.claude/logs/cast-push-audit.log" 2>/dev/null || true
+# records regardless of which branch is taken. Never fail the push if logging fails
+# (extracted to cast-push-audit-log.sh so the bats suite can exercise the real
+# function instead of a re-implemented snippet; guarded exactly like the
+# cast-events.sh sourcing below so a missing/broken sibling is a harmless no-op).
+( source ~/.claude/scripts/cast-push-audit-log.sh 2>/dev/null && cast_push_write_audit_log "$BRANCH" "$PUSH_SHA" 2>/dev/null ) || true
 
 # Set upstream if none is configured; otherwise plain push.
 if ! git rev-parse --abbrev-ref "@{u}" &>/dev/null; then
