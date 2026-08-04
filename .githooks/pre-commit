@@ -25,7 +25,7 @@ _lint_python_cold_starts() {
   for script in scripts/*.sh; do
     [[ -f "$script" ]] || continue
     local count
-    count=$(grep 'python3 -c' "$script" 2>/dev/null | wc -l | tr -d ' ')
+    count=$(grep -E 'python3 -c|python3 <<|python3 - <<' "$script" 2>/dev/null | wc -l | tr -d ' ')
 
     # Check if this script is in the baseline
     local baseline_line=""

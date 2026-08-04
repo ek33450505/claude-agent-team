@@ -140,6 +140,30 @@ EOF
   [[ "$output" == *"ERROR [lint-cold-starts]: scripts/regression.sh has 4 python3 -c calls (baseline: 3)"* ]]
 }
 
+@test "lint-cold-starts: fail when GRANDFATHERED file adds heredoc spawns over baseline (counter must see 'python3 <<' and 'python3 - <<', not just 'python3 -c')" {
+  cd "$TEST_REPO"
+  # Baseline says 1 (one pre-existing heredoc spawn). The fixture below has TWO heredoc
+  # spawns (one 'python3 <<' form, one 'python3 - <<' form) and ZERO "python3 -c" calls —
+  # a counter blind to heredocs would see count=0, miss the regression, and wrongly pass.
+  echo "scripts/heredoc-regression.sh:1" >> .githooks/cold-start-baseline.txt
+  cat > scripts/heredoc-regression.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+python3 - <<'PYEOF'
+print("one")
+PYEOF
+python3 <<'PYEOF2'
+print("two")
+PYEOF2
+EOF
+  chmod +x scripts/heredoc-regression.sh
+  git add scripts/heredoc-regression.sh .githooks/cold-start-baseline.txt
+  run bash .githooks/pre-commit
+  # Should FAIL because true count (2 heredoc spawns) exceeds baseline (1)
+  [[ "$status" -ne 0 ]]
+  [[ "$output" == *"ERROR [lint-cold-starts]: scripts/heredoc-regression.sh has 2 python3 -c calls (baseline: 1)"* ]]
+}
+
 # === LINT 2: SQL injection detector ===
 
 @test "lint-sql-injection: pass when no sql interpolation" {
