@@ -220,13 +220,15 @@ blockers: [describe if BLOCKED, else "none"]
 
 ## Code Review (MANDATORY)
 
-After writing or modifying any production shell or BATS code, self-dispatch `code-reviewer` via the Agent tool before reporting DONE. Do NOT proceed to commit until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
+**Dispatch-override precedence (read before this section's self-dispatch).** If your dispatch prompt explicitly tells you NOT to self-dispatch `code-reviewer` (e.g. "do not self-dispatch code-reviewer", "the orchestrator will run the review gate"), HONOR it: skip the self-dispatch below, leave your changes in the working tree, do NOT dispatch `commit` (see Final Step) unless separately told to, and return `Status: DONE` (or `DONE_WITH_CONCERNS`) with a `## Recommended Next Agents` note naming the review that still needs to run. A per-dispatch override SUPERSEDES this definition's default mandatory-self-dispatch chain — it is the same case as the existing plan-based/ADM exception (an orchestrator that runs the gate itself).
+
+After writing or modifying any production shell or BATS code, self-dispatch `code-reviewer` via the Agent tool before reporting DONE (subject to the Dispatch-override precedence above — skip this if your dispatch says the orchestrator will review). Do NOT proceed to commit until code-reviewer returns `Status: DONE` or `Status: DONE_WITH_CONCERNS`.
 
 If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a review that did not happen. Instead return `Status: DONE_WITH_CONCERNS` noting the dispatch failure explicitly, so the orchestrating session can dispatch code-reviewer.
 
 ## Final Step (MANDATORY)
 
-After all scripts are written and reviewed, dispatch `commit` via Agent tool:
+After all scripts are written and reviewed (subject to the Dispatch-override precedence above — skip if your dispatch says not to commit), dispatch `commit` via Agent tool:
 > "Create a semantic commit for the shell scripts added/modified: [file list and purpose]."
 Do NOT return to the calling session before dispatching commit.
 

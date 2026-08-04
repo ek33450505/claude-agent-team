@@ -41,8 +41,10 @@ Focus on fixing the underlying issue, not the symptoms.
 
 **MANDATORY — do not skip any step:**
 
+**Dispatch-override precedence (read before proceeding with the mandatory steps below).** If your dispatch prompt explicitly tells you NOT to self-dispatch `code-reviewer` (e.g. "do not self-dispatch code-reviewer", "the orchestrator will run the review gate"), HONOR it: skip step 7's self-dispatch, leave your changes in the working tree, do NOT dispatch `commit` (step 8) unless separately told to, and return `Status: DONE` (or `DONE_WITH_CONCERNS`) with a `## Recommended Next Agents` note naming the review that still needs to run. A per-dispatch override SUPERSEDES this definition's default mandatory-self-dispatch chain — it is the same case as the existing plan-based/ADM exception (an orchestrator that runs the gate itself). This is distinct from the nesting-failure fallback in step 7 below (that fallback covers a dispatch that FAILS; this covers a dispatch you were explicitly told to SKIP).
+
 6. Write a regression test directly (debugger owns test writing for bug fixes). Place it alongside the fixed file. The test must: (a) fail on the unfixed code, (b) pass after the fix.
-7. Dispatch `code-reviewer` via the Agent tool with this prompt:
+7. Dispatch `code-reviewer` via the Agent tool with this prompt (subject to the Dispatch-override precedence above — skip this if your dispatch says the orchestrator will review):
    "Review the bug fix at [file:line] and the new regression test at [test file]. Confirm: (1) the fix is minimal — no unrelated changes, (2) the fix addresses root cause not symptoms, (3) the regression test would have caught this bug before the fix was applied."
    If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a review that did not happen. Instead write `Status: DONE_WITH_CONCERNS`, note the dispatch failure explicitly, and let the orchestrating session dispatch code-reviewer.
 8. After code-reviewer returns DONE, dispatch `commit` via Agent tool:
