@@ -181,13 +181,23 @@ def analyze_memory(row, age_days, has_validated_col):
     }
 
 
+# Defensive cap on the full-table read below (live count ~900 as of 2026-08-04).
+# The staleness sweep needs every row to be correct, so this is set with wide
+# headroom rather than as a page size — it exists to bound worst-case memory/CPU
+# if agent_memories ever grows pathologically, not to page real results. main()
+# warns to stderr if the cap is ever hit, since a truncated report is silently wrong.
+_MAX_MEMORIES = 20000
+
+
 def load_memories(conn):
     """Return list of dicts from agent_memories."""
     # Get column names
     col_info = conn.execute("PRAGMA table_info(agent_memories)").fetchall()
     col_names = [r[1] for r in col_info]
 
-    rows = conn.execute("SELECT * FROM agent_memories").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM agent_memories LIMIT ?", (_MAX_MEMORIES,)
+    ).fetchall()
     return [dict(zip(col_names, row)) for row in rows]
 
 
@@ -221,6 +231,12 @@ def main():
     try:
         has_validated_col = check_schema(conn)
         memories = load_memories(conn)
+        if len(memories) >= _MAX_MEMORIES:
+            print(
+                f"WARNING: agent_memories hit the {_MAX_MEMORIES}-row read cap — "
+                "this report may be missing rows beyond the cap.",
+                file=sys.stderr,
+            )
 
         report = []
         for mem in memories:

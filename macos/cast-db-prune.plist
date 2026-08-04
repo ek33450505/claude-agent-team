@@ -33,6 +33,8 @@
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
 		<key>HOME</key>
 		<string>__HOME__</string>
+		<key>CAST_PRUNE_OTEL_DAYS</key>
+		<string>10</string>
 	</dict>
 </dict>
 </plist>

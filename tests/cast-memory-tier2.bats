@@ -106,6 +106,22 @@ PYEOF
   echo "$output" | python3 -m json.tool >/dev/null
 }
 
+@test "cast-memory-validate: --check reports every seeded memory under the LIMIT cap" {
+  # Regression guard for the defensive LIMIT added to load_memories()'s
+  # SELECT * — a handful of rows must never be silently truncated.
+  sqlite3 "$CAST_DB_PATH" "
+    INSERT INTO agent_memories (agent, project, type, name, description, content, importance, decay_rate, created_at) VALUES ('shared', 'cast', 'feedback', 'cap-test-one', 'First', 'First memory content.', 0.5, 0.995, datetime('now'));
+    INSERT INTO agent_memories (agent, project, type, name, description, content, importance, decay_rate, created_at) VALUES ('shared', 'cast', 'feedback', 'cap-test-two', 'Second', 'Second memory content.', 0.5, 0.995, datetime('now'));
+    INSERT INTO agent_memories (agent, project, type, name, description, content, importance, decay_rate, created_at) VALUES ('shared', 'cast', 'feedback', 'cap-test-three', 'Third', 'Third memory content.', 0.5, 0.995, datetime('now'));
+  " 2>/dev/null
+
+  run python3 "$VALIDATE_PY" --check
+  assert_success
+  assert_output --partial "cap-test-one"
+  assert_output --partial "cap-test-two"
+  assert_output --partial "cap-test-three"
+}
+
 @test "cast-memory-validate: --archive-stale sets importance=0 for old memories" {
   # Seed a memory with created_at 60 days ago (definitely stale)
   sqlite3 "$CAST_DB_PATH" "INSERT INTO agent_memories (agent, project, type, name, description, content, importance, decay_rate, created_at) VALUES ('shared', 'cast', 'feedback', 'old-memory-archive', 'Old test', 'Old memory content from long ago.', 0.9, 0.995, datetime('now', '-60 days'));" 2>/dev/null

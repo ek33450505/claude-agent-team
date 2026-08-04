@@ -270,6 +270,48 @@ teardown() {
   rm -rf "$backup_dir"
 }
 
+# --- VACUUM (page reclaim after real deletes) ---
+
+@test "VACUUM runs and logs completion after a real delete" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+  "
+  local backup_dir
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+
+  run python3 "$SCRIPT"
+  assert_success
+  assert_output --partial "VACUUM complete"
+
+  rm -rf "$backup_dir"
+}
+
+@test "VACUUM is skipped when no rows were deleted" {
+  # Real (non-dry-run) prune with no old rows present — nothing to reclaim.
+  local backup_dir
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+
+  run python3 "$SCRIPT"
+  assert_success
+  assert_output --partial "VACUUM skipped — no rows deleted this run"
+  refute_output --partial "VACUUM complete"
+
+  rm -rf "$backup_dir"
+}
+
+@test "VACUUM does not run in dry-run mode" {
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));
+  "
+  export CAST_DB_PRUNE_DRY_RUN=1
+  run python3 "$SCRIPT"
+  assert_success
+  refute_output --partial "VACUUM complete"
+  refute_output --partial "VACUUM skipped"
+}
+
 @test "dry-run does not invoke backup and deletes nothing" {
   sqlite3 "$TEST_DB" "
     INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-200 days'));

@@ -300,13 +300,38 @@ def _resource_schema() -> str:
     lines = ["cast.db exposed tables and row counts:"]
     try:
         with contextlib.closing(_ro_connect()) as conn:
-            for t in _EXPOSED_TABLES:
+            # Determine which exposed tables exist in a single query, then batch
+            # all COUNT(*) calls into one UNION ALL — was one round trip per
+            # table in _EXPOSED_TABLES (N+1).
+            placeholders = ",".join("?" for _ in _EXPOSED_TABLES)
+            existing = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    f"AND name IN ({placeholders})",
+                    _EXPOSED_TABLES,
+                ).fetchall()
+            }
+            counts: dict = {}
+            present = [t for t in _EXPOSED_TABLES if t in existing]
+            if present:
+                # Table names are hardcoded literals — not user input — so f-string is safe here.
+                union_sql = " UNION ALL ".join(
+                    f"SELECT '{t}' AS t, COUNT(*) AS n FROM {t}" for t in present
+                )  # noqa: S608
                 try:
-                    # Table names are hardcoded literals — not user input — so f-string is safe here.
-                    row = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()  # noqa: S608
-                    lines.append(f"  {t}: {row[0]} rows")
+                    counts = {row[0]: row[1] for row in conn.execute(union_sql).fetchall()}
                 except sqlite3.OperationalError:
-                    lines.append(f"  {t}: unavailable")
+                    # Rare: a table passed the existence check but failed COUNT
+                    # (e.g. corrupt index). Fall back to per-table probing so one
+                    # bad table doesn't blank out the others.
+                    for t in present:
+                        try:
+                            counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]  # noqa: S608
+                        except sqlite3.OperationalError:
+                            pass
+            for t in _EXPOSED_TABLES:
+                lines.append(f"  {t}: {counts[t]} rows" if t in counts else f"  {t}: unavailable")
     except sqlite3.OperationalError as e:
         return f"cast.db unavailable: {e}"
     return "\n".join(lines)

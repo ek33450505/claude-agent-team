@@ -70,6 +70,11 @@ def _setup_logging() -> None:
 # ---------------------------------------------------------------------------
 DB_PATH = os.environ.get("CAST_DB_PATH", os.path.expanduser("~/.claude/cast.db"))
 
+# Defensive cap for the unfiltered "list all routines" read in cmd_status.
+# routines is a small, admin-registered table (one row per named scheduled
+# routine — currently 0 live), so this is generous headroom, not a page size.
+_MAX_ROUTINES = 1000
+
 
 def _connect() -> sqlite3.Connection:
     """Return a sqlite3 connection with row_factory set."""
@@ -151,8 +156,14 @@ def cmd_status(args: list) -> int:
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM routines ORDER BY name ASC"
+                "SELECT * FROM routines ORDER BY name ASC LIMIT ?", (_MAX_ROUTINES,)
             ).fetchall()
+            if len(rows) >= _MAX_ROUTINES:
+                print(
+                    f"WARNING: routines hit the {_MAX_ROUTINES}-row read cap — "
+                    "some routines may not be shown.",
+                    file=sys.stderr,
+                )
 
         result = [_row_to_dict(r) for r in rows]
         print(json.dumps(result, indent=2))

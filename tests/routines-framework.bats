@@ -50,6 +50,43 @@ teardown() {
   assert_success
 }
 
+@test "cast routines status (no filter) returns every seeded routine under the LIMIT cap" {
+  # Regression guard for the defensive LIMIT added to cmd_status's unfiltered
+  # SELECT * — a handful of rows must never be truncated.
+  sqlite3 "$TEST_DB" < "$MIGRATION_FILE"
+  sqlite3 "$TEST_DB" "
+    INSERT INTO routines (id, name, trigger_type, agent_to_dispatch, prompt_template, output_dir, created_at)
+    VALUES ('r1', 'routine-alpha', 'cron', 'docs', 'do alpha', '/tmp/out', datetime('now'));
+    INSERT INTO routines (id, name, trigger_type, agent_to_dispatch, prompt_template, output_dir, created_at)
+    VALUES ('r2', 'routine-beta', 'cron', 'docs', 'do beta', '/tmp/out', datetime('now'));
+    INSERT INTO routines (id, name, trigger_type, agent_to_dispatch, prompt_template, output_dir, created_at)
+    VALUES ('r3', 'routine-gamma', 'cron', 'docs', 'do gamma', '/tmp/out', datetime('now'));
+  "
+
+  run python3 "$ROUTINES_SCRIPT" status
+  assert_success
+  assert_output --partial "routine-alpha"
+  assert_output --partial "routine-beta"
+  assert_output --partial "routine-gamma"
+}
+
+@test "cast routines status (no filter) warns when the LIMIT cap is hit" {
+  sqlite3 "$TEST_DB" < "$MIGRATION_FILE"
+  sqlite3 "$TEST_DB" "
+    WITH RECURSIVE seq(n) AS (
+      SELECT 1
+      UNION ALL
+      SELECT n + 1 FROM seq WHERE n < 1000
+    )
+    INSERT INTO routines (id, name, trigger_type, agent_to_dispatch, prompt_template, output_dir, created_at)
+    SELECT 'r' || n, 'routine-' || n, 'cron', 'docs', 'do it', '/tmp/out', datetime('now') FROM seq;
+  "
+
+  run python3 "$ROUTINES_SCRIPT" status
+  assert_success
+  assert_output --partial "WARNING: routines hit the 1000-row read cap"
+}
+
 # ---------------------------------------------------------------------------
 # Wave 2 tests
 # ---------------------------------------------------------------------------
