@@ -59,7 +59,7 @@ key is silently ignored and enforcement is **unscoped** — see Step 1 below bef
 The allowlist (`ATTEST_ENFORCE_AGENTS`) requires attest **v0.3.0 or later**.
 
 ```bash
-cast plugin info attest   # check installed version
+claude plugin list   # shows installed plugins, version, and enabled/disabled status
 ```
 
 A stale plugin (≤ 0.2.0) ignores `ATTEST_ENFORCE_AGENTS` entirely and would enforce on
@@ -69,8 +69,11 @@ confirmed v0.3.0+.**
 ### Step 2 — Enable the plugin
 
 ```bash
-cast plugin enable attest
+claude plugin enable attest@attest
 ```
+
+The bare `claude plugin enable attest` fails with "not found in any editable settings scope" —
+the `plugin@marketplace` qualifier (as shown in `claude plugin list`) is required.
 
 ### Step 3 — Set the enforcement on-switch in your session
 
