@@ -71,7 +71,7 @@ CAST wires the Claude Code hook surface into a single enforcement-and-observabil
 |---|---|---|
 | `SessionStart` | `cast-session-start.sh`, `cast-plugin-bootstrap.sh` | Bootstrap runtime dirs / symlinks / `cast.db`; inject the journal + context banner |
 | `UserPromptSubmit` | `cast-user-prompt-hook.sh` → `cast-memory-router.py`, `route.sh` | Per-prompt memory recall (FTS5) + intent routing |
-| `PreToolUse: Bash` | `pre-tool-guard.sh`, `cast-command-guard.sh` | Block raw `git commit`/`push`/`stash`; block process-kills + `rm -rf` of protected roots |
+| `PreToolUse: Bash` | `cast-pretool-dispatch.py` (unifies `cast-egress-hook.sh`, `pre-tool-guard.sh`, `cast-command-guard.py`) | Block raw `git commit`/`push`/`stash`; block process-kills + `rm -rf` of protected roots |
 | `PreToolUse: Write\|Edit` | `write-guards.sh`, `pre-tool-guard.sh` | Block writes outside the declared blast radius; inject `[CAST-REVIEW]` after code edits |
 | `PostToolUse` | `post-tool-hook.sh` | Lifecycle event emission → `cast.db` |
 | `SubagentStop` | `cast-subagent-stop-hook.sh` → `cast_handoff_parser.py` | Truncation detection, typed Handoff validation, honesty sensors, memory write |

@@ -273,8 +273,11 @@ def t(argv, n=15):
 
 dispatch = t(["python3", os.path.join(S, "cast-pretool-dispatch.py")])
 serial = 0.0
-for w in ("cast-egress-hook.sh", "pre-tool-guard.sh", "cast-command-guard.sh"):
-    serial += t(["bash", os.path.join(S, w)])
+# cast-command-guard.sh (bash wrapper) was removed 2026-08-04 as dead code; its logic
+# is cast-command-guard.py, invoked with python3 here (not bash) to keep this baseline
+# a fair per-process-invocation comparison against the 3 hooks the dispatcher replaced.
+for interp, w in (("bash", "cast-egress-hook.sh"), ("bash", "pre-tool-guard.sh"), ("python3", "cast-command-guard.py")):
+    serial += t([interp, os.path.join(S, w)])
 
 print(f"dispatcher={dispatch*1000:.0f}ms serial3={serial*1000:.0f}ms")
 sys.exit(0 if dispatch < serial else 1)

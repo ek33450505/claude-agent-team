@@ -162,7 +162,7 @@ Rules:
 
 ## Section 2 — Escape Hatch Pattern
 
-Two CAST PreToolUse hooks hard-block destructive Bash operations: `pre-tool-guard.sh` (git commit/push/stash + policy-protected writes) and `cast-command-guard.sh` (process mass-kills + `rm -rf` of protected roots). Escape hatches allow a trusted context — a designated agent, or a human-authorized override — to bypass a specific block.
+CAST's unified `PreToolUse: Bash` gate, `cast-pretool-dispatch.py`, hard-blocks destructive Bash operations. It runs the git-guard (`pre-tool-guard.sh`'s rules: commit/push/stash + policy-protected writes) and the command-guard (`cast-command-guard.py`'s rules, loaded as a library: process mass-kills + `rm -rf` of protected roots) in every context, including `CLAUDE_SUBPROCESS=1` (headless/managed) — escape hatches, not subprocess status, are the only sanctioned bypass.
 
 ### 2.1 Defined Escape Hatches
 
