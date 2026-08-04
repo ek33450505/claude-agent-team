@@ -60,7 +60,6 @@ class TestConnectPragma(unittest.TestCase):
 
     def test_pragma_hardening_does_not_break_db_write(self):
         """db_write still succeeds on a temp DB — PRAGMAs don't block writes."""
-        import sqlite3
         # Create the sessions table so db_write can target it
         conn = cast_db._connect()
         conn.execute(

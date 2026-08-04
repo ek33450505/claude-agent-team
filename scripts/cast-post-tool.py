@@ -277,7 +277,6 @@ def part6_file_writes(data: dict, tool_name: str, file_path: str) -> None:
     if not file_path:
         return
 
-    import datetime
     try:
         from cast_db import db_write, db_execute, db_query
         # Ensure the table exists (idempotent — safe on every call)
