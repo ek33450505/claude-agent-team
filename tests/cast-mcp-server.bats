@@ -130,6 +130,18 @@ teardown() {
   assert_output --partial 'rows'
 }
 
+@test "resources/read cast://schema reports unavailable for a missing table without blanking others" {
+  # Batched UNION ALL count query (N+1 fix) must still degrade per-table: a
+  # dropped table shows "unavailable" while the other exposed tables keep
+  # reporting real counts.
+  sqlite3 "$CAST_DB_PATH" "DROP TABLE incidents;"
+  run env CAST_DB_PATH="$CAST_DB_PATH" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"resources/read\",\"params\":{\"uri\":\"cast://schema\"}}' | python3 '$SERVER_PY'"
+  assert_success
+  assert_output --partial 'incidents: unavailable'
+  assert_output --partial 'dispatch_decisions'
+  assert_output --partial 'rows'
+}
+
 @test "resources/read unknown uri returns error -32602" {
   run env CAST_DB_PATH="$CAST_DB_PATH" bash -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"resources/read\",\"params\":{\"uri\":\"cast://nonexistent\"}}' | python3 '$SERVER_PY'"
   assert_success

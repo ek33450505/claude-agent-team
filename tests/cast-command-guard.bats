@@ -3,12 +3,17 @@
 # cast-command-guard.bats — prove-refusal tests for the PreToolUse Bash command-guard.
 # Mirrors tests/pre-tool-guard.bats. Self-isolates via setup_temp_home, so it is safe
 # to run directly (it never touches the real $HOME).
+#
+# cast-command-guard.sh (the thin bash wrapper) was removed 2026-08-04 — dead code,
+# never wired in settings.json, superseded by cast-pretool-dispatch.py (which loads
+# cast-command-guard.py as a library, not a subprocess). Tests below invoke the .py
+# entrypoint directly; the guard GUARANTEES they prove are unchanged.
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-HOOK_SH="$REPO_DIR/scripts/cast-command-guard.sh"
+HOOK_PY="$REPO_DIR/scripts/cast-command-guard.py"
 
 setup() {
   load 'helpers/setup'
@@ -49,35 +54,35 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ---------------------------------------------------------------------------
 
 @test "pkill -9 bash → blocks (exit 2)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "pkill -9 bash")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "pkill -9 bash")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "pkill node → blocks (exit 2)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "pkill node")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "pkill node")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "killall -9 bash → blocks (exit 2)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "killall -9 bash")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "killall -9 bash")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "killall Terminal → blocks (exit 2)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "killall Terminal")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "killall Terminal")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "echo x && pkill bash → blocks (pkill in command position after &&)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "echo x && pkill bash")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "echo x && pkill bash")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -88,21 +93,21 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ---------------------------------------------------------------------------
 
 @test "kill -9 -1 → blocks (signal to all processes)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "kill -9 -1")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "kill -9 -1")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "kill 0 → blocks (process group 0)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "kill 0")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "kill 0")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "kill -- -1234 → blocks (explicit negative pgid after --)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "kill -- -1234")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "kill -- -1234")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -113,49 +118,49 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ---------------------------------------------------------------------------
 
 @test "rm -rf ~/.claude → blocks (literal tilde home)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ~/.claude")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ~/.claude")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "rm -rf \$HOME (literal) → blocks" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf $HOME')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf $HOME')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "rm -rf \"\$HOME\" (literal quoted) → blocks" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf "$HOME"')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf "$HOME"')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "rm -rf \${HOME}/.claude (literal braces) → blocks" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ${HOME}/.claude')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ${HOME}/.claude')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "rm -rf / → blocks (root)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf /")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf /")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "rm -rf ~ → blocks (bare tilde home)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ~")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ~")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "rm -rf . → blocks (cwd)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf .")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf .")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -164,14 +169,14 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 @test "rm -rf \$HOME (resolved temp-home absolute path) → blocks" {
   # $HOME is expanded here (double-quoted) to the temp-home absolute path; the
   # guard must match it via the resolved-home base.
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf $HOME")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf $HOME")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "rm -rf \$HOME/.claude (resolved temp-home subpath) → blocks" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf $HOME/.claude")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf $HOME/.claude")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -182,27 +187,27 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ---------------------------------------------------------------------------
 
 @test "kill \"\$SUITE_PID\" → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'kill "$SUITE_PID"')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'kill "$SUITE_PID"')"
   assert_success
 }
 
 @test "kill -0 \"\$SUITE_PID\" → allows (liveness probe)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'kill -0 "$SUITE_PID"')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'kill -0 "$SUITE_PID"')"
   assert_success
 }
 
 @test "kill 12345 → allows (single pid)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "kill 12345")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "kill 12345")"
   assert_success
 }
 
 @test "kill -9 12345 → allows (signal to single pid)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "kill -9 12345")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "kill -9 12345")"
   assert_success
 }
 
 @test "kill -TERM 999 → allows (named signal to single pid)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "kill -TERM 999")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "kill -TERM 999")"
   assert_success
 }
 
@@ -211,22 +216,22 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ---------------------------------------------------------------------------
 
 @test "rm -rf /tmp/foo → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf /tmp/foo")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf /tmp/foo")"
   assert_success
 }
 
 @test "rm -rf \"\$TEST_HOME\" → allows (non-HOME variable not protected)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf "$TEST_HOME"')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf "$TEST_HOME"')"
   assert_success
 }
 
 @test "rm -rf ./build → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ./build")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ./build")"
   assert_success
 }
 
 @test "rm -rf node_modules → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf node_modules")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf node_modules")"
   assert_success
 }
 
@@ -235,17 +240,17 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ---------------------------------------------------------------------------
 
 @test "ls -la → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "ls -la")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "ls -la")"
   assert_success
 }
 
 @test "git status → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "git status")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "git status")"
   assert_success
 }
 
 @test "echo \"use pkill to kill the process\" → allows (mention, not command position)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo "use pkill to kill the process"')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo "use pkill to kill the process"')"
   assert_success
 }
 
@@ -254,12 +259,12 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ---------------------------------------------------------------------------
 
 @test "CAST_KILL_OK=1 pkill bash → allows (kill escape hatch)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_KILL_OK=1 pkill bash")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "CAST_KILL_OK=1 pkill bash")"
   assert_success
 }
 
 @test "CAST_RM_OK=1 rm -rf ~/.claude → allows (rm escape hatch)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RM_OK=1 rm -rf ~/.claude")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "CAST_RM_OK=1 rm -rf ~/.claude")"
   assert_success
 }
 
@@ -268,24 +273,31 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ---------------------------------------------------------------------------
 
 @test "non-Bash tool payload (Write) → allows even with dangerous content" {
-  run bash "$HOOK_SH" <<< "$(make_write_payload)"
+  run python3 "$HOOK_PY" <<< "$(make_write_payload)"
   assert_success
 }
 
 @test "empty input → allows (graceful no-op)" {
-  run bash "$HOOK_SH" <<< ""
+  run python3 "$HOOK_PY" <<< ""
   assert_success
 }
 
 @test "malformed JSON input → allows (fail-open)" {
-  run bash "$HOOK_SH" <<< "not valid json at all"
+  run python3 "$HOOK_PY" <<< "not valid json at all"
   assert_success
 }
 
-@test "CLAUDE_SUBPROCESS=1 → blocked command bypassed (subprocess skip)" {
+@test "CLAUDE_SUBPROCESS=1 → destructive rm still blocks (command guard not skipped)" {
+  # Matches tests/cast-pretool-dispatch.bats "CLAUDE_SUBPROCESS=1 + destructive pkill
+  # → blocks" and reference_claude_subprocess_semantics: CLAUDE_SUBPROCESS=1 marks a
+  # managed/headless subprocess but does NOT bypass the destructive-command guard —
+  # only the (now-removed) .sh wrapper ever implemented that bypass; the .py guard
+  # itself never has, and the current dispatcher runs it in every context.
   export CLAUDE_SUBPROCESS=1
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf /")"
-  assert_success
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf /")"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "[CAST]"
 }
 
 # ===========================================================================
@@ -293,53 +305,53 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "FIX1 BLOCK: rm -rf .. → blocks (parent dir, exact)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ..")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ..")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX1 BLOCK: rm -rf ~/.claude/logs → blocks (.claude subtree child)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ~/.claude/logs")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ~/.claude/logs")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX1 BLOCK: rm -rf \$HOME/.claude (resolved subtree base) → blocks" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf $HOME/.claude")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf $HOME/.claude")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX1 ALLOW: rm -rf ~/Projects/x/node_modules → allows (non-.claude home subpath)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ~/Projects/x/node_modules")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ~/Projects/x/node_modules")"
   assert_success
 }
 
 @test "FIX1 ALLOW: rm -rf \"\$HOME/Projects/x/dist\" (literal) → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf "$HOME/Projects/x/dist"')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf "$HOME/Projects/x/dist"')"
   assert_success
 }
 
 @test "FIX1 ALLOW: rm -rf ~/.cache/pip → allows (non-.claude dotdir)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ~/.cache/pip")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ~/.cache/pip")"
   assert_success
 }
 
 @test "FIX1 ALLOW: rm -rf ~/Downloads/tmpbuild → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ~/Downloads/tmpbuild")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ~/Downloads/tmpbuild")"
   assert_success
 }
 
 @test "FIX1 ALLOW: rm -rf \$HOME/Projects/x/node_modules (resolved subpath) → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf $HOME/Projects/x/node_modules")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf $HOME/Projects/x/node_modules")"
   assert_success
 }
 
 @test "FIX1 ALLOW: rm -rf \$HOME/.cast-worktrees/wt-1 (resolved subpath) → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf $HOME/.cast-worktrees/wt-1")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf $HOME/.cast-worktrees/wt-1")"
   assert_success
 }
 
@@ -348,21 +360,21 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "FIX2 BLOCK: rm -rf /* → blocks (root glob)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf /*')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf /*')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX2 BLOCK: rm -rf /.* → blocks (root dot-glob)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf /.*')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf /.*')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX2 ALLOW: rm -rf /tmp/foo → allows (non-root absolute)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf /tmp/foo")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf /tmp/foo")"
   assert_success
 }
 
@@ -371,19 +383,19 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "FIX3 ALLOW: payload 123 (non-dict number) → exit 0, no traceback" {
-  run bash "$HOOK_SH" <<< '123'
+  run python3 "$HOOK_PY" <<< '123'
   [[ "$status" -eq 0 ]]
   refute_output --partial "Traceback"
 }
 
 @test "FIX3 ALLOW: payload [1,2,3] (non-dict array) → exit 0, no traceback" {
-  run bash "$HOOK_SH" <<< '[1,2,3]'
+  run python3 "$HOOK_PY" <<< '[1,2,3]'
   [[ "$status" -eq 0 ]]
   refute_output --partial "Traceback"
 }
 
 @test "FIX3 ALLOW: tool_input is a string (not object) → exit 0, no traceback" {
-  run bash "$HOOK_SH" <<< '{"tool_name":"Bash","tool_input":"oops"}'
+  run python3 "$HOOK_PY" <<< '{"tool_name":"Bash","tool_input":"oops"}'
   [[ "$status" -eq 0 ]]
   refute_output --partial "Traceback"
 }
@@ -393,14 +405,14 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "FIX4 BLOCK: echo \`pkill -9 bash\` → blocks (pkill in backtick subst)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo `pkill -9 bash`')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo `pkill -9 bash`')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX4 BLOCK: x=\`rm -rf ~/.claude\` → blocks (rm in backtick subst)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'x=`rm -rf ~/.claude`')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'x=`rm -rf ~/.claude`')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -411,21 +423,21 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "FIX5 BLOCK: rm -rf \$HOME\"/.claude\" → blocks (quote-concat)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf $HOME"/.claude"')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf $HOME"/.claude"')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX5 BLOCK: rm -rf \"\$HOME\"/.claude → blocks (leading-quoted concat)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf "$HOME"/.claude')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf "$HOME"/.claude')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX5 BLOCK: rm -rf ~\"/.claude\" → blocks (tilde quote-concat)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ~"/.claude"')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ~"/.claude"')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -437,19 +449,19 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 
 @test "FIX6 ALLOW: heredoc body containing 'rm -rf /' → allows (body is data)" {
   CMD=$'cat <<EOF\nrm -rf /\nEOF\n'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_success
 }
 
 @test "FIX6 ALLOW: quoted-delim heredoc body containing 'pkill -9 bash' → allows" {
   CMD=$'cat <<\'EOF\'\npkill -9 bash\nEOF\n'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_success
 }
 
 @test "FIX6 BLOCK: rm -rf ~/.claude OUTSIDE the heredoc → blocks" {
   CMD=$'cat <<EOF\nsome inert text\nEOF\nrm -rf ~/.claude\n'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -460,17 +472,17 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "FIX7 ALLOW: rm -rf ./build # mentions ~/.claude in comment → allows" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ./build # mentions ~/.claude in comment')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ./build # mentions ~/.claude in comment')"
   assert_success
 }
 
 @test "FIX7 ALLOW: rm -rf ./build > ~/.claude/build.log 2>&1 → allows (redirect target)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ./build > ~/.claude/build.log 2>&1')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ./build > ~/.claude/build.log 2>&1')"
   assert_success
 }
 
 @test "FIX7 BLOCK: rm -rf ~/.claude > x.log → blocks (rm target before redirect)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ~/.claude > x.log')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ~/.claude > x.log')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -481,47 +493,47 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "FIX8 BLOCK: CAST_RM_OK=1 echo x; rm -rf ~ → blocks (hatch only exempts first segment)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'CAST_RM_OK=1 echo x; rm -rf ~')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'CAST_RM_OK=1 echo x; rm -rf ~')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX8 BLOCK: \\pkill bash → blocks (leading backslash stripped)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "\\pkill bash")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "\\pkill bash")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX8 BLOCK: command pkill bash → blocks (wrapper unwrapped)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'command pkill bash')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'command pkill bash')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX8 BLOCK: exec pkill bash → blocks (wrapper unwrapped)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'exec pkill bash')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'exec pkill bash')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX8 BLOCK: nohup pkill bash → blocks (wrapper unwrapped)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'nohup pkill bash')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'nohup pkill bash')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX8 ALLOW: nohup bash tests/run.sh --tap → allows (bash is the command)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'nohup bash tests/run.sh --tap')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'nohup bash tests/run.sh --tap')"
   assert_success
 }
 
 @test "FIX8 ALLOW: time bats tests/foo.bats → allows (bats is the command)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'time bats tests/foo.bats')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'time bats tests/foo.bats')"
   assert_success
 }
 
@@ -534,7 +546,7 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 
 @test "FIX9 BLOCK: quoted '<<EOF' then rm -rf ~/.claude → blocks (quoted, not a heredoc)" {
   CMD=$'echo \'<<EOF\'\nrm -rf ~/.claude'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -542,7 +554,7 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 
 @test "FIX9 BLOCK: '# <<EOF' comment then rm -rf ~/.claude → blocks (comment, not a heredoc)" {
   CMD=$'# <<EOF\nrm -rf ~/.claude'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -550,7 +562,7 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 
 @test "FIX9 BLOCK: \"see <<EOF here\" then rm -rf ~ → blocks (double-quoted, not a heredoc)" {
   CMD=$'echo "see <<EOF here"\nrm -rf ~'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -558,7 +570,7 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 
 @test "FIX9 BLOCK: <<<EOF here-string then rm -rf ~/.claude → blocks (here-string, not a heredoc)" {
   CMD=$'echo "x" <<<EOF\nrm -rf ~/.claude\nEOF'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -566,25 +578,25 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 
 @test "FIX9 ALLOW: real heredoc body 'rm -rf /' → allows (legit heredoc preserved)" {
   CMD=$'cat <<EOF\nrm -rf /\nEOF'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_success
 }
 
 @test "FIX9 ALLOW: real quoted-delim heredoc body 'pkill -9 bash' → allows" {
   CMD=$'cat <<\'EOF\'\npkill -9 bash\nEOF'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_success
 }
 
 @test "FIX9 ALLOW: real <<- tab-strip heredoc body 'rm -rf /' → allows" {
   CMD=$'cat <<-EOF\n\trm -rf /\n\tEOF'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_success
 }
 
 @test "FIX9 BLOCK: real heredoc then real rm -rf ~/.claude after terminator → blocks" {
   CMD=$'cat <<EOF\nhello\nEOF\nrm -rf ~/.claude'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -597,33 +609,33 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "FIX10 BLOCK: rm -rf ~/.claude>x → blocks (attached redirect split off target)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ~/.claude>x')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ~/.claude>x')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX10 BLOCK: rm -rf \$HOME>x (resolved temp home) → blocks (attached redirect split off)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf $HOME>x")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf $HOME>x")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX10 BLOCK: rm -rf ~/.claude > x.log → blocks (rm target before spaced redirect)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ~/.claude > x.log')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ~/.claude > x.log')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "FIX10 ALLOW: rm -rf ./build > \$HOME/.claude/build.log 2>&1 → allows (protected path is redirect target)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "rm -rf ./build > $HOME/.claude/build.log 2>&1")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "rm -rf ./build > $HOME/.claude/build.log 2>&1")"
   assert_success
 }
 
 @test "FIX10 ALLOW: rm -rf ./build>out.txt → allows (non-protected target, attached redirect)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'rm -rf ./build>out.txt')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ./build>out.txt')"
   assert_success
 }
 
@@ -635,7 +647,7 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # ===========================================================================
 
 @test "RULE4 BLOCK: echo x > .github/workflows/ci.yml → blocks (spaced redirect, repo-relative)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x > .github/workflows/ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo x > .github/workflows/ci.yml')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -643,42 +655,42 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 }
 
 @test "RULE4 BLOCK: printf ... >> .github/workflows/deploy.yml → blocks (append redirect)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'printf "on: push" >> .github/workflows/deploy.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'printf "on: push" >> .github/workflows/deploy.yml')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "RULE4 BLOCK: cat src > /repo/.github/workflows/x.yml → blocks (absolute path)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cat src > /repo/.github/workflows/x.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'cat src > /repo/.github/workflows/x.yml')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "RULE4 BLOCK: echo x > \$PWD/.github/workflows/ci.yml → blocks (PWD-composed path)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x > $PWD/.github/workflows/ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo x > $PWD/.github/workflows/ci.yml')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "RULE4 BLOCK: echo x >.github/workflows/ci.yml → blocks (attached redirect, no space)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x >.github/workflows/ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo x >.github/workflows/ci.yml')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "RULE4 BLOCK: cmd | tee .github/workflows/ci.yml → blocks (tee sink)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x | tee .github/workflows/ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo x | tee .github/workflows/ci.yml')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "RULE4 BLOCK: cmd | tee -a .github/workflows/ci.yml → blocks (tee append, flag skipped)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x | tee -a .github/workflows/ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo x | tee -a .github/workflows/ci.yml')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
@@ -686,50 +698,50 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 
 @test "RULE4 BLOCK: heredoc-fed cat > .github/workflows/x.yml → blocks (intro line scanned)" {
   CMD=$'cat > .github/workflows/x.yml <<EOF\non: push\nEOF'
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "$CMD")"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "RULE4 ALLOW: cat .github/workflows/ci.yml → allows (plain read, no redirect)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cat .github/workflows/ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'cat .github/workflows/ci.yml')"
   assert_success
 }
 
 @test "RULE4 ALLOW: grep -n jobs .github/workflows/ci.yml → allows (plain read)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'grep -n jobs .github/workflows/ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'grep -n jobs .github/workflows/ci.yml')"
   assert_success
 }
 
 @test "RULE4 ALLOW: cat .github/workflows/ci.yml > /tmp/out.yml → allows (read workflow, write /tmp)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cat .github/workflows/ci.yml > /tmp/out.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'cat .github/workflows/ci.yml > /tmp/out.yml')"
   assert_success
 }
 
 @test "RULE4 ALLOW: echo x > /tmp/notes.txt → allows (redirect to non-workflow path)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x > /tmp/notes.txt')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo x > /tmp/notes.txt')"
   assert_success
 }
 
 @test "RULE4 ALLOW: echo x > docs/workflows/guide.md → allows (not .github/workflows/)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'echo x > docs/workflows/guide.md')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'echo x > docs/workflows/guide.md')"
   assert_success
 }
 
 @test "RULE4 BLOCK: cd .github/workflows && echo x > ci.yml → blocks (cd-evasion: redirect target lacks marker)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cd .github/workflows && echo x > ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'cd .github/workflows && echo x > ci.yml')"
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
 }
 
 @test "RULE4 ALLOW: cd .github/workflows && cat ci.yml → allows (cd-evasion path, but no output redirect)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cd .github/workflows && cat ci.yml')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'cd .github/workflows && cat ci.yml')"
   assert_success
 }
 
 @test "RULE4 ALLOW: cd docs && echo x > notes.md → allows (cd to non-workflow dir)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload 'cd docs && echo x > notes.md')"
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'cd docs && echo x > notes.md')"
   assert_success
 }

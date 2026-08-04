@@ -18,9 +18,27 @@ import struct
 import argparse
 import sqlite3
 import math
+import urllib.parse
 
 OLLAMA_EMBED_URL = 'http://localhost:11434/api/embed'
 EMBED_MODEL = 'nomic-embed-text'
+
+# Copied from cast-memory-router.py (no cross-script imports — see
+# cast-memory-consolidate.py's equivalent note) to gate the hardcoded Ollama
+# URL against SSRF-style tampering before it's ever passed to urlopen().
+_ALLOWED_EMBED_HOSTS = {'localhost', '127.0.0.1', '::1'}
+
+
+def _is_safe_url(url: str) -> bool:
+    """Return True only if url has an allowed scheme and a local hostname."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme not in ('http', 'https'):
+        return False
+    hostname = parsed.hostname or ''
+    return hostname in _ALLOWED_EMBED_HOSTS
 
 
 def get_db_path():
@@ -34,6 +52,8 @@ def get_db_path():
 def embed_text(text, timeout=5):
     """Call Ollama embed API. Returns list[float] or None on any error."""
     try:
+        if not _is_safe_url(OLLAMA_EMBED_URL):
+            raise ValueError(f"Unsafe Ollama embed URL: {OLLAMA_EMBED_URL!r}")
         import urllib.request
         payload = json.dumps({"model": EMBED_MODEL, "input": text}).encode('utf-8')
         req = urllib.request.Request(

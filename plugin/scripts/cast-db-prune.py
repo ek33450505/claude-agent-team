@@ -276,6 +276,11 @@ def main() -> None:
                 _log('ERROR: Skipping all delete steps — prune aborted (fail-closed)')
                 sys.exit(0)
 
+        # total_deleted gates Step 5 (VACUUM) below — only worth the I/O cost when
+        # a real delete actually freed pages. Dry-run counts are would-deletes, not
+        # actual deletions, so they intentionally do NOT feed this total.
+        total_deleted = 0
+
         # --- Step 1: routing_events (column: timestamp) ---
         # Pass days=DAYS explicitly: a --days override reassigns the module global,
         # but _prune_table's default param binds DAYS at def-time (stale otherwise).
@@ -283,6 +288,8 @@ def main() -> None:
             count = _prune_table(conn, 'routing_events', 'timestamp', days=DAYS)
             action = 'would delete' if DRY_RUN else 'deleted'
             _log(f'{mode_label}routing_events: {action} {count} row(s) older than {DAYS} days')
+            if not DRY_RUN:
+                total_deleted += count
         except Exception as e:
             print(f'[cast-db-prune] routing_events step failed: {e}', file=sys.stderr)
             _log(f'routing_events step failed (non-fatal): {e}')
@@ -292,6 +299,8 @@ def main() -> None:
             count = _prune_table(conn, 'agent_runs', 'started_at', days=DAYS)
             action = 'would delete' if DRY_RUN else 'deleted'
             _log(f'{mode_label}agent_runs: {action} {count} row(s) older than {DAYS} days')
+            if not DRY_RUN:
+                total_deleted += count
         except Exception as e:
             print(f'[cast-db-prune] agent_runs step failed: {e}', file=sys.stderr)
             _log(f'agent_runs step failed (non-fatal): {e}')
@@ -301,6 +310,8 @@ def main() -> None:
             count = _prune_table(conn, 'otel_events', 'received_at', days=OTEL_DAYS)
             action = 'would delete' if DRY_RUN else 'deleted'
             _log(f'{mode_label}otel_events: {action} {count} row(s) older than {OTEL_DAYS} days')
+            if not DRY_RUN:
+                total_deleted += count
         except Exception as e:
             print(f'[cast-db-prune] otel_events step failed: {e}', file=sys.stderr)
             _log(f'otel_events step failed (non-fatal): {e}')
@@ -310,9 +321,26 @@ def main() -> None:
             count = _prune_table(conn, 'otel_metrics', 'received_at', days=OTEL_DAYS)
             action = 'would delete' if DRY_RUN else 'deleted'
             _log(f'{mode_label}otel_metrics: {action} {count} row(s) older than {OTEL_DAYS} days')
+            if not DRY_RUN:
+                total_deleted += count
         except Exception as e:
             print(f'[cast-db-prune] otel_metrics step failed: {e}', file=sys.stderr)
             _log(f'otel_metrics step failed (non-fatal): {e}')
+
+        # --- Step 5: VACUUM (reclaim freed pages) ---
+        # DELETE marks pages free but does not shrink the file; VACUUM rebuilds
+        # the DB to reclaim them. Guarded to real (non-dry-run) prunes that
+        # actually deleted at least one row — a no-op run has nothing to
+        # reclaim, and VACUUM's full-DB rewrite is too costly to pay for free.
+        if not DRY_RUN and total_deleted > 0:
+            try:
+                conn.execute('VACUUM')
+                _log(f'VACUUM complete — reclaimed space after {total_deleted} row(s) deleted')
+            except Exception as e:
+                print(f'[cast-db-prune] VACUUM step failed: {e}', file=sys.stderr)
+                _log(f'VACUUM step failed (non-fatal): {e}')
+        elif not DRY_RUN:
+            _log('VACUUM skipped — no rows deleted this run')
 
     except Exception as e:
         print(f'[cast-db-prune] Unexpected error: {e}', file=sys.stderr)

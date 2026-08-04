@@ -162,7 +162,7 @@ Rules:
 
 ## Section 2 — Escape Hatch Pattern
 
-Two CAST PreToolUse hooks hard-block destructive Bash operations: `pre-tool-guard.sh` (git commit/push/stash + policy-protected writes) and `cast-command-guard.sh` (process mass-kills + `rm -rf` of protected roots). Escape hatches allow a trusted context — a designated agent, or a human-authorized override — to bypass a specific block.
+CAST's unified `PreToolUse: Bash` gate, `cast-pretool-dispatch.py`, hard-blocks destructive Bash operations. It runs the git-guard (`pre-tool-guard.sh`'s rules: commit/push/stash + policy-protected writes) and the command-guard (`cast-command-guard.py`'s rules, loaded as a library: process mass-kills + `rm -rf` of protected roots) in every context, including `CLAUDE_SUBPROCESS=1` (headless/managed) — escape hatches, not subprocess status, are the only sanctioned bypass.
 
 ### 2.1 Defined Escape Hatches
 
@@ -218,27 +218,27 @@ CAST treats a defined set of operations as **irreversible or destructive** — t
 | Context | `CLAUDE_SUBPROCESS` | PreToolUse hooks | `AskUserQuestion` |
 |---|---|---|---|
 | Interactive main session **and in-session Agent-tool subagents** (incl. a `planner`→`/orchestrate` chain) | unset | **fire** | prompts the user |
-| Headless / managed sub-claude (`claude -p`, `cast-managed-agent.sh`) | `1` | **skip** (guards `exit 0` on the `CLAUDE_SUBPROCESS` check) | auto-answered "safest default" (`cast-headless-guard.sh`) |
+| Headless / managed sub-claude (`claude -p`, `cast-managed-agent.sh`) | `1` | **partial** — git-guard + command-guard destructive-op blocks (commit/push/stash, mass-kill, `rm -rf` of protected roots) still **fire**; Write/Edit-policy, egress recording, and dispatch-capture **skip** (`exit 0` on the `CLAUDE_SUBPROCESS` check) | auto-answered "safest default" (`cast-headless-guard.sh`) |
 | Cron / launchd direct (`cast-db-prune.py`, `cast-migrate.py`) | n/a | **absent** — no Claude in the loop | n/a |
 
 > Verified 2026-06-14: a native Agent-tool subagent runs with `CLAUDE_SUBPROCESS` **unset**, so the hook guards DO fire for it (a subagent's `pkill` is hard-blocked, exit 2). The "subagents run with `CLAUDE_SUBPROCESS=1`" notes elsewhere in this spec describe the older headless/managed dispatch model, not native Agent-tool subagents.
 
-**Design rule — auto-chain safety:** a hook-based hard-block or a confirm-pause protects the interactive context (row 1) but is **bypassed** in headless/managed (row 2) and absent in cron/launchd (row 3). An irreversible op is **auto-chain-safe only if it is protected by a fail-closed script-level gate** (back-up-or-abort inside the script itself) **or an agent text-refusal.** New destructive automation MUST carry its own fail-closed gate rather than relying on a hook.
+**Design rule — auto-chain safety:** the git-guard and command-guard hard-blocks (commit/push/stash; process mass-kill; `rm -rf` of protected roots) fire **unconditionally** — before the `CLAUDE_SUBPROCESS` early-return in `cast-pretool-dispatch.py` — so they protect both the interactive context (row 1) **and** headless/managed (row 2). It's the **Write/Edit-policy engine, egress recording, and dispatch-capture** (plus confirm-pauses, which aren't hooks at all) that are **bypassed** in headless/managed (row 2); those, and every hook-based gate, are absent in cron/launchd (row 3). An irreversible op outside the git-guard/command-guard umbrella is **auto-chain-safe only if it is protected by a fail-closed script-level gate** (back-up-or-abort inside the script itself) **or an agent text-refusal.** New destructive automation MUST carry its own fail-closed gate rather than relying on a hook.
 
 **The ledger:**
 
 | Op class | Operation(s) | Enforced by | Type | Escape hatch | Auto-chain-safe? |
 |---|---|---|---|---|---|
-| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record`) + pre-push reconcile (`cast-commit-reconcile.py`) | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✗ hook-only |
-| Git push | raw `git push` | `pre-tool-guard.sh` (push block) | hard-block | `CAST_PUSH_OK=1` | ✗ hook-only |
+| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record`) + pre-push reconcile (`cast-commit-reconcile.py`) | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✓ hook (unconditional) |
+| Git push | raw `git push` | `pre-tool-guard.sh` (push block) | hard-block | `CAST_PUSH_OK=1` | ✓ hook (unconditional) |
 | Force-push | `git push --force` | `push.md` (agent refusal) | refuse | none | ◑ agent-refusal |
 | Push to main (work repo) | push to `main`/`master` | `push.md` (branch rule) | refuse | `--force-main` / `repo_class=personal` | ◑ agent-refusal |
 | PR merge | squash-merge; force-merge to main | `merge.md` (confirm / hard-block) | confirm / hard-block | text confirmation | ◑ agent-only |
-| Git stash | all `git stash` variants | `pre-tool-guard.sh` (stash block) | hard-block | `CAST_STASH_OK=1` | ✗ hook-only |
+| Git stash | all `git stash` variants | `pre-tool-guard.sh` (stash block) | hard-block | `CAST_STASH_OK=1` | ✓ hook (unconditional) |
 | Schema migration | destructive DDL/DML via `cast-migrate.py` | `cast-migrate.py` (`_pre_migration_backup`) | **fail-closed backup** | none | ✓ **script gate** |
 | DB row prune | nightly `DELETE` of old rows | `cast-db-prune.py` (`_pre_prune_backup`) | **fail-closed backup** | none | ✓ **script gate** |
-| Process mass-kill | `pkill`/`killall`/`kill -1`/`kill 0` | `cast-command-guard.py` (kill rule) | hard-block | `CAST_KILL_OK=1` | ✗ hook-only |
-| Destructive delete | `rm -rf`/rmtree of protected roots | `cast-command-guard.py` (rm rule) + `cast_guard.safe_rmtree` + `blast-radius-lint.sh` | hard-block + scoped lib + CI lint | `CAST_RM_OK=1` | ◑ hook ✗ / lib + lint ✓ |
+| Process mass-kill | `pkill`/`killall`/`kill -1`/`kill 0` | `cast-command-guard.py` (kill rule) | hard-block | `CAST_KILL_OK=1` | ✓ hook (unconditional) |
+| Destructive delete | `rm -rf`/rmtree of protected roots | `cast-command-guard.py` (rm rule) + `cast_guard.safe_rmtree` + `blast-radius-lint.sh` | hard-block + scoped lib + CI lint | `CAST_RM_OK=1` | ✓ hook (unconditional) + lib + lint |
 | Risky write | literal-`~` path, policy-protected file, badge mismatch | `write-guards.py` + `pre-tool-guard.sh` (policy rule) | hard-block | `CAST_POLICY_OVERRIDE=1` (audited) | ✗ hook-only |
 | Orchestration pause | batch interrupt window; freeze/careful mode | `skills/orchestrate`, `skills/freeze-mode` | confirm-pause | abort / deactivate | ✗ confirm-only |
 
@@ -247,7 +247,7 @@ Legend: **✓** survives an unattended auto-chain · **◑** survives only via i
 **Notes / gaps (2026-06-14):**
 - The two recurring **DB destructive paths now both fail-closed-back-up** (migration `_pre_migration_backup`; nightly prune `_pre_prune_backup`). `cast-db-prune.py` runs via `launchd` (`com.cast.db-prune`, 03:30) with no Claude in the loop, so its script-level gate is the *only* protection that can apply — the row-3 case made concrete.
 - `cast-memory-consolidate.py` dedup deletes are recoverable only on the low-importance path (archives to `archived_memories` first); the dedup-of-duplicates path hard-deletes (manual-only, low risk — deferred).
-- Hook-based interrupts and confirm-pauses are **interactive-context guarantees, not auto-chain guarantees** — by design (hook loop guard; cron has no hook layer). That asymmetry is the reason the design rule above exists.
+- Hook-based interrupts split in two: the git-guard/command-guard hard-blocks are **auto-chain guarantees** (they fire unconditionally, headless/managed included); the Write/Edit-policy engine, egress recording, dispatch-capture, and confirm-pauses are **interactive-context guarantees only** — skipped in headless/managed and absent in cron (by design, to prevent hook recursion). That asymmetry is the reason the design rule above distinguishes the two.
 
 ---
 

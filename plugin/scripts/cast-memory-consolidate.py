@@ -120,7 +120,7 @@ def _pre_consolidate_backup(db_path: str) -> int:
     return 0
 
 
-SAFE_COL = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+SAFE_COL = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*\Z')
 
 
 # --- Copied from cast-memory-router.py / cast-memory-embed.py (no cross-script imports) ---

@@ -84,7 +84,7 @@ CAST_COMMIT_AGENT=1 git commit  # ← This line is checked, but split_segments s
 
 | Variable | Purpose | Set / Checked By | Notes |
 |-----------|---------|------------------|-------|
-| `CLAUDE_SUBPROCESS=1` | Framework flag: marks a process as a CAST-managed subprocess (managed agents, hook subprocesses). When set, hooks skip guards (consistency + latency). | CAST hook infrastructure; set by Claude Code or `cast-managed-agent.sh` | Not user-facing. Agents and scripts should never set this themselves. When set, `pre-tool-guard.sh`, `cast-command-guard.py`, and most event hooks exit 0 without processing. |
+| `CLAUDE_SUBPROCESS=1` | Framework flag: marks a process as a CAST-managed subprocess (managed agents, hook subprocesses). When set, the Write/Edit-policy engine, egress recording, and dispatch-capture are skipped (consistency + latency) — git-guard and command-guard destructive-op blocks still fire unconditionally. | CAST hook infrastructure; set by Claude Code or `cast-managed-agent.sh` | Not user-facing. Agents and scripts should never set this themselves. Most event hooks exit 0 without processing when set — but `pre-tool-guard.sh`/`cast-git-guard.py` (commit/push/stash) and `cast-command-guard.py` (mass-kill, `rm -rf`) are exceptions: their destructive-op guards run before the `CLAUDE_SUBPROCESS` check and still hard-block. |
 | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` | Enable Claude Code's Managed Agents (beta, Anthropic feature). Set in `managed-settings.d/00-env.json` (line 4). | Claude Code runtime; stored in `managed-settings.d/00-env.json` | Not a guard bypass; a feature flag. Required for managed-agent dispatches to work. Part of the CAST plugin's managed-agents support (see `docs/managed-agents-reference.md`). |
 
 ---
