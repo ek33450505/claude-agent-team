@@ -90,12 +90,12 @@ assert d['name']=='cast', 'plugin name is not cast'
   [ -z "$result" ]
 }
 
-@test "gen-plugin.sh creates 17 skill directories with SKILL.md each" {
+@test "gen-plugin.sh creates 18 skill directories with SKILL.md each" {
   OUT="$BATS_TEST_TMPDIR/plugin"
   bash "$REPO_DIR/scripts/gen-plugin.sh" "$OUT" >/dev/null 2>&1
 
   skill_count=$(find "$OUT/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-  [ "$skill_count" -eq 17 ]
+  [ "$skill_count" -eq 18 ]
 
   # Assert every skill has SKILL.md
   result=$(find "$OUT/skills" -mindepth 1 -maxdepth 1 -type d ! -exec test -f "{}/SKILL.md" \; -print | wc -l | tr -d ' ')

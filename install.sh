@@ -667,6 +667,22 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         cast_launchctl_reload "$PLIST_DEST" "com.cast.db-prune"
     fi
 
+    # Install cast-misfire-audit.plist — weekly (Sun 06:30) misfire rank report.
+    # Fail-open OBSERVER only: misfire only reads/ranks ~/.claude, never mutates.
+    if [ -f "$SCRIPT_DIR/macos/cast-misfire-audit.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.misfire-audit.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-misfire-audit.plist" > "$PLIST_DEST"
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.misfire-audit"
+    fi
+
+    # Install cast-looptrip-scan.plist — nightly (04:45) looptrip scan against cast.db.
+    # Fail-open OBSERVER only: post-hoc scan for later FP-rate review, not a gate.
+    if [ -f "$SCRIPT_DIR/macos/cast-looptrip-scan.plist" ]; then
+        PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.looptrip-scan.plist"
+        sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-looptrip-scan.plist" > "$PLIST_DEST"
+        cast_launchctl_reload "$PLIST_DEST" "com.cast.looptrip-scan"
+    fi
+
     # Install cast-tidy.plist — daily cast tidy housekeeping (03:00)
     if [ -f "$SCRIPT_DIR/macos/cast-tidy.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.tidy.plist"

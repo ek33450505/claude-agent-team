@@ -99,3 +99,24 @@ teardown() {
   branch=$(sqlite3 "$TEMP_DB" "SELECT branch FROM agent_runs WHERE agent_id='aid4';")
   [ "$branch" = "feature/branch-probe" ]
 }
+
+@test "SubagentStop: branch falls back to process cwd when payload cwd is absent" {
+  local repo="$TEST_TMPDIR/probe-repo-fallback"
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email "test@example.com"
+  git -C "$repo" config user.name "Test User"
+  git -C "$repo" commit -q --allow-empty -m "init"
+  git -C "$repo" checkout -q -b feature/fallback-probe
+
+  sqlite3 "$TEMP_DB" "INSERT INTO agent_runs (agent, session_id, agent_id, status, started_at) VALUES ('test-agent','s5','aid5','running','2026-01-01T00:00:00Z');"
+  # Payload has no cwd key at all, forcing fallback to process cwd.
+  local payload='{"agent_type":"test-agent","session_id":"s5","agent_id":"aid5","stop_reason":"end_turn"}'
+
+  # Process cwd is the git repo, so the hook should resolve branch from it.
+  run bash -c "cd '$repo' && echo '$payload' | CAST_DB_PATH='$TEMP_DB' bash '$HOOK_SH'"
+  assert_success
+  local branch
+  branch=$(sqlite3 "$TEMP_DB" "SELECT branch FROM agent_runs WHERE agent_id='aid5';")
+  [ "$branch" = "feature/fallback-probe" ]
+}

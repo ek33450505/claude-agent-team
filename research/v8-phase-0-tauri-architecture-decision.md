@@ -1,7 +1,7 @@
 # CAST v8 Phase 0.4 — Tauri Architecture Decision
 
 **Date:** 2026-05-11
-**Inputs:** `v8-phase-0-dashboard-state.md`, `v8-phase-0-forge-state.md`, v8 master plan (internal planning doc)
+**Inputs:** `archive/v8-phase-0-dashboard-state.md`, `archive/v8-phase-0-forge-state.md`, v8 master plan (internal planning doc)
 **Decision-maker on record:** Ed (this doc is the recommendation + reasoning)
 
 ---

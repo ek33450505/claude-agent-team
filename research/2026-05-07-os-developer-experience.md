@@ -26,7 +26,7 @@
 
 7. **`CONTRIBUTING.md` requires `task_claimed` event emission but the event script path is `~/.claude/scripts/cast-events.sh` — not in the repo.** First-time contributors cannot run the Step 0 protocol without first running `install.sh`. This is documented but the dependency chain is non-obvious.
 
-8. **No "good first issue" label on GitHub visible from the README.** The `2026-05-04-good-first-issues-draft.md` exists in research/ but there is no link from README or CONTRIBUTING.md to open GitHub issues tagged `good first issue`. New contributors have no curated entry point.
+8. **No "good first issue" label on GitHub visible from the README.** The `2026-05-04-good-first-issues-draft.md` exists in research/archive/ but there is no link from README or CONTRIBUTING.md to open GitHub issues tagged `good first issue`. New contributors have no curated entry point.
 
 ---
 
@@ -139,7 +139,7 @@ Compared to LangChain, CrewAI, AutoGen, and raw Claude API:
 
 3. **Fix `bug_report.yml` hook dropdown options** — Replace stale hook names with the current `scripts/cast-*.sh` names. *Why urgent:* Active bug reports are arriving with wrong hook names; maintainer triage time increases.
 
-4. **Add a "good first issue" label and pin 3 curated issues** — Use the existing `2026-05-04-good-first-issues-draft.md` research to open and label 3 GitHub issues. Add a "Contributing" callout to `CONTRIBUTING.md` linking to `https://github.com/ek33450505/claude-agent-team/issues?q=label%3A"good+first+issue"`. *Why urgent:* 2000 clones per 14 days means contributor traffic exists; there is no curated entry point.
+4. **Add a "good first issue" label and pin 3 curated issues** — Use the existing `research/archive/2026-05-04-good-first-issues-draft.md` research to open and label 3 GitHub issues. Add a "Contributing" callout to `CONTRIBUTING.md` linking to `https://github.com/ek33450505/claude-agent-team/issues?q=label%3A"good+first+issue"`. *Why urgent:* 2000 clones per 14 days means contributor traffic exists; there is no curated entry point.
 
 5. **Add a `cast new-agent <name>` subcommand to `bin/cast`** — Scaffold a new agent `.md` file in `agents/core/` with correct frontmatter (name, description, tools, model) and the `task_claimed` boilerplate. Print the path and next steps. *Why urgent:* The most common contributor task (adding an agent) has no scaffolding; CONTRIBUTING.md is a wall of prose for what should be a one-command workflow.
 

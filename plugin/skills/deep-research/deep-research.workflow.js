@@ -148,7 +148,8 @@ const PROSE_SUFFIX =
 async function structuredWithFallback(workPrompt, schema, opts) {
   const label = (opts && opts.label) || "agent"
   const phase = opts && opts.phase
-  const base = phase ? { label, phase } : { label }
+  const model = opts && opts.model
+  const base = { label, ...(phase ? { phase } : {}), ...(model ? { model } : {}) }
   // 1) structured attempt
   try {
     const direct = await agent(workPrompt + STRUCTURED_SUFFIX, { ...base, schema })
@@ -200,7 +201,7 @@ const scope = await structuredWithFallback(
   "Make queries specific enough to surface high-signal results. Avoid redundancy.\n" +
   "Return: the question (verbatim or lightly normalized), a 1-2 sentence decomposition strategy, and the angles.",
   SCOPE_SCHEMA,
-  { label: "scope", phase: "Scope" }
+  { label: "scope", phase: "Scope", model: "sonnet" }
 )
 if (!scope) {
   return { error: "Scope agent returned no result — cannot decompose the research question." }
@@ -269,7 +270,7 @@ const searchResults = await pipeline(
   scope.angles,
 
   angle => structuredWithFallback(SEARCH_PROMPT(angle), SEARCH_SCHEMA, {
-    label: "search:" + angle.label, phase: "Search"
+    label: "search:" + angle.label, phase: "Search", model: "haiku"
   }).then(r => {
     if (!r) return null
     log(angle.label + ": " + r.results.length + " results")
@@ -302,6 +303,7 @@ const searchResults = await pipeline(
         return structuredWithFallback(FETCH_PROMPT(source, searchResult.angle), EXTRACT_SCHEMA, {
           label: "fetch:" + host,
           phase: "Fetch",
+          model: "sonnet",
         }).then(ext => {
           if (!ext) {
             // Even the free-text → structure fallback couldn't extract. SURFACE it as a
@@ -353,7 +355,7 @@ phase("Verify")
 
 const judgeVote = (claim, v) =>
   agent(VERIFY_PROMPT(claim, v) + STRUCTURED_SUFFIX, {
-    label: "v" + v + ":" + claim.claim.slice(0, 40), phase: "Verify", schema: VERDICT_SCHEMA,
+    label: "v" + v + ":" + claim.claim.slice(0, 40), phase: "Verify", schema: VERDICT_SCHEMA, model: "sonnet",
   }).catch(() => null)   // throw (rate-limit / no-StructuredOutput) → null → abstain, NEVER a refutation
 
 const tallyClaim = (claim, verdicts) => {
@@ -443,7 +445,7 @@ const report = await structuredWithFallback(
   "5. Note caveats: what's uncertain, what sources were weak, what time-sensitivity applies. If any claims were unverified (no verdict returned), say so plainly.\n" +
   "6. List 2-4 open questions that emerged but weren't answered.",
   REPORT_SCHEMA,
-  { label: "synthesize", phase: "Synthesize" }
+  { label: "synthesize", phase: "Synthesize", model: "opus" }
 )
 
 if (!report) {

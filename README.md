@@ -7,7 +7,7 @@
 [![BATS Tests](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg)](https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml)
 ![Version](https://img.shields.io/badge/version-9.5.3-blue)
 ![Agents](https://img.shields.io/badge/agents-27-green)
-![Tests](https://img.shields.io/badge/tests-2397-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2398-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-blue)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)
@@ -87,7 +87,7 @@ The plugin bundles CAST's curated agents, skills, commands, and `command`-type e
 - **The record acts:** `cast predict` joins past outcomes to agent cost/success rates; `cast ask` runs full-text search over the whole record; `cast cost --by-task` attributes spend per unit of work; the pre-push gate reads `quality_gates` to enforce review.
 - **Local-first by construction.** Your code, prompts, memory, and the full audit trail live on your disk. No SaaS dashboard, no telemetry egress, no sign-in. Every cloud feature is strictly opt-in — a CAST user with no network still has a fully working system.
 - **Agent behavior is tested, not hoped for.** The `cast eval` harness runs an agent-behavior corpus mined from real failures — with LLM-judge graders and `pass@k`.
-- **<!-- CAST_TEST_COUNT -->2397<!-- /CAST_TEST_COUNT --> BATS test cases** proving the guards work — including tests that *prove destructive ops refuse*. Runs on macOS and Ubuntu.
+- **<!-- CAST_TEST_COUNT -->2398<!-- /CAST_TEST_COUNT --> BATS test cases** proving the guards work — including tests that *prove destructive ops refuse*. Runs on macOS and Ubuntu.
 
 ---
 
@@ -159,7 +159,7 @@ The recorded **model tiering** shows the discipline directly: Haiku does the mos
 
 The subtraction thesis, turned on CAST itself: when Claude Code ships a native equivalent, adopt it and delete the bespoke code. CAST has run that audit adversarially and reports the verdict plainly — because honesty about what melts is the pitch.
 
-**Melts into native** (and CAST says so): demand-loaded skills (<!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> SKILL.md dirs, 100% native loader), the MCP adapter, the agent roster + model tiering (<!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents, all native frontmatter), `cast feature` (a native Workflow), the statusline, backup/DR (already delegated to Litestream continuous replication, with off-the-shelf snapshot tooling for the rest), the provenance chain's tamper-evidence (git is the canonical Merkle chain). Each is content or convenience over a native seam.
+**Melts into native** (and CAST says so): demand-loaded skills (<!-- CAST_SKILL_COUNT -->18<!-- /CAST_SKILL_COUNT --> SKILL.md dirs, 100% native loader), the MCP adapter, the agent roster + model tiering (<!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents, all native frontmatter), `cast feature` (a native Workflow), the statusline, backup/DR (already delegated to Litestream continuous replication, with off-the-shelf snapshot tooling for the rest), the provenance chain's tamper-evidence (git is the canonical Merkle chain). Each is content or convenience over a native seam.
 
 **CAST-forever** — the thin, genuine residual: the **governance-semantic content** of the record and its **cross-surface joins**. No single off-the-shelf plugin gives you `dispatch_decisions` outcomes joined to per-agent cost, per-session spend, and incident recall in *one* sovereign schema, because producing those events means reimplementing CAST's governance — at which point the plugin *is* CAST. And the honesty constraint rendered *executable*: write-guards that inspect a file's body to block a README whose stat badge contradicts the real repo, and path-tier `rm` specificity that native glob permissions can't express.
 
@@ -274,7 +274,7 @@ Runtime installs to `~/.claude/` — agents, memory, plans, `cast.db`, scripts.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->207<!-- /CAST_TEST_FILE_COUNT --> CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->2397<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
+<!-- CAST_TEST_FILE_COUNT -->207<!-- /CAST_TEST_FILE_COUNT --> CAST-authored BATS test files (<!-- CAST_TEST_COUNT -->2398<!-- /CAST_TEST_COUNT --> test cases) covering hooks, database migrations, guard logic (including **proving destructive ops refuse**), event emission, and memory persistence. Every test isolates to a temp HOME and stubs GUI side effects — a HARD RULE born from a wipe. BATS installs via package manager (`brew install bats-core` / `apt-get install bats-core`). Run with `bash tests/run.sh` (the CI-glob runner; plain `bats tests/` is non-recursive and skips subdirectory tests). **Never run the suite against your real `~/.claude`.**
 
 ---
 
@@ -341,6 +341,6 @@ MIT — see [LICENSE](LICENSE). Built by [Edward Kubiak](https://github.com/ek33
 ## Stats
 
 <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents |
-<!-- CAST_TEST_COUNT -->2397<!-- /CAST_TEST_COUNT --> test cases |
+<!-- CAST_TEST_COUNT -->2398<!-- /CAST_TEST_COUNT --> test cases |
 <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> commands |
-<!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> skills
+<!-- CAST_SKILL_COUNT -->18<!-- /CAST_SKILL_COUNT --> skills

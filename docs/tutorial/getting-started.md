@@ -33,7 +33,7 @@ Expected output:
 
   ✓ Installed <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents -> ~/.claude/agents/
   ✓ Installed <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash commands -> ~/.claude/commands/
-  ✓ Installed <!-- CAST_SKILL_COUNT -->17<!-- /CAST_SKILL_COUNT --> skills -> ~/.claude/skills/
+  ✓ Installed <!-- CAST_SKILL_COUNT -->18<!-- /CAST_SKILL_COUNT --> skills -> ~/.claude/skills/
   ✓ Installed hook scripts -> ~/.claude/scripts/
   ✓ Installed 9 rules -> ~/.claude/rules/
   ✓ Wired settings.json (hooks, permissions)

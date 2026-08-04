@@ -5,7 +5,8 @@
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80",
     "MCP_CONNECTION_NONBLOCKING": "true",
     "CLAUDE_CODE_SCRIPT_CAPS": "100",
-    "ATTEST_ENFORCE_AGENTS": "backend-writer,frontend-writer,bash-specialist"
+    "ATTEST_ENFORCE_AGENTS": "backend-writer,frontend-writer,bash-specialist",
+    "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION": "200"
   },
   "feedbackSurveyRate": 0,
   "cleanupPeriodDays": 30,
