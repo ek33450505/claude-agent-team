@@ -22,6 +22,11 @@ fi
 # would cause a re-read of HEAD to return a SHA that was never pushed).
 PUSH_SHA=$(git rev-parse HEAD)
 
+# Audit-log the escape-hatch use (CAST_PUSH_OK=1) before either push path below —
+# records regardless of which branch is taken. Never fail the push if logging fails.
+mkdir -p "$HOME/.claude/logs" 2>/dev/null || true
+printf '%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$BRANCH" "$PUSH_SHA" >>"$HOME/.claude/logs/cast-push-audit.log" 2>/dev/null || true
+
 # Set upstream if none is configured; otherwise plain push.
 if ! git rev-parse --abbrev-ref "@{u}" &>/dev/null; then
   CAST_PUSH_OK=1 git push --set-upstream origin "$BRANCH" 2>&1 || {

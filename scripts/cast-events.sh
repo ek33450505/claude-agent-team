@@ -292,6 +292,7 @@ try:
     window_min = int(sys.argv[4])
 except (ValueError, IndexError):
     window_min = 120
+window_min = min(max(window_min, 1), 1440)   # clamp: 1-min floor, 24h ceiling — an unbounded window lets a stale approval satisfy the gate
 db_path = sys.argv[5]
 required = sys.argv[6:]
 

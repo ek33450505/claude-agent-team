@@ -101,18 +101,21 @@ At task end, write key findings:
 bash ~/.claude/scripts/cast-memory-write.sh "security" "feedback" "<finding-name>" "<finding-content>" --project "$(basename $PWD)"
 ```
 
-## Mandatory Final Step — Approval Marker
+## Mandatory Final Step — Approval Marker (orchestrated dispatch only)
 
-Before returning your Status block, write the approval marker to the CAST state store:
+Write the approval marker to the CAST state store **only when you are running under orchestration** — that is, when `TASK_ID` is set. In ad-hoc / manual (non-orchestrated) dispatch, `TASK_ID` is unset: do **NOT** write the marker. A reviewer that records its own "approved" verdict with no separate approver trips the harness self-approval guard, and the commit agent's security gate has a session-scoped `agent_runs` fallback that does not need this record. In that case, state your APPROVE / BLOCKED verdict as text in your Status block instead.
+
+Before returning your Status block:
 
 ```bash
-source ~/.claude/scripts/cast-events.sh
-cast_write_review "${TASK_ID:-batch-manual}" "security" "approved" "Security review complete" ""
-cast_derive_state "${TASK_ID:-batch-manual}"
+if [ -n "${TASK_ID:-}" ]; then
+  source ~/.claude/scripts/cast-events.sh
+  cast_write_review "$TASK_ID" "security" "approved" "Security review complete" ""
+  cast_derive_state "$TASK_ID"
+fi
 ```
 
-If your decision is BLOCKED (critical/high findings that must be fixed), use `"rejected"`.
-This step is NOT optional. The commit agent's security gate reads this record. Without it, the gate blocks.
+If your decision is BLOCKED (critical/high findings that must be fixed), use `"rejected"` instead of `"approved"` (still only when `TASK_ID` is set). This marker is mandatory **under orchestration** — the commit agent's security gate reads it; without it the gate blocks. Under ad-hoc dispatch, your text verdict is the record.
 
 **Supply-chain hard gates (set `"rejected"` and `Status: BLOCKED` when ANY of the following are true):**
 - trufflehog `--only-verified` reports at least one verified (live, confirmed) secret
