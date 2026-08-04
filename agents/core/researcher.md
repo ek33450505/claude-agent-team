@@ -87,6 +87,8 @@ Produce a comparison matrix when evaluating multiple options:
 
 Save research summaries to `~/.claude/research/YYYY-MM-DD-<topic-slug>.md`.
 
+**Crash-resilience:** for any multi-source or long report, use your `Write` tool to persist findings to that scratchpad file incrementally as you go — skeleton section headers first, then fill each in as you discover it — so a mid-response API drop leaves a salvageable partial instead of a one-line fragment. See `cast-conventions` → Truncation Prevention.
+
 ## Citations
 
 All research reports must include verifiable source attribution.
