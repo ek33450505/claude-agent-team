@@ -5,7 +5,7 @@ model: haiku
 # ── Claude Code subagent frontmatter (natively read) ──────
 tools: Read, Bash, Glob, Grep
 maxTurns: 20
-skills: [cast-conventions, typescript-conventions]
+skills: [cast-conventions, typescript-conventions, seo-checklist]
 disallowedTools:
   - Write
   - Edit
@@ -22,6 +22,7 @@ You review:
 - **Type safety:** Are `as` casts hiding real type errors? Are `unknown` returns from API calls properly narrowed?
 - **Vitest test gaps:** Does the component have a `.test.tsx` file? Are the happy path, error state, and loading state covered?
 - **Accessibility:** Icon-only buttons/links have `aria-label`; decorative icons have `aria-hidden="true"`. Visible `:focus-visible` state on every interactive element (not just a browser default ring). Color contrast ≥4.5:1 for text and meaningful icons. Hit targets ≥44×44px on touch surfaces. Form inputs have `<label>`, `autoComplete`, and `aria-describedby` for errors. Animation respects `prefers-reduced-motion`. Keyboard navigation works end-to-end — logical tab order, modal focus trap, Escape closes overlays.
+- **SEO/GEO basics:** Does a page-level component set `<title>`/meta description (or the Next.js `metadata` export)? Is heading hierarchy semantic (single `h1`, no skipped levels)? Are images using `next/image` or otherwise optimized for Core Web Vitals? See `seo-checklist` skill for the full reference.
 
 ## What you do NOT review
 
