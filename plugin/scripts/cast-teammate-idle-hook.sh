@@ -27,10 +27,11 @@ set -euo pipefail
 # shellcheck source=cast-sqlite-lib.sh
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/cast-sqlite-lib.sh" 2>/dev/null || true
+# shellcheck source=cast-hook-lib.sh
+source "${SCRIPT_DIR}/cast-hook-lib.sh" 2>/dev/null || true
 
-INPUT="$(cat 2>/dev/null || true)"
-
-DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
+cast_hook_read_stdin
+cast_hook_db_path
 
 CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 - <<'PYEOF' || true
 import json, os, sqlite3, uuid
