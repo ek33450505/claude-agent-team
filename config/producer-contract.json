@@ -18,19 +18,19 @@
     },
     {
       "table": "agent_truncations",
-      "writers": ["cast-subagent-stop-hook.sh:649"],
+      "writers": ["cast_subagent_stop.py:964"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "agent_protocol_violations",
-      "writers": ["cast-subagent-stop-hook.sh:1118"],
+      "writers": ["cast_subagent_stop.py:1469"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "quality_gates",
-      "writers": ["cast-subagent-stop-hook.sh:660", "cast-subagent-stop-hook.sh:893", "write-guards.py:130"],
+      "writers": ["cast_subagent_stop.py:1219", "orchestrate-dispatch.py:139", "write-guards.py:130"],
       "cadence": "per_agent_run",
       "status": "live",
       "notes": "gate_type populated from 2026-07-03"
@@ -63,7 +63,7 @@
       "table": "routing_events",
       "writers": [
         "cast-user-prompt-hook.sh:109",
-        "cast-duration-check.sh:123",
+        "cast_subagent_stop.py:1549",
         "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"
       ],
       "cadence": "per_event",
@@ -83,7 +83,7 @@
     },
     {
       "table": "file_writes",
-      "writers": ["cast-post-tool.py:409"],
+      "writers": ["cast-post-tool.py:333"],
       "cadence": "per_tool_call",
       "status": "live",
       "notes": "run_id attributable from 2026-07-03"
@@ -96,7 +96,7 @@
     },
     {
       "table": "completeness_events",
-      "writers": ["cast-response-completeness-hook.sh:202"],
+      "writers": ["cast_subagent_stop.py:1025"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -156,7 +156,7 @@
     },
     {
       "table": "incidents",
-      "writers": ["cast-incident-record.sh:145", "cast-abandon-stale-runs.py:137"],
+      "writers": ["cast_subagent_stop.py:1713", "cast-abandon-stale-runs.py:137"],
       "cadence": "per_event",
       "status": "live"
     },
