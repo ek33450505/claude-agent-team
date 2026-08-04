@@ -62,7 +62,7 @@ Verbose per-file enumeration (e.g., "src/auth.ts (142 lines)", "src/utils.ts (88
 
 ## Model naming convention for haiku agents
 
-> All haiku agents use `model: haiku` in frontmatter (bare form — 13 agents verified in `agents/core/`). When authoring or editing agent frontmatter, use `model: haiku` — never `haiku-3`, `claude-haiku-3`, or `claude-haiku-4-5`. If a fully-qualified string is required by the API, use `claude-haiku-4.5` (dotted, matching CLAUDE.md registry), but the bare `model: haiku` is the established repo convention.
+> All haiku agents use `model: haiku` in frontmatter (bare form — 16 agents verified in `agents/core/`). When authoring or editing agent frontmatter, use `model: haiku` — never `haiku-3`, `claude-haiku-3`, or `claude-haiku-4-5`. If a fully-qualified string is required by the API, use `claude-haiku-4.5` (dotted, matching CLAUDE.md registry), but the bare `model: haiku` is the established repo convention.
 
 Note: `thinking_budget:` frontmatter was removed in CAST v8 as dead code — Claude Code does not read this field. Use native `effort:` instead for compute control.
 

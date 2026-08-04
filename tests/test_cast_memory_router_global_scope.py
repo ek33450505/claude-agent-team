@@ -26,7 +26,6 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 # Import after path setup
-import cast_db  # noqa: E402
 
 
 def _import_router():
@@ -446,7 +445,6 @@ class TestRetrieveGlobalMainMode(unittest.TestCase):
 
     def test_mode_choices_include_retrieve_global(self):
         """The --mode argument must accept 'retrieve-global' without raising SystemExit."""
-        import argparse
         # Rebuild parser using argparse to simulate the check; easier: call main() with --help
         # and look for retrieve-global. Instead, test via retrieve_record_global directly.
         # We verify choices by checking the router accepts the mode via retrieve_record_global.

@@ -13,7 +13,6 @@ haiku appropriately.
 Exit 0 = success (includes INFO/insufficient-data and healthy-trend cases).
 Exit 1 = error, or WARN (recent-week opus% has not meaningfully improved).
 """
-import os
 import sys
 from pathlib import Path
 

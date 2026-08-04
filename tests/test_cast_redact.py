@@ -7,7 +7,6 @@ Covers:
   SLACK_WEBHOOK — hooks.slack.com/... → [SLACK_WEBHOOK]
 """
 import importlib.util
-import sys
 import unittest
 from pathlib import Path
 
