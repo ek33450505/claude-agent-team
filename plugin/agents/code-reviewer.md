@@ -76,18 +76,25 @@ Concerns: [required if DONE_WITH_CONCERNS or BLOCKED]
 - Suggestions: [count, or "none"]
 ```
 
-## Mandatory Final Step — Approval Marker
+## Mandatory Final Step — Approval Marker (orchestrated dispatch only)
 
-Before returning your Status block, write the approval marker to the CAST state store:
+Write the approval marker to the CAST state store **only when you are running under orchestration** — that is, when `TASK_ID` is set. In ad-hoc / manual (non-orchestrated) dispatch, `TASK_ID` is unset: do **NOT** write the marker. A reviewer that records its own "approved" verdict with no separate approver trips the harness self-approval guard, and the commit agent's approval gate has a session-scoped `agent_runs` fallback that does not need this record. In that case, state your APPROVE / BLOCK verdict as text in your Status block instead.
+
+Before returning your Status block:
 
 ```bash
-source ~/.claude/scripts/cast-events.sh
-cast_write_review "${TASK_ID:-batch-manual}" "code-reviewer" "approved" "Review complete" ""
-cast_derive_state "${TASK_ID:-batch-manual}"
+if [ -n "${TASK_ID:-}" ]; then
+  source ~/.claude/scripts/cast-events.sh
+  cast_write_review "$TASK_ID" "code-reviewer" "approved" "Review complete" ""
+  cast_derive_state "$TASK_ID"
+fi
 ```
 
-If your decision is to BLOCK (critical issues found), use `"rejected"` instead of `"approved"`.
-This step is NOT optional. The commit agent's approval gate reads this record. Without it, the gate blocks.
+If your decision is to BLOCK (critical issues found), use `"rejected"` instead of `"approved"` (still only when `TASK_ID` is set). This marker is mandatory **under orchestration** — the commit agent's approval gate reads it; without it the gate blocks. Under ad-hoc dispatch, your text verdict is the record.
+
+## Verify, Don't Assert
+
+Do **not** assert whether a test file is discovered, collected, or run based on its path shape or a config file you read (for example, claiming a dynamic-route / bracket dir such as `app/facilities/[slug]/page.test.tsx` is skipped by the runner). Either **verify by running the collector** (`npx vitest list <path>` or `npx jest --listTests`) or mark the point "unverified — needs test-runner" and do **NOT** issue a BLOCK on it. A confidently-wrong discovery claim causes false BLOCKs and erodes trust in the gate.
 
 ## Response Budget
 Keep your final response under **300 tokens**. Return your Status Block and a 1-2 sentence summary. Do not reproduce content from tool outputs.
