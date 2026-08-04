@@ -4,10 +4,12 @@
 #   cast-memory-router.py (hybrid search), cast-session-distiller.py
 #
 # Coverage (surviving tests after orphan script cleanup):
-#   1-3.  cast-memory-embed: --text, --backfill, graceful on Ollama down
-#   4-6.  cast-memory-validate: --check, JSON, --archive-stale
-#   7-8.  cast-memory-router: hybrid search, Ollama fallback
-#   9-11. cast-session-distiller: --dry-run, JSON, feedback pattern → pending candidate
+#   1-5.   cast-memory-embed: --text, --backfill, graceful on Ollama down,
+#          _is_safe_url gating (accepts real URL / rejects external host +
+#          non-http scheme), embed_text short-circuits on unsafe URL
+#   6-8.   cast-memory-validate: --check, JSON, --archive-stale
+#   9-10.  cast-memory-router: hybrid search, Ollama fallback
+#   11-13. cast-session-distiller: --dry-run, JSON, feedback pattern → pending candidate
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -89,6 +91,55 @@ else:
 PYEOF
   assert_success
   assert_output --partial "graceful"
+}
+
+@test "cast-memory-embed: _is_safe_url rejects non-local hosts (SSRF gate)" {
+  local embed_script="$EMBED_PY"
+  run python3 - "$embed_script" <<'PYEOF'
+import sys, importlib.util
+
+src_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("embed", src_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+# The real hardcoded Ollama URL must remain accepted.
+assert mod._is_safe_url(mod.OLLAMA_EMBED_URL) is True, "real OLLAMA_EMBED_URL must stay safe"
+
+# External hosts and non-http(s) schemes must be rejected.
+assert mod._is_safe_url("http://evil.example.com/api/embed") is False, "external host must be rejected"
+assert mod._is_safe_url("file:///etc/passwd") is False, "non-http(s) scheme must be rejected"
+
+print("ok: _is_safe_url gating correct")
+sys.exit(0)
+PYEOF
+  assert_success
+  assert_output --partial "ok: _is_safe_url gating correct"
+}
+
+@test "cast-memory-embed: embed_text short-circuits on unsafe URL without network call" {
+  local embed_script="$EMBED_PY"
+  run python3 - "$embed_script" <<'PYEOF'
+import sys, importlib.util
+
+src_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("embed", src_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+# Point at a non-local host: must be gated before any request is attempted.
+mod.OLLAMA_EMBED_URL = "http://example.com/api/embed"
+
+result = mod.embed_text("test text")
+if result is None:
+    print("graceful: unsafe URL gated, returned None")
+    sys.exit(0)
+else:
+    print("unexpected: got embedding from unsafe URL")
+    sys.exit(1)
+PYEOF
+  assert_success
+  assert_output --partial "graceful: unsafe URL gated"
 }
 
 # ---------------------------------------------------------------------------

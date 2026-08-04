@@ -61,6 +61,12 @@ printf -v _default_install_cmd 'bash %q/install.sh' "$REPO_ROOT"
 INSTALL_CMD="${CAST_POST_MERGE_INSTALL_CMD:-$_default_install_cmd}"
 
 _log "running: $INSTALL_CMD"
+# ACCEPTED-RISK: eval on CAST_POST_MERGE_INSTALL_CMD is intentional, not an
+# oversight. It's the testability seam documented in the header comment above
+# (tests set it to a harmless marker command). Setting this var requires
+# writing to the operator's own environment, which is already local-compromise
+# — the same trust boundary as the other CAST_* escape hatches (e.g.
+# CAST_COMMIT_AGENT, CAST_PUSH_OK). No untrusted/remote input reaches this eval.
 # shellcheck disable=SC2294
 if eval "$INSTALL_CMD" >> "$LOG_FILE" 2>&1; then
   _log "install complete"
