@@ -100,6 +100,45 @@ def _safe_url(url: str) -> str:
         return ""
 
 
+# Cache for the sibling shell tokenizer: None = not yet attempted, {} = attempted
+# and unavailable (don't retry), populated dict = loaded callables.
+_GUARD_TOKENIZER: dict | None = None
+
+
+def _load_guard_tokenizer() -> dict:
+    """Load the shell-aware segment tokenizer from the sibling cast-command-guard.py
+    (issue #343). Reused rather than reimplemented so exfil-pipe detection shares the
+    guard's quote/segment/heredoc-correct parser. Loaded via importlib because the
+    sibling has a hyphenated filename; resolved relative to THIS file so it works both
+    in-repo and installed. Returns {} on any failure — the caller falls back to a naive
+    split, keeping the sentinel fail-open. Import-time safety: cast-command-guard.py has
+    only module-level constants + defs (its main() is __name__-guarded), no side effects."""
+    global _GUARD_TOKENIZER
+    if _GUARD_TOKENIZER is not None:
+        return _GUARD_TOKENIZER
+    _GUARD_TOKENIZER = {}
+    try:
+        import importlib.util
+        guard_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "cast-command-guard.py"
+        )
+        if not os.path.isfile(guard_path):
+            return _GUARD_TOKENIZER
+        spec = importlib.util.spec_from_file_location("cast_command_guard", guard_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _GUARD_TOKENIZER = {
+            "split_segments": mod.split_segments,
+            "tokenize": mod.tokenize,
+            "command_and_args": mod.command_and_args,
+            "basename": mod.basename,
+        }
+    except Exception as e:
+        _log_error(f"guard tokenizer load failed: {e}")
+        _GUARD_TOKENIZER = {}
+    return _GUARD_TOKENIZER
+
+
 # --------------------------------------------------------------------------
 # Classification — returns an "egress event" dict or None if on-machine/safe
 # --------------------------------------------------------------------------
@@ -276,13 +315,63 @@ def _bash_all_targets_loopback(command: str) -> bool:
 
 
 def _bash_network_hits(command: str, policy: dict) -> list:
-    """Coarse, conservative first-pass: which network binaries appear as a
-    command token. TODO(ed): replace with the cast-command-guard.py segment
-    tokenizer for real exfil-pipe detection (`cat secret | curl ...`),
-    loopback-vs-remote host parsing, and FP suppression. This stub only
-    name-matches — it is deliberately NOT an enforcement-grade parser."""
+    """Which network binaries a Bash command invokes as a bare word — as a command,
+    a piped/backgrounded/substituted target, or an argument to a re-exec wrapper.
+    Uses cast-command-guard.py's shell-aware segment tokenizer (issue #343): the
+    command is split into segments (on unquoted | & ; ( ) { newline backtick) and
+    each segment tokenized quote-correctly. Within a segment, leading VAR=
+    assignments are dropped and the command word plus its argument tokens are
+    matched against the network-binary allowlist.
+
+    Scanning the arguments (not the command word alone) keeps recall for a network
+    binary run behind a re-exec wrapper — `nohup curl …`, `env curl …`,
+    `time/command/exec curl …`, `xargs curl`, `find . -exec curl …` — matching the
+    old naive detector. But because `basename()` strips quotes, a network name
+    that lives *inside a quoted string* stays one unmatched token, so a mention
+    like `echo "run curl later"` is correctly NOT flagged — the false-positive
+    suppression issue #343 asked for. Command substitution (`$(curl …)`, backticks)
+    is caught: those are their own segments.
+
+    KNOWN OUT-OF-SCOPE (documented, not silent — mirrors cast-command-guard.py's own
+    evasion callouts): a network binary named *inside a quoted string that is itself
+    re-executed* — `eval "curl …"`, `bash -c "curl …"`, `sh -c "…"` — is NOT
+    detected, because that content stays a single opaque token; recording it would
+    require recursively re-parsing the quoted argument as a command. Advisory-only
+    tool, so this gap is a visible boundary, not an enforcement hole.
+
+    Falls back to the pre-#343 naive whitespace/separator split when the tokenizer
+    can't be loaded. AWARENESS ONLY — feeds the advisory record, no block path.
+    Returns a sorted list of matched command basenames."""
     cmds = policy.get("bash_network_commands", {}).get("commands", [])
-    toks = set()
+    if not cmds:
+        return []
+    toks: set = set()
+
+    tk = _load_guard_tokenizer()
+    if tk:
+        try:
+            for segment in tk["split_segments"](command):
+                tokens = tk["tokenize"](segment)
+                if not tokens:
+                    continue
+                # Drop leading VAR= assignments (so e.g. a PATH=/usr/bin/curl prefix
+                # is not itself matched), then scan the command word AND its args.
+                _assignments, cmd_word, args = tk["command_and_args"](tokens)
+                scan = ([cmd_word] if cmd_word else []) + args
+                for tok in scan:
+                    base = tk["basename"](tok)
+                    if base in cmds:
+                        toks.add(base)
+            return sorted(toks)
+        except Exception as e:
+            # Never let a parser edge case break the fail-open sentinel — fall
+            # through to the naive split below.
+            _log_error(f"tokenizer parse failed, using naive fallback: {e}")
+            toks.clear()
+
+    # Fallback (pre-#343 behavior): coarse name-match on a whitespace/separator
+    # split. Broader (may false-positive on a network name used as an argument),
+    # but never misses a real command-word hit.
     for raw in command.replace("|", " ").replace("&", " ").replace(";", " ").split():
         base = os.path.basename(raw.strip("'\"`"))
         if base in cmds:
