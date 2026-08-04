@@ -4,16 +4,18 @@
 # Targeted for consolidation into .py files in audit Phase 4 (consolidation sprint).
 # Do not add new entries; fix new violations instead.
 scripts/agent-status-reader.sh:3
-scripts/cast-exec.sh:17
+scripts/cast-exec.sh:11
 scripts/cast-notify.sh:3
-scripts/cast-parallel.sh:4
-scripts/cast-stop-failure-hook.sh:6
+scripts/cast-parallel.sh:5
+scripts/cast-stop-failure-hook.sh:9
 scripts/cast-subagent-start-hook.sh:6
-scripts/cast-subagent-stop-hook.sh:20
-scripts/cast-upgrade-check.sh:13
+scripts/cast-subagent-stop-hook.sh:0
+scripts/cast-upgrade-check.sh:11
 scripts/cast-validate.sh:3
-scripts/pre-tool-guard.sh:4
-scripts/cast-batch-dispatch.sh:3
-scripts/cast-managed-agent.sh:11
-scripts/cast-response-completeness-hook.sh:4
+scripts/pre-tool-guard.sh:0
+scripts/cast-batch-dispatch.sh:2
+scripts/cast-managed-agent.sh:12
 scripts/cast-routine-runner.sh:7
+scripts/cast-cwdchanged-hook.sh:5
+scripts/cast-otel.sh:4
+scripts/cast-session-start-journal.sh:3

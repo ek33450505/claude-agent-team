@@ -19,3 +19,9 @@ jobs:
         # No --desktop-path: cast-desktop is absent in CI (UNCHECKED degradation, not a failure).
         # Exit 1 only on NEW violations absent from .github/db-contract-baseline.json.
         run: python3 scripts/cast-db-contract.py --check
+
+      - name: Check producer-contract writers resolve to real files
+        # Fails if any "status":"live" table in config/producer-contract.json points at a
+        # writer that no longer exists on disk (guards the .sh->.py migration drift class
+        # that the 2026-08-04 audit surfaced). Pure static check, no live DB needed.
+        run: python3 scripts/cast-producer-contract-check.py
