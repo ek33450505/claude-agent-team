@@ -20,8 +20,9 @@ _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
 _SCRIPT_PATH = _SCRIPTS_DIR / 'cast-record-review.py'
 
 # Load module via importlib (hyphenated name cannot be imported normally)
-# Set CAST_DB_PATH to a temp location first to avoid any import-time path resolution issues
-os.environ['CAST_DB_PATH'] = tempfile.mktemp(suffix='.db')
+# Set CAST_DB_PATH to a temp location first to avoid any import-time path resolution issues.
+# Use mkdtemp (secure 0700 dir) + a joined name rather than the deprecated, race-prone mktemp.
+os.environ['CAST_DB_PATH'] = os.path.join(tempfile.mkdtemp(prefix='cast-rr-test-'), 'cast.db')
 _spec = importlib.util.spec_from_file_location('cast_record_review', str(_SCRIPT_PATH))
 cast_record_review = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cast_record_review)
