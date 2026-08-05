@@ -85,7 +85,9 @@ class TestSafelistMatch(unittest.TestCase):
 
     def test_matches_noreply_at(self):
         """Should match 'noreply@'."""
-        self.assertTrue(cast_audit._safelist_match("noreply@github.com"))
+        # Use an @example.com address (RFC-2606 reserved, PII-scanner-exempt) that
+        # still contains the 'noreply@' substring under test.
+        self.assertTrue(cast_audit._safelist_match("noreply@example.com"))
 
     def test_matches_user_at_example(self):
         """Should match 'user@example'."""
@@ -93,7 +95,9 @@ class TestSafelistMatch(unittest.TestCase):
 
     def test_matches_at_anthropic(self):
         """Should match '@anthropic'."""
-        self.assertTrue(cast_audit._safelist_match("team@anthropic.com"))
+        # noreply@anthropic.com is PII-scanner-exempt and still contains the
+        # '@anthropic' substring under test.
+        self.assertTrue(cast_audit._safelist_match("noreply@anthropic.com"))
 
     def test_matches_claude_ai(self):
         """Should match 'claude.ai'."""
