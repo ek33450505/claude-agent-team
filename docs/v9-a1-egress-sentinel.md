@@ -85,9 +85,11 @@ never asks, and exits 0 unconditionally.
 ## 7. Scaffolded vs. Ed-builds
 **Scaffolded (works today, advisory/log-only):**
 - `scripts/cast-egress-sentinel.py` — stdin parse, fail-open, 4-surface
-  classification, per-server MCP map, credential-path globbing, coarse bash
-  network-command name-matching, egress-ledger recording, advisory output
-  (record + warn).
+  classification, per-server MCP map, credential-path globbing, shell-aware bash
+  network-command detection (segment/quote-correct via cast-command-guard.py's
+  tokenizer — exfil-pipe + re-exec-wrapper aware, with false-positive suppression
+  for network names inside quoted strings; #343), egress-ledger recording,
+  advisory output (record + warn).
 - `scripts/cast-pretool-dispatch.py` — the unified PreToolUse dispatcher that runs the egress sentinel (the former thin `cast-egress-hook.sh` shim was folded into it; removed v9 S5).
 - `config/egress-policy.json` — starter policy data.
 - Hook registration in `managed-settings.d/25-hooks-security.json` (inert until

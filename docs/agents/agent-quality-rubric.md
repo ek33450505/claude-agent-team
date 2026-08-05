@@ -65,7 +65,7 @@ Scored 2026-08-04 against the same 5 dimensions. Model and Tool Discipline are r
 | db-reader | sonnet | 5 | 4 | 4 | 3 | 4 | **20** | Read-only by tool omission (Write dropped); SELECT-discipline still prompt-level |
 | report-writer | haiku | 4 | 4 | 5 | 3 | 4 | **20** | Multiple report templates; "generate from code, never invent" |
 | pr-reviewer | sonnet | 5 | 5 | 4 | 2 | 4 | **20** | Strong role/workflow; thin on failure-case handling |
-| infra-writer | haiku | 4 | 3 | 4 | 3 | 4 | **18** | Thinnest def — responsibility list, not a numbered workflow; one failure case |
+| infra-writer | haiku | 4 | 5 | 4 | 5 | 4 | **22** | Numbered workflow with artifact-type branches, concrete commands, and four named failure modes with explicit Status routing |
 
 ## Notes
 
@@ -73,4 +73,4 @@ Scored 2026-08-04 against the same 5 dimensions. Model and Tool Discipline are r
 - **The baseline table is 13 rows, not 15.** The v3 target of 15 counted `orchestrator` (since removed — orchestration is now the `/orchestrate` skill run from the main session, not a dispatched agent) and `test-writer` (standalone, still unscored). The 13 baseline rows are the v3 agents that both survived and were scored.
 - **Scoring carried forward** where the agent existed in v2. New/consolidated agents scored against their current definitions.
 - **Roster coverage (2026-08-04):** 26 of the 27 current agents are now scored — the 13 baseline rows above plus the 13 current-roster additions. Only `test-writer` remains unscored.
-- **Honest distribution — do NOT assert a blanket "all agents score 19+".** 25 of the 26 scored agents score ≥19. The sole exception is `infra-writer` at **18**: its definition is a responsibility list rather than a numbered workflow (Workflow = 3) and documents only one failure case (Error = 3). Closing the gap to ≥19 would mean giving it a numbered workflow with decision points and a second named failure-mode fallback.
+- **Honest distribution:** All 26 scored agents now score ≥19. The `infra-writer` restructure (2026-08-04 audit remediation, unit C3) replaced a flat responsibility list with a numbered workflow (Workflow = 5, Error = 5), raising it from 18 to 22.
