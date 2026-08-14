@@ -30,6 +30,9 @@ jobs:
       - name: Blast radius lint
         run: bash scripts/blast-radius-lint.sh
 
+      - name: Source-guard lint
+        run: bash scripts/cast-lint-source-guard.sh
+
       - name: Plugin drift check
         run: bash scripts/check-plugin-drift.sh
 

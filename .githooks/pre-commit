@@ -245,6 +245,11 @@ _lint_blast_radius() {
   bash scripts/blast-radius-lint.sh
 }
 
+# Lint 10 (self): Source guard — unguarded `source <file>` left of `||` under set -e is a violation
+_lint_source_guard() {
+  bash scripts/cast-lint-source-guard.sh
+}
+
 # --- Hook contract validation ---
 # Exit code semantics: 0=all pass, 1=warn-only (benign), 2=errors found.
 # Only block (exit 1) when the validator reports ERRORS (exit 2). Warns let the commit proceed.
@@ -304,9 +309,9 @@ _lint_utcnow || {
   exit 1
 }
 
-# Self-lints: byte-budget, hook-wiring, agent-roster, agent-boilerplate
+# Self-lints: byte-budget, hook-wiring, agent-roster, agent-boilerplate, blast-radius, source-guard
 if [[ "${CAST_SKIP_SELF_LINTS:-0}" == "1" ]]; then
-  echo "[CAST pre-commit] WARNING: CAST_SKIP_SELF_LINTS=1 — self-lints (byte-budget, hook-wiring, agent-roster, agent-boilerplate) skipped. This bypass is for one-time emergencies only." >&2
+  echo "[CAST pre-commit] WARNING: CAST_SKIP_SELF_LINTS=1 — self-lints (byte-budget, hook-wiring, agent-roster, agent-boilerplate, blast-radius, source-guard) skipped. This bypass is for one-time emergencies only." >&2
 else
   self_lint_failed=0
   _lint_byte_budget       || self_lint_failed=1
@@ -314,6 +319,7 @@ else
   _lint_agent_roster      || self_lint_failed=1
   _lint_agent_boilerplate || self_lint_failed=1
   _lint_blast_radius      || self_lint_failed=1
+  _lint_source_guard      || self_lint_failed=1
   if [[ "$self_lint_failed" -ne 0 ]]; then
     echo ""
     echo "ERROR [pre-commit]: One or more self-lints failed. See above for details."
