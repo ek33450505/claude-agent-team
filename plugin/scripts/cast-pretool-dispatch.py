@@ -195,6 +195,7 @@ def _record_dispatch(data):
         # leak unredacted content into cast.db. Still never blocks the dispatch.
         if prompt:
             _redacted = None
+            _exc_name = None
             try:
                 import subprocess as _sp
                 _r = _sp.run(
@@ -205,10 +206,24 @@ def _record_dispatch(data):
                 _out = _r.stdout.strip()
                 if _r.returncode == 0 and _out:
                     _redacted = _out
-            except Exception:
+            except Exception as _exc:
                 _redacted = None
+                _exc_name = type(_exc).__name__
             if _redacted is None:
-                _log_error("dispatch redaction failed — storing [REDACTION_FAILED] marker")
+                # CONTENT-FREE breadcrumb (byte length + exception class + site
+                # only, never the prompt itself) — two 2026-07-02 incidents were
+                # never root-caused because [REDACTION_FAILED] carried no other
+                # detail. Wrapped so breadcrumb construction can never itself
+                # raise on this already-error path.
+                try:
+                    _byte_len = len(prompt.encode("utf-8", errors="replace"))
+                    _log_error(
+                        "dispatch redaction failed — storing [REDACTION_FAILED] marker "
+                        f"(site=dispatch_decisions.prompt input_bytes={_byte_len} "
+                        f"exception={_exc_name or 'none'})"
+                    )
+                except Exception:
+                    pass
                 prompt = "[REDACTION_FAILED]"
             else:
                 prompt = _redacted

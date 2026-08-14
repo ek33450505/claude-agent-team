@@ -768,6 +768,110 @@ def section_trend_alert(conn, repo_root: str, lookback_days: int = 7) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Section 5: Stale Memories
+# ---------------------------------------------------------------------------
+
+_STALE_MEMORIES_LISTED_MAX = 10
+
+
+def section_stale_memories(repo_root: str) -> tuple:
+    """Surface scripts/cast-stale-memories.py findings in the weekly report.
+
+    Reuses the canonical scanner via subprocess — the same invocation shape as
+    `bin/cast doctor` (check 9) and cast-session-start-health.sh — rather than
+    re-implementing the verified_at parse (indented under `metadata:` in the
+    frontmatter; the scanner already handles that gotcha, see its docstring).
+
+    Degrades honestly: any failure to obtain a real count renders as an
+    explicit DEGRADED "could not check", never a false "0 stale" — an absent
+    signal must never read as a clean zero.
+    """
+    proposals = []
+    lines = ["## 5. Stale Memories"]
+
+    # repo_root-relative sibling lookup — same resolution strategy as
+    # _check_push_hatch_audit_gap() and the cast-workflow-model-audit.py lookup
+    # above; no other fallback (keeps this deterministic for callers/tests that
+    # pass an explicit repo_root).
+    scanner = os.path.join(repo_root, 'scripts', 'cast-stale-memories.py')
+
+    def _degraded(reason: str) -> tuple:
+        lines.append("\n### Stale auto-memories: DEGRADED")
+        lines.append(f"- Could not check — {reason}")
+        return "\n".join(lines), proposals
+
+    if not os.path.isfile(scanner):
+        return _degraded(f"scanner not found at {scanner}")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, scanner], capture_output=True, text=True, timeout=15
+        )
+    except Exception as e:
+        return _degraded(f"scanner invocation failed: {e}")
+
+    if result.returncode != 0:
+        err = (result.stderr or '').strip()[-300:]
+        return _degraded(f"scanner exited {result.returncode}" + (f": {err}" if err else ""))
+
+    scanner_lines = result.stdout.splitlines()
+    if not scanner_lines:
+        return _degraded("scanner produced no output")
+
+    try:
+        total = int(scanner_lines[0].strip())
+    except ValueError:
+        return _degraded(f"scanner's count line was not an integer: {scanner_lines[0]!r}")
+
+    entries = []
+    for row in scanner_lines[1:]:
+        parts = row.split("|", 2)
+        if len(parts) < 3:
+            continue
+        filepath, vdate, age_str = parts
+        try:
+            age = int(age_str)
+        except ValueError:
+            continue
+        entries.append((filepath, vdate, age))
+
+    if total > 0 and not entries:
+        return _degraded(f"scanner reported {total} stale but produced 0 parseable entries")
+
+    lines.append("\n### Stale auto-memories: " + ("WATCH" if total else "OK"))
+
+    if total == 0:
+        lines.append("- 0 stale memories (verified_at > 30 days, names specific paths/flags).")
+        return "\n".join(lines), proposals
+
+    entries.sort(key=lambda e: (-e[2], e[0]))
+    shown = entries[:_STALE_MEMORIES_LISTED_MAX]
+    omitted = total - len(shown)
+
+    if len(entries) != total:
+        lines.append(f"- Note: scanner reported {total} but only {len(entries)} entries were "
+                      f"parseable from its output.")
+
+    lines.append(f"- {total} stale memories flagged (verified_at > 30 days, names specific "
+                  f"paths/flags) — top {len(shown)} by age shown"
+                  + (f", {omitted} omitted" if omitted > 0 else "") + ":")
+    for filepath, vdate, age in shown:
+        lines.append(f"  - `{os.path.basename(filepath)}` — verified {vdate}, {age}d ago ({filepath})")
+
+    proposals.append(Proposal(
+        section="5. Stale Memories",
+        title=f"{total} auto-memories overdue for re-verification",
+        evidence=(f"{total} memory files have verified_at > 30d and name a concrete "
+                  f"path/function/flag; oldest is {shown[0][2]}d ago (`{os.path.basename(shown[0][0])}`)"),
+        recommendation="Re-verify each listed memory (confirm the named path/flag/function still "
+                        "exists), bump verified_at, or delete it if superseded.",
+        strength="High" if total >= 20 else "Medium",
+    ))
+
+    return "\n".join(lines), proposals
+
+
+# ---------------------------------------------------------------------------
 # Report assembly
 # ---------------------------------------------------------------------------
 
@@ -779,7 +883,8 @@ def build_report(conn, agents_dir: str, evals_dir: str, audit_log: str, projects
     s2_text, s2_props = section_mine_propose(conn, evals_dir, lookback_days=7)
     s3_text, s3_props = section_friction(conn, audit_log, projects_dir, repo_root, lookback_days=7)
     s4_text, s4_props = section_trend_alert(conn, repo_root, lookback_days=7)
-    all_proposals += s1_props + s2_props + s3_props + s4_props
+    s5_text, s5_props = section_stale_memories(repo_root)
+    all_proposals += s1_props + s2_props + s3_props + s4_props + s5_props
 
     deep_pass = today.day <= 7
     deep_text = ""
@@ -800,6 +905,7 @@ def build_report(conn, agents_dir: str, evals_dir: str, audit_log: str, projects
         "2. Mine→Propose": len([p for p in all_proposals if p.section.startswith("2.")]),
         "3. Friction Mining": len([p for p in all_proposals if p.section.startswith("3.")]),
         "4. Trend→Alert": len([p for p in all_proposals if p.section.startswith("4.")]),
+        "5. Stale Memories": len(s5_props),
     }
     total = sum(counts.values())
 
@@ -813,7 +919,7 @@ def build_report(conn, agents_dir: str, evals_dir: str, audit_log: str, projects
         "\n## Summary\n"
         f"- {total} proposals ({counts['1. Measure→Tune']} measure→tune, "
         f"{counts['2. Mine→Propose']} mine→propose, {counts['3. Friction Mining']} friction, "
-        f"{counts['4. Trend→Alert']} trend)\n"
+        f"{counts['4. Trend→Alert']} trend, {counts['5. Stale Memories']} stale-memories)\n"
     )
 
     # Build proposal detail sections (### Proposal blocks) grouped under their section headers.
@@ -826,6 +932,7 @@ def build_report(conn, agents_dir: str, evals_dir: str, audit_log: str, projects
         section_with_proposals(s2_text, s2_props),
         section_with_proposals(s3_text, s3_props),
         section_with_proposals(s4_text, s4_props),
+        section_with_proposals(s5_text, s5_props),
     ])
 
     table_rows = []
