@@ -275,5 +275,123 @@ This is in the body, not frontmatter.
         self.assertIsNone(result)
 
 
+class TestSectionStaleMemories(unittest.TestCase):
+    """Test section_stale_memories() — reuses cast-stale-memories.py via subprocess.
+
+    Each test points repo_root at a temp dir with a stub scripts/cast-stale-memories.py
+    so scanner output is fully controlled and deterministic, without touching real
+    ~/.claude/projects or depending on the real scanner's own file-scanning logic
+    (that logic has its own dedicated coverage in tests/cast-stale-memories.bats).
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix='cast-rr-stale-test-')
+        self.scripts_dir = os.path.join(self.tmpdir, 'scripts')
+        os.makedirs(self.scripts_dir)
+        self.stub_path = os.path.join(self.scripts_dir, 'cast-stale-memories.py')
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_stub(self, content):
+        with open(self.stub_path, 'w') as f:
+            f.write(content)
+
+    def test_zero_stale_renders_ok(self):
+        """0 stale -> 'OK' header, explicit '0 stale memories' line, no proposals."""
+        self._write_stub("print(0)\n")
+        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        self.assertIn("### Stale auto-memories: OK", text)
+        self.assertIn("0 stale memories", text)
+        self.assertEqual(proposals, [])
+
+    def test_watch_with_entries_lists_files_and_proposes(self):
+        """N stale entries -> 'WATCH' header, all filenames listed, one Proposal."""
+        stub = (
+            "print(3)\n"
+            "print('/fake/proj/memory/a.md|2026-06-01|74')\n"
+            "print('/fake/proj/memory/b.md|2026-06-05|70')\n"
+            "print('/fake/proj/memory/c.md|2026-06-10|65')\n"
+        )
+        self._write_stub(stub)
+        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        self.assertIn("### Stale auto-memories: WATCH", text)
+        self.assertIn("a.md", text)
+        self.assertIn("b.md", text)
+        self.assertIn("c.md", text)
+        self.assertIn("3 stale memories flagged", text)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0].section, "5. Stale Memories")
+        self.assertIn("3 auto-memories", proposals[0].title)
+
+    def test_caps_at_ten_and_states_omitted_count(self):
+        """>10 entries -> only top 10 by age shown, omitted count stated, none silently dropped."""
+        rows = "\n".join(
+            f"print('/fake/proj/memory/entry{i}.md|2026-06-01|{100 - i}')" for i in range(15)
+        )
+        self._write_stub("print(15)\n" + rows + "\n")
+        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        self.assertIn("### Stale auto-memories: WATCH", text)
+        self.assertIn("top 10 by age shown", text)
+        self.assertIn("5 omitted", text)
+        # Oldest 10 (entry0..entry9, ages 100..91) shown; entry10+ (ages 90..86) omitted.
+        self.assertIn("entry0.md", text)
+        self.assertIn("entry9.md", text)
+        self.assertNotIn("entry10.md", text)
+        self.assertEqual(len(proposals), 1)
+
+    def test_watch_notes_partial_parse_mismatch(self):
+        """Some body rows unparseable but not all -> WATCH with an explicit mismatch note."""
+        stub = (
+            "print(3)\n"
+            "print('/fake/proj/memory/a.md|2026-06-01|74')\n"
+            "print('garbage-row-no-pipes')\n"
+            "print('/fake/proj/memory/b.md|2026-06-05|70')\n"
+        )
+        self._write_stub(stub)
+        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        self.assertIn("### Stale auto-memories: WATCH", text)
+        self.assertIn("scanner reported 3 but only 2 entries were", text)
+        self.assertEqual(len(proposals), 1)
+
+    def test_degraded_when_scanner_missing(self):
+        """Scanner file absent -> DEGRADED text, never a false '0 stale'."""
+        # scripts/ exists (setUp) but cast-stale-memories.py was never written.
+        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        self.assertIn("### Stale auto-memories: DEGRADED", text)
+        self.assertIn("Could not check", text)
+        self.assertIn("scanner not found", text)
+        self.assertNotIn("0 stale memories", text)
+        self.assertEqual(proposals, [])
+
+    def test_degraded_when_scanner_exits_nonzero(self):
+        """Scanner crashes (nonzero exit) -> DEGRADED, never a false '0 stale'."""
+        self._write_stub("import sys\nprint('boom', file=sys.stderr)\nsys.exit(1)\n")
+        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        self.assertIn("### Stale auto-memories: DEGRADED", text)
+        self.assertIn("Could not check", text)
+        self.assertIn("exited 1", text)
+        self.assertNotIn("0 stale memories", text)
+        self.assertEqual(proposals, [])
+
+    def test_degraded_when_count_line_not_integer(self):
+        """Malformed count line -> DEGRADED, never a false '0 stale'."""
+        self._write_stub("print('not-a-number')\n")
+        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        self.assertIn("### Stale auto-memories: DEGRADED", text)
+        self.assertIn("Could not check", text)
+        self.assertNotIn("0 stale memories", text)
+        self.assertEqual(proposals, [])
+
+    def test_degraded_when_count_positive_but_no_parseable_rows(self):
+        """Count > 0 but every body row is garbage -> DEGRADED, not a silent '0 shown'."""
+        self._write_stub("print(2)\nprint('garbage-row-no-pipes')\n")
+        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        self.assertIn("### Stale auto-memories: DEGRADED", text)
+        self.assertIn("0 parseable entries", text)
+        self.assertEqual(proposals, [])
+
+
 if __name__ == '__main__':
     unittest.main()
