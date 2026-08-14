@@ -25,8 +25,14 @@ CAST_DB_PATH="${CAST_DB_PATH:-$HOME/.claude/cast.db}"
 
 # shellcheck source=cast-sqlite-lib.sh
 CAST_SCRIPTS_DIR="${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}"
-# shellcheck disable=SC1091
-source "${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh" 2>/dev/null || source "$(dirname "$0")/cast-sqlite-lib.sh" 2>/dev/null || true
+# Existence-checked before sourcing — see cast-guard-lib.sh header (bash 3.2 + set -e
+# makes `source` of a missing file fatal even left-of-`||`).
+_cast_sqlite_lib="${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh"
+[[ -f "$_cast_sqlite_lib" ]] || _cast_sqlite_lib="$(dirname "$0")/cast-sqlite-lib.sh"
+if [[ -f "$_cast_sqlite_lib" ]]; then
+  # shellcheck source=cast-sqlite-lib.sh disable=SC1091
+  source "$_cast_sqlite_lib" 2>/dev/null || true
+fi
 LOG_DIR="${HOME}/.claude/logs"
 REPORTS_DIR="${HOME}/.claude/reports"
 

@@ -2,10 +2,17 @@
 # cast-guard-lib.sh — Shared blast-radius write guard for CAST destructive operations.
 #
 # SOURCED library — must not alter caller shell options (no set -euo pipefail here).
-# Source once at the top of any script that deletes files:
+# Source once at the top of any script that deletes files. Guard existence with
+# [[ -f ]] first — do NOT collapse to `source X 2>/dev/null || source Y 2>/dev/null || true`:
+# under `set -e`, Apple's frozen /bin/bash 3.2 treats `source` of a missing file as
+# fatal even as the left operand of `||`, aborting the whole script instead of
+# falling through (bash 4+ does not have this bug):
 #
-#   source "${CAST_SCRIPTS_DIR}/cast-guard-lib.sh" 2>/dev/null || \
-#     source "$(dirname "$0")/cast-guard-lib.sh" 2>/dev/null || true
+#   _lib="${CAST_SCRIPTS_DIR}/cast-guard-lib.sh"
+#   [[ -f "$_lib" ]] || _lib="$(dirname "$0")/cast-guard-lib.sh"
+#   if [[ -f "$_lib" ]]; then
+#     source "$_lib" 2>/dev/null || true
+#   fi
 #
 # Usage:
 #   cast_declare_blast_radius "/private/tmp/cast-snapshot-" "/tmp/cast-snapshot-"

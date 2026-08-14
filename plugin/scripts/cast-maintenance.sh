@@ -9,11 +9,21 @@ LOG="${CAST_DIR}/logs/maintenance.log"
 
 # shellcheck source=cast-sqlite-lib.sh
 CAST_SCRIPTS_DIR="${CAST_SCRIPTS_DIR:-${CAST_DIR}/scripts}"
-# shellcheck disable=SC1091
-source "${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh" 2>/dev/null || source "$(dirname "$0")/cast-sqlite-lib.sh" 2>/dev/null || true
-# shellcheck source=cast-guard-lib.sh
-# shellcheck disable=SC1091
-source "${CAST_SCRIPTS_DIR}/cast-guard-lib.sh" 2>/dev/null || source "$(dirname "$0")/cast-guard-lib.sh" 2>/dev/null || true
+# Existence-checked before sourcing (do NOT collapse to
+# `source X 2>/dev/null || source Y 2>/dev/null || true`): under `set -e`, bash 3.2
+# treats `source` of a missing file as fatal even left-of-`||` — see cast-guard-lib.sh header.
+_cast_sqlite_lib="${CAST_SCRIPTS_DIR}/cast-sqlite-lib.sh"
+[[ -f "$_cast_sqlite_lib" ]] || _cast_sqlite_lib="$(dirname "$0")/cast-sqlite-lib.sh"
+if [[ -f "$_cast_sqlite_lib" ]]; then
+  # shellcheck source=cast-sqlite-lib.sh disable=SC1091
+  source "$_cast_sqlite_lib" 2>/dev/null || true
+fi
+_cast_guard_lib="${CAST_SCRIPTS_DIR}/cast-guard-lib.sh"
+[[ -f "$_cast_guard_lib" ]] || _cast_guard_lib="$(dirname "$0")/cast-guard-lib.sh"
+if [[ -f "$_cast_guard_lib" ]]; then
+  # shellcheck source=cast-guard-lib.sh disable=SC1091
+  source "$_cast_guard_lib" 2>/dev/null || true
+fi
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG"; }
 
