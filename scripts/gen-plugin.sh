@@ -116,6 +116,7 @@ EXCLUDE_SCRIPTS=(
   cast-lint-orphan-scripts.py
   cast-lint-write-only-tables.py
   cast-lint-source-guard.sh
+  cast-rules-drift.sh
   gen-cast-stats.sh
   gen-ecosystem-versions.sh
   gen-stats.sh
