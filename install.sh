@@ -316,6 +316,8 @@ rm -f "$CLAUDE_DIR/scripts/cast-plugin-install.sh" "$CLAUDE_DIR/scripts/cast-tmu
 rm -f "$CLAUDE_DIR/scripts/sync-ecosystem-readme.sh" "$CLAUDE_DIR/scripts/cast-morning-briefing-sdk.py"
 # v7.5 Phase 7: removed dead reference skills
 rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budget"
+# Remove config retired in v7.5 Phase 6b (config-rot sweep, #152)
+rm -f "$CLAUDE_DIR/config/routing-table.json"
 success "  Scripts installed (including cast_db.py)"
 
 # --- Install managed-settings.d fragments ---

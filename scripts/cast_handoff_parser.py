@@ -11,7 +11,7 @@ CLI (for smoke-testing):
 
 Schema (mirrors schemas/agent-handoff.json):
   REQUIRED: files_changed (comma-list or "none")
-            status        (DONE | DONE_WITH_CONCERNS | BLOCKED)
+            status        (DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT)
             blockers      (text or "none")
   OPTIONAL: agent, key_decisions, next_agent_needs, <any other key: value>
 
@@ -34,11 +34,53 @@ import json
 _HANDOFF_RE = re.compile(r'## Handoff\s*\n([\s\S]+?)(?=\n## |\Z)')
 
 # Required field definitions: field_name → set of allowed values, or None for any non-empty string.
+# KEEP IN SYNC with the inline fallback copy in scripts/cast_subagent_stop.py
+# (_inline_validate_handoff / _INLINE_STATUS_VALUES). The two drifted apart once
+# already — NEEDS_CONTEXT was missing from both from 2026-07-02 to 2026-08-04,
+# logging 41 valid-status agent responses as protocol violations (see
+# agent_protocol_violations, pattern='invalid_value:status=NEEDS_CONTEXT').
+#
+# This duplication is DELIBERATE, not sloppiness — do not "fix" it by merging
+# the two or having the fallback import this module. The inline copy exists
+# specifically for the case where importing THIS module fails (missing file,
+# syntax error, bad sys.path); an import from inside that same fallback would
+# fail for the identical reason it's needed, so it cannot depend on this file
+# at runtime by construction. Parity is enforced by
+# tests/test_cast_handoff_parser.py (TestStatusEnumParity) instead of a shared
+# import — that test is the sync mechanism; keep it passing when either copy
+# changes.
 _REQUIRED_FIELDS: dict = {
     'files_changed': None,  # comma-list or "none" — any non-empty string is valid
-    'status':        {'DONE', 'DONE_WITH_CONCERNS', 'BLOCKED'},
+    'status':        {'DONE', 'DONE_WITH_CONCERNS', 'BLOCKED', 'NEEDS_CONTEXT'},
     'blockers':      None,  # text or "none" — any non-empty string is valid
 }
+
+# Enum values may arrive wrapped in markdown emphasis ("**DONE**") or followed by
+# trailing prose ("BLOCKED (verdict stated as text...)") — agents write these and
+# mean the plain token; the intent is unambiguous. Extract the leading UPPER_SNAKE
+# token before comparing against the allowed set: skip leading whitespace/emphasis
+# markers, then capture a contiguous run of uppercase letters/underscores. This
+# strips a wrapping "_DONE_" -> "DONE" (anchored at start/end only) without eating
+# the internal underscores of DONE_WITH_CONCERNS itself. A value with no leading
+# uppercase token (lowercase prose, pure punctuation, empty) normalizes to '' and
+# is rejected same as before — a genuinely wrong or absent value is still caught.
+_ENUM_TOKEN_RE = re.compile(r'^[\s*_]*([A-Z][A-Z_]*)')
+
+
+def _normalize_enum_value(value: str) -> str:
+    """Return the leading UPPER_SNAKE token from an enum field value, tolerant of
+    surrounding markdown emphasis/whitespace and trailing prose. Returns '' when no
+    such token is found — callers treat '' as not-in-allowed-set.
+
+    The capture group is greedy over [A-Z_]*, so a closing "_" emphasis wrapper
+    (e.g. "_DONE_") is captured along with the token itself ("DONE_") since
+    underscore is also a legal mid-token character (DONE_WITH_CONCERNS). Strip
+    only a TRAILING underscore after capture — every real enum value ends in a
+    letter, so this never truncates a legitimate token, and it correctly reduces
+    "_DONE_WITH_CONCERNS_" -> "DONE_WITH_CONCERNS" (internal underscores untouched).
+    """
+    m = _ENUM_TOKEN_RE.match(value)
+    return m.group(1).rstrip('_') if m else ''
 
 
 def extract_handoff_block(text: str):
@@ -146,8 +188,12 @@ def validate_handoff(text: str) -> dict:
                 'raw_excerpt': raw_excerpt,
             }
 
-        # Enum validation (only for fields with a defined allowed_values set)
-        if allowed_values is not None and value not in allowed_values:
+        # Enum validation (only for fields with a defined allowed_values set).
+        # Tolerant of markdown emphasis / trailing prose around the token (see
+        # _normalize_enum_value) — a genuinely wrong or absent leading token is
+        # still rejected; the raw value (not the normalized token) is reported
+        # below for debuggability.
+        if allowed_values is not None and _normalize_enum_value(value) not in allowed_values:
             return {
                 'block_present': True,
                 'ok': False,

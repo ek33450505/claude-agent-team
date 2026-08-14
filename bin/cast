@@ -17,8 +17,8 @@ CAST_REPO_DIR="${CAST_REPO_DIR:-$(cd "$CAST_BIN_DIR/.." && pwd)}"
 
 # ── Version ──────────────────────────────────────────────────────────────────
 CAST_VERSION="$(cat "${CAST_REPO_DIR}/VERSION" 2>/dev/null || echo "unknown")"
-CAST_SCRIPTS_DIR="${HOME}/.claude/scripts"
-CAST_AGENTS_DIR="${HOME}/.claude/agents"
+CAST_SCRIPTS_DIR="${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}"
+CAST_AGENTS_DIR="${CAST_AGENTS_DIR:-${HOME}/.claude/agents}"
 
 # ── Global flags ─────────────────────────────────────────────────────────────
 CAST_JSON=0
@@ -2387,6 +2387,73 @@ PYEOF
         [ -z "$_at" ] && continue
         printf "    %-20s %d violation(s)\n" "$_at" "$_cnt"
       done <<< "$_apv_out"
+
+      # ── roster vs unclassifiable split (reporting-only) ───────────────────
+      # The write layer is untouched: per Claude Code docs, a dispatch `name`
+      # overwrites agent_type in the hook payload, so a named roster dispatch
+      # is indistinguishable from an ad-hoc/Workflow agent at write time —
+      # filtering writes would silently drop real roster violations. This
+      # re-groups the SAME rows counted above (total already reconciles);
+      # nothing here is suppressed. Roster source = the installed .md files
+      # in CAST_AGENTS_DIR, same source as the "Agents: N installed" check.
+      # Honest degradation: an unreadable/empty roster directory must NEVER
+      # render as "0 roster violations" (indistinguishable from "checked and
+      # clean") — it reports the split as unavailable instead (2026-08-14).
+      # Classification order (working-conventions.md, 2026-08-14 — roster
+      # dispatches SHOULD be named `<agent-type>__<label>`):
+      #   1. agent_type matches an installed agent verbatim (unnamed dispatch).
+      #   2. agent_type contains '__' — the part before the FIRST '__' is
+      #      checked against the roster; a '__' alone is never trusted as
+      #      compliance, only an actual roster match promotes it.
+      #   3. otherwise → unclassifiable.
+      local _apv_roster_ok=0 _apv_roster_count=0
+      if [ -d "$CAST_AGENTS_DIR" ] && [ -r "$CAST_AGENTS_DIR" ]; then
+        _apv_roster_count="$(ls "$CAST_AGENTS_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+        [ "${_apv_roster_count:-0}" -gt 0 ] 2>/dev/null && _apv_roster_ok=1
+      fi
+      if [ "${_apv_roster_ok}" -eq 0 ]; then
+        printf "    %b roster split unavailable — agents directory unreadable or empty (%s); showing ungrouped total only\n" \
+          "$INFO" "$CAST_AGENTS_DIR"
+      else
+        local _apv_roster_total=0 _apv_unclass_total=0
+        local _apv_roster_rows="" _apv_unclass_rows=""
+        while IFS='|' read -r _at _cnt; do
+          [ -z "$_at" ] && continue
+          local _apv_roster_match=0
+          if [ -f "${CAST_AGENTS_DIR}/${_at}.md" ]; then
+            _apv_roster_match=1
+          elif [[ "$_at" == *__* ]]; then
+            # part before the FIRST '__' (bash suffix-strip: %% is longest match,
+            # and '__*' can only start matching at the first '__' occurrence)
+            local _apv_prefix="${_at%%__*}"
+            [ -f "${CAST_AGENTS_DIR}/${_apv_prefix}.md" ] && _apv_roster_match=1
+          fi
+          if [ "${_apv_roster_match}" -eq 1 ]; then
+            _apv_roster_total=$((_apv_roster_total + _cnt))
+            _apv_roster_rows="${_apv_roster_rows}${_at}|${_cnt}"$'\n'
+          else
+            _apv_unclass_total=$((_apv_unclass_total + _cnt))
+            _apv_unclass_rows="${_apv_unclass_rows}${_at}|${_cnt}"$'\n'
+          fi
+        done <<< "$_apv_out"
+        local _apv_roster_glyph="$OK"
+        [ "${_apv_roster_total}" -gt 0 ] && _apv_roster_glyph="$WARN"
+        printf "    %b roster agents: %d flagged (bound by the Status contract)\n" "$_apv_roster_glyph" "$_apv_roster_total"
+        if [ -n "$_apv_roster_rows" ]; then
+          while IFS='|' read -r _at _cnt; do
+            [ -z "$_at" ] && continue
+            printf "        %-20s %d violation(s)\n" "$_at" "$_cnt"
+          done <<< "$_apv_roster_rows"
+        fi
+        printf "    %b unclassifiable (named dispatch or ad-hoc agent): %d flagged — agent_type is the dispatch name, which overwrites the registered subagent_type; cannot attribute to a roster agent\n" \
+          "$INFO" "$_apv_unclass_total"
+        if [ -n "$_apv_unclass_rows" ]; then
+          while IFS='|' read -r _at _cnt; do
+            [ -z "$_at" ] && continue
+            printf "        %-20s %d violation(s)\n" "$_at" "$_cnt"
+          done <<< "$_apv_unclass_rows"
+        fi
+      fi
     fi
 
     # ── code_ref_checks — RETIRED v9 Phase C U7b (writer purged in v9 S5) ───────
@@ -2523,24 +2590,47 @@ PYEOF
     fi
 
     # ── redaction_failures ────────────────────────────────────────────────────
-    # Quiet-pass check: silent on 0 rows; WARN when [REDACTION_FAILED] marker rows found.
+    # Quiet-pass check: silent when no [REDACTION_FAILED] marker rows exist at all.
+    # WARN only on UNRESOLVED incidents markers — resolution_status NOT IN
+    # ('fixed','wont-fix'), the only two statuses this table actually uses
+    # (verified live 2026-08-14; NULL/empty/unknown values count as unresolved,
+    # never assumed triaged — fail loud on unknown state).
+    # Triaged markers (fixed/wont-fix) still surface via a visible OK line
+    # instead of going silent: a WARN with no operator path to clear it short
+    # of deleting the incident row is backwards for a record whose purpose is
+    # durability (an operator triaged 2 rows to wont-fix with full rationale
+    # and the old check stayed red — the only way to clear it was DELETE).
+    # dispatch_decisions has no resolution_status column, so its marker rows
+    # always count toward the WARN — left untouched otherwise.
     # Tables: dispatch_decisions.prompt_snippet, incidents.problem_summary / fix_summary.
-    local _rf_dd _rf_inc _rf_total
+    local _rf_dd _rf_inc_unresolved _rf_inc_unresolved_rc _rf_inc_triaged _rf_inc_triaged_rc _rf_total
     _rf_dd="$(sqlite3 "$CAST_DB_PATH" \
       "SELECT COUNT(*) FROM dispatch_decisions WHERE prompt_snippet = '[REDACTION_FAILED]';" \
       2>/dev/null || echo 0)"
-    _rf_inc="$(sqlite3 "$CAST_DB_PATH" \
-      "SELECT COUNT(*) FROM incidents WHERE problem_summary = '[REDACTION_FAILED]' OR fix_summary = '[REDACTION_FAILED]';" \
-      2>/dev/null || echo 0)"
+    _rf_inc_unresolved="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COUNT(*) FROM incidents WHERE (problem_summary = '[REDACTION_FAILED]' OR fix_summary = '[REDACTION_FAILED]') \
+       AND COALESCE(resolution_status,'') NOT IN ('fixed','wont-fix');" \
+      2>&1)"
+    _rf_inc_unresolved_rc=$?
+    _rf_inc_triaged="$(sqlite3 "$CAST_DB_PATH" \
+      "SELECT COUNT(*) FROM incidents WHERE (problem_summary = '[REDACTION_FAILED]' OR fix_summary = '[REDACTION_FAILED]') \
+       AND COALESCE(resolution_status,'') IN ('fixed','wont-fix');" \
+      2>&1)"
+    _rf_inc_triaged_rc=$?
     _rf_dd="${_rf_dd:-0}"
-    _rf_inc="${_rf_inc:-0}"
-    _rf_total=0
-    if [[ "${_rf_dd}" =~ ^[0-9]+$ ]] && [[ "${_rf_inc}" =~ ^[0-9]+$ ]]; then
-      _rf_total=$(( _rf_dd + _rf_inc ))
-    fi
-    if [ "${_rf_total:-0}" -gt 0 ] 2>/dev/null; then
-      printf "%b redaction failures recorded — cast-redact fell back to marker; inspect why (dispatch_decisions: %d, incidents: %d)\n" \
-        "$WARN" "$_rf_dd" "$_rf_inc"
+    [[ "${_rf_dd}" =~ ^[0-9]+$ ]] || _rf_dd=0
+    if [ "${_rf_inc_unresolved_rc}" -ne 0 ] || [ "${_rf_inc_triaged_rc}" -ne 0 ] \
+       || ! [[ "${_rf_inc_unresolved}" =~ ^[0-9]+$ ]] || ! [[ "${_rf_inc_triaged}" =~ ^[0-9]+$ ]]; then
+      printf "%b redaction-failure check: incidents query failed — unable to verify triage status (db error)\n" "$INFO"
+    else
+      _rf_total=$(( _rf_dd + _rf_inc_unresolved ))
+      if [ "${_rf_total}" -gt 0 ]; then
+        printf "%b redaction failures recorded — cast-redact fell back to marker; inspect why (dispatch_decisions: %d, incidents unresolved: %d)\n" \
+          "$WARN" "$_rf_dd" "$_rf_inc_unresolved"
+      elif [ "${_rf_inc_triaged}" -gt 0 ]; then
+        printf "%b redaction failures triaged — %d incident marker row(s) resolved (fixed/wont-fix); no action needed\n" \
+          "$OK" "$_rf_inc_triaged"
+      fi
     fi
   fi
 

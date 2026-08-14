@@ -109,5 +109,5 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 
 **Do NOT dispatch** from orchestrating session if change was made by backend-writer, frontend-writer, or debugger — these self-dispatch code-reviewer internally.
 
-**Parallel post-chain note:** When routing-table post_chain fires code-reviewer and security in parallel, both run independently. If either returns BLOCKED, surface to user before dispatching commit.
+**Parallel review note:** When the orchestrator runs code-reviewer and security on the same unit (e.g. in parallel), each runs independently. If either returns BLOCKED, surface to the user before dispatching commit.
 

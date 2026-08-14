@@ -792,6 +792,27 @@ def _load_db_write():
 # for the case where cast_handoff_parser cannot be imported.
 _HANDOFF_RE = re.compile(r"## Handoff\s*\n([\s\S]+?)(?=\n## |\Z)")
 
+# KEEP IN SYNC with scripts/cast_handoff_parser.py's _REQUIRED_FIELDS['status'] /
+# _normalize_enum_value. The two drifted apart once already — NEEDS_CONTEXT was
+# missing from both from 2026-07-02 to 2026-08-04, logging 41 valid-status agent
+# responses as protocol violations (see agent_protocol_violations,
+# pattern='invalid_value:status=NEEDS_CONTEXT').
+#
+# This duplication is DELIBERATE, not sloppiness — do not "fix" it by merging
+# the two or adding `from cast_handoff_parser import ...` here. This whole
+# function exists specifically for the case where importing cast_handoff_parser
+# fails (see _load_validate_handoff below); an import from inside this fallback
+# would fail for the identical reason it's needed, so it cannot depend on that
+# module at runtime by construction. Parity is enforced by
+# tests/test_cast_handoff_parser.py (TestStatusEnumParity) instead of a shared
+# import — that test is the sync mechanism; keep it passing when either copy
+# changes.
+_INLINE_STATUS_VALUES = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT")
+# Same tolerant-matching rule as cast_handoff_parser._ENUM_TOKEN_RE: leading
+# UPPER_SNAKE token only, so "**DONE** — notes" / "BLOCKED (reason...)" match
+# while a genuinely wrong or absent value is still rejected.
+_INLINE_ENUM_TOKEN_RE = re.compile(r"^[\s*_]*([A-Z][A-Z_]*)")
+
 
 def _inline_validate_handoff(text: str) -> dict:
     m = _HANDOFF_RE.search(text)
@@ -811,10 +832,16 @@ def _inline_validate_handoff(text: str) -> dict:
                     "violation": "handoff_schema_violation",
                     "pattern": f"missing_field:{req}", "detail": f"Missing {req}",
                     "raw_excerpt": block[:500]}
-    if fields.get("status") not in ("DONE", "DONE_WITH_CONCERNS", "BLOCKED"):
+    status_raw = fields.get("status", "")
+    status_m = _INLINE_ENUM_TOKEN_RE.match(status_raw)
+    # .rstrip("_") drops a captured closing "_" emphasis wrapper (e.g. "_DONE_" ->
+    # "DONE_" -> "DONE") without touching internal underscores — see the matching
+    # comment on cast_handoff_parser._normalize_enum_value.
+    status_token = status_m.group(1).rstrip("_") if status_m else ""
+    if status_token not in _INLINE_STATUS_VALUES:
         return {"block_present": True, "ok": False,
                 "violation": "handoff_schema_violation",
-                "pattern": f'invalid_value:status={fields.get("status", "")}',
+                "pattern": f'invalid_value:status={status_raw}',
                 "detail": "Invalid status value", "raw_excerpt": block[:500]}
     return {"block_present": True, "ok": True, "violation": None,
             "pattern": None, "detail": None, "raw_excerpt": block[:500]}
@@ -852,23 +879,25 @@ def _get_redact_module():
     return None
 
 
-def redact_excerpt(text: str) -> Optional[str]:
-    """Redact PII in ``text`` in-process (cast-redact.py analyze_regex/redact_regex).
-
-    Falls back to the old subprocess ``cast-redact.py --engine regex`` mechanism if
-    the in-process import fails. Returns the redacted text, or None on total failure
-    so the CALLER chooses the policy — stage-6 handoff is fail-OPEN (keep original);
-    stage-15 incidents (later) is fail-closed ([REDACTION_FAILED]).
+def _redact_excerpt_verbose(text: str):
+    """Core of redact_excerpt() — also returns the class name of whichever
+    exception was last encountered internally (or None), for the fail-closed
+    diagnostic breadcrumb in ``_redact_fail_closed``. Internal use only: never
+    returns or logs the exception MESSAGE (it could contain fragments of the
+    input) — only its class name. Behavior/control-flow is identical to the
+    former single-return redact_excerpt() body; nothing here changes what gets
+    redacted or when None is returned.
     """
     if not text:
-        return text
+        return text, None
+    last_exc: Optional[str] = None
     mod = _get_redact_module()
     if mod is not None:
         try:
             entities = mod.analyze_regex(text, [])
-            return mod.redact_regex(text, entities, "redact")
-        except Exception:
-            pass
+            return mod.redact_regex(text, entities, "redact"), None
+        except Exception as exc:
+            last_exc = type(exc).__name__
     try:
         res = subprocess.run(
             ["python3", os.path.join(_HOOK_DIR, "cast-redact.py"), "--engine", "regex"],
@@ -877,10 +906,22 @@ def redact_excerpt(text: str) -> Optional[str]:
             timeout=5,
         )
         if res.returncode == 0:
-            return json.loads(res.stdout.decode()).get("redacted_text", text)
-    except Exception:
-        pass
-    return None
+            return json.loads(res.stdout.decode()).get("redacted_text", text), None
+    except Exception as exc:
+        last_exc = type(exc).__name__
+    return None, last_exc
+
+
+def redact_excerpt(text: str) -> Optional[str]:
+    """Redact PII in ``text`` in-process (cast-redact.py analyze_regex/redact_regex).
+
+    Falls back to the old subprocess ``cast-redact.py --engine regex`` mechanism if
+    the in-process import fails. Returns the redacted text, or None on total failure
+    so the CALLER chooses the policy — stage-6 handoff is fail-OPEN (keep original);
+    stage-15 incidents (later) is fail-closed ([REDACTION_FAILED]).
+    """
+    result, _exc_name = _redact_excerpt_verbose(text)
+    return result
 
 
 # ── Stage 3: dispatch_decisions outcome update (F2 record→decision loop) ─────
@@ -1294,18 +1335,34 @@ def _run_script_module(rel_name: str, env_overrides: dict) -> None:
                 os.environ[k] = old
 
 
-def _redact_fail_closed(text: str) -> str:
+def _redact_fail_closed(text: str, site: str) -> str:
     """FAIL-CLOSED redaction for the incidents surface (stage 15).
 
     On ANY redaction failure, returns the ``[REDACTION_FAILED]`` marker — NEVER the
     raw text. Empty text passes through unchanged (nothing to leak). Contrast with
     stage 6/16, which are fail-OPEN (keep the original on failure).
+
+    ``site`` identifies the caller (e.g. "problem_summary" / "fix_summary") for the
+    diagnostic breadcrumb below. Two 2026-07-02 incidents landed with
+    resolution_status='open' and were never root-caused because the marker
+    overwrote both problem_summary and fix_summary with no other detail. The
+    breadcrumb is CONTENT-FREE by construction — byte length, exception class name,
+    and the site label only; never the input text, a hash of it, or a sample of it.
+    Breadcrumb construction is itself wrapped so it can never raise on this
+    already-error path.
     """
     if not text:
         return text
-    redacted = redact_excerpt(text)
+    redacted, exc_name = _redact_excerpt_verbose(text)
     if redacted is None or redacted == "":
-        _log_error("WARN: redaction failed — storing [REDACTION_FAILED] marker")
+        try:
+            byte_len = len(text.encode("utf-8", errors="replace"))
+            _log_error(
+                "WARN: redaction failed — storing [REDACTION_FAILED] marker "
+                f"(site={site} input_bytes={byte_len} exception={exc_name or 'none'})"
+            )
+        except Exception:
+            pass  # breadcrumb construction must never raise on this already-error path
         return "[REDACTION_FAILED]"
     return redacted
 
@@ -1703,8 +1760,8 @@ def stage15_incident_record(ctx: Ctx) -> None:
         """Redact summaries (fail-closed) and insert one incidents row (bound params)."""
         import uuid as _uuid
 
-        p_sum = _redact_fail_closed(problem_summary)
-        f_sum = _redact_fail_closed(fix_summary)
+        p_sum = _redact_fail_closed(problem_summary, site="problem_summary")
+        f_sum = _redact_fail_closed(fix_summary, site="fix_summary")
         occurred_at = ctx.ts_iso
         c = None
         try:

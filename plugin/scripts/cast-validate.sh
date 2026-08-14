@@ -1,9 +1,10 @@
 #!/bin/bash
 # cast-validate.sh — CAST system integrity checker v2.1.0
-# Checks: hook wiring, agent frontmatter, routing table schema,
-#         CLAUDE.md directives, CAST directory structure, cast-events.sh installed,
-#         agent-groups.json, cast-session-end.sh wiring, routing-proposals.json schema,
-#         security post_chain wiring, local-first readiness.
+# Checks: hook wiring, agent frontmatter, CLAUDE.md directives,
+#         CAST directory structure, cast-events.sh installed, agent-groups.json,
+#         cast-session-end.sh wiring, routing-proposals.json schema,
+#         managed-settings.d fragment validation, ghost-agent cross-check,
+#         local-first readiness.
 # Exit codes: 0=all green, 1=warnings only, 2=one or more errors
 
 set -euo pipefail
@@ -16,8 +17,8 @@ for arg in "$@"; do
 Usage: cast-validate.sh [--help|-h]
 
 CAST system integrity checker v2.1.0.
-Validates hook wiring, agent frontmatter, routing table schema,
-CLAUDE.md directives, CAST directory structure, and local-first readiness.
+Validates hook wiring, agent frontmatter, CLAUDE.md directives,
+CAST directory structure, and local-first readiness.
 
 Exit codes:
   0 = all checks passed
@@ -406,9 +407,14 @@ print(f'{age:.0f}')
 else
   info "Backup: dir not found at $BACKUP_DIR (run: cast-db-backup.py)"
 fi
-# Legacy advisory: old colocated backups from before wipe-#2 retarget
+# Legacy advisory: ~/.claude/backups holds harness config snapshots (agents/,
+# commands/, skills/), NOT database backups — DB backups live under $BACKUP_DIR.
+# cast-log-rotate.sh auto-prunes known install-snapshot dirs (YYYYMMDD-HHMMSS)
+# at +14d (CAST_LEGACY_BACKUP_DIR_DAYS) via an explicit allowlist; it does NOT
+# touch anything else in this dir — an unrecognized entry (e.g. a stray
+# `.claude/` duplicate) is left for manual review, never auto-deleted.
 if [[ -d "$LEGACY_BACKUP_DIR" ]] && [[ -n "$(ls -A "$LEGACY_BACKUP_DIR" 2>/dev/null)" ]]; then
-  info "Backup: legacy colocated backups present in ~/.claude/backups — migrate to $BACKUP_DIR"
+  info "Backup: ~/.claude/backups holds harness config snapshots (not DB backups) — known install-snapshot dirs auto-prune at +14d; any other entries need manual review (never auto-deleted)"
 fi
 
 # Ollama: is it running?

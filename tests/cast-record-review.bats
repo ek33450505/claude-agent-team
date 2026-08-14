@@ -7,12 +7,20 @@
 #             (skip gracefully otherwise) — per the live-probe-over-synthetic-fixtures rule.
 #
 # Coverage:
-#   (1) live-probe acceptance   — real db copy -> exit 0, report file, >=3 "### Proposal"
+#   (1) live-probe acceptance   — real db copy -> exit 0, non-empty report, all 5 section
+#       headers, well-formed proposals (structural: Evidence+Recommendation lines match
+#       the proposal-block count; decision-table row count matches the report's own
+#       stated total) — NOT a minimum-quantity count, which drifts under the rolling
+#       cast.db prune window and can't distinguish "generator broke" from "prune ran"
 #   (2) read-only integrity     — md5sum of db copy unchanged after the run
 #   (3) empty-db honesty        — fresh empty db -> all 4 section headers, explicit "no findings"
 #   (4) section 2 dedup         — existing eval case -> "existing case", no new yaml block
 #   (5) section 3 friction      — confirmed vs proactive classification
 #   (6) section 4 silent-producer honesty — hook_failures 0 rows reported explicitly
+#   (7) section 1 NULL gate_type regression guard
+#   (8) section 5 stale-memories — empty isolated ~/.claude/projects -> real scanner subprocess
+#       wired end-to-end, explicit "OK" / "0 stale memories" (unit-level WATCH/DEGRADED/cap
+#       coverage lives in tests/test_cast_record_review.py; this is the integration wiring check)
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -67,9 +75,31 @@ report_path_from_output() {
 
 # ---------------------------------------------------------------------------
 # (1) Live-probe acceptance
+#
+# Structural, not count-based. An earlier version of this test asserted
+# `>=3 "### Proposal:"` blocks, which doesn't test the CODE — it tests how
+# much data happens to be in cast.db right now, under the rolling prune
+# window (com.cast.db-prune: 90d for routing_events/agent_runs, 10d for
+# otel). A failure there can't distinguish "the report generator broke"
+# from "the prune ran last night," which trains you to ignore the failure.
+#
+# Replaced with invariants that hold for ANY real row population, including
+# zero proposals: exit 0, a non-empty report, every expected section header
+# present, and — whatever number of proposals the real data happens to
+# produce — each one is well-formed (one Evidence + one Recommendation line
+# per "### Proposal:" block) and the decision table's data-row count matches
+# the total the report itself states in its Summary line. The table/summary
+# check deliberately does NOT require the table count to equal the body's
+# "### Proposal:" block count: on a monthly deep-pass day (today.day <= 7),
+# section_mine_propose/section_friction/section_trend_alert's 90d variants
+# feed all_proposals (and so the table + Summary total) but their text is
+# never routed through section_with_proposals(), so they never get a body
+# detail block — tying the check to the report's own stated total, rather
+# than to the body, stays correct on those days too instead of re-coupling
+# this test to a different quietly-shifting population (day-of-month).
 # ---------------------------------------------------------------------------
 
-@test "(1) live-probe: real cast.db copy -> exit 0, report file, >=3 proposals" {
+@test "(1) live-probe: real cast.db copy -> exit 0, non-empty report, all headers, well-formed proposals" {
   [[ -f "$ORIG_HOME/.claude/cast.db" ]] || skip "no real cast.db found at $ORIG_HOME/.claude/cast.db"
 
   cp "$ORIG_HOME/.claude/cast.db" "$TEST_DB"
@@ -83,9 +113,39 @@ report_path_from_output() {
     echo "Full output: $output" >&2
     return 1
   }
+  [[ -s "$report_path" ]] || {
+    echo "FAIL: report file is empty at '$report_path'" >&2
+    return 1
+  }
 
-  local count; count="$(grep -c '^### Proposal:' "$report_path")"
-  [ "$count" -ge 3 ]
+  run cat "$report_path"
+  assert_output --partial "## 1. Measure→Tune"
+  assert_output --partial "## 2. Mine→Propose"
+  assert_output --partial "## 3. Friction Mining"
+  assert_output --partial "## 4. Trend→Alert"
+  assert_output --partial "## 5. Stale Memories"
+  assert_output --partial "## Proposals Requiring Decision"
+
+  # Well-formed proposals: whatever number the real data produces (including
+  # zero), every "### Proposal:" block has exactly one Evidence line and one
+  # Recommendation line (Proposal.to_markdown()'s fixed shape), and the
+  # decision table's data-row count (rows starting "| <n> |") matches the
+  # total the Summary line states — see comment block above for why this is
+  # compared to the Summary total rather than to the body block count.
+  local proposal_count evidence_count recommendation_count summary_total table_data_rows
+  proposal_count="$(grep -c '^### Proposal:' "$report_path")"
+  evidence_count="$(grep -c '^- Evidence:' "$report_path")"
+  recommendation_count="$(grep -c '^- Recommendation:' "$report_path")"
+  summary_total="$(grep -m1 -oE '^- [0-9]+ proposals \(' "$report_path" | grep -oE '[0-9]+')"
+  table_data_rows="$(grep -cE '^\| [0-9]+ \|' "$report_path")"
+
+  [ -n "$summary_total" ] || {
+    echo "FAIL: could not parse '- N proposals (' from the Summary line in '$report_path'" >&2
+    return 1
+  }
+  [ "$evidence_count" -eq "$proposal_count" ]
+  [ "$recommendation_count" -eq "$proposal_count" ]
+  [ "$table_data_rows" -eq "$summary_total" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -230,4 +290,29 @@ EOF
   local report_path; report_path="$(report_path_from_output)"
   run cat "$report_path"
   assert_output --partial "\`(none)\`"
+}
+
+# ---------------------------------------------------------------------------
+# (8) Section 5 stale-memories — real scanner subprocess wired end-to-end
+#
+# Unlike (1)-(7) this exercises the REAL scripts/cast-stale-memories.py via
+# subprocess (not a stub) — section_stale_memories() resolves the scanner
+# from repo_root (git rev-parse, i.e. this checkout), while HOME stays
+# redirected to the isolated temp dir set up by setup_temp_home, so the
+# scanner's own `~/.claude/projects` glob sees the empty temp projects dir
+# and reports 0 — confirming the wiring, not re-testing the scanner's parse
+# logic (that's tests/cast-stale-memories.bats) or the section's own
+# WATCH/DEGRADED/cap behavior (that's tests/test_cast_record_review.py).
+# ---------------------------------------------------------------------------
+
+@test "(8) section 5: empty isolated ~/.claude/projects -> real scanner reports 0, renders OK" {
+  init_db
+  run_record_review_debug
+  assert_success
+
+  local report_path; report_path="$(report_path_from_output)"
+  run cat "$report_path"
+  assert_output --partial "## 5. Stale Memories"
+  assert_output --partial "### Stale auto-memories: OK"
+  assert_output --partial "0 stale memories"
 }

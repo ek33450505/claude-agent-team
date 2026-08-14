@@ -46,10 +46,19 @@ _guard() {
 }
 
 # Blast-radius guard primitive — required for any recursive delete (CAST blast-radius-lint).
-# shellcheck source=/dev/null
-source "$(dirname "${BASH_SOURCE[0]}")/cast-guard-lib.sh" 2>/dev/null \
-  || source "${HOME}/.claude/scripts/cast-guard-lib.sh" 2>/dev/null \
-  || true
+# Existence-checked before sourcing (do NOT collapse back to
+# `source X 2>/dev/null || source Y 2>/dev/null || true`): under `set -e`, Apple's
+# frozen /bin/bash 3.2 (still what a plain `bash` resolves to on stock macOS/CI runners
+# unless a newer bash is first on PATH) treats a `source` of a nonexistent file as fatal
+# EVEN as the left side of `||`, exiting the whole script immediately instead of falling
+# through — bash 4+ does not have this bug. Checking -f first means source is only ever
+# invoked on a path already confirmed to exist, so the failure mode can't trigger.
+_cast_guard_lib="$(dirname "${BASH_SOURCE[0]}")/cast-guard-lib.sh"
+[[ -f "$_cast_guard_lib" ]] || _cast_guard_lib="${HOME}/.claude/scripts/cast-guard-lib.sh"
+if [[ -f "$_cast_guard_lib" ]]; then
+  # shellcheck source=/dev/null
+  source "$_cast_guard_lib" 2>/dev/null || true
+fi
 
 # ── 1. cast/events ─────────────────────────────────────────────────────────
 if [[ -d "$EVENTS_DIR" ]] && _guard "$EVENTS_DIR"; then
@@ -76,16 +85,28 @@ if [[ -d "$LEGACY_BACKUP_DIR" ]] && _guard "$LEGACY_BACKUP_DIR"; then
   # 3a. harness-written .claude.json.backup.* files (5+/day)
   find "$LEGACY_BACKUP_DIR" -maxdepth 1 -type f -name '.claude.json.backup.*' \
     -mtime "+${LEGACY_BACKUP_DAYS}" -delete 2>/dev/null || true
-  # 3b. old timestamped config-snapshot dirs (YYYYMMDD-HHMMSS) — deleted via the
-  # cast_safe_rm blast-radius primitive (canonicalizes + deny-lists / $HOME / ~/.claude,
-  # requires the path to be strictly inside the declared radius). Skipped fail-closed
-  # if the guard lib could not be sourced.
+  # 3b. old timestamped config-snapshot dirs (YYYYMMDD-HHMMSS) — the ONLY
+  # directory writer into this path is install.sh's
+  # BACKUP_DIR="$CLAUDE_DIR/backups/$(date +%Y%m%d-%H%M%S)" (install.sh's own
+  # prune at install.sh:764 uses the equivalent ^[0-9]{8}-[0-9]{6}$ regex).
+  # This is an explicit allowlist, not a catch-all — deletion is gated TWICE
+  # on the same `20*-*` pattern (the find -name filter, then the case
+  # statement as a second safety net confirming the path prefix) via the
+  # cast_safe_rm blast-radius primitive (canonicalizes + deny-lists / $HOME /
+  # ~/.claude, requires the path to be strictly inside the declared radius).
+  # Any directory NOT matching (e.g. a stray `.claude/` config-snapshot
+  # duplicate) is left alone: an unrecognized entry here is exactly what a
+  # human should look at, not something a cron job silently removes. Skipped
+  # fail-closed if the guard lib could not be sourced.
   if declare -f cast_safe_rm >/dev/null 2>&1; then
     cast_declare_blast_radius "${LEGACY_BACKUP_DIR}/"
     while IFS= read -r _d; do
       [[ -z "$_d" ]] && continue
       case "$_d" in
-        "${LEGACY_BACKUP_DIR}"/20*-*) cast_safe_rm "$_d" >/dev/null 2>&1 || true ;;
+        "${LEGACY_BACKUP_DIR}"/20*-*)
+          _log "pruning stale legacy-backup dir: ${_d}"
+          _rm_err="$(cast_safe_rm "$_d" 2>&1)" || _log "REFUSED: ${_rm_err}"
+          ;;
       esac
     done < <(find "$LEGACY_BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -name '20*-*' \
                -mtime "+${LEGACY_BACKUP_DIR_DAYS}" 2>/dev/null || true)

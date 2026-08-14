@@ -74,28 +74,6 @@ model: claude-haiku-4-5
 Plan things.
 MD
 
-  # --- Routing table with valid schema ---
-  # Second route includes security in post_chain so Check 11 passes cleanly
-  cat > "$HOME/.claude/config/routing-table.json" <<'JSON'
-{
-  "routes": [
-    {
-      "patterns": ["^/plan\\b"],
-      "agent": "planner",
-      "model": "claude-haiku-4-5",
-      "confidence": "hard"
-    },
-    {
-      "patterns": ["^/secure\\b"],
-      "agent": "security",
-      "model": "claude-sonnet-4-5",
-      "confidence": "hard",
-      "post_chain": ["security"]
-    }
-  ]
-}
-JSON
-
   # --- agent-groups.json: minimal valid config ---
   cat > "$HOME/.claude/config/agent-groups.json" <<'JSON'
 {
@@ -136,6 +114,15 @@ run_validate() {
 setup() {
   load 'helpers/setup'
   setup_temp_home
+  # Guard: HOME must be isolated before any test body runs — this file's tests do
+  # bare `rm -rf "$HOME/..."` fixture work (the exact shape that wiped the live
+  # runtime on 2026-06-02), safe only while setup_temp_home actually redirected
+  # HOME. Mirrors teardown_temp_home's own prefix allowlist (tests/helpers/setup.bash)
+  # so both ends of the temp-HOME contract stay symmetric.
+  case "$HOME" in
+    /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) : ;;
+    *) echo "FATAL [cast-validate.bats setup]: HOME not isolated after setup_temp_home: $HOME" >&2; return 1 ;;
+  esac
   # Prepend stub-bin to PATH to prevent real network/keychain calls in ALL tests.
   # Default stubs: security exits 1 (no key found), curl exits 7 (unreachable).
   # Individual tests that need specific curl behaviour rewrite the stub before calling run_validate.
@@ -407,13 +394,16 @@ JSON
 
 @test "backup: legacy ~/.claude/backups advisory when old dir is present and non-empty" {
   build_clean_install
-  # Simulate legacy colocated backups surviving from before wipe-#2 retarget
-  mkdir -p "$HOME/.claude/backups"
-  touch "$HOME/.claude/backups/cast-db-2025-12-01.db"
+  # Simulate a real legacy config-snapshot dir — the shape install.sh's own
+  # backup_if_needed() writes (BACKUP_DIR="$CLAUDE_DIR/backups/$(date +%Y%m%d-%H%M%S)",
+  # populated with copies of agents/commands/skills). NOT a .db file: the advisory
+  # this test asserts on explicitly says this dir holds config snapshots, not DB backups.
+  mkdir -p "$HOME/.claude/backups/20260101-000000/agents"
+  touch "$HOME/.claude/backups/20260101-000000/agents/planner.md"
 
   run env -u CAST_BACKUP_DIR bash "$VALIDATE_SH"
-  assert_output --partial "legacy colocated backups"
-  assert_output --partial "migrate"
+  assert_output --partial "harness config snapshots"
+  assert_output --partial "manual review"
 }
 
 @test "backup: no legacy advisory when ~/.claude/backups is absent" {
@@ -422,7 +412,7 @@ JSON
   rm -rf "$HOME/.claude/backups"
 
   run env -u CAST_BACKUP_DIR bash "$VALIDATE_SH"
-  refute_output --partial "legacy colocated backups"
+  refute_output --partial "harness config snapshots"
 }
 
 # ---------------------------------------------------------------------------
