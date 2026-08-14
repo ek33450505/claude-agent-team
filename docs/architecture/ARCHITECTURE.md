@@ -112,7 +112,7 @@ Destructive paths are tested by **proving refusal** (the guard refuses and logs)
 
 In a multi-agent chain, each agent emits a `## Handoff` block — the machine-readable contract the orchestrator injects into the next agent's prompt. v8 promotes it from prose to a JSON schema, [`schemas/agent-handoff.json`](../../schemas/agent-handoff.json):
 
-- **Required:** `files_changed`, `status` (`DONE` | `DONE_WITH_CONCERNS` | `BLOCKED`), `blockers`.
+- **Required:** `files_changed`, `status` (`DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`), `blockers`.
 - **Optional:** `agent`, `key_decisions`, `next_agent_needs`.
 
 `scripts/cast_handoff_parser.py` validates the block inside the `SubagentStop` hook — **WARN-only, never blocking** — and logs violations to `agent_protocol_violations`. A missing block is only flagged for chained (batch) agents, so solo dispatches never produce false positives. This kills the "Handoff key missing → silent cascade failure" class.

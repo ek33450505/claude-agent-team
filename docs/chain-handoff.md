@@ -19,7 +19,7 @@ blockers: none
 | Field | Values | Description |
 |---|---|---|
 | `files_changed` | comma-separated paths, or `none` | Every file the agent wrote, edited, or deleted |
-| `status` | `DONE` \| `DONE_WITH_CONCERNS` \| `BLOCKED` | Mirrors the agent's Status line |
+| `status` | `DONE` \| `DONE_WITH_CONCERNS` \| `BLOCKED` \| `NEEDS_CONTEXT` | Mirrors the agent's Status line |
 | `blockers` | text or `none` | Anything that must be resolved before the chain continues |
 
 ## Optional Fields

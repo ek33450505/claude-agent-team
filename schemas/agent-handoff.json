@@ -16,8 +16,8 @@
     },
     "status": {
       "type": "string",
-      "enum": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED"],
-      "description": "Mirrors the agent's prose Status line. NEEDS_CONTEXT is not valid here — an agent that needs context is BLOCKED from the chain's perspective."
+      "enum": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT"],
+      "description": "Mirrors the agent's prose Status line."
     },
     "blockers": {
       "type": "string",
