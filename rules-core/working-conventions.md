@@ -31,7 +31,7 @@ Fail ANY condition → the standard ceremony applies (dispatch the specialist + 
 - Scope discipline: every change traces to the request. Fix a trivial bug only in a file you are ALREADY editing for the task — never open another file to "tidy" it; no "while I'm here" edits.
 - Out-of-scope or non-trivial findings: SURFACE, do not fix without an OK. Agents flag via `DONE_WITH_CONCERNS` (the Status `Concerns` field); the main session raises it to the user. (Surgical HARD RULES in `bash-specialist`/`commit` stay stricter — this does not loosen them.)
 - MANDATORY: `code-reviewer` after every logical unit of changes **above the Inline tier** (trivial doc/comment/non-protected-config edits the main session applies inline are exempt — see **Inline tier**; anything touching code, enforcement/security/destructive config, or a §1 hard-won-core file is never exempt)
-- MANDATORY: Never `git commit` directly — use the `commit` agent
+- MANDATORY: Never `git commit` directly (see `## Commits` for the agent + escape hatch)
 - MANDATORY: Route errors to `debugger` agent, not inline triage
 - MANDATORY: Code-modifying agents attempt to self-dispatch `code-reviewer` via the Agent tool; when nesting depth prevents it, they emit DONE_WITH_CONCERNS and the orchestrator dispatches code-reviewer instead
 - MANDATORY: All agents end with Status: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`
@@ -57,18 +57,24 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 - **Scope the commit agent explicitly.** Every `commit` dispatch lists the exact files to stage AND states "exclude everything else" — the agent stages nothing outside the list. An unscoped dispatch swept `docs/decision-log.md` into an unrelated commit (LF-5, 2026-07-01).
 - **Per-unit review gates need per-unit diffs.** When multiple units' uncommitted work coexists, scope each `code-reviewer` dispatch to the unit's files (or commit prior units first) — a reviewer shown the whole tree false-BLOCKs on other units' legitimate work (LF-9, 2026-07-01).
 - **Commit dispatches without a `task_id` log an expected "no approval record" WARN.** When dispatching `commit` outside an orchestrated task, state the review provenance in the prompt (which reviewers passed); the WARN is informational, not a failure.
+- **Name roster dispatches `<agent-type>__<label>`, or don't name them at all.** A custom `name` on the Agent call **overwrites the registered type in the hook payload** — Claude Code documents an agent's `name` as *"the value hooks receive as `agent_type`"*, and there is **no separate key carrying `subagent_type`** (verified against the official hooks/subagents docs, 2026-08-14). So `Agent({subagent_type: "backend-writer", name: "fix-advisory"})` lands in `agent_runs` and `agent_protocol_violations` as `fix-advisory`, permanently unattributable to `backend-writer`; `agent_id` doesn't help (it's a slug of the same name, and NULL in ~27% of rows). Prefix with the roster type and a **double underscore** — `backend-writer__fix-advisory` — so the record stays classifiable. `__` is unambiguous because every roster name uses single hyphens; a single `-` would be. Note the `name` pattern is `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, so `type:label` is **invalid** — no colons. Unnamed dispatches are already fine (they report the roster type verbatim). Cost of ignoring this: a 2026-08-14 audit found 59 protocol violations in 7d that could not be attributed to any agent, burying the ~10 that were real.
 
 ## Parallel Dispatch
 - `test-runner` (and any process-killing / test-executing agent) MUST run in its OWN sequential batch. It MUST NEVER share a `"parallel": true` batch or a dispatch-group wave with any other agent — most critically the review agents (`code-reviewer`, `security`, `frontend-qa`).
 - Reason: `test-runner`'s suite-timeout/kill path can reap co-scheduled sibling processes — a co-scheduled `code-reviewer` was killed this way on 2026-06-14. Isolating `test-runner` in its own batch keeps the kill blast radius to itself.
 
 ## Workflow Authoring (stage model selection)
-`Workflow` stages inherit the **session model (opus) by default** — the tool's own guidance is to omit `model` and let stages inherit. For CAST that default is the dominant cost: `workflow-subagent` runs are **64.6% of all recorded agent cost** (~$5.3K; ~69% opus-by-inheritance at ~$6.56/run — 2026-07-06 agent audit). Choose the model per stage instead:
+`Workflow` stages inherit the **session model (opus) by default** — the tool's own guidance is to omit `model` and let stages inherit. For CAST that default is the dominant cost driver: `workflow-subagent` is consistently the single largest line item in the record. Choose the model per stage instead:
 - **Mechanical / scout / gather** (file collection, grep/scan, formatting, mechanical transforms) → `model: 'haiku'`.
 - **Analytical middle** (per-item review, single-source synthesis) → `model: 'sonnet'`.
 - **Synthesis / verify / adversarial-judge tops** (final report, refute-a-finding, cross-item ranking) → `model: 'opus'` (or `fable` where breadth helps).
 - Omit `model` (inherit opus) ONLY when the whole workflow is genuinely opus-hard — never let a mechanical fan-out inherit opus. Mirror this for `effort` (`low` for mechanical stages, higher tiers only for the hardest tops).
 - Pin a `label`/stage name when you set a model, so the record can measure the before/after (feeds B5).
+
+**Measure, don't remember — never cite a frozen cost literal here.** `cast.db` keeps a **rolling 30-day window** (`com.cast.db-prune`), so (a) a cited share is meaningless without the window it was computed over, and (b) any figure written into this file goes stale within the month. Recompute before citing — `just -g window` FIRST (prints the real span), then `just -g cost`, `just -g model-mix`, `just -g cost-weekly`, `just -g model-drift`. Recipes live in `~/.config/just/justfile`.
+- The former "64.6% of all recorded agent cost / ~$5.3K / ~$6.56 per run (2026-07-06 audit)" figure is **unreproducible** — the rows it was computed over have been pruned. Do not re-cite it.
+- Last measured 2026-08-03 (window 2026-07-04 → 2026-08-03, 30d): `workflow-subagent` = 611 runs, ~$1.4K, **~31% of recorded spend at ~$2.33/run**. That window shifted inside 12 hours (4602 → 4375 rows overnight as prune ran) — which is precisely why the *recipe*, not the number, is the durable artifact.
+- ⚠️ **The per-stage rule above is NOT currently being applied.** Over that window `workflow-subagent` opus share rose **21% → 68%** while haiku usage fell to **zero for three consecutive weeks**. The falling per-run cost is a pricing effect (`opus-4-8` ~$4.75/run → `opus-5` ~$1.98/run), not evidence of stage discipline. Verify with `just -g model-drift` before assuming this is resolved.
 
 ## Irreversibility Interrupts
 - Irreversible/destructive ops that always gate (never run ad hoc): `git push` & force-push, PR/force-merge, schema migration, DB row deletion (prune), destructive `rm -rf`/rmtree, process mass-kill (`pkill`/`killall`), raw `git commit`/`git stash`.
@@ -83,7 +89,8 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 > cost half a day on PR #104. The old "all tests green before push" rule is retired.
 > EXCEPTIONS that still block immediately: (1) destructive tests (anything that can damage the live
 > runtime — see project_cast_recovery_state memory), (2) failures clearly caused by the change being made.
-> **NEVER run the full BATS suite against a real $HOME until the destructive test (Phase 3.8.A) is fixed.**
+> **NEVER run the full BATS suite against a real $HOME — the isolated-temp-HOME requirement is permanent**
+> **(see cast-blast-radius-guard.bats §3.8.A regression coverage), not conditional on a pending fix.**
 
 - Tests alongside source: `Foo.jsx` -> `Foo.test.jsx`
 - Test behavior (`getByRole`/`getByText`), not implementation
@@ -115,16 +122,9 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 - `/compact` to summarize; `/clear` + `/resume` for fresh start
 - Commit before compacting — compact discards tool output history
 - Commit at least hourly during implementation sessions
-- Run `/usage` periodically to monitor token spend; cost data feeds the monthly review process
-- Run `/cost` after long sessions for per-model + cache-hit breakdown (complements `/usage`).
+- Run `/usage` periodically to monitor token spend; run `/cost` after long sessions for per-model + cache-hit breakdown — both feed the monthly cost re-evaluation cadence.
 - `CLAUDE_CODE_SCRIPT_CAPS=100` is set in settings.json — caps per-session script invocations to prevent runaway agent loops.
-
-## MCP + Cost
-
-- `mcpServers` wired in `settings.json` — github MCP available in all sessions
-- `/cost` after long sessions for per-model + cache-hit breakdown
-- `/usage` periodically for token spend monitoring
-- All three feed the monthly cost re-evaluation cadence
+- No github MCP wired (dropped 2026-07-02, `gh` CLI covers it — see memory).
 
 ## Branch Naming
 - Before starting any phase/feature work, verify the current branch matches the phase name (e.g., Phase C3 work must land on feature/c3-*, not feature/c2-*).
