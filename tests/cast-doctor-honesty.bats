@@ -80,8 +80,18 @@ setup() {
   mkdir -p "$HOME/.claude"
   export CAST_DB_PATH="$HOME/.claude/cast.db"
   export CLAUDE_SUBPROCESS=0
-  # Point to the repo's agents dir so doctor doesn't error on missing agents
-  export CAST_AGENTS_DIR="$REPO_DIR/agents/core"
+  # No CAST_AGENTS_DIR override: bin/cast now guards it (${CAST_AGENTS_DIR:-
+  # ${HOME}/.claude/agents}), so leaving it unset lets doctor fall through to
+  # its own default of ${HOME}/.claude/agents — i.e. this temp HOME's fixture
+  # dir. Tests that need a populated roster mkdir -p + drop .md fixtures
+  # there directly (see the protocol-violations roster-split tests below);
+  # this keeps the suite hermetic instead of depending on the real repo's
+  # agents/core contents. A prior version of this line pointed at
+  # "$REPO_DIR/agents/core" but that override was silently ignored by
+  # bin/cast (no guard existed) until 2026-08-14 — removed rather than kept,
+  # since making it live here would break the empty-roster test below, which
+  # needs an on-demand-empty directory that a real, always-populated repo
+  # dir can't provide.
 }
 
 teardown() {
@@ -227,6 +237,172 @@ SQL
   refute_output --partial "agent_hallucinations — 1 flagged"
 }
 
+# ── Test: protocol violations — roster vs unclassifiable split ──────────────
+# Reporting-only regrouping of agent_protocol_violations by whether agent_type
+# resolves against the installed .md roster (setup() points CAST_AGENTS_DIR at
+# the real agents/core, so 'commit' and 'frontend-writer' are real roster
+# agents; 'census-writer'/'lane-mi' are not — matching the ad-hoc Workflow
+# agent names that motivated this split).
+#
+# NOTE: bin/cast:21 resolves CAST_AGENTS_DIR unconditionally to
+# ${HOME}/.claude/agents — it does NOT honor a pre-exported override (no
+# ${CAST_AGENTS_DIR:-default} guard), unlike CAST_REPO_DIR/CAST_DB_PATH. This
+# file's setup() exports CAST_AGENTS_DIR="$REPO_DIR/agents/core", which is
+# therefore a no-op for doctor. These tests build the fixture roster directly
+# under ${HOME}/.claude/agents instead — the same workaround already used by
+# tests/cast-doctor-expansion.bats. Flagged as a pre-existing concern in the
+# handoff rather than fixed here (out of scope for this dispatch).
+@test "protocol violations: known roster agent lands in 'roster agents' bucket" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  mkdir -p "${HOME}/.claude/agents"
+  echo 'fixture' > "${HOME}/.claude/agents/commit.md"
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_protocol_violations (agent_type, violation, timestamp)
+VALUES ('commit', 'missing_formality', datetime('now', '-1 hour'));
+INSERT INTO agent_protocol_violations (agent_type, violation, timestamp)
+VALUES ('commit', 'handoff_schema_violation', datetime('now', '-2 hours'));
+SQL
+
+  _run_doctor
+
+  assert_output --partial "agent_protocol_violations — 2 flagged"
+  assert_output --partial "roster agents: 2 flagged"
+  assert_output --partial "commit"
+}
+
+@test "protocol violations: unknown agent_type lands in 'unclassifiable' bucket, not roster" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Roster must be non-empty for the split to activate; 'commit' is present
+  # but unused here so the split runs against a real (if minimal) roster.
+  mkdir -p "${HOME}/.claude/agents"
+  echo 'fixture' > "${HOME}/.claude/agents/commit.md"
+
+  # 'census-writer' is an ad-hoc Workflow agent name, not an installed roster agent
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('census-writer', 'missing_formality', datetime('now', '-1 hour'));"
+
+  _run_doctor
+
+  assert_output --partial "agent_protocol_violations — 1 flagged"
+  assert_output --partial "unclassifiable (named dispatch or ad-hoc agent): 1 flagged"
+  assert_output --partial "roster agents: 0 flagged"
+  assert_output --partial "census-writer"
+  # non-alarming: never given the Status contract, so never a WARN glyph tied to this bucket
+  assert_output --partial "cannot attribute to a roster agent"
+}
+
+# ── '<agent-type>__<label>' convention (working-conventions.md, 2026-08-14) ──
+# Roster dispatches SHOULD be named this way so a custom Agent-tool `name`
+# (which overwrites agent_type in the hook payload) stays classifiable. The
+# part before the FIRST '__' is matched against the roster; '__' alone is
+# never trusted — only an actual roster match promotes the row.
+@test "protocol violations: '__'-delimited dispatch resolves via its prefix (rule 2 match)" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  mkdir -p "${HOME}/.claude/agents"
+  echo 'fixture' > "${HOME}/.claude/agents/backend-writer.md"
+
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('backend-writer__unit1-advisory', 'missing_formality', datetime('now', '-1 hour'));"
+
+  _run_doctor
+
+  assert_output --partial "agent_protocol_violations — 1 flagged"
+  assert_output --partial "roster agents: 1 flagged"
+  assert_output --partial "unclassifiable (named dispatch or ad-hoc agent): 0 flagged"
+  assert_output --partial "backend-writer__unit1-advisory"
+}
+
+@test "protocol violations: '__'-prefix that does NOT match the roster falls through to unclassifiable (rule 2 non-match)" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Roster must be non-empty for the split to activate; 'backend-writer' is
+  # present but irrelevant to 'not-an-agent' — the '__' must NOT be trusted
+  # on its own.
+  mkdir -p "${HOME}/.claude/agents"
+  echo 'fixture' > "${HOME}/.claude/agents/backend-writer.md"
+
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('not-an-agent__some-label', 'missing_formality', datetime('now', '-1 hour'));"
+
+  _run_doctor
+
+  assert_output --partial "agent_protocol_violations — 1 flagged"
+  assert_output --partial "roster agents: 0 flagged"
+  assert_output --partial "unclassifiable (named dispatch or ad-hoc agent): 1 flagged"
+  assert_output --partial "not-an-agent__some-label"
+}
+
+@test "protocol violations: historical agent_type with no '__' still classifies via verbatim match (rule 1 unaffected)" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  mkdir -p "${HOME}/.claude/agents"
+  echo 'fixture' > "${HOME}/.claude/agents/commit.md"
+
+  # No '__' anywhere — this is the pre-convention shape every existing row has.
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('commit', 'missing_formality', datetime('now', '-1 hour'));"
+
+  _run_doctor
+
+  assert_output --partial "agent_protocol_violations — 1 flagged"
+  assert_output --partial "roster agents: 1 flagged"
+  assert_output --partial "unclassifiable (named dispatch or ad-hoc agent): 0 flagged"
+}
+
+@test "protocol violations: roster and unclassifiable totals reconcile with the ungrouped total" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  mkdir -p "${HOME}/.claude/agents"
+  echo 'fixture' > "${HOME}/.claude/agents/commit.md"
+  echo 'fixture' > "${HOME}/.claude/agents/frontend-writer.md"
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('commit', 'missing_formality', datetime('now', '-1 hour'));
+INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('frontend-writer', 'missing_formality', datetime('now', '-1 hour'));
+INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('census-writer', 'missing_formality', datetime('now', '-1 hour'));
+INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('lane-mi', 'missing_formality', datetime('now', '-1 hour'));
+SQL
+
+  _run_doctor
+
+  # ungrouped total = 4; roster (commit, frontend-writer) = 2; unclassifiable (census-writer, lane-mi) = 2
+  assert_output --partial "agent_protocol_violations — 4 flagged"
+  assert_output --partial "roster agents: 2 flagged"
+  assert_output --partial "unclassifiable (named dispatch or ad-hoc agent): 2 flagged"
+}
+
+@test "protocol violations: empty roster directory reports split unavailable, never a false '0 roster violations'" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO agent_protocol_violations (agent_type, violation, timestamp) VALUES ('commit', 'missing_formality', datetime('now', '-1 hour'));"
+
+  # ${HOME}/.claude/agents exists but is empty — roster cannot be resolved,
+  # so the split must degrade honestly instead of reading as "checked and clean".
+  mkdir -p "${HOME}/.claude/agents"
+
+  _run_doctor
+
+  # Ungrouped total must still be visible so the numbers reconcile
+  assert_output --partial "agent_protocol_violations — 1 flagged"
+  # The split must say it could not be computed...
+  assert_output --partial "roster split unavailable"
+  assert_output --partial "showing ungrouped total only"
+  # ...and must NEVER render as a green/zero roster bucket
+  refute_output --partial "roster agents: 0 flagged"
+}
+
 # ── Test 7: redaction failures — WARN path ──────────────────────────────────
 @test "redaction failures: WARN when [REDACTION_FAILED] row exists in dispatch_decisions" {
   _create_minimal_core_tables "$CAST_DB_PATH"
@@ -234,6 +410,11 @@ SQL
 
   # Minimal fixture uses simplified dispatch_decisions schema; add prompt_snippet
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN prompt_snippet TEXT;" 2>/dev/null || true
+  # incidents needs its redaction-check columns even with 0 rows, or the
+  # per-row query errors out (see the "query error" test below)
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN problem_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN fix_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN resolution_status TEXT;" 2>/dev/null || true
 
   # Plant a [REDACTION_FAILED] marker row
   sqlite3 "$CAST_DB_PATH" \
@@ -244,26 +425,88 @@ SQL
   assert_output --partial "redaction failures recorded"
   assert_output --partial "cast-redact fell back to marker"
   assert_output --partial "dispatch_decisions: 1"
-  assert_output --partial "incidents: 0"
+  assert_output --partial "incidents unresolved: 0"
 }
 
-@test "redaction failures: WARN when [REDACTION_FAILED] row exists in incidents" {
+@test "redaction failures: WARN when [REDACTION_FAILED] incident has an unresolved (open) status" {
   _create_minimal_core_tables "$CAST_DB_PATH"
   _create_honesty_tables "$CAST_DB_PATH"
 
-  # Minimal fixture uses simplified incidents schema; add redacted-text columns
+  # Minimal fixture uses simplified incidents schema; add redacted-text + resolution columns
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN problem_summary TEXT;" 2>/dev/null || true
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN fix_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN resolution_status TEXT;" 2>/dev/null || true
 
-  # Plant a [REDACTION_FAILED] marker in problem_summary
+  # Plant a [REDACTION_FAILED] marker in problem_summary, explicitly unresolved
+  sqlite3 "$CAST_DB_PATH" \
+    "INSERT INTO incidents (problem_summary, resolution_status) VALUES ('[REDACTION_FAILED]', 'open');"
+
+  _run_doctor
+
+  assert_output --partial "redaction failures recorded"
+  assert_output --partial "cast-redact fell back to marker"
+  assert_output --partial "incidents unresolved: 1"
+}
+
+@test "redaction failures: NULL resolution_status counts as unresolved (WARN), never assumed triaged" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN problem_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN fix_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN resolution_status TEXT;" 2>/dev/null || true
+
+  # Plant a marker row and leave resolution_status NULL (never set)
   sqlite3 "$CAST_DB_PATH" \
     "INSERT INTO incidents (problem_summary) VALUES ('[REDACTION_FAILED]');"
 
   _run_doctor
 
   assert_output --partial "redaction failures recorded"
-  assert_output --partial "cast-redact fell back to marker"
-  assert_output --partial "incidents: 1"
+  assert_output --partial "incidents unresolved: 1"
+  refute_output --partial "redaction failures triaged"
+}
+
+# ── Test 7f: redaction failures — triaged incidents get a visible, non-WARN line ──
+@test "redaction failures: triaged (fixed/wont-fix) incidents do NOT warn but ARE reported" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN problem_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN fix_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN resolution_status TEXT;" 2>/dev/null || true
+
+  # Two marker rows, both triaged — one fixed, one wont-fix. Neither should
+  # leave a WARN with no operator path to clear it short of deleting rows.
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO incidents (problem_summary, resolution_status) VALUES ('[REDACTION_FAILED]', 'fixed');
+INSERT INTO incidents (fix_summary, resolution_status) VALUES ('[REDACTION_FAILED]', 'wont-fix');
+SQL
+
+  _run_doctor
+
+  # Must NOT render as a permanent WARN
+  refute_output --partial "redaction failures recorded"
+  # Must NOT go silent either — the record should read "this happened, it was triaged"
+  assert_output --partial "redaction failures triaged"
+  assert_output --partial "2 incident marker row(s) resolved"
+}
+
+# ── Test 7g: redaction failures — incidents query error must not render false green ──
+@test "redaction failures: incidents query error surfaces as unavailable, not a false OK/green" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  # Deliberately do NOT add problem_summary/fix_summary/resolution_status —
+  # the redaction incidents query will fail with 'no such column'.
+
+  _run_doctor
+
+  # Must not silently render as healthy (no WARN, no OK-triaged line built off a false 0)
+  refute_output --partial "redaction failures recorded"
+  refute_output --partial "redaction failures triaged"
+  # Must surface the query failure explicitly instead of going silent
+  assert_output --partial "unable to verify triage status"
 }
 
 # ── Test 8: redaction failures — quiet pass ──────────────────────────────────
@@ -273,6 +516,9 @@ SQL
 
   # Add prompt_snippet column (minimal fixture omits it)
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN prompt_snippet TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN problem_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN fix_summary TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE incidents ADD COLUMN resolution_status TEXT;" 2>/dev/null || true
 
   # Plant a normal (non-marker) row
   sqlite3 "$CAST_DB_PATH" \
@@ -282,6 +528,8 @@ SQL
 
   refute_output --partial "redaction failures recorded"
   refute_output --partial "cast-redact fell back to marker"
+  refute_output --partial "redaction failures triaged"
+  refute_output --partial "unable to verify triage status"
 }
 
 # ── Test 5: silent truncations (maxTurns) — WARN path ───────────────────────
