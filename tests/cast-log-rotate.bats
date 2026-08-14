@@ -139,7 +139,19 @@ teardown() {
   mkdir -p "$snapshot_dir"
   _backdate "$snapshot_dir" "$_15_days"
 
-  run bash "$isolated_dir/cast-log-rotate.sh"
+  # Pin the interpreter to /bin/bash rather than a PATH-resolved `bash`: this is
+  # the one scenario in this file where the guard-lib source genuinely fails (both
+  # attempts miss), and under `set -e`, Apple's frozen /bin/bash 3.2 (still what
+  # macOS ships, and what a plain `bash` resolves to unless a newer bash sits
+  # earlier on PATH) treats `source <missing-file>` as fatal even as the left side
+  # of `||` — bash 4+ does not have this bug. Pinning /bin/bash makes this
+  # regression check deterministic instead of depending on whichever bash happens
+  # to be first on a given machine's PATH (a Homebrew-bash-first dev machine masks
+  # it entirely, which is exactly how this shipped broken to macOS CI).
+  local _bash_bin="bash"
+  [[ -x /bin/bash ]] && _bash_bin="/bin/bash"
+
+  run "$_bash_bin" "$isolated_dir/cast-log-rotate.sh"
   assert_success
 
   [ -d "$snapshot_dir" ] || {

@@ -46,10 +46,19 @@ _guard() {
 }
 
 # Blast-radius guard primitive — required for any recursive delete (CAST blast-radius-lint).
-# shellcheck source=/dev/null
-source "$(dirname "${BASH_SOURCE[0]}")/cast-guard-lib.sh" 2>/dev/null \
-  || source "${HOME}/.claude/scripts/cast-guard-lib.sh" 2>/dev/null \
-  || true
+# Existence-checked before sourcing (do NOT collapse back to
+# `source X 2>/dev/null || source Y 2>/dev/null || true`): under `set -e`, Apple's
+# frozen /bin/bash 3.2 (still what a plain `bash` resolves to on stock macOS/CI runners
+# unless a newer bash is first on PATH) treats a `source` of a nonexistent file as fatal
+# EVEN as the left side of `||`, exiting the whole script immediately instead of falling
+# through — bash 4+ does not have this bug. Checking -f first means source is only ever
+# invoked on a path already confirmed to exist, so the failure mode can't trigger.
+_cast_guard_lib="$(dirname "${BASH_SOURCE[0]}")/cast-guard-lib.sh"
+[[ -f "$_cast_guard_lib" ]] || _cast_guard_lib="${HOME}/.claude/scripts/cast-guard-lib.sh"
+if [[ -f "$_cast_guard_lib" ]]; then
+  # shellcheck source=/dev/null
+  source "$_cast_guard_lib" 2>/dev/null || true
+fi
 
 # ── 1. cast/events ─────────────────────────────────────────────────────────
 if [[ -d "$EVENTS_DIR" ]] && _guard "$EVENTS_DIR"; then
