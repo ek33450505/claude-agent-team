@@ -17,6 +17,8 @@ make ci-local                     # Run real GitHub Actions CI locally via act
 
 **HARD RULE:** Run only against an isolated temp HOME, never against real `~/.claude`. The suite's teardown deletes its HOME-scoped fixtures, so it must run only against an isolated temp HOME — never your real `~/.claude`. Use the `setup_temp_home` / `teardown_temp_home` helpers in `tests/helpers/setup.bash`.
 
+`tests/test_helper/bats-support` and `tests/test_helper/bats-assert` are git submodules — on a fresh clone, run `git submodule update --init --recursive` first or `tests/run.sh` will refuse to start.
+
 The `make ci-local` target (also: `cast ci-local`) runs the exact PR-gating workflows that block merges (bats, contract-test, hook-contract-validation, stats-guard, rules-drift, readme-structure, pii-scan, shellcheck, db-contract, python-unit) via `act`. Requires `act` and Docker. Excluded from act: gitleaks (needs live GITHUB_TOKEN), bats-macos (no macOS runner in act), bats-ubuntu (duplicates bats).
 
 ## Run
