@@ -15,7 +15,11 @@ set -euo pipefail
 
 # shellcheck source=cast-sqlite-lib.sh
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/cast-sqlite-lib.sh" 2>/dev/null || true
+# Existence-checked before sourcing — see cast-guard-lib.sh header (bash 3.2 + set -e
+# makes `source` of a missing file fatal even left-of-`||`).
+if [[ -f "${SCRIPT_DIR}/cast-sqlite-lib.sh" ]]; then
+  source "${SCRIPT_DIR}/cast-sqlite-lib.sh" 2>/dev/null || true
+fi
 
 INPUT="$(cat 2>/dev/null || true)"
 

@@ -34,11 +34,14 @@ OUT="${POSITIONAL_OUT:-${REPO_ROOT}/dist/cast-plugin}"
 VERSION="$(cat "${REPO_ROOT}/VERSION" 2>/dev/null || echo "8.0.0")"
 
 # Load the cast-guard-lib for safe destructive operations (data-integrity pillar)
-# shellcheck source=cast-guard-lib.sh
-# shellcheck disable=SC1091
-source "$(dirname "$0")/cast-guard-lib.sh" 2>/dev/null \
-  || source "${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}/cast-guard-lib.sh" 2>/dev/null \
-  || true
+# Existence-checked before sourcing — see cast-guard-lib.sh header (bash 3.2 + set -e
+# makes `source` of a missing file fatal even left-of-`||`).
+_cast_guard_lib="$(dirname "$0")/cast-guard-lib.sh"
+[[ -f "$_cast_guard_lib" ]] || _cast_guard_lib="${CAST_SCRIPTS_DIR:-${HOME}/.claude/scripts}/cast-guard-lib.sh"
+if [[ -f "$_cast_guard_lib" ]]; then
+  # shellcheck source=cast-guard-lib.sh disable=SC1091
+  source "$_cast_guard_lib" 2>/dev/null || true
+fi
 if ! declare -f cast_safe_rm >/dev/null 2>&1; then
   printf 'ERROR: cast-guard-lib.sh not loaded — cannot safely remove output dir\n' >&2
   exit 1
@@ -112,6 +115,7 @@ EXCLUDE_SCRIPTS=(
   cast-lint-agent-boilerplate.sh
   cast-lint-orphan-scripts.py
   cast-lint-write-only-tables.py
+  cast-lint-source-guard.sh
   gen-cast-stats.sh
   gen-ecosystem-versions.sh
   gen-stats.sh

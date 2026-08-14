@@ -31,11 +31,19 @@ set -euo pipefail
 # ---- Source blast-radius guard lib ------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/cast-guard-lib.sh
-source "${SCRIPT_DIR}/cast-guard-lib.sh" || {
+# Existence-checked before sourcing — see cast-guard-lib.sh header (bash 3.2 + set -e
+# makes `source` of a missing file fatal even left-of-`||`, which would otherwise
+# swallow the diagnostic message below).
+if [[ -f "${SCRIPT_DIR}/cast-guard-lib.sh" ]]; then
+  # shellcheck source=scripts/cast-guard-lib.sh
+  source "${SCRIPT_DIR}/cast-guard-lib.sh" || {
+    echo "FAIL [cast-litestream-verify]: could not source cast-guard-lib.sh" >&2
+    exit 1
+  }
+else
   echo "FAIL [cast-litestream-verify]: could not source cast-guard-lib.sh" >&2
   exit 1
-}
+fi
 
 # Declare blast radius for the mktemp restore directory.
 # Prefixes canonicalize at registration: /tmp → /private/tmp on macOS.
