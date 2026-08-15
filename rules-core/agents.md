@@ -12,4 +12,4 @@ paths:
 - Procedural memories for an agent are loaded at session start via cast-memory-router.py `--mode retrieve --type procedural`
 - ADM execution: the `/orchestrate` skill runs plans directly from the main session — no subagent dispatch needed for orchestration
 - Agent prompts in manifest dispatch: use `subagent_type: 'general-purpose'` for orchestrator dispatch workarounds
-- Model assignments: haiku for review/commit/test-runner/push; sonnet for all implementation agents
+- Model assignments vary per agent (13 haiku, 8 sonnet, 1 opus as of 2026-07-10) — see the `agent-registry` skill for the current per-agent mapping rather than assuming a blanket tier
