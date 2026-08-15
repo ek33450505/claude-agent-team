@@ -162,7 +162,7 @@ Subcommands:
   ${C_BOLD}memory${C_RESET}    search|list|forget|export   Query and manage agent memories
   ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
   ${C_BOLD}cost${C_RESET}      [--by-task|--by-branch|--by-agent] [--project N] [--limit N]  Per-task/feature cost attribution
-  ${C_BOLD}agents${C_RESET}    [--usage] [--json]            List installed agents, or per-agent runtime usage with --usage
+  ${C_BOLD}agents${C_RESET}    [--usage] [--live] [--json]   List installed agents, per-agent usage with --usage, or in-flight runs with --live
   ${C_BOLD}review${C_RESET}    <agent|prefix> [--last N]     Print recorded agent output (agent_runs.response), newest first
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}backup${C_RESET}    [--overlay]               On-disk snapshot (+ GitHub overlay with --overlay)
@@ -636,12 +636,108 @@ PYEOF
 # ── Subcommand: agents ───────────────────────────────────────────────────────
 _cmd_agents() {
   local usage_mode=0
+  local live_mode=0
   while [ "${#}" -gt 0 ]; do
     case "$1" in
       --usage) usage_mode=1; shift ;;
+      --live) live_mode=1; shift ;;
       *) shift ;;
     esac
   done
+
+  if [ "$live_mode" -eq 1 ]; then
+    _require_db
+    python3 - "$CAST_DB_PATH" "$CAST_JSON" <<'PYEOF'
+import sys, sqlite3, json
+from datetime import datetime, timezone
+
+db_path, json_mode = sys.argv[1], sys.argv[2]
+json_out = json_mode == '1'
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+
+# tool_uses/branch/model are written on the COMPLETION path only (see the
+# post-run recorder). A still-running row therefore carries them as NULL by
+# construction, never as a value that could move — measured 0/84 populated
+# for non-DONE rows over a 30-day window (vs 3090/3090 for DONE rows). The
+# human table below shows only AGENT/ELAPSED for that reason; --json still
+# returns the raw (possibly null) fields for machine consumers.
+cur.execute("""
+    SELECT agent, status, tool_uses, started_at, branch, model
+    FROM agent_runs
+    WHERE status = 'running'
+    ORDER BY started_at ASC
+""")
+rows = cur.fetchall()
+conn.close()
+
+# 10 min is the harness's own default subagent stall timeout
+# (CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS, default 600000 ms); a typical agent
+# finishes in ~1.6 min, so anything past this is flagged rather than assumed dead.
+STUCK_THRESHOLD_SECONDS = 600
+
+now = datetime.now(timezone.utc)
+
+def parse_elapsed_seconds(started_at):
+    if not started_at:
+        return None
+    ts = started_at.strip()
+    if ts.endswith('Z'):
+        ts = ts[:-1] + '+00:00'
+    try:
+        dt = datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (now - dt).total_seconds()
+
+def fmt_elapsed(seconds):
+    if seconds is None:
+        return '?'
+    seconds = max(0, int(seconds))
+    mins, secs = divmod(seconds, 60)
+    hours, mins = divmod(mins, 60)
+    if hours:
+        return f'{hours}h{mins:02d}m'
+    return f'{mins}m{secs:02d}s'
+
+data = []
+for r in rows:
+    elapsed = parse_elapsed_seconds(r['started_at'])
+    data.append({
+        'agent': r['agent'] or '?',
+        'status': r['status'] or '?',
+        'tool_uses': r['tool_uses'],
+        'started_at': r['started_at'],
+        'elapsed_seconds': elapsed,
+        'branch': r['branch'] or '?',
+        'model': r['model'] or '?',
+        'likely_stuck': bool(elapsed is not None and elapsed > STUCK_THRESHOLD_SECONDS),
+    })
+
+if json_out:
+    print(json.dumps({'view': 'agents_live', 'rows': data}, indent=2))
+    sys.exit(0)
+
+if not data:
+    print('No agents currently running.')
+    sys.exit(0)
+
+print(f"{'AGENT':<28} {'ELAPSED':>10}")
+print('-' * 39)
+for d in data:
+    elapsed_str = fmt_elapsed(d['elapsed_seconds'])
+    flag = '  ⚠ likely stuck' if d['likely_stuck'] else ''
+    print(f"{d['agent']:<28} {elapsed_str:>10}{flag}")
+
+print('\nElapsed is the only in-flight signal — tool_uses, branch and model are recorded at completion, not during a run.')
+print("Past ~10m, suspect a maxTurns truncation: run 'cast review <agent>' and compare status + response before re-dispatching.")
+PYEOF
+    return
+  fi
 
   if [ "$usage_mode" -eq 1 ]; then
     _require_db
