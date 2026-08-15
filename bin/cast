@@ -4,7 +4,7 @@
 #
 # Usage: cast <subcommand> [args] [--json] [--quiet] [--verbose]
 #
-# Subcommands: status, exec, parallel, memory, budget, agents, hooks, doctor, upgrade-check, tidy, clean, dash, install-completions, plan-doctor
+# Subcommands: status, exec, parallel, memory, budget, agents, review, hooks, doctor, upgrade-check, tidy, clean, dash, install-completions, plan-doctor
 #
 # Config: ~/.claude/config/cast-cli.json
 # DB:     $CAST_DB_PATH or ~/.claude/cast.db
@@ -163,6 +163,7 @@ Subcommands:
   ${C_BOLD}budget${C_RESET}    [--week] [--project]        View cost summary
   ${C_BOLD}cost${C_RESET}      [--by-task|--by-branch|--by-agent] [--project N] [--limit N]  Per-task/feature cost attribution
   ${C_BOLD}agents${C_RESET}    [--usage] [--json]            List installed agents, or per-agent runtime usage with --usage
+  ${C_BOLD}review${C_RESET}    <agent|prefix> [--last N]     Print recorded agent output (agent_runs.response), newest first
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}backup${C_RESET}    [--overlay]               On-disk snapshot (+ GitHub overlay with --overlay)
   ${C_BOLD}restore${C_RESET}   <date|dir> [--force]      Restore files from a snapshot (--list to see them)
@@ -4192,6 +4193,112 @@ USAGE
   fi
 }
 
+# ── Subcommand: review ────────────────────────────────────────────────────────
+_cmd_review() {
+  local query="" last=5
+  while [ "${#}" -gt 0 ]; do
+    case "$1" in
+      --last)
+        if [ "${#}" -lt 2 ]; then
+          _error "Usage: cast review <agent-name-or-prefix> [--last N]"
+          exit 1
+        fi
+        last="$2"
+        shift 2
+        ;;
+      *)
+        if [ -z "$query" ]; then
+          query="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$query" ]; then
+    _error "Usage: cast review <agent-name-or-prefix> [--last N]"
+    exit 1
+  fi
+
+  case "$last" in
+    ''|*[!0-9]*)
+      _error "Invalid --last value: must be a positive integer"
+      exit 1
+      ;;
+  esac
+  if [ "$last" -eq 0 ]; then
+    _error "Invalid --last value: must be a positive integer"
+    exit 1
+  fi
+
+  _require_db
+
+  python3 - "$CAST_DB_PATH" "$CAST_JSON" "$query" "$last" <<'PYEOF'
+import sys, sqlite3, json
+
+db_path, json_mode, q, limit = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+json_out = json_mode == '1'
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+
+cur.execute("""
+    SELECT agent, status, tool_uses, duration_ms, branch, started_at, model, response
+    FROM agent_runs
+    WHERE agent = ? OR agent LIKE ? ESCAPE '\\'
+    ORDER BY started_at DESC, id DESC
+    LIMIT ?
+""", (q, q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%', limit))
+
+rows = cur.fetchall()
+conn.close()
+
+def fmt_duration(ms):
+    if ms is None:
+        return '?'
+    total_s = int(ms) // 1000
+    m, s = divmod(total_s, 60)
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+if json_out:
+    data = [
+        {
+            'agent': r['agent'],
+            'status': r['status'],
+            'tool_uses': r['tool_uses'],
+            'duration_ms': r['duration_ms'],
+            'branch': r['branch'],
+            'started_at': r['started_at'],
+            'model': r['model'],
+            'response': r['response'] if r['response'] else None,
+        }
+        for r in rows
+    ]
+    print(json.dumps({'view': 'agent_review', 'rows': data}, indent=2))
+    sys.exit(0)
+
+if not rows:
+    print(f"No agent runs match '{q}'")
+    sys.exit(0)
+
+for i, r in enumerate(rows):
+    if i > 0:
+        print()
+    tool_uses = r['tool_uses'] if r['tool_uses'] is not None else '?'
+    header = f"── {r['agent']} · {r['status'] or '?'} · {tool_uses} tool uses · {fmt_duration(r['duration_ms'])} · {r['branch'] or '?'}"
+    print(header)
+    print(f"   {r['started_at'] or '?'} · {r['model'] or '?'}")
+    resp = r['response']
+    if resp:
+        print(resp)
+    else:
+        print('(no response recorded)')
+PYEOF
+}
+
 # ── Subcommand: install-completions ──────────────────────────────────────────
 _cmd_install_completions() {
   local completions_src="${CAST_REPO_DIR}/completions"
@@ -5038,6 +5145,7 @@ case "$SUBCOMMAND" in
   budget)               _cmd_budget "$@" ;;
   cost)                 _cmd_cost "$@" ;;
   agents)               _cmd_agents "$@" ;;
+  review)               _cmd_review "$@" ;;
   hooks)                _cmd_hooks "$@" ;;
   backup)               _cmd_backup "$@" ;;
   restore)              _cmd_restore "$@" ;;
