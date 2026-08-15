@@ -10,6 +10,14 @@
 # BATS runs ONLY those files. Each --files argument must be an existing regular file
 # matching a tests/*.bats path; absolute paths, '..' traversal and non-.bats paths
 # are rejected (exit 1). Other flags (e.g. --tap) flow through to bats unchanged.
+#
+# Bare file arguments outside --files are REJECTED (exit 1, before any work runs) —
+# only --files scopes a run. This closes a footgun where `bash tests/run.sh
+# tests/foo.bats` looked scoped but silently fell through to the full suite.
+# KNOWN LIMITATION: a passthrough flag that takes a separate value (e.g. `--filter
+# <regex>`) is not supported — the value would look like a bare positional and get
+# rejected. Use --files for scoping. (Verified: no caller in this repo passes such
+# a flag.)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -57,9 +65,15 @@ while [[ "$#" -gt 0 ]]; do
         shift
       done
       ;;
-    *)
+    -*)
       PASSTHRU+=("$1")
       shift
+      ;;
+    *)
+      echo "tests/run.sh: bare file arguments are not supported — did you mean: --files <f>?" >&2
+      echo "  Got bare argument: '$1'" >&2
+      echo "  A bare positional does NOT scope the run — the FULL suite would execute." >&2
+      exit 1
       ;;
   esac
 done
