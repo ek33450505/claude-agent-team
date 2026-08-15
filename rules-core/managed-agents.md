@@ -1,6 +1,6 @@
 # Managed Agents Preference
 
-> Shim usage, keychain setup, convergence status, and roadmap live in `docs/managed-agents-reference.md`. Behavioral rule kept below.
+> Shim usage, keychain setup, convergence status, and roadmap moved to `claude-agent-team/docs/managed-agents-reference.md` (v7.5 Phase 1, 2026-06-09). Behavioral rule kept below.
 
 Managed Agents are Anthropic-hosted autonomous agents (beta `managed-agents-2026-04-01`) that run on Anthropic infrastructure rather than the local machine — parallel work without the filesystem-isolation complexity of git worktrees.
 
