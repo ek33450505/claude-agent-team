@@ -15,6 +15,30 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
+# ── Preflight: BATS helper submodules must be initialised. ─────────────────────────────
+# tests/test_helper/bats-support and tests/test_helper/bats-assert are git submodules
+# (see .gitmodules); a plain 'git clone' does not populate them, and every test file
+# loads them directly. An uninitialised submodule leaves an EMPTY directory, so this
+# checks for the actual loadable file, not just directory presence. Fires before any
+# other work (both the full-suite and --files scoped paths need these helpers).
+# Gated on THIS repo actually declaring the submodules (.gitmodules present and
+# referencing the bats helper path): a real clone of this repo always has .gitmodules
+# (it's tracked) even before `git submodule update --init`, so the check still fires
+# there. Synthetic fixture repos (e.g. tests/cast-run-sh-scoped.bats's _new_fake(), a
+# bare mktemp -d with no .gitmodules) declare no such submodules and legitimately
+# don't need this check — their fixtures never load the helpers either.
+if [[ -f .gitmodules ]] && grep -q 'tests/test_helper/bats-' .gitmodules 2>/dev/null; then
+  for _helper in tests/test_helper/bats-support/load.bash tests/test_helper/bats-assert/load.bash; do
+    if [[ ! -f "$_helper" ]]; then
+      echo "ERROR [tests/run.sh]: BATS helper submodules are not initialised." >&2
+      echo "  tests/test_helper/bats-support and tests/test_helper/bats-assert are git submodules" >&2
+      echo "  and a plain 'git clone' does not populate them." >&2
+      echo "  Fix: git submodule update --init --recursive" >&2
+      exit 1
+    fi
+  done
+fi
+
 # ── Parse args: peel off an optional scoped "--files <f1> <f2> ..." list. ──────────────
 # Anything that is not part of --files (e.g. --tap) is collected into PASSTHRU and
 # forwarded to bats verbatim. bash-3.2 safe: plain arrays + while/case, guarded

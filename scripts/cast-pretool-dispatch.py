@@ -246,7 +246,7 @@ def _record_dispatch(data):
         finally:
             conn.close()
     except Exception as e:
-        _log_error(f"dispatch_decisions record failed: {e}")
+        _log_error(f"dispatch_decisions record failed: {type(e).__name__}")
 
 
 def main():

@@ -115,4 +115,12 @@ if [[ -f "${CAST_DIR}/scripts/cast-ask-index.py" ]]; then
   log "Ran record_embed pass (see logs/ask-embed.log)"
 fi
 
+# 11. Detect rules-core drift: repo rules-core/ vs live ~/.claude/rules/ (advisory
+# only — never abort maintenance on drift). See scripts/cast-rules-drift.sh header
+# for why this can't just be bin/cast doctor (dormant until a tap release).
+if [[ -f "${CAST_DIR}/scripts/cast-rules-drift.sh" ]]; then
+  bash "${CAST_DIR}/scripts/cast-rules-drift.sh" >> "${CAST_DIR}/logs/rules-drift.log" 2>&1 || true
+  log "Checked rules-core drift (see logs/rules-drift.log)"
+fi
+
 log "Maintenance complete"

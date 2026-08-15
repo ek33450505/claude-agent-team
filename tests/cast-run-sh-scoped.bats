@@ -186,3 +186,22 @@ _new_fake() {
   assert_output --partial "1..1"
   assert_output --partial "ok 1"
 }
+
+# ---------------------------------------------------------------------------
+# (6) submodule preflight is scoped to repos that declare it (regression for
+#     the false positive that broke every test in this file: the preflight
+#     was unconditional and refused fake repos that never declare the bats
+#     helpers as submodules in the first place)
+# ---------------------------------------------------------------------------
+
+@test "preflight: a fake repo with no .gitmodules and no test_helper/ is not refused" {
+  local fake; fake="$(_new_fake)"
+  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  # _new_fake() never creates .gitmodules or tests/test_helper/ — this repo declares
+  # no bats-helper submodules, so the preflight in tests/run.sh must not fire here.
+
+  run bash "$fake/tests/run.sh" --tap
+  assert_success
+  assert_output --partial "1..1"
+  refute_output --partial "BATS helper submodules are not initialised"
+}
