@@ -48,6 +48,13 @@ Fail ANY condition → the standard ceremony applies (dispatch the specialist + 
 - Symptom of a hit cap: agent's final message ends mid-sentence (e.g. "Now let me run the tests:") with no Status line. Treat as truncation, not completion — never relay it as done.
 - For tasks that legitimately need more turns (large migrations, multi-file sweeps), split into smaller dispatches rather than raising caps further — the cap is a runaway-loop guard.
 
+## When an Agent Goes Quiet (two causes, opposite remedies)
+An agent that delivers nothing has TWO possible causes, and guessing wrong is expensive in both directions. **Before re-dispatching or redoing the work, read the record:** `bash bin/cast review <agent-name-or-prefix> [--last N]` prints `agent_runs.status` and `response` together — that pair is the discriminator.
+- **`status='DONE'` with a populated `response` → transport loss.** The work is finished; only delivery dropped it. Read it, do NOT re-run. Observed 3× in one session (2026-08-15): 2938, 3135 and 4151 chars of complete work the orchestrator never saw.
+- **`status='running'` with an empty `response` → real maxTurns truncation** (the mode described above). Re-dispatch with smaller scope.
+- ⚠️ Invoke it as `bash bin/cast review`, never bare `cast review` — the tap binary is dormant and rejects it with `Unknown subcommand` (verified 2026-08-15).
+- Honest limit: only ~79% of `DONE` runs carry a response, and **no** non-DONE run carries one at all (measured 2026-08-15 over the rolling 30d window — re-measure, don't cite this literal). `(no response recorded)` is the correct output for the rest — it is NOT evidence the agent failed.
+
 ## Dispatch-Prompt Contract (context-at-dispatch)
 The 95K-token zero-yield burn (a bash-specialist read 8 files, wrote nothing, hit maxTurns) was an *authoring* failure, not a cap failure. Every dispatch MUST give the agent enough inlined context to start producing output immediately:
 - **Inline the context, don't defer it.** Paste the exact `file:line` anchors / snippets / old→new strings the agent needs — never "study/read these N files first." If the agent would need to read 4+ files just to begin, compress that context into the prompt before dispatch.
