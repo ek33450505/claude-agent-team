@@ -54,6 +54,7 @@ An agent that delivers nothing has TWO possible causes, and guessing wrong is ex
 - **`status='running'` with an empty `response` → real maxTurns truncation** (the mode described above). Re-dispatch with smaller scope.
 - ⚠️ Invoke it as `bash bin/cast review`, never bare `cast review` — the tap binary is dormant and rejects it with `Unknown subcommand` (verified 2026-08-15).
 - Honest limit: only ~79% of `DONE` runs carry a response, and **no** non-DONE run carries one at all (measured 2026-08-15 over the rolling 30d window — re-measure, don't cite this literal). `(no response recorded)` is the correct output for the rest — it is NOT evidence the agent failed.
+- Still `running`? Check `bash bin/cast agents --live` before concluding anything — it lists in-flight runs with elapsed time. **Do NOT re-dispatch on `running` alone:** only ~1.5% of runs never end and `code-reviewer` averages 1.6 min, so `running` usually means slow, not dead. Misreading it as stalled once caused two agents to edit the same file. Note elapsed is the ONLY live signal — `tool_uses`, `branch` and `model` are written at completion, so they are empty mid-run by design, not a fault.
 
 ## Dispatch-Prompt Contract (context-at-dispatch)
 The 95K-token zero-yield burn (a bash-specialist read 8 files, wrote nothing, hit maxTurns) was an *authoring* failure, not a cap failure. Every dispatch MUST give the agent enough inlined context to start producing output immediately:
