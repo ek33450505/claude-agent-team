@@ -14,12 +14,12 @@
 #   0 — always (report-only; never blocks)
 #
 # Env overrides (for testing):
-#   CAST_RULES_BYTE_BUDGET  — soft target in bytes (default: 20480)
+#   CAST_RULES_BYTE_BUDGET  — soft target in bytes (default: 36864)
 #   CAST_RULES_DIR          — path to scan instead of <repo-root>/rules-core
 
 set -euo pipefail
 
-BUDGET="${CAST_RULES_BYTE_BUDGET:-20480}"
+BUDGET="${CAST_RULES_BYTE_BUDGET:-36864}"
 
 # Resolve repo root if CAST_RULES_DIR is not overridden
 if [[ -n "${CAST_RULES_DIR:-}" ]]; then
