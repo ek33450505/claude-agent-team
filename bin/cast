@@ -713,8 +713,8 @@ for r in rows:
         'tool_uses': r['tool_uses'],
         'started_at': r['started_at'],
         'elapsed_seconds': elapsed,
-        'branch': r['branch'] or '?',
-        'model': r['model'] or '?',
+        'branch': r['branch'],
+        'model': r['model'],
         'likely_stuck': bool(elapsed is not None and elapsed > STUCK_THRESHOLD_SECONDS),
     })
 

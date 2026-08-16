@@ -174,6 +174,11 @@ SQL
 
 @test "cast agents --live --json: tool_uses key present and null for a running row" {
   _seed
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-3', 'debugger__no-branch-model', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-1 minutes')), NULL, 'running', NULL, NULL, NULL, NULL, NULL);
+SQL
   run bash "$CAST_BIN" agents --live --json
   assert_success
   run python3 -c "
@@ -182,6 +187,12 @@ data = json.loads(sys.argv[1])
 rows = {r['agent']: r for r in data['rows']}
 assert 'tool_uses' in rows['code-reviewer__stale'], 'tool_uses key missing from JSON row'
 assert rows['code-reviewer__stale']['tool_uses'] is None, 'tool_uses should be JSON null, not omitted'
+assert 'debugger__no-branch-model' in rows, 'NULL branch/model row missing from JSON output'
+row = rows['debugger__no-branch-model']
+assert 'branch' in row, 'branch key missing from JSON row'
+assert row['branch'] is None, 'branch should be JSON null (not the \'?\' display placeholder) when unset, got: ' + repr(row['branch'])
+assert 'model' in row, 'model key missing from JSON row'
+assert row['model'] is None, 'model should be JSON null (not the \'?\' display placeholder) when unset, got: ' + repr(row['model'])
 print('OK')
 " "$output"
   assert_success
