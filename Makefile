@@ -41,20 +41,34 @@ test-ubuntu:
 # Requires: act (https://nektosact.com) and Docker
 #
 # Jobs included (mirrors the full PR-gating workflow set):
-#   bats, contract-test, hook-contract-validation — bats-ci.yml (full suite + contracts)
-#   stats-guard           — cast-stats-guard.yml
-#   rules-drift           — rules-drift.yml
-#   readme-structure      — docs-check.yml
-#   pii-scan, shellcheck  — security-scan.yml
-#   db-contract           — db-contract.yml
-#   self-lints            — self-lints.yml
-#   python-unit           — python-unit.yml
+#   bats                   — bats-ci.yml (full suite)
+#   stats-guard            — cast-stats-guard.yml
+#   rules-drift            — rules-drift.yml
+#   readme-structure       — docs-check.yml
+#   pii-scan, shellcheck   — security-scan.yml
+#   db-contract            — db-contract.yml
+#   self-lints             — self-lints.yml
+#   python-unit            — python-unit.yml
+# Plus, run directly (not via act — see "Dropped from the act loop" below):
+#   hook-contract-validation — scripts/cast-validate-all-hooks.sh --source
 #
 # Runner image: -P pins ubuntu-latest to catthehacker/ubuntu:act-latest so act never
 #   prompts interactively on first run (non-TTY safe; equivalent to the prompt's default).
 #
 # One invocation per job: act's -j flag is last-wins (repeated -j silently runs only the
-#   final job). Use a fail-fast loop — one act call per job — to guarantee all 11 run.
+#   final job). Use a fail-fast loop — one act call per job — to guarantee all 9 run.
+#
+# Dropped from the act loop (both declare `needs: bats` in bats-ci.yml, so under act
+# each one re-runs the ENTIRE bats suite as a dependency — 3x ~50min instead of 1x):
+#   contract-test            — advisory-only BY CONSTRUCTION: `bats-ci.yml` runs it as
+#                              `... || true` with `continue-on-error: true`, and the
+#                              workflow's own comment says it "currently provides no
+#                              enforcement signal" (fixture coverage incomplete). It cannot
+#                              fail a PR, so skipping it here loses no real signal.
+#   hook-contract-validation — a REAL gate, so it is NOT skipped: it runs directly below,
+#                              after the act loop, as `scripts/cast-validate-all-hooks.sh
+#                              --source` (the same command bats-ci.yml's job runs), instead
+#                              of paying the `needs: bats` re-run cost under act.
 #
 # Excluded (cannot run under act):
 #   gitleaks   — uses gitleaks/gitleaks-action which requires a live GITHUB_TOKEN secret;
@@ -73,11 +87,15 @@ ci-local:
 	@echo "Running PR-gating workflows locally via act..."
 	@echo "This simulates the exact CI checks that block PR merges."
 	@echo ""
-	@for j in bats contract-test hook-contract-validation stats-guard rules-drift readme-structure pii-scan shellcheck db-contract self-lints python-unit; do \
+	@echo "Skipping via act (see Makefile header): contract-test (advisory-only, no enforcement signal)."
+	@echo "Running directly instead of via act (see Makefile header): hook-contract-validation."
+	@for j in bats stats-guard rules-drift readme-structure pii-scan shellcheck db-contract self-lints python-unit; do \
 		echo "── ci-local: act job $$j"; \
 		act pull_request --container-architecture linux/amd64 -P ubuntu-latest=catthehacker/ubuntu:act-latest -j "$$j" || { echo "ci-local FAILED at job: $$j" >&2; exit 1; }; \
 	done
-	@echo "ci-local: all 11 jobs green"
+	@echo "── ci-local: direct job hook-contract-validation"
+	bash scripts/cast-validate-all-hooks.sh --source
+	@echo "ci-local: all 9 act jobs + hook-contract-validation (direct) green"
 
 # Sync docs then validate
 sync: docs validate
