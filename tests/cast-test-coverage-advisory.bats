@@ -4,6 +4,17 @@
 # Path precision (test 6) is the reason this script exists: it must match on
 # the repo-relative PATH, not the basename — see the script header for the
 # measured 187-vs-35 false-positive gap that basename matching produced.
+#
+# Fixture heredocs below intentionally contain NO `@test` token, at any
+# indentation. The advisory script only ever does a fixed-string path grep
+# against tests/*.bats (see scripts/cast-test-coverage-advisory.sh) — the
+# fixture bodies never needed to be valid bats files, just files containing
+# the target path string. An indented `@test "..."` line inside a heredoc is
+# parsed by some bats versions (observed: CI's bats, not local 1.14.0) as a
+# real outer-file test declaration, which caused a
+# "Duplicate test name(s)" CI failure when two fixtures reused the same
+# quoted description. Keep fixtures as plain comments/commands referencing
+# the path — never reintroduce `@test` inside a fixture heredoc.
 
 load test_helper/bats-support/load
 load test_helper/bats-assert/load
@@ -36,14 +47,12 @@ teardown() {
 @test "advisory: names the covering test file and not an unrelated one" {
   cd "$TEST_REPO"
   cat >tests/alpha.bats <<'EOF'
- @test "covers target" {
-  run bash scripts/target.sh
-}
+# fixture: references scripts/target.sh (no @test — see file header)
+run bash scripts/target.sh
 EOF
   cat >tests/unrelated.bats <<'EOF'
- @test "covers something else" {
-  run bash scripts/other.sh
-}
+# fixture: references scripts/other.sh (no @test — see file header)
+run bash scripts/other.sh
 EOF
   cat >scripts/target.sh <<'EOF'
 #!/bin/bash
@@ -60,9 +69,8 @@ EOF
 @test "advisory: reports explicitly when no test references a scanned file" {
   cd "$TEST_REPO"
   cat >tests/alpha.bats <<'EOF'
- @test "covers target" {
-  run bash scripts/target.sh
-}
+# fixture: references scripts/target.sh (no @test — see file header)
+run bash scripts/target.sh
 EOF
   cat >scripts/orphan.sh <<'EOF'
 #!/bin/bash
@@ -120,9 +128,8 @@ EOF
 @test "advisory: path-precise match — a test referencing scripts/other-cast.sh does not count as covering bin/cast" {
   cd "$TEST_REPO"
   cat >tests/cast-adjacent.bats <<'EOF'
- @test "covers a different cast-named script" {
-  run bash scripts/other-cast.sh
-}
+# fixture: references scripts/other-cast.sh (no @test — see file header)
+run bash scripts/other-cast.sh
 EOF
   cat >bin/cast <<'EOF'
 #!/usr/bin/env bash
@@ -143,14 +150,12 @@ EOF
 @test "advisory: multiple covering tests are joined with comma-space, not comma alone" {
   cd "$TEST_REPO"
   cat >tests/aaa.bats <<'EOF'
- @test "covers target a" {
-  run bash scripts/multi.sh
-}
+# fixture: references scripts/multi.sh (no @test — see file header)
+run bash scripts/multi.sh
 EOF
   cat >tests/bbb.bats <<'EOF'
- @test "covers target b" {
-  run bash scripts/multi.sh
-}
+# fixture: references scripts/multi.sh (no @test — see file header)
+run bash scripts/multi.sh
 EOF
   cat >scripts/multi.sh <<'EOF'
 #!/bin/bash
