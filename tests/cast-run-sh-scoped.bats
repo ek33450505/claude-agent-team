@@ -205,3 +205,57 @@ _new_fake() {
   assert_output --partial "1..1"
   refute_output --partial "BATS helper submodules are not initialised"
 }
+
+# ---------------------------------------------------------------------------
+# (7) bare positional footgun: a bare file argument must fail closed, not fall
+#     through to the full glob (the shape behind the 2026-06-02/2026-06-11
+#     ~/.claude wipes). PREMISE-VS-MECHANISM: it is not enough to assert the
+#     warning text appeared — a broken version could print it AND still run
+#     the whole suite. Assert NO TAP plan line ran at all.
+# ---------------------------------------------------------------------------
+
+@test "bare positional: a bare file argument is rejected before any test runs" {
+  local fake; fake="$(_new_fake)"
+  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '@test "b1" { true; }\n@test "b2" { true; }\n' > "$fake/tests/beta.bats"
+  printf '@test "g1" { true; }\n@test "g2" { true; }\n@test "g3" { true; }\n' > "$fake/tests/gamma.bats"
+  # Full glob would be 6 tests; a bare positional must run ZERO of them.
+
+  run bash "$fake/tests/run.sh" tests/alpha.bats
+  assert_failure
+  assert_output --partial "bare file arguments are not supported"
+  # The real hazard: no TAP plan line at all — nothing executed, scoped or full.
+  refute_output --partial "1.."
+  refute_output --partial "1..6"
+}
+
+@test "bare positional: rejected before the temp-HOME banner is printed (bails before any work)" {
+  local fake; fake="$(_new_fake)"
+  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+
+  run bash "$fake/tests/run.sh" tests/alpha.bats
+  assert_failure
+  assert_output --partial "bare file arguments are not supported"
+  refute_output --partial "isolated temp HOME"
+}
+
+@test "regression: flags still pass through and run the full glob without --files" {
+  local fake; fake="$(_new_fake)"
+  printf '@test "a1" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '@test "b1" { true; }\n@test "b2" { true; }\n' > "$fake/tests/beta.bats"
+
+  run bash "$fake/tests/run.sh" --tap
+  assert_success
+  assert_output --partial "1..3"
+}
+
+@test "regression: --files tests/alpha.bats --tap still scopes correctly" {
+  local fake; fake="$(_new_fake)"
+  printf '@test "a1" { true; }\n@test "a2" { true; }\n' > "$fake/tests/alpha.bats"
+  printf '@test "b1" { true; }\n' > "$fake/tests/beta.bats"
+
+  run bash "$fake/tests/run.sh" --files tests/alpha.bats --tap
+  assert_success
+  assert_output --partial "1..2"
+  refute_output --partial "1..3"
+}
