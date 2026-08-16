@@ -11,7 +11,10 @@ Covers:
 """
 
 import importlib.util
+import io
+import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +22,12 @@ from unittest import mock
 
 _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
 _SCRIPT_PATH = _SCRIPTS_DIR / 'cast-audit.py'
+
+# scripts/ on sys.path so cast_audit's lazy `from cast_db import db_write` (used
+# by write_mcp_routing_event) resolves the same way it does when the hook runs
+# cast-audit.py as a top-level script (Python auto-adds the script's own dir).
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
 # Load module via importlib (hyphenated name cannot be imported normally)
 # Set CAST_DB_PATH to a temp location first to avoid any import-time path resolution issues.
@@ -429,6 +438,523 @@ class TestResolveProject(unittest.TestCase):
         # For this test, we expect it might be non-empty if running in a git repo,
         # so we just verify it's a string
         self.assertIsInstance(result, str)
+
+
+class TestMcpParsing(unittest.TestCase):
+    """Test parse_tool_fields() MCP branch (v10 2.6) — server/tool split,
+    args_summary redaction-by-construction, is_cloud_bound derivation, and
+    outcome/result_size capture. All MCP-only; non-MCP tools must be unaffected
+    (see TestMcpNonRegression below)."""
+
+    def test_mcp_server_tool_split(self):
+        """mcp__<server>__<tool> splits on the double underscore delimiter."""
+        data = {"tool_name": "mcp__cast-record__query", "tool_input": {}}
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["mcp_server"], "cast-record")
+        self.assertEqual(result["mcp_tool"], "query")
+
+    def test_mcp_server_tool_split_hyphenated_server(self):
+        """Server names may legitimately contain single hyphens — split must
+        use '__' only, never '-'."""
+        data = {"tool_name": "mcp__cloudflare-graphql__graphql_query", "tool_input": {}}
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["mcp_server"], "cloudflare-graphql")
+        self.assertEqual(result["mcp_tool"], "graphql_query")
+
+    def test_mcp_malformed_tool_name_no_tool_segment(self):
+        """'mcp__server' with no tool segment must not raise."""
+        data = {"tool_name": "mcp__onlyserver", "tool_input": {}}
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["mcp_server"], "onlyserver")
+        self.assertEqual(result["mcp_tool"], "")
+
+    def test_mcp_malformed_bare_prefix(self):
+        """Bare 'mcp__' with nothing after must not raise."""
+        data = {"tool_name": "mcp__", "tool_input": {}}
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["mcp_server"], "")
+        self.assertEqual(result["mcp_tool"], "")
+
+    def test_args_summary_omits_secret_value_keeps_key_name(self):
+        """A secret VALUE must be structurally absent; the key name must appear."""
+        data = {
+            "tool_name": "mcp__cast-record__query",
+            "tool_input": {"account_id": "SECRET-TOKEN-ABCDEF1234567890", "limit": 10},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertIn("account_id", result["args_summary"])
+        self.assertNotIn("SECRET-TOKEN-ABCDEF1234567890", result["args_summary"])
+        self.assertIn("limit:int", result["args_summary"])
+
+    def test_args_summary_key_sorted_type_len_format(self):
+        """Matches the documented shape: key-sorted, comma-joined key:type(len)."""
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {"query": "x" * 418, "account_id": "y" * 32, "limit": 5},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["args_summary"], "account_id:str(32),limit:int,query:str(418)")
+
+    def test_args_summary_nested_containers(self):
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {"opts": {"a": 1, "b": 2}, "items": [1, 2, 3]},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertIn("opts:dict(2)", result["args_summary"])
+        self.assertIn("items:list(3)", result["args_summary"])
+
+    def test_args_summary_truncated_to_200_chars(self):
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {f"k{i}": "x" * 20 for i in range(30)},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertLessEqual(len(result["args_summary"]), 200)
+
+    def test_is_cloud_bound_stdio_is_false(self):
+        """Record-level (wiring) check. NOTE: this alone is NOT load-bearing —
+        the base record's `is_cloud_bound` default is already False, so this
+        test would still pass even if _mcp_is_cloud_bound() were never called
+        at all. See test_mcp_is_cloud_bound_direct_stdio (Fix 3) below for the
+        assertion that actually exercises the function."""
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = os.path.join(td, "claude.json")
+            with open(cfg_path, "w") as f:
+                json.dump({"mcpServers": {"cast-record": {"type": "stdio"}}}, f)
+            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
+                data = {"tool_name": "mcp__cast-record__query", "tool_input": {}}
+                result = cast_audit.parse_tool_fields(data)
+                self.assertFalse(result["is_cloud_bound"])
+
+    def test_mcp_is_cloud_bound_direct_stdio(self):
+        """Fix 3 (was flagged by the writer, code-reviewer, AND a live probe
+        independently): calls _mcp_is_cloud_bound() directly rather than
+        through parse_tool_fields()'s dict default, so deleting the function
+        makes this test ERROR (AttributeError) instead of silently agreeing
+        with a default it never consulted. This is the load-bearing assertion
+        for the stdio case — the test above is wiring-level only."""
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = os.path.join(td, "claude.json")
+            with open(cfg_path, "w") as f:
+                json.dump({"mcpServers": {"cast-record": {"type": "stdio"}}}, f)
+            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
+                self.assertFalse(cast_audit._mcp_is_cloud_bound("cast-record"))
+
+    def test_is_cloud_bound_http_is_true(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = os.path.join(td, "claude.json")
+            with open(cfg_path, "w") as f:
+                json.dump({"mcpServers": {"cloudflare": {"type": "http"}}}, f)
+            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
+                data = {"tool_name": "mcp__cloudflare__zones_list", "tool_input": {}}
+                result = cast_audit.parse_tool_fields(data)
+                self.assertTrue(result["is_cloud_bound"])
+
+    def test_is_cloud_bound_sse_is_true(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = os.path.join(td, "claude.json")
+            with open(cfg_path, "w") as f:
+                json.dump({"mcpServers": {"streamsrv": {"type": "sse"}}}, f)
+            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
+                data = {"tool_name": "mcp__streamsrv__tool", "tool_input": {}}
+                result = cast_audit.parse_tool_fields(data)
+                self.assertTrue(result["is_cloud_bound"])
+
+    def test_is_cloud_bound_unknown_server_fails_safe_true(self):
+        """Server missing from ~/.claude.json → assume cloud-bound (fail-safe)."""
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = os.path.join(td, "claude.json")
+            with open(cfg_path, "w") as f:
+                json.dump({"mcpServers": {}}, f)
+            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
+                data = {"tool_name": "mcp__unknownserver__tool", "tool_input": {}}
+                result = cast_audit.parse_tool_fields(data)
+                self.assertTrue(result["is_cloud_bound"])
+
+    def test_is_cloud_bound_missing_config_file_fails_safe_true(self):
+        with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", "/nonexistent/path/claude.json"):
+            data = {"tool_name": "mcp__srv__tool", "tool_input": {}}
+            result = cast_audit.parse_tool_fields(data)
+            self.assertTrue(result["is_cloud_bound"])
+
+    def test_outcome_ok_no_error_key(self):
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {},
+            "tool_response": {"result": "success"},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["outcome"], "ok")
+        self.assertNotIn("error_preview", result)
+
+    def test_outcome_error_from_error_key(self):
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {},
+            "tool_response": {"error": "rate limit exceeded"},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["outcome"], "error")
+        self.assertEqual(result["error_preview"], "rate limit exceeded")
+
+    def test_outcome_error_from_iserror_flag(self):
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {},
+            "tool_response": {"isError": True, "content": "boom"},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["outcome"], "error")
+
+    def test_outcome_error_from_content_block_list(self):
+        """tool_response as a list of content blocks (MCP shape) must not raise."""
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {},
+            "tool_response": [{"type": "error", "text": "not found"}],
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["outcome"], "error")
+        self.assertEqual(result["error_preview"], "not found")
+
+    def test_outcome_string_tool_response_is_ok(self):
+        """tool_response as a plain string must not raise."""
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {},
+            "tool_response": "plain text result",
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["outcome"], "ok")
+
+    def test_outcome_missing_tool_response_is_ok(self):
+        """Missing tool_response (e.g. pre-mode) must not raise."""
+        data = {"tool_name": "mcp__srv__tool", "tool_input": {}}
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["outcome"], "ok")
+
+    def test_result_size_present_and_positive(self):
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {},
+            "tool_response": {"result": "abcdefgh"},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertIn("result_size", result)
+        self.assertGreater(result["result_size"], 0)
+
+
+class TestMcpNonRegression(unittest.TestCase):
+    """Regression guard: non-MCP tool calls must keep their existing shape.
+    cast-record-review.py, cast-commit-reconcile.py, and cast-redact.py all
+    parse audit.jsonl — changing the non-MCP record shape is out of scope."""
+
+    def test_bash_tool_gains_no_mcp_fields(self):
+        data = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
+        result = cast_audit.parse_tool_fields(data)
+        for key in ("mcp_server", "mcp_tool", "args_summary", "outcome", "error_preview", "result_size"):
+            self.assertNotIn(key, result)
+
+    def test_write_tool_gains_no_mcp_fields(self):
+        data = {"tool_name": "Write", "tool_input": {"file_path": "/tmp/x.txt", "content": "hi"}}
+        result = cast_audit.parse_tool_fields(data)
+        for key in ("mcp_server", "mcp_tool", "args_summary", "outcome", "error_preview", "result_size"):
+            self.assertNotIn(key, result)
+
+
+class TestSessionIdPrecedence(unittest.TestCase):
+    """Test main() — session_id must be read from the stdin payload first,
+    falling back to the env var, then 'unknown' (v10 2.6 Edit 1)."""
+
+    def setUp(self):
+        self._orig_audit_log = cast_audit.AUDIT_LOG
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-audit-sid-test-')
+        cast_audit.AUDIT_LOG = os.path.join(self._tmpdir, 'audit.jsonl')
+        self._orig_env_sid = os.environ.get('CLAUDE_SESSION_ID')
+
+    def tearDown(self):
+        cast_audit.AUDIT_LOG = self._orig_audit_log
+        if self._orig_env_sid is not None:
+            os.environ['CLAUDE_SESSION_ID'] = self._orig_env_sid
+        else:
+            os.environ.pop('CLAUDE_SESSION_ID', None)
+
+    def _run_main_with_stdin(self, payload: dict) -> dict:
+        stdin_data = json.dumps(payload)
+        with mock.patch('sys.stdin', io.StringIO(stdin_data)):
+            with mock.patch('sys.argv', ['cast-audit.py', '--mode', 'post']):
+                cast_audit.main()
+        with open(cast_audit.AUDIT_LOG) as f:
+            lines = f.readlines()
+        return json.loads(lines[-1])
+
+    def test_payload_session_id_takes_precedence_over_env(self):
+        os.environ['CLAUDE_SESSION_ID'] = 'env-session'
+        record = self._run_main_with_stdin({
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "session_id": "payload-session",
+        })
+        self.assertEqual(record["session_id"], "payload-session")
+
+    def test_env_session_id_used_when_payload_missing(self):
+        os.environ['CLAUDE_SESSION_ID'] = 'env-session'
+        record = self._run_main_with_stdin({
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        })
+        self.assertEqual(record["session_id"], "env-session")
+
+    def test_unknown_when_neither_present(self):
+        os.environ.pop('CLAUDE_SESSION_ID', None)
+        record = self._run_main_with_stdin({
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        })
+        self.assertEqual(record["session_id"], "unknown")
+
+
+class TestWriteMcpRoutingEvent(unittest.TestCase):
+    """Test write_mcp_routing_event() — persists MCP calls to routing_events
+    (v10 2.6 Edit 4). ⚠ db_write swallows errors silently — SELECT the row back
+    rather than trusting a clean return (known CAST hazard)."""
+
+    def setUp(self):
+        from cast_db import db_execute
+        db_execute(
+            "CREATE TABLE IF NOT EXISTS routing_events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, timestamp TEXT, "
+            "prompt_preview TEXT, action TEXT, matched_route TEXT, pattern TEXT, "
+            "confidence TEXT, project TEXT, event_type TEXT, data TEXT)"
+        )
+
+    def test_persists_mcp_call_and_row_is_readable_back(self):
+        from cast_db import db_query
+        record = {"tool_name": "mcp__cast-record__query", "mcp_server": "cast-record"}
+        cast_audit.write_mcp_routing_event(record, "sess-mcp-1", "2026-08-16T00:00:00Z", "test-proj")
+        rows = db_query(
+            "SELECT session_id, event_type, project, data FROM routing_events "
+            "WHERE session_id = ? AND event_type = 'mcp_tool_call'",
+            ("sess-mcp-1",)
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], "sess-mcp-1")
+        self.assertEqual(rows[0][1], "mcp_tool_call")
+        self.assertEqual(rows[0][2], "test-proj")
+        stored = json.loads(rows[0][3])
+        self.assertEqual(stored["tool_name"], "mcp__cast-record__query")
+
+    def test_never_raises_on_db_failure(self):
+        """Fail-soft: a DB error must not propagate (never crash the hook)."""
+        with mock.patch.object(cast_audit, '_log_error') as mock_log:
+            with mock.patch('cast_db.db_write', side_effect=Exception("db exploded")):
+                cast_audit.write_mcp_routing_event({}, "sess", "ts", "proj")
+            mock_log.assert_called_once()
+
+
+class TestMainMcpGating(unittest.TestCase):
+    """Test main() — DB persistence must be gated to mcp__* tool calls only
+    (v10 2.6 Edit 4). Non-MCP calls fire ~1300+/day; a write on that hot path
+    is unacceptable."""
+
+    def setUp(self):
+        self._orig_audit_log = cast_audit.AUDIT_LOG
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-audit-gate-test-')
+        cast_audit.AUDIT_LOG = os.path.join(self._tmpdir, 'audit.jsonl')
+
+    def tearDown(self):
+        cast_audit.AUDIT_LOG = self._orig_audit_log
+
+    def _run_main_with_stdin(self, payload: dict) -> None:
+        stdin_data = json.dumps(payload)
+        with mock.patch('sys.stdin', io.StringIO(stdin_data)):
+            with mock.patch('sys.argv', ['cast-audit.py', '--mode', 'post']):
+                cast_audit.main()
+
+    def test_non_mcp_call_does_not_invoke_db_write(self):
+        with mock.patch.object(cast_audit, 'write_mcp_routing_event') as mock_write:
+            self._run_main_with_stdin({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+            mock_write.assert_not_called()
+
+    def test_mcp_call_invokes_db_write(self):
+        with mock.patch.object(cast_audit, 'write_mcp_routing_event') as mock_write:
+            self._run_main_with_stdin({
+                "tool_name": "mcp__cast-record__query",
+                "tool_input": {"limit": 5},
+                "tool_response": {"result": "ok"},
+            })
+            mock_write.assert_called_once()
+
+
+class TestSanitizeErrorText(unittest.TestCase):
+    """Test _sanitize_error_text() (Fix 1, HIGH — security review) — provider-
+    controlled MCP error text must be redacted BEFORE truncation, using
+    cast-redact.py's real regex engine, and must FAIL CLOSED (return None,
+    never raw text) on any failure."""
+
+    def test_redacts_github_token_keeps_surrounding_context(self):
+        token = "ghp_" + "a" * 36
+        text = f"Authentication failed: invalid token {token}"
+        result = cast_audit._sanitize_error_text(text)
+        self.assertIsNotNone(result)
+        self.assertNotIn(token, result)
+        self.assertIn("Authentication failed", result)
+
+    def test_redacts_aws_access_key(self):
+        key = "AKIA" + "1B2C3D4E5F6G7H8I"  # realistic: real AWS keys always mix digits+letters
+        text = f"access denied for key {key}"
+        result = cast_audit._sanitize_error_text(text)
+        self.assertIsNotNone(result)
+        self.assertNotIn(key, result)
+        self.assertIn("access denied", result)
+
+    def test_no_pii_passes_through_unchanged(self):
+        text = "rate limit exceeded"
+        result = cast_audit._sanitize_error_text(text)
+        self.assertEqual(result, text)
+
+    def test_fails_closed_when_redact_script_missing(self):
+        with mock.patch.object(cast_audit, "REDACT_SCRIPT", "/nonexistent/cast-redact.py"):
+            result = cast_audit._sanitize_error_text("some error text")
+            self.assertIsNone(result)
+
+    def test_fails_closed_on_loader_exception(self):
+        with mock.patch("importlib.util.spec_from_file_location", side_effect=Exception("boom")):
+            result = cast_audit._sanitize_error_text("some error text")
+            self.assertIsNone(result)
+
+
+class TestErrorPreviewSanitization(unittest.TestCase):
+    """Integration: error_preview via parse_tool_fields() must never leak a
+    provider-echoed secret (Fix 1, HIGH). Truncation to 120 chars alone is not
+    redaction — both a GitHub PAT (~40 chars) and an AWS key (20 chars) fit
+    inside that cap, so these assert the SECRET is gone, not just short."""
+
+    def test_error_preview_omits_github_token_keeps_context(self):
+        token = "ghp_" + "c" * 36
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {},
+            "tool_response": {"error": f"401 Unauthorized: bad credentials {token}"},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertEqual(result["outcome"], "error")
+        self.assertNotIn(token, result["error_preview"])
+        self.assertIn("Unauthorized", result["error_preview"])
+
+    def test_error_preview_omits_aws_key(self):
+        key = "AKIA" + "1D2E3F4G5H6I7J8K"  # realistic: real AWS keys always mix digits+letters
+        data = {
+            "tool_name": "mcp__srv__tool",
+            "tool_input": {},
+            "tool_response": {"error": f"access denied {key}"},
+        }
+        result = cast_audit.parse_tool_fields(data)
+        self.assertNotIn(key, result["error_preview"])
+
+    def test_error_preview_dropped_entirely_when_sanitization_fails_closed(self):
+        """Fail-closed contract: if sanitization can't run, error_preview must
+        be ABSENT, never fall back to raw provider text."""
+        with mock.patch.object(cast_audit, "REDACT_SCRIPT", "/nonexistent/cast-redact.py"):
+            data = {
+                "tool_name": "mcp__srv__tool",
+                "tool_input": {},
+                "tool_response": {"error": "some raw error text"},
+            }
+            result = cast_audit.parse_tool_fields(data)
+            self.assertEqual(result["outcome"], "error")
+            self.assertNotIn("error_preview", result)
+
+    def test_sanitization_is_unconditional_not_gated_on_redact_pii_config(self):
+        """Sanitization must run regardless of cfg.get('redact_pii') — DB/JSONL
+        persistence for MCP is unconditional, so sanitization must be too."""
+        token = "ghp_" + "e" * 36
+        with mock.patch.object(cast_audit, "_read_cast_cli_cfg", return_value={"redact_pii": False}):
+            data = {
+                "tool_name": "mcp__srv__tool",
+                "tool_input": {},
+                "tool_response": {"error": f"failed: {token}"},
+            }
+            result = cast_audit.parse_tool_fields(data)
+            self.assertNotIn(token, result["error_preview"])
+
+
+class TestMcpDbWriteOrdering(unittest.TestCase):
+    """Test main() — write_mcp_routing_event() must run AFTER the redaction
+    block finalizes `record`, not before (Fix 2, MEDIUM). Real MCP calls never
+    populate url/query/command_preview today (Fix 4's confirmed dead-code
+    finding), so the redaction block never actually mutates a real MCP
+    record — meaning a plain "DB row == JSONL line" content check can't
+    discriminate the ordering bug (it would pass either way). This test
+    forces the redaction path via a patched parse_tool_fields() so the
+    ordering is genuinely exercised: with the bug (write BEFORE redaction),
+    the DB row is serialized before `record["redacted"]` exists and the
+    assertion below fails; with the fix, it passes.
+    """
+
+    def setUp(self):
+        from cast_db import db_execute
+        db_execute(
+            "CREATE TABLE IF NOT EXISTS routing_events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, timestamp TEXT, "
+            "prompt_preview TEXT, action TEXT, matched_route TEXT, pattern TEXT, "
+            "confidence TEXT, project TEXT, event_type TEXT, data TEXT)"
+        )
+        self._orig_audit_log = cast_audit.AUDIT_LOG
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-audit-order-test-')
+        cast_audit.AUDIT_LOG = os.path.join(self._tmpdir, 'audit.jsonl')
+
+    def tearDown(self):
+        cast_audit.AUDIT_LOG = self._orig_audit_log
+
+    def test_db_row_reflects_redaction_annotation(self):
+        from cast_db import db_query
+
+        def fake_parse_tool_fields(data):
+            return {
+                "tool_name": "mcp__srv__tool",
+                "mcp_server": "srv",
+                "mcp_tool": "tool",
+                "is_cloud_bound": True,
+                # Real MCP calls never set `query` — forced here to exercise
+                # the redaction-annotation path deterministically.
+                "query": "some text to redact",
+                "input_hash": "abc123",
+            }
+
+        session_id = "sess-order-1"
+        with mock.patch.object(cast_audit, 'parse_tool_fields', side_effect=fake_parse_tool_fields):
+            with mock.patch.object(cast_audit, '_read_cast_cli_cfg', return_value={"redact_pii": True}):
+                with mock.patch.object(
+                    cast_audit, 'run_redact_analysis',
+                    return_value={"entity_count": 1, "entities": []}
+                ):
+                    payload = {"tool_name": "mcp__srv__tool", "tool_input": {}, "session_id": session_id}
+                    with mock.patch('sys.stdin', io.StringIO(json.dumps(payload))):
+                        # --mode post: never hits the strict-block early return,
+                        # regardless of safelist match, so no need to force that.
+                        with mock.patch('sys.argv', ['cast-audit.py', '--mode', 'post']):
+                            cast_audit.main()
+
+        rows = db_query(
+            "SELECT data FROM routing_events WHERE session_id = ? AND event_type = 'mcp_tool_call'",
+            (session_id,)
+        )
+        self.assertEqual(len(rows), 1)
+        db_record = json.loads(rows[0][0])
+        self.assertTrue(
+            db_record.get("redacted"),
+            "DB row must reflect the redaction annotation added by main()'s "
+            "redaction block — proves write_mcp_routing_event() fires AFTER "
+            "it, not before."
+        )
+        self.assertEqual(db_record.get("redacted_count"), 1)
+
+        # And the JSONL copy must agree — same final `record` object.
+        with open(cast_audit.AUDIT_LOG) as f:
+            jsonl_record = json.loads(f.readlines()[-1])
+        self.assertEqual(db_record, jsonl_record)
 
 
 if __name__ == '__main__':

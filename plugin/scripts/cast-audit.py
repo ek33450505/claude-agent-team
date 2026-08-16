@@ -49,6 +49,7 @@ ERROR_LOG = os.path.join(HOME, ".claude", "logs", "hook-errors.log")
 REDACT_MAPS_DIR = os.path.join(HOME, ".claude", "logs", "redact-maps")
 CAST_CLI_CFG = os.path.join(HOME, ".claude", "config", "cast-cli.json")
 REDACT_SCRIPT = os.path.join(HOME, ".claude", "scripts", "cast-redact.py")
+CLAUDE_JSON_CFG = os.path.join(HOME, ".claude.json")
 
 ENFORCEMENT_MODE = os.environ.get("CAST_PII_ENFORCEMENT", "advisory")
 
@@ -101,6 +102,144 @@ def _safelist_match(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# MCP observability helpers
+# ---------------------------------------------------------------------------
+
+def _mcp_type_desc(value) -> str:
+    """Describe a value's shape only — never its content."""
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, str):
+        return f"str({len(value)})"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, dict):
+        return f"dict({len(value)})"
+    if isinstance(value, list):
+        return f"list({len(value)})"
+    if value is None:
+        return "null"
+    return type(value).__name__
+
+
+def _mcp_args_summary(tool_input: dict) -> str:
+    """Redaction-by-construction: comma-joined, key-sorted `key:type(len)` pairs.
+
+    MCP args can carry credentials, tokens, and account IDs — this must build a
+    string that is structurally incapable of containing a value, not merely one
+    that has been filtered. Never raises; unusable input yields "".
+    """
+    try:
+        if not isinstance(tool_input, dict):
+            return ""
+        parts = [f"{k}:{_mcp_type_desc(tool_input[k])}" for k in sorted(tool_input.keys())]
+        return ",".join(parts)[:200]
+    except Exception:
+        return ""
+
+
+def _mcp_is_cloud_bound(server: str) -> bool:
+    """stdio => local subprocess (False); http/sse => leaves the machine (True).
+
+    Unknown/missing server => True (fail-safe: assume cloud-bound so it still
+    gets redaction analysis instead of being silently skipped).
+    """
+    if not server:
+        return True
+    try:
+        with open(CLAUDE_JSON_CFG) as f:
+            cfg = json.load(f)
+        server_type = cfg.get("mcpServers", {}).get(server, {}).get("type", "")
+        if server_type == "stdio":
+            return False
+        return True
+    except Exception:
+        return True
+
+
+def _sanitize_error_text(text: str):
+    """Redact PII/secrets from provider-controlled MCP error text before it is
+    ever persisted. Both the routing_events (cast.db) and audit.jsonl writes
+    are UNCONDITIONAL for MCP calls, so sanitization must be too — never gate
+    this on cfg.get("redact_pii") or on is_cloud_bound. An upstream auth
+    failure can echo a token straight back via `error`/`isError` content, and
+    truncation alone is not redaction: a GitHub PAT (~40 chars) or an AWS key
+    (20 chars) both fit inside the 120-char preview cap.
+
+    Loads cast-redact.py's own regex engine directly via importlib (the
+    hyphenated filename can't be `import`ed as a normal module) — same engine
+    choice cast-redact.py makes for its own hook path (see cast-redact.py:319,
+    "no Presidio startup cost in hook path").
+
+    FAILS CLOSED: returns None on ANY failure (missing file, import error,
+    regex error) so the caller drops the text entirely rather than storing
+    raw, unredacted content. Never raises.
+    """
+    try:
+        if not os.path.isfile(REDACT_SCRIPT):
+            return None
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cast_redact_lazy", REDACT_SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        entities = module.analyze_regex(text, [])
+        return module.redact_regex(text, entities, "redact")
+    except Exception:
+        return None
+
+
+def _mcp_outcome(tool_response) -> tuple:
+    """Derive (outcome, error_preview, result_size) from tool_response.
+
+    tool_response may be a dict, a string, a list of content blocks, or missing
+    entirely — handle all shapes without raising. error_preview is sanitized
+    via _sanitize_error_text() BEFORE truncation — see that function's
+    docstring for why (fail-closed: sanitization failure drops the preview
+    entirely rather than ever persisting raw text).
+    """
+    if tool_response is None:
+        return "ok", "", 0
+
+    is_error = False
+    error_text = ""
+    try:
+        if isinstance(tool_response, dict):
+            if tool_response.get("error"):
+                is_error = True
+                error_text = str(tool_response.get("error"))
+            if tool_response.get("isError"):
+                is_error = True
+                if not error_text:
+                    error_text = json.dumps(tool_response, default=str)
+        elif isinstance(tool_response, list):
+            for block in tool_response:
+                if isinstance(block, dict) and (block.get("isError") or block.get("type") == "error"):
+                    is_error = True
+                    error_text = str(block.get("text") or block.get("error") or "")
+                    break
+    except Exception:
+        pass
+
+    try:
+        result_size = len(json.dumps(tool_response, default=str))
+    except Exception:
+        try:
+            result_size = len(str(tool_response))
+        except Exception:
+            result_size = 0
+
+    outcome = "error" if is_error else "ok"
+    error_preview = ""
+    if is_error and error_text:
+        sanitized = _sanitize_error_text(error_text)
+        if sanitized is not None:
+            error_preview = sanitized[:120]
+    return outcome, error_preview, result_size
+
+
+# ---------------------------------------------------------------------------
 # Step 1: Parse tool-specific fields
 # ---------------------------------------------------------------------------
 
@@ -150,6 +289,30 @@ def parse_tool_fields(data: dict) -> dict:
     elif tool_name == "Grep":
         result["query"] = (tool_input.get("pattern", "") or "")[:80]
         result["file_path"] = tool_input.get("path", "") or ""
+
+    elif tool_name.startswith("mcp__"):
+        # Format is mcp__<server>__<tool> — split on the DOUBLE underscore
+        # delimiter only; server/tool names may legitimately contain hyphens
+        # (e.g. mcp__cloudflare-graphql__graphql_query).
+        parts = tool_name.split("__")
+        result["mcp_server"] = parts[1] if len(parts) >= 2 else ""
+        result["mcp_tool"] = "__".join(parts[2:]) if len(parts) >= 3 else ""
+        result["args_summary"] = _mcp_args_summary(tool_input)
+        # NOTE: for MCP, is_cloud_bound is a RECORD/OBSERVABILITY field only —
+        # it answers "which MCP calls left the machine" when querying
+        # routing_events. It does NOT gate the PII redaction/blocking path in
+        # main() below: that path keys off `redact_text`, built from
+        # url/query/command_preview — none of which this branch sets — so it
+        # is unreachable for MCP calls regardless of is_cloud_bound. There is
+        # nothing left for it to redact anyway: args_summary is value-free by
+        # construction and error_preview is sanitized at the source (see
+        # _sanitize_error_text). Do not assume this flag enforces anything.
+        result["is_cloud_bound"] = _mcp_is_cloud_bound(result["mcp_server"])
+        outcome, error_preview, result_size = _mcp_outcome(data.get("tool_response"))
+        result["outcome"] = outcome
+        if error_preview:
+            result["error_preview"] = error_preview
+        result["result_size"] = result_size
 
     # Catch-all fingerprint of the full tool_input
     input_str = json.dumps(tool_input, sort_keys=True)
@@ -254,6 +417,28 @@ def write_redact_map(session_id: str, timestamp: str, redact_result: dict) -> No
         _log_error(f"write_redact_map failed: {e}")
 
 
+def write_mcp_routing_event(record: dict, session_id: str, timestamp: str, project: str) -> None:
+    """Persist an MCP tool call to routing_events (cast.db).
+
+    audit.jsonl rotates through 5 files (~12 days) and is then gone — this is
+    the durable record for MCP observability. MCP-only; caller must gate this.
+    Fail-soft: never raises, never crashes the hook pipeline. db_write swallows
+    its own errors silently, so callers that need certainty must SELECT the row
+    back — this function does not (fire-and-forget, matching cast-post-tool.py).
+    """
+    try:
+        from cast_db import db_write
+        db_write("routing_events", {
+            "session_id": session_id,
+            "timestamp": timestamp,
+            "event_type": "mcp_tool_call",
+            "project": project,
+            "data": json.dumps(record, separators=(",", ":")),
+        })
+    except Exception as e:
+        _log_error(f"write_mcp_routing_event failed: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -287,7 +472,7 @@ def main() -> int:
         return 0
 
     timestamp = _now_iso()
-    session_id = os.environ.get("CLAUDE_SESSION_ID", "unknown")
+    session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID") or "unknown"
     project = resolve_project()
 
     # Parse tool fields
@@ -400,6 +585,15 @@ def main() -> int:
                             }
                         })
                         print(hook_output)
+
+    # Persist MCP tool calls to routing_events. Gated to mcp__* only — this
+    # hook fires on every Bash/Edit/Write/etc. call with timeout: 3, and a DB
+    # write on that hot path is unacceptable. MCP calls are rare by comparison.
+    # Runs AFTER the redaction block (not before it) so the durable cast.db
+    # copy is built from the exact same final `record` as the audit.jsonl
+    # copy below — never a snapshot taken before redaction annotated it.
+    if parsed.get("tool_name", "").startswith("mcp__"):
+        write_mcp_routing_event(record, session_id, timestamp, project)
 
     # Append to audit log
     try:
