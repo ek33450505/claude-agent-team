@@ -45,10 +45,13 @@ teardown() {
 _seed() {
   bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
   sqlite3 "$CAST_DB_PATH" <<'SQL'
+-- Running rows carry NULL tool_uses/branch/model — those are written on the completion path.
+-- Measured 0/84 populated for non-DONE rows over 30d. A fixture with values here would be
+-- a shape production never produces, and would hide dead-column defects (see v10 0.2).
 INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
 VALUES
-  ('sess-1', 'backend-writer__fresh', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-2 minutes')), NULL, 'running', 12, NULL, 'feature/v10-reliability', 'sonnet', NULL),
-  ('sess-1', 'code-reviewer__stale', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-45 minutes')), NULL, 'running', NULL, NULL, 'feature/v10-reliability', 'sonnet', NULL),
+  ('sess-1', 'backend-writer__fresh', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-2 minutes')), NULL, 'running', NULL, NULL, NULL, NULL, NULL),
+  ('sess-1', 'code-reviewer__stale', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-45 minutes')), NULL, 'running', NULL, NULL, NULL, NULL, NULL),
   ('sess-1', 'frontend-writer__done', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-5 minutes')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-3 minutes')), 'DONE', 8, 120000, 'feature/v10-reliability', 'sonnet', 'done body');
 SQL
 }
@@ -193,6 +196,33 @@ assert 'branch' in row, 'branch key missing from JSON row'
 assert row['branch'] is None, 'branch should be JSON null (not the \'?\' display placeholder) when unset, got: ' + repr(row['branch'])
 assert 'model' in row, 'model key missing from JSON row'
 assert row['model'] is None, 'model should be JSON null (not the \'?\' display placeholder) when unset, got: ' + repr(row['model'])
+print('OK')
+" "$output"
+  assert_success
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# 9. Insurance: if the recorder ever DOES populate branch/model mid-run,
+#    --json must pass those values through unchanged (not null, not '?').
+# ───────────────────────────────────────────────────────────────────────────
+
+@test "cast agents --live --json: non-null branch/model pass through unchanged if ever populated" {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-4', 'backend-writer__mid-run-populated', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-4 minutes')), NULL, 'running', NULL, NULL, 'feature/v10-reliability', 'sonnet', NULL);
+SQL
+  run bash "$CAST_BIN" agents --live --json
+  assert_success
+  run python3 -c "
+import sys, json
+data = json.loads(sys.argv[1])
+rows = {r['agent']: r for r in data['rows']}
+assert 'backend-writer__mid-run-populated' in rows, 'populated row missing from JSON output'
+row = rows['backend-writer__mid-run-populated']
+assert row['branch'] == 'feature/v10-reliability', 'branch should pass through unchanged, got: ' + repr(row['branch'])
+assert row['model'] == 'sonnet', 'model should pass through unchanged, got: ' + repr(row['model'])
 print('OK')
 " "$output"
   assert_success
