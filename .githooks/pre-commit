@@ -329,6 +329,11 @@ else
   fi
 fi
 
+# Test-coverage advisory — reports which existing BATS tests already cover each
+# staged scripts/bin/.githooks/completions file. Purely informational: the `|| true`
+# guarantees this can NEVER block or fail the commit, even if the script itself errors.
+bash scripts/cast-test-coverage-advisory.sh || true
+
 # Keep canonical cast-stats.json in sync with derived stats (git ls-files based → CI-consistent).
 # Only stages when a real stat field changed (--check ignores the volatile `updated` field),
 # so unrelated commits never churn the file. Never blocks the commit.
