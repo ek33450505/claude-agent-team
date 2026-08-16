@@ -512,71 +512,121 @@ class TestMcpParsing(unittest.TestCase):
         result = cast_audit.parse_tool_fields(data)
         self.assertLessEqual(len(result["args_summary"]), 200)
 
-    def test_is_cloud_bound_stdio_is_false(self):
-        """Record-level (wiring) check. NOTE: this alone is NOT load-bearing —
-        the base record's `is_cloud_bound` default is already False, so this
-        test would still pass even if _mcp_is_cloud_bound() were never called
-        at all. See test_mcp_is_cloud_bound_direct_stdio (Fix 3) below for the
-        assertion that actually exercises the function."""
-        with tempfile.TemporaryDirectory() as td:
-            cfg_path = os.path.join(td, "claude.json")
-            with open(cfg_path, "w") as f:
-                json.dump({"mcpServers": {"cast-record": {"type": "stdio"}}}, f)
-            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
-                data = {"tool_name": "mcp__cast-record__query", "tool_input": {}}
-                result = cast_audit.parse_tool_fields(data)
-                self.assertFalse(result["is_cloud_bound"])
+    def _egress_policy_candidates(self, policy: dict):
+        """Write `policy` to a temp file and return an EGRESS_POLICY_CANDIDATES
+        override list pointing at it (first candidate; second is a guaranteed
+        non-existent path so the real ~/.claude/config/egress-policy.json on
+        this dev machine is never consulted by these tests)."""
+        td = tempfile.mkdtemp(prefix="cast-audit-egress-test-")
+        path = os.path.join(td, "egress-policy.json")
+        with open(path, "w") as f:
+            json.dump(policy, f)
+        return [path, "/nonexistent/fallback/egress-policy.json"]
 
-    def test_mcp_is_cloud_bound_direct_stdio(self):
-        """Fix 3 (was flagged by the writer, code-reviewer, AND a live probe
-        independently): calls _mcp_is_cloud_bound() directly rather than
-        through parse_tool_fields()'s dict default, so deleting the function
-        makes this test ERROR (AttributeError) instead of silently agreeing
-        with a default it never consulted. This is the load-bearing assertion
-        for the stdio case — the test above is wiring-level only."""
-        with tempfile.TemporaryDirectory() as td:
-            cfg_path = os.path.join(td, "claude.json")
-            with open(cfg_path, "w") as f:
-                json.dump({"mcpServers": {"cast-record": {"type": "stdio"}}}, f)
-            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
-                self.assertFalse(cast_audit._mcp_is_cloud_bound("cast-record"))
+    def test_mcp_is_cloud_bound_stdio_server_classified_cloud_bound(self):
+        """Fix 3 (v10 2.6 follow-up) — THE discriminating test. `github` uses
+        local stdio transport (npx) yet calls api.github.com; the retired
+        transport-based logic confidently returned False here — wrong answer,
+        on the confident branch, in the security-meaning field. What a
+        PASSING run looks like while that bug is present: this test FAILS
+        (asserts True, transport logic returns False for any stdio server
+        regardless of policy). Mutation-tested below by restoring the
+        transport-based version and confirming exactly that failure, while
+        the plain 'cloudflare is http' test would have kept passing either
+        way — that contrast is why transport probes couldn't have caught
+        this and a stdio+cloud_bound case is required."""
+        policy = {
+            "mcp_servers": {
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("github"))
 
-    def test_is_cloud_bound_http_is_true(self):
-        with tempfile.TemporaryDirectory() as td:
-            cfg_path = os.path.join(td, "claude.json")
-            with open(cfg_path, "w") as f:
-                json.dump({"mcpServers": {"cloudflare": {"type": "http"}}}, f)
-            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
-                data = {"tool_name": "mcp__cloudflare__zones_list", "tool_input": {}}
-                result = cast_audit.parse_tool_fields(data)
-                self.assertTrue(result["is_cloud_bound"])
+    def test_mcp_is_cloud_bound_local_only_server_is_false(self):
+        policy = {
+            "mcp_servers": {
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertFalse(cast_audit._mcp_is_cloud_bound("cast-record"))
 
-    def test_is_cloud_bound_sse_is_true(self):
-        with tempfile.TemporaryDirectory() as td:
-            cfg_path = os.path.join(td, "claude.json")
-            with open(cfg_path, "w") as f:
-                json.dump({"mcpServers": {"streamsrv": {"type": "sse"}}}, f)
-            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
-                data = {"tool_name": "mcp__streamsrv__tool", "tool_input": {}}
-                result = cast_audit.parse_tool_fields(data)
-                self.assertTrue(result["is_cloud_bound"])
+    def test_mcp_is_cloud_bound_unlisted_server_fails_safe_true(self):
+        policy = {
+            "mcp_servers": {
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("some-unlisted-server"))
 
-    def test_is_cloud_bound_unknown_server_fails_safe_true(self):
-        """Server missing from ~/.claude.json → assume cloud-bound (fail-safe)."""
-        with tempfile.TemporaryDirectory() as td:
-            cfg_path = os.path.join(td, "claude.json")
-            with open(cfg_path, "w") as f:
-                json.dump({"mcpServers": {}}, f)
-            with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", cfg_path):
-                data = {"tool_name": "mcp__unknownserver__tool", "tool_input": {}}
-                result = cast_audit.parse_tool_fields(data)
-                self.assertTrue(result["is_cloud_bound"])
+    def test_mcp_is_cloud_bound_missing_policy_file_fails_safe_true(self):
+        with mock.patch.object(
+            cast_audit, "EGRESS_POLICY_CANDIDATES",
+            ["/nonexistent/a/egress-policy.json", "/nonexistent/b/egress-policy.json"]
+        ):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("anything"))
 
-    def test_is_cloud_bound_missing_config_file_fails_safe_true(self):
-        with mock.patch.object(cast_audit, "CLAUDE_JSON_CFG", "/nonexistent/path/claude.json"):
-            data = {"tool_name": "mcp__srv__tool", "tool_input": {}}
+    def test_mcp_is_cloud_bound_malformed_json_fails_safe_true(self):
+        td = tempfile.mkdtemp(prefix="cast-audit-egress-malformed-")
+        path = os.path.join(td, "egress-policy.json")
+        with open(path, "w") as f:
+            f.write("{not valid json")
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", [path]):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("anything"))
+
+    def test_mcp_is_cloud_bound_wired_through_parse_tool_fields(self):
+        """Wiring-level check — confirms parse_tool_fields() actually consults
+        _mcp_is_cloud_bound() rather than leaving the base-dict False default.
+        Uses github (stdio, cloud_bound) specifically so a default-masking
+        regression (function never called) cannot coincidentally pass, unlike
+        a stdio-defaults-false check would."""
+        policy = {
+            "mcp_servers": {
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            data = {"tool_name": "mcp__github__list_issues", "tool_input": {}}
             result = cast_audit.parse_tool_fields(data)
             self.assertTrue(result["is_cloud_bound"])
+
+    def test_mcp_is_cloud_bound_reads_real_repo_egress_policy(self):
+        """Integration check against the REAL config/egress-policy.json (no
+        mocked EGRESS_POLICY_CANDIDATES) — catches drift between this
+        function and the actual policy file's contents, e.g. Fix 2's
+        `cloudflare` addition. Relies on EGRESS_POLICY_CANDIDATES' first entry
+        (os.getcwd()/config/egress-policy.json, bound at cast-audit.py import
+        time) resolving to the repo's real config/ — true when the test
+        suite is run from the repo root, as tests/run.sh and CI both do."""
+        self.assertTrue(cast_audit._mcp_is_cloud_bound("cloudflare"))
+        self.assertFalse(cast_audit._mcp_is_cloud_bound("cast-record"))
+
+    def test_mcp_is_cloud_bound_still_true_when_policy_load_logs_error(self):
+        """Security Low finding follow-up: the fail-safe VALUE (True) and the
+        visible failure signal (a _log_error() call) must now coexist —
+        neither is optional. What a PASSING run looks like while the bug is
+        present: this test FAILS on the mock_log assertion (never called)
+        while STILL returning True — the exact "safe value, invisible
+        failure" defect this fix closes. The pre-existing
+        `..._fails_safe_true` tests above only check the value and would
+        keep passing regardless, which is why they didn't catch this."""
+        with mock.patch.object(
+            cast_audit, "EGRESS_POLICY_CANDIDATES", ["/nonexistent/a/egress-policy.json"]
+        ):
+            with mock.patch.object(cast_audit, "_log_error") as mock_log:
+                result = cast_audit._mcp_is_cloud_bound("anything")
+        self.assertTrue(result, "fail-safe VALUE must not change")
+        mock_log.assert_called_once()
 
     def test_outcome_ok_no_error_key(self):
         data = {
@@ -955,6 +1005,68 @@ class TestMcpDbWriteOrdering(unittest.TestCase):
         with open(cast_audit.AUDIT_LOG) as f:
             jsonl_record = json.loads(f.readlines()[-1])
         self.assertEqual(db_record, jsonl_record)
+
+
+class TestLoadEgressPolicyLogging(unittest.TestCase):
+    """Test _load_egress_policy() (security Low finding follow-up) — a
+    missing or malformed policy file must be logged via _log_error(), not
+    fail silently. Before this fix, every MCP call with a broken/missing
+    policy fell through to is_cloud_bound=True with NO diagnostic trace —
+    the correct fail-safe VALUE, but indistinguishable from a working
+    classifier that correctly found the server cloud-bound. That is exactly
+    the "safe value, invisible failure" defect class this release targets."""
+
+    def test_missing_policy_logs_error_and_returns_empty_dict(self):
+        candidates = ["/nonexistent/a/egress-policy.json", "/nonexistent/b/egress-policy.json"]
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            with mock.patch.object(cast_audit, "_log_error") as mock_log:
+                result = cast_audit._load_egress_policy()
+        self.assertEqual(result, {})
+        mock_log.assert_called_once()
+        self.assertIn("egress policy", mock_log.call_args[0][0].lower())
+
+    def test_malformed_json_logs_error_with_path_and_returns_empty_dict(self):
+        td = tempfile.mkdtemp(prefix="cast-audit-egress-log-malformed-")
+        path = os.path.join(td, "egress-policy.json")
+        with open(path, "w") as f:
+            f.write("{not valid json")
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", [path]):
+            with mock.patch.object(cast_audit, "_log_error") as mock_log:
+                result = cast_audit._load_egress_policy()
+        self.assertEqual(result, {})
+        mock_log.assert_called_once()
+        logged_msg = mock_log.call_args[0][0]
+        self.assertIn(path, logged_msg)
+
+    def test_successful_load_does_not_log(self):
+        """Regression guard: logging is for failures only — a normal,
+        successful load must not write to hook-errors.log."""
+        policy = {"mcp_servers": {"cloud_bound": ["x"], "local_only": ["y"]}}
+        td = tempfile.mkdtemp(prefix="cast-audit-egress-log-success-")
+        path = os.path.join(td, "egress-policy.json")
+        with open(path, "w") as f:
+            json.dump(policy, f)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", [path]):
+            with mock.patch.object(cast_audit, "_log_error") as mock_log:
+                result = cast_audit._load_egress_policy()
+        self.assertEqual(result, policy)
+        mock_log.assert_not_called()
+
+    def test_second_candidate_used_when_first_missing_no_log(self):
+        """Regression guard: falling through to the second candidate path
+        (the normal $CWD-miss / ~/.claude-hit case) is not a failure and
+        must not log — only exhausting ALL candidates is a failure."""
+        policy = {"mcp_servers": {"cloud_bound": [], "local_only": []}}
+        td = tempfile.mkdtemp(prefix="cast-audit-egress-log-fallback-")
+        real_path = os.path.join(td, "egress-policy.json")
+        with open(real_path, "w") as f:
+            json.dump(policy, f)
+        candidates = ["/nonexistent/first/egress-policy.json", real_path]
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            with mock.patch.object(cast_audit, "_log_error") as mock_log:
+                result = cast_audit._load_egress_policy()
+        self.assertEqual(result, policy)
+        mock_log.assert_not_called()
 
 
 if __name__ == '__main__':

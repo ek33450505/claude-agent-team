@@ -157,9 +157,13 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# MCP observability (v10 2.6) — end-to-end through the real hook script,
-# not just the Python unit tests. No ~/.claude.json in the temp HOME, so
-# every server here exercises the "unknown server -> fail-safe True" path.
+# MCP observability (v10 2.6) — end-to-end through the real hook script, not
+# just the Python unit tests. is_cloud_bound is classified from CAST's
+# canonical config/egress-policy.json (mcp_servers.cloud_bound/local_only),
+# resolved via $CWD/config/egress-policy.json — bats is invoked from the repo
+# root, so these tests read the REAL policy file, not a fixture. Servers not
+# named in either list (e.g. "unknownserver" below) exercise the fail-safe
+# True default.
 # ---------------------------------------------------------------------------
 
 @test "MCP tool call → audit record has mcp_server and mcp_tool fields" {
@@ -218,6 +222,39 @@ print(json.dumps({'tool_name': 'mcp__unknownserver__tool', 'tool_input': {}}))
 import sys, json
 d = json.loads(sys.stdin.read())
 assert d.get('is_cloud_bound') == True, f'expected fail-safe True, got {d.get(\"is_cloud_bound\")}'
+print('ok')
+"
+}
+
+@test "MCP tool call for a stdio-yet-cloud_bound server (github) → is_cloud_bound is true" {
+  # THE discriminating case: github runs over local stdio (npx) but calls
+  # api.github.com — config/egress-policy.json classifies it cloud_bound.
+  # The retired transport-based logic would have returned false here.
+  bash "$HOOK_SH" --mode post <<< "$(python3 -c "
+import json
+print(json.dumps({'tool_name': 'mcp__github__list_issues', 'tool_input': {}}))
+")"
+  local record
+  record="$(tail -1 "$HOME/.claude/logs/audit.jsonl")"
+  echo "$record" | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+assert d.get('is_cloud_bound') == True, f'github (stdio, cloud_bound) must be True, got {d.get(\"is_cloud_bound\")}'
+print('ok')
+"
+}
+
+@test "MCP tool call for cast-record (local_only) → is_cloud_bound is false" {
+  bash "$HOOK_SH" --mode post <<< "$(python3 -c "
+import json
+print(json.dumps({'tool_name': 'mcp__cast-record__query', 'tool_input': {}}))
+")"
+  local record
+  record="$(tail -1 "$HOME/.claude/logs/audit.jsonl")"
+  echo "$record" | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+assert d.get('is_cloud_bound') == False, f'cast-record (local_only) must be False, got {d.get(\"is_cloud_bound\")}'
 print('ok')
 "
 }

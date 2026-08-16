@@ -49,7 +49,14 @@ ERROR_LOG = os.path.join(HOME, ".claude", "logs", "hook-errors.log")
 REDACT_MAPS_DIR = os.path.join(HOME, ".claude", "logs", "redact-maps")
 CAST_CLI_CFG = os.path.join(HOME, ".claude", "config", "cast-cli.json")
 REDACT_SCRIPT = os.path.join(HOME, ".claude", "scripts", "cast-redact.py")
-CLAUDE_JSON_CFG = os.path.join(HOME, ".claude.json")
+CLAUDE_DIR = os.environ.get("CLAUDE_DIR", os.path.join(HOME, ".claude"))
+# Policy data: prefer repo cwd (dev), fall back to installed ~/.claude — same
+# candidate order as scripts/cast-egress-sentinel.py:53-56, the canonical
+# reader of this file.
+EGRESS_POLICY_CANDIDATES = [
+    os.path.join(os.getcwd(), "config", "egress-policy.json"),
+    os.path.join(CLAUDE_DIR, "config", "egress-policy.json"),
+]
 
 ENFORCEMENT_MODE = os.environ.get("CAST_PII_ENFORCEMENT", "advisory")
 
@@ -140,19 +147,62 @@ def _mcp_args_summary(tool_input: dict) -> str:
         return ""
 
 
-def _mcp_is_cloud_bound(server: str) -> bool:
-    """stdio => local subprocess (False); http/sse => leaves the machine (True).
+def _load_egress_policy() -> dict:
+    """Load config/egress-policy.json via EGRESS_POLICY_CANDIDATES (same order
+    as scripts/cast-egress-sentinel.py's _load_policy(), lines 76-84). Returns
+    {} on any failure — never raises.
 
-    Unknown/missing server => True (fail-safe: assume cloud-bound so it still
-    gets redaction analysis instead of being silently skipped).
+    Logs to hook-errors.log on failure (matching the sentinel's own
+    _log_error() call) so a missing/malformed policy is VISIBLE. Without
+    this, every MCP call silently falls through to the fail-safe
+    is_cloud_bound=True — the correct safe VALUE, but indistinguishable from
+    a working classifier that correctly found the server cloud-bound. The
+    safe value does not change here; only its visibility does.
+    """
+    found_any = False
+    for path in EGRESS_POLICY_CANDIDATES:
+        try:
+            if os.path.isfile(path):
+                found_any = True
+                with open(path) as f:
+                    return json.load(f)
+        except Exception as e:
+            _log_error(f"egress policy load failed ({path}): {e}")
+    if not found_any:
+        _log_error(f"egress policy not found in any candidate path: {EGRESS_POLICY_CANDIDATES}")
+    return {}
+
+
+def _mcp_is_cloud_bound(server: str) -> bool:
+    """Classify from CAST's CANONICAL egress policy
+    (config/egress-policy.json -> mcp_servers), matching the semantics of
+    scripts/cast-egress-sentinel.py:153-158 EXACTLY.
+
+    Transport (stdio vs http) is NOT a reliable signal and must NOT be
+    consulted here — the policy file's own _doc says why: github uses local
+    stdio (npx) yet calls api.github.com. The transport-based version of this
+    function got exactly that case wrong (confidently returned False for a
+    server that does leave the machine); the policy file is the single
+    source of truth CAST already maintains for this classification.
+
+    server in local_only  -> False
+    server in cloud_bound -> True
+    otherwise (unknown)   -> True (honors the policy's _default_unknown,
+                              currently "cloud_bound" — the sentinel's own
+                              reader hardcodes this same unknown-is-cloud-
+                              bound behavior rather than re-deriving it, so
+                              this matches it exactly rather than reading
+                              _default_unknown dynamically)
+
+    Fail-safe: ANY failure (missing file, malformed JSON, missing key)
+    -> True. This is a RECORD/OBSERVABILITY field only — see the note where
+    it's set in parse_tool_fields().
     """
     if not server:
         return True
     try:
-        with open(CLAUDE_JSON_CFG) as f:
-            cfg = json.load(f)
-        server_type = cfg.get("mcpServers", {}).get(server, {}).get("type", "")
-        if server_type == "stdio":
+        mcp = _load_egress_policy().get("mcp_servers", {})
+        if server in mcp.get("local_only", []):
             return False
         return True
     except Exception:
@@ -307,6 +357,9 @@ def parse_tool_fields(data: dict) -> dict:
         # nothing left for it to redact anyway: args_summary is value-free by
         # construction and error_preview is sanitized at the source (see
         # _sanitize_error_text). Do not assume this flag enforces anything.
+        # Derived from CAST's canonical egress policy (config/egress-
+        # policy.json), NOT from MCP transport type — see _mcp_is_cloud_bound's
+        # docstring for why transport is not a reliable signal here.
         result["is_cloud_bound"] = _mcp_is_cloud_bound(result["mcp_server"])
         outcome, error_preview, result_size = _mcp_outcome(data.get("tool_response"))
         result["outcome"] = outcome
