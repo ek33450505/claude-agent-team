@@ -6,23 +6,35 @@ if [[ "${CLAUDE_SUBPROCESS:-}" == "1" ]]; then
   exit 0
 fi
 
-# gen-completions.sh — regenerate completions/cast.bash's top-level subcommand
-# list from bin/cast's dispatch table (the single source of truth).
+# gen-completions.sh — regenerate completions/cast.bash's (bash) and
+# completions/_cast's (zsh) top-level subcommand lists from bin/cast's
+# dispatch table (the single source of truth).
 #
 # completions/cast.bash carries the subcommand set in TWO places that must
 # stay in sync with each other AND with bin/cast:
 #   1. the `local subcommands="..."` list used for top-level compgen
 #   2. the `case "${words[$i]}" in name1|name2|...)` active-subcommand detector
 #
-# Both regions are bounded by BEGIN/END sentinel comments so this script can
-# rewrite them idempotently without hand-parsing the surrounding bash.
+# completions/_cast carries the subcommand set in ONE place that must also
+# stay in sync: the top-level `subcommands=(...)` array inside `_cast()`'s
+# `->subcommand` state (there is one OTHER `subcommands=(` array in that
+# file — `_cast_memory`'s nested sub-subcommand list — which this script
+# must never touch).
 #
-# Does NOT touch completions/_cast (zsh) — that is a separate follow-up unit.
+# All regions are bounded by BEGIN/END sentinel comments so this script can
+# rewrite them idempotently without hand-parsing the surrounding shell.
+#
+# The bash regions fall back to a legacy-line bootstrap when the sentinels
+# are absent (first-run migration path). The zsh region has no such
+# fallback: it fails closed if its sentinels are missing, since guessing
+# which of the two `subcommands=(` occurrences to rewrite would risk
+# silently corrupting a nested sub-subcommand list instead.
 
 cd "$(git rev-parse --show-toplevel)"
 
 CAST_BIN="bin/cast"
 COMPLETIONS="completions/cast.bash"
+ZSH_COMPLETIONS="completions/_cast"
 
 # --- Extract the dispatch table (case "$SUBCOMMAND" in ... esac) -----------
 # Anchor on the exact case-open/close lines so we never over-collect from the
@@ -102,3 +114,47 @@ with open(path, "w") as f:
 PYEOF
 
 echo "[gen-completions] wrote $COUNT subcommands to $COMPLETIONS"
+
+# --- Rewrite completions/_cast (zsh) between sentinel markers --------------
+# Fail CLOSED: unlike the bash regions above, this region has no legacy-line
+# bootstrap fallback. completions/_cast contains FOUR `subcommands=(` array
+# literals (three belong to nested sub-subcommand lists in _cast_queue-style
+# functions); guessing which one to rewrite when the sentinels are missing
+# would risk silently corrupting the wrong array. If the markers are gone,
+# stop and make a human re-add them rather than guessing at placement.
+if [[ ! -f "$ZSH_COMPLETIONS" ]]; then
+  echo "gen-completions: $ZSH_COMPLETIONS not found — refusing to guess" >&2
+  exit 1
+fi
+
+python3 - "$ZSH_COMPLETIONS" "$SUBCOMMANDS_SPACE" <<'PYEOF'
+import re
+import sys
+
+path, space_list = sys.argv[1], sys.argv[2]
+
+with open(path) as f:
+    text = f.read()
+
+ZSH_BEGIN = "      # BEGIN GENERATED SUBCOMMANDS (zsh) — do not edit by hand; run scripts/gen-completions.sh"
+ZSH_END = "      # END GENERATED SUBCOMMANDS (zsh)"
+
+zsh_block = f'{ZSH_BEGIN}\n      subcommands=({space_list})\n{ZSH_END}'
+
+marker_re = re.compile(re.escape(ZSH_BEGIN) + r".*?" + re.escape(ZSH_END), re.DOTALL)
+if not marker_re.search(text):
+    raise SystemExit(
+        f"gen-completions: zsh sentinel markers not found in {path} — "
+        "refusing to guess which of its `subcommands=(` arrays to rewrite "
+        "(there are multiple: top-level plus per-subcommand nested lists). "
+        "Restore the BEGIN/END GENERATED SUBCOMMANDS (zsh) markers by hand "
+        "before re-running this script."
+    )
+
+text = marker_re.sub(lambda _m: zsh_block, text, count=1)
+
+with open(path, "w") as f:
+    f.write(text)
+PYEOF
+
+echo "[gen-completions] wrote $COUNT subcommands to $ZSH_COMPLETIONS"

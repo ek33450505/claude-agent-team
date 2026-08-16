@@ -51,70 +51,6 @@ _cast_complete() {
   fi
 
   case "$subcmd" in
-    run)
-      # First non-flag arg is agent, second is task
-      local agent_set=0
-      for (( i=2; i<cword; i++ )); do
-        if [[ "${words[$i]}" != -* ]]; then
-          agent_set=$((agent_set + 1))
-        fi
-      done
-
-      if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--model --priority --async --help" -- "$cur") )
-      elif [[ "$prev" == "--model" ]]; then
-        COMPREPLY=( $(compgen -W "local cloud auto" -- "$cur") )
-      elif [[ $agent_set -eq 0 ]]; then
-        local agents
-        agents="$(_cast_get_agents)"
-        COMPREPLY=( $(compgen -W "$agents" -- "$cur") )
-      fi
-      ;;
-
-    queue)
-      # Find sub-subcommand
-      local queue_subcmd=""
-      for (( i=2; i<cword; i++ )); do
-        case "${words[$i]}" in
-          list|add|cancel|retry)
-            queue_subcmd="${words[$i]}"
-            break
-            ;;
-        esac
-      done
-
-      if [[ -z "$queue_subcmd" ]]; then
-        COMPREPLY=( $(compgen -W "list add cancel retry" -- "$cur") )
-      else
-        case "$queue_subcmd" in
-          list)
-            if [[ "$cur" == -* ]]; then
-              COMPREPLY=( $(compgen -W "--status --project --limit" -- "$cur") )
-            elif [[ "$prev" == "--status" ]]; then
-              COMPREPLY=( $(compgen -W "pending claimed done failed" -- "$cur") )
-            fi
-            ;;
-          add)
-            if [[ "$cur" == -* ]]; then
-              COMPREPLY=( $(compgen -W "--priority --when" -- "$cur") )
-            else
-              local agent_set=0
-              for (( i=2; i<cword; i++ )); do
-                if [[ "${words[$i]}" != -* ]]; then
-                  agent_set=$((agent_set + 1))
-                fi
-              done
-              if [[ $agent_set -eq 1 ]]; then
-                local agents
-                agents="$(_cast_get_agents)"
-                COMPREPLY=( $(compgen -W "$agents" -- "$cur") )
-              fi
-            fi
-            ;;
-        esac
-      fi
-      ;;
-
     memory)
       local mem_subcmd=""
       for (( i=2; i<cword; i++ )); do
@@ -169,31 +105,6 @@ _cast_complete() {
       done
       ;;
 
-    audit)
-      if [[ "$cur" == -* ]]; then
-        COMPREPLY=( $(compgen -W "--session --week --export --redact --help" -- "$cur") )
-      elif [[ "$prev" == "--redact" ]]; then
-        COMPREPLY=( $(compgen -W "on off" -- "$cur") )
-      fi
-      ;;
-
-    daemon)
-      local daemon_subcmd=""
-      for (( i=2; i<cword; i++ )); do
-        case "${words[$i]}" in
-          status|start|stop|restart|logs)
-            daemon_subcmd="${words[$i]}"
-            break
-            ;;
-        esac
-      done
-
-      if [[ -z "$daemon_subcmd" ]]; then
-        COMPREPLY=( $(compgen -W "status start stop restart logs" -- "$cur") )
-      elif [[ "$daemon_subcmd" == "logs" ]]; then
-        COMPREPLY=( $(compgen -W "--tail" -- "$cur") )
-      fi
-      ;;
   esac
 }
 

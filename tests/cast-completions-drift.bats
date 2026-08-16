@@ -22,6 +22,7 @@ load 'test_helper/bats-assert/load'
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CAST_BIN="$REPO_DIR/bin/cast"
 COMPLETIONS="$REPO_DIR/completions/cast.bash"
+ZSH_COMPLETIONS="$REPO_DIR/completions/_cast"
 GEN_SCRIPT="$REPO_DIR/scripts/gen-completions.sh"
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -56,6 +57,20 @@ _extract_case_set() {
     | grep -E '^ *[a-z][a-z0-9|-]*\)$' \
     | sed -E 's/^ *//; s/\)$//' \
     | tr '|' '\n' | sort -u
+}
+
+# completions/_cast (zsh) carries its top-level subcommand set as a bare-name
+# array literal `subcommands=(name1 name2 ...)`, bounded by the same
+# BEGIN/END GENERATED SUBCOMMANDS (zsh) sentinel style as the bash regions
+# above. Scoped by sentinel range deliberately: the file has THREE other
+# `subcommands=(` array literals (in _cast_memory and, historically,
+# _cast_queue/_cast_daemon) that must never be confused with this one.
+_extract_zsh_list_set() {
+  local file="$1"
+  sed -n '/BEGIN GENERATED SUBCOMMANDS (zsh)/,/END GENERATED SUBCOMMANDS (zsh)/p' "$file" \
+    | grep -oE 'subcommands=\([^)]*\)' \
+    | sed -E 's/subcommands=\(//; s/\)$//' \
+    | tr ' ' '\n' | sort -u
 }
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -123,28 +138,62 @@ _extract_case_set() {
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# 5. Idempotent generation — run twice against an isolated copy (a plain
-#    temp dir, no git repo needed); never mutate the real tracked file.
+# 5. Idempotent generation — run twice against an isolated copy.
+#
+#    gen-completions.sh does `cd "$(git rev-parse --show-toplevel)"`, which
+#    resolves against the AMBIENT cwd's repo at invocation time, not the
+#    copied script's location on disk. A plain (non-git) tmpdir does NOT
+#    isolate the run: `git rev-parse` walks up and finds bats' real cwd
+#    inside this repo, so the "isolated" copy silently escapes and rewrites
+#    the live tracked completions files instead. Both of the following are
+#    load-bearing: `git -C "$tmpdir" init -q` roots a repo at $tmpdir (no
+#    commit, no identity needed — stays PII-scan-safe), AND the invocation
+#    below cd's into $tmpdir before running the copy, since `git init`
+#    alone doesn't change bats' cwd. A planted phantom is used to prove the
+#    generator actually wrote $tmpdir's files rather than the real ones.
 # ───────────────────────────────────────────────────────────────────────────
 
 @test "generator is idempotent: second run produces no further diff" {
   local tmpdir
   tmpdir="$(mktemp -d)"
   mkdir -p "$tmpdir/bin" "$tmpdir/completions" "$tmpdir/scripts"
+  git -C "$tmpdir" init -q
   cp "$CAST_BIN" "$tmpdir/bin/cast"
   cp "$COMPLETIONS" "$tmpdir/completions/cast.bash"
+  cp "$ZSH_COMPLETIONS" "$tmpdir/completions/_cast"
   cp "$GEN_SCRIPT" "$tmpdir/scripts/gen-completions.sh"
 
-  run bash "$tmpdir/scripts/gen-completions.sh"
+  # Plant a detectable phantom inside the generated (list) region of the
+  # COPY only. Its removal by the first run is the proof that the generator
+  # operated on $tmpdir's files rather than escaping elsewhere — without
+  # this, comparing two files the generator never touched would pass
+  # unconditionally regardless of where it actually wrote.
+  python3 -c "
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+text = text.replace('local subcommands=\"', 'local subcommands=\"ZZPHANTOM ', 1)
+with open(path, 'w') as f:
+    f.write(text)
+" "$tmpdir/completions/cast.bash"
+  run grep -q 'ZZPHANTOM' "$tmpdir/completions/cast.bash"
   assert_success
+
+  run bash -c 'cd "$1" && bash scripts/gen-completions.sh' _ "$tmpdir"
+  assert_success
+  run grep -q 'ZZPHANTOM' "$tmpdir/completions/cast.bash"
+  assert_failure
   cp "$tmpdir/completions/cast.bash" "$tmpdir/after-first-run.bash"
+  cp "$tmpdir/completions/_cast" "$tmpdir/after-first-run.zsh"
 
-  run bash "$tmpdir/scripts/gen-completions.sh"
+  run bash -c 'cd "$1" && bash scripts/gen-completions.sh' _ "$tmpdir"
   assert_success
 
-  # Byte-identical after a second run — a STRONGER assertion than the old
-  # `git diff --stat` comparison, and it needs no git repo or git identity.
+  # Byte-identical after a second run.
   run cmp -s "$tmpdir/after-first-run.bash" "$tmpdir/completions/cast.bash"
+  assert_success
+  run cmp -s "$tmpdir/after-first-run.zsh" "$tmpdir/completions/_cast"
   assert_success
 
   rm -rf "$tmpdir"
@@ -179,4 +228,146 @@ with open(path, 'w') as f:
   rm -rf "$tmpdir"
 
   [ "$phantom" = "notarealcmd" ]
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# 7. zsh coverage: completions/_cast's top-level generated `subcommands=(...)`
+#    array (inside _cast()'s ->subcommand state) is the zsh half of the same
+#    defect class covered above for completions/cast.bash — it previously
+#    carried `run queue audit daemon` phantoms and was missing `install-
+#    completions`/`status`. Set equality both directions, plus an explicit
+#    count assertion (40) per the dispatch-table ground truth.
+# ───────────────────────────────────────────────────────────────────────────
+
+@test "zsh: generated subcommands region == dispatch table (count 40)" {
+  local dispatch_set zsh_set missing phantom count
+  dispatch_set="$(_extract_dispatch_set "$CAST_BIN")"
+  zsh_set="$(_extract_zsh_list_set "$ZSH_COMPLETIONS")"
+  count="$(printf '%s\n' "$zsh_set" | grep -c .)"
+  missing="$(comm -23 <(printf '%s\n' "$dispatch_set") <(printf '%s\n' "$zsh_set"))"
+  phantom="$(comm -13 <(printf '%s\n' "$dispatch_set") <(printf '%s\n' "$zsh_set"))"
+  if [ -n "$missing" ] || [ -n "$phantom" ]; then
+    echo "missing from _cast generated region: $missing"
+    echo "phantom in _cast generated region: $phantom"
+  fi
+  [ -z "$missing" ]
+  [ -z "$phantom" ]
+  [ "$count" -eq 40 ]
+}
+
+@test "zsh: zero phantom subcommands (run queue audit daemon) in generated region" {
+  local zsh_set
+  zsh_set="$(_extract_zsh_list_set "$ZSH_COMPLETIONS")"
+  ! printf '%s\n' "$zsh_set" | grep -qxE 'run|queue|audit|daemon'
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# 8. Dead-code absence: the 5 completion functions that existed solely to
+#    serve the 4 removed phantoms (_cast_run, _cast_queue, its helper
+#    _cast_queue_statuses, _cast_audit, _cast_daemon) must be gone from
+#    completions/_cast, and the 4 hand-maintained `case "$subcmd" in ...`
+#    detail-completion branches for those same phantoms must be gone from
+#    completions/cast.bash. (Distinct from tests 2/3/7 above: those check the
+#    GENERATED sentinel regions, which never contained these names in the
+#    first place since they're dispatch-table-derived; this checks the
+#    hand-maintained branches that used to reference them anyway.)
+# ───────────────────────────────────────────────────────────────────────────
+
+@test "no dead zsh completion functions remain for removed phantoms" {
+  local fn
+  for fn in _cast_run _cast_queue _cast_queue_statuses _cast_audit _cast_daemon; do
+    run grep -qE "^${fn}\(\)" "$ZSH_COMPLETIONS"
+    assert_failure
+  done
+}
+
+@test "no dead bash case branches remain for removed phantoms" {
+  local name
+  for name in run queue audit daemon; do
+    run grep -qE "^ *${name}\)\$" "$COMPLETIONS"
+    assert_failure
+  done
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# 9. Prove the zsh comparison logic bites: plant a fake subcommand into a
+#    COPY of completions/_cast's generated region (never the real tracked
+#    file) and assert the comparison FAILS. Anchored to the BEGIN sentinel so
+#    the mutation lands in the top-level array, not _cast_memory's nested one
+#    (the file has more than one `subcommands=(` literal).
+# ───────────────────────────────────────────────────────────────────────────
+
+@test "zsh: comparison logic catches a planted phantom subcommand" {
+  local tmpdir tmpfile
+  tmpdir="$(mktemp -d)"
+  tmpfile="$tmpdir/_cast"
+  cp "$ZSH_COMPLETIONS" "$tmpfile"
+
+  python3 -c "
+import re, sys
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+text = re.sub(
+    r'(# BEGIN GENERATED SUBCOMMANDS \(zsh\).*?subcommands=\([^)]*)\)',
+    r'\1 notarealcmd)',
+    text, count=1, flags=re.DOTALL,
+)
+with open(path, 'w') as f:
+    f.write(text)
+" "$tmpfile"
+
+  local dispatch_set zsh_set phantom
+  dispatch_set="$(_extract_dispatch_set "$CAST_BIN")"
+  zsh_set="$(_extract_zsh_list_set "$tmpfile")"
+  phantom="$(comm -13 <(printf '%s\n' "$dispatch_set") <(printf '%s\n' "$zsh_set"))"
+
+  rm -rf "$tmpdir"
+
+  [ "$phantom" = "notarealcmd" ]
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# 10. Generator fails closed for the zsh region: with the sentinels stripped
+#     from a COPY, gen-completions.sh must error out rather than guess which
+#     of the file's several `subcommands=(` arrays to rewrite.
+# ───────────────────────────────────────────────────────────────────────────
+
+@test "generator fails closed when zsh sentinels are missing" {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  mkdir -p "$tmpdir/bin" "$tmpdir/completions" "$tmpdir/scripts"
+  # gen-completions.sh does `cd "$(git rev-parse --show-toplevel)"`, which
+  # resolves against the AMBIENT cwd's repo at invocation time — NOT the
+  # script's own location. Without both a real .git here AND actually
+  # cd-ing into tmpdir before invoking it, this would silently re-target the
+  # live tracked repo instead of this tmpdir copy (git-init alone is not
+  # enough; see the `(cd "$tmpdir" && ...)` invocation below).
+  git -C "$tmpdir" init -q
+  cp "$CAST_BIN" "$tmpdir/bin/cast"
+  cp "$COMPLETIONS" "$tmpdir/completions/cast.bash"
+  cp "$ZSH_COMPLETIONS" "$tmpdir/completions/_cast"
+  cp "$GEN_SCRIPT" "$tmpdir/scripts/gen-completions.sh"
+
+  # Strip the zsh sentinel markers down to a bare (unsentineled) array —
+  # simulates a human having deleted the BEGIN/END comments by hand.
+  python3 -c "
+import re, sys
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+text = re.sub(
+    r'      # BEGIN GENERATED SUBCOMMANDS \(zsh\).*?# END GENERATED SUBCOMMANDS \(zsh\)',
+    '      subcommands=(agents ask backup)',
+    text, count=1, flags=re.DOTALL,
+)
+with open(path, 'w') as f:
+    f.write(text)
+" "$tmpdir/completions/_cast"
+
+  run bash -c 'cd "$1" && bash scripts/gen-completions.sh' _ "$tmpdir"
+  assert_failure
+  assert_output --partial "zsh sentinel markers not found"
+
+  rm -rf "$tmpdir"
 }

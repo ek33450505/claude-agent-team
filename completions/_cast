@@ -14,67 +14,10 @@ _cast_agents() {
   fi
 }
 
-_cast_queue_statuses() {
-  local -a statuses
-  statuses=(pending claimed done failed)
-  _describe 'status' statuses
-}
-
 _cast_memory_types() {
   local -a types
   types=(feedback project user reference)
   _describe 'type' types
-}
-
-_cast_run() {
-  local curcontext="$curcontext" state line
-  _arguments \
-    '1:agent:_cast_agents' \
-    '2:task:()' \
-    '--model[Override model resolution]:model:(local cloud auto)' \
-    '--priority[Task priority 1-10]:priority:()' \
-    '--async[Enqueue instead of running synchronously]' \
-    '--help[Show help]'
-}
-
-_cast_queue() {
-  local curcontext="$curcontext" state line
-  local -a subcommands
-  subcommands=(
-    'list:List queued tasks'
-    'add:Add a task to the queue'
-    'cancel:Cancel a pending task'
-    'retry:Retry a failed task'
-  )
-  _arguments \
-    '1:subcommand:->subcommand' \
-    '*::arg:->args'
-
-  case "$state" in
-    subcommand)
-      _describe 'subcommand' subcommands
-      ;;
-    args)
-      case "$line[1]" in
-        list)
-          _arguments \
-            '--status[Filter by status]:status:_cast_queue_statuses' \
-            '--project[Filter by project]:project:()' \
-            '--limit[Maximum results]:limit:()'
-          ;;
-        add)
-          _arguments \
-            '1:agent:_cast_agents' \
-            '2:task:()' \
-            '--priority[Priority 1-10]:priority:()' \
-            '--when[Schedule datetime ISO8601]:datetime:()'
-          ;;
-        cancel|retry)
-          _arguments '1:task-id:()'
-          ;;
-      esac
-      ;;
-  esac
 }
 
 _cast_memory() {
@@ -137,42 +80,6 @@ _cast_budget() {
   esac
 }
 
-_cast_audit() {
-  _arguments \
-    '--session[Filter by session ID]:session-id:()' \
-    '--week[Last 7 days summary]' \
-    '--export[Dump full JSON to stdout]' \
-    '--redact[Toggle PII redaction]:setting:(on off)'
-}
-
-_cast_daemon() {
-  local curcontext="$curcontext" state line
-  local -a subcommands
-  subcommands=(
-    'status:Show daemon status'
-    'start:Start castd daemon'
-    'stop:Stop castd daemon'
-    'restart:Restart castd daemon'
-    'logs:View daemon logs'
-  )
-  _arguments \
-    '1:subcommand:->subcommand' \
-    '*::arg:->args'
-
-  case "$state" in
-    subcommand)
-      _describe 'subcommand' subcommands
-      ;;
-    args)
-      case "$line[1]" in
-        logs)
-          _arguments '--tail[Number of lines]:lines:()'
-          ;;
-      esac
-      ;;
-  esac
-}
-
 _cast() {
   local curcontext="$curcontext" state line
   typeset -A opt_args
@@ -189,26 +96,19 @@ _cast() {
   case "$state" in
     subcommand)
       local -a subcommands
-      subcommands=(
-        'run:Run an agent synchronously or async'
-        'queue:Manage the persistent task queue'
-        'memory:Query and manage agent memories'
-        'budget:View cost and savings summary'
-        'audit:View and manage audit log'
-        'daemon:Control the castd background daemon'
-        'status:Terminal health dashboard'
-        'install-completions:Install shell tab completions'
-      )
+      # Bare names only (no name:description pairs): bin/cast --help formats
+      # descriptions inconsistently (args interleaved, variable spacing), so
+      # parsing them would reintroduce exactly the drift this region exists
+      # to remove. _describe works fine against a plain array.
+      # BEGIN GENERATED SUBCOMMANDS (zsh) — do not edit by hand; run scripts/gen-completions.sh
+      subcommands=(agents ask backup batch budget cheap ci-local clean cost dash db-contract dispatch doctor eval exec feature files hooks incidents init-repo install-completions integrity ledger mcp memory migrate new-agent parallel plan-doctor predict provenance restore review routines stack status test tidy upgrade-check verify-chain)
+      # END GENERATED SUBCOMMANDS (zsh)
       _describe 'subcommand' subcommands
       ;;
     args)
       case "$line[1]" in
-        run)      _cast_run ;;
-        queue)    _cast_queue ;;
         memory)   _cast_memory ;;
         budget)   _cast_budget ;;
-        audit)    _cast_audit ;;
-        daemon)   _cast_daemon ;;
       esac
       ;;
   esac
