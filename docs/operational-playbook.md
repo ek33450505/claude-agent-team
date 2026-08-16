@@ -29,6 +29,26 @@ When running more than one terminal on the same repo simultaneously:
 - After pushing commits that could affect CI, check for hardcoded absolute paths, platform-specific modules (e.g., FTS5 on macOS runners), and stale version lookups after package renames.
 - Run the test suite locally with CI-equivalent paths before pushing when possible (with an ISOLATED temp HOME — never the real one).
 
+### Known flake: `bats-macos` — recognise it, do not bisect it
+
+**Signature.** The `bats-macos` job fails with one large contiguous block (~96 assertions) of
+`no such table: agent_memories`, spread across ~10 unrelated test files. Every other job is green.
+
+**Proven a flake three ways** (2026-08): an isolation re-run passed; the identical SHA was green on
+`main`; and the failing files share no code path with each other or with the change under test.
+
+**Action:** re-run the job. Do not bisect, do not "fix" the listed tests, and do not chase
+`agent_memories` schema initialisation — a fresh runner clears it. Only treat it as real if the
+failures are NOT this shape (scattered, few, or naming a table other than `agent_memories`).
+
+⚠️ **`bats-macos` lives in the `Test Installer` workflow (`.github/workflows/test-installer.yml`),
+NOT in `BATS Tests` (`.github/workflows/bats-ci.yml`).** A `gh run list` line reading
+*"BATS Tests: success"* says nothing at all about macOS. Check the job explicitly:
+
+```bash
+gh run view <run-id> --json jobs --jq '.jobs[] | select(.name|test("macos")) | {name, conclusion}'
+```
+
 ## Branch & Worktree Hygiene
 
 - **Grooming policy:**
