@@ -50,7 +50,7 @@ fi
 # memory subcommand forces a human to write one description line rather
 # than silently shipping a blank or guessed one.
 
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 
 CAST_BIN="bin/cast"
 COMPLETIONS="completions/cast.bash"

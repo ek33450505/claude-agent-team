@@ -140,17 +140,23 @@ _extract_zsh_list_set() {
 # ───────────────────────────────────────────────────────────────────────────
 # 5. Idempotent generation — run twice against an isolated copy.
 #
-#    gen-completions.sh does `cd "$(git rev-parse --show-toplevel)"`, which
-#    resolves against the AMBIENT cwd's repo at invocation time, not the
-#    copied script's location on disk. A plain (non-git) tmpdir does NOT
-#    isolate the run: `git rev-parse` walks up and finds bats' real cwd
-#    inside this repo, so the "isolated" copy silently escapes and rewrites
-#    the live tracked completions files instead. Both of the following are
-#    load-bearing: `git -C "$tmpdir" init -q` roots a repo at $tmpdir (no
-#    commit, no identity needed — stays PII-scan-safe), AND the invocation
-#    below cd's into $tmpdir before running the copy, since `git init`
-#    alone doesn't change bats' cwd. A planted phantom is used to prove the
-#    generator actually wrote $tmpdir's files rather than the real ones.
+#    gen-completions.sh now does
+#    `cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"`,
+#    anchored to the SCRIPT's own location rather than the ambient cwd (fixed
+#    2026-08-16 — the old bare `cd "$(git rev-parse --show-toplevel)"`
+#    resolved against whatever repo the caller's cwd happened to be in, and
+#    a non-git tmpdir would fall through to bats' real cwd inside this repo,
+#    silently escaping and rewriting the live tracked completions files; see
+#    `tests/cast-generator-anchor.bats` for the two-repo regression that
+#    proves the escape is closed). `git -C "$tmpdir" init -q` is still
+#    load-bearing here: with the fix the generator resolves its root from
+#    the copied script's own directory ($tmpdir/scripts), so $tmpdir itself
+#    must still be a real repo or the run now fails closed instead of
+#    escaping. The `cd "$1"` in the invocation below is no longer required
+#    for correctness (script-anchored resolution works from any cwd — see
+#    the anchor-fix regression file) but is kept so this test also covers
+#    the from-repo-root invocation style. A planted phantom is used to prove
+#    the generator actually wrote $tmpdir's files rather than the real ones.
 # ───────────────────────────────────────────────────────────────────────────
 
 @test "generator is idempotent: second run produces no further diff" {
@@ -583,12 +589,12 @@ PYEOF
   local tmpdir
   tmpdir="$(mktemp -d)"
   mkdir -p "$tmpdir/bin" "$tmpdir/completions" "$tmpdir/scripts"
-  # gen-completions.sh does `cd "$(git rev-parse --show-toplevel)"`, which
-  # resolves against the AMBIENT cwd's repo at invocation time — NOT the
-  # script's own location. Without both a real .git here AND actually
-  # cd-ing into tmpdir before invoking it, this would silently re-target the
-  # live tracked repo instead of this tmpdir copy (git-init alone is not
-  # enough; see the `(cd "$tmpdir" && ...)` invocation below).
+  # gen-completions.sh now anchors its root resolution to the SCRIPT's own
+  # location (fixed 2026-08-16 — see `tests/cast-generator-anchor.bats` for
+  # the two-repo escape regression), not the ambient cwd. $tmpdir must still
+  # be a real repo: the generator resolves from $tmpdir/scripts (the copied
+  # script's directory) and now fails closed rather than escaping if no
+  # repo is found there.
   git -C "$tmpdir" init -q
   cp "$CAST_BIN" "$tmpdir/bin/cast"
   cp "$COMPLETIONS" "$tmpdir/completions/cast.bash"
