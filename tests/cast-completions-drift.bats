@@ -123,9 +123,8 @@ _extract_case_set() {
 }
 
 # ───────────────────────────────────────────────────────────────────────────
-# 5. Idempotent generation — run twice against an isolated copy (own git
-#    repo so `git rev-parse --show-toplevel` inside the generator resolves
-#    to the temp dir, not this repo); never mutate the real tracked file.
+# 5. Idempotent generation — run twice against an isolated copy (a plain
+#    temp dir, no git repo needed); never mutate the real tracked file.
 # ───────────────────────────────────────────────────────────────────────────
 
 @test "generator is idempotent: second run produces no further diff" {
@@ -136,26 +135,19 @@ _extract_case_set() {
   cp "$COMPLETIONS" "$tmpdir/completions/cast.bash"
   cp "$GEN_SCRIPT" "$tmpdir/scripts/gen-completions.sh"
 
-  (
-    cd "$tmpdir" || exit 1
-    git init -q
-    git config user.email "t@t.com"
-    git config user.name "t"
-    git add -A
-    git commit -q -m init
-  )
+  run bash "$tmpdir/scripts/gen-completions.sh"
+  assert_success
+  cp "$tmpdir/completions/cast.bash" "$tmpdir/after-first-run.bash"
 
-  (cd "$tmpdir" && bash scripts/gen-completions.sh) >/dev/null
-  local diff1
-  diff1="$(cd "$tmpdir" && git diff --stat -- completions/cast.bash)"
+  run bash "$tmpdir/scripts/gen-completions.sh"
+  assert_success
 
-  (cd "$tmpdir" && bash scripts/gen-completions.sh) >/dev/null
-  local diff2
-  diff2="$(cd "$tmpdir" && git diff --stat -- completions/cast.bash)"
+  # Byte-identical after a second run — a STRONGER assertion than the old
+  # `git diff --stat` comparison, and it needs no git repo or git identity.
+  run cmp -s "$tmpdir/after-first-run.bash" "$tmpdir/completions/cast.bash"
+  assert_success
 
   rm -rf "$tmpdir"
-
-  [ "$diff1" = "$diff2" ]
 }
 
 # ───────────────────────────────────────────────────────────────────────────
