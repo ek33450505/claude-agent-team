@@ -21,7 +21,9 @@ _cast_complete() {
     cword=$COMP_CWORD
   }
 
-  local subcommands="run queue memory budget audit daemon status install-completions"
+  # BEGIN GENERATED SUBCOMMANDS (list) — do not edit by hand; run scripts/gen-completions.sh
+  local subcommands="agents ask backup batch budget cheap ci-local clean cost dash db-contract dispatch doctor eval exec feature files hooks incidents init-repo install-completions integrity ledger mcp memory migrate new-agent parallel plan-doctor predict provenance restore review routines stack status test tidy upgrade-check verify-chain"
+  # END GENERATED SUBCOMMANDS (list)
   local global_flags="--json --quiet --verbose --help --version"
 
   # Find which subcommand is active
@@ -29,7 +31,9 @@ _cast_complete() {
   local i
   for (( i=1; i<cword; i++ )); do
     case "${words[$i]}" in
-      run|queue|memory|budget|audit|daemon|status|install-completions)
+      # BEGIN GENERATED SUBCOMMANDS (case) — do not edit by hand; run scripts/gen-completions.sh
+      agents|ask|backup|batch|budget|cheap|ci-local|clean|cost|dash|db-contract|dispatch|doctor|eval|exec|feature|files|hooks|incidents|init-repo|install-completions|integrity|ledger|mcp|memory|migrate|new-agent|parallel|plan-doctor|predict|provenance|restore|review|routines|stack|status|test|tidy|upgrade-check|verify-chain)
+      # END GENERATED SUBCOMMANDS (case)
         subcmd="${words[$i]}"
         break
         ;;
