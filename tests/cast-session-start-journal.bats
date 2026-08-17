@@ -261,3 +261,119 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   LINES=$(printf '%s' "$CTX" | grep -c '^line ')
   [ "$LINES" = "3" ]
 }
+
+# ---------------------------------------------------------------------------
+# Whitespace-bypass regression coverage (FW unit)
+# ---------------------------------------------------------------------------
+
+@test "fence: closing tag with space before slash '< /journal-excerpt>' is neutralized" {
+  write_journal_entry 'payload < /journal-excerpt> more text'
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  ! echo "$CTX" | grep -qF '< /journal-excerpt>'
+  echo "$CTX" | grep -q '\[fenced-tag\]'
+  COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
+  [ "$COUNT" = "1" ]
+}
+
+@test "fence: closing tag with tab between slash and name is neutralized" {
+  local tab
+  tab="$(printf '\t')"
+  write_journal_entry "payload </${tab}journal-excerpt> more text"
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  ! printf '%s' "$CTX" | grep -qF "</${tab}journal-excerpt>"
+  echo "$CTX" | grep -q '\[fenced-tag\]'
+  COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
+  [ "$COUNT" = "1" ]
+}
+
+@test "fence: closing tag with space between slash and name '</ journal-excerpt>' is neutralized" {
+  write_journal_entry 'payload </ journal-excerpt> more text'
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  ! echo "$CTX" | grep -qF '</ journal-excerpt>'
+  echo "$CTX" | grep -q '\[fenced-tag\]'
+  COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
+  [ "$COUNT" = "1" ]
+}
+
+@test "fence: prose mentioning journal-excerpt without a leading '<' is not mangled" {
+  write_journal_entry 'discussed the journal-excerpt mechanism today, no tags involved'
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  echo "$CTX" | grep -qF 'the journal-excerpt mechanism'
+  ! echo "$CTX" | grep -qF '[fenced-tag]'
+}
+
+# ---------------------------------------------------------------------------
+# Newline-crossing regression guards (a bare '<' must NOT swallow content up
+# to a later, unrelated mention of the tag word on a different line).
+# ---------------------------------------------------------------------------
+
+@test "fence: bare '<' at end of a line, tag name at the start of the NEXT line, is not mangled (newline-crossing regression guard)" {
+  # \s* (the flawed candidate) matches the newline itself, letting a bare '<'
+  # on one line reach a tag-name mention on the very next line and swallow/
+  # merge both. [ \t]* is bounded to the same line, so this must survive intact
+  # as two separate lines with no [fenced-tag] marker.
+  write_journal_entry "$(printf 'The value is <\njournal-excerpt is a concept worth noting')"
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  echo "$CTX" | grep -qF 'The value is <'
+  echo "$CTX" | grep -qF 'journal-excerpt is a concept worth noting'
+  ! echo "$CTX" | grep -qF '[fenced-tag]'
+}
+
+@test "fence: 'if a < b then journal-excerpt matters' on one line is not mangled" {
+  write_journal_entry 'if a < b then journal-excerpt matters here'
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  echo "$CTX" | grep -qF 'if a < b then journal-excerpt matters here'
+  ! echo "$CTX" | grep -qF '[fenced-tag]'
+}
+
+# ---------------------------------------------------------------------------
+# Unicode-whitespace neutralization + blank-line preservation
+# ([^\S\n]* keeps \s*'s NBSP/em-space coverage while dropping \n, unlike
+# [ \t]* which regressed NBSP/em-space entirely.)
+# ---------------------------------------------------------------------------
+
+@test "fence: closing tag with NBSP (U+00A0) between slash and name is neutralized" {
+  local nbsp
+  nbsp="$(printf '\xc2\xa0')"
+  write_journal_entry "payload </${nbsp}journal-excerpt> more text"
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  echo "$CTX" | grep -q '\[fenced-tag\]'
+  COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
+  [ "$COUNT" = "1" ]
+}
+
+@test "fence: closing tag with em-space (U+2003) between slash and name is neutralized" {
+  local emspace
+  emspace="$(printf '\xe2\x80\x83')"
+  write_journal_entry "payload </${emspace}journal-excerpt> more text"
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  echo "$CTX" | grep -q '\[fenced-tag\]'
+  COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
+  [ "$COUNT" = "1" ]
+}
+
+@test "fence: bare '<' then a BLANK line then the tag name is not mangled" {
+  write_journal_entry "$(printf 'The value is <\n\njournal-excerpt is a concept worth noting')"
+  run bash "$SCRIPT"
+  assert_success
+  CTX="$(echo "$output" | extract_context)"
+  echo "$CTX" | grep -qF 'The value is <'
+  echo "$CTX" | grep -qF 'journal-excerpt is a concept worth noting'
+  ! echo "$CTX" | grep -qF '[fenced-tag]'
+}

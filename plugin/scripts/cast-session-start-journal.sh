@@ -81,7 +81,7 @@ excerpt = re.sub(r'\[CAST-([A-Z-]+)', r'[CAST_\1', excerpt, flags=re.IGNORECASE)
 # tag with no nearby '>' would swallow real journal content up to the next
 # unrelated '>' anywhere in the excerpt. Neutralizing the name prefix alone
 # is sufficient to render the tag inert.
-excerpt = re.sub(r'</?journal-excerpt', '[fenced-tag]', excerpt, flags=re.IGNORECASE)
+excerpt = re.sub(r'<[^\S\n]*/?[^\S\n]*journal-excerpt', '[fenced-tag]', excerpt, flags=re.IGNORECASE)
 
 # ── Trust fence ───────────────────────────────────────────────────────────────
 _PREAMBLE = (

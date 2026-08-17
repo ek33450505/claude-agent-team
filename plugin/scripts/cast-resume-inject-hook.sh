@@ -80,7 +80,7 @@ slug = os.environ.get("CAST_RI_SLUG", "")
 # tag-NAME prefix (not attributes/whitespace up to ">") so a bare open tag
 # with no nearby ">" cannot swallow real body content up to an unrelated
 # later ">" elsewhere in the injected text.
-body = re.sub(r"</?resume-distillate", "[fenced-tag]", body, flags=re.IGNORECASE)
+body = re.sub(r"<[^\S\n]*/?[^\S\n]*resume-distillate", "[fenced-tag]", body, flags=re.IGNORECASE)
 lines = body.splitlines()
 # Skip a leading YAML frontmatter block (---\n...\n---) before choosing the banner.
 start_idx = 0
