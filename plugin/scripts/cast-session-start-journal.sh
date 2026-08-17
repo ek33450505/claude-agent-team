@@ -69,11 +69,19 @@ if len(excerpt) > 2000:
     excerpt = excerpt[:2000] + "\n[…truncated]"
 
 # ── Neutralize directive tokens and closing-fence literals ────────────────────
-# Replace [CAST-DISPATCH / [CAST-CHAIN / [CAST-REVIEW tokens so an injected
-# directive inside a past journal entry cannot re-fire as a MANDATORY directive.
-excerpt = re.sub(r'\[CAST-(DISPATCH|CHAIN|REVIEW)', r'[CAST_\1', excerpt)
-# Neutralize any literal that would escape the trust fence
-excerpt = excerpt.replace('</journal-excerpt>', '[/journal-excerpt]')
+# Replace every [CAST-<TOKEN> directive (DISPATCH, CHAIN, REVIEW, HALT,
+# ORCHESTRATE, POLICY-BLOCK, ...) so an injected directive inside a past
+# journal entry cannot re-fire as a MANDATORY directive. Generalized over the
+# alternation so a new directive token added elsewhere in the codebase can't
+# silently reopen this hole.
+excerpt = re.sub(r'\[CAST-([A-Z-]+)', r'[CAST_\1', excerpt, flags=re.IGNORECASE)
+# Neutralize any literal that would escape the trust fence (open or close
+# tag, any case). Matches only the tag-NAME prefix (not attributes/whitespace
+# up to '>') — this is deliberate: a greedy up-to-'>' match on a bare open
+# tag with no nearby '>' would swallow real journal content up to the next
+# unrelated '>' anywhere in the excerpt. Neutralizing the name prefix alone
+# is sufficient to render the tag inert.
+excerpt = re.sub(r'</?journal-excerpt', '[fenced-tag]', excerpt, flags=re.IGNORECASE)
 
 # ── Trust fence ───────────────────────────────────────────────────────────────
 _PREAMBLE = (
