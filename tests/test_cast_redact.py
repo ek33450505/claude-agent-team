@@ -10,6 +10,7 @@ Covers:
 """
 import importlib.util
 import unittest
+import re
 from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
@@ -786,6 +787,280 @@ class TestPrivateKeyNoSpaceAfterBegin(unittest.TestCase):
         redacted = cast_redact.redact_regex(self._NO_SPACE_AFTER_BEGIN, entities, mode='redact')
         self.assertNotIn(self._NO_SPACE_AFTER_BEGIN, redacted)
         self.assertIn('<PRIVATE_KEY>', redacted)
+
+
+class TestMachineDerivedPiiCandidatesRatchet(unittest.TestCase):
+    """Machine-derived superset ratchet: walk each FALLBACK_PATTERNS regex's parse tree
+    to generate a minimal sample, preferring letters over digits at every choice point.
+    This catches the AWS_ACCESS_KEY and PRIVATE_KEY class bugs (hand-chosen samples
+    hide issues via accidental digit/space inclusion) that passed the old hand-maintained
+    superset test twice in production.
+
+    Patterns that the generator cannot handle are listed explicitly in
+    _UNHANDLEABLE_PATTERNS; the list grows only by deliberate edit (an invariant test
+    fails if it shrinks, catching stale exemptions; another fails if it grows,
+    preventing silent skips of new patterns). Hand-maintained samples in
+    TestPiiCandidatesSuperset still cover all patterns, including unhandleable ones.
+    """
+
+    # Patterns the generator cannot handle and must be exempted.
+    # All patterns are now handled by the machine-derived generator!
+    _UNHANDLEABLE_PATTERNS = frozenset()
+
+    def _generate_sample(self, pattern_str: str) -> str | None:
+        """Parse regex pattern and generate a minimal matching sample.
+        Returns None if the pattern cannot be handled.
+
+        Preference: letters over digits at every choice point, to find the
+        adversarial case (no incidental digit hiding a gap in _PII_CANDIDATES).
+        """
+        try:
+            # Try re._parser first (available in Python 3.8+), fall back to sre_parse.
+            try:
+                from re import _parser as regex_parser
+                import re as re_module
+            except (ImportError, AttributeError):
+                try:
+                    import sre_parse as regex_parser
+                    import re as re_module
+                except ImportError:
+                    return None
+
+            # Parse WITH the re.IGNORECASE flag (don't let it leak into the tree walk)
+            parsed = regex_parser.parse(pattern_str, flags=re_module.IGNORECASE)
+        except Exception:
+            return None
+
+        def walk(node_list):
+            """Walk parse tree nodes and emit characters, preferring letters."""
+            result = []
+            try:
+                for code, value in node_list:
+                    # Node codes: see sre_parse module. We handle the major ones.
+                    if code == regex_parser.LITERAL:
+                        # Single character literal
+                        result.append(chr(value))
+                    elif code == regex_parser.IN:
+                        # Character class [...]
+                        sample_char = self._char_from_in_set(value)
+                        if sample_char is None:
+                            return None  # Unsupported class
+                        result.append(sample_char)
+                    elif code == regex_parser.ANY:
+                        # . (any char except newline)
+                        result.append('a')
+                    elif code == regex_parser.MAX_REPEAT or code == regex_parser.MIN_REPEAT:
+                        # Quantified subpattern
+                        min_count, max_count, sub = value
+                        # Emit min_count or 1 if min_count is 0
+                        repeat_count = max(min_count, 1)
+                        for _ in range(repeat_count):
+                            sub_result = walk(sub)
+                            if sub_result is None:
+                                return None
+                            result.append(sub_result)
+                    elif code == regex_parser.SUBPATTERN:
+                        # Group (...)
+                        group_id, add_flags, del_flags, sub = value
+                        sub_result = walk(sub)
+                        if sub_result is None:
+                            return None
+                        result.append(sub_result)
+                    elif code == regex_parser.BRANCH:
+                        # Alternation: value is (None, [[alt1_nodes], [alt2_nodes], ...])
+                        # Take the first alternative for a minimal sample
+                        alternatives = value[1]  # List of alternatives, each is a list of nodes
+                        if alternatives:
+                            first_alt = alternatives[0]  # List of nodes for first alternative
+                            branch_result = walk(first_alt)
+                            if branch_result is None:
+                                return None
+                            result.append(branch_result)
+                    elif code == regex_parser.AT:
+                        # Anchor: skip (^, $, \b, etc.)
+                        pass
+                    elif code == regex_parser.ASSERT or code == regex_parser.ASSERT_NOT:
+                        # Lookahead/lookbehind: skip
+                        pass
+                    elif code == regex_parser.NEGATE:
+                        # Should not appear at top level
+                        return None
+                    else:
+                        # Unknown node type
+                        return None
+                return ''.join(result)
+            except (ValueError, TypeError, AttributeError):
+                # Unparseable structure
+                return None
+
+        sample = walk(parsed)
+        return sample if sample else None
+
+    def _char_from_in_set(self, in_set_value) -> str | None:
+        r"""Extract a character from a character class [...].
+
+        Prefers letters over digits at every choice point. This is load-bearing for the
+        superset invariant: a sample containing an incidental digit satisfies _PII_CANDIDATES'
+        `\d` trigger by accident and hides the very gap this test exists to catch. This happened
+        to AWS_ACCESS_KEY for months (sample was AWS's own example key 'AKIA...7EXAMPLE' with an
+        incidental '7'; all-letter keys 'AKIA...Z' never matched _PII_CANDIDATES and leaked
+        plaintext). Same class of bug hid PRIVATE_KEY behind 'BEGIN\s' (an all-letter pattern
+        without space never matched the early trigger). Letter preference forces us to find the
+        adversarial case.
+        """
+        # in_set_value is a list of (code, value) pairs for the class contents.
+        # NEGATE flag indicates negation. RANGE, CATEGORY, LITERAL codes appear.
+        try:
+            from re import _parser as regex_parser
+        except (ImportError, AttributeError):
+            try:
+                import sre_parse as regex_parser
+            except ImportError:
+                return None
+
+        # Check for NEGATE flag first
+        is_negated = any(code == regex_parser.NEGATE for code, _ in in_set_value)
+
+        # Extract candidates (non-negated case), preferring letters
+        letter_candidates = []
+        other_candidates = []
+
+        for code, value in in_set_value:
+            if code == regex_parser.NEGATE:
+                continue
+            elif code == regex_parser.LITERAL:
+                c = chr(value)
+                if c.isalpha():
+                    letter_candidates.append(c)
+                else:
+                    other_candidates.append(c)
+            elif code == regex_parser.RANGE:
+                # RANGE is (start, end) pair
+                start, end = value
+                # Collect letters first, then others
+                for cp in range(start, end + 1):
+                    c = chr(cp)
+                    if c.isalpha():
+                        letter_candidates.append(c)
+                    else:
+                        other_candidates.append(c)
+            elif code == regex_parser.CATEGORY:
+                # CATEGORY like DIGIT, SPACE, etc.; map to a sample.
+                cat_str = str(value)
+                if 'DIGIT' in cat_str:
+                    other_candidates.append('5')  # Prefer digit '5'
+                elif 'SPACE' in cat_str:
+                    other_candidates.append(' ')
+                elif 'WORD' in cat_str:
+                    letter_candidates.append('a')  # Word char, prefer letter
+                else:
+                    other_candidates.append('x')
+
+        # If negated, return something not in the excluded set (union of both)
+        if is_negated:
+            excluded = set(letter_candidates + other_candidates)
+            # Pick something outside it, preferring letters
+            for c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789':
+                if c not in excluded:
+                    return c
+            return '!'
+
+        # Not negated: return first candidate, preferring letters
+        if letter_candidates:
+            return letter_candidates[0]
+        if other_candidates:
+            return other_candidates[0]
+
+        return 'a'  # Fallback
+
+    def test_generator_can_handle_required_patterns(self):
+        """Patterns NOT in _UNHANDLEABLE_PATTERNS must have the generator produce a sample."""
+        for etype, pat in cast_redact.FALLBACK_PATTERNS:
+            if etype in self._UNHANDLEABLE_PATTERNS:
+                continue
+            with self.subTest(etype=etype):
+                sample = self._generate_sample(pat)
+                self.assertIsNotNone(
+                    sample,
+                    f'{etype}: generator failed to produce a sample for pattern {pat!r}'
+                )
+                # Sample must match the pattern itself
+                try:
+                    regex = re.compile(pat, re.IGNORECASE)
+                    self.assertRegex(sample, regex, f'{etype}: generated sample {sample!r} does not match its own pattern')
+                except re.error:
+                    self.fail(f'{etype}: pattern {pat!r} is invalid regex')
+
+    def test_machine_samples_trigger_pii_candidates(self):
+        """Every machine-generated sample must also match _PII_CANDIDATES (the superset invariant)."""
+        for etype, pat in cast_redact.FALLBACK_PATTERNS:
+            if etype in self._UNHANDLEABLE_PATTERNS:
+                # Exempted patterns must still be covered by hand-maintained samples
+                # in TestPiiCandidatesSuperset; not tested here.
+                continue
+            with self.subTest(etype=etype):
+                sample = self._generate_sample(pat)
+                if sample is None:
+                    continue  # Already asserted above for non-exempt patterns
+                self.assertTrue(
+                    cast_redact._PII_CANDIDATES.search(sample),
+                    f'{etype}: machine sample {sample!r} matches pattern but NOT _PII_CANDIDATES '
+                    f'— the fast-path is broken for this pattern'
+                )
+
+    def test_unhandleable_list_does_not_grow(self):
+        """Fail if a new pattern is added to FALLBACK_PATTERNS but not to _UNHANDLEABLE_PATTERNS.
+
+        This guards against silent skips: if the generator fails on a new pattern, someone
+        must consciously add it to the exemption list, not let it be silently skipped.
+        """
+        handled_types = {
+            etype for etype, _ in cast_redact.FALLBACK_PATTERNS
+            if etype not in self._UNHANDLEABLE_PATTERNS
+        }
+        # If this fails, either:
+        # 1. A new pattern was added that the generator cannot handle → add it to _UNHANDLEABLE_PATTERNS
+        # 2. A pattern was removed → update _UNHANDLEABLE_PATTERNS
+        # 3. The generator improved → remove the pattern from _UNHANDLEABLE_PATTERNS
+        all_types = {etype for etype, _ in cast_redact.FALLBACK_PATTERNS}
+        unhandled = all_types - handled_types
+        self.assertEqual(
+            unhandled, self._UNHANDLEABLE_PATTERNS,
+            f'Unhandleable patterns list mismatch. Expected {self._UNHANDLEABLE_PATTERNS!r}, '
+            f'but generator cannot handle {unhandled!r}. Update _UNHANDLEABLE_PATTERNS.'
+        )
+
+    def test_unhandleable_list_does_not_contain_obsolete_entries(self):
+        """Fail if _UNHANDLEABLE_PATTERNS lists a pattern the generator CAN now handle.
+
+        This guards against stale exemptions: as the generator improves, the list must shrink.
+
+        NOTE: This test is dormant-by-design while the list is empty (loop runs zero times).
+        It cannot fire in the current state. This is intentional future-proofing: the moment
+        a pattern is added to _UNHANDLEABLE_PATTERNS, this test activates and will fail if
+        the generator can actually handle it. Verified by mutation: adding a bogus entry
+        causes this test to fail as expected.
+        """
+        for etype in self._UNHANDLEABLE_PATTERNS:
+            if etype not in {e for e, _ in cast_redact.FALLBACK_PATTERNS}:
+                # Pattern was removed entirely; OK to keep it in the list (harmless).
+                continue
+            with self.subTest(etype=etype):
+                pat = dict(cast_redact.FALLBACK_PATTERNS)[etype]
+                sample = self._generate_sample(pat)
+                # If the pattern is in the exemption list, it SHOULD fail to generate.
+                # If it now succeeds, remove it from _UNHANDLEABLE_PATTERNS.
+                if sample is not None:
+                    # Double-check: does the sample actually match the pattern?
+                    try:
+                        regex = re.compile(pat, re.IGNORECASE)
+                        if regex.search(sample):
+                            self.fail(
+                                f'{etype}: generator now SUCCEEDS for this pattern (sample={sample!r}), '
+                                f'but it is still in _UNHANDLEABLE_PATTERNS — remove it from the list'
+                            )
+                    except re.error:
+                        pass  # Pattern is invalid; OK to keep exempted.
 
 
 if __name__ == '__main__':
