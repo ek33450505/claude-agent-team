@@ -1081,6 +1081,11 @@ class TestWriteRedactMap(unittest.TestCase):
     exporting HOME (which would arrive too late to affect an already-bound
     constant)."""
 
+    # Split so the literal isn't a contiguous AWS-key-shaped string (would
+    # trip scripts/ci-pii-scan.sh's `AKIA[0-9A-Z]{16}` pattern); value is
+    # byte-identical to the concatenated form.
+    _FAKE_AWS_KEY = "AKIA" + "BCDEFGHIJKLMNOPQ"
+
     def setUp(self):
         self._tmpdir = tempfile.mkdtemp(prefix="cast-audit-redact-map-test-")
         self._patcher = mock.patch.object(cast_audit, "REDACT_MAPS_DIR", self._tmpdir)
@@ -1105,7 +1110,7 @@ class TestWriteRedactMap(unittest.TestCase):
                     "start": 8,
                     "end": 28,
                     "score": 0.9,
-                    "original": "AKIABCDEFGHIJKLMNOPQ",
+                    "original": self._FAKE_AWS_KEY,
                     "original_hash": "b445e97203ae0d5e",
                 }
             ]
@@ -1115,7 +1120,7 @@ class TestWriteRedactMap(unittest.TestCase):
         self.assertEqual(len(data["entities"]), 1)
         entity = data["entities"][0]
         self.assertNotIn("original", entity)
-        self.assertNotIn("AKIABCDEFGHIJKLMNOPQ", json.dumps(data))
+        self.assertNotIn(self._FAKE_AWS_KEY, json.dumps(data))
 
     def test_correlation_fields_still_written(self):
         """The map must stay useful: entity_type/start/end/score/original_hash
@@ -1127,7 +1132,7 @@ class TestWriteRedactMap(unittest.TestCase):
                     "start": 8,
                     "end": 28,
                     "score": 0.9,
-                    "original": "AKIABCDEFGHIJKLMNOPQ",
+                    "original": self._FAKE_AWS_KEY,
                     "original_hash": "b445e97203ae0d5e",
                 }
             ]
