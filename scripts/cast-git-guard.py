@@ -32,6 +32,80 @@ GUARANTEES PRESERVED (Subtraction Safety Gate, master_v9.md §0.2):
     gap a READ-ONLY code-reviewer used to silently revert the file it was
     reviewing (see CLAUDE.md incident note); escapes: CAST_CHECKOUT_OK=1,
     CAST_RESTORE_OK=1, CAST_SWITCH_OK=1.
+  - Quoted-token evasion CLOSED (2026-08-17 shlex tokenization pass): every
+    BLOCK regex above matches a BARE shell token, so `git reset "--hard"`,
+    `git "reset" --hard`, `git "commit" -m x`, `git "push"`, `git checkout
+    "--" .`, `git switch "--discard-changes" main`, `git gc "--prune=now"`,
+    `git reflog "expire" --all`, `git -c "gc.pruneExpire=now" gc`, and `git
+    "config" gc.pruneExpire now` were all measured ALLOWED before this pass.
+    `_normalize_git_segment()` re-tokenizes each shell segment with
+    `shlex.split()` and re-joins it unquoted; `_git_evaluate`'s `hit()`
+    wrapper then checks every existing pattern against BOTH the raw segment
+    and (when it parses as a git invocation) its normalized form — no
+    individual BLOCK/ALLOW regex was rewritten to get this. Absolute-path
+    invocation (`/usr/bin/git reset --hard`, previously allowed because
+    every pattern anchors on `(^|\s)git`, and the char before `git` here is
+    `/`) is closed the same way: the first non-assignment token is
+    normalized to the literal `git` whenever `os.path.basename()` of it
+    equals `git` (so `./mygit` does NOT normalize — no basename collision).
+    Normalization runs ONLY when the segment IS a git invocation (leading
+    `VAR=value` assignments, then `git`/`/path/to/git`); a segment that
+    isn't a git command to begin with (`rg "git push" docs/`, `gh pr create
+    --body "adds git push guard"`) returns None and is evaluated exactly as
+    before — this was a deliberate choice (Ed, this session): normalizing
+    EVERY segment was measured to newly BLOCK ordinary non-git commands
+    with NO working escape hatch, because every `*_ALLOW` hatch pattern
+    requires `git` immediately after the env assignments and a non-git
+    segment can never satisfy that. NOT covered by this pass (see KNOWN
+    LIMITATIONS below for the durable list): subshell/`$()` wrapping,
+    `--config-env=`/`GIT_CONFIG_*` env indirection, unbalanced-quote parse
+    failures (raw-only fallback), and quoting a *safety*-flag token for
+    `clean` specifically — that one is a structural asymmetry, not an
+    oversight, documented in `_git_evaluate`'s docstring.
+  - `git config edit`/`--edit`/`-e` blocked under the SAME hatch as the
+    `git config` write block below (CAST_GC_OK=1) — an interactive editor
+    session on `.git/config` can set `gc.pruneExpire`/`gc.reflogExpire`/
+    `gc.reflogExpireUnreachable` to `now` with no key/value token ever
+    appearing on the command line for the write-detection block to key on
+    (2026-08-17 shlex tokenization pass, same-day follow-up).
+  - Two more same-day (2026-08-17) fixes, both from a security-gate review of
+    this pass, honestly recorded here on the ALLOW side too (not just what
+    got newly blocked):
+    (1) `_GC_CONFIG_EDIT_BLOCK` originally matched the bare token `edit`
+    ANYWHERE on the line, so it false-blocked reads/values that merely
+    contained "edit": `git config user.email "edit@example.com"`, `git
+    config --get-regexp edit` (a READ), `git config alias.e "edit"`. `edit`
+    IS a real subcommand (git ≥ 2.46: `get|set|unset|list|edit`), so the
+    bare token now anchors to SUBCOMMAND POSITION only (via
+    `_GC_CONFIG_SCOPE_FLAGS`, an enumerated valueless-flag allowlist —
+    deliberately not a generic `--\S+` skip, which would swallow
+    value-taking options like `--get-regexp` and reintroduce the same false
+    block); `--edit`/`-e` remain matched anywhere as unambiguous flags. All
+    three commands above now correctly ALLOW; `git config edit`, `git config
+    --edit`, `git config -e`, `git config --global -e`, `git config
+    --global edit`, `git config --local edit` still correctly BLOCK.
+    (2) `_normalize_git_segment`'s rejoin (`' '.join(tokens)`) broke on a
+    leading env-assignment VALUE containing whitespace: `CAST_RESET_OK=1
+    FOO="bar baz" git reset --hard` is a genuine, valid hatch use, but
+    `shlex.split` parses `FOO=bar baz` as one token while every `*_ALLOW`
+    pattern's assignment-tolerance (`\S+`) cannot span the re-rendered
+    space — a real hatch use false-blocked. Whitespace-containing values in
+    the assignment PREFIX (indices before the `git` token) are now collapsed
+    to a placeholder (`FOO=_`) before rejoining; this now correctly ALLOWS,
+    and `CAST_RESET_OK="10" git reset --hard` (wrong hatch VALUE) still
+    correctly BLOCKS — the fix only fixes the whitespace-join bug, it does
+    not loosen the value check. Two more cases worth naming plainly rather
+    than silently absorbing: `CAST_RESET_OK="1" git reset --hard` /
+    `CAST_PUSH_OK="1" git push` (a quoted hatch VALUE — a real bash
+    assignment) previously false-blocked and now correctly ALLOWS, a
+    straightforward FIX. But `"CAST_RESET_OK=1" git reset --hard` (a
+    FULLY-QUOTED assignment WORD) is NOT a bash assignment at all — measured
+    live, bash resolves the quoted word as a command name and errors
+    (`bash: CAST_RESET_OK=1: command not found`), so git never executes;
+    this guard now allows a line that cannot run in the first place. That is
+    an inert over-allow (no destructive git command actually runs), not a
+    guarantee regression, but it is a real behavior change on the ALLOW side
+    and is named here rather than left undocumented.
   - Write/Edit path policy engine (config/policies.json → requires_agent gate,
     CAST_POLICY_OVERRIDE=1 escape with audit-log).
   - agent-status TTL sweep (files older than 120 min) on Write/Edit.
@@ -82,31 +156,22 @@ regex layer):
     git invocation itself is still plainly on the line. It does nothing for
     the case above, where the ENTIRE git invocation is wrapped inside the
     subshell/substitution and never appears as a bare `git ...` token.
-  - Quoted-token evasion (2026-08-17 recovery-path pass, measured — SAME
-    family as the subshell/`$( )` limitation above, and for the same reason:
-    fixing it properly needs real shell tokenization (`shlex`), not more
-    regex, so it is surfaced here rather than papered over). Every BLOCK
-    regex in this module matches a BARE shell token — `--hard`, `expire`,
-    `commit`, etc. — literally, so wrapping the subcommand name OR a
-    destructive flag in quotes evades the match, since the shell strips the
-    quotes but the regex never sees past them: `git reset "--hard"`, `git
-    "reset" --hard`, `git "commit" -m x`, `git "push"`, `git checkout "--" .`,
-    `git switch "--discard-changes" main`, `git gc "--prune=now"`, `git
-    reflog "expire" --all` are all measured ALLOWED. This is PRE-EXISTING —
-    reproducible against `commit`/`push`/`reset`/`checkout`/`switch` at HEAD
-    — and NOT introduced by the reflog/gc/prune additions in this pass;
-    those three ops inherit the same gap by using the same pattern idiom.
-    Quoting only the flag's VALUE, as opposed to the flag/token itself, does
-    NOT evade it: `git gc --prune="now"` still blocks, because the literal
-    `--prune=` text the regex keys on is unquoted. The failure direction is
-    NOT uniform across ops: for most ops (reset/checkout/switch/commit/push/
-    reflog/gc/prune) quoting fails OPEN as shown above, but for `clean` and
-    `restore` the *safe-form* detection (the dry-run/`--staged` lookahead,
-    not the block itself) is what gets quoted-token-evaded, which flips the
-    outcome to fail CLOSED instead: `git clean "-fd"` and `git restore
-    "--worktree" f.txt` still BLOCK, because the quoted safety flag is what
-    the regex fails to recognize, not the destructive command. Advisory-grade
-    like every other gap in this module — surfaced, not fixed, this pass.
+  - Quoted-token evasion is CLOSED — see the GUARANTEES PRESERVED section
+    above (2026-08-17 shlex tokenization pass) for the mechanism
+    (`_normalize_git_segment()` + the `hit()` dual-variant check) and its
+    deliberately narrow scope. One asymmetry survives BY DESIGN, not by
+    oversight: `restore`'s safety check is a separate positive predicate
+    (`hit(_RESTORE_HAS_STAGED) and not hit(_RESTORE_HAS_WORKTREE)`), so
+    normalizing either operand independently fixes it — `git restore
+    "--staged" f.txt` (blocked at HEAD, a fail-CLOSED false positive) now
+    correctly ALLOWS. `clean`'s dry-run safety instead lives INSIDE
+    `_CLEAN_BLOCK`'s own negative lookahead, evaluated once per variant and
+    OR'd by `hit()` — so if the RAW variant alone still trips the block (as
+    it does for a quoted safety flag, since the lookahead never sees past
+    the quote), the normalized variant's safe verdict can't override it:
+    `git clean "-nd"` still blocks. Restructuring `_CLEAN_BLOCK` to match
+    `restore`'s shape would fix it too, but was deliberately deferred this
+    pass to keep the diff on this safety-critical file small.
   - The stash/reset/checkout BLOCK regexes anchor destructive-flag detection
     on a token boundary (`\b`, or an equivalent negative lookahead for `.`,
     which is itself a non-word character) rather than requiring literal
@@ -380,6 +445,69 @@ _CHECKOUT_CMD = re.compile(r'(^|\s)git' + _GIT_OPTS + r'\s+checkout\b(?P<rest>.*
 _CHECKOUT_CDIR = re.compile(r'-C\s+(\S+)')
 
 
+# --- shell-quoting normalization (2026-08-17 shlex tokenization pass) -------
+# Every BLOCK regex in this module matches a BARE shell token; quoting the
+# git subcommand or a destructive flag (`git reset "--hard"`, `git "commit"
+# -m x`) evades every regex above since the shell strips quotes the regex
+# never sees past. `_normalize_git_segment` re-tokenizes a segment with
+# shlex and re-joins it unquoted, giving every existing regex a SECOND,
+# quote-stripped view to match against (see `_git_evaluate`'s `hit()`
+# wrapper below) without rewriting a single existing pattern.
+_ENV_ASSIGN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+
+
+def _normalize_git_segment(seg):
+    r"""Return a quote-stripped, absolute-path-normalized rendering of `seg`
+    if (and only if) `seg` is a git invocation, else None.
+
+    DELIBERATELY NARROW: normalization runs ONLY when the segment's first
+    non-assignment token is a git invocation (`os.path.basename(token) ==
+    'git'`, so `/usr/bin/git` also normalizes but `./mygit` does not — no
+    basename collision). Every `*_ALLOW` hatch pattern requires `git`
+    immediately after the leading `VAR=value` assignments, so a segment
+    that isn't a git command to begin with (`rg "git push" docs/`, `gh pr
+    create --body "adds git push guard"`) returns None and is evaluated
+    EXACTLY as before this pass — measured: normalizing every segment
+    unconditionally newly blocked ordinary non-git commands with NO working
+    escape hatch, since a false BLOCK on a non-git segment has no *_ALLOW
+    pattern that could ever match it.
+
+    Unbalanced quotes (`shlex.split` raising ValueError) also return None,
+    falling back to raw-only evaluation rather than raising — this module's
+    fail-open-on-internal-error contract applies here too.
+
+    A leading env-assignment VALUE containing whitespace (`FOO="bar baz"
+    git ...`) is collapsed to a placeholder (`FOO=_`) before the rejoin
+    (2026-08-17 shlex tokenization pass, security-gate fix): `shlex.split`
+    correctly parses the quoted value as ONE token, but `' '.join(tokens)`
+    then re-renders it as TWO words, which every `*_ALLOW` hatch pattern's
+    assignment-tolerance (`([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*`, `\S+` cannot
+    span a space) fails to re-match — a genuine, valid hatch use like
+    `CAST_RESET_OK=1 FOO="bar baz" git reset --hard` was false-blocking.
+    Scoped to indices `< i` (the assignment prefix) ONLY — never `tokens[i:]`,
+    where e.g. a `-c gc.pruneExpire=<value>` argument lives and the value IS
+    load-bearing for `_GC_CINJECT_BLOCK`/`_GC_CONFIG_WRITE_BLOCK`.
+    """
+    try:
+        tokens = shlex.split(seg)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    i = 0
+    while i < len(tokens) and _ENV_ASSIGN.match(tokens[i]):
+        i += 1
+    if i >= len(tokens) or os.path.basename(tokens[i]) != 'git':
+        return None
+    tokens[i] = 'git'  # absolute-path normalization: /usr/bin/git -> git
+    for k in range(i):
+        if re.search(r'\s', tokens[k]):
+            name, _sep, _val = tokens[k].partition('=')
+            tokens[k] = name + '=_'  # value is never load-bearing for any pattern
+    norm = ' '.join(tokens)
+    return norm if norm != seg else None
+
+
 def _checkout_bare_path_blocks(seg: str) -> bool:
     """True if `seg` is a `git checkout <token> ...` with no `--` separator
     (already handled by `_CHECKOUT_BLOCK`) whose first non-flag argument
@@ -615,6 +743,49 @@ _GC_CONFIG_WRITE_BLOCK = re.compile(
     r'(?=.*\s' + _GC_CONFIG_KEY + r'\s+\S)'
 )
 
+# `git config edit` / `git config --edit` / `git config -e` opens $EDITOR
+# directly on .git/config — a hole in the SAME mechanism as the write block
+# above, since an interactive edit can set gc.pruneExpire=now with NO
+# key/value token ever appearing on the command line for that block to key
+# on (2026-08-17 shlex tokenization pass, same-day follow-up). Gated by the
+# SAME hatch (CAST_GC_OK=1) — no new hatch name.
+#
+# The `edit` bare-token form is a real subcommand only in SUBCOMMAND
+# POSITION (`git config edit`, `git config --global edit`) — git ≥ 2.46
+# accepts `get|set|unset|list|edit`. It is deliberately anchored there via
+# `_GC_CONFIG_SCOPE_FLAGS` (an enumerated, valueless allowlist of scope
+# flags git accepts before the subcommand) rather than a generic `--\S+`
+# skip, which would swallow value-taking options and re-block reads like
+# `git config --get-regexp edit` (2026-08-17 security-gate fix: that read,
+# plus `git config user.email "edit@example.com"` and `git config alias.e
+# "edit"`, previously false-blocked because `edit` was matched anywhere on
+# the line). The `--edit`/`-e` FLAGS remain matched anywhere on the line
+# (unambiguous in any position) via the second alternative below. A value
+# token literally equal to `-e`/`--edit`/`edit` elsewhere on the line still
+# fails closed — this pass narrows false blocks, it does not narrow true
+# ones.
+# MEASURED against git 2.55.0 with an editor sentinel (2026-08-17 shlex pass),
+# because the reasoning and the behaviour disagreed: the scope-flag run below is
+# DEFENCE-IN-DEPTH, not a live route. Only `edit` as the FIRST argument is the
+# edit subcommand — `git config edit` opens the editor, while `git config
+# --global edit`, `--local edit`, `--show-origin edit` and `-z edit` all parse
+# `edit` as a KEY NAME and die with "key does not contain a section: edit",
+# opening nothing. So no omission from this list can fail OPEN; the list can
+# only over-block forms git itself rejects. It is kept anyway because git's
+# subcommand syntax is new (2.46) and a later version accepting the legacy
+# flags-then-subcommand order would otherwise reopen the hole silently.
+# The `--edit`/`-e` FLAGS are the real scoped route and DO open the editor
+# (`git config --global -e` measured), which is why they match anywhere.
+_GC_CONFIG_SCOPE_FLAGS = (
+    r'(?:\s+(?:--global|--local|--system|--worktree|--show-origin|--show-scope'
+    r'|--includes|--no-includes|-z|--null))*'
+)
+_GC_CONFIG_EDIT_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+config\b'
+    r'(?:' + _GC_CONFIG_SCOPE_FLAGS + r'\s+edit\b'
+    r'|(?=.*(?:^|\s)(?:--edit|-e)\b))'
+)
+
 _COMMIT_MSG = (
     "**[CAST]** Raw `git commit` blocked. Dispatch the `commit` agent instead "
     "(Agent tool, subagent_type: 'commit')."
@@ -711,6 +882,16 @@ _GC_CONFIG_WRITE_MSG = (
     "via a persistent config write that makes a LATER, innocent-looking bare "
     "`git gc` destructive. If you genuinely need to set one of these, use "
     "`CAST_GC_OK=1 git config gc.pruneExpire ...` (document why)."
+)
+_GC_CONFIG_EDIT_MSG = (
+    "**[CAST]** `git config edit`/`--edit`/`-e` blocked — an interactive "
+    "editor session on `.git/config` can set `gc.pruneExpire` / "
+    "`gc.reflogExpire` / `gc.reflogExpireUnreachable` to `now` with NO "
+    "key/value token ever appearing on the command line for the "
+    "`git config` write block to key on — same config-layer bypass family, "
+    "closing the last route into it. If you genuinely need to edit git "
+    "config interactively, use `CAST_GC_OK=1 git config --edit` (document "
+    "why)."
 )
 
 SESSION_TIMEOUT = 7200  # 2 hours, matches the agent-status TTL
@@ -990,42 +1171,56 @@ def _git_evaluate(command: str):
         seg = seg.strip()
         if not seg:
             continue
-        if _COMMIT_ALLOW.search(seg):
+        # 2026-08-17 shlex tokenization pass: `norm` is a quote-stripped,
+        # absolute-path-normalized rendering of `seg` (None if `seg` isn't a
+        # git invocation — see `_normalize_git_segment`'s docstring for why
+        # that's deliberate, not an oversight). `hit()` checks every pattern
+        # against BOTH the raw segment and its normalized form, closing the
+        # quoted-token evasion class without rewriting any BLOCK/ALLOW regex.
+        norm = _normalize_git_segment(seg)
+        variants = (seg, norm) if norm else (seg,)
+
+        def hit(pattern, _v=variants):
+            return any(pattern.search(v) for v in _v)
+
+        if hit(_COMMIT_ALLOW):
             _audit_commit_hatch()
-        elif _COMMIT_BLOCK.search(seg):
+        elif hit(_COMMIT_BLOCK):
             return 2, _COMMIT_MSG
-        if _PUSH_ALLOW.search(seg):
+        if hit(_PUSH_ALLOW):
             _audit_push_hatch()
-        elif _PUSH_BLOCK.search(seg):
+        elif hit(_PUSH_BLOCK):
             return 2, _PUSH_MSG
-        if not _STASH_ALLOW.search(seg) and _STASH_BLOCK.search(seg):
+        if not hit(_STASH_ALLOW) and hit(_STASH_BLOCK):
             return 2, _STASH_MSG
-        if not _RESET_ALLOW.search(seg) and _RESET_BLOCK.search(seg):
+        if not hit(_RESET_ALLOW) and hit(_RESET_BLOCK):
             return 2, _RESET_MSG
-        if not _CLEAN_ALLOW.search(seg) and _CLEAN_BLOCK.search(seg):
+        if not hit(_CLEAN_ALLOW) and hit(_CLEAN_BLOCK):
             return 2, _CLEAN_MSG
-        if not _CHECKOUT_ALLOW.search(seg) and (
-            _CHECKOUT_BLOCK.search(seg)
-            or _checkout_bare_path_blocks(seg)
-            or _CHECKOUT_FORCE_BLOCK.search(seg)
+        if not hit(_CHECKOUT_ALLOW) and (
+            hit(_CHECKOUT_BLOCK)
+            or any(_checkout_bare_path_blocks(v) for v in variants)
+            or hit(_CHECKOUT_FORCE_BLOCK)
         ):
             return 2, _CHECKOUT_MSG
-        if not _RESTORE_ALLOW.search(seg) and _RESTORE_CMD.search(seg):
-            safe = bool(_RESTORE_HAS_STAGED.search(seg)) and not _RESTORE_HAS_WORKTREE.search(seg)
+        if not hit(_RESTORE_ALLOW) and hit(_RESTORE_CMD):
+            safe = hit(_RESTORE_HAS_STAGED) and not hit(_RESTORE_HAS_WORKTREE)
             if not safe:
                 return 2, _RESTORE_MSG
-        if not _SWITCH_ALLOW.search(seg) and _SWITCH_BLOCK.search(seg):
+        if not hit(_SWITCH_ALLOW) and hit(_SWITCH_BLOCK):
             return 2, _SWITCH_MSG
-        if not _REFLOG_ALLOW.search(seg) and _REFLOG_BLOCK.search(seg):
+        if not hit(_REFLOG_ALLOW) and hit(_REFLOG_BLOCK):
             return 2, _REFLOG_MSG
-        if not _GC_ALLOW.search(seg) and _GC_BLOCK.search(seg):
+        if not hit(_GC_ALLOW) and hit(_GC_BLOCK):
             return 2, _GC_MSG
-        if not _PRUNE_ALLOW.search(seg) and _PRUNE_BLOCK.search(seg):
+        if not hit(_PRUNE_ALLOW) and hit(_PRUNE_BLOCK):
             return 2, _PRUNE_MSG
-        if not _GC_HATCH_ALLOW.search(seg) and _GC_CINJECT_BLOCK.search(seg):
+        if not hit(_GC_HATCH_ALLOW) and hit(_GC_CINJECT_BLOCK):
             return 2, _GC_CINJECT_MSG
-        if not _GC_HATCH_ALLOW.search(seg) and _GC_CONFIG_WRITE_BLOCK.search(seg):
+        if not hit(_GC_HATCH_ALLOW) and hit(_GC_CONFIG_WRITE_BLOCK):
             return 2, _GC_CONFIG_WRITE_MSG
+        if not hit(_GC_HATCH_ALLOW) and hit(_GC_CONFIG_EDIT_BLOCK):
+            return 2, _GC_CONFIG_EDIT_MSG
     return 0, None
 
 
