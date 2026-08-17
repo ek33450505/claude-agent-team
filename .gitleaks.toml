@@ -23,4 +23,8 @@ paths = [
   '''tests/cast-batch-dispatch\.bats''',
   '''tests/cast-subagent-stop-hook-redaction\.bats''',
   '''evals/cases/security/security-hardcoded-api-key-unreported\.yaml''',
+  # Redaction-engine fixtures: fake AWS/GitHub/generic-secret literals proving
+  # cast-redact.py/cast-audit.py detect and strip them.
+  '''tests/test_cast_audit\.py''',
+  '''tests/test_cast_redact\.py''',
 ]

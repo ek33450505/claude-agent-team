@@ -444,7 +444,23 @@ class TestMcpParsing(unittest.TestCase):
     """Test parse_tool_fields() MCP branch (v10 2.6) — server/tool split,
     args_summary redaction-by-construction, is_cloud_bound derivation, and
     outcome/result_size capture. All MCP-only; non-MCP tools must be unaffected
-    (see TestMcpNonRegression below)."""
+    (see TestMcpNonRegression below).
+
+    Two tests here (test_outcome_error_from_error_key,
+    test_outcome_error_from_content_block_list) exercise error_preview, which
+    depends on _sanitize_error_text() finding cast_audit.REDACT_SCRIPT. That
+    constant defaults to the INSTALLED ~/.claude copy, which is absent in CI
+    (no ~/.claude there) — see TestSanitizeErrorText for the full rationale.
+    setUp/tearDown here repoint it at the repo copy for every test in this
+    class; the redirect is harmless to the tests that don't touch
+    error_preview."""
+
+    def setUp(self):
+        self._orig_redact_script = cast_audit.REDACT_SCRIPT
+        cast_audit.REDACT_SCRIPT = str(_SCRIPTS_DIR / 'cast-redact.py')
+
+    def tearDown(self):
+        cast_audit.REDACT_SCRIPT = self._orig_redact_script
 
     def test_mcp_server_tool_split(self):
         """mcp__<server>__<tool> splits on the double underscore delimiter."""
@@ -841,7 +857,21 @@ class TestSanitizeErrorText(unittest.TestCase):
     """Test _sanitize_error_text() (Fix 1, HIGH — security review) — provider-
     controlled MCP error text must be redacted BEFORE truncation, using
     cast-redact.py's real regex engine, and must FAIL CLOSED (return None,
-    never raw text) on any failure."""
+    never raw text) on any failure.
+
+    cast_audit.REDACT_SCRIPT defaults to the INSTALLED ~/.claude copy, which
+    is absent in CI (no ~/.claude there); setUp/tearDown repoint it at the
+    repo copy so redaction is actually exercised regardless of environment.
+    Tests that specifically probe the fail-closed-when-missing path
+    (test_fails_closed_when_redact_script_missing) further override it with
+    their own mock.patch.object, layered on top of this class-level default."""
+
+    def setUp(self):
+        self._orig_redact_script = cast_audit.REDACT_SCRIPT
+        cast_audit.REDACT_SCRIPT = str(_SCRIPTS_DIR / 'cast-redact.py')
+
+    def tearDown(self):
+        cast_audit.REDACT_SCRIPT = self._orig_redact_script
 
     def test_redacts_github_token_keeps_surrounding_context(self):
         token = "ghp_" + "a" * 36
@@ -879,7 +909,20 @@ class TestErrorPreviewSanitization(unittest.TestCase):
     """Integration: error_preview via parse_tool_fields() must never leak a
     provider-echoed secret (Fix 1, HIGH). Truncation to 120 chars alone is not
     redaction — both a GitHub PAT (~40 chars) and an AWS key (20 chars) fit
-    inside that cap, so these assert the SECRET is gone, not just short."""
+    inside that cap, so these assert the SECRET is gone, not just short.
+
+    cast_audit.REDACT_SCRIPT defaults to the INSTALLED ~/.claude copy, which
+    is absent in CI; setUp/tearDown repoint it at the repo copy so
+    sanitization actually runs. test_error_preview_dropped_entirely_when_
+    sanitization_fails_closed further overrides it with its own
+    mock.patch.object to force the fail-closed path."""
+
+    def setUp(self):
+        self._orig_redact_script = cast_audit.REDACT_SCRIPT
+        cast_audit.REDACT_SCRIPT = str(_SCRIPTS_DIR / 'cast-redact.py')
+
+    def tearDown(self):
+        cast_audit.REDACT_SCRIPT = self._orig_redact_script
 
     def test_error_preview_omits_github_token_keeps_context(self):
         token = "ghp_" + "c" * 36
