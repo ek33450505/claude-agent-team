@@ -64,17 +64,23 @@ BODY="$(cat "$CHOSEN" 2>/dev/null || true)"
 if [ -z "$BODY" ]; then exit 0; fi
 
 # Neutralize dispatch directives so re-injected text can't re-fire CAST triggers.
-SAFE_BODY="$(printf '%s' "$BODY" | sed 's/\[CAST-/[CAST_/g' || true)"
+SAFE_BODY="$(printf '%s' "$BODY" | sed 's/\[[Cc][Aa][Ss][Tt]-/[CAST_/g' || true)"
 
 export CAST_RI_BODY="$SAFE_BODY" CAST_RI_SOURCE="$SOURCE" CAST_RI_SLUG
 # shellcheck disable=SC2016
 python3 -c '
-import json, os
+import json, os, re
 body = os.environ.get("CAST_RI_BODY", "")
 if not body:
     raise SystemExit(0)
 source = os.environ.get("CAST_RI_SOURCE", "auto")
 slug = os.environ.get("CAST_RI_SLUG", "")
+# Neutralize any literal that would escape the trust fence (open or close
+# tag, any case), mirroring cast-session-start-journal.sh. Matches only the
+# tag-NAME prefix (not attributes/whitespace up to ">") so a bare open tag
+# with no nearby ">" cannot swallow real body content up to an unrelated
+# later ">" elsewhere in the injected text.
+body = re.sub(r"</?resume-distillate", "[fenced-tag]", body, flags=re.IGNORECASE)
 lines = body.splitlines()
 # Skip a leading YAML frontmatter block (---\n...\n---) before choosing the banner.
 start_idx = 0
