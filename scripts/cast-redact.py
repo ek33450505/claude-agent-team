@@ -50,7 +50,7 @@ PATTERNS_CONFIG = os.path.expanduser("~/.claude/config/pii-patterns.json")
 
 # ── Built-in fallback regex patterns (used when Presidio is unavailable) ─────
 
-FALLBACK_PATTERNS = [
+_STANDARD_FALLBACK_PATTERNS = [
     # Standard PII
     ("EMAIL_ADDRESS",   r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),
     ("PHONE_NUMBER",    r"\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
@@ -71,6 +71,59 @@ FALLBACK_PATTERNS = [
     ("ABSOLUTE_PATH",   r"/Users/[a-zA-Z0-9_\-]+/[^\s]*"),
     ("BITBUCKET_URL",   r"bitbucket\.org/[^\s]+"),
     ("SLACK_WEBHOOK",   r"hooks\.slack\.com/[^\s]+"),
+    # C1b: additional secret/token vendors (closing redaction-engine gaps for the
+    # SubagentStop free-form prose surface)
+    ("STRIPE_KEY",      r"(?:sk_live|sk_test|pk_live|rk_live)_[A-Za-z0-9]{24,}"),
+    # xoxa- is not a documented Slack token type (bot/user/refresh/app tokens are
+    # xoxb/xoxp/xoxr/xoxs) — kept deliberately for conservative future-proofing;
+    # do not "clean up" by removing it.
+    ("SLACK_TOKEN",     r"xox[abprs]-[A-Za-z0-9\-]{10,}"),
+    ("NPM_TOKEN",       r"npm_[A-Za-z0-9]{36,}"),
+    ("SENDGRID_KEY",    r"SG\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}"),
+    ("GOOGLE_API_KEY",  r"AIza[A-Za-z0-9_\-]{35}"),
+]
+
+# GENERIC_SECRET's tag-placeholder lookahead (below) is DERIVED from the entity-type
+# names of every other pattern, rather than hardcoded, so it can never silently go
+# stale as new FALLBACK_PATTERNS entries are added — plus the redactor's own generic
+# placeholder words (REDACTED/MASKED) and GENERIC_SECRET's own tag.
+_KNOWN_ENTITY_TAGS = "|".join(
+    re.escape(etype) for etype, _ in _STANDARD_FALLBACK_PATTERNS
+) + "|REDACTED|MASKED|GENERIC_SECRET"
+
+# GENERIC_SECRET: keyword, then an optional closing quote/backtick/whitespace before
+# the operator (handles JSON `"password":`, PHP `'password' =>`, and markdown
+# `` `password`: ``), an assignment operator (=, :, or the PHP fat-arrow =>), then an
+# optional opening quote/backtick (so markdown-fenced values like `` password: `X` ``
+# are caught — security found this regression 2026-08-16: excluding the backtick from
+# the VALUE charset last round, to kill markdown-prose false positives, accidentally
+# also excluded it as a value DELIMITER, so backtick-fenced real secrets went
+# undetected entirely), two negative lookaheads — one for known placeholder/null
+# values (so `token: None`, `secret: null`, `password: undefined` are not flagged)
+# and one for the redactor's OWN emitted <ENTITY_TYPE> tags, case-SENSITIVE via
+# (?-i:...) (a plain [A-Z_] class inherits the module's re.IGNORECASE compile flag
+# and matches lowercase too — security found `token=<PROD>abc123realvalue` evaded
+# detection entirely under the case-insensitive version, 2026-08-16) — then the value
+# itself. Value charset is a denylist (anything but whitespace/quotes/backtick) per
+# corpus sweep measurement (2026-08-16, 2437 real agent responses, contamination-free
+# slice): 1 true positive + 1 false positive ("WebSearch" quoted in prose) — team-lead
+# decision: prefer recall over precision here, do not add an entropy/charset
+# heuristic to chase 0 FP, since that also kills real all-alphabetic passphrases like
+# "password=correcthorse". Trailing sentence punctuation is trimmed in
+# analyze_regex(), not here, since the regex alone can't distinguish "part of the
+# secret" from "end of sentence" — and analyze_regex() keeps the UNTRIMMED span
+# rather than dropping the entity if trimming would take it under the 6-char floor
+# (over-redacting a trailing period is strictly safer than leaking the value).
+_GENERIC_SECRET_PATTERN = (
+    r"(?i)\b(?:access_token|client_secret|password|passwd|secret|token)"
+    r"['\"`]?\s*(?:=>|[:=])\s*['\"`]?"
+    r"(?!(?:null|undefined|none|nil|redacted|masked|hidden|empty)\b)"
+    rf"(?!(?-i:<(?:{_KNOWN_ENTITY_TAGS})>))"
+    r"([^\s'\"`]{6,})['\"`]?"
+)
+
+FALLBACK_PATTERNS = _STANDARD_FALLBACK_PATTERNS + [
+    ("GENERIC_SECRET", _GENERIC_SECRET_PATTERN),
 ]
 
 # F2: Precompile FALLBACK_PATTERNS at module load to avoid per-call re.compile overhead.
@@ -99,6 +152,14 @@ _COMPILED_PATTERNS: list[tuple[str, re.Pattern]] = [
 #   ABSOLUTE_PATH  → /
 #   BITBUCKET_URL  → /
 #   SLACK_WEBHOOK  → /
+#   STRIPE_KEY     → sk_|pk_|rk_  (prefix is pure-alpha+underscore, no digit/@//sk- guaranteed)
+#   SLACK_TOKEN    → xox[abprs]-  (bot/user/etc token prefix, distinct from the sk- OPENAI_KEY trigger)
+#   NPM_TOKEN      → npm_  (prefix alone; the 36+-char body may be pure-alpha with no digit)
+#   SENDGRID_KEY   → SG\.  (prefix; body segments may be pure-alpha)
+#   GOOGLE_API_KEY → AIza  (prefix; 35-char body may be pure-alpha)
+#   GENERIC_SECRET → password|passwd|secret|token  (keyword; "client_secret" is caught via
+#                    "secret" and "access_token" via "token" — value may be pure-alpha, e.g.
+#                    password=hunter has no @, digit, or / and would be missed without this)
 #
 # GITHUB_TOKEN, BEARER_TOKEN, and API_KEY can all match text with no @, digit, /, sk-, eyJ, or
 # BEGIN\s, so their keyword prefixes are added explicitly to ensure the candidate is a
@@ -107,7 +168,13 @@ _PII_CANDIDATES: re.Pattern = re.compile(
     r'[@\d/]|sk-|eyJ|BEGIN\s'
     r'|(?:ghp|gho|ghu|ghs|ghr|github_pat)_'
     r'|bearer\s'
-    r'|api[_\-]?key|x-api-key',
+    r'|api[_\-]?key|x-api-key'
+    r'|sk_|pk_|rk_'
+    r'|xox[abprs]-'
+    r'|npm_'
+    r'|SG\.'
+    r'|AIza'
+    r'|password|passwd|secret|token',
     re.IGNORECASE,
 )
 
@@ -224,6 +291,22 @@ def analyze_regex(text: str, custom_patterns: list[dict]) -> list[dict]:
                 # Use group 1 if capturing group, else full match
                 start = m.start(1) if m.lastindex else m.start()
                 end = m.end(1) if m.lastindex else m.end()
+                if entity_type == "GENERIC_SECRET":
+                    # Trim trailing sentence punctuation (period/comma/close-paren) that
+                    # the denylist value charset would otherwise swallow into the redacted
+                    # span — e.g. "(password=Secret123)." must not capture ")." as part of
+                    # the secret. Deliberately does NOT trim "!" or similar — those are
+                    # common in real passwords and should stay inside the redaction.
+                    # If trimming would take the span under the 6-char floor, KEEP the
+                    # untrimmed span rather than discarding the entity — security found
+                    # (2026-08-16) that "The password=Abcde." was dropping to zero
+                    # entities entirely (a full plaintext leak), which is strictly worse
+                    # than over-redacting a trailing period.
+                    trimmed_end = end
+                    while trimmed_end > start and text[trimmed_end - 1] in ".,)":
+                        trimmed_end -= 1
+                    if trimmed_end - start >= 6:
+                        end = trimmed_end
                 span = (start, end)
                 if span in seen_spans:
                     continue
