@@ -82,6 +82,31 @@ regex layer):
     git invocation itself is still plainly on the line. It does nothing for
     the case above, where the ENTIRE git invocation is wrapped inside the
     subshell/substitution and never appears as a bare `git ...` token.
+  - Quoted-token evasion (2026-08-17 recovery-path pass, measured — SAME
+    family as the subshell/`$( )` limitation above, and for the same reason:
+    fixing it properly needs real shell tokenization (`shlex`), not more
+    regex, so it is surfaced here rather than papered over). Every BLOCK
+    regex in this module matches a BARE shell token — `--hard`, `expire`,
+    `commit`, etc. — literally, so wrapping the subcommand name OR a
+    destructive flag in quotes evades the match, since the shell strips the
+    quotes but the regex never sees past them: `git reset "--hard"`, `git
+    "reset" --hard`, `git "commit" -m x`, `git "push"`, `git checkout "--" .`,
+    `git switch "--discard-changes" main`, `git gc "--prune=now"`, `git
+    reflog "expire" --all` are all measured ALLOWED. This is PRE-EXISTING —
+    reproducible against `commit`/`push`/`reset`/`checkout`/`switch` at HEAD
+    — and NOT introduced by the reflog/gc/prune additions in this pass;
+    those three ops inherit the same gap by using the same pattern idiom.
+    Quoting only the flag's VALUE, as opposed to the flag/token itself, does
+    NOT evade it: `git gc --prune="now"` still blocks, because the literal
+    `--prune=` text the regex keys on is unquoted. The failure direction is
+    NOT uniform across ops: for most ops (reset/checkout/switch/commit/push/
+    reflog/gc/prune) quoting fails OPEN as shown above, but for `clean` and
+    `restore` the *safe-form* detection (the dry-run/`--staged` lookahead,
+    not the block itself) is what gets quoted-token-evaded, which flips the
+    outcome to fail CLOSED instead: `git clean "-fd"` and `git restore
+    "--worktree" f.txt` still BLOCK, because the quoted safety flag is what
+    the regex fails to recognize, not the destructive command. Advisory-grade
+    like every other gap in this module — surfaced, not fixed, this pass.
   - The stash/reset/checkout BLOCK regexes anchor destructive-flag detection
     on a token boundary (`\b`, or an equivalent negative lookahead for `.`,
     which is itself a non-word character) rather than requiring literal
@@ -128,15 +153,94 @@ regex layer):
     `--track` are unaffected). Non-`f` clusters (`-b`, `-B`, `-q`, `-t`,
     `-p`, `-m`, `-d`, `-c`, `-C`, and combinations without an `f`) correctly
     stay unmatched.
+  - `git reflog expire`/`git reflog delete` blocked (2026-08-17 recovery-path
+    pass: these destroy reflog entries — the SAME recovery mechanism that
+    recovered a fully reviewed diff via a dangling-blob hunt earlier that
+    day; escape: CAST_REFLOG_OK=1). Read-only `git reflog`/`git reflog show`/
+    `git reflog exists` stay UNBLOCKED.
+  - `git gc --prune=<value>` (any explicit value, including `now`/`all`/an
+    age) blocked — same recovery-path rationale (escape: CAST_GC_OK=1). Bare
+    `git gc`, `--aggressive`, `--prune` with no value, `--no-prune`, and
+    `--auto` stay UNBLOCKED.
+  - `git prune` blocked in every non-dry-run form — measured MORE
+    destructive than `git gc --prune=now` (no grace period at all; escape:
+    CAST_PRUNE_OK=1). Dry runs (`-n`/`--dry-run`) stay UNBLOCKED, as do the
+    unrelated `git prune-packed`, `git remote prune`, and `git worktree
+    prune`.
+  - `git -c gc.pruneExpire=<value>` / `-c gc.reflogExpire=<value>` / `-c
+    gc.reflogExpireUnreachable=<value>` blocked on ANY git invocation
+    regardless of subcommand — measured as a complete config-layer bypass of
+    all three blocks above (2026-08-17 recovery-path pass, same-day
+    follow-up): `git -c gc.reflogExpire=now -c gc.pruneExpire=now gc`
+    reproduces the FULL `reflog expire --all && gc --prune=now` destruction
+    chain in ONE command with no `--prune=`/`expire`/`prune` token for those
+    checks to key on (escape: CAST_GC_OK=1, no new hatch). Key match is
+    case-insensitive (git config keys are); value match is not — ANY value
+    blocks, including a protective `=never`, same precedent as `--prune=
+    <value>` above. NOT narrowed to the `gc` subcommand — see the `--auto`
+    note below for why.
+  - `git config` WRITES (bare, `--local`, `--global`, `--replace-all`, ...)
+    of `gc.pruneExpire`/`gc.reflogExpire`/`gc.reflogExpireUnreachable` are
+    blocked under the same hatch (CAST_GC_OK=1) — closes `git config
+    gc.pruneExpire now && git gc`, where the destructive act is the config
+    WRITE in segment 1, leaving a bare, innocent-looking `git gc` in segment
+    2. READS (`git config --get gc.pruneExpire`, or a bare `git config
+    gc.pruneExpire` with no value — git itself treats that as a
+    print-current-value read) stay UNBLOCKED.
   - Entirely unguarded ops, deliberately out of scope, measured and
     confirmed still open as of this pass (a separate enumerated unit, not
     this one): `git rm -f`, `git rm -r --cached`, `git branch -D`, `git
     worktree remove -f`, `git update-ref -d`, `git filter-branch`, `git
-    sparse-checkout set`, `git reflog expire --expire=now --all` + `git gc
-    --prune=now` (the last pair would destroy the dangling-blob recovery
-    path that saved a reviewed diff on 2026-08-17). Do not assume this list
-    is exhaustive — it is the set explicitly measured and deferred, not a
-    claim that everything else is covered.
+    sparse-checkout set`. Do not assume this list is exhaustive — it is the
+    set explicitly measured and deferred, not a claim that everything else
+    is covered. (`git reflog expire`/`git gc --prune=<value>`/`git prune`
+    were on this list through the prior pass; they are now covered by the
+    reflog/gc/prune blocks above — see the 2026-08-17 recovery-path pass
+    note in each block's comment.)
+  - The `git gc`/`git prune` coverage above is deliberately narrow, keyed
+    only on the explicit `--prune=<value>` flag or the bare `git prune`
+    invocation. It does NOT cover bare `git gc` or `git gc --prune` (no
+    value) — both stay allowed and CAN still delete objects older than
+    `gc.pruneExpire` (default 2 weeks). The `-c`/`git config` blocks added in
+    the same-day follow-up (above) close the two routes that SET that config
+    via a `git` command in the scanned line; they do NOT close a bare `git
+    gc` run against a `gc.pruneExpire=now` that got into `.git/config` some
+    OTHER way — e.g. a direct file edit (`Write`/`Edit` tool, a text editor,
+    a prior session, a repo committed with that setting) — since that write
+    never appears as a `git ...` token on any line this module scans. That
+    remains a real, named hole: bare `git gc` is not, and cannot be made,
+    unconditionally safe by a command-line regex layer.
+  - Config-injection indirection (2026-08-17 recovery-path pass, follow-up,
+    measured — deliberately NOT chased, same family as the subshell/`$( )`
+    and quoted-token limitations: regex cannot win this arms race, and the
+    threat model here is a careless agent, not an adversary evading a
+    security boundary; the OS/tool sandbox is the real boundary):
+    `PRX=now git --config-env=gc.pruneExpire=PRX gc` and `GIT_CONFIG_COUNT=1
+    GIT_CONFIG_KEY_0=gc.pruneExpire GIT_CONFIG_VALUE_0=now git gc` both
+    measured GONE (dangling blob deleted) and both ALLOWED by every check in
+    this module — `--config-env=` names the ENV VAR holding the value, not
+    the value itself, so the literal `gc.pruneExpire=now` text the `-c`
+    block keys on never appears on the line; the `GIT_CONFIG_KEY_0`/
+    `GIT_CONFIG_VALUE_0` form sets config purely via env-var assignments
+    git reads internally, with no `-c` or `config` token at all.
+  - Honest unresolved question, NOT smoothed over (2026-08-17 recovery-path
+    pass, follow-up): whether inline expiry config plus git's own
+    auto-gc (`git -c gc.auto=1 -c gc.pruneExpire=now commit`, or any
+    subcommand that can trigger auto-gc) is ITSELF destructive at scale
+    could NOT be determined this pass. A first probe checking only whether
+    the blob survived showed "harmless," but `gc.autoDetach` defaults to
+    TRUE, so that probe may simply have raced a backgrounded gc process
+    rather than proving auto-gc never ran. Re-probing with
+    `-c gc.autoDetach=false` and counting loose objects directly (not just
+    checking blob survival) showed the object count UNCHANGED — i.e. gc
+    genuinely never fired, because a repo this small (7 loose objects) never
+    trips `gc.auto`'s default threshold. The correct, narrow statement is:
+    **auto-gc could not be MADE to fire in a repo small enough to probe
+    cheaply, so whether inline expiry config plus auto-gc is destructive at
+    scale is UNRESOLVED, not "verified harmless."** This is also why block
+    (A) above (the `-c` config-injection block) is NOT narrowed to the `gc`
+    subcommand: doing so would require answering this exact open question
+    first, and this pass could not.
 
 CONTRACT: exit 2 + stderr message = block; exit 0 = allow. FAIL-OPEN — any
 internal error allows the tool (a guard crash must never block all work).
@@ -399,6 +503,118 @@ _SWITCH_BLOCK = re.compile(
     r'(?=.*(?:' + _FORCE_FLAG_LOOKAHEAD + r'|(?:^|\s)--discard-changes\b))'
 )
 
+# --- git reflog expire/delete block ------------------------------------------
+# 2026-08-17 recovery-path pass: `git reflog expire`/`git reflog delete` destroy
+# reflog entries — the SAME dangling-object/reflog recovery path that recovered
+# a fully reviewed, gated working-tree diff after a dispatched commit agent ran
+# a raw `git reset --hard` earlier the same day. Only the two destructive
+# subcommands block; `git reflog` (bare), `git reflog show [ref]`, and `git
+# reflog exists <ref>` are read-only and stay allowed. Reuses the shell-token
+# boundary (`\b`) rather than a trailing `(\s|$)`, same as stash/reset above,
+# so adjacent empty-output command substitution (`` git reflog expire`true` ``)
+# can't evade it.
+# Tolerates extra VAR=value assignments between CAST_REFLOG_OK=1 and git.
+_REFLOG_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_REFLOG_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+reflog\b'
+)
+_REFLOG_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+reflog\s+(expire|delete)\b'
+)
+
+# --- git gc --prune=<value> block --------------------------------------------
+# 2026-08-17 recovery-path pass: measured that `git gc --prune=<value>` (ANY
+# explicit value, including `now`/`all`, and even a value as generous as
+# `1.hour.ago` against a 3-hour-old dangling blob) deletes unreachable objects
+# — the same recovery path noted above. Bare `git gc`, `--aggressive`,
+# `--prune` with no `=value`, `--no-prune`, and `--auto` all stay allowed —
+# none of them force an immediate/explicit prune. The `--no-prune` case is the
+# trap: the flag lookahead below requires the literal substring `--prune=`
+# preceded by a token boundary, which `--no-prune` (no `=` at all) never
+# contains, so it cannot misfire on it.
+# Tolerates extra VAR=value assignments between CAST_GC_OK=1 and git.
+_GC_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_GC_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+gc\b'
+)
+_GC_PRUNE_VALUE = r'(?:^|\s)--prune=\S+'
+_GC_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+gc\b(?=.*' + _GC_PRUNE_VALUE + r')'
+)
+
+# --- git prune block ----------------------------------------------------------
+# 2026-08-17 recovery-path pass: bare `git prune` destroys unreachable objects
+# with NO grace period at all — measured MORE destructive than `git gc
+# --prune=now` (which still respects `gc.pruneExpire`, default 2 weeks, unless
+# overridden). Dry runs (`-n`/`--dry-run`, including clustered short-flag forms
+# like `-fn`) are the only safe form and stay allowed, mirroring `_CLEAN_DRY_RUN`
+# above. Must NOT match `git prune-packed` (a distinct, non-destructive
+# command), `git remote prune origin`, or `git worktree prune` (both `prune`
+# arguments to a DIFFERENT subcommand, not the top-level destructive `git
+# prune`). `\b` alone is wrong here — `prune\b` still matches inside
+# `prune-packed` (the `e`->`-` transition IS a word/non-word boundary) — so a
+# negative lookahead `(?![\w-])` is used instead, rejecting anything where
+# `prune` is immediately followed by a word char or hyphen. `remote prune
+# origin`/`worktree prune` are excluded structurally: `_GIT_OPTS` only
+# recognizes git's global options (`-C`, `--no-pager`, `-c`, `--git-dir=`,
+# `--work-tree=`), not subcommand names like `remote`/`worktree`, so the
+# pattern's `\s+prune` can only match when `prune` is the FIRST subcommand
+# token right after `git` (+ global opts) — not a later argument to another
+# subcommand.
+# Tolerates extra VAR=value assignments between CAST_PRUNE_OK=1 and git.
+_PRUNE_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_PRUNE_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+prune(?![\w-])'
+)
+_PRUNE_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+prune(?![\w-])(?!.*' + _CLEAN_DRY_RUN + r')'
+)
+
+# --- git gc/reflog config-injection block (config-route bypass follow-up) ----
+# 2026-08-17 recovery-path pass, follow-up (same day): the three blocks above
+# key on the DESTRUCTIVE FLAG (`--prune=<value>`, `reflog expire`/`delete`,
+# bare `prune`). Measured that the exact same destruction is reachable with
+# NONE of those flags present at all, via git's config layer instead —
+# `git -c gc.pruneExpire=now gc` deletes the dangling blob with no `--prune=`
+# on the line, and `git -c gc.reflogExpire=now -c gc.pruneExpire=now gc` in
+# ONE command reproduces the full `reflog expire --all && gc --prune=now`
+# destruction chain with no token any BLOCK regex above would catch. `git
+# config` keys are case-insensitive (`gc.pruneexpire` behaves identically to
+# `gc.pruneExpire`), so the key match below is case-insensitive; value safety
+# is deliberately NOT decidable here either (same precedent as `--prune=
+# <value>` above) — ANY value blocks, including a protective `=never`, an
+# accepted hatchable false positive.
+#
+# Two distinct routes, both gated by the SAME hatch (CAST_GC_OK=1 — no new
+# hatch for this follow-up):
+#
+# (A) Inline injection via `-c key=value` on ANY git invocation, regardless
+#     of subcommand. NOT narrowed to `gc` — see the KNOWN LIMITATIONS note on
+#     `--auto`/`gc.autoDetach` for why: whether inline expiry config plus
+#     git's own auto-gc (which can fire on ANY subcommand, e.g. `git -c
+#     gc.auto=1 -c gc.pruneExpire=now commit`) is itself destructive at scale
+#     is an open, unresolved question this pass could not settle, so the
+#     block does not assume "only `gc` matters."
+# (B) `git config` WRITES of an expiry key (any form: bare, `--local`,
+#     `--global`, `--replace-all`, ...) — closes `git config gc.pruneExpire
+#     now && git gc`, where the destructive second segment is a bare `git gc`
+#     that looks innocent in isolation to the per-segment evaluator; the
+#     config WRITE in segment 1 is the actual destructive act. A READ (`git
+#     config --get gc.pruneExpire`, or a bare `git config gc.pruneExpire`
+#     with no value token — git itself treats that as a print-current-value
+#     read) must NOT be caught: the pattern requires BOTH the absence of
+#     `--get`/`--get-all`/etc. AND a value token following the key, so a
+#     bare-key read is allowed on either condition alone.
+_GC_CONFIG_KEY = r'(?i:gc\.(?:reflogExpireUnreachable|reflogExpire|pruneExpire))'
+_GC_HATCH_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_GC_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git\b'
+)
+_GC_CINJECT_BLOCK = re.compile(
+    r'(^|\s)git\b(?=.*(?:^|\s)-c\s+' + _GC_CONFIG_KEY + r'=)'
+)
+_GC_CONFIG_WRITE_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+config\b'
+    r'(?!.*--get)'
+    r'(?=.*\s' + _GC_CONFIG_KEY + r'\s+\S)'
+)
+
 _COMMIT_MSG = (
     "**[CAST]** Raw `git commit` blocked. Dispatch the `commit` agent instead "
     "(Agent tool, subagent_type: 'commit')."
@@ -450,6 +666,51 @@ _SWITCH_MSG = (
     "`git switch <branch>` is unaffected (git itself refuses it when local changes "
     "conflict). If you genuinely need to force a switch, use `CAST_SWITCH_OK=1 "
     "git switch ...` (document why)."
+)
+_REFLOG_MSG = (
+    "**[CAST]** Raw `git reflog expire`/`git reflog delete` blocked — it "
+    "permanently destroys reflog entries, closing off the dangling-object "
+    "recovery path that saved a fully reviewed, gated working-tree diff after "
+    "a dispatched commit agent ran a raw `git reset --hard` on 2026-08-17. "
+    "Read-only forms (`git reflog`, `git reflog show`, `git reflog exists`) are "
+    "unaffected. If you genuinely need to expire/delete reflog entries, use "
+    "`CAST_REFLOG_OK=1 git reflog ...` (document why)."
+)
+_GC_MSG = (
+    "**[CAST]** Raw `git gc --prune=<value>` blocked — an explicit prune value "
+    "(including `now`/`all`, or any age) permanently deletes unreachable "
+    "objects, closing off the same 2026-08-17 dangling-blob recovery path. "
+    "Bare `git gc`, `--aggressive`, `--prune` (no value), `--no-prune`, and "
+    "`--auto` are unaffected. If you genuinely need an explicit prune, use "
+    "`CAST_GC_OK=1 git gc --prune=<value>` (document why)."
+)
+_PRUNE_MSG = (
+    "**[CAST]** Raw `git prune` blocked (dry runs via `-n`/`--dry-run` are "
+    "exempt) — it deletes unreachable objects with no grace period at all, "
+    "closing off the same 2026-08-17 dangling-blob recovery path (more "
+    "destructive than `git gc --prune=now`, which still respects "
+    "`gc.pruneExpire`). `git prune-packed`, `git remote prune`, and `git "
+    "worktree prune` are unaffected. If you genuinely need to prune, use "
+    "`CAST_PRUNE_OK=1 git prune ...` (document why)."
+)
+_GC_CINJECT_MSG = (
+    "**[CAST]** Raw `git -c gc.pruneExpire=<value>` / `-c gc.reflogExpire=<value>` "
+    "/ `-c gc.reflogExpireUnreachable=<value>` blocked (key match is "
+    "case-insensitive; ANY value blocks, including `never`) — this is a "
+    "config-layer bypass of the reflog/gc/prune blocks above: it reaches the "
+    "exact same dangling-object/reflog recovery-path destruction with no "
+    "`--prune=`/`expire`/`prune` token on the line for those checks to key "
+    "on. If you genuinely need to set one of these inline, use "
+    "`CAST_GC_OK=1 git -c gc.pruneExpire=<value> ...` (document why)."
+)
+_GC_CONFIG_WRITE_MSG = (
+    "**[CAST]** `git config` write of `gc.pruneExpire` / `gc.reflogExpire` / "
+    "`gc.reflogExpireUnreachable` blocked (key match is case-insensitive; "
+    "reads via `--get`/a bare key with no value are unaffected) — this is "
+    "the same config-layer bypass as the inline `-c` block, staged instead "
+    "via a persistent config write that makes a LATER, innocent-looking bare "
+    "`git gc` destructive. If you genuinely need to set one of these, use "
+    "`CAST_GC_OK=1 git config gc.pruneExpire ...` (document why)."
 )
 
 SESSION_TIMEOUT = 7200  # 2 hours, matches the agent-status TTL
@@ -755,6 +1016,16 @@ def _git_evaluate(command: str):
                 return 2, _RESTORE_MSG
         if not _SWITCH_ALLOW.search(seg) and _SWITCH_BLOCK.search(seg):
             return 2, _SWITCH_MSG
+        if not _REFLOG_ALLOW.search(seg) and _REFLOG_BLOCK.search(seg):
+            return 2, _REFLOG_MSG
+        if not _GC_ALLOW.search(seg) and _GC_BLOCK.search(seg):
+            return 2, _GC_MSG
+        if not _PRUNE_ALLOW.search(seg) and _PRUNE_BLOCK.search(seg):
+            return 2, _PRUNE_MSG
+        if not _GC_HATCH_ALLOW.search(seg) and _GC_CINJECT_BLOCK.search(seg):
+            return 2, _GC_CINJECT_MSG
+        if not _GC_HATCH_ALLOW.search(seg) and _GC_CONFIG_WRITE_BLOCK.search(seg):
+            return 2, _GC_CONFIG_WRITE_MSG
     return 0, None
 
 

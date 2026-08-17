@@ -1253,6 +1253,415 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
 }
 
 # ---------------------------------------------------------------------------
+# git reflog expire/delete block (2026-08-17 recovery-path pass)
+# ---------------------------------------------------------------------------
+
+@test "git reflog expire --expire=now --all without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog expire --expire=now --all")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git reflog expire --expire-unreachable=now --all without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog expire --expire-unreachable=now --all")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git reflog delete HEAD@{0} without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog delete HEAD@{0}")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git reflog (bare, read-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog")"
+  assert_success
+}
+
+@test "git reflog show HEAD (read-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog show HEAD")"
+  assert_success
+}
+
+@test "git reflog exists refs/heads/main (read-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog exists refs/heads/main")"
+  assert_success
+}
+
+@test "CAST_REFLOG_OK=1 git reflog expire --expire=now --all → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_REFLOG_OK=1 git reflog expire --expire=now --all")"
+  assert_success
+}
+
+@test "CAST_REFLOG_OK=1 with extra VAR=value before git reflog expire → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_REFLOG_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git reflog expire --expire=now --all")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git reflog delete HEAD@{0} → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog delete HEAD@{0}")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git reflog expire\`true\` (adjacent command substitution) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git reflog expire`true`')"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+# ---------------------------------------------------------------------------
+# git gc --prune=<value> block (2026-08-17 recovery-path pass)
+# ---------------------------------------------------------------------------
+
+@test "git gc --prune=now without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git gc --prune=all without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=all")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git gc --prune=1.hour.ago without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=1.hour.ago")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "bare git gc → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc")"
+  assert_success
+}
+
+@test "git gc --aggressive → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --aggressive")"
+  assert_success
+}
+
+@test "git gc --prune (no value) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune")"
+  assert_success
+}
+
+@test "git gc --no-prune → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --no-prune")"
+  assert_success
+}
+
+@test "git gc --auto → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --auto")"
+  assert_success
+}
+
+@test "git gcfoo (look-alike token) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gcfoo")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 git gc --prune=now → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git gc --prune=now")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 with extra VAR=value before git gc --prune=now → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git gc --prune=now")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git gc --prune=now → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+# ---------------------------------------------------------------------------
+# git prune block (2026-08-17 recovery-path pass)
+# ---------------------------------------------------------------------------
+
+@test "bare git prune without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git prune --expire=now without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune --expire=now")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git prune -n (dry run) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune -n")"
+  assert_success
+}
+
+@test "git prune --dry-run → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune --dry-run")"
+  assert_success
+}
+
+@test "git prune-packed (distinct non-destructive command) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune-packed")"
+  assert_success
+}
+
+@test "git remote prune origin (different subcommand's argument) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git remote prune origin")"
+  assert_success
+}
+
+@test "git worktree prune (different subcommand's argument) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree prune")"
+  assert_success
+}
+
+@test "git prunefoo (look-alike token) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prunefoo")"
+  assert_success
+}
+
+@test "CAST_PRUNE_OK=1 git prune → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PRUNE_OK=1 git prune")"
+  assert_success
+}
+
+@test "CAST_PRUNE_OK=1 with extra VAR=value before git prune → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PRUNE_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git prune")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git prune → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git prune\$(true) (adjacent command substitution) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git prune$(true)')"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git -C /repo prune (global option tolerance) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C /repo prune")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "CAST_PRUNE_OK=1 git -C /repo prune (global option tolerance) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PRUNE_OK=1 git -C /repo prune")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git gc/reflog config-route bypass block (2026-08-17 recovery-path pass,
+# follow-up): -c inline config injection + `git config` writes of an expiry
+# key, both under the existing CAST_GC_OK=1 hatch
+# ---------------------------------------------------------------------------
+
+@test "git -c gc.pruneExpire=now gc without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c gc.reflogExpire=now gc without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c gc.reflogExpireUnreachable=now gc without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpireUnreachable=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c gc.reflogExpire=now -c gc.pruneExpire=now gc (combined, ONE command) without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpire=now -c gc.pruneExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git --git-dir=.git -c gc.pruneExpire=now gc (global option tolerance) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --git-dir=.git -c gc.pruneExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c gc.pruneexpire=now gc (lowercase key, git config keys are case-insensitive) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneexpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c core.pager=less log (unrelated key) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c core.pager=less log")"
+  assert_success
+}
+
+@test "git -c gc.auto=0 gc (unrelated gc.* key) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.auto=0 gc")"
+  assert_success
+}
+
+@test "git -c user.name=x commit → blocks on commit, not on the -c (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c user.name=x commit")"
+  assert_failure
+  assert_output --partial "commit"
+}
+
+@test "CAST_GC_OK=1 git -c gc.pruneExpire=now gc → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git -c gc.pruneExpire=now gc")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 with extra VAR=value before git -c gc.pruneExpire=now gc → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git -c gc.pruneExpire=now gc")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git -c gc.pruneExpire=now gc → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.pruneExpire now without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config --local gc.pruneExpire now (any form) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --local gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config --replace-all gc.pruneExpire now (any form) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --replace-all gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.pruneexpire now (lowercase key) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneexpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.reflogExpire now → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.reflogExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.reflogExpireUnreachable now → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.reflogExpireUnreachable now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config user.email x (unrelated key) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config user.email x")"
+  assert_success
+}
+
+@test "git config --get gc.pruneExpire (a READ) → allows (exit 0) [subtle: read must not be mistaken for write]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --get gc.pruneExpire")"
+  assert_success
+}
+
+@test "git config gc.pruneExpire (bare key, no value — a READ) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire")"
+  assert_success
+}
+
+# `git config --get <key> <value-pattern>` is a READ — the value-pattern is a
+# FILTER argument, not a set-value — but it has a token after the key, which
+# would otherwise satisfy the write-detection lookahead on its own. This test
+# is the only thing that discriminates the `(?!.*--get)` condition: with the
+# value-token requirement alone (no --get exclusion), this form is still
+# wrongly allowed to look like a write and blocks; only the --get exemption
+# saves it.
+@test "git config --get gc.pruneExpire now (READ with value-pattern filter) → allows (exit 0) [subtle: --get exemption is load-bearing, not redundant with the value-token check]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --get gc.pruneExpire now")"
+  assert_success
+}
+
+@test "git config --get-regexp gc.*Expire now (READ, --get-family) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --get-regexp gc.*Expire now")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 git config gc.pruneExpire now → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git config gc.pruneExpire now")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 with extra VAR=value before git config gc.pruneExpire now → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git config gc.pruneExpire now")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git config gc.pruneExpire now → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.pruneExpire now && git gc (config-write-then-bare-gc bypass) → blocks (exit 2) [the exact measured bypass this closes]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now && git gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "CAST_GC_OK=1 git -c gc.pruneExpire=now gc && git gc --prune=now → still BLOCKS (segment 2 carries no hatch)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git -c gc.pruneExpire=now gc && git gc --prune=now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "CAST_GC_OK=1 git config gc.pruneExpire now && git gc --prune=now → still BLOCKS (segment 2 carries no hatch)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git config gc.pruneExpire now && git gc --prune=now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+# ---------------------------------------------------------------------------
+# reflog/gc/prune: per-segment hatch scoping + cross-op independence
+# (2026-08-17 fix — must not regress)
+# ---------------------------------------------------------------------------
+
+@test "CAST_GC_OK=1 git gc --prune=now && git prune → still BLOCKS (segment 2 carries no hatch)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git gc --prune=now && git prune")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "CAST_GC_OK=1 git gc --prune=now && CAST_PRUNE_OK=1 git prune → ALLOWED (each segment carries its own hatch)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git gc --prune=now && CAST_PRUNE_OK=1 git prune")"
+  assert_success
+}
+
+@test "CAST_PRUNE_OK=1 git prune; git reset --hard → still BLOCKS (cross-op independence)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PRUNE_OK=1 git prune; git reset --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+# ---------------------------------------------------------------------------
 # Empty Input Handling
 # ---------------------------------------------------------------------------
 
