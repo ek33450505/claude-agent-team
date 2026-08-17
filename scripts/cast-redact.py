@@ -148,7 +148,11 @@ _COMPILED_PATTERNS: list[tuple[str, re.Pattern]] = [
 #   BEARER_TOKEN   → bearer\s  (keyword; value may be pure-alpha with no digit/@)
 #   JWT            → eyJ
 #   DATABASE_URL   → /  (scheme://user:pass@host always has /)
-#   PRIVATE_KEY    → BEGIN\s
+#   PRIVATE_KEY    → BEGIN  (the [A-Z ]+ body between "BEGIN" and "PRIVATE KEY"/
+#                    "CERTIFICATE" is letters-OR-spaces, so a space right after
+#                    BEGIN is NOT guaranteed, e.g. "-----BEGINRSA PRIVATE KEY-----"
+#                    matches the pattern with no whitespace touching "BEGIN" —
+#                    trigger on the bare literal, not "BEGIN\s")
 #   API_KEY        → api.{0,1}key or x-api-key  (keyword; value may be pure-alpha)
 #   ABSOLUTE_PATH  → /
 #   BITBUCKET_URL  → /
@@ -163,10 +167,17 @@ _COMPILED_PATTERNS: list[tuple[str, re.Pattern]] = [
 #                    password=hunter has no @, digit, or / and would be missed without this)
 #
 # GITHUB_TOKEN, BEARER_TOKEN, and API_KEY can all match text with no @, digit, /, sk-, eyJ, or
-# BEGIN\s, so their keyword prefixes are added explicitly to ensure the candidate is a
+# BEGIN, so their keyword prefixes are added explicitly to ensure the candidate is a
 # strict superset of every pattern's trigger set.
+#
+# BEGIN (not BEGIN\s): the \s was dropped because it was not actually guaranteed (see
+# PRIVATE_KEY rationale above) — widening the trigger only makes the regex SCAN run in
+# more cases, which is always safe: _PII_CANDIDATES only gates whether the scan runs at
+# all, never what gets redacted, so a wider trigger can only turn a false negative
+# (dead pattern) into a correct detection or a harmless extra scan — it cannot itself
+# cause a false redaction (that's solely decided by FALLBACK_PATTERNS matching or not).
 _PII_CANDIDATES: re.Pattern = re.compile(
-    r'[@\d/]|sk-|eyJ|BEGIN\s|AKIA'
+    r'[@\d/]|sk-|eyJ|BEGIN|AKIA'
     r'|(?:ghp|gho|ghu|ghs|ghr|github_pat)_'
     r'|bearer\s'
     r'|api[_\-]?key|x-api-key'

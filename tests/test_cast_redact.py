@@ -755,5 +755,38 @@ class TestAwsAccessKeyAllLetterDetection(unittest.TestCase):
         self.assertIn('<AWS_ACCESS_KEY>', redacted)
 
 
+class TestPrivateKeyNoSpaceAfterBegin(unittest.TestCase):
+    """C1d-follow: PRIVATE_KEY's body (`[A-Z ]+` between "BEGIN" and "PRIVATE KEY"/
+    "CERTIFICATE") is letters-OR-spaces, so a space immediately after "BEGIN" is NOT
+    guaranteed — the fast-path trigger was `BEGIN\\s`, which is a false superset claim
+    for the all-letter form (e.g. "-----BEGINRSA PRIVATE KEY-----"). Every REAL PEM
+    header has a space there, so severity is low, but the false superset claim is the
+    same class of bug that made AWS_ACCESS_KEY dead code for months — fixed by
+    widening the trigger to the bare "BEGIN" literal.
+    """
+
+    # Split so no contiguous PEM-shaped literal sits on one line (pre-push PII scanner
+    # convention — same trick used for the AKIA fixtures above).
+    _NO_SPACE_AFTER_BEGIN = '-----BEGIN' + 'RSA PRIVATE KEY-----'
+
+    def test_matches_private_key_pattern(self):
+        private_key_pattern = dict(cast_redact.FALLBACK_PATTERNS)['PRIVATE_KEY']
+        self.assertRegex(self._NO_SPACE_AFTER_BEGIN, private_key_pattern)
+
+    def test_no_space_after_begin_still_triggers_fast_path(self):
+        self.assertNotRegex(
+            self._NO_SPACE_AFTER_BEGIN, r'BEGIN\s',
+            'fixture must have no whitespace immediately after BEGIN',
+        )
+        self.assertTrue(cast_redact._PII_CANDIDATES.search(self._NO_SPACE_AFTER_BEGIN))
+
+    def test_no_space_after_begin_is_detected_and_redacted(self):
+        entities = cast_redact.analyze_regex(self._NO_SPACE_AFTER_BEGIN, [])
+        self.assertEqual([e['entity_type'] for e in entities], ['PRIVATE_KEY'])
+        redacted = cast_redact.redact_regex(self._NO_SPACE_AFTER_BEGIN, entities, mode='redact')
+        self.assertNotIn(self._NO_SPACE_AFTER_BEGIN, redacted)
+        self.assertIn('<PRIVATE_KEY>', redacted)
+
+
 if __name__ == '__main__':
     unittest.main()
