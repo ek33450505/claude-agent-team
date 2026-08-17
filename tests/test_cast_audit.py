@@ -1069,5 +1069,101 @@ class TestLoadEgressPolicyLogging(unittest.TestCase):
         mock_log.assert_not_called()
 
 
+class TestWriteRedactMap(unittest.TestCase):
+    """Test write_redact_map() — RL unit: the entity map written to
+    ~/.claude/logs/redact-maps/ must never carry the plaintext `original`
+    field cast-redact.py attaches, only entity_type/start/end/score/
+    original_hash. original_hash is what correlation needs; the raw matched
+    text must not touch disk.
+
+    REDACT_MAPS_DIR is a module-level constant baked to the real HOME at
+    import time, so tests patch it directly to a temp dir rather than
+    exporting HOME (which would arrive too late to affect an already-bound
+    constant)."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp(prefix="cast-audit-redact-map-test-")
+        self._patcher = mock.patch.object(cast_audit, "REDACT_MAPS_DIR", self._tmpdir)
+        self._patcher.start()
+
+    def tearDown(self):
+        self._patcher.stop()
+
+    def _read_written_map(self):
+        files = os.listdir(self._tmpdir)
+        self.assertEqual(len(files), 1, f"expected exactly one map file, got {files!r}")
+        with open(os.path.join(self._tmpdir, files[0])) as f:
+            return json.load(f)
+
+    def test_original_field_stripped_from_written_map(self):
+        """Mutation check: reverting the strip (writing redact_result['entities']
+        verbatim) makes this assertion fail because 'original' is present."""
+        redact_result = {
+            "entities": [
+                {
+                    "entity_type": "AWS_ACCESS_KEY",
+                    "start": 8,
+                    "end": 28,
+                    "score": 0.9,
+                    "original": "AKIABCDEFGHIJKLMNOPQ",
+                    "original_hash": "b445e97203ae0d5e",
+                }
+            ]
+        }
+        cast_audit.write_redact_map("sess-1", "2026-08-17T00:00:00Z", redact_result)
+        data = self._read_written_map()
+        self.assertEqual(len(data["entities"]), 1)
+        entity = data["entities"][0]
+        self.assertNotIn("original", entity)
+        self.assertNotIn("AKIABCDEFGHIJKLMNOPQ", json.dumps(data))
+
+    def test_correlation_fields_still_written(self):
+        """The map must stay useful: entity_type/start/end/score/original_hash
+        survive the strip."""
+        redact_result = {
+            "entities": [
+                {
+                    "entity_type": "AWS_ACCESS_KEY",
+                    "start": 8,
+                    "end": 28,
+                    "score": 0.9,
+                    "original": "AKIABCDEFGHIJKLMNOPQ",
+                    "original_hash": "b445e97203ae0d5e",
+                }
+            ]
+        }
+        cast_audit.write_redact_map("sess-1", "2026-08-17T00:00:00Z", redact_result)
+        entity = self._read_written_map()["entities"][0]
+        self.assertEqual(entity["entity_type"], "AWS_ACCESS_KEY")
+        self.assertEqual(entity["start"], 8)
+        self.assertEqual(entity["end"], 28)
+        self.assertEqual(entity["score"], 0.9)
+        self.assertEqual(entity["original_hash"], "b445e97203ae0d5e")
+
+    def test_malformed_entity_does_not_crash(self):
+        """A non-dict entity (malformed input) must be skipped, not raise —
+        write_redact_map's contract is 'never crash the hook pipeline'."""
+        redact_result = {"entities": ["not-a-dict", None, 42]}
+        with mock.patch.object(cast_audit, "_log_error") as mock_log:
+            cast_audit.write_redact_map("sess-1", "2026-08-17T00:00:00Z", redact_result)
+        mock_log.assert_not_called()
+        data = self._read_written_map()
+        self.assertEqual(data["entities"], [])
+
+    def test_partial_entity_missing_keys_does_not_crash(self):
+        """An entity dict missing some expected keys is written as-is (minus
+        `original`), not dropped or crashed on."""
+        redact_result = {"entities": [{"entity_type": "PHONE_NUMBER"}]}
+        cast_audit.write_redact_map("sess-1", "2026-08-17T00:00:00Z", redact_result)
+        entity = self._read_written_map()["entities"][0]
+        self.assertEqual(entity, {"entity_type": "PHONE_NUMBER"})
+
+    def test_no_entities_writes_empty_list(self):
+        cast_audit.write_redact_map("sess-1", "2026-08-17T00:00:00Z", {"entities": []})
+        data = self._read_written_map()
+        self.assertEqual(data["entities"], [])
+        self.assertEqual(data["session_id"], "sess-1")
+
+
 if __name__ == '__main__':
     unittest.main()

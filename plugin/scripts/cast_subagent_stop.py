@@ -917,8 +917,9 @@ def redact_excerpt(text: str) -> Optional[str]:
 
     Falls back to the old subprocess ``cast-redact.py --engine regex`` mechanism if
     the in-process import fails. Returns the redacted text, or None on total failure
-    so the CALLER chooses the policy — stage-6 handoff is fail-OPEN (keep original);
-    stage-15 incidents (later) is fail-closed ([REDACTION_FAILED]).
+    so the CALLER chooses the policy — stage-6 handoff, stage-15 incidents, and
+    stage-16 response_excerpt are all fail-closed (omit/marker on failure, never
+    fall back to the unredacted original).
     """
     result, _exc_name = _redact_excerpt_verbose(text)
     return result
@@ -1085,7 +1086,9 @@ def stage6_handoff_validation(ctx: Ctx) -> None:
     False-positive guard: an absent block on a SOLO dispatch (no batch_id) logs
     nothing; an absent block on a CHAINED dispatch (batch_id present) is a
     missing_handoff violation. The raw excerpt is redacted in-process before storage
-    (fail-OPEN — the original keeps the unredacted text on redaction failure).
+    (fail-CLOSED — on redaction failure the excerpt is omitted entirely; the
+    unredacted original is never stored. Matches response_excerpt's fail-closed
+    convention elsewhere in this file).
     """
     if ctx.is_exempt:
         return
@@ -1121,8 +1124,17 @@ def stage6_handoff_validation(ctx: Ctx) -> None:
         return
 
     excerpt_raw = (raw_excerpt or detail or "")[:500]
-    _redacted = redact_excerpt(excerpt_raw)
-    excerpt_for_db = _redacted if _redacted is not None else excerpt_raw
+    # Fail-CLOSED: on redaction failure (None return, or — belt-and-braces,
+    # since redact_excerpt is documented to never raise — an exception), omit
+    # the excerpt entirely rather than falling back to the unredacted original.
+    # `payload` below drops None values, so this simply leaves raw_excerpt out
+    # of the stored row instead of storing raw text (matches response_excerpt's
+    # own try/except around redact_excerpt, ~:1934-1962).
+    try:
+        _redacted = redact_excerpt(excerpt_raw)
+    except Exception:
+        _redacted = None
+    excerpt_for_db = _redacted if _redacted is not None else None
 
     payload = {
         "session_id": session_id,
@@ -1340,7 +1352,9 @@ def _redact_fail_closed(text: str, site: str) -> str:
 
     On ANY redaction failure, returns the ``[REDACTION_FAILED]`` marker — NEVER the
     raw text. Empty text passes through unchanged (nothing to leak). Contrast with
-    stage 6/16, which are fail-OPEN (keep the original on failure).
+    stage 16's summary/concerns fields, which are still fail-OPEN (keep the
+    original on failure) — stage 6's raw_excerpt and stage 16's response_excerpt
+    are both fail-closed (omit on failure).
 
     ``site`` identifies the caller (e.g. "problem_summary" / "fix_summary") for the
     diagnostic breadcrumb below. Two 2026-07-02 incidents landed with

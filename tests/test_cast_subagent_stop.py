@@ -537,5 +537,79 @@ class TestStage16ResponseExcerpt(_IsolatedHomeTestCase):
         self.assertNotIn('<subagent-report', inner['response_excerpt'].lower())
 
 
+class TestStage6HandoffFailClosed(_IsolatedHomeTestCase):
+    """Coverage for stage6_handoff_validation's raw_excerpt storage — RL unit.
+
+    Was fail-OPEN: on redaction failure the docstring said the original
+    (unredacted) excerpt is what gets stored. Now fail-CLOSED: on failure the
+    excerpt is omitted from the agent_protocol_violations payload entirely,
+    matching stage16's response_excerpt convention (~:1931-1933) rather than
+    inventing a second one.
+    """
+
+    def _make_ctx(self, response_text: str = 'body', batch_id: str = 'b1') -> css.Ctx:
+        ctx = css.Ctx()
+        ctx.response_text = response_text
+        ctx.agent_name = 'test-agent'
+        ctx.agent_id = 'agent-1'
+        ctx.session_id = 'sess-1'
+        ctx.ts_iso = '2026-08-17T00:00:00Z'
+        ctx.data = {'batch_id': batch_id}
+        return ctx
+
+    def _run(self, ctx: css.Ctx, redact_side_effect) -> dict:
+        """Runs stage6 with db_write/validate_handoff mocked, returns the
+        single payload dict passed to db_write (or {} if never called)."""
+        captured = {}
+
+        def _fake_db_write(table, payload):
+            captured['table'] = table
+            captured['payload'] = payload
+
+        fake_result = {
+            'block_present': True,
+            'ok': False,
+            'violation': 'missing_handoff',
+            'pattern': None,
+            'detail': 'no ## Handoff block found',
+            'raw_excerpt': 'SECRET_RAW_TEXT_MUST_NOT_LEAK',
+        }
+        with mock.patch.object(css, '_load_db_write', return_value=_fake_db_write), \
+             mock.patch.object(css, '_load_validate_handoff', return_value=lambda t: fake_result), \
+             mock.patch.object(css, 'redact_excerpt', side_effect=redact_side_effect):
+            css.stage6_handoff_validation(ctx)
+        return captured.get('payload', {})
+
+    def test_redaction_failure_omits_raw_excerpt_not_raw_text(self):
+        """redact_excerpt returning None (its documented total-failure contract,
+        see TestRedactExcerptVerboseWrapping above) must NOT fall back to the
+        unredacted excerpt. Mutation check: reverting the fail-closed edit
+        (excerpt_for_db = _redacted if _redacted is not None else excerpt_raw)
+        makes this assertion fail because raw_excerpt then contains the secret."""
+        payload = self._run(self._make_ctx(), redact_side_effect=lambda t: None)
+        self.assertNotIn('raw_excerpt', payload)
+        self.assertNotIn('SECRET_RAW_TEXT_MUST_NOT_LEAK', json.dumps(payload))
+
+    def test_redaction_exception_omits_raw_excerpt_not_raw_text(self):
+        """Same contract when redact_excerpt itself raises rather than returning
+        None — the fail-closed path must still hold and the pipeline must not
+        crash."""
+        def _boom(t):
+            raise RuntimeError('redaction exploded')
+
+        payload = self._run(self._make_ctx(), redact_side_effect=_boom)
+        self.assertNotIn('raw_excerpt', payload)
+        self.assertNotIn('SECRET_RAW_TEXT_MUST_NOT_LEAK', json.dumps(payload))
+
+    def test_normal_path_still_redacts_and_stores(self):
+        """No regression: when redaction succeeds, the (redacted) excerpt is
+        still stored as before."""
+        payload = self._run(
+            self._make_ctx(), redact_side_effect=lambda t: 'redacted-ok'
+        )
+        self.assertEqual(payload.get('raw_excerpt'), 'redacted-ok')
+        self.assertEqual(payload.get('violation'), 'missing_handoff')
+
+
 if __name__ == '__main__':
     unittest.main()

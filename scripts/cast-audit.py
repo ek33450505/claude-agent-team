@@ -454,15 +454,29 @@ def run_redact_analysis(text: str) -> dict:
 
 
 def write_redact_map(session_id: str, timestamp: str, redact_result: dict) -> None:
-    """Store redaction entity map to ~/.claude/logs/redact-maps/."""
+    """Store redaction entity map to ~/.claude/logs/redact-maps/.
+
+    Strips the plaintext `original` field from each entity before writing —
+    only entity_type/start/end/score/original_hash are persisted. original_hash
+    is what correlation needs; the raw matched text must never touch disk.
+    Entities that aren't dicts (malformed input) are skipped rather than
+    raising, and entities missing expected keys are written with whatever
+    keys they do have.
+    """
     try:
         os.makedirs(REDACT_MAPS_DIR, exist_ok=True)
         safe_ts = timestamp.replace(":", "-")
         path = os.path.join(REDACT_MAPS_DIR, f"{session_id}-{safe_ts}.json")
+        raw_entities = redact_result.get("entities", []) or []
+        entities = [
+            {k: v for k, v in e.items() if k != "original"}
+            for e in raw_entities
+            if isinstance(e, dict)
+        ]
         map_data = {
             "timestamp": timestamp,
             "session_id": session_id,
-            "entities": redact_result.get("entities", []),
+            "entities": entities,
         }
         with open(path, "w") as f:
             json.dump(map_data, f)
