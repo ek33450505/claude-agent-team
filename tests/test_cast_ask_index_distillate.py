@@ -91,6 +91,11 @@ def _query_distillate_body_match(db_path: str, term: str) -> list:
 class TestDistillateFileSource(unittest.TestCase):
 
     def setUp(self):
+        # Save pre-existing env so tearDown restores rather than clobbers it
+        # for whichever test module runs next alphabetically.
+        self._orig_db_path = os.environ.get('CAST_DB_PATH')
+        self._orig_resume_dir = os.environ.get('CAST_RESUME_PROMPTS_DIR')
+
         # Isolated temp DB
         self._db_fd, self._db_path = tempfile.mkstemp(suffix='.db')
         os.close(self._db_fd)
@@ -108,13 +113,26 @@ class TestDistillateFileSource(unittest.TestCase):
         )
 
     def tearDown(self):
-        os.unlink(self._db_path)
-        # Clean up resume dir (and any nested dirs from test 3)
-        import shutil
-        shutil.rmtree(self._resume_dir, ignore_errors=True)
-        # Restore env
-        os.environ.pop('CAST_DB_PATH', None)
-        os.environ.pop('CAST_RESUME_PROMPTS_DIR', None)
+        # Restore in `finally` so a raise from os.unlink (e.g. file already
+        # gone) can never skip the env restore and clobber the next module —
+        # that would reintroduce the isolation bug through a different door.
+        try:
+            os.unlink(self._db_path)
+            # Clean up resume dir (and any nested dirs from test 3)
+            import shutil
+            shutil.rmtree(self._resume_dir, ignore_errors=True)
+        finally:
+            # Restore env: put back the original value rather than unconditionally
+            # popping, which would clobber isolation for tests that run after this
+            # module alphabetically (see tests/test_zz_db_isolation_guard.py).
+            if self._orig_db_path is None:
+                os.environ.pop('CAST_DB_PATH', None)
+            else:
+                os.environ['CAST_DB_PATH'] = self._orig_db_path
+            if self._orig_resume_dir is None:
+                os.environ.pop('CAST_RESUME_PROMPTS_DIR', None)
+            else:
+                os.environ['CAST_RESUME_PROMPTS_DIR'] = self._orig_resume_dir
 
     # ── Test 1: indexing inserts a searchable distillate row ─────────────────
 

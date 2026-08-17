@@ -182,6 +182,7 @@ class TestRetrieveRecordGlobal(unittest.TestCase):
 
     def setUp(self):
         # Create isolated temp DB
+        self._orig_db_path = os.environ.get('CAST_DB_PATH')
         self._tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
         self._tmp.close()
         os.environ['CAST_DB_PATH'] = self._tmp.name
@@ -193,8 +194,16 @@ class TestRetrieveRecordGlobal(unittest.TestCase):
         self.router = _import_router()
 
     def tearDown(self):
-        os.unlink(self._tmp.name)
-        os.environ.pop('CAST_DB_PATH', None)
+        # Restore in `finally` so a raise from os.unlink (e.g. file already
+        # gone) can never skip the env restore and clobber the next module —
+        # that would reintroduce the isolation bug through a different door.
+        try:
+            os.unlink(self._tmp.name)
+        finally:
+            if self._orig_db_path is None:
+                os.environ.pop('CAST_DB_PATH', None)
+            else:
+                os.environ['CAST_DB_PATH'] = self._orig_db_path
 
     # --- Test 1: per-prompt relevance ---
     def test_resume_prompt_hits_resume_memory(self):
@@ -365,6 +374,7 @@ class TestUuidRefId(unittest.TestCase):
     UUID_REF = '890a9e51-1a65-400b-919c-6f9eeb7e4b39'
 
     def setUp(self):
+        self._orig_db_path = os.environ.get('CAST_DB_PATH')
         self._tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
         self._tmp.close()
         os.environ['CAST_DB_PATH'] = self._tmp.name
@@ -382,8 +392,16 @@ class TestUuidRefId(unittest.TestCase):
         self.router = _import_router()
 
     def tearDown(self):
-        os.unlink(self._tmp.name)
-        os.environ.pop('CAST_DB_PATH', None)
+        # Restore in `finally` so a raise from os.unlink (e.g. file already
+        # gone) can never skip the env restore and clobber the next module —
+        # that would reintroduce the isolation bug through a different door.
+        try:
+            os.unlink(self._tmp.name)
+        finally:
+            if self._orig_db_path is None:
+                os.environ.pop('CAST_DB_PATH', None)
+            else:
+                os.environ['CAST_DB_PATH'] = self._orig_db_path
 
     def test_uuid_incident_is_returned(self):
         """A UUID-ref_id incident must be returned (not crash) when the prompt matches."""
@@ -431,6 +449,7 @@ class TestRetrieveGlobalMainMode(unittest.TestCase):
     """Tests for --mode retrieve-global via main() argument parsing."""
 
     def setUp(self):
+        self._orig_db_path = os.environ.get('CAST_DB_PATH')
         self._tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
         self._tmp.close()
         os.environ['CAST_DB_PATH'] = self._tmp.name
@@ -440,8 +459,16 @@ class TestRetrieveGlobalMainMode(unittest.TestCase):
         self.router = _import_router()
 
     def tearDown(self):
-        os.unlink(self._tmp.name)
-        os.environ.pop('CAST_DB_PATH', None)
+        # Restore in `finally` so a raise from os.unlink (e.g. file already
+        # gone) can never skip the env restore and clobber the next module —
+        # that would reintroduce the isolation bug through a different door.
+        try:
+            os.unlink(self._tmp.name)
+        finally:
+            if self._orig_db_path is None:
+                os.environ.pop('CAST_DB_PATH', None)
+            else:
+                os.environ['CAST_DB_PATH'] = self._orig_db_path
 
     def test_mode_choices_include_retrieve_global(self):
         """The --mode argument must accept 'retrieve-global' without raising SystemExit."""
@@ -489,6 +516,7 @@ class TestOrSemantics(unittest.TestCase):
     """
 
     def setUp(self):
+        self._orig_db_path = os.environ.get('CAST_DB_PATH')
         self._tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
         self._tmp.close()
         os.environ['CAST_DB_PATH'] = self._tmp.name
@@ -527,8 +555,16 @@ class TestOrSemantics(unittest.TestCase):
         self.router = _import_router()
 
     def tearDown(self):
-        os.unlink(self._tmp.name)
-        os.environ.pop('CAST_DB_PATH', None)
+        # Restore in `finally` so a raise from os.unlink (e.g. file already
+        # gone) can never skip the env restore and clobber the next module —
+        # that would reintroduce the isolation bug through a different door.
+        try:
+            os.unlink(self._tmp.name)
+        finally:
+            if self._orig_db_path is None:
+                os.environ.pop('CAST_DB_PATH', None)
+            else:
+                os.environ['CAST_DB_PATH'] = self._orig_db_path
 
     def test_multi_term_prompt_matches_partial_doc(self):
         """A multi-term prompt matches a doc containing only ONE of the query terms (OR, not AND)."""

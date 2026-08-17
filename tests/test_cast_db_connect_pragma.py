@@ -25,13 +25,22 @@ class TestConnectPragma(unittest.TestCase):
     """_connect sets required PRAGMAs on every new connection."""
 
     def setUp(self):
+        self._orig_db_path = os.environ.get('CAST_DB_PATH')
         self._tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
         self._tmp.close()
         os.environ['CAST_DB_PATH'] = self._tmp.name
 
     def tearDown(self):
-        os.unlink(self._tmp.name)
-        os.environ.pop('CAST_DB_PATH', None)
+        # Restore in `finally` so a raise from os.unlink (e.g. file already
+        # gone) can never skip the env restore and clobber the next module —
+        # that would reintroduce the isolation bug through a different door.
+        try:
+            os.unlink(self._tmp.name)
+        finally:
+            if self._orig_db_path is None:
+                os.environ.pop('CAST_DB_PATH', None)
+            else:
+                os.environ['CAST_DB_PATH'] = self._orig_db_path
 
     def _pragma(self, conn, name):
         return conn.execute(f'PRAGMA {name}').fetchone()[0]
