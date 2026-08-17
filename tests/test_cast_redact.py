@@ -622,7 +622,13 @@ class TestPiiCandidatesSuperset(unittest.TestCase):
         'US_SSN': '123-45-6789',
         'CREDIT_CARD': '4111111111111111',
         'IP_ADDRESS': '10.0.0.1',
-        'AWS_ACCESS_KEY': 'AKIA' + 'IOSFODNN7EXAMPLE',  # AWS's own documented example key; split so the pre-push PII scanner does not flag a benign fixture
+        # Adversarially minimal: all-letter body (no digit) — the AWS_ACCESS_KEY
+        # pattern (AKIA[0-9A-Z]{16}) does NOT require a digit, only the "AKIA"
+        # prefix; AWS's own example key ('AKIA' + 'IOSFODNN7EXAMPLE') contains a
+        # '7' that incidentally trips the (formerly digit-based) _PII_CANDIDATES
+        # trigger, masking that the pattern was dead for all-letter keys. Split
+        # so the pre-push PII scanner does not flag a benign fixture.
+        'AWS_ACCESS_KEY': 'AKIA' + 'BCDEFGHIJKLMNOPQ',
         'GITHUB_TOKEN': 'ghp_' + 'A' * 36,
         'ANTHROPIC_KEY': 'sk-ant-' + 'A' * 32,
         'OPENAI_KEY': 'sk-' + 'A' * 32,
@@ -657,6 +663,96 @@ class TestPiiCandidatesSuperset(unittest.TestCase):
                 f'{etype}: sample "{sample}" matches FALLBACK_PATTERNS but not '
                 f'_PII_CANDIDATES — this pattern is dead code behind the F3 short-circuit',
             )
+
+
+class TestRedactRegexOverlappingSpans(unittest.TestCase):
+    """C1d defect (a): analyze_regex does not guarantee non-overlapping spans (its
+    docstring claim), and redact_regex previously assumed it did — a right-to-left
+    splice used stale (pre-shift) indices once an inner replacement's length delta
+    had shifted the string, leaking a plaintext tail of the outer secret.
+
+    The durable ratchet is the general invariant below (no detected entity's
+    `original` value may survive as a substring of the redacted output) exercised
+    over a table of inputs — not a single golden string, since a shrinking inner
+    replacement (mysql case) truncates rather than leaks and would pass even with
+    the bug fully present.
+    """
+
+    # DATABASE_URL with an IP_ADDRESS nested inside, inner replacement LONGER than
+    # the original span (<IP_ADDRESS> is 12 chars vs '10.0.0.1' at 8) — this is the
+    # case that leaked "ppdb" before the fix.
+    _CASE_GROWING_INNER = 'postgres://user:pa55word@10.0.0.1/appdb'
+    # DATABASE_URL with an EMAIL_ADDRESS nested inside, inner replacement SHORTER
+    # than the original span — truncates rather than leaks even with the bug
+    # present, so this alone would never have caught the defect; kept as a
+    # regression guard, not a repro.
+    _CASE_SHRINKING_INNER = 'mysql://admin:hunter22' + '@db.internal:3306/prod'
+    # Two separate outer entities, each with its own nested IP, back to back.
+    _CASE_MULTIPLE_OUTER = (
+        'multiple: postgres://a:b@192.168.1.1/db and mongodb://c:d@10.0.0.2/db2'
+    )
+
+    _CASES = [_CASE_GROWING_INNER, _CASE_SHRINKING_INNER, _CASE_MULTIPLE_OUTER]
+
+    def test_no_entity_original_survives_in_redacted_output(self):
+        for text in self._CASES:
+            with self.subTest(text=text):
+                entities = cast_redact.analyze_regex(text, [])
+                self.assertTrue(entities, 'test case must actually detect entities')
+                redacted = cast_redact.redact_regex(text, entities, mode='redact')
+                for entity in entities:
+                    original = entity['original']
+                    self.assertNotIn(
+                        original, redacted,
+                        f'{entity["entity_type"]} original {original!r} survived '
+                        f'in redacted output {redacted!r}',
+                    )
+
+    def test_growing_inner_span_no_tail_leak(self):
+        # The exact repro: without merging, the outer DATABASE_URL span's stale
+        # end-index sliced 4 chars too early into the shifted string, leaking
+        # "ppdb". Merged, the outer (broader) span wins outright.
+        redacted = _redact(self._CASE_GROWING_INNER)
+        self.assertEqual(redacted, '<DATABASE_URL>')
+
+    def test_shrinking_inner_span_still_clean(self):
+        redacted = _redact(self._CASE_SHRINKING_INNER)
+        self.assertEqual(redacted, '<DATABASE_URL>')
+
+    def test_multiple_outer_entities_both_clean(self):
+        redacted = _redact(self._CASE_MULTIPLE_OUTER)
+        self.assertEqual(redacted, 'multiple: <DATABASE_URL> and <DATABASE_URL>')
+
+    def test_mask_mode_merges_spans_too(self):
+        # mask mode uses "*" * (end - start) on the MERGED span — assert it does
+        # not raise and produces no leftover plaintext fragment either.
+        entities = cast_redact.analyze_regex(self._CASE_GROWING_INNER, [])
+        masked = cast_redact.redact_regex(self._CASE_GROWING_INNER, entities, mode='mask')
+        self.assertNotIn('10.0.0.1', masked)
+        self.assertNotIn('appdb', masked)
+
+
+class TestAwsAccessKeyAllLetterDetection(unittest.TestCase):
+    """C1d defect (b): AKIA was missing from _PII_CANDIDATES, so an all-letter AKIA
+    key (no digit anywhere in the surrounding text) never reached analyze_regex at
+    all — the F3 fast-path short-circuited before the AWS_ACCESS_KEY pattern ever
+    ran, a full plaintext leak.
+    """
+
+    _ALL_LETTER_KEY = 'AKIA' + 'BCDEFGHIJKLMNOPQ'  # 16 letters, no digit anywhere
+
+    def test_candidate_fast_path_triggers_without_a_digit(self):
+        text = f'aws key {self._ALL_LETTER_KEY} rotate it'
+        self.assertNotRegex(text, r'\d', 'fixture must contain no digit at all')
+        self.assertTrue(cast_redact._PII_CANDIDATES.search(text))
+
+    def test_all_letter_key_is_detected_and_redacted(self):
+        text = f'aws key {self._ALL_LETTER_KEY} rotate it'
+        entities = cast_redact.analyze_regex(text, [])
+        self.assertEqual([e['entity_type'] for e in entities], ['AWS_ACCESS_KEY'])
+        redacted = cast_redact.redact_regex(text, entities, mode='redact')
+        self.assertNotIn(self._ALL_LETTER_KEY, redacted)
+        self.assertIn('<AWS_ACCESS_KEY>', redacted)
 
 
 if __name__ == '__main__':

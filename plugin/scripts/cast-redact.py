@@ -140,7 +140,8 @@ _COMPILED_PATTERNS: list[tuple[str, re.Pattern]] = [
 #   US_SSN         → \d
 #   CREDIT_CARD    → \d
 #   IP_ADDRESS     → \d
-#   AWS_ACCESS_KEY → \d  (AKIA followed by [0-9A-Z] — numerics always present)
+#   AWS_ACCESS_KEY → AKIA  (the AKIA followed by [0-9A-Z]{16} body may be ALL LETTERS —
+#                    a digit is NOT guaranteed; the explicit "AKIA" prefix is the trigger)
 #   GITHUB_TOKEN   → ghp_|gho_|ghu_|ghs_|ghr_|github_pat_  (pure-alpha prefix, no digits/@ required)
 #   ANTHROPIC_KEY  → sk-
 #   OPENAI_KEY     → sk-
@@ -165,7 +166,7 @@ _COMPILED_PATTERNS: list[tuple[str, re.Pattern]] = [
 # BEGIN\s, so their keyword prefixes are added explicitly to ensure the candidate is a
 # strict superset of every pattern's trigger set.
 _PII_CANDIDATES: re.Pattern = re.compile(
-    r'[@\d/]|sk-|eyJ|BEGIN\s'
+    r'[@\d/]|sk-|eyJ|BEGIN\s|AKIA'
     r'|(?:ghp|gho|ghu|ghs|ghr|github_pat)_'
     r'|bearer\s'
     r'|api[_\-]?key|x-api-key'
@@ -335,15 +336,54 @@ _CUSTOM_REPLACEMENTS: dict[str, str] = {
 }
 
 
-def redact_regex(text: str, entities: list[dict], mode: str) -> str:
-    """Apply redactions to text based on entity spans (non-overlapping, right-to-left).
+def _merge_overlapping_spans(entities: list[dict]) -> list[dict]:
+    """Merge overlapping/nested entity spans into non-overlapping spans.
 
-    Processes entities right-to-left so earlier spans remain valid after each
+    analyze_regex does NOT guarantee non-overlapping spans (e.g. an IP_ADDRESS
+    nested inside a DATABASE_URL) — redact_regex previously assumed it did, and
+    spliced text at the ORIGINAL (pre-shift) offsets after an inner replacement's
+    length delta had already shifted the string, leaking a plaintext tail of the
+    outer secret. Merging spans here restores the precondition redact_regex needs.
+
+    Where one span contains another, the OUTER (broader) span's entity_type wins.
+    For partial (non-nesting) overlaps, the WIDEST constituent span's entity_type
+    wins the replacement tag for the unioned range.
+
+    Only used internally by redact_regex for text substitution — the caller's
+    original `entities` list (used for reporting/counts elsewhere) is untouched.
+    """
+    if not entities:
+        return []
+    ordered = sorted(entities, key=lambda e: (e["start"], -(e["end"] - e["start"])))
+    merged: list[dict] = []
+    for e in ordered:
+        width = e["end"] - e["start"]
+        if merged and e["start"] < merged[-1]["end"]:
+            prev = merged[-1]
+            if e["end"] > prev["end"]:
+                prev["end"] = e["end"]
+            if width > prev["_width"]:
+                prev["_width"] = width
+                prev["entity_type"] = e["entity_type"]
+        else:
+            merged.append({"start": e["start"], "end": e["end"], "entity_type": e["entity_type"], "_width": width})
+    for m in merged:
+        del m["_width"]
+    return merged
+
+
+def redact_regex(text: str, entities: list[dict], mode: str) -> str:
+    """Apply redactions to text based on entity spans, right-to-left.
+
+    Spans are merged first (see _merge_overlapping_spans) since analyze_regex
+    does not guarantee non-overlapping spans. Processing the merged, now
+    non-overlapping spans right-to-left keeps earlier spans valid after each
     substitution. Uses string slicing (immutable str) rather than list mutation
     to avoid index drift when replacement length differs from original span.
     """
+    merged = _merge_overlapping_spans(entities)
     result = text
-    for entity in sorted(entities, key=lambda e: e["start"], reverse=True):
+    for entity in sorted(merged, key=lambda e: e["start"], reverse=True):
         start, end = entity["start"], entity["end"]
         if mode == "mask":
             replacement = "*" * (end - start)
