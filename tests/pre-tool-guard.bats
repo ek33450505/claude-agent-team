@@ -1674,3 +1674,246 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   run bash "$HOOK_SH" <<< "not valid json at all"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# shlex tokenization: quoted-subcommand evasion blocks [2026-08-17]
+# Normalization via _normalize_git_segment() rewrites tokens that start with
+# git; these cases test that quoted subcommands (attempting to evade the block)
+# are still caught.
+# ---------------------------------------------------------------------------
+
+@test "git \"commit\" -m x (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git \"commit\" -m x")"
+  assert_failure
+  assert_output --partial "commit"
+}
+
+@test "git \"push\" (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git \"push\"")"
+  assert_failure
+  assert_output --partial "push"
+}
+
+@test "git \"stash\" (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git \"stash\"")"
+  assert_failure
+  assert_output --partial "stash"
+}
+
+@test "git reset \"--hard\" (quoted flag) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset \"--hard\"")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git \"reset\" --hard (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git \"reset\" --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git checkout \"--\" . (quoted path arg) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout \"--\" .")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git switch \"--discard-changes\" main (quoted flag) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch \"--discard-changes\" main")"
+  assert_failure
+  assert_output --partial "switch"
+}
+
+@test "git gc \"--prune=now\" (quoted flag) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc \"--prune=now\"")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git reflog \"expire\" --all (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog \"expire\" --all")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git \"prune\" (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git \"prune\"")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git -c \"gc.pruneExpire=now\" gc (quoted -c value) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c \"gc.pruneExpire=now\" gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git \"config\" gc.pruneExpire now (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git \"config\" gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "config"
+}
+
+# ---------------------------------------------------------------------------
+# shlex tokenization: absolute-path normalization
+# Absolute paths to git binary are normalized to basename; the guard pattern
+# still matches the bare git command.
+# ---------------------------------------------------------------------------
+
+@test "/usr/bin/git reset --hard (absolute path to git) → blocks (exit 2) [path normalization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "/usr/bin/git reset --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "/opt/homebrew/bin/git push (absolute path to git, homebrew) → blocks (exit 2) [path normalization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "/opt/homebrew/bin/git push")"
+  assert_failure
+  assert_output --partial "push"
+}
+
+# ---------------------------------------------------------------------------
+# config-edit block: new gate (2026-08-17)
+# git config edit/--edit/-e are blocked to prevent interactive editor abuse.
+# ---------------------------------------------------------------------------
+
+@test "git config edit → blocks (exit 2) [config-edit block]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config edit")"
+  assert_failure
+  assert_output --partial "config"
+}
+
+@test "git config --edit → blocks (exit 2) [config-edit block]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --edit")"
+  assert_failure
+  assert_output --partial "config"
+}
+
+@test "git config -e → blocks (exit 2) [config-edit block]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config -e")"
+  assert_failure
+  assert_output --partial "config"
+}
+
+# ---------------------------------------------------------------------------
+# Regression fence: normalization must be narrow (git-basename-only)
+# These cases verify that the shlex rewrite does NOT over-apply.
+# ---------------------------------------------------------------------------
+
+@test "rg \"git push\" docs/ (string search, not command) → allows (exit 0) [regression: must not rewrite non-commands]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "rg \"git push\" docs/")"
+  assert_success
+}
+
+@test "grep -n \"git commit\" scripts/cast-git-guard.py (string search) → allows (exit 0) [regression: string literal must not trigger guard]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "grep -n \"git commit\" scripts/cast-git-guard.py")"
+  assert_success
+}
+
+@test "gh pr create --body \"adds git push guard\" (gh tool with git string in arg) → blocks (exit 2) [PRE-EXISTING at HEAD, unchanged by tokenization: the raw pattern sees a literal space before 'git' INSIDE the quoted string; this is the known prose-mention behaviour — ship such text via 'git commit -F <file>' — NOT a regression introduced by this unit, and pinned here only to prove the git-head-only normalization did not widen it]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "gh pr create --body \"adds git push guard\"")"
+  assert_failure
+  assert_output --partial "push"
+}
+
+@test "./mygit reset --hard (basename ≠ git; must not match) → allows (exit 0) [regression: basename check is strict]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "./mygit reset --hard")"
+  assert_success
+}
+
+@test "CAST_RESET_OK=1 git reset \"--hard\" (hatch + quoted flag) → allows (exit 0) [regression: hatch survives normalization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 git reset \"--hard\"")"
+  assert_success
+}
+
+@test "CAST_PUSH_OK=1 git \"push\" (hatch + quoted subcommand) → allows (exit 0) [regression: hatch survives normalization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 git \"push\"")"
+  assert_success
+}
+
+@test "git restore \"--staged\" f.txt (quoted flag on safe restore) → allows (exit 0) [regression: non-blocked git subcommand unaffected]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git restore \"--staged\" f.txt")"
+  assert_success
+}
+
+@test "git config --global user.email x (safe config write) → allows (exit 0) [regression: safe config operations allowed]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --global user.email x")"
+  assert_success
+}
+
+@test "git config --get-regexp gc.*Expire (config read with regex) → allows (exit 0) [regression: config-edit block must not misfire on reads]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --get-regexp gc.*Expire")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 git config --edit (config-edit hatch works) → allows (exit 0) [regression: the escape hatch is functional]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git config --edit")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# 2026-08-17 security-gate follow-up: config-edit subcommand-position
+# anchoring (was: bare "edit" matched anywhere on the line) + hatch
+# whitespace-value join fix in _normalize_git_segment.
+# ---------------------------------------------------------------------------
+
+@test "git config --global edit → blocks (exit 2) [defence-in-depth: MEASURED on git 2.55, this form does NOT open the editor — git parses 'edit' as a key and errors; blocked anyway in case a later git accepts the legacy flags-then-subcommand order]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --global edit")"
+  assert_failure
+  assert_output --partial "config"
+}
+
+@test "git config --local edit → blocks (exit 2) [defence-in-depth, same as --global edit: not a live editor route on git 2.55, blocked so a future git cannot reopen it silently]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --local edit")"
+  assert_failure
+  assert_output --partial "config"
+}
+
+@test "git config --global -e → blocks (exit 2) [this one IS a live route: MEASURED to open the editor on git 2.55, unlike the bare-edit-after-a-flag forms]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --global -e")"
+  assert_failure
+  assert_output --partial "config"
+}
+
+@test "git config user.email \"edit@example.com\" (value merely contains 'edit') → allows (exit 0) [gate-finding regression fence: config-edit block must not overmatch on a value]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config user.email \"edit@example.com\"")"
+  assert_success
+}
+
+@test "git config --get-regexp edit (config read, not the edit subcommand) → allows (exit 0) [gate-finding regression fence: config-edit block must not overmatch a --get-regexp read]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --get-regexp edit")"
+  assert_success
+}
+
+@test "git config alias.e \"edit\" (alias VALUE, not the edit subcommand) → allows (exit 0) [gate-finding regression fence: config-edit block must not overmatch on a value]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config alias.e \"edit\"")"
+  assert_success
+}
+
+@test "CAST_RESET_OK=1 FOO=\"bar baz\" git reset --hard (hatch prefix with a whitespace-containing value) → allows (exit 0) [gate-finding regression fence: _normalize_git_segment must not break the hatch on a quoted multi-word value]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 FOO=\"bar baz\" git reset --hard")"
+  assert_success
+}
+
+@test "CAST_RESET_OK=\"1\" git reset --hard (quoted hatch value, a real bash assignment) → allows (exit 0) [gate-finding regression fence: quoted-value hatch must survive normalization]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=\"1\" git reset --hard")"
+  assert_success
+}
+
+@test "CAST_RESET_OK=\"10\" git reset --hard (wrong hatch value) → blocks (exit 2) [gate-finding regression fence: whitespace-value join fix must not loosen the hatch VALUE check]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=\"10\" git reset --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+# ---------------------------------------------------------------------------
+# shlex tokenization: unbalanced-quote fallback
+# When shlex.split() raises ValueError (unterminated quote), normalization
+# returns None and the RAW pattern still blocks the command.
+# ---------------------------------------------------------------------------
+
+@test "git commit -m \"unterminated (unbalanced quote, shlex ValueError) → blocks (exit 2) [fallback to raw evaluation]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git commit -m \"unterminated")"
+  assert_failure
+  assert_output --partial "commit"
+}
