@@ -466,6 +466,1202 @@ assert d.get('repo') == '', 'expected empty repo outside git repo, got: ' + repr
 }
 
 # ---------------------------------------------------------------------------
+# git stash token-boundary regex fix (2026-08-17 follow-up security review;
+# pre-existing flaw, same class as the reset/checkout fixes below) —
+# adjacent empty-output command substitution defeated the old literal
+# trailing-whitespace requirement.
+# ---------------------------------------------------------------------------
+
+@test "git stash\`true\` (adjacent command substitution, backticks) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git stash`true`')"
+  assert_failure
+  assert_output --partial "stash"
+}
+
+@test "git stash\$(true) (adjacent command substitution) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git stash$(true)')"
+  assert_failure
+  assert_output --partial "stash"
+}
+
+@test "git stashsomething (look-alike token) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git stashsomething")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git reset --hard/--merge/--keep block Tests (2026-08-17 incident)
+# ---------------------------------------------------------------------------
+
+@test "git reset --hard without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git reset --hard HEAD without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset --hard HEAD")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git reset HEAD --hard (flag after ref) without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset HEAD --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git reset --merge without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset --merge")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git reset --keep without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset --keep")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "bare git reset (index-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset")"
+  assert_success
+}
+
+@test "git reset --soft HEAD~1 (index-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset --soft HEAD~1")"
+  assert_success
+}
+
+@test "git reset --mixed (index-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset --mixed")"
+  assert_success
+}
+
+@test "git reset HEAD file.txt (unstage a file) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset HEAD file.txt")"
+  assert_success
+}
+
+@test "CAST_RESET_OK=1 git reset --hard → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 git reset --hard")"
+  assert_success
+}
+
+@test "CAST_RESET_OK=1 with extra VAR=value before git reset --hard → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git reset --hard")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git reset --hard → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reset --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "multiline: CAST_RESET_OK=1 on line 2 does NOT unblock git reset --hard on line 1" {
+  local payload
+  payload=$(python3 -c "
+import json, sys
+print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
+" $'git reset --hard\nCAST_RESET_OK=1')
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+# ---------------------------------------------------------------------------
+# git reset token-boundary regex fix (2026-08-17 follow-up security review) —
+# adjacent empty-output command substitution defeated the old literal
+# trailing-whitespace requirement.
+# ---------------------------------------------------------------------------
+
+@test "git reset --hard\$(true) (adjacent command substitution) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git reset --hard$(true)')"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git reset --merge\$(true) (adjacent command substitution) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git reset --merge$(true)')"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git reset --keep\`true\` (adjacent command substitution, backticks) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git reset --keep`true`')"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "git reset --hardcore (look-alike flag) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git reset --hardcore')"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git clean block Tests (2026-08-17 incident)
+# ---------------------------------------------------------------------------
+
+@test "git clean -fd without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -fd")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "git clean -fdx without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -fdx")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "git clean -f without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -f")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "bare git clean without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "git clean -n (dry run) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -n")"
+  assert_success
+}
+
+@test "git clean --dry-run → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean --dry-run")"
+  assert_success
+}
+
+@test "CAST_CLEAN_OK=1 git clean -fd → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CLEAN_OK=1 git clean -fd")"
+  assert_success
+}
+
+@test "CAST_CLEAN_OK=1 with extra VAR=value before git clean -fd → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CLEAN_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git clean -fd")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git clean -fd → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -fd")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "multiline: CAST_CLEAN_OK=1 on line 2 does NOT unblock git clean -fd on line 1" {
+  local payload
+  payload=$(python3 -c "
+import json, sys
+print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
+" $'git clean -fd\nCAST_CLEAN_OK=1')
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+# ---------------------------------------------------------------------------
+# git checkout (pathspec) block Tests (2026-08-17 incident class — the same
+# mechanism a READ-ONLY code-reviewer used to silently revert its own review)
+# ---------------------------------------------------------------------------
+
+@test "git checkout -- . without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -- .")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout -- src/f.py without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -- src/f.py")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout . without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout .")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout main (branch op) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout main")"
+  assert_success
+}
+
+@test "git checkout -b feature/x (new branch) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -b feature/x")"
+  assert_success
+}
+
+@test "git checkout - (previous branch) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -")"
+  assert_success
+}
+
+@test "git checkout --track origin/feature/x → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout --track origin/feature/x")"
+  assert_success
+}
+
+@test "CAST_CHECKOUT_OK=1 git checkout -- . → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CHECKOUT_OK=1 git checkout -- .")"
+  assert_success
+}
+
+@test "CAST_CHECKOUT_OK=1 with extra VAR=value before git checkout -- . → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CHECKOUT_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git checkout -- .")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git checkout -- . → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -- .")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "multiline: CAST_CHECKOUT_OK=1 on line 2 does NOT unblock git checkout -- . on line 1" {
+  local payload
+  payload=$(python3 -c "
+import json, sys
+print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
+" $'git checkout -- .\nCAST_CHECKOUT_OK=1')
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+# ---------------------------------------------------------------------------
+# git checkout token-boundary regex fix (2026-08-17 follow-up security
+# review) — adjacent empty-output command substitution defeated the old
+# literal trailing-whitespace requirement on the bare-`.` form.
+# ---------------------------------------------------------------------------
+
+@test "git checkout .\$(true) (adjacent command substitution) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git checkout .$(true)')"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout .github (look-alike dotfile-ish arg) → allows (exit 0) [regression: no false positive]" {
+  # Run from an isolated cwd with no `.github` on disk: this test targets the
+  # _CHECKOUT_BLOCK regex's bare-dot lookahead specifically (does `.github`
+  # false-match the literal-`.` alternative?), not the separate bare-token
+  # filesystem-existence heuristic added below (2026-08-17 2nd follow-up) —
+  # that heuristic WOULD correctly block `git checkout .github` from THIS
+  # repo's own root, since `.github/` really exists here (see the dedicated
+  # "existing nested/top-level file" tests for that behavior).
+  local test_repo="$HOME/checkout-dotfile-repo"
+  mkdir -p "$test_repo"
+  run bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$(make_bash_payload "git checkout .github")"
+  assert_success
+}
+
+@test "git checkout ./foo (relative pathspec, not bare dot) → allows (exit 0) [regression: no false positive]" {
+  local test_repo="$HOME/checkout-relpath-repo"
+  mkdir -p "$test_repo"
+  run bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$(make_bash_payload "git checkout ./foo")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git checkout <bare pathspec, no --> block Tests (2026-08-17 second
+# follow-up security review — the EXACT form of the 2026-08-15 incident:
+# a read-only code-reviewer silently reverted `completions/cast.bash` via
+# `git checkout completions/cast.bash`, with no `--` and no bare `.`.)
+# ---------------------------------------------------------------------------
+
+@test "git checkout <existing nested file, no --> → blocks (exit 2) [2026-08-15 incident's exact command]" {
+  local test_repo="$HOME/checkout-bare-repo"
+  mkdir -p "$test_repo/completions"
+  echo "fixture" > "$test_repo/completions/cast.bash"
+  local payload
+  payload="$(make_bash_payload "git checkout completions/cast.bash")"
+  run bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout <existing top-level file, no --> → blocks (exit 2)" {
+  local test_repo="$HOME/checkout-bare-repo2"
+  mkdir -p "$test_repo"
+  echo "fixture" > "$test_repo/f.txt"
+  local payload
+  payload="$(make_bash_payload "git checkout f.txt")"
+  run bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "CAST_CHECKOUT_OK=1 git checkout <existing file, no --> → allows (exit 0)" {
+  local test_repo="$HOME/checkout-bare-repo3"
+  mkdir -p "$test_repo"
+  echo "fixture" > "$test_repo/f.txt"
+  local payload
+  payload="$(make_bash_payload "CAST_CHECKOUT_OK=1 git checkout f.txt")"
+  run bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
+  assert_success
+}
+
+@test "git checkout <token that does NOT exist on disk> (branch name) → allows (exit 0) [regression: no false positive]" {
+  local test_repo="$HOME/checkout-bare-repo4"
+  mkdir -p "$test_repo"
+  local payload
+  payload="$(make_bash_payload "git checkout some-branch-name")"
+  run bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
+  assert_success
+}
+
+@test "git checkout release/1.0.0 (branch name shaped like a path, no matching dir) → allows (exit 0) [regression: no false positive]" {
+  local test_repo="$HOME/checkout-bare-repo5"
+  mkdir -p "$test_repo"
+  local payload
+  payload="$(make_bash_payload "git checkout release/1.0.0")"
+  run bash -c "cd '$test_repo' && bash '$HOOK_SH'" <<< "$payload"
+  assert_success
+}
+
+@test "git checkout HEAD~1 (ref, not a path) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git checkout HEAD~1')"
+  assert_success
+}
+
+@test "git checkout @{-1} (ref shorthand, not a path) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git checkout @{-1}')"
+  assert_success
+}
+
+@test "git checkout --detach (flag, no pathspec) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout --detach")"
+  assert_success
+}
+
+@test "git checkout -B main origin/main (multi-token branch-create form) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -B main origin/main")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git checkout -f/--force block Tests (2026-08-17 third follow-up, final
+# round before ship) — forces a branch switch through local changes,
+# discarding them, same as bare-pathspec checkout.
+# ---------------------------------------------------------------------------
+
+@test "git checkout -f main → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -f main")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout --force main → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout --force main")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout -f (bare, no branch arg) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -f")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout -f -b new (force combined with branch-create) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -f -b new")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "CAST_CHECKOUT_OK=1 git checkout -f main → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CHECKOUT_OK=1 git checkout -f main")"
+  assert_success
+}
+
+@test "git checkout -b new (regression: -b must not misfire as -f) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -b new")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git checkout -f clustered short-flag completion (2026-08-17 fourth
+# follow-up) — `git checkout -fb newbranch` is valid git, parsed as
+# `-f -b newbranch` (confirmed: `git checkout -fb` alone errors with
+# "switch `b' requires a value"), and is fully destructive, but the initial
+# standalone-`-f`-only regex missed it. Same fix shape as `_CLEAN_DRY_RUN`
+# clustering.
+# ---------------------------------------------------------------------------
+
+@test "git checkout -fb newbranch (clustered force+branch-create) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -fb newbranch")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "git checkout -bf newbranch (clustered, reversed order) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -bf newbranch")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "CAST_CHECKOUT_OK=1 git checkout -fb newbranch → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CHECKOUT_OK=1 git checkout -fb newbranch")"
+  assert_success
+}
+
+@test "git checkout -B main origin/main (no f in cluster) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -B main origin/main")"
+  assert_success
+}
+
+@test "git checkout -q main (no f in cluster) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -q main")"
+  assert_success
+}
+
+@test "git checkout -t origin/x (no f in cluster) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -t origin/x")"
+  assert_success
+}
+
+@test "git checkout -p (no f in cluster) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -p")"
+  assert_success
+}
+
+@test "git checkout -m (no f in cluster) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git checkout -m")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git restore block Tests (2026-08-17 incident class)
+# ---------------------------------------------------------------------------
+
+@test "git restore . without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git restore .")"
+  assert_failure
+  assert_output --partial "restore"
+}
+
+@test "git restore file.txt (bare, worktree-destructive) without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git restore file.txt")"
+  assert_failure
+  assert_output --partial "restore"
+}
+
+@test "git restore --staged --worktree . (worktree present) without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git restore --staged --worktree .")"
+  assert_failure
+  assert_output --partial "restore"
+}
+
+@test "git restore --staged file.txt (index-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git restore --staged file.txt")"
+  assert_success
+}
+
+@test "CAST_RESTORE_OK=1 git restore . → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESTORE_OK=1 git restore .")"
+  assert_success
+}
+
+@test "CAST_RESTORE_OK=1 with extra VAR=value before git restore . → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESTORE_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git restore .")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git restore . → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git restore .")"
+  assert_failure
+  assert_output --partial "restore"
+}
+
+@test "multiline: CAST_RESTORE_OK=1 on line 2 does NOT unblock git restore . on line 1" {
+  local payload
+  payload=$(python3 -c "
+import json, sys
+print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
+" $'git restore .\nCAST_RESTORE_OK=1')
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_failure
+  assert_output --partial "restore"
+}
+
+# ---------------------------------------------------------------------------
+# git switch block Tests (2026-08-17 third follow-up, final round before
+# ship) — `git switch` is the modern branch-changing half of `checkout` and
+# was previously COMPLETELY unguarded. Unlike checkout, plain `git switch
+# <branch>` is NOT destructive (git refuses it on conflicting local
+# changes), so only the force/discard forms block. Own hatch: CAST_SWITCH_OK=1.
+# ---------------------------------------------------------------------------
+
+@test "git switch --discard-changes main → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch --discard-changes main")"
+  assert_failure
+  assert_output --partial "switch"
+}
+
+@test "git switch -f main → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch -f main")"
+  assert_failure
+  assert_output --partial "switch"
+}
+
+@test "git switch --force main → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch --force main")"
+  assert_failure
+  assert_output --partial "switch"
+}
+
+@test "git switch main (plain, not destructive) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch main")"
+  assert_success
+}
+
+@test "git switch -c new-branch (create) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch -c new-branch")"
+  assert_success
+}
+
+@test "git switch - (previous branch) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch -")"
+  assert_success
+}
+
+@test "git switch --detach → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch --detach")"
+  assert_success
+}
+
+@test "CAST_SWITCH_OK=1 git switch -f main → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_SWITCH_OK=1 git switch -f main")"
+  assert_success
+}
+
+@test "CAST_SWITCH_OK=1 with extra VAR=value before git switch -f main → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_SWITCH_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git switch -f main")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git switch -f main → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch -f main")"
+  assert_failure
+  assert_output --partial "switch"
+}
+
+@test "multiline: CAST_SWITCH_OK=1 on line 2 does NOT unblock git switch -f main on line 1" {
+  local payload
+  payload=$(python3 -c "
+import json, sys
+print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
+" $'git switch -f main\nCAST_SWITCH_OK=1')
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_failure
+  assert_output --partial "switch"
+}
+
+@test "git switch -fc new (clustered force+create) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git switch -fc new")"
+  assert_failure
+  assert_output --partial "switch"
+}
+
+@test "CAST_SWITCH_OK=1 git switch -fc new → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_SWITCH_OK=1 git switch -fc new")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# Same-line chaining / ALLOW short-circuit Tests (2026-08-17 security fix)
+# A matched hatch must suppress ONLY its own op's block, not every later
+# destructive op chained on the same line via `;` or `&&`.
+# ---------------------------------------------------------------------------
+
+@test "CAST_STASH_OK=1 git stash pop; git reset --hard; git clean -fdx → still blocks (chained bypass)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_STASH_OK=1 git stash pop; git reset --hard; git clean -fdx")"
+  assert_failure
+}
+
+@test "CAST_RESET_OK=1 git reset --hard && git clean -fdx → still blocks (chained bypass)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 git reset --hard && git clean -fdx")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "CAST_PUSH_OK=1 git push; git clean -fdx → still blocks (chained bypass)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 git push; git clean -fdx")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "CAST_COMMIT_AGENT=1 git commit -m x && git push --force → still blocks (chained bypass, original commit/push trio)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m x && git push --force")"
+  assert_failure
+  assert_output --partial "push"
+}
+
+@test "single-op hatches unaffected by the independent-evaluation fix (commit/push/stash/reset/clean/checkout/restore)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit -m x")"
+  assert_success
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 git push")"
+  assert_success
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_STASH_OK=1 git stash")"
+  assert_success
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 git reset --hard")"
+  assert_success
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CLEAN_OK=1 git clean -fd")"
+  assert_success
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CHECKOUT_OK=1 git checkout -- .")"
+  assert_success
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESTORE_OK=1 git restore .")"
+  assert_success
+}
+
+@test "combined-prefix hatch (CAST_RESET_OK=1 CAST_CLEAN_OK=1 git reset --hard && git clean -fdx) → BLOCKS (intentional strictness)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 CAST_CLEAN_OK=1 git reset --hard && git clean -fdx")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "per-command hatch (CAST_RESET_OK=1 git reset --hard && CAST_CLEAN_OK=1 git clean -fdx) → ALLOWED" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 git reset --hard && CAST_CLEAN_OK=1 git clean -fdx")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git clean dry-run flag-cluster Tests (2026-08-17 false-positive fix)
+# ---------------------------------------------------------------------------
+
+@test "git clean -nd (clustered dry-run+directories) → allows (exit 0) [false-positive fix]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -nd")"
+  assert_success
+}
+
+@test "git clean -dn (clustered, reversed order) → allows (exit 0) [false-positive fix]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -dn")"
+  assert_success
+}
+
+@test "git clean -fn (clustered dry-run+force) → allows (exit 0) [false-positive fix]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -fn")"
+  assert_success
+}
+
+@test "git clean -nfd (clustered, dry-run first) → allows (exit 0) [false-positive fix]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -nfd")"
+  assert_success
+}
+
+@test "git clean -d (no n, destructive) → still blocks (exit 2) [regression: no false negative]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -d")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "git clean -xfd (no n, destructive) → still blocks (exit 2) [regression: no false negative]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean -xfd")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "git clean --interactive → still blocks (exit 2) [must not misfire as dry-run on long-flag 'n']" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git clean --interactive")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+# ---------------------------------------------------------------------------
+# Same-op hatch bleed Tests (2026-08-17 follow-up security fix)
+# A hatch attached to a HARMLESS invocation of an op must NOT unlock a
+# DESTRUCTIVE invocation of the SAME op later on the line — per-segment
+# evaluation (split on ; && || |), not per-line.
+# ---------------------------------------------------------------------------
+
+@test "CAST_RESET_OK=1 git reset --soft && git reset --hard → still blocks (same-op bleed)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 git reset --soft && git reset --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+@test "CAST_CLEAN_OK=1 git clean -n && git clean -fdx → still blocks (same-op bleed)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CLEAN_OK=1 git clean -n && git clean -fdx")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "CAST_CHECKOUT_OK=1 git checkout main && git checkout -- . → still blocks (same-op bleed)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_CHECKOUT_OK=1 git checkout main && git checkout -- .")"
+  assert_failure
+  assert_output --partial "checkout"
+}
+
+@test "CAST_RESTORE_OK=1 git restore --staged x && git restore . → still blocks (same-op bleed)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESTORE_OK=1 git restore --staged x && git restore .")"
+  assert_failure
+  assert_output --partial "restore"
+}
+
+@test "CAST_STASH_OK=1 git stash list && git stash → still blocks (same-op bleed)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_STASH_OK=1 git stash list && git stash")"
+  assert_failure
+  assert_output --partial "stash"
+}
+
+@test "CAST_PUSH_OK=1 git push; git push --force → still blocks (same-op bleed)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 git push; git push --force")"
+  assert_failure
+  assert_output --partial "push"
+}
+
+@test "CAST_COMMIT_AGENT=1 git commit --dry-run && git commit -m x → still blocks (same-op bleed, pre-existing at HEAD)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_COMMIT_AGENT=1 git commit --dry-run && git commit -m x")"
+  assert_failure
+  assert_output --partial "commit"
+}
+
+@test "per-command chained hatch (CAST_RESET_OK=1 git reset --hard && CAST_CLEAN_OK=1 git clean -fdx) → still ALLOWED after segmentation" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 git reset --hard && CAST_CLEAN_OK=1 git clean -fdx")"
+  assert_success
+}
+
+@test "combined-prefix hatch still BLOCKS after segmentation (CAST_RESET_OK=1 CAST_CLEAN_OK=1 git reset --hard && git clean -fdx)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 CAST_CLEAN_OK=1 git reset --hard && git clean -fdx")"
+  assert_failure
+  assert_output --partial "clean"
+}
+
+@test "harmless multi-segment lines still allowed after segmentation (git status && git diff)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git status && git diff")"
+  assert_success
+}
+
+@test "harmless piped line still allowed after segmentation (git log --oneline | head -5)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git log --oneline | head -5")"
+  assert_success
+}
+
+@test "harmless mixed ; and && line still allowed after segmentation (git diff && git status; git add -A)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git diff && git status; git add -A")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git reflog expire/delete block (2026-08-17 recovery-path pass)
+# ---------------------------------------------------------------------------
+
+@test "git reflog expire --expire=now --all without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog expire --expire=now --all")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git reflog expire --expire-unreachable=now --all without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog expire --expire-unreachable=now --all")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git reflog delete HEAD@{0} without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog delete HEAD@{0}")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git reflog (bare, read-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog")"
+  assert_success
+}
+
+@test "git reflog show HEAD (read-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog show HEAD")"
+  assert_success
+}
+
+@test "git reflog exists refs/heads/main (read-only) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog exists refs/heads/main")"
+  assert_success
+}
+
+@test "CAST_REFLOG_OK=1 git reflog expire --expire=now --all → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_REFLOG_OK=1 git reflog expire --expire=now --all")"
+  assert_success
+}
+
+@test "CAST_REFLOG_OK=1 with extra VAR=value before git reflog expire → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_REFLOG_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git reflog expire --expire=now --all")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git reflog delete HEAD@{0} → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git reflog delete HEAD@{0}")"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+@test "git reflog expire\`true\` (adjacent command substitution) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git reflog expire`true`')"
+  assert_failure
+  assert_output --partial "reflog"
+}
+
+# ---------------------------------------------------------------------------
+# git gc --prune=<value> block (2026-08-17 recovery-path pass)
+# ---------------------------------------------------------------------------
+
+@test "git gc --prune=now without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git gc --prune=all without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=all")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git gc --prune=1.hour.ago without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=1.hour.ago")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "bare git gc → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc")"
+  assert_success
+}
+
+@test "git gc --aggressive → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --aggressive")"
+  assert_success
+}
+
+@test "git gc --prune (no value) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune")"
+  assert_success
+}
+
+@test "git gc --no-prune → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --no-prune")"
+  assert_success
+}
+
+@test "git gc --auto → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --auto")"
+  assert_success
+}
+
+@test "git gcfoo (look-alike token) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gcfoo")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 git gc --prune=now → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git gc --prune=now")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 with extra VAR=value before git gc --prune=now → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git gc --prune=now")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git gc --prune=now → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+# ---------------------------------------------------------------------------
+# git prune block (2026-08-17 recovery-path pass)
+# ---------------------------------------------------------------------------
+
+@test "bare git prune without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git prune --expire=now without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune --expire=now")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git prune -n (dry run) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune -n")"
+  assert_success
+}
+
+@test "git prune --dry-run → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune --dry-run")"
+  assert_success
+}
+
+@test "git prune-packed (distinct non-destructive command) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune-packed")"
+  assert_success
+}
+
+@test "git remote prune origin (different subcommand's argument) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git remote prune origin")"
+  assert_success
+}
+
+@test "git worktree prune (different subcommand's argument) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree prune")"
+  assert_success
+}
+
+@test "git prunefoo (look-alike token) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prunefoo")"
+  assert_success
+}
+
+@test "CAST_PRUNE_OK=1 git prune → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PRUNE_OK=1 git prune")"
+  assert_success
+}
+
+@test "CAST_PRUNE_OK=1 with extra VAR=value before git prune → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PRUNE_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git prune")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git prune → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git prune")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git prune\$(true) (adjacent command substitution) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload 'git prune$(true)')"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "git -C /repo prune (global option tolerance) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C /repo prune")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "CAST_PRUNE_OK=1 git -C /repo prune (global option tolerance) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PRUNE_OK=1 git -C /repo prune")"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# git gc/reflog config-route bypass block (2026-08-17 recovery-path pass,
+# follow-up): -c inline config injection + `git config` writes of an expiry
+# key, both under the existing CAST_GC_OK=1 hatch
+# ---------------------------------------------------------------------------
+
+@test "git -c gc.pruneExpire=now gc without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c gc.reflogExpire=now gc without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c gc.reflogExpireUnreachable=now gc without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpireUnreachable=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c gc.reflogExpire=now -c gc.pruneExpire=now gc (combined, ONE command) without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpire=now -c gc.pruneExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git --git-dir=.git -c gc.pruneExpire=now gc (global option tolerance) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --git-dir=.git -c gc.pruneExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c gc.pruneexpire=now gc (lowercase key, git config keys are case-insensitive) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneexpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git -c core.pager=less log (unrelated key) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c core.pager=less log")"
+  assert_success
+}
+
+@test "git -c gc.auto=0 gc (unrelated gc.* key) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.auto=0 gc")"
+  assert_success
+}
+
+@test "git -c user.name=x commit → blocks on commit, not on the -c (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c user.name=x commit")"
+  assert_failure
+  assert_output --partial "commit"
+}
+
+@test "CAST_GC_OK=1 git -c gc.pruneExpire=now gc → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git -c gc.pruneExpire=now gc")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 with extra VAR=value before git -c gc.pruneExpire=now gc → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git -c gc.pruneExpire=now gc")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git -c gc.pruneExpire=now gc → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneExpire=now gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.pruneExpire now without escape hatch → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config --local gc.pruneExpire now (any form) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --local gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config --replace-all gc.pruneExpire now (any form) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --replace-all gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.pruneexpire now (lowercase key) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneexpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.reflogExpire now → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.reflogExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.reflogExpireUnreachable now → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.reflogExpireUnreachable now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config user.email x (unrelated key) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config user.email x")"
+  assert_success
+}
+
+@test "git config --get gc.pruneExpire (a READ) → allows (exit 0) [subtle: read must not be mistaken for write]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --get gc.pruneExpire")"
+  assert_success
+}
+
+@test "git config gc.pruneExpire (bare key, no value — a READ) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire")"
+  assert_success
+}
+
+# `git config --get <key> <value-pattern>` is a READ — the value-pattern is a
+# FILTER argument, not a set-value — but it has a token after the key, which
+# would otherwise satisfy the write-detection lookahead on its own. This test
+# is the only thing that discriminates the `(?!.*--get)` condition: with the
+# value-token requirement alone (no --get exclusion), this form is still
+# wrongly allowed to look like a write and blocks; only the --get exemption
+# saves it.
+@test "git config --get gc.pruneExpire now (READ with value-pattern filter) → allows (exit 0) [subtle: --get exemption is load-bearing, not redundant with the value-token check]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --get gc.pruneExpire now")"
+  assert_success
+}
+
+@test "git config --get-regexp gc.*Expire now (READ, --get-family) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --get-regexp gc.*Expire now")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 git config gc.pruneExpire now → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git config gc.pruneExpire now")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 with extra VAR=value before git config gc.pruneExpire now → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 CAST_SKIP_PLUGIN_DRIFT=1 git config gc.pruneExpire now")"
+  assert_success
+}
+
+@test "CLAUDE_SUBPROCESS=1 + git config gc.pruneExpire now → still blocks (irreversibility guard always on)" {
+  export CLAUDE_SUBPROCESS=1
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "git config gc.pruneExpire now && git gc (config-write-then-bare-gc bypass) → blocks (exit 2) [the exact measured bypass this closes]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now && git gc")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "CAST_GC_OK=1 git -c gc.pruneExpire=now gc && git gc --prune=now → still BLOCKS (segment 2 carries no hatch)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git -c gc.pruneExpire=now gc && git gc --prune=now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+@test "CAST_GC_OK=1 git config gc.pruneExpire now && git gc --prune=now → still BLOCKS (segment 2 carries no hatch)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git config gc.pruneExpire now && git gc --prune=now")"
+  assert_failure
+  assert_output --partial "gc"
+}
+
+# ---------------------------------------------------------------------------
+# reflog/gc/prune: per-segment hatch scoping + cross-op independence
+# (2026-08-17 fix — must not regress)
+# ---------------------------------------------------------------------------
+
+@test "CAST_GC_OK=1 git gc --prune=now && git prune → still BLOCKS (segment 2 carries no hatch)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git gc --prune=now && git prune")"
+  assert_failure
+  assert_output --partial "prune"
+}
+
+@test "CAST_GC_OK=1 git gc --prune=now && CAST_PRUNE_OK=1 git prune → ALLOWED (each segment carries its own hatch)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git gc --prune=now && CAST_PRUNE_OK=1 git prune")"
+  assert_success
+}
+
+@test "CAST_PRUNE_OK=1 git prune; git reset --hard → still BLOCKS (cross-op independence)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PRUNE_OK=1 git prune; git reset --hard")"
+  assert_failure
+  assert_output --partial "reset"
+}
+
+# ---------------------------------------------------------------------------
 # Empty Input Handling
 # ---------------------------------------------------------------------------
 

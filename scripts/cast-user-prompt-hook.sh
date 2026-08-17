@@ -158,9 +158,9 @@ for m in memories:
     name    = _re.sub(r'[\r\n]+', ' ', name).strip()
     content = _re.sub(r'[\r\n]+', ' ', content).strip()
     mem_type = _re.sub(r'[\r\n]+', ' ', mem_type).strip()
-    name    = _re.sub(r'</?memory-recall', '[fenced-tag]', name,    flags=_re.IGNORECASE)
-    content = _re.sub(r'</?memory-recall', '[fenced-tag]', content, flags=_re.IGNORECASE)
-    mem_type = _re.sub(r'</?memory-recall', '[fenced-tag]', mem_type, flags=_re.IGNORECASE)
+    name    = _re.sub(r'<[^\S\n]*/?[^\S\n]*memory-recall', '[fenced-tag]', name,    flags=_re.IGNORECASE)
+    content = _re.sub(r'<[^\S\n]*/?[^\S\n]*memory-recall', '[fenced-tag]', content, flags=_re.IGNORECASE)
+    mem_type = _re.sub(r'<[^\S\n]*/?[^\S\n]*memory-recall', '[fenced-tag]', mem_type, flags=_re.IGNORECASE)
     if name and content:
         if kind == 'incident':
             lines.append(f"[incident:{name}] {content}")

@@ -13,7 +13,8 @@
 #
 # Each JSONL line records:
 #   timestamp        ISO8601 UTC
-#   session_id       from $CLAUDE_SESSION_ID (set by Claude Code hook runner)
+#   session_id       from the hook payload's session_id key, falling back to
+#                    $CLAUDE_SESSION_ID, then "unknown"
 #   project          CLAUDE_PROJECT_DIR basename or git toplevel
 #   tool_name        the Claude Code tool being called
 #   file_path        for Write/Edit/Read/Glob tool calls
@@ -24,6 +25,19 @@
 #   query            for WebSearch/Glob/Grep calls
 #   is_cloud_bound   true if the tool routes data outside the machine
 #   input_hash       SHA256[:16] of full tool_input (catch-all fingerprint)
+#
+#   MCP tool calls (tool_name starts with "mcp__") additionally record:
+#     mcp_server       server name split from mcp__<server>__<tool>
+#     mcp_tool         tool name split from mcp__<server>__<tool>
+#     args_summary     key:type(len) shape only — NEVER argument values
+#     outcome          "ok" or "error", derived from tool_response
+#     error_preview    first 120 chars of a REDACTED error (error outcomes
+#                      only; sanitized via cast-redact.py before truncation,
+#                      dropped entirely — not stored raw — if sanitization
+#                      fails)
+#     result_size      byte length of the JSON-serialized tool_response
+#   MCP calls are also persisted to cast.db routing_events
+#   (event_type='mcp_tool_call') since audit.jsonl rotates out in ~12 days.
 #
 # PII enforcement (pre mode only): when redact_pii=true AND a cloud-bound tool
 # call contains PII, exits 2 to block the call.

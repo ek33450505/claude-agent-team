@@ -34,10 +34,21 @@ _make_file() {
 # Tests
 # ---------------------------------------------------------------------------
 
-@test "advisory on current repo (rules-core over 20480-byte soft target)" {
-  run bash -c "bash '${LINT_SH}' 2>&1"
+@test "default budget is 36864 bytes (pins the shipped default, no override)" {
+  # Below-default fixture: no CAST_RULES_BYTE_BUDGET override — exercises the
+  # script's own default literal, not a test-supplied one.
+  _make_file "${FIXTURE_DIR}/under.md" 36000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' bash '${LINT_SH}' 2>&1"
+  assert_success
+  assert_output --partial "OK [lint-byte-budget]:"
+  assert_output --partial "36864 bytes"
+
+  # Above-default fixture: same no-override invocation, now over the default.
+  _make_file "${FIXTURE_DIR}/under.md" 37000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' bash '${LINT_SH}' 2>&1"
   assert_success
   assert_output --partial "ADVISORY [lint-byte-budget]:"
+  assert_output --partial "over the 36864-byte soft target"
 }
 
 @test "pass when fixture dir is within budget" {

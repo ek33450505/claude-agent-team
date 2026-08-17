@@ -23,12 +23,19 @@ _cast_memory_types() {
 _cast_memory() {
   local curcontext="$curcontext" state line
   local -a subcommands
+  # BEGIN GENERATED MEMORY SUBCOMMANDS (zsh) — do not edit by hand; run scripts/gen-completions.sh
   subcommands=(
     'search:Search memories by query'
     'list:List all memories'
+    'verify:Run staleness sweep'
+    'show:Print full memory entry'
+    'delete:Delete a memory entry'
     'forget:Delete a memory by ID'
     'export:Export all memories as JSON'
+    'review:Pending memory review TUI'
+    'dream:Run markdown memory consolidation'
   )
+  # END GENERATED MEMORY SUBCOMMANDS (zsh)
   _arguments \
     '1:subcommand:->subcommand' \
     '*::arg:->args'
