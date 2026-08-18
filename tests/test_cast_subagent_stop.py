@@ -611,5 +611,586 @@ class TestStage6HandoffFailClosed(_IsolatedHomeTestCase):
         self.assertEqual(payload.get('violation'), 'missing_handoff')
 
 
+class TestStructuredOutputResponseRecovery(_IsolatedHomeTestCase):
+    """C2 fix — Workflow-tool stages that terminate via a StructuredOutput tool_use
+    call (no text block) must not silently write an empty `response`.
+
+    Root cause (plans/c2-c3-response-loss-findings.md): real subagent transcripts
+    under ~/.claude/projects/*/*/subagents/workflows/**/agent-*.jsonl show the
+    terminal assistant turn as {"stop_reason": "tool_use", "content":
+    [{"type": "tool_use", "name": "StructuredOutput", "input": {...}}]} — zero
+    text blocks. Before the fix, parse_input()'s response extraction (text-block
+    path + 3 flat fallback fields) found nothing and response_text stayed "".
+    Measured 2026-08-18: 460/462 empty-response DONE rows in a 30-day window
+    resolved to exactly this shape.
+
+    Mutation-tested: reverting the `if not response_text:` tool_use-recovery block
+    added after the flat-fallback in parse_input() makes test_structured_output_
+    tool_use_is_recovered fail (response_text == "" instead of the expected
+    marker+JSON) — confirming this test would have caught the bug pre-fix.
+    """
+
+    def _parse(self, payload):
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def test_structured_output_tool_use_is_recovered(self):
+        """The dominant real-world case: a Workflow stage's only content block is
+        a StructuredOutput tool_use. response_text must recover the tool input
+        (tagged, not mistaken for prose) instead of being left empty."""
+        payload = {
+            'agent_type': 'workflow-subagent',
+            'session_id': 's1',
+            'agent_id': 'a1',
+            'agent_response': {
+                'content': [
+                    {
+                        'type': 'tool_use',
+                        'id': 'toolu_01',
+                        'name': 'StructuredOutput',
+                        'input': {'summary': 'hi', 'findings': ['a', 'b']},
+                    }
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertTrue(
+            ctx.response_text.startswith('[structured-output:StructuredOutput]'),
+            f'expected structured-output marker, got: {ctx.response_text!r}',
+        )
+        body = ctx.response_text.split('] ', 1)[1]
+        self.assertEqual(json.loads(body), {'summary': 'hi', 'findings': ['a', 'b']})
+
+    def test_text_block_path_unaffected(self):
+        """Regression guard: a normal text-block response must be completely
+        unchanged by the new fallback (it should never even be reached)."""
+        payload = {
+            'agent_type': 'backend-writer',
+            'session_id': 's2',
+            'agent_id': 'a2',
+            'agent_response': {
+                'content': [{'type': 'text', 'text': 'Status: DONE\nall good'}]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertEqual(ctx.response_text, 'Status: DONE\nall good')
+
+    def test_no_content_at_all_stays_empty_no_crash(self):
+        """Edge case: an empty content list must still yield "" — not crash, and
+        not fabricate a marker out of nothing."""
+        payload = {
+            'agent_type': 'x',
+            'session_id': 's3',
+            'agent_id': 'a3',
+            'agent_response': {'content': []},
+        }
+        ctx = self._parse(payload)
+        self.assertEqual(ctx.response_text, '')
+
+    def test_text_block_takes_priority_over_sibling_tool_use(self):
+        """When a text block IS present alongside a tool_use block, the existing
+        text-block path must win — the tool_use fallback only fires when text
+        extraction found nothing at all."""
+        payload = {
+            'agent_type': 'code-reviewer',
+            'session_id': 's4',
+            'agent_id': 'a4',
+            'agent_response': {
+                'content': [
+                    {'type': 'text', 'text': 'Status: DONE'},
+                    {'type': 'tool_use', 'name': 'StructuredOutput', 'input': {'x': 1}},
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertEqual(ctx.response_text, 'Status: DONE')
+
+
+class TestClassifierProvenanceOnStructuredOutput(_IsolatedHomeTestCase):
+    """Fail-open follow-up to the C2 fix above (TestStructuredOutputResponseRecovery).
+
+    Recovering a StructuredOutput tool_use into response_text is DATA the agent
+    returned, not a status it reported about itself. Before this fix,
+    parse_input() let that recovered text become ctx.output_full unconditionally
+    (``flat_output or response_text``), so a completely ordinary payload key like
+    ``{"status": "DONE", ...}`` in a Workflow stage's structured output matched
+    _GATE_RE's JSON-form alternative and produced ``gate_match == "DONE"`` for a
+    run that never gave a self-reported verdict. That value flows through
+    stage17_tail -> CAST_GATE_MATCH -> cast_write_status ->
+    cast-git-guard.py's _agent_completed_this_session, which clears
+    requires_agent BLOCK policies on DONE/DONE_WITH_CONCERNS — a policy-gate
+    fail-open for any non-exempt agentType pinned to a Workflow stage (e.g.
+    'researcher') that returns ordinary structured data.
+
+    The fix adds ctx.response_is_structured and keeps output_full at its
+    pre-recovery value (flat_output, "" whenever recovery fires) when the flag
+    is set — response still carries the recovered content into agent_runs
+    below; only the classification input is held at its old value.
+
+    Mutation-tested: forcing response_is_structured back to False before the
+    output_full assignment (i.e. reverting to the unconditional ``flat_output or
+    response_text``) makes test_structured_output_status_key_does_not_fire_
+    gate_match fail (gate_match == 'DONE' instead of ''); restoring the fix
+    makes it pass again. test_legitimate_prose_verdict_still_fires_gate_match
+    passes in BOTH states — proving it is not entangled with this fix and the
+    first test is actually discriminating.
+    """
+
+    def _parse(self, payload):
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def test_structured_output_status_key_does_not_fire_gate_match(self):
+        """The exact fail-open scenario: a non-exempt agentType (a Workflow stage
+        pinned to e.g. 'researcher') whose only content is a StructuredOutput
+        tool_use carrying an ordinary `"status": "DONE"` payload key. response
+        must still recover the content; gate_match/trunc_class/has_verdict_keyword
+        must stay at their pre-recovery (empty-output) values."""
+        payload = {
+            'agent_type': 'researcher',
+            'session_id': 's10',
+            'agent_id': 'a10',
+            'agent_response': {
+                'content': [
+                    {
+                        'type': 'tool_use',
+                        'id': 'toolu_10',
+                        'name': 'StructuredOutput',
+                        'input': {'status': 'DONE', 'summary': 'found 3 results'},
+                    }
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        # response recovery itself (the C2 fix) is unaffected by this unit.
+        self.assertTrue(ctx.response_text.startswith('[structured-output:StructuredOutput]'))
+        self.assertIn('"status": "DONE"', ctx.response_text)
+        self.assertTrue(ctx.response_is_structured)
+        # ...but classification must NOT treat the payload key as a self-reported verdict.
+        self.assertEqual(
+            ctx.gate_match, '',
+            f'gate_match leaked a policy-clearing verdict from structured data: {ctx.gate_match!r}',
+        )
+        self.assertEqual(
+            ctx.trunc_class, 2,
+            'trunc_class must match the pre-recovery (empty output_full) value, not be '
+            'reclassified to 0 by the recovered JSON',
+        )
+        self.assertFalse(ctx.has_verdict_keyword)
+
+    def test_legitimate_prose_verdict_still_fires_gate_match(self):
+        """Regression guard for the fix itself: a REAL 'Status: DONE' text
+        response (no structured-output recovery involved at all) must still
+        classify exactly as before — proves the fix narrows to recovered
+        payloads only, not to gate_match/verdict detection in general."""
+        payload = {
+            'agent_type': 'researcher',
+            'session_id': 's11',
+            'agent_id': 'a11',
+            'agent_response': {
+                'content': [{'type': 'text', 'text': 'Findings below.\n\nStatus: DONE'}]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertFalse(ctx.response_is_structured)
+        self.assertEqual(ctx.gate_match, 'DONE')
+        self.assertTrue(ctx.has_verdict_keyword)
+        self.assertEqual(ctx.trunc_class, 0)
+
+
+class _IsolatedDbPathTestCase(_IsolatedHomeTestCase):
+    """Extends the isolated-HOME base with a temp CAST_DB_PATH pointing at a
+    nonexistent file, so parse_input()'s agent-name DB fallback query (if it
+    ever fires) can never reach the real ~/.claude/cast.db. Saved/restored in
+    finally — never unconditionally popped, which is the exact env-var-loss
+    pattern that let a prior test suite write synthetic rows into the live DB
+    (2026-08-17 incident)."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_db_path = os.environ.get('CAST_DB_PATH')
+        os.environ['CAST_DB_PATH'] = os.path.join(self._tmpdir, 'probe-nonexistent.db')
+
+    def tearDown(self):
+        if self._orig_db_path is None:
+            os.environ.pop('CAST_DB_PATH', None)
+        else:
+            os.environ['CAST_DB_PATH'] = self._orig_db_path
+        super().tearDown()
+
+
+class TestTerminalToolUseBlockRecovery(_IsolatedDbPathTestCase):
+    """Low finding (2026-08-18 security review of the C2 recovery path): the
+    tool_use recovery loop in parse_input() used to `break` on the FIRST
+    tool_use block, contradicting its own comment ("serializes the terminal
+    tool_use block"). An earlier incidental tool call (e.g. a Bash lookup
+    before the agent's actual final StructuredOutput call) was recovered
+    instead of the real deliverable. Fixed by dropping the `break` so the
+    loop keeps overwriting response_text/response_is_structured through to
+    the LAST matching block.
+
+    Mutation-tested: restoring the `break` after the first match makes
+    test_multiple_tool_use_blocks_recovers_the_last_not_the_first fail
+    (recovers 'Bash' instead of 'StructuredOutput').
+    """
+
+    def _parse(self, payload):
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def test_multiple_tool_use_blocks_recovers_the_last_not_the_first(self):
+        """An incidental tool_use block (Bash) precedes the agent's actual
+        terminal StructuredOutput call. Recovery must pick the LAST block."""
+        payload = {
+            'agent_type': 'security',
+            'session_id': 's20',
+            'agent_id': 'a20',
+            'agent_response': {
+                'content': [
+                    {'type': 'tool_use', 'id': 'toolu_20', 'name': 'Bash', 'input': {'command': 'ls'}},
+                    {
+                        'type': 'tool_use',
+                        'id': 'toolu_21',
+                        'name': 'StructuredOutput',
+                        'input': {'status': 'DONE', 'summary': 'x'},
+                    },
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertTrue(
+            ctx.response_text.startswith('[structured-output:StructuredOutput]'),
+            f'expected the terminal StructuredOutput block, got: {ctx.response_text!r}',
+        )
+        self.assertNotIn('Bash', ctx.response_text.split('] ', 1)[0])
+        body = ctx.response_text.split('] ', 1)[1]
+        self.assertEqual(json.loads(body), {'status': 'DONE', 'summary': 'x'})
+        self.assertTrue(ctx.response_is_structured)
+        self.assertEqual(
+            ctx.gate_match, '',
+            f'gate_match leaked a policy-clearing verdict from recovered structured data: {ctx.gate_match!r}',
+        )
+
+
+class TestWhitespaceOnlyTextBlockMasking(_IsolatedDbPathTestCase):
+    """Low finding (2026-08-18 security review of the C2 recovery path): a
+    text block containing only whitespace (e.g. "   \\n\\t  ") was treated as
+    real response content because the extraction only checked truthiness, not
+    substance. That silently suppressed the tool_use recovery fallback below
+    it — the StructuredOutput content was discarded and never recorded at
+    all, the exact information loss the C2 fix exists to stop. Fixed by
+    nulling response_text when its `.strip()` is empty, so the flat-field
+    fallback and tool_use recovery still get their turn.
+
+    Mutation-tested: removing the `if not response_text.strip(): response_text
+    = ""` guard makes test_whitespace_only_text_falls_through_to_tool_use_
+    recovery fail (response_text stays "   \\n\\t  ", never reaching the
+    tool_use block).
+    """
+
+    def _parse(self, payload):
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def test_whitespace_only_text_falls_through_to_tool_use_recovery(self):
+        """A whitespace-only text block must not mask the StructuredOutput
+        tool_use block that follows it."""
+        payload = {
+            'agent_type': 'security',
+            'session_id': 's21',
+            'agent_id': 'a21',
+            'agent_response': {
+                'content': [
+                    {'type': 'text', 'text': '   \n\t  '},
+                    {
+                        'type': 'tool_use',
+                        'id': 'toolu_22',
+                        'name': 'StructuredOutput',
+                        'input': {'status': 'DONE'},
+                    },
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertTrue(
+            ctx.response_text.startswith('[structured-output:StructuredOutput]'),
+            f'whitespace-only text block masked the tool_use recovery: {ctx.response_text!r}',
+        )
+        self.assertTrue(ctx.response_is_structured)
+        self.assertEqual(ctx.gate_match, '')
+
+    def test_whitespace_only_text_with_no_fallback_stays_empty_no_crash(self):
+        """Edge case: whitespace-only text with nothing to fall back to must
+        yield "" — not crash, and not fabricate a marker out of nothing."""
+        payload = {
+            'agent_type': 'x',
+            'session_id': 's22',
+            'agent_response': {'content': [{'type': 'text', 'text': '  \n  '}]},
+        }
+        ctx = self._parse(payload)
+        self.assertEqual(ctx.response_text, '')
+        self.assertFalse(ctx.response_is_structured)
+
+    def test_real_text_with_incidental_whitespace_is_byte_identical(self):
+        """Regression guard: this fix must not alter behavior for ANY response
+        with real content — only pure-whitespace extractions are affected.
+        Leading/trailing whitespace around real content must be preserved
+        exactly as before (no new stripping introduced)."""
+        payload = {
+            'agent_type': 'backend-writer',
+            'session_id': 's23',
+            'agent_response': {
+                'content': [{'type': 'text', 'text': '  Status: DONE  \n'}]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertEqual(ctx.response_text, '  Status: DONE  \n')
+        self.assertEqual(ctx.gate_match, 'DONE')
+
+
+class TestGateMatchInvariantAfterLowFixes(_IsolatedDbPathTestCase):
+    """Explicit invariant check for both Low fixes above: a recovered
+    structured-output payload — whether reached via the terminal-block fix
+    (multiple tool_use blocks) or the whitespace-masking fix (whitespace text
+    + tool_use) — must NEVER populate output_full / fire gate_match. Only a
+    genuine self-reported prose verdict may do that. This is the invariant
+    stage17_tail -> CAST_GATE_MATCH -> cast_write_status ->
+    cast-git-guard.py's requires_agent BLOCK-clearing depends on."""
+
+    def _parse(self, payload):
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def test_multi_tool_use_recovery_never_fires_gate_match(self):
+        payload = {
+            'agent_type': 'security',
+            'session_id': 's24',
+            'agent_response': {
+                'content': [
+                    {'type': 'tool_use', 'name': 'Bash', 'input': {'command': 'ls'}},
+                    {
+                        'type': 'tool_use',
+                        'name': 'StructuredOutput',
+                        'input': {'status': 'DONE', 'summary': 'x'},
+                    },
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertEqual(ctx.gate_match, '')
+        self.assertEqual(ctx.output_full, '')
+
+    def test_whitespace_masked_tool_use_recovery_never_fires_gate_match(self):
+        payload = {
+            'agent_type': 'security',
+            'session_id': 's25',
+            'agent_response': {
+                'content': [
+                    {'type': 'text', 'text': '   \n\t  '},
+                    {'type': 'tool_use', 'name': 'StructuredOutput', 'input': {'status': 'DONE'}},
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertEqual(ctx.gate_match, '')
+        self.assertEqual(ctx.output_full, '')
+
+    def test_real_prose_verdict_still_fires_gate_match(self):
+        """The other half of the invariant: this pair of fixes must not
+        suppress a genuine self-reported verdict."""
+        payload = {
+            'agent_type': 'security',
+            'session_id': 's26',
+            'agent_response': {
+                'content': [{'type': 'text', 'text': 'Reviewed.\n\nStatus: DONE\n'}]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertEqual(ctx.gate_match, 'DONE')
+
+
+class TestLastToolCallTagSplit(_IsolatedDbPathTestCase):
+    """Two independent reviewers found the same defect: the tool_use recovery
+    loop in parse_input() tagged EVERY recovered block
+    "[structured-output:<name>]" regardless of tool name, so a Workflow stage
+    whose terminal turn was e.g. a Bash or Edit call got mislabeled as a
+    genuine structured deliverable — the same "last thing the agent was
+    doing" vs "the agent's structured deliverable" confusion already fixed in
+    scripts/cast-abandon-stale-runs.py's _recover_response.
+
+    Fix: tag by exact tool-name equality, mirroring the reaper —
+    "StructuredOutput" gets "[structured-output:StructuredOutput]"; any other
+    tool name gets "[last-tool-call:<name>]" instead.
+    response_is_structured stays True in BOTH branches (recovered tool
+    content is never a self-reported verdict, regardless of which tool
+    produced it) — see the updated comment on Ctx.response_is_structured and
+    on the output_full assignment in parse_input().
+
+    Mutation-tested:
+    1. Reverting the tag split (always "[structured-output:<name>]") makes
+       test_non_structured_terminal_call_gets_last_tool_call_tag and
+       test_similarly_named_tool_is_not_treated_as_structured_output fail
+       (both expect "[last-tool-call:...]", would get
+       "[structured-output:...]" instead).
+    2. Flipping response_is_structured to False in the else-branch makes
+       test_adversarial_status_done_in_last_tool_call_input_does_not_fire_
+       gate_match fail — output_full would then absorb the recovered Bash
+       command JSON, _GATE_RE would match the literal `"status": "DONE"`
+       substring, and gate_match would become "DONE" instead of "" — the
+       exact policy-gate fail-open this test guards against.
+    """
+
+    def _parse(self, payload):
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def test_non_structured_terminal_call_gets_last_tool_call_tag(self):
+        """A terminal Bash tool_use (no StructuredOutput anywhere) must be
+        tagged [last-tool-call:Bash], not [structured-output:Bash] — and must
+        never fire gate_match, since it is not a self-reported verdict."""
+        payload = {
+            # Non-exempt agent_type: is_exempt_agent('workflow-subagent') is True
+            # (matches the "workflow-subagent" substring), which would short-circuit
+            # compute_gate_match to "" regardless of this fix — 'security' (matching
+            # the sibling TestTerminalToolUseBlockRecovery/TestGateMatchInvariant...
+            # classes above) keeps the gate_match assertion below meaningful.
+            'agent_type': 'security',
+            'session_id': 's30',
+            'agent_id': 'a30',
+            'agent_response': {
+                'content': [
+                    {'type': 'tool_use', 'id': 'toolu_30', 'name': 'Bash', 'input': {'command': 'ls -la'}},
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertTrue(
+            ctx.response_text.startswith('[last-tool-call:Bash]'),
+            f'expected last-tool-call marker, got: {ctx.response_text!r}',
+        )
+        self.assertTrue(ctx.response_is_structured)
+        self.assertEqual(ctx.gate_match, '')
+
+    def test_structured_output_terminal_call_keeps_structured_output_tag(self):
+        """Regression guard: a genuine terminal StructuredOutput call must
+        still get the original [structured-output:StructuredOutput] tag."""
+        payload = {
+            'agent_type': 'security',  # non-exempt — see comment on the s30 payload above
+            'session_id': 's31',
+            'agent_id': 'a31',
+            'agent_response': {
+                'content': [
+                    {
+                        'type': 'tool_use',
+                        'id': 'toolu_31',
+                        'name': 'StructuredOutput',
+                        'input': {'summary': 'done'},
+                    },
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertTrue(
+            ctx.response_text.startswith('[structured-output:StructuredOutput]'),
+            f'expected structured-output marker, got: {ctx.response_text!r}',
+        )
+        self.assertTrue(ctx.response_is_structured)
+        self.assertEqual(ctx.gate_match, '')
+
+    def test_similarly_named_tool_is_not_treated_as_structured_output(self):
+        """Proves the tag split uses NAME EQUALITY, not a prefix/substring
+        check: a hypothetical 'StructuredOutputHelper' tool must get
+        [last-tool-call:...], not [structured-output:...]."""
+        payload = {
+            'agent_type': 'security',  # non-exempt — see comment on the s30 payload above
+            'session_id': 's32',
+            'agent_id': 'a32',
+            'agent_response': {
+                'content': [
+                    {
+                        'type': 'tool_use',
+                        'id': 'toolu_32',
+                        'name': 'StructuredOutputHelper',
+                        'input': {'x': 1},
+                    },
+                ]
+            },
+        }
+        ctx = self._parse(payload)
+        self.assertTrue(
+            ctx.response_text.startswith('[last-tool-call:StructuredOutputHelper]'),
+            f'name-equality check failed, matched by prefix instead: {ctx.response_text!r}',
+        )
+        self.assertFalse(ctx.response_text.startswith('[structured-output:'))
+
+    def test_adversarial_status_done_in_last_tool_call_input_does_not_fire_gate_match(self):
+        """The adversarial case: a recovered Bash call whose serialized JSON
+        input contains the literal substring "Status: DONE" (e.g. a command
+        string like `git commit -m "Status: DONE"` — verified below to match
+        _GATE_RE's prose alternative once embedded in the JSON-serialized
+        tool input) must NEVER produce a gate_match verdict. If this ever
+        yields a verdict, the requires_agent policy gate (cast-git-guard.py
+        _agent_completed_this_session) is fail-open for any Bash/Edit/etc.
+        terminal tool call, not just StructuredOutput ones."""
+        payload = {
+            'agent_type': 'security',  # non-exempt — see comment on the s30 payload above
+            'session_id': 's33',
+            'agent_id': 'a33',
+            'agent_response': {
+                'content': [
+                    {
+                        'type': 'tool_use',
+                        'id': 'toolu_33',
+                        'name': 'Bash',
+                        'input': {'command': 'git commit -m "Status: DONE"'},
+                    },
+                ]
+            },
+        }
+        # Precondition: this payload's serialized tool_input actually matches
+        # _GATE_RE's prose alternative once embedded in the JSON string value
+        # (the escaped inner quotes don't break the "Status: DONE" substring) —
+        # otherwise this test would pass vacuously regardless of the fix.
+        serialized = json.dumps(payload['agent_response']['content'][0]['input'], ensure_ascii=False)
+        self.assertTrue(
+            css._GATE_RE.search(serialized),
+            f'test payload does not actually exercise _GATE_RE — not adversarial: {serialized!r}',
+        )
+        ctx = self._parse(payload)
+        # The policy-gate invariant comes FIRST and deliberately does not depend on
+        # response_is_structured's own value being asserted first — this is the
+        # assertion the mutation-2 test (flip response_is_structured to False in the
+        # else-branch) must fail on, not an earlier proxy for it.
+        self.assertEqual(
+            ctx.gate_match, '',
+            f'gate_match fired a policy-clearing verdict from a recovered Bash call: {ctx.gate_match!r}',
+        )
+        self.assertEqual(
+            ctx.output_full, '',
+            f'recovered tool_use content leaked into output_full: {ctx.output_full!r}',
+        )
+        self.assertTrue(ctx.response_text.startswith('[last-tool-call:Bash]'))
+        self.assertIn('Status: DONE', ctx.response_text)
+        self.assertTrue(ctx.response_is_structured)
+
+
 if __name__ == '__main__':
     unittest.main()
