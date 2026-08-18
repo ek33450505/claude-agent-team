@@ -1917,3 +1917,435 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   assert_failure
   assert_output --partial "commit"
 }
+
+# ---------------------------------------------------------------------------
+# git rm force block (2026-08-17 remaining-destructive-ops pass)
+# hatch: CAST_GIT_RM_OK=1
+# ---------------------------------------------------------------------------
+
+@test "git rm -f f.txt → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -f f.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git rm --force f.txt → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm --force f.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git rm -rf other → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -rf other")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git rm -fr other → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -fr other")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git rm -rfq other → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -rfq other")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+# --- security-finding regression fence (2026-08-17) -------------------------
+# The `--cached` exemption previously used a bare `--cached\b` lookahead.
+# `\b` fires on ANY word→non-word transition, so a pathspec that merely
+# STARTS WITH `--cached` (e.g. a file named `--cached-evil.txt`) satisfied
+# the lookahead and disabled the entire force-block for the whole command —
+# a confirmed HIGH-severity bypass. These four cases reproduce the bypass
+# and MUST block. (The corresponding ALLOW fences for the legitimate
+# `--cached` flag — `git rm -f --cached f.txt`, `git rm -r --cached sub`,
+# `git rm --cached f.txt` — already exist above; this section only adds the
+# new BLOCK coverage the fix introduces.)
+@test "git rm -f -- --cached-evil.txt (bare \\b bypass regression) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -f -- --cached-evil.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git rm -f --cached-evil.txt (bare \\b bypass regression) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -f --cached-evil.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git rm -rf -- --cached-evil.txt (bare \\b bypass regression) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -rf -- --cached-evil.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git rm -f --cached-suffix/file.txt (bare \\b bypass regression) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -f --cached-suffix/file.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git \"rm\" -f f.txt (quoted-token evasion) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git \"rm\" -f f.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "/usr/bin/git rm -f f.txt (absolute path) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "/usr/bin/git rm -f f.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git -C /tmp/x rm -f f.txt (leading -C) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C /tmp/x rm -f f.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+@test "git rm f.txt (no force flag; git itself refuses on local mods) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm f.txt")"
+  assert_success
+}
+
+@test "git rm --cached f.txt (index-only) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm --cached f.txt")"
+  assert_success
+}
+
+@test "git rm -r --cached sub (index-only, recursive) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -r --cached sub")"
+  assert_success
+}
+
+@test "git rm -f --cached f.txt (force + cached is still index-only; worktree untouched) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -f --cached f.txt")"
+  assert_success
+}
+
+@test "git rm -nf f.txt (dry-run wins even with force cluster) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -nf f.txt")"
+  assert_success
+}
+
+@test "git rm -n f.txt (dry-run) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -n f.txt")"
+  assert_success
+}
+
+@test "CAST_GIT_RM_OK=1 git rm -f f.txt → allows (exit 0) [hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GIT_RM_OK=1 git rm -f f.txt")"
+  assert_success
+}
+
+@test "CAST_GIT_RM_OK=1 git rm -f f.txt && git rm -f g.txt → blocks (exit 2) [hatch does not carry across segments]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GIT_RM_OK=1 git rm -f f.txt && git rm -f g.txt")"
+  assert_failure
+  assert_output --partial "force-remove a modified file"
+}
+
+# ---------------------------------------------------------------------------
+# git branch force-delete block (2026-08-17 remaining-destructive-ops pass)
+# hatch: CAST_BRANCH_OK=1
+# ---------------------------------------------------------------------------
+
+@test "git branch -D feature → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -D feature")"
+  assert_failure
+  assert_output --partial "force-deletes an unmerged branch ref"
+}
+
+@test "git branch --delete --force feature → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --delete --force feature")"
+  assert_failure
+  assert_output --partial "force-deletes an unmerged branch ref"
+}
+
+@test "git branch -qD feature (clustered) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -qD feature")"
+  assert_failure
+  assert_output --partial "force-deletes an unmerged branch ref"
+}
+
+@test "git branch -d x --force (measured destructive) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -d x --force")"
+  assert_failure
+  assert_output --partial "force-deletes an unmerged branch ref"
+}
+
+@test "git branch --force --delete x (reversed order) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --force --delete x")"
+  assert_failure
+  assert_output --partial "force-deletes an unmerged branch ref"
+}
+
+@test "git \"branch\" -D feature (quoted-token evasion) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git \"branch\" -D feature")"
+  assert_failure
+  assert_output --partial "force-deletes an unmerged branch ref"
+}
+
+@test "git branch -d feature (git refuses unmerged) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -d feature")"
+  assert_success
+}
+
+@test "git branch --delete feature (no force) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --delete feature")"
+  assert_success
+}
+
+@test "git branch (bare, read-only) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch")"
+  assert_success
+}
+
+@test "git branch -a → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -a")"
+  assert_success
+}
+
+@test "git branch -v → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -v")"
+  assert_success
+}
+
+@test "git branch -vv → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -vv")"
+  assert_success
+}
+
+@test "git branch -r → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -r")"
+  assert_success
+}
+
+@test "git branch --list → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --list")"
+  assert_success
+}
+
+@test "git branch -m renamed (rename) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -m renamed")"
+  assert_success
+}
+
+@test "git branch --show-current → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --show-current")"
+  assert_success
+}
+
+@test "git branch --merged main → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --merged main")"
+  assert_success
+}
+
+@test "git branch --set-upstream-to=origin/main → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --set-upstream-to=origin/main")"
+  assert_success
+}
+
+@test "CAST_BRANCH_OK=1 git branch -D feature → allows (exit 0) [hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_BRANCH_OK=1 git branch -D feature")"
+  assert_success
+}
+
+@test "CAST_BRANCH_OK=1 git branch -D feature && git branch -D other → blocks (exit 2) [hatch does not carry across segments]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_BRANCH_OK=1 git branch -D feature && git branch -D other")"
+  assert_failure
+  assert_output --partial "force-deletes an unmerged branch ref"
+}
+
+# ---------------------------------------------------------------------------
+# git worktree remove force block (2026-08-17 remaining-destructive-ops pass)
+# hatch: CAST_WORKTREE_OK=1
+# ---------------------------------------------------------------------------
+
+@test "git worktree remove -f /tmp/wt → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree remove -f /tmp/wt")"
+  assert_failure
+  assert_output --partial "deletes a worktree even when"
+}
+
+@test "git worktree remove --force /tmp/wt → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree remove --force /tmp/wt")"
+  assert_failure
+  assert_output --partial "deletes a worktree even when"
+}
+
+@test "git worktree remove -fq /tmp/wt (clustered force flag) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree remove -fq /tmp/wt")"
+  assert_failure
+  assert_output --partial "deletes a worktree even when"
+}
+
+@test "git worktree remove /tmp/wt (git refuses on dirty AND untracked-only) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree remove /tmp/wt")"
+  assert_success
+}
+
+@test "git worktree add -f /tmp/wt (force on add is not destructive) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree add -f /tmp/wt")"
+  assert_success
+}
+
+@test "git worktree list → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree list")"
+  assert_success
+}
+
+@test "git worktree prune → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree prune")"
+  assert_success
+}
+
+@test "git worktree add /tmp/wt -b b → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree add /tmp/wt -b b")"
+  assert_success
+}
+
+@test "CAST_WORKTREE_OK=1 git worktree remove -f /tmp/wt → allows (exit 0) [hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_WORKTREE_OK=1 git worktree remove -f /tmp/wt")"
+  assert_success
+}
+
+@test "CAST_WORKTREE_OK=1 git worktree remove -f /tmp/wt && git worktree remove -f /tmp/wt2 → blocks (exit 2) [hatch does not carry across segments]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_WORKTREE_OK=1 git worktree remove -f /tmp/wt && git worktree remove -f /tmp/wt2")"
+  assert_failure
+  assert_output --partial "deletes a worktree even when"
+}
+
+# ---------------------------------------------------------------------------
+# git update-ref delete block (2026-08-17 remaining-destructive-ops pass)
+# hatch: CAST_UPDATE_REF_OK=1
+# NOTE: `git update-ref --delete` is NOT a valid git flag (measured rc=129
+# usage error on git 2.55.0) — only `-d` deletes. Its absence from the block
+# pattern is deliberate, not an oversight; there is nothing to add.
+# ---------------------------------------------------------------------------
+
+@test "git update-ref -d refs/heads/feature → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref -d refs/heads/feature")"
+  assert_failure
+  assert_output --partial "deletes a ref and its reflog"
+}
+
+@test "git update-ref --stdin (payload invisible to scanner, denied by default) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref --stdin")"
+  assert_failure
+  assert_output --partial "deletes a ref and its reflog"
+}
+
+@test "/usr/bin/git update-ref -d refs/heads/feature (absolute path) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "/usr/bin/git update-ref -d refs/heads/feature")"
+  assert_failure
+  assert_output --partial "deletes a ref and its reflog"
+}
+
+@test "git update-ref refs/heads/tmp HEAD (create/update via args) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref refs/heads/tmp HEAD")"
+  assert_success
+}
+
+@test "git update-ref -m msg refs/heads/tmp HEAD → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref -m msg refs/heads/tmp HEAD")"
+  assert_success
+}
+
+@test "git update-ref refs/heads/tmp2 HEAD~1 (update via args, no -d/--stdin) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref refs/heads/tmp2 HEAD~1")"
+  assert_success
+}
+
+@test "CAST_UPDATE_REF_OK=1 git update-ref -d refs/heads/feature → allows (exit 0) [hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_UPDATE_REF_OK=1 git update-ref -d refs/heads/feature")"
+  assert_success
+}
+
+@test "CAST_UPDATE_REF_OK=1 git update-ref -d refs/heads/feature && git update-ref -d refs/heads/other → blocks (exit 2) [hatch does not carry across segments]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_UPDATE_REF_OK=1 git update-ref -d refs/heads/feature && git update-ref -d refs/heads/other")"
+  assert_failure
+  assert_output --partial "deletes a ref and its reflog"
+}
+
+# ---------------------------------------------------------------------------
+# git filter-branch block (2026-08-17 remaining-destructive-ops pass)
+# hatch: CAST_FILTER_BRANCH_OK=1
+# filter-branch has no non-destructive read-only mode, so every real
+# invocation blocks; the ALLOW-side regressions below exercise the
+# (?![\w-]) token-boundary guard instead (must not overmatch a longer
+# hyphenated/suffixed token or a non-git command containing the substring).
+# ---------------------------------------------------------------------------
+
+@test "git filter-branch -f --msg-filter cat HEAD → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git filter-branch -f --msg-filter cat HEAD")"
+  assert_failure
+  assert_output --partial "rewrites history"
+}
+
+@test "git filter-branch (bare) → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git filter-branch")"
+  assert_failure
+  assert_output --partial "rewrites history"
+}
+
+@test "git filter-branch --tag-name-filter cat -- --all → blocks (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git filter-branch --tag-name-filter cat -- --all")"
+  assert_failure
+  assert_output --partial "rewrites history"
+}
+
+@test "git filter-branches (longer token; must not overmatch via bare \\\\b) → allows (exit 0) [token-boundary regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git filter-branches")"
+  assert_success
+}
+
+@test "echo test filter-branch (non-git command containing the substring) → allows (exit 0) [regression: must not overmatch outside a git invocation]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "echo test filter-branch")"
+  assert_success
+}
+
+@test "CAST_FILTER_BRANCH_OK=1 git filter-branch -f --msg-filter cat HEAD → allows (exit 0) [hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_FILTER_BRANCH_OK=1 git filter-branch -f --msg-filter cat HEAD")"
+  assert_success
+}
+
+@test "CAST_FILTER_BRANCH_OK=1 git filter-branch -f --msg-filter cat HEAD && git filter-branch -f --msg-filter cat HEAD → blocks (exit 2) [hatch does not carry across segments]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_FILTER_BRANCH_OK=1 git filter-branch -f --msg-filter cat HEAD && git filter-branch -f --msg-filter cat HEAD")"
+  assert_failure
+  assert_output --partial "rewrites history"
+}
+
+# ---------------------------------------------------------------------------
+# Out-of-scope regression fence (2026-08-17): both measured non-destructive
+# on git 2.55.0 — sparse-checkout refuses to remove modified files and
+# ignores untracked-only content; `rm -r --cached` is index-only. Neither
+# is covered by any of the five new blocks above; these assert they STAY
+# allowed (a false positive here is a shipping blocker per Ed's decision).
+# ---------------------------------------------------------------------------
+
+@test "git sparse-checkout set keep → allows (exit 0) [out-of-scope regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git sparse-checkout set keep")"
+  assert_success
+}
+
+@test "git sparse-checkout init --cone → allows (exit 0) [out-of-scope regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git sparse-checkout init --cone")"
+  assert_success
+}
+
+@test "git sparse-checkout disable → allows (exit 0) [out-of-scope regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git sparse-checkout disable")"
+  assert_success
+}
+
+@test "git sparse-checkout list → allows (exit 0) [out-of-scope regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git sparse-checkout list")"
+  assert_success
+}
+
+@test "git rm -r --cached sub (index-only recursive removal, duplicate regression fence) → allows (exit 0) [out-of-scope regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -r --cached sub")"
+  assert_success
+}

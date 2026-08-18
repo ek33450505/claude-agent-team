@@ -786,6 +786,131 @@ _GC_CONFIG_EDIT_BLOCK = re.compile(
     r'|(?=.*(?:^|\s)(?:--edit|-e)\b))'
 )
 
+# --- git rm force block -------------------------------------------------------
+# 2026-08-17 remaining-destructive-ops pass: measured that `git rm` with a
+# force flag (-f, --force, or any single-dash cluster containing f: -rf, -fr,
+# -rfq) DESTROYS an uncommitted working-tree edit — git's normal refusal
+# ("error: the following file has local modifications") is bypassed by force.
+# Reuses `_FORCE_FLAG_LOOKAHEAD` (defined with the checkout block above) for
+# flag detection, same cluster-aware/single-dash-anchored reasoning.
+# Measured SAFE, stays allowed even WITH a force flag: `git rm --cached
+# f.txt` and `git rm -r --cached sub` — `--cached` only touches the index;
+# the worktree file (and any uncommitted edit on it) is left untouched
+# (verified empirically). The pattern excludes any segment containing
+# `--cached` via a negative lookahead.
+# 2026-08-17 security-review fix: the `--cached` exemption previously used a
+# bare `\b` lookahead (`--cached\b`). `\b` fires on ANY word→non-word
+# transition, so a pathspec that merely STARTS WITH `--cached` (e.g. a file
+# named `--cached-evil.txt`) satisfies `\b` right after the `d` and disables
+# the entire force-block, even though `--cached` is not a real flag token
+# there — same defect class already fixed for `_PRUNE_BLOCK`
+# (`prune(?![\w-])`) and `_FILTER_BRANCH_BLOCK` (`filter-branch(?![\w-])`):
+# a plain `\b` still matches inside a longer hyphenated token. Fixed by
+# anchoring the exemption to a real shell token — `--cached` must be
+# followed by whitespace or end-of-string, not merely a non-word char — via
+# `(?:^|\s)--cached(?:\s|$)` instead of a bare `\b` lookahead.
+# Residual limitation (cannot be closed by a command-line regex scanner): a
+# file literally named `--cached`, passed after a `--` separator
+# (`git rm -f -- --cached`), is indistinguishable from the real flag token
+# and is still exempted. This is a known, accepted gap, not an oversight.
+# Measured: `-n`/`--dry-run` DOES save the file — `git rm -nf <modified>`
+# printed what it would remove but left the file on disk untouched (unlike
+# `_GC_PRUNE_VALUE`'s "no exemption" cases, this one genuinely is a no-op).
+# Exempted the same way `_PRUNE_BLOCK` exempts dry runs, via `_CLEAN_DRY_RUN`.
+# Tolerates extra VAR=value assignments between CAST_GIT_RM_OK=1 and git.
+_GIT_RM_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_GIT_RM_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+rm\b'
+)
+_GIT_RM_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+rm\b'
+    r'(?!.*(?:^|\s)--cached(?:\s|$))'
+    r'(?=.*' + _FORCE_FLAG_LOOKAHEAD + r')'
+    r'(?!.*' + _CLEAN_DRY_RUN + r')'
+)
+
+# --- git branch force-delete block --------------------------------------------
+# 2026-08-17 remaining-destructive-ops pass: measured that `git branch -D
+# <branch>`, `git branch --delete --force <branch>`, and clustered `git
+# branch -qD <branch>` all deleted an UNMERGED branch ref AND its branch
+# reflog. The commit object itself survived in the HEAD reflog and survived
+# `gc --prune=now`, so it remains recoverable for the reflog retention
+# window — NOT unrecoverable; the message below says exactly that, no more.
+# Measured SAFE, stays allowed: `git branch -d <branch>` on an unmerged
+# branch (git refuses, rc=1), `git branch -m <new>` (rename), and the
+# read-only forms `git branch` (bare), `-a`, `-v`, `-vv`, `-r`, `--list`.
+# Measured: `git branch -d x --force` DOES force-delete (force overrides the
+# safe `-d` refusal the same way it overrides `-D`'s absent one) — so the
+# block condition is: an uppercase-D cluster ALONE, OR (`-d`-cluster/
+# `--delete` together with a force flag, in EITHER order).
+# `_BRANCH_D_LOOKAHEAD` is cluster-aware and single-dash-anchored the same
+# way as `_FORCE_FLAG_LOOKAHEAD`, built for uppercase `D` instead of `f` —
+# it cannot match inside `--delete` (double-dash token, no uppercase D).
+_BRANCH_D_LOOKAHEAD = r'(?:^|\s)-[a-zA-Z]*D[a-zA-Z]*\b'
+_BRANCH_LOWERD_OR_DELETE_LOOKAHEAD = r'(?:^|\s)(?:--delete|-[a-zA-Z]*d[a-zA-Z]*)\b'
+_BRANCH_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_BRANCH_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+branch\b'
+)
+_BRANCH_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+branch\b'
+    r'(?=.*(?:'
+    + _BRANCH_D_LOOKAHEAD
+    + r'|(?:' + _BRANCH_LOWERD_OR_DELETE_LOOKAHEAD + r').*' + _FORCE_FLAG_LOOKAHEAD
+    + r'|' + _FORCE_FLAG_LOOKAHEAD + r'.*(?:' + _BRANCH_LOWERD_OR_DELETE_LOOKAHEAD + r')'
+    + r'))'
+)
+
+# --- git worktree remove force block -------------------------------------------
+# 2026-08-17 remaining-destructive-ops pass: measured that `git worktree
+# remove -f <path>` / `--force` deleted a worktree containing uncommitted
+# edits. Measured SAFE, stays allowed: bare `git worktree remove <path>`
+# (git refuses on a dirty tree AND on untracked-only content, rc=128),
+# `git worktree add -f` (force there is not destructive — the pattern
+# anchors on the literal `worktree\s+remove` sequence, so `add -f` can never
+# match), `git worktree list`, `git worktree prune`.
+_WORKTREE_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_WORKTREE_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+worktree\s+remove\b'
+)
+_WORKTREE_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+worktree\s+remove\b(?=.*' + _FORCE_FLAG_LOOKAHEAD + r')'
+)
+
+# --- git update-ref delete block ------------------------------------------------
+# 2026-08-17 remaining-destructive-ops pass: measured that `git update-ref -d
+# refs/heads/feature` deleted the ref AND its reflog. Measured that
+# `git update-ref --delete` is NOT a valid flag (rc=129 usage error) — only
+# `-d` works; do not "fix" its absence, there is nothing to fix. Measured
+# that `printf 'delete refs/heads/feature\n' | git update-ref --stdin`
+# deleted the ref via a payload that arrives on STDIN, invisible to a
+# command-line scanner — so `--stdin` is ALSO blocked under the same hatch,
+# deny-by-default. This deliberately also blocks non-destructive `create`/
+# `update` stdin payloads, because the scanner has no way to see which verb
+# the stdin stream carries. Measured SAFE, stays allowed: `git update-ref
+# refs/heads/tmp HEAD` (create/update via command-line args, no `-d`/
+# `--stdin`).
+_UPDATE_REF_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_UPDATE_REF_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+update-ref\b'
+)
+_UPDATE_REF_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+update-ref\b'
+    r'(?=.*(?:(?:^|\s)-d\b|(?:^|\s)--stdin\b))'
+)
+
+# --- git filter-branch block -----------------------------------------------------
+# 2026-08-17 remaining-destructive-ops pass: measured that `git filter-branch
+# -f --msg-filter ... HEAD` rewrote history (HEAD sha changed). All forms
+# block — filter-branch has no non-destructive read-only mode. Uses a
+# `(?![\w-])` token-boundary guard after `filter-branch` for the same reason
+# `_PRUNE_BLOCK` does: a plain `\b` still matches inside a longer hyphenated
+# token (the `e`->`-` transition IS a word/non-word boundary), so the
+# negative lookahead rejects anything where `filter-branch` is immediately
+# followed by a word char or hyphen.
+_FILTER_BRANCH_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_FILTER_BRANCH_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+filter-branch(?![\w-])'
+)
+_FILTER_BRANCH_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+filter-branch(?![\w-])'
+)
+
 _COMMIT_MSG = (
     "**[CAST]** Raw `git commit` blocked. Dispatch the `commit` agent instead "
     "(Agent tool, subagent_type: 'commit')."
@@ -892,6 +1017,49 @@ _GC_CONFIG_EDIT_MSG = (
     "closing the last route into it. If you genuinely need to edit git "
     "config interactively, use `CAST_GC_OK=1 git config --edit` (document "
     "why)."
+)
+
+_GIT_RM_MSG = (
+    "**[CAST]** Raw `git rm` with a force flag (`-f`/`--force`/clustered "
+    "`-rf`/`-fr`/`-rfq`) blocked — it deletes an uncommitted working-tree "
+    "edit that git would otherwise refuse to remove. `git rm --cached "
+    "<path>` (index-only, worktree untouched) and `-n`/`--dry-run` are "
+    "unaffected. If you genuinely need to force-remove a modified file, "
+    "use `CAST_GIT_RM_OK=1 git rm -f ...` (document why)."
+)
+_BRANCH_MSG = (
+    "**[CAST]** Raw `git branch -D` / `--delete --force` / `-d ... --force` "
+    "blocked — it force-deletes an unmerged branch ref and its branch "
+    "reflog. The commit object itself typically survives in the HEAD "
+    "reflog for the retention window, but the branch ref and its own "
+    "reflog do not. Plain `git branch -d <branch>` (safe refusal on "
+    "unmerged), `git branch -m` (rename), and read-only forms (`branch`, "
+    "`-a`, `-v`, `-vv`, `-r`, `--list`) are unaffected. If you genuinely "
+    "need to force-delete a branch, use `CAST_BRANCH_OK=1 git branch -D "
+    "...` (document why)."
+)
+_WORKTREE_MSG = (
+    "**[CAST]** Raw `git worktree remove -f`/`--force` blocked — it deletes "
+    "a worktree even when it contains uncommitted edits. Bare `git worktree "
+    "remove <path>` (git refuses on a dirty tree), `git worktree add -f`, "
+    "`list`, and `prune` are unaffected. If you genuinely need to "
+    "force-remove a worktree, use `CAST_WORKTREE_OK=1 git worktree remove "
+    "-f ...` (document why)."
+)
+_UPDATE_REF_MSG = (
+    "**[CAST]** Raw `git update-ref -d`/`--stdin` blocked — `-d` deletes a "
+    "ref and its reflog; `--stdin` accepts a delete payload on stdin that "
+    "is invisible to this scanner, so it is blocked deny-by-default even "
+    "though it can also carry non-destructive `create`/`update` payloads. "
+    "Plain `git update-ref <ref> <value>` (create/update via args) is "
+    "unaffected. If you genuinely need `-d` or `--stdin`, use "
+    "`CAST_UPDATE_REF_OK=1 git update-ref -d ...` (document why)."
+)
+_FILTER_BRANCH_MSG = (
+    "**[CAST]** Raw `git filter-branch` blocked — it rewrites history "
+    "(changes commit SHAs), including the current HEAD. There is no "
+    "non-destructive form. If you genuinely need to rewrite history, use "
+    "`CAST_FILTER_BRANCH_OK=1 git filter-branch ...` (document why)."
 )
 
 SESSION_TIMEOUT = 7200  # 2 hours, matches the agent-status TTL
@@ -1221,6 +1389,16 @@ def _git_evaluate(command: str):
             return 2, _GC_CONFIG_WRITE_MSG
         if not hit(_GC_HATCH_ALLOW) and hit(_GC_CONFIG_EDIT_BLOCK):
             return 2, _GC_CONFIG_EDIT_MSG
+        if not hit(_GIT_RM_ALLOW) and hit(_GIT_RM_BLOCK):
+            return 2, _GIT_RM_MSG
+        if not hit(_BRANCH_ALLOW) and hit(_BRANCH_BLOCK):
+            return 2, _BRANCH_MSG
+        if not hit(_WORKTREE_ALLOW) and hit(_WORKTREE_BLOCK):
+            return 2, _WORKTREE_MSG
+        if not hit(_UPDATE_REF_ALLOW) and hit(_UPDATE_REF_BLOCK):
+            return 2, _UPDATE_REF_MSG
+        if not hit(_FILTER_BRANCH_ALLOW) and hit(_FILTER_BRANCH_BLOCK):
+            return 2, _FILTER_BRANCH_MSG
     return 0, None
 
 
