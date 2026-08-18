@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY,
   session_id TEXT,
   started_at TEXT,
-  status TEXT
+  status TEXT,
+  response TEXT
 );
 
 CREATE TABLE IF NOT EXISTS routing_events (
@@ -201,6 +202,46 @@ teardown() {
 
   # Hook must always exit 0 (never blocks)
   assert_success
+}
+
+# ---------------------------------------------------------------------------
+# C3 fix (2026-08-18): the DB-pruning UPDATE that flips stale 'running'
+# agent_runs to 'failed' must also write an explicit no-response marker, not
+# leave `response` NULL — indistinguishable from a DONE run with a
+# legitimately-empty response. See plans/c2-c3-response-loss-findings.md.
+# ---------------------------------------------------------------------------
+
+@test "session-end prune writes an explicit no-response marker on stale run — C3 fix" {
+  local old_ts
+  old_ts=$(python3 -c "from datetime import datetime,timedelta,timezone; print((datetime.now(timezone.utc)-timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S'))")
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO agent_runs (id, session_id, started_at, status) VALUES ('stale-run-1', 'sess-x', '$old_ts', 'running');"
+
+  export CLAUDE_SESSION_ID="test-prune-marker"
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+
+  local status response
+  status="$(sqlite3 "$TEST_DB" "SELECT status FROM agent_runs WHERE id='stale-run-1';")"
+  response="$(sqlite3 "$TEST_DB" "SELECT response FROM agent_runs WHERE id='stale-run-1';")"
+  [ "$status" = "failed" ]
+  [ -n "$response" ]
+  [[ "$response" == *"SubagentStop never fired"* ]]
+}
+
+@test "session-end prune never clobbers an already-populated response — C3 fix" {
+  local old_ts
+  old_ts=$(python3 -c "from datetime import datetime,timedelta,timezone; print((datetime.now(timezone.utc)-timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S'))")
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO agent_runs (id, session_id, started_at, status, response) VALUES ('stale-run-2', 'sess-x', '$old_ts', 'running', 'real response text');"
+
+  export CLAUDE_SESSION_ID="test-prune-no-clobber"
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+
+  local response
+  response="$(sqlite3 "$TEST_DB" "SELECT response FROM agent_runs WHERE id='stale-run-2';")"
+  [ "$response" = "real response text" ]
 }
 
 # ---------------------------------------------------------------------------
