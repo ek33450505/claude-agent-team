@@ -70,3 +70,22 @@ teardown() {
   # Space-format would look like '2026-06-13 07:48:22' — no 'T'
   [[ "$ended_at" != *" "* ]]
 }
+
+@test "maintenance writes an explicit no-response marker, not NULL — C3 fix" {
+  # C3 (plans/c2-c3-response-loss-findings.md): SubagentStop never fires for a row
+  # that's still 'running' at the 2h reap threshold, so response was always NULL —
+  # indistinguishable from a DONE run with a legitimately-empty response.
+  CAST_SCRIPTS_DIR="$REPO_DIR/scripts" bash "$SCRIPT" 2>/dev/null
+
+  response=$(sqlite3 "$TEST_DB" "SELECT response FROM agent_runs WHERE agent='stale-bot' LIMIT 1;")
+  [ -n "$response" ]
+  [[ "$response" == *"SubagentStop never fired"* ]]
+}
+
+@test "maintenance never clobbers an already-populated response — C3 fix" {
+  sqlite3 "$TEST_DB" "UPDATE agent_runs SET response='real response text' WHERE agent='stale-bot';"
+  CAST_SCRIPTS_DIR="$REPO_DIR/scripts" bash "$SCRIPT" 2>/dev/null
+
+  response=$(sqlite3 "$TEST_DB" "SELECT response FROM agent_runs WHERE agent='stale-bot' LIMIT 1;")
+  [ "$response" = "real response text" ]
+}

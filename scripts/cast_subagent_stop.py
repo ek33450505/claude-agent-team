@@ -237,6 +237,20 @@ class Ctx:
         self.data: dict = {}
         self.response_text: str = ""
         self.output_full: str = ""
+        # True whenever response_text was recovered from a terminal tool_use block
+        # (parse_input's C2 recovery path) rather than self-reported prose/JSON text —
+        # regardless of which tool it came from. A genuine StructuredOutput call is
+        # tagged "[structured-output:StructuredOutput]"; any other terminal tool call
+        # (e.g. Bash, Edit) is tagged "[last-tool-call:<name>]" instead, matching the
+        # convention in scripts/cast-abandon-stale-runs.py. Both are DATA the agent
+        # produced, not a status it reported about itself, so BOTH must set this flag —
+        # output_full must not absorb either one (see the output_full assignment
+        # below), or the trunc_class/has_verdict_keyword/gate_match classifiers (see
+        # their assignments further below) would treat an ordinary `{"status": "DONE"}`
+        # payload key — or even a Bash command string that happens to contain the
+        # words "status" and "DONE" — as a self-reported verdict and fail-open a
+        # requires_agent policy gate (cast-git-guard.py _agent_completed_this_session).
+        self.response_is_structured: bool = False
         self.agent_name: str = "unknown"
         self.agent_id: str = ""
         self.session_id: str = ""
@@ -301,6 +315,12 @@ def parse_input() -> Optional[Ctx]:
                 if isinstance(block, dict) and block.get("type") == "text"
             ]
             response_text = "\n".join(t for t in texts if t)
+            if not response_text.strip():
+                # Whitespace-only extraction is treated as no text at all, so the
+                # flat-field fallback and tool_use recovery below still get their
+                # turn instead of being silently masked (Low finding, 2026-08-18
+                # security review of the C2 recovery path).
+                response_text = ""
     except Exception:
         response_text = ""
     if not response_text:
@@ -310,6 +330,54 @@ def parse_input() -> Optional[Ctx]:
             or data.get("body")
             or ""
         )
+    response_is_structured = False
+    if not response_text:
+        # C2 fix (2026-08-18): Workflow-tool stages (agent 'workflow-subagent' and any
+        # agentType pinned to a Workflow stage, e.g. 'researcher') routinely end their
+        # terminal turn in a StructuredOutput tool_use call rather than a text block —
+        # confirmed by inspecting real subagent transcripts under
+        # ~/.claude/projects/*/*/subagents/workflows/**/agent-*.jsonl, whose last
+        # message is {"stop_reason": "tool_use", "content": [{"type": "tool_use",
+        # "name": "StructuredOutput", "input": {...}}]}. Neither the text-block path
+        # above nor the flat fallback fields ever see this content, so response_text
+        # was silently "" for ~99% of workflow-subagent DONE runs (measured
+        # 2026-08-18, plans/c2-c3-response-loss-findings.md). Recover the tool_use
+        # block's `input` instead of discarding it — tagged so it is never mistaken
+        # for a Status-block-bearing prose reply by the truncation/completeness
+        # stages below. The tag itself distinguishes a genuine StructuredOutput
+        # deliverable ("[structured-output:StructuredOutput]") from any other
+        # terminal tool call the agent happened to stop on, e.g. Bash or Edit
+        # ("[last-tool-call:<name>]") — mirrors the convention in
+        # scripts/cast-abandon-stale-runs.py's _recover_response, which recovers the
+        # same content from transcripts. response_is_structured is the actual
+        # enforcement of the "not a self-reported verdict" intent for BOTH tags — the
+        # string tag alone does not stop the classifier regexes from matching an
+        # ordinary `"status": "DONE"` payload key, or even a command string that
+        # happens to contain those words (see the output_full assignment below).
+        # Scope note: this does NOT touch the separate agent_response.content parse at
+        # the prose-dispatch protocol check (~line 1176) — that stage already has
+        # its own correct tool_use handling for its own unrelated purpose.
+        try:
+            # No `break`: keep overwriting so the LAST tool_use block wins, matching
+            # the terminal-block intent described above — an earlier incidental tool
+            # call (e.g. a Bash lookup before the final StructuredOutput call) must
+            # not be recovered in place of the actual deliverable (Low finding,
+            # 2026-08-18 security review of the C2 recovery path).
+            for block in content_blocks:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_name = block.get("name") or "?"
+                    tool_input = json.dumps(block.get("input") or {}, ensure_ascii=False)
+                    # Name EQUALITY, not prefix/substring — a hypothetical
+                    # "StructuredOutputHelper" tool must NOT qualify as a genuine
+                    # structured deliverable. Mirrors scripts/cast-abandon-stale-runs.py's
+                    # _recover_response, which recovers the same content from transcripts.
+                    if tool_name == "StructuredOutput":
+                        response_text = f"[structured-output:{tool_name}] {tool_input}"[:20000]
+                    else:
+                        response_text = f"[last-tool-call:{tool_name}] {tool_input}"[:20000]
+                    response_is_structured = True
+        except Exception:
+            pass
     flat_output = data.get("last_assistant_message") or data.get("output") or ""
 
     # Capture raw identity before coalescing — used for the precondition guard
@@ -336,7 +404,17 @@ def parse_input() -> Optional[Ctx]:
             pass  # fall back to "unknown" on any DB error
 
     ctx.response_text = response_text
-    ctx.output_full = flat_output or response_text
+    ctx.response_is_structured = response_is_structured
+    # response is DATA the agent returned; output_full is what the classifiers below
+    # (the trunc_class/has_verdict_keyword/gate_match assignments further down) treat
+    # as a SELF-REPORTED verdict. A recovered tool_use block — whether tagged
+    # "[structured-output:StructuredOutput]" or "[last-tool-call:<name>]" — is never
+    # the latter, regardless of which tool produced it: a Bash command string can
+    # contain `"status": "DONE"` just as easily as a StructuredOutput payload can, so
+    # both branches keep output_full at its pre-recovery value (flat_output, which is
+    # "" whenever recovery fired — see the recovery guard above) so
+    # trunc_class/has_verdict_keyword/gate_match are unaffected by this unit.
+    ctx.output_full = flat_output if response_is_structured else (flat_output or response_text)
     ctx.agent_name = agent_name
     ctx.agent_id = agent_id
     ctx.session_id = session_id

@@ -159,8 +159,13 @@ def cmd_log_quality_gate(
 
 def cmd_recent_status(agent: str, max_age: int) -> None:
     """Print the status field from the most recent fresh status file, or nothing."""
-    pattern = str(Path.home() / '.claude' / 'agent-status' / f'{agent}-*.json')
-    files = glob.glob(pattern)
+    status_dir = Path.home() / '.claude' / 'agent-status'
+    # Match the bare agent's status files AND its `<agent>__<label>` dispatch-naming
+    # variant (working-conventions.md dispatch-naming rule): a status file for
+    # "code-reviewer__fix-x" is named "code-reviewer__fix-x-<ts>.json" and the bare
+    # "{agent}-*.json" glob misses it.
+    files = glob.glob(str(status_dir / f'{agent}-*.json'))
+    files += glob.glob(str(status_dir / f'{agent}__*-*.json'))
     if not files:
         sys.exit(0)
 

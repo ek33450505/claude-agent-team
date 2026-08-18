@@ -2349,3 +2349,332 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git rm -r --cached sub")"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# git global-option bypass fix (2026-08-18, security review)
+# `_GIT_OPTS` was a 5-form enumerated allowlist; ANY other legal git global
+# option (or one of those 5 forms spelled differently) broke the `git`-to-
+# subcommand anchor in every BLOCK/ALLOW pattern, allowing all 16 guarded
+# ops. Fixed by dropping global-option tokens in `_normalize_git_segment`
+# instead of extending the regex allowlist. Every case below was measured
+# ALLOWED (bypassed) at HEAD `ba039b5` before this fix.
+# ---------------------------------------------------------------------------
+
+@test "git -C '/tmp/my dir' reset --hard (quoted -C value, space form) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C '/tmp/my dir' reset --hard")"
+  assert_failure 2
+}
+
+@test "git -C '/tmp/my dir' push (quoted -C value, space form) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C '/tmp/my dir' push")"
+  assert_failure 2
+}
+
+@test "git -C '/tmp/my dir' clean -fdx (quoted -C value, space form) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C '/tmp/my dir' clean -fdx")"
+  assert_failure 2
+}
+
+@test "git -C '/tmp/my dir' commit -m x (quoted -C value, space form) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C '/tmp/my dir' commit -m x")"
+  assert_failure 2
+}
+
+@test "git --git-dir='/tmp/my dir/.git' reset --hard (quoted --git-dir value) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --git-dir='/tmp/my dir/.git' reset --hard")"
+  assert_failure 2
+}
+
+@test "git --work-tree='/tmp/my dir' clean -fdx (quoted --work-tree value) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --work-tree='/tmp/my dir' clean -fdx")"
+  assert_failure 2
+}
+
+@test "git -c 'user.name=A B' reset --hard (quoted -c value with a space) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c 'user.name=A B' reset --hard")"
+  assert_failure 2
+}
+
+@test "git -C/tmp/x reset --hard (attached -C, no separator; MEASURED: real git rejects this form, dropped as an opaque flag anyway) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C/tmp/x reset --hard")"
+  assert_failure 2
+}
+
+@test "git --git-dir /tmp/x/.git reset --hard (space form; only the = form was allowlisted) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --git-dir /tmp/x/.git reset --hard")"
+  assert_failure 2
+}
+
+@test "git --work-tree /tmp/x reset --hard (space form; only the = form was allowlisted) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --work-tree /tmp/x reset --hard")"
+  assert_failure 2
+}
+
+@test "git -p reset --hard (unenumerated global flag; two-character bypass of the entire module) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -p reset --hard")"
+  assert_failure 2
+}
+
+@test "git --paginate reset --hard → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --paginate reset --hard")"
+  assert_failure 2
+}
+
+@test "git --bare reset --hard → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --bare reset --hard")"
+  assert_failure 2
+}
+
+@test "git --literal-pathspecs reset --hard → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --literal-pathspecs reset --hard")"
+  assert_failure 2
+}
+
+@test "git --no-replace-objects reset --hard → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --no-replace-objects reset --hard")"
+  assert_failure 2
+}
+
+@test "git --no-optional-locks reset --hard → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --no-optional-locks reset --hard")"
+  assert_failure 2
+}
+
+@test "git --exec-path=/usr/lib/git-core reset --hard (attached =, MEASURED: bare form has no value-consumption at all on git 2.55) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --exec-path=/usr/lib/git-core reset --hard")"
+  assert_failure 2
+}
+
+@test "git --namespace=foo reset --hard → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --namespace=foo reset --hard")"
+  assert_failure 2
+}
+
+@test "git --attr-source=HEAD reset --hard → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --attr-source=HEAD reset --hard")"
+  assert_failure 2
+}
+
+@test "CAST_RESET_OK=1 git -p reset --hard (hatch survives a global option) → allows (exit 0) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_RESET_OK=1 git -p reset --hard")"
+  assert_success
+}
+
+@test "CAST_PUSH_OK=1 git -C '/tmp/my dir' push (hatch survives a quoted-value global option) → allows (exit 0) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_PUSH_OK=1 git -C '/tmp/my dir' push")"
+  assert_success
+}
+
+@test "git -p -c gc.pruneExpire=now gc (config-injection block must still fire off the RAW segment when -c is preceded by another global option) → blocks (exit 2) [global-option bypass regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -p -c gc.pruneExpire=now gc")"
+  assert_failure 2
+}
+
+# --- non-regression: legitimate global-option use on non-blocked ops stays allowed ---
+
+@test "git -c foo=bar log (non-blocked subcommand, attached -c form) → allows (exit 0) [global-option bypass, non-regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c foo=bar log")"
+  assert_success
+}
+
+@test "git -C /tmp/x status (non-blocked subcommand, -C space form) → allows (exit 0) [global-option bypass, non-regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -C /tmp/x status")"
+  assert_success
+}
+
+@test "git --no-pager diff (non-blocked subcommand) → allows (exit 0) [global-option bypass, non-regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git --no-pager diff")"
+  assert_success
+}
+
+@test "git worktree add -f /tmp/x (no leading global option at all) → allows (exit 0) [global-option bypass, non-regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree add -f /tmp/x")"
+  assert_success
+}
+
+@test "rg \"git reset --hard\" docs/ (string search, not a command) → allows (exit 0) [global-option bypass, non-regression]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "rg \"git reset --hard\" docs/")"
+  assert_success
+}
+
+@test "git -c \"gc.pruneExpire=now\" gc (quoted -c value, NO whitespace inside; config-injection block must survive quote-stripping) → blocks (exit 2) [global-option bypass regression: -c preservation]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c \"gc.pruneExpire=now\" gc")"
+  assert_failure 2
+}
+
+# ---------------------------------------------------------------------------
+# git branch -M / -f force-overwrite (2026-08-18, remaining-destructive-ops
+# follow-up). `-M` clobbers an existing destination branch (dangling-blob-
+# recoverable, same class as `reset --hard`); `-f`/`--force` force-moves an
+# existing branch pointer (reflog-recoverable via `<branch>@{1}`, same
+# class as `-D`). Both were still ALLOWED at HEAD before this fix.
+# ---------------------------------------------------------------------------
+
+@test "git branch -M old new (force-rename onto an existing destination) → blocks (exit 2) [remaining-destructive-ops: branch -M]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -M old new")"
+  assert_failure 2
+  assert_output --partial "branch"
+}
+
+@test "git branch -f main HEAD~3 (force-move an existing branch pointer) → blocks (exit 2) [remaining-destructive-ops: branch -f]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -f main HEAD~3")"
+  assert_failure 2
+  assert_output --partial "branch"
+}
+
+@test "git branch --force main HEAD~3 (long-flag force-move) → blocks (exit 2) [remaining-destructive-ops: branch -f]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --force main HEAD~3")"
+  assert_failure 2
+}
+
+@test "git branch -c -f copyname (force-copy onto an existing branch) → blocks (exit 2) [remaining-destructive-ops: branch -f, same clobber class as -M]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -c -f copyname")"
+  assert_failure 2
+}
+
+@test "CAST_BRANCH_OK=1 git branch -M old new (hatch) → allows (exit 0) [remaining-destructive-ops: branch -M]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_BRANCH_OK=1 git branch -M old new")"
+  assert_success
+}
+
+@test "CAST_BRANCH_OK=1 git branch -f main HEAD~3 (hatch) → allows (exit 0) [remaining-destructive-ops: branch -f]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_BRANCH_OK=1 git branch -f main HEAD~3")"
+  assert_success
+}
+
+@test "git branch -m renamed (safe lowercase rename, no force, still allowed) → allows (exit 0) [remaining-destructive-ops: branch -M regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -m renamed")"
+  assert_success
+}
+
+@test "git branch -d feature (safe delete, no force, still allowed) → allows (exit 0) [remaining-destructive-ops: branch -f regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -d feature")"
+  assert_success
+}
+
+@test "git branch --set-upstream-to=origin/main (long option containing no -f/-M, still allowed) → allows (exit 0) [remaining-destructive-ops: branch regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch --set-upstream-to=origin/main")"
+  assert_success
+}
+
+@test "git branch -D feature (pre-existing -D coverage, unaffected by the -M/-f simplification) → blocks (exit 2) [remaining-destructive-ops: branch regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git branch -D feature")"
+  assert_failure 2
+}
+
+# ---------------------------------------------------------------------------
+# git update-ref overwrite-existing-ref (2026-08-18, remaining-destructive-
+# ops follow-up; hermetic-fixture fix same day). `git update-ref <ref>
+# <value>`, when <ref> already exists, moves it (reflog-recoverable, same
+# class as `branch -f`) — was still ALLOWED at HEAD. Creating a NEW ref
+# stays allowed (unaffected; re-measured, still genuinely harmless). The
+# check shells out to `git rev-parse --verify --quiet <ref>` (scoped
+# read-only, never a mutating verb) but resolves it against the GUARD
+# PROCESS's cwd — so these three tests build a throwaway fixture repo
+# (`_mk_update_ref_fixture`, under $BATS_TEST_TMPDIR) with a known ref and
+# `cd` into it before invoking $HOOK_SH, instead of depending on THIS
+# repo's ambient refs (main, feature/v10-continuity) as an earlier version
+# of this block did. That earlier version was non-hermetic: CI checks out
+# a detached merge ref with no local `main` branch, so `rev-parse` failed
+# there, the guard (correctly, per its fail-open contract) treated the
+# call as a create, and the overwrite-blocks test went red in CI while
+# green locally — and the create/hatch tests below went green in CI for
+# the WRONG reason (vacuously: nothing update-ref-shaped was ever blocked
+# there, so an ALLOW assertion proved nothing about the mechanism).
+# ---------------------------------------------------------------------------
+
+# Builds a throwaway git repo under $BATS_TEST_TMPDIR with a branch named
+# `existing-branch` that provably exists only in the fixture (never in the
+# real repo), and no branch named `probe-branch` (provably absent). Prints
+# the fixture path; callers `cd` into it before `run`, since the guard's
+# `rev-parse --verify --quiet` call has no `-C` in these commands and so
+# resolves against the guard process's cwd. Plain `git -C "$d"` calls here
+# never go through $HOOK_SH, so no CAST_*_OK hatch is needed to build it.
+_mk_update_ref_fixture() {
+  local d="$BATS_TEST_TMPDIR/update-ref-fixture"
+  mkdir -p "$d"
+  git -C "$d" init -q
+  git -C "$d" config user.email "t@example.invalid"
+  git -C "$d" config user.name "t"
+  git -C "$d" commit -q --allow-empty -m "one"
+  git -C "$d" commit -q --allow-empty -m "two"
+  git -C "$d" branch existing-branch
+  echo "$d"
+}
+
+@test "git update-ref refs/heads/existing-branch HEAD~1 (existing ref, hermetic fixture) → blocks (exit 2) [remaining-destructive-ops: update-ref overwrite]" {
+  local fixture
+  fixture="$(_mk_update_ref_fixture)"
+  cd "$fixture"
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref refs/heads/existing-branch HEAD~1")"
+  assert_failure 2
+  assert_output --partial "update-ref"
+}
+
+@test "git update-ref refs/heads/probe-branch HEAD (nonexistent ref in hermetic fixture, create) → allows (exit 0) [remaining-destructive-ops: update-ref create regression fence]" {
+  local fixture
+  fixture="$(_mk_update_ref_fixture)"
+  cd "$fixture"
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref refs/heads/probe-branch HEAD")"
+  assert_success
+}
+
+@test "CAST_UPDATE_REF_OK=1 git update-ref refs/heads/existing-branch HEAD~1 (hatch, existing ref in hermetic fixture) → allows (exit 0) [remaining-destructive-ops: update-ref overwrite]" {
+  local fixture
+  fixture="$(_mk_update_ref_fixture)"
+  cd "$fixture"
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_UPDATE_REF_OK=1 git update-ref refs/heads/existing-branch HEAD~1")"
+  assert_success
+}
+
+@test "git update-ref -d refs/heads/feature (pre-existing -d coverage, unaffected) → blocks (exit 2) [remaining-destructive-ops: update-ref regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref -d refs/heads/feature")"
+  assert_failure 2
+}
+
+@test "git update-ref --stdin (pre-existing --stdin coverage, unaffected) → blocks (exit 2) [remaining-destructive-ops: update-ref regression fence]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref --stdin")"
+  assert_failure 2
+}
+
+# ---------------------------------------------------------------------------
+# Status-file completion-gate __ prefix fix (2026-08-18). Roster dispatches
+# named `<agent-type>__<label>` (dispatch-naming convention) write
+# `<agent-type>__<label>-<ts>.json`, which a bare `<agent>-` prefix match
+# never sees, so a policy gate falsely reports the required agent as never
+# having completed. Exercised end-to-end through pre-tool-guard.sh's real
+# Write-tool path against this repo's actual config/policies.json
+# (`src/auth/.*` requires `security`, severity block).
+# ---------------------------------------------------------------------------
+
+@test "Write to src/auth/*.php with NO completion record → blocks (exit 2) [policy-gate __ prefix fix: control]" {
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe1.php")"
+  assert_failure
+  assert_output --partial "auth-requires-security"
+}
+
+@test "Write to src/auth/*.php with a plain security-<ts>.json record → allows (exit 0) [policy-gate __ prefix fix: pre-existing dash form regression fence]" {
+  create_status_file "security-1000.json" 0 '{"status":"DONE"}'
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe2.php")"
+  assert_success
+}
+
+@test "Write to src/auth/*.php with a security__fix-x-<ts>.json record (dunder dispatch naming) → allows (exit 0) [policy-gate __ prefix fix]" {
+  create_status_file "security__fix-x-1000.json" 0 '{"status":"DONE"}'
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe3.php")"
+  assert_success
+}
+
+@test "Write to src/auth/*.php with a security2-<ts>.json record (must NOT satisfy 'security': anchoring regression) → blocks (exit 2) [policy-gate __ prefix fix: anchoring must hold]" {
+  create_status_file "security2-1000.json" 0 '{"status":"DONE"}'
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe4.php")"
+  assert_failure
+  assert_output --partial "auth-requires-security"
+}
+
+@test "Write to src/auth/*.php with a securityX__fix-y-<ts>.json record (must NOT satisfy 'security': dunder anchoring regression) → blocks (exit 2) [policy-gate __ prefix fix: anchoring must hold]" {
+  create_status_file "securityX__fix-y-1000.json" 0 '{"status":"DONE"}'
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe5.php")"
+  assert_failure
+  assert_output --partial "auth-requires-security"
+}

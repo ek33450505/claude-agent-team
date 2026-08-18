@@ -11,6 +11,29 @@ Runs daily via launchd (com.cast.abandon-stale-runs). Two symmetric steps:
   table on older DBs logs a warning and does NOT interrupt the reap or the
   always-exit-0 contract.
 
+  Step 1b — recovery backfill (C4, 2026-08-18; text-preference fix same day):
+  a reaped row's `response` is initially just an explicit "[NO RESPONSE ...]"
+  marker, since SubagentStop never fired on this path. But the run's
+  transcript is frequently STILL on disk even though the hook never
+  processed it — so this step makes a best-effort pass to recover the run's
+  actual last output and replace the marker with it. PROSE IS PREFERRED OVER
+  A TOOL CALL: a killed/truncated agent's terminal turn is almost always an
+  ordinary tool_use (Bash, Edit, ...) — what it was mid-flight doing, not its
+  work — so this walks every assistant turn backward and returns the most
+  recent TEXT block found anywhere, falling back to the terminal tool_use
+  only when no text exists in the whole transcript. That fallback is tagged
+  "[structured-output:<name>]" ONLY for a genuine StructuredOutput call
+  (matches cast_subagent_stop.py's own C2 tag+contract — its `input` IS the
+  deliverable); any other terminal tool gets the distinct
+  "[last-tool-call:<name>]" tag so the two cases never look alike in the
+  record. See _extract_recovered_text() for the full walk. Idempotent and
+  STATE-based (matches status IN ('failed','abandoned') AND response IS
+  NULL/marker) — runs unconditionally every invocation, so it also backfills
+  rows flipped by cast-maintenance.sh or cast-session-end.sh (both bash, both
+  flip to 'failed' and write the same marker prefix) regardless of which
+  sweep got to a given row first, and rows flipped before this backfill
+  existed at all. Never overwrites a response holding real content.
+
   Step 2 — sessions: rows stuck in status='active' for more than
   CAST_SESSION_CRASH_HOURS (default 4h) are flipped to 'crashed'.
   This mirrors the former cast-session-status-cleanup.py (deleted v7.5-phase6),
@@ -35,6 +58,8 @@ Usage:
   # Or via launchd plist (com.cast.abandon-stale-runs — runs daily).
 """
 
+import glob
+import json
 import os
 import sys
 import sqlite3
@@ -47,6 +72,23 @@ STALE_HOURS = int(os.environ.get('CAST_ABANDON_STALE_HOURS', '2'))
 SESSION_CRASH_HOURS = int(os.environ.get('CAST_SESSION_CRASH_HOURS', '4'))
 LOG_PATH = os.path.expanduser('~/.claude/logs/cast-abandon-stale-runs.log')
 
+# --- Recovery config (C4: partial-response backfill) ---
+# Mirrors cast_subagent_stop.py's own 20MB CAST_TRANSCRIPT_MAX_BYTES guard —
+# NEVER moved or loosened; it protects this best-effort read from a multi-GB
+# transcript inside an unattended launchd job. Same env var name so a single
+# override tunes both the hook and this reaper consistently.
+TRANSCRIPT_MAX_BYTES = int(os.environ.get('CAST_TRANSCRIPT_MAX_BYTES', '20971520') or '20971520')
+RECOVERED_TEXT_MAX_CHARS = 20000
+# Any `response` starting with this literal is a "no real response" marker —
+# written by THIS script, cast-maintenance.sh, or cast-session-end.sh (all
+# three share the same "[NO RESPONSE ..." prefix by convention, only the
+# script name / hours differ). The backfill pass below treats NULL and any
+# marker-prefixed response as equally eligible for recovery, so a row flipped
+# by ANY of the three sweeps is recoverable regardless of which one got there
+# first — recovery is keyed on the row's *state*, not on who flipped it.
+NO_RESPONSE_MARKER_LIKE = '[NO RESPONSE%'
+PARTIAL_PREFIX = '[PARTIAL — recovered from transcript; SubagentStop never fired] '
+
 
 def _log(msg: str) -> None:
     """Append a timestamped line to the log file. Never fails."""
@@ -56,6 +98,228 @@ def _log(msg: str) -> None:
             f.write(f'[{ts}] {msg}\n')
     except Exception:
         pass
+
+
+# --- C4 recovery: pull partial output out of the transcript at reap time ---
+#
+# The reap sweeps (this script, cast-maintenance.sh, cast-session-end.sh) flip
+# rows stuck 'running' because SubagentStop never fired for them — so
+# `response` is always NULL at flip time. That is often wrong: for agent_id +
+# session_id pairs the transcript is frequently still sitting on disk with the
+# agent's real (if incomplete) last turn. This section resolves that
+# transcript exactly the way SubagentStop's own hook does and recovers it,
+# falling back to the honest "no response" marker only when nothing is
+# recoverable (missing/oversized/malformed transcript, or no agent_id).
+
+
+def _resolve_transcript_path(agent_id: str, session_id: str) -> str:
+    """Resolve a subagent run's transcript path.
+
+    SAME glob idiom as cast_subagent_stop.py:534-543 (SubagentStop's own
+    resolver) — reused verbatim, not reinvented, so this reaper and the hook
+    agree on where a given run's transcript lives. Returns "" (never raises)
+    when either id is missing or no file matches.
+    """
+    if not agent_id or not session_id:
+        return ""
+    pattern = os.path.expanduser(
+        f"~/.claude/projects/*/{session_id}/subagents/**/agent-{agent_id}.jsonl"
+    )
+    try:
+        matches = glob.glob(pattern, recursive=True)
+        if matches:
+            return max(matches, key=os.path.getmtime)
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_recovered_text(transcript_path: str) -> str:
+    """Read `transcript_path` (JSONL) and return the agent's recoverable last
+    output, truncated to RECOVERED_TEXT_MAX_CHARS.
+
+    Prose over tool calls, always. A killed/truncated agent's LAST assistant
+    message is almost always a tool_use for an ordinary tool (Bash, Edit,
+    ...) — that is what it was mid-flight doing when it died, not its work.
+    The agent's actual partial report sits in an earlier assistant text
+    block. So this walks assistant messages from the end and returns the
+    FIRST (i.e. most recent) non-empty `type=="text"` block it finds,
+    checking every turn — not just the terminal one — before ever falling
+    back to a tool call:
+      - text block(s) in some assistant turn (any turn, not just the last)
+        -> joined with '\\n', returned immediately. This is the preferred,
+        common case.
+      - no text block ANYWHERE in the transcript -> fall back to the
+        truly-terminal assistant turn's tool_use block (the last thing the
+        agent was doing when it died), captured once from the first
+        (most-recent) assistant message walked. Two distinct tags, matching
+        cast_subagent_stop.py's own C2 response extraction so a reader (or
+        `bash bin/cast review`) can always tell which case produced a given
+        response:
+          - name == "StructuredOutput" -> "[structured-output:<name>]
+            <json-input>" — a GENUINE deliverable (matches
+            cast_subagent_stop.py's own tag+contract: `input` IS the
+            agent's output for that tool).
+          - any other tool name (Bash, Edit, ...) -> "[last-tool-call:<name>]
+            <json-input>" — explicitly NOT a deliverable, just what was
+            in-flight. Never reuses the structured-output tag, so the two
+            cases stay distinguishable in the record.
+
+    Best-effort only: a missing, empty, oversized, or malformed transcript —
+    or one with no text block and no tool_use anywhere — degrades to "" so
+    the caller leaves the existing marker in place. Never raises.
+    """
+    try:
+        if not transcript_path or not os.path.isfile(transcript_path):
+            return ""
+        size = os.path.getsize(transcript_path)
+        if size <= 0 or size > TRANSCRIPT_MAX_BYTES:
+            return ""
+        with open(transcript_path, 'r', errors='replace') as f:
+            lines = f.readlines()
+    except Exception:
+        return ""
+
+    # Captured once, from the first (most-recent) assistant turn that has a
+    # tool_use block — i.e. the true terminal state of the transcript. Only
+    # used if the backward text search below never finds a text block in ANY
+    # turn.
+    fallback_tool_call = None
+
+    for raw_line in reversed(lines):
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            obj = json.loads(raw_line)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        msg = obj.get('message') if isinstance(obj.get('message'), dict) else {}
+        role = msg.get('role') or obj.get('type')
+        if role != 'assistant':
+            continue
+        content = msg.get('content')
+        if not isinstance(content, list) or not content:
+            continue
+
+        texts = [
+            blk.get('text', '')
+            for blk in content
+            if isinstance(blk, dict) and blk.get('type') == 'text'
+        ]
+        text_joined = '\n'.join(t for t in texts if t)
+        if text_joined:
+            return text_joined[:RECOVERED_TEXT_MAX_CHARS]
+
+        if fallback_tool_call is None:
+            for blk in content:
+                if isinstance(blk, dict) and blk.get('type') == 'tool_use':
+                    tool_name = blk.get('name') or '?'
+                    try:
+                        tool_input = json.dumps(blk.get('input') or {}, ensure_ascii=False)
+                    except Exception:
+                        tool_input = '{}'
+                    if tool_name == 'StructuredOutput':
+                        fallback_tool_call = f"[structured-output:{tool_name}] {tool_input}"
+                    else:
+                        fallback_tool_call = f"[last-tool-call:{tool_name}] {tool_input}"
+                    break
+
+        # This assistant turn had content but no usable text (only tool_use,
+        # or only e.g. a 'thinking' block) — keep walking backward; an
+        # earlier turn may still carry real prose, which always wins.
+
+    return (fallback_tool_call or "")[:RECOVERED_TEXT_MAX_CHARS]
+
+
+def _recover_response(agent_id: str, session_id: str) -> str:
+    """Best-effort wrapper: resolve + extract, collapsing every failure to "".
+
+    Callers must treat "" as "nothing recoverable — leave the marker in
+    place"; this never raises so a single bad row can never abort the reap.
+    """
+    try:
+        transcript_path = _resolve_transcript_path(agent_id, session_id)
+        if not transcript_path:
+            return ""
+        return _extract_recovered_text(transcript_path)
+    except Exception as e:
+        _log(f'Recovery: unexpected error resolving/reading transcript: {e}')
+        return ""
+
+
+def recover_stale_responses(conn: sqlite3.Connection) -> None:
+    """Idempotent backfill pass — recovers partial output for EVERY eligible
+    row, not just the ones this run's Step 1 just flipped.
+
+    Targets rows by *state* (status IN ('failed','abandoned') AND response is
+    NULL or the no-response marker), not by who flipped them or when. That
+    decouples recovery from flip ordering: a row flipped first by
+    cast-maintenance.sh or cast-session-end.sh (both bash, both write the same
+    marker prefix) is just as eligible as one flipped by this script, and a
+    row that predates this backfill entirely gets picked up the next time
+    this reaper runs. Runs on every invocation — safe to run repeatedly since
+    a recovered response (PARTIAL_PREFIX) never matches the eligibility
+    WHERE clause again.
+
+    Never overwrites a response holding real content: the WHERE clause below
+    only ever matches NULL or a marker-prefixed value, both at selection time
+    and again at UPDATE time (defends against a response having been
+    populated by something else between the SELECT and the UPDATE).
+    """
+    try:
+        candidates = conn.execute(
+            '''
+            SELECT id, agent_id, session_id
+            FROM agent_runs
+            WHERE status IN ('failed', 'abandoned')
+              AND (response IS NULL OR response LIKE ?)
+            ''',
+            (NO_RESPONSE_MARKER_LIKE,)
+        ).fetchall()
+    except Exception as e:
+        _log(f'Recovery backfill: candidate query failed: {e}')
+        return
+
+    if not candidates:
+        _log('Recovery backfill: no eligible rows')
+        return
+
+    recovered = 0
+    for row_id, agent_id, session_id in candidates:
+        try:
+            recovered_text = _recover_response(agent_id, session_id)
+        except Exception as e:
+            _log(f'Recovery backfill: id={row_id} extraction raised (ignored): {e}')
+            recovered_text = ""
+        if not recovered_text:
+            continue
+        try:
+            new_response = f'{PARTIAL_PREFIX}{recovered_text}'
+            result = conn.execute(
+                '''
+                UPDATE agent_runs
+                SET response = ?
+                WHERE id = ?
+                  AND (response IS NULL OR response LIKE ?)
+                ''',
+                (new_response, row_id, NO_RESPONSE_MARKER_LIKE)
+            )
+            conn.commit()
+            if result.rowcount:
+                recovered += 1
+        except Exception as e:
+            _log(f'Recovery backfill: id={row_id} UPDATE failed: {e}')
+
+    _log(f'Recovery backfill: recovered {recovered} of {len(candidates)} eligible row(s) from transcript')
+    if recovered:
+        print(
+            f'[cast-abandon-stale-runs] Recovered {recovered} of {len(candidates)} '
+            'partial response(s) from transcript',
+            file=sys.stderr,
+        )
 
 
 def main() -> None:
@@ -103,13 +367,38 @@ def main() -> None:
             _log('No stale running rows found')
         else:
             row_ids = [row[0] for row in stale_rows]
+            # C3 fix (2026-08-18): a reaped row's `response` was always left NULL —
+            # indistinguishable from a DONE run whose response is legitimately empty
+            # (see plans/c2-c3-response-loss-findings.md). SubagentStop never fires on
+            # this path (that's WHY the row is still 'running' at the threshold), so
+            # write an explicit marker here instead of silence. COALESCE guards
+            # against ever clobbering a response that is (unexpectedly) already
+            # populated.
+            # C4 fix (2026-08-18): "no real response to recover" above turned out to
+            # be wrong — the transcript is frequently still on disk even though
+            # SubagentStop never fired. This marker is therefore only the immediate,
+            # cheap placeholder; recover_stale_responses() below (run unconditionally,
+            # every invocation) makes a best-effort pass to replace it with the run's
+            # actual partial output pulled straight from the transcript.
+            # Literal kept byte-identical (aside from script name / hours) with
+            # cast-maintenance.sh:54 and cast-session-end.sh:268 — all three
+            # write "... stale running]" (unquoted). A prior version of this
+            # line quoted 'running', which still matched the shared
+            # NO_RESPONSE_MARKER_LIKE '[NO RESPONSE%' predicate today, but a
+            # divergent literal across three writers is a trap for the day
+            # someone tightens that predicate to something more specific.
+            no_response_marker = (
+                f"[NO RESPONSE — SubagentStop never fired; reaped by "
+                f"cast-abandon-stale-runs.py after {STALE_HOURS}h stale running]"
+            )
             conn.execute(
                 f'''
                 UPDATE agent_runs
-                SET status = 'abandoned', abandoned_at = ?
+                SET status = 'abandoned', abandoned_at = ?,
+                    response = COALESCE(response, ?)
                 WHERE id IN ({",".join("?" * len(row_ids))})
                 ''',
-                [now_iso] + row_ids
+                [now_iso, no_response_marker] + row_ids
             )
             conn.commit()
 
@@ -146,6 +435,19 @@ def main() -> None:
                     # Best-effort: a missing incidents table on older DBs or any insert
                     # failure must not break the reap or the always-exit-0 contract.
                     _log(f'Incident insert skipped for run_id={row_id}: {inc_err}')
+
+        # --- Step 1b: recover partial output from transcripts (C4 backfill) ---
+        # Unconditional — NOT gated on `stale_rows` above. State-based (status IN
+        # ('failed','abandoned') + still-marker response), so this also backfills
+        # rows flipped by cast-maintenance.sh / cast-session-end.sh, and rows
+        # flipped on a PRIOR run of this script before this backfill existed. See
+        # recover_stale_responses() docstring for the full rationale.
+        try:
+            recover_stale_responses(conn)
+        except Exception as e:
+            # Belt-and-braces: recover_stale_responses already swallows its own
+            # errors, but the reap must survive even if that guarantee ever breaks.
+            _log(f'Recovery backfill: unexpected top-level error (ignored): {e}')
 
         # --- Step 2: Flip stale active sessions to 'crashed' ---
         # Symmetric with step 1. Sessions stuck in 'active' for more than
