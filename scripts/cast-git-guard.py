@@ -455,6 +455,39 @@ _CHECKOUT_CDIR = re.compile(r'-C\s+(\S+)')
 # wrapper below) without rewriting a single existing pattern.
 _ENV_ASSIGN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 
+# --- git global-option bypass fix (2026-08-18, security review) ------------
+# `_GIT_OPTS` (top of file) is a 5-form ENUMERATED allowlist inserted between
+# `git` and every guarded subcommand in every BLOCK/ALLOW pattern. Any OTHER
+# legal git global option — or one of those 5 forms spelled differently —
+# breaks the `git`-to-subcommand anchor, so no pattern matches and the op is
+# ALLOWED. Measured at HEAD `ba039b5` against the live regexes: `git -p
+# reset --hard`, `git --namespace=foo push`, `git --git-dir /tmp/x/.git
+# clean -fdx` (space form; only `--git-dir=<d>` was allowlisted), and
+# `git -C/tmp/x reset --hard` all bypassed every one of the 16 guarded ops.
+#
+# Fix is a token DROP in `_normalize_git_segment`, not another `_GIT_OPTS`
+# alternative — extending the regex allowlist is what produced the defect.
+# Which tokens consume a following (space-separated) value was measured
+# directly against `git 2.55.0`'s global-option parsing (`git.c`'s
+# `handle_options()`), not assumed from the `git --help` usage synopsis:
+# the synopsis is misleading here. `--exec-path` and `--list-cmds` LOOK
+# like they take a value but only accept the ATTACHED `=` form — a bare
+# `--exec-path` prints the configured exec-path and exits without touching
+# further argv, and a bare `--list-cmds` errors "unknown option: --list-cmds"
+# — so neither needs (or may have) a space-form value-consumption entry.
+# `--super-prefix`, despite existing in git's source, is NOT in this git's
+# global-option usage line at all and errors "unknown option" in every
+# form tried (bare, `=value`, and space `value`). `-C` and `-c` themselves
+# have NO attached form: `-C/tmp/x` and `-cfoo=bar` both error "unknown
+# option" (only the space-separated `-C <path>` / `-c <cfg>` form is real);
+# those malformed-looking single tokens are simply dropped as opaque flags
+# by the generic branch in the walk below, which is safe because git would
+# reject them too, so there is nothing valid after them left to consume.
+_GIT_GLOBAL_VALUE_OPTS = frozenset((
+    '-C', '-c', '--git-dir', '--work-tree', '--namespace',
+    '--config-env', '--attr-source',
+))
+
 
 def _normalize_git_segment(seg):
     r"""Return a quote-stripped, absolute-path-normalized rendering of `seg`
@@ -487,6 +520,11 @@ def _normalize_git_segment(seg):
     Scoped to indices `< i` (the assignment prefix) ONLY — never `tokens[i:]`,
     where e.g. a `-c gc.pruneExpire=<value>` argument lives and the value IS
     load-bearing for `_GC_CINJECT_BLOCK`/`_GC_CONFIG_WRITE_BLOCK`.
+
+    Global-option tokens between `git` and the subcommand are then DROPPED
+    entirely (2026-08-18 global-option bypass fix, security review) — see
+    `_GIT_GLOBAL_VALUE_OPTS` below for what was measured and why this is a
+    token-drop, not a `_GIT_OPTS` regex extension.
     """
     try:
         tokens = shlex.split(seg)
@@ -504,7 +542,38 @@ def _normalize_git_segment(seg):
         if re.search(r'\s', tokens[k]):
             name, _sep, _val = tokens[k].partition('=')
             tokens[k] = name + '=_'  # value is never load-bearing for any pattern
-    norm = ' '.join(tokens)
+
+    # Walk forward from the subcommand position dropping global-option
+    # tokens, so the normalized rendering is always `git <subcommand>
+    # <args...>` with zero `_GIT_OPTS` repetitions needed. j never raises:
+    # every branch either advances j or the loop condition itself bounds it.
+    #
+    # `-c` is the one option KEPT rather than dropped (value collapsed the
+    # same way the assignment-prefix loop above collapses whitespace):
+    # `_GIT_OPTS` already allowlists `-c\s+\S+`, and `-c`'s value is
+    # separately load-bearing for `_GC_CINJECT_BLOCK`'s `gc.*Expire=` key
+    # lookahead, which only the quote-stripped NORMALIZED view can still
+    # see once the value is shell-quoted — measured (mutation-tested by
+    # this fix's own test run): `git -c "gc.pruneExpire=now" gc` left
+    # literal quote characters in the RAW segment that broke
+    # `_GC_CONFIG_KEY`'s match, so dropping `-c` like every other global
+    # option silently un-blocked it (caught test 233, pre-existing at HEAD).
+    j = i + 1
+    kept_tail = []
+    while j < len(tokens) and tokens[j].startswith('-'):
+        opt, eq, _val = tokens[j].partition('=')
+        if opt == '-c' and not eq and j + 1 < len(tokens):
+            val = tokens[j + 1]
+            if re.search(r'\s', val):
+                name, _sep, _v = val.partition('=')
+                val = name + '=_'  # value is never load-bearing; only the KEY prefix is
+            kept_tail.extend(('-c', val))
+            j += 2
+        elif eq or opt not in _GIT_GLOBAL_VALUE_OPTS or j + 1 >= len(tokens):
+            j += 1  # attached `opt=value`, or a no-value/unrecognized flag: drop it alone
+        else:
+            j += 2  # separate-token value form (`--git-dir <path>`): drop opt AND its value
+    norm = ' '.join(tokens[:i + 1] + kept_tail + tokens[j:])
     return norm if norm != seg else None
 
 
@@ -839,14 +908,47 @@ _GIT_RM_BLOCK = re.compile(
 # branch (git refuses, rc=1), `git branch -m <new>` (rename), and the
 # read-only forms `git branch` (bare), `-a`, `-v`, `-vv`, `-r`, `--list`.
 # Measured: `git branch -d x --force` DOES force-delete (force overrides the
-# safe `-d` refusal the same way it overrides `-D`'s absent one) — so the
-# block condition is: an uppercase-D cluster ALONE, OR (`-d`-cluster/
-# `--delete` together with a force flag, in EITHER order).
+# safe `-d` refusal the same way it overrides `-D`'s absent one).
 # `_BRANCH_D_LOOKAHEAD` is cluster-aware and single-dash-anchored the same
 # way as `_FORCE_FLAG_LOOKAHEAD`, built for uppercase `D` instead of `f` —
 # it cannot match inside `--delete` (double-dash token, no uppercase D).
+#
+# 2026-08-18 follow-up (global-option bypass pass, same day): `git branch -M
+# old new` and `git branch -f main HEAD~3` were both still ALLOWED — a gap
+# the force-delete block above never covered. Measured in a throwaway repo:
+#   - `git branch -M old new`, when `new` already exists, OVERWRITES `new`'s
+#     ref with `old`'s tip. `new`'s OWN reflog does NOT carry the
+#     destination's prior history forward (only the renamed SOURCE branch's
+#     reflog survives the rename) — the victim's old tip becomes a
+#     dangling, unreachable commit object (confirmed via `git fsck
+#     --unreachable --no-reflogs`), recoverable only by a dangling-blob
+#     hunt, same class as `git reset --hard`. Lowercase `git branch -m old
+#     new` (no force) correctly REFUSES ("fatal: a branch named 'new'
+#     already exists", rc=128) — `-M` really is a distinct destructive
+#     flag, not just `-m` typed differently; per `git branch --help`, `-M`
+#     is literally `-m -f` combined.
+#   - `git branch -f <branch> <start-point>`, when `<branch>` already
+#     exists, force-moves it. Unlike `-M`'s victim, THIS old tip IS
+#     reflog-recoverable (`git rev-parse <branch>@{1}` returned the exact
+#     pre-force commit on an isolated unique-tip branch) — same
+#     recoverability class as `-D`, blocked anyway for the same
+#     deny-by-default reason `-D` is.
+#   - Per `git branch --help`, `-f`/`--force` means the same thing
+#     ("allow overwriting an existing target") whether paired with no verb
+#     (create/move), `-d`/`--delete` (force-delete, already covered above),
+#     `-m`/`--move`, or `-c`/`--copy` — there is no git-documented SAFE
+#     meaning of `--force` on `branch`. So instead of adding another paired
+#     lookahead (mirroring the OLD `-d ... --force` shape), the block
+#     condition below is simplified to: an uppercase-D cluster, OR an
+#     uppercase-M cluster, OR a bare force flag ANYWHERE on the line. This
+#     is a strict superset of the two old paired alternatives (both already
+#     REQUIRED `_FORCE_FLAG_LOOKAHEAD` to match too, so nothing previously
+#     blocked stops being blocked) — and it additionally closes `-M`,
+#     `-c -f` (force-copy onto an existing branch, same clobber class as
+#     `-M`, not in the reported gap but closed for free by the same fix),
+#     and bare `-f`/`--force` with no `-d`/`-m`/`-c` verb at all.
 _BRANCH_D_LOOKAHEAD = r'(?:^|\s)-[a-zA-Z]*D[a-zA-Z]*\b'
-_BRANCH_LOWERD_OR_DELETE_LOOKAHEAD = r'(?:^|\s)(?:--delete|-[a-zA-Z]*d[a-zA-Z]*)\b'
+_BRANCH_M_LOOKAHEAD = r'(?:^|\s)-[a-zA-Z]*M[a-zA-Z]*\b'
 _BRANCH_ALLOW = re.compile(
     r'(^|&&\s*)CAST_BRANCH_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+branch\b'
 )
@@ -854,8 +956,8 @@ _BRANCH_BLOCK = re.compile(
     r'(^|\s)git' + _GIT_OPTS + r'\s+branch\b'
     r'(?=.*(?:'
     + _BRANCH_D_LOOKAHEAD
-    + r'|(?:' + _BRANCH_LOWERD_OR_DELETE_LOOKAHEAD + r').*' + _FORCE_FLAG_LOOKAHEAD
-    + r'|' + _FORCE_FLAG_LOOKAHEAD + r'.*(?:' + _BRANCH_LOWERD_OR_DELETE_LOOKAHEAD + r')'
+    + r'|' + _BRANCH_M_LOOKAHEAD
+    + r'|' + _FORCE_FLAG_LOOKAHEAD
     + r'))'
 )
 
@@ -894,6 +996,89 @@ _UPDATE_REF_BLOCK = re.compile(
     r'(^|\s)git' + _GIT_OPTS + r'\s+update-ref\b'
     r'(?=.*(?:(?:^|\s)-d\b|(?:^|\s)--stdin\b))'
 )
+
+# 2026-08-18 follow-up (global-option bypass pass, same day): `git
+# update-ref refs/heads/main HEAD~3`, when `refs/heads/main` already
+# exists, was still ALLOWED — the block above only catches `-d`/`--stdin`.
+# Re-measured the "Measured SAFE" claim above against an EXISTING target:
+# creating `refs/heads/tmp` (didn't exist) really is harmless, that part of
+# the comment still holds. But overwriting an EXISTING ref moves it exactly
+# like `git branch -f` above (measured: reflog-recoverable via `<ref>@{1}`,
+# dangling per `git fsck --unreachable --no-reflogs` beforehand — same
+# class blocked above for `branch -f`). Unlike every other block in this
+# module, "create" vs "overwrite" is NOT decidable from the command line
+# alone — the `<ref>` argument is spelled identically either way — so this
+# needs a small stateful check, the same shape as
+# `_checkout_bare_path_blocks`'s pathspec-existence check, adapted from a
+# filesystem check to `git rev-parse --verify --quiet <ref>` (a read-only
+# query; mirrors `_repo_toplevel`'s subprocess style/timeout). Chose the
+# clean separation over blocking unconditionally, since blocking
+# unconditionally would regress the still-true, still-tested "creating a
+# new ref is harmless" case above.
+#
+# KNOWN LIMITATION (measured, same spirit as `_checkout_bare_path_blocks`'s
+# own KNOWN LIMITATION note): `update-ref` resolves a BARE, non-fully-
+# qualified ref argument (`git update-ref main HEAD~3`, no `refs/heads/`
+# prefix) as a LITERAL path relative to `$GIT_DIR` (creates `.git/main`, a
+# pseudo-ref entirely separate from the real `refs/heads/main` branch —
+# confirmed: `git branch --list` never sees it). `git rev-parse --verify`
+# instead applies git's normal DWIM revision resolution, which tries
+# `refs/heads/<name>` (among other namespaces) for a bare name. So for a
+# BARE argument only, this check can say "exists" (via DWIM matching the
+# real branch) when the literal `update-ref` target does not yet exist,
+# over-blocking a call that would have been safe. This is the SAFE
+# direction of error (a false BLOCK, never a false ALLOW) and only affects
+# non-fully-qualified ref arguments — a fully-qualified `refs/heads/<name>`
+# argument (the form in every example above, and the only form git itself
+# recommends for `update-ref`) resolves identically both ways.
+_UPDATE_REF_CMD = re.compile(r'(^|\s)git' + _GIT_OPTS + r'\s+update-ref\b(?P<rest>.*)$')
+
+
+def _update_ref_overwrites_existing(seg: str) -> bool:
+    """True if `seg` is a `git update-ref <ref> <value> [<oldvalue>]` (no
+    `-d`/`--stdin` — those are already caught by `_UPDATE_REF_BLOCK`
+    directly) whose target `<ref>` ALREADY EXISTS, i.e. this call
+    overwrites it rather than creating a new one. See the 2026-08-18
+    comment above `_UPDATE_REF_CMD` for what was measured, why this needs
+    a stateful check instead of a static regex, and its known limitation.
+
+    Bails out (returns False) immediately if the first token after
+    `update-ref` starts with `-` — that's `-d`/`--stdin`/an unrecognized
+    flag, not a ref name; `_UPDATE_REF_BLOCK` (or nothing, if unrecognized)
+    is the correct handler for those, not this function.
+
+    FAILS OPEN: any subprocess error, timeout, or non-git-repo cwd (a
+    nonzero `rev-parse --verify` return also covers "not a git repo" and
+    "not a valid ref", both correctly treated as "doesn't exist" → allow)
+    returns False — matches this module's global fail-open-on-internal-
+    error contract and mirrors `_checkout_bare_path_blocks`'s try/except
+    shape. Reuses `_CHECKOUT_CDIR` (a generic `-C\\s+(\\S+)` pattern despite
+    the name) for the same cwd-relative `-C <dir>` extraction and the same
+    documented quoted-path limitation as `_checkout_bare_path_blocks`.
+    """
+    try:
+        m = _UPDATE_REF_CMD.search(seg)
+        if not m:
+            return False
+        rest = m.group('rest').strip()
+        if not rest:
+            return False
+        try:
+            tokens = shlex.split(rest)
+        except ValueError:
+            return False
+        if not tokens or tokens[0].startswith('-'):
+            return False
+        ref = tokens[0]
+        cdir_m = _CHECKOUT_CDIR.search(seg)
+        cmd = ['git']
+        if cdir_m:
+            cmd += ['-C', cdir_m.group(1)]
+        cmd += ['rev-parse', '--verify', '--quiet', ref]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
 
 # --- git filter-branch block -----------------------------------------------------
 # 2026-08-17 remaining-destructive-ops pass: measured that `git filter-branch
@@ -1028,14 +1213,18 @@ _GIT_RM_MSG = (
     "use `CAST_GIT_RM_OK=1 git rm -f ...` (document why)."
 )
 _BRANCH_MSG = (
-    "**[CAST]** Raw `git branch -D` / `--delete --force` / `-d ... --force` "
-    "blocked — it force-deletes an unmerged branch ref and its branch "
-    "reflog. The commit object itself typically survives in the HEAD "
-    "reflog for the retention window, but the branch ref and its own "
-    "reflog do not. Plain `git branch -d <branch>` (safe refusal on "
-    "unmerged), `git branch -m` (rename), and read-only forms (`branch`, "
-    "`-a`, `-v`, `-vv`, `-r`, `--list`) are unaffected. If you genuinely "
-    "need to force-delete a branch, use `CAST_BRANCH_OK=1 git branch -D "
+    "**[CAST]** Raw `git branch` with `-D` / `-M` / `-f`/`--force` (in any "
+    "combination, including `-c -f`) blocked. `-D` (or `-d`/`--delete` "
+    "combined with force) force-deletes an unmerged branch ref and its own "
+    "reflog — recoverable only within the HEAD reflog's retention window. "
+    "`-M` (or `-c`/`--copy` combined with force) force-overwrites an "
+    "existing branch's tip — a dangling-blob hunt to recover, NOT "
+    "reflog-recoverable. Bare `-f`/`--force` force-moves an existing "
+    "branch pointer — reflog-recoverable via `<branch>@{1}`. Plain `git "
+    "branch -d <branch>` (safe refusal on unmerged), `git branch -m <new>` "
+    "(safe refusal if `<new>` already exists), and read-only forms "
+    "(`branch`, `-a`, `-v`, `-vv`, `-r`, `--list`) are unaffected. If you "
+    "genuinely need to force this, use `CAST_BRANCH_OK=1 git branch -D "
     "...` (document why)."
 )
 _WORKTREE_MSG = (
@@ -1047,13 +1236,15 @@ _WORKTREE_MSG = (
     "-f ...` (document why)."
 )
 _UPDATE_REF_MSG = (
-    "**[CAST]** Raw `git update-ref -d`/`--stdin` blocked — `-d` deletes a "
+    "**[CAST]** Raw `git update-ref -d`/`--stdin`, or a `git update-ref "
+    "<ref> <value>` whose `<ref>` already exists, blocked — `-d` deletes a "
     "ref and its reflog; `--stdin` accepts a delete payload on stdin that "
     "is invisible to this scanner, so it is blocked deny-by-default even "
-    "though it can also carry non-destructive `create`/`update` payloads. "
-    "Plain `git update-ref <ref> <value>` (create/update via args) is "
-    "unaffected. If you genuinely need `-d` or `--stdin`, use "
-    "`CAST_UPDATE_REF_OK=1 git update-ref -d ...` (document why)."
+    "though it can also carry non-destructive `create`/`update` payloads; "
+    "overwriting an existing ref moves it, same reflog-recoverable class "
+    "as `git branch -f`. `git update-ref <ref> <value>` where `<ref>` does "
+    "NOT already exist (create) is unaffected. If you genuinely need this, "
+    "use `CAST_UPDATE_REF_OK=1 git update-ref -d ...` (document why)."
 )
 _FILTER_BRANCH_MSG = (
     "**[CAST]** Raw `git filter-branch` blocked — it rewrites history "
@@ -1100,18 +1291,33 @@ def _agent_completed_this_session(required_agent: str, agent_status_dir: str, no
     Picks the newest matching file by mtime so a later BLOCKED/NEEDS_CONTEXT review
     supersedes an earlier DONE (re-run safety). The filename written by
     status-writer.sh is ``<agent>-<ts>.json``, so an exact ``<agent>-`` prefix match
-    avoids spurious hits from agent names that merely contain required_agent. Reads
-    the structured ``status`` field (not a substring scan) and fails CLOSED (keeps
-    the block) on any read/parse error. Mirrors orchestrate-dispatch.py
+    avoids spurious hits from agent names that merely contain required_agent.
+
+    2026-08-18 fix (same defect class as the commit approval gate, fixed this
+    session in cast-events.sh — that file untouched here): the dispatch-naming
+    rule (`working-conventions.md` → Dispatch-Prompt Contract) requires roster
+    dispatches be named ``<agent-type>__<label>`` for attribution, so a
+    ``code-reviewer__fix-x`` run writes ``code-reviewer__fix-x-<ts>.json`` —
+    which does NOT start with ``code-reviewer-``. A required-agent policy gate
+    then sees a review that genuinely ran as never-having-run and blocks.
+    Fixed by accepting EITHER ``<agent>-`` OR ``<agent>__`` as the prefix,
+    still anchored to a real separator (not a bare ``required_agent`` prefix)
+    so ``code-reviewer2-...`` cannot satisfy a ``code-reviewer`` requirement —
+    that anchoring is the whole reason the dispatch convention uses `__` in
+    the first place, and this fix must not loosen it.
+
+    Reads the structured ``status`` field (not a substring scan) and fails CLOSED
+    (keeps the block) on any read/parse error. Mirrors orchestrate-dispatch.py
     cmd_recent_status.
     """
     if not os.path.isdir(agent_status_dir):
         return False
-    prefix = required_agent + '-'
+    prefix_dash = required_agent + '-'
+    prefix_dunder = required_agent + '__'
     newest_path = None
     newest_mtime = -1.0
     for fname in os.listdir(agent_status_dir):
-        if not fname.startswith(prefix):
+        if not (fname.startswith(prefix_dash) or fname.startswith(prefix_dunder)):
             continue
         fpath = os.path.join(agent_status_dir, fname)
         try:
@@ -1395,7 +1601,10 @@ def _git_evaluate(command: str):
             return 2, _BRANCH_MSG
         if not hit(_WORKTREE_ALLOW) and hit(_WORKTREE_BLOCK):
             return 2, _WORKTREE_MSG
-        if not hit(_UPDATE_REF_ALLOW) and hit(_UPDATE_REF_BLOCK):
+        if not hit(_UPDATE_REF_ALLOW) and (
+            hit(_UPDATE_REF_BLOCK)
+            or any(_update_ref_overwrites_existing(v) for v in variants)
+        ):
             return 2, _UPDATE_REF_MSG
         if not hit(_FILTER_BRANCH_ALLOW) and hit(_FILTER_BRANCH_BLOCK):
             return 2, _FILTER_BRANCH_MSG
