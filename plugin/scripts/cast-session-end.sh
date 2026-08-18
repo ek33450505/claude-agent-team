@@ -265,7 +265,7 @@ DELETE FROM quality_gates    WHERE created_at < datetime('now', '-30 days');
 DELETE FROM stream_hook_events WHERE timestamp < datetime('now', '-30 days');
 DELETE FROM worktree_events  WHERE timestamp  < datetime('now', '-30 days');
 DELETE FROM cast_events      WHERE timestamp  < datetime('now', '-30 days');
-UPDATE agent_runs SET status='failed' WHERE status='running' AND started_at < datetime('now', '-2 hours');
+UPDATE agent_runs SET status='failed', response=COALESCE(response, '[NO RESPONSE — SubagentStop never fired; reaped by cast-session-end.sh after 2h stale running]') WHERE status='running' AND started_at < datetime('now', '-2 hours');
 COMMIT;
 PRUNE_SQL
 fi

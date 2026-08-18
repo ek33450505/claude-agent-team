@@ -339,13 +339,22 @@ try:
     conn = sqlite3.connect(db_path, timeout=5)
     try:
         for r in missing:
+            # Match the bare agent name OR its `<agent>__<label>` dispatch-naming
+            # variant (working-conventions.md dispatch-naming rule) — LIKE '_' is a
+            # single-char wildcard, so escape the literal pattern and anchor on a
+            # literal "__" separator (never a bare "<agent>%" prefix, which would
+            # also match an unrelated agent like "code-reviewer2").
+            like_pattern = (
+                r.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+                + '\\_\\_%'
+            )
             row = conn.execute(
                 "SELECT status, branch, ended_at FROM agent_runs "
-                "WHERE session_id=? AND agent=? "
+                "WHERE session_id=? AND (agent=? OR agent LIKE ? ESCAPE '\\') "
                 "AND ended_at IS NOT NULL AND ended_at != '' "
                 "AND status IN ('DONE','DONE_WITH_CONCERNS','completed','BLOCKED') "
                 "ORDER BY replace(ended_at, 'T', ' ') DESC LIMIT 1",
-                (session_id, r),
+                (session_id, r, like_pattern),
             ).fetchone()
             if row is None:
                 still_missing.append(r); continue

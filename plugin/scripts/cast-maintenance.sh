@@ -44,9 +44,14 @@ fi
 log "Starting maintenance run"
 
 # 1. Mark stale running agents as failed (>2h old)
+# C3 fix (2026-08-18): SubagentStop never fires for these rows (that's why they're
+# still 'running' at the 2h mark) so `response` is always NULL — indistinguishable
+# from a DONE run whose response is legitimately empty. Write an explicit marker
+# instead of silence (COALESCE guards against clobbering an already-populated
+# response). See plans/c2-c3-response-loss-findings.md.
 stale=$(cast_sqlite "$DB" "SELECT COUNT(*) FROM agent_runs WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');" 2>/dev/null || echo 0)
 if [ "$stale" -gt 0 ]; then
-  cast_sqlite "$DB" "UPDATE agent_runs SET status='failed', ended_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');"
+  cast_sqlite "$DB" "UPDATE agent_runs SET status='failed', ended_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'), response=COALESCE(response, '[NO RESPONSE — SubagentStop never fired; reaped by cast-maintenance.sh after 2h stale running]') WHERE status='running' AND datetime(started_at) < datetime('now','-2 hours');"
   log "Cleaned $stale stale running agents"
 fi
 
