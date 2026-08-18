@@ -2564,27 +2564,66 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
 
 # ---------------------------------------------------------------------------
 # git update-ref overwrite-existing-ref (2026-08-18, remaining-destructive-
-# ops follow-up). `git update-ref <ref> <value>`, when <ref> already
-# exists, moves it (reflog-recoverable, same class as `branch -f`) — was
-# still ALLOWED at HEAD. Creating a NEW ref stays allowed (unaffected;
-# re-measured, still genuinely harmless). Uses THIS repo's real refs
-# (main, feature/v10-continuity) since the check shells out to
-# `git rev-parse --verify --quiet`, scoped read-only, never executed.
+# ops follow-up; hermetic-fixture fix same day). `git update-ref <ref>
+# <value>`, when <ref> already exists, moves it (reflog-recoverable, same
+# class as `branch -f`) — was still ALLOWED at HEAD. Creating a NEW ref
+# stays allowed (unaffected; re-measured, still genuinely harmless). The
+# check shells out to `git rev-parse --verify --quiet <ref>` (scoped
+# read-only, never a mutating verb) but resolves it against the GUARD
+# PROCESS's cwd — so these three tests build a throwaway fixture repo
+# (`_mk_update_ref_fixture`, under $BATS_TEST_TMPDIR) with a known ref and
+# `cd` into it before invoking $HOOK_SH, instead of depending on THIS
+# repo's ambient refs (main, feature/v10-continuity) as an earlier version
+# of this block did. That earlier version was non-hermetic: CI checks out
+# a detached merge ref with no local `main` branch, so `rev-parse` failed
+# there, the guard (correctly, per its fail-open contract) treated the
+# call as a create, and the overwrite-blocks test went red in CI while
+# green locally — and the create/hatch tests below went green in CI for
+# the WRONG reason (vacuously: nothing update-ref-shaped was ever blocked
+# there, so an ALLOW assertion proved nothing about the mechanism).
 # ---------------------------------------------------------------------------
 
-@test "git update-ref refs/heads/main HEAD~3 (existing ref) → blocks (exit 2) [remaining-destructive-ops: update-ref overwrite]" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref refs/heads/main HEAD~3")"
+# Builds a throwaway git repo under $BATS_TEST_TMPDIR with a branch named
+# `existing-branch` that provably exists only in the fixture (never in the
+# real repo), and no branch named `probe-branch` (provably absent). Prints
+# the fixture path; callers `cd` into it before `run`, since the guard's
+# `rev-parse --verify --quiet` call has no `-C` in these commands and so
+# resolves against the guard process's cwd. Plain `git -C "$d"` calls here
+# never go through $HOOK_SH, so no CAST_*_OK hatch is needed to build it.
+_mk_update_ref_fixture() {
+  local d="$BATS_TEST_TMPDIR/update-ref-fixture"
+  mkdir -p "$d"
+  git -C "$d" init -q
+  git -C "$d" config user.email "t@example.invalid"
+  git -C "$d" config user.name "t"
+  git -C "$d" commit -q --allow-empty -m "one"
+  git -C "$d" commit -q --allow-empty -m "two"
+  git -C "$d" branch existing-branch
+  echo "$d"
+}
+
+@test "git update-ref refs/heads/existing-branch HEAD~1 (existing ref, hermetic fixture) → blocks (exit 2) [remaining-destructive-ops: update-ref overwrite]" {
+  local fixture
+  fixture="$(_mk_update_ref_fixture)"
+  cd "$fixture"
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref refs/heads/existing-branch HEAD~1")"
   assert_failure 2
   assert_output --partial "update-ref"
 }
 
-@test "git update-ref refs/heads/definitely-not-a-real-branch-probe-xyz HEAD (nonexistent ref, create) → allows (exit 0) [remaining-destructive-ops: update-ref create regression fence]" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref refs/heads/definitely-not-a-real-branch-probe-xyz HEAD")"
+@test "git update-ref refs/heads/probe-branch HEAD (nonexistent ref in hermetic fixture, create) → allows (exit 0) [remaining-destructive-ops: update-ref create regression fence]" {
+  local fixture
+  fixture="$(_mk_update_ref_fixture)"
+  cd "$fixture"
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git update-ref refs/heads/probe-branch HEAD")"
   assert_success
 }
 
-@test "CAST_UPDATE_REF_OK=1 git update-ref refs/heads/main HEAD~3 (hatch) → allows (exit 0) [remaining-destructive-ops: update-ref overwrite]" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_UPDATE_REF_OK=1 git update-ref refs/heads/main HEAD~3")"
+@test "CAST_UPDATE_REF_OK=1 git update-ref refs/heads/existing-branch HEAD~1 (hatch, existing ref in hermetic fixture) → allows (exit 0) [remaining-destructive-ops: update-ref overwrite]" {
+  local fixture
+  fixture="$(_mk_update_ref_fixture)"
+  cd "$fixture"
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_UPDATE_REF_OK=1 git update-ref refs/heads/existing-branch HEAD~1")"
   assert_success
 }
 
