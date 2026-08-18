@@ -75,3 +75,53 @@ teardown() {
   # UUID format: 8-4-4-4-12 hex with hyphens (36 chars)
   [[ "$written_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
 }
+
+# ---------------------------------------------------------------------------
+# LF-10: recent-status must find a "<agent>__<label>" dispatch-naming status
+# file, not just a bare "<agent>-<ts>.json" one (working-conventions.md
+# dispatch-naming rule requires roster dispatches be named <agent>__<label>).
+# ---------------------------------------------------------------------------
+
+@test "recent-status finds a code-reviewer__label-<ts>.json status file" {
+  status_dir="$HOME/.claude/agent-status"
+  mkdir -p "$status_dir"
+  echo '{"status":"DONE"}' > "$status_dir/code-reviewer__fix-advisory-1234567890.json"
+
+  run python3 "$SCRIPT" recent-status --agent code-reviewer --max-age 999999999
+  assert_success
+  assert_output "DONE"
+}
+
+@test "recent-status still finds a bare code-reviewer-<ts>.json status file (regression guard)" {
+  status_dir="$HOME/.claude/agent-status"
+  mkdir -p "$status_dir"
+  echo '{"status":"DONE"}' > "$status_dir/code-reviewer-1234567890.json"
+
+  run python3 "$SCRIPT" recent-status --agent code-reviewer --max-age 999999999
+  assert_success
+  assert_output "DONE"
+}
+
+@test "recent-status does not match an unrelated agent name (code-reviewer2)" {
+  status_dir="$HOME/.claude/agent-status"
+  mkdir -p "$status_dir"
+  echo '{"status":"DONE"}' > "$status_dir/code-reviewer2-1234567890.json"
+
+  run python3 "$SCRIPT" recent-status --agent code-reviewer --max-age 999999999
+  assert_success
+  assert_output ""
+}
+
+@test "recent-status picks the newest file across bare and __-named variants" {
+  status_dir="$HOME/.claude/agent-status"
+  mkdir -p "$status_dir"
+  echo '{"status":"DONE"}' > "$status_dir/code-reviewer-1111111111.json"
+  # Fixed, unambiguously-old mtime (POSIX -t format: both BSD and GNU touch
+  # accept [[CC]YY]MMDDhhmm) so the newer __-named file below sorts last.
+  touch -t 202001010000 "$status_dir/code-reviewer-1111111111.json"
+  echo '{"status":"BLOCKED"}' > "$status_dir/code-reviewer__fix-advisory-2222222222.json"
+
+  run python3 "$SCRIPT" recent-status --agent code-reviewer --max-age 999999999
+  assert_success
+  assert_output "BLOCKED"
+}

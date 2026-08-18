@@ -89,6 +89,75 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# LF-10 — dispatch-naming rule (`<agent>__<label>`) vs the approval gate
+# ---------------------------------------------------------------------------
+# working-conventions.md requires roster dispatches be named "<agent>__<label>"
+# for record attribution. The agent_runs fallback previously matched agent=?
+# by exact equality only, so a reviewer dispatched as "code-reviewer__fix-x"
+# could never satisfy a "code-reviewer" requirement — the gate reported
+# "Missing approvals" even though the review had just run DONE.
+
+@test "dispatch-naming: code-reviewer__label DONE satisfies the code-reviewer gate" {
+  _setup_fallback_db
+  _insert_run "sess-B" "code-reviewer__fix-advisory" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-B"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+}
+
+@test "dispatch-naming: code-reviewer__label BLOCKED rejects the gate (exit 2)" {
+  _setup_fallback_db
+  _insert_run "sess-B" "code-reviewer__fix-advisory" "BLOCKED" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-B"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+}
+
+@test "dispatch-naming: bare-prefix name code-reviewer2 does NOT satisfy the gate (anchor proof)" {
+  _setup_fallback_db
+  _insert_run "sess-B" "code-reviewer2" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-B"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 1 ]
+}
+
+@test "dispatch-naming: 2-char wildcard-position name does NOT satisfy the gate (ESCAPE proof)" {
+  # Without ESCAPE, LIKE 'code-reviewer__%' treats each "_" as a single-char
+  # wildcard: "XX" satisfies both wildcards and "%" matches the rest, so a
+  # naive unescaped pattern would wrongly match "code-reviewerXXfix". The
+  # escaped pattern requires a literal "__" substring, which this name lacks.
+  _setup_fallback_db
+  _insert_run "sess-B" "code-reviewerXXfix" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-B"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 1 ]
+}
+
+@test "dispatch-naming: newest run wins across bare and __-named rows (BLOCKED supersedes DONE)" {
+  _setup_fallback_db
+  _insert_run "sess-B" "code-reviewer" "DONE" "datetime('now','-2 minutes')" ""
+  _insert_run "sess-B" "code-reviewer__fix-advisory" "BLOCKED" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-B"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+}
+
+@test "dispatch-naming: bare code-reviewer DONE still satisfies the gate (regression guard)" {
+  _setup_fallback_db
+  _insert_run "sess-B" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-B"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+}
+
+@test "dispatch-naming: no matching row at all still fails closed (exit 1)" {
+  _setup_fallback_db
+  export CAST_SESSION_ID="sess-empty"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
 # T2.3 — cast-push.sh escape-hatch audit log
 # ---------------------------------------------------------------------------
 # cast-push.sh performs a real `git push`, so rather than exercise the whole
