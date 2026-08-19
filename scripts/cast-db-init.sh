@@ -1108,6 +1108,55 @@ COMMIT_PROVENANCE_TABLE
   _columns_added=1
 fi
 
+# agent_runs_daily — pre-prune rollup of agent_runs (C5). Writer: scripts/cast-db-rollup.py.
+# Survives cast-db-prune.py's retention-window DELETE on agent_runs, so cost/model/status
+# trends are not destroyed when raw rows age out. See cast-db-rollup.py's module docstring
+# for the monotone non-shrinking upsert guard this table depends on.
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "agent_runs_daily"; then
+  sqlite3 "$DB_PATH" <<'AGENT_RUNS_DAILY_TABLE'
+CREATE TABLE IF NOT EXISTS agent_runs_daily (
+  day            TEXT NOT NULL,
+  agent          TEXT NOT NULL DEFAULT '',
+  model          TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT '',
+  runs           INTEGER NOT NULL DEFAULT 0,
+  with_response  INTEGER NOT NULL DEFAULT 0,
+  input_tokens   INTEGER NOT NULL DEFAULT 0,
+  output_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_read_input_tokens     INTEGER NOT NULL DEFAULT 0,
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd       REAL    NOT NULL DEFAULT 0,
+  duration_ms    INTEGER NOT NULL DEFAULT 0,
+  tool_uses      INTEGER NOT NULL DEFAULT 0,
+  rolled_up_at   TEXT    NOT NULL,
+  PRIMARY KEY (day, agent, model, status)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_daily_day ON agent_runs_daily(day);
+AGENT_RUNS_DAILY_TABLE
+  _columns_added=1
+fi
+
+# mcp_calls_daily — pre-prune rollup of routing_events (event_type='mcp_tool_call') (C5).
+# Writer: scripts/cast-db-rollup.py. Survives cast-db-prune.py's retention-window DELETE on
+# routing_events, so MCP call-volume/cost trends are not destroyed when raw rows age out.
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "mcp_calls_daily"; then
+  sqlite3 "$DB_PATH" <<'MCP_CALLS_DAILY_TABLE'
+CREATE TABLE IF NOT EXISTS mcp_calls_daily (
+  day            TEXT NOT NULL,
+  mcp_server     TEXT NOT NULL DEFAULT '',
+  mcp_tool       TEXT NOT NULL DEFAULT '',
+  outcome        TEXT NOT NULL DEFAULT '',
+  is_cloud_bound INTEGER NOT NULL DEFAULT 0,
+  calls          INTEGER NOT NULL DEFAULT 0,
+  result_bytes   INTEGER NOT NULL DEFAULT 0,
+  rolled_up_at   TEXT    NOT NULL,
+  PRIMARY KEY (day, mcp_server, mcp_tool, outcome, is_cloud_bound)
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_calls_daily_day ON mcp_calls_daily(day);
+MCP_CALLS_DAILY_TABLE
+  _columns_added=1
+fi
+
 # Ensure agent_id index exists
 sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);" 2>/dev/null || true
 

@@ -1,1 +1,14 @@
-{"repo_class":"personal","co_author_trailer":"claude"}
+{
+  "repo_class": "personal",
+  "co_author_trailer": "claude",
+  "stack": {
+    "language": "bash",
+    "framework": "cast-shell",
+    "build_cmd": "",
+    "test_cmd": "bash tests/run.sh",
+    "lint_cmd": "",
+    "deploy_style": "dev-server",
+    "inferred_at": "2026-08-17T12:02:16Z",
+    "inferred_by": "cast-stack-detect.sh"
+  }
+}
