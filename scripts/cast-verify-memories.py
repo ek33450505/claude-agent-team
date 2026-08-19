@@ -24,8 +24,8 @@ itself, against an explicit, ORDERED, named root list (first hit wins):
      bare-basename citation resolve)
   3. the project root decoded from the memory's parent dir name — Claude
      Code encodes a project's cwd as `~/.claude/projects/<cwd with / -> ->`,
-     e.g. `-Users-edkubiak-Projects-personal-claude-agent-team` decodes to
-     `/Users/edkubiak/Projects/personal/claude-agent-team`. The encoding is
+     e.g. `-Users-testuser-Projects-personal-my-app` decodes to
+     `/Users/testuser/Projects/personal/my-app`. The encoding is
      lossy (the final path component may itself contain literal hyphens), so
      decode_project_dir() tries progressively coarser suffix merges and picks
      the first that is an actual directory on disk — bounded by the number of
@@ -150,8 +150,8 @@ def find_stale_candidates(base_dir: str, stale_days: int) -> List[Tuple[str, str
 
 def decode_project_dir(encoded: str) -> Optional[str]:
     """Best-effort decode of a Claude Code project-dir name back to a real
-    absolute path, e.g. "-Users-edkubiak-Projects-personal-claude-agent-team"
-    -> "/Users/edkubiak/Projects/personal/claude-agent-team".
+    absolute path, e.g. "-Users-testuser-Projects-personal-my-app"
+    -> "/Users/testuser/Projects/personal/my-app".
 
     The encoding (cwd with '/' replaced by '-') is lossy when a path
     component itself contains a literal hyphen, so this tries progressively
