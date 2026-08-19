@@ -1,0 +1,242 @@
+# ~/.user.justfile — CAST observability recipes (run from anywhere with `just -g <recipe>`)
+#
+# Created 2026-08-03. Every recipe here is read-only against the live cast.db.
+# WHY read-only: cast.db has concurrent writers (hooks, com.cast.* launchd jobs,
+# litestream replication). Never attach it read-write from an ad-hoc query.
+#
+# DuckDB gotchas baked in below (both are parser errors otherwise):
+#   - `cast` is a reserved keyword -> attach the DB as `castdb`, never `cast`
+#   - `cost`  is a reserved keyword -> alias sums as `usd`, never `cost`
+
+db      := env_var('HOME') / '.claude/cast.db'
+logs    := env_var('HOME') / '.claude/logs'
+scripts := env_var('HOME') / '.claude/scripts'
+
+# Attach preamble reused by every query recipe.
+attach := "LOAD sqlite; ATTACH '" + db + "' AS castdb (TYPE sqlite, READ_ONLY);"
+
+# List available recipes.
+default:
+    @just --list --global-justfile
+
+# ---------------------------------------------------------------------------
+# Window / provenance — run this BEFORE citing any percentage anywhere.
+# ---------------------------------------------------------------------------
+
+# Shows BOTH the raw retained span AND the rollup span (agent_runs_daily reaches
+# further back than raw once the prune window has run).
+# NOTE: `rollup_age` is how long since the nightly rollup ran (~03:30). The
+# CURRENT day's rollup numbers are always partial until that run -- up to ~24h
+# of today's activity can be missing. Prior (historical) days are complete.
+# The DB's real date range + totals. Any cited % is meaningless without it.
+window:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    duckdb -box -c "{{attach}}
+    SELECT count(*) AS rows_total,
+           min(started_at) AS earliest,
+           max(started_at) AS latest,
+           round(sum(cost_usd),2) AS usd_total,
+           date_diff('day', CAST(min(started_at) AS TIMESTAMP),
+                            CAST(max(started_at) AS TIMESTAMP)) AS span_days
+    FROM castdb.agent_runs;
+    WITH f AS (
+      SELECT min(day) AS rollup_earliest_day,
+             max(day) AS rollup_latest_day,
+             round(sum(cost_usd),2) AS rollup_usd_total,
+             date_diff('day', CAST(min(day) AS DATE),
+                              CAST(max(day) AS DATE)) AS rollup_span_days,
+             max(rolled_up_at) AS rollup_last_refreshed
+      FROM castdb.agent_runs_daily
+    ),
+    a AS (
+      SELECT *, date_diff('second', CAST(rollup_last_refreshed AS TIMESTAMPTZ), now()) AS age_secs FROM f
+    )
+    SELECT rollup_earliest_day, rollup_latest_day, rollup_usd_total, rollup_span_days,
+           rollup_last_refreshed,
+           CASE WHEN age_secs < 3600  THEN round(age_secs/60.0)::VARCHAR    || ' min'
+                WHEN age_secs < 86400 THEN round(age_secs/3600.0,1)::VARCHAR || ' hr'
+                ELSE round(age_secs/86400.0,1)::VARCHAR || ' day' END AS rollup_age
+    FROM a;"
+
+# ---------------------------------------------------------------------------
+# Cost
+# ---------------------------------------------------------------------------
+
+# Rollup-backed (castdb.agent_runs_daily) -- NOT raw. agent_runs_daily rows are
+# PRE-AGGREGATED per (day, agent, model, status): `runs` is already a COUNT and
+# `cost_usd` is already a SUM for that group, so a per-run average is
+# SUM(cost_usd)/SUM(runs), never AVG(cost_usd) -- AVG would average the
+# per-group sums, not the per-run costs. Never UNION this with raw agent_runs:
+# the rollup already covers every day including unpruned recent ones, so a
+# union would double-count recent days.
+# NOTE: `rollup_age` (bottom table) is how long since the nightly rollup ran
+# (~03:30). TODAY's contribution to the numbers above is always partial until
+# that run -- up to ~24h of today's spend can be missing. Prior days are complete.
+# Spend by agent, with share % and cumulative % (Pareto view).
+cost:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    duckdb -box -c "{{attach}}
+    WITH t AS (
+      SELECT agent, sum(runs) AS runs, sum(cost_usd) AS spend,
+             sum(cost_usd)/NULLIF(sum(runs),0) AS per_run
+      FROM castdb.agent_runs_daily GROUP BY 1
+    )
+    SELECT agent, runs,
+           round(spend,2)   AS usd,
+           round(per_run,3) AS avg_run,
+           round(100.0*spend/sum(spend) OVER (),1) AS pct,
+           round(100.0*sum(spend) OVER (ORDER BY spend DESC)/sum(spend) OVER (),1) AS cume
+    FROM t ORDER BY spend DESC LIMIT 20;
+    WITH f AS (SELECT max(rolled_up_at) AS rollup_freshness FROM castdb.agent_runs_daily),
+         a AS (SELECT rollup_freshness,
+                       date_diff('second', CAST(rollup_freshness AS TIMESTAMPTZ), now()) AS age_secs FROM f)
+    SELECT rollup_freshness,
+           CASE WHEN age_secs < 3600  THEN round(age_secs/60.0)::VARCHAR    || ' min'
+                WHEN age_secs < 86400 THEN round(age_secs/3600.0,1)::VARCHAR || ' hr'
+                ELSE round(age_secs/86400.0,1)::VARCHAR || ' day' END AS rollup_age
+    FROM a;"
+
+# Rollup-backed (castdb.agent_runs_daily) -- see `cost` above for the
+# SUM/SUM-not-AVG rule and the never-union-with-raw rule; both apply here too.
+# NOTE: `rollup_age` (bottom table) is how long since the nightly rollup ran
+# (~03:30). TODAY's contribution to the numbers above is always partial until
+# that run -- up to ~24h of today's activity can be missing. Prior days are complete.
+# Spend by model tier.
+model-mix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    duckdb -box -c "{{attach}}
+    SELECT model, sum(runs) AS runs,
+           round(sum(cost_usd),2) AS usd,
+           round(sum(cost_usd)/NULLIF(sum(runs),0),3) AS avg_run
+    FROM castdb.agent_runs_daily
+    GROUP BY 1 ORDER BY usd DESC;
+    WITH f AS (SELECT max(rolled_up_at) AS rollup_freshness FROM castdb.agent_runs_daily),
+         a AS (SELECT rollup_freshness,
+                       date_diff('second', CAST(rollup_freshness AS TIMESTAMPTZ), now()) AS age_secs FROM f)
+    SELECT rollup_freshness,
+           CASE WHEN age_secs < 3600  THEN round(age_secs/60.0)::VARCHAR    || ' min'
+                WHEN age_secs < 86400 THEN round(age_secs/3600.0,1)::VARCHAR || ' hr'
+                ELSE round(age_secs/86400.0,1)::VARCHAR || ' day' END AS rollup_age
+    FROM a;"
+
+# Rollup-backed (castdb.agent_runs_daily) -- see `cost` above for the
+# SUM/SUM-not-AVG rule and the never-union-with-raw rule; both apply here too.
+# `day` is already 'YYYY-MM-DD', so no started_at parsing is needed.
+# NOTE: `rollup_age` (bottom table) is how long since the nightly rollup ran
+# (~03:30). TODAY's row above is always partial until that run -- up to ~24h of
+# today's activity can be missing. Prior weeks/days are complete.
+# Weekly cost trend for one agent (default: workflow-subagent).
+cost-weekly agent='workflow-subagent':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    duckdb -box -c "{{attach}}
+    SELECT strftime(CAST(day AS DATE),'%Y-W%W') AS wk,
+           min(day) AS from_day,
+           sum(runs) AS runs,
+           round(sum(cost_usd)/NULLIF(sum(runs),0),3) AS avg_run,
+           round(sum(cost_usd),2) AS usd
+    FROM castdb.agent_runs_daily
+    WHERE agent='{{agent}}'
+    GROUP BY 1 ORDER BY 1;
+    WITH f AS (SELECT max(rolled_up_at) AS rollup_freshness
+               FROM castdb.agent_runs_daily WHERE agent='{{agent}}'),
+         a AS (SELECT rollup_freshness,
+                       date_diff('second', CAST(rollup_freshness AS TIMESTAMPTZ), now()) AS age_secs FROM f)
+    SELECT rollup_freshness,
+           CASE WHEN age_secs < 3600  THEN round(age_secs/60.0)::VARCHAR    || ' min'
+                WHEN age_secs < 86400 THEN round(age_secs/3600.0,1)::VARCHAR || ' hr'
+                ELSE round(age_secs/86400.0,1)::VARCHAR || ' day' END AS rollup_age
+    FROM a;"
+
+# ---------------------------------------------------------------------------
+# The stage-model-selection check (see rules/working-conventions.md)
+# ---------------------------------------------------------------------------
+
+# Rollup-backed (castdb.agent_runs_daily) -- opus/sonnet/haiku columns sum `runs`
+# per group (a COUNT), not row counts, since each row is already one
+# (day, agent, model, status) bucket. See `cost` above for the never-union-with-raw rule.
+# NOTE: `rollup_age` (bottom table) is how long since the nightly rollup ran
+# (~03:30). TODAY's row above is always partial until that run -- up to ~24h of
+# today's activity can be missing. Prior weeks/days are complete.
+# Is the per-stage model rule actually being applied? Watch opus_pct fall and haiku rise.
+model-drift agent='workflow-subagent':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    duckdb -box -c "{{attach}}
+    SELECT strftime(CAST(day AS DATE),'%Y-W%W') AS wk,
+           min(day) AS from_day,
+           sum(runs) AS runs,
+           sum(CASE WHEN model LIKE '%opus%'   THEN runs ELSE 0 END) AS opus,
+           sum(CASE WHEN model LIKE '%sonnet%' THEN runs ELSE 0 END) AS sonnet,
+           sum(CASE WHEN model LIKE '%haiku%'  THEN runs ELSE 0 END) AS haiku,
+           round(100.0*sum(CASE WHEN model LIKE '%opus%' THEN runs ELSE 0 END)/NULLIF(sum(runs),0),1) AS opus_pct
+    FROM castdb.agent_runs_daily
+    WHERE agent='{{agent}}'
+    GROUP BY 1 ORDER BY 1;
+    WITH f AS (SELECT max(rolled_up_at) AS rollup_freshness
+               FROM castdb.agent_runs_daily WHERE agent='{{agent}}'),
+         a AS (SELECT rollup_freshness,
+                       date_diff('second', CAST(rollup_freshness AS TIMESTAMPTZ), now()) AS age_secs FROM f)
+    SELECT rollup_freshness,
+           CASE WHEN age_secs < 3600  THEN round(age_secs/60.0)::VARCHAR    || ' min'
+                WHEN age_secs < 86400 THEN round(age_secs/3600.0,1)::VARCHAR || ' hr'
+                ELSE round(age_secs/86400.0,1)::VARCHAR || ' day' END AS rollup_age
+    FROM a;"
+
+# Raw-backed (castdb.agent_runs) intentionally -- per-run drill-down needs
+# individual rows the rollup doesn't carry, so this is limited to whatever
+# raw retention window is currently live (see `window` above for that span).
+# Agent runs from the last N days (default 1), newest first.
+runs days='1':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    duckdb -box -c "{{attach}}
+    SELECT substr(started_at,1,16) AS started, agent, model, status,
+           round(cost_usd,3) AS usd, duration_ms
+    FROM castdb.agent_runs
+    WHERE CAST(started_at AS TIMESTAMP) > now() - INTERVAL '{{days}}' DAY
+    ORDER BY started_at DESC LIMIT 40;"
+
+# Raw-backed (castdb.agent_runs) intentionally -- in-flight rows (status='running')
+# only exist in raw; the rollup aggregates finished runs and is limited to
+# whatever raw retention window is currently live (see `window` above for that span).
+# Runs that never reached a terminal status (maxTurns truncation leaves these stuck).
+stuck:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    duckdb -box -c "{{attach}}
+    SELECT substr(started_at,1,16) AS started, agent, model, status, tool_uses
+    FROM castdb.agent_runs
+    WHERE status IS NULL OR status = 'running'
+    ORDER BY started_at DESC LIMIT 30;"
+
+# ---------------------------------------------------------------------------
+# Ad-hoc exploration
+# ---------------------------------------------------------------------------
+
+# Interactive cast.db shell, read-only, with table/column autocompletion.
+db:
+    litecli "file:{{db}}?mode=ro"
+
+# Arbitrary read-only SQL against cast.db. Usage: just -g sql "SELECT ..."
+sql query:
+    @duckdb -box -c "{{attach}} {{query}}"
+
+# Pretty-print any .jsonl record stream as a table. Usage: just -g jsonl ~/.claude/routing-log.jsonl
+jsonl file:
+    mlr --ijson --opprint --from "{{file}}" cat
+
+# Tail the audit log including compressed rotations (lnav reads .gz natively).
+audit:
+    lnav {{logs}}/audit.jsonl {{logs}}/audit.jsonl.1 {{logs}}/audit.jsonl.2.gz
+
+# ---------------------------------------------------------------------------
+# Stat verification (rules/working-conventions.md -> Stat/Fact Verification)
+# ---------------------------------------------------------------------------
+
+# Real line/file counts. Run this before citing repo stats in public-facing content.
+stats path=scripts:
+    scc "{{path}}"

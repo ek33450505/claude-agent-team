@@ -439,6 +439,69 @@ if [ -d "$SCRIPT_DIR/config" ]; then
     done
 fi
 
+# --- Install tools/justfile -> ~/.config/just/justfile (overwrite, backup-or-abort) ---
+# Unlike rules-core (skip-if-exists), this MUST overwrite an existing file: tools/justfile
+# is the canonical source for CAST's cost/trend observability recipes, and a merged reader
+# fix (e.g. migrating a recipe onto a rollup table) must actually reach the live file —
+# "merge != delivered" bit us before with skip-if-exists rules (see reference memory).
+# Back up any existing file first; if the backup itself cannot be written, ABORT this step
+# and leave the existing file untouched (fail-closed, same convention as cast-migrate.py /
+# cast-db-prune.py). Uses $HOME so it stays confined to the isolated temp HOME under tests,
+# same as the config/ install step above.
+if [ -f "$SCRIPT_DIR/tools/justfile" ]; then
+    info "Installing observability justfile..."
+    JUST_DIR="$HOME/.config/just"
+    JUST_DEST="$JUST_DIR/justfile"
+    mkdir -p "$JUST_DIR"
+    if [ -L "$JUST_DEST" ]; then
+        # `cp`/`mv` onto a symlinked destination write THROUGH it — a user who
+        # symlinked ~/.config/just/justfile into e.g. a dotfiles repo would get
+        # vendored content silently written into that repo file, outside
+        # ~/.config/just/, with no warning. Fail closed (same convention as the
+        # backup-failure branch below): warn loudly and leave it untouched.
+        warn "  Skipped: ~/.config/just/justfile is a symlink -> $(readlink "$JUST_DEST") — leaving it untouched to avoid writing through it"
+    elif [ -f "$JUST_DEST" ] && ! cmp -s "$SCRIPT_DIR/tools/justfile" "$JUST_DEST"; then
+        # Find a non-conflicting, still-recognizably-timestamped backup name —
+        # two different-content overwrites landing in the same second would
+        # otherwise collide and silently lose the older backup.
+        JUST_BAK_TS="$(date +%Y%m%d%H%M%S)"
+        JUST_BAK="$JUST_DEST.bak.$JUST_BAK_TS"
+        _just_bak_n=1
+        while [ -e "$JUST_BAK" ]; do
+            JUST_BAK="$JUST_DEST.bak.${JUST_BAK_TS}.$_just_bak_n"
+            _just_bak_n=$((_just_bak_n + 1))
+        done
+        unset _just_bak_n
+        if cp "$JUST_DEST" "$JUST_BAK"; then
+            # Write atomically: cp to a temp file, then rename it into place, so a
+            # failure mid-write (e.g. disk full) leaves the OLD file in place
+            # rather than a truncated one. `mv` within the same directory is an
+            # atomic rename; note it also REPLACES a destination symlink rather
+            # than writing through it — but symlink destinations are already
+            # routed to the branch above, so that distinction never triggers here.
+            JUST_TMP="$JUST_DEST.tmp.$$"
+            if cp "$SCRIPT_DIR/tools/justfile" "$JUST_TMP" && mv "$JUST_TMP" "$JUST_DEST"; then
+                success "  [updated] ~/.config/just/justfile (backup: $JUST_BAK)"
+            else
+                rm -f "$JUST_TMP"
+                error "  ERROR: failed to write $JUST_DEST — original content preserved (backup: $JUST_BAK)"
+            fi
+        else
+            warn "  Skipped: could not back up existing $JUST_DEST — leaving it untouched"
+        fi
+    elif [ -f "$JUST_DEST" ]; then
+        info "  Unchanged: ~/.config/just/justfile"
+    else
+        JUST_TMP="$JUST_DEST.tmp.$$"
+        if cp "$SCRIPT_DIR/tools/justfile" "$JUST_TMP" && mv "$JUST_TMP" "$JUST_DEST"; then
+            success "  Installed: ~/.config/just/justfile"
+        else
+            rm -f "$JUST_TMP"
+            error "  ERROR: failed to write $JUST_DEST"
+        fi
+    fi
+fi
+
 # --- Install ccr (claude-code-router) local-routing config (skip-if-exists) ---
 # First-class local cheap-mode (cast cheap) routes via ccr -> Ollama. Deploy a
 # working CAST template only if the user has no ccr config yet; never clobber a
