@@ -36,7 +36,11 @@ teardown() {
 
 # Create the otel_events + otel_metrics tables (schema mirrors cast-db-init.sh)
 # WITHOUT any indexes — the "legacy DB missing them" fixture.
+# Also seeds the rollup tables (see tests/helpers/setup.bash::seed_rollup_tables)
+# so real-prune tests here pass cast-db-prune.py's fail-closed rollup gate —
+# harmless for the (a)/(b) index tests, which don't run prune.
 _create_otel_schema() {
+  seed_rollup_tables "$TEST_DB"
   sqlite3 "$TEST_DB" "
     CREATE TABLE otel_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -221,9 +225,11 @@ _count_otel_indexes() {
 @test "(c) otel window is independent of CAST_DB_PRUNE_DAYS" {
   # A 45-day-old row: past the 30-day otel window (deleted) but within the
   # 90-day routing/agent_runs window (kept) — proves the windows are separate.
+  # routing_events is already provisioned by _create_otel_schema (via
+  # seed_rollup_tables), which includes the `timestamp` column this test
+  # needs — no separate CREATE TABLE here (it would collide).
   _create_otel_schema
   sqlite3 "$TEST_DB" "
-    CREATE TABLE routing_events (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT);
     INSERT INTO otel_events (session_id, received_at) VALUES ('s-45d', datetime('now', '-45 days'));
     INSERT INTO routing_events (timestamp) VALUES (datetime('now', '-45 days'));
   "
