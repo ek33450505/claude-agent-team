@@ -29,7 +29,8 @@ cast status   # health check after install
 
 ## Non-obvious
 
-- `agents/core/` holds the 22 canonical agent definitions — edit there, then reinstall.
+- `agents/core/` holds the 27 canonical agent definitions — edit there, then reinstall.
 - `.claude/` at repo root is a runtime install artifact (output of `install.sh`), not a config location for development.
 - `CAST_DB_PATH` overrides the default SQLite path (`~/.claude/cast.db`).
 - `CAST_COMMIT_AGENT=1` escape-hatch prefix allows raw `git commit` when the commit agent is unavailable.
+- `tools/justfile` is the canonical source for the `just -g <recipe>` cost/trend recipes; `install.sh` delivers it to `~/.config/just/justfile`. Unlike every other install step this one **overwrites** (backing up first, and aborting if the backup fails) — skip-if-exists is what previously meant a merged fix never reached the live file. Cost/trend recipes read the `agent_runs_daily` rollup, so the CURRENT day is partial until the nightly rollup runs; each prints a `rollup_age`.
