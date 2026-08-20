@@ -485,7 +485,7 @@ EOF
     local fake_repo="$BATS_TEST_TMPDIR/fake-repo"
     mkdir -p "$fake_repo/a" "$fake_repo/b"
     touch "$fake_repo/a/dup.md" "$fake_repo/b/dup.md"
-    ( cd "$fake_repo" && git init -q && git add -A && git -c user.email=t@t.com -c user.name=t commit -q -m init )
+    ( cd "$fake_repo" && git init -q && git add -A )
 
     run python3 -c "
 import sys
