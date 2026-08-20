@@ -72,3 +72,79 @@ teardown_temp_home() {
   rm -rf "$target"
   export HOME="$ORIG_HOME"
 }
+
+# Seed everything scripts/cast-db-rollup.py needs to exit 0 against a fixture
+# DB: the two rollup-summary tables (agent_runs_daily, mcp_calls_daily) it
+# checks for up front, AND minimal agent_runs / routing_events source tables
+# it unconditionally SELECTs FROM. scripts/cast-db-prune.py runs the rollup
+# as a fail-closed gate before any DELETE: if the rollup exits non-zero,
+# prune skips ALL delete steps by design.
+#
+# VERIFIED (2026-08-19): the rollup's _REQUIRED_TABLES check only names the
+# two daily tables, but Step A/B run `FROM agent_runs` / `FROM routing_events`
+# unconditionally — a fixture missing either source table fails with
+# "no such table: agent_runs" even when both daily tables exist. So this
+# helper seeds all four, using CREATE TABLE IF NOT EXISTS for every one —
+# a caller that already defines its own richer agent_runs/routing_events
+# (e.g. cast-db-prune.bats) is left untouched; a caller with neither
+# (e.g. the otel fixture) gets empty-but-schema-complete tables, which is
+# sufficient for the rollup to run over zero rows and exit 0.
+#
+# Idempotent — safe to call after other schema setup, and safe to call more
+# than once against the same DB.
+#
+# Usage: seed_rollup_tables "$TEST_DB"
+seed_rollup_tables() {
+  local db_path="$1"
+  sqlite3 "$db_path" "
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent TEXT,
+      started_at TEXT,
+      model TEXT,
+      status TEXT,
+      response TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_read_input_tokens INTEGER,
+      cache_creation_input_tokens INTEGER,
+      cost_usd REAL,
+      duration_ms INTEGER,
+      tool_uses INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS routing_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT,
+      event_type TEXT,
+      data TEXT
+    );
+    CREATE TABLE IF NOT EXISTS agent_runs_daily (
+      day TEXT NOT NULL,
+      agent TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '',
+      runs INTEGER NOT NULL DEFAULT 0,
+      with_response INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      tool_uses INTEGER NOT NULL DEFAULT 0,
+      rolled_up_at TEXT NOT NULL,
+      PRIMARY KEY (day, agent, model, status)
+    );
+    CREATE TABLE IF NOT EXISTS mcp_calls_daily (
+      day TEXT NOT NULL,
+      mcp_server TEXT NOT NULL DEFAULT '',
+      mcp_tool TEXT NOT NULL DEFAULT '',
+      outcome TEXT NOT NULL DEFAULT '',
+      is_cloud_bound INTEGER NOT NULL DEFAULT 0,
+      calls INTEGER NOT NULL DEFAULT 0,
+      result_bytes INTEGER NOT NULL DEFAULT 0,
+      rolled_up_at TEXT NOT NULL,
+      PRIMARY KEY (day, mcp_server, mcp_tool, outcome, is_cloud_bound)
+    );
+  "
+}

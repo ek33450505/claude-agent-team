@@ -101,7 +101,7 @@ Pillar 2 made into infrastructure. The invariant: **a CAST operation may never d
 - **Litestream** continuously replicates `cast.db` to `~/Library/Application Support/cast/` — *outside* the `~/.claude` blast radius — via the `com.cast.litestream` LaunchAgent. Near-zero RPO; closes the colocated-backup hole that a wipe exposed.
 - **Dated snapshots** (`cast-snapshot.py`, 7-day + 4-week retention) land off-radius as well; `cast backup` drives them.
 - **Wipe canary** lives at `~/Library/Application Support/cast/bin/` (relocated off the blast radius) so it captures forensics at the instant `~/.claude` vanishes — the detector cannot be deleted by the event it detects.
-- **Migration backup-gate** — `cast-migrate.py --confirm` takes a fail-closed `cast.db` backup before any destructive migration; `cast-db-prune.py` backs up before its scheduled DELETE.
+- **Migration backup-gate** — `cast-migrate.py --confirm` takes a fail-closed `cast.db` backup before any destructive migration; `cast-db-prune.py` backs up **and rolls up** (`cast-db-rollup.py`, aggregating trends into `agent_runs_daily`/`mcp_calls_daily`) before its scheduled DELETE — either gate failing skips every delete.
 - **`cast integrity`** is the read surface — an honest ladder that answers "are my guarantees live *right now*?": write-guards present · blast-radius lint wired · backups fresh and off-radius · Litestream replica fresh · canary loaded · evidence path writable. It never reports green on absent evidence. A daily `com.cast.integrity` LaunchAgent notifies only when the warn count *rises* above a stored baseline.
 
 Destructive paths are tested by **proving refusal** (the guard refuses and logs), not just by proving the happy path.

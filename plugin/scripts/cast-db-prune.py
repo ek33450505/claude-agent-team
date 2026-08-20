@@ -25,9 +25,22 @@ Fail-closed backup gate (real prune only):
   script still exits 0 to preserve the cron/launchd contract.  There is NO
   escape hatch — a real prune never proceeds without a successful backup.
 
+Fail-closed rollup gate (real prune only):
+  After the backup gate and before any DELETE, cast-db-rollup.py is invoked
+  as a subprocess with the prune's OWN --db path and --authoritative-days
+  (the current DAYS, including any --days override) so the rollup's
+  authoritative/insert-only split can never diverge from the window this
+  prune deletes at.  If the rollup exits non-zero, times out, or cannot be
+  found, ALL FOUR delete steps AND the VACUUM are skipped — including
+  otel_events/otel_metrics, which nothing rolls up — and a loud ERROR is
+  logged.  The script still exits 0 to preserve the cron/launchd contract.
+  There is NO escape hatch.  If this fails because the rollup tables are
+  missing, run `python3 scripts/cast-migrate.py --confirm` to provision them.
+
 Dry-run mode: set CAST_DB_PRUNE_DRY_RUN=1 to report would-delete counts
 without actually deleting (useful for safe verification and tests).  Dry-run
-skips the backup gate because it performs no destructive operations.
+skips both the backup gate and the rollup gate because it performs no
+destructive operations.
 
 Retention:
   CAST_DB_PRUNE_DAYS  (default 90) — routing_events + agent_runs (steps 1-2).
@@ -193,7 +206,7 @@ def _pre_prune_backup() -> int:
                 error_detail = raw
         if not error_detail and result.stderr.strip():
             error_detail = result.stderr.strip()
-        _log(f'ERROR: Pre-prune backup failed: {error_detail} — skipping prune')
+        _log(f'ERROR: Pre-prune backup failed: {error_detail!r} — skipping prune')
         return 1
 
     raw = result.stdout.strip()
@@ -204,6 +217,134 @@ def _pre_prune_backup() -> int:
         backup_path = '(unparseable output)'
 
     _log(f'Pre-prune backup OK: {backup_path}')
+    return 0
+
+
+def _pre_prune_rollup() -> int:
+    """Run cast-db-rollup.py before deleting any rows (after the backup gate).
+
+    Fail-closed gate: if the rollup subprocess exits non-zero, times out, or
+    cannot be invoked, log a LOUD ERROR and return 1.  The caller MUST skip
+    ALL delete steps — including otel_events/otel_metrics, which nothing
+    rolls up — never prune without a successful rollup.
+
+    Invoked with the prune's OWN db path and retention window (read from the
+    module globals at call time, NOT bound as default-parameter values) so
+    the rollup's authoritative/insert-only split can never diverge from the
+    window this prune is about to delete at.
+
+    On success, log a one-line confirmation with all four counts and return 0.
+    """
+    script_dir = Path(__file__).resolve().parent
+    rollup_script = script_dir / 'cast-db-rollup.py'
+
+    if not rollup_script.exists():
+        _log(
+            f'ERROR: Pre-prune rollup script not found: {rollup_script} — skipping '
+            'ALL prune deletes (incl. otel_events/otel_metrics); cast.db will GROW '
+            'until this is fixed'
+        )
+        return 1
+
+    # LAYER 1 — prevent an ambient CAST_DB_ROLLUP_DRY_RUN=1 in this process's own
+    # environment from silently putting the CHILD rollup into dry-run (measured:
+    # the child inherits and honours it, writes NOTHING, exits 0, and reports
+    # plausible would-be counts — the aggregate is silently never written and the
+    # cost/trend data is lost forever once the matching raw row is pruned below).
+    child_env = dict(os.environ)
+    child_env['CAST_DB_ROLLUP_DRY_RUN'] = '0'
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(rollup_script), '--db', DB_PATH, '--authoritative-days', str(DAYS)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=child_env,
+        )
+    except subprocess.TimeoutExpired:
+        _log(
+            'ERROR: Pre-prune rollup timed out after 120s — skipping ALL prune deletes '
+            '(incl. otel_events/otel_metrics); cast.db will GROW until this is fixed'
+        )
+        return 1
+    except Exception as e:
+        _log(
+            f'ERROR: Pre-prune rollup invocation failed: {e} — skipping ALL prune deletes '
+            '(incl. otel_events/otel_metrics); cast.db will GROW until this is fixed'
+        )
+        return 1
+
+    if result.returncode != 0:
+        raw = result.stdout.strip()
+        error_detail = ''
+        if raw:
+            try:
+                payload = json.loads(raw)
+                error_detail = payload.get('error', raw)
+            except json.JSONDecodeError:
+                error_detail = raw
+        if not error_detail and result.stderr.strip():
+            error_detail = result.stderr.strip()
+        _log(
+            f'ERROR: Pre-prune rollup failed (rc={result.returncode}): {error_detail!r} — '
+            'skipping ALL prune deletes (incl. otel_events/otel_metrics); cast.db will '
+            'GROW until this is fixed'
+        )
+        return 1
+
+    # LAYER 2 — a zero exit code alone is NOT proof the rollup actually wrote
+    # anything (measured: exit 0 with empty/garbage/empty-dict stdout, or exit 0
+    # in dry-run via case above, all previously sailed through as "OK"). Validate
+    # the payload shape and content before accepting success.
+    raw = result.stdout.strip()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        _log(
+            'ERROR: Pre-prune rollup returned unparseable output (rc=0) — skipping ALL '
+            'prune deletes (incl. otel_events/otel_metrics); cast.db will GROW until '
+            'this is fixed'
+        )
+        return 1
+
+    if not isinstance(payload, dict):
+        _log(
+            f'ERROR: Pre-prune rollup returned a non-object payload (rc=0): {payload!r} — '
+            'skipping ALL prune deletes (incl. otel_events/otel_metrics); cast.db will '
+            'GROW until this is fixed'
+        )
+        return 1
+
+    if payload.get('dry_run') is not False:
+        _log(
+            f'ERROR: Pre-prune rollup reported dry_run={payload.get("dry_run")!r} (rc=0) — '
+            'the rollup did not actually write anything; skipping ALL prune deletes '
+            '(incl. otel_events/otel_metrics); cast.db will GROW until this is fixed'
+        )
+        return 1
+
+    count_keys = ('agent_runs_daily', 'mcp_calls_daily', 'excluded_agent_runs', 'excluded_mcp_calls')
+    for key in count_keys:
+        value = payload.get(key)
+        # isinstance(True, int) is True in Python — exclude bool explicitly so a
+        # payload of {"agent_runs_daily": true, ...} cannot sail through as valid.
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            _log(
+                f'ERROR: Pre-prune rollup payload has invalid {key}={value!r} (rc=0) — '
+                'skipping ALL prune deletes (incl. otel_events/otel_metrics); cast.db '
+                'will GROW until this is fixed'
+            )
+            return 1
+
+    _log(
+        'Pre-prune rollup OK: '
+        f'agent_runs_daily={payload.get("agent_runs_daily")} '
+        f'mcp_calls_daily={payload.get("mcp_calls_daily")} '
+        f'excluded_agent_runs={payload.get("excluded_agent_runs")} '
+        f'excluded_mcp_calls={payload.get("excluded_mcp_calls")}'
+    )
+
     return 0
 
 
@@ -273,6 +414,12 @@ def main() -> None:
         # --- Fail-closed backup gate (real prune only; dry-run is read-only) ---
         if not DRY_RUN:
             if _pre_prune_backup() != 0:
+                _log('ERROR: Skipping all delete steps — prune aborted (fail-closed)')
+                sys.exit(0)
+
+        # --- Fail-closed rollup gate (real prune only) ---
+        if not DRY_RUN:
+            if _pre_prune_rollup() != 0:
                 _log('ERROR: Skipping all delete steps — prune aborted (fail-closed)')
                 sys.exit(0)
 
