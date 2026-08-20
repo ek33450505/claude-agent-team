@@ -115,3 +115,65 @@ _make_file() {
   assert_success
   assert_output --partial "WARNING [lint-byte-budget]:"
 }
+
+# ---------------------------------------------------------------------------
+# Tier 2: hard ceiling tests
+# ---------------------------------------------------------------------------
+
+@test "default ceiling is 45056 bytes (pins the shipped default, no override)" {
+  # Under ceiling but over advisory: no CAST_RULES_BYTE_CEILING override —
+  # exercises the script's own default literal, not a test-supplied one.
+  _make_file "${FIXTURE_DIR}/mid.md" 40000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' bash '${LINT_SH}' 2>&1"
+  assert_success
+  assert_output --partial "ADVISORY [lint-byte-budget]:"
+
+  # Over the default ceiling: same no-override invocation.
+  _make_file "${FIXTURE_DIR}/mid.md" 46000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' bash '${LINT_SH}' 2>&1"
+  assert_failure
+  assert_output --partial "BLOCKED [lint-byte-budget]:"
+  assert_output --partial "45056-byte hard ceiling"
+}
+
+@test "ceiling breach without ack is blocked and names the escape hatch" {
+  _make_file "${FIXTURE_DIR}/huge.md" 5000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_CEILING=4000 bash '${LINT_SH}' 2>&1"
+  assert_failure
+  assert_output --partial "BLOCKED [lint-byte-budget]:"
+  assert_output --partial "CAST_RULES_BUDGET_ACK"
+}
+
+@test "ceiling breach with non-empty ack succeeds and echoes the reason verbatim" {
+  _make_file "${FIXTURE_DIR}/huge.md" 5000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_CEILING=4000 CAST_RULES_BUDGET_ACK='some reason text' bash '${LINT_SH}' 2>&1"
+  assert_success
+  assert_output --partial "ACK [lint-byte-budget]:"
+  assert_output --partial "some reason text"
+}
+
+@test "ceiling breach with empty ack is still blocked" {
+  _make_file "${FIXTURE_DIR}/huge.md" 5000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_CEILING=4000 CAST_RULES_BUDGET_ACK='' bash '${LINT_SH}' 2>&1"
+  assert_failure
+  assert_output --partial "BLOCKED [lint-byte-budget]:"
+}
+
+@test "between advisory and ceiling exits 0 with ADVISORY and never BLOCKED" {
+  _make_file "${FIXTURE_DIR}/mid.md" 3000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_BUDGET=1000 CAST_RULES_BYTE_CEILING=5000 bash '${LINT_SH}' 2>&1"
+  assert_success
+  assert_output --partial "ADVISORY [lint-byte-budget]:"
+  refute_output --partial "BLOCKED"
+}
+
+@test "per-file table appears on the BLOCKED path" {
+  _make_file "${FIXTURE_DIR}/small.md" 100
+  _make_file "${FIXTURE_DIR}/large.md" 4900
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_CEILING=1000 bash '${LINT_SH}' 2>&1"
+  assert_failure
+  assert_output --partial "BLOCKED [lint-byte-budget]:"
+  assert_output --partial "Per-file sizes (largest first):"
+  assert_output --partial "large.md"
+  assert_output --partial "small.md"
+}
