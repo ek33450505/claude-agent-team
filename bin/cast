@@ -164,6 +164,7 @@ Subcommands:
   ${C_BOLD}cost${C_RESET}      [--by-task|--by-branch|--by-agent] [--project N] [--limit N]  Per-task/feature cost attribution
   ${C_BOLD}agents${C_RESET}    [--usage] [--live] [--json]   List installed agents, per-agent usage with --usage, or in-flight runs with --live
   ${C_BOLD}review${C_RESET}    <agent|prefix> [--last N]     Print recorded agent output (agent_runs.response), newest first
+  ${C_BOLD}rules${C_RESET}     sync [--apply]                Diff repo rules-core/ vs live ~/.claude/rules/ and sync on confirm (dry-run by default)
   ${C_BOLD}hooks${C_RESET}                           Show active hooks with health status
   ${C_BOLD}backup${C_RESET}    [--overlay]               On-disk snapshot (+ GitHub overlay with --overlay)
   ${C_BOLD}restore${C_RESET}   <date|dir> [--force]      Restore files from a snapshot (--list to see them)
@@ -4395,6 +4396,55 @@ for i, r in enumerate(rows):
 PYEOF
 }
 
+# ── Subcommand: rules ────────────────────────────────────────────────────────
+_cmd_rules() {
+  local sub="${1:-}"
+  shift 2>/dev/null || true
+
+  case "$sub" in
+    ''|--help|-h)
+      cat <<USAGE
+Usage: cast rules <subcommand> [args]
+
+Subcommands:
+  sync [--apply]   Diff repo rules-core/ vs live ~/.claude/rules/ and sync on
+                    confirm. Dry run by default (report-only, never writes).
+  status           Alias for a dry-run sync (no --apply).
+
+Env overrides:
+  CAST_RULES_CORE_DIR          default: <repo-root>/rules-core
+  CAST_LIVE_RULES_DIR          default: \$HOME/.claude/rules
+  CAST_RULES_SYNC_BACKUP_DIR   default: \$HOME/.claude/backups
+USAGE
+      exit 0
+      ;;
+    sync|status)
+      rules_sync_script="${CAST_SCRIPTS_DIR}/cast-rules-sync.sh"
+      if [ ! -f "$rules_sync_script" ]; then
+        rules_sync_script="${CAST_REPO_DIR}/scripts/cast-rules-sync.sh"
+      fi
+      if [ ! -f "$rules_sync_script" ]; then
+        _error "cast-rules-sync.sh not found. Run: bash install.sh"
+        exit 1
+      fi
+      if [ "$sub" = "status" ]; then
+        for arg in "$@"; do
+          if [ "$arg" = "--apply" ]; then
+            _error "cast rules status is read-only; use: cast rules sync --apply"
+            exit 1
+          fi
+        done
+        exec bash "$rules_sync_script"
+      fi
+      exec bash "$rules_sync_script" "$@"
+      ;;
+    *)
+      _error "Unknown rules subcommand: $sub. Usage: cast rules sync [--apply] | status"
+      exit 1
+      ;;
+  esac
+}
+
 # ── Subcommand: install-completions ──────────────────────────────────────────
 _cmd_install_completions() {
   local completions_src="${CAST_REPO_DIR}/completions"
@@ -5242,6 +5292,7 @@ case "$SUBCOMMAND" in
   cost)                 _cmd_cost "$@" ;;
   agents)               _cmd_agents "$@" ;;
   review)               _cmd_review "$@" ;;
+  rules)                _cmd_rules "$@" ;;
   hooks)                _cmd_hooks "$@" ;;
   backup)               _cmd_backup "$@" ;;
   restore)              _cmd_restore "$@" ;;

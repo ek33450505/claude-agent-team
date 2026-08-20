@@ -108,7 +108,7 @@ _cast() {
       # parsing them would reintroduce exactly the drift this region exists
       # to remove. _describe works fine against a plain array.
       # BEGIN GENERATED SUBCOMMANDS (zsh) — do not edit by hand; run scripts/gen-completions.sh
-      subcommands=(agents ask backup batch budget cheap ci-local clean cost dash db-contract dispatch doctor eval exec feature files hooks incidents init-repo install-completions integrity ledger mcp memory migrate new-agent parallel plan-doctor predict provenance restore review routines stack status test tidy upgrade-check verify-chain)
+      subcommands=(agents ask backup batch budget cheap ci-local clean cost dash db-contract dispatch doctor eval exec feature files hooks incidents init-repo install-completions integrity ledger mcp memory migrate new-agent parallel plan-doctor predict provenance restore review routines rules stack status test tidy upgrade-check verify-chain)
       # END GENERATED SUBCOMMANDS (zsh)
       _describe 'subcommand' subcommands
       ;;

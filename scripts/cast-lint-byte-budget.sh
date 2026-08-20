@@ -1,25 +1,34 @@
 #!/usr/bin/env bash
-# cast-lint-byte-budget.sh — CAST Rules-Core Size Advisory
+# cast-lint-byte-budget.sh — CAST Rules-Core Size Gate (two-tier)
 #
 # Reports the byte footprint of the always-loaded rules surface: rules-core/*.md
-# and rules-core/*.md.template.  This is a report-only advisory that never
-# blocks; it exits 0 regardless of whether the total is above or below the soft
-# target.
+# and rules-core/*.md.template. This is a TWO-TIER gate:
+#   Tier 1 (advisory) — over CAST_RULES_BYTE_BUDGET prints an ADVISORY message
+#     and a per-file size table, but still exits 0 (not enforced).
+#   Tier 2 (hard ceiling) — over CAST_RULES_BYTE_CEILING prints a BLOCKED
+#     message and per-file table, and exits non-zero (enforced), UNLESS
+#     CAST_RULES_BUDGET_ACK is set to a non-empty reason string, in which case
+#     it prints an ACK message (echoing the reason) and exits 0.
 #
 # NOTE: CLAUDE.md itself is NOT repo-tracked and is therefore excluded from
-# this scan. This advisory covers only the committed rules-core/ source files
+# this scan. This gate covers only the committed rules-core/ source files
 # that install.sh deploys to ~/.claude/rules/.
 #
 # Exit codes:
-#   0 — always (report-only; never blocks)
+#   0 — under the ceiling (regardless of advisory), or ceiling breach acked
+#   1 — rules dir not found, OR ceiling breached without an ack
 #
 # Env overrides (for testing):
-#   CAST_RULES_BYTE_BUDGET  — soft target in bytes (default: 36864)
+#   CAST_RULES_BYTE_BUDGET  — soft advisory target in bytes (default: 36864)
+#   CAST_RULES_BYTE_CEILING — hard ceiling in bytes (default: 45056)
+#   CAST_RULES_BUDGET_ACK   — non-empty reason string to ack a ceiling breach
+#                             and allow it through (exit 0)
 #   CAST_RULES_DIR          — path to scan instead of <repo-root>/rules-core
 
 set -euo pipefail
 
 BUDGET="${CAST_RULES_BYTE_BUDGET:-36864}"
+CEILING="${CAST_RULES_BYTE_CEILING:-45056}"
 
 # Resolve repo root if CAST_RULES_DIR is not overridden
 if [[ -n "${CAST_RULES_DIR:-}" ]]; then
@@ -55,14 +64,37 @@ for fp in "${FILES[@]}"; do
 	SIZE_LIST+=("${sz}	${fp}")
 done
 
-if [[ "${TOTAL}" -gt "${BUDGET}" ]]; then
-	OVERAGE=$((TOTAL - BUDGET))
-	echo "ADVISORY [lint-byte-budget]: rules-core is ${TOTAL} bytes, over the ${BUDGET}-byte soft target by ${OVERAGE} — consider trimming (advisory; not enforced)" >&2
+_print_per_file_table() {
 	echo "" >&2
 	echo "Per-file sizes (largest first):" >&2
 	printf '%s\n' "${SIZE_LIST[@]}" | sort -rn | while IFS=$'\t' read -r sz fp; do
 		printf '  %6d  %s\n' "${sz}" "$(basename "${fp}")"
 	done >&2
+}
+
+# Tier 2 — hard ceiling. Must be checked BEFORE the advisory return so a
+# ceiling breach can never exit 0 through the advisory path.
+if [[ "${TOTAL}" -gt "${CEILING}" ]]; then
+	OVERAGE=$((TOTAL - CEILING))
+	if [[ -n "${CAST_RULES_BUDGET_ACK:-}" ]]; then
+		# Sanitize for DISPLAY only — strip control chars (CR/LF/ESC/etc) so a
+		# crafted reason can't forge adjacent log lines. The ack DECISION above
+		# reads the raw, unsanitized value; only the echoed text is stripped.
+		ACK_DISPLAY="$(printf '%s' "${CAST_RULES_BUDGET_ACK}" | tr -d '\000-\037\177')"
+		echo "ACK [lint-byte-budget]: rules-core is ${TOTAL} bytes, over the ${CEILING}-byte hard ceiling by ${OVERAGE} — acknowledged: ${ACK_DISPLAY}" >&2
+		_print_per_file_table
+		exit 0
+	fi
+	echo "BLOCKED [lint-byte-budget]: rules-core is ${TOTAL} bytes, over the ${CEILING}-byte hard ceiling by ${OVERAGE}. Trim rules-core, or ack with: CAST_RULES_BUDGET_ACK=\"<reason>\" git commit ..." >&2
+	_print_per_file_table
+	exit 1
+fi
+
+# Tier 1 — advisory (report-only, never blocks)
+if [[ "${TOTAL}" -gt "${BUDGET}" ]]; then
+	OVERAGE=$((TOTAL - BUDGET))
+	echo "ADVISORY [lint-byte-budget]: rules-core is ${TOTAL} bytes, over the ${BUDGET}-byte soft target by ${OVERAGE} — consider trimming (advisory; not enforced)" >&2
+	_print_per_file_table
 	exit 0
 fi
 

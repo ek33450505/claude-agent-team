@@ -429,3 +429,104 @@ print(json.dumps(data))
   run bash "$CAST_CLI" restore 2026-01-01
   assert_failure
 }
+
+# ── cast rules ───────────────────────────────────────────────────────────────
+# Wires the already-shipped scripts/cast-rules-sync.sh into `cast rules sync`.
+# Fixture dirs (CAST_RULES_CORE_DIR / CAST_LIVE_RULES_DIR) keep every test off
+# the real ~/.claude/rules/ (the live daily-driver runtime rules dir).
+
+setup_rules_fixture() {
+  RULES_FIXTURE_DIR="$(mktemp -d)"
+  RULES_CORE_DIR="$RULES_FIXTURE_DIR/rules-core"
+  RULES_LIVE_DIR="$RULES_FIXTURE_DIR/live-rules"
+  mkdir -p "$RULES_CORE_DIR" "$RULES_LIVE_DIR"
+  export CAST_RULES_CORE_DIR="$RULES_CORE_DIR"
+  export CAST_LIVE_RULES_DIR="$RULES_LIVE_DIR"
+}
+
+teardown_rules_fixture() {
+  [ -n "${RULES_FIXTURE_DIR:-}" ] && rm -rf "$RULES_FIXTURE_DIR"
+  unset CAST_RULES_CORE_DIR CAST_LIVE_RULES_DIR RULES_FIXTURE_DIR RULES_CORE_DIR RULES_LIVE_DIR
+}
+
+@test "cast rules: no subcommand prints usage and exits 0" {
+  run bash "$CAST_CLI" rules
+  assert_success
+  assert_output --partial "Usage: cast rules"
+  assert_output --partial "sync"
+}
+
+@test "cast rules --help: prints usage and exits 0" {
+  # --help is intercepted globally by _parse_global_flags before subcommand
+  # dispatch (same pre-existing behavior as `cast restore --help` above) — it
+  # prints the top-level usage, which lists "rules", not _cmd_rules's own
+  # usage text. Matches the established convention for every subcommand.
+  run bash "$CAST_CLI" rules --help
+  assert_success
+  assert_output --partial "Usage"
+  assert_output --partial "rules"
+}
+
+@test "cast rules badsubcommand: exits non-zero naming the bad input" {
+  run bash "$CAST_CLI" rules badsubcommand
+  assert_failure
+  assert_output --partial "badsubcommand"
+}
+
+@test "cast rules sync: dry-run does not modify any live file" {
+  setup_rules_fixture
+  echo "old content" >"$RULES_LIVE_DIR/foo.md"
+  echo "new content" >"$RULES_CORE_DIR/foo.md"
+
+  run bash "$CAST_CLI" rules sync
+  assert_success
+
+  run cat "$RULES_LIVE_DIR/foo.md"
+  assert_output "old content"
+  teardown_rules_fixture
+}
+
+@test "cast --help output names 'rules' (discoverability)" {
+  run bash "$CAST_CLI" --help
+  assert_success
+  assert_output --partial "rules"
+}
+
+@test "cast rules sync: propagates the underlying script's non-zero exit code" {
+  setup_rules_fixture
+  # No *.md files under CAST_RULES_CORE_DIR -> cast-rules-sync.sh refuses to
+  # report clean and exits 1. cast rules sync must not swallow that.
+  run bash "$CAST_CLI" rules sync
+  assert_failure
+  teardown_rules_fixture
+}
+
+@test "cast rules status --apply: rejected, live file byte-unchanged" {
+  setup_rules_fixture
+  echo "OLD" >"$RULES_LIVE_DIR/foo.md"
+  echo "NEW" >"$RULES_CORE_DIR/foo.md"
+  export CAST_RULES_SYNC_ACK="test-run"
+
+  run bash "$CAST_CLI" rules status --apply
+  assert_failure
+  assert_output --partial "status is read-only"
+  assert_output --partial "cast rules sync --apply"
+
+  run cat "$RULES_LIVE_DIR/foo.md"
+  assert_output "OLD"
+  teardown_rules_fixture
+}
+
+@test "cast rules status: still performs a dry run, live file byte-unchanged" {
+  setup_rules_fixture
+  echo "OLD" >"$RULES_LIVE_DIR/foo.md"
+  echo "NEW" >"$RULES_CORE_DIR/foo.md"
+
+  run bash "$CAST_CLI" rules status
+  assert_success
+  assert_output --partial "WOULD-UPDATE: foo.md"
+
+  run cat "$RULES_LIVE_DIR/foo.md"
+  assert_output "OLD"
+  teardown_rules_fixture
+}
