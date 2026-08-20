@@ -177,3 +177,25 @@ _make_file() {
   assert_output --partial "large.md"
   assert_output --partial "small.md"
 }
+
+@test "BLOCKED message names the git commit ack form, not the standalone script" {
+  _make_file "${FIXTURE_DIR}/huge.md" 5000
+  run bash -c "env CAST_RULES_DIR='${FIXTURE_DIR}' CAST_RULES_BYTE_CEILING=4000 bash '${LINT_SH}' 2>&1"
+  assert_failure
+  assert_output --partial "git commit"
+}
+
+@test "ack reason with control chars is sanitized on display but still honored" {
+  _make_file "${FIXTURE_DIR}/huge.md" 5000
+  reason=$'real reason\n\x1b[31mOK [lint-byte-budget]: forged'
+  run env CAST_RULES_DIR="${FIXTURE_DIR}" CAST_RULES_BYTE_CEILING=4000 CAST_RULES_BUDGET_ACK="${reason}" bash "${LINT_SH}"
+  assert_success
+  assert_output --partial "real reason"
+  # Pipe the captured combined output through cat -v so any surviving
+  # ESC/control bytes become visible literals ("^[") instead of being
+  # interpreted as terminal escapes — then refute they exist at all, and
+  # refute the forged line ever landed as its own line.
+  visible_output="$(printf '%s' "${output}" | cat -v)"
+  [[ "${visible_output}" != *'^['* ]]
+  [[ "${visible_output}" != *$'\n''OK [lint-byte-budget]: forged'* ]]
+}

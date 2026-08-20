@@ -77,11 +77,15 @@ _print_per_file_table() {
 if [[ "${TOTAL}" -gt "${CEILING}" ]]; then
 	OVERAGE=$((TOTAL - CEILING))
 	if [[ -n "${CAST_RULES_BUDGET_ACK:-}" ]]; then
-		echo "ACK [lint-byte-budget]: rules-core is ${TOTAL} bytes, over the ${CEILING}-byte hard ceiling by ${OVERAGE} — acknowledged: ${CAST_RULES_BUDGET_ACK}" >&2
+		# Sanitize for DISPLAY only — strip control chars (CR/LF/ESC/etc) so a
+		# crafted reason can't forge adjacent log lines. The ack DECISION above
+		# reads the raw, unsanitized value; only the echoed text is stripped.
+		ACK_DISPLAY="$(printf '%s' "${CAST_RULES_BUDGET_ACK}" | tr -d '\000-\037\177')"
+		echo "ACK [lint-byte-budget]: rules-core is ${TOTAL} bytes, over the ${CEILING}-byte hard ceiling by ${OVERAGE} — acknowledged: ${ACK_DISPLAY}" >&2
 		_print_per_file_table
 		exit 0
 	fi
-	echo "BLOCKED [lint-byte-budget]: rules-core is ${TOTAL} bytes, over the ${CEILING}-byte hard ceiling by ${OVERAGE}. Trim rules-core, or ack with: CAST_RULES_BUDGET_ACK=\"<reason>\" bash scripts/cast-lint-byte-budget.sh" >&2
+	echo "BLOCKED [lint-byte-budget]: rules-core is ${TOTAL} bytes, over the ${CEILING}-byte hard ceiling by ${OVERAGE}. Trim rules-core, or ack with: CAST_RULES_BUDGET_ACK=\"<reason>\" git commit ..." >&2
 	_print_per_file_table
 	exit 1
 fi
