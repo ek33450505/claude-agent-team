@@ -108,13 +108,14 @@ for event, entries in hooks.items():
             if hook.get("type") != "command":
                 continue
             cmd = hook.get("command", "")
+            has_args = "1" if "args" in hook else "0"
             if entry_id:
                 label = entry_id
             else:
                 parts = cmd.split()
                 script_part = parts[-1] if parts else cmd
                 label = os.path.basename(script_part)
-            print(f"{event}\t{label}\t{cmd}")
+            print(f"{event}\t{label}\t{has_args}\t{cmd}")
 PYEOF
 )
 
@@ -127,16 +128,60 @@ fi
 OK_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
+EXECUTED_COUNT=0
+SKIPPED_COUNT=0
 
-while IFS=$'\t' read -r event label cmd; do
-  # Resolve script path
-  script_path="${cmd#bash }"
+while IFS=$'\t' read -r event label has_args cmd; do
+  # Resolve the script argument for an EXISTENCE pre-check. Scan tokens
+  # and take the first one that looks like a path (contains '/', or
+  # starts with '~'); fall back to token 0 if none does. This handles all
+  # three shapes seen in settings.json:
+  #   bash ~/.claude/scripts/foo.sh
+  #   bash ~/.claude/scripts/cast-audit-hook.sh --mode post
+  #   python3 ~/.claude/scripts/cast-pretool-dispatch.py
+  # (the old `${cmd#bash }` decomposition only handled the first shape,
+  # and only when the command literally started with "bash ").
+  #
+  # ⚠️ This scan is a DIAGNOSTIC HEURISTIC, not a safety boundary. It exists
+  # to fail fast on a broken or typo'd hook registration; it does not parse
+  # shell grammar, so an adversarially-shaped command could pass this check
+  # while `sh -c` executes something else entirely. That is not a gap worth
+  # closing here: anyone able to edit settings.json already gets the same
+  # shell-form execution from Claude Code itself on every real hook fire.
+  # Do not later mistake this for a security control.
+  script_path=""
+  for tok in $cmd; do
+    case "$tok" in
+      */* | '~'*)
+        script_path="$tok"
+        break
+        ;;
+    esac
+  done
+  if [[ -z "$script_path" ]]; then
+    script_path="${cmd%% *}"
+  fi
   script_path="${script_path/#\~/$HOME}"
-  script_path="${script_path%% *}"
 
+  # Exec-form hooks (an `args` key) are not shell-form and are not
+  # supported by this validator — fail loudly rather than mis-invoke.
+  if [[ "$has_args" == "1" ]]; then
+    printf "[fail] %s (%s) — hook uses exec form ('args' key); this validator only supports shell-form command hooks\n" "$label" "$event" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+    continue
+  fi
+
+  # An unresolvable script cannot possibly run — fail before attempting
+  # execution. This MUST be a pre-check, not an exit-code inference: exit
+  # 2 from a hook is a legitimate PreToolUse "block" result (see
+  # cast-pretool-dispatch.py), not evidence the hook is broken, so exit
+  # status alone cannot distinguish "blocked the call" from "interpreter
+  # could not open the script."
   if [[ ! -f "$script_path" ]]; then
-    printf "[warn] %s (%s) — script not found: %s\n" "$label" "$event" "$script_path" >&2
-    WARN_COUNT=$((WARN_COUNT + 1))
+    printf "[fail] %s (%s) — script not found: %s\n" "$label" "$event" "$script_path" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
     continue
   fi
 
@@ -144,20 +189,35 @@ while IFS=$'\t' read -r event label cmd; do
   payload_var="PAYLOAD_${event}"
   payload="${!payload_var:-{}}"
 
-  # Run hook with synthetic stdin; timeout 5s
+  # Run hook exactly as Claude Code does: the full command string handed
+  # whole to `sh -c` (shell form — no splitting/truncation, no forced
+  # interpreter; `sh` performs its own tilde expansion).
   hook_stdout=""
   hook_exit=0
+  EXECUTED_COUNT=$((EXECUTED_COUNT + 1))
   if command -v timeout &>/dev/null; then
-    hook_stdout=$(printf '%s' "$payload" | CLAUDE_SUBPROCESS=0 timeout 5 bash "$script_path" 2>/dev/null) || hook_exit=$?
+    hook_stdout=$(printf '%s' "$payload" | CLAUDE_SUBPROCESS=0 timeout 5 sh -c "$cmd" 2>/dev/null) || hook_exit=$?
   elif command -v perl &>/dev/null; then
-    hook_stdout=$(printf '%s' "$payload" | CLAUDE_SUBPROCESS=0 perl -e 'alarm 5; exec @ARGV' bash "$script_path" 2>/dev/null) || hook_exit=$?
+    hook_stdout=$(printf '%s' "$payload" | CLAUDE_SUBPROCESS=0 perl -e 'alarm 5; exec @ARGV' sh -c "$cmd" 2>/dev/null) || hook_exit=$?
   else
-    hook_stdout=$(printf '%s' "$payload" | CLAUDE_SUBPROCESS=0 bash "$script_path" 2>/dev/null) || hook_exit=$?
+    hook_stdout=$(printf '%s' "$payload" | CLAUDE_SUBPROCESS=0 sh -c "$cmd" 2>/dev/null) || hook_exit=$?
   fi
 
   if [[ $hook_exit -eq 124 || $hook_exit -eq 142 ]]; then
     printf "[warn] %s (%s) — hook timed out\n" "$label" "$event" >&2
     WARN_COUNT=$((WARN_COUNT + 1))
+    continue
+  fi
+
+  # Backstop only: the pre-check above should have already caught an
+  # unresolvable script. 126 = found but not executable by the shell,
+  # 127 = command not found — this catches shapes the token-scan missed
+  # (e.g. a bare PATH command with no '/' that isn't actually on PATH).
+  # Deliberately NOT extended to other exit codes: exit 2 is a legitimate
+  # PreToolUse "block" result and must not be misread as broken.
+  if [[ $hook_exit -eq 126 || $hook_exit -eq 127 ]]; then
+    printf "[fail] %s (%s) — hook could not be executed (exit %d; resolved path: %s)\n" "$label" "$event" "$hook_exit" "$script_path" >&2
+    FAIL_COUNT=$((FAIL_COUNT + 1))
     continue
   fi
 
@@ -264,8 +324,11 @@ PYEOF
 done <<< "$HOOK_LINES"
 
 # ── Summary ───────────────────────────────────────────────────────────────
+# Report executed vs skipped explicitly — a hook that was never executed
+# (e.g. exec-form 'args' hooks) must not be able to hide inside "validated".
 TOTAL=$((OK_COUNT + WARN_COUNT + FAIL_COUNT))
-printf "\nvalidated %d hooks: %d ok, %d warn, %d fail\n" "$TOTAL" "$OK_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
+printf "\nvalidated %d hooks (%d executed, %d skipped): %d ok, %d warn, %d fail\n" \
+  "$TOTAL" "$EXECUTED_COUNT" "$SKIPPED_COUNT" "$OK_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
 
 # Exit policy: fails block CI; warnings are advisory and do NOT block.
 # Use --strict to also fail on warnings (e.g. when tightening contracts).
