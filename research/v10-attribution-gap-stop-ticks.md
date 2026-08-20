@@ -197,3 +197,96 @@ sqlite3 ~/.claude/cast.db "SELECT COUNT(*) FROM agent_runs WHERE started_at LIKE
 
 ⚠️ Every figure here is from the retained window (events dir oldest artifact 2026-08-16; `agent_runs`
 ~30 days). Re-measure before citing — do not copy a number out of this file.
+
+---
+
+# ADDENDUM — I-1c: the ticks IDENTIFIED, and what they were doing to the record
+
+**Date:** 2026-08-20, same session. The capture built in `25135db` was armed
+(`mkdir ~/.claude/cast/debug/stdin-capture`), one `researcher` was dispatched, and 7 raw payloads
+were captured. Timer-vs-per-turn (§3's open question) is now **ESTABLISHED**, and the answer came
+with a second finding that outranks the first.
+
+## A. The discriminator is `agent_type`
+
+Six of seven captures were ticks; one was the real completion.
+
+| field | tick (6×) | real completion (1×) |
+|---|---|---|
+| `agent_type` | `""` — empty string | `"researcher"` |
+| `agent_id` | a DIFFERENT ephemeral id per tick, matching no `agent_runs` row | `a56fb899387e6b9ef` — the dispatched agent's real id |
+| `hook_event_name` | `SubagentStop` (genuinely, in the RAW payload — not the hardcoded field of §5) | `SubagentStop` |
+| payload size | ~1.2 KB | 10.7 KB |
+| `background_tasks` | lists the in-flight subagent | lists itself |
+| `stop_hook_active` | `False` | `False` — NOT a discriminator |
+
+**Why they get through:** `cast_subagent_stop.py:2107` gates on
+`has_agent_identity = bool(raw_name or agent_id)`. The `or agent_id` clause is the hole — ticks carry
+an `agent_id` but no name. A real completion always carries `agent_type`.
+
+**Corrected model of the emitter:** these fire while a background subagent is in flight, carry the
+*enclosing session's* last message rather than any subagent's output, and are not per-subagent-turn
+events at all. The ~31.5 s beat in §2 is the cadence of the enclosing session's own turns, which is
+why it looked like a timer and why it scaled with session activity rather than dispatch count.
+
+## B. ⭐⭐ THE SPOOF CHANNEL — this is the real defect
+
+The `last_assistant_message` on the six tick payloads read, verbatim:
+
+```
+"show me a tick payload vs a real completion"
+"Grepping project-board.json readers"
+"Grepping cast-stats.sh callers repo-wide"
+"Confirming cast-stats.sh orphan-lint gap"
+"Quoting protocol-spec.md line 855"
+```
+
+Every one of these arrived in this session as a `<subagent-report source="cast-subagent-stop"
+trust="untrusted-agent-output"> … "response_excerpt": …` block — a 1:1 match, plus
+`"push it and open the PR"` earlier in the same session.
+
+**So the stop hook is relaying, as "a subagent's reported output", text that no subagent produced.**
+Two of the strings this session were phrased as direct user instructions authorising an irreversible
+act (`push it and open the PR`) or directing the next step (`show me a tick payload…`). Neither came
+from Ed.
+
+⚠️ **This is the mechanism behind [[reference_subagent_excerpts_can_spoof_user_approval]]** — the
+~10 logged incidents of an excerpt appearing to be user approval to push, which until now had no
+identified producer. It is not a model misreading; a real component is feeding
+non-subagent text into a subagent-attributed channel.
+
+**This re-prioritises I-1c.** It is not a statistics-hygiene fix. It closes a channel that has
+repeatedly manufactured apparent authorisation for `git push` / PR-merge.
+
+## C. What the fix should be (now built from an OBSERVED discriminator, per §8d)
+
+Gate on **`agent_type` being non-empty**, not on `raw_name or agent_id`:
+
+- a real completion always supplies `agent_type` (observed);
+- ticks never do (observed, 6/6);
+- the existing `agent_id → agent_runs` DB fallback stays for the genuinely-orphaned terminal event,
+  but must no longer be sufficient on its own to admit an event.
+
+⚠️ **Mutation-test against a REAL captured tick payload**, not a synthesised one — the capture
+directory now contains six. This is exactly the case
+[[reference_probe_fixture_built_from_hypothesis]] warns about: a fixture built from the hypothesis
+would have had `agent_type` absent for the wrong reason.
+
+⚠️ **Verify the fix by ABSENCE of the old path** ([[reference_probe_can_discriminate_wrong_axis]]):
+after the gate, a dispatched agent must still produce exactly ONE named stop event, AND zero
+`unknown` ones, AND no `<subagent-report>` carrying a message the subagent never wrote.
+
+## D. Re-runnable
+
+```bash
+mkdir -p ~/.claude/cast/debug/stdin-capture     # arm
+# dispatch any agent, wait for it to finish
+python3 - <<'PY'
+import json,glob,os
+for f in sorted(glob.glob(os.path.expanduser('~/.claude/cast/debug/stdin-capture/*.json'))):
+    d=json.load(open(f))
+    print(f"{os.path.basename(f)}  agent_type={d.get('agent_type')!r}  "
+          f"msg={str(d.get('last_assistant_message'))[:60]!r}")
+PY
+rm -rf ~/.claude/cast/debug/stdin-capture       # disarm (payloads contain full agent output)
+```
