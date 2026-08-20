@@ -265,3 +265,274 @@ PYEOF
   run env HOME="$fake_home" bash "$VALIDATOR_ALL"
   assert_failure
 }
+
+# ---------------------------------------------------------------------------
+# Test 6: a `python3 <script>.py` hook is actually EXECUTED, not skipped
+# ---------------------------------------------------------------------------
+
+# Emits a marker in the [ok]/[warn]/[fail] line so we can prove it ran
+# rather than being warned-away by the old `${cmd#bash }` decomposition.
+_write_python_marker_hook() {
+  local path="$1"
+  cat > "$path" <<'SCRIPT'
+import json, sys
+if __import__("os").environ.get("CLAUDE_SUBPROCESS", "0") == "1":
+    sys.exit(0)
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": "PY_MARKER_EXECUTED"
+    }
+}))
+SCRIPT
+  chmod +x "$path"
+}
+
+@test "validate-all: a python3-invoked hook is executed, not skipped as script-not-found" {
+  local py_hook="$TEST_TMPDIR/marker-hook.py"
+  local settings="$TEST_TMPDIR/settings.json"
+
+  _write_python_marker_hook "$py_hook"
+
+  export _SETTINGS_PATH="$settings"
+  export _PY_HOOK="$py_hook"
+  python3 - <<'PYEOF'
+import json, os
+settings_path = os.environ["_SETTINGS_PATH"]
+py_hook = os.environ["_PY_HOOK"]
+data = {
+    "hooks": {
+        "SessionStart": [
+            {
+                "id": "test-python-hook",
+                "hooks": [{"type": "command", "command": f"python3 {py_hook}", "timeout": 3}]
+            }
+        ]
+    }
+}
+with open(settings_path, "w") as f:
+    json.dump(data, f, indent=2)
+PYEOF
+
+  local fake_home="$TEST_TMPDIR/fh_pymarker"
+  mkdir -p "$fake_home/.claude"
+  cp "$settings" "$fake_home/.claude/settings.json"
+
+  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+  assert_success
+  # Executed (not skipped) and its shape was validated ok.
+  [[ "$output" =~ "1 executed" ]]
+  [[ "$output" =~ "0 skipped" ]]
+  refute_output --partial "script not found"
+}
+
+# ---------------------------------------------------------------------------
+# Test 7: a hook with an argument receives it
+# ---------------------------------------------------------------------------
+
+_write_arg_sensitive_hook() {
+  local path="$1"
+  cat > "$path" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then exit 0; fi
+mode="${1:-missing}"
+if [[ "$mode" == "post" ]]; then
+  python3 - <<'PYEOF'
+import json
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "SessionStart",
+        "additionalContext": "mode=post"
+    }
+}))
+PYEOF
+else
+  # No arg reached us — emit a shape the validator will FAIL on, proving
+  # the arg was (or wasn't) delivered.
+  echo "not json"
+fi
+SCRIPT
+  chmod +x "$path"
+}
+
+@test "validate-all: a hook command's argument is passed through to the hook" {
+  local arg_hook="$TEST_TMPDIR/arg-hook.sh"
+  local settings="$TEST_TMPDIR/settings.json"
+
+  _write_arg_sensitive_hook "$arg_hook"
+
+  export _SETTINGS_PATH="$settings"
+  export _ARG_HOOK="$arg_hook"
+  python3 - <<'PYEOF'
+import json, os
+settings_path = os.environ["_SETTINGS_PATH"]
+arg_hook = os.environ["_ARG_HOOK"]
+data = {
+    "hooks": {
+        "SessionStart": [
+            {
+                "id": "test-arg-hook",
+                "hooks": [{"type": "command", "command": f"bash {arg_hook} post", "timeout": 3}]
+            }
+        ]
+    }
+}
+with open(settings_path, "w") as f:
+    json.dump(data, f, indent=2)
+PYEOF
+
+  local fake_home="$TEST_TMPDIR/fh_arg"
+  mkdir -p "$fake_home/.claude"
+  cp "$settings" "$fake_home/.claude/settings.json"
+
+  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+  assert_success
+  [[ "$output" =~ "1 ok" ]]
+}
+
+# ---------------------------------------------------------------------------
+# Test 8: an unresolvable/unrunnable hook makes the validator exit non-zero
+# (regression guard for the whole "warn instead of fail" defect class)
+# ---------------------------------------------------------------------------
+
+@test "validate-all: an unrunnable hook FAILS the gate (exits non-zero), not just warns" {
+  local settings="$TEST_TMPDIR/settings.json"
+
+  export _SETTINGS_PATH="$settings"
+  python3 - <<'PYEOF'
+import json, os
+settings_path = os.environ["_SETTINGS_PATH"]
+data = {
+    "hooks": {
+        "SessionStart": [
+            {
+                "id": "test-unrunnable-hook",
+                "hooks": [{"type": "command", "command": "bash /nonexistent/does-not-exist.sh", "timeout": 3}]
+            }
+        ]
+    }
+}
+with open(settings_path, "w") as f:
+    json.dump(data, f, indent=2)
+PYEOF
+
+  local fake_home="$TEST_TMPDIR/fh_unrunnable"
+  mkdir -p "$fake_home/.claude"
+  cp "$settings" "$fake_home/.claude/settings.json"
+
+  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+  assert_failure
+  [[ "$output" =~ "1 fail" ]]
+  refute_output --partial "1 warn"
+}
+
+# ---------------------------------------------------------------------------
+# Test 9: a hook entry carrying an `args` key (exec form) is reported as fail
+# ---------------------------------------------------------------------------
+
+@test "validate-all: a hook with an 'args' key (exec form) is reported as fail" {
+  local settings="$TEST_TMPDIR/settings.json"
+
+  export _SETTINGS_PATH="$settings"
+  python3 - <<'PYEOF'
+import json, os
+settings_path = os.environ["_SETTINGS_PATH"]
+data = {
+    "hooks": {
+        "SessionStart": [
+            {
+                "id": "test-execform-hook",
+                "hooks": [{"type": "command", "command": "some-tool", "args": ["--flag"], "timeout": 3}]
+            }
+        ]
+    }
+}
+with open(settings_path, "w") as f:
+    json.dump(data, f, indent=2)
+PYEOF
+
+  local fake_home="$TEST_TMPDIR/fh_execform"
+  mkdir -p "$fake_home/.claude"
+  cp "$settings" "$fake_home/.claude/settings.json"
+
+  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+  assert_failure
+  [[ "$output" =~ "1 fail" ]]
+  [[ "$output" =~ "1 skipped" ]]
+  [[ "$output" =~ "args" ]]
+}
+
+# ---------------------------------------------------------------------------
+# Test 10: the real E-1 shape — `python3 <missing .py>` — must FAIL.
+# python3 exists on PATH, so `sh -c` happily execs it; python3 itself exits
+# 2 ("can't open file"), which is indistinguishable from a legitimate
+# PreToolUse block by exit code alone. Only a pre-execution existence
+# check (not exit-code inference) can catch this deterministically.
+# ---------------------------------------------------------------------------
+
+@test "validate-all: python3 <missing .py> hook FAILS (not silently ok)" {
+  local settings="$TEST_TMPDIR/settings.json"
+
+  export _SETTINGS_PATH="$settings"
+  python3 - <<'PYEOF'
+import json, os
+settings_path = os.environ["_SETTINGS_PATH"]
+data = {
+    "hooks": {
+        "SessionStart": [
+            {
+                "id": "test-missing-python-hook",
+                "hooks": [{"type": "command", "command": "python3 ~/.claude/scripts/does-not-exist.py", "timeout": 3}]
+            }
+        ]
+    }
+}
+with open(settings_path, "w") as f:
+    json.dump(data, f, indent=2)
+PYEOF
+
+  local fake_home="$TEST_TMPDIR/fh_missingpy"
+  mkdir -p "$fake_home/.claude"
+  cp "$settings" "$fake_home/.claude/settings.json"
+
+  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+  assert_failure
+  [[ "$output" =~ "1 fail" ]]
+  [[ "$output" =~ "0 executed" ]]
+  refute_output --partial "1 ok"
+}
+
+# ---------------------------------------------------------------------------
+# Test 11: guard against overcorrection — a hook that legitimately exits 2
+# (simulating a real PreToolUse block, e.g. cast-pretool-dispatch.py
+# blocking a destructive command) must NOT be reported as broken.
+# ---------------------------------------------------------------------------
+
+_write_blocking_hook() {
+  local path="$1"
+  cat > "$path" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then exit 0; fi
+echo "**[CAST]** blocked for test" >&2
+exit 2
+SCRIPT
+  chmod +x "$path"
+}
+
+@test "validate-all: a hook that legitimately exits 2 (a real block) is NOT reported as broken" {
+  local blocking_hook="$TEST_TMPDIR/blocking-hook.sh"
+  local settings="$TEST_TMPDIR/settings.json"
+
+  _write_blocking_hook "$blocking_hook"
+  _write_synthetic_settings "$settings" "PreToolUse" "$blocking_hook"
+
+  local fake_home="$TEST_TMPDIR/fh_blocking"
+  mkdir -p "$fake_home/.claude"
+  cp "$settings" "$fake_home/.claude/settings.json"
+
+  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+  assert_success
+  [[ "$output" =~ "1 ok" ]]
+  [[ "$output" =~ "1 executed" ]]
+  refute_output --partial "1 fail"
+}

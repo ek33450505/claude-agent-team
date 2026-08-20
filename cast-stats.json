@@ -2,7 +2,7 @@
   "version": "9.5.3",
   "versionTag": "v9.5.3",
   "agents": 27,
-  "tests": 3016,
+  "tests": 3022,
   "test_files": 226,
   "tables": 41,
   "commands": 21,
