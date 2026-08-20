@@ -25,14 +25,22 @@ itself, against an explicit, ORDERED, named root list (first hit wins):
   3. the project root decoded from the memory's parent dir name — Claude
      Code encodes a project's cwd as `~/.claude/projects/<cwd with / -> ->`,
      e.g. `-Users-testuser-Projects-personal-my-app` decodes to
-     `/Users/testuser/Projects/personal/my-app`. The encoding is
-     lossy (the final path component may itself contain literal hyphens), so
-     decode_project_dir() tries progressively coarser suffix merges and picks
-     the first that is an actual directory on disk — bounded by the number of
-     hyphens in the encoded name, never an unbounded filesystem walk. If no
-     merge produces a real directory (e.g. the project was deleted), this
-     root is skipped entirely and refs relying on it correctly stay
-     REF-BROKEN — that is a TRUE positive, not a bug.
+     `/Users/testuser/Projects/personal/my-app`. The encoding is lossy in
+     two ways: the final path component may itself contain a literal
+     hyphen, AND the encoding also flattens '_' and '.' to '-' (e.g.
+     `Edward_Kubiak` -> `Edward-Kubiak`, `crosscheck_2.0` ->
+     `crosscheck-2-0`). decode_project_dir() first tries progressively
+     coarser pure-hyphen suffix merges (as before), then — only if none of
+     those resolved — retries the trailing components with their internal
+     separators varied across '-'/'_'/'.', bounded to the last 4 segments so
+     it stays a small, explicitly capped search rather than a combinatorial
+     one. First candidate that is an actual directory on disk wins. If
+     nothing in either pass produces a real directory (e.g. the project was
+     deleted, or its name needs a wider search than this bound covers), this
+     root is skipped entirely and refs relying on it stay REF-BROKEN — this
+     is usually a true positive (the project really is gone) but, unlike
+     before this change, is no longer guaranteed to be one: a bounded search
+     can still miss a project dir whose encoding this doesn't try.
      Tried as <project>/<ref> and <project>/scripts/<basename>.
   4. ~/.claude/<ref> and ~/.claude/scripts/<basename>
   5. the `claude/` prefix: memories write refs like
@@ -58,14 +66,40 @@ itself, against an explicit, ORDERED, named root list (first hit wins):
      basename satisfied by the wrong file is a worse failure than a false
      positive.
 
+Ephemeral session-artifact refs: 33 (as of 2026-08-19) of the refs this
+script would otherwise call REF-BROKEN point at `claude/plans/…`,
+`claude/reports/…`, `claude/resume-prompts/…`, or `claude/research/…` —
+ephemeral session artifacts destroyed by the 2026-06-02 and 2026-06-11
+`~/.claude` wipes. A memory citing one of these correctly recorded a
+pointer to something that later ceased to exist; the memory itself is not
+stale, and the ref can never resolve again. is_ephemeral_session_ref()
+recognizes this shape (a `claude/`-prefixed ref whose remainder starts with
+plans/, reports/, resume-prompts/, or research/) but ONLY consults it for a
+ref that has already failed every resolution root above — a ref of this
+shape that DOES resolve is reported as a normal resolved ref, never routed
+into the ephemeral bucket.
+
 A file classifies as:
-  REF-BROKEN — at least one extracted path resolves under NONE of the roots
-               above. The memory is provably outdated; a human must read it.
-               NEVER auto-bumped.
-  REFS-OK    — every extracted path resolved under some root.
-  NO-REFS    — zero paths were extracted at all. A refs-resolved bump would
-               be a verification claim backed by zero evidence, so this is
-               its own class and is NEVER auto-bumped either.
+  REF-BROKEN     — at least one extracted path resolves under NONE of the
+                   roots above AND is not an ephemeral-session-artifact ref
+                   (or is ambiguous). The memory is provably outdated; a
+                   human must read it. NEVER auto-bumped.
+  REFS-OK        — every extracted path resolved under some root. Bump-
+                   eligible under --apply.
+  EPHEMERAL-ONLY — every extracted path either resolved OR is an
+                   unresolvable ephemeral-session-artifact ref; no
+                   genuinely missing and no ambiguous refs. Reported
+                   separately from REF-BROKEN (these are known-dead
+                   pointers, not evidence of rot) but deliberately NOT
+                   folded into REFS-OK either and NEVER auto-bumped: a
+                   refs-resolved bump would claim evidence for refs that
+                   were, in fact, never resolved — just excused. See the
+                   `verified_by` rationale below for why that distinction
+                   matters.
+  NO-REFS        — zero paths were extracted at all. A refs-resolved bump
+                   would be a verification claim backed by zero evidence,
+                   so this is its own class and is NEVER auto-bumped
+                   either.
 
 Default mode is REPORT-ONLY and never modifies a file. The report header
 names the root list once (not per-ref) so any REF-BROKEN claim can be
@@ -104,6 +138,7 @@ Exit codes: 0 on success (including REPORT-ONLY with REF-BROKEN findings);
 """
 
 import argparse
+import itertools
 import json
 import os
 import subprocess
@@ -178,16 +213,33 @@ def decode_project_dir(encoded: str) -> Optional[str]:
     absolute path, e.g. "-Users-testuser-Projects-personal-my-app"
     -> "/Users/testuser/Projects/personal/my-app".
 
-    The encoding (cwd with '/' replaced by '-') is lossy when a path
-    component itself contains a literal hyphen, so this tries progressively
-    coarser suffix merges — starting from the fully-split candidate, then
-    merging the last 2 segments into one hyphenated component, then the last
-    3, etc. — and returns the first candidate that is a real directory on
-    disk. Bounded by the number of hyphens in `encoded` (never an unbounded
-    filesystem search). Returns None if `encoded` isn't in the expected
-    leading-hyphen form, or if no merge produces an existing directory (e.g.
-    the project has since been deleted) — callers must treat that as "this
-    root is unavailable," not crash.
+    The encoding (cwd with '/' replaced by '-') is lossy in TWO ways:
+      (a) a path component itself contains a literal hyphen (e.g. "my-app"),
+          so a hyphen may be a real '/' or may be internal to one segment;
+      (b) the encoding ALSO flattens '_' and '.' to '-' (e.g. "Edward_Kubiak"
+          -> "Edward-Kubiak", "crosscheck_2.0" -> "crosscheck-2-0"), so a
+          hyphen in the trailing component(s) may stand for '/', '_', or '.'.
+
+    Pass 1 (unchanged): tries progressively coarser suffix merges —
+    starting from the fully-split candidate, then merging the last 2
+    segments into one hyphenated component, then the last 3, etc. — first
+    real directory wins.
+
+    Pass 2 (additional): if no pure-hyphen merge resolved, retries only the
+    TRAILING segments (bounded to the last `min(len(segments), 4)`) with
+    their internal separators varied across {'-', '_', '.'} — e.g. for a
+    3-segment trailing group this tries at most 3**2 = 8 additional
+    combinations, not 3**(total hyphens). The prefix segments before the
+    trailing group are never varied and the search never walks the
+    filesystem — it only calls os.path.isdir() on constructed candidates,
+    capped by this bound. First real directory wins, exactly as pass 1.
+
+    Returns None if `encoded` isn't in the expected leading-hyphen form, or
+    if nothing in either pass produces an existing directory (e.g. the
+    project has since been deleted, or a longer/deeper name than this
+    bounded search covers) — callers must treat that as "this root is
+    unavailable," not crash. A None here is NOT proof the project was
+    deleted; it only means this bounded decode didn't find it.
     """
     if not encoded.startswith("-"):
         return None
@@ -195,6 +247,7 @@ def decode_project_dir(encoded: str) -> Optional[str]:
     if not segments:
         return None
 
+    # Pass 1: pure hyphen-merge (original behavior, unchanged).
     for merge_size in range(1, len(segments) + 1):
         if merge_size == 1:
             candidate_segments = segments
@@ -205,6 +258,27 @@ def decode_project_dir(encoded: str) -> Optional[str]:
         candidate = "/" + "/".join(candidate_segments)
         if os.path.isdir(candidate):
             return candidate
+
+    # Pass 2: trailing-only, bounded separator variants covering '_' and '.'
+    # flattening. merge_size caps at 4 trailing segments (<=3 internal
+    # separators, <=26 extra candidates per merge_size) so this stays a
+    # small bounded search, never a combinatorial explosion over the whole
+    # path.
+    max_merge = min(len(segments), 4)
+    for merge_size in range(2, max_merge + 1):
+        prefix_segments = segments[:-merge_size]
+        trailing = segments[-merge_size:]
+        num_seps = merge_size - 1
+        all_hyphens = tuple("-" * num_seps)
+        for combo in itertools.product("-_.", repeat=num_seps):
+            if combo == all_hyphens:
+                continue  # already tried in pass 1
+            merged = trailing[0]
+            for sep, seg in zip(combo, trailing[1:]):
+                merged += sep + seg
+            candidate = "/" + "/".join(prefix_segments + [merged])
+            if os.path.isdir(candidate):
+                return candidate
 
     return None
 
@@ -355,11 +429,54 @@ def resolve_git_suffix_ref(
     return None, None
 
 
+# Ref path suffixes (after stripping a leading "claude/" segment) that name
+# ephemeral session artifacts under ~/.claude/ — plans, reports, resume
+# prompts, and research notes are all destroyed/rotated as a normal part of
+# session lifecycle (concretely: the 2026-06-02 and 2026-06-11 ~/.claude
+# wipes). A memory citing one of these correctly recorded a pointer to
+# something that later ceased to exist; that is not the memory being stale,
+# and the ref can never resolve again. See is_ephemeral_session_ref().
+EPHEMERAL_SESSION_DIRS = ("plans/", "reports/", "resume-prompts/", "research/")
+
+
+def is_ephemeral_session_ref(ref: str) -> bool:
+    """True if `ref` uses the `claude/`-prefix convention (search-strategy
+    step 5) AND names a path under one of EPHEMERAL_SESSION_DIRS. Only ever
+    consulted for a ref that has ALREADY failed every resolution root
+    (direct-join roots and the project-git-suffix fallback) — a ref of this
+    shape that resolves is reported as a normal resolved ref, never routed
+    through this check."""
+    ref_norm = ref.replace(os.sep, "/")
+    if not ref_norm.startswith("claude/"):
+        return False
+    remainder = ref_norm[len("claude/") :]
+    return remainder.startswith(EPHEMERAL_SESSION_DIRS)
+
+
 def classify(content: str, memory_filepath: str) -> Dict:
-    """Classify content as REF-BROKEN / REFS-OK / NO-REFS, with per-ref detail."""
+    """Classify content as REF-BROKEN / REFS-OK / EPHEMERAL-ONLY / NO-REFS,
+    with per-ref detail.
+
+    EPHEMERAL-ONLY: every ref either resolved OR is an unresolvable
+    ephemeral-session-artifact ref (is_ephemeral_session_ref()) — no
+    genuinely missing and no ambiguous refs. Deliberately NOT the same as
+    REFS-OK: bumping verified_at/verified_by would claim "refs-resolved"
+    evidence for refs that were in fact never resolved, just excused as
+    dead-artifact pointers. That is a weaker, different claim than what
+    verified_by promises, so EPHEMERAL-ONLY is never --apply-bump-eligible
+    (see the verified_by rationale in the module docstring) — the
+    conservative choice when it's a close call between reusing REFS-OK and
+    minting a new state.
+    """
     paths, _functions = cast_memory_verifier.extract_paths_and_functions(content)
     if not paths:
-        return {"status": "NO-REFS", "missing_refs": [], "ambiguous_refs": [], "resolved_refs": []}
+        return {
+            "status": "NO-REFS",
+            "missing_refs": [],
+            "ambiguous_refs": [],
+            "ephemeral_refs": [],
+            "resolved_refs": [],
+        }
 
     roots, project_root = build_search_roots(memory_filepath)
     # search-strategy step 7's fallback root: the decoded project root when
@@ -370,6 +487,7 @@ def classify(content: str, memory_filepath: str) -> Dict:
 
     missing: List[str] = []
     ambiguous: List[Dict] = []
+    ephemeral: List[str] = []
     resolved: List[Dict] = []
     for ref in sorted(set(paths)):
         hit = resolve_ref(ref, roots)
@@ -383,17 +501,25 @@ def classify(content: str, memory_filepath: str) -> Dict:
             resolved.append({"ref": ref, "resolved_path": git_path, "root": "project-git-suffix"})
         elif candidates:
             ambiguous.append({"ref": ref, "candidates": candidates})
+        elif is_ephemeral_session_ref(ref):
+            ephemeral.append(ref)
         else:
             missing.append(ref)
 
     if missing or ambiguous:
-        return {
-            "status": "REF-BROKEN",
-            "missing_refs": sorted(missing),
-            "ambiguous_refs": ambiguous,
-            "resolved_refs": resolved,
-        }
-    return {"status": "REFS-OK", "missing_refs": [], "ambiguous_refs": [], "resolved_refs": resolved}
+        status = "REF-BROKEN"
+    elif ephemeral:
+        status = "EPHEMERAL-ONLY"
+    else:
+        status = "REFS-OK"
+
+    return {
+        "status": status,
+        "missing_refs": sorted(missing),
+        "ambiguous_refs": ambiguous,
+        "ephemeral_refs": sorted(ephemeral),
+        "resolved_refs": resolved,
+    }
 
 
 def _leading_whitespace(line: str) -> str:
@@ -489,6 +615,7 @@ def main() -> int:
     ref_broken: List[Dict] = []
     refs_ok: List[Dict] = []
     no_refs: List[Dict] = []
+    ephemeral_only: List[Dict] = []
     write_failure = False
     today_str = date.today().strftime("%Y-%m-%d")
 
@@ -502,6 +629,7 @@ def main() -> int:
                     "file": filepath,
                     "missing_refs": result["missing_refs"],
                     "ambiguous_refs": result.get("ambiguous_refs", []),
+                    "ephemeral_refs": result.get("ephemeral_refs", []),
                     "resolved_refs": result["resolved_refs"],
                 }
             )
@@ -509,6 +637,18 @@ def main() -> int:
 
         if status == "NO-REFS":
             no_refs.append({"file": filepath})
+            continue
+
+        if status == "EPHEMERAL-ONLY":
+            # Not bump-eligible — see classify()'s docstring for why this is
+            # a distinct state rather than reusing REFS-OK.
+            ephemeral_only.append(
+                {
+                    "file": filepath,
+                    "ephemeral_refs": result["ephemeral_refs"],
+                    "resolved_refs": result["resolved_refs"],
+                }
+            )
             continue
 
         # REFS-OK — the only bump-eligible class.
@@ -537,6 +677,7 @@ def main() -> int:
             "ref_broken": ref_broken,
             "refs_ok": refs_ok,
             "no_refs": no_refs,
+            "ephemeral_only": ephemeral_only,
             "applied": args.apply,
         }
         print(json.dumps(payload, indent=2))
@@ -546,7 +687,8 @@ def main() -> int:
             print(f"  {line}")
         print(
             f"{len(candidates)} stale memories evaluated "
-            f"({len(ref_broken)} REF-BROKEN, {len(refs_ok)} REFS-OK, {len(no_refs)} NO-REFS)"
+            f"({len(ref_broken)} REF-BROKEN, {len(refs_ok)} REFS-OK, "
+            f"{len(no_refs)} NO-REFS, {len(ephemeral_only)} EPHEMERAL-ONLY)"
         )
         if ref_broken:
             print("REF-BROKEN:")
@@ -559,10 +701,25 @@ def main() -> int:
                         f"  {entry['file']} — {amb['ref']}: "
                         f"ambiguous ({len(amb['candidates'])} candidates: {candidates_str})"
                     )
+                for eph in entry.get("ephemeral_refs", []):
+                    print(
+                        f"  {entry['file']} — ephemeral ref (dead session "
+                        f"artifact, does not count toward REF-BROKEN on its "
+                        f"own): {eph}"
+                    )
         if no_refs:
             print("NO-REFS (not bump-eligible — no evidence to verify):")
             for entry in no_refs:
                 print(f"  {entry['file']}")
+        if ephemeral_only:
+            print(
+                "EPHEMERAL-ONLY (not bump-eligible — unresolvable refs are "
+                "dead session artifacts under plans/reports/resume-prompts/"
+                "research, not stale code refs):"
+            )
+            for entry in ephemeral_only:
+                for eph in entry["ephemeral_refs"]:
+                    print(f"  {entry['file']} — ephemeral ref: {eph}")
         if refs_ok:
             print("REFS-OK:")
             for entry in refs_ok:
