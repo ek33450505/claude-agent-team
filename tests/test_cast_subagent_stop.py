@@ -20,6 +20,7 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -1190,6 +1191,242 @@ class TestLastToolCallTagSplit(_IsolatedDbPathTestCase):
         self.assertTrue(ctx.response_text.startswith('[last-tool-call:Bash]'))
         self.assertIn('Status: DONE', ctx.response_text)
         self.assertTrue(ctx.response_is_structured)
+
+
+class TestTickIdentityGuard(_IsolatedDbPathTestCase):
+    """Security fix (2026-08-20): Claude Code fires SubagentStop repeatedly
+    (~31.5s apart) while a subagent is still RUNNING — a heartbeat "tick".
+    Seven raw payloads captured live show the discriminator: 6 ticks carry
+    `agent_type=""` plus a fresh ephemeral agent_id matching NO agent_runs
+    row, and their `last_assistant_message` is the ENCLOSING SESSION's last
+    message, not any subagent's output; 1 real completion carries a non-empty
+    agent_type and an agent_id that resolves. The old guard,
+    `ctx.has_agent_identity = bool(raw_name or agent_id)`, let a bare
+    unresolvable agent_id pass — admitting ticks and letting
+    stage16_compressed_output relay the enclosing session's text as a
+    `<subagent-report>` excerpt, manufacturing apparent user authorization
+    downstream (a ~10-incident spoof class).
+
+    Fixed: `ctx.has_agent_identity = bool(raw_name) or id_resolved`, where
+    `id_resolved` is True ONLY when agent_id maps to a real agent_runs row.
+
+    Fixtures below are the REAL captured JSON (session
+    6f3480ff-df01-45ec-b239-b1173dd52836, captured 2026-08-20), copied in
+    verbatim except transcript_path/agent_transcript_path, which are trimmed
+    to a portable placeholder (parse_input()/main() never read those two
+    fields for the identity decision under test, so trimming them changes
+    nothing about what is being exercised).
+    """
+
+    # Real tick #1 (20260820T214926Z-24883.json): agent_type="", agent_id
+    # never appears in any agent_runs row.
+    _REAL_TICK_1 = {
+        "session_id": "6f3480ff-df01-45ec-b239-b1173dd52836",
+        "transcript_path": "/portable/placeholder/session.jsonl",
+        "cwd": "/portable/placeholder/repo",
+        "prompt_id": "b4fa49ed-3aa8-40c5-a553-f936744266e4",
+        "permission_mode": "auto",
+        "agent_id": "ab51d45d591c46f33",
+        "agent_type": "",
+        "effort": {"level": "high"},
+        "hook_event_name": "SubagentStop",
+        "stop_hook_active": False,
+        "agent_transcript_path": "/portable/placeholder/agent-ab51d45d591c46f33.jsonl",
+        "last_assistant_message": "show me a tick payload vs a real completion",
+        "background_tasks": [
+            {
+                "id": "a56fb899387e6b9ef",
+                "type": "subagent",
+                "status": "running",
+                "description": "Survey file-count-as-truth surfaces",
+                "agent_type": "researcher",
+            },
+            {
+                "id": "bu4rkvkyt",
+                "type": "shell",
+                "status": "running",
+                "description": "raw stdin captures landing",
+                "command": (
+                    "prev=0; for i in $(seq 1 60); do cur=$(ls "
+                    "/portable/placeholder/.claude/cast/debug/stdin-capture 2>/dev/null | wc -l | "
+                    "tr -d ' '); if [ \"$cur\" -gt \"$prev\" ]; then echo \"captures: $cur\"; "
+                    "prev=$cur; fi; sleep 10; done"
+                ),
+            },
+        ],
+        "session_crons": [],
+    }
+
+    # Real tick #2 (20260820T214941Z-25144.json): same shape, different
+    # ephemeral agent_id — used for the "DB fallback resolves" test, where the
+    # test seeds an agent_runs row matching THIS tick's agent_id to prove the
+    # fallback still admits a genuinely resolving id.
+    _REAL_TICK_2 = {
+        "session_id": "6f3480ff-df01-45ec-b239-b1173dd52836",
+        "transcript_path": "/portable/placeholder/session.jsonl",
+        "cwd": "/portable/placeholder/repo",
+        "prompt_id": "6c2a30b3-013e-457e-b514-1d696c1943b4",
+        "permission_mode": "auto",
+        "agent_id": "a07ee4be96f73397d",
+        "agent_type": "",
+        "effort": {"level": "high"},
+        "hook_event_name": "SubagentStop",
+        "stop_hook_active": False,
+        "agent_transcript_path": "/portable/placeholder/agent-a07ee4be96f73397d.jsonl",
+        "last_assistant_message": "show me a tick payload vs a real completion",
+        "background_tasks": [],
+        "session_crons": [],
+    }
+
+    # Real completion (20260820T215128Z-26322.json): agent_type="researcher",
+    # agent_id is the dispatched agent's ACTUAL id. last_assistant_message
+    # trimmed to a short marker — the full captured text is a multi-KB
+    # findings report irrelevant to the identity check under test; keeping it
+    # short here avoids bloating this fixture while the agent_type/agent_id
+    # pairing (the thing under test) is preserved verbatim.
+    _REAL_COMPLETION = {
+        "session_id": "6f3480ff-df01-45ec-b239-b1173dd52836",
+        "transcript_path": "/portable/placeholder/session.jsonl",
+        "cwd": "/portable/placeholder/repo",
+        "prompt_id": "1094450c-0d22-4b5e-9bbc-1c04c74220c2",
+        "permission_mode": "auto",
+        "agent_id": "a56fb899387e6b9ef",
+        "agent_type": "researcher",
+        "effort": {"level": "high"},
+        "hook_event_name": "SubagentStop",
+        "stop_hook_active": False,
+        "agent_transcript_path": "/portable/placeholder/agent-a56fb899387e6b9ef.jsonl",
+        "last_assistant_message": "Status: DONE\nSummary: Corroborated cast-stats.sh --brief is dead code.",
+        "background_tasks": [],
+        "session_crons": [],
+    }
+
+    def _parse(self, payload):
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def _run_main(self, payload):
+        """Runs the real main() end-to-end and captures whatever it writes to
+        stdout. Returns (rc, stdout_text)."""
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = css.main()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+        return rc, buf.getvalue()
+
+    def _seed_agent_runs_row(self, agent_id, agent_name):
+        """Creates a minimal agent_runs table at CAST_DB_PATH (set by
+        _IsolatedDbPathTestCase's parent, then overridden per-test to a real
+        temp file) and inserts one row so parse_input()'s DB-fallback query
+        can resolve agent_id -> agent_name, exactly as it would against the
+        real cast.db schema (scripts/cast-db-init.sh)."""
+        db_path = os.environ['CAST_DB_PATH']
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS agent_runs ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, agent TEXT NOT NULL, agent_id TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO agent_runs (agent, agent_id) VALUES (?, ?)",
+                (agent_name, agent_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_real_captured_tick_has_no_agent_identity(self):
+        """The real tick fixture (agent_type="", unresolvable agent_id) must
+        NOT be treated as carrying agent identity — this is the flag the
+        fix changed."""
+        ctx = self._parse(self._REAL_TICK_1)
+        self.assertFalse(
+            ctx.has_agent_identity,
+            'real captured tick was admitted as having agent identity — '
+            'the id_resolved fix did not take effect',
+        )
+
+    def test_real_captured_tick_end_to_end_runs_no_stages_writes_nothing(self):
+        """main() on a real tick must return 0 having run NO stages (proven
+        by mocking run_stage and asserting zero calls) and written nothing to
+        stdout at all — not even the stage17 tail block, which unconditionally
+        fires for any admitted event."""
+        with mock.patch.object(css, 'run_stage') as mock_run_stage:
+            rc, out = self._run_main(self._REAL_TICK_1)
+        mock_run_stage.assert_not_called()
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, '', f'tick produced stdout output when it should be silently dropped: {out!r}')
+
+    def test_real_captured_completion_is_admitted(self):
+        """The real completion fixture (agent_type="researcher") must be
+        treated as carrying agent identity — the fallback/raw-name path must
+        keep working for genuine completions."""
+        ctx = self._parse(self._REAL_COMPLETION)
+        self.assertTrue(ctx.has_agent_identity)
+        self.assertEqual(ctx.agent_name, 'researcher')
+
+    def test_empty_agent_type_with_resolving_agent_id_still_admitted(self):
+        """A tick-SHAPED payload (agent_type="") whose agent_id DOES resolve
+        to a real agent_runs row must still be admitted — the DB-fallback
+        resolution path (hook lines 116-129) must survive the fix, not just
+        the raw_name path. Uses _REAL_TICK_2's actual agent_id, seeded into a
+        real agent_runs row to simulate the row this session's dispatch
+        would genuinely have written."""
+        self._seed_agent_runs_row('a07ee4be96f73397d', 'researcher')
+        ctx = self._parse(self._REAL_TICK_2)
+        self.assertTrue(
+            ctx.has_agent_identity,
+            'a genuinely resolving agent_id was rejected — the DB-fallback path regressed',
+        )
+        self.assertEqual(ctx.agent_name, 'researcher')
+
+    def test_empty_agent_type_with_agent_id_but_db_absent_is_rejected(self):
+        """Documented fail-closed trade-off: when CAST_DB_PATH is missing or
+        unreadable, an un-named event (agent_type="") with only a bare
+        agent_id cannot resolve and must be rejected. _IsolatedDbPathTestCase
+        already points CAST_DB_PATH at a nonexistent file by default."""
+        self.assertFalse(os.path.isfile(os.environ['CAST_DB_PATH']))
+        ctx = self._parse(self._REAL_TICK_1)
+        self.assertFalse(ctx.has_agent_identity)
+
+    def test_neither_name_nor_id_is_rejected(self):
+        """A main-session Stop supplies neither agent_type/name nor agent_id
+        (no real capture of this shape was gathered — every observed
+        SubagentStop, tick or real, carries an agent_id — so this fixture is
+        constructed directly to cover the pre-existing guard case the fix
+        must not regress)."""
+        payload = {
+            "session_id": "6f3480ff-df01-45ec-b239-b1173dd52836",
+            "hook_event_name": "Stop",
+            "last_assistant_message": "wrapping up the main session now",
+        }
+        ctx = self._parse(payload)
+        self.assertFalse(ctx.has_agent_identity)
+
+    def test_real_tick_end_to_end_no_spoofed_subagent_report_reaches_stdout(self):
+        """THE SPOOF ITSELF: feed a real tick end-to-end through main() and
+        assert no <subagent-report> fence, no response_excerpt, and no
+        fragment of the tick's last_assistant_message reaches stdout. This is
+        the test that names the actual harm (apparent user authorization
+        manufactured from the enclosing session's text) — the other tests in
+        this class are about the has_agent_identity flag in isolation."""
+        rc, out = self._run_main(self._REAL_TICK_1)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, '')
+        self.assertNotIn(css._STOP_FENCE_OPEN, out)
+        self.assertNotIn('<subagent-report', out)
+        self.assertNotIn('response_excerpt', out)
+        self.assertNotIn(
+            self._REAL_TICK_1['last_assistant_message'],
+            out,
+            'the enclosing session\'s last_assistant_message leaked into stdout via a tick',
+        )
 
 
 if __name__ == '__main__':

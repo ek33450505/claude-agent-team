@@ -7,7 +7,7 @@
 #
 # What this does (all paths hard-guarded to ~/.claude; idempotent; exit 0 always):
 #   1. cast/events  — gzip *.json older than EVENTS_GZIP_DAYS, delete *.json/*.json.gz
-#                     older than EVENTS_DELETE_DAYS (keeps recent for cast-stats.sh).
+#                     older than EVENTS_DELETE_DAYS (retains a recent window for inspection).
 #   2. ~/.claude/logs — gzip *.log / *.jsonl older than LOGS_GZIP_DAYS (active same-day
 #                     logs are skipped by the mtime filter), delete *.gz older than
 #                     LOGS_DELETE_DAYS.

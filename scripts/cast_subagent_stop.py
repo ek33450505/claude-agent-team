@@ -390,6 +390,15 @@ def parse_input() -> Optional[Ctx]:
     db_path = os.path.expanduser(os.environ.get("CAST_DB_PATH", "~/.claude/cast.db"))
 
     # Agent-name fallback query (hook lines 116-129), bound param.
+    # id_resolved is True ONLY when agent_id mapped to a real agent_runs row —
+    # this is what distinguishes a genuine completion from a heartbeat "tick"
+    # (Claude Code fires SubagentStop repeatedly, ~31.5s apart, while a subagent
+    # is still running; ticks carry agent_type="" plus a fresh ephemeral agent_id
+    # that resolves to NO agent_runs row). If the DB is missing/unreadable, an
+    # un-named event cannot resolve and id_resolved stays False — deliberate
+    # fail-closed behavior: such an event is unattributable and unrecordable
+    # anyway, so it is dropped rather than admitted on a bare unresolvable id.
+    id_resolved = False
     if agent_name == "unknown" and agent_id:
         try:
             if os.path.isfile(db_path):
@@ -399,6 +408,7 @@ def parse_input() -> Optional[Ctx]:
                 ).fetchone()
                 if row and row[0]:
                     agent_name = row[0]
+                    id_resolved = True
                 conn.close()
         except Exception:
             pass  # fall back to "unknown" on any DB error
@@ -418,10 +428,16 @@ def parse_input() -> Optional[Ctx]:
     ctx.agent_name = agent_name
     ctx.agent_id = agent_id
     ctx.session_id = session_id
-    # Precondition guard flag: True when the payload supplied a raw agent identity.
-    # The DB-fallback above may have enriched agent_name, but we gate only on what
-    # arrived in the payload (raw_name or agent_id) — a main-session Stop supplies neither.
-    ctx.has_agent_identity = bool(raw_name or agent_id)
+    # Precondition guard flag: True when the payload supplied a non-empty raw
+    # agent_type/name, OR a bare agent_id that RESOLVED to a real agent_runs row
+    # (id_resolved, set above). A bare unresolvable agent_id is NOT sufficient —
+    # heartbeat ticks carry agent_type="" plus a fresh ephemeral agent_id that
+    # matches no agent_runs row, and their last_assistant_message is the
+    # ENCLOSING SESSION's last message, not any subagent's output. Admitting
+    # those ticks manufactured apparent authorization downstream (spoofed
+    # <subagent-report> excerpts). A main-session Stop supplies neither raw_name
+    # nor a resolvable agent_id.
+    ctx.has_agent_identity = bool(raw_name) or id_resolved
     ctx.stop_reason = data.get("stop_reason") or ""
     ctx.has_turn_ceiling = "[TURN CEILING]" in (flat_output or response_text)
 
@@ -2100,10 +2116,20 @@ def main() -> int:
     ctx = parse_input()
     if ctx is None:
         return 0
-    # Precondition guard (hook line 307): refuse telemetry for a main-session Stop —
-    # SubagentStop always carries a raw agent_id or agent_name in the payload.
+    # Precondition guard (hook line 307): refuse telemetry for a main-session Stop
+    # AND for a heartbeat "tick". Claude Code fires SubagentStop repeatedly
+    # (~31.5s apart) while a subagent is still running; these ticks carry
+    # agent_type="" plus a fresh ephemeral agent_id that resolves to NO
+    # agent_runs row, and their last_assistant_message is the ENCLOSING
+    # SESSION's last message — NOT the subagent's output. A bare unresolvable
+    # agent_id is therefore NOT sufficient identity (this previously admitted
+    # ticks and let their text be relayed as spoofed subagent-report excerpts).
     # ctx.agent_name is never falsy (coalesces to "unknown"), so we gate on
-    # ctx.has_agent_identity which captures raw_name or agent_id BEFORE coalescing.
+    # ctx.has_agent_identity, which is True only for a non-empty raw agent_type/
+    # name OR an agent_id that actually resolved to an agent_runs row (see the
+    # id_resolved assignment above). Rejected events (main-session Stop or an
+    # unresolved tick) drop silently here — no counter, no log line, no new
+    # artifact; that is the whole mechanism.
     if not ctx.has_agent_identity:
         return 0
 

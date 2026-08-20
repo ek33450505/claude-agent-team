@@ -46,6 +46,35 @@ if [ -z "$INPUT" ]; then
   exit 0
 fi
 
+# ── Opt-in raw-stdin capture (debug) ─────────────────────────────────────────
+# Enabled by CREATING the directory; disabled by removing it. No env plumbing and
+# no settings change, so it can never switch itself on. Capped so it cannot fill
+# the disk. Local-only and off by default: the payload contains full agent output.
+# Exists because nothing else in the hook chain records the raw payload, which is
+# why the SubagentStop unknown-agent question stayed INFERRED
+# (research/v10-attribution-gap-stop-ticks.md §3).
+_CAST_STDIN_CAPTURE_DIR="${CAST_DIR}/debug/stdin-capture"
+if [ -d "$_CAST_STDIN_CAPTURE_DIR" ]; then
+  _cap_count="$(find "$_CAST_STDIN_CAPTURE_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d '[:space:]')"
+  # Degrade a malformed CAP to the DEFAULT, never to "off": an unvalidated value
+  # makes `[` exit 2 and silently disables the capture, and an empty capture dir
+  # then reads as "no events observed" — a conclusion drawn from an instrument
+  # that was never running.
+  # The `??????????*` arm rejects 10-or-more-digit values. Those PASS an all-digits
+  # test but still overflow `[ -lt ]` (> 2^63-1 → "integer expected", rc 2), which
+  # is precisely the bug this guard exists to prevent.
+  _cap_max="${CAST_STDIN_CAPTURE_MAX:-500}"
+  case "$_cap_max" in ''|*[!0-9]*|??????????*) _cap_max=500 ;; esac
+  # Degrade a malformed COUNT to the CAP — deliberately the OPPOSITE direction from
+  # the cap above. An unreadable count must not be read as "empty" and licence an
+  # unbounded write; bounding disk use is the whole point of the cap.
+  case "$_cap_count" in ''|*[!0-9]*|??????????*) _cap_count="$_cap_max" ;; esac
+  if [ "$_cap_count" -lt "$_cap_max" ]; then
+    printf '%s' "$INPUT" \
+      > "${_CAST_STDIN_CAPTURE_DIR}/$(date -u +%Y%m%dT%H%M%SZ)-$$.json" 2>/dev/null || true
+  fi
+fi
+
 # Export the raw payload for the python process. Identical trust boundary to the
 # old hook — the JSON is never interpolated into any source, only read from env.
 export CAST_STOP_INPUT="$INPUT"
