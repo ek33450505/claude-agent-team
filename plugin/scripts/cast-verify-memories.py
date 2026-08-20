@@ -28,8 +28,8 @@ itself, against an explicit, ORDERED, named root list (first hit wins):
      `/Users/testuser/Projects/personal/my-app`. The encoding is lossy in
      two ways: the final path component may itself contain a literal
      hyphen, AND the encoding also flattens '_' and '.' to '-' (e.g.
-     `Edward_Kubiak` -> `Edward-Kubiak`, `crosscheck_2.0` ->
-     `crosscheck-2-0`). decode_project_dir() first tries progressively
+     `data_set` -> `data-set`, `report_v2.0` ->
+     `report-v2-0`). decode_project_dir() first tries progressively
      coarser pure-hyphen suffix merges (as before), then — only if none of
      those resolved — retries the trailing components with their internal
      separators varied across '-'/'_'/'.', bounded to the last 4 segments so
@@ -216,8 +216,8 @@ def decode_project_dir(encoded: str) -> Optional[str]:
     The encoding (cwd with '/' replaced by '-') is lossy in TWO ways:
       (a) a path component itself contains a literal hyphen (e.g. "my-app"),
           so a hyphen may be a real '/' or may be internal to one segment;
-      (b) the encoding ALSO flattens '_' and '.' to '-' (e.g. "Edward_Kubiak"
-          -> "Edward-Kubiak", "crosscheck_2.0" -> "crosscheck-2-0"), so a
+      (b) the encoding ALSO flattens '_' and '.' to '-' (e.g. "data_set"
+          -> "data-set", "report_v2.0" -> "report-v2-0"), so a
           hyphen in the trailing component(s) may stand for '/', '_', or '.'.
 
     Pass 1 (unchanged): tries progressively coarser suffix merges —
