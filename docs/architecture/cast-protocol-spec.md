@@ -852,7 +852,6 @@ A CAST-compatible hook script SHOULD:
 │   ├── status-writer.sh             # Sourced helper: cast_write_status
 │   ├── cast-events.sh               # Sourced helper: cast_emit_event
 │   ├── cast-validate.sh             # System integrity checker
-│   ├── cast-stats.sh                # Usage analytics from cast.db
 │   ├── cast-cron-setup.sh           # Cron installer for scheduled tasks
 │   └── cast-db-init.sh              # Initialize cast.db schema
 ├── rules/                           # Stack context, project catalog, conventions
