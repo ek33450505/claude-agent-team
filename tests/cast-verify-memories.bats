@@ -416,3 +416,89 @@ EOF
     after=$(shasum -a 256 "$proj_dir/no-refs.md" | awk '{print $1}')
     [ "$before" = "$after" ]
 }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 14: a `claude/`-prefixed ref (memories write these meaning ~/.claude/...)
+# resolves via the dedicated claude-prefix root, not a doubled
+# ~/.claude/claude/... join.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "claude/-prefix ref resolves against \$HOME/.claude" {
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/proj-14/memory"
+    mkdir -p "$proj_dir"
+    mkdir -p "$HOME/.claude/resume-prompts"
+    touch "$HOME/.claude/resume-prompts/2026-06-24-fixture.md"
+
+    cat > "$proj_dir/claude-prefix.md" <<EOF
+---
+name: claude-prefix-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+See claude/resume-prompts/2026-06-24-fixture.md for details, plus the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS)"
+    refute_output --partial "missing ref: claude/resume-prompts/2026-06-24-fixture.md"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 15: a bare ref with no direct root hit resolves via the LAST-RESORT
+# project-git-suffix fallback (git -C <project_root> ls-files, path-suffix
+# match) — "run.sh" isn't at repo root or repo/scripts/, only at
+# tests/run.sh, so this can ONLY pass via the new fallback.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "bare ref resolves via the project-git-suffix fallback (unique match)" {
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/proj-15/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/git-suffix.md" <<EOF
+---
+name: git-suffix-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+See run.sh for the test entrypoint, plus the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --json
+    assert_success
+    assert_output --partial '"root": "project-git-suffix"'
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS)"
+    refute_output --partial "missing ref: run.sh"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 16: MORE THAN ONE git-tracked file matching the suffix must NOT be
+# silently picked — it stays REF-BROKEN with an "ambiguous" detail line,
+# never resolved. Exercises resolve_git_suffix_ref()/get_git_tracked_files()
+# directly against an isolated throwaway git repo (not the real repo tree)
+# so the assertion can't drift if real-repo file layout changes.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "ambiguous multi-hit on project-git-suffix stays REF-BROKEN, never silently picked" {
+    local fake_repo="$BATS_TEST_TMPDIR/fake-repo"
+    mkdir -p "$fake_repo/a" "$fake_repo/b"
+    touch "$fake_repo/a/dup.md" "$fake_repo/b/dup.md"
+    ( cd "$fake_repo" && git init -q && git add -A && git -c user.email=t@t.com -c user.name=t commit -q -m init )
+
+    run python3 -c "
+import sys
+sys.path.insert(0, '$REPO_DIR/scripts')
+import importlib.util
+spec = importlib.util.spec_from_file_location('cvm', '$SCRIPT')
+cvm = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cvm)
+path, candidates = cvm.resolve_git_suffix_ref('dup.md', '$fake_repo')
+assert path is None, f'expected no unique resolution, got {path}'
+assert candidates is not None and len(candidates) == 2, f'expected 2 ambiguous candidates, got {candidates}'
+print('OK', sorted(candidates))
+"
+    assert_success
+    assert_output --partial "OK ['a/dup.md', 'b/dup.md']"
+}

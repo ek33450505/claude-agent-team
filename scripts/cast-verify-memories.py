@@ -35,8 +35,28 @@ itself, against an explicit, ORDERED, named root list (first hit wins):
      REF-BROKEN — that is a TRUE positive, not a bug.
      Tried as <project>/<ref> and <project>/scripts/<basename>.
   4. ~/.claude/<ref> and ~/.claude/scripts/<basename>
-  5. cwd: <cwd>/<ref> and <cwd>/scripts/<basename> (today's original
-     behaviour, kept last in the order)
+  5. the `claude/` prefix: memories write refs like
+     `claude/resume-prompts/2026-06-24-foo.md` meaning `~/.claude/resume-
+     prompts/2026-06-24-foo.md` — a bare join at root 4 doubles the segment
+     (`~/.claude/claude/...`) and never hits. When a relative ref's first
+     path segment is exactly `claude`, this also tries
+     `~/.claude/<ref with the leading "claude/" stripped>`, labeled
+     distinctly so the report shows which rule resolved it.
+  6. cwd: <cwd>/<ref> and <cwd>/scripts/<basename> (today's original
+     behaviour, kept last among the direct-join roots)
+  7. LAST RESORT — project-git-suffix: after every root above misses,
+     resolve against the project's git-tracked file list (`git -C
+     <project_root> ls-files`, project_root = the decoded root from step 3,
+     falling back to cwd when that decode failed). A candidate matches if
+     its repo-relative path equals the ref or ends with "/<ref>" — this is
+     what resolves memories that cite `run.sh` for `tests/run.sh` or
+     `planner.md` for `agents/core/planner.md`. Exactly one match resolves
+     the ref; git failing (not a repo, git missing) skips this root
+     entirely and falls through to REF-BROKEN; MORE THAN ONE match is
+     reported as `ambiguous` (not resolved, not silently picked) — the ref
+     stays counted as broken with the candidate list shown, because a
+     basename satisfied by the wrong file is a worse failure than a false
+     positive.
 
 A file classifies as:
   REF-BROKEN — at least one extracted path resolves under NONE of the roots
@@ -86,6 +106,7 @@ Exit codes: 0 on success (including REPORT-ONLY with REF-BROKEN findings);
 import argparse
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from datetime import date
@@ -107,7 +128,11 @@ SEARCH_STRATEGY = [
     "3) project root decoded from the memory's parent dir name "
     "(<project>/<ref>, <project>/scripts/<basename>)",
     "4) ~/.claude/<ref>, ~/.claude/scripts/<basename>",
-    "5) cwd/<ref>, cwd/scripts/<basename>",
+    "5) ~/.claude/<ref with leading 'claude/' segment stripped> "
+    "(claude/-prefix refs)",
+    "6) cwd/<ref>, cwd/scripts/<basename>",
+    "7) LAST RESORT: project's git-tracked files, exact or path-suffix match "
+    "(git -C <project_root> ls-files; ambiguous multi-hit stays REF-BROKEN)",
 ]
 
 
@@ -184,10 +209,19 @@ def decode_project_dir(encoded: str) -> Optional[str]:
     return None
 
 
-def build_search_roots(memory_filepath: str) -> List[Tuple[str, Optional[str]]]:
-    """Return the ordered (label, root_dir) list used to resolve refs cited by
-    `memory_filepath`. root_dir is None for the "as-given" step, which uses
-    the ref literally (expanduser'd) rather than joining it to a root."""
+def build_search_roots(
+    memory_filepath: str,
+) -> Tuple[List[Tuple[str, Optional[str]]], Optional[str]]:
+    """Return (roots, project_root) for `memory_filepath`.
+
+    `roots` is the ordered (label, root_dir) list used by resolve_ref();
+    root_dir is None for the "as-given" step, which uses the ref literally
+    (expanduser'd) rather than joining it to a root. `project_root` is the
+    decoded project directory (or None if it couldn't be decoded) — returned
+    separately so callers can also use it as the git-tracked-suffix fallback
+    root (search-strategy step 7), which needs the raw directory rather than
+    a joined candidate path.
+    """
     home = os.path.expanduser("~")
     memory_dir = os.path.dirname(memory_filepath)
     project_dir_name = os.path.basename(os.path.dirname(memory_dir))
@@ -203,19 +237,31 @@ def build_search_roots(memory_filepath: str) -> List[Tuple[str, Optional[str]]]:
         roots.append(("project-root/scripts", os.path.join(project_root, "scripts")))
     roots.append(("home/.claude", os.path.join(home, ".claude")))
     roots.append(("home/.claude/scripts", os.path.join(home, ".claude", "scripts")))
+    roots.append(("home/.claude(claude-prefix)", os.path.join(home, ".claude")))
     roots.append(("cwd", cwd))
     roots.append(("cwd/scripts", os.path.join(cwd, "scripts")))
-    return roots
+    return roots, project_root
 
 
 def resolve_ref(
     ref: str, roots: List[Tuple[str, Optional[str]]]
 ) -> Optional[Tuple[str, str]]:
     """Resolve ref against the ordered roots; first hit wins. Returns
-    (resolved_absolute_path, root_label), or None if no root has it."""
+    (resolved_absolute_path, root_label), or None if no root has it.
+
+    Does NOT include the project-git-suffix fallback (search-strategy step
+    7) — that root needs the full tracked-file list and ambiguity handling,
+    so it is applied separately by classify() after every root here misses.
+    """
     expanded = os.path.expanduser(ref)
     is_abs = os.path.isabs(expanded)
     basename = os.path.basename(ref)
+    ref_norm = ref.replace(os.sep, "/")
+    claude_prefix_remainder: Optional[str] = None
+    if not is_abs and "/" in ref_norm:
+        head, remainder = ref_norm.split("/", 1)
+        if head == "claude" and remainder:
+            claude_prefix_remainder = remainder
 
     for label, root in roots:
         if label == "as-given":
@@ -224,6 +270,10 @@ def resolve_ref(
             # An absolute ref is only meaningfully checked "as given" — a
             # rooted join would just collapse back to the same path.
             continue
+        elif label.endswith("(claude-prefix)"):
+            if claude_prefix_remainder is None:
+                continue
+            candidate = os.path.join(root, claude_prefix_remainder)
         elif label.endswith("/scripts"):
             candidate = os.path.join(root, basename)
         else:
@@ -235,30 +285,115 @@ def resolve_ref(
     return None
 
 
+# Per-project-root git-tracked-file-list cache. classify() runs once per
+# stale memory file, and many memory files share a project root, so this
+# avoids re-shelling out to `git ls-files` per file. Values are None for a
+# root that is not a git repo (or where git failed) so that outcome is also
+# cached rather than retried.
+_GIT_TRACKED_FILES_CACHE: Dict[str, Optional[List[str]]] = {}
+
+
+def get_git_tracked_files(project_root: str) -> Optional[List[str]]:
+    """Return git-tracked, repo-relative file paths for `project_root`, or
+    None if it isn't a git repo / git failed. Never raises — a git failure
+    here means "this root is unavailable," the same contract as
+    decode_project_dir() returning None."""
+    if project_root in _GIT_TRACKED_FILES_CACHE:
+        return _GIT_TRACKED_FILES_CACHE[project_root]
+
+    files: Optional[List[str]]
+    try:
+        result = subprocess.run(
+            ["git", "-C", project_root, "ls-files"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            files = None
+        else:
+            files = [line for line in result.stdout.splitlines() if line]
+    except (OSError, subprocess.SubprocessError):
+        files = None
+
+    _GIT_TRACKED_FILES_CACHE[project_root] = files
+    return files
+
+
+def resolve_git_suffix_ref(
+    ref: str, project_root: Optional[str]
+) -> Tuple[Optional[str], Optional[List[str]]]:
+    """Last-resort resolution: match `ref` against project_root's
+    git-tracked files by exact repo-relative path or by path suffix
+    ("/<ref>"). Returns:
+      (resolved_absolute_path, None)  — exactly one tracked file matched.
+      (None, None)                    — no candidate matched (or
+                                         project_root is unavailable / not a
+                                         git repo — never crash, just fall
+                                         through to REF-BROKEN).
+      (None, candidates)              — MORE THAN ONE tracked file matched;
+                                         the caller must treat this as
+                                         unresolved/ambiguous, never pick one.
+    Absolute refs are skipped — they're only meaningfully checked "as
+    given," a suffix match against a repo-relative list can't apply.
+    """
+    if not project_root or os.path.isabs(ref):
+        return None, None
+
+    files = get_git_tracked_files(project_root)
+    if not files:
+        return None, None
+
+    ref_norm = ref.replace(os.sep, "/")
+    suffix = "/" + ref_norm
+    matches = [f for f in files if f == ref_norm or f.endswith(suffix)]
+
+    if len(matches) == 1:
+        return os.path.abspath(os.path.join(project_root, matches[0])), None
+    if len(matches) > 1:
+        return None, sorted(matches)
+    return None, None
+
+
 def classify(content: str, memory_filepath: str) -> Dict:
     """Classify content as REF-BROKEN / REFS-OK / NO-REFS, with per-ref detail."""
     paths, _functions = cast_memory_verifier.extract_paths_and_functions(content)
     if not paths:
-        return {"status": "NO-REFS", "missing_refs": [], "resolved_refs": []}
+        return {"status": "NO-REFS", "missing_refs": [], "ambiguous_refs": [], "resolved_refs": []}
 
-    roots = build_search_roots(memory_filepath)
+    roots, project_root = build_search_roots(memory_filepath)
+    # search-strategy step 7's fallback root: the decoded project root when
+    # available, else cwd (so the fallback still applies when a memory's
+    # project dir couldn't be decoded but its refs are cwd-relative repo
+    # paths — the common case when running this script from within a repo).
+    git_root = project_root or os.getcwd()
+
     missing: List[str] = []
+    ambiguous: List[Dict] = []
     resolved: List[Dict] = []
     for ref in sorted(set(paths)):
         hit = resolve_ref(ref, roots)
-        if hit is None:
-            missing.append(ref)
-        else:
+        if hit is not None:
             resolved_path, root_label = hit
             resolved.append({"ref": ref, "resolved_path": resolved_path, "root": root_label})
+            continue
 
-    if missing:
+        git_path, candidates = resolve_git_suffix_ref(ref, git_root)
+        if git_path is not None:
+            resolved.append({"ref": ref, "resolved_path": git_path, "root": "project-git-suffix"})
+        elif candidates:
+            ambiguous.append({"ref": ref, "candidates": candidates})
+        else:
+            missing.append(ref)
+
+    if missing or ambiguous:
         return {
             "status": "REF-BROKEN",
             "missing_refs": sorted(missing),
+            "ambiguous_refs": ambiguous,
             "resolved_refs": resolved,
         }
-    return {"status": "REFS-OK", "missing_refs": [], "resolved_refs": resolved}
+    return {"status": "REFS-OK", "missing_refs": [], "ambiguous_refs": [], "resolved_refs": resolved}
 
 
 def _leading_whitespace(line: str) -> str:
@@ -366,6 +501,7 @@ def main() -> int:
                 {
                     "file": filepath,
                     "missing_refs": result["missing_refs"],
+                    "ambiguous_refs": result.get("ambiguous_refs", []),
                     "resolved_refs": result["resolved_refs"],
                 }
             )
@@ -417,6 +553,12 @@ def main() -> int:
             for entry in ref_broken:
                 for ref in entry["missing_refs"]:
                     print(f"  {entry['file']} — missing ref: {ref}")
+                for amb in entry.get("ambiguous_refs", []):
+                    candidates_str = ", ".join(amb["candidates"])
+                    print(
+                        f"  {entry['file']} — {amb['ref']}: "
+                        f"ambiguous ({len(amb['candidates'])} candidates: {candidates_str})"
+                    )
         if no_refs:
             print("NO-REFS (not bump-eligible — no evidence to verify):")
             for entry in no_refs:
