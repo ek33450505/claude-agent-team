@@ -1223,7 +1223,7 @@ class TestTickIdentityGuard(_IsolatedDbPathTestCase):
     _REAL_TICK_1 = {
         "session_id": "6f3480ff-df01-45ec-b239-b1173dd52836",
         "transcript_path": "/portable/placeholder/session.jsonl",
-        "cwd": "/Users/edkubiak/Projects/personal/claude-agent-team",
+        "cwd": "/portable/placeholder/repo",
         "prompt_id": "b4fa49ed-3aa8-40c5-a553-f936744266e4",
         "permission_mode": "auto",
         "agent_id": "ab51d45d591c46f33",
@@ -1248,7 +1248,7 @@ class TestTickIdentityGuard(_IsolatedDbPathTestCase):
                 "description": "raw stdin captures landing",
                 "command": (
                     "prev=0; for i in $(seq 1 60); do cur=$(ls "
-                    "/Users/edkubiak/.claude/cast/debug/stdin-capture 2>/dev/null | wc -l | "
+                    "/portable/placeholder/.claude/cast/debug/stdin-capture 2>/dev/null | wc -l | "
                     "tr -d ' '); if [ \"$cur\" -gt \"$prev\" ]; then echo \"captures: $cur\"; "
                     "prev=$cur; fi; sleep 10; done"
                 ),
@@ -1264,7 +1264,7 @@ class TestTickIdentityGuard(_IsolatedDbPathTestCase):
     _REAL_TICK_2 = {
         "session_id": "6f3480ff-df01-45ec-b239-b1173dd52836",
         "transcript_path": "/portable/placeholder/session.jsonl",
-        "cwd": "/Users/edkubiak/Projects/personal/claude-agent-team",
+        "cwd": "/portable/placeholder/repo",
         "prompt_id": "6c2a30b3-013e-457e-b514-1d696c1943b4",
         "permission_mode": "auto",
         "agent_id": "a07ee4be96f73397d",
@@ -1287,7 +1287,7 @@ class TestTickIdentityGuard(_IsolatedDbPathTestCase):
     _REAL_COMPLETION = {
         "session_id": "6f3480ff-df01-45ec-b239-b1173dd52836",
         "transcript_path": "/portable/placeholder/session.jsonl",
-        "cwd": "/Users/edkubiak/Projects/personal/claude-agent-team",
+        "cwd": "/portable/placeholder/repo",
         "prompt_id": "1094450c-0d22-4b5e-9bbc-1c04c74220c2",
         "permission_mode": "auto",
         "agent_id": "a56fb899387e6b9ef",
