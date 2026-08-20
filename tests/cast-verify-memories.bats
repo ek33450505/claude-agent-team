@@ -6,7 +6,10 @@
 # REF-BROKEN classify + never-auto-bumped, report-only-modifies-nothing,
 # indentation preservation, --apply idempotency, MEMORY.md exclusion,
 # unknown-flag exit-2-no-mutation, multi-root ref resolution (bare basename,
-# memory-own-dir, missing project dir), and the NO-REFS class.
+# memory-own-dir, missing project dir), the NO-REFS class, decode_project_dir's
+# underscore/dot trailing-component recovery (Change 1), and the
+# EPHEMERAL-ONLY class for dead session artifacts under claude/{plans,
+# reports,resume-prompts,research} (Change 2).
 #
 # HARD RULE: never runs --apply against real memory data — CAST_MEMORIES_BASE_DIR
 # is always a tempdir created by setup_temp_home.
@@ -57,7 +60,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -81,7 +84,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -103,7 +106,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
     refute_output --partial "REF-BROKEN:"
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
@@ -139,7 +142,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
     assert_output --partial "missing ref: $FAKE_REF"
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
@@ -271,7 +274,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
     assert_success
@@ -330,7 +333,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
     refute_output --partial "missing ref: $BARE_BASENAME"
 }
 
@@ -355,7 +358,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
     refute_output --partial "missing ref: companion-xyz.sh"
 }
 
@@ -380,7 +383,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
     assert_output --partial "missing ref: src/would-be-resolved-xyz.py"
 }
 
@@ -407,7 +410,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 1 NO-REFS)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 1 NO-REFS, 0 EPHEMERAL-ONLY)"
     assert_output --partial "NO-REFS (not bump-eligible"
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
@@ -440,7 +443,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
     refute_output --partial "missing ref: claude/resume-prompts/2026-06-24-fixture.md"
 }
 
@@ -470,7 +473,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
     refute_output --partial "missing ref: run.sh"
 }
 
@@ -501,4 +504,166 @@ print('OK', sorted(candidates))
 "
     assert_success
     assert_output --partial "OK ['a/dup.md', 'b/dup.md']"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 17 (Change 1): a project dir whose real directory name contains an
+# UNDERSCORE — the Claude Code encoding flattens '_' to '-' just like '/', so
+# the trailing-component decode pass must recover it. Without this pass the
+# ref would stay REF-BROKEN (see mutation-tested in the dispatch report).
+# ──────────────────────────────────────────────────────────────────────────────
+@test "project dir with an underscore in its real name decodes and resolves" {
+    local real_dir="$HOME/testproj_underscore"
+    mkdir -p "$real_dir/src"
+    touch "$real_dir/src/marker-us.js"
+
+    # Only flatten the tail component WE added — $HOME itself is a
+    # mktemp-generated name that must decode via pass 1 (literal-dot-inside-
+    # a-segment) unchanged, so it must not be swept into this substitution.
+    local encoded="${HOME//\//-}-testproj-underscore"
+
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/$encoded/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/underscore-project.md" <<EOF
+---
+name: underscore-project-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+References src/marker-us.js and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    refute_output --partial "missing ref: src/marker-us.js"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 18 (Change 1): a project dir whose real directory name contains a DOT
+# — the encoding flattens '.' to '-' as well, exercising the same trailing-
+# component decode pass with a different separator character.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "project dir with a dot in its real name decodes and resolves" {
+    local real_dir="$HOME/testproj.dotted"
+    mkdir -p "$real_dir/src"
+    touch "$real_dir/src/marker-dot.js"
+
+    # Only flatten the tail component WE added — $HOME's own mktemp-
+    # generated name (which itself may contain a literal dot, e.g.
+    # "tmp.XXXXXXXX" on macOS) must decode via pass 1 unchanged; sweeping it
+    # into this substitution would create a second, non-trailing merge
+    # point that the (intentionally bounded, trailing-only) decoder is not
+    # meant to chase.
+    local encoded="${HOME//\//-}-testproj-dotted"
+
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/$encoded/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/dotted-project.md" <<EOF
+---
+name: dotted-project-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+References src/marker-dot.js and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    refute_output --partial "missing ref: src/marker-dot.js"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 19 (Change 1 regression guard): a genuinely absent project — whose
+# encoded name LOOKS like it could decode via an underscore/dot variant but
+# has no real directory anywhere — must still fail closed to REF-BROKEN. The
+# widened decode must not become blanket forgiveness.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "genuinely absent project with underscore/dot-shaped name still fails closed" {
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/-Nonexistent-Test-Root-Foo-Bar-Baz/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/dead-project-2.md" <<EOF
+---
+name: dead-project-2-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+References src/would-not-resolve-xyz.py and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "missing ref: src/would-not-resolve-xyz.py"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 20 (Change 2): an unresolvable `claude/reports/...` ref (a dead
+# session artifact — the file was destroyed and can never come back) is
+# bucketed as EPHEMERAL-ONLY, not counted toward REF-BROKEN, and NOT
+# --apply-bump-eligible.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "unresolvable ephemeral session ref classifies EPHEMERAL-ONLY, never bumped" {
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/proj-20/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/ephemeral.md" <<EOF
+---
+name: ephemeral-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+See claude/reports/2026-06-01-long-gone-report.md and the --verbose flag.
+EOF
+
+    local before after
+    before=$(shasum -a 256 "$proj_dir/ephemeral.md" | awk '{print $1}')
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 1 EPHEMERAL-ONLY)"
+    assert_output --partial "ephemeral ref: claude/reports/2026-06-01-long-gone-report.md"
+    refute_output --partial "missing ref: claude/reports/2026-06-01-long-gone-report.md"
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
+    assert_success
+
+    after=$(shasum -a 256 "$proj_dir/ephemeral.md" | awk '{print $1}')
+    [ "$before" = "$after" ]
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 21 (Change 2 regression guard): a `claude/reports/...`-SHAPED ref that
+# actually DOES resolve on disk must stay a normal resolved ref (REFS-OK),
+# and must NOT be swept into the ephemeral bucket just because its path
+# shape matches plans/reports/resume-prompts/research.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "resolving ephemeral-shaped ref stays a normal resolved ref, not ephemeral" {
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/proj-21/memory"
+    mkdir -p "$proj_dir"
+    mkdir -p "$HOME/.claude/reports"
+    touch "$HOME/.claude/reports/2026-06-01-still-here-report.md"
+
+    cat > "$proj_dir/resolving-ephemeral-shaped.md" <<EOF
+---
+name: resolving-ephemeral-shaped-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+See claude/reports/2026-06-01-still-here-report.md and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    refute_output --partial "ephemeral ref: claude/reports/2026-06-01-still-here-report.md"
 }
