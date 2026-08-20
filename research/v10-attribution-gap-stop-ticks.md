@@ -56,8 +56,9 @@ events in the retained events dir (663 gaps ≤ 600 s):
 ```
 
 157 of 663 gaps fall in the 31–33 s band, plus 20 more at its 61–62 s harmonic. Agent completions do
-not cluster on a 31.5-second period. **No launchd job has a matching interval** (`com.cast.*` plists
-carry `StartInterval` 7200 and 21600 only), so the emitter is inside Claude Code, not CAST.
+not cluster on a 31.5-second period. **No launchd job has a matching interval** — across ALL of
+`~/Library/LaunchAgents/*.plist`, only two declare `StartInterval` at all (`com.cast.abandon-stale-runs`
+7200, `com.cast.backup` 21600) — so the emitter is inside Claude Code, not CAST or the OS scheduler.
 
 ## 3. The beat runs exactly for the duration of an in-flight subagent
 
@@ -120,14 +121,25 @@ predicates that are exactly true and say nothing.
 
 ## 6. What this actually costs (the real defects, all measured)
 
-1. **`cast-stats.sh --brief` — the statusLine — overstates agent activity ~2.4×.**
+1. **`cast-stats.sh --brief` miscounts by ~2.4× — but it is DEAD CODE.**
    `scripts/cast-stats.sh:19-21` counts event *files*:
    ```bash
    agents_today=$(ls "$EVENTS_DIR" | grep -c "^${TODAY}T.*subagent-stop\.json$")
    dispatches=$(ls  "$EVENTS_DIR" | grep -c "subagent-stop\.json$")
    ```
-   For 2026-08-20 that reports **371 agents today** against **153** real `agent_runs` rows. The
+   For 2026-08-20 that reports **371 agents today** against **153** real `agent_runs` rows, and the
    comment on the line — "subagent-stop files = completed agent runs" — is false.
+
+   ⚠️ **CORRECTION, same session.** The first version of this file called this "the statusLine."
+   **It is not.** `statusLine` in `~/.claude/settings.json` runs `cast-statusline.sh`, which already
+   reads `agent_runs` (`scripts/cast-statusline.sh:76-80`) and is unaffected. `cast-stats.sh --brief`
+   has **zero callers** — repo-wide grep and live `~/.claude` both come up empty; it is a superseded
+   statusLine implementation nobody removed. I read the branch's own comment ("output a single status
+   line for statusLine setting") as evidence of its wiring, which is the *exact* failure this file
+   flags in §5: a self-description is not a wiring check. Severity accordingly drops from "a number
+   Ed sees daily is wrong" to "a dead branch would be wrong if revived" — plus one live doc error:
+   `docs/architecture/cast-protocol-spec.md:855` describes `cast-stats.sh` as "Usage analytics from
+   cast.db", which is false for this branch. The disposition question is now delete-vs-fix, not fix.
 2. **All 18 hook stages run on every tick.** `main()` returns early only on the identity guard, which
    ticks pass. Stage 2 opens and scans the session transcript (guarded at 20 MB) roughly every 31 s
    per in-flight agent. This is repeated work with no record value.
