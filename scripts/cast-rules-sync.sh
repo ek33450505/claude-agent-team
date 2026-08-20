@@ -53,23 +53,59 @@ EOF
 }
 
 # --- repo root resolution --------------------------------------------------
+# All three fallbacks MUST verify a candidate root before accepting it. An
+# unverified guess here means --apply can silently write a stale install-time
+# snapshot over hand-tuned live rules (see script header). If none verify,
+# hard-error rather than guess.
+#
+# _is_repo_root() is the SINGLE predicate all three fallbacks share, so the
+# checks can never drift apart from each other. It requires BOTH:
+#   1. rules-core/working-conventions.md exists — but this ALONE does NOT
+#      discriminate: install.sh:261 copies working-conventions.md (among
+#      others) into ~/.claude/rules-core/ at install time, so an installed
+#      machine has this exact file at the install DESTINATION too.
+#   2. install.sh exists at the candidate root — install.sh is the repo's
+#      entry point and is never itself copied into ~/.claude by its own
+#      install step, so it is a repo-only marker.
+# Belt-and-braces: refuse outright if the candidate resolves to
+# ${HOME}/.claude, regardless of what marker files happen to exist there.
+# That directory is the install DESTINATION and can never be a valid sync
+# SOURCE — this guard is not redundant with the marker check above; it is a
+# second, independent line of defense in case a future install.sh layout
+# change ever makes the marker check alone insufficient again.
+_is_repo_root() {
+	local candidate="$1"
+	[[ -n "$candidate" ]] || return 1
+	[[ -f "$candidate/rules-core/working-conventions.md" ]] || return 1
+	[[ -f "$candidate/install.sh" ]] || return 1
+	[[ "$candidate" != "${HOME}/.claude" ]] || return 1
+	return 0
+}
+
 resolve_repo_root() {
 	local root
 	root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-	if [[ -n "$root" && -f "$root/rules-core/working-conventions.md" ]]; then
+	if _is_repo_root "$root"; then
 		printf '%s\n' "$root"
 		return 0
 	fi
 
 	local fallback="${HOME}/Projects/personal/claude-agent-team"
-	if [[ -f "$fallback/rules-core/working-conventions.md" ]]; then
+	if _is_repo_root "$fallback"; then
 		printf '%s\n' "$fallback"
 		return 0
 	fi
 
-	local script_dir
+	local script_dir script_root
 	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	printf '%s\n' "$(dirname "$script_dir")"
+	script_root="$(dirname "$script_dir")"
+	if _is_repo_root "$script_root"; then
+		printf '%s\n' "$script_root"
+		return 0
+	fi
+
+	echo "ERROR: cannot resolve repo root — refusing to guess. Checked: git toplevel ('${root:-<none>}'), $fallback, $script_root. Set CAST_RULES_CORE_DIR to override." >&2
+	exit 1
 }
 
 # --- arg parsing -------------------------------------------------------------
@@ -90,8 +126,14 @@ for arg in "$@"; do
 	esac
 done
 
-REPO_ROOT="$(resolve_repo_root)"
-CORE_DIR="${CAST_RULES_CORE_DIR:-$REPO_ROOT/rules-core}"
+# CAST_RULES_CORE_DIR (when set) makes repo-root resolution irrelevant — skip
+# it entirely so tests/callers with the override never depend on git context.
+if [[ -n "${CAST_RULES_CORE_DIR:-}" ]]; then
+	CORE_DIR="$CAST_RULES_CORE_DIR"
+else
+	REPO_ROOT="$(resolve_repo_root)"
+	CORE_DIR="$REPO_ROOT/rules-core"
+fi
 LIVE_DIR="${CAST_LIVE_RULES_DIR:-$HOME/.claude/rules}"
 BACKUP_ROOT="${CAST_RULES_SYNC_BACKUP_DIR:-$HOME/.claude/backups}"
 

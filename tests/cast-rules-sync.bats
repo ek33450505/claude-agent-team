@@ -144,3 +144,129 @@ teardown() {
   run cat "$LIVE_DIR/foo.md"
   assert_output "old content"
 }
+
+@test "--apply with CAST_RULES_SYNC_ACK set but EMPTY refuses, and the live file is unchanged" {
+  echo "old content" >"$LIVE_DIR/foo.md"
+  echo "new content" >"$CORE_DIR/foo.md"
+
+  run env CAST_RULES_SYNC_ACK="" bash "$SCRIPT" --apply
+  assert_failure
+  assert_output --partial "CAST_RULES_SYNC_ACK"
+
+  run cat "$LIVE_DIR/foo.md"
+  assert_output "old content"
+}
+
+@test "dry-run output includes the unified diff body, not just the word diff" {
+  echo "old content" >"$LIVE_DIR/foo.md"
+  echo "new content" >"$CORE_DIR/foo.md"
+
+  run bash "$SCRIPT"
+  assert_success
+  assert_output --partial "-old content"
+  assert_output --partial "+new content"
+}
+
+@test "--apply when everything is already in sync exits 0, prints Nothing to do, and creates no backup dir" {
+  echo "same content" >"$LIVE_DIR/foo.md"
+  echo "same content" >"$CORE_DIR/foo.md"
+
+  run env CAST_RULES_SYNC_ACK="test reason" bash "$SCRIPT" --apply
+  assert_success
+  assert_output --partial "Nothing to do"
+
+  backup_subdir="$(find "$BACKUP_DIR" -maxdepth 1 -type d -name 'rules-sync-*' | head -n1)"
+  [[ -z "$backup_subdir" ]]
+}
+
+@test "unknown flag exits 2 with an error on stderr" {
+  run bash "$SCRIPT" --bogus-flag
+  assert_equal "$status" 2
+  assert_output --partial "unknown flag"
+}
+
+@test "--help exits 0 and prints the usage block" {
+  run bash "$SCRIPT" --help
+  assert_success
+  assert_output --partial "Usage: cast-rules-sync.sh"
+  assert_output --partial "--apply"
+}
+
+@test "per-file cp failure during backup is fail-closed: unreadable source aborts and leaves live files unchanged" {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    skip "running as root — chmod 000 does not block root from reading"
+  fi
+
+  echo "old content a" >"$LIVE_DIR/aaa.md"
+  echo "new content a" >"$CORE_DIR/aaa.md"
+  echo "old content b" >"$LIVE_DIR/bbb.md"
+  echo "new content b" >"$CORE_DIR/bbb.md"
+
+  chmod 000 "$LIVE_DIR/bbb.md"
+  run env CAST_RULES_SYNC_ACK="test reason" bash "$SCRIPT" --apply
+  chmod 644 "$LIVE_DIR/bbb.md"
+
+  assert_failure
+  assert_output --partial "ERROR"
+  assert_output --partial "back up"
+
+  run cat "$LIVE_DIR/aaa.md"
+  assert_output "old content a"
+  run cat "$LIVE_DIR/bbb.md"
+  assert_output "old content b"
+}
+
+@test "REGRESSION: installed copy with no git repo and no known checkout hard-refuses on a stale rules-core rather than silently adopting it" {
+  installed_scripts="$HOME/.claude/scripts"
+  installed_core="$HOME/.claude/rules-core"
+  mkdir -p "$installed_scripts" "$installed_core"
+  cp "$SCRIPT" "$installed_scripts/cast-rules-sync.sh"
+  # Mirrors the REAL deployed shape: install.sh:261 copies working-conventions.md
+  # (among others) into ~/.claude/rules-core/ at install time, so this exact
+  # file legitimately EXISTS at the install destination on every installed
+  # machine. A predicate that only checks for working-conventions.md cannot
+  # tell this apart from a real repo checkout — that was the bug.
+  echo "STALE" >"$installed_core/working-conventions.md"
+  echo "STALE" >"$installed_core/shell.md"
+  # No $HOME/Projects/personal/claude-agent-team checkout in this fake HOME —
+  # the fallback-2 candidate must not exist either.
+
+  unset CAST_RULES_CORE_DIR
+
+  nogit_dir="$HOME/nogit"
+  mkdir -p "$nogit_dir"
+  cd "$nogit_dir"
+
+  run bash "$installed_scripts/cast-rules-sync.sh"
+  assert_failure
+  assert_output --partial "cannot resolve repo root"
+  # Never got far enough to propose a sync from the stale install snapshot.
+  refute_output --partial "WOULD-UPDATE"
+  refute_output --partial "WOULD-CREATE"
+}
+
+@test "REGRESSION: --apply on the installed copy with no git repo never writes over hand-tuned live rules" {
+  installed_scripts="$HOME/.claude/scripts"
+  installed_core="$HOME/.claude/rules-core"
+  installed_live="$HOME/.claude/rules"
+  mkdir -p "$installed_scripts" "$installed_core" "$installed_live"
+  cp "$SCRIPT" "$installed_scripts/cast-rules-sync.sh"
+  echo "STALE" >"$installed_core/working-conventions.md"
+  echo "STALE" >"$installed_core/shell.md"
+  echo "HAND-TUNED" >"$installed_live/shell.md"
+
+  unset CAST_RULES_CORE_DIR
+  export CAST_LIVE_RULES_DIR="$installed_live"
+
+  nogit_dir="$HOME/nogit2"
+  mkdir -p "$nogit_dir"
+  cd "$nogit_dir"
+
+  run env CAST_RULES_SYNC_ACK="probe" CAST_LIVE_RULES_DIR="$installed_live" bash "$installed_scripts/cast-rules-sync.sh" --apply
+  assert_failure
+  assert_output --partial "cannot resolve repo root"
+
+  # The property that matters: nothing was written, not just a nonzero exit.
+  run cat "$installed_live/shell.md"
+  assert_output "HAND-TUNED"
+}
