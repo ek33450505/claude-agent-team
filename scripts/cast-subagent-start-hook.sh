@@ -75,22 +75,27 @@ if [ -z "$PARSED" ]; then
   exit 0
 fi
 
-# Extract fields — single python3 call emits a tab-separated line to avoid
+# Extract fields — single python3 call emits a 0x1f-separated line to avoid
 # five separate cold-start invocations that each re-parse the same input.
 export CAST_START_PARSED="$PARSED"
 
-IFS=$'\t' read -r AGENT_NAME SESSION_ID AGENT_ID <<<"$(python3 -c "
+# Field separator is ASCII unit separator (0x1f), not tab: tab is IFS
+# *whitespace* to bash's `read`, so consecutive tabs from an empty middle
+# field (e.g. no session_id) collapse into ONE delimiter, shifting agent_id
+# into SESSION_ID and losing it. 0x1f is non-whitespace IFS, so empty fields
+# are preserved exactly. See tests: "no session_id" field-placement guards.
+IFS=$'\x1f' read -r AGENT_NAME SESSION_ID AGENT_ID <<<"$(python3 -c "
 import json, os
 d = json.loads(os.environ.get('CAST_START_PARSED', '{}'))
 
 def clean(v):
-    return str(v).replace('\t', ' ').replace('\n', ' ') if v else ''
+    return str(v).replace('\x1f', ' ').replace('\n', ' ').replace('\r', ' ') if v else ''
 
 agent_name = clean(d.get('agent_name')) or 'unknown'
 session_id = clean(d.get('session_id'))
 agent_id   = clean(d.get('agent_id'))
-print(f'{agent_name}\t{session_id}\t{agent_id}')
-" 2>/dev/null || printf 'unknown\t\t\n')"
+print(f'{agent_name}\x1f{session_id}\x1f{agent_id}')
+" 2>/dev/null || printf 'unknown\x1f\x1f\n')"
 export CAST_START_AGENT_ID="$AGENT_ID"
 
 # ── Step 1: Write task_claimed event to ~/.claude/cast/events/ ────────────────
@@ -142,6 +147,15 @@ agent_id = os.environ.get('CAST_START_AGENT_ID', '')
 err_log  = os.path.expanduser('~/.claude/logs/hook-errors.log')
 
 if not agent:
+    raise SystemExit(0)
+
+# #372-twin guard: an 'unknown' agent name (no agent_type/agent_name/subagent_name
+# in the SubagentStart payload) combined with no agent_id produces a row that
+# cast_subagent_stop.py can NEVER match (no agent_id fast path, no agent+session_id
+# fallback) — it sits 'running' until a reaper ages it to failed/abandoned. The
+# event file (Step 1, above) already recorded the forensic trace; skip only the
+# unclosable agent_runs row. Either a real name OR an agent_id keeps the insert.
+if agent == 'unknown' and not agent_id:
     raise SystemExit(0)
 
 def _log_hook_error(msg):

@@ -168,3 +168,90 @@ print('ok')
   val=$(sqlite3 "$CAST_DB_PATH" "SELECT COALESCE(session_id, 'IS_NULL') FROM agent_runs WHERE agent='no-sess-agent' LIMIT 1;")
   [[ "$val" == "IS_NULL" ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 8: #372-twin guard — no real name AND no agent_id → skip the row,
+# keep the event file (unclosable row per reference_subagent_excerpts...).
+# ---------------------------------------------------------------------------
+
+@test "no agent name and no agent_id → event file still created" {
+  run bash "$HOOK_SH" <<< '{}'
+  assert_success
+  local count
+  count=$(find "$HOME/.claude/cast/events" -name "*unknown*subagent-start.json" 2>/dev/null | wc -l)
+  [[ "$count" -ge 1 ]]
+}
+
+@test "no agent name and no agent_id → zero agent_runs rows inserted" {
+  run bash "$HOOK_SH" <<< '{"session_id": ""}'
+  assert_success
+  local count
+  count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs;" | tr -d ' ')
+  [[ "$count" -eq 0 ]]
+}
+
+@test "agent_type present but no agent_id/session_id → row IS inserted (lower edge: real name)" {
+  run bash "$HOOK_SH" <<< '{"agent_type": "named-no-id"}'
+  assert_success
+  local count
+  count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE agent='named-no-id';" | tr -d ' ')
+  [[ "$count" -eq 1 ]]
+}
+
+@test "agent_id present, no agent_type, no session_id → row inserted with fields in the right columns" {
+  # Real production shape (no workaround): this is the field-placement
+  # regression guard for the 0x1f delimiter fix — with the old tab delimiter,
+  # the empty middle (session_id) field collapsed and agent_id landed in
+  # session_id instead, while AGENT_ID itself came out empty.
+  run bash "$HOOK_SH" <<< '{"agent_id": "aid-only-123"}'
+  assert_success
+  local row
+  row=$(sqlite3 "$CAST_DB_PATH" "SELECT agent, COALESCE(session_id, 'IS_NULL'), agent_id FROM agent_runs WHERE agent_id='aid-only-123';")
+  [[ "$row" == "unknown|IS_NULL|aid-only-123" ]]
+}
+
+@test "named agent + agent_id, no session_id → session_id NULL, agent_id in agent_id column" {
+  run bash "$HOOK_SH" <<< '{"agent_type": "named-with-id", "agent_id": "id-1"}'
+  assert_success
+  local row
+  row=$(sqlite3 "$CAST_DB_PATH" "SELECT agent, COALESCE(session_id, 'IS_NULL'), agent_id FROM agent_runs WHERE agent='named-with-id';")
+  [[ "$row" == "named-with-id|IS_NULL|id-1" ]]
+}
+
+@test "embedded CR in agent_type → sanitised in stored column, fields in correct columns" {
+  # Built via python3 json.dumps so the CR is a properly JSON-escaped '\r'
+  # (2 chars: backslash, r) in the on-disk payload — the ONLY form json.loads
+  # decodes back to a real 0x0d byte. A bash $'...' ANSI-C-quoted heredoc
+  # would embed a RAW unescaped CR byte instead, which is invalid JSON under
+  # strict json.loads and would fall to the "unknown" parse-error fallback —
+  # never reaching clean() at all, making the test pass vacuously either way.
+  local payload
+  payload=$(python3 -c "
+import json
+print(json.dumps({'agent_type': 'cr-agent\rX', 'agent_id': 'id-cr-1'}))
+")
+  # Fixture self-check: confirm the decoded value really contains a literal
+  # CR (0x0d), not the two characters '\' and 'r'.
+  python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+assert chr(13) in d['agent_type'], 'fixture does not contain a real CR byte'
+" "$payload"
+
+  run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+  local row
+  row=$(sqlite3 "$CAST_DB_PATH" "SELECT agent, COALESCE(session_id, 'IS_NULL'), agent_id FROM agent_runs WHERE agent_id='id-cr-1';")
+  [[ "$row" == "cr-agent X|IS_NULL|id-cr-1" ]]
+  # Defensive: the stored agent value must not contain a raw CR byte.
+  local raw_agent
+  raw_agent=$(sqlite3 "$CAST_DB_PATH" "SELECT agent FROM agent_runs WHERE agent_id='id-cr-1';")
+  [[ "$raw_agent" != *$'\r'* ]]
+}
+
+@test "malformed JSON → creates no DB rows (preserved behaviour)" {
+  bash "$HOOK_SH" <<< '{"incomplete": json'
+  local count
+  count=$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs;" | tr -d ' ')
+  [[ "$count" -eq 0 ]]
+}

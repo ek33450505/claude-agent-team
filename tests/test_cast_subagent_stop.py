@@ -16,6 +16,8 @@ so hook-errors.log is never written under the real ~/.claude — os.path.expandu
 honors the HOME env var on POSIX, which is exactly what _log_error relies on.
 """
 import contextlib
+import datetime
+import inspect
 import io
 import json
 import os
@@ -1427,6 +1429,302 @@ class TestTickIdentityGuard(_IsolatedDbPathTestCase):
             out,
             'the enclosing session\'s last_assistant_message leaked into stdout via a tick',
         )
+
+
+class TestSessionIdNullSafeMatch(_IsolatedDbPathTestCase):
+    """Fix (I-2 unit 2, 2026-08-20): scripts/cast-subagent-start-hook.sh
+    writes an absent session_id as genuine SQL NULL
+    (``data.get("session_id") or None``), but cast_subagent_stop.py's
+    matching/enrichment queries bound the empty string
+    (``data.get("session_id") or ""``) and compared with ``=``. Both
+    ``NULL = ''`` and ``NULL = NULL`` are never true in SQLite, so a
+    running row started with no session_id could never be matched by any
+    of the four ``agent_runs`` queries keyed on session_id. Fixed by
+    switching all four predicates to the null-safe ``IS`` operator and
+    binding ``sess or None`` (never the empty string) at each call site:
+    cast_subagent_stop.py stage0_fast_write (:537), the
+    stage2_transcript_cost fallback UPDATE (:846), stage9_claimed_work's
+    started_at lookup (:1499), and stage13_duration_p95's duration_ms
+    lookup (:1682). ``ctx.session_id`` itself is left untouched (still a
+    plain string) — normalization happens only at the query sites.
+
+    Mutation-tested: reverting any one of the four ``IS`` back to ``=``
+    makes exactly that site's test below fail while the other three
+    continue to pass (see Status block for observed counts).
+    """
+
+    _AGENT_RUNS_SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS agent_runs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "session_id TEXT,"
+        "agent TEXT NOT NULL,"
+        "model TEXT,"
+        "started_at TEXT,"
+        "ended_at TEXT,"
+        "status TEXT,"
+        "input_tokens INTEGER,"
+        "output_tokens INTEGER,"
+        "cost_usd REAL,"
+        "agent_id TEXT,"
+        "response TEXT,"
+        "cache_read_input_tokens INTEGER,"
+        "cache_creation_input_tokens INTEGER,"
+        "duration_ms INTEGER,"
+        "tool_uses INTEGER,"
+        "files TEXT,"
+        "file_class TEXT,"
+        "abandoned_at TIMESTAMP,"
+        "branch TEXT"
+        ")"
+    )
+    _ROUTING_EVENTS_SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS routing_events ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "session_id TEXT,"
+        "timestamp TEXT,"
+        "prompt_preview TEXT,"
+        "action TEXT,"
+        "matched_route TEXT,"
+        "pattern TEXT,"
+        "confidence TEXT,"
+        "project TEXT,"
+        "event_type TEXT,"
+        "data TEXT"
+        ")"
+    )
+
+    def _seed_row(self, agent, session_id, agent_id=None, status='running',
+                  started_at=None, duration_ms=None):
+        """Inserts one agent_runs row. ``session_id=None`` seeds a genuine
+        SQL NULL (never the empty string) — the specific trap this fix
+        targets."""
+        db_path = os.environ['CAST_DB_PATH']
+        if started_at is None:
+            started_at = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(self._AGENT_RUNS_SCHEMA)
+            conn.execute(self._ROUTING_EVENTS_SCHEMA)
+            conn.execute(
+                "INSERT INTO agent_runs (agent, agent_id, session_id, status, started_at, duration_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (agent, agent_id, session_id, status, started_at, duration_ms),
+            )
+            conn.commit()
+            return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        finally:
+            conn.close()
+
+    def _row_status(self, row_id):
+        db_path = os.environ['CAST_DB_PATH']
+        conn = sqlite3.connect(db_path)
+        try:
+            r = conn.execute("SELECT status FROM agent_runs WHERE id=?", (row_id,)).fetchone()
+            return r[0] if r else None
+        finally:
+            conn.close()
+
+    def _make_ctx(self, agent_name, session_id, agent_id=""):
+        ctx = css.Ctx()
+        ctx.agent_name = agent_name
+        ctx.session_id = session_id
+        ctx.agent_id = agent_id
+        ctx.db_path = os.environ['CAST_DB_PATH']
+        ctx.db_present = True
+        ctx.ts_iso = '2026-08-20T21:05:00Z'
+        ctx.db_status = 'DONE'
+        return ctx
+
+    # ── site 1 (:537) — stage0_fast_write ────────────────────────────────
+
+    def test_null_session_id_row_closes_on_stop_stage0(self):
+        """Requirement 1: a running row seeded with a genuine SQL NULL
+        session_id and a real agent name, no agent_id on either side, is
+        closed by a stop event for that agent."""
+        row_id = self._seed_row('backend-writer', None)
+        db_path = os.environ['CAST_DB_PATH']
+        conn = sqlite3.connect(db_path)
+        try:
+            is_null = conn.execute(
+                "SELECT session_id IS NULL FROM agent_runs WHERE id=?", (row_id,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(is_null, 1, 'fixture did not seed a genuine SQL NULL session_id')
+
+        ctx = self._make_ctx('backend-writer', '')
+        css.stage0_fast_write(ctx)
+
+        self.assertEqual(
+            self._row_status(row_id), 'DONE',
+            'NULL-session running row was not closed by stage0_fast_write',
+        )
+        self.assertEqual(ctx.fast_row_id, row_id)
+
+    def test_regular_session_id_still_matches_stage0(self):
+        """Regression guard: the normal non-NULL case still matches."""
+        row_id = self._seed_row('backend-writer', 'sess-abc123')
+        ctx = self._make_ctx('backend-writer', 'sess-abc123')
+        css.stage0_fast_write(ctx)
+        self.assertEqual(self._row_status(row_id), 'DONE')
+        self.assertEqual(ctx.fast_row_id, row_id)
+
+    def test_non_matching_session_id_does_not_close_stage0(self):
+        """IS is null-safe equality, not a wildcard: a stop for a
+        DIFFERENT session must not close another session's running row."""
+        row_id = self._seed_row('backend-writer', 'sess-abc123')
+        ctx = self._make_ctx('backend-writer', 'sess-DIFFERENT')
+        css.stage0_fast_write(ctx)
+        self.assertEqual(
+            self._row_status(row_id), 'running',
+            'IS matched a non-matching session_id — the row should have stayed open',
+        )
+        self.assertIsNone(ctx.fast_row_id)
+
+    def test_concurrent_null_session_stops_are_closed_fifo_by_min_id(self):
+        """Pins an ACCEPTED tradeoff, not a bug: this fix made the
+        agent_id-absent, session_id-absent fallback branch (:537 stage0,
+        :846 stage2) reachable for the first time — before the fix a
+        genuine NULL session_id could never match the old `session_id=?`
+        predicate, so this MIN(id) FIFO path was dead code for the
+        no-session case. The pre-existing comment above the enrichment
+        UPDATE (:795, "FIFO: oldest started row of this type is the one
+        that just finished first") documents the intended heuristic when
+        neither agent_id nor session_id can disambiguate — this test pins
+        that heuristic on the record, it does not fix it.
+
+        Consequence, named plainly so the next reader doesn't mistake it
+        for a latent bug someone missed: with TWO OR MORE concurrently
+        running rows of the SAME agent name, both carrying a genuine SQL
+        NULL session_id, and a stop event carrying neither agent_id nor
+        session_id, MIN(id) closes and enriches the OLDEST row — which
+        may not be the invocation that actually finished. Wrong
+        response/cost_usd/tool_uses can land on the wrong run's row by
+        design. `agent=?` stays an exact match, so this is same-name
+        concurrent-invocation misattribution only — cross-agent-type
+        contamination remains impossible.
+        """
+        older_id = self._seed_row('backend-writer', None, started_at='2026-08-20T20:00:00Z')
+        newer_id = self._seed_row('backend-writer', None, started_at='2026-08-20T20:05:00Z')
+        self.assertGreater(newer_id, older_id, 'fixture rows were not inserted in the expected id order')
+
+        db_path = os.environ['CAST_DB_PATH']
+        conn = sqlite3.connect(db_path)
+        try:
+            for rid in (older_id, newer_id):
+                is_null = conn.execute(
+                    "SELECT session_id IS NULL FROM agent_runs WHERE id=?", (rid,)
+                ).fetchone()[0]
+                self.assertEqual(is_null, 1, f'row {rid} did not seed a genuine SQL NULL session_id')
+        finally:
+            conn.close()
+
+        ctx = self._make_ctx('backend-writer', '')
+        css.stage0_fast_write(ctx)
+
+        self.assertEqual(
+            self._row_status(older_id), 'DONE',
+            'MIN(id) FIFO heuristic regressed — the OLDER row should be the one closed',
+        )
+        self.assertEqual(
+            self._row_status(newer_id), 'running',
+            'the newer, still-actually-running row was ALSO closed — MIN(id) FIFO must '
+            'touch only the single oldest match, not every NULL-session row of this agent',
+        )
+        self.assertEqual(ctx.fast_row_id, older_id)
+
+    # ── site 2 (:846) — stage2_transcript_cost fallback UPDATE ────────────
+
+    def test_null_session_id_row_enriched_by_stage2_fallback(self):
+        """Same defect class in the enrichment UPDATE's session_id
+        fallback branch (agent_id absent on both sides, fast_row_id not
+        yet resolved — the path reached when stage0 could not find/close
+        the row first)."""
+        row_id = self._seed_row('backend-writer', None)
+        ctx = self._make_ctx('backend-writer', '')
+        ctx.fast_row_id = None
+        ctx.response_text = 'Status: DONE'
+        css.stage2_transcript_cost(ctx)
+        self.assertEqual(
+            self._row_status(row_id), 'DONE',
+            'NULL-session running row was not matched by the stage2_transcript_cost fallback',
+        )
+
+    # ── site 3 (:1499) — stage9_claimed_work started_at lookup ────────────
+
+    def test_null_session_id_start_time_resolved_by_stage9(self):
+        """A NULL-session row's started_at must be found via the IS
+        predicate rather than falling back to the stop-time — proven by
+        capturing the CAST_AGENT_START_TIME env var passed to the
+        verifier subprocess module."""
+        real_started_at = '2026-08-20T20:00:00Z'
+        self._seed_row('backend-writer', None, status='DONE', started_at=real_started_at)
+        ctx = self._make_ctx('backend-writer', '')
+        ctx.response_text = 'Status: DONE\nSummary: did the thing.'
+
+        with mock.patch.object(css, '_run_script_module') as mock_run:
+            css.stage9_claimed_work(ctx)
+
+        mock_run.assert_called_once()
+        _name, env = mock_run.call_args[0]
+        self.assertEqual(
+            env['CAST_AGENT_START_TIME'], real_started_at,
+            'NULL-session row was not found — start time fell back to the stop timestamp instead',
+        )
+
+    # ── site 4 (:1682) — stage13_duration_p95 duration_ms lookup ──────────
+    #
+    # Unlike sites 1-3, this call site sits behind its OWN pre-existing
+    # guard (`session_id != "unknown"`, stage13:1680) that only lets the
+    # query run when ctx.session_id is genuinely non-empty — deliberately,
+    # since the query has no agent filter and binding NULL here would risk
+    # matching an unrelated agent's NULL-session row. That guard means the
+    # None-bind branch of this site's fix can never actually execute at
+    # runtime: it is a defensive/consistency edit, not a reachable bugfix.
+    # Verified two ways below: the shipped predicate text (mutation-
+    # sensitive to the IS/= revert) and a regression check of the one path
+    # that IS reachable (a genuine non-empty session_id).
+
+    def test_site4_query_uses_null_safe_is_operator(self):
+        """The predicate text itself is what a revert-to-`=` mutation
+        flips; runtime NULL-bind reachability is blocked by the
+        session_id != "unknown" guard documented above."""
+        src = inspect.getsource(css.stage13_duration_p95)
+        self.assertIn(
+            'WHERE session_id IS ? AND duration_ms IS NOT NULL',
+            src,
+            'site 4 query no longer uses the null-safe IS predicate',
+        )
+
+    def test_duration_lookup_reachable_path_still_works_stage13(self):
+        """Regression guard for the one branch that IS reachable: a
+        genuine non-empty session_id still resolves this run's own
+        duration_ms via the fallback lookup and feeds the p95 check
+        (routing_events INSERT fires)."""
+        now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        self._seed_row('backend-writer', 'sess-this-run', status='DONE', started_at=now, duration_ms=9999)
+        for i, d in enumerate((100, 200, 300, 400, 500)):
+            self._seed_row('backend-writer', f'hist-sess-{i}', status='DONE', started_at=now, duration_ms=d)
+
+        ctx = self._make_ctx('backend-writer', 'sess-this-run')
+        ctx.fast_row_id = None
+        ctx.agent_id = ''
+        css.stage13_duration_p95(ctx)
+
+        db_path = os.environ['CAST_DB_PATH']
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT data FROM routing_events WHERE event_type='slow_agent' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(
+            row,
+            'no slow_agent routing_events row — the reachable session_id fallback '
+            'lookup (site 4) did not resolve duration_ms, so the p95 check never ran',
+        )
+        self.assertIn('"duration_ms": 9999', row[0])
 
 
 if __name__ == '__main__':
