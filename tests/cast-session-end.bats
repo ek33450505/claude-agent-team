@@ -205,43 +205,34 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# C3 fix (2026-08-18): the DB-pruning UPDATE that flips stale 'running'
-# agent_runs to 'failed' must also write an explicit no-response marker, not
-# leave `response` NULL — indistinguishable from a DONE run with a
-# legitimately-empty response. See plans/c2-c3-response-loss-findings.md.
+# v10 I-2b (2026-08-21): stale-agent_runs reaping moved OUT of this hook and
+# into scripts/cast-abandon-stale-runs.py, which is now the SOLE reaper.
+# The C3 no-response-marker / no-clobber coverage now lives in
+# tests/cast-reaper-timestamps.bats. The predicate this file used to assert
+# here compared `started_at` RAW (unwrapped) against `datetime('now','-2
+# hours')` — since real agent_runs.started_at is ISO-8601
+# ('%Y-%m-%dT%H:%M:%SZ'), and 'T' (0x54) sorts after ' ' (0x20), that raw
+# compare could never match a real row; the old test only passed because its
+# own fixture used a space-separated timestamp the broken compare happened
+# to match. Any future fixture in this file must use ISO-8601
+# ('%Y-%m-%dT%H:%M:%SZ') to reflect production data.
 # ---------------------------------------------------------------------------
 
-@test "session-end prune writes an explicit no-response marker on stale run — C3 fix" {
+@test "session-end prune leaves stale running agent_runs untouched (reaping moved to cast-abandon-stale-runs.py)" {
   local old_ts
-  old_ts=$(python3 -c "from datetime import datetime,timedelta,timezone; print((datetime.now(timezone.utc)-timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S'))")
+  old_ts=$(python3 -c "from datetime import datetime,timedelta,timezone; print((datetime.now(timezone.utc)-timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
   sqlite3 "$TEST_DB" \
     "INSERT INTO agent_runs (id, session_id, started_at, status) VALUES ('stale-run-1', 'sess-x', '$old_ts', 'running');"
 
-  export CLAUDE_SESSION_ID="test-prune-marker"
+  export CLAUDE_SESSION_ID="test-prune-no-reap"
   run bash "$HOOK_SH" <<< ""
   assert_success
 
   local status response
   status="$(sqlite3 "$TEST_DB" "SELECT status FROM agent_runs WHERE id='stale-run-1';")"
   response="$(sqlite3 "$TEST_DB" "SELECT response FROM agent_runs WHERE id='stale-run-1';")"
-  [ "$status" = "failed" ]
-  [ -n "$response" ]
-  [[ "$response" == *"SubagentStop never fired"* ]]
-}
-
-@test "session-end prune never clobbers an already-populated response — C3 fix" {
-  local old_ts
-  old_ts=$(python3 -c "from datetime import datetime,timedelta,timezone; print((datetime.now(timezone.utc)-timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S'))")
-  sqlite3 "$TEST_DB" \
-    "INSERT INTO agent_runs (id, session_id, started_at, status, response) VALUES ('stale-run-2', 'sess-x', '$old_ts', 'running', 'real response text');"
-
-  export CLAUDE_SESSION_ID="test-prune-no-clobber"
-  run bash "$HOOK_SH" <<< ""
-  assert_success
-
-  local response
-  response="$(sqlite3 "$TEST_DB" "SELECT response FROM agent_runs WHERE id='stale-run-2';")"
-  [ "$response" = "real response text" ]
+  [ "$status" = "running" ]
+  [ -z "$response" ]
 }
 
 # ---------------------------------------------------------------------------

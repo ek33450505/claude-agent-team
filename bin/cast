@@ -2561,13 +2561,23 @@ PYEOF
     # Detects agent_runs rows that were silently cut off by the maxTurns cap:
     #   - stuck running > 2h (pre-reaper, not yet abandoned)
     #   - status='abandoned' in the last 7d (reaped by cast-abandon-stale-runs.py)
+    #   - status='failed' in the last 7d (backward-compat: rows written by the
+    #     two reapers removed in v10 I-2b; no new 'failed' rows are produced
+    #     for this event, so this arm self-expires as retention ages them out)
+    # started_at/abandoned_at/ended_at are stored ISO-8601 with a 'T' date/time
+    # separator (YYYY-MM-DDTHH:MM:SSZ); sqlite3's datetime('now',...) emits a
+    # space separator. Comparing raw strings is a lexical compare where 'T'
+    # (0x54) sorts after ' ' (0x20), so same-day rows never satisfy '<' and
+    # over-match on '>='. Every comparison below wraps the stored column in
+    # datetime(...) to normalize both sides before comparing.
     # Note: abandoned_at column is added by the reaper on first run; if it is
     # absent the UNION query fails and we degrade gracefully via the rc-ne-0 branch.
     local _st_out _st_rc
     _st_out="$(sqlite3 "$CAST_DB_PATH" \
       "SELECT COALESCE(agent,'unknown'), COUNT(*) FROM agent_runs \
-       WHERE (status='running' AND started_at < datetime('now','-2 hours')) \
-          OR (status='abandoned' AND abandoned_at >= datetime('now','-7 days')) \
+       WHERE (status='running' AND datetime(started_at) < datetime('now','-2 hours')) \
+          OR (status='abandoned' AND datetime(abandoned_at) >= datetime('now','-7 days')) \
+          OR (status='failed' AND ended_at IS NOT NULL AND datetime(ended_at) >= datetime('now','-7 days')) \
        GROUP BY agent ORDER BY COUNT(*) DESC;" 2>&1)"
     _st_rc=$?
     if echo "$_st_out" | grep -qi "no such table"; then

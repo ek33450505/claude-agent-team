@@ -4,7 +4,9 @@
 Runs daily via launchd (com.cast.abandon-stale-runs). Two symmetric steps:
 
   Step 1 — agent_runs: rows stuck in status='running' for more than
-  CAST_ABANDON_STALE_HOURS (default 2h) are flipped to 'abandoned'.
+  CAST_ABANDON_STALE_HOURS (default 2h) are flipped to 'abandoned', with
+  both abandoned_at and ended_at set (v10 I-2b: this script is the sole
+  reaper — see the "sole writer" comment above no_response_marker below).
   For each reaped row, one incidents row is inserted so that API-killed agents
   and maxTurns-truncated runs (which never fire SubagentStop) become visible in
   the incident record.  Incident insertion is best-effort — a missing incidents
@@ -380,13 +382,16 @@ def main() -> None:
             # cheap placeholder; recover_stale_responses() below (run unconditionally,
             # every invocation) makes a best-effort pass to replace it with the run's
             # actual partial output pulled straight from the transcript.
-            # Literal kept byte-identical (aside from script name / hours) with
-            # cast-maintenance.sh:54 and cast-session-end.sh:268 — all three
-            # write "... stale running]" (unquoted). A prior version of this
-            # line quoted 'running', which still matched the shared
-            # NO_RESPONSE_MARKER_LIKE '[NO RESPONSE%' predicate today, but a
-            # divergent literal across three writers is a trap for the day
-            # someone tightens that predicate to something more specific.
+            # v10 I-2b: this script is now the SOLE writer of this marker —
+            # the cast-maintenance.sh and cast-session-end.sh reaping UPDATEs
+            # were removed (they raced this one with no coordination, so the
+            # same stale event landed as 'abandoned' or 'failed' depending
+            # only on which fired first). Historical rows written by those
+            # two removed writers still carry their own "... stale running]"
+            # marker text and must keep matching the shared
+            # NO_RESPONSE_MARKER_LIKE '[NO RESPONSE%' predicate — so this
+            # literal's prefix must not change even though it is no longer
+            # shared byte-for-byte with anything else.
             no_response_marker = (
                 f"[NO RESPONSE — SubagentStop never fired; reaped by "
                 f"cast-abandon-stale-runs.py after {STALE_HOURS}h stale running]"
@@ -395,10 +400,11 @@ def main() -> None:
                 f'''
                 UPDATE agent_runs
                 SET status = 'abandoned', abandoned_at = ?,
+                    ended_at = COALESCE(ended_at, ?),
                     response = COALESCE(response, ?)
                 WHERE id IN ({",".join("?" * len(row_ids))})
                 ''',
-                [now_iso, no_response_marker] + row_ids
+                [now_iso, now_iso, no_response_marker] + row_ids
             )
             conn.commit()
 

@@ -120,7 +120,7 @@
       ],
       "cadence": "per_event",
       "status": "live",
-      "notes": "closer: cast-session-end.sh; reaper: cast-maintenance.sh; closer added 2026-07-03"
+      "notes": "closer: cast-session-end.sh; reaper: cast-abandon-stale-runs.py; closer added 2026-07-03"
     },
     {
       "table": "teammate_runs",
