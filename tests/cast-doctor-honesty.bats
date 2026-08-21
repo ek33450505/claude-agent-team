@@ -575,6 +575,77 @@ SQL
   refute_output --partial "silent truncations (maxTurns) — 1 suspected truncation"
 }
 
+# ── Test 5b: silent truncations — ISO-T/Z stuck-running row (raw-compare regression) ──
+# Production writes started_at as ISO-8601 with a 'T' separator
+# (YYYY-MM-DDTHH:MM:SSZ), not sqlite3's own space-separated datetime() format
+# that Test 5 above happens to use. A raw string compare against
+# datetime('now',...) never matches a same-day 'T'-separated timestamp
+# ('T' 0x54 sorts after ' ' 0x20), so the WHERE clause must wrap started_at
+# in datetime(...) to normalize it. This is the assertion that fails on the
+# pre-fix raw-compare WHERE clause.
+@test "silent truncations: WARN when stuck-running row is 3h-stale in ISO-T/Z format" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, status)
+VALUES ('test-writer', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-3 hours'), 'running');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "silent truncations (maxTurns) — 1 suspected truncation(s)"
+  assert_output --partial "test-writer"
+  assert_output --partial "likely maxTurns cap hit"
+}
+
+# ── Test 5c: silent truncations — legacy 'failed' reaper rows (backward-compat arm) ──
+# Before v10 I-2b, two reapers wrote status='failed' (not 'abandoned') for the
+# same silent-truncation event. Those historical rows are left untouched and
+# must still surface here, keyed on ended_at (ISO-T/Z), which most of them have.
+@test "silent truncations: WARN when legacy status='failed' row has ended_at within 7d" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, ended_at, status)
+VALUES ('debugger', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-2 days', '-1 hour'),
+        strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-2 days'), 'failed');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "silent truncations (maxTurns) — 1 suspected truncation(s)"
+  assert_output --partial "debugger"
+}
+
+# ── Test 5d: silent truncations — fresh ISO-T/Z running row still discriminates ──
+# Guards against a fix that over-corrects into matching everything: a 30-minute-old
+# running row in the real ISO-T/Z production format must NOT be reported.
+@test "silent truncations: OK when fresh ISO-T/Z running row is within the 2h threshold" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, status)
+VALUES ('code-writer', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 minutes'), 'running');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "silent truncations (maxTurns) — none in last 7d"
+  refute_output --partial "silent truncations (maxTurns) — 1 suspected truncation"
+}
+
 # ── Test 9: cast status with nonexistent cast.db ──────────────────────────────
 @test "cast status: nonexistent cast.db outputs 'cast.db not found' in Spend line" {
   # CAST_DB_PATH set in setup() but we intentionally do NOT create the db file
