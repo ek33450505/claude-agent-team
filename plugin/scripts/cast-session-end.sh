@@ -253,7 +253,7 @@ if command -v python3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   fi
 fi
 
-# === DB PRUNING (atomic — one lock acquisition for all 11 deletes/updates) ===
+# === DB PRUNING (atomic — one lock acquisition for all 8 deletes) ===
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   cast_sqlite "$DB" << PRUNE_SQL 2>/dev/null || true
 BEGIN;
@@ -265,7 +265,10 @@ DELETE FROM quality_gates    WHERE created_at < datetime('now', '-30 days');
 DELETE FROM stream_hook_events WHERE timestamp < datetime('now', '-30 days');
 DELETE FROM worktree_events  WHERE timestamp  < datetime('now', '-30 days');
 DELETE FROM cast_events      WHERE timestamp  < datetime('now', '-30 days');
-UPDATE agent_runs SET status='failed', response=COALESCE(response, '[NO RESPONSE — SubagentStop never fired; reaped by cast-session-end.sh after 2h stale running]') WHERE status='running' AND started_at < datetime('now', '-2 hours');
+-- Stale agent_runs reaping moved to cast-abandon-stale-runs.py (v10 I-2b):
+-- the old predicate here compared a raw ISO-8601 string (started_at) against
+-- datetime('now', ...) rather than datetime(started_at) < datetime(...), so
+-- it could not correctly express "more than 2 hours ago" and rarely matched.
 COMMIT;
 PRUNE_SQL
 fi
