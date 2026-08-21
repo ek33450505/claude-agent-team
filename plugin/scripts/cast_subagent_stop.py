@@ -534,8 +534,8 @@ def stage0_fast_write(ctx: Ctx) -> None:
             ).fetchone()
         else:
             _frow = _fconn.execute(
-                "SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?",
-                (agent, sess),
+                "SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id IS ?",
+                (agent, sess or None),
             ).fetchone()
         fast_row_id = _frow[0] if _frow and _frow[0] is not None else None
         if fast_row_id is not None:
@@ -843,11 +843,11 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
                     "files=?, file_class=? "
                     "WHERE id=("
-                    "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id=?"
+                    "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id IS ?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, agent, sess),
+                     files_val, file_class_val, agent, sess or None),
                 )
             rows_affected = conn.execute("SELECT changes()").fetchone()[0]
             conn.commit()
@@ -1496,8 +1496,8 @@ def stage9_claimed_work(ctx: Ctx) -> None:
         try:
             conn = sqlite3.connect(ctx.db_path, timeout=2)
             row = conn.execute(
-                "SELECT started_at FROM agent_runs WHERE session_id=? AND agent=? ORDER BY id DESC LIMIT 1",
-                (ctx.session_id, ctx.agent_name),
+                "SELECT started_at FROM agent_runs WHERE session_id IS ? AND agent=? ORDER BY id DESC LIMIT 1",
+                (ctx.session_id or None, ctx.agent_name),
             ).fetchone()
             conn.close()
             if row and row[0]:
@@ -1679,8 +1679,8 @@ def stage13_duration_p95(ctx: Ctx) -> None:
                 duration_ms = r[0]
         if duration_ms is None and session_id != "unknown":
             r = conn.execute(
-                "SELECT duration_ms FROM agent_runs WHERE session_id=? AND duration_ms IS NOT NULL ORDER BY id DESC LIMIT 1",
-                (session_id,),
+                "SELECT duration_ms FROM agent_runs WHERE session_id IS ? AND duration_ms IS NOT NULL ORDER BY id DESC LIMIT 1",
+                (session_id or None,),
             ).fetchone()
             if r:
                 duration_ms = r[0]
