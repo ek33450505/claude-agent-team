@@ -260,7 +260,14 @@ class TestDispatchDecisionsNameCapture(unittest.TestCase):
         """A name that satisfies Claude Code's charset but is shaped like a real
         secret (AWS access key ID) must be redacted, not stored verbatim."""
         self._make_db(with_dispatch_name=True)
-        raw = 'AKIAQQQQZZZZWWWWRRRR'
+        # Split literal, deliberately: the assembled value is still AKIA-shaped so
+        # the redaction screen sees a genuine AWS-key pattern, but no tracked LINE
+        # matches ci-pii-scan.sh's AKIA[0-9A-Z]{16} regex. Same remedy already used
+        # for this repo's other secret-shaped fixtures (2902a2b, 61b8d03).
+        # Do NOT rejoin this into one literal, and do NOT allowlist this file in
+        # .gitleaks.toml instead — an allowlist would blind both scanners to a REAL
+        # secret committed here later.
+        raw = 'AKIA' + 'QQQQZZZZWWWWRRRR'
         cast_pretool_dispatch._record_dispatch(self._data('backend-writer', name=raw))
         row = self._row()
         self.assertIsNotNone(row)
