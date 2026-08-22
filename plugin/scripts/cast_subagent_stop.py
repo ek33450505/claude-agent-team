@@ -1023,9 +1023,40 @@ def redact_excerpt(text: str) -> Optional[str]:
 def stage3_dispatch_decisions(ctx: Ctx) -> None:
     """Resolve the PreToolUse(Task)-captured pending decision row to its outcome.
 
-    Ported from cast-subagent-stop-hook.sh L604-651. FIFO MIN(id) match on
-    (chosen_agent, session_id) mirrors the agent_runs heuristic. BLOCKED on a
-    task_blocked event, else DONE. No pending row → no-op.
+    Ported from cast-subagent-stop-hook.sh L604-651; widened for I-2c into a
+    two-step match. BLOCKED on a task_blocked event, else DONE. No pending row
+    -> no-op.
+
+    Step 1 — exact join on dispatch_name. A dispatch carrying a custom
+    Agent-tool `name=` makes Claude Code report THAT name as agent_type at
+    SubagentStop instead of the roster type (ctx.agent_name is e.g.
+    "backend-writer__i2c-producer", not "backend-writer"), so matching on
+    chosen_agent (the roster type recorded at PreToolUse) alone silently
+    never closed the row — 782 of 2158 rows measured stuck pending on
+    2026-08-21. dispatch_name (migration 033) is the custom name as-seen,
+    written by cast-pretool-dispatch.py's _record_dispatch(); step 1 joins on
+    it with `=`, not `IS` — a NULL dispatch_name (unnamed dispatch, sanitizer
+    rejection, or redaction-fail-closed) can never satisfy `= ?`, so legacy
+    and unnamed rows are deliberately left for step 2, never mismatched here.
+
+    Step 2 — the original FIFO chosen_agent match, run only when step 1
+    closed nothing (rowcount == 0), widened (mirrors cast-events.sh:353 and
+    bin/cast:4356) to also recover a `<roster-type>__<label>` agent_name
+    against a legacy row whose dispatch_name is still NULL. The `\\_\\_%`
+    literal plus `ESCAPE '\\'` is load-bearing, not decoration: unescaped,
+    LIKE's `_` wildcard lets an unrelated agent name (e.g.
+    "code-reviewerXY-unit-a") match a totally different pending row. Step 2
+    stays a MIN(id) FIFO heuristic for these legacy rows — it is not exact
+    the way step 1 is, and an exact step-1 hit is never second-guessed by it.
+
+    Tolerates a DB predating migration 033 (no dispatch_decisions.dispatch_name
+    column): step 1 raises sqlite3.OperationalError with "no such column" in
+    the message (the SELECT/UPDATE-side wording — NOT cast-pretool-dispatch.py
+    _record_dispatch()'s INSERT-side "has no column named"; matching that
+    string here would leave the error unmatched and let it propagate instead
+    of falling through), which is caught and treated as "step 1 matched
+    nothing" so step 2 still runs. Any other exception re-raises to the
+    outer fail-soft handler below.
     """
     if not ctx.db_present:
         return
@@ -1037,12 +1068,25 @@ def stage3_dispatch_decisions(ctx: Ctx) -> None:
     conn = None
     try:
         conn = sqlite3.connect(ctx.db_path, timeout=2)
-        conn.execute(
-            "UPDATE dispatch_decisions SET outcome=? "
-            "WHERE id=(SELECT MIN(id) FROM dispatch_decisions "
-            "          WHERE outcome='pending' AND chosen_agent=? AND session_id=?)",
-            (outcome, agent, sess),
-        )
+        cur = None
+        try:
+            cur = conn.execute(
+                "UPDATE dispatch_decisions SET outcome=? "
+                "WHERE id=(SELECT MIN(id) FROM dispatch_decisions "
+                "          WHERE outcome='pending' AND session_id=? AND dispatch_name=?)",
+                (outcome, sess, agent),
+            )
+        except sqlite3.OperationalError as e:
+            if "no such column" not in str(e).lower():
+                raise
+        if cur is None or cur.rowcount == 0:
+            conn.execute(
+                "UPDATE dispatch_decisions SET outcome=? "
+                "WHERE id=(SELECT MIN(id) FROM dispatch_decisions "
+                "          WHERE outcome='pending' AND session_id=? "
+                "            AND (chosen_agent=? OR ? LIKE chosen_agent || '\\_\\_%' ESCAPE '\\'))",
+                (outcome, sess, agent, agent),
+            )
         conn.commit()
         conn.close()
     except Exception as e:

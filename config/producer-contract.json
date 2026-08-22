@@ -71,7 +71,7 @@
     },
     {
       "table": "dispatch_decisions",
-      "writers": ["cast-pretool-dispatch.py:186"],
+      "writers": ["cast-pretool-dispatch.py:319"],
       "cadence": "per_agent_run",
       "status": "live"
     },

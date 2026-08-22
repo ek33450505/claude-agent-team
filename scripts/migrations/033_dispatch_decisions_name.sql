@@ -1,0 +1,30 @@
+-- Migration 033: add dispatch_decisions.dispatch_name (I-2c).
+-- Finding: dispatch_decisions rows are written at PreToolUse(Agent) with
+--   chosen_agent = tool_input["subagent_type"] (the roster type, e.g.
+--   "code-reviewer") and outcome='pending'. They are closed at SubagentStop
+--   by scripts/cast_subagent_stop.py, which matches on chosen_agent =
+--   ctx.agent_name. When a dispatch carries a custom Agent-tool `name=`,
+--   Claude Code puts that name in the hook's agent_type field, so
+--   ctx.agent_name is e.g. "code-reviewer__v10-unit-a", not "code-reviewer".
+--   The exact match against chosen_agent then fails and the row is never
+--   closed. Measured on the live record: 782 of 2158 rows stuck pending,
+--   tracking __-naming adoption (2026-08-15 100% -> 2026-08-20 18.8%).
+-- This migration provisions the PRODUCER half of the fix: a new column to
+--   hold the dispatch's custom `name` (NULL when none was given) alongside
+--   the existing chosen_agent roster type, so a later consumer-side fix can
+--   join on whichever of (chosen_agent, dispatch_name) SubagentStop actually
+--   saw. Written by scripts/cast-pretool-dispatch.py's _record_dispatch();
+--   read by scripts/cast_subagent_stop.py's stage 3 closer (separate unit).
+-- Mirrors the ALTER TABLE added to cast-db-init.sh, which is the SINGLE
+--   SOURCE OF TRUTH for fresh DBs (migrations do not run at install); this
+--   migration backfills the same column onto existing/legacy DBs.
+-- No defensive parent-table CREATE is needed here (unlike migration 031's
+--   agent_runs guard for CREATE INDEX): cast-migrate.py's idempotency
+--   fallback tolerates "no such table" for ALTER TABLE ADD/DROP COLUMN
+--   statements specifically, so a bare ALTER is safe even against a
+--   migrations-only test DB where dispatch_decisions was never provisioned
+--   by cast-db-init.sh. Re-running this migration against an already-
+--   migrated DB hits the "duplicate column" idempotency class, which is
+--   likewise tolerated (see cast-migrate.py's _apply_migration docstring).
+
+ALTER TABLE dispatch_decisions ADD COLUMN dispatch_name TEXT;

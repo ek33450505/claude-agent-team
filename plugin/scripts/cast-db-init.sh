@@ -555,10 +555,11 @@ QUALITY_GATES_TABLE
   _columns_added=1
 fi
 
-# dispatch_decisions: routing telemetry. NO live writer — the orchestrate writer was removed in v9 S3
-# (3-way schema fork); each run is captured via plan_sessions instead. cast-session-end.sh only prunes
-# (DELETE) old rows; the line-534 claim of write hooks was stale. Writer deferred to the §12 P-reliability
-# packet. Declared-reserved (record-is-product — never dropped).
+# dispatch_decisions: routing telemetry. Live writer: cast-pretool-dispatch.py's
+# _record_dispatch() (PreToolUse on Agent/Task), which has written 4757 rows as of
+# 2026-08-21 and is registered "status": "live" in config/producer-contract.json.
+# Closed (outcome pending -> terminal) at SubagentStop by cast_subagent_stop.py's
+# stage 3. Declared-reserved (record-is-product — never dropped).
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "dispatch_decisions"; then
   sqlite3 "$DB_PATH" <<'DISPATCH_DECISIONS_TABLE'
 -- db-contract: reserved table=dispatch_decisions
@@ -569,7 +570,8 @@ CREATE TABLE IF NOT EXISTS dispatch_decisions (
   chosen_agent    TEXT,
   model           TEXT,
   created_at      TEXT DEFAULT (datetime('now')),
-  outcome         TEXT DEFAULT 'pending'
+  outcome         TEXT DEFAULT 'pending',
+  dispatch_name   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_session    ON dispatch_decisions(session_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_decisions_agent      ON dispatch_decisions(chosen_agent);
@@ -611,6 +613,13 @@ sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN branch TEXT;" 2>/dev/null 
 # dispatch_decisions.outcome — written by cast_db.py ensure_schema_columns(). Was not in the
 # fresh-install CREATE TABLE prior to v7.4.0. Must match default used by cast_db.py ('pending').
 sqlite3 "$DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN outcome TEXT DEFAULT 'pending';" 2>/dev/null || true
+
+# dispatch_decisions.dispatch_name (I-2c) — the dispatch's custom Agent-tool `name=`, when given
+# (NULL otherwise). Writer: cast-pretool-dispatch.py's _record_dispatch(). Reader/closer:
+# cast_subagent_stop.py stage 3, which needs it because a custom `name` makes Claude Code's
+# SubagentStop hook report ctx.agent_name as that name (e.g. "code-reviewer__unit-a"), not the
+# roster type in chosen_agent — an exact match on chosen_agent alone then never closes the row.
+sqlite3 "$DB_PATH" "ALTER TABLE dispatch_decisions ADD COLUMN dispatch_name TEXT;" 2>/dev/null || true
 
 # sessions cost-rollup + lifecycle columns (writers: cast-session-end.sh, cast-maintenance.sh,
 # cast-cache-metrics.sh; budget-alert stage now in cast_subagent_stop.py). Their UPDATEs failed on fresh installs without these.
