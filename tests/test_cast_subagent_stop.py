@@ -1727,5 +1727,255 @@ class TestSessionIdNullSafeMatch(_IsolatedDbPathTestCase):
         self.assertIn('"duration_ms": 9999', row[0])
 
 
+class TestStage3DispatchNameMatch(_IsolatedDbPathTestCase):
+    """Regression coverage for I-2c unit 2 (stage3_dispatch_decisions'
+    two-step match). Before this fix, a dispatch carrying a custom
+    Agent-tool `name=` made Claude Code report that name as agent_type at
+    SubagentStop instead of the roster type, so the old single
+    chosen_agent-only UPDATE could never close the row — measured live at
+    782/2158 rows stuck pending on 2026-08-21. Fixed with an exact join on
+    the new dispatch_decisions.dispatch_name column (migration 033),
+    falling back to the original FIFO chosen_agent match (now widened for
+    `<roster>__<label>` names against legacy NULL-dispatch_name rows) only
+    when the exact match closes nothing.
+
+    Mutation-tested per test (see Status block for observed RED/GREEN
+    pairs) — each one was confirmed to fail against a reverted/mutated
+    implementation before being trusted here.
+    """
+
+    _DISPATCH_DECISIONS_SCHEMA = (
+        "CREATE TABLE IF NOT EXISTS dispatch_decisions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "session_id TEXT,"
+        "prompt_snippet TEXT,"
+        "chosen_agent TEXT,"
+        "model TEXT,"
+        "created_at TEXT DEFAULT (datetime('now')),"
+        "outcome TEXT DEFAULT 'pending',"
+        "dispatch_name TEXT"
+        ")"
+    )
+    _DISPATCH_DECISIONS_SCHEMA_PREMIGRATION = (
+        "CREATE TABLE IF NOT EXISTS dispatch_decisions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "session_id TEXT,"
+        "prompt_snippet TEXT,"
+        "chosen_agent TEXT,"
+        "model TEXT,"
+        "created_at TEXT DEFAULT (datetime('now')),"
+        "outcome TEXT DEFAULT 'pending'"
+        ")"
+    )
+
+    def _seed_row(self, chosen_agent, session_id, dispatch_name=None,
+                  outcome='pending', premigration=False):
+        """Inserts one dispatch_decisions row. ``premigration=True`` creates
+        the table WITHOUT the dispatch_name column at all (as if migration
+        033 never ran), so the missing-column tolerance path is exercised
+        against a real sqlite3.OperationalError, not a mock."""
+        db_path = os.environ['CAST_DB_PATH']
+        conn = sqlite3.connect(db_path)
+        try:
+            if premigration:
+                conn.execute(self._DISPATCH_DECISIONS_SCHEMA_PREMIGRATION)
+                conn.execute(
+                    "INSERT INTO dispatch_decisions (session_id, chosen_agent, outcome) "
+                    "VALUES (?, ?, ?)",
+                    (session_id, chosen_agent, outcome),
+                )
+            else:
+                conn.execute(self._DISPATCH_DECISIONS_SCHEMA)
+                conn.execute(
+                    "INSERT INTO dispatch_decisions "
+                    "(session_id, chosen_agent, dispatch_name, outcome) "
+                    "VALUES (?, ?, ?, ?)",
+                    (session_id, chosen_agent, dispatch_name, outcome),
+                )
+            conn.commit()
+            return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        finally:
+            conn.close()
+
+    def _row_outcome(self, row_id):
+        db_path = os.environ['CAST_DB_PATH']
+        conn = sqlite3.connect(db_path)
+        try:
+            r = conn.execute(
+                "SELECT outcome FROM dispatch_decisions WHERE id=?", (row_id,)
+            ).fetchone()
+            return r[0] if r else None
+        finally:
+            conn.close()
+
+    def _make_ctx(self, agent_name, session_id, blocked=False):
+        ctx = css.Ctx()
+        ctx.agent_name = agent_name
+        ctx.session_id = session_id
+        ctx.db_path = os.environ['CAST_DB_PATH']
+        ctx.db_present = True
+        ctx.db_status = 'BLOCKED' if blocked else 'DONE'
+        return ctx
+
+    def test_i2c_producer_incident_closes_via_dispatch_name(self):
+        """The live-measured incident this unit fixes: agent_runs id 12638
+        (agent='backend-writer__i2c-producer') completed DONE at
+        2026-08-22T00:39:02Z while its dispatch_decisions row id 4763
+        (chosen_agent='backend-writer', same session_id) stayed 'pending'
+        forever under the old chosen_agent-only match. dispatch_name now
+        carries the custom name as SubagentStop actually saw it, so step 1
+        closes this exactly."""
+        row_id = self._seed_row(
+            'backend-writer', 'sess-i2c', dispatch_name='backend-writer__i2c-producer'
+        )
+        css.stage3_dispatch_decisions(
+            self._make_ctx('backend-writer__i2c-producer', 'sess-i2c')
+        )
+        self.assertEqual(self._row_outcome(row_id), 'DONE')
+
+    def test_unnamed_dispatch_still_closes_via_fifo(self):
+        """No-regression guard: a dispatch with no custom name (dispatch_name
+        NULL) must still close via the step-2 FIFO chosen_agent match,
+        exactly as it did before I-2c."""
+        row_id = self._seed_row('code-reviewer', 'sess-plain', dispatch_name=None)
+        css.stage3_dispatch_decisions(self._make_ctx('code-reviewer', 'sess-plain'))
+        self.assertEqual(self._row_outcome(row_id), 'DONE')
+
+    def test_legacy_dunder_name_recovered_against_null_dispatch_name(self):
+        """A row whose dispatch_name is NULL (written before this column
+        existed, or before this session's dispatch adopted __-naming) but
+        whose chosen_agent is still the bare roster type. Step 2's widened
+        LIKE must recover a `<roster>__<label>` agent_name against it."""
+        row_id = self._seed_row('code-reviewer', 'sess-legacy', dispatch_name=None)
+        css.stage3_dispatch_decisions(
+            self._make_ctx('code-reviewer__unit-a', 'sess-legacy')
+        )
+        self.assertEqual(self._row_outcome(row_id), 'DONE')
+
+    def test_escape_pins_double_underscore_not_single_char_wildcard(self):
+        """Without ESCAPE '\\', LIKE's `_` is a single-character wildcard and
+        'code-reviewer__%' would match 'code-reviewerXY-unit-a' (a stop for a
+        DIFFERENT agent) via the two wildcard underscores absorbing 'XY'.
+        This pins that the escaped literal '__' is required — a stop for an
+        unrelated agent must never close this row."""
+        row_id = self._seed_row('code-reviewer', 'sess-escape', dispatch_name=None)
+        css.stage3_dispatch_decisions(
+            self._make_ctx('code-reviewerXY-unit-a', 'sess-escape')
+        )
+        self.assertEqual(
+            self._row_outcome(row_id), 'pending',
+            'a stop for a DIFFERENT agent closed this row — the ESCAPE is missing '
+            'or wrong and LIKE wildcards are matching arbitrary characters',
+        )
+
+    def test_exact_dispatch_name_beats_fifo_chosen_agent(self):
+        """Highest-value case: two pending rows in one session, same
+        chosen_agent, different dispatch_name (…__a created first / lower
+        id, …__b second / higher id). A stop for …__b must close ONLY
+        …__b and leave …__a untouched — the old FIFO MIN(id) match would
+        have closed whichever pending row for that chosen_agent came first
+        (…__a), which is exactly the cross-contamination an exact join
+        fixes. Asserting only 'a row closed' would pass even under the old
+        FIFO behavior, so both halves are checked."""
+        row_a = self._seed_row(
+            'backend-writer', 'sess-two', dispatch_name='backend-writer__unit-a'
+        )
+        row_b = self._seed_row(
+            'backend-writer', 'sess-two', dispatch_name='backend-writer__unit-b'
+        )
+        css.stage3_dispatch_decisions(
+            self._make_ctx('backend-writer__unit-b', 'sess-two')
+        )
+        self.assertEqual(self._row_outcome(row_b), 'DONE')
+        self.assertEqual(self._row_outcome(row_a), 'pending')
+
+    def test_cross_session_isolation(self):
+        """A pending row in a DIFFERENT session_id is never touched, even
+        when chosen_agent/dispatch_name would otherwise match."""
+        other_row = self._seed_row(
+            'backend-writer', 'sess-other', dispatch_name='backend-writer__x'
+        )
+        css.stage3_dispatch_decisions(
+            self._make_ctx('backend-writer__x', 'sess-mine')
+        )
+        self.assertEqual(self._row_outcome(other_row), 'pending')
+
+    def test_blocked_outcome_propagates_through_exact_path(self):
+        """ctx.db_status == 'BLOCKED' (task_blocked event) must propagate
+        through the step-1 exact path, not just the step-2 fallback."""
+        row_id = self._seed_row(
+            'backend-writer', 'sess-blocked', dispatch_name='backend-writer__unit-c'
+        )
+        css.stage3_dispatch_decisions(
+            self._make_ctx('backend-writer__unit-c', 'sess-blocked', blocked=True)
+        )
+        self.assertEqual(self._row_outcome(row_id), 'BLOCKED')
+
+    def test_premigration_db_missing_dispatch_name_column_falls_back(self):
+        """A DB predating migration 033 has no dispatch_name column at all.
+        Step 1 must raise sqlite3.OperationalError('no such column: ...'),
+        which stage3 tolerates and falls through to step 2 — the stage must
+        keep closing unnamed dispatches rather than letting the
+        OperationalError propagate to the outer fail-soft handler (which
+        would silently no-op the write)."""
+        row_id = self._seed_row(
+            'code-reviewer', 'sess-premigration', premigration=True
+        )
+        css.stage3_dispatch_decisions(
+            self._make_ctx('code-reviewer', 'sess-premigration')
+        )
+        self.assertEqual(self._row_outcome(row_id), 'DONE')
+
+    def test_non_missing_column_error_is_reraised_and_logged(self):
+        """A non-missing-column OperationalError (e.g. 'database is locked')
+        raised by step 1 must NOT be swallowed — it reaches the outer handler,
+        is logged via _log_fail, and step 2 does NOT run.
+
+        This pins the behavior against a future simplification like
+        `except sqlite3.OperationalError: pass`, which would silently misread
+        a locked DB as "step 1 matched nothing", run step 2, and possibly
+        close the wrong row with zero logging."""
+        row_id = self._seed_row(
+            'backend-writer', 'sess-lock', dispatch_name='backend-writer__locked'
+        )
+
+        # Create a mock connection that raises "database is locked" on the first
+        # execute call (step 1), and would fail if step 2 tried to run.
+        mock_conn = mock.MagicMock()
+        execute_call_count = []
+
+        def mock_execute_side_effect(*args, **kwargs):
+            execute_call_count.append(None)
+            if len(execute_call_count) == 1:
+                # First call (step 1) raises "database is locked"
+                raise sqlite3.OperationalError("database is locked")
+            else:
+                # If step 2 runs, that's a failure — step 1's exception should
+                # have prevented it from executing at all.
+                raise AssertionError(
+                    "Step 2 executed, but step 1's exception should have prevented it"
+                )
+
+        mock_conn.execute = mock_execute_side_effect
+
+        with mock.patch('sqlite3.connect', return_value=mock_conn), \
+             mock.patch.object(css, '_log_fail') as mock_log_fail:
+            css.stage3_dispatch_decisions(
+                self._make_ctx('backend-writer__locked', 'sess-lock')
+            )
+
+        # Assertion 1: _log_fail was called with dispatch_decisions and the error
+        mock_log_fail.assert_called_once()
+        call_args = mock_log_fail.call_args[0]
+        self.assertEqual(call_args[0], 'dispatch_decisions')
+        self.assertIn('database is locked', call_args[2])
+
+        # Assertion 2: Step 2 never ran (only one execute call was attempted)
+        self.assertEqual(len(execute_call_count), 1)
+
+        # Assertion 3: The row stayed pending (step 2's UPDATE never occurred)
+        self.assertEqual(self._row_outcome(row_id), 'pending')
+
+
 if __name__ == '__main__':
     unittest.main()
