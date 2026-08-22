@@ -65,6 +65,18 @@ _EGRESS_TOOLS = ("WebFetch", "WebSearch", "Bash", "Read")
 
 _MODULE_CACHE = {}
 
+# I-2c hardening: dispatch_name's bound-parameter shape gate. Claude Code's own
+# Agent-tool `name=` pattern (^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$) is a SUPERSET of
+# common secret-token alphabets (AWS key IDs, GitHub PATs, base64url/JWT segments
+# all fit it) — the pattern below re-enforces that exact bound rather than trusting
+# the caller to have honored it, which in one stroke also rejects control
+# characters, newlines/CR, NUL, DEL, and Unicode bidi-override characters (none of
+# those are in the allowed charset). Use fullmatch(), not match()+trailing `$` —
+# `$` matches just before a trailing newline even under match(), so match() alone
+# would let "name\n" through; fullmatch() requires the match to consume the entire
+# string and correctly rejects it (verified).
+_DISPATCH_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')
+
 
 def _log_error(msg):
     """Append to hook-errors.log so a silently-disabled guard is observable. Never raises."""
@@ -137,6 +149,59 @@ def _load(mod_name, filename):
     return mod
 
 
+def _sanitize_dispatch_name(raw_name):
+    """Bound + screen a dispatch's custom Agent-tool `name=` before storage (I-2c).
+
+    Three-step pipeline, fail-CLOSED at every step — a rejection anywhere returns
+    None (never the raw value):
+      1. Type + shape gate: non-str, empty, or not a full match of
+         _DISPATCH_NAME_RE -> None. This alone closes the control-character/
+         newline/bidi gap (see _DISPATCH_NAME_RE's comment).
+      2. Redaction screen: run the (now shape-bound) name through cast-redact.py's
+         regex engine — analyze_regex/redact_regex — so a token-shaped name that
+         still happens to satisfy the shape gate (an AWS key ID, GitHub PAT, etc.)
+         gets redacted rather than stored raw. Costs zero extra subprocess spawns:
+         cast-redact.py is loaded in-process via the file's existing cached _load()
+         (measured ~8ms import), not spawned — there is no performance case for
+         skipping this the way there was for a second `subprocess.run` per dispatch.
+      3. Fail closed: a missing/unloadable redactor module, or any exception raised
+         while screening, stores None rather than the raw name — this only costs a
+         lost attribution join (today's exact behavior, pre-I-2c) and can never leak.
+         Logs one content-free breadcrumb (byte length + exception class + site,
+         never the name itself) via _log_error, matching the prompt-redaction
+         breadcrumb pattern elsewhere in this function.
+
+    Honest limit: this screen is only as strong as cast-redact.py's own pattern
+    set. Verified 2026-08-21: an Anthropic key shaped like "sk-ant-api03-..." is
+    NOT matched by cast-redact.py's ANTHROPIC_KEY pattern and passes through
+    unredacted. Do not represent this as a complete secret-detection guarantee —
+    fixing cast-redact.py's pattern set is out of scope for this change.
+    """
+    if not isinstance(raw_name, str) or not raw_name:
+        return None
+    if not _DISPATCH_NAME_RE.fullmatch(raw_name):
+        return None
+    try:
+        cast_redact = _load("cast_redact", "cast-redact.py")
+        if cast_redact is None:
+            raise RuntimeError("cast_redact module unavailable")
+        entities = cast_redact.analyze_regex(raw_name, [])
+        if entities:
+            return cast_redact.redact_regex(raw_name, entities, "redact")
+        return raw_name
+    except Exception as exc:
+        try:
+            _byte_len = len(raw_name.encode("utf-8", errors="replace"))
+            _log_error(
+                "dispatch_name redaction failed — storing NULL "
+                f"(site=dispatch_decisions.dispatch_name input_bytes={_byte_len} "
+                f"exception={type(exc).__name__})"
+            )
+        except Exception:
+            pass
+        return None
+
+
 def _is_egress_tool(tool):
     return tool in _EGRESS_TOOLS or tool.startswith("mcp__")
 
@@ -188,6 +253,14 @@ def _record_dispatch(data):
         if not isinstance(ti, dict):
             return
         chosen_agent = ti.get("subagent_type") or "unknown"
+        # dispatch_name (I-2c): the dispatch's custom Agent-tool `name=`, when given (None
+        # otherwise). Captured so a later join can use whichever of (chosen_agent,
+        # dispatch_name) SubagentStop actually saw as ctx.agent_name — a custom `name` makes
+        # Claude Code report THAT as agent_type instead of the roster type, which silently
+        # breaks the exact match dispatch_decisions.outcome is closed on. Shape-gated AND
+        # redaction-screened before storage — see _sanitize_dispatch_name's docstring for
+        # the fail-closed, three-step pipeline and its honest limit.
+        dispatch_name = _sanitize_dispatch_name(ti.get("name"))
         prompt = (ti.get("prompt") or ti.get("description") or "")[:500]
         # Redact PII/secrets before storage (consistency with cast_subagent_stop.py incident stage;
         # cast.db can sync off-machine). FAIL-CLOSED: if redaction does not succeed on a
@@ -236,12 +309,31 @@ def _record_dispatch(data):
 
         conn = sqlite3.connect(db, timeout=1)
         try:
-            conn.execute(
-                "INSERT INTO dispatch_decisions "
-                "(session_id, prompt_snippet, chosen_agent, model, outcome) "
-                "VALUES (?, ?, ?, ?, 'pending')",
-                (session_id, prompt, chosen_agent, model),
-            )
+            try:
+                # Column list kept on ONE string literal (not split across adjacent
+                # literals) so cast-db-contract.py's writer-attribution regex can see
+                # it — \s* in that regex cannot cross the closing-quote/opening-quote
+                # seam between two adjacent Python string literals, only whitespace
+                # within a single literal (see cast-db-contract.py's insert_re).
+                conn.execute(
+                    "INSERT INTO dispatch_decisions (session_id, prompt_snippet, chosen_agent, model, outcome, dispatch_name) "
+                    "VALUES (?, ?, ?, ?, 'pending', ?)",
+                    (session_id, prompt, chosen_agent, model, dispatch_name),
+                )
+            except sqlite3.OperationalError as e:
+                # Fallback for a DB that predates migration 033 (dispatch_decisions has no
+                # dispatch_name column yet). This function is contractually record-only,
+                # fail-soft — without this fallback the outer `except Exception` would swallow
+                # the OperationalError and silently stop recording EVERY dispatch row on an
+                # unmigrated DB, not just drop the new column. Retry the original 5-column
+                # INSERT so the row is still recorded.
+                if "has no column named" not in str(e).lower():
+                    raise
+                conn.execute(
+                    "INSERT INTO dispatch_decisions (session_id, prompt_snippet, chosen_agent, model, outcome) "
+                    "VALUES (?, ?, ?, ?, 'pending')",
+                    (session_id, prompt, chosen_agent, model),
+                )
             conn.commit()
         finally:
             conn.close()
