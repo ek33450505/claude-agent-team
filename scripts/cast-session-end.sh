@@ -253,24 +253,41 @@ if command -v python3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   fi
 fi
 
-# === DB PRUNING (atomic — one lock acquisition for all 8 deletes) ===
+# === DB PRUNING (atomic — one lock acquisition for all 5 deletes) ===
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
-  cast_sqlite "$DB" << PRUNE_SQL 2>/dev/null || true
+  _PRUNE_ERR="$(cast_sqlite "$DB" 2>&1 1>/dev/null << PRUNE_SQL
 BEGIN;
-DELETE FROM agent_runs       WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');
-DELETE FROM sessions         WHERE started_at < datetime('now', '-${TTL_DB_ROWS} days');
-DELETE FROM routing_events   WHERE timestamp  < datetime('now', '-30 days');
+-- agent_runs.started_at and sessions.started_at are stored ISO-8601
+-- (YYYY-MM-DDTHH:MM:SSZ). Wrap the column in datetime() so the comparison
+-- normalizes to the same space-separated form datetime('now', ...) emits —
+-- a raw lexical compare under-matches rows on the cutoff's own calendar
+-- date, since 'T' (0x54) sorts after ' ' (0x20).
+DELETE FROM agent_runs       WHERE datetime(started_at) < datetime('now', '-${TTL_DB_ROWS} days');
+DELETE FROM sessions         WHERE datetime(started_at) < datetime('now', '-${TTL_DB_ROWS} days');
+DELETE FROM routing_events   WHERE datetime(timestamp)  < datetime('now', '-30 days');
+-- dispatch_decisions.created_at and quality_gates.created_at are stored
+-- SPACE-separated (e.g. '2026-08-24 16:10:15') — the raw compare below is
+-- already correct for these two. Do NOT wrap them in datetime() as part of
+-- a blanket ISO-vs-space sweep; that would not break them, but it is
+-- unnecessary and papers over the fact that column formats differ per table.
 DELETE FROM dispatch_decisions WHERE created_at < datetime('now', '-30 days');
 DELETE FROM quality_gates    WHERE created_at < datetime('now', '-30 days');
-DELETE FROM stream_hook_events WHERE timestamp < datetime('now', '-30 days');
-DELETE FROM worktree_events  WHERE timestamp  < datetime('now', '-30 days');
-DELETE FROM cast_events      WHERE timestamp  < datetime('now', '-30 days');
+-- stream_hook_events / worktree_events / cast_events deletes removed (v10 J-13a):
+-- stream_hook_events was dropped by migration 015; worktree_events and cast_events
+-- have no CREATE TABLE anywhere in the repo and are absent from the live DB.
+-- Deleting from a nonexistent table made sqlite3 exit 1 unconditionally, and the
+-- old "2>/dev/null || true" swallowed that — masking real prune failures too.
 -- Stale agent_runs reaping moved to cast-abandon-stale-runs.py (v10 I-2b):
 -- the old predicate here compared a raw ISO-8601 string (started_at) against
 -- datetime('now', ...) rather than datetime(started_at) < datetime(...), so
 -- it could not correctly express "more than 2 hours ago" and rarely matched.
 COMMIT;
 PRUNE_SQL
+)"
+  _PRUNE_RC=$?
+  if [[ $_PRUNE_RC -ne 0 ]]; then
+    _log_error "db pruning failed (rc=${_PRUNE_RC}): ${_PRUNE_ERR}"
+  fi
 fi
 
 # === PANE BINDINGS UPDATE ===

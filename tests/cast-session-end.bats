@@ -54,22 +54,13 @@ CREATE TABLE IF NOT EXISTS quality_gates (
   id TEXT PRIMARY KEY,
   created_at TEXT
 );
-
-CREATE TABLE IF NOT EXISTS stream_hook_events (
-  id TEXT PRIMARY KEY,
-  timestamp TEXT
-);
-
-CREATE TABLE IF NOT EXISTS worktree_events (
-  id TEXT PRIMARY KEY,
-  timestamp TEXT
-);
-
-CREATE TABLE IF NOT EXISTS cast_events (
-  id TEXT PRIMARY KEY,
-  timestamp TEXT
-);
 EOF
+# stream_hook_events / worktree_events / cast_events CREATE TABLE statements
+# removed (v10 J-13a): those tables don't exist in the live DB (stream_hook_events
+# was dropped by migration 015; the other two have no CREATE TABLE anywhere in the
+# repo), so building them here built a synthetic world in which the prune block's
+# DELETEs against them silently succeeded — masking the fact that the block has
+# been exiting 1 in production since those DELETEs were added.
 
   unset CLAUDE_SUBPROCESS
 }
@@ -233,6 +224,57 @@ teardown() {
   response="$(sqlite3 "$TEST_DB" "SELECT response FROM agent_runs WHERE id='stale-run-1';")"
   [ "$status" = "running" ]
   [ -z "$response" ]
+}
+
+# ---------------------------------------------------------------------------
+# v10 J-13a (2026-08-24): the prune block deleted from three tables that don't
+# exist in the live DB (stream_hook_events / worktree_events / cast_events),
+# which made sqlite3 exit 1 unconditionally in production; the old
+# `2>/dev/null || true` swallowed that, so it never surfaced. This fixture's
+# setup() no longer creates those three tables (they don't exist live either),
+# and the hook now routes prune failures through _log_error instead of
+# discarding them. A PASSING run here means: sqlite3 exits 0 for the whole
+# prune transaction AND _log_error is never called for it.
+# ---------------------------------------------------------------------------
+
+@test "session-end prune runs cleanly — no prune-failure logged (v10 J-13a)" {
+  export CLAUDE_SESSION_ID="test-prune-clean"
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+
+  # No "db pruning failed" line should have been appended to hook-errors.log.
+  # (grep -q returns non-zero both when the file has no match and when the
+  # file doesn't exist yet — either way means no failure was logged.)
+  run grep -q "db pruning failed" "$HOME/.claude/logs/hook-errors.log"
+  assert_failure
+}
+
+# ---------------------------------------------------------------------------
+# v10 J-13a: ISO-8601 vs space-separated timestamp comparison. routing_events
+# .timestamp is stored ISO-8601 ('%Y-%m-%dT%H:%M:%SZ'); a raw `timestamp <
+# datetime('now','-30 days')` compare never matches a row on the cutoff's own
+# calendar date, because 'T' (0x54) sorts after ' ' (0x20). A fixture whose
+# stale row isn't on that boundary date can't discriminate this bug (a prior
+# probe of this exact bug showed no difference for precisely that reason) —
+# so this row is built 30 days + 1 hour ago: same calendar date as the cutoff,
+# earlier in the day.
+# ---------------------------------------------------------------------------
+
+@test "session-end prune deletes routing_events past a same-calendar-date ISO-8601 boundary (v10 J-13a)" {
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO routing_events (id, session_id, timestamp, event_type) VALUES ('stale-routing-1', 'sess-x', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 days', '-1 hour'), 'test');"
+  sqlite3 "$TEST_DB" \
+    "INSERT INTO routing_events (id, session_id, timestamp, event_type) VALUES ('recent-routing-1', 'sess-x', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 'test');"
+
+  export CLAUDE_SESSION_ID="test-prune-routing-boundary"
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+
+  local stale_count recent_count
+  stale_count="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events WHERE id='stale-routing-1';")"
+  recent_count="$(sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM routing_events WHERE id='recent-routing-1';")"
+  [ "$stale_count" -eq 0 ]
+  [ "$recent_count" -eq 1 ]
 }
 
 # ---------------------------------------------------------------------------
