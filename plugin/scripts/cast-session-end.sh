@@ -254,9 +254,13 @@ if command -v python3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
 fi
 
 # === DB PRUNING (atomic — one lock acquisition for all 5 deletes) ===
+# NOTE: SQL is built as a plain double-quoted variable, NOT a heredoc inside
+# $( ) — bash 3.2 (macOS's /bin/bash) cannot parse a heredoc nested inside a
+# command substitution (that construct only became valid in bash 4.x), which
+# made this whole script fail `bash -n` on macOS. Double-quoting (not single-
+# quoting) is required so ${TTL_DB_ROWS} still interpolates below.
 if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
-  _PRUNE_ERR="$(cast_sqlite "$DB" 2>&1 1>/dev/null << PRUNE_SQL
-BEGIN;
+  _PRUNE_SQL="BEGIN;
 -- agent_runs.started_at and sessions.started_at are stored ISO-8601
 -- (YYYY-MM-DDTHH:MM:SSZ). Wrap the column in datetime() so the comparison
 -- normalizes to the same space-separated form datetime('now', ...) emits —
@@ -276,14 +280,13 @@ DELETE FROM quality_gates    WHERE created_at < datetime('now', '-30 days');
 -- stream_hook_events was dropped by migration 015; worktree_events and cast_events
 -- have no CREATE TABLE anywhere in the repo and are absent from the live DB.
 -- Deleting from a nonexistent table made sqlite3 exit 1 unconditionally, and the
--- old "2>/dev/null || true" swallowed that — masking real prune failures too.
+-- old \"2>/dev/null || true\" swallowed that — masking real prune failures too.
 -- Stale agent_runs reaping moved to cast-abandon-stale-runs.py (v10 I-2b):
 -- the old predicate here compared a raw ISO-8601 string (started_at) against
 -- datetime('now', ...) rather than datetime(started_at) < datetime(...), so
--- it could not correctly express "more than 2 hours ago" and rarely matched.
-COMMIT;
-PRUNE_SQL
-)"
+-- it could not correctly express \"more than 2 hours ago\" and rarely matched.
+COMMIT;"
+  _PRUNE_ERR="$(cast_sqlite "$DB" "$_PRUNE_SQL" 2>&1 1>/dev/null)"
   _PRUNE_RC=$?
   if [[ $_PRUNE_RC -ne 0 ]]; then
     _log_error "db pruning failed (rc=${_PRUNE_RC}): ${_PRUNE_ERR}"
