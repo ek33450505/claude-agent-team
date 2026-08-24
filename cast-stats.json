@@ -4,11 +4,11 @@
   "agents": 27,
   "tests": 3076,
   "test_files": 228,
-  "tables": 41,
+  "tables": 42,
   "commands": 21,
   "skills": 18,
   "packages": 9,
-  "updated": "2026-08-21",
+  "updated": "2026-08-24",
   "_source": "https://raw.githubusercontent.com/ek33450505/claude-agent-team/main/cast-stats.json",
   "_generator": "scripts/gen-cast-stats.sh"
 }

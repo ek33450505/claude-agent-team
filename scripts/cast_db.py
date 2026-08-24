@@ -9,6 +9,7 @@ from pathlib import Path
 
 # All tables that cast_db.py is allowed to write to.
 ALLOWED_TABLES = {
+    'ack_events',
     'agent_hallucinations',
     'agent_memories',
     'agent_protocol_violations',
