@@ -4202,10 +4202,46 @@ USAGE
       if [ "${old_rows:-0}" -gt 0 ]; then
         if [ "$dry_run" -eq 1 ]; then
           _info "  Would prune: $old_rows agent_runs older than 30 days"
+          db_pruned=$old_rows
         else
-          sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE datetime(started_at) < datetime('now', '-30 days');" 2>/dev/null
+          # Fail-closed backup gate: before the DELETE, run cast-db-backup.py
+          # bounded at 120s wall-clock (override via CAST_TIDY_BACKUP_TIMEOUT
+          # — used by tests to avoid a slow suite), matching the timeout half
+          # of cast-db-prune.py's subprocess.run(..., timeout=120) contract.
+          # If the backup script is missing, times out, or exits non-zero,
+          # skip the DELETE and let tidy continue to its remaining steps —
+          # never abort or hang the whole run. cast-tidy.plist runs this
+          # unattended nightly via launchd with no KeepAlive and no timeout
+          # key of its own, so an unbounded hang here would stall tidy
+          # indefinitely with no alert; `timeout(1)` isn't available on a
+          # stock macOS (no coreutils), so the bound is enforced in Python,
+          # which is already required for the backup script itself.
+          local backup_script="${CAST_SCRIPTS_DIR}/cast-db-backup.py"
+          if [ ! -f "$backup_script" ]; then
+            backup_script="${CAST_REPO_DIR}/scripts/cast-db-backup.py"
+          fi
+          local backup_timeout="${CAST_TIDY_BACKUP_TIMEOUT:-120}"
+          local backup_rc=1
+          if [ -f "$backup_script" ]; then
+            python3 - "$backup_script" "$backup_timeout" >/dev/null 2>&1 <<'PYEOF'
+import subprocess, sys
+script, timeout_s = sys.argv[1], float(sys.argv[2])
+try:
+    sys.exit(subprocess.run([sys.executable, script], timeout=timeout_s).returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+except Exception:
+    sys.exit(1)
+PYEOF
+            backup_rc=$?
+          fi
+          if [ "$backup_rc" -eq 0 ]; then
+            sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE datetime(started_at) < datetime('now', '-30 days');" 2>/dev/null
+            db_pruned=$old_rows
+          else
+            _error "  Pre-tidy-prune backup failed, missing, or timed out (script: $backup_script, timeout: ${backup_timeout}s, exit $backup_rc) — skipping agent_runs prune"
+          fi
         fi
-        db_pruned=$old_rows
       fi
       if [ "$dry_run" -eq 0 ]; then
         sqlite3 "$CAST_DB_PATH" "VACUUM;" 2>/dev/null
