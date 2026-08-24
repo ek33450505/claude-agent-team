@@ -266,6 +266,7 @@ class Ctx:
         # timestamps
         self.ts: str = ""
         self.ts_iso: str = ""
+        self.ts_disambig: str = ""
         # sanitized derivations
         self.safe_agent: str = ""
         self.safe_session_id: str = ""
@@ -470,6 +471,11 @@ def parse_input() -> Optional[Ctx]:
     _now = datetime.now(timezone.utc)
     ctx.ts = _now.strftime("%Y%m%dT%H%M%SZ")
     ctx.ts_iso = _now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Disambiguator (PID + urandom hex): two events for the same agent
+    # within the same UTC second must not collide on the filesystem (J-12).
+    # ctx.ts stays byte-identical/leading for chronological sort and
+    # bare-timestamp prefix comparisons; ctx.ts_iso (DB writes) is untouched.
+    ctx.ts_disambig = f"{os.getpid()}-{os.urandom(3).hex()}"
 
     ctx.safe_agent = re.sub(r"[^a-zA-Z0-9_-]", "", agent_name)
     ctx.safe_session_id = re.sub(r"[^a-zA-Z0-9-]", "", session_id)
@@ -571,7 +577,9 @@ def stage1_event_file(ctx: Ctx) -> None:
         "stop_reason": ctx.stop_reason,
         "source": "SubagentStop",
     }
-    filepath = os.path.join(events_dir, f"{ctx.ts}-{ctx.safe_agent}-subagent-stop.json")
+    filepath = os.path.join(
+        events_dir, f"{ctx.ts}-{ctx.ts_disambig}-{ctx.safe_agent}-subagent-stop.json"
+    )
     with open(filepath, "w") as f:
         json.dump(event, f, indent=2)
 
@@ -1608,7 +1616,9 @@ def stage11_turn_ceiling(ctx: Ctx) -> None:
         "output_preview": (ctx.output_full or "")[:200],
         "resume_hint": "Re-invoke the agent with --resume or dispatch orchestrator to continue from last checkpoint.",
     }
-    filepath = os.path.join(ceil_dir, f"{ctx.ts}-{ctx.safe_agent}.json")
+    filepath = os.path.join(
+        ceil_dir, f"{ctx.ts}-{ctx.ts_disambig}-{ctx.safe_agent}.json"
+    )
     with open(filepath, "w") as f:
         json.dump(checkpoint, f, indent=2)
 

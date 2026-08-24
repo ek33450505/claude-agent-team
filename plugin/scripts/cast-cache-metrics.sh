@@ -58,7 +58,7 @@ QUERY="SELECT
   COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_write,
   COALESCE(SUM(input_tokens), 0) AS input
 FROM agent_runs
-WHERE started_at > datetime('now', '-30 days');"
+WHERE datetime(started_at) > datetime('now', '-30 days');"
 
 RESULT=$(sqlite3 "$CAST_DB_PATH" "$QUERY" 2>/dev/null || echo "0|0|0")
 
