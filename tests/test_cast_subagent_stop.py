@@ -1977,5 +1977,79 @@ class TestStage3DispatchNameMatch(_IsolatedDbPathTestCase):
         self.assertEqual(self._row_outcome(row_id), 'pending')
 
 
+class TestEventFilenameDisambiguator(_IsolatedHomeTestCase):
+    """J-12 regression: stage1_event_file and stage11_turn_ceiling built
+    filenames from a second-resolution UTC stamp (``ctx.ts``) only, so two
+    events for the same agent landing within the SAME second silently
+    overwrote each other on disk — only ONE file survived. This is exactly
+    the burst condition anomalies actually arrive in, so any count derived
+    by listing event files was a floor, not a count.
+
+    Both ctx objects below share an identical frozen ``ctx.ts`` (simulating
+    two real hook invocations in the same UTC second); each independently
+    computes ``ctx.ts_disambig`` via the production formula. ``ctx.ts_iso``
+    (feeds DB writes, untouched by this fix) is deliberately left distinct
+    per ctx only for readability — it plays no role in the filename.
+
+    What a PASSING run looks like WHILE THE BUG IS PRESENT: exactly 1 file
+    on disk after both calls (the second write clobbers the first) — these
+    assertions require 2, so they fail loudly against the pre-fix builders.
+    """
+
+    _FROZEN_TS = "20260824T120000Z"
+
+    def _make_ctx(self, agent_name, session_id):
+        ctx = css.Ctx()
+        ctx.agent_name = agent_name
+        ctx.session_id = session_id
+        ctx.stop_reason = "end_turn"
+        ctx.event_type = "task_completed"
+        ctx.ts = self._FROZEN_TS
+        ctx.ts_iso = "2026-08-24T12:00:00Z"
+        ctx.safe_agent = agent_name
+        # Production formula (cast_subagent_stop.py ~line 474) — NOT called
+        # through classify()/parse_input() here, since those need a full
+        # stdin payload; this reproduces just the disambiguator computation.
+        ctx.ts_disambig = f"{os.getpid()}-{os.urandom(3).hex()}"
+        return ctx
+
+    def test_stage1_event_file_same_second_writes_two_files(self):
+        events_dir = os.path.join(self._tmpdir, '.claude', 'cast', 'events')
+        ctx1 = self._make_ctx('burst-worker', 'sess-a')
+        ctx2 = self._make_ctx('burst-worker', 'sess-b')
+        self.assertEqual(ctx1.ts, ctx2.ts)  # sanity: same-second collision setup
+        self.assertNotEqual(
+            ctx1.ts_disambig, ctx2.ts_disambig,
+            "test fixture itself collided — re-run (astronomically unlikely)",
+        )
+
+        css.stage1_event_file(ctx1)
+        css.stage1_event_file(ctx2)
+
+        files = sorted(
+            f for f in os.listdir(events_dir) if f.endswith('-subagent-stop.json')
+        )
+        self.assertEqual(len(files), 2, f"expected 2 distinct event files, got {files}")
+        for f in files:
+            self.assertTrue(f.startswith(self._FROZEN_TS))
+
+    def test_stage11_turn_ceiling_same_second_writes_two_files(self):
+        ceil_dir = os.path.join(self._tmpdir, '.claude', 'cast', 'turn-ceiling-events')
+        ctx1 = self._make_ctx('burst-worker', 'sess-a')
+        ctx1.has_turn_ceiling = True
+        ctx1.output_full = '[TURN CEILING] hit'
+        ctx2 = self._make_ctx('burst-worker', 'sess-b')
+        ctx2.has_turn_ceiling = True
+        ctx2.output_full = '[TURN CEILING] hit'
+
+        css.stage11_turn_ceiling(ctx1)
+        css.stage11_turn_ceiling(ctx2)
+
+        files = sorted(f for f in os.listdir(ceil_dir) if f.endswith('.json'))
+        self.assertEqual(len(files), 2, f"expected 2 distinct checkpoint files, got {files}")
+        for f in files:
+            self.assertTrue(f.startswith(self._FROZEN_TS))
+
+
 if __name__ == '__main__':
     unittest.main()
