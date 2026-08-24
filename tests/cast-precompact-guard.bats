@@ -126,3 +126,42 @@ teardown() {
   run /bin/bash -c "echo '{}' | CAST_DB_PATH=/dev/null /bin/bash '$HOOK_SH'"
   assert_success
 }
+
+# ---------------------------------------------------------------------------
+# 8. ISO-T/Z vs space-form regression: sessions.started_at raw compare bug
+#    (raw `started_at > datetime('now','-1 day')` string-compared a stored
+#    ISO-T/Z timestamp against sqlite's space-separated datetime('now',...)
+#    form; 'T' (0x54) > ' ' (0x20) lexically, so a session at/before the
+#    cutoff instant was falsely treated as "within the last day" and its
+#    repo got swept into the dirty-check. Fixed by wrapping the column in
+#    datetime().)
+# ---------------------------------------------------------------------------
+@test "PreCompact guard: sessions row at the ISO-T/space cutoff instant is NOT falsely swept in" {
+  local dirty_repo test_db threshold fixture_started_at
+  dirty_repo=$(mktemp -d)
+  TEMP_GIT_REPO="$dirty_repo"
+  (
+    cd "$dirty_repo"
+    git init -q
+    git config user.email "test@test.com"
+    git config user.name "Test"
+    echo "init" > README.md
+    git add README.md
+    git commit -q -m "init" 2>/dev/null
+    echo "untracked" > untracked.txt
+  ) || true
+
+  test_db="$(mktemp -d)/cast.db"
+  threshold="$(sqlite3 :memory: "SELECT datetime('now','-1 day');")"
+  # Same instant as the cutoff, stored in the ISO-T/Z form the real column uses.
+  fixture_started_at="${threshold%% *}T${threshold#* }Z"
+
+  sqlite3 "$test_db" "CREATE TABLE sessions (project_root TEXT, started_at TEXT);"
+  sqlite3 "$test_db" "INSERT INTO sessions (project_root, started_at) VALUES ('$dirty_repo', '$fixture_started_at');"
+
+  run bash -c "echo '{}' | CAST_DB_PATH='$test_db' bash '$HOOK_SH'"
+  assert_success
+  # Correct: the cutoff instant is not strictly "within the last day" -> the
+  # session-sourced project is never added to KNOWN_PROJECTS -> allow.
+  assert_output --partial '"decision":"allow"'
+}

@@ -2389,7 +2389,7 @@ PYEOF
   slow_rows="$(sqlite3 "$CAST_DB_PATH" \
     "SELECT matched_route, COUNT(*) as slow_count, MAX(CAST(json_extract(data,'$.duration_ms') AS INTEGER)) as max_ms \
      FROM routing_events \
-     WHERE event_type='slow_agent' AND timestamp >= datetime('now','-7 days') \
+     WHERE event_type='slow_agent' AND datetime(timestamp) >= datetime('now','-7 days') \
      GROUP BY matched_route ORDER BY max_ms DESC LIMIT 5;" 2>/dev/null || true)"
   if [[ -z "$slow_rows" ]]; then
     printf "  (no slow_agent events this week)\n"
@@ -2412,7 +2412,7 @@ PYEOF
     local _ah_out _ah_rc
     _ah_out="$(sqlite3 "$CAST_DB_PATH" \
       "SELECT agent_name, COUNT(*) FROM agent_hallucinations \
-       WHERE timestamp >= datetime('now','-7 days') \
+       WHERE datetime(timestamp) >= datetime('now','-7 days') \
        AND (verified IS NULL OR verified = 0) \
        GROUP BY agent_name ORDER BY COUNT(*) DESC;" 2>&1)"
     _ah_rc=$?
@@ -2439,7 +2439,7 @@ PYEOF
     local _ce_out _ce_rc
     _ce_out="$(sqlite3 "$CAST_DB_PATH" \
       "SELECT severity, COUNT(*) FROM completeness_events \
-       WHERE truncated_at >= datetime('now','-7 days') \
+       WHERE datetime(truncated_at) >= datetime('now','-7 days') \
        GROUP BY severity ORDER BY COUNT(*) DESC;" 2>&1)"
     _ce_rc=$?
     if echo "$_ce_out" | grep -qi "no such table"; then
@@ -2465,7 +2465,7 @@ PYEOF
     local _apv_out _apv_rc
     _apv_out="$(sqlite3 "$CAST_DB_PATH" \
       "SELECT COALESCE(agent_type,'unknown'), COUNT(*) FROM agent_protocol_violations \
-       WHERE timestamp >= datetime('now','-7 days') \
+       WHERE datetime(timestamp) >= datetime('now','-7 days') \
        GROUP BY agent_type ORDER BY COUNT(*) DESC;" 2>&1)"
     _apv_rc=$?
     if echo "$_apv_out" | grep -qi "no such table"; then
@@ -3073,7 +3073,7 @@ PYEOF
     local _tcf_count_out _tcf_count_rc
     _tcf_count_out="$(sqlite3 "$CAST_DB_PATH" \
       "SELECT COUNT(*) FROM tool_call_failures \
-       WHERE timestamp >= datetime('now','-7 days');" 2>&1)"
+       WHERE datetime(timestamp) >= datetime('now','-7 days');" 2>&1)"
     _tcf_count_rc=$?
     if echo "$_tcf_count_out" | grep -qi "no such table"; then
       printf "%b tool_call_failures: table absent — no data yet\n" "$INFO"
@@ -4198,12 +4198,12 @@ USAGE
   case "$(_db_state)" in
     ok)
       local old_rows
-      old_rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE started_at < datetime('now', '-30 days');" 2>/dev/null || echo 0)"
+      old_rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE datetime(started_at) < datetime('now', '-30 days');" 2>/dev/null || echo 0)"
       if [ "${old_rows:-0}" -gt 0 ]; then
         if [ "$dry_run" -eq 1 ]; then
           _info "  Would prune: $old_rows agent_runs older than 30 days"
         else
-          sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE started_at < datetime('now', '-30 days');" 2>/dev/null
+          sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE datetime(started_at) < datetime('now', '-30 days');" 2>/dev/null
         fi
         db_pruned=$old_rows
       fi
