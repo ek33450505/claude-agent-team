@@ -499,6 +499,15 @@
     ]
   },
   "mcpServers": {},
+  "deniedMcpServers": [
+    {
+      "serverUrl": "https://mcp.neon.tech/mcp"
+    },
+    {
+      "serverName": "claude.ai Neon"
+    }
+  ],
+  "_neon_note": "mcpServers here is INERT: Claude Code reads MCP servers only from ~/.claude.json, .mcp.json, or /Library/Application Support/ClaudeCode/managed-mcp.json \u2014 never from settings.json. This file's mcpServers key is retained solely to propagate removals. The read-only Neon server (https://mcp.neon.tech/mcp?readonly=true) is wired at user scope in ~/.claude.json. The deniedMcpServers entries above block the full read-write Neon endpoint: the serverUrl entry is the real enforcement and was verified by live probe on 2026-08-24 to block https://mcp.neon.tech/mcp while sparing the ?readonly=true URL, so it survives a connector rename and also catches a second server aimed at the same endpoint; the serverName entry is a secondary catch. RESIDUAL, stated plainly: a full-access Neon URL carrying some OTHER query string (e.g. ?projectId=x) would not match the serverUrl entry, and a denied server disappears from `claude mcp list` with no warning, so a deny that stops matching is silent in both directions. Verified against code.claude.com/docs/en/mcp and /managed-mcp.",
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "worktree": {
     "symlinkDirectories": [
