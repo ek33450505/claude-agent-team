@@ -158,6 +158,41 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
+# J-12 regression: event filenames were built from a second-resolution UTC
+# stamp only, so two events landing in the SAME second silently overwrote
+# each other on disk (only ONE file survived). A `date` stub freezes both
+# invocations onto the identical %Y%m%dT%H%M%SZ second so the collision is
+# reproduced deterministically instead of relying on wall-clock luck.
+#
+# What a PASSING run looks like WHILE THE BUG IS PRESENT: exactly 1 file
+# (the second write clobbers the first) — this test requires 2, so it fails
+# loudly against the pre-fix filename builder.
+# ---------------------------------------------------------------------------
+
+@test "two calls frozen to the SAME second → creates two distinct event files (J-12)" {
+  local date_stub_dir="$HOME/.date-stub"
+  mkdir -p "$date_stub_dir"
+  cat > "$date_stub_dir/date" <<'STUBEOF'
+#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    *%Y%m%dT%H%M%SZ*) echo "20260824T120000Z"; exit 0 ;;
+    *%Y-%m-%dT%H:%M:%SZ*) echo "2026-08-24T12:00:00Z"; exit 0 ;;
+  esac
+done
+exec /bin/date "$@"
+STUBEOF
+  chmod +x "$date_stub_dir/date"
+
+  PATH="$date_stub_dir:$PATH" bash "$HOOK_SH" <<< "$(make_valid_payload "burst-agent" "sess-burst-1")"
+  PATH="$date_stub_dir:$PATH" bash "$HOOK_SH" <<< "$(make_valid_payload "burst-agent" "sess-burst-2")"
+
+  local count
+  count=$(find "$HOME/.claude/cast/events" -name "20260824T120000Z-*burst-agent-subagent-start.json" | wc -l)
+  [[ "$count" -eq 2 ]]
+}
+
+# ---------------------------------------------------------------------------
 # Test 7: Unset session_id → DB row gets NULL not empty-string (FK-orphan fix)
 # Phase 5 Wave 2: writers must emit NULL when CAST_SESSION_ID is unresolved.
 # ---------------------------------------------------------------------------

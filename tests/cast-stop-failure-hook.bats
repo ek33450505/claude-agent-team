@@ -93,3 +93,40 @@ teardown() {
     count=$(ls "${BATS_EVENTS_DIR}/"*stop-failure*.json 2>/dev/null | wc -l | tr -d ' ')
     [ "$count" -eq 1 ]
 }
+
+# ---------------------------------------------------------------------------
+# J-12 regression: event filenames were built from a second-resolution UTC
+# stamp only, so two failure events landing in the SAME second silently
+# overwrote each other on disk (only ONE file survived). A `date` stub
+# freezes both invocations onto the identical %Y%m%dT%H%M%SZ second so the
+# collision reproduces deterministically instead of relying on wall-clock
+# luck.
+#
+# What a PASSING run looks like WHILE THE BUG IS PRESENT: exactly 1 file
+# (the second write clobbers the first) — this test requires 2, so it fails
+# loudly against the pre-fix filename builder.
+# ---------------------------------------------------------------------------
+
+@test "two calls frozen to the SAME second → creates two distinct event files (J-12)" {
+    local date_stub_dir="${TMPDIR_TEST}/date-stub"
+    mkdir -p "$date_stub_dir"
+    cat > "$date_stub_dir/date" <<'STUBEOF'
+#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    *%Y%m%dT%H%M%SZ*) echo "20260824T120000Z"; exit 0 ;;
+    *%Y-%m-%dT%H:%M:%SZ*) echo "2026-08-24T12:00:00Z"; exit 0 ;;
+  esac
+done
+exec /bin/date "$@"
+STUBEOF
+    chmod +x "$date_stub_dir/date"
+
+    run -0 bash -c "PATH='${date_stub_dir}:$PATH' HOME='${BATS_FAKE_HOME}' bash '${HOOK}'" <<< '{"agent_type":"burst-agent","session_id":"sess-burst-1","error":"rate_limit_exceeded"}'
+    [ "$status" -eq 0 ]
+    run -0 bash -c "PATH='${date_stub_dir}:$PATH' HOME='${BATS_FAKE_HOME}' bash '${HOOK}'" <<< '{"agent_type":"burst-agent","session_id":"sess-burst-2","error":"rate_limit_exceeded"}'
+    [ "$status" -eq 0 ]
+
+    count=$(ls "${BATS_EVENTS_DIR}/"20260824T120000Z-*-stop-failure.json 2>/dev/null | wc -l | tr -d ' ')
+    [ "$count" -eq 2 ]
+}

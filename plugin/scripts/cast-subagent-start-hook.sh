@@ -102,7 +102,12 @@ export CAST_START_AGENT_ID="$AGENT_ID"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
 TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())" | sed 's/+00:00/Z/')"
 SAFE_AGENT="${AGENT_NAME//[^a-zA-Z0-9_-]/}"
-EVENT_FILE="${EVENTS_DIR}/${TIMESTAMP}-${SAFE_AGENT}-subagent-start.json"
+# Disambiguator (PID + $RANDOM): two subagent-start events for the same agent
+# within the same UTC second must not collide and silently overwrite each
+# other on disk (J-12). The %Y%m%dT%H%M%SZ prefix stays byte-identical and
+# leading so chronological sort / bare-timestamp prefix comparisons still work.
+TS_DISAMBIG="$$-${RANDOM}"
+EVENT_FILE="${EVENTS_DIR}/${TIMESTAMP}-${TS_DISAMBIG}-${SAFE_AGENT}-subagent-start.json"
 
 export CAST_START_AGENT="$AGENT_NAME"
 export CAST_START_SESSION="$SESSION_ID"

@@ -44,7 +44,7 @@ if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ]; then
       KNOWN_PROJECTS+=("$proj_path")
     fi
   done < <(sqlite3 "$DB_PATH" \
-    "SELECT DISTINCT project_root FROM sessions WHERE started_at > datetime('now','-1 day') AND project_root IS NOT NULL AND project_root != '' LIMIT 20;" \
+    "SELECT DISTINCT project_root FROM sessions WHERE datetime(started_at) > datetime('now','-1 day') AND project_root IS NOT NULL AND project_root != '' LIMIT 20;" \
     2>/dev/null || true)
 fi
 

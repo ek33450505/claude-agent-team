@@ -115,7 +115,10 @@ fi
 # ── Step 1: Write stop_failure event to ~/.claude/cast/events/ ────────────────
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
 TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat()+'Z')" | sed 's/+00:00//')"
-EVENT_FILE="${EVENTS_DIR}/${TIMESTAMP}-stop-failure.json"
+# Disambiguator (PID + $RANDOM): see cast-subagent-start-hook.sh (J-12) —
+# same-second collisions were silently overwriting stop-failure events.
+TS_DISAMBIG="$$-${RANDOM}"
+EVENT_FILE="${EVENTS_DIR}/${TIMESTAMP}-${TS_DISAMBIG}-stop-failure.json"
 
 export CAST_FAIL_AGENT="$AGENT_NAME"
 export CAST_FAIL_SESSION="$SESSION_ID"
