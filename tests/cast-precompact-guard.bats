@@ -143,7 +143,7 @@ teardown() {
   (
     cd "$dirty_repo"
     git init -q
-    git config user.email "test@test.com"
+    git config user.email "test@example.com"
     git config user.name "Test"
     echo "init" > README.md
     git add README.md
