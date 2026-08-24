@@ -34,3 +34,14 @@ dist/
 research/2026-07-agent-audit.md
 research/2026-07-portfolio-audit.md
 research/2026-07-frontier-hunt-v2/
+# Third-party agent skills installed via `npx skills add` (neondatabase/agent-skills, 2026-08-24).
+# Kept LOCAL and usable, deliberately NOT tracked: CAST counts its own skills with
+# `git ls-files 'skills/*'` (scripts/cast-stats-lib.sh:42), so committing these would silently move
+# the count 18 -> 20 and fail stats-guard — and they are third-party content in a portfolio repo.
+# Paths are root-anchored for the same reason as /AGENTS.md above (macOS matches case-insensitively,
+# so an unanchored rule would also swallow nested paths like plugin/skills/neon).
+# Adopting any of them properly is its own unit: regenerate cast-stats.json + README sentinels first.
+.agents/
+skills-lock.json
+/skills/neon
+/skills/neon-postgres
