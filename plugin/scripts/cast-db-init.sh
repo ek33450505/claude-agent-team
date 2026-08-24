@@ -850,6 +850,29 @@ RATE_LIMIT_SNAPSHOTS_TABLE
   _columns_added=1
 fi
 
+# ack_events: escape-hatch acknowledgment log (writer: scripts/cast_ack.py record_ack();
+# CAST v10 I-3a part 1 — primitive + schema only, no caller wired yet). created_at uses
+# datetime('now') (SPACE format), matching dispatch_decisions.created_at, NOT the ISO-T/Z
+# form agent_runs uses — see scripts/migrations/034_ack_events.sql for the full rationale.
+if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "ack_events"; then
+  sqlite3 "$DB_PATH" <<'ACK_EVENTS_TABLE'
+CREATE TABLE IF NOT EXISTS ack_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    variable TEXT NOT NULL,
+    value TEXT,
+    has_reason INTEGER NOT NULL DEFAULT 0,
+    script TEXT,
+    git_sha TEXT,
+    session_id TEXT,
+    repo TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ack_events_variable ON ack_events(variable);
+CREATE INDEX IF NOT EXISTS idx_ack_events_created_at ON ack_events(created_at);
+ACK_EVENTS_TABLE
+  _columns_added=1
+fi
+
 # agent_hallucinations: claim verification telemetry (writer: cast-hallucination-guard.sh)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "agent_hallucinations"; then
   sqlite3 "$DB_PATH" <<'AGENT_HALLUCINATIONS_TABLE'
