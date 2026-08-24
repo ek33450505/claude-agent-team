@@ -17,7 +17,7 @@
 	<key>StandardErrorPath</key>
 	<string>__HOME__/.claude/logs/abandon-stale-runs-launchd.log</string>
 	<key>RunAtLoad</key>
-	<false/>
+	<true/>
 	<key>KeepAlive</key>
 	<false/>
 	<key>ProcessType</key>

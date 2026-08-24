@@ -62,11 +62,11 @@ AND replace(replace(started_at,'T',' '),'Z','') > '2026-06-10 22:21:00';
 - Network disconnect
 - SIGTERM from OS scheduler
 
-...never invoke `cast-session-end.sh`. These sessions remain `status='active'` until `cast-abandon-stale-runs.py` (Step 2, runs daily via launchd) flips them to `crashed` after `CAST_SESSION_CRASH_HOURS` (default 4h).
+...never invoke `cast-session-end.sh`. These sessions remain `status='active'` until `cast-abandon-stale-runs.py` (Step 2, runs every 2h via launchd) flips them to `crashed` after `CAST_SESSION_CRASH_HOURS` (default 4h).
 
 ### The 1 crashed row with `ended_at` set
 
-Session `e76edb7c` has both `status='crashed'` and `ended_at IS NOT NULL`. This is a race condition: the session ended cleanly and `cast-session-end.sh` wrote `ended_at` + `status='ended'`, but the daily reaper ran concurrently (or the status was later overwritten). This is a bookkeeping artifact, not a real crash with a known clean-end timestamp. The row count is 1 and the pattern is expected to be rare.
+Session `e76edb7c` has both `status='crashed'` and `ended_at IS NOT NULL`. This is a race condition: the session ended cleanly and `cast-session-end.sh` wrote `ended_at` + `status='ended'`, but the periodic reaper (every 2h) ran concurrently (or the status was later overwritten). This is a bookkeeping artifact, not a real crash with a known clean-end timestamp. The row count is 1 and the pattern is expected to be rare.
 
 ### Split
 
