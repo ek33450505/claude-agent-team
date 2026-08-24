@@ -1,7 +1,25 @@
 #!/usr/bin/env python3
 """cast-abandon-stale-runs.py — Flip stale agent_runs and sessions to terminal states.
 
-Runs daily via launchd (com.cast.abandon-stale-runs). Two symmetric steps:
+Runs every 2h via launchd (com.cast.abandon-stale-runs, StartInterval 7200 —
+changed from daily in v9.5.2, 2026-07-09). Because the sweep is periodic and
+not continuous, a row that goes stale just after a sweep waits up to one full
+interval for the next one: on a continuously-awake host the latency is the
+staleness threshold PLUS the interval (~4h at the defaults), not 2h.
+
+CAVEAT — ~4h is a FLOOR, not a bound. launchd does not replay StartInterval
+firings missed while the host was asleep or powered off, so that time is never
+made up. v10 I-2d set RunAtLoad=true, which bounds the post-boot case: loading
+the job (boot, login, or a reinstall) fires ONE immediate catch-up sweep — one,
+not one per missed interval, and it does not fire on wake-from-sleep. So do NOT
+quote "2h" or "~4h" as the maximum age of a 'running' row. Measured 2026-08-24
+BEFORE the RunAtLoad fix, over the retained window: 17 of 41 reaped rows (41%)
+exceeded 4h, max lag 18.8h; three rows sat 'running' for 59h across a weekend
+the host was powered off (last sweep 2026-08-22T01:54:01Z, next boot
+2026-08-24T07:21:36-04:00). Anything judging freshness must read the row's own
+timestamps, never the configured cadence.
+
+Two symmetric steps:
 
   Step 1 — agent_runs: rows stuck in status='running' for more than
   CAST_ABANDON_STALE_HOURS (default 2h) are flipped to 'abandoned', with
@@ -31,10 +49,12 @@ Runs daily via launchd (com.cast.abandon-stale-runs). Two symmetric steps:
   record. See _extract_recovered_text() for the full walk. Idempotent and
   STATE-based (matches status IN ('failed','abandoned') AND response IS
   NULL/marker) — runs unconditionally every invocation, so it also backfills
-  rows flipped by cast-maintenance.sh or cast-session-end.sh (both bash, both
-  flip to 'failed' and write the same marker prefix) regardless of which
-  sweep got to a given row first, and rows flipped before this backfill
-  existed at all. Never overwrites a response holding real content.
+  LEGACY rows: those flipped by cast-maintenance.sh or cast-session-end.sh
+  BEFORE v10 I-2b removed both of those writers (both were bash, both flipped
+  to 'failed' and wrote the same marker prefix), plus rows flipped before this
+  backfill existed at all. Neither bash writer runs any more — this script has
+  been the sole reaper since I-2b. Never overwrites a response holding real
+  content.
 
   Step 2 — sessions: rows stuck in status='active' for more than
   CAST_SESSION_CRASH_HOURS (default 4h) are flipped to 'crashed'.
@@ -57,7 +77,7 @@ One-time backfill (review before executing — DO NOT automate):
 
 Usage:
   python3 ~/.claude/scripts/cast-abandon-stale-runs.py
-  # Or via launchd plist (com.cast.abandon-stale-runs — runs daily).
+  # Or via launchd plist (com.cast.abandon-stale-runs — runs every 2h).
 """
 
 import glob

@@ -146,6 +146,12 @@ ts       = os.environ.get('CAST_START_TS_ISO', '')
 agent_id = os.environ.get('CAST_START_AGENT_ID', '')
 err_log  = os.path.expanduser('~/.claude/logs/hook-errors.log')
 
+# NOTE (v10 I-2d): this guard is unreachable defence-in-depth, NOT the
+# nameless-payload catch. The parser above coerces a missing agent_type /
+# agent_name / subagent_name to the LITERAL string 'unknown' (and its own
+# failure path prints 'unknown' too), so CAST_START_AGENT is never empty.
+# The nameless-payload handling is the #372-twin guard directly below.
+# Kept because it costs nothing and would fire if that coercion ever changed.
 if not agent:
     raise SystemExit(0)
 

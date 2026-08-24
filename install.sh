@@ -704,7 +704,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         cast_launchctl_reload "$PLIST_DEST" "com.cast.record-review"
     fi
 
-    # Install cast-abandon-stale-runs.plist — nightly stale agent_runs cleanup (04:00)
+    # Install cast-abandon-stale-runs.plist — stale agent_runs/sessions reaper.
+    # StartInterval 7200 (every 2h) since v9.5.2; RunAtLoad=true since v10 I-2d
+    # so a reinstall/boot fires one immediate catch-up sweep.
     if [ -f "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" ]; then
         PLIST_DEST="$LAUNCH_AGENTS_DIR/com.cast.abandon-stale-runs.plist"
         sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/macos/cast-abandon-stale-runs.plist" > "$PLIST_DEST"
