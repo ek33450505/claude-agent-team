@@ -358,3 +358,173 @@ PYEOF
   run cast_check_approvals "throwaway-task" "code-reviewer"
   [ "$status" -eq 1 ]
 }
+
+# ---------------------------------------------------------------------------
+# 8. cast_check_approvals — sticky BLOCKED (Tier 2 fallback: a later DONE can
+#    never silently supersede an earlier BLOCKED). This is DELIBERATELY
+#    STRICTER than Tier 1's order-independent set-difference resolution
+#    (`rejections - approvals`, where a same-reviewer approval clears an
+#    earlier rejection) — Tier 2 never clears a BLOCKED via a later approval,
+#    because a self-dispatched `code-reviewer__<label>` shares the enclosing
+#    session_id and would otherwise silently overturn an orchestrator's
+#    rejection. See v10-sec2 dispatch.
+# ---------------------------------------------------------------------------
+
+@test "sticky: earlier BLOCKED + later DONE rejects (exit 2) — the bug itself" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+}
+
+@test "sticky: earlier BLOCKED + later __label DONE rejects (exit 2) — real-world self-review shape" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
+  _insert_run "sess-A" "code-reviewer__self" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+}
+
+# The next three tests (freshness-window, branch-guard, CAST_REVIEW_BLOCK_OK=1)
+# are regression guards, not mutation-safe proofs of the sticky-BLOCKED fix —
+# each fixture's *newest* row is already DONE, so pre-fix most-recent-wins
+# resolution would pass them too. Keep them (they lock in real behavior), but
+# don't mistake a pass here for evidence the fix is doing anything; the two
+# "bug itself" tests above and the literal-1-convention test below are the
+# ones that actually discriminate (code-reviewer finding).
+@test "sticky: BLOCKED outside the freshness window does not stick; fresh DONE approves (exit 0)" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-5 hours')" ""
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  export CAST_APPROVAL_WINDOW_MIN=120
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+}
+
+@test "sticky: BLOCKED on a different branch does not stick when the branch guard applies (exit 0)" {
+  _setup_fallback_db
+  cd "$REPO_DIR"
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" "definitely-not-current-branch-xyz"
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+}
+
+@test "sticky: CAST_REVIEW_BLOCK_OK=1 suppresses the sticky block (exit 0)" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  export CAST_REVIEW_BLOCK_OK=1
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+}
+
+# ---------------------------------------------------------------------------
+# 8a. The hatch must RECORD the bypass, not just permit it. `exit 0` alone
+#     cannot distinguish "hatch recorded the bypass" from "hatch silently
+#     dropped the record" — assert the ack_events row directly.
+# ---------------------------------------------------------------------------
+
+# Guard against a vacuous pass: confirm ack_events actually exists before any
+# test below counts rows in it, so "0 before, 0 after" can't be mistaken for
+# "the hatch recorded nothing" when the real cause is a missing table.
+_assert_ack_events_table_exists() {
+  local exists
+  exists=$(python3 - "$CAST_DB_PATH" <<'PYEOF'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1], timeout=5)
+try:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ack_events'"
+    ).fetchone()
+    print(1 if row else 0)
+finally:
+    conn.close()
+PYEOF
+)
+  [ "$exists" = "1" ]
+}
+
+_ack_events_count() {
+  python3 - "$CAST_DB_PATH" <<'PYEOF'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1], timeout=5)
+try:
+    print(conn.execute("SELECT COUNT(*) FROM ack_events").fetchone()[0])
+finally:
+    conn.close()
+PYEOF
+}
+
+# Newest ack_events row as "variable|script|has_reason", or "NONE" if empty.
+_ack_events_latest() {
+  python3 - "$CAST_DB_PATH" <<'PYEOF'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1], timeout=5)
+try:
+    row = conn.execute(
+        "SELECT variable, script, has_reason FROM ack_events ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    print("|".join(str(x) for x in row) if row else "NONE")
+finally:
+    conn.close()
+PYEOF
+}
+
+@test "sticky: CAST_REVIEW_BLOCK_OK=1 is RECORDED in ack_events, not just permitted" {
+  _setup_fallback_db
+  _assert_ack_events_table_exists
+
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  export CAST_REVIEW_BLOCK_OK=1
+
+  local before after
+  before=$(_ack_events_count)
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+  after=$(_ack_events_count)
+  [ "$((after - before))" -eq 1 ]
+
+  run _ack_events_latest
+  assert_output "CAST_REVIEW_BLOCK_OK|cast-events.sh|0"
+}
+
+@test "sticky: WITHOUT the hatch, no bypass row is added to ack_events (control)" {
+  _setup_fallback_db
+  _assert_ack_events_table_exists
+
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+  unset CAST_REVIEW_BLOCK_OK
+
+  local before after
+  before=$(_ack_events_count)
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+  after=$(_ack_events_count)
+  [ "$after" -eq "$before" ]
+}
+
+@test "sticky: CAST_REVIEW_BLOCK_OK=true / =10 do NOT suppress the block (literal-1 convention, exit 2)" {
+  _setup_fallback_db
+  _insert_run "sess-A" "code-reviewer" "BLOCKED" "datetime('now','-10 minutes')" ""
+  _insert_run "sess-A" "code-reviewer" "DONE" "datetime('now')" ""
+  export CAST_SESSION_ID="sess-A"
+
+  export CAST_REVIEW_BLOCK_OK=true
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+
+  export CAST_REVIEW_BLOCK_OK=10
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+}
