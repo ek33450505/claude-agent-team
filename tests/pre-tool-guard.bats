@@ -2678,3 +2678,434 @@ _mk_update_ref_fixture() {
   assert_failure
   assert_output --partial "auth-requires-security"
 }
+
+# ---------------------------------------------------------------------------
+# SEC-1: multiline git-guard bypass regression tests (2026-08-24)
+#
+# _git_evaluate() in scripts/cast-git-guard.py (~line 1542) only scans the
+# FIRST LINE of the command before splitting into `;`/`&&`/`||`/`|` segments:
+#     first_line = command.split('\n', 1)[0]
+#     for seg in re.split(r';|&&|\|\||\|', first_line):
+# Everything on line 2+ is invisible to every BLOCK pattern. Segment
+# splitting itself is correct (measured); the defect is newline-only.
+# Measured (2026-08-24): a benign or non-git line 1 followed by an unguarded
+# op on line 2 is ALLOWED (rc=0), where the same op joined with `;`/`&&` on
+# ONE line is BLOCKED (rc=2). A `git \` line-continuation before the
+# guarded op is ALSO allowed by the same mechanism.
+#
+# make_bash_payload() (above) interpolates $cmd into single-quoted Python
+# SOURCE: a newline-bearing command breaks the Python literal with a
+# SyntaxError, and its `|| echo` fallback then emits a raw newline inside a
+# JSON string, which is invalid JSON. The guard fail-opens on malformed
+# stdin, so a test built on make_bash_payload would measure the JSON
+# parser, not the guard, and would read "allowed" forever regardless of the
+# fix. make_bash_payload_multiline() below passes the command via argv
+# instead, so json.dumps() escapes embedded newlines as `\n` and the
+# payload stays valid JSON. Verified (2026-08-24) via the same herestring
+# (`<<<`) mechanism the tests below use to feed the guard — NOT via `echo`,
+# which in this shell reinterprets a literal `\n` back into a raw newline
+# and corrupts the JSON before it ever reaches the guard.
+#
+# Tests 1-8 are the bypass: they must BLOCK after the fix but ALLOW (RED)
+# against today's unmodified guard. Tests 9-12 were originally
+# MUST-STAY-ALLOWED fences for the fix dispatch: they passed TODAY too, but
+# for the WRONG reason (nothing past line 1 was scanned at all, so a
+# comment/heredoc body was never reached — not because it was correctly
+# recognized as safe). They became meaningful evidence once the fix landed
+# and 1-8 flipped to blocking while 9-11 stayed allowed.
+#   2026-08-24 heredoc-suppression REMOVAL follow-up: test 12 (heredoc body
+# mentioning a guarded op) is NO LONGER a MUST-STAY-ALLOWED fence — heredoc
+# bodies are now scanned like any other line, so it correctly flips to
+# BLOCK. See the block comment above that test for why.
+#   2026-08-24 comment-suppression REMOVAL follow-up (D2, same day, owner
+# decision): test 11 (comment line mentioning a guarded op) is ALSO no
+# longer a MUST-STAY-ALLOWED fence, for the same reason — comment lines are
+# no longer dropped from the scan at all (see _scannable_segments()'s
+# docstring: both possible join/drop orderings were shown, this session, to
+# produce a fail-open bypass in opposite directions, so comment suppression
+# was deleted rather than reordered a third time). It now correctly flips
+# to BLOCK; a new sibling fence (comment mentioning a NON-guarded op)
+# replaces it as the over-correction check for this class. Only tests 9-10
+# (no git at all; a per-line hatch) remain genuine MUST-STAY-ALLOWED fences
+# from the original set.
+# ---------------------------------------------------------------------------
+
+# Helper: create a Bash tool input JSON for a (possibly multi-line) command,
+# passed via argv so embedded newlines are JSON-escaped by json.dumps(),
+# never interpolated into Python source. See SEC-1 block comment above for
+# why make_bash_payload() cannot be reused for this.
+make_bash_payload_multiline() {
+  python3 -c '
+import json, sys
+print(json.dumps({
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": sys.argv[1],
+    "description": "test command"
+  }
+}))
+' "$1"
+}
+
+@test "SEC-1 multiline bypass: git status --short NEWLINE git stash → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'git status --short\ngit stash'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 multiline bypass: echo hi NEWLINE git reset --hard → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'echo hi\ngit reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 multiline bypass: git branch tmp NEWLINE git branch -D feature/x → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'git branch tmp\ngit branch -D feature/x'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 multiline bypass: echo hi NEWLINE git clean -fdx → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'echo hi\ngit clean -fdx'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 multiline bypass: echo hi NEWLINE git push → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'echo hi\ngit push'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 multiline bypass: echo hi NEWLINE git commit -m x → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'echo hi\ngit commit -m x'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 multiline bypass: line-continuation git \\\\ NEWLINE reset --hard → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'git \\\nreset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 multiline bypass: guarded op on line 3, not just line 2 → blocks (exit 2) [today: RED, allowed; not an off-by-one]" {
+  local cmd
+  cmd=$'echo hi\necho bye\ngit reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 multiline bypass MUST-STAY-ALLOWED: echo a NEWLINE echo b, no git at all → allows (exit 0)" {
+  local cmd
+  cmd=$'echo a\necho b'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_success
+}
+
+@test "SEC-1 multiline bypass MUST-STAY-ALLOWED: git status NEWLINE CAST_STASH_OK=1 git stash, per-line hatch → allows (exit 0)" {
+  local cmd
+  cmd=$'git status\nCAST_STASH_OK=1 git stash'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_success
+}
+
+@test "SEC-1 D2: echo hi NEWLINE comment line mentioning git reset --hard → now blocks (exit 2) [CONTRACT CHANGE, not a regression: comment suppression was removed entirely (2026-08-24, same day) after BOTH possible join/drop orderings were shown to produce a fail-open bypass in opposite directions — see the D2 block comment below and _scannable_segments()'s docstring. A comment mentioning a guarded git command is now scanned like any other text and needs its own CAST_*_OK=1 hatch]" {
+  local cmd
+  cmd=$'echo hi\n# git reset --hard is blocked here'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+  assert_output --partial "reset"
+}
+
+@test "SEC-1 D2 MUST-STAY-ALLOWED: echo hi NEWLINE comment mentioning a NON-guarded git command → allows (exit 0) [over-correction fence: 'git status' is not a guarded op, so scanning comment text unconditionally must not false-block it]" {
+  local cmd
+  cmd=$'echo hi\n# git status is fine'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_success
+}
+
+@test "SEC-1 heredoc-suppression REMOVED: heredoc body mentioning a guarded op → now blocks (exit 2) [CONTRACT CHANGE, not a regression: heredoc-body suppression was deleted entirely (2026-08-24, same day) after its quote-parity parser produced a second CRITICAL bypass — see the block comment below. A heredoc body is now scanned like any other line; prose mentioning a guarded git command inside one needs its own CAST_*_OK=1 hatch]" {
+  local cmd
+  cmd=$'cat > d.md <<\'EOF\'\nRun git reset --hard to nuke it\nEOF'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+# ---------------------------------------------------------------------------
+# SEC-1 follow-up: heredoc-detection fail-open bypass, C1/C2/C3 (2026-08-24)
+#
+# The multiline widening above (_scannable_segments()) is correct, but its
+# heredoc-body drop was itself fail-OPEN: `_HEREDOC_START` was a bare `<<`
+# regex with no quote/operator awareness. On a match it skipped forward to a
+# line equal to the delimiter; when none existed it ran to EOF, dropping
+# EVERY remaining line from the scan.
+#
+# C1 (CRITICAL, unbounded bypass): three ordinary, non-adversarial
+# constructs mis-triggered a "heredoc start" and none of them ever produces
+# a real terminator line, so the guard swallowed everything after them to
+# EOF: a herestring (`<<<WORD`, an everyday idiom, e.g. `jq . <<< "$json"`),
+# a `<<` inside a quoted string (`echo "<<WORD"`), and a `<<` after an
+# unquoted trailing `#` comment. Originally fixed via a quote/comment-aware
+# heredoc-start detector (rejects `<<<`) plus a fail-closed fallback: when
+# no terminator is found, scanning resumes normally instead of swallowing
+# to EOF, so blast radius was capped at "possible false BLOCK", never
+# "silent bypass of everything downstream."
+#
+# C2 (MEDIUM, confirmed bypass): continuation joining used
+# `buf.endswith('\\')` with no counting — an EVEN trailing-backslash count
+# (not a real bash continuation) was joined anyway. Fixed by counting
+# trailing backslashes; only an ODD count joins. This fix SURVIVES the
+# heredoc-suppression removal below — it has nothing to do with heredocs.
+#
+# C3 (MEDIUM, false positive): the heredoc delimiter group was `\w+`-only,
+# so a valid quoted delimiter containing punctuation (`<<'MY-EOF'`) was
+# never recognized as a heredoc, and its inert body got scanned as commands.
+# Originally fixed by widening the quoted-delimiter charset to allow
+# punctuation.
+#
+# 2026-08-24 heredoc-suppression REMOVAL (later the same day, design
+# decision, not a bug fix): the C1 fix above — a hand-rolled quote-parity
+# scanner — turned out to have a SECOND CRITICAL bypass of its own: it does
+# not understand backslash-escaped quotes, so a line like
+# `echo "text \" <<EOF"` desyncs its tracked quote state and it misdetects
+# a real destructive command on a following line as heredoc body, silently
+# dropping it from the scan while bash executes it for real (verified
+# against real bash with a `git` PATH-shim). Two CRITICAL bypasses from the
+# SAME parser is the parser proving itself untractable, not a pair of
+# unlucky bugs, so it is DELETED rather than patched a third time — heredoc
+# bodies are now scanned exactly like any other line, with no special-casing
+# at all. Effect on the tests below: the C1 tests (herestring / quoted `<<`
+# / trailing-comment `<<`) still BLOCK, but now for a TRIVIAL reason —
+# nothing detects heredocs at all anymore, so there is no fake "heredoc
+# start" left for them to exploit — not because the quote/comment-aware
+# parser correctly rejected them (it no longer exists). The C3 test (quoted
+# delimiter with punctuation) below FLIPS from ALLOW to BLOCK: its body is
+# no longer suppressed, so it is scanned and correctly blocks on the
+# `git reset --hard` string it contains — rewritten below to assert the
+# new contract.
+# ---------------------------------------------------------------------------
+
+@test "SEC-1 C1: herestring <<<NEVERMATCH is not a heredoc start, next line still scanned → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'git status <<<NEVERMATCH\ngit reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 C1: <<NEVERMATCH inside a quoted string is not a heredoc start, next line still scanned → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'echo "<<NEVERMATCH"\ngit reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 C1: <<NEVERMATCH after an unquoted trailing # comment is not a heredoc start, next line still scanned → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'echo hello # <<NEVERMATCH\ngit reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 C1: unterminated herestring bypass has UNBOUNDED blast radius (3 chained ops, not just 1) → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd=$'git status <<<NEVERMATCH\ngit reset --hard\ngit push --force\ngit commit -m x'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 C2: EVEN trailing-backslash count (2) is not a real continuation, git stash on next line still scanned → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd='echo foo\\'$'\n''git stash'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 C2: EVEN trailing-backslash count (2) is not a real continuation, git reset --hard on next line still scanned → blocks (exit 2) [today: RED, allowed]" {
+  local cmd
+  cmd='echo foo\\'$'\n''git reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 C2 MUST-STAY-ALLOWED: ODD trailing-backslash count (3) is a real continuation, still joins → allows (exit 0) [does not flip red→green like its siblings above: the joined line already loses git's word-boundary and was ALLOW pre-fix too for that separate, pre-existing, out-of-scope reason — kept as a regression fence for the odd-count-still-joins path itself, per explicit test-matrix requirement; see backend-writer completion report]" {
+  local cmd
+  cmd='echo foo\\\'$'\n''git stash'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_success
+}
+
+@test "SEC-1 C3 heredoc-suppression REMOVED: quoted heredoc delimiter with punctuation (<<'MY-EOF') is no longer special-cased, body IS scanned → now blocks (exit 2) [CONTRACT CHANGE, not a regression: see the block comment above]" {
+  local cmd
+  cmd=$'cat <<\'MY-EOF\'\nmentions git reset --hard\nMY-EOF'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+# ---------------------------------------------------------------------------
+# SEC-1 escaped-quote regression tests (2026-08-24, heredoc-suppression
+# removal pass): these prove the class of bug that motivated deleting the
+# heredoc-start parser entirely is actually gone, not just the two examples
+# used to find it. Each payload is REAL, self-contained bash that never
+# opens a heredoc at all (the `<<EOF`-looking text sits INSIDE a quoted
+# argument, escaped past by a backslash-escaped quote) — bash runs the
+# `git`/EOF lines as ordinary, unconditional commands. The OLD quote-parity
+# scanner did not understand backslash-escaped quotes, so it desynced its
+# tracked quote state, misread the embedded `<<EOF` as a real heredoc start,
+# and swallowed the real destructive command(s) that follow as fake
+# "heredoc body" — confirmed ALLOWED (rc=0) against the pre-removal guard
+# via a `git` PATH-shim. With the parser deleted, every line is scanned
+# like any other and these now correctly BLOCK.
+# ---------------------------------------------------------------------------
+
+@test "SEC-1 escaped-quote regression: double-quoted \\\" before <<EOF hides git stash on the next line → blocks (exit 2) [was ALLOWED pre-removal: the old quote-parity scanner desynced on the escaped quote and swallowed 'git stash' as fake heredoc body]" {
+  local cmd
+  cmd=$'echo "text \\" <<EOF"\ngit stash\nEOF'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 escaped-quote regression: same bypass hides an UNBOUNDED chain (stash, reset --hard, push --force) → blocks (exit 2) [was ALLOWED pre-removal: all three destructive ops were swallowed as fake heredoc body, not just the one adjacent to the fake delimiter]" {
+  local cmd
+  cmd=$'echo "t \\" <<EOF"\ngit stash\ngit reset --hard\ngit push --force\nEOF'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+@test "SEC-1 escaped-quote regression: ANSI-C single-quoted \\' before <<EOF hides git reset --hard on the next line → blocks (exit 2) [was ALLOWED pre-removal: same desync, sibling quote style]" {
+  local cmd
+  cmd=$'echo $\'foo\\\' <<EOF more text\'\ngit reset --hard\nEOF'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+}
+
+# ---------------------------------------------------------------------------
+# SEC-1 D1: comment + line-continuation step-ordering bypass (2026-08-24)
+#
+# _scannable_segments() used to JOIN backslash line-continuations BEFORE
+# dropping comment lines. In real bash a `#` comment runs to the newline
+# UNCONDITIONALLY — a trailing backslash on a comment line does NOT
+# continue the comment — but the old step order joined it anyway, so the
+# comment line absorbed the FOLLOWING line's text, and the merged line was
+# then dropped whole as "a comment". Verified against real bash with a
+# `git` PATH-shim: the guarded command genuinely ran while the old guard
+# returned rc=0 (allow).
+#
+# Blast radius was bounded to the ONE line immediately after the
+# backslash-comment — a guarded op two lines later was unaffected and
+# still blocked on its own. That is why the 4th test below asserts on the
+# BLOCK MESSAGE, not just the exit code: mutation-tested against the
+# pre-fix step order (reconstructed verbatim from the Edit that landed this
+# fix), `git reset --hard` on line 3 already exits 2 under the OLD, buggy
+# code — exit code alone does NOT discriminate for that case. The old
+# code's message names `reset` (never `stash`), because `git stash` on
+# line 2 was silently swallowed into the dropped comment and never
+# independently evaluated; only after the fix does `_git_evaluate` see
+# `git stash` as its own segment and return the STASH message first.
+#
+# Fix: comment lines are now classified and dropped from the RAW lines
+# FIRST, before continuation-joining ever runs, so a comment can neither
+# absorb a following line nor be absorbed into a preceding one.
+#
+#   2026-08-24 SUPERSEDED BY D2 (same day, later, owner decision): the
+# "drop comment lines FIRST" fix above was itself replaced — not by
+# reordering again, but by deleting comment classification entirely, after
+# a security review found drop-then-join has its own fail-open bypass in
+# the OPPOSITE direction (`echo foo\` / `#bar; git reset --hard` — see the
+# D2 section below). The four tests below still pass against the current
+# code: for these specific payloads, joining every line unconditionally
+# (D2) produces the same BLOCK+message outcome drop-then-join (D1) did,
+# just via a different path (the comment text now joins into the segment
+# that trips the block, instead of being discarded before a lone
+# surviving `git ...` line trips it) — so they remain valid regression
+# coverage for "a backslash-continued comment must not swallow a real
+# command," even though the mechanism that satisfies them changed.
+# ---------------------------------------------------------------------------
+
+@test "SEC-1 D1: comment ending in backslash does not continue onto git stash on the next line → blocks (exit 2) [mutation-tested RED on pre-fix step order: old code silently ALLOWED (rc=0) because git stash joined into the dropped comment line]" {
+  local cmd
+  cmd=$'# note about something \\\ngit stash'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+  assert_output --partial "stash"
+}
+
+@test "SEC-1 D1: comment ending in backslash does not continue onto git reset --hard on the next line → blocks (exit 2) [mutation-tested RED on pre-fix step order: old code silently ALLOWED (rc=0)]" {
+  local cmd
+  cmd=$'# see docs \\\ngit reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+  assert_output --partial "reset"
+}
+
+@test "SEC-1 D1: INDENTED comment ending in backslash does not continue onto git clean -fdx on the next line → blocks (exit 2) [mutation-tested RED on pre-fix step order: leading whitespace before # still classifies as a comment via lstrip(), old code silently ALLOWED (rc=0)]" {
+  local cmd
+  cmd=$'   # note \\\ngit clean -fdx'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+  assert_output --partial "clean"
+}
+
+@test "SEC-1 D1: bypass is not limited to swallowing only the first following line — git stash is independently evaluated, not just the unaffected git reset --hard two lines later → blocks with the STASH message [mutation-tested RED on pre-fix step order via MESSAGE CONTENT ONLY: exit code does not discriminate here, since old code already exits 2 via the unrelated line-3 'git reset --hard'; old code's message names reset, never stash, because git stash was silently swallowed — only the fix surfaces the stash message]" {
+  local cmd
+  cmd=$'# x \\\ngit stash\ngit reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+  assert_output --partial "stash"
+}
+
+# ---------------------------------------------------------------------------
+# SEC-1 D2: comment suppression REMOVED entirely (2026-08-24, same day,
+# owner decision)
+#
+# The D1 fix above (classify-and-drop comment lines BEFORE joining) closed
+# the join-then-drop bypass, but a security review found D1 has its own
+# fail-open bypass in the OPPOSITE direction: dropping a line as "a
+# comment" using its ORIGINAL (pre-join) text can throw away a REAL command
+# that only becomes real once you account for a PRECEDING line's
+# continuation. `echo foo\` followed by `#bar; git reset --hard`: real bash
+# joins the backslash-continued first line with the second BEFORE that
+# line's `#` is ever evaluated, fusing `foo` and `#bar` into one word
+# (`foo#bar`) where `#` is no longer a comment-start at all — bash prints
+# `foo#bar` and then genuinely runs `git reset --hard` after the `;`. D1
+# classifies the second line as a comment in isolation and drops it before
+# joining ever runs, discarding that real, executable `git reset --hard`
+# from the scan entirely. Verified against real bash with a `git`
+# PATH-shim: prints `foo#bar`, then the reset genuinely runs, while the D1
+# guard returned rc=0 (allow).
+#
+# Root cause: bash decides comment-hood WORD-WISE, during lexing,
+# interleaved with continuation removal. Neither ordering (join-then-drop
+# nor drop-then-join) can reproduce that with a line-based approximation —
+# each is wrong in the opposite direction from the other (see the payload
+# table in the block comment above `_scannable_segments()` in
+# scripts/cast-git-guard.py). So comment suppression is deleted rather than
+# reordered a third time: every line, comment or not, is joined
+# (odd-trailing-backslash-count only) and then split on `;`/`&&`/`||`/`|`,
+# exactly like any other line. A comment mentioning a guarded git command
+# now correctly BLOCKS and needs its own CAST_*_OK=1 hatch — see the SEC-1
+# D2 test above (comment-only line mentioning a guarded op).
+# ---------------------------------------------------------------------------
+
+@test "SEC-1 D2: echo foo backslash-continued into a comment prefix that resumes with a guarded op (echo foo\\ NEWLINE #bar; git reset --hard) → blocks (exit 2) [CRITICAL bypass found by security review: real bash fuses foo+#bar into one word (# is not a comment-start mid-word), then genuinely runs git reset --hard after the ';'; the D1 guard classified line 2 as a comment in isolation and dropped it, silently discarding the reset — mutation-tested RED against the D1 (drop-first) code: rc=0]" {
+  local cmd
+  cmd=$'echo foo\\\n#bar; git reset --hard'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+  assert_output --partial "reset"
+}
+
+@test "SEC-1 D2: same bypass shape with git stash instead of reset (echo foo\\ NEWLINE #bar; git stash) → blocks (exit 2) [sibling of the CRITICAL above, different guarded op — mutation-tested RED against the D1 (drop-first) code: rc=0]" {
+  local cmd
+  cmd=$'echo foo\\\n#bar; git stash'
+  run bash "$HOOK_SH" <<< "$(make_bash_payload_multiline "$cmd")"
+  assert_failure 2
+  assert_output --partial "stash"
+}
