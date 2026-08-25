@@ -6,7 +6,8 @@
     "MCP_CONNECTION_NONBLOCKING": "true",
     "CLAUDE_CODE_SCRIPT_CAPS": "100",
     "ATTEST_ENFORCE_AGENTS": "backend-writer,frontend-writer,bash-specialist",
-    "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION": "200"
+    "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION": "200",
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
   },
   "feedbackSurveyRate": 0,
   "cleanupPeriodDays": 30,

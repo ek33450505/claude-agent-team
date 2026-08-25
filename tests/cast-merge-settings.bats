@@ -241,3 +241,39 @@ print('ok')
   run python3 -m json.tool "$DENY_FRAG"
   assert_success
 }
+
+@test "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH fragment: 00-env.json sets it to \"1\"" {
+  ENV_FRAG="$REPO_DIR/managed-settings.d/00-env.json"
+  [ -f "$ENV_FRAG" ]
+  run python3 -c "
+import json
+with open('$ENV_FRAG') as f:
+    d = json.load(f)
+val = d.get('env', {}).get('CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH')
+assert val == '1', f'expected \"1\", got {val!r}'
+print('ok')
+"
+  assert_success
+  assert_output "ok"
+}
+
+@test "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH survives the fragment-to-merged hop" {
+  # Reproduce the settings-drift.yml recipe with the REAL repo fragments
+  # (not synthetic ones) so this catches a key that never reaches the
+  # merged artifact — a recorded CAST failure mode ("delivered but never read").
+  cp "$REPO_DIR"/managed-settings.d/*.json "$FRAGMENTS_DIR/"
+
+  run bash "$MERGE_SH" "$OUTPUT_FILE"
+  assert_success
+
+  run python3 -c "
+import json
+with open('$OUTPUT_FILE') as f:
+    d = json.load(f)
+val = d.get('env', {}).get('CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH')
+assert val == '1', f'merged env missing/wrong: {val!r}'
+print('ok')
+"
+  assert_success
+  assert_output "ok"
+}
