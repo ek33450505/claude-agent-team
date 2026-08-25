@@ -36,6 +36,26 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 LINT_SCRIPT="$REPO_DIR/scripts/cast-lint-bash32-parse.sh"
 
 @test "bash32-parse-lint flags a real bash-3.2-only parse error and names the file" {
+  # Capability probe, not a platform probe: what discriminates this test is
+  # whether the bash binary the lint will actually check with REJECTS the
+  # `;;&` case fall-through (bash 4.0+ only) at parse time -- not "which OS
+  # is this". CAST_LINT_BASH32_BASH mirrors the lint script's own default
+  # (BASH_BIN="${CAST_LINT_BASH32_BASH:-/bin/bash}") so a caller forcing a
+  # newer bash (e.g. CAST_LINT_BASH32_BASH=$(command -v bash) to simulate
+  # Linux CI, where /bin/bash is 5.x) is honored here too.
+  local probe_bash="${CAST_LINT_BASH32_BASH:-/bin/bash}"
+  local probe_ver
+  probe_ver="$("$probe_bash" --version 2>&1 | head -1)"
+  if "$probe_bash" -n <<'PROBE_EOF' 2>/dev/null
+case "x" in
+  a) echo a ;;&
+  b) echo b ;;
+esac
+PROBE_EOF
+  then
+    skip "bash-3.2 ';;&' detection NOT exercised on this runner: ${probe_bash} (${probe_ver}) parses ';;&' cleanly (bash 4.0+ semantics), so no bash-3.2-only parse error exists to catch. Real coverage for this bug class is the bats-macos CI job (real /bin/bash 3.2.57)."
+  fi
+
   local d="$BATS_TEST_TMPDIR/scan-bad"
   mkdir -p "$d"
   cat > "$d/bad.sh" << 'EOF'
@@ -51,7 +71,7 @@ case "${1:-}" in
 esac
 echo "$_PRUNE_ERR"
 EOF
-  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_BASH="$probe_bash" CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
   assert_failure
   assert_output --partial "bad.sh"
   assert_output --partial "BLOCKED"
