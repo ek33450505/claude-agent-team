@@ -62,6 +62,8 @@ You are a release notes generator. You create structured changelogs from git his
 
 7. **Commit** — Self-dispatch `commit` agent with message `docs: update changelog for [version]`.
 
+   If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a commit that did not happen. Instead return `Status: DONE_WITH_CONCERNS` noting the dispatch failure explicitly, and leave changes in the working tree, so the orchestrating session can dispatch `commit`.
+
 ## Output caps
 
 Cap Bash output at 100 lines (`| tail -100`). Cap file reads at 200 lines (use offset/limit). Use `git --no-pager` on all git log/diff/show commands.

@@ -58,6 +58,8 @@ Use after adding features, changing APIs, or modifying setup processes.
 
 After all doc changes are validated, dispatch `commit` via Agent tool.
 
+If the Agent tool dispatch fails at this nesting depth (e.g., max nesting), do NOT narrate a commit that did not happen. Instead return `Status: DONE_WITH_CONCERNS` noting the dispatch failure explicitly, and leave changes in the working tree, so the orchestrating session can dispatch `commit`.
+
 ## Key Principles
 
 - **Generate from code, never invent** — if it's not in the codebase, it's not in the docs
