@@ -100,6 +100,74 @@ cost:
 
 # Rollup-backed (castdb.agent_runs_daily) -- see `cost` above for the
 # SUM/SUM-not-AVG rule and the never-union-with-raw rule; both apply here too.
+# Cost-outlier detector: flags any agent whose per-run cost exceeds
+# `multiplier`x the MEDIAN per-run cost across agents (median, not mean --
+# a mean would itself be dragged by the outliers this is hunting for).
+# Agents below MIN_RUNS are excluded from BOTH the median calc and the flag
+# list -- a single expensive run is not a trend; MIN_RUNS is always printed,
+# never hidden. An empty result (nothing exceeds the threshold) is reported
+# explicitly, never as a silent empty box.
+# The footer box prints the day-range this data covers plus `rollup_age` --
+# see `cost` above for what `rollup_age` means; today's row is always
+# partial. Run `just -g window` for the full raw+rollup provenance picture.
+# Flags agents whose per-run cost exceeds `multiplier`x the median (default: 3x).
+cost-outliers multiplier='3':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    MIN_RUNS=5
+    STATS="$(duckdb -csv -noheader -c "{{attach}}
+    WITH per_agent AS (
+      SELECT agent, sum(runs) AS runs, sum(cost_usd) AS spend,
+             sum(cost_usd)/NULLIF(sum(runs),0) AS per_run
+      FROM castdb.agent_runs_daily GROUP BY 1
+      HAVING sum(runs) >= ${MIN_RUNS}
+    ),
+    m AS (SELECT median(per_run) AS med FROM per_agent)
+    SELECT round((SELECT med FROM m),4) AS median_per_run,
+           (SELECT count(*) FROM per_agent) AS eligible,
+           (SELECT count(*) FROM per_agent
+              WHERE per_run > {{multiplier}} * (SELECT med FROM m)) AS outlier_count;")"
+    IFS=',' read -r MEDIAN ELIGIBLE OUTLIERS <<< "$STATS"
+
+    if [ -z "$MEDIAN" ] || [ "$ELIGIBLE" = "0" ]; then
+      echo "cost-outliers: no agents have >= ${MIN_RUNS} runs (min-runs floor) -- nothing eligible to compare. Run 'just -g cost' to see raw per-agent volume."
+    else
+      echo "cost-outliers: median per-run = \$${MEDIAN}  |  min-runs floor = ${MIN_RUNS} runs  |  multiplier = {{multiplier}}x  |  eligible agents = ${ELIGIBLE}"
+      if [ "$OUTLIERS" = "0" ]; then
+        echo "cost-outliers: no outliers -- no agent's per-run cost exceeds {{multiplier}}x the median (\$${MEDIAN})."
+      else
+        duckdb -box -c "{{attach}}
+        WITH per_agent AS (
+          SELECT agent, sum(runs) AS runs, sum(cost_usd) AS spend,
+                 sum(cost_usd)/NULLIF(sum(runs),0) AS per_run
+          FROM castdb.agent_runs_daily GROUP BY 1
+          HAVING sum(runs) >= ${MIN_RUNS}
+        ),
+        m AS (SELECT median(per_run) AS med FROM per_agent)
+        SELECT agent, runs,
+               round(per_run,3) AS avg_run_usd,
+               round(per_run / (SELECT med FROM m), 2) AS x_median,
+               round(spend,2) AS total_usd
+        FROM per_agent
+        WHERE per_run > {{multiplier}} * (SELECT med FROM m)
+        ORDER BY x_median DESC;"
+      fi
+    fi
+
+    duckdb -box -c "{{attach}}
+    WITH f AS (SELECT min(day) AS window_from, max(day) AS window_to,
+                      max(rolled_up_at) AS rollup_freshness
+               FROM castdb.agent_runs_daily),
+         a AS (SELECT window_from, window_to, rollup_freshness,
+                      date_diff('second', CAST(rollup_freshness AS TIMESTAMPTZ), now()) AS age_secs FROM f)
+    SELECT window_from, window_to, rollup_freshness,
+           CASE WHEN age_secs < 3600  THEN round(age_secs/60.0)::VARCHAR    || ' min'
+                WHEN age_secs < 86400 THEN round(age_secs/3600.0,1)::VARCHAR || ' hr'
+                ELSE round(age_secs/86400.0,1)::VARCHAR || ' day' END AS rollup_age
+    FROM a;"
+
+# Rollup-backed (castdb.agent_runs_daily) -- see `cost` above for the
+# SUM/SUM-not-AVG rule and the never-union-with-raw rule; both apply here too.
 # NOTE: `rollup_age` (bottom table) is how long since the nightly rollup ran
 # (~03:30). TODAY's contribution to the numbers above is always partial until
 # that run -- up to ~24h of today's activity can be missing. Prior days are complete.

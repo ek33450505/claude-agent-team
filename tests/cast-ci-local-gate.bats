@@ -66,6 +66,18 @@ exit "${STUB_HOOK_EXIT:-0}"
 HOOKEOF
   chmod +x "$WORK/scripts/cast-validate-all-hooks.sh"
 
+  # Controllable stub bash32-parse-lint: sentinel line + exit code from env
+  # var, mirroring the cast-validate-all-hooks.sh stub above. Added when
+  # bash32-parse-lint became a direct (pre-loop) ci-local job — without this
+  # stub the sandboxed $WORK dir has no such script and `make ci-local` dies
+  # with "No such file or directory" before ever reaching the act loop.
+  cat > "$WORK/scripts/cast-lint-bash32-parse.sh" <<'BASH32EOF'
+#!/usr/bin/env bash
+echo "BASH32_LINT_RAN"
+exit "${STUB_BASH32_EXIT:-0}"
+BASH32EOF
+  chmod +x "$WORK/scripts/cast-lint-bash32-parse.sh"
+
   # Controllable stub act/docker, placed on PATH ahead of the real binaries.
   cat > "$WORK/stubbin/act" <<'ACTEOF'
 #!/usr/bin/env bash
@@ -89,7 +101,7 @@ teardown() {
 }
 
 run_ci_local() {
-  PATH="$WORK/stubbin:$PATH" STUB_HOOK_EXIT="${STUB_HOOK_EXIT:-0}" STUB_ACT_EXIT="${STUB_ACT_EXIT:-0}" \
+  PATH="$WORK/stubbin:$PATH" STUB_HOOK_EXIT="${STUB_HOOK_EXIT:-0}" STUB_ACT_EXIT="${STUB_ACT_EXIT:-0}" STUB_BASH32_EXIT="${STUB_BASH32_EXIT:-0}" \
     bash -c 'cd "$1" && make -f "$1/Makefile" ci-local' _ "$WORK"
 }
 
@@ -104,8 +116,21 @@ run_ci_local() {
   assert_failure
 }
 
-@test "case 3: green path succeeds and the summary names 8 act jobs" {
-  STUB_ACT_EXIT=0 STUB_HOOK_EXIT=0 run run_ci_local
+@test "case 3: green path succeeds and the summary names bash32-parse-lint and 8 act jobs" {
+  # Act-job count is unchanged by the bash32-parse-lint addition: it runs as
+  # a direct (pre-loop) job, not an act job, so the loop is still exactly
+  # bats/stats-guard/rules-drift/readme-structure/pii-scan/shellcheck/
+  # db-contract/self-lints (8). "8 act jobs" stays accurate; this only
+  # broadens the assertion to also cover the new direct job's presence in
+  # the closing summary line.
+  STUB_ACT_EXIT=0 STUB_HOOK_EXIT=0 STUB_BASH32_EXIT=0 run run_ci_local
   assert_success
+  # Sentinel FIRST, mirroring case 1's HOOK_GATE_RAN: this is the only
+  # assertion that proves the stub was actually INVOKED. The two --partial
+  # checks below match the Makefile's closing summary line, which prints
+  # whether or not the job ran, so on their own they would pass against a
+  # target that skipped it entirely.
+  assert_output --partial "BASH32_LINT_RAN"
+  assert_output --partial "bash32-parse-lint"
   assert_output --partial "8 act jobs"
 }

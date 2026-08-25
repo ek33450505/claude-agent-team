@@ -214,7 +214,51 @@ printf '  Agents: %d copied\n' "$AGENT_COUNT"
 # --- Step 4: Skills ---
 SKILL_COUNT=0
 if [[ -d "${REPO_ROOT}/skills" ]]; then
-  cp -r "${REPO_ROOT}/skills/." "${OUT}/skills/"
+  # Bundle only git-tracked files under skills/ — untracked/gitignored content
+  # (e.g. skills/neon, skills/neon-postgres: third-party skills installed via
+  # `npx skills`, deliberately gitignored per PR #380) must never reach a
+  # bundled, committed artifact. Mirrors the tracked-count convention already
+  # used by cast-stats-lib.sh:42 (`git ls-files 'skills/*'`), so the bundler
+  # and the stats gate agree on what "a skill" is.
+  #
+  # Fail closed: if `git ls-files` errors (git unavailable, REPO_ROOT not a
+  # work tree, corrupted index, etc.) ABORT rather than falling back to a
+  # working-tree `cp -r` — a silent fallback would reintroduce this exact
+  # leak, invisibly, in CI, a tarball build, or a fresh clone.
+  _skills_tracked_list="$(mktemp)"
+  if ! git -C "${REPO_ROOT}" ls-files -z -- 'skills' > "${_skills_tracked_list}"; then
+    printf 'ERROR: git ls-files failed for skills/ — refusing to fall back to a working-tree copy (fail closed)\n' >&2
+    rm -f "${_skills_tracked_list}"
+    exit 1
+  fi
+  while IFS= read -r -d '' rel_path; do
+    src="${REPO_ROOT}/${rel_path}"
+    dst="${OUT}/${rel_path}"
+    mkdir -p "$(dirname "$dst")"
+    if [[ -L "$src" ]]; then
+      # Tracked symlink — git stores the link itself as a blob regardless of
+      # what it points to (skills/neon and skills/neon-postgres are exactly
+      # this shape, currently untracked; a future tracked symlinked skill
+      # must still bundle correctly). Fail closed on a dangling target
+      # rather than silently skipping or bundling a broken link.
+      if [[ ! -e "$src" ]]; then
+        printf 'ERROR: tracked symlink target missing: %s\n' "$src" >&2
+        exit 1
+      fi
+      if [[ -d "$src" ]]; then
+        # Symlink resolves to a directory — recurse so the bundled plugin is
+        # self-contained and doesn't depend on the maintainer's filesystem
+        # layout (e.g. a shared skills cache) at install time.
+        mkdir -p "$dst"
+        cp -RL "${src}/." "${dst}/"
+      else
+        cp -L "$src" "$dst"
+      fi
+    else
+      cp "$src" "$dst"
+    fi
+  done < "${_skills_tracked_list}"
+  rm -f "${_skills_tracked_list}"
 
   # Delete PII overlay files
   find "${OUT}/skills" -name "SKILL-personal.md" -delete
@@ -245,7 +289,17 @@ printf '  Skills: %d directories\n' "$SKILL_COUNT"
 # --- Step 5: Commands ---
 CMD_COUNT=0
 if [[ -d "${REPO_ROOT}/commands" ]]; then
-  for cmd_src in "${REPO_ROOT}/commands/"*.md; do
+  # Bundle only git-tracked *.md files — same untracked-content guard as
+  # skills/ above (fail closed; no working-tree fallback; see the comment
+  # on that block for the full rationale).
+  _commands_tracked_list="$(mktemp)"
+  if ! git -C "${REPO_ROOT}" ls-files -z -- 'commands/*.md' > "${_commands_tracked_list}"; then
+    printf 'ERROR: git ls-files failed for commands/ — refusing to fall back to a working-tree glob (fail closed)\n' >&2
+    rm -f "${_commands_tracked_list}"
+    exit 1
+  fi
+  while IFS= read -r -d '' rel_path; do
+    cmd_src="${REPO_ROOT}/${rel_path}"
     [[ -f "$cmd_src" ]] || continue
     fname="$(basename "$cmd_src")"
     cmd_name="${fname%.md}"
@@ -299,7 +353,8 @@ with open(dst, 'w') as f:
 PYEOF
 
     CMD_COUNT=$((CMD_COUNT + 1))
-  done
+  done < "${_commands_tracked_list}"
+  rm -f "${_commands_tracked_list}"
 fi
 
 printf '  Commands: %d copied\n' "$CMD_COUNT"

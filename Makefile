@@ -49,13 +49,22 @@ test-ubuntu:
 #   pii-scan, shellcheck   — security-scan.yml
 #   db-contract            — db-contract.yml
 #   self-lints             — self-lints.yml
-# Plus, run directly (not via act — see "Dropped from the act loop" below),
-# BOTH before the act loop so a later act-job failure can never silently
-# skip either of them:
+# Plus, run directly (not via act — see "Dropped from the act loop" below
+# for the two that mirror real CI jobs), all before the act loop so a later
+# act-job failure can never silently skip any of them:
 #   hook-contract-validation — scripts/cast-validate-all-hooks.sh --source
 #   python-unit               — python3 -m unittest discover -s tests -p
 #                              'test_*.py' -v (the exact python-unit.yml
 #                              command)
+#   bash32-parse-lint         — scripts/cast-lint-bash32-parse.sh — NOT a CI
+#                              job (no GitHub Actions workflow runs it,
+#                              deliberately): catches bash-3.2-only parse
+#                              errors (real macOS /bin/bash) in seconds,
+#                              locally. On a Linux runner /bin/bash is
+#                              bash 5.x and can't see 3.2-only failures, so
+#                              this check is WEAKER in CI than locally —
+#                              real coverage for this bug class is the
+#                              bats-macos job, not this script.
 #
 # Runner image: -P pins ubuntu-latest to catthehacker/ubuntu:act-latest so act never
 #   prompts interactively on first run (non-TTY safe; equivalent to the prompt's default).
@@ -108,11 +117,13 @@ ci-local:
 	bash scripts/cast-validate-all-hooks.sh --source
 	@echo "── ci-local: direct job python-unit (run directly — PyYAML is absent from the act image but present on GitHub's ubuntu-latest)"
 	python3 -m unittest discover -s tests -p 'test_*.py' -v
+	@echo "── ci-local: direct job bash32-parse-lint (run directly — LOCAL ONLY, no CI workflow counterpart; see Makefile header)"
+	bash scripts/cast-lint-bash32-parse.sh
 	@for j in bats stats-guard rules-drift readme-structure pii-scan shellcheck db-contract self-lints; do \
 		echo "── ci-local: act job $$j"; \
 		act pull_request --container-architecture linux/amd64 -P ubuntu-latest=catthehacker/ubuntu:act-latest -j "$$j" || { echo "ci-local FAILED at job: $$j" >&2; exit 1; }; \
 	done
-	@echo "ci-local: hook-contract-validation + python-unit (direct, before the loop) + 8 act jobs green"
+	@echo "ci-local: hook-contract-validation + python-unit + bash32-parse-lint (direct, before the loop) + 8 act jobs green"
 
 # Sync docs then validate
 sync: docs validate

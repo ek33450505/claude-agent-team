@@ -110,14 +110,21 @@ GUARANTEES PRESERVED (Subtraction Safety Gate, master_v9.md §0.2):
     CAST_POLICY_OVERRIDE=1 escape with audit-log).
   - agent-status TTL sweep (files older than 120 min) on Write/Edit.
 
-SECURITY (unchanged from the bash original):
+SECURITY (updated 2026-08-24, SEC-1 fix — every line is now scanned; see the
+updated KNOWN LIMITATIONS below for what this replaces):
   - The escape hatch MUST appear as a leading env-var assignment BEFORE the git
-    command (tolerating leading `cd &&` chains and git global options). It can
-    NEVER take effect from inside a commit message / comment / echo — only the
-    command's FIRST LINE is scanned, so a multiline escape-hatch on line 2 can't
-    bypass the first-line git command.
-  - `_git_evaluate` splits the first line into SHELL SEGMENTS on `;`, `&&`,
-    `||`, and `|`, and evaluates each segment on its own (2026-08-17 fix —
+    command, in the SAME shell segment (tolerating leading `cd &&` chains and
+    git global options). It can NEVER take effect from inside a commit message
+    / comment / echo. Multiline commands are now fully scanned (every line,
+    not just the first — see `_scannable_segments()`), but a hatch on one
+    line/segment still can't unblock a destructive op on a DIFFERENT
+    line/segment: that guarantee comes from the PER-SEGMENT evaluation below,
+    not from limiting how much of the command gets scanned. A multiline
+    escape-hatch on line 2 still can't bypass a git command on line 1.
+  - `_git_evaluate` splits every line of the command into SHELL SEGMENTS on
+    `;`, `&&`, `||`, and `|` (2026-08-24: widened from first-line-only via
+    `_scannable_segments()` — see KNOWN LIMITATIONS below), and evaluates
+    each segment on its own (2026-08-17 fix —
     a security review found that per-LINE evaluation let a hatch attached to
     a HARMLESS invocation of an op unlock a DESTRUCTIVE invocation of the
     *same* op later on the line, e.g. `CAST_RESET_OK=1 git reset --soft &&
@@ -140,10 +147,107 @@ SECURITY (unchanged from the bash original):
 KNOWN LIMITATIONS (advisory-grade guard — threat model is a careless agent,
 not an adversary; the OS/tool sandbox is the real security boundary, not this
 regex layer):
-  - Multiline: anything past line 1 evades the scan (`echo hi\ngit reset
-    --hard`). This is the SAME mechanism that stops a hatch on line 2 from
-    unblocking a destructive op on line 1 — the tradeoff is deliberate and is
-    NOT going to be widened to a multi-line scan in this module.
+  - Multiline scanning (2026-08-24 SEC-1 fix): every line of the command is
+    scanned, via `_scannable_segments()`, not just line 1 — `echo hi` /
+    `git reset --hard` on line 2 correctly blocks. The function performs
+    exactly two operations: backslash line-continuations are joined across
+    ALL lines, counting TRAILING backslashes so only an ODD count joins
+    (SEC-1 C2 fix) — an EVEN count is a paired-off literal escape, not a
+    continuation, and is left unjoined; a single trailing backslash still
+    joins `git \` / `reset --hard` into one logical line, and an odd count
+    of N backslashes collapses to (N-1)/2 literal backslashes once the
+    continuation itself is consumed (2026-08-24 correctness fix — the
+    prior version left N-1 residual backslashes for N >= 3). Each
+    resulting line is then split into shell segments on `;`, `&&`, `||`,
+    `|`, same as line 1 always was. That is the entire transformation.
+      COMMENTS ARE NOT SKIPPED (2026-08-24 SEC-1 D2 removal, superseding
+    the D1 fix this bullet used to describe). This module previously tried
+    to classify and drop leading-`#` comment lines from the scan, and
+    tried it in BOTH possible orderings relative to continuation-joining —
+    join-then-drop, and drop-then-join — and BOTH were empirically
+    demonstrated, this session, to produce a fail-open bypass, in opposite
+    directions, verified against real bash with a `git` PATH-shim:
+      join-then-drop (the original SEC-1 multiline fix): `# note \`
+    followed by `git stash` on the next line joined into one string,
+    `# note git stash`, before the comment check ever ran — and since the
+    JOINED string starts with `#`, the whole thing was dropped as one
+    comment. But real bash treats a trailing backslash INSIDE a comment as
+    inert: a comment runs to the newline unconditionally, so `# note \` is
+    a complete, self-terminating comment and `git stash` on the next line
+    is a separate, real command that runs. The guard returned rc=0 (allow)
+    while the stash genuinely ran.
+      drop-then-join (the D1 fix, this module's immediately prior state):
+    `echo foo\` followed by `#bar; git reset --hard` classified the SECOND
+    line as a comment and dropped it, in isolation, before any joining
+    ran. But real bash joins the first line's trailing backslash with the
+    second line BEFORE that line's `#` is ever evaluated, fusing `foo` and
+    `#bar` into one word (`foo#bar`) where `#` is no longer at a word
+    start and is therefore not a comment marker at all — bash prints
+    `foo#bar` and then genuinely runs `git reset --hard` after the `;`.
+    Dropping the second line in isolation discarded that real, executable
+    `git reset --hard` from the scan entirely.
+      Root cause: bash decides comment-hood WORD-WISE, during lexing,
+    interleaved with continuation removal — a `#` starts a comment only at
+    a word start, and whether a given line's leading `#` IS a word start
+    depends on whether a preceding line's trailing backslash fused
+    something onto it. Neither a per-original-line check (drop-first) nor
+    a post-join whole-string check (join-first) can decide that correctly;
+    only a real, character-by-character shell lexer can, interleaving
+    continuation-removal and comment detection the way bash itself does —
+    which is exactly the kind of hand-rolled parser already tried once for
+    heredocs (below) and shown to produce two CRITICAL bypasses of its
+    own. So comment suppression is deleted here too, rather than
+    re-ordered a third time.
+      This is a statement of what the function costs, not a claim that the
+    multiline surface is now closed: a comment mentioning a guarded git
+    command — a whole comment line (`# git push`) or comment text fused by
+    a continuation into an adjacent line — is scanned exactly like any
+    other text and BLOCKS, and needs that op's own `CAST_*_OK=1` hatch on
+    that line/segment to proceed.
+      2026-08-24 SEC-1 heredoc-suppression REMOVAL (design decision, not a
+    third patch): this module used to also drop heredoc BODIES before the
+    per-line scan, on the theory that a heredoc body is inert data the
+    shell never executes as a command — first via a bare `<<` regex, then
+    (C1, CRITICAL, closed same day) via a quote/comment-aware detector
+    wrapper plus a fail-closed unterminated-heredoc fallback, after the
+    bare regex was found to swallow every remaining
+    line to EOF on three ordinary, non-adversarial constructs (a herestring
+    `<<<WORD`, a `<<` inside a quoted string, a `<<` after an unquoted
+    trailing `#`) — none of which ever produces a real terminator line, so
+    the bypass had UNBOUNDED blast radius, hiding an arbitrary number of
+    real, unguarded destructive git commands.
+    That fix held for less than a day: the detector's
+    quote-parity scan tracks `'`/`"` state character-by-character but does
+    not understand backslash-escaped quotes, so
+    `echo "text \" <<EOF"` — a single, self-contained echo in real bash,
+    with NO heredoc at all — desyncs its tracked quote state into believing
+    a real `<<EOF` heredoc opened; a real destructive git command on the
+    next line is then swallowed as "heredoc body" and a later `EOF` line
+    closes the fake heredoc, so the whole line is silently dropped from
+    the scan while bash executes it for real. Verified against real bash
+    with a `git` PATH-shim, both for a double-quoted (`\"`) and an ANSI-C
+    single-quoted (`$'...\'...'`) escaped-quote form. Two CRITICAL bypasses
+    from the SAME parser across three review rounds is the parser proving
+    itself untractable, not a pair of unlucky one-off bugs — a hand-rolled
+    shell quote scanner cannot safely draw the "is this really inside a
+    string" line by chasing each new escaping construct as it is found. So
+    THE PARSER IS DELETED rather than patched a third time: the heredoc-start
+    regex and its quote/comment-aware detector wrapper no longer exist, and
+    `_scannable_segments()` no longer special-cases heredocs at all — a heredoc body is scanned
+    exactly like any other line, with the SAME per-line/per-segment
+    evaluation as everything else. Removing the parser removes the whole
+    misdetection class: there is nothing left for an escaping trick to fool.
+    Accepted cost, deliberate and approved (not an oversight): a heredoc
+    body that happens to mention a guarded git command as PROSE — e.g.
+    documentation authored via `cat > notes.md <<EOF` — now false-BLOCKs,
+    and needs a per-segment `CAST_*_OK=1` hatch on that line to write. A
+    rare, hatchable false positive is preferable to a parser that has
+    already produced two silent, unbounded bypasses.
+    Widening the scan to every line (including former heredoc bodies) is
+    safe specifically BECAUSE of the per-segment evaluation above: a hatch
+    on one line/segment cannot reach a destructive op on a different
+    line/segment, so there is no line-2-hatch-unblocks-line-1-op risk from
+    scanning further.
   - Subshell / command-substitution indirection evades every BLOCK regex,
     which all anchor on `(^|\s)git`: `(git reset --hard)`, `$(git reset
     --hard)`, backticks, `{ git reset --hard; }`, `bash -c 'git reset
@@ -1505,28 +1609,135 @@ def _audit_push_hatch() -> None:
         pass
 
 
-def _git_evaluate(command: str):
-    """Evaluate the FIRST LINE of a Bash command for git commit/push/stash/
-    reset/clean/checkout/restore/switch.
+def _scannable_segments(command: str):
+    """Yield shell-evaluable segments from EVERY line of `command`, not just
+    line 1 (2026-08-24 SEC-1 fix — see the module SECURITY note above for
+    why widening this to a multi-line scan is safe: the 2026-08-17
+    per-segment fix already scopes a hatch to its own segment, so a hatch on
+    one line structurally cannot reach a destructive op on a different
+    line).
 
-    First-line-only scan prevents a multiline escape-hatch on line 2 from
-    unblocking a git command on line 1. Returns (exit_code, message_or_None).
+    This function performs EXACTLY two operations and nothing else:
+      1. Join backslash line-continuations across ALL lines, counting
+         TRAILING backslashes on each line so only an ODD count joins
+         (SEC-1 C2 fix) — an EVEN count is a paired-off literal escape, not
+         a continuation, and is left unjoined. A single trailing backslash
+         still joins `git \\` / `reset --hard` into one logical line, and
+         an odd count of N backslashes collapses to (N-1)/2 literal
+         backslashes once the continuation itself is consumed (2026-08-24
+         correctness fix — the prior version left N-1 residual backslashes
+         for N >= 3).
+      2. Split each resulting joined line into shell segments on `;`,
+         `&&`, `||`, `|` — the same regex `_git_evaluate` always used for
+         line 1 — and yield each segment.
+
+    COMMENTS ARE NOT SKIPPED (2026-08-24 SEC-1 D2 removal, superseding the
+    D1 fix this docstring previously described — see the module KNOWN
+    LIMITATIONS docstring for the full incident history with worked
+    examples). This function used to classify and drop leading-`#` comment
+    lines before the scan. Both possible orderings relative to
+    continuation-joining were tried this session — join-then-drop, and
+    drop-then-join (D1, this function's immediately prior state) — and
+    BOTH produced a confirmed, fail-open bypass, in opposite directions,
+    verified against real bash with a `git` PATH-shim: join-then-drop let a
+    real, self-terminating comment's trailing backslash wrongly absorb a
+    following REAL command into the text that got dropped as "a comment"
+    (`# note \\` / `git stash`); drop-then-join let a following line's
+    leading `#` be classified as a real comment-start in isolation, when a
+    preceding line's continuation would have fused it mid-word in real
+    bash, where it is NOT a comment-start at all (`echo foo\\` /
+    `#bar; git reset --hard`). Root cause: bash decides comment-hood
+    WORD-WISE, during lexing, interleaved with continuation removal — no
+    line-based ordering of "join" and "drop" can reproduce that; only a
+    real shell lexer can, which is exactly the kind of hand-rolled parser
+    that already failed twice for heredocs (below). So comment suppression
+    is deleted here too, rather than re-ordered a third time. Cost, stated
+    plainly rather than as a claim that the multiline surface is now
+    closed: a comment mentioning a guarded git command — a whole comment
+    line (`# git push`) or comment text fused by a continuation into an
+    adjacent line — is scanned like any other text and BLOCKS, needing
+    that op's own `CAST_*_OK=1` hatch on that line/segment to proceed.
+
+    2026-08-24 SEC-1 heredoc-suppression REMOVAL (design decision, not a
+    bug fix — see the module KNOWN LIMITATIONS docstring for the full
+    incident history): this function used to also drop heredoc BODIES via
+    a hand-rolled quote/comment-aware detector (a heredoc-start regex plus a
+    quote/comment-tracking wrapper), on the theory that a heredoc body is
+    inert data the shell never executes as a command. That parser produced TWO CRITICAL
+    bypasses across three review rounds — closing the first (a herestring
+    `<<<`, a `<<` inside quotes, a `<<` after a trailing comment) only
+    exposed the second and fatal one: the parser's quote-parity scan does
+    not understand backslash-escaped quotes, so a line like
+    `echo "text \" <<EOF"` desyncs its tracked quote state and it
+    misdetects a real destructive command on a following line as heredoc
+    body, silently dropping it from the scan while bash executes it for
+    real. A hand-rolled shell quote parser is not a tractable way to draw
+    this line safely, so it is DELETED rather than patched a third time —
+    removing the parser removes the whole misdetection class, since there
+    is no longer any special-casing left to fool. A heredoc body is now
+    scanned exactly like any other line: prose (e.g. documentation written
+    via `cat > file <<EOF`) that happens to mention a guarded git command
+    will correctly false-BLOCK, and needs its own per-segment
+    `CAST_*_OK=1` hatch to write. That trade is deliberate: a rare,
+    hatchable false positive beats a parser that has already produced two
+    silent, unbounded bypasses.
+    """
+    # Step 1: join backslash line-continuations across ALL lines (no
+    # comment classification — see the docstring above). Only an ODD
+    # trailing-backslash count is a real continuation (SEC-1 C2); an odd
+    # count of N backslashes leaves (N-1)/2 literal backslashes behind once
+    # the continuation itself is consumed, matching bash's own escaped-pair
+    # semantics (2026-08-24 correctness fix).
+    joined_lines = []
+    buf = ''
+    for line in command.split('\n'):
+        buf += line
+        trailing = 0
+        idx = len(buf) - 1
+        while idx >= 0 and buf[idx] == '\\':
+            trailing += 1
+            idx -= 1
+        if trailing % 2 == 1:
+            buf = buf[:len(buf) - trailing] + ('\\' * ((trailing - 1) // 2))
+            continue
+        joined_lines.append(buf)
+        buf = ''
+    if buf:
+        joined_lines.append(buf)
+
+    # Step 2: split each joined line into shell segments.
+    for line in joined_lines:
+        for seg in re.split(r';|&&|\|\||\|', line):
+            yield seg
+
+
+def _git_evaluate(command: str):
+    """Evaluate a Bash command for git commit/push/stash/reset/clean/
+    checkout/restore/switch. Every line is scanned (2026-08-24 SEC-1 fix),
+    not just the first — see `_scannable_segments()` for how lines are
+    joined/filtered before the per-line segment split below.
+
+    A hatch on one line/segment still cannot unblock a destructive op on a
+    DIFFERENT line/segment — that guarantee comes from PER-SEGMENT
+    evaluation (below), not from limiting how much of the command gets
+    scanned. Returns (exit_code, message_or_None).
 
     Evaluated PER SHELL SEGMENT (2026-08-17 same-op fix, security review),
-    splitting the first line on `;`, `&&`, `||`, and `|`. This mirrors real
-    shell semantics: `VAR=1 cmd` scopes VAR to that one command, not to
-    everything chained after it on the line. Per-line (not per-segment)
-    evaluation let a hatch attached to a HARMLESS invocation of an op unlock
-    a DESTRUCTIVE invocation of the *same* op later on the line — e.g.
-    `CAST_RESET_OK=1 git reset --soft && git reset --hard` was allowed,
-    because the line-wide *_ALLOW.search() doesn't care which `git reset`
-    it matched against. Verified pre-existing (not introduced by the
-    reset/clean/checkout/restore additions) even for commit/push: at HEAD,
-    `CAST_COMMIT_AGENT=1 git commit --dry-run && git commit -m x` was
-    allowed. `seg.strip()` is load-bearing: the *_ALLOW patterns anchor a
-    hatch to the START of a segment (`^`); an un-stripped leading space
-    after splitting on `&&`/`;` would make a legitimate per-segment hatch
-    like `CAST_RESET_OK=1 git reset --hard && CAST_CLEAN_OK=1 git clean -fdx`
+    using `_scannable_segments()` to split every surviving line on `;`,
+    `&&`, `||`, and `|`. This mirrors real shell semantics: `VAR=1 cmd`
+    scopes VAR to that one command, not to everything chained after it.
+    Per-line (not per-segment) evaluation let a hatch attached to a
+    HARMLESS invocation of an op unlock a DESTRUCTIVE invocation of the
+    *same* op later on the line — e.g. `CAST_RESET_OK=1 git reset --soft &&
+    git reset --hard` was allowed, because the line-wide *_ALLOW.search()
+    doesn't care which `git reset` it matched against. Verified
+    pre-existing (not introduced by the reset/clean/checkout/restore
+    additions) even for commit/push: at HEAD, `CAST_COMMIT_AGENT=1 git
+    commit --dry-run && git commit -m x` was allowed. `seg.strip()` is
+    load-bearing: the *_ALLOW patterns anchor a hatch to the START of a
+    segment (`^`); an un-stripped leading space after splitting on
+    `&&`/`;` would make a legitimate per-segment hatch like
+    `CAST_RESET_OK=1 git reset --hard && CAST_CLEAN_OK=1 git clean -fdx`
     wrongly block on its second segment.
 
     Each op is ALSO evaluated independently within a segment (2026-08-17
@@ -1537,11 +1748,11 @@ def _git_evaluate(command: str):
     git reset --hard && git clean -fdx`) still BLOCKS — segment 2 carries no
     hatch of its own — so "each destructive git command needs its OWN hatch
     immediately before it" holds for same-op chains too, not just cross-op
-    chains.
+    chains, and now holds ACROSS LINES too: `git reset --hard` on line 1
+    followed by `CAST_CLEAN_OK=1 git clean -fdx` on line 2 still blocks
+    line 1.
     """
-    first_line = command.split('\n', 1)[0]
-
-    for seg in re.split(r';|&&|\|\||\|', first_line):
+    for seg in _scannable_segments(command):
         seg = seg.strip()
         if not seg:
             continue

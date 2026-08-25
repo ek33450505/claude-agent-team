@@ -13,6 +13,9 @@
 #   queue_complete    — all queued tasks finished
 #   budget_alert      — spending threshold exceeded
 #   briefing_ready    — morning briefing is available
+#   neon_write        — a Neon MCP credential/write/unsafe tool was called
+#                        (informational FYI only — the tool was NOT blocked;
+#                        see cast-pretool-dispatch.py's _notify_neon_risk)
 
 set -euo pipefail
 
@@ -31,6 +34,7 @@ Event types:
   queue_complete    - All queued tasks finished
   budget_alert      - Spending threshold exceeded
   briefing_ready    - Morning briefing is available
+  neon_write        - Neon MCP credential/write/unsafe tool called (FYI only)
 
 Arguments:
   event_type        Event type (required)
@@ -67,7 +71,7 @@ fi
 
 # --- EVENT_TYPE whitelist validation ---
 case "$EVENT_TYPE" in
-  blocked|queue_complete|budget_alert|briefing_ready|ci_failure|ollama_down) ;;
+  blocked|queue_complete|budget_alert|briefing_ready|ci_failure|ollama_down|neon_write) ;;
   *)
     echo "Unknown event type: $EVENT_TYPE" >&2
     exit 1
@@ -137,12 +141,20 @@ if [ "$(notifications_enabled)" = "false" ]; then exit 0; fi
 if [ "$(event_enabled "$EVENT_TYPE")" = "false" ]; then exit 0; fi
 if [ "$(in_quiet_hours)" = "true" ]; then
   # Budget alerts bypass quiet hours
+  # neon_write deliberately does NOT bypass quiet hours (security LOW #8,
+  # 2026-08-24): unlike budget_alert, which needs immediate attention to
+  # stop a cost overrun, a neon_write alert is a record-only FYI about a
+  # Neon MCP call that has already been approved via permissions.ask (or
+  # already executed, for a dispatched subagent that never saw that
+  # prompt) -- record() in cast-pretool-dispatch.py/cast-egress-sentinel.py
+  # is unaffected either way, so suppressing the desktop ping during quiet
+  # hours loses no audit trail, only a same-night notification.
   if [ "$EVENT_TYPE" != "budget_alert" ]; then exit 0; fi
 fi
 
 # --- Choose notification sound ---
 case "$EVENT_TYPE" in
-  blocked|budget_alert)
+  blocked|budget_alert|neon_write)
     SOUND="Bottle"
     ;;
   queue_complete|briefing_ready)
@@ -161,6 +173,7 @@ if [ -z "$MESSAGE" ]; then
     budget_alert)   MESSAGE="CAST budget threshold exceeded." ;;
     briefing_ready) MESSAGE="Your morning briefing is ready." ;;
     ollama_down)    MESSAGE="Ollama isn't running — CAST needs it for local embeddings." ;;
+    neon_write)     MESSAGE="A Neon MCP credential/write tool was called." ;;
     *)              MESSAGE="$EVENT_TYPE" ;;
   esac
 fi

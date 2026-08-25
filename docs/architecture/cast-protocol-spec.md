@@ -225,6 +225,26 @@ CAST treats a defined set of operations as **irreversible or destructive** — t
 
 **Design rule — auto-chain safety:** the git-guard and command-guard hard-blocks (commit/push/stash; process mass-kill; `rm -rf` of protected roots) fire **unconditionally** — before the `CLAUDE_SUBPROCESS` early-return in `cast-pretool-dispatch.py` — so they protect both the interactive context (row 1) **and** headless/managed (row 2). It's the **Write/Edit-policy engine, egress recording, and dispatch-capture** (plus confirm-pauses, which aren't hooks at all) that are **bypassed** in headless/managed (row 2); those, and every hook-based gate, are absent in cron/launchd (row 3). An irreversible op outside the git-guard/command-guard umbrella is **auto-chain-safe only if it is protected by a fail-closed script-level gate** (back-up-or-abort inside the script itself) **or an agent text-refusal.** New destructive automation MUST carry its own fail-closed gate rather than relying on a hook.
 
+**What "unconditional" means for the git guard — its scan model, corrected 2026-08-24.** Every
+`✓ hook (unconditional)` row below is a claim about a **Bash tool call**, and the guard's reach over that
+call has limits the ledger did not state until now. `cast-git-guard.py` splits the command into shell
+segments on `;`, `&&`, `||` and `|`, and evaluates each segment independently, so an escape hatch scopes to
+its own segment exactly as `VAR=1 cmd` does in a real shell — a hatch never unlocks a later op.
+**Correction of record:** until 2026-08-24 the guard scanned **only the first line** of a multi-line command,
+so every row below was silently false for any Bash call whose guarded op sat on line 2 or later — the natural
+shape of `git status` followed by an action. The spec never disclosed this. The guard now scans every line,
+joining backslash continuations (odd-count only) and skipping whole-line `#` comments.
+
+**Residual limits, stated plainly so this section does not overstate again.** Heredoc **bodies are scanned**:
+prose inside a heredoc that mentions a guarded git command will block and needs the op's hatch to write. That
+is deliberate — the heredoc-suppression logic that avoided those false blocks produced two CRITICAL
+fail-open bypasses in review (a herestring, a quoted `<<`, a trailing-comment `<<`, and a backslash-escaped
+quote each fooled its detector into dropping every following line from the scan), so the suppression was
+removed rather than hardened. Still unmatched, pre-existing: a git invocation wrapped entirely inside a
+subshell or command substitution, which would need a real shell parser rather than regexes. The guard is
+advisory-grade — its threat model is a careless agent, not an adversary, and the OS/tool sandbox remains the
+real security boundary.
+
 **The ledger:**
 
 | Op class | Operation(s) | Enforced by | Type | Escape hatch | Auto-chain-safe? |

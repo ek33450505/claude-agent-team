@@ -37,7 +37,7 @@ FAIL-OPEN per guard: a crash/missing module in one guard never suppresses anothe
 (each load + call is independently guarded), and any load failure is logged to
 hook-errors.log so `cast doctor` can surface a silently-disabled guard. command-
 guard is always evaluated for Bash unless git-guard already hard-blocked — which
-prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 skips ONLY the Write/Edit policy + egress record + dispatch capture; the git commit/push/stash and destructive-command guards run in EVERY context (a subagent must not bypass the irreversibility/destructive guards). Any
+prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 skips ONLY the Write/Edit policy + egress record + dispatch capture; the git commit/push/stash and destructive-command guards run in EVERY context (a subagent must not bypass the irreversibility/destructive guards), and so does the Neon MCP unsafe-tool notify guard (_notify_neon_risk) — a dispatched subagent's risky Neon call must be notified and recorded too. Any
 unhandled error → exit 0 (allow); a guard crash must never block all tool use.
 
 CONTRACT (identical to the wrappers): exit 2 + stderr = block; stdout
@@ -239,6 +239,265 @@ def _emit_egress(sentinel, action):
         pass
 
 
+# --------------------------------------------------------------------------
+# Neon MCP unsafe-tool notify guard (owner decision, 2026-08-24; hardened
+# 2026-08-24 after security found this guard fail-open on two classes of
+# calls -- see managed-settings.d/12-ask.json's _neon_ask_note for the full
+# incident). The Neon MCP server reports "Write mode active. Destructive
+# tools are exposed." and exposes delete_branch/delete_project/run_sql/
+# reset_from_parent with full schemas even though the client wires
+# ?readonly=true and deniedMcpServers blocks the full-access URL (see
+# managed-settings.d/50-mcp.json's _neon_note) -- the OAuth SCOPE granted at
+# session start beat the URL param. Decision: keep the write tools usable
+# (do not deny, do not try to re-scope OAuth); instead make sure nothing
+# risky ever lands silently. The real GATE is managed-settings.d/12-ask.json's
+# permissions.ask (a client-side prompt the user must answer); this half is
+# notify + record ONLY and must never block -- see the call site in main(),
+# placed BEFORE the CLAUDE_SUBPROCESS recursion-prevention early-return so a
+# dispatched subagent's Neon call is also caught (mirrors the Bash git/kill/rm
+# guards' "every context" rule documented at the top of main()).
+#
+# CRITICAL fix (2026-08-24): get_connection_string returns a LIVE Postgres
+# connection string with an embedded password. It starts with "get_", so the
+# old verb-enumeration regex (which only matched delete/create/run_sql/reset/
+# prepare/complete/provision/configure) let it through as a "read" with zero
+# signal -- identical to list_projects. Credential exposure is its OWN risk
+# class, distinct from "mutates data": _NEON_CREDENTIAL_RE below is a
+# separate pattern from the safe-read allowlist, checked BEFORE it so a
+# credential tool can never be shadowed into "safe" just because it happens
+# to match a get_.* shape. Covers the named tool plus any plausible
+# *credential*/*password*/*connection*-shaped name.
+#
+# HIGH fix (2026-08-24): the old regex was a positive enumeration of
+# "dangerous" verbs, and it was missing update/grant/revoke/set_/add_/
+# remove_/rename/transfer -- security reproduced mcp__neon__grant_access and
+# mcp__neon__update_project producing zero signal. Enumerating today's
+# dangerous verbs is unbounded (Neon can add any verb tomorrow); enumerating
+# today's SAFE reads is bounded. _NEON_SAFE_READ_RE below is now the ONLY
+# allowlist, and classification is FAIL-CLOSED: any mcp__neon__* tool that
+# does not affirmatively match it (and isn't a credential tool) is treated
+# as unsafe. A tool Neon adds tomorrow gets signal by default instead of
+# silence. Mirrors managed-settings.d/12-ask.json's verb-glob set (kept in
+# sync by convention, not by shared code -- the JSON fragment is consumed by
+# Claude Code's native permission engine, not by this Python process).
+#
+# permissions.ask precedence investigated (2026-08-24) before choosing how to
+# widen 12-ask.json: docs/architecture/enforcement-awareness-split.md:55
+# records the documented native precedence as `deny -> ask -> allow ->
+# prompt` -- ask is checked BEFORE allow, so a broad "ask on mcp__neon__*"
+# rule would catch every read before a narrower "allow" exception for
+# known-safe reads ever got a chance to match. That rules out an
+# allow-carve-out for 12-ask.json; see that file's _neon_ask_note for the
+# chosen alternative (widen the ask globs directly).
+#
+# STRUCTURAL fix (2026-08-24, 3rd pass -- security BLOCKED this guard twice;
+# both prior passes (CRITICAL, HIGH above) were point-patches that added a
+# name to a list; this pass removes the pattern class that keeps producing
+# those gaps. _NEON_SAFE_READ_RE previously mixed a handful of exact names
+# with UNBOUNDED wildcards (list_.*, describe_.*, explain_.*, get_.*), and
+# _NEON_CREDENTIAL_RE sat in front of it matching only the three literal
+# words credential/password/connection. Any secret-returning tool using
+# different wording -- get_client_secret, get_api_key, get_database_uri,
+# get_bearer_token, get_jwt, get_oauth_token, describe_api_token,
+# describe_secret_key, list_role_secrets, explain_token_scope (10 names
+# reproduced live by security) -- matched a get_.*/describe_.*/explain_.*
+# wildcard, fell through the narrow credential check, and classified None
+# (safe): zero notify, zero record. A wider credential word list is not a
+# fix for this -- it is the identical blocklist-in-front-of-a-wildcard shape
+# with a bigger dictionary, and fails again on the next word.
+#
+# _NEON_SAFE_READ_RE below is now an EXACT enumeration of literal tool
+# names -- no verb-prefix wildcard anywhere in it. This IS the fail-closed
+# boundary the HIGH-fix docstring already claimed but the wildcards
+# silently undermined: anything that is not a literal member -- including
+# every unrecognised get_*/list_*/describe_* tool -- classifies "unsafe" by
+# default in _classify_neon_risk. get_neon_auth_config is deliberately
+# DROPPED from the enumeration (security MEDIUM): "auth config" plausibly
+# returns client secrets or JWKS material and nobody has verified its
+# response shape, so it now fails closed too (in practice it resolves to
+# "credential" below, since "auth" is one of the broadened label words --
+# either way it is no longer silently "safe"). _NEON_CREDENTIAL_RE is
+# DEMOTED to a labelling refinement only: it does zero safety work now
+# (nothing reaches "safe" that this enumeration would not itself call
+# safe) -- it only decides whether a non-safe tool is notified as
+# "CREDENTIAL" (a more useful signal) instead of the generic "write/unsafe"
+# default, so it is broadened liberally (credential/password/connection/
+# secret/token/key/uri/auth/jwt/oauth) without reintroducing any safety
+# risk from over-matching.
+#
+# Both regexes now match via .fullmatch(), not .match()+trailing $ -- see
+# _DISPATCH_NAME_RE's comment above: $ matches just before a trailing
+# newline even under match(), so 'mcp__neon__list_projects\n' previously
+# classified None/safe via that laxity (reproduced). fullmatch() requires
+# consuming the whole string and correctly rejects it.
+#
+# managed-settings.d/12-ask.json's three *credential*/*password*/
+# *connection* MID-STRING globs were found to be almost certainly INERT in
+# the same pass (this engine's permission matching is prefix-glob only --
+# see docs/architecture/enforcement-awareness-split.md and that file's
+# _neon_ask_note) and were removed there rather than kept as false
+# reassurance; that file's belt-and-braces literal get_connection_string
+# entry remains. The two files still encode one policy in two languages
+# (kept in sync by convention, not shared code) -- see
+# tests/cast-neon-notify-guard.bats's drift tests for the cross-check.
+# --------------------------------------------------------------------------
+_NEON_CREDENTIAL_RE = re.compile(
+    r'^mcp__neon__.*(credential|password|connection|secret|token|key|uri|'
+    r'auth|jwt|oauth).*$',
+    re.IGNORECASE,
+)
+
+# EXACT enumeration -- no verb-prefix wildcards. This IS the safety
+# boundary: anything not a literal member classifies "unsafe" by default in
+# _classify_neon_risk. get_neon_auth_config intentionally excluded (see
+# comment block above).
+_NEON_SAFE_READ_RE = re.compile(
+    r'^mcp__neon__('
+    r'list_projects|list_shared_projects|list_organizations|'
+    r'list_branch_computes|list_slow_queries|list_docs_resources|'
+    r'list_log_fields|list_log_field_values|'
+    r'describe_project|describe_branch|describe_table_schema|'
+    r'explain_sql_statement|'
+    r'query_logs|search|fetch|'
+    r'compare_database_schema|inspect_database|get_database_tables|'
+    r'get_doc_resource'
+    r')$'
+)
+
+
+def _classify_neon_risk(tool_name):
+    """Fail-closed Neon MCP risk classifier (structural fix, 3rd pass; prefix
+    hardening, 4th pass 2026-08-24 -- see PREFIX HARDENING note below).
+    Returns:
+      None          -- not a neon tool, or an EXACT literal member of the
+                       known-safe-read enumeration (_NEON_SAFE_READ_RE). The
+                       two cases deliberately share this sentinel: the sole
+                       consumer (_notify_neon_risk) branches only on
+                       `risk is None` to mean "no action, no signal" --
+                       splitting the sentinel would require also changing
+                       that check (and its risk-label mapping) for zero
+                       behavior difference, so the value stays shared and
+                       the two `return None` sites below stay textually
+                       separate for legibility instead.
+      "credential"  -- a LABELLING refinement only, not a security boundary
+                       (see the comment block above _NEON_CREDENTIAL_RE):
+                       flags a non-safe tool whose name contains a
+                       credential-shaped word so the notification says
+                       something more useful than a bare "unsafe". Checked
+                       first only so a credential-shaped name can never
+                       accidentally match the (now-exact, non-overlapping)
+                       safe-read enumeration; safety does not depend on this
+                       branch running at all.
+      "unsafe"      -- the fail-closed default: everything else, including
+                       every unrecognised get_*/list_*/describe_* tool and
+                       any tool this classifier has never seen before.
+    Both regexes use .fullmatch() -- see _DISPATCH_NAME_RE's comment for why
+    match()+trailing $ lets a trailing-newline tool name through.
+
+    PREFIX HARDENING (4th pass, 2026-08-24 -- security reproduced this
+    directly against the classifier): the prefix gate previously did a bare
+    `tool_name.startswith("mcp__neon__")`, so an uppercase
+    "MCP__NEON__delete_branch", a leading space, or a leading newline all
+    fell through the first `if` below to `return None` -- i.e. "not a Neon
+    tool at all", identical to a genuinely unrelated tool, instead of being
+    recognised and classified. `normalized` below is `.lstrip().lower()`
+    ONLY (leading whitespace stripped, case folded) -- deliberately NOT a
+    full `.strip()`: stripping the TRAILING side too would silently re-open
+    the exact bypass the .fullmatch() switch above already closed (a
+    regression-tested case -- see tests/cast-neon-notify-guard.bats's
+    trailing-newline test), so trailing whitespace is left in place and
+    still fails every fullmatch below, still falling through to "unsafe".
+    Deliberately narrow scope: a leading NON-whitespace character is not
+    stripped, so this must not and does not widen into typosquat matching --
+    "mcp__neonfake__delete_all" still does not start with "mcp__neon__"
+    after normalisation (it starts with "mcp__neonfake__") and still
+    correctly returns None. Both regex fullmatch calls below now run
+    against `normalized` too, not just the prefix test, so a case/whitespace
+    variant of a genuinely safe read (e.g. "MCP__NEON__LIST_PROJECTS")
+    classifies the SAME as its canonical-case form instead of merely
+    happening to fail closed by accident of case.
+
+    Prefix-scoped to the neon server only -- a non-Neon mcp__<other>__* tool
+    is deliberately NOT matched (a different server needs its own guard)."""
+    tool_name = tool_name or ""
+    normalized = tool_name.lstrip().lower()
+    if not normalized.startswith("mcp__neon__"):
+        return None
+    if _NEON_CREDENTIAL_RE.fullmatch(normalized):
+        return "credential"
+    if _NEON_SAFE_READ_RE.fullmatch(normalized):
+        return None
+    return "unsafe"
+
+
+def _notify_neon_risk(tool, tool_input, data):
+    """Notify + record a risky (credential or unsafe/write) Neon MCP tool
+    call. Never blocks (main() does not consult a return value here) and
+    never raises -- fail-open, matching this file's module-level contract
+    ("any unhandled error -> exit 0; a guard crash must never block all
+    tool use").
+
+    RECORD: a top-level (non-subprocess) call is already recorded moments
+    later by the normal EGRESS step further down in main() (_run_egress ->
+    sentinel.record()), which captures the FULL tool_name (e.g.
+    "mcp__neon__delete_branch", not just surface/server) to
+    logs/egress.jsonl -- "neon" is classified cloud_bound in
+    config/egress-policy.json, so every neon call already reaches record().
+    Calling record() again here for that case would double-write the
+    ledger, so this function fills only the one real gap: a DISPATCHED
+    SUBAGENT (CLAUDE_SUBPROCESS=1) never reaches that later step at all --
+    main()'s recursion-prevention early-return returns 0 first, before step
+    2 (EGRESS) ever runs. Only that case gets an explicit record() call
+    here.
+
+    tool_input payloads are deliberately never added to the ledger line or
+    the notify message -- record() already omits generic tool_input fields
+    for every MCP surface (a documented no-payload invariant, not a
+    Neon-specific gap; see cast-egress-sentinel.py's record() docstring/
+    comments), and the notify message below is built from the tool NAME
+    only, never tool_input, so this guard does not widen what gets
+    persisted or displayed.
+
+    EVENT TYPE: uses "neon_write", not "blocked" -- by the time this code
+    runs the tool has NOT been blocked; permissions.ask, a separate
+    client-side gate, has either already prompted-and-been-approved or
+    never applied at all for a dispatched subagent. Sending "blocked" for
+    an action that proceeds trains the user to ignore real blocks (security
+    finding). Deliberately does NOT bypass quiet hours: unlike
+    budget_alert, which needs immediate attention to stop a cost overrun,
+    this is a record-only FYI about an action that has already been
+    approved or already happened -- see scripts/cast-notify.sh's
+    in_quiet_hours call site for the matching inline comment.
+    """
+    try:
+        risk = _classify_neon_risk(tool)
+        if risk is None:
+            return
+        # --- notify: best-effort desktop notification; never blocks. ---
+        try:
+            import subprocess as _sp
+            notify_script = os.path.join(SCRIPT_DIR, "cast-notify.sh")
+            if os.path.isfile(notify_script):
+                label = "CREDENTIAL" if risk == "credential" else "write/unsafe"
+                _sp.run(
+                    ["bash", notify_script, "neon_write",
+                     f"Neon {label} tool called: {tool}",
+                     "CAST Neon Guard"],
+                    timeout=3, capture_output=True,
+                )
+        except Exception:
+            pass
+        # --- record: only the subagent gap (see docstring above) ---
+        if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
+            sentinel = _load("cast_egress_sentinel", "cast-egress-sentinel.py")
+            if sentinel is not None:
+                action = _run_egress(sentinel, data)
+                if action is not None:
+                    _emit_egress(sentinel, action)
+    except Exception:
+        pass
+
+
 def _block(message):
     if message:
         print(message, file=sys.stderr)
@@ -394,6 +653,11 @@ def main():
                     except Exception:
                         pass
                     return _block(message)
+
+    # 0.5. Neon MCP unsafe-tool notify guard -- fires in EVERY context (see
+    #      _notify_neon_risk's docstring), same "every context" rule as the
+    #      Bash git/kill/rm guards above. Notify + record only -- never blocks.
+    _notify_neon_risk(tool, tool_input, data)
 
     # Recursion-prevention skip: the REST of the dispatcher (Write/Edit path policy
     # engine + TTL sweep, egress I/O, dispatch_decisions capture) is suppressed for
