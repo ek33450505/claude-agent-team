@@ -644,6 +644,126 @@ class TestMcpParsing(unittest.TestCase):
         self.assertTrue(result, "fail-safe VALUE must not change")
         mock_log.assert_called_once()
 
+    # -- J-2: mcp_servers._default_unknown is now the single source of truth
+    # for classifying an unknown server, resolved via the sibling sentinel's
+    # _resolve_unknown_is_cloud_bound() (imported, never re-derived here).
+
+    def test_mcp_is_cloud_bound_default_unknown_local_only(self):
+        """What a PASSING run looks like while the J-2 defect is present:
+        this FAILS (asserts False, the old hardcoded version returns True
+        for every unknown server regardless of _default_unknown)."""
+        policy = {
+            "mcp_servers": {
+                "_default_unknown": "local_only",
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertFalse(cast_audit._mcp_is_cloud_bound("some-unlisted-server"))
+
+    def test_mcp_is_cloud_bound_default_unknown_cloud_bound_explicit(self):
+        """Today's real-corpus value: current observable behavior for an
+        unknown server must not change."""
+        policy = {
+            "mcp_servers": {
+                "_default_unknown": "cloud_bound",
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("some-unlisted-server"))
+
+    def test_mcp_is_cloud_bound_default_unknown_key_absent_fails_safe_true(self):
+        """A policy that omits _default_unknown entirely must still fail
+        safe to cloud-bound for an unknown server — a discriminating
+        fixture: it has no cloud_bound/local_only entry that would produce
+        True by coincidence via the explicit-list branches."""
+        policy = {"mcp_servers": {"cloud_bound": ["github"], "local_only": ["cast-record"]}}
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("some-unlisted-server"))
+
+    def test_mcp_is_cloud_bound_default_unknown_garbage_value_fails_safe_true(self):
+        """An unrecognized _default_unknown value (typo/garbage) must fail
+        safe to cloud-bound, never silently downgrade to local."""
+        policy = {
+            "mcp_servers": {
+                "_default_unknown": "banana",
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("some-unlisted-server"))
+
+    def test_mcp_is_cloud_bound_default_unknown_local_only_does_not_affect_known_cloud_server(self):
+        """A KNOWN cloud_bound server must stay cloud-bound even when
+        _default_unknown is relaxed to local_only — the explicit list wins
+        over the default, it is never consulted for a listed server."""
+        policy = {
+            "mcp_servers": {
+                "_default_unknown": "local_only",
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("github"))
+
+    def test_mcp_is_cloud_bound_default_unknown_cloud_bound_does_not_affect_known_local_server(self):
+        """A KNOWN local_only server must stay local even when
+        _default_unknown is cloud_bound."""
+        policy = {
+            "mcp_servers": {
+                "_default_unknown": "cloud_bound",
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            self.assertFalse(cast_audit._mcp_is_cloud_bound("cast-record"))
+
+    def test_mcp_is_cloud_bound_default_unknown_resolver_unavailable_fails_safe_true(self):
+        """If the sibling sentinel's resolver can't be loaded (e.g. missing
+        file), _mcp_is_cloud_bound() must still fail safe to True for an
+        unknown server — even with a policy that would otherwise say
+        local_only. Fail-safe on the LOADER path, not just the value path."""
+        policy = {
+            "mcp_servers": {
+                "_default_unknown": "local_only",
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            with mock.patch.object(cast_audit, "_load_egress_sentinel_resolver", return_value={}):
+                self.assertTrue(cast_audit._mcp_is_cloud_bound("some-unlisted-server"))
+
+    def test_mcp_is_cloud_bound_default_unknown_wired_through_parse_tool_fields(self):
+        """Wiring-level check: parse_tool_fields()'s is_cloud_bound field must
+        reflect _default_unknown=local_only for an unknown server, not the
+        base-dict True/False default."""
+        policy = {
+            "mcp_servers": {
+                "_default_unknown": "local_only",
+                "cloud_bound": ["github"],
+                "local_only": ["cast-record"],
+            }
+        }
+        candidates = self._egress_policy_candidates(policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", candidates):
+            data = {"tool_name": "mcp__somenewthing__do", "tool_input": {}}
+            result = cast_audit.parse_tool_fields(data)
+            self.assertFalse(result["is_cloud_bound"])
+
     def test_outcome_ok_no_error_key(self):
         data = {
             "tool_name": "mcp__srv__tool",

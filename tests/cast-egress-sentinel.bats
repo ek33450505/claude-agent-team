@@ -83,6 +83,86 @@ teardown() {
   assert_output --partial '"unknown_server":true'
 }
 
+# --- J-2: mcp_servers._default_unknown is now the single source of truth -
+# for how classify() treats an unknown server. Every fixture below is
+# written to $HOME/.claude/config/egress-policy.json (never the real repo
+# config/egress-policy.json) and consulted only because we `cd` to a
+# directory with no config/ subdir of its own, so _load_policy()'s cwd-first
+# candidate misses and falls through to the CLAUDE_DIR (temp $HOME) one.
+
+_write_default_unknown_policy() {
+  # $1 = raw JSON to write in place of _default_unknown's value line, e.g.
+  # '"_default_unknown": "local_only"' or the key omitted entirely.
+  cat > "$HOME/.claude/config/egress-policy.json" <<EOF
+{
+  "mcp_servers": {
+    $1
+    "cloud_bound": ["knowncloud"],
+    "local_only": ["knownlocal"]
+  }
+}
+EOF
+}
+
+@test "_default_unknown=local_only + unknown server → NOT recorded (silent)" {
+  _write_default_unknown_policy '"_default_unknown": "local_only",'
+  run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__somenewthing__do)'"
+  assert_success
+  [[ ! -f "$EGRESS_LOG" ]]
+}
+
+@test "_default_unknown=cloud_bound (explicit) + unknown server → recorded + flagged unknown" {
+  _write_default_unknown_policy '"_default_unknown": "cloud_bound",'
+  run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__somenewthing__do)'"
+  assert_success
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"unknown_server":true'
+}
+
+@test "_default_unknown key ABSENT + unknown server → recorded (fail-safe cloud)" {
+  _write_default_unknown_policy ''
+  run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__somenewthing__do)'"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"unknown_server":true'
+}
+
+@test "_default_unknown garbage value + unknown server → recorded (fail-safe cloud)" {
+  _write_default_unknown_policy '"_default_unknown": "banana",'
+  run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__somenewthing__do)'"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"unknown_server":true'
+}
+
+@test "malformed policy JSON + unknown server → recorded (fail-safe cloud)" {
+  echo '{not valid json' > "$HOME/.claude/config/egress-policy.json"
+  run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__somenewthing__do)'"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"unknown_server":true'
+}
+
+@test "_default_unknown=local_only does not affect a KNOWN local_only server (still silent)" {
+  _write_default_unknown_policy '"_default_unknown": "local_only",'
+  run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__knownlocal__do)'"
+  assert_success
+  [[ ! -f "$EGRESS_LOG" ]]
+}
+
+@test "_default_unknown=local_only does not affect a KNOWN cloud_bound server (still recorded)" {
+  _write_default_unknown_policy '"_default_unknown": "local_only",'
+  run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__knowncloud__do)'"
+  assert_success
+  [[ -f "$EGRESS_LOG" ]]
+  run tail -1 "$EGRESS_LOG"
+  assert_output --partial '"server":"knowncloud"'
+  assert_output --partial '"unknown_server":false'
+}
+
 # --- credential read ------------------------------------------------------
 
 @test "Read of ~/.ssh/id_rsa → credential_read event" {

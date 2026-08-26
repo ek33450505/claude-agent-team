@@ -173,10 +173,51 @@ def _load_egress_policy() -> dict:
     return {}
 
 
+# Cache for the sibling sentinel's _default_unknown resolver: None = not yet
+# attempted, {} = attempted and unavailable (don't retry), populated dict =
+# loaded callable.
+_EGRESS_SENTINEL_RESOLVER: dict | None = None
+
+
+def _load_egress_sentinel_resolver() -> dict:
+    """Load _resolve_unknown_is_cloud_bound() from the sibling
+    cast-egress-sentinel.py — the single reader of mcp_servers._default_unknown
+    — via importlib, mirroring the pattern cast-egress-sentinel.py itself uses
+    to load cast-command-guard.py (issue #343). Reused rather than
+    reimplemented so both classifiers resolve the policy's unknown-server
+    default identically and can never disagree. Resolved relative to THIS
+    file so it works both in-repo and installed. Returns {} on any failure —
+    the caller falls back to the same fail-safe (True) inline. Import-time
+    safety: cast-egress-sentinel.py has only module-level constants + defs
+    (its main() is __name__-guarded), no side effects.
+    """
+    global _EGRESS_SENTINEL_RESOLVER
+    if _EGRESS_SENTINEL_RESOLVER is not None:
+        return _EGRESS_SENTINEL_RESOLVER
+    _EGRESS_SENTINEL_RESOLVER = {}
+    try:
+        import importlib.util
+        sentinel_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "cast-egress-sentinel.py"
+        )
+        if not os.path.isfile(sentinel_path):
+            return _EGRESS_SENTINEL_RESOLVER
+        spec = importlib.util.spec_from_file_location("cast_egress_sentinel", sentinel_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _EGRESS_SENTINEL_RESOLVER = {
+            "resolve_unknown_is_cloud_bound": mod._resolve_unknown_is_cloud_bound,
+        }
+    except Exception as e:
+        _log_error(f"egress sentinel resolver load failed: {e}")
+        _EGRESS_SENTINEL_RESOLVER = {}
+    return _EGRESS_SENTINEL_RESOLVER
+
+
 def _mcp_is_cloud_bound(server: str) -> bool:
     """Classify from CAST's CANONICAL egress policy
     (config/egress-policy.json -> mcp_servers), matching the semantics of
-    scripts/cast-egress-sentinel.py:153-158 EXACTLY.
+    scripts/cast-egress-sentinel.py's classify() EXACTLY.
 
     Transport (stdio vs http) is NOT a reliable signal and must NOT be
     consulted here — the policy file's own _doc says why: github uses local
@@ -187,24 +228,29 @@ def _mcp_is_cloud_bound(server: str) -> bool:
 
     server in local_only  -> False
     server in cloud_bound -> True
-    otherwise (unknown)   -> True (honors the policy's _default_unknown,
-                              currently "cloud_bound" — the sentinel's own
-                              reader hardcodes this same unknown-is-cloud-
-                              bound behavior rather than re-deriving it, so
-                              this matches it exactly rather than reading
-                              _default_unknown dynamically)
+    otherwise (unknown)   -> resolved via mcp_servers._default_unknown,
+                              read by _resolve_unknown_is_cloud_bound()
+                              (imported from the sentinel, the single reader
+                              of that key — never re-derived here, so this
+                              can't drift from the sentinel's own answer)
 
-    Fail-safe: ANY failure (missing file, malformed JSON, missing key)
-    -> True. This is a RECORD/OBSERVABILITY field only — see the note where
-    it's set in parse_tool_fields().
+    Fail-safe: ANY failure (missing file, malformed JSON, missing key,
+    resolver unavailable) -> True. This is a RECORD/OBSERVABILITY field
+    only — see the note where it's set in parse_tool_fields().
     """
     if not server:
         return True
     try:
-        mcp = _load_egress_policy().get("mcp_servers", {})
+        policy = _load_egress_policy()
+        mcp = policy.get("mcp_servers", {})
         if server in mcp.get("local_only", []):
             return False
-        return True
+        if server in mcp.get("cloud_bound", []):
+            return True
+        resolver = _load_egress_sentinel_resolver().get("resolve_unknown_is_cloud_bound")
+        if resolver is None:
+            return True  # fail-safe: sentinel resolver unavailable
+        return bool(resolver(policy))
     except Exception:
         return True
 
