@@ -2,6 +2,24 @@
 """
 write-guards.py — Unified Python backend for write-guards.sh (Phase 4, Unit 1).
 Parses PreToolUse input ONCE, extracts tool metadata, validates against three guards.
+
+SCOPE — this is a Write/Edit-TOOL layer, not full coverage.
+settings.json wires this hook on matcher "Write|Edit" only, so it sees a write
+only when it arrives via the Write or Edit tool. A Bash-side write to the same
+path -- `cp`, `sed -i`, `cat > README.md`, a heredoc -- never reaches this guard
+and is NOT checked here. Not hypothetical: the v10 README rewrite was installed
+with `cp` and this guard did not fire.
+
+The real gate for README stat drift is `gen-stats.sh --check`, which runs in
+.githooks/pre-push and in the stats-guard CI job. Both were mutation-tested on
+2026-08-26: corrupting the tests badge turned --check RED, restoring turned it
+green -- so the check is not vacuous against the HTML <img> badges either. A
+Bash-side write is therefore still caught, later and louder, just not at the
+moment of the write.
+
+A guard's matcher is part of its threat model. This note exists so the layer is
+not mistaken for complete coverage -- the same defect class as SEC-1 (a guard
+that scanned only line 1) and SEC-3 (`--bare` removing the whole hook pipeline).
 """
 import json
 import os
