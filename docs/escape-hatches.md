@@ -135,7 +135,18 @@ echo "CAST_PUSH_OK=1" && git push
 
 7. **Hatch Values are Matched Strictly:** The hatch value must be set as `VAR=1` (unquoted). Quoted forms like `CAST_RESET_OK="1"` are accepted; non-1 values like `CAST_RESET_OK="10"` are NOT and will still block. The hatch must be a real bash assignment prefix on the same shell segment as the command.
 
-8. **Most Hatches are Not Yet Recorded:** v10 added `scripts/cast_ack.py` and an `ack_events` table to make bypasses a recorded primitive. Today only `CAST_NEON_BRANCH_DELETE_OK` and `CAST_REVIEW_BLOCK_OK` attempt recording (best-effort only — the recording call is `|| true` and can fail silently, in which case the bypass still happens with no CAST-side record). Others may record in the future; assume the current position — do NOT infer that hatches without explicit recording statements record.
+8. **The hatch must be the FIRST assignment.** When composing two env vars, the hatch goes first. Other `VAR=value` assignments may follow it, never precede it — the ALLOW patterns are anchored as `CAST_<OP>_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git`, so anything before the hatch breaks the anchor and the op blocks. Measured:
+
+   ```bash
+   CAST_COMMIT_AGENT=1 CAST_SKIP_PLUGIN_DRIFT=1 git commit   # ✓ allowed
+   CAST_SKIP_PLUGIN_DRIFT=1 CAST_COMMIT_AGENT=1 git commit   # ✗ BLOCKED — hatch is not first
+   ```
+
+   Tolerance for assignments *after* the hatch was the v9.5.2 fix; nothing was ever allowed before it. The failure reads as "the hatch doesn't work" rather than "the hatch is in the wrong position", which is what makes it worth stating.
+
+9. **Passing a message that names a guarded command.** Since the guard scans every line including heredoc bodies, a commit message mentioning e.g. a guarded op can itself trigger a block. Use `git commit -F <file>` rather than a `-m` heredoc, so the body never enters the scanned command string.
+
+10. **Most Hatches are Not Yet Recorded:** v10 added `scripts/cast_ack.py` and an `ack_events` table to make bypasses a recorded primitive. Today only `CAST_NEON_BRANCH_DELETE_OK` and `CAST_REVIEW_BLOCK_OK` attempt recording (best-effort only — the recording call is `|| true` and can fail silently, in which case the bypass still happens with no CAST-side record). Others may record in the future; assume the current position — do NOT infer that hatches without explicit recording statements record.
 
 ---
 
