@@ -79,7 +79,28 @@ actual_files=$(echo "$actual_files" | tr -d ' ')
 # Anchor must be unique in the ledger — the combined form so the historical
 # "prior count of 23 across 14 files" prose note (which lacks the "Total
 # call sites:" prefix) cannot be matched instead.
-mapfile -t matches < <(grep -oE 'Total call sites: [0-9]+\*\* across [0-9]+ files' "$LEDGER")
+# bash 3.2 has no mapfile/readarray builtin (macOS ships /bin/bash 3.2.57) —
+# use a while-read loop instead. Must yield a truly empty array on no match,
+# not a one-element array containing "".
+#
+# TWO DEPENDENCIES, both load-bearing, both invisible if you refactor this:
+#
+#   1. `while IFS= read -r` DROPS a final line that has no trailing newline,
+#      where `mapfile -t` would have kept it. Safe ONLY because the input is
+#      grep's stdout, and grep always terminates its output with a newline.
+#      If this is ever changed to read a FILE directly, a ledger whose last
+#      line lacks a trailing newline would silently lose its anchor.
+#
+#   2. `|| true` swallows grep's rc=1 (no match, expected) AND rc=2 (a real
+#      error, e.g. unreadable file) — ERROR and EMPTY become indistinguishable,
+#      a defect class this repo has been bitten by before. Safe ONLY because
+#      the caller has already established the ledger exists and is readable
+#      (the -f check above). Remove that check and this becomes live: an
+#      unreadable ledger would report "no anchor found" rather than the truth.
+matches=()
+while IFS= read -r _match_line; do
+	matches+=("$_match_line")
+done < <(grep -oE 'Total call sites: [0-9]+\*\* across [0-9]+ files' "$LEDGER" || true)
 
 if [[ "${#matches[@]}" -eq 0 ]]; then
 	echo "cast-check-skip-ledger: FATAL — no 'Total call sites: N** across M files' anchor found in $LEDGER" >&2

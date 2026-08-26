@@ -37,11 +37,26 @@
 # scanning shebangs at run time, not a hardcoded file list, so new scripts
 # are automatically covered.
 #
+# TWO DIFFERENT CHECKS, NOT ONE — READ BEFORE TRUSTING A GREEN RUN:
+#   1) `$BASH_BIN -n` (PARSE-ONLY): validates syntax without executing
+#      anything. It CANNOT see that mapfile/readarray don't exist as
+#      builtins in bash 3.2 — that is a RUNTIME failure (`mapfile: command
+#      not found`, rc=127), and a file using mapfile parses perfectly
+#      clean under `-n` on 3.2. This is exactly how
+#      scripts/cast-check-skip-ledger.sh shipped a live bats-macos CI
+#      break (2026-08-26) while passing this lint.
+#   2) The bash-4-only-builtin grep below: a static text check for
+#      mapfile/readarray as actual invocations (comment-only mentions are
+#      excluded). This is the check that catches the class `-n` cannot.
+#   Both must pass; neither substitutes for the other.
+#
 # Exit codes:
-#   0 — every scanned file parses clean under `$BASH_BIN -n`
-#   1 — one or more files failed to parse (listed with error text), OR the
-#       bash binary was not found/executable, OR zero files were scanned
-#       (fail-closed — a lint that scans nothing must never pass)
+#   0 — every scanned file parses clean under `$BASH_BIN -n` AND invokes no
+#       bash-4-only builtin (mapfile/readarray)
+#   1 — one or more files failed to parse, OR one or more files invoke a
+#       bash-4-only builtin, OR the bash binary was not found/executable,
+#       OR zero files were scanned (fail-closed — a lint that scans
+#       nothing must never pass)
 #
 # Usage:
 #   cast-lint-bash32-parse.sh [--help]
@@ -149,4 +164,50 @@ if [[ "${errors}" -gt 0 ]]; then
 fi
 
 echo "OK [cast-lint-bash32-parse]: ${#BASH_FILES[@]} bash-shebang file(s) parse clean under ${BASH_BIN}"
+
+# --- Bash-4-only builtin check (separate mechanism from -n above; see header) ---
+# `-n` cannot see this class of bug: mapfile/readarray parse fine on 3.2 and
+# fail only at runtime. This is a plain static grep for real invocations,
+# excluding whole-line comments (a comment merely NAMING mapfile/readarray,
+# like the ones in this very file's own header prose, is not a bug).
+echo "[cast-lint-bash32-parse] checking for bash-4-only builtins (mapfile, readarray)..."
+
+builtin_errors=0
+declare -a builtin_report=()
+
+for f in "${BASH_FILES[@]}"; do
+	# Exclude this lint script's OWN file: the grep pattern immediately
+	# below contains the literal words "mapfile"/"readarray" as CODE (not
+	# just a comment), which would otherwise self-match — the same
+	# self-match trap tests/skip-ledger-drift.bats handles by excluding
+	# its own filename from the enumeration it verifies.
+	[[ "${f}" == *"cast-lint-bash32-parse.sh" ]] && continue
+
+	hits=$(grep -nE '(^|[^#[:alnum:]_])(mapfile|readarray)([[:space:]]|$)' "${f}" 2>/dev/null |
+		grep -vE '^[0-9]+:[[:space:]]*#' || true)
+	if [[ -n "${hits}" ]]; then
+		builtin_errors=$((builtin_errors + 1))
+		builtin_report+=("${f}:")
+		while IFS= read -r hit_line; do
+			builtin_report+=("    ${hit_line}")
+		done <<<"${hits}"
+	fi
+done
+
+if [[ "${builtin_errors}" -gt 0 ]]; then
+	echo "" >&2
+	echo "BLOCKED [cast-lint-bash32-parse]: ${builtin_errors} file(s) invoke a bash-4-only builtin" >&2
+	echo "  (mapfile/readarray) that does not exist in bash 3.2. These PARSE fine under" >&2
+	echo "  ${BASH_BIN} -n and fail only at RUNTIME ('command not found', rc=127) on macOS's" >&2
+	echo "  real /bin/bash. Replace with:" >&2
+	echo "    arr=()" >&2
+	echo "    while IFS= read -r line; do arr+=(\"\${line}\"); done < <(producer-command)" >&2
+	echo "" >&2
+	for line in "${builtin_report[@]}"; do
+		echo "  ${line}" >&2
+	done
+	exit 1
+fi
+
+echo "OK [cast-lint-bash32-parse]: 0 bash-4-only builtin (mapfile/readarray) invocations found"
 exit 0
