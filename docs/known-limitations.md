@@ -10,6 +10,17 @@ This document records framework-level limitations that are not bugs but rather c
 
 > **Partially resolved — v7 Phase 1 (2026-05-08):** Three additional friction points were addressed: (1) `push`, `install`, and `compact` operations now run with `bypassPermissions` mode so agent-initiated pushes no longer stall mid-chain waiting for user approval; (2) PII redaction via `cast-redact.py` prevents session tokens and API keys from being logged to `cast.db` or hook output, reducing the blast radius of a dropped/replayed session; (3) the `pre_approved: true` manifest flag is now the documented default for long-running plans. The core gap — inability to resume a dropped subagent session — remains open at the Claude Code runtime level.
 
+> **⚠️ Correction — 2026-08-26 (v10 SEC-3):** Point (1) above is false as of this date, and the mechanism
+> it names is narrower than it sounds. **`push`, `install` and `compact` do NOT run with
+> `bypassPermissions`** — `agents/core/morning-briefing.md:12` is the only agent in the repo carrying
+> `permissionMode: bypassPermissions` (grepped repo-wide). Separately, `bypassPermissions` does **not**
+> disable `permissions.ask` gates: the Claude Code docs state that tools matched by an explicit ask rule
+> are among the "actions no mode auto-approves … including `bypassPermissions`", that "Deny rules block in
+> every mode, including `bypassPermissions`", and that a PreToolUse hook exiting 2 "stops the tool call
+> before permission rules are evaluated". What `bypassPermissions` *does* disable is the built-in
+> **protected-paths** protection. The real hook-removal mechanism is **`--bare`**, not `bypassPermissions`.
+> See `plans/next-session.md` → SEC-3.
+
 **Symptom:** If the main session is dropped mid-execution (network error, timeout, process kill), dispatched specialist subagents cannot be resumed via `SendMessage`.
 
 **Root cause:** Claude Code's `Agent` tool does not expose a `SendMessage` / continuation mechanism for already-running subagent contexts. When a subagent's session ends, it ends permanently.

@@ -310,7 +310,11 @@ import os, sys, subprocess
 prompt = os.environ.get('CAST_EXEC_PROMPT', '')
 log_file = sys.argv[1]
 agent = sys.argv[2]
-cmd = ['claude', '--agent', agent, '--print', '--bare', '--dangerously-skip-permissions', '-p', prompt]
+# NEVER add bare mode back to this cmd list: it skips ~/.claude hook
+# auto-discovery (CAST's entire PreToolUse guard pipeline) and never reads
+# OAuth credentials/the keychain, so a bare dispatch fails auth outright
+# (SEC-3, 2026-08-26; see tests/cast-exec-no-bare.bats).
+cmd = ['claude', '--agent', agent, '--print', '--dangerously-skip-permissions', '-p', prompt]
 with open(log_file, 'w') as f:
     result = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
 sys.exit(result.returncode)
@@ -334,7 +338,11 @@ import os, sys, subprocess
 prompt = os.environ.get('CAST_EXEC_PROMPT', '')
 log_file = sys.argv[1]
 agent = sys.argv[2]
-cmd = ['claude', '--agent', agent, '--print', '--bare', '--dangerously-skip-permissions', '-p', prompt]
+# NEVER add bare mode back to this cmd list: it skips ~/.claude hook
+# auto-discovery (CAST's entire PreToolUse guard pipeline) and never reads
+# OAuth credentials/the keychain, so a bare dispatch fails auth outright
+# (SEC-3, 2026-08-26; see tests/cast-exec-no-bare.bats).
+cmd = ['claude', '--agent', agent, '--print', '--dangerously-skip-permissions', '-p', prompt]
 with open(log_file, 'w') as f:
     result = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
 sys.exit(result.returncode)
