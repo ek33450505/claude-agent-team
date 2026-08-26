@@ -30,6 +30,14 @@ Reachability set (surfaces searched for each script basename):
 Self-references (a script's own content) are excluded from the check so that
 a script that only mentions its own name in comments/shebang is still flagged.
 
+A FULL-LINE comment (first non-whitespace char is '#') in a .sh/.py/.bash
+surface does not count as a real caller — see _strip_full_line_comments.
+A TRAILING comment (``foo  # see cast-x.sh``) still counts as a caller;
+telling it apart from a real invocation needs lexing, which this lint
+deliberately does not attempt (see J-10 / v10 SEC-1 lesson). A script whose
+only reference(s) are full-line comments is reported separately (see
+comment_only_refs in check_orphan_scripts) rather than silently passing.
+
 Hermeticity rule: this script MUST read only repo files, never the live
 ~/.claude install. Every path resolution bottoms out at repo_root/scripts/<name>.
 Absolute paths (``/usr/...``) are treated as contract violations in settings.json.
@@ -218,6 +226,33 @@ def check_fragments(repo_root: str) -> list[str]:
 # Reverse pass — orphan scripts (no caller found)
 # ---------------------------------------------------------------------------
 
+# Extensions where a leading '#' is unambiguously a comment marker.  Kept
+# narrow on purpose: JSON surfaces (settings.json, managed-settings.d/*.json)
+# have no comment syntax at all, so stripping '#'-leading lines there would
+# corrupt matching against real JSON content. YAML/.plist/Makefile also use
+# '#' for comments but are deliberately NOT included here -- extending this
+# set is a separate, explicitly-scoped follow-up, not part of this fix.
+_COMMENT_STRIP_EXTENSIONS: set[str] = {".sh", ".py", ".bash"}
+
+
+def _strip_full_line_comments(content: str) -> str:
+    """Remove lines whose first non-whitespace character is '#'.
+
+    Deliberately narrow: only a FULL-LINE comment (nothing but whitespace
+    before the '#') is stripped. A TRAILING comment (``foo  # see x.sh``)
+    is NOT stripped, because distinguishing a real trailing '#' from one
+    inside a string literal requires actual shell/Python lexing -- v10
+    SEC-1 removed exactly that kind of machinery (a heredoc detector, a
+    quote-parity replacer, and a comment-dropper each proved unsafe) on the
+    recorded lesson that comment-hood is decided word-wise during lexing,
+    not by scanning characters. This function only ever handles the
+    unambiguous case and does not claim to cover trailing comments.
+    """
+    kept_lines = [
+        line for line in content.splitlines() if not line.lstrip().startswith("#")
+    ]
+    return "\n".join(kept_lines)
+
 # Glob patterns (relative to repo_root) whose text content is searched
 # for each script's basename.  Self-references are excluded per-script.
 #
@@ -258,12 +293,19 @@ def _collect_surface_files(repo_root: str) -> list[str]:
     return files
 
 
-def check_orphan_scripts(repo_root: str) -> list[str]:
-    """Return basenames of scripts/ not referenced anywhere outside themselves.
+def check_orphan_scripts(repo_root: str) -> tuple[list[str], list[str]]:
+    """Return (orphans, comment_only_refs) for scripts/ with no real caller.
 
-    Does NOT raise or exit — returns a (possibly empty) list of warnings.
+    Does NOT raise or exit — both lists are warnings only (see main()); the
+    reverse pass has never affected the exit code and that is unchanged here.
     Self-references are excluded: if the only mention of 'foo.sh' is inside
     'foo.sh' itself, it is still flagged.
+
+    A "real" caller excludes a FULL-LINE comment mention (first non-whitespace
+    char is '#') in a .sh/.py/.bash surface — see _strip_full_line_comments
+    for exactly what that does and does not cover. A script whose ONLY
+    reference(s) are such comment lines is reported separately in
+    comment_only_refs rather than silently passing as "has a caller".
     """
     script_pattern_sh = os.path.join(repo_root, "scripts", "*.sh")
     script_pattern_py = os.path.join(repo_root, "scripts", "*.py")
@@ -273,29 +315,64 @@ def check_orphan_scripts(repo_root: str) -> list[str]:
 
     surface_files = _collect_surface_files(repo_root)
     # Pre-read surface file contents keyed by absolute path for speed
-    surface_content: dict[str, str] = {}
+    surface_raw: dict[str, str] = {}
     for f in surface_files:
         try:
             with open(f, "r", errors="replace") as fh:
-                surface_content[f] = fh.read()
+                surface_raw[f] = fh.read()
         except OSError:
-            surface_content[f] = ""
+            surface_raw[f] = ""
+
+    # Content used to decide "real caller" — full-line comments stripped for
+    # the narrow set of extensions where '#' is unambiguously a comment.
+    surface_for_matching: dict[str, str] = {}
+    for f, content in surface_raw.items():
+        ext = os.path.splitext(f)[1]
+        if ext in _COMMENT_STRIP_EXTENSIONS:
+            surface_for_matching[f] = _strip_full_line_comments(content)
+        else:
+            surface_for_matching[f] = content
 
     orphans: list[str] = []
+    comment_only_refs: list[str] = []
     for script_path in all_script_paths:
         basename = os.path.basename(script_path)
         abs_script = os.path.abspath(script_path)
-        found = False
-        for abs_surface, content in surface_content.items():
+        found_real = False
+        for abs_surface, matching_content in surface_for_matching.items():
             if abs_surface == abs_script:
                 continue  # skip self
-            if basename in content:
-                found = True
+            if basename in matching_content:
+                found_real = True
                 break
-        if not found:
+
+        if found_real:
+            continue
+
+        # No real caller found. Check whether the ONLY reference(s) are
+        # inside full-line comments, so that case is visible rather than
+        # silently indistinguishable from a genuine orphan.
+        comment_hit: str | None = None
+        for abs_surface, raw_content in surface_raw.items():
+            if abs_surface == abs_script:
+                continue
+            ext = os.path.splitext(abs_surface)[1]
+            if ext not in _COMMENT_STRIP_EXTENSIONS:
+                continue
+            for line_no, line in enumerate(raw_content.splitlines(), start=1):
+                if line.lstrip().startswith("#") and basename in line:
+                    rel = os.path.relpath(abs_surface, repo_root)
+                    comment_hit = f"{basename}  ({rel}:{line_no})"
+                    break
+            if comment_hit:
+                break
+
+        if comment_hit:
+            comment_only_refs.append(comment_hit)
+        else:
             orphans.append(basename)
 
-    return orphans
+    return orphans, comment_only_refs
 
 
 def main() -> int:
@@ -335,7 +412,7 @@ def main() -> int:
             print(f"  - {entry}", file=sys.stderr)
 
     # --- reverse pass: orphan scripts ---
-    orphan_scripts = check_orphan_scripts(repo_root)
+    orphan_scripts, comment_only_refs = check_orphan_scripts(repo_root)
 
     if orphan_scripts:
         print(
@@ -349,6 +426,21 @@ def main() -> int:
         print(
             "  To suppress: wire the script into a caller, or add it to the "
             "documented allowlist in check_orphan_scripts() if it is a standalone tool.",
+            file=sys.stderr,
+        )
+
+    if comment_only_refs:
+        print(
+            f"WARN [lint-orphan-scripts]: {len(comment_only_refs)} script(s) in scripts/ "
+            f"referenced ONLY in comments (not a caller — warning only, does not block "
+            f"commit):",
+            file=sys.stderr,
+        )
+        for entry in comment_only_refs:
+            print(f"  - {entry}", file=sys.stderr)
+        print(
+            "  A comment mention is not a real caller; wire the script into an actual "
+            "invocation or treat it as orphaned.",
             file=sys.stderr,
         )
 
