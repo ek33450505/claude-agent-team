@@ -121,6 +121,59 @@ EOF
   assert_output --partial "scanned 0"
 }
 
+@test "bash32-parse-lint BLOCKS a script that invokes the bash-4-only mapfile builtin" {
+  # This is the check `-n` cannot make: mapfile PARSES clean on 3.2 (it's
+  # valid syntax) and fails only at runtime. Regression coverage for the
+  # 2026-08-26 incident (cast-check-skip-ledger.sh shipped `mapfile -t` and
+  # broke bats-macos CI with "mapfile: command not found", rc=127).
+  local d="$BATS_TEST_TMPDIR/scan-mapfile"
+  mkdir -p "$d"
+  cat > "$d/uses-mapfile.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+mapfile -t lines < <(printf '%s\n' a b c)
+printf '%s\n' "${lines[@]}"
+EOF
+  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  assert_failure
+  assert_output --partial "uses-mapfile.sh"
+  assert_output --partial "bash-4-only builtin"
+}
+
+@test "bash32-parse-lint BLOCKS a script that invokes the bash-4-only readarray builtin" {
+  local d="$BATS_TEST_TMPDIR/scan-readarray"
+  mkdir -p "$d"
+  cat > "$d/uses-readarray.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+readarray -t lines < <(printf '%s\n' a b c)
+printf '%s\n' "${lines[@]}"
+EOF
+  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  assert_failure
+  assert_output --partial "uses-readarray.sh"
+  assert_output --partial "bash-4-only builtin"
+}
+
+@test "bash32-parse-lint does NOT flag a comment that merely names mapfile/readarray" {
+  # A comment explaining that a script deliberately AVOIDS mapfile (the
+  # exact shape this fix itself introduced in three files) must not
+  # false-positive -- only real invocations are a bug.
+  local d="$BATS_TEST_TMPDIR/scan-mapfile-comment"
+  mkdir -p "$d"
+  cat > "$d/comment-only.sh" << 'EOF'
+#!/bin/bash
+set -euo pipefail
+# bash-3.2 compatible: no mapfile/readarray here, just a while-read loop.
+lines=()
+while IFS= read -r l; do lines+=("$l"); done < <(printf '%s\n' a b c)
+printf '%s\n' "${lines[@]}"
+EOF
+  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  assert_success
+  assert_output --partial "0 bash-4-only builtin"
+}
+
 @test "bash32-parse-lint ignores files without a bash shebang" {
   local d="$BATS_TEST_TMPDIR/scan-nonbash"
   mkdir -p "$d"

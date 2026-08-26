@@ -7,9 +7,11 @@
 # indentation preservation, --apply idempotency, MEMORY.md exclusion,
 # unknown-flag exit-2-no-mutation, multi-root ref resolution (bare basename,
 # memory-own-dir, missing project dir), the NO-REFS class, decode_project_dir's
-# underscore/dot trailing-component recovery (Change 1), and the
-# EPHEMERAL-ONLY class for dead session artifacts under claude/{plans,
-# reports,resume-prompts,research} (Change 2).
+# underscore/dot trailing-component recovery (Change 1), the EPHEMERAL-ONLY
+# class for dead session artifacts under claude/{plans, reports,
+# resume-prompts,research} (Change 2), the RETIRED class for refs naming a
+# file deliberately deleted from the memory's own project git history, and
+# the bare-extension extraction guard ("init/.sh/.py") (CAST v10 J-4).
 #
 # HARD RULE: never runs --apply against real memory data — CAST_MEMORIES_BASE_DIR
 # is always a tempdir created by setup_temp_home.
@@ -30,6 +32,28 @@ FAKE_REF="scripts/cast-definitely-not-real-xyz123.sh"
 # root, and not directly in $HOME — so resolving it requires the fix's
 # "<root>/scripts/<basename>" joining, not the old cwd/$HOME-only check.
 BARE_BASENAME="cast_db.py"
+
+# Creates a throwaway git repo at "$1" containing a file (basename "$2",
+# default retired-fixture.sh) that is added then deleted, so the RETIRED
+# tests exercise get_retired_info() against REAL git history rather than a
+# stub. Sets DELETED_SHA to the short hash of the deleting commit.
+_make_retired_repo() {
+    local repo_dir="$1"
+    local basename="${2:-retired-fixture.sh}"
+    mkdir -p "$repo_dir/scripts"
+    (
+        cd "$repo_dir" || exit 1
+        git init -q
+        git config user.email "bats@example.com"
+        git config user.name "bats-test"
+        touch "scripts/$basename"
+        git add -A
+        git commit -q -m "add $basename"
+        git rm -q "scripts/$basename"
+        git commit -q -m "remove $basename"
+    )
+    DELETED_SHA=$(git -C "$repo_dir" log --diff-filter=D --format='%h' -1 -- "scripts/$basename")
+}
 
 setup() {
     setup_temp_home
@@ -60,7 +84,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -84,7 +108,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -106,7 +130,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     refute_output --partial "REF-BROKEN:"
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
@@ -142,7 +166,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     assert_output --partial "missing ref: $FAKE_REF"
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
@@ -274,7 +298,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "0 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
     assert_success
@@ -333,7 +357,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     refute_output --partial "missing ref: $BARE_BASENAME"
 }
 
@@ -358,7 +382,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     refute_output --partial "missing ref: companion-xyz.sh"
 }
 
@@ -383,7 +407,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     assert_output --partial "missing ref: src/would-be-resolved-xyz.py"
 }
 
@@ -410,7 +434,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 1 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 1 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     assert_output --partial "NO-REFS (not bump-eligible"
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
@@ -443,7 +467,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     refute_output --partial "missing ref: claude/resume-prompts/2026-06-24-fixture.md"
 }
 
@@ -473,7 +497,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     refute_output --partial "missing ref: run.sh"
 }
 
@@ -537,7 +561,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     refute_output --partial "missing ref: src/marker-us.js"
 }
 
@@ -574,7 +598,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     refute_output --partial "missing ref: src/marker-dot.js"
 }
 
@@ -600,7 +624,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     assert_output --partial "missing ref: src/would-not-resolve-xyz.py"
 }
 
@@ -629,7 +653,7 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 1 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 1 EPHEMERAL-ONLY, 0 RETIRED)"
     assert_output --partial "ephemeral ref: claude/reports/2026-06-01-long-gone-report.md"
     refute_output --partial "missing ref: claude/reports/2026-06-01-long-gone-report.md"
 
@@ -664,6 +688,217 @@ EOF
 
     run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
     assert_success
-    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY)"
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     refute_output --partial "ephemeral ref: claude/reports/2026-06-01-still-here-report.md"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 22 (CAST v10 J-4): a ref naming a file that was deliberately deleted
+# from the memory's OWN project git history classifies RETIRED, reports the
+# deleting commit/date, and is never counted toward REF-BROKEN.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "retired ref (deleted from project git history) classifies RETIRED with commit/date" {
+    local fake_repo="$HOME/retired-proj"
+    _make_retired_repo "$fake_repo" "cast-retired-fixture.sh"
+
+    local encoded="${HOME//\//-}-retired-proj"
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/$encoded/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/retired.md" <<EOF
+---
+name: retired-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+References cast-retired-fixture.sh and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 1 RETIRED)"
+    assert_output --partial "retired ref: cast-retired-fixture.sh (deleted $DELETED_SHA"
+    refute_output --partial "missing ref: cast-retired-fixture.sh"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 23 (regression guard): a ref whose basename was NEVER in the
+# project's git history (genuinely missing, not retired) must stay
+# REF-BROKEN — the RETIRED check must not become blanket forgiveness.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "genuinely missing ref (never existed in git history) stays REF-BROKEN, not RETIRED" {
+    local fake_repo="$HOME/never-existed-proj"
+    _make_retired_repo "$fake_repo" "cast-retired-fixture.sh"
+
+    local encoded="${HOME//\//-}-never-existed-proj"
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/$encoded/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/never-existed.md" <<EOF
+---
+name: never-existed-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+References cast-never-existed-xyz123.sh and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
+    assert_output --partial "missing ref: cast-never-existed-xyz123.sh"
+    refute_output --partial "retired ref: cast-never-existed-xyz123.sh"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 24 (regression guard): a ref that resolves via an earlier root is
+# reported as a normal resolved ref, even when a same-basename file was
+# ALSO deleted at some point in that project's git history — resolution
+# takes priority and get_retired_info() must never be consulted for a ref
+# that already resolved.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "a ref resolving on disk stays REFS-OK even if the same basename was once deleted from history" {
+    local fake_repo="$HOME/resolves-anyway-proj"
+    _make_retired_repo "$fake_repo" "cast-recreated-fixture.sh"
+    # Recreate the file (and its now-pruned parent dir — `git rm` removes
+    # empty leading directories from the working tree) after its deletion:
+    # it exists on disk again, but the DELETE commit is still in history,
+    # so get_retired_info() would also find it if (incorrectly) consulted.
+    mkdir -p "$fake_repo/scripts"
+    touch "$fake_repo/scripts/cast-recreated-fixture.sh"
+
+    local encoded="${HOME//\//-}-resolves-anyway-proj"
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/$encoded/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/resolves-anyway.md" <<EOF
+---
+name: resolves-anyway-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+References scripts/cast-recreated-fixture.sh and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 1 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
+    refute_output --partial "retired ref: scripts/cast-recreated-fixture.sh"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 25: --apply never bumps a RETIRED-only file — same non-bump-eligible
+# contract as EPHEMERAL-ONLY, verified by byte-identical checksum.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "--apply never bumps a RETIRED-only file" {
+    local fake_repo="$HOME/retired-apply-proj"
+    _make_retired_repo "$fake_repo" "cast-retired-apply-fixture.sh"
+
+    local encoded="${HOME//\//-}-retired-apply-proj"
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/$encoded/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/retired-apply.md" <<EOF
+---
+name: retired-apply-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+References cast-retired-apply-fixture.sh and the --verbose flag.
+EOF
+
+    local before after
+    before=$(shasum -a 256 "$proj_dir/retired-apply.md" | awk '{print $1}')
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT" --apply
+    assert_success
+
+    after=$(shasum -a 256 "$proj_dir/retired-apply.md" | awk '{print $1}')
+    [ "$before" = "$after" ]
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 26 (fail-closed): when the memory's decoded project root is NOT a
+# git work tree, a ref that would otherwise be RETIRED must fail closed to
+# REF-BROKEN — get_retired_info() must never guess retirement without git.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "non-git-repo project root falls back to REF-BROKEN, never guesses RETIRED" {
+    local plain_dir="$HOME/plain-non-git-proj"
+    mkdir -p "$plain_dir"
+    # Deliberately NOT a git repo — no `git init` here.
+
+    local encoded="${HOME//\//-}-plain-non-git-proj"
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/$encoded/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/non-git.md" <<EOF
+---
+name: non-git-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+References cast-would-be-retired-xyz.sh and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
+    assert_output --partial "missing ref: cast-would-be-retired-xyz.sh"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 27 (CAST v10 J-4 — bare-extension extraction guard): "init/.sh/.py"
+# (a real extraction artifact from prose like "init/.sh/.py", meaning two
+# files, not a path) is dropped before classification. When it's the ONLY
+# extracted "ref", the file classifies NO-REFS, not REF-BROKEN.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "bare-extension extraction artifact is dropped, leaving NO-REFS" {
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/proj-27/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/bare-ext.md" <<EOF
+---
+name: bare-ext-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+schema_migrations shape unified across init/.sh/.py and the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (0 REF-BROKEN, 0 REFS-OK, 1 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
+    refute_output --partial "init/.sh/.py"
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 28 (regression guard): a placeholder-shaped ref like "tests/X.bats"
+# is NOT swept up by the bare-extension guard (its final segment "X.bats"
+# has a real stem, "X") — it must stay reported as REF-BROKEN, per the
+# task's explicit instruction not to guess at placeholder-ness.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "placeholder-shaped ref (tests/X.bats) is left reported, not swept by the bare-extension guard" {
+    local proj_dir="$CAST_MEMORIES_BASE_DIR/proj-28/memory"
+    mkdir -p "$proj_dir"
+
+    cat > "$proj_dir/placeholder.md" <<EOF
+---
+name: placeholder-entry
+metadata:
+  verified_at: 2026-06-08
+---
+
+Run bats tests/X.bats to check, plus the --verbose flag.
+EOF
+
+    run env CAST_STALE_DAYS=30 python3 "$SCRIPT"
+    assert_success
+    assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
+    assert_output --partial "missing ref: tests/X.bats"
 }

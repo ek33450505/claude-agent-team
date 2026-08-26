@@ -140,6 +140,36 @@ def _load_guard_tokenizer() -> dict:
 
 
 # --------------------------------------------------------------------------
+# mcp_servers._default_unknown resolution — SINGLE reader of this key.
+# scripts/cast-audit.py imports this function via importlib (see its
+# _load_egress_sentinel_resolver()) rather than re-deriving the value, so
+# the two classifiers can never disagree about what "unknown" means.
+# --------------------------------------------------------------------------
+def _resolve_unknown_is_cloud_bound(policy: dict) -> bool:
+    """Resolve mcp_servers._default_unknown for a server that is in neither
+    cloud_bound nor local_only.
+
+    "local_only"  -> False (unknown treated as on-machine)
+    "cloud_bound" -> True  (unknown treated as off-machine; this is the
+                     current policy value, so today's observable behavior
+                     is unchanged by this function existing)
+    anything else (key missing, unrecognized value, policy not a dict,
+    or any exception) -> True.
+
+    FAIL-SAFE, non-negotiable: a missing key, a typo, or a malformed policy
+    must never silently downgrade an unknown server to local. Only an
+    explicit "local_only" value relaxes the default.
+    """
+    try:
+        value = policy.get("mcp_servers", {}).get("_default_unknown")
+        if value == "local_only":
+            return False
+        return True  # "cloud_bound", missing, or unrecognized -> fail safe
+    except Exception:
+        return True
+
+
+# --------------------------------------------------------------------------
 # Classification — returns an "egress event" dict or None if on-machine/safe
 # --------------------------------------------------------------------------
 def classify(tool_name: str, tool_input: dict, policy: dict) -> dict | None:
@@ -155,8 +185,10 @@ def classify(tool_name: str, tool_input: dict, policy: dict) -> dict | None:
             return None  # local vault / on-machine MCP
         cloud = server in mcp.get("cloud_bound", [])
         unknown = server not in mcp.get("cloud_bound", []) and server not in mcp.get("local_only", [])
-        # default_unknown = cloud_bound -> treat unknown as cloud-bound (record it)
-        if cloud or unknown:
+        # mcp_servers._default_unknown decides how an unrecognized server is
+        # treated; _resolve_unknown_is_cloud_bound() above is the single
+        # reader of that key (fail-safe: defaults to cloud-bound).
+        if cloud or (unknown and _resolve_unknown_is_cloud_bound(policy)):
             return {
                 "surface": "mcp",
                 "server": server,

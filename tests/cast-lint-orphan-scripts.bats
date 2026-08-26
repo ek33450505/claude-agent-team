@@ -262,3 +262,57 @@ _write_fragment() {
   assert_output --partial "WARN"
   assert_output --partial "cast-unused-helper.py"
 }
+
+# ---------------------------------------------------------------------------
+# Comment-only reference tests (J-10)
+#
+# Regression: cast-stats.sh had zero real callers repo-wide but the lint
+# never flagged it, because a retention-rationale COMMENT in
+# cast-log-rotate.sh mentioned its basename. `basename in content` matched
+# the comment text and was treated as "has a caller". Fixed by stripping
+# FULL-LINE comments (first non-whitespace char '#') before matching, for
+# .sh/.py/.bash surfaces only, and reporting comment-only mentions in a
+# separate list instead of silently passing them as real callers.
+# ---------------------------------------------------------------------------
+
+@test "reverse: script referenced ONLY in a full-line comment is not treated as having a caller" {
+  # Reproduces the cast-stats.sh case: a dead script + a comment mention
+  # elsewhere. Before the fix this silently passed (exit 0, no mention at
+  # all). After the fix it must surface as a distinct comment-only warning.
+  touch "$FAKE_REPO/scripts/cast-comment-only.sh"
+  printf '#!/usr/bin/env bash\n# retained for reference: see cast-comment-only.sh\necho hi\n' \
+    > "$FAKE_REPO/scripts/cast-log-rotate-fake.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  assert_output --partial "referenced ONLY in comments"
+  assert_output --partial "cast-comment-only.sh"
+}
+
+@test "reverse: script referenced by a real invocation still passes (comment mention elsewhere ignored)" {
+  # A real invocation elsewhere must still count as a caller even when a
+  # SEPARATE file only comments about the script — the fix must not
+  # over-correct into treating every mention as comment-only.
+  touch "$FAKE_REPO/scripts/cast-real-caller.sh"
+  mkdir -p "$FAKE_REPO/tests"
+  printf '#!/usr/bin/env bash\nbash scripts/cast-real-caller.sh\n' \
+    > "$FAKE_REPO/tests/run.sh"
+  printf '#!/usr/bin/env bash\n# see cast-real-caller.sh for details\necho hi\n' \
+    > "$FAKE_REPO/scripts/cast-notes.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  refute_output --partial "cast-real-caller.sh"
+}
+
+@test "reverse: script referenced only in a TRAILING comment still silently passes (documented limitation)" {
+  # Pins a KNOWN, documented gap: a trailing comment (code then '#...') is
+  # NOT stripped, because telling a real trailing '#' apart from one inside
+  # a string needs lexing (v10 SEC-1 removed that kind of machinery as
+  # unsafe). This must keep passing so a future reader recognizes the gap
+  # as known rather than an accidental regression to "fix".
+  touch "$FAKE_REPO/scripts/cast-trailing-only.sh"
+  printf '#!/usr/bin/env bash\necho hi  # see cast-trailing-only.sh\n' \
+    > "$FAKE_REPO/scripts/cast-mentions-trailing.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  refute_output --partial "cast-trailing-only.sh"
+}

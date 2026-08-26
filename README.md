@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-9.5.3-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-3244-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3274-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -257,7 +257,7 @@ usage-aware, so a memory recalled often decays slower than one nobody reads.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->236<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->3244<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->236<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->3274<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
 guard logic, event emission and memory persistence — including tests that prove destructive operations
 **refuse**. Runs on macOS and Ubuntu in CI.
 

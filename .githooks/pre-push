@@ -188,6 +188,39 @@ else
   echo "[CAST pre-push] Skipping db-contract check (CAST_SKIP_DB_CONTRACT=1)" >&2
 fi
 
+# Skip-ledger gate — block push when docs/test-skip-ledger.md's recorded
+# "Total call sites: N across M files" line has drifted from the real
+# enumeration in tests/*.bats. Mirrors tests/skip-ledger-drift.bats, but
+# catches it before CI instead of after (2026-08-26: a new skip guard was
+# added, local push was clean, CI went red on this exact drift).
+if [ "${CAST_SKIP_LEDGER_CHECK:-0}" != "1" ]; then
+  echo "[CAST pre-push] Checking test-skip-ledger drift..."
+  _LEDGER_SCRIPT="$REPO_ROOT/scripts/cast-check-skip-ledger.sh"
+  if [ -f "$_LEDGER_SCRIPT" ]; then
+    _ledger_rc=0
+    bash "$_LEDGER_SCRIPT" >/dev/null 2>&1 || _ledger_rc=$?
+    if [ "$_ledger_rc" = "1" ]; then
+      echo "" >&2
+      echo "ERROR: docs/test-skip-ledger.md is out of sync with the real skip-site count." >&2
+      echo "  Fix: update the '**Total call sites: N** across M files' line in docs/test-skip-ledger.md" >&2
+      echo "  Run: bash scripts/cast-check-skip-ledger.sh   (shows both the recorded and actual numbers)" >&2
+      echo "To skip this gate: CAST_SKIP_LEDGER_CHECK=1 git push" >&2
+      exit 1
+    elif [ "$_ledger_rc" != "0" ]; then
+      echo "" >&2
+      echo "ERROR: cast-check-skip-ledger.sh exited $_ledger_rc (usage error, not drift) — the hook is calling it wrong." >&2
+      echo "  This is a bug in .githooks/pre-push, not in docs/test-skip-ledger.md. Do not treat as drift." >&2
+      echo "To skip this gate: CAST_SKIP_LEDGER_CHECK=1 git push" >&2
+      exit 1
+    fi
+    echo "[CAST pre-push] test-skip-ledger OK ✓"
+  else
+    echo "[CAST pre-push] skip-ledger script not found — skipping (run: bash install.sh)" >&2
+  fi
+else
+  echo "[CAST pre-push] Skipping test-skip-ledger check (CAST_SKIP_LEDGER_CHECK=1)" >&2
+fi
+
 # Rules-drift gate — block push when rules-core manifest is out of sync.
 # Mirrors .github/workflows/rules-drift.yml semantics: runs the canonical generator
 # (gen-rules-manifest.sh), then diffs freshly generated vs. committed HEAD version.

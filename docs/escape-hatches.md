@@ -11,6 +11,12 @@ Escape hatches MUST appear as a **leading env var** on the command line itself, 
 CAST_COMMIT_AGENT=1 git commit -m "message"
 CAST_PUSH_OK=1 git push
 CAST_KILL_OK=1 kill -9 $PID
+
+# ✓ On a LATER LINE of a multi-line command — every line is scanned, so this is honoured.
+#   (Before v10 SEC-1 only line 1 was scanned. Same-line && and ; chaining always worked;
+#    the newline was the whole bug.)
+SOME_VAR=x
+CAST_COMMIT_AGENT=1 git commit  # ← hatch is on the same segment as the command
 ```
 
 **Invalid (will be blocked):**
@@ -20,13 +26,11 @@ git commit -m "CAST_COMMIT_AGENT=1 something something"
 
 # ✗ Chained via echo — blocked
 echo "CAST_PUSH_OK=1" && git push
-
-# ✗ On a later line in a multi-line command — first line is scanned; blocks on that
-SOME_VAR=x
-CAST_COMMIT_AGENT=1 git commit  # ← This line is checked, but split_segments sees line 1 first
 ```
 
-**Reference:** `scripts/pre-tool-guard.sh` § Line 10-15 for the policy engine; `scripts/cast-command-guard.py` § §39, 78 for per-segment semantics.
+**Important:** The guard scans every line and splits on `;`, `&&`, `||`, and `|`. Comments and heredoc bodies are also scanned, so prose that merely names a guarded command will block and requires the hatch. This is deliberate — a hatchable false block was chosen over a silent bypass.
+
+**Reference:** `scripts/cast-git-guard.py` holds the git blocks and the Write/Edit policy engine; `scripts/pre-tool-guard.sh` is a thin wrapper that `exec`s it (the live hook routes through `cast-pretool-dispatch.py`). `scripts/cast-command-guard.py` holds the per-segment mass-kill and `rm -rf` guards. Symbols are cited rather than line numbers deliberately — the previous line references had rotted past the end of a 24-line file.
 
 ---
 
@@ -36,10 +40,23 @@ CAST_COMMIT_AGENT=1 git commit  # ← This line is checked, but split_segments s
 
 | Variable | What it bypasses | Guarding Script | Example | Caveat |
 |----------|------------------|-----------------|---------|--------|
-| `CAST_COMMIT_AGENT=1` | Raw `git commit` (without using commit agent) | `scripts/pre-tool-guard.sh` (line 160) | `CAST_COMMIT_AGENT=1 git commit -m "message"` | Hard block (exit 2). Escape hatch required because agents should orchestrate commits to ensure co-author trailers and status logging. Emergency-only bypass. |
-| `CAST_PUSH_OK=1` | Raw `git push` (without ensuring code-reviewer has run first) | `scripts/pre-tool-guard.sh` (line 178) | `CAST_PUSH_OK=1 git push` | Hard block (exit 2). Designed to enforce the Writer/Reviewer pattern. Use `commit` agent workflow instead for normal flow. |
-| `CAST_STASH_OK=1` | Any `git stash` operation (push, pop, apply, drop, clear, etc.) | `scripts/pre-tool-guard.sh` (line 188) | `CAST_STASH_OK=1 git stash pop` | Hard block (exit 2). Guards against the 2026-05-19 incident where bare `git stash pop` resurrected abandoned stashes from other sessions. Only use if you have a documented reason. |
-| `CAST_POLICY_OVERRIDE=1` | Path-based policies defined in `config/policies.json` or `~/.claude/config/policies.json` | `scripts/pre-tool-guard.sh` (line 28) | `CAST_POLICY_OVERRIDE=1 <write or edit command>` | Hard block (exit 2) on violations. Audit-logged to `~/.claude/logs/audit.jsonl` when used. Document your reason — this is a policy gate, not a lint. |
+| `CAST_COMMIT_AGENT=1` | Raw `git commit` (without using commit agent) | `scripts/cast-git-guard.py` (`_COMMIT_BLOCK`) | `CAST_COMMIT_AGENT=1 git commit -m "message"` | Hard block (exit 2). Escape hatch required because agents should orchestrate commits to ensure co-author trailers and status logging. Emergency-only bypass. |
+| `CAST_PUSH_OK=1` | Raw `git push` (without ensuring code-reviewer has run first) | `scripts/cast-git-guard.py` (`_PUSH_BLOCK`) | `CAST_PUSH_OK=1 git push` | Hard block (exit 2). Designed to enforce the Writer/Reviewer pattern. Use `commit` agent workflow instead for normal flow. |
+| `CAST_STASH_OK=1` | Any `git stash` operation (push, pop, apply, drop, clear, etc.) | `scripts/cast-git-guard.py` (`_STASH_BLOCK`) | `CAST_STASH_OK=1 git stash pop` | Hard block (exit 2). Guards against the 2026-05-19 incident where bare `git stash pop` resurrected abandoned stashes from other sessions. Only use if you have a documented reason. |
+| `CAST_RESET_OK=1` | `git reset --hard`, `--merge`, `--keep` | `scripts/cast-git-guard.py` | `CAST_RESET_OK=1 git reset --hard HEAD~1` | Hard block (exit 2). Destructive reset variants are guarded; soft reset remains allowed. |
+| `CAST_CLEAN_OK=1` | `git clean` (non-dry-run) | `scripts/cast-git-guard.py` | `CAST_CLEAN_OK=1 git clean -fd` | Hard block (exit 2). Dry-run mode (`-n`) is always allowed. |
+| `CAST_CHECKOUT_OK=1` | `git checkout <pathspec>` and forced switches (`-f`, `--discard-changes`) | `scripts/cast-git-guard.py` | `CAST_CHECKOUT_OK=1 git checkout -f main` | Hard block (exit 2). Guarded pathname and forced-switch variants only; navigation-only checkouts remain allowed. |
+| `CAST_RESTORE_OK=1` | `git restore` (worktree forms) | `scripts/cast-git-guard.py` | `CAST_RESTORE_OK=1 git restore --worktree <path>` | Hard block (exit 2). Index-only restores remain allowed. |
+| `CAST_SWITCH_OK=1` | `git switch -f`, `--discard-changes` | `scripts/cast-git-guard.py` | `CAST_SWITCH_OK=1 git switch -f feature/x` | Hard block (exit 2). Clean switches remain allowed; discarding local changes requires the hatch. |
+| `CAST_GIT_RM_OK=1` | `git rm -f` | `scripts/cast-git-guard.py` | `CAST_GIT_RM_OK=1 git rm -f <path>` | Hard block (exit 2). Guarded forced-removal variant only. |
+| `CAST_BRANCH_OK=1` | `git branch -D`, `-M`, `-f` (destructive branch operations) | `scripts/cast-git-guard.py` | `CAST_BRANCH_OK=1 git branch -D stale-branch` | Hard block (exit 2). Read-only branch queries remain allowed. |
+| `CAST_WORKTREE_OK=1` | `git worktree remove -f` | `scripts/cast-git-guard.py` | `CAST_WORKTREE_OK=1 git worktree remove -f <path>` | Hard block (exit 2). Clean worktree removal remains allowed. |
+| `CAST_UPDATE_REF_OK=1` | `git update-ref -d`, `--stdin`, and ref overwrites | `scripts/cast-git-guard.py` | `CAST_UPDATE_REF_OK=1 git update-ref -d refs/heads/old` | Hard block (exit 2). Low-level ref mutation requires this hatch. |
+| `CAST_FILTER_BRANCH_OK=1` | `git filter-branch` | `scripts/cast-git-guard.py` | `CAST_FILTER_BRANCH_OK=1 git filter-branch -f --tree-filter '...'` | Hard block (exit 2). Rewriting history requires explicit acknowledgement. |
+| `CAST_REFLOG_OK=1` | `git reflog expire`, `delete` | `scripts/cast-git-guard.py` | `CAST_REFLOG_OK=1 git reflog delete refs/heads/old@{0}` | Hard block (exit 2). Part of the recovery path (see `CAST_GC_OK` and `CAST_PRUNE_OK` below). Reflog entries are what recovered a destroyed reviewed diff on 2026-08-17. |
+| `CAST_GC_OK=1` | `git gc` with an explicit prune date; also gates git config writes to `gc.reflogExpire`, `gc.reflogExpireUnreachable`, `gc.pruneExpire` | `scripts/cast-git-guard.py` | `CAST_GC_OK=1 git gc --prune=now` | Hard block (exit 2). Bare `git gc` (honouring git's two-week default) remains allowed; explicit prune dates require the hatch. Part of the recovery path. |
+| `CAST_PRUNE_OK=1` | `git prune` (non-dry-run) | `scripts/cast-git-guard.py` | `CAST_PRUNE_OK=1 git prune` | Hard block (exit 2). Dry-run mode (`-n`) is always allowed. Part of the recovery path — unreachable objects are what enabled recovery of destroyed reviewed work. |
+| `CAST_POLICY_OVERRIDE=1` | Path-based policies defined in `config/policies.json` or `~/.claude/config/policies.json` | `scripts/cast-git-guard.py` (`_policy_evaluate`) | `CAST_POLICY_OVERRIDE=1 <write or edit command>` | Hard block (exit 2) on violations. Audit-logged to `~/.claude/logs/audit.jsonl` when used. Document your reason — this is a policy gate, not a lint. |
 
 ### Destructive Operations
 
@@ -47,6 +64,8 @@ CAST_COMMIT_AGENT=1 git commit  # ← This line is checked, but split_segments s
 |----------|------------------|-----------------|---------|--------|
 | `CAST_KILL_OK=1` | Process-kill guards: blocks `pkill`, `killall`, and `kill` of process groups / all processes (targets 0, -1, negative pids) | `scripts/cast-command-guard.py` (line 9–19) | `CAST_KILL_OK=1 pkill -9 -f my_pattern` | Hard block (exit 2). Individual PIDs (`kill -9 $PID`) are allowed; mass-kill is not. Per-segment escape hatch (see §39). |
 | `CAST_RM_OK=1` | Recursive rm guard: blocks `rm -rf` of protected paths (`/`, `~`, `~/.claude`, `${HOME}/.claude`) | `scripts/cast-command-guard.py` (line 21–33) | `CAST_RM_OK=1 rm -rf ~/.claude/cache` | Hard block (exit 2). Protects home root and `.claude` subtree only; other home subpaths (`rm -rf ~/Projects/x/node_modules`) are allowed. Per-segment escape hatch. |
+| `CAST_NEON_BRANCH_DELETE_OK=1` | Neon database branch deletion (CI/cleanup automation) | `scripts/cast-neon.sh` | `CAST_NEON_BRANCH_DELETE_OK=1 bash scripts/cast-neon.sh branch-delete <project_id> <branch_id>` | The script refuses to proceed without the hatch. Recording is attempted best-effort and can fail silently. `--dry-run` is exempt from the gate and writes no ack row. Use only for documented automation. |
+| `CAST_CONSOLIDATE_SKIP_BACKUP=1` | Memory consolidation backup skip (agent-memory consolidation, `scripts/cast-memory-consolidate.py`) | `scripts/cast-memory-consolidate.py` | `CAST_CONSOLIDATE_SKIP_BACKUP=1 python3 scripts/cast-memory-consolidate.py` | The script refuses to proceed without the hatch. Skips creating a backup before consolidating agent memory. Use only if you have a separate backup strategy. |
 
 ### Hook / Lint Bypass (pre-commit, pre-push, post-merge)
 
@@ -56,6 +75,14 @@ CAST_COMMIT_AGENT=1 git commit  # ← This line is checked, but split_segments s
 | `CAST_SKIP_SELF_LINTS=1` | Self-lints: byte-budget, hook-wiring, agent-roster, agent-boilerplate, blast-radius in pre-commit | `.githooks/pre-commit` (line 308) | `CAST_SKIP_SELF_LINTS=1 git commit -m "..."` | Advisory bypass (exit 0). Emergency-only. Address violations before next merge. |
 | `CAST_SKIP_HOOK_VALIDATE=1` | Hook contract validator (pre-commit, on settings.json or managed-settings.d/*.json changes) | `.githooks/pre-commit` (line 256) | `CAST_SKIP_HOOK_VALIDATE=1 git commit -m "..."` | Advisory bypass (exit 0). Only blocks on ERRORS (exit 2); warnings are non-blocking. |
 | `CAST_SKIP_PLUGIN_DRIFT=1` | Plugin-drift guard (pre-commit, when agents/core, skills, commands, scripts, or managed-settings.d are staged) | `.githooks/pre-commit` (line 355) | `CAST_SKIP_PLUGIN_DRIFT=1 git commit -m "..."` | Advisory bypass (exit 0). Regenerate plugin/ before next merge to avoid CI failure. |
+| `CAST_SKIP_RECONCILE=1` | Commit-provenance reconcile gate (pre-push, `scripts/cast-commit-reconcile.py`) | `scripts/cast-commit-reconcile.py` | `CAST_SKIP_RECONCILE=1 git push` | Advisory bypass (exit 0). Skips verification that the commit session is recorded in cast.db. Emergency-only; use `CAST_RECONCILE_ACK=1` (below) for sanctioned false-blocks. |
+| `CAST_RECONCILE_ACK=1` | Sanctioned acknowledgement when the commit-provenance reconcile gate false-blocks on empty session_id or squash merges (pre-push) | `scripts/cast-commit-reconcile.py` | `CAST_RECONCILE_ACK=1 git push` | Advisory bypass (exit 0). Use when you have verified the gate's condition is a legitimate false-positive (empty session from a SendMessage resume, or a squash merge without a session context). |
+| `CAST_SKIP_LEDGER_CHECK=1` | Ledger-drift gate for `docs/test-skip-ledger.md` reconciliation (pre-push, `scripts/cast-check-skip-ledger.sh`) | `scripts/cast-check-skip-ledger.sh` | `CAST_SKIP_LEDGER_CHECK=1 git push` | Advisory bypass (exit 0). Update the `**Total call sites: N** across M files` line in `docs/test-skip-ledger.md`; run `bash scripts/cast-check-skip-ledger.sh` to see both the recorded and the actual numbers. |
+| `CAST_SKIP_UBUNTU_CHECK=1` | Ubuntu-specific check gate (pre-push, `scripts/pre-push-ubuntu-check.sh`) | `scripts/pre-push-ubuntu-check.sh` | `CAST_SKIP_UBUNTU_CHECK=1 git push` | Advisory bypass (exit 0). Skips verification of Ubuntu-compatibility markers in BATS tests. |
+| `CAST_SKIP_DOCS_DELETE=1` | Docs-deletion guard (pre-push, `scripts/check-docs-deletion.sh`) prevents accidental doc removal | `scripts/check-docs-deletion.sh` | `CAST_SKIP_DOCS_DELETE=1 git push` | Advisory bypass (exit 0). Detects deletions in `docs/` and gates them for review. Use only if you have verified the deletion is intentional. |
+| `CAST_SKIP_POST_COMMIT_PROVENANCE=1` | Post-commit provenance logging (`.githooks/post-commit`, which writes to `~/.claude/logs/post-commit-provenance.log`) | `.githooks/post-commit` | `CAST_SKIP_POST_COMMIT_PROVENANCE=1 git commit -m "..."` | Advisory bypass (exit 0). Skips post-commit provenance logging. Use only if you're managing logging manually. |
+| `CAST_SKIP_BATS_PUSH=1` | BATS regression test gate during push (pre-push, isolated runner) | `.githooks/pre-push` | `CAST_SKIP_BATS_PUSH=1 git push` | Advisory bypass (exit 0). Skips test suite at push time (rarely set — tests only run on push when `CAST_RUN_BATS_PUSH=1` is active). |
+| `CAST_RULES_BUDGET_ACK` | Byte-budget overflow acknowledgement for rules-core (`scripts/cast-lint-byte-budget.sh`) | `scripts/cast-lint-byte-budget.sh` | `CAST_RULES_BUDGET_ACK="reason for overflow" git commit -m "..."` | Advisory bypass (exit 0). **NOTE: This hatch requires a non-empty reason string (not `=1`), and the reason is echoed back.** Document why the budget was exceeded. |
 | `CAST_SKIP_PII_CHECK=1` | PII / secret scan gate (pre-push) | `.githooks/pre-push` (line 20) | `CAST_SKIP_PII_CHECK=1 git push` | Advisory bypass (exit 0). Fails fast before test gates if secrets detected. Use only if you've manually verified no PII is being pushed. |
 | `CAST_SKIP_STATS_PUSH=1` | Stats-drift ratchet gate (pre-push, cast-stats.json check) | `.githooks/pre-push` (line 37) | `CAST_SKIP_STATS_PUSH=1 git push` | Advisory bypass (exit 0). Run `bash scripts/gen-cast-stats.sh` to regenerate before next push. |
 | `CAST_SKIP_DB_CONTRACT=1` | DB-contract ratchet gate (pre-push, schema violations check) | `.githooks/pre-push` (line 103) | `CAST_SKIP_DB_CONTRACT=1 git push` | Advisory bypass (exit 0). Fix with `python3 scripts/cast-db-contract.py --update-baseline` before next push. |
@@ -79,6 +106,8 @@ CAST_COMMIT_AGENT=1 git commit  # ← This line is checked, but split_segments s
 | `CAST_REPO_CLASS` | Marks repo as `personal` or `work` (default: inferred by `cast-stack-detect.sh`) | `scripts/cast-cwdchanged-hook.sh` (reads from `.claude/cast.json` via env) | Read/written via `.claude/cast.json` | Not an escape hatch; a repo classification. Affects co-author trailer style and deployment behavior (see `~/.claude/rules/work-projects.md`). |
 | `CAST_JARVIS_LOCAL=1` | Override sunset jobs gate (re-enable local cron jobs that are sunset in the schedule) | `scripts/cast-cron-setup.sh` (line 17) | `CAST_JARVIS_LOCAL=1 bash ~/.claude/scripts/cast-cron-setup.sh` | Local-machine policy. Sunset jobs (morning, summary, cron-health) are disabled by default; set this flag to re-enable. Re-running `cast-cron-setup.sh` without the flag keeps them disabled. |
 | `CAST_OVERLAY_REPO` | Git URL of the private overlay repo (required for `cast-overlay-sync.sh`; no default) | `scripts/cast-overlay-sync.sh` (line 8); reads from env or `~/.claude/config/cast-overlay-repo` | `CAST_OVERLAY_REPO=https://github.com/user/cast-private.git bash ~/.claude/scripts/cast-overlay-sync.sh` | Config variable, not a guard bypass. If not set via env, script reads from `~/.claude/config/cast-overlay-repo` (gitignored). |
+| `CAST_RULES_SYNC_ACK` | Acknowledgement flag for non-interactive rules-core sync (`scripts/cast-rules-sync.sh --apply`) | `scripts/cast-rules-sync.sh` | `CAST_RULES_SYNC_ACK="<reason>" bash scripts/cast-rules-sync.sh --apply` | Required for non-interactive (headless) application of rules. Takes a non-empty reason string (not `=1`). Unset or falsy, the script requires manual approval at each step. |
+| `CAST_ROUTINE_SKIP_MCP_CHECK=1` | Skip MCP server availability check in routine runner (`scripts/cast-routine-runner.sh`) | `scripts/cast-routine-runner.sh` | `CAST_ROUTINE_SKIP_MCP_CHECK=1 bash scripts/cast-routine-runner.sh` | Advisory skip (exit 0 if skipped). Skips pre-flight validation of MCP tool availability. Use only if you've verified tooling manually. |
 
 ### Internal / Meta (Framework)
 
@@ -86,6 +115,7 @@ CAST_COMMIT_AGENT=1 git commit  # ← This line is checked, but split_segments s
 |-----------|---------|------------------|-------|
 | `CLAUDE_SUBPROCESS=1` | Framework flag: marks a process as a CAST-managed subprocess (managed agents, hook subprocesses). When set, the Write/Edit-policy engine, egress recording, and dispatch-capture are skipped (consistency + latency) — git-guard and command-guard destructive-op blocks still fire unconditionally. | CAST hook infrastructure; set by Claude Code or `cast-managed-agent.sh` | Not user-facing. Agents and scripts should never set this themselves. Most event hooks exit 0 without processing when set — but `pre-tool-guard.sh`/`cast-git-guard.py` (commit/push/stash) and `cast-command-guard.py` (mass-kill, `rm -rf`) are exceptions: their destructive-op guards run before the `CLAUDE_SUBPROCESS` check and still hard-block. |
 | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` | Enable Claude Code's Managed Agents (beta, Anthropic feature). Set in `managed-settings.d/00-env.json` (line 4). | Claude Code runtime; stored in `managed-settings.d/00-env.json` | Not a guard bypass; a feature flag. Required for managed-agent dispatches to work. Part of the CAST plugin's managed-agents support (see `docs/managed-agents-reference.md`). |
+| `CAST_REVIEW_BLOCK_OK=1` | Environment variable read by the approval gate (`cast_check_approvals` in `scripts/cast-events.sh`) to revert sticky-BLOCKED behaviour to newest-decision-wins | `scripts/cast-events.sh` | Set as an environment variable; no command-line invocation. The script refuses to proceed without the hatch. Recording is attempted best-effort and can fail silently. **SECURITY-RELEVANT:** This can let a later approval clear an earlier rejection; use only with explicit authorization. |
 
 ---
 
@@ -102,6 +132,21 @@ CAST_COMMIT_AGENT=1 git commit  # ← This line is checked, but split_segments s
 5. **Docker / Isolation:** Some guards (`CAST_SKIP_PII_CHECK`, `CAST_SKIP_STATS_PUSH`) are routinely used in CI when running in isolated containers. Set them as needed for your CI/CD flow, but document the reason.
 
 6. **Default Behavior:** Most escape hatches are ADVISORY (guard is a suggestion, exit 0). A few are HARD blocks (exit 2): the git safety guards (`CAST_COMMIT_AGENT`, `CAST_PUSH_OK`, `CAST_STASH_OK`), destructive-op guards (`CAST_KILL_OK`, `CAST_RM_OK`), and the policy override (`CAST_POLICY_OVERRIDE`). Hard blocks cannot be silently bypassed — the hatch must be explicitly set.
+
+7. **Hatch Values are Matched Strictly:** The hatch value must be set as `VAR=1` (unquoted). Quoted forms like `CAST_RESET_OK="1"` are accepted; non-1 values like `CAST_RESET_OK="10"` are NOT and will still block. The hatch must be a real bash assignment prefix on the same shell segment as the command.
+
+8. **The hatch must be the FIRST assignment.** When composing two env vars, the hatch goes first. Other `VAR=value` assignments may follow it, never precede it — the ALLOW patterns are anchored as `CAST_<OP>_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git`, so anything before the hatch breaks the anchor and the op blocks. Measured:
+
+   ```bash
+   CAST_COMMIT_AGENT=1 CAST_SKIP_PLUGIN_DRIFT=1 git commit   # ✓ allowed
+   CAST_SKIP_PLUGIN_DRIFT=1 CAST_COMMIT_AGENT=1 git commit   # ✗ BLOCKED — hatch is not first
+   ```
+
+   Tolerance for assignments *after* the hatch was the v9.5.2 fix; nothing was ever allowed before it. The failure reads as "the hatch doesn't work" rather than "the hatch is in the wrong position", which is what makes it worth stating.
+
+9. **Passing a message that names a guarded command.** Since the guard scans every line including heredoc bodies, a commit message mentioning e.g. a guarded op can itself trigger a block. Use `git commit -F <file>` rather than a `-m` heredoc, so the body never enters the scanned command string.
+
+10. **Most Hatches are Not Yet Recorded:** v10 added `scripts/cast_ack.py` and an `ack_events` table to make bypasses a recorded primitive. Today only `CAST_NEON_BRANCH_DELETE_OK` and `CAST_REVIEW_BLOCK_OK` attempt recording (best-effort only — the recording call is `|| true` and can fail silently, in which case the bypass still happens with no CAST-side record). Others may record in the future; assume the current position — do NOT infer that hatches without explicit recording statements record.
 
 ---
 

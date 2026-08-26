@@ -42,8 +42,12 @@ Usage:
   bash scripts/cast-validate-all-hooks.sh [--runtime|--source]
 
 Flags:
-  --runtime    Validate ~/.claude/scripts/ hooks (reads ~/.claude/settings.json) [default]
-  --source     Validate repo scripts/ hooks (reads repo settings.json)
+  --runtime    Validate installed ~/.claude/scripts/ hooks (reads ~/.claude/settings.json)
+               [default]
+  --source     Validate this repo's working-tree scripts/ hooks (reads repo settings.json;
+               hook commands pointing at ~/.claude/scripts/<name> are rewritten to
+               <repo-root>/scripts/<name> before executing, so a fix or regression that
+               exists only in the working tree is what actually runs here)
   --help, -h   Show this message
 
 Exit:
@@ -132,6 +136,22 @@ EXECUTED_COUNT=0
 SKIPPED_COUNT=0
 
 while IFS=$'\t' read -r event label has_args cmd; do
+  # --source rewrite: settings.json's hook commands always point at the
+  # INSTALLED copy (~/.claude/scripts/<name>, or the literal $HOME form),
+  # even under --source. Without this, --source read the repo's
+  # settings.json but still EXECUTED ~/.claude/scripts/<name> — a
+  # working-tree-only fix or regression could never be caught here. Fix:
+  # a literal prefix substitution on the two known forms only (NOT shell-
+  # grammar parsing — see the script_path scan comment below for why that
+  # boundary matters). Any other shape (already repo-relative, or
+  # pointing elsewhere) passes through unchanged. If the rewritten path
+  # doesn't exist in the repo, the existing existence pre-check below
+  # reports it as [fail], not a silent skip.
+  if [[ "$MODE" == "source" ]]; then
+    cmd="${cmd//\$HOME\/.claude\/scripts\//$REPO_DIR/scripts/}"
+    cmd="${cmd//~\/.claude\/scripts\//$REPO_DIR/scripts/}"
+  fi
+
   # Resolve the script argument for an EXISTENCE pre-check. Scan tokens
   # and take the first one that looks like a path (contains '/', or
   # starts with '~'); fall back to token 0 if none does. This handles all

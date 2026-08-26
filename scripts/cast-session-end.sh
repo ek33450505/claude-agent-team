@@ -10,7 +10,6 @@
 #   On session end, perform all CAST cleanup and maintenance tasks:
 #   - Touch hook-health marker
 #   - Escalate on repeated BLOCKED responses
-#   - Refresh project board (background)
 #   - Run agent memory auto-init (background)
 #   - Run auto-escalation rule engine (background)
 #   - Archive stale files from ~/.claude/ to ~/Archive/claude-archive-auto/
@@ -115,12 +114,6 @@ if [[ "${BLOCKED_COUNT}" -ge 2 ]] 2>/dev/null; then
 fi
 
 # === BACKGROUND TASKS ===
-
-# Project board refresh
-CAST_BOARD="${CAST_SCRIPTS_DIR}/cast-board.sh"
-if [[ -f "$CAST_BOARD" ]]; then
-  bash "$CAST_BOARD" > "${TMPDIR:-/tmp}/cast-board-last.log" 2>&1 &
-fi
 
 # Agent memory auto-initialization
 CAST_AGENT_MEM_INIT="${CAST_SCRIPTS_DIR}/cast-agent-memory-init.sh"

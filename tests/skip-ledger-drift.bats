@@ -13,43 +13,78 @@ load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
+SCRIPT="$REPO_DIR/scripts/cast-check-skip-ledger.sh"
 
-@test "skip-ledger: recorded total matches actual skip-site count" {
-  local ledger="$REPO_DIR/docs/test-skip-ledger.md"
-  [ -f "$ledger" ] || fail "skip ledger not found at $ledger"
+# This test exercises the real script (scripts/cast-check-skip-ledger.sh) rather
+# than re-implementing the enumeration logic inline — that duplication is exactly
+# what let the file-count half of this guard go unenforced for two drift cycles.
+# Drift/error fixtures are written under $BATS_TEST_TMPDIR and passed via
+# CAST_SKIP_LEDGER_PATH; the real tracked docs/test-skip-ledger.md is never mutated.
 
-  # Parse the 'Total call sites: N' line from the ledger.
-  # Accepts the exact format written by this document: "**Total call sites: 54**"
-  local recorded
-  recorded=$(grep -E 'Total call sites: [0-9]+' "$ledger" | grep -oE '[0-9]+' | head -1)
-  [ -n "$recorded" ] || fail "could not parse 'Total call sites: N' from $ledger"
+@test "skip-ledger: real ledger is in sync (call sites AND file count)" {
+  run bash "$SCRIPT"
+  assert_success
+  assert_output --partial "OK: skip ledger in sync"
+}
 
-  # Canonical enumeration — catches all 4 skip forms:
-  #   || skip "..."
-  #   && skip "..."
-  #   line-leading    skip "..."  (indent + bare call, multi-line if-then body)
-  #   if-then inline  skip "..."  (same-line: if [...]; then skip "..."; fi)
-  # Excludes comment lines (lines whose content starts with optional whitespace + #).
-  # Excludes this file itself — it contains the pattern as a string argument and
-  # would otherwise produce a false match that inflates the count by 1.
-  local actual
-  actual=$(grep -rEn '(\|\| skip "|&& skip "|[[:space:]]skip ")' \
-    "$REPO_DIR/tests/" --include="*.bats" \
-    | grep -vF 'skip-ledger-drift.bats' \
-    | grep -cvE '^[^:]+:[0-9]+:[[:space:]]*#' || true)
+@test "skip-ledger: fails when call-site count drifts" {
+  local fixture="$BATS_TEST_TMPDIR/ledger-sitedrift.md"
+  sed -E 's/Total call sites: [0-9]+\*\*/Total call sites: 999**/' \
+    "$REPO_DIR/docs/test-skip-ledger.md" > "$fixture"
 
-  # grep -c returns 1 when count is 0; use the pipeline form above to avoid false
-  # failures. Normalise any trailing whitespace.
-  actual=$(echo "$actual" | tr -d ' ')
+  CAST_SKIP_LEDGER_PATH="$fixture" run bash "$SCRIPT"
+  assert_failure
+  assert_output --partial "DRIFT: call-site count"
+}
 
-  [ "$actual" -eq "$recorded" ] || {
-    echo "FAIL: docs/test-skip-ledger.md records $recorded skip call sites but grep found $actual"
-    echo ""
-    echo "If you added or removed a skip, update the 'Total call sites' line in the ledger."
-    echo ""
-    echo "Re-run enumeration to see the full list:"
-    echo "  grep -rEn '(|| skip \"|&& skip \"|[[:space:]]skip \")' tests/ --include='*.bats' \\"
-    echo "    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'"
-    return 1
-  }
+@test "skip-ledger: fails when file count drifts" {
+  local fixture="$BATS_TEST_TMPDIR/ledger-filedrift.md"
+  sed -E 's/across [0-9]+ files/across 999 files/' \
+    "$REPO_DIR/docs/test-skip-ledger.md" > "$fixture"
+
+  CAST_SKIP_LEDGER_PATH="$fixture" run bash "$SCRIPT"
+  assert_failure
+  assert_output --partial "DRIFT: file count"
+}
+
+@test "skip-ledger: fails closed when ledger file is missing" {
+  local missing="$BATS_TEST_TMPDIR/does-not-exist.md"
+
+  CAST_SKIP_LEDGER_PATH="$missing" run bash "$SCRIPT"
+  assert_failure
+  assert_output --partial "ledger not found"
+}
+
+@test "skip-ledger: fails closed when ledger has no parseable anchor" {
+  local fixture="$BATS_TEST_TMPDIR/ledger-no-anchor.md"
+  echo "nothing useful here" > "$fixture"
+
+  CAST_SKIP_LEDGER_PATH="$fixture" run bash "$SCRIPT"
+  assert_failure
+  assert_output --partial "no 'Total call sites"
+}
+
+@test "skip-ledger: fails closed when ledger anchor is ambiguous (matches twice)" {
+  local fixture="$BATS_TEST_TMPDIR/ledger-double-anchor.md"
+  printf '**Total call sites: 79** across 33 files\n**Total call sites: 79** across 33 files\n' > "$fixture"
+
+  CAST_SKIP_LEDGER_PATH="$fixture" run bash "$SCRIPT"
+  assert_failure
+  assert_output --partial "expected exactly 1"
+}
+
+@test "skip-ledger: --help exits 0 without touching the ledger" {
+  run bash "$SCRIPT" --help
+  assert_success
+  assert_output --partial "Usage:"
+}
+
+@test "skip-ledger: rejects an unrecognised flag with exit 2, not silent success" {
+  run bash "$SCRIPT" --bogus-flag
+  assert_equal "$status" 2
+  assert_output --partial "unrecognised argument"
+
+  run bash "$SCRIPT" --check
+  assert_equal "$status" 2
+  assert_output --partial "unrecognised argument"
 }
