@@ -79,27 +79,85 @@ ref that has already failed every resolution root above — a ref of this
 shape that DOES resolve is reported as a normal resolved ref, never routed
 into the ephemeral bucket.
 
+Retired project refs (CAST v10 J-4, 2026-08-26): most REF-BROKEN findings
+in the real corpus turned out to be memories correctly citing a script that
+was deliberately DELETED from the same project's own git history — not a
+stale or wrong memory, just an accurate pointer to something that no longer
+exists. That is the identical argument the ephemeral-session-artifact case
+above already makes, applied to a real project file instead of a
+~/.claude/ session artifact. get_retired_info() checks this ONLY for a ref
+that has already failed every resolution root above (direct-join roots,
+the project-git-suffix fallback, AND the ephemeral-session-artifact check):
+it runs `git -C <project_root> log --all --diff-filter=D --format='%h %ad'
+--date=short -1 -- ':(glob)**/<basename>'` against the ref's OWN decoded
+project root (never os.getcwd() — a cwd-anchored git history would be the
+WRONG repo's history for any memory whose project differs from the
+invoking cwd; this is the same cwd-anchoring bug class fixed in
+gen-completions.sh). A non-empty result means a file with that basename
+was deleted at some point in that project's history; the deleting commit
+and date are reported so a RETIRED claim is auditable by hand, not a bare
+assertion — strong evidence the ref is the same file, but not proof.
+Results are cached per (project_root, basename) within a run
+(_RETIRED_CACHE) — one `git log` per otherwise-unresolvable basename, not
+per ref occurrence, mirroring the bound discipline get_git_tracked_files()
+already applies. Fails CLOSED: a ref stays REF-BROKEN (never guessed
+retired) if project_root is None (undecodable project), git is
+unavailable, the subprocess errors, or it times out (10s bound, same as
+get_git_tracked_files()). Like ephemeral refs, a ref of this shape that
+actually resolves under an earlier root is a normal resolved ref, never
+routed through this check.
+
+Bare-extension extraction artifacts: cast_memory_verifier's path regex
+occasionally extracts a fragment like "init/.sh/.py" from prose such as
+"schema_migrations shape unified across init/.sh/.py" (shorthand for two
+files, not a real path) — its final path segment (".py") is a bare
+extension with no filename stem, which can never be a real file.
+_is_bare_extension_ref() drops exactly this shape before classification.
+It deliberately does NOT try to filter placeholder stems like "X.bats" (a
+single-letter filename is a legal real filename; guessing at
+placeholder-ness there would suppress genuinely broken refs) — that shape
+stays reported.
+
 A file classifies as:
-  REF-BROKEN     — at least one extracted path resolves under NONE of the
-                   roots above AND is not an ephemeral-session-artifact ref
-                   (or is ambiguous). The memory is provably outdated; a
-                   human must read it. NEVER auto-bumped.
+  REF-BROKEN     — at least one extracted path could not be resolved under
+                   any root above (or matched more than one git-tracked
+                   file — ambiguous), and is not excused as an
+                   ephemeral-session-artifact ref or a RETIRED ref. This
+                   measures "could not be resolved" — it is NOT proof the
+                   memory's underlying claim is wrong, only that a human
+                   should read it to confirm. NEVER auto-bumped.
   REFS-OK        — every extracted path resolved under some root. Bump-
                    eligible under --apply.
+  RETIRED        — every extracted path either resolved OR names a file
+                   deliberately deleted from the memory's OWN project git
+                   history (get_retired_info()); no genuinely missing, no
+                   ambiguous, and no ephemeral refs. NOT a failure — see
+                   "Retired project refs" above. Reported separately from
+                   REF-BROKEN and REFS-OK, and NEVER auto-bumped for the
+                   same reason as EPHEMERAL-ONLY: a refs-resolved bump
+                   would claim evidence for a ref that was excused, not
+                   resolved.
   EPHEMERAL-ONLY — every extracted path either resolved OR is an
                    unresolvable ephemeral-session-artifact ref; no
-                   genuinely missing and no ambiguous refs. Reported
-                   separately from REF-BROKEN (these are known-dead
-                   pointers, not evidence of rot) but deliberately NOT
-                   folded into REFS-OK either and NEVER auto-bumped: a
-                   refs-resolved bump would claim evidence for refs that
-                   were, in fact, never resolved — just excused. See the
-                   `verified_by` rationale below for why that distinction
-                   matters.
-  NO-REFS        — zero paths were extracted at all. A refs-resolved bump
-                   would be a verification claim backed by zero evidence,
-                   so this is its own class and is NEVER auto-bumped
-                   either.
+                   genuinely missing, no ambiguous, and no retired refs.
+                   NOT a failure. Reported separately from REF-BROKEN
+                   (these are known-dead pointers, not evidence of rot)
+                   but deliberately NOT folded into REFS-OK either and
+                   NEVER auto-bumped: a refs-resolved bump would claim
+                   evidence for refs that were, in fact, never resolved —
+                   just excused. See the `verified_by` rationale below for
+                   why that distinction matters.
+  NO-REFS        — zero paths were extracted at all (after discarding
+                   bare-extension extraction artifacts — see above). A
+                   refs-resolved bump would be a verification claim backed
+                   by zero evidence, so this is its own class and is NEVER
+                   auto-bumped either.
+
+Precedence when a file's unresolved refs mix ephemeral and retired shapes
+(no missing, no ambiguous): RETIRED wins. This is an implementation choice,
+not an observed real-corpus case as of 2026-08-26 — the two shapes don't
+overlap in practice (ephemeral refs point under ~/.claude/, retired refs
+point at project-tracked files) but a basename collision is possible.
 
 Default mode is REPORT-ONLY and never modifies a file. The report header
 names the root list once (not per-ref) so any REF-BROKEN claim can be
@@ -453,28 +511,136 @@ def is_ephemeral_session_ref(ref: str) -> bool:
     return remainder.startswith(EPHEMERAL_SESSION_DIRS)
 
 
+# A bare extension with no filename stem (the final path segment of an
+# extraction artifact like "init/.sh/.py") can never be a real file. See the
+# module docstring's "Bare-extension extraction artifacts" paragraph.
+_BARE_EXTENSION_STEMS = (".sh", ".py", ".bats")
+
+
+def _is_bare_extension_ref(ref: str) -> bool:
+    """True if `ref`'s final path segment is exactly a bare extension
+    (".sh", ".py", ".bats") with nothing before the dot but a path
+    separator. Deliberately narrow — does NOT attempt to recognize
+    placeholder stems like "X.bats"; a single-letter filename is a legal
+    real filename and guessing at placeholder-ness there would suppress
+    genuinely broken refs."""
+    final_segment = ref.replace(os.sep, "/").rsplit("/", 1)[-1]
+    return final_segment in _BARE_EXTENSION_STEMS
+
+
+# Per-(project_root, basename) cache for get_retired_info(). Many memory
+# files under the same project can cite the same retired basename (e.g.
+# several files across a project all name "cast-migrate.sh"), and this runs
+# a `git log` subprocess per otherwise-unresolvable ref — caching by
+# basename within a run keeps that to one subprocess per (root, basename)
+# pair, mirroring the bound discipline get_git_tracked_files() already
+# applies for the project-git-suffix fallback and decode_project_dir()
+# applies for its bounded trailing-segment search.
+_RETIRED_CACHE: Dict[Tuple[str, str], Optional[Tuple[str, str]]] = {}
+
+
+def get_retired_info(ref: str, project_root: Optional[str]) -> Optional[Tuple[str, str]]:
+    """Return (deleting_commit, deleted_date) if a file with `ref`'s
+    basename was deliberately deleted from `project_root`'s OWN git
+    history, else None.
+
+    Resolves against `project_root` ONLY — never os.getcwd() (see the
+    module docstring's "Retired project refs" paragraph on why
+    cwd-anchoring would check the wrong repo's history). Absolute refs are
+    skipped, same rationale as resolve_git_suffix_ref(): an absolute path
+    is only meaningfully checked "as given".
+
+    Fails CLOSED, never raises: returns None (caller falls through to
+    REF-BROKEN) if project_root is None, `ref` is absolute, git is
+    unavailable, project_root is not a git work tree, the subprocess exits
+    non-zero, or it times out (10s bound, same as get_git_tracked_files()).
+    A None here is never proof the ref is genuinely missing — only that
+    this check could not confirm retirement, so the conservative (fail
+    closed) REF-BROKEN classification stands.
+    """
+    if not project_root or os.path.isabs(ref):
+        return None
+
+    basename = os.path.basename(ref.replace(os.sep, "/"))
+    if not basename:
+        return None
+
+    cache_key = (project_root, basename)
+    if cache_key in _RETIRED_CACHE:
+        return _RETIRED_CACHE[cache_key]
+
+    result: Optional[Tuple[str, str]] = None
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                project_root,
+                "log",
+                "--all",
+                "--diff-filter=D",
+                "--format=%h %ad",
+                "--date=short",
+                "-1",
+                "--",
+                f":(glob)**/{basename}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            line = proc.stdout.strip()
+            if line:
+                parts = line.split(None, 1)
+                if len(parts) == 2:
+                    result = (parts[0], parts[1])
+    except (OSError, subprocess.SubprocessError):
+        result = None
+
+    _RETIRED_CACHE[cache_key] = result
+    return result
+
+
 def classify(content: str, memory_filepath: str) -> Dict:
-    """Classify content as REF-BROKEN / REFS-OK / EPHEMERAL-ONLY / NO-REFS,
-    with per-ref detail.
+    """Classify content as REF-BROKEN / REFS-OK / RETIRED / EPHEMERAL-ONLY /
+    NO-REFS, with per-ref detail. See the module docstring's "A file
+    classifies as:" block for the full contract; summary:
+
+    RETIRED: every ref either resolved OR names a file deliberately
+    deleted from the memory's OWN project git history
+    (get_retired_info()) — no genuinely missing, no ambiguous, and no
+    ephemeral refs. NOT --apply-bump-eligible, same reasoning as
+    EPHEMERAL-ONLY below.
 
     EPHEMERAL-ONLY: every ref either resolved OR is an unresolvable
     ephemeral-session-artifact ref (is_ephemeral_session_ref()) — no
-    genuinely missing and no ambiguous refs. Deliberately NOT the same as
-    REFS-OK: bumping verified_at/verified_by would claim "refs-resolved"
-    evidence for refs that were in fact never resolved, just excused as
-    dead-artifact pointers. That is a weaker, different claim than what
-    verified_by promises, so EPHEMERAL-ONLY is never --apply-bump-eligible
-    (see the verified_by rationale in the module docstring) — the
-    conservative choice when it's a close call between reusing REFS-OK and
-    minting a new state.
+    genuinely missing, no ambiguous, and no retired refs. Deliberately NOT
+    the same as REFS-OK: bumping verified_at/verified_by would claim
+    "refs-resolved" evidence for refs that were in fact never resolved,
+    just excused as dead-artifact pointers. That is a weaker, different
+    claim than what verified_by promises, so EPHEMERAL-ONLY (and RETIRED)
+    are never --apply-bump-eligible (see the verified_by rationale in the
+    module docstring) — the conservative choice when it's a close call
+    between reusing REFS-OK and minting a new state.
+
+    Precedence when a file mixes ephemeral AND retired unresolved refs
+    (no missing, no ambiguous): RETIRED wins — see the module docstring.
     """
     paths, _functions = cast_memory_verifier.extract_paths_and_functions(content)
+    # Drop bare-extension extraction artifacts (e.g. the final segment of
+    # "init/.sh/.py") BEFORE the NO-REFS check, so a file whose only
+    # "extracted path" was one of these correctly falls through to NO-REFS
+    # rather than being reported as REF-BROKEN over a fragment that was
+    # never a real path. See _is_bare_extension_ref().
+    paths = [p for p in paths if not _is_bare_extension_ref(p)]
     if not paths:
         return {
             "status": "NO-REFS",
             "missing_refs": [],
             "ambiguous_refs": [],
             "ephemeral_refs": [],
+            "retired_refs": [],
             "resolved_refs": [],
         }
 
@@ -488,6 +654,7 @@ def classify(content: str, memory_filepath: str) -> Dict:
     missing: List[str] = []
     ambiguous: List[Dict] = []
     ephemeral: List[str] = []
+    retired: List[Dict] = []
     resolved: List[Dict] = []
     for ref in sorted(set(paths)):
         hit = resolve_ref(ref, roots)
@@ -504,10 +671,21 @@ def classify(content: str, memory_filepath: str) -> Dict:
         elif is_ephemeral_session_ref(ref):
             ephemeral.append(ref)
         else:
-            missing.append(ref)
+            # RETIRED resolves against the memory's OWN decoded project
+            # root ONLY — never git_root's cwd fallback (see
+            # get_retired_info()'s docstring and the module docstring's
+            # "Retired project refs" paragraph).
+            retired_info = get_retired_info(ref, project_root)
+            if retired_info is not None:
+                commit_hash, deleted_date = retired_info
+                retired.append({"ref": ref, "commit": commit_hash, "date": deleted_date})
+            else:
+                missing.append(ref)
 
     if missing or ambiguous:
         status = "REF-BROKEN"
+    elif retired:
+        status = "RETIRED"
     elif ephemeral:
         status = "EPHEMERAL-ONLY"
     else:
@@ -518,6 +696,7 @@ def classify(content: str, memory_filepath: str) -> Dict:
         "missing_refs": sorted(missing),
         "ambiguous_refs": ambiguous,
         "ephemeral_refs": sorted(ephemeral),
+        "retired_refs": sorted(retired, key=lambda r: r["ref"]),
         "resolved_refs": resolved,
     }
 
@@ -616,6 +795,7 @@ def main() -> int:
     refs_ok: List[Dict] = []
     no_refs: List[Dict] = []
     ephemeral_only: List[Dict] = []
+    retired_only: List[Dict] = []
     write_failure = False
     today_str = date.today().strftime("%Y-%m-%d")
 
@@ -651,6 +831,18 @@ def main() -> int:
             )
             continue
 
+        if status == "RETIRED":
+            # Not bump-eligible — same reasoning as EPHEMERAL-ONLY above,
+            # see classify()'s docstring.
+            retired_only.append(
+                {
+                    "file": filepath,
+                    "retired_refs": result["retired_refs"],
+                    "resolved_refs": result["resolved_refs"],
+                }
+            )
+            continue
+
         # REFS-OK — the only bump-eligible class.
         entry = {
             "file": filepath,
@@ -678,6 +870,7 @@ def main() -> int:
             "refs_ok": refs_ok,
             "no_refs": no_refs,
             "ephemeral_only": ephemeral_only,
+            "retired": retired_only,
             "applied": args.apply,
         }
         print(json.dumps(payload, indent=2))
@@ -688,10 +881,19 @@ def main() -> int:
         print(
             f"{len(candidates)} stale memories evaluated "
             f"({len(ref_broken)} REF-BROKEN, {len(refs_ok)} REFS-OK, "
-            f"{len(no_refs)} NO-REFS, {len(ephemeral_only)} EPHEMERAL-ONLY)"
+            f"{len(no_refs)} NO-REFS, {len(ephemeral_only)} EPHEMERAL-ONLY, "
+            f"{len(retired_only)} RETIRED)"
         )
         if ref_broken:
-            print("REF-BROKEN:")
+            # "REF-BROKEN" measures "could not be resolved" — it is NOT
+            # proof the memory's underlying claim is wrong (see the module
+            # docstring). RETIRED and EPHEMERAL-ONLY below are the excused
+            # counterpart of this same "could not resolve" measurement.
+            print(
+                "REF-BROKEN (a cited ref could not be resolved under any "
+                "known root — evidence a human should read the memory, not "
+                "evidence the memory is wrong):"
+            )
             for entry in ref_broken:
                 for ref in entry["missing_refs"]:
                     print(f"  {entry['file']} — missing ref: {ref}")
@@ -713,13 +915,29 @@ def main() -> int:
                 print(f"  {entry['file']}")
         if ephemeral_only:
             print(
-                "EPHEMERAL-ONLY (not bump-eligible — unresolvable refs are "
-                "dead session artifacts under plans/reports/resume-prompts/"
-                "research, not stale code refs):"
+                "EPHEMERAL-ONLY (NOT a failure — not bump-eligible because "
+                "unresolvable refs are dead session artifacts under "
+                "plans/reports/resume-prompts/research, not stale code refs):"
             )
             for entry in ephemeral_only:
                 for eph in entry["ephemeral_refs"]:
                     print(f"  {entry['file']} — ephemeral ref: {eph}")
+        if retired_only:
+            print(
+                "RETIRED (NOT a failure — not bump-eligible because the ref "
+                "named a real file deliberately deleted from this project's "
+                "own git history; the memory's citation is an accurate "
+                "historical record, not evidence the memory is stale). "
+                "Matching is by BASENAME, so this is strong evidence, NOT "
+                "proof the deleted file is the one the memory meant — the "
+                "commit and date below are printed so you can check by hand:"
+            )
+            for entry in retired_only:
+                for r in entry["retired_refs"]:
+                    print(
+                        f"  {entry['file']} — retired ref: {r['ref']} "
+                        f"(deleted {r['commit']} {r['date']})"
+                    )
         if refs_ok:
             print("REFS-OK:")
             for entry in refs_ok:
