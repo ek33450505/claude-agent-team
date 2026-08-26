@@ -44,7 +44,7 @@ _make_retired_repo() {
     (
         cd "$repo_dir" || exit 1
         git init -q
-        git config user.email "bats@test.local"
+        git config user.email "bats@example.com"
         git config user.name "bats-test"
         touch "scripts/$basename"
         git add -A
