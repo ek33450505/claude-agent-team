@@ -11,6 +11,15 @@ VALIDATOR_CONTRACT="$REPO_DIR/scripts/cast-validate-hook-contracts.sh"
 # Setup / teardown
 # ---------------------------------------------------------------------------
 
+# Isolation note: this file predates the setup_temp_home/teardown_temp_home
+# helpers and does NOT use them. It is still HOME-safe, by a different
+# mechanism: every test that can reach $HOME invokes the validator as
+# `run env HOME="$TEST_TMPDIR/fh_*" ...`, so the real $HOME is never read,
+# and teardown only rm -rf's the /tmp path from mktemp (guarded non-empty).
+# Verified empirically 2026-08-26: the real ~/.claude was byte-identical
+# before and after a full run of this file.
+# Migrating to the canonical helpers is tracked as a follow-up — doing it
+# here would rewrite 11 pre-existing tests for no isolation gain.
 setup() {
   export TEST_TMPDIR="$(mktemp -d /tmp/cast-validate-all-hooks-test.XXXXXXXX)"
 }
@@ -535,4 +544,108 @@ SCRIPT
   [[ "$output" =~ "1 ok" ]]
   [[ "$output" =~ "1 executed" ]]
   refute_output --partial "1 fail"
+}
+
+# ---------------------------------------------------------------------------
+# J-1: --source must execute the REPO working-tree copy, not the installed
+# ~/.claude/scripts/<name> copy, even though settings.json always spells the
+# hook command with the installed absolute path. Build a real fake "repo"
+# (own scripts/ dir + settings.json) so REPO_DIR resolves to it via the
+# script's own BASH_SOURCE location, exactly like the real repo does.
+# ---------------------------------------------------------------------------
+
+# Scaffold a fake repo: $dir/settings.json + $dir/scripts/{cast-validate-all-hooks.sh copy,
+# cast-validate-hook-contracts.sh placeholder}. cast-validate-hook-contracts.sh is never
+# actually invoked by cast-validate-all-hooks.sh (only existence-checked at startup), so a
+# placeholder is sufficient.
+_setup_fake_repo() {
+  local dir="$1"
+  mkdir -p "$dir/scripts"
+  cp "$VALIDATOR_ALL" "$dir/scripts/cast-validate-all-hooks.sh"
+  echo '#!/usr/bin/env bash' >"$dir/scripts/cast-validate-hook-contracts.sh"
+  chmod +x "$dir/scripts/cast-validate-all-hooks.sh" "$dir/scripts/cast-validate-hook-contracts.sh"
+}
+
+# settings.json with one hook whose command uses the literal installed-path form
+# (the form every real hook in settings.json actually uses).
+_write_source_settings() {
+  local settings_path="$1"
+  local hook_name="$2"
+  export _SETTINGS_PATH="$settings_path"
+  export _HOOK_NAME="$hook_name"
+  python3 - <<'PYEOF'
+import json, os
+settings_path = os.environ["_SETTINGS_PATH"]
+hook_name = os.environ["_HOOK_NAME"]
+data = {
+    "hooks": {
+        "SessionStart": [
+            {
+                "id": "test-source-rewrite-hook",
+                "hooks": [{"type": "command", "command": f"bash ~/.claude/scripts/{hook_name}", "timeout": 3}]
+            }
+        ]
+    }
+}
+with open(settings_path, "w") as f:
+    json.dump(data, f, indent=2)
+PYEOF
+}
+
+@test "validate-all --source: rewrites ~/.claude/scripts/<name> to the repo scripts/ copy and executes it" {
+  local fakerepo="$TEST_TMPDIR/fakerepo1"
+  local fake_home="$TEST_TMPDIR/fh_source1"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude"
+
+  # The hook exists ONLY in the repo copy, never under the fake $HOME's
+  # installed location — so success is only possible if the command was
+  # actually rewritten to the repo path before execution (a real
+  # discriminator, not a string match on output).
+  _write_valid_hook "$fakerepo/scripts/source-rewrite-marker.sh"
+  _write_source_settings "$fakerepo/settings.json" "source-rewrite-marker.sh"
+
+  run env HOME="$fake_home" bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_success
+  [[ "$output" =~ "1 ok" ]]
+  [[ "$output" =~ "1 executed" ]]
+  [[ "$output" =~ "0 skipped" ]]
+}
+
+@test "validate-all --source: a rewritten path missing from the repo FAILS distinctly, not a silent skip" {
+  local fakerepo="$TEST_TMPDIR/fakerepo2"
+  local fake_home="$TEST_TMPDIR/fh_source2"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude"
+
+  # Deliberately do NOT create does-not-exist-in-repo.sh anywhere.
+  _write_source_settings "$fakerepo/settings.json" "does-not-exist-in-repo.sh"
+
+  run env HOME="$fake_home" bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_failure
+  [[ "$output" =~ "1 fail" ]]
+  [[ "$output" =~ "1 skipped" ]]
+  [[ "$output" =~ "0 executed" ]]
+  # The [fail] message must show the REWRITTEN (repo) path was checked, proving
+  # the rewrite ran rather than silently falling through to the installed path.
+  assert_output --partial "$fakerepo/scripts/does-not-exist-in-repo.sh"
+  refute_output --partial "$fake_home/.claude/scripts/does-not-exist-in-repo.sh"
+}
+
+@test "validate-all --runtime: does NOT rewrite ~/.claude paths (rewrite is --source only)" {
+  local fakerepo="$TEST_TMPDIR/fakerepo3"
+  local fake_home="$TEST_TMPDIR/fh_source3"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude"
+
+  # Same hook that succeeds under --source (repo-only copy) must FAIL under
+  # --runtime, because --runtime reads $HOME/.claude/settings.json and must
+  # resolve against $HOME/.claude/scripts/, never the repo.
+  _write_valid_hook "$fakerepo/scripts/source-rewrite-marker.sh"
+  _write_source_settings "$fake_home/.claude/settings.json" "source-rewrite-marker.sh"
+
+  run env HOME="$fake_home" bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --runtime
+  assert_failure
+  [[ "$output" =~ "1 fail" ]]
+  assert_output --partial "$fake_home/.claude/scripts/source-rewrite-marker.sh"
 }
