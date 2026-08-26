@@ -16,7 +16,7 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `/devops` | Dispatch devops agent for CI/CD, Docker, and infrastructure |
 | `/docs` | Dispatch docs agent to update documentation |
 | `/doctor` | Run comprehensive CAST system health check |
-| `/laconic` | Toggle laconic terse-output mode. Usage: /laconic [lite|full|ultra|off] |
+| `/laconic` | Toggle laconic terse-output mode. Usage: /laconic [lite\|full\|ultra\|off] |
 | `/merge` | Dispatch merge agent for git merges, rebases, conflict resolution |
 | `/morning` | Dispatch morning-briefing agent to generate today's briefing |
 | `/orchestrate` | Execute a CAST plan via the /orchestrate skill (main session dispatches sub-agents inline) |
@@ -91,10 +91,12 @@ Quick reference for the Claude Agent Specialist Team (CAST) framework.
 | `cast predict "<task>"` | Predict cost + suggest agents from the record (reads past runs/incidents) | `--limit`, `--json` |
 | `cast feature "<desc>"` | App-build: decompose a feature into gated units, build each via backend-writer/frontend-writer→code-reviewer→test→commit | |
 | `cast mcp serve\|config\|status` | Expose the cast.db record read-only over MCP (stdio, local-only) so any CC session can query decisions/incidents/cost/sessions | |
-| `cast agents` | List installed agents; with `--usage`, per-agent runtime stats (dispatches, avg cost, success rate) | `--usage`, `--json` |
+| `cast agents` | List installed agents; with `--usage`, per-agent runtime stats (dispatches, avg cost, success rate). `--live` shows in-flight runs with elapsed time only — `tool_uses`, `branch` and `model` are recorded at completion, so they are empty mid-run by design. | `--usage`, `--live`, `--json` |
+| `cast review <agent\|prefix>` | Print recorded agent output (`agent_runs.response`), newest first — reads back work lost in transport between an agent and the orchestrator | `--last N`, `--json` |
 | `cast hooks` | Show active hooks with health status | `--json` |
 | `cast doctor` | Run system health check | |
 | `cast tidy` | Clean up old plans, events, logs, briefings | `--dry-run` |
+| `cast rules sync` | Diff repo `rules-core/` vs live `~/.claude/rules/` and sync on confirm; dry-run by default. `cast rules status` is the read-only form. Closes the gap left by `install.sh` copying rules skip-if-exists | `--apply` |
 | `cast install-completions` | Install shell tab completions | |
 
 Global flags: `--json`, `--quiet`, `--verbose`, `--help`, `--version`
@@ -168,8 +170,11 @@ These directives appear in hook-injected context and must be followed immediatel
 |---|---|
 | `CAST_COMMIT_AGENT=1` | Bypass the PreToolUse commit block (let commit agent run git commit) |
 | `CAST_PUSH_OK=1` | Bypass the PreToolUse push block (let push agent run git push) |
-| `CAST_POLICY_OVERRIDE=1` | Skip the UserPromptSubmit policy gate |
-| `CLAUDE_SUBPROCESS=1` | Signal that this is a subprocess (hooks exit early) |
+| `CAST_POLICY_OVERRIDE=1` | Bypass a `block`-severity path policy from `config/policies.json` on a PreToolUse Write/Edit (`_policy_evaluate` in `scripts/cast-git-guard.py`). Audit-logged when used. Not a UserPromptSubmit gate. |
+| `CLAUDE_SUBPROCESS=1` | Marks a managed/headless subprocess. **Does NOT disable the destructive-op guards** — git-guard (commit/push/stash) and command-guard (mass-kill, `rm -rf` of protected roots) fire in every context. Only Write/Edit-policy, egress recording and dispatch-capture skip. Escape hatches, not subprocess status, are the only sanctioned bypass. |
+| `CAST_RESET_OK=1`, `CAST_CLEAN_OK=1`, `CAST_CHECKOUT_OK=1`, … | The git-guard destructive-op family — one hatch per guarded op (reset, clean, checkout, restore, switch, rm, branch, worktree, update-ref, filter-branch, and the reflog/gc/prune recovery-path trio) |
+
+> Full reference, including which forms stay allowed for each op: [`docs/escape-hatches.md`](docs/escape-hatches.md).
 
 ---
 
