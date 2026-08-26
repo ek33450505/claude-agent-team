@@ -200,6 +200,14 @@ fi
 
 # --- Install rules (skip if destination exists) ---
 info "Installing rules..."
+# Drift report: skip-if-exists means a merged rules-core/ fix never reaches an
+# existing live file ("merge != delivered"). Report-only — install.sh NEVER
+# overwrites here; remedy is `cast rules sync` (scripts/cast-rules-sync.sh).
+# CORE bucket only: rules-core/*.md. *.md.template sources are TEMPLATE bucket —
+# their live counterparts (dest_name drops .template) are user-specialized BY
+# DESIGN and are deliberately never compared (would false-positive every run).
+RULES_DRIFTED=""
+RULES_DRIFT_COUNT=0
 for rule_file in "$SCRIPT_DIR"/rules-core/*; do
     [ -f "$rule_file" ] || continue
     base="$(basename "$rule_file")"
@@ -207,11 +215,31 @@ for rule_file in "$SCRIPT_DIR"/rules-core/*; do
     dest="$CLAUDE_DIR/rules/$dest_name"
     if [ -f "$dest" ]; then
         info "  Skipped (exists): $dest_name"
+        case "$base" in
+            *.md)
+                if ! cmp -s "$rule_file" "$dest"; then
+                    RULES_DRIFTED="$RULES_DRIFTED$dest_name
+"
+                    RULES_DRIFT_COUNT=$((RULES_DRIFT_COUNT + 1))
+                fi
+                ;;
+        esac
     else
         cp "$rule_file" "$dest"
         success "  Installed: $dest_name"
     fi
 done
+
+if [ "$RULES_DRIFT_COUNT" -gt 0 ]; then
+    warn "  WARNING: $RULES_DRIFT_COUNT core rule file(s) have drifted from the repo source (a merged fix never reached them):"
+    while IFS= read -r drifted_name; do
+        [ -n "$drifted_name" ] || continue
+        warn "    - $drifted_name"
+    done <<EOF
+$RULES_DRIFTED
+EOF
+    warn "  Review with: cast rules sync   (apply with: cast rules sync --apply)"
+fi
 
 # Personal rules overlay (non-destructive — only adds files not already present)
 if [ "$INSTALL_PERSONAL" = true ] && [ -d "$SCRIPT_DIR/rules-personal" ]; then
