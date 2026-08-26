@@ -3225,11 +3225,11 @@ PYEOF
   # *.bak) so there are no false positives.
   local _rc_dir="${HOME}/.claude/rules-core"
   local _rules_dir="${HOME}/.claude/rules"
-  local _drift="" _rc_any=0 _rc _base _live
+  local _drift="" _rc_count=0 _rc _base _live
   if [ -d "$_rc_dir" ]; then
     for _rc in "$_rc_dir"/*; do
       [ -f "$_rc" ] || continue
-      _rc_any=1
+      _rc_count=$((_rc_count + 1))
       _base="$(basename "$_rc")"
       _live="${_rules_dir}/${_base}"
       if [ ! -f "$_live" ]; then
@@ -3239,15 +3239,16 @@ PYEOF
       fi
     done
   fi
-  if [ "$_rc_any" -eq 0 ]; then
+  if [ "$_rc_count" -eq 0 ]; then
     printf "%b rules drift: no CAST rules-core baseline found (skip)\n" "$INFO"
   elif [ -z "$_drift" ]; then
-    printf "%b rules drift: main-session rules in sync with CAST baseline\n" "$OK"
+    printf "%b rules drift: %s baseline file(s) in sync with CAST baseline\n" "$OK" "$_rc_count"
   else
-    printf "%b rules drift:%s differ from the freshly-installed CAST baseline\n" "$WARN" "$_drift"
+    printf "%b rules drift (of %s baseline file(s) compared):%s differ from the freshly-installed CAST baseline\n" "$WARN" "$_rc_count" "$_drift"
     printf "      ~/.claude/rules/ (loaded by the main session) is skip-if-exists and lagged a CAST update.\n"
     printf "      Reconcile (live may hold hard-won content — review, do NOT blind-overwrite):\n"
-    printf "        diff ~/.claude/rules-core/<file> ~/.claude/rules/<file>\n"
+    printf "        1. cast rules sync          (report-only dry run; prints IN-SYNC / WOULD-UPDATE / WOULD-CREATE with diffs, never writes)\n"
+    printf "        2. cast rules sync --apply  (backs up fail-closed, confirms interactively)\n"
     overall_ok=0
   fi
 

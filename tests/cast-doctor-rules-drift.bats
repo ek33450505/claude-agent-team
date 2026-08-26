@@ -21,7 +21,7 @@ teardown() {
 
   run bash bin/cast doctor
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "rules drift: main-session rules in sync" ]]
+  [[ "$output" =~ "rules drift: 1 baseline file(s) in sync" ]]
   [[ ! "$output" =~ "differ from the freshly-installed CAST baseline" ]]
 }
 
@@ -31,7 +31,7 @@ teardown() {
 
   run bash bin/cast doctor
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "rules drift:" ]]
+  [[ "$output" =~ "rules drift (of 1 baseline file(s) compared)" ]]
   [[ "$output" =~ "working-conventions.md" ]]
   [[ "$output" =~ "differ from the freshly-installed CAST baseline" ]]
   [[ "$output" =~ "do NOT blind-overwrite" ]]
@@ -53,7 +53,7 @@ teardown() {
 
   run bash bin/cast doctor
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "rules drift: main-session rules in sync" ]]
+  [[ "$output" =~ "rules drift: 1 baseline file(s) in sync" ]]
   [[ ! "$output" =~ "work-projects.md" ]]
 }
 
@@ -61,4 +61,45 @@ teardown() {
   run bash bin/cast doctor
   [ "$status" -eq 0 ]
   [[ "$output" =~ "no CAST rules-core baseline found" ]]
+}
+
+@test "rules drift: OK branch names the number of baseline files compared" {
+  printf 'a\n' > "${HOME}/.claude/rules-core/agents.md"
+  printf 'a\n' > "${HOME}/.claude/rules/agents.md"
+  printf 'b\n' > "${HOME}/.claude/rules-core/shell.md"
+  printf 'b\n' > "${HOME}/.claude/rules/shell.md"
+
+  run bash bin/cast doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "rules drift: 2 baseline file(s) in sync" ]]
+}
+
+@test "rules drift: WARN branch names cast rules sync as the remediation" {
+  printf 'new repo content\n' > "${HOME}/.claude/rules-core/working-conventions.md"
+  printf 'stale local content\n' > "${HOME}/.claude/rules/working-conventions.md"
+
+  run bash bin/cast doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "cast rules sync"[[:space:]]*\(report-only ]]
+  [[ "$output" =~ "cast rules sync --apply" ]]
+}
+
+@test "rules drift: subset baseline makes the compared-file count visible (regression for Wave F2)" {
+  # Simulates the real-world defect: rules-core/ holds only a curated subset (here: 2 files)
+  # while ~/.claude/rules/ holds more files overall (here: 5). The check can only ever see
+  # what's in rules-core/, so the compared count MUST reflect the small baseline (2), not the
+  # larger rules/ directory (5) — proving the scope is visible in the output rather than
+  # silently implying full coverage.
+  printf 'a\n' > "${HOME}/.claude/rules-core/agents.md"
+  printf 'a\n' > "${HOME}/.claude/rules/agents.md"
+  printf 'b\n' > "${HOME}/.claude/rules-core/shell.md"
+  printf 'b\n' > "${HOME}/.claude/rules/shell.md"
+  printf 'c\n' > "${HOME}/.claude/rules/python.md"
+  printf 'd\n' > "${HOME}/.claude/rules/tests.md"
+  printf 'e\n' > "${HOME}/.claude/rules/typescript.md"
+
+  run bash bin/cast doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "rules drift: 2 baseline file(s) in sync" ]]
+  [[ ! "$output" =~ "5 baseline file(s)" ]]
 }
