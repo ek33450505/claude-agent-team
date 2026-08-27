@@ -62,6 +62,7 @@ The `provenance_chain` table holds the tamper-evident hash chain:
 - **`session_digest`** — The A5 digest captured at append-time
 - **`chain_hash`** — `sha256(prev_hash + session_digest)`
 - **`created_at`** — Timestamp of append
+- **`receipt_json`** — The exact canonical serialization the `session_digest` was taken over, frozen at append time (v10, migration 035). NULL for links appended before that column existed.
 
 A UNIQUE index on `session_id` makes append idempotent (a session is chained at most once).
 
@@ -75,9 +76,33 @@ The table is declared in `scripts/cast-db-init.sh` (the schema source of truth).
 
 Recompute each row's `chain_hash` from the stored `prev_hash` + `session_digest` and check linkage (each row's `prev_hash` equals the prior row's `chain_hash`). Needs no live session data, so it works even for sessions that have since been pruned.
 
-### Level 2 — Session Attestation (Where Data Exists)
+### Level 2 — Receipt Attestation (Where a Receipt Was Stored)
 
-For each session still present in `sessions`, re-derive its A5 digest from cast.db and compare to the stored `session_digest`. Sessions already pruned are skipped-with-note (reported as "pruned-skipped"), not failed.
+Digest the row's stored `receipt_json` and compare it to the stored `session_digest`. This asks *"does this ledger row still hash to its own digest"*, which is a question about the ledger and has one right answer.
+
+It deliberately does **not** ask "does live data still hash to the stored digest." Until v10 it did, and the answer changed for reasons that were never tamper:
+
+- **Retention.** `cast-db-prune` deletes `agent_runs` while `provenance_chain` is never pruned. Measured 2026-08-27, the oldest surviving `agent_runs` row was `2026-07-28T10:42:38Z`, and chain rows appended in July verified 40% "broken" against 9% for August.
+- **Post-append backfill.** `cost_usd`, `tool_uses`, `model`, `duration_ms` and `status` are written at completion by a later transcript pass, so recent links broke too.
+
+Together those reported **244 of 929 links (26%) as `session-data tamper detected`**, none of which were tamper. A chain that is permanently part-red carries no information: an operator cannot tell a real edit from CAST's own writers.
+
+**Live-data divergence is still checked**, and classified rather than discarded:
+
+| Divergence | Verdict | Why |
+|---|---|---|
+| `id`, `project`, `project_root`, `started_at` differ | **BROKEN — tamper** | Written once at session start; nothing in CAST updates them |
+| `agents`, `totals`, `integrity`, `files`, `routes`, `gates`, `status`, `ended_at` differ | `drifted` (reported, passes) | Retention and completion-time backfill move these by design |
+
+Sessions already pruned from `sessions` are skipped-with-note ("pruned-skipped"), not failed.
+
+### Links With No Stored Receipt
+
+Links appended before `receipt_json` existed report as **`unverifiable`**, not BROKEN. The distinction is load-bearing: *"could not be verified"* and *"could not be read"* are different facts, and collapsing them into one string is what made the old 26% figure unreadable.
+
+Those links are **not unguarded** — Level 1 covers every row regardless, so editing a stored `session_digest` still breaks `chain_hash`, and editing `chain_hash` still breaks the next row's linkage. What is unavailable for them is attestation against a frozen payload.
+
+`cast provenance verify --require-attestation` exits 1 if any link lacks a stored receipt, for callers that need every link attestable rather than merely chained.
 
 ### Empty-Chain Cross-Check
 
@@ -90,7 +115,8 @@ If the chain is empty but sessions exist, verify reports BROKEN (an emptied chai
 ### Guarantees (Detected as BROKEN)
 
 - Modification, insertion, deletion, or reordering of individual chain rows
-- Modification of session data that's still present (Level 2)
+- Modification of a stored `receipt_json` (Level 2)
+- Modification of an immutable session-header field — `id`, `project`, `project_root`, `started_at` — while the session is still present (Level 2)
 - Emptying the chain while sessions exist
 
 ### Limitations (Local-Only, No External Anchor)
@@ -99,7 +125,11 @@ If the chain is empty but sessions exist, verify reports BROKEN (an emptied chai
 
 2. **Pruned session attestation gap:** Deleting a session row from `sessions` makes verify classify that link as "pruned" and skip Level 2 for it (the `chain_hash` still locks the stored digest, but it can no longer be independently re-derived). Pruning is by-design.
 
-3. **Tail truncation undetected (mostly):** Removing the most recent links from `provenance_chain` leaves a valid prefix and is not detected beyond the empty-chain cross-check. The head hash changes, so downstream chain links (if any existed) would break — but a freshly-truncated chain has no downstream links to catch it.
+3. **Deletion of a mutable child row is indistinguishable from retention.** Removing an `agent_runs` or `file_writes` row to hide it produces exactly the divergence that `cast-db-prune` produces legitimately, so it is reported as `drifted` rather than tamper. The frozen `receipt_json` still holds what was there at append time, so the evidence survives and can be read back — but verify will not raise on it. Stated rather than implied covered.
+
+4. **Links predating migration 035 cannot be attested.** They report `unverifiable` and retain Level 1 coverage only. Use `--require-attestation` to fail on them.
+
+5. **Tail truncation undetected (mostly):** Removing the most recent links from `provenance_chain` leaves a valid prefix and is not detected beyond the empty-chain cross-check. The head hash changes, so downstream chain links (if any existed) would break — but a freshly-truncated chain has no downstream links to catch it.
 
 ---
 

@@ -299,16 +299,35 @@ def _build_receipt_data(
 
 # ── Digest computation ────────────────────────────────────────────────────────
 
-def _compute_digest(data: Dict[str, Any]) -> str:
-    """Compute deterministic SHA-256 digest of the canonical data dict."""
-    serialized = json.dumps(
+def canonical_json(data: Dict[str, Any]) -> str:
+    """Serialize the canonical data dict exactly as _compute_digest hashes it.
+
+    Exposed so a caller can PERSIST the bytes the digest was taken over. The
+    receipt's inputs are not immutable — retention prunes agent_runs out from
+    under them and CAST's own writers backfill cost/token/tool_uses columns after
+    a session ends — so a digest with no stored payload can never be re-derived,
+    and re-deriving it from live data answers a different question than the one
+    the chain is asked. See cast-provenance-chain.py's verify for what each
+    outcome means.
+    """
+    return json.dumps(
         data,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
         default=str,
-    ).encode("utf-8")
+    )
+
+
+def _compute_digest(data: Dict[str, Any]) -> str:
+    """Compute deterministic SHA-256 digest of the canonical data dict."""
+    serialized = canonical_json(data).encode("utf-8")
     return "sha256:" + hashlib.sha256(serialized).hexdigest()
+
+
+def digest_of_canonical_json(payload: str) -> str:
+    """Digest a STORED canonical serialization, without rebuilding it from the DB."""
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 # ── Duration helper ───────────────────────────────────────────────────────────

@@ -1109,12 +1109,22 @@ CREATE TABLE IF NOT EXISTS provenance_chain (
   prev_hash      TEXT NOT NULL DEFAULT '',
   session_digest TEXT NOT NULL,
   chain_hash     TEXT NOT NULL,
-  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  receipt_json   TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_provenance_chain_session_uniq ON provenance_chain(session_id);
 PROVENANCE_CHAIN_TABLE
   _columns_added=1
 fi
+
+# provenance_chain.receipt_json (v10 PROV-1) — the exact canonical serialization the
+# session_digest was taken over. Without it, level-2 attestation must re-derive the
+# digest from live data, and those inputs keep changing after the digest is taken:
+# retention prunes agent_runs (never provenance_chain), and cost/tool_uses/model are
+# backfilled at completion. That reported 244 of 929 rows as tamper, none of which were.
+# Self-healing ALTER for DBs created before this column existed; duplicate-column and
+# missing-table errors are both benign here, same as the dispatch_name ALTER above.
+sqlite3 "$DB_PATH" "ALTER TABLE provenance_chain ADD COLUMN receipt_json TEXT;" 2>/dev/null || true
 
 # commit_provenance: D5 self-commit enforcement substrate — records the SHA of every
 # commit made by the `commit` agent so the pre-push reconciler can flag unauthorized
