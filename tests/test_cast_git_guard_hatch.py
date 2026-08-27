@@ -191,9 +191,19 @@ class TestHatchRecordCap(unittest.TestCase):
         with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
             code, msg = cast_git_guard._git_evaluate(command)
         self.assertEqual((code, msg), (0, None))
+        # CAST v10 I-3b Unit 1b-i: the cap still allows only 8 PER-HATCH
+        # calls, but `_git_evaluate`'s `finally` now makes ONE additional
+        # call for the CAST_HATCH_RECORD_CAP sentinel — so the total is
+        # cap + 1, not cap. See TestHatchRecordCapSentinel below for tests
+        # that assert on the sentinel call's own shape.
         self.assertEqual(
-            mock_record.call_count, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND
+            mock_record.call_count, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND + 1
         )
+        sentinel_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_HATCH_RECORD_CAP'
+        ]
+        self.assertEqual(len(sentinel_calls), 1)
 
     def test_cap_does_not_suppress_a_real_block_after_it_is_reached(self):
         # 8 hatched, ALLOWed commits (exhausting the cap) followed by a
@@ -212,8 +222,127 @@ class TestHatchRecordCap(unittest.TestCase):
             code, msg = cast_git_guard._git_evaluate(command)
         self.assertEqual(code, 2)
         self.assertIsNotNone(msg)
+        # Exactly 8 hatches occurred (none suppressed — 8 == the cap, not
+        # over it), so NO CAST_HATCH_RECORD_CAP sentinel should fire here.
         self.assertEqual(
             mock_record.call_count, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND
+        )
+        self.assertFalse(
+            any(c.args[0] == 'CAST_HATCH_RECORD_CAP' for c in mock_record.call_args_list)
+        )
+
+
+class TestHatchRecordCapSentinel(unittest.TestCase):
+    """CAST v10 I-3b Unit 1b-i: closes the ambiguity `_MAX_HATCH_RECORDS_
+    PER_COMMAND` created — an absent per-hatch `ack_events` row used to mean
+    EITHER "no hatch was used" OR "a hatch was used and suppressed by the
+    cap". `_git_evaluate` now emits exactly one `CAST_HATCH_RECORD_CAP`
+    sentinel row (via `_record_hatch`) whenever the cap suppressed at least
+    one record, on EVERY exit path (allow, block, or exception) — via a
+    `finally` clause wrapping the renamed `_git_evaluate_impl`.
+    """
+
+    def setUp(self):
+        self._orig_home = os.environ.get('HOME')
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-git-guard-hatch-sentinel-test-')
+        os.environ['HOME'] = self._tmpdir
+
+    def tearDown(self):
+        if self._orig_home is None:
+            os.environ.pop('HOME', None)
+        else:
+            os.environ['HOME'] = self._orig_home
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_nine_hatches_emit_exactly_one_sentinel_naming_count_one(self):
+        # 9 hatches: 8 real records + 1 suppressed -> exactly one sentinel
+        # call naming a suppressed count of 1.
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + f'mit -m "unit {i}"'
+            for i in range(9)
+        ]
+        command = ' && '.join(segments)
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(command)
+        self.assertEqual((code, msg), (0, None))
+        sentinel_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_HATCH_RECORD_CAP'
+        ]
+        self.assertEqual(len(sentinel_calls), 1)
+        variable, value, git_op = sentinel_calls[0].args
+        self.assertEqual(variable, 'CAST_HATCH_RECORD_CAP')
+        self.assertIn('1', value)
+        self.assertIn('suppressed', value)
+        self.assertEqual(git_op, 'cap')
+
+    def test_eight_or_fewer_hatches_emit_no_sentinel_at_all(self):
+        # The discriminating case: staying AT or UNDER the cap must never
+        # fire the sentinel. A sentinel that always fires is worthless.
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + f'mit -m "unit {i}"'
+            for i in range(8)
+        ]
+        command = ' && '.join(segments)
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(command)
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 8)
+        self.assertFalse(
+            any(c.args[0] == 'CAST_HATCH_RECORD_CAP' for c in mock_record.call_args_list)
+        )
+
+    def test_suppression_followed_by_block_still_records_sentinel(self):
+        # The early-return case the `finally` exists for: 9 hatches (1
+        # suppressed) followed by an UNHATCHED destructive op that BLOCKs.
+        # `_git_evaluate_impl` returns EARLY on the block, before its loop
+        # would ever reach a "tally suppressed count" step at the end — the
+        # sentinel must still be recorded, and the block verdict itself
+        # must be untouched.
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + f'mit -m "unit {i}"'
+            for i in range(9)
+        ]
+        segments.append('git reset --hard')
+        command = ' && '.join(segments)
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(command)
+        self.assertEqual(code, 2)
+        self.assertIsNotNone(msg)
+        sentinel_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_HATCH_RECORD_CAP'
+        ]
+        self.assertEqual(len(sentinel_calls), 1)
+
+    def test_sentinel_record_hatch_raising_does_not_propagate(self):
+        # If the sentinel's own _record_hatch call raises (e.g. cast_ack.py
+        # itself misbehaves in a way that bypasses _record_hatch's internal
+        # try/except, as happens here since the whole function is mocked),
+        # `_git_evaluate` must still return the correct verdict and must
+        # never let the exception escape.
+        def flaky(variable, value, git_op):
+            if variable == 'CAST_HATCH_RECORD_CAP':
+                raise RuntimeError('boom')
+            return None
+
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + f'mit -m "unit {i}"'
+            for i in range(9)
+        ]
+        command = ' && '.join(segments)
+        with mock.patch.object(
+            cast_git_guard, '_record_hatch', side_effect=flaky
+        ) as mock_record:
+            try:
+                code, msg = cast_git_guard._git_evaluate(command)
+            except Exception as e:  # pragma: no cover - fail() below is the real check
+                self.fail(
+                    f'_git_evaluate raised {e!r} when the sentinel _record_hatch call raised'
+                )
+        self.assertEqual((code, msg), (0, None))
+        self.assertTrue(
+            any(c.args[0] == 'CAST_HATCH_RECORD_CAP' for c in mock_record.call_args_list)
         )
 
 

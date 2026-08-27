@@ -1616,11 +1616,15 @@ def _audit_push_hatch() -> None:
 # three chained, against a HEALTHY-path baseline of 0.033s median / 0.040s
 # max over 5 runs. Two-part fix: the timeout drops to 2s (still ~60x the
 # measured healthy call), and this caps how many `_record_hatch` calls
-# `_git_evaluate` will make per invocation, bounding worst case to
-# `_MAX_HATCH_RECORDS_PER_COMMAND` x 2s instead of unbounded x 5s. The
-# counter lives in `_git_evaluate`, not here — see its per-segment loop —
-# so this cap never touches the ALLOW/BLOCK verdict, only whether the
-# audit-record subprocess gets spawned.
+# `_git_evaluate_impl` will make per invocation, bounding worst case to
+# `_MAX_HATCH_RECORDS_PER_COMMAND` x 2s for the per-hatch calls, PLUS one
+# more `_record_hatch` spawn (2026-08-27 I-3b Unit 1b-i) for the
+# `CAST_HATCH_RECORD_CAP` sentinel that `_git_evaluate`'s `finally` clause
+# emits whenever this cap suppressed at least one record — so the true
+# worst case is `(_MAX_HATCH_RECORDS_PER_COMMAND + 1) x 2s` instead of
+# unbounded x 5s. The counter lives in `_git_evaluate_impl`, not here — see
+# its per-segment loop — so this cap never touches the ALLOW/BLOCK verdict,
+# only whether the audit-record subprocess gets spawned.
 _MAX_HATCH_RECORDS_PER_COMMAND = 8
 
 
@@ -1642,15 +1646,19 @@ def _record_hatch(variable: str, value: str, git_op: str) -> None:
     prints a stderr nudge for bare/reasonless values (e.g. "=1"), and this
     function must never print to stdout/stderr regardless of value content.
 
-    LATENCY (2026-08-26 fix, security review): this call is synchronous on
-    the PreToolUse hot path. Measured: a healthy `cast_ack.py` spawn is
-    0.033s median / 0.040s max over 5 runs; a hung spawn cost 5.011s at the
-    prior 5s timeout (15.065s for three chained). `timeout` here is now 2s
-    (still ~60x the healthy median, ample headroom without the old
-    worst-case cost) and `_git_evaluate` additionally caps total calls to
-    this function at `_MAX_HATCH_RECORDS_PER_COMMAND` (8) per command, so
-    the worst case for one guard invocation is bounded at 8 x 2s rather
-    than unbounded x 5s.
+    LATENCY (2026-08-26 fix, security review; updated 2026-08-27 I-3b Unit
+    1b-i): this call is synchronous on the PreToolUse hot path. Measured: a
+    healthy `cast_ack.py` spawn is 0.033s median / 0.040s max over 5 runs; a
+    hung spawn cost 5.011s at the prior 5s timeout (15.065s for three
+    chained). `timeout` here is now 2s (still ~60x the healthy median,
+    ample headroom without the old worst-case cost) and `_git_evaluate_impl`
+    additionally caps total per-hatch calls to this function at
+    `_MAX_HATCH_RECORDS_PER_COMMAND` (8) per command. `_git_evaluate`'s
+    `finally` clause makes ONE additional call to this function for the
+    `CAST_HATCH_RECORD_CAP` sentinel whenever the cap suppressed at least
+    one record, so the worst case for one guard invocation is bounded at
+    `(_MAX_HATCH_RECORDS_PER_COMMAND + 1) x 2s = 18s` rather than unbounded
+    x 5s.
 
     Must never raise and must never change the guard's exit code.
     """
@@ -1802,10 +1810,56 @@ def _scannable_segments(command: str):
 
 
 def _git_evaluate(command: str):
+    """Thin wrapper around `_git_evaluate_impl()` (2026-08-27 I-3b Unit
+    1b-i). Kept as the stable public entry point — same name, same
+    `(command: str)` signature, same `(exit_code, message_or_None)` return
+    contract — because it is imported and called directly as a module by
+    tests and by probes; renaming it or changing its return shape breaks
+    them.
+
+    The ONLY thing this wrapper adds over calling the impl directly is a
+    `finally` clause that emits exactly one `CAST_HATCH_RECORD_CAP`
+    sentinel `ack_events` row (via `_record_hatch`) if `_git_evaluate_impl`
+    suppressed one or more per-hatch records against
+    `_MAX_HATCH_RECORDS_PER_COMMAND`. `finally` fires on every exit path —
+    an ALLOW return, a BLOCK return, or an unexpected exception — which
+    matters because `_git_evaluate_impl` returns EARLY on the first BLOCK
+    verdict in its per-segment loop: a suppression counter tallied only
+    after the loop completes would be lost whenever a block follows a
+    suppression later in the same command. The sentinel call itself is
+    wrapped in its own try/except so it can never raise and never change
+    the verdict computed by `_git_evaluate_impl` — same contract as
+    `_record_hatch` itself.
+    """
+    suppressed_counter = [0]
+    try:
+        return _git_evaluate_impl(command, suppressed_counter)
+    finally:
+        if suppressed_counter[0] > 0:
+            try:
+                _record_hatch(
+                    'CAST_HATCH_RECORD_CAP',
+                    f'{suppressed_counter[0]} hatch record(s) suppressed '
+                    f'(cap={_MAX_HATCH_RECORDS_PER_COMMAND})',
+                    'cap',
+                )
+            except Exception:
+                pass
+
+
+def _git_evaluate_impl(command: str, suppressed_counter):
     """Evaluate a Bash command for git commit/push/stash/reset/clean/
     checkout/restore/switch. Every line is scanned (2026-08-24 SEC-1 fix),
     not just the first — see `_scannable_segments()` for how lines are
     joined/filtered before the per-line segment split below.
+
+    `suppressed_counter` is a 1-element list used as an out-parameter
+    (2026-08-27 I-3b Unit 1b-i): `_git_evaluate`, the caller, needs the
+    suppressed-hatch-record count even when this function returns EARLY on
+    a BLOCK verdict, so the count can't simply be a local returned at the
+    end of the function. `suppressed_counter[0]` is incremented once per
+    hatch use that exceeded `_MAX_HATCH_RECORDS_PER_COMMAND`; see the
+    `hatch_record_count` paragraph below.
 
     A hatch on one line/segment still cannot unblock a destructive op on a
     DIFFERENT line/segment — that guarantee comes from PER-SEGMENT
@@ -1846,9 +1900,13 @@ def _git_evaluate(command: str):
     `_record_hatch()` audit-record subprocesses this invocation will spawn
     at `_MAX_HATCH_RECORDS_PER_COMMAND` — see `_record_hatch`'s docstring
     for the measured latency this bounds. Once the cap is reached, further
-    hatch uses in the SAME command are silently not recorded — this ONLY
-    skips the audit-record call, never the ALLOW/BLOCK verdict itself,
-    which is computed identically either way.
+    hatch uses in the SAME command are NOT individually recorded — but they
+    are NOT silent (2026-08-27 I-3b Unit 1b-i fix): `_git_evaluate`'s
+    `finally` clause emits ONE `CAST_HATCH_RECORD_CAP` sentinel `ack_events`
+    row naming the suppressed count, so an absent per-hatch row is never
+    ambiguous with "no hatch was used." This ONLY affects whether the
+    per-hatch audit-record subprocess gets spawned, never the ALLOW/BLOCK
+    verdict itself, which is computed identically either way.
     """
     hatch_record_count = 0
     for seg in _scannable_segments(command):
@@ -1872,6 +1930,8 @@ def _git_evaluate(command: str):
             if hatch_record_count < _MAX_HATCH_RECORDS_PER_COMMAND:
                 _record_hatch('CAST_COMMIT_AGENT', _hatch_value(seg, 'CAST_COMMIT_AGENT'), 'commit')
                 hatch_record_count += 1
+            else:
+                suppressed_counter[0] += 1
         elif hit(_COMMIT_BLOCK):
             return 2, _COMMIT_MSG
         if hit(_PUSH_ALLOW):
@@ -1879,6 +1939,8 @@ def _git_evaluate(command: str):
             if hatch_record_count < _MAX_HATCH_RECORDS_PER_COMMAND:
                 _record_hatch('CAST_PUSH_OK', _hatch_value(seg, 'CAST_PUSH_OK'), 'push')
                 hatch_record_count += 1
+            else:
+                suppressed_counter[0] += 1
         elif hit(_PUSH_BLOCK):
             return 2, _PUSH_MSG
         if not hit(_STASH_ALLOW) and hit(_STASH_BLOCK):
