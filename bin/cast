@@ -2826,16 +2826,23 @@ PYEOF
     overall_ok=0
   fi
 
-  # 16. MCP servers reachable (best-effort, multi-scope: settings.json, settings.local.json, .mcp.json)
+  # 16. MCP servers reachable (best-effort, multi-scope: settings.json, settings.local.json,
+  # .mcp.json, ~/.claude.json). NOTE: Claude Code does NOT read mcpServers from settings.json —
+  # it reads ~/.claude.json (top-level "mcpServers" and per-project "projects.<cwd>.mcpServers")
+  # plus .mcp.json / managed-mcp.json. settings.json/.local.json are kept in the scan for
+  # informational parity (a stray entry there is still worth surfacing) but ~/.claude.json is
+  # the authoritative source and MUST be included or "none configured" can be false (DOC-1).
   local mcp_scope_1="${HOME}/.claude/settings.json"
   local mcp_scope_2="${HOME}/.claude/settings.local.json"
   local mcp_scope_3="${PWD}/.mcp.json"
+  local mcp_scope_4="${HOME}/.claude.json"
   local mcp_scopes=()
   [ -f "$mcp_scope_1" ] && mcp_scopes+=("$mcp_scope_1")
   [ -f "$mcp_scope_2" ] && mcp_scopes+=("$mcp_scope_2")
   [ -f "$mcp_scope_3" ] && mcp_scopes+=("$mcp_scope_3")
+  [ -f "$mcp_scope_4" ] && mcp_scopes+=("$mcp_scope_4")
   if [ "${#mcp_scopes[@]}" -eq 0 ]; then
-    printf "%b MCP servers: no config found (settings.json / settings.local.json / ./.mcp.json)\n" "$INFO"
+    printf "%b MCP servers: no config found (settings.json / settings.local.json / ./.mcp.json / ~/.claude.json)\n" "$INFO"
   else
     local mcp_checked="" mcp_p
     for mcp_p in "${mcp_scopes[@]}"; do
@@ -2845,13 +2852,38 @@ PYEOF
     done
     local mcp_status
     mcp_status="$(python3 - "${mcp_scopes[@]}" <<'PYEOF'
-import json, sys, os, shutil, subprocess
+import json, sys, os, shutil, subprocess, urllib.parse
 merged = {}
+cwd = os.getcwd()
+
+
+def redact_url(u):
+    # Keep only scheme + host[:port] + path. Drop query/fragment/userinfo —
+    # credentials (?api_key=..., https://user:pass@host) must never reach stdout.
+    try:
+        parts = urllib.parse.urlsplit(u)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{host}{port}{parts.path}"
+    except Exception:
+        return "<redacted>"
+
+
 for path in sys.argv[1:]:
     try:
         with open(path) as f:
             cfg = json.load(f)
+    except Exception:
+        continue
+    # Global shape: top-level "mcpServers" (settings.json/.local.json, .mcp.json, ~/.claude.json)
+    try:
         merged.update(cfg.get("mcpServers", {}))
+    except Exception:
+        pass
+    # Per-project shape: ~/.claude.json's "projects"."<abs cwd>"."mcpServers"
+    try:
+        proj_cfg = cfg.get("projects", {}).get(cwd, {})
+        merged.update(proj_cfg.get("mcpServers", {}))
     except Exception:
         pass
 for name, server in merged.items():
@@ -2859,11 +2891,28 @@ for name, server in merged.items():
     cmd = server.get("command")
     if url:
         try:
-            r = subprocess.run(["curl", "-sf", "--max-time", "2", url], capture_output=True, timeout=3)
-            status = "ok" if r.returncode == 0 else "unreachable"
+            # Discriminator is "did the host answer at all", not "was it a 2xx" —
+            # but a real 4xx/5xx (e.g. an expired/revoked token) is still worth
+            # surfacing distinctly rather than folding it silently into "ok".
+            r = subprocess.run(
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2", url],
+                capture_output=True, timeout=3, text=True,
+            )
+            code = r.stdout.strip()
+            if r.returncode == 0 and code and code != "000":
+                try:
+                    code_num = int(code)
+                except ValueError:
+                    code_num = None
+                if code_num is not None and 200 <= code_num < 400:
+                    status = "ok"
+                else:
+                    status = f"responding (HTTP {code})"
+            else:
+                status = "unreachable"
         except Exception:
             status = "error"
-        print(f"{name}|{status}|{url}")
+        print(f"{name}|{status}|{redact_url(url)}")
     elif cmd:
         resolved = shutil.which(cmd) or (cmd if os.path.isfile(cmd) else None)
         status = "ok" if resolved else "missing"
@@ -2875,23 +2924,34 @@ PYEOF
     if [ -z "$mcp_status" ]; then
       printf "%b MCP servers: none configured (checked %s)\n" "$INFO" "$mcp_checked"
     else
-      local mcp_ok=0 mcp_bad=0
+      local mcp_ok=0 mcp_bad=0 mcp_responding=0
       while IFS='|' read -r name status target; do
         [ -z "$name" ] && continue
-        if [ "$status" = "ok" ]; then
-          mcp_ok=$((mcp_ok+1))
-        else
-          mcp_bad=$((mcp_bad+1))
-        fi
+        case "$status" in
+          ok) mcp_ok=$((mcp_ok+1)) ;;
+          responding*) mcp_ok=$((mcp_ok+1)); mcp_responding=$((mcp_responding+1)) ;;
+          *) mcp_bad=$((mcp_bad+1)) ;;
+        esac
       done <<< "$mcp_status"
       if [ "$mcp_bad" -eq 0 ]; then
         printf "%b MCP servers: %d configured, all reachable\n" "$OK" "$mcp_ok"
+        if [ "$mcp_responding" -gt 0 ]; then
+          while IFS='|' read -r name status target; do
+            [ -z "$name" ] && continue
+            case "$status" in
+              responding*) printf "    %b %s: %s (%s)\n" "$INFO" "$name" "$status" "$target" ;;
+            esac
+          done <<< "$mcp_status"
+        fi
       else
         printf "%b MCP servers: %d reachable, %d unreachable/missing\n" "$WARN" "$mcp_ok" "$mcp_bad"
         while IFS='|' read -r name status target; do
           [ -z "$name" ] && continue
-          [ "$status" = "ok" ] && continue
-          printf "    %s: %s (%s)\n" "$name" "$status" "$target"
+          case "$status" in
+            ok) continue ;;
+            responding*) printf "    %b %s: %s (%s)\n" "$INFO" "$name" "$status" "$target" ;;
+            *) printf "    %s: %s (%s)\n" "$name" "$status" "$target" ;;
+          esac
         done <<< "$mcp_status"
       fi
     fi
@@ -3420,6 +3480,13 @@ PYEOF
     printf "%b All checks passed\n" "$OK"
   else
     printf "%b Some checks need attention\n" "$WARN"
+    # DOC-3: this function's return value becomes `cast doctor`'s process exit status
+    # (the `doctor)` case arm at the bottom of this file is a tail call with nothing
+    # after it). Nothing in this repo currently consumes that exit code (scripts/,
+    # .github/, .githooks/ were grepped 2026-08-27), so flipping it here is safe.
+    # 1 = "some checks need attention" (conventional non-zero failure). Reserve 2
+    # elsewhere in CAST for hook hard-block semantics — do not reuse it here.
+    return 1
   fi
 }
 
