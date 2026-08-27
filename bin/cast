@@ -2600,6 +2600,39 @@ PYEOF
       printf "    likely maxTurns cap hit — agent stopped without Status; see rules working-conventions 'Agent Turn Limits'\n"
     fi
 
+    # ── subagent depth cap (v10 SEC-2) ───────────────────────────────────────
+    # CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1 is set at the fragment layer so a
+    # subagent is not given the Agent tool at all. It fails OPEN by absence: if
+    # the var is missing, malformed, or never installed, the default is depth 3
+    # and nothing errors. Until v10 there was no runtime assertion that the cap
+    # was actually in effect — only build-time backstops. agent_runs.spawn_depth
+    # (migration 036, read from Claude Code's own agent-<id>.meta.json sidecar)
+    # makes the question answerable from the record instead of from the config.
+    local _dc_out _dc_rc
+    _dc_out="$(sqlite3 "$CAST_DB_PATH" "
+      SELECT COALESCE(SUM(spawn_depth > 1), 0), COALESCE(COUNT(spawn_depth), 0), COALESCE(MAX(spawn_depth), 0)
+      FROM agent_runs
+      WHERE spawn_depth IS NOT NULL
+        AND datetime(replace(replace(started_at,'T',' '),'Z','')) >= datetime('now','-7 day');" 2>/dev/null)"
+    _dc_rc=$?
+    if [ "$_dc_rc" -ne 0 ] || [ -z "$_dc_out" ]; then
+      printf "%b subagent depth cap: unavailable (db query failed)\n" "$INFO"
+    else
+      local _dc_over _dc_seen _dc_max
+      IFS='|' read -r _dc_over _dc_seen _dc_max <<< "$_dc_out"
+      if [ "${_dc_seen:-0}" -eq 0 ]; then
+        # No captured depths is NOT a pass — it means the assertion could not run.
+        printf "%b subagent depth cap: no depth recorded in last 7d — cannot confirm in effect\n" "$INFO"
+      elif [ "${_dc_over:-0}" -gt 0 ]; then
+        printf "%b subagent depth cap BREACHED: %d of %d run(s) in last 7d at depth > 1 (max %d)\n" \
+          "$ERR" "$_dc_over" "$_dc_seen" "$_dc_max"
+        printf "    CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH fails open by absence — check ~/.claude/settings.json env\n"
+        overall_ok=0
+      else
+        printf "%b subagent depth cap: %d run(s) in last 7d, max depth %d\n" "$OK" "$_dc_seen" "$_dc_max"
+      fi
+    fi
+
     # ── spend-consistency ────────────────────────────────────────────────────
     # Runs both the LIKE-based query (consolidated budget-alert stage behavior) and the
     # normalized DATE-based query (cast budget / cast-dash.py behavior) and

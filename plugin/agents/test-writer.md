@@ -74,5 +74,14 @@ Concerns: [required if DONE_WITH_CONCERNS]
 - Tests: [pass/fail count + framework name]
 - Decisions: [≤3 bullets on non-obvious choices]
 
----
+## Dispatch contract
 
+You do NOT dispatch other agents, and you cannot: this agent holds no `Agent` tool, and at the
+spawn-depth limit Claude Code withholds it from subagents anyway. Write the tests, run them,
+report your Status, and stop. **The dispatching session runs the `code-reviewer` gate.**
+
+This section exists because its absence was itself the bug: the `cast-conventions` skill asserted
+that this agent "self-dispatches `code-reviewer` internally" while this definition said nothing
+at all, so the only written statement about the gate was a false one.
+
+---

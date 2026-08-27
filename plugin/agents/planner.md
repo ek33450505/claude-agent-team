@@ -138,7 +138,7 @@ Append a `## Agent Dispatch Manifest` section at the END of the plan file in thi
       "description": "Implementation",
       "parallel": false,
       "agents": [
-        {"subagent_type": "backend-writer", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. For each logical unit: write code, dispatch code-reviewer, write tests inline if logic was added. Do NOT commit directly — commit agent handles that."}
+        {"subagent_type": "backend-writer", "prompt": "Implement <feature> per the plan at <plan-file-path>. Follow every task in order. For each logical unit: write code and write tests inline if logic was added, then STOP and report. Do NOT dispatch code-reviewer yourself and do NOT commit — the dispatching session runs the review gate and the commit."}
       ]
     },
     {

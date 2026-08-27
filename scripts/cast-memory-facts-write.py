@@ -29,6 +29,36 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 
+# The memory ROUTER matches on `description` during recall, so a description cut
+# mid-word makes an otherwise good body unrecallable — which is why a queue of
+# ~1,000 entries has produced so little value. Measured 2026-08-27 across the
+# live agent_memories table: every stored description was exactly 100 characters
+# and cut mid-token ("safe-by-const", "settings.json ONLY; t", "unpinn").
+#
+# Note the diagnosis this corrects: the finding that opened this item named
+# cast-session-distiller.py's `sentence[:140]`. That IS a byte slice and is fixed
+# too, but it is not what wrote these rows — the ceiling in the data is 100, not
+# 140, and it comes from here. The number in the evidence did not match the
+# number in the accused line, which is what gave it away.
+_DESCRIPTION_MAX = 100
+
+
+def _summarize(text, limit=_DESCRIPTION_MAX):
+    """Return a description that ends at a word or sentence boundary."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    for end in (". ", "! ", "? "):
+        cut = window.rfind(end)
+        if cut > limit // 2:
+            return window[:cut + 1].strip()
+    cut = window.rfind(" ")
+    if cut > 0:
+        return window[:cut].rstrip(" ,;:-") + "\u2026"
+    return window
+
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 # Confidence ceiling for subagent-asserted facts (unverified; prevents injection gaming)
@@ -235,7 +265,7 @@ def main() -> None:
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         agent, project, mem_type, name,
-                        content[:100], content,
+                        _summarize(content), content,
                         now, now, confidence, now,
                     ),
                 )
@@ -250,7 +280,7 @@ def main() -> None:
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         agent, project, mem_type, name,
-                        content[:100], content,
+                        _summarize(content), content,
                         now, now, confidence, now,
                     ),
                 )

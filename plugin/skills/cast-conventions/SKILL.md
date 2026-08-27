@@ -80,7 +80,13 @@ NEVER run any of: `git stash` (any form), `git reset` (any form), `git checkout 
 ## Error Routing
 
 - Route any error/failure to the `debugger` agent rather than inline triage.
-- Agents that modify code (`test-writer`, `debugger`, `backend-writer`, `frontend-writer`) self-dispatch `code-reviewer` internally — do not double-dispatch from the main session.
+- **The DISPATCHING SESSION runs the review gate.** Code-modifying agents (`test-writer`,
+  `debugger`, `backend-writer`, `frontend-writer`) finish their unit, report `DONE` /
+  `DONE_WITH_CONCERNS`, and stop. They do NOT self-dispatch `code-reviewer` — at the spawn-depth
+  limit Claude Code withholds the `Agent` tool from a subagent entirely, so the call is absent,
+  not merely discouraged. `code-reviewer` is also declared `background: true`, which an
+  in-process teammate cannot spawn. This line previously claimed the opposite; acting on it meant
+  the review gate ran nowhere.
 
 ## Code Review Requirement
 

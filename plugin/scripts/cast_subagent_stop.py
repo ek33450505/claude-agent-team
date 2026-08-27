@@ -619,6 +619,31 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
         except Exception:
             transcript_path = ""
 
+    # Lineage (SEC-2 residual). Claude Code writes an agent-<id>.meta.json sidecar
+    # beside every subagent transcript, and it carries what the HOOK PAYLOAD does
+    # not: spawnDepth on every agent, and parentAgentId whenever the parent is
+    # itself a subagent. Measured across 3,063 live sidecars 2026-08-27:
+    # spawnDepth present in 3,063 (100%), parentAgentId in 188 — every agent at
+    # depth >= 2 plus 16 at depth 1 — and all 188 resolve to a real sibling agent.
+    # So the SEC-2 item's premise was wrong: this is not an always-NULL column.
+    # The gate is closed by stickiness AND now recorded lineage.
+    spawn_depth = None
+    parent_agent_id = None
+    if transcript_path:
+        meta_path = transcript_path[:-len(".jsonl")] + ".meta.json" if transcript_path.endswith(".jsonl") else ""
+        try:
+            if meta_path and os.path.isfile(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as _mf:
+                    _meta = json.load(_mf)
+                _sd = _meta.get("spawnDepth")
+                spawn_depth = int(_sd) if isinstance(_sd, (int, float)) else None
+                _pa = _meta.get("parentAgentId")
+                parent_agent_id = str(_pa)[:64] if _pa else None
+        except Exception:
+            # Recording lineage must never change whether this hook completes.
+            spawn_depth = None
+            parent_agent_id = None
+
     # Branch of the agent's working tree (F1 per-feature cost attribution).
     branch = None
     try:
@@ -679,6 +704,10 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             total_tool_uses = 0
             edited = set()
             found_usage = False
+            # C1: the last assistant turn, captured in the SAME pass as the token
+            # counts. Costs one comparison per line and needs no second read.
+            _recov_text = ""
+            _recov_tool = None
 
             with open(transcript_path, "r", errors="replace") as f:
                 for raw_line in f:
@@ -692,6 +721,19 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     msg = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
                     _content = msg.get("content")
                     if isinstance(_content, list):
+                        if msg.get("role") == "assistant":
+                            _texts = [b.get("text", "") for b in _content
+                                      if isinstance(b, dict) and b.get("type") == "text"]
+                            _joined = "\n".join(t for t in _texts if t)
+                            # Last non-empty assistant turn wins, mirroring the
+                            # terminal-block intent of the payload-side recovery.
+                            if _joined.strip():
+                                _recov_text = _joined
+                                _recov_tool = None
+                            else:
+                                for _b in _content:
+                                    if isinstance(_b, dict) and _b.get("type") == "tool_use":
+                                        _recov_tool = (_b.get("name") or "?", _b.get("input") or {})
                         for _blk in _content:
                             if isinstance(_blk, dict) and _blk.get("type") == "tool_use":
                                 total_tool_uses += 1
@@ -712,6 +754,35 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     found_usage = True
                     if not transcript_model and isinstance(msg.get("model"), str):
                         transcript_model = msg["model"]
+
+            # C1: recover the response when the payload carried none.
+            #
+            # The payload-side chain (agent_response.content -> last_assistant_message
+            # -> output -> body -> terminal tool_use) is entirely payload-fed, so a
+            # transport loss leaves response_text empty and there is nothing for
+            # stage 16 to surface — the orchestrator sees silence and has to run
+            # `cast review` by hand. Measured over the last 14 days: 264 DONE runs
+            # carried an empty response, and ALL 264 had their transcript on disk
+            # (median 71 KB). The reaper's recovery pass only ever targeted
+            # status IN ('failed','abandoned'), so a DONE run was never a candidate.
+            #
+            # Tagged, because provenance matters: this text came from the subagent's
+            # own transcript rather than from the message it handed back. Only
+            # response_text is filled — ctx.output_full is deliberately left alone so
+            # the truncation, completeness and protocol stages keep classifying the
+            # payload they were given, not text recovered afterwards.
+            if not response_text:
+                _rec = ""
+                if _recov_text.strip():
+                    _rec = _recov_text
+                elif _recov_tool:
+                    try:
+                        _rec = f"[{_recov_tool[0]}] " + json.dumps(_recov_tool[1], ensure_ascii=False)
+                    except Exception:
+                        _rec = ""
+                if _rec.strip():
+                    response_text = ("[recovered-from-transcript] " + _rec)[:20000]
+                    ctx.response_text = response_text
 
             if found_usage:
                 input_tokens = total_input
@@ -790,6 +861,11 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             ("branch", "TEXT"),
             ("files", "TEXT"),
             ("file_class", "TEXT"),
+            # v10 SEC-2 lineage (migration 036). Self-healed here as well as
+            # migrated, so a cast.db that has not been reinstalled still RECORDS
+            # lineage rather than merely degrading past it.
+            ("spawn_depth", "INTEGER"),
+            ("parent_agent_id", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {col} {coltype}")
@@ -811,6 +887,34 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
         try:
             conn = sqlite3.connect(db, timeout=5)
             cur = conn.cursor()
+            # A cast.db that has not had migration 036 applied has no lineage
+            # columns. This UPDATE is wrapped in try/except with a retry, so an
+            # unconditional "SET ..., spawn_depth=?" there raises "no such column"
+            # on every attempt, the row stays 'running', and enrichment stops
+            # recording ENTIRELY and silently — for cost, tokens, tool_uses and
+            # response, not just lineage. CI caught exactly that.
+            #
+            # The PRIMARY fix is the self-healing ALTER above, which adds both
+            # columns to any DB reaching this code, so lineage is recorded rather
+            # than merely skipped. This probe is a second layer for the case where
+            # that ALTER itself fails (unwritable DB, lock contention, a future
+            # schema that refuses it) and the column genuinely is not there.
+            #
+            # Stated plainly because it is true: NO TEST DISCRIMINATES THIS BRANCH.
+            # Mutation-testing it (forcing the unconditional SET) leaves the suite
+            # green, because the self-heal has already restored the columns by the
+            # time this runs. It is defence in depth, not a covered path — do not
+            # read the green suite as evidence that it works.
+            try:
+                _cols = {r[1] for r in cur.execute("PRAGMA table_info(agent_runs)").fetchall()}
+            except Exception:
+                _cols = set()
+            if {"spawn_depth", "parent_agent_id"} <= _cols:
+                _lineage_sql = ", spawn_depth=?, parent_agent_id=?"
+                _lineage_params = (spawn_depth, parent_agent_id)
+            else:
+                _lineage_sql = ""
+                _lineage_params = ()
             if fast_row_id is not None:
                 # The fast status write above already closed this row out of 'running';
                 # enrich the SAME row by id (its status is no longer 'running', so the
@@ -821,11 +925,11 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=? "
+                    "files=?, file_class=?" + _lineage_sql + " "
                     "WHERE id=?",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, fast_row_id),
+                     files_val, file_class_val) + _lineage_params + (fast_row_id,),
                 )
             elif agent_id:
                 cur.execute(
@@ -834,13 +938,13 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=? "
+                    "files=?, file_class=?" + _lineage_sql + " "
                     "WHERE id=("
                     "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, agent_id),
+                     files_val, file_class_val) + _lineage_params + (agent_id,),
                 )
             else:
                 cur.execute(
@@ -849,13 +953,13 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=? "
+                    "files=?, file_class=?" + _lineage_sql + " "
                     "WHERE id=("
                     "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id IS ?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, agent, sess or None),
+                     files_val, file_class_val) + _lineage_params + (agent, sess or None),
                 )
             rows_affected = conn.execute("SELECT changes()").fetchone()[0]
             conn.commit()
@@ -910,10 +1014,27 @@ _HANDOFF_RE = re.compile(r"## Handoff\s*\n([\s\S]+?)(?=\n## |\Z)")
 # import — that test is the sync mechanism; keep it passing when either copy
 # changes.
 _INLINE_STATUS_VALUES = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT")
+_INLINE_REQUIRED_FIELDS = ("files_changed", "status", "blockers")
 # Same tolerant-matching rule as cast_handoff_parser._ENUM_TOKEN_RE: leading
 # UPPER_SNAKE token only, so "**DONE** — notes" / "BLOCKED (reason...)" match
 # while a genuinely wrong or absent value is still rejected.
 _INLINE_ENUM_TOKEN_RE = re.compile(r"^[\s*_]*([A-Z][A-Z_]*)")
+# Same markdown-in-KEYS and list-continuation tolerance as
+# cast_handoff_parser._MD_EMPHASIS_RE / _LIST_ITEM_RE — see the long rationale
+# there. "**files_changed:** a.py" and a "files_changed:" followed by bullets were
+# together 63% of all recorded protocol violations (measured 2026-08-27).
+_INLINE_KEY_LEAD_RE = re.compile(r"""^[\s*_`"'+-]+""")
+_INLINE_KEY_TRAIL_RE = re.compile(r"""[\s*_`"']+$""")
+_INLINE_KEY_SPACE_RE = re.compile(r"\s+")
+_INLINE_VALUE_LEAD_EMPHASIS_RE = re.compile(r"""^[\s*_`"']+""")
+_INLINE_EMPHASIS_CHARS = """*_`"'"""
+_INLINE_LIST_ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
+
+
+def _inline_normalize_key(key: str) -> str:
+    """Mirror of cast_handoff_parser._normalize_key — see the rationale there."""
+    k = _INLINE_KEY_TRAIL_RE.sub("", _INLINE_KEY_LEAD_RE.sub("", key))
+    return _INLINE_KEY_SPACE_RE.sub("_", k.strip()).lower()
 
 
 def _inline_validate_handoff(text: str) -> dict:
@@ -923,12 +1044,33 @@ def _inline_validate_handoff(text: str) -> dict:
                 "pattern": None, "detail": "No ## Handoff block found", "raw_excerpt": ""}
     block = m.group(1)
     fields = {}
+    pending_list_key = None
     for line in block.splitlines():
         line = line.strip()
+        if not line:
+            pending_list_key = None
+            continue
+        if pending_list_key is not None:
+            item = _INLINE_LIST_ITEM_RE.match(line)
+            if item and _inline_normalize_key(item.group(1).partition(":")[0]) in _INLINE_REQUIRED_FIELDS:
+                item = None  # a bulleted KEY line, not a value — do not absorb it
+            if item:
+                seen = fields[pending_list_key]
+                fields[pending_list_key] = f"{seen}, {item.group(1)}" if seen else item.group(1)
+                continue
+            pending_list_key = None
         if ":" in line:
             k, _, v = line.partition(":")
-            fields[k.strip().lower()] = v.strip()
-    for req in ("files_changed", "status", "blockers"):
+            key = _inline_normalize_key(k)
+            v = v.strip()
+            lead = _INLINE_KEY_LEAD_RE.match(k)
+            if lead and any(c in _INLINE_EMPHASIS_CHARS for c in lead.group(0)):
+                v = _INLINE_VALUE_LEAD_EMPHASIS_RE.sub("", v)
+            if not key:
+                continue
+            fields[key] = v
+            pending_list_key = key if not v else None
+    for req in _INLINE_REQUIRED_FIELDS:
         if req not in fields or not fields[req]:
             return {"block_present": True, "ok": False,
                     "violation": "handoff_schema_violation",

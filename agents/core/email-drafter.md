@@ -81,7 +81,10 @@ You keep showcase repo READMEs accurate by syncing stats with actual project sta
    - Preserve formatting, tone, and structure
    - Update shields.io badge URLs with correct values
 
-5. **Commit** — Self-dispatch `commit` agent per repo: `docs(readme): sync stats — N agents, M tests`
+5. **Commit** — Do NOT attempt to dispatch the `commit` agent: this agent holds no `Agent`
+   tool, so the call is structurally impossible, not merely discouraged. Report the files you
+   changed and the message you would use (`docs(readme): sync stats — N agents, M tests`);
+   the dispatching session runs the commit.
 
 6. **Generate sync report:**
    ```markdown

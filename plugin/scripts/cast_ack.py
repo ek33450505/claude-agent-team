@@ -91,6 +91,14 @@ def record_ack(variable: str, value: str = None, script: str = None) -> bool:
 
     value=None reads os.environ[variable]. Empty/unset -> no row, returns
     False (the hatch was not used). Never raises.
+
+    False is returned for three genuinely different outcomes and only the first
+    is benign: the hatch was not used; cast_db is unavailable; or the write
+    itself failed. The latter two are logged to ~/.claude/logs/ — a legitimate
+    bypass going unrecorded is exactly the hole this primitive exists to close,
+    and it previously produced no signal anywhere. The return value and the
+    CLI's exit status are unchanged: recording must never be able to alter
+    whether a gate passes.
     """
     try:
         raw_value = value if value is not None else os.environ.get(variable, '')
@@ -109,6 +117,12 @@ def record_ack(variable: str, value: str = None, script: str = None) -> bool:
             )
 
         if db_write is None:
+            # NOT the same as "the hatch was not used" above, though both return
+            # False. A legitimate bypass just went unrecorded and nothing said so.
+            _log_error(
+                f'record_ack: {variable} was used but cast_db is unavailable — '
+                f'the bypass is NOT recorded'
+            )
             return False
 
         git_sha = _git('rev-parse', 'HEAD')
@@ -129,7 +143,17 @@ def record_ack(variable: str, value: str = None, script: str = None) -> bool:
             'session_id': session_id,
             'repo': repo,
         }
-        return bool(db_write('ack_events', payload))
+        written = bool(db_write('ack_events', payload))
+        if not written:
+            # db_write fails SILENTLY by contract, so without this the only
+            # signal that a recorded bypass was lost is its absence from a table
+            # nobody is watching. Exit status is unaffected: recording can never
+            # change whether a gate passes.
+            _log_error(
+                f'record_ack: db_write returned no row for {variable} — '
+                f'the bypass is NOT recorded'
+            )
+        return written
     except Exception as e:
         _log_error(f'record_ack failed for {variable}: {e}')
         return False

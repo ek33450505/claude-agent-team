@@ -30,6 +30,10 @@ cast_check_approvals '<task_id>' 'code-reviewer'
 - Exit 0: all required approvals present — proceed with commit
 - Exit 1: approvals missing — output Status: BLOCKED 'Missing required approvals from code-reviewer. Dispatch code-reviewer first.'
 - Exit 2: unanswered rejections — output Status: BLOCKED 'Artifact rejected by <reviewer>. Rejection must be resolved before commit.'
+- **Any other exit code: treat as BLOCKED.** 127 means `python3` was not found, 126 a permission
+  problem, 137 a kill — none of them mean "approved". This list enumerated only 0/1/2, so an
+  unlisted code fell through the prose entirely and the safest reading of "not 1 and not 2" is the
+  dangerous one. A gate that cannot run has not passed; output Status: BLOCKED naming the code.
 
 The commit agent MUST NOT bypass this gate. Use CAST_COMMIT_AGENT=1 prefix only after the gate passes.
 

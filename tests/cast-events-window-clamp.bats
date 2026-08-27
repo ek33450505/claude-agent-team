@@ -193,3 +193,56 @@ PYEOF
 
   chmod 755 "$log_dir"
 }
+
+# ---------------------------------------------------------------------------
+# ISO-timestamp coverage for the agent_runs fallback.
+#
+# _insert_run seeds ONLY space-format timestamps via datetime('now'), but the
+# production hooks write ISO-T/Z (datetime.now(timezone.utc).isoformat()), and
+# cast.db timestamp formats are genuinely mixed across tables. Sticky-BLOCKED was
+# verified by hand to hold for pure-ISO and for mixed rows, and nothing tested it —
+# so a future parse_ts / ORDER BY refactor could break the production format while
+# the suite stayed green on a format production never writes.
+# ---------------------------------------------------------------------------
+
+_iso_now() { echo "strftime('%Y-%m-%dT%H:%M:%SZ','now')"; }
+
+@test "ISO-T/Z rows: a DONE after a BLOCKED does not clear the rejection" {
+  _setup_fallback_db
+  _insert_run "sess-ISO" "code-reviewer" "BLOCKED" "strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 minutes')" ""
+  _insert_run "sess-ISO" "code-reviewer" "DONE"    "strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 minutes')" ""
+  export CAST_SESSION_ID="sess-ISO"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+}
+
+@test "MIXED formats: sticky-BLOCKED still holds when the two rows disagree on format" {
+  # The realistic shape: a row written by a bash writer (space format) alongside
+  # one written by a python hook (ISO-T/Z). A raw string comparison between the
+  # two under- or over-matches depending on direction.
+  _setup_fallback_db
+  _insert_run "sess-MIX" "code-reviewer" "BLOCKED" "strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 minutes')" ""
+  _insert_run "sess-MIX" "code-reviewer" "DONE"    "datetime('now','-1 minutes')" ""
+  export CAST_SESSION_ID="sess-MIX"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 2 ]
+}
+
+@test "ISO-T/Z rows: a clean DONE still satisfies the gate (the fix is not over-tightened)" {
+  _setup_fallback_db
+  _insert_run "sess-ISOOK" "code-reviewer" "DONE" "strftime('%Y-%m-%dT%H:%M:%SZ','now')" ""
+  export CAST_SESSION_ID="sess-ISOOK"
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  assert_success
+}
+
+@test "ISO-T/Z rows: the 24h clamp still excludes a stale approval" {
+  # Guards the parse path specifically: if an ISO-T/Z ended_at failed to parse and
+  # fell back to "no timestamp", a >24h-old row could read as in-window.
+  _setup_fallback_db
+  _insert_run "sess-ISOOLD" "code-reviewer" "DONE" "strftime('%Y-%m-%dT%H:%M:%SZ','now','-2000 minutes')" ""
+  export CAST_SESSION_ID="sess-ISOOLD"
+  export CAST_APPROVAL_WINDOW_MIN=999999
+  run cast_check_approvals "throwaway-task" "code-reviewer"
+  [ "$status" -eq 1 ]
+}

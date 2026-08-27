@@ -974,7 +974,12 @@ PYEOF
   cast_derive_state "$task_a"
   cast_derive_state "$task_b"
 
-  # The two derived state files must be genuinely different files.
+  # ⚠ LOAD-BEARING — this path-equality assertion is H1's ONLY real discriminator.
+  # The exit-code assertions at the end of this test pass EITHER WAY in a
+  # non-concurrent run, because cast_check_approvals re-derives state for its own
+  # exact task_id immediately before reading it, which self-heals the collision.
+  # Proved by reverting the H1 fix: the test fails HERE, not on the exit codes.
+  # Do not "simplify away" as redundant — doing so silently deletes H1's coverage.
   local state_a state_b
   state_a="$(_cast_state_file "$task_a")"
   state_b="$(_cast_state_file "$task_b")"
@@ -1021,4 +1026,50 @@ PYEOF
   local agent
   agent=$(json_field "$f" "agent")
   [ "$agent" = "team/planner" ]
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SEC-2 defect 6 — the events glob used the RAW task_id while cast_emit_event
+# writes filenames with the slash-SANITIZED form, so any task_id containing "/"
+# matched zero event files and cast_derive_state silently produced empty state.
+# Branch-derived task ids plausibly contain "/" — this branch's own name does.
+#
+# Standalone because it previously had NO test of its own: it was exercised only
+# incidentally, because an unrelated H1 fixture happened to use a task_id with a
+# slash in it. Refactoring that fixture would have dropped the coverage with no
+# signal at all. This test names the behaviour it guards.
+# ──────────────────────────────────────────────────────────────────────────────
+
+@test "defect 6: a task_id containing / still derives state from its events" {
+  local tid="feature/v10-slash-task"
+  cast_emit_event "artifact_written" "backend-writer" "$tid" "art-slash" "" "" ""
+
+  # The file on disk carries the SANITIZED id; the JSON body carries the raw one.
+  run bash -c "ls '$CAST_EVENTS_DIR' | grep -c 'feature-v10-slash-task'"
+  assert_output "1"
+
+  cast_derive_state "$tid"
+  local state_file
+  state_file="$(_cast_state_file "$tid")"
+  [ -f "$state_file" ]
+
+  # The artifact must appear in derived state. With the raw-task_id glob this
+  # was an empty list, and the state file still existed — which is why the
+  # failure was silent rather than loud.
+  run bash -c "python3 -c \"import json;print(json.load(open('$state_file'))['artifact_ids'])\""
+  assert_output --partial "art-slash"
+}
+
+@test "defect 6: a slash task_id does not collect a DIFFERENT task's events" {
+  # Sanitizing "a/b" to "a-b" means a literally-named "a-b" task shares the glob.
+  # The raw-value exact-match check inside the loop is what keeps them apart, and
+  # widening the glob must not have reopened that.
+  cast_emit_event "artifact_written" "backend-writer" "sib/one" "art-slashy" "" "" ""
+  cast_emit_event "artifact_written" "backend-writer" "sib-one" "art-literal" "" "" ""
+
+  cast_derive_state "sib/one"
+  local sf; sf="$(_cast_state_file "sib/one")"
+  run bash -c "python3 -c \"import json;print(json.load(open('$sf'))['artifact_ids'])\""
+  assert_output --partial "art-slashy"
+  refute_output --partial "art-literal"
 }

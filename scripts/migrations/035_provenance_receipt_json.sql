@@ -1,0 +1,36 @@
+-- Migration 035: add provenance_chain.receipt_json (CAST v10 PROV-1).
+-- Finding: `cast verify-chain` reported "session-data tamper detected" for 244
+--   of 929 rows (26%), and not one of them was tamper. Level-2 attestation
+--   re-derives session_digest from LIVE data via ledger._build_receipt_data(),
+--   which joins sessions + agent_runs + file_writes + routing_events +
+--   quality_gates + four integrity tables. Those inputs are not immutable:
+--     (a) RETENTION. cast-db-prune deletes agent_runs while provenance_chain is
+--         never pruned. Measured 2026-08-27: the oldest surviving agent_runs row
+--         is 2026-07-28T10:42:38Z, and chain rows appended in July are 40% broken
+--         against 9% for August — the cliff, not coincidence.
+--     (b) POST-APPEND BACKFILL. cost_usd, tool_uses, model, duration_ms and
+--         status are written at completion by a later stage-2 transcript pass,
+--         so August rows break too. The newest broken entry was appended
+--         2026-08-27 17:22:44 with its five agent_runs still present.
+--   Consequence, and the reason this is in v10 rather than a release note: a
+--   permanently 26%-red chain carries no information. An operator cannot tell a
+--   real edit from CAST's own writers, which is the same defect class as a gate
+--   that has never failed — here, one that can never be fully green.
+-- Fix: store the exact canonical serialization the digest was taken over, at
+--   append time. Verification then digests the STORED payload (real tamper
+--   evidence for the ledger row) and reports any divergence from live data
+--   separately, as drift, because drift is expected and benign.
+-- Rows appended before this column exists keep receipt_json NULL and are
+--   reported UNVERIFIABLE, never BROKEN. They are NOT unguarded: level-1
+--   linkage (prev_hash chaining and chain_hash recompute) still covers every
+--   row, so editing a stored digest still breaks the chain. What is unavailable
+--   for them is attestation against live data, and saying so plainly is the
+--   whole point — "could not be verified" and "could not be read" must not
+--   collapse into one string.
+-- Mirrors the ALTER TABLE added to cast-db-init.sh, which is the SINGLE SOURCE
+--   OF TRUTH for fresh DBs; this migration backfills existing/legacy DBs.
+--   A bare ALTER is safe: cast-migrate.py tolerates both "no such table" and
+--   "duplicate column" for ALTER TABLE ADD COLUMN (see _apply_migration).
+-- Additive and non-destructive: no existing row is read, rewritten or deleted.
+
+ALTER TABLE provenance_chain ADD COLUMN receipt_json TEXT;

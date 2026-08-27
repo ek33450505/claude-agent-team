@@ -107,7 +107,11 @@ Keep your final response under **300 tokens**. Return your Status Block and a 1-
 
 **When to re-run:** After any fix touching reviewed files.
 
-**Do NOT dispatch** from orchestrating session if change was made by backend-writer, frontend-writer, or debugger — these self-dispatch code-reviewer internally.
+**ALWAYS dispatch from the orchestrating session.** backend-writer, frontend-writer and debugger
+do NOT self-dispatch this agent and structurally cannot: at the spawn-depth limit the `Agent` tool
+is withheld from subagents, and this agent is declared `background: true`, which an in-process
+teammate cannot spawn at all. An earlier version of this line said the reverse — following it left
+the review gate unrun.
 
 **Parallel review note:** When the orchestrator runs code-reviewer and security on the same unit (e.g. in parallel), each runs independently. If either returns BLOCKED, surface to the user before dispatching commit.
 
