@@ -467,7 +467,7 @@ LITE
 {
   "mcpServers": {
     "secret-server": {
-      "url": "https://user:mypassword@example.com/mcp?api_key=SECRET123&other=value"
+      "url": "https://user:mypassword@mcp-fixture-host/mcp?api_key=SECRET123&other=value"
     }
   }
 }
@@ -529,7 +529,7 @@ LITE
 {
   "mcpServers": {
     "redacted-server": {
-      "url": "https://admin:secret@api.example.com:8443/mcp/v2?key=TOKEN"
+      "url": "https://admin:secret@mcp-fixture-host:8443/mcp/v2?key=TOKEN"
     }
   }
 }
@@ -538,7 +538,7 @@ JSON
   run bash bin/cast doctor
   [ "$status" -eq 0 ]
   [[ "$output" =~ "https://" ]]
-  [[ "$output" =~ "api.example.com" ]]
+  [[ "$output" =~ "mcp-fixture-host" ]]
   [[ "$output" =~ "8443" ]]
   [[ "$output" =~ "/mcp/v2" ]]
   ! [[ "$output" =~ "admin" ]]
