@@ -7,7 +7,7 @@ Usage:
 Options:
     --rebuild       Delete all record_fts rows then full-reindex (leaves record_embed untouched)
     --kind <k>      Only index this kind (agent_run, incident, dispatch, memory, plan,
-                    journal, transcript)
+                    hatch, journal, transcript, distillate)
     --db <path>     Override CAST_DB_PATH for this run
 
 Exit codes: 0 = success, 1 = error
@@ -314,6 +314,26 @@ SOURCES: List[Dict[str, Any]] = [
         "ts_col": "started_at",
         "title_expr": "plan_file",  # basename extracted in Python
         "body_parts": ["plan_file"],
+    },
+    {
+        # ack_events records escape-hatch uses (scripts/cast-git-guard.py,
+        # scripts/cast-neon.sh). created_at is SQLite datetime('now') SPACE-format
+        # ("YYYY-MM-DD HH:MM:SS") per migration 034 — NOT the ISO-T/Z format
+        # agent_runs uses. _get_high_water() is scoped per-kind (WHERE kind = ?),
+        # so the hatch high-water mark only ever compares against its own
+        # space-format values and never cross-contaminates with ISO-T/Z kinds.
+        # repo/script can be empty string (not NULL) for hook invocations with no
+        # repo context — NULLIF(..., '') covers that before COALESCE falls back.
+        "kind": "hatch",
+        "table": "ack_events",
+        "ref_id_col": "id",
+        "ts_col": "created_at",
+        "title_expr": (
+            "variable || ' · ' || "
+            "COALESCE(NULLIF(repo, ''), '(no repo)') || ' · ' || "
+            "COALESCE(NULLIF(script, ''), '(no script)')"
+        ),
+        "body_parts": ["variable", "value", "script", "repo"],
     },
 ]
 
