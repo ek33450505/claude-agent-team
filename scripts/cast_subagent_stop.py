@@ -704,6 +704,10 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             total_tool_uses = 0
             edited = set()
             found_usage = False
+            # C1: the last assistant turn, captured in the SAME pass as the token
+            # counts. Costs one comparison per line and needs no second read.
+            _recov_text = ""
+            _recov_tool = None
 
             with open(transcript_path, "r", errors="replace") as f:
                 for raw_line in f:
@@ -717,6 +721,19 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     msg = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
                     _content = msg.get("content")
                     if isinstance(_content, list):
+                        if msg.get("role") == "assistant":
+                            _texts = [b.get("text", "") for b in _content
+                                      if isinstance(b, dict) and b.get("type") == "text"]
+                            _joined = "\n".join(t for t in _texts if t)
+                            # Last non-empty assistant turn wins, mirroring the
+                            # terminal-block intent of the payload-side recovery.
+                            if _joined.strip():
+                                _recov_text = _joined
+                                _recov_tool = None
+                            else:
+                                for _b in _content:
+                                    if isinstance(_b, dict) and _b.get("type") == "tool_use":
+                                        _recov_tool = (_b.get("name") or "?", _b.get("input") or {})
                         for _blk in _content:
                             if isinstance(_blk, dict) and _blk.get("type") == "tool_use":
                                 total_tool_uses += 1
@@ -737,6 +754,35 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     found_usage = True
                     if not transcript_model and isinstance(msg.get("model"), str):
                         transcript_model = msg["model"]
+
+            # C1: recover the response when the payload carried none.
+            #
+            # The payload-side chain (agent_response.content -> last_assistant_message
+            # -> output -> body -> terminal tool_use) is entirely payload-fed, so a
+            # transport loss leaves response_text empty and there is nothing for
+            # stage 16 to surface — the orchestrator sees silence and has to run
+            # `cast review` by hand. Measured over the last 14 days: 264 DONE runs
+            # carried an empty response, and ALL 264 had their transcript on disk
+            # (median 71 KB). The reaper's recovery pass only ever targeted
+            # status IN ('failed','abandoned'), so a DONE run was never a candidate.
+            #
+            # Tagged, because provenance matters: this text came from the subagent's
+            # own transcript rather than from the message it handed back. Only
+            # response_text is filled — ctx.output_full is deliberately left alone so
+            # the truncation, completeness and protocol stages keep classifying the
+            # payload they were given, not text recovered afterwards.
+            if not response_text:
+                _rec = ""
+                if _recov_text.strip():
+                    _rec = _recov_text
+                elif _recov_tool:
+                    try:
+                        _rec = f"[{_recov_tool[0]}] " + json.dumps(_recov_tool[1], ensure_ascii=False)
+                    except Exception:
+                        _rec = ""
+                if _rec.strip():
+                    response_text = ("[recovered-from-transcript] " + _rec)[:20000]
+                    ctx.response_text = response_text
 
             if found_usage:
                 input_tokens = total_input

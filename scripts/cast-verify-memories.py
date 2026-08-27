@@ -452,6 +452,11 @@ def get_git_tracked_files(project_root: str) -> Optional[List[str]]:
     return files
 
 
+# Directories generated as a mirror of tracked repo content. A file here is a
+# copy, not an independent source, so it must not create an ambiguity on its own.
+_GENERATED_MIRROR_PREFIXES = ("plugin/",)
+
+
 def resolve_git_suffix_ref(
     ref: str, project_root: Optional[str]
 ) -> Tuple[Optional[str], Optional[List[str]]]:
@@ -479,6 +484,20 @@ def resolve_git_suffix_ref(
     ref_norm = ref.replace(os.sep, "/")
     suffix = "/" + ref_norm
     matches = [f for f in files if f == ref_norm or f.endswith(suffix)]
+
+    if len(matches) > 1:
+        # Drop generated-mirror twins before calling it ambiguous. plugin/ is
+        # regenerated from the repo by scripts/gen-plugin.sh, so EVERY bundled
+        # file has a plugin/ copy and a ref naming one of them matches twice by
+        # construction — "planner.md: ambiguous (2 candidates: agents/core/planner.md,
+        # plugin/agents/planner.md)" is not a real ambiguity, it is the mirror.
+        # Only collapse when the mirror is the ONLY thing creating the tie: if two
+        # genuine sources remain (SKILL.md matches 37 files, half of them mirrors),
+        # it stays ambiguous and stays reported, because picking one would be a
+        # guess. Fails toward reporting, never toward silently choosing.
+        non_mirror = [f for f in matches if not f.startswith(_GENERATED_MIRROR_PREFIXES)]
+        if len(non_mirror) == 1:
+            matches = non_mirror
 
     if len(matches) == 1:
         return os.path.abspath(os.path.join(project_root, matches[0])), None

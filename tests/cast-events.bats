@@ -974,7 +974,12 @@ PYEOF
   cast_derive_state "$task_a"
   cast_derive_state "$task_b"
 
-  # The two derived state files must be genuinely different files.
+  # ⚠ LOAD-BEARING — this path-equality assertion is H1's ONLY real discriminator.
+  # The exit-code assertions at the end of this test pass EITHER WAY in a
+  # non-concurrent run, because cast_check_approvals re-derives state for its own
+  # exact task_id immediately before reading it, which self-heals the collision.
+  # Proved by reverting the H1 fix: the test fails HERE, not on the exit codes.
+  # Do not "simplify away" as redundant — doing so silently deletes H1's coverage.
   local state_a state_b
   state_a="$(_cast_state_file "$task_a")"
   state_b="$(_cast_state_file "$task_b")"

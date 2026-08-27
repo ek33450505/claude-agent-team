@@ -902,3 +902,51 @@ EOF
     assert_output --partial "1 stale memories evaluated (1 REF-BROKEN, 0 REFS-OK, 0 NO-REFS, 0 EPHEMERAL-ONLY, 0 RETIRED)"
     assert_output --partial "missing ref: tests/X.bats"
 }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# J-4: plugin/ is a GENERATED MIRROR of tracked repo content (scripts/gen-plugin.sh),
+# so every bundled file has a plugin/ twin and a ref naming one matches twice by
+# construction. That produced ambiguity findings that were artifacts of the mirror,
+# not of the memory — measured on the real corpus: "planner.md: ambiguous (2
+# candidates: agents/core/planner.md, plugin/agents/planner.md)".
+# The mirror is collapsed ONLY when it is the sole cause of the tie. A ref with two
+# genuine sources stays ambiguous and stays reported, because picking one is a guess.
+# ──────────────────────────────────────────────────────────────────────────────
+@test "J-4: a generated plugin/ mirror twin does not make a ref ambiguous" {
+    local fake_repo="$BATS_TEST_TMPDIR/mirror-repo"
+    mkdir -p "$fake_repo/agents/core" "$fake_repo/plugin/agents"
+    touch "$fake_repo/agents/core/planner.md" "$fake_repo/plugin/agents/planner.md"
+    ( cd "$fake_repo" && git init -q && git add -A )
+
+    run python3 -c "
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location('cvm', '$SCRIPT')
+cvm = importlib.util.module_from_spec(spec); spec.loader.exec_module(cvm)
+path, candidates = cvm.resolve_git_suffix_ref('planner.md', '$fake_repo')
+assert candidates is None, f'expected no ambiguity, got {candidates}'
+assert path is not None and path.endswith('agents/core/planner.md'), f'resolved to {path}'
+print('OK resolved to the source, not the mirror')
+"
+    assert_success
+    assert_output --partial "OK resolved to the source"
+}
+
+@test "J-4: two genuine sources stay ambiguous even when mirrors are present" {
+    local fake_repo="$BATS_TEST_TMPDIR/mirror-repo2"
+    mkdir -p "$fake_repo/skills/a" "$fake_repo/skills/b" "$fake_repo/plugin/skills/a"
+    touch "$fake_repo/skills/a/SKILL.md" "$fake_repo/skills/b/SKILL.md" \
+          "$fake_repo/plugin/skills/a/SKILL.md"
+    ( cd "$fake_repo" && git init -q && git add -A )
+
+    run python3 -c "
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location('cvm', '$SCRIPT')
+cvm = importlib.util.module_from_spec(spec); spec.loader.exec_module(cvm)
+path, candidates = cvm.resolve_git_suffix_ref('SKILL.md', '$fake_repo')
+assert path is None, f'must not silently pick, got {path}'
+assert candidates is not None and len(candidates) == 3, f'expected all 3 reported, got {candidates}'
+print('OK still ambiguous')
+"
+    assert_success
+    assert_output --partial "OK still ambiguous"
+}
