@@ -5,7 +5,9 @@ Usage:
     cast-ask-index.py [--rebuild] [--kind <k>] [--db <path>]
 
 Options:
-    --rebuild       Delete all record_fts rows then full-reindex (leaves record_embed untouched)
+    --rebuild       Full reindex. Clears record_fts first, scoped to --kind when one is
+                    given, or all kinds when it is not. (Also clears record_embed, under the
+                    same scoping, only when --embed is passed.)
     --kind <k>      Only index this kind (agent_run, incident, dispatch, memory, plan,
                     hatch, journal, transcript, distillate)
     --db <path>     Override CAST_DB_PATH for this run
@@ -557,7 +559,7 @@ def _index_file_source(src: Dict[str, Any], rebuild: bool) -> int:
     return count
 
 
-def _embed_pending(rebuild: bool) -> int:
+def _embed_pending(rebuild: bool, kind: Optional[str] = None) -> int:
     """Populate record_embed for record_fts rows lacking an embedding. Opt-in (--embed); fail-open.
 
     Reuses cast-memory-embed.py (embed_text + pack_embedding). Ollama down / module missing →
@@ -570,7 +572,13 @@ def _embed_pending(rebuild: bool) -> int:
         return 0
 
     if rebuild:
-        cast_db.db_execute("DELETE FROM record_embed", ())
+        # Same scoping rule as the record_fts clear in main() — a --kind rebuild
+        # must not discard every other kind's embeddings, which are expensive to
+        # recompute and are NOT restored by this run.
+        if kind:
+            cast_db.db_execute("DELETE FROM record_embed WHERE kind = ?", (kind,))
+        else:
+            cast_db.db_execute("DELETE FROM record_embed", ())
 
     rows = cast_db.db_query(
         "SELECT f.kind AS kind, f.ref_id AS ref_id, f.ts AS ts, f.title AS title, f.body AS body "
@@ -612,7 +620,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--rebuild", action="store_true",
-        help="Full reindex: delete all record_fts rows first (leaves record_embed untouched)",
+        help="Full reindex: clear record_fts first, scoped to --kind when given",
     )
     parser.add_argument(
         "--kind", metavar="K",
@@ -656,11 +664,26 @@ def main() -> int:
             return 1
 
     if args.rebuild:
-        ok = cast_db.db_execute("DELETE FROM record_fts", ())
+        # Scope the clear to what is about to be reindexed. Unscoped, this DELETE
+        # ran BEFORE --kind was applied, so `--rebuild --kind hatch` destroyed
+        # every other kind and then reindexed only `hatch`. Measured live
+        # 2026-08-27: 18,162 rows across 8 kinds (agent_run 8,867, dispatch 4,928,
+        # transcript 2,719, memory 1,052, incident 252, distillate 209, journal 121,
+        # plan 14) stood to be lost to rebuild one of them. The per-file delete in
+        # _index_file_source already scoped itself exactly this way; this one never did.
+        if args.kind:
+            ok = cast_db.db_execute("DELETE FROM record_fts WHERE kind = ?", (args.kind,))
+            scope = f"kind={args.kind}"
+        else:
+            # No --kind: every kind is being reindexed, so an unscoped clear is
+            # correct — and it additionally sweeps rows of kinds this version no
+            # longer produces, which a per-kind loop would leave orphaned.
+            ok = cast_db.db_execute("DELETE FROM record_fts", ())
+            scope = "all kinds"
         if not ok:
             print("Failed to clear record_fts for rebuild", file=sys.stderr)
             return 1
-        print("record_fts cleared for full rebuild")
+        print(f"record_fts cleared for rebuild ({scope})")
 
     exit_code = 0
 
@@ -684,7 +707,7 @@ def main() -> int:
 
     if args.embed:
         try:
-            n_emb = _embed_pending(rebuild=args.rebuild)
+            n_emb = _embed_pending(rebuild=args.rebuild, kind=args.kind)
             print(f"embedded {n_emb} record_embed rows")
         except Exception as exc:
             print(f"ERROR embedding: {exc}", file=sys.stderr)
