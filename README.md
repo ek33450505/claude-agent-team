@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-9.5.3-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-3274-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3292-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -257,7 +257,7 @@ usage-aware, so a memory recalled often decays slower than one nobody reads.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->236<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->3274<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->237<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->3292<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
 guard logic, event emission and memory persistence — including tests that prove destructive operations
 **refuse**. Runs on macOS and Ubuntu in CI.
 
@@ -340,20 +340,6 @@ anyway. See [docs/TOKEN-OPTIMIZATION.md](docs/TOKEN-OPTIMIZATION.md).
 
 CAST ships <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash commands and <!-- CAST_SKILL_COUNT -->18<!-- /CAST_SKILL_COUNT --> on-demand skills.
 
-Two further skills — `neon` and `neon-postgres` — are **declared dependencies, not CAST's work**. Both come
-from [neondatabase/agent-skills](https://github.com/neondatabase/agent-skills), are installed with the
-`skills` CLI rather than by CAST, and live outside the repo under `.agents/skills/`, surfaced as symlinks in
-`skills/`. A working copy therefore shows 20 directories while the count above says 18: the count measures
-skills CAST authors and maintains (`git ls-files 'skills/*'`), and deliberately does not claim credit for
-someone else's.
-
-Neither the skill content nor the `skills-lock.json` that pins it is tracked here, so this paragraph is the
-only record a fresh clone gets. As pinned at install (2026-08-24):
-
-| Skill | Source | Path |
-|---|---|---|
-| `neon` | `neondatabase/agent-skills` | `skills/neon/SKILL.md` |
-| `neon-postgres` | `neondatabase/agent-skills` | `skills/neon-postgres/SKILL.md` |
 
 ---
 

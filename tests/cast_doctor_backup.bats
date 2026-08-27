@@ -25,7 +25,10 @@ teardown() {
 
   run bash "$REPO_DIR/bin/cast" doctor
 
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 
   # Output should contain "Backups:" and the WARN marker "[!!]"
   [[ "$output" =~ "Backups:" ]]
@@ -43,7 +46,10 @@ teardown() {
 
   run bash "$REPO_DIR/bin/cast" doctor
 
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 
   # Output should contain "Backups:" and the OK marker "[ok]"
   [[ "$output" =~ "Backups:" ]]

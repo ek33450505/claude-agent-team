@@ -34,14 +34,14 @@ dist/
 research/2026-07-agent-audit.md
 research/2026-07-portfolio-audit.md
 research/2026-07-frontier-hunt-v2/
-# Third-party agent skills installed via `npx skills add` (neondatabase/agent-skills, 2026-08-24).
-# Kept LOCAL and usable, deliberately NOT tracked: CAST counts its own skills with
-# `git ls-files 'skills/*'` (scripts/cast-stats-lib.sh:42), so committing these would silently move
-# the count 18 -> 20 and fail stats-guard — and they are third-party content in a portfolio repo.
-# Paths are root-anchored for the same reason as /AGENTS.md above (macOS matches case-insensitively,
-# so an unanchored rule would also swallow nested paths like plugin/skills/neon).
-# Adopting any of them properly is its own unit: regenerate cast-stats.json + README sentinels first.
+# Third-party agent-skill installers drop content here. The Neon skills that lived
+# under these paths were REMOVED 2026-08-27: they taught direct Neon CLI/MCP workflows
+# with zero awareness of scripts/cast-neon.sh, which deliberately wires the MCP
+# read-only and gates branch-delete behind CAST_NEON_BRANCH_DELETE_OK — so an agent
+# loading them was being coached around a fail-closed destructive-op guard.
+# The ignore rules stay: they keep any future `skills add` content out of the tracked
+# skill count (`git ls-files 'skills/*'`, scripts/cast-stats-lib.sh:42) rather than
+# silently moving it. Both rules are intentionally unanchored: `.agents/` should match
+# wherever a skills installer creates it, not only at the repo root.
 .agents/
 skills-lock.json
-/skills/neon
-/skills/neon-postgres

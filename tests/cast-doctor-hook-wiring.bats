@@ -87,7 +87,10 @@ JSON
   # Do NOT create the sentinel file
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "double-fire risk" ]]
   [[ "$output" =~ "cast-hook-owner sentinel MISSING" ]]
   [[ "$output" =~ "Fix: touch" ]]
@@ -100,7 +103,10 @@ JSON
   touch "${CAST_CONFIG_DIR}/cast-hook-owner"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "dual install detected" ]]
   [[ "$output" =~ "plugin hooks defer to install.sh via cast-hook-owner sentinel" ]]
 }
@@ -111,7 +117,10 @@ JSON
   # No sentinel
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "no double-fire risk" ]]
   [[ ! "$output" =~ "stale" ]]
 }
@@ -122,7 +131,10 @@ JSON
   # No sentinel
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "no double-fire risk" ]]
 }
 
@@ -133,7 +145,10 @@ JSON
   touch "${CAST_CONFIG_DIR}/cast-hook-owner"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "stale cast-hook-owner sentinel" ]]
   [[ "$output" =~ "plugin hooks are deferring but no install.sh hooks found" ]]
   [[ "$output" =~ "Fix: rm" ]]

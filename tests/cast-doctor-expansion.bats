@@ -34,7 +34,10 @@ Body content here.
 AGENT
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Agent frontmatter: all 1 pass native format check" ]]
 }
 
@@ -50,7 +53,10 @@ Body.
 AGENT
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Agent frontmatter: errors found" ]]
   [[ "$output" =~ "bad-agent.md: missing 'name'" ]]
 }
@@ -67,7 +73,10 @@ Body.
 AGENT
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Agent frontmatter: errors found" ]]
   [[ "$output" =~ "no-desc.md: missing 'description'" ]]
 }
@@ -83,7 +92,10 @@ Body.
 AGENT
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Agent frontmatter: errors found" ]]
   [[ "$output" =~ "no-tools.md: missing 'tools'" ]]
 }
@@ -92,7 +104,10 @@ AGENT
   echo "Body only, no frontmatter." > "${CAST_AGENTS_DIR}/bare.md"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Agent frontmatter: errors found" ]]
   [[ "$output" =~ "bare.md: no frontmatter block" ]]
 }
@@ -106,7 +121,10 @@ AGENT
 JSON
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "MCP servers: none configured" ]]
 }
 
@@ -122,9 +140,13 @@ JSON
 }
 JSON
 
-  # Mock curl to succeed (status 0 = reachable)
+  # Mock a healthy server. Since v10 the probe reads curl's -w '%{http_code}'
+  # rather than relying on curl -sf's exit status, so the mock must PRINT a
+  # status code — exiting 0 with no output now (correctly) reads as no HTTP
+  # response at all, i.e. unreachable.
   cat > "${HOME}/curl-mock.sh" <<'CURL'
 #!/bin/bash
+printf '200'
 exit 0
 CURL
   chmod +x "${HOME}/curl-mock.sh"
@@ -134,7 +156,10 @@ CURL
   ln -sf "${HOME}/curl-mock.sh" "${HOME}/curl"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "MCP servers: 1 configured, all reachable" ]]
 }
 
@@ -151,7 +176,10 @@ CURL
 JSON
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "MCP servers:" ]]
   [[ "$output" =~ "broken-server" ]]
 }
@@ -169,13 +197,19 @@ JSON
 JSON
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "MCP servers: 1 configured, all reachable" ]]
 }
 
 @test "check 16: routines reports none configured" {
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Routines: none configured" ]]
 }
 
@@ -188,7 +222,10 @@ schedule: "0 9 * * *"
 YAML
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Routines: 1 configured, all schemas valid" ]]
 }
 
@@ -199,7 +236,10 @@ prompt_template: "Test"
 YAML
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Routines:" ]]
   [[ "$output" =~ "with schema errors" ]]
   [[ "$output" =~ "bad.yaml: missing 'name'" ]]
@@ -212,7 +252,10 @@ prompt_template: "Test"
 YAML
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Routines:" ]]
   [[ "$output" =~ "with schema errors" ]]
   [[ "$output" =~ "bad.yaml: missing 'agent'" ]]
@@ -225,7 +268,10 @@ agent: researcher
 YAML
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Routines:" ]]
   [[ "$output" =~ "with schema errors" ]]
   [[ "$output" =~ "bad.yaml: missing 'prompt_template'" ]]
@@ -239,7 +285,10 @@ prompt_template: "Review"
 YAML
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Routines: 1 configured, all schemas valid" ]]
 }
 
@@ -271,7 +320,10 @@ Body content here.
 AGENT
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "Agent frontmatter:" ]]
   # Ensure no errors were triggered
   ! [[ "$output" =~ "errors found" ]]
