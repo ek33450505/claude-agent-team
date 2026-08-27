@@ -36,6 +36,12 @@ jobs:
       - name: Plugin drift check
         run: bash scripts/check-plugin-drift.sh
 
+      # J-5: recomputes every derived count and names the stale ones. Enforcing,
+      # not advisory — a release moves more of these at once than any other change,
+      # and two of the five surfaces had already drifted silently more than once.
+      - name: Derived counts
+        run: bash scripts/cast-check-derived-counts.sh
+
       - name: Python 3.9 annotations lint
         run: bash scripts/ci-py39-annotations-lint.sh
 
