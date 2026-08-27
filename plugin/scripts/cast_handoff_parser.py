@@ -66,6 +66,53 @@ _REQUIRED_FIELDS: dict = {
 # is rejected same as before — a genuinely wrong or absent value is still caught.
 _ENUM_TOKEN_RE = re.compile(r'^[\s*_]*([A-Z][A-Z_]*)')
 
+# Handoff KEYS arrive markdown-emphasised for exactly the same reason enum VALUES
+# do ("**files_changed:** a.py" alongside "**DONE**") — agents write the emphasis
+# and mean the plain token. That tolerance shipped for values (_normalize_enum_value
+# above) and was never applied to keys, so partitioning on the first ':' produced
+# the key "**files_changed" and the required field read as absent. Measured
+# 2026-08-27: 862 of 2,555 recorded agent_protocol_violations were well-formed
+# handoffs failing on emphasis alone, burying the real violations ~40:1.
+# Anchored at both ends only, so the internal underscore of "files_changed"
+# is untouched.
+_KEY_LEAD_RE = re.compile(r'^[\s*_`"\'+-]+')
+_KEY_TRAIL_RE = re.compile(r'[\s*_`"\']+$')
+_KEY_SPACE_RE = re.compile(r'\s+')
+_VALUE_LEAD_EMPHASIS_RE = re.compile(r'^[\s*_`"\']+')
+# Emphasis characters proper — a leading run made only of bullet markers and
+# whitespace ("- files_changed") carries no closing half, so the value is left alone.
+_EMPHASIS_CHARS = '*_`"\''
+
+
+def _normalize_key(key: str) -> str:
+    """Reduce a Handoff key to its bare identifier.
+
+    Strips the decoration agents wrap keys in — markdown emphasis, list markers,
+    JSON/shell quotes — and folds internal whitespace to '_'. Measured shapes, all
+    from real rows: "**files_changed", "- **files_changed", '"files_changed"',
+    "files changed", "_files_changed_", "`files_changed`".
+
+    Whitespace folding cannot manufacture a false match: it maps "files changed"
+    to "files_changed" (the agent plainly meant that field) while "files staged"
+    and "files committed" become "files_staged"/"files_committed" — still not a
+    required field, so those stay the genuine violations they are.
+    """
+    k = _KEY_TRAIL_RE.sub('', _KEY_LEAD_RE.sub('', key))
+    return _KEY_SPACE_RE.sub('_', k.strip()).lower()
+
+# A required field whose value is written as a list on the FOLLOWING lines:
+#     files_changed:
+#     - scripts/a.py
+#     - scripts/b.py
+# parses as present-but-empty, because the bullet lines carry no ':' of their own.
+# Agents write this constantly and mean the list as the value (746 further
+# violations from the same measurement). Consecutive list items are absorbed into
+# the pending key; the first line that is not a list item — including a blank
+# line — closes the continuation. Note the leading "*" alternative cannot swallow
+# an emphasised key line: "**files_changed:**" has no whitespace after its first
+# "*", so \s+ fails to match.
+_LIST_ITEM_RE = re.compile(r'^(?:[-*+]|\d+[.)])\s+(.*\S)\s*$')
+
 
 def _normalize_enum_value(value: str) -> str:
     """Return the leading UPPER_SNAKE token from an enum field value, tolerant of
@@ -94,22 +141,55 @@ def extract_handoff_block(text: str):
 def _parse_kv(block: str) -> dict:
     """Parse 'key: value' lines from the Handoff block body into a dict.
 
-    Keys are lowercased and stripped; values are stripped.
-    Lines without ':' are silently skipped.
-    Only the first ':' is used as a delimiter (values may contain colons).
+    Keys are lowercased, stripped, and stripped of markdown emphasis; values are
+    stripped. Lines without ':' are silently skipped unless they are list items
+    continuing the previous key. Only the first ':' is used as a delimiter
+    (values may contain colons).
     """
     result: dict = {}
-    for line in block.splitlines():
-        line = line.strip()
+    # Key of the most recent 'key:' line whose inline value was empty — the next
+    # lines may be its value as a list. None means no continuation is open.
+    pending_list_key = None
+
+    for raw_line in block.splitlines():
+        line = raw_line.strip()
         if not line:
+            pending_list_key = None
             continue
+
+        if pending_list_key is not None:
+            item = _LIST_ITEM_RE.match(line)
+            if item and _normalize_key(item.group(1).partition(':')[0]) in _REQUIRED_FIELDS:
+                # "- **status:** DONE" is a bulleted KEY line, not a value of the
+                # pending list. Absorbing it would silently destroy a required
+                # field, so fall through and parse it as a key.
+                item = None
+            if item:
+                seen = result[pending_list_key]
+                result[pending_list_key] = f'{seen}, {item.group(1)}' if seen else item.group(1)
+                continue
+            pending_list_key = None
+
         if ':' not in line:
             continue
-        key, _, value = line.partition(':')
-        key = key.strip().lower()
+        key_raw, _, value = line.partition(':')
+        key = _normalize_key(key_raw)
         value = value.strip()
-        if key:
-            result[key] = value
+        lead = _KEY_LEAD_RE.match(key_raw)
+        if lead and any(c in _EMPHASIS_CHARS for c in lead.group(0)):
+            # The key opened a markdown/quote wrapper, so the closing half of it is
+            # sitting at the head of the value:
+            #     "**files_changed:** a.py"  ->  key "**files_changed", value "** a.py"
+            # Strip it ONLY then. A plainly-written key's value is left byte-for-byte
+            # alone, so a legitimate leading "*" (a "*.py" glob) survives — and
+            # "**blockers:**" with nothing after it correctly reduces to an empty
+            # value rather than reading as the non-empty string "**".
+            value = _VALUE_LEAD_EMPHASIS_RE.sub('', value)
+        if not key:
+            continue
+        result[key] = value
+        pending_list_key = key if not value else None
+
     return result
 
 

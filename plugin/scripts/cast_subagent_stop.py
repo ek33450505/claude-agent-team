@@ -910,10 +910,27 @@ _HANDOFF_RE = re.compile(r"## Handoff\s*\n([\s\S]+?)(?=\n## |\Z)")
 # import — that test is the sync mechanism; keep it passing when either copy
 # changes.
 _INLINE_STATUS_VALUES = ("DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT")
+_INLINE_REQUIRED_FIELDS = ("files_changed", "status", "blockers")
 # Same tolerant-matching rule as cast_handoff_parser._ENUM_TOKEN_RE: leading
 # UPPER_SNAKE token only, so "**DONE** — notes" / "BLOCKED (reason...)" match
 # while a genuinely wrong or absent value is still rejected.
 _INLINE_ENUM_TOKEN_RE = re.compile(r"^[\s*_]*([A-Z][A-Z_]*)")
+# Same markdown-in-KEYS and list-continuation tolerance as
+# cast_handoff_parser._MD_EMPHASIS_RE / _LIST_ITEM_RE — see the long rationale
+# there. "**files_changed:** a.py" and a "files_changed:" followed by bullets were
+# together 63% of all recorded protocol violations (measured 2026-08-27).
+_INLINE_KEY_LEAD_RE = re.compile(r"""^[\s*_`"'+-]+""")
+_INLINE_KEY_TRAIL_RE = re.compile(r"""[\s*_`"']+$""")
+_INLINE_KEY_SPACE_RE = re.compile(r"\s+")
+_INLINE_VALUE_LEAD_EMPHASIS_RE = re.compile(r"""^[\s*_`"']+""")
+_INLINE_EMPHASIS_CHARS = """*_`"'"""
+_INLINE_LIST_ITEM_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")
+
+
+def _inline_normalize_key(key: str) -> str:
+    """Mirror of cast_handoff_parser._normalize_key — see the rationale there."""
+    k = _INLINE_KEY_TRAIL_RE.sub("", _INLINE_KEY_LEAD_RE.sub("", key))
+    return _INLINE_KEY_SPACE_RE.sub("_", k.strip()).lower()
 
 
 def _inline_validate_handoff(text: str) -> dict:
@@ -923,12 +940,33 @@ def _inline_validate_handoff(text: str) -> dict:
                 "pattern": None, "detail": "No ## Handoff block found", "raw_excerpt": ""}
     block = m.group(1)
     fields = {}
+    pending_list_key = None
     for line in block.splitlines():
         line = line.strip()
+        if not line:
+            pending_list_key = None
+            continue
+        if pending_list_key is not None:
+            item = _INLINE_LIST_ITEM_RE.match(line)
+            if item and _inline_normalize_key(item.group(1).partition(":")[0]) in _INLINE_REQUIRED_FIELDS:
+                item = None  # a bulleted KEY line, not a value — do not absorb it
+            if item:
+                seen = fields[pending_list_key]
+                fields[pending_list_key] = f"{seen}, {item.group(1)}" if seen else item.group(1)
+                continue
+            pending_list_key = None
         if ":" in line:
             k, _, v = line.partition(":")
-            fields[k.strip().lower()] = v.strip()
-    for req in ("files_changed", "status", "blockers"):
+            key = _inline_normalize_key(k)
+            v = v.strip()
+            lead = _INLINE_KEY_LEAD_RE.match(k)
+            if lead and any(c in _INLINE_EMPHASIS_CHARS for c in lead.group(0)):
+                v = _INLINE_VALUE_LEAD_EMPHASIS_RE.sub("", v)
+            if not key:
+                continue
+            fields[key] = v
+            pending_list_key = key if not v else None
+    for req in _INLINE_REQUIRED_FIELDS:
         if req not in fields or not fields[req]:
             return {"block_present": True, "ok": False,
                     "violation": "handoff_schema_violation",

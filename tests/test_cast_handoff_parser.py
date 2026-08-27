@@ -270,5 +270,146 @@ class TestStatusEnumParity(unittest.TestCase):
         )
 
 
+class TestKeyDecorationTolerance(unittest.TestCase):
+    """DOC-2: the parser tolerated markdown in enum VALUES but not in KEYS.
+
+    Measured 2026-08-27 over the live agent_protocol_violations table: 1,629 of
+    2,555 rows (63%) were `missing_field:files_changed` or
+    `empty_field:files_changed`, and sampling showed the handoffs behind them were
+    complete and well-formed. Two root causes, both reproduced against the parser
+    before the fix: `**files_changed:** a.py` partitions on the first ':' into the
+    key `**files_changed`, and `files_changed:` with a bullet list beneath reads as
+    an empty value. Real violations were buried roughly 40:1.
+
+    Each case below is a shape taken from those rows. The rejection cases matter
+    at least as much: this tolerance must not turn a genuinely malformed handoff
+    into a passing one.
+    """
+
+    def _ok(self, body):
+        return cast_handoff_parser.validate_handoff('## Handoff\n' + body)
+
+    def test_markdown_emphasised_keys_are_accepted(self):
+        r = self._ok('**files_changed:** a.py\n**status:** DONE\n**blockers:** none\n')
+        self.assertTrue(r['ok'], r)
+
+    def test_underscore_and_backtick_emphasised_keys_are_accepted(self):
+        for body in ('_files_changed_: a.py\n_status_: DONE\n_blockers_: none\n',
+                     '`files_changed`: a.py\n`status`: DONE\n`blockers`: none\n'):
+            self.assertTrue(self._ok(body)['ok'], body)
+
+    def test_bulleted_key_lines_are_accepted(self):
+        r = self._ok('- **files_changed:** a.py\n- **status:** DONE\n- **blockers:** none\n')
+        self.assertTrue(r['ok'], r)
+
+    def test_json_quoted_keys_are_accepted(self):
+        r = self._ok('"files_changed": ["a.py"]\n"status": "DONE"\n"blockers": "none"\n')
+        self.assertTrue(r['ok'], r)
+
+    def test_space_separated_key_words_are_accepted(self):
+        r = self._ok('Files changed: a.py\nStatus: DONE\nBlockers: none\n')
+        self.assertTrue(r['ok'], r)
+
+    def test_list_beneath_a_key_becomes_its_value(self):
+        r = self._ok('files_changed:\n- a.py\n- b.py\nstatus: DONE\nblockers: none\n')
+        self.assertTrue(r['ok'], r)
+        fields = cast_handoff_parser._parse_kv('files_changed:\n- a.py\n- b.py\n')
+        self.assertEqual(fields['files_changed'], 'a.py, b.py')
+
+    def test_numbered_list_beneath_a_key_becomes_its_value(self):
+        r = self._ok('files_changed:\n1. a.py\n2. b.py\nstatus: DONE\nblockers: none\n')
+        self.assertTrue(r['ok'], r)
+
+    def test_blank_line_closes_a_list_continuation(self):
+        """The real rows put a blank line between the list and the next key."""
+        r = self._ok('files_changed:\n- a.py\n\nstatus: DONE\nblockers: none\n')
+        self.assertTrue(r['ok'], r)
+
+    def test_a_bulleted_required_key_is_not_swallowed_by_a_list(self):
+        """A list continuation must not eat the next required field. Without the
+        guard, `- **status:** DONE` reads as another files_changed entry and the
+        status field vanishes — the fix would have destroyed data it was meant to
+        recover."""
+        r = self._ok('files_changed:\n- a.py\n- **status:** DONE\n- **blockers:** none\n')
+        self.assertTrue(r['ok'], r)
+        self.assertIsNone(r['pattern'])
+
+    # --- the tolerance must not manufacture passes -------------------------
+
+    def test_a_genuinely_absent_field_is_still_missing(self):
+        r = self._ok('status: DONE\nblockers: none\n')
+        self.assertEqual(r['pattern'], 'missing_field:files_changed')
+
+    def test_an_empty_key_with_nothing_beneath_it_is_still_empty(self):
+        r = self._ok('files_changed:\nstatus: DONE\nblockers: none\n')
+        self.assertEqual(r['pattern'], 'empty_field:files_changed')
+
+    def test_prose_beneath_an_empty_key_is_not_absorbed(self):
+        """Only list items continue a key. Free prose does not, so a field that
+        was never given a value still reads as empty."""
+        r = self._ok('files_changed:\nI changed nothing\nstatus: DONE\nblockers: none\n')
+        self.assertEqual(r['pattern'], 'empty_field:files_changed')
+
+    def test_emphasis_wrapper_with_no_content_is_empty_not_the_wrapper(self):
+        """`**blockers:**` alone must reduce to an empty value. Stripping only the
+        KEY would leave the value as the literal string '**', which is non-empty
+        and would have passed — a false green created by the fix itself."""
+        r = self._ok('**files_changed:** a.py\n**status:** DONE\n**blockers:**\n')
+        self.assertEqual(r['pattern'], 'empty_field:blockers')
+
+    def test_a_differently_named_field_is_still_a_violation(self):
+        """Folding whitespace to '_' maps `files changed` onto the required field,
+        but must not map a different field onto it: `files staged` becomes
+        `files_staged` and stays the genuine violation it is."""
+        r = self._ok('files staged: a.py\nstatus: DONE\nblockers: none\n')
+        self.assertEqual(r['pattern'], 'missing_field:files_changed')
+
+    def test_an_invalid_status_still_fails_through_an_emphasised_key(self):
+        r = self._ok('**files_changed:** a.py\n**status:** APPROVED\n**blockers:** none\n')
+        self.assertEqual(r['pattern'], 'invalid_value:status=APPROVED')
+
+    def test_a_plain_key_leaves_its_value_untouched(self):
+        """The closing half of an emphasis wrapper is stripped from the value only
+        when the key opened one. A plainly-written key keeps its value byte for
+        byte, so a leading-'*' glob survives."""
+        self.assertEqual(cast_handoff_parser._parse_kv('files_changed: *.py\n')['files_changed'], '*.py')
+        self.assertEqual(cast_handoff_parser._parse_kv('files changed: *.py\n')['files_changed'], '*.py')
+
+
+class TestKeyDecorationParity(unittest.TestCase):
+    """The inline fallback in cast_subagent_stop.py carries its own copy of the
+    key normalisation, for the same reason it carries its own status enum: it runs
+    exactly when importing cast_handoff_parser has failed, so it cannot import it.
+    This is the sync mechanism for that second copy — see TestStatusEnumParity."""
+
+    CASES = (
+        '**files_changed:** a.py\n**status:** DONE\n**blockers:** none\n',
+        '- **files_changed:** a.py\n- **status:** DONE\n- **blockers:** none\n',
+        '"files_changed": ["a.py"]\n"status": "DONE"\n"blockers": "none"\n',
+        'Files changed: a.py\nStatus: DONE\nBlockers: none\n',
+        'files_changed:\n- a.py\n- b.py\nstatus: DONE\nblockers: none\n',
+        'files_changed:\n- a.py\n\nstatus: DONE\nblockers: none\n',
+        'files_changed:\n- a.py\n- **status:** DONE\n- **blockers:** none\n',
+        'files_changed:\nstatus: DONE\nblockers: none\n',
+        'status: DONE\nblockers: none\n',
+        '**files_changed:** a.py\n**status:** DONE\n**blockers:**\n',
+        'files staged: a.py\nstatus: DONE\nblockers: none\n',
+        '**files_changed:** a.py\n**status:** APPROVED\n**blockers:** none\n',
+    )
+
+    def test_both_copies_agree_on_every_shape(self):
+        for body in self.CASES:
+            text = '## Handoff\n' + body
+            canonical = cast_handoff_parser.validate_handoff(text)['ok']
+            inline = cast_subagent_stop._inline_validate_handoff(text)['ok']
+            self.assertEqual(canonical, inline,
+                             f'key-normalisation drift on:\n{body}\n'
+                             f'canonical ok={canonical} inline ok={inline}')
+
+    def test_required_field_lists_match(self):
+        self.assertEqual(set(cast_handoff_parser._REQUIRED_FIELDS),
+                         set(cast_subagent_stop._INLINE_REQUIRED_FIELDS))
+
+
 if __name__ == '__main__':
     unittest.main()
