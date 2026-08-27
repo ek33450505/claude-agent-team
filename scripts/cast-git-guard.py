@@ -1609,6 +1609,96 @@ def _audit_push_hatch() -> None:
         pass
 
 
+# 2026-08-26 latency-bound fix: `_record_hatch` is synchronous on the
+# PreToolUse hot path, spawned once per hatched segment with (before this
+# fix) no cap on segment count and a 5s subprocess timeout — a security
+# review measured 5.011s for one hung `cast_ack.py` spawn and 15.065s for
+# three chained, against a HEALTHY-path baseline of 0.033s median / 0.040s
+# max over 5 runs. Two-part fix: the timeout drops to 2s (still ~60x the
+# measured healthy call), and this caps how many `_record_hatch` calls
+# `_git_evaluate` will make per invocation, bounding worst case to
+# `_MAX_HATCH_RECORDS_PER_COMMAND` x 2s instead of unbounded x 5s. The
+# counter lives in `_git_evaluate`, not here — see its per-segment loop —
+# so this cap never touches the ALLOW/BLOCK verdict, only whether the
+# audit-record subprocess gets spawned.
+_MAX_HATCH_RECORDS_PER_COMMAND = 8
+
+
+def _record_hatch(variable: str, value: str, git_op: str) -> None:
+    """Record an escape-hatch use into cast.db's ack_events table (CAST v10
+    I-3b). Best-effort, run as an EXTERNAL subprocess rather than an
+    in-process `from cast_ack import record_ack` — mirrors
+    cast-events.sh:576-596's `_record_hatch_ack()`: an in-process import
+    puts cast_ack.py on a CWD-derived sys.path where a planted same-named
+    module could call sys.exit() at import time and kill this entire guard
+    process (`except Exception` does not catch SystemExit).
+
+    `git_op` identifies which guarded operation triggered the hatch (e.g.
+    'commit', 'push') for callers/logging context only — ack_events has no
+    git_op column (scripts/migrations/034_ack_events.sql), so it is not
+    part of the recorded payload.
+
+    `capture_output=True` is required, not cosmetic: cast_ack.py's CLI
+    prints a stderr nudge for bare/reasonless values (e.g. "=1"), and this
+    function must never print to stdout/stderr regardless of value content.
+
+    LATENCY (2026-08-26 fix, security review): this call is synchronous on
+    the PreToolUse hot path. Measured: a healthy `cast_ack.py` spawn is
+    0.033s median / 0.040s max over 5 runs; a hung spawn cost 5.011s at the
+    prior 5s timeout (15.065s for three chained). `timeout` here is now 2s
+    (still ~60x the healthy median, ample headroom without the old
+    worst-case cost) and `_git_evaluate` additionally caps total calls to
+    this function at `_MAX_HATCH_RECORDS_PER_COMMAND` (8) per command, so
+    the worst case for one guard invocation is bounded at 8 x 2s rather
+    than unbounded x 5s.
+
+    Must never raise and must never change the guard's exit code.
+    """
+    try:
+        scripts_dir = os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts'))
+        subprocess.run(
+            ['python3', os.path.join(scripts_dir, 'cast_ack.py'),
+             variable, '--value', value, '--script', 'cast-git-guard.py'],
+            timeout=2,
+            capture_output=True,
+        )
+    except Exception:
+        pass
+
+
+def _hatch_value(segment: str, variable: str) -> str:
+    """Return the literal value assigned to `variable=` in the leading
+    VAR=value assignment prefix of `segment` (i.e. before the `git`
+    invocation), or '' if `variable` is not assigned there.
+
+    Uses shlex.split so a quoted, spaced value (`VAR="a b c"`) survives as
+    ONE token (`VAR=a b c`) instead of being split on internal whitespace —
+    see the module's 2026-08-17 shlex tokenization note above. shlex.split
+    raises ValueError on unbalanced quotes; this is NOT treated as "no value
+    found" (2026-08-26 fix) — a quoting error LATER in the command (e.g. an
+    unbalanced quote inside a commit message) has nothing to do with the
+    LEADING hatch assignment, and the relevant `*_ALLOW` regex has already
+    matched the raw segment and honoured the hatch by the time this is
+    called. Silently returning '' here would drop the audit row for a
+    bypass that DID happen — a plain whitespace split is used as a fallback
+    instead, recovering the ordinary unquoted form (`VAR=1 git ...`); a
+    hatch value that itself contains unbalanced-quote-and-whitespace stays
+    unrecoverable, which is a strict improvement on always returning ''.
+    Never raises.
+    """
+    try:
+        tokens = shlex.split(segment)
+    except ValueError:
+        tokens = segment.split()
+    prefix = f'{variable}='
+    for token in tokens:
+        if not _ENV_ASSIGN.match(token):
+            break
+        if token.startswith(prefix):
+            return token[len(prefix):]
+    return ''
+
+
 def _scannable_segments(command: str):
     """Yield shell-evaluable segments from EVERY line of `command`, not just
     line 1 (2026-08-24 SEC-1 fix — see the module SECURITY note above for
@@ -1751,7 +1841,16 @@ def _git_evaluate(command: str):
     chains, and now holds ACROSS LINES too: `git reset --hard` on line 1
     followed by `CAST_CLEAN_OK=1 git clean -fdx` on line 2 still blocks
     line 1.
+
+    `hatch_record_count` (2026-08-26 latency-bound fix) caps how many
+    `_record_hatch()` audit-record subprocesses this invocation will spawn
+    at `_MAX_HATCH_RECORDS_PER_COMMAND` — see `_record_hatch`'s docstring
+    for the measured latency this bounds. Once the cap is reached, further
+    hatch uses in the SAME command are silently not recorded — this ONLY
+    skips the audit-record call, never the ALLOW/BLOCK verdict itself,
+    which is computed identically either way.
     """
+    hatch_record_count = 0
     for seg in _scannable_segments(command):
         seg = seg.strip()
         if not seg:
@@ -1770,10 +1869,16 @@ def _git_evaluate(command: str):
 
         if hit(_COMMIT_ALLOW):
             _audit_commit_hatch()
+            if hatch_record_count < _MAX_HATCH_RECORDS_PER_COMMAND:
+                _record_hatch('CAST_COMMIT_AGENT', _hatch_value(seg, 'CAST_COMMIT_AGENT'), 'commit')
+                hatch_record_count += 1
         elif hit(_COMMIT_BLOCK):
             return 2, _COMMIT_MSG
         if hit(_PUSH_ALLOW):
             _audit_push_hatch()
+            if hatch_record_count < _MAX_HATCH_RECORDS_PER_COMMAND:
+                _record_hatch('CAST_PUSH_OK', _hatch_value(seg, 'CAST_PUSH_OK'), 'push')
+                hatch_record_count += 1
         elif hit(_PUSH_BLOCK):
             return 2, _PUSH_MSG
         if not hit(_STASH_ALLOW) and hit(_STASH_BLOCK):
