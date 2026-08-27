@@ -1830,6 +1830,13 @@ def _git_evaluate(command: str):
     wrapped in its own try/except so it can never raise and never change
     the verdict computed by `_git_evaluate_impl` — same contract as
     `_record_hatch` itself.
+
+    KNOWN LIMITATION (named plainly, not buried): the `CAST_HATCH_RECORD_CAP`
+    sentinel records only HOW MANY per-hatch records this invocation
+    suppressed — it does not, and cannot, say which hatch variable(s), which
+    git op(s), or which value(s) were involved. A responder investigating a
+    cap-sentinel row has the count and the command's rough timing only; the
+    per-hatch detail for anything past the cap is gone, not just deferred.
     """
     suppressed_counter = [0]
     try:
@@ -1907,6 +1914,17 @@ def _git_evaluate_impl(command: str, suppressed_counter):
     ambiguous with "no hatch was used." This ONLY affects whether the
     per-hatch audit-record subprocess gets spawned, never the ALLOW/BLOCK
     verdict itself, which is computed identically either way.
+
+    A per-hatch row is written ONLY when the hatch actually AVERTED a block
+    (2026-08-27 I-3b Unit 1b-ii, `record_hatch_use()` below), never on every
+    hatched invocation: recording is gated on the relevant BLOCK regex
+    itself having matched, since several BLOCK regexes are deliberately
+    narrower than their matching ALLOW regex (e.g. `CAST_RESET_OK=1 git
+    reset --soft` never trips `_RESET_BLOCK`, so it records nothing, while
+    `CAST_RESET_OK=1 git reset --hard` does). `record_hatch_use()` also
+    de-duplicates by variable WITHIN a segment, since one variable
+    (`CAST_GC_OK`) gates four distinct BLOCK sites — a de-duplicated call is
+    not a suppression and does not touch `suppressed_counter`.
     """
     hatch_record_count = 0
     for seg in _scannable_segments(command):
@@ -1925,67 +1943,154 @@ def _git_evaluate_impl(command: str, suppressed_counter):
         def hit(pattern, _v=variants):
             return any(pattern.search(v) for v in _v)
 
+        # 2026-08-27 I-3b Unit 1b-ii: a row is recorded ONLY when the hatch
+        # actually AVERTED a block, never on every hatched invocation — the
+        # BLOCK regexes below are deliberately narrower than their matching
+        # ALLOW regexes (e.g. `_RESET_BLOCK` requires --hard/--merge/--keep
+        # while `_RESET_ALLOW` matches any hatched `git reset`), so recording
+        # is gated on the BLOCK regex having actually matched, not merely on
+        # the ALLOW regex matching. `recorded_vars` de-duplicates within THIS
+        # segment: `CAST_GC_OK` alone gates four distinct BLOCK sites below
+        # (`_GC_BLOCK` plus the three `_GC_HATCH_ALLOW`-gated config blocks)
+        # and must write at most one row per segment, not up to four. A
+        # de-duplicated call is NOT a suppression — only cap-driven skips
+        # increment `suppressed_counter`. `_seg=seg`/`_seen=recorded_vars`
+        # mirror `hit()`'s `_v=variants` default-argument binding above, for
+        # the same late-binding-capture reason.
+        recorded_vars = set()
+
+        def record_hatch_use(variable, git_op, _seg=seg, _seen=recorded_vars):
+            # 2026-08-27 I-3b Unit 1b-ii, security review Low #2: `_record_hatch`
+            # and `_hatch_value` are each independently documented "never
+            # raises" and wrap their own internals — this try/except is
+            # DELIBERATELY redundant with both, not a gap being patched. This
+            # module's fail-open guarantee is load-bearing: a raise here would
+            # propagate up through `_git_evaluate_impl` and turn an ALLOW/BLOCK
+            # verdict into an unhandled exception instead. Making the
+            # guarantee LOCAL (one wrap, here) rather than inherited from two
+            # callees means it survives a future refactor of either one — do
+            # NOT delete this as "redundant with the callees' own contracts."
+            nonlocal hatch_record_count
+            try:
+                if variable in _seen:
+                    return
+                _seen.add(variable)
+                if hatch_record_count < _MAX_HATCH_RECORDS_PER_COMMAND:
+                    _record_hatch(variable, _hatch_value(_seg, variable), git_op)
+                    hatch_record_count += 1
+                else:
+                    suppressed_counter[0] += 1
+            except Exception:
+                pass
+
         if hit(_COMMIT_ALLOW):
             _audit_commit_hatch()
-            if hatch_record_count < _MAX_HATCH_RECORDS_PER_COMMAND:
-                _record_hatch('CAST_COMMIT_AGENT', _hatch_value(seg, 'CAST_COMMIT_AGENT'), 'commit')
-                hatch_record_count += 1
+        if hit(_COMMIT_BLOCK):
+            if hit(_COMMIT_ALLOW):
+                record_hatch_use('CAST_COMMIT_AGENT', 'commit')
             else:
-                suppressed_counter[0] += 1
-        elif hit(_COMMIT_BLOCK):
-            return 2, _COMMIT_MSG
+                return 2, _COMMIT_MSG
         if hit(_PUSH_ALLOW):
             _audit_push_hatch()
-            if hatch_record_count < _MAX_HATCH_RECORDS_PER_COMMAND:
-                _record_hatch('CAST_PUSH_OK', _hatch_value(seg, 'CAST_PUSH_OK'), 'push')
-                hatch_record_count += 1
+        if hit(_PUSH_BLOCK):
+            if hit(_PUSH_ALLOW):
+                record_hatch_use('CAST_PUSH_OK', 'push')
             else:
-                suppressed_counter[0] += 1
-        elif hit(_PUSH_BLOCK):
-            return 2, _PUSH_MSG
-        if not hit(_STASH_ALLOW) and hit(_STASH_BLOCK):
-            return 2, _STASH_MSG
-        if not hit(_RESET_ALLOW) and hit(_RESET_BLOCK):
-            return 2, _RESET_MSG
-        if not hit(_CLEAN_ALLOW) and hit(_CLEAN_BLOCK):
-            return 2, _CLEAN_MSG
-        if not hit(_CHECKOUT_ALLOW) and (
+                return 2, _PUSH_MSG
+        if hit(_STASH_BLOCK):
+            if hit(_STASH_ALLOW):
+                record_hatch_use('CAST_STASH_OK', 'stash')
+            else:
+                return 2, _STASH_MSG
+        if hit(_RESET_BLOCK):
+            if hit(_RESET_ALLOW):
+                record_hatch_use('CAST_RESET_OK', 'reset')
+            else:
+                return 2, _RESET_MSG
+        if hit(_CLEAN_BLOCK):
+            if hit(_CLEAN_ALLOW):
+                record_hatch_use('CAST_CLEAN_OK', 'clean')
+            else:
+                return 2, _CLEAN_MSG
+        if (
             hit(_CHECKOUT_BLOCK)
             or any(_checkout_bare_path_blocks(v) for v in variants)
             or hit(_CHECKOUT_FORCE_BLOCK)
         ):
-            return 2, _CHECKOUT_MSG
-        if not hit(_RESTORE_ALLOW) and hit(_RESTORE_CMD):
+            if hit(_CHECKOUT_ALLOW):
+                record_hatch_use('CAST_CHECKOUT_OK', 'checkout')
+            else:
+                return 2, _CHECKOUT_MSG
+        if hit(_RESTORE_CMD):
             safe = hit(_RESTORE_HAS_STAGED) and not hit(_RESTORE_HAS_WORKTREE)
             if not safe:
-                return 2, _RESTORE_MSG
-        if not hit(_SWITCH_ALLOW) and hit(_SWITCH_BLOCK):
-            return 2, _SWITCH_MSG
-        if not hit(_REFLOG_ALLOW) and hit(_REFLOG_BLOCK):
-            return 2, _REFLOG_MSG
-        if not hit(_GC_ALLOW) and hit(_GC_BLOCK):
-            return 2, _GC_MSG
-        if not hit(_PRUNE_ALLOW) and hit(_PRUNE_BLOCK):
-            return 2, _PRUNE_MSG
-        if not hit(_GC_HATCH_ALLOW) and hit(_GC_CINJECT_BLOCK):
-            return 2, _GC_CINJECT_MSG
-        if not hit(_GC_HATCH_ALLOW) and hit(_GC_CONFIG_WRITE_BLOCK):
-            return 2, _GC_CONFIG_WRITE_MSG
-        if not hit(_GC_HATCH_ALLOW) and hit(_GC_CONFIG_EDIT_BLOCK):
-            return 2, _GC_CONFIG_EDIT_MSG
-        if not hit(_GIT_RM_ALLOW) and hit(_GIT_RM_BLOCK):
-            return 2, _GIT_RM_MSG
-        if not hit(_BRANCH_ALLOW) and hit(_BRANCH_BLOCK):
-            return 2, _BRANCH_MSG
-        if not hit(_WORKTREE_ALLOW) and hit(_WORKTREE_BLOCK):
-            return 2, _WORKTREE_MSG
-        if not hit(_UPDATE_REF_ALLOW) and (
+                if hit(_RESTORE_ALLOW):
+                    record_hatch_use('CAST_RESTORE_OK', 'restore')
+                else:
+                    return 2, _RESTORE_MSG
+        if hit(_SWITCH_BLOCK):
+            if hit(_SWITCH_ALLOW):
+                record_hatch_use('CAST_SWITCH_OK', 'switch')
+            else:
+                return 2, _SWITCH_MSG
+        if hit(_REFLOG_BLOCK):
+            if hit(_REFLOG_ALLOW):
+                record_hatch_use('CAST_REFLOG_OK', 'reflog')
+            else:
+                return 2, _REFLOG_MSG
+        if hit(_GC_BLOCK):
+            if hit(_GC_ALLOW):
+                record_hatch_use('CAST_GC_OK', 'gc')
+            else:
+                return 2, _GC_MSG
+        if hit(_PRUNE_BLOCK):
+            if hit(_PRUNE_ALLOW):
+                record_hatch_use('CAST_PRUNE_OK', 'prune')
+            else:
+                return 2, _PRUNE_MSG
+        if hit(_GC_CINJECT_BLOCK):
+            if hit(_GC_HATCH_ALLOW):
+                record_hatch_use('CAST_GC_OK', 'gc-config')
+            else:
+                return 2, _GC_CINJECT_MSG
+        if hit(_GC_CONFIG_WRITE_BLOCK):
+            if hit(_GC_HATCH_ALLOW):
+                record_hatch_use('CAST_GC_OK', 'gc-config')
+            else:
+                return 2, _GC_CONFIG_WRITE_MSG
+        if hit(_GC_CONFIG_EDIT_BLOCK):
+            if hit(_GC_HATCH_ALLOW):
+                record_hatch_use('CAST_GC_OK', 'gc-config')
+            else:
+                return 2, _GC_CONFIG_EDIT_MSG
+        if hit(_GIT_RM_BLOCK):
+            if hit(_GIT_RM_ALLOW):
+                record_hatch_use('CAST_GIT_RM_OK', 'git-rm')
+            else:
+                return 2, _GIT_RM_MSG
+        if hit(_BRANCH_BLOCK):
+            if hit(_BRANCH_ALLOW):
+                record_hatch_use('CAST_BRANCH_OK', 'branch')
+            else:
+                return 2, _BRANCH_MSG
+        if hit(_WORKTREE_BLOCK):
+            if hit(_WORKTREE_ALLOW):
+                record_hatch_use('CAST_WORKTREE_OK', 'worktree')
+            else:
+                return 2, _WORKTREE_MSG
+        if (
             hit(_UPDATE_REF_BLOCK)
             or any(_update_ref_overwrites_existing(v) for v in variants)
         ):
-            return 2, _UPDATE_REF_MSG
-        if not hit(_FILTER_BRANCH_ALLOW) and hit(_FILTER_BRANCH_BLOCK):
-            return 2, _FILTER_BRANCH_MSG
+            if hit(_UPDATE_REF_ALLOW):
+                record_hatch_use('CAST_UPDATE_REF_OK', 'update-ref')
+            else:
+                return 2, _UPDATE_REF_MSG
+        if hit(_FILTER_BRANCH_BLOCK):
+            if hit(_FILTER_BRANCH_ALLOW):
+                record_hatch_use('CAST_FILTER_BRANCH_OK', 'filter-branch')
+            else:
+                return 2, _FILTER_BRANCH_MSG
     return 0, None
 
 
