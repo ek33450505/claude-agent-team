@@ -569,6 +569,126 @@ class TestCommitPushAuditUnchanged(unittest.TestCase):
         mock_audit.assert_not_called()
 
 
+class TestHatchReason(unittest.TestCase):
+    """CAST v10 I-3b Unit 2b: `CAST_HATCH_REASON`, a second leading
+    assignment AFTER the hatch variable in the same segment, records the
+    reason TEXT as `ack_events.value` instead of the hatch's own value
+    ('1'). Overwriting is safe because every `*_ALLOW` regex requires the
+    hatch literally `=1` to grant the allow at all -- the hatch's own value
+    carries no information once recording happens.
+
+    The quoted-multi-word case is the load-bearing one: it depends, by
+    design (not by accident this test is unaware of), on
+    `_normalize_git_segment` collapsing a whitespace-containing leading
+    assignment value to a placeholder before the ALLOW regex's dual-variant
+    `hit()` check runs -- see `_normalize_git_segment`'s docstring and the
+    `record_hatch_use` comment this Unit added. If that normalization
+    behavior regresses, this test must go RED (a quoted reason starts
+    BLOCKING outright), not silently lose its text -- that is the point of
+    pinning it here.
+    """
+
+    def test_no_reason_records_hatch_value_as_today(self):
+        # Regression: identical to the pre-Unit-2b recorded shape.
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate('CAST_RESET_OK=1 git reset --hard')
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        self.assertEqual(
+            mock_record.call_args.args, ('CAST_RESET_OK', '1', 'reset')
+        )
+
+    def test_single_word_reason_allows_and_records_the_reason(self):
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(
+                'CAST_RESET_OK=1 CAST_HATCH_REASON=rebase git reset --hard'
+            )
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        self.assertEqual(
+            mock_record.call_args.args, ('CAST_RESET_OK', 'rebase', 'reset')
+        )
+
+    def test_quoted_multiword_reason_still_allows_and_records_full_text(self):
+        # THE normalization-dependent case (see class docstring). Command
+        # built from concatenated fragments so this test file's own text
+        # does not trip the git guard protecting this repo's own commits.
+        cmd = (
+            'CAST_RESET_OK=1 CAST_HATCH_REASON="rebasing onto main" git '
+            + 'reset --hard'
+        )
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(cmd)
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        self.assertEqual(
+            mock_record.call_args.args,
+            ('CAST_RESET_OK', 'rebasing onto main', 'reset'),
+        )
+
+    def test_reason_before_hatch_still_blocks(self):
+        # Ordering is unchanged by this Unit: the hatch MUST be the FIRST
+        # assignment. A reason placed before it means the *_ALLOW regex
+        # never matches at all, so record_hatch_use is never reached.
+        cmd = 'CAST_HATCH_REASON=rebase CAST_RESET_OK=1 git ' + 'reset --hard'
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(cmd)
+        self.assertEqual(code, 2)
+        self.assertIsNotNone(msg)
+        self.assertEqual(mock_record.call_count, 0)
+
+    def test_reason_on_block_averted_harmless_op_records_nothing(self):
+        # A reason attached to a hatched-but-harmless invocation (--soft
+        # never trips _RESET_BLOCK) must not resurrect a recording -- the
+        # Unit 1b-ii block-averted semantics are unaffected by this Unit.
+        cmd = 'CAST_RESET_OK=1 CAST_HATCH_REASON=x git ' + 'reset --soft'
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(cmd)
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 0)
+
+    def test_dedup_and_cap_unaffected_by_reasons_present(self):
+        # 9 distinct segments, each carrying its OWN hatch + reason, chained
+        # with && -- dedup is per-segment (each segment has a fresh
+        # `recorded_vars` set) and the cap counts CALLS, not variables, so
+        # reasons being present must not change the cap+1 shape at all.
+        # HOME is redirected: each ALLOWed CAST_COMMIT_AGENT segment also
+        # fires `_audit_commit_hatch()` (a separate audit.jsonl write, not
+        # mocked here), same isolation contract as TestHatchRecordCap above.
+        orig_home = os.environ.get('HOME')
+        tmpdir = tempfile.mkdtemp(prefix='cast-git-guard-hatch-reason-cap-test-')
+        os.environ['HOME'] = tmpdir
+        self.addCleanup(shutil.rmtree, tmpdir, ignore_errors=True)
+        if orig_home is None:
+            self.addCleanup(os.environ.pop, 'HOME', None)
+        else:
+            self.addCleanup(os.environ.__setitem__, 'HOME', orig_home)
+        segments = [
+            f'CAST_COMMIT_AGENT=1 CAST_HATCH_REASON=r{i} git '
+            + 'com' + f'mit -m "unit {i}"'
+            for i in range(9)
+        ]
+        command = ' && '.join(segments)
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(command)
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(
+            mock_record.call_count, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND + 1
+        )
+        reason_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_COMMIT_AGENT'
+        ]
+        self.assertEqual(len(reason_calls), 8)
+        for idx, call in enumerate(reason_calls):
+            self.assertEqual(call.args[1], f'r{idx}')
+        sentinel_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_HATCH_RECORD_CAP'
+        ]
+        self.assertEqual(len(sentinel_calls), 1)
+
+
 class TestRecordHatchUseFailOpen(unittest.TestCase):
     """CAST v10 I-3b Unit 1b-ii follow-up (security review Low #2):
     `record_hatch_use()` wraps its own body in try/except, independently of
