@@ -256,7 +256,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   files           TEXT,
   file_class      TEXT,
   abandoned_at    TIMESTAMP,
-  branch          TEXT
+  branch          TEXT,
+  spawn_depth     INTEGER,  -- v10 SEC-2: Claude Code's agent-<id>.meta.json spawnDepth (0 = top level)
+  parent_agent_id TEXT      -- v10 SEC-2: dispatching agent's id; NULL at depth<=1, where the parent is the session
 );
 
 -- Routing events: structured event log
@@ -1125,6 +1127,13 @@ fi
 # Self-healing ALTER for DBs created before this column existed; duplicate-column and
 # missing-table errors are both benign here, same as the dispatch_name ALTER above.
 sqlite3 "$DB_PATH" "ALTER TABLE provenance_chain ADD COLUMN receipt_json TEXT;" 2>/dev/null || true
+
+# agent_runs.spawn_depth / .parent_agent_id (v10 SEC-2 residual) — subagent lineage,
+# read from Claude Code's agent-<id>.meta.json sidecar by cast_subagent_stop.py.
+# The hook PAYLOAD carries no parentage; the sidecar does, on 100% of 3,063 live
+# files for spawnDepth and on every depth>=2 agent for parentAgentId.
+sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN spawn_depth INTEGER;" 2>/dev/null || true
+sqlite3 "$DB_PATH" "ALTER TABLE agent_runs ADD COLUMN parent_agent_id TEXT;" 2>/dev/null || true
 
 # commit_provenance: D5 self-commit enforcement substrate — records the SHA of every
 # commit made by the `commit` agent so the pre-push reconciler can flag unauthorized

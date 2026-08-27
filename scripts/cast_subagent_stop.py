@@ -619,6 +619,31 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
         except Exception:
             transcript_path = ""
 
+    # Lineage (SEC-2 residual). Claude Code writes an agent-<id>.meta.json sidecar
+    # beside every subagent transcript, and it carries what the HOOK PAYLOAD does
+    # not: spawnDepth on every agent, and parentAgentId whenever the parent is
+    # itself a subagent. Measured across 3,063 live sidecars 2026-08-27:
+    # spawnDepth present in 3,063 (100%), parentAgentId in 188 — every agent at
+    # depth >= 2 plus 16 at depth 1 — and all 188 resolve to a real sibling agent.
+    # So the SEC-2 item's premise was wrong: this is not an always-NULL column.
+    # The gate is closed by stickiness AND now recorded lineage.
+    spawn_depth = None
+    parent_agent_id = None
+    if transcript_path:
+        meta_path = transcript_path[:-len(".jsonl")] + ".meta.json" if transcript_path.endswith(".jsonl") else ""
+        try:
+            if meta_path and os.path.isfile(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as _mf:
+                    _meta = json.load(_mf)
+                _sd = _meta.get("spawnDepth")
+                spawn_depth = int(_sd) if isinstance(_sd, (int, float)) else None
+                _pa = _meta.get("parentAgentId")
+                parent_agent_id = str(_pa)[:64] if _pa else None
+        except Exception:
+            # Recording lineage must never change whether this hook completes.
+            spawn_depth = None
+            parent_agent_id = None
+
     # Branch of the agent's working tree (F1 per-feature cost attribution).
     branch = None
     try:
@@ -821,11 +846,11 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=? "
+                    "files=?, file_class=?, spawn_depth=?, parent_agent_id=? "
                     "WHERE id=?",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, fast_row_id),
+                     files_val, file_class_val, spawn_depth, parent_agent_id, fast_row_id),
                 )
             elif agent_id:
                 cur.execute(
@@ -834,13 +859,13 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=? "
+                    "files=?, file_class=?, spawn_depth=?, parent_agent_id=? "
                     "WHERE id=("
                     "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, agent_id),
+                     files_val, file_class_val, spawn_depth, parent_agent_id, agent_id),
                 )
             else:
                 cur.execute(
@@ -849,13 +874,13 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=? "
+                    "files=?, file_class=?, spawn_depth=?, parent_agent_id=? "
                     "WHERE id=("
                     "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id IS ?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, agent, sess or None),
+                     files_val, file_class_val, spawn_depth, parent_agent_id, agent, sess or None),
                 )
             rows_affected = conn.execute("SELECT changes()").fetchone()[0]
             conn.commit()

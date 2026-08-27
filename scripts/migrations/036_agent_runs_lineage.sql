@@ -1,0 +1,36 @@
+-- Migration 036: add agent_runs.spawn_depth and agent_runs.parent_agent_id
+-- (CAST v10, SEC-2 residual).
+-- The SEC-2 gate is closed by stickiness — a BLOCKED review can no longer be
+--   superseded by a later DONE — but nothing recorded WHO dispatched whom, so
+--   the closure rested on ordering rather than lineage. The item carried an
+--   explicit instruction not to add these columns on faith, because the standing
+--   evidence said PreToolUse payloads carry no agent identity (agent_type is
+--   SubagentStop-only, subagent_type is readable only at the orchestrator's
+--   dispatch, CAST_AGENT_RUN_ID has zero writers) and an always-NULL column is
+--   exactly the write-only-table defect J-6 deleted cast-board.sh for.
+-- That premise was tested and is FALSE. The payload does not carry parentage,
+--   but Claude Code writes an agent-<id>.meta.json sidecar beside every subagent
+--   transcript that does. Measured across 3,063 live sidecars 2026-08-27:
+--     spawnDepth      present in 3,063 (100%) — values 0:772, 1:2119, 2:170, 3:2
+--     parentAgentId   present in 188 — EVERY agent at depth >= 2, plus 16 at
+--                     depth 1 — and all 188 resolve to a real sibling agent file.
+--   So spawn_depth is populated for every row, and parent_agent_id is populated
+--   exactly where a parent agent exists (at depth 1 the parent is the main
+--   session, which is already agent_runs.session_id).
+-- The same sidecar independently corroborates v10's depth-cap claim from outside
+--   the mechanism being claimed: the newest depth>=2 agent on disk is dated
+--   2026-08-24 19:59, the day BEFORE CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1
+--   merged, and there are zero on or after it.
+-- Written by scripts/cast_subagent_stop.py's stage-2 enrichment, which already
+--   resolves the sibling transcript path; the sidecar is read from the same
+--   location. Capture is best-effort and wrapped: lineage must never change
+--   whether the hook completes.
+-- Mirrors the columns added to cast-db-init.sh (SINGLE SOURCE OF TRUTH for fresh
+--   DBs); this migration backfills existing/legacy DBs. Bare ALTERs are safe —
+--   cast-migrate.py tolerates both "no such table" and "duplicate column".
+-- Additive and non-destructive: no existing row is read, rewritten or deleted.
+--   Rows written before this migration keep NULL in both columns, which reads as
+--   "not captured", not as "depth 0".
+
+ALTER TABLE agent_runs ADD COLUMN spawn_depth INTEGER;
+ALTER TABLE agent_runs ADD COLUMN parent_agent_id TEXT;
