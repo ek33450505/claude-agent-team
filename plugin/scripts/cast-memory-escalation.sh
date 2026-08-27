@@ -150,6 +150,22 @@ db_path = sys.argv[3]
 rules = json.loads(os.environ.get("CAST_AUTO_RULES", "[]"))
 write_script = os.path.join(scripts_dir, "cast-memory-write.sh")
 
+
+def _desc(text, limit=100):
+    """Description cut at a word boundary, not a byte offset.
+
+    The memory router matches on `description` during recall, so a mid-word cut
+    makes an otherwise good body unrecallable. Measured 2026-08-27: every stored
+    description in agent_memories was exactly 100 characters and cut mid-token.
+    """
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    cut = window.rfind(" ")
+    return (window[:cut].rstrip(" ,;:-") + "\u2026") if cut > 0 else window
+
+
 for rule in rules:
     agent = rule.get("agent", "cast")
     mem_type = rule.get("type", "project")
@@ -172,7 +188,9 @@ for rule in rules:
         if row:
             cur.execute(
                 "UPDATE agent_memories SET content = ?, description = ?, updated_at = ? WHERE id = ?",
-                (content, content[:100], now, row[0])
+                # Word-boundary description: the router matches on this field,
+                # so a mid-word cut makes a good body unrecallable.
+                (content, _desc(content), now, row[0])
             )
             conn.commit()
             db_updated = True

@@ -103,3 +103,29 @@ _fire() {
   run sqlite3 "$CAST_DB_PATH" "SELECT status FROM agent_runs WHERE agent_id='aaa6';"
   assert_output "DONE"
 }
+
+@test "SEC-2: a cast.db without the lineage columns still records, and self-heals them" {
+  # Found by CI, not by me. The enrichment UPDATE is wrapped in try/except with a
+  # retry, so an unconditional "SET ..., spawn_depth=?" against a DB that has not
+  # had migration 036 applied raises "no such column" on every attempt, the row
+  # stays 'running', and enrichment stops recording ENTIRELY and silently — for
+  # cost, tokens, tool_uses and response, not just lineage. That is a live risk
+  # for any cast.db that has not been reinstalled, and it is precisely the defect
+  # class this release exists to remove.
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs DROP COLUMN spawn_depth;"
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs DROP COLUMN parent_agent_id;"
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM pragma_table_info('agent_runs') WHERE name IN ('spawn_depth','parent_agent_id');"
+  assert_output "0"
+
+  _seed_agent aaa7 code-reviewer '{"agentType":"code-reviewer","spawnDepth":2,"parentAgentId":"aparent07"}'
+  _fire aaa7 code-reviewer
+
+  # The row must close — that is the part that must never depend on a migration.
+  run sqlite3 "$CAST_DB_PATH" "SELECT status FROM agent_runs WHERE agent_id='aaa7';"
+  assert_output "DONE"
+
+  # And the hook's own self-healing ALTER should have restored the columns and
+  # written the lineage, rather than merely degrading past them.
+  run sqlite3 "$CAST_DB_PATH" "SELECT COALESCE(spawn_depth,-1) || '|' || COALESCE(parent_agent_id,'NULL') FROM agent_runs WHERE agent_id='aaa7';"
+  assert_output "2|aparent07"
+}

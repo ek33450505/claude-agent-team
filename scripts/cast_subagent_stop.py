@@ -861,6 +861,11 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
             ("branch", "TEXT"),
             ("files", "TEXT"),
             ("file_class", "TEXT"),
+            # v10 SEC-2 lineage (migration 036). Self-healed here as well as
+            # migrated, so a cast.db that has not been reinstalled still RECORDS
+            # lineage rather than merely degrading past it.
+            ("spawn_depth", "INTEGER"),
+            ("parent_agent_id", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {col} {coltype}")
@@ -882,6 +887,34 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
         try:
             conn = sqlite3.connect(db, timeout=5)
             cur = conn.cursor()
+            # A cast.db that has not had migration 036 applied has no lineage
+            # columns. This UPDATE is wrapped in try/except with a retry, so an
+            # unconditional "SET ..., spawn_depth=?" there raises "no such column"
+            # on every attempt, the row stays 'running', and enrichment stops
+            # recording ENTIRELY and silently — for cost, tokens, tool_uses and
+            # response, not just lineage. CI caught exactly that.
+            #
+            # The PRIMARY fix is the self-healing ALTER above, which adds both
+            # columns to any DB reaching this code, so lineage is recorded rather
+            # than merely skipped. This probe is a second layer for the case where
+            # that ALTER itself fails (unwritable DB, lock contention, a future
+            # schema that refuses it) and the column genuinely is not there.
+            #
+            # Stated plainly because it is true: NO TEST DISCRIMINATES THIS BRANCH.
+            # Mutation-testing it (forcing the unconditional SET) leaves the suite
+            # green, because the self-heal has already restored the columns by the
+            # time this runs. It is defence in depth, not a covered path — do not
+            # read the green suite as evidence that it works.
+            try:
+                _cols = {r[1] for r in cur.execute("PRAGMA table_info(agent_runs)").fetchall()}
+            except Exception:
+                _cols = set()
+            if {"spawn_depth", "parent_agent_id"} <= _cols:
+                _lineage_sql = ", spawn_depth=?, parent_agent_id=?"
+                _lineage_params = (spawn_depth, parent_agent_id)
+            else:
+                _lineage_sql = ""
+                _lineage_params = ()
             if fast_row_id is not None:
                 # The fast status write above already closed this row out of 'running';
                 # enrich the SAME row by id (its status is no longer 'running', so the
@@ -892,11 +925,11 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=?, spawn_depth=?, parent_agent_id=? "
+                    "files=?, file_class=?" + _lineage_sql + " "
                     "WHERE id=?",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, spawn_depth, parent_agent_id, fast_row_id),
+                     files_val, file_class_val) + _lineage_params + (fast_row_id,),
                 )
             elif agent_id:
                 cur.execute(
@@ -905,13 +938,13 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=?, spawn_depth=?, parent_agent_id=? "
+                    "files=?, file_class=?" + _lineage_sql + " "
                     "WHERE id=("
                     "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent_id=?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, spawn_depth, parent_agent_id, agent_id),
+                     files_val, file_class_val) + _lineage_params + (agent_id,),
                 )
             else:
                 cur.execute(
@@ -920,13 +953,13 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                     "tool_uses=?, response=?, "
                     "cache_read_input_tokens=?, cache_creation_input_tokens=?, "
                     "cost_usd=?, input_tokens=?, output_tokens=?, model=?, branch=?, "
-                    "files=?, file_class=?, spawn_depth=?, parent_agent_id=? "
+                    "files=?, file_class=?" + _lineage_sql + " "
                     "WHERE id=("
                     "  SELECT MIN(id) FROM agent_runs WHERE status='running' AND agent=? AND session_id IS ?"
                     ")",
                     (st, ts, ts, tool_uses, response_text, cache_read, cache_create,
                      cost_usd, input_tokens, output_tokens, transcript_model, branch,
-                     files_val, file_class_val, spawn_depth, parent_agent_id, agent, sess or None),
+                     files_val, file_class_val) + _lineage_params + (agent, sess or None),
                 )
             rows_affected = conn.execute("SELECT changes()").fetchone()[0]
             conn.commit()
