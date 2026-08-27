@@ -20,7 +20,10 @@ teardown() {
   printf 'identical content\n' > "${HOME}/.claude/rules/working-conventions.md"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "rules drift: 1 baseline file(s) in sync" ]]
   [[ ! "$output" =~ "differ from the freshly-installed CAST baseline" ]]
 }
@@ -30,7 +33,10 @@ teardown() {
   printf 'stale local content\n' > "${HOME}/.claude/rules/working-conventions.md"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "rules drift (of 1 baseline file(s) compared)" ]]
   [[ "$output" =~ "working-conventions.md" ]]
   [[ "$output" =~ "differ from the freshly-installed CAST baseline" ]]
@@ -41,7 +47,10 @@ teardown() {
   printf 'baseline only\n' > "${HOME}/.claude/rules-core/shell.md"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "shell.md(missing)" ]]
 }
 
@@ -52,14 +61,20 @@ teardown() {
   printf 'backup\n' > "${HOME}/.claude/rules/working-conventions.md.pre-u3.bak"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "rules drift: 1 baseline file(s) in sync" ]]
   [[ ! "$output" =~ "work-projects.md" ]]
 }
 
 @test "rules drift: empty baseline dir reports INFO skip" {
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "no CAST rules-core baseline found" ]]
 }
 
@@ -70,7 +85,10 @@ teardown() {
   printf 'b\n' > "${HOME}/.claude/rules/shell.md"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "rules drift: 2 baseline file(s) in sync" ]]
 }
 
@@ -79,7 +97,10 @@ teardown() {
   printf 'stale local content\n' > "${HOME}/.claude/rules/working-conventions.md"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "cast rules sync"[[:space:]]*\(report-only ]]
   [[ "$output" =~ "cast rules sync --apply" ]]
 }
@@ -99,7 +120,10 @@ teardown() {
   printf 'e\n' > "${HOME}/.claude/rules/typescript.md"
 
   run bash bin/cast doctor
-  [ "$status" -eq 0 ]
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" =~ "rules drift: 2 baseline file(s) in sync" ]]
   [[ ! "$output" =~ "5 baseline file(s)" ]]
 }

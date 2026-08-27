@@ -252,18 +252,27 @@ teardown() {
 
 @test "cast doctor: runs without crash" {
   run bash "$CAST_CLI" doctor
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 }
 
 @test "cast doctor: checks cast.db" {
   run bash "$CAST_CLI" doctor
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   assert_output --partial "cast.db"
 }
 
 @test "cast doctor: checks schema tables" {
   run bash "$CAST_CLI" doctor
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   assert_output --partial "tables"
 }
 
@@ -275,7 +284,10 @@ teardown() {
   # Ensure no candidates file exists in our isolated HOME
   rm -f "$HOME/.claude/cast/upgrade-candidates.json"
   run bash "$CAST_CLI" doctor
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 }
 
 @test "cast doctor: shows 'cast upgrade-check' hint when candidates file is missing" {
@@ -285,7 +297,10 @@ teardown() {
   mkdir -p "$HOME/.claude/stubs"; printf '#!/bin/sh\nexit 0\n' > "$HOME/.claude/stubs/gh"; chmod +x "$HOME/.claude/stubs/gh"; export PATH="$HOME/.claude/stubs:$PATH"
   rm -f "$HOME/.claude/cast/upgrade-candidates.json"
   run bash "$CAST_CLI" doctor
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   assert_output --partial "cast upgrade-check"
 }
 
@@ -293,7 +308,10 @@ teardown() {
   mkdir -p "$HOME/.claude/cast"
   echo '{}' > "$HOME/.claude/cast/upgrade-candidates.json"
   run bash "$CAST_CLI" doctor
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
 }
 
 @test "cast doctor: shows candidate info when upgrade-candidates.json has entries" {
@@ -317,7 +335,10 @@ entry = {
 print(json.dumps(entry))
 " > "$HOME/.claude/cast/upgrade-candidates.json"
   run bash "$CAST_CLI" doctor
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   assert_output --partial "test-org/test-repo"
 }
 

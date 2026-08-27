@@ -65,7 +65,10 @@ teardown() {
 
   run bash "$CAST_BIN" doctor 2>&1
 
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   assert_output --partial "ask-record: record_fts not present"
 }
 
@@ -78,7 +81,10 @@ teardown() {
 
   run bash "$CAST_BIN" doctor 2>&1
 
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   assert_output --partial "record_fts present but empty (0 rows)"
   refute_output --partial "rows indexed"
 }
@@ -101,7 +107,10 @@ SQL
 
   run bash "$CAST_BIN" doctor 2>&1
 
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   assert_output --partial "rows indexed"
   assert_output --partial "newest"
 }
@@ -115,7 +124,10 @@ SQL
 
   run bash "$CAST_BIN" doctor 2>&1
 
-  assert_success
+  # cast doctor returns 0 (all pass) or 1 (some checks need attention) since v10 DOC-3.
+  # This test is about the check's OUTPUT, not the global verdict, so accept either --
+  # but still catch a crash (2, 127, ...).
+  [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   assert_output --partial "ask-record: semantic layer not populated"
   refute_output --partial "record_embed"
 }

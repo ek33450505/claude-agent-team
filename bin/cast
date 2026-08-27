@@ -2880,7 +2880,11 @@ for path in sys.argv[1:]:
         merged.update(cfg.get("mcpServers", {}))
     except Exception:
         pass
-    # Per-project shape: ~/.claude.json's "projects"."<abs cwd>"."mcpServers"
+    # Per-project shape: the "projects" -> "<abs cwd>" -> "mcpServers" path in
+    # ~/.claude.json. NOTE: no apostrophes in this heredoc. bash 3.2 (macOS
+    # /bin/bash) parses quotes inside a heredoc nested in $( ), so a lone "'"
+    # here is a SYNTAX ERROR there while bash 4+ accepts it. Cost: a red
+    # bats-macos on PR #391, invisible to `bash -n` under Homebrew bash 5.
     try:
         proj_cfg = cfg.get("projects", {}).get(cwd, {})
         merged.update(proj_cfg.get("mcpServers", {}))
