@@ -1970,13 +1970,43 @@ def _git_evaluate_impl(command: str, suppressed_counter):
             # guarantee LOCAL (one wrap, here) rather than inherited from two
             # callees means it survives a future refactor of either one — do
             # NOT delete this as "redundant with the callees' own contracts."
+            #
+            # 2026-08-27 I-3b Unit 2b: migration 034's stated purpose was
+            # "who bypassed which gate, when, and why" — the first three were
+            # wired (Unit 1a/1b-ii); this adds the why. `CAST_HATCH_REASON`,
+            # if present as a leading assignment ANYWHERE after the hatch
+            # variable itself in the same segment (e.g. `CAST_RESET_OK=1
+            # CAST_HATCH_REASON="rebasing onto main" git reset --hard`),
+            # overwrites the recorded value with the reason text instead of
+            # the hatch's own value ('1'). Overwriting loses nothing: every
+            # `*_ALLOW` regex above requires the hatch literally `=1` to
+            # grant the allow at all, so by the time this function runs the
+            # hatch's own value has already done all the work it will ever
+            # do — it carries no further information. `reason` is looked up
+            # via `_hatch_value` on `_seg`, the RAW (non-normalized) segment
+            # — `_hatch_value` calls `shlex.split` directly and already
+            # returns a quoted multi-word value as one token on its own,
+            # independent of `_normalize_git_segment`. This is a DIFFERENT
+            # code path from whether the ALLOW regex matches at all: a
+            # quoted multi-word `CAST_HATCH_REASON` value only keeps the
+            # *_ALLOW hit() check passing because `_normalize_git_segment`
+            # collapses it to `CAST_HATCH_REASON=_` before re-joining, giving
+            # the ALLOW regex's `\S+`-per-assignment token a single word to
+            # match — see `_normalize_git_segment`'s docstring. If that
+            # normalization behavior ever changes, a quoted multi-word reason
+            # will start BLOCKING outright (never reaching this function at
+            # all) rather than silently losing its text — fails loudly, not
+            # silently. No reason present -> falls back to the hatch's own
+            # value, exactly as before this change (regression-safe).
             nonlocal hatch_record_count
             try:
                 if variable in _seen:
                     return
                 _seen.add(variable)
                 if hatch_record_count < _MAX_HATCH_RECORDS_PER_COMMAND:
-                    _record_hatch(variable, _hatch_value(_seg, variable), git_op)
+                    reason = _hatch_value(_seg, 'CAST_HATCH_REASON')
+                    value = reason if reason else _hatch_value(_seg, variable)
+                    _record_hatch(variable, value, git_op)
                     hatch_record_count += 1
                 else:
                     suppressed_counter[0] += 1
