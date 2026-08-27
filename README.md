@@ -76,6 +76,109 @@ model or elapsed time yet — those are written at completion, so an empty pair 
 > [CHANGELOG.md](CHANGELOG.md).
 
 ---
+## See it work
+
+Three commands, real output.
+
+**Ask what a task will cost — and who should do it.** Not a guess: an aggregate over your own history.
+
+```console
+$ cast predict "add a bats test for the git guard"
+── Cost Prediction ──────────────────────────────────────────────────────
+Tasks like this: ≈ $19.30 median  (mean $35.00, range $0.14–$254.95) over 49 similar sessions
+
+── Suggested Agents ─────────────────────────────────────────────────────
+  Suggested: commit                 (136 runs on similar tasks, 98% DONE, ≈$0.19 avg)
+  Suggested: code-reviewer          (124 runs on similar tasks, 98% DONE, ≈$0.25 avg)
+  Suggested: researcher             ( 94 runs on similar tasks, 65% DONE, ≈$1.93 avg)
+```
+
+**Ask your record in English.** FTS5 across every agent run, dispatch, transcript, memory, incident and
+journal entry. `--semantic` adds local embeddings via Ollama. Nothing leaves the machine.
+
+The index size is whatever your own history is — this README publishes no frozen figure, for the same
+reason it publishes no frozen cost headline: retention prunes the rows underneath it. Measure yours:
+`sqlite3 ~/.claude/cast.db "SELECT kind, COUNT(*) FROM record_fts GROUP BY 1 ORDER BY 2 DESC;"`
+
+```console
+$ cast ask "wipe incident" --limit 2
+memory · 2026-07-09T21:40:50 · wipe-canary-quiet-log-is-healthy
+   [wipe]-canary-quiet-log-is-healthy com.cast.[wipe]-canary's StandardOutPath…
+
+agent_run · 2026-07-09T21:40:50 · researcher · DONE
+   …including `[wipe]-canary-launchd.log`. It only writes to the [incident] directory…
+```
+
+**Know the state of your own system.** `cast doctor` emits 34 check lines and, since v10, exits non-zero
+when something is actually wrong.
+
+```console
+$ cast doctor
+[ok] Schema: 16/16 provisioned tables present
+[ok] Hooks registered: 32 entries
+[!!] Stale memories: 38 flagged (verified_at > 30 days, names specific paths/flags)
+[ok] MCP servers: 3 configured, all reachable
+[ok] Litestream: replica fresh (lag 0s)
+[!!] Some checks need attention
+$ echo $?
+1
+```
+
+---
+
+## What is in the box
+
+`cast` is one binary with **41 subcommands** (`grep -cE '^  [a-z-]+\)' bin/cast`). The record is not a logbook you read — it is a surface you
+query, and these are the queries.
+
+| | |
+|---|---|
+| **Query the record** | `ask` · `predict` · `incidents` · `review` · `cost` · `budget` · `files` · `agents --usage` |
+| **Enforce** | `doctor` · `integrity` · `db-contract` · `provenance` · `ledger` |
+| **Run agents** | `dispatch` · `parallel` · `batch` · `exec` · `feature` · `test` · `eval` |
+| **Operate** | `status` · `dash` · `hooks` · `routines` · `migrate` · `backup` · `restore` · `tidy` · `clean` |
+| **Extend** | `new-agent` · `init-repo` · `rules` · `stack` · `memory` · `mcp` · `cheap` · `install-completions` |
+
+A few worth calling out:
+
+- **`cast dash`** — a live TUI. `htop`, but for your agents.
+- **`cast cheap`** — route a whole session to a local model through
+  [claude-code-router](https://github.com/musistudio/claude-code-router) + Ollama. Verified here on
+  `qwen2.5:7b`. Cheap mode is opt-in and per-session; `claude` still uses the API.
+- **`cast ledger`** — a signed, per-session audit receipt, renderable to a file and re-verifiable with
+  `--verify`.
+- **`cast mcp serve`** — expose your own record read-only over MCP, so any Claude Code session can query it:
+  `claude mcp add cast-record -- cast mcp serve`.
+- **`cast ci-local`** — run the PR-gating CI workflows locally via `act` before you push.
+- **`cast routines`** — scheduled agent jobs (briefings, cost reports, integrity monitors) via launchd.
+
+---
+
+## Five things you will not find elsewhere
+
+**1. The record predicts.** `cast predict` reads outcomes, not intentions: median cost, spread, and which
+agents actually finished this kind of work. Most observability tells you what happened. This tells you what
+is *about to*.
+
+**2. Escape hatches are a recorded primitive, not an honor system.** Every guarded git operation has a
+hatch — and as of v10 all 16 of them write a row to `ack_events` when, and only when, the hatch actually
+averted a block. `CAST_HATCH_REASON="rebasing onto main"` records *why*. Bypassing a gate is allowed; doing
+it invisibly is not.
+
+**3. It records its own failures in their own tables.** `agent_hallucinations`, `agent_truncations`,
+`completeness_events`, `hook_failures`, `agent_protocol_violations`. When a hook breaks it writes a row
+instead of swallowing the error — so the failure is data, not silence.
+
+**4. It is hard to make it destroy itself.** Two full `~/.claude` wipes (one taking colocated backups with
+it) and a destructive test that ran `rm -rf` from the repo root became invariants in code. Litestream
+replicates outside the blast radius; the wipe canary runs from that isolated path so it survives the event
+it detects; `blast-radius-lint` fails CI on a bare `rm -rf` in `scripts/`.
+
+**5. Everything is local and inspectable.** SQLite you can open with `sqlite3`. Markdown agents you can
+read in an editor. Hooks that are shell scripts. No SaaS, no telemetry, no sign-in — and no magic you
+cannot `cat`.
+
+---
 
 ## Installation
 
@@ -115,6 +218,7 @@ first gated dispatch.
 
 ---
 
+
 ## Why CAST exists
 
 Observability systems produce data, and data alone is powerless. The record only matters when it *acts* —
@@ -145,6 +249,7 @@ can check on everything else.
 
 ---
 
+
 ## What it enforces
 
 **Guards that bite.** Raw `git commit` and `git push` are blocked by PreToolUse hooks
@@ -162,7 +267,7 @@ truncation (an agent cut off mid-task is flagged, never relayed as done), checks
 file changes, and records what it finds in `agent_hallucinations` and `agent_truncations`. When a hook fails,
 it writes to `hook_failures` instead of swallowing the error.
 
-**No false green.** `cast doctor` runs 23 checks and reports what is actually wrong — stale backups, an
+**No false green.** `cast doctor` emits 34 check lines and reports what is actually wrong — stale backups, an
 unloaded canary, a non-writable evidence path — rather than a green tick. Separately,
 `scripts/cast-lint-write-only-tables.py` parses every `CREATE TABLE` and searches the source for a matching
 read site, so a table that is written but never read gets named. It is deliberately **advisory** — it always
@@ -182,6 +287,7 @@ user with no network still has a fully working system.*
 
 ---
 
+
 ## Architecture
 
 A user prompt is routed by `CLAUDE.md`; **PreToolUse guards** block non-compliant actions before they land;
@@ -196,6 +302,7 @@ step appends to `cast.db` — which Litestream replicates outside the blast radi
 Full guide: **[docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)**.
 
 ---
+
 
 ## Agents
 
@@ -215,6 +322,7 @@ work runs the `planner` → `/orchestrate` chain in waves. Full table with tiers
 
 ---
 
+
 ## Hooks
 
 Deterministic `command`-type hooks enforce; `prompt`-type hooks advise. The lifecycle: **SessionStart**
@@ -226,6 +334,7 @@ sensors, memory write) → **PostCompact** → **SessionEnd** (memory distiller)
 Write your own: **[docs/hooks/authoring-guide.md](docs/hooks/authoring-guide.md)**.
 
 ---
+
 
 ## The record
 
@@ -254,6 +363,7 @@ confidence scoring). A weekly routine decays, dedups, archives and promotes — 
 usage-aware, so a memory recalled often decays slower than one nobody reads.
 
 ---
+
 
 ## Testing
 
@@ -286,6 +396,7 @@ cast eval list && cast eval run --all && cast eval report
 ```
 
 ---
+
 
 ## Cost, measured honestly
 
@@ -323,6 +434,7 @@ anyway. See [docs/TOKEN-OPTIMIZATION.md](docs/TOKEN-OPTIMIZATION.md).
 
 ---
 
+
 ## Documentation
 
 | Guide | What's in it |
@@ -343,6 +455,7 @@ CAST ships <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash comma
 
 ---
 
+
 ## Ecosystem
 
 CAST is the core of a connected set of open-source repositories, each solving one piece of the multi-agent
@@ -360,6 +473,7 @@ Full table and install commands: **[docs/ecosystem.md](docs/ecosystem.md)**.
 
 ---
 
+
 ## Contributing
 
 Contributions are welcome — CAST is developed in the open. New agents, shell fixes, BATS coverage and
@@ -369,6 +483,7 @@ documentation improvements are all fair game. Please open an issue before non-tr
 Questions and ideas: **[GitHub Discussions](https://github.com/ek33450505/claude-agent-team/discussions)**.
 
 ---
+
 
 ## License
 
