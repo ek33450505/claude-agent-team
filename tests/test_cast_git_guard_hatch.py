@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Tests for scripts/cast-git-guard.py's CAST v10 I-3b Unit 1a additions:
-`_hatch_value()` and `_record_hatch()`.
+"""Tests for scripts/cast-git-guard.py's CAST v10 I-3b hatch-recording
+additions: `_hatch_value()`, `_record_hatch()`, and (as of Unit 1b-ii) the
+block-averted recording semantics shared by all 16 hatch variables.
 
-Unit 1a wires ONLY the commit/push hatches (CAST_COMMIT_AGENT, CAST_PUSH_OK)
-into cast.db's ack_events table — the other 14 hatches in this module are a
-separate unit and are NOT covered here.
+Unit 1a wired ONLY the commit/push hatches (CAST_COMMIT_AGENT, CAST_PUSH_OK)
+into cast.db's ack_events table. Unit 1b-ii wires the remaining 14 and makes
+the meaning of a recorded row uniform: a row is written ONLY when the hatch
+actually AVERTED a block, never on every hatched invocation — see
+`TestBlockAvertedRecording` below for the discriminating cases.
 
 Hyphenated filename cannot be imported normally — load via importlib, same
 pattern as tests/test_cast_pretool_dispatch.py.
@@ -191,9 +194,19 @@ class TestHatchRecordCap(unittest.TestCase):
         with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
             code, msg = cast_git_guard._git_evaluate(command)
         self.assertEqual((code, msg), (0, None))
+        # CAST v10 I-3b Unit 1b-i: the cap still allows only 8 PER-HATCH
+        # calls, but `_git_evaluate`'s `finally` now makes ONE additional
+        # call for the CAST_HATCH_RECORD_CAP sentinel — so the total is
+        # cap + 1, not cap. See TestHatchRecordCapSentinel below for tests
+        # that assert on the sentinel call's own shape.
         self.assertEqual(
-            mock_record.call_count, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND
+            mock_record.call_count, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND + 1
         )
+        sentinel_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_HATCH_RECORD_CAP'
+        ]
+        self.assertEqual(len(sentinel_calls), 1)
 
     def test_cap_does_not_suppress_a_real_block_after_it_is_reached(self):
         # 8 hatched, ALLOWed commits (exhausting the cap) followed by a
@@ -212,9 +225,373 @@ class TestHatchRecordCap(unittest.TestCase):
             code, msg = cast_git_guard._git_evaluate(command)
         self.assertEqual(code, 2)
         self.assertIsNotNone(msg)
+        # Exactly 8 hatches occurred (none suppressed — 8 == the cap, not
+        # over it), so NO CAST_HATCH_RECORD_CAP sentinel should fire here.
         self.assertEqual(
             mock_record.call_count, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND
         )
+        self.assertFalse(
+            any(c.args[0] == 'CAST_HATCH_RECORD_CAP' for c in mock_record.call_args_list)
+        )
+
+
+class TestHatchRecordCapSentinel(unittest.TestCase):
+    """CAST v10 I-3b Unit 1b-i: closes the ambiguity `_MAX_HATCH_RECORDS_
+    PER_COMMAND` created — an absent per-hatch `ack_events` row used to mean
+    EITHER "no hatch was used" OR "a hatch was used and suppressed by the
+    cap". `_git_evaluate` now emits exactly one `CAST_HATCH_RECORD_CAP`
+    sentinel row (via `_record_hatch`) whenever the cap suppressed at least
+    one record, on EVERY exit path (allow, block, or exception) — via a
+    `finally` clause wrapping the renamed `_git_evaluate_impl`.
+    """
+
+    def setUp(self):
+        self._orig_home = os.environ.get('HOME')
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-git-guard-hatch-sentinel-test-')
+        os.environ['HOME'] = self._tmpdir
+
+    def tearDown(self):
+        if self._orig_home is None:
+            os.environ.pop('HOME', None)
+        else:
+            os.environ['HOME'] = self._orig_home
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_nine_hatches_emit_exactly_one_sentinel_naming_count_one(self):
+        # 9 hatches: 8 real records + 1 suppressed -> exactly one sentinel
+        # call naming a suppressed count of 1.
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + f'mit -m "unit {i}"'
+            for i in range(9)
+        ]
+        command = ' && '.join(segments)
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(command)
+        self.assertEqual((code, msg), (0, None))
+        sentinel_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_HATCH_RECORD_CAP'
+        ]
+        self.assertEqual(len(sentinel_calls), 1)
+        variable, value, git_op = sentinel_calls[0].args
+        self.assertEqual(variable, 'CAST_HATCH_RECORD_CAP')
+        self.assertIn('1', value)
+        self.assertIn('suppressed', value)
+        self.assertEqual(git_op, 'cap')
+
+    def test_eight_or_fewer_hatches_emit_no_sentinel_at_all(self):
+        # The discriminating case: staying AT or UNDER the cap must never
+        # fire the sentinel. A sentinel that always fires is worthless.
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + f'mit -m "unit {i}"'
+            for i in range(8)
+        ]
+        command = ' && '.join(segments)
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(command)
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 8)
+        self.assertFalse(
+            any(c.args[0] == 'CAST_HATCH_RECORD_CAP' for c in mock_record.call_args_list)
+        )
+
+    def test_suppression_followed_by_block_still_records_sentinel(self):
+        # The early-return case the `finally` exists for: 9 hatches (1
+        # suppressed) followed by an UNHATCHED destructive op that BLOCKs.
+        # `_git_evaluate_impl` returns EARLY on the block, before its loop
+        # would ever reach a "tally suppressed count" step at the end — the
+        # sentinel must still be recorded, and the block verdict itself
+        # must be untouched.
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + f'mit -m "unit {i}"'
+            for i in range(9)
+        ]
+        segments.append('git reset --hard')
+        command = ' && '.join(segments)
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(command)
+        self.assertEqual(code, 2)
+        self.assertIsNotNone(msg)
+        sentinel_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_HATCH_RECORD_CAP'
+        ]
+        self.assertEqual(len(sentinel_calls), 1)
+
+    def test_sentinel_record_hatch_raising_does_not_propagate(self):
+        # If the sentinel's own _record_hatch call raises (e.g. cast_ack.py
+        # itself misbehaves in a way that bypasses _record_hatch's internal
+        # try/except, as happens here since the whole function is mocked),
+        # `_git_evaluate` must still return the correct verdict and must
+        # never let the exception escape.
+        def flaky(variable, value, git_op):
+            if variable == 'CAST_HATCH_RECORD_CAP':
+                raise RuntimeError('boom')
+            return None
+
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + f'mit -m "unit {i}"'
+            for i in range(9)
+        ]
+        command = ' && '.join(segments)
+        with mock.patch.object(
+            cast_git_guard, '_record_hatch', side_effect=flaky
+        ) as mock_record:
+            try:
+                code, msg = cast_git_guard._git_evaluate(command)
+            except Exception as e:  # pragma: no cover - fail() below is the real check
+                self.fail(
+                    f'_git_evaluate raised {e!r} when the sentinel _record_hatch call raised'
+                )
+        self.assertEqual((code, msg), (0, None))
+        self.assertTrue(
+            any(c.args[0] == 'CAST_HATCH_RECORD_CAP' for c in mock_record.call_args_list)
+        )
+
+
+class TestBlockAvertedRecording(unittest.TestCase):
+    """CAST v10 I-3b Unit 1b-ii: a per-hatch row is written ONLY when the
+    hatch actually AVERTED a block — never on every hatched invocation. The
+    BLOCK regexes are deliberately narrower than their matching ALLOW
+    regexes (`_RESET_BLOCK` needs --hard/--merge/--keep; `_RESET_ALLOW`
+    matches any hatched `git reset`), so a hatched-but-harmless invocation
+    of a guarded op must record NOTHING even though its ALLOW pattern
+    matches. This is the single most important property in this file.
+    """
+
+    def test_reset_hard_hatched_records_one_row(self):
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate('CAST_RESET_OK=1 git reset --hard')
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        variable, value, git_op = mock_record.call_args.args
+        self.assertEqual((variable, value, git_op), ('CAST_RESET_OK', '1', 'reset'))
+
+    def test_reset_soft_hatched_records_nothing(self):
+        # THE discriminator: --soft never trips _RESET_BLOCK (index-only,
+        # routine), so nothing was ever going to block and the hatch never
+        # averted anything — must record NOTHING even though CAST_RESET_OK=1
+        # is present and matches _RESET_ALLOW.
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate('CAST_RESET_OK=1 git reset --soft')
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 0)
+
+    def test_clean_without_dry_run_hatched_records_one_row(self):
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate('CAST_CLEAN_OK=1 git clean -fdx')
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        variable, value, git_op = mock_record.call_args.args
+        self.assertEqual((variable, value, git_op), ('CAST_CLEAN_OK', '1', 'clean'))
+
+    def test_clean_dry_run_hatched_records_nothing(self):
+        # Same discriminator, second op: -n/--dry-run is the exempt safe
+        # form of clean, so the hatch never averts a block here either.
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate('CAST_CLEAN_OK=1 git clean -n')
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 0)
+
+    def test_unhatched_destructive_op_still_blocks_and_records_nothing(self):
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate('git reset --hard')
+        self.assertEqual(code, 2)
+        self.assertIsNotNone(msg)
+        self.assertEqual(mock_record.call_count, 0)
+
+
+class TestGcDeduplication(unittest.TestCase):
+    """`CAST_GC_OK` gates FOUR distinct BLOCK sites (`_GC_BLOCK` plus the
+    three `_GC_HATCH_ALLOW`-gated config-injection/write/edit blocks).
+    Tripping more than one within a single segment must still write exactly
+    ONE row, not one per site."""
+
+    def test_gc_and_config_injection_in_one_segment_dedup_to_one_row(self):
+        # A single segment tripping BOTH _GC_BLOCK (bare `gc --prune=now`)
+        # AND _GC_CINJECT_BLOCK (`-c gc.pruneExpire=now` present on the same
+        # `git` invocation, subcommand-independent) — both keyed on the same
+        # CAST_GC_OK hatch.
+        cmd = 'CAST_GC_OK=1 git -c gc.pruneExpire=now gc --prune=now'
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(cmd)
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        variable, _value, _git_op = mock_record.call_args.args
+        self.assertEqual(variable, 'CAST_GC_OK')
+
+    def test_dedup_resets_per_segment_not_per_command(self):
+        # Two SEPARATE segments, each independently tripping the dedup case
+        # above, chained with its own hatch — dedup is scoped to one
+        # segment, so this must record TWO rows, not one.
+        seg = 'CAST_GC_OK=1 git -c gc.pruneExpire=now gc --prune=now'
+        cmd = f'{seg} && {seg}'
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(cmd)
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 2)
+
+
+class TestRecordedShapeSample(unittest.TestCase):
+    """`variable`/`value`/`git_op` sampled across the simple, compound, and
+    restore site shapes — not exhaustive over all 16 ops, but enough to
+    prove each shape wires its op name and hatch correctly."""
+
+    def test_simple_shape_stash(self):
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate('CAST_STASH_OK=1 git stash pop')
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        self.assertEqual(
+            mock_record.call_args.args, ('CAST_STASH_OK', '1', 'stash')
+        )
+
+    def test_compound_shape_checkout(self):
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(
+                'CAST_CHECKOUT_OK=1 git checkout -- some-file.txt'
+            )
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        self.assertEqual(
+            mock_record.call_args.args, ('CAST_CHECKOUT_OK', '1', 'checkout')
+        )
+
+    def test_restore_shape(self):
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(
+                'CAST_RESTORE_OK=1 git restore some-file.txt'
+            )
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 1)
+        self.assertEqual(
+            mock_record.call_args.args, ('CAST_RESTORE_OK', '1', 'restore')
+        )
+
+    def test_restore_staged_only_is_safe_and_records_nothing(self):
+        # The safe form of restore (--staged without --worktree) never
+        # blocks, so even with the hatch present nothing is averted.
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(
+                'CAST_RESTORE_OK=1 git restore --staged some-file.txt'
+            )
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(mock_record.call_count, 0)
+
+
+class TestCapAcrossMixedOps(unittest.TestCase):
+    """Cap interaction still holds once every op can record, not just
+    commit: >8 recordable hatch uses spread across DIFFERENT ops in one
+    command still yields exactly 8 real records + one sentinel."""
+
+    def setUp(self):
+        self._orig_home = os.environ.get('HOME')
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-git-guard-hatch-mixed-cap-test-')
+        os.environ['HOME'] = self._tmpdir
+
+    def tearDown(self):
+        if self._orig_home is None:
+            os.environ.pop('HOME', None)
+        else:
+            os.environ['HOME'] = self._orig_home
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_nine_distinct_ops_yield_eight_records_plus_one_sentinel(self):
+        segments = [
+            'CAST_COMMIT_AGENT=1 git ' + 'com' + 'mit -m "x"',
+            'CAST_PUSH_OK=1 git push',
+            'CAST_STASH_OK=1 git stash pop',
+            'CAST_RESET_OK=1 git reset --hard',
+            'CAST_CLEAN_OK=1 git clean -fdx',
+            'CAST_CHECKOUT_OK=1 git checkout -- f.txt',
+            'CAST_RESTORE_OK=1 git restore f.txt',
+            'CAST_SWITCH_OK=1 git switch -f main',
+            'CAST_REFLOG_OK=1 git reflog expire --all',
+        ]
+        command = ' && '.join(segments)
+        with mock.patch.object(cast_git_guard, '_record_hatch') as mock_record:
+            code, msg = cast_git_guard._git_evaluate(command)
+        self.assertEqual((code, msg), (0, None))
+        self.assertEqual(
+            mock_record.call_count, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND + 1
+        )
+        sentinel_calls = [
+            c for c in mock_record.call_args_list
+            if c.args[0] == 'CAST_HATCH_RECORD_CAP'
+        ]
+        self.assertEqual(len(sentinel_calls), 1)
+        self.assertIn('1', sentinel_calls[0].args[1])
+
+
+class TestCommitPushAuditUnchanged(unittest.TestCase):
+    """`_audit_commit_hatch`/`_audit_push_hatch` fire on ALLOW exactly as
+    before this refactor — they are NOT gated on the BLOCK regex the way
+    `_record_hatch` now is; only the `_record_hatch` call moved."""
+
+    def setUp(self):
+        self._orig_home = os.environ.get('HOME')
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-git-guard-hatch-audit-test-')
+        os.environ['HOME'] = self._tmpdir
+
+    def tearDown(self):
+        if self._orig_home is None:
+            os.environ.pop('HOME', None)
+        else:
+            os.environ['HOME'] = self._orig_home
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def test_audit_commit_hatch_fires_on_allow(self):
+        with mock.patch.object(cast_git_guard, '_audit_commit_hatch') as mock_audit, \
+                mock.patch.object(cast_git_guard, '_record_hatch'):
+            code, msg = cast_git_guard._git_evaluate(
+                'CAST_COMMIT_AGENT=1 git ' + 'com' + 'mit -m "x"'
+            )
+        self.assertEqual((code, msg), (0, None))
+        mock_audit.assert_called_once()
+
+    def test_audit_push_hatch_fires_on_allow(self):
+        with mock.patch.object(cast_git_guard, '_audit_push_hatch') as mock_audit, \
+                mock.patch.object(cast_git_guard, '_record_hatch'):
+            code, msg = cast_git_guard._git_evaluate('CAST_PUSH_OK=1 git push')
+        self.assertEqual((code, msg), (0, None))
+        mock_audit.assert_called_once()
+
+    def test_audit_commit_hatch_not_called_without_the_hatch(self):
+        with mock.patch.object(cast_git_guard, '_audit_commit_hatch') as mock_audit:
+            code, msg = cast_git_guard._git_evaluate('git ' + 'com' + 'mit -m "x"')
+        self.assertEqual(code, 2)
+        mock_audit.assert_not_called()
+
+    def test_audit_push_hatch_not_called_without_the_hatch(self):
+        with mock.patch.object(cast_git_guard, '_audit_push_hatch') as mock_audit:
+            code, msg = cast_git_guard._git_evaluate('git push')
+        self.assertEqual(code, 2)
+        mock_audit.assert_not_called()
+
+
+class TestRecordHatchUseFailOpen(unittest.TestCase):
+    """CAST v10 I-3b Unit 1b-ii follow-up (security review Low #2):
+    `record_hatch_use()` wraps its own body in try/except, independently of
+    `_record_hatch`'s and `_hatch_value`'s own "never raises" contracts —
+    the guarantee must be LOCAL, not merely inherited, so it survives a
+    future refactor of either callee. A raise from either one, while
+    recording a hatch use that DID avert a block, must never propagate and
+    must never change the ALLOW verdict."""
+
+    def test_hatch_value_raising_inside_recording_does_not_change_verdict_or_propagate(self):
+        with mock.patch.object(
+            cast_git_guard, '_hatch_value', side_effect=RuntimeError('boom')
+        ):
+            try:
+                code, msg = cast_git_guard._git_evaluate(
+                    'CAST_RESET_OK=1 git reset --hard'
+                )
+            except Exception as e:  # pragma: no cover - fail() below is the real check
+                self.fail(
+                    f'_git_evaluate raised {e!r} when _hatch_value raised inside '
+                    'record_hatch_use instead of failing open'
+                )
+        self.assertEqual((code, msg), (0, None))
 
 
 if __name__ == '__main__':
