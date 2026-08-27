@@ -184,6 +184,121 @@ class TestCliNeverBreaksPipeline(_IsolatedDbTestCase):
         self.assertIsNone(rows[0]['script'])
         self.assertEqual(rows[0]['value'], reason)
 
+    def test_cli_value_flag_is_passed_through(self):
+        """CAST v10 I-3b: `--value` must reach record_ack explicitly — the
+        git guard's hatch is an inline command prefix, never in the guard's
+        own environment, so the env fallback alone can never see it."""
+        env = os.environ.copy()
+        env.pop('CAST_ACK_VALUE_FLAG_VAR', None)  # unset: env fallback must NOT be used
+        env['CAST_DB_PATH'] = self._db_path
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(_SCRIPTS_DIR) / 'cast_ack.py'),
+                'CAST_ACK_VALUE_FLAG_VAR',
+                '--value', 'explicit value from caller',
+                '--script', 'cast-git-guard.py',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['value'], 'explicit value from caller')
+        self.assertEqual(rows[0]['script'], 'cast-git-guard.py')
+
+    def test_cli_without_value_flag_preserves_env_fallback(self):
+        """No --value on argv must behave byte-identically to before this
+        change: value=None -> record_ack reads os.environ[variable] itself.
+        Existing callers (cast-events.sh, cast-neon.sh) never pass --value
+        and must not change behavior."""
+        env = os.environ.copy()
+        env['CAST_ACK_NO_VALUE_FLAG_VAR'] = 'from the environment'
+        env['CAST_DB_PATH'] = self._db_path
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(_SCRIPTS_DIR) / 'cast_ack.py'),
+                'CAST_ACK_NO_VALUE_FLAG_VAR',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['value'], 'from the environment')
+
+    def test_cli_value_literally_matching_flag_name_not_misbound(self):
+        """CAST v10 I-3b Unit 1a gate fix: a `--value` payload that is
+        literally the string `--script` must not be mis-bound by a
+        FIRST-occurrence `argv.index('--script')` lookup, which previously
+        found the VALUE token (not the real trailing `--script <name>`
+        flag) and captured it as the script name — e.g.
+        `cast_ack.py X --value --script --script cast-git-guard.py` used to
+        record script='--script' instead of the real
+        script='cast-git-guard.py'. The fixed in-order pair-consuming scan
+        must record value='--script' (the real --value payload) AND
+        script='cast-git-guard.py' (the real, later --script flag)."""
+        env = os.environ.copy()
+        env.pop('CAST_ACK_FLAG_COLLISION_VAR', None)
+        env['CAST_DB_PATH'] = self._db_path
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(_SCRIPTS_DIR) / 'cast_ack.py'),
+                'CAST_ACK_FLAG_COLLISION_VAR',
+                '--value', '--script',
+                '--script', 'cast-git-guard.py',
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['value'], '--script')
+        self.assertEqual(rows[0]['script'], 'cast-git-guard.py')
+
+    def test_cli_value_flag_without_following_value_still_exits_zero(self):
+        """`--value` as the LAST argv token (no value following) must be
+        handled by the bounds check, not the outer exception handler —
+        mirrors the existing --script-with-no-value coverage above.
+
+        Asserting only the exit code would pass even if the bounds check
+        were deleted, since main()'s outer try/except swallows the
+        resulting IndexError and still returns 0 (confirmed by mutation:
+        removing `if idx + 1 < len(argv):` leaves this exit-code assertion
+        green). The env-fallback value must actually be RECORDED to prove
+        `value` stayed None and reached record_ack, rather than the CLI
+        crashing before ever calling it."""
+        env = os.environ.copy()
+        env['CAST_ACK_MALFORMED_VALUE_VAR'] = 'fallback via env, not --value'
+        env['CAST_DB_PATH'] = self._db_path
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(_SCRIPTS_DIR) / 'cast_ack.py'),
+                'CAST_ACK_MALFORMED_VALUE_VAR',
+                '--value',  # flag last, deliberately no value after it
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 0)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['value'], 'fallback via env, not --value')
+
 
 if __name__ == '__main__':
     unittest.main()

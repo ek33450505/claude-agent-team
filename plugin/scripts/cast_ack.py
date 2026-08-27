@@ -21,7 +21,7 @@ This part builds the primitive + schema + tests only. Wiring the 19 callers
 is a separate unit — nothing in this file is invoked by any hook yet.
 
 CLI usage (the primary consumer — bash hooks call this directly):
-    python3 scripts/cast_ack.py <VARIABLE_NAME> [--script <name>]
+    python3 scripts/cast_ack.py <VARIABLE_NAME> [--value <v>] [--script <name>]
 
 Library usage:
     from cast_ack import record_ack
@@ -143,11 +143,18 @@ def main(argv) -> int:
             return 0
         variable = argv[0]
         script = None
-        if '--script' in argv:
-            idx = argv.index('--script')
-            if idx + 1 < len(argv):
-                script = argv[idx + 1]
-        record_ack(variable, script=script)
+        value = None
+        i = 1
+        while i < len(argv):
+            if argv[i] == '--script' and i + 1 < len(argv):
+                script = argv[i + 1]
+                i += 2
+            elif argv[i] == '--value' and i + 1 < len(argv):
+                value = argv[i + 1]
+                i += 2
+            else:
+                i += 1
+        record_ack(variable, value=value, script=script)
     except Exception as e:
         _log_error(f'CLI main failed: {e}')
     return 0
