@@ -23,3 +23,6 @@ jobs:
 
       - name: Verify README sentinels and badges are in sync
         run: bash scripts/gen-stats.sh --check
+
+      - name: Verify ecosystem-versions.json is in sync
+        run: bash scripts/gen-ecosystem-versions.sh --remote --check
