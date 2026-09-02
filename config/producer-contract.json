@@ -1,7 +1,7 @@
 {
-  "schema_version": "1.0",
-  "generated": "2026-07-03",
-  "source": "producer audit master_post_v9 §3.b",
+  "schema_version": "1.1",
+  "generated": "2026-09-01",
+  "source": "producer audit master_post_v9 §3.b; v10 refresh 2026-09-01 (dashboard v10 contract alignment)",
   "consumers": "cast-desktop pipeline-health E2, dashboard",
   "tables": [
     {
@@ -44,12 +44,7 @@
     },
     {
       "table": "agent_memories",
-      "writers": [
-        "cast-memory-write.sh",
-        "cast-memory-router.py:374",
-        "cast-session-end.sh:401",
-        "cast-memory-facts-write.py"
-      ],
+      "writers": ["cast-memory-write.sh", "cast-memory-router.py:374", "cast-session-end.sh:401", "cast-memory-facts-write.py"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -61,11 +56,7 @@
     },
     {
       "table": "routing_events",
-      "writers": [
-        "cast-user-prompt-hook.sh:109",
-        "cast_subagent_stop.py:1549",
-        "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"
-      ],
+      "writers": ["cast-user-prompt-hook.sh:109", "cast_subagent_stop.py:1549", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -114,10 +105,7 @@
     },
     {
       "table": "swarm_sessions",
-      "writers": [
-        "cast-teammate-idle-hook.sh:74",
-        "cast-task-completed-hook.sh:74"
-      ],
+      "writers": ["cast-teammate-idle-hook.sh:74", "cast-task-completed-hook.sh:74"],
       "cadence": "per_event",
       "status": "live",
       "notes": "closer: cast-session-end.sh; reaper: cast-abandon-stale-runs.py; closer added 2026-07-03"
@@ -268,8 +256,64 @@
       "table": "unstaged_warnings",
       "writers": [],
       "cadence": "none",
-      "status": "retired_this_session",
-      "notes": "retired this session, migration 028"
+      "status": "retired",
+      "notes": "table dropped by migration 028 (2026-07-03); does not exist on live DBs"
+    },
+    {
+      "table": "ack_events",
+      "writers": ["cast_ack.py:146", "cast-git-guard.py:1847", "cast-events.sh:623", "cast-neon.sh:270"],
+      "cadence": "per_hatch_use",
+      "status": "live",
+      "notes": "NEW v10 (migration 034). A row means the op was PERMITTED, not that it ran (PreToolUse). Recording is gated on the hatch actually averting a block — a harmless hatched command records nothing. `value` is USER-SUPPLIED FREE TEXT when CAST_HATCH_REASON is set (sanitized, <=500 chars); never render it as evidence of what executed. has_reason=0 iff value is a bare 1/true/yes. Capped at 8 records per command; overflow emits ONE sentinel row with variable='CAST_HATCH_RECORD_CAP' — exclude it from hatch counts. created_at is SQLite space format ('YYYY-MM-DD HH:MM:SS'), not ISO-T/Z. Reader: cast-ask-index.py:330 (kind='hatch')."
+    },
+    {
+      "table": "agent_runs_daily",
+      "writers": ["cast-db-rollup.py:172", "cast-db-rollup.py:206"],
+      "cadence": "nightly",
+      "status": "live",
+      "notes": "NEW v10 (migration 032). Pre-prune rollup of agent_runs, PK (day,agent,model,status). Per-run average is SUM(cost_usd)/SUM(runs) — NEVER AVG(cost_usd), the rows are already aggregated. NEVER UNION with raw agent_runs: the rollup already covers every day including unpruned recent ones, so a union double-counts. Today's row is PARTIAL until the ~03:30 run (check rolled_up_at). Never pruned, so it outlives the 90-day agent_runs window."
+    },
+    {
+      "table": "mcp_calls_daily",
+      "writers": ["cast-db-rollup.py:266", "cast-db-rollup.py:288"],
+      "cadence": "nightly",
+      "status": "live",
+      "notes": "NEW v10 (migration 032). Rolled up from routing_events WHERE event_type='mcp_tool_call' AND json_valid(data). is_cloud_bound resolves via config/egress-policy.json. Same rollup rules as agent_runs_daily. Never pruned."
+    },
+    {
+      "table": "parry_guard_events",
+      "writers": [],
+      "cadence": "none",
+      "status": "retired",
+      "notes": "table does not exist in the canonical schema or on live DBs. docs/observability/OBSERVABILITY.md documented it in error until 2026-09-01, which is why claude-code-dashboard shipped a route querying it."
+    },
+    {
+      "table": "code_ref_checks",
+      "writers": [],
+      "cadence": "none",
+      "status": "retired",
+      "notes": "retired v9 Phase C U7b; does not exist on live DBs"
+    },
+    {
+      "table": "stream_events",
+      "writers": [],
+      "cadence": "none",
+      "status": "retired",
+      "notes": "retired v9 Phase C U7a (migration 025); does not exist on live DBs"
+    },
+    {
+      "table": "teammate_messages",
+      "writers": [],
+      "cadence": "none",
+      "status": "retired",
+      "notes": "retired v9 Phase C U7a (migration 025); does not exist on live DBs"
     }
-  ]
+  ],
+  "_status_vocabulary": {
+    "live": "a writer exists and runs on the stated cadence; writers are line-validated by scripts/cast-producer-contract-check.py",
+    "dormant": "table and writer both exist, but the writer is gated off (feature disabled, credentials absent). Zero rows is CORRECT — surface a 'dormant' badge, never an error state.",
+    "external": "written by something outside this repo",
+    "dead_writer_retired": "the writer was removed; historical rows remain and are still valid. Show the data with a 'no longer updated' badge.",
+    "retired": "the TABLE itself no longer exists in the canonical schema or on live DBs. Consumers MUST NOT query it — a graceful table-exists probe turns this into a permanently empty panel that looks like 'nothing happened'."
+  }
 }

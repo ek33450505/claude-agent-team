@@ -4,31 +4,45 @@
 
 ## claude-code-dashboard
 
-**[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** is a React 19 + Vite + Express observability UI that provides ~21 views into your CAST runtime. All data is read from `~/.claude/cast.db` — local-only, no cloud dependencies.
+**[claude-code-dashboard](https://github.com/ek33450505/claude-code-dashboard)** is a React 19 + Vite + Express observability UI over `~/.claude/cast.db`. Local-only, no cloud dependencies, and **read-only by default** — the server performs zero writes at startup and every mutating endpoint sits behind an opt-in token gate (`CAST_DASHBOARD_CONTROL=1` + `DASHBOARD_TOKEN`).
 
 ### Views
 
-Core observability pages:
+**19 navigable views** plus 2 detail views reached by link (21 routes total). Verified against `src/components/Sidebar.tsx` and `src/App.tsx` on 2026-09-01.
 
-- **Sessions** — active and historical Claude Code sessions with token counts, models, duration
-- **Session Detail** — deep dive into a single session with tool calls, memory injections, routing events
-- **Agents** — agent dispatch history, reliability metrics, model-specific performance
-- **Agent Reliability** — error rates, fallback patterns, model comparison
-- **Analytics** — multi-dimension analysis (sessions over time, cost trends, agent performance)
-- **Analytics Agent Detail** — per-agent analytics with cost attribution
-- **Hooks** — hook execution history and lifecycle event coverage
-- **Hook Failures** — guard hook blocks, gate violations, pre-tool-use failures
-- **Memory** — agent-accumulated knowledge from the memory system
-- **Plans** — Agent Dispatch Manifest history and orchestration execution
-- **Incidents** — critical events and anomalies
-- **Routines** — scheduled workflow execution and trigger history
-- **File Writes** — audit trail of all file modifications with agent and timestamp
-- **Injection Log** — memory and context injection events
-- **Executive Summary** — dashboard-level health and key metrics
-- **SQLite Explorer** — direct query interface to cast.db schema
-- **System** — CAST health, version, installed hooks and agents, database stats
-- **Docs** — embedded documentation reference
-- **Work Log** — agent response work logs and status blocks
+*Overview*
+
+- **Dashboard** (`/`) — today's runs, active agents, token-spend sparkline, gate and tool-failure counts
+- **Executive** (`/executive`) — run-status rollup, cost today/week, top agents, blockers
+- **Sessions** (`/sessions`) — session list with live hook events and compaction badges
+- **Session Detail** (`/sessions/:project/:sessionId`) — virtualized JSONL timeline, token and tool breakdown, agent runs
+- **Analytics** (`/analytics`) — token spend, agent scorecard, dispatch activity, delegation savings, cache breakdown
+- **Analytics Agent Detail** (`/analytics/agents/:agent`) — per-agent run history and charts
+
+*Observability*
+
+- **Work Log** (`/work-log`) — agent response work logs and Status blocks
+- **Evals** (`/evals`) — `eval_runs` table
+- **Injection Log** (`/injection-log`) — memory and context injection audit trail
+- **Routines** (`/routines`) — scheduled routine definitions and last-run status
+- **Hooks** (`/hooks`) — hook definitions plus per-hook health (script present, executable, recent failures)
+- **Database** (`/db`) — direct `cast.db` table browser, paginated
+
+*Reliability*
+
+- **Failures** (`/hook-failures`) — hook failure log with stderr
+- **Reliability** (`/agent-reliability`) — hallucinations, completeness events, truncations, protocol violations, worktree anomalies
+- **Incidents** (`/incidents`) — recorded incidents and resolution status
+
+*System*
+
+- **Memory** (`/memory`) — agent and project memory files, consolidation runs
+- **Plans** (`/plans`) — plan files and `plan_sessions`
+- **Agents** (`/agents`) — agent roster, scorecard, recent runs, routing intel
+- **Outputs** (`/outputs`) — briefings, meetings, reports
+- **System** (`/system`) — CAST health, rules, skills, cron, policies, pricing, control surface, integrity
+- **Docs** (`/docs`) — embedded slash-command, agent, skill and CLI reference
+
 
 ### Development
 

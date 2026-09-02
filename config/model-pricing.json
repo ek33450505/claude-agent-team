@@ -1,58 +1,94 @@
 {
-  "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-06-09.",
-  "_note": "Cloud costs reflect Anthropic published pricing. _default is used when a model id is not in the table (approximate-but-nonzero).",
+  "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-09-01.",
+  "_note": "Rates verified against https://platform.claude.com/docs/en/about-claude/pricing on 2026-09-01. _default is used when a model id is not in the table (approximate-but-nonzero). Consumers derive cache rates from cost_per_million_input: 5m cache write = 1.25x, cache read = 0.1x (scripts/cast_subagent_stop.py). KNOWN GAP: Claude Fable 5.1 / Mythos 5.1 price cache reads at 0.025x, not 0.1x, and the hook applies the flat 0.1x to every model — so if either model ever enters the record, its cache reads will be overstated 4x. Neither has any rows today; fix the hook before adding one.",
   "models": {
     "_default": {
-      "cost_per_million_input": 3.00,
-      "cost_per_million_output": 15.00,
+      "cost_per_million_input": 3.0,
+      "cost_per_million_output": 15.0,
       "tier": "cloud",
       "provider": "anthropic"
     },
-    "claude-opus-4-5": {
-      "cost_per_million_input": 15.00,
-      "cost_per_million_output": 75.00,
+    "claude-fable-5-1": {
+      "cost_per_million_input": 10.0,
+      "cost_per_million_output": 50.0,
       "tier": "cloud",
       "provider": "anthropic"
     },
-    "claude-sonnet-4-5": {
-      "cost_per_million_input": 3.00,
-      "cost_per_million_output": 15.00,
+    "claude-fable-5": {
+      "cost_per_million_input": 10.0,
+      "cost_per_million_output": 50.0,
       "tier": "cloud",
       "provider": "anthropic"
     },
-    "claude-sonnet-4-6": {
-      "cost_per_million_input": 3.00,
-      "cost_per_million_output": 15.00,
-      "tier": "cloud",
-      "provider": "anthropic"
-    },
-    "claude-sonnet-5": {
-      "cost_per_million_input": 2.00,
-      "cost_per_million_output": 10.00,
-      "tier": "cloud",
-      "provider": "anthropic"
-    },
-    "claude-haiku-4-5": {
-      "cost_per_million_input": 0.80,
-      "cost_per_million_output": 4.00,
-      "tier": "cloud",
-      "provider": "anthropic"
-    },
-    "claude-haiku-4-5-20251001": {
-      "cost_per_million_input": 0.80,
-      "cost_per_million_output": 4.00,
-      "tier": "cloud",
-      "provider": "anthropic"
-    },
-    "claude-opus-4-6": {
-      "cost_per_million_input": 15.00,
-      "cost_per_million_output": 75.00,
+    "claude-opus-5": {
+      "cost_per_million_input": 5.0,
+      "cost_per_million_output": 25.0,
       "tier": "cloud",
       "provider": "anthropic"
     },
     "claude-opus-4-8": {
-      "cost_per_million_input": 15.00,
-      "cost_per_million_output": 75.00,
+      "cost_per_million_input": 5.0,
+      "cost_per_million_output": 25.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-opus-4-7": {
+      "cost_per_million_input": 5.0,
+      "cost_per_million_output": 25.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-opus-4-6": {
+      "cost_per_million_input": 5.0,
+      "cost_per_million_output": 25.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-opus-4-5": {
+      "cost_per_million_input": 5.0,
+      "cost_per_million_output": 25.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-sonnet-5": {
+      "cost_per_million_input": 2.0,
+      "cost_per_million_output": 10.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-sonnet-4-6": {
+      "cost_per_million_input": 3.0,
+      "cost_per_million_output": 15.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-sonnet-4-5": {
+      "cost_per_million_input": 3.0,
+      "cost_per_million_output": 15.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-haiku-4-5": {
+      "cost_per_million_input": 1.0,
+      "cost_per_million_output": 5.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-haiku-4-5-20251001": {
+      "cost_per_million_input": 1.0,
+      "cost_per_million_output": 5.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-opus-4-1": {
+      "cost_per_million_input": 15.0,
+      "cost_per_million_output": 75.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-haiku-3-5-20241022": {
+      "cost_per_million_input": 0.8,
+      "cost_per_million_output": 4.0,
       "tier": "cloud",
       "provider": "anthropic"
     }
