@@ -148,7 +148,7 @@ CAST uses two complementary observability layers that serve different purposes:
 | `quality_gates` | Gate evaluations, pass/fail per unit | None |
 | `dispatch_decisions` | Agent selection rationale, batch context | None |
 | `swarm_sessions` | Multi-agent swarm metadata (dormant — writers retired v9) | None |
-| `parry_guard_events` | Guard-blocked tool calls (PreToolUse exit 2) | None |
+| `ack_events` | Escape-hatch acknowledgments — which guard was overridden, and why (v10, migration 034) | None |
 | `agent_truncations` | Context-limit truncation events | None |
 | `injection_log` | Memory and context injection audit trail | None |
 
@@ -184,10 +184,10 @@ OTEL_LOGS_EXPORTER=otlp
 
 The following cast.db columns track data that native OTel also covers (once a collector is running). They are **NOT dropped now** — 15+ scripts read/write them and the dashboard depends on them.
 
+> **Already dropped, do not read (corrected 2026-09-01):** `sessions.total_input_tokens`, `sessions.total_output_tokens`, `sessions.total_cost_usd`, `sessions.model`, `agent_runs.prompt` and `agent_runs.project` were dropped by migration 022 and re-dropped by 026. They may still be physically present on older live DBs as zero/empty orphan columns. Source project via `JOIN sessions`, and session totals by aggregating `agent_runs`. See `docs/cast-db-schema-rationale.md` → Orphan columns.
+
 | Column | Table | Why it's a candidate | Blocker before dropping |
 |---|---|---|---|
-| `total_input_tokens` | `sessions` | Duplicates OTel `claude_code.token.usage` (input dimension) | Collector confirmed running; dashboard reader migrated to OTel |
-| `total_output_tokens` | `sessions` | Duplicates OTel `claude_code.token.usage` (output dimension) | Collector confirmed running; dashboard reader migrated to OTel |
 | `input_tokens` | `agent_runs` | Per-dispatch token count, available via OTel span attributes | Collector confirmed running; dashboard reader migrated to OTel |
 | `output_tokens` | `agent_runs` | Per-dispatch token count, available via OTel span attributes | Collector confirmed running; dashboard reader migrated to OTel |
 | `cost_usd` | `agent_runs` | Cost derived from tokens; OTel has no cost semantic (compute locally from token counts) | Cost calculation migrated to dashboard layer; collector confirmed running |

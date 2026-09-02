@@ -50,7 +50,7 @@
 
 **Note on turn budgets:** `code-reviewer` carries a maxTurns of 50 — notably higher than the 15–25 band most non-implementation agents occupy — which may correlate with its `background: true` frontmatter flag (background/async execution), though the exact rationale for this distinction is not documented elsewhere, so treat this as an observed asymmetry rather than a confirmed causal link.
 
-**Main-loop default (inline session):** `claude-sonnet-5` — set in `managed-settings.d/16-model-defaults.json` (pinned ID, not the `sonnet` alias, to prevent silent model drift). Chosen for documented near-Opus-4.8 capability at a fraction of the cost ($2/$10 per 1M vs Opus 4.8's $15/$75 — 7.5x cheaper on both input and output). Intro pricing through 2026-08-31; steady-state $3/$15 afterward — bump the pricing entry in `config/model-pricing.json` when pricing changes.
+**Main-loop default (inline session):** `claude-sonnet-5` — set in `managed-settings.d/16-model-defaults.json` (pinned ID, not the `sonnet` alias, to prevent silent model drift). Chosen for documented near-Opus-4.8 capability at a fraction of the cost ($2/$10 per 1M vs Opus 4.8's $5/$25 — 2.5x cheaper on both input and output). The $2/$10 rate was announced as introductory pricing through 2026-08-31; Anthropic has since made it the standard price and cancelled the scheduled increase to $3/$15 (verified 2026-09-01). Rates live in `config/model-pricing.json` — verify against <https://platform.claude.com/docs/en/about-claude/pricing> before changing them, never from memory.
 
 **Manual escalation:** `/model opus` for the hardest reasoning tasks, within the standing Opus-4.8 subagent cap; `/model fable` for the very hardest **solo** work only (no fan-outs — see warning below).
 
