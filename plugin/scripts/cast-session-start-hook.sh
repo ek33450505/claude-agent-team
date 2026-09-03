@@ -157,11 +157,14 @@ if pane_id and os.path.exists(db_path):
             lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: pane-bindings INSERT failed: {type(e).__name__}: {e}\n")
 PYEOF
 
-# Notify the Cast Desktop backend of the pane binding
+# Notify the dashboard of the pane binding (best-effort — dashboard may not be running,
+# or its control surface may not be enabled; either way this silently no-ops via --max-time
+# + `|| true`, matching the existing fire-and-forget behavior above).
 if [ -n "${CAST_DESKTOP_PANE_ID:-}" ]; then
   curl -s -X POST "http://localhost:3001/api/pane-bindings/notify" \
     -H "Content-Type: application/json" \
-    -d "{\"paneId\": \"${CAST_DESKTOP_PANE_ID}\"}" \
+    -H "X-Dashboard-Token: ${DASHBOARD_TOKEN:-}" \
+    -d "{\"pane_id\": \"${CAST_DESKTOP_PANE_ID}\"}" \
     --max-time 2 >/dev/null 2>&1 || true
 fi
 
