@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
-  <img src="https://img.shields.io/badge/version-10.0.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-10.0.1-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
   <img src="https://img.shields.io/badge/tests-3323-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">

@@ -6,6 +6,32 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 _Nothing yet._
 
+## [10.0.1] — 2026-09-03
+
+Small patch release — 3 merged PRs since v10.0.0, no schema or behavior changes to the
+gate/guard surfaces.
+
+### Fixed
+
+- **`config/model-pricing.json` corrected against live Anthropic rates** (#397). Every model
+  except `claude-sonnet-5` was mispriced — `claude-opus-5` and `claude-fable-5` were absent
+  and fell through to the `_default` rate, `claude-opus-4-8` was overstated 3x, and
+  `claude-haiku-4-5` carried Haiku 3.5's price. `config/producer-contract.json` gained entries
+  for the three v10 tables (`ack_events`, `agent_runs_daily`, `mcp_calls_daily`) and a
+  `retired` status for four tables that no longer exist, closing the gap that let
+  `claude-code-dashboard` ship routes silently querying dropped tables. A fail-closed recost
+  migration for historical `cost_usd` was added but **not yet applied** — dry-run only,
+  pending a separate explicit decision.
+- **`ecosystem-versions.json` drift now gated in CI** (#395) — the file had silently drifted
+  (dashboard entry stuck at 2.5.0 while the dashboard had reached 2.7.0), publishing stale
+  data to castframework.dev. `cast-stats-guard.yml` now runs `gen-ecosystem-versions.sh
+  --remote --check` and fails loudly on drift instead of publishing it.
+- **`cast-session-start-hook.sh`'s pane-bindings notify call aligned with the dashboard's
+  endpoint contract** (#398) — adds the `X-Dashboard-Token` header the dashboard's new
+  `POST /api/pane-bindings/notify` route requires, and renames the JSON field `paneId` →
+  `pane_id` to match. The dashboard-side endpoint shipped in a parallel
+  `claude-code-dashboard` v3.0.0 release.
+
 ## [10.0.0] — 2026-08-27 — Make the Gates Tell the Truth
 
 49 merged PRs since v9.5.3 (2026-07-11 → 2026-08-27): 423 files, +48,879/−3,259. The release has one theme, arrived at the hard way: **a gate that has never failed is indistinguishable from a gate that cannot fail.** Nearly every item below was found by asking of an existing check "what does its output look like when the thing it guards did not happen?" — and discovering the answer was "identical to success." The destructive-op guard was registered but never validated; the session-end prune had been failing on every run for months behind `|| true`; a `cast doctor` honesty check compared timestamp formats that can never match; the review gate could be satisfied by a review of a different artifact entirely. Tests 2,353 → 3,320 across 204 → 239 files, and the new ones are mutation-tested — reverted against the bug they guard and confirmed RED — because an assertion that never fails is the same defect one level up. Two of this release's own tests were caught that way and would otherwise have shipped green and empty: one asserted NULLs on a payload the hook had rejected as malformed, so it could not have failed; another never reached the code under test because an optional module was absent on the machine running it.
