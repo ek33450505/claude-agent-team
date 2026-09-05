@@ -286,6 +286,52 @@ def _sanitize_error_text(text: str):
         return None
 
 
+def _sanitize_redacted_fields(record: dict) -> None:
+    """Once redaction has been triggered (entity_count > 0), sanitize the raw
+    fields (url/query/command_preview) IN PLACE on the audit record so that
+    record["redacted"] = True reflects an actual guarantee rather than an
+    unfulfilled promise — build_record() never rewrites these fields itself.
+
+    Uses _sanitize_error_text() (fails closed: None on ANY failure). A field
+    that fails to sanitize is DROPPED entirely rather than persisted raw —
+    same fail-closed contract as the advisory-log helper below.
+    """
+    for field in ("url", "query", "command_preview"):
+        value = record.get(field)
+        if not value:
+            continue
+        sanitized = _sanitize_error_text(value)
+        if sanitized is not None:
+            record[field] = sanitized
+        else:
+            record.pop(field, None)
+
+
+def _write_pii_advisory_log(timestamp: str, reason: str, raw_text: str) -> None:
+    """Append one line to pii-advisory.log — never persisting raw, unredacted
+    text. `raw_text` is sanitized via _sanitize_error_text() BEFORE any
+    truncation (truncation alone is not redaction — see that function's
+    docstring). If sanitization fails (returns None), the line is written
+    WITHOUT a preview at all rather than falling back to the raw string:
+    the operator still sees timestamp/reason/entity-count, just no text.
+
+    Fail-soft: swallows all exceptions, never raises, never crashes the hook
+    pipeline (matches every other logging path in this module).
+    """
+    try:
+        sanitized = _sanitize_error_text(raw_text)
+        if sanitized is not None:
+            preview = f"Text preview: {sanitized[:100]}\n"
+        else:
+            preview = "Text preview unavailable (sanitization failed).\n"
+        pii_log = os.path.join(HOME, ".claude", "logs", "pii-advisory.log")
+        os.makedirs(os.path.dirname(pii_log), exist_ok=True)
+        with open(pii_log, "a") as f:
+            f.write(f"[{timestamp}] PII-ADVISORY cast-audit.py: {reason}{preview}")
+    except Exception:
+        pass
+
+
 def _mcp_outcome(tool_response) -> tuple:
     """Derive (outcome, error_preview, result_size) from tool_response.
 
@@ -637,6 +683,12 @@ def main() -> int:
                     record["redacted"] = True
                     record["redacted_count"] = entity_count
 
+                    # Sanitize the raw fields the "redacted" flag above claims
+                    # to guarantee — build_record() never rewrites them, so
+                    # without this every write path below (safelist-match,
+                    # strict-block, advisory) would still persist raw content.
+                    _sanitize_redacted_fields(record)
+
                     # Write redaction map
                     write_redact_map(session_id, timestamp, redact_result)
 
@@ -645,16 +697,11 @@ def main() -> int:
 
                     if safelist_matched:
                         # Log advisory only — never block
-                        try:
-                            pii_log = os.path.join(HOME, ".claude", "logs", "pii-advisory.log")
-                            with open(pii_log, "a") as f:
-                                f.write(
-                                    f"[{timestamp}] PII-ADVISORY cast-audit.py: "
-                                    f"safelist match, skipping enforcement. "
-                                    f"Text preview: {redact_text[:100]}\n"
-                                )
-                        except Exception:
-                            pass
+                        _write_pii_advisory_log(
+                            timestamp,
+                            "safelist match, skipping enforcement. ",
+                            redact_text,
+                        )
                     elif mode == "pre" and ENFORCEMENT_MODE == "strict" and cfg.get("redact_pii"):
                         # Strict pre-tool mode: append record before blocking
                         try:
@@ -676,16 +723,11 @@ def main() -> int:
                         return 2
                     else:
                         # Advisory mode: warn but allow
-                        try:
-                            pii_log = os.path.join(HOME, ".claude", "logs", "pii-advisory.log")
-                            with open(pii_log, "a") as f:
-                                f.write(
-                                    f"[{timestamp}] PII-ADVISORY cast-audit.py: "
-                                    f"{entity_count} entities detected (advisory mode). "
-                                    f"Text preview: {redact_text[:100]}\n"
-                                )
-                        except Exception:
-                            pass
+                        _write_pii_advisory_log(
+                            timestamp,
+                            f"{entity_count} entities detected (advisory mode). ",
+                            redact_text,
+                        )
 
                         hook_output = json.dumps({
                             "hookSpecificOutput": {
