@@ -544,8 +544,7 @@ CAST uses three Claude Code hook events. Each hook script reads a JSON payload f
 | Event | Hook script | Fires when |
 |---|---|---|
 | `PreToolUse:Bash` | `pre-tool-guard.sh` | Claude is about to run a bash command |
-| `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Claude just wrote or edited a file |
-| `PostToolUse:Agent` | `cast-cost-tracker.sh` | Claude just dispatched an agent |
+| `PostToolUse:Write\|Edit\|Agent\|Bash\|Task\|NotebookEdit` | `post-tool-hook.sh` | Claude just wrote/edited a file, ran a command, or dispatched an agent |
 | `Stop` | `cast-session-end.sh` | Session ends |
 | `SubagentStop` | `cast-subagent-stop-hook.sh` + `cast_subagent_stop.py` | A subagent has finished — updates agent_runs, detects truncation/completeness/protocol violations, records incidents, emits budget alerts, and compresses hookSpecificOutput; single python process, no sub-hook fan-out |
 | `SubagentStop` | `cast-subagent-worktree-check.sh` | Scans for stale git worktrees left by the subagent and prunes them; isolated from main hook so git mutations get their own 10s budget |
@@ -849,7 +848,7 @@ A CAST-compatible hook script MUST:
 - [ ] Use exit code 0 (allow), 1 (warn), or 2 (hard-block) — never exit with other codes for protocol responses
 - [ ] Output `hookSpecificOutput` JSON for directive injection; output plain text for block messages
 - [ ] Limit regex pattern length to 200 characters maximum (ReDoS prevention)
-- [ ] Log dispatch events to `cast.db` via `cast-cost-tracker.sh` (for PostToolUse:Agent hooks)
+- [ ] Log dispatch events to `cast.db` via `post-tool-hook.sh` (its matcher covers PostToolUse:Agent)
 - [ ] Use `python3` stdlib only — no pip packages
 
 A CAST-compatible hook script SHOULD:
@@ -868,8 +867,7 @@ A CAST-compatible hook script SHOULD:
 ├── agents/                          # Agent definition files (.md with YAML frontmatter)
 ├── scripts/
 │   ├── pre-tool-guard.sh            # PreToolUse:Bash hook: git commit/push guard
-│   ├── post-tool-hook.sh            # PostToolUse:Write|Edit hook (review injection)
-│   ├── cast-cost-tracker.sh         # PostToolUse:Agent hook (logs to cast.db)
+│   ├── post-tool-hook.sh            # PostToolUse:Write|Edit|Agent|Bash|Task|NotebookEdit hook (review injection + dispatch logging)
 │   ├── cast-session-end.sh          # Stop hook: archival, pruning, memory sync
 │   ├── status-writer.sh             # Sourced helper: cast_write_status
 │   ├── cast-events.sh               # Sourced helper: cast_emit_event
