@@ -1333,5 +1333,149 @@ class TestWriteRedactMap(unittest.TestCase):
         self.assertEqual(data["session_id"], "sess-1")
 
 
+class TestPiiAdvisoryLogSanitization(unittest.TestCase):
+    """Test the PII-advisory-log fix (HIGH security defect, live-verified via
+    ~/.claude/logs/pii-advisory.log). Both former raw-write points in main()
+    (safelist-match branch, advisory-mode branch) now route through
+    _write_pii_advisory_log(), which sanitizes the preview via
+    _sanitize_error_text() BEFORE truncating and, per that function's
+    fail-closed contract, drops the preview entirely rather than ever
+    falling back to raw text when sanitization fails.
+
+    cast_audit.REDACT_SCRIPT defaults to the INSTALLED ~/.claude copy (absent
+    in CI); setUp/tearDown repoint it at the repo copy, same pattern as
+    TestSanitizeErrorText. cast_audit.HOME and cast_audit.REDACT_MAPS_DIR are
+    both repointed at a temp dir so nothing here ever touches the real
+    ~/.claude/logs/."""
+
+    def setUp(self):
+        self._orig_redact_script = cast_audit.REDACT_SCRIPT
+        cast_audit.REDACT_SCRIPT = str(_SCRIPTS_DIR / 'cast-redact.py')
+        self._orig_audit_log = cast_audit.AUDIT_LOG
+        self._orig_home = cast_audit.HOME
+        self._orig_redact_maps_dir = cast_audit.REDACT_MAPS_DIR
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-audit-pii-log-test-')
+        cast_audit.AUDIT_LOG = os.path.join(self._tmpdir, 'audit.jsonl')
+        cast_audit.HOME = self._tmpdir
+        cast_audit.REDACT_MAPS_DIR = os.path.join(self._tmpdir, 'redact-maps')
+
+    def tearDown(self):
+        cast_audit.REDACT_SCRIPT = self._orig_redact_script
+        cast_audit.AUDIT_LOG = self._orig_audit_log
+        cast_audit.HOME = self._orig_home
+        cast_audit.REDACT_MAPS_DIR = self._orig_redact_maps_dir
+
+    def _advisory_log_path(self):
+        return os.path.join(self._tmpdir, ".claude", "logs", "pii-advisory.log")
+
+    def _run_main_advisory(self, url: str):
+        payload = {
+            "tool_name": "WebFetch",
+            "tool_input": {"url": url},
+            "session_id": "sess-pii-1",
+        }
+        with mock.patch.object(cast_audit, "_read_cast_cli_cfg", return_value={"redact_pii": True}):
+            with mock.patch.object(
+                cast_audit, "run_redact_analysis",
+                return_value={"entity_count": 1, "entities": []},
+            ):
+                with mock.patch('sys.stdin', io.StringIO(json.dumps(payload))):
+                    with mock.patch('sys.argv', ['cast-audit.py', '--mode', 'post']):
+                        cast_audit.main()
+
+    def test_advisory_log_contains_entity_marker_not_raw_secret(self):
+        """A secret-bearing input must produce an advisory log line with the
+        redaction ENTITY marker present, and the raw secret literal absent.
+
+        Mutation-tested: stubbing _sanitize_error_text to identity (an
+        agent that forgets to redact) made this FAIL with
+        'ghp_aaa...' (36 a's) found in log_contents — the token appeared in
+        the advisory line verbatim. Restoring the real fix makes it pass."""
+        token = "ghp_" + "a" * 36
+        self._run_main_advisory(f"https://example-not-safelisted.test/{token}")
+        with open(self._advisory_log_path()) as f:
+            log_contents = f.read()
+        self.assertNotIn(token, log_contents)
+        self.assertIn("<GITHUB_TOKEN>", log_contents)
+        self.assertIn("PII-ADVISORY", log_contents)
+
+    def test_sanitize_failure_produces_no_preview_never_raw_fallback(self):
+        """When _sanitize_error_text fails closed (returns None), the
+        advisory line must contain NO preview at all — never fall back to
+        the raw string.
+
+        Mutation-tested: replacing _write_pii_advisory_log's None-branch
+        with the old raw-fallback behavior (`raw_text[:100]` regardless of
+        sanitize result) made this FAIL — the secret literal appeared in the
+        log line and 'Text preview unavailable' was absent. Restoring the
+        real fix makes it pass."""
+        secret = "super-secret-value-should-never-appear"
+        with mock.patch.object(cast_audit, "_sanitize_error_text", return_value=None):
+            cast_audit._write_pii_advisory_log(
+                "2026-09-05T00:00:00Z", "test reason. ", secret
+            )
+        with open(self._advisory_log_path()) as f:
+            log_contents = f.read()
+        self.assertNotIn(secret, log_contents)
+        self.assertIn("Text preview unavailable", log_contents)
+        self.assertNotIn("Text preview:", log_contents)
+
+
+class TestRedactedRecordFieldsSanitization(unittest.TestCase):
+    """Test the audit.jsonl record-field fix (Change 2, HIGH security defect)
+    — build_record() never rewrites url/query/command_preview itself, so
+    record["redacted"] = True previously asserted a guarantee the code never
+    established: the persisted record still carried the raw secret. main()
+    must now sanitize those fields in place via _sanitize_redacted_fields()
+    before the record is written to audit.jsonl.
+
+    Same REDACT_SCRIPT/AUDIT_LOG/REDACT_MAPS_DIR isolation pattern as
+    TestPiiAdvisoryLogSanitization above."""
+
+    def setUp(self):
+        self._orig_redact_script = cast_audit.REDACT_SCRIPT
+        cast_audit.REDACT_SCRIPT = str(_SCRIPTS_DIR / 'cast-redact.py')
+        self._orig_audit_log = cast_audit.AUDIT_LOG
+        self._orig_redact_maps_dir = cast_audit.REDACT_MAPS_DIR
+        self._tmpdir = tempfile.mkdtemp(prefix='cast-audit-redacted-record-test-')
+        cast_audit.AUDIT_LOG = os.path.join(self._tmpdir, 'audit.jsonl')
+        cast_audit.REDACT_MAPS_DIR = os.path.join(self._tmpdir, 'redact-maps')
+
+    def tearDown(self):
+        cast_audit.REDACT_SCRIPT = self._orig_redact_script
+        cast_audit.AUDIT_LOG = self._orig_audit_log
+        cast_audit.REDACT_MAPS_DIR = self._orig_redact_maps_dir
+
+    def test_redacted_record_does_not_contain_raw_secret_in_query(self):
+        """A WebSearch query carrying a secret, once entity_count > 0, must
+        be sanitized in the PERSISTED audit.jsonl record — not just flagged
+        redacted=True while the raw value is still present.
+
+        Mutation-tested: stubbing _sanitize_redacted_fields to a no-op
+        (matching the pre-fix code, which never called it at all) made this
+        FAIL with the raw 'ghp_bbb...' token found in the serialized record
+        despite record["redacted"] being True. Restoring the real fix makes
+        it pass."""
+        token = "ghp_" + "b" * 36
+        payload = {
+            "tool_name": "WebSearch",
+            "tool_input": {"query": f"look up {token}"},
+            "session_id": "sess-redacted-1",
+        }
+        with mock.patch.object(cast_audit, "_read_cast_cli_cfg", return_value={"redact_pii": True}):
+            with mock.patch.object(
+                cast_audit, "run_redact_analysis",
+                return_value={"entity_count": 1, "entities": []},
+            ):
+                with mock.patch('sys.stdin', io.StringIO(json.dumps(payload))):
+                    with mock.patch('sys.argv', ['cast-audit.py', '--mode', 'post']):
+                        cast_audit.main()
+        with open(cast_audit.AUDIT_LOG) as f:
+            record = json.loads(f.readlines()[-1])
+        self.assertTrue(record.get("redacted"))
+        self.assertNotIn(token, json.dumps(record))
+        self.assertIn("<GITHUB_TOKEN>", record.get("query", ""))
+
+
 if __name__ == '__main__':
     unittest.main()

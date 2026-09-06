@@ -19,7 +19,7 @@ Parse the first word as the agent name. Dispatch that agent via the Agent tool w
 
 Show:
 1. **Available agents** — List all 15 agents from `~/.claude/agents/` with their model
-2. **Hook status** — Confirm pre-tool-guard.sh, post-tool-hook.sh, cast-cost-tracker.sh, and cast-session-end.sh are present
+2. **Hook status** — Confirm post-tool-hook.sh, cast-pretool-dispatch.py, write-guards.sh, cast-audit-hook.sh, cast-headless-guard.sh, and cast-session-end.sh are present
 3. **Recent agent runs** — Query last 5 entries from cast.db agent_runs table
 
 ## Agent Registry (for manual dispatch)
