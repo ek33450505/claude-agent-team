@@ -80,17 +80,13 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 - Reason: `test-runner`'s suite-timeout/kill path can reap co-scheduled sibling processes — a co-scheduled `code-reviewer` was killed this way on 2026-06-14. Isolating `test-runner` in its own batch keeps the kill blast radius to itself.
 
 ## Workflow Authoring (stage model selection)
-`Workflow` stages inherit the **session model (opus) by default** — the tool's own guidance is to omit `model` and let stages inherit. For CAST that default is the dominant cost driver: `workflow-subagent` is consistently the single largest line item in the record. Choose the model per stage instead:
-- **Mechanical / scout / gather** (file collection, grep/scan, formatting, mechanical transforms) → `model: 'haiku'`.
-- **Analytical middle** (per-item review, single-source synthesis) → `model: 'sonnet'`.
-- **Synthesis / verify / adversarial-judge tops** (final report, refute-a-finding, cross-item ranking) → `model: 'opus'` (or `fable` where breadth helps).
-- Omit `model` (inherit opus) ONLY when the whole workflow is genuinely opus-hard — never let a mechanical fan-out inherit opus. Mirror this for `effort` (`low` for mechanical stages, higher tiers only for the hardest tops).
-- Pin a `label`/stage name when you set a model, so the record can measure the before/after (feeds B5).
+`Workflow` stages and built-in agents inherit the **main-loop model** whenever `model` is omitted, and `agentType` supplies the roster agent's *prompt*, NOT its frontmatter model — so the roster's haiku assignments are discarded unless each stage pins its own. Set it per stage:
+- **Mechanical / scout / gather** (collection, grep/scan, mechanical transforms) → `model: 'haiku'`; **analytical middle** (per-item review, single-source synthesis) → `'sonnet'`; **synthesis / verify / adversarial-judge tops** → `'opus'`.
+- Omit `model` ONLY when the whole workflow is genuinely opus-hard — never let a mechanical fan-out inherit opus. Mirror this for `effort`. Pin a `label` so the record can measure the before/after.
+- **Built-in agents (`Explore`, `Plan`, `general-purpose`) have no frontmatter at all**, so an unpinned dispatch runs on the session model. Pass `model` explicitly — a search agent on opus is pure waste.
+- Enforced for repo workflows by `scripts/cast-lint-workflow-stage-models.py` (Self-Lints; opt out with `// cast-lint: inherit-model -- <reason>`). **Ad-hoc scripts authored inline are NOT covered** — pin those by hand.
 
-**Measure, don't remember — never cite a frozen cost literal here.** `com.cast.db-prune` prunes on `CAST_DB_PRUNE_DAYS` (default **90**; OTLP tables **10**), and the RETAINED span is whatever survives that, not the window itself (measured 2026-08-19: 90d window, 30d retained). A cited share is meaningless without the span it covers, and any figure written here goes stale. Recompute before citing — `just -g window` FIRST (prints the real span), then `just -g cost`, `just -g model-mix`, `just -g cost-weekly`, `just -g model-drift`. Recipes live in `~/.config/just/justfile`.
-- The former "64.6% of all recorded agent cost / ~$5.3K / ~$6.56 per run (2026-07-06 audit)" figure is **unreproducible** — the rows it was computed over have been pruned. Do not re-cite it.
-- Last measured 2026-08-03 (window 2026-07-04 → 2026-08-03, 30d): `workflow-subagent` = 611 runs, ~$1.4K, **~31% of recorded spend at ~$2.33/run**. That window shifted inside 12 hours (4602 → 4375 rows overnight as prune ran) — which is precisely why the *recipe*, not the number, is the durable artifact.
-- ⚠️ **The per-stage rule above is NOT currently being applied.** Over that window `workflow-subagent` opus share rose **21% → 68%** while haiku usage fell to **zero for three consecutive weeks**. The falling per-run cost is a pricing effect (`opus-4-8` ~$4.75/run → `opus-5` ~$1.98/run), not evidence of stage discipline. Verify with `just -g model-drift` before assuming this is resolved.
+**Measure, don't remember — never cite a frozen cost literal here.** `com.cast.db-prune` prunes on `CAST_DB_PRUNE_DAYS` (default 90; OTLP tables 10), so the RETAINED span is whatever survives that, not the window itself — a cited share is meaningless without the span it covers, and any figure written here goes stale. Recompute before citing: `just -g window` FIRST (prints the real span), then `just -g cost`, `just -g model-mix`, `just -g cost-weekly`, `just -g model-drift`. Recipes live in `~/.config/just/justfile`.
 
 ## Irreversibility Interrupts
 - Irreversible/destructive ops that always gate (never run ad hoc): `git push` & force-push, PR/force-merge, schema migration, DB row deletion (prune), destructive `rm -rf`/rmtree, process mass-kill (`pkill`/`killall`), raw `git commit`/`git stash`.
@@ -119,15 +115,7 @@ Agents enforce the reciprocal half (`cast-conventions` → Truncation Prevention
 - New BATS files using `date`/`stat`/`sed` get a Docker Ubuntu pass before push, not just macOS — BSD/GNU flag divergence (e.g. BSD-only `date -v`) breaks CI (2026-06-12).
 
 ## Accessibility (UI projects)
-- Every icon-only button/link gets `aria-label`; decorative icons get `aria-hidden="true"`
-- Visible `:focus-visible` state on every interactive element — never rely on browser default rings on dark themes
-- Color contrast ≥ 4.5:1 for text and meaningful icons
-- Hit target ≥ 44×44 px on touch surfaces
-- Form inputs have `<label>`, `autoComplete`, and `aria-describedby` for errors
-- Animation respects `prefers-reduced-motion` via `useReducedMotion()` or CSS media query
-- Semantic HTML first (`<button>`, `<a>`, `<nav>`, `<main>`); ARIA only when semantic HTML is insufficient
-- Keyboard navigation works end-to-end — logical tab order, modal focus trap, Escape closes overlays
-- Applies on first pass, not as a later sweep. Dispatch `frontend-qa` for a dedicated a11y review before commit on UI-heavy changes.
+Full checklist moved to the **`typescript-conventions`** skill (loaded on demand when writing TSX/React — exactly when it applies). Applies on the first pass, never as a later sweep; dispatch `frontend-qa` for a dedicated a11y review before commit on UI-heavy changes.
 
 ## SQL / Data
 - `db-reader` for read-only exploration
