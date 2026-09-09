@@ -60,7 +60,31 @@ After all mechanical signals are collected, reason over the combined picture (CI
 
 ## Step 4 — Emit the digest (idempotent, deterministic)
 Ensure the label exists: `gh label create ecosystem-health --color 1d76db --description "Monthly CAST ecosystem health digest" --repo ek33450505/claude-agent-team 2>/dev/null || true`.
-Build the body in EXACTLY this section order, every section always present (write "(0)" / "none" when empty):
+Build the body in EXACTLY this section order, every section always present.
+
+**A count is a MEASUREMENT, never a placeholder for a check that did not run.**
+Write `(0)` ONLY when the check actually ran across every non-skipped repo and
+found nothing. If a signal was recorded "check unavailable" (Step 2) for ANY
+repo, that section's header MUST read `(N confirmed, M unchecked)` and name the
+unchecked repos — never a bare `(0)`. This is the same rule as the
+empty-enumeration guard in Step 1, applied per-signal: an unmeasured check is a
+failure signal, not a clean bill of health.
+
+If MORE THAN HALF of the non-skipped repos are unavailable for a given signal,
+the digest MUST open with a headline warning before Priority Actions:
+`**WARNING: <signal> could not be checked for M/N repos — this digest is not a
+health verdict.**`
+
+Why this rule exists: the 2026-09-01 digest rendered `CI Red (0)`,
+`Security Alerts (0)` and `Stat Drift (0)` when all 20 per-repo checks had in
+fact failed. It read as a clean bill of health for an audit that measured
+nothing, and its own Priority Actions misdiagnosed the cause as GitHub **MCP**
+scope — a surface this routine does not use (see Notes: `gh`/`curl`, no MCP).
+The real cause was cross-org `gh api` reads falling back to the unauthenticated
+60 req/hr limit, per the token note below. A re-run on 2026-09-09 with an
+authenticated `gh` reached all 21 repos: 0 access denied, 0 CI red (measured).
+
+Section bodies: write "none" when a section is genuinely empty.
 
 ## CAST Ecosystem Health — <DATE>
 

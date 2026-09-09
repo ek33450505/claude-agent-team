@@ -6,6 +6,72 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 _Nothing yet._
 
+## [10.1.0] — 2026-09-09
+
+Minor release. Two additive governance surfaces (a new enforcing CI gate and a
+standing output-style default) alongside a cost-attribution fix and a
+context-budget reduction. No schema changes.
+
+### Added
+
+- **`scripts/cast-lint-workflow-stage-models.py` — enforcing gate on workflow
+  stage models.** `Workflow` stages inherit the *main-loop* model whenever
+  `model:` is omitted, and passing `agentType` supplies that roster agent's
+  **prompt**, not its frontmatter model — so the roster's haiku assignments were
+  being discarded inside every workflow. Measured over a 27-day window,
+  `workflow-subagent` ran 150 opus stages at $3.14/run against 16 haiku at
+  $0.18/run. The gate fails any `agent()` call with no explicit `model:`, with a
+  documented `// cast-lint: inherit-model -- <reason>` opt-out. Comments,
+  string/template contents and regex literals are blanked before parsing, and an
+  unterminated quote **fails closed** with a PARSE ANOMALY rather than reporting
+  zero violations. Wired into Self-Lints; excluded from the plugin mirror like
+  the other repo-only lints.
+- **`rules-core/output-style.md` — laconic `lite` is now the standing default.**
+  The `laconic` skill already existed but had to be invoked per session. `lite`
+  rather than `full`/`ultra`, with an explicit carve-out: a concerns note,
+  security finding, stated assumption, or caveat about what was NOT verified is
+  the payload and is never compressed. Deliberately **not** added to the
+  haiku-tier subset — `code-reviewer` concerns notes have outranked a clean
+  verdict before.
+
+### Fixed
+
+- **`scripts/cast-workflow-model-audit.py` was blind to opus-5** and had been
+  since the rollout. It counted opus with `model = 'claude-opus-4-8'`, so it saw
+  zero opus runs and exited 0 while 150 opus-5 stages ran. It scored week
+  2026-35 at 6.5%; corrected, that week is **71.2%** — above its own 60% WARN
+  threshold, so the blindness was suppressing a real alarm, and the "68.9% →
+  2.3% improvement" it reported was entirely an artifact of a model rename. Now
+  matches any opus substring so a future rename cannot blind it again.
+- **All 7 stages in `workflows/cast-feature.workflow.js` pinned** to the model
+  each stage's `agentType` already declares in its roster frontmatter.
+- **Ecosystem-health digests could report a clean bill of health for an audit
+  that measured nothing.** `docs/routines/cast-ecosystem-health-digest.md`
+  instructed writing `(0)` whenever a section was empty, with no distinction
+  between *checked and clean* and *could not check* — which is how the
+  2026-09-01 digest rendered `CI Red (0)` and `Security Alerts (0)` after all 20
+  per-repo checks had failed. A count is now a measurement only; unavailable
+  checks must render `(N confirmed, M unchecked)`, and a majority-unavailable
+  signal forces a headline warning.
+
+### Changed
+
+- **Always-on context reduced from ~16,360 to ~15,965 tokens (2.4%).**
+  Everything under `~/.claude/rules` is loaded every session, re-read every turn,
+  and inherited by every subagent spawn. The 9-item accessibility checklist moved
+  to the `typescript-conventions` skill (which loads exactly when TSX is being
+  written); `## Workflow Authoring` was condensed, dropping two cost figures the
+  file itself marked unreproducible; `MEMORY.md`'s closed-work block moved to a
+  non-loaded archive. A new rule was added in the same change — built-in agents
+  (`Explore`, `Plan`, `general-purpose`) carry no frontmatter, so an unpinned
+  dispatch runs on the session model (27 `Explore` runs on opus at $3.62/run).
+
+### Known limitations
+
+- The workflow stage-model gate covers `workflows/*.workflow.js` only. **Ad-hoc
+  `Workflow` scripts authored inline during a session are not linted**, and that
+  is likely where most of the opus spend actually was.
+
 ## [10.0.1] — 2026-09-03
 
 Small patch release — 3 merged PRs since v10.0.0, no schema or behavior changes to the
