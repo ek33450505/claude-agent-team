@@ -10,6 +10,14 @@ script can only tell whether opus's overall share of workflow-subagent runs
 has dropped week over week -- it cannot tell whether OTHER stages moved to
 haiku appropriately.
 
+Opus detection is a SUBSTRING match on the model id (see fetch_weekly_stats).
+An equality test against a single id silently returns 0% the moment the fleet
+moves to a new opus generation -- that regression was live from the opus-5
+rollout until 2026-09-09.
+
+Companion gate: scripts/cast-lint-workflow-stage-models.py enforces the
+per-stage `model:` pin in source that THIS script cannot verify from the record.
+
 Exit 0 = success (includes INFO/insufficient-data and healthy-trend cases).
 Exit 1 = error, or WARN (recent-week opus% has not meaningfully improved).
 """
@@ -33,7 +41,13 @@ def fetch_weekly_stats():
         SELECT
             strftime('%Y-%W', started_at) AS week,
             COUNT(*) AS total_runs,
-            SUM(CASE WHEN model = 'claude-opus-4-8' THEN 1 ELSE 0 END) AS opus_runs,
+            -- Substring match, NOT an equality test against one model id.
+            -- This line previously read `model = 'claude-opus-4-8'`, so when the
+            -- fleet moved to claude-opus-5 the audit counted ZERO opus runs and
+            -- reported 0.0% / rc=0 while 150 opus-5 stages ($471.68) were running.
+            -- A gate that cannot see the thing it guards is worse than no gate:
+            -- match any opus so a future rename cannot blind it again.
+            SUM(CASE WHEN LOWER(model) LIKE '%opus%' THEN 1 ELSE 0 END) AS opus_runs,
             SUM(COALESCE(cost_usd, 0)) AS total_cost
         FROM agent_runs
         WHERE agent = 'workflow-subagent' AND started_at IS NOT NULL

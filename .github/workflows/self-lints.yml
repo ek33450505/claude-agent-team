@@ -42,6 +42,13 @@ jobs:
       - name: Derived counts
         run: bash scripts/cast-check-derived-counts.sh
 
+      # Workflow stages inherit the MAIN-LOOP model when model: is omitted, so an
+      # unpinned agent() stage silently runs on opus -- the top workflow cost line.
+      # Enforcing: the roster's haiku/sonnet assignments are discarded inside
+      # workflows, and prose in working-conventions.md never caught it.
+      - name: Workflow stage models
+        run: python3 scripts/cast-lint-workflow-stage-models.py
+
       - name: Python 3.9 annotations lint
         run: bash scripts/ci-py39-annotations-lint.sh
 

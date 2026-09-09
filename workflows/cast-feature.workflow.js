@@ -95,14 +95,14 @@ const DECOMP_PROMPT =
   `"needs_security":false,"depends_on":[]}]}\n` +
   `needs_security is true ONLY if the unit touches auth / user input / secrets / shell interpolation / enforcement / destructive ops.`
 
-let raw = await agent(DECOMP_PROMPT, { label: 'decompose', phase: 'Decompose' })
+let raw = await agent(DECOMP_PROMPT, { label: 'decompose', phase: 'Decompose', model: 'sonnet' })
 let plan = _extractJson(raw)
 let units = _normalizeUnits(plan)
 if (!units) {
   log('decompose: first reply was not parseable JSON with units — retrying once (stricter)')
   raw = await agent(
     DECOMP_PROMPT + `\n\nYour previous reply could not be parsed as JSON. Reply with ONLY the JSON object, nothing else — no explanation.`,
-    { label: 'decompose-retry', phase: 'Decompose' }
+    { label: 'decompose-retry', phase: 'Decompose', model: 'sonnet' }
   )
   plan = _extractJson(raw)
   units = _normalizeUnits(plan)
@@ -132,7 +132,7 @@ for (const unit of units) {
     `Follow project conventions (read CLAUDE.md / rules-core first). Add inline tests if you introduce logic. ` +
     `Artifact-first: write a skeleton of the deliverable in your first 1-2 tool calls, then refine. ` +
     `Do NOT git commit and do NOT push — a later stage commits. Leave your changes in the working tree.`,
-    { label: `write:${unit.id}`, phase: 'Build', agentType: 'code-writer' }
+    { label: `write:${unit.id}`, phase: 'Build', agentType: 'code-writer', model: 'sonnet' }
   )
   if (writerOut === null) {
     log(`  ${tag}: code-writer died/skipped — stopping the build`)
@@ -149,7 +149,7 @@ for (const unit of units) {
       `feature "${desc}". Check correctness, edge cases, error handling, naming, and project conventions. ` +
       `If there is a BLOCKING defect, output a line beginning with the literal token "BLOCKER" followed by the issue. ` +
       `Otherwise state plainly that it is acceptable.`,
-      { label: `review:${unit.id}`, phase: 'Build', agentType: 'code-reviewer' }
+      { label: `review:${unit.id}`, phase: 'Build', agentType: 'code-reviewer', model: 'haiku' }
     ),
   ]
   if (unit.needs_security) {
@@ -158,7 +158,7 @@ for (const unit of units) {
       `Check injection, auth bypass, secret exposure, unsafe shell interpolation, path traversal, and any weakening ` +
       `of enforcement / §1 record-feeding hooks. If there is a BLOCKING issue, output a line beginning with the ` +
       `literal token "BLOCKER" followed by the issue. Otherwise state plainly that it is clean.`,
-      { label: `security:${unit.id}`, phase: 'Build', agentType: 'security' }
+      { label: `security:${unit.id}`, phase: 'Build', agentType: 'security', model: 'sonnet' }
     ))
   }
   const reviews = (await parallel(reviewThunks)).filter(Boolean)
@@ -178,7 +178,7 @@ for (const unit of units) {
     `any destructive / real-HOME-touching test against the real HOME. ` +
     `If no tests exist that cover this scope, that counts as PASS — still include the verdict line.\n` +
     `Near the end of your reply, before your Status block, output exactly one line: TEST_VERDICT: PASS or TEST_VERDICT: FAIL.`,
-    { label: `test:${unit.id}`, phase: 'Build', agentType: 'test-runner' }
+    { label: `test:${unit.id}`, phase: 'Build', agentType: 'test-runner', model: 'haiku' }
   )
 
   // Gate: require TEST_VERDICT: PASS before proceeding to commit.
@@ -201,7 +201,7 @@ for (const unit of units) {
   const commitOut = await agent(
     `Stage and commit ONLY the working-tree changes for CAST unit ${unit.id} (${unit.title}) — part of feature ` +
     `"${desc}". Compose a semantic commit message. Do NOT push.`,
-    { label: `commit:${unit.id}`, phase: 'Build', agentType: 'commit' }
+    { label: `commit:${unit.id}`, phase: 'Build', agentType: 'commit', model: 'haiku' }
   )
   results.push({ unit, status: 'DONE', test: testOut, commit: commitOut })
   log(`  ${tag}: committed`)
