@@ -152,7 +152,7 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   # Security property, not an implementation detail: exactly one literal
   # </journal-excerpt> should remain — the genuine fence close the script
   # itself appends. The injected one must no longer read as a close tag.
-  # (Not asserting the '[fenced-tag]' marker here: the pre-fix exact-string
+  # (Not asserting a marker here: the pre-fix exact-string
   # ".replace()" also neutralized this exact-case row correctly — using a
   # different marker — so a marker check on THIS row couples the test to an
   # implementation detail rather than the property under test. The marker
@@ -168,7 +168,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   assert_success
   CTX="$(echo "$output" | extract_context)"
   ! echo "$CTX" | grep -qF '</JOURNAL-EXCERPT>'
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
 }
 
 @test "fence: mixed-case closing tag is neutralized" {
@@ -177,7 +179,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   assert_success
   CTX="$(echo "$output" | extract_context)"
   ! echo "$CTX" | grep -qF '</Journal-Excerpt>'
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
 }
 
 @test "fence: closing tag with whitespace before '>' is neutralized" {
@@ -189,7 +193,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   # The genuine close tag (no space) must still be present exactly once
   COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
   [ "$COUNT" = "1" ]
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
 }
 
 @test "fence: forged open tag is neutralized" {
@@ -198,7 +204,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   assert_success
   CTX="$(echo "$output" | extract_context)"
   ! echo "$CTX" | grep -qF '<journal-excerpt source="x">'
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
   # The genuine open fence (emitted by the script itself) must still be intact
   echo "$CTX" | grep -qF '<journal-excerpt source="claudes-journal" trust="background-data">'
 }
@@ -272,7 +280,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   assert_success
   CTX="$(echo "$output" | extract_context)"
   ! echo "$CTX" | grep -qF '< /journal-excerpt>'
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
   COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
   [ "$COUNT" = "1" ]
 }
@@ -285,7 +295,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   assert_success
   CTX="$(echo "$output" | extract_context)"
   ! printf '%s' "$CTX" | grep -qF "</${tab}journal-excerpt>"
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
   COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
   [ "$COUNT" = "1" ]
 }
@@ -296,7 +308,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   assert_success
   CTX="$(echo "$output" | extract_context)"
   ! echo "$CTX" | grep -qF '</ journal-excerpt>'
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
   COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
   [ "$COUNT" = "1" ]
 }
@@ -307,7 +321,8 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   assert_success
   CTX="$(echo "$output" | extract_context)"
   echo "$CTX" | grep -qF 'the journal-excerpt mechanism'
-  ! echo "$CTX" | grep -qF '[fenced-tag]'
+  # No marker substitution exists any more; the meaningful invariant is that
+  # the surrounding text survived intact (asserted above).
 }
 
 # ---------------------------------------------------------------------------
@@ -319,14 +334,15 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   # \s* (the flawed candidate) matches the newline itself, letting a bare '<'
   # on one line reach a tag-name mention on the very next line and swallow/
   # merge both. [ \t]* is bounded to the same line, so this must survive intact
-  # as two separate lines with no [fenced-tag] marker.
+  # as two separate lines, losslessly (with '<' escaped to '&lt;').
   write_journal_entry "$(printf 'The value is <\njournal-excerpt is a concept worth noting')"
   run bash "$SCRIPT"
   assert_success
   CTX="$(echo "$output" | extract_context)"
-  echo "$CTX" | grep -qF 'The value is <'
+  echo "$CTX" | grep -qF 'The value is &lt;'
   echo "$CTX" | grep -qF 'journal-excerpt is a concept worth noting'
-  ! echo "$CTX" | grep -qF '[fenced-tag]'
+  # No marker substitution exists any more; the meaningful invariant is that
+  # the surrounding text survived intact (asserted above).
 }
 
 @test "fence: 'if a < b then journal-excerpt matters' on one line is not mangled" {
@@ -334,8 +350,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   run bash "$SCRIPT"
   assert_success
   CTX="$(echo "$output" | extract_context)"
-  echo "$CTX" | grep -qF 'if a < b then journal-excerpt matters here'
-  ! echo "$CTX" | grep -qF '[fenced-tag]'
+  echo "$CTX" | grep -qF 'if a &lt; b then journal-excerpt matters here'
+  # No marker substitution exists any more; the meaningful invariant is that
+  # the surrounding text survived intact (asserted above).
 }
 
 # ---------------------------------------------------------------------------
@@ -351,7 +368,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   run bash "$SCRIPT"
   assert_success
   CTX="$(echo "$output" | extract_context)"
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
   COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
   [ "$COUNT" = "1" ]
 }
@@ -363,7 +382,9 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   run bash "$SCRIPT"
   assert_success
   CTX="$(echo "$output" | extract_context)"
-  echo "$CTX" | grep -q '\[fenced-tag\]'
+  # Angle brackets are escaped, so a forged tag survives as inert text
+  # rather than being replaced by a marker.
+  echo "$CTX" | grep -qF '&lt;'
   COUNT=$(printf '%s' "$CTX" | grep -o '</journal-excerpt>' | wc -l | tr -d ' ')
   [ "$COUNT" = "1" ]
 }
@@ -373,7 +394,8 @@ assert isinstance(d.get('hookSpecificOutput'), dict), 'hookSpecificOutput must b
   run bash "$SCRIPT"
   assert_success
   CTX="$(echo "$output" | extract_context)"
-  echo "$CTX" | grep -qF 'The value is <'
+  echo "$CTX" | grep -qF 'The value is &lt;'
   echo "$CTX" | grep -qF 'journal-excerpt is a concept worth noting'
-  ! echo "$CTX" | grep -qF '[fenced-tag]'
+  # No marker substitution exists any more; the meaningful invariant is that
+  # the surrounding text survived intact (asserted above).
 }

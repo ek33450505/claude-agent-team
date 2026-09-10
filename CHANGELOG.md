@@ -6,6 +6,66 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 _Nothing yet._
 
+## [10.2.0] — 2026-09-09
+
+Minor release. A security fix for replayed journal content, an ecosystem
+logic-sync that ends a long-standing install-time clobber, and drift correction
+for long sessions.
+
+### Security
+- **The journal trust-fence filter was bypassable.** `cast-session-start-journal.sh`
+  replays a past journal entry into a new session's context. Entries are written
+  by Claude, so one can contain anything Claude ever reasoned *about* — including
+  directive tokens and the fence tags marking that content untrusted. Every
+  bypass below was verified against the real regexes, not reasoned about:
+  - `[ CAST-DISPATCH ]` / `[<newline>CAST-DISPATCH]` — interior whitespace.
+  - `[CAST‑DISPATCH]` with U+2010/2011/2013 — a dash look-alike reads identically
+    but misses an ASCII-hyphen pattern.
+  - `</<newline>journal-excerpt>`, `<//journal-excerpt>` — the whitespace class
+    excluded newline.
+  - `<system-reminder>…</system-reminder>` — **untouched**. The filter matched a
+    single tag NAME, so an entry could forge any *other* trusted-looking wrapper.
+  Replaced the name blacklist with angle-bracket escaping, which makes every tag
+  inert rather than the ones someone enumerated, plus dash normalisation and a
+  whitespace-tolerant anchor. Sanitisation now also covers the predictions
+  section, which is generated from journal entries and carries the same vector.
+
+### Fixed
+- **`install.sh` silently overwrote satellite-owned scripts.** The glob-copy at
+  `install.sh:301` ships every file in `scripts/` with an unconditional `cp`, and
+  five of those paths are also installed by standalone packages. Whichever
+  installer ran last won, so `cast-ledger`, `cast-claudes_journal` and `cast-time`
+  logic was reverted on every flagship reinstall. The flagship is now the
+  canonical source and its copies match the packages byte-for-byte, so the
+  overwrite is self-healing instead of destructive.
+- **The session-end hook could exit non-zero and drop the whole journal
+  injection** — an unguarded `cat` of an unreadable predictions file, and an
+  unguarded `touch` on a missing/unwritable `$TMP`. Both now degrade to "absent".
+- A literal `\n` in the missed-entry notice rendered as visible text.
+- `cast-journal-session-end.bats` wrote flag files into the real `/tmp`; they are
+  now pinned to the per-test temp dir.
+
+### Added
+- **`cast-time-drift-hook.sh`** (UserPromptSubmit) — the session-start time block
+  is injected once, so a session running past midnight reported the previous day
+  indefinitely, and anything deriving a date from it recorded the wrong day. The
+  hook stays silent on virtually every prompt and re-injects only on a date
+  rollover (saying so explicitly) or after `CAST_TIME_DRIFT_SECONDS` (default 3h).
+- **Relative date anchors** in the session-start block — yesterday, tomorrow, week
+  span + ISO week, month end, quarter span — as absolute dates, so offsets are
+  never computed in-head.
+- The session-end hook gains the wrap-flag, stub-entry re-prompt and
+  `CAST_JOURNAL_VAULT` support that had diverged into the standalone package.
+
+### Notes
+- The SessionStart time hook deliberately does **not** read stdin: a SessionStart
+  hook that blocks on input is killed by its 3s timeout, silently dropping the
+  entire time context. Covered by a regression test that feeds it a never-closing
+  FIFO.
+- Embedded Python avoids nested quotes inside f-strings — that syntax needs 3.12+
+  (PEP 701) and fails on a stock macOS `python3` (3.9), where `|| _log_error`
+  would swallow it into a silent no-op.
+
 ## [10.1.0] — 2026-09-09
 
 Minor release. Two additive governance surfaces (a new enforcing CI gate and a

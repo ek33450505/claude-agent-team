@@ -79,6 +79,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "id": "cast-time-drift",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-time-drift-hook.sh\"",
+            "timeout": 3
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
