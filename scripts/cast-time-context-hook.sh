@@ -14,14 +14,13 @@ _log_error() {
 }
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 
+
 # --- Gather time data (all via date, no external deps) ---
-LOCAL_DATE="$(date '+%Y-%m-%d')"
 LOCAL_TIME="$(date '+%H:%M')"
 TZ_ABBREV="$(date '+%Z')"
 UTC_OFFSET="$(date '+%z')"          # e.g. -0500
 HOUR_RAW="$(date '+%H')"            # always 2-digit with leading zero
 HOUR=$((10#${HOUR_RAW}))            # strip leading zero for arithmetic (portable)
-DAY_OF_WEEK="$(date '+%A')"         # e.g. Tuesday
 DAY_NUM="$(date '+%u')"             # 1=Mon...7=Sun
 EPOCH="$(date '+%s')"
 ISO_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -76,6 +75,39 @@ lines = [
     "Day type: "     + os.environ["CAST_TC_DAY_TYPE"],
     "Time of day: "  + os.environ["CAST_TC_BUCKET"],
     "Session started: " + os.environ["CAST_TC_ISO_UTC"] + " (epoch: " + os.environ["CAST_TC_EPOCH"] + ")",
+]
+
+# Relative-date anchors. Emitted as absolute dates so relative references never
+# have to be computed in-head — the failure mode that "convert relative dates to
+# absolute" exists to prevent.
+from datetime import datetime, timedelta
+import calendar
+
+now = datetime.fromtimestamp(int(os.environ["CAST_TC_EPOCH"]))
+today = now.date()
+mon = today - timedelta(days=today.isoweekday() - 1)
+sun = mon + timedelta(days=6)
+iso_year, iso_week, _ = today.isocalendar()
+month_end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+q = (today.month - 1) // 3
+q_start = today.replace(month=q * 3 + 1, day=1)
+q_end_month = q * 3 + 3
+q_end = today.replace(month=q_end_month, day=calendar.monthrange(today.year, q_end_month)[1])
+
+def d(x):
+    return x.strftime("%Y-%m-%d")
+
+lines += [
+    "",
+    "Date anchors (use these directly; do not compute offsets):",
+    "- Yesterday: "  + d(today - timedelta(days=1)) + " (" + (today - timedelta(days=1)).strftime("%A") + ")",
+    "- Tomorrow: "   + d(today + timedelta(days=1)) + " (" + (today + timedelta(days=1)).strftime("%A") + ")",
+    "- This week: "  + d(mon) + " (Mon) to " + d(sun) + " (Sun), ISO " + f"{iso_year}-W{iso_week:02d}",
+    "- Last week: "  + d(mon - timedelta(days=7)) + " to " + d(sun - timedelta(days=7)),
+    "- This month: " + today.strftime("%B %Y") + " ends " + d(month_end)
+                     + " (" + str((month_end - today).days) + " days remaining)",
+    "- This quarter: Q" + str(q + 1) + " " + str(today.year) + " (" + d(q_start) + " to " + d(q_end)
+                     + "), " + str((q_end - today).days) + " days remaining",
     "",
     "Note: This context is injected once at session start. Times shown are local to the machine running Claude Code.",
 ]

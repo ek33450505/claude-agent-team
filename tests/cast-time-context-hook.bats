@@ -191,3 +191,35 @@ print('OK')
 "
   assert_output "OK"
 }
+
+# ---------------------------------------------------------------------------
+# Regression: the hook must never read stdin. It is a SessionStart hook with a
+# 3s timeout; if it blocks waiting for input the harness never sends, the
+# timeout kills it and the ENTIRE time context is silently dropped.
+# ---------------------------------------------------------------------------
+@test "does not block when stdin is an open pipe that never closes" {
+  FIFO="$BATS_TEST_TMPDIR/stdin.fifo"
+  OUT="$BATS_TEST_TMPDIR/out.json"
+  mkfifo "$FIFO"
+  # Hold the FIFO open read-write for the whole test so a reader never sees EOF.
+  exec 9<> "$FIFO"
+
+  bash "$SCRIPT" <&9 > "$OUT" 2>/dev/null &
+  BGPID=$!
+
+  FINISHED=0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if ! kill -0 "$BGPID" 2>/dev/null; then FINISHED=1; break; fi
+    sleep 0.5
+  done
+
+  if [ "$FINISHED" -eq 0 ]; then
+    # SIGKILL, and deliberately no `wait`: the child is blocked on a FIFO this
+    # test still holds open, so waiting on it is itself a way to hang.
+    kill -9 "$BGPID" 2>/dev/null || true
+  fi
+  exec 9>&-
+
+  [ "$FINISHED" -eq 1 ]
+  [ -s "$OUT" ]
+}

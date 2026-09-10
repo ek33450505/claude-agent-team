@@ -1,12 +1,12 @@
 {
   "_generator": "scripts/gen-ecosystem-versions.sh",
-  "cast-claudes_journal": "0.3.1",
+  "cast-claudes_journal": "0.4.1",
   "cast-desktop": "1.2.12",
   "cast-doctor": "0.1.3",
-  "cast-ledger": "0.1.0",
+  "cast-ledger": "0.2.0",
   "cast-mcp": "0.1.0",
   "cast-memory": "0.4.1",
-  "cast-predict": "0.1.0",
-  "cast-time": "0.1.2",
+  "cast-predict": "0.1.1",
+  "cast-time": "0.2.0",
   "claude-code-dashboard": "3.0.0"
 }

@@ -19,6 +19,10 @@ setup() {
 	load 'helpers/setup'
 	setup_temp_home # sets HOME to a temp dir; exports ORIG_HOME
 
+	# Flag files must not land in the real /tmp. The script resolves its flag
+	# directory from TMP, so pin it to this test's private dir.
+	export TMP="$BATS_TEST_TMPDIR"
+
 	mkdir -p "$HOME/bin"
 	cat >"$HOME/bin/date" <<'DATEEOF'
 #!/bin/bash
@@ -62,11 +66,11 @@ DATEEOF
 	export TEST_STUB_HOUR="12"
 	export CLAUDE_SESSION_ID="cast-test-journal-${BATS_TEST_NUMBER:-0}-$$"
 
-	rm -f "/tmp/cast_journal_session_${CLAUDE_SESSION_ID}" "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}"
+	rm -f "${TMP}/cast_journal_session_${CLAUDE_SESSION_ID}" "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}"
 }
 
 teardown() {
-	rm -f "/tmp/cast_journal_session_${CLAUDE_SESSION_ID}" "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}"
+	rm -f "${TMP}/cast_journal_session_${CLAUDE_SESSION_ID}" "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}"
 	teardown_temp_home
 }
 
@@ -76,7 +80,7 @@ teardown() {
 	run env CLAUDE_SUBPROCESS=1 bash "$SCRIPT" </dev/null
 	assert_success
 	[ -z "$output" ]
-	[ ! -f "/tmp/cast_journal_session_${CLAUDE_SESSION_ID}" ]
+	[ ! -f "${TMP}/cast_journal_session_${CLAUDE_SESSION_ID}" ]
 	[ ! -d "$HOME/Documents/Claude" ]
 }
 
@@ -95,18 +99,21 @@ teardown() {
 # --- No note, no cancel flag: first prompt of the day ---
 
 @test "journal-session-end: no note and no cancel flag creates the flag and emits block JSON with the note path" {
+	# The hook is deliberately quiet before 15:00 (see the time-of-day guard), so
+	# the prompt path has to be exercised at an hour where it actually fires.
+	export TEST_STUB_HOUR="19"
 	run bash "$SCRIPT" </dev/null
 	assert_success
 	assert_output --partial '"decision": "block"'
 	assert_output --partial "${TEST_STUB_MONTH}/${TEST_STUB_TODAY}.md"
-	[ -f "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}" ]
+	[ -f "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}" ]
 }
 
 # --- Cancel flag + session marker: already prompted this session ---
 
 @test "journal-session-end: cancel flag + session marker present exits 0 without reprompting" {
-	touch "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}"
-	touch "/tmp/cast_journal_session_${CLAUDE_SESSION_ID}"
+	touch "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}"
+	touch "${TMP}/cast_journal_session_${CLAUDE_SESSION_ID}"
 
 	run bash "$SCRIPT" </dev/null
 	assert_success
@@ -116,7 +123,7 @@ teardown() {
 # --- Cancel flag + note now filled in: honor the cancel ---
 
 @test "journal-session-end: cancel flag present and note has content honors the cancel" {
-	touch "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}"
+	touch "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}"
 	local note_dir="$HOME/Documents/Claude/${TEST_STUB_MONTH}"
 	mkdir -p "$note_dir"
 	echo "# filled in" >"${note_dir}/${TEST_STUB_TODAY}.md"
@@ -129,21 +136,53 @@ teardown() {
 # --- Hour-dependent re-prompt threshold ---
 
 @test "journal-session-end: cancel flag present, no note, hour < 18 honors the cancel" {
-	touch "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}"
+	touch "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}"
 	export TEST_STUB_HOUR="09"
 
 	run bash "$SCRIPT" </dev/null
 	assert_success
 	[ -z "$output" ]
-	[ -f "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}" ]
+	[ -f "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}" ]
 }
 
 @test "journal-session-end: cancel flag present, no note, hour >= 18 clears the flag and reprompts" {
-	touch "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}"
+	touch "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}"
 	export TEST_STUB_HOUR="19"
 
 	run bash "$SCRIPT" </dev/null
 	assert_success
 	assert_output --partial '"decision": "block"'
-	[ -f "/tmp/cast_journal_cancelled_${TEST_STUB_TODAY}" ]
+	[ -f "${TMP}/cast_journal_cancelled_${TEST_STUB_TODAY}" ]
+}
+
+# --- Time-of-day guard (added with the wrap-flag backport) ---
+
+@test "journal-session-end: before 15:00 the hook stays quiet" {
+	# Nagging for a journal entry at midday is noise; the hook waits until the
+	# session is plausibly ending.
+	export TEST_STUB_HOUR="12"
+	run bash "$SCRIPT" </dev/null
+	assert_success
+	[ -z "$output" ]
+}
+
+@test "journal-session-end: an explicit wrap flag overrides the time-of-day guard" {
+	# /wrap means "I am ending the session now", so the hour no longer matters.
+	export TEST_STUB_HOUR="09"
+	touch "${TMP}/cast_journal_wrap_${TEST_STUB_TODAY}"
+	run bash "$SCRIPT" </dev/null
+	rm -f "${TMP}/cast_journal_wrap_${TEST_STUB_TODAY}"
+	assert_success
+	assert_output --partial '"decision": "block"'
+}
+
+@test "journal-session-end: a zero-padded hour is compared in base 10, not octal" {
+	# `date +%H` zero-pads. Bash reads a leading zero as octal, so a bare
+	# "08"/"09" comparison dies with "value too great for base".
+	for h in 08 09; do
+		export TEST_STUB_HOUR="$h"
+		run bash "$SCRIPT" </dev/null
+		assert_success
+		[[ "$output" != *"value too great for base"* ]]
+	done
 }

@@ -243,6 +243,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "id": "cast-time-drift",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-time-drift-hook.sh",
+            "timeout": 3
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
