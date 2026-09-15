@@ -26,7 +26,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_BASELINE = REPO_ROOT / ".github" / "plan-doctor-baseline.json"
-DEFAULT_PLAN = REPO_ROOT / "plans" / "cast-v9-foundation.md"
+DEFAULT_PLAN = REPO_ROOT / "plans" / "next-session.md"
 ACTIVE_PLAN_MARKER = Path.home() / ".claude" / "config" / "active-plan"
 
 # Severity levels
