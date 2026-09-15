@@ -407,8 +407,17 @@ else
   # --- SSE streaming path ---
   # Use --no-buffer to get progressive output; accumulate lines for cast.db write.
   curl_sse_exit=0
+  parse_sse_exit=0
   sse_tmpfile="$(mktemp)"
 
+  # NOTE: this is a 4-stage pipeline (echo|curl|tee|_parse_sse_lines). Under
+  # `set -o pipefail` the pipeline's own exit status is the rightmost NONZERO
+  # stage, which is NOT necessarily curl's — a local _parse_sse_lines bug can
+  # masquerade as a curl/SSE failure, or mask curl's real exit code. Capture
+  # PIPESTATUS immediately (no intervening command — any command in between
+  # would overwrite it) to attribute each stage correctly:
+  # index 0=echo, 1=curl, 2=tee, 3=_parse_sse_lines.
+  set +e
   echo "$SESSION_BODY" | curl \
     --no-buffer \
     --silent \
@@ -422,7 +431,11 @@ else
     -H "Accept: text/event-stream" \
     --data-binary @- \
     --write-out "\n__HTTP_STATUS__%{http_code}" \
-    2>&1 | tee "$sse_tmpfile" | _parse_sse_lines || curl_sse_exit=$?
+    2>&1 | tee "$sse_tmpfile" | _parse_sse_lines
+  pipe_status=("${PIPESTATUS[@]}")
+  set -e
+  curl_sse_exit="${pipe_status[1]}"
+  parse_sse_exit="${pipe_status[3]}"
 
   SESSION_END_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
   SESSION_DURATION_MS=$(( SESSION_END_MS - SESSION_START_MS ))
@@ -447,13 +460,13 @@ else
 
   if [[ "$curl_sse_exit" -ne 0 ]]; then
     if [[ "$LOCAL_FALLBACK" -eq 1 ]]; then
-      _log "error" "sse_failed http=${STEP3_HTTP_STATUS} fallback=local"
+      _log "error" "sse_failed http=${STEP3_HTTP_STATUS} curl_exit=${curl_sse_exit} parse_exit=${parse_sse_exit} fallback=local"
       echo "WARN: Managed Agents SSE failed (HTTP ${STEP3_HTTP_STATUS}), falling back" >&2
       _write_agent_runs "fallback" ""
       _write_telemetry "$MODE_LABEL" "${STEP3_HTTP_STATUS:-0}" 0 "${SESSION_DURATION_MS:-0}"
       exit 0
     fi
-    _log "error" "sse_failed http=${STEP3_HTTP_STATUS}"
+    _log "error" "sse_failed http=${STEP3_HTTP_STATUS} curl_exit=${curl_sse_exit} parse_exit=${parse_sse_exit}"
     echo "ERROR: Managed Agents SSE failed (HTTP ${STEP3_HTTP_STATUS})" >&2
     _write_agent_runs "error" ""
     _write_telemetry "$MODE_LABEL" "${STEP3_HTTP_STATUS:-0}" 1 "${SESSION_DURATION_MS:-0}"
@@ -462,6 +475,11 @@ else
 
   # Accumulate full agent output for telemetry summary
   STEP3_AGENT_OUTPUT="$raw_sse"
+  if [[ "$parse_sse_exit" -ne 0 ]]; then
+    # curl succeeded but the local parser hit an issue — visible in logs without
+    # altering the branch above, which stays keyed on curl's status only.
+    _log "warn" "sse_parse_nonzero http=${STEP3_HTTP_STATUS} parse_exit=${parse_sse_exit}"
+  fi
   _log "success" "http=${STEP3_HTTP_STATUS} duration_ms=${SESSION_DURATION_MS} streaming=true"
   # Emit the raw session response body to stdout (parallel to the non-streaming path's
   # `echo "$STEP3_RESPONSE"`). In real SSE usage _parse_sse_lines already streamed
