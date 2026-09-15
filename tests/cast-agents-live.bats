@@ -227,3 +227,216 @@ print('OK')
 " "$output"
   assert_success
 }
+
+# ───────────────────────────────────────────────────────────────────────────
+# 10. Per-agent baseline: bidirectional bug fix (v10 reliability)
+#
+# The old flat 600s threshold is wrong in both directions:
+#   Direction A: a HIGH-baseline agent's normal ~700s run got flagged (it
+#                shouldn't have been — its own p95 is 795s).
+#   Direction B: a LOW-baseline agent hanging at 300s was NEVER flagged
+#                (under the flat 600s), though it is already 3x its own p95.
+# ───────────────────────────────────────────────────────────────────────────
+
+_seed_baseline_done_rows() {
+  local agent="$1" duration_ms="$2" count="$3"
+  local i=1
+  while [ "$i" -le "$count" ]; do
+    sqlite3 "$CAST_DB_PATH" <<SQL
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-base-$i', '$agent', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-$i days')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-$i days', '+10 minutes')), 'DONE', 5, $duration_ms, 'main', 'sonnet', 'done body');
+SQL
+    i=$((i + 1))
+  done
+}
+
+@test "cast agents --live: Direction A — high-baseline agent at 700s is NOT flagged (old flat 600s would flag it)" {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  _seed_baseline_done_rows 'backend-writer__highbase' 795000 5
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-run-a', 'backend-writer__highbase', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-700 seconds')), NULL, 'running', NULL, NULL, NULL, NULL, NULL);
+SQL
+  run bash "$CAST_BIN" agents --live
+  assert_success
+  local line
+  line=$(printf '%s\n' "$output" | grep 'backend-writer__highbase')
+  [[ "$line" != *"stuck"* ]]
+  [[ "$line" != *"⚠"* ]]
+}
+
+@test "cast agents --live: Direction B — low-baseline agent at 300s IS flagged (old flat 600s would NEVER catch this)" {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  _seed_baseline_done_rows 'commit__lowbase' 95000 5
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-run-b', 'commit__lowbase', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-300 seconds')), NULL, 'running', NULL, NULL, NULL, NULL, NULL);
+SQL
+  run bash "$CAST_BIN" agents --live
+  assert_success
+  local line
+  line=$(printf '%s\n' "$output" | grep 'commit__lowbase')
+  [[ "$line" == *"⚠"* ]]
+}
+
+@test "cast agents --live: agent with only 4 DONE runs (below n>=5 minimum) falls back to the flat 600s threshold" {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  _seed_baseline_done_rows 'test-writer__fewbase' 50000 4
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-run-c', 'test-writer__fewbase', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-660 seconds')), NULL, 'running', NULL, NULL, NULL, NULL, NULL);
+SQL
+  run bash "$CAST_BIN" agents --live --json
+  assert_success
+  run python3 -c "
+import sys, json
+data = json.loads(sys.argv[1])
+rows = {r['agent']: r for r in data['rows']}
+row = rows['test-writer__fewbase']
+assert row['baseline_n'] == 0, 'expected no qualifying baseline (only 4 runs), got baseline_n=' + repr(row['baseline_n'])
+assert row['baseline_p95_seconds'] is None, 'expected null baseline_p95_seconds, got ' + repr(row['baseline_p95_seconds'])
+assert row['threshold_seconds'] == 600, 'expected flat 600s fallback threshold, got ' + repr(row['threshold_seconds'])
+assert row['likely_stuck'] is True, 'elapsed ~660s should exceed the 600s fallback'
+print('OK')
+" "$output"
+  assert_success
+}
+
+@test "cast agents --live --json: carries baseline_p95_seconds, baseline_n, threshold_seconds; likely_stuck stays a real bool" {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  _seed_baseline_done_rows 'backend-writer__highbase' 795000 5
+  _seed_baseline_done_rows 'commit__lowbase' 95000 5
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-run-d1', 'backend-writer__highbase', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-700 seconds')), NULL, 'running', NULL, NULL, NULL, NULL, NULL),
+  ('sess-run-d2', 'commit__lowbase', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-300 seconds')), NULL, 'running', NULL, NULL, NULL, NULL, NULL);
+SQL
+  run bash "$CAST_BIN" agents --live --json
+  assert_success
+  run python3 -c "
+import sys, json
+data = json.loads(sys.argv[1])
+rows = {r['agent']: r for r in data['rows']}
+
+high = rows['backend-writer__highbase']
+assert isinstance(high['likely_stuck'], bool), 'likely_stuck must be a real bool'
+assert high['likely_stuck'] is False, 'high-baseline 700s run should NOT be flagged'
+assert high['baseline_n'] == 5, 'expected baseline_n=5, got ' + repr(high['baseline_n'])
+assert abs(high['baseline_p95_seconds'] - 795.0) < 1, 'expected baseline_p95_seconds ~=795.0, got ' + repr(high['baseline_p95_seconds'])
+assert abs(high['threshold_seconds'] - 1192.5) < 1, 'expected threshold_seconds ~=1192.5 (795*1.5), got ' + repr(high['threshold_seconds'])
+
+low = rows['commit__lowbase']
+assert isinstance(low['likely_stuck'], bool), 'likely_stuck must be a real bool'
+assert low['likely_stuck'] is True, 'low-baseline 300s run SHOULD be flagged'
+assert low['baseline_n'] == 5, 'expected baseline_n=5, got ' + repr(low['baseline_n'])
+assert abs(low['baseline_p95_seconds'] - 95.0) < 1, 'expected baseline_p95_seconds ~=95.0, got ' + repr(low['baseline_p95_seconds'])
+assert abs(low['threshold_seconds'] - 142.5) < 1, 'expected threshold_seconds ~=142.5 (max(95*1.5,120)), got ' + repr(low['threshold_seconds'])
+print('OK')
+" "$output"
+  assert_success
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# 11. NTILE(20) degeneracy: n<20 must label itself 'max', never 'p95'
+#
+# NTILE(20) needs >=20 rows per agent to produce a genuine 95th percentile.
+# With fewer rows every row lands in its own bucket, so "b<=19" excludes
+# nothing and MAX(...) returns the true maximum, not a p95. A fixture with
+# IDENTICAL durations can't tell max from p95 (they're the same number) —
+# this fixture uses six DIFFERING durations so the two statistics would
+# diverge if the code (wrongly) computed a real percentile instead.
+# ───────────────────────────────────────────────────────────────────────────
+
+@test "cast agents --live: n=6 differing durations reports baseline_stat=max, not p95 (NTILE degeneracy)" {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-ntile-1', 'bash-specialist__discovery-scope', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-1 days')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-1 days', '+10 minutes')), 'DONE', 5, 100000, 'main', 'sonnet', 'done'),
+  ('sess-ntile-2', 'bash-specialist__discovery-scope', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-2 days')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-2 days', '+10 minutes')), 'DONE', 5, 200000, 'main', 'sonnet', 'done'),
+  ('sess-ntile-3', 'bash-specialist__discovery-scope', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-3 days')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-3 days', '+10 minutes')), 'DONE', 5, 300000, 'main', 'sonnet', 'done'),
+  ('sess-ntile-4', 'bash-specialist__discovery-scope', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-4 days')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-4 days', '+10 minutes')), 'DONE', 5, 400000, 'main', 'sonnet', 'done'),
+  ('sess-ntile-5', 'bash-specialist__discovery-scope', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-5 days')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-5 days', '+10 minutes')), 'DONE', 5, 500000, 'main', 'sonnet', 'done'),
+  ('sess-ntile-6', 'bash-specialist__discovery-scope', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-6 days')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-6 days', '+10 minutes')), 'DONE', 5, 600000, 'main', 'sonnet', 'done');
+SQL
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-run-ntile', 'bash-specialist__discovery-scope', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-950 seconds')), NULL, 'running', NULL, NULL, NULL, NULL, NULL);
+SQL
+
+  run bash "$CAST_BIN" agents --live --json
+  assert_success
+  run python3 -c "
+import sys, json
+data = json.loads(sys.argv[1])
+rows = {r['agent']: r for r in data['rows']}
+row = rows['bash-specialist__discovery-scope']
+assert row['baseline_n'] == 6, 'expected baseline_n=6, got ' + repr(row['baseline_n'])
+assert row['baseline_stat'] == 'max', 'expected baseline_stat=max (n<20 NTILE degeneracy), got ' + repr(row['baseline_stat'])
+assert abs(row['baseline_p95_seconds'] - 600.0) < 1, 'expected the baseline value ~=600.0 (the true max of 6 differing durations), got ' + repr(row['baseline_p95_seconds'])
+print('OK')
+" "$output"
+  assert_success
+
+  run bash "$CAST_BIN" agents --live
+  assert_success
+  local line
+  line=$(printf '%s\n' "$output" | grep 'bash-specialist__discovery-scope')
+  [[ "$line" == *"max (n=6)"* ]]
+  [[ "$line" != *"p95"* ]]
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# 12. NTILE(20) lower boundary: n=20 is the FIRST count where bucket 20 holds
+# exactly the top row, so b<=19 excludes it and MAX(...) over that filtered
+# set becomes a genuine 95th percentile, not the true max. n=19 is still
+# degenerate (every row its own bucket); n=20 is the first genuine case.
+# `b_n >= 20` is the load-bearing boundary in bin/cast — a fixture asserting
+# only the n=6 (degenerate) side can't catch an off-by-N regression at this
+# threshold (e.g. `>= 25` or `> 20`), so this fixture pins n=20 exactly, with
+# 20 DIFFERING durations (identical durations make max and p95
+# indistinguishable, which is why this couldn't have been the existing
+# n=6 test).
+# ───────────────────────────────────────────────────────────────────────────
+
+@test "cast agents --live: exactly n=20 reports baseline_stat=p95 (lower boundary of the NTILE(20) genuine-percentile range)" {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  local i sql_values=""
+  for i in $(seq 1 20); do
+    sql_values+="  ('sess-p95-$i', 'test-writer__n20boundary', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-$i days')), strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-$i days', '+10 minutes')), 'DONE', 5, $((i * 100000)), 'main', 'sonnet', 'done')"
+    if [ "$i" -lt 20 ]; then
+      sql_values+=$',\n'
+    else
+      sql_values+=$';\n'
+    fi
+  done
+  sqlite3 "$CAST_DB_PATH" <<SQL
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+$sql_values
+SQL
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, tool_uses, duration_ms, branch, model, response)
+VALUES
+  ('sess-run-n20', 'test-writer__n20boundary', strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', '-950 seconds')), NULL, 'running', NULL, NULL, NULL, NULL, NULL);
+SQL
+
+  run bash "$CAST_BIN" agents --live --json
+  assert_success
+  run python3 -c "
+import sys, json
+data = json.loads(sys.argv[1])
+rows = {r['agent']: r for r in data['rows']}
+row = rows['test-writer__n20boundary']
+assert row['baseline_n'] == 20, 'expected baseline_n=20, got ' + repr(row['baseline_n'])
+assert row['baseline_stat'] == 'p95', 'expected baseline_stat=p95 at the n=20 lower boundary (genuine NTILE percentile), got ' + repr(row['baseline_stat'])
+print('OK')
+" "$output"
+  assert_success
+}
