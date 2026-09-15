@@ -22,7 +22,7 @@ import shlex
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 # ── log_hook_failure loader (sibling cast_db.py) ─────────────────────────────
@@ -1964,11 +1964,15 @@ def stage14_budget_alert(ctx: Ctx) -> None:
             return
 
         # Today's spend from agent_runs (the same authoritative source `cast budget`
-        # reports). LIKE-form absorbs both 'T'/'Z' and space-form timestamps.
+        # reports). agent_runs.started_at is uniformly ISO-8601 'T'/'Z' form (verified
+        # 2026-09-15: 4650/4650 rows, no NULLs, single format) — a half-open range on
+        # the raw column lets SQLite use idx_agent_runs_started_at. The prior
+        # `LIKE ? || '%'` form is also index-defeating (confirmed SCAN agent_runs).
         today = datetime.now(timezone.utc).date().isoformat()
+        today_next = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
         cur.execute(
-            "SELECT COALESCE(SUM(cost_usd), 0.0) FROM agent_runs WHERE started_at LIKE ? || '%'",
-            (today,),
+            "SELECT COALESCE(SUM(cost_usd), 0.0) FROM agent_runs WHERE started_at >= ? AND started_at < ?",
+            (today, today_next),
         )
         today_spend = float(cur.fetchone()[0] or 0)
         conn.close()

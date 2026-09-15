@@ -444,10 +444,15 @@ db = sys.argv[1]
 conn = sqlite3.connect(db)
 cur = conn.cursor()
 today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+today_next = (datetime.now(timezone.utc)+timedelta(days=1)).strftime('%Y-%m-%d')
 week_ago = (datetime.now(timezone.utc)-timedelta(days=7)).strftime('%Y-%m-%d')
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?", (today,))
+# Half-open range on the raw column (not DATE(started_at)=?) so SQLite can use
+# idx_agent_runs_started_at — agent_runs.started_at is uniformly ISO-8601 T/Z
+# (verified 2026-09-15: 4650/4650 rows, no NULLs), so lexical range comparison
+# against plain YYYY-MM-DD bounds is correct.
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= ? AND started_at < ?", (today, today_next))
 today_s = cur.fetchone()[0] or 0
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?", (week_ago,))
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= ?", (week_ago,))
 week_s = cur.fetchone()[0] or 0
 conn.close()
 print(f"{today_s:.2f} {week_s:.2f}")
@@ -1615,12 +1620,17 @@ conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
 today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+today_next = (datetime.now(timezone.utc) + timedelta(days=1)).strftime('%Y-%m-%d')
 week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d')
 
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))=?", (today,))
+# Half-open range on the raw column so SQLite can use idx_agent_runs_started_at —
+# date(replace(replace(...))) on the column defeats the index (confirmed SCAN
+# agent_runs). started_at is uniformly ISO-8601 T/Z (verified 2026-09-15,
+# 4650/4650 rows), so lexical range comparison against YYYY-MM-DD is correct.
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= ? AND started_at < ?", (today, today_next))
 today_spend = cur.fetchone()[0] or 0.0
 
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))>=?", (week_ago,))
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= ?", (week_ago,))
 week_spend = cur.fetchone()[0] or 0.0
 
 cur.execute("SELECT COUNT(*) FROM agent_runs")
@@ -1635,7 +1645,7 @@ week_rows = []
 if show_week:
     cur.execute(
         """SELECT date(replace(replace(started_at,'T',' '),'Z','')) as day, COALESCE(SUM(cost_usd),0) as spend
-           FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))>=? GROUP BY day ORDER BY day DESC""",
+           FROM agent_runs WHERE started_at >= ? GROUP BY day ORDER BY day DESC""",
         (week_ago,)
     )
     week_rows = [{"date": r["day"], "spend": r["spend"]} for r in cur.fetchall()]
