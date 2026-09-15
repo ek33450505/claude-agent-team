@@ -102,6 +102,7 @@ def _collect_files(claude_dir: Path) -> list[Path]:
     # Glob patterns
     glob_patterns = [
         "projects/*/memory/*.md",
+        "projects/*/memory/_archive/*.md",
         "agent-memory-local/**/*.md",
         "rules/*.md",
         "agents/personal/*.md",
