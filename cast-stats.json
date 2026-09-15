@@ -2,13 +2,13 @@
   "version": "10.2.0",
   "versionTag": "v10.2.0",
   "agents": 27,
-  "tests": 3339,
+  "tests": 3344,
   "test_files": 240,
   "tables": 42,
   "commands": 21,
   "skills": 18,
   "packages": 9,
-  "updated": "2026-09-09",
+  "updated": "2026-09-15",
   "_source": "https://raw.githubusercontent.com/ek33450505/claude-agent-team/main/cast-stats.json",
   "_generator": "scripts/gen-cast-stats.sh"
 }
