@@ -912,3 +912,118 @@ SQL
   # Do NOT assert overall exit code
   assert_output --partial "FTS5: cast.db present but unreadable"
 }
+
+# ── Test 15: spend-consistency — divergence IS detected ──────────────────────
+# arm A (production shape): started_at >= today AND < tomorrow (half-open range)
+# arm B (tolerant reference): date(trim(replace(replace(started_at,'T',' '),'Z','')))
+# A leading-whitespace timestamp sorts BEFORE the range's lower bound (space
+# 0x20 < '2' 0x32) so arm A misses it, while arm B's trim() still catches it —
+# this is the divergence the check now exists to surface.
+@test "spend-consistency: leading-whitespace row diverges the two arms and WARNs" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 1.0);
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', ' ' || strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 2.0);
+SQL
+
+  _run_doctor
+
+  assert_output --partial "spend-consistency"
+  assert_output --partial "mismatch >\$0.01"
+  # The two reported figures must actually differ, not just the WARN label.
+  assert_output --partial "RANGE=\$1.0000 TOLERANT=\$3.0000"
+}
+
+# ── Test 16: spend-consistency — agreement passes (OK, not WARN) ─────────────
+@test "spend-consistency: well-formed rows only agree and report OK" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 1.0);
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('backend-writer', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+1 hour'), 2.0);
+SQL
+
+  _run_doctor
+
+  assert_output --partial "spend-consistency"
+  assert_output --partial "RANGE ≈ TOLERANT, within \$0.01"
+  refute_output --partial "mismatch >\$0.01"
+}
+
+# ── Test 17: spend-consistency — honest degradation preserved (no data → INFO) ──
+@test "spend-consistency: no cost data today reports INFO, never a false OK or WARN" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+  # No rows inserted at all — no cost data for today on either arm.
+
+  _run_doctor
+
+  assert_output --partial "spend-consistency: no cost data today"
+  refute_output --partial "RANGE ≈ TOLERANT"
+  refute_output --partial "mismatch >\$0.01"
+}
+
+# ── Test 18: spend-consistency — tomorrow's row excluded from both arms ──────
+@test "spend-consistency: a row dated tomorrow is not counted by either arm" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', strftime('%Y-%m-%dT00:00:00Z', 'now', '+1 day'), 999.0);
+SQL
+
+  _run_doctor
+
+  # Tomorrow's row is invisible to both arms, so this is indistinguishable
+  # from "no cost data today" — never a false OK, and never counted into WARN.
+  assert_output --partial "spend-consistency: no cost data today"
+  refute_output --partial "999"
+}
+
+# ── Test 19: spend-consistency — bare-date tomorrow row excluded, no WARN ────
+# Regression lock for the plain-date-bound fix: production (cast status
+# ~L453) binds bare `YYYY-MM-DD` strings, not `YYYY-MM-DDT00:00:00`. A
+# malformed row whose started_at is exactly tomorrow's bare date
+# ("2026-09-16", no time component) must compare `"2026-09-16" < "2026-09-16"`
+# → False → excluded by arm A. A `T00:00:00`-suffixed upper bound would
+# instead compare `"2026-09-16" < "2026-09-16T00:00:00"` → True (string
+# prefix) → incorrectly INCLUDED, diverging from arm B and producing a false
+# WARN. Both arms must agree this row does not count.
+@test "spend-consistency: bare-date tomorrow row (no time component) is excluded, no WARN" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', strftime('%Y-%m-%d', 'now', '+1 day'), 777.0);
+SQL
+
+  _run_doctor
+
+  assert_output --partial "spend-consistency: no cost data today"
+  refute_output --partial "mismatch >\$0.01"
+  refute_output --partial "777"
+}

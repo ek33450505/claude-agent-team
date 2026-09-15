@@ -2771,42 +2771,62 @@ PYEOF
     fi
 
     # ── spend-consistency ────────────────────────────────────────────────────
-    # Runs both the LIKE-based query (consolidated budget-alert stage behavior) and the
-    # normalized DATE-based query (cast budget / cast-dash.py behavior) and
-    # flags when they diverge > $0.01 — the root cause of the 2026-06-11
-    # incident where cast budget reported $0 while the hard-limit fired $375.83.
-    # Honest degradation: absent table or column → INFO, never ERR.
+    # Compares what production actually runs — the half-open range query
+    # (`started_at >= ? AND started_at < ?`, today..today+1day via real
+    # timedelta arithmetic) used by `cast status`, `cast budget`, and the
+    # SubagentStop budget-alert stage since audit item P-1 — against a
+    # genuinely more tolerant reference query
+    # (`date(trim(replace(replace(started_at,'T',' '),'Z','')))=?`), and flags
+    # divergence > $0.01. This is a rewrite of the original check, which
+    # compared two RETIRED query shapes (a `LIKE ? || '%'` prefix match and a
+    # `date(replace(replace(...)))` match without trim) that were provably
+    # IDENTICAL on every realistic timestamp format tested — canonical,
+    # space-separated, T-no-Z, UTC-offset, non-zero-padded, and the range-query
+    # shape all summed to 15; only adding `trim()` (catching a leading-space
+    # timestamp) diverged, at 47. That means the original check was a
+    # tautology: LIKE and DATE could never disagree, so its green carried no
+    # information. Root cause history this check guards against: the
+    # 2026-06-11 incident where `cast budget` reported $0 while the hard limit
+    # fired $375.83 (timestamp-format divergence) — if a malformed timestamp
+    # ever lands, the fast indexed range query silently under-counts while the
+    # trim()-hardened reference still catches it.
+    # Honest degradation preserved: absent table/column → INFO, query failure
+    # → INFO, no cost data → INFO, never a false OK.
     local _sc_out _sc_rc
     _sc_out="$(python3 - "$CAST_DB_PATH" <<'PYEOF'
 import sqlite3, sys, datetime
-from datetime import timezone
+from datetime import timezone, timedelta
 
 db = sys.argv[1]
-today = datetime.datetime.now(timezone.utc).strftime('%Y-%m-%d')
+now = datetime.datetime.now(timezone.utc)
+today = now.strftime('%Y-%m-%d')
+today_next = (now + timedelta(days=1)).strftime('%Y-%m-%d')
 
 try:
     conn = sqlite3.connect(db, timeout=5)
     conn.row_factory = sqlite3.Row
-    # LIKE-based (matches consolidated budget-alert stage)
-    like_row = conn.execute(
-        "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at LIKE ? || '%'",
-        (today,)
+    # Production shape (cast status ~L453 / cast budget / SubagentStop
+    # budget-alert, post-P-1) — plain YYYY-MM-DD bounds, no time suffix.
+    range_row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs "
+        "WHERE started_at >= ? AND started_at < ?",
+        (today, today_next)
     ).fetchone()
-    like_spend = float(like_row[0]) if like_row else 0.0
-    # Normalized DATE-based (matches fixed cast budget query)
+    range_spend = float(range_row[0]) if range_row else 0.0
+    # Tolerant reference: trims whitespace + normalizes T/Z before extracting DATE
     date_row = conn.execute(
         "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs "
-        "WHERE date(replace(replace(started_at,'T',' '),'Z',''))=?",
+        "WHERE date(trim(replace(replace(started_at,'T',' '),'Z','')))=?",
         (today,)
     ).fetchone()
     date_spend = float(date_row[0]) if date_row else 0.0
     conn.close()
-    if like_spend == 0.0 and date_spend == 0.0:
+    if range_spend == 0.0 and date_spend == 0.0:
         print("INFO:no cost data today")
-    elif abs(like_spend - date_spend) > 0.01:
-        print("WARN:LIKE=${:.4f} DATE=${:.4f}".format(like_spend, date_spend))
+    elif abs(range_spend - date_spend) > 0.01:
+        print("WARN:RANGE=${:.4f} TOLERANT=${:.4f}".format(range_spend, date_spend))
     else:
-        print("OK:{:.4f}".format(like_spend))
+        print("OK:{:.4f}".format(range_spend))
 except sqlite3.OperationalError as e:
     err = str(e).lower()
     if 'no such table' in err or 'no such column' in err:
@@ -2825,11 +2845,11 @@ PYEOF
       printf "%b spend-consistency: %s\n" "$INFO" "$_sc_msg"
     elif echo "$_sc_out" | grep -q "^WARN:"; then
       _sc_msg="${_sc_out#WARN:}"
-      printf "%b spend-consistency: %s — mismatch >$0.01 (timestamp format divergence)\n" "$WARN" "$_sc_msg"
+      printf "%b spend-consistency: %s — mismatch >\$0.01 (timestamp format divergence)\n" "$WARN" "$_sc_msg"
       overall_ok=0
     elif echo "$_sc_out" | grep -q "^OK:"; then
       _sc_msg="${_sc_out#OK:}"
-      printf "%b spend-consistency: \$%s (LIKE ≈ DATE, within \$0.01)\n" "$OK" "$_sc_msg"
+      printf "%b spend-consistency: \$%s (RANGE ≈ TOLERANT, within \$0.01)\n" "$OK" "$_sc_msg"
     else
       printf "%b spend-consistency: unexpected output — %s\n" "$INFO" "$_sc_out"
     fi
