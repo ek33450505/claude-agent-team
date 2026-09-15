@@ -39,7 +39,11 @@ def _setup_logging(log_path: Path) -> logging.Logger:
     """Configure file-based logger. Creates log dir if needed."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("cast-db-backup")
-    logger.setLevel(logging.ERROR)
+    # WARNING, not ERROR: 8 of the 9 log calls in this file are warnings
+    # (chmod/checkpoint/self-heal failures, retention skips). At ERROR they
+    # were all silently dropped, so the "non-fatal failures are logged"
+    # contract wrote to nowhere. Found by code-reviewer, 2026-09-05.
+    logger.setLevel(logging.WARNING)
     if not logger.handlers:
         handler = logging.FileHandler(str(log_path))
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
@@ -50,14 +54,97 @@ def _setup_logging(log_path: Path) -> logging.Logger:
 def _do_backup(db_src: Path, backup_dir: Path) -> Path:
     """Perform WAL-safe backup via sqlite3.Connection.backup(). Returns dest path."""
     backup_dir.mkdir(parents=True, exist_ok=True)
+    _harden_dir_mode(backup_dir)
     today_str = date.today().strftime("%Y-%m-%d")
     dest_path = backup_dir / f"cast-db-{today_str}.db"
 
-    with sqlite3.connect(str(db_src), timeout=5) as src:
-        with sqlite3.connect(str(dest_path), timeout=5) as dst:
+    src = sqlite3.connect(str(db_src), timeout=5)
+    try:
+        dst = sqlite3.connect(str(dest_path), timeout=5)
+        try:
             src.backup(dst)
+            # sqlite3.Connection.backup() copies the source's file header
+            # verbatim, including journal_mode=WAL if the source is in WAL
+            # mode (cast.db is). That leaves the fresh destination in WAL
+            # mode too, so its own -wal/-shm sidecars can persist on disk
+            # holding real page data. Checkpoint and force the destination
+            # back to DELETE mode so the backup collapses to one
+            # self-contained file and there is no sidecar left to chmod.
+            try:
+                dst.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                dst.execute("PRAGMA journal_mode=DELETE")
+            except sqlite3.DatabaseError as e:
+                logging.getLogger("cast-db-backup").warning(
+                    f"could not force destination out of WAL mode: {e}"
+                )
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    _secure_backup_file(dest_path)
 
     return dest_path
+
+
+def _secure_backup_file(path: Path) -> None:
+    """chmod `path` (plus any -wal/-shm sidecar still present) to 0600.
+
+    Defense-in-depth: _do_backup already forces the destination out of WAL
+    mode so no sidecar should normally survive, but this covers the case
+    where the checkpoint/mode-change above failed or the sqlite version
+    behaves differently. A chmod failure here must never turn a completed
+    backup into a lost one, so failures are logged, not raised.
+    """
+    logger = logging.getLogger("cast-db-backup")
+    for candidate in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm")):
+        if not candidate.exists():
+            continue
+        try:
+            os.chmod(candidate, 0o600)
+        except OSError as e:
+            logger.warning(f"failed to chmod {candidate} to 0600: {e}")
+
+
+def _harden_dir_mode(backup_dir: Path) -> None:
+    """Best-effort chmod of backup_dir to 0700. Never fatal."""
+    try:
+        os.chmod(backup_dir, 0o700)
+    except OSError as e:
+        logging.getLogger("cast-db-backup").warning(
+            f"failed to chmod {backup_dir} to 0700: {e}"
+        )
+
+
+def _harden_existing_backups(backup_dir: Path) -> None:
+    """Self-heal: fix the mode of pre-existing cast-db-*.db backups (and any
+    -wal/-shm sidecars) that predate this fix and are still group/world
+    readable.
+
+    cast-db-init.sh already applies this same self-heal pattern to the live
+    DB (chmod 600 on every run, not just at creation time) — mirrored here
+    because fixing only the write path a backup is CREATED through would
+    leave every already-written 644 backup (including today's 805MB file)
+    exposed indefinitely with no correction. Scoped to the same
+    cast-db-YYYY-MM-DD.db glob the retention logic trusts, inside backup_dir
+    only — never a wildcard over an arbitrary directory.
+    """
+    logger = logging.getLogger("cast-db-backup")
+    if not backup_dir.exists():
+        return
+    for f in glob.glob(str(backup_dir / "cast-db-*.db")):
+        fpath = Path(f)
+        if fpath.resolve().parent != backup_dir.resolve():
+            continue
+        for candidate in (fpath, Path(f + "-wal"), Path(f + "-shm")):
+            if not candidate.exists():
+                continue
+            try:
+                mode = candidate.stat().st_mode & 0o777
+                if mode != 0o600:
+                    os.chmod(candidate, 0o600)
+            except OSError as e:
+                logger.warning(f"failed to harden pre-existing backup {candidate}: {e}")
 
 
 def _parse_date_from_filename(filepath: Path):
@@ -177,6 +264,14 @@ def main():
     # Guard: source must exist
     if not db_src.exists():
         _fail(f"source not found: {db_src}")
+
+    # Self-heal pre-existing 644 backups regardless of whether today's
+    # backup succeeds below — an old exposed file is a problem on its own,
+    # not conditional on a fresh backup landing.
+    try:
+        _harden_existing_backups(backup_dir)
+    except Exception as e:
+        logger.warning(f"pre-existing backup hardening failed (non-fatal): {e}")
 
     try:
         dest_path = _do_backup(db_src, backup_dir)

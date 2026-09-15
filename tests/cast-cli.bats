@@ -171,6 +171,61 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# cast status / cast budget — boundary-date fixture (P-1 fix: index-defeating
+# date predicates rewritten to half-open ranges on the raw started_at column).
+# Rows at today 00:00:00Z, today 23:59:59Z, and tomorrow 00:00:00Z — the
+# half-open range must include the first two in "today" and EXCLUDE the
+# third. Off-by-one is exactly where half-open ranges break.
+# ---------------------------------------------------------------------------
+
+_seed_boundary_fixture() {
+  local today tomorrow
+  today="$(python3 -c "from datetime import datetime, timezone; print(datetime.now(timezone.utc).date().isoformat())")"
+  tomorrow="$(python3 -c "from datetime import datetime, timezone, timedelta; print((datetime.now(timezone.utc).date()+timedelta(days=1)).isoformat())")"
+  sqlite3 "$CAST_DB_PATH" <<SQL
+INSERT INTO agent_runs (agent, started_at, cost_usd, status) VALUES ('test-agent', '${today}T00:00:00Z', 1.00, 'DONE');
+INSERT INTO agent_runs (agent, started_at, cost_usd, status) VALUES ('test-agent', '${today}T23:59:59Z', 2.00, 'DONE');
+INSERT INTO agent_runs (agent, started_at, cost_usd, status) VALUES ('test-agent', '${tomorrow}T00:00:00Z', 100.00, 'DONE');
+SQL
+}
+
+@test "cast status: boundary-date fixture — today spend excludes tomorrow's row" {
+  _seed_boundary_fixture
+  run bash "$CAST_CLI" status
+  assert_success
+  assert_output --partial "\$3.00 today"
+}
+
+@test "cast budget: boundary-date fixture — today spend excludes tomorrow's row" {
+  _seed_boundary_fixture
+  run bash "$CAST_CLI" budget
+  assert_success
+  assert_output --partial "Today: \$3.00"
+}
+
+@test "cast budget: boundary-date fixture — week spend has no upper bound (includes all three)" {
+  _seed_boundary_fixture
+  run bash "$CAST_CLI" budget
+  assert_success
+  assert_output --partial "This week: \$103.00"
+}
+
+@test "cast budget --json: boundary-date fixture — today_usd is 3.0, not 103.0" {
+  _seed_boundary_fixture
+  run bash "$CAST_CLI" --json budget
+  assert_success
+  echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['today_usd'] == 3.0, d" 2>&1
+  assert_success
+}
+
+@test "cast budget --week: boundary-date fixture — week breakdown groups today's two rows together" {
+  _seed_boundary_fixture
+  run bash "$CAST_CLI" budget --week
+  assert_success
+  assert_output --partial "\$3.0000"
+}
+
+# ---------------------------------------------------------------------------
 # cast memory — empty DB
 # ---------------------------------------------------------------------------
 

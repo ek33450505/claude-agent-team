@@ -540,8 +540,10 @@ SQL
   # The minimal DDL uses agent_name; add the production column names idempotently
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
 
-  # Insert a row stuck in running state for 3h (pre-reaper, not yet abandoned)
+  # Insert a row stuck in running state for 3h (pre-reaper, not yet abandoned);
+  # response left NULL — this is the genuine no_output/maxTurns signature.
   sqlite3 "$CAST_DB_PATH" <<'SQL'
 INSERT INTO agent_runs (agent, started_at, status)
 VALUES ('test-writer', datetime('now', '-3 hours'), 'running');
@@ -549,7 +551,7 @@ SQL
 
   _run_doctor
 
-  assert_output --partial "silent truncations (maxTurns) — 1 suspected truncation(s)"
+  assert_output --partial "agent runs that stopped without Status — 1 in last 7d"
   assert_output --partial "test-writer"
   assert_output --partial "likely maxTurns cap hit"
 }
@@ -562,6 +564,7 @@ SQL
   # Add production column names the minimal DDL omits (idempotent)
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
 
   # Insert a recent running row (only 30 minutes old — within the 2h threshold)
   sqlite3 "$CAST_DB_PATH" <<'SQL'
@@ -571,8 +574,8 @@ SQL
 
   _run_doctor
 
-  assert_output --partial "silent truncations (maxTurns) — none in last 7d"
-  refute_output --partial "silent truncations (maxTurns) — 1 suspected truncation"
+  assert_output --partial "agent runs that stopped without Status — none in last 7d"
+  refute_output --partial "agent runs that stopped without Status — 1 in last 7d"
 }
 
 # ── Test 5b: silent truncations — ISO-T/Z stuck-running row (raw-compare regression) ──
@@ -589,6 +592,7 @@ SQL
 
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
 
   sqlite3 "$CAST_DB_PATH" <<'SQL'
 INSERT INTO agent_runs (agent, started_at, status)
@@ -597,7 +601,7 @@ SQL
 
   _run_doctor
 
-  assert_output --partial "silent truncations (maxTurns) — 1 suspected truncation(s)"
+  assert_output --partial "agent runs that stopped without Status — 1 in last 7d"
   assert_output --partial "test-writer"
   assert_output --partial "likely maxTurns cap hit"
 }
@@ -612,6 +616,7 @@ SQL
 
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
 
   sqlite3 "$CAST_DB_PATH" <<'SQL'
 INSERT INTO agent_runs (agent, started_at, ended_at, status)
@@ -621,7 +626,7 @@ SQL
 
   _run_doctor
 
-  assert_output --partial "silent truncations (maxTurns) — 1 suspected truncation(s)"
+  assert_output --partial "agent runs that stopped without Status — 1 in last 7d"
   assert_output --partial "debugger"
 }
 
@@ -634,6 +639,7 @@ SQL
 
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
   sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
 
   sqlite3 "$CAST_DB_PATH" <<'SQL'
 INSERT INTO agent_runs (agent, started_at, status)
@@ -642,8 +648,186 @@ SQL
 
   _run_doctor
 
-  assert_output --partial "silent truncations (maxTurns) — none in last 7d"
-  refute_output --partial "silent truncations (maxTurns) — 1 suspected truncation"
+  assert_output --partial "agent runs that stopped without Status — none in last 7d"
+  refute_output --partial "agent runs that stopped without Status — 1 in last 7d"
+}
+
+# ── Test 5e: silent truncations — cause classification by `response` content ──
+# The count was never wrong; the ATTRIBUTION was. Most abandoned/failed rows
+# carry a populated response ending in a plan session-limit message, which is
+# NOT a maxTurns cap hit and is not fixed by narrowing dispatch scope.
+@test "silent truncations: session-limit response classifies as session_limit, not maxTurns" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('workflow-subagent', datetime('now', '-1 day'), 'abandoned',
+        'Working on the fix now. You''ve hit your session limit · resets 6:10pm (America/New_York)');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "agent runs that stopped without Status — 1 in last 7d"
+  assert_output --partial "session_limit"
+  assert_output --partial "hit the plan session limit"
+  refute_output --partial "likely maxTurns cap hit"
+}
+
+@test "silent truncations: NULL response classifies as no_output and gets maxTurns advice" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('backend-writer', datetime('now', '-1 day'), 'abandoned', NULL);
+SQL
+
+  _run_doctor
+
+  assert_output --partial "agent runs that stopped without Status — 1 in last 7d"
+  assert_output --partial "no_output"
+  assert_output --partial "likely maxTurns cap hit"
+}
+
+@test "silent truncations: '[NO RESPONSE' marker classifies as no_output, not completed" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('debugger', datetime('now', '-1 day'), 'abandoned', '[NO RESPONSE recorded — reaped]');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "agent runs that stopped without Status — 1 in last 7d"
+  assert_output --partial "no_output"
+  assert_output --partial "likely maxTurns cap hit"
+}
+
+@test "silent truncations: '[PARTIAL' prefix classifies as partial" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('frontend-writer', datetime('now', '-1 day'), 'abandoned',
+        '[PARTIAL — recovered from transcript; SubagentStop never fired] Wrote 3 of 5 files.');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "agent runs that stopped without Status — 1 in last 7d"
+  assert_output --partial "partial"
+  assert_output --partial "SubagentStop never fired"
+}
+
+@test "silent truncations: mixed session-limit + no-output rows reconcile total and per-bucket counts" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('workflow-subagent', datetime('now', '-1 day'), 'abandoned',
+        'Done for now. You''ve hit your session limit · resets 6:10pm (America/New_York)');
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('code-writer', datetime('now', '-1 day'), 'abandoned', NULL);
+SQL
+
+  _run_doctor
+
+  assert_output --partial "agent runs that stopped without Status — 2 in last 7d"
+  assert_output --partial "no_output       1"
+  assert_output --partial "session_limit   1"
+}
+
+# ── Test 8b: precedence lock — a row carrying BOTH markers must classify as
+# session_limit, not partial. On the live DB, 423 of 432 qualifying rows
+# carry BOTH the [PARTIAL prefix (SubagentStop never fired) AND a session
+# session-limit message — they land in session_limit only because that WHEN
+# arm precedes the [PARTIAL arm in the CASE statement. That precedence is
+# correct (session limit is the actionable cause) but nothing asserted it;
+# reordering the two arms would silently flip all 423 rows with every other
+# test still green. This test is mutation-provable: swap the session_limit
+# and partial WHEN arms and this test must fail.
+@test "silent truncations: response carrying BOTH session-limit and PARTIAL markers classifies as session_limit (precedence lock)" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+
+  # Exact production shape: the [PARTIAL prefix immediately followed by a
+  # session-limit message in the same response string.
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('workflow-subagent', datetime('now', '-1 day'), 'abandoned',
+        '[PARTIAL — recovered from transcript; SubagentStop never fired] You''ve hit your session limit · resets 6:10pm (America/New_York)');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "agent runs that stopped without Status — 1 in last 7d"
+  assert_output --partial "session_limit   1"
+  assert_output --partial "hit the plan session limit"
+  refute_output --partial "partial"
+}
+
+# ── Test 8c: reconciliation — one row of each of the four buckets, counts
+# must sum to the headline total. A row falling through every WHEN arm
+# (impossible today since the ELSE arm catches everything, but this is the
+# regression guard against a future arm reorder introducing a gap) cannot
+# go silently missing from the per-bucket breakdown.
+@test "silent truncations: one row per bucket (no_output, session_limit, partial, completed) reconciles total to per-bucket sum" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN abandoned_at TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN response TEXT;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('backend-writer', datetime('now', '-1 day'), 'abandoned', NULL);
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('workflow-subagent', datetime('now', '-1 day'), 'abandoned',
+        'Done for now. You''ve hit your session limit · resets 6:10pm (America/New_York)');
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('frontend-writer', datetime('now', '-1 day'), 'abandoned',
+        '[PARTIAL — recovered from transcript; SubagentStop never fired] Wrote 3 of 5 files.');
+INSERT INTO agent_runs (agent, abandoned_at, status, response)
+VALUES ('code-reviewer', datetime('now', '-1 day'), 'abandoned', 'Full response recorded. Status: DONE');
+SQL
+
+  _run_doctor
+
+  assert_output --partial "agent runs that stopped without Status — 4 in last 7d"
+  assert_output --partial "no_output       1"
+  assert_output --partial "session_limit   1"
+  assert_output --partial "partial         1"
+  assert_output --partial "completed       1"
 }
 
 # ── Test 9: cast status with nonexistent cast.db ──────────────────────────────
@@ -727,4 +911,119 @@ SQL
 
   # Do NOT assert overall exit code
   assert_output --partial "FTS5: cast.db present but unreadable"
+}
+
+# ── Test 15: spend-consistency — divergence IS detected ──────────────────────
+# arm A (production shape): started_at >= today AND < tomorrow (half-open range)
+# arm B (tolerant reference): date(trim(replace(replace(started_at,'T',' '),'Z','')))
+# A leading-whitespace timestamp sorts BEFORE the range's lower bound (space
+# 0x20 < '2' 0x32) so arm A misses it, while arm B's trim() still catches it —
+# this is the divergence the check now exists to surface.
+@test "spend-consistency: leading-whitespace row diverges the two arms and WARNs" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 1.0);
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', ' ' || strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 2.0);
+SQL
+
+  _run_doctor
+
+  assert_output --partial "spend-consistency"
+  assert_output --partial "mismatch >\$0.01"
+  # The two reported figures must actually differ, not just the WARN label.
+  assert_output --partial "RANGE=\$1.0000 TOLERANT=\$3.0000"
+}
+
+# ── Test 16: spend-consistency — agreement passes (OK, not WARN) ─────────────
+@test "spend-consistency: well-formed rows only agree and report OK" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 1.0);
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('backend-writer', strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+1 hour'), 2.0);
+SQL
+
+  _run_doctor
+
+  assert_output --partial "spend-consistency"
+  assert_output --partial "RANGE ≈ TOLERANT, within \$0.01"
+  refute_output --partial "mismatch >\$0.01"
+}
+
+# ── Test 17: spend-consistency — honest degradation preserved (no data → INFO) ──
+@test "spend-consistency: no cost data today reports INFO, never a false OK or WARN" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+  # No rows inserted at all — no cost data for today on either arm.
+
+  _run_doctor
+
+  assert_output --partial "spend-consistency: no cost data today"
+  refute_output --partial "RANGE ≈ TOLERANT"
+  refute_output --partial "mismatch >\$0.01"
+}
+
+# ── Test 18: spend-consistency — tomorrow's row excluded from both arms ──────
+@test "spend-consistency: a row dated tomorrow is not counted by either arm" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', strftime('%Y-%m-%dT00:00:00Z', 'now', '+1 day'), 999.0);
+SQL
+
+  _run_doctor
+
+  # Tomorrow's row is invisible to both arms, so this is indistinguishable
+  # from "no cost data today" — never a false OK, and never counted into WARN.
+  assert_output --partial "spend-consistency: no cost data today"
+  refute_output --partial "999"
+}
+
+# ── Test 19: spend-consistency — bare-date tomorrow row excluded, no WARN ────
+# Regression lock for the plain-date-bound fix: production (cast status
+# ~L453) binds bare `YYYY-MM-DD` strings, not `YYYY-MM-DDT00:00:00`. A
+# malformed row whose started_at is exactly tomorrow's bare date
+# ("2026-09-16", no time component) must compare `"2026-09-16" < "2026-09-16"`
+# → False → excluded by arm A. A `T00:00:00`-suffixed upper bound would
+# instead compare `"2026-09-16" < "2026-09-16T00:00:00"` → True (string
+# prefix) → incorrectly INCLUDED, diverging from arm B and producing a false
+# WARN. Both arms must agree this row does not count.
+@test "spend-consistency: bare-date tomorrow row (no time component) is excluded, no WARN" {
+  _create_minimal_core_tables "$CAST_DB_PATH"
+  _create_honesty_tables "$CAST_DB_PATH"
+
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN agent TEXT;" 2>/dev/null || true
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs ADD COLUMN cost_usd REAL;" 2>/dev/null || true
+
+  sqlite3 "$CAST_DB_PATH" <<'SQL'
+INSERT INTO agent_runs (agent, started_at, cost_usd)
+VALUES ('code-reviewer', strftime('%Y-%m-%d', 'now', '+1 day'), 777.0);
+SQL
+
+  _run_doctor
+
+  assert_output --partial "spend-consistency: no cost data today"
+  refute_output --partial "mismatch >\$0.01"
+  refute_output --partial "777"
 }

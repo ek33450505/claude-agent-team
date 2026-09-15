@@ -444,10 +444,15 @@ db = sys.argv[1]
 conn = sqlite3.connect(db)
 cur = conn.cursor()
 today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+today_next = (datetime.now(timezone.utc)+timedelta(days=1)).strftime('%Y-%m-%d')
 week_ago = (datetime.now(timezone.utc)-timedelta(days=7)).strftime('%Y-%m-%d')
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)=?", (today,))
+# Half-open range on the raw column (not DATE(started_at)=?) so SQLite can use
+# idx_agent_runs_started_at — agent_runs.started_at is uniformly ISO-8601 T/Z
+# (verified 2026-09-15: 4650/4650 rows, no NULLs), so lexical range comparison
+# against plain YYYY-MM-DD bounds is correct.
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= ? AND started_at < ?", (today, today_next))
 today_s = cur.fetchone()[0] or 0
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE DATE(started_at)>=?", (week_ago,))
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= ?", (week_ago,))
 week_s = cur.fetchone()[0] or 0
 conn.close()
 print(f"{today_s:.2f} {week_s:.2f}")
@@ -672,11 +677,53 @@ cur.execute("""
     ORDER BY started_at ASC
 """)
 rows = cur.fetchall()
+
+# Per-agent baseline: p95 of duration_ms over completed runs in the last 30
+# days, requiring at least 5 runs. NTILE(20) needs >=20 rows per agent to
+# produce a genuine 95th percentile; with fewer rows every row lands in its
+# own bucket, so "b<=19" excludes nothing and MAX(...) returns the maximum,
+# not a p95 (verified against the live DB — 11 of 21 qualifying agents fall
+# in this n<20 regime; the cutover is exactly n=20, as the NTILE math
+# predicts). Do NOT "fix" this by raising the n>=5 minimum to 20 — that
+# would strip agents with a genuine 5-19 run history back to the flat
+# fallback and flag their ordinary runs as stuck. Instead baseline_stat
+# records which statistic was actually computed ('p95' when n>=20, 'max'
+# when 5<=n<20) so neither the human table nor --json mislabels a max as a
+# p95. Falls back to STUCK_THRESHOLD_SECONDS for any agent without a
+# baseline (new agent, <5 runs, or the query itself failing on an older
+# sqlite without window-function support). Degrade to "no baselines" rather
+# than crash — this view must never die on a bad query.
+baselines = {}
+try:
+    cur.execute("""
+        WITH d AS (
+            SELECT agent, duration_ms,
+                   NTILE(20) OVER (PARTITION BY agent ORDER BY duration_ms) AS b
+            FROM agent_runs
+            WHERE status='DONE' AND duration_ms>0 AND agent IS NOT NULL
+              AND datetime(started_at) >= datetime('now','-30 days')
+        )
+        SELECT agent, COUNT(*), MAX(CASE WHEN b<=19 THEN duration_ms END)
+        FROM d GROUP BY agent HAVING COUNT(*) >= 5
+    """)
+    for b_agent, b_n, b_p95_ms in cur.fetchall():
+        if b_agent and b_p95_ms is not None:
+            b_stat = 'p95' if b_n >= 20 else 'max'
+            baselines[b_agent] = (b_n, b_p95_ms / 1000.0, b_stat)
+except sqlite3.Error:
+    baselines = {}
+
 conn.close()
 
-# 10 min is the harness's own default subagent stall timeout
-# (CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS, default 600000 ms); a typical agent
-# finishes in ~1.6 min, so anything past this is flagged rather than assumed dead.
+# STUCK_THRESHOLD_SECONDS is the fallback for agents with no completed-run
+# baseline (below the n>=5 minimum above, or when the baseline query itself
+# is unavailable). Agents WITH a baseline are flagged instead against 1.5x
+# their own measured 30-day p95 — per-agent p95s vary widely (measured
+# 95s-795s across agents on the live DB), so a single flat threshold flags
+# slow agents' ordinary runs as stuck while missing fast agents hanging well
+# past their own worst historical run. The baseline is derived from a
+# retention-pruned window, so it shifts over time — never quote it as a
+# fixed number.
 STUCK_THRESHOLD_SECONDS = 600
 
 now = datetime.now(timezone.utc)
@@ -708,6 +755,13 @@ def fmt_elapsed(seconds):
 data = []
 for r in rows:
     elapsed = parse_elapsed_seconds(r['started_at'])
+    baseline = baselines.get(r['agent'])
+    if baseline:
+        baseline_n, baseline_p95_seconds, baseline_stat = baseline
+        threshold_seconds = max(baseline_p95_seconds * 1.5, 120)
+    else:
+        baseline_n, baseline_p95_seconds, baseline_stat = 0, None, None
+        threshold_seconds = STUCK_THRESHOLD_SECONDS
     data.append({
         'agent': r['agent'] or '?',
         'status': r['status'] or '?',
@@ -716,7 +770,11 @@ for r in rows:
         'elapsed_seconds': elapsed,
         'branch': r['branch'],
         'model': r['model'],
-        'likely_stuck': bool(elapsed is not None and elapsed > STUCK_THRESHOLD_SECONDS),
+        'likely_stuck': bool(elapsed is not None and elapsed > threshold_seconds),
+        'baseline_p95_seconds': baseline_p95_seconds,
+        'baseline_stat': baseline_stat,
+        'baseline_n': baseline_n,
+        'threshold_seconds': threshold_seconds,
     })
 
 if json_out:
@@ -731,11 +789,18 @@ print(f"{'AGENT':<28} {'ELAPSED':>10}")
 print('-' * 39)
 for d in data:
     elapsed_str = fmt_elapsed(d['elapsed_seconds'])
-    flag = '  ⚠ likely stuck' if d['likely_stuck'] else ''
+    if d['likely_stuck']:
+        if d['baseline_n'] and d['baseline_p95_seconds']:
+            ratio = d['elapsed_seconds'] / d['baseline_p95_seconds']
+            flag = f"  ⚠ likely stuck — {ratio:.1f}× {d['baseline_stat']} (n={d['baseline_n']})"
+        else:
+            flag = '  ⚠ likely stuck — past 10m (no baseline)'
+    else:
+        flag = ''
     print(f"{d['agent']:<28} {elapsed_str:>10}{flag}")
 
 print('\nElapsed is the only in-flight signal — tool_uses, branch and model are recorded at completion, not during a run.')
-print("Past ~10m, suspect a maxTurns truncation: run 'cast review <agent>' and compare status + response before re-dispatching.")
+print("A flag above is evidence (elapsed vs. measured/fallback threshold), not a diagnosis: run 'cast review <agent>' and compare status + response before re-dispatching.")
 PYEOF
     return
   fi
@@ -1555,12 +1620,17 @@ conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
 today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+today_next = (datetime.now(timezone.utc) + timedelta(days=1)).strftime('%Y-%m-%d')
 week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d')
 
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))=?", (today,))
+# Half-open range on the raw column so SQLite can use idx_agent_runs_started_at —
+# date(replace(replace(...))) on the column defeats the index (confirmed SCAN
+# agent_runs). started_at is uniformly ISO-8601 T/Z (verified 2026-09-15,
+# 4650/4650 rows), so lexical range comparison against YYYY-MM-DD is correct.
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= ? AND started_at < ?", (today, today_next))
 today_spend = cur.fetchone()[0] or 0.0
 
-cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))>=?", (week_ago,))
+cur.execute("SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at >= ?", (week_ago,))
 week_spend = cur.fetchone()[0] or 0.0
 
 cur.execute("SELECT COUNT(*) FROM agent_runs")
@@ -1575,7 +1645,7 @@ week_rows = []
 if show_week:
     cur.execute(
         """SELECT date(replace(replace(started_at,'T',' '),'Z','')) as day, COALESCE(SUM(cost_usd),0) as spend
-           FROM agent_runs WHERE date(replace(replace(started_at,'T',' '),'Z',''))>=? GROUP BY day ORDER BY day DESC""",
+           FROM agent_runs WHERE started_at >= ? GROUP BY day ORDER BY day DESC""",
         (week_ago,)
     )
     week_rows = [{"date": r["day"], "spend": r["spend"]} for r in cur.fetchall()]
@@ -2558,7 +2628,7 @@ PYEOF
     # Table removed from canonical schema; no longer reported in honesty surface.
 
     # ── silent truncations (maxTurns) ────────────────────────────────────────
-    # Detects agent_runs rows that were silently cut off by the maxTurns cap:
+    # Detects agent_runs rows that stopped without a Status block:
     #   - stuck running > 2h (pre-reaper, not yet abandoned)
     #   - status='abandoned' in the last 7d (reaped by cast-abandon-stale-runs.py)
     #   - status='failed' in the last 7d (backward-compat: rows written by the
@@ -2572,32 +2642,99 @@ PYEOF
     # datetime(...) to normalize both sides before comparing.
     # Note: abandoned_at column is added by the reaper on first run; if it is
     # absent the UNION query fails and we degrade gracefully via the rc-ne-0 branch.
+    #
+    # Root cause fixed here: not every qualifying row is a maxTurns cap hit.
+    # A measured sample found 423/432 rows carry a populated `response` ending
+    # in a plan SESSION LIMIT message ("You've hit your session limit ..."),
+    # not a mid-sentence cutoff — the "scope dispatches to fit the cap" advice
+    # is inert against that cause. Classify by `response` content (markers per
+    # scripts/cast-abandon-stale-runs.py: NO_RESPONSE_MARKER_LIKE = '[NO
+    # RESPONSE%', PARTIAL_PREFIX = '[PARTIAL — recovered from transcript;
+    # SubagentStop never fired] ') so the printed remedy matches the cause.
     local _st_out _st_rc
     _st_out="$(sqlite3 "$CAST_DB_PATH" \
-      "SELECT COALESCE(agent,'unknown'), COUNT(*) FROM agent_runs \
+      "SELECT \
+         CASE \
+           WHEN response IS NULL OR TRIM(response)='' OR response LIKE '[NO RESPONSE%' THEN 'no_output' \
+           WHEN response LIKE '%session limit%' THEN 'session_limit' \
+           WHEN response LIKE '[PARTIAL%' THEN 'partial' \
+           ELSE 'completed' \
+         END, \
+         COALESCE(agent,'unknown'), COUNT(*) FROM agent_runs \
        WHERE (status='running' AND datetime(started_at) < datetime('now','-2 hours')) \
           OR (status='abandoned' AND datetime(abandoned_at) >= datetime('now','-7 days')) \
           OR (status='failed' AND ended_at IS NOT NULL AND datetime(ended_at) >= datetime('now','-7 days')) \
-       GROUP BY agent ORDER BY COUNT(*) DESC;" 2>&1)"
+       GROUP BY 1, 2 ORDER BY 1, COUNT(*) DESC;" 2>&1)"
     _st_rc=$?
     if echo "$_st_out" | grep -qi "no such table"; then
-      printf "%b honesty: silent truncations (maxTurns) — no data yet\n" "$INFO"
+      printf "%b honesty: agent runs that stopped without Status — no data yet\n" "$INFO"
     elif [ "$_st_rc" -ne 0 ]; then
-      printf "%b honesty: silent truncations (maxTurns) — unavailable (db query failed)\n" "$INFO"
+      printf "%b honesty: agent runs that stopped without Status — unavailable (db query failed)\n" "$INFO"
     elif [ -z "$_st_out" ]; then
-      printf "%b honesty: silent truncations (maxTurns) — none in last 7d\n" "$OK"
+      printf "%b honesty: agent runs that stopped without Status — none in last 7d\n" "$OK"
     else
       local _st_total=0
-      while IFS='|' read -r _ag _cnt; do
-        [ -z "$_ag" ] && continue
+      local _st_c_no_output=0 _st_c_session_limit=0 _st_c_partial=0 _st_c_completed=0
+      local _st_r_no_output="" _st_r_session_limit="" _st_r_partial="" _st_r_completed=""
+      while IFS='|' read -r _cause _ag _cnt; do
+        [ -z "$_cause" ] && continue
         _st_total=$((_st_total + _cnt))
+        case "$_cause" in
+          no_output)
+            _st_c_no_output=$((_st_c_no_output + _cnt))
+            _st_r_no_output="${_st_r_no_output}${_ag}|${_cnt}"$'\n'
+            ;;
+          session_limit)
+            _st_c_session_limit=$((_st_c_session_limit + _cnt))
+            _st_r_session_limit="${_st_r_session_limit}${_ag}|${_cnt}"$'\n'
+            ;;
+          partial)
+            _st_c_partial=$((_st_c_partial + _cnt))
+            _st_r_partial="${_st_r_partial}${_ag}|${_cnt}"$'\n'
+            ;;
+          *)
+            _st_c_completed=$((_st_c_completed + _cnt))
+            _st_r_completed="${_st_r_completed}${_ag}|${_cnt}"$'\n'
+            ;;
+        esac
       done <<< "$_st_out"
-      printf "%b honesty: silent truncations (maxTurns) — %d suspected truncation(s)\n" "$WARN" "$_st_total"
-      while IFS='|' read -r _ag _cnt; do
-        [ -z "$_ag" ] && continue
-        printf "    %-20s %d\n" "$_ag" "$_cnt"
-      done <<< "$_st_out"
-      printf "    likely maxTurns cap hit — agent stopped without Status; see rules working-conventions 'Agent Turn Limits'\n"
+      printf "%b honesty: agent runs that stopped without Status — %d in last 7d\n" "$WARN" "$_st_total"
+      # Each cause line (and its per-agent breakdown) prints ONLY when that
+      # bucket is non-zero — a bucket that never fired must not carry its
+      # advice text onto the screen, or the attribution bug just moves down
+      # one line instead of being fixed.
+      if [ "$_st_c_no_output" -gt 0 ]; then
+        printf "    %-15s %-6d %s\n" "no_output" "$_st_c_no_output" \
+          "likely maxTurns cap hit — see rules working-conventions 'Agent Turn Limits'"
+        while IFS='|' read -r _ag _cnt; do
+          [ -z "$_ag" ] && continue
+          printf "        %-20s %d\n" "$_ag" "$_cnt"
+        done <<< "$_st_r_no_output"
+      fi
+      if [ "$_st_c_session_limit" -gt 0 ]; then
+        printf "    %-15s %-6d %s\n" "session_limit" "$_st_c_session_limit" \
+          "hit the plan session limit — NOT a turn-cap issue; narrowing dispatch scope will not help"
+        while IFS='|' read -r _ag _cnt; do
+          [ -z "$_ag" ] && continue
+          printf "        %-20s %d\n" "$_ag" "$_cnt"
+        done <<< "$_st_r_session_limit"
+      fi
+      if [ "$_st_c_partial" -gt 0 ]; then
+        printf "    %-15s %-6d %s\n" "partial" "$_st_c_partial" \
+          "SubagentStop never fired; partial recovered from transcript — work exists, delivery failed"
+        while IFS='|' read -r _ag _cnt; do
+          [ -z "$_ag" ] && continue
+          printf "        %-20s %d\n" "$_ag" "$_cnt"
+        done <<< "$_st_r_partial"
+      fi
+      if [ "$_st_c_completed" -gt 0 ]; then
+        printf "    %-15s %-6d %s\n" "completed" "$_st_c_completed" \
+          "full response recorded — reaper/transport timing, not truncation"
+        while IFS='|' read -r _ag _cnt; do
+          [ -z "$_ag" ] && continue
+          printf "        %-20s %d\n" "$_ag" "$_cnt"
+        done <<< "$_st_r_completed"
+      fi
     fi
 
     # ── subagent depth cap (v10 SEC-2) ───────────────────────────────────────
@@ -2634,42 +2771,62 @@ PYEOF
     fi
 
     # ── spend-consistency ────────────────────────────────────────────────────
-    # Runs both the LIKE-based query (consolidated budget-alert stage behavior) and the
-    # normalized DATE-based query (cast budget / cast-dash.py behavior) and
-    # flags when they diverge > $0.01 — the root cause of the 2026-06-11
-    # incident where cast budget reported $0 while the hard-limit fired $375.83.
-    # Honest degradation: absent table or column → INFO, never ERR.
+    # Compares what production actually runs — the half-open range query
+    # (`started_at >= ? AND started_at < ?`, today..today+1day via real
+    # timedelta arithmetic) used by `cast status`, `cast budget`, and the
+    # SubagentStop budget-alert stage since audit item P-1 — against a
+    # genuinely more tolerant reference query
+    # (`date(trim(replace(replace(started_at,'T',' '),'Z','')))=?`), and flags
+    # divergence > $0.01. This is a rewrite of the original check, which
+    # compared two RETIRED query shapes (a `LIKE ? || '%'` prefix match and a
+    # `date(replace(replace(...)))` match without trim) that were provably
+    # IDENTICAL on every realistic timestamp format tested — canonical,
+    # space-separated, T-no-Z, UTC-offset, non-zero-padded, and the range-query
+    # shape all summed to 15; only adding `trim()` (catching a leading-space
+    # timestamp) diverged, at 47. That means the original check was a
+    # tautology: LIKE and DATE could never disagree, so its green carried no
+    # information. Root cause history this check guards against: the
+    # 2026-06-11 incident where `cast budget` reported $0 while the hard limit
+    # fired $375.83 (timestamp-format divergence) — if a malformed timestamp
+    # ever lands, the fast indexed range query silently under-counts while the
+    # trim()-hardened reference still catches it.
+    # Honest degradation preserved: absent table/column → INFO, query failure
+    # → INFO, no cost data → INFO, never a false OK.
     local _sc_out _sc_rc
     _sc_out="$(python3 - "$CAST_DB_PATH" <<'PYEOF'
 import sqlite3, sys, datetime
-from datetime import timezone
+from datetime import timezone, timedelta
 
 db = sys.argv[1]
-today = datetime.datetime.now(timezone.utc).strftime('%Y-%m-%d')
+now = datetime.datetime.now(timezone.utc)
+today = now.strftime('%Y-%m-%d')
+today_next = (now + timedelta(days=1)).strftime('%Y-%m-%d')
 
 try:
     conn = sqlite3.connect(db, timeout=5)
     conn.row_factory = sqlite3.Row
-    # LIKE-based (matches consolidated budget-alert stage)
-    like_row = conn.execute(
-        "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs WHERE started_at LIKE ? || '%'",
-        (today,)
+    # Production shape (cast status ~L453 / cast budget / SubagentStop
+    # budget-alert, post-P-1) — plain YYYY-MM-DD bounds, no time suffix.
+    range_row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs "
+        "WHERE started_at >= ? AND started_at < ?",
+        (today, today_next)
     ).fetchone()
-    like_spend = float(like_row[0]) if like_row else 0.0
-    # Normalized DATE-based (matches fixed cast budget query)
+    range_spend = float(range_row[0]) if range_row else 0.0
+    # Tolerant reference: trims whitespace + normalizes T/Z before extracting DATE
     date_row = conn.execute(
         "SELECT COALESCE(SUM(cost_usd),0) FROM agent_runs "
-        "WHERE date(replace(replace(started_at,'T',' '),'Z',''))=?",
+        "WHERE date(trim(replace(replace(started_at,'T',' '),'Z','')))=?",
         (today,)
     ).fetchone()
     date_spend = float(date_row[0]) if date_row else 0.0
     conn.close()
-    if like_spend == 0.0 and date_spend == 0.0:
+    if range_spend == 0.0 and date_spend == 0.0:
         print("INFO:no cost data today")
-    elif abs(like_spend - date_spend) > 0.01:
-        print("WARN:LIKE=${:.4f} DATE=${:.4f}".format(like_spend, date_spend))
+    elif abs(range_spend - date_spend) > 0.01:
+        print("WARN:RANGE=${:.4f} TOLERANT=${:.4f}".format(range_spend, date_spend))
     else:
-        print("OK:{:.4f}".format(like_spend))
+        print("OK:{:.4f}".format(range_spend))
 except sqlite3.OperationalError as e:
     err = str(e).lower()
     if 'no such table' in err or 'no such column' in err:
@@ -2688,11 +2845,11 @@ PYEOF
       printf "%b spend-consistency: %s\n" "$INFO" "$_sc_msg"
     elif echo "$_sc_out" | grep -q "^WARN:"; then
       _sc_msg="${_sc_out#WARN:}"
-      printf "%b spend-consistency: %s — mismatch >$0.01 (timestamp format divergence)\n" "$WARN" "$_sc_msg"
+      printf "%b spend-consistency: %s — mismatch >\$0.01 (timestamp format divergence)\n" "$WARN" "$_sc_msg"
       overall_ok=0
     elif echo "$_sc_out" | grep -q "^OK:"; then
       _sc_msg="${_sc_out#OK:}"
-      printf "%b spend-consistency: \$%s (LIKE ≈ DATE, within \$0.01)\n" "$OK" "$_sc_msg"
+      printf "%b spend-consistency: \$%s (RANGE ≈ TOLERANT, within \$0.01)\n" "$OK" "$_sc_msg"
     else
       printf "%b spend-consistency: unexpected output — %s\n" "$INFO" "$_sc_out"
     fi
