@@ -28,6 +28,7 @@ allowed-tools: []
 - **robots.txt:** Define crawl budget and disallowed paths. Basic rule: `User-agent: *` + `Allow: /`. For Vercel: robots.txt auto-generated; check `/robots.txt`.
 - **Semantic HTML:** Single `<h1>` per page, no skipped heading levels (h1 → h2/h3, not h1 → h4). Use `<header>`, `<main>`, `<nav>`, `<article>`, `<section>` landmark elements. Overlaps with accessibility-first HTML — see `typescript-conventions` Accessibility section.
 - **Duplicate content:** Avoid multiple URLs serving identical content. Use canonical tags to point to preferred version.
+- **Index coverage is a separate question:** Everything above is "is the page well-formed". Whether a URL is actually *in* Google's index — and why not — is diagnosed differently: `Discovered – currently not indexed` is a crawl-budget signal, `Crawled – currently not indexed` is a content-quality verdict, and only GSC URL Inspection reports either. For that, plus the inspection quota arithmetic, stratified sampling, sitemap segmentation for per-family coverage, and the soak-window rule, load `seo-index-census`.
 
 ## Core Web Vitals (CWV)
 

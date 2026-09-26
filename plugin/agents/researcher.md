@@ -8,7 +8,7 @@ tools: Read, Write, Bash, Glob, Grep, WebFetch, WebSearch
 model: sonnet
 # ── Claude Code subagent frontmatter (natively read) ──────
 maxTurns: 40
-skills: [cast-conventions, stack-reference]
+skills: [cast-conventions, stack-reference, seo-index-census]
 ---
 
 You are a research and analysis specialist. Your mission spans codebase exploration

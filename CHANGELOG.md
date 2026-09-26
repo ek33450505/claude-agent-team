@@ -16,7 +16,9 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
   Google Indexing API is ineligible for `Place`/`Dataset` sites, with the reason, so it is not
   re-proposed. The "safe programmatic pages / penalty risk at scale" rubric is ported as
   credited prior art from `AgriciDaniel/claude-seo` (MIT) — ideas and rubric text only, nothing
-  installed or vendored. Cross-links `seo-checklist` without duplicating it.
+  installed or vendored. Cross-linked with `seo-checklist` in both directions without
+  duplicating it, and declared on the `researcher` agent — the tier that runs an index
+  investigation — rather than on `frontend-qa`, whose scope is per-file `.tsx` review.
 
 ## [10.2.0] — 2026-09-09
 
