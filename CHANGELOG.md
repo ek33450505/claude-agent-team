@@ -4,7 +4,19 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **`skills/seo-index-census`** — index-coverage census discipline for sites with many
+  programmatic routes. Covers the distinction that decides the lever: `Discovered – currently
+  not indexed` is a crawl-budget signal (content depth does nothing for it), `Crawled –
+  currently not indexed` is a content-quality verdict. Also the GSC URL Inspection quota
+  arithmetic (2,000 QPD / 600 QPM per property), stratify-to-measure vs weight-to-project
+  sampling, the pre-registered ≥14-day soak window against GSC's 2–3 day lag, a
+  baseline→compare→history drift pattern, and the GSC MCP silent-failure traps (`sc-domain:`
+  form, ignored `sort_by`, the page-filter + `device`-dimension data loss). Records that the
+  Google Indexing API is ineligible for `Place`/`Dataset` sites, with the reason, so it is not
+  re-proposed. The "safe programmatic pages / penalty risk at scale" rubric is ported as
+  credited prior art from `AgriciDaniel/claude-seo` (MIT) — ideas and rubric text only, nothing
+  installed or vendored. Cross-links `seo-checklist` without duplicating it.
 
 ## [10.2.0] — 2026-09-09
 

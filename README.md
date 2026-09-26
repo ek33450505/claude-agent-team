@@ -450,7 +450,7 @@ anyway. See [docs/TOKEN-OPTIMIZATION.md](docs/TOKEN-OPTIMIZATION.md).
 | [Known Limitations](docs/known-limitations.md) | What CAST cannot do, and why |
 | [Full Docs Index](docs/README.md) | Everything, with one-line descriptions |
 
-CAST ships <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash commands and <!-- CAST_SKILL_COUNT -->18<!-- /CAST_SKILL_COUNT --> on-demand skills.
+CAST ships <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash commands and <!-- CAST_SKILL_COUNT -->19<!-- /CAST_SKILL_COUNT --> on-demand skills.
 
 
 ---
