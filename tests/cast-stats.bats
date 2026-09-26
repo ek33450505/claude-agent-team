@@ -65,10 +65,10 @@ teardown() {
   assert_output "21"
 }
 
-@test "gen-cast-stats.sh produces skills=18" {
+@test "gen-cast-stats.sh produces skills=19" {
   run jq -r '.skills' < "$CANONICAL_JSON"
   assert_success
-  assert_output "18"
+  assert_output "19"
 }
 
 @test "gen-cast-stats.sh produces a non-empty version field" {
