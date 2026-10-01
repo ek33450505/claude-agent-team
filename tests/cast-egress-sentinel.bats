@@ -76,6 +76,12 @@ teardown() {
   [[ ! -f "$EGRESS_LOG" ]]
 }
 
+@test "local-only MCP (undertone reply) → silent, no ledger line" {
+  run python3 "$DISPATCH" <<< "$(payload mcp__undertone__reply)"
+  assert_success
+  [[ ! -f "$EGRESS_LOG" ]]
+}
+
 @test "unknown MCP server → recorded + flagged unknown" {
   run python3 "$DISPATCH" <<< "$(payload mcp__somenewthing__do)"
   assert_success
