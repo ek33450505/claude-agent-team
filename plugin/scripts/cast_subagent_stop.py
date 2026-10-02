@@ -585,6 +585,26 @@ def stage1_event_file(ctx: Ctx) -> None:
 
 
 # ── Stage 2: transcript glob + 20MB guard + cost + Phase-2 enrichment ────────
+def _compute_cost_usd(entry: dict, total_input, total_output, cache_create, cache_read) -> float:
+    """Anthropic cost formula from a pricing-table entry (pure; mirrored by cast-recost-agent-runs._cost).
+
+    5m cache write = 1.25x input; cache read = entry["cache_read_multiplier"] (default 0.1x).
+    """
+    rate_in = entry.get("cost_per_million_input", 3.0)
+    rate_out = entry.get("cost_per_million_output", 15.0)
+    read_mult = entry.get("cache_read_multiplier", 0.1)
+    return round(
+        (
+            total_input * rate_in
+            + total_output * rate_out
+            + cache_create * rate_in * 1.25
+            + cache_read * rate_in * read_mult
+        )
+        / 1_000_000,
+        6,
+    )
+
+
 def stage2_transcript_cost(ctx: Ctx) -> None:
     """Transcript glob → 20MB guard → cost → enrichment UPDATE WHERE id=fast_row_id.
 
@@ -804,8 +824,8 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                 ctx.file_class = classify_files(ctx.edited_files)
 
                 # Load pricing table
-                rate_in = 3.0
-                rate_out = 15.0
+                # Load pricing table (missing file/entry => {} => helper defaults 3/15/0.1)
+                entry: dict = {}
                 try:
                     if pricing_path and os.path.isfile(pricing_path):
                         with open(pricing_path, "r") as pf:
@@ -813,20 +833,13 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
                         models = pricing.get("models", {})
                         model_key = transcript_model or ""
                         entry = models.get(model_key) or models.get("_default") or {}
-                        rate_in = entry.get("cost_per_million_input", 3.0)
-                        rate_out = entry.get("cost_per_million_output", 15.0)
                 except Exception as _pe:
+                    entry = {}
                     if log_hook_failure:
                         log_hook_failure("cast-subagent-stop-hook:pricing_load", -1, str(_pe), sess)
 
                 # Anthropic full cost formula (cache tokens dominate)
-                cr = cache_read or 0
-                cc = cache_create or 0
-                cost_usd = round(
-                    (total_input * rate_in + total_output * rate_out + cc * rate_in * 1.25 + cr * rate_in * 0.1)
-                    / 1_000_000,
-                    6,
-                )
+                cost_usd = _compute_cost_usd(entry, total_input, total_output, cache_create or 0, cache_read or 0)
             else:
                 if log_hook_failure:
                     log_hook_failure(

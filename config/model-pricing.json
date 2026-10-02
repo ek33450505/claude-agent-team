@@ -1,6 +1,6 @@
 {
-  "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-09-01.",
-  "_note": "Rates verified against https://platform.claude.com/docs/en/about-claude/pricing on 2026-09-01. _default is used when a model id is not in the table (approximate-but-nonzero). Consumers derive cache rates from cost_per_million_input: 5m cache write = 1.25x, cache read = 0.1x (scripts/cast_subagent_stop.py). KNOWN GAP: Claude Fable 5.1 / Mythos 5.1 price cache reads at 0.025x, not 0.1x, and the hook applies the flat 0.1x to every model — so if either model ever enters the record, its cache reads will be overstated 4x. Neither has any rows today; fix the hook before adding one.",
+  "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-10-02.",
+  "_note": "Rates verified against https://platform.claude.com/docs/en/about-claude/pricing on 2026-10-02. _default is used when a model id is not in the table (approximate-but-nonzero). Consumers derive cache rates from cost_per_million_input: 5m cache write = 1.25x, cache read = cache_read_multiplier (optional per-model field; absent => 0.1x). Opus 5.5 reads cache at 0.05x; Fable 5.1 / Mythos 5.1 at 0.025x. Shared by scripts/cast_subagent_stop.py (_compute_cost_usd) and scripts/cast-recost-agent-runs.py (_cost).",
   "models": {
     "_default": {
       "cost_per_million_input": 3.0,
@@ -8,9 +8,30 @@
       "tier": "cloud",
       "provider": "anthropic"
     },
+    "claude-mythos-5-1": {
+      "cost_per_million_input": 10.0,
+      "cost_per_million_output": 50.0,
+      "cache_read_multiplier": 0.025,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-opus-5-5": {
+      "cost_per_million_input": 4.0,
+      "cost_per_million_output": 20.0,
+      "cache_read_multiplier": 0.05,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-sonnet-5-5": {
+      "cost_per_million_input": 2.0,
+      "cost_per_million_output": 10.0,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
     "claude-fable-5-1": {
       "cost_per_million_input": 10.0,
       "cost_per_million_output": 50.0,
+      "cache_read_multiplier": 0.025,
       "tier": "cloud",
       "provider": "anthropic"
     },
