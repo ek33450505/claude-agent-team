@@ -1217,7 +1217,18 @@ sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_
 # columns, data, the session_id FK, and every index; no-op when no CHECK exists.
 _DROP_CHECK_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/cast-db-drop-status-check.py"
 if [ -f "$_DROP_CHECK_HELPER" ] && command -v python3 >/dev/null 2>&1; then
-  CAST_DB_PATH="$DB_PATH" python3 "$_DROP_CHECK_HELPER" "$DB_PATH" >&2 || true
+  _drop_rc=0
+  CAST_DB_PATH="$DB_PATH" python3 "$_DROP_CHECK_HELPER" "$DB_PATH" >&2 || _drop_rc=$?
+  if [ "$_drop_rc" -ne 0 ]; then
+    # Loud and durable, never fatal: a failed migration leaves the row-dropping
+    # CHECK in place, so say so on stderr AND persist a line for `cast doctor`/triage.
+    _drop_msg="[cast-db-init] WARN: agent_runs status CHECK migration FAILED (rc=${_drop_rc}) — agent_runs may be silently dropping rows; run: python3 ${_DROP_CHECK_HELPER} ${DB_PATH}"
+    echo "$_drop_msg" >&2
+    {
+      mkdir -p "${HOME}/.claude/logs" &&
+        printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_drop_msg" >>"${HOME}/.claude/logs/hook-errors.log"
+    } 2>/dev/null || true
+  fi
 fi
 
 if [ "$_columns_added" -eq 1 ]; then
