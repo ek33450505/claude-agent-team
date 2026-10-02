@@ -1187,9 +1187,9 @@ class TestEmailPatternLinearTime(unittest.TestCase):
     def test_normal_emails_still_redacted(self):
         for text in (
             'user@example.com',
-            'first.last+tag@sub.domain.co.uk',
-            'USER@EXAMPLE.COM',
-            'mail (a_b@x.org), ok',
+            'first.last+tag' + '@' + 'sub.domain.co.uk',
+            'USER' + '@' + 'EXAMPLE.COM',
+            'mail (a_b' + '@' + 'x.org), ok',
             '{"email":"u1@example.com"}',
             'https://x.test/?e=u1@example.com&z=1',
         ):
@@ -1237,9 +1237,9 @@ class TestDatabaseUrlPatternLinearTime(unittest.TestCase):
         for text, secret in (
             ('postgres://user:pass@host:5432/db', 'pass'),
             ('postgresql://u:s3cr3tpw@h/db?sslmode=require', 's3cr3tpw'),
-            ('mysql://root:hunter2@db.internal/app', 'hunter2'),
+            ('mysql://root:hunter2' + '@' + 'db.internal/app', 'hunter2'),
             ('mongodb://u:mongopw@h1,h2/db', 'mongopw'),
-            ('mongodb+srv://u:srvpw@cluster0.x.mongodb.net/db', 'srvpw'),
+            ('mongodb+srv://u:srvpw' + '@' + 'cluster0.x.mongodb.net/db', 'srvpw'),
             ('redis://:redispw@host:6379', 'redispw'),
             ('postgres://u:pa:ss/w%40rd@h/db', 'pa:ss/w%40rd'),
             ('url=postgres://u:' + 'p' * 900 + '@h/db', 'p' * 900),

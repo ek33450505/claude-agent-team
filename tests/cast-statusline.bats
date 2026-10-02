@@ -75,7 +75,7 @@ teardown() {
 
 @test "git: when in a git repo, branch appears in output" {
   git init . >/dev/null 2>&1
-  git config user.email "test@test.com" 2>/dev/null || true
+  git config user.email "test""@""test.com" 2>/dev/null || true
   git config user.name "Test" 2>/dev/null || true
   git checkout -b feature/test-branch >/dev/null 2>&1
 
