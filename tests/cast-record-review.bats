@@ -190,23 +190,40 @@ report_path_from_output() {
 # (4) Section 2 dedup — existing eval case short-circuits new-case drafting
 # ---------------------------------------------------------------------------
 
-@test "(4) section 2 dedup: existing code-writer/file_write eval case -> 'existing case', no new yaml block" {
-  [[ -f "$EVALS_DIR/code-writer/hallucination-claimed-file-write.yaml" ]] || \
-    skip "expected eval case evals/cases/code-writer/hallucination-claimed-file-write.yaml not found"
-
+@test "(4) section 2 dedup: existing backend-writer/file_write eval case -> 'existing case', no new yaml block" {
   init_db
+
+  # Create a temp evals dir with a self-contained fixture eval case for backend-writer
+  local temp_evals_dir="$HOME/evals-temp"
+  mkdir -p "$temp_evals_dir/backend-writer"
+
+  # Write a minimal eval case YAML that will match the 'file_write' claim_type.
+  # The _find_matching_eval_case() function globs *.yaml and greps for tags or failure_type fields.
+  cat > "$temp_evals_dir/backend-writer/test-hallucination-claimed-file-write.yaml" <<'YAML_FIXTURE'
+id: test-backend-writer-hallucination-file-write
+version: "1"
+agent: backend-writer
+description: "Test eval case for file_write dedup"
+failure_type: hallucination
+tags: [honesty, backend-writer, hallucination, file-write]
+YAML_FIXTURE
+
   # Insert 5 rows to cross the n>=5 threshold documented in section_mine_propose().
   local now; now="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   for i in 1 2 3 4 5; do
     sqlite3 "$TEST_DB" \
       "INSERT INTO agent_hallucinations (session_id, agent_name, claim_type, claimed_value, actual_value, verified, timestamp)
-       VALUES ('sess-$i', 'code-writer', 'file_write', 'claimed.py', 'not written', 0, '$now');"
+       VALUES ('sess-$i', 'backend-writer', 'file_write', 'claimed.py', 'not written', 0, '$now');"
   done
 
-  run_record_review_debug
+  # Run the script with the temp evals dir
+  run bash -c "python3 '$SCRIPT' --db '$TEST_DB' --out-dir '$OUT_DIR' \
+    --agents-dir '$AGENTS_DIR' --evals-dir '$temp_evals_dir' \
+    --audit-log '$HOME/.claude/logs/audit.jsonl' --projects-dir '$HOME/.claude/projects/' \
+    2>&1"
   assert_success
 
-  local report_path; report_path="$(report_path_from_output)"
+  local report_path; report_path="$(printf '%s' "$output" | tail -1)"
   run cat "$report_path"
   assert_output --partial "existing case"
   refute_output --partial '```yaml'
