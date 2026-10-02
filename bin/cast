@@ -2887,6 +2887,53 @@ PYEOF
       printf "%b crashed-sessions: %s in last 7d (below threshold %s)\n" "$OK" "${_cs_out:-0}" "$_cs_threshold"
     fi
 
+    # ── model-pricing coverage ───────────────────────────────────────────────
+    # config/model-pricing.json is keyed by exact model id; any id missing from it
+    # is silently priced at _default. This recurred three times as new models
+    # shipped (Opus 4.8, Opus 5, Opus 5.5 / Sonnet 5.5) with no warning — surface
+    # it. started_at is uniform ISO-8601 T/Z, so a plain half-open predicate on the
+    # raw column is correct (and index-friendly). '<synthetic>' rows are not models.
+    local _mp_file _mp_models _mp_rc _mp_res
+    _mp_file="${HOME}/.claude/config/model-pricing.json"
+    if [ ! -r "$_mp_file" ]; then
+      printf "%b model-pricing: config not found\n" "$INFO"
+    else
+      _mp_models="$(sqlite3 "$CAST_DB_PATH" \
+        "SELECT DISTINCT model FROM agent_runs \
+         WHERE started_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-7 days') \
+           AND model IS NOT NULL AND model <> '' AND model NOT LIKE '<%';" 2>&1)"
+      _mp_rc=$?
+      if [ $_mp_rc -ne 0 ]; then
+        printf "%b model-pricing: unavailable (db query failed)\n" "$INFO"
+      else
+        _mp_res="$(MP_MODELS="$_mp_models" python3 - "$_mp_file" <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    priced = set(json.load(open(sys.argv[1])).get("models", {})) - {"_default"}
+except Exception:
+    print("ERR")
+    sys.exit(0)
+seen = sorted({l.strip() for l in os.environ.get("MP_MODELS", "").splitlines() if l.strip()})
+miss = [m for m in seen if m not in priced]
+print("%d|%d|%s" % (len(seen), len(miss), ", ".join(miss)))
+PY
+)" || _mp_res="ERR"
+        case "$_mp_res" in
+          ""|ERR)
+            printf "%b model-pricing: unavailable (config unparseable)\n" "$INFO" ;;
+          *)
+            local _mp_n="${_mp_res%%|*}" _mp_rest="${_mp_res#*|}"
+            local _mp_miss="${_mp_rest%%|*}" _mp_ids="${_mp_rest#*|}"
+            if [ "$_mp_miss" -gt 0 ] 2>/dev/null; then
+              printf "%b model-pricing: %s model(s) seen in 7d priced at _default — add to config/model-pricing.json: %s\n" "$WARN" "$_mp_miss" "$_mp_ids"
+              overall_ok=0
+            else
+              printf "%b model-pricing: all %s model(s) seen in 7d are priced\n" "$OK" "$_mp_n"
+            fi ;;
+        esac
+      fi
+    fi
+
     # ── redaction_failures ────────────────────────────────────────────────────
     # Quiet-pass check: silent when no [REDACTION_FAILED] marker rows exist at all.
     # WARN only on UNRESOLVED incidents markers — resolution_status NOT IN
