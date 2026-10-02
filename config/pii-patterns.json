@@ -124,6 +124,28 @@
       "regex": "(?i)(?:secret|password|passwd|pwd)[\\s]*[=:][\\s]*['\"]?([A-Za-z0-9_\\-!@#$%^&*]{8,})['\"]?",
       "group": 1,
       "score": 0.75
+    },
+    {
+      "name": "RESEND_KEY",
+      "entity_type": "RESEND_KEY",
+      "description": "Resend API key (re_ prefix, long mixed letter/digit body)",
+      "regex": "\\bre_(?-i:(?=[A-Za-z0-9_]*[A-Z])(?=[A-Za-z0-9_]*[a-z])(?=[A-Za-z0-9_]*\\d)[A-Za-z0-9_]{20,})",
+      "score": 0.95
+    },
+    {
+      "name": "GITLAB_TOKEN",
+      "entity_type": "GITLAB_TOKEN",
+      "description": "GitLab token (pat/oas/dt/rt/rtr/cbt/ptt/ft/imt/agent/wt/soat/ffct prefixes)",
+      "regex": "\\bgl(?:pat|oas|dt|rtr?|cbt|ptt|ft|imt|agent|wt|soat|ffct)-[A-Za-z0-9_\\-]{20,}",
+      "score": 0.98
+    },
+    {
+      "name": "VENDOR_TOKEN_ASSIGNMENT",
+      "entity_type": "VENDOR_TOKEN_ASSIGNMENT",
+      "description": "Zenodo/Cloudflare API token assignment (context-anchored; bare tokens have no prefix and are uncoverable by regex)",
+      "regex": "(?i)(?:zenodo|cloudflare|cf)[_-]?(?:api[_-]?)?(?:access[_-]?)?token['\"]?\\s*[:=]\\s*['\"]?([A-Za-z0-9_\\-]{30,})",
+      "group": 1,
+      "score": 0.85
     }
   ]
 }
