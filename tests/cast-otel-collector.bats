@@ -326,9 +326,20 @@ _stop_collector_http() {
 @test "HTTP: chunked POST to /v1/logs is de-chunked, parsed, and lands in otel_events" {
   local port=48391
   if ! _start_collector_http "$port"; then
-    if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector daemon does not start on GH macOS runner (tracked: v9.5.2 follow-up)"
-    fi
+    # Audit T-5 probe: no skip on the GH macOS lane — a red run must say WHY.
+    {
+      echo "# T-5 DIAG: collector did not accept connections on 127.0.0.1:$port"
+      echo "# T-5 DIAG: uname=$(uname -sr) python3=$(python3 --version 2>&1) GITHUB_ACTIONS=${GITHUB_ACTIONS:-} RUNNER_OS=${RUNNER_OS:-}"
+      if [[ -n "${COLLECTOR_HTTP_PID:-}" ]] && kill -0 "$COLLECTOR_HTTP_PID" 2>/dev/null; then
+        echo "# T-5 DIAG: collector pid $COLLECTOR_HTTP_PID still ALIVE (bound elsewhere / slow start)"
+      else
+        echo "# T-5 DIAG: collector pid ${COLLECTOR_HTTP_PID:-none} EXITED before listening"
+      fi
+      echo "# T-5 DIAG: collector log tail:"
+      tail -20 "$BATS_TEST_TMPDIR/collector-http.log" 2>&1 | sed 's/^/# /'
+      echo "# T-5 DIAG: lsof port: $(lsof -ti "tcp:$port" 2>&1 | tr '\n' ' ')"
+    } >&3
+    _stop_collector_http "$port"
     false
   fi
 
@@ -364,7 +375,7 @@ print(resp.status)
   local port=48392
   if ! _start_collector_http "$port"; then
     if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector daemon does not start on GH macOS runner (tracked: v9.5.2 follow-up)"
+      skip "collector daemon did not accept connections on GH macOS runner (attempt-first skip, only reached if daemon fails to start) — re-triage 2026-10-03: one sibling un-skipped as probe (audit T-5)"
     fi
     false
   fi
@@ -391,7 +402,7 @@ print(resp.status)
   local port=48393
   if ! _start_collector_http "$port"; then
     if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector daemon does not start on GH macOS runner (tracked: v9.5.2 follow-up)"
+      skip "collector daemon did not accept connections on GH macOS runner (attempt-first skip, only reached if daemon fails to start) — re-triage 2026-10-03: one sibling un-skipped as probe (audit T-5)"
     fi
     false
   fi
