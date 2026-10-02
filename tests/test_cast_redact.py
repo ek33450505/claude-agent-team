@@ -1147,5 +1147,50 @@ class TestVendorSecretGaps(unittest.TestCase):
             self.assertEqual(cfg_regex[etype], fallback[etype])
 
 
+class TestEmailPatternLinearTime(unittest.TestCase):
+    """EMAIL_ADDRESS local part was an unbounded `+` -> quadratic on long [A-Za-z0-9._-]
+    runs with no '@' (14 s+ on 90 KB of text). Bounded to {1,64} / {1,253}."""
+
+    _TIMING_INPUTS = {
+        'x_re': 'x_re_1' + 'ab-' * 30000,
+        'glpat': 'glpat-' * 16000,
+        'dotrun': 'a.' * 50000 + '1',
+        'token': 'token ' + 'x-' * 50000,
+    }
+
+    def test_long_no_at_runs_are_fast(self):
+        import time
+        for name, text in self._TIMING_INPUTS.items():
+            with self.subTest(name=name):
+                start = time.monotonic()
+                _redact(text)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 0.5, f'{name} took {elapsed:.2f}s')
+
+    def test_normal_emails_still_redacted(self):
+        for text in (
+            'user@example.com',
+            'first.last+tag@sub.domain.co.uk',
+            'USER@EXAMPLE.COM',
+            'mail (a_b@x.org), ok',
+            '{"email":"u1@example.com"}',
+            'https://x.test/?e=u1@example.com&z=1',
+        ):
+            with self.subTest(text=text):
+                out = _redact(text)
+                self.assertIn('<EMAIL_ADDRESS>', out)
+                self.assertNotIn('@', out)
+
+    def test_non_emails_not_redacted(self):
+        for text in ('foo@bar', '@handle', 'version 1.2.3', 'a@b.c'):
+            with self.subTest(text=text):
+                self.assertNotIn('<EMAIL_ADDRESS>', _redact(text))
+
+    def test_overlong_local_part_still_redacts_domain(self):
+        out = _redact('z' * 70 + '@example.com')
+        self.assertIn('<EMAIL_ADDRESS>', out)
+        self.assertNotIn('example.com', out)
+
+
 if __name__ == '__main__':
     unittest.main()

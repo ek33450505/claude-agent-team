@@ -52,7 +52,10 @@ PATTERNS_CONFIG = os.path.expanduser("~/.claude/config/pii-patterns.json")
 
 _STANDARD_FALLBACK_PATTERNS = [
     # Standard PII
-    ("EMAIL_ADDRESS",   r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),
+    # Local part capped at 64 (RFC 5321) and domain at 253: the unbounded `+` was
+    # quadratic on long no-@ runs. No leading \b: it would stop a >64-char local part
+    # from matching mid-run (leak); instead the last 64 chars + domain are redacted.
+    ("EMAIL_ADDRESS",   r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,253}\.[A-Za-z]{2,}\b"),
     ("PHONE_NUMBER",    r"\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
     ("US_SSN",          r"\b\d{3}-\d{2}-\d{4}\b"),
     ("CREDIT_CARD",     r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6011[0-9]{12}|3(?:0[0-5]|[68][0-9])[0-9]{11})\b"),
