@@ -87,3 +87,24 @@ teardown() {
   assert_output --partial "Offline queue:"
   assert_output --partial "Last replay:"
 }
+
+@test "cast-connectivity.sh: replay treats a quote-bearing queue filename as data (no code injection)" {
+  # PATH-shim ping so replay proceeds without touching the network
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$BATS_TEST_TMPDIR/bin/ping"
+  chmod +x "$BATS_TEST_TMPDIR/bin/ping"
+
+  mkdir -p "$CAST_OFFLINE_QUEUE_DIR"
+  # Filename closes the python string literal and concatenates a payload that
+  # genuinely executes under the old interpolated form: it writes a
+  # relative-path sentinel into the process cwd before the outer open() fails.
+  local evil="x'+str(open('pwned','w').write('1'))+'.json"
+  printf '{"agent":"bash-specialist","task":"hello"}' > "$CAST_OFFLINE_QUEUE_DIR/$evil"
+
+  cd "$BATS_TEST_TMPDIR"
+  run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$CAST_CONNECTIVITY_SH" replay
+  assert_success
+  [ ! -e "$BATS_TEST_TMPDIR/pwned" ]
+  assert_output --partial "agent=bash-specialist task=hello"
+  assert_output --partial "1 replayed, 0 failed"
+}

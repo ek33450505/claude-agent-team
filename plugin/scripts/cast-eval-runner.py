@@ -164,8 +164,12 @@ def _substitute(
                          template quotes and applies proper shell quoting)
       {placeholder}    — bare form; replaced with shlex.quote(value)
 
-    The '{placeholder}' form is handled FIRST so the bare-form pass does not
-    double-substitute.
+    Substitution is SINGLE-PASS: one compiled regex matches either form for
+    the six known keys (quoted alternative first, so '{x}' consumes its
+    quotes) and re.sub never rescans replacement text.  A value that itself
+    contains a token such as {session_id} (e.g. the graded agent's own
+    response in {output}) is therefore emitted verbatim inside its quote-seal
+    and can never be re-substituted.  Unknown {foo} tokens are left untouched.
     """
     substitutions = {
         'output_file': output_file,
@@ -175,18 +179,13 @@ def _substitute(
         'agent': agent,
         'since': since,
     }
-    for key, value in substitutions.items():
-        quoted = shlex.quote(value)
-        # Replace YAML-quoted form first: '{key}' (including surrounding single quotes)
-        # → shlex.quote(value).  The f-string f"'{{{key}}}'" evaluates to e.g.
-        # "'{output_file}'" — exactly the token the YAML author writes.  Replacing the
-        # WHOLE token (quotes + braces) with shlex.quote(value) means shlex.quote owns
-        # all shell quoting; there is no residual bare {key} left for the pass below.
-        cmd = cmd.replace(f"'{{{key}}}'", quoted)
-        # Replace bare form: {key} → shlex.quote(value)
-        # Handles templates that use {key} without surrounding single quotes.
-        cmd = cmd.replace(f'{{{key}}}', quoted)
-    return cmd
+    keys = '|'.join(re.escape(k) for k in substitutions)
+    pattern = re.compile(r"'\{(" + keys + r")\}'|\{(" + keys + r")\}")
+
+    def _repl(m: 're.Match[str]') -> str:
+        return shlex.quote(substitutions[m.group(1) or m.group(2)])
+
+    return pattern.sub(_repl, cmd)
 
 
 def _substitute_raw(

@@ -10,6 +10,8 @@ commit fc7f6fa). Every cost recorded before that correction used a wrong rate:
     claude-opus-4-8            $15/$75  -> real $5/$25          (3.0x OVERSTATED)
     claude-haiku-4-5-20251001  $0.80/$4 (Haiku 3.5's price) -> real $1/$5
     claude-fable-5             absent -> _default; real $10/$50
+    claude-opus-5-5 / claude-sonnet-5-5
+                               absent -> _default (2026-10-02); real $4/$20 and $2/$10
 
 agent_runs.cost_usd is read by the statusline, the budget gates, `bin/cast cost`,
 `just -g cost` and the dashboard, so the error propagates everywhere. The token columns on
@@ -30,12 +32,8 @@ WHAT IT WILL NOT DO
 Cache rates are derived the same way cast_subagent_stop.py derives them (1.25x write,
 0.1x read of base input) so a recomputed row is identical to a freshly recorded one.
 
-ONE DELIBERATE DIVERGENCE. This script applies the real 0.025x cache-read rate for
-claude-fable-5-1 / claude-mythos-5-1; the hook still flat-rates every model at 0.1x (a known
-gap recorded in config/model-pricing.json's _note). Both models have ZERO rows today, so the
-divergence is inert. If either starts accruing rows before the hook is fixed, this script
-would price history correctly while the hook keeps overstating new rows 4x — fix the hook
-first in that case, rather than removing the override here.
+The cache-read multiplier comes from each model's cache_read_multiplier in the pricing
+config (default 0.1x), shared with the hook, so the two cannot diverge.
 
 Usage:
   scripts/cast-recost-agent-runs.py               # dry run: report only, writes nothing
@@ -55,9 +53,7 @@ from pathlib import Path
 DB_PATH = Path(os.environ.get('CAST_DB_PATH', Path.home() / '.claude' / 'cast.db'))
 PRICING_PATH = Path.home() / '.claude' / 'config' / 'model-pricing.json'
 CACHE_WRITE_MULT = 1.25
-CACHE_READ_MULT = 0.1
-# Fable 5.1 / Mythos 5.1 read cache at 0.025x, not 0.1x.
-CACHE_READ_OVERRIDES = {'claude-fable-5-1': 0.025, 'claude-mythos-5-1': 0.025}
+CACHE_READ_MULT = 0.1  # default; per-model override via cache_read_multiplier in the pricing config
 
 
 def _log(msg: str) -> None:
@@ -83,7 +79,7 @@ def _cost(rates: dict, model: str, tin: int, tout: int, cc: int, cr: int) -> flo
     entry = rates.get(model) or rates['_default']
     rin = entry['cost_per_million_input']
     rout = entry['cost_per_million_output']
-    read_mult = CACHE_READ_OVERRIDES.get(model, CACHE_READ_MULT)
+    read_mult = entry.get('cache_read_multiplier', CACHE_READ_MULT)
     return round(
         (tin * rin + tout * rout + cc * rin * CACHE_WRITE_MULT + cr * rin * read_mult) / 1_000_000, 6
     )

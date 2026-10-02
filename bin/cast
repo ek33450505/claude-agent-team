@@ -2261,6 +2261,39 @@ routines incidents plan_sessions memory_consolidation_runs archived_memories bud
     overall_ok=0
   fi
 
+  # 2b. agent_runs status CHECK must be gone (it silently drops rows with
+  # 'abandoned'/'fallback'/'unknown'). Reuses the migration helper's own predicate;
+  # SQL `--` comments are stripped first so the DDL's "-- no CHECK: ..." note
+  # cannot false-positive. A query/helper error is INFO, never OK.
+  local _sc_helper="${CAST_SCRIPTS_DIR}/cast-db-drop-status-check.py"
+  [ -f "$_sc_helper" ] || _sc_helper="${CAST_REPO_DIR:-}/scripts/cast-db-drop-status-check.py"
+  local _sc_out _sc_rc=0
+  _sc_out="$(CAST_SC_HELPER="$_sc_helper" python3 - "$CAST_DB_PATH" <<'PYEOF' 2>/dev/null
+import importlib.util, os, re, sqlite3, sys
+try:
+    spec = importlib.util.spec_from_file_location("_sc_helper", os.environ["CAST_SC_HELPER"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    con = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
+    row = con.execute("SELECT sql FROM sqlite_master WHERE name='agent_runs'").fetchone()
+    if not row or not row[0]:
+        print("unknown"); sys.exit(0)
+    ddl = re.sub(r'--[^\n]*', '', row[0])
+    print("present" if mod._has_status_check(ddl) else "absent")
+except Exception:
+    print("unknown")
+PYEOF
+  )" || _sc_rc=$?
+  if [ "$_sc_rc" -ne 0 ]; then _sc_out="unknown"; fi
+  case "$_sc_out" in
+    absent) printf "%b agent_runs status check: none (no row-dropping CHECK)\n" "$OK" ;;
+    present)
+      printf "%b agent_runs status check: legacy CHECK still present — rows may be silently dropped (run: python3 %s %s)\n" "$WARN" "$_sc_helper" "$CAST_DB_PATH"
+      overall_ok=0
+      ;;
+    *) printf "%b agent_runs status check: could not determine\n" "$INFO" ;;
+  esac
+
   # 3. Hooks registered
   local settings_file="${HOME}/.claude/settings.json"
   local hook_count=0
@@ -2885,6 +2918,53 @@ PYEOF
       overall_ok=0
     else
       printf "%b crashed-sessions: %s in last 7d (below threshold %s)\n" "$OK" "${_cs_out:-0}" "$_cs_threshold"
+    fi
+
+    # ── model-pricing coverage ───────────────────────────────────────────────
+    # config/model-pricing.json is keyed by exact model id; any id missing from it
+    # is silently priced at _default. This recurred three times as new models
+    # shipped (Opus 4.8, Opus 5, Opus 5.5 / Sonnet 5.5) with no warning — surface
+    # it. started_at is uniform ISO-8601 T/Z, so a plain half-open predicate on the
+    # raw column is correct (and index-friendly). '<synthetic>' rows are not models.
+    local _mp_file _mp_models _mp_rc _mp_res
+    _mp_file="${HOME}/.claude/config/model-pricing.json"
+    if [ ! -r "$_mp_file" ]; then
+      printf "%b model-pricing: config not found\n" "$INFO"
+    else
+      _mp_models="$(sqlite3 "$CAST_DB_PATH" \
+        "SELECT DISTINCT model FROM agent_runs \
+         WHERE started_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-7 days') \
+           AND model IS NOT NULL AND model <> '' AND model NOT LIKE '<%';" 2>&1)"
+      _mp_rc=$?
+      if [ $_mp_rc -ne 0 ]; then
+        printf "%b model-pricing: unavailable (db query failed)\n" "$INFO"
+      else
+        _mp_res="$(MP_MODELS="$_mp_models" python3 - "$_mp_file" <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    priced = set(json.load(open(sys.argv[1])).get("models", {})) - {"_default"}
+except Exception:
+    print("ERR")
+    sys.exit(0)
+seen = sorted({l.strip() for l in os.environ.get("MP_MODELS", "").splitlines() if l.strip()})
+miss = [m for m in seen if m not in priced]
+print("%d|%d|%s" % (len(seen), len(miss), ", ".join(miss)))
+PY
+)" || _mp_res="ERR"
+        case "$_mp_res" in
+          ""|ERR)
+            printf "%b model-pricing: unavailable (config unparseable)\n" "$INFO" ;;
+          *)
+            local _mp_n="${_mp_res%%|*}" _mp_rest="${_mp_res#*|}"
+            local _mp_miss="${_mp_rest%%|*}" _mp_ids="${_mp_rest#*|}"
+            if [ "$_mp_miss" -gt 0 ] 2>/dev/null; then
+              printf "%b model-pricing: %s model(s) seen in 7d priced at _default — add to config/model-pricing.json: %s\n" "$WARN" "$_mp_miss" "$_mp_ids"
+              overall_ok=0
+            else
+              printf "%b model-pricing: all %s model(s) seen in 7d are priced\n" "$OK" "$_mp_n"
+            fi ;;
+        esac
+      fi
     fi
 
     # ── redaction_failures ────────────────────────────────────────────────────

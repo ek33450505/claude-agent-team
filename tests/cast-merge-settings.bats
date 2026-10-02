@@ -277,3 +277,22 @@ print('ok')
   assert_success
   assert_output "ok"
 }
+
+@test "no settings source sets plansDirectory to a tilde path (never expanded, creates a literal ~ dir)" {
+  run python3 - "$REPO_DIR" <<'PY'
+import glob, json, os, sys
+repo = sys.argv[1]
+files = sorted(glob.glob(os.path.join(repo, "managed-settings.d", "*.json")))
+files.append(os.path.join(repo, "settings.json"))
+assert len(files) > 1, "no fragments found"
+bad = []
+for f in files:
+    v = json.load(open(f)).get("plansDirectory")
+    if isinstance(v, str) and v.startswith("~"):
+        bad.append((os.path.basename(f), v))
+assert not bad, f"tilde plansDirectory: {bad}"
+print("ok")
+PY
+  assert_success
+  assert_output "ok"
+}

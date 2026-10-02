@@ -81,6 +81,20 @@ _STANDARD_FALLBACK_PATTERNS = [
     ("NPM_TOKEN",       r"npm_[A-Za-z0-9]{36,}"),
     ("SENDGRID_KEY",    r"SG\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}"),
     ("GOOGLE_API_KEY",  r"AIza[A-Za-z0-9_\-]{35}"),
+    # S-3: Resend (re_) and GitLab tokens are prefix-anchored. The Resend body must be long
+    # and contain an uppercase letter, a lowercase letter AND a digit, evaluated
+    # case-sensitively via (?-i:...) (the module compiles with IGNORECASE, so plain [A-Z]
+    # would not discriminate) — this excludes snake_case identifiers (no uppercase) and
+    # UPPER_SNAKE constants (no lowercase), e.g. re_compile_pattern_v2_handler.
+    # GitLab prefixes per https://docs.gitlab.com/security/tokens/ ("Token prefixes");
+    # no lengths are documented, so a 20+ char body is kept.
+    ("RESEND_KEY",      r"\bre_(?-i:(?=[A-Za-z0-9_]*[A-Z])(?=[A-Za-z0-9_]*[a-z])(?=[A-Za-z0-9_]*\d)[A-Za-z0-9_]{20,})"),
+    ("GITLAB_TOKEN",    r"\bgl(?:pat|oas|dt|rtr?|cbt|ptt|ft|imt|agent|wt|soat|ffct)-[A-Za-z0-9_\-]{20,}"),
+    # Zenodo and Cloudflare API tokens have NO distinctive prefix: a bare token is
+    # uncoverable by regex without surrounding context (a bare high-entropy catch-all
+    # would false-positive everywhere). Only context-anchored assignments are matched.
+    ("VENDOR_TOKEN_ASSIGNMENT",
+     r"""(?i)(?:zenodo|cloudflare|cf)[_-]?(?:api[_-]?)?(?:access[_-]?)?token['"]?\s*[:=]\s*['"]?([A-Za-z0-9_\-]{30,})"""),
 ]
 
 # GENERIC_SECRET's tag-placeholder lookahead (below) is DERIVED from the entity-type
@@ -162,6 +176,10 @@ _COMPILED_PATTERNS: list[tuple[str, re.Pattern]] = [
 #   NPM_TOKEN      → npm_  (prefix alone; the 36+-char body may be pure-alpha with no digit)
 #   SENDGRID_KEY   → SG\.  (prefix; body segments may be pure-alpha)
 #   GOOGLE_API_KEY → AIza  (prefix; 35-char body may be pure-alpha)
+#   RESEND_KEY     → \d  (the body requires a digit, so the existing \d trigger already covers it;
+#                    no re_ trigger — it would widen exposure to the quadratic EMAIL_ADDRESS regex)
+#   GITLAB_TOKEN   → gl(?:pat|oas|...)-  (prefix; body may be pure-alpha)
+#   VENDOR_TOKEN_ASSIGNMENT → token  (keyword, already covered by the GENERIC_SECRET trigger)
 #   GENERIC_SECRET → password|passwd|secret|token  (keyword; "client_secret" is caught via
 #                    "secret" and "access_token" via "token" — value may be pure-alpha, e.g.
 #                    password=hunter has no @, digit, or / and would be missed without this)
@@ -186,6 +204,7 @@ _PII_CANDIDATES: re.Pattern = re.compile(
     r'|npm_'
     r'|SG\.'
     r'|AIza'
+    r'|gl(?:pat|oas|dt|rtr?|cbt|ptt|ft|imt|agent|wt|soat|ffct)-'
     r'|password|passwd|secret|token',
     re.IGNORECASE,
 )

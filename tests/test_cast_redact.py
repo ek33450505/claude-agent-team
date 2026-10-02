@@ -9,6 +9,7 @@ Covers:
     (C1b: closing redaction-engine blind spots — see _PII_CANDIDATES superset invariant test)
 """
 import importlib.util
+import json
 import unittest
 import re
 from pathlib import Path
@@ -646,6 +647,9 @@ class TestPiiCandidatesSuperset(unittest.TestCase):
         'NPM_TOKEN': 'npm_' + 'A' * 36,
         'SENDGRID_KEY': 'SG.' + 'A' * 22 + '.' + 'A' * 43,
         'GOOGLE_API_KEY': 'AIza' + 'A' * 35,
+        'RESEND_KEY': 're_' + 'A1b' * 8,
+        'GITLAB_TOKEN': 'glpat-' + 'A' * 20,
+        'VENDOR_TOKEN_ASSIGNMENT': 'zenodo_token=' + 'A' * 30,
         'GENERIC_SECRET': 'password=hunter',
     }
 
@@ -804,8 +808,9 @@ class TestMachineDerivedPiiCandidatesRatchet(unittest.TestCase):
     """
 
     # Patterns the generator cannot handle and must be exempted.
-    # All patterns are now handled by the machine-derived generator!
-    _UNHANDLEABLE_PATTERNS = frozenset()
+    # RESEND_KEY uses lookaheads (digit AND letter required in the body), which the
+    # simple generator cannot satisfy; it is covered by hand-maintained samples instead.
+    _UNHANDLEABLE_PATTERNS = frozenset({'RESEND_KEY'})
 
     def _generate_sample(self, pattern_str: str) -> str | None:
         """Parse regex pattern and generate a minimal matching sample.
@@ -1061,6 +1066,85 @@ class TestMachineDerivedPiiCandidatesRatchet(unittest.TestCase):
                             )
                     except re.error:
                         pass  # Pattern is invalid; OK to keep exempted.
+
+
+class TestVendorSecretGaps(unittest.TestCase):
+    """S-3: Resend / GitLab / Zenodo+Cloudflare (context-anchored) token patterns.
+
+    Fixtures are built at runtime by concatenation so no real-looking secret literal
+    appears in source (repo gitleaks / pii-scan would flag it).
+    """
+
+    RESEND = 're_' + 'A1b2' * 6
+    GITLAB = 'glpat-' + 'Ab3x' * 6
+    VENDOR = 'Zq9' * 12
+
+    def test_resend_key_redacted(self):
+        result = _redact('key is ' + self.RESEND + ' ok')
+        self.assertNotIn(self.RESEND, result)
+        self.assertIn('<RESEND_KEY>', result)
+
+    def test_gitlab_token_redacted(self):
+        result = _redact('token ' + self.GITLAB + ' here')
+        self.assertNotIn(self.GITLAB, result)
+        self.assertIn('<GITLAB_TOKEN>', result)
+
+    def test_gitlab_other_prefixes_redacted(self):
+        for prefix in ('gldt-', 'glrt-', 'glrtr-', 'glcbt-', 'glffct-', 'gloas-', 'glagent-'):
+            with self.subTest(prefix=prefix):
+                tok = prefix + 'Ab3x' * 6
+                result = _redact('tok ' + tok + ' end')
+                self.assertNotIn(tok, result)
+                self.assertIn('<GITLAB_TOKEN>', result)
+
+    def test_gitlab_short_body_not_redacted(self):
+        text = 'x glpat-' + 'a' * 19 + ' y'
+        self.assertEqual(text, _redact(text))
+
+    def test_resend_identifier_false_positives_not_redacted(self):
+        for text in ('re_compile_pattern_v2_handler', 're_store_user_2fa_enabled_flag_v3',
+                     'RE_MAX_RETRY_COUNT_2026_LIMIT'):
+            with self.subTest(text=text):
+                self.assertEqual(text, _redact(text))
+
+    def test_json_quoted_vendor_keys_redacted(self):
+        for text in ('{"zenodo_token":"%s"}', '"CF_API_TOKEN": "%s"',
+                     '{"cloudflare_api_token":"%s"}'):
+            with self.subTest(text=text):
+                result = _redact(text % self.VENDOR)
+                self.assertNotIn(self.VENDOR, result)
+
+    def test_zenodo_and_cloudflare_assignments_redacted(self):
+        for name in ('zenodo_token', 'CLOUDFLARE_API_TOKEN', 'cf_token'):
+            with self.subTest(name=name):
+                result = _redact(name + '=' + self.VENDOR)
+                self.assertNotIn(self.VENDOR, result)
+
+    def test_vendor_assignment_entity_type(self):
+        ents = cast_redact.analyze_regex('cloudflare_api_token: ' + self.VENDOR, [])
+        self.assertIn('VENDOR_TOKEN_ASSIGNMENT', {e['entity_type'] for e in ents})
+
+    def test_negatives_not_redacted(self):
+        for text in ('call re_try now', 'table re_index_name here', 'the glpat prefix',
+                     'glpat- alone', 'see the zenodo_token setting', 'a re_' + 'x' * 25 + ' ident'):
+            with self.subTest(text=text):
+                self.assertEqual(text, _redact(text))
+
+    def test_resend_requires_word_boundary(self):
+        text = 'pre_' + 'A1b2' * 6
+        self.assertNotIn('<RESEND_KEY>', _redact(text))
+
+    def test_new_entity_types_in_sync_with_config(self):
+        cfg = json.loads((Path(__file__).parent.parent / 'config' / 'pii-patterns.json').read_text())
+        cfg_types = {p['entity_type'] for p in cfg['patterns']}
+        fallback = dict(cast_redact._STANDARD_FALLBACK_PATTERNS)
+        for etype in ('RESEND_KEY', 'GITLAB_TOKEN', 'VENDOR_TOKEN_ASSIGNMENT'):
+            with self.subTest(etype=etype):
+                self.assertIn(etype, cfg_types)
+                self.assertIn(etype, fallback)
+        cfg_regex = {p['entity_type']: p['regex'] for p in cfg['patterns']}
+        for etype in ('RESEND_KEY', 'GITLAB_TOKEN', 'VENDOR_TOKEN_ASSIGNMENT'):
+            self.assertEqual(cfg_regex[etype], fallback[etype])
 
 
 if __name__ == '__main__':
