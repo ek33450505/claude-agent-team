@@ -653,13 +653,21 @@ class TestPiiCandidatesSuperset(unittest.TestCase):
         'GENERIC_SECRET': 'password=hunter',
     }
 
+    # Entity types registered more than once (DATABASE_URL main + OVERSIZE companion, same
+    # label on purpose): the 2nd and later entries are checked against these samples.
+    _SECOND_SAMPLES: dict[str, str] = {
+        'DATABASE_URL': 'postgres://u:' + 'A' * 1025 + '@h/db',
+    }
+
     def test_all_patterns_have_samples(self):
         pattern_types = {etype for etype, _ in cast_redact.FALLBACK_PATTERNS}
         self.assertEqual(pattern_types, set(self._SAMPLES.keys()))
 
     def test_every_pattern_sample_matches_pii_candidates(self):
+        seen = set()
         for etype, pat in cast_redact.FALLBACK_PATTERNS:
-            sample = self._SAMPLES[etype]
+            sample = self._SECOND_SAMPLES[etype] if etype in seen else self._SAMPLES[etype]
+            seen.add(etype)
             # Confirm the sample actually matches its own pattern (sample is representative).
             self.assertRegex(sample, pat, f'{etype}: sample does not match its own pattern')
             # The invariant under test: the same sample must also trigger the fast-path.
@@ -1146,6 +1154,15 @@ class TestVendorSecretGaps(unittest.TestCase):
         for etype in ('RESEND_KEY', 'GITLAB_TOKEN', 'VENDOR_TOKEN_ASSIGNMENT'):
             self.assertEqual(cfg_regex[etype], fallback[etype])
 
+    def test_database_url_patterns_in_sync_with_config(self):
+        # DATABASE_URL has two entries (main + oversize) under one entity type, so the
+        # dict()-by-entity-type lookup above can't be used: compare ordered regex lists.
+        cfg = json.loads((Path(__file__).parent.parent / 'config' / 'pii-patterns.json').read_text())
+        cfg_re = [p['regex'] for p in cfg['patterns'] if p['entity_type'] == 'DATABASE_URL']
+        fb_re = [r for t, r in cast_redact._STANDARD_FALLBACK_PATTERNS if t == 'DATABASE_URL']
+        self.assertEqual(len(fb_re), 2)
+        self.assertEqual(cfg_re, fb_re)
+
 
 class TestEmailPatternLinearTime(unittest.TestCase):
     """EMAIL_ADDRESS local part was an unbounded `+` -> quadratic on long [A-Za-z0-9._-]
@@ -1190,6 +1207,68 @@ class TestEmailPatternLinearTime(unittest.TestCase):
         out = _redact('z' * 70 + '@example.com')
         self.assertIn('<EMAIL_ADDRESS>', out)
         self.assertNotIn('example.com', out)
+
+
+class TestDatabaseUrlPatternLinearTime(unittest.TestCase):
+    """DATABASE_URL user/password were unbounded `+` before a required `:` / `@` ->
+    quadratic on repeated `scheme://x-` (3-4 s on 120 KB). Bounded to {0,256} / {1,1024}."""
+
+    _TIMING_INPUTS = {
+        'scheme_dash': 'postgres://x-' * 10000,
+        'scheme_user_colon': 'postgres://user:y-' * 10000,
+        'mysql_colons': 'mysql://' + 'a:' * 20000,
+        'redis_colon_at': 'redis://' + ':@' * 20000,
+        'huge_password': 'postgres://u:' + 'a' * 180000,
+        'long_path_repeat': ('postgres://' + 'a' * 300) * 600,
+        'empty_user_repeat': 'postgres://:' * 15000,
+        'oversize_pw_repeat': ('postgres+x://u:' + 'b' * 1100) * 150,
+    }
+
+    def test_adversarial_inputs_are_fast(self):
+        import time
+        for name, text in self._TIMING_INPUTS.items():
+            with self.subTest(name=name):
+                start = time.monotonic()
+                cast_redact.analyze_regex(text, [])
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 0.5, f'{name} took {elapsed:.2f}s')
+
+    def test_connection_strings_still_redacted(self):
+        for text, secret in (
+            ('postgres://user:pass@host:5432/db', 'pass'),
+            ('postgresql://u:s3cr3tpw@h/db?sslmode=require', 's3cr3tpw'),
+            ('mysql://root:hunter2@db.internal/app', 'hunter2'),
+            ('mongodb://u:mongopw@h1,h2/db', 'mongopw'),
+            ('mongodb+srv://u:srvpw@cluster0.x.mongodb.net/db', 'srvpw'),
+            ('redis://:redispw@host:6379', 'redispw'),
+            ('postgres://u:pa:ss/w%40rd@h/db', 'pa:ss/w%40rd'),
+            ('url=postgres://u:' + 'p' * 900 + '@h/db', 'p' * 900),
+            ('postgresql+psycopg2://u:SECRETPW@h/db', 'SECRETPW'),
+            ('postgres+asyncpg://u:SECRETPW@h/db', 'SECRETPW'),
+            ('mysql+pymysql://u:SECRETPW@h/db', 'SECRETPW'),
+            ('rediss://:SECRETPW@h', 'SECRETPW'),
+        ):
+            with self.subTest(text=text[:40]):
+                out = _redact(text)
+                self.assertIn('<DATABASE_URL>', out)
+                self.assertNotIn(secret, out)
+
+    def test_oversize_credentials_do_not_leak(self):
+        for name, text, secret in (
+            ('pw1025', 'postgres://u:' + 'A' * 1025 + '@h/db', 'A' * 50),
+            ('pw5000', 'postgres://u:' + 'B' * 5000 + '@h/db', 'B' * 50),
+            ('user300', 'postgres://' + 'U' * 300 + ':SECRETPW@h', 'SECRETPW'),
+        ):
+            with self.subTest(name=name):
+                out = _redact(text)
+                self.assertIn('<DATABASE_URL>', out)
+                self.assertNotIn(secret, out)
+                self.assertNotIn('@h', out)
+
+    def test_non_urls_not_redacted(self):
+        for text in ('postgres is a database', 'postgres://host/db', 'see redis://localhost:6379'):
+            with self.subTest(text=text):
+                self.assertNotIn('<DATABASE_URL>', _redact(text))
 
 
 if __name__ == '__main__':

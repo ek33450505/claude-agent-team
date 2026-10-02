@@ -79,7 +79,14 @@
       "name": "DATABASE_URL",
       "entity_type": "DATABASE_URL",
       "description": "Database connection string with embedded credentials",
-      "regex": "(?i)(?:postgres|mysql|mongodb|redis|sqlite)(?:ql)?://[^:@\\s]+:[^@\\s]+@[^\\s]+",
+      "regex": "(?i)(?:postgres(?:ql)?|mysql|mongodb|rediss?|sqlite)(?:\\+[a-z0-9_]{1,24})?://[^:@\\s]{0,256}:[^@\\s]{1,1024}@[^\\s]+",
+      "score": 0.95
+    },
+    {
+      "name": "DATABASE_URL_OVERSIZE",
+      "entity_type": "DATABASE_URL",
+      "description": "Database connection string whose user (>256) or password (>1024) exceeds the bounded DATABASE_URL pattern",
+      "regex": "(?i)(?:postgres(?:ql)?|mysql|mongodb|rediss?|sqlite)(?:\\+[a-z0-9_]{1,24})?://(?:[^:@\\s]{257,}|[^:@\\s]{0,256}:[^@\\s]{1025,})[^\\s]*",
       "score": 0.95
     },
     {
