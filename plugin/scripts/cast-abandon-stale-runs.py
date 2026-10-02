@@ -110,6 +110,21 @@ RECOVERED_TEXT_MAX_CHARS = 20000
 # first — recovery is keyed on the row's *state*, not on who flipped it.
 NO_RESPONSE_MARKER_LIKE = '[NO RESPONSE%'
 PARTIAL_PREFIX = '[PARTIAL — recovered from transcript; SubagentStop never fired] '
+# P-4a give-up path. Claude Code prunes transcripts after `cleanupPeriodDays`
+# (30 in the live settings.json). A reaped row older than that with no
+# transcript can NEVER be recovered; leaving it marker-bearing kept it in the
+# candidate set forever. Past the window (+ margin) such a row is retired by
+# swapping the "[NO RESPONSE%" marker for UNRECOVERABLE_PREFIX, which does not
+# match NO_RESPONSE_MARKER_LIKE, so it leaves the set permanently. Existing
+# columns only: status stays 'abandoned'/'failed', response carries the marker.
+# The age basis is the LATEST of abandoned_at/ended_at/started_at, and the
+# window must stay > 7d so retired rows never fall inside bin/cast doctor's 7d
+# honesty window (which classifies a non-"[NO RESPONSE" response as 'completed').
+TRANSCRIPT_RETENTION_DAYS = max(
+    8, int(os.environ.get('CAST_TRANSCRIPT_RETENTION_DAYS', '31') or '31')
+)
+RECOVERY_CANDIDATE_LIMIT = int(os.environ.get('CAST_ABANDON_RECOVERY_LIMIT', '500') or '500')
+UNRECOVERABLE_PREFIX = '[UNRECOVERABLE — transcript past retention and gone; recovery given up by cast-abandon-stale-runs.py]'
 
 
 def _log(msg: str) -> None:
@@ -134,26 +149,42 @@ def _log(msg: str) -> None:
 # recoverable (missing/oversized/malformed transcript, or no agent_id).
 
 
-def _resolve_transcript_path(agent_id: str, session_id: str) -> str:
-    """Resolve a subagent run's transcript path.
+def _build_transcript_index() -> dict:
+    """Walk the transcript tree ONCE and index it: {(session_id, agent_id): path}.
 
-    SAME glob idiom as cast_subagent_stop.py:534-543 (SubagentStop's own
-    resolver) — reused verbatim, not reinvented, so this reaper and the hook
-    agree on where a given run's transcript lives. Returns "" (never raises)
-    when either id is missing or no file matches.
+    Same layout as cast_subagent_stop.py:534-543 (SubagentStop's own resolver):
+    ~/.claude/projects/<project>/<session_id>/subagents/**/agent-<agent_id>.jsonl.
+    When several files share a key the newest mtime wins (the old per-row
+    glob's behaviour). Never raises; a failed walk yields an empty index.
     """
+    index: dict = {}
+    pattern = os.path.expanduser('~/.claude/projects/*/*/subagents/**/agent-*.jsonl')
+    try:
+        for path in glob.glob(pattern, recursive=True):
+            parts = path.split(os.sep)
+            try:
+                session_id = parts[parts.index('subagents') - 1]
+            except (ValueError, IndexError):
+                continue
+            agent_id = os.path.basename(path)[len('agent-'):-len('.jsonl')]
+            key = (session_id, agent_id)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if key not in index or mtime > index[key][0]:
+                index[key] = (mtime, path)
+    except Exception as e:
+        _log(f'Recovery: transcript index walk failed: {e}')
+    return {k: v[1] for k, v in index.items()}
+
+
+def _resolve_transcript_path(agent_id: str, session_id: str, index: dict) -> str:
+    """Look a run's transcript up in the prebuilt index. Returns "" (never
+    raises) when either id is missing or nothing is indexed for the pair."""
     if not agent_id or not session_id:
         return ""
-    pattern = os.path.expanduser(
-        f"~/.claude/projects/*/{session_id}/subagents/**/agent-{agent_id}.jsonl"
-    )
-    try:
-        matches = glob.glob(pattern, recursive=True)
-        if matches:
-            return max(matches, key=os.path.getmtime)
-    except Exception:
-        pass
-    return ""
+    return index.get((session_id, agent_id), "")
 
 
 def _extract_recovered_text(transcript_path: str) -> str:
@@ -256,14 +287,14 @@ def _extract_recovered_text(transcript_path: str) -> str:
     return (fallback_tool_call or "")[:RECOVERED_TEXT_MAX_CHARS]
 
 
-def _recover_response(agent_id: str, session_id: str) -> str:
+def _recover_response(agent_id: str, session_id: str, index: dict) -> str:
     """Best-effort wrapper: resolve + extract, collapsing every failure to "".
 
     Callers must treat "" as "nothing recoverable — leave the marker in
     place"; this never raises so a single bad row can never abort the reap.
     """
     try:
-        transcript_path = _resolve_transcript_path(agent_id, session_id)
+        transcript_path = _resolve_transcript_path(agent_id, session_id, index)
         if not transcript_path:
             return ""
         return _extract_recovered_text(transcript_path)
@@ -284,7 +315,10 @@ def recover_stale_responses(conn: sqlite3.Connection) -> None:
     row that predates this backfill entirely gets picked up the next time
     this reaper runs. Runs on every invocation — safe to run repeatedly since
     a recovered response (PARTIAL_PREFIX) never matches the eligibility
-    WHERE clause again.
+    WHERE clause again. A row whose transcript was pruned by retention can
+    never be recovered, so past TRANSCRIPT_RETENTION_DAYS it is retired
+    (marker -> UNRECOVERABLE_PREFIX) and leaves the candidate set for good.
+    Candidates are ordered oldest-first and capped at RECOVERY_CANDIDATE_LIMIT.
 
     Never overwrites a response holding real content: the WHERE clause below
     only ever matches NULL or a marker-prefixed value, both at selection time
@@ -294,12 +328,16 @@ def recover_stale_responses(conn: sqlite3.Connection) -> None:
     try:
         candidates = conn.execute(
             '''
-            SELECT id, agent_id, session_id
+            SELECT id, agent_id, session_id,
+                   MAX(COALESCE(datetime(abandoned_at), ''), COALESCE(datetime(ended_at), ''),
+                       COALESCE(datetime(started_at), '')) AS last_ts
             FROM agent_runs
             WHERE status IN ('failed', 'abandoned')
               AND (response IS NULL OR response LIKE ?)
+            ORDER BY started_at ASC, id ASC
+            LIMIT ?
             ''',
-            (NO_RESPONSE_MARKER_LIKE,)
+            (NO_RESPONSE_MARKER_LIKE, RECOVERY_CANDIDATE_LIMIT)
         ).fetchall()
     except Exception as e:
         _log(f'Recovery backfill: candidate query failed: {e}')
@@ -309,14 +347,45 @@ def recover_stale_responses(conn: sqlite3.Connection) -> None:
         _log('Recovery backfill: no eligible rows')
         return
 
+    # One tree walk for the whole run, not one recursive glob per candidate.
+    index = _build_transcript_index()
+    retire_before = (
+        datetime.now(timezone.utc) - timedelta(days=TRANSCRIPT_RETENTION_DAYS)
+    ).strftime('%Y-%m-%d %H:%M:%S')
+
     recovered = 0
-    for row_id, agent_id, session_id in candidates:
+    retired = 0
+    for row_id, agent_id, session_id, last_ts in candidates:
         try:
-            recovered_text = _recover_response(agent_id, session_id)
+            recovered_text = _recover_response(agent_id, session_id, index)
         except Exception as e:
             _log(f'Recovery backfill: id={row_id} extraction raised (ignored): {e}')
             recovered_text = ""
         if not recovered_text:
+            # Give up only when recovery is impossible by age: the transcript
+            # key is absent from the index AND the row is past the retention
+            # window. A present-but-unreadable/oversized transcript keeps the
+            # marker (it may still be fixable by an override). A fresh row with
+            # no transcript yet is left alone.
+            if (
+                (session_id, agent_id) not in index
+                and last_ts and last_ts < retire_before
+            ):
+                try:
+                    result = conn.execute(
+                        '''
+                        UPDATE agent_runs
+                        SET response = ?
+                        WHERE id = ?
+                          AND (response IS NULL OR response LIKE ?)
+                        ''',
+                        (UNRECOVERABLE_PREFIX, row_id, NO_RESPONSE_MARKER_LIKE)
+                    )
+                    conn.commit()
+                    if result.rowcount:
+                        retired += 1
+                except Exception as e:
+                    _log(f'Recovery backfill: id={row_id} retire UPDATE failed: {e}')
             continue
         try:
             new_response = f'{PARTIAL_PREFIX}{recovered_text}'
@@ -335,7 +404,10 @@ def recover_stale_responses(conn: sqlite3.Connection) -> None:
         except Exception as e:
             _log(f'Recovery backfill: id={row_id} UPDATE failed: {e}')
 
-    _log(f'Recovery backfill: recovered {recovered} of {len(candidates)} eligible row(s) from transcript')
+    _log(
+        f'Recovery backfill: recovered {recovered} of {len(candidates)} eligible row(s) '
+        f'from transcript; retired {retired} unrecoverable (past {TRANSCRIPT_RETENTION_DAYS}d)'
+    )
     if recovered:
         print(
             f'[cast-abandon-stale-runs] Recovered {recovered} of {len(candidates)} '
