@@ -701,7 +701,7 @@ try:
                    NTILE(20) OVER (PARTITION BY agent ORDER BY duration_ms) AS b
             FROM agent_runs
             WHERE status='DONE' AND duration_ms>0 AND agent IS NOT NULL
-              AND datetime(started_at) >= datetime('now','-30 days')
+              AND started_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-30 days')
         )
         SELECT agent, COUNT(*), MAX(CASE WHEN b<=19 THEN duration_ms END)
         FROM d GROUP BY agent HAVING COUNT(*) >= 5
@@ -1730,8 +1730,8 @@ cur = conn.cursor()
 cur.execute("PRAGMA table_info(agent_runs)")
 _ar_cols = {row["name"] for row in cur.fetchall()}
 
-# Unqualified form (no join) and table-aliased form (when joining sessions).
-DATE_FN    = "date(replace(replace(started_at,'T',' '),'Z',''))"
+# Table-aliased form (when joining sessions). Summary view uses date(MIN/MAX(col)) so
+# the aggregate can use idx_agent_runs_started_at instead of wrapping every row.
 DATE_FN_AR = "date(replace(replace(ar.started_at,'T',' '),'Z',''))"
 
 if view == "agent":
@@ -1867,8 +1867,8 @@ else:
     if project_f:
         cur.execute(f"""
             SELECT
-                MIN({DATE_FN_AR}) AS first_date,
-                MAX({DATE_FN_AR}) AS last_date,
+                date(MIN(ar.started_at)) AS first_date,
+                date(MAX(ar.started_at)) AS last_date,
                 COUNT(*) AS runs,
                 COALESCE(SUM(ar.cost_usd),0) AS total_cost,
                 COALESCE(SUM(ar.input_tokens),0) AS input_tok,
@@ -1882,8 +1882,8 @@ else:
     else:
         cur.execute(f"""
             SELECT
-                MIN({DATE_FN}) AS first_date,
-                MAX({DATE_FN}) AS last_date,
+                date(MIN(started_at)) AS first_date,
+                date(MAX(started_at)) AS last_date,
                 COUNT(*) AS runs,
                 COALESCE(SUM(cost_usd),0) AS total_cost,
                 COALESCE(SUM(input_tokens),0) AS input_tok,
@@ -2025,8 +2025,10 @@ conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
 # ── Section 1: Cost prediction via routing_events keyword scoring ─────────────
+# Bounded to the 10000 most recent rows (idx_routing_events_timestamp); 4674 rows qualify
+# on the live DB today, so current results are unchanged.
 try:
-    cur.execute("SELECT session_id, prompt_preview FROM routing_events WHERE prompt_preview IS NOT NULL AND prompt_preview != ''")
+    cur.execute("SELECT session_id, prompt_preview FROM routing_events WHERE prompt_preview IS NOT NULL AND prompt_preview != '' ORDER BY timestamp DESC LIMIT 10000")
     re_rows = cur.fetchall()
 except Exception:
     re_rows = []
@@ -2783,7 +2785,7 @@ PYEOF
       SELECT COALESCE(SUM(spawn_depth > 1), 0), COALESCE(COUNT(spawn_depth), 0), COALESCE(MAX(spawn_depth), 0)
       FROM agent_runs
       WHERE spawn_depth IS NOT NULL
-        AND datetime(replace(replace(started_at,'T',' '),'Z','')) >= datetime('now','-7 day');" 2>/dev/null)"
+        AND started_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-7 days');" 2>/dev/null)"
     _dc_rc=$?
     if [ "$_dc_rc" -ne 0 ] || [ -z "$_dc_out" ]; then
       printf "%b subagent depth cap: unavailable (db query failed)\n" "$INFO"
@@ -2899,7 +2901,7 @@ PYEOF
     _cs_out="$(sqlite3 "$CAST_DB_PATH" \
       "SELECT COALESCE(COUNT(*),0) FROM sessions \
        WHERE status='crashed' \
-         AND replace(replace(started_at,'T',' '),'Z','') >= datetime('now','-7 days');" 2>&1)"
+         AND started_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-7 days');" 2>&1)"
     _cs_rc=$?
     # Threshold: CAST_CRASH_WARN_THRESHOLD (default 100 per 7d).
     # Background: sessions killed without a clean exit (terminal kill, hung agent,
@@ -4539,8 +4541,10 @@ USAGE
   # 4. cast.db — prune old agent_runs, VACUUM
   case "$(_db_state)" in
     ok)
+      # COUNT and DELETE share one WHERE; the GLOB keeps a non-ISO started_at row (which the
+      # lexical range can't date reliably) out of the destructive path, so it is kept, not deleted early.
       local old_rows
-      old_rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE datetime(started_at) < datetime('now', '-30 days');" 2>/dev/null || echo 0)"
+      old_rows="$(sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM agent_runs WHERE started_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-30 days') AND started_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*';" 2>/dev/null || echo 0)"
       if [ "${old_rows:-0}" -gt 0 ]; then
         if [ "$dry_run" -eq 1 ]; then
           _info "  Would prune: $old_rows agent_runs older than 30 days"
@@ -4578,7 +4582,7 @@ PYEOF
             backup_rc=$?
           fi
           if [ "$backup_rc" -eq 0 ]; then
-            sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE datetime(started_at) < datetime('now', '-30 days');" 2>/dev/null
+            sqlite3 "$CAST_DB_PATH" "DELETE FROM agent_runs WHERE started_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-30 days') AND started_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*';" 2>/dev/null
             db_pruned=$old_rows
           else
             _error "  Pre-tidy-prune backup failed, missing, or timed out (script: $backup_script, timeout: ${backup_timeout}s, exit $backup_rc) — skipping agent_runs prune"
