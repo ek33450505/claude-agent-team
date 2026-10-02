@@ -430,8 +430,20 @@ def _ensure_ref_map() -> bool:
         return False
 
 
+def _ensure_map_table(conn: sqlite3.Connection) -> None:
+    """Idempotently create record_fts_ref (+ index) on this connection.
+
+    Every write helper calls this first so a caller that bypasses main() (and therefore
+    _ensure_ref_map) never fails the map write and rolls the whole transaction back. Creation
+    only; the count-based backfill stays in _ensure_ref_map.
+    """
+    for ddl in _REF_MAP_DDL:
+        conn.execute(ddl)
+
+
 def _purge_range(conn: sqlite3.Connection, kind: str, lo: str, hi: str) -> None:
     """Delete every record_fts row with kind and lo <= ref_id < hi, plus its map rows."""
+    _ensure_map_table(conn)
     conn.execute(_PURGE_FTS_SQL, (kind, lo, hi))
     conn.execute(_PURGE_MAP_SQL, (kind, lo, hi))
 
@@ -439,6 +451,7 @@ def _purge_range(conn: sqlite3.Connection, kind: str, lo: str, hi: str) -> None:
 def _insert_row(conn: sqlite3.Connection, kind: str, ref_id: str, ts: str, title: str, body: str,
                 agent: str = "", project: str = "", mtype: str = "") -> None:
     """Insert one record_fts row and its record_fts_ref map row on the caller's connection."""
+    _ensure_map_table(conn)
     cur = conn.execute(
         "INSERT INTO record_fts(kind, ref_id, ts, title, body, agent, project, mtype) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (kind, ref_id, ts, title, body, agent, project, mtype),
@@ -459,6 +472,7 @@ def _upsert_row(kind: str, ref_id: str, ts: str, title: str, body: str,
     cast_db.db_execute); with a caller-supplied conn the caller owns commit/rollback.
     """
     def _do(c: sqlite3.Connection) -> None:
+        _ensure_map_table(c)
         c.execute("DELETE FROM record_fts WHERE rowid IN "
                   "(SELECT fts_rowid FROM record_fts_ref WHERE kind = ? AND ref_id = ?)", (kind, ref_id))
         c.execute("DELETE FROM record_fts_ref WHERE kind = ? AND ref_id = ?", (kind, ref_id))
