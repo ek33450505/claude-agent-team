@@ -500,7 +500,36 @@ def _read_audit_events(audit_log: str, lookback_days: int) -> list:
     return events
 
 
-def _find_transcript_evidence(projects_dir: str, session_id: str, hatch_ts: str):
+class _TranscriptIndex:
+    """Lazily walks projects_dir ONCE and answers `*<session_id>*.jsonl` lookups.
+
+    Replaces a per-event recursive glob (which re-enumerated the whole transcript
+    tree for every audit event). Mirrors glob semantics: hidden files/dirs
+    (leading '.') are skipped, matches are substring-on-basename, and a missing
+    projects_dir yields no matches.
+    """
+
+    def __init__(self, projects_dir: str):
+        self.projects_dir = projects_dir
+        self._files = None  # list of (basename, path), built on first lookup
+
+    def _build(self) -> list:
+        files = []
+        for root, dirs, names in os.walk(self.projects_dir, followlinks=True):
+            dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
+            for n in sorted(names):
+                if n.endswith('.jsonl') and not n.startswith('.'):
+                    files.append((n, os.path.join(root, n)))
+        return files
+
+    def find(self, session_id: str) -> list:
+        if self._files is None:
+            self._files = self._build()
+        return [path for name, path in self._files if session_id in name]
+
+
+def _find_transcript_evidence(projects_dir: str, session_id: str, hatch_ts: str,
+                               index: '_TranscriptIndex | None' = None):
     """Search transcript(s) matching session_id for block-message substrings before hatch_ts.
 
     Best-effort: if a line has no parseable 'timestamp' field it is still searched
@@ -508,8 +537,9 @@ def _find_transcript_evidence(projects_dir: str, session_id: str, hatch_ts: str)
     """
     if not session_id or session_id == 'unknown':
         return None
-    pattern = os.path.join(projects_dir, '**', f'*{session_id}*.jsonl')
-    matches = glob.glob(pattern, recursive=True)
+    if index is None:
+        index = _TranscriptIndex(projects_dir)
+    matches = index.find(session_id)
     if not matches:
         return None
     try:
@@ -566,11 +596,12 @@ def section_friction(conn, audit_log: str, projects_dir: str, repo_root: str,
     events = _read_audit_events(audit_log, lookback_days)
     confirmed = []
     proactive_count = 0
+    index = _TranscriptIndex(projects_dir)  # walks the tree once, on first lookup
 
     for ev in events:
         session_id = ev.get('session_id', '')
         ts = ev.get('timestamp', '')
-        match = _find_transcript_evidence(projects_dir, session_id, ts)
+        match = _find_transcript_evidence(projects_dir, session_id, ts, index)
         if match:
             confirmed.append((ev, match))
         else:
