@@ -23,6 +23,7 @@ import importlib.util
 import json
 import os
 import re
+import sqlite3
 import sys
 from typing import Any, Callable, Dict, List, Optional
 
@@ -386,19 +387,92 @@ def _record_fts_columns() -> set:
     return {str(_row_to_dict(r).get("name") or "") for r in rows}
 
 
-def _upsert_row(kind: str, ref_id: str, ts: str, title: str, body: str,
-                agent: str = "", project: str = "", mtype: str = "") -> None:
-    """Delete-then-insert to keep record_fts deduplicated on (kind, ref_id).
+_REF_MAP_DDL = (
+    "CREATE TABLE IF NOT EXISTS record_fts_ref ("
+    "fts_rowid INTEGER PRIMARY KEY, kind TEXT NOT NULL, ref_id TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_record_fts_ref_kind_ref ON record_fts_ref(kind, ref_id)",
+)
 
-    agent/project/mtype are UNINDEXED filter columns (populated for memory rows; empty otherwise).
+# record_fts keeps ref_id UNINDEXED, so `WHERE ref_id ...` against it is a full virtual-table
+# SCAN per statement (audit P-2). record_fts_ref maps FTS rowid -> (kind, ref_id) behind a
+# (kind, ref_id) index; every purge resolves rowids through it. EVERY writer of record_fts in
+# this file must go through the helpers below so the map cannot drift.
+_PURGE_FTS_SQL = (
+    "DELETE FROM record_fts WHERE rowid IN "
+    "(SELECT fts_rowid FROM record_fts_ref WHERE kind = ? AND ref_id >= ? AND ref_id < ?)"
+)
+_PURGE_MAP_SQL = "DELETE FROM record_fts_ref WHERE kind = ? AND ref_id >= ? AND ref_id < ?"
+
+
+def _ensure_ref_map() -> bool:
+    """Create record_fts_ref if absent and re-derive it from record_fts when the counts disagree.
+
+    Idempotent and cheap on the happy path (two COUNT(*)s). Covers: a DB whose cast-db-init.sh
+    predates the map, a map emptied/stale after the init self-heal recreated record_fts, and any
+    out-of-band record_fts write. record_fts is the source of truth, so the map is rebuilt wholesale
+    (one transaction) rather than patched. Returns False only if the map could not be made usable.
     """
-    cast_db.db_execute(
-        "DELETE FROM record_fts WHERE kind = ? AND ref_id = ?", (kind, ref_id)
-    )
-    cast_db.db_execute(
+    try:
+        with cast_db._connect() as conn:
+            for ddl in _REF_MAP_DDL:
+                conn.execute(ddl)
+            n_fts = conn.execute("SELECT count(*) FROM record_fts").fetchone()[0]
+            n_map = conn.execute("SELECT count(*) FROM record_fts_ref").fetchone()[0]
+            if n_fts != n_map:
+                conn.execute("DELETE FROM record_fts_ref")
+                conn.execute("INSERT INTO record_fts_ref(fts_rowid, kind, ref_id) "
+                             "SELECT rowid, kind, ref_id FROM record_fts")
+                print(f"record_fts_ref re-derived from record_fts ({n_map} -> {n_fts} rows)")
+            conn.commit()
+        return True
+    except sqlite3.Error as exc:
+        print(f"cast-ask-index: cannot maintain record_fts_ref: {exc}", file=sys.stderr)
+        return False
+
+
+def _purge_range(conn: sqlite3.Connection, kind: str, lo: str, hi: str) -> None:
+    """Delete every record_fts row with kind and lo <= ref_id < hi, plus its map rows."""
+    conn.execute(_PURGE_FTS_SQL, (kind, lo, hi))
+    conn.execute(_PURGE_MAP_SQL, (kind, lo, hi))
+
+
+def _insert_row(conn: sqlite3.Connection, kind: str, ref_id: str, ts: str, title: str, body: str,
+                agent: str = "", project: str = "", mtype: str = "") -> None:
+    """Insert one record_fts row and its record_fts_ref map row on the caller's connection."""
+    cur = conn.execute(
         "INSERT INTO record_fts(kind, ref_id, ts, title, body, agent, project, mtype) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (kind, ref_id, ts, title, body, agent, project, mtype),
     )
+    conn.execute(
+        "INSERT OR REPLACE INTO record_fts_ref(fts_rowid, kind, ref_id) VALUES (?, ?, ?)",
+        (cur.lastrowid, kind, ref_id),
+    )
+
+
+def _upsert_row(kind: str, ref_id: str, ts: str, title: str, body: str,
+                agent: str = "", project: str = "", mtype: str = "",
+                conn: Optional[sqlite3.Connection] = None) -> None:
+    """Delete-then-insert to keep record_fts deduplicated on (kind, ref_id).
+
+    agent/project/mtype are UNINDEXED filter columns (populated for memory rows; empty otherwise).
+    With conn=None this runs in its own transaction and never raises (logs and returns, like
+    cast_db.db_execute); with a caller-supplied conn the caller owns commit/rollback.
+    """
+    def _do(c: sqlite3.Connection) -> None:
+        c.execute("DELETE FROM record_fts WHERE rowid IN "
+                  "(SELECT fts_rowid FROM record_fts_ref WHERE kind = ? AND ref_id = ?)", (kind, ref_id))
+        c.execute("DELETE FROM record_fts_ref WHERE kind = ? AND ref_id = ?", (kind, ref_id))
+        _insert_row(c, kind, ref_id, ts, title, body, agent, project, mtype)
+
+    if conn is not None:
+        _do(conn)
+        return
+    try:
+        with cast_db._connect() as own:
+            _do(own)
+            own.commit()
+    except sqlite3.Error as exc:
+        cast_db._log_error(f"_upsert_row failed ({kind} {ref_id}): {exc}")
 
 
 def _index_source(src: Dict[str, Any], rebuild: bool) -> int:
@@ -539,18 +613,18 @@ def _index_file_source(src: Dict[str, Any], rebuild: bool) -> int:
             # Range predicate (not GLOB/LIKE) so filesystem paths containing SQLite glob
             # metacharacters (* ? [) can never over- or under-delete other files' chunks.
             # All chunk ref_ids are "<path>#<int>"; '#'..'#\U0010ffff' bounds every suffix.
-            cast_db.db_execute(
-                "DELETE FROM record_fts WHERE kind = ? AND ref_id >= ? AND ref_id < ?",
-                (kind, path + '#', path + '#\U0010ffff'),
-            )
-
-            for i, chunk_body in enumerate(chunks):
-                if not chunk_body.strip():
-                    continue
-                chunk_ref_id = f'{path}#{i}'
-                chunk_title = title if n_chunks == 1 else f'{title} [{i + 1}/{n_chunks}]'
-                _upsert_row(kind, chunk_ref_id, ts, chunk_title, chunk_body)
-                count += 1
+            # Purge + re-insert share ONE transaction (and resolve rowids via record_fts_ref,
+            # not a record_fts scan): a crash can never leave a file half-purged or the map drifted.
+            with cast_db._connect() as conn:
+                _purge_range(conn, kind, path + '#', path + '#\U0010ffff')
+                for i, chunk_body in enumerate(chunks):
+                    if not chunk_body.strip():
+                        continue
+                    chunk_ref_id = f'{path}#{i}'
+                    chunk_title = title if n_chunks == 1 else f'{title} [{i + 1}/{n_chunks}]'
+                    _insert_row(conn, kind, chunk_ref_id, ts, chunk_title, chunk_body)
+                    count += 1
+                conn.commit()
 
         except Exception as exc:
             print(f"ERROR indexing file {path} (kind={kind}): {exc}", file=sys.stderr)
@@ -653,6 +727,11 @@ def main() -> int:
         )
         return 1
 
+    # record_fts_ref must exist and agree with record_fts BEFORE any purge relies on it
+    # (and before a rebuild clear, which assumes the table is there).
+    if _fts_cols and not _ensure_ref_map():
+        return 1
+
     # Filter both SOURCES and FILE_SOURCES by --kind
     db_sources = SOURCES
     file_sources = FILE_SOURCES
@@ -671,15 +750,25 @@ def main() -> int:
         # transcript 2,719, memory 1,052, incident 252, distillate 209, journal 121,
         # plan 14) stood to be lost to rebuild one of them. The per-file delete in
         # _index_file_source already scoped itself exactly this way; this one never did.
-        if args.kind:
-            ok = cast_db.db_execute("DELETE FROM record_fts WHERE kind = ?", (args.kind,))
-            scope = f"kind={args.kind}"
-        else:
-            # No --kind: every kind is being reindexed, so an unscoped clear is
-            # correct — and it additionally sweeps rows of kinds this version no
-            # longer produces, which a per-kind loop would leave orphaned.
-            ok = cast_db.db_execute("DELETE FROM record_fts", ())
-            scope = "all kinds"
+        # record_fts and its record_fts_ref map are cleared together, in one transaction.
+        try:
+            with cast_db._connect() as conn:
+                if args.kind:
+                    conn.execute("DELETE FROM record_fts WHERE kind = ?", (args.kind,))
+                    conn.execute("DELETE FROM record_fts_ref WHERE kind = ?", (args.kind,))
+                    scope = f"kind={args.kind}"
+                else:
+                    # No --kind: every kind is being reindexed, so an unscoped clear is
+                    # correct — and it additionally sweeps rows of kinds this version no
+                    # longer produces, which a per-kind loop would leave orphaned.
+                    conn.execute("DELETE FROM record_fts")
+                    conn.execute("DELETE FROM record_fts_ref")
+                    scope = "all kinds"
+                conn.commit()
+            ok = True
+        except sqlite3.Error as exc:
+            print(f"cast-ask-index: rebuild clear failed: {exc}", file=sys.stderr)
+            ok = False
         if not ok:
             print("Failed to clear record_fts for rebuild", file=sys.stderr)
             return 1

@@ -216,6 +216,13 @@
       "notes": "includes 5 FTS shadow tables; treated as one unit"
     },
     {
+      "table": "record_fts_ref",
+      "writers": ["cast-ask-index.py"],
+      "cadence": "on_demand",
+      "status": "live",
+      "notes": "companion rowid map for record_fts (audit P-2); written in the same transaction as every record_fts write, re-derived when counts disagree"
+    },
+    {
       "table": "archived_memories",
       "writers": ["cast-memory-consolidate.py:213"],
       "cadence": "on_demand",

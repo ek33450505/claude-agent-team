@@ -431,6 +431,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
   project UNINDEXED,   -- filter metadata
   mtype   UNINDEXED    -- filter metadata (agent_memories.type)
 );
+
+-- record_fts_ref = ordinary companion map: FTS rowid -> (kind, ref_id). record_fts keeps ref_id
+-- UNINDEXED (FTS5 cannot push down >=/< or a ref_id equality), so every per-file / per-row purge
+-- in cast-ask-index was a full virtual-table SCAN (audit P-2: O(files x rows)). The (kind, ref_id)
+-- index makes the purge a SEARCH. Derived + regenerable: cast-ask-index maintains it alongside
+-- every record_fts write and re-derives it from record_fts when the row counts disagree.
+-- (Name deliberately starts with record_fts: it is part of the FTS apparatus, not a data table.)
+-- db-contract: external-writer table=record_fts_ref source=cast-ask-index
+CREATE TABLE IF NOT EXISTS record_fts_ref (
+  fts_rowid INTEGER PRIMARY KEY,
+  kind      TEXT NOT NULL,
+  ref_id    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_record_fts_ref_kind_ref ON record_fts_ref(kind, ref_id);
 FTS_SQL
 else
   echo "cast-db-init: FTS5 unavailable in this sqlite3 build — record_fts not created; 'cast ask' will use the LIKE fallback." >&2
