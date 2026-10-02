@@ -356,14 +356,32 @@ regex layer):
     2. READS (`git config --get gc.pruneExpire`, or a bare `git config
     gc.pruneExpire` with no value — git itself treats that as a
     print-current-value read) stay UNBLOCKED.
-  - Entirely unguarded ops, deliberately out of scope, measured and
-    confirmed still open as of this pass (a separate enumerated unit, not
-    this one): `git rm -f`, `git rm -r --cached`, `git branch -D`, `git
-    worktree remove -f`, `git update-ref -d`, `git filter-branch`, `git
-    sparse-checkout set`. Do not assume this list is exhaustive — it is the
-    set explicitly measured and deferred, not a claim that everything else
-    is covered. (`git reflog expire`/`git gc --prune=<value>`/`git prune`
-    were on this list through the prior pass; they are now covered by the
+  - Former "entirely unguarded" list, resolved by the 2026-08-17
+    remaining-ops pass (docs/architecture/cast-protocol-spec.md). NOW
+    BLOCKED, each with its own hatch: `git rm -f` (CAST_GIT_RM_OK=1), `git
+    branch -D` (CAST_BRANCH_OK=1), `git worktree remove -f`
+    (CAST_WORKTREE_OK=1), `git update-ref -d` (CAST_UPDATE_REF_OK=1), `git
+    filter-branch` (CAST_FILTER_BRANCH_OK=1). DELIBERATELY ALLOWED after
+    measurement (non-destructive), pinned by regression fences in
+    `tests/pre-tool-guard.bats`: `git rm -r --cached` (index-only; the
+    worktree file and its uncommitted edit survive) and `git
+    sparse-checkout set` / `init --cone` (remove only clean committed
+    files; git refuses to drop a locally-modified file and leaves untracked
+    files alone; `disable` restores — re-confirmed 2026-10-02 on git
+    2.56.0; the 2026-09-05 audit item S-5 calling it destructive was a
+    false finding).
+  - Gaps the spec's 2026-08-17 note listed as unguarded, now CLOSED:
+    a `-C` path containing a space (`git -C '/tmp/my dir' reset --hard`
+    etc., in every quoting form) no longer defeats the guard (see #363/#364/
+    #365, parsed-token matching); `git branch -M`/`-f` and `git update-ref
+    <ref> <sha>` overwriting an EXISTING ref now block (creating a brand-new
+    ref stays allowed, as designed). Each was verified 2026-10-02 by
+    calling `_git_evaluate` directly as a module (return 2 = block). The
+    residual limitations are the ones named elsewhere in this docstring
+    (subshell/`$( )` wrapping, `--config-env=`/`GIT_CONFIG_*` env
+    indirection, unbalanced-quote parsing); do not assume that list is
+    exhaustive. (`git reflog expire`/`git gc --prune=<value>`/`git prune`
+    were once on the unguarded list; they are now covered by the
     reflog/gc/prune blocks above — see the 2026-08-17 recovery-path pass
     note in each block's comment.)
   - The `git gc`/`git prune` coverage above is deliberately narrow, keyed
