@@ -110,8 +110,9 @@ PYEOF
       fi
 
       # Read the queued task
-      AGENT=$(python3 -c "import json; d=json.load(open('$queue_file')); print(d.get('agent',''))" 2>/dev/null || echo "")
-      TASK=$(python3 -c "import json; d=json.load(open('$queue_file')); print(d.get('task',''))" 2>/dev/null || echo "")
+      # Pass the path via env (NOT string interpolation) to avoid code injection.
+      AGENT=$(CAST_QUEUE_FILE="$queue_file" python3 -c "import json, os; d=json.load(open(os.environ['CAST_QUEUE_FILE'])); print(d.get('agent',''))" 2>/dev/null || echo "")
+      TASK=$(CAST_QUEUE_FILE="$queue_file" python3 -c "import json, os; d=json.load(open(os.environ['CAST_QUEUE_FILE'])); print(d.get('task',''))" 2>/dev/null || echo "")
 
       if [[ -z "$AGENT" || -z "$TASK" ]]; then
         echo "  Skipped malformed entry: $queue_file" >&2
