@@ -44,12 +44,18 @@ Absolute paths (``/usr/...``) are treated as contract violations in settings.jso
 In fragments they are simply not matched (fragment paths are always tilde or
 HOME-env forms).
 
+CI runs ``--strict`` (orphans fail the build); the pre-commit hook stays
+advisory (no flag) so mid-work commits aren't blocked.
+
 Exit codes:
   0 — all referenced scripts exist in repo; orphan warnings are printed but
-      do NOT change the exit code
-  1 — one or more referenced scripts are missing (forward-pass violation)
+      do NOT change the exit code (default mode)
+  1 — one or more referenced scripts are missing (forward-pass violation), OR
+      ``--strict`` was given and one or more orphan scripts were found
+      (comment-only references stay warning-only even under --strict)
 """
 
+import argparse
 import glob
 import json
 import os
@@ -375,7 +381,17 @@ def check_orphan_scripts(repo_root: str) -> tuple[list[str], list[str]]:
     return orphans, comment_only_refs
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="CAST orphan script detector (see module docstring)."
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 if any orphan script is found (default: warn only, exit 0)",
+    )
+    args = parser.parse_args(argv)
+
     repo_root = get_repo_root()
 
     # --- settings.json check ---
@@ -417,8 +433,8 @@ def main() -> int:
     if orphan_scripts:
         print(
             f"WARN [lint-orphan-scripts]: {len(orphan_scripts)} script(s) in scripts/ "
-            f"not referenced anywhere in the reachability set (warning only — does not "
-            f"block commit):",
+            f"not referenced anywhere in the reachability set "
+            + ("(--strict: failing):" if args.strict else "(warning only — does not block commit):"),
             file=sys.stderr,
         )
         for name in orphan_scripts:
@@ -445,6 +461,9 @@ def main() -> int:
         )
 
     if invalid or missing_settings or missing_fragments:
+        return 1
+
+    if args.strict and orphan_scripts:
         return 1
 
     return 0
