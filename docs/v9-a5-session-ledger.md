@@ -43,7 +43,8 @@ cast ledger --json
 # Verify a previously-written receipt file
 cast ledger --verify ~/Desktop/session-receipt.md
 
-# Exit code: 0 = PASS, 1 = TAMPERED (digest mismatch)
+# Exit code: 0 = PASS, 1 = TAMPERED (digest mismatch or session missing),
+#            3 = UNVERIFIABLE (a cast.db read failed while re-deriving; TAMPERED outranks it)
 echo $?
 ```
 
@@ -56,7 +57,7 @@ echo $?
 | `--since` | `YYYY-MM-DD` | Render all sessions since this date (inclusive) |
 | `--json` | — | Emit JSON instead of Markdown |
 | `--out` | `FILE` | Write output to FILE instead of stdout |
-| `--verify` | `FILE` | Verify a receipt file and exit (0=PASS, 1=TAMPERED) |
+| `--verify` | `FILE` | Verify a receipt file and exit (0=PASS, 1=TAMPERED, 3=UNVERIFIABLE) |
 | `--db` | `PATH` | Override DB path (default: `CAST_DB_PATH` or `~/.claude/cast.db`) |
 
 ---
@@ -109,6 +110,8 @@ The digest is **deterministic** and **re-derivable**:
 - The receipt file was edited
 - The cast.db rows for that session were modified (unlikely under normal use, as cast.db is write-guarded)
 - The session does not exist in cast.db
+
+If a cast.db query fails while re-deriving (a dropped or renamed column, a missing table — absent optional integrity tables excepted), verify prints `VERIFY: UNVERIFIABLE` and exits 3 instead of reporting TAMPERED.
 
 ---
 
@@ -275,7 +278,7 @@ CAST_DB_URL="sqlite:///path/to/custom.db" cast ledger
 ## Design Notes
 
 - **Read-only:** Cast ledger never writes to cast.db — it is a pure query and serialization tool
-- **Fail-open:** Every section is wrapped in try/except. Missing tables or columns result in honest "0 recorded" counts, not crashes
+- **Incomplete, never silently empty:** A failed section query (missing table or column, locked DB) does not crash the render, but it is reported: a stderr `WARNING` per section, an `INCOMPLETE` banner in Markdown or a `read_errors` array in JSON (both outside the digest), and exit code 3. If the `sessions` query itself fails, no receipt is rendered: it prints `ERROR: sessions query failed (...)` and exits 3. Absent integrity tables still render as "0 recorded", since those tables are optional
 - **Deterministic:** The SHA-256 digest is reproducible on any machine with the same cast.db
 - **Privacy-preserving export:** Because the receipt is a portable artifact, raw agent-output columns (`raw_excerpt`, `partial_work_log`, `last_line`, etc.) are excluded from integrity rows — only counts and safe descriptors are rendered. cast.db itself stays local inside `~/.claude`; off-machine sync is recorded by the v9 A1 egress audit ledger (it logs egress; hard egress control is native permissions.deny + the OS sandbox)
 
