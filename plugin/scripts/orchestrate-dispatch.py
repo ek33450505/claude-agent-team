@@ -115,7 +115,6 @@ def cmd_log_quality_gate(
 
     # contract_passed allows the special sentinel -1 (file-recovered status)
     cp_int = _to_int(contract_passed, default=0)
-    batch_int = _to_int(batch_id, default=0)
     retry_int = _to_int(retry_count, default=0)
 
     # HONESTY-FIX: private CREATE TABLE formerly included batch_id, absent from the canonical

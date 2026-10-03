@@ -46,7 +46,7 @@ def eval_output_contains(pattern, content):
     """Check if pattern (regex) is found in content (case-insensitive, multiline)."""
     try:
         return bool(re.search(pattern, content, re.MULTILINE | re.IGNORECASE))
-    except re.error as e:
+    except re.error:
         return False
 
 
@@ -74,7 +74,7 @@ def eval_cast_db_write(table, field, expected):
         conn.close()
 
         return count > 0
-    except Exception as e:
+    except Exception:
         # DB check failed — return False (assertion failed)
         return False
 

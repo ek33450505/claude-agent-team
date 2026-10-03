@@ -37,7 +37,20 @@ print(d['hookSpecificOutput']['additionalContext'])
 }
 
 @test "output is valid JSON when entries exist" {
-  skip "Requires actual journal entries in ~/Documents/Claude/"
+  # Seed under the current YYYY-MM/YYYY-MM-DD.md subfolder layout (the script
+  # searches maxdepth 2), inside the temp HOME.
+  mkdir -p "${HOME}/Documents/Claude/2026-08"
+  printf '%s\n' 'distinctive-marker-zq7 journal body' \
+    > "${HOME}/Documents/Claude/2026-08/2026-08-17.md"
+  run bash "$SCRIPT"
+  assert_success
+  echo "$output" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+ctx = d['hookSpecificOutput']['additionalContext']
+assert 'distinctive-marker-zq7 journal body' in ctx, f'seeded entry missing: {ctx!r}'
+assert 'August 17, 2026' in d['systemMessage'], d['systemMessage']
+"
 }
 
 @test "output contains systemMessage on vault directory missing" {

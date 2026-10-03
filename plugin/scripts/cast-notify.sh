@@ -87,11 +87,11 @@ notifications_enabled() {
   python3 -c "
 import json, sys
 try:
-  cfg = json.load(open('${NOTIFICATIONS_CONFIG}'))
+  cfg = json.load(open(sys.argv[1]))
   print('true' if cfg.get('enabled', True) else 'false')
 except Exception:
   print('true')
-" 2>/dev/null || echo "true"
+" "$NOTIFICATIONS_CONFIG" 2>/dev/null || echo "true"
 }
 
 event_enabled() {
@@ -102,15 +102,15 @@ event_enabled() {
   fi
   # Pass event via environment to avoid shell injection
   CAST_EVENT_TYPE="$event" python3 -c "
-import json, os
+import json, os, sys
 try:
-  cfg = json.load(open('${NOTIFICATIONS_CONFIG}'))
+  cfg = json.load(open(sys.argv[1]))
   events = cfg.get('events', {})
   event = os.environ.get('CAST_EVENT_TYPE', '')
   print('true' if events.get(event, True) else 'false')
 except Exception:
   print('true')
-" 2>/dev/null || echo "true"
+" "$NOTIFICATIONS_CONFIG" 2>/dev/null || echo "true"
 }
 
 in_quiet_hours() {
@@ -119,10 +119,10 @@ in_quiet_hours() {
     return
   fi
   python3 -c "
-import json
+import json, sys
 from datetime import datetime
 try:
-  cfg = json.load(open('${NOTIFICATIONS_CONFIG}'))
+  cfg = json.load(open(sys.argv[1]))
   start = cfg.get('quiet_hours_start', 22)
   end   = cfg.get('quiet_hours_end', 8)
   now   = datetime.now().hour
@@ -133,7 +133,7 @@ try:
   print('true' if quiet else 'false')
 except Exception:
   print('false')
-" 2>/dev/null || echo "false"
+" "$NOTIFICATIONS_CONFIG" 2>/dev/null || echo "false"
 }
 
 # --- Eligibility checks ---

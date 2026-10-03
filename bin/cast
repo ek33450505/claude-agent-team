@@ -35,16 +35,16 @@ _config_get() {
     python3 -c "
 import json, sys
 try:
-    with open('$CAST_CONFIG_FILE') as f:
+    with open(sys.argv[1]) as f:
         cfg = json.load(f)
-    val = cfg.get('$key', '$default')
+    val = cfg.get(sys.argv[2], sys.argv[3])
     if val:
         print(str(val).replace('~', __import__('os').path.expanduser('~')))
     else:
-        print('$default')
+        print(sys.argv[3])
 except Exception:
-    print('$default')
-" 2>/dev/null || echo "$default"
+    print(sys.argv[3])
+" "$CAST_CONFIG_FILE" "$key" "$default" 2>/dev/null || echo "$default"
   else
     echo "$default"
   fi
@@ -525,16 +525,16 @@ PYEOF
   if [ -f "$_repo_cast_json" ] && command -v python3 >/dev/null 2>&1; then
     local _repo_limit
     _repo_limit="$(python3 -c "
-import json
+import json, sys
 try:
-    with open('$_repo_cast_json') as f:
+    with open(sys.argv[1]) as f:
         cfg = json.load(f)
     limit = cfg.get('budget', {}).get('per_dispatch_limit_usd')
     if limit is not None:
         print(f'\${limit:.2f}')
 except Exception:
     pass
-" 2>/dev/null || true)"
+" "$_repo_cast_json" 2>/dev/null || true)"
     [ -n "$_repo_limit" ] && _budget_secondary="${_repo_limit} per dispatch limit"
   fi
 
@@ -549,12 +549,12 @@ except Exception:
   local settings_file="${HOME}/.claude/settings.json"
   if [ -f "$settings_file" ]; then
     hook_count="$(python3 -c "
-import json
-with open('$settings_file') as f:
+import json, sys
+with open(sys.argv[1]) as f:
     cfg = json.load(f)
 hooks = cfg.get('hooks', {})
 print(sum(len(v) if isinstance(v, list) else 1 for v in hooks.values()))
-" 2>/dev/null || echo 0)"
+" "$settings_file" 2>/dev/null || echo 0)"
   fi
 
   # Recent agent runs (last 5)
@@ -600,7 +600,7 @@ PYEOF
 
   # Render dashboard
   local sep
-  sep="$(python3 -c "print('=' * $width)" 2>/dev/null || printf '%0.s=' $(seq 1 $width))"
+  sep="$(python3 -c "import sys; print('=' * int(sys.argv[1]))" "$width" 2>/dev/null || printf '%0.s=' $(seq 1 $width))"
 
   printf "${C_BOLD}CAST v${CAST_VERSION}${C_RESET}\n"
   printf "%s\n" "$sep"
@@ -3379,6 +3379,24 @@ PYEOF
     fi
   fi
 
+  # cast.db WAL size — a WAL left large after the nightly prune VACUUM is not shrunk by a checkpoint
+  local _wal_file="${CAST_DB_PATH}-wal"
+  local _wal_warn_mb="${CAST_DOCTOR_WAL_WARN_MB:-256}"
+  [[ "$_wal_warn_mb" =~ ^(0|[1-9][0-9]*)$ ]] || _wal_warn_mb=256
+  if [[ ! -f "$_wal_file" ]]; then
+    printf "%b cast.db WAL: none\n" "$OK"
+  else
+    local _wal_bytes _wal_mb
+    _wal_bytes="$(wc -c < "$_wal_file" 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$_wal_bytes" =~ ^(0|[1-9][0-9]*)$ ]] || _wal_bytes=0
+    _wal_mb=$((_wal_bytes / 1048576))
+    if [[ "$_wal_mb" -gt "$_wal_warn_mb" ]]; then
+      printf "%b cast.db WAL: %s MB (> %s MB) — not shrunk by a checkpoint; usually left by the nightly prune VACUUM. Restarting com.cast.litestream truncates it\n" "$WARN" "$_wal_mb" "$_wal_warn_mb"
+    else
+      printf "%b cast.db WAL: %s MB\n" "$OK" "$_wal_mb"
+    fi
+  fi
+
   # 20. Homebrew tap count vs packages constant advisory
   # CAST taps = homebrew-cast* (8) + homebrew-claudes-journal (1) = 9 (2026-07-01 consolidation)
   # Excludes dropped non-CAST taps: homebrew-engram, homebrew-stratum, homebrew-jarvis
@@ -4132,14 +4150,14 @@ _doctor_upgrades() {
     file_exists=1
     local file_age_hours
     file_age_hours="$(python3 -c "
-import os, time
+import os, sys, time
 try:
-    mtime = os.path.getmtime('$candidates_file')
+    mtime = os.path.getmtime(sys.argv[1])
     age_s = time.time() - mtime
     print(int(age_s // 3600))
 except Exception:
     print(999)
-" 2>/dev/null || echo 999)"
+" "$candidates_file" 2>/dev/null || echo 999)"
     if [ "${file_age_hours:-999}" -lt 24 ]; then
       file_fresh=1
     fi
@@ -4154,13 +4172,13 @@ except Exception:
   local last_checked_display="unknown"
   if [ -f "$last_checked_file" ]; then
     last_checked_display="$(python3 -c "
-import json
+import json, sys
 try:
-    d = json.load(open('$last_checked_file'))
+    d = json.load(open(sys.argv[1]))
     print(d.get('last_checked', 'unknown'))
 except Exception:
     print('unknown')
-" 2>/dev/null || echo "unknown")"
+" "$last_checked_file" 2>/dev/null || echo "unknown")"
   fi
   printf "  %b Last checked: %s\n" "$INFO_SYM" "$last_checked_display"
 

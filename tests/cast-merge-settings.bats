@@ -296,3 +296,16 @@ PY
   assert_success
   assert_output "ok"
 }
+
+@test "refuses a directory as output: exit 1, no temp file dropped inside or beside it" {
+  write_fragment "00-a.json" '{"model": "sonnet"}'
+  local d="$HOME/outdir"
+  mkdir "$d"
+
+  run bash "$MERGE_SH" "$d"
+  assert_failure
+  assert_output --partial "is a directory"
+  [ -z "$(ls -A "$d")" ]
+  run bash -c 'compgen -G "$1.tmp.*"' _ "$d"
+  assert_failure
+}

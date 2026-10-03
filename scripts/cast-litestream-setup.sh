@@ -50,6 +50,9 @@ TMP_CONFIG="$(mktemp "${CONFIG_DIR}/.litestream-tmp-XXXXXX")"
 trap 'rm -f "${TMP_CONFIG}"' EXIT
 
 cat > "${TMP_CONFIG}" <<YAML
+# WARN+ only: litestream logs INFO ~1 line/s (replica sync, compaction), which grew the unrotated log to hundreds of MB.
+logging:
+  level: warn
 dbs:
   - path: ${CAST_DB_PATH}
     replicas:

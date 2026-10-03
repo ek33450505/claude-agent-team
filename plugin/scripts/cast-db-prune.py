@@ -15,6 +15,14 @@ Runs nightly via launchd (com.cast.db-prune). Four symmetric steps:
   Step 4 — otel_metrics: rows whose `received_at` is older than OTEL_DAYS
   days are deleted. (OTLP feed.)
 
+  Step 5 — VACUUM: runs only after a real prune that deleted >=1 row AND
+  whose freelist is >= CAST_DB_PRUNE_VACUUM_FREE_PCT percent of all pages
+  (int 0-100, default 25; invalid values fall back to 25; 0 = always VACUUM
+  after a delete). VACUUM rewrites the whole DB, which is very costly on a
+  large WAL/litestream DB, and freed pages are reused by later inserts, so
+  a small freelist is left alone. If the freelist cannot be read, VACUUM is
+  skipped.
+
 Each table's delete is wrapped in an independent try/except so a missing
 table or column does NOT abort the other steps or crash the script.
 
@@ -163,6 +171,27 @@ def _log(msg: str) -> None:
             f.write(line + '\n')
     except Exception:
         pass
+
+
+def _parse_vacuum_free_pct() -> int:
+    """Return the VACUUM freelist threshold (0-100) from CAST_DB_PRUNE_VACUUM_FREE_PCT.
+
+    Default 25. Unlike the retention parsers this is NOT fatal on bad input: the
+    value only tunes an optimisation, so anything invalid falls back to 25 with a
+    log note. 0 means always VACUUM after a delete (the pre-gate behaviour).
+    """
+    default = 25
+    raw = os.environ.get('CAST_DB_PRUNE_VACUUM_FREE_PCT')
+    if raw is None or raw == '':
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = -1
+    if not 0 <= value <= 100:
+        _log(f'CAST_DB_PRUNE_VACUUM_FREE_PCT={raw!r} invalid (want int 0-100) — using {default}')
+        return default
+    return value
 
 
 def _pre_prune_backup() -> int:
@@ -477,15 +506,37 @@ def main() -> None:
         # --- Step 5: VACUUM (reclaim freed pages) ---
         # DELETE marks pages free but does not shrink the file; VACUUM rebuilds
         # the DB to reclaim them. Guarded to real (non-dry-run) prunes that
-        # actually deleted at least one row — a no-op run has nothing to
-        # reclaim, and VACUUM's full-DB rewrite is too costly to pay for free.
+        # actually deleted at least one row, AND to a freelist ratio at or above
+        # CAST_DB_PRUNE_VACUUM_FREE_PCT (default 25). The full-DB rewrite is very
+        # costly on a large WAL/litestream DB, and freed pages are reused by the
+        # next inserts anyway, so a small freelist is not worth a VACUUM.
         if not DRY_RUN and total_deleted > 0:
+            threshold = _parse_vacuum_free_pct()
             try:
-                conn.execute('VACUUM')
-                _log(f'VACUUM complete — reclaimed space after {total_deleted} row(s) deleted')
+                freelist = conn.execute('PRAGMA freelist_count').fetchone()[0]
+                page_count = conn.execute('PRAGMA page_count').fetchone()[0]
+                free_pct = 100.0 * freelist / page_count if page_count > 0 else 0.0
             except Exception as e:
-                print(f'[cast-db-prune] VACUUM step failed: {e}', file=sys.stderr)
-                _log(f'VACUUM step failed (non-fatal): {e}')
+                freelist = page_count = None
+                free_pct = None
+                print(f'[cast-db-prune] freelist read failed: {e}', file=sys.stderr)
+                _log(f'VACUUM skipped — could not read freelist (non-fatal): {e}')
+            if free_pct is not None:
+                if free_pct >= threshold:
+                    try:
+                        conn.execute('VACUUM')
+                        _log(
+                            f'VACUUM complete — reclaimed space after {total_deleted} row(s) deleted '
+                            f'(freelist {free_pct:.1f}% >= {threshold}%)'
+                        )
+                    except Exception as e:
+                        print(f'[cast-db-prune] VACUUM step failed: {e}', file=sys.stderr)
+                        _log(f'VACUUM step failed (non-fatal): {e}')
+                else:
+                    _log(
+                        f'VACUUM skipped — freelist {free_pct:.1f}% < {threshold}% '
+                        f'({freelist}/{page_count} pages free; freed pages are reused by later inserts)'
+                    )
         elif not DRY_RUN:
             _log('VACUUM skipped — no rows deleted this run')
 

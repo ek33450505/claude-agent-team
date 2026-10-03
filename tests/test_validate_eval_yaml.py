@@ -13,6 +13,7 @@ Covers:
 """
 
 import importlib.util
+import inspect
 import json
 import os
 import tempfile
@@ -780,6 +781,93 @@ graders:
         result = validate_eval_yaml.validate(yaml_path)
         self.assertEqual(result, 0)
 
+    def _validate_command(self, name, command):
+        """Write a minimal valid case whose grader uses `command`; return validate()."""
+        yaml_content = f"""---
+id: {name}
+version: 1
+agent: test-agent
+description: Test
+corpus_source: manual
+failure_type: test
+cost_tier: cheap
+tags: [test]
+trigger: Test
+expected_behaviors: [test]
+forbidden_behaviors: [bad]
+graders:
+  - id: g1
+    type: programmatic
+    pass_criteria: "true"
+    on_error: skip
+    command: {json.dumps(command)}
+"""
+        yaml_path = os.path.join(self.tmpdir, f'{name}.yaml')
+        with open(yaml_path, 'w') as f:
+            f.write(yaml_content)
+        return validate_eval_yaml.validate(yaml_path)
+
+    def test_placeholder_in_double_quotes_rejected(self):
+        """"{output_file}" — shlex.quote() is not protective inside double quotes."""
+        self.assertEqual(
+            self._validate_command('dq-whole', 'grep -q x "{output_file}"'), 1
+        )
+
+    def test_placeholder_embedded_in_double_quotes_rejected(self):
+        self.assertEqual(
+            self._validate_command('dq-embedded', 'grep -q "prefix {session_id} suffix" f'), 1
+        )
+
+    def test_placeholder_in_single_quotes_allowed(self):
+        self.assertEqual(
+            self._validate_command('sq-form', "grep -q x '{output_file}'"), 0
+        )
+
+    def test_bare_placeholder_allowed(self):
+        self.assertEqual(
+            self._validate_command('bare-form', 'grep -q x {output_file}'), 0
+        )
+
+    def test_placeholder_between_double_quoted_regions_allowed(self):
+        """Regex-style detection would false-positive here; the scanner must not."""
+        self.assertEqual(
+            self._validate_command(
+                'between-dq', 'grep -q "x" {output_file} && echo "y"'
+            ),
+            0,
+        )
+
+    def test_escaped_quote_outside_quotes_allowed(self):
+        r"""echo \"{agent} — the escaped quote is literal, so no double-quoted region opens."""
+        self.assertEqual(
+            self._validate_command('escaped-dq', 'echo \\"{agent} | grep x'), 0
+        )
+
+    def test_unknown_key_in_double_quotes_allowed(self):
+        """{foo} is not a substitution key, so the runner leaves it alone."""
+        self.assertEqual(
+            self._validate_command('unknown-key', 'grep -q "{foo}" f'), 0
+        )
+
+    def test_double_quotes_inside_single_quotes_allowed(self):
+        """'"{agent}"' — the double quotes are literal inside single quotes.
+
+        Runner regex: at the leading ' the alternative '{key}' does not match (the
+        next char is ", not {), so the bare {agent} alternative matches and becomes
+        shlex.quote(value) = 'val'. Result: '"''val''"' => shell concatenates "
+        + val (single-quoted, inert) + ", i.e. safe. The scanner agrees: the
+        placeholder sits in the single-quoted state, never double-quoted.
+        """
+        self.assertEqual(
+            self._validate_command('sq-wraps-dq', "echo '\"{agent}\"' | grep x"), 0
+        )
+
+    def test_escaped_quote_inside_double_quotes_still_in_region(self):
+        r"""grep "a\"{agent}" — \" does not close the region, so {agent} is still quoted."""
+        self.assertEqual(
+            self._validate_command('dq-escaped-inner', 'grep "a\\"{agent}" f'), 1
+        )
+
 
 class TestValidateLlmJudgeGrader(unittest.TestCase):
     """Test llm_judge grader validation."""
@@ -1041,6 +1129,29 @@ graders:
 
         result = validate_eval_yaml.validate(yml_path)
         self.assertEqual(result, 0)
+
+
+class TestSubstitutionKeysInSyncWithRunner(unittest.TestCase):
+    """SUBSTITUTION_KEYS must mirror the placeholders _substitute() really replaces."""
+
+    def test_substitution_keys_match_runner(self):
+        runner_path = Path(__file__).parent.parent / 'scripts' / 'cast-eval-runner.py'
+        spec = importlib.util.spec_from_file_location('cast_eval_runner', str(runner_path))
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+
+        # Runner keys = every _substitute() parameter except the command itself.
+        params = list(inspect.signature(runner._substitute).parameters)
+        runner_keys = set(params[1:])
+        self.assertEqual(params[0], 'cmd')
+
+        # Behavioral cross-check: each derived key really is replaced in a command.
+        for key in runner_keys:
+            kwargs = {k: f'sentinel-{k}' for k in runner_keys}
+            rendered = runner._substitute('{' + key + '}', **kwargs)
+            self.assertNotIn('{' + key + '}', rendered, key)
+
+        self.assertEqual(set(validate_eval_yaml.SUBSTITUTION_KEYS), runner_keys)
 
 
 if __name__ == '__main__':

@@ -77,6 +77,7 @@ setup() {
 }
 
 teardown() {
+  _stop_wal_holder
   teardown_temp_home
 }
 
@@ -315,4 +316,82 @@ os.utime(p, (stale_time, stale_time))
   _run_doctor_with_path "$FAKE_BIN"
   assert_output --partial "Litestream: replica fresh"
   assert_output --partial "lag"
+}
+
+# ---------------------------------------------------------------------------
+# A zero-filled fake WAL is truncated by doctor's own sqlite3 calls, so hold a
+# real WAL open: a live connection with autocheckpoint off keeps it on disk.
+_make_live_wal() {
+  local mb="$1"
+  rm -f "${BATS_TEST_TMPDIR}/wal-ready"
+  python3 - "$CAST_DB_PATH" "$mb" "${BATS_TEST_TMPDIR}/wal-ready" 3>&- 4>&- <<'PYEOF' >/dev/null 2>&1 &
+import sqlite3, sys, time, os
+c = sqlite3.connect(sys.argv[1], isolation_level=None)
+c.execute("PRAGMA journal_mode=WAL")
+c.execute("PRAGMA wal_autocheckpoint=0")
+c.execute("CREATE TABLE IF NOT EXISTS wal_fill (b BLOB)")
+c.execute("INSERT INTO wal_fill VALUES (zeroblob(?))", (int(sys.argv[2]) * 1048576,))
+open(sys.argv[3], "w").close()
+time.sleep(60)
+PYEOF
+  WAL_HOLDER_PID=$!
+  local i
+  for i in $(seq 1 100); do
+    [ -f "${BATS_TEST_TMPDIR}/wal-ready" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+_stop_wal_holder() {
+  if [ -n "${WAL_HOLDER_PID:-}" ]; then
+    kill "$WAL_HOLDER_PID" 2>/dev/null || true
+    wait "$WAL_HOLDER_PID" 2>/dev/null || true
+    WAL_HOLDER_PID=""
+  fi
+}
+
+# cast.db WAL size check (independent of litestream)
+# ---------------------------------------------------------------------------
+
+@test "doctor WAL: no WAL file reports none" {
+  rm -f "${CAST_DB_PATH}-wal"
+  _run_doctor_with_path "$FAKE_BIN"
+  assert_output --partial "cast.db WAL: none"
+}
+
+@test "doctor WAL: 2 MB WAL over 1 MB threshold warns" {
+  _make_live_wal 2
+  export CAST_DOCTOR_WAL_WARN_MB=1
+  _run_doctor_with_path "$FAKE_BIN"
+  assert_output --regexp "cast.db WAL: 2 MB \(> 1 MB\)"
+  assert_output --partial "Restarting com.cast.litestream truncates it"
+}
+
+@test "doctor WAL: small WAL at default threshold is OK, not WARN" {
+  _make_live_wal 2
+  unset CAST_DOCTOR_WAL_WARN_MB
+  _run_doctor_with_path "$FAKE_BIN"
+  assert_output --partial "cast.db WAL: 2 MB"
+  refute_output --partial "cast.db WAL: 2 MB (>"
+}
+
+@test "doctor WAL: non-integer threshold falls back to 256" {
+  _make_live_wal 2
+  export CAST_DOCTOR_WAL_WARN_MB=abc
+  _run_doctor_with_path "$FAKE_BIN"
+  assert_output --partial "cast.db WAL: 2 MB"
+  refute_output --partial "cast.db WAL: 2 MB (>"
+  export CAST_DOCTOR_WAL_WARN_MB=
+  _run_doctor_with_path "$FAKE_BIN"
+  assert_output --partial "cast.db WAL: 2 MB"
+  refute_output --partial "(> 256 MB)"
+}
+
+@test "doctor WAL: leading-zero threshold 08 falls back to 256 without a base error" {
+  _make_live_wal 2
+  export CAST_DOCTOR_WAL_WARN_MB=08
+  _run_doctor_with_path "$FAKE_BIN"
+  assert_output --partial "[ok] cast.db WAL: 2 MB"
+  refute_output --partial "value too great for base"
 }

@@ -85,29 +85,29 @@ cast_declare_blast_radius() {
 # On pass:
 #   Executes rm -rf on the canonicalized path.
 cast_safe_rm() {
-  local path="$1"
+  local _target="$1"
   local canonical
 
   # Check 1: fail-closed — no blast radius declared
   if [[ "${#_CAST_GUARD_BLAST_RADIUS[@]}" -eq 0 ]]; then
-    echo "FATAL [cast_safe_rm]: refusing '${path}' — no blast radius declared (fail-closed)" >&2
+    echo "FATAL [cast_safe_rm]: refusing '${_target}' — no blast radius declared (fail-closed)" >&2
     return 1
   fi
 
   # Canonicalize the path.
   # If the target exists (or is a symlink), realpath resolves it fully.
   # If the target does not exist, canonicalize the parent + append basename.
-  if [[ -e "$path" || -L "$path" ]]; then
-    canonical="$(realpath "$path" 2>/dev/null)" || {
-      echo "FATAL [cast_safe_rm]: refusing '${path}' — realpath failed" >&2
+  if [[ -e "$_target" || -L "$_target" ]]; then
+    canonical="$(realpath "$_target" 2>/dev/null)" || {
+      echo "FATAL [cast_safe_rm]: refusing '${_target}' — realpath failed" >&2
       return 1
     }
   else
     local _parent _basename _parent_canonical
-    _parent="$(dirname "$path")"
-    _basename="$(basename "$path")"
+    _parent="$(dirname "$_target")"
+    _basename="$(basename "$_target")"
     _parent_canonical="$(realpath "$_parent" 2>/dev/null)" || {
-      echo "FATAL [cast_safe_rm]: refusing '${path}' — could not canonicalize parent '${_parent}'" >&2
+      echo "FATAL [cast_safe_rm]: refusing '${_target}' — could not canonicalize parent '${_parent}'" >&2
       return 1
     }
     canonical="${_parent_canonical}/${_basename}"
@@ -115,7 +115,7 @@ cast_safe_rm() {
 
   # Hard deny #1: filesystem root
   if [[ "$canonical" == "/" ]]; then
-    echo "FATAL [cast_safe_rm]: refusing '${path}' — canonical path is filesystem root" >&2
+    echo "FATAL [cast_safe_rm]: refusing '${_target}' — canonical path is filesystem root" >&2
     return 1
   fi
 
@@ -123,14 +123,14 @@ cast_safe_rm() {
   local _real_home
   _real_home="$(realpath "$HOME" 2>/dev/null)" || _real_home="$HOME"
   if [[ "$canonical" == "$_real_home" ]]; then
-    echo "FATAL [cast_safe_rm]: refusing '${path}' — canonical path is user home directory" >&2
+    echo "FATAL [cast_safe_rm]: refusing '${_target}' — canonical path is user home directory" >&2
     return 1
   fi
 
   # Hard deny #3: $HOME/.claude
   local _claude_dir="${_real_home}/.claude"
   if [[ "$canonical" == "$_claude_dir" ]]; then
-    echo "FATAL [cast_safe_rm]: refusing '${path}' — canonical path is \$HOME/.claude" >&2
+    echo "FATAL [cast_safe_rm]: refusing '${_target}' — canonical path is \$HOME/.claude" >&2
     return 1
   fi
 
@@ -139,7 +139,7 @@ cast_safe_rm() {
   for _prefix in "${_CAST_GUARD_BLAST_RADIUS[@]}"; do
     _prefix_parent="$(dirname "$_prefix")"
     if [[ "$canonical" == "$_prefix_parent" ]]; then
-      echo "FATAL [cast_safe_rm]: refusing '${path}' — canonical path '${canonical}' equals parent of declared blast radius '${_prefix}'" >&2
+      echo "FATAL [cast_safe_rm]: refusing '${_target}' — canonical path '${canonical}' equals parent of declared blast radius '${_prefix}'" >&2
       return 1
     fi
   done
@@ -156,7 +156,7 @@ cast_safe_rm() {
   done
 
   if [[ "$_matched" -eq 0 ]]; then
-    echo "FATAL [cast_safe_rm]: refusing '${path}' — '${canonical}' is outside declared blast radius" >&2
+    echo "FATAL [cast_safe_rm]: refusing '${_target}' — '${canonical}' is outside declared blast radius" >&2
     return 1
   fi
 
