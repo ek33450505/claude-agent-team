@@ -357,22 +357,28 @@ success "  Scripts installed (including cast_db.py)"
 # enforcement config — network allowlist, filesystem denyRead/allowRead, credentials deny;
 # must reach existing installs on reinstall: 2026-07-02 allowRead change failed to deploy
 # while sandbox lived in skip-if-exists 60-meta). User MCP servers belong in ~/.claude.json
-# (user/project scope), NOT in the managed fragment.
-# User-customizable fragments (env, permissions, etc.) skip-if-exists.
+# (user/project scope), NOT in the managed fragment. 12-ask.json (ask-gate enforcement —
+# permission prompts before destructive/credential tool calls; sibling of 11-deny; a
+# 2026-10-03 Neon ask-list change failed to deploy while it was skip-if-exists).
+# User-customizable fragments (env, permissions, etc.) skip-if-exists; a differing
+# copy is reported (report-only drift WARN after the loop), never overwritten.
 # Downstream-only fragments (filenames not in source) are preserved by virtue of never being
 # touched. Backup of the prior CAST-owned copy goes to backups/.
 info "Installing settings fragments..."
 mkdir -p "$CLAUDE_DIR/managed-settings.d"
+FRAGMENTS_DRIFTED=""
+FRAGMENTS_DRIFT_COUNT=0
 for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
     [ -f "$fragment" ] || continue
     base="$(basename "$fragment")"
     dest="$CLAUDE_DIR/managed-settings.d/$base"
     case "$base" in
-        *-hooks-*.json|50-mcp.json|11-deny.json|61-sandbox.json)
+        *-hooks-*.json|50-mcp.json|11-deny.json|12-ask.json|61-sandbox.json)
             # CAST-owned: overwrite to propagate source updates
             if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
                 mkdir -p "$BACKUP_DIR/managed-settings.d"
                 cp "$dest" "$BACKUP_DIR/managed-settings.d/$base"
+                warn "  Replaced (differed from repo): managed-settings.d/$base — prior copy backed up to $BACKUP_DIR/managed-settings.d/$base"
             fi
             cp "$fragment" "$dest"
             success "  Synced: managed-settings.d/$base"
@@ -381,6 +387,11 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
             # User-customizable: skip if present
             if [ -f "$dest" ]; then
                 info "  Skipped (exists): managed-settings.d/$base"
+                if ! cmp -s "$fragment" "$dest"; then
+                    FRAGMENTS_DRIFTED="$FRAGMENTS_DRIFTED$base
+"
+                    FRAGMENTS_DRIFT_COUNT=$((FRAGMENTS_DRIFT_COUNT + 1))
+                fi
             else
                 cp "$fragment" "$dest"
                 success "  Installed: managed-settings.d/$base"
@@ -388,6 +399,19 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
             ;;
     esac
 done
+
+# Drift report (report-only — install.sh NEVER overwrites a user-customizable fragment).
+# Local customization is legitimate; this only surfaces that the copies differ.
+if [ "$FRAGMENTS_DRIFT_COUNT" -gt 0 ]; then
+    warn "  WARNING: $FRAGMENTS_DRIFT_COUNT user-customizable settings fragment(s) differ from the repo source (install.sh never overwrites these):"
+    while IFS= read -r drifted_name; do
+        [ -n "$drifted_name" ] || continue
+        warn "    - $drifted_name"
+    done <<EOF
+$FRAGMENTS_DRIFTED
+EOF
+    warn "  Review with: diff \"$SCRIPT_DIR/managed-settings.d/<name>\" \"$CLAUDE_DIR/managed-settings.d/<name>\""
+fi
 
 # Harden fragment permissions — fragments may contain tokens/paths; 644 is too open
 chmod 600 "$CLAUDE_DIR"/managed-settings.d/*.json 2>/dev/null || true

@@ -407,6 +407,79 @@ STUBEOF
   fi
 }
 
+@test "Install: 12-ask.json is overwritten on reinstall (CAST-owned fragment — propagates ask-gate updates)" {
+  # First install — seeds 12-ask.json from repo source
+  run_install
+
+  local ask_dest="$HOME/.claude/managed-settings.d/12-ask.json"
+  [ -f "$ask_dest" ] || { echo "FAIL: 12-ask.json not installed" >&2; return 1; }
+
+  # Simulate a stale ask-gate missing the Neon rules (the 2026-10-03 failed-to-deploy shape)
+  printf '{"permissions":{"ask":["Bash(rm *)"]}}\n' > "$ask_dest"
+
+  # Verify our stale copy is missing the mcp__neon__ ask rules (present in repo source)
+  if grep -q "mcp__neon__" "$ask_dest"; then
+    echo "setup error: stale copy unexpectedly contains mcp__neon__" >&2
+    return 1
+  fi
+
+  # Second install — 12-ask.json must be overwritten with full repo source
+  run run_install
+  assert_success
+
+  # A replaced copy is never silent: the notice names the file ...
+  assert_output --partial "Replaced (differed from repo): managed-settings.d/12-ask.json"
+
+  # ... and the stale copy is backed up with its content intact
+  local bak
+  bak="$(ls "$HOME"/.claude/backups/*/managed-settings.d/12-ask.json 2>/dev/null | head -1)"
+  [ -n "$bak" ] || { echo "FAIL: no backup of stale 12-ask.json under ~/.claude/backups" >&2; return 1; }
+  grep -q 'Bash(rm \*)' "$bak" || { echo "FAIL: backup lacks the stale marker" >&2; cat "$bak" >&2; return 1; }
+
+  if ! grep -q "mcp__neon__" "$ask_dest"; then
+    echo "FAIL: stale 12-ask.json was NOT overwritten on reinstall" >&2
+    cat "$ask_dest" >&2
+    return 1
+  fi
+  if ! cmp -s "$REPO_DIR/managed-settings.d/12-ask.json" "$ask_dest"; then
+    echo "FAIL: reinstalled 12-ask.json differs from repo source" >&2
+    return 1
+  fi
+}
+
+@test "Install: a customized user fragment is preserved and reported as drift" {
+  run_install
+
+  local perm_dest="$HOME/.claude/managed-settings.d/10-permissions.json"
+  [ -f "$perm_dest" ] || { echo "FAIL: 10-permissions.json not installed" >&2; return 1; }
+
+  # Local customization of a user-customizable (skip-if-exists) fragment
+  printf '{"permissions":{"allow":["Bash(echo custom-marker)"]}}\n' > "$perm_dest"
+
+  run run_install
+  assert_success
+
+  # Preserved — install.sh must never overwrite a skip-if-exists fragment
+  if ! grep -q "custom-marker" "$perm_dest"; then
+    echo "FAIL: customized 10-permissions.json was overwritten on reinstall" >&2
+    cat "$perm_dest" >&2
+    return 1
+  fi
+
+  # Reported — report-only drift WARN names the file
+  assert_output --partial "differ from the repo source"
+  assert_output --partial "    - 10-permissions.json"
+}
+
+@test "Install: clean reinstall reports no fragment drift" {
+  run_install
+
+  run run_install
+  assert_success
+  refute_output --partial "differ from the repo source"
+  refute_output --partial "Replaced (differed from repo)"
+}
+
 @test "Install: creates ~/.claude/config/cast-hook-owner with content 'install.sh'" {
   run_install
 
