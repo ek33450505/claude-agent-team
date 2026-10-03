@@ -41,7 +41,12 @@ prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 skips ONLY
 unhandled error → exit 0 (allow); a guard crash must never block all tool use.
 
 CONTRACT (identical to the wrappers): exit 2 + stderr = block; stdout
-hookSpecificOutput JSON = egress advisory; exit 0 = allow.
+hookSpecificOutput JSON = egress advisory (and, for a risky Neon MCP call, a
+native permissionDecision "ask" folded into the same single object; also printed
+alone when stdin cannot be parsed but names an mcp__neon__ tool); exit 0 =
+allow. An ask is a prompt, never a hard block (this hook exits 2 only for the
+git/kill/rm/policy blocks); under headless or CLAUDE_SUBPROCESS=1 nobody can
+answer it, so there it is effectively a deny -- intended fail-closed.
 
 ENFORCEMENT vs AWARENESS (master_v9.md §0.3): these guards are ADVISORY-grade — the
 model-facing block in an interactive session, NOT the non-bypassable wall. The real
@@ -251,9 +256,10 @@ def _emit_egress(sentinel, action):
 # session start beat the URL param. Decision: keep the write tools usable
 # (do not deny, do not try to re-scope OAuth); instead make sure nothing
 # risky ever lands silently. The real GATE is managed-settings.d/12-ask.json's
-# permissions.ask (a client-side prompt the user must answer); this half is
-# notify + record ONLY and must never block -- see the call site in main(),
-# placed BEFORE the CLAUDE_SUBPROCESS recursion-prevention early-return so a
+# permissions.ask (a client-side prompt the user must answer). This half
+# notifies + records and (since 2026-10-03, see NATIVE ASK below) also emits its
+# own fail-closed ask; it NEVER hard-blocks (never exits 2) -- see the call site
+# in main(), placed BEFORE the CLAUDE_SUBPROCESS recursion-prevention early-return so a
 # dispatched subagent's Neon call is also caught (mirrors the Bash git/kill/rm
 # guards' "every context" rule documented at the top of main()).
 #
@@ -340,6 +346,21 @@ def _emit_egress(sentinel, action):
 # entry remains. The two files still encode one policy in two languages
 # (kept in sync by convention, not shared code) -- see
 # tests/cast-neon-notify-guard.bats's drift tests for the cross-check.
+#
+# NATIVE ASK (2026-10-03): this hook now ALSO emits `permissionDecision:
+# "ask"` for every risky classification, fail-closed -- an unknown future tool
+# prompts by default, with no glob to keep in step. That closes two gaps in the
+# 12-ask.json globs alone: verb-glob drift (it recurred twice) and
+# argument-dependence (explain_sql_statement {analyze: true} EXECUTES its SQL;
+# a native rule cannot read arguments, so _classify_neon_risk does). The
+# 12-ask.json globs REMAIN as the belt for when this fail-open hook cannot run
+# (module load failure, crash); the two layers are redundant by design. It is
+# a prompt, not a hard block -- exit stays 0, never 2. Under headless /
+# CLAUDE_SUBPROCESS=1 nobody can answer the prompt, so there an ask is
+# effectively a deny: intended fail-closed. Stdout carries ONE JSON object only
+# (see _emit_pretool_output): an ask and an egress advisory are folded together.
+# If the stdin payload cannot be parsed at all, main() still asks when the raw
+# text names an mcp__neon__ tool (see _emit_unparseable_neon_ask).
 # --------------------------------------------------------------------------
 _NEON_CREDENTIAL_RE = re.compile(
     r'^mcp__neon__.*(credential|password|connection|secret|token|key|uri|'
@@ -360,12 +381,61 @@ _NEON_SAFE_READ_RE = re.compile(
     r'explain_sql_statement|'
     r'query_logs|search|fetch|'
     r'compare_database_schema|inspect_database|get_database_tables|'
-    r'get_doc_resource'
+    r'get_doc_resource|'
+    # Schema-verified read-only tools (2026-10-03). Deliberately NOT here:
+    # get_neon_auth_config, list_auth_oauth_providers, get_function,
+    # list_functions, get_storage, get_data_api, list_credentials,
+    # list_triggers, get_trigger -- response shapes unverified / may carry
+    # secrets (trigger/webhook config can hold headers), so they keep failing
+    # closed.
+    r'list_branches|list_operations|list_regions|get_branch|'
+    r'get_default_branch|get_operation|get_snapshot_schedule|list_snapshots|'
+    r'list_postgres_databases|list_postgres_endpoints|list_postgres_roles|'
+    r'get_postgres_database|get_postgres_endpoint|get_postgres_role|'
+    r'list_project_members|list_project_permissions|'
+    r'list_functions_custom_domains|'
+    r'list_storage_buckets|list_storage_objects|get_ai_gateway'
     r')$'
 )
 
 
-def _classify_neon_risk(tool_name):
+_NEON_EXPLAIN_TOOL = "mcp__neon__explain_sql_statement"
+
+
+# explain_sql_statement's live input schema is flat with
+# additionalProperties:false and exactly these properties (verified 2026-10-03
+# by loading the tool schema); `analyze` is {"type": "boolean", "default": false}.
+_NEON_EXPLAIN_KNOWN_KEYS = frozenset(
+    {"analyze", "branch_id", "database_name", "project_id", "sql"}
+)
+
+
+def _explain_may_execute(tool_input):
+    """True unless explain_sql_statement provably does NOT execute the SQL.
+
+    `analyze: true` makes Postgres EXECUTE the statement (EXPLAIN ANALYZE), so
+    explain_sql_statement {analyze: true, sql: "DELETE ..."} runs the SQL and
+    its side effects. The tool's schema default is false (verified
+    2026-10-03), but a native permissions.ask rule cannot read arguments, so
+    this check lives here.
+    FAIL-CLOSED: skip the prompt ONLY when `analyze` is the real JSON boolean
+    False AND every key in tool_input is one the live schema declares. The
+    schema types `analyze` as boolean, so a legitimate client sends a bool; a
+    string such as "false"/"0" is NOT accepted (a server that coerces strings
+    could read "false" as true). Missing/None/any other analyze value, an
+    unknown extra key (the schema forbids additionalProperties, so one means
+    the schema drifted or the call is malformed), or a non-dict tool_input is
+    treated as may-execute."""
+    if not isinstance(tool_input, dict):
+        return True
+    if tool_input.get("analyze") is not False:
+        return True
+    if not set(tool_input).issubset(_NEON_EXPLAIN_KNOWN_KEYS):
+        return True
+    return False
+
+
+def _classify_neon_risk(tool_name, tool_input=None):
     """Fail-closed Neon MCP risk classifier (structural fix, 3rd pass; prefix
     hardening, 4th pass 2026-08-24 -- see PREFIX HARDENING note below).
     Returns:
@@ -418,7 +488,13 @@ def _classify_neon_risk(tool_name):
     happening to fail closed by accident of case.
 
     Prefix-scoped to the neon server only -- a non-Neon mcp__<other>__* tool
-    is deliberately NOT matched (a different server needs its own guard)."""
+    is deliberately NOT matched (a different server needs its own guard).
+
+    ARGUMENT-AWARE (2026-10-03): `tool_input` is optional (backward
+    compatible). The one tool whose safety depends on its arguments is
+    explain_sql_statement -- `analyze: true` EXECUTES the SQL and its side
+    effects -- so it classifies "unsafe" unless `analyze` is explicitly false
+    (see _explain_may_execute; missing/unparseable input fails closed)."""
     tool_name = tool_name or ""
     normalized = tool_name.lstrip().lower()
     if not normalized.startswith("mcp__neon__"):
@@ -426,16 +502,22 @@ def _classify_neon_risk(tool_name):
     if _NEON_CREDENTIAL_RE.fullmatch(normalized):
         return "credential"
     if _NEON_SAFE_READ_RE.fullmatch(normalized):
+        # explain_sql_statement is a known-safe read ONLY when it does not
+        # execute the statement (see _explain_may_execute).
+        if normalized == _NEON_EXPLAIN_TOOL and _explain_may_execute(tool_input):
+            return "unsafe"
         return None
     return "unsafe"
 
 
 def _notify_neon_risk(tool, tool_input, data):
     """Notify + record a risky (credential or unsafe/write) Neon MCP tool
-    call. Never blocks (main() does not consult a return value here) and
-    never raises -- fail-open, matching this file's module-level contract
-    ("any unhandled error -> exit 0; a guard crash must never block all
-    tool use").
+    call. Never hard-blocks (never exits 2) and never raises -- fail-open,
+    matching this file's module-level contract ("any unhandled error -> exit
+    0; a guard crash must never block all tool use"). Returns the egress advisory action for the
+    subagent case (see RECORD below) so main() can fold it into its single
+    stdout object, else None; the native ask is built separately by
+    _neon_ask_reason.
 
     RECORD: a top-level (non-subprocess) call is already recorded moments
     later by the normal EGRESS step further down in main() (_run_egress ->
@@ -458,22 +540,25 @@ def _notify_neon_risk(tool, tool_input, data):
     only, never tool_input, so this guard does not widen what gets
     persisted or displayed.
 
-    EVENT TYPE: uses "neon_write", not "blocked" -- by the time this code
-    runs the tool has NOT been blocked; permissions.ask, a separate
-    client-side gate, has either already prompted-and-been-approved or
-    never applied at all for a dispatched subagent. Sending "blocked" for
-    an action that proceeds trains the user to ignore real blocks (security
-    finding). Deliberately does NOT bypass quiet hours: unlike
-    budget_alert, which needs immediate attention to stop a cost overrun,
-    this is a record-only FYI about an action that has already been
-    approved or already happened -- see scripts/cast-notify.sh's
-    in_quiet_hours call site for the matching inline comment.
+    EVENT TYPE: uses "neon_write", not "blocked" -- this code never
+    hard-blocks the call (it exits 0, never 2); at most the call is PROMPTED,
+    by the native permissions.ask globs and by this hook's own ask object
+    (_neon_ask_reason), and the user may approve it. Under headless or
+    CLAUDE_SUBPROCESS=1 nobody can answer a prompt, so there it is
+    effectively a deny (intended fail-closed) -- but that is the prompt's
+    doing, not this notification's. Sending "blocked" for an action that may
+    proceed trains the user to ignore real blocks (security finding).
+    Deliberately does NOT bypass quiet hours: unlike budget_alert, which
+    needs immediate attention to stop a cost overrun, this is a record-only
+    FYI about a call that is being prompted or has already been approved --
+    see scripts/cast-notify.sh's in_quiet_hours call site for the matching
+    inline comment.
     """
     try:
-        risk = _classify_neon_risk(tool)
+        risk = _classify_neon_risk(tool, tool_input)
         if risk is None:
-            return
-        # --- notify: best-effort desktop notification; never blocks. ---
+            return None
+        # --- notify: best-effort desktop notification; never hard-blocks. ---
         try:
             import subprocess as _sp
             notify_script = os.path.join(SCRIPT_DIR, "cast-notify.sh")
@@ -483,7 +568,11 @@ def _notify_neon_risk(tool, tool_input, data):
                     ["bash", notify_script, "neon_write",
                      f"Neon {label} tool called: {tool}",
                      "CAST Neon Guard"],
-                    timeout=3, capture_output=True,
+                    # 1 s, not 3: the hook's settings timeout is 5 s and the
+                    # native ask prints LAST (after this, the sentinel load
+                    # and the ledger write), so the worst case must stay well
+                    # under it. A timeout here is swallowed (fail-open).
+                    timeout=1, capture_output=True,
                 )
         except Exception:
             pass
@@ -491,9 +580,106 @@ def _notify_neon_risk(tool, tool_input, data):
         if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
             sentinel = _load("cast_egress_sentinel", "cast-egress-sentinel.py")
             if sentinel is not None:
-                action = _run_egress(sentinel, data)
-                if action is not None:
-                    _emit_egress(sentinel, action)
+                # Recorded here; the advisory (if any) is RETURNED, not printed,
+                # so main() can fold it into the single JSON object it emits
+                # alongside the native ask (stdout must hold exactly one).
+                return _run_egress(sentinel, data)
+    except Exception:
+        pass
+    return None
+
+
+def _neon_ask_reason(tool, tool_input):
+    """Reason text for a native `permissionDecision: "ask"` on a risky Neon
+    call, or None when no prompt is warranted (not a Neon tool, a known-safe
+    read, or any internal error -- fail-open by this hook's contract; the
+    managed-settings.d/12-ask.json globs are the belt for that case).
+
+    The text names the tool only. tool_input content (SQL text etc.) is
+    NEVER included: the reason is shown to the user and written to
+    transcripts, and the ledger/notify paths keep the same no-payload
+    invariant. A tool name that is not a plain identifier is replaced by the
+    word "tool" so odd bytes never reach the prompt."""
+    try:
+        risk = _classify_neon_risk(tool, tool_input)
+        if risk is None:
+            return None
+        normalized = (tool or "").lstrip().lower()
+        bare = normalized[len("mcp__neon__"):]
+        if not re.fullmatch(r"[a-z0-9_]{1,80}", bare):
+            bare = "tool"
+        if risk == "credential":
+            return f"[CAST] Neon {bare} can return a credential — confirm before it runs."
+        if normalized == _NEON_EXPLAIN_TOOL:
+            return (
+                "[CAST] explain_sql_statement with analyze not explicitly false "
+                "executes the SQL and its side effects — confirm before it runs."
+            )
+        return (
+            f"[CAST] Neon {bare} is not on CAST's known-safe read list "
+            "(write or unrecognised tool) — confirm before it runs."
+        )
+    except Exception:
+        return None
+
+
+_NEON_UNPARSEABLE_REASON = (
+    "[CAST] Neon tool call could not be parsed by the guard — "
+    "confirm before it runs."
+)
+_NEON_TOOL_NAME_SCAN_RE = re.compile(r'"tool_name"\s*:\s*"\s*mcp__neon__', re.IGNORECASE)
+
+
+def _emit_unparseable_neon_ask(raw):
+    """Parse-failure branch ONLY. If the raw stdin still LOOKS like a Neon
+    tool call (a `"tool_name": "mcp__neon__` token), print ONE ask object --
+    fail-closed where the structured path cannot run. Any error or no match
+    -> print nothing (fail-open, exit 0 by the caller).
+
+    The WHOLE of `raw` is scanned, not a prefix: if the harness serialises
+    tool_input before tool_name, a >64 KiB tool_input would push the name past
+    any fixed prefix window and hide it (reproduced on 3.9). The regex is
+    linear (a literal prefix, no nested quantifiers), so the full scan is
+    cheap: ~130 KB of adversarial input measured at 0.02 s."""
+    try:
+        if _NEON_TOOL_NAME_SCAN_RE.search(raw):
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": _NEON_UNPARSEABLE_REASON,
+            }}))
+    except Exception:
+        pass
+
+
+def _emit_pretool_output(sentinel, action, neon_reason):
+    """Print AT MOST ONE hookSpecificOutput JSON object on stdout (Claude Code
+    2.1.288 BLOCKS the call when a PreToolUse hook's output fails to parse, so
+    two concatenated objects must never happen).
+
+      neon_reason set  -> {"permissionDecision": "ask", "permissionDecisionReason":
+                          neon_reason}, plus "additionalContext" when an egress
+                          advisory also exists (the advisory text is folded in,
+                          not printed separately);
+      neon_reason None -> the egress advisory alone (unchanged behaviour), or
+                          nothing.
+    Never raises."""
+    try:
+        advisory = action is not None and action[0] == "advisory"
+        if neon_reason:
+            out = {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": neon_reason,
+            }
+            if advisory and sentinel is not None:
+                try:
+                    out["additionalContext"] = sentinel.advisory_context(action[1])
+                except Exception:
+                    pass
+            print(json.dumps({"hookSpecificOutput": out}))
+        elif advisory and sentinel is not None:
+            _emit_egress(sentinel, action)
     except Exception:
         pass
 
@@ -602,7 +788,18 @@ def _record_dispatch(data):
 
 def main():
     try:
-        raw = sys.stdin.read()
+        # Read BYTES and decode ourselves: sys.stdin.read() raises
+        # UnicodeDecodeError on invalid UTF-8 (strict locale), which would
+        # return 0 here before `raw` exists -- so a Neon call inside such a
+        # payload got no ask. errors="replace" keeps `raw` defined (a U+FFFD
+        # inside a JSON string still parses; one outside it falls to the
+        # parse-failure scan below). Fall back to text read if stdin has no
+        # .buffer (e.g. a patched stream).
+        _stdin_buf = getattr(sys.stdin, "buffer", None)
+        if _stdin_buf is not None:
+            raw = _stdin_buf.read().decode("utf-8", errors="replace")
+        else:
+            raw = sys.stdin.read()
     except Exception:
         return 0
     if not raw.strip():
@@ -610,8 +807,15 @@ def main():
     try:
         data = json.loads(raw)
     except Exception:
+        # Parse failure (malformed JSON, or RecursionError on deep nesting --
+        # /usr/bin/python3 3.9 trips it near 1000 levels). Everything below is
+        # unreachable, so this is the ONLY place a Neon call can still be
+        # caught: fail closed with a prompt rather than let it through
+        # silently. Nothing but that one ask is ever printed on this path.
+        _emit_unparseable_neon_ask(raw)
         return 0
     if not isinstance(data, dict):
+        _emit_unparseable_neon_ask(raw)
         return 0
 
     tool = data.get("tool_name", "") or ""
@@ -654,15 +858,27 @@ def main():
                         pass
                     return _block(message)
 
-    # 0.5. Neon MCP unsafe-tool notify guard -- fires in EVERY context (see
+    # 0.5. Neon MCP unsafe-tool guard -- fires in EVERY context (see
     #      _notify_neon_risk's docstring), same "every context" rule as the
-    #      Bash git/kill/rm guards above. Notify + record only -- never blocks.
-    _notify_neon_risk(tool, tool_input, data)
+    #      Bash git/kill/rm guards above. Notify + record never hard-block. The
+    #      same classification also yields a native `permissionDecision: "ask"`
+    #      (neon_reason): a prompt, not a hard block -- exit stays 0 (never 2);
+    #      headless / CLAUDE_SUBPROCESS=1 cannot answer it, so there it is
+    #      effectively a deny (intended fail-closed). The one JSON
+    #      object carrying it is printed by _emit_pretool_output (here for a
+    #      subagent, at step 2 for a top-level session).
+    neon_action = _notify_neon_risk(tool, tool_input, data)
+    neon_reason = _neon_ask_reason(tool, tool_input)
 
     # Recursion-prevention skip: the REST of the dispatcher (Write/Edit path policy
     # engine + TTL sweep, egress I/O, dispatch_decisions capture) is suppressed for
     # managed/headless sub-claude to avoid hook recursion.
     if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
+        if neon_reason or neon_action is not None:
+            _emit_pretool_output(
+                _load("cast_egress_sentinel", "cast-egress-sentinel.py"),
+                neon_action, neon_reason,
+            )
         return 0
 
     # 1. Write/Edit path policy (top-level sessions only).
@@ -678,12 +894,17 @@ def main():
 
     # 2. EGRESS — record + emit (only reached when nothing hard-blocked; blocked
     #    commands are never off-machine-bound, so no egress record is lost).
+    #    Output goes through _emit_pretool_output so a Neon ask and an egress
+    #    advisory share ONE JSON object. It is called even for a non-egress tool
+    #    name (e.g. an upper-cased "MCP__NEON__...", which _classify_neon_risk
+    #    normalises but _is_egress_tool does not) so the ask is never lost.
+    sentinel = None
+    action = None
     if _is_egress_tool(tool):
         sentinel = _load("cast_egress_sentinel", "cast-egress-sentinel.py")
         if sentinel is not None:
             action = _run_egress(sentinel, data)
-            if action is not None:
-                _emit_egress(sentinel, action)
+    _emit_pretool_output(sentinel, action, neon_reason)
 
     # F2: record the dispatch decision (record-only; NEVER blocks a dispatch).
     # The subagent-dispatch tool is "Agent" in current Claude Code and "Task" in
