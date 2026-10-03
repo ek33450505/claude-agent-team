@@ -3597,6 +3597,38 @@ PYEOF
     printf "%b hook wiring: no double-fire risk\n" "$INFO"
   fi
 
+  # 24. launchd jobs loaded
+  # Every installed $HOME/Library/LaunchAgents/com.cast.*.plist should be loaded in the
+  # user's launchd domain. Uses _launchd_job_loaded (print-first) so a sandboxed shell,
+  # whose `launchctl list` sees an empty domain, does not report a false "all unloaded".
+  #   no launchctl (Linux/CI) → INFO skip; no plists → INFO; any unloaded → WARN
+  local _lj_dir="${HOME}/Library/LaunchAgents"
+  if ! command -v launchctl >/dev/null 2>&1; then
+    printf "%b launchd: check skipped (launchctl not available)\n" "$INFO"
+  else
+    local _lj_total=0 _lj_loaded=0 _lj_unloaded="" _lj_plist _lj_label
+    for _lj_plist in "$_lj_dir"/com.cast.*.plist; do
+      [[ -f "$_lj_plist" ]] || continue
+      _lj_label="$(plutil -extract Label raw -o - "$_lj_plist" 2>/dev/null || true)"
+      [[ -n "$_lj_label" ]] || _lj_label="$(basename "$_lj_plist" .plist)"
+      _lj_total=$((_lj_total + 1))
+      if _launchd_job_loaded "$_lj_label"; then
+        _lj_loaded=$((_lj_loaded + 1))
+      else
+        _lj_unloaded="${_lj_unloaded} ${_lj_label}"
+      fi
+    done
+    if [[ "$_lj_total" -eq 0 ]]; then
+      printf "%b launchd: no com.cast.* LaunchAgent plists installed in %s\n" "$INFO" "$_lj_dir"
+    elif [[ -z "$_lj_unloaded" ]]; then
+      printf "%b launchd: %d/%d com.cast.* jobs loaded\n" "$OK" "$_lj_loaded" "$_lj_total"
+    else
+      printf "%b launchd: %d/%d com.cast.* jobs loaded — NOT loaded:%s\n" "$WARN" "$_lj_loaded" "$_lj_total" "$_lj_unloaded"
+      printf "      Fix: launchctl bootstrap gui/%s ~/Library/LaunchAgents/<label>.plist  (or re-run: bash install.sh)\n" "$(id -u)"
+      overall_ok=0
+    fi
+  fi
+
   # Rules drift — main-session rules/ vs the CAST-owned rules-core/ baseline.
   # install.sh copies rules-core/* -> ~/.claude/rules/ SKIP-IF-EXISTS (never refreshed once
   # present, and ~/.claude/rules/ is what the MAIN orchestrator session loads), while it
