@@ -474,12 +474,18 @@ def record(event: dict, verdict: dict, tool_name: str, session_id: str) -> None:
 # --------------------------------------------------------------------------
 # Output
 # --------------------------------------------------------------------------
+def advisory_context(verdict: dict) -> str:
+    """The advisory text, shared by emit_advisory and by callers that fold it
+    into a larger hookSpecificOutput object (cast-pretool-dispatch.py)."""
+    return (f"[CAST-EGRESS:{verdict['severity']}] {verdict['reason']} "
+            f"(recorded to logs/egress.jsonl).")
+
+
 def emit_advisory(verdict: dict) -> None:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": f"[CAST-EGRESS:{verdict['severity']}] {verdict['reason']} "
-                                 f"(recorded to logs/egress.jsonl).",
+            "additionalContext": advisory_context(verdict),
         }
     }))
 
