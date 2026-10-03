@@ -333,7 +333,7 @@ FAIL_VIEW_STUB
 
 # ---------------------------------------------------------------------------
 # Option injection: the release tag is untrusted GitHub data passed to
-# `gh release view` as a positional arg — a leading "-" would be parsed as a
+# `gh release view` as a positional arg - a leading "-" would be parsed as a
 # gh flag. Tags that start with "-" or contain whitespace/control chars must be
 # skipped (with a warning) and never reach `gh release view`.
 # ---------------------------------------------------------------------------
@@ -359,14 +359,15 @@ LOGGHSTUB
 }
 
 # Run the checker against a single fake source with the logging gh stub and the
-# stub scorer. $1 = JSON release list served by `gh release list`.
+# stub scorer. $1 = JSON release list served by `gh release list`;
+# $2 (optional) = LC_ALL to run the checker under (empty = ambient locale).
 _run_check_with_releases() {
   _install_logging_gh_stub
   _install_score_stub "$HOME/scripts"
   _write_sources "$HOME/sources.json"
   export GH_LOG="$HOME/gh.log"
   : > "$GH_LOG"
-  run env CLAUDE_SUBPROCESS=0 \
+  run env CLAUDE_SUBPROCESS=0 LC_ALL="${2:-}" \
     GH_LOG="$GH_LOG" GH_RELEASES="$1" \
     CAST_UPGRADE_SOURCES_FILE="$HOME/sources.json" \
     CAST_UPGRADE_SCORE_SCRIPT="$HOME/scripts/cast-upgrade-score.sh" \
@@ -418,4 +419,66 @@ _run_check_with_releases() {
   assert_output '1'
   run bash -c 'printf "%s\n" "$1" | grep -c "unsafe tag name from test-org/test-repo"' _ "$check_out"
   assert_output '2'
+}
+
+# The tag guard is an ALLOW-list with a literally enumerated charset, so it must
+# behave identically in every locale: bash ranges ([A-Z]) and classes
+# ([:cntrl:], [:space:]) are locale-dependent, and under LC_ALL=C a deny-list
+# lets high bytes (e, U+202E bidi override, U+009B CSI, NBSP) straight through.
+# $1 = LC_ALL value. (If the host lacks en_US.UTF-8, bash falls back to the C
+# locale; the guard result must be the same, so the test stays valid.)
+_assert_tag_allowlist_in_locale() {
+  # JSON \u escapes: e-acute, RLO U+202E, CSI U+009B, NBSP U+00A0.
+  _run_check_with_releases '[{"tagName":"v1.0\u00e9","publishedAt":"2099-01-01T00:00:00Z"},{"tagName":"v1\u202e0.1","publishedAt":"2099-01-01T00:00:00Z"},{"tagName":"v1\u009b0","publishedAt":"2099-01-01T00:00:00Z"},{"tagName":"v1\u00a00","publishedAt":"2099-01-01T00:00:00Z"},{"tagName":"@scope/pkg@1.2.3","publishedAt":"2099-01-01T00:00:00Z"},{"tagName":"v1-rc.1","publishedAt":"2099-01-01T00:00:00Z"},{"tagName":"release-1.2","publishedAt":"2099-01-01T00:00:00Z"}]' "$1"
+  assert_success
+  local check_out="$output"
+  # Exactly the three allow-listed tags were viewed - nothing else.
+  run grep -c '^release|view|' "$GH_LOG"
+  assert_output '3'
+  run grep -c '^release|view|@scope/pkg@1.2.3|' "$GH_LOG"
+  assert_output '1'
+  run grep -c '^release|view|v1-rc.1|' "$GH_LOG"
+  assert_output '1'
+  run grep -c '^release|view|release-1.2|' "$GH_LOG"
+  assert_output '1'
+  # One warning per rejected tag (4), each naming the repo.
+  run bash -c 'printf "%s\n" "$1" | grep -c "unsafe tag name from test-org/test-repo"' _ "$check_out"
+  assert_output '4'
+}
+
+@test "upgrade-check: tag allow-list rejects non-ASCII tags under LC_ALL=C" {
+  _assert_tag_allowlist_in_locale C
+}
+
+@test "upgrade-check: tag allow-list rejects non-ASCII tags under LC_ALL=en_US.UTF-8" {
+  _assert_tag_allowlist_in_locale en_US.UTF-8
+}
+
+@test "upgrade-check: the scorer's one-line stderr notice is not swallowed" {
+  _install_logging_gh_stub
+  mkdir -p "$HOME/scripts"
+  cat > "$HOME/scripts/cast-upgrade-score.sh" <<'NOISYSCORE'
+#!/bin/bash
+echo "[cast-upgrade-score] claude exited 7 for $1@$2 - see ~/.claude/logs/upgrade-score.log" >&2
+echo "[]"
+NOISYSCORE
+  chmod +x "$HOME/scripts/cast-upgrade-score.sh"
+  _write_sources "$HOME/sources.json"
+  export GH_LOG="$HOME/gh.log"
+  : > "$GH_LOG"
+  run env CLAUDE_SUBPROCESS=0 \
+    GH_LOG="$GH_LOG" GH_RELEASES='[{"tagName":"v1.0.0","publishedAt":"2099-01-01T00:00:00Z"}]' \
+    CAST_UPGRADE_SOURCES_FILE="$HOME/sources.json" \
+    CAST_UPGRADE_SCORE_SCRIPT="$HOME/scripts/cast-upgrade-score.sh" \
+    CAST_STATE_DIR="$HOME/.claude/cast" \
+    bash "$UPGRADE_CHECK_SH"
+  assert_success
+  assert_output --partial '[cast-upgrade-score] claude exited 7 for test-org/test-repo@v1.0.0'
+}
+
+@test "upgrade-check: critical-items pointer names a command that exists (cast doctor)" {
+  _run_check_with_releases '[{"tagName":"v1.0.0","publishedAt":"2099-01-01T00:00:00Z"}]'
+  assert_success
+  assert_output --partial 'Run: cast doctor'
+  refute_output --partial 'cast upgrade list'
 }

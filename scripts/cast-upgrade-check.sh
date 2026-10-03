@@ -127,10 +127,13 @@ print(f\"{clean(d.get('tagName'))}\t{clean(d.get('publishedAt'))}\")
     [ -z "$TAG" ] && continue
 
     # TAG comes from untrusted GitHub release data and is passed to `gh release view`
-    # as a positional arg: a leading "-" would be parsed as a gh flag (option injection),
-    # and whitespace/control chars have no place in a tag. Skip, don't sanitize.
+    # as a positional arg: a leading "-" would be parsed as a gh flag (option injection).
+    # Allow-list, not deny-list: bash ranges (A-Z) and classes ([:alnum:], [:cntrl:])
+    # are locale-dependent, so under LC_ALL=C bidi overrides, CSI, NBSP etc. would slip
+    # through a deny-list. The charset below is enumerated literally and covers
+    # monorepo tags like @scope/pkg@1.2.3. Skip, don't sanitize.
     case "$TAG" in
-      -* | *[[:space:][:cntrl:]]*)
+      -* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._+@/-]*)
         printf "[cast-upgrade-check] Warning: skipping release with unsafe tag name from %s.\n" "$REPO" >&2
         continue
         ;;
@@ -183,7 +186,9 @@ print('1' if pub > lkg else '0')
     fi
 
     # Score the release notes
-    SCORED_ITEMS="$(bash "$SCORE_SCRIPT" "$REPO" "$TAG" "$NOTES_FILE" 2>/dev/null || echo "[]")"
+    # The scorer's stderr is NOT discarded: on a claude failure it prints exactly one
+    # "[cast-upgrade-score] claude exited ..." line, which must stay visible.
+    SCORED_ITEMS="$(bash "$SCORE_SCRIPT" "$REPO" "$TAG" "$NOTES_FILE" || echo "[]")"
     rm -f "$NOTES_FILE"
 
     if [ -z "$SCORED_ITEMS" ] || [ "$SCORED_ITEMS" = "[]" ]; then
@@ -299,5 +304,5 @@ print(f'{total}\t{critical}')
 
 printf "[cast-upgrade-check] Done. Candidates: %s total, %s CRITICAL\n" "$TOTAL" "$CRITICAL"
 if [ "$CRITICAL" -gt 0 ]; then
-  printf "[cast-upgrade-check] Run: cast upgrade list  (to review critical items)\n"
+  printf "[cast-upgrade-check] Run: cast doctor  (to review critical items)\n"
 fi
