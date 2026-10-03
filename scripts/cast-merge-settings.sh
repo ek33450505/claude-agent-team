@@ -16,6 +16,12 @@
 set -euo pipefail
 
 OUTPUT="${1:-${HOME}/.claude/settings.json}"
+
+# Fail closed: a directory as output would make the final mv drop the temp file inside it.
+if [[ -d "$OUTPUT" ]]; then
+  echo "[cast-merge-settings] ERROR: output path is a directory: $OUTPUT" >&2
+  exit 1
+fi
 FRAGMENT_DIR="${HOME}/.claude/managed-settings.d"
 
 if [ ! -d "$FRAGMENT_DIR" ]; then
