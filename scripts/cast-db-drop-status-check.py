@@ -78,44 +78,64 @@ def main() -> int:
         if not _has_status_check(ddl):
             return 0  # already clean — idempotent no-op
 
-        new_ddl = _strip_status_check(ddl)
-        if _has_status_check(new_ddl):
-            print("[drop-status-check] could not strip CHECK from DDL; aborting (no changes made)",
-                  file=sys.stderr)
-            return 1
-        # Build the temp-table DDL by renaming only the CREATE TABLE target.
-        tmp_ddl = re.sub(
-            r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["\[]?agent_runs["\]]?',
-            'CREATE TABLE agent_runs__newschema',
-            new_ddl,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-        if 'agent_runs__newschema' not in tmp_ddl:
-            print("[drop-status-check] could not rename CREATE target; aborting", file=sys.stderr)
-            return 1
-
-        # Preserve exact column order (incl. organically-added columns).
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_runs)").fetchall()]
-        if not cols:
-            print("[drop-status-check] agent_runs has no columns?; aborting", file=sys.stderr)
-            return 1
-        col_list = ', '.join(f'"{c}"' for c in cols)
-
-        # Capture index DDLs (skip auto-indexes which have sql IS NULL); they are
-        # dropped with the old table and must be recreated against the new one.
-        index_ddls = [
-            r[0] for r in conn.execute(
-                "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='agent_runs' AND sql IS NOT NULL"
-            ).fetchall()
-        ]
-
-        before = conn.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0]
-
         # Foreign keys must be toggled outside a transaction.
         conn.execute("PRAGMA foreign_keys=OFF")
         try:
-            conn.execute("BEGIN")
+            # L1 (audit B-3): take the write lock BEFORE reading the schema inputs.
+            # The unlocked read above is only a cheap no-op fast path (so a routine
+            # init never takes a write lock); everything the rebuild is derived from
+            # is re-read here, under BEGIN IMMEDIATE, so a concurrent writer cannot
+            # change the columns / row count between the read and the swap (that
+            # would silently drop a just-added column's data). If the lock cannot be
+            # obtained within the busy timeout this raises OperationalError -> the
+            # handler below rolls back and returns 1 (non-fatal WARN upstream).
+            conn.execute("BEGIN IMMEDIATE")
+
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_runs'"
+            ).fetchone()
+            if not row or not row[0] or not _has_status_check(row[0]):
+                conn.rollback()
+                return 0  # another process migrated (or dropped) it while we waited
+            ddl = row[0]
+
+            new_ddl = _strip_status_check(ddl)
+            if _has_status_check(new_ddl):
+                conn.rollback()
+                print("[drop-status-check] could not strip CHECK from DDL; aborting (no changes made)",
+                      file=sys.stderr)
+                return 1
+            # Build the temp-table DDL by renaming only the CREATE TABLE target.
+            tmp_ddl = re.sub(
+                r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["\[]?agent_runs["\]]?',
+                'CREATE TABLE agent_runs__newschema',
+                new_ddl,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            if 'agent_runs__newschema' not in tmp_ddl:
+                conn.rollback()
+                print("[drop-status-check] could not rename CREATE target; aborting", file=sys.stderr)
+                return 1
+
+            # Preserve exact column order (incl. organically-added columns).
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(agent_runs)").fetchall()]
+            if not cols:
+                conn.rollback()
+                print("[drop-status-check] agent_runs has no columns?; aborting", file=sys.stderr)
+                return 1
+            col_list = ', '.join(f'"{c}"' for c in cols)
+
+            # Capture index DDLs (skip auto-indexes which have sql IS NULL); they are
+            # dropped with the old table and must be recreated against the new one.
+            index_ddls = [
+                r[0] for r in conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name='agent_runs' AND sql IS NOT NULL"
+                ).fetchall()
+            ]
+
+            before = conn.execute("SELECT COUNT(*) FROM agent_runs").fetchone()[0]
+
             conn.execute(tmp_ddl)
             conn.execute(
                 f"INSERT INTO agent_runs__newschema ({col_list}) SELECT {col_list} FROM agent_runs"
