@@ -298,10 +298,10 @@ print(len(data.get('env', {})))
 }
 
 @test "status shows 'Not loaded' when daemon is not loaded" {
-  # Stub launchctl exits 1 for 'list' (daemon not loaded)
+  # Stub launchctl exits 1 for 'list' AND 'print' (daemon not loaded in any domain)
   cat > "$HOME/.claude/stubs/launchctl" <<'STUBEOF'
 #!/bin/bash
-if [[ "$1" == "list" ]]; then
+if [[ "$1" == "list" || "$1" == "print" ]]; then
   exit 1
 fi
 exit 0
@@ -310,6 +310,23 @@ STUBEOF
   CAST_OTEL_DRY_RUN="0" run bash "$OTEL_SH" status
   assert_success
   assert_output --partial "Not loaded"
+}
+
+@test "status shows 'Loaded' when only 'launchctl print' sees the job (sandboxed-shell shape)" {
+  # Inside a sandboxed shell (Claude Code's Bash tool) `launchctl list <label>`
+  # sees an empty domain and exits 1, while `launchctl print <domain>/<label>`
+  # resolves the running service and exits 0.
+  cat > "$HOME/.claude/stubs/launchctl" <<'STUBEOF'
+#!/bin/bash
+if [[ "$1" == "list" ]]; then
+  exit 1
+fi
+exit 0
+STUBEOF
+  CAST_OTEL_DRY_RUN="0" run bash "$OTEL_SH" status
+  assert_success
+  assert_output --partial "Loaded"
+  refute_output --partial "Not loaded"
 }
 
 @test "status shows env key count after enable" {

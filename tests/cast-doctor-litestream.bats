@@ -123,6 +123,19 @@ EOF
   chmod +x "${FAKE_BIN}/launchctl"
 }
 
+# Install a fake launchctl with the sandboxed-shell shape: `list <label>` sees an
+# empty domain (exit 1) while `print <domain>/<label>` resolves the service (exit 0)
+_install_fake_launchctl_sandboxed() {
+  cat > "${FAKE_BIN}/launchctl" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "print" ]; then
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "${FAKE_BIN}/launchctl"
+}
+
 # Create litestream.yml config at CAST_LITESTREAM_ROOT
 _write_fake_config() {
   mkdir -p "${CAST_LITESTREAM_ROOT}"
@@ -316,6 +329,38 @@ os.utime(p, (stale_time, stale_time))
   _run_doctor_with_path "$FAKE_BIN"
   assert_output --partial "Litestream: replica fresh"
   assert_output --partial "lag"
+}
+
+# ---------------------------------------------------------------------------
+# 7b. Sandboxed shell: `launchctl list` sees nothing, `launchctl print` sees the
+#     running job → daemon is loaded, no false "daemon not loaded" WARN
+# ---------------------------------------------------------------------------
+@test "daemon visible only via launchctl print (sandbox shape): not reported as not loaded" {
+  _install_fake_litestream
+  _install_fake_launchctl_sandboxed
+  _write_fake_config
+  _create_fresh_replica
+
+  _run_doctor_with_path "$FAKE_BIN"
+  assert_output --partial "Litestream: replica fresh"
+  refute_output --partial "daemon not loaded"
+}
+
+# ---------------------------------------------------------------------------
+# 7c. Events dir that is genuinely not owner-writable stays a WARN (the
+#     sandbox-only INFO path must not swallow a real permission problem)
+# ---------------------------------------------------------------------------
+@test "events dir with owner-write bit cleared: WARN not writable, not the sandbox INFO" {
+  [ "$(id -u)" -ne 0 ] || skip "root bypasses directory permission bits"
+  mkdir -p "$HOME/.claude/cast/events"
+  chmod 555 "$HOME/.claude/cast/events"
+
+  _run_doctor_with_path "$FAKE_BIN"
+  # Restore before asserting so teardown can clean up even if an assert fails
+  chmod 755 "$HOME/.claude/cast/events"
+
+  assert_output --partial "Events dir not writable"
+  refute_output --partial "owner-writable"
 }
 
 # ---------------------------------------------------------------------------

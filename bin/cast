@@ -77,6 +77,18 @@ _warn()    { printf "${C_YELLOW}%s${C_RESET}\n" "$*" >&2; }
 _error()   { printf "${C_RED}Error: %s${C_RESET}\n" "$*" >&2; }
 _verbose() { [ "$CAST_VERBOSE" -eq 1 ] && printf "${C_DIM}[verbose] %s${C_RESET}\n" "$*" >&2; }
 
+# True when a launchd job is loaded. `launchctl list <label>` sees an empty domain
+# inside a sandboxed shell (e.g. Claude Code's Bash tool) and reports every job as
+# not loaded; `launchctl print` resolves the service directly. Try the GUI domain,
+# then the user domain (non-GUI/SSH logins), then legacy `list`.
+_launchd_job_loaded() {
+  local label="$1" uid
+  uid="$(id -u)"
+  launchctl print "gui/${uid}/${label}" >/dev/null 2>&1 \
+    || launchctl print "user/${uid}/${label}" >/dev/null 2>&1 \
+    || launchctl list "$label" >/dev/null 2>&1
+}
+
 # _db_state — prints "ok" | "unreadable" | "missing". A read probe, NOT [ -f ]:
 # sandbox denyRead blocks stat(), so [ -f ] reports a present file as missing.
 _db_state() {
@@ -2371,8 +2383,24 @@ PYEOF
 
   # 5. Events dir writable
   local events_dir="${HOME}/.claude/cast/events"
+  # Owner-write bit of the dir ("w" or "-"). `ls -ld | cut -c3` is the BSD/GNU-portable
+  # probe (`stat -f` means something different on GNU).
+  local _events_owner_w=""
+  if [ -d "$events_dir" ]; then
+    # shellcheck disable=SC2012
+    _events_owner_w="$(ls -ld "$events_dir" 2>/dev/null | cut -c3)" || _events_owner_w=""
+  fi
   if [ -d "$events_dir" ] && [ -w "$events_dir" ]; then
     printf "%b Events dir writable\n" "$OK"
+  elif [ -d "$events_dir" ] && [ -O "$events_dir" ] && [ "$_events_owner_w" = "w" ]; then
+    # Owner-write bit is set and we own the dir, yet this process cannot write:
+    # a sandboxed shell (e.g. Claude Code's Bash tool). Hooks write from the
+    # Claude Code process itself, so this is not a real failure. Known limitation:
+    # the shell cannot tell a sandbox from other process-level write denials on an
+    # owner-writable dir it owns (ACL deny, read-only mount, `chflags uchg`), so
+    # those also report INFO here; a real permission problem with the owner-write
+    # bit cleared still WARNs.
+    printf "%b Events dir: owner-writable, but not writable from this shell (likely a sandboxed shell; hooks write from Claude Code itself): %s\n" "$INFO" "$events_dir"
   elif [ -d "$events_dir" ]; then
     printf "%b Events dir not writable: %s\n" "$WARN" "$events_dir"
     overall_ok=0
@@ -3324,7 +3352,7 @@ except Exception:
     # Daemon status — macOS-only via launchctl; degrade gracefully on Linux/CI
     local _daemon_state="unknown"
     if command -v launchctl >/dev/null 2>&1; then
-      if launchctl list com.cast.litestream >/dev/null 2>&1; then
+      if _launchd_job_loaded com.cast.litestream; then
         _daemon_state="loaded"
       else
         _daemon_state="not_loaded"
@@ -3933,7 +3961,7 @@ except Exception:
     # Daemon state — macOS-only; degrade gracefully on Linux/CI
     local _daemon_state="unknown"
     if command -v launchctl >/dev/null 2>&1; then
-      if launchctl list com.cast.litestream >/dev/null 2>&1; then
+      if _launchd_job_loaded com.cast.litestream; then
         _daemon_state="loaded"
       else
         _daemon_state="not_loaded"
@@ -4034,7 +4062,7 @@ print(count)
 
   # ── 4. Wipe canary loaded ─────────────────────────────────────────────────
   # The canary is a launchd WatchPaths agent (com.cast.wipe-canary), NOT a
-  # settings.json hook. Real check: `launchctl list com.cast.wipe-canary` succeeds
+  # settings.json hook. Real check: `_launchd_job_loaded com.cast.wipe-canary` succeeds
   # (loaded) AND the plist's ProgramArguments script path exists.
   # Sub-rung: if the script path resolves inside ~/.claude → WARN (the wipe would
   # delete the canary script before it can fire — detected on this machine right now).
@@ -4044,9 +4072,9 @@ print(count)
   if ! command -v launchctl >/dev/null 2>&1; then
     info_count=$((info_count + 1))
     printf "%b Wipe canary: launchctl not available (Linux/CI) — skipping\n" "$INFO"
-  elif ! launchctl list "$_canary_label" >/dev/null 2>&1; then
+  elif ! _launchd_job_loaded "$_canary_label"; then
     warn_count=$((warn_count + 1))
-    printf "%b Wipe canary: daemon not loaded (launchctl list %s failed)\n" "$WARN" "$_canary_label"
+    printf "%b Wipe canary: daemon not loaded (launchctl has no %s)\n" "$WARN" "$_canary_label"
   else
     # Daemon is loaded. Parse the plist for the script path.
     local _canary_script_path=""

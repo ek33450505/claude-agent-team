@@ -319,7 +319,14 @@ _status() {
   # (1) Daemon status
   echo "Daemon status:"
   if command -v launchctl >/dev/null 2>&1; then
-    if "${LAUNCHCTL}" list "${PLIST_LABEL}" >/dev/null 2>&1; then
+    # `launchctl list <label>` sees an empty domain inside a sandboxed shell (e.g.
+    # Claude Code's Bash tool); `launchctl print` resolves the service directly.
+    # Try the GUI domain, then the user domain, then legacy `list`.
+    local _otel_uid
+    _otel_uid="$(id -u)"
+    if "${LAUNCHCTL}" print "gui/${_otel_uid}/${PLIST_LABEL}" >/dev/null 2>&1 \
+      || "${LAUNCHCTL}" print "user/${_otel_uid}/${PLIST_LABEL}" >/dev/null 2>&1 \
+      || "${LAUNCHCTL}" list "${PLIST_LABEL}" >/dev/null 2>&1; then
       echo "  ✓ Loaded"
     else
       echo "  ✗ Not loaded"
