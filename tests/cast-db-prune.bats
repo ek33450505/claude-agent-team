@@ -300,10 +300,72 @@ teardown() {
   local backup_dir
   backup_dir="$(mktemp -d)"
   export CAST_BACKUP_DIR="$backup_dir"
+  export CAST_DB_PRUNE_VACUUM_FREE_PCT=0
 
   run python3 "$SCRIPT"
   assert_success
   assert_output --partial "VACUUM complete"
+
+  rm -rf "$backup_dir"
+}
+
+# Seed routing_events with N rows (~3KB payload each) at a given age in days.
+_seed_padded() {
+  local n="$1" age="$2"
+  sqlite3 "$TEST_DB" "
+    WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i < $n)
+    INSERT INTO routing_events (timestamp, data)
+      SELECT datetime('now', '-$age days'), hex(randomblob(1500)) FROM c;
+  "
+}
+
+@test "VACUUM is skipped when freelist is below the default threshold" {
+  _seed_padded 400 1
+  _seed_padded 10 200
+  local backup_dir pages_before
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+  pages_before=$(sqlite3 "$TEST_DB" "PRAGMA page_count;")
+
+  run python3 "$SCRIPT"
+  assert_success
+  assert_output --partial "VACUUM skipped — freelist"
+  refute_output --partial "VACUUM complete"
+  [ "$(sqlite3 "$TEST_DB" "PRAGMA page_count;")" -eq "$pages_before" ]
+  [ "$(sqlite3 "$TEST_DB" "PRAGMA freelist_count;")" -gt 0 ]
+
+  rm -rf "$backup_dir"
+}
+
+@test "VACUUM runs and empties the freelist on a large delete at the default threshold" {
+  _seed_padded 400 200
+  _seed_padded 10 1
+  local backup_dir
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+  [ "$(sqlite3 "$TEST_DB" "PRAGMA freelist_count;")" -eq 0 ]
+
+  run python3 "$SCRIPT"
+  assert_success
+  assert_output --partial "VACUUM complete"
+  assert_output --partial "freelist"
+  [ "$(sqlite3 "$TEST_DB" "PRAGMA freelist_count;")" -eq 0 ]
+
+  rm -rf "$backup_dir"
+}
+
+@test "invalid CAST_DB_PRUNE_VACUUM_FREE_PCT falls back to 25 and does not crash" {
+  _seed_padded 400 1
+  _seed_padded 10 200
+  local backup_dir
+  backup_dir="$(mktemp -d)"
+  export CAST_BACKUP_DIR="$backup_dir"
+  export CAST_DB_PRUNE_VACUUM_FREE_PCT=abc
+
+  run python3 "$SCRIPT"
+  assert_success
+  assert_output --partial "CAST_DB_PRUNE_VACUUM_FREE_PCT='abc' invalid"
+  assert_output --partial "< 25%"
 
   rm -rf "$backup_dir"
 }
