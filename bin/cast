@@ -3379,6 +3379,24 @@ PYEOF
     fi
   fi
 
+  # cast.db WAL size — a WAL left large after the nightly prune VACUUM is not shrunk by a checkpoint
+  local _wal_file="${CAST_DB_PATH}-wal"
+  local _wal_warn_mb="${CAST_DOCTOR_WAL_WARN_MB:-256}"
+  [[ "$_wal_warn_mb" =~ ^(0|[1-9][0-9]*)$ ]] || _wal_warn_mb=256
+  if [[ ! -f "$_wal_file" ]]; then
+    printf "%b cast.db WAL: none\n" "$OK"
+  else
+    local _wal_bytes _wal_mb
+    _wal_bytes="$(wc -c < "$_wal_file" 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$_wal_bytes" =~ ^(0|[1-9][0-9]*)$ ]] || _wal_bytes=0
+    _wal_mb=$((_wal_bytes / 1048576))
+    if [[ "$_wal_mb" -gt "$_wal_warn_mb" ]]; then
+      printf "%b cast.db WAL: %s MB (> %s MB) — not shrunk by a checkpoint; usually left by the nightly prune VACUUM. Restarting com.cast.litestream truncates it\n" "$WARN" "$_wal_mb" "$_wal_warn_mb"
+    else
+      printf "%b cast.db WAL: %s MB\n" "$OK" "$_wal_mb"
+    fi
+  fi
+
   # 20. Homebrew tap count vs packages constant advisory
   # CAST taps = homebrew-cast* (8) + homebrew-claudes-journal (1) = 9 (2026-07-01 consolidation)
   # Excludes dropped non-CAST taps: homebrew-engram, homebrew-stratum, homebrew-jarvis
