@@ -8,6 +8,8 @@ Covers:
   STRIPE_KEY, SLACK_TOKEN, NPM_TOKEN, SENDGRID_KEY, GOOGLE_API_KEY, GENERIC_SECRET
     (C1b: closing redaction-engine blind spots — see _PII_CANDIDATES superset invariant test)
 """
+from __future__ import annotations
+
 import importlib.util
 import json
 import unittest

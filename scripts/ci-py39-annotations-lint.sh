@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ci-py39-annotations-lint.sh — Lint Python 3.9 annotation compatibility.
 #
-# Checks every scripts/*.py and bin/*.py file for two failure classes:
+# Checks every scripts/*.py, bin/*.py and tests/*.py file for two failure classes:
 #
 #   A) PEP-604 union syntax in annotation position (-> X | Y, : X | None,
 #      variable annotations with |) WITHOUT a "from __future__ import
@@ -62,9 +62,9 @@ if [[ "${1:-}" == "--self-test" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Collect Python files from scripts/ and bin/
+# Collect Python files from scripts/, bin/ and tests/
 # ---------------------------------------------------------------------------
-SCAN_DIRS=("$REPO_ROOT/scripts" "$REPO_ROOT/bin")
+SCAN_DIRS=("$REPO_ROOT/scripts" "$REPO_ROOT/bin" "$REPO_ROOT/tests")
 PY_FILES=()
 for dir in "${SCAN_DIRS[@]}"; do
     [[ -d "$dir" ]] || continue
@@ -74,11 +74,11 @@ for dir in "${SCAN_DIRS[@]}"; do
 done
 
 if [[ "${#PY_FILES[@]}" -eq 0 ]]; then
-    echo "[ci-py39-annotations-lint] No .py files found under scripts/ or bin/ — nothing to check."
+    echo "[ci-py39-annotations-lint] No .py files found under scripts/, bin/ or tests/ — nothing to check."
     exit 0
 fi
 
-echo "[ci-py39-annotations-lint] Scanning ${#PY_FILES[@]} file(s) in scripts/ and bin/"
+echo "[ci-py39-annotations-lint] Scanning ${#PY_FILES[@]} file(s) in scripts/, bin/ and tests/"
 echo ""
 
 # ---------------------------------------------------------------------------
