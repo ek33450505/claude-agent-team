@@ -439,35 +439,6 @@ def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=
     return [(s, r) for s, r in scored[:top_n]]
 
 
-def write_shared_memory(name, description, content, memory_type='project',
-                        importance=0.5, decay_rate=0.993):
-    """Write a memory to the shared pool (agent='shared')."""
-    if memory_type not in VALID_TYPES:
-        raise ValueError(f"Invalid memory type: {memory_type}. Must be one of {VALID_TYPES}")
-
-    # Check if UNIQUE constraint on (agent, name) exists by trying ON CONFLICT
-    # If the constraint doesn't exist, this will fall back to a plain insert
-    try:
-        db_execute("""
-            INSERT INTO agent_memories (agent, type, name, description, content, importance, decay_rate)
-            VALUES ('shared', ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(agent, name) DO UPDATE SET
-                content=excluded.content,
-                description=excluded.description,
-                importance=excluded.importance,
-                updated_at=CURRENT_TIMESTAMP,
-                valid_from=datetime('now'),
-                valid_to=NULL
-        """, (memory_type, name, description, content, importance, decay_rate))
-    except sqlite3.OperationalError:
-        # ON CONFLICT clause requires a UNIQUE index — if not present, use INSERT OR REPLACE
-        db_execute("""
-            INSERT OR REPLACE INTO agent_memories
-            (agent, type, name, description, content, importance, decay_rate)
-            VALUES ('shared', ?, ?, ?, ?, ?, ?)
-        """, (memory_type, name, description, content, importance, decay_rate))
-
-
 def main():
     parser = argparse.ArgumentParser(description='Memory-based agent router and retriever')
     parser.add_argument('--prompt', type=str, default=None,

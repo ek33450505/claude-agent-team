@@ -54,10 +54,6 @@ def fail(reason: str) -> None:
     sys.exit(1)
 
 
-def invalid_if(condition: bool, reason: str) -> None:
-    if condition:
-        fail(reason)
-
 # ---------------------------------------------------------------------------
 # Validation logic (manual — stdlib only)
 # ---------------------------------------------------------------------------

@@ -233,20 +233,6 @@ def ensure_hook_failures_table() -> None:
     db_execute(sql)
 
 
-def ensure_tool_call_failures_table() -> None:
-    """Idempotently create the tool_call_failures table if it does not exist."""
-    sql = """CREATE TABLE IF NOT EXISTS tool_call_failures (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp  TEXT    NOT NULL,
-        session_id TEXT,
-        tool_name  TEXT    NOT NULL,
-        error      TEXT,
-        project    TEXT,
-        data       TEXT
-    )"""
-    db_execute(sql)
-
-
 def log_hook_failure(hook_name: str, exit_code: int, stderr: str, session_id: str = None) -> None:
     """Write a row to hook_failures. Wraps the DB write in try/except — MUST NOT crash the hook pipeline.
 

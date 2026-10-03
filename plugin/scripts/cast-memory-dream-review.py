@@ -78,12 +78,6 @@ def fetch_completed_runs(db_path, project_id=None):
             sys.exit(1)
 
 
-def is_promoted(output_path):
-    """Return True if the sentinel .promoted file exists in the output dir."""
-    sentinel = os.path.join(output_path, '.promoted')
-    return os.path.exists(sentinel)
-
-
 def get_promote_status(output_path):
     """
     Return the promotion status string for a run's output dir.
