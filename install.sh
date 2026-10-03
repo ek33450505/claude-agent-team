@@ -360,7 +360,11 @@ success "  Scripts installed (including cast_db.py)"
 # (user/project scope), NOT in the managed fragment. 12-ask.json (ask-gate enforcement —
 # permission prompts before destructive/credential tool calls; sibling of 11-deny; a
 # 2026-10-03 Neon ask-list change failed to deploy while it was skip-if-exists).
-# User-customizable fragments (env, permissions, etc.) skip-if-exists; a differing
+# 05-behavior.json (carries sandbox.failIfUnavailable) and 10-permissions.json are
+# enforcement fragments too: a repo fix to them otherwise never reaches the machine —
+# the same failure as 12-ask on 2026-10-03. Per-user customisations belong in
+# ~/.claude/settings.json / settings.local.json, NOT in a managed fragment.
+# Remaining fragments (env, model overrides, etc.) skip-if-exists; a differing
 # copy is reported (report-only drift WARN after the loop), never overwritten.
 # Downstream-only fragments (filenames not in source) are preserved by virtue of never being
 # touched. Backup of the prior CAST-owned copy goes to backups/.
@@ -373,7 +377,7 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
     base="$(basename "$fragment")"
     dest="$CLAUDE_DIR/managed-settings.d/$base"
     case "$base" in
-        *-hooks-*.json|50-mcp.json|11-deny.json|12-ask.json|61-sandbox.json)
+        *-hooks-*.json|50-mcp.json|05-behavior.json|10-permissions.json|11-deny.json|12-ask.json|61-sandbox.json)
             # CAST-owned: overwrite to propagate source updates
             if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
                 mkdir -p "$BACKUP_DIR/managed-settings.d"

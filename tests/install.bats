@@ -447,28 +447,115 @@ STUBEOF
   fi
 }
 
+# Shared body for the "CAST-owned enforcement fragment is replaced on reinstall" tests.
+# Args: <fragment filename> <stale JSON> <stale marker grep pattern (fixed string)>
+# Asserts: replaced notice, content-intact backup, dest byte-identical to repo source.
+assert_owned_fragment_replaced() {
+  local name="$1" stale_json="$2" stale_marker="$3"
+  local dest="$HOME/.claude/managed-settings.d/$name"
+
+  # First install — seeds the fragment from repo source
+  run_install
+  [ -f "$dest" ] || { echo "FAIL: $name not installed" >&2; return 1; }
+
+  # Simulate a stale/diverged deployed copy
+  printf '%s\n' "$stale_json" > "$dest"
+  if cmp -s "$REPO_DIR/managed-settings.d/$name" "$dest"; then
+    echo "setup error: stale copy of $name is identical to repo source" >&2
+    return 1
+  fi
+
+  # Second install — must overwrite with repo source
+  run run_install
+  assert_success
+
+  # A replaced copy is never silent: the notice names the file ...
+  assert_output --partial "Replaced (differed from repo): managed-settings.d/$name"
+
+  # ... and the stale copy is backed up with its content intact
+  local bak
+  bak="$(ls "$HOME"/.claude/backups/*/managed-settings.d/"$name" 2>/dev/null | head -1)"
+  [ -n "$bak" ] || { echo "FAIL: no backup of stale $name under ~/.claude/backups" >&2; return 1; }
+  grep -qF -- "$stale_marker" "$bak" || { echo "FAIL: backup of $name lacks the stale marker" >&2; cat "$bak" >&2; return 1; }
+
+  if grep -qF -- "$stale_marker" "$dest"; then
+    echo "FAIL: stale $name was NOT overwritten on reinstall" >&2
+    cat "$dest" >&2
+    return 1
+  fi
+  if ! cmp -s "$REPO_DIR/managed-settings.d/$name" "$dest"; then
+    echo "FAIL: reinstalled $name differs from repo source" >&2
+    return 1
+  fi
+}
+
+@test "Install: 05-behavior.json is overwritten on reinstall (CAST-owned fragment — propagates sandbox.failIfUnavailable)" {
+  # Stale copy disables the fail-closed sandbox switch (the shape a repo fix must be able to repair)
+  assert_owned_fragment_replaced "05-behavior.json" \
+    '{"sandbox":{"failIfUnavailable":false,"staleMarker05":true}}' \
+    'staleMarker05'
+
+  # The enforcement value from repo source is what landed
+  grep -q '"failIfUnavailable": true' "$HOME/.claude/managed-settings.d/05-behavior.json" || {
+    echo "FAIL: reinstalled 05-behavior.json lacks failIfUnavailable: true" >&2
+    return 1
+  }
+}
+
+@test "Install: 10-permissions.json is overwritten on reinstall (CAST-owned fragment — propagates permission allow-list)" {
+  assert_owned_fragment_replaced "10-permissions.json" \
+    '{"permissions":{"allow":["Bash(echo stale-marker-10)"]}}' \
+    'stale-marker-10'
+}
+
+@test "Install: identical 05-behavior.json and 10-permissions.json are synced with no Replaced notice or backup" {
+  run_install
+
+  run run_install
+  assert_success
+
+  local name
+  for name in 05-behavior.json 10-permissions.json; do
+    # Owned fragments report "Synced", never "Skipped (exists)"
+    assert_output --partial "Synced: managed-settings.d/$name"
+    refute_output --partial "Replaced (differed from repo): managed-settings.d/$name"
+    # No backup is taken when the copies are already identical
+    if compgen -G "$HOME/.claude/backups/*/managed-settings.d/$name" >/dev/null; then
+      echo "FAIL: unexpected backup of identical $name" >&2
+      return 1
+    fi
+  done
+}
+
 @test "Install: a customized user fragment is preserved and reported as drift" {
   run_install
 
-  local perm_dest="$HOME/.claude/managed-settings.d/10-permissions.json"
-  [ -f "$perm_dest" ] || { echo "FAIL: 10-permissions.json not installed" >&2; return 1; }
+  # 00-env.json remains a user-customizable (skip-if-exists) fragment
+  local env_dest="$HOME/.claude/managed-settings.d/00-env.json"
+  [ -f "$env_dest" ] || { echo "FAIL: 00-env.json not installed" >&2; return 1; }
 
-  # Local customization of a user-customizable (skip-if-exists) fragment
-  printf '{"permissions":{"allow":["Bash(echo custom-marker)"]}}\n' > "$perm_dest"
+  # Local customization of a user-customizable fragment
+  printf '{"env":{"CUSTOM_MARKER":"custom-marker"}}\n' > "$env_dest"
 
   run run_install
   assert_success
 
   # Preserved — install.sh must never overwrite a skip-if-exists fragment
-  if ! grep -q "custom-marker" "$perm_dest"; then
-    echo "FAIL: customized 10-permissions.json was overwritten on reinstall" >&2
-    cat "$perm_dest" >&2
+  if ! grep -q "custom-marker" "$env_dest"; then
+    echo "FAIL: customized 00-env.json was overwritten on reinstall" >&2
+    cat "$env_dest" >&2
     return 1
   fi
 
-  # Reported — report-only drift WARN names the file
+  # Skipped, not synced
+  assert_output --partial "Skipped (exists): managed-settings.d/00-env.json"
+  refute_output --partial "Replaced (differed from repo): managed-settings.d/00-env.json"
+
+  # Reported — report-only drift WARN names the file (and only the drifted one)
   assert_output --partial "differ from the repo source"
-  assert_output --partial "    - 10-permissions.json"
+  assert_output --partial "    - 00-env.json"
+  refute_output --partial "    - 10-permissions.json"
+  refute_output --partial "    - 05-behavior.json"
 }
 
 @test "Install: clean reinstall reports no fragment drift" {
