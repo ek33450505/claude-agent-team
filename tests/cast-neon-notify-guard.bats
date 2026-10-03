@@ -519,6 +519,63 @@ assert not missing, f'missing verb globs from ask list: {missing}'
   assert_success
 }
 
+@test "12-ask.json ask list covers the 2026-10-03 drift verbs" {
+  run python3 -c "
+import json
+d = json.load(open('$ASK_FRAGMENT'))
+ask = set(d['permissions']['ask'])
+required_globs = {
+    'mcp__neon__restore*', 'mcp__neon__finalize*', 'mcp__neon__recover*',
+    'mcp__neon__rotate*', 'mcp__neon__deploy*', 'mcp__neon__register*',
+    'mcp__neon__restart*', 'mcp__neon__start*', 'mcp__neon__suspend*',
+    'mcp__neon__disable*', 'mcp__neon__presign*',
+}
+required_literals = {
+    'mcp__neon__restore_snapshot', 'mcp__neon__finalize_branch_restore',
+    'mcp__neon__recover_project', 'mcp__neon__rotate_credential',
+    'mcp__neon__deploy_function',
+    'mcp__neon__register_functions_custom_domain',
+    'mcp__neon__restart_postgres_endpoint',
+    'mcp__neon__start_postgres_endpoint',
+    'mcp__neon__suspend_postgres_endpoint', 'mcp__neon__disable_auth',
+    'mcp__neon__presign_storage_object',
+}
+missing_globs = required_globs - ask
+assert not missing_globs, f'missing drift verb globs: {missing_globs}'
+missing_literals = required_literals - ask
+assert not missing_literals, f'missing drift literals: {missing_literals}'
+"
+  assert_success
+}
+
+@test "no 12-ask.json ask glob shadows a known safe-read tool" {
+  run python3 -c "
+import ast, fnmatch, json
+ask = json.load(open('$ASK_FRAGMENT'))['permissions']['ask']
+# Parse the real _NEON_SAFE_READ_RE out of the dispatch source (no import, no
+# side effects) so this check cannot drift from a hard-coded third copy.
+tree = ast.parse(open('$DISPATCH').read())
+pattern = None
+for node in ast.walk(tree):
+    if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == '_NEON_SAFE_READ_RE'
+            for t in node.targets):
+        pattern = node.value.args[0].value
+assert pattern, '_NEON_SAFE_READ_RE assignment not found in dispatch script'
+head, tail = '^mcp__neon__(', ')' + chr(36)
+assert pattern.startswith(head) and pattern.endswith(tail), f'unexpected regex shape: {pattern!r}'
+names = pattern[len(head):-len(tail)].split('|')
+# Non-vacuity: the parse must have produced the real enumeration.
+assert len(names) >= 10 and 'list_projects' in names and 'search' in names, f'parsed too few safe names: {names}'
+globs = [a for a in ask if '*' in a]
+assert globs, 'no glob entries found in ask list'
+hits = [(g, n) for g in globs for n in names
+        if fnmatch.fnmatchcase('mcp__neon__' + n, g)]
+assert not hits, f'ask glob(s) shadow known safe-read tool(s): {hits}'
+"
+  assert_success
+}
+
 @test "12-ask.json does not list any Neon safe-read tool (list_/describe_/explain_)" {
   run python3 -c "
 import json
