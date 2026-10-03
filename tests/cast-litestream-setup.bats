@@ -232,8 +232,20 @@ EOF
   assert_success
 
   local config="${HOME}/Library/Application Support/cast-test/litestream.yml"
-  # Expected: dbs:, - path: <db>, replicas:, - type: file, path: <replica>  = 5 non-empty lines
+  # Expected: comment, logging:, level: warn, dbs:, - path: <db>, replicas:, - type: file, path: <replica>  = 8 non-empty lines
   local count
   count=$(grep -c '[^[:space:]]' "$config" | tr -d ' ')
-  [ "$count" -eq 5 ]
+  [ "$count" -eq 8 ]
+}
+
+# ---------------------------------------------------------------------------
+# 11. Log level is capped at warn (INFO is ~1 line/s)
+# ---------------------------------------------------------------------------
+@test "setup: litestream.yml sets logging level warn at top level" {
+  run bash "$SETUP_SCRIPT"
+  assert_success
+
+  local config="${HOME}/Library/Application Support/cast-test/litestream.yml"
+  # level: warn must be the line directly under a top-level logging: key
+  grep -A1 '^logging:$' "$config" | grep -q '^  level: warn$'
 }
