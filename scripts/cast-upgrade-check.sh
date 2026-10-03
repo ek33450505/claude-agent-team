@@ -50,29 +50,29 @@ mkdir -p "$CAST_STATE_DIR"
 
 # ── Read last-checked timestamp (epoch 0 if file missing or malformed) ─────────
 LAST_CHECKED_ISO="$(python3 -c "
-import json, os
-f = '$LAST_CHECKED_FILE'
+import json, os, sys
+f = sys.argv[1]
 try:
     with open(f) as fh:
         d = json.load(fh)
     print(d.get('last_checked', '1970-01-01T00:00:00Z') or '1970-01-01T00:00:00Z')
 except Exception:
     print('1970-01-01T00:00:00Z')
-" 2>/dev/null || echo "1970-01-01T00:00:00Z")"
+" "$LAST_CHECKED_FILE" 2>/dev/null || echo "1970-01-01T00:00:00Z")"
 
 printf "[cast-upgrade-check] Last checked: %s\n" "$LAST_CHECKED_ISO"
 
 # ── Read sources list ──────────────────────────────────────────────────────────
 REPOS="$(python3 -c "
 import json, sys
-with open('$SOURCES_FILE') as f:
+with open(sys.argv[1]) as f:
     d = json.load(f)
 sources = d.get('sources', [])
 for s in sources:
     repo = s.get('repo', '')
     if repo:
         print(repo)
-" 2>/dev/null || echo "")"
+" "$SOURCES_FILE" 2>/dev/null || echo "")"
 
 if [ -z "$REPOS" ]; then
   printf "[cast-upgrade-check] No sources configured in upgrade-sources.json — nothing to check.\n"
@@ -81,8 +81,8 @@ fi
 
 # ── Load existing candidates (for idempotent merge) ────────────────────────────
 EXISTING_CANDIDATES="$(python3 -c "
-import json, os
-f = '$CANDIDATES_FILE'
+import json, os, sys
+f = sys.argv[1]
 try:
     with open(f) as fh:
         d = json.load(fh)
@@ -92,7 +92,7 @@ try:
         print('{}')
 except Exception:
     print('{}')
-" 2>/dev/null || echo "{}")"
+" "$CANDIDATES_FILE" 2>/dev/null || echo "{}")"
 
 # ── Process each source repo ───────────────────────────────────────────────────
 NEW_ENTRIES_JSON="{}"
@@ -143,10 +143,10 @@ def parse(s):
         except ValueError:
             continue
     return datetime.min.replace(tzinfo=timezone.utc)
-pub = parse('$PUBLISHED')
-lkg = parse('$LAST_CHECKED_ISO')
+pub = parse(sys.argv[1])
+lkg = parse(sys.argv[2])
 print('1' if pub > lkg else '0')
-" 2>/dev/null || echo "0")"
+" "$PUBLISHED" "$LAST_CHECKED_ISO" 2>/dev/null || echo "0")"
 
     if [ "$IS_NEW" != "1" ]; then
       continue
@@ -185,11 +185,11 @@ print('1' if pub > lkg else '0')
     NEW_ENTRIES_JSON="$(python3 -c "
 import json, hashlib, sys
 
-repo = '$REPO'
-tag = '$TAG'
-published = '$PUBLISHED'
-scored_raw = '''$SCORED_ITEMS'''
-existing_raw = '''$NEW_ENTRIES_JSON'''
+repo = sys.argv[1]
+tag = sys.argv[2]
+published = sys.argv[3]
+scored_raw = sys.argv[4]
+existing_raw = sys.argv[5]
 
 try:
     scored = json.loads(scored_raw)
@@ -220,14 +220,14 @@ for item in scored:
         }
 
 print(json.dumps(entries))
-" 2>/dev/null || echo "$NEW_ENTRIES_JSON")"
+" "$REPO" "$TAG" "$PUBLISHED" "$SCORED_ITEMS" "$NEW_ENTRIES_JSON" 2>/dev/null || echo "$NEW_ENTRIES_JSON")"
 
   done < <(python3 -c "
 import json, sys
-releases = json.loads('''$RELEASES_JSON''')
+releases = json.loads(sys.argv[1])
 for r in releases:
     print(json.dumps(r))
-" 2>/dev/null)
+" "$RELEASES_JSON" 2>/dev/null)
 
 done <<< "$REPOS"
 
@@ -235,8 +235,8 @@ done <<< "$REPOS"
 MERGED_CANDIDATES="$(python3 -c "
 import json, sys
 
-existing_raw = '''$EXISTING_CANDIDATES'''
-new_raw = '''$NEW_ENTRIES_JSON'''
+existing_raw = sys.argv[1]
+new_raw = sys.argv[2]
 
 try:
     existing = json.loads(existing_raw)
@@ -251,7 +251,7 @@ except Exception:
 # Merge: existing takes no precedence over new (idempotent keys prevent overwrites)
 merged = {**existing, **new_entries}
 print(json.dumps(merged, indent=2))
-" 2>/dev/null || echo "{}")"
+" "$EXISTING_CANDIDATES" "$NEW_ENTRIES_JSON" 2>/dev/null || echo "{}")"
 
 printf "%s\n" "$MERGED_CANDIDATES" > "$CANDIDATES_FILE"
 
@@ -263,29 +263,29 @@ print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 
 if [ -n "$NOW_ISO" ]; then
   python3 -c "
-import json, os
-f = '$LAST_CHECKED_FILE'
+import json, os, sys
+f = sys.argv[1]
 try:
     with open(f) as fh:
         d = json.load(fh)
 except Exception:
     d = {}
-d['last_checked'] = '$NOW_ISO'
+d['last_checked'] = sys.argv[2]
 with open(f, 'w') as fh:
     json.dump(d, fh, indent=2)
-" 2>/dev/null || true
+" "$LAST_CHECKED_FILE" "$NOW_ISO" 2>/dev/null || true
 fi
 
 # ── Summary ────────────────────────────────────────────────────────────────────
 # Single python3 call emits tab-separated TOTAL/CRITICAL to avoid two separate
 # cold-start invocations that each re-read and re-parse CANDIDATES_FILE.
 IFS=$'\t' read -r TOTAL CRITICAL <<<"$(python3 -c "
-import json
-d = json.loads(open('$CANDIDATES_FILE').read())
+import json, sys
+d = json.loads(open(sys.argv[1]).read())
 total = len(d)
 critical = sum(1 for v in d.values() if v.get('category') == 'CRITICAL')
 print(f'{total}\t{critical}')
-" 2>/dev/null || printf '0\t0')"
+" "$CANDIDATES_FILE" 2>/dev/null || printf '0\t0')"
 
 printf "[cast-upgrade-check] Done. Candidates: %s total, %s CRITICAL\n" "$TOTAL" "$CRITICAL"
 if [ "$CRITICAL" -gt 0 ]; then

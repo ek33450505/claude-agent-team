@@ -116,12 +116,12 @@ from datetime import datetime
 import sys
 try:
     # Accept various ISO8601 forms: with T, with space, with Z, with offset
-    s = '${SCHEDULED_FOR}'.replace('Z', '+00:00')
+    s = sys.argv[1].replace('Z', '+00:00')
     datetime.fromisoformat(s)
     print('ok')
 except Exception as e:
     print(f'error: {e}')
-" 2>/dev/null || echo "error: python3 unavailable")
+" "$SCHEDULED_FOR" 2>/dev/null || echo "error: python3 unavailable")
   if [[ "$VALID_DATE" != "ok" ]]; then
     echo "Error: --when value is not a valid ISO8601 datetime: ${SCHEDULED_FOR}" >&2
     echo "       Example: --when '2026-03-27T08:00:00'" >&2

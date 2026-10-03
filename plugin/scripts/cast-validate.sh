@@ -230,11 +230,11 @@ if [[ -f "$AGENT_GROUPS" ]]; then
   GROUP_COUNT=$(python3 -c "
 import json, sys
 try:
-    data = json.load(open('$AGENT_GROUPS'))
+    data = json.load(open(sys.argv[1]))
     print(len(data.get('groups', [])))
 except Exception:
     print(0)
-" 2>/dev/null || echo 0)
+" "$AGENT_GROUPS" 2>/dev/null || echo 0)
   if [[ "$GROUP_COUNT" -gt 0 ]]; then
     pass "agent-groups.json: ${GROUP_COUNT} groups — present and valid"
   else
@@ -395,11 +395,11 @@ if [[ -d "$BACKUP_DIR" ]]; then
   LATEST_BACKUP=$(find "$BACKUP_DIR" -name "cast-db-*.db" -type f 2>/dev/null | sort -r | head -1)
   if [[ -n "$LATEST_BACKUP" ]]; then
     BACKUP_AGE_DAYS=$(python3 -c "
-import os, datetime
-mtime = os.path.getmtime('$LATEST_BACKUP')
+import os, sys, datetime
+mtime = os.path.getmtime(sys.argv[1])
 age = (datetime.datetime.now().timestamp() - mtime) / 86400
 print(f'{age:.0f}')
-" 2>/dev/null || echo "?")
+" "$LATEST_BACKUP" 2>/dev/null || echo "?")
     pass "Backup: latest $(basename "$LATEST_BACKUP") (${BACKUP_AGE_DAYS}d ago)"
   else
     info "Backup: $BACKUP_DIR exists but no cast-db-*.db snapshots found"
