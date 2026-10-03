@@ -13,16 +13,18 @@ INPUT="$(cat 2>/dev/null || true)"
 
 # ── Parse stdin JSON + git branch + active agents: ONE python3 process ───────
 # (Replaces jq + `git branch --show-current` + a sqlite heredoc: 3 spawns -> 1.)
-# Fields are joined with SOH (\x01 — non-whitespace so IFS does not collapse
-# consecutive delimiters) to preserve empty field positions.
+# Fields are joined with US (0x1f, ASCII Unit Separator): non-whitespace so IFS
+# does not collapse consecutive delimiters (empty field positions survive).
+# NOT \x01 — bash <=4 (macOS /bin/bash 3.2) uses 0x01 internally as CTLESC, so
+# it fails as an IFS delimiter and every field lands in the first variable.
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 agent="main"; cost="0"; ctx_pct="0"; rate_pct=""; model="n/a"; session=""; session_id=""
 git_branch=""; active_agents=""; dispatch_count=""
-IFS=$'\x01' read -r agent cost ctx_pct rate_pct model session session_id git_branch active_agents dispatch_count <<< \
+IFS=$'\x1f' read -r agent cost ctx_pct rate_pct model session session_id git_branch active_agents dispatch_count <<< \
   "$(CAST_SL_INPUT="$INPUT" CAST_SL_DB="$DB_PATH" python3 -c '
 import json, os, sqlite3
 
-SEP = "\x01"
+SEP = "\x1f"
 DEFAULTS = ["main", "0", "0", "", "n/a", "", ""]
 
 
@@ -122,7 +124,7 @@ if sess and db and os.path.isfile(db):
     except Exception:
         active, count = "", "0"
 
-print(SEP.join(fields + [branch(), active, count]))
+print(SEP.join(v.replace(SEP, "") for v in fields + [branch(), active, count]))
 ' 2>/dev/null || true)"
 
 # ── Session uptime ─────────────────────────────────────────────────────────────

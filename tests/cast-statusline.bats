@@ -53,6 +53,24 @@ teardown() {
   assert_output --partial "62%"
 }
 
+@test "happy path: fields split correctly under system /bin/bash (3.2 IFS regression)" {
+  [ -x /bin/bash ] || skip "/bin/bash not present"
+  local json='{
+    "agent": {"name": "test-agent"},
+    "cost": {"total_cost_usd": 0.42},
+    "context_window": {"used_percentage": 62},
+    "model": {"display_name": "Sonnet 4"},
+    "session_name": "my-session",
+    "session_id": "sess123"
+  }'
+
+  run /bin/bash "$SCRIPT" <<< "$json"
+  assert_success
+  assert_output --partial '$0.42'
+  assert_output --partial "Sonnet 4"
+  assert_output --partial "test-agent"
+}
+
 @test "happy path: non-empty output without fallback" {
   local json='{
     "agent": {"name": "main"},
