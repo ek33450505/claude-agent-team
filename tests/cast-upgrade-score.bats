@@ -69,3 +69,57 @@ sys.exit(0 if a < n < b else 1)" "$FAKE_ARGV"
   run grep -c 'untrusted data' "$FAKE_ARGV"
   assert_output '1'
 }
+
+# Everything the stub recorded after the given flag line (the system prompt is
+# multi-line, so this returns the flag's value plus whatever follows it).
+_argv_from() {
+  local ln
+  ln="$(grep -n -x -- "$1" "$FAKE_ARGV" | head -1 | cut -d: -f1)"
+  [ -n "$ln" ] || return 1
+  sed -n "$((ln + 1)),\$p" "$FAKE_ARGV"
+}
+
+@test "score: system prompt carrying the JSON-only contract is passed" {
+  _run_score
+  run grep -c -x -- '--system-prompt' "$FAKE_ARGV"
+  assert_output '1'
+  run _argv_from '--system-prompt'
+  assert_success
+  assert_output --partial 'Output ONLY valid JSON array'
+  assert_output --partial 'release notes analyst'
+}
+
+@test "score: skills disabled via --disable-slash-commands" {
+  _run_score
+  run grep -c -x -- '--disable-slash-commands' "$FAKE_ARGV"
+  assert_output '1'
+}
+
+@test "score: scorer returns the model array only when the system prompt was sent" {
+  # Discriminating stub: a valid non-empty array ONLY if --system-prompt arrived
+  # with the JSON-only contract; otherwise prose (what the unfixed script
+  # provoked from Haiku), which the parser must collapse to [].
+  cat >"$T/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+have_sys=0
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--system-prompt" ] && [[ "${2:-}" == *"Output ONLY valid JSON array"* ]]; then
+    have_sys=1
+  fi
+  shift
+done
+if [ "$have_sys" = "1" ]; then
+  echo '[{"item":"x","category":"UPGRADE","reason":"r","cast_component":"c"}]'
+else
+  echo 'Here is my analysis of the release notes in prose.'
+fi
+STUB
+  chmod +x "$T/bin/claude"
+  _run_score
+  assert_success
+  run python3 -c "
+import sys, json
+d = json.loads(sys.argv[1])
+sys.exit(0 if isinstance(d, list) and len(d) == 1 and d[0]['category'] == 'UPGRADE' else 1)" "$output"
+  assert_success
+}

@@ -126,6 +126,16 @@ print(f\"{clean(d.get('tagName'))}\t{clean(d.get('publishedAt'))}\")
 
     [ -z "$TAG" ] && continue
 
+    # TAG comes from untrusted GitHub release data and is passed to `gh release view`
+    # as a positional arg: a leading "-" would be parsed as a gh flag (option injection),
+    # and whitespace/control chars have no place in a tag. Skip, don't sanitize.
+    case "$TAG" in
+      -* | *[[:space:][:cntrl:]]*)
+        printf "[cast-upgrade-check] Warning: skipping release with unsafe tag name from %s.\n" "$REPO" >&2
+        continue
+        ;;
+    esac
+
     # Compare timestamps: skip if published <= last_checked
     IS_NEW="$(python3 -c "
 from datetime import datetime, timezone

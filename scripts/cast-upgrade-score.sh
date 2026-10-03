@@ -64,11 +64,17 @@ ${RELEASE_NOTES}
 </release_notes>"
 
 # Call Haiku via claude CLI (avoids managing API keys in curl).
-# The scorer needs NO tools: --tools "" disables built-ins and --strict-mcp-config
-# (with no --mcp-config) loads no MCP servers, so injected notes cannot run anything.
+# The scorer needs NO tools, so injected notes cannot run anything:
+#   --tools ""              disables built-in tools
+#   --strict-mcp-config     (with no --mcp-config) loads no MCP servers
+#   --disable-slash-commands disables all skills
+# --system-prompt delivers the role + "Output ONLY valid JSON array" contract;
+# without it the model answers in prose and the parser below falls back to [].
 SCORED_OUTPUT="$(claude -p "$USER_CONTENT" \
+  --system-prompt "$SYSTEM_PROMPT" \
   --tools "" \
   --strict-mcp-config \
+  --disable-slash-commands \
   --model claude-haiku-4-5 \
   2>/dev/null || echo "[]")"  # benign: optional AI scoring step; [] means no scores recorded, not a gate failure
 
