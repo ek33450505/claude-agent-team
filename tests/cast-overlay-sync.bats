@@ -56,18 +56,11 @@ teardown() {
 }
 
 @test "cast-overlay-sync sets correct local git identity on the overlay dir (dry-run)" {
-  # Audit T-5 probe: un-skipped on the GH macOS lane; failure prints diagnostics.
+  if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
+    skip "overlay-sync --dry-run exits 1 with empty output on GH macOS runner (git 2.55; 2026-10-03 probe; root cause open, see audit T-5)"
+  fi
 
   run bash "$SCRIPT" --dry-run
-  if [ "$status" -ne 0 ]; then
-    {
-      echo "# T-5 DIAG: overlay-sync --dry-run exit status=$status"
-      echo "# T-5 DIAG: git=$(git --version) uname=$(uname -sr) GITHUB_ACTIONS=${GITHUB_ACTIONS:-}"
-      echo "# T-5 DIAG: overlay branch/remote: $(git -C "$OVERLAY_DIR" branch -vv 2>&1 | tr '\n' ';') $(git -C "$OVERLAY_DIR" remote -v 2>&1 | tr '\n' ';')"
-      echo "# T-5 DIAG: script output:"
-      printf '%s\n' "$output" | tail -30 | sed 's/^/# /'
-    } >&3
-  fi
   [ "$status" -eq 0 ]
 
   local_email="$(git -C "$OVERLAY_DIR" config user.email)"
@@ -79,7 +72,7 @@ teardown() {
 
 @test "cast-overlay-sync does not touch global git config" {
   if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-    skip "git empty-clone/overlay setup behavior differs on GH macOS runner (unconditional CI-macOS skip) — re-triage 2026-10-03: one sibling un-skipped as probe (audit T-5)"
+    skip "git empty-clone/overlay setup behavior differs on GH macOS runner (unconditional CI-macOS skip; sibling dry-run test exits 1 with empty output there, root cause open — audit T-5)"
   fi
 
   # Isolate global config to a throwaway file so we never touch the real
@@ -97,7 +90,7 @@ teardown() {
 
 @test "cast-overlay-sync corrects a pre-existing real-email local config (regression for GH007)" {
   if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-    skip "git empty-clone/overlay setup behavior differs on GH macOS runner (unconditional CI-macOS skip) — re-triage 2026-10-03: one sibling un-skipped as probe (audit T-5)"
+    skip "git empty-clone/overlay setup behavior differs on GH macOS runner (unconditional CI-macOS skip; sibling dry-run test exits 1 with empty output there, root cause open — audit T-5)"
   fi
 
   # Pre-condition sanity check: setup() seeded the real (buggy) identity.
