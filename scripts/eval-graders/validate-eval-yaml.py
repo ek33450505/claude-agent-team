@@ -22,6 +22,7 @@ Usage:
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Required top-level keys in every eval YAML.
 REQUIRED_KEYS = {
@@ -55,6 +56,49 @@ ALLOWED_GRADER_TYPES = {'programmatic', 'llm_judge'}
 # Allowed on_error values — 'fail' is explicitly forbidden (three-outcome discipline:
 # an infra error must never be recorded as 'fail'; only 'skip' or 'error' are valid).
 ALLOWED_ON_ERROR = {'skip', 'error'}
+
+
+# Placeholder keys substituted by _substitute() in scripts/cast-eval-runner.py.
+# Keep in sync with that function (not imported: the runner is not a library).
+SUBSTITUTION_KEYS = ('output_file', 'output', 'agent_run_id', 'session_id', 'agent', 'since')
+
+
+def _placeholder_in_double_quotes(command: str) -> Optional[str]:
+    """Return the first substitution key whose {key} begins inside a shell
+    double-quoted region of `command`, else None.
+
+    The runner replaces {key} with shlex.quote(value), which seals the value in
+    single quotes. That is only safe outside quotes: inside "..." the single
+    quotes are literal and $(...), backticks and $VAR in the value expand.
+
+    Scanner states: outside / single-quoted / double-quoted. Backslash escapes
+    the next char outside and inside double quotes; inside single quotes
+    nothing is special until the closing quote.
+    """
+    state = 'out'
+    i = 0
+    n = len(command)
+    while i < n:
+        ch = command[i]
+        if state == 'single':
+            if ch == "'":
+                state = 'out'
+        elif ch == '\\':
+            i += 1  # skip the escaped char
+        elif state == 'out':
+            if ch == "'":
+                state = 'single'
+            elif ch == '"':
+                state = 'double'
+        else:  # double
+            if ch == '"':
+                state = 'out'
+            elif ch == '{':
+                for key in SUBSTITUTION_KEYS:
+                    if command.startswith('{' + key + '}', i):
+                        return key
+        i += 1
+    return None
 
 
 def _fail(message: str) -> int:
@@ -187,6 +231,15 @@ def validate(path: str) -> int:
                     f'pipe agent-response text directly into a shell command — '
                     f'use {{output_file}} instead; {{output}} is reserved for '
                     f'llm_judge prompts (not shell-executed)'
+                )
+            # Double-quote guard: shlex.quote() output is only safe outside double quotes.
+            quoted_key = _placeholder_in_double_quotes(command)
+            if quoted_key is not None:
+                return _fail(
+                    f'graders[{i}] ({grader_id!r}) command has placeholder '
+                    f'{{{quoted_key}}} inside double quotes — shlex.quote() does not '
+                    f'protect it there; use the bare form {{{quoted_key}}} or '
+                    f"'{{{quoted_key}}}'"
                 )
 
         elif grader_type == 'llm_judge':

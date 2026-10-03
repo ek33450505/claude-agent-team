@@ -44,7 +44,7 @@ graders:
     command: |
       python3 -c "
       import sys, re
-      with open('{output_file}') as f:
+      with open(sys.argv[1]) as f:
           text = f.read()
       h = re.search(r'##\s*Handoff', text)
       if not h:
@@ -57,7 +57,7 @@ graders:
       stop = re.search(r'\n(?:status|blockers|key_decisions|next_agent_needs)\s*:', region, re.I)
       region = region[:stop.start()] if stop else region.split('\n\n')[0]
       sys.exit(1 if '.claude/cast.json' in region else 0)
-      "
+      " {output_file}
     pass_criteria: exit_code_0
     on_error: error
 
