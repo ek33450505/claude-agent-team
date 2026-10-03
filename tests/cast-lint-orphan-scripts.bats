@@ -316,3 +316,36 @@ _write_fragment() {
   assert_success
   refute_output --partial "cast-trailing-only.sh"
 }
+
+# ---------------------------------------------------------------------------
+# --strict: orphans fail only when asked (CI), pre-commit stays advisory
+# ---------------------------------------------------------------------------
+
+@test "strict: no orphan -> exit 0 with and without --strict" {
+  touch "$FAKE_REPO/scripts/cast-wired.sh"
+  printf '#!/usr/bin/env bash\nbash scripts/cast-wired.sh\n' \
+    > "$FAKE_REPO/scripts/cast-caller.sh"
+  printf '#!/usr/bin/env bash\nbash scripts/cast-caller.sh\n' \
+    > "$FAKE_REPO/install.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' --strict 2>&1"
+  assert_success
+}
+
+@test "strict: planted orphan -> exit 0 by default, exit 1 with --strict, file named" {
+  printf '#!/usr/bin/env bash\necho hi\n' > "$FAKE_REPO/scripts/cast-zz-orphan-probe.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' 2>&1"
+  assert_success
+  assert_output --partial "cast-zz-orphan-probe.sh"
+  run bash -c "cd '$FAKE_REPO' && python3 '$LINT_PY' --strict 2>&1"
+  assert_failure 1
+  assert_output --partial "cast-zz-orphan-probe.sh"
+  refute_output --partial "does not block commit"
+}
+
+@test "strict: --help documents --strict" {
+  run python3 "$LINT_PY" --help
+  assert_success
+  assert_output --partial "--strict"
+}

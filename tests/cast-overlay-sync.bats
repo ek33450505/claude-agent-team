@@ -57,7 +57,7 @@ teardown() {
 
 @test "cast-overlay-sync sets correct local git identity on the overlay dir (dry-run)" {
   if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-    skip "git empty-clone behavior differs on GH macOS runner (tracked: v9.5.2 follow-up)"
+    skip "overlay-sync --dry-run exits 1 with empty output on GH macOS runner (git 2.55; 2026-10-03 probe; root cause open, see audit T-5)"
   fi
 
   run bash "$SCRIPT" --dry-run
@@ -72,7 +72,7 @@ teardown() {
 
 @test "cast-overlay-sync does not touch global git config" {
   if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-    skip "git empty-clone behavior differs on GH macOS runner (tracked: v9.5.2 follow-up)"
+    skip "git empty-clone/overlay setup behavior differs on GH macOS runner (unconditional CI-macOS skip; sibling dry-run test exits 1 with empty output there, root cause open — audit T-5)"
   fi
 
   # Isolate global config to a throwaway file so we never touch the real
@@ -90,7 +90,7 @@ teardown() {
 
 @test "cast-overlay-sync corrects a pre-existing real-email local config (regression for GH007)" {
   if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-    skip "git empty-clone behavior differs on GH macOS runner (tracked: v9.5.2 follow-up)"
+    skip "git empty-clone/overlay setup behavior differs on GH macOS runner (unconditional CI-macOS skip; sibling dry-run test exits 1 with empty output there, root cause open — audit T-5)"
   fi
 
   # Pre-condition sanity check: setup() seeded the real (buggy) identity.

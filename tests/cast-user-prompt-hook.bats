@@ -1000,3 +1000,94 @@ print('ok')
   refute_output --partial '<memory-recall'
   rm -f "$input_file"
 }
+
+# ---------------------------------------------------------------------------
+# P-6: redaction + router run IN-PROCESS (no python subprocess spawns)
+# ---------------------------------------------------------------------------
+
+@test "in-process redaction: secret in prompt is redacted in jsonl and routing_events" {
+  local key
+  key="AKIA""IOSFODNN7EXAMPLE"   # built at runtime; never a literal secret in source
+  bash "$HOOK_SH" <<< "$(make_payload "sess-redact-live" "my aws key is $key please keep it safe")"
+  [ -f "$HOME/.claude/cast/user-prompts.jsonl" ]
+  run grep -c "$key" "$HOME/.claude/cast/user-prompts.jsonl"
+  assert_output "0"
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT prompt_preview || data FROM routing_events WHERE session_id='sess-redact-live'"
+  assert_success
+  refute_output --partial "$key"
+  # redaction really ran (the row exists and the preview is non-empty)
+  [ -n "$output" ]
+}
+
+@test "in-process redaction fail-closed: redact module missing → no jsonl, no DB row" {
+  local d
+  d="$(mktemp -d)"
+  cp "$HOOK_SH" "$d/hook.sh"   # sibling cast-redact.py deliberately absent
+  run bash "$d/hook.sh" <<< "$(make_payload "sess-nored" "some long enough prompt text here")"
+  assert_success
+  [ ! -s "$HOME/.claude/cast/user-prompts.jsonl" ]
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id='sess-nored'"
+  assert_output "0"
+  rm -rf "$d"
+}
+
+@test "in-process redaction fail-closed: redact module raises → no jsonl, no DB row" {
+  local d
+  d="$(mktemp -d)"
+  cp "$HOOK_SH" "$d/hook.sh"
+  printf 'raise RuntimeError("boom")\n' > "$d/cast-redact.py"
+  run bash "$d/hook.sh" <<< "$(make_payload "sess-raise" "some long enough prompt text here")"
+  assert_success
+  [ ! -s "$HOME/.claude/cast/user-prompts.jsonl" ]
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id='sess-raise'"
+  assert_output "0"
+  rm -rf "$d"
+}
+
+@test "in-process redaction fail-closed: redact module exits nonzero → no write" {
+  local d
+  d="$(mktemp -d)"
+  cp "$HOOK_SH" "$d/hook.sh"
+  printf 'import sys\nprint("{\\"redacted_text\\": \\"x\\"}")\nsys.exit(3)\n' > "$d/cast-redact.py"
+  run bash "$d/hook.sh" <<< "$(make_payload "sess-rc3" "some long enough prompt text here")"
+  assert_success
+  [ ! -s "$HOME/.claude/cast/user-prompts.jsonl" ]
+  rm -rf "$d"
+}
+
+@test "in-process router: hook spawns no python subprocesses for redact/router" {
+  # Structural: the subprocess spawns are gone from the hook.
+  run grep -nE "subprocess\.|import subprocess|os\.system\(|os\.popen\(|Popen\(|check_output\(" "$HOOK_SH"
+  assert_failure
+}
+
+@test "_run_inproc restores sys.path, os.environ, argv and evicts same-dir modules" {
+  local d helper
+  d="$(mktemp -d)"
+  printf 'import sys, os\nsys.path.insert(0, "/probe-path")\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nos.environ["PROBE_ENV"]="1"\nimport probe_mod\nprint("[]")\n' > "$d/stub.py"
+  printf 'X = 1\n' > "$d/probe_mod.py"
+  # Extract the helper block from the hook's python heredoc.
+  python3 - "$HOOK_SH" "$d/helper.py" <<'PYX'
+import sys
+s = open(sys.argv[1]).read()
+a = s.index("import runpy as _runpy")
+b = s.index("return rc, out.getvalue()") + len("return rc, out.getvalue()")
+open(sys.argv[2], "w").write("import os\n" + s[a:b] + "\n")
+PYX
+  run python3 - "$d" <<'PYX'
+import sys, os
+d = sys.argv[1]
+exec(open(d + "/helper.py").read())
+path0, env0, argv0 = sys.path[:], dict(os.environ), sys.argv[:]
+rc, out = _run_inproc(d + "/stub.py", ["--x"], "", 5)
+assert rc == 0 and out.strip() == "[]", (rc, out)
+assert sys.path == path0, "sys.path leaked"
+assert dict(os.environ) == env0, "env leaked"
+assert sys.argv == argv0, "argv leaked"
+assert "probe_mod" not in sys.modules, "module leaked"
+print("ok")
+PYX
+  assert_success
+  assert_output "ok"
+  rm -rf "$d"
+}

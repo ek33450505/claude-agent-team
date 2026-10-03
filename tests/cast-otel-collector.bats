@@ -291,7 +291,9 @@ _start_collector_http() {
   COLLECTOR_HTTP_PID=$!
   COLLECTOR_HTTP_PORT="$port"
   # Wait for the port to accept connections (bounded poll, avoids fixed sleep flakiness)
-  for _ in $(seq 1 50); do
+  # 20 s window (200 x 0.1 s): returns as soon as the port accepts, so the wider
+  # bound costs nothing on a fast host; GH macOS cold start exceeded the old 5 s (audit T-5).
+  for _ in $(seq 1 200); do
     if python3 -c "import socket; s=socket.create_connection(('127.0.0.1', $port), timeout=0.2); s.close()" 2>/dev/null; then
       return 0
     fi
@@ -326,8 +328,22 @@ _stop_collector_http() {
 @test "HTTP: chunked POST to /v1/logs is de-chunked, parsed, and lands in otel_events" {
   local port=48391
   if ! _start_collector_http "$port"; then
+    # Audit T-5: diagnostics first, then attempt-first skip on the GH macOS lane.
+    {
+      echo "# T-5 DIAG: collector did not accept connections on 127.0.0.1:$port"
+      echo "# T-5 DIAG: uname=$(uname -sr) python3=$(python3 --version 2>&1) GITHUB_ACTIONS=${GITHUB_ACTIONS:-} RUNNER_OS=${RUNNER_OS:-}"
+      if [[ -n "${COLLECTOR_HTTP_PID:-}" ]] && kill -0 "$COLLECTOR_HTTP_PID" 2>/dev/null; then
+        echo "# T-5 DIAG: collector pid $COLLECTOR_HTTP_PID still ALIVE (bound elsewhere / slow start)"
+      else
+        echo "# T-5 DIAG: collector pid ${COLLECTOR_HTTP_PID:-none} EXITED before listening"
+      fi
+      echo "# T-5 DIAG: collector log tail:"
+      tail -20 "$BATS_TEST_TMPDIR/collector-http.log" 2>&1 | sed 's/^/# /'
+      echo "# T-5 DIAG: lsof port: $(lsof -ti "tcp:$port" 2>&1 | tr '\n' ' ')"
+    } >&3
+    _stop_collector_http "$port"
     if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector daemon does not start on GH macOS runner (tracked: v9.5.2 follow-up)"
+      skip "collector slow to accept on GH macOS runner (2026-10-03 probe: pid alive and bound per lsof after 5s poll; window widened to 20s) — audit T-5"
     fi
     false
   fi
@@ -364,7 +380,7 @@ print(resp.status)
   local port=48392
   if ! _start_collector_http "$port"; then
     if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector daemon does not start on GH macOS runner (tracked: v9.5.2 follow-up)"
+      skip "collector daemon did not accept connections within the 20s window on GH macOS runner (attempt-first skip, only reached if daemon fails to start) — audit T-5"
     fi
     false
   fi
@@ -391,7 +407,7 @@ print(resp.status)
   local port=48393
   if ! _start_collector_http "$port"; then
     if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname)" = "Darwin" ]; then
-      skip "collector daemon does not start on GH macOS runner (tracked: v9.5.2 follow-up)"
+      skip "collector daemon did not accept connections within the 20s window on GH macOS runner (attempt-first skip, only reached if daemon fails to start) — audit T-5"
     fi
     false
   fi

@@ -52,7 +52,10 @@ PATTERNS_CONFIG = os.path.expanduser("~/.claude/config/pii-patterns.json")
 
 _STANDARD_FALLBACK_PATTERNS = [
     # Standard PII
-    ("EMAIL_ADDRESS",   r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),
+    # Local part capped at 64 (RFC 5321) and domain at 253: the unbounded `+` was
+    # quadratic on long no-@ runs. No leading \b: it would stop a >64-char local part
+    # from matching mid-run (leak); instead the last 64 chars + domain are redacted.
+    ("EMAIL_ADDRESS",   r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,253}\.[A-Za-z]{2,}\b"),
     ("PHONE_NUMBER",    r"\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
     ("US_SSN",          r"\b\d{3}-\d{2}-\d{4}\b"),
     ("CREDIT_CARD",     r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6011[0-9]{12}|3(?:0[0-5]|[68][0-9])[0-9]{11})\b"),
@@ -64,7 +67,15 @@ _STANDARD_FALLBACK_PATTERNS = [
     ("OPENAI_KEY",      r"sk-(?:proj-)?[A-Za-z0-9]{32,}"),
     ("BEARER_TOKEN",    r"(?i)bearer\s+([A-Za-z0-9_\-\.]{20,})"),
     ("JWT",             r"eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"),
-    ("DATABASE_URL",    r"(?i)(?:postgres|mysql|mongodb|redis)(?:ql)?://[^:@\s]+:[^@\s]+@[^\s]+"),
+    # user/password bounded (256/1024): the unbounded `+` runs before the required `:` / `@`
+    # were quadratic on repeated `scheme://x-` input (3-4 s on 120 KB). Host stays `[^\s]+`:
+    # it is last and needs no following literal, so it cannot backtrack. User may be empty
+    # (`redis://:pw@h`). Scheme takes an optional `+driver` suffix (+srv, +psycopg2, ...).
+    ("DATABASE_URL",    r"(?i)(?:postgres(?:ql)?|mysql|mongodb|rediss?|sqlite)(?:\+[a-z0-9_]{1,24})?://[^:@\s]{0,256}:[^@\s]{1,1024}@[^\s]+"),
+    # OVERSIZE companion (same entity type): a user >256 or password >1024 chars would
+    # otherwise leak the whole URL. Nothing required follows an unbounded run, so it stays
+    # linear; redacts scheme -> next whitespace. (No possessive quantifiers: py3.9 support.)
+    ("DATABASE_URL",    r"(?i)(?:postgres(?:ql)?|mysql|mongodb|rediss?|sqlite)(?:\+[a-z0-9_]{1,24})?://(?:[^:@\s]{257,}|[^:@\s]{0,256}:[^@\s]{1025,})[^\s]*"),
     ("PRIVATE_KEY",     r"-----BEGIN[A-Z ]+(?:PRIVATE KEY|CERTIFICATE)-----"),
     ("API_KEY",         r"(?i)(?:api[_-]?key|apikey|x-api-key)[:\s=]+['\"]?([A-Za-z0-9_\-]{20,})['\"]?"),
     # Paths and URLs

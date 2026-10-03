@@ -31,7 +31,8 @@ setup() {
 
   # Minimal agent_runs table with one row older than the 30-day prune window.
   sqlite3 "$DB_PATH" "CREATE TABLE agent_runs (id INTEGER PRIMARY KEY, agent_type TEXT, started_at TEXT);"
-  sqlite3 "$DB_PATH" "INSERT INTO agent_runs (agent_type, started_at) VALUES ('code-reviewer', datetime('now', '-45 days'));"
+  # started_at must be ISO-T/Z: the prune deliberately keeps non-ISO rows.
+  sqlite3 "$DB_PATH" "INSERT INTO agent_runs (agent_type, started_at) VALUES ('code-reviewer', strftime('%Y-%m-%dT%H:%M:%SZ','now','-45 days'));"
 
   # Fixture scripts dir — bin/cast resolves cast-db-backup.py via
   # CAST_SCRIPTS_DIR (already defaults to \${HOME}/.claude/scripts under the

@@ -42,7 +42,62 @@ raw_preview    = prompt_text[:120]
 
 # Redact PII from preview before writing to any log.
 # If redaction fails, skip the DB write entirely — do not fall back to raw text.
-import subprocess as _sp
+import runpy as _runpy, signal as _signal, io as _io, sys as _sys
+from contextlib import redirect_stdout as _rso, redirect_stderr as _rse
+
+
+def _run_inproc(script, argv, stdin_text="", timeout=5):
+    """Run a sibling script in THIS interpreter (as __main__) instead of spawning
+    `python3 script ...` — saves one interpreter cold-start (~35 ms) per call.
+    Returns (returncode, stdout) with the same meaning as a child process's: stdout
+    captured, stderr discarded, SystemExit code -> returncode, any other exception
+    or timeout -> (1, ""). Trade-off vs a subprocess: the 5 s guard is a SIGALRM
+    (main thread only, interrupts pure-Python/sleep but not a blocking C call), so
+    a hang inside a C extension can outlive it. Callers must treat rc!=0 as failure."""
+    out, err = _io.StringIO(), _io.StringIO()
+    old_argv, old_stdin = _sys.argv, _sys.stdin
+    old_handler = None
+    rc = 0
+    # Isolation: the child script mutates interpreter state a subprocess would have
+    # discarded with its process. Snapshot sys.path and os.environ and restore both
+    # in the finally. Modules the script imported from its OWN directory (e.g. the
+    # router's `cast_db`) are evicted from sys.modules so a later run can't reuse
+    # them; stdlib/third-party modules are left cached (evicting them costs re-imports).
+    old_path = _sys.path[:]
+    old_env = dict(os.environ)
+    old_mods = set(_sys.modules)
+    script_dir = os.path.dirname(os.path.abspath(script))
+    def _on_alarm(signum, frame):
+        raise TimeoutError("in-process script timed out")
+    try:
+        old_handler = _signal.signal(_signal.SIGALRM, _on_alarm)
+        _signal.setitimer(_signal.ITIMER_REAL, timeout)
+        _sys.argv = [script] + list(argv)
+        _sys.stdin = _io.StringIO(stdin_text)
+        with _rso(out), _rse(err):
+            _runpy.run_path(script, run_name="__main__")
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+    except BaseException:
+        rc = 1
+    finally:
+        try:
+            _signal.setitimer(_signal.ITIMER_REAL, 0)
+            if old_handler is not None:
+                _signal.signal(_signal.SIGALRM, old_handler)
+        except Exception:
+            pass
+        _sys.argv, _sys.stdin = old_argv, old_stdin
+        _sys.path[:] = old_path
+        os.environ.clear()
+        os.environ.update(old_env)
+        for _m in set(_sys.modules) - old_mods:
+            _f = getattr(_sys.modules.get(_m), "__file__", None) or ""
+            if _f.startswith(script_dir + os.sep):
+                _sys.modules.pop(_m, None)
+    return rc, out.getvalue()
+
+
 _redact_script = os.environ.get("_CAST_REDACT_SCRIPT", "")
 _redaction_ok = False
 prompt_preview = None
@@ -51,15 +106,9 @@ if _redact_script and os.path.isfile(_redact_script):
     try:
         # --engine regex: regex covers all credential/secret patterns; spaCy NER is
         # lower-stakes for a prompt preview field — avoids 0.5–3s Presidio startup cost.
-        _result = _sp.run(
-            ["python3", _redact_script, "--engine", "regex"],
-            input=raw_preview,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if _result.returncode == 0 and _result.stdout.strip():
-            _out = json.loads(_result.stdout)
+        _rc, _stdout = _run_inproc(_redact_script, ["--engine", "regex"], raw_preview, 5)
+        if _rc == 0 and _stdout.strip():
+            _out = json.loads(_stdout)
             prompt_preview = _out.get("redacted_text")
             if prompt_preview is not None:
                 _redaction_ok = True
@@ -125,14 +174,11 @@ if not os.path.isfile(router):
     raise SystemExit(0)
 
 try:
-    import subprocess as _subprocess
-    result = _subprocess.run(
-        ['python3', router, '--mode', 'retrieve-global',
-         '--prompt', prompt_text[:500], '--top-n', '3',
-         '--session-id', session_id],
-        capture_output=True, text=True, timeout=5
-    )
-    memories = json.loads(result.stdout or '[]')
+    _rrc, _rstdout = _run_inproc(
+        router,
+        ['--mode', 'retrieve-global', '--prompt', prompt_text[:500],
+         '--top-n', '3', '--session-id', session_id], "", 5)
+    memories = json.loads(_rstdout or '[]')
 except Exception:
     memories = []
 

@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-10.2.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-3374-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-3431-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -31,7 +31,7 @@
 CAST is a governance layer for Claude Code: it records what your agents did, and enforces what they may do next.
 
 Every dispatch, review, truncation and cost lands in a typed SQLite schema on your machine at
-`~/.claude/cast.db` — <!-- CAST_DB_TABLE_COUNT -->42<!-- /CAST_DB_TABLE_COUNT --> typed tables that CAST provisions (a long-lived database
+`~/.claude/cast.db` — <!-- CAST_DB_TABLE_COUNT -->43<!-- /CAST_DB_TABLE_COUNT --> typed tables that CAST provisions (a long-lived database
 also carries tables from older migrations). That record is not a logbook —
 it is the control plane. It gates your commits, recalls the incident you are about to re-cause, attributes
 spend per task, and predicts how a dispatch will go before you make it.
@@ -339,7 +339,7 @@ Write your own: **[docs/hooks/authoring-guide.md](docs/hooks/authoring-guide.md)
 ## The record
 
 SQLite in WAL mode at `~/.claude/cast.db` — append-only, never truncated, fully local.
-<!-- CAST_DB_TABLE_COUNT -->42<!-- /CAST_DB_TABLE_COUNT --> typed tables covering sessions, agent runs, routing events, quality gates,
+<!-- CAST_DB_TABLE_COUNT -->43<!-- /CAST_DB_TABLE_COUNT --> typed tables covering sessions, agent runs, routing events, quality gates,
 dispatch decisions, memories, eval runs, incidents and provenance.
 
 ```bash
@@ -367,7 +367,7 @@ usage-aware, so a memory recalled often decays slower than one nobody reads.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->242<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->3374<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->245<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->3431<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
 guard logic, event emission and memory persistence — including tests that prove destructive operations
 **refuse**. Runs on macOS and Ubuntu in CI.
 
