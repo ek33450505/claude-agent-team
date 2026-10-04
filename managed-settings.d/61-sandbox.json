@@ -21,6 +21,10 @@
       "allowWrite": [
         "/tmp"
       ],
+      "denyWrite": [
+        "~/Projects/**/.git/worktrees",
+        "~/Projects/**/.githooks"
+      ],
       "denyRead": [
         "~/.aws/credentials",
         "~/.ssh/id_*",
