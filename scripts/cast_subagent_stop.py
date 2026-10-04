@@ -669,16 +669,10 @@ def stage2_transcript_cost(ctx: Ctx) -> None:
     try:
         _payload_cwd = os.path.expanduser((ctx.data.get("cwd") or "").strip())
         _git_cwd = _payload_cwd if _payload_cwd and os.path.isdir(_payload_cwd) else None
-        branch = (
-            subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                cwd=_git_cwd,
-            ).stdout.strip()
-            or None
-        )
+        # Unsandboxed hook + agent-steerable payload cwd: route through the hardened
+        # cast_git_safe primitive (repo-local config can otherwise execute code).
+        _br = _git_safe_run(_git_cwd or os.getcwd(), ["rev-parse", "--abbrev-ref", "HEAD"], timeout=5)
+        branch = (_br.stdout.strip() or None) if _br.returncode == 0 else None
     except Exception:
         branch = None
 
@@ -1114,29 +1108,40 @@ def _load_validate_handoff():
 
 
 # ── hostile-repo git hardening ───────────────────────────────────────────────
-# This hook runs OUTSIDE the Bash sandbox in a cwd an agent can write to. Porcelain
-# `git log` honours repo-local config an agent can plant (log.showSignature +
-# gpg.program, core.fsmonitor, ...) and would execute it unsandboxed. Use plumbing
-# only, with the exec-capable config knobs forced off, and no lazy ref replacement.
-_SAFE_GIT_PREFIX = [
-    "git",
-    "-c", "core.fsmonitor=false",
-    "-c", "core.hooksPath=/dev/null",
-    "-c", "log.showSignature=false",
-    "--no-replace-objects",
-]
+# This hook runs OUTSIDE the Bash sandbox in a cwd an agent can write to, and repo-local
+# config (core.fsmonitor, filter drivers, config hooks, gpg.program, promisor lazy fetch,
+# ...) can make git execute programs. Every git call here goes through the ONE reviewed
+# primitive, scripts/cast_git_safe.py (-> cast_git_safe in cast-hook-lib.sh). This hook
+# is loaded by explicit realpath: safe whether or not the interpreter runs with -I, because a
+# script run by path puts only its own directory on sys.path.
+# Any non-zero return code means "unknown"; an unloadable module behaves as "git unavailable".
+_GIT_SAFE_MOD = None  # None=unattempted, False=load failed, module=loaded
 
 
-def _safe_git_env() -> dict:
-    """Environment for hardened git calls: no optional locks, never prompt."""
-    env = dict(os.environ)
-    env["GIT_OPTIONAL_LOCKS"] = "0"
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    # Partial-clone repos lazily fetch missing objects via repo-configured
-    # remote.<n>.uploadpack / core.sshCommand / core.gitProxy / ext:: - block that.
-    env["GIT_NO_LAZY_FETCH"] = "1"
-    env["GIT_ALLOW_PROTOCOL"] = "none"
-    return env
+def _git_safe_run(repo_dir: str, args: list, timeout: float = 5.0):
+    """cast_git_safe.run(repo_dir, args, timeout); rc 3 CompletedProcess if it can't load."""
+    global _GIT_SAFE_MOD
+    if _GIT_SAFE_MOD is None:
+        try:
+            import importlib.util as _ilu
+            spec = _ilu.spec_from_file_location(
+                "cast_git_safe",
+                os.path.join(os.path.dirname(os.path.realpath(__file__)), "cast_git_safe.py"),
+            )
+            if spec and spec.loader:
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                _GIT_SAFE_MOD = mod
+            else:
+                _GIT_SAFE_MOD = False
+        except Exception:
+            _GIT_SAFE_MOD = False
+    if _GIT_SAFE_MOD is False:
+        return subprocess.CompletedProcess(["git", *args], 3, "", "cast_git_safe unavailable")
+    try:
+        return _GIT_SAFE_MOD.run(repo_dir, args, timeout=timeout)
+    except Exception:
+        return subprocess.CompletedProcess(["git", *args], 3, "", "cast_git_safe error")
 
 
 # In-process cast-redact.py loader (replaces the per-event subprocess spawn).
@@ -1624,15 +1629,9 @@ def _repo_root(ctx: Ctx) -> str:
         return cached
     root = None
     try:
-        root = (
-            subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            ).stdout.strip()
-            or None
-        )
+        # Unsandboxed hook, agent-writable cwd: hardened primitive (see _git_safe_run).
+        _r = _git_safe_run(os.getcwd(), ["rev-parse", "--show-toplevel"], timeout=5)
+        root = (_r.stdout.strip() or None) if _r.returncode == 0 else None
     except Exception:
         root = None
     if not root:
@@ -2097,13 +2096,7 @@ def stage15_incident_record(ctx: Ctx) -> None:
 
     related_commit = ""
     try:
-        r = subprocess.run(
-            _SAFE_GIT_PREFIX + ["rev-parse", "--verify", "-q", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=_safe_git_env(),
-        )
+        r = _git_safe_run(os.getcwd(), ["rev-parse", "--verify", "-q", "HEAD"], timeout=5)
         if r.returncode == 0:
             related_commit = r.stdout.strip()
     except Exception:
