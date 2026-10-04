@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
 # tests/cast-maintenance-prune.bats — Prune-scope assertions for cast-maintenance.sh
 #
-# Verifies three prune operations:
+# Verifies the prune operations (and the absence of worktree prune):
 #   §2  cast/events/  — files older than 30 days deleted; fresh files survive
 #   §3  agent-status/ — files older than 24 h deleted; fresh files survive
-#   §4  git worktree prune — scoped to a throwaway temp repo, not the real project
+#   §4  NO git worktree prune — symlink-victim regression + static guards on all callers
 #
 # File age is backdated via python3 os.utime (portable; avoids BSD-only date -v).
 # Uses isolated temp HOME; never touches real ~/.claude or the live cast.db.
@@ -151,16 +151,130 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# §4 — git worktree prune (scoped to throwaway temp repo)
+# §4 — NO git worktree prune anywhere (symlinked .git/worktrees/<id> is followed
+#      by prune and empties its target; CAST code must never run it)
 # ---------------------------------------------------------------------------
 
-@test "maintenance: git worktree prune runs against temp repo without error" {
-  # The throwaway repo at $HOME/Projects/personal/claude-agent-team was created
-  # in setup().  maintenance.sh checks 'if [ -d "$repo/.git" ]' before calling
-  # git, so the prune executes only against this temp repo — never the real one.
+@test "maintenance: a planted symlinked .git/worktrees/<id> is never followed (victim intact)" {
+  # The throwaway repo at $HOME/Projects/personal/claude-agent-team was created in
+  # setup(); `~` in the script expands to the temp HOME, so this is fully isolated.
+  local repo="$HOME/Projects/personal/claude-agent-team"
+  local victim="$BATS_TEST_TMPDIR/victim"
+  mkdir -p "$victim" "$repo/.git/worktrees"
+  printf 'precious\n' > "$victim/keep.txt"
+  ln -s "$victim" "$repo/.git/worktrees/zz"
   run env CAST_SCRIPTS_DIR="$REPO_DIR/scripts" bash "$SCRIPT" 2>/dev/null
   assert_success
-  # Maintenance logs "Pruned stale worktrees" after the git prune loop
-  run grep -q "Pruned stale worktrees" "$HOME/.claude/logs/maintenance.log"
+  [ -f "$victim/keep.txt" ]
+  [ "$(cat "$victim/keep.txt")" = "precious" ]
+  [ -L "$repo/.git/worktrees/zz" ]
+}
+
+# Static guard: no executable `git worktree prune` in CAST callers. It judges CODE only, with no
+# phrase exclusions (a phrase like "never run" on a line must not hide a real prune). HEURISTIC, per line:
+#   1. skip full-line comments;
+#   2. strip "..." then '...' string contents (so message text naming the command is ignored);
+#   3. strip a trailing ` # comment` (done AFTER quote-stripping so a `#` inside a string cannot
+#      swallow real code after it, e.g. `echo "x #"; git worktree prune`);
+#   4. flag if `worktree<ws>prune` remains.
+# Limits: does not track multi-line strings or heredocs. Prints flagged lines; returns 0 if any.
+_exec_prune_lines() {
+  local f="$1" dq='"[^"]*"' sq="'[^']*'"
+  grep -vE '^[[:space:]]*#' "$f" \
+    | sed -E "s/${dq}//g; s/${sq}//g; s/[[:space:]]#.*\$//" \
+    | grep -E 'worktree[[:space:]]+prune'
+}
+
+_no_exec_prune() {
+  local f="$REPO_DIR/$1"
+  [ -f "$f" ] || { echo "missing: $f" >&2; return 1; }
+  if _exec_prune_lines "$f"; then
+    return 1
+  fi
+  return 0
+}
+
+@test "static helper self-test: flags code, ignores comments and quoted text" {
+  local fx="$BATS_TEST_TMPDIR/helper-fixture.sh"
+  # Four fixture lines, one per case; `git worktree prune # never run` and the
+  # extra-space form must flag; the quoted message and the comment must not.
+  {
+    printf '%s\n' 'git worktree prune # never run'
+    printf '%s\n' '  git -C "$r" worktree   prune'
+    printf '%s\n' 'echo "never run git worktree prune"'
+    printf '%s\n' '# git worktree prune'
+    printf '%s\n' 'echo "x #"; git worktree prune'
+  } > "$fx"
+  run _exec_prune_lines "$fx"
   assert_success
+  [ "${#lines[@]}" -eq 3 ]
+  [ "${lines[0]}" = "git worktree prune" ]
+  [[ "${lines[1]}" == *'worktree   prune'* ]]
+  [[ "${lines[2]}" == *'; git worktree prune' ]]
+  # The two non-code lines must not appear.
+  ! printf '%s\n' "$output" | grep -qF 'never run git worktree prune'
+  ! printf '%s\n' "$output" | grep -qE '^# git'
+}
+
+@test "static: scripts/cast-maintenance.sh has no executable worktree prune" {
+  _no_exec_prune scripts/cast-maintenance.sh
+}
+
+@test "static: .githooks/pre-push has no executable worktree prune" {
+  _no_exec_prune .githooks/pre-push
+}
+
+@test "static: scripts/cast-parallel.sh has no executable worktree prune" {
+  _no_exec_prune scripts/cast-parallel.sh
+}
+
+@test "static: bin/cast has no executable worktree prune" {
+  _no_exec_prune bin/cast
+}
+
+# ---------------------------------------------------------------------------
+# §5 — `cast tidy` step 8 is report-only; its rm advice must be inert when pasted
+# ---------------------------------------------------------------------------
+
+@test "cast tidy: SUSPICIOUS rm advice is shell-quoted (hostile entry name cannot inject)" {
+  local repo="$BATS_TEST_TMPDIR/repo" victim="$BATS_TEST_TMPDIR/victim" work="$BATS_TEST_TMPDIR/work"
+  mkdir -p "$repo/.git/worktrees" "$victim" "$work"
+  printf 'precious\n' > "$victim/keep.txt"
+  local name="x;touch PWNED"   # no "/" allowed in an entry name; cwd = $work
+  ln -s "$victim" "$repo/.git/worktrees/$name"
+
+  run env CAST_REPO_DIR="$repo" bash "$REPO_DIR/bin/cast" tidy
+  assert_success
+  assert_output --partial "SUSPICIOUS symlinked worktree registry entry"
+  [ -f "$victim/keep.txt" ]
+  [ -L "$repo/.git/worktrees/$name" ]
+
+  # Extract the advised command (text between "with: " and " (no -r)").
+  local advice="${output#*remove the symlink with: }"
+  advice="${advice%% (no -r)*}"
+  [[ "$advice" == "rm -- "* ]]
+  [[ "$advice" == *'\;'* || "$advice" == *"'"* ]]
+
+  # Control: the OLD unquoted form injects `touch PWNED` (proves the fixture bites).
+  rm -f "$work/PWNED"
+  (cd "$work" && eval "rm $repo/.git/worktrees/$name" 2>/dev/null) || true
+  [ -e "$work/PWNED" ]
+  rm -f "$work/PWNED"
+  ln -s "$victim" "$repo/.git/worktrees/$name" 2>/dev/null || true
+
+  # The advised (quoted) command removes only the symlink and injects nothing.
+  (cd "$work" && eval "$advice")
+  [ ! -e "$work/PWNED" ]
+  [ ! -L "$repo/.git/worktrees/$name" ]
+  [ -f "$victim/keep.txt" ]
+}
+
+@test "cast tidy: stale line does not claim safe-to-remove or suggest prune as a fix" {
+  local repo="$BATS_TEST_TMPDIR/repo2"
+  mkdir -p "$repo/.git/worktrees/gone"
+  printf '%s\n' "$BATS_TEST_TMPDIR/nonexistent" > "$repo/.git/worktrees/gone/gitdir"
+  run env CAST_REPO_DIR="$repo" bash "$REPO_DIR/bin/cast" tidy
+  assert_success
+  assert_output --partial "stale: gone — gitdir points to a missing path; inspect before removing (never run git worktree prune)"
+  refute_output --partial "safe to remove"
 }

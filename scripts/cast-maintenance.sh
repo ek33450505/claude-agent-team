@@ -63,13 +63,7 @@ log "Pruned $pruned event files (>30d)"
 pruned=$(find "${CAST_DIR}/agent-status/" -name "*.json" -mtime +0 -delete -print 2>/dev/null | wc -l | tr -d ' ')
 log "Pruned $pruned status files (>24h)"
 
-# 4. Prune git worktrees across project repos
-for repo in ~/Projects/personal/claude-agent-team ~/Projects/personal/claude-code-dashboard; do
-  if [ -d "$repo/.git" ]; then
-    git -C "$repo" worktree prune 2>/dev/null
-  fi
-done
-log "Pruned stale worktrees"
+# 4. (removed 2026-10-04) git worktree prune follows symlinked .git/worktrees entries and empties the target; cleanup is the groomer's job.
 
 # 5. sessions.total_cost_usd dropped in migration 022 (wave-3); backfill removed
 

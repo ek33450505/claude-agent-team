@@ -529,7 +529,7 @@ if [[ "$DO_WORKTREES" -eq 1 ]]; then
         # Drop ONLY this worktree's own registry entry. NEVER `git worktree prune`: prune follows an
         # agent-planted symlinked .git/worktrees/<id> and deletes its target.
         if ! _remove_registry_entry "$wt_path"; then
-          printf '[groomer] WARN: registry entry not removed — run git worktree prune manually after checking .git/worktrees: %s\n' "$wt_path" >&2
+          printf '[groomer] WARN: registry entry not removed — remove it by hand after checking it is not a symlink (never run git worktree prune: it follows symlinked entries): %s\n' "$wt_path" >&2
           WARN_COUNT=$((WARN_COUNT + 1))
         fi
       else

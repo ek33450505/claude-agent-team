@@ -4531,7 +4531,7 @@ Clean up accumulated CAST files:
   Briefings older than 14 days  → archived to briefings/archive/YYYY-MM/
   Agent status older than 24h   → deleted
   Orchestrator checkpoints >7d  → deleted
-  Stale worktree metadata        → pruned (git worktree prune)
+  Stale worktree registry        → reported only (never auto-pruned; symlinked entries flagged)
 
 Options:
   --dry-run   Preview what would be cleaned without making changes
@@ -4724,19 +4724,32 @@ PYEOF
     done < <(find "$cast_dir" -maxdepth 1 -name "orchestrator-checkpoint-*.log" -mtime +7 -print0 2>/dev/null)
   fi
 
-  # 8. Git worktree prune — remove stale worktree metadata entries where the
-  #    directory no longer exists. Safe: only removes entries whose path is gone.
+  # 8. Git worktree registry — REPORT ONLY. Never `git worktree prune`: prune follows a symlink
+  #    planted at .git/worktrees/<id> (writable from the agent sandbox) and empties its target.
+  #    Nothing here deletes; it only lists entries for the operator to review.
   if command -v git >/dev/null 2>&1; then
     local cast_repo_dir="${CAST_REPO_DIR:-${HOME}/Projects/personal/claude-agent-team}"
-    if [ -d "$cast_repo_dir/.git" ]; then
-      if [ "$dry_run" -eq 1 ]; then
-        local stale_wt
-        stale_wt="$(git -C "$cast_repo_dir" worktree list --porcelain 2>/dev/null | grep '^worktree ' | awk '{print $2}' | while read -r wt; do [ -d "$wt" ] || echo "$wt"; done | wc -l | tr -d ' ')"
-        [ "${stale_wt:-0}" -gt 0 ] && _info "  Would prune: $stale_wt stale worktree entries"
-      else
-        git -C "$cast_repo_dir" worktree prune 2>/dev/null || true
-        _info "  Git worktree metadata pruned"
-      fi
+    local wt_reg="$cast_repo_dir/.git/worktrees"
+    if [ -d "$cast_repo_dir/.git" ] && [ ! -L "$wt_reg" ] && [ -d "$wt_reg" ]; then
+      local wt_entry wt_id wt_target wt_gitdir wt_gd_path wt_rm_path
+      for wt_entry in "$wt_reg"/*; do
+        [ -e "$wt_entry" ] || [ -L "$wt_entry" ] || continue
+        wt_id="$(printf '%s' "${wt_entry##*/}" | LC_ALL=C tr '\000-\037\177' '?')"
+        if [ -L "$wt_entry" ]; then
+          wt_target="$(printf '%s' "$(readlink "$wt_entry" 2>/dev/null)" | LC_ALL=C tr '\000-\037\177' '?')"
+          # The rm command uses %q of the RAW path (inert when pasted); the display forms are sanitised.
+          wt_rm_path="$(printf '%q' "$wt_entry")"
+          _warn "SUSPICIOUS symlinked worktree registry entry: ${wt_reg}/${wt_id} -> ${wt_target} — do NOT run git worktree prune; remove the symlink with: rm -- ${wt_rm_path} (no -r)"
+          continue
+        fi
+        wt_gitdir="$wt_entry/gitdir"
+        if [ -f "$wt_gitdir" ] && [ ! -L "$wt_gitdir" ]; then
+          wt_gd_path="$(head -n 1 "$wt_gitdir" 2>/dev/null)"
+          if [ -n "$wt_gd_path" ] && [ ! -e "$wt_gd_path" ]; then
+            _info "  stale: ${wt_id} — gitdir points to a missing path; inspect before removing (never run git worktree prune)"
+          fi
+        fi
+      done
     fi
   fi
 

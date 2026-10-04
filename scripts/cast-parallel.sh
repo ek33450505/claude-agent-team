@@ -319,7 +319,8 @@ _cleanup_worktrees() {
   _info "Cleaning up worktrees..."
   git worktree remove --force "$WORKTREE_A" 2>/dev/null || true
   git worktree remove --force "$WORKTREE_B" 2>/dev/null || true
-  git worktree prune 2>/dev/null || true
+  # No `git worktree prune`: it follows an agent-planted symlink at .git/worktrees/<id> and empties
+  # its target. The two `worktree remove` calls above already drop their own registry entries.
   git branch -D "$BRANCH_A" 2>/dev/null || true
   git branch -D "$BRANCH_B" 2>/dev/null || true
   _success "Worktrees cleaned up."
