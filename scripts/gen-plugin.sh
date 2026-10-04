@@ -116,7 +116,8 @@ EXCLUDE_SCRIPTS=(
   cast-lint-orphan-scripts.py
   cast-lint-write-only-tables.py
   cast-lint-source-guard.sh
-  cast-lint-workflow-stage-models.py
+  # cast-lint-workflow-stage-models.py is deliberately NOT excluded: the bundled
+  # cast-pretool-dispatch.py loads it at runtime (Workflow stage-model guard).
   cast-rules-drift.sh
   gen-cast-stats.sh
   gen-ecosystem-versions.sh

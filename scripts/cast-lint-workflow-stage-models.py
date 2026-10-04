@@ -27,7 +27,10 @@ the DB prunes on CAST_DB_PRUNE_DAYS and any literal here goes stale.
 SCOPE
 -----
 Hermetic: reads only ``workflows/*.workflow.js`` under the repo root. Never
-touches the live ~/.claude install.
+touches the live ~/.claude install. ``find_violations_in_source(src)`` is the
+string-level core; ``cast-pretool-dispatch.py`` imports it to DENY an inline /
+scriptPath ``Workflow`` call at PreToolUse (there, a parse anomaly allows and
+logs instead of failing closed -- see that function's docstring).
 
 ESCAPE HATCH
 ------------
@@ -196,19 +199,25 @@ def call_span(src, open_paren):
     return len(src)
 
 
-def find_violations(path):
-    with open(path, "r", encoding="utf-8") as fh:
-        original = fh.read()
-    scrubbed, unterminated = blank_comments_and_strings(original)
-    original_lines = original.splitlines()
+def find_violations_in_source(src):
+    """Lint workflow source text. Returns ``(violations, unterminated)``.
 
-    # FAIL CLOSED. An unclosed quote at EOF means everything after it was
-    # blanked, so any agent() call in that region is invisible. Reporting zero
-    # violations here would be a silent pass -- the one outcome this gate must
-    # never produce. Report the anomaly instead.
+    ``violations`` is a list of ``(lineno, trimmed_line)`` for each ``agent(``
+    call with no ``model:`` and no opt-out. ``unterminated`` is the quote
+    character left open at EOF, or None.
+
+    A non-None ``unterminated`` means the scrub cannot be trusted (everything
+    after the unclosed quote was blanked, so any agent() call in it is
+    invisible) and ``violations`` is empty -- the caller MUST NOT read that
+    empty list as "certified clean". The repo CLI fails closed on it
+    (``find_violations``); the inline-script PreToolUse guard deliberately
+    allows (a parser limitation must not block work) and logs instead.
+    """
+    scrubbed, unterminated = blank_comments_and_strings(src)
+    original_lines = src.splitlines()
+
     if unterminated is not None:
-        return [(0, "PARSE ANOMALY: unterminated %s at EOF -- file not certified"
-                 % unterminated)]
+        return [], unterminated
 
     calls = []
     for m in AGENT_CALL_RE.finditer(scrubbed):
@@ -216,11 +225,18 @@ def find_violations(path):
         calls.append((m.start(), open_paren, call_span(scrubbed, open_paren)))
 
     violations = []
-    for start, open_paren, end in calls:
+    for idx, (start, open_paren, end) in enumerate(calls):
         span = list(scrubbed[open_paren:end])
         # Blank nested agent(...) spans so an inner model: cannot satisfy this call.
-        for nstart, nopen, nend in calls:
-            if nopen > open_paren and nend <= end:
+        # `calls` is in source order, so only later entries can start inside this
+        # span, and the first one that opens at/after `end` ends the scan (every
+        # later one opens even further right). Without that break, N sequential
+        # calls cost O(N^2) -- the PreToolUse hook has a 5 s budget.
+        for j in range(idx + 1, len(calls)):
+            nstart, nopen, nend = calls[j]
+            if nopen >= end:
+                break
+            if nend <= end:
                 for k in range(nopen - open_paren, nend - open_paren):
                     if span[k] != "\n":
                         span[k] = " "
@@ -233,6 +249,21 @@ def find_violations(path):
         if OPT_OUT_RE.search(here) or OPT_OUT_RE.search(above):
             continue
         violations.append((lineno, here.strip()[:88]))
+    return violations, None
+
+
+def find_violations(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        original = fh.read()
+    violations, unterminated = find_violations_in_source(original)
+
+    # FAIL CLOSED. An unclosed quote at EOF means everything after it was
+    # blanked, so any agent() call in that region is invisible. Reporting zero
+    # violations here would be a silent pass -- the one outcome this gate must
+    # never produce. Report the anomaly instead.
+    if unterminated is not None:
+        return [(0, "PARSE ANOMALY: unterminated %s at EOF -- file not certified"
+                 % unterminated)]
     return violations
 
 
