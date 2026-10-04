@@ -41,15 +41,27 @@ teardown() {
 # ---------------------------------------------------------------------------------------------
 _write_scanner() {
   cat > "$1" <<'PYSCAN'
-import os, re, subprocess
+import os, re, subprocess, sys
 
-PY_RE = re.compile(r'(?<![\w.$-])(?:(?:/[\w.+-]+)*/)?python3(?:\.\d+)?(?=\s|$)')
+# Interpreters: literal python[3[.x]], and variable interpreters ("$python_cmd", $PY, ${PYTHON:-python3}).
+PY_RE = re.compile(r'(?<![\w.$-])(?:(?:/[\w.+-]+)*/)?python(?:3(?:\.\d+)?)?(?=\s|$)')
+VAR_RE = re.compile(
+    r'(?<![\w.$-])"?(?:\$([A-Za-z_]\w*)|\$\{([A-Za-z_]\w*)(?::?[-=+?][^}]*)?\})"?(?=\s|$)')
+VAR_NAME_RE = re.compile(r'(?i)python|(?:^|_)py(?:$|_)')
+# `sh -c "..."`, `bash -c '...'`, `eval "..."`: a quoted python3 after one of these IS executed.
+WRAP_RE = re.compile(r'(?:\b(?:ba|z|da|k)?sh\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*c|\beval)\s+["\']')
 OPT_RE = re.compile(r'\s+(-[A-Za-z0-9]*)(?=[\s<|;&)>"\'`]|$)')
 SHELL_SHEBANG = re.compile(r'^#!.*\b(ba|z|da|k)?sh\b')
+ROOTS = ["scripts", "bin", ".githooks", "install.sh"]
 
 
-def shell_files():
-    out = subprocess.check_output(["git", "ls-files", "scripts", "bin", ".githooks"], text=True).splitlines()
+def shell_files(args):
+    if args:
+        out = args
+    else:
+        # tracked + untracked-not-ignored, so a new unstaged script is scanned too
+        out = sorted(set(subprocess.check_output(
+            ["git", "ls-files", "-co", "--exclude-standard"] + ROOTS, text=True).splitlines()))
     res = []
     for f in out:
         if not os.path.isfile(f) or os.path.islink(f):
@@ -61,6 +73,20 @@ def shell_files():
             if SHELL_SHEBANG.match(fh.readline()):
                 res.append(f)
     return res
+
+
+def logical_lines(f):
+    """Yield (first_lineno, text) with backslash-newline continuations joined."""
+    with open(f, "r", encoding="utf-8", errors="replace") as fh:
+        raw = fh.read().split("\n")
+    i = 0
+    while i < len(raw):
+        start, text = i + 1, raw[i]
+        while text.endswith("\\") and not text.lstrip().startswith("#") and i + 1 < len(raw):
+            i += 1
+            text = text[:-1] + " " + raw[i].lstrip()
+        yield start, text
+        i += 1
 
 
 def scan_state(line, idx):
@@ -81,18 +107,29 @@ def scan_state(line, idx):
     return sq, dq, False
 
 
+def candidates(line):
+    spans = [(m.start(), m.end()) for m in PY_RE.finditer(line)]
+    for m in VAR_RE.finditer(line):
+        if re.search(r'>\s*$', line[:m.start()]):
+            continue  # `cat > "$SOME_PY" <<EOF` WRITES a file named by the variable; it is not run
+        if VAR_NAME_RE.search(m.group(1) or m.group(2)):
+            spans.append((m.start(), m.end()))
+    return sorted(spans)
+
+
 def classify(line):
     """Return a list of 'NEED' (un-isolated code-from-cwd-sys.path invocation) / 'ALREADY' (-I)."""
     res = []
     if re.match(r'^\s*#', line):
         return res
-    for m in PY_RE.finditer(line):
-        sq, dq, in_comment = scan_state(line, m.start())
+    for start, end in candidates(line):
+        sq, dq, in_comment = scan_state(line, start)
         if in_comment:
             continue
-        if sq or (dq and not re.search(r'\$\(|`', line[:m.start()])):
+        in_string = sq or (dq and not re.search(r'\$\(|`', line[:start]))
+        if in_string and not WRAP_RE.search(line[:start]):
             continue  # python3 named inside a string literal (grep pattern, echo message), not run
-        pos = m.end()
+        pos = end
         opts = []
         while True:
             om = OPT_RE.match(line, pos)
@@ -111,23 +148,21 @@ def classify(line):
         code_flag = any(o == "-" or re.search(r'[cm]', o[1:]) for o in opts)
         if has_i:
             res.append("ALREADY")
-        elif code_flag or line[pos:].lstrip().startswith("<<"):
-            res.append("NEED")
+        elif code_flag or re.match(r'\s*<', line[pos:]):
+            res.append("NEED")  # -c / - / -m, or code via heredoc / here-string / `< file`
     return res
 
 
-files = shell_files()
+files = shell_files(sys.argv[1:])
 isolated = 0
 offenders = []
 for f in files:
-    with open(f, "r", encoding="utf-8", errors="replace") as fh:
-        for n, line in enumerate(fh, 1):
-            line = line.rstrip("\n")
-            for kind in classify(line):
-                if kind == "ALREADY":
-                    isolated += 1
-                else:
-                    offenders.append("%s:%d: %s" % (f, n, line.strip()[:160]))
+    for n, line in logical_lines(f):
+        for kind in classify(line):
+            if kind == "ALREADY":
+                isolated += 1
+            else:
+                offenders.append("%s:%d: %s" % (f, n, line.strip()[:160]))
 print("SUMMARY scanned=%d isolated=%d offenders=%d" % (len(files), isolated, len(offenders)))
 for o in offenders:
     print("OFFENDER " + o)
@@ -178,4 +213,74 @@ PYSCAN
   assert_success
   [ ! -f "$marker" ]
   [ -f "$HOME/.claude/cast/user-prompts.jsonl" ]
+}
+
+# ---------------------------------------------------------------------------------------------
+# Scanner self-test: one offender per historical blind spot (each MUST be flagged) plus isolated
+# / non-executing forms (MUST NOT be flagged). One file per case so a failure names the blind spot.
+# Fixtures deliberately contain no test-declaration token (bats would parse it in THIS file).
+# ---------------------------------------------------------------------------------------------
+_mk_fixture() { # <dir> <name> <line...>  -- writes a bash script containing exactly the given lines
+  local dir="$1" name="$2"
+  shift 2
+  { printf '#!/bin/bash\n'; printf '%s\n' "$@"; } > "$dir/$name"
+}
+
+@test "scanner self-test: flags each blind-spot offender, passes isolated forms, enumerates untracked" {
+  local fx="$BATS_TEST_TMPDIR/fx"
+  mkdir -p "$fx/scripts" "$fx/bin" "$fx/.githooks"
+  cd "$fx"
+  git init -q .
+
+  # --- offenders (every one must be reported) ---
+  _mk_fixture scripts off_literal.sh "python3 -c 'import json'"
+  _mk_fixture scripts off_module.sh 'python3 -m venv "$D"'
+  _mk_fixture scripts off_heredoc.sh "python3 - <<'EOF'" 'import json' 'EOF'
+  _mk_fixture scripts off_stdin_redirect.sh 'python3 < "$f"'
+  _mk_fixture scripts off_var_quoted.sh 'if ! "$python_cmd" -c "import textual"; then :; fi'
+  _mk_fixture scripts off_var_bare.sh '$PY -c "x"'
+  _mk_fixture scripts off_var_default.sh '"${PYTHON:-python3}" -c "x"'
+  _mk_fixture scripts off_var_module.sh '"$VENV_PY" -m pytest'
+  _mk_fixture scripts off_sh_c.sh "sh -c \"python3 -c 'import json'\""
+  _mk_fixture scripts off_bash_c.sh "bash -c 'python3 -c \"import json\"'"
+  _mk_fixture scripts off_continuation.sh 'python3 \' "  -c 'import json'"
+  _mk_fixture scripts off_continuation_multi.sh 'python3 \' "  -c 'x' \\" '  | cat'
+  _mk_fixture bin off_bin_noext "python3 -c 'x'"      # no .sh extension: found via shebang
+  _mk_fixture .githooks off_hook "python3 -m json.tool"
+  _mk_fixture . install.sh "python3 -m venv v"        # top-level install.sh is in scope
+  # untracked-not-ignored must be scanned; ignored must not
+  printf 'scripts/ignored_*.sh\n' > .gitignore
+  _mk_fixture scripts ignored_offender.sh "python3 -c 'x'"
+
+  # --- isolated / non-executing forms (none may be reported) ---
+  _mk_fixture scripts ok_literal.sh "python3 -I -c 'import json'" 'python3 -I - <<EOF' 'EOF' 'python3 -I -m venv "$D"'
+  _mk_fixture scripts ok_var.sh '"$python_cmd" -I -c "x"' '"${PYTHON:-python3}" -I -c "x"' '$PY -I -c x'
+  _mk_fixture scripts ok_sh_c.sh "sh -c \"python3 -I -c 'x'\"" "bash -c 'python3 -I -c \"x\"'"
+  _mk_fixture scripts ok_continuation.sh 'python3 \' "  -I -c 'x'"
+  _mk_fixture scripts ok_script_path.sh 'python3 "$script" --flag' '"$PY" "$script"' 'python3 /abs/tool.py'
+  _mk_fixture scripts ok_strings.sh 'grep -q "python3 -c" "$f"' 'echo "run python3 -m venv later"' \
+    '# python3 -c commentary' 'x=1 # python3 -c trailing comment'
+  _mk_fixture scripts ok_redirect_target.sh 'cat > "$_THING_PY" <<'"'EOF'" 'EOF' '"$COPYDIR" -c x'
+
+  local scanner="$BATS_TEST_TMPDIR/scan.py"
+  _write_scanner "$scanner"
+  run python3 -I "$scanner"
+  assert_success
+
+  local f
+  for f in scripts/off_literal.sh scripts/off_module.sh scripts/off_heredoc.sh \
+    scripts/off_stdin_redirect.sh scripts/off_var_quoted.sh scripts/off_var_bare.sh \
+    scripts/off_var_default.sh scripts/off_var_module.sh scripts/off_sh_c.sh scripts/off_bash_c.sh \
+    scripts/off_continuation.sh scripts/off_continuation_multi.sh bin/off_bin_noext \
+    .githooks/off_hook install.sh; do
+    printf '%s\n' "$output" | grep -q "^OFFENDER $f:" || {
+      echo "NOT FLAGGED (blind spot): $f" >&2
+      echo "$output" >&2
+      return 1
+    }
+  done
+  # exactly the 15 planted offenders: nothing isolated, ignored or string-only was reported
+  [[ "$output" == *"offenders=15"* ]] || { echo "$output" >&2; return 1; }
+  [[ "$output" != *ok_* ]]
+  [[ "$output" != *ignored_offender* ]]
 }

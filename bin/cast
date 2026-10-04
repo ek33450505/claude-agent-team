@@ -5044,7 +5044,7 @@ _cmd_dash() {
   fi
 
   # Verify textual is available
-  if ! "$python_cmd" -c "import textual" 2>/dev/null; then
+  if ! "$python_cmd" -I -c "import textual" 2>/dev/null; then
     _error "textual is not installed."
     printf "  Install: %s -m pip install textual\n" "$python_cmd" >&2
     printf "  Or run:  bash install.sh  (from claude-agent-team repo)\n" >&2

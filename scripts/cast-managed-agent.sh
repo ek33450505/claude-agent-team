@@ -119,7 +119,6 @@ _write_telemetry() {
   CAST_MA_DURATION_MS="$duration_ms" \
   python3 -I - <<'PYTELEMETRY' 2>/dev/null || true
 import sys, os
-sys.path.insert(0, os.path.expanduser('~/Projects/personal/claude-agent-team/scripts'))
 sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
 try:
     from cast_db import db_execute, db_write
@@ -301,7 +300,6 @@ _write_agent_runs() {
   CAST_AGENT_STATUS="$run_status" \
   python3 -I - <<'PYEOF' 2>/dev/null || true
 import sys, os, datetime
-sys.path.insert(0, os.path.expanduser('~/Projects/personal/claude-agent-team/scripts'))
 sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
 try:
     from cast_db import db_execute, db_write
