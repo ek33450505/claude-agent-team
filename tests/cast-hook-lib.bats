@@ -597,7 +597,7 @@ _hl_diff_fixture() {
 }
 
 # push.gpgSign only reaches gpg when the server advertises push certs, so check the env instead.
-@test "cast_git_safe: commit/tag/push gpgSign=false are env entries 4-6; enumerated entries start at 7" {
+@test "cast_git_safe: commit/tag/push gpgSign=false are env entries 4-6; gc/maintenance 7-8; enumerated entries start at 9" {
   local repo="$BATS_TEST_TMPDIR/envk" log="$BATS_TEST_TMPDIR/env.log"
   _hl_repo "$repo"
   mkdir -p "$BATS_TEST_TMPDIR/shim"
@@ -618,9 +618,54 @@ SHIM
   grep -qx 'GIT_CONFIG_VALUE_5=false' "$log"
   grep -qx 'GIT_CONFIG_KEY_6=push.gpgSign' "$log"
   grep -qx 'GIT_CONFIG_VALUE_6=false' "$log"
-  # One filter driver = clean, smudge, process, required (4 entries) after the 7 fixed ones.
-  grep -qx 'GIT_CONFIG_KEY_7=filter.d.clean' "$log"
-  grep -qx 'GIT_CONFIG_COUNT=11' "$log"
+  grep -qx 'GIT_CONFIG_KEY_7=gc.auto' "$log"
+  grep -qx 'GIT_CONFIG_VALUE_7=0' "$log"
+  grep -qx 'GIT_CONFIG_KEY_8=maintenance.auto' "$log"
+  grep -qx 'GIT_CONFIG_VALUE_8=false' "$log"
+  # One filter driver = clean, smudge, process, required (4 entries) after the 9 fixed ones.
+  grep -qx 'GIT_CONFIG_KEY_9=filter.d.clean' "$log"
+  grep -qx 'GIT_CONFIG_COUNT=13' "$log"
+}
+
+# _hl_gc_fixture <repo> <victim> — a repo whose OWN config makes plain git auto-gc on any gc --auto
+# (gc.auto=1, no detach), with >1 loose object in objects/17 (what the loose-object trigger counts),
+# and an agent-planted symlinked worktree entry .git/worktrees/zz -> <victim> with NO gitdir file.
+# `git worktree prune` (run by gc) follows that symlink and empties the victim.
+_hl_gc_fixture() {
+  local repo="$1" victim="$2" i=0 n17=0
+  _hl_repo "$repo"
+  mkdir -p "$victim"
+  printf 'precious\n' > "$victim/keep.txt"
+  mkdir -p "$repo/.git/worktrees"
+  ln -s "$victim" "$repo/.git/worktrees/zz"
+  git -C "$repo" config gc.auto 1
+  git -C "$repo" config gc.autoDetach false
+  mkdir -p "$BATS_TEST_TMPDIR/objsrc"
+  while [ "$n17" -lt 3 ] && [ "$i" -lt 20 ]; do
+    local j=0
+    while [ "$j" -lt 600 ]; do
+      printf 'obj-%s-%s\n' "$i" "$j" > "$BATS_TEST_TMPDIR/objsrc/f$j"
+      j=$((j + 1))
+    done
+    git -C "$repo" hash-object -w --stdin-paths < <(find "$BATS_TEST_TMPDIR/objsrc" -type f) > /dev/null
+    i=$((i + 1))
+    n17="$(find "$repo/.git/objects/17" -type f 2> /dev/null | wc -l | tr -d ' ')"
+  done
+  [ "$n17" -ge 3 ]
+}
+
+@test "cast_git_safe: gc --auto does not empty a symlinked .git/worktrees/<id> target (control fires)" {
+  local ctl="$BATS_TEST_TMPDIR/gcc" ctlv="$BATS_TEST_TMPDIR/gcc-victim"
+  local repo="$BATS_TEST_TMPDIR/gcs" victim="$BATS_TEST_TMPDIR/gcs-victim"
+  _hl_gc_fixture "$ctl" "$ctlv"
+  _hl_gc_fixture "$repo" "$victim"
+  # CONTROL (identical fixture): plain git gc --auto must wipe the victim, or the fixture is vacuous.
+  [ -e "$ctlv/keep.txt" ]
+  git -C "$ctl" gc --auto > /dev/null 2>&1 || true
+  [ ! -e "$ctlv/keep.txt" ]
+  _hl_run_safe "$repo" gc --auto
+  assert_success
+  [ -e "$victim/keep.txt" ]
 }
 
 @test "cast_git_safe: a missing or empty first git arg returns 2 and runs no git" {

@@ -50,10 +50,13 @@ cast_hook_db_path() {
 # gpgSign=false; lazy fetch through a promisor remote (GIT_NO_LAZY_FETCH=1 +
 # GIT_ALLOW_PROTOCOL=none are the load-bearing defence, probe 2026-10-04; the -c flags are
 # belt-and-braces); filters defined in a submodule's OWN config (--ignore-submodules=all);
-# diff.<drv>.command and textconv (--no-ext-diff --no-textconv, diff family only); inherited
+# diff.<drv>.command and textconv (--no-ext-diff --no-textconv, diff family only); implicit
+# `git gc --auto` / `maintenance run --auto` (gc.auto=0, maintenance.auto=false: gc runs
+# `git worktree prune`, which follows an agent-planted symlinked .git/worktrees/<id> and EMPTIES
+# its target; gc.worktreePruneExpire=never does NOT stop it, probed 2026-10-04); inherited
 # GIT_DIR & co. that would override -C (env -u); PATH-resolved `env` (called as /usr/bin/env).
 # Config goes through GIT_CONFIG_COUNT/KEY_i/VALUE_i, NOT -c k=v (a name containing '=' would
-# mis-split -c). Locals only, no nested helpers (sourced file). Bash 3.2-safe.
+# mis-split -c). Fixed entries occupy indices 0-8; enumeration starts at n=9. Locals only, no nested helpers (sourced file). Bash 3.2-safe.
 # RESIDUALS (NOT covered): (M1) enumerate-then-blank is a TOCTOU window if an agent can rewrite
 # .git/config between the read and the call (the sandbox denies that today). (M3) a .git file or
 # core.worktree can redirect to another repo: MUTATING callers must verify `rev-parse
@@ -79,7 +82,7 @@ cast_git_safe() {
       set -- "$1" --ignore-submodules=all --no-ext-diff --no-textconv "${@:2}"
       ;;
   esac
-  local n=7 key name knob cfg rc=0
+  local n=9 key name knob cfg rc=0
   # Inherited git env that would override -C or the config below. Never empty, so
   # "${unset_env[@]}" is safe under `set -u` in bash 3.2 (as is env_assignments).
   local unset_env=(
@@ -95,6 +98,8 @@ cast_git_safe() {
     "GIT_CONFIG_KEY_4=commit.gpgSign" "GIT_CONFIG_VALUE_4=false"
     "GIT_CONFIG_KEY_5=tag.gpgSign" "GIT_CONFIG_VALUE_5=false"
     "GIT_CONFIG_KEY_6=push.gpgSign" "GIT_CONFIG_VALUE_6=false"
+    "GIT_CONFIG_KEY_7=gc.auto" "GIT_CONFIG_VALUE_7=0"
+    "GIT_CONFIG_KEY_8=maintenance.auto" "GIT_CONFIG_VALUE_8=false"
   )
   # Enumerate filter drivers and config hooks from config (a read; executes nothing). name = key
   # minus the "filter."/"hook." prefix minus the last ".<knob>" (it may itself contain '.' or
