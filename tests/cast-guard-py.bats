@@ -297,3 +297,136 @@ PYEOF
 
   rm -rf "$radius" "$sentinel_dir" "$py"
 }
+
+# ===========================================================================
+# safe_rmtree_pinned — delete by (parent fd, name); ancestors pinned O_NOFOLLOW
+# All fixtures live under $BATS_TEST_TMPDIR; paths reach Python via os.environ.
+# ===========================================================================
+
+# Write the shared prologue + the case body (stdin) to $BATS_TEST_TMPDIR/pin.py.
+# Case bodies call expect_fatal(fn) / plain calls; exit 0 = behaved as expected.
+_pin_script() {
+  {
+    cat << 'PYEOF'
+import os, sys
+sys.path.insert(0, os.environ['REPO_DIR'] + '/scripts')
+from cast_guard import safe_rmtree_pinned
+
+def expect_fatal(*args):
+    try:
+        safe_rmtree_pinned(*args, label="test")
+    except RuntimeError as e:
+        if 'FATAL [safe_rmtree_pinned]' not in str(e):
+            print(f"ERROR: bad message: {e}")
+            sys.exit(1)
+        return
+    print(f"ERROR: no exception raised for {args!r}")
+    sys.exit(1)
+
+PYEOF
+    cat
+  } > "$BATS_TEST_TMPDIR/pin.py"
+}
+
+# 8. Happy path: removes parent/name incl. nested content, leaves siblings, restores cwd
+@test "safe_rmtree_pinned removes parent/name with nested files, leaves siblings, restores cwd" {
+  local radius="$BATS_TEST_TMPDIR/radius"
+  mkdir -p "$radius/p/name/deep/er" "$radius/p/sibling"
+  touch "$radius/p/name/f" "$radius/p/name/deep/er/g" "$radius/p/sibling/keep"
+
+  _pin_script << 'PYEOF'
+radius = os.environ['RADIUS_PATH']
+before = os.getcwd()
+safe_rmtree_pinned(os.path.join(radius, 'p'), 'name', radius, label="test")
+if os.getcwd() != before:
+    print("ERROR: cwd not restored")
+    sys.exit(1)
+PYEOF
+
+  RADIUS_PATH="$radius" REPO_DIR="$REPO_DIR" run python3 "$BATS_TEST_TMPDIR/pin.py"
+  assert_success
+  [ ! -e "$radius/p/name" ]
+  [ -f "$radius/p/sibling/keep" ]
+}
+
+# 9. Parent outside the blast radius -> FATAL, canary survives
+@test "safe_rmtree_pinned refuses parent outside blast radius (canary survives)" {
+  local radius="$BATS_TEST_TMPDIR/radius" outside="$BATS_TEST_TMPDIR/outside"
+  mkdir -p "$radius" "$outside/name"
+  touch "$outside/name/canary"
+
+  _pin_script << 'PYEOF'
+expect_fatal(os.environ['OUTSIDE_PATH'], 'name', os.environ['RADIUS_PATH'])
+PYEOF
+
+  OUTSIDE_PATH="$outside" RADIUS_PATH="$radius" REPO_DIR="$REPO_DIR" \
+    run python3 "$BATS_TEST_TMPDIR/pin.py"
+  assert_success
+  [ -f "$outside/name/canary" ]
+}
+
+# 10. name is a symlink to a victim directory -> FATAL, victim intact
+@test "safe_rmtree_pinned refuses name that is a symlink (victim intact)" {
+  local radius="$BATS_TEST_TMPDIR/radius" victim="$BATS_TEST_TMPDIR/victim"
+  mkdir -p "$radius/p" "$victim"
+  touch "$victim/canary"
+  ln -s "$victim" "$radius/p/name"
+
+  _pin_script << 'PYEOF'
+radius = os.environ['RADIUS_PATH']
+expect_fatal(os.path.join(radius, 'p'), 'name', radius)
+PYEOF
+
+  RADIUS_PATH="$radius" REPO_DIR="$REPO_DIR" run python3 "$BATS_TEST_TMPDIR/pin.py"
+  assert_success
+  [ -f "$victim/canary" ]
+  [ -L "$radius/p/name" ]
+}
+
+# 11. name must be a single component: '..', '.', 'a/b', '' -> FATAL
+@test "safe_rmtree_pinned refuses bad names (.. . a/b empty)" {
+  local radius="$BATS_TEST_TMPDIR/radius"
+  mkdir -p "$radius/p/a/b" "$radius/p/name"
+  touch "$radius/p/a/b/canary" "$radius/p/name/canary"
+
+  _pin_script << 'PYEOF'
+radius = os.environ['RADIUS_PATH']
+parent = os.path.join(radius, 'p')
+for bad in ('..', '.', 'a/b', '', 'x\0y'):
+    expect_fatal(parent, bad, radius)
+PYEOF
+
+  RADIUS_PATH="$radius" REPO_DIR="$REPO_DIR" run python3 "$BATS_TEST_TMPDIR/pin.py"
+  assert_success
+  [ -f "$radius/p/a/b/canary" ]
+  [ -f "$radius/p/name/canary" ]
+}
+
+# 12. ANCESTOR swap after the realpath check: radius/p becomes a symlink to a victim
+#     dir holding name/. realpath is pinned to the pre-swap answer (simulating the
+#     check-then-swap window); the O_NOFOLLOW walk must refuse and the victim survive.
+@test "safe_rmtree_pinned refuses an ancestor swapped for a symlink after the check (victim survives)" {
+  local radius="$BATS_TEST_TMPDIR/radius" victim="$BATS_TEST_TMPDIR/victimdir"
+  mkdir -p "$radius/p/name" "$victim/name"
+  touch "$radius/p/name/f" "$victim/name/canary"
+
+  _pin_script << 'PYEOF'
+import shutil
+radius = os.environ['RADIUS_PATH']
+victim = os.environ['VICTIM_PATH']
+parent = os.path.join(radius, 'p')
+
+real_realpath = os.path.realpath
+frozen = {parent: real_realpath(parent)}      # what the check saw BEFORE the swap
+shutil.rmtree(parent)
+os.symlink(victim, parent)                    # the swap
+os.path.realpath = lambda p, *a, **k: frozen.get(str(p)) or real_realpath(p, *a, **k)
+
+expect_fatal(parent, 'name', radius)
+PYEOF
+
+  RADIUS_PATH="$radius" VICTIM_PATH="$victim" REPO_DIR="$REPO_DIR" \
+    run python3 "$BATS_TEST_TMPDIR/pin.py"
+  assert_success
+  [ -f "$victim/name/canary" ]
+}

@@ -813,3 +813,495 @@ _gx_symlink_fixture() { # <repo> <target>
   git -C "$TEST_REPO" branch --list | grep -q "safe-keep-do-not-delete"
   git -C "$TEST_REPO" branch --list | grep -q "random-old-branch"
 }
+
+# ---------------------------------------------------------------------------
+# U2c (2026-10-04): quarantine-by-rename TOCTOU defence for `--apply --worktrees`.
+# All victims live under BATS_TEST_TMPDIR. Swap tests run an injected script COPY: a hook line is
+# inserted immediately before the rename step, so the swap lands AFTER every gate has passed.
+# ---------------------------------------------------------------------------
+_gq_copy() { # [nocheck]  -> $GQ_S = path of the injected groomer copy
+  local s="$BATS_TEST_TMPDIR/s"
+  mkdir -p "$s"
+  cp "$REPO_DIR/scripts/cast-hook-lib.sh" "$REPO_DIR/scripts/cast_groom_fs.py" "$REPO_DIR/scripts/cast_guard.py" "$s/"
+  awk '/^      if ! _rename_path "\$wt_path" "\$qdir\/\$wt_name"; then$/ { print "      eval \"${GQ_SWAP:-:}\"" } { print }' \
+    "$GROOMER" >"$s/groomer.sh"
+  grep -q 'GQ_SWAP' "$s/groomer.sh" # the hook line really landed (else the swap tests are vacuous)
+  if [ "${1:-}" = "nocheck" ]; then
+    sed -i.bak 's/^      if \[\[ -z "\$wt_moved_id" \]\] || \[\[ "\$wt_moved_id" != "\$wt_id" \]\]; then$/      if false; then/' "$s/groomer.sh"
+    rm -f "$s/groomer.sh.bak"
+    grep -q '^      if false; then$' "$s/groomer.sh" # the mutation really applied
+  fi
+  GQ_S="$s/groomer.sh"
+}
+_gq_wt() { # name [branch-suffix] -> creates an old clean agent worktree $GX_REPO/.claude/worktrees/<name>
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/$1" -b "$1-branch${2:-}"
+  touch -t 202001010000 "$GX_REPO/.claude/worktrees/$1"
+}
+_gq_victim() { # dir -> real directory with one file (the thing that must survive)
+  mkdir -p "$1"
+  echo precious >"$1/precious.txt"
+}
+
+@test "groomer quarantine: leaf swapped to a SYMLINK after the gates never deletes the victim" {
+  _gx_setup
+  _gq_wt agent-x
+  _gq_victim "$BATS_TEST_TMPDIR/victim"
+  _gq_copy
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  run env GQ_SWAP="rm -rf '$wt' && ln -s '$BATS_TEST_TMPDIR/victim' '$wt' && echo swapped >'$BATS_TEST_TMPDIR/swap-landed' && [ -L '$wt' ]" \
+    bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ -e "$BATS_TEST_TMPDIR/swap-landed" ] # control: the swap really happened (path became a symlink to the victim)
+  [ -e "$BATS_TEST_TMPDIR/victim/precious.txt" ]
+  refute_output --partial "Removed worktree"
+  assert_output --partial "WARN"
+}
+
+@test "groomer quarantine: leaf swapped to a DIFFERENT real dir is restored, not deleted (control: no identity check deletes it)" {
+  _gx_setup
+  _gq_wt agent-x
+  _gq_victim "$BATS_TEST_TMPDIR/victim"
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  local swap="mv '$wt' '$BATS_TEST_TMPDIR/orig-wt' && mv '$BATS_TEST_TMPDIR/victim' '$wt'"
+  _gq_copy nocheck
+  run env GQ_SWAP="$swap" bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ ! -e "$wt/precious.txt" ] # control: with the identity check removed the victim IS deleted
+  # reset, then run the unmutated script copy
+  rm -rf "$HOME/.claude/groomer-quarantine" "$wt" "$BATS_TEST_TMPDIR/orig-wt"
+  git -C "$GX_REPO" worktree prune
+  _gq_wt agent-x 2
+  _gq_victim "$BATS_TEST_TMPDIR/victim"
+  _gq_copy
+  run env GQ_SWAP="$swap" bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ -e "$wt/precious.txt" ] # restored to the original path, intact
+  assert_output --partial "swap detected"
+  refute_output --partial "Removed worktree"
+}
+
+@test "groomer quarantine: PARENT .claude/worktrees swapped to a symlink never deletes the victim (control: no identity check deletes it)" {
+  _gx_setup
+  _gq_wt agent-x
+  local wts="$GX_REPO/.claude/worktrees"
+  local swap="mv '$wts' '$BATS_TEST_TMPDIR/orig-wts' && ln -s '$BATS_TEST_TMPDIR/vparent' '$wts'"
+  _gq_victim "$BATS_TEST_TMPDIR/vparent/agent-x"
+  _gq_copy nocheck
+  run env GQ_SWAP="$swap" bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ ! -e "$BATS_TEST_TMPDIR/vparent/agent-x/precious.txt" ] # control: swap real + check removed -> victim deleted
+  # reset, then run the unmutated script copy
+  rm -rf "$HOME/.claude/groomer-quarantine"
+  rm -f "$wts"
+  rm -rf "$BATS_TEST_TMPDIR/orig-wts" "$BATS_TEST_TMPDIR/vparent"
+  git -C "$GX_REPO" worktree prune
+  _gq_wt agent-x 2
+  _gq_victim "$BATS_TEST_TMPDIR/vparent/agent-x"
+  _gq_copy
+  run env GQ_SWAP="$swap" bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ -e "$BATS_TEST_TMPDIR/vparent/agent-x/precious.txt" ]
+  assert_output --partial "swap detected"
+  refute_output --partial "Removed worktree"
+}
+
+@test "groomer --apply --worktrees: a LOCKED agent worktree is kept (control: unlocked twin removed)" {
+  _gx_setup
+  _gq_wt agent-x
+  _gq_wt agent-y
+  git -C "$GX_REPO" worktree lock "$GX_REPO/.claude/worktrees/agent-x"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp "Keeping worktree \(locked\): .*/\.claude/worktrees/agent-x"
+  [ -d "$GX_REPO/.claude/worktrees/agent-x" ]
+  [ ! -d "$GX_REPO/.claude/worktrees/agent-y" ] # control
+  assert_output --regexp "Removed worktree: .*/\.claude/worktrees/agent-y"
+}
+
+_gq_ignore_repo() { # commit a .gitignore covering the rebuildable and the non-rebuildable cases
+  printf '%s\n' '*.env' '.env.local' 'node_modules/' '__pycache__/' '*.pyc' >"$GX_REPO/.gitignore"
+  git -C "$GX_REPO" add .gitignore
+  git -C "$GX_REPO" commit -q -m ignore
+}
+
+@test "groomer --apply --worktrees: a worktree with only REBUILDABLE ignored files (__pycache__, node_modules) is removed" {
+  _gx_setup
+  _gq_ignore_repo
+  _gq_wt agent-x
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  mkdir -p "$wt/__pycache__" "$wt/node_modules/a"
+  echo b >"$wt/__pycache__/x.pyc"
+  echo b >"$wt/node_modules/a/b.js"
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp "Removed worktree: .*/agent-x"
+  [ ! -d "$wt" ]
+}
+
+@test "groomer --apply --worktrees: an ignored x.env keeps the worktree and is named (control: removed once deleted)" {
+  _gx_setup
+  _gq_ignore_repo
+  _gq_wt agent-x
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  echo SECRET=1 >"$wt/x.env"
+  touch -t 202001010000 "$wt"
+  [ -z "$(git -C "$wt" status --porcelain --untracked-files=all)" ] # control: plain status looks clean
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Keeping worktree (ignored files not in the rebuildable list)"
+  assert_output --partial "x.env"
+  [ -e "$wt/x.env" ]
+  rm "$wt/x.env"
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Removed worktree"
+  [ ! -d "$wt" ]
+}
+
+@test "groomer --apply --worktrees: MIXED ignored (__pycache__ + .env.local) keeps the worktree" {
+  _gx_setup
+  _gq_ignore_repo
+  _gq_wt agent-x
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  mkdir -p "$wt/__pycache__"
+  echo b >"$wt/__pycache__/x.pyc"
+  echo SECRET=1 >"$wt/.env.local"
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Keeping worktree (ignored files not in the rebuildable list)"
+  assert_output --partial ".env.local"
+  [ -e "$wt/.env.local" ]
+}
+
+@test "groomer --apply --worktrees: an ignored file UNDER a non-ignored build/ dir (build/secrets.env) keeps the worktree (control: removed once deleted)" {
+  _gx_setup
+  printf '%s\n' '*.env' >"$GX_REPO/.gitignore"
+  git -C "$GX_REPO" add .gitignore
+  git -C "$GX_REPO" commit -q -m ignore
+  _gq_wt agent-x
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  mkdir -p "$wt/build"
+  echo SECRET=1 >"$wt/build/secrets.env"
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Keeping worktree (ignored files not in the rebuildable list)"
+  assert_output --partial "build/secrets.env"
+  [ -e "$wt/build/secrets.env" ]
+  rm "$wt/build/secrets.env"
+  rmdir "$wt/build"
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Removed worktree"
+  [ ! -d "$wt" ]
+}
+
+@test "groomer --apply --worktrees: a NESTED wholly-ignored pkg/node_modules/ is still removed" {
+  _gx_setup
+  _gq_ignore_repo
+  _gq_wt agent-x
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  mkdir -p "$wt/pkg/node_modules/a"
+  echo b >"$wt/pkg/node_modules/a/b.js"
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp "Removed worktree: .*/agent-x"
+  [ ! -d "$wt" ]
+}
+
+_gq_copy_del() { # [nopin] -> injected copy with the hook line just before the quarantine delete
+  local s="$BATS_TEST_TMPDIR/s"
+  mkdir -p "$s"
+  cp "$REPO_DIR/scripts/cast-hook-lib.sh" "$REPO_DIR/scripts/cast_groom_fs.py" "$REPO_DIR/scripts/cast_guard.py" "$s/"
+  awk '/^      if _quarantine_delete "\$qdir" "\$wt_name"; then$/ { print "      eval \"${GQ_SWAP:-:}\"" } { print }' \
+    "$GROOMER" >"$s/groomer.sh"
+  grep -q 'GQ_SWAP' "$s/groomer.sh" # the hook line really landed
+  if [ "${1:-}" = "nopin" ]; then
+    sed -i.bak '/^    \[\[ "\$(pwd -P)" == "\$GROOM_QROOT_REAL\/\$base" \]\] || exit 1$/d' "$s/groomer.sh"
+    rm -f "$s/groomer.sh.bak"
+    ! grep -q 'GROOM_QROOT_REAL/\$base' "$s/groomer.sh" # the mutation really applied
+    # ...and revert the delete to the pre-U2c-pin cwd-relative rm (the pinned primitive is a 2nd layer)
+    sed -i.bak 's#^    python3 -I "\$_GROOM_FS" rmtree-pinned "\$GROOM_QROOT_REAL/\$base" "\$name" "\$GROOM_QROOT_REAL" || exit 1$#    rm -rf -- "./$name" || exit 1#' "$s/groomer.sh"
+    rm -f "$s/groomer.sh.bak"
+    if grep -qF 'rmtree-pinned "$GROOM_QROOT_REAL' "$s/groomer.sh"; then return 1; fi # that mutation really applied
+  fi
+  GQ_S="$s/groomer.sh"
+}
+
+@test "groomer --apply --worktrees: a planted symlinked .git/worktrees/<id> is NEVER followed by registry cleanup (control: plain prune empties its victim)" {
+  _gx_setup
+  # control: plain git DOES delete the symlink target on prune (the exact C1 reproduction)
+  git init -q --initial-branch=main "$BATS_TEST_TMPDIR/ctl"
+  mkdir -p "$BATS_TEST_TMPDIR/ctl/.git/worktrees" "$BATS_TEST_TMPDIR/vctl/sub"
+  echo precious >"$BATS_TEST_TMPDIR/vctl/sub/f.txt"
+  ln -s "$BATS_TEST_TMPDIR/vctl" "$BATS_TEST_TMPDIR/ctl/.git/worktrees/zz"
+  git -C "$BATS_TEST_TMPDIR/ctl" worktree prune >/dev/null 2>&1 || true
+  [ ! -e "$BATS_TEST_TMPDIR/vctl/sub/f.txt" ]
+  # real run
+  _gq_wt agent-x
+  mkdir -p "$BATS_TEST_TMPDIR/vprune/sub"
+  echo precious >"$BATS_TEST_TMPDIR/vprune/sub/f.txt"
+  echo precious2 >"$BATS_TEST_TMPDIR/vprune/top.txt"
+  ln -s "$BATS_TEST_TMPDIR/vprune" "$GX_REPO/.git/worktrees/zz"
+  [ -e "$GX_REPO/.git/worktrees/agent-x" ]
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp "Removed worktree: .*/agent-x"
+  [ ! -d "$GX_REPO/.claude/worktrees/agent-x" ]
+  [ ! -e "$GX_REPO/.git/worktrees/agent-x" ] # its own registry entry is gone
+  [ -e "$BATS_TEST_TMPDIR/vprune/sub/f.txt" ]
+  [ -e "$BATS_TEST_TMPDIR/vprune/top.txt" ]
+  [ -L "$GX_REPO/.git/worktrees/zz" ]
+}
+
+@test "groomer quarantine: the quarantine dir swapped to a symlink just before the delete never deletes the victim (control: no pinned-cwd check and no pinned delete deletes it)" {
+  _gx_setup
+  _gq_wt agent-x
+  mkdir -p "$BATS_TEST_TMPDIR/victim/agent-x"
+  echo precious >"$BATS_TEST_TMPDIR/victim/agent-x/p.txt"
+  local swap='mv "$qdir" "$qdir.orig" && ln -s "'"$BATS_TEST_TMPDIR"'/victim" "$qdir"'
+  _gq_copy_del nopin
+  run env GQ_SWAP="$swap" bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ ! -e "$BATS_TEST_TMPDIR/victim/agent-x/p.txt" ] # control: swap real + pin removed -> victim deleted
+  # reset, then the unmutated copy
+  rm -rf "$HOME/.claude/groomer-quarantine"
+  rm -rf "$GX_REPO/.claude/worktrees/agent-x"
+  git -C "$GX_REPO" worktree prune
+  _gq_wt agent-x 2
+  mkdir -p "$BATS_TEST_TMPDIR/victim/agent-x"
+  echo precious >"$BATS_TEST_TMPDIR/victim/agent-x/p.txt"
+  _gq_copy_del
+  run env GQ_SWAP="$swap" bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ -e "$BATS_TEST_TMPDIR/victim/agent-x/p.txt" ]
+  assert_output --partial "could not fully delete"
+  refute_output --partial "Removed worktree"
+}
+
+_gq_copy_reg() { # [plain] -> injected copy with the hook line just before the registry delete
+  local s="$BATS_TEST_TMPDIR/s"
+  mkdir -p "$s"
+  cp "$REPO_DIR/scripts/cast-hook-lib.sh" "$REPO_DIR/scripts/cast_groom_fs.py" "$REPO_DIR/scripts/cast_guard.py" "$s/"
+  awk '/^  python3 -I "\$_GROOM_FS" rmtree-pinned "\$reg" "\$name" "\$reg" 2>\/dev\/null$/ { print "  eval \"${GQ_SWAP:-:}\"" } { print }' \
+    "$GROOMER" >"$s/groomer.sh"
+  grep -q 'GQ_SWAP' "$s/groomer.sh" # the hook line really landed
+  if [ "${1:-}" = "plain" ]; then
+    # control: the pre-pin absolute-path delete (re-resolves .git/worktrees at delete time)
+    sed -i.bak 's#^  python3 -I "\$_GROOM_FS" rmtree-pinned "\$reg" "\$name" "\$reg" 2>/dev/null$#  rm -rf -- "$reg/$name"#' "$s/groomer.sh"
+    rm -f "$s/groomer.sh.bak"
+    if grep -qF 'rmtree-pinned "$reg"' "$s/groomer.sh"; then return 1; fi # the mutation really applied
+  fi
+  GQ_S="$s/groomer.sh"
+}
+
+@test "groomer registry cleanup: .git/worktrees swapped to a symlink just before the delete never deletes the victim (control: absolute-path delete does)" {
+  _gx_setup
+  _gq_wt agent-x
+  mkdir -p "$BATS_TEST_TMPDIR/vreg/agent-x"
+  echo precious >"$BATS_TEST_TMPDIR/vreg/agent-x/p.txt"
+  local swap='mv "$GX_REPO/.git/worktrees" "$GX_REPO/.git/worktrees.orig" && ln -s "'"$BATS_TEST_TMPDIR"'/vreg" "$GX_REPO/.git/worktrees"'
+  _gq_copy_reg plain
+  run env GX_REPO="$GX_REPO" GQ_SWAP="$swap" bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ ! -e "$BATS_TEST_TMPDIR/vreg/agent-x/p.txt" ] # control: swap real + absolute-path delete -> victim deleted
+  # reset, then the real (pinned) copy
+  rm -rf "$HOME/.claude/groomer-quarantine"
+  rm -f "$GX_REPO/.git/worktrees"
+  mv "$GX_REPO/.git/worktrees.orig" "$GX_REPO/.git/worktrees"
+  rm -rf "$GX_REPO/.claude/worktrees/agent-x"
+  git -C "$GX_REPO" worktree prune
+  _gq_wt agent-x 2
+  mkdir -p "$BATS_TEST_TMPDIR/vreg/agent-x"
+  echo precious >"$BATS_TEST_TMPDIR/vreg/agent-x/p.txt"
+  _gq_copy_reg
+  run env GX_REPO="$GX_REPO" GQ_SWAP="$swap" bash "$GQ_S" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ -e "$BATS_TEST_TMPDIR/vreg/agent-x/p.txt" ]
+  assert_output --partial "registry entry not removed"
+}
+
+@test "cast_groom_fs.py rmtree-pinned: deletes PARENT/NAME only for a canonical in-radius PARENT; every refusal exits 1 with empty stdout and no traceback" {
+  local h="$REPO_DIR/scripts/cast_groom_fs.py" r d
+  r="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/rp"
+  d="$r/par"
+  mkdir -p "$d/gone/sub" "$d/keep" "$BATS_TEST_TMPDIR/outside/gone"
+  echo x >"$d/gone/sub/f"
+  echo precious >"$BATS_TEST_TMPDIR/outside/gone/p"
+  ln -s "$d" "$r/plink"
+  ln -s "$BATS_TEST_TMPDIR/outside" "$d/escape"
+  # refusals: nothing deleted, nothing on stdout, no traceback
+  for args in "$d .. $r" "$d a/b $r" "$d keep/../gone $r" "$r/plink gone $r" "$BATS_TEST_TMPDIR/outside gone $r" "$d escape $r" "$d missing $r" "$d gone"; do
+    # shellcheck disable=SC2086
+    run --separate-stderr python3 -I "$h" rmtree-pinned $args
+    assert_failure
+    [ -z "$output" ]
+    [[ "$stderr" != *Traceback* ]]
+  done
+  [ -e "$d/gone/sub/f" ] && [ -e "$d/keep" ] && [ -e "$BATS_TEST_TMPDIR/outside/gone/p" ] && [ -L "$d/escape" ]
+  # success
+  run --separate-stderr python3 -I "$h" rmtree-pinned "$d" gone "$r"
+  assert_success
+  [ -z "$output" ]
+  [ ! -e "$d/gone" ] && [ -d "$d/keep" ] && [ -e "$BATS_TEST_TMPDIR/outside/gone/p" ]
+  # a missing/broken cast_guard.py next to the helper -> exit 1, no traceback, no delete
+  local s="$BATS_TEST_TMPDIR/hs"
+  mkdir -p "$s" "$d/gone2"
+  cp "$h" "$s/"
+  run --separate-stderr python3 -I "$s/cast_groom_fs.py" rmtree-pinned "$d" gone2 "$r"
+  assert_failure
+  [ -z "$output" ] && [[ "$stderr" != *Traceback* ]] && [ -d "$d/gone2" ]
+  echo 'raise SystemError("broken")' >"$s/cast_guard.py"
+  run --separate-stderr python3 -I "$s/cast_groom_fs.py" rmtree-pinned "$d" gone2 "$r"
+  assert_failure
+  [ -z "$output" ] && [[ "$stderr" != *Traceback* ]] && [ -d "$d/gone2" ]
+}
+
+@test "groomer --apply --worktrees: an ignored FILE named build is kept; an ignored build/ DIRECTORY is removed" {
+  _gx_setup
+  printf '%s\n' 'build' >"$GX_REPO/.gitignore"
+  git -C "$GX_REPO" add .gitignore
+  git -C "$GX_REPO" commit -q -m ignore
+  _gq_wt agent-x
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  echo SECRET=1 >"$wt/build"
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Keeping worktree (ignored files not in the rebuildable list)"
+  [ -e "$wt/build" ]
+  rm "$wt/build"
+  mkdir -p "$wt/build"
+  echo out >"$wt/build/o.js"
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Removed worktree"
+  [ ! -d "$wt" ]
+}
+
+@test "groomer --apply --worktrees: a group/world-writable quarantine root is tightened to 700 before use" {
+  _gx_setup
+  _gq_wt agent-x
+  mkdir -p "$HOME/.claude/groomer-quarantine"
+  chmod 777 "$HOME/.claude/groomer-quarantine"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Removed worktree"
+  [ "$(ls -ld "$HOME/.claude/groomer-quarantine" | cut -c1-10)" = "drwx------" ]
+}
+
+@test "groomer: invoked by a RELATIVE path it never runs a helper planted inside the target repo (control: relative resolution would)" {
+  _gx_setup
+  _gq_wt agent-x
+  local inst="$BATS_TEST_TMPDIR/inst"
+  mkdir -p "$inst" "$GX_REPO/inst"
+  cp "$GROOMER" "$REPO_DIR/scripts/cast-hook-lib.sh" "$REPO_DIR/scripts/cast_groom_fs.py" "$REPO_DIR/scripts/cast_guard.py" "$inst/"
+  printf '%s\n' 'import sys' "open('$BATS_TEST_TMPDIR/planted-ran','w').close()" 'sys.exit(0)' >"$GX_REPO/inst/cast_groom_fs.py"
+  cp "$REPO_DIR/scripts/cast-hook-lib.sh" "$GX_REPO/inst/"
+  cd "$BATS_TEST_TMPDIR"
+  run bash inst/cast-branch-groomer.sh --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  [ ! -e "$BATS_TEST_TMPDIR/planted-ran" ]
+  assert_output --regexp "Removed worktree: .*/agent-x" # the REAL helper did the work
+  # control: the relative form really would resolve to the planted helper from inside the repo
+  (cd "$GX_REPO" && [ "$(dirname inst/cast-branch-groomer.sh)/cast_groom_fs.py" = "inst/cast_groom_fs.py" ] && python3 -I inst/cast_groom_fs.py)
+  [ -e "$BATS_TEST_TMPDIR/planted-ran" ]
+}
+
+@test "groomer: a missing cast_groom_fs.py helper makes it refuse to run (non-zero) and delete nothing" {
+  _gx_setup
+  _gq_wt agent-x
+  local s="$BATS_TEST_TMPDIR/s"
+  mkdir -p "$s"
+  cp "$REPO_DIR/scripts/cast-hook-lib.sh" "$GROOMER" "$s/" # deliberately NOT the helper
+  run bash "$s/cast-branch-groomer.sh" --apply --worktrees --repo "$GX_REPO"
+  assert_failure
+  assert_output --partial "cannot read helper"
+  [ -d "$GX_REPO/.claude/worktrees/agent-x" ]
+}
+
+@test "cast_groom_fs.py: identity/rename/root-ok semantics; bad usage exits 1 with no traceback" {
+  local h="$REPO_DIR/scripts/cast_groom_fs.py" d="$BATS_TEST_TMPDIR/fs"
+  mkdir -p "$d/real"
+  ln -s "$d/real" "$d/link"
+  : >"$d/file"
+  run python3 -I "$h" identity "$d/real"
+  assert_success
+  assert_output --regexp '^[0-9]+:[0-9]+$'
+  run python3 -I "$h" identity "$d/link"
+  assert_failure
+  assert_output ""
+  run python3 -I "$h" identity "$d/file"
+  assert_failure
+  run python3 -I "$h" identity "$d/missing"
+  assert_failure
+  assert_output ""
+  run python3 -I "$h" rename "$d/file" "$d/file2"
+  assert_success
+  [ -e "$d/file2" ] && [ ! -e "$d/file" ]
+  run python3 -I "$h" rename "$d/missing" "$d/x"
+  assert_failure
+  chmod 700 "$d/real"
+  run python3 -I "$h" root-ok "$d/real"
+  assert_success
+  chmod 770 "$d/real"
+  run python3 -I "$h" root-ok "$d/real"
+  assert_failure
+  run python3 -I "$h" root-ok "$d/link"
+  assert_failure
+  run python3 -I "$h" bogus x
+  assert_failure
+  assert_output ""
+  run python3 -I "$h"
+  assert_failure
+  assert_output ""
+}
+
+@test "groomer --worktrees: an old KEPT worktree is reported STALE and counted; a leftover quarantine dir WARNs and is NOT removed" {
+  _gx_setup
+  _gq_wt agent-x
+  local wt="$GX_REPO/.claude/worktrees/agent-x"
+  echo mine >"$wt/notes.txt"
+  touch -t 202001010000 "$wt"
+  mkdir -p "$HOME/.claude/groomer-quarantine/wt.PLANTED"
+  echo keep >"$HOME/.claude/groomer-quarantine/wt.PLANTED/f"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp "STALE \(kept >30d, review manually\): .*/agent-x"
+  assert_output --partial "1 agent worktrees kept"
+  assert_output --partial "WARN: 1 leftover quarantine dir(s)"
+  [ -e "$HOME/.claude/groomer-quarantine/wt.PLANTED/f" ]
+  [ -e "$wt/notes.txt" ]
+}
+
+@test "groomer --apply --worktrees: successful removal leaves no quarantine dir and drops the registry entry" {
+  _gx_setup
+  _gq_wt agent-x
+  git -C "$GX_REPO" worktree list | grep -q agent-x # control: registered before
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp "Removed worktree: .*/\.claude/worktrees/agent-x"
+  [ -d "$HOME/.claude/groomer-quarantine" ]
+  [ -z "$(find "$HOME/.claude/groomer-quarantine" -mindepth 1 2>/dev/null)" ]
+  ! git -C "$GX_REPO" worktree list | grep -q agent-x
+  [ ! -e "$GX_REPO/.git/worktrees/agent-x" ]
+}
+
+@test "groomer --apply --worktrees: a SYMLINKED quarantine root removes nothing and warns" {
+  _gx_setup
+  _gq_wt agent-x
+  mkdir -p "$HOME/.claude" "$BATS_TEST_TMPDIR/qtarget"
+  ln -s "$BATS_TEST_TMPDIR/qtarget" "$HOME/.claude/groomer-quarantine"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "WARN: quarantine root unusable"
+  refute_output --partial "Removed worktree"
+  [ -d "$GX_REPO/.claude/worktrees/agent-x" ]
+  [ -z "$(find "$BATS_TEST_TMPDIR/qtarget" -mindepth 1 2>/dev/null)" ]
+}
