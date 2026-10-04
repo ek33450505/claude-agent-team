@@ -1113,6 +1113,32 @@ def _load_validate_handoff():
         return _inline_validate_handoff
 
 
+# ── hostile-repo git hardening ───────────────────────────────────────────────
+# This hook runs OUTSIDE the Bash sandbox in a cwd an agent can write to. Porcelain
+# `git log` honours repo-local config an agent can plant (log.showSignature +
+# gpg.program, core.fsmonitor, ...) and would execute it unsandboxed. Use plumbing
+# only, with the exec-capable config knobs forced off, and no lazy ref replacement.
+_SAFE_GIT_PREFIX = [
+    "git",
+    "-c", "core.fsmonitor=false",
+    "-c", "core.hooksPath=/dev/null",
+    "-c", "log.showSignature=false",
+    "--no-replace-objects",
+]
+
+
+def _safe_git_env() -> dict:
+    """Environment for hardened git calls: no optional locks, never prompt."""
+    env = dict(os.environ)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    # Partial-clone repos lazily fetch missing objects via repo-configured
+    # remote.<n>.uploadpack / core.sshCommand / core.gitProxy / ext:: - block that.
+    env["GIT_NO_LAZY_FETCH"] = "1"
+    env["GIT_ALLOW_PROTOCOL"] = "none"
+    return env
+
+
 # In-process cast-redact.py loader (replaces the per-event subprocess spawn).
 _REDACT_MOD = None  # None=unattempted, False=import failed, module=loaded
 
@@ -2071,7 +2097,13 @@ def stage15_incident_record(ctx: Ctx) -> None:
 
     related_commit = ""
     try:
-        r = subprocess.run(["git", "log", "-1", "--format=%H"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(
+            _SAFE_GIT_PREFIX + ["rev-parse", "--verify", "-q", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=_safe_git_env(),
+        )
         if r.returncode == 0:
             related_commit = r.stdout.strip()
     except Exception:

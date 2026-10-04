@@ -19,6 +19,10 @@ the wrappers stay on disk as those test entrypoints; only the live hook WIRING i
 repointed here.
 
 ROUTING (by tool_name):
+  0. Workflow: stage-model guard (_workflow_stage_model_guard) owns the call --
+     DENY an inline/scriptPath script whose agent() stage lacks model:; every
+     failure mode allows silently, incl. a lint that outruns its 2 s SIGALRM
+     watchdog. No other path below applies to Workflow.
   1. HARD BLOCKS first — CPU-bound (regex only, no I/O), so the wipe-protection
      guard is guaranteed to run before any egress I/O could stall the hook's
      timeout budget:
@@ -60,7 +64,9 @@ import importlib.util
 import json
 import os
 import re
+import stat
 import sys
+import time
 from datetime import datetime, timezone
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -786,6 +792,253 @@ def _record_dispatch(data):
         _log_error(f"dispatch_decisions record failed: {type(e).__name__}")
 
 
+_WORKFLOW_LINT_MOD = "cast_lint_workflow_stage_models"
+_WORKFLOW_LINT_FILE = "cast-lint-workflow-stage-models.py"
+_WORKFLOW_SCRIPT_MAX_BYTES = 1024 * 1024
+_WORKFLOW_REASON_MAX_ENTRIES = 10
+_WORKFLOW_SNIPPET_MAX = 80
+# Fail-open bounds (hook only -- the lint CLI has none). The hook's budget is 5 s
+# and the lint is superlinear on pathological input, so a source over either
+# bound is ALLOWED unlinted. Raw `agent(` matches over-count (comments/strings
+# included), which only makes the bound more conservative. These bound size and
+# count, NOT shape: malformed nesting inside them can still be slow (measured:
+# 150 unclosed `agent(` + 64 KiB of padding ~10 s), so the lint itself also runs
+# under a wall-clock watchdog (_lint_with_watchdog).
+_WORKFLOW_MAX_SOURCE_CHARS = 256 * 1024
+_WORKFLOW_MAX_AGENT_CALLS = 2000
+_WORKFLOW_LINT_BUDGET_SECS = 2.0  # < the hook's 5 s timeout, with margin for startup
+
+
+def _read_workflow_script_path(data, path):
+    """Read a Workflow `scriptPath` -> decoded text, or None (= nothing lintable):
+    non-str / empty path, missing / unreadable / non-regular / oversize (> 1 MiB)
+    file, or a path the OS refuses (NUL byte, lone surrogate). Relative paths
+    resolve against the payload `cwd`.
+
+    Opened FIRST with O_NONBLOCK and judged with fstat on the SAME fd, so a path
+    swapped for a FIFO between a stat and an open cannot block the hook (an
+    open() of a FIFO with no writer waits forever, outside the lint watchdog) and
+    a FIFO / device is never read."""
+    if not isinstance(path, str) or not path:
+        return None
+    fd = -1
+    try:
+        path = os.path.expanduser(path)
+        if not os.path.isabs(path):
+            cwd = data.get("cwd")
+            if isinstance(cwd, str) and cwd:
+                path = os.path.join(cwd, path)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1  # fh owns (and closes) the descriptor from here on
+            raw = fh.read(_WORKFLOW_SCRIPT_MAX_BYTES + 1)
+    except (OSError, ValueError):
+        return None
+    finally:
+        if fd != -1:
+            os.close(fd)
+    if len(raw) > _WORKFLOW_SCRIPT_MAX_BYTES:
+        return None
+    return raw.decode("utf-8", errors="replace")
+
+
+def _workflow_sources(data, tool_input):
+    """Workflow source texts to lint, as [(label, text), ...] (possibly empty).
+
+    A non-empty `script` str is one source; a readable `scriptPath` (see
+    _read_workflow_script_path) is another. BOTH are linted when both exist -- an
+    empty or non-str `script` is "absent" and must never shadow a real file, and
+    a clean `script` must not mask a violating file. Anything else (`name` of a
+    saved workflow, resume, ...) yields no source -> allow."""
+    sources = []
+    script = tool_input.get("script")
+    if isinstance(script, str) and script:
+        sources.append(("script", script))
+    text = _read_workflow_script_path(data, tool_input.get("scriptPath"))
+    if text is not None:
+        sources.append(("scriptPath", text))
+    return sources
+
+
+def _workflow_deny_reason(entries):
+    """Deny reason: count, up to 10 `line N: <snippet <= 80 chars>` entries, then
+    the fix. `entries` is [(label, lineno, text), ...]; the label ("script" /
+    "scriptPath") is shown only when two sources were linted, so line numbers stay
+    unambiguous. Stays under ~1500 chars (10 x ~92 + header + fix)."""
+    total = len(entries)
+    shown = entries[:_WORKFLOW_REASON_MAX_ENTRIES]
+    lines = [
+        f"{total} agent() stage(s) in this Workflow script have no model:, so they "
+        "inherit the opus main-loop model (cost lever)."
+    ]
+    for label, lineno, text in shown:
+        prefix = f"{label} " if label else ""
+        lines.append(f"{prefix}line {lineno}: {str(text).strip()[:_WORKFLOW_SNIPPET_MAX]}")
+    if total > len(shown):
+        lines.append(f"(+{total - len(shown)} more)")
+    lines.append(
+        "Fix: add model: to each stage ('haiku' for mechanical/scout/gather, "
+        "'sonnet' for analytical, 'opus' for synthesis/judge), or opt out on the "
+        "agent( line or the line above with: "
+        "// cast-lint: inherit-model -- <reason>  (reason required)."
+    )
+    return "\n".join(lines)
+
+
+class _WorkflowLintTimeout(Exception):
+    """Private: raised by the SIGALRM handler when the lint outruns its budget.
+    Deliberately an Exception (not BaseException): if the alarm ever lands outside
+    the helper's own try, the guard's `except Exception` still turns it into an
+    ALLOW instead of letting a traceback escape -- an uncaught hook crash is a
+    BLOCK to Claude Code >= 2.1.288."""
+
+
+def _lint_with_watchdog(lint, srcs):
+    """lint.find_violations_in_source over each text in `srcs`, all under ONE
+    SIGALRM wall-clock budget (_WORKFLOW_LINT_BUDGET_SECS).
+
+    Returns a list of the lint's (violations, unterminated), one per source;
+    raises _WorkflowLintTimeout when the budget expires first. Runs the lint
+    WITHOUT a watchdog -- same result, no protection -- where SIGALRM/setitimer do
+    not exist (non-POSIX) or signal.signal refuses (not the main thread of the
+    main interpreter). Armed only around the lint itself, never around the module
+    load (an alarm mid-import would poison the module cache).
+
+    Disposition afterwards: the timer is cancelled FIRST; then a previously
+    installed Python handler (or SIG_IGN) is restored, but SIG_DFL / None is
+    replaced by a no-op -- never restored. This process is single-shot, and a
+    SIGALRM arriving after the restore (one already in flight when the timer was
+    cancelled) would, under SIG_DFL, terminate it with exit 142: a crashed hook,
+    which Claude Code treats as a BLOCK."""
+    import signal
+
+    def run_all():
+        return [lint.find_violations_in_source(src) for src in srcs]
+
+    if not (hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")):
+        return run_all()
+
+    def _on_alarm(signum, frame):
+        raise _WorkflowLintTimeout()
+
+    def _noop(signum, frame):
+        return None
+
+    try:
+        previous = signal.signal(signal.SIGALRM, _on_alarm)
+    except (ValueError, OSError):
+        return run_all()
+    try:
+        signal.setitimer(signal.ITIMER_REAL, _WORKFLOW_LINT_BUDGET_SECS)
+        try:
+            return run_all()
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)  # cancel FIRST
+    finally:
+        if previous is None or previous == signal.SIG_DFL:
+            signal.signal(signal.SIGALRM, _noop)
+        else:
+            signal.signal(signal.SIGALRM, previous)
+
+
+def _workflow_stage_model_guard(data, tool_input):
+    """PreToolUse DENY for a Workflow script with an agent() stage lacking model:
+    (such stages silently inherit the opus main-loop model; Ed-approved
+    2026-10-03). Reuses cast-lint-workflow-stage-models.py's
+    find_violations_in_source, lazy-loaded here only (Bash/Read/Write/Edit never
+    pay for it). An inline `script` and a `scriptPath` file are both linted when
+    both are present; a violation in either denies.
+
+    ALWAYS returns 0 and prints at most ONE hookSpecificOutput object, built in
+    full before printing: Claude Code >= 2.1.288 BLOCKS a tool call whose
+    PreToolUse hook crashes or emits malformed output, so every failure mode
+    (lint module missing, any exception, a parse anomaly, a source over the
+    size / agent( count bounds, or a lint that outruns its 2 s wall-clock
+    watchdog) ALLOWS silently and is logged. Content-free logging: exception
+    class and counts only, never script text."""
+    src_len = n_calls = 0
+    t_lint = None
+    try:
+        sources = _workflow_sources(data, tool_input)
+        sized = []
+        for label, text in sources:
+            if len(text) > _WORKFLOW_MAX_SOURCE_CHARS:
+                _log_error(
+                    f"workflow stage-model lint skipped: {label} is {len(text)} chars, "
+                    f"over the {_WORKFLOW_MAX_SOURCE_CHARS}-char bound — allowed unlinted"
+                )
+            else:
+                sized.append((label, text))
+        if not sized:
+            return 0
+        lint = _load(_WORKFLOW_LINT_MOD, _WORKFLOW_LINT_FILE)
+        if lint is None:  # _load already logged + recorded the lost guard
+            return 0
+        to_lint = []
+        for label, text in sized:
+            count = 0
+            for _m in lint.AGENT_CALL_RE.finditer(text):
+                count += 1
+                if count > _WORKFLOW_MAX_AGENT_CALLS:
+                    break
+            if count > _WORKFLOW_MAX_AGENT_CALLS:
+                _log_error(
+                    f"workflow stage-model lint skipped: {label} has more than "
+                    f"{_WORKFLOW_MAX_AGENT_CALLS} agent( matches, over the call-count "
+                    "bound — allowed unlinted"
+                )
+            else:
+                to_lint.append((label, text))
+                src_len += len(text)
+                n_calls += count
+        if not to_lint:
+            return 0
+        t_lint = time.monotonic()
+        results = _lint_with_watchdog(lint, [text for _label, text in to_lint])
+        entries = []
+        multi = len(to_lint) > 1
+        for (label, _text), (violations, unterminated) in zip(to_lint, results):
+            if unterminated is not None:
+                # Scrub cannot be trusted -> the empty violation list is NOT a
+                # clean bill. A parser limitation must not block work: allow this
+                # source, but say so.
+                _log_error(
+                    f"workflow stage-model lint skipped: unterminated {unterminated} "
+                    f"quote in {label} (parse anomaly) — allowed"
+                )
+                continue
+            for lineno, text in violations:
+                entries.append((label if multi else "", lineno, text))
+        if not entries:
+            return 0
+        out = json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": _workflow_deny_reason(entries),
+        }})
+    except _WorkflowLintTimeout:
+        elapsed = (time.monotonic() - t_lint) if t_lint is not None else 0.0
+        _log_error(
+            f"workflow stage-model lint timed out after {elapsed:.1f}s "
+            f"(budget {_WORKFLOW_LINT_BUDGET_SECS:g}s) on {src_len} chars of source "
+            f"with {n_calls} agent( matches — allowed unlinted"
+        )
+        return 0
+    except Exception as e:
+        name = type(e).__name__
+        _log_error(f"workflow stage-model lint failed — allowed: {name}")
+        _record_guard_failure("cast_lint_workflow_runtime",
+                              f"runtime error in Workflow stage-model guard: {name}")
+        return 0
+    try:
+        print(out)
+    except Exception:
+        pass
+    return 0
+
+
 def main():
     try:
         # Read BYTES and decode ourselves: sys.stdin.read() raises
@@ -822,6 +1075,12 @@ def main():
     tool_input = data.get("tool_input", {}) or {}
     if not isinstance(tool_input, dict):
         tool_input = {}
+
+    # Workflow stage-model guard: runs in EVERY context (pure CPU, spawns nothing,
+    # so no recursion risk) and owns this tool call outright -- none of the Bash /
+    # Neon / Write / egress / dispatch paths below apply to `Workflow`.
+    if tool == "Workflow":
+        return _workflow_stage_model_guard(data, tool_input)
 
     # 0. IRREVERSIBLE + DESTRUCTIVE Bash ops are guarded in EVERY context —
     #    including dispatched subagents (CLAUDE_SUBPROCESS=1) and headless runs.

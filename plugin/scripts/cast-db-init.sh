@@ -1237,11 +1237,23 @@ if [ -f "$_DROP_CHECK_HELPER" ] && command -v python3 >/dev/null 2>&1; then
     # Loud and durable, never fatal: a failed migration leaves the row-dropping
     # CHECK in place, so say so on stderr AND persist a line for `cast doctor`/triage.
     _drop_msg="[cast-db-init] WARN: agent_runs status CHECK migration FAILED (rc=${_drop_rc}) — agent_runs may be silently dropping rows; run: python3 ${_DROP_CHECK_HELPER} ${DB_PATH}"
-    echo "$_drop_msg" >&2
-    {
-      mkdir -p "${HOME}/.claude/logs" &&
-        printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_drop_msg" >>"${HOME}/.claude/logs/hook-errors.log"
-    } 2>/dev/null || true
+    # Rate-limit (audit B-3 M1): a PERSISTENT failure would otherwise re-log on every
+    # init, and init runs from hooks. Emit at most once per UTC day per distinct
+    # message, tracked in a stamp file "<UTC-date> <cksum-of-message>". Fail-LOUD: an
+    # unreadable stamp, an unwritable stamp, or a missing cksum means "log anyway" —
+    # the stamp may only ever suppress a repeat, never hide a first/changed failure.
+    _drop_stamp="${HOME}/.claude/logs/.cast-db-init-drop-check-warned"
+    _drop_today="$(date -u +%Y-%m-%d)"
+    _drop_sum="$(printf '%s' "$_drop_msg" | cksum | cut -d' ' -f1)" || _drop_sum=""
+    _drop_seen="$(cat "$_drop_stamp" 2>/dev/null)" || _drop_seen=""
+    if [ -z "$_drop_sum" ] || [ "$_drop_seen" != "${_drop_today} ${_drop_sum}" ]; then
+      echo "$_drop_msg" >&2
+      {
+        mkdir -p "${HOME}/.claude/logs" &&
+          printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_drop_msg" >>"${HOME}/.claude/logs/hook-errors.log" &&
+          printf '%s %s\n' "$_drop_today" "$_drop_sum" >"$_drop_stamp"
+      } 2>/dev/null || true
+    fi
   fi
 fi
 

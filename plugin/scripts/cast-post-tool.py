@@ -6,9 +6,11 @@ Reads stdin JSON once and performs all post-tool-hook logic:
   Part 2: Detect Agent Dispatch Manifests in .md plan files (Write on plans/)
   Part 3: Agent dispatch logging to routing-log.jsonl + status file
   Part 4: Bash non-zero exit → [CAST-DEBUG] directive
+  Part 5: Bash hatch commit (CAST_COMMIT_AGENT=1) → commit_provenance row
 
 Replaces ~10 inline `python3 -c` / `python3 -` calls in post-tool-hook.sh.
-Uses stdlib only. No subprocess spawns.
+Uses stdlib only. No subprocess spawns, except Part 5, which runs `git` only
+after its substring precheck + hatch predicate pass (hatch commits only).
 """
 import sys
 import json
@@ -270,6 +272,203 @@ def part4_bash_debug(data: dict) -> None:
     _hook_output(directive)
 
 
+# Part 5 — D5 commit provenance, recorded from the hook.
+#
+# Why here: inside Claude Code's Bash sandbox ~/.claude/cast.db is read-only, so
+# the Bash children that normally write the commit_provenance row (commit agent
+# step 8 → cast-commit-provenance.py; .githooks/post-commit) fail with "attempt
+# to write a readonly database" while the COMMIT_HATCH_USED audit event (written
+# by the PreToolUse hook, outside the sandbox) still lands — leaving every
+# sandboxed commit with an event and no row, which cast-commit-reconcile.py
+# blocks at push. PostToolUse hooks run outside the sandbox. Those two writers
+# stay as fallbacks. The write is write-once (INSERT OR IGNORE): a row already
+# written by one of them is never relabelled by this hook — recorder identity is
+# a parked follow-up (an upsert would let a no-op hatch call within the 120 s
+# window relabel another actor's row).
+#
+# SECURITY: this runs OUTSIDE the sandbox on a payload-supplied `cwd` — a repo the
+# agent controls. So git is run plumbing-only (rev-parse / cat-file: no `log`,
+# `show`, `diff`, `status`, which can spawn a configured gpg.program, textconv,
+# pager or fsmonitor) with config that could exec neutralised, and the repo's own
+# claim about its toplevel is distrusted (core.worktree) — see part5 below.
+_PROV_MAX_HEAD_AGE_S = 120   # record only a HEAD committed this recently
+_PROV_MIN_HEAD_AGE_S = -60   # tolerate small clock skew; reject far-future HEADs
+_PROV_GIT_BUDGET_S = 4.0     # ONE shared deadline across every git call (hook timeout is 10 s)
+_PROV_GIT_MIN_CALL_S = 0.5   # floor for a call's share once the budget is nearly spent
+_PROV_MAX_COMMIT_BYTES = 1 << 20   # refuse to read a commit object larger than 1 MiB
+_PROV_GIT_HARDEN = ["--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "log.showSignature=false"]
+
+
+def _log_hook_error(where: str, exc) -> None:
+    """Append one line to ~/.claude/logs/hook-errors.log. Never raises."""
+    try:
+        import datetime as _dt
+        log_path = os.path.expanduser("~/.claude/logs/hook-errors.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        ts = _dt.datetime.now(_dt.timezone.utc).isoformat().replace('+00:00', 'Z')
+        with open(log_path, 'a') as f:
+            f.write(f'[{ts}] ERROR cast-post-tool.py {where}: {exc}\n')
+    except Exception:
+        pass
+
+
+def _load_git_guard():
+    """Load the hyphen-named sibling cast-git-guard.py as a module.
+
+    Same importlib pattern as cast-pretool-dispatch.py:_load(). The guard's
+    hatch predicate is inlined in _git_evaluate_impl (not a callable), so
+    _is_hatch_commit() below reuses its three ingredients — _scannable_segments,
+    _normalize_git_segment, _COMMIT_ALLOW — rather than re-implementing the
+    hatch regex, so the COMMIT_HATCH_USED event and the provenance row cannot
+    disagree about what counts as a hatch commit."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cast-git-guard.py")
+    spec = importlib.util.spec_from_file_location("cast_git_guard_posttool", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _has_dry_flag(seg: str) -> bool:
+    """True if any argv token of `seg` starts with `--dry`. git accepts unique
+    option prefixes, so `--dry` / `--dry-r` are dry runs just like `--dry-run`."""
+    import shlex
+    try:
+        tokens = shlex.split(seg)
+    except ValueError:
+        tokens = seg.split()
+    return any(t.startswith("--dry") for t in tokens)
+
+
+def _is_hatch_commit(guard, command: str) -> bool:
+    """True if any shell segment of `command` is a hatch `git commit` that is not a dry run.
+
+    Mirrors the guard's per-segment `hit(_COMMIT_ALLOW)` check (raw segment and
+    its normalized form). A dry run (any `--dry*` token) is excluded here (the
+    guard still audits it as a hatch use): it creates no commit, and a row for
+    whatever HEAD happens to be fresh would be a false attribution."""
+    for seg in guard._scannable_segments(command):
+        seg = seg.strip()
+        if not seg:
+            continue
+        norm = guard._normalize_git_segment(seg)
+        variants = (seg, norm) if norm else (seg,)
+        if any(guard._COMMIT_ALLOW.search(v) for v in variants) and not _has_dry_flag(seg):
+            return True
+    return False
+
+
+def _committer_epoch(commit_text: str):
+    """Committer unix time from raw `git cat-file commit` output, or None.
+
+    Parses the `committer <name> <email> <epoch> <tz>` header ourselves, from the
+    header block only (before the first blank line) so a commit message can't
+    spoof it. Plumbing replaces `git log --format=%ct`, which runs a configured
+    gpg.program when log.showSignature=true and HEAD carries a gpgsig header."""
+    header = commit_text.split("\n\n", 1)[0]
+    for line in header.split("\n"):
+        if line.startswith("committer "):
+            parts = line.rsplit(" ", 2)
+            if len(parts) == 3 and re.fullmatch(r'[0-9]+', parts[1]):
+                return int(parts[1])
+            return None
+    return None
+
+
+def part5_commit_provenance(data: dict) -> None:
+    """Record a commit_provenance row for a successful hatch commit. Fail-open, silent."""
+    try:
+        command = (data.get("tool_input") or {}).get("command") or ""
+        # Cheap precheck: the hot path (every Bash call) pays two substring tests.
+        if not isinstance(command, str) or "CAST_COMMIT_AGENT=1" not in command or "commit" not in command:
+            return
+
+        # PostToolUse only fires for a successful call (failures go to
+        # PostToolUseFailure); this is defence in depth for payloads that
+        # still carry a failure marker.
+        resp = data.get("tool_response")
+        if isinstance(resp, dict):
+            ec = resp.get("exit_code")
+            if (ec is not None and str(ec) != "0") or resp.get("interrupted") \
+                    or resp.get("is_error") or resp.get("error"):
+                return
+
+        if not _is_hatch_commit(_load_git_guard(), command):
+            return
+
+        cwd = data.get("cwd") or os.getcwd()
+        if not isinstance(cwd, str) or not os.path.isdir(cwd):
+            return
+
+        import datetime as _dt
+        import subprocess
+        import time
+
+        # One shared deadline for ALL git calls (each gets the remaining budget,
+        # floored at _PROV_GIT_MIN_CALL_S); a timeout raises → swallowed → no row.
+        deadline = time.monotonic() + _PROV_GIT_BUDGET_S
+        # GIT_NO_LAZY_FETCH + GIT_ALLOW_PROTOCOL=none: reading an object that is MISSING in
+        # a partial-clone repo (extensions.partialClone / remote.<n>.promisor — both
+        # repo-controlled) triggers a lazy fetch that would run the repo's
+        # remote.<n>.uploadpack, core.sshCommand, core.gitProxy or an ext:: transport —
+        # code exec outside the sandbox. Either variable alone blocks all four (probed on
+        # git 2.56.0); both = defence in depth, and GIT_ALLOW_PROTOCOL still covers git
+        # versions that predate GIT_NO_LAZY_FETCH (which they would simply ignore).
+        env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0",
+                   GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="none")
+
+        def _git(*args):
+            budget = max(_PROV_GIT_MIN_CALL_S, deadline - time.monotonic())
+            r = subprocess.run(["git"] + _PROV_GIT_HARDEN + ["-C", cwd] + list(args),
+                               stdin=subprocess.DEVNULL, capture_output=True,
+                               env=env, timeout=budget)
+            return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+
+        repo = _git("rev-parse", "--show-toplevel")
+        sha = _git("rev-parse", "HEAD")
+        if not repo or not re.match(r'^[0-9a-f]{40,64}$', sha):
+            return
+
+        # core.worktree (repo-controlled config) can make --show-toplevel report an
+        # arbitrary directory. Trust it only if the payload cwd is that toplevel or
+        # inside it; otherwise the recorded `repo` would be a path the agent chose.
+        real_top = os.path.realpath(repo)
+        if os.path.commonpath([os.path.realpath(cwd), real_top]) != real_top:
+            return
+
+        # Bound the read: a repo-controlled commit object can be arbitrarily large, so
+        # check its size (no object body is read) before pulling it into memory. A
+        # missing object fails here (rc != 0 → "") and records nothing.
+        size = _git("cat-file", "-s", sha)
+        if not re.fullmatch(r'[0-9]{1,9}', size) or int(size) > _PROV_MAX_COMMIT_BYTES:
+            return
+        commit_ts = _committer_epoch(_git("cat-file", "commit", sha))
+        if commit_ts is None:
+            return
+
+        # A hatch `git commit … || true` / "nothing to commit" leaves an OLD
+        # HEAD in place — never record that as this call's commit.
+        age = time.time() - commit_ts
+        if age > _PROV_MAX_HEAD_AGE_S or age < _PROV_MIN_HEAD_AGE_S:
+            return
+
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+        session_id = data.get("session_id") or ""
+        agent = data.get("agent_type") or "main-session"
+        recorded_at = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        from cast_db import db_execute
+        ok = db_execute(
+            "INSERT OR IGNORE INTO commit_provenance (sha, session_id, agent, branch, repo, recorded_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (sha, session_id, agent, branch, repo, recorded_at),
+        )
+        if not ok:
+            _log_hook_error("part5_commit_provenance", f"db_execute returned False for {sha}")
+    except Exception as e:
+        _log_hook_error("part5_commit_provenance", e)
+
+
 def part6_file_writes(data: dict, tool_name: str, file_path: str) -> None:
     """Record file writes to file_writes table for IDE gutter annotations."""
     if tool_name not in ("Write", "Edit", "MultiEdit"):
@@ -364,6 +563,8 @@ def main():
         part3_agent_logging(data)
 
     if tool_name == "Bash":
+        # Part 5 first and self-contained: a part4 parse quirk must not drop the row.
+        part5_commit_provenance(data)
         part4_bash_debug(data)
 
 
