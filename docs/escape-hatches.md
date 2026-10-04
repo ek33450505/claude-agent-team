@@ -100,7 +100,7 @@ echo "CAST_PUSH_OK=1" && git push
 
 | Variable | What it bypasses | Guarding Script | Example | Caveat |
 |----------|------------------|-----------------|---------|--------|
-| `CAST_INSTALL_FORCE=1` | Dirty-tree guard in install.sh (refuses to overwrite uncommitted edits in agents/, scripts/, bin/, rules-core/) | `install.sh` (line 11) | `CAST_INSTALL_FORCE=1 bash install.sh` | Hard block (exit 1) on dirty tree, unless flag is set. For CI / test harnesses that manage git state themselves. Skips the safety check; use carefully. |
+| `CAST_INSTALL_FORCE=1` | Dirty-tree guard in install.sh (refuses to deploy uncommitted or untracked changes in any deploy-source path: `GUARD_PATHS` in `install.sh` — agents/, commands/, skills/, rules-core/, scripts/, bin/, config/, managed-settings.d/, macos/, tools/justfile, cast/, VERSION, skills-personal/, managed-settings-personal/; also fails closed outside a git work tree) | `install.sh` (line 19) | `CAST_INSTALL_FORCE=1 bash install.sh` | Hard block (exit 1) on dirty tree, unless flag is set. For CI / test harnesses that manage git state themselves. Skips the safety check; use carefully. |
 
 ### Runtime Config / Behavior
 

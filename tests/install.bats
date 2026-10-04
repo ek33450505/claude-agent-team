@@ -296,6 +296,80 @@ make_clean_tmp_repo() {
   rm -rf "$tmp_repo"
 }
 
+@test "Dirty-tree guard: every deploy-source path is guarded (untracked file and tracked edit, listing names the file)" {
+  # Independent oracle (deliberately NOT read from install.sh): the repo paths install.sh deploys
+  # from, per its deploy map. Dropping any entry from install.sh's GUARD_PATHS fails that row.
+  # The guard exits before any deploy step, so each probe is fast.
+  local guarded=(agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
+    macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/)
+  local tmp_repo failures="" entry probe tracked
+  tmp_repo="$(make_clean_tmp_repo)"
+
+  for entry in "${guarded[@]}"; do
+    # Each row must start from a clean guarded tree (else a prior row's leftover could pass it).
+    [ -z "$(git -C "$tmp_repo" status --porcelain --untracked-files=all)" ] \
+      || failures="$failures [dirty-before:$entry]"
+
+    # (1) untracked file under a directory entry
+    if [[ "$entry" == */ ]]; then
+      probe="${entry}zz-guard-probe.txt"
+      echo probe > "$tmp_repo/$probe"
+      run bash "$tmp_repo/install.sh"
+      { [ "$status" -eq 1 ] && [[ "$output" == *"$probe"* ]]; } || failures="$failures [untracked:$entry]"
+      rm -f "$tmp_repo/$probe"
+    fi
+
+    # (2) edit to a tracked file under (or equal to) the entry
+    tracked="$entry"
+    if [[ "$entry" == */ ]]; then
+      tracked="$(git -C "$tmp_repo" ls-files -- "$entry" | head -1)"
+    fi
+    if [ -n "$tracked" ]; then
+      cp -p "$tmp_repo/$tracked" "$HOME/.probe-saved"
+      echo "# guard probe" >> "$tmp_repo/$tracked"
+      run bash "$tmp_repo/install.sh"
+      { [ "$status" -eq 1 ] && [[ "$output" == *"$tracked"* ]]; } || failures="$failures [tracked:$entry]"
+      cp -p "$HOME/.probe-saved" "$tmp_repo/$tracked"
+    fi
+  done
+
+  rm -rf "$tmp_repo"
+  [ -z "$failures" ] || { echo "unguarded rows:$failures" >&2; return 1; }
+}
+
+@test "Dirty-tree guard: untracked-only dirt is listed by file (even with showUntrackedFiles=no) and says commit or remove" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  # An untracked file inside a NEW subdirectory: default porcelain would collapse it to the dir.
+  mkdir -p "$tmp_repo/config/zz-newdir"
+  echo '{}' > "$tmp_repo/config/zz-newdir/untracked-only.json"
+  # A user/repo setting that hides untracked files must not defeat the guard.
+  git -C "$tmp_repo" config status.showUntrackedFiles no
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"config/zz-newdir/untracked-only.json"* ]]
+  [[ "$output" == *"Commit or remove"* ]]
+  # CAST forbids stash: the footer must not recommend it.
+  [[ "$output" != *"stash"* ]]
+
+  rm -rf "$tmp_repo"
+}
+
+@test "Dirty-tree guard: outside a git work tree fails closed with a message (not silently)" {
+  local not_git
+  not_git="$(mktemp -d)"
+  cp "$REPO_DIR/install.sh" "$not_git/install.sh"
+
+  # Ceiling keeps git from discovering an enclosing repo above the temp dir.
+  run env GIT_CEILING_DIRECTORIES="$(dirname "$not_git")" bash "$not_git/install.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not a usable git work tree"* ]]
+  [ ! -e "$HOME/.claude" ]
+
+  rm -rf "$not_git"
+}
+
 @test "Owned fragment backup: prior copy is backed up with mode 600 even when the live file was 644" {
   mkdir -p "$HOME/.claude/managed-settings.d"
   # A differing live copy of a CAST-owned fragment, world-readable.

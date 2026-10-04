@@ -8,18 +8,28 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Dirty-tree guard: refuse to overwrite uncommitted edits in paths install.sh touches.
 # Set CAST_INSTALL_FORCE=1 to bypass (for CI / test harnesses that manage their own git state).
+# GUARD_PATHS is the single source of truth: every repo path install.sh deploys from.
+# Keep it in sync with the deploy map below (an unguarded deploy source lets an uncommitted
+# loosening of an enforcement file ship on the next reinstall). Missing paths are harmless
+# to git status. bash 3.2-safe: plain indexed array, no declare -A / mapfile.
+GUARD_PATHS=(
+  agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
+  macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/
+)
 if [[ "${CAST_INSTALL_FORCE:-0}" != "1" ]]; then
-  DIRTY=false
-  if ! git -C "$SCRIPT_DIR" diff --quiet HEAD -- agents/ scripts/ bin/ rules-core/ managed-settings.d/ 2>/dev/null; then
-    DIRTY=true
-  elif git -C "$SCRIPT_DIR" status --porcelain -- agents/ scripts/ bin/ rules-core/ managed-settings.d/ 2>/dev/null | grep -q '^??'; then
-    DIRTY=true
+  # One status call both detects and lists: tracked changes (staged or not) plus untracked
+  # files. --untracked-files=all defeats status.showUntrackedFiles=no and lists files, not
+  # collapsed directories. Fail closed (with a message) if git cannot answer, e.g. outside a
+  # work tree or on a dubious-ownership checkout — never skip the guard silently.
+  if ! DIRTY_FILES="$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=all -- "${GUARD_PATHS[@]}" 2>/dev/null)"; then
+    echo "ERROR: install.sh aborted — cannot verify the working tree is clean: $SCRIPT_DIR is not a usable git work tree." >&2
+    echo "Run install.sh from a git checkout of claude-agent-team (or set CAST_INSTALL_FORCE=1 to bypass)." >&2
+    exit 1
   fi
-  if [[ "$DIRTY" == "true" ]]; then
-    DIRTY_FILES="$(git -C "$SCRIPT_DIR" diff --name-only HEAD -- agents/ scripts/ bin/ rules-core/ managed-settings.d/ 2>/dev/null)"
+  if [[ -n "$DIRTY_FILES" ]]; then
     echo "ERROR: install.sh aborted — uncommitted changes in install-managed paths:" >&2
     echo "$DIRTY_FILES" >&2
-    echo "Commit or stash these changes before running install.sh (or set CAST_INSTALL_FORCE=1 to bypass)." >&2
+    echo "Commit or remove these changes before running install.sh (or set CAST_INSTALL_FORCE=1 to bypass)." >&2
     exit 1
   fi
 fi
