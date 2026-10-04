@@ -6,7 +6,7 @@
 bash install.sh
 ```
 
-Requires clean working tree in `agents/`, `scripts/`, `bin/`, `rules-core/` — install aborts on uncommitted changes. Bypass with `CAST_INSTALL_FORCE=1` (CI only).
+Requires clean working tree (tracked and untracked) in every deploy-source path (`GUARD_PATHS` in `install.sh`: `agents/`, `commands/`, `skills/`, `rules-core/`, `scripts/`, `bin/`, `config/`, `managed-settings.d/`, `macos/`, `tools/justfile`, `cast/`, `VERSION`, plus the `--personal` overlay dirs) — install aborts on uncommitted changes, and also outside a git work tree. Bypass with `CAST_INSTALL_FORCE=1` (CI only).
 
 ## Test
 

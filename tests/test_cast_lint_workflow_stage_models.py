@@ -138,6 +138,72 @@ class WorkflowStageModelLintTest(unittest.TestCase):
         self.assertEqual(found[0][0], 0, 'anomaly rows carry line 0')
         self.assertIn('PARSE ANOMALY', found[0][1])
 
+    # --- find_violations_in_source: the string-level API the PreToolUse
+    # --- Workflow guard reuses (find_violations(path) delegates to it) ------
+    def test_in_source_reports_violation_records_and_no_anomaly(self):
+        src = "const a = await agent(P, { label: 'a' })\n"
+        found, unterminated = lint.find_violations_in_source(src)
+        self.assertEqual(found, [(1, "const a = await agent(P, { label: 'a' })")])
+        self.assertIsNone(unterminated)
+
+    def test_in_source_clean_source_returns_empty(self):
+        found, unterminated = lint.find_violations_in_source(
+            "const a = await agent(P, { model: 'haiku' })\n")
+        self.assertEqual(found, [])
+        self.assertIsNone(unterminated)
+
+    def test_in_source_signals_unterminated_quote_without_certifying(self):
+        # Everything after the open quote is blanked, so the agent() call is
+        # invisible: the signal must surface (violations alone would read clean).
+        src = "const s = 'oops\nconst x = await agent(P, { label: 'a' })\n"
+        found, unterminated = lint.find_violations_in_source(src)
+        self.assertEqual(found, [])
+        self.assertEqual(unterminated, "'")
+
+    def test_in_source_honours_opt_out_on_line_above(self):
+        src = ("// cast-lint: inherit-model -- needs session opus\n"
+               "const a = await agent(P, { label: 'a' })\n")
+        self.assertEqual(lint.find_violations_in_source(src), ([], None))
+
+    def test_in_source_nested_inner_model_does_not_satisfy_outer(self):
+        src = "await agent(await agent(P, { model: 'haiku' }), { label: 'o' })\n"
+        found, _ = lint.find_violations_in_source(src)
+        self.assertEqual([ln for ln, _ in found], [1])
+
+    def test_many_sequential_calls_are_linear_not_quadratic(self):
+        # The nested-span scan must stop at the first call that starts past this
+        # call's span. Without that break, 30k sequential calls take ~15 s;
+        # with it, well under one. Generous bound to stay non-flaky.
+        import time
+        src = "agent(P);\n" * 30000
+        t0 = time.time()
+        found, unterminated = lint.find_violations_in_source(src)
+        elapsed = time.time() - t0
+        self.assertEqual(len(found), 30000)
+        self.assertIsNone(unterminated)
+        self.assertLess(elapsed, 5.0, 'nested-span loop looks quadratic again')
+
+    def test_early_break_still_blanks_deeply_nested_inner_models(self):
+        # inner-most has model; the two outer calls must still be reported (both on
+        # line 1), and
+        # a sibling AFTER the nest (past the break point) must be judged alone.
+        src = ("agent(agent(agent(P, { model: 'haiku' })))\n"
+               "agent(P, { model: 'sonnet' })\n"
+               "agent(P)\n")
+        found, _ = lint.find_violations_in_source(src)
+        self.assertEqual([ln for ln, _ in found], [1, 1, 3])
+
+    def test_path_api_matches_source_api(self):
+        src = "x\nconst a = await agent(P, { label: 'a' })\n"
+        fd, path = tempfile.mkstemp(suffix='.workflow.js')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                fh.write(src)
+            self.assertEqual(lint.find_violations(path),
+                             lint.find_violations_in_source(src)[0])
+        finally:
+            os.unlink(path)
+
     # --- the repo's own workflows must be clean ---------------------------
     def test_repo_workflows_pin_every_stage_model(self):
         wf_dir = Path(__file__).parent.parent / 'workflows'

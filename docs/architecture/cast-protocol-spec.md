@@ -249,7 +249,7 @@ real security boundary.
 
 | Op class | Operation(s) | Enforced by | Type | Escape hatch | Auto-chain-safe? |
 |---|---|---|---|---|---|
-| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record`) + pre-push reconcile (`cast-commit-reconcile.py`) | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✓ hook (unconditional) |
+| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record` from the commit agent and `.githooks/post-commit`; the PostToolUse hook `cast-post-tool.py` also records it from outside the Bash sandbox, where cast.db is read-only) + pre-push reconcile (`cast-commit-reconcile.py`; reports `unverifiable` when the sandbox can't read the audit log) | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✓ hook (unconditional) |
 | Git push | raw `git push` | `pre-tool-guard.sh` (push block) | hard-block | `CAST_PUSH_OK=1` | ✓ hook (unconditional) |
 | Force-push | `git push --force` | `push.md` (agent refusal) | refuse | none | ◑ agent-refusal |
 | Push to main (work repo) | push to `main`/`master` | `push.md` (branch rule) | refuse | `--force-main` / `repo_class=personal` | ◑ agent-refusal |
@@ -544,7 +544,7 @@ CAST uses three Claude Code hook events. Each hook script reads a JSON payload f
 
 | Event | Hook script | Fires when |
 |---|---|---|
-| `PreToolUse:Bash` | `pre-tool-guard.sh` | Claude is about to run a bash command |
+| `PreToolUse:Bash` (+ MCP, web, file and dispatch tools) | `cast-pretool-dispatch.py` | Claude is about to call a matched tool. Runs the git guard (`cast-git-guard.py`) and the command guard in-process. |
 | `PostToolUse:Write\|Edit\|Agent\|Bash\|Task\|NotebookEdit` | `post-tool-hook.sh` | Claude just wrote/edited a file, ran a command, or dispatched an agent |
 | `Stop` | `cast-session-end.sh` | Session ends |
 | `SubagentStop` | `cast-subagent-stop-hook.sh` + `cast_subagent_stop.py` | A subagent has finished — updates agent_runs, detects truncation/completeness/protocol violations, records incidents, emits budget alerts, and compresses hookSpecificOutput; single python process, no sub-hook fan-out |
@@ -586,6 +586,8 @@ CAST uses three Claude Code hook events. Each hook script reads a JSON payload f
 **CLAUDE_SUBPROCESS guard:** `route.sh` exits 0 immediately when `CLAUDE_SUBPROCESS=1`. Subagent prompts MUST NOT trigger re-routing — they are focused work delegations, not new user requests.
 
 ### 5.3 `PreToolUse` — `pre-tool-guard.sh`
+
+> **Live wiring (v9 P0 onward):** the registered hook is `cast-pretool-dispatch.py`, which runs the same rules in-process via `cast-git-guard.py`. `pre-tool-guard.sh` is a thin wrapper kept as the standalone entrypoint for `tests/pre-tool-guard.bats`. The contract below describes that wrapper.
 
 **Stdin JSON schema:**
 ```json
@@ -867,7 +869,8 @@ A CAST-compatible hook script SHOULD:
 ├── CLAUDE.md                        # Dispatch table + post-chain protocol (loaded every session)
 ├── agents/                          # Agent definition files (.md with YAML frontmatter)
 ├── scripts/
-│   ├── pre-tool-guard.sh            # PreToolUse:Bash hook: git commit/push guard
+│   ├── cast-pretool-dispatch.py     # PreToolUse hook (live): git + command guards, egress, Neon ask
+│   ├── pre-tool-guard.sh            # Test/standalone wrapper for the git guard (not registered)
 │   ├── post-tool-hook.sh            # PostToolUse:Write|Edit|Agent|Bash|Task|NotebookEdit hook (review injection + dispatch logging)
 │   ├── cast-session-end.sh          # Stop hook: archival, pruning, memory sync
 │   ├── status-writer.sh             # Sourced helper: cast_write_status

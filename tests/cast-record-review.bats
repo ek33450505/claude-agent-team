@@ -99,10 +99,32 @@ report_path_from_output() {
 # this test to a different quietly-shifting population (day-of-month).
 # ---------------------------------------------------------------------------
 
+# snapshot_live_db <src> <dst> — consistent online snapshot of a live WAL-mode db.
+# A plain `cp` of cast.db without its -wal is a torn snapshot (hooks write to
+# it constantly), so use sqlite's online backup API (python3 stdlib) instead.
+# Paths go via argv, never interpolated into the python source. On ANY failure
+# (e.g. the sandbox denies reading cast.db-wal, or the db is busy) the calling
+# test is SKIPPED with the error in the reason — never failed, and never
+# falling back to `cp`. Must be called directly (not in a subshell / `run`)
+# so that `skip` takes effect.
+snapshot_live_db() {
+  local src="$1" dst="$2" err
+  err="$(python3 -c 'import sqlite3,sys
+from urllib.parse import quote
+s=sqlite3.connect("file:"+quote(sys.argv[1])+"?mode=ro", uri=True)
+d=sqlite3.connect(sys.argv[2])
+s.backup(d)
+d.close()
+s.close()' "$src" "$dst" 2>&1)" || {
+    err="$(printf '%s' "$err" | tail -n 1)"
+    skip "could not take consistent snapshot of $src (WAL-safe backup failed): $err"
+  }
+}
+
 @test "(1) live-probe: real cast.db copy -> exit 0, non-empty report, all headers, well-formed proposals" {
   [[ -f "$ORIG_HOME/.claude/cast.db" ]] || skip "no real cast.db found at $ORIG_HOME/.claude/cast.db"
 
-  cp "$ORIG_HOME/.claude/cast.db" "$TEST_DB"
+  snapshot_live_db "$ORIG_HOME/.claude/cast.db" "$TEST_DB"
 
   run_record_review_debug
   assert_success
@@ -155,7 +177,7 @@ report_path_from_output() {
 @test "(2) read-only integrity: db copy md5 unchanged after run" {
   [[ -f "$ORIG_HOME/.claude/cast.db" ]] || skip "no real cast.db found at $ORIG_HOME/.claude/cast.db"
 
-  cp "$ORIG_HOME/.claude/cast.db" "$TEST_DB"
+  snapshot_live_db "$ORIG_HOME/.claude/cast.db" "$TEST_DB"
   local before; before="$(md5sum "$TEST_DB" | awk '{print $1}')"
 
   run_record_review

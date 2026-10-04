@@ -47,6 +47,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+# _append_session outcomes. Distinct so a refusal or failure is never counted as "already present".
+APPEND_APPENDED = "appended"
+APPEND_PRESENT = "present"        # INSERT OR IGNORE hit an existing row
+APPEND_MISSING = "missing"        # healthy read, no such session
+APPEND_INCOMPLETE = "incomplete"  # a ledger read failed — refused, nothing written
+APPEND_FAILED = "failed"          # the write transaction raised
+
+# Exit status when a read failure stopped a check from running (matches ledger.EXIT_INCOMPLETE).
+EXIT_INCOMPLETE = 3
+
+
 # ── Ledger module loader ──────────────────────────────────────────────────────
 
 def _load_ledger():
@@ -151,26 +162,58 @@ def _open_ro(db_path: str) -> sqlite3.Connection:
 
 # ── Core append logic ────────────────────────────────────────────────────────
 
+def _warn_refused(ledger, session_id: str, errors: List[Dict[str, str]]) -> None:
+    """One stderr line saying why a session was not chained."""
+    print(
+        f"cast-provenance-chain: refusing to chain an incomplete receipt for {session_id}"
+        f" — read failed for: {', '.join(ledger._failed_sections(errors))}"
+        f" ({ledger._one_line(errors[0]['error'])})",
+        file=sys.stderr,
+    )
+
+
 def _append_session(
     ledger,
     ro_conn: sqlite3.Connection,
     rw: sqlite3.Connection,
     session_id: str,
-) -> bool:
-    """Append one session to the chain. Returns True if inserted, False if skipped/error.
+) -> str:
+    """Append one session to the chain. Returns one of the APPEND_* outcome strings.
+
+    APPEND_APPENDED   inserted a new chain row.
+    APPEND_PRESENT    the session was already chained (INSERT OR IGNORE hit a row).
+    APPEND_MISSING    healthy read, no such session.
+    APPEND_INCOMPLETE a ledger read failed; refused, nothing written.
+    APPEND_FAILED     the write transaction raised (rolled back).
 
     Uses BEGIN IMMEDIATE to serialize the head-read + insert against concurrent appends,
     preventing a race where two processes read the same head and both store the same
     prev_hash (which verify would later flag as a false linkage break).
     INSERT OR IGNORE keeps this idempotent: a 2nd append for the same session is a no-op.
-    On any exception, rolls back and returns False (append stays fail-open at call-site).
+    On any write exception, rolls back and returns APPEND_FAILED (append stays fail-open
+    at call-site).
+
+    A receipt whose read failed is REFUSED rather than chained: the chain is never
+    pruned and the digest is frozen at append, so a degraded receipt (e.g. agents: []
+    because agent_runs was unreadable) would be permanent and indistinguishable from a
+    genuinely empty session. Refusing is recoverable — `backfill` appends the session
+    once the read succeeds (it then lands out of started_at order, which is fine: chain
+    order is append order and verify does not depend on started_at).
     """
-    session_row = ledger._fetch_session(ro_conn, session_id)
+    errors: List[Dict[str, str]] = []
+    session_row = ledger._fetch_session(ro_conn, session_id, errors)
+    if errors:
+        _warn_refused(ledger, session_id, errors)
+        return APPEND_INCOMPLETE
     if session_row is None:
-        return False
+        return APPEND_MISSING
+    data = ledger._build_receipt_data(ro_conn, session_row, errors)
+    if errors:
+        _warn_refused(ledger, session_id, errors)
+        return APPEND_INCOMPLETE
     # Serialize ONCE and keep the bytes. The digest must be taken over exactly what
     # is stored, or the two disagree by construction.
-    receipt_json = ledger.canonical_json(ledger._build_receipt_data(ro_conn, session_row))
+    receipt_json = ledger.canonical_json(data)
     session_digest = ledger.digest_of_canonical_json(receipt_json)
 
     try:
@@ -197,13 +240,17 @@ def _append_session(
                 (session_id, prev_hash, session_digest, chain_hash),
             )
         rw.commit()
-        return cursor.rowcount > 0
-    except Exception:
+        return APPEND_APPENDED if cursor.rowcount > 0 else APPEND_PRESENT
+    except Exception as e:
         try:
             rw.rollback()
         except Exception:
             pass
-        return False
+        print(
+            f"cast-provenance-chain: append failed for {session_id}: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        return APPEND_FAILED
 
 
 # ── Subcommand: append ───────────────────────────────────────────────────────
@@ -239,11 +286,15 @@ def cmd_append(args: argparse.Namespace, ledger) -> int:
 # ── Subcommand: verify ───────────────────────────────────────────────────────
 
 def cmd_verify(args: argparse.Namespace, ledger) -> int:
-    """Walk the chain and verify integrity. Returns 0 for PASS, 1 for BROKEN.
+    """Walk the chain and verify integrity. Returns 0 PASS, 1 BROKEN, 3 INCOMPLETE.
 
     Level 1: chain linkage + chain_hash recompute (no live session required).
     Level 2: session attestation (re-derive session_digest from live data; skip if pruned).
-    Empty-chain guard: if chain is empty but sessions exist, report BROKEN.
+    Empty-chain guard: if chain is empty but sessions exist, report BROKEN; if the
+    sessions table cannot be read, report INCOMPLETE rather than PASS.
+
+    INCOMPLETE (3) means a read failure stopped a tamper check from running — it is
+    neither a pass nor a tamper finding. BROKEN (1) outranks it.
     """
     db_path = _resolve_db_path(ledger, getattr(args, 'db', None) or "")
     ro_conn: Optional[sqlite3.Connection] = None
@@ -263,12 +314,18 @@ def cmd_verify(args: argparse.Namespace, ledger) -> int:
 
         if not rows:
             # FIX 1: cross-check sessions to prevent empty-chain false-pass
-            session_count = 0
             try:
                 sc_row = ro_conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
                 session_count = sc_row[0] if sc_row else 0
-            except Exception:
-                session_count = 0
+            except Exception as e:
+                # An unreadable sessions table is not "no sessions": PASS here would
+                # certify an empty chain against a count that was never taken.
+                # `ledger` may be None here, so collapse whitespace locally.
+                print(
+                    f"VERIFY-CHAIN: INCOMPLETE (chain is empty and sessions could not be read:"
+                    f" {type(e).__name__}: {' '.join(str(e).split())})"
+                )
+                return EXIT_INCOMPLETE
             if session_count > 0:
                 print(
                     f"VERIFY-CHAIN: BROKEN (chain is empty but {session_count} sessions exist"
@@ -298,6 +355,10 @@ def cmd_verify(args: argparse.Namespace, ledger) -> int:
         pruned_skipped = 0
         unverifiable = 0
         drifted = 0
+        unattested = 0                          # sessions unreadable: tamper check did not run
+        first_unattested_error = ""
+        live_unreadable = 0                     # a section unreadable: drift not classifiable
+        live_unreadable_sections: List[str] = []
         prev_stored_chain_hash = ""
 
         for row in rows:
@@ -339,11 +400,26 @@ def cmd_verify(args: argparse.Namespace, ledger) -> int:
                     )
                     broken = True
                 elif ledger_ro_conn is not None:
-                    session_row = ledger._fetch_session(ledger_ro_conn, row["session_id"])
+                    # Read errors are collected per link, not swallowed. Section
+                    # divergence is only ever classified as drift, never tamper, so a
+                    # section read failure costs drift classification only — the tamper
+                    # verdict stays complete (live["session"] is built from session_row,
+                    # not from the failed sections). A sessions read failure is
+                    # different: the immutable-field tamper check did not run for this
+                    # link, so the verdict is incomplete.
+                    live_errors: List[Dict[str, str]] = []
+                    session_row = ledger._fetch_session(
+                        ledger_ro_conn, row["session_id"], live_errors)
                     if session_row is None:
-                        pruned_skipped += 1
+                        if live_errors:
+                            unattested += 1
+                            if not first_unattested_error:
+                                first_unattested_error = ledger._one_line(live_errors[0]["error"])
+                        else:
+                            pruned_skipped += 1
                     else:
-                        live = ledger._build_receipt_data(ledger_ro_conn, session_row)
+                        live = ledger._build_receipt_data(
+                            ledger_ro_conn, session_row, live_errors)
                         if ledger.canonical_json(live) != payload:
                             changed = _immutable_fields_changed(payload, live)
                             if changed:
@@ -355,8 +431,18 @@ def cmd_verify(args: argparse.Namespace, ledger) -> int:
                                     f" for {row['session_id']} — {', '.join(changed)})"
                                 )
                                 broken = True
+                            elif live_errors:
+                                live_unreadable += 1
                             else:
                                 drifted += 1
+                        elif live_errors:
+                            # live == payload but live is incomplete: incomplete ==
+                            # incomplete is not a verdict.
+                            live_unreadable += 1
+                        if live_errors:
+                            for sec in ledger._failed_sections(live_errors):
+                                if sec not in live_unreadable_sections:
+                                    live_unreadable_sections.append(sec)
 
             prev_stored_chain_hash = row["chain_hash"]
 
@@ -371,16 +457,34 @@ def cmd_verify(args: argparse.Namespace, ledger) -> int:
             notes.append(f"{pruned_skipped} pruned-skipped")
         if drifted:
             notes.append(f"{drifted} drifted from live data")
+        if live_unreadable:
+            notes.append(
+                f"{live_unreadable} live-unreadable ({', '.join(live_unreadable_sections)})")
+        if unattested:
+            notes.append(f"{unattested} unattested (sessions read failed)")
         suffix = (", " + ", ".join(notes)) if notes else ""
-        print(f"VERIFY-CHAIN: PASS ({n} links{suffix})")
+        if unattested:
+            print(f"VERIFY-CHAIN: INCOMPLETE ({n} links{suffix}) — {first_unattested_error}")
+            result = EXIT_INCOMPLETE
+        else:
+            print(f"VERIFY-CHAIN: PASS ({n} links{suffix})")
+            result = 0
+        if live_unreadable:
+            print(
+                f"WARNING: live re-derive hit a read error for: "
+                f"{', '.join(live_unreadable_sections)} — drift could not be classified "
+                f"for {live_unreadable} link(s)",
+                file=sys.stderr,
+            )
 
+        # BROKEN (1) outranks INCOMPLETE (3).
         if unverifiable and getattr(args, "require_attestation", False):
             print(
                 f"VERIFY-CHAIN: BROKEN ({unverifiable} of {n} links carry no stored receipt "
                 f"and --require-attestation was given)"
             )
             return 1
-        return 0
+        return result
 
     finally:
         if ro_conn is not None:
@@ -398,7 +502,13 @@ def cmd_verify(args: argparse.Namespace, ledger) -> int:
 # ── Subcommand: backfill ─────────────────────────────────────────────────────
 
 def cmd_backfill(args: argparse.Namespace, ledger) -> int:
-    """Append all sessions not yet in the chain, in deterministic order. Exit 0."""
+    """Append all sessions not yet in the chain, in deterministic order.
+
+    Exit 0 when every session is chained or already present; 1 when a chain write
+    failed (or the DB/ledger could not be opened); 3 when one or more sessions were
+    refused because their receipt could not be read in full (re-run once the read
+    succeeds — backfill chains them then).
+    """
     if ledger is None:
         print("cast-provenance-chain backfill: ledger module unavailable", file=sys.stderr)
         return 1
@@ -418,22 +528,33 @@ def cmd_backfill(args: argparse.Namespace, ledger) -> int:
             print(f"cast-provenance-chain backfill: error: {e}", file=sys.stderr)
             return 1
 
-        appended = 0
-        skipped = 0
+        tally = {
+            APPEND_APPENDED: 0, APPEND_PRESENT: 0, APPEND_MISSING: 0,
+            APPEND_INCOMPLETE: 0, APPEND_FAILED: 0,
+        }
         for s_row in session_rows:
-            sid = s_row["id"]
-            inserted = _append_session(ledger, ro_conn, rw, sid)
-            if inserted:
-                appended += 1
-            else:
-                skipped += 1
+            tally[_append_session(ledger, ro_conn, rw, s_row["id"])] += 1
 
         try:
             chain_len = rw.execute("SELECT COUNT(*) FROM provenance_chain").fetchone()[0]
         except Exception:
             chain_len = "?"
 
-        print(f"BACKFILL: {appended} appended, {skipped} already-present (chain length {chain_len})")
+        extras = ""
+        if tally[APPEND_MISSING]:
+            extras += f", {tally[APPEND_MISSING]} not found"
+        if tally[APPEND_INCOMPLETE]:
+            extras += f", {tally[APPEND_INCOMPLETE]} refused (incomplete receipt)"
+        if tally[APPEND_FAILED]:
+            extras += f", {tally[APPEND_FAILED]} failed"
+        print(
+            f"BACKFILL: {tally[APPEND_APPENDED]} appended, "
+            f"{tally[APPEND_PRESENT]} already-present{extras} (chain length {chain_len})"
+        )
+        if tally[APPEND_FAILED]:
+            return 1
+        if tally[APPEND_INCOMPLETE]:
+            return EXIT_INCOMPLETE
         return 0
 
     finally:

@@ -294,3 +294,79 @@ print('match' if row[0] == 'sha256:' + hashlib.sha256(row[1].encode()).hexdigest
   assert_failure
   assert_output --partial "started_at"
 }
+
+# ── ERROR vs EMPTY: a read failure must not be chained or certified ───────────
+# Same class as the cast-ledger read-error fix: a failed read used to come back
+# as [] / None and was indistinguishable from a genuinely empty session.
+
+@test "READ-ERR: append refuses to chain a receipt whose agent_runs read failed" {
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs RENAME COLUMN cost_usd TO cost_usd_old;"
+  run python3 "$PROV" append sess-1 --db "$CAST_DB_PATH"
+  assert_success   # fail-open: append always exits 0
+  assert_output --partial "refusing to chain an incomplete receipt"
+  assert_output --partial "agent_runs"
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM provenance_chain;"
+  assert_output "0"
+}
+
+@test "READ-ERR: a refused append is recoverable once the read succeeds" {
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs RENAME COLUMN cost_usd TO cost_usd_old;"
+  run python3 "$PROV" append sess-1 --db "$CAST_DB_PATH"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM provenance_chain;"
+  assert_output "0"
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs RENAME COLUMN cost_usd_old TO cost_usd;"
+  run python3 "$PROV" append sess-1 --db "$CAST_DB_PATH"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM provenance_chain;"
+  assert_output "1"
+  run python3 "$PROV" verify --db "$CAST_DB_PATH"
+  assert_success
+}
+
+@test "READ-ERR: backfill counts refused sessions separately and exits 3" {
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs RENAME COLUMN cost_usd TO cost_usd_old;"
+  run python3 "$PROV" backfill --db "$CAST_DB_PATH"
+  [ "$status" -eq 3 ]
+  assert_output --partial "0 appended"
+  assert_output --partial "3 refused (incomplete receipt)"
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM provenance_chain;"
+  assert_output "0"
+}
+
+@test "READ-ERR: verify reports live-unreadable, not drifted, when agent_runs cannot be read" {
+  python3 "$PROV" backfill --db "$CAST_DB_PATH" >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs RENAME COLUMN cost_usd TO cost_usd_old;"
+  run python3 "$PROV" verify --db "$CAST_DB_PATH"
+  assert_success
+  assert_output --partial "3 live-unreadable (agent_runs)"
+  refute_output --partial "drifted"
+}
+
+@test "READ-ERR: tamper in an immutable field is still BROKEN under a section read failure" {
+  python3 "$PROV" backfill --db "$CAST_DB_PATH" >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE agent_runs RENAME COLUMN cost_usd TO cost_usd_old;"
+  sqlite3 "$CAST_DB_PATH" "UPDATE sessions SET project='HACKED' WHERE id='sess-1';"
+  run python3 "$PROV" verify --db "$CAST_DB_PATH"
+  assert_failure
+  [ "$status" -eq 1 ]
+  assert_output --partial "session-data tamper detected"
+}
+
+@test "READ-ERR: verify is INCOMPLETE, not pruned-skipped, when sessions cannot be read" {
+  python3 "$PROV" backfill --db "$CAST_DB_PATH" >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" "ALTER TABLE sessions RENAME COLUMN project_root TO project_root_old;"
+  run python3 "$PROV" verify --db "$CAST_DB_PATH"
+  [ "$status" -eq 3 ]
+  assert_output --partial "VERIFY-CHAIN: INCOMPLETE"
+  assert_output --partial "3 unattested"
+  refute_output --partial "pruned-skipped"
+}
+
+@test "READ-ERR: empty chain with an unreadable sessions table is INCOMPLETE, not PASS" {
+  sqlite3 "$CAST_DB_PATH" "DROP TABLE sessions;"
+  run python3 "$PROV" verify --db "$CAST_DB_PATH"
+  [ "$status" -eq 3 ]
+  assert_output --partial "VERIFY-CHAIN: INCOMPLETE (chain is empty and sessions could not be read"
+  refute_output --partial "PASS"
+}

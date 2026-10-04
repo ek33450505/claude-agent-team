@@ -112,22 +112,46 @@ EOF
 # Canary helpers — PATH-shim launchctl, plant fixture plists
 # ---------------------------------------------------------------------------
 
-# Fake launchctl that reports com.cast.wipe-canary as LOADED (exit 0)
-_install_fake_launchctl_canary_loaded() {
-  cat > "${FAKE_BIN}/launchctl" <<'EOF'
-#!/usr/bin/env bash
-exit 0
+# Argument-aware fake launchctl for com.cast.wipe-canary, answering like the real one:
+# `print gui/<uid>/com.cast.wipe-canary` (or `user/<uid>/...`) and `list com.cast.wipe-canary`
+# succeed only when enabled; EVERYTHING else (other labels, other subcommands, malformed
+# targets) exits 113 ("Could not find service"). This is what lets _launchd_job_loaded's
+# print-first / list-fallback logic be exercised — a blanket exit-0/1 stub cannot.
+#   _write_fake_launchctl_canary <print_ok 0|1> <list_ok 0|1>
+_write_fake_launchctl_canary() {
+  local print_ok="$1" list_ok="$2"
+  {
+    printf '#!/usr/bin/env bash\nprint_ok=%s\nlist_ok=%s\n' "$print_ok" "$list_ok"
+    cat <<'EOF'
+uid="$(id -u)"
+case "${1:-} ${2:-}" in
+  "print gui/${uid}/com.cast.wipe-canary" | "print user/${uid}/com.cast.wipe-canary")
+    [ "$print_ok" = 1 ] && exit 0
+    ;;
+  "list com.cast.wipe-canary")
+    [ "$list_ok" = 1 ] && exit 0
+    ;;
+esac
+exit 113
 EOF
+  } > "${FAKE_BIN}/launchctl"
   chmod +x "${FAKE_BIN}/launchctl"
 }
 
-# Fake launchctl that reports com.cast.wipe-canary as NOT LOADED (exit 1)
+# Fake launchctl that reports com.cast.wipe-canary as LOADED (print and list both resolve it)
+_install_fake_launchctl_canary_loaded() {
+  _write_fake_launchctl_canary 1 1
+}
+
+# Fake launchctl with the sandboxed-shell shape: `list` sees an empty domain (113) while
+# `print gui|user/<uid>/com.cast.wipe-canary` resolves the service -> still LOADED
+_install_fake_launchctl_canary_loaded_print_only() {
+  _write_fake_launchctl_canary 1 0
+}
+
+# Fake launchctl that reports com.cast.wipe-canary as NOT LOADED (every query exits 113)
 _install_fake_launchctl_canary_not_loaded() {
-  cat > "${FAKE_BIN}/launchctl" <<'EOF'
-#!/usr/bin/env bash
-exit 1
-EOF
-  chmod +x "${FAKE_BIN}/launchctl"
+  _write_fake_launchctl_canary 0 0
 }
 
 # Write a canary plist whose script path is OUTSIDE the blast radius
@@ -338,6 +362,21 @@ EOF
   assert_output --partial "Wipe canary: daemon not loaded"
   run bash -c "printf '%s\n' '$output' | grep 'Wipe canary: daemon not loaded' | grep '\[!!\]'"
   assert_success
+}
+
+# ---------------------------------------------------------------------------
+# Test 4c2: sandboxed-shell shape — `launchctl list` empty, `launchctl print` resolves
+# → canary reported LOADED (no false "daemon not loaded" WARN). Exercises
+# _launchd_job_loaded's print-first logic; a list-only helper would fail this.
+# ---------------------------------------------------------------------------
+
+@test "canary: sandbox shape (print ok, list fails) → loaded, not a false 'not loaded' WARN" {
+  _install_fake_launchctl_canary_loaded_print_only
+  _write_canary_plist_outside_blast
+
+  _run_integrity_neutral "$FAKE_BIN"
+  assert_output --partial "Wipe canary: daemon loaded, script present and off blast radius"
+  refute_output --partial "Wipe canary: daemon not loaded"
 }
 
 # ---------------------------------------------------------------------------

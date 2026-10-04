@@ -242,7 +242,7 @@ fi
 if command -v python3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   PROV_SCRIPT="${CAST_SCRIPTS_DIR}/cast-provenance-chain.py"
   if [ -f "$PROV_SCRIPT" ]; then
-    python3 "$PROV_SCRIPT" append "$SESSION_ID" --db "$DB" >/dev/null 2>&1 || true
+    python3 "$PROV_SCRIPT" append "$SESSION_ID" --db "$DB" >/dev/null 2>>"${HOME}/.claude/logs/provenance-chain.log" || true
   fi
 fi
 

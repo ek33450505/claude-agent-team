@@ -179,7 +179,7 @@ run_install_personal() {
   rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
+  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
     -c core.hooksPath=/dev/null commit -q -m "init"
 
   # Now dirty the tree by modifying a tracked file
@@ -206,7 +206,7 @@ run_install_personal() {
   rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
+  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
     -c core.hooksPath=/dev/null commit -q -m "init"
 
   # Tree is clean — install.sh should exit 0 (guard passes through)
@@ -226,7 +226,7 @@ run_install_personal() {
   rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
+  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
     -c core.hooksPath=/dev/null commit -q -m "init"
   echo "# force test" >> "$tmp_repo/scripts/gen-stats.sh"
   git -C "$tmp_repo" add scripts/gen-stats.sh
@@ -238,13 +238,165 @@ run_install_personal() {
   rm -rf "$tmp_repo"
 }
 
+# Helper: build a clean throwaway git repo copy of the source tree; echoes its path.
+# core.hooksPath=/dev/null prevents CAST pre-commit hooks from firing in the fixture.
+make_clean_tmp_repo() {
+  local tmp_repo
+  tmp_repo="$(mktemp -d)"
+  cp -R "$REPO_DIR/." "$tmp_repo/"
+  rm -rf "$tmp_repo/.git"
+  git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
+  git -C "$tmp_repo" add -A
+  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
+    -c core.hooksPath=/dev/null commit -q -m "init"
+  echo "$tmp_repo"
+}
+
+@test "Dirty-tree guard: aborts on an uncommitted tracked change in managed-settings.d/" {
+  # An unstaged edit to an owned enforcement fragment must not deploy on reinstall.
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  echo "# loosened" >> "$tmp_repo/managed-settings.d/12-ask.json"
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "uncommitted changes" ]]
+  # Guard runs before any deploy step: nothing may have been written to the temp HOME.
+  [ ! -e "$HOME/.claude/managed-settings.d" ]
+  [ ! -e "$HOME/.claude/agents" ]
+
+  rm -rf "$tmp_repo"
+}
+
+@test "Dirty-tree guard: aborts on an untracked new file in managed-settings.d/ (guard covers untracked)" {
+  # Guard semantics: the untracked branch (`status --porcelain | grep '^??'`) applies to every
+  # guarded pathspec, so a brand-new fragment is refused just like a modified tracked one.
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  echo '{}' > "$tmp_repo/managed-settings.d/99-untracked.json"
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "uncommitted changes" ]]
+  [ ! -e "$HOME/.claude/managed-settings.d" ]
+
+  rm -rf "$tmp_repo"
+}
+
+@test "Dirty-tree guard: CAST_INSTALL_FORCE=1 bypasses guard with dirty managed-settings.d/" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  echo '{}' > "$tmp_repo/managed-settings.d/99-untracked.json"
+
+  # Without the bypass this state aborts (previous test); with it, install proceeds and deploys.
+  run env CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.claude/managed-settings.d/99-untracked.json" ]
+
+  rm -rf "$tmp_repo"
+}
+
+@test "Dirty-tree guard: every deploy-source path is guarded (untracked file and tracked edit, listing names the file)" {
+  # Independent oracle (deliberately NOT read from install.sh): the repo paths install.sh deploys
+  # from, per its deploy map. Dropping any entry from install.sh's GUARD_PATHS fails that row.
+  # The guard exits before any deploy step, so each probe is fast.
+  local -a guarded
+  guarded=(agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
+    macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/)
+  local tmp_repo failures="" entry probe tracked
+  tmp_repo="$(make_clean_tmp_repo)"
+
+  for entry in "${guarded[@]}"; do
+    # Each row must start from a clean guarded tree (else a prior row's leftover could pass it).
+    [ -z "$(git -C "$tmp_repo" status --porcelain --untracked-files=all)" ] \
+      || failures="$failures [dirty-before:$entry]"
+
+    # (1) untracked file under a directory entry
+    if [[ "$entry" == */ ]]; then
+      probe="${entry}zz-guard-probe.txt"
+      echo probe > "$tmp_repo/$probe"
+      run bash "$tmp_repo/install.sh"
+      { [ "$status" -eq 1 ] && [[ "$output" == *"$probe"* ]]; } || failures="$failures [untracked:$entry]"
+      rm -f "$tmp_repo/$probe"
+    fi
+
+    # (2) edit to a tracked file under (or equal to) the entry
+    tracked="$entry"
+    if [[ "$entry" == */ ]]; then
+      tracked="$(git -C "$tmp_repo" ls-files -- "$entry" | head -1)"
+    fi
+    if [ -n "$tracked" ]; then
+      cp -p "$tmp_repo/$tracked" "$HOME/.probe-saved"
+      echo "# guard probe" >> "$tmp_repo/$tracked"
+      run bash "$tmp_repo/install.sh"
+      { [ "$status" -eq 1 ] && [[ "$output" == *"$tracked"* ]]; } || failures="$failures [tracked:$entry]"
+      cp -p "$HOME/.probe-saved" "$tmp_repo/$tracked"
+    fi
+  done
+
+  rm -rf "$tmp_repo"
+  [ -z "$failures" ] || { echo "unguarded rows:$failures" >&2; return 1; }
+}
+
+@test "Dirty-tree guard: untracked-only dirt is listed by file (even with showUntrackedFiles=no) and says commit or remove" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  # An untracked file inside a NEW subdirectory: default porcelain would collapse it to the dir.
+  mkdir -p "$tmp_repo/config/zz-newdir"
+  echo '{}' > "$tmp_repo/config/zz-newdir/untracked-only.json"
+  # A user/repo setting that hides untracked files must not defeat the guard.
+  git -C "$tmp_repo" config status.showUntrackedFiles no
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"config/zz-newdir/untracked-only.json"* ]]
+  [[ "$output" == *"Commit or remove"* ]]
+  # CAST forbids stash: the footer must not recommend it.
+  [[ "$output" != *"stash"* ]]
+
+  rm -rf "$tmp_repo"
+}
+
+@test "Dirty-tree guard: outside a git work tree fails closed with a message (not silently)" {
+  local not_git
+  not_git="$(mktemp -d)"
+  cp "$REPO_DIR/install.sh" "$not_git/install.sh"
+
+  # Ceiling keeps git from discovering an enclosing repo above the temp dir.
+  run env GIT_CEILING_DIRECTORIES="$(dirname "$not_git")" bash "$not_git/install.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not a usable git work tree"* ]]
+  [ ! -e "$HOME/.claude" ]
+
+  rm -rf "$not_git"
+}
+
+@test "Owned fragment backup: prior copy is backed up with mode 600 even when the live file was 644" {
+  mkdir -p "$HOME/.claude/managed-settings.d"
+  # A differing live copy of a CAST-owned fragment, world-readable.
+  echo '{"_planted":"differs-from-repo"}' > "$HOME/.claude/managed-settings.d/05-behavior.json"
+  chmod 644 "$HOME/.claude/managed-settings.d/05-behavior.json"
+
+  run_install
+
+  local backup
+  backup="$(ls -d "$HOME"/.claude/backups/*/managed-settings.d/05-behavior.json 2>/dev/null | head -1)"
+  [ -n "$backup" ]
+  grep -q "differs-from-repo" "$backup"
+  # Portable mode check (no `stat -f`/`stat -c`): first 10 chars of `ls -l`.
+  local mode
+  mode="$(ls -l "$backup" | cut -c1-10)"
+  [ "$mode" = "-rw-------" ]
+}
+
 @test "Backup retention: keeps only the 5 most recent install snapshots" {
   # Pre-populate 7 fake timestamp dirs in the isolated temp HOME backups dir
   local backup_base="$HOME/.claude/backups"
   mkdir -p "$backup_base"
 
   # Create 7 dirs with valid YYYYMMDD-HHMMSS names (8+6 digits)
-  local dirs=()
+  local -a dirs
+  dirs=()
   for ts in 20260601-120001 20260602-120002 20260603-120003 20260604-120004 \
             20260605-120005 20260606-120006 20260607-120007; do
     local d="$backup_base/$ts"
@@ -405,6 +557,166 @@ STUBEOF
     cat "$sandbox_dest" >&2
     return 1
   fi
+}
+
+@test "Install: 12-ask.json is overwritten on reinstall (CAST-owned fragment — propagates ask-gate updates)" {
+  # First install — seeds 12-ask.json from repo source
+  run_install
+
+  local ask_dest="$HOME/.claude/managed-settings.d/12-ask.json"
+  [ -f "$ask_dest" ] || { echo "FAIL: 12-ask.json not installed" >&2; return 1; }
+
+  # Simulate a stale ask-gate missing the Neon rules (the 2026-10-03 failed-to-deploy shape)
+  printf '{"permissions":{"ask":["Bash(rm *)"]}}\n' > "$ask_dest"
+
+  # Verify our stale copy is missing the mcp__neon__ ask rules (present in repo source)
+  if grep -q "mcp__neon__" "$ask_dest"; then
+    echo "setup error: stale copy unexpectedly contains mcp__neon__" >&2
+    return 1
+  fi
+
+  # Second install — 12-ask.json must be overwritten with full repo source
+  run run_install
+  assert_success
+
+  # A replaced copy is never silent: the notice names the file ...
+  assert_output --partial "Replaced (differed from repo): managed-settings.d/12-ask.json"
+
+  # ... and the stale copy is backed up with its content intact
+  local bak
+  bak="$(ls "$HOME"/.claude/backups/*/managed-settings.d/12-ask.json 2>/dev/null | head -1)"
+  [ -n "$bak" ] || { echo "FAIL: no backup of stale 12-ask.json under ~/.claude/backups" >&2; return 1; }
+  grep -q 'Bash(rm \*)' "$bak" || { echo "FAIL: backup lacks the stale marker" >&2; cat "$bak" >&2; return 1; }
+
+  if ! grep -q "mcp__neon__" "$ask_dest"; then
+    echo "FAIL: stale 12-ask.json was NOT overwritten on reinstall" >&2
+    cat "$ask_dest" >&2
+    return 1
+  fi
+  if ! cmp -s "$REPO_DIR/managed-settings.d/12-ask.json" "$ask_dest"; then
+    echo "FAIL: reinstalled 12-ask.json differs from repo source" >&2
+    return 1
+  fi
+}
+
+# Shared body for the "CAST-owned enforcement fragment is replaced on reinstall" tests.
+# Args: <fragment filename> <stale JSON> <stale marker grep pattern (fixed string)>
+# Asserts: replaced notice, content-intact backup, dest byte-identical to repo source.
+assert_owned_fragment_replaced() {
+  local name="$1" stale_json="$2" stale_marker="$3"
+  local dest="$HOME/.claude/managed-settings.d/$name"
+
+  # First install — seeds the fragment from repo source
+  run_install
+  [ -f "$dest" ] || { echo "FAIL: $name not installed" >&2; return 1; }
+
+  # Simulate a stale/diverged deployed copy
+  printf '%s\n' "$stale_json" > "$dest"
+  if cmp -s "$REPO_DIR/managed-settings.d/$name" "$dest"; then
+    echo "setup error: stale copy of $name is identical to repo source" >&2
+    return 1
+  fi
+
+  # Second install — must overwrite with repo source
+  run run_install
+  assert_success
+
+  # A replaced copy is never silent: the notice names the file ...
+  assert_output --partial "Replaced (differed from repo): managed-settings.d/$name"
+
+  # ... and the stale copy is backed up with its content intact
+  local bak
+  bak="$(ls "$HOME"/.claude/backups/*/managed-settings.d/"$name" 2>/dev/null | head -1)"
+  [ -n "$bak" ] || { echo "FAIL: no backup of stale $name under ~/.claude/backups" >&2; return 1; }
+  grep -qF -- "$stale_marker" "$bak" || { echo "FAIL: backup of $name lacks the stale marker" >&2; cat "$bak" >&2; return 1; }
+
+  if grep -qF -- "$stale_marker" "$dest"; then
+    echo "FAIL: stale $name was NOT overwritten on reinstall" >&2
+    cat "$dest" >&2
+    return 1
+  fi
+  if ! cmp -s "$REPO_DIR/managed-settings.d/$name" "$dest"; then
+    echo "FAIL: reinstalled $name differs from repo source" >&2
+    return 1
+  fi
+}
+
+@test "Install: 05-behavior.json is overwritten on reinstall (CAST-owned fragment — propagates sandbox.failIfUnavailable)" {
+  # Stale copy disables the fail-closed sandbox switch (the shape a repo fix must be able to repair)
+  assert_owned_fragment_replaced "05-behavior.json" \
+    '{"sandbox":{"failIfUnavailable":false,"staleMarker05":true}}' \
+    'staleMarker05'
+
+  # The enforcement value from repo source is what landed
+  grep -q '"failIfUnavailable": true' "$HOME/.claude/managed-settings.d/05-behavior.json" || {
+    echo "FAIL: reinstalled 05-behavior.json lacks failIfUnavailable: true" >&2
+    return 1
+  }
+}
+
+@test "Install: 10-permissions.json is overwritten on reinstall (CAST-owned fragment — propagates permission allow-list)" {
+  assert_owned_fragment_replaced "10-permissions.json" \
+    '{"permissions":{"allow":["Bash(echo stale-marker-10)"]}}' \
+    'stale-marker-10'
+}
+
+@test "Install: identical 05-behavior.json and 10-permissions.json are synced with no Replaced notice or backup" {
+  run_install
+
+  run run_install
+  assert_success
+
+  local name
+  for name in 05-behavior.json 10-permissions.json; do
+    # Owned fragments report "Synced", never "Skipped (exists)"
+    assert_output --partial "Synced: managed-settings.d/$name"
+    refute_output --partial "Replaced (differed from repo): managed-settings.d/$name"
+    # No backup is taken when the copies are already identical
+    if compgen -G "$HOME/.claude/backups/*/managed-settings.d/$name" >/dev/null; then
+      echo "FAIL: unexpected backup of identical $name" >&2
+      return 1
+    fi
+  done
+}
+
+@test "Install: a customized user fragment is preserved and reported as drift" {
+  run_install
+
+  # 00-env.json remains a user-customizable (skip-if-exists) fragment
+  local env_dest="$HOME/.claude/managed-settings.d/00-env.json"
+  [ -f "$env_dest" ] || { echo "FAIL: 00-env.json not installed" >&2; return 1; }
+
+  # Local customization of a user-customizable fragment
+  printf '{"env":{"CUSTOM_MARKER":"custom-marker"}}\n' > "$env_dest"
+
+  run run_install
+  assert_success
+
+  # Preserved — install.sh must never overwrite a skip-if-exists fragment
+  if ! grep -q "custom-marker" "$env_dest"; then
+    echo "FAIL: customized 00-env.json was overwritten on reinstall" >&2
+    cat "$env_dest" >&2
+    return 1
+  fi
+
+  # Skipped, not synced
+  assert_output --partial "Skipped (exists): managed-settings.d/00-env.json"
+  refute_output --partial "Replaced (differed from repo): managed-settings.d/00-env.json"
+
+  # Reported — report-only drift WARN names the file (and only the drifted one)
+  assert_output --partial "differ from the repo source"
+  assert_output --partial "    - 00-env.json"
+  refute_output --partial "    - 10-permissions.json"
+  refute_output --partial "    - 05-behavior.json"
+}
+
+@test "Install: clean reinstall reports no fragment drift" {
+  run_install
+
+  run run_install
+  assert_success
+  refute_output --partial "differ from the repo source"
+  refute_output --partial "Replaced (differed from repo)"
 }
 
 @test "Install: creates ~/.claude/config/cast-hook-owner with content 'install.sh'" {

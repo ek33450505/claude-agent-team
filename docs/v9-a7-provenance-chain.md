@@ -35,18 +35,19 @@ cast provenance status --db ~/custom.db
 
 ### Exit Codes
 
-| Command | Exit 0 (Pass) | Exit 1 (Fail) |
-|---------|---------------|---------------|
-| `cast verify-chain` | Chain valid | Chain broken or empty |
-| `cast provenance verify` | Chain valid | Chain broken or empty |
-| `cast provenance backfill` | Backfill succeeded | Backfill encountered error |
-| `cast provenance append <id>` | Always 0 — **fail-open** (no-op if session missing) | Never (it runs inside session-end and must never break it) |
+| Command | Exit 0 (Pass) | Exit 1 (Fail) | Exit 3 (Incomplete) |
+|---------|---------------|---------------|---------------------|
+| `cast verify-chain` | Chain valid | Chain broken or empty | A read failure stopped a tamper check from running (`sessions` unreadable, or empty chain with `sessions` unreadable) |
+| `cast provenance verify` | Chain valid | Chain broken or empty | A read failure stopped a tamper check from running (`sessions` unreadable, or empty chain with `sessions` unreadable) |
+| `cast provenance backfill` | Backfill succeeded | A chain write failed | One or more sessions refused: their receipt could not be read in full |
+| `cast provenance append <id>` | Always 0 — **fail-open** (no-op if session missing) | Never (it runs inside session-end and must never break it) | — |
 
 ---
 
 ## How It Works
 
 - A `SessionEnd` hook (`cast-session-end.sh`) calls `cast provenance append` for each session as it ends — **BEFORE any DB pruning** — so the digest is chained while the session row still exists. The call is fail-open: it can never break session recording.
+- Append **refuses** — writes nothing and logs to `~/.claude/logs/provenance-chain.log` — when any ledger section fails to read, because a frozen degraded receipt would be permanent. `cast provenance backfill` chains the session once the read succeeds.
 - The chain is stored in the `provenance_chain` table in `~/.claude/cast.db` and is **NEVER pruned** (it stores each session's digest at append-time, so it survives the TTL-based pruning of the live `sessions` table).
 - Chain computation: `chain_hash = sha256(prev_hash + session_digest)`, where `session_digest` is the A5 ledger digest and `prev_hash` is the previous row's `chain_hash` (empty string for the genesis row).
 
@@ -93,8 +94,9 @@ Together those reported **244 of 929 links (26%) as `session-data tamper detecte
 |---|---|---|
 | `id`, `project`, `project_root`, `started_at` differ | **BROKEN — tamper** | Written once at session start; nothing in CAST updates them |
 | `agents`, `totals`, `integrity`, `files`, `routes`, `gates`, `status`, `ended_at` differ | `drifted` (reported, passes) | Retention and completion-time backfill move these by design |
+| A section cannot be read at verify time (e.g. `agent_runs` unreadable) | `live-unreadable` (reported, passes; immutable fields still checked) | Drift cannot be classified from a read that failed, but the tamper check does not depend on those sections |
 
-Sessions already pruned from `sessions` are skipped-with-note ("pruned-skipped"), not failed.
+Sessions already pruned from `sessions` are skipped-with-note ("pruned-skipped"), not failed. A `sessions` read *failure* is not a prune: it reports `unattested` and the verdict is INCOMPLETE (exit 3), because the immutable-field tamper check never ran for that link.
 
 ### Links With No Stored Receipt
 
@@ -106,7 +108,7 @@ Those links are **not unguarded** — Level 1 covers every row regardless, so ed
 
 ### Empty-Chain Cross-Check
 
-If the chain is empty but sessions exist, verify reports BROKEN (an emptied chain cannot silently pass).
+If the chain is empty but sessions exist, verify reports BROKEN (an emptied chain cannot silently pass). If `sessions` cannot be read at all, verify reports INCOMPLETE (exit 3), never PASS.
 
 ---
 

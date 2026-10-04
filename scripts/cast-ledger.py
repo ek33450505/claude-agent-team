@@ -6,7 +6,10 @@ CLI: cast-ledger.py [SESSION_ID] [--last N] [--since YYYY-MM-DD]
 
 Renders a human-readable, SHA-256-stamped session receipt entirely from cast.db.
 Strictly read-only; never writes to the database.
-Never crashes — every section is wrapped in fail-open try/except.
+Never crashes — every section is wrapped in fail-open try/except, but a failed
+read is REPORTED, never silently rendered as empty: failures are collected
+out-of-band (never into the digested data), the receipt is marked INCOMPLETE,
+and the exit code is 3. ERROR and EMPTY must not look identical.
 """
 
 import argparse
@@ -19,6 +22,18 @@ import sys
 import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+# Out-of-band read-failure collector: each entry is {"section": ..., "error": ...}.
+# Deliberately NOT part of the receipt data dict — errors must never enter the digest.
+ReadErrors = Optional[List[Dict[str, str]]]
+
+EXIT_INCOMPLETE = 3  # receipt rendered, but one or more sections failed to read
+
+
+def _record_error(errors: ReadErrors, section: str, exc: BaseException) -> None:
+    """Append a read failure to the collector (no-op when no collector was passed)."""
+    if errors is not None:
+        errors.append({"section": section, "error": f"{type(exc).__name__}: {exc}"})
 
 
 ALLOWED_INTEGRITY_TABLES = frozenset({
@@ -64,8 +79,14 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 # ── Session resolution ────────────────────────────────────────────────────────
 
-def _fetch_session(conn: sqlite3.Connection, session_id: str) -> Optional[sqlite3.Row]:
-    """Return the sessions row for session_id, or None if not found."""
+def _fetch_session(
+    conn: sqlite3.Connection, session_id: str, errors: ReadErrors = None
+) -> Optional[sqlite3.Row]:
+    """Return the sessions row for session_id, or None if not found.
+
+    A query failure also returns None, but is recorded in `errors` so the caller
+    can tell "no such session" from "could not read sessions".
+    """
     try:
         row = conn.execute(
             "SELECT id, project, project_root, started_at, ended_at, status "
@@ -73,13 +94,14 @@ def _fetch_session(conn: sqlite3.Connection, session_id: str) -> Optional[sqlite
             (session_id,),
         ).fetchone()
         return row
-    except sqlite3.OperationalError:
-        return None
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "sessions", e)
         return None
 
 
-def _fetch_most_recent_session(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+def _fetch_most_recent_session(
+    conn: sqlite3.Connection, errors: ReadErrors = None
+) -> Optional[sqlite3.Row]:
     """Return the session with the latest started_at."""
     try:
         row = conn.execute(
@@ -87,13 +109,14 @@ def _fetch_most_recent_session(conn: sqlite3.Connection) -> Optional[sqlite3.Row
             "FROM sessions ORDER BY started_at DESC, rowid DESC LIMIT 1"
         ).fetchone()
         return row
-    except sqlite3.OperationalError:
-        return None
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "sessions", e)
         return None
 
 
-def _fetch_last_n_sessions(conn: sqlite3.Connection, n: int) -> List[sqlite3.Row]:
+def _fetch_last_n_sessions(
+    conn: sqlite3.Connection, n: int, errors: ReadErrors = None
+) -> List[sqlite3.Row]:
     """Return the N most-recent sessions ordered most-recent first."""
     try:
         rows = conn.execute(
@@ -102,13 +125,14 @@ def _fetch_last_n_sessions(conn: sqlite3.Connection, n: int) -> List[sqlite3.Row
             (n,),
         ).fetchall()
         return rows
-    except sqlite3.OperationalError:
-        return []
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "sessions", e)
         return []
 
 
-def _fetch_sessions_since(conn: sqlite3.Connection, since: str) -> List[sqlite3.Row]:
+def _fetch_sessions_since(
+    conn: sqlite3.Connection, since: str, errors: ReadErrors = None
+) -> List[sqlite3.Row]:
     """Return sessions with started_at >= since, most-recent first."""
     try:
         rows = conn.execute(
@@ -118,15 +142,16 @@ def _fetch_sessions_since(conn: sqlite3.Connection, since: str) -> List[sqlite3.
             (since,),
         ).fetchall()
         return rows
-    except sqlite3.OperationalError:
-        return []
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "sessions", e)
         return []
 
 
 # ── Section data collectors ───────────────────────────────────────────────────
 
-def _fetch_agent_runs(conn: sqlite3.Connection, session_id: str) -> List[Dict]:
+def _fetch_agent_runs(
+    conn: sqlite3.Connection, session_id: str, errors: ReadErrors = None
+) -> List[Dict]:
     """Fetch agent_runs rows for the session, ordered by started_at then rowid."""
     try:
         rows = conn.execute(
@@ -140,13 +165,14 @@ def _fetch_agent_runs(conn: sqlite3.Connection, session_id: str) -> List[Dict]:
             (session_id,),
         ).fetchall()
         return [dict(r) for r in rows]
-    except sqlite3.OperationalError:
-        return []
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "agent_runs", e)
         return []
 
 
-def _fetch_file_writes(conn: sqlite3.Connection, session_id: str) -> List[Dict]:
+def _fetch_file_writes(
+    conn: sqlite3.Connection, session_id: str, errors: ReadErrors = None
+) -> List[Dict]:
     """Fetch file_writes rows ordered by ts, file_path."""
     try:
         rows = conn.execute(
@@ -157,13 +183,14 @@ def _fetch_file_writes(conn: sqlite3.Connection, session_id: str) -> List[Dict]:
             (session_id,),
         ).fetchall()
         return [dict(r) for r in rows]
-    except sqlite3.OperationalError:
-        return []
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "file_writes", e)
         return []
 
 
-def _fetch_routing_events(conn: sqlite3.Connection, session_id: str) -> List[Dict]:
+def _fetch_routing_events(
+    conn: sqlite3.Connection, session_id: str, errors: ReadErrors = None
+) -> List[Dict]:
     """Fetch routing_events rows ordered by timestamp."""
     try:
         rows = conn.execute(
@@ -174,13 +201,14 @@ def _fetch_routing_events(conn: sqlite3.Connection, session_id: str) -> List[Dic
             (session_id,),
         ).fetchall()
         return [dict(r) for r in rows]
-    except sqlite3.OperationalError:
-        return []
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "routing_events", e)
         return []
 
 
-def _fetch_quality_gates(conn: sqlite3.Connection, session_id: str) -> List[Dict]:
+def _fetch_quality_gates(
+    conn: sqlite3.Connection, session_id: str, errors: ReadErrors = None
+) -> List[Dict]:
     """Fetch quality_gates rows ordered by created_at (excludes truncation-mirror rows, status_line='TRUNCATED')."""
     try:
         rows = conn.execute(
@@ -192,17 +220,21 @@ def _fetch_quality_gates(conn: sqlite3.Connection, session_id: str) -> List[Dict
             (session_id,),
         ).fetchall()
         return [dict(r) for r in rows]
-    except sqlite3.OperationalError:
-        return []
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "quality_gates", e)
         return []
 
 
-def _fetch_integrity_table(conn: sqlite3.Connection, table: str, session_id: str) -> List[Dict]:
+def _fetch_integrity_table(
+    conn: sqlite3.Connection, table: str, session_id: str, errors: ReadErrors = None
+) -> List[Dict]:
     """Fetch SAFE (non-freetext) columns from an integrity table for session_id. Fail-open.
 
     The receipt is a portable export, so raw agent-output columns (raw_excerpt,
     partial_work_log, etc.) are NEVER included — only counts + safe descriptors.
+
+    Legitimately-empty paths (table not allowlisted, table absent, no session_id
+    column, no safe columns) return [] silently. Only an exception is an error.
     """
     if table not in ALLOWED_INTEGRITY_TABLES:
         return []
@@ -219,9 +251,8 @@ def _fetch_integrity_table(conn: sqlite3.Connection, table: str, session_id: str
             (session_id,),
         ).fetchall()
         return [dict(r) for r in rows]
-    except sqlite3.OperationalError:
-        return []
-    except Exception:
+    except Exception as e:
+        _record_error(errors, table, e)
         return []
 
 
@@ -230,8 +261,14 @@ def _fetch_integrity_table(conn: sqlite3.Connection, table: str, session_id: str
 def _build_receipt_data(
     conn: sqlite3.Connection,
     session_row: sqlite3.Row,
+    errors: ReadErrors = None,
 ) -> Dict[str, Any]:
-    """Build the canonical data dict D for a session. No wall-clock timestamps."""
+    """Build the canonical data dict D for a session. No wall-clock timestamps.
+
+    Section read failures are appended to `errors` (when given), NEVER to the
+    returned dict — the digest covers only the returned data, so a healthy read
+    is byte-identical to before and errors cannot perturb it.
+    """
     sid = session_row["id"]
 
     # Session header
@@ -244,10 +281,10 @@ def _build_receipt_data(
         "status": session_row["status"],
     }
 
-    agents = _fetch_agent_runs(conn, sid)
-    files = _fetch_file_writes(conn, sid)
-    routes = _fetch_routing_events(conn, sid)
-    gates = _fetch_quality_gates(conn, sid)
+    agents = _fetch_agent_runs(conn, sid, errors)
+    files = _fetch_file_writes(conn, sid, errors)
+    routes = _fetch_routing_events(conn, sid, errors)
+    gates = _fetch_quality_gates(conn, sid, errors)
 
     # Compute totals from agent_runs
     total_input = sum(int(a.get("input_tokens") or 0) for a in agents)
@@ -283,7 +320,7 @@ def _build_receipt_data(
     ]
     integrity: Dict[str, Any] = {}
     for tbl in integrity_tables:
-        rows = _fetch_integrity_table(conn, tbl, sid)
+        rows = _fetch_integrity_table(conn, tbl, sid, errors)
         integrity[tbl] = rows
 
     return {
@@ -358,9 +395,60 @@ def _duration_str(started_at: Optional[str], ended_at: Optional[str]) -> Optiona
         return None
 
 
+# ── Read-error reporting helpers ──────────────────────────────────────────────
+
+def _one_line(text: Any) -> str:
+    """Collapse whitespace/newlines so an error message stays on one output line."""
+    return " ".join(str(text).split())
+
+
+def _failed_sections(read_errors: List[Dict[str, str]]) -> List[str]:
+    """Distinct failed section names, in order of first failure."""
+    seen: List[str] = []
+    for e in read_errors:
+        if e["section"] not in seen:
+            seen.append(e["section"])
+    return seen
+
+
+def _incomplete_banner(read_errors: ReadErrors) -> List[str]:
+    """Markdown banner lines for a receipt with failed sections. Outside the digest.
+
+    Every line starts with '> ' so none can match the '- **Session:**' / 'Digest:'
+    patterns that --verify extracts from a rendered receipt.
+    """
+    errs = read_errors or []
+    lines = [
+        f"> **INCOMPLETE RECEIPT — read failed for: {', '.join(_failed_sections(errs))}.**",
+        "> Sections below may be empty because the query failed, not because nothing was recorded.",
+    ]
+    for e in errs:
+        lines.append(f"> - `{e['section']}`: {_one_line(e['error'])}")
+    lines.append("")
+    return lines
+
+
+def _warn_incomplete(read_errors: ReadErrors, sid: Optional[str] = None) -> bool:
+    """Print one stderr WARNING per failed section. Returns True if any failed."""
+    if not read_errors:
+        return False
+    suffix = f" (session {sid})" if sid else ""
+    for e in read_errors:
+        print(
+            f"cast ledger: WARNING: {e['section']} query failed ({_one_line(e['error'])}) "
+            f"— receipt is INCOMPLETE, not empty{suffix}",
+            file=sys.stderr,
+        )
+    return True
+
+
 # ── Markdown renderer ─────────────────────────────────────────────────────────
 
-def _render_markdown(data: Dict[str, Any], digest: str) -> str:
+def _render_markdown(
+    data: Dict[str, Any],
+    digest: str,
+    read_errors: ReadErrors = None,
+) -> str:
     lines: List[str] = []
 
     sess = data["session"]
@@ -373,6 +461,8 @@ def _render_markdown(data: Dict[str, Any], digest: str) -> str:
 
     lines.append("# CAST Session Receipt")
     lines.append("")
+    if read_errors:
+        lines.extend(_incomplete_banner(read_errors))
 
     # Header bullets
     lines.append(f"- **Session:** {sess['id']}")
@@ -554,7 +644,12 @@ def _extract_pairs_json(content: str) -> List[Tuple[str, str]]:
 
 
 def _cmd_verify(file_path: str, conn: sqlite3.Connection) -> int:
-    """Verify a receipt file. Returns 0 for PASS, 1 for TAMPERED/unverifiable."""
+    """Verify a receipt file.
+
+    Returns 0 for PASS, 1 for TAMPERED (a genuine digest mismatch on a healthy
+    read), 3 for UNVERIFIABLE (re-deriving hit a read error, so no verdict on
+    tampering can be given). TAMPERED outranks UNVERIFIABLE across sessions.
+    """
     try:
         with open(file_path, "r", encoding="utf-8") as fh:
             content = fh.read()
@@ -573,26 +668,46 @@ def _cmd_verify(file_path: str, conn: sqlite3.Connection) -> int:
         print("cast ledger: no session/digest pairs found in file", file=sys.stderr)
         return 1
 
-    all_pass = True
+    tampered = False
+    unverifiable = False
     for sid, embedded_digest in pairs:
-        session_row = _fetch_session(conn, sid)
+        read_errors: List[Dict[str, str]] = []
+        session_row = _fetch_session(conn, sid, read_errors)
         if session_row is None:
-            print(f"VERIFY: TAMPERED (session {sid}: not found in cast.db — unverifiable)")
-            all_pass = False
+            if read_errors:
+                _print_unverifiable(sid, read_errors)
+                unverifiable = True
+            else:
+                print(f"VERIFY: TAMPERED (session {sid}: not found in cast.db — unverifiable)")
+                tampered = True
             continue
-        data = _build_receipt_data(conn, session_row)
+        data = _build_receipt_data(conn, session_row, read_errors)
+        if read_errors:
+            # A section failed to read, so the re-derived digest is over incomplete
+            # data: a mismatch would be a false TAMPERED, and even a match would
+            # only mean "incomplete == incomplete". No verdict either way.
+            _print_unverifiable(sid, read_errors)
+            unverifiable = True
+            continue
         rederived = _compute_digest(data)
-        if rederived == embedded_digest:
-            # individual pass — only print overall at the end
-            pass
-        else:
+        if rederived != embedded_digest:
             print(f"VERIFY: TAMPERED (session {sid}: expected {embedded_digest} got {rederived})")
-            all_pass = False
+            tampered = True
 
-    if all_pass:
-        print("VERIFY: PASS")
-        return 0
-    return 1
+    if tampered:
+        return 1
+    if unverifiable:
+        return EXIT_INCOMPLETE
+    print("VERIFY: PASS")
+    return 0
+
+
+def _print_unverifiable(sid: str, read_errors: ReadErrors) -> None:
+    """Print the one-line UNVERIFIABLE verdict naming the failed sections and errors."""
+    errs = read_errors or []
+    sections = ", ".join(_failed_sections(errs))
+    detail = "; ".join(_one_line(e["error"]) for e in errs)
+    print(f"VERIFY: UNVERIFIABLE (session {sid}: read error in {sections}: {detail})")
 
 
 # ── Output dispatch ───────────────────────────────────────────────────────────
@@ -602,15 +717,22 @@ def _render_session(
     session_row: sqlite3.Row,
     as_json: bool,
 ) -> Tuple[str, Dict[str, Any]]:
-    """Return (rendered_string, canonical_data_dict) for one session."""
-    data = _build_receipt_data(conn, session_row)
+    """Return (rendered_string, {"receipt", "digest"[, "read_errors"]}) for one session.
+
+    `read_errors` is present ONLY when a section failed to read, and sits beside
+    (never inside) `receipt` — the digest is computed over `data` alone.
+    """
+    read_errors: List[Dict[str, str]] = []
+    data = _build_receipt_data(conn, session_row, read_errors)
     digest = _compute_digest(data)
+    obj: Dict[str, Any] = {"receipt": data, "digest": digest}
+    if read_errors:
+        obj["read_errors"] = read_errors
     if as_json:
-        obj = {"receipt": data, "digest": digest}
         rendered = json.dumps(obj, sort_keys=True, indent=2, default=str)
     else:
-        rendered = _render_markdown(data, digest)
-    return rendered, {"receipt": data, "digest": digest}
+        rendered = _render_markdown(data, digest, read_errors)
+    return rendered, obj
 
 
 def _output(text: str, out_file: Optional[str]) -> None:
@@ -665,23 +787,31 @@ def main() -> int:
         print(f"cast ledger: cannot connect to db: {e}", file=sys.stderr)
         return 1
 
-    # Determine which sessions to render
+    # Determine which sessions to render. A failed sessions query is a READ ERROR
+    # (exit 3), never "no sessions found" / "no such session" (exit 1).
     session_rows: List[sqlite3.Row] = []
+    resolve_errors: List[Dict[str, str]] = []
 
     if args.last is not None:
-        session_rows = _fetch_last_n_sessions(conn, args.last)
+        session_rows = _fetch_last_n_sessions(conn, args.last, resolve_errors)
+        if resolve_errors:
+            return _report_resolve_failure(resolve_errors)
         if not session_rows:
             print("cast ledger: no sessions found in cast.db", file=sys.stderr)
             return 1
 
     elif args.since is not None:
-        session_rows = _fetch_sessions_since(conn, args.since)
+        session_rows = _fetch_sessions_since(conn, args.since, resolve_errors)
+        if resolve_errors:
+            return _report_resolve_failure(resolve_errors)
         if not session_rows:
             print(f"cast ledger: no sessions found since {args.since}", file=sys.stderr)
             return 1
 
     elif args.session_id is not None:
-        row = _fetch_session(conn, args.session_id)
+        row = _fetch_session(conn, args.session_id, resolve_errors)
+        if resolve_errors:
+            return _report_resolve_failure(resolve_errors)
         if row is None:
             print(f"cast ledger: no such session: {args.session_id}", file=sys.stderr)
             return 1
@@ -689,15 +819,20 @@ def main() -> int:
 
     else:
         # Default: most-recent session
-        row = _fetch_most_recent_session(conn)
+        row = _fetch_most_recent_session(conn, resolve_errors)
+        if resolve_errors:
+            return _report_resolve_failure(resolve_errors)
         if row is None:
             print("cast ledger: no sessions found in cast.db", file=sys.stderr)
             return 1
         session_rows = [row]
 
     # Render
-    if len(session_rows) == 1:
-        rendered, _ = _render_session(conn, session_rows[0], args.as_json)
+    multi = len(session_rows) > 1
+    incomplete = False
+    if not multi:
+        rendered, obj = _render_session(conn, session_rows[0], args.as_json)
+        incomplete = _warn_incomplete(obj.get("read_errors"))
         _output(rendered, args.out)
     else:
         if args.as_json:
@@ -705,6 +840,7 @@ def main() -> int:
             items = []
             for row in session_rows:
                 _, obj = _render_session(conn, row, True)
+                incomplete = _warn_incomplete(obj.get("read_errors"), row["id"]) or incomplete
                 items.append(obj)
             rendered = json.dumps(items, sort_keys=True, indent=2, default=str)
             _output(rendered, args.out)
@@ -712,11 +848,24 @@ def main() -> int:
             # Markdown: separate with ---
             parts = []
             for row in session_rows:
-                rendered, _ = _render_session(conn, row, False)
+                rendered, obj = _render_session(conn, row, False)
+                incomplete = _warn_incomplete(obj.get("read_errors"), row["id"]) or incomplete
                 parts.append(rendered)
             _output("\n---\n".join(parts), args.out)
 
-    return 0
+    # The receipt is written either way; the exit code says whether it is complete.
+    return EXIT_INCOMPLETE if incomplete else 0
+
+
+def _report_resolve_failure(resolve_errors: List[Dict[str, str]]) -> int:
+    """Report a failed session-resolution query (not an empty result) and return exit 3."""
+    for e in resolve_errors:
+        print(
+            f"cast ledger: ERROR: {e['section']} query failed ({_one_line(e['error'])}) "
+            "— cannot resolve sessions; this is a read failure, not an empty result",
+            file=sys.stderr,
+        )
+    return EXIT_INCOMPLETE
 
 
 if __name__ == "__main__":

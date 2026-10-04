@@ -50,11 +50,45 @@ fi
 
 DIRTY_REPOS=()
 
+# Hostile-repo hardening. This hook runs OUTSIDE the Bash sandbox over project roots an
+# agent can write to, so repo-local config an agent plants must not be able to execute
+# code during the dirty check: core.fsmonitor (a program run by `git status`) and
+# filter.<drv>.clean/process (run when status re-hashes a stat-dirty tracked file).
+# fsmonitor is forced off by -c; filter drivers are enumerated from config (a read —
+# nothing is executed) and each one's exec knobs are blanked. Bash 3.2-safe (no declare -A).
+# Inherited GIT_CONFIG_PARAMETERS/GLOBAL/SYSTEM are unset (env -u): GIT_CONFIG_PARAMETERS would
+# override the env-indexed keys; the fixed keys are ALSO passed as -c (belt and braces).
+# Submodules are ignored (--ignore-submodules=all): their OWN config could define filter drivers
+# we never enumerated. Dirty-submodule detection is intentionally lost.
+SAFE_GIT_ENV=()
+# _safe_git_args <repo-dir> — populate SAFE_GIT_ENV (env assignments for `env ... git`). All
+# hardening config goes through GIT_CONFIG_COUNT/KEY_i/VALUE_i, NOT `-c k=v`: a filter driver
+# name containing '=' would be mis-split by -c parsing and escape the blanking. The count is
+# set explicitly with keys from index 0, so an inherited GIT_CONFIG_COUNT cannot add entries.
+_safe_git_args() {
+  local _key _drv _n=0 _k
+  SAFE_GIT_ENV=()
+  _sg_add() { SAFE_GIT_ENV+=("GIT_CONFIG_KEY_${_n}=$1" "GIT_CONFIG_VALUE_${_n}=$2"); _n=$((_n + 1)); }
+  _sg_add core.fsmonitor false
+  _sg_add core.untrackedCache false
+  _sg_add core.hooksPath /dev/null
+  _sg_add log.showSignature false
+  while IFS= read -r -d '' _key; do
+    _drv="${_key#filter.}"
+    [[ "$_drv" == *.* ]] || continue
+    _drv="${_drv%.*}"
+    for _k in clean smudge process; do _sg_add "filter.${_drv}.${_k}" ""; done
+    _sg_add "filter.${_drv}.required" false
+  done < <(git -C "$1" config -z --name-only --get-regexp '^filter\.' 2>/dev/null || true)
+  SAFE_GIT_ENV+=("GIT_CONFIG_COUNT=${_n}")
+}
+
 for proj in "${KNOWN_PROJECTS[@]}"; do
   # Defensive: reject paths starting with '-' so git -C can't reinterpret as an option
   case "$proj" in -*) continue ;; esac
   [ -d "$proj/.git" ] || continue
-  STATUS="$(git -C "$proj" status --porcelain 2>/dev/null || true)"
+  _safe_git_args "$proj"
+  STATUS="$(GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none env -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM "${SAFE_GIT_ENV[@]}" git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false -c core.untrackedCache=false --no-replace-objects --no-optional-locks -C "$proj" status --porcelain --ignore-submodules=all 2>/dev/null || true)"
   if [ -n "$STATUS" ]; then
     DIRTY_REPOS+=("$proj")
   fi

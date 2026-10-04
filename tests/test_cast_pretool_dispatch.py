@@ -16,12 +16,20 @@ points at a nonexistent file so _record_dispatch no-ops (returns) right after
 the redaction block under test — this file covers the breadcrumb in isolation,
 not the dispatch_decisions INSERT itself.
 """
+import contextlib
 import importlib.util
+import io
+import json
 import os
+import re
 import shutil
+import signal
 import sqlite3
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -321,6 +329,573 @@ class TestDispatchDecisionsNameCapture(unittest.TestCase):
         finally:
             conn.close()
         self.assertNotIn(raw, all_names)
+
+
+_LINT_MOD_NAME = 'cast_lint_workflow_stage_models'
+_LINT_FILENAME = 'cast-lint-workflow-stage-models.py'
+
+_WF_BAD = "const r = await agent(PROMPT, { label: 'scan' })\n"
+_WF_OK = "const r = await agent(PROMPT, { label: 'scan', model: 'haiku' })\n"
+
+# Subprocess snippets: each probes a failure that would KILL or HANG the process,
+# so it must run out-of-process (a regression then fails a test instead of
+# taking down / freezing the suite). argv[1] = path of the dispatcher script.
+
+# A SIGALRM delivered AFTER the watchdog helper has returned (or timed out). If
+# the helper left SIG_DFL installed, the default action terminates the process
+# (exit 142 / -14): a crashed hook, which Claude Code treats as a BLOCK.
+_PENDING_ALARM_SNIPPET = r'''
+import importlib.util, os, signal, sys
+spec = importlib.util.spec_from_file_location("d", sys.argv[1])
+d = importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
+lint = d._load("cast_lint_workflow_stage_models", "cast-lint-workflow-stage-models.py")
+if sys.argv[2] == "timeout":
+    d._WORKFLOW_LINT_BUDGET_SECS = 0.05
+    src = ("agent(" * 150).ljust(64 * 1024, " ")
+else:
+    src = "agent(P);\n"
+try:
+    results = d._lint_with_watchdog(lint, [src])
+    outcome = "ok:%d" % len(results[0][0])
+except d._WorkflowLintTimeout:
+    outcome = "timeout"
+os.kill(os.getpid(), signal.SIGALRM)   # pending alarm arriving after the helper
+for _ in range(200000):
+    pass                               # let the interpreter dispatch it
+print(outcome)
+'''
+
+# stat() says "regular file" but the path is a FIFO when open() runs (the
+# stat-then-open race, simulated by making every os.stat lie). A plain open()
+# of a FIFO with no writer blocks forever; the fd-based read must not.
+_TOCTOU_SNIPPET = r'''
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("d", sys.argv[1])
+d = importlib.util.module_from_spec(spec); spec.loader.exec_module(d)
+regular = os.stat(sys.argv[1])
+os.stat = lambda *a, **k: regular
+print(repr(d._workflow_sources({}, {"scriptPath": sys.argv[2]})))
+'''
+
+
+class TestWorkflowStageModelGuard(_IsolatedHomeTestCase):
+    """PreToolUse deny for a Workflow script whose agent() stage has no model:.
+
+    Stages without model: silently inherit the opus main-loop model (cost lever,
+    Ed-approved 2026-10-03; mode = DENY with reason). The path must be
+    exception-proof: Claude Code >= 2.1.288 BLOCKS a tool call when a PreToolUse
+    hook crashes or prints malformed output, so every failure mode here must
+    ALLOW silently (nothing on stdout, exit 0) and be logged.
+
+    Each in-process test drives main() with a patched stdin and captured stdout;
+    two end-to-end tests spawn the real script. _record_guard_failure is mocked
+    so no marker file / cast.db row is ever written.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._env_patch = mock.patch.dict(os.environ)
+        self._env_patch.start()
+        os.environ.pop('CLAUDE_SUBPROCESS', None)
+        cast_pretool_dispatch._MODULE_CACHE.pop(_LINT_MOD_NAME, None)
+        self._rec = mock.patch.object(cast_pretool_dispatch, '_record_guard_failure')
+        self.record_failure = self._rec.start()
+
+    def tearDown(self):
+        self._rec.stop()
+        cast_pretool_dispatch._MODULE_CACHE.pop(_LINT_MOD_NAME, None)
+        self._env_patch.stop()
+        super().tearDown()
+
+    # -- helpers ---------------------------------------------------------
+    def _run(self, payload):
+        raw = json.dumps(payload).encode('utf-8')
+        stdin = io.TextIOWrapper(io.BytesIO(raw), encoding='utf-8')
+        out = io.StringIO()
+        with mock.patch.object(sys, 'stdin', stdin), contextlib.redirect_stdout(out):
+            rc = cast_pretool_dispatch.main()
+        return rc, out.getvalue()
+
+    def _wf(self, **tool_input):
+        return {'tool_name': 'Workflow', 'tool_input': tool_input,
+                'session_id': 'test-session'}
+
+    def _assert_allow(self, payload):
+        rc, out = self._run(payload)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, '')
+
+    def _assert_deny(self, payload):
+        """Exit 0 + EXACTLY ONE well-formed deny object on stdout; return reason."""
+        rc, out = self._run(payload)
+        self.assertEqual(rc, 0)
+        obj, end = json.JSONDecoder().raw_decode(out.strip())
+        self.assertEqual(end, len(out.strip()), 'stdout holds more than one JSON object')
+        self.assertEqual(list(obj), ['hookSpecificOutput'])
+        hso = obj['hookSpecificOutput']
+        self.assertEqual(hso['hookEventName'], 'PreToolUse')
+        self.assertEqual(hso['permissionDecision'], 'deny')
+        self.assertIsInstance(hso['permissionDecisionReason'], str)
+        return hso['permissionDecisionReason']
+
+    def _write(self, name, text):
+        path = os.path.join(self._tmpdir, name)
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(text)
+        return path
+
+    # -- inline script ---------------------------------------------------
+    def test_inline_missing_model_denies_with_actionable_reason(self):
+        reason = self._assert_deny(self._wf(script="// header\n" + _WF_BAD))
+        self.assertIn('line 2', reason)
+        self.assertIn('agent(PROMPT', reason)
+        for tier in ("'haiku'", "'sonnet'", "'opus'"):
+            self.assertIn(tier, reason)
+        self.assertIn('cast-lint: inherit-model --', reason)
+
+    def test_all_stages_pinned_allows_silently(self):
+        self._assert_allow(self._wf(script=_WF_OK + _WF_OK))
+
+    def test_script_with_no_agent_calls_allows(self):
+        self._assert_allow(self._wf(script="const x = 1 + 1\nreturn x\n"))
+
+    def test_opt_out_with_reason_allows(self):
+        src = ("// cast-lint: inherit-model -- final judge, needs session opus\n"
+               + _WF_BAD)
+        self._assert_allow(self._wf(script=src))
+
+    def test_bare_opt_out_marker_still_denies(self):
+        src = "// cast-lint: inherit-model --\n" + _WF_BAD
+        self._assert_deny(self._wf(script=src))
+
+    def test_model_only_in_comment_or_string_still_denies(self):
+        src = ("// model: 'haiku'\n"
+               "const r = await agent('use model: haiku here', { label: 'x' })\n")
+        reason = self._assert_deny(self._wf(script=src))
+        self.assertIn('line 2', reason)
+
+    def test_nested_inner_model_does_not_satisfy_outer(self):
+        src = ("const r = await agent('outer ' + (await agent(P, { model: 'haiku' })),\n"
+               "                      { label: 'outer' })\n")
+        reason = self._assert_deny(self._wf(script=src))
+        self.assertIn('line 1', reason)
+        self.assertIn('1 agent()', reason)
+
+    def test_reason_lists_at_most_ten_entries_and_stays_bounded(self):
+        pad = 'x' * 200
+        src = ''.join(
+            "const r%d = await agent(PROMPT_%s, { label: 'l%d' })\n" % (i, pad, i)
+            for i in range(14))
+        reason = self._assert_deny(self._wf(script=src))
+        entries = [ln for ln in reason.splitlines() if re.match(r'line \d+: ', ln)]
+        self.assertEqual(len(entries), 10)
+        self.assertIn('14', reason)
+        self.assertLessEqual(len(reason), 1500)
+        for ln in entries:  # each snippet is trimmed to <= 80 chars
+            self.assertLessEqual(len(ln.split(': ', 1)[1]), 80)
+
+    # -- scriptPath ------------------------------------------------------
+    def test_scriptpath_with_violation_denies(self):
+        path = self._write('bad.workflow.js', "\n\n" + _WF_BAD)
+        reason = self._assert_deny(self._wf(scriptPath=path))
+        self.assertIn('line 3', reason)
+
+    def test_scriptpath_clean_allows(self):
+        self._assert_allow(self._wf(scriptPath=self._write('ok.workflow.js', _WF_OK)))
+
+    def test_scriptpath_relative_resolves_against_payload_cwd(self):
+        self._write('rel.workflow.js', _WF_BAD)
+        payload = self._wf(scriptPath='rel.workflow.js')
+        payload['cwd'] = self._tmpdir
+        self._assert_deny(payload)
+
+    def test_scriptpath_missing_allows(self):
+        self._assert_allow(self._wf(scriptPath=os.path.join(self._tmpdir, 'nope.js')))
+
+    def test_scriptpath_directory_allows(self):
+        self._assert_allow(self._wf(scriptPath=self._tmpdir))
+
+    def test_scriptpath_over_one_mib_allows(self):
+        path = self._write('big.workflow.js', _WF_BAD + ' ' * (1024 * 1024 + 16))
+        self._assert_allow(self._wf(scriptPath=path))
+
+    def test_scriptpath_not_a_string_allows(self):
+        self._assert_allow(self._wf(scriptPath=['a', 'b']))
+
+    def test_script_and_scriptpath_are_both_linted(self):
+        bad = self._write('bad.workflow.js', _WF_BAD)
+        ok = self._write('ok.workflow.js', _WF_OK)
+        self._assert_deny(self._wf(script=_WF_OK, scriptPath=bad))   # path violates
+        self._assert_deny(self._wf(script=_WF_BAD, scriptPath=ok))   # script violates
+        self._assert_allow(self._wf(script=_WF_OK, scriptPath=ok))
+
+    def test_both_sources_violating_are_labelled_in_the_reason(self):
+        bad = self._write('bad.workflow.js', "\n" + _WF_BAD)
+        reason = self._assert_deny(self._wf(script=_WF_BAD, scriptPath=bad))
+        self.assertIn('2 agent() stage(s)', reason)
+        self.assertIn('script line 1:', reason)
+        self.assertIn('scriptPath line 2:', reason)
+
+    def test_single_source_reason_keeps_bare_line_prefix(self):
+        reason = self._assert_deny(self._wf(script=_WF_BAD))
+        self.assertTrue(re.search(r'^line 1: ', reason, re.M))
+        self.assertNotIn('script line', reason)
+
+    def test_empty_script_does_not_shadow_a_real_scriptpath(self):
+        bad = self._write('bad.workflow.js', _WF_BAD)
+        self._assert_deny(self._wf(script='', scriptPath=bad))
+
+    def test_empty_script_alone_allows(self):
+        self._assert_allow(self._wf(script=''))
+
+    def test_non_string_script_falls_through_to_scriptpath(self):
+        bad = self._write('bad.workflow.js', _WF_BAD)
+        self._assert_deny(self._wf(script=123, scriptPath=bad))
+
+    # -- other input forms / anomalies -> allow --------------------------
+    def test_name_only_allows(self):
+        self._assert_allow(self._wf(name='some-saved-workflow'))
+
+    def test_empty_tool_input_allows(self):
+        self._assert_allow(self._wf())
+
+    def test_script_not_a_string_allows(self):
+        for bad in (123, None, ['agent(P)'], {'a': 1}):
+            with self.subTest(script=bad):
+                self._assert_allow(self._wf(script=bad))
+
+    def test_unterminated_quote_allows_and_logs(self):
+        self._assert_allow(self._wf(script="const s = await agent(P, { label: 'oops })\n"))
+        self.assertIn('unterminated', self._read_log())
+
+    def test_lint_module_load_failure_allows_silently(self):
+        with mock.patch.object(cast_pretool_dispatch, '_load', return_value=None):
+            self._assert_allow(self._wf(script=_WF_BAD))
+
+    def test_lint_module_missing_file_allows_and_records_failure(self):
+        with mock.patch.object(cast_pretool_dispatch, 'SCRIPT_DIR', self._tmpdir):
+            self._assert_allow(self._wf(script=_WF_BAD))
+        self.assertIn('failed to load', self._read_log())
+        self.record_failure.assert_called()
+
+    def test_lint_exception_allows_logs_and_records_failure(self):
+        lint = cast_pretool_dispatch._load(_LINT_MOD_NAME, _LINT_FILENAME)
+        self.assertIsNotNone(lint)
+        with mock.patch.object(lint, 'find_violations_in_source',
+                               side_effect=RuntimeError('boom')):
+            self._assert_allow(self._wf(script=_WF_BAD))
+        self.assertIn('RuntimeError', self._read_log())
+        self.record_failure.assert_called()
+
+    # -- fail-open size / call-count bounds (hook-only; the CLI has none) ---
+    # The hook has a 5 s timeout and the lint is superlinear on pathological
+    # input, so oversize or call-heavy sources are ALLOWED unlinted + logged.
+    def _pad_to(self, src, n_chars):
+        return src + ' ' * (n_chars - len(src))
+
+    def test_source_at_256_kib_bound_is_still_linted(self):
+        src = self._pad_to(_WF_BAD, 256 * 1024)
+        self.assertEqual(len(src), 256 * 1024)
+        self._assert_deny(self._wf(script=src))
+
+    def test_source_over_256_kib_allows_unlinted_and_logs(self):
+        src = self._pad_to(_WF_BAD, 256 * 1024 + 1)
+        lint = cast_pretool_dispatch._load(_LINT_MOD_NAME, _LINT_FILENAME)
+        with mock.patch.object(lint, 'find_violations_in_source') as mocked:
+            self._assert_allow(self._wf(script=src))
+        mocked.assert_not_called()
+        log = self._read_log()
+        self.assertIn('workflow stage-model lint skipped', log)
+        self.assertIn('bound', log)
+        self.assertEqual(len([ln for ln in log.splitlines() if 'skipped' in ln]), 1)
+
+    def test_scriptpath_over_256_kib_but_under_1_mib_allows_unlinted(self):
+        path = self._write('mid.workflow.js',
+                           self._pad_to(_WF_BAD, 256 * 1024 + 1))
+        self._assert_allow(self._wf(scriptPath=path))
+        self.assertIn('workflow stage-model lint skipped', self._read_log())
+
+    def test_exactly_2000_agent_calls_are_still_linted(self):
+        src = "agent(P);\n" * 2000
+        reason = self._assert_deny(self._wf(script=src))
+        self.assertIn('2000 agent() stage(s)', reason)
+
+    def test_over_2000_agent_calls_allows_unlinted_and_logs(self):
+        src = "agent(P);\n" * 2001
+        lint = cast_pretool_dispatch._load(_LINT_MOD_NAME, _LINT_FILENAME)
+        with mock.patch.object(lint, 'find_violations_in_source') as mocked:
+            self._assert_allow(self._wf(script=src))
+        mocked.assert_not_called()
+        log = self._read_log()
+        self.assertIn('workflow stage-model lint skipped', log)
+        self.assertIn('bound', log)
+        self.assertEqual(len([ln for ln in log.splitlines() if 'skipped' in ln]), 1)
+
+    def test_bound_logs_never_contain_script_text(self):
+        marker = 'SECRET_SCRIPT_MARKER_55'
+        src = ("// %s\n" % marker) + "agent(P);\n" * 2001
+        self._assert_allow(self._wf(script=src))
+        self.assertNotIn(marker, self._read_log())
+
+    # -- wall-clock watchdog (SIGALRM, 2 s) ----------------------------------
+    # The size / count bounds do not cap run time on MALFORMED nesting: 150
+    # unclosed agent( + 64 KiB of padding takes ~10 s unmitigated (measured),
+    # against the hook's 5 s timeout. The watchdog ALLOWS + logs on expiry.
+    @staticmethod
+    def _slow_malformed(pad_to=64 * 1024):
+        return ("agent(" * 150).ljust(pad_to, " ")
+
+    def _arm_probe(self):
+        """Install a sentinel SIGALRM handler (restored on cleanup) so a test can
+        prove the guard put it back; returns the sentinel."""
+        def sentinel(signum, frame):
+            pass
+        prev = signal.signal(signal.SIGALRM, sentinel)
+        self.addCleanup(signal.signal, signal.SIGALRM, prev)
+        return sentinel
+
+    def _assert_timer_clean(self, sentinel):
+        self.assertIs(signal.getsignal(signal.SIGALRM), sentinel)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
+    def _timeout_log_lines(self):
+        return [ln for ln in self._read_log().splitlines() if 'timed out' in ln]
+
+    def test_pathological_input_times_out_allows_within_3s(self):
+        sentinel = self._arm_probe()
+        t0 = time.monotonic()
+        self._assert_allow(self._wf(script=self._slow_malformed()))
+        elapsed = time.monotonic() - t0
+        self.assertLess(elapsed, 3.0, 'watchdog did not cut the lint off')
+        lines = self._timeout_log_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn('workflow stage-model lint', lines[0])
+        self.assertIn(str(64 * 1024), lines[0])  # source size, in chars
+        self.assertIn('150', lines[0])           # agent( matches
+        self._assert_timer_clean(sentinel)
+
+    def test_timeout_log_line_is_content_free(self):
+        marker = 'SECRET_SCRIPT_MARKER_77'
+        src = ('// %s\n' % marker) + self._slow_malformed()
+        with mock.patch.object(cast_pretool_dispatch, '_WORKFLOW_LINT_BUDGET_SECS', 0.05):
+            self._assert_allow(self._wf(script=src))
+        self.assertEqual(len(self._timeout_log_lines()), 1)
+        self.assertNotIn(marker, self._read_log())
+
+    def test_timer_and_handler_restored_after_timeout_path(self):
+        sentinel = self._arm_probe()
+        with mock.patch.object(cast_pretool_dispatch, '_WORKFLOW_LINT_BUDGET_SECS', 0.05):
+            self._assert_allow(self._wf(script=self._slow_malformed()))
+        self.assertEqual(len(self._timeout_log_lines()), 1)
+        self._assert_timer_clean(sentinel)
+
+    def test_timer_and_handler_restored_after_normal_paths(self):
+        sentinel = self._arm_probe()
+        self._assert_deny(self._wf(script=_WF_BAD))
+        self._assert_timer_clean(sentinel)
+        self._assert_allow(self._wf(script=_WF_OK))
+        self._assert_timer_clean(sentinel)
+        self.assertEqual(self._timeout_log_lines(), [])
+
+    def test_timer_and_handler_restored_after_lint_exception(self):
+        sentinel = self._arm_probe()
+        lint = cast_pretool_dispatch._load(_LINT_MOD_NAME, _LINT_FILENAME)
+        with mock.patch.object(lint, 'find_violations_in_source',
+                               side_effect=RuntimeError('boom')):
+            self._assert_allow(self._wf(script=_WF_BAD))
+        self._assert_timer_clean(sentinel)
+
+    def test_watchdog_budget_is_two_seconds_and_cancelled(self):
+        with mock.patch.object(signal, 'setitimer', wraps=signal.setitimer) as spy:
+            self._assert_deny(self._wf(script=_WF_BAD))
+        self.assertEqual(spy.call_args_list[0], mock.call(signal.ITIMER_REAL, 2.0))
+        self.assertEqual(spy.call_args_list[-1], mock.call(signal.ITIMER_REAL, 0))
+
+    def test_runs_without_watchdog_when_setitimer_or_sigalrm_missing(self):
+        for attr in ('setitimer', 'SIGALRM'):
+            with self.subTest(missing=attr):
+                orig = getattr(signal, attr)
+                delattr(signal, attr)
+                try:
+                    self._assert_deny(self._wf(script=_WF_BAD))
+                    self._assert_allow(self._wf(script=_WF_OK))
+                finally:
+                    setattr(signal, attr, orig)
+
+    def test_non_main_thread_skips_watchdog_and_still_lints(self):
+        sentinel = self._arm_probe()
+        box = {}
+
+        def work():
+            try:
+                box['deny'] = self._run(self._wf(script=_WF_BAD))
+                box['allow'] = self._run(self._wf(script=_WF_OK))
+            except BaseException as exc:  # surfaced via the assertion below
+                box['err'] = exc
+
+        th = threading.Thread(target=work)
+        th.start()
+        th.join(30)
+        self.assertFalse(th.is_alive())
+        self.assertNotIn('err', box)
+        rc, out = box['deny']
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertEqual(box['allow'], (0, ''))
+        self._assert_timer_clean(sentinel)
+
+    def test_watchdog_armed_only_around_the_lint_itself(self):
+        # Not for other tools, and not for any Workflow input that short-circuits
+        # before linting (name-only, over either bound).
+        too_big = _WF_BAD + ' ' * (256 * 1024 + 1)
+        cases = [
+            {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'x'}},
+            {'tool_name': 'Glob', 'tool_input': {}},
+            self._wf(name='saved-workflow'),
+            self._wf(script=too_big),
+            self._wf(script="agent(P);\n" * 2001),
+        ]
+        with mock.patch.object(signal, 'setitimer') as setitimer, \
+                mock.patch.object(signal, 'signal') as sig:
+            for payload in cases:
+                with self.subTest(case=payload['tool_name'] + str(list(payload['tool_input']))):
+                    rc, out = self._run(payload)
+                    self.assertEqual((rc, out), (0, ''))
+        setitimer.assert_not_called()
+        sig.assert_not_called()
+
+    def test_e2e_pathological_input_allows_within_budget(self):
+        t0 = time.monotonic()
+        proc = self._spawn(self._wf(script=self._slow_malformed()))
+        elapsed = time.monotonic() - t0
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, b'')
+        self.assertLess(elapsed, 3.5, 'real script was not cut off by the watchdog')
+
+    # -- SIGALRM disposition after the watchdog (Low-1) -----------------------
+    # A single-shot hook process must never be left with SIG_DFL on SIGALRM: a
+    # late alarm would then terminate it (exit 142) -> crashed hook -> BLOCK.
+    def test_sig_dfl_is_replaced_by_a_noop_not_restored(self):
+        prev = signal.signal(signal.SIGALRM, signal.SIG_DFL)
+        self.addCleanup(signal.signal, signal.SIGALRM, prev)
+        self._assert_deny(self._wf(script=_WF_BAD))
+        self.assertTrue(callable(signal.getsignal(signal.SIGALRM)),
+                        'SIG_DFL was left installed after the watchdog')
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
+    def test_sig_dfl_is_replaced_by_a_noop_after_timeout_too(self):
+        prev = signal.signal(signal.SIGALRM, signal.SIG_DFL)
+        self.addCleanup(signal.signal, signal.SIGALRM, prev)
+        with mock.patch.object(cast_pretool_dispatch, '_WORKFLOW_LINT_BUDGET_SECS', 0.05):
+            self._assert_allow(self._wf(script=self._slow_malformed()))
+        self.assertEqual(len(self._timeout_log_lines()), 1)
+        self.assertTrue(callable(signal.getsignal(signal.SIGALRM)))
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
+    def test_previous_sig_ign_is_restored(self):
+        prev = signal.signal(signal.SIGALRM, signal.SIG_IGN)
+        self.addCleanup(signal.signal, signal.SIGALRM, prev)
+        self._assert_deny(self._wf(script=_WF_BAD))
+        self.assertEqual(signal.getsignal(signal.SIGALRM), signal.SIG_IGN)
+
+    def test_pending_alarm_after_helper_returns_does_not_kill_the_process(self):
+        proc = self._spawn_snippet(_PENDING_ALARM_SNIPPET, 'normal', timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode('utf-8', 'replace'))
+        self.assertEqual(proc.stdout.decode().strip(), 'ok:1')
+
+    def test_pending_alarm_after_timeout_does_not_kill_the_process(self):
+        proc = self._spawn_snippet(_PENDING_ALARM_SNIPPET, 'timeout', timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode('utf-8', 'replace'))
+        self.assertEqual(proc.stdout.decode().strip(), 'timeout')
+
+    # -- scriptPath read hardening (Low-2 + Info) -----------------------------
+    def test_fifo_scriptpath_allows_quickly(self):
+        fifo = os.path.join(self._tmpdir, 'pipe.workflow.js')
+        os.mkfifo(fifo)
+        t0 = time.monotonic()
+        proc = self._spawn(self._wf(scriptPath=fifo), timeout=20)
+        self.assertEqual((proc.returncode, proc.stdout), (0, b''))
+        self.assertLess(time.monotonic() - t0, 10.0)
+
+    def test_fifo_with_a_violating_script_in_it_is_never_read(self):
+        fifo = os.path.join(self._tmpdir, 'pipe.workflow.js')
+        os.mkfifo(fifo)
+        wfd = os.open(fifo, os.O_RDWR)  # keeps a writer alive; data is readable
+        self.addCleanup(os.close, wfd)
+        os.write(wfd, _WF_BAD.encode('utf-8'))
+        proc = self._spawn(self._wf(scriptPath=fifo), timeout=20)
+        self.assertEqual((proc.returncode, proc.stdout), (0, b''))
+
+    def test_stat_then_open_swap_to_a_fifo_cannot_hang_the_hook(self):
+        fifo = os.path.join(self._tmpdir, 'swapped.workflow.js')
+        os.mkfifo(fifo)
+        proc = self._spawn_snippet(_TOCTOU_SNIPPET, fifo, timeout=20)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode('utf-8', 'replace'))
+        self.assertEqual(proc.stdout.decode().strip(), '[]')
+
+    def test_nul_and_lone_surrogate_scriptpaths_allow_quietly(self):
+        for bad in ('a\x00b.js', '\ud800.js', '~\ud800/x.js'):
+            with self.subTest(path=bad.encode('unicode_escape')):
+                self._assert_allow(self._wf(scriptPath=bad))
+        self.record_failure.assert_not_called()
+        self.assertEqual(self._read_log(), '')
+
+    def test_lint_returning_garbage_allows(self):
+        lint = cast_pretool_dispatch._load(_LINT_MOD_NAME, _LINT_FILENAME)
+        with mock.patch.object(lint, 'find_violations_in_source', return_value=None):
+            self._assert_allow(self._wf(script=_WF_BAD))
+
+    # -- scope: nothing else changes -------------------------------------
+    def test_non_workflow_tool_with_same_input_is_unaffected(self):
+        for tool in ('Agent', 'Glob', 'Read'):
+            with self.subTest(tool=tool):
+                payload = {'tool_name': tool,
+                           'tool_input': {'script': _WF_BAD, 'subagent_type': 'x',
+                                          'file_path': os.path.join(self._tmpdir, 'f')}}
+                rc, out = self._run(payload)
+                self.assertEqual(rc, 0)
+                self.assertNotIn('"deny"', out)
+
+    def test_lint_module_is_lazy_loaded_only_for_workflow(self):
+        for tool in ('Agent', 'Glob'):
+            self._run({'tool_name': tool, 'tool_input': {'subagent_type': 'x'}})
+        self.assertNotIn(_LINT_MOD_NAME, cast_pretool_dispatch._MODULE_CACHE)
+        self._run(self._wf(script=_WF_OK))
+        self.assertIn(_LINT_MOD_NAME, cast_pretool_dispatch._MODULE_CACHE)
+
+    def test_denies_in_subprocess_context_too(self):
+        os.environ['CLAUDE_SUBPROCESS'] = '1'
+        self._assert_deny(self._wf(script=_WF_BAD))
+
+    # -- end-to-end through the real script ------------------------------
+    def _child_env(self):
+        env = dict(os.environ)
+        env['HOME'] = self._tmpdir
+        env['CAST_DB_PATH'] = os.path.join(self._tmpdir, 'nonexistent-cast.db')
+        return env
+
+    def _spawn(self, payload, timeout=60):
+        return subprocess.run(
+            [sys.executable, str(_SCRIPT_PATH)],
+            input=json.dumps(payload).encode('utf-8'),
+            capture_output=True, env=self._child_env(), timeout=timeout)
+
+    def _spawn_snippet(self, snippet, *args, timeout=60):
+        return subprocess.run(
+            [sys.executable, '-c', snippet, str(_SCRIPT_PATH), *args],
+            capture_output=True, env=self._child_env(), timeout=timeout)
+
+    def test_e2e_script_deny(self):
+        proc = self._spawn(self._wf(script=_WF_BAD))
+        self.assertEqual(proc.returncode, 0)
+        obj = json.loads(proc.stdout.decode('utf-8'))
+        self.assertEqual(obj['hookSpecificOutput']['permissionDecision'], 'deny')
+        self.assertIn('line 1', obj['hookSpecificOutput']['permissionDecisionReason'])
+
+    def test_e2e_script_allow_is_silent(self):
+        proc = self._spawn(self._wf(script=_WF_OK))
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, b'')
 
 
 if __name__ == '__main__':

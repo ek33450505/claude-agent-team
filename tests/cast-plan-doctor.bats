@@ -6,6 +6,8 @@
 #   - Plan file detection and parsing
 #   - --check exit codes and output
 #   - --resume silent-exit on missing marker
+#   - Bare-invocation default plan resolution (active-plan marker, then newest
+#     top-level plans/*.md, then the literal next-session.md path)
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -158,4 +160,122 @@ build_plan_md() {
   run python3 "$DOCTOR" --check --plan "$plan_path" --baseline /dev/null
   assert_failure
   assert_output --partial "ledger:empty"
+}
+
+# ---------------------------------------------------------------------------
+# Default plan resolution (bare manual invocation, no --plan)
+#
+# Seam: the script derives REPO_ROOT from its own location (SCRIPT_DIR.parent),
+# so these tests copy it into $HOME/sandbox-repo/scripts/ and populate
+# $HOME/sandbox-repo/plans/ — no code seam needed. $HOME is the isolated temp
+# HOME, so teardown_temp_home cleans the sandbox.
+# ---------------------------------------------------------------------------
+
+make_sandbox_repo() {
+  SANDBOX="$HOME/sandbox-repo"
+  mkdir -p "$SANDBOX/scripts" "$SANDBOX/plans/archive"
+  cp "$DOCTOR" "$SANDBOX/scripts/cast-plan-doctor.py"
+  SANDBOX_DOCTOR="$SANDBOX/scripts/cast-plan-doctor.py"
+}
+
+# write_plan <path> — minimal well-formed ledger: a done row on `main` plus a
+# NEXT row (--resume only emits a briefing when a NEXT row exists, so without it
+# the --resume tests below could not tell "silent by design" from "silent because
+# the fixture is empty").
+write_plan() {
+  build_plan_md "| 1 | Phase A | U1 | P0 | main | ✅ Done |
+| 2 | Phase B | U2 | P1 | feature/b1 | ☐ NEXT |" > "$1"
+}
+
+@test "plan-doctor default plan: active-plan marker wins over plans/*.md" {
+  make_sandbox_repo
+  mkdir -p "$HOME/elsewhere"
+  write_plan "$HOME/elsewhere/marked.md"
+  write_plan "$SANDBOX/plans/newer.md"
+  touch -t 202001010000 "$HOME/elsewhere/marked.md"
+  touch -t 202401010000 "$SANDBOX/plans/newer.md"
+  printf '%s\n' "$HOME/elsewhere/marked.md" > "$HOME/.claude/config/active-plan"
+
+  run python3 "$SANDBOX_DOCTOR" --json
+  assert_success
+  assert_output --partial "\"plan_path\": \"$HOME/elsewhere/marked.md\""
+}
+
+@test "plan-doctor default plan: no marker picks newest top-level plans/*.md, not archive/" {
+  make_sandbox_repo
+  write_plan "$SANDBOX/plans/old.md"
+  write_plan "$SANDBOX/plans/new.md"
+  write_plan "$SANDBOX/plans/archive/archived.md"
+  touch -t 202001010000 "$SANDBOX/plans/old.md"
+  touch -t 202401010000 "$SANDBOX/plans/new.md"
+  touch -t 202601010000 "$SANDBOX/plans/archive/archived.md"
+
+  run python3 "$SANDBOX_DOCTOR" --json
+  assert_success
+  assert_output --partial "\"plan_path\": \"$SANDBOX/plans/new.md\""
+}
+
+@test "plan-doctor default plan: stale marker falls through to newest plans/*.md" {
+  make_sandbox_repo
+  write_plan "$SANDBOX/plans/new.md"
+  printf '%s\n' "$HOME/gone/missing.md" > "$HOME/.claude/config/active-plan"
+
+  run python3 "$SANDBOX_DOCTOR" --json
+  assert_success
+  assert_output --partial "\"plan_path\": \"$SANDBOX/plans/new.md\""
+}
+
+@test "plan-doctor default plan: explicit --plan beats marker and plans/*.md" {
+  make_sandbox_repo
+  mkdir -p "$HOME/elsewhere"
+  write_plan "$HOME/elsewhere/marked.md"
+  write_plan "$SANDBOX/plans/newer.md"
+  write_plan "$HOME/explicit.md"
+  printf '%s\n' "$HOME/elsewhere/marked.md" > "$HOME/.claude/config/active-plan"
+
+  run python3 "$SANDBOX_DOCTOR" --json --plan "$HOME/explicit.md"
+  assert_success
+  assert_output --partial "\"plan_path\": \"$HOME/explicit.md\""
+}
+
+@test "plan-doctor default plan: nothing resolvable keeps the next-session.md not-found error" {
+  make_sandbox_repo
+  # plans/ holds only archive/ content (skipped) — no marker, no top-level *.md
+  write_plan "$SANDBOX/plans/archive/archived.md"
+
+  run python3 "$SANDBOX_DOCTOR"
+  assert_failure
+  assert_output --partial "Plan file not found: $SANDBOX/plans/next-session.md"
+}
+
+@test "plan-doctor --resume: no marker stays silent even when plans/*.md exist" {
+  make_sandbox_repo
+  write_plan "$SANDBOX/plans/next-session.md"
+  write_plan "$SANDBOX/plans/newer.md"
+
+  run python3 "$SANDBOX_DOCTOR" --resume
+  assert_success
+  assert_output ""
+}
+
+@test "plan-doctor --resume: explicit --plan is honoured even when it equals the old default path" {
+  make_sandbox_repo
+  write_plan "$SANDBOX/plans/next-session.md"
+
+  run python3 "$SANDBOX_DOCTOR" --resume --plan "$SANDBOX/plans/next-session.md"
+  assert_success
+  assert_output --partial "YOU ARE HERE"
+  assert_output --partial "Canonical plan: $SANDBOX/plans/next-session.md"
+}
+
+@test "plan-doctor --resume: marker path is used when --plan is omitted" {
+  make_sandbox_repo
+  mkdir -p "$HOME/elsewhere"
+  write_plan "$HOME/elsewhere/marked.md"
+  write_plan "$SANDBOX/plans/newer.md"
+  printf '%s\n' "$HOME/elsewhere/marked.md" > "$HOME/.claude/config/active-plan"
+
+  run python3 "$SANDBOX_DOCTOR" --resume
+  assert_success
+  assert_output --partial "Canonical plan: $HOME/elsewhere/marked.md"
 }

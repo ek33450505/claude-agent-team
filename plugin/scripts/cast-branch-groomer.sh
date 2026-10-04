@@ -101,12 +101,49 @@ _has_open_pr() {
   return 1
 }
 
+# ── Hostile-repo hardening ───────────────────────────────────────────────
+# Runs unattended (launchd), OUTSIDE the Bash sandbox, over repos/worktrees an agent can
+# write to. Repo-local config an agent plants must not execute code during the read-only
+# checks below: log.showSignature+gpg.program (git log), core.fsmonitor (status/diff),
+# diff.external / textconv (git diff), filter.<drv>.clean/process (re-hash of stat-dirty
+# files). fsmonitor etc. are forced off with -c; filter drivers are enumerated from config
+# (a read — nothing is executed) and each one's exec knobs blanked. Bash 3.2-safe.
+_SAFE_GIT_BASE=(-c core.fsmonitor=false -c core.untrackedCache=false -c core.hooksPath=/dev/null
+  -c log.showSignature=false --no-replace-objects --no-optional-locks)
+SAFE_GIT_ENV=()
+# _safe_git_args <repo-dir> — populate SAFE_GIT_ENV (env assignments for `env ... git`). All
+# hardening config goes through GIT_CONFIG_COUNT/KEY_i/VALUE_i, NOT `-c k=v`: a filter driver
+# name containing '=' would be mis-split by -c parsing and escape the blanking. The count is
+# set explicitly with keys from index 0, so an inherited GIT_CONFIG_COUNT cannot add entries.
+_safe_git_args() {
+  local _key _drv _n=0 _k
+  SAFE_GIT_ENV=()
+  _sg_add() { SAFE_GIT_ENV+=("GIT_CONFIG_KEY_${_n}=$1" "GIT_CONFIG_VALUE_${_n}=$2"); _n=$((_n + 1)); }
+  _sg_add core.fsmonitor false
+  _sg_add core.untrackedCache false
+  _sg_add core.hooksPath /dev/null
+  _sg_add log.showSignature false
+  while IFS= read -r -d '' _key; do
+    _drv="${_key#filter.}"
+    [[ "$_drv" == *.* ]] || continue
+    _drv="${_drv%.*}"
+    for _k in clean smudge process; do _sg_add "filter.${_drv}.${_k}" ""; done
+    _sg_add "filter.${_drv}.required" false
+  done < <(git -C "$1" config -z --name-only --get-regexp '^filter\.' 2>/dev/null || true)
+  SAFE_GIT_ENV+=("GIT_CONFIG_COUNT=${_n}")
+}
+
 # ── Date helpers ─────────────────────────────────────────────────────────
 _epoch_now() { date +%s; }
 _days_since_commit() {
   local branch="$1"
   local commit_epoch
-  commit_epoch=$(git log -1 --format='%ct' "refs/heads/$branch" 2>/dev/null || echo 0)
+  # Plumbing (for-each-ref) instead of `git log`: log honours log.showSignature/gpg.program.
+  # Pattern also matches refs/heads/<branch>/..., so keep only the exact ref; missing -> 0.
+  commit_epoch=$(GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none env -u GIT_CONFIG_PARAMETERS git "${_SAFE_GIT_BASE[@]}" for-each-ref \
+    --format='%(refname) %(committerdate:unix)' "refs/heads/$branch" 2>/dev/null |
+    awk -v r="refs/heads/$branch" '$1 == r { print $2; exit }') || commit_epoch=0
+  commit_epoch="${commit_epoch:-0}"
   local now; now=$(_epoch_now)
   echo $(( (now - commit_epoch) / 86400 ))
 }
@@ -185,7 +222,26 @@ if [[ "$DO_WORKTREES" -eq 1 ]]; then
     [[ "$wt_path" == "$(git rev-parse --show-toplevel 2>/dev/null)" ]] && continue
     if [[ ! -d "$wt_path" ]]; then continue; fi
     # Check: no uncommitted changes
-    if ! git -C "$wt_path" diff --quiet 2>/dev/null; then
+    _safe_git_args "$wt_path"
+    # FAIL-SAFE submodule guard. The dirty check below uses --ignore-submodules=all (a submodule's
+    # own config could define filter drivers we never enumerated), so uncommitted work INSIDE a
+    # submodule would be invisible to it and `worktree remove --force` would destroy it. Keep any
+    # worktree that has a .gitmodules or a gitlink (mode 160000) in its index. `ls-files -s` reads
+    # the index only (no stat compare, no filters). An unreadable index also keeps the worktree.
+    if [[ -e "$wt_path/.gitmodules" ]]; then
+      printf '[groomer] Keeping worktree (has submodules — check manually): %s\n' "$wt_path"
+      continue
+    fi
+    if ! _wt_index="$(GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none env -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM "${SAFE_GIT_ENV[@]}" git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-replace-objects --no-optional-locks -C "$wt_path" ls-files -s 2>/dev/null)"; then
+      printf '[groomer] Keeping worktree (index unreadable — check manually): %s\n' "$wt_path"
+      continue
+    fi
+    if printf '%s\n' "$_wt_index" | grep -q '^160000 '; then
+      printf '[groomer] Keeping worktree (has submodules — check manually): %s\n' "$wt_path"
+      continue
+    fi
+    # --ignore-submodules=all (safe: submodule worktrees were kept above).
+    if ! GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none env -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM "${SAFE_GIT_ENV[@]}" git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false -c core.untrackedCache=false --no-replace-objects --no-optional-locks -C "$wt_path" diff --quiet --ignore-submodules=all --no-ext-diff --no-textconv 2>/dev/null; then
       printf '[groomer] Keeping worktree (dirty): %s\n' "$wt_path"
       continue
     fi

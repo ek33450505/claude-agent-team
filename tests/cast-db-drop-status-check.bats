@@ -12,7 +12,7 @@ HELPER="$REPO_DIR/scripts/cast-db-drop-status-check.py"
 setup() {
   load 'helpers/setup'
   setup_temp_home  # sets HOME to a temp dir; exports ORIG_HOME
-  export TEST_DB="/tmp/test-drop-check-$$.db"
+  export TEST_DB="$HOME/test-drop-check.db"  # under the isolated temp HOME, never /tmp
   # A realistic legacy agent_runs WITH the status CHECK, a FK, organic columns,
   # data, and a custom index.
   sqlite3 "$TEST_DB" "
@@ -31,6 +31,8 @@ setup() {
 }
 
 teardown() {
+  # A holder left over from a failed lock-contention test must not outlive it.
+  if [ -n "${HOLDER_PID:-}" ]; then kill "$HOLDER_PID" 2>/dev/null || true; fi
   rm -f "$TEST_DB"
   teardown_temp_home
 }
@@ -98,7 +100,7 @@ teardown() {
 }
 
 @test "helper exits 0 when the DB does not exist" {
-  run python3 "$HELPER" "/tmp/nonexistent-drop-check-$$.db"
+  run python3 "$HELPER" "$HOME/nonexistent-drop-check.db"
   assert_success
 }
 
@@ -106,4 +108,125 @@ teardown() {
   python3 "$HELPER" "$TEST_DB"
   run sqlite3 "$TEST_DB" "PRAGMA integrity_check;"
   assert_output "ok"
+}
+
+# --- Audit B-3 L1: the schema/row-count reads must happen INSIDE the write
+# transaction (BEGIN IMMEDIATE). Reading before BEGIN let a concurrent writer change
+# the columns between the read and the table swap, silently dropping that column's
+# data. The no-op fast path must stay lock-free so a routine init never takes a
+# write lock.
+
+# Take the RESERVED (write) lock in a background process, signal readiness, hold it
+# until $HOME/release exists, then add + backfill a column and commit. `3>&-` keeps
+# the background process off bats' TAP pipe (an inherited fd 3 can freeze the suite).
+_hold_write_lock_then_add_column() {
+  python3 - "$TEST_DB" "$HOME/ready" "$HOME/release" 3>&- <<'PY' &
+import os, sqlite3, sys, time
+db, ready, release = sys.argv[1:4]
+c = sqlite3.connect(db, timeout=10, isolation_level=None)
+c.execute("BEGIN IMMEDIATE")
+open(ready, "w").close()
+for _ in range(400):  # bounded: gives up after ~20s so a failed test cannot hang
+    if os.path.exists(release):
+        break
+    time.sleep(0.05)
+c.execute("ALTER TABLE agent_runs ADD COLUMN late_col TEXT")
+c.execute("UPDATE agent_runs SET late_col='x'")
+c.execute("COMMIT")
+PY
+  HOLDER_PID=$!
+  local _
+  for _ in $(seq 1 100); do
+    [ -f "$HOME/ready" ] && return 0
+    sleep 0.05
+  done
+  return 1
+}
+
+@test "L1 race: a column added by a concurrent writer is preserved by the migration" {
+  _hold_write_lock_then_add_column
+  python3 "$HELPER" "$TEST_DB" >"$HOME/helper.out" 2>&1 3>&- &
+  local helper_pid=$!
+  # Give the helper time to reach the lock wait (python start-up is ~50ms; 2s is
+  # generous). If it were released before it read anything, the pre-fix helper would
+  # also pass - so this wait is what makes the test discriminate stale vs fresh reads.
+  sleep 2
+  kill -0 "$helper_pid" # still running => genuinely blocked behind the held lock
+  touch "$HOME/release"
+  local rc=0
+  wait "$helper_pid" || rc=$?
+  wait "$HOLDER_PID"
+  [ "$rc" -eq 0 ]
+  # late_col (added mid-migration) must survive the table rebuild, data included.
+  run sqlite3 "$TEST_DB" "SELECT group_concat(late_col) FROM agent_runs;"
+  assert_success
+  assert_output "x,x,x"
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE name='agent_runs' AND sql LIKE '%CHECK%';"
+  assert_output "0"
+}
+
+@test "L1 fast path: an already-clean DB returns 0 without waiting on a held write lock" {
+  sqlite3 "$TEST_DB" "DROP TABLE agent_runs; CREATE TABLE agent_runs (id INTEGER PRIMARY KEY, agent TEXT, status TEXT);"
+  _hold_write_lock_then_add_column
+  local t0=$SECONDS
+  run python3 "$HELPER" "$TEST_DB"
+  local dt=$((SECONDS - t0))
+  touch "$HOME/release"
+  wait "$HOLDER_PID"
+  assert_success
+  [ "$dt" -lt 5 ] # busy timeout is 10s: waiting on the lock would take >=10s
+}
+
+# --- migration-reviewer follow-up: the rebuild recreates indexes only. A TRIGGER on
+# agent_runs would be silently dropped with the old table (helper reporting success),
+# and a VIEW/trigger referencing it makes the RENAME fail. Neither exists in the repo
+# schema today, so the helper must REFUSE (non-zero, one clear line naming them) and
+# leave the table exactly as it was - it never tries to recreate them.
+
+_assert_untouched_after_refusal() { # $1 = dependent object name that must survive
+  run sqlite3 "$TEST_DB" "SELECT sql FROM sqlite_master WHERE name='agent_runs';"
+  assert_output --partial "CHECK (status"
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE name='$1';"
+  assert_output "1"
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;"
+  assert_output "3"
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE name='agent_runs__newschema';"
+  assert_output "0"
+}
+
+@test "dependents: a trigger on agent_runs blocks the rebuild; CHECK, trigger and rows intact" {
+  sqlite3 "$TEST_DB" "CREATE TRIGGER trg_ar_audit AFTER INSERT ON agent_runs BEGIN SELECT 1; END;"
+  run python3 "$HELPER" "$TEST_DB"
+  assert_failure
+  assert_output --partial "refusing to rebuild agent_runs"
+  assert_output --partial "trg_ar_audit"
+  _assert_untouched_after_refusal trg_ar_audit
+}
+
+@test "dependents: a view referencing agent_runs blocks the rebuild; CHECK, view and rows intact" {
+  sqlite3 "$TEST_DB" "CREATE VIEW v_ar_agents AS SELECT agent, status FROM agent_runs;"
+  run python3 "$HELPER" "$TEST_DB"
+  assert_failure
+  assert_output --partial "refusing to rebuild agent_runs"
+  assert_output --partial "v_ar_agents"
+  _assert_untouched_after_refusal v_ar_agents
+}
+
+@test "dependents: a trigger on ANOTHER table whose body references agent_runs also blocks" {
+  sqlite3 "$TEST_DB" "CREATE TRIGGER trg_sess_cleanup AFTER DELETE ON sessions BEGIN DELETE FROM agent_runs WHERE session_id = OLD.id; END;"
+  run python3 "$HELPER" "$TEST_DB"
+  assert_failure
+  assert_output --partial "refusing to rebuild agent_runs"
+  assert_output --partial "trg_sess_cleanup"
+  _assert_untouched_after_refusal trg_sess_cleanup
+}
+
+@test "dependents: an unrelated trigger/view does not block the migration" {
+  sqlite3 "$TEST_DB" "CREATE TABLE other (id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TRIGGER trg_other AFTER INSERT ON other BEGIN SELECT 1; END;
+    CREATE VIEW v_other AS SELECT v FROM other;"
+  run python3 "$HELPER" "$TEST_DB"
+  assert_success
+  run sqlite3 "$TEST_DB" "SELECT sql FROM sqlite_master WHERE name='agent_runs';"
+  refute_output --partial "CHECK (status"
 }

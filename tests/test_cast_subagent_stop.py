@@ -23,6 +23,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -2049,6 +2050,108 @@ class TestEventFilenameDisambiguator(_IsolatedHomeTestCase):
         self.assertEqual(len(files), 2, f"expected 2 distinct checkpoint files, got {files}")
         for f in files:
             self.assertTrue(f.startswith(self._FROZEN_TS))
+
+
+class TestStage15RelatedCommitHostileRepo(_IsolatedDbPathTestCase):
+    """SECURITY (2026-10-03): stage15 resolves ``related_commit`` in the hook's cwd, which
+    can be an agent-writable repo, OUTSIDE the Bash sandbox. The old ``git log -1`` honoured
+    repo-local ``log.showSignature`` + ``gpg.program`` and executed an agent-planted program
+    when HEAD carried a ``gpgsig`` header. The fix is plumbing (``rev-parse --verify -q HEAD``)
+    with exec-capable config forced off. Marker-file tests: the planted program must NOT run,
+    and the sha must still be recorded."""
+
+    _SCHEMA = (
+        "CREATE TABLE incidents (id TEXT, occurred_at TEXT, problem_summary TEXT, "
+        "fix_summary TEXT, related_files TEXT, related_commit TEXT, "
+        "resolution_status TEXT, surfaced_by TEXT)"
+    )
+
+    def setUp(self):
+        super().setUp()
+        self._git_env = dict(os.environ)
+        self._git_env.update({'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_SYSTEM': os.devnull,
+                              'GIT_CONFIG_NOSYSTEM': '1'})
+        self._marker_dir = os.path.join(self._tmpdir, 'markers')
+        os.makedirs(self._marker_dir)
+        self._repo = os.path.join(self._tmpdir, 'repo')
+        os.makedirs(self._repo)
+        self._db = os.path.join(self._tmpdir, 'incidents.db')
+        conn = sqlite3.connect(self._db)
+        conn.execute(self._SCHEMA)
+        conn.commit()
+        conn.close()
+        self._orig_cwd = os.getcwd()
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        super().tearDown()
+
+    def _git(self, *args, stdin=None, cwd=None):
+        r = subprocess.run(
+            ['git'] + list(args), cwd=cwd or self._repo, env=self._git_env, input=stdin,
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(r.returncode, 0, 'git %s failed: %s' % (args, r.stderr))
+        return r.stdout.strip()
+
+    def _marker_script(self, name):
+        path = os.path.join(self._marker_dir, name + '.sh')
+        with open(path, 'w') as fh:
+            fh.write('#!/bin/sh\ntouch "%s/fired-%s"\nexit 1\n' % (self._marker_dir, name))
+        os.chmod(path, 0o755)
+        return path
+
+    def _fired(self, name):
+        return os.path.exists(os.path.join(self._marker_dir, 'fired-' + name))
+
+    def _signed_head_repo(self):
+        """Repo whose HEAD commit carries a gpgsig header, plus hostile showSignature config."""
+        self._git('init', '-q', '-b', 'main')
+        tree = self._git('mktree', stdin='')
+        body = ('tree %s\nauthor T <t@t> 1577836800 +0000\ncommitter T <t@t> 1577836800 +0000\n'
+                'gpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n'
+                '\nsigned\n' % tree)
+        sha = self._git('hash-object', '-t', 'commit', '-w', '--stdin', stdin=body)
+        self._git('update-ref', 'refs/heads/main', sha)
+        self._git('config', 'log.showSignature', 'true')
+        self._git('config', 'gpg.program', self._marker_script('gpg'))
+        return sha
+
+    def _run_stage15(self):
+        ctx = css.Ctx()
+        ctx.agent_name = 'debugger'
+        ctx.response_text = 'Summary: fixed it\nStatus: DONE\n'
+        ctx.db_path = self._db
+        ctx.db_present = True
+        ctx.ts_iso = '2026-10-03T00:00:00Z'
+        ctx.session_id = 'sess-1'
+        os.chdir(self._repo)
+        css.stage15_incident_record(ctx)
+        conn = sqlite3.connect(self._db)
+        try:
+            return [row[0] for row in conn.execute('SELECT related_commit FROM incidents')]
+        finally:
+            conn.close()
+
+    def test_control_raw_git_log_fires_planted_gpg_program(self):
+        """Proves the fixture is hostile: the OLD call executes the planted program."""
+        self._signed_head_repo()
+        self._git('log', '-1', '--format=%H')
+        self.assertTrue(self._fired('gpg'), 'fixture is not hostile - control did not fire')
+
+    def test_hostile_signed_head_does_not_execute_gpg_program_and_sha_recorded(self):
+        sha = self._signed_head_repo()
+        rows = self._run_stage15()
+        self.assertFalse(self._fired('gpg'), 'planted gpg.program executed by the hook')
+        self.assertEqual(rows, [sha])
+
+    def test_non_repo_cwd_records_empty_commit(self):
+        self._repo = os.path.join(self._tmpdir, 'not-a-repo')
+        os.makedirs(self._repo)
+        self.assertEqual(self._run_stage15(), [''])
+
+    def test_unborn_head_records_empty_commit(self):
+        self._git('init', '-q', '-b', 'main')
+        self.assertEqual(self._run_stage15(), [''])
 
 
 if __name__ == '__main__':

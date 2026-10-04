@@ -8,18 +8,28 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Dirty-tree guard: refuse to overwrite uncommitted edits in paths install.sh touches.
 # Set CAST_INSTALL_FORCE=1 to bypass (for CI / test harnesses that manage their own git state).
+# GUARD_PATHS is the single source of truth: every repo path install.sh deploys from.
+# Keep it in sync with the deploy map below (an unguarded deploy source lets an uncommitted
+# loosening of an enforcement file ship on the next reinstall). Missing paths are harmless
+# to git status. bash 3.2-safe: plain indexed array, no declare -A / mapfile.
+GUARD_PATHS=(
+  agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
+  macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/
+)
 if [[ "${CAST_INSTALL_FORCE:-0}" != "1" ]]; then
-  DIRTY=false
-  if ! git -C "$SCRIPT_DIR" diff --quiet HEAD -- agents/ scripts/ bin/ rules-core/ 2>/dev/null; then
-    DIRTY=true
-  elif git -C "$SCRIPT_DIR" status --porcelain -- agents/ scripts/ bin/ rules-core/ 2>/dev/null | grep -q '^??'; then
-    DIRTY=true
+  # One status call both detects and lists: tracked changes (staged or not) plus untracked
+  # files. --untracked-files=all defeats status.showUntrackedFiles=no and lists files, not
+  # collapsed directories. Fail closed (with a message) if git cannot answer, e.g. outside a
+  # work tree or on a dubious-ownership checkout — never skip the guard silently.
+  if ! DIRTY_FILES="$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=all -- "${GUARD_PATHS[@]}" 2>/dev/null)"; then
+    echo "ERROR: install.sh aborted — cannot verify the working tree is clean: $SCRIPT_DIR is not a usable git work tree." >&2
+    echo "Run install.sh from a git checkout of claude-agent-team (or set CAST_INSTALL_FORCE=1 to bypass)." >&2
+    exit 1
   fi
-  if [[ "$DIRTY" == "true" ]]; then
-    DIRTY_FILES="$(git -C "$SCRIPT_DIR" diff --name-only HEAD -- agents/ scripts/ bin/ rules-core/ 2>/dev/null)"
+  if [[ -n "$DIRTY_FILES" ]]; then
     echo "ERROR: install.sh aborted — uncommitted changes in install-managed paths:" >&2
     echo "$DIRTY_FILES" >&2
-    echo "Commit or stash these changes before running install.sh (or set CAST_INSTALL_FORCE=1 to bypass)." >&2
+    echo "Commit or remove these changes before running install.sh (or set CAST_INSTALL_FORCE=1 to bypass)." >&2
     exit 1
   fi
 fi
@@ -357,22 +367,36 @@ success "  Scripts installed (including cast_db.py)"
 # enforcement config — network allowlist, filesystem denyRead/allowRead, credentials deny;
 # must reach existing installs on reinstall: 2026-07-02 allowRead change failed to deploy
 # while sandbox lived in skip-if-exists 60-meta). User MCP servers belong in ~/.claude.json
-# (user/project scope), NOT in the managed fragment.
-# User-customizable fragments (env, permissions, etc.) skip-if-exists.
+# (user/project scope), NOT in the managed fragment. 12-ask.json (ask-gate enforcement —
+# permission prompts before destructive/credential tool calls; sibling of 11-deny; a
+# 2026-10-03 Neon ask-list change failed to deploy while it was skip-if-exists).
+# 05-behavior.json (carries sandbox.failIfUnavailable) and 10-permissions.json are
+# enforcement fragments too: a repo fix to them otherwise never reaches the machine —
+# the same failure as 12-ask on 2026-10-03. Per-user customisations belong in
+# ~/.claude/settings.local.json, NOT in a managed fragment (and NOT in
+# ~/.claude/settings.json: cast-merge-settings.sh regenerates it from the fragments on
+# every install, so only settings.local.json survives).
+# Remaining fragments (env, model overrides, etc.) skip-if-exists; a differing
+# copy is reported (report-only drift WARN after the loop), never overwritten.
 # Downstream-only fragments (filenames not in source) are preserved by virtue of never being
 # touched. Backup of the prior CAST-owned copy goes to backups/.
 info "Installing settings fragments..."
 mkdir -p "$CLAUDE_DIR/managed-settings.d"
+FRAGMENTS_DRIFTED=""
+FRAGMENTS_DRIFT_COUNT=0
 for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
     [ -f "$fragment" ] || continue
     base="$(basename "$fragment")"
     dest="$CLAUDE_DIR/managed-settings.d/$base"
     case "$base" in
-        *-hooks-*.json|50-mcp.json|11-deny.json|61-sandbox.json)
+        *-hooks-*.json|50-mcp.json|05-behavior.json|10-permissions.json|11-deny.json|12-ask.json|61-sandbox.json)
             # CAST-owned: overwrite to propagate source updates
             if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
                 mkdir -p "$BACKUP_DIR/managed-settings.d"
                 cp "$dest" "$BACKUP_DIR/managed-settings.d/$base"
+                # cp inherits the live file's mode (possibly 644); backups are 600 regardless.
+                chmod 600 "$BACKUP_DIR/managed-settings.d/$base"
+                warn "  Replaced (differed from repo): managed-settings.d/$base — prior copy backed up to $BACKUP_DIR/managed-settings.d/$base"
             fi
             cp "$fragment" "$dest"
             success "  Synced: managed-settings.d/$base"
@@ -381,6 +405,11 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
             # User-customizable: skip if present
             if [ -f "$dest" ]; then
                 info "  Skipped (exists): managed-settings.d/$base"
+                if ! cmp -s "$fragment" "$dest"; then
+                    FRAGMENTS_DRIFTED="$FRAGMENTS_DRIFTED$base
+"
+                    FRAGMENTS_DRIFT_COUNT=$((FRAGMENTS_DRIFT_COUNT + 1))
+                fi
             else
                 cp "$fragment" "$dest"
                 success "  Installed: managed-settings.d/$base"
@@ -388,6 +417,19 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
             ;;
     esac
 done
+
+# Drift report (report-only — install.sh NEVER overwrites a user-customizable fragment).
+# Local customization is legitimate; this only surfaces that the copies differ.
+if [ "$FRAGMENTS_DRIFT_COUNT" -gt 0 ]; then
+    warn "  WARNING: $FRAGMENTS_DRIFT_COUNT user-customizable settings fragment(s) differ from the repo source (install.sh never overwrites these):"
+    while IFS= read -r drifted_name; do
+        [ -n "$drifted_name" ] || continue
+        warn "    - $drifted_name"
+    done <<EOF
+$FRAGMENTS_DRIFTED
+EOF
+    warn "  Review with: diff \"$SCRIPT_DIR/managed-settings.d/<name>\" \"$CLAUDE_DIR/managed-settings.d/<name>\""
+fi
 
 # Harden fragment permissions — fragments may contain tokens/paths; 644 is too open
 chmod 600 "$CLAUDE_DIR"/managed-settings.d/*.json 2>/dev/null || true

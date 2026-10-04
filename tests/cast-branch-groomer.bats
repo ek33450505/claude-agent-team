@@ -45,6 +45,226 @@ _create_branch_aged() {
 }
 
 # ---------------------------------------------------------------------------
+# Test 0: SECURITY (2026-10-03) hostile repo-local config must not execute during the
+#         groomer's age check (git log -> for-each-ref) or worktree dirty check
+#         (git diff --quiet). Marker-file tests; dry-run only, never --apply.
+# ---------------------------------------------------------------------------
+_gx_marker_script() { # name [body]
+  printf '#!/bin/sh\ntouch "%s/fired-%s"\n%s\n' "$GX_MARK" "$1" "${2:-exit 0}" > "$GX_MARK/$1.sh"
+  chmod +x "$GX_MARK/$1.sh"
+}
+_gx_fired() { find "$GX_MARK" -name 'fired-*' | wc -l | tr -d ' '; }
+_gx_setup() {
+  unset GIT_DIR GIT_WORK_TREE # the file-level setup() exports these; they override git -C
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
+  GX_MARK="$BATS_TEST_TMPDIR/markers"
+  GX_REPO="$BATS_TEST_TMPDIR/hostile"
+  mkdir -p "$GX_MARK"
+  _gx_marker_script filter cat
+  _gx_marker_script process
+  _gx_marker_script fsmonitor
+  _gx_marker_script eqfilter cat
+  _gx_marker_script subfilter cat
+  _gx_marker_script diffext
+  _gx_marker_script textconv 'cat "$1"'
+  _gx_marker_script gpg 'exit 1'
+  git init -q --initial-branch=main "$GX_REPO"
+  git -C "$GX_REPO" config user.email "test@example.com"
+  git -C "$GX_REPO" config user.name "Test User"
+  printf 'a.txt filter=x\nb.txt filter=Y.z\nc.txt filter=a=b\n*.txt diff=y\n' > "$GX_REPO/.gitattributes"
+  echo eq > "$GX_REPO/c.txt"
+  echo hello > "$GX_REPO/a.txt"
+  echo world > "$GX_REPO/b.txt"
+  touch -t 202001010000 "$GX_REPO/.gitattributes" "$GX_REPO/a.txt" "$GX_REPO/b.txt" "$GX_REPO/c.txt"
+  git -C "$GX_REPO" add -A
+  git -C "$GX_REPO" commit -q -m init
+}
+_gx_plant() { # hostile config planted AFTER the base commit / worktree creation
+  git -C "$GX_REPO" config filter.x.clean "$GX_MARK/filter.sh"
+  git -C "$GX_REPO" config filter.Y.z.process "$GX_MARK/process.sh"
+  git -C "$GX_REPO" config filter.Y.z.required true
+  git -C "$GX_REPO" config core.fsmonitor "$GX_MARK/fsmonitor.sh"
+  git -C "$GX_REPO" config "filter.a=b.clean" "$GX_MARK/eqfilter.sh"
+  git -C "$GX_REPO" config diff.external "$GX_MARK/diffext.sh"
+  git -C "$GX_REPO" config diff.y.textconv "$GX_MARK/textconv.sh"
+}
+
+@test "groomer hostile repo: branch age ignores planted gpg.program on a gpgsig tip and stays correct" {
+  _gx_setup
+  local tree sha
+  tree="$(git -C "$GX_REPO" rev-parse 'main^{tree}')"
+  sha="$(printf 'tree %s\nauthor T <t@t> 1577836800 +0000\ncommitter T <t@t> 1577836800 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\nsigned\n' "$tree" |
+    git -C "$GX_REPO" hash-object -t commit -w --stdin)"
+  git -C "$GX_REPO" update-ref refs/heads/worktree-agent-signed "$sha"        # 2020 -> stale
+  git -C "$GX_REPO" update-ref refs/heads/worktree-agent-fresh refs/heads/main # committed now -> fresh
+  git -C "$GX_REPO" config log.showSignature true
+  git -C "$GX_REPO" config gpg.program "$GX_MARK/gpg.sh"
+  # Control: the OLD call (porcelain git log) executes the planted program
+  git -C "$GX_REPO" log -1 --format='%ct' refs/heads/worktree-agent-signed >/dev/null 2>&1 || true
+  [ -e "$GX_MARK/fired-gpg" ]
+  rm -f "$GX_MARK"/fired-*
+  run bash "$GROOMER" --dry-run --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Would delete branch: worktree-agent-signed"
+  refute_output --partial "Would delete branch: worktree-agent-fresh"
+  [ "$(_gx_fired)" = "0" ]
+}
+
+@test "groomer hostile repo: filter driver name containing '=' is blanked in the worktree check" {
+  _gx_setup
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  _gx_plant
+  touch "$BATS_TEST_TMPDIR/gwt/c.txt"
+  # (other drivers blanked in the control only: the required process filter would die first)
+  git -c core.fsmonitor=false -c filter.x.clean= -c filter.Y.z.process= -c filter.Y.z.required=false \
+    -C "$BATS_TEST_TMPDIR/gwt" status --porcelain >/dev/null 2>&1 || true
+  [ -e "$GX_MARK/fired-eqfilter" ] # control
+  rm -f "$GX_MARK"/fired-*
+  touch -t 202201010000 "$BATS_TEST_TMPDIR/gwt/c.txt"
+  run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
+  assert_success
+  refute_output --partial "Keeping worktree (dirty)"
+  [ "$(_gx_fired)" = "0" ]
+}
+
+@test "groomer hostile repo: submodule-local clean filter on a stat-dirty file does not run" {
+  _gx_setup
+  mkdir -p "$BATS_TEST_TMPDIR/subsrc"
+  git init -q --initial-branch=main "$BATS_TEST_TMPDIR/subsrc"
+  git -C "$BATS_TEST_TMPDIR/subsrc" config user.email t@t
+  git -C "$BATS_TEST_TMPDIR/subsrc" config user.name t
+  printf '* filter=sf\n' > "$BATS_TEST_TMPDIR/subsrc/.gitattributes"
+  echo f > "$BATS_TEST_TMPDIR/subsrc/f.txt"
+  git -C "$BATS_TEST_TMPDIR/subsrc" add -A
+  git -C "$BATS_TEST_TMPDIR/subsrc" commit -q -m i
+  git -C "$GX_REPO" -c protocol.file.allow=always submodule add -q "$BATS_TEST_TMPDIR/subsrc" sub >/dev/null 2>&1
+  git -C "$GX_REPO" commit -q -m sub
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  git -C "$BATS_TEST_TMPDIR/gwt" -c protocol.file.allow=always submodule update --init -q >/dev/null 2>&1
+  git -C "$BATS_TEST_TMPDIR/gwt/sub" config filter.sf.clean "$GX_MARK/subfilter.sh"
+  touch -t 202101010000 "$BATS_TEST_TMPDIR/gwt/sub/f.txt" # stat-dirty inside the submodule
+  git -C "$BATS_TEST_TMPDIR/gwt" diff --quiet >/dev/null 2>&1 || true
+  [ -e "$GX_MARK/fired-subfilter" ] # control
+  rm -f "$GX_MARK"/fired-*
+  touch -t 202201010000 "$BATS_TEST_TMPDIR/gwt/sub/f.txt"
+  run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
+  assert_success
+  [ "$(_gx_fired)" = "0" ]
+}
+
+@test "groomer hostile repo: inherited GIT_CONFIG_PARAMETERS fsmonitor does not run in the worktree check" {
+  _gx_setup
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  export GIT_CONFIG_PARAMETERS="'core.fsmonitor=$GX_MARK/fsmonitor.sh'"
+  git -C "$BATS_TEST_TMPDIR/gwt" status --porcelain >/dev/null 2>&1 || true
+  [ -e "$GX_MARK/fired-fsmonitor" ] # control: env-injected fsmonitor fires on raw git
+  rm -f "$GX_MARK"/fired-*
+  run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
+  assert_success
+  [ "$(_gx_fired)" = "0" ]
+}
+
+@test "groomer --apply: worktree whose only uncommitted work is inside a submodule is NOT removed" {
+  _gx_setup
+  mkdir -p "$BATS_TEST_TMPDIR/subsrc"
+  git init -q --initial-branch=main "$BATS_TEST_TMPDIR/subsrc"
+  git -C "$BATS_TEST_TMPDIR/subsrc" config user.email t@t
+  git -C "$BATS_TEST_TMPDIR/subsrc" config user.name t
+  echo f > "$BATS_TEST_TMPDIR/subsrc/f.txt"
+  git -C "$BATS_TEST_TMPDIR/subsrc" add -A
+  git -C "$BATS_TEST_TMPDIR/subsrc" commit -q -m i
+  git -C "$GX_REPO" -c protocol.file.allow=always submodule add -q "$BATS_TEST_TMPDIR/subsrc" sub >/dev/null 2>&1
+  git -C "$GX_REPO" commit -q -m sub
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  git -C "$BATS_TEST_TMPDIR/gwt" -c protocol.file.allow=always submodule update --init -q >/dev/null 2>&1
+  echo "uncommitted submodule work" >> "$BATS_TEST_TMPDIR/gwt/sub/f.txt"
+  touch -t 203001010000 "$BATS_TEST_TMPDIR/gwt" # newer than /tmp so every other check passes
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "has submodules"
+  [ -d "$BATS_TEST_TMPDIR/gwt/sub" ]
+  grep -q "uncommitted submodule work" "$BATS_TEST_TMPDIR/gwt/sub/f.txt"
+}
+
+@test "groomer --apply: plain clean stale worktree is still removed" {
+  _gx_setup
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  touch -t 203001010000 "$BATS_TEST_TMPDIR/gwt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Removed worktree"
+  [ ! -d "$BATS_TEST_TMPDIR/gwt" ]
+}
+
+@test "groomer hostile repo: clean (stat-dirty only) worktree is not reported dirty and no planted program runs" {
+  _gx_setup
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  _gx_plant
+  touch "$BATS_TEST_TMPDIR/gwt/a.txt" "$BATS_TEST_TMPDIR/gwt/b.txt" # stat-dirty, content identical
+  # Control: raw status in the worktree DOES execute the planted programs
+  git -C "$BATS_TEST_TMPDIR/gwt" status --porcelain >/dev/null 2>&1 || true
+  [ -e "$GX_MARK/fired-fsmonitor" ]
+  [ -e "$GX_MARK/fired-filter" ]
+  rm -f "$GX_MARK"/fired-*
+  touch -t 202201010000 "$BATS_TEST_TMPDIR/gwt/a.txt" "$BATS_TEST_TMPDIR/gwt/b.txt"
+  run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
+  assert_success
+  refute_output --partial "Keeping worktree (dirty)"
+  [ "$(_gx_fired)" = "0" ]
+}
+
+@test "groomer hostile repo: modified worktree is still reported dirty and no planted program runs" {
+  _gx_setup
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  _gx_plant
+  echo changed >> "$BATS_TEST_TMPDIR/gwt/a.txt"
+  # Control: a raw (non-quiet) diff DOES execute the planted diff.external. The filter and
+  # fsmonitor knobs are blanked here only so the control isolates the diff.external vector
+  # (the required process filter would otherwise die before the diff runs).
+  GIT_PAGER=cat git -c core.fsmonitor=false -c filter.x.clean= -c filter.Y.z.process= \
+    -c filter.Y.z.required=false -C "$BATS_TEST_TMPDIR/gwt" diff >/dev/null 2>&1 || true
+  [ -e "$GX_MARK/fired-diffext" ]
+  rm -f "$GX_MARK"/fired-*
+  run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp 'Keeping worktree \(dirty\): .*/gwt'
+  [ "$(_gx_fired)" = "0" ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 0b: partial-clone lazy fetch. A promisor repo fetches a MISSING object via
+#          repo-configured remote.<n>.uploadpack / core.sshCommand outside the sandbox;
+#          GIT_NO_LAZY_FETCH=1 + GIT_ALLOW_PROTOCOL=none must stop that in the worktree check.
+# ---------------------------------------------------------------------------
+@test "groomer hostile repo: partial-clone lazy fetch does not run planted remote uploadpack" {
+  _gx_setup
+  _gx_marker_script uploadpack 'exec git upload-pack "$@"'
+  git -C "$GX_REPO" config uploadpack.allowFilter true
+  git -C "$GX_REPO" config uploadpack.allowAnySHA1InWant true
+  # Two identical promisor clones: the control run fetches the missing blob into ITS object
+  # store, so the groomer must run against a separate, still-incomplete clone.
+  local n
+  for n in ctl grm; do
+    git clone -q --no-checkout --filter=blob:none "file://$GX_REPO" "$BATS_TEST_TMPDIR/pc-$n"
+    git -C "$BATS_TEST_TMPDIR/pc-$n" worktree add -q --no-checkout "$BATS_TEST_TMPDIR/pwt-$n" -b pwt-branch
+    git -C "$BATS_TEST_TMPDIR/pwt-$n" read-tree HEAD # index entries whose blobs are NOT present locally
+    # identical content, no stat info in the index -> diff must compare against the (missing) blobs
+    printf 'a.txt filter=x\nb.txt filter=Y.z\n*.txt diff=y\n' > "$BATS_TEST_TMPDIR/pwt-$n/.gitattributes"
+    echo hello > "$BATS_TEST_TMPDIR/pwt-$n/a.txt"
+    echo world > "$BATS_TEST_TMPDIR/pwt-$n/b.txt"
+    git -C "$BATS_TEST_TMPDIR/pc-$n" config remote.origin.uploadpack "$GX_MARK/uploadpack.sh"
+  done
+  # Control: an unhardened diff needs the missing blob and DOES run the planted uploadpack
+  git -C "$BATS_TEST_TMPDIR/pwt-ctl" diff --quiet >/dev/null 2>&1 || true
+  [ -e "$GX_MARK/fired-uploadpack" ]
+  rm -f "$GX_MARK"/fired-*
+  run bash "$GROOMER" --dry-run --worktrees --repo "$BATS_TEST_TMPDIR/pc-grm"
+  assert_success
+  [ "$(_gx_fired)" = "0" ]
+}
+
+# ---------------------------------------------------------------------------
 # Test 1: dry-run changes nothing and prints summary
 # ---------------------------------------------------------------------------
 

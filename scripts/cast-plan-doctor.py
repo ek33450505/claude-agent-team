@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
 # Path constants (mirror cast-db-contract.py:45-52)
@@ -26,6 +26,8 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_BASELINE = REPO_ROOT / ".github" / "plan-doctor-baseline.json"
+# Last-resort literal for a bare invocation when nothing else resolves — keeps
+# the "Plan file not found" message stable. Never used by --resume (see main()).
 DEFAULT_PLAN = REPO_ROOT / "plans" / "next-session.md"
 ACTIVE_PLAN_MARKER = Path.home() / ".claude" / "config" / "active-plan"
 
@@ -738,6 +740,56 @@ def mode_default(
 
 
 # ---------------------------------------------------------------------------
+# Plan resolution
+# ---------------------------------------------------------------------------
+def read_active_plan_marker() -> Optional[Path]:
+    """Return the path named on the first line of the active-plan marker.
+
+    The marker holds a single line: the absolute path to the active plan (the
+    same format cast-plan-resume-hook.sh reads). Returns None when the marker is
+    missing, unreadable or empty. Does NOT check that the path exists.
+    """
+    try:
+        content = ACTIVE_PLAN_MARKER.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    first_line = content.splitlines()[0].strip() if content else ""
+    return Path(first_line) if first_line else None
+
+
+def newest_top_level_plan(plans_dir: Path) -> Optional[Path]:
+    """Return the newest-mtime *.md directly under plans_dir, or None.
+
+    Subdirectories (plans/archive/) are not searched — same rule as
+    cast-resume-scaffold.py _newest_plan. Ties break on name for determinism.
+    """
+    try:
+        candidates = [
+            p for p in plans_dir.iterdir() if p.name.endswith(".md") and p.is_file()
+        ]
+        return max(candidates, key=lambda p: (p.stat().st_mtime, p.name), default=None)
+    except OSError:
+        return None
+
+
+def resolve_default_plan() -> Path:
+    """Default plan for a bare manual invocation (no --plan, no --resume).
+
+    Order: (1) the active-plan marker's path, if that file exists; (2) the newest
+    top-level plans/*.md; (3) the literal DEFAULT_PLAN so the not-found error stays
+    stable when nothing exists. --resume deliberately does NOT use this (it is
+    marker-gated; see main()).
+    """
+    marker_plan = read_active_plan_marker()
+    if marker_plan is not None and marker_plan.is_file():
+        return marker_plan
+    newest = newest_top_level_plan(REPO_ROOT / "plans")
+    if newest is not None:
+        return newest
+    return DEFAULT_PLAN
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
@@ -749,8 +801,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--plan",
         metavar="PATH",
         type=Path,
-        default=DEFAULT_PLAN,
-        help=f"Plan file to analyze (default: {DEFAULT_PLAN})",
+        default=None,
+        help=(
+            "Plan file to analyze. Default (bare invocation): the path in "
+            "~/.claude/config/active-plan if that file exists, else the newest "
+            "top-level plans/*.md in the repo, else plans/next-session.md. "
+            "--resume never falls back: with no --plan it uses only the "
+            "active-plan marker."
+        ),
     )
     p.add_argument(
         "--baseline",
@@ -791,28 +849,20 @@ def main() -> int:
 
     # --resume: special plan resolution (ACTIVE_PLAN_MARKER takes precedence
     # unless --plan was explicitly given by the user)
-    plan_path: Path = args.plan
-    if args.resume and args.plan == DEFAULT_PLAN:
-        # Only use the marker if --plan was not explicitly provided
-        if ACTIVE_PLAN_MARKER.exists():
-            try:
-                marker_content = ACTIVE_PLAN_MARKER.read_text(encoding="utf-8").strip()
-                first_line = marker_content.splitlines()[0] if marker_content else ""
-                if first_line:
-                    candidate = Path(first_line)
-                    if candidate.exists():
-                        plan_path = candidate
-                    else:
-                        # Marker path doesn't exist — silent exit
-                        return 0
-                else:
-                    return 0
-            except OSError:
-                return 0
-        else:
-            # No active-plan marker and no explicit --plan: a session with no active
-            # plan gets no briefing. Do NOT fall back to DEFAULT_PLAN.
+    # args.plan is None exactly when the user did not pass --plan.
+    if args.plan is not None:
+        plan_path: Path = args.plan
+    elif args.resume:
+        # Only use the marker if --plan was not explicitly provided. No marker (or
+        # empty/unreadable/dangling marker) and no explicit --plan: a session with
+        # no active plan gets no briefing — silent exit. Do NOT fall back to
+        # resolve_default_plan() / DEFAULT_PLAN here.
+        marker_plan = read_active_plan_marker()
+        if marker_plan is None or not marker_plan.exists():
             return 0
+        plan_path = marker_plan
+    else:
+        plan_path = resolve_default_plan()
 
     # Read plan file
     if not plan_path.exists():

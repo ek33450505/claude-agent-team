@@ -52,7 +52,11 @@ _check_recent_failures() {
   done < <(find "$LOGS_DIR" -name "cron-*.log" -mtime -7 2>/dev/null || true)
 
   echo "$failure_count"
-  [[ -n "$failure_details" ]] && echo "$failure_details"
+  # Explicit `if`, not `[[ ]] && echo`: with no failures the `&&` form returns 1,
+  # and under `set -e` that aborts the caller's `$(...)` before the log is written.
+  if [[ -n "$failure_details" ]]; then
+    echo "$failure_details"
+  fi
 }
 
 # ── Compare live crontab against expected entries ─────────────────────────────
@@ -91,7 +95,11 @@ _check_crontab_drift() {
   fi
 
   echo "$drift_count"
-  [[ -n "$drift_details" ]] && echo "$drift_details"
+  # Explicit `if` (see _check_recent_failures): a bare `&&` last statement returns 1
+  # on the healthy path and trips `set -e` in the caller.
+  if [[ -n "$drift_details" ]]; then
+    echo "$drift_details"
+  fi
 }
 
 # ── Main health check ─────────────────────────────────────────────────────────
