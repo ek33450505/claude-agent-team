@@ -380,7 +380,8 @@ teardown() { teardown_temp_home; }
   # explain_sql_statement is deliberately NOT here: it is safe only when
   # `analyze` is explicitly false (it needs tool_input), covered by the
   # dedicated explain_sql_statement tests below.
-  local tools=(
+  local -a tools
+  tools=(
     list_projects list_shared_projects list_organizations list_branch_computes
     list_slow_queries list_docs_resources list_log_fields list_log_field_values
     describe_project describe_branch describe_table_schema
@@ -582,7 +583,8 @@ teardown() { teardown_temp_home; }
 @test "native ask: case/whitespace variants of a Neon write (not egress-shaped names) still ask" {
   # _is_egress_tool() is case-sensitive, so an upper-cased name never reaches
   # the egress step; the ask must not be lost on that path.
-  local names=("MCP__NEON__delete_branch" $' mcp__neon__delete_branch' $'\nmcp__neon__delete_branch')
+  local -a names
+  names=("MCP__NEON__delete_branch" $' mcp__neon__delete_branch' $'\nmcp__neon__delete_branch')
   local n
   for n in "${names[@]}"; do
     run_dispatch_stdout "$(payload "$n" branchId=br-1)"
@@ -638,7 +640,8 @@ teardown() { teardown_temp_home; }
 }
 
 @test "native ask: tools deliberately kept OFF the safe list (unverified shapes / credential-flavoured) still ask" {
-  local kept=(
+  local -a kept
+  kept=(
     get_neon_auth_config list_auth_oauth_providers get_function list_functions
     get_storage get_data_api list_credentials get_auth list_auth_trusted_domains
     list_triggers get_trigger
@@ -711,11 +714,14 @@ teardown() { teardown_temp_home; }
 @test "explain_sql_statement: string analyze spellings (false, padded FALSE, 0) now ASK -- only a JSON boolean false skips the prompt" {
   # The schema types analyze as boolean; a server that coerces strings could
   # read "false" as true, so no string is trusted as "does not execute".
-  local forms=('"false"' '" FALSE "' '"0"')
+  local -a forms
+  forms=('"false"' '" FALSE "' '"0"')
   local f
   for f in "${forms[@]}"; do
     rm -f "$NOTIFY_QUEUE"
-    run_dispatch_stdout "$(payload_json mcp__neon__explain_sql_statement "{\"sql\":\"SELECT 1\",\"analyze\":${f}}")"
+    # Hoisted: bash 3.2 mangles \" inside a nested "$(...)".
+    local ti="{\"sql\":\"SELECT 1\",\"analyze\":${f}}"
+    run_dispatch_stdout "$(payload_json mcp__neon__explain_sql_statement "$ti")"
     [ "$status" -eq 0 ] || { echo "non-zero exit for analyze=$f" >&2; return 1; }
     local out="$output"
     run hook_json_get "$out" permissionDecision
@@ -737,10 +743,13 @@ teardown() { teardown_temp_home; }
 }
 
 @test "explain_sql_statement: anything that is not explicitly false (null, 1, string yes, empty list) → ask" {
-  local forms=('null' '1' '"yes"' '[]')
+  local -a forms
+  forms=('null' '1' '"yes"' '[]')
   local f
   for f in "${forms[@]}"; do
-    run_dispatch_stdout "$(payload_json mcp__neon__explain_sql_statement "{\"sql\":\"SELECT 1\",\"analyze\":${f}}")"
+    # Hoisted: bash 3.2 mangles \" inside a nested "$(...)".
+    local ti="{\"sql\":\"SELECT 1\",\"analyze\":${f}}"
+    run_dispatch_stdout "$(payload_json mcp__neon__explain_sql_statement "$ti")"
     [ "$status" -eq 0 ] || { echo "non-zero exit for analyze=$f" >&2; return 1; }
     local out="$output"
     run hook_json_get "$out" permissionDecision

@@ -300,7 +300,8 @@ make_clean_tmp_repo() {
   # Independent oracle (deliberately NOT read from install.sh): the repo paths install.sh deploys
   # from, per its deploy map. Dropping any entry from install.sh's GUARD_PATHS fails that row.
   # The guard exits before any deploy step, so each probe is fast.
-  local guarded=(agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
+  local -a guarded
+  guarded=(agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
     macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/)
   local tmp_repo failures="" entry probe tracked
   tmp_repo="$(make_clean_tmp_repo)"
@@ -394,7 +395,8 @@ make_clean_tmp_repo() {
   mkdir -p "$backup_base"
 
   # Create 7 dirs with valid YYYYMMDD-HHMMSS names (8+6 digits)
-  local dirs=()
+  local -a dirs
+  dirs=()
   for ts in 20260601-120001 20260602-120002 20260603-120003 20260604-120004 \
             20260605-120005 20260606-120006 20260607-120007; do
     local d="$backup_base/$ts"

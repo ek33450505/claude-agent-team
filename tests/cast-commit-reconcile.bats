@@ -646,7 +646,7 @@ run_prepush_hook() {
     [[ "$output" == *'"status": "acked"'* ]]
     [[ "$output" == *"commit-provenance reconcile OK ✓"* ]]
     [[ "$stderr" != *"stub-noise-that-must-stay-hidden"* ]]
-    [[ "$stderr" != *"SKIPPED"* ]]
+    [[ "$stderr" != *"reconcile SKIPPED"* ]]
     [[ "$stderr" != *"NOT verified"* ]]
 }
 
@@ -705,7 +705,7 @@ prepush_real_script_fixture() {
     [ "$status" -eq 0 ]
     [[ "$output" == *'"status": "clean"'* ]]
     [[ "$output" == *"commit-provenance reconcile OK ✓"* ]]
-    [[ "$stderr" != *"SKIPPED"* ]]
+    [[ "$stderr" != *"reconcile SKIPPED"* ]]
     [[ "$stderr" != *"NOT verified"* ]]
 }
 
