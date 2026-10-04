@@ -296,7 +296,6 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/post-tool-hook.sh",
-            "if": "Write|Edit|Agent|Bash|Task|NotebookEdit",
             "timeout": 10,
             "async": true
           }
@@ -366,26 +365,6 @@
             "type": "command",
             "command": "bash ~/.claude/scripts/write-guards.sh",
             "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "Evaluate whether this file change could expose secrets, weaken authentication, or leak sensitive data. If the change is dangerous, respond with BLOCK and explain why. If safe, respond with ALLOW.",
-            "if": "Write(**/.env*|**/auth/**|**/credentials*|**/secrets*)"
-          }
-        ]
-      },
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "Evaluate whether this file change could expose secrets, weaken authentication, or leak sensitive data. If the change is dangerous, respond with BLOCK and explain why. If safe, respond with ALLOW.",
-            "if": "Edit(**/.env*|**/auth/**|**/credentials*|**/secrets*)"
           }
         ]
       }

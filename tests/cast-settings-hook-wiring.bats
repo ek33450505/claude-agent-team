@@ -24,6 +24,7 @@ load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
 SETTINGS="${BATS_TEST_DIRNAME}/../settings.json"
+FRAGMENTS_DIR="${BATS_TEST_DIRNAME}/../managed-settings.d"
 
 @test "settings.json has at least 3 SessionStart entries" {
   run python3 -c "
@@ -181,6 +182,70 @@ pretool = s['hooks'].get('PreToolUse', [])
 cmds = [hook.get('command', '') for entry in pretool for hook in entry.get('hooks', [])]
 bad = [c for c in cmds if 'cast-command-guard.sh' in c]
 assert not bad, f'Legacy cast-command-guard.sh still wired in PreToolUse (should be absent): {bad}'
+print('OK')
+"
+  assert_output "OK"
+}
+
+# ---------------------------------------------------------------------------
+# Hook `if` field regression (2026-10-04, unit P1-a).
+# Claude Code: the `if` field holds exactly ONE permission rule — there is no
+# `||`, `&&`, or list syntax. A value like "Write|Edit|Bash" is read as a rule
+# for a tool literally named "Write|Edit|Bash", matches nothing, and the hook
+# silently never spawns (post-tool-hook.sh was dead from 2026-07-05 this way).
+# Tool alternation belongs in the entry `matcher` (a regex), not in `if`.
+#
+# Second instance of the class (2026-10-04): managed-settings.d/27-hooks-advanced.json
+# carried `Write(**/.env*|**/auth/**|...)` path rules. File-path rules use
+# gitignore syntax, which has no `|` alternation, so each was one literal
+# pattern that matched no path and the guards never fired. The fragment was
+# removed; this test now guards future additions (zero `if` fields is valid).
+# ---------------------------------------------------------------------------
+
+@test "every hook if-field in managed-settings.d holds a single permission rule (no | lists)" {
+  run env FRAGMENTS_DIR="$FRAGMENTS_DIR" python3 -c "
+import glob, json, os, re
+frag_dir = os.environ['FRAGMENTS_DIR']
+bad = []
+file_tools = ('Read', 'Edit', 'Write', 'NotebookEdit', 'Glob')
+for path in sorted(glob.glob(os.path.join(frag_dir, '*.json'))):
+  with open(path) as f:
+    d = json.load(f)
+  for event, entries in (d.get('hooks') or {}).items():
+    for entry in entries:
+      for h in entry.get('hooks', []):
+        if 'if' not in h:
+          continue
+        val = h['if']
+        tool = val.split('(', 1)[0] if isinstance(val, str) else ''
+        where = os.path.basename(path) + ':' + event + ':' + repr(val)
+        if not re.match(r'^[A-Za-z0-9_*]+\$', tool):
+          bad.append(where)
+        elif tool in file_tools and '(' in val and '|' in val.split('(', 1)[1]:
+          # file-path rules are gitignore syntax: no | alternation (Bash(...) may hold a real pipe)
+          bad.append(where)
+assert not bad, 'if-field is not a single permission rule: ' + '; '.join(bad)
+print('OK')
+"
+  assert_output "OK"
+}
+
+@test "post-tool-hook.sh PostToolUse handler is not narrowed by an if-filter" {
+  run python3 -c "
+import json
+with open('$SETTINGS') as f:
+  s = json.load(f)
+found = []
+for entry in s['hooks'].get('PostToolUse', []):
+  for h in entry.get('hooks', []):
+    if 'post-tool-hook.sh' in h.get('command', ''):
+      found.append((entry, h))
+assert len(found) == 1, f'Expected exactly one post-tool-hook.sh PostToolUse handler, got {len(found)}'
+entry, h = found[0]
+assert 'if' not in h, f'post-tool-hook.sh handler carries an if-filter (silently never spawns on a | list): {h[\"if\"]!r}'
+matcher = entry.get('matcher', '')
+for tool in ('Write', 'Edit', 'Bash', 'Agent'):
+  assert tool in matcher, f'matcher {matcher!r} does not cover {tool}'
 print('OK')
 "
   assert_output "OK"

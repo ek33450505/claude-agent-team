@@ -10,11 +10,21 @@ HOOK_SH="$REPO_DIR/scripts/post-tool-hook.sh"
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Build a Write tool payload
+# Build a Write tool payload. Optional 3rd arg agent_id: when non-empty the payload
+# carries top-level agent_id + agent_type, i.e. the hook fired inside an Agent subagent
+# (Claude Code sets agent_id ONLY in that case).
 write_payload() {
   local file_path="$1"
   local content="${2:-export const x = 1}"
-  python3 -c "import json,sys; print(json.dumps({'tool_name':'Write','tool_input':{'file_path':sys.argv[1],'content':sys.argv[2]},'tool_response':{}}))" "$file_path" "$content"
+  local agent_id="${3:-}"
+  python3 -c "
+import json, sys
+p = {'tool_name': 'Write', 'tool_input': {'file_path': sys.argv[1], 'content': sys.argv[2]}, 'tool_response': {}}
+if sys.argv[3]:
+    p['agent_id'] = sys.argv[3]
+    p['agent_type'] = 'bash-specialist'
+print(json.dumps(p))
+" "$file_path" "$content" "$agent_id"
 }
 
 # Build an Agent tool payload
@@ -23,11 +33,20 @@ agent_payload() {
   python3 -c "import json,sys; print(json.dumps({'tool_name':'Agent','tool_input':{'subagent_type':sys.argv[1],'prompt':'test prompt for agent dispatch'},'tool_response':{}}))" "$subagent_type"
 }
 
-# Build a Bash tool payload with optional exit code
+# Build a Bash tool payload with optional exit code and optional agent_id (3rd arg,
+# same semantics as write_payload: non-empty → fired inside an Agent subagent)
 bash_payload() {
   local command="$1"
   local exit_code="${2:-0}"
-  python3 -c "import json,sys; print(json.dumps({'tool_name':'Bash','tool_input':{'command':sys.argv[1]},'tool_response':{'exit_code':int(sys.argv[2]),'stdout':'','stderr':'command failed'}}))" "$command" "$exit_code"
+  local agent_id="${3:-}"
+  python3 -c "
+import json, sys
+p = {'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}, 'tool_response': {'exit_code': int(sys.argv[2]), 'stdout': '', 'stderr': 'command failed'}}
+if sys.argv[3]:
+    p['agent_id'] = sys.argv[3]
+    p['agent_type'] = 'bash-specialist'
+print(json.dumps(p))
+" "$command" "$exit_code" "$agent_id"
 }
 
 # Read the action field from the last routing-log entry
@@ -107,10 +126,31 @@ teardown() {
   refute_output --partial "CAST-CHAIN"
 }
 
-@test "Write .ts + CLAUDE_SUBPROCESS=1 → outputs subagent reinforcement (CAST-REVIEW)" {
+@test "Write .ts + CLAUDE_SUBPROCESS=1 → no hookSpecificOutput (dispatching session runs the review gate)" {
   run env CLAUDE_SUBPROCESS=1 bash "$HOOK_SH" <<< "$(write_payload "$HOME/test.ts")"
   assert_success
-  assert_output --partial "CAST-REVIEW"
+  refute_output --partial "hookSpecificOutput"
+}
+
+# Review Gate: inside an Agent subagent (hook input carries agent_id; CLAUDE_SUBPROCESS is
+# NOT set for Agent subagents) the hook must not tell the agent to dispatch code-reviewer —
+# a subagent structurally cannot, and obeying the directive burns its whole turn budget.
+@test "Write .ts + agent_id (CLAUDE_SUBPROCESS unset) → no CAST-CHAIN / CAST-REVIEW / hookSpecificOutput" {
+  run env -u CLAUDE_SUBPROCESS bash "$HOOK_SH" <<< "$(write_payload "$HOME/test.ts" "export const x = 1" "agent-test-1")"
+  assert_success
+  refute_output --partial "CAST-CHAIN"
+  refute_output --partial "CAST-REVIEW"
+  refute_output --partial "hookSpecificOutput"
+}
+
+# `--agent` main-thread sessions carry agent_type but NO agent_id, so agent_type must not be
+# used to detect a subagent: the main-thread session still owns the review gate.
+@test "Write .ts + agent_type but NO agent_id (--agent main thread) → still emits [CAST-CHAIN]" {
+  local payload
+  payload="$(python3 -c "import json,sys; print(json.dumps({'tool_name':'Write','agent_type':'bash-specialist','tool_input':{'file_path':sys.argv[1],'content':'export const x = 1'},'tool_response':{}}))" "$HOME/test.ts")"
+  run env -u CLAUDE_SUBPROCESS bash "$HOOK_SH" <<< "$payload"
+  assert_success
+  assert_output --partial "[CAST-CHAIN]"
 }
 
 # ---------------------------------------------------------------------------
@@ -221,6 +261,13 @@ PLAN
   refute_output --partial "CAST-DEBUG"
 }
 
+# Control for this test is the main-session test above (same command + exit code, no agent_id → emits CAST-DEBUG).
+@test "Bash tool exit_code=1 + agent_id (CLAUDE_SUBPROCESS unset) → exits 0 with no [CAST-DEBUG]" {
+  run env -u CLAUDE_SUBPROCESS bash "$HOOK_SH" <<< "$(bash_payload "npm run build" 1 "agent-test-1")"
+  assert_success
+  refute_output --partial "CAST-DEBUG"
+}
+
 @test "Bash 'grep foo bar' exit_code=1 → exits 0 with no [CAST-DEBUG]" {
   run bash "$HOOK_SH" <<< "$(bash_payload "grep foo bar" 1)"
   assert_success
@@ -252,7 +299,7 @@ PLAN
 # 16–19. Security chain (Batch 2 — CAST follow-ups 2026-04-16)
 #
 # cast-post-tool.py emits [CAST-CHAIN: security] only when:
-#   - main session (CLAUDE_SUBPROCESS not set or = "0")
+#   - main session (no agent_id in hook input; CLAUDE_SUBPROCESS not set or = "0")
 #   - file path matches .sh or .py extension AND scripts/ or hooks/ path
 #   - non-blank line count of content >= 5
 # ---------------------------------------------------------------------------
@@ -268,7 +315,8 @@ n = int(sys.argv[1])
 lines = ['#!/bin/bash'] + [f'echo line_{i}' for i in range(n - 1)]
 print('\n'.join(lines))
 " "$line_count")"
-  python3 -c "import json,sys; print(json.dumps({'tool_name':'Write','tool_input':{'file_path':sys.argv[1],'content':sys.argv[2]},'tool_response':{}}))" "$file_path" "$content"
+  # Optional 3rd arg agent_id: delegate to write_payload so the subagent payload shape stays in one place
+  write_payload "$file_path" "$content" "${3:-}"
 }
 
 @test "security chain fires for scripts/foo.sh with 6 non-blank lines" {
@@ -295,6 +343,13 @@ print('\n'.join(lines))
   local payload
   payload="$(python3 -c "import json,sys; print(json.dumps({'tool_name':'Write','tool_input':{'file_path':sys.argv[1],'content':sys.argv[2]},'tool_response':{}}))" "$file_path" "$content")"
   run bash "$HOOK_SH" <<< "$payload"
+  assert_success
+  refute_output --partial "[CAST-CHAIN: security]"
+}
+
+@test "security chain does NOT fire inside a subagent (agent_id, CLAUDE_SUBPROCESS unset)" {
+  local file_path="$HOME/projects/repo/scripts/foo.sh"
+  run env -u CLAUDE_SUBPROCESS bash "$HOOK_SH" <<< "$(scripts_sh_payload "$file_path" 6 "agent-test-1")"
   assert_success
   refute_output --partial "[CAST-CHAIN: security]"
 }
