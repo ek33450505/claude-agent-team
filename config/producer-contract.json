@@ -132,7 +132,7 @@
     },
     {
       "table": "commit_provenance",
-      "writers": ["cast-commit-provenance.py:50"],
+      "writers": ["cast-commit-provenance.py:50", "cast-post-tool.py:part5_commit_provenance (PostToolUse hook; sandbox-safe writer)"],
       "cadence": "per_event",
       "status": "live"
     },
