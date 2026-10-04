@@ -6,7 +6,7 @@
 bash install.sh
 ```
 
-Requires clean working tree in `agents/`, `scripts/`, `bin/`, `rules-core/` — install aborts on uncommitted changes. Bypass with `CAST_INSTALL_FORCE=1` (CI only).
+Requires clean working tree in `agents/`, `scripts/`, `bin/`, `rules-core/`, `managed-settings.d/` — install aborts on uncommitted changes. Bypass with `CAST_INSTALL_FORCE=1` (CI only).
 
 ## Test
 

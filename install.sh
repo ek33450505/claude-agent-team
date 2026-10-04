@@ -10,13 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Set CAST_INSTALL_FORCE=1 to bypass (for CI / test harnesses that manage their own git state).
 if [[ "${CAST_INSTALL_FORCE:-0}" != "1" ]]; then
   DIRTY=false
-  if ! git -C "$SCRIPT_DIR" diff --quiet HEAD -- agents/ scripts/ bin/ rules-core/ 2>/dev/null; then
+  if ! git -C "$SCRIPT_DIR" diff --quiet HEAD -- agents/ scripts/ bin/ rules-core/ managed-settings.d/ 2>/dev/null; then
     DIRTY=true
-  elif git -C "$SCRIPT_DIR" status --porcelain -- agents/ scripts/ bin/ rules-core/ 2>/dev/null | grep -q '^??'; then
+  elif git -C "$SCRIPT_DIR" status --porcelain -- agents/ scripts/ bin/ rules-core/ managed-settings.d/ 2>/dev/null | grep -q '^??'; then
     DIRTY=true
   fi
   if [[ "$DIRTY" == "true" ]]; then
-    DIRTY_FILES="$(git -C "$SCRIPT_DIR" diff --name-only HEAD -- agents/ scripts/ bin/ rules-core/ 2>/dev/null)"
+    DIRTY_FILES="$(git -C "$SCRIPT_DIR" diff --name-only HEAD -- agents/ scripts/ bin/ rules-core/ managed-settings.d/ 2>/dev/null)"
     echo "ERROR: install.sh aborted — uncommitted changes in install-managed paths:" >&2
     echo "$DIRTY_FILES" >&2
     echo "Commit or stash these changes before running install.sh (or set CAST_INSTALL_FORCE=1 to bypass)." >&2
@@ -363,7 +363,9 @@ success "  Scripts installed (including cast_db.py)"
 # 05-behavior.json (carries sandbox.failIfUnavailable) and 10-permissions.json are
 # enforcement fragments too: a repo fix to them otherwise never reaches the machine —
 # the same failure as 12-ask on 2026-10-03. Per-user customisations belong in
-# ~/.claude/settings.json / settings.local.json, NOT in a managed fragment.
+# ~/.claude/settings.local.json, NOT in a managed fragment (and NOT in
+# ~/.claude/settings.json: cast-merge-settings.sh regenerates it from the fragments on
+# every install, so only settings.local.json survives).
 # Remaining fragments (env, model overrides, etc.) skip-if-exists; a differing
 # copy is reported (report-only drift WARN after the loop), never overwritten.
 # Downstream-only fragments (filenames not in source) are preserved by virtue of never being
@@ -382,6 +384,8 @@ for fragment in "$SCRIPT_DIR"/managed-settings.d/*.json; do
             if [ -f "$dest" ] && ! cmp -s "$fragment" "$dest"; then
                 mkdir -p "$BACKUP_DIR/managed-settings.d"
                 cp "$dest" "$BACKUP_DIR/managed-settings.d/$base"
+                # cp inherits the live file's mode (possibly 644); backups are 600 regardless.
+                chmod 600 "$BACKUP_DIR/managed-settings.d/$base"
                 warn "  Replaced (differed from repo): managed-settings.d/$base — prior copy backed up to $BACKUP_DIR/managed-settings.d/$base"
             fi
             cp "$fragment" "$dest"

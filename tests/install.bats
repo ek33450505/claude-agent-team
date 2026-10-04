@@ -238,6 +238,82 @@ run_install_personal() {
   rm -rf "$tmp_repo"
 }
 
+# Helper: build a clean throwaway git repo copy of the source tree; echoes its path.
+# core.hooksPath=/dev/null prevents CAST pre-commit hooks from firing in the fixture.
+make_clean_tmp_repo() {
+  local tmp_repo
+  tmp_repo="$(mktemp -d)"
+  cp -R "$REPO_DIR/." "$tmp_repo/"
+  rm -rf "$tmp_repo/.git"
+  git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
+  git -C "$tmp_repo" add -A
+  git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
+    -c core.hooksPath=/dev/null commit -q -m "init"
+  echo "$tmp_repo"
+}
+
+@test "Dirty-tree guard: aborts on an uncommitted tracked change in managed-settings.d/" {
+  # An unstaged edit to an owned enforcement fragment must not deploy on reinstall.
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  echo "# loosened" >> "$tmp_repo/managed-settings.d/12-ask.json"
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "uncommitted changes" ]]
+  # Guard runs before any deploy step: nothing may have been written to the temp HOME.
+  [ ! -e "$HOME/.claude/managed-settings.d" ]
+  [ ! -e "$HOME/.claude/agents" ]
+
+  rm -rf "$tmp_repo"
+}
+
+@test "Dirty-tree guard: aborts on an untracked new file in managed-settings.d/ (guard covers untracked)" {
+  # Guard semantics: the untracked branch (`status --porcelain | grep '^??'`) applies to every
+  # guarded pathspec, so a brand-new fragment is refused just like a modified tracked one.
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  echo '{}' > "$tmp_repo/managed-settings.d/99-untracked.json"
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "uncommitted changes" ]]
+  [ ! -e "$HOME/.claude/managed-settings.d" ]
+
+  rm -rf "$tmp_repo"
+}
+
+@test "Dirty-tree guard: CAST_INSTALL_FORCE=1 bypasses guard with dirty managed-settings.d/" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  echo '{}' > "$tmp_repo/managed-settings.d/99-untracked.json"
+
+  # Without the bypass this state aborts (previous test); with it, install proceeds and deploys.
+  run env CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$HOME/.claude/managed-settings.d/99-untracked.json" ]
+
+  rm -rf "$tmp_repo"
+}
+
+@test "Owned fragment backup: prior copy is backed up with mode 600 even when the live file was 644" {
+  mkdir -p "$HOME/.claude/managed-settings.d"
+  # A differing live copy of a CAST-owned fragment, world-readable.
+  echo '{"_planted":"differs-from-repo"}' > "$HOME/.claude/managed-settings.d/05-behavior.json"
+  chmod 644 "$HOME/.claude/managed-settings.d/05-behavior.json"
+
+  run_install
+
+  local backup
+  backup="$(ls -d "$HOME"/.claude/backups/*/managed-settings.d/05-behavior.json 2>/dev/null | head -1)"
+  [ -n "$backup" ]
+  grep -q "differs-from-repo" "$backup"
+  # Portable mode check (no `stat -f`/`stat -c`): first 10 chars of `ls -l`.
+  local mode
+  mode="$(ls -l "$backup" | cut -c1-10)"
+  [ "$mode" = "-rw-------" ]
+}
+
 @test "Backup retention: keeps only the 5 most recent install snapshots" {
   # Pre-populate 7 fake timestamp dirs in the isolated temp HOME backups dir
   local backup_base="$HOME/.claude/backups"
