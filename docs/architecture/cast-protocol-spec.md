@@ -249,7 +249,7 @@ real security boundary.
 
 | Op class | Operation(s) | Enforced by | Type | Escape hatch | Auto-chain-safe? |
 |---|---|---|---|---|---|
-| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record`) + pre-push reconcile (`cast-commit-reconcile.py`) | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✓ hook (unconditional) |
+| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record` from the commit agent and `.githooks/post-commit`; the PostToolUse hook `cast-post-tool.py` also records it from outside the Bash sandbox, where cast.db is read-only) + pre-push reconcile (`cast-commit-reconcile.py`; reports `unverifiable` when the sandbox can't read the audit log) | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✓ hook (unconditional) |
 | Git push | raw `git push` | `pre-tool-guard.sh` (push block) | hard-block | `CAST_PUSH_OK=1` | ✓ hook (unconditional) |
 | Force-push | `git push --force` | `push.md` (agent refusal) | refuse | none | ◑ agent-refusal |
 | Push to main (work repo) | push to `main`/`master` | `push.md` (branch rule) | refuse | `--force-main` / `repo_class=personal` | ◑ agent-refusal |
