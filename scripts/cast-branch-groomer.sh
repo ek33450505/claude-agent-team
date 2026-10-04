@@ -121,21 +121,8 @@ _is_whitelisted() {
   return 1
 }
 
-# ── Fetch open PRs (best-effort; skip if gh not available) ────────────────
-OPEN_PR_BRANCHES=()
-if command -v gh &>/dev/null; then
-  while IFS= read -r pr_branch; do
-    [[ -n "$pr_branch" ]] && OPEN_PR_BRANCHES+=("$pr_branch")
-  done < <(gh pr list --state open --json headRefName --jq '.[].headRefName' --limit 1000 2>/dev/null || true)
-fi
-
-_has_open_pr() {
-  local b="$1"
-  for pr in "${OPEN_PR_BRANCHES[@]+"${OPEN_PR_BRANCHES[@]}"}"; do
-    [[ "$b" == "$pr" ]] && return 0
-  done
-  return 1
-}
+# (Removed: a best-effort `gh pr list` + _has_open_pr. Nothing ever called _has_open_pr, and gh
+# shells out to bare git in the repo cwd -- unhardened, outside cast_git_safe.)
 
 # ── Date helpers ─────────────────────────────────────────────────────────
 _epoch_now() { date +%s; }
@@ -237,11 +224,35 @@ done < <(cast_git_safe "$GROOM_REPO" branch -vv 2>/dev/null || true)
 DELETED_WORKTREES=0
 if [[ "$DO_WORKTREES" -eq 1 ]]; then
   GROOM_TOP="$(cast_git_safe "$GROOM_REPO" rev-parse --show-toplevel 2>/dev/null || true)"
+  GROOM_TOP_REAL=""
+  if [[ -n "$GROOM_TOP" && -d "$GROOM_TOP" ]]; then
+    GROOM_TOP_REAL="$(cd "$GROOM_TOP" 2>/dev/null && pwd -P)" || GROOM_TOP_REAL=""
+  fi
   while IFS= read -r wt_path; do
     [[ -z "$wt_path" ]] && continue
     # Skip the main worktree (first entry, no extra path)
     [[ "$wt_path" == "$GROOM_TOP" ]] && continue
     if [[ ! -d "$wt_path" ]]; then continue; fi
+    # ── Identity gates (SECURITY; any doubt -> keep). The registry entry
+    # (.git/worktrees/<id>/gitdir) and the worktree's own .git file are agent-writable, so a forged
+    # entry can aim `worktree remove --force` at ANY directory (or, via a symlink, at a symlink
+    # target) while every content check below reads a different repo's clean state. Only a REAL
+    # agent worktree is ever removed: directly <repo>/.claude/worktrees/<agent-*|worktree-agent-*>,
+    # compared on RESOLVED paths (no symlink anywhere), whose git common dir is THIS repo's .git.
+    wt_name="${wt_path##*/}"
+    wt_expected="$GROOM_TOP_REAL/.claude/worktrees/$wt_name"
+    wt_resolved="$(cd "$wt_path" 2>/dev/null && pwd -P)" || wt_resolved=""
+    if [[ -z "$GROOM_TOP_REAL" ]] || [[ -z "$wt_resolved" ]] || [[ -L "$wt_path" ]] ||
+      { [[ "$wt_name" != agent-* ]] && [[ "$wt_name" != worktree-agent-* ]]; } ||
+      [[ "$wt_resolved" != "$wt_expected" ]]; then
+      printf '[groomer] Keeping worktree (not an agent worktree path): %s\n' "$wt_path"
+      continue
+    fi
+    wt_common="$(cast_git_safe "$wt_path" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || wt_common=""
+    if [[ -z "$wt_common" ]] || [[ ! "$wt_common" -ef "$GROOM_TOP_REAL/.git" ]]; then
+      printf '[groomer] Keeping worktree (not this repo'"'"'s worktree — identity mismatch): %s\n' "$wt_path"
+      continue
+    fi
     # Check: no uncommitted changes
     # FAIL-SAFE submodule guard. The dirty check below uses --ignore-submodules=all (a submodule's
     # own config could define filter drivers we never enumerated), so uncommitted work INSIDE a
@@ -266,15 +277,22 @@ if [[ "$DO_WORKTREES" -eq 1 ]]; then
       printf '[groomer] Keeping worktree (dirty): %s\n' "$wt_path"
       continue
     fi
+    # `diff --quiet` ignores UNTRACKED files, and `worktree remove --force` would destroy them:
+    # require an empty `status` (untracked included). An error also keeps the worktree.
+    if ! _wt_status="$(cast_git_safe "$wt_path" status --porcelain --untracked-files=all 2>/dev/null)" ||
+      [[ -n "$_wt_status" ]]; then
+      printf '[groomer] Keeping worktree (uncommitted or untracked files): %s\n' "$wt_path"
+      continue
+    fi
     # Check: no commits ahead of main
     ahead=$(cast_git_safe "$wt_path" rev-list --count "main..HEAD" 2>/dev/null || echo 1)
     if [[ "$ahead" -gt 0 ]]; then
       printf '[groomer] Keeping worktree (ahead of main): %s\n' "$wt_path"
       continue
     fi
-    # Check: last modified > 7 days ago
-    wt_mtime=$(find "$wt_path" -maxdepth 0 -newer /tmp -prune -o -print 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$wt_mtime" -gt 0 ]]; then
+    # Check: directory mtime older than 7 days. Housekeeping only, NOT a security control (mtime is
+    # agent-forgeable; the identity gates above are what protect). A find error -> empty -> keep.
+    if [[ -z "$(find "$wt_path" -maxdepth 0 -mtime +7 2>/dev/null)" ]]; then
       printf '[groomer] Keeping worktree (recently touched): %s\n' "$wt_path"
       continue
     fi

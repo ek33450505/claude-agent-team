@@ -121,15 +121,15 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
 
 @test "groomer hostile repo: filter driver name containing '=' is blanked in the worktree check" {
   _gx_setup
-  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-gwt" -b gwt-branch
   _gx_plant
-  touch "$BATS_TEST_TMPDIR/gwt/c.txt"
+  touch "$GX_REPO/.claude/worktrees/agent-gwt/c.txt"
   # (other drivers blanked in the control only: the required process filter would die first)
   git -c core.fsmonitor=false -c filter.x.clean= -c filter.Y.z.process= -c filter.Y.z.required=false \
-    -C "$BATS_TEST_TMPDIR/gwt" status --porcelain >/dev/null 2>&1 || true
+    -C "$GX_REPO/.claude/worktrees/agent-gwt" status --porcelain >/dev/null 2>&1 || true
   [ -e "$GX_MARK/fired-eqfilter" ] # control
   rm -f "$GX_MARK"/fired-*
-  touch -t 202201010000 "$BATS_TEST_TMPDIR/gwt/c.txt"
+  touch -t 202201010000 "$GX_REPO/.claude/worktrees/agent-gwt/c.txt"
   run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
   assert_success
   refute_output --partial "Keeping worktree (dirty)"
@@ -148,14 +148,14 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
   git -C "$BATS_TEST_TMPDIR/subsrc" commit -q -m i
   git -C "$GX_REPO" -c protocol.file.allow=always submodule add -q "$BATS_TEST_TMPDIR/subsrc" sub >/dev/null 2>&1
   git -C "$GX_REPO" commit -q -m sub
-  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
-  git -C "$BATS_TEST_TMPDIR/gwt" -c protocol.file.allow=always submodule update --init -q >/dev/null 2>&1
-  git -C "$BATS_TEST_TMPDIR/gwt/sub" config filter.sf.clean "$GX_MARK/subfilter.sh"
-  touch -t 202101010000 "$BATS_TEST_TMPDIR/gwt/sub/f.txt" # stat-dirty inside the submodule
-  git -C "$BATS_TEST_TMPDIR/gwt" diff --quiet >/dev/null 2>&1 || true
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-gwt" -b gwt-branch
+  git -C "$GX_REPO/.claude/worktrees/agent-gwt" -c protocol.file.allow=always submodule update --init -q >/dev/null 2>&1
+  git -C "$GX_REPO/.claude/worktrees/agent-gwt/sub" config filter.sf.clean "$GX_MARK/subfilter.sh"
+  touch -t 202101010000 "$GX_REPO/.claude/worktrees/agent-gwt/sub/f.txt" # stat-dirty inside the submodule
+  git -C "$GX_REPO/.claude/worktrees/agent-gwt" diff --quiet >/dev/null 2>&1 || true
   [ -e "$GX_MARK/fired-subfilter" ] # control
   rm -f "$GX_MARK"/fired-*
-  touch -t 202201010000 "$BATS_TEST_TMPDIR/gwt/sub/f.txt"
+  touch -t 202201010000 "$GX_REPO/.claude/worktrees/agent-gwt/sub/f.txt"
   run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
   assert_success
   [ "$(_gx_fired)" = "0" ]
@@ -163,9 +163,9 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
 
 @test "groomer hostile repo: inherited GIT_CONFIG_PARAMETERS fsmonitor does not run in the worktree check" {
   _gx_setup
-  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-gwt" -b gwt-branch
   export GIT_CONFIG_PARAMETERS="'core.fsmonitor=$GX_MARK/fsmonitor.sh'"
-  git -C "$BATS_TEST_TMPDIR/gwt" status --porcelain >/dev/null 2>&1 || true
+  git -C "$GX_REPO/.claude/worktrees/agent-gwt" status --porcelain >/dev/null 2>&1 || true
   [ -e "$GX_MARK/fired-fsmonitor" ] # control: env-injected fsmonitor fires on raw git
   rm -f "$GX_MARK"/fired-*
   run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
@@ -184,38 +184,38 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
   git -C "$BATS_TEST_TMPDIR/subsrc" commit -q -m i
   git -C "$GX_REPO" -c protocol.file.allow=always submodule add -q "$BATS_TEST_TMPDIR/subsrc" sub >/dev/null 2>&1
   git -C "$GX_REPO" commit -q -m sub
-  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
-  git -C "$BATS_TEST_TMPDIR/gwt" -c protocol.file.allow=always submodule update --init -q >/dev/null 2>&1
-  echo "uncommitted submodule work" >> "$BATS_TEST_TMPDIR/gwt/sub/f.txt"
-  touch -t 203001010000 "$BATS_TEST_TMPDIR/gwt" # newer than /tmp so every other check passes
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-gwt" -b gwt-branch
+  git -C "$GX_REPO/.claude/worktrees/agent-gwt" -c protocol.file.allow=always submodule update --init -q >/dev/null 2>&1
+  echo "uncommitted submodule work" >> "$GX_REPO/.claude/worktrees/agent-gwt/sub/f.txt"
+  touch -t 202001010000 "$GX_REPO/.claude/worktrees/agent-gwt" # older than 7 days so the age gate passes
   run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
   assert_success
   assert_output --partial "has submodules"
-  [ -d "$BATS_TEST_TMPDIR/gwt/sub" ]
-  grep -q "uncommitted submodule work" "$BATS_TEST_TMPDIR/gwt/sub/f.txt"
+  [ -d "$GX_REPO/.claude/worktrees/agent-gwt/sub" ]
+  grep -q "uncommitted submodule work" "$GX_REPO/.claude/worktrees/agent-gwt/sub/f.txt"
 }
 
 @test "groomer --apply: plain clean stale worktree is still removed" {
   _gx_setup
-  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
-  touch -t 203001010000 "$BATS_TEST_TMPDIR/gwt"
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-gwt" -b gwt-branch
+  touch -t 202001010000 "$GX_REPO/.claude/worktrees/agent-gwt"
   run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
   assert_success
   assert_output --partial "Removed worktree"
-  [ ! -d "$BATS_TEST_TMPDIR/gwt" ]
+  [ ! -d "$GX_REPO/.claude/worktrees/agent-gwt" ]
 }
 
 @test "groomer hostile repo: clean (stat-dirty only) worktree is not reported dirty and no planted program runs" {
   _gx_setup
-  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-gwt" -b gwt-branch
   _gx_plant
-  touch "$BATS_TEST_TMPDIR/gwt/a.txt" "$BATS_TEST_TMPDIR/gwt/b.txt" # stat-dirty, content identical
+  touch "$GX_REPO/.claude/worktrees/agent-gwt/a.txt" "$GX_REPO/.claude/worktrees/agent-gwt/b.txt" # stat-dirty, content identical
   # Control: raw status in the worktree DOES execute the planted programs
-  git -C "$BATS_TEST_TMPDIR/gwt" status --porcelain >/dev/null 2>&1 || true
+  git -C "$GX_REPO/.claude/worktrees/agent-gwt" status --porcelain >/dev/null 2>&1 || true
   [ -e "$GX_MARK/fired-fsmonitor" ]
   [ -e "$GX_MARK/fired-filter" ]
   rm -f "$GX_MARK"/fired-*
-  touch -t 202201010000 "$BATS_TEST_TMPDIR/gwt/a.txt" "$BATS_TEST_TMPDIR/gwt/b.txt"
+  touch -t 202201010000 "$GX_REPO/.claude/worktrees/agent-gwt/a.txt" "$GX_REPO/.claude/worktrees/agent-gwt/b.txt"
   run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
   assert_success
   refute_output --partial "Keeping worktree (dirty)"
@@ -224,19 +224,19 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
 
 @test "groomer hostile repo: modified worktree is still reported dirty and no planted program runs" {
   _gx_setup
-  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-gwt" -b gwt-branch
   _gx_plant
-  echo changed >> "$BATS_TEST_TMPDIR/gwt/a.txt"
+  echo changed >> "$GX_REPO/.claude/worktrees/agent-gwt/a.txt"
   # Control: a raw (non-quiet) diff DOES execute the planted diff.external. The filter and
   # fsmonitor knobs are blanked here only so the control isolates the diff.external vector
   # (the required process filter would otherwise die before the diff runs).
   GIT_PAGER=cat git -c core.fsmonitor=false -c filter.x.clean= -c filter.Y.z.process= \
-    -c filter.Y.z.required=false -C "$BATS_TEST_TMPDIR/gwt" diff >/dev/null 2>&1 || true
+    -c filter.Y.z.required=false -C "$GX_REPO/.claude/worktrees/agent-gwt" diff >/dev/null 2>&1 || true
   [ -e "$GX_MARK/fired-diffext" ]
   rm -f "$GX_MARK"/fired-*
   run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
   assert_success
-  assert_output --regexp 'Keeping worktree \(dirty\): .*/gwt'
+  assert_output --regexp 'Keeping worktree \(dirty\): .*/agent-gwt'
   [ "$(_gx_fired)" = "0" ]
 }
 
@@ -255,16 +255,16 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
   local n
   for n in ctl grm; do
     git clone -q --no-checkout --filter=blob:none "file://$GX_REPO" "$BATS_TEST_TMPDIR/pc-$n"
-    git -C "$BATS_TEST_TMPDIR/pc-$n" worktree add -q --no-checkout "$BATS_TEST_TMPDIR/pwt-$n" -b pwt-branch
-    git -C "$BATS_TEST_TMPDIR/pwt-$n" read-tree HEAD # index entries whose blobs are NOT present locally
+    git -C "$BATS_TEST_TMPDIR/pc-$n" worktree add -q --no-checkout "$BATS_TEST_TMPDIR/pc-$n/.claude/worktrees/agent-pwt" -b pwt-branch
+    git -C "$BATS_TEST_TMPDIR/pc-$n/.claude/worktrees/agent-pwt" read-tree HEAD # index entries whose blobs are NOT present locally
     # identical content, no stat info in the index -> diff must compare against the (missing) blobs
-    printf 'a.txt filter=x\nb.txt filter=Y.z\n*.txt diff=y\n' > "$BATS_TEST_TMPDIR/pwt-$n/.gitattributes"
-    echo hello > "$BATS_TEST_TMPDIR/pwt-$n/a.txt"
-    echo world > "$BATS_TEST_TMPDIR/pwt-$n/b.txt"
+    printf 'a.txt filter=x\nb.txt filter=Y.z\n*.txt diff=y\n' > "$BATS_TEST_TMPDIR/pc-$n/.claude/worktrees/agent-pwt/.gitattributes"
+    echo hello > "$BATS_TEST_TMPDIR/pc-$n/.claude/worktrees/agent-pwt/a.txt"
+    echo world > "$BATS_TEST_TMPDIR/pc-$n/.claude/worktrees/agent-pwt/b.txt"
     git -C "$BATS_TEST_TMPDIR/pc-$n" config remote.origin.uploadpack "$GX_MARK/uploadpack.sh"
   done
   # Control: an unhardened diff needs the missing blob and DOES run the planted uploadpack
-  git -C "$BATS_TEST_TMPDIR/pwt-ctl" diff --quiet >/dev/null 2>&1 || true
+  git -C "$BATS_TEST_TMPDIR/pc-ctl/.claude/worktrees/agent-pwt" diff --quiet >/dev/null 2>&1 || true
   [ -e "$GX_MARK/fired-uploadpack" ]
   rm -f "$GX_MARK"/fired-*
   run bash "$GROOMER" --dry-run --worktrees --repo "$BATS_TEST_TMPDIR/pc-grm"
@@ -363,11 +363,11 @@ _gx_run_shimmed() { # <mode> <groomer args...>
 
 @test "groomer hostile repo: planted core.fsmonitor does not run during a --worktrees dry-run dirty check" {
   _gx_setup
-  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-gwt" -b gwt-branch
   git -C "$GX_REPO" config core.fsmonitor "$GX_MARK/fsmonitor.sh"
-  touch -t 203001010000 "$BATS_TEST_TMPDIR/gwt" # newer than /tmp so every non-dirty check passes
+  touch -t 202001010000 "$GX_REPO/.claude/worktrees/agent-gwt" # older than 7 days so the age gate passes
   # Control: plain `git status` in the worktree DOES run the planted program
-  git -C "$BATS_TEST_TMPDIR/gwt" status --porcelain >/dev/null 2>&1 || true
+  git -C "$GX_REPO/.claude/worktrees/agent-gwt" status --porcelain >/dev/null 2>&1 || true
   [ -e "$GX_MARK/fired-fsmonitor" ]
   rm -f "$GX_MARK"/fired-*
   run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
@@ -433,6 +433,136 @@ _gx_run_shimmed() { # <mode> <groomer args...>
   run env _CAST_HOOK_LIB_LOADED=1 bash "$GROOMER" --apply --repo "$GX_REPO"
   assert_success
   assert_output --partial "Deleted branch: worktree-agent-x"
+}
+
+# ---------------------------------------------------------------------------
+# Test 0d: S3a-U2b — --worktrees is a confused deputy unless the groomer proves the worktree is a
+#          REAL agent worktree of THIS repo. .git/worktrees/<id>/{gitdir,commondir,HEAD} and the
+#          worktree's .git file are agent-writable; `worktree remove --force` follows them.
+# ---------------------------------------------------------------------------
+# Forged registry entry aimed at <victim-dir> (which holds a precious, git-IGNORED sentinel so no content
+# check can see it). self  = commondir ../.. (passes the identity gate; only the PATH gate stops it)
+#                    other = commondir -> a different repo (checks read THAT repo's clean state)
+_gx_deputy_fixture() { # <repo> <victim-dir> <self|other>
+  local repo="$1" victim="$2" mode="$3" other="$1-other" adm sha
+  git init -q --initial-branch=main "$repo"
+  git -C "$repo" config user.email t@t
+  git -C "$repo" config user.name t
+  git -C "$repo" commit -q --allow-empty -m base
+  adm="$repo/.git/worktrees/x"
+  mkdir -p "$adm" "$victim"
+  echo precious > "$victim/keep-me.txt"
+  if [ "$mode" = self ]; then
+    sha="$(git -C "$repo" rev-parse HEAD)"
+    printf '../..\n' > "$adm/commondir"
+    printf 'keep-me.txt\n' >> "$repo/.git/info/exclude"
+  else
+    git init -q --initial-branch=main "$other"
+    git -C "$other" config user.email t@t
+    git -C "$other" config user.name t
+    git -C "$other" commit -q --allow-empty -m base
+    sha="$(git -C "$other" rev-parse HEAD)"
+    printf '%s\n' "$other/.git" > "$adm/commondir"
+    printf 'keep-me.txt\n' >> "$other/.git/info/exclude"
+  fi
+  printf '%s\n' "$sha" > "$adm/HEAD"
+  printf '%s\n' "$victim/.git" > "$adm/gitdir"
+  printf 'gitdir: %s\n' "$adm" > "$victim/.git"
+  touch -t 202001010000 "$victim" # old: the (forgeable) age gate must not be what saves it
+}
+# A real, clean agent worktree whose path is then swapped for a symlink to <target>.
+_gx_symlink_fixture() { # <repo> <target>
+  git init -q --initial-branch=main "$1"
+  git -C "$1" config user.email t@t
+  git -C "$1" config user.name t
+  echo tracked > "$1/tracked.txt"
+  git -C "$1" add -A
+  git -C "$1" commit -q -m base
+  git -C "$1" worktree add -q "$1/.claude/worktrees/agent-link" -b agent-link-branch
+  mv "$1/.claude/worktrees/agent-link" "$2"
+  ln -s "$2" "$1/.claude/worktrees/agent-link"
+  touch -t 202001010000 "$2"
+  touch -h -t 202001010000 "$1/.claude/worktrees/agent-link"
+}
+
+@test "groomer --apply --worktrees: a forged worktree entry aimed OUTSIDE .claude/worktrees never deletes the victim" {
+  _gx_setup
+  # Control: the same forged entry makes plain git delete the victim directory
+  _gx_deputy_fixture "$BATS_TEST_TMPDIR/ctl" "$BATS_TEST_TMPDIR/ctl/victim" self
+  git -C "$BATS_TEST_TMPDIR/ctl" worktree remove --force -- "$BATS_TEST_TMPDIR/ctl/victim" >/dev/null 2>&1 || true
+  [ ! -e "$BATS_TEST_TMPDIR/ctl/victim/keep-me.txt" ]
+  _gx_deputy_fixture "$BATS_TEST_TMPDIR/dep" "$BATS_TEST_TMPDIR/dep/victim" self
+  run bash "$GROOMER" --apply --worktrees --repo "$BATS_TEST_TMPDIR/dep"
+  assert_success
+  assert_output --partial "Keeping worktree (not an agent worktree path)"
+  [ -e "$BATS_TEST_TMPDIR/dep/victim/keep-me.txt" ]
+}
+
+@test "groomer --apply --worktrees: an agent-path worktree whose common dir is ANOTHER repo is kept (identity gate)" {
+  _gx_setup
+  _gx_deputy_fixture "$BATS_TEST_TMPDIR/ctl" "$BATS_TEST_TMPDIR/ctl/.claude/worktrees/agent-evil" other
+  git -C "$BATS_TEST_TMPDIR/ctl" worktree remove --force -- "$BATS_TEST_TMPDIR/ctl/.claude/worktrees/agent-evil" >/dev/null 2>&1 || true
+  [ ! -e "$BATS_TEST_TMPDIR/ctl/.claude/worktrees/agent-evil/keep-me.txt" ] # control: plain git deletes it
+  _gx_deputy_fixture "$BATS_TEST_TMPDIR/dep" "$BATS_TEST_TMPDIR/dep/.claude/worktrees/agent-evil" other
+  run bash "$GROOMER" --apply --worktrees --repo "$BATS_TEST_TMPDIR/dep"
+  assert_success
+  assert_output --partial "identity mismatch"
+  [ -e "$BATS_TEST_TMPDIR/dep/.claude/worktrees/agent-evil/keep-me.txt" ]
+}
+
+@test "groomer --apply --worktrees: a symlinked agent-worktree path never deletes the symlink target" {
+  _gx_setup
+  _gx_symlink_fixture "$BATS_TEST_TMPDIR/ctl" "$BATS_TEST_TMPDIR/ctl-target"
+  git -C "$BATS_TEST_TMPDIR/ctl" worktree remove --force -- "$BATS_TEST_TMPDIR/ctl/.claude/worktrees/agent-link" >/dev/null 2>&1 || true
+  [ ! -e "$BATS_TEST_TMPDIR/ctl-target/tracked.txt" ] # control: plain git deletes the TARGET's contents
+  _gx_symlink_fixture "$BATS_TEST_TMPDIR/dep" "$BATS_TEST_TMPDIR/dep-target"
+  run bash "$GROOMER" --apply --worktrees --repo "$BATS_TEST_TMPDIR/dep"
+  assert_success
+  assert_output --partial "Keeping worktree (not an agent worktree path)"
+  [ -e "$BATS_TEST_TMPDIR/dep-target/tracked.txt" ]
+  [ -L "$BATS_TEST_TMPDIR/dep/.claude/worktrees/agent-link" ]
+}
+
+@test "groomer --apply --worktrees: a real agent worktree holding only UNTRACKED work is kept (control: removed once clean)" {
+  _gx_setup
+  local wt="$GX_REPO/.claude/worktrees/agent-u"
+  git -C "$GX_REPO" worktree add -q "$wt" -b agent-u-branch
+  echo "only copy of my work" > "$wt/notes.txt"
+  touch -t 202001010000 "$wt"
+  git -C "$wt" diff --quiet # control part 1: the tracked-diff check alone cannot see untracked files
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Keeping worktree (uncommitted or untracked files)"
+  [ -e "$wt/notes.txt" ]
+  rm "$wt/notes.txt" # control part 2: same worktree, nothing untracked -> removed
+  touch -t 202001010000 "$wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Removed worktree"
+  [ ! -d "$wt" ]
+}
+
+@test "groomer --apply --worktrees: age gate removes an OLD clean agent worktree and keeps a fresh one" {
+  _gx_setup
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-old" -b agent-old-branch
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-fresh" -b agent-fresh-branch
+  touch -t 202001010000 "$GX_REPO/.claude/worktrees/agent-old"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp 'Removed worktree: .*/agent-old'
+  assert_output --regexp 'Keeping worktree \(recently touched\): .*/agent-fresh'
+  [ ! -d "$GX_REPO/.claude/worktrees/agent-old" ]
+  [ -d "$GX_REPO/.claude/worktrees/agent-fresh" ]
+}
+
+@test "groomer --worktrees: a worktree outside .claude/worktrees/agent-* is kept even when clean and old" {
+  _gx_setup
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/plain-wt" -b plain-wt-branch
+  touch -t 202001010000 "$BATS_TEST_TMPDIR/plain-wt"
+  run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --regexp 'Keeping worktree \(not an agent worktree path\): .*/plain-wt'
+  [ -d "$BATS_TEST_TMPDIR/plain-wt" ]
 }
 
 # ---------------------------------------------------------------------------
