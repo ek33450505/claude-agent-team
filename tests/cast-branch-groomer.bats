@@ -11,7 +11,12 @@ GROOMER="$REPO_DIR/scripts/cast-branch-groomer.sh"
 # ---------------------------------------------------------------------------
 
 setup() {
-  export TEST_TMPDIR="$(mktemp -d /tmp/cast-groomer-test.XXXXXXXX)"
+  # Everything lives under BATS_TEST_TMPDIR (bats removes it); isolated HOME so the groomer's
+  # ~/.claude/logs side effects never touch the real one.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
+  export TEST_TMPDIR="$BATS_TEST_TMPDIR/legacy"
+  mkdir -p "$TEST_TMPDIR"
   export TEST_REPO="$TEST_TMPDIR/testrepo"
 
   # Create isolated git repo
@@ -26,7 +31,10 @@ setup() {
 
 teardown() {
   unset GIT_DIR GIT_WORK_TREE
-  [ -n "${TEST_TMPDIR:-}" ] && rm -rf "$TEST_TMPDIR"
+  # Destructive-path discipline: only ever remove a dir this test created under BATS_TEST_TMPDIR.
+  if [ -n "${TEST_TMPDIR:-}" ] && [[ "$TEST_TMPDIR" == "$BATS_TEST_TMPDIR"/* ]]; then
+    rm -rf "$TEST_TMPDIR"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -262,6 +270,169 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
   run bash "$GROOMER" --dry-run --worktrees --repo "$BATS_TEST_TMPDIR/pc-grm"
   assert_success
   [ "$(_gx_fired)" = "0" ]
+}
+
+# ---------------------------------------------------------------------------
+# Test 0c: S3a-U2 — EVERY groomer git call goes through cast_git_safe. Mutating calls
+#          (branch -d/-D, worktree remove) fire repo-planted hooks on bare git; the helper must
+#          neutralise them, and any helper/git error must mean "keep", never "delete".
+# ---------------------------------------------------------------------------
+_gx_old_branch() { # <name> — a branch whose only commit is backdated to 2020; main stays checked out
+  local when="2020-01-01T00:00:00 +0000"
+  git -C "$GX_REPO" checkout -q -b "$1"
+  GIT_COMMITTER_DATE="$when" GIT_AUTHOR_DATE="$when" git -C "$GX_REPO" commit -q --allow-empty -m "old $1"
+  git -C "$GX_REPO" checkout -q main
+}
+_gx_gone_branch() { # <name> [unique] — fix/* branch whose upstream is [gone]; "unique" adds an unmerged commit
+  git -C "$GX_REPO" branch "$1" main
+  # The fetch refspec is what lets `branch -vv` resolve the (missing) upstream ref and print [gone].
+  git -C "$GX_REPO" config remote.origin.url "$BATS_TEST_TMPDIR/no-such-remote"
+  git -C "$GX_REPO" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+  git -C "$GX_REPO" config "branch.$1.remote" origin
+  git -C "$GX_REPO" config "branch.$1.merge" "refs/heads/$1"
+  if [ "${2:-}" = unique ]; then
+    git -C "$GX_REPO" checkout -q "$1"
+    git -C "$GX_REPO" commit -q --allow-empty -m "unmerged work on $1"
+    git -C "$GX_REPO" checkout -q main
+  fi
+}
+_gx_branch_exists() { git -C "$GX_REPO" show-ref --verify --quiet "refs/heads/$1"; }
+# PATH-shim git: SHIM_MODE picks the failure; everything else passes through to the real git.
+#   cfg = fail the hardening config read   foreach = fail for-each-ref   cherry1 = fail the FIRST cherry
+_gx_git_shim() {
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  cat > "$BATS_TEST_TMPDIR/shim/git" <<'SHIM'
+#!/bin/sh
+fail() { echo x >> "$SHIM_STATE/shim-hit"; echo "fatal: shim: injected failure" >&2; exit 128; }
+for a in "$@"; do
+  case "${SHIM_MODE:-}:$a" in
+    cfg:--get-regexp) fail ;;
+    foreach:for-each-ref) fail ;;
+    cherry1:cherry) [ -e "$SHIM_STATE/shim-hit" ] || fail ;;
+  esac
+done
+exec "$SHIM_REAL_GIT" "$@"
+SHIM
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+}
+_gx_run_shimmed() { # <mode> <groomer args...>
+  local mode="$1"
+  shift
+  run env PATH="$BATS_TEST_TMPDIR/shim:$PATH" SHIM_MODE="$mode" SHIM_REAL_GIT="$(command -v git)" \
+    SHIM_STATE="$BATS_TEST_TMPDIR" bash "$GROOMER" "$@"
+}
+
+@test "groomer --apply hostile repo: branch deletion does not run reference-transaction hooks (classic hooksPath + config hook)" {
+  _gx_setup
+  # -x is UNMERGED (plain -d refuses -> the groomer falls back to -D); -m is fully merged into main
+  # (fast-forwarded in, so -d itself succeeds). Both mutating calls must be hardened.
+  _gx_old_branch worktree-agent-x
+  _gx_old_branch worktree-agent-m
+  git -C "$GX_REPO" merge -q --ff-only worktree-agent-m
+  git -C "$GX_REPO" branch sibling
+  mkdir -p "$BATS_TEST_TMPDIR/hooks"
+  printf '#!/bin/sh\ntouch "%s/fired-classic-hook"\ncat >/dev/null\n' "$GX_MARK" > "$BATS_TEST_TMPDIR/hooks/reference-transaction"
+  chmod +x "$BATS_TEST_TMPDIR/hooks/reference-transaction"
+  git -C "$GX_REPO" config core.hooksPath "$BATS_TEST_TMPDIR/hooks"
+  _gx_marker_script cfghook 'cat >/dev/null'
+  git -C "$GX_REPO" config hook.x.event reference-transaction
+  git -C "$GX_REPO" config hook.x.command "$GX_MARK/cfghook.sh"
+  # Control: plain `git branch -d` on a sibling DOES fire the classic hook (and the config hook on git >= 2.54)
+  git -C "$GX_REPO" branch -d sibling >/dev/null 2>&1
+  [ -e "$GX_MARK/fired-classic-hook" ]
+  local cfg_live=0
+  if [ -e "$GX_MARK/fired-cfghook" ]; then
+    cfg_live=1
+  else
+    echo "# note: this git does not run config hooks (< 2.54); asserting the classic hook only" >&3
+  fi
+  rm -f "$GX_MARK"/fired-*
+  run bash "$GROOMER" --apply --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Deleted branch: worktree-agent-x"
+  assert_output --partial "Deleted branch: worktree-agent-m"
+  run _gx_branch_exists worktree-agent-x # (`! cmd` would not trip errexit: use run + assert_failure)
+  assert_failure
+  run _gx_branch_exists worktree-agent-m
+  assert_failure
+  [ ! -e "$GX_MARK/fired-classic-hook" ]
+  if [ "$cfg_live" = 1 ]; then
+    [ ! -e "$GX_MARK/fired-cfghook" ]
+  fi
+}
+
+@test "groomer hostile repo: planted core.fsmonitor does not run during a --worktrees dry-run dirty check" {
+  _gx_setup
+  git -C "$GX_REPO" worktree add -q "$BATS_TEST_TMPDIR/gwt" -b gwt-branch
+  git -C "$GX_REPO" config core.fsmonitor "$GX_MARK/fsmonitor.sh"
+  touch -t 203001010000 "$BATS_TEST_TMPDIR/gwt" # newer than /tmp so every non-dirty check passes
+  # Control: plain `git status` in the worktree DOES run the planted program
+  git -C "$BATS_TEST_TMPDIR/gwt" status --porcelain >/dev/null 2>&1 || true
+  [ -e "$GX_MARK/fired-fsmonitor" ]
+  rm -f "$GX_MARK"/fired-*
+  run bash "$GROOMER" --dry-run --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Would remove worktree: "  # the dirty check ran and passed (it is what could fire fsmonitor)
+  [ "$(_gx_fired)" = "0" ]
+}
+
+@test "groomer --apply: when the hardening read fails nothing is deleted (control: a healthy run deletes both)" {
+  _gx_setup
+  _gx_git_shim
+  _gx_old_branch worktree-agent-x
+  _gx_gone_branch fix/gone-merged
+  _gx_run_shimmed cfg --apply --repo "$GX_REPO"
+  assert_failure
+  assert_output --partial "refusing to run git"
+  [ -e "$BATS_TEST_TMPDIR/shim-hit" ] # the injected failure really fired
+  _gx_branch_exists worktree-agent-x
+  _gx_branch_exists fix/gone-merged
+  # Control: same fixture, same shim on PATH but passing through -> both branches ARE deletable
+  _gx_run_shimmed pass --apply --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Deleted branch: worktree-agent-x"
+  assert_output --partial "Deleted branch: fix/gone-merged"
+}
+
+@test "groomer --apply: a for-each-ref error keeps a worktree-agent branch (age unknown is not 'ancient')" {
+  _gx_setup
+  _gx_git_shim
+  _gx_old_branch worktree-agent-x
+  _gx_run_shimmed foreach --apply --repo "$GX_REPO"
+  assert_success
+  [ -e "$BATS_TEST_TMPDIR/shim-hit" ]
+  refute_output --partial "Deleted branch"
+  _gx_branch_exists worktree-agent-x
+  # Control: with a healthy for-each-ref the same branch is deleted
+  _gx_run_shimmed pass --apply --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Deleted branch: worktree-agent-x"
+}
+
+@test "groomer --apply: a transient cherry error never reads as 'merged' for an UNMERGED fix/* branch" {
+  _gx_setup
+  _gx_git_shim
+  _gx_gone_branch fix/unmerged-gone unique
+  _gx_run_shimmed cherry1 --apply --repo "$GX_REPO"
+  assert_success
+  [ -e "$BATS_TEST_TMPDIR/shim-hit" ] # the first cherry call failed
+  refute_output --partial "Deleted branch"
+  _gx_branch_exists fix/unmerged-gone
+}
+
+@test "groomer: refuses to run ANY git when cast-hook-lib.sh cannot be loaded; an inherited loaded-guard does not defeat the lib" {
+  _gx_setup
+  _gx_old_branch worktree-agent-x
+  mkdir -p "$BATS_TEST_TMPDIR/solo"
+  cp "$GROOMER" "$BATS_TEST_TMPDIR/solo/cast-branch-groomer.sh" # deliberately NOT copying the lib
+  run bash "$BATS_TEST_TMPDIR/solo/cast-branch-groomer.sh" --apply --repo "$GX_REPO"
+  assert_failure
+  assert_output --partial "refusing to run git"
+  _gx_branch_exists worktree-agent-x
+  # Control: the real script (lib beside it) works, even with the lib's loaded-guard inherited from the env
+  run env _CAST_HOOK_LIB_LOADED=1 bash "$GROOMER" --apply --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Deleted branch: worktree-agent-x"
 }
 
 # ---------------------------------------------------------------------------

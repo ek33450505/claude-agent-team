@@ -45,6 +45,26 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# ── Hostile-repo hardening ───────────────────────────────────────────────
+# Runs unattended (launchd), OUTSIDE the Bash sandbox, over repos/worktrees an agent can
+# write to. Repo-local config an agent plants can make git exec programs (fsmonitor, filter
+# drivers, hooks incl. git>=2.54 config hooks, gpg, promisor lazy fetch). EVERY git call below
+# goes through cast_git_safe (scripts/cast-hook-lib.sh) -- see its header for the contract.
+# rc 2/3/126 (helper could not run git) are errors like any other: they must mean "keep".
+# If the lib cannot be loaded we refuse to run ANY git (a failing job beats bare git).
+# unset first: an inherited _CAST_HOOK_LIB_LOADED makes the lib skip its definitions, and an
+# inherited exported function must not stand in for the real one.
+_GROOM_LIB="$(dirname "$0")/cast-hook-lib.sh"
+unset -f cast_git_safe 2>/dev/null || true
+unset _CAST_HOOK_LIB_LOADED
+# shellcheck source=cast-hook-lib.sh
+# (-r first: bash 3.2 exits the shell silently on a failed `source` of a missing file.)
+if [[ ! -r "$_GROOM_LIB" ]] || ! source "$_GROOM_LIB" 2>/dev/null || ! declare -F cast_git_safe >/dev/null 2>&1; then
+  printf '[cast-branch-groomer] ERROR: cannot load cast_git_safe from %s; refusing to run git\n' "$_GROOM_LIB" >&2
+  _log_error "cannot load cast_git_safe from $_GROOM_LIB"
+  exit 1
+fi
+
 # If --repo was given, cd into it so git commands operate there
 if [[ -n "$REPO_DIR" ]]; then
   if [[ ! -d "$REPO_DIR" ]]; then
@@ -53,14 +73,30 @@ if [[ -n "$REPO_DIR" ]]; then
   fi
   cd "$REPO_DIR"
 fi
+GROOM_REPO="$(pwd -P)"
 
 # Verify we're in a git repo
-if ! git rev-parse --git-dir &>/dev/null; then
-  printf '[cast-branch-groomer] ERROR: not a git repository\n' >&2
-  exit 1
-fi
+_rc=0
+cast_git_safe "$GROOM_REPO" rev-parse --git-dir &>/dev/null || _rc=$?
+case "$_rc" in
+  0) ;;
+  2 | 3 | 126)
+    printf '[cast-branch-groomer] ERROR: git hardening could not be established (rc=%s); refusing to run git\n' "$_rc" >&2
+    _log_error "git hardening could not be established (rc=$_rc) in $GROOM_REPO"
+    exit 1
+    ;;
+  *)
+    printf '[cast-branch-groomer] ERROR: not a git repository\n' >&2
+    exit 1
+    ;;
+esac
 
 # ── Build whitelist: currently checked-out branches ───────────────────────
+# Fail CLOSED: an unreadable worktree list would silently empty the whitelist.
+if ! _wt_porcelain="$(cast_git_safe "$GROOM_REPO" worktree list --porcelain 2>/dev/null)"; then
+  printf '[cast-branch-groomer] ERROR: could not list worktrees; refusing to groom\n' >&2
+  exit 1
+fi
 CHECKED_OUT_BRANCHES=()
 while IFS= read -r line; do
   # git worktree list --porcelain emits "branch refs/heads/<name>"
@@ -68,7 +104,7 @@ while IFS= read -r line; do
   if [[ -n "$branch" ]]; then
     CHECKED_OUT_BRANCHES+=("$branch")
   fi
-done < <(git worktree list --porcelain 2>/dev/null | grep '^branch' || true)
+done < <(printf '%s\n' "$_wt_porcelain" | grep '^branch' || true)
 
 _is_whitelisted() {
   local b="$1"
@@ -101,64 +137,45 @@ _has_open_pr() {
   return 1
 }
 
-# ── Hostile-repo hardening ───────────────────────────────────────────────
-# Runs unattended (launchd), OUTSIDE the Bash sandbox, over repos/worktrees an agent can
-# write to. Repo-local config an agent plants must not execute code during the read-only
-# checks below: log.showSignature+gpg.program (git log), core.fsmonitor (status/diff),
-# diff.external / textconv (git diff), filter.<drv>.clean/process (re-hash of stat-dirty
-# files). fsmonitor etc. are forced off with -c; filter drivers are enumerated from config
-# (a read — nothing is executed) and each one's exec knobs blanked. Bash 3.2-safe.
-_SAFE_GIT_BASE=(-c core.fsmonitor=false -c core.untrackedCache=false -c core.hooksPath=/dev/null
-  -c log.showSignature=false --no-replace-objects --no-optional-locks)
-SAFE_GIT_ENV=()
-# _safe_git_args <repo-dir> — populate SAFE_GIT_ENV (env assignments for `env ... git`). All
-# hardening config goes through GIT_CONFIG_COUNT/KEY_i/VALUE_i, NOT `-c k=v`: a filter driver
-# name containing '=' would be mis-split by -c parsing and escape the blanking. The count is
-# set explicitly with keys from index 0, so an inherited GIT_CONFIG_COUNT cannot add entries.
-_safe_git_args() {
-  local _key _drv _n=0 _k
-  SAFE_GIT_ENV=()
-  _sg_add() { SAFE_GIT_ENV+=("GIT_CONFIG_KEY_${_n}=$1" "GIT_CONFIG_VALUE_${_n}=$2"); _n=$((_n + 1)); }
-  _sg_add core.fsmonitor false
-  _sg_add core.untrackedCache false
-  _sg_add core.hooksPath /dev/null
-  _sg_add log.showSignature false
-  while IFS= read -r -d '' _key; do
-    _drv="${_key#filter.}"
-    [[ "$_drv" == *.* ]] || continue
-    _drv="${_drv%.*}"
-    for _k in clean smudge process; do _sg_add "filter.${_drv}.${_k}" ""; done
-    _sg_add "filter.${_drv}.required" false
-  done < <(git -C "$1" config -z --name-only --get-regexp '^filter\.' 2>/dev/null || true)
-  SAFE_GIT_ENV+=("GIT_CONFIG_COUNT=${_n}")
-}
-
 # ── Date helpers ─────────────────────────────────────────────────────────
 _epoch_now() { date +%s; }
 _days_since_commit() {
   local branch="$1"
-  local commit_epoch
+  local ref_out commit_epoch now
   # Plumbing (for-each-ref) instead of `git log`: log honours log.showSignature/gpg.program.
-  # Pattern also matches refs/heads/<branch>/..., so keep only the exact ref; missing -> 0.
-  commit_epoch=$(GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none env -u GIT_CONFIG_PARAMETERS git "${_SAFE_GIT_BASE[@]}" for-each-ref \
-    --format='%(refname) %(committerdate:unix)' "refs/heads/$branch" 2>/dev/null |
-    awk -v r="refs/heads/$branch" '$1 == r { print $2; exit }') || commit_epoch=0
-  commit_epoch="${commit_epoch:-0}"
-  local now; now=$(_epoch_now)
-  echo $(( (now - commit_epoch) / 86400 ))
+  # Pattern also matches refs/heads/<branch>/..., so keep only the exact ref.
+  # FAIL-SAFE: any git error or missing/garbled epoch -> age UNKNOWN -> report 0 days (fresh), so the
+  # caller KEEPS the branch. (A fallback epoch of 0 would read as ~20000 days old = delete.)
+  if ! ref_out="$(cast_git_safe "$GROOM_REPO" for-each-ref \
+    --format='%(refname) %(committerdate:unix)' "refs/heads/$branch" 2>/dev/null)"; then
+    echo 0
+    return 0
+  fi
+  commit_epoch="$(printf '%s\n' "$ref_out" | awk -v r="refs/heads/$branch" '$1 == r { print $2; exit }')"
+  if [[ ! "$commit_epoch" =~ ^[0-9]+$ ]]; then
+    echo 0
+    return 0
+  fi
+  now=$(_epoch_now)
+  echo $(((now - commit_epoch) / 86400))
 }
 
 # _is_content_merged <branch> — 0 if every commit on <branch> is already on main
-# (true/ff merge OR squash merge), 1 otherwise.
+# (true/ff merge OR squash merge), 1 otherwise. FAIL-SAFE: any git error -> 1 (not merged).
 _is_content_merged() {
   local branch="$1"
-  local ahead_count plus_count cherry_total
-  ahead_count="$(git rev-list --count "main..$branch" 2>/dev/null || echo 1)"
+  local ahead_count plus_count cherry_total cherry_out
+  ahead_count="$(cast_git_safe "$GROOM_REPO" rev-list --count "main..$branch" 2>/dev/null || echo 1)"
   if [[ "$ahead_count" -eq 0 ]]; then
     return 0
   fi
-  plus_count=$(git cherry main "$branch" 2>/dev/null | grep -c '^+') || plus_count=0
-  cherry_total=$(git cherry main "$branch" 2>/dev/null | wc -l | tr -d ' ') || cherry_total=0
+  # ONE cherry call, status checked: two calls (one for '+' lines, one for the total) let a
+  # transient error in the first read as "no '+' lines" while the second succeeds = a false
+  # "merged" on an unmerged branch. Empty output also means "cannot prove merged".
+  cherry_out="$(cast_git_safe "$GROOM_REPO" cherry main "$branch" 2>/dev/null)" || return 1
+  [[ -n "$cherry_out" ]] || return 1
+  plus_count=$(printf '%s\n' "$cherry_out" | grep -c '^+' || true)
+  cherry_total=$(printf '%s\n' "$cherry_out" | grep -c '' || true)
   if [[ "$plus_count" -eq 0 ]] && [[ "$cherry_total" -gt 0 ]] && [[ "$cherry_total" -eq "$ahead_count" ]]; then
     return 0
   fi
@@ -175,7 +192,10 @@ _delete_branch() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '[dry-run] Would delete branch: %s\n' "$branch"
   else
-    if git branch -d "$branch" 2>/dev/null || git branch -D "$branch" 2>/dev/null; then
+    # `--`: a ref named like an option must never be parsed as one. -d then -D is deliberate
+    # (squash merges; gated by _is_content_merged).
+    if cast_git_safe "$GROOM_REPO" branch -d -- "$branch" 2>/dev/null ||
+      cast_git_safe "$GROOM_REPO" branch -D -- "$branch" 2>/dev/null; then
       printf '[groomer] Deleted branch: %s\n' "$branch"
     else
       printf '[groomer] WARN: could not delete branch: %s\n' "$branch" >&2
@@ -195,7 +215,7 @@ while IFS= read -r branch; do
     _delete_branch "$branch"
     DELETED_WORKTREE_AGENT=$((DELETED_WORKTREE_AGENT + 1))
   fi
-done < <(git branch --list 'worktree-agent-*' 2>/dev/null || true)
+done < <(cast_git_safe "$GROOM_REPO" branch --list 'worktree-agent-*' 2>/dev/null || true)
 
 # ── Process feature/* and fix/* — merged + [gone] remote ─────────────────
 while IFS= read -r vv_line; do
@@ -211,18 +231,18 @@ while IFS= read -r vv_line; do
       fi
     fi
   fi
-done < <(git branch -vv 2>/dev/null || true)
+done < <(cast_git_safe "$GROOM_REPO" branch -vv 2>/dev/null || true)
 
 # ── Worktree directory pruning (--worktrees flag) ─────────────────────────
 DELETED_WORKTREES=0
 if [[ "$DO_WORKTREES" -eq 1 ]]; then
+  GROOM_TOP="$(cast_git_safe "$GROOM_REPO" rev-parse --show-toplevel 2>/dev/null || true)"
   while IFS= read -r wt_path; do
     [[ -z "$wt_path" ]] && continue
     # Skip the main worktree (first entry, no extra path)
-    [[ "$wt_path" == "$(git rev-parse --show-toplevel 2>/dev/null)" ]] && continue
+    [[ "$wt_path" == "$GROOM_TOP" ]] && continue
     if [[ ! -d "$wt_path" ]]; then continue; fi
     # Check: no uncommitted changes
-    _safe_git_args "$wt_path"
     # FAIL-SAFE submodule guard. The dirty check below uses --ignore-submodules=all (a submodule's
     # own config could define filter drivers we never enumerated), so uncommitted work INSIDE a
     # submodule would be invisible to it and `worktree remove --force` would destroy it. Keep any
@@ -232,7 +252,7 @@ if [[ "$DO_WORKTREES" -eq 1 ]]; then
       printf '[groomer] Keeping worktree (has submodules — check manually): %s\n' "$wt_path"
       continue
     fi
-    if ! _wt_index="$(GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none env -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM "${SAFE_GIT_ENV[@]}" git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-replace-objects --no-optional-locks -C "$wt_path" ls-files -s 2>/dev/null)"; then
+    if ! _wt_index="$(cast_git_safe "$wt_path" ls-files -s 2>/dev/null)"; then
       printf '[groomer] Keeping worktree (index unreadable — check manually): %s\n' "$wt_path"
       continue
     fi
@@ -240,13 +260,14 @@ if [[ "$DO_WORKTREES" -eq 1 ]]; then
       printf '[groomer] Keeping worktree (has submodules — check manually): %s\n' "$wt_path"
       continue
     fi
-    # --ignore-submodules=all (safe: submodule worktrees were kept above).
-    if ! GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none env -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM "${SAFE_GIT_ENV[@]}" git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false -c core.untrackedCache=false --no-replace-objects --no-optional-locks -C "$wt_path" diff --quiet --ignore-submodules=all --no-ext-diff --no-textconv 2>/dev/null; then
+    # cast_git_safe injects --ignore-submodules=all for diff (safe: submodule worktrees were kept
+    # above). Any error (incl. helper rc 2/3/126) falls into the "dirty" keep branch.
+    if ! cast_git_safe "$wt_path" diff --quiet --no-ext-diff --no-textconv 2>/dev/null; then
       printf '[groomer] Keeping worktree (dirty): %s\n' "$wt_path"
       continue
     fi
     # Check: no commits ahead of main
-    ahead=$(git -C "$wt_path" rev-list --count "main..HEAD" 2>/dev/null || echo 1)
+    ahead=$(cast_git_safe "$wt_path" rev-list --count "main..HEAD" 2>/dev/null || echo 1)
     if [[ "$ahead" -gt 0 ]]; then
       printf '[groomer] Keeping worktree (ahead of main): %s\n' "$wt_path"
       continue
@@ -260,7 +281,7 @@ if [[ "$DO_WORKTREES" -eq 1 ]]; then
     if [[ "$DRY_RUN" -eq 1 ]]; then
       printf '[dry-run] Would remove worktree: %s\n' "$wt_path"
     else
-      if git worktree remove --force "$wt_path" 2>/dev/null; then
+      if cast_git_safe "$GROOM_REPO" worktree remove --force -- "$wt_path" 2>/dev/null; then
         printf '[groomer] Removed worktree: %s\n' "$wt_path"
         DELETED_WORKTREES=$((DELETED_WORKTREES + 1))
       else
@@ -268,7 +289,7 @@ if [[ "$DO_WORKTREES" -eq 1 ]]; then
         WARN_COUNT=$((WARN_COUNT + 1))
       fi
     fi
-  done < <(git worktree list --porcelain 2>/dev/null | grep '^worktree' | awk '{print $2}' || true)
+  done < <(cast_git_safe "$GROOM_REPO" worktree list --porcelain 2>/dev/null | grep '^worktree' | awk '{print $2}' || true)
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────
