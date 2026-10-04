@@ -99,6 +99,25 @@ def main() -> int:
                 return 0  # another process migrated (or dropped) it while we waited
             ddl = row[0]
 
+            # The rebuild recreates indexes only. A trigger on agent_runs would be
+            # silently dropped with the old table (success reported), and a view or
+            # trigger that merely references it makes the RENAME fail. Refuse rather
+            # than lose them; no attempt is made to recreate them. The LIKE match is
+            # deliberately conservative ('_' is a wildcard too): a false positive only
+            # causes a skip, never a lost object.
+            dependents = [
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('trigger','view') "
+                    "AND (tbl_name = 'agent_runs' OR sql LIKE '%agent_runs%') ORDER BY name"
+                ).fetchall()
+            ]
+            if dependents:
+                conn.rollback()
+                print("[drop-status-check] refusing to rebuild agent_runs: dependent "
+                      f"trigger(s)/view(s) {', '.join(dependents)} would be lost; "
+                      "drop the CHECK manually", file=sys.stderr)
+                return 1
+
             new_ddl = _strip_status_check(ddl)
             if _has_status_check(new_ddl):
                 conn.rollback()

@@ -176,3 +176,57 @@ PY
   assert_success
   [ "$dt" -lt 5 ] # busy timeout is 10s: waiting on the lock would take >=10s
 }
+
+# --- migration-reviewer follow-up: the rebuild recreates indexes only. A TRIGGER on
+# agent_runs would be silently dropped with the old table (helper reporting success),
+# and a VIEW/trigger referencing it makes the RENAME fail. Neither exists in the repo
+# schema today, so the helper must REFUSE (non-zero, one clear line naming them) and
+# leave the table exactly as it was - it never tries to recreate them.
+
+_assert_untouched_after_refusal() { # $1 = dependent object name that must survive
+  run sqlite3 "$TEST_DB" "SELECT sql FROM sqlite_master WHERE name='agent_runs';"
+  assert_output --partial "CHECK (status"
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE name='$1';"
+  assert_output "1"
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM agent_runs;"
+  assert_output "3"
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM sqlite_master WHERE name='agent_runs__newschema';"
+  assert_output "0"
+}
+
+@test "dependents: a trigger on agent_runs blocks the rebuild; CHECK, trigger and rows intact" {
+  sqlite3 "$TEST_DB" "CREATE TRIGGER trg_ar_audit AFTER INSERT ON agent_runs BEGIN SELECT 1; END;"
+  run python3 "$HELPER" "$TEST_DB"
+  assert_failure
+  assert_output --partial "refusing to rebuild agent_runs"
+  assert_output --partial "trg_ar_audit"
+  _assert_untouched_after_refusal trg_ar_audit
+}
+
+@test "dependents: a view referencing agent_runs blocks the rebuild; CHECK, view and rows intact" {
+  sqlite3 "$TEST_DB" "CREATE VIEW v_ar_agents AS SELECT agent, status FROM agent_runs;"
+  run python3 "$HELPER" "$TEST_DB"
+  assert_failure
+  assert_output --partial "refusing to rebuild agent_runs"
+  assert_output --partial "v_ar_agents"
+  _assert_untouched_after_refusal v_ar_agents
+}
+
+@test "dependents: a trigger on ANOTHER table whose body references agent_runs also blocks" {
+  sqlite3 "$TEST_DB" "CREATE TRIGGER trg_sess_cleanup AFTER DELETE ON sessions BEGIN DELETE FROM agent_runs WHERE session_id = OLD.id; END;"
+  run python3 "$HELPER" "$TEST_DB"
+  assert_failure
+  assert_output --partial "refusing to rebuild agent_runs"
+  assert_output --partial "trg_sess_cleanup"
+  _assert_untouched_after_refusal trg_sess_cleanup
+}
+
+@test "dependents: an unrelated trigger/view does not block the migration" {
+  sqlite3 "$TEST_DB" "CREATE TABLE other (id INTEGER PRIMARY KEY, v TEXT);
+    CREATE TRIGGER trg_other AFTER INSERT ON other BEGIN SELECT 1; END;
+    CREATE VIEW v_other AS SELECT v FROM other;"
+  run python3 "$HELPER" "$TEST_DB"
+  assert_success
+  run sqlite3 "$TEST_DB" "SELECT sql FROM sqlite_master WHERE name='agent_runs';"
+  refute_output --partial "CHECK (status"
+}
