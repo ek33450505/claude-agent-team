@@ -2176,10 +2176,19 @@ class TestGitSitesUseHardenedPrimitive(_IsolatedDbPathTestCase):
             fh.write('#!/bin/sh\nprintf \'%%s|%%s\\n\' "$*" "${GIT_CONFIG_COUNT-unset}" >> "%s"\n'
                      'exec "%s" "$@"\n' % (self._log, self._real_git))
         os.chmod(shim, 0o755)
+        os.chmod(shim_dir, 0o755)
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         env.update({'PATH': shim_dir + os.pathsep + os.environ['PATH'],
                     'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'})
         patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # cast_git_safe never consults PATH for git (fixed trusted list), so the PATH shim alone is
+        # inert. Load cast_git_safe from a COPY of the scripts (wrapper + lib) whose lib's
+        # git_candidates names the shim, and hand THAT module to the hook (_GIT_SAFE_MOD).
+        # PATH stays shimmed too: a site reverted to bare git then records `unset` and fails.
+        self._shim_mod = self._load_shimmed_git_safe(shim)
+        patcher = mock.patch.object(css, '_GIT_SAFE_MOD', self._shim_mod)
         patcher.start()
         self.addCleanup(patcher.stop)
         self._repo = os.path.realpath(os.path.join(self._tmpdir, 'repo'))
@@ -2195,6 +2204,28 @@ class TestGitSitesUseHardenedPrimitive(_IsolatedDbPathTestCase):
     def tearDown(self):
         os.chdir(self._orig_cwd)
         super().tearDown()
+
+    def _load_shimmed_git_safe(self, shim):
+        import importlib.util
+        import re
+        scripts = Path(css.__file__).resolve().parent
+        dest = os.path.join(self._tmpdir, 'scripts-copy')
+        os.makedirs(dest)
+        shutil.copy(scripts / 'cast_git_safe.py', dest)
+        out, n = re.subn(r'(?m)^  local git_candidates=\(.*\)$',
+                         lambda _m: '  local git_candidates=("%s")' % shim,
+                         (scripts / 'cast-hook-lib.sh').read_text())
+        self.assertEqual(n, 1, 'git_candidates line not found in the lib (vacuous shim)')
+        lib = os.path.join(dest, 'cast-hook-lib.sh')
+        Path(lib).write_text(out)
+        os.chmod(lib, 0o644)
+        self.assertIn('local git_candidates=("%s")' % shim, Path(lib).read_text())
+        spec = importlib.util.spec_from_file_location(
+            'cast_git_safe_shimmed', os.path.join(dest, 'cast_git_safe.py'))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertEqual(mod.LIB, os.path.join(os.path.realpath(dest), 'cast-hook-lib.sh'))
+        return mod
 
     def _git(self, *args):
         r = subprocess.run([self._real_git, '-C', self._repo, *args], capture_output=True,

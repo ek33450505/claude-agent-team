@@ -85,7 +85,21 @@ class GitSafeTestBase(unittest.TestCase):
         path = os.path.join(shim, 'git')
         Path(path).write_text(f'#!/bin/sh\n{git_body}\n')
         os.chmod(path, 0o755)
+        # cast_git_safe never consults PATH for git (fixed trusted list), so a PATH shim is inert:
+        # also build a COPY of the lib whose trusted-git list is just the shim (self.shim_lib).
+        self.shim_lib = self.lib_with_git(path, os.path.join(self.root, 'lib-shimmed.sh'))
         return shim + os.pathsep + os.environ['PATH']
+
+    def lib_with_git(self, git_path: str, dest: str) -> str:
+        """Copy of the lib with git_candidates=(<git_path>); asserts the substitution applied."""
+        import re
+        src = Path(cast_git_safe.LIB).read_text()
+        out, n = re.subn(r'(?m)^  local git_candidates=\(.*\)$',
+                         lambda _m: f'  local git_candidates=("{git_path}")', src)
+        self.assertEqual(n, 1, 'git_candidates line not found in the lib (vacuous shim)')
+        Path(dest).write_text(out)
+        os.chmod(dest, 0o644)
+        return dest
 
 
 class RunBehaviour(GitSafeTestBase):
@@ -131,8 +145,9 @@ class RunBehaviour(GitSafeTestBase):
     def test_05_missing_lib_returns_3_and_runs_nothing(self) -> None:
         path = self.shim_path(f'touch "{self.marker}"\nexit 1')
         with mock.patch.dict(os.environ, {'PATH': path}):
-            # CONTROL: with the real lib the shimmed git IS reached.
-            cast_git_safe.run(self.repo, ['status'])
+            # CONTROL: with the (shim-pinned) lib the shimmed git IS reached.
+            with mock.patch.object(cast_git_safe, 'LIB', self.shim_lib):
+                cast_git_safe.run(self.repo, ['status'])
             self.assertTrue(self.fired(), 'control: shimmed git was never reached with the real lib')
             self.reset_marker()
             with mock.patch.object(cast_git_safe, 'LIB', os.path.join(self.root, 'no-such-lib.sh')):
@@ -197,7 +212,7 @@ class RunBehaviour(GitSafeTestBase):
         pidfile = os.path.join(self.root, 'sleeper.pid')
         path = self.shim_path(
             f'case "$*" in *--get-regexp*) exit 1;; esac\necho $$ > "{pidfile}"\nexec sleep 30')
-        with mock.patch.dict(os.environ, {'PATH': path}):
+        with mock.patch.dict(os.environ, {'PATH': path}), mock.patch.object(cast_git_safe, 'LIB', self.shim_lib):
             start = time.monotonic()
             r = cast_git_safe.run(self.repo, ['status'], timeout=1)
             elapsed = time.monotonic() - start
@@ -342,8 +357,8 @@ class RunBehaviour(GitSafeTestBase):
 
     def test_16_group_or_world_writable_lib_is_refused(self) -> None:
         lib = os.path.join(self.root, 'lib-copy.sh')
-        Path(lib).write_bytes(Path(cast_git_safe.LIB).read_bytes())
         path = self.shim_path(f'touch "{self.marker}"\nexit 1')
+        self.lib_with_git(os.path.join(self.root, 'shim', 'git'), lib)
         with mock.patch.dict(os.environ, {'PATH': path}), mock.patch.object(cast_git_safe, 'LIB', lib):
             os.chmod(lib, 0o644)
             # CONTROL: the same copy at 0644 is accepted and the shimmed git IS reached.
@@ -360,7 +375,7 @@ class RunBehaviour(GitSafeTestBase):
 
     def test_17_nul_byte_in_an_argument_returns_3_and_runs_no_git(self) -> None:
         path = self.shim_path(f'touch "{self.marker}"\nexit 1')
-        with mock.patch.dict(os.environ, {'PATH': path}):
+        with mock.patch.dict(os.environ, {'PATH': path}), mock.patch.object(cast_git_safe, 'LIB', self.shim_lib):
             # CONTROL: an ordinary argument reaches the shimmed git.
             cast_git_safe.run(self.repo, ['rev-parse', 'ab'])
             self.assertTrue(self.fired(), 'control: shimmed git was never reached')

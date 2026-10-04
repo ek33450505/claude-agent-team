@@ -34,15 +34,37 @@ cast_hook_db_path() {
 }
 
 # cast_git_safe <repo-dir> <git-args...> — run git against <repo-dir> with the KNOWN repo-config
-# exec paths neutralised. stdout/stderr/exit status are git's own EXCEPT: 2 = bad args (empty or
-# '-'-leading <repo-dir>; a MISSING or EMPTY first git arg; or a first git arg starting with '-':
-# callers pass the SUBCOMMAND first, since global options like `-c k=v status` would bypass the
-# injection below); 3 = the hardening config read failed, so hardening could not be established
-# and git was NOT run (fail closed); 126 from env if the config exceeds ARG_MAX (thousands of
-# filter/hook sections, or ONE huge config key name; also fail closed). The first git arg must be
-# a git BUILTIN subcommand: a repo-defined alias would be expanded by git under repo control.
+# exec paths neutralised. stdout/stderr/exit status are git's own EXCEPT: 2 = refused (empty or
+# '-'-leading <repo-dir>; a MISSING, EMPTY, '-'-leading or newline-bearing first git arg — callers
+# pass the SUBCOMMAND first, since global options like `-c k=v status` would bypass the injection
+# below; or a subcommand NOT on the ALLOWLIST); 3 = hardening could not be established and git was
+# NOT run (fail closed: the config read failed, or no trusted git binary: its directory must be
+# owned by root or the current user and not world-writable); 126 from env if the config exceeds ARG_MAX (thousands of filter/hook
+# sections, or ONE huge config key name; also fail closed).
+# ALLOWLIST (exactly what callers use): status rev-parse rev-list for-each-ref ls-files cherry
+# branch diff diff-files diff-index, plus `worktree` ONLY when its first non-option arg is `list`.
+# Everything else is refused, because "is a git builtin" is the wrong safety axis: repo config can
+# make many builtins exec programs or delete (alias.<x>='!cmd'; help -> man.<tool>.cmd; credential,
+# difftool/mergetool, merge drivers, bisect run; gc/prune/repack/maintenance and `worktree
+# prune|repair|move|remove` follow an agent-planted symlinked .git/worktrees/<id> and EMPTY its
+# target). This also closes `show` / `log -p` / `format-patch`, where diff.<drv>.textconv would
+# fire (they are not on the list, so the diff-family flag injection need not cover them).
+# git is NEVER resolved from the caller's PATH (a planted ./git, or a git in any agent-writable
+# dir on PATH, would win): the first executable of /opt/homebrew/bin/git, /usr/local/bin/git,
+# /usr/bin/git whose directory is owned by root or by the invoking user and is NOT world-writable
+# is used (an untrusted candidate dir is SKIPPED; group-writable is accepted, so a stock Mac's
+# user:admin 775 /opt/homebrew/bin is trusted; Linux/CI: /usr/bin/git); rc 3 if none qualifies.
+# git's own children get a SANITISED PATH (empty and non-absolute entries dropped; fallback
+# /usr/bin:/bin:/opt/homebrew/bin). --no-pager is always passed (core.pager/pager.<cmd> exec).
+# Editors: GIT_EDITOR=: and GIT_SEQUENCE_EDITOR=: are SET (they outrank core.editor /
+# sequence.editor, so `branch --edit-description` cannot launch a repo-set editor; merely UNSETTING
+# them would fall back to that repo config). Unset: GIT_EXEC_PATH, GIT_PAGER, PAGER,
+# GIT_EXTERNAL_DIFF, GIT_SSH, GIT_SSH_COMMAND, GIT_ASKPASS, SSH_ASKPASS, GIT_TEMPLATE_DIR,
+# GIT_PROXY_COMMAND (plus the repo-redirecting GIT_DIR & co.).
 # Injected right after the subcommand: status -> --ignore-submodules=all;
 # diff|diff-files|diff-index -> --ignore-submodules=all --no-ext-diff --no-textconv.
+# Caller-supplied args come AFTER the injected flags and can override them: --ext-diff, --textconv
+# or --ignore-submodules=none re-enable what was disabled. Callers must not pass them.
 # WHY: hooks and launchd jobs run OUTSIDE the Bash sandbox over repos an agent can write to, and
 # repo-local config can make git exec programs. Neutralised: core.fsmonitor; filter.<drv>.* (each
 # driver found in config); core.hooksPath AND config-based hooks (hook.<name>.enabled=false, git
@@ -71,24 +93,90 @@ cast_git_safe() {
     "" | -*) return 2 ;;
   esac
   shift
-  # A leading option (-c k=v, --no-pager, ...) would hide the subcommand from the injection below.
-  # --ignore-submodules=all: a submodule's own config can define filter drivers we never
-  # enumerate (the env diff.ignoreSubmodules does NOT close this). Harmless if passed twice.
-  # --no-ext-diff/--no-textconv: diff.<drv>.command / .textconv are repo-defined programs.
+  # A leading option (-c k=v, --no-pager, ...) would hide the subcommand from the checks below.
+  local wt_arg wt_sub=""
   case "${1-}" in
-    "" | -*) return 2 ;;
-    status) set -- "$1" --ignore-submodules=all "${@:2}" ;;
-    diff | diff-files | diff-index)
-      set -- "$1" --ignore-submodules=all --no-ext-diff --no-textconv "${@:2}"
+    "" | -* | *$'\n'*) return 2 ;;
+    status | rev-parse | rev-list | for-each-ref | ls-files | cherry | branch | diff | diff-files | diff-index) ;;
+    worktree)
+      # Only `worktree list`: the first non-option arg after `worktree` is the sub-subcommand.
+      for wt_arg in "${@:2}"; do
+        case "$wt_arg" in
+          -*) continue ;;
+        esac
+        wt_sub="$wt_arg"
+        break
+      done
+      if [[ "$wt_sub" != "list" ]]; then
+        echo "cast_git_safe: 'worktree ${wt_sub}' is not allowed (only 'worktree list'); git NOT run" >&2
+        return 2
+      fi
+      ;;
+    *)
+      echo "cast_git_safe: '$1' is not allowed; allowed: status rev-parse rev-list for-each-ref ls-files cherry branch diff diff-files diff-index, worktree list; git NOT run" >&2
+      return 2
       ;;
   esac
+  # git: first executable of a FIXED trusted list whose directory is owned by root or by the
+  # invoking user and is not world-writable; the caller's PATH is never consulted. Group-writable
+  # is fine (Homebrew's /opt/homebrew/bin is user:admin 775 on a single-user Mac; the admin group
+  # is trusted there). A candidate in an untrusted dir is SKIPPED, not fatal. ONE stat spawn covers
+  # every existing candidate dir (hooks call this often); -L follows a symlinked dir. BSD vs GNU
+  # stat is chosen from the builtin $OSTYPE (no spawn). Anything stat cannot report is untrusted.
+  local git_candidates=(/opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git)
+  local git_bin="" cand seen=0 dirs=() info="" trusted="" d_name d_uid d_mode
+  for cand in "${git_candidates[@]}"; do
+    [[ -f "$cand" && -x "$cand" ]] || continue
+    seen=$((seen + 1))
+    dirs+=("${cand%/*}")
+  done
+  if [[ "$seen" -gt 0 ]]; then
+    if [[ "$OSTYPE" == darwin* ]]; then
+      info="$(/usr/bin/stat -L -f '%N %u %Lp' "${dirs[@]}" 2>/dev/null)" || :
+    else
+      info="$(/usr/bin/stat -L -c '%n %u %a' "${dirs[@]}" 2>/dev/null)" || :
+    fi
+    while read -r d_name d_uid d_mode; do
+      # No =~ here: it would leak BASH_REMATCH into the caller's shell.
+      case "$d_uid" in "" | *[!0-9]*) continue ;; esac
+      case "$d_mode" in "" | *[!0-7]*) continue ;; esac
+      [[ "$d_uid" == 0 || "$d_uid" == "${EUID:-x}" ]] || continue
+      [[ $((8#$d_mode & 2)) -eq 0 ]] || continue
+      trusted="${trusted}"$'\n'"${d_name}"
+    done <<<"$info"
+    trusted="${trusted}"$'\n'
+  fi
+  for cand in "${git_candidates[@]}"; do
+    [[ -f "$cand" && -x "$cand" ]] || continue
+    case "$trusted" in
+      *$'\n'"${cand%/*}"$'\n'*)
+        git_bin="$cand"
+        break
+        ;;
+    esac
+  done
+  if [[ -z "$git_bin" ]]; then
+    echo "cast_git_safe: no trusted git binary (seen=${seen}; dir must be owned by root or the current user and not world-writable); git NOT run" >&2
+    return 3
+  fi
+  # PATH for git's own children: absolute entries only. Locals only; read -a leaves IFS untouched.
+  local safe_path="" p parts=()
+  IFS=: read -r -a parts <<<"${PATH-}"
+  for p in ${parts[@]+"${parts[@]}"}; do
+    case "$p" in
+      /*) safe_path="${safe_path:+$safe_path:}$p" ;;
+    esac
+  done
+  [[ -n "$safe_path" ]] || safe_path="/usr/bin:/bin:/opt/homebrew/bin"
   local n=9 key name knob cfg rc=0
-  # Inherited git env that would override -C or the config below. Never empty, so
+  # Inherited git env that would override -C, the config below, or exec a program. Never empty, so
   # "${unset_env[@]}" is safe under `set -u` in bash 3.2 (as is env_assignments).
   local unset_env=(
     -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM
     -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR
     -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_PREFIX
+    -u GIT_EXEC_PATH -u GIT_PAGER -u PAGER -u GIT_EXTERNAL_DIFF -u GIT_SSH -u GIT_SSH_COMMAND
+    -u GIT_ASKPASS -u SSH_ASKPASS -u GIT_TEMPLATE_DIR -u GIT_PROXY_COMMAND
   )
   local env_assignments=(
     "GIT_CONFIG_KEY_0=core.fsmonitor" "GIT_CONFIG_VALUE_0=false"
@@ -100,7 +188,17 @@ cast_git_safe() {
     "GIT_CONFIG_KEY_6=push.gpgSign" "GIT_CONFIG_VALUE_6=false"
     "GIT_CONFIG_KEY_7=gc.auto" "GIT_CONFIG_VALUE_7=0"
     "GIT_CONFIG_KEY_8=maintenance.auto" "GIT_CONFIG_VALUE_8=false"
+    "GIT_EDITOR=:" "GIT_SEQUENCE_EDITOR=:"
   )
+  # --ignore-submodules=all: a submodule's own config can define filter drivers we never
+  # enumerate (the env diff.ignoreSubmodules does NOT close this). Harmless if passed twice.
+  # --no-ext-diff/--no-textconv: diff.<drv>.command / .textconv are repo-defined programs.
+  case "$1" in
+    status) set -- "$1" --ignore-submodules=all "${@:2}" ;;
+    diff | diff-files | diff-index)
+      set -- "$1" --ignore-submodules=all --no-ext-diff --no-textconv "${@:2}"
+      ;;
+  esac
   # Enumerate filter drivers and config hooks from config (a read; executes nothing). name = key
   # minus the "filter."/"hook." prefix minus the last ".<knob>" (it may itself contain '.' or
   # '='); keys with no dot after the prefix (e.g. hook.jobs) are skipped.
@@ -108,7 +206,7 @@ cast_git_safe() {
   # 128) means we cannot know what to blank, so refuse. Plain read, not -z: a config key cannot
   # contain a newline and $(...) cannot carry NUL bytes. `|| rc=$?` keeps the caller's set -e
   # from firing on rc 1.
-  cfg="$(/usr/bin/env "${unset_env[@]}" git -C "$dir" config --name-only --get-regexp '^(filter|hook)\.' 2>/dev/null)" || rc=$?
+  cfg="$(/usr/bin/env "${unset_env[@]}" PATH="$safe_path" "$git_bin" -C "$dir" config --name-only --get-regexp '^(filter|hook)\.' 2>/dev/null)" || rc=$?
   if [[ "$rc" -gt 1 ]]; then
     echo "cast_git_safe: hardening config read failed (rc=$rc); git NOT run" >&2
     return 3
@@ -138,7 +236,7 @@ cast_git_safe() {
   # Explicit count with keys from index 0: an inherited GIT_CONFIG_COUNT cannot add entries.
   env_assignments+=("GIT_CONFIG_COUNT=${n}")
   GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none \
-    /usr/bin/env "${unset_env[@]}" "${env_assignments[@]}" \
-    git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false -c core.untrackedCache=false \
+    /usr/bin/env "${unset_env[@]}" PATH="$safe_path" "${env_assignments[@]}" \
+    "$git_bin" --no-pager -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false -c core.untrackedCache=false \
     --no-replace-objects --no-optional-locks -C "$dir" "$@"
 }

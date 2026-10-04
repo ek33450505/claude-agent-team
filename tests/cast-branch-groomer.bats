@@ -315,11 +315,25 @@ exec "$SHIM_REAL_GIT" "$@"
 SHIM
   chmod +x "$BATS_TEST_TMPDIR/shim/git"
 }
+# cast_git_safe resolves git from a FIXED trusted list and never consults PATH, so a PATH shim is
+# inert. Run the groomer from a COPY of its scripts (groomer + lib + fs helper) whose lib's
+# git_candidates line names the shim; the rewrite is asserted so the shim cannot be silently bypassed.
+_gx_shimmed_groomer() { # prints the path of the copied groomer
+  local d="$BATS_TEST_TMPDIR/gscripts"
+  mkdir -p "$d"
+  chmod 755 "$BATS_TEST_TMPDIR/shim"
+  cp "$REPO_DIR/scripts/cast-branch-groomer.sh" "$REPO_DIR/scripts/cast_groom_fs.py" "$d/"
+  sed "s|^  local git_candidates=(.*)\$|  local git_candidates=(\"$BATS_TEST_TMPDIR/shim/git\")|" \
+    "$REPO_DIR/scripts/cast-hook-lib.sh" > "$d/cast-hook-lib.sh"
+  grep -qF "local git_candidates=(\"$BATS_TEST_TMPDIR/shim/git\")" "$d/cast-hook-lib.sh"
+  printf '%s' "$d/cast-branch-groomer.sh"
+}
 _gx_run_shimmed() { # <mode> <groomer args...>
-  local mode="$1"
+  local mode="$1" groomer
   shift
-  run env PATH="$BATS_TEST_TMPDIR/shim:$PATH" SHIM_MODE="$mode" SHIM_REAL_GIT="$(command -v git)" \
-    SHIM_STATE="$BATS_TEST_TMPDIR" bash "$GROOMER" "$@"
+  groomer="$(_gx_shimmed_groomer)"
+  run env SHIM_MODE="$mode" SHIM_REAL_GIT="$(command -v git)" \
+    SHIM_STATE="$BATS_TEST_TMPDIR" bash "$groomer" "$@"
 }
 
 @test "groomer --apply hostile repo: branch deletion does not run reference-transaction hooks (classic hooksPath + config hook)" {

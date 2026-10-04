@@ -176,15 +176,28 @@ esac
 exec "$REAL_GIT" "$@"
 SHIM
   chmod +x "$BATS_TEST_TMPDIR/shim/git"
+  # The lib refuses a git in a group/other-writable dir; pin the shim dir's mode.
+  chmod 755 "$BATS_TEST_TMPDIR/shim"
+}
+
+# _hl_lib_with_git <git-path> — prints the path of a COPY of the lib whose trusted-git list is just
+# <git-path> (the lib never consults PATH for git, so a PATH shim cannot be used). Fails the test if
+# the substitution did not apply (a vacuous shim would silently run the real git).
+_hl_lib_with_git() {
+  local out="$BATS_TEST_TMPDIR/lib-shimmed.sh"
+  sed "s|^  local git_candidates=(.*)\$|  local git_candidates=(\"$1\")|" "$HOOK_LIB" > "$out"
+  grep -qF "local git_candidates=(\"$1\")" "$out"
+  printf '%s' "$out"
 }
 
 # _hl_run_shimmed <config-rc> <log> <repo-dir> <git-args...> — cast_git_safe through the shim.
 _hl_run_shimmed() {
-  local rc="$1" log="$2" real
+  local rc="$1" log="$2" real lib
   real="$(command -v git)"
   shift 2
-  run env PATH="$BATS_TEST_TMPDIR/shim:$PATH" SHIM_LOG="$log" SHIM_CONFIG_RC="$rc" REAL_GIT="$real" \
-    bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$HOOK_LIB" "$@"
+  lib="$(_hl_lib_with_git "$BATS_TEST_TMPDIR/shim/git")"
+  run env SHIM_LOG="$log" SHIM_CONFIG_RC="$rc" REAL_GIT="$real" \
+    bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$lib" "$@"
 }
 
 @test "cast_git_safe: core.fsmonitor canary does not run (control fires)" {
@@ -459,19 +472,23 @@ _hl_run_shimmed() {
   # CONTROL: read rc 1 = "no matches" is fine; both the read and the main call ran.
   _hl_run_shimmed 1 "$log" "$repo" status --porcelain
   assert_success
+  # Two calls: hardening read, main call.
   [ "$(grep -c . "$log")" -eq 2 ]
   rm -f "$log"
   # Read rc 128 (git died): fail closed, only the read happened.
   _hl_run_shimmed 128 "$log" "$repo" status --porcelain
   assert_failure 3
   assert_output --partial "git NOT run"
+  # Only the failed read; the main call (--no-pager) never happened.
   [ "$(grep -c . "$log")" -eq 1 ]
   grep -q -- '--get-regexp' "$log"
+  [ "$(grep -c -- '--no-pager' "$log")" -eq 0 ]
   rm -f "$log"
   # Any other rc is fail-closed too.
   _hl_run_shimmed 2 "$log" "$repo" status --porcelain
   assert_failure 3
   [ "$(grep -c . "$log")" -eq 1 ]
+  [ "$(grep -c -- '--no-pager' "$log")" -eq 0 ]
 }
 
 # M-2: a leading option hides the subcommand from the --ignore-submodules injection, so reject it.
@@ -557,10 +574,10 @@ _hl_diff_fixture() {
   _hl_run_shimmed 1 "$log" "$repo" status --porcelain
   assert_success
   grep -q -- '--ignore-submodules=all' "$log"
-  ! grep -q -- '--no-ext-diff' "$log"
+  [ "$(grep -c -- '--no-ext-diff' "$log")" -eq 0 ]
 }
 
-@test "cast_git_safe: commit.gpgSign=true with a gpg.program canary does not run on commit (control fires)" {
+@test "cast_git_safe: commit is refused (rc 2) and a commit.gpgSign gpg.program canary does not run (control fires)" {
   local repo="$BATS_TEST_TMPDIR/gpgc" marker="$BATS_TEST_TMPDIR/gpgc.marker"
   _hl_repo "$repo"
   git -C "$repo" config user.email test@example.com
@@ -574,12 +591,12 @@ _hl_diff_fixture() {
   [ -e "$marker" ]
   rm -f "$marker"
   _hl_run_safe "$repo" commit -q --allow-empty -m x
-  assert_success
-  [ "$(git -C "$repo" log --format=%s -1)" = x ]
+  assert_failure 2
+  [ "$(git -C "$repo" rev-list --count HEAD)" -eq 1 ]
   [ ! -e "$marker" ]
 }
 
-@test "cast_git_safe: tag.gpgSign=true with a gpg.program canary does not run on tag -m (control fires)" {
+@test "cast_git_safe: tag is refused (rc 2) and a tag.gpgSign gpg.program canary does not run (control fires)" {
   local repo="$BATS_TEST_TMPDIR/gpgt" marker="$BATS_TEST_TMPDIR/gpgt.marker"
   _hl_repo "$repo"
   git -C "$repo" config user.email test@example.com
@@ -591,8 +608,8 @@ _hl_diff_fixture() {
   [ -e "$marker" ]
   rm -f "$marker"
   _hl_run_safe "$repo" tag -m x v1
-  assert_success
-  git -C "$repo" rev-parse -q --verify refs/tags/v1 > /dev/null
+  assert_failure 2
+  [ -z "$(git -C "$repo" tag -l v1)" ]
   [ ! -e "$marker" ]
 }
 
@@ -606,11 +623,12 @@ _hl_diff_fixture() {
 case "$*" in
   *--get-regexp*) printf 'filter.d.clean\n'; exit 0 ;;
 esac
-env | grep '^GIT_CONFIG_' | sort > "$SHIM_LOG"
+env | sort > "$SHIM_LOG"
 SHIM
   chmod +x "$BATS_TEST_TMPDIR/shim/git"
-  run env PATH="$BATS_TEST_TMPDIR/shim:$PATH" SHIM_LOG="$log" \
-    bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$HOOK_LIB" "$repo" status
+  chmod 755 "$BATS_TEST_TMPDIR/shim"
+  run env SHIM_LOG="$log" \
+    bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$(_hl_lib_with_git "$BATS_TEST_TMPDIR/shim/git")" "$repo" status
   assert_success
   grep -qx 'GIT_CONFIG_KEY_4=commit.gpgSign' "$log"
   grep -qx 'GIT_CONFIG_VALUE_4=false' "$log"
@@ -654,7 +672,7 @@ _hl_gc_fixture() {
   [ "$n17" -ge 3 ]
 }
 
-@test "cast_git_safe: gc --auto does not empty a symlinked .git/worktrees/<id> target (control fires)" {
+@test "cast_git_safe: gc --auto is refused (rc 2) and does not empty a symlinked .git/worktrees/<id> target (control fires)" {
   local ctl="$BATS_TEST_TMPDIR/gcc" ctlv="$BATS_TEST_TMPDIR/gcc-victim"
   local repo="$BATS_TEST_TMPDIR/gcs" victim="$BATS_TEST_TMPDIR/gcs-victim"
   _hl_gc_fixture "$ctl" "$ctlv"
@@ -664,7 +682,7 @@ _hl_gc_fixture() {
   git -C "$ctl" gc --auto > /dev/null 2>&1 || true
   [ ! -e "$ctlv/keep.txt" ]
   _hl_run_safe "$repo" gc --auto
-  assert_success
+  assert_failure 2
   [ -e "$victim/keep.txt" ]
 }
 
@@ -699,4 +717,310 @@ _hl_gc_fixture() {
     bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$HOOK_LIB" "$repo" status --porcelain
   assert_success
   [ ! -e "$marker" ]
+}
+
+# --- U4a: prune-capable subcommands, aliases, PATH, pager ---
+
+# _hl_wt_fixture <repo> <victim> — repo plus an agent-planted symlinked .git/worktrees/zz -> <victim>
+# (no gitdir file). Plain `git worktree prune` / `git gc` / `git maintenance run` empty the victim.
+_hl_wt_fixture() {
+  mkdir -p "$2"
+  printf 'precious\n' > "$2/keep.txt"
+  git init -q "$1"
+  mkdir -p "$1/.git/worktrees"
+  ln -s "$2" "$1/.git/worktrees/zz"
+}
+
+# _hl_no_repo_call <shim-log> <repo> — succeeds only if no git call against <repo> was logged (an
+# absent log means no git ran at all). Explicit test, not `! grep`: in bats `!` never fails a test.
+_hl_no_repo_call() {
+  [ ! -e "$1" ] || [ "$(grep -c -- "-C $2" "$1")" -eq 0 ]
+}
+
+@test "cast_git_safe: gc, maintenance run and worktree prune are refused (rc 2); victim intact (control: plain git empties it)" {
+  local c i=0 repo victim ctl ctlv
+  for c in "gc" "maintenance run" "worktree prune" "worktree --porcelain prune"; do
+    i=$((i + 1))
+    ctl="$BATS_TEST_TMPDIR/pc$i" ctlv="$BATS_TEST_TMPDIR/pcv$i"
+    repo="$BATS_TEST_TMPDIR/ps$i" victim="$BATS_TEST_TMPDIR/psv$i"
+    _hl_wt_fixture "$ctl" "$ctlv"
+    _hl_wt_fixture "$repo" "$victim"
+    # CONTROL (identical fixture): plain git must empty the victim, or the fixture is vacuous.
+    # shellcheck disable=SC2086
+    git -C "$ctl" ${c/ --porcelain/} > /dev/null 2>&1 || true
+    [ ! -e "$ctlv/keep.txt" ]
+    # shellcheck disable=SC2086
+    _hl_run_safe "$repo" $c
+    assert_failure 2
+    [ -e "$victim/keep.txt" ]
+  done
+}
+
+@test "cast_git_safe: prune, repack, maintenance, worktree repair|move are refused (rc 2) and run no git (control: worktree list runs)" {
+  local repo="$BATS_TEST_TMPDIR/pr" log="$BATS_TEST_TMPDIR/shim.log" c
+  _hl_repo "$repo"
+  _hl_shim
+  # CONTROL: a benign worktree subcommand reaches git (the shim log proves it).
+  _hl_run_shimmed 1 "$log" "$repo" worktree list
+  assert_success
+  grep -q -- "-C $repo" "$log"
+  for c in "prune" "repack -ad" "maintenance run" "worktree repair" "worktree move a b" "worktree -q repair" "worktree" "show HEAD" "log -p" "help status" "gc --auto" "credential fill" "difftool -x true" "bisect run true"; do
+    rm -f "$log"
+    # shellcheck disable=SC2086
+    _hl_run_shimmed 1 "$log" "$repo" $c
+    assert_failure 2
+    # Nothing ran against the repo (a builtin-list call, if any, never carries -C <repo>).
+    _hl_no_repo_call "$log" "$repo"
+  done
+}
+
+@test "cast_git_safe: a repo alias is not expanded; non-builtin first arg returns 2 (control: plain git runs the alias)" {
+  local repo="$BATS_TEST_TMPDIR/al" marker="$BATS_TEST_TMPDIR/al.marker" log="$BATS_TEST_TMPDIR/shim.log"
+  _hl_repo "$repo"
+  git -C "$repo" config alias.zz "!touch $marker"
+  # CONTROL: plain git executes the alias.
+  git -C "$repo" zz > /dev/null 2>&1
+  [ -e "$marker" ]
+  rm -f "$marker"
+  _hl_run_safe "$repo" zz
+  assert_failure 2
+  assert_output --partial "not allowed"
+  [ ! -e "$marker" ]
+  # A made-up subcommand and one with an embedded newline are refused too, before any repo git.
+  _hl_shim
+  _hl_run_shimmed 1 "$log" "$repo" frobnicate
+  assert_failure 2
+  _hl_no_repo_call "$log" "$repo"
+  _hl_run_safe "$repo" $'status\nrev-parse'
+  assert_failure 2
+  # Builtins still work.
+  _hl_run_safe "$repo" rev-parse --is-inside-work-tree
+  assert_success
+  assert_output "true"
+}
+
+@test "cast_git_safe: a planted ./git (cwd, empty or relative PATH entry) is never run; PATH of only relative entries falls back (control: plain git runs it)" {
+  local repo="$BATS_TEST_TMPDIR/pg" cwd="$BATS_TEST_TMPDIR/pgcwd" marker="$BATS_TEST_TMPDIR/pg.marker" p
+  _hl_repo "$repo"
+  mkdir -p "$cwd/rel" "$cwd/abs"
+  printf '#!/bin/sh\ntouch "%s"\necho PLANTED\n' "$marker" > "$cwd/git"
+  cp "$cwd/git" "$cwd/rel/git"
+  cp "$cwd/git" "$cwd/abs/git"
+  chmod +x "$cwd/git" "$cwd/rel/git" "$cwd/abs/git"
+  # The ABSOLUTE agent-style dir variant: not "unsafe" by any PATH-sanitising rule, so only the
+  # fixed trusted-git list keeps it out.
+  for p in ".:$PATH" ":$PATH" "rel:$PATH" "$cwd/abs:$PATH"; do
+    rm -f "$marker"
+    # CONTROL: with this PATH, plain `git` from that cwd resolves to the planted one.
+    run bash -c 'cd "$1" && PATH="$2" git rev-parse --is-inside-work-tree' _ "$cwd" "$p"
+    [ -e "$marker" ]
+    rm -f "$marker"
+    run bash -c 'cd "$1" && PATH="$2" && . "$3" && cast_git_safe "$4" rev-parse --is-inside-work-tree' _ "$cwd" "$p" "$HOOK_LIB" "$repo"
+    assert_success
+    assert_output "true"
+    [ ! -e "$marker" ]
+  done
+  # Only relative entries left: fall back to the standard dirs, still the real git, still no plant.
+  run bash -c 'cd "$1" && PATH=".:rel" && . "$2" && cast_git_safe "$3" rev-parse --is-inside-work-tree' _ "$cwd" "$HOOK_LIB" "$repo"
+  assert_success
+  assert_output "true"
+  [ ! -e "$marker" ]
+}
+
+@test "cast_git_safe: --no-pager is passed to the main git call (argv-recording shim)" {
+  local repo="$BATS_TEST_TMPDIR/np" log="$BATS_TEST_TMPDIR/np.log"
+  _hl_repo "$repo"
+  _hl_shim
+  _hl_run_shimmed 1 "$log" "$repo" status --porcelain
+  assert_success
+  # The main call is the line carrying -C <repo> and the subcommand; it must carry --no-pager.
+  grep -- "-C $repo status" "$log" | grep -q -- '--no-pager'
+  # CONTROL for the probe itself: the hardening read (not the main call) carries no --no-pager.
+  [ "$(grep -- '--get-regexp' "$log" | grep -c -- '--no-pager' || true)" -eq 0 ]
+}
+
+# --- U4a redesign: ALLOWLIST, fixed trusted git, env, editors ---
+
+# _hl_wtremove_fixture <repo> <victim> <wt-path> — a linked worktree whose admin dir
+# .git/worktrees/<id> was replaced by a symlink to <victim> (a copy of the admin files, commondir made
+# absolute so git still validates it, plus keep.txt). Plain `git worktree remove <wt-path>` succeeds
+# (rc 0, no --force) and EMPTIES the victim.
+_hl_wtremove_fixture() {
+  local repo="$1" victim="$2" wt="$3" id
+  id="$(basename "$wt")"
+  _hl_repo "$repo"
+  git -C "$repo" worktree add -q --detach "$wt" HEAD
+  mkdir -p "$victim"
+  cp -R "$repo/.git/worktrees/$id/." "$victim/"
+  printf 'precious\n' > "$victim/keep.txt"
+  printf '%s\n' "$(cd "$repo" && pwd -P)/.git" > "$victim/commondir"
+  rm -rf "${repo:?}/.git/worktrees/${id:?}"
+  ln -s "$victim" "$repo/.git/worktrees/$id"
+}
+
+@test "cast_git_safe: worktree remove is refused (rc 2); victim intact (control: plain git empties it)" {
+  local ctl="$BATS_TEST_TMPDIR/wrc" ctlv="$BATS_TEST_TMPDIR/wrcv" ctlw="$BATS_TEST_TMPDIR/wrcw"
+  local repo="$BATS_TEST_TMPDIR/wrs" victim="$BATS_TEST_TMPDIR/wrsv" wt="$BATS_TEST_TMPDIR/wrsw"
+  _hl_wtremove_fixture "$ctl" "$ctlv" "$ctlw"
+  _hl_wtremove_fixture "$repo" "$victim" "$wt"
+  # CONTROL (identical fixture): plain git worktree remove must wipe the victim.
+  [ -e "$ctlv/keep.txt" ]
+  git -C "$ctl" worktree remove "$ctlw" > /dev/null 2>&1
+  [ ! -e "$ctlv/keep.txt" ]
+  _hl_run_safe "$repo" worktree remove "$wt"
+  assert_failure 2
+  [ -e "$victim/keep.txt" ]
+}
+
+@test "cast_git_safe: help (man.<tool>.cmd via help.format=man) is refused (rc 2); canary absent (control: plain git fires it)" {
+  local ctl="$BATS_TEST_TMPDIR/hpc" repo="$BATS_TEST_TMPDIR/hps"
+  local cm="$BATS_TEST_TMPDIR/hpc.marker" sm="$BATS_TEST_TMPDIR/hps.marker" r m
+  for r in "$ctl:$cm" "$repo:$sm"; do
+    m="${r#*:}"
+    _hl_repo "${r%%:*}"
+    _hl_canary "$BATS_TEST_TMPDIR/hp-canary-${m##*/}.sh" "$m"
+    git -C "${r%%:*}" config help.format man
+    git -C "${r%%:*}" config man.viewer evil
+    git -C "${r%%:*}" config man.evil.cmd "$BATS_TEST_TMPDIR/hp-canary-${m##*/}.sh"
+  done
+  # CONTROL: plain git help runs the configured man viewer command (output/rc irrelevant).
+  git -C "$ctl" help status > /dev/null 2>&1 || true
+  [ -e "$cm" ]
+  _hl_run_safe "$repo" help status
+  assert_failure 2
+  [ ! -e "$sm" ]
+}
+
+@test "cast_git_safe: branch --edit-description never launches a repo core.editor (GIT_EDITOR=: set; control: plain git fires it)" {
+  local ctl="$BATS_TEST_TMPDIR/edc" repo="$BATS_TEST_TMPDIR/eds"
+  local cm="$BATS_TEST_TMPDIR/edc.marker" sm="$BATS_TEST_TMPDIR/eds.marker" r m branch
+  for r in "$ctl:$cm" "$repo:$sm"; do
+    m="${r#*:}"
+    _hl_repo "${r%%:*}"
+    _hl_canary "$BATS_TEST_TMPDIR/ed-canary-${m##*/}.sh" "$m"
+    git -C "${r%%:*}" config core.editor "$BATS_TEST_TMPDIR/ed-canary-${m##*/}.sh"
+  done
+  branch="$(git -C "$ctl" rev-parse --abbrev-ref HEAD)"
+  # CONTROL: plain git branch --edit-description launches core.editor (the canary does not edit,
+  # so the command's own rc is irrelevant; only the marker matters).
+  # (An ambient GIT_EDITOR outranks core.editor, so it is cleared for the control.)
+  env -u GIT_EDITOR -u VISUAL -u EDITOR TERM=xterm git -C "$ctl" branch --edit-description "$branch" > /dev/null 2>&1 || true
+  [ -e "$cm" ]
+  # A GIT_EDITOR / GIT_SEQUENCE_EDITOR inherited from the caller must not matter either.
+  run env -u VISUAL -u EDITOR TERM=xterm GIT_EDITOR="$BATS_TEST_TMPDIR/ed-canary-${sm##*/}.sh" GIT_SEQUENCE_EDITOR="$BATS_TEST_TMPDIR/ed-canary-${sm##*/}.sh" \
+    bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$HOOK_LIB" "$repo" branch --edit-description "$branch"
+  [ ! -e "$sm" ]
+}
+
+@test "cast_git_safe: inherited exec/pager/ssh/askpass/template env is stripped, editors forced to ':' (control: shim sees them unfiltered)" {
+  local repo="$BATS_TEST_TMPDIR/envu" log="$BATS_TEST_TMPDIR/envu.log" v
+  _hl_repo "$repo"
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  cat > "$BATS_TEST_TMPDIR/shim/git" << 'SHIM'
+#!/bin/sh
+case "$*" in
+  *--get-regexp*) exit 1 ;;
+esac
+env | sort > "$SHIM_LOG"
+SHIM
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+  chmod 755 "$BATS_TEST_TMPDIR/shim"
+  local evil=(GIT_EXEC_PATH=/evil GIT_PAGER=evil PAGER=evil GIT_EXTERNAL_DIFF=evil GIT_SSH=evil
+    GIT_SSH_COMMAND=evil GIT_ASKPASS=evil SSH_ASKPASS=evil GIT_TEMPLATE_DIR=/evil GIT_PROXY_COMMAND=evil
+    GIT_EDITOR=evil GIT_SEQUENCE_EDITOR=evil)
+  # CONTROL: invoked directly with the evil env, the shim's dump contains every variable.
+  env "${evil[@]}" SHIM_LOG="$log" "$BATS_TEST_TMPDIR/shim/git" status
+  for v in "${evil[@]}"; do grep -qx "$v" "$log"; done
+  rm -f "$log"
+  run env "${evil[@]}" SHIM_LOG="$log" \
+    bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$(_hl_lib_with_git "$BATS_TEST_TMPDIR/shim/git")" "$repo" status
+  assert_success
+  for v in GIT_EXEC_PATH GIT_PAGER PAGER GIT_EXTERNAL_DIFF GIT_SSH GIT_SSH_COMMAND GIT_ASKPASS SSH_ASKPASS GIT_TEMPLATE_DIR GIT_PROXY_COMMAND; do
+    [ "$(grep -c "^${v}=" "$log")" -eq 0 ]
+  done
+  grep -qx 'GIT_EDITOR=:' "$log"
+  grep -qx 'GIT_SEQUENCE_EDITOR=:' "$log"
+}
+
+@test "cast_git_safe: every allowlisted caller subcommand is accepted (table-driven), incl. worktree list" {
+  local repo="$BATS_TEST_TMPDIR/allow" c
+  _hl_repo "$repo"
+  while IFS= read -r c; do
+    # shellcheck disable=SC2086
+    _hl_run_safe "$repo" $c
+    [ "$status" -ne 2 ] || { echo "refused: $c: $output" >&2; return 1; }
+  done << 'CALLS'
+status --porcelain
+rev-parse --show-toplevel
+rev-list --count HEAD
+for-each-ref --format=%(refname)
+ls-files -s
+cherry HEAD HEAD
+branch --list
+branch -vv
+diff --quiet
+diff-files --quiet
+diff-index --quiet HEAD
+worktree list
+worktree list --porcelain
+worktree -q list
+CALLS
+  # CONTROL: the same check does fire on a refused subcommand.
+  _hl_run_safe "$repo" gc
+  [ "$status" -eq 2 ]
+}
+
+# --- U4a trusted-dir rule: dir owned by root or the invoking user AND not world-writable ---
+
+# _hl_dir_shim <dir> <mode> <marker> — dir/git logs its dir to <marker> then execs the real git.
+_hl_dir_shim() {
+  local real
+  real="$(command -v git)"
+  mkdir -p "$1"
+  printf '#!/bin/sh\necho "%s" >> "%s"\nexec "%s" "$@"\n' "$1" "$3" "$real" > "$1/git"
+  chmod +x "$1/git"
+  chmod "$2" "$1"
+}
+
+# _hl_lib_with_two_git <git-a> <git-b> — COPY of the lib whose trusted-git list is (<a> <b>); the
+# rewrite is asserted so a vacuous copy cannot pass.
+_hl_lib_with_two_git() {
+  local out="$BATS_TEST_TMPDIR/lib-two.sh"
+  sed "s|^  local git_candidates=(.*)\$|  local git_candidates=(\"$1\" \"$2\")|" "$HOOK_LIB" > "$out"
+  grep -qF "local git_candidates=(\"$1\" \"$2\")" "$out"
+  printf '%s' "$out"
+}
+
+@test "cast_git_safe: a user-owned GROUP-writable git dir is ACCEPTED (control: same shim runs)" {
+  local repo="$BATS_TEST_TMPDIR/tdg" log="$BATS_TEST_TMPDIR/tdg.log" lib
+  _hl_repo "$repo"
+  : > "$log"
+  _hl_dir_shim "$BATS_TEST_TMPDIR/gw" 775 "$log"
+  [ "$(stat -f %Lp "$BATS_TEST_TMPDIR/gw" 2> /dev/null || stat -c %a "$BATS_TEST_TMPDIR/gw")" = "775" ]
+  lib="$(_hl_lib_with_two_git "$BATS_TEST_TMPDIR/gw/git" "$BATS_TEST_TMPDIR/gw/git")"
+  run bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$lib" "$repo" rev-parse --git-dir
+  [ "$status" -eq 0 ]
+  [ "$output" = ".git" ]
+  grep -qF "$BATS_TEST_TMPDIR/gw" "$log"
+}
+
+@test "cast_git_safe: a WORLD-writable git dir is SKIPPED (rc 3, shim never runs); a later trusted candidate is used" {
+  local repo="$BATS_TEST_TMPDIR/tdw" log="$BATS_TEST_TMPDIR/tdw.log" lib
+  _hl_repo "$repo"
+  : > "$log"
+  _hl_dir_shim "$BATS_TEST_TMPDIR/ww" 777 "$log"
+  _hl_dir_shim "$BATS_TEST_TMPDIR/ok" 755 "$log"
+  [ "$(stat -f %Lp "$BATS_TEST_TMPDIR/ww" 2> /dev/null || stat -c %a "$BATS_TEST_TMPDIR/ww")" = "777" ]
+  # Only the world-writable candidate: refused, nothing ran.
+  lib="$(_hl_lib_with_two_git "$BATS_TEST_TMPDIR/ww/git" "$BATS_TEST_TMPDIR/ww/git")"
+  run bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$lib" "$repo" rev-parse --git-dir
+  [ "$status" -eq 3 ]
+  [ ! -s "$log" ]
+  case "$output" in *"no trusted git binary"*) ;; *) echo "unexpected: $output" >&2; return 1 ;; esac
+  # CONTROL: world-writable first, trusted second -> the trusted one is used, the 777 one is not.
+  lib="$(_hl_lib_with_two_git "$BATS_TEST_TMPDIR/ww/git" "$BATS_TEST_TMPDIR/ok/git")"
+  run bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$lib" "$repo" rev-parse --git-dir
+  [ "$status" -eq 0 ]
+  grep -qF "$BATS_TEST_TMPDIR/ok" "$log"
+  [ "$(grep -cF "$BATS_TEST_TMPDIR/ww" "$log")" -eq 0 ]
 }

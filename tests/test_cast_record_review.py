@@ -11,6 +11,7 @@ Covers:
 
 import importlib.util
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -418,10 +419,29 @@ class TestGetRepoRootHardened(unittest.TestCase):
             fh.write('#!/bin/sh\nprintf \'%%s|%%s\\n\' "$*" "${GIT_CONFIG_COUNT-unset}" >> "%s"\n'
                      'exec "%s" "$@"\n' % (self.log, real_git))
         os.chmod(shim, 0o755)
+        os.chmod(shim_dir, 0o755)
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         env.update({'PATH': shim_dir + os.pathsep + os.environ['PATH'], 'HOME': self.tmp,
                     'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'})
         patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # cast_git_safe never consults PATH for git (fixed trusted list), so the PATH shim alone is
+        # inert. get_repo_root loads cast_git_safe.py from _CAST_SCRIPTS_DIR: point that at a COPY
+        # of the scripts (wrapper + lib) whose lib's git_candidates names the shim. PATH stays
+        # shimmed too: a get_repo_root reverted to bare git records `unset` and fails.
+        scripts_copy = os.path.join(self.tmp, 'scripts-copy')
+        os.makedirs(scripts_copy)
+        shutil.copy(_SCRIPTS_DIR / 'cast_git_safe.py', scripts_copy)
+        out, n = re.subn(r'(?m)^  local git_candidates=\(.*\)$',
+                         lambda _m: '  local git_candidates=("%s")' % shim,
+                         (_SCRIPTS_DIR / 'cast-hook-lib.sh').read_text())
+        self.assertEqual(n, 1, 'git_candidates line not found in the lib (vacuous shim)')
+        lib = os.path.join(scripts_copy, 'cast-hook-lib.sh')
+        Path(lib).write_text(out)
+        os.chmod(lib, 0o644)
+        self.assertIn('local git_candidates=("%s")' % shim, Path(lib).read_text())
+        patcher = mock.patch.object(cast_record_review, '_CAST_SCRIPTS_DIR', scripts_copy)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.repo = os.path.join(self.tmp, 'repo')

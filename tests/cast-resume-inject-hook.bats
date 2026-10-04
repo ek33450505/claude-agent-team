@@ -672,8 +672,17 @@ _seed_auto_file() {
 @test "repo lookup goes through cast_git_safe (hardened git, never bare)" {
   _install_git_shim
   _seed_auto_file
+  # cast_git_safe never consults PATH for git (fixed trusted list), so the PATH shim alone is inert:
+  # run the hook from a COPY (hook + lib) whose git_candidates names the shim, and assert the rewrite
+  # applied so a vacuous copy cannot pass.
+  mkdir -p "$BATS_TEST_TMPDIR/hookcopy"
+  chmod 755 "$BATS_TEST_TMPDIR/shim"
+  cp "$SCRIPT" "$BATS_TEST_TMPDIR/hookcopy/cast-resume-inject-hook.sh"
+  sed "s|^  local git_candidates=(.*)\$|  local git_candidates=(\"$BATS_TEST_TMPDIR/shim/git\")|" \
+    "$REPO_DIR/scripts/cast-hook-lib.sh" > "$BATS_TEST_TMPDIR/hookcopy/cast-hook-lib.sh"
+  grep -qF "local git_candidates=(\"$BATS_TEST_TMPDIR/shim/git\")" "$BATS_TEST_TMPDIR/hookcopy/cast-hook-lib.sh"
   cd "$FIXTURE_REPO"
-  run bash "$SCRIPT" </dev/null
+  run bash "$BATS_TEST_TMPDIR/hookcopy/cast-resume-inject-hook.sh" </dev/null
   assert_success
   assert_output --partial 'Body here'   # git really ran: slug resolved, distillate injected
   run grep -c 'rev-parse --show-toplevel|' "$SHIM_LOG"

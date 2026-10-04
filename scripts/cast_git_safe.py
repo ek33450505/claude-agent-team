@@ -7,10 +7,14 @@ hardening lives in ONE reviewed place: ``cast_git_safe`` in
 bash function -- no second implementation that could drift.
 
 Return-code contract of ``run`` (see the header of cast_git_safe for the bash side):
-  2    bad args (leading option, missing/empty first git arg, empty or '-'-leading
-       dir) -- from cast_git_safe
-  3    hardening config read failed (from cast_git_safe), OR this wrapper could
-       not start it (lib missing, unreadable, not a regular file or group/world-
+  2    refused by cast_git_safe: bad args (empty or '-'-leading dir; missing, empty,
+       '-'-leading or newline-bearing first git arg) OR a subcommand not on the
+       ALLOWLIST (status rev-parse rev-list for-each-ref ls-files cherry branch diff
+       diff-files diff-index, and `worktree list` only); git was NOT run
+  3    hardening config read failed, or no trusted git binary (fixed list
+       /opt/homebrew/bin, /usr/local/bin, /usr/bin; the caller's PATH is never
+       consulted; a dir not owned by root or the current user, or world-writable, is skipped) -- from cast_git_safe, OR
+       this wrapper could not start it (lib missing, unreadable, not a regular file or group/world-
        writable; bash missing; OSError; NUL in an arg); git was NOT run
   124  timeout; the whole process group was killed; stdout is empty
   126  ``env`` hit ARG_MAX -- from cast_git_safe (fail closed)
