@@ -296,7 +296,6 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/post-tool-hook.sh",
-            "if": "Write|Edit|Agent|Bash|Task|NotebookEdit",
             "timeout": 10,
             "async": true
           }
