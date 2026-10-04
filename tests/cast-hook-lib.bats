@@ -927,7 +927,7 @@ SHIM
   chmod 755 "$BATS_TEST_TMPDIR/shim"
   local evil=(GIT_EXEC_PATH=/evil GIT_PAGER=evil PAGER=evil GIT_EXTERNAL_DIFF=evil GIT_SSH=evil
     GIT_SSH_COMMAND=evil GIT_ASKPASS=evil SSH_ASKPASS=evil GIT_TEMPLATE_DIR=/evil GIT_PROXY_COMMAND=evil
-    GIT_EDITOR=evil GIT_SEQUENCE_EDITOR=evil)
+    GIT_EDITOR=evil GIT_SEQUENCE_EDITOR=evil DEVELOPER_DIR=/evil)
   # CONTROL: invoked directly with the evil env, the shim's dump contains every variable.
   env "${evil[@]}" SHIM_LOG="$log" "$BATS_TEST_TMPDIR/shim/git" status
   for v in "${evil[@]}"; do grep -qx "$v" "$log"; done
@@ -935,7 +935,7 @@ SHIM
   run env "${evil[@]}" SHIM_LOG="$log" \
     bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$(_hl_lib_with_git "$BATS_TEST_TMPDIR/shim/git")" "$repo" status
   assert_success
-  for v in GIT_EXEC_PATH GIT_PAGER PAGER GIT_EXTERNAL_DIFF GIT_SSH GIT_SSH_COMMAND GIT_ASKPASS SSH_ASKPASS GIT_TEMPLATE_DIR GIT_PROXY_COMMAND; do
+  for v in GIT_EXEC_PATH GIT_PAGER PAGER GIT_EXTERNAL_DIFF GIT_SSH GIT_SSH_COMMAND GIT_ASKPASS SSH_ASKPASS GIT_TEMPLATE_DIR GIT_PROXY_COMMAND DEVELOPER_DIR; do
     [ "$(grep -c "^${v}=" "$log")" -eq 0 ]
   done
   grep -qx 'GIT_EDITOR=:' "$log"
@@ -1023,4 +1023,258 @@ _hl_lib_with_two_git() {
   [ "$status" -eq 0 ]
   grep -qF "$BATS_TEST_TMPDIR/ok" "$log"
   [ "$(grep -cF "$BATS_TEST_TMPDIR/ww" "$log")" -eq 0 ]
+}
+
+# --- U4d: branch symlink check (H1), uid from /usr/bin/id (M1), denied flags (L1) ---
+
+# _hl_h1_reflog_fixture <repo> <victim-dir> — ref feature/settings.json at HEAD whose reflog dir
+# .git/logs/refs/heads/feature is a symlink to <victim-dir> holding settings.json = "precious".
+_hl_h1_reflog_fixture() {
+  _hl_repo "$1"
+  mkdir -p "$2"
+  printf 'precious\n' > "$2/settings.json"
+  git -C "$1" branch feature/settings.json
+  [[ "$1" == "$BATS_TEST_TMPDIR"/* ]]
+  rm -rf "$1/.git/logs/refs/heads/feature"
+  ln -s "$2" "$1/.git/logs/refs/heads/feature"
+}
+
+# _hl_h1_refs_fixture <repo> <victim-dir> — .git/refs/heads/dir is a symlink to <victim-dir>, whose
+# file y holds a valid object id (so a branch delete of dir/y resolves it through the symlink).
+_hl_h1_refs_fixture() {
+  _hl_repo "$1"
+  mkdir -p "$2"
+  git -C "$1" rev-parse HEAD > "$2/y"
+  ln -s "$2" "$1/.git/refs/heads/dir"
+}
+
+@test "cast_git_safe: branch -D through a symlinked reflog dir is refused (rc 3); victim intact (control: plain git empties it)" {
+  local repo="$BATS_TEST_TMPDIR/h1r" vict="$BATS_TEST_TMPDIR/h1r-vict"
+  local crepo="$BATS_TEST_TMPDIR/h1r-ctl" cvict="$BATS_TEST_TMPDIR/h1r-cvict"
+  _hl_h1_reflog_fixture "$crepo" "$cvict"
+  # CONTROL: plain git unlinks the victim's file through the symlink.
+  CAST_BRANCH_OK=1 git -C "$crepo" branch -D -- feature/settings.json > /dev/null 2>&1 || true
+  [ ! -e "$cvict/settings.json" ]
+  _hl_h1_reflog_fixture "$repo" "$vict"
+  _hl_run_safe "$repo" branch -D -- feature/settings.json
+  [ "$status" -eq 3 ]
+  case "$output" in *"git NOT run"*) ;; *) echo "unexpected: $output" >&2; return 1 ;; esac
+  [ "$(cat "$vict/settings.json")" = "precious" ]
+  git -C "$repo" rev-parse --verify -q refs/heads/feature/settings.json > /dev/null
+}
+
+@test "cast_git_safe: branch -D through a symlinked refs dir is refused (rc 3); victim intact (control: plain git deletes it)" {
+  local repo="$BATS_TEST_TMPDIR/h1f" vict="$BATS_TEST_TMPDIR/h1f-vict"
+  local crepo="$BATS_TEST_TMPDIR/h1f-ctl" cvict="$BATS_TEST_TMPDIR/h1f-cvict"
+  _hl_h1_refs_fixture "$crepo" "$cvict"
+  # CONTROL: plain git removes victim_dir/y through the symlinked refs/heads/dir.
+  CAST_BRANCH_OK=1 git -C "$crepo" branch -D -- dir/y > /dev/null 2>&1 || true
+  [ ! -e "$cvict/y" ]
+  _hl_h1_refs_fixture "$repo" "$vict"
+  _hl_run_safe "$repo" branch -D -- dir/y
+  [ "$status" -eq 3 ]
+  [ -s "$vict/y" ]
+}
+
+@test "cast_git_safe: a symlinked .git/logs itself makes branch refuse (rc 3)" {
+  local repo="$BATS_TEST_TMPDIR/h1l"
+  _hl_repo "$repo"
+  git -C "$repo" branch somebranch
+  [[ "$repo" == "$BATS_TEST_TMPDIR"/* ]]
+  mv "$repo/.git/logs" "$repo/.git/logs.real"
+  ln -s logs.real "$repo/.git/logs"
+  _hl_run_safe "$repo" branch -D -- somebranch
+  [ "$status" -eq 3 ]
+  git -C "$repo" rev-parse --verify -q refs/heads/somebranch > /dev/null
+}
+
+@test "cast_git_safe: branch on a clean repo works (delete rc 0 and branch gone; --list rc 0)" {
+  local repo="$BATS_TEST_TMPDIR/h1ok"
+  _hl_repo "$repo"
+  git -C "$repo" branch somebranch
+  _hl_run_safe "$repo" branch --list
+  [ "$status" -eq 0 ]
+  case "$output" in *somebranch*) ;; *) echo "unexpected: $output" >&2; return 1 ;; esac
+  _hl_run_safe "$repo" branch -D -- somebranch
+  [ "$status" -eq 0 ]
+  run git -C "$repo" rev-parse --verify -q refs/heads/somebranch
+  [ "$status" -ne 0 ]
+}
+
+@test "cast_git_safe: trust uses /usr/bin/id, not an imported EUID (user-owned git dir still trusted under EUID=99999)" {
+  local repo="$BATS_TEST_TMPDIR/m1" log="$BATS_TEST_TMPDIR/m1.log" lib
+  _hl_repo "$repo"
+  : > "$log"
+  # A user-owned 755 dir (NOT root-owned): trust depends on the uid compare, so this fails if the
+  # lib consults an EUID imported from the environment.
+  _hl_dir_shim "$BATS_TEST_TMPDIR/m1d" 755 "$log"
+  lib="$(_hl_lib_with_two_git "$BATS_TEST_TMPDIR/m1d/git" "$BATS_TEST_TMPDIR/m1d/git")"
+  # CONTROL: this bash imports EUID from the environment (bash 3.2 does; bash 5 does not).
+  if [ "$(env EUID=99999 /bin/bash -c 'echo $EUID')" != "99999" ]; then
+    echo "(/bin/bash does not import EUID from env; the M1 spoof is not reproducible here)" >&2
+  fi
+  run env EUID=99999 /bin/bash -c "source '$lib'; cast_git_safe '$repo' status"
+  [ "$status" -eq 0 ]
+  grep -qF "$BATS_TEST_TMPDIR/m1d" "$log"
+}
+
+@test "cast_git_safe: denied flags (--ext-diff --textconv --output --no-index --alternate-refs --ignore-submodules) return 2 and run no git" {
+  local repo="$BATS_TEST_TMPDIR/l1t" log="$BATS_TEST_TMPDIR/l1t.log" f
+  _hl_repo "$repo"
+  _hl_shim
+  # CONTROL: a permitted diff reaches git (the shim log proves it), incl. the allowed --no-* forms.
+  _hl_run_shimmed 1 "$log" "$repo" diff --quiet --no-ext-diff --no-textconv
+  [ "$status" -eq 0 ]
+  [ -s "$log" ]
+  for f in --ext-diff --textconv --output "--output=$BATS_TEST_TMPDIR/l1t.out" --no-index --alternate-refs \
+    --ignore-submodules --ignore-submodules=none --ignore-submodules=all; do
+    : > "$log"
+    _hl_run_shimmed 1 "$log" "$repo" diff "$f"
+    [ "$status" -eq 2 ]
+    [ ! -s "$log" ]
+  done
+  # Caught in any position and on diff-index / status too.
+  : > "$log"
+  _hl_run_shimmed 1 "$log" "$repo" diff-index HEAD --output=x
+  [ "$status" -eq 2 ]
+  _hl_run_shimmed 1 "$log" "$repo" status --ignore-submodules=none
+  [ "$status" -eq 2 ]
+  [ ! -s "$log" ]
+}
+
+@test "cast_git_safe: diff --output=<path> writes nothing (rc 2); control: plain git writes it" {
+  local repo="$BATS_TEST_TMPDIR/l1o" f="$BATS_TEST_TMPDIR/l1o.out" f2="$BATS_TEST_TMPDIR/l1o.out2"
+  _hl_diff_fixture "$repo"
+  git -C "$repo" diff --output="$f2" > /dev/null 2>&1 || true
+  [ -e "$f2" ]
+  _hl_run_safe "$repo" diff --output="$f"
+  [ "$status" -eq 2 ]
+  [ ! -e "$f" ]
+  _hl_run_safe "$repo" diff-index --output="$f" HEAD
+  [ "$status" -eq 2 ]
+  [ ! -e "$f" ]
+}
+
+@test "cast_git_safe: diff --ext-diff and --textconv canaries do not fire (rc 2); control: plain git fires them" {
+  local repo="$BATS_TEST_TMPDIR/l1e" me="$BATS_TEST_TMPDIR/l1e.ext" mt="$BATS_TEST_TMPDIR/l1e.tc"
+  _hl_diff_fixture "$repo"
+  _hl_canary "$BATS_TEST_TMPDIR/l1e-ext.sh" "$me"
+  git -C "$repo" config diff.external "$BATS_TEST_TMPDIR/l1e-ext.sh"
+  printf '#!/bin/sh\ntouch "%s"\ncat "$1"\n' "$mt" > "$BATS_TEST_TMPDIR/l1e-tc.sh"
+  chmod +x "$BATS_TEST_TMPDIR/l1e-tc.sh"
+  git -C "$repo" config diff.evil.textconv "$BATS_TEST_TMPDIR/l1e-tc.sh"
+  # CONTROL: plain git fires both.
+  git -C "$repo" diff --ext-diff > /dev/null 2>&1 || true
+  [ -e "$me" ]
+  # (An external diff program outranks textconv, so drop it for the textconv control only.)
+  git -C "$repo" config --unset diff.external
+  git -C "$repo" diff --textconv > /dev/null 2>&1 || true
+  [ -e "$mt" ]
+  git -C "$repo" config diff.external "$BATS_TEST_TMPDIR/l1e-ext.sh"
+  rm -f "$me" "$mt"
+  _hl_run_safe "$repo" diff --ext-diff
+  [ "$status" -eq 2 ]
+  _hl_run_safe "$repo" diff --textconv
+  [ "$status" -eq 2 ]
+  [ ! -e "$me" ]
+  [ ! -e "$mt" ]
+  # The permitted forms still work and still do not fire either.
+  _hl_run_safe "$repo" diff --no-ext-diff --no-textconv
+  [ "$status" -eq 0 ]
+  [ ! -e "$me" ]
+  [ ! -e "$mt" ]
+}
+
+# --- U4d follow-up: branch symlink scan also covers worktrees, config and reftable ---
+
+@test "cast_git_safe: branch -m with a symlinked worktrees/<id>/logs/HEAD is refused (rc 3); victim unchanged (control: plain git appends)" {
+  local repo="$BATS_TEST_TMPDIR/wa" vict="$BATS_TEST_TMPDIR/wa-vict.txt"
+  local crepo="$BATS_TEST_TMPDIR/wa-ctl" cvict="$BATS_TEST_TMPDIR/wa-cvict.txt" r v sum
+  for r in "$crepo:$cvict" "$repo:$vict"; do
+    _hl_repo "${r%%:*}"
+    git -C "${r%%:*}" worktree add -q -b wtb "${r%%:*}-wt"
+    printf 'precious\n' > "${r#*:}"
+    [[ "${r%%:*}" == "$BATS_TEST_TMPDIR"/* ]]
+    mkdir -p "${r%%:*}/.git/worktrees/$(basename "${r%%:*}-wt")/logs"
+    rm -f "${r%%:*}/.git/worktrees/$(basename "${r%%:*}-wt")/logs/HEAD"
+    ln -s "${r#*:}" "${r%%:*}/.git/worktrees/$(basename "${r%%:*}-wt")/logs/HEAD"
+  done
+  # CONTROL: plain git appends a reflog line to the victim through the symlink.
+  CAST_BRANCH_OK=1 git -C "$crepo" branch -m wtb wtb2 > /dev/null 2>&1 || true
+  [ "$(cat "$cvict")" != "precious" ]
+  sum="$(cksum < "$vict")"
+  _hl_run_safe "$repo" branch -m wtb wtb2
+  [ "$status" -eq 3 ]
+  [ "$(cksum < "$vict")" = "$sum" ]
+  git -C "$repo" rev-parse --verify -q refs/heads/wtb > /dev/null
+}
+
+@test "cast_git_safe: branch -D with .git/config symlinked to a victim is refused (rc 3); victim byte-identical (control: plain git rewrites it)" {
+  local repo="$BATS_TEST_TMPDIR/wb" vict="$BATS_TEST_TMPDIR/wb-vict.cfg"
+  local crepo="$BATS_TEST_TMPDIR/wb-ctl" cvict="$BATS_TEST_TMPDIR/wb-cvict.cfg" r sum
+  for r in "$crepo:$cvict" "$repo:$vict"; do
+    _hl_repo "${r%%:*}"
+    git -C "${r%%:*}" branch feature
+    git -C "${r%%:*}" config branch.feature.remote origin
+    [[ "${r%%:*}" == "$BATS_TEST_TMPDIR"/* ]]
+    mv "${r%%:*}/.git/config" "${r#*:}"
+    ln -s "${r#*:}" "${r%%:*}/.git/config"
+  done
+  # CONTROL: plain git removes the [branch "feature"] section from the victim.
+  sum="$(cksum < "$cvict")"
+  CAST_BRANCH_OK=1 git -C "$crepo" branch -D -- feature > /dev/null 2>&1 || true
+  [ "$(cksum < "$cvict")" != "$sum" ]
+  sum="$(cksum < "$vict")"
+  _hl_run_safe "$repo" branch -D -- feature
+  [ "$status" -eq 3 ]
+  [ "$(cksum < "$vict")" = "$sum" ]
+  git -C "$repo" rev-parse --verify -q refs/heads/feature > /dev/null
+}
+
+# _hl_reftable_repo <dir> — a commit-bearing repo using the reftable ref backend.
+_hl_reftable_repo() {
+  mkdir -p "$1"
+  git -C "$1" init -q --ref-format=reftable
+  printf 'one\n' > "$1/tracked.txt"
+  git -C "$1" add tracked.txt
+  git -C "$1" -c user.email=test@example.com -c user.name=t -c commit.gpgsign=false commit -q -m init
+}
+
+@test "cast_git_safe: branch -D with .git/reftable symlinked to another repo is refused (rc 3); other repo keeps its ref (control: plain git deletes it)" {
+  local repo="$BATS_TEST_TMPDIR/wc" other="$BATS_TEST_TMPDIR/wc-other"
+  local crepo="$BATS_TEST_TMPDIR/wc-ctl" cother="$BATS_TEST_TMPDIR/wc-cother" r
+  if [ "$(git --version | awk -F'[ .]' '{print $3*1000+$4}')" -lt 2045 ]; then
+    skip "git < 2.45 has no --ref-format=reftable"
+  fi
+  for r in "$crepo:$cother" "$repo:$other"; do
+    _hl_reftable_repo "${r%%:*}"
+    _hl_reftable_repo "${r#*:}"
+    git -C "${r#*:}" branch victimbr
+    [[ "${r%%:*}" == "$BATS_TEST_TMPDIR"/* ]]
+    rm -rf "${r%%:*}/.git/reftable"
+    ln -s "${r#*:}/.git/reftable" "${r%%:*}/.git/reftable"
+  done
+  # CONTROL: plain git deletes victimbr in the OTHER repo through the symlink.
+  CAST_BRANCH_OK=1 git -C "$crepo" branch -D -- victimbr > /dev/null 2>&1 || true
+  run git -C "$cother" rev-parse --verify -q refs/heads/victimbr
+  [ "$status" -ne 0 ]
+  _hl_run_safe "$repo" branch -D -- victimbr
+  [ "$status" -eq 3 ]
+  git -C "$other" rev-parse --verify -q refs/heads/victimbr > /dev/null
+}
+
+@test "cast_git_safe: branch -D on a repo with a normal linked worktree (no symlinks) still works (rc 0)" {
+  local repo="$BATS_TEST_TMPDIR/wp"
+  _hl_repo "$repo"
+  git -C "$repo" worktree add -q -b wtp "$repo-wt"
+  git -C "$repo" branch other
+  [ -d "$repo/.git/worktrees" ]
+  _hl_run_safe "$repo" branch -D -- other
+  [ "$status" -eq 0 ]
+  run git -C "$repo" rev-parse --verify -q refs/heads/other
+  [ "$status" -ne 0 ]
+  # Also from inside the linked worktree (git-dir != common-dir).
+  git -C "$repo" branch other2
+  _hl_run_safe "$repo-wt" branch -D -- other2
+  [ "$status" -eq 0 ]
 }

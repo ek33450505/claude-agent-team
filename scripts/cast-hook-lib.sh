@@ -37,9 +37,12 @@ cast_hook_db_path() {
 # exec paths neutralised. stdout/stderr/exit status are git's own EXCEPT: 2 = refused (empty or
 # '-'-leading <repo-dir>; a MISSING, EMPTY, '-'-leading or newline-bearing first git arg — callers
 # pass the SUBCOMMAND first, since global options like `-c k=v status` would bypass the injection
-# below; or a subcommand NOT on the ALLOWLIST); 3 = hardening could not be established and git was
-# NOT run (fail closed: the config read failed, or no trusted git binary: its directory must be
-# owned by root or the current user and not world-writable); 126 from env if the config exceeds ARG_MAX (thousands of filter/hook
+# below; a subcommand NOT on the ALLOWLIST; or a DENIED FLAG anywhere in the args: --ext-diff
+# --textconv --output[=*] --no-index --alternate-refs --ignore-submodules*); 3 = hardening could
+# not be established and git was NOT run (fail closed: the config read failed, or no trusted git
+# binary: its directory must be owned by root or the current user (uid from /usr/bin/id, NOT $EUID:
+# bash 3.2 imports EUID from the environment) and not world-writable, or a `branch` symlink check
+# failed/fired, see WHY); 126 from env if the config exceeds ARG_MAX (thousands of filter/hook
 # sections, or ONE huge config key name; also fail closed).
 # ALLOWLIST (exactly what callers use): status rev-parse rev-list for-each-ref ls-files cherry
 # branch diff diff-files diff-index, plus `worktree` ONLY when its first non-option arg is `list`.
@@ -60,11 +63,14 @@ cast_hook_db_path() {
 # sequence.editor, so `branch --edit-description` cannot launch a repo-set editor; merely UNSETTING
 # them would fall back to that repo config). Unset: GIT_EXEC_PATH, GIT_PAGER, PAGER,
 # GIT_EXTERNAL_DIFF, GIT_SSH, GIT_SSH_COMMAND, GIT_ASKPASS, SSH_ASKPASS, GIT_TEMPLATE_DIR,
-# GIT_PROXY_COMMAND (plus the repo-redirecting GIT_DIR & co.).
+# GIT_PROXY_COMMAND, DEVELOPER_DIR (the /usr/bin/git Xcode shim honours it) (plus the
+# repo-redirecting GIT_DIR & co.).
 # Injected right after the subcommand: status -> --ignore-submodules=all;
 # diff|diff-files|diff-index -> --ignore-submodules=all --no-ext-diff --no-textconv.
-# Caller-supplied args come AFTER the injected flags and can override them: --ext-diff, --textconv
-# or --ignore-submodules=none re-enable what was disabled. Callers must not pass them.
+# Caller-supplied args that would override or bypass those are REFUSED (rc 2, before the
+# injection): --ext-diff, --textconv, --output[=*], --no-index, --alternate-refs,
+# --ignore-submodules*. Exact match suffices (git diff options take no abbreviations, probed
+# 2.56). --no-ext-diff and --no-textconv stay allowed.
 # WHY: hooks and launchd jobs run OUTSIDE the Bash sandbox over repos an agent can write to, and
 # repo-local config can make git exec programs. Neutralised: core.fsmonitor; filter.<drv>.* (each
 # driver found in config); core.hooksPath AND config-based hooks (hook.<name>.enabled=false, git
@@ -76,17 +82,23 @@ cast_hook_db_path() {
 # `git gc --auto` / `maintenance run --auto` (gc.auto=0, maintenance.auto=false: gc runs
 # `git worktree prune`, which follows an agent-planted symlinked .git/worktrees/<id> and EMPTIES
 # its target; gc.worktreePruneExpire=never does NOT stop it, probed 2026-10-04); inherited
-# GIT_DIR & co. that would override -C (env -u); PATH-resolved `env` (called as /usr/bin/env).
+# GIT_DIR & co. that would override -C (env -u); PATH-resolved `env` (called as /usr/bin/env);
+# `branch` (run for every invocation, flags not parsed) deleting or rewriting a file OUTSIDE the
+# repo through an agent-planted symlink (git unlinks/appends/rewrites through it): refused (rc 3)
+# when /usr/bin/find -P finds any symlink at or under logs, refs, packed-refs, config, reftable or
+# worktrees of the git-dir or the common-dir. Only THOSE paths are scanned; a symlink elsewhere
+# in .git is not covered.
 # Config goes through GIT_CONFIG_COUNT/KEY_i/VALUE_i, NOT -c k=v (a name containing '=' would
 # mis-split -c). Fixed entries occupy indices 0-8; enumeration starts at n=9. Locals only, no nested helpers (sourced file). Bash 3.2-safe.
 # RESIDUALS (NOT covered): (M1) enumerate-then-blank is a TOCTOU window if an agent can rewrite
-# .git/config between the read and the call (the sandbox denies that today). (M3) a .git file or
+# .git/config between the read and the call (the sandbox denies that today); the same window
+# applies to the `branch` symlink scan (a symlink swapped in between the find and the git call).
+# (M3) a .git file or
 # core.worktree can redirect to another repo: MUTATING callers must verify `rev-parse
 # --git-common-dir` first and put `--` before refs/paths. `log -p`, `show` and `format-patch`
 # are NOT injected: callers must pass --no-ext-diff --no-textconv themselves or
 # diff.<drv>.command/textconv will run. `describe --dirty` and `commit -a` still recurse into
-# submodules (no flag exists), and a caller-supplied --ignore-submodules=none overrides the
-# injection.
+# submodules (no flag exists).
 cast_git_safe() {
   local dir="${1-}"
   case "$dir" in
@@ -131,6 +143,11 @@ cast_git_safe() {
     dirs+=("${cand%/*}")
   done
   if [[ "$seen" -gt 0 ]]; then
+    # Own uid from /usr/bin/id, NOT $EUID (bash 3.2 imports EUID from the environment, so a caller
+    # could set EUID=<dir owner>). Failure / non-numeric => no match: only root-owned dirs trusted.
+    local self_uid=""
+    self_uid="$(/usr/bin/id -u 2>/dev/null)" || self_uid=""
+    case "$self_uid" in "" | *[!0-9]*) self_uid="" ;; esac
     if [[ "$OSTYPE" == darwin* ]]; then
       info="$(/usr/bin/stat -L -f '%N %u %Lp' "${dirs[@]}" 2>/dev/null)" || :
     else
@@ -140,7 +157,7 @@ cast_git_safe() {
       # No =~ here: it would leak BASH_REMATCH into the caller's shell.
       case "$d_uid" in "" | *[!0-9]*) continue ;; esac
       case "$d_mode" in "" | *[!0-7]*) continue ;; esac
-      [[ "$d_uid" == 0 || "$d_uid" == "${EUID:-x}" ]] || continue
+      [[ "$d_uid" == 0 || ( -n "$self_uid" && "$d_uid" == "$self_uid" ) ]] || continue
       [[ $((8#$d_mode & 2)) -eq 0 ]] || continue
       trusted="${trusted}"$'\n'"${d_name}"
     done <<<"$info"
@@ -159,6 +176,19 @@ cast_git_safe() {
     echo "cast_git_safe: no trusted git binary (seen=${seen}; dir must be owned by root or the current user and not world-writable); git NOT run" >&2
     return 3
   fi
+  # Caller-supplied flags that re-enable what is disabled below (external diff / textconv programs),
+  # write a file (--output), leave the repo (--no-index), or flip the submodule injection are
+  # refused. Exact match is enough: git diff options do not accept abbreviations (probed, 2.56).
+  # --no-ext-diff / --no-textconv stay allowed. Must run BEFORE the injection below.
+  local a_arg
+  for a_arg in "${@:2}"; do
+    case "$a_arg" in
+      --ext-diff | --textconv | --output | --no-index | --alternate-refs | --output=* | --ignore-submodules*)
+        echo "cast_git_safe: argument '${a_arg%%=*}' is not allowed; git NOT run" >&2
+        return 2
+        ;;
+    esac
+  done
   # PATH for git's own children: absolute entries only. Locals only; read -a leaves IFS untouched.
   local safe_path="" p parts=()
   IFS=: read -r -a parts <<<"${PATH-}"
@@ -177,6 +207,7 @@ cast_git_safe() {
     -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_PREFIX
     -u GIT_EXEC_PATH -u GIT_PAGER -u PAGER -u GIT_EXTERNAL_DIFF -u GIT_SSH -u GIT_SSH_COMMAND
     -u GIT_ASKPASS -u SSH_ASKPASS -u GIT_TEMPLATE_DIR -u GIT_PROXY_COMMAND
+    -u DEVELOPER_DIR
   )
   local env_assignments=(
     "GIT_CONFIG_KEY_0=core.fsmonitor" "GIT_CONFIG_VALUE_0=false"
@@ -235,6 +266,62 @@ cast_git_safe() {
   done < <(printf '%s\n' "$cfg")
   # Explicit count with keys from index 0: an inherited GIT_CONFIG_COUNT cannot add entries.
   env_assignments+=("GIT_CONFIG_COUNT=${n}")
+  # `branch` (flags are not parsed; the scan runs for every invocation) unlinks refs and reflogs,
+  # appends reflogs and rewrites config, following a symlink an agent planted, so it could delete
+  # or modify a file outside the repo. Refuse when any symlink is at or under
+  # <git-dir>|<common-dir>/{logs,refs,packed-refs,config,reftable,worktrees}. The dirs
+  # come from the same hardened git; anything but exactly two absolute lines fails closed. Fixed
+  # messages only (never echo attacker-controlled path bytes). Residual: TOCTOU, see header.
+  if [[ "$1" == "branch" ]]; then
+    local gd_out="" gd_line gd_n=0 gd_a="" gd_b="" gd_rc=0 gd_d gd_s gd_p gd_found="" gd_paths=() gd_dirs=()
+    gd_out="$(GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none \
+      /usr/bin/env "${unset_env[@]}" PATH="$safe_path" "${env_assignments[@]}" \
+      "$git_bin" --no-pager -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false -c core.untrackedCache=false \
+      --no-replace-objects --no-optional-locks -C "$dir" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null)" || gd_rc=$?
+    if [[ "$gd_rc" -ne 0 ]]; then
+      echo "cast_git_safe: could not resolve git dir for the branch symlink check; git NOT run" >&2
+      return 3
+    fi
+    while IFS= read -r gd_line; do
+      gd_n=$((gd_n + 1))
+      case "$gd_line" in
+        /*) ;;
+        *) gd_n=99 ;;
+      esac
+      if [[ "$gd_n" -eq 1 ]]; then
+        gd_a="$gd_line"
+      elif [[ "$gd_n" -eq 2 ]]; then
+        gd_b="$gd_line"
+      fi
+    done <<<"$gd_out"
+    if [[ "$gd_n" -ne 2 ]]; then
+      echo "cast_git_safe: unexpected git-dir output for the branch symlink check; git NOT run" >&2
+      return 3
+    fi
+    gd_dirs=("$gd_a")
+    [[ "$gd_b" == "$gd_a" ]] || gd_dirs+=("$gd_b")
+    for gd_d in "${gd_dirs[@]}"; do
+      for gd_s in logs refs packed-refs config reftable worktrees; do
+        gd_p="${gd_d}/${gd_s}"
+        if [[ -e "$gd_p" || -L "$gd_p" ]]; then
+          gd_paths+=("$gd_p")
+        fi
+      done
+    done
+    # Never run find with no paths (it would scan the cwd).
+    if [[ "${#gd_paths[@]}" -gt 0 ]]; then
+      gd_rc=0
+      gd_found="$(/usr/bin/find -P "${gd_paths[@]}" -type l -print 2>/dev/null)" || gd_rc=$?
+      if [[ "$gd_rc" -ne 0 ]]; then
+        echo "cast_git_safe: symlink scan under logs/refs/packed-refs/config/reftable/worktrees failed; git NOT run" >&2
+        return 3
+      fi
+      if [[ -n "$gd_found" ]]; then
+        echo "cast_git_safe: a symlink exists at or under the repo's logs, refs, packed-refs, config, reftable or worktrees (branch would follow it); git NOT run" >&2
+        return 3
+      fi
+    fi
+  fi
   GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none \
     /usr/bin/env "${unset_env[@]}" PATH="$safe_path" "${env_assignments[@]}" \
     "$git_bin" --no-pager -c core.fsmonitor=false -c core.hooksPath=/dev/null -c log.showSignature=false -c core.untrackedCache=false \
