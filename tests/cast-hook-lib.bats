@@ -4,7 +4,8 @@
 # and re-source guard (_CAST_HOOK_LIB_LOADED), and cast_git_safe (hostile-repo hardening:
 # fsmonitor, filter drivers, config-based hooks, submodule-only filters (status/diff/diff-files/
 # diff-index), inherited GIT_DIR, ambient GIT_CONFIG_COUNT, fail-closed config read, leading-option
-# rejection, promisor lazy-fetch ext::, arg guard, behaviour + caller hygiene).
+# rejection, promisor lazy-fetch ext::, arg guard, behaviour + caller hygiene, diff.<drv>.command/
+# textconv suppression on the diff family, commit/tag/push gpgSign=false, missing-subcommand rc 2).
 # Uses isolated temp HOME + temp CAST_DB_PATH — never touches real ~/.claude.
 
 load 'test_helper/bats-support/load'
@@ -489,4 +490,168 @@ _hl_run_shimmed() {
   _hl_run_shimmed 1 "$log" "$repo" --no-pager status
   assert_failure 2
   [ ! -e "$log" ]
+}
+
+# --- U3a-r2: diff family (--no-ext-diff/--no-textconv), gpgSign, missing subcommand ---
+
+# _hl_diff_fixture <repo> — a repo whose tracked.txt is modified in the worktree and mapped to the
+# diff driver "evil" by .gitattributes (untracked: attributes are read from the worktree).
+_hl_diff_fixture() {
+  _hl_repo "$1"
+  printf '*.txt diff=evil\n' > "$1/.gitattributes"
+  printf 'two\n' > "$1/tracked.txt"
+}
+
+@test "cast_git_safe: diff.<drv>.command canary does not run on diff (control fires)" {
+  local repo="$BATS_TEST_TMPDIR/dcmd" marker="$BATS_TEST_TMPDIR/dcmd.marker"
+  _hl_diff_fixture "$repo"
+  _hl_canary "$BATS_TEST_TMPDIR/dcmd-canary.sh" "$marker"
+  git -C "$repo" config diff.evil.command "$BATS_TEST_TMPDIR/dcmd-canary.sh"
+  # CONTROL: plain git diff runs the external diff program.
+  git -C "$repo" diff > /dev/null 2>&1 || true
+  [ -e "$marker" ]
+  rm -f "$marker"
+  _hl_run_safe "$repo" diff
+  assert_success
+  assert_output --partial '+two'
+  [ ! -e "$marker" ]
+}
+
+@test "cast_git_safe: diff.<drv>.textconv canary does not run on diff (control fires)" {
+  local repo="$BATS_TEST_TMPDIR/dtc" marker="$BATS_TEST_TMPDIR/dtc.marker"
+  _hl_diff_fixture "$repo"
+  printf '#!/bin/sh\ntouch "%s"\ncat "$1"\n' "$marker" > "$BATS_TEST_TMPDIR/dtc-canary.sh"
+  chmod +x "$BATS_TEST_TMPDIR/dtc-canary.sh"
+  git -C "$repo" config diff.evil.textconv "$BATS_TEST_TMPDIR/dtc-canary.sh"
+  # CONTROL: plain git diff runs the textconv program.
+  git -C "$repo" diff > /dev/null 2>&1 || true
+  [ -e "$marker" ]
+  rm -f "$marker"
+  _hl_run_safe "$repo" diff
+  assert_success
+  assert_output --partial '+two'
+  [ ! -e "$marker" ]
+}
+
+# diff-files/diff-index default to NO external diff, so a canary cannot discriminate there; assert
+# the injected argv through the shim instead (and that real git accepts both flags on all three).
+@test "cast_git_safe: diff, diff-files and diff-index get --no-ext-diff --no-textconv; status does not" {
+  local repo="$BATS_TEST_TMPDIR/inj" log="$BATS_TEST_TMPDIR/shim.log" sub
+  _hl_repo "$repo"
+  printf 'two\n' > "$repo/tracked.txt"
+  _hl_shim
+  for sub in "diff" "diff-files -p" "diff-index -p HEAD"; do
+    rm -f "$log"
+    # shellcheck disable=SC2086
+    _hl_run_shimmed 1 "$log" "$repo" $sub
+    assert_success
+    grep -q -- '--ignore-submodules=all --no-ext-diff --no-textconv' "$log"
+  done
+  for sub in "diff" "diff-files -p" "diff-index -p HEAD"; do
+    # shellcheck disable=SC2086
+    _hl_run_safe "$repo" $sub
+    assert_success
+    assert_output --partial '+two'
+  done
+  rm -f "$log"
+  _hl_run_shimmed 1 "$log" "$repo" status --porcelain
+  assert_success
+  grep -q -- '--ignore-submodules=all' "$log"
+  ! grep -q -- '--no-ext-diff' "$log"
+}
+
+@test "cast_git_safe: commit.gpgSign=true with a gpg.program canary does not run on commit (control fires)" {
+  local repo="$BATS_TEST_TMPDIR/gpgc" marker="$BATS_TEST_TMPDIR/gpgc.marker"
+  _hl_repo "$repo"
+  git -C "$repo" config user.email test@example.com
+  git -C "$repo" config user.name t
+  _hl_canary "$BATS_TEST_TMPDIR/gpgc-canary.sh" "$marker"
+  git -C "$repo" config gpg.program "$BATS_TEST_TMPDIR/gpgc-canary.sh"
+  git -C "$repo" config commit.gpgSign true
+  # CONTROL: plain git commit invokes gpg.program (the canary produces no signature, so the
+  # commit itself may fail; only the marker matters).
+  git -C "$repo" commit -q --allow-empty -m control > /dev/null 2>&1 || true
+  [ -e "$marker" ]
+  rm -f "$marker"
+  _hl_run_safe "$repo" commit -q --allow-empty -m x
+  assert_success
+  [ "$(git -C "$repo" log --format=%s -1)" = x ]
+  [ ! -e "$marker" ]
+}
+
+@test "cast_git_safe: tag.gpgSign=true with a gpg.program canary does not run on tag -m (control fires)" {
+  local repo="$BATS_TEST_TMPDIR/gpgt" marker="$BATS_TEST_TMPDIR/gpgt.marker"
+  _hl_repo "$repo"
+  git -C "$repo" config user.email test@example.com
+  git -C "$repo" config user.name t
+  _hl_canary "$BATS_TEST_TMPDIR/gpgt-canary.sh" "$marker"
+  git -C "$repo" config gpg.program "$BATS_TEST_TMPDIR/gpgt-canary.sh"
+  git -C "$repo" config tag.gpgSign true
+  git -C "$repo" tag -m control v0 > /dev/null 2>&1 || true
+  [ -e "$marker" ]
+  rm -f "$marker"
+  _hl_run_safe "$repo" tag -m x v1
+  assert_success
+  git -C "$repo" rev-parse -q --verify refs/tags/v1 > /dev/null
+  [ ! -e "$marker" ]
+}
+
+# push.gpgSign only reaches gpg when the server advertises push certs, so check the env instead.
+@test "cast_git_safe: commit/tag/push gpgSign=false are env entries 4-6; enumerated entries start at 7" {
+  local repo="$BATS_TEST_TMPDIR/envk" log="$BATS_TEST_TMPDIR/env.log"
+  _hl_repo "$repo"
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  cat > "$BATS_TEST_TMPDIR/shim/git" << 'SHIM'
+#!/bin/sh
+case "$*" in
+  *--get-regexp*) printf 'filter.d.clean\n'; exit 0 ;;
+esac
+env | grep '^GIT_CONFIG_' | sort > "$SHIM_LOG"
+SHIM
+  chmod +x "$BATS_TEST_TMPDIR/shim/git"
+  run env PATH="$BATS_TEST_TMPDIR/shim:$PATH" SHIM_LOG="$log" \
+    bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$HOOK_LIB" "$repo" status
+  assert_success
+  grep -qx 'GIT_CONFIG_KEY_4=commit.gpgSign' "$log"
+  grep -qx 'GIT_CONFIG_VALUE_4=false' "$log"
+  grep -qx 'GIT_CONFIG_KEY_5=tag.gpgSign' "$log"
+  grep -qx 'GIT_CONFIG_VALUE_5=false' "$log"
+  grep -qx 'GIT_CONFIG_KEY_6=push.gpgSign' "$log"
+  grep -qx 'GIT_CONFIG_VALUE_6=false' "$log"
+  # One filter driver = clean, smudge, process, required (4 entries) after the 7 fixed ones.
+  grep -qx 'GIT_CONFIG_KEY_7=filter.d.clean' "$log"
+  grep -qx 'GIT_CONFIG_COUNT=11' "$log"
+}
+
+@test "cast_git_safe: a missing or empty first git arg returns 2 and runs no git" {
+  local repo="$BATS_TEST_TMPDIR/nosub" log="$BATS_TEST_TMPDIR/shim.log"
+  _hl_repo "$repo"
+  _hl_shim
+  # CONTROL: a real subcommand reaches git (the shim log proves it).
+  _hl_run_shimmed 1 "$log" "$repo" status --porcelain
+  assert_success
+  [ -s "$log" ]
+  rm -f "$log"
+  _hl_run_shimmed 1 "$log" "$repo"
+  assert_failure 2
+  [ ! -e "$log" ]
+  _hl_run_shimmed 1 "$log" "$repo" ""
+  assert_failure 2
+  [ ! -e "$log" ]
+}
+
+@test "cast_git_safe: a PATH-planted env is not used (absolute /usr/bin/env; control: plain env is shadowed)" {
+  local repo="$BATS_TEST_TMPDIR/penv" marker="$BATS_TEST_TMPDIR/penv.marker"
+  _hl_repo "$repo"
+  mkdir -p "$BATS_TEST_TMPDIR/envshim"
+  printf '#!/bin/sh\ntouch "%s"\nexec /usr/bin/env "$@"\n' "$marker" > "$BATS_TEST_TMPDIR/envshim/env"
+  chmod +x "$BATS_TEST_TMPDIR/envshim/env"
+  # CONTROL: with the shim first on PATH, a bare `env` resolves to it.
+  PATH="$BATS_TEST_TMPDIR/envshim:$PATH" bash -c 'env true'
+  [ -e "$marker" ]
+  rm -f "$marker"
+  run env PATH="$BATS_TEST_TMPDIR/envshim:$PATH" \
+    bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$HOOK_LIB" "$repo" status --porcelain
+  assert_success
+  [ ! -e "$marker" ]
 }

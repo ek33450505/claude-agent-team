@@ -161,7 +161,8 @@ class RunBehaviour(GitSafeTestBase):
     def test_06b_popen_call_shape(self) -> None:
         """Structural: argv list, no shell, no stdin, bash-exec variables stripped."""
         hostile = {'BASH_ENV': '/x', 'ENV': '/x', 'SHELLOPTS': 'xtrace', 'BASHOPTS': 'x',
-                   'PS4': '$(id)', 'BASH_FUNC_source%%': '() { :; }', 'KEEP_ME': '1'}
+                   'PS4': '$(id)', 'BASH_FUNC_source%%': '() { :; }', 'KEEP_ME': '1',
+                   'POSIXLY_CORRECT': '1', '_CAST_HOOK_LIB_LOADED': '1'}
         with mock.patch.dict(os.environ, hostile):
             with mock.patch.object(cast_git_safe.subprocess, 'Popen',
                                    wraps=cast_git_safe.subprocess.Popen) as popen:
@@ -172,7 +173,8 @@ class RunBehaviour(GitSafeTestBase):
         self.assertFalse(kw.get('shell', False))
         self.assertEqual(kw['stdin'], subprocess.DEVNULL)
         self.assertEqual(kw['env'].get('KEEP_ME'), '1')
-        for name in ('BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'PS4', 'BASH_FUNC_source%%'):
+        for name in ('BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'PS4', 'BASH_FUNC_source%%',
+                     'POSIXLY_CORRECT', '_CAST_HOOK_LIB_LOADED'):
             self.assertNotIn(name, kw['env'])
 
     def test_07_repo_dir_is_argv_not_interpolated(self) -> None:
@@ -241,6 +243,138 @@ class RunBehaviour(GitSafeTestBase):
             cast_git_safe.run(self.repo, 'status')  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
             cast_git_safe.run(self.repo, ['status', 1])  # type: ignore[list-item]
+
+    # -- U3a-r2 hardening of the wrapper itself ------------------------------------------------
+    def _plain_git_bytes(self, *args: str) -> bytes:
+        return subprocess.run(['git', '-C', self.repo, *args], env=dict(os.environ),
+                              capture_output=True, check=True, stdin=subprocess.DEVNULL).stdout
+
+    def test_11_cr_and_non_utf8_bytes_in_z_paths_round_trip(self) -> None:
+        cr_name = 'cr\rname.txt'
+        try:
+            Path(self.repo, cr_name).write_text('x\n')
+        except OSError:
+            self.skipTest('filesystem rejects \\r in file names')
+        self.git(self.repo, 'add', '--', cr_name)
+        # A non-UTF-8 path byte cannot exist on APFS, so put it straight into the index.
+        blob = subprocess.run(['git', '-C', self.repo, 'hash-object', '-w', '--stdin'],
+                              input=b'y\n', capture_output=True, check=True,
+                              env=dict(os.environ)).stdout.decode().strip()
+        bad_name = os.fsdecode(b'bad\xffname.txt')
+        self.git(self.repo, 'update-index', '--add', '--cacheinfo', f'100644,{blob},{bad_name}')
+        expected = self._plain_git_bytes('ls-files', '-z')
+        self.assertIn(b'cr\rname.txt\0', expected)
+        self.assertIn(b'bad\xffname.txt\0', expected)
+        # CONTROL: text-mode universal newlines (what the wrapper used to do) mangle the \r.
+        mangled = subprocess.run(['git', '-C', self.repo, 'ls-files', '-z'], env=dict(os.environ),
+                                 capture_output=True, text=True, check=True,
+                                 errors='surrogateescape', stdin=subprocess.DEVNULL).stdout
+        self.assertNotIn('cr\rname.txt', mangled, 'control: text mode did not rewrite \\r')
+        r = cast_git_safe.run(self.repo, ['ls-files', '-z'])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(os.fsencode(r.stdout), expected)
+        self.assertIn('cr\rname.txt\0', r.stdout)
+        # status --porcelain -z carries the same path through a different git code path.
+        r = cast_git_safe.run(self.repo, ['status', '--porcelain', '-z'])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('cr\rname.txt\0', r.stdout)
+
+    def test_12_clean_path_drops_empty_and_relative_entries(self) -> None:
+        self.assertEqual(cast_git_safe._clean_path(f'/a/bin{os.pathsep}{os.pathsep}rel/bin'
+                                                   f'{os.pathsep}.{os.pathsep}/b/bin'),
+                         f'/a/bin{os.pathsep}/b/bin')
+        self.assertEqual(cast_git_safe._clean_path(''), '/usr/bin:/bin')
+        self.assertEqual(cast_git_safe._clean_path(f'{os.pathsep}.{os.pathsep}rel'), '/usr/bin:/bin')
+        with mock.patch.dict(os.environ, {'PATH': f'{os.pathsep}rel:/a/bin'}):
+            self.assertEqual(cast_git_safe._clean_env()['PATH'], '/a/bin')
+        with mock.patch.dict(os.environ):
+            os.environ.pop('PATH', None)
+            self.assertEqual(cast_git_safe._clean_env()['PATH'], '/usr/bin:/bin')
+
+    def test_12b_empty_path_entry_does_not_resolve_git_from_cwd(self) -> None:
+        planted = os.path.join(self.canaries, 'git')
+        Path(planted).write_text(f'#!/bin/sh\ntouch "{self.marker}"\nexit 1\n')
+        os.chmod(planted, 0o755)
+        old_cwd = os.getcwd()
+        self.addCleanup(os.chdir, old_cwd)
+        os.chdir(self.canaries)
+        env = {'PATH': os.pathsep + os.environ['PATH']}  # leading empty entry == cwd
+        with mock.patch.dict(os.environ, env):
+            # CONTROL: a plain shell resolves `git` from the cwd through the empty entry.
+            subprocess.run(['/bin/sh', '-c', 'git --version'], env=dict(os.environ),
+                           capture_output=True, check=False)
+            self.assertTrue(self.fired(), 'control: empty PATH entry did not resolve to cwd')
+            self.reset_marker()
+            r = cast_git_safe.run(self.repo, ['rev-parse', '--git-dir'])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), '.git')
+        self.assertFalse(self.fired(), 'planted cwd git ran through cast_git_safe.run')
+
+    def test_13_inherited_lib_guard_variable_does_not_disable_the_lib(self) -> None:
+        with mock.patch.dict(os.environ, {'_CAST_HOOK_LIB_LOADED': '1'}):
+            # CONTROL: inherited, it makes the lib return early and leaves the function undefined.
+            c = subprocess.run(['/bin/bash', '-c', 'source "$1"; type cast_git_safe', '_', cast_git_safe.LIB],
+                               env=dict(os.environ), capture_output=True, text=True)
+            self.assertNotEqual(c.returncode, 0, 'control: the guard variable did not hide the function')
+            r = cast_git_safe.run(self.repo, ['rev-parse', '--git-dir'])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), '.git')
+
+    def test_14_inherited_posixly_correct_does_not_change_bash_semantics(self) -> None:
+        with mock.patch.dict(os.environ, {'POSIXLY_CORRECT': '1'}):
+            # CONTROL: in posix mode the lib's process substitution no longer works.
+            c = subprocess.run(['/bin/bash', '-c', 'source "$1" && cast_git_safe "$2" rev-parse --git-dir',
+                                '_', cast_git_safe.LIB, self.repo],
+                               env=dict(os.environ), capture_output=True, text=True)
+            self.assertNotEqual(c.returncode, 0, f'control: POSIXLY_CORRECT did not break the lib: {c.stdout!r}')
+            r = cast_git_safe.run(self.repo, ['rev-parse', '--git-dir'])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), '.git')
+
+    def test_15_lib_is_resolved_through_symlinks(self) -> None:
+        import importlib.util
+        link = os.path.join(self.root, 'scripts-link')
+        os.symlink(_SCRIPTS_DIR, link)
+        spec = importlib.util.spec_from_file_location('cgs_via_link', os.path.join(link, 'cast_git_safe.py'))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertEqual(mod.LIB, os.path.join(os.path.realpath(_SCRIPTS_DIR), 'cast-hook-lib.sh'))
+
+    def test_16_group_or_world_writable_lib_is_refused(self) -> None:
+        lib = os.path.join(self.root, 'lib-copy.sh')
+        Path(lib).write_bytes(Path(cast_git_safe.LIB).read_bytes())
+        path = self.shim_path(f'touch "{self.marker}"\nexit 1')
+        with mock.patch.dict(os.environ, {'PATH': path}), mock.patch.object(cast_git_safe, 'LIB', lib):
+            os.chmod(lib, 0o644)
+            # CONTROL: the same copy at 0644 is accepted and the shimmed git IS reached.
+            cast_git_safe.run(self.repo, ['status'])
+            self.assertTrue(self.fired(), 'control: a 0644 lib copy was not usable')
+            self.reset_marker()
+            for mode in (0o664, 0o646):
+                os.chmod(lib, mode)
+                r = cast_git_safe.run(self.repo, ['status'])
+                self.assertEqual(r.returncode, 3, f'mode {mode:o}')
+                self.assertEqual(r.stdout, '')
+                self.assertIn('writable', r.stderr)
+                self.assertFalse(self.fired(), f'git ran with a mode {mode:o} lib')
+
+    def test_17_nul_byte_in_an_argument_returns_3_and_runs_no_git(self) -> None:
+        path = self.shim_path(f'touch "{self.marker}"\nexit 1')
+        with mock.patch.dict(os.environ, {'PATH': path}):
+            # CONTROL: an ordinary argument reaches the shimmed git.
+            cast_git_safe.run(self.repo, ['rev-parse', 'ab'])
+            self.assertTrue(self.fired(), 'control: shimmed git was never reached')
+            self.reset_marker()
+            r = cast_git_safe.run(self.repo, ['rev-parse', 'a\x00b'])
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(r.stdout, '')
+        self.assertFalse(self.fired(), 'git ran despite a NUL byte in an argument')
+
+    def test_18_missing_or_empty_subcommand_returns_2(self) -> None:
+        for args in ([], ['']):
+            r = cast_git_safe.run(self.repo, args)
+            self.assertEqual(r.returncode, 2, args)
+            self.assertEqual(r.stdout, '')
 
 
 if __name__ == '__main__':
