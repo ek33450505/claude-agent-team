@@ -69,7 +69,7 @@ case "$SUBCMD" in
     TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
     QUEUE_FILE="${OFFLINE_QUEUE_DIR}/${TIMESTAMP}.json"
 
-    python3 - "$AGENT" "$TASK" "$QUEUE_FILE" <<'PYEOF'
+    python3 -I - "$AGENT" "$TASK" "$QUEUE_FILE" <<'PYEOF'
 import sys, json
 from datetime import datetime, timezone
 
@@ -111,8 +111,8 @@ PYEOF
 
       # Read the queued task
       # Pass the path via env (NOT string interpolation) to avoid code injection.
-      AGENT=$(CAST_QUEUE_FILE="$queue_file" python3 -c "import json, os; d=json.load(open(os.environ['CAST_QUEUE_FILE'])); print(d.get('agent',''))" 2>/dev/null || echo "")
-      TASK=$(CAST_QUEUE_FILE="$queue_file" python3 -c "import json, os; d=json.load(open(os.environ['CAST_QUEUE_FILE'])); print(d.get('task',''))" 2>/dev/null || echo "")
+      AGENT=$(CAST_QUEUE_FILE="$queue_file" python3 -I -c "import json, os; d=json.load(open(os.environ['CAST_QUEUE_FILE'])); print(d.get('agent',''))" 2>/dev/null || echo "")
+      TASK=$(CAST_QUEUE_FILE="$queue_file" python3 -I -c "import json, os; d=json.load(open(os.environ['CAST_QUEUE_FILE'])); print(d.get('task',''))" 2>/dev/null || echo "")
 
       if [[ -z "$AGENT" || -z "$TASK" ]]; then
         echo "  Skipped malformed entry: $queue_file" >&2

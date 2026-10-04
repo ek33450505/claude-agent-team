@@ -25,7 +25,7 @@ INPUT="$(cat 2>/dev/null || true)"
 
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 
-CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 - <<'PYEOF' || true
+CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 -I - <<'PYEOF' || true
 import json, os, sqlite3, uuid
 from datetime import datetime, timezone
 

@@ -39,7 +39,7 @@ TIMEOUT_MSG=""
 # --- CAST-TIMEOUT: session duration check ---
 # Create session start epoch file if absent; suppress errors if /tmp is not writable
 CURRENT_EPOCH="$(date +%s)"
-CAST_EPOCH_FILE="$SESSION_EPOCH_FILE" CAST_EPOCH_VAL="$CURRENT_EPOCH" python3 -c "
+CAST_EPOCH_FILE="$SESSION_EPOCH_FILE" CAST_EPOCH_VAL="$CURRENT_EPOCH" python3 -I -c "
 import os
 f = os.environ.get('CAST_EPOCH_FILE','')
 v = os.environ.get('CAST_EPOCH_VAL','')
@@ -82,7 +82,7 @@ if [ "$SESSION_AGE" -gt 5400 ]; then
     # stdout would cause the second to be silently dropped by the hook infra.
     # We defer printing until after the status check, and only print when the
     # status is non-blocking (empty / DONE / NEEDS_CONTEXT).
-    TIMEOUT_MSG="$(python3 -c "
+    TIMEOUT_MSG="$(python3 -I -c "
 import json
 msg = '[CAST-TIMEOUT] Session running 90+ minutes without a commit event. Consider: /commit to checkpoint progress, or /fresh to start a clean context.'
 output = {
@@ -115,7 +115,7 @@ if [[ -z "$REAL_PATH" || "$REAL_PATH" != "$REAL_HOME/"* ]]; then exit 0; fi
 # Parse status and summary using python3 stdlib only
 CAST_STATUS_FILE="$REAL_PATH" \
 CAST_BLOCKED_COUNT_PREFIX="$BLOCKED_COUNT_PREFIX" \
-python3 -c "
+python3 -I -c "
 import json, os, sys, time, subprocess
 
 filepath = os.environ.get('CAST_STATUS_FILE', '')

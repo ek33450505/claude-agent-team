@@ -30,7 +30,7 @@ export CAST_PANE_ID_FOR_HOOK="${CAST_DESKTOP_PANE_ID:-}"
 # the same CAST_INPUT on the unconditional hot path, so they share ONE python3
 # cold start instead of two. Each responsibility keeps its own try/except so a
 # failure in one does not skip the other (matches prior process independence).
-CAST_INPUT="$INPUT" python3 - <<'PYEOF' || _log_error "session-start JSONL+DB+pane-bindings block failed (exit $?)"
+CAST_INPUT="$INPUT" python3 -I - <<'PYEOF' || _log_error "session-start JSONL+DB+pane-bindings block failed (exit $?)"
 import json, os, sqlite3 as _sqlite3
 from datetime import datetime, timezone
 
@@ -183,7 +183,7 @@ fi
 # or top-3 feedback_*.md memories exist. Silent (no output) when neither is present.
 # Hard cap: total Phase 16 additions ≤ 500 chars. Preference block ≤ 280 chars.
 # Abstention rule: feedback files with body < 30 chars are skipped entirely.
-CAST_INPUT="$INPUT" CAST_STACK_PROFILE="${CAST_STACK_PROFILE:-}" python3 - <<'PYEOF4' || _log_error "session-start banner block failed (exit $?)"
+CAST_INPUT="$INPUT" CAST_STACK_PROFILE="${CAST_STACK_PROFILE:-}" python3 -I - <<'PYEOF4' || _log_error "session-start banner block failed (exit $?)"
 import json, os, glob, sys
 
 # ── Section A: Stack banner ────────────────────────────────────────────────────

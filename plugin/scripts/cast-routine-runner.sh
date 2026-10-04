@@ -87,7 +87,7 @@ fi
 # Reads agent, prompt_template, output_dir from the YAML.
 # Never evals YAML field values — treats them as data.
 _parse_yaml() {
-  python3 - "$YAML_FILE" <<'PYEOF'
+  python3 -I - "$YAML_FILE" <<'PYEOF'
 import sys, yaml, json
 
 try:
@@ -116,11 +116,11 @@ PYEOF
 
 PARSED="$(_parse_yaml)"
 
-AGENT="$(echo "$PARSED" | python3 -c "import sys,json; print(json.load(sys.stdin)['agent'])")"
-PROMPT_TEMPLATE="$(echo "$PARSED" | python3 -c "import sys,json; print(json.load(sys.stdin)['prompt_template'])")"
-OUTPUT_DIR_RAW="$(echo "$PARSED" | python3 -c "import sys,json; print(json.load(sys.stdin)['output_dir'])")"
-PROMPT_ARGS_JSON="$(echo "$PARSED" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['prompt_args']))")"
-MCP_REQUIRED_JSON="$(echo "$PARSED" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['mcp_required']))")"
+AGENT="$(echo "$PARSED" | python3 -I -c "import sys,json; print(json.load(sys.stdin)['agent'])")"
+PROMPT_TEMPLATE="$(echo "$PARSED" | python3 -I -c "import sys,json; print(json.load(sys.stdin)['prompt_template'])")"
+OUTPUT_DIR_RAW="$(echo "$PARSED" | python3 -I -c "import sys,json; print(json.load(sys.stdin)['output_dir'])")"
+PROMPT_ARGS_JSON="$(echo "$PARSED" | python3 -I -c "import sys,json; print(json.dumps(json.load(sys.stdin)['prompt_args']))")"
+MCP_REQUIRED_JSON="$(echo "$PARSED" | python3 -I -c "import sys,json; print(json.dumps(json.load(sys.stdin)['mcp_required']))")"
 
 # ── Step 5 (early): Verify agent exists in agents/core/ ──────────────────────
 # Derive repo dir relative to this script's location
@@ -139,7 +139,7 @@ OUTPUT_DIR_EXPANDED="${OUTPUT_DIR_EXPANDED/\$HOME/$HOME}"
 # Security: validate output_dir resolves under ~/.claude/routines-output/
 ALLOWED_BASE="$(realpath "$HOME/.claude/routines-output" 2>/dev/null || echo "$HOME/.claude/routines-output")"
 # Resolve parent dir with realpath (handles symlinks); accept if parent dir doesn't exist yet
-OUTPUT_DIR_REAL="$(python3 -c "
+OUTPUT_DIR_REAL="$(python3 -I -c "
 import os, sys
 candidate = os.path.expanduser(sys.argv[1])
 # Resolve parent directory to handle symlinks
@@ -156,7 +156,7 @@ else:
 print(OUTPUT_DIR_REAL)
 " "$OUTPUT_DIR_EXPANDED")"
 
-allowed_base_real="$(python3 -c "import os; print(os.path.realpath(os.path.expanduser('$HOME/.claude/routines-output')))")"
+allowed_base_real="$(python3 -I -c "import os; print(os.path.realpath(os.path.expanduser('$HOME/.claude/routines-output')))")"
 if ! [[ "$OUTPUT_DIR_REAL" == "$allowed_base_real" || "$OUTPUT_DIR_REAL" == "$allowed_base_real"/* ]]; then
   echo "Error: output_dir must resolve under ~/.claude/routines-output/ — got: $OUTPUT_DIR_REAL" >&2
   exit 1

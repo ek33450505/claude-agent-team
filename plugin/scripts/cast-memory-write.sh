@@ -84,7 +84,7 @@ DESCRIPTION="$(echo "$CONTENT" | cut -c1-100)"
 
 # Pass all values as argv to Python — never interpolate into SQL strings
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-INSERT_ID="$(CAST_DB_PATH="$DB_PATH" python3 - "$DB_PATH" "$AGENT" "$PROJECT" "$TYPE" "$NAME" "$DESCRIPTION" "$CONTENT" "$NOW" "$SCRIPT_DIR" <<'PYEOF' 2>/dev/null || echo ""
+INSERT_ID="$(CAST_DB_PATH="$DB_PATH" python3 -I - "$DB_PATH" "$AGENT" "$PROJECT" "$TYPE" "$NAME" "$DESCRIPTION" "$CONTENT" "$NOW" "$SCRIPT_DIR" <<'PYEOF' 2>/dev/null || echo ""
 import sys, os
 from pathlib import Path
 

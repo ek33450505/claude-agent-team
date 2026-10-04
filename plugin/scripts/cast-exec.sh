@@ -125,7 +125,7 @@ if [ -z "$DISPATCH_JSON" ]; then
 fi
 
 # ── Parse plan_id from dispatch JSON ─────────────────────────────────────────
-PLAN_ID=$(printf '%s' "$DISPATCH_JSON" | python3 -c "
+PLAN_ID=$(printf '%s' "$DISPATCH_JSON" | python3 -I -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -149,7 +149,7 @@ CHECKPOINT_FILE="${EXEC_STATE_DIR}/${PLAN_ID}.json"
 _checkpoint_init() {
   mkdir -p "$EXEC_STATE_DIR"
   if [ ! -f "$CHECKPOINT_FILE" ]; then
-    python3 - "$PLAN_ID" "$PLAN_FILE" "$CHECKPOINT_FILE" <<'PYEOF'
+    python3 -I - "$PLAN_ID" "$PLAN_FILE" "$CHECKPOINT_FILE" <<'PYEOF'
 import sys, json, datetime
 from pathlib import Path
 plan_id, plan_file, checkpoint_file = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -175,7 +175,7 @@ _checkpoint_read() {
 
 _checkpoint_batch_status() {
   local batch_id="$1"
-  python3 - "$CHECKPOINT_FILE" "$batch_id" <<'PYEOF'
+  python3 -I - "$CHECKPOINT_FILE" "$batch_id" <<'PYEOF'
 import sys, json
 from pathlib import Path
 checkpoint_file, batch_id = sys.argv[1], sys.argv[2]
@@ -192,7 +192,7 @@ _checkpoint_write_batch() {
   local batch_id="$1"
   local status="$2"           # running | complete | blocked
   local extra_json="${3:-{}}" # optional extra fields as JSON object string
-  python3 - "$CHECKPOINT_FILE" "$batch_id" "$status" "$extra_json" <<'PYEOF'
+  python3 -I - "$CHECKPOINT_FILE" "$batch_id" "$status" "$extra_json" <<'PYEOF'
 import sys, json, datetime
 from pathlib import Path
 checkpoint_file, batch_id, status, extra_json = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -227,7 +227,7 @@ _cmd_status() {
     _dim "  Run: cast-exec.sh $PLAN_FILE  to start execution"
     exit 0
   fi
-  python3 - "$CHECKPOINT_FILE" <<'PYEOF'
+  python3 -I - "$CHECKPOINT_FILE" <<'PYEOF'
 import sys, json
 from pathlib import Path
 
@@ -305,7 +305,7 @@ _dispatch_agent() {
 
   # Run claude --print with the agent; capture stdout+stderr to log
   # The prompt is passed via env var and a python3 heredoc to avoid shell injection
-  CAST_EXEC_PROMPT="$prompt" python3 -c "
+  CAST_EXEC_PROMPT="$prompt" python3 -I -c "
 import os, sys, subprocess
 prompt = os.environ.get('CAST_EXEC_PROMPT', '')
 log_file = sys.argv[1]
@@ -333,7 +333,7 @@ _dispatch_agent_background() {
 
   _info "  Dispatching (parallel) ${C_BOLD}${agent_type}${C_RESET}${C_CYAN} (log: ${log_file})"
 
-  CAST_EXEC_PROMPT="$prompt" python3 -c "
+  CAST_EXEC_PROMPT="$prompt" python3 -I -c "
 import os, sys, subprocess
 prompt = os.environ.get('CAST_EXEC_PROMPT', '')
 log_file = sys.argv[1]
@@ -364,7 +364,7 @@ _run_batch() {
   # re-parse the same $batch_json.
   local batch_id parallel description agent_count
   local _batch_fields
-  _batch_fields=$(printf '%s' "$batch_json" | python3 -c "
+  _batch_fields=$(printf '%s' "$batch_json" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 bid = d.get('id', '')
@@ -409,7 +409,7 @@ for f in d.get('verify_files', []):
       # (possibly multi-line) prompt on all remaining lines, instead of two
       # separate cold-start invocations that each re-parse the same batch_json.
       local _agent_fields
-      _agent_fields=$(printf '%s' "$batch_json" | python3 -c "
+      _agent_fields=$(printf '%s' "$batch_json" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 a = d['agents'][$idx]
@@ -464,7 +464,7 @@ print(a.get('prompt', ''), end='')
       # (possibly multi-line) prompt on all remaining lines, instead of two
       # separate cold-start invocations that each re-parse the same batch_json.
       local _agent_fields
-      _agent_fields=$(printf '%s' "$batch_json" | python3 -c "
+      _agent_fields=$(printf '%s' "$batch_json" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 a = d['agents'][$idx]
@@ -503,7 +503,7 @@ print(a.get('prompt', ''), end='')
   if [ "$verify_ok" -eq 0 ]; then
     # Build JSON array of verify_files for checkpoint
     local vf_json
-    vf_json=$(printf '%s' "$batch_json" | python3 -c "
+    vf_json=$(printf '%s' "$batch_json" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 print(json.dumps(d.get('verify_files', [])))
@@ -517,7 +517,7 @@ print(json.dumps(d.get('verify_files', [])))
 
   # Mark complete with verified files list
   local vf_json
-  vf_json=$(printf '%s' "$batch_json" | python3 -c "
+  vf_json=$(printf '%s' "$batch_json" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 print(json.dumps(d.get('verify_files', [])))
@@ -536,7 +536,7 @@ if [ "$MODE" = "status" ]; then
 fi
 
 # Count batches
-BATCH_COUNT=$(printf '%s' "$DISPATCH_JSON" | python3 -c "
+BATCH_COUNT=$(printf '%s' "$DISPATCH_JSON" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 print(len(d.get('batches', [])))
@@ -555,7 +555,7 @@ echo ""
 
 # ── Batch loop ────────────────────────────────────────────────────────────────
 for idx in $(seq 0 $((BATCH_COUNT - 1))); do
-  BATCH_JSON=$(printf '%s' "$DISPATCH_JSON" | python3 -c "
+  BATCH_JSON=$(printf '%s' "$DISPATCH_JSON" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 import json as j
@@ -567,7 +567,7 @@ print(j.dumps(d['batches'][$idx]))
     exit 1
   fi
 
-  BATCH_ID=$(printf '%s' "$BATCH_JSON" | python3 -c "
+  BATCH_ID=$(printf '%s' "$BATCH_JSON" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 print(d.get('id',''))

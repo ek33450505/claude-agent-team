@@ -49,7 +49,7 @@ fi
 mkdir -p "$CAST_STATE_DIR"
 
 # ── Read last-checked timestamp (epoch 0 if file missing or malformed) ─────────
-LAST_CHECKED_ISO="$(python3 -c "
+LAST_CHECKED_ISO="$(python3 -I -c "
 import json, os, sys
 f = sys.argv[1]
 try:
@@ -63,7 +63,7 @@ except Exception:
 printf "[cast-upgrade-check] Last checked: %s\n" "$LAST_CHECKED_ISO"
 
 # ── Read sources list ──────────────────────────────────────────────────────────
-REPOS="$(python3 -c "
+REPOS="$(python3 -I -c "
 import json, sys
 with open(sys.argv[1]) as f:
     d = json.load(f)
@@ -80,7 +80,7 @@ if [ -z "$REPOS" ]; then
 fi
 
 # ── Load existing candidates (for idempotent merge) ────────────────────────────
-EXISTING_CANDIDATES="$(python3 -c "
+EXISTING_CANDIDATES="$(python3 -I -c "
 import json, os, sys
 f = sys.argv[1]
 try:
@@ -116,7 +116,7 @@ while IFS= read -r REPO; do
   while IFS= read -r RELEASE_LINE; do
     # Single python3 call emits tab-separated fields to avoid two separate
     # cold-start invocations that each re-parse the same RELEASE_LINE.
-    IFS=$'\t' read -r TAG PUBLISHED <<<"$(echo "$RELEASE_LINE" | python3 -c "
+    IFS=$'\t' read -r TAG PUBLISHED <<<"$(echo "$RELEASE_LINE" | python3 -I -c "
 import sys, json
 d = json.loads(sys.stdin.read())
 def clean(v):
@@ -140,7 +140,7 @@ print(f\"{clean(d.get('tagName'))}\t{clean(d.get('publishedAt'))}\")
     esac
 
     # Compare timestamps: skip if published <= last_checked
-    IS_NEW="$(python3 -c "
+    IS_NEW="$(python3 -I -c "
 from datetime import datetime, timezone
 import sys
 def parse(s):
@@ -197,7 +197,7 @@ print('1' if pub > lkg else '0')
 
     # Merge scored items into new_entries using idempotent key: {repo}-{tag}-{item_hash}
     # item_hash = first 8 chars of md5 of item description
-    NEW_ENTRIES_JSON="$(python3 -c "
+    NEW_ENTRIES_JSON="$(python3 -I -c "
 import json, hashlib, sys
 
 repo = sys.argv[1]
@@ -237,7 +237,7 @@ for item in scored:
 print(json.dumps(entries))
 " "$REPO" "$TAG" "$PUBLISHED" "$SCORED_ITEMS" "$NEW_ENTRIES_JSON" 2>/dev/null || echo "$NEW_ENTRIES_JSON")"
 
-  done < <(python3 -c "
+  done < <(python3 -I -c "
 import json, sys
 releases = json.loads(sys.argv[1])
 for r in releases:
@@ -247,7 +247,7 @@ for r in releases:
 done <<< "$REPOS"
 
 # ── Merge new entries into existing candidates ─────────────────────────────────
-MERGED_CANDIDATES="$(python3 -c "
+MERGED_CANDIDATES="$(python3 -I -c "
 import json, sys
 
 existing_raw = sys.argv[1]
@@ -271,13 +271,13 @@ print(json.dumps(merged, indent=2))
 printf "%s\n" "$MERGED_CANDIDATES" > "$CANDIDATES_FILE"
 
 # ── Update last-checked timestamp ──────────────────────────────────────────────
-NOW_ISO="$(python3 -c "
+NOW_ISO="$(python3 -I -c "
 from datetime import datetime, timezone
 print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))
 " 2>/dev/null || echo "")"
 
 if [ -n "$NOW_ISO" ]; then
-  python3 -c "
+  python3 -I -c "
 import json, os, sys
 f = sys.argv[1]
 try:
@@ -294,7 +294,7 @@ fi
 # ── Summary ────────────────────────────────────────────────────────────────────
 # Single python3 call emits tab-separated TOTAL/CRITICAL to avoid two separate
 # cold-start invocations that each re-read and re-parse CANDIDATES_FILE.
-IFS=$'\t' read -r TOTAL CRITICAL <<<"$(python3 -c "
+IFS=$'\t' read -r TOTAL CRITICAL <<<"$(python3 -I -c "
 import json, sys
 d = json.loads(open(sys.argv[1]).read())
 total = len(d)

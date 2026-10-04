@@ -118,7 +118,7 @@ fi
 # score OBJECTS is ever accepted ('see [1]' or ["x", 1, null] -> []), because
 # cast-upgrade-check.sh calls item.get() on every element. The raw output arrives
 # via argv, never interpolated into the source.
-python3 -c "
+python3 -I -c "
 import sys, json
 
 def parse(raw):

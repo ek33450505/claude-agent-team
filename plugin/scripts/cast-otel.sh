@@ -63,7 +63,7 @@ _ensure_env_vars_in_fragment() {
 
   _CAST_FRAGMENT_PATH="${fragment_path}" \
   _CAST_ENV_KEYS="${pairs}" \
-  python3 << 'PYEOF'
+  python3 -I << 'PYEOF'
 import json
 import os
 import sys
@@ -114,7 +114,7 @@ _remove_env_vars_from_fragment() {
 
   _CAST_FRAGMENT_PATH="${fragment_path}" \
   _CAST_KEYS_TO_REMOVE="${keys}" \
-  python3 << 'PYEOF'
+  python3 -I << 'PYEOF'
 import json
 import os
 import sys
@@ -159,7 +159,7 @@ _check_env_vars_in_fragment() {
 
   _CAST_FRAGMENT_PATH="${fragment_path}" \
   _CAST_KEYS_TO_CHECK="${keys}" \
-  python3 << 'PYEOF'
+  python3 -I << 'PYEOF'
 import json
 import os
 import sys
@@ -201,7 +201,7 @@ _check_env_vars() {
 
   _CAST_SETTINGS_PATH="${settings_path}" \
   _CAST_KEYS_TO_CHECK="${keys}" \
-  python3 << 'PYEOF'
+  python3 -I << 'PYEOF'
 import json
 import os
 import sys

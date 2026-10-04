@@ -70,7 +70,7 @@ _validate_output() {
   export CAST_CV_LABEL="$hook_label"
   export CAST_CV_STDOUT="$hook_stdout"
 
-  python3 - <<'PYEOF'
+  python3 -I - <<'PYEOF'
 import json
 import os
 import sys
@@ -178,7 +178,7 @@ PYEOF
 
 # --- Iterate hooks from settings.json ---
 export CAST_CV_SETTINGS="$SETTINGS_FILE"
-HOOK_LINES=$(python3 - <<'PYEOF'
+HOOK_LINES=$(python3 -I - <<'PYEOF'
 import json
 import os
 
