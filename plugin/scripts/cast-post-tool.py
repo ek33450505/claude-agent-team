@@ -24,6 +24,17 @@ SCRIPTS_PATH_PATTERN = re.compile(r'(scripts/|hooks/)')
 SIZE_THRESHOLD = 5
 
 
+def _in_subagent(data: dict) -> bool:
+    """True inside an Agent subagent or a managed/headless run.
+
+    Hook input carries `agent_id` ONLY when the hook fires inside a subagent
+    (Claude Code hooks docs); `agent_type` is also set for `--agent` main-thread
+    sessions, so it is not used. CLAUDE_SUBPROCESS=1 marks managed/headless runs
+    and is NOT set for Agent subagents, so on its own it never detected them.
+    """
+    return bool(data.get("agent_id")) or os.environ.get("CLAUDE_SUBPROCESS", "0") == "1"
+
+
 def _read_stdin_json():
     raw = sys.stdin.read()
     if not raw.strip():
@@ -49,9 +60,13 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
     if tool_name not in ("Write", "Edit"):
         return
 
+    # Review Gate: the dispatching session runs code-reviewer / security. A
+    # subagent structurally cannot, so never instruct one to (it burns turns).
+    if _in_subagent(data):
+        return
+
     is_code_file = bool(re.search(r'\.(js|jsx|ts|tsx|sh|py|mjs|cjs)$', file_path))
     is_md_file = file_path.endswith(".md")
-    is_subprocess = os.environ.get("CLAUDE_SUBPROCESS", "0") == "1"
     is_orchestrate_active = os.environ.get("CAST_ORCHESTRATE_ACTIVE", "0") == "1"
 
     # Security chain: fire on shell/Python writes in scripts/ or hooks/ with >= 5 lines.
@@ -68,37 +83,9 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
     )
     lines_changed = len([l for l in new_content.split('\n') if l.strip()])
 
-    if not is_subprocess:
-        # In orchestrate sessions: suppress CAST-CHAIN and CAST-REVIEW (they're noise),
-        # but always keep the security chain (real escalation, not hook chatter).
-        if is_orchestrate_active:
-            if is_security_target and lines_changed >= SIZE_THRESHOLD:
-                _hook_output(
-                    "[CAST-CHAIN: security] Shell/Python script in scripts/ or hooks/ modified with "
-                    f"{lines_changed} lines. MANDATORY: dispatch `security` agent after "
-                    "code-reviewer completes. Security agent must scan for SQL injection, "
-                    "env var interpolation into sqlite3, and shell injection before commit."
-                )
-            return
-
-        # .md files are plan/docs, not code — CAST-REVIEW is not relevant.
-        if is_md_file:
-            return
-
-        if is_code_file:
-            msg = (
-                "[CAST-CHAIN] Code file modified. MANDATORY: After completing your current logical unit, "
-                "dispatch in sequence: (1) `code-reviewer` (haiku) — review all changes in this unit. "
-                "(2) `test-writer` (sonnet) if logic was added. "
-                "Do NOT proceed to next unit or commit until code-reviewer returns Status: DONE or DONE_WITH_CONCERNS. "
-                "Skipping is a protocol violation."
-            )
-            _hook_output(msg)
-        else:
-            _hook_output(
-                "[CAST-REVIEW] Non-code file modified. Dispatch `code-reviewer` if the change is significant."
-            )
-
+    # In orchestrate sessions: suppress CAST-CHAIN and CAST-REVIEW (they're noise),
+    # but always keep the security chain (real escalation, not hook chatter).
+    if is_orchestrate_active:
         if is_security_target and lines_changed >= SIZE_THRESHOLD:
             _hook_output(
                 "[CAST-CHAIN: security] Shell/Python script in scripts/ or hooks/ modified with "
@@ -106,29 +93,33 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
                 "code-reviewer completes. Security agent must scan for SQL injection, "
                 "env var interpolation into sqlite3, and shell injection before commit."
             )
-    else:
-        # Subagent context
-        if is_code_file:
-            depth_file = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"cast-depth-{os.getppid()}.depth")
-            subagent_depth = 1
-            try:
-                with open(depth_file) as f:
-                    subagent_depth = int(f.read().strip())
-            except Exception:
-                pass
+        return
 
-            if subagent_depth >= 2:
-                msg = (
-                    "DEEP NESTING WARNING: [CAST-REVIEW] Code modified in subagent context. "
-                    "Per your agent instructions, dispatch `code-reviewer` after this logical unit completes. "
-                    "If Agent tool dispatch fails at this depth, the inline session must re-dispatch code-reviewer as fallback."
-                )
-            else:
-                msg = (
-                    "[CAST-REVIEW] Code modified in subagent context. "
-                    "Per your agent instructions, dispatch `code-reviewer` after this logical unit completes."
-                )
-            _hook_output(msg)
+    # .md files are plan/docs, not code — CAST-REVIEW is not relevant.
+    if is_md_file:
+        return
+
+    if is_code_file:
+        msg = (
+            "[CAST-CHAIN] Code file modified. MANDATORY: After completing your current logical unit, "
+            "dispatch in sequence: (1) `code-reviewer` (haiku) — review all changes in this unit. "
+            "(2) `test-writer` (sonnet) if logic was added. "
+            "Do NOT proceed to next unit or commit until code-reviewer returns Status: DONE or DONE_WITH_CONCERNS. "
+            "Skipping is a protocol violation."
+        )
+        _hook_output(msg)
+    else:
+        _hook_output(
+            "[CAST-REVIEW] Non-code file modified. Dispatch `code-reviewer` if the change is significant."
+        )
+
+    if is_security_target and lines_changed >= SIZE_THRESHOLD:
+        _hook_output(
+            "[CAST-CHAIN: security] Shell/Python script in scripts/ or hooks/ modified with "
+            f"{lines_changed} lines. MANDATORY: dispatch `security` agent after "
+            "code-reviewer completes. Security agent must scan for SQL injection, "
+            "env var interpolation into sqlite3, and shell injection before commit."
+        )
 
 
 def part2_plan_manifest(tool_name: str, file_path: str) -> None:
@@ -231,7 +222,7 @@ def part3_agent_logging(data: dict) -> None:
 
 def part4_bash_debug(data: dict) -> None:
     """Emit [CAST-DEBUG] directive for non-zero Bash exits (main session only)."""
-    if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
+    if _in_subagent(data):
         return
 
     tool_input = data.get("tool_input", {})
