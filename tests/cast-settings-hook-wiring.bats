@@ -194,14 +194,20 @@ print('OK')
 # for a tool literally named "Write|Edit|Bash", matches nothing, and the hook
 # silently never spawns (post-tool-hook.sh was dead from 2026-07-05 this way).
 # Tool alternation belongs in the entry `matcher` (a regex), not in `if`.
+#
+# Second instance of the class (2026-10-04): managed-settings.d/27-hooks-advanced.json
+# carried `Write(**/.env*|**/auth/**|...)` path rules. File-path rules use
+# gitignore syntax, which has no `|` alternation, so each was one literal
+# pattern that matched no path and the guards never fired. The fragment was
+# removed; this test now guards future additions (zero `if` fields is valid).
 # ---------------------------------------------------------------------------
 
-@test "every hook if-field in managed-settings.d holds a single permission rule (no | list in the tool name)" {
+@test "every hook if-field in managed-settings.d holds a single permission rule (no | lists)" {
   run env FRAGMENTS_DIR="$FRAGMENTS_DIR" python3 -c "
 import glob, json, os, re
 frag_dir = os.environ['FRAGMENTS_DIR']
 bad = []
-checked = 0
+file_tools = ('Read', 'Edit', 'Write', 'NotebookEdit', 'Glob')
 for path in sorted(glob.glob(os.path.join(frag_dir, '*.json'))):
   with open(path) as f:
     d = json.load(f)
@@ -210,12 +216,14 @@ for path in sorted(glob.glob(os.path.join(frag_dir, '*.json'))):
       for h in entry.get('hooks', []):
         if 'if' not in h:
           continue
-        checked += 1
         val = h['if']
         tool = val.split('(', 1)[0] if isinstance(val, str) else ''
+        where = os.path.basename(path) + ':' + event + ':' + repr(val)
         if not re.match(r'^[A-Za-z0-9_*]+\$', tool):
-          bad.append(os.path.basename(path) + ':' + event + ':' + repr(val))
-assert checked > 0, 'no hook if-fields found in any fragment - test would be vacuous'
+          bad.append(where)
+        elif tool in file_tools and '(' in val and '|' in val.split('(', 1)[1]:
+          # file-path rules are gitignore syntax: no | alternation (Bash(...) may hold a real pipe)
+          bad.append(where)
 assert not bad, 'if-field is not a single permission rule: ' + '; '.join(bad)
 print('OK')
 "
