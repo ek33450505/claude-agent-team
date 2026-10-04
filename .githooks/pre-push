@@ -70,9 +70,17 @@ if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
         rm -f "$_RECONCILE_TMPSTDERR"
         echo "[CAST pre-push] commit-provenance reconcile NOT verified (audit log unreadable — sandboxed shell?) — push allowed; re-push from an unsandboxed terminal to verify" >&2
         ;;
-      *)
+      *'"status": "clean"'* | *'"status": "acked"'*)
+        # Only a check that actually ran to a verdict earns "OK".
         rm -f "$_RECONCILE_TMPSTDERR"
         echo "[CAST pre-push] commit-provenance reconcile OK ✓"
+        ;;
+      *)
+        # "skip" (audit/cast.db/table absent) or any unknown/missing status on exit 0:
+        # nothing was verified, so never claim "OK" — fail soft (push allowed) but say so.
+        cat "$_RECONCILE_TMPSTDERR" >&2
+        rm -f "$_RECONCILE_TMPSTDERR"
+        echo "[CAST pre-push] commit-provenance reconcile SKIPPED (nothing verified) — push allowed" >&2
         ;;
     esac
   fi

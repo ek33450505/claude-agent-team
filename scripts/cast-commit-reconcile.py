@@ -9,8 +9,9 @@ Enforcement rule (Ed-locked design):
 
 Exit codes:
   0 — clean / acked / skipped (infra absence) / unverifiable (audit file exists
-      but is unreadable — e.g. inside the Claude Code Bash sandbox; the check
-      was NOT performed, said loudly on stderr + in the JSON "warning")
+      but is unreadable or unparseable — e.g. inside the Claude Code Bash sandbox,
+      or a non-UTF-8 byte; the check was NOT performed, said loudly on stderr +
+      in the JSON "warning")
   1 — unacked violations found OR DB error (fail-closed)
 
 Output: valid JSON on stdout regardless of exit code.
@@ -255,7 +256,10 @@ def load_hatch_events(since: datetime.datetime) -> list[dict]:
     """
     events: list[dict] = []
     try:
-        with open(AUDIT_PATH) as f:
+        # Explicit strict UTF-8 (not the locale default): a non-UTF-8 byte must raise
+        # UnicodeDecodeError -> "unverifiable" on every host, never be silently
+        # decoded (latin-1/C locale) into a line the JSON filter then drops.
+        with open(AUDIT_PATH, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -395,9 +399,10 @@ def append_ack_event(acked_events: list[dict]) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-def _report_unverifiable(exc: OSError) -> int:
-    """The audit log exists but cannot be read (EPERM/EACCES/other OSError other
-    than not-found), so the D5 provenance check could not run. Say so loudly —
+def _report_unverifiable(exc: Exception) -> int:
+    """The audit log exists but cannot be read or parsed (EPERM/EACCES/other OSError
+    other than not-found, or a non-OSError such as a UnicodeDecodeError from a
+    non-UTF-8 byte), so the D5 provenance check could not run. Say so loudly —
     never as a quiet "skip": inside the Claude Code Bash sandbox
     ~/.claude/logs/audit.jsonl is unreadable, and os.path.exists() reports False
     there, which used to turn an unperformed check into a silent pass.
@@ -407,7 +412,10 @@ def _report_unverifiable(exc: OSError) -> int:
     stderr gets a WARN naming the path, and the checkpoint is NOT advanced.
     NOTE: .githooks/pre-push shows this script's stdout but discards its stderr
     on exit 0, so the stdout "warning" is the pusher-visible channel."""
-    detail = os.strerror(exc.errno) if exc.errno else str(exc)
+    # Non-OSError exceptions (e.g. UnicodeDecodeError) carry no errno; their text can
+    # echo audit-file bytes, so sanitize the fallback before it reaches JSON/stderr.
+    _errno = getattr(exc, "errno", None)
+    detail = os.strerror(_errno) if _errno else _sanitize(str(exc))
     result = {
         "status": "unverifiable",
         "reason": f"audit file unreadable: {detail}",
@@ -456,17 +464,20 @@ def main() -> int:
     try:
         events = load_hatch_events(since)
     except Exception as exc:  # noqa: BLE001
-        # stat() can succeed while open() is denied (e.g. chmod 000): unverifiable too.
-        if isinstance(exc, OSError) and not isinstance(exc, FileNotFoundError):
-            return _report_unverifiable(exc)
-        result = {
-            "status": "skip",
-            "reason": f"could not read audit log: {exc}",
-            "checked": 0,
-            "violations": [],
-        }
-        print(json.dumps(result))
-        return 0
+        # The file EXISTS (stat() above succeeded), so any failure reading or parsing
+        # it — open() denied after a good stat() (chmod 000), a non-UTF-8 byte
+        # (UnicodeDecodeError), ... — means the check could not run: unverifiable,
+        # never a quiet "skip". Only a file that vanished since the stat() is "absent".
+        if isinstance(exc, FileNotFoundError):
+            result = {
+                "status": "skip",
+                "reason": "audit file not found",
+                "checked": 0,
+                "violations": [],
+            }
+            print(json.dumps(result))
+            return 0
+        return _report_unverifiable(exc)
 
     # 4. Skip cleanly if DB is missing (infra not yet deployed)
     if not os.path.exists(DB_PATH):
@@ -483,9 +494,11 @@ def main() -> int:
     try:
         table_present = provenance_table_exists()
     except _DBError as exc:
+        # Exception text can echo DB/path bytes: sanitize before JSON + stderr.
+        reason = _sanitize(str(exc))
         result = {
             "status": "error",
-            "reason": str(exc),
+            "reason": reason,
             "checked": 0,
             "violations": [],
         }
@@ -493,7 +506,7 @@ def main() -> int:
         print(
             f"\n[CAST pre-push] DB query failed — cannot verify provenance; push blocked.\n"
             f"(Fail-closed on infra ERROR; skips only on genuine table absence.)\n"
-            f"Reason: {exc}\n",
+            f"Reason: {reason}\n",
             file=sys.stderr,
         )
         return 1

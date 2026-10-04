@@ -258,6 +258,25 @@ assert d['in_claude_session'] == False, f'expected False (CLAUDECODE unset), got
     [ "$result" = "error" ]
 }
 
+@test "M2b: DB error reason is sanitized in both the JSON and the stderr 'Reason:' line (skip if root)" {
+    if [ "$(id -u)" = "0" ]; then
+        skip "chmod 000 has no effect as root"
+    fi
+    write_hatch_event "$T1" "sess-dberr-san" "true"
+    chmod 000 "$CAST_DB"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    chmod 644 "$CAST_DB"  # restore so teardown_temp_home can clean up
+    [ "$status" -eq 1 ]
+    [ "$(json_field status)" = "error" ]
+    # _sanitize maps every char outside [A-Za-z0-9._:TZ+-] (incl. space) to '?'.
+    [[ "$(json_field reason)" == "DB?query?failed:"* ]]
+    [[ "$(json_field reason)" != *" "* ]]
+    [[ "$stderr" == *"Reason: DB?query?failed:"* ]]
+}
+
 # ===========================================================================
 # Repo-scoping tests (D5 hardening — E1/E2/E3)
 # These tests do NOT set CAST_RECONCILE_CHECKPOINT (T18/T19) or set it
@@ -563,14 +582,69 @@ run_prepush_hook() {
     [[ "$stderr" != *"NOT verified"* ]]
 }
 
-@test "pre-push: only the exact status key/value counts ('unverifiable' inside another field is still OK)" {
+@test "pre-push: only the exact status key/value counts ('unverifiable' inside another field is a skip, not NOT-verified)" {
     prepush_fixture
     export STUB_RC=0
     export STUB_OUT='{"status": "skip", "reason": "cast.db not found (was unverifiable before)", "checked": 0, "violations": []}'
     export STUB_ERR=''
     run_prepush_hook
     [ "$status" -eq 0 ]
+    [[ "$stderr" == *"reconcile SKIPPED (nothing verified)"* ]]
+    [[ "$stderr" != *"NOT verified"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+}
+
+@test "pre-push: skip reconcile → JSON passed through, 'SKIPPED (nothing verified)', never 'reconcile OK', push allowed" {
+    prepush_fixture
+    export STUB_RC=0
+    export STUB_OUT='{"status": "skip", "reason": "audit file not found", "checked": 0, "violations": []}'
+    export STUB_ERR=''
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "skip"'* ]]
+    [[ "$stderr" == *"commit-provenance reconcile SKIPPED (nothing verified) — push allowed"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"NOT verified"* ]]
+}
+
+@test "pre-push: unknown status on exit 0 → treated as skip, never 'reconcile OK'" {
+    prepush_fixture
+    export STUB_RC=0
+    export STUB_OUT='{"status": "mystery", "checked": 0, "violations": []}'
+    export STUB_ERR='stub-detail-for-unknown-status'
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "mystery"'* ]]
+    [[ "$stderr" == *"reconcile SKIPPED (nothing verified)"* ]]
+    [[ "$stderr" == *"stub-detail-for-unknown-status"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"reconcile OK"* ]]
+}
+
+@test "pre-push: exit 0 with empty stdout → treated as skip, never 'reconcile OK'" {
+    prepush_fixture
+    export STUB_RC=0
+    export STUB_OUT=''
+    export STUB_ERR=''
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$stderr" == *"reconcile SKIPPED (nothing verified)"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"reconcile OK"* ]]
+}
+
+@test "pre-push: acked reconcile → 'reconcile OK' (a check that ran to a verdict), stub stderr hidden" {
+    prepush_fixture
+    export STUB_RC=0
+    export STUB_OUT='{"status": "acked", "checked": 1, "violations": [{"session_id": "s"}]}'
+    export STUB_ERR='stub-noise-that-must-stay-hidden'
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "acked"'* ]]
     [[ "$output" == *"commit-provenance reconcile OK ✓"* ]]
+    [[ "$stderr" != *"stub-noise-that-must-stay-hidden"* ]]
+    [[ "$stderr" != *"SKIPPED"* ]]
     [[ "$stderr" != *"NOT verified"* ]]
 }
 
@@ -586,4 +660,87 @@ run_prepush_hook() {
     [[ "$stderr" == *"Blocked: unauthorized in-session self-commit detected."* ]]
     [[ "$stderr" == *"CAST_RECONCILE_ACK=1 git push"* ]]
     [[ "$output" != *"reconcile OK"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# REAL-script end-to-end: the tests above feed the hook a STUB literal, so a change
+# to the real script's json.dumps formatting (e.g. separators) would silently drop
+# the hook's exact-match onto its fallback branch. These drive the hook with the
+# real script (+ its cast_db.py sibling) copied into the temp repo.
+# ---------------------------------------------------------------------------
+
+prepush_real_script_fixture() {
+    prepush_fixture
+    cp "$RECONCILE" "$PP_REPO/scripts/cast-commit-reconcile.py"
+    cp "$REPO_ROOT/scripts/cast_db.py" "$PP_REPO/scripts/cast_db.py"
+    export CAST_AUDIT_PATH="$AUDIT_FILE"
+    export CAST_DB_PATH="$CAST_DB"
+    export CAST_RECONCILE_CHECKPOINT="$CHECKPOINT"
+}
+
+@test "pre-push e2e (real script): chmod-000 audit log → 'NOT verified' shown, no 'reconcile OK', push allowed (skip if root)" {
+    if [ "$(id -u)" = "0" ]; then
+        skip "chmod 000 has no effect as root"
+    fi
+    prepush_real_script_fixture
+    write_hatch_event "$T1" "sess-unreadable" "true"
+    chmod 000 "$AUDIT_FILE"
+    run_prepush_hook
+    chmod 644 "$AUDIT_FILE"  # restore so teardown_temp_home can clean up
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "unverifiable"'* ]]
+    [[ "$stderr" == *"[CAST WARN]"* ]]
+    [[ "$stderr" == *"reconcile NOT verified"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"reconcile OK"* ]]
+    [ "$(cat "$CHECKPOINT")" = "$T0" ]
+}
+
+@test "pre-push e2e (real script): readable empty audit log → real 'clean' verdict earns 'reconcile OK'" {
+    prepush_real_script_fixture
+    printf '' > "$AUDIT_FILE"
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "clean"'* ]]
+    [[ "$output" == *"commit-provenance reconcile OK ✓"* ]]
+    [[ "$stderr" != *"SKIPPED"* ]]
+    [[ "$stderr" != *"NOT verified"* ]]
+}
+
+@test "pre-push e2e (real script): absent audit log → real 'skip' verdict shows SKIPPED, never 'reconcile OK'" {
+    prepush_real_script_fixture
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "skip"'* ]]
+    [[ "$stderr" == *"reconcile SKIPPED (nothing verified)"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"reconcile OK"* ]]
+}
+
+# A non-OSError failure reading the audit log (here a non-UTF-8 byte -> UnicodeDecodeError)
+# means the check could not run: unverifiable, not a quiet "skip". The script opens the
+# audit log with an explicit strict encoding="utf-8", so the verdict must not depend on
+# the runner's locale. The test runs under a latin-1 locale (and with PYTHONUTF8 unset):
+# where that locale exists (macOS) a locale-default open() would decode \377 silently and
+# this test would fail without the pin; on a host lacking the locale Python falls back to
+# its default and the test still checks the mapping (just not the pin).
+@test "audit unparseable: non-UTF-8 byte in audit log → unverifiable (not skip), exit 0, sanitized reason, WARN, checkpoint kept" {
+    write_hatch_event "$T1" "sess-nonutf8" "true"
+    printf '\377\376 not-utf8\n' >> "$AUDIT_FILE"
+    run --separate-stderr env -u PYTHONUTF8 LC_ALL=en_US.ISO8859-1 CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "unverifiable" ]
+    [[ "$(json_field reason)" == "audit file unreadable: "* ]]
+    [[ "$(json_field reason)" == *"utf-8"* ]]
+    # The exception text is sanitized: no quote / space survives into the reason.
+    [[ "$(json_field reason)" != *"'"* ]]
+    [[ "$(json_field warning)" == *"NOT performed"* ]]
+    [ "$(json_field checked)" = "0" ]
+    [[ "$stderr" == *"[CAST WARN]"* ]]
+    [[ "$stderr" == *"NOT performed"* ]]
+    # Nothing was verified, so the checkpoint must not advance.
+    [ "$(cat "$CHECKPOINT")" = "$T0" ]
 }
