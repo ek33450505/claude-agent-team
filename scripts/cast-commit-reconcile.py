@@ -8,7 +8,9 @@ Enforcement rule (Ed-locked design):
   = unauthorized in-session self-commit.
 
 Exit codes:
-  0 — clean / acked / skipped (infra absence)
+  0 — clean / acked / skipped (infra absence) / unverifiable (audit file exists
+      but is unreadable — e.g. inside the Claude Code Bash sandbox; the check
+      was NOT performed, said loudly on stderr + in the JSON "warning")
   1 — unacked violations found OR DB error (fail-closed)
 
 Output: valid JSON on stdout regardless of exit code.
@@ -393,6 +395,36 @@ def append_ack_event(acked_events: list[dict]) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def _report_unverifiable(exc: OSError) -> int:
+    """The audit log exists but cannot be read (EPERM/EACCES/other OSError other
+    than not-found), so the D5 provenance check could not run. Say so loudly —
+    never as a quiet "skip": inside the Claude Code Bash sandbox
+    ~/.claude/logs/audit.jsonl is unreadable, and os.path.exists() reports False
+    there, which used to turn an unperformed check into a silent pass.
+
+    Exit 0 (the push is not blocked — absence of the evidence is not a
+    violation), but the stdout JSON carries status "unverifiable" + a "warning",
+    stderr gets a WARN naming the path, and the checkpoint is NOT advanced.
+    NOTE: .githooks/pre-push shows this script's stdout but discards its stderr
+    on exit 0, so the stdout "warning" is the pusher-visible channel."""
+    detail = os.strerror(exc.errno) if exc.errno else str(exc)
+    result = {
+        "status": "unverifiable",
+        "reason": f"audit file unreadable: {detail}",
+        "checked": 0,
+        "violations": [],
+        "warning": "D5 commit-provenance check was NOT performed",
+    }
+    print(json.dumps(result))
+    print(
+        f"[CAST WARN] commit-provenance reconcile: audit file "
+        f"{_sanitize_path(AUDIT_PATH)} is unreadable ({detail}) — the D5 provenance "
+        f"check was NOT performed (push not blocked; run it outside the sandbox).",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main() -> int:
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
@@ -403,8 +435,12 @@ def main() -> int:
     else:
         since = checkpoint
 
-    # 2. Skip cleanly if audit file is missing
-    if not os.path.exists(AUDIT_PATH):
+    # 2. Skip cleanly ONLY if the audit file is genuinely missing. An unreadable
+    #    file (EPERM/EACCES — e.g. the Bash sandbox) is "unverifiable", not "absent":
+    #    os.path.exists() can't tell them apart (it returns False on any stat error).
+    try:
+        os.stat(AUDIT_PATH)
+    except FileNotFoundError:
         result = {
             "status": "skip",
             "reason": "audit file not found",
@@ -413,11 +449,16 @@ def main() -> int:
         }
         print(json.dumps(result))
         return 0
+    except OSError as exc:
+        return _report_unverifiable(exc)
 
     # 3. Load candidate events from audit log
     try:
         events = load_hatch_events(since)
     except Exception as exc:  # noqa: BLE001
+        # stat() can succeed while open() is denied (e.g. chmod 000): unverifiable too.
+        if isinstance(exc, OSError) and not isinstance(exc, FileNotFoundError):
+            return _report_unverifiable(exc)
         result = {
             "status": "skip",
             "reason": f"could not read audit log: {exc}",

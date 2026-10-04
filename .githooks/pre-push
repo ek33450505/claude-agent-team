@@ -46,7 +46,12 @@ if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
   else
     echo "[CAST pre-push] Running commit-provenance reconcile gate..."
     _RECONCILE_TMPSTDERR="$(mktemp)"
-    if ! CAST_RECONCILE_REPO="$REPO_ROOT" python3 "$_RECONCILE_SCRIPT" 2>"$_RECONCILE_TMPSTDERR"; then
+    # stdout (the JSON verdict) is captured so the exit-0 path can tell a performed
+    # check ("clean"/"acked"/"skip") from one that could not run ("unverifiable":
+    # audit log unreadable, e.g. inside the Claude Code Bash sandbox) — and is
+    # still relayed to stdout in every case, as before.
+    if ! _RECONCILE_OUT="$(CAST_RECONCILE_REPO="$REPO_ROOT" python3 "$_RECONCILE_SCRIPT" 2>"$_RECONCILE_TMPSTDERR")"; then
+      [ -z "$_RECONCILE_OUT" ] || printf '%s\n' "$_RECONCILE_OUT"
       cat "$_RECONCILE_TMPSTDERR" >&2
       rm -f "$_RECONCILE_TMPSTDERR"
       echo "" >&2
@@ -54,8 +59,22 @@ if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
       echo "To skip this gate (human-approved exception): CAST_RECONCILE_ACK=1 git push" >&2
       exit 1
     fi
-    rm -f "$_RECONCILE_TMPSTDERR"
-    echo "[CAST pre-push] commit-provenance reconcile OK ✓"
+    [ -z "$_RECONCILE_OUT" ] || printf '%s\n' "$_RECONCILE_OUT"
+    # Exact fixed-string match on the key/value json.dumps emits: a quote inside any
+    # other JSON string is escaped (\"), so this cannot match a lookalike value.
+    case "$_RECONCILE_OUT" in
+      *'"status": "unverifiable"'*)
+        # Exit 0 by design (absence of evidence is not a violation) — but the check
+        # did NOT run, so surface the script's stderr WARN and do not claim "OK".
+        cat "$_RECONCILE_TMPSTDERR" >&2
+        rm -f "$_RECONCILE_TMPSTDERR"
+        echo "[CAST pre-push] commit-provenance reconcile NOT verified (audit log unreadable — sandboxed shell?) — push allowed; re-push from an unsandboxed terminal to verify" >&2
+        ;;
+      *)
+        rm -f "$_RECONCILE_TMPSTDERR"
+        echo "[CAST pre-push] commit-provenance reconcile OK ✓"
+        ;;
+    esac
   fi
 else
   echo "[CAST pre-push] Skipping commit-provenance reconcile (CAST_SKIP_RECONCILE=1)" >&2

@@ -431,3 +431,159 @@ assert d['in_claude_session'] == False, f'expected False (CLAUDECODE unset), got
     checked="$(echo "$output" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["checked"])')"
     [ "$checked" = "0" ]
 }
+
+# ===========================================================================
+# Unverifiable vs missing audit log (inside the Claude Code Bash sandbox
+# ~/.claude/logs/audit.jsonl is unreadable; os.path.exists() reported False
+# there, so the gate printed a quiet "skip" for a check it never performed).
+# ===========================================================================
+
+json_field() {
+    echo "$output" | python3 -c 'import sys,json; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
+}
+
+@test "audit missing: genuinely absent file → skip 'audit file not found', exit 0, no WARN" {
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "skip" ]
+    [ "$(json_field reason)" = "audit file not found" ]
+    [ -z "$stderr" ]
+}
+
+@test "audit unreadable: chmod-000 audit file → unverifiable, exit 0, loud stderr WARN, checkpoint kept (skip if root)" {
+    if [ "$(id -u)" = "0" ]; then
+        skip "chmod 000 has no effect as root"
+    fi
+    write_hatch_event "$T1" "sess-unreadable" "true"
+    chmod 000 "$AUDIT_FILE"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    chmod 644 "$AUDIT_FILE"  # restore so teardown_temp_home can clean up
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "unverifiable" ]
+    [[ "$(json_field reason)" == "audit file unreadable: "* ]]
+    [[ "$(json_field warning)" == *"NOT performed"* ]]
+    [ "$(json_field checked)" = "0" ]
+    [[ "$stderr" == *"[CAST WARN]"* ]]
+    [[ "$stderr" == *"NOT performed"* ]]
+    [[ "$stderr" == *"audit.jsonl"* ]]
+    # Nothing was verified, so the checkpoint must not advance.
+    [ "$(cat "$CHECKPOINT")" = "$T0" ]
+}
+
+@test "audit unreadable: stat denied (unsearchable parent dir, the sandbox shape) → unverifiable, not skip (skip if root)" {
+    if [ "$(id -u)" = "0" ]; then
+        skip "chmod 000 has no effect as root"
+    fi
+    mkdir -p "$HOME/denied"
+    printf '' > "$HOME/denied/audit.jsonl"
+    chmod 000 "$HOME/denied"
+    run --separate-stderr env CAST_AUDIT_PATH="$HOME/denied/audit.jsonl" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    chmod 755 "$HOME/denied"  # restore so teardown_temp_home can clean up
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "unverifiable" ]
+    [[ "$(json_field reason)" == "audit file unreadable: "* ]]
+    [[ "$stderr" == *"NOT performed"* ]]
+    [ "$(cat "$CHECKPOINT")" = "$T0" ]
+}
+
+@test "audit readable: empty readable audit file → clean, exit 0, no WARN (unchanged)" {
+    printf '' > "$AUDIT_FILE"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+    [ -z "$stderr" ]
+}
+
+# ===========================================================================
+# .githooks/pre-push surfaces the reconcile result honestly.
+# The hook is driven in a temp git repo whose scripts/cast-commit-reconcile.py
+# is a STUB (prints $STUB_OUT, writes $STUB_ERR to stderr, exits $STUB_RC), with
+# every other gate skipped — this isolates the reconcile block of the hook.
+# Before the fix the hook discarded the script's stderr on exit 0 and printed
+# "reconcile OK" even for an unverifiable (not-performed) check.
+# ===========================================================================
+
+prepush_fixture() {
+    PP_REPO="$BATS_TEST_TMPDIR/pp-repo"
+    mkdir -p "$PP_REPO/scripts"
+    git init -q "$PP_REPO"
+    printf '%s\n' \
+        '#!/usr/bin/env python3' \
+        'import os, sys' \
+        'sys.stdout.write(os.environ.get("STUB_OUT", "") + "\n")' \
+        'sys.stderr.write(os.environ.get("STUB_ERR", "") + "\n")' \
+        'sys.exit(int(os.environ.get("STUB_RC", "0")))' \
+        > "$PP_REPO/scripts/cast-commit-reconcile.py"
+    export PP_REPO PRE_PUSH_HOOK
+    export CAST_SKIP_PII_CHECK=1 CAST_SKIP_STATS_PUSH=1 CAST_SKIP_DB_CONTRACT=1
+    export CAST_SKIP_LEDGER_CHECK=1 CAST_SKIP_RULES_DRIFT=1 CAST_SKIP_README_STRUCTURE=1
+}
+
+run_prepush_hook() {
+    run --separate-stderr bash -c 'cd "$PP_REPO" && exec bash "$PRE_PUSH_HOOK" </dev/null'
+}
+
+@test "pre-push: unverifiable reconcile → stderr WARN surfaced, NOT-verified line, no 'reconcile OK', push allowed" {
+    prepush_fixture
+    export STUB_RC=0
+    export STUB_OUT='{"status": "unverifiable", "reason": "audit file unreadable: Operation not permitted", "checked": 0, "violations": [], "warning": "D5 commit-provenance check was NOT performed"}'
+    export STUB_ERR='[CAST WARN] stub: audit file unreadable'
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"status": "unverifiable"'* ]]
+    [[ "$stderr" == *"[CAST WARN] stub: audit file unreadable"* ]]
+    [[ "$stderr" == *"reconcile NOT verified (audit log unreadable"* ]]
+    [[ "$stderr" == *"re-push from an unsandboxed terminal"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"reconcile OK"* ]]
+}
+
+@test "pre-push: clean reconcile → stdout JSON passed through, 'reconcile OK', stub stderr still discarded" {
+    prepush_fixture
+    export STUB_RC=0
+    export STUB_OUT='{"status": "clean", "checked": 2, "violations": []}'
+    export STUB_ERR='stub-noise-that-must-stay-hidden'
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'{"status": "clean", "checked": 2, "violations": []}'* ]]
+    [[ "$output" == *"commit-provenance reconcile OK ✓"* ]]
+    [[ "$stderr" != *"stub-noise-that-must-stay-hidden"* ]]
+    [[ "$stderr" != *"NOT verified"* ]]
+}
+
+@test "pre-push: only the exact status key/value counts ('unverifiable' inside another field is still OK)" {
+    prepush_fixture
+    export STUB_RC=0
+    export STUB_OUT='{"status": "skip", "reason": "cast.db not found (was unverifiable before)", "checked": 0, "violations": []}'
+    export STUB_ERR=''
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"commit-provenance reconcile OK ✓"* ]]
+    [[ "$stderr" != *"NOT verified"* ]]
+}
+
+@test "pre-push: reconcile exit 1 → push blocked exactly as before (stdout + stderr relayed, ACK hint, no OK)" {
+    prepush_fixture
+    export STUB_RC=1
+    export STUB_OUT='{"status": "violations", "checked": 1, "violations": [{"session_id": "s"}]}'
+    export STUB_ERR='stub-violation-detail'
+    run_prepush_hook
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'"status": "violations"'* ]]
+    [[ "$stderr" == *"stub-violation-detail"* ]]
+    [[ "$stderr" == *"Blocked: unauthorized in-session self-commit detected."* ]]
+    [[ "$stderr" == *"CAST_RECONCILE_ACK=1 git push"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+}
