@@ -268,6 +268,8 @@ def load_hatch_events(since: datetime.datetime) -> list[dict]:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue  # garbage line — skip silently
+                if not isinstance(obj, dict):
+                    continue  # valid JSON but not an event object ([], "x", 3) — skip like garbage
 
                 # Only care about COMMIT_HATCH_USED events
                 if obj.get("event") != "COMMIT_HATCH_USED":
@@ -284,8 +286,14 @@ def load_hatch_events(since: datetime.datetime) -> list[dict]:
                 # Repo scoping: skip ONLY a foreign repo's scoped event. Empty
                 # event repo (legacy) or empty CURRENT_REPO → no filtering.
                 repo = obj.get("repo") or ""
-                if repo and CURRENT_REPO and os.path.realpath(repo) != CURRENT_REPO:
-                    continue
+                if not isinstance(repo, str):
+                    continue  # malformed repo value — skip this line only
+                if repo and CURRENT_REPO:
+                    try:
+                        if os.path.realpath(repo) != CURRENT_REPO:
+                            continue
+                    except ValueError:
+                        continue  # e.g. NUL byte in repo — skip this line only
 
                 # Parse timestamp
                 raw_ts = obj.get("timestamp") or obj.get("ts") or ""
@@ -410,8 +418,10 @@ def _report_unverifiable(exc: Exception) -> int:
     Exit 0 (the push is not blocked — absence of the evidence is not a
     violation), but the stdout JSON carries status "unverifiable" + a "warning",
     stderr gets a WARN naming the path, and the checkpoint is NOT advanced.
-    NOTE: .githooks/pre-push shows this script's stdout but discards its stderr
-    on exit 0, so the stdout "warning" is the pusher-visible channel."""
+    NOTE: .githooks/pre-push shows this script's stdout and, on "unverifiable" and
+    on "skip", also relays this script's stderr (it still discards stderr on a
+    clean/acked verdict), so both the stdout "warning" and the stderr WARN reach
+    the pusher."""
     # Non-OSError exceptions (e.g. UnicodeDecodeError) carry no errno; their text can
     # echo audit-file bytes, so sanitize the fallback before it reaches JSON/stderr.
     _errno = getattr(exc, "errno", None)

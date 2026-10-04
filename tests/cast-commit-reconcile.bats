@@ -564,7 +564,9 @@ run_prepush_hook() {
     [[ "$output" == *'"status": "unverifiable"'* ]]
     [[ "$stderr" == *"[CAST WARN] stub: audit file unreadable"* ]]
     [[ "$stderr" == *"reconcile NOT verified (audit log unreadable"* ]]
-    [[ "$stderr" == *"re-push from an unsandboxed terminal"* ]]
+    [[ "$stderr" == *"audit log unreadable or unparseable"* ]]
+    [[ "$stderr" == *"re-push from a normal terminal"* ]]
+    [[ "$stderr" == *"check ~/.claude/logs/audit.jsonl"* ]]
     [[ "$output" != *"reconcile OK"* ]]
     [[ "$stderr" != *"reconcile OK"* ]]
 }
@@ -743,4 +745,32 @@ prepush_real_script_fixture() {
     [[ "$stderr" == *"NOT performed"* ]]
     # Nothing was verified, so the checkpoint must not advance.
     [ "$(cat "$CHECKPOINT")" = "$T0" ]
+}
+
+@test "audit bad lines: non-dict JSON line ([]) does not hide a later real violation" {
+    printf '[]\n' >> "$AUDIT_FILE"
+    printf '"str"\n3\n' >> "$AUDIT_FILE"
+    write_hatch_event "$T1" "sess-after-nondict" "true"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    [ "$(json_field status)" = "violations" ]
+    echo "$output" | python3 -c \
+        'import sys,json; d=json.load(sys.stdin); assert any(v["session_id"]=="sess-after-nondict" for v in d["violations"]), d'
+}
+
+@test "audit bad lines: NUL-in-repo line does not hide a later real violation" {
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"sess-nul","in_claude_session":true,"repo":"/a\\u0000b"}\n' "$T1" >> "$AUDIT_FILE"
+    write_hatch_event "$T1" "sess-after-nul" "true"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           CAST_RECONCILE_REPO="$HOME" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    [ "$(json_field status)" = "violations" ]
+    echo "$output" | python3 -c \
+        'import sys,json; d=json.load(sys.stdin); assert any(v["session_id"]=="sess-after-nul" for v in d["violations"]), d'
 }

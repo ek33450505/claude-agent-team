@@ -68,7 +68,7 @@ if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
         # did NOT run, so surface the script's stderr WARN and do not claim "OK".
         cat "$_RECONCILE_TMPSTDERR" >&2
         rm -f "$_RECONCILE_TMPSTDERR"
-        echo "[CAST pre-push] commit-provenance reconcile NOT verified (audit log unreadable — sandboxed shell?) — push allowed; re-push from an unsandboxed terminal to verify" >&2
+        echo "[CAST pre-push] commit-provenance reconcile NOT verified (audit log unreadable or unparseable) — push allowed; if this is a sandboxed shell, re-push from a normal terminal; otherwise check ~/.claude/logs/audit.jsonl" >&2
         ;;
       *'"status": "clean"'* | *'"status": "acked"'*)
         # Only a check that actually ran to a verdict earns "OK".
