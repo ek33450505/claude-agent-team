@@ -48,7 +48,7 @@ fi
 # Parse fields via env var (never interpolate into Python source)
 export CAST_START_INPUT="$INPUT"
 
-PARSED="$(python3 - <<'PYEOF' 2>/dev/null
+PARSED="$(python3 -I - <<'PYEOF' 2>/dev/null
 import sys, json, os
 
 raw = os.environ.get('CAST_START_INPUT', '')
@@ -84,7 +84,7 @@ export CAST_START_PARSED="$PARSED"
 # field (e.g. no session_id) collapse into ONE delimiter, shifting agent_id
 # into SESSION_ID and losing it. 0x1f is non-whitespace IFS, so empty fields
 # are preserved exactly. See tests: "no session_id" field-placement guards.
-IFS=$'\x1f' read -r AGENT_NAME SESSION_ID AGENT_ID <<<"$(python3 -c "
+IFS=$'\x1f' read -r AGENT_NAME SESSION_ID AGENT_ID <<<"$(python3 -I -c "
 import json, os
 d = json.loads(os.environ.get('CAST_START_PARSED', '{}'))
 
@@ -99,8 +99,8 @@ print(f'{agent_name}\x1f{session_id}\x1f{agent_id}')
 export CAST_START_AGENT_ID="$AGENT_ID"
 
 # ── Step 1: Write task_claimed event to ~/.claude/cast/events/ ────────────────
-TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
-TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())" | sed 's/+00:00/Z/')"
+TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -I -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
+TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -I -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())" | sed 's/+00:00/Z/')"
 SAFE_AGENT="${AGENT_NAME//[^a-zA-Z0-9_-]/}"
 # Disambiguator (PID + $RANDOM): two subagent-start events for the same agent
 # within the same UTC second must not collide and silently overwrite each
@@ -114,7 +114,7 @@ export CAST_START_SESSION="$SESSION_ID"
 export CAST_START_TS_ISO="$TIMESTAMP_ISO"
 export CAST_START_EVENT_FILE="$EVENT_FILE"
 
-python3 - <<'PYEOF' 2>/dev/null || true
+python3 -I - <<'PYEOF' 2>/dev/null || true
 import json, os
 
 event = {
@@ -135,7 +135,7 @@ PYEOF
 # ── Step 2: Insert running row into cast.db agent_runs ────────────────────────
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ] && [ -s "$DB_PATH" ]; then
   export CAST_START_DB_PATH="$DB_PATH"
-  python3 - <<'PYEOF' 2>>"$START_ERROR_LOG" || true
+  python3 -I - <<'PYEOF' 2>>"$START_ERROR_LOG" || true
 import sqlite3, os, time, sys
 sys.path.insert(0, os.environ.get('CAST_HOOK_DIR', os.path.expanduser('~/.claude/scripts')))
 try:

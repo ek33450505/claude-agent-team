@@ -28,7 +28,7 @@ if [ ! -d "$OUT_DIR" ]; then exit 0; fi
 # Select the distillate file in Python (robust date + regex handling), print its
 # absolute path + a source tag ("auto"|"manual") on one line, or nothing.
 export CAST_RI_DIR="$OUT_DIR" CAST_RI_SLUG="$SLUG"
-SELECTION="$(python3 -c '
+SELECTION="$(python3 -I -c '
 import os, re, sys
 d = os.environ["CAST_RI_DIR"]; slug = os.environ["CAST_RI_SLUG"]
 try:
@@ -68,7 +68,7 @@ SAFE_BODY="$(printf '%s' "$BODY" | sed 's/\[[Cc][Aa][Ss][Tt]-/[CAST_/g' || true)
 
 export CAST_RI_BODY="$SAFE_BODY" CAST_RI_SOURCE="$SOURCE" CAST_RI_SLUG
 # shellcheck disable=SC2016
-python3 -c '
+python3 -I -c '
 import json, os, re
 body = os.environ.get("CAST_RI_BODY", "")
 if not body:

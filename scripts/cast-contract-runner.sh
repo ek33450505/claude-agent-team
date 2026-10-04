@@ -81,7 +81,7 @@ _log_error() {
 # Minimal YAML parser: extract fixtures list and assertions list
 _parse_contract() {
   local contract_file="$1"
-  python3 - "$contract_file" <<'PYEOF'
+  python3 -I - "$contract_file" <<'PYEOF'
 import sys
 import re
 
@@ -154,7 +154,7 @@ _run_assertions() {
 
   # Extract assertions for this fixture from contract file
   local assertions_json
-  assertions_json="$(python3 - "$CONTRACT_FILE" <<'PYEOF'
+  assertions_json="$(python3 -I - "$CONTRACT_FILE" <<'PYEOF'
 import sys, re
 try:
     import yaml
@@ -178,7 +178,7 @@ PYEOF
 
   # Parse results and print
   local passed=0 failed=0
-  python3 - "$result_json" <<'PYEOF'
+  python3 -I - "$result_json" <<'PYEOF'
 import sys, json
 try:
     data = json.loads(sys.argv[1])
@@ -197,7 +197,7 @@ PYEOF
 
   # Determine overall pass/fail
   local result_status="FAIL"
-  python3 - "$result_json" <<'PYEOF'
+  python3 -I - "$result_json" <<'PYEOF'
 import sys, json
 try:
     data = json.loads(sys.argv[1])
@@ -218,7 +218,7 @@ PYEOF
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 # Parse fixtures from contract
-fixture_list="$(python3 - "$CONTRACT_FILE" <<'PYEOF'
+fixture_list="$(python3 -I - "$CONTRACT_FILE" <<'PYEOF'
 import sys
 try:
     import yaml

@@ -19,7 +19,7 @@ _log_error() {
     >> "$HOME/.claude/logs/hook-errors.log"
 }
 
-AGENT_ID="$(printf '%s' "$INPUT" | python3 -c 'import sys,json
+AGENT_ID="$(printf '%s' "$INPUT" | python3 -I -c 'import sys,json
 try:
     d = json.loads(sys.stdin.read() or "{}")
     print(d.get("agent_id") or d.get("subagent_id") or "unknown")
@@ -35,7 +35,7 @@ if [[ -n "$REPO_ROOT" ]]; then
 
   # Run the worktree scan + DB writes inside a single python invocation to keep
   # state consistent and to avoid shelling out for each worktree.
-  python3 - "$AGENT_ID" "$REPO_ROOT" "$DB_PATH" <<'PYEOF' || _log_error "worktree scan failed"
+  python3 -I - "$AGENT_ID" "$REPO_ROOT" "$DB_PATH" <<'PYEOF' || _log_error "worktree scan failed"
 import os
 import re
 import sqlite3

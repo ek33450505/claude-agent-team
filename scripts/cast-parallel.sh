@@ -125,7 +125,7 @@ if [ -z "$DISPATCH_JSON" ]; then
 fi
 
 # ── Parse plan metadata ──────────────────────────────────────────────────────
-PLAN_ID=$(printf '%s' "$DISPATCH_JSON" | python3 -c "
+PLAN_ID=$(printf '%s' "$DISPATCH_JSON" | python3 -I -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -138,7 +138,7 @@ except Exception:
   exit 1
 }
 
-BATCH_COUNT=$(printf '%s' "$DISPATCH_JSON" | python3 -c "
+BATCH_COUNT=$(printf '%s' "$DISPATCH_JSON" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 print(len(d.get('batches', [])))
@@ -173,7 +173,7 @@ _compute_split() {
 _compute_split
 
 # ── Build batch ID lists for each stream ──────────────────────────────────────
-STREAM_A_IDS=$(printf '%s' "$DISPATCH_JSON" | python3 -c "
+STREAM_A_IDS=$(printf '%s' "$DISPATCH_JSON" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 split = int(sys.argv[1])
@@ -182,7 +182,7 @@ ids = [str(b['id']) for b in batches[:split]]
 print(','.join(ids))
 " "$SPLIT_POINT" 2>/dev/null || echo "")
 
-STREAM_B_IDS=$(printf '%s' "$DISPATCH_JSON" | python3 -c "
+STREAM_B_IDS=$(printf '%s' "$DISPATCH_JSON" | python3 -I -c "
 import sys, json
 d = json.load(sys.stdin)
 split = int(sys.argv[1])
@@ -336,7 +336,7 @@ _db_log() {
     CAST_DB_LOG_MSG="$message" \
     CAST_DB_LOG_SESSION="${CAST_SESSION_ID:-cast-parallel}" \
     CAST_DB_LOG_PROJECT="$(basename "$PWD")" \
-    python3 - <<'_PYEOF' 2>/dev/null | python3 "$db_log_script" 2>/dev/null || true
+    python3 -I - <<'_PYEOF' 2>/dev/null | python3 "$db_log_script" 2>/dev/null || true
 import json, os, datetime
 print(json.dumps({
     "session_id":     os.environ["CAST_DB_LOG_SESSION"],

@@ -106,7 +106,7 @@ fi
 # ---------------------------------------------------------------------------
 _emit_event() {
   local event_type="$1" agent="$2" batch="$3" msg="$4" status="${5:-}"
-  python3 -c "
+  python3 -I -c "
 import json, os, time, uuid
 event = {
     'id': str(uuid.uuid4()),

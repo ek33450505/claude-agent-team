@@ -25,7 +25,7 @@ AIRGAP_STATE_FILE="${HOME}/.claude/cast/state/airgap.state"
 
 case "$SUBCMD" in
   on)
-    python3 - "$CONFIG_FILE" "true" <<'PYEOF'
+    python3 -I - "$CONFIG_FILE" "true" <<'PYEOF'
 import sys, json
 
 config_file = sys.argv[1]
@@ -49,7 +49,7 @@ PYEOF
     ;;
 
   off)
-    python3 - "$CONFIG_FILE" "false" <<'PYEOF'
+    python3 -I - "$CONFIG_FILE" "false" <<'PYEOF'
 import sys, json
 
 config_file = sys.argv[1]
@@ -72,7 +72,7 @@ PYEOF
     ;;
 
   status)
-    python3 - "$CONFIG_FILE" <<'PYEOF'
+    python3 -I - "$CONFIG_FILE" <<'PYEOF'
 import sys, json, os
 
 config_file = sys.argv[1]

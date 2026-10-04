@@ -21,7 +21,7 @@ DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 agent="main"; cost="0"; ctx_pct="0"; rate_pct=""; model="n/a"; session=""; session_id=""
 git_branch=""; active_agents=""; dispatch_count=""
 IFS=$'\x1f' read -r agent cost ctx_pct rate_pct model session session_id git_branch active_agents dispatch_count <<< \
-  "$(CAST_SL_INPUT="$INPUT" CAST_SL_DB="$DB_PATH" python3 -c '
+  "$(CAST_SL_INPUT="$INPUT" CAST_SL_DB="$DB_PATH" python3 -I -c '
 import json, os, sqlite3
 
 SEP = "\x1f"

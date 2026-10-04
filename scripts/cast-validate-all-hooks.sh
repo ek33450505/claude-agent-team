@@ -93,7 +93,7 @@ PAYLOAD_SubagentStart='{"agent_type":"test","session_id":"test"}'
 
 # ── Enumerate hooks from settings.json ───────────────────────────────────
 export CAST_VA_SETTINGS="$SETTINGS_FILE"
-HOOK_LINES=$(python3 - <<'PYEOF'
+HOOK_LINES=$(python3 -I - <<'PYEOF'
 import json, os
 
 settings_file = os.environ["CAST_VA_SETTINGS"]
@@ -252,7 +252,7 @@ while IFS=$'\t' read -r event label has_args cmd; do
   # non-zero (warnings/fails) — we need that exit code to classify, not abort.
   _cv_tmp=$(mktemp)
   validate_exit=0
-  python3 - >"$_cv_tmp" 2>&1 <<'PYEOF' || validate_exit=$?
+  python3 -I - >"$_cv_tmp" 2>&1 <<'PYEOF' || validate_exit=$?
 import json, os, sys
 
 event = os.environ["CAST_CV_EVENT"]

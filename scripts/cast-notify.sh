@@ -84,7 +84,7 @@ notifications_enabled() {
     echo "true"
     return
   fi
-  python3 -c "
+  python3 -I -c "
 import json, sys
 try:
   cfg = json.load(open(sys.argv[1]))
@@ -101,7 +101,7 @@ event_enabled() {
     return
   fi
   # Pass event via environment to avoid shell injection
-  CAST_EVENT_TYPE="$event" python3 -c "
+  CAST_EVENT_TYPE="$event" python3 -I -c "
 import json, os, sys
 try:
   cfg = json.load(open(sys.argv[1]))
@@ -118,7 +118,7 @@ in_quiet_hours() {
     echo "false"
     return
   fi
-  python3 -c "
+  python3 -I -c "
 import json, sys
 from datetime import datetime
 try:
@@ -185,7 +185,7 @@ append_to_queue() {
   local msg="$2"
   local ttl="$3"
   # Pass values as arguments to avoid shell variable injection into Python source
-  python3 - "$event" "$msg" "$ttl" "$NOTIFY_QUEUE_FILE" "$MAX_QUEUE_ENTRIES" <<'PYEOF' 2>/dev/null || true
+  python3 -I - "$event" "$msg" "$ttl" "$NOTIFY_QUEUE_FILE" "$MAX_QUEUE_ENTRIES" <<'PYEOF' 2>/dev/null || true
 import json, sys, time
 from pathlib import Path
 event, msg, ttl, queue_path, max_entries = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])

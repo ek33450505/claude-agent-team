@@ -64,7 +64,7 @@ export CAST_TC_ISO_UTC="$ISO_UTC"
 export CAST_TC_EPOCH="$EPOCH"
 
 # --- Emit hookSpecificOutput via json.dumps (correct newline encoding) ---
-python3 -c '
+python3 -I -c '
 import json, os
 lines = [
     "## Session Time Context",

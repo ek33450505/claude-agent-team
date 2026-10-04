@@ -32,7 +32,7 @@ _config_get() {
   local key="$1"
   local default="${2:-}"
   if [ -f "$CAST_CONFIG_FILE" ] && command -v python3 >/dev/null 2>&1; then
-    python3 -c "
+    python3 -I -c "
 import json, sys
 try:
     with open(sys.argv[1]) as f:
@@ -229,7 +229,7 @@ _cmd_init_repo() {
     printf "Already initialized.\n"
     printf "\nCurrent config (%s):\n" "$config_file"
     if command -v python3 >/dev/null 2>&1; then
-      python3 -m json.tool "$config_file" 2>/dev/null || cat "$config_file"
+      python3 -I -m json.tool "$config_file" 2>/dev/null || cat "$config_file"
     else
       cat "$config_file"
     fi
@@ -259,7 +259,7 @@ _cmd_init_repo() {
   mkdir -p "$claude_dir"
 
   # Write cast.json
-  python3 - "$config_file" "$repo_class" "$co_author_trailer" <<'PYEOF'
+  python3 -I - "$config_file" "$repo_class" "$co_author_trailer" <<'PYEOF'
 import sys, json
 config_file, repo_class, co_author_trailer = sys.argv[1], sys.argv[2], sys.argv[3]
 config = {
@@ -449,7 +449,7 @@ _cmd_status() {
   # Budget
   local today_spend=0 week_spend=0 _spend_note=""
   if [ "$db_state" = "ok" ] && command -v python3 >/dev/null 2>&1; then
-    read -r today_spend week_spend <<< "$(python3 - "$CAST_DB_PATH" <<'PYEOF'
+    read -r today_spend week_spend <<< "$(python3 -I - "$CAST_DB_PATH" <<'PYEOF'
 import sys, sqlite3
 from datetime import datetime, timedelta, timezone
 db = sys.argv[1]
@@ -498,7 +498,7 @@ PYEOF
       ;;
     ok)
       if command -v python3 >/dev/null 2>&1; then
-        _budget_primary="$(python3 - "$CAST_DB_PATH" "$today_spend" <<'PYEOF'
+        _budget_primary="$(python3 -I - "$CAST_DB_PATH" "$today_spend" <<'PYEOF'
 import sys, sqlite3
 db, spend_str = sys.argv[1], sys.argv[2]
 try:
@@ -536,7 +536,7 @@ PYEOF
   local _repo_cast_json="${PWD}/.claude/cast.json"
   if [ -f "$_repo_cast_json" ] && command -v python3 >/dev/null 2>&1; then
     local _repo_limit
-    _repo_limit="$(python3 -c "
+    _repo_limit="$(python3 -I -c "
 import json, sys
 try:
     with open(sys.argv[1]) as f:
@@ -560,7 +560,7 @@ except Exception:
   local hook_count=0
   local settings_file="${HOME}/.claude/settings.json"
   if [ -f "$settings_file" ]; then
-    hook_count="$(python3 -c "
+    hook_count="$(python3 -I -c "
 import json, sys
 with open(sys.argv[1]) as f:
     cfg = json.load(f)
@@ -572,7 +572,7 @@ print(sum(len(v) if isinstance(v, list) else 1 for v in hooks.values()))
   # Recent agent runs (last 5)
   local recent_runs=""
   if [ "$db_state" = "ok" ] && command -v python3 >/dev/null 2>&1; then
-    recent_runs="$(python3 - "$CAST_DB_PATH" <<'PYEOF'
+    recent_runs="$(python3 -I - "$CAST_DB_PATH" <<'PYEOF'
 import sys, sqlite3
 from datetime import datetime, timezone
 db = sys.argv[1]
@@ -612,7 +612,7 @@ PYEOF
 
   # Render dashboard
   local sep
-  sep="$(python3 -c "import sys; print('=' * int(sys.argv[1]))" "$width" 2>/dev/null || printf '%0.s=' $(seq 1 $width))"
+  sep="$(python3 -I -c "import sys; print('=' * int(sys.argv[1]))" "$width" 2>/dev/null || printf '%0.s=' $(seq 1 $width))"
 
   printf "${C_BOLD}CAST v${CAST_VERSION}${C_RESET}\n"
   printf "%s\n" "$sep"
@@ -665,7 +665,7 @@ _cmd_agents() {
 
   if [ "$live_mode" -eq 1 ]; then
     _require_db
-    python3 - "$CAST_DB_PATH" "$CAST_JSON" <<'PYEOF'
+    python3 -I - "$CAST_DB_PATH" "$CAST_JSON" <<'PYEOF'
 import sys, sqlite3, json
 from datetime import datetime, timezone
 
@@ -819,7 +819,7 @@ PYEOF
 
   if [ "$usage_mode" -eq 1 ]; then
     _require_db
-    python3 - "$CAST_DB_PATH" "$CAST_JSON" <<'PYEOF'
+    python3 -I - "$CAST_DB_PATH" "$CAST_JSON" <<'PYEOF'
 import sys, sqlite3, json
 
 db_path, json_mode = sys.argv[1], sys.argv[2]
@@ -872,7 +872,7 @@ PYEOF
     return 1
   fi
 
-  python3 - "$CAST_AGENTS_DIR" "$CAST_JSON" <<'PYEOF'
+  python3 -I - "$CAST_AGENTS_DIR" "$CAST_JSON" <<'PYEOF'
 import sys, os, json, re
 
 agents_dir = sys.argv[1]
@@ -937,7 +937,7 @@ _cmd_hooks() {
     return 1
   fi
 
-  python3 - "$settings_file" "$CAST_JSON" <<'PYEOF'
+  python3 -I - "$settings_file" "$CAST_JSON" <<'PYEOF'
 import sys, json, os
 
 settings_file = sys.argv[1]
@@ -1098,7 +1098,7 @@ USAGE
     fi
 
     # Summary
-    printf "\n%s\n" "$(python3 -c "print('=' * 52)" 2>/dev/null || printf '%0.s=' $(seq 1 52))"
+    printf "\n%s\n" "$(python3 -I -c "print('=' * 52)" 2>/dev/null || printf '%0.s=' $(seq 1 52))"
     printf "Contract tests: %d passed, %d failed\n" "$total_passed" "$total_failed"
 
     if [ "$total_failed" -gt 0 ]; then
@@ -1288,7 +1288,7 @@ _memory_search() {
   result="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
 
   # Adapt the unified record_fts row shape → the memory-search contract so the reroute is transparent.
-  CAST_JSON="${CAST_JSON:-0}" python3 - "$result" <<'PYEOF'
+  CAST_JSON="${CAST_JSON:-0}" python3 -I - "$result" <<'PYEOF'
 import os, sys, json
 cast_json = os.environ.get("CAST_JSON", "0") == "1"
 try:
@@ -1339,7 +1339,7 @@ _memory_list() {
     esac
   done
 
-  python3 - "$CAST_DB_PATH" "$agent_filter" "$type_filter" "$CAST_JSON" <<'PYEOF'
+  python3 -I - "$CAST_DB_PATH" "$agent_filter" "$type_filter" "$CAST_JSON" <<'PYEOF'
 import sys, sqlite3, json
 
 db_path, agent_f, type_f, json_mode = sys.argv[1:5]
@@ -1390,7 +1390,7 @@ _memory_forget() {
   fi
 
   local rows_affected
-  rows_affected="$(python3 - "$CAST_DB_PATH" "$memory_id" <<'PYEOF'
+  rows_affected="$(python3 -I - "$CAST_DB_PATH" "$memory_id" <<'PYEOF'
 import sys, sqlite3
 db_path, mem_id = sys.argv[1], sys.argv[2]
 conn = sqlite3.connect(db_path)
@@ -1415,7 +1415,7 @@ PYEOF
 
 _memory_export() {
   _require_db
-  python3 - "$CAST_DB_PATH" <<'PYEOF'
+  python3 -I - "$CAST_DB_PATH" <<'PYEOF'
 import sys, sqlite3, json
 
 db_path = sys.argv[1]
@@ -1463,7 +1463,7 @@ _memory_show() {
     return 1
   fi
 
-  python3 - "$CAST_DB_PATH" "$memory_id" "$CAST_JSON" <<'PYEOF'
+  python3 -I - "$CAST_DB_PATH" "$memory_id" "$CAST_JSON" <<'PYEOF'
 import sys, sqlite3, json
 
 db_path, mem_id, json_mode = sys.argv[1:4]
@@ -1518,7 +1518,7 @@ _memory_delete() {
     return 1
   fi
 
-  python3 - "$CAST_DB_PATH" "$memory_id" <<'PYEOF'
+  python3 -I - "$CAST_DB_PATH" "$memory_id" <<'PYEOF'
 import sys, sqlite3
 db_path, mem_id = sys.argv[1], sys.argv[2]
 conn = sqlite3.connect(db_path)
@@ -1569,7 +1569,7 @@ USAGE
       return 1
     fi
     _require_db
-    python3 - "$CAST_DB_PATH" "$b_scope" "$b_period" "$b_limit" "$b_alert" <<'PYEOF'
+    python3 -I - "$CAST_DB_PATH" "$b_scope" "$b_period" "$b_limit" "$b_alert" <<'PYEOF'
 import sys, sqlite3
 from datetime import datetime, timezone
 db_path, scope, period, limit_usd, alert_at = sys.argv[1:6]
@@ -1619,7 +1619,7 @@ USAGE
 
   _require_db
 
-  python3 - "$CAST_DB_PATH" "$show_week" "$project_filter" "$CAST_JSON" <<'PYEOF'
+  python3 -I - "$CAST_DB_PATH" "$show_week" "$project_filter" "$CAST_JSON" <<'PYEOF'
 import sys, sqlite3, json
 from datetime import datetime, timedelta, timezone
 
@@ -1722,7 +1722,7 @@ USAGE
 
   _require_db
 
-  python3 - "$CAST_DB_PATH" "$view" "$project_filter" "$limit_n" "$CAST_JSON" <<'PYEOF'
+  python3 -I - "$CAST_DB_PATH" "$view" "$project_filter" "$limit_n" "$CAST_JSON" <<'PYEOF'
 import sys, sqlite3, json
 
 db_path, view, project_f, limit_arg, json_mode = sys.argv[1:6]
@@ -2018,7 +2018,7 @@ USAGE
 
   _require_db
 
-  python3 - "$CAST_DB_PATH" "$task_desc" "$limit_n" "$CAST_JSON" <<'PYEOF'
+  python3 -I - "$CAST_DB_PATH" "$task_desc" "$limit_n" "$CAST_JSON" <<'PYEOF'
 import sys, sqlite3, json, re
 from statistics import median, mean
 
@@ -2233,7 +2233,7 @@ _cmd_doctor() {
   local INFO="[${C_CYAN}--${C_RESET}]"
 
   printf "${C_BOLD}CAST Doctor${C_RESET}\n"
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
 
   # 1. cast.db accessible
   # Use sqlite_master (not SELECT 1) to force header validation — SELECT 1 is a
@@ -2282,7 +2282,7 @@ routines incidents plan_sessions memory_consolidation_runs archived_memories bud
   local _sc_helper="${CAST_SCRIPTS_DIR}/cast-db-drop-status-check.py"
   [ -f "$_sc_helper" ] || _sc_helper="${CAST_REPO_DIR:-}/scripts/cast-db-drop-status-check.py"
   local _sc_out _sc_rc=0
-  _sc_out="$(CAST_SC_HELPER="$_sc_helper" python3 - "$CAST_DB_PATH" <<'PYEOF' 2>/dev/null
+  _sc_out="$(CAST_SC_HELPER="$_sc_helper" python3 -I - "$CAST_DB_PATH" <<'PYEOF' 2>/dev/null
 import importlib.util, os, re, sqlite3, sys
 try:
     spec = importlib.util.spec_from_file_location("_sc_helper", os.environ["CAST_SC_HELPER"])
@@ -2312,7 +2312,7 @@ PYEOF
   local settings_file="${HOME}/.claude/settings.json"
   local hook_count=0
   if [ -f "$settings_file" ]; then
-    hook_count="$(python3 - "$settings_file" <<'PYEOF'
+    hook_count="$(python3 -I - "$settings_file" <<'PYEOF'
 import json, sys
 try:
     with open(sys.argv[1]) as f:
@@ -2335,7 +2335,7 @@ PYEOF
   # 4. Hook scripts exist
   if [ -f "$settings_file" ]; then
     local missing_scripts
-    missing_scripts="$(python3 - "$settings_file" <<'PYEOF'
+    missing_scripts="$(python3 -I - "$settings_file" <<'PYEOF'
 import json, sys, os
 
 try:
@@ -2489,7 +2489,7 @@ PYEOF
 
   # 10. Pending memory review queue
   local pending_count
-  pending_count=$(python3 << 'PYEOF' 2>/dev/null || echo 0
+  pending_count=$(python3 -I << 'PYEOF' 2>/dev/null || echo 0
 import os
 home = os.path.expanduser("~")
 projects_dir = os.path.join(home, ".claude", "projects")
@@ -2516,7 +2516,7 @@ PYEOF
   printf "%b Version: %s\n" "$INFO" "$CAST_VERSION"
 
   # 12. Slowest agents this week
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Slowest agents this week${C_RESET}\n"
   local slow_rows
   slow_rows="$(sqlite3 "$CAST_DB_PATH" \
@@ -2536,7 +2536,7 @@ PYEOF
   # 13. Honesty surface — reads agent_hallucinations, completeness_events,
   #     agent_protocol_violations. Diagnostic only: failures
   #     inside this block never flip overall_ok or exit cast doctor early.
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Honesty signals (last 7d)${C_RESET}\n"
   if ! command -v sqlite3 >/dev/null 2>&1; then
     printf "%b honesty: cast.db unavailable (sqlite3 not found)\n" "$INFO"
@@ -2856,7 +2856,7 @@ PYEOF
     # Honest degradation preserved: absent table/column → INFO, query failure
     # → INFO, no cost data → INFO, never a false OK.
     local _sc_out _sc_rc
-    _sc_out="$(python3 - "$CAST_DB_PATH" <<'PYEOF'
+    _sc_out="$(python3 -I - "$CAST_DB_PATH" <<'PYEOF'
 import sqlite3, sys, datetime
 from datetime import timezone, timedelta
 
@@ -2969,7 +2969,7 @@ PYEOF
       if [ $_mp_rc -ne 0 ]; then
         printf "%b model-pricing: unavailable (db query failed)\n" "$INFO"
       else
-        _mp_res="$(MP_MODELS="$_mp_models" python3 - "$_mp_file" <<'PY' 2>/dev/null
+        _mp_res="$(MP_MODELS="$_mp_models" python3 -I - "$_mp_file" <<'PY' 2>/dev/null
 import json, os, sys
 try:
     priced = set(json.load(open(sys.argv[1])).get("models", {})) - {"_default"}
@@ -3043,7 +3043,7 @@ PY
   fi
 
   # 13b. Ask-Your-Record (A3 U7)
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Ask-Your-Record${C_RESET}\n"
   # record_fts — FTS5 search index; optional (FTS5 may not be compiled into this sqlite build)
   local _ar_out _ar_rc _ar_count _ar_newest _are_out _are_rc _are_count
@@ -3078,13 +3078,13 @@ PY
   fi
 
   # 14. Updates Available
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
   _doctor_upgrades
 
   # 15. Agent frontmatter parses
   local frontmatter_errors
-  frontmatter_errors="$(python3 - "$CAST_AGENTS_DIR" <<'PYEOF'
+  frontmatter_errors="$(python3 -I - "$CAST_AGENTS_DIR" <<'PYEOF'
 import os, sys, re
 agents_dir = sys.argv[1]
 errors = []
@@ -3151,7 +3151,7 @@ PYEOF
       mcp_checked="${mcp_checked:+${mcp_checked}, }${mcp_bn}"
     done
     local mcp_status
-    mcp_status="$(python3 - "${mcp_scopes[@]}" <<'PYEOF'
+    mcp_status="$(python3 -I - "${mcp_scopes[@]}" <<'PYEOF'
 import json, sys, os, shutil, subprocess, urllib.parse
 merged = {}
 cwd = os.getcwd()
@@ -3265,7 +3265,7 @@ PYEOF
   local routines_dir="${CAST_REPO_DIR}/routines"
   if [ -d "$routines_dir" ]; then
     local routine_status
-    routine_status="$(python3 - "$routines_dir" <<'PYEOF'
+    routine_status="$(python3 -I - "$routines_dir" <<'PYEOF'
 import os, sys, re
 routines_dir = sys.argv[1]
 total = 0
@@ -3326,7 +3326,7 @@ PYEOF
     overall_ok=0
   else
     local snap_age_hours
-    snap_age_hours="$(python3 -c 'import os,sys,time
+    snap_age_hours="$(python3 -I -c 'import os,sys,time
 try:
     print(int((time.time()-os.path.getmtime(sys.argv[1]))//3600))
 except Exception:
@@ -3369,7 +3369,7 @@ except Exception:
       printf "%b Litestream: replica dir missing or empty (%s)\n" "$WARN" "$_ls_replica"
     else
       local _ls_lag_s="-1"
-      _ls_lag_s="$(python3 - "$_ls_replica" "$CAST_DB_PATH" <<'PYEOF'
+      _ls_lag_s="$(python3 -I - "$_ls_replica" "$CAST_DB_PATH" <<'PYEOF'
 import os, sys
 replica_dir = sys.argv[1]
 db_path = sys.argv[2]
@@ -3447,7 +3447,7 @@ PYEOF
   fi
 
   # 21. Tool-call failures (last 7d) — collected-but-read surface
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Tool-call failures (last 7d)${C_RESET}\n"
   if ! command -v sqlite3 >/dev/null 2>&1; then
     printf "%b tool_call_failures: cast.db unavailable (sqlite3 not found)\n" "$INFO"
@@ -3505,7 +3505,7 @@ PYEOF
       local _dbc_contra_count=0 _dbc_drop_count=0
       if [ -f "$_dbc_baseline" ] && command -v python3 >/dev/null 2>&1; then
         local _dbc_counts_out
-        _dbc_counts_out="$(python3 - "$_dbc_baseline" <<'PYEOF'
+        _dbc_counts_out="$(python3 -I - "$_dbc_baseline" <<'PYEOF'
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
@@ -3544,7 +3544,7 @@ PYEOF
   # Does settings.json reference any cast- hook scripts?
   local _hw_has_install_hooks=0
   if [ -f "$settings_file" ]; then
-    _hw_has_install_hooks="$(python3 - "$settings_file" <<'PYEOF'
+    _hw_has_install_hooks="$(python3 -I - "$settings_file" <<'PYEOF'
 import json, sys
 try:
     with open(sys.argv[1]) as fh:
@@ -3707,7 +3707,7 @@ PYEOF
   # Read-only: only stat + tail-reads; never writes or mutates anything.
   local _orphan_threshold_min="${CAST_ORPHAN_SESSION_MIN:-60}"
   local _orphan_out
-  _orphan_out="$(python3 - "$_orphan_threshold_min" <<'PYEOF' 2>/dev/null || echo "ERROR:python3 failed"
+  _orphan_out="$(python3 -I - "$_orphan_threshold_min" <<'PYEOF' 2>/dev/null || echo "ERROR:python3 failed"
 import os
 import json
 import time
@@ -3829,7 +3829,7 @@ PYEOF
   fi
 
   # Summary
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$overall_ok" -eq 1 ]; then
     printf "%b All checks passed\n" "$OK"
   else
@@ -3861,7 +3861,7 @@ _cmd_integrity() {
   local INFO="[${C_CYAN}--${C_RESET}]"
 
   printf "${C_BOLD}CAST Integrity${C_RESET}\n"
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
 
   # ── 1. Write guards live ──────────────────────────────────────────────────
   # Check runtime guard scripts installed to ~/.claude/scripts/.
@@ -3926,7 +3926,7 @@ _cmd_integrity() {
     printf "%b Snapshot: no snapshot found in %s — run: cast backup\n" "$WARN" "$_snap_root"
   else
     local _snap_age_h
-    _snap_age_h="$(python3 -c 'import os,sys,time
+    _snap_age_h="$(python3 -I -c 'import os,sys,time
 try:
     print(int((time.time()-os.path.getmtime(sys.argv[1]))//3600))
 except Exception:
@@ -3950,7 +3950,7 @@ except Exception:
     warn_count=$((warn_count + 1))
     printf "%b DB backups: dir not found (%s) — run: bash install.sh\n" "$WARN" "$_db_backup_dir"
   else
-    _db_bak_age_h="$(python3 -c '
+    _db_bak_age_h="$(python3 -I -c '
 import os, sys, time
 d = sys.argv[1]
 try:
@@ -4012,7 +4012,7 @@ except Exception:
       printf "%b Litestream: replica dir missing or empty (%s)\n" "$WARN" "$_ls_replica"
     else
       local _ls_lag_s="-1"
-      _ls_lag_s="$(python3 - "$_ls_replica" "${CAST_DB_PATH}" <<'INTPYEOF'
+      _ls_lag_s="$(python3 -I - "$_ls_replica" "${CAST_DB_PATH}" <<'INTPYEOF'
 import os, sys
 replica_dir = sys.argv[1]
 db_path = sys.argv[2]
@@ -4060,7 +4060,7 @@ INTPYEOF
   local _coloc_dir="${HOME}/.claude/backups"
   local _coloc_fresh_count=0
   if [[ -d "$_coloc_dir" ]]; then
-    _coloc_fresh_count="$(python3 -c '
+    _coloc_fresh_count="$(python3 -I -c '
 import os, sys, time
 d = sys.argv[1]
 threshold = time.time() - 7 * 86400
@@ -4089,7 +4089,7 @@ print(count)
   # Compute canonical ~/.claude path once — used in both check 4 (canary script
   # blast-radius sub-rung) and check 5 (evidence dir off-blast-radius check).
   local _claude_real
-  _claude_real="$(python3 -c "import os; print(os.path.realpath(os.path.expanduser('~/.claude')))" \
+  _claude_real="$(python3 -I -c "import os; print(os.path.realpath(os.path.expanduser('~/.claude')))" \
     2>/dev/null || echo "${HOME}/.claude")"
 
   # ── 4. Wipe canary loaded ─────────────────────────────────────────────────
@@ -4111,7 +4111,7 @@ print(count)
     # Daemon is loaded. Parse the plist for the script path.
     local _canary_script_path=""
     if [[ -f "$_canary_plist" ]]; then
-      _canary_script_path="$(python3 - "$_canary_plist" <<'CANPYEOF'
+      _canary_script_path="$(python3 -I - "$_canary_plist" <<'CANPYEOF'
 import plistlib, sys
 try:
     with open(sys.argv[1], 'rb') as f:
@@ -4135,7 +4135,7 @@ CANPYEOF
     else
       # Sub-rung: is the canary script inside the blast radius?
       local _canary_script_real
-      _canary_script_real="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" \
+      _canary_script_real="$(python3 -I -c "import os,sys; print(os.path.realpath(sys.argv[1]))" \
         "$_canary_script_path" 2>/dev/null || echo "$_canary_script_path")"
       local _canary_inside_blast=0
       case "$_canary_script_real" in
@@ -4162,7 +4162,7 @@ CANPYEOF
     printf "%b Evidence dir: not yet created (%s) — created on first wipe event\n" "$INFO" "$_evidence_dir"
   else
     local _evidence_real
-    _evidence_real="$(python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" \
+    _evidence_real="$(python3 -I -c "import os,sys; print(os.path.realpath(sys.argv[1]))" \
       "$_evidence_dir" 2>/dev/null || echo "$_evidence_dir")"
     # Check if evidence dir is inside blast radius
     local _inside_blast=0
@@ -4184,7 +4184,7 @@ CANPYEOF
     fi
   fi
 
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "integrity: %d ok, %d warn, %d info\n" "$ok_count" "$warn_count" "$info_count"
 }
 
@@ -4209,7 +4209,7 @@ _doctor_upgrades() {
   if [ -f "$candidates_file" ]; then
     file_exists=1
     local file_age_hours
-    file_age_hours="$(python3 -c "
+    file_age_hours="$(python3 -I -c "
 import os, sys, time
 try:
     mtime = os.path.getmtime(sys.argv[1])
@@ -4231,7 +4231,7 @@ except Exception:
   # Read last-checked timestamp for display
   local last_checked_display="unknown"
   if [ -f "$last_checked_file" ]; then
-    last_checked_display="$(python3 -c "
+    last_checked_display="$(python3 -I -c "
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
@@ -4243,7 +4243,7 @@ except Exception:
   printf "  %b Last checked: %s\n" "$INFO_SYM" "$last_checked_display"
 
   # Parse and display candidates
-  python3 - "$candidates_file" <<'PYEOF'
+  python3 -I - "$candidates_file" <<'PYEOF'
 import sys, json, os
 
 candidates_file = sys.argv[1]
@@ -4309,7 +4309,7 @@ _cmd_backup() {
   printf "${C_BOLD}Running cast backup...${C_RESET}\n"
   local snap_output
   if snap_output="$(python3 "$snapshot_script" 2>/dev/null)"; then
-    python3 -m json.tool <<< "$snap_output" 2>/dev/null || printf "%s\n" "$snap_output"
+    python3 -I -m json.tool <<< "$snap_output" 2>/dev/null || printf "%s\n" "$snap_output"
     printf "${C_GREEN}Snapshot complete.${C_RESET}\n"
   else
     printf "${C_RED}Snapshot failed.${C_RESET}\n"
@@ -4386,7 +4386,7 @@ _cmd_restore() {
   printf "${C_BOLD}Running cast restore...${C_RESET}\n"
   local restore_output
   if restore_output="$(python3 "$snapshot_script" restore "$@" 2>/dev/null)"; then
-    python3 -m json.tool <<< "$restore_output" 2>/dev/null || printf "%s\n" "$restore_output"
+    python3 -I -m json.tool <<< "$restore_output" 2>/dev/null || printf "%s\n" "$restore_output"
     printf "${C_GREEN}Restore complete.${C_RESET}\n"
   else
     [[ -n "$restore_output" ]] && printf "%s\n" "$restore_output"
@@ -4546,7 +4546,7 @@ USAGE
   [ "$dry_run" -eq 1 ] && label="Dry run"
 
   printf "${C_BOLD}CAST Tidy${C_RESET} (%s)\n" "$label"
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
 
   local plans_archived=0 events_deleted=0 logs_rotated=0 db_pruned=0
   local briefings_archived=0 status_deleted=0 checkpoints_deleted=0
@@ -4647,7 +4647,7 @@ USAGE
           local backup_timeout="${CAST_TIDY_BACKUP_TIMEOUT:-120}"
           local backup_rc=1
           if [ -f "$backup_script" ]; then
-            python3 - "$backup_script" "$backup_timeout" >/dev/null 2>&1 <<'PYEOF'
+            python3 -I - "$backup_script" "$backup_timeout" >/dev/null 2>&1 <<'PYEOF'
 import subprocess, sys
 script, timeout_s = sys.argv[1], float(sys.argv[2])
 try:
@@ -4742,7 +4742,7 @@ PYEOF
 
   # Summary table
   printf "\n%-28s %-10s %s\n" "Area" "Action" "Count"
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "%-28s %-10s %d\n" "Plans (>7 days)"          "archived" "$plans_archived"
   printf "%-28s %-10s %d\n" "Events (>3 days)"         "deleted"  "$events_deleted"
   printf "%-28s %-10s %d\n" "Logs (>7d or >1MB)"       "rotated"  "$logs_rotated"
@@ -4752,7 +4752,7 @@ PYEOF
   printf "%-28s %-10s %d\n" "Checkpoints (>7 days)"    "deleted"  "$checkpoints_deleted"
 
   local total=$((plans_archived + events_deleted + logs_rotated + db_pruned + briefings_archived + status_deleted + checkpoints_deleted))
-  printf "%s\n" "$(python3 -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   if [ "$dry_run" -eq 1 ]; then
     printf "${C_YELLOW}Dry run: %d items would be affected${C_RESET}\n" "$total"
   else
@@ -4800,7 +4800,7 @@ _cmd_review() {
 
   _require_db
 
-  python3 - "$CAST_DB_PATH" "$CAST_JSON" "$query" "$last" <<'PYEOF'
+  python3 -I - "$CAST_DB_PATH" "$CAST_JSON" "$query" "$last" <<'PYEOF'
 import sys, sqlite3, json
 
 db_path, json_mode, q, limit = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
@@ -5101,13 +5101,13 @@ _cmd_routines() {
       fi
       # Parse fields from YAML
       local name trigger_type trigger_value agent prompt_template output_dir enabled
-      name="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('name',''))" "$yaml_path")"
-      trigger_type="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('type','manual'))" "$yaml_path")"
-      trigger_value="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('value','') or '')" "$yaml_path")"
-      agent="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('agent',''))" "$yaml_path")"
-      prompt_template="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('prompt_template',''))" "$yaml_path")"
-      output_dir="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('output_dir',''))" "$yaml_path")"
-      enabled="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(1 if d.get('enabled',True) else 0)" "$yaml_path")"
+      name="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('name',''))" "$yaml_path")"
+      trigger_type="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('type','manual'))" "$yaml_path")"
+      trigger_value="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('value','') or '')" "$yaml_path")"
+      agent="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('agent',''))" "$yaml_path")"
+      prompt_template="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('prompt_template',''))" "$yaml_path")"
+      output_dir="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('output_dir',''))" "$yaml_path")"
+      enabled="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(1 if d.get('enabled',True) else 0)" "$yaml_path")"
 
       if [ -z "$name" ]; then
         _error "YAML missing required field: name"
@@ -5126,7 +5126,7 @@ _cmd_routines() {
 
       # Upsert into DB
       local upsert_json
-      upsert_json="$(python3 -c "
+      upsert_json="$(python3 -I -c "
 import json, sys
 print(json.dumps({
   'name': sys.argv[1],
@@ -5166,7 +5166,7 @@ print(json.dumps({
       "$crontab_cmd" -l 2>/dev/null | grep -vF "cast-routine-runner.sh $routine_name --from-cron" | "$crontab_cmd" - 2>/dev/null || true
       # Mark disabled in DB
       local upsert_json
-      upsert_json="$(python3 -c "
+      upsert_json="$(python3 -I -c "
 import json, sys
 print(json.dumps({'name': sys.argv[1], 'trigger_type': 'manual', 'agent_to_dispatch': '', 'prompt_template': '', 'enabled': 0}))" "$routine_name")"
       # Use update directly — only flip enabled flag
@@ -5186,8 +5186,8 @@ print(json.dumps({'name': sys.argv[1], 'trigger_type': 'manual', 'agent_to_dispa
       local yaml_file="$routines_dir/$routine_name.yaml"
       if [ -f "$yaml_file" ]; then
         local trigger_type trigger_value
-        trigger_type="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('type','manual'))" "$yaml_file")"
-        trigger_value="$(python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('value','') or '')" "$yaml_file")"
+        trigger_type="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('type','manual'))" "$yaml_file")"
+        trigger_value="$(python3 -I -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('trigger',{}).get('value','') or '')" "$yaml_file")"
         if [ "$trigger_type" = "cron" ] && [ -n "$trigger_value" ]; then
           local cron_entry="$trigger_value bash $routine_runner $routine_name --from-cron"
           ( "$crontab_cmd" -l 2>/dev/null; echo "$cron_entry" ) | sort -u | "$crontab_cmd" -
@@ -5219,7 +5219,7 @@ print(json.dumps({'name': sys.argv[1], 'trigger_type': 'manual', 'agent_to_dispa
       local errors=0
       # Check required fields
       local check_result
-      check_result="$(python3 - "$yaml_path" "${CAST_REPO_DIR:-$(cd "$(dirname "$routine_runner")/.." && pwd)}" <<'PYEOF'
+      check_result="$(python3 -I - "$yaml_path" "${CAST_REPO_DIR:-$(cd "$(dirname "$routine_runner")/.." && pwd)}" <<'PYEOF'
 import yaml, sys, os, json
 
 yaml_path = sys.argv[1]
@@ -5405,7 +5405,7 @@ _cmd_ask() {
     return 0
   fi
 
-  python3 - "$result" <<'PYEOF'
+  python3 -I - "$result" <<'PYEOF'
 import sys, json
 
 raw = sys.argv[1]
@@ -5609,7 +5609,7 @@ _cmd_stack() {
         printf "Run: cast stack refresh %s\n" "$target_path"
         exit 0
       fi
-      TARGET_PATH="$target_path" CAST_JSON="$cast_json" python3 - <<'STACK_SHOW_PY'
+      TARGET_PATH="$target_path" CAST_JSON="$cast_json" python3 -I - <<'STACK_SHOW_PY'
 import json, os, sys
 from datetime import datetime, timezone
 
@@ -5678,7 +5678,7 @@ STACK_SHOW_PY
       local result
       result="$(bash "$detect_script" "$target_path" --write --force 2>/dev/null)" || true
       if [ -n "$result" ]; then
-        printf "%s\n" "$result" | python3 -c "
+        printf "%s\n" "$result" | python3 -I -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())

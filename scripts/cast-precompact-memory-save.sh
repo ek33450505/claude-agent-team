@@ -34,7 +34,7 @@ fi
 
 # Parse session_id and transcript_path from the real PreCompact payload
 # Schema: { session_id, transcript_path, cwd, permission_mode, hook_event_name }
-PARSED="$(echo "$INPUT" | python3 -c "
+PARSED="$(echo "$INPUT" | python3 -I -c "
 import sys, json
 try:
     data = json.load(sys.stdin)

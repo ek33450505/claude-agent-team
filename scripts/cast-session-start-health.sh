@@ -28,7 +28,7 @@ export CAST_INPUT="$INPUT"
 export CAST_LAUNCHCTL_OUTPUT="$LAUNCHCTL_OUTPUT"
 export CAST_HOME="$HOME"
 
-python3 - <<'PYEOF' || _log_error "session-start-health python block failed (exit $?)"
+python3 -I - <<'PYEOF' || _log_error "session-start-health python block failed (exit $?)"
 import json, os, subprocess, sys
 
 home = os.environ.get("CAST_HOME", os.path.expanduser("~"))

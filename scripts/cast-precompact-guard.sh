@@ -15,7 +15,7 @@ _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/
 INPUT="$(cat 2>/dev/null || true)"
 
 # Always allow manual /compact — only guard auto-compaction
-TRIGGER="$(echo "$INPUT" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('trigger','auto'))" 2>/dev/null || echo "auto")"
+TRIGGER="$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('trigger','auto'))" 2>/dev/null || echo "auto")"
 if [[ "$TRIGGER" == "manual" ]]; then
   CAST_INPUT="$INPUT" python3 "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
   printf '{"decision":"allow"}\n'
@@ -114,7 +114,7 @@ fi
 # Build the reason JSON safely using python3 to avoid shell quoting issues.
 # Pass the dirty-repo list via env var so the heredoc can use 'PYEOF' (no shell expansion).
 LIST="$(printf '%s, ' "${DIRTY_REPOS[@]}" | sed 's/, $//')"
-CAST_DIRTY_LIST="$LIST" python3 - <<'PYEOF' 2>/dev/null || printf '{"decision":"block","reason":"Uncommitted changes detected"}\n'
+CAST_DIRTY_LIST="$LIST" python3 -I - <<'PYEOF' 2>/dev/null || printf '{"decision":"block","reason":"Uncommitted changes detected"}\n'
 import json, os
 dirty_list = os.environ.get('CAST_DIRTY_LIST', '')
 message = f"Uncommitted changes in: {dirty_list}. Commit before compacting (use commit agent)."

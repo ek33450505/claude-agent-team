@@ -117,7 +117,7 @@ _write_telemetry() {
   CAST_MA_HTTP_STATUS="$http_status" \
   CAST_MA_EXIT_CODE="$exit_code" \
   CAST_MA_DURATION_MS="$duration_ms" \
-  python3 - <<'PYTELEMETRY' 2>/dev/null || true
+  python3 -I - <<'PYTELEMETRY' 2>/dev/null || true
 import sys, os
 sys.path.insert(0, os.path.expanduser('~/Projects/personal/claude-agent-team/scripts'))
 sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
@@ -209,7 +209,7 @@ _curl_step() {
 }
 
 # --- Build agent definition request body ---
-DEFINE_BODY="$(CAST_MA_PROMPT="$PROMPT" CAST_MA_AGENT="$AGENT_NAME" python3 -c '
+DEFINE_BODY="$(CAST_MA_PROMPT="$PROMPT" CAST_MA_AGENT="$AGENT_NAME" python3 -I -c '
 import json, os
 name = os.environ["CAST_MA_AGENT"]
 prompt = os.environ["CAST_MA_PROMPT"]
@@ -241,7 +241,7 @@ STEP1_HTTP_STATUS="$LAST_HTTP_STATUS"
 _log "agent_defined" "http=${STEP1_HTTP_STATUS}"
 
 # Extract agent_id
-AGENT_ID="$(echo "$STEP1_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
+AGENT_ID="$(echo "$STEP1_RESPONSE" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
 
 if [[ -z "$AGENT_ID" ]]; then
   _log "error" "agent_id missing from Step 1 response"
@@ -258,7 +258,7 @@ if [[ "$DEFINE_ONLY" -eq 1 ]]; then
 fi
 
 # --- Step 2: POST /v1/environments ---
-ENV_BODY="$(CAST_MA_AGENT_ID="$AGENT_ID" python3 -c '
+ENV_BODY="$(CAST_MA_AGENT_ID="$AGENT_ID" python3 -I -c '
 import json, os
 body = {
     "agent_id": os.environ["CAST_MA_AGENT_ID"],
@@ -281,7 +281,7 @@ STEP2_HTTP_STATUS="$LAST_HTTP_STATUS"
 _log "environment_created" "http=${STEP2_HTTP_STATUS}"
 
 # Extract environment_id
-ENVIRONMENT_ID="$(echo "$STEP2_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
+ENVIRONMENT_ID="$(echo "$STEP2_RESPONSE" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
 
 if [[ -z "$ENVIRONMENT_ID" ]]; then
   _log "error" "environment_id missing from Step 2 response"
@@ -299,7 +299,7 @@ _write_agent_runs() {
   CAST_AGENT_NAME="${AGENT_NAME}" \
   CAST_STARTED_AT="${SESSION_STARTED_AT:-}" \
   CAST_AGENT_STATUS="$run_status" \
-  python3 - <<'PYEOF' 2>/dev/null || true
+  python3 -I - <<'PYEOF' 2>/dev/null || true
 import sys, os, datetime
 sys.path.insert(0, os.path.expanduser('~/Projects/personal/claude-agent-team/scripts'))
 sys.path.insert(0, os.path.expanduser('~/.claude/scripts'))
@@ -346,7 +346,7 @@ _parse_sse_lines() {
       local payload="${line#data: }"
       # Extract text delta if present; fall back to printing raw payload
       local text
-      text="$(echo "$payload" | python3 -c '
+      text="$(echo "$payload" | python3 -I -c '
 import json, sys
 try:
     obj = json.load(sys.stdin)
@@ -363,7 +363,7 @@ except Exception:
 }
 
 # --- Step 3: POST /v1/sessions ---
-SESSION_BODY="$(CAST_MA_AGENT_ID="$AGENT_ID" CAST_MA_ENV_ID="$ENVIRONMENT_ID" CAST_MA_AGENT="$AGENT_NAME" python3 -c '
+SESSION_BODY="$(CAST_MA_AGENT_ID="$AGENT_ID" CAST_MA_ENV_ID="$ENVIRONMENT_ID" CAST_MA_AGENT="$AGENT_NAME" python3 -I -c '
 import json, os
 body = {
     "agent_id": os.environ["CAST_MA_AGENT_ID"],
@@ -375,7 +375,7 @@ print(json.dumps(body))
 
 # Single cold start for both session-start values instead of two separate
 # python3 invocations (tab-separated read, mirrors cast-subagent-start-hook.sh).
-IFS=$'\t' read -r SESSION_START_MS SESSION_STARTED_AT <<<"$(python3 -c '
+IFS=$'\t' read -r SESSION_START_MS SESSION_STARTED_AT <<<"$(python3 -I -c '
 import time, datetime
 ms = int(time.time() * 1000)
 iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -397,7 +397,7 @@ if [[ "$NO_STREAM" -eq 1 ]]; then
     _write_telemetry "$MODE_LABEL" "${LAST_HTTP_STATUS:-0}" 1 0
     exit 1
   }
-  SESSION_END_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
+  SESSION_END_MS="$(python3 -I -c 'import time; print(int(time.time() * 1000))')"
   SESSION_DURATION_MS=$(( SESSION_END_MS - SESSION_START_MS ))
   STEP3_HTTP_STATUS="$LAST_HTTP_STATUS"
   _log "success" "http=${STEP3_HTTP_STATUS} duration_ms=${SESSION_DURATION_MS}"
@@ -437,7 +437,7 @@ else
   curl_sse_exit="${pipe_status[1]}"
   parse_sse_exit="${pipe_status[3]}"
 
-  SESSION_END_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
+  SESSION_END_MS="$(python3 -I -c 'import time; print(int(time.time() * 1000))')"
   SESSION_DURATION_MS=$(( SESSION_END_MS - SESSION_START_MS ))
 
   raw_sse="$(cat "$sse_tmpfile")"
@@ -490,7 +490,7 @@ fi
 
 # --- cast.db: agent_runs (Task 2.3) ---
 # Extract a brief task summary from the agent output (first 500 chars of text content)
-TASK_SUMMARY="$(echo "$STEP3_AGENT_OUTPUT" | python3 -c '
+TASK_SUMMARY="$(echo "$STEP3_AGENT_OUTPUT" | python3 -I -c '
 import sys
 raw = sys.stdin.read()
 # Try to extract text from SSE lines

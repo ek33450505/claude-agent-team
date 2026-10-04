@@ -31,7 +31,7 @@ fi
 # Final fallback: empty list — don't seed phantom agents
 KNOWN_AGENTS_LIST="${KNOWN_AGENTS_LIST:-}"
 
-CAST_PROJECT_ROOT="$PROJECT_ROOT" CAST_KNOWN_AGENTS="$KNOWN_AGENTS_LIST" python3 - <<'PYEOF' 2>/dev/null || true
+CAST_PROJECT_ROOT="$PROJECT_ROOT" CAST_KNOWN_AGENTS="$KNOWN_AGENTS_LIST" python3 -I - <<'PYEOF' 2>/dev/null || true
 import json, os, sys, glob, datetime
 from collections import defaultdict
 

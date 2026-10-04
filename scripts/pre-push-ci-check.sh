@@ -103,7 +103,7 @@ fi
 echo ""
 echo "=== Check 3: Stale package/version references ==="
 if [[ -f "$REPO_ROOT/package.json" ]]; then
-  PKG_NAME=$(python3 - "$REPO_ROOT/package.json" <<'EOF' 2>/dev/null || echo ""
+  PKG_NAME=$(python3 -I - "$REPO_ROOT/package.json" <<'EOF' 2>/dev/null || echo ""
 import json, sys
 try:
     with open(sys.argv[1]) as f:
