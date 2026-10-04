@@ -27,6 +27,145 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# 0. SECURITY (2026-10-03): hostile repo-local config must not execute during the dirty
+#    check. The hook runs OUTSIDE the Bash sandbox over agent-writable project roots.
+#    Marker-file tests: planted fsmonitor / clean filter / process filter (dotted+mixed-case
+#    driver name included) must NOT run, and dirty detection must still be correct.
+# ---------------------------------------------------------------------------
+_pc_marker_script() { # name [body]
+  printf '#!/bin/sh\ntouch "%s/fired-%s"\n%s\n' "$PC_MARK" "$1" "${2:-exit 0}" > "$PC_MARK/$1.sh"
+  chmod +x "$PC_MARK/$1.sh"
+}
+_pc_fired() { find "$PC_MARK" -name 'fired-*' | wc -l | tr -d ' '; }
+_pc_hostile_repo() {
+  PC_MARK="$BATS_TEST_TMPDIR/markers"
+  PC_REPO="$BATS_TEST_TMPDIR/hostile"
+  mkdir -p "$PC_MARK" "$PC_REPO"
+  _pc_marker_script filter cat
+  _pc_marker_script process
+  _pc_marker_script fsmonitor
+  _pc_marker_script eqfilter cat
+  git init -q --initial-branch=main "$PC_REPO"
+  git -C "$PC_REPO" config user.email "test@test.com"
+  git -C "$PC_REPO" config user.name "Test"
+  printf 'a.txt filter=x\nb.txt filter=Y.z\nc.txt filter=a=b\n' > "$PC_REPO/.gitattributes"
+  echo eq > "$PC_REPO/c.txt"
+  echo hello > "$PC_REPO/a.txt"
+  echo world > "$PC_REPO/b.txt"
+  touch -t 202001010000 "$PC_REPO/.gitattributes" "$PC_REPO/a.txt" "$PC_REPO/b.txt" "$PC_REPO/c.txt"
+  git -C "$PC_REPO" add -A
+  git -C "$PC_REPO" commit -q -m init
+  # hostile config planted AFTER the base commit
+  git -C "$PC_REPO" config filter.x.clean "$PC_MARK/filter.sh"
+  git -C "$PC_REPO" config filter.Y.z.process "$PC_MARK/process.sh"
+  git -C "$PC_REPO" config filter.Y.z.required true
+  git -C "$PC_REPO" config core.fsmonitor "$PC_MARK/fsmonitor.sh"
+  git -C "$PC_REPO" config "filter.a=b.clean" "$PC_MARK/eqfilter.sh"
+}
+_pc_run_hook() {
+  run bash -c "echo '{}' | CAST_EXTRA_PROJECT='$PC_REPO' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
+}
+
+@test "PreCompact guard hostile repo: filter driver name containing '=' is blanked (no planted program runs)" {
+  _pc_hostile_repo
+  touch "$PC_REPO/c.txt"
+  git -C "$PC_REPO" status --porcelain >/dev/null 2>&1 || true
+  [ -e "$PC_MARK/fired-eqfilter" ] # control
+  rm -f "$PC_MARK"/fired-*
+  touch -t 202201010000 "$PC_REPO/c.txt" # control refreshed the index; re-dirty
+  _pc_run_hook
+  assert_success
+  assert_output --partial '"decision":"allow"'
+  [ "$(_pc_fired)" = "0" ]
+}
+
+@test "PreCompact guard hostile repo: submodule-local clean filter on a stat-dirty file does not run" {
+  PC_MARK="$BATS_TEST_TMPDIR/markers"
+  PC_REPO="$BATS_TEST_TMPDIR/par"
+  mkdir -p "$PC_MARK" "$BATS_TEST_TMPDIR/subsrc"
+  _pc_marker_script subfilter cat
+  git init -q --initial-branch=main "$BATS_TEST_TMPDIR/subsrc"
+  git -C "$BATS_TEST_TMPDIR/subsrc" config user.email t@t
+  git -C "$BATS_TEST_TMPDIR/subsrc" config user.name t
+  printf '* filter=sf\n' > "$BATS_TEST_TMPDIR/subsrc/.gitattributes"
+  echo f > "$BATS_TEST_TMPDIR/subsrc/f.txt"
+  git -C "$BATS_TEST_TMPDIR/subsrc" add -A
+  git -C "$BATS_TEST_TMPDIR/subsrc" commit -q -m i
+  git init -q --initial-branch=main "$PC_REPO"
+  git -C "$PC_REPO" config user.email t@t
+  git -C "$PC_REPO" config user.name t
+  git -C "$PC_REPO" -c protocol.file.allow=always submodule add -q "$BATS_TEST_TMPDIR/subsrc" sub >/dev/null 2>&1
+  git -C "$PC_REPO" commit -q -m i
+  git -C "$PC_REPO/sub" config filter.sf.clean "$PC_MARK/subfilter.sh"
+  touch -t 202101010000 "$PC_REPO/sub/f.txt" # stat-dirty inside the submodule
+  git -C "$PC_REPO" status --porcelain >/dev/null 2>&1 || true
+  [ -e "$PC_MARK/fired-subfilter" ] # control
+  rm -f "$PC_MARK"/fired-*
+  touch -t 202201010000 "$PC_REPO/sub/f.txt"
+  _pc_run_hook
+  assert_success
+  [ "$(_pc_fired)" = "0" ]
+}
+
+@test "PreCompact guard hostile repo: inherited GIT_CONFIG_PARAMETERS fsmonitor does not run" {
+  PC_MARK="$BATS_TEST_TMPDIR/markers"
+  PC_REPO="$BATS_TEST_TMPDIR/plain"
+  mkdir -p "$PC_MARK" "$PC_REPO"
+  _pc_marker_script fsmonitor
+  git init -q --initial-branch=main "$PC_REPO"
+  git -C "$PC_REPO" config user.email t@t
+  git -C "$PC_REPO" config user.name t
+  echo x > "$PC_REPO/a.txt"
+  git -C "$PC_REPO" add -A
+  git -C "$PC_REPO" commit -q -m i
+  export GIT_CONFIG_PARAMETERS="'core.fsmonitor=$PC_MARK/fsmonitor.sh'"
+  git -C "$PC_REPO" status --porcelain >/dev/null 2>&1 || true
+  [ -e "$PC_MARK/fired-fsmonitor" ] # control: env-injected fsmonitor fires on raw git
+  rm -f "$PC_MARK"/fired-*
+  _pc_run_hook
+  assert_success
+  assert_output --partial '"decision":"allow"'
+  [ "$(_pc_fired)" = "0" ]
+}
+
+@test "PreCompact guard hostile repo: stat-dirty-only repo is allowed and no planted program runs" {
+  _pc_hostile_repo
+  touch "$PC_REPO/a.txt" "$PC_REPO/b.txt" # stat-dirty, content identical
+  # Control: raw porcelain status DOES execute the planted programs (fixture is hostile)
+  git -C "$PC_REPO" status --porcelain >/dev/null 2>&1 || true
+  [ -e "$PC_MARK/fired-fsmonitor" ]
+  [ -e "$PC_MARK/fired-filter" ]
+  [ -e "$PC_MARK/fired-process" ]
+  rm -f "$PC_MARK"/fired-*
+  touch -t 202201010000 "$PC_REPO/a.txt" "$PC_REPO/b.txt"
+  _pc_run_hook
+  assert_success
+  assert_output --partial '"decision":"allow"'
+  [ "$(_pc_fired)" = "0" ]
+}
+
+@test "PreCompact guard hostile repo: modified tracked file is still detected and no planted program runs" {
+  _pc_hostile_repo
+  echo changed >> "$PC_REPO/a.txt"
+  touch "$PC_REPO/b.txt"
+  _pc_run_hook
+  assert_success
+  assert_output --regexp '"decision":[[:space:]]*"block"'
+  assert_output --partial "$PC_REPO"
+  [ "$(_pc_fired)" = "0" ]
+}
+
+@test "PreCompact guard hostile repo: untracked file is still detected and no planted program runs" {
+  _pc_hostile_repo
+  echo new > "$PC_REPO/new.txt"
+  _pc_run_hook
+  assert_success
+  assert_output --regexp '"decision":[[:space:]]*"block"'
+  assert_output --partial "$PC_REPO"
+  [ "$(_pc_fired)" = "0" ]
+}
+
+# ---------------------------------------------------------------------------
 # 1. allow path: only project visible is a clean git repo
 # ---------------------------------------------------------------------------
 @test "PreCompact guard: returns allow decision when no dirty repos" {
