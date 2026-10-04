@@ -46,7 +46,7 @@ _pc_hostile_repo() {
   _pc_marker_script fsmonitor
   _pc_marker_script eqfilter cat
   git init -q --initial-branch=main "$PC_REPO"
-  git -C "$PC_REPO" config user.email "test@test.com"
+  git -C "$PC_REPO" config user.email "test@example.com"
   git -C "$PC_REPO" config user.name "Test"
   printf 'a.txt filter=x\nb.txt filter=Y.z\nc.txt filter=a=b\n' > "$PC_REPO/.gitattributes"
   echo eq > "$PC_REPO/c.txt"
@@ -175,7 +175,7 @@ _pc_run_hook() {
   (
     cd "$clean_repo"
     git init -q
-    git config user.email "test@test.com"
+    git config user.email "test@example.com"
     git config user.name "Test"
     echo "init" > README.md
     git add README.md
@@ -197,7 +197,7 @@ _pc_run_hook() {
   (
     cd "$dirty_repo"
     git init -q
-    git config user.email "test@test.com"
+    git config user.email "test@example.com"
     git config user.name "Test"
     echo "init" > README.md
     git add README.md

@@ -179,7 +179,7 @@ run_install_personal() {
   rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
+  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
     -c core.hooksPath=/dev/null commit -q -m "init"
 
   # Now dirty the tree by modifying a tracked file
@@ -206,7 +206,7 @@ run_install_personal() {
   rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
+  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
     -c core.hooksPath=/dev/null commit -q -m "init"
 
   # Tree is clean — install.sh should exit 0 (guard passes through)
@@ -226,7 +226,7 @@ run_install_personal() {
   rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
+  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
     -c core.hooksPath=/dev/null commit -q -m "init"
   echo "# force test" >> "$tmp_repo/scripts/gen-stats.sh"
   git -C "$tmp_repo" add scripts/gen-stats.sh
@@ -247,7 +247,7 @@ make_clean_tmp_repo() {
   rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
   git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@test.com" -c user.name="Test" \
+  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
     -c core.hooksPath=/dev/null commit -q -m "init"
   echo "$tmp_repo"
 }
