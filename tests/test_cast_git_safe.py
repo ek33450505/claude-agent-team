@@ -336,12 +336,23 @@ class RunBehaviour(GitSafeTestBase):
         self.assertEqual(r.stdout.strip(), '.git')
 
     def test_14_inherited_posixly_correct_does_not_change_bash_semantics(self) -> None:
+        # Probe bash version to determine if POSIXLY_CORRECT disables process substitution.
+        bash_version_result = subprocess.run(['/bin/bash', '-c', 'echo $((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1]))'],
+                                            capture_output=True, text=True, timeout=10)
+        try:
+            bash_version = int(bash_version_result.stdout.strip())
+        except ValueError:
+            bash_version = 0  # unknown version: fail closed, assert the control
+
         with mock.patch.dict(os.environ, {'POSIXLY_CORRECT': '1'}):
-            # CONTROL: in posix mode the lib's process substitution no longer works.
+            # CONTROL: in posix mode the lib's process substitution is disabled in bash < 5.1.
+            # On macOS /bin/bash 3.2 this breaks the lib; on Linux bash 5.x it does not, so the
+            # control only fires for bash versions < 501.
             c = subprocess.run(['/bin/bash', '-c', 'source "$1" && cast_git_safe "$2" rev-parse --git-dir',
                                 '_', cast_git_safe.LIB, self.repo],
                                env=dict(os.environ), capture_output=True, text=True)
-            self.assertNotEqual(c.returncode, 0, f'control: POSIXLY_CORRECT did not break the lib: {c.stdout!r}')
+            if bash_version < 501:
+                self.assertNotEqual(c.returncode, 0, f'control: POSIXLY_CORRECT did not break the lib: {c.stdout!r}')
             r = cast_git_safe.run(self.repo, ['rev-parse', '--git-dir'])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), '.git')
