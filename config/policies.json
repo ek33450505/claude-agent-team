@@ -31,6 +31,30 @@
       "requires_agent": "security",
       "scope": "session",
       "severity": "block"
+    },
+    {
+      "id": "githooks-require-security",
+      "description": "Git hooks (.githooks/ = core.hooksPath) run unsandboxed on the next commit/push; edits require a security review this session",
+      "path_pattern": "(^|/)\\.githooks/",
+      "requires_agent": "security",
+      "scope": "session",
+      "severity": "block"
+    },
+    {
+      "id": "git-internals-require-security",
+      "description": "Git internals (.git/config, hooks, info, and a gitfile .git pointer) execute or steer unsandboxed git; file-tool edits require a security review this session",
+      "path_pattern": "(^|/)\\.git(/|$)",
+      "requires_agent": "security",
+      "scope": "session",
+      "severity": "block"
+    },
+    {
+      "id": "git-global-config-require-security",
+      "description": "Global git config (~/.gitconfig, ~/.config/git/) can define fsmonitor/hooksPath/filters that run unsandboxed for every repo",
+      "path_pattern": "(^|/)\\.gitconfig$|(^|/)\\.config/git/",
+      "requires_agent": "security",
+      "scope": "session",
+      "severity": "block"
     }
   ]
 }
