@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "ConfigChange": [
+      {
+        "matcher": "project_settings|local_settings",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-config-change-guard.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|Bash|Agent|Task|WebFetch|WebSearch|NotebookEdit|mcp__.*",

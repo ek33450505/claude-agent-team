@@ -137,7 +137,10 @@
       "Edit(~/.claude/settings.json)",
       "Edit(~/.claude/settings.local.json)",
       "Edit(~/.claude/managed-settings.d/**)",
-      "Edit(~/.claude/scripts/**)"
+      "Edit(~/.claude/scripts/**)",
+      "Edit(~/.claude/logs/**)",
+      "Edit(**/.claude/settings*.json)",
+      "Edit(//**/.claude/settings*.json)"
     ],
     "ask": [
       "mcp__neon__delete*",
@@ -337,6 +340,18 @@
         ]
       }
     ],
+    "ConfigChange": [
+      {
+        "matcher": "project_settings|local_settings",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-config-change-guard.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "WebFetch|WebSearch",
@@ -509,14 +524,6 @@
             "command": "bash ~/.claude/scripts/cast-post-compact-hook.sh",
             "timeout": 5,
             "async": true
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "Context was automatically compacted. Briefly let the user know this happened, summarize the current task state, and continue where you left off."
           }
         ]
       }

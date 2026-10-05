@@ -101,16 +101,20 @@ Rotation: files rotate at 5MB → routing-log.jsonl.1, routing-log.jsonl.2
 
 ### agent-status/ Schema
 
-Location: `~/.claude/agent-status/<agent>-<timestamp>.json`
+Location: `~/.claude/agent-status/<agent>-<timestamp>-<pid>-<hex>.json` (the pid + random suffix keeps same-second records distinct; written via a no-follow temp file + `os.replace`)
 
 | Field | Type | Description |
 |---|---|---|
-| agent | string | Agent name |
+| agent | string | Agent name as dispatched (display only — may be a `__label` name) |
 | status | string | DONE \| DONE_WITH_CONCERNS \| BLOCKED \| NEEDS_CONTEXT |
 | summary | string | One-sentence summary |
 | concerns | string \| null | Details if DONE_WITH_CONCERNS |
 | recommended_agents | string \| null | Pipe-separated agent recommendations |
 | timestamp | ISO8601 string | When status was written |
+| session_id | string (optional) | Main-session id from the SubagentStop payload; present only on hook-written records |
+| agent_type | string (optional) | Roster type read from Claude Code's subagent sidecar (`agent-<id>.meta.json`), never the dispatch name; present only when trusted |
+
+The `requires_agent` policy gate (`cast-git-guard.py`) trusts **only** `session_id` + `agent_type`, matched exactly against the current PreToolUse session and the required agent; the filename and `agent` are display-only, and records without both fields (e.g. agent-written via `cast_write_status`) never clear a gate. Since 2026-10-05 (S3d, PR #416) the directory is also protected by a native `Edit(~/.claude/agent-status/**)` deny.
 
 ### task-board.json Schema
 

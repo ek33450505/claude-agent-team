@@ -139,6 +139,18 @@
         ]
       }
     ],
+    "ConfigChange": [
+      {
+        "matcher": "project_settings|local_settings",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-config-change-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "WebFetch|WebSearch",
@@ -311,14 +323,6 @@
             "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-post-compact-hook.sh\"",
             "timeout": 5,
             "async": true
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "Context was automatically compacted. Briefly let the user know this happened, summarize the current task state, and continue where you left off."
           }
         ]
       }

@@ -3,6 +3,8 @@
 # Archives the session transcript BEFORE compaction to an off-blast-radius location.
 # Reads the real PreCompact payload fields: session_id, transcript_path.
 # Falls open (allows compaction) on any error.
+# Proceed contract: print NOTHING on stdout and exit 0 (top-level "decision" accepts only
+# "approve"|"block"; "allow" is rejected by Claude Code's hook-output validation).
 
 # Restrictive umask — archive dir + files inherit owner-only perms
 # (transcripts may contain pasted secrets / env values from the conversation)
@@ -28,7 +30,6 @@ INPUT="$(cat 2>/dev/null || true)"
 
 # Fail-open on empty or malformed input
 if [[ -z "$INPUT" ]]; then
-  echo '{"decision":"allow"}'
   exit 0
 fi
 
@@ -55,7 +56,6 @@ SESSION_ID="${SESSION_ID//[^A-Za-z0-9_-]/_}"
 
 # Fail-open if transcript_path is absent, empty, or unreadable
 if [[ -z "$TRANSCRIPT_PATH" || ! -r "$TRANSCRIPT_PATH" ]]; then
-  echo '{"decision":"allow"}'
   exit 0
 fi
 
@@ -76,6 +76,5 @@ else
   _log_error "Failed to create archive directory $ARCHIVE_DIR"
 fi
 
-# Always allow compaction to proceed (this is a save hook, not a blocking hook)
-echo '{"decision":"allow"}'
+# Always allow compaction to proceed (this is a save hook, not a blocking hook): no stdout.
 exit 0

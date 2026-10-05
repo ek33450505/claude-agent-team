@@ -173,14 +173,7 @@ run_install_personal() {
   # without polluting the real working tree.
   # core.hooksPath=/dev/null prevents CAST pre-commit hooks from firing in the fixture.
   local tmp_repo
-  tmp_repo="$(mktemp -d)"
-  cp -R "$REPO_DIR/." "$tmp_repo/"
-  # Discard any inherited .git (e.g., CI's detached pull/N/merge state) so init creates a fresh repo.
-  rm -rf "$tmp_repo/.git"
-  git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
-  git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
-    -c core.hooksPath=/dev/null commit -q -m "init"
+  tmp_repo="$(make_clean_tmp_repo)"
 
   # Now dirty the tree by modifying a tracked file
   echo "# test change" >> "$tmp_repo/scripts/gen-stats.sh"
@@ -192,60 +185,46 @@ run_install_personal() {
 
   # Verify error message mentions "uncommitted changes"
   [[ "$output" =~ "uncommitted changes" ]]
-
-  rm -rf "$tmp_repo"
 }
 
 @test "Dirty-tree guard: allows install.sh to proceed with clean tree" {
   # Use a temp git repo with a clean tree — guard should not fire.
   # core.hooksPath=/dev/null prevents CAST pre-commit hooks from firing in the fixture.
   local tmp_repo
-  tmp_repo="$(mktemp -d)"
-  cp -R "$REPO_DIR/." "$tmp_repo/"
-  # Discard any inherited .git (e.g., CI's detached pull/N/merge state) so init creates a fresh repo.
-  rm -rf "$tmp_repo/.git"
-  git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
-  git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
-    -c core.hooksPath=/dev/null commit -q -m "init"
+  tmp_repo="$(make_clean_tmp_repo)"
 
   # Tree is clean — install.sh should exit 0 (guard passes through)
   run bash "$tmp_repo/install.sh"
   [ "$status" -eq 0 ]
-
-  rm -rf "$tmp_repo"
 }
 
 @test "Dirty-tree guard: CAST_INSTALL_FORCE=1 bypasses guard with dirty tree" {
   # Use a temp git repo and make it dirty.
   # core.hooksPath=/dev/null prevents CAST pre-commit hooks from firing in the fixture.
   local tmp_repo
-  tmp_repo="$(mktemp -d)"
-  cp -R "$REPO_DIR/." "$tmp_repo/"
-  # Discard any inherited .git (e.g., CI's detached pull/N/merge state) so init creates a fresh repo.
-  rm -rf "$tmp_repo/.git"
-  git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
-  git -C "$tmp_repo" add -A
-  git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
-    -c core.hooksPath=/dev/null commit -q -m "init"
+  tmp_repo="$(make_clean_tmp_repo)"
   echo "# force test" >> "$tmp_repo/scripts/gen-stats.sh"
   git -C "$tmp_repo" add scripts/gen-stats.sh
 
   # With CAST_INSTALL_FORCE=1, install.sh should succeed despite dirty tree
   run env CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
   [ "$status" -eq 0 ]
-
-  rm -rf "$tmp_repo"
 }
 
 # Helper: build a clean throwaway git repo copy of the source tree; echoes its path.
 # core.hooksPath=/dev/null prevents CAST pre-commit hooks from firing in the fixture.
 make_clean_tmp_repo() {
   local tmp_repo
-  tmp_repo="$(mktemp -d)"
+  # Under bats' per-test dir (bats owns cleanup). Detached git auto-maintenance after the big
+  # commit can write into .git during teardown ("rm: .git: Directory not empty", main 2026-10-05).
+  tmp_repo="$(mktemp -d "$BATS_TEST_TMPDIR/repo.XXXXXX")"
   cp -R "$REPO_DIR/." "$tmp_repo/"
+  # Discard any inherited .git (CI's detached pull/N/merge state).
   rm -rf "$tmp_repo/.git"
   git -C "$tmp_repo" -c core.hooksPath=/dev/null init -q
+  git -C "$tmp_repo" config gc.auto 0
+  git -C "$tmp_repo" config maintenance.auto false
+  git -C "$tmp_repo" config maintenance.autoDetach false
   git -C "$tmp_repo" add -A
   git -C "$tmp_repo" -c user.email="test@example.com" -c user.name="Test" \
     -c core.hooksPath=/dev/null commit -q -m "init"
@@ -264,8 +243,6 @@ make_clean_tmp_repo() {
   # Guard runs before any deploy step: nothing may have been written to the temp HOME.
   [ ! -e "$HOME/.claude/managed-settings.d" ]
   [ ! -e "$HOME/.claude/agents" ]
-
-  rm -rf "$tmp_repo"
 }
 
 @test "Dirty-tree guard: aborts on an untracked new file in managed-settings.d/ (guard covers untracked)" {
@@ -279,8 +256,6 @@ make_clean_tmp_repo() {
   [ "$status" -eq 1 ]
   [[ "$output" =~ "uncommitted changes" ]]
   [ ! -e "$HOME/.claude/managed-settings.d" ]
-
-  rm -rf "$tmp_repo"
 }
 
 @test "Dirty-tree guard: CAST_INSTALL_FORCE=1 bypasses guard with dirty managed-settings.d/" {
@@ -292,8 +267,6 @@ make_clean_tmp_repo() {
   run env CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
   [ "$status" -eq 0 ]
   [ -f "$HOME/.claude/managed-settings.d/99-untracked.json" ]
-
-  rm -rf "$tmp_repo"
 }
 
 @test "Dirty-tree guard: every deploy-source path is guarded (untracked file and tracked edit, listing names the file)" {
@@ -334,7 +307,6 @@ make_clean_tmp_repo() {
     fi
   done
 
-  rm -rf "$tmp_repo"
   [ -z "$failures" ] || { echo "unguarded rows:$failures" >&2; return 1; }
 }
 
@@ -353,8 +325,6 @@ make_clean_tmp_repo() {
   [[ "$output" == *"Commit or remove"* ]]
   # CAST forbids stash: the footer must not recommend it.
   [[ "$output" != *"stash"* ]]
-
-  rm -rf "$tmp_repo"
 }
 
 @test "Dirty-tree guard: outside a git work tree fails closed with a message (not silently)" {

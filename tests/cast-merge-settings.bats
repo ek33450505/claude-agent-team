@@ -242,7 +242,7 @@ print('ok')
   assert_success
 }
 
-@test "11-deny.json denies Edit on agent-status, config, sidecars, settings and scripts" {
+@test "11-deny.json denies Edit on agent-status, config, sidecars, settings, scripts, logs and project settings" {
   DENY_FRAG="$REPO_DIR/managed-settings.d/11-deny.json"
   [ -f "$DENY_FRAG" ]
   run env DENY_FRAG="$DENY_FRAG" python3 -I -c '
@@ -257,6 +257,9 @@ required = [
     "Edit(~/.claude/settings.local.json)",
     "Edit(~/.claude/managed-settings.d/**)",
     "Edit(~/.claude/scripts/**)",
+    "Edit(~/.claude/logs/**)",
+    "Edit(**/.claude/settings*.json)",
+    "Edit(//**/.claude/settings*.json)",
 ]
 missing = [r for r in required if r not in deny]
 if missing:

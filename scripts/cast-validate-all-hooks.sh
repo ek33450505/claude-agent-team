@@ -291,11 +291,21 @@ top_keys = set(data.keys())
 allowed = KNOWN_TOP_LEVEL.get(event, None)
 status = 0
 
+# Top-level decision (EVERY event): Claude Code accepts only "approve" or "block"
+# ("decision: Invalid option: expected one of approve|block"); to proceed, print nothing.
+# Checked first so a failure suppresses the "[ok] shape valid" lines below.
+# Keep in sync with the identical check in cast-validate-hook-contracts.sh.
+if "decision" in data:
+    decision = data.get("decision")
+    if decision not in ("approve", "block"):
+        print(f"[fail] {label} ({event}) — invalid top-level decision value {decision!r} (Claude Code accepts only approve|block)", file=sys.stderr)
+        status = max(status, 2)
+
 if allowed is not None:
     unknown = top_keys - allowed
     if unknown:
         for k in sorted(unknown):
-            print(f"[warn] {label} ({event}) — unknown key '{k}'", file=sys.stderr)
+            print(f"[warn] {label} ({event}) — unknown key {k!r}", file=sys.stderr)
         status = max(status, 1)
 
 if "hookSpecificOutput" in data:
@@ -305,7 +315,7 @@ if "hookSpecificOutput" in data:
         sys.exit(2)
     emitted_name = hso.get("hookEventName", "")
     if emitted_name != event:
-        print(f"[fail] {label} ({event}) — wrong hookEventName '{emitted_name}' (expected '{event}')", file=sys.stderr)
+        print(f"[fail] {label} ({event}) — wrong hookEventName {emitted_name!r} (expected '{event}')", file=sys.stderr)
         sys.exit(2)
     elif "additionalContext" not in hso:
         print(f"[warn] {label} ({event}) — hookSpecificOutput missing 'additionalContext'", file=sys.stderr)

@@ -141,6 +141,14 @@ one-time `settings.json` edit from commit `73d0db1`).
 | `Bash(rm -rf ~)` | **B2 destructive belt** — exact home-root wipe (belt against catastrophic single-arg form) |
 | `Bash(rm -rf ~/)` | **B2 destructive belt** — exact home-root wipe with trailing slash |
 | `Bash(rm -rf ~/.claude*)` | **B2 destructive belt** — CAST runtime wipe (full .claude subtree) |
+| `Edit(~/.claude/agent-status/**)` | **S3d gate integrity** — no forged `requires_agent` completion records via Write/Edit/NotebookEdit |
+| `Edit(~/.claude/config/**)` | **S3d gate integrity** — installed `policies.json` / `egress-policy.json` cannot be emptied or rewritten |
+| `Edit(~/.claude/projects/**/subagents/**)` | **S3d gate integrity** — subagent sidecars/transcripts (the gate's roster-type and handback-verdict sources) |
+| `Edit(~/.claude/settings.json)` / `Edit(~/.claude/settings.local.json)` | **S3d self-protection** — the denies themselves cannot be removed by an agent tool (Claude Code's own `/config`, `/model` writes are in-process and unaffected) |
+| `Edit(~/.claude/managed-settings.d/**)` | **S3d self-protection** — live settings fragments; change them in the repo and reinstall |
+| `Edit(~/.claude/scripts/**)` | **S3d self-protection** — every CAST hook executes from here; edit the repo copy and reinstall |
+| `Edit(~/.claude/logs/**)` | **S3d F2** — `audit.jsonl` and hook logs cannot be rewritten by an agent tool |
+| `Edit(**/.claude/settings*.json)` / `Edit(//**/.claude/settings*.json)` | **S3d F1** — a project's `env` and `disableAllHooks` hot-reload mid-session and reach (or switch off) every user-level CAST hook; the `//` form also covers a subdirectory or worktree cwd |
 
 > **Why NOT `rm -rf ~*`:** the `~*` prefix glob matched `rm -rf ~/Projects/foo/node_modules`
 > and other legitimate deep-path deletes (the command-guard intentionally allows those).
@@ -196,6 +204,63 @@ carries the merged result (kept in sync manually — `cast-merge-settings.sh` re
 `~/.claude/managed-settings.d`, not the repo fragments). The `11-deny.json` fragment is
 CAST-owned in `install.sh` (pattern `11-deny.json` in the overwrite case), so reinstall
 propagates security updates to existing deployments.
+
+## The `requires_agent` unblock gate: session-bound, roster-typed records (S3d, 2026-10-05)
+
+`config/policies.json` block policies (`.githooks/`, `.git/`, `.env`, `src/auth/`, global gitconfig → `security`;
+`.github/workflows/` → `devops`) clear only after the required agent has run. Until PR #416 the gate accepted ANY
+`~/.claude/agent-status/<agent>-*` file with a DONE status from ANY session. Live-probed: a read-only `Explore`
+dispatched with `name: "security"` minted a security pass, and another terminal's record unblocked this one.
+
+**Now:**
+- The SubagentStop hook writes `session_id` + `agent_type`. The type comes from Claude Code's `agent-<id>.meta.json`
+  sidecar. A non-empty `customAgentType` is trusted. A teammate (`taskKind: in_process_teammate`, or `teamName`
+  set) without one is untrusted, because its `agentType` is the dispatch name; this covers e.g. an Explore named
+  `security`. Otherwise `agentType` is used, unless it equals `name`.
+- `cast-git-guard.py` clears a policy only on a record whose content matches the PreToolUse `session_id` and the
+  required agent exactly. The newest matching record wins, and a same-session BLOCKED supersedes an earlier DONE.
+- The verdict is parsed asymmetrically: blocking verdicts are read anywhere, passing ones only from an anchored,
+  unfenced `Status:` line or a `json status` fence. Async agents that end with `SubagentHandback` produce no
+  `last_assistant_message`, so their verdict is read from that call in the agent's own transcript.
+- The native `Edit` denies above keep agent tools out of every gate input.
+
+**Live-verified 2026-10-05** (post-install, this repo):
+
+| Probe | Result |
+|---|---|
+| Gated `.githooks/` Write with no review | BLOCKED |
+| After an Explore named `security-2` | BLOCKED |
+| After a real `security` review ending `Status: SAFE` (not a contract verdict) | BLOCKED |
+| After a real unnamed `security` review | ALLOWED |
+| Write/Edit/Bash-redirect into `agent-status`, `config`, `scripts`, sidecars, incl. `~/.Claude/`, `/./`, `/../` | DENIED |
+
+**What it attests:** a `<required_agent>`-typed subagent finished with a passing verdict in THIS session. It does
+not attest that the review covered this particular edit. DONE_WITH_CONCERNS still unblocks; the concerns go to
+the orchestrator.
+
+**Residuals:**
+- With the sandbox OFF, Bash or subprocess writes can still forge a record or a sidecar.
+- A project-level `.claude/agents/security.md` shadows the roster agent; identity is a name.
+- Project `.claude/settings*.json` writes (S3d follow-up F1): see the next section.
+- ~~A slow SubagentStop telemetry stage can hit the 15 s hook timeout before the record is written (S3d-5).~~
+  Fixed: a `--gate-only` pass writes the record before any telemetry stage, and the claimed-work verifier is linear
+  on agent output (was 50–100 s on 600 KB).
+
+## Project settings files: `env` and `disableAllHooks` (S3d F1, 2026-10-05)
+
+Claude Code reloads a project's `.claude/settings.json` and `.claude/settings.local.json` mid-session. Their `env`
+block "reaches every subprocess Claude Code starts", hooks included. Their `disableAllHooks: true` disables user
+hooks, and every CAST guard is a user hook. Project `env` is not filtered for `PATH`, `BASH_ENV`, `BASH_FUNC_*`,
+`LD_*`, `DYLD_*`, `PYTHON*` or `GIT_*`. A write to that file could therefore switch off every guard or run code inside
+every hook. Before this, only the auto-mode classifier stood in the way, and `bypassPermissions` allows the write.
+
+| Layer | Covers | Doesn't cover |
+|---|---|---|
+| Native deny `Edit(**/.claude/settings*.json)` + `Edit(//**/…)` | Write/Edit/NotebookEdit and Bash's recognized writers, in every mode | `ln -s`, `cp`, `mv`, `dd`, interpreters while the sandbox is off |
+| `ConfigChange` guard (`cast-config-change-guard.sh`, matcher `project_settings\|local_settings`) | Any writer, mid-session: blocks a change that sets `disableAllHooks` or an exec/guard/egress-relevant `env` name (denylist + `CAST_`/`CLAUDE_`/`ANTHROPIC_`/`NODE_`/`AWS_`/`GOOGLE_`/`LD_`/`DYLD_`/`PYTHON`/`GIT_`/`BASH_FUNC_` prefixes, any non-identifier key; a benign `NODE_ENV` also blocks mid-session, by design). Fails closed on anything it can't evaluate, with a 2.5 s self-deadline inside the 5 s hook timeout. | A blocked file stays on disk and applies at the next startup (no startup event). The content is judged at hook-read time (TOCTOU), and only an OS deny-write closes that. Other keys (`hooks`, `statusLine`, helpers, `permissions`, `sandbox`) aren't judged. |
+
+The denylist is defence in depth, not an inventory. A block shows no message to the user or to Claude. Claude
+Code writes only a debug-log line, and the guard appends a names-only line to `~/.claude/logs/config-change-guard.jsonl`.
 
 ## Sandbox write-denies for git-executed paths (2026-10-04, U6b/U6c)
 
