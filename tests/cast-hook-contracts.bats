@@ -667,3 +667,97 @@ _probe_field() { # file key
   [ ! -e "$out" ] # no hook ran
   [ "$(find "$tmpd" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# V3 (2026-10-05): NUL-byte capture, timed-out hooks still validated, python3 hooks
+# executed (not "script not found: python3"), common JSON fields / event-scoped
+# top-level keys, exec-form + 126/127 handling. Keep in sync with
+# cast-validate-all-hooks.bats.
+# ---------------------------------------------------------------------------
+
+# Plant a raw hook script (body $2 after a bash shebang) registered under event $1 in a
+# fake HOME and run the validator against it (sets $status/$output, stderr merged).
+_run_raw_hook() { # event body
+  local event="$1" body="$2"
+  local hook="$TEST_TMPDIR/raw-hook.sh" fake_home="$TEST_TMPDIR/fh_raw_$event"
+  printf '#!/usr/bin/env bash\n%s\n' "$body" >"$hook"
+  chmod +x "$hook"
+  mkdir -p "$fake_home/.claude"
+  printf '{"hooks":{"%s":[{"id":"raw","hooks":[{"type":"command","command":"bash %s"}]}]}}\n' "$event" "$hook" >"$fake_home/.claude/settings.json"
+  run env HOME="$fake_home" bash "$VALIDATOR"
+}
+
+@test "validator: output containing a NUL byte FAILS (a \$(...) capture would strip it and pass)" {
+  # Valid JSON once the NUL is dropped - exactly what command substitution would hand over.
+  _run_raw_hook SessionEnd "printf '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionEnd\",\\000\"additionalContext\":\"x\"}}'"
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] raw (SessionEnd)"
+  assert_output --partial "output contains NUL bytes"
+  refute_output --partial "[ok] raw"
+}
+
+@test "validator: a slow hook that printed INVALID output before the timeout FAILS (not just a timeout warn)" {
+  _run_raw_hook SessionEnd "printf 'not json'
+exec sleep 7"
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] raw (SessionEnd) — non-JSON output"
+  assert_output --partial "hook also timed out"
+  refute_output --partial "[warn] raw (SessionEnd) — hook timed out"
+}
+
+@test "validator --source: a python3-invoked hook is EXECUTED, not skipped as 'script not found: python3'" {
+  _probe_repo SessionEnd py-probe.py
+  printf '{"hooks":{"SessionEnd":[{"id":"probe","hooks":[{"type":"command","command":"python3 ~/.claude/scripts/py-probe.py"}]}]}}\n' >"$PS/settings.json"
+  cat >"$PS/scripts/py-probe.py" <<'SCRIPT'
+import os
+open(os.path.join(os.environ["HOME"], "py-marker"), "w").close()
+print("PY_PROBE_NOT_JSON")
+SCRIPT
+
+  run env HOME="$HOME" bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] probe (SessionEnd) — non-JSON output"
+  refute_output --partial "script not found"
+  [ ! -e "$HOME/py-marker" ] # the hook ran in the validator's sandbox HOME, not the caller's
+}
+
+@test "validator: a hook with an 'args' key (exec form) is reported as an error, never executed" {
+  local fake_home="$TEST_TMPDIR/fh_args"
+  mkdir -p "$fake_home/.claude"
+  printf '{"hooks":{"SessionEnd":[{"id":"execform","hooks":[{"type":"command","command":"bash /bin/true","args":["x"]}]}]}}\n' >"$fake_home/.claude/settings.json"
+
+  run env HOME="$fake_home" bash "$VALIDATOR"
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] execform (SessionEnd) — hook uses exec form ('args' key)"
+}
+
+@test "validator: a hook command that cannot be executed (exit 127) is an error, not a silent ok" {
+  local fake_home="$TEST_TMPDIR/fh_127"
+  mkdir -p "$fake_home/.claude"
+  # The first path-like token exists (so the pre-check passes); the command word does not.
+  printf '{"hooks":{"SessionEnd":[{"id":"nobin","hooks":[{"type":"command","command":"no-such-binary-xyz /bin/sh"}]}]}}\n' >"$fake_home/.claude/settings.json"
+
+  run env HOME="$fake_home" bash "$VALIDATOR"
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] nobin (SessionEnd) — hook could not be executed (exit 127"
+}
+
+@test "validator: a SessionStart hook printing only {systemMessage} is valid (no warn)" {
+  _validate_event_fixture SessionStart '{"systemMessage":"x"}'
+  [ "$status" -eq 0 ]
+  assert_output --partial "[ok] decision-fixture-hook (SessionStart)"
+  refute_output --partial "[warn]"
+}
+
+@test "validator: a PostToolUse hook printing {decision,reason} is valid (no unknown-key warn)" {
+  _validate_event_fixture PostToolUse '{"decision":"block","reason":"x"}'
+  [ "$status" -eq 0 ]
+  refute_output --partial "[warn]"
+  refute_output --partial "[fail]"
+}
+
+@test "validator: a top-level updatedInput from PreToolUse is an unknown key (it belongs inside hookSpecificOutput)" {
+  _validate_event_fixture PreToolUse '{"updatedInput":{}}'
+  [ "$status" -eq 1 ]
+  assert_output --partial "[warn] decision-fixture-hook (PreToolUse) — unknown key 'updatedInput'"
+}

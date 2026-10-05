@@ -1002,3 +1002,57 @@ _probe_field() { # file key
   [ ! -e "$out" ] # no hook ran
   [ "$(find "$tmpd" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# V3 (2026-10-05): NUL-byte capture, timed-out hooks still validated, common JSON
+# fields / event-scoped top-level keys. Keep in sync with cast-hook-contracts.bats.
+# ---------------------------------------------------------------------------
+
+# Plant a raw hook script (body $2 after a bash shebang) registered under event $1 in a
+# fake HOME and run the validator against it (sets $status/$output, stderr merged).
+_run_raw_hook() { # event body
+  local event="$1" body="$2"
+  local hook="$TEST_TMPDIR/raw-hook.sh" fake_home="$TEST_TMPDIR/fh_raw_$event"
+  printf '#!/usr/bin/env bash\n%s\n' "$body" >"$hook"
+  chmod +x "$hook"
+  mkdir -p "$fake_home/.claude"
+  printf '{"hooks":{"%s":[{"id":"raw","hooks":[{"type":"command","command":"bash %s"}]}]}}\n' "$event" "$hook" >"$fake_home/.claude/settings.json"
+  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+}
+
+@test "validate-all: output containing a NUL byte FAILS (a \$(...) capture would strip it and pass)" {
+  # Valid JSON once the NUL is dropped - exactly what command substitution would hand over.
+  _run_raw_hook SessionEnd "printf '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionEnd\",\\000\"additionalContext\":\"x\"}}'"
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] raw (SessionEnd)"
+  assert_output --partial "output contains NUL bytes"
+  refute_output --partial "[ok] raw"
+}
+
+@test "validate-all: a slow hook that printed INVALID output before the timeout FAILS (not just a timeout warn)" {
+  _run_raw_hook SessionEnd "printf 'not json'
+exec sleep 7"
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] raw (SessionEnd) — non-JSON output"
+  assert_output --partial "hook also timed out"
+  refute_output --partial "[warn] raw (SessionEnd) — hook timed out"
+}
+
+@test "validate-all: a SessionStart hook printing only {systemMessage} is valid (no warn)" {
+  _validate_all_event_fixture SessionStart '{"systemMessage":"x"}'
+  [ "$status" -eq 0 ]
+  assert_output --partial "[ok] test-sessionstart-hook (SessionStart)"
+  refute_output --partial "[warn]"
+}
+
+@test "validate-all: a PostToolUse hook printing {decision,reason} is valid (no unknown-key warn)" {
+  _validate_all_event_fixture PostToolUse '{"decision":"block","reason":"x"}'
+  [ "$status" -eq 0 ]
+  refute_output --partial "[warn]"
+  refute_output --partial "[fail]"
+}
+
+@test "validate-all: a top-level updatedInput from PreToolUse is an unknown key (it belongs inside hookSpecificOutput)" {
+  _validate_all_event_fixture PreToolUse '{"updatedInput":{}}'
+  assert_output --partial "[warn] test-pretooluse-hook (PreToolUse) — unknown key 'updatedInput'"
+}

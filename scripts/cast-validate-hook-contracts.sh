@@ -61,14 +61,19 @@ ERROR_COUNT=0
 OK_COUNT=0
 
 # --- Python contract validator (single-quoted heredoc, paths via os.environ) ---
+# Args: event, label, path of the file holding the hook's captured stdout, timed_out (0|1).
+# The output is read as BYTES from that file: a `$(...)` capture drops NUL bytes, so
+# `{"a":1}\0garbage` would otherwise look valid.
 _validate_output() {
   local event_name="$1"
   local hook_label="$2"
-  local hook_stdout="$3"
+  local hook_stdout_file="$3"
+  local hook_timed_out="$4"
 
   export CAST_CV_EVENT="$event_name"
   export CAST_CV_LABEL="$hook_label"
-  export CAST_CV_STDOUT="$hook_stdout"
+  export CAST_CV_STDOUT_FILE="$hook_stdout_file"
+  export CAST_CV_TIMED_OUT="$hook_timed_out"
 
   python3 -I - <<'PYEOF'
 import json
@@ -77,7 +82,24 @@ import sys
 
 event = os.environ["CAST_CV_EVENT"]
 label = os.environ["CAST_CV_LABEL"]
-stdout_raw = os.environ.get("CAST_CV_STDOUT", "").strip()
+timed_out = os.environ.get("CAST_CV_TIMED_OUT", "0") == "1"
+note = " (hook also timed out; output captured before the kill)" if timed_out else ""
+
+# Fail closed if the capture file cannot be read.
+try:
+    with open(os.environ["CAST_CV_STDOUT_FILE"], "rb") as f:
+        raw = f.read()
+except (OSError, KeyError) as e:
+    print(f"[fail] {label} ({event}) — cannot read captured hook output: {e}", file=sys.stderr)
+    sys.exit(2)
+
+if b"\0" in raw:
+    print(f"[fail] {label} ({event}) — output contains NUL bytes{note}", file=sys.stderr)
+    sys.exit(2)
+
+# surrogateescape: non-UTF-8 bytes survive decoding exactly as they did via the old
+# environment-variable hand-off (this check is about NUL / JSON shape, not encoding).
+stdout_raw = raw.decode("utf-8", errors="surrogateescape").strip()
 
 # Empty stdout is valid for all logging-only events
 if not stdout_raw:
@@ -88,26 +110,31 @@ if not stdout_raw:
 try:
     data = json.loads(stdout_raw)
 except json.JSONDecodeError as e:
-    print(f"[fail] {label} ({event}) — non-JSON output: {e}", file=sys.stderr)
+    print(f"[fail] {label} ({event}) — non-JSON output: {e}{note}", file=sys.stderr)
     sys.exit(2)
 
 if not isinstance(data, dict):
-    print(f"[fail] {label} ({event}) — output is not a JSON object", file=sys.stderr)
+    print(f"[fail] {label} ({event}) — output is not a JSON object{note}", file=sys.stderr)
     sys.exit(2)
 
 # --- Contract definitions ---
+# Claude Code accepts these common JSON fields from EVERY hook event.
+COMMON = {"continue", "stopReason", "suppressOutput", "systemMessage"}
+# Per-event allowed top-level keys = COMMON + the event's own. NOTE: PreToolUse's
+# `updatedInput` belongs INSIDE hookSpecificOutput, never at top level.
+# Keep in sync with the identical table in cast-validate-all-hooks.sh.
 KNOWN_TOP_LEVEL = {
-    "SessionStart":    {"hookSpecificOutput"},
-    "PostToolUse":     {"hookSpecificOutput"},
-    "UserPromptSubmit": {"hookSpecificOutput"},
-    "PreToolUse":      {"decision", "reason", "hookSpecificOutput", "updatedInput"},
-    "Stop":            {"decision", "reason", "continue"},
-    "SubagentStop":    {"hookSpecificOutput"},
-    "SessionEnd":      {"hookSpecificOutput"},
-    "InstructionsLoaded": {"hookSpecificOutput"},
-    "PreCompact":      {"decision", "reason"},
-    "StopFailure":     {"hookSpecificOutput"},
-    "PostToolUseFailure": {"hookSpecificOutput"},
+    "SessionStart":       COMMON | {"hookSpecificOutput"},
+    "PostToolUse":        COMMON | {"hookSpecificOutput", "decision", "reason"},
+    "UserPromptSubmit":   COMMON | {"hookSpecificOutput", "decision", "reason"},
+    "PreToolUse":         COMMON | {"decision", "reason", "hookSpecificOutput"},
+    "Stop":               COMMON | {"decision", "reason"},
+    "SubagentStop":       COMMON | {"hookSpecificOutput", "decision", "reason"},
+    "SessionEnd":         COMMON | {"hookSpecificOutput"},
+    "InstructionsLoaded": COMMON | {"hookSpecificOutput"},
+    "PreCompact":         COMMON | {"decision", "reason"},
+    "StopFailure":        COMMON | {"hookSpecificOutput"},
+    "PostToolUseFailure": COMMON | {"hookSpecificOutput"},
     # Async/logging events — empty is always ok, no strict shape required
 }
 
@@ -145,16 +172,14 @@ if "hookSpecificOutput" in data:
                 print(f"[ok] {label} ({event}) — shape valid")
 
 elif event in REQUIRES_HOOK_SPECIFIC:
-    # Has output but no hookSpecificOutput — might still be valid (e.g. SessionStart can return nothing)
-    # but if they emit keys that look wrong, warn
-    if allowed:
-        unknown = top_keys - allowed
-        if unknown:
-            pass  # already warned above
-        elif status == 0:
+    # No hookSpecificOutput. An EMPTY object is output that carries nothing (warn);
+    # a body of valid common/decision keys (e.g. {"systemMessage": "..."}) is fine.
+    # (A top-level decision prints its own [ok]/[fail] line below.)
+    if not top_keys:
+        if status == 0:
             print(f"[warn] {label} ({event}) — has output but no hookSpecificOutput", file=sys.stderr)
             status = max(status, 1)
-    elif status == 0:
+    elif status == 0 and "decision" not in data:
         print(f"[ok] {label} ({event}) — shape valid")
 
 # Validate the top-level decision field (EVERY event). Claude Code's hook-output validation accepts
@@ -168,9 +193,6 @@ if "decision" in data:
         status = max(status, 2)
     elif status == 0:
         print(f"[ok] {label} ({event}) — shape valid (decision={decision})")
-
-if status == 0 and not stdout_raw:
-    pass  # already printed ok above
 
 sys.exit(status)
 PYEOF
@@ -198,6 +220,7 @@ for event, entries in hooks.items():
             if hook.get("type") != "command":
                 continue
             cmd = hook.get("command", "")
+            has_args = "1" if "args" in hook else "0"
             # label: prefer id, else basename of script
             if entry_id:
                 label = entry_id
@@ -206,7 +229,7 @@ for event, entries in hooks.items():
                 parts = cmd.split()
                 script_part = parts[-1] if parts else cmd
                 label = os.path.basename(script_part)
-            print(f"{event}\t{label}\t{cmd}")
+            print(f"{event}\t{label}\t{has_args}\t{cmd}")
 PYEOF
 )
 
@@ -336,7 +359,7 @@ _vh_run() {
     "$@"
 }
 
-while IFS=$'\t' read -r event label cmd; do
+while IFS=$'\t' read -r event label has_args cmd; do
   # --source rewrite: settings.json's hook commands always point at the INSTALLED copy
   # (~/.claude/scripts/<name>, or the literal $HOME form), even under --source. Without this,
   # --source read the repo's settings.json but still EXECUTED the installed copy, so a
@@ -350,18 +373,45 @@ while IFS=$'\t' read -r event label cmd; do
     cmd="${cmd//\$HOME\/.claude\/scripts\//$_VH_SCRIPTS}"
     cmd="${cmd//~\/.claude\/scripts\//$_VH_SCRIPTS}"
   fi
-  # Resolve script path: strip 'bash ' prefix, expand ~ against the SANDBOX home
-  # (not the caller's HOME) so the existence check and execution below agree on
-  # the seeded copy the hook actually runs.
-  script_path="${cmd#bash }"
+  # Resolve the script argument for an EXISTENCE pre-check. Scan tokens and take the
+  # first one that looks like a path (contains '/', or starts with '~'); fall back to
+  # token 0 if none does. Handles `bash ~/.claude/scripts/foo.sh`, the same with extra
+  # flags, and `python3 ~/.claude/scripts/cast-pretool-dispatch.py` (the old
+  # `${cmd#bash }` decomposition only handled the first shape, so a python3 hook was
+  # "script not found: python3" and never executed). `~` expands against the SANDBOX
+  # home (not the caller's HOME) so the existence check and the execution below agree
+  # on the seeded copy the hook actually runs.
+  # ⚠️ DIAGNOSTIC HEURISTIC, not a safety boundary: it does not parse shell grammar, so
+  # an adversarially-shaped command could pass this check while `sh -c` runs something
+  # else. Anyone able to edit settings.json already gets the same shell-form execution
+  # from Claude Code on every real hook fire.
+  # Keep in sync with the identical scan in cast-validate-all-hooks.sh.
+  script_path=""
+  for tok in $cmd; do
+    case "$tok" in
+      */* | '~'*)
+        script_path="$tok"
+        break
+        ;;
+    esac
+  done
+  if [[ -z "$script_path" ]]; then
+    script_path="${cmd%% *}"
+  fi
   script_path="${script_path/#\~/$VALIDATE_HOME}"
-  # Strip extra flags/args (take first word as script)
-  script_path="${script_path%% *}"
   # Diagnostics name the REPO path under --source (the sandbox copy is an
   # implementation detail of where the repo's script actually runs).
   script_shown="$script_path"
   if [[ "$USE_SOURCE" == "1" ]]; then
     script_shown="${script_path/#"$_VH_SCRIPTS"/$REPO_DIR/scripts/}"
+  fi
+
+  # Exec-form hooks (an `args` key) are not shell-form and are not supported here —
+  # fail loudly rather than mis-invoke (same as cast-validate-all-hooks.sh).
+  if [[ "$has_args" == "1" ]]; then
+    echo "[fail] $label ($event) — hook uses exec form ('args' key); this validator only supports shell-form command hooks" >&2
+    ERROR_COUNT=$((ERROR_COUNT + 1))
+    continue
   fi
 
   if [[ ! -f "$script_path" ]]; then
@@ -377,32 +427,61 @@ while IFS=$'\t' read -r event label cmd; do
   payload="${!payload_var-}"
   [[ -n "$payload" ]] || payload='{}'
 
-  # Run hook with synthetic stdin and CLAUDE_SUBPROCESS=0 enforced
-  # Timeout: 5s to prevent hangs (macOS-compatible via perl)
-  stdout_out=""
+  # Run the hook exactly as Claude Code does: the full command string handed whole to
+  # `sh -c` (shell form — no splitting/truncation, no forced interpreter; `sh` does its
+  # own tilde expansion, against the sandbox HOME). CLAUDE_SUBPROCESS=0 is enforced by
+  # _vh_run. Timeout: 5s to prevent hangs (macOS-compatible via perl).
+  # stdout goes to a FILE in the sandbox tmp, never `$(...)`: command substitution
+  # silently drops NUL bytes, so `{"a":1}\0garbage` would look valid. The python check
+  # reads the file as BYTES. mktemp (random name) so a hook cannot pre-plant a
+  # predictable path (symlink) in the sandbox tmp to redirect this write.
+  # Keep in sync with the identical capture in cast-validate-all-hooks.sh.
+  hook_out="$(mktemp "$VALIDATE_HOME/tmp/out.XXXXXX")"
   hook_exit=0
   if command -v timeout &>/dev/null; then
-    stdout_out=$(echo "$payload" | _vh_run timeout 5 bash "$script_path" 2>/dev/null) || hook_exit=$?
+    echo "$payload" | _vh_run timeout 5 sh -c "$cmd" >"$hook_out" 2>/dev/null || hook_exit=$?
   elif command -v perl &>/dev/null; then
-    stdout_out=$(echo "$payload" | _vh_run perl -e 'alarm 5; exec @ARGV' bash "$script_path" 2>/dev/null) || hook_exit=$?
+    echo "$payload" | _vh_run perl -e 'alarm 5; exec @ARGV' sh -c "$cmd" >"$hook_out" 2>/dev/null || hook_exit=$?
   else
-    stdout_out=$(echo "$payload" | _vh_run bash "$script_path" 2>/dev/null) || hook_exit=$?
+    echo "$payload" | _vh_run sh -c "$cmd" >"$hook_out" 2>/dev/null || hook_exit=$?
   fi
+
+  # A timed-out hook is NOT skipped: whatever it printed before the kill is still
+  # validated below (invalid / NUL output is an error, not a warn). Only an empty or
+  # valid-so-far capture stays the advisory timeout warn.
+  timed_out=0
   if [[ $hook_exit -eq 124 || $hook_exit -eq 142 ]]; then
-    echo "[warn] $label ($event) — hook timed out after 5s" >&2
-    WARN_COUNT=$((WARN_COUNT + 1))
+    timed_out=1
+  fi
+
+  # Backstop only: the pre-check above should have caught an unresolvable script.
+  # 126 = found but not executable by the shell, 127 = command not found (catches shapes
+  # the token-scan missed). Deliberately NOT extended to other exit codes: a non-zero
+  # exit is ok for PreToolUse block hooks (exit 2 = block) — stdout is still validated.
+  if [[ $timed_out -eq 0 && ($hook_exit -eq 126 || $hook_exit -eq 127) ]]; then
+    rm -f "$hook_out"
+    echo "[fail] $label ($event) — hook could not be executed (exit $hook_exit; resolved path: $script_shown)" >&2
+    ERROR_COUNT=$((ERROR_COUNT + 1))
     continue
   fi
-  # Non-zero exit is ok for PreToolUse block hooks — still validate stdout
 
   # Validate output shape
   # Capture exit code separately to avoid set -e triggering on non-zero exit
-  result=$(_validate_output "$event" "$label" "$stdout_out" 2>&1; echo "CAST_EXIT:$?")
+  result=$(_validate_output "$event" "$label" "$hook_out" "$timed_out" 2>&1; echo "CAST_EXIT:$?")
   validate_exit="${result##*CAST_EXIT:}"
   result="${result%$'\n'CAST_EXIT:*}"
+  rm -f "$hook_out"
 
   # Print validation result to stdout/stderr as appropriate
-  if [[ $validate_exit -eq 0 ]]; then
+  if [[ $timed_out -eq 1 ]]; then
+    if [[ $validate_exit -ge 2 ]]; then
+      echo "$result" >&2
+      ERROR_COUNT=$((ERROR_COUNT + 1))
+    else
+      echo "[warn] $label ($event) — hook timed out after 5s" >&2
+      WARN_COUNT=$((WARN_COUNT + 1))
+    fi
+  elif [[ $validate_exit -eq 0 ]]; then
     echo "$result"
     OK_COUNT=$((OK_COUNT + 1))
   elif [[ $validate_exit -eq 1 ]]; then

@@ -348,21 +348,29 @@ while IFS=$'\t' read -r event label has_args cmd; do
   # Run hook exactly as Claude Code does: the full command string handed
   # whole to `sh -c` (shell form — no splitting/truncation, no forced
   # interpreter; `sh` performs its own tilde expansion).
-  hook_stdout=""
+  # stdout goes to a FILE in the sandbox tmp, never `$(...)`: command
+  # substitution silently drops NUL bytes, so `{"a":1}\0garbage` would look
+  # valid. The python check below reads the file as BYTES. mktemp (random
+  # name) so a hook cannot pre-plant a predictable path (symlink) in the
+  # sandbox tmp to redirect this write; removed once the output is checked.
+  # Keep in sync with the identical capture in cast-validate-hook-contracts.sh.
+  hook_out="$(mktemp "$VALIDATE_HOME/tmp/out.XXXXXX")"
   hook_exit=0
   EXECUTED_COUNT=$((EXECUTED_COUNT + 1))
   if command -v timeout &>/dev/null; then
-    hook_stdout=$(printf '%s' "$payload" | _vh_run timeout 5 sh -c "$cmd" 2>/dev/null) || hook_exit=$?
+    printf '%s' "$payload" | _vh_run timeout 5 sh -c "$cmd" >"$hook_out" 2>/dev/null || hook_exit=$?
   elif command -v perl &>/dev/null; then
-    hook_stdout=$(printf '%s' "$payload" | _vh_run perl -e 'alarm 5; exec @ARGV' sh -c "$cmd" 2>/dev/null) || hook_exit=$?
+    printf '%s' "$payload" | _vh_run perl -e 'alarm 5; exec @ARGV' sh -c "$cmd" >"$hook_out" 2>/dev/null || hook_exit=$?
   else
-    hook_stdout=$(printf '%s' "$payload" | _vh_run sh -c "$cmd" 2>/dev/null) || hook_exit=$?
+    printf '%s' "$payload" | _vh_run sh -c "$cmd" >"$hook_out" 2>/dev/null || hook_exit=$?
   fi
 
+  # A timed-out hook is NOT skipped: whatever it printed before the kill is still
+  # validated below (invalid / NUL output is a fail, not a warn). Only an
+  # empty or valid-so-far capture stays the advisory timeout warn.
+  timed_out=0
   if [[ $hook_exit -eq 124 || $hook_exit -eq 142 ]]; then
-    printf "[warn] %s (%s) — hook timed out\n" "$label" "$event" >&2
-    WARN_COUNT=$((WARN_COUNT + 1))
-    continue
+    timed_out=1
   fi
 
   # Backstop only: the pre-check above should have already caught an
@@ -371,7 +379,8 @@ while IFS=$'\t' read -r event label has_args cmd; do
   # (e.g. a bare PATH command with no '/' that isn't actually on PATH).
   # Deliberately NOT extended to other exit codes: exit 2 is a legitimate
   # PreToolUse "block" result and must not be misread as broken.
-  if [[ $hook_exit -eq 126 || $hook_exit -eq 127 ]]; then
+  if [[ $timed_out -eq 0 && ($hook_exit -eq 126 || $hook_exit -eq 127) ]]; then
+    rm -f "$hook_out"
     printf "[fail] %s (%s) — hook could not be executed (exit %d; resolved path: %s)\n" "$label" "$event" "$hook_exit" "$script_shown" >&2
     FAIL_COUNT=$((FAIL_COUNT + 1))
     continue
@@ -380,33 +389,58 @@ while IFS=$'\t' read -r event label has_args cmd; do
   # Validate output via contract validator (inline python — avoids re-running the full validator per hook)
   export CAST_CV_EVENT="$event"
   export CAST_CV_LABEL="$label"
-  export CAST_CV_STDOUT="$hook_stdout"
+  export CAST_CV_STDOUT_FILE="$hook_out"
+  export CAST_CV_TIMED_OUT="$timed_out"
 
   # Capture python output + exit code via temp file (portable across bash 3.2 / 4 / 5;
   # mixing heredoc with `; echo` inside $(...) breaks on macOS bash 3.2 — see PR #29 fix).
   # The `|| validate_exit=$?` keeps set -e from killing the script when python exits
   # non-zero (warnings/fails) — we need that exit code to classify, not abort.
-  _cv_tmp=$(mktemp)
+  # Under the sandbox tmp, not the caller's TMPDIR.
+  _cv_tmp="$(mktemp "$VALIDATE_HOME/tmp/cv.XXXXXX")"
   validate_exit=0
   python3 -I - >"$_cv_tmp" 2>&1 <<'PYEOF' || validate_exit=$?
 import json, os, sys
 
 event = os.environ["CAST_CV_EVENT"]
 label = os.environ["CAST_CV_LABEL"]
-stdout_raw = os.environ.get("CAST_CV_STDOUT", "").strip()
+timed_out = os.environ.get("CAST_CV_TIMED_OUT", "0") == "1"
+note = " (hook also timed out; output captured before the kill)" if timed_out else ""
 
+# Hook stdout is read as BYTES from the capture file: a `$(...)` capture would have
+# dropped NUL bytes. Fail closed if the file cannot be read.
+try:
+    with open(os.environ["CAST_CV_STDOUT_FILE"], "rb") as f:
+        raw = f.read()
+except (OSError, KeyError) as e:
+    print(f"[fail] {label} ({event}) — cannot read captured hook output: {e}", file=sys.stderr)
+    sys.exit(2)
+
+if b"\0" in raw:
+    print(f"[fail] {label} ({event}) — output contains NUL bytes{note}", file=sys.stderr)
+    sys.exit(2)
+
+# surrogateescape: non-UTF-8 bytes survive decoding exactly as they did via the old
+# environment-variable hand-off (this check is about NUL / JSON shape, not encoding).
+stdout_raw = raw.decode("utf-8", errors="surrogateescape").strip()
+
+# Claude Code accepts these common JSON fields from EVERY hook event.
+COMMON = {"continue", "stopReason", "suppressOutput", "systemMessage"}
+# Per-event allowed top-level keys = COMMON + the event's own. NOTE: PreToolUse's
+# `updatedInput` belongs INSIDE hookSpecificOutput, never at top level.
+# Keep in sync with the identical table in cast-validate-hook-contracts.sh.
 KNOWN_TOP_LEVEL = {
-    "SessionStart":       {"hookSpecificOutput"},
-    "PostToolUse":        {"hookSpecificOutput"},
-    "UserPromptSubmit":   {"hookSpecificOutput"},
-    "PreToolUse":         {"decision", "reason", "hookSpecificOutput", "updatedInput"},
-    "Stop":               {"decision", "reason", "continue"},
-    "SubagentStop":       {"hookSpecificOutput"},
-    "SessionEnd":         {"hookSpecificOutput"},
-    "InstructionsLoaded": {"hookSpecificOutput"},
-    "PreCompact":         {"decision", "reason"},
-    "StopFailure":        {"hookSpecificOutput"},
-    "PostToolUseFailure": {"hookSpecificOutput"},
+    "SessionStart":       COMMON | {"hookSpecificOutput"},
+    "PostToolUse":        COMMON | {"hookSpecificOutput", "decision", "reason"},
+    "UserPromptSubmit":   COMMON | {"hookSpecificOutput", "decision", "reason"},
+    "PreToolUse":         COMMON | {"decision", "reason", "hookSpecificOutput"},
+    "Stop":               COMMON | {"decision", "reason"},
+    "SubagentStop":       COMMON | {"hookSpecificOutput", "decision", "reason"},
+    "SessionEnd":         COMMON | {"hookSpecificOutput"},
+    "InstructionsLoaded": COMMON | {"hookSpecificOutput"},
+    "PreCompact":         COMMON | {"decision", "reason"},
+    "StopFailure":        COMMON | {"hookSpecificOutput"},
+    "PostToolUseFailure": COMMON | {"hookSpecificOutput"},
 }
 
 if not stdout_raw:
@@ -416,11 +450,11 @@ if not stdout_raw:
 try:
     data = json.loads(stdout_raw)
 except json.JSONDecodeError as e:
-    print(f"[fail] {label} ({event}) — non-JSON output: {e}", file=sys.stderr)
+    print(f"[fail] {label} ({event}) — non-JSON output: {e}{note}", file=sys.stderr)
     sys.exit(2)
 
 if not isinstance(data, dict):
-    print(f"[fail] {label} ({event}) — output is not a JSON object", file=sys.stderr)
+    print(f"[fail] {label} ({event}) — output is not a JSON object{note}", file=sys.stderr)
     sys.exit(2)
 
 top_keys = set(data.keys())
@@ -461,9 +495,10 @@ if "hookSpecificOutput" in data:
             print(f"[ok] {label} ({event}) — shape valid")
 elif event in {"SessionStart", "PostToolUse", "UserPromptSubmit", "InstructionsLoaded",
                "StopFailure", "PostToolUseFailure", "SubagentStop"}:
-    if allowed:
-        unknown = top_keys - allowed
-        if not unknown and status == 0:
+    # No hookSpecificOutput. An EMPTY object is output that carries nothing (warn);
+    # a body of valid common/decision keys (e.g. {"systemMessage": "..."}) is fine.
+    if not top_keys:
+        if status == 0:
             print(f"[warn] {label} ({event}) — has output but no hookSpecificOutput", file=sys.stderr)
             status = max(status, 1)
     elif status == 0:
@@ -474,9 +509,17 @@ elif status == 0:
 sys.exit(status)
 PYEOF
   result=$(cat "$_cv_tmp")
-  rm -f "$_cv_tmp"
+  rm -f "$_cv_tmp" "$hook_out"
 
-  if [[ "$validate_exit" -eq 0 ]]; then
+  if [[ $timed_out -eq 1 ]]; then
+    if [[ "$validate_exit" -ge 2 ]]; then
+      printf '%s\n' "$result" >&2
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+    else
+      printf "[warn] %s (%s) — hook timed out\n" "$label" "$event" >&2
+      WARN_COUNT=$((WARN_COUNT + 1))
+    fi
+  elif [[ "$validate_exit" -eq 0 ]]; then
     printf '%s\n' "$result"
     OK_COUNT=$((OK_COUNT + 1))
   elif [[ "$validate_exit" -eq 1 ]]; then
