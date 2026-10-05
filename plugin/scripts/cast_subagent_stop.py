@@ -396,7 +396,7 @@ _ROSTER_TYPE_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _META_MAX_BYTES = 65536
 
 
-def _trusted_roster_type(meta) -> str:
+def _roster_type_from_meta(meta) -> str:
     """Roster agent type from a subagent ``.meta.json`` dict, or "" if untrusted.
 
     LIVE-PROBED 2026-10-05 against Claude Code's
@@ -471,7 +471,7 @@ def _resolve_roster_type(ctx) -> str:
 
     (payload ``session_id`` is the MAIN session id and ``agent_id`` is the filename
     stem — both confirmed by the 2026-10-05 live probe; see
-    :func:`_trusted_roster_type` for the four sidecar shapes). Two non-recursive
+    :func:`_roster_type_from_meta` for the four sidecar shapes). Two non-recursive
     patterns, NOT a recursive ``**`` glob: an agent can plant a sidecar in another
     project slug or at an arbitrary nesting depth, and a newest-mtime pick would
     let that plant win. The gate therefore requires EXACTLY ONE candidate path;
@@ -496,7 +496,7 @@ def _resolve_roster_type(ctx) -> str:
             os.close(fd)
         if len(data) > _META_MAX_BYTES:
             return ""
-        roster = _trusted_roster_type(json.loads(data.decode("utf-8")))
+        roster = _roster_type_from_meta(json.loads(data.decode("utf-8")))
         return roster if _ROSTER_TYPE_RE.fullmatch(roster) else ""
     except Exception:
         return ""

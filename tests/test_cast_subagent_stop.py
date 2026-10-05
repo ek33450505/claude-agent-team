@@ -2863,8 +2863,8 @@ class TestGitSitesUseHardenedPrimitive(_IsolatedDbPathTestCase):
         self._assert_hardened('rev-parse --abbrev-ref HEAD')
 
 
-class TestTrustedRosterType(unittest.TestCase):
-    """_trusted_roster_type: pure rule over Claude Code's subagent .meta.json.
+class TestRosterTypeFromMeta(unittest.TestCase):
+    """_roster_type_from_meta: pure rule over Claude Code's subagent .meta.json.
 
     The four shapes are the exact live keys captured by the 2026-10-05 probe.
     Shape 3 is THE SPOOF: a read-only built-in Explore agent dispatched with
@@ -2882,7 +2882,7 @@ class TestTrustedRosterType(unittest.TestCase):
             'requestNonInteractive': True,
             'model': 'haiku',
         }
-        self.assertEqual(css._trusted_roster_type(meta), 'api-contract')
+        self.assertEqual(css._roster_type_from_meta(meta), 'api-contract')
 
     def test_shape2_named_teammate_custom_type_uses_customagenttype(self):
         meta = {
@@ -2894,7 +2894,7 @@ class TestTrustedRosterType(unittest.TestCase):
             'customAgentType': 'api-contract',
             'permissionMode': 'auto',
         }
-        self.assertEqual(css._trusted_roster_type(meta), 'api-contract')
+        self.assertEqual(css._roster_type_from_meta(meta), 'api-contract')
 
     def test_shape3_builtin_explore_teammate_spoof_is_untrusted(self):
         meta = {
@@ -2906,11 +2906,11 @@ class TestTrustedRosterType(unittest.TestCase):
             'teamName': 'session-b3ec8ae6',
             'permissionMode': 'auto',
         }
-        self.assertEqual(css._trusted_roster_type(meta), '')
+        self.assertEqual(css._roster_type_from_meta(meta), '')
 
     def test_shape4_named_regular_subagent_uses_agenttype(self):
         meta = {'agentType': 'security', 'name': 'security__cros-287', 'spawnDepth': 1}
-        self.assertEqual(css._trusted_roster_type(meta), 'security')
+        self.assertEqual(css._roster_type_from_meta(meta), 'security')
 
     def test_teammate_branch_alone_rejects_spoof_with_distinct_name(self):
         # Shape 3 is ALSO caught by the name == agentType rule, so the verbatim
@@ -2924,59 +2924,59 @@ class TestTrustedRosterType(unittest.TestCase):
             'taskKind': 'in_process_teammate',
             'teamName': 'session-b3ec8ae6',
         }
-        self.assertEqual(css._trusted_roster_type(meta), '')
+        self.assertEqual(css._roster_type_from_meta(meta), '')
 
     def test_name_equal_to_agenttype_is_ambiguous_untrusted(self):
         # Regular (non-teammate) subagent whose name == agentType: the name may
         # have overwritten the real type, so it cannot be trusted.
         self.assertEqual(
-            css._trusted_roster_type({'agentType': 'security', 'name': 'security'}), ''
+            css._roster_type_from_meta({'agentType': 'security', 'name': 'security'}), ''
         )
 
     def test_unnamed_without_name_key_is_trusted(self):
-        self.assertEqual(css._trusted_roster_type({'agentType': 'devops'}), 'devops')
+        self.assertEqual(css._roster_type_from_meta({'agentType': 'devops'}), 'devops')
 
     def test_customagenttype_non_str_falls_through_to_other_rules(self):
         # Non-str customAgentType is ignored; a teammate shape still yields "".
         self.assertEqual(
-            css._trusted_roster_type(
+            css._roster_type_from_meta(
                 {'customAgentType': 7, 'agentType': 'x', 'taskKind': 'in_process_teammate'}
             ),
             '',
         )
         # ... and a plain subagent shape still yields agentType.
         self.assertEqual(
-            css._trusted_roster_type({'customAgentType': ['a'], 'agentType': 'devops'}),
+            css._roster_type_from_meta({'customAgentType': ['a'], 'agentType': 'devops'}),
             'devops',
         )
 
     def test_customagenttype_empty_string_falls_through(self):
         self.assertEqual(
-            css._trusted_roster_type({'customAgentType': '', 'agentType': 'devops'}),
+            css._roster_type_from_meta({'customAgentType': '', 'agentType': 'devops'}),
             'devops',
         )
         self.assertEqual(
-            css._trusted_roster_type(
+            css._roster_type_from_meta(
                 {'customAgentType': '', 'agentType': 'devops', 'teamName': 't'}
             ),
             '',
         )
 
     def test_missing_or_bad_agenttype_is_untrusted(self):
-        self.assertEqual(css._trusted_roster_type({}), '')
-        self.assertEqual(css._trusted_roster_type({'name': 'devops'}), '')
-        self.assertEqual(css._trusted_roster_type({'agentType': ''}), '')
-        self.assertEqual(css._trusted_roster_type({'agentType': 5}), '')
-        self.assertEqual(css._trusted_roster_type({'agentType': None}), '')
+        self.assertEqual(css._roster_type_from_meta({}), '')
+        self.assertEqual(css._roster_type_from_meta({'name': 'devops'}), '')
+        self.assertEqual(css._roster_type_from_meta({'agentType': ''}), '')
+        self.assertEqual(css._roster_type_from_meta({'agentType': 5}), '')
+        self.assertEqual(css._roster_type_from_meta({'agentType': None}), '')
 
     def test_teamname_without_taskkind_is_untrusted(self):
         self.assertEqual(
-            css._trusted_roster_type({'agentType': 'devops', 'teamName': 'session-x'}), ''
+            css._roster_type_from_meta({'agentType': 'devops', 'teamName': 'session-x'}), ''
         )
 
     def test_taskkind_without_teamname_is_untrusted(self):
         self.assertEqual(
-            css._trusted_roster_type(
+            css._roster_type_from_meta(
                 {'agentType': 'devops', 'taskKind': 'in_process_teammate'}
             ),
             '',
@@ -2984,7 +2984,7 @@ class TestTrustedRosterType(unittest.TestCase):
 
     def test_non_dict_is_untrusted(self):
         for bad in (None, [], 'security', 3, ['agentType']):
-            self.assertEqual(css._trusted_roster_type(bad), '', repr(bad))
+            self.assertEqual(css._roster_type_from_meta(bad), '', repr(bad))
 
 
 class TestResolveRosterType(_IsolatedHomeTestCase):
