@@ -10,7 +10,7 @@
 #
 # Monthly schedule registration (run once):
 #   /schedule --description "CAST cache metrics monthly report" \
-#     --command "bash ~/Projects/personal/claude-agent-team/scripts/cast-cache-metrics.sh" \
+#     --command "bash ~/.claude/scripts/cast-cache-metrics.sh" \
 #     --frequency monthly --day-of-month 1 --time 08:00
 
 if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then
