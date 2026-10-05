@@ -2,6 +2,8 @@
 .mcp.json
 *.local
 *.env
+# `*.env` misses .env.production / .env.local / .env.development.local; `.env.*` covers them (any depth).
+.env.*
 *.key
 *.pem
 *.p12
