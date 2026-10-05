@@ -2,7 +2,8 @@
 # cast-precompact-guard.sh — PreCompact hook: block AUTO-compaction if any tracked repo is dirty.
 # Manual /compact always passes through — only system-triggered compaction is guarded.
 # Returns {"decision":"block","reason":"..."} to stdout when dirty repos found.
-# Returns {"decision":"allow"} when clean.
+# Prints nothing (empty stdout) when clean or manual: Claude Code's top-level "decision" field
+# accepts only "approve"|"block", so the proceed contract is no stdout + exit 0.
 # Exit 0 always.
 
 if [ "${CLAUDE_SUBPROCESS:-0}" = "1" ]; then exit 0; fi
@@ -31,7 +32,7 @@ INPUT="$(cat 2>/dev/null || true)"
 TRIGGER="$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('trigger','auto'))" 2>/dev/null || echo "auto")"
 if [[ "$TRIGGER" == "manual" ]]; then
   CAST_INPUT="$INPUT" python3 "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
-  printf '{"decision":"allow"}\n'
+  # proceed: no stdout (top-level "decision" accepts only approve|block)
   exit 0
 fi
 
@@ -106,7 +107,6 @@ fi
 if [ ${#DIRTY_REPOS[@]} -eq 0 ] && [ ${#FAILED_REPOS[@]} -eq 0 ]; then
   # Log observability event (carry forward from cast-pre-compact-hook.sh behavior)
   CAST_INPUT="$INPUT" python3 "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
-  printf '{"decision":"allow"}\n'
   exit 0
 fi
 
