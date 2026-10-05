@@ -48,6 +48,34 @@ def parse_iso_timestamp(ts_str: str) -> float:
     except Exception:
         return 0.0
 
+_JSON_STATUS_FENCE = re.compile(r'```json\s+status')
+_FILES_CHANGED_OPEN = re.compile(r'"files_changed"\s*:\s*\[')
+_WS_RUN = re.compile(r'\s{16,}')
+
+
+def _json_status_paths(response_text: str) -> set:
+    """Paths from the first `"files_changed": [...]` array after a ```json status fence.
+
+    Linear rewrite of the former single regex
+    ```json\\s+status[\\s\\S]*?"files_changed"\\s*:\\s*\\[([\\s\\S]*?)\\]
+    which was quadratic: re.search retried from every fence and each lazy
+    scan ran to EOF. Exact-equivalent: any match starting at a later fence is
+    also reachable from the FIRST fence, and if no ']' follows the first
+    `"files_changed": [` after that fence, none follows any later one.
+    """
+    fence = _JSON_STATUS_FENCE.search(response_text)
+    if not fence:
+        return set()
+    opener = _FILES_CHANGED_OPEN.search(response_text, fence.end())
+    if not opener:
+        return set()
+    close = response_text.find(']', opener.end())
+    if close == -1:
+        return set()
+    array_text = response_text[opener.end():close]
+    return set(re.findall(r'"([^"]+\.[a-zA-Z0-9]+)"', array_text))
+
+
 def extract_file_paths(response_text: str) -> list:
     """Extract claimed file paths from agent output.
 
@@ -62,6 +90,12 @@ def extract_file_paths(response_text: str) -> list:
     m = re.search(r'(?:Files changed|files_changed)\s*:\s*([\s\S]+?)(?=\n\n|$)', response_text)
     if m:
         section = m.group(1)
+        # Squeeze long whitespace runs: the findalls below start a match at every
+        # whitespace char and `\s*` rescans the rest of the run, so a run of N
+        # whitespace chars costs O(N^2). Path chars exclude whitespace, every path
+        # keeps >=1 whitespace (or line start) before it, and `[-*]?\s*` accepts any
+        # run length, so results are unchanged.
+        section = _WS_RUN.sub('  ', section)
         # Extract paths from the section (dash list, comma list, or paths)
         path_matches = re.findall(r'(?:^|\s)[-*]?\s*(/[a-zA-Z0-9_./\-]+\.[a-zA-Z0-9]+)\b', section, re.MULTILINE)
         paths.update(path_matches)
@@ -74,11 +108,7 @@ def extract_file_paths(response_text: str) -> list:
         )
 
     # Pattern 2: files_changed array in JSON status block
-    json_match = re.search(r'```json\s+status[\s\S]*?"files_changed"\s*:\s*\[([\s\S]*?)\]', response_text)
-    if json_match:
-        array_text = json_match.group(1)
-        json_paths = re.findall(r'"([^"]+\.[a-zA-Z0-9]+)"', array_text)
-        paths.update(json_paths)
+    paths.update(_json_status_paths(response_text))
 
     # Patterns 3 and 4 (prose verbs + backtick paths) are intentionally omitted.
     # They extracted paths the agent only read, not wrote, flooding [PRE_EXISTING] rows.
