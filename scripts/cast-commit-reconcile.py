@@ -10,8 +10,9 @@ Enforcement rule (Ed-locked design):
 Exit codes:
   0 — clean / acked / skipped (infra absence) / unverifiable (audit file exists
       but is unreadable or unparseable — e.g. inside the Claude Code Bash sandbox,
-      or a non-UTF-8 byte; the check was NOT performed, said loudly on stderr +
-      in the JSON "warning")
+      or a non-UTF-8 line that mentions COMMIT_HATCH_USED (a possibly damaged hatch
+      event; a non-UTF-8 line that does not is skipped and counted); the check was
+      NOT performed, said loudly on stderr + in the JSON "warning")
   1 — unacked violations found OR DB error (fail-closed)
 
 Output: valid JSON on stdout regardless of exit code.
@@ -237,7 +238,7 @@ def _parse_ts(raw_ts: str) -> datetime.datetime | None:
         return None
 
 
-def load_hatch_events(since: datetime.datetime) -> list[dict]:
+def load_hatch_events(since: datetime.datetime, stats: dict | None = None) -> list[dict]:
     """
     Parse audit.jsonl and return COMMIT_HATCH_USED events with
     in_claude_session==True that are strictly newer than `since`.
@@ -253,14 +254,31 @@ def load_hatch_events(since: datetime.datetime) -> list[dict]:
       - event repo non-empty and matching → evaluate, repo-scoped.
       - event repo empty/missing → evaluate as legacy-global (fail-closed grandfather).
       - CURRENT_REPO == '' (repo undeterminable) → no filtering, full legacy behavior.
+
+    Decoding is strict UTF-8 PER LINE (never the locale default, never lossy):
+      - an undecodable line whose raw bytes contain b"COMMIT_HATCH_USED" may be a
+        damaged hatch event we cannot evaluate → the UnicodeDecodeError propagates
+        and the caller reports the whole check "unverifiable" (never a silent drop);
+      - any other undecodable line is junk like a non-JSON line: skipped, and counted
+        in stats["skipped_undecodable_lines"] when a `stats` dict is passed. One stray
+        bad byte elsewhere in the log must not switch off the provenance check.
     """
     events: list[dict] = []
+    skipped_undecodable = 0
     try:
-        # Explicit strict UTF-8 (not the locale default): a non-UTF-8 byte must raise
-        # UnicodeDecodeError -> "unverifiable" on every host, never be silently
-        # decoded (latin-1/C locale) into a line the JSON filter then drops.
-        with open(AUDIT_PATH, encoding="utf-8") as f:
-            for line in f:
+        # Binary read + per-line strict decode. bytes.splitlines() splits on \n, \r and
+        # \r\n exactly like text-mode universal newlines, so line boundaries (and thus
+        # which events a lone \r separates) are unchanged from the old text-mode read.
+        with open(AUDIT_PATH, "rb") as f:
+            raw_lines = (piece for chunk in f for piece in chunk.splitlines())
+            for raw in raw_lines:
+                try:
+                    line = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    if b"COMMIT_HATCH_USED" in raw:
+                        raise  # possibly a damaged hatch event → unverifiable
+                    skipped_undecodable += 1
+                    continue
                 line = line.strip()
                 if not line:
                     continue
@@ -314,6 +332,8 @@ def load_hatch_events(since: datetime.datetime) -> list[dict]:
     except FileNotFoundError:
         pass  # handled by caller — audit file absent → skip
 
+    if stats is not None:
+        stats["skipped_undecodable_lines"] = skipped_undecodable
     return events
 
 
@@ -410,7 +430,8 @@ def append_ack_event(acked_events: list[dict]) -> None:
 def _report_unverifiable(exc: Exception) -> int:
     """The audit log exists but cannot be read or parsed (EPERM/EACCES/other OSError
     other than not-found, or a non-OSError such as a UnicodeDecodeError from a
-    non-UTF-8 byte), so the D5 provenance check could not run. Say so loudly —
+    non-UTF-8 line that mentions COMMIT_HATCH_USED), so the D5 provenance check could
+    not run. Say so loudly —
     never as a quiet "skip": inside the Claude Code Bash sandbox
     ~/.claude/logs/audit.jsonl is unreadable, and os.path.exists() reports False
     there, which used to turn an unperformed check into a silent pass.
@@ -471,13 +492,15 @@ def main() -> int:
         return _report_unverifiable(exc)
 
     # 3. Load candidate events from audit log
+    audit_stats: dict = {}
     try:
-        events = load_hatch_events(since)
+        events = load_hatch_events(since, audit_stats)
     except Exception as exc:  # noqa: BLE001
         # The file EXISTS (stat() above succeeded), so any failure reading or parsing
-        # it — open() denied after a good stat() (chmod 000), a non-UTF-8 byte
-        # (UnicodeDecodeError), ... — means the check could not run: unverifiable,
-        # never a quiet "skip". Only a file that vanished since the stat() is "absent".
+        # it — open() denied after a good stat() (chmod 000), an undecodable line that
+        # may be a hatch event (UnicodeDecodeError), ... — means the check could not
+        # run: unverifiable, never a quiet "skip". Only a file that vanished since the
+        # stat() is "absent".
         if isinstance(exc, FileNotFoundError):
             result = {
                 "status": "skip",
@@ -531,6 +554,14 @@ def main() -> int:
         print(json.dumps(result))
         return 0
 
+    # Undecodable junk lines are skipped, not fatal — surface the count in the JSON
+    # (only when non-zero, so the common-case output is unchanged).
+    skipped_note = (
+        {"skipped_undecodable_lines": audit_stats["skipped_undecodable_lines"]}
+        if audit_stats.get("skipped_undecodable_lines")
+        else {}
+    )
+
     # 6. For each event, check provenance within the window
     violations: list[dict] = []
     violation_events: list[dict] = []
@@ -547,20 +578,20 @@ def main() -> int:
 
     # 7. Build response
     if not violations:
-        result = {"status": "clean", "checked": checked, "violations": []}
+        result = {"status": "clean", "checked": checked, "violations": [], **skipped_note}
         print(json.dumps(result))
         write_checkpoint(now, old_ts=checkpoint)
         return 0
 
     if ACK_MODE:
-        result = {"status": "acked", "checked": checked, "violations": violations}
+        result = {"status": "acked", "checked": checked, "violations": violations, **skipped_note}
         print(json.dumps(result))
         append_ack_event(violation_events)
         write_checkpoint(now, old_ts=checkpoint)
         return 0
 
     # Unacked violations — exit 1 with remediation block on stderr (L1: sanitize audit values)
-    result = {"status": "violations", "checked": checked, "violations": violations}
+    result = {"status": "violations", "checked": checked, "violations": violations, **skipped_note}
     print(json.dumps(result))
 
     offenders = "".join(

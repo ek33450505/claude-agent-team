@@ -719,16 +719,23 @@ prepush_real_script_fixture() {
     [[ "$stderr" != *"reconcile OK"* ]]
 }
 
-# A non-OSError failure reading the audit log (here a non-UTF-8 byte -> UnicodeDecodeError)
-# means the check could not run: unverifiable, not a quiet "skip". The script opens the
-# audit log with an explicit strict encoding="utf-8", so the verdict must not depend on
-# the runner's locale. The test runs under a latin-1 locale (and with PYTHONUTF8 unset):
-# where that locale exists (macOS) a locale-default open() would decode \377 silently and
-# this test would fail without the pin; on a host lacking the locale Python falls back to
-# its default and the test still checks the mapping (just not the pin).
-@test "audit unparseable: non-UTF-8 byte in audit log → unverifiable (not skip), exit 0, sanitized reason, WARN, checkpoint kept" {
+# S3c rule: the audit log is decoded as strict UTF-8 PER LINE. An undecodable line that
+# mentions COMMIT_HATCH_USED may be a damaged hatch event we cannot evaluate -> the
+# UnicodeDecodeError propagates -> unverifiable, not a quiet "skip" (never a silent drop).
+# An undecodable line WITHOUT that marker is junk: skipped + counted (see the next tests),
+# so one stray bad byte cannot switch the provenance check off for every push. Decoding is
+# an explicit strict "utf-8" (never the locale default), so the verdict must not depend on
+# the runner's locale. These tests run under a latin-1 locale (and with PYTHONUTF8 unset):
+# where that locale exists (macOS) a locale-default decode would turn \377 into a silent
+# character and the marker-bearing test would fail without the pin; on a host lacking the
+# locale Python falls back to its default and the test still checks the mapping.
+#
+# (Rewritten for S3c: this test previously asserted that ANY non-UTF-8 byte, even on an
+# unrelated line, made the whole check unverifiable. It now asserts that only a
+# marker-bearing undecodable line does.)
+@test "audit unparseable: non-UTF-8 line mentioning COMMIT_HATCH_USED → unverifiable (not skip), exit 0, sanitized reason, WARN, checkpoint kept" {
     write_hatch_event "$T1" "sess-nonutf8" "true"
-    printf '\377\376 not-utf8\n' >> "$AUDIT_FILE"
+    printf '\377\376 {"event":"COMMIT_HATCH_USED"} not-utf8\n' >> "$AUDIT_FILE"
     run --separate-stderr env -u PYTHONUTF8 LC_ALL=en_US.ISO8859-1 CAST_AUDIT_PATH="$AUDIT_FILE" \
            CAST_DB_PATH="$CAST_DB" \
            CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
@@ -745,6 +752,98 @@ prepush_real_script_fixture() {
     [[ "$stderr" == *"NOT performed"* ]]
     # Nothing was verified, so the checkpoint must not advance.
     [ "$(cat "$CHECKPOINT")" = "$T0" ]
+}
+
+# A non-UTF-8 line that does NOT mention COMMIT_HATCH_USED is junk: the real hatch event
+# is still evaluated (a violation here blocks the push), and the skipped junk is counted
+# in the JSON. Junk lines sit both BEFORE and AFTER the event so ordering can't matter.
+@test "audit junk byte: unrelated non-UTF-8 lines do NOT disable the check → real violation still blocks, junk counted" {
+    printf '\377\376 junk-before\n' >> "$AUDIT_FILE"
+    write_hatch_event "$T1" "sess-junk-viol" "true"
+    printf 'junk-after \377\n' >> "$AUDIT_FILE"
+    run --separate-stderr env -u PYTHONUTF8 LC_ALL=en_US.ISO8859-1 CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    [ "$(json_field status)" = "violations" ]
+    [ "$(json_field checked)" = "1" ]
+    [[ "$output" == *"sess-junk-viol"* ]]
+    [ "$(json_field skipped_undecodable_lines)" = "2" ]
+    [[ "$stderr" == *"Unauthorized in-session self-commit"* ]]
+}
+
+@test "audit junk byte: unrelated non-UTF-8 line + provenance in window → clean exit 0, checkpoint advances, junk counted" {
+    write_hatch_event "$T1" "sess-junk-ok" "true"
+    printf '\377\376 junk\n' >> "$AUDIT_FILE"
+    insert_provenance "$PROV_MATCH"
+    run --separate-stderr env -u PYTHONUTF8 LC_ALL=en_US.ISO8859-1 CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+    [ "$(json_field checked)" = "1" ]
+    [ "$(json_field skipped_undecodable_lines)" = "1" ]
+    # The check ran, so (unlike unverifiable) the checkpoint advanced past T0.
+    [ "$(cat "$CHECKPOINT")" != "$T0" ]
+}
+
+@test "audit junk byte: ack mode still acks the real violation alongside a junk line" {
+    write_hatch_event "$T1" "sess-junk-ack" "true"
+    printf '\377 junk\n' >> "$AUDIT_FILE"
+    run --separate-stderr env CAST_RECONCILE_ACK=1 CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "acked" ]
+    [ "$(json_field checked)" = "1" ]
+    [ "$(json_field skipped_undecodable_lines)" = "1" ]
+}
+
+# Only junk bytes, no hatch marker anywhere -> nothing to evaluate -> clean (not
+# unverifiable): there is no hatch event we failed to read.
+@test "audit junk byte: file of only non-UTF-8 junk (no hatch marker) → clean, checked 0, junk counted" {
+    printf '\377\376\375\n\200\201 more junk\n' > "$AUDIT_FILE"
+    run --separate-stderr env -u PYTHONUTF8 LC_ALL=en_US.ISO8859-1 CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+    [ "$(json_field checked)" = "0" ]
+    [ "$(json_field skipped_undecodable_lines)" = "2" ]
+}
+
+# With no undecodable line the JSON is unchanged: the counter key appears only when > 0.
+@test "audit junk byte: no undecodable lines → no skipped_undecodable_lines key" {
+    write_hatch_event "$T1" "sess-nojunk" "true"
+    insert_provenance "$PROV_MATCH"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+    [[ "$output" != *"skipped_undecodable_lines"* ]]
+}
+
+# The per-line binary read must keep text-mode universal-newline boundaries: a lone \r
+# separates records exactly as \n does, so two events joined by \r are BOTH evaluated
+# (a naive split on \n alone would fuse them into one unparseable line and silently
+# drop both).
+@test "audit newlines: events separated by a lone \\r are both evaluated" {
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"sess-cr-a","in_claude_session":true}\r{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"sess-cr-b","in_claude_session":true}\n' \
+        "$T1" "$T1" > "$AUDIT_FILE"
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    [ "$(json_field checked)" = "2" ]
+    [[ "$output" == *"sess-cr-a"* ]]
+    [[ "$output" == *"sess-cr-b"* ]]
 }
 
 @test "audit bad lines: non-dict JSON line ([]) does not hide a later real violation" {
