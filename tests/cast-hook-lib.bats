@@ -105,6 +105,12 @@ _hl_run_safe() {
   run bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$HOOK_LIB" "$@"
 }
 
+# _hl_mode <path> — octal permission bits; BSD vs GNU stat chosen by $OSTYPE (GNU `stat -f` is
+# filesystem status and succeeds, so a `stat -f … || stat -c …` fallback never runs on Linux).
+_hl_mode() {
+  if [[ "$OSTYPE" == darwin* ]]; then stat -f %Lp "$1"; else stat -c %a "$1"; fi
+}
+
 # _hl_repo <dir> — a repo with one committed file (tracked.txt).
 _hl_repo() {
   mkdir -p "$1"
@@ -144,8 +150,9 @@ _hl_sub_fixture() {
   git -C "$1" -c user.email=test@example.com -c user.name=t -c commit.gpgsign=false commit -q -m "add sm"
   _hl_canary "$BATS_TEST_TMPDIR/sm-canary.sh" "$2" cat
   git -C "$1/sm" config filter.evil.clean "$BATS_TEST_TMPDIR/sm-canary.sh"
-  # Precondition: the SUPERPROJECT config defines no filter; only the submodule's own does.
-  [ -z "$(git -C "$1" config --get-regexp '^filter\.' || true)" ]
+  # Precondition: the SUPERPROJECT's own (local) config defines no filter; only the submodule's does.
+  # --local: global/system config may legitimately define filters (e.g. git-lfs on CI runners).
+  [ -z "$(git -C "$1" config --local --get-regexp '^filter\.' || true)" ]
 }
 
 # _hl_sub_probe <repo> <marker> <stamp-control> <stamp-safe> <git-args...> — CONTROL (plain git
@@ -996,7 +1003,7 @@ _hl_lib_with_two_git() {
   _hl_repo "$repo"
   : > "$log"
   _hl_dir_shim "$BATS_TEST_TMPDIR/gw" 775 "$log"
-  [ "$(stat -f %Lp "$BATS_TEST_TMPDIR/gw" 2> /dev/null || stat -c %a "$BATS_TEST_TMPDIR/gw")" = "775" ]
+  [ "$(_hl_mode "$BATS_TEST_TMPDIR/gw")" = "775" ]
   lib="$(_hl_lib_with_two_git "$BATS_TEST_TMPDIR/gw/git" "$BATS_TEST_TMPDIR/gw/git")"
   run bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$lib" "$repo" rev-parse --git-dir
   [ "$status" -eq 0 ]
@@ -1010,7 +1017,7 @@ _hl_lib_with_two_git() {
   : > "$log"
   _hl_dir_shim "$BATS_TEST_TMPDIR/ww" 777 "$log"
   _hl_dir_shim "$BATS_TEST_TMPDIR/ok" 755 "$log"
-  [ "$(stat -f %Lp "$BATS_TEST_TMPDIR/ww" 2> /dev/null || stat -c %a "$BATS_TEST_TMPDIR/ww")" = "777" ]
+  [ "$(_hl_mode "$BATS_TEST_TMPDIR/ww")" = "777" ]
   # Only the world-writable candidate: refused, nothing ran.
   lib="$(_hl_lib_with_two_git "$BATS_TEST_TMPDIR/ww/git" "$BATS_TEST_TMPDIR/ww/git")"
   run bash -c 'set -euo pipefail; . "$1"; shift; cast_git_safe "$@"' _ "$lib" "$repo" rev-parse --git-dir
