@@ -659,6 +659,33 @@ def _emit_unparseable_neon_ask(raw):
         pass
 
 
+# Parse-failure scan for a Write/Edit call (see _unparseable_write_edit_verdict). Linear: a
+# literal prefix plus bounded alternation, no nested quantifiers.
+_WRITE_EDIT_TOOL_NAME_SCAN_RE = re.compile(r'"tool_name"\s*:\s*"(Write|Edit)"')
+
+
+def _unparseable_write_edit_verdict(raw, exc):
+    """Parse-failure branch ONLY. (code, msg) when the unparseable stdin still LOOKS like a
+    Write/Edit call, else None.
+
+    An attacker-shaped payload (e.g. 1,000,000-deep nesting in an extra tool_input key ->
+    RecursionError) makes json.loads fail, and the policy gate never ran: that must not allow
+    the write. Same verdict as a raising evaluate() -- BLOCK, or allow under
+    CAST_POLICY_OVERRIDE=1 (audited best-effort). The whole of `raw` is scanned (the harness may
+    serialise tool_input before tool_name); the reason names the exception CLASS only, never raw
+    text. A block is stderr + exit 2, so the caller must NOT also print the Neon ask object:
+    exactly one outcome per call. Like the parsed path, managed/headless sub-claude
+    (CLAUDE_SUBPROCESS=1) skips the Write/Edit policy engine."""
+    if os.environ.get("CLAUDE_SUBPROCESS", "0") == "1":
+        return None
+    m = _WRITE_EDIT_TOOL_NAME_SCAN_RE.search(raw)
+    if m is None:
+        return None
+    code, msg = _write_edit_gate_error(
+        _load("cast_git_guard", "cast-git-guard.py"), m.group(1), {}, "", exc)
+    return (code, msg) if code == 2 else None
+
+
 def _emit_pretool_output(sentinel, action, neon_reason):
     """Print AT MOST ONE hookSpecificOutput JSON object on stdout (Claude Code
     2.1.288 BLOCKS the call when a PreToolUse hook's output fails to parse, so
@@ -695,6 +722,33 @@ def _block(message):
     if message:
         print(message, file=sys.stderr)
     return 2
+
+
+def _write_edit_gate_error(git_guard, tool, tool_input, session_id, exc):
+    """(code, msg) when git_guard.evaluate() RAISED for a Write/Edit: fail CLOSED.
+
+    evaluate() fails closed on its own and should never raise; if it does, the policy gate
+    did not run, so the write is blocked unless CAST_POLICY_OVERRIDE=1 (audited via the
+    guard's own writer, best-effort). The reason names the exception CLASS only -- never
+    str(exc) or the path, which can carry attacker-controlled text. Never raises."""
+    exc_class = type(exc).__name__
+    _log_error(f"Write/Edit policy gate could not run for {tool} ({exc_class}); failing closed")
+    if os.environ.get("CAST_POLICY_OVERRIDE", "0") == "1":
+        try:
+            path = tool_input.get("file_path", tool_input.get("path"))
+            git_guard._audit_policy_override(
+                "policy-internal-error",
+                path if isinstance(path, str) else "<unresolved file_path>",
+                session_id if session_id else os.environ.get("CLAUDE_SESSION_ID", "default"),
+            )
+        except Exception:
+            pass
+        return 0, ""
+    return 2, (
+        f"**[CAST-POLICY-BLOCK]** Internal error ({exc_class}) while checking this {tool} "
+        f"against the policies; failing closed.\n"
+        f"Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason)."
+    )
 
 
 def _record_dispatch(data):
@@ -1060,12 +1114,18 @@ def main():
         return 0
     try:
         data = json.loads(raw)
-    except Exception:
+    except Exception as parse_exc:
         # Parse failure (malformed JSON, or RecursionError on deep nesting --
         # /usr/bin/python3 3.9 trips it near 1000 levels). Everything below is
         # unreachable, so this is the ONLY place a Neon call can still be
         # caught: fail closed with a prompt rather than let it through
         # silently. Nothing but that one ask is ever printed on this path.
+        # A Write/Edit call that went unparseable ran NO policy: it is blocked (stderr,
+        # exit 2) instead -- unless CAST_POLICY_OVERRIDE=1 -- and then no Neon ask is
+        # printed (one outcome per call).
+        verdict = _unparseable_write_edit_verdict(raw, parse_exc)
+        if verdict is not None:
+            return _block(verdict[1])
         _emit_unparseable_neon_ask(raw)
         return 0
     if not isinstance(data, dict):
@@ -1150,8 +1210,10 @@ def main():
             sid = data.get("session_id")
             try:
                 code, msg = git_guard.evaluate(tool, tool_input, sid if isinstance(sid, str) else "")
-            except Exception:
-                code, msg = 0, ""
+            except Exception as exc:
+                # Write/Edit fails CLOSED (unlike Bash above): the policy gate did not run.
+                code, msg = _write_edit_gate_error(
+                    git_guard, tool, tool_input, sid if isinstance(sid, str) else "", exc)
             if code == 2:
                 return _block(msg)
 
