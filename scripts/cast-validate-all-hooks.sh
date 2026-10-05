@@ -298,14 +298,14 @@ status = 0
 if "decision" in data:
     decision = data.get("decision")
     if decision not in ("approve", "block"):
-        print(f"[fail] {label} ({event}) — invalid top-level decision value '{decision}' (Claude Code accepts only approve|block)", file=sys.stderr)
+        print(f"[fail] {label} ({event}) — invalid top-level decision value {decision!r} (Claude Code accepts only approve|block)", file=sys.stderr)
         status = max(status, 2)
 
 if allowed is not None:
     unknown = top_keys - allowed
     if unknown:
         for k in sorted(unknown):
-            print(f"[warn] {label} ({event}) — unknown key '{k}'", file=sys.stderr)
+            print(f"[warn] {label} ({event}) — unknown key {k!r}", file=sys.stderr)
         status = max(status, 1)
 
 if "hookSpecificOutput" in data:
@@ -315,7 +315,7 @@ if "hookSpecificOutput" in data:
         sys.exit(2)
     emitted_name = hso.get("hookEventName", "")
     if emitted_name != event:
-        print(f"[fail] {label} ({event}) — wrong hookEventName '{emitted_name}' (expected '{event}')", file=sys.stderr)
+        print(f"[fail] {label} ({event}) — wrong hookEventName {emitted_name!r} (expected '{event}')", file=sys.stderr)
         sys.exit(2)
     elif "additionalContext" not in hso:
         print(f"[warn] {label} ({event}) — hookSpecificOutput missing 'additionalContext'", file=sys.stderr)

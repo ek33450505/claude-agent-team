@@ -123,7 +123,7 @@ if allowed is not None:
     unknown = top_keys - allowed
     if unknown:
         for k in sorted(unknown):
-            print(f"[warn] {label} ({event}) — unknown key '{k}' (harness silently ignores it)", file=sys.stderr)
+            print(f"[warn] {label} ({event}) — unknown key {k!r} (harness silently ignores it)", file=sys.stderr)
         status = max(status, 1)
 
 # Validate hookSpecificOutput shape when present
@@ -135,7 +135,7 @@ if "hookSpecificOutput" in data:
     else:
         emitted_name = hso.get("hookEventName", "")
         if emitted_name != event:
-            print(f"[fail] {label} ({event}) — wrong hookEventName '{emitted_name}' (expected '{event}')", file=sys.stderr)
+            print(f"[fail] {label} ({event}) — wrong hookEventName {emitted_name!r} (expected '{event}')", file=sys.stderr)
             status = max(status, 2)
         elif "additionalContext" not in hso:
             print(f"[warn] {label} ({event}) — hookSpecificOutput missing 'additionalContext'", file=sys.stderr)
@@ -164,7 +164,7 @@ elif event in REQUIRES_HOOK_SPECIFIC:
 if "decision" in data:
     decision = data.get("decision")
     if decision not in ("approve", "block"):
-        print(f"[fail] {label} ({event}) — invalid top-level decision value '{decision}' (Claude Code accepts only approve|block)", file=sys.stderr)
+        print(f"[fail] {label} ({event}) — invalid top-level decision value {decision!r} (Claude Code accepts only approve|block)", file=sys.stderr)
         status = max(status, 2)
     elif status == 0:
         print(f"[ok] {label} ({event}) — shape valid (decision={decision})")
@@ -216,6 +216,16 @@ if [[ -z "$HOOK_LINES" ]]; then
 fi
 
 while IFS=$'\t' read -r event label cmd; do
+  # --source rewrite: settings.json's hook commands always point at the INSTALLED copy
+  # (~/.claude/scripts/<name>, or the literal $HOME form), even under --source. Without this,
+  # --source read the repo's settings.json but still EXECUTED ~/.claude/scripts/<name>, so a
+  # stale installed copy failed a correct tree and a working-tree fix/regression was never seen.
+  # Literal prefix substitution on the two known forms only; any other shape passes through.
+  # Keep in sync with the identical rewrite in cast-validate-all-hooks.sh.
+  if [[ "$USE_SOURCE" == "1" ]]; then
+    cmd="${cmd//\$HOME\/.claude\/scripts\//$REPO_DIR/scripts/}"
+    cmd="${cmd//~\/.claude\/scripts\//$REPO_DIR/scripts/}"
+  fi
   # Resolve script path: strip 'bash ' prefix, expand ~
   script_path="${cmd#bash }"
   script_path="${script_path/#\~/$HOME}"

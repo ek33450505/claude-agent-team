@@ -341,3 +341,94 @@ PYEOF
   [ "$status" -eq 0 ]
   assert_output --partial "empty stdout"
 }
+
+# ---------------------------------------------------------------------------
+# Test 8: --source executes the REPO copy of a hook, not the installed one (2026-10-05).
+# settings.json registers hooks as `bash ~/.claude/scripts/<name>` (the INSTALLED path). Under
+# --source the validator read the repo settings.json but still executed the installed copy, so a
+# stale installed hook failed a correct tree and a working-tree fix/regression was never seen.
+# Both directions are probed in a sandbox repo copy: the repo copy and the installed copy
+# disagree, and only the one the mode is supposed to run may decide the verdict.
+# ---------------------------------------------------------------------------
+
+# Build $PC_SB (sandbox repo: validator + settings.json registering ONE PreCompact hook through the
+# installed-path form + scripts/fixture-pc.sh) and $HOME/.claude/scripts/fixture-pc.sh (installed copy).
+# Args: repo-copy-json installed-json; "" = that copy prints nothing.
+_pc_sandbox() { # repo_json installed_json
+  PC_SB="$BATS_TEST_TMPDIR/sandbox-repo"
+  mkdir -p "$PC_SB/scripts" "$HOME/.claude/scripts"
+  cp "$VALIDATOR" "$PC_SB/scripts/cast-validate-hook-contracts.sh"
+  printf '%s\n' '{"hooks":{"PreCompact":[{"id":"fixture-pc","hooks":[{"type":"command","command":"bash ~/.claude/scripts/fixture-pc.sh"}]}]}}' > "$PC_SB/settings.json"
+  if [ -n "$1" ]; then _write_fixture_hook "$PC_SB/scripts/fixture-pc.sh" "$1"; else _write_logging_hook "$PC_SB/scripts/fixture-pc.sh"; fi
+  if [ -n "$2" ]; then _write_fixture_hook "$HOME/.claude/scripts/fixture-pc.sh" "$2"; else _write_logging_hook "$HOME/.claude/scripts/fixture-pc.sh"; fi
+}
+_pc_validate() { # extra flags...
+  run env HOME="$HOME" bash "$PC_SB/scripts/cast-validate-hook-contracts.sh" "$@"
+}
+
+@test "validator --source runs the REPO copy: clean repo copy + stale installed copy (prints allow) -> no error" {
+  _pc_sandbox '' '{"decision":"allow"}'
+  _pc_validate --source
+  [ "$status" -le 1 ]
+  assert_output --partial "[ok] fixture-pc (PreCompact)"
+  refute_output --partial "invalid top-level decision"
+}
+
+@test "validator --source runs the REPO copy: bad repo copy (prints allow) + clean installed copy -> error" {
+  _pc_sandbox '{"decision":"allow"}' ''
+  _pc_validate --source
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] fixture-pc (PreCompact)"
+  assert_output --partial "invalid top-level decision value 'allow'"
+}
+
+@test "validator without --source still runs the INSTALLED copy (default mode unchanged)" {
+  _pc_sandbox '' '{"decision":"allow"}'
+  # default mode reads $HOME/.claude/settings.json, not the repo's
+  cp "$PC_SB/settings.json" "$HOME/.claude/settings.json"
+  _pc_validate
+  [ "$status" -eq 2 ]
+  assert_output --partial "invalid top-level decision value 'allow'"
+}
+
+# Fail if ANY output line starts with a forged "[ok] forged" marker (a hook-controlled string that
+# reached the log unescaped can inject a line break and forge a validator verdict line).
+_refute_forged_ok_line() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      "[ok] forged"*)
+        echo "forged line leaked: $line" >&2
+        return 1
+        ;;
+    esac
+  done <<< "$output"
+}
+
+@test "validator escapes a hook-controlled decision value (no forged [ok] line in the log)" {
+  _pc_sandbox '{"decision":"allow\n[ok] forged"}' ''
+  _pc_validate --source
+  [ "$status" -eq 2 ]
+  # the newline is escaped (repr), so the value stays on ONE line...
+  assert_output --partial '\n[ok] forged'
+  # ...and no output line may start with a forged [ok] marker
+  _refute_forged_ok_line
+}
+
+@test "validator escapes a hook-controlled unknown KEY (no forged [ok] line in the log)" {
+  _pc_sandbox '{"zz\n[ok] forged-via-key":1}' ''
+  _pc_validate --source
+  # the key is reported (unknown key warn) with its newline escaped, on ONE line...
+  assert_output --partial 'unknown key'
+  assert_output --partial '\n[ok] forged-via-key'
+  _refute_forged_ok_line
+}
+
+@test "validator escapes a hook-controlled hookEventName (no forged [ok] line in the log)" {
+  _pc_sandbox '{"hookSpecificOutput":{"hookEventName":"x\n[ok] forged-via-event","additionalContext":""}}' ''
+  _pc_validate --source
+  [ "$status" -eq 2 ]
+  assert_output --partial "wrong hookEventName"
+  assert_output --partial '\n[ok] forged-via-event'
+  _refute_forged_ok_line
+}

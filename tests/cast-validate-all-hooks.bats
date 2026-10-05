@@ -727,3 +727,42 @@ _validate_all_event_fixture() { # event json
   [ "$status" -eq 0 ]
   assert_output --partial "empty stdout"
 }
+
+# Fail if ANY output line starts with a forged "[ok] forged" marker (a hook-controlled string that
+# reached the log unescaped can inject a line break and forge a validator verdict line).
+_refute_forged_ok_line() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      "[ok] forged"*)
+        echo "forged line leaked: $line" >&2
+        return 1
+        ;;
+    esac
+  done <<< "$output"
+}
+
+@test "validate-all: escapes a hook-controlled decision value (no forged [ok] line in the log)" {
+  _validate_all_event_fixture PreCompact '{"decision":"allow\n[ok] forged"}'
+  [ "$status" -eq 2 ]
+  # the newline is escaped (repr), so the value stays on ONE line...
+  assert_output --partial '\n[ok] forged'
+  # ...and no output line may start with a forged [ok] marker
+  _refute_forged_ok_line
+}
+
+@test "validate-all: escapes a hook-controlled unknown KEY (no forged [ok] line in the log)" {
+  _validate_all_event_fixture PreCompact '{"zz\n[ok] forged-via-key":1}'
+  # the key is reported (unknown key warn) with its newline escaped, on ONE line...
+  assert_output --partial 'unknown key'
+  assert_output --partial '\n[ok] forged-via-key'
+  _refute_forged_ok_line
+}
+
+@test "validate-all: escapes a hook-controlled hookEventName (no forged [ok] line in the log)" {
+  _validate_all_event_fixture SessionStart '{"hookSpecificOutput":{"hookEventName":"x\n[ok] forged-via-event","additionalContext":""}}'
+  [ "$status" -eq 2 ]
+  assert_output --partial "wrong hookEventName"
+  assert_output --partial '\n[ok] forged-via-event'
+  _refute_forged_ok_line
+}
