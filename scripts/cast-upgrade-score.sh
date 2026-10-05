@@ -83,10 +83,32 @@ ${RELEASE_NOTES}
 # ONE line to stderr and falls back to [] on stdout (scoring stays non-gating).
 LOG_DIR="${HOME}/.claude/logs"
 LOG_FILE="${LOG_DIR}/upgrade-score.log"
-# Byte-exact strip of every C0 control byte (incl. CR/LF/ESC) and DEL, so a hostile
-# repo/tag cannot forge log lines or smuggle terminal escapes into the log/notice.
-# LC_ALL=C + octal ranges (not [:cntrl:]) keeps this locale-independent.
-LABEL="$(printf '%s@%s' "$REPO" "$TAG" | LC_ALL=C tr -d '\000-\037\177')"
+# Byte-exact label sanitizer, so a hostile repo/tag cannot forge log lines, smuggle
+# terminal escapes, or visually spoof the log/notice. LC_ALL=C + octal escapes built
+# with printf (not [:cntrl:], not sed's \x) keeps it locale-independent and portable
+# across BSD (macOS) and GNU sed: BRE only, no -E, no GNU-only escapes.
+#   1. tr  strips every C0 control byte (incl. CR/LF/ESC) and DEL.
+#   2. sed strips the UTF-8 encodings of the C1 controls (U+0080-U+009F = C2 80..9F)
+#      and the bidi / zero-width format chars U+200B-U+200F, U+202A-U+202E,
+#      U+2066-U+2069 and U+FEFF (EF BB BF).
+# The sed pass LOOPS to a fixpoint (:a ... ta): a single pass can splice the bytes
+# around a removed match into a fresh one (C2 C2 80 80 -> C2 80), and step 1 can do
+# the same (C2 <LF> 80 -> C2 80) - so one pass would leave a live C1/Cf behind.
+_sanitize_label() {
+  local c1 cf iso bom
+  c1="$(printf '\302[\200-\237]')"
+  cf="$(printf '\342\200[\213-\217\252-\256]')"
+  iso="$(printf '\342\201[\246-\251]')"
+  bom="$(printf '\357\273\277')"
+  LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed \
+    -e ':a' \
+    -e "s/${c1}//" \
+    -e "s/${cf}//" \
+    -e "s/${iso}//" \
+    -e "s/${bom}//" \
+    -e 'ta'
+}
+LABEL="$(printf '%s@%s' "$REPO" "$TAG" | _sanitize_label)"
 ERR_SINK="$LOG_FILE"
 mkdir -p "$LOG_DIR" 2>/dev/null || true  # benign: unwritable log dir degrades to no log, scoring continues
 if printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LABEL" 2>/dev/null >>"$LOG_FILE"; then
