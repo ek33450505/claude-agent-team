@@ -50,11 +50,9 @@ REDACT_MAPS_DIR = os.path.join(HOME, ".claude", "logs", "redact-maps")
 CAST_CLI_CFG = os.path.join(HOME, ".claude", "config", "cast-cli.json")
 REDACT_SCRIPT = os.path.join(HOME, ".claude", "scripts", "cast-redact.py")
 CLAUDE_DIR = os.environ.get("CLAUDE_DIR", os.path.join(HOME, ".claude"))
-# Policy data: prefer repo cwd (dev), fall back to installed ~/.claude — same
-# candidate order as scripts/cast-egress-sentinel.py:53-56, the canonical
-# reader of this file.
+# Policy data: cwd is agent-writable, so only the installed copy is trusted; repo edits take effect after install.sh.
+# Same candidate list as scripts/cast-egress-sentinel.py (_POLICY_CANDIDATES), the canonical reader of this file.
 EGRESS_POLICY_CANDIDATES = [
-    os.path.join(os.getcwd(), "config", "egress-policy.json"),
     os.path.join(CLAUDE_DIR, "config", "egress-policy.json"),
 ]
 
@@ -148,8 +146,8 @@ def _mcp_args_summary(tool_input: dict) -> str:
 
 
 def _load_egress_policy() -> dict:
-    """Load config/egress-policy.json via EGRESS_POLICY_CANDIDATES (same order
-    as scripts/cast-egress-sentinel.py's _load_policy(), lines 76-84). Returns
+    """Load config/egress-policy.json via EGRESS_POLICY_CANDIDATES (same
+    candidates as _load_policy() in scripts/cast-egress-sentinel.py). Returns
     {} on any failure — never raises.
 
     Logs to hook-errors.log on failure (matching the sentinel's own

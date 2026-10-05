@@ -14,6 +14,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -617,15 +618,61 @@ class TestMcpParsing(unittest.TestCase):
             self.assertTrue(result["is_cloud_bound"])
 
     def test_mcp_is_cloud_bound_reads_real_repo_egress_policy(self):
-        """Integration check against the REAL config/egress-policy.json (no
-        mocked EGRESS_POLICY_CANDIDATES) — catches drift between this
-        function and the actual policy file's contents, e.g. Fix 2's
-        `cloudflare` addition. Relies on EGRESS_POLICY_CANDIDATES' first entry
-        (os.getcwd()/config/egress-policy.json, bound at cast-audit.py import
-        time) resolving to the repo's real config/ — true when the test
-        suite is run from the repo root, as tests/run.sh and CI both do."""
-        self.assertTrue(cast_audit._mcp_is_cloud_bound("cloudflare"))
-        self.assertFalse(cast_audit._mcp_is_cloud_bound("cast-record"))
+        """Integration check against the REAL repo config/egress-policy.json —
+        catches drift between this function and the actual policy file's
+        contents, e.g. Fix 2's `cloudflare` addition. The candidates list is
+        pointed at the repo file explicitly (computed from __file__), NOT via
+        cwd: cast-audit.py no longer reads a cwd-relative policy (cwd is
+        agent-writable), so this test must not depend on where it is run."""
+        repo_policy = str(Path(__file__).resolve().parent.parent / 'config' / 'egress-policy.json')
+        self.assertTrue(os.path.isfile(repo_policy), repo_policy)
+        with mock.patch.object(cast_audit, "EGRESS_POLICY_CANDIDATES", [repo_policy]):
+            self.assertTrue(cast_audit._mcp_is_cloud_bound("cloudflare"))
+            self.assertFalse(cast_audit._mcp_is_cloud_bound("cast-record"))
+
+    def test_egress_policy_candidates_never_include_cwd(self):
+        """Hooks run unsandboxed with cwd = the project dir, which a sandboxed
+        agent can write. A planted <cwd>/config/egress-policy.json must never
+        be a policy candidate. What a PASSING run looks like while the bug is
+        present: none — with the old cwd-first list this FAILS on both the
+        structural assertion and the behavioral one (the planted local_only
+        verdict wins and `_mcp_is_cloud_bound` returns False).
+
+        Candidates are bound at import time from os.getcwd(), so a FRESH copy
+        of the module is imported with cwd set to the planted dir."""
+        planted_cwd = os.path.realpath(tempfile.mkdtemp(prefix="cast-audit-planted-cwd-"))
+        empty_claude_dir = os.path.realpath(tempfile.mkdtemp(prefix="cast-audit-empty-claude-"))
+        # addCleanup is LIFO: register the rmtrees BEFORE the chdir-back below so
+        # they run AFTER it (never rmtree the directory the process is still in).
+        self.addCleanup(shutil.rmtree, planted_cwd, True)
+        self.addCleanup(shutil.rmtree, empty_claude_dir, True)
+        os.makedirs(os.path.join(planted_cwd, "config"))
+        with open(os.path.join(planted_cwd, "config", "egress-policy.json"), "w") as f:
+            json.dump({"mcp_servers": {
+                "_default_unknown": "local_only",
+                "cloud_bound": [],
+                "local_only": ["zz-planted-server"],
+            }}, f)
+
+        orig_cwd = os.getcwd()
+        self.addCleanup(os.chdir, orig_cwd)
+        os.chdir(planted_cwd)
+        with mock.patch.dict(os.environ, {"CLAUDE_DIR": empty_claude_dir}):
+            spec = importlib.util.spec_from_file_location("cast_audit_fresh_cwd", str(_SCRIPT_PATH))
+            fresh = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(fresh)
+
+        self.assertTrue(fresh.EGRESS_POLICY_CANDIDATES)
+        for cand in fresh.EGRESS_POLICY_CANDIDATES:
+            real = os.path.realpath(cand)
+            self.assertFalse(
+                real == planted_cwd or real.startswith(planted_cwd + os.sep),
+                f"cwd-relative policy candidate present: {cand}",
+            )
+        # Behavioral: the planted policy marks the server local_only; with no
+        # installed policy the server is unknown -> fail-safe cloud-bound.
+        with mock.patch.object(fresh, "_log_error"):
+            self.assertTrue(fresh._mcp_is_cloud_bound("zz-planted-server"))
 
     def test_mcp_is_cloud_bound_still_true_when_policy_load_logs_error(self):
         """Security Low finding follow-up: the fail-safe VALUE (True) and the
