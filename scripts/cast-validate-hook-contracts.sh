@@ -157,16 +157,16 @@ elif event in REQUIRES_HOOK_SPECIFIC:
     elif status == 0:
         print(f"[ok] {label} ({event}) — shape valid")
 
-# Validate Stop/PreToolUse decision field
+# Validate the top-level decision field (EVERY event). Claude Code's hook-output validation accepts
+# only "approve" or "block" here ("decision: Invalid option: expected one of approve|block");
+# anything else (allow, continue, deny, ask, ...) is rejected at runtime. To proceed, print nothing.
+# Keep in sync with the identical check in cast-validate-all-hooks.sh.
 if "decision" in data:
     decision = data.get("decision")
-    if event == "Stop" and decision not in ("block", "continue"):
-        print(f"[fail] {label} ({event}) — invalid decision value '{decision}' (expected block|continue)", file=sys.stderr)
+    if decision not in ("approve", "block"):
+        print(f"[fail] {label} ({event}) — invalid top-level decision value '{decision}' (Claude Code accepts only approve|block)", file=sys.stderr)
         status = max(status, 2)
-    elif event == "PreToolUse" and decision not in ("block", "allow"):
-        print(f"[warn] {label} ({event}) — unexpected decision value '{decision}'", file=sys.stderr)
-        status = max(status, 1)
-    if status == 0:
+    elif status == 0:
         print(f"[ok] {label} ({event}) — shape valid (decision={decision})")
 
 if status == 0 and not stdout_raw:

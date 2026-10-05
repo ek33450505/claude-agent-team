@@ -269,3 +269,75 @@ for hook in hooks:
   [[ "$matcher" =~ "Task" ]]
   [[ "$matcher" =~ "Agent" ]]
 }
+
+# ---------------------------------------------------------------------------
+# Test 7: top-level `decision` is validated for EVERY event (2026-10-05).
+# Claude Code's hook-output validation accepts only "approve" | "block" and rejects anything else
+# at runtime ("decision: Invalid option: expected one of approve|block") - the validator used to
+# check Stop (block|continue) and PreToolUse (block|allow, warn only) and pass every other event.
+# ---------------------------------------------------------------------------
+
+# Plant a fixture hook (printing $2, or printing nothing when $2 is __silent__) registered under event $1 in a fake HOME, then run the
+# validator against it. Sets $status / $output (stdout+stderr merged).
+_validate_event_fixture() { # event json
+  local event="$1" json="$2"
+  local fixture_script="$TEST_TMPDIR/decision-$event-hook.sh"
+  local settings_file="$TEST_TMPDIR/decision-$event-settings.json"
+  local fake_home="$TEST_TMPDIR/fh_decision_$event"
+  if [ "$json" = "__silent__" ]; then
+    _write_logging_hook "$fixture_script"
+  else
+    _write_fixture_hook "$fixture_script" "$json"
+  fi
+  _CV_EVENT="$event" _SETTINGS_PATH="$settings_file" _SCRIPT_PATH="$fixture_script" python3 - <<'PYEOF'
+import json, os
+event = os.environ["_CV_EVENT"]
+data = {"hooks": {event: [{"id": "decision-fixture-hook", "hooks": [
+    {"type": "command", "command": "bash " + os.environ["_SCRIPT_PATH"], "timeout": 3}]}]}}
+with open(os.environ["_SETTINGS_PATH"], "w") as f:
+    json.dump(data, f)
+PYEOF
+  mkdir -p "$fake_home/.claude"
+  cp "$settings_file" "$fake_home/.claude/settings.json"
+  run env HOME="$fake_home" bash "$VALIDATOR"
+}
+
+@test "validator FAILS a PreCompact hook that prints decision=allow (Claude Code accepts only approve|block)" {
+  _validate_event_fixture PreCompact '{"decision":"allow"}'
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] decision-fixture-hook (PreCompact)"
+  assert_output --partial "invalid top-level decision value 'allow'"
+  assert_output --partial "approve|block"
+}
+
+@test "validator FAILS a Stop hook that prints decision=continue (not an accepted value)" {
+  _validate_event_fixture Stop '{"decision":"continue"}'
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] decision-fixture-hook (Stop)"
+  assert_output --partial "invalid top-level decision value 'continue'"
+}
+
+@test "validator FAILS a PreToolUse hook that prints decision=allow (previously only warned)" {
+  _validate_event_fixture PreToolUse '{"decision":"allow"}'
+  [ "$status" -eq 2 ]
+  assert_output --partial "invalid top-level decision value 'allow'"
+}
+
+@test "validator accepts decision=block on PreCompact (control: no invalid-decision failure)" {
+  _validate_event_fixture PreCompact '{"decision":"block","reason":"x"}'
+  [ "$status" -eq 0 ]
+  assert_output --partial "[ok] decision-fixture-hook (PreCompact)"
+  refute_output --partial "invalid top-level decision"
+}
+
+@test "validator accepts decision=approve on Stop (control: no invalid-decision failure)" {
+  _validate_event_fixture Stop '{"decision":"approve"}'
+  [ "$status" -eq 0 ]
+  refute_output --partial "invalid top-level decision"
+}
+
+@test "validator accepts empty stdout on PreCompact (the proceed contract)" {
+  _validate_event_fixture PreCompact __silent__
+  [ "$status" -eq 0 ]
+  assert_output --partial "empty stdout"
+}

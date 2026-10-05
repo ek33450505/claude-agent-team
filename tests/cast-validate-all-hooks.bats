@@ -649,3 +649,81 @@ PYEOF
   [[ "$output" =~ "1 fail" ]]
   assert_output --partial "$fake_home/.claude/scripts/source-rewrite-marker.sh"
 }
+
+# ---------------------------------------------------------------------------
+# Top-level `decision` is validated for EVERY event (2026-10-05). Claude Code accepts only
+# "approve" | "block" and rejects anything else at runtime ("decision: Invalid option: expected
+# one of approve|block"). This is the validator the CI hook-contract-validation job runs
+# (`--source`); its embedded checker had no decision check, so {"decision":"allow"} passed.
+# Fixtures are planted the way the tests above plant theirs: a synthetic settings.json in a
+# per-test fake HOME, validator run with `env HOME=<fake>` (the real HOME is never read).
+# ---------------------------------------------------------------------------
+
+# Write a hook that prints the given JSON line on stdout
+_write_json_hook() { # path json
+  local path="$1" json="$2"
+  cat > "$path" <<SCRIPT
+#!/usr/bin/env bash
+if [[ "\${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then exit 0; fi
+cat <<'JSONEOF'
+$json
+JSONEOF
+SCRIPT
+  chmod +x "$path"
+}
+
+# Plant a hook printing $2 under event $1 in a fake HOME and run the validator (sets $status/$output)
+_validate_all_event_fixture() { # event json
+  local event="$1" json="$2"
+  local hook="$TEST_TMPDIR/decision-$event-hook.sh"
+  local settings="$TEST_TMPDIR/decision-$event-settings.json"
+  local fake_home="$TEST_TMPDIR/fh_decision_$event"
+  _write_json_hook "$hook" "$json"
+  _write_synthetic_settings "$settings" "$event" "$hook"
+  mkdir -p "$fake_home/.claude"
+  cp "$settings" "$fake_home/.claude/settings.json"
+  # [fail] messages go to stderr; merge so $output sees them.
+  run bash -c "env HOME='$fake_home' bash '$VALIDATOR_ALL' 2>&1"
+}
+
+@test "validate-all: FAILS a PreCompact hook that prints decision=allow (Claude Code accepts only approve|block)" {
+  _validate_all_event_fixture PreCompact '{"decision":"allow"}'
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] test-precompact-hook (PreCompact)"
+  assert_output --partial "invalid top-level decision value 'allow' (Claude Code accepts only approve|block)"
+  # the failing hook must not ALSO be reported as a shape-valid ok
+  refute_output --partial "[ok] test-precompact-hook"
+  [[ "$output" =~ "1 fail" ]]
+}
+
+@test "validate-all: FAILS a Stop hook that prints decision=continue" {
+  _validate_all_event_fixture Stop '{"decision":"continue"}'
+  [ "$status" -eq 2 ]
+  assert_output --partial "invalid top-level decision value 'continue'"
+}
+
+@test "validate-all: accepts decision=block on PreCompact (control: no invalid-decision failure)" {
+  _validate_all_event_fixture PreCompact '{"decision":"block","reason":"x"}'
+  [ "$status" -eq 0 ]
+  assert_output --partial "[ok] test-precompact-hook (PreCompact)"
+  refute_output --partial "invalid top-level decision"
+  [[ "$output" =~ "0 fail" ]]
+}
+
+@test "validate-all: accepts decision=approve on Stop (control: no invalid-decision failure)" {
+  _validate_all_event_fixture Stop '{"decision":"approve"}'
+  [ "$status" -eq 0 ]
+  refute_output --partial "invalid top-level decision"
+}
+
+@test "validate-all: accepts empty stdout on PreCompact (the proceed contract)" {
+  local hook="$TEST_TMPDIR/decision-silent-hook.sh" settings="$TEST_TMPDIR/decision-silent-settings.json"
+  local fake_home="$TEST_TMPDIR/fh_decision_silent"
+  _write_logging_hook "$hook"
+  _write_synthetic_settings "$settings" PreCompact "$hook"
+  mkdir -p "$fake_home/.claude"
+  cp "$settings" "$fake_home/.claude/settings.json"
+  run bash -c "env HOME='$fake_home' bash '$VALIDATOR_ALL' 2>&1"
+  [ "$status" -eq 0 ]
+  assert_output --partial "empty stdout"
+}

@@ -3,6 +3,10 @@
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
+# `run --separate-stderr` (Bats >= 1.5.0): $output is STDOUT ONLY, which is the stream Claude Code
+# validates for a PreCompact hook.
+bats_require_minimum_version 1.5.0
+
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOK_SH="$REPO_DIR/scripts/cast-precompact-guard.sh"
 
@@ -24,6 +28,30 @@ teardown() {
   else
     unset CAST_DB_PATH
   fi
+}
+
+# PreCompact proceed contract (Claude Code): print NOTHING on stdout and exit 0. The top-level
+# "decision" field accepts only "approve"|"block", so {"decision":"allow"} is rejected by hook-output
+# validation ("Invalid option: expected one of approve|block"). Use after `run --separate-stderr`.
+assert_proceeds() {
+  assert_success
+  [ -z "$output" ] || {
+    echo "expected empty stdout, got: $output" >&2
+    return 1
+  }
+}
+
+# The schema Claude Code enforces on hook stdout: empty, OR a JSON object whose top-level
+# "decision", if present, is exactly "approve" or "block". Arg: the captured stdout text.
+_decision_schema_ok() { # text
+  [ -z "$1" ] && return 0
+  printf '%s' "$1" | python3 -I -c '
+import json, sys
+d = json.load(sys.stdin)
+if not isinstance(d, dict):
+    sys.exit(1)
+sys.exit(0 if ("decision" not in d or d["decision"] in ("approve", "block")) else 1)
+' 2> /dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -63,7 +91,7 @@ _pc_hostile_repo() {
   git -C "$PC_REPO" config "filter.a=b.clean" "$PC_MARK/eqfilter.sh"
 }
 _pc_run_hook() {
-  run bash -c "echo '{}' | CAST_EXTRA_PROJECT='$PC_REPO' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
+  run --separate-stderr bash -c "echo '{}' | CAST_EXTRA_PROJECT='$PC_REPO' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
 }
 
 @test "PreCompact guard hostile repo: filter driver name containing '=' is blanked (no planted program runs)" {
@@ -74,8 +102,7 @@ _pc_run_hook() {
   rm -f "$PC_MARK"/fired-*
   touch -t 202201010000 "$PC_REPO/c.txt" # control refreshed the index; re-dirty
   _pc_run_hook
-  assert_success
-  assert_output --partial '"decision":"allow"'
+  assert_proceeds
   [ "$(_pc_fired)" = "0" ]
 }
 
@@ -123,8 +150,7 @@ _pc_run_hook() {
   [ -e "$PC_MARK/fired-fsmonitor" ] # control: env-injected fsmonitor fires on raw git
   rm -f "$PC_MARK"/fired-*
   _pc_run_hook
-  assert_success
-  assert_output --partial '"decision":"allow"'
+  assert_proceeds
   [ "$(_pc_fired)" = "0" ]
 }
 
@@ -139,8 +165,7 @@ _pc_run_hook() {
   rm -f "$PC_MARK"/fired-*
   touch -t 202201010000 "$PC_REPO/a.txt" "$PC_REPO/b.txt"
   _pc_run_hook
-  assert_success
-  assert_output --partial '"decision":"allow"'
+  assert_proceeds
   [ "$(_pc_fired)" = "0" ]
 }
 
@@ -166,9 +191,9 @@ _pc_run_hook() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. allow path: only project visible is a clean git repo
+# 1. proceed path (no stdout): only project visible is a clean git repo
 # ---------------------------------------------------------------------------
-@test "PreCompact guard: returns allow decision when no dirty repos" {
+@test "PreCompact guard: proceeds (no stdout) when no dirty repos" {
   local clean_repo
   clean_repo=$(mktemp -d)
   TEMP_GIT_REPO="$clean_repo"
@@ -182,9 +207,8 @@ _pc_run_hook() {
     git commit -q -m "init" 2>/dev/null
   ) || true
 
-  run bash -c "echo '{}' | CAST_EXTRA_PROJECT='$clean_repo' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
-  assert_success
-  assert_output --partial '"decision":"allow"'
+  run --separate-stderr bash -c "echo '{}' | CAST_EXTRA_PROJECT='$clean_repo' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
+  assert_proceeds
 }
 
 # ---------------------------------------------------------------------------
@@ -222,9 +246,8 @@ _pc_run_hook() {
   non_git_dir=$(mktemp -d)
   TEMP_GIT_REPO="$non_git_dir"
 
-  run bash -c "echo '{}' | CAST_EXTRA_PROJECT='$non_git_dir' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
-  assert_success
-  assert_output --partial '"decision":"allow"'
+  run --separate-stderr bash -c "echo '{}' | CAST_EXTRA_PROJECT='$non_git_dir' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
+  assert_proceeds
 }
 
 # ---------------------------------------------------------------------------
@@ -264,8 +287,8 @@ _pc_run_hook() {
   if [ ! -x /bin/bash ]; then
     skip "/bin/bash not available"
   fi
-  run /bin/bash -c "echo '{}' | CAST_DB_PATH=/dev/null /bin/bash '$HOOK_SH'"
-  assert_success
+  run --separate-stderr /bin/bash -c "echo '{}' | CAST_DB_PATH=/dev/null /bin/bash '$HOOK_SH'"
+  assert_proceeds
 }
 
 # ---------------------------------------------------------------------------
@@ -300,11 +323,10 @@ _pc_run_hook() {
   sqlite3 "$test_db" "CREATE TABLE sessions (project_root TEXT, started_at TEXT);"
   sqlite3 "$test_db" "INSERT INTO sessions (project_root, started_at) VALUES ('$dirty_repo', '$fixture_started_at');"
 
-  run bash -c "echo '{}' | CAST_DB_PATH='$test_db' bash '$HOOK_SH'"
-  assert_success
+  run --separate-stderr bash -c "echo '{}' | CAST_DB_PATH='$test_db' bash '$HOOK_SH'"
   # Correct: the cutoff instant is not strictly "within the last day" -> the
-  # session-sourced project is never added to KNOWN_PROJECTS -> allow.
-  assert_output --partial '"decision":"allow"'
+  # session-sourced project is never added to KNOWN_PROJECTS -> proceed (no stdout).
+  assert_proceeds
 }
 
 # ---------------------------------------------------------------------------
@@ -332,7 +354,7 @@ _pg_canary() { # script-path marker-path [body] — a program that records that 
   chmod +x "$1"
 }
 _pg_auto() { # repo [hook-script] — auto-compaction payload through the hook
-  run bash -c "echo '{\"trigger\":\"auto\"}' | CAST_EXTRA_PROJECT='$1' CAST_DB_PATH=/dev/null bash '${2:-$HOOK_SH}'"
+  run --separate-stderr bash -c "echo '{\"trigger\":\"auto\"}' | CAST_EXTRA_PROJECT='$1' CAST_DB_PATH=/dev/null bash '${2:-$HOOK_SH}'"
 }
 # Reason for a repo whose status could not be read (S3a-U1b security L1): a distinct sentence naming
 # the repo and saying committing will not help — "Commit before compacting" must NOT be the guidance.
@@ -408,8 +430,7 @@ _pg_assert_unreadable_reason() { # repo
   rm -f "$mk"/*.fired
   touch -t 202201010000 "$repo/evil.txt" # the control refreshed the index; re-dirty
   _pg_auto "$repo"
-  assert_success
-  assert_output --partial '"decision":"allow"'
+  assert_proceeds
   [ -z "$(find "$mk" -name '*.fired')" ]
 }
 
@@ -429,8 +450,7 @@ _pg_assert_unreadable_reason() { # repo
   rm -f "$mk/hook.fired"
   touch -t 202201010000 "$repo/a.txt"
   _pg_auto "$repo"
-  assert_success
-  assert_output --partial '"decision":"allow"'
+  assert_proceeds
   [ ! -e "$mk/hook.fired" ]
 }
 
@@ -441,12 +461,11 @@ _pg_assert_unreadable_reason() { # repo
   cp "$HOOK_SH" "$dir/cast-precompact-guard.sh"
   [ ! -e "$dir/cast-hook-lib.sh" ]
   _pg_repo "$repo"
-  # A clean repo: a bare-git fallback would say "allow", so only fail-closed can produce "block".
+  # A clean repo: a bare-git fallback would proceed, so only fail-closed can produce "block".
   [ -z "$(git -C "$repo" status --porcelain)" ]
   # CONTROL 1: with the lib beside the script, this same repo is allowed.
   _pg_auto "$repo"
-  assert_success
-  assert_output --partial '"decision":"allow"'
+  assert_proceeds
   # CONTROL 2: the PATH shim records any git invocation.
   printf '#!/bin/sh\ntouch "%s"\nexit 99\n' "$fired" > "$shim/git"
   chmod +x "$shim/git"
@@ -462,4 +481,48 @@ _pg_assert_unreadable_reason() { # repo
   assert_output --partial "rc=3"
   [ ! -e "$fired" ]
   grep -q 'cast-hook-lib.sh not loadable' "$HOME/.claude/logs/hook-errors.log"
+}
+
+# ---------------------------------------------------------------------------
+# 10. PreCompact stdout contract (2026-10-05): Claude Code rejected {"decision":"allow"} on every
+#     /compact ("Invalid option: expected one of approve|block"). Proceed = NO stdout + exit 0.
+# ---------------------------------------------------------------------------
+_pg_dirty_repo() { # dir — committed repo plus an untracked file
+  _pg_repo "$1"
+  echo new > "$1/untracked.txt"
+}
+
+@test "PreCompact guard: manual /compact proceeds (no stdout) even when a tracked repo is dirty" {
+  local repo="$BATS_TEST_TMPDIR/dirty-manual"
+  _pg_dirty_repo "$repo"
+  run --separate-stderr bash -c "echo '{\"trigger\":\"manual\"}' | CAST_EXTRA_PROJECT='$repo' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
+  assert_proceeds
+}
+
+@test "PreCompact guard: stdout satisfies the Claude Code decision schema (empty, or decision approve|block) on every path" {
+  local clean="$BATS_TEST_TMPDIR/schema-clean" dirty="$BATS_TEST_TMPDIR/schema-dirty"
+  _pg_repo "$clean"
+  _pg_dirty_repo "$dirty"
+  # CONTROL: the validator can fail - the rejected legacy output and non-JSON stdout do not pass.
+  if _decision_schema_ok '{"decision":"allow"}'; then
+    echo "validator accepted decision=allow" >&2
+    return 1
+  fi
+  if _decision_schema_ok 'not json'; then
+    echo "validator accepted non-JSON stdout" >&2
+    return 1
+  fi
+  # proceed path (auto, clean repo): stdout must be empty
+  _pg_auto "$clean"
+  assert_proceeds
+  _decision_schema_ok "$output"
+  # proceed path (manual): stdout must be empty
+  run --separate-stderr bash -c "echo '{\"trigger\":\"manual\"}' | CAST_EXTRA_PROJECT='$dirty' CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
+  assert_proceeds
+  _decision_schema_ok "$output"
+  # block path: valid JSON with decision == "block"
+  _pg_auto "$dirty"
+  assert_success
+  assert_output --regexp '"decision":[[:space:]]*"block"'
+  _decision_schema_ok "$output"
 }
