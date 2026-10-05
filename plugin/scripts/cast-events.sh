@@ -125,7 +125,7 @@ cast_emit_event() {
   # original filename, so cast_derive_state replays events in order of
   # their own recorded `timestamp` field rather than filename order — see
   # the comment there.
-  if ! python3 - "$event_type" "$agent" "$task_id" "$artifact_id" "$summary" "$run_status" "$concerns" "$ts" "$CAST_EVENTS_DIR" "$safe_task_id" "$ts_iso" "$safe_agent" <<'PYEOF'
+  if ! python3 -I - "$event_type" "$agent" "$task_id" "$artifact_id" "$summary" "$run_status" "$concerns" "$ts" "$CAST_EVENTS_DIR" "$safe_task_id" "$ts_iso" "$safe_agent" <<'PYEOF'
 import json, os, sys
 
 event_type, agent, task_id, artifact_id, summary, status, concerns, ts, events_dir, safe_task_id, ts_iso, safe_agent = sys.argv[1:]
@@ -172,7 +172,7 @@ PYEOF
   if [[ "$event_type" == "task_claimed" || "$event_type" == "task_completed" || "$event_type" == "task_blocked" ]]; then
     CAST_ETYPE="$event_type" CAST_AGENT="$agent" CAST_TASK="$task_id" \
     CAST_SUMMARY="$summary" CAST_STATUS="$run_status" CAST_TS="$ts_iso" \
-    python3 -c "
+    python3 -I -c "
 import json, os
 etype   = os.environ.get('CAST_ETYPE', '')
 agent   = os.environ.get('CAST_AGENT', '')
@@ -259,7 +259,7 @@ cast_write_review() {
   # the filename is byte-identical to before this fix, so existing
   # single-write callers/tests are unaffected. The glob `{safe_aid}-*.json`
   # in cast_derive_state matches either shape.
-  if ! python3 - "$artifact_id" "$reviewer" "$decision" "$feedback" "$recommended" "$ts" "$CAST_REVIEWS_DIR" "$safe_artifact" "$ts_iso" "$safe_reviewer" <<'PYEOF'
+  if ! python3 -I - "$artifact_id" "$reviewer" "$decision" "$feedback" "$recommended" "$ts" "$CAST_REVIEWS_DIR" "$safe_artifact" "$ts_iso" "$safe_reviewer" <<'PYEOF'
 import json, os, sys
 
 artifact_id, reviewer, decision, feedback, recommended, ts, reviews_dir, safe_artifact, ts_iso, safe_reviewer = sys.argv[1:]
@@ -349,7 +349,7 @@ cast_derive_state() {
   local state_file
   state_file="$(_cast_state_file "$task_id")"
 
-  python3 - "$CAST_EVENTS_DIR" "$CAST_REVIEWS_DIR" "$task_id" "$state_file" <<'PYEOF'
+  python3 -I - "$CAST_EVENTS_DIR" "$CAST_REVIEWS_DIR" "$task_id" "$state_file" <<'PYEOF'
 import json, sys, os, glob
 
 events_dir, reviews_dir, task_id, state_file = sys.argv[1:]
@@ -557,7 +557,7 @@ cast_check_approvals() {
   # BASH_SOURCE-based resolution mechanism threaded in alongside that would
   # be the redundant-private-path-model this whole change exists to remove.
 
-  python3 - "$state_file" "$sid" "$cur_branch" "$window_min" "$db_path" "$review_block_ok" "${required[@]}" <<'PYEOF'
+  python3 -I - "$state_file" "$sid" "$cur_branch" "$window_min" "$db_path" "$review_block_ok" "${required[@]}" <<'PYEOF'
 import json, os, sqlite3, subprocess, sys
 from datetime import datetime, timedelta, timezone
 
@@ -741,7 +741,7 @@ PYEOF
 # Print a human-readable board of current state across all tasks.
 cast_read_board() {
   _cast_init_dirs
-  python3 - "$CAST_STATE_DIR" "$CAST_EVENTS_DIR" <<'PYEOF'
+  python3 -I - "$CAST_STATE_DIR" "$CAST_EVENTS_DIR" <<'PYEOF'
 import json, sys, os, glob
 from datetime import datetime
 

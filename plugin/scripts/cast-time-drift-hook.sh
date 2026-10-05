@@ -33,7 +33,7 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 # Read the hook payload for a session id. Never fail on empty/absent stdin.
 INPUT="$(cat 2>/dev/null || true)"
-SESSION_ID="$(printf '%s' "$INPUT" | python3 -c '
+SESSION_ID="$(printf '%s' "$INPUT" | python3 -I -c '
 import json, sys
 try:
     print(json.load(sys.stdin).get("session_id", "") or "default")
@@ -85,7 +85,7 @@ export CAST_TD_PREV_DATE="$LAST_DATE"
 export CAST_TD_START_EPOCH="$START_EPOCH"
 export CAST_TD_NOW_EPOCH="$NOW_EPOCH"
 
-python3 -c '
+python3 -I -c '
 import json, os
 from datetime import datetime
 

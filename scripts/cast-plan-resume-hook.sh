@@ -50,7 +50,7 @@ export CAST_PR_BRIEF="$SAFE_BRIEF"
 
 # --- Emit hookSpecificOutput via json.dumps (correct escaping + newline encoding) ---
 # shellcheck disable=SC2016  # single quotes intentional — Python code, not shell expansion
-python3 -c '
+python3 -I -c '
 import json, os
 
 brief = os.environ.get("CAST_PR_BRIEF", "")

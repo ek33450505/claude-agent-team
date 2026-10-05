@@ -15,8 +15,8 @@ fi
 INPUT="$(cat 2>/dev/null || true)"
 
 # Extract previous_cwd and new_cwd via python3 (safe parsing)
-PREVIOUS_CWD="$(printf '%s' "$INPUT" | python3 -c 'import sys,json; d=json.loads(sys.stdin.read() or "{}"); print(d.get("previous_cwd",""))' 2>/dev/null || echo "")"
-NEW_CWD="$(printf '%s' "$INPUT" | python3 -c 'import sys,json; d=json.loads(sys.stdin.read() or "{}"); print(d.get("new_cwd",""))' 2>/dev/null || echo "")"
+PREVIOUS_CWD="$(printf '%s' "$INPUT" | python3 -I -c 'import sys,json; d=json.loads(sys.stdin.read() or "{}"); print(d.get("previous_cwd",""))' 2>/dev/null || echo "")"
+NEW_CWD="$(printf '%s' "$INPUT" | python3 -I -c 'import sys,json; d=json.loads(sys.stdin.read() or "{}"); print(d.get("new_cwd",""))' 2>/dev/null || echo "")"
 
 # ── Step 1: Emit observability event ──────────────────────────────────
 # Emit event (best-effort; never fail the hook)
@@ -33,7 +33,7 @@ CAST_JSON_PATH="${NEW_CWD}/.claude/cast.json"
 if [[ -f "$CAST_JSON_PATH" ]]; then
   # Try to extract repo_class field (graceful fallback to default)
   # Use heredoc with environment variable to avoid code injection
-  REPO_CLASS=$(CAST_JSON_PATH="$CAST_JSON_PATH" python3 << 'PYTHON_BLOCK'
+  REPO_CLASS=$(CAST_JSON_PATH="$CAST_JSON_PATH" python3 -I << 'PYTHON_BLOCK'
 import json, os
 try:
     with open(os.environ['CAST_JSON_PATH']) as f:
@@ -54,7 +54,7 @@ if [[ -n "$NEW_CWD" ]] && [[ -f "${HOME}/.claude/scripts/cast-stack-detect.sh" ]
 fi
 
 if [[ -n "$STACK_JSON" ]]; then
-  CAST_STACK_PROFILE="$(STACK_JSON="$STACK_JSON" python3 << 'PYTHON_COMPACT'
+  CAST_STACK_PROFILE="$(STACK_JSON="$STACK_JSON" python3 -I << 'PYTHON_COMPACT'
 import json, os
 try:
     d = json.loads(os.environ.get('STACK_JSON', '{}'))
@@ -74,7 +74,7 @@ fi
 # ── Step 3: Export CAST_REPO_CLASS + CAST_STACK_PROFILE via hookSpecificOutput ──
 # Emit JSON to stdout so Claude Code can set env vars in the session.
 # hookEventName must match the hook event type (CwdChanged).
-REPO_CLASS="$REPO_CLASS" CAST_STACK_PROFILE="$CAST_STACK_PROFILE" python3 << 'PYTHON_END'
+REPO_CLASS="$REPO_CLASS" CAST_STACK_PROFILE="$CAST_STACK_PROFILE" python3 -I << 'PYTHON_END'
 import json, os
 env_block = {
     "CAST_REPO_CLASS": os.environ.get("REPO_CLASS", "personal"),

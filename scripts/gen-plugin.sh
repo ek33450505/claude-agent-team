@@ -149,7 +149,7 @@ for agent_name in "${COPY_AGENTS[@]}"; do
 
   # Strip forbidden plugin frontmatter fields (hooks, mcpServers, permissionMode)
   # and their nested block lines (YAML block scalars under those keys).
-  python3 - "$src" "$dst" <<'PYEOF'
+  python3 -I - "$src" "$dst" <<'PYEOF'
 import sys, re
 
 src, dst = sys.argv[1], sys.argv[2]
@@ -319,7 +319,7 @@ if [[ -d "${REPO_ROOT}/commands" ]]; then
 
     # Normalize the command file: ensure valid YAML frontmatter.
     # Uses Python to parse + rewrite frontmatter, quoting description if needed.
-    python3 - "$cmd_dst" "$cmd_name" <<'PYEOF'
+    python3 -I - "$cmd_dst" "$cmd_name" <<'PYEOF'
 import sys, re
 
 dst, cmd_name = sys.argv[1], sys.argv[2]
@@ -381,7 +381,7 @@ done < <(git -C "$REPO_ROOT" ls-files -- 'scripts/' | grep -E '^scripts/[^/]+$')
 printf '  Scripts: %d copied\n' "$SCRIPT_COUNT"
 
 # --- Step 7: Hooks ---
-python3 - "$REPO_ROOT" "$OUT" <<'PYEOF'
+python3 -I - "$REPO_ROOT" "$OUT" <<'PYEOF'
 import json, glob, re, sys, os
 repo = sys.argv[1]; out = sys.argv[2]
 frags = sorted(glob.glob(os.path.join(repo, "managed-settings.d", "*.json")))

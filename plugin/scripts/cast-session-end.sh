@@ -68,7 +68,7 @@ fi
 # invocation (one interpreter cold-start, not two — stays within the
 # cold-start lint budget). Emits exactly two lines: session_id then cwd
 # (either may be empty); an unparseable payload yields two empty lines.
-_STDIN_FIELDS="$(CAST_INPUT="${_INPUT}" python3 -c "
+_STDIN_FIELDS="$(CAST_INPUT="${_INPUT}" python3 -I -c "
 import json, os
 sid = cwd = ''
 try:
@@ -288,7 +288,7 @@ fi
 
 # === PANE BINDINGS UPDATE ===
 if [[ -f "$DB" ]]; then
-  python3 - "$DB" "$SESSION_ID" <<'PYEOF_PANE' 2>/dev/null || _log_error "pane-bindings end update failed"
+  python3 -I - "$DB" "$SESSION_ID" <<'PYEOF_PANE' 2>/dev/null || _log_error "pane-bindings end update failed"
 import os
 import sys
 import sqlite3
@@ -320,7 +320,7 @@ MEMORY_DIR="${HOME}/.claude/agent-memory-local"
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
 
 if [[ -f "$DB_PATH" ]] && [[ -d "$MEMORY_DIR" ]]; then
-  python3 - "$DB_PATH" "$MEMORY_DIR" <<'PYEOF' 2>/dev/null || true
+  python3 -I - "$DB_PATH" "$MEMORY_DIR" <<'PYEOF' 2>/dev/null || true
 import sys
 import os
 import sqlite3
@@ -453,7 +453,7 @@ fi
 #   ~/.claude/projects/<project-slug>/<session_id>.jsonl
 DISTILLER="${HOME}/.claude/scripts/cast-session-distiller.py"
 if [[ -f "$DISTILLER" && -n "${SESSION_ID:-}" && "${SESSION_ID}" != "default" ]]; then
-  _TRANSCRIPT_PATH="$(CAST_SESSION="${SESSION_ID}" python3 -c "
+  _TRANSCRIPT_PATH="$(CAST_SESSION="${SESSION_ID}" python3 -I -c "
 import glob, os, sys
 sid = os.environ.get('CAST_SESSION', '')
 if not sid:

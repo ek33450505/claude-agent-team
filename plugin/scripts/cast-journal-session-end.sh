@@ -107,7 +107,7 @@ else
 fi
 
 export CAST_PROMPT_MESSAGE="$PROMPT_MESSAGE"
-python3 <<'PYEOF'
+python3 -I <<'PYEOF'
 import json, os
 msg = os.environ.get("CAST_PROMPT_MESSAGE", "")
 print(json.dumps({"decision": "block", "reason": msg}))

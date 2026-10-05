@@ -18,7 +18,17 @@ mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 INPUT="$(cat 2>/dev/null || true)"
 
 # Resolve repo -> slug (matches cast-resume-scaffold.py: slug = basename of git toplevel)
-REPO="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+# Runs UNSANDBOXED in an agent-writable cwd: bare git would execute repo-local config an
+# agent plants (core.fsmonitor, filters, hooks, gpg.program, ...). Use the hardened
+# cast_git_safe primitive from the lib in THIS script's absolute dir; if it will not
+# load, never fall back to bare git -> silent degrade.
+_DIR="$(cd -- "$(dirname -- "$0")" && pwd -P)"
+unset _CAST_HOOK_LIB_LOADED
+unset -f cast_git_safe 2>/dev/null || true
+# shellcheck source=/dev/null
+# (-r first: bash 3.2 exits the shell silently on a failed `source` of a missing file.)
+if [[ ! -r "${_DIR}/cast-hook-lib.sh" ]] || ! source "${_DIR}/cast-hook-lib.sh" 2>/dev/null || ! declare -F cast_git_safe >/dev/null 2>&1; then exit 0; fi
+REPO="$(cast_git_safe "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -z "$REPO" ]; then exit 0; fi   # not a git repo -> silent degrade
 SLUG="$(basename "$REPO")"
 
@@ -28,7 +38,7 @@ if [ ! -d "$OUT_DIR" ]; then exit 0; fi
 # Select the distillate file in Python (robust date + regex handling), print its
 # absolute path + a source tag ("auto"|"manual") on one line, or nothing.
 export CAST_RI_DIR="$OUT_DIR" CAST_RI_SLUG="$SLUG"
-SELECTION="$(python3 -c '
+SELECTION="$(python3 -I -c '
 import os, re, sys
 d = os.environ["CAST_RI_DIR"]; slug = os.environ["CAST_RI_SLUG"]
 try:
@@ -68,7 +78,7 @@ SAFE_BODY="$(printf '%s' "$BODY" | sed 's/\[[Cc][Aa][Ss][Tt]-/[CAST_/g' || true)
 
 export CAST_RI_BODY="$SAFE_BODY" CAST_RI_SOURCE="$SOURCE" CAST_RI_SLUG
 # shellcheck disable=SC2016
-python3 -c '
+python3 -I -c '
 import json, os, re
 body = os.environ.get("CAST_RI_BODY", "")
 if not body:

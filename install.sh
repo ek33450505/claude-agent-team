@@ -608,7 +608,7 @@ fi
 info "Setting up Python venv..."
 VENV_DIR="$CLAUDE_DIR/venv"
 if [ ! -d "$VENV_DIR" ]; then
-    if python3 -m venv "$VENV_DIR" 2>/dev/null; then
+    if python3 -I -m venv "$VENV_DIR" 2>/dev/null; then
         success "  Created venv at $VENV_DIR"
     else
         warn "  Could not create venv — cast dash will use system Python"

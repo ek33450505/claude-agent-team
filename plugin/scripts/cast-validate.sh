@@ -52,7 +52,7 @@ SETTINGS="$HOME/.claude/settings.json"
 if [[ ! -f "$SETTINGS" ]]; then
   fail "Hook wiring: neither settings.json nor settings.local.json found"
 else
-  WIRING=$(python3 - "$SETTINGS" <<'PYEOF'
+  WIRING=$(python3 -I - "$SETTINGS" <<'PYEOF'
 import sys, json
 
 path = sys.argv[1]
@@ -103,7 +103,7 @@ AGENTS_DIR="$HOME/.claude/agents"
 if [[ ! -d "$AGENTS_DIR" ]]; then
   fail "Agent frontmatter: agents directory not found ($AGENTS_DIR)"
 else
-  FRONTMATTER_RESULT=$(python3 - "$AGENTS_DIR" <<'PYEOF'
+  FRONTMATTER_RESULT=$(python3 -I - "$AGENTS_DIR" <<'PYEOF'
 import sys, os
 
 agents_dir = sys.argv[1]
@@ -159,7 +159,7 @@ CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 if [[ ! -f "$CLAUDE_MD" ]]; then
   fail "CLAUDE.md directives: $CLAUDE_MD not found"
 else
-  DIRECTIVES_RESULT=$(python3 - "$CLAUDE_MD" <<'PYEOF'
+  DIRECTIVES_RESULT=$(python3 -I - "$CLAUDE_MD" <<'PYEOF'
 import sys
 
 path = sys.argv[1]
@@ -227,7 +227,7 @@ fi
 # --- Check 7: agent-groups.json present ---
 AGENT_GROUPS="$HOME/.claude/config/agent-groups.json"
 if [[ -f "$AGENT_GROUPS" ]]; then
-  GROUP_COUNT=$(python3 -c "
+  GROUP_COUNT=$(python3 -I -c "
 import json, sys
 try:
     data = json.load(open(sys.argv[1]))
@@ -246,7 +246,7 @@ fi
 
 # --- Check 8: cast-session-end.sh wired in settings file ---
 if [[ -f "$SETTINGS" ]]; then
-  STOP_WIRED=$(python3 - "$SETTINGS" <<'PYEOF'
+  STOP_WIRED=$(python3 -I - "$SETTINGS" <<'PYEOF'
 import sys, json
 path = sys.argv[1]
 try:
@@ -284,7 +284,7 @@ fi
 # --- Check 9: routing-proposals.json schema (if present) ---
 PROPOSALS_FILE="$HOME/.claude/routing-proposals.json"
 if [[ -f "$PROPOSALS_FILE" ]]; then
-  PROPOSALS_RESULT=$(python3 - "$PROPOSALS_FILE" <<'PYEOF'
+  PROPOSALS_RESULT=$(python3 -I - "$PROPOSALS_FILE" <<'PYEOF'
 import sys, json
 path = sys.argv[1]
 try:
@@ -394,7 +394,7 @@ LEGACY_BACKUP_DIR="${HOME}/.claude/backups"
 if [[ -d "$BACKUP_DIR" ]]; then
   LATEST_BACKUP=$(find "$BACKUP_DIR" -name "cast-db-*.db" -type f 2>/dev/null | sort -r | head -1)
   if [[ -n "$LATEST_BACKUP" ]]; then
-    BACKUP_AGE_DAYS=$(python3 -c "
+    BACKUP_AGE_DAYS=$(python3 -I -c "
 import os, sys, datetime
 mtime = os.path.getmtime(sys.argv[1])
 age = (datetime.datetime.now().timestamp() - mtime) / 86400
@@ -420,7 +420,7 @@ fi
 # Ollama: is it running?
 if command -v ollama >/dev/null 2>&1; then
   if curl -s --connect-timeout 2 "http://localhost:11434/api/tags" >/dev/null 2>&1; then
-    OLLAMA_MODEL_COUNT=$(curl -s --connect-timeout 2 "http://localhost:11434/api/tags" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo "?")
+    OLLAMA_MODEL_COUNT=$(curl -s --connect-timeout 2 "http://localhost:11434/api/tags" 2>/dev/null | python3 -I -c "import sys,json; print(len(json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo "?")
     pass "Ollama: running ($OLLAMA_MODEL_COUNT model(s) available)"
   else
     info "Ollama: installed but not running (start: ollama serve)"
@@ -467,7 +467,7 @@ SCRIPTS_DIR="$HOME/.claude/scripts"
 if [[ ! -d "$FRAGS_DIR" ]]; then
   info "Fragment command check: $FRAGS_DIR not found (install not yet run)"
 else
-  FRAG_CHECK=$(python3 - "$FRAGS_DIR" "$SCRIPTS_DIR" <<'PYEOF'
+  FRAG_CHECK=$(python3 -I - "$FRAGS_DIR" "$SCRIPTS_DIR" <<'PYEOF'
 import sys, os, json, glob
 
 frags_dir = sys.argv[1]
@@ -527,7 +527,7 @@ SETTINGS_JSON="$HOME/.claude/settings.json"
 if [[ ! -d "$AGENTS_DIR" ]]; then
   warn "Agent cross-check: $AGENTS_DIR not found — cannot verify config agent names"
 else
-  GHOST_RESULT=$(python3 - "$AGENTS_DIR" "$CHAIN_MAP" "$POLICIES_JSON" "$AGENT_GROUPS" "$SETTINGS_JSON" <<'PYEOF'
+  GHOST_RESULT=$(python3 -I - "$AGENTS_DIR" "$CHAIN_MAP" "$POLICIES_JSON" "$AGENT_GROUPS" "$SETTINGS_JSON" <<'PYEOF'
 import sys, os, json, glob
 
 agents_dir    = sys.argv[1]

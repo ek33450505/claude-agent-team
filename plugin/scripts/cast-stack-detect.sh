@@ -20,7 +20,7 @@ FORCE_FLAG="${3:-}"
 # --write logic write relative to cwd). Print the same unknown-fallback shape
 # the Python block emits on detection failure, then exit 0.
 if [[ -z "$REPO_ROOT" ]] || [[ "${REPO_ROOT:0:1}" != "/" ]]; then
-  python3 -c "
+  python3 -I -c "
 import json, sys
 from datetime import datetime, timezone
 print(json.dumps({'language':'unknown','framework':'unknown','build_cmd':'',
@@ -35,7 +35,7 @@ fi
 REPO_ROOT="$REPO_ROOT" \
 WRITE_FLAG="$WRITE_FLAG" \
 FORCE_FLAG="$FORCE_FLAG" \
-python3 << 'PYTHON_BLOCK'
+python3 -I << 'PYTHON_BLOCK'
 import json, os, re, sys, glob
 from datetime import datetime, timezone
 

@@ -111,7 +111,7 @@ fi
 # ── Validate --when format if provided ──────────────────────────────────────
 if [[ -n "$SCHEDULED_FOR" ]]; then
   # Basic ISO8601 sanity check via Python
-  VALID_DATE=$(python3 -c "
+  VALID_DATE=$(python3 -I -c "
 from datetime import datetime
 import sys
 try:
@@ -149,7 +149,7 @@ if [[ -n "$PROJECT_ROOT" ]]; then
 fi
 
 # ── Insert task into queue ───────────────────────────────────────────────────
-INSERTED_ID=$(python3 - "$CAST_DB" "$AGENT_NAME" "$TASK_TEXT" \
+INSERTED_ID=$(python3 -I - "$CAST_DB" "$AGENT_NAME" "$TASK_TEXT" \
   "$PRIORITY" "$SCHEDULED_FOR" "$PROJECT_NAME" "$PROJECT_ROOT" <<'PYEOF'
 import sys, sqlite3
 

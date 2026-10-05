@@ -210,6 +210,8 @@ _pc_run_hook() {
   # Tolerate either compact ('"decision":"block"') or pretty ('"decision": "block"') JSON
   assert_output --regexp '"decision":[[:space:]]*"block"'
   assert_output --partial "$dirty_repo"
+  # S3a-U1b: a dirty-only reason is byte-for-byte the original (json.dumps shape + message, nothing appended)
+  assert_output "{\"decision\": \"block\", \"reason\": \"Uncommitted changes in: $dirty_repo. Commit before compacting (use commit agent).\"}"
 }
 
 # ---------------------------------------------------------------------------
@@ -303,4 +305,161 @@ _pc_run_hook() {
   # Correct: the cutoff instant is not strictly "within the last day" -> the
   # session-sourced project is never added to KNOWN_PROJECTS -> allow.
   assert_output --partial '"decision":"allow"'
+}
+
+# ---------------------------------------------------------------------------
+# 9. S3a-U1b (2026-10-04): the dirty check runs through cast_git_safe (cast-hook-lib.sh).
+#    (a) a git status that FAILS must fail CLOSED (block, naming the repo) — the old
+#        `... 2>/dev/null || true` wrapper read an erroring repo as clean;
+#    (b) hostile repo-local config (fsmonitor, git 2.54+ config hook, clean filter) planted
+#        TOGETHER must not execute;
+#    (c) a missing cast-hook-lib.sh must not degrade to bare git: it blocks as status-unknown.
+# ---------------------------------------------------------------------------
+_pg_repo() { # dir — committed clean repo; tracked files carry an old mtime (never racily clean)
+  mkdir -p "$1"
+  git init -q --initial-branch=main "$1"
+  git -C "$1" config user.email "test@example.com"
+  git -C "$1" config user.name "Test"
+  printf 'evil.txt filter=evil\n' > "$1/.gitattributes"
+  echo base > "$1/a.txt"
+  echo evil > "$1/evil.txt"
+  touch -t 202001010000 "$1/.gitattributes" "$1/a.txt" "$1/evil.txt"
+  git -C "$1" add -A
+  git -C "$1" commit -q -m init
+}
+_pg_canary() { # script-path marker-path [body] — a program that records that it ran
+  printf '#!/bin/sh\ntouch "%s"\n%s\n' "$2" "${3:-exit 0}" > "$1"
+  chmod +x "$1"
+}
+_pg_auto() { # repo [hook-script] — auto-compaction payload through the hook
+  run bash -c "echo '{\"trigger\":\"auto\"}' | CAST_EXTRA_PROJECT='$1' CAST_DB_PATH=/dev/null bash '${2:-$HOOK_SH}'"
+}
+# Reason for a repo whose status could not be read (S3a-U1b security L1): a distinct sentence naming
+# the repo and saying committing will not help — "Commit before compacting" must NOT be the guidance.
+_pg_assert_unreadable_reason() { # repo
+  assert_output --partial "Could not read git status for: $1 (rc="
+  assert_output --partial "needs an operator fix"
+  assert_output --partial "committing will not help"
+  assert_output --partial "Manual /compact still works"
+  refute_output --partial "Commit before compacting"
+  refute_output --partial "Uncommitted changes"
+}
+
+@test "PreCompact guard: a git status that FAILS fails CLOSED (blocks, names the repo) - never reads as clean" {
+  local repo="$BATS_TEST_TMPDIR/broken-index"
+  _pg_repo "$repo"
+  printf garbage > "$repo/.git/index"
+  # CONTROL: plain git status really fails in this fixture (so a clean/allow verdict is the bug)
+  run git -C "$repo" status --porcelain
+  assert_failure
+  _pg_auto "$repo"
+  assert_success
+  assert_output --regexp '"decision":[[:space:]]*"block"'
+  _pg_assert_unreadable_reason "$repo"
+}
+
+@test "PreCompact guard: hardening config read failing (malformed .git/config, rc=3) fails CLOSED" {
+  local repo="$BATS_TEST_TMPDIR/broken-config"
+  _pg_repo "$repo"
+  printf '[core\n' >> "$repo/.git/config"
+  # CONTROL: plain git rejects the malformed config too
+  run git -C "$repo" status --porcelain
+  assert_failure
+  _pg_auto "$repo"
+  assert_success
+  assert_output --regexp '"decision":[[:space:]]*"block"'
+  _pg_assert_unreadable_reason "$repo"
+  assert_output --partial "$repo (rc=3)"
+}
+
+@test "PreCompact guard: a dirty repo AND an unreadable repo get BOTH sentences (commit guidance only for the dirty one)" {
+  # KNOWN_PROJECTS hardcodes $HOME/Projects/personal/<name>; HOME is the isolated temp HOME here.
+  local dirty="$HOME/Projects/personal/cast-hooks" broken="$HOME/Projects/personal/cast-dash"
+  _pg_repo "$dirty"
+  echo new > "$dirty/untracked.txt"
+  _pg_repo "$broken"
+  printf garbage > "$broken/.git/index"
+  run bash -c "echo '{\"trigger\":\"auto\"}' | CAST_DB_PATH=/dev/null bash '$HOOK_SH'"
+  assert_success
+  assert_output --regexp '"decision":[[:space:]]*"block"'
+  assert_output --partial "Uncommitted changes in: $dirty. Commit before compacting (use commit agent)."
+  assert_output --partial "Could not read git status for: $broken (rc="
+  # the dirty-guidance sentence must not name the unreadable repo
+  refute_output --partial "Uncommitted changes in: $dirty, $broken"
+  refute_output --partial "Uncommitted changes in: $broken"
+}
+
+@test "PreCompact guard hostile repo: fsmonitor + config hook + stat-dirty clean filter planted together, none fire (control fires)" {
+  local repo="$BATS_TEST_TMPDIR/trio" mk="$BATS_TEST_TMPDIR/trio-marks"
+  mkdir -p "$mk"
+  _pg_repo "$repo"
+  _pg_canary "$mk/fsm.sh" "$mk/fsm.fired"
+  _pg_canary "$mk/hook.sh" "$mk/hook.fired"
+  _pg_canary "$mk/clean.sh" "$mk/clean.fired" cat
+  git -C "$repo" config core.fsmonitor "$mk/fsm.sh"
+  git -C "$repo" config hook.x.event post-index-change # inert before git 2.54; see the next test
+  git -C "$repo" config hook.x.command "$mk/hook.sh"
+  git -C "$repo" config filter.evil.clean "$mk/clean.sh"
+  touch "$repo/evil.txt" # stat-dirty, content identical
+  # CONTROL: plain git status fires the fsmonitor and the clean filter (the fixture is hostile)
+  git -C "$repo" status --porcelain > /dev/null 2>&1 || true
+  [ -e "$mk/fsm.fired" ]
+  [ -e "$mk/clean.fired" ]
+  rm -f "$mk"/*.fired
+  touch -t 202201010000 "$repo/evil.txt" # the control refreshed the index; re-dirty
+  _pg_auto "$repo"
+  assert_success
+  assert_output --partial '"decision":"allow"'
+  [ -z "$(find "$mk" -name '*.fired')" ]
+}
+
+@test "PreCompact guard hostile repo: git 2.54+ config-based hook (post-index-change) does not run (control fires)" {
+  local repo="$BATS_TEST_TMPDIR/cfghook" mk="$BATS_TEST_TMPDIR/cfghook-marks"
+  mkdir -p "$mk"
+  _pg_repo "$repo"
+  _pg_canary "$mk/hook.sh" "$mk/hook.fired"
+  git -C "$repo" config hook.x.event post-index-change
+  git -C "$repo" config hook.x.command "$mk/hook.sh"
+  touch "$repo/a.txt" # stat-dirty: a plain status refreshes and rewrites the index
+  # CONTROL (attempt-first): skip ONLY if plain git cannot fire a config hook here (git < 2.54)
+  git -C "$repo" status --porcelain > /dev/null 2>&1 || true
+  if [ ! -e "$mk/hook.fired" ]; then
+    skip "config-based hooks need git >= 2.54"
+  fi
+  rm -f "$mk/hook.fired"
+  touch -t 202201010000 "$repo/a.txt"
+  _pg_auto "$repo"
+  assert_success
+  assert_output --partial '"decision":"allow"'
+  [ ! -e "$mk/hook.fired" ]
+}
+
+@test "PreCompact guard: missing cast-hook-lib.sh fails CLOSED (blocks as status-unknown) and never runs bare git" {
+  local dir="$BATS_TEST_TMPDIR/nolib" repo="$BATS_TEST_TMPDIR/cleanrepo"
+  local shim="$BATS_TEST_TMPDIR/gitshim" fired="$BATS_TEST_TMPDIR/git-shim.fired"
+  mkdir -p "$dir" "$shim"
+  cp "$HOOK_SH" "$dir/cast-precompact-guard.sh"
+  [ ! -e "$dir/cast-hook-lib.sh" ]
+  _pg_repo "$repo"
+  # A clean repo: a bare-git fallback would say "allow", so only fail-closed can produce "block".
+  [ -z "$(git -C "$repo" status --porcelain)" ]
+  # CONTROL 1: with the lib beside the script, this same repo is allowed.
+  _pg_auto "$repo"
+  assert_success
+  assert_output --partial '"decision":"allow"'
+  # CONTROL 2: the PATH shim records any git invocation.
+  printf '#!/bin/sh\ntouch "%s"\nexit 99\n' "$fired" > "$shim/git"
+  chmod +x "$shim/git"
+  PATH="$shim:$PATH" git --version > /dev/null 2>&1 || true
+  [ -e "$fired" ]
+  rm -f "$fired"
+  # The lib-less copy, with the shim first on PATH: block, no git invocation at all.
+  run env PATH="$shim:$PATH" CAST_EXTRA_PROJECT="$repo" CAST_DB_PATH=/dev/null \
+    bash "$dir/cast-precompact-guard.sh" <<< '{"trigger":"auto"}'
+  assert_success
+  assert_output --regexp '"decision":[[:space:]]*"block"'
+  assert_output --partial "$repo"
+  assert_output --partial "rc=3"
+  [ ! -e "$fired" ]
+  grep -q 'cast-hook-lib.sh not loadable' "$HOME/.claude/logs/hook-errors.log"
 }

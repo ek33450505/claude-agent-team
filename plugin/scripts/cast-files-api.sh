@@ -144,7 +144,7 @@ case "$SUBCOMMAND" in
     }
 
     # Extract file_id from response
-    FILE_ID="$(echo "$RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || echo "")"
+    FILE_ID="$(echo "$RESPONSE" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || echo "")"
 
     if [[ -z "$FILE_ID" ]]; then
       _log "upload" "" "$LOCAL_FILE_PATH" "" "error"

@@ -628,3 +628,80 @@ print('OK')
   assert_success
   assert_output --partial 'OK'
 }
+
+# ---------------------------------------------------------------------------
+# Hostile-repo hardening: the repo lookup must go through cast_git_safe.
+#
+# The hook runs UNSANDBOXED in an agent-writable cwd. Plain `git rev-parse
+# --show-toplevel` fires no repo-local exec config (core.fsmonitor needs `status`), so a
+# marker canary cannot discriminate. A PATH-shimmed git records GIT_CONFIG_COUNT instead,
+# which ONLY the cast_git_safe hardening sets; the control proves bare git records "unset".
+# Mutation: reverting REPO= to bare `git rev-parse` makes the 'goes through cast_git_safe' test fail on the "unset" line.
+# ---------------------------------------------------------------------------
+
+_install_git_shim() {
+  SHIM_LOG="$BATS_TEST_TMPDIR/git-calls.log"
+  mkdir -p "$BATS_TEST_TMPDIR/shim"
+  : > "$SHIM_LOG"
+  local real_git
+  real_git="$(command -v git)"
+  # shellcheck disable=SC2016  # the single-quoted $* must reach the shim literally
+  printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$*" "${GIT_CONFIG_COUNT-unset}" >> "%s"\nexec "%s" "$@"\n' \
+    "$SHIM_LOG" "$real_git" > "$BATS_TEST_TMPDIR/shim/git"
+  chmod 755 "$BATS_TEST_TMPDIR/shim/git"
+  # An inherited GIT_CONFIG_COUNT would make "hardened" indistinguishable from "bare".
+  local v
+  for v in $(compgen -e | grep '^GIT_' || true); do unset "$v"; done
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+  export PATH="$BATS_TEST_TMPDIR/shim:$PATH"
+}
+
+_seed_auto_file() {
+  mkdir -p "$RESUME_DIR"
+  printf -- '---\norigin: resume-scaffold\n---\n# Resume — fixture-repo auto: s\nBody here.\n' \
+    > "$RESUME_DIR/2026-07-06-fixture-repo-auto.md"
+}
+
+@test "git shim control: bare git rev-parse records GIT_CONFIG_COUNT unset" {
+  _install_git_shim
+  git -C "$FIXTURE_REPO" rev-parse --show-toplevel >/dev/null
+  run grep -c 'rev-parse --show-toplevel|unset$' "$SHIM_LOG"
+  assert_output "1"
+}
+
+@test "repo lookup goes through cast_git_safe (hardened git, never bare)" {
+  _install_git_shim
+  _seed_auto_file
+  # cast_git_safe never consults PATH for git (fixed trusted list), so the PATH shim alone is inert:
+  # run the hook from a COPY (hook + lib) whose git_candidates names the shim, and assert the rewrite
+  # applied so a vacuous copy cannot pass.
+  mkdir -p "$BATS_TEST_TMPDIR/hookcopy"
+  chmod 755 "$BATS_TEST_TMPDIR/shim"
+  cp "$SCRIPT" "$BATS_TEST_TMPDIR/hookcopy/cast-resume-inject-hook.sh"
+  sed "s|^  local git_candidates=(.*)\$|  local git_candidates=(\"$BATS_TEST_TMPDIR/shim/git\")|" \
+    "$REPO_DIR/scripts/cast-hook-lib.sh" > "$BATS_TEST_TMPDIR/hookcopy/cast-hook-lib.sh"
+  grep -qF "local git_candidates=(\"$BATS_TEST_TMPDIR/shim/git\")" "$BATS_TEST_TMPDIR/hookcopy/cast-hook-lib.sh"
+  cd "$FIXTURE_REPO"
+  run bash "$BATS_TEST_TMPDIR/hookcopy/cast-resume-inject-hook.sh" </dev/null
+  assert_success
+  assert_output --partial 'Body here'   # git really ran: slug resolved, distillate injected
+  run grep -c 'rev-parse --show-toplevel|' "$SHIM_LOG"
+  [ "$output" -ge 1 ]
+  run grep 'rev-parse --show-toplevel|unset$' "$SHIM_LOG"
+  assert_failure
+}
+
+@test "cast-hook-lib missing: silent degrade, bare git is never run" {
+  _install_git_shim
+  _seed_auto_file
+  mkdir -p "$BATS_TEST_TMPDIR/nolib"
+  cp "$SCRIPT" "$BATS_TEST_TMPDIR/nolib/cast-resume-inject-hook.sh"
+  cd "$FIXTURE_REPO"
+  # /bin/bash (3.2 on macOS) explicitly: it exits silently on a failed `source` of a missing
+  # file, so only an -r guard before `source` keeps the exit-0 degrade reachable.
+  run /bin/bash "$BATS_TEST_TMPDIR/nolib/cast-resume-inject-hook.sh" </dev/null
+  assert_success
+  assert_output ""
+  run grep -c 'rev-parse' "$SHIM_LOG"
+  assert_output "0"
+}

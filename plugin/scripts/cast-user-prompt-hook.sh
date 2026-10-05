@@ -25,7 +25,7 @@ INPUT="$(cat 2>/dev/null || true)"
 
 _CAST_REDACT_SCRIPT="$(dirname "$0")/cast-redact.py"
 _CAST_ROUTER="${_CAST_ROUTER:-"$(dirname "$0")/cast-memory-router.py"}"
-CAST_INPUT="$INPUT" _CAST_REDACT_SCRIPT="$_CAST_REDACT_SCRIPT" _CAST_ROUTER="$_CAST_ROUTER" python3 - <<'PYEOF' || true
+CAST_INPUT="$INPUT" _CAST_REDACT_SCRIPT="$_CAST_REDACT_SCRIPT" _CAST_ROUTER="$_CAST_ROUTER" python3 -I - <<'PYEOF' || true
 import json, os
 from datetime import datetime, timezone
 

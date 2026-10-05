@@ -12,7 +12,7 @@ INPUT="$(cat 2>/dev/null || true)"
 LOG_FILE="${HOME}/.claude/logs/headless-stalls.log"
 
 # Parse the question text for logging
-QUESTION=$(echo "$INPUT" | python3 -c "
+QUESTION=$(echo "$INPUT" | python3 -I -c "
 import json, sys
 try:
     d = json.load(sys.stdin)

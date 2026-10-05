@@ -55,7 +55,7 @@ fi
 # Parse fields via env var — never interpolate into Python source
 export CAST_FAIL_INPUT="$INPUT"
 
-PARSED="$(python3 - <<'PYEOF' 2>/dev/null
+PARSED="$(python3 -I - <<'PYEOF' 2>/dev/null
 import sys, json, os
 
 raw = os.environ.get('CAST_FAIL_INPUT', '')
@@ -79,14 +79,14 @@ print(json.dumps(result))
 PYEOF
 )" || true
 
-AGENT_NAME="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_FAIL_INPUT','{}') if not os.environ.get('CAST_FAIL_PARSED') else os.environ.get('CAST_FAIL_PARSED','{}')); print(d.get('agent_name','unknown'))" 2>/dev/null || echo "unknown")"
+AGENT_NAME="$(python3 -I -c "import json,os; d=json.loads(os.environ.get('CAST_FAIL_INPUT','{}') if not os.environ.get('CAST_FAIL_PARSED') else os.environ.get('CAST_FAIL_PARSED','{}')); print(d.get('agent_name','unknown'))" 2>/dev/null || echo "unknown")"
 
 # Use parsed output if available
 if [ -n "$PARSED" ]; then
   export CAST_FAIL_PARSED="$PARSED"
-  AGENT_NAME="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_FAIL_PARSED','{}')); print(d.get('agent_name','unknown'))" 2>/dev/null || echo "unknown")"
-  SESSION_ID="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_FAIL_PARSED','{}')); print(d.get('session_id',''))" 2>/dev/null || echo "")"
-  ERROR_MSG="$(python3 -c "import json,os; d=json.loads(os.environ.get('CAST_FAIL_PARSED','{}')); print(d.get('error','unknown failure'))" 2>/dev/null || echo "unknown failure")"
+  AGENT_NAME="$(python3 -I -c "import json,os; d=json.loads(os.environ.get('CAST_FAIL_PARSED','{}')); print(d.get('agent_name','unknown'))" 2>/dev/null || echo "unknown")"
+  SESSION_ID="$(python3 -I -c "import json,os; d=json.loads(os.environ.get('CAST_FAIL_PARSED','{}')); print(d.get('session_id',''))" 2>/dev/null || echo "")"
+  ERROR_MSG="$(python3 -I -c "import json,os; d=json.loads(os.environ.get('CAST_FAIL_PARSED','{}')); print(d.get('error','unknown failure'))" 2>/dev/null || echo "unknown failure")"
 else
   SESSION_ID=""
   ERROR_MSG="unknown failure"
@@ -113,8 +113,8 @@ if echo "$INPUT" | grep -q '"session_id":"test"' 2>/dev/null; then
 fi
 
 # ── Step 1: Write stop_failure event to ~/.claude/cast/events/ ────────────────
-TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
-TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat()+'Z')" | sed 's/+00:00//')"
+TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || python3 -I -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))")"
+TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -I -c "from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat()+'Z')" | sed 's/+00:00//')"
 # Disambiguator (PID + $RANDOM): see cast-subagent-start-hook.sh (J-12) —
 # same-second collisions were silently overwriting stop-failure events.
 TS_DISAMBIG="$$-${RANDOM}"
@@ -126,7 +126,7 @@ export CAST_FAIL_ERROR="$ERROR_MSG"
 export CAST_FAIL_TS_ISO="$TIMESTAMP_ISO"
 export CAST_FAIL_EVENT_FILE="$EVENT_FILE"
 
-python3 - <<'PYEOF' 2>/dev/null || true
+python3 -I - <<'PYEOF' 2>/dev/null || true
 import json, os
 
 event = {
@@ -147,7 +147,7 @@ PYEOF
 
 # ── Step 2: Write to cast.db stop_failure_events table ──────────────────────────
 # Idempotent schema creation + insert
-python3 - <<'DBEOF' 2>/dev/null || true
+python3 -I - <<'DBEOF' 2>/dev/null || true
 import sqlite3
 import os
 import json

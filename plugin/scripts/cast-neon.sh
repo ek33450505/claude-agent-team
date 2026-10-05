@@ -235,7 +235,7 @@ case "$CMD" in
     # the python program text, and json.dumps handles all escaping — a
     # branch name containing a double-quote (or anything else) cannot break
     # out of the JSON string or inject sibling keys into the request body.
-    BODY="$(python3 -c 'import json, sys; print(json.dumps({"branch": {"name": sys.argv[1]}}))' "$BRANCH_NAME")"
+    BODY="$(python3 -I -c 'import json, sys; print(json.dumps({"branch": {"name": sys.argv[1]}}))' "$BRANCH_NAME")"
     _do_request POST "/projects/${PROJECT_ID}/branches" "$BODY"
     ;;
 

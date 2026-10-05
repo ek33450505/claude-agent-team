@@ -23,7 +23,7 @@ fi
 # If vault dir missing or no entries found, emit JSON with systemMessage
 if [[ ! -d "$VAULT_PATH" ]] || [[ -z "$LATEST_ENTRY" ]] || [[ ! -f "$LATEST_ENTRY" ]]; then
   export VAULT_PATH
-  python3 << 'PYEOF'
+  python3 -I << 'PYEOF'
 import json, os
 vault_path = os.environ.get("VAULT_PATH", "~/Documents/Claude")
 output = {
@@ -64,7 +64,7 @@ fi
 # Convert YYYY-MM-DD to pretty format — try BSD date -j first, then GNU date -d, then Python
 PRETTY_DATE=$(date -j -f "%Y-%m-%d" "$DATEONLY" +"%B %d, %Y" 2>/dev/null \
   || date -d "$DATEONLY" +"%B %d, %Y" 2>/dev/null \
-  || python3 -c "from datetime import datetime; print(datetime.strptime('$DATEONLY', '%Y-%m-%d').strftime('%B %d, %Y'))" 2>/dev/null \
+  || python3 -I -c "from datetime import datetime; print(datetime.strptime('$DATEONLY', '%Y-%m-%d').strftime('%B %d, %Y'))" 2>/dev/null \
   || echo "")
 
 if [[ -z "$PRETTY_DATE" ]]; then
@@ -101,7 +101,7 @@ export CAST_EOD_NOTICE="$EOD_NOTICE"
 export CAST_ED_NUDGE="$ED_NUDGE"
 export CAST_PREDICTIONS_SECTION="$PREDICTIONS_SECTION"
 
-python3 << 'PYEOF'
+python3 -I << 'PYEOF'
 import json, os, re
 
 date                = os.environ.get("CAST_JOURNAL_DATE", "")

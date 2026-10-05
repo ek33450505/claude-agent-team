@@ -43,7 +43,7 @@ fi
 # Validate all fragments before merging
 # Fragments are passed as argv (not string interpolation) to avoid path injection.
 for f in "${FRAGMENTS[@]}"; do
-  if ! python3 - "$f" <<'PYEOF' 2>/dev/null
+  if ! python3 -I - "$f" <<'PYEOF' 2>/dev/null
 import json, sys
 json.load(open(sys.argv[1]))
 PYEOF
@@ -54,7 +54,7 @@ PYEOF
 done
 
 # Deep-merge fragments using Python
-MERGED=$(python3 - "${FRAGMENTS[@]}" <<'PYEOF'
+MERGED=$(python3 -I - "${FRAGMENTS[@]}" <<'PYEOF'
 import json
 import sys
 
@@ -101,7 +101,7 @@ PYEOF
 )
 
 # Validate merged output
-if ! echo "$MERGED" | python3 -m json.tool > /dev/null 2>&1; then
+if ! echo "$MERGED" | python3 -I -m json.tool > /dev/null 2>&1; then
   echo "[cast-merge-settings] ERROR: merged output is invalid JSON — output not written" >&2
   exit 3
 fi

@@ -56,7 +56,7 @@ fi
 # ---------------------------------------------------------------------------
 # Pattern detection via Python
 # ---------------------------------------------------------------------------
-AUTO_RULES="$(python3 - "$DB_PATH" "$PROJECT_FILTER" <<'PYEOF' 2>/dev/null || echo "[]"
+AUTO_RULES="$(python3 -I - "$DB_PATH" "$PROJECT_FILTER" <<'PYEOF' 2>/dev/null || echo "[]"
 import sys, sqlite3, json
 from collections import defaultdict
 
@@ -139,9 +139,9 @@ fi
 # ---------------------------------------------------------------------------
 # Write each rule via cast-memory-write.sh and to human-readable auto-rules.md
 # ---------------------------------------------------------------------------
-RULE_COUNT="$(echo "$AUTO_RULES" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
+RULE_COUNT="$(echo "$AUTO_RULES" | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
 
-CAST_AUTO_RULES="$AUTO_RULES" python3 - "$SCRIPTS_DIR" "$AGENT_MEMORY_DIR" "$DB_PATH" <<'PYEOF' 2>/dev/null || true
+CAST_AUTO_RULES="$AUTO_RULES" python3 -I - "$SCRIPTS_DIR" "$AGENT_MEMORY_DIR" "$DB_PATH" <<'PYEOF' 2>/dev/null || true
 import json, sys, os, subprocess, datetime, sqlite3
 
 scripts_dir = sys.argv[1]

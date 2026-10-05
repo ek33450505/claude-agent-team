@@ -149,7 +149,8 @@ if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
   _stats_wt_cleanup() {
     if [ -n "${_STATS_WT_BASE:-}" ]; then
       git -C "$REPO_ROOT" worktree remove --force "${_STATS_WT_BASE}/wt" 2>/dev/null || true
-      git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+      # No `git worktree prune` here: it follows an agent-planted symlink at .git/worktrees/<id>
+      # and empties its target. `worktree remove` above already drops this worktree's own entry.
       rm -rf "${_STATS_WT_BASE}" 2>/dev/null || true
       _STATS_WT_BASE=""
     fi

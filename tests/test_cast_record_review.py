@@ -11,10 +11,15 @@ Covers:
 
 import importlib.util
 import os
+import re
+import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
 _SCRIPT_PATH = _SCRIPTS_DIR / 'cast-record-review.py'
@@ -278,8 +283,8 @@ This is in the body, not frontmatter.
 class TestSectionStaleMemories(unittest.TestCase):
     """Test section_stale_memories() — reuses cast-stale-memories.py via subprocess.
 
-    Each test points repo_root at a temp dir with a stub scripts/cast-stale-memories.py
-    so scanner output is fully controlled and deterministic, without touching real
+    Each test points cast_record_review._CAST_SCRIPTS_DIR at a temp dir holding a stub
+    cast-stale-memories.py so scanner output is fully controlled and deterministic, without touching real
     ~/.claude/projects or depending on the real scanner's own file-scanning logic
     (that logic has its own dedicated coverage in tests/cast-stale-memories.bats).
     """
@@ -289,9 +294,11 @@ class TestSectionStaleMemories(unittest.TestCase):
         self.scripts_dir = os.path.join(self.tmpdir, 'scripts')
         os.makedirs(self.scripts_dir)
         self.stub_path = os.path.join(self.scripts_dir, 'cast-stale-memories.py')
+        patcher = mock.patch.object(cast_record_review, '_CAST_SCRIPTS_DIR', self.scripts_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
-        import shutil
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def _write_stub(self, content):
@@ -301,7 +308,7 @@ class TestSectionStaleMemories(unittest.TestCase):
     def test_zero_stale_renders_ok(self):
         """0 stale -> 'OK' header, explicit '0 stale memories' line, no proposals."""
         self._write_stub("print(0)\n")
-        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        text, proposals = cast_record_review.section_stale_memories()
         self.assertIn("### Stale auto-memories: OK", text)
         self.assertIn("0 stale memories", text)
         self.assertEqual(proposals, [])
@@ -315,7 +322,7 @@ class TestSectionStaleMemories(unittest.TestCase):
             "print('/fake/proj/memory/c.md|2026-06-10|65')\n"
         )
         self._write_stub(stub)
-        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        text, proposals = cast_record_review.section_stale_memories()
         self.assertIn("### Stale auto-memories: WATCH", text)
         self.assertIn("a.md", text)
         self.assertIn("b.md", text)
@@ -331,7 +338,7 @@ class TestSectionStaleMemories(unittest.TestCase):
             f"print('/fake/proj/memory/entry{i}.md|2026-06-01|{100 - i}')" for i in range(15)
         )
         self._write_stub("print(15)\n" + rows + "\n")
-        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        text, proposals = cast_record_review.section_stale_memories()
         self.assertIn("### Stale auto-memories: WATCH", text)
         self.assertIn("top 10 by age shown", text)
         self.assertIn("5 omitted", text)
@@ -350,15 +357,15 @@ class TestSectionStaleMemories(unittest.TestCase):
             "print('/fake/proj/memory/b.md|2026-06-05|70')\n"
         )
         self._write_stub(stub)
-        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        text, proposals = cast_record_review.section_stale_memories()
         self.assertIn("### Stale auto-memories: WATCH", text)
         self.assertIn("scanner reported 3 but only 2 entries were", text)
         self.assertEqual(len(proposals), 1)
 
     def test_degraded_when_scanner_missing(self):
         """Scanner file absent -> DEGRADED text, never a false '0 stale'."""
-        # scripts/ exists (setUp) but cast-stale-memories.py was never written.
-        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        # The scripts dir exists (setUp) but cast-stale-memories.py was never written.
+        text, proposals = cast_record_review.section_stale_memories()
         self.assertIn("### Stale auto-memories: DEGRADED", text)
         self.assertIn("Could not check", text)
         self.assertIn("scanner not found", text)
@@ -368,7 +375,7 @@ class TestSectionStaleMemories(unittest.TestCase):
     def test_degraded_when_scanner_exits_nonzero(self):
         """Scanner crashes (nonzero exit) -> DEGRADED, never a false '0 stale'."""
         self._write_stub("import sys\nprint('boom', file=sys.stderr)\nsys.exit(1)\n")
-        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        text, proposals = cast_record_review.section_stale_memories()
         self.assertIn("### Stale auto-memories: DEGRADED", text)
         self.assertIn("Could not check", text)
         self.assertIn("exited 1", text)
@@ -378,7 +385,7 @@ class TestSectionStaleMemories(unittest.TestCase):
     def test_degraded_when_count_line_not_integer(self):
         """Malformed count line -> DEGRADED, never a false '0 stale'."""
         self._write_stub("print('not-a-number')\n")
-        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        text, proposals = cast_record_review.section_stale_memories()
         self.assertIn("### Stale auto-memories: DEGRADED", text)
         self.assertIn("Could not check", text)
         self.assertNotIn("0 stale memories", text)
@@ -387,10 +394,135 @@ class TestSectionStaleMemories(unittest.TestCase):
     def test_degraded_when_count_positive_but_no_parseable_rows(self):
         """Count > 0 but every body row is garbage -> DEGRADED, not a silent '0 shown'."""
         self._write_stub("print(2)\nprint('garbage-row-no-pipes')\n")
-        text, proposals = cast_record_review.section_stale_memories(self.tmpdir)
+        text, proposals = cast_record_review.section_stale_memories()
         self.assertIn("### Stale auto-memories: DEGRADED", text)
         self.assertIn("0 parseable entries", text)
         self.assertEqual(proposals, [])
+
+
+class TestGetRepoRootHardened(unittest.TestCase):
+    """SECURITY (2026-10-04): get_repo_root() runs unsandboxed in an agent-writable cwd, so it
+    must use cast_git_safe, not bare git. Plain ``rev-parse`` fires no repo-local exec config
+    (fsmonitor needs ``status``), so a PATH-shimmed git records GIT_CONFIG_COUNT, which only
+    the cast_git_safe hardening sets. CONTROL: bare git through the shim records ``unset``.
+    Mutation: reverting get_repo_root to subprocess.run(['git', ...]) fails the hardened tests."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix='cast-rr-git-'))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        real_git = shutil.which('git')
+        self.log = os.path.join(self.tmp, 'calls.log')
+        shim_dir = os.path.join(self.tmp, 'shim')
+        os.makedirs(shim_dir)
+        shim = os.path.join(shim_dir, 'git')
+        with open(shim, 'w') as fh:
+            fh.write('#!/bin/sh\nprintf \'%%s|%%s\\n\' "$*" "${GIT_CONFIG_COUNT-unset}" >> "%s"\n'
+                     'exec "%s" "$@"\n' % (self.log, real_git))
+        os.chmod(shim, 0o755)
+        os.chmod(shim_dir, 0o755)
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        env.update({'PATH': shim_dir + os.pathsep + os.environ['PATH'], 'HOME': self.tmp,
+                    'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'})
+        patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # cast_git_safe never consults PATH for git (fixed trusted list), so the PATH shim alone is
+        # inert. get_repo_root loads cast_git_safe.py from _CAST_SCRIPTS_DIR: point that at a COPY
+        # of the scripts (wrapper + lib) whose lib's git_candidates names the shim. PATH stays
+        # shimmed too: a get_repo_root reverted to bare git records `unset` and fails.
+        scripts_copy = os.path.join(self.tmp, 'scripts-copy')
+        os.makedirs(scripts_copy)
+        shutil.copy(_SCRIPTS_DIR / 'cast_git_safe.py', scripts_copy)
+        out, n = re.subn(r'(?m)^  local git_candidates=\(.*\)$',
+                         lambda _m: '  local git_candidates=("%s")' % shim,
+                         (_SCRIPTS_DIR / 'cast-hook-lib.sh').read_text())
+        self.assertEqual(n, 1, 'git_candidates line not found in the lib (vacuous shim)')
+        lib = os.path.join(scripts_copy, 'cast-hook-lib.sh')
+        Path(lib).write_text(out)
+        os.chmod(lib, 0o644)
+        self.assertIn('local git_candidates=("%s")' % shim, Path(lib).read_text())
+        patcher = mock.patch.object(cast_record_review, '_CAST_SCRIPTS_DIR', scripts_copy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.repo = os.path.join(self.tmp, 'repo')
+        os.makedirs(self.repo)
+        subprocess.run([real_git, '-C', self.repo, 'init', '-q'], check=True, capture_output=True)
+        open(self.log, 'w').close()
+        self.orig_cwd = os.getcwd()
+        self.addCleanup(os.chdir, self.orig_cwd)
+
+    def _calls(self):
+        with open(self.log) as fh:
+            return [ln.rstrip('\n') for ln in fh if 'rev-parse --show-toplevel' in ln]
+
+    def test_control_bare_git_records_unset(self):
+        subprocess.run(['git', '-C', self.repo, 'rev-parse', '--show-toplevel'],
+                       check=True, capture_output=True)
+        calls = self._calls()
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].endswith('|unset'), calls)
+
+    def test_get_repo_root_uses_hardened_primitive(self):
+        os.chdir(self.repo)
+        self.assertEqual(os.path.realpath(cast_record_review.get_repo_root()), self.repo)
+        calls = self._calls()
+        self.assertTrue(calls, 'git never reached the shim (vacuous)')
+        for ln in calls:
+            self.assertFalse(ln.endswith('|unset'), 'bare (unhardened) git call: %s' % ln)
+
+    def test_non_repo_cwd_falls_back_to_cwd(self):
+        plain = os.path.join(self.tmp, 'plain')
+        os.makedirs(plain)
+        os.chdir(plain)
+        self.assertEqual(os.path.realpath(cast_record_review.get_repo_root()),
+                         os.path.realpath(plain))
+
+
+class TestHelperScriptsNotResolvedFromCwdRepo(unittest.TestCase):
+    """SECURITY (2026-10-04): record-review runs unsandboxed with an agent-writable cwd. The
+    audit/stale-memory helpers it executes must come from CAST's own scripts dir, never from
+    ``<cwd git toplevel>/scripts`` (which an agent can plant). The fixture repo holds canary
+    versions of both helpers; the canary must NOT run. Mutation: resolving either helper from
+    the repo root again makes the matching test fail."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix='cast-rr-hostile-'))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.repo = os.path.join(self.tmp, 'repo')
+        os.makedirs(os.path.join(self.repo, 'scripts'))
+        subprocess.run(['git', '-C', self.repo, 'init', '-q'], check=True, capture_output=True,
+                       env={**os.environ, 'GIT_CONFIG_GLOBAL': os.devnull})
+        self.marker = os.path.join(self.tmp, 'MARKER')
+        for name in ('cast-workflow-model-audit.py', 'cast-stale-memories.py'):
+            Path(self.repo, 'scripts', name).write_text(
+                'import pathlib\npathlib.Path(%r).write_text(%r)\nprint(0)\n' % (self.marker, name))
+        self.orig_cwd = os.getcwd()
+        self.addCleanup(os.chdir, self.orig_cwd)
+        os.chdir(self.repo)
+
+    def test_control_old_resolution_points_into_the_fixture_repo(self):
+        """The fixture is hostile: the OLD repo-relative paths exist and are executable canaries."""
+        root = cast_record_review.get_repo_root()
+        self.assertEqual(os.path.realpath(root), self.repo)
+        for name in ('cast-workflow-model-audit.py', 'cast-stale-memories.py'):
+            old = os.path.join(root, 'scripts', name)
+            self.assertTrue(os.path.isfile(old))
+            subprocess.run([sys.executable, old], check=True, capture_output=True)
+            self.assertTrue(os.path.exists(self.marker), 'control canary did not fire: ' + name)
+            os.remove(self.marker)
+
+    def test_stale_memories_ignores_cwd_repo_scripts(self):
+        text, _ = cast_record_review.section_stale_memories()
+        self.assertFalse(os.path.exists(self.marker), 'cwd repo scanner executed')
+        self.assertNotIn(self.repo, text)
+
+    def test_trend_alert_audit_ignores_cwd_repo_scripts(self):
+        conn = sqlite3.connect(':memory:')
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE agent_runs (session_id TEXT, agent TEXT, started_at TEXT, "
+                     "cost_usd REAL, status TEXT, model TEXT)")
+        cast_record_review.section_trend_alert(conn, self.repo, lookback_days=7)
+        self.assertFalse(os.path.exists(self.marker), 'cwd repo audit script executed')
 
 
 if __name__ == '__main__':

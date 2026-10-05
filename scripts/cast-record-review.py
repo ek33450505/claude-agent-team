@@ -29,6 +29,11 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# CAST's OWN helper scripts live next to this file. They are resolved from here, NEVER from the
+# cwd's git toplevel: this script runs unsandboxed with an agent-writable cwd, and a
+# repo-relative lookup would execute that repo's attacker-written scripts/<name>.py.
+_CAST_SCRIPTS_DIR = os.path.dirname(os.path.realpath(__file__))
 try:
     from cast_db import log_hook_failure
 except Exception:
@@ -64,11 +69,19 @@ def get_db_path(cli_db: str = '') -> str:
 
 def get_repo_root() -> str:
     """Get the repository root — git toplevel, else cwd. Mirrors cast-lint-agent-roster.py."""
+    # Runs unsandboxed (hook/launchd) with an agent-writable cwd: use the hardened
+    # cast_git_safe primitive, never bare git (repo-local config can execute code).
+    # Loaded by explicit realpath: safe whether or not the interpreter runs with -I, because a
+    # script run by path puts only its own directory on sys.path.
     try:
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, timeout=5
-        )
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location(
+            'cast_git_safe', os.path.join(_CAST_SCRIPTS_DIR, 'cast_git_safe.py'))
+        if not (spec and spec.loader):
+            return os.getcwd()
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        result = mod.run(os.getcwd(), ['rev-parse', '--show-toplevel'], timeout=5)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except Exception:
@@ -773,11 +786,12 @@ def section_trend_alert(conn, repo_root: str, lookback_days: int = 7) -> tuple:
 
     # --- workflow-subagent opus-share trend (S3 cost lever, cast-workflow-model-audit.py) ---
     lines.append("\n### Workflow-subagent opus-share trend")
-    audit_script = os.path.join(repo_root, 'scripts', 'cast-workflow-model-audit.py')
+    # CAST's own helper (this file's dir), never <cwd repo>/scripts; -I = no cwd/env path hijack.
+    audit_script = os.path.join(_CAST_SCRIPTS_DIR, 'cast-workflow-model-audit.py')
     if os.path.isfile(audit_script):
         try:
             result = subprocess.run(
-                ['python3', audit_script], capture_output=True, text=True, timeout=15
+                [sys.executable, '-I', audit_script], capture_output=True, text=True, timeout=15
             )
             lines.append(result.stdout.strip() or "(no output from audit script)")
             if result.returncode != 0:
@@ -805,7 +819,7 @@ def section_trend_alert(conn, repo_root: str, lookback_days: int = 7) -> tuple:
 _STALE_MEMORIES_LISTED_MAX = 10
 
 
-def section_stale_memories(repo_root: str) -> tuple:
+def section_stale_memories() -> tuple:
     """Surface scripts/cast-stale-memories.py findings in the weekly report.
 
     Reuses the canonical scanner via subprocess — the same invocation shape as
@@ -820,11 +834,9 @@ def section_stale_memories(repo_root: str) -> tuple:
     proposals = []
     lines = ["## 5. Stale Memories"]
 
-    # repo_root-relative sibling lookup — same resolution strategy as
-    # _check_push_hatch_audit_gap() and the cast-workflow-model-audit.py lookup
-    # above; no other fallback (keeps this deterministic for callers/tests that
-    # pass an explicit repo_root).
-    scanner = os.path.join(repo_root, 'scripts', 'cast-stale-memories.py')
+    # CAST's own scanner, resolved from this file's dir (NOT the cwd repo: that would run an
+    # agent-writable repo's scripts/ unsandboxed); no other fallback, deterministic for tests.
+    scanner = os.path.join(_CAST_SCRIPTS_DIR, 'cast-stale-memories.py')
 
     def _degraded(reason: str) -> tuple:
         lines.append("\n### Stale auto-memories: DEGRADED")
@@ -836,7 +848,7 @@ def section_stale_memories(repo_root: str) -> tuple:
 
     try:
         result = subprocess.run(
-            [sys.executable, scanner], capture_output=True, text=True, timeout=15
+            [sys.executable, '-I', scanner], capture_output=True, text=True, timeout=15
         )
     except Exception as e:
         return _degraded(f"scanner invocation failed: {e}")
@@ -914,7 +926,7 @@ def build_report(conn, agents_dir: str, evals_dir: str, audit_log: str, projects
     s2_text, s2_props = section_mine_propose(conn, evals_dir, lookback_days=7)
     s3_text, s3_props = section_friction(conn, audit_log, projects_dir, repo_root, lookback_days=7)
     s4_text, s4_props = section_trend_alert(conn, repo_root, lookback_days=7)
-    s5_text, s5_props = section_stale_memories(repo_root)
+    s5_text, s5_props = section_stale_memories()
     all_proposals += s1_props + s2_props + s3_props + s4_props + s5_props
 
     deep_pass = today.day <= 7

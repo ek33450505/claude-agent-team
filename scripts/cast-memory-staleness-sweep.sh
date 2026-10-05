@@ -20,7 +20,7 @@ done
 # If --all, don't limit
 [ "$ALL_FLAG" -eq 1 ] && MAX_ENTRIES=999999
 
-python3 - "$CAST_DB_PATH" "$MAX_ENTRIES" "$CAST_SCRIPTS_DIR" <<'PYEOF'
+python3 -I - "$CAST_DB_PATH" "$MAX_ENTRIES" "$CAST_SCRIPTS_DIR" <<'PYEOF'
 import os
 import sys
 import sqlite3

@@ -57,7 +57,7 @@ _parse_router_model() {
     # Prefer python3 JSON parse
     if command -v python3 >/dev/null 2>&1; then
         # Pass the path via env (NOT string interpolation) to avoid code injection.
-        model="$(CAST_CCR_CONFIG_PATH="$CAST_CCR_CONFIG" python3 -c "
+        model="$(CAST_CCR_CONFIG_PATH="$CAST_CCR_CONFIG" python3 -I -c "
 import json, os, sys
 try:
     cfg = json.load(open(os.environ['CAST_CCR_CONFIG_PATH']))

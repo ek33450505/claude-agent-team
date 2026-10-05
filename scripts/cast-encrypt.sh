@@ -53,7 +53,7 @@ check_age() {
 # Read private key path from config
 get_key_path() {
   if [[ -f "$CONFIG_FILE" ]]; then
-    python3 - "$CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo ""
+    python3 -I - "$CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo ""
 import sys, json, os
 
 config_file = sys.argv[1]
@@ -72,7 +72,7 @@ PYEOF
 # Save key path to config
 save_key_path() {
   local key_path="$1"
-  python3 - "$CONFIG_FILE" "$key_path" <<'PYEOF'
+  python3 -I - "$CONFIG_FILE" "$key_path" <<'PYEOF'
 import sys, json, os
 
 config_file = sys.argv[1]
@@ -98,7 +98,7 @@ PYEOF
 # Read Secure Enclave identity file path from config
 get_identity_path() {
   if [[ -f "$CONFIG_FILE" ]]; then
-    python3 - "$CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo ""
+    python3 -I - "$CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo ""
 import sys, json, os
 
 config_file = sys.argv[1]
@@ -117,7 +117,7 @@ PYEOF
 # Save Secure Enclave identity file path to config
 save_identity_path() {
   local identity_path="$1"
-  python3 - "$CONFIG_FILE" "$identity_path" <<'PYEOF'
+  python3 -I - "$CONFIG_FILE" "$identity_path" <<'PYEOF'
 import sys, json, os
 
 config_file = sys.argv[1]

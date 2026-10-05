@@ -34,7 +34,7 @@ cast_write_status() {
   # Use python3 stdlib only — no pip packages required.
   # Pass all values as positional argv to avoid shell-quoting pitfalls with
   # heredoc variables and to keep the inline script readable.
-  written_path=$(python3 - "$agent" "$_status" "$summary" "$concerns" "$recommended" "$ts" "$filepath" <<'PYEOF'
+  written_path=$(python3 -I - "$agent" "$_status" "$summary" "$concerns" "$recommended" "$ts" "$filepath" <<'PYEOF'
 import json, sys
 
 agent, status, summary, concerns, recommended, ts, filepath = sys.argv[1:]

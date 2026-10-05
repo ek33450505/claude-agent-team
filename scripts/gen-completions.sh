@@ -132,7 +132,7 @@ MEMORY_PIPE="$(printf '%s\n' "$MEMORY_SUBCOMMANDS" | tr '\n' '|' | sed 's/|$//')
 # The two memory-nested regions have no legacy bootstrap path (they didn't
 # exist as generated regions before this script grew memory-awareness) so
 # they fail closed if their sentinels are missing.
-python3 - "$COMPLETIONS" "$SUBCOMMANDS_SPACE" "$SUBCOMMANDS_PIPE" "$MEMORY_SPACE" "$MEMORY_PIPE" <<'PYEOF'
+python3 -I - "$COMPLETIONS" "$SUBCOMMANDS_SPACE" "$SUBCOMMANDS_PIPE" "$MEMORY_SPACE" "$MEMORY_PIPE" <<'PYEOF'
 import re
 import sys
 
@@ -209,7 +209,7 @@ if [[ ! -f "$ZSH_COMPLETIONS" ]]; then
   exit 1
 fi
 
-python3 - "$ZSH_COMPLETIONS" "$SUBCOMMANDS_SPACE" "$MEMORY_SUBCOMMANDS" <<'PYEOF'
+python3 -I - "$ZSH_COMPLETIONS" "$SUBCOMMANDS_SPACE" "$MEMORY_SUBCOMMANDS" <<'PYEOF'
 import re
 import sys
 

@@ -2154,5 +2154,169 @@ class TestStage15RelatedCommitHostileRepo(_IsolatedDbPathTestCase):
         self.assertEqual(self._run_stage15(), [''])
 
 
+class TestGitSitesUseHardenedPrimitive(_IsolatedDbPathTestCase):
+    """SECURITY (2026-10-04): the hook runs UNSANDBOXED in an agent-writable cwd; its git
+    sites (branch lookup, _repo_root, stage15 related_commit) must go through cast_git_safe.
+
+    No repo-local exec config fires for plain ``rev-parse`` (core.fsmonitor only fires for
+    ``status``), so a marker canary cannot discriminate. Instead a PATH-shimmed ``git``
+    records ``GIT_CONFIG_COUNT`` (set ONLY by the cast_git_safe hardening, never by plain
+    git). CONTROL: a bare ``git rev-parse`` through the same shim records ``unset``.
+    Mutation: reverting a site to bare ``subprocess.run(["git", ...])`` makes that site's
+    test fail on the ``unset`` line."""
+
+    def setUp(self):
+        super().setUp()
+        self._real_git = shutil.which('git')
+        self._log = os.path.join(self._tmpdir, 'git-calls.log')
+        shim_dir = os.path.join(self._tmpdir, 'shim')
+        os.makedirs(shim_dir)
+        shim = os.path.join(shim_dir, 'git')
+        with open(shim, 'w') as fh:
+            fh.write('#!/bin/sh\nprintf \'%%s|%%s\\n\' "$*" "${GIT_CONFIG_COUNT-unset}" >> "%s"\n'
+                     'exec "%s" "$@"\n' % (self._log, self._real_git))
+        os.chmod(shim, 0o755)
+        os.chmod(shim_dir, 0o755)
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        env.update({'PATH': shim_dir + os.pathsep + os.environ['PATH'],
+                    'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1'})
+        patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # cast_git_safe never consults PATH for git (fixed trusted list), so the PATH shim alone is
+        # inert. Load cast_git_safe from a COPY of the scripts (wrapper + lib) whose lib's
+        # git_candidates names the shim, and hand THAT module to the hook (_GIT_SAFE_MOD).
+        # PATH stays shimmed too: a site reverted to bare git then records `unset` and fails.
+        self._shim_mod = self._load_shimmed_git_safe(shim)
+        patcher = mock.patch.object(css, '_GIT_SAFE_MOD', self._shim_mod)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self._repo = os.path.realpath(os.path.join(self._tmpdir, 'repo'))
+        os.makedirs(self._repo)
+        self._git('init', '-q', '-b', 'feat-x')
+        Path(self._repo, 'a.txt').write_text('a\n')
+        self._git('add', 'a.txt')
+        self._git('-c', 'user.name=T', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false',
+                  'commit', '-q', '-m', 'init')
+        open(self._log, 'w').close()  # drop the fixture-setup calls
+        self._orig_cwd = os.getcwd()
+
+    def tearDown(self):
+        os.chdir(self._orig_cwd)
+        super().tearDown()
+
+    def _load_shimmed_git_safe(self, shim):
+        import importlib.util
+        import re
+        scripts = Path(css.__file__).resolve().parent
+        dest = os.path.join(self._tmpdir, 'scripts-copy')
+        os.makedirs(dest)
+        shutil.copy(scripts / 'cast_git_safe.py', dest)
+        out, n = re.subn(r'(?m)^  local git_candidates=\(.*\)$',
+                         lambda _m: '  local git_candidates=("%s")' % shim,
+                         (scripts / 'cast-hook-lib.sh').read_text())
+        self.assertEqual(n, 1, 'git_candidates line not found in the lib (vacuous shim)')
+        lib = os.path.join(dest, 'cast-hook-lib.sh')
+        Path(lib).write_text(out)
+        os.chmod(lib, 0o644)
+        self.assertIn('local git_candidates=("%s")' % shim, Path(lib).read_text())
+        spec = importlib.util.spec_from_file_location(
+            'cast_git_safe_shimmed', os.path.join(dest, 'cast_git_safe.py'))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertEqual(mod.LIB, os.path.join(os.path.realpath(dest), 'cast-hook-lib.sh'))
+        return mod
+
+    def _git(self, *args):
+        r = subprocess.run([self._real_git, '-C', self._repo, *args], capture_output=True,
+                           text=True, timeout=15)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def _calls(self, needle):
+        with open(self._log) as fh:
+            return [ln.rstrip('\n') for ln in fh if needle in ln]
+
+    def _assert_hardened(self, needle):
+        calls = self._calls(needle)
+        self.assertTrue(calls, 'no git call matching %r reached the shim (vacuous)' % needle)
+        for ln in calls:
+            self.assertFalse(ln.endswith('|unset'), 'bare (unhardened) git call: %s' % ln)
+
+    def test_control_bare_git_through_shim_records_unset(self):
+        """Proves the probe discriminates: a plain git call has no GIT_CONFIG_COUNT."""
+        subprocess.run(['git', '-C', self._repo, 'rev-parse', '--show-toplevel'],
+                       capture_output=True, text=True, timeout=15, check=True)
+        calls = self._calls('rev-parse --show-toplevel')
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].endswith('|unset'), calls)
+
+    def test_repo_root_uses_hardened_primitive(self):
+        os.chdir(self._repo)
+        ctx = css.Ctx()
+        self.assertEqual(os.path.realpath(css._repo_root(ctx)), self._repo)
+        self._assert_hardened('rev-parse --show-toplevel')
+
+    def test_repo_root_falls_back_to_cwd_when_primitive_unavailable(self):
+        os.chdir(self._repo)
+        with mock.patch.object(css, '_GIT_SAFE_MOD', False):
+            root = css._repo_root(css.Ctx())
+        self.assertEqual(os.path.realpath(root), self._repo)
+        self.assertEqual(self._calls('rev-parse --show-toplevel'), [],
+                         'git ran although the hardened primitive was unavailable')
+
+    def test_stage15_related_commit_uses_hardened_primitive(self):
+        db = os.path.join(self._tmpdir, 'incidents.db')
+        conn = sqlite3.connect(db)
+        conn.execute(TestStage15RelatedCommitHostileRepo._SCHEMA)
+        conn.commit()
+        conn.close()
+        ctx = css.Ctx()
+        ctx.agent_name = 'debugger'
+        ctx.response_text = 'Summary: fixed it\nStatus: DONE\n'
+        ctx.db_path = db
+        ctx.db_present = True
+        ctx.ts_iso = '2026-10-04T00:00:00Z'
+        ctx.session_id = 'sess-1'
+        os.chdir(self._repo)
+        css.stage15_incident_record(ctx)
+        conn = sqlite3.connect(db)
+        try:
+            shas = [r[0] for r in conn.execute('SELECT related_commit FROM incidents')]
+        finally:
+            conn.close()
+        self.assertEqual(len(shas), 1)
+        self.assertRegex(shas[0], r'^[0-9a-f]{40}$', 'git did not actually run (vacuous pass)')
+        self._assert_hardened('rev-parse --verify -q HEAD')
+
+    def test_stage2_branch_lookup_uses_hardened_primitive(self):
+        conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+        try:
+            conn.execute(TestSessionIdNullSafeMatch._AGENT_RUNS_SCHEMA)
+            conn.execute("INSERT INTO agent_runs (agent, session_id, status, started_at) "
+                         "VALUES ('backend-writer', NULL, 'running', '2026-10-04T00:00:00Z')")
+            conn.commit()
+        finally:
+            conn.close()
+        ctx = css.Ctx()
+        ctx.agent_name = 'backend-writer'
+        ctx.session_id = ''
+        ctx.agent_id = ''
+        ctx.db_path = os.environ['CAST_DB_PATH']
+        ctx.db_present = True
+        ctx.ts_iso = '2026-10-04T00:05:00Z'
+        ctx.db_status = 'DONE'
+        ctx.fast_row_id = None
+        ctx.response_text = 'Status: DONE'
+        ctx.data = {'cwd': self._repo}
+        css.stage2_transcript_cost(ctx)
+        conn = sqlite3.connect(os.environ['CAST_DB_PATH'])
+        try:
+            branch = conn.execute('SELECT branch FROM agent_runs').fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(branch, 'feat-x', 'git did not actually run (vacuous pass)')
+        self._assert_hardened('rev-parse --abbrev-ref HEAD')
+
+
 if __name__ == '__main__':
     unittest.main()

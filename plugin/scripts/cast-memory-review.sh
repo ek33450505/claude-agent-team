@@ -58,7 +58,7 @@ _read_frontmatter() {
     return
   fi
 
-  python3 << PYEOF 2>/dev/null || echo ""
+  python3 -I << PYEOF 2>/dev/null || echo ""
 import re
 try:
     with open("$file", 'r') as f:
@@ -269,7 +269,7 @@ _mode_interactive() {
     echo "  Body (first 30 lines):"
 
     # Extract and print body (first 30 lines)
-    python3 << 'PYEOF' 2>/dev/null || true
+    python3 -I << 'PYEOF' 2>/dev/null || true
 import sys
 try:
     with open("$file", 'r') as f:

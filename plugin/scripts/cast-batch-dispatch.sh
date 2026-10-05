@@ -73,7 +73,7 @@ PAYLOAD=$(cat <<EOF
         "messages": [
           {
             "role": "user",
-            "content": $(printf '%s\n' "$PROMPT" | python3 -c 'import sys, json; print(json.dumps(sys.stdin.read()))')
+            "content": $(printf '%s\n' "$PROMPT" | python3 -I -c 'import sys, json; print(json.dumps(sys.stdin.read()))')
           }
         ]
       }
@@ -94,7 +94,7 @@ RESPONSE=$(curl -sf -X POST "https://api.anthropic.com/v1/messages/batches" \
 }
 
 # Extract batch_id
-BATCH_ID=$(echo "$RESPONSE" | python3 -c 'import sys, json; d = json.load(sys.stdin); print(d.get("id", ""))' 2>/dev/null || echo "")
+BATCH_ID=$(echo "$RESPONSE" | python3 -I -c 'import sys, json; d = json.load(sys.stdin); print(d.get("id", ""))' 2>/dev/null || echo "")
 
 if [ -z "$BATCH_ID" ]; then
   echo "ERROR: No batch ID in response: $RESPONSE" >&2

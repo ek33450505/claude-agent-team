@@ -25,7 +25,7 @@ _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/
 
 INPUT="$(cat 2>/dev/null || true)"
 
-CAST_INPUT="$INPUT" python3 - <<'PYEOF' || true
+CAST_INPUT="$INPUT" python3 -I - <<'PYEOF' || true
 import json, os
 from datetime import datetime, timezone
 

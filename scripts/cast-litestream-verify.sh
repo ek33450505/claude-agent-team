@@ -139,7 +139,7 @@ fi
 # ---- Step 6: freshness check (python3 — cross-platform mtime math) ----------
 
 echo "[cast-litestream-verify] Checking freshness ..."
-_FRESHNESS="$(python3 - "${CAST_DB_PATH}" "${REPLICA_DIR}" <<'PYEOF'
+_FRESHNESS="$(python3 -I - "${CAST_DB_PATH}" "${REPLICA_DIR}" <<'PYEOF'
 import sys
 import os
 

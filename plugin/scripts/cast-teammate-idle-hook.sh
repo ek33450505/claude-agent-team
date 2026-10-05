@@ -39,7 +39,7 @@ fi
 cast_hook_read_stdin
 cast_hook_db_path
 
-CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 - <<'PYEOF' || true
+CAST_INPUT="$INPUT" DB_PATH_VAL="$DB_PATH" python3 -I - <<'PYEOF' || true
 import json, os, sqlite3, uuid
 from datetime import datetime, timezone
 
