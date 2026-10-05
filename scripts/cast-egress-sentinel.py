@@ -49,9 +49,8 @@ HOME = os.path.expanduser("~")
 CLAUDE_DIR = os.environ.get("CLAUDE_DIR", os.path.join(HOME, ".claude"))
 EGRESS_LOG = os.path.join(CLAUDE_DIR, "logs", "egress.jsonl")
 ERROR_LOG = os.path.join(CLAUDE_DIR, "logs", "hook-errors.log")
-# Policy data: prefer repo cwd (dev), fall back to installed ~/.claude.
+# Policy data: cwd is agent-writable, so only the installed copy is trusted; repo edits take effect after install.sh.
 _POLICY_CANDIDATES = [
-    os.path.join(os.getcwd(), "config", "egress-policy.json"),
     os.path.join(CLAUDE_DIR, "config", "egress-policy.json"),
 ]
 
@@ -73,12 +72,87 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Shape of the policy keys classify() and _resolve_unknown_is_cloud_bound() read.
+# Every section config/egress-policy.json defines is REQUIRED (a missing one is a
+# shape error). Per section: (lists that must be present AND non-empty, lists that
+# may be absent or empty). An absent/empty `commands` or `globs` list silently
+# disables the whole Bash / credential-Read surface, so those two may not be empty;
+# an empty mcp_servers list or `hosts` only makes classification noisier, never
+# quieter, so those stay optional (fixtures and operators legitimately leave them []).
+_POLICY_SHAPE = {
+    "mcp_servers": ((), ("cloud_bound", "local_only", "anthropic_brokered")),
+    "credential_path_globs": (("globs",), ()),
+    "bash_network_commands": (("commands",), ()),
+    "safelist_hosts": ((), ("hosts",)),
+}
+_ABSENT = object()
+
+
+def _str_list_error(section: str, field: str, value) -> str | None:
+    if not isinstance(value, list):
+        return f"'{section}.{field}' is not a list"
+    if not all(isinstance(x, str) for x in value):
+        return f"'{section}.{field}' holds a non-string entry"
+    return None
+
+
+def _policy_shape_error(policy) -> str | None:
+    """Return a reason string if `policy` has a shape classify() would raise on
+    (or silently under-classify with), else None. Validates exactly the keys
+    classify() / _resolve_unknown_is_cloud_bound() read. Reasons name structure
+    only, never policy values. Never raises: an unexpected failure is itself
+    reported as a shape error (fail-safe)."""
+    try:
+        if not isinstance(policy, dict):
+            return "top level is not an object"
+        for section, (required_lists, optional_lists) in _POLICY_SHAPE.items():
+            if section not in policy:
+                return f"missing required section '{section}'"
+            sec = policy[section]
+            if not isinstance(sec, dict):
+                return f"'{section}' is not an object"
+            for field in required_lists:
+                value = sec.get(field, _ABSENT)
+                if value is _ABSENT:
+                    return f"'{section}.{field}' is missing"
+                err = _str_list_error(section, field, value)
+                if err:
+                    return err
+                if not value:
+                    return f"'{section}.{field}' is empty"
+            for field in optional_lists:
+                value = sec.get(field, _ABSENT)
+                if value is _ABSENT:
+                    continue
+                err = _str_list_error(section, field, value)
+                if err:
+                    return err
+        default_unknown = policy["mcp_servers"].get("_default_unknown", _ABSENT)
+        if default_unknown is not _ABSENT and not isinstance(default_unknown, str):
+            return "'mcp_servers._default_unknown' is not a string"
+        return None
+    except Exception as e:
+        return f"shape check failed: {type(e).__name__}"
+
+
 def _load_policy() -> dict:
+    """Load the installed egress policy. Returns {} (never raises) when the file
+    is missing, unparseable, or has a shape _policy_shape_error() rejects; the
+    reason is logged to hook-errors.log as `policy load failed (<path>): <why>`.
+    An empty policy is the fail-safe path: MCP/WebFetch still record, and
+    evaluate() adds an advisory so the un-classified Bash/Read surfaces are
+    never silent."""
     for path in _POLICY_CANDIDATES:
         try:
-            if os.path.isfile(path):
-                with open(path) as f:
-                    return json.load(f)
+            if not os.path.isfile(path):
+                _log_error(f"policy load failed ({path}): file not found")
+                continue
+            with open(path) as f:
+                policy = json.load(f)
+            err = _policy_shape_error(policy)
+            if err is None:
+                return policy
+            _log_error(f"policy load failed ({path}): {err}")
         except Exception as e:
             _log_error(f"policy load failed ({path}): {e}")
     return {}
@@ -476,9 +550,11 @@ def record(event: dict, verdict: dict, tool_name: str, session_id: str) -> None:
 # --------------------------------------------------------------------------
 def advisory_context(verdict: dict) -> str:
     """The advisory text, shared by emit_advisory and by callers that fold it
-    into a larger hookSpecificOutput object (cast-pretool-dispatch.py)."""
-    return (f"[CAST-EGRESS:{verdict['severity']}] {verdict['reason']} "
-            f"(recorded to logs/egress.jsonl).")
+    into a larger hookSpecificOutput object (cast-pretool-dispatch.py). A verdict
+    with recorded=False (the policy-invalid notice alone) does not claim a ledger
+    line was written."""
+    suffix = " (recorded to logs/egress.jsonl)." if verdict.get("recorded", True) else "."
+    return f"[CAST-EGRESS:{verdict['severity']}] {verdict['reason']}{suffix}"
 
 
 def emit_advisory(verdict: dict) -> None:
@@ -488,6 +564,40 @@ def emit_advisory(verdict: dict) -> None:
             "additionalContext": advisory_context(verdict),
         }
     }))
+
+
+# --------------------------------------------------------------------------
+# Per-call evaluation — the ONE body main() and cast-pretool-dispatch.py's
+# _run_egress both run, so the two paths cannot drift.
+# --------------------------------------------------------------------------
+_POLICY_INVALID_NOTE = ("egress policy missing or invalid - this call was not fully "
+                        "classified (see logs/hook-errors.log)")
+
+
+def evaluate(tool_name: str, tool_input: dict, session_id: str) -> dict | None:
+    """Load the policy, classify, assess and RECORD one tool call. Returns the
+    verdict to advise ({severity: 'warn', reason, recorded}) or None for silence.
+
+    When the effective policy is {} (missing / malformed / wrong-shape file --
+    see _load_policy()) the advisory is added even for a call classify() found
+    nothing to say about: with no bash_network_commands / credential_path_globs
+    the Bash and Read surfaces cannot classify anything, and that must never be a
+    silent state. The MCP/WebFetch fail-safe records are unchanged. A valid policy
+    never produces this notice."""
+    policy = _load_policy()
+    verdict = None
+    event = classify(tool_name, tool_input, policy)
+    if event is not None:
+        assessed = assess_sensitivity(event, tool_input)
+        record(event, assessed, tool_name, session_id)
+        if assessed.get("severity") == "warn":
+            verdict = dict(assessed, recorded=True)
+    if not policy:
+        if verdict is None:
+            verdict = {"severity": "warn", "reason": _POLICY_INVALID_NOTE, "recorded": False}
+        else:
+            verdict["reason"] = f"{verdict['reason']}; {_POLICY_INVALID_NOTE}"
+    return verdict
 
 
 # --------------------------------------------------------------------------
@@ -510,16 +620,8 @@ def main() -> int:
     tool_input = data.get("tool_input", {}) or {}
     session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
 
-    policy = _load_policy()
-
-    event = classify(tool_name, tool_input, policy)
-    if event is None:
-        return 0  # on-machine / not egress — say nothing
-
-    verdict = assess_sensitivity(event, tool_input)
-    record(event, verdict, tool_name, session_id)
-
-    if verdict.get("severity") == "warn":
+    verdict = evaluate(tool_name, tool_input, session_id)
+    if verdict is not None:
         emit_advisory(verdict)
     return 0
 

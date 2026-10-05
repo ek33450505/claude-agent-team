@@ -45,6 +45,12 @@ setup() {
   # error_preview redaction can actually run instead of failing closed.
   mkdir -p "$HOME/.claude/scripts"
   cp "$REPO_DIR/scripts/cast-redact.py" "$HOME/.claude/scripts/"
+  # The egress policy is read ONLY from the installed $HOME/.claude/config copy
+  # (cwd is agent-writable, so cast-audit.py never trusts a cwd-relative one).
+  # Seed the temp HOME with the repo's real policy so the MCP tests below
+  # classify against it.
+  mkdir -p "$HOME/.claude/config"
+  cp "$REPO_DIR/config/egress-policy.json" "$HOME/.claude/config/egress-policy.json"
 }
 
 teardown() {
@@ -160,10 +166,10 @@ print('ok')
 # MCP observability (v10 2.6) — end-to-end through the real hook script, not
 # just the Python unit tests. is_cloud_bound is classified from CAST's
 # canonical config/egress-policy.json (mcp_servers.cloud_bound/local_only),
-# resolved via $CWD/config/egress-policy.json — bats is invoked from the repo
-# root, so these tests read the REAL policy file, not a fixture. Servers not
-# named in either list (e.g. "unknownserver" below) exercise the fail-safe
-# True default.
+# resolved ONLY via $HOME/.claude/config/egress-policy.json — setup() copies the
+# repo's REAL policy file there, so these tests read the real contents, not a
+# fixture. Servers not named in either list (e.g. "unknownserver" below)
+# exercise the fail-safe True default.
 # ---------------------------------------------------------------------------
 
 @test "MCP tool call → audit record has mcp_server and mcp_tool fields" {

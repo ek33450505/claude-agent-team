@@ -2645,9 +2645,21 @@ _mk_update_ref_fixture() {
 # having completed. Exercised end-to-end through pre-tool-guard.sh's real
 # Write-tool path against this repo's actual config/policies.json
 # (`src/auth/.*` requires `security`, severity block).
+#
+# The guard reads ONLY the installed ~/.claude/config/policies.json (security
+# M1, 2026-10-04: a cwd-relative config/policies.json is agent-writable, so
+# trusting it let a planted file disable every block policy). Each test below
+# therefore installs the repo's policies into the temp HOME; none depends on cwd.
 # ---------------------------------------------------------------------------
 
+# Install the repo's real policies as the INSTALLED copy under the temp HOME.
+install_repo_policies() {
+  mkdir -p "$HOME/.claude/config"
+  cp "$REPO_DIR/config/policies.json" "$HOME/.claude/config/policies.json"
+}
+
 @test "Write to src/auth/*.php with NO completion record → blocks (exit 2) [policy-gate __ prefix fix: control]" {
+  install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe1.php")"
   assert_failure
   assert_output --partial "auth-requires-security"
@@ -2655,18 +2667,21 @@ _mk_update_ref_fixture() {
 
 @test "Write to src/auth/*.php with a plain security-<ts>.json record → allows (exit 0) [policy-gate __ prefix fix: pre-existing dash form regression fence]" {
   create_status_file "security-1000.json" 0 '{"status":"DONE"}'
+  install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe2.php")"
   assert_success
 }
 
 @test "Write to src/auth/*.php with a security__fix-x-<ts>.json record (dunder dispatch naming) → allows (exit 0) [policy-gate __ prefix fix]" {
   create_status_file "security__fix-x-1000.json" 0 '{"status":"DONE"}'
+  install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe3.php")"
   assert_success
 }
 
 @test "Write to src/auth/*.php with a security2-<ts>.json record (must NOT satisfy 'security': anchoring regression) → blocks (exit 2) [policy-gate __ prefix fix: anchoring must hold]" {
   create_status_file "security2-1000.json" 0 '{"status":"DONE"}'
+  install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe4.php")"
   assert_failure
   assert_output --partial "auth-requires-security"
@@ -2674,9 +2689,242 @@ _mk_update_ref_fixture() {
 
 @test "Write to src/auth/*.php with a securityX__fix-y-<ts>.json record (must NOT satisfy 'security': dunder anchoring regression) → blocks (exit 2) [policy-gate __ prefix fix: anchoring must hold]" {
   create_status_file "securityX__fix-y-1000.json" 0 '{"status":"DONE"}'
+  install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe5.php")"
   assert_failure
   assert_output --partial "auth-requires-security"
+}
+
+# ---------------------------------------------------------------------------
+# Policy-config trust boundary + fail-closed (security M1, 2026-10-04).
+# _policy_evaluate() used to prefer a cwd-relative config/policies.json (agent-
+# writable) and silently allow on any unreadable/malformed config. It now reads
+# only ~/.claude/config/policies.json and FAILS CLOSED when that file is present
+# but unusable; CAST_POLICY_OVERRIDE=1 is the audit-logged escape hatch.
+# ---------------------------------------------------------------------------
+
+@test "planted cwd config/policies.json (empty policies list) does NOT disable the installed block policy → blocks (exit 2) [policy M1: cwd not trusted]" {
+  install_repo_policies
+  local planted="$BATS_TEST_TMPDIR/planted"
+  mkdir -p "$planted/config"
+  printf '{"policies": []}\n' > "$planted/config/policies.json"
+  cd "$planted"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/x.php")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "auth-requires-security"
+}
+
+@test "installed policies.json is malformed JSON → fail closed on a path matching NO policy (exit 2) [policy M1]" {
+  mkdir -p "$HOME/.claude/config"
+  printf '{not json' > "$HOME/.claude/config/policies.json"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "policies.json"
+  assert_output --partial "CAST_POLICY_OVERRIDE"
+}
+
+@test "malformed installed policies.json + CAST_POLICY_OVERRIDE=1 → allows (exit 0) and audit-logs policies-config-invalid [policy M1]" {
+  mkdir -p "$HOME/.claude/config"
+  printf '{not json' > "$HOME/.claude/config/policies.json"
+  export CAST_POLICY_OVERRIDE=1
+  run bash "$HOOK_SH" <<< "$(make_write_payload "docs/readme.md")"
+  assert_success
+  run grep -c "policies-config-invalid" "$HOME/.claude/logs/audit.jsonl"
+  assert_success
+  assert_output "1"
+}
+
+@test "installed policies.json with a non-list policies value → fail closed (exit 2) [policy M1]" {
+  mkdir -p "$HOME/.claude/config"
+  printf '{"policies": {"x": 1}}' > "$HOME/.claude/config/policies.json"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "not a list"
+}
+
+@test "installed policies.json with a non-object policy entry → fail closed (exit 2) [policy M1]" {
+  mkdir -p "$HOME/.claude/config"
+  printf '{"policies": ["str"]}' > "$HOME/.claude/config/policies.json"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "not an object"
+}
+
+@test "installed policies.json with an invalid path_pattern regex → fail closed (exit 2) [policy M1]" {
+  mkdir -p "$HOME/.claude/config"
+  printf '{"policies": [{"id": "bad", "path_pattern": "(", "requires_agent": "security", "severity": "block"}]}' \
+    > "$HOME/.claude/config/policies.json"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "invalid path_pattern"
+}
+
+@test "installed policies.json ABSENT → allows (exit 0) even for src/auth/*.php; cwd config ignored [policy M1: not-installed unchanged]" {
+  # No installed copy. A cwd copy with a block policy must NOT be consulted either.
+  local planted="$BATS_TEST_TMPDIR/cwdonly"
+  mkdir -p "$planted/config"
+  cp "$REPO_DIR/config/policies.json" "$planted/config/policies.json"
+  cd "$planted"
+  if [ -e "$HOME/.claude/config/policies.json" ]; then return 1; fi
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/x.php")"
+  assert_success
+  refute_output --partial "CAST-POLICY-BLOCK"
+}
+
+# ---------------------------------------------------------------------------
+# Policy-config loader hardening + path handling (security round 2, 2026-10-05).
+# The installed config path is attacker-influenceable (a FIFO hangs open(); a
+# symlink to /dev/zero is read without bound; a dangling symlink once read as
+# "missing"), policy entries can carry fail-open shapes (non-string
+# requires_agent, severity "BLOCK"), very long file_paths make the regexes
+# quadratic, and a symlinked directory sidesteps every path_pattern.
+# ---------------------------------------------------------------------------
+
+# Run the hook with a hard 10 s wall-clock cap that kills the WHOLE process group,
+# so a regression back to a blocking open() fails the test (status 137) instead of
+# hanging the suite or leaking an orphaned python blocked on a FIFO.
+run_hook_capped() {
+  perl -e 'setpgrp(0,0); $SIG{ALRM}=sub{kill "KILL", -$$}; alarm 10; system(@ARGV); exit($? >> 8);' \
+    bash "$HOOK_SH" <<< "$1"
+}
+
+# Install a one-policy config whose raw JSON is $1 (installed copy, temp HOME).
+install_policies_json() {
+  mkdir -p "$HOME/.claude/config"
+  printf '%s' "$1" > "$HOME/.claude/config/policies.json"
+}
+
+@test "installed policies.json is a FIFO → fail closed and FINISHES (exit 2, not a hang) [policy M2]" {
+  mkdir -p "$HOME/.claude/config"
+  mkfifo "$HOME/.claude/config/policies.json"
+  run run_hook_capped "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "not a regular file"
+}
+
+@test "installed policies.json is a symlink to /dev/zero → fail closed fast, never read unbounded (exit 2) [policy M3]" {
+  mkdir -p "$HOME/.claude/config"
+  ln -s /dev/zero "$HOME/.claude/config/policies.json"
+  run run_hook_capped "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "not a regular file"
+}
+
+@test "installed policies.json is a 1.5 MiB regular file of valid JSON → fail closed 'too large' (exit 2) [policy M3]" {
+  mkdir -p "$HOME/.claude/config"
+  python3 -c 'import sys; sys.stdout.write("{\"policies\": [], \"pad\": \"" + "a" * 1572864 + "\"}")' \
+    > "$HOME/.claude/config/policies.json"
+  run run_hook_capped "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "too large"
+}
+
+@test "installed policies.json is a DANGLING symlink → fail closed, not 'missing' (exit 2) [policy L-2]" {
+  mkdir -p "$HOME/.claude/config"
+  ln -s "$HOME/does-not-exist-target" "$HOME/.claude/config/policies.json"
+  run run_hook_capped "$(make_write_payload "src/auth/x.php")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "FileNotFoundError"
+}
+
+@test "installed policies.json path is a DIRECTORY → fail closed (exit 2) [policy L-2]" {
+  mkdir -p "$HOME/.claude/config/policies.json"
+  run run_hook_capped "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "not a regular file"
+}
+
+@test "policy with a non-string requires_agent (list) → fail closed (exit 2), not a TypeError fail-open [policy M-1]" {
+  install_policies_json '{"policies": [{"id": "p", "path_pattern": "src/auth/.*", "requires_agent": ["security"], "severity": "block"}]}'
+  run run_hook_capped "$(make_write_payload "src/auth/x.php")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "requires_agent"
+}
+
+@test "policy with severity BLOCK (wrong case) → fail closed (exit 2), not a silent downgrade to allow [policy L-3]" {
+  install_policies_json '{"policies": [{"id": "p", "path_pattern": "src/auth/.*", "requires_agent": "security", "severity": "BLOCK"}]}'
+  run run_hook_capped "$(make_write_payload "src/auth/x.php")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "severity"
+}
+
+@test "policy with NO severity → fail closed (exit 2), not a silent default to warn [policy L-3]" {
+  install_policies_json '{"policies": [{"id": "p", "path_pattern": "src/auth/.*", "requires_agent": "security"}]}'
+  run run_hook_capped "$(make_write_payload "src/auth/x.php")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "severity"
+}
+
+@test "installed policies.json nested 200000 levels deep → fail closed (exit 2), RecursionError does not escape [policy L-1]" {
+  mkdir -p "$HOME/.claude/config"
+  python3 -c 'import sys; n = 200000; sys.stdout.write("[" * n + "]" * n)' > "$HOME/.claude/config/policies.json"
+  run run_hook_capped "$(make_write_payload "docs/readme.md")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "RecursionError"
+}
+
+@test "5000-char path to a non-policy file with valid policies → blocked 'too long' (exit 2) [policy M-5]" {
+  install_repo_policies
+  local longpath="docs/$(head -c 5000 /dev/zero | tr '\0' 'a')"
+  run run_hook_capped "$(make_write_payload "$longpath")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "too long"
+}
+
+@test "5000-char path with CAST_POLICY_OVERRIDE=1 → allows (exit 0) and audit-logs policy-path-too-long [policy M-5]" {
+  install_repo_policies
+  local longpath="docs/$(head -c 5000 /dev/zero | tr '\0' 'a')"
+  export CAST_POLICY_OVERRIDE=1
+  run run_hook_capped "$(make_write_payload "$longpath")"
+  assert_success
+  run grep -c "policy-path-too-long" "$HOME/.claude/logs/audit.jsonl"
+  assert_success
+  assert_output "1"
+}
+
+@test "Write through a symlinked dir (authlink -> src/auth) is blocked by the src/auth policy (exit 2) [policy HIGH-1: realpath arm]" {
+  install_repo_policies
+  local repo="$BATS_TEST_TMPDIR/repo"
+  mkdir -p "$repo/src/auth"
+  ln -s src/auth "$repo/authlink"
+  run run_hook_capped "$(make_write_payload "$repo/authlink/x.php")"
+  assert_failure 2
+  assert_output --partial "[CAST-POLICY-BLOCK]"
+  assert_output --partial "auth-requires-security"
+}
+
+@test "Write through a symlink to a NON-policy dir (doclink -> docs) still allows (exit 0) [policy HIGH-1: control]" {
+  install_repo_policies
+  local repo="$BATS_TEST_TMPDIR/repo"
+  mkdir -p "$repo/docs"
+  ln -s docs "$repo/doclink"
+  run run_hook_capped "$(make_write_payload "$repo/doclink/x.md")"
+  assert_success
+  refute_output --partial "CAST-POLICY-BLOCK"
+}
+
+@test "normal block message truncates a 300-char path to 256 chars (exit 2) [policy: consistent truncation]" {
+  install_repo_policies
+  local a300; a300="$(head -c 300 /dev/zero | tr '\0' 'a')"
+  run run_hook_capped "$(make_write_payload "src/auth/${a300}.php")"
+  assert_failure 2
+  assert_output --partial "auth-requires-security"
+  refute_output --partial "${a300}.php"
 }
 
 # ---------------------------------------------------------------------------

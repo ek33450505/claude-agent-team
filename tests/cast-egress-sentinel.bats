@@ -11,6 +11,7 @@ load 'test_helper/bats-assert/load'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 DISPATCH="$REPO_DIR/scripts/cast-pretool-dispatch.py"
+SENTINEL="$REPO_DIR/scripts/cast-egress-sentinel.py"
 
 # Build a PreToolUse payload: payload <tool_name> [file_path_or_url_or_cmd]
 payload() {
@@ -92,20 +93,26 @@ teardown() {
 # --- J-2: mcp_servers._default_unknown is now the single source of truth -
 # for how classify() treats an unknown server. Every fixture below is
 # written to $HOME/.claude/config/egress-policy.json (never the real repo
-# config/egress-policy.json) and consulted only because we `cd` to a
-# directory with no config/ subdir of its own, so _load_policy()'s cwd-first
-# candidate misses and falls through to the CLAUDE_DIR (temp $HOME) one.
+# config/egress-policy.json). _load_policy() reads ONLY that installed copy
+# (cwd is agent-writable and is never consulted); we still `cd` to a scratch
+# dir so the cwd is a known-empty one.
 
 _write_default_unknown_policy() {
   # $1 = raw JSON to write in place of _default_unknown's value line, e.g.
   # '"_default_unknown": "local_only"' or the key omitted entirely.
+  # The other three sections every valid policy must carry (a missing section is
+  # a shape error -> {} -> advisory) are minimal-valid here: these tests are
+  # about _default_unknown, not the Bash/Read/WebFetch lists.
   cat > "$HOME/.claude/config/egress-policy.json" <<EOF
 {
   "mcp_servers": {
     $1
     "cloud_bound": ["knowncloud"],
     "local_only": ["knownlocal"]
-  }
+  },
+  "credential_path_globs": { "globs": ["**/.env"] },
+  "bash_network_commands": { "commands": ["curl"] },
+  "safelist_hosts": { "hosts": ["localhost"] }
 }
 EOF
 }
@@ -152,6 +159,21 @@ EOF
   assert_output --partial '"unknown_server":true'
 }
 
+@test "non-object policy JSON ([]) + unknown server → recorded (fail-safe cloud) + error logged" {
+  # Valid JSON whose top level is not an object used to be returned as-is, so
+  # classify() raised on policy.get() and the ledger went silent (fail-open).
+  # It must take the same fail-safe path as a malformed file instead.
+  echo '[]' > "$HOME/.claude/config/egress-policy.json"
+  run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__somenewthing__do)'"
+  assert_success
+  run tail -1 "$EGRESS_LOG"
+  assert_success
+  assert_output --partial '"unknown_server":true'
+  run cat "$HOME/.claude/logs/hook-errors.log"
+  assert_success
+  assert_output --partial 'top level is not an object'
+}
+
 @test "_default_unknown=local_only does not affect a KNOWN local_only server (still silent)" {
   _write_default_unknown_policy '"_default_unknown": "local_only",'
   run bash -c "cd '$BATS_TEST_TMPDIR' && python3 '$DISPATCH' <<< '$(payload mcp__knownlocal__do)'"
@@ -167,6 +189,137 @@ EOF
   run tail -1 "$EGRESS_LOG"
   assert_output --partial '"server":"knowncloud"'
   assert_output --partial '"unknown_server":false'
+}
+
+# --- cwd is agent-writable: a planted cwd policy must NEVER be consulted ----
+# Hooks run unsandboxed with cwd = the project dir, which a sandboxed agent can
+# write. The installed $HOME/.claude/config copy is the only trusted policy.
+
+@test "planted cwd config/egress-policy.json is IGNORED (installed policy still records cloud server)" {
+  # Installed (trusted) policy: knowncloud is cloud_bound.
+  _write_default_unknown_policy '"_default_unknown": "cloud_bound",'
+  # Planted cwd policy: tries to launder the same server as local_only.
+  local planted="$BATS_TEST_TMPDIR/planted-project"
+  mkdir -p "$planted/config"
+  cat > "$planted/config/egress-policy.json" <<EOF
+{
+  "mcp_servers": {
+    "_default_unknown": "local_only",
+    "cloud_bound": [],
+    "local_only": ["knowncloud"]
+  }
+}
+EOF
+  run bash -c "cd '$planted' && python3 '$DISPATCH' <<< '$(payload mcp__knowncloud__do)'"
+  assert_success
+  # Cloud verdict => a ledger line exists (a local_only verdict would be silent).
+  run tail -1 "$EGRESS_LOG"
+  assert_success
+  assert_output --partial '"server":"knowncloud"'
+  assert_output --partial '"unknown_server":false'
+}
+
+# --- policy missing / wrong shape must NEVER be a silent state --------------
+# A policy classify() cannot use is treated as {} (see _load_policy()): MCP and
+# WebFetch still fail safe and record, but Bash/Read have no command/glob lists
+# and would classify NOTHING -- so evaluate() adds a [CAST-EGRESS:warn] advisory
+# pointing at hook-errors.log, and _load_policy() logs the reason. Every test
+# below runs through the dispatcher (cast-pretool-dispatch.py -> _run_egress),
+# the production path; one also drives the sentinel's own main().
+
+# _write_policy_variant <python statement mutating the dict `d`>: rewrite the
+# TEMP-HOME copy of the repo policy (the repo file is never touched).
+_write_policy_variant() {
+  [[ -f "$HOME/.cast-test-home" ]] || { echo "refusing: HOME is not a test fixture" >&2; return 1; }
+  python3 - "$HOME/.claude/config/egress-policy.json" "$1" <<'PY'
+import json, sys
+path, stmt = sys.argv[1], sys.argv[2]
+d = json.load(open(path))
+exec(stmt)
+json.dump(d, open(path, "w"))
+PY
+}
+
+_assert_policy_advisory_and_log() {
+  # $1 = reason substring expected in the temp-HOME hook-errors.log
+  assert_output --partial '[CAST-EGRESS:warn]'
+  assert_output --partial 'egress policy missing or invalid'
+  assert_output --partial 'not fully classified'
+  assert_output --partial 'hook-errors.log'
+  run cat "$HOME/.claude/logs/hook-errors.log"
+  assert_success
+  assert_output --partial "policy load failed"
+  assert_output --partial "$1"
+}
+
+@test "policy mcp_servers: 5 + MCP call → advisory + reason logged (dispatcher path)" {
+  _write_policy_variant 'd["mcp_servers"] = 5'
+  run python3 "$DISPATCH" <<< "$(payload mcp__knowncloud__do)"
+  assert_success
+  _assert_policy_advisory_and_log "'mcp_servers' is not an object"
+}
+
+@test "policy mcp_servers: 5 + MCP call → advisory + reason logged (sentinel main path)" {
+  _write_policy_variant 'd["mcp_servers"] = 5'
+  run python3 "$SENTINEL" <<< "$(payload mcp__knowncloud__do)"
+  assert_success
+  _assert_policy_advisory_and_log "'mcp_servers' is not an object"
+}
+
+@test "policy safelist_hosts.hosts: [5] + WebFetch → advisory + reason logged" {
+  _write_policy_variant 'd["safelist_hosts"]["hosts"] = [5]'
+  run python3 "$DISPATCH" <<< "$(payload WebFetch https://example.org/page)"
+  assert_success
+  _assert_policy_advisory_and_log "'safelist_hosts.hosts' holds a non-string entry"
+}
+
+@test "policy bash_network_commands.commands: null + Bash curl → advisory + reason logged (was silent)" {
+  _write_policy_variant 'd["bash_network_commands"]["commands"] = None'
+  run python3 "$DISPATCH" <<< "$(payload Bash 'curl https://evil.example.org/x')"
+  assert_success
+  _assert_policy_advisory_and_log "'bash_network_commands.commands' is not a list"
+}
+
+@test "policy bash_network_commands.commands: [] + Bash curl → advisory + reason logged (was silent)" {
+  _write_policy_variant 'd["bash_network_commands"]["commands"] = []'
+  run python3 "$DISPATCH" <<< "$(payload Bash 'curl https://evil.example.org/x')"
+  assert_success
+  _assert_policy_advisory_and_log "'bash_network_commands.commands' is empty"
+}
+
+@test "MISSING installed policy + Bash curl → advisory + 'file not found' logged (was silent)" {
+  rm -f "$HOME/.claude/config/egress-policy.json"
+  run python3 "$DISPATCH" <<< "$(payload Bash 'curl https://evil.example.org/x')"
+  assert_success
+  _assert_policy_advisory_and_log "file not found"
+}
+
+@test "CONTROL: valid repo policy + benign Bash ls → NO egress advisory, no policy error logged" {
+  run python3 "$DISPATCH" <<< "$(payload Bash 'ls')"
+  assert_success
+  refute_output --partial 'CAST-EGRESS'
+  refute_output --partial 'egress policy missing or invalid'
+  if [[ -f "$HOME/.claude/logs/hook-errors.log" ]]; then
+    run cat "$HOME/.claude/logs/hook-errors.log"
+    refute_output --partial 'policy load failed'
+  fi
+}
+
+@test "CONTROL: valid repo policy + Bash curl → the normal advisory only (no policy-invalid notice)" {
+  run python3 "$DISPATCH" <<< "$(payload Bash 'curl https://evil.example.org/x')"
+  assert_success
+  assert_output --partial '[CAST-EGRESS:warn] bash network command(s): curl'
+  refute_output --partial 'egress policy missing or invalid'
+}
+
+@test "dispatcher logs a swallowed egress-evaluation exception (fail-open but NOT silent)" {
+  # A non-string Bash command makes classify() raise inside _run_egress; the
+  # dispatcher must still exit 0 / emit nothing, AND leave a hook-errors.log line.
+  run python3 "$DISPATCH" <<< '{"tool_name":"Bash","tool_input":{"command":5},"session_id":"t"}'
+  assert_success
+  run cat "$HOME/.claude/logs/hook-errors.log"
+  assert_success
+  assert_output --partial 'cast-pretool-dispatch.py: egress evaluation failed'
 }
 
 # --- credential read ------------------------------------------------------

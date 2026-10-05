@@ -1,7 +1,9 @@
 #!/usr/bin/env bats
 # cast-sandbox-u6-config.bats -- static + merge checks for the U6b/U6c security config:
 #   61-sandbox.json sandbox.filesystem.denyWrite (.git/worktrees, .githooks)
-#   12-ask.json permissions.ask (Edit/Write on .githooks)
+#   12-ask.json permissions.ask (Edit on .githooks; NO Write rule -- Write path rules are inert,
+#     only Edit(path) is consulted for file tools; the mode-independent gate is the
+#     githooks-require-security policy, see tests/cast-githooks-policy.bats)
 # These do NOT prove live enforcement (settings apply only after install + a new
 # session); see docs/architecture/enforcement-awareness-split.md for the live-probe list.
 # Isolated temp HOME; no real settings touched.
@@ -47,8 +49,10 @@ assert not bad, bad
   assert_success
 }
 
-@test "12-ask.json ask contains Edit and Write rules for .githooks" {
-  run jq_py "$ASK" "'Edit(**/.githooks/**)' in d['permissions']['ask'] and 'Write(**/.githooks/**)' in d['permissions']['ask']"
+@test "12-ask.json ask contains the Edit rule for .githooks and NO inert Write rule" {
+  # Write(path) rules are inert per the Claude Code permissions docs (only Edit(path) is
+  # consulted for file tools), so a Write ask rule is false reassurance and must stay absent.
+  run jq_py "$ASK" "'Edit(**/.githooks/**)' in d['permissions']['ask'] and 'Write(**/.githooks/**)' not in d['permissions']['ask']"
   assert_success
 }
 
@@ -61,7 +65,7 @@ assert not bad, bad
   assert_success
 }
 
-@test "real merge keeps both denyWrite entries, the .githooks ask rules, AND existing ask entries" {
+@test "real merge keeps both denyWrite entries, the .githooks Edit ask rule (no Write rule), AND existing ask entries" {
   mkdir -p "$HOME/.claude/managed-settings.d"
   cp "$REPO_DIR"/managed-settings.d/*.json "$HOME/.claude/managed-settings.d/"
   out="$HOME/.claude/settings.json"
@@ -69,15 +73,15 @@ assert not bad, bad
   assert_success
   run jq_py "$out" "{'~/Projects/**/.git/worktrees', '~/Projects/**/.githooks'} <= set(d['sandbox']['filesystem']['denyWrite'])"
   assert_success
-  run jq_py "$out" "{'Edit(**/.githooks/**)', 'Write(**/.githooks/**)', 'mcp__neon__delete_branch'} <= set(d['permissions']['ask'])"
+  run jq_py "$out" "{'Edit(**/.githooks/**)', 'mcp__neon__delete_branch'} <= set(d['permissions']['ask']) and 'Write(**/.githooks/**)' not in d['permissions']['ask']"
   assert_success
   # a different array key in the same dict must survive (allowWrite/denyRead siblings)
   run jq_py "$out" "'/tmp' in d['sandbox']['filesystem']['allowWrite'] and d['sandbox']['filesystem']['denyRead']"
   assert_success
 }
 
-@test "repo-root settings.json (hand-maintained merged copy) carries all four U6 entries" {
-  run jq_py "$REPO_DIR/settings.json" "{'~/Projects/**/.git/worktrees', '~/Projects/**/.githooks'} <= set(d['sandbox']['filesystem']['denyWrite']) and {'Edit(**/.githooks/**)', 'Write(**/.githooks/**)'} <= set(d['permissions']['ask'])"
+@test "repo-root settings.json (hand-maintained merged copy) carries the U6 entries (Edit ask, no Write ask)" {
+  run jq_py "$REPO_DIR/settings.json" "{'~/Projects/**/.git/worktrees', '~/Projects/**/.githooks'} <= set(d['sandbox']['filesystem']['denyWrite']) and 'Edit(**/.githooks/**)' in d['permissions']['ask'] and 'Write(**/.githooks/**)' not in d['permissions']['ask']"
   assert_success
 }
 
