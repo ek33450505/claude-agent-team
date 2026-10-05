@@ -133,7 +133,11 @@ SAFE_ROSTER_TYPE="${SAFE_ROSTER_TYPE:-}"
 # RECENT such record and clears requires_agent BLOCK policies only for DONE /
 # DONE_WITH_CONCERNS. A truncated agent (no recognized status) → CAST_GATE_MATCH
 # empty → no file written → gate stays blocked. Gate value computed once by the
-# python process (last-match-wins, non-exempt only).
+# python process (compute_gate_match, non-exempt only): ASYMMETRIC and
+# most-conservative-wins (BLOCKED > NEEDS_CONTEXT > DONE_WITH_CONCERNS > DONE) —
+# passing verdicts only from an unfenced line-anchored `Status: X` or a closed
+# ```json status``` fence; BLOCKED/NEEDS_CONTEXT from ANY line, fence-independent
+# and unanchored. NOT last-match-wins (quoted text must never override a block).
 # Identity: the gate trusts ONLY the record's `session_id` and `agent_type`
 # content fields, which only this hook supplies (args 6/7). `agent_type` is the
 # roster type read from Claude Code's subagent sidecar, NEVER the dispatch name
