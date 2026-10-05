@@ -70,13 +70,13 @@ print(json.dumps({
 }
 
 @test "Write to an absolute .githooks/ path with NO completion record -> blocks (exit 2) naming the policy" {
-  run bash "$HOOK_SH" <<< "$(make_write_payload "/Users/someone/Projects/x/.githooks/pre-commit")"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
   assert_failure 2
   assert_output --partial "githooks-require-security"
 }
 
 @test "Edit to an absolute .githooks/ path with NO completion record -> blocks (exit 2) naming the policy" {
-  run bash "$HOOK_SH" <<< "$(make_edit_payload "/Users/someone/Projects/x/.githooks/pre-commit")"
+  run bash "$HOOK_SH" <<< "$(make_edit_payload "/home/someone/Projects/x/.githooks/pre-commit")"
   assert_failure 2
   assert_output --partial "githooks-require-security"
 }
@@ -95,19 +95,19 @@ print(json.dumps({
 
 @test "Write to .githooks/ with a plain security-<ts>.json DONE record -> allows (exit 0)" {
   create_status_file "security-1000.json" '{"status":"DONE"}'
-  run bash "$HOOK_SH" <<< "$(make_write_payload "/Users/someone/Projects/x/.githooks/pre-commit")"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
   assert_success
 }
 
 @test "Write to .githooks/ with a security__githooks-<ts>.json DONE record (dunder dispatch naming) -> allows (exit 0)" {
   create_status_file "security__githooks-1000.json" '{"status":"DONE"}'
-  run bash "$HOOK_SH" <<< "$(make_write_payload "/Users/someone/Projects/x/.githooks/pre-commit")"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
   assert_success
 }
 
 @test "Write to .githooks/ with a BLOCKED security record -> still blocks (exit 2): only DONE unblocks" {
   create_status_file "security-1000.json" '{"status":"BLOCKED"}'
-  run bash "$HOOK_SH" <<< "$(make_write_payload "/Users/someone/Projects/x/.githooks/pre-commit")"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
   assert_failure 2
   assert_output --partial "githooks-require-security"
 }
@@ -225,21 +225,21 @@ print(json.dumps({
 # fsmonitor/hooksPath/filters that run unsandboxed for every repo.
 # ---------------------------------------------------------------------------
 
-@test "Write to /Users/u/.gitconfig -> blocks (exit 2) naming git-global-config-require-security" {
-  run bash "$HOOK_SH" <<< "$(make_write_payload "/Users/u/.gitconfig")"
+@test "Write to /home/u/.gitconfig -> blocks (exit 2) naming git-global-config-require-security" {
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/u/.gitconfig")"
   assert_failure 2
   assert_output --partial "git-global-config-require-security"
 }
 
-@test "Write to /Users/u/.config/git/config -> blocks (exit 2) naming git-global-config-require-security" {
-  run bash "$HOOK_SH" <<< "$(make_write_payload "/Users/u/.config/git/config")"
+@test "Write to /home/u/.config/git/config -> blocks (exit 2) naming git-global-config-require-security" {
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/u/.config/git/config")"
   assert_failure 2
   assert_output --partial "git-global-config-require-security"
 }
 
-@test "Write to /Users/u/.gitconfig with a security DONE record -> allows (exit 0)" {
+@test "Write to /home/u/.gitconfig with a security DONE record -> allows (exit 0)" {
   create_status_file "security-1000.json" '{"status":"DONE"}'
-  run bash "$HOOK_SH" <<< "$(make_write_payload "/Users/u/.gitconfig")"
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/u/.gitconfig")"
   assert_success
 }
 
