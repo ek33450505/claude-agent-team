@@ -514,14 +514,6 @@
             "async": true
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "Context was automatically compacted. Briefly let the user know this happened, summarize the current task state, and continue where you left off."
-          }
-        ]
       }
     ],
     "TaskCreated": [
