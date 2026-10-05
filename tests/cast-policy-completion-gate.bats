@@ -38,18 +38,39 @@ print(json.dumps({'tool_name': tool, 'tool_input': ti, 'session_id': 'test'}))
 run_dispatch() { run python3 "$DISPATCH" <<< "$1"; }
 
 # Build a SubagentStop payload (mirrors cast-subagent-stop-hook.bats)
+# Optional 3rd arg: agent_id (the filename stem of Claude Code's subagent sidecar).
 make_stop_payload() {
   local agent_type="${1:-test-agent}"
   local output="${2:-}"
+  local agent_id="${3:-}"
   python3 -c "
 import json, sys
-print(json.dumps({
+d = {
     'agent_type':             sys.argv[1],
     'session_id':             'sess-gate-test',
     'stop_reason':            'end_turn',
     'last_assistant_message': sys.argv[2],
-}))
-" "$agent_type" "$output"
+}
+if sys.argv[3]:
+    d['agent_id'] = sys.argv[3]
+print(json.dumps(d))
+" "$agent_type" "$output" "$agent_id"
+}
+
+# Write Claude Code's subagent sidecar fixture the writer reads its TRUSTED roster
+# type from: ~/.claude/projects/<slug>/<session_id>/subagents/agent-<agent_id>.meta.json
+# (layout live-probed 2026-10-05). Args: <agent_id> <meta-json>. printf only.
+write_sidecar() {
+  local aid="$1"
+  local meta="$2"
+  local dir="$HOME/.claude/projects/-home-proj/sess-gate-test/subagents"
+  mkdir -p "$dir"
+  printf '%s\n' "$meta" > "$dir/agent-${aid}.meta.json"
+}
+
+# First completion record written for <agent-prefix> (empty string if none).
+first_record() {
+  find "$HOME/.claude/agent-status" -name "${1}-*.json" 2>/dev/null | head -1
 }
 
 # Write a completion record for <agent> with <STATUS>.
@@ -209,7 +230,9 @@ lines.append('Status: DONE')
 lines.append('Summary: devops review complete')
 print('\n'.join(lines))
 ")"
-  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$output")"
+  # Unnamed-subagent sidecar shape: agentType IS the roster type.
+  write_sidecar adevops0001 '{"agentType":"devops"}'
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$output" adevops0001)"
   assert_success
   # At least one devops-*.json must exist
   local count
@@ -222,6 +245,61 @@ print('\n'.join(lines))
   run grep -c '"status": "DONE"' "$found"
   assert_success
   assert_output "1"
+  # Gate-trust content fields: the payload session_id + the sidecar roster type.
+  run grep -c '"session_id": "sess-gate-test"' "$found"
+  assert_success
+  assert_output "1"
+  run grep -c '"agent_type": "devops"' "$found"
+  assert_success
+  assert_output "1"
+}
+
+@test "WRITER-7b: roster type comes from the sidecar, not the dispatch name" {
+  local output
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  # Named regular subagent (probe shape 4): name differs from agentType.
+  write_sidecar adevops0002 '{"agentType":"devops","name":"devops__label"}'
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops__label "$output" adevops0002)"
+  assert_success
+  local f
+  f="$(first_record devops__label)"
+  [[ -n "$f" ]]
+  run grep -c '"agent_type": "devops"' "$f"
+  assert_success
+  assert_output "1"
+}
+
+@test "WRITER-7c: built-in Explore teammate spoof sidecar → record written, NO agent_type key" {
+  local output
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  # Probe shape 3: a built-in Explore dispatched with name devops. agentType is the
+  # dispatch NAME and nothing names Explore, so the roster type must be untrusted.
+  write_sidecar aspoof0001 '{"agentType":"devops","name":"devops","taskKind":"in_process_teammate","teamName":"t"}'
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$output" aspoof0001)"
+  assert_success
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run grep -c '"status": "DONE"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -q '"agent_type"' "$f"
+  assert_failure
+}
+
+@test "WRITER-7d: no sidecar at all → record written, NO agent_type key" {
+  local output
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$output" anosidecar01)"
+  assert_success
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run grep -c '"session_id": "sess-gate-test"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -q '"agent_type"' "$f"
+  assert_failure
 }
 
 @test "WRITER-8: devops Status: BLOCKED → agent-status file written with status BLOCKED" {

@@ -2318,5 +2318,344 @@ class TestGitSitesUseHardenedPrimitive(_IsolatedDbPathTestCase):
         self._assert_hardened('rev-parse --abbrev-ref HEAD')
 
 
+class TestTrustedRosterType(unittest.TestCase):
+    """_trusted_roster_type: pure rule over Claude Code's subagent .meta.json.
+
+    The four shapes are the exact live keys captured by the 2026-10-05 probe.
+    Shape 3 is THE SPOOF: a read-only built-in Explore agent dispatched with
+    name "security" writes agentType "security" with no trace of Explore, and
+    must NEVER be trusted as the security roster (it would clear every
+    security-gated requires_agent policy)."""
+
+    def test_shape1_unnamed_subagent_custom_type(self):
+        meta = {
+            'agentType': 'api-contract',
+            'description': 'review contract',
+            'toolUseId': 'toolu_01abc',
+            'spawnDepth': 1,
+            'requestShape': 'background',
+            'requestNonInteractive': True,
+            'model': 'haiku',
+        }
+        self.assertEqual(css._trusted_roster_type(meta), 'api-contract')
+
+    def test_shape2_named_teammate_custom_type_uses_customagenttype(self):
+        meta = {
+            'agentType': 'api-contract__rosterprobe',
+            'name': 'api-contract__rosterprobe',
+            'spawnDepth': 0,
+            'taskKind': 'in_process_teammate',
+            'teamName': 'session-b3ec8ae6',
+            'customAgentType': 'api-contract',
+            'permissionMode': 'auto',
+        }
+        self.assertEqual(css._trusted_roster_type(meta), 'api-contract')
+
+    def test_shape3_builtin_explore_teammate_spoof_is_untrusted(self):
+        meta = {
+            'agentType': 'security',
+            'description': 'spoof probe',
+            'name': 'security',
+            'spawnDepth': 0,
+            'taskKind': 'in_process_teammate',
+            'teamName': 'session-b3ec8ae6',
+            'permissionMode': 'auto',
+        }
+        self.assertEqual(css._trusted_roster_type(meta), '')
+
+    def test_shape4_named_regular_subagent_uses_agenttype(self):
+        meta = {'agentType': 'security', 'name': 'security__cros-287', 'spawnDepth': 1}
+        self.assertEqual(css._trusted_roster_type(meta), 'security')
+
+    def test_teammate_branch_alone_rejects_spoof_with_distinct_name(self):
+        # Shape 3 is ALSO caught by the name == agentType rule, so the verbatim
+        # spoof test cannot tell whether the teammate branch works. This variant
+        # (name != agentType, no customAgentType) is rejected ONLY by the
+        # teammate branch — mutation-checked 2026-10-05: removing that branch
+        # makes this fail while the verbatim shape-3 test still passes.
+        meta = {
+            'agentType': 'security',
+            'name': 'security__lbl',
+            'taskKind': 'in_process_teammate',
+            'teamName': 'session-b3ec8ae6',
+        }
+        self.assertEqual(css._trusted_roster_type(meta), '')
+
+    def test_name_equal_to_agenttype_is_ambiguous_untrusted(self):
+        # Regular (non-teammate) subagent whose name == agentType: the name may
+        # have overwritten the real type, so it cannot be trusted.
+        self.assertEqual(
+            css._trusted_roster_type({'agentType': 'security', 'name': 'security'}), ''
+        )
+
+    def test_unnamed_without_name_key_is_trusted(self):
+        self.assertEqual(css._trusted_roster_type({'agentType': 'devops'}), 'devops')
+
+    def test_customagenttype_non_str_falls_through_to_other_rules(self):
+        # Non-str customAgentType is ignored; a teammate shape still yields "".
+        self.assertEqual(
+            css._trusted_roster_type(
+                {'customAgentType': 7, 'agentType': 'x', 'taskKind': 'in_process_teammate'}
+            ),
+            '',
+        )
+        # ... and a plain subagent shape still yields agentType.
+        self.assertEqual(
+            css._trusted_roster_type({'customAgentType': ['a'], 'agentType': 'devops'}),
+            'devops',
+        )
+
+    def test_customagenttype_empty_string_falls_through(self):
+        self.assertEqual(
+            css._trusted_roster_type({'customAgentType': '', 'agentType': 'devops'}),
+            'devops',
+        )
+        self.assertEqual(
+            css._trusted_roster_type(
+                {'customAgentType': '', 'agentType': 'devops', 'teamName': 't'}
+            ),
+            '',
+        )
+
+    def test_missing_or_bad_agenttype_is_untrusted(self):
+        self.assertEqual(css._trusted_roster_type({}), '')
+        self.assertEqual(css._trusted_roster_type({'name': 'devops'}), '')
+        self.assertEqual(css._trusted_roster_type({'agentType': ''}), '')
+        self.assertEqual(css._trusted_roster_type({'agentType': 5}), '')
+        self.assertEqual(css._trusted_roster_type({'agentType': None}), '')
+
+    def test_teamname_without_taskkind_is_untrusted(self):
+        self.assertEqual(
+            css._trusted_roster_type({'agentType': 'devops', 'teamName': 'session-x'}), ''
+        )
+
+    def test_taskkind_without_teamname_is_untrusted(self):
+        self.assertEqual(
+            css._trusted_roster_type(
+                {'agentType': 'devops', 'taskKind': 'in_process_teammate'}
+            ),
+            '',
+        )
+
+    def test_non_dict_is_untrusted(self):
+        for bad in (None, [], 'security', 3, ['agentType']):
+            self.assertEqual(css._trusted_roster_type(bad), '', repr(bad))
+
+
+class TestResolveRosterType(_IsolatedHomeTestCase):
+    """_resolve_roster_type: locate + safely read the sidecar, fail closed.
+
+    Fixtures live under $HOME/.claude/projects/-tmp-proj/<sid>/subagents/ — the
+    live layout confirmed by the 2026-10-05 probe — in the isolated temp HOME."""
+
+    SID = 'sess-roster-test'
+    AID = 'a2955ff4ce2f7fd6b'
+
+    def _subagents_dir(self, sid=None):
+        d = os.path.join(
+            self._tmpdir, '.claude', 'projects', '-tmp-proj', sid or self.SID, 'subagents'
+        )
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _write_meta(self, meta, aid=None, sid=None, raw=None):
+        path = os.path.join(self._subagents_dir(sid), f'agent-{aid or self.AID}.meta.json')
+        with open(path, 'w') as f:
+            f.write(raw if raw is not None else json.dumps(meta))
+        return path
+
+    def _ctx(self, sid=None, aid=None):
+        ctx = css.Ctx()
+        ctx.session_id = self.SID if sid is None else sid
+        ctx.agent_id = self.AID if aid is None else aid
+        return ctx
+
+    def test_happy_path_returns_roster_type(self):
+        self._write_meta({'agentType': 'api-contract', 'spawnDepth': 1})
+        self.assertEqual(css._resolve_roster_type(self._ctx()), 'api-contract')
+
+    def _write_meta_at(self, rel_dir, meta, slug='-tmp-proj', aid=None):
+        d = os.path.join(
+            self._tmpdir, '.claude', 'projects', slug, self.SID, 'subagents', rel_dir
+        )
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f'agent-{aid or self.AID}.meta.json')
+        with open(path, 'w') as f:
+            json.dump(meta, f)
+        return path
+
+    def test_workflows_layout_resolves(self):
+        # Live layout #2 (1612 sidecars): subagents/workflows/<wfid>/agent-<aid>.meta.json
+        self._write_meta_at(os.path.join('workflows', 'wf-1'), {'agentType': 'devops'})
+        self.assertEqual(css._resolve_roster_type(self._ctx()), 'devops')
+
+    def test_arbitrary_deeper_nesting_returns_empty(self):
+        # Only the two real layouts are searched; a planted sidecar at any other
+        # depth/dir must be invisible (it used to be reachable via a recursive **).
+        for rel in (
+            os.path.join('a', 'b'),
+            os.path.join('workflows', 'wf-1', 'deeper'),
+            'other',
+            os.path.join('other', 'wf-1'),
+        ):
+            self._write_meta_at(rel, {'agentType': 'devops'})
+            self.assertEqual(css._resolve_roster_type(self._ctx()), '', rel)
+
+    def test_two_candidates_in_different_slugs_return_empty(self):
+        # Ambiguous: a planted sidecar in another project slug must not win (the
+        # old max-mtime pick let it), nor may either copy be trusted.
+        self._write_meta_at('', {'agentType': 'api-contract'}, slug='-tmp-proj')
+        self.assertEqual(css._resolve_roster_type(self._ctx()), 'api-contract')
+        self._write_meta_at('', {'agentType': 'security'}, slug='-tmp-other')
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+    def test_depth0_and_workflows_candidates_together_return_empty(self):
+        self._write_meta_at('', {'agentType': 'devops'})
+        self._write_meta_at(os.path.join('workflows', 'wf-1'), {'agentType': 'devops'})
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+    def test_spoof_shape_resolves_to_empty(self):
+        self._write_meta({
+            'agentType': 'security', 'name': 'security',
+            'taskKind': 'in_process_teammate', 'teamName': 'session-x',
+        })
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+    def test_missing_file_returns_empty(self):
+        self._subagents_dir()
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+    def test_wrong_session_dir_returns_empty(self):
+        self._write_meta({'agentType': 'devops'}, sid='some-other-session')
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+    def test_ids_with_glob_or_path_chars_return_empty(self):
+        # A real, trusted sidecar exists; every hostile id must still yield "".
+        self._write_meta({'agentType': 'devops'})
+        for sid, aid in (
+            ('*', self.AID),
+            ('sess-*', self.AID),
+            ('..', self.AID),
+            ('sess/../sess-roster-test', self.AID),
+            (self.SID, '*'),
+            (self.SID, 'a*'),
+            (self.SID, '../agent-x'),
+            (self.SID, 'a/b'),
+            (self.SID, '..'),
+            (self.SID, 'a?'),
+            (self.SID, 'a[0-9]'),
+            ('', self.AID),
+            (self.SID, ''),
+            ('s' * 65, self.AID),
+            (self.SID, 'a' * 129),
+        ):
+            self.assertEqual(
+                css._resolve_roster_type(self._ctx(sid=sid, aid=aid)), '', (sid, aid)
+            )
+
+    def test_non_str_ids_return_empty(self):
+        self._write_meta({'agentType': 'devops'})
+        ctx = self._ctx()
+        ctx.session_id = None
+        self.assertEqual(css._resolve_roster_type(ctx), '')
+        ctx = self._ctx()
+        ctx.agent_id = 12345
+        self.assertEqual(css._resolve_roster_type(ctx), '')
+
+    def test_symlinked_meta_returns_empty(self):
+        real = os.path.join(self._tmpdir, 'real-meta.json')
+        with open(real, 'w') as f:
+            json.dump({'agentType': 'devops'}, f)
+        link = os.path.join(self._subagents_dir(), f'agent-{self.AID}.meta.json')
+        os.symlink(real, link)
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+    def test_oversized_meta_returns_empty(self):
+        pad = 'x' * 70000
+        path = self._write_meta({'agentType': 'devops', 'pad': pad})
+        self.assertGreater(os.path.getsize(path), 65536)
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+    def test_meta_at_size_limit_is_still_read(self):
+        # Exactly 65536 bytes is accepted (> limit rejects); guards an off-by-one.
+        base = json.dumps({'agentType': 'devops', 'pad': ''})
+        pad = 'x' * (65536 - len(base))
+        path = self._write_meta({'agentType': 'devops', 'pad': pad})
+        self.assertEqual(os.path.getsize(path), 65536)
+        self.assertEqual(css._resolve_roster_type(self._ctx()), 'devops')
+
+    def test_roster_with_illegal_chars_returns_empty(self):
+        for bad in ('sec urity', 'sec;urity', 'a' * 65, 'sec\nurity', 'séc'):
+            self._write_meta({'agentType': bad})
+            self.assertEqual(css._resolve_roster_type(self._ctx()), '', repr(bad))
+
+    def test_malformed_json_returns_empty(self):
+        self._write_meta(None, raw='{not json')
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+    def test_non_dict_json_returns_empty(self):
+        self._write_meta(None, raw='["agentType", "devops"]')
+        self.assertEqual(css._resolve_roster_type(self._ctx()), '')
+
+
+class TestRosterTypeWiring(_IsolatedDbPathTestCase):
+    """parse_input resolves the roster only when a gate record will be written,
+    and stage17_tail emits it shlex-quoted as SAFE_ROSTER_TYPE."""
+
+    SID = 'sess-wiring-test'
+    AID = 'a2955ff4ce2f7fd6b'
+
+    def _write_meta(self, meta):
+        d = os.path.join(
+            self._tmpdir, '.claude', 'projects', '-tmp-proj', self.SID, 'subagents'
+        )
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f'agent-{self.AID}.meta.json'), 'w') as f:
+            json.dump(meta, f)
+
+    def _parse(self, text):
+        payload = {
+            'agent_type': 'devops',
+            'session_id': self.SID,
+            'agent_id': self.AID,
+            'agent_response': {'content': [{'type': 'text', 'text': text}]},
+        }
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def _tail(self, ctx):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            css.stage17_tail(ctx)
+        return buf.getvalue()
+
+    def test_roster_resolved_when_gate_matches_and_emitted_in_tail(self):
+        self._write_meta({'agentType': 'devops'})
+        ctx = self._parse('Done.\n\nStatus: DONE\n')
+        self.assertEqual(ctx.gate_match, 'DONE')
+        self.assertEqual(ctx.roster_type, 'devops')
+        self.assertIn('SAFE_ROSTER_TYPE=devops\n', self._tail(ctx))
+
+    def test_roster_not_resolved_without_gate_match(self):
+        self._write_meta({'agentType': 'devops'})
+        ctx = self._parse('I ran out of turns mid-sentence')
+        self.assertEqual(ctx.gate_match, '')
+        self.assertEqual(ctx.roster_type, '')
+        self.assertIn("SAFE_ROSTER_TYPE=''\n", self._tail(ctx))
+
+    def test_spoof_sidecar_emits_empty_roster_in_tail(self):
+        self._write_meta({
+            'agentType': 'devops', 'name': 'devops',
+            'taskKind': 'in_process_teammate', 'teamName': 't',
+        })
+        ctx = self._parse('Done.\n\nStatus: DONE\n')
+        self.assertEqual(ctx.gate_match, 'DONE')
+        self.assertEqual(ctx.roster_type, '')
+        self.assertIn("SAFE_ROSTER_TYPE=''\n", self._tail(ctx))
+
+
 if __name__ == '__main__':
     unittest.main()

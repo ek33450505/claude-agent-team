@@ -20,6 +20,7 @@ import os
 import re
 import shlex
 import sqlite3
+import stat
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -167,6 +168,110 @@ def compute_successors(agent_name: str, event_type: str) -> List[str]:
         return []
 
 
+# ── Trusted roster type (requires_agent unblock gate — writer side) ──────────
+# The gate record's agent identity must NOT come from the hook payload
+# ``agent_type``: Claude Code overwrites it with the dispatch NAME, so any agent
+# (even a read-only Explore) dispatched with ``name: "security"`` would write a
+# ``security`` DONE record and clear every security-gated policy. The only
+# source that survives that is Claude Code's own sidecar next to the transcript.
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
+_AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_ROSTER_TYPE_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_META_MAX_BYTES = 65536
+
+
+def _trusted_roster_type(meta) -> str:
+    """Roster agent type from a subagent ``.meta.json`` dict, or "" if untrusted.
+
+    LIVE-PROBED 2026-10-05 against Claude Code's
+    ``~/.claude/projects/<slug>/<session_id>/subagents/agent-<agent_id>.meta.json``.
+    Four shapes (exact live keys), and what each must yield:
+
+    1. Unnamed subagent, custom type:
+       ``{"agentType": "api-contract", "spawnDepth": 1, ...}`` -> ``api-contract``.
+    2. Named teammate, custom type:
+       ``{"agentType": "api-contract__rosterprobe", "name": "api-contract__rosterprobe",
+       "taskKind": "in_process_teammate", "teamName": "...", "customAgentType":
+       "api-contract", ...}`` -> ``customAgentType`` (``api-contract``).
+    3. Named teammate, BUILT-IN type Explore (THE SPOOF): ``{"agentType":
+       "security", "name": "security", "taskKind": "in_process_teammate",
+       "teamName": "...", ...}`` — ``agentType`` is the dispatch NAME and nothing
+       names Explore -> "" (untrusted). A read-only Explore agent dispatched as
+       ``name: "security"`` must NOT mint a ``security`` gate record.
+    4. Named regular subagent: ``{"agentType": "security", "name":
+       "security__cros-287"}`` (no customAgentType) -> ``agentType`` (the name
+       differs from the type, so the name did not overwrite it).
+
+    Why this matters (gate trust): the reader unblocks ``requires_agent`` policies
+    from this value, so when the evidence is ambiguous the answer is "" (fail
+    closed), never a best guess. Pure — no I/O.
+    """
+    if not isinstance(meta, dict):
+        return ""
+    custom = meta.get("customAgentType")
+    if isinstance(custom, str) and custom:
+        return custom
+    if meta.get("taskKind") == "in_process_teammate" or meta.get("teamName"):
+        return ""  # teammate agentType is the dispatch NAME (shape 3)
+    at, name = meta.get("agentType"), meta.get("name")
+    if not isinstance(at, str) or not at:
+        return ""
+    if isinstance(name, str) and name == at:
+        return ""  # name may have overwritten the type: ambiguous -> untrusted
+    return at
+
+
+def _resolve_roster_type(ctx) -> str:
+    """Trusted roster type for this SubagentStop, read from Claude Code's sidecar.
+
+    Looks for the sidecar at exactly the two layouts Claude Code writes (measured
+    over 6134 live sidecars on 2026-10-05: 4522 + 1612, and zero (session, agent)
+    pairs with more than one candidate)::
+
+        ~/.claude/projects/<slug>/<session_id>/subagents/agent-<agent_id>.meta.json
+        ~/.claude/projects/<slug>/<session_id>/subagents/workflows/<wfid>/agent-<agent_id>.meta.json
+
+    (payload ``session_id`` is the MAIN session id and ``agent_id`` is the filename
+    stem — both confirmed by the 2026-10-05 live probe; see
+    :func:`_trusted_roster_type` for the four sidecar shapes). Two non-recursive
+    patterns, NOT a recursive ``**`` glob: an agent can plant a sidecar in another
+    project slug or at an arbitrary nesting depth, and a newest-mtime pick would
+    let that plant win. The gate therefore requires EXACTLY ONE candidate path;
+    zero or several (ambiguous) -> "" (untrusted).
+
+    Returns "" on ANY doubt: ids that are not plain tokens (they are interpolated
+    into a glob, so ``*``/``/``/``..`` are refused outright), no or several
+    sidecars, a symlink or non-regular file, an oversized file, bad JSON, an
+    untrusted shape, or a roster type outside ``[A-Za-z0-9_-]{1,64}`` (no fuzzy
+    sanitizing — a mismatch is untrusted, not repaired). Never raises.
+    """
+    try:
+        sid, aid = ctx.session_id, ctx.agent_id
+        if not isinstance(sid, str) or not isinstance(aid, str):
+            return ""
+        if not _SESSION_ID_RE.fullmatch(sid) or not _AGENT_ID_RE.fullmatch(aid):
+            return ""
+        base = os.path.expanduser(f"~/.claude/projects/*/{sid}/subagents")
+        candidates = set(glob.glob(f"{base}/agent-{aid}.meta.json"))
+        candidates.update(glob.glob(f"{base}/workflows/*/agent-{aid}.meta.json"))
+        if len(candidates) != 1:
+            return ""
+        path = next(iter(candidates))
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return ""
+            data = os.read(fd, _META_MAX_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(data) > _META_MAX_BYTES:
+            return ""
+        roster = _trusted_roster_type(json.loads(data.decode("utf-8")))
+        return roster if _ROSTER_TYPE_RE.fullmatch(roster) else ""
+    except Exception:
+        return ""
+
+
 # ── File-class classifier (F2) ───────────────────────────────────────────────
 def classify_files(paths: list) -> str:
     """Return the highest-severity class present across all edited file paths.
@@ -270,6 +375,8 @@ class Ctx:
         # sanitized derivations
         self.safe_agent: str = ""
         self.safe_session_id: str = ""
+        # Trusted roster type from Claude Code's subagent sidecar ("" = untrusted/unknown).
+        self.roster_type: str = ""
         # db
         self.db_path: str = ""
         self.db_present: bool = False
@@ -493,6 +600,8 @@ def parse_input() -> Optional[Ctx]:
     ctx.trunc_class = compute_trunc_class(ctx.output_full)
     ctx.has_verdict_keyword = bool(_VERDICT_RE.search(ctx.output_full))
     ctx.gate_match = compute_gate_match(ctx.output_full, ctx.is_exempt)
+    # Only resolve when a gate record will actually be written (Step 2.8).
+    ctx.roster_type = _resolve_roster_type(ctx) if ctx.gate_match else ""
     ctx.successors = compute_successors(agent_name, ctx.event_type)
 
     return ctx
@@ -2345,6 +2454,7 @@ def stage17_tail(ctx: Ctx) -> None:
         "CAST_SUCCESSORS=" + shlex.quote("\n".join(ctx.successors)),
         "SAFE_AGENT=" + shlex.quote(ctx.safe_agent or ""),
         "SAFE_SESSION_ID=" + shlex.quote(ctx.safe_session_id or ""),
+        "SAFE_ROSTER_TYPE=" + shlex.quote(ctx.roster_type or ""),
         "__CAST_TAIL_END__",
     ]
     sys.stdout.write("\n".join(lines) + "\n")
