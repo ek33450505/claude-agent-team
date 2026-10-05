@@ -432,3 +432,238 @@ _refute_forged_ok_line() {
   assert_output --partial '\n[ok] forged-via-event'
   _refute_forged_ok_line
 }
+
+# ---------------------------------------------------------------------------
+# V2 (2026-10-05): hooks must receive VALID JSON on stdin — the old
+# `${!payload_var:-{}}` ended at the first '}' and appended a stray one, so every
+# hook was validated on INVALID JSON — and, now that real hook logic runs, every hook
+# must run in a throwaway sandbox (HOME / cast.db / cwd / inherited CAST_* dirs),
+# never against the caller's live state. Keep in sync with the same block in
+# cast-validate-all-hooks.bats.
+# ---------------------------------------------------------------------------
+
+# Sandbox repo ($PS): validator + its guard lib + settings.json registering ONE hook `probe`
+# for $1 (event) through the installed-path form, pointing at scripts/$2.
+_probe_repo() { # event hook-basename
+  PS="$BATS_TEST_TMPDIR/probe-repo"
+  mkdir -p "$PS/scripts"
+  cp "$VALIDATOR" "$PS/scripts/cast-validate-hook-contracts.sh"
+  cp "$REPO_DIR/scripts/cast-guard-lib.sh" "$PS/scripts/cast-guard-lib.sh"
+  printf '{"hooks":{"%s":[{"id":"probe","hooks":[{"type":"command","command":"bash ~/.claude/scripts/%s"}]}]}}\n' "$1" "$2" >"$PS/settings.json"
+}
+
+# Probe hook: emits valid <event> hookSpecificOutput iff stdin parses as a JSON object,
+# else the literal NOTJSON (which the validator then reports as non-JSON output).
+_write_json_probe_hook() { # path event
+  sed "s/__EVENT__/$2/" >"$1" <<'SCRIPT'
+#!/usr/bin/env bash
+payload="$(cat)"
+if printf '%s' "$payload" | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin), dict)' 2>/dev/null; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"__EVENT__","additionalContext":"payload-valid"}}'
+else
+  printf 'NOTJSON\n'
+fi
+SCRIPT
+  chmod +x "$1"
+}
+
+# Probe hook: dirties HOME and cwd, then records what it can see to <out>. The output
+# path is baked into the script (hooks run under `env -i`, so no env var can carry it).
+# Extra shell appended by the caller via $3 (e.g. removing the sentinel); it may use $PROBE_OUT.
+_write_isolation_probe_hook() { # path out [extra-shell]
+  sed "s|__PROBE_OUT__|$2|" >"$1" <<'SCRIPT'
+#!/usr/bin/env bash
+PROBE_OUT=__PROBE_OUT__
+cat >/dev/null
+mkdir -p "$HOME/.claude" && : >"$HOME/.claude/isolation-marker"
+: >"$PWD/cwd-marker"
+[ -n "${TMPDIR:-}" ] && : >"$TMPDIR/tmp-marker"
+{
+  printf 'HOME=%s\n' "$HOME"
+  printf 'DB=%s\n' "${CAST_DB_PATH-UNSET}"
+  printf 'PWD=%s\n' "$PWD"
+  printf 'PROJ=%s\n' "${CLAUDE_PROJECT_DIR-UNSET}"
+  printf 'JOURNAL=%s\n' "${CAST_JOURNAL_DIR-UNSET}"
+  printf 'GITIDX=%s\n' "${GIT_INDEX_FILE-UNSET}"
+  printf 'OSA=%s\n' "$(command -v osascript)"
+  printf 'TMPD=%s\n' "${TMPDIR-UNSET}"
+  printf 'DBURL=%s\n' "${CAST_DB_URL-UNSET}"
+  printf 'VAULT=%s\n' "${CAST_JOURNAL_VAULT-UNSET}"
+  printf 'BASHENV=%s\n' "${BASH_ENV-UNSET}"
+  printf 'LCALL=%s\n' "${LC_ALL-UNSET}"
+  printf 'TOPLEVEL=%s\n' "$(git rev-parse --show-toplevel 2>/dev/null || echo NOREPO)"
+} >"$PROBE_OUT"
+SCRIPT
+  [ -n "${3:-}" ] && printf '%s\n' "$3" >>"$1"
+  chmod +x "$1"
+}
+
+_probe_field() { # file key
+  grep "^$2=" "$1" | cut -d= -f2-
+}
+
+@test "validator: a hook receives its event's synthetic payload as VALID JSON" {
+  _probe_repo SessionEnd json-probe.sh
+  _write_json_probe_hook "$PS/scripts/json-probe.sh" SessionEnd
+
+  run env HOME="$HOME" bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 0 ]
+  assert_output --partial "[ok] probe (SessionEnd)"
+  refute_output --partial "non-JSON output"
+}
+
+@test "validator: an event with no synthetic payload still gets '{}' (valid JSON)" {
+  _probe_repo Notification json-probe.sh
+  _write_json_probe_hook "$PS/scripts/json-probe.sh" Notification
+
+  run env HOME="$HOME" bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 0 ]
+  assert_output --partial "[ok] probe (Notification)"
+}
+
+@test "validator: hooks run in a sandbox — real HOME, repo and cwd untouched; inherited CAST_*/GIT_* dirs unset" {
+  local tmpd="$BATS_TEST_TMPDIR/tmpd" invoke="$BATS_TEST_TMPDIR/invoke" out="$BATS_TEST_TMPDIR/probe.out"
+  local vault="$BATS_TEST_TMPDIR/vault" bashenv="$BATS_TEST_TMPDIR/bashenv.sh"
+  mkdir -p "$tmpd" "$invoke" "$vault"
+  : >"$bashenv"
+  _probe_repo SessionEnd iso-probe.sh
+  _write_isolation_probe_hook "$PS/scripts/iso-probe.sh" "$out"
+
+  cd "$invoke"
+  run env HOME="$HOME" TMPDIR="$tmpd" \
+    CAST_JOURNAL_DIR="$BATS_TEST_TMPDIR/live-journal" GIT_INDEX_FILE="$BATS_TEST_TMPDIR/live-index" \
+    CAST_DB_URL="sqlite:///$BATS_TEST_TMPDIR/live.db" CAST_JOURNAL_VAULT="$vault" BASH_ENV="$bashenv" LC_ALL=C \
+    bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 0 ]
+
+  # nothing the hook wrote reached the caller's HOME, the repo, or the caller's cwd
+  [ ! -e "$HOME/.claude/isolation-marker" ]
+  [ ! -e "$PS/.claude/isolation-marker" ]
+  [ ! -e "$invoke/cwd-marker" ]
+
+  # everything the hook saw lives under the validator's own temp dir
+  local sbx
+  sbx="$(cd "$tmpd" && pwd -P)"
+  [[ "$(_probe_field "$out" HOME)" == "$sbx"/cast-validate-home.* ]]
+  [ "$(_probe_field "$out" DB)" = "$(_probe_field "$out" HOME)/.claude/cast.db" ]
+  [ "$(_probe_field "$out" PWD)" = "$(_probe_field "$out" HOME)/work" ]
+  [ "$(_probe_field "$out" PROJ)" = "$(_probe_field "$out" HOME)/work" ]
+  [ "$(_probe_field "$out" OSA)" = "$(_probe_field "$out" HOME)/shim/osascript" ]
+  # inherited live-state pointers are gone inside the hook
+  [ "$(_probe_field "$out" JOURNAL)" = "UNSET" ]
+  [ "$(_probe_field "$out" GITIDX)" = "UNSET" ]
+  [ "$(_probe_field "$out" DBURL)" = "UNSET" ]
+  [ "$(_probe_field "$out" VAULT)" = "UNSET" ]
+  [ "$(_probe_field "$out" BASHENV)" = "UNSET" ]
+  # the hook's temp dir is the sandbox's, not the caller's; allowlisted locale passes through
+  [ "$(_probe_field "$out" TMPD)" = "$(_probe_field "$out" HOME)/tmp" ]
+  [ "$(_probe_field "$out" LCALL)" = "C" ]
+  [ ! -e "$tmpd/tmp-marker" ]
+  [ -z "$(ls -A "$vault")" ]
+}
+
+@test "validator: the sandbox is removed on exit (positive control: the hook ran inside it)" {
+  local tmpd="$BATS_TEST_TMPDIR/tmpd" out="$BATS_TEST_TMPDIR/probe.out"
+  mkdir -p "$tmpd"
+  _probe_repo SessionEnd iso-probe.sh
+  _write_isolation_probe_hook "$PS/scripts/iso-probe.sh" "$out"
+
+  run env HOME="$HOME" TMPDIR="$tmpd" \
+    bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 0 ]
+
+  local seen
+  seen="$(_probe_field "$out" HOME)"
+  [[ "$seen" == "$(cd "$tmpd" && pwd -P)"/cast-validate-home.* ]] # it existed...
+  [ ! -e "$seen" ]                                                 # ...and is gone
+  [ "$(find "$tmpd" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "validator: cleanup refuses a sandbox that lost its sentinel (fail-closed)" {
+  local tmpd="$BATS_TEST_TMPDIR/tmpd" out="$BATS_TEST_TMPDIR/probe.out"
+  mkdir -p "$tmpd"
+  _probe_repo SessionEnd iso-probe.sh
+  _write_isolation_probe_hook "$PS/scripts/iso-probe.sh" "$out" 'rm -f "$HOME/.cast-test-home"'
+
+  run env HOME="$HOME" TMPDIR="$tmpd" \
+    bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 0 ]
+
+  # no sentinel -> the validator must NOT delete it (left for a human; BATS cleans $BATS_TEST_TMPDIR)
+  [ -d "$(_probe_field "$out" HOME)" ]
+}
+
+@test "validator (runtime mode): executes the SEEDED copy of an installed hook, not the real one" {
+  local out="$BATS_TEST_TMPDIR/probe.out"
+  _probe_repo SessionEnd iso-probe.sh
+  # installed copy lives under the (temp) HOME only; it records which file ran
+  mkdir -p "$HOME/.claude/scripts"
+  _write_isolation_probe_hook "$HOME/.claude/scripts/iso-probe.sh" "$out" 'printf "SELF=%s\n" "$0" >>"$PROBE_OUT"'
+  cp "$PS/settings.json" "$HOME/.claude/settings.json"
+
+  run env HOME="$HOME" TMPDIR="$BATS_TEST_TMPDIR" \
+    bash "$PS/scripts/cast-validate-hook-contracts.sh"
+  [ "$status" -eq 0 ]
+  [ "$(_probe_field "$out" SELF)" = "$(_probe_field "$out" HOME)/.claude/scripts/iso-probe.sh" ]
+  [ ! -e "$HOME/.claude/isolation-marker" ]
+}
+
+@test "validator --source: executes the sandbox COPY of the repo script (its dirname-\$0 is inside the sandbox, not the repo)" {
+  local tmpd="$BATS_TEST_TMPDIR/tmpd" out="$BATS_TEST_TMPDIR/probe.out"
+  mkdir -p "$tmpd"
+  _probe_repo SessionEnd iso-probe.sh
+  _write_isolation_probe_hook "$PS/scripts/iso-probe.sh" "$out" 'printf "SELFDIR=%s\n" "$(cd "$(dirname "$0")" && pwd)" >>"$PROBE_OUT"'
+
+  run env HOME="$HOME" TMPDIR="$tmpd" \
+    bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 0 ]
+
+  # the hook ran from the seeded copy inside the sandbox...
+  [ "$(_probe_field "$out" SELFDIR)" = "$(_probe_field "$out" HOME)/.claude/scripts" ]
+  # ...not from the repo it was seeded from
+  [ "$(_probe_field "$out" SELFDIR)" != "$PS/scripts" ]
+}
+
+@test "validator --source: a symlink in the seed source fails closed (exit 2) and leaves no sandbox" {
+  local tmpd="$BATS_TEST_TMPDIR/tmpd"
+  mkdir -p "$tmpd"
+  _probe_repo SessionEnd json-probe.sh
+  _write_json_probe_hook "$PS/scripts/json-probe.sh" SessionEnd
+  ln -s "$BATS_TEST_TMPDIR" "$PS/scripts/evil-link" # a dereferencing copy would pull this tree in
+
+  run env HOME="$HOME" TMPDIR="$tmpd" bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] seed source contains symlinks:"
+  assert_output --partial "evil-link"
+  [ "$(find "$tmpd" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "validator: git discovery in a hook cannot escape into a caller TMPDIR that is inside a work tree" {
+  local callerrepo="$BATS_TEST_TMPDIR/callerrepo" out="$BATS_TEST_TMPDIR/probe.out"
+  mkdir -p "$callerrepo/tmp"
+  git init -q "$callerrepo"
+  _probe_repo SessionEnd iso-probe.sh
+  _write_isolation_probe_hook "$PS/scripts/iso-probe.sh" "$out"
+
+  run env HOME="$HOME" TMPDIR="$callerrepo/tmp" bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 0 ]
+  [ "$(_probe_field "$out" TOPLEVEL)" = "NOREPO" ]
+}
+
+@test "validator --source: a symlink that appears in the sandbox copy AFTER seeding fails closed before any hook runs" {
+  local tmpd="$BATS_TEST_TMPDIR/tmpd" shimdir="$BATS_TEST_TMPDIR/shim" out="$BATS_TEST_TMPDIR/probe.out"
+  mkdir -p "$tmpd" "$shimdir"
+  _probe_repo SessionEnd iso-probe.sh
+  _write_isolation_probe_hook "$PS/scripts/iso-probe.sh" "$out"
+  # tar shim: real tar, then (extract side only) plant a symlink in the sandbox copy —
+  # stands in for the source changing between the pre-check and the copy (TOCTOU)
+  printf '#!/bin/sh\n"%s" "$@" || exit $?\ncase "$1" in -xf) ln -s /nonexistent planted-link ;; esac\n' "$(command -v tar)" >"$shimdir/tar"
+  chmod +x "$shimdir/tar"
+
+  run env HOME="$HOME" TMPDIR="$tmpd" PATH="$shimdir:$PATH" bash "$PS/scripts/cast-validate-hook-contracts.sh" --source
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] seed source contains symlinks:"
+  assert_output --partial "planted-link"
+  [ ! -e "$out" ] # no hook ran
+  [ "$(find "$tmpd" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ]
+}
