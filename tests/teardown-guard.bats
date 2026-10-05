@@ -283,29 +283,3 @@ _cleanup_non_temp_home() {
   # Restore
   export HOME="$orig_home"
 }
-
-# ---------------------------------------------------------------------------
-# Test 7: Concordance check — cast-headless-guard.bats delegates HOME teardown
-# to the canonical setup.bash guard (setup_temp_home/teardown_temp_home) rather
-# than reimplementing it inline, so it inherits the same three-layer wipe guard.
-# (DRY successor to the old inline-copy concordance after the U8 refactor.)
-# ---------------------------------------------------------------------------
-@test "concordance: cast-headless-guard.bats delegates to the canonical temp-HOME guard" {
-  local setup_guard="$REPO_DIR/tests/helpers/setup.bash"
-  local headless_test="$REPO_DIR/tests/cast-headless-guard.bats"
-
-  # Verify setup.bash (the source of truth) still has the three-layer guard
-  grep -q "sentinel marker" "$setup_guard" || exit 1
-  grep -q "/tmp/\*" "$setup_guard" || exit 1
-  grep -q "real home" "$setup_guard" || exit 1
-  grep -q '\.cast-test-home' "$setup_guard" || exit 1
-  local users_glob='/Users/*'
-  grep -qF "$users_glob" "$setup_guard" || exit 1
-
-  # cast-headless-guard.bats must INHERIT that guard by loading the canonical
-  # helper and calling setup_temp_home/teardown_temp_home — never by wiping HOME
-  # itself. Delegation is what keeps the wipe protection concordant.
-  grep -q "helpers/setup" "$headless_test" || exit 1
-  grep -q "setup_temp_home" "$headless_test" || exit 1
-  grep -q "teardown_temp_home" "$headless_test" || exit 1
-}

@@ -40,7 +40,6 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 | Script | Matcher | What it does |
 |---|---|---|
 | `cast-audit-hook.sh` | `Write\|Edit` | Appends an audit record (tool name, file path, command hash) to `audit.jsonl`; when PII redaction is enabled, conditionally blocks cloud-bound writes containing PII (exit 2). |
-| `cast-headless-guard.sh` | `AskUserQuestion` | Auto-responds to `AskUserQuestion` with a safe default to prevent pipeline stalls in headless runs. |
 | `cast-stat-claim-guard.sh` | `Write\|Edit` | Blocks `README.md` writes when the badge test count differs from the actual `git ls-files` count. |
 | `cast-no-fake-success-guard.sh` | `Write\|Edit` | Warns (never blocks) when try/catch blocks return sample/fake/mock data that could mask integration failures. |
 | `pre-tool-guard.sh` | `Bash` | Blocks `git commit`, `git push`, and `git stash` calls (and other policy violations) in agent sessions (exit 2). |

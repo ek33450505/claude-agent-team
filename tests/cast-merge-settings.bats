@@ -260,6 +260,7 @@ required = [
     "Edit(~/.claude/logs/**)",
     "Edit(**/.claude/settings*.json)",
     "Edit(//**/.claude/settings*.json)",
+    "Edit(~/.claude.json)",
 ]
 missing = [r for r in required if r not in deny]
 if missing:
