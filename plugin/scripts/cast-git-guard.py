@@ -438,6 +438,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 
@@ -1461,39 +1462,146 @@ def _agent_completed_this_session(required_agent: str, agent_status_dir: str, no
     return data.get('status') in ('DONE', 'DONE_WITH_CONCERNS')
 
 
+_POLICY_MAX_BYTES = 1024 * 1024  # policies.json larger than this is rejected (fail closed)
+_POLICY_MAX_PATH_LEN = 4096      # longer file_paths are not regex-matched (quadratic-backtrack DoS)
+
+
+def _read_policy_config(path: str):
+    """Load the installed policy config without trusting what sits at `path`.
+
+    Returns ('missing', None) | ('invalid', reason) | ('ok', config). Only
+    FileNotFoundError from lstat means "not installed"; every other failure
+    (dangling symlink, symlink loop, unreadable parent, FIFO, device, directory,
+    oversize, bad JSON, deep nesting) is 'invalid' so the caller fails closed.
+    O_NONBLOCK keeps open() from hanging on a FIFO; S_ISREG + a bounded read keep
+    a symlink to /dev/zero (or any device) from being read without limit. `reason`
+    is a structural label, never file contents.
+    """
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return 'missing', None
+    except OSError as exc:
+        return 'invalid', f'stat error: {type(exc).__name__}'
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return 'invalid', 'not a regular file'
+        chunks = []
+        total = 0
+        while total <= _POLICY_MAX_BYTES:
+            chunk = os.read(fd, _POLICY_MAX_BYTES + 1 - total)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > _POLICY_MAX_BYTES:
+            return 'invalid', 'too large'
+        return 'ok', json.loads(b''.join(chunks).decode('utf-8'))
+    except (OSError, ValueError, RecursionError, MemoryError) as exc:
+        # ValueError covers JSONDecodeError + UnicodeDecodeError
+        return 'invalid', f'load error: {type(exc).__name__}'
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def _policy_evaluate(file_path: str):
-    """Evaluate config/policies.json against file_path. Returns (exit_code, message_or_None).
+    """Evaluate the INSTALLED ~/.claude/config/policies.json against file_path.
+    Returns (exit_code, message_or_None).
 
     Mirrors the inline policy engine: a `block`-severity policy whose path_pattern
     matches AND whose required_agent has NOT completed this session → (2, msg).
     CAST_POLICY_OVERRIDE=1 bypasses block policies (audit-logged). `warn` policies
     allow silently (the original routed warns to a suppressed stream).
+
+    Only the installed copy is read (never a cwd-relative config/policies.json: the
+    project dir is agent-writable). A missing installed file (lstat ENOENT) means
+    CAST is not installed → (0, None). A PRESENT but unusable config (not a regular
+    file, oversize, bad JSON, wrong shape, malformed policy entry, invalid
+    path_pattern regex, severity not exactly "block"/"warn") FAILS CLOSED → (2, msg);
+    CAST_POLICY_OVERRIDE=1 bypasses it (audit-logged). A file_path longer than
+    _POLICY_MAX_PATH_LEN is blocked rather than regex-matched. Each pattern is tested
+    against BOTH the raw path and its realpath (symlinked-directory bypass).
     """
     override = os.environ.get('CAST_POLICY_OVERRIDE', '0') == '1'
     session_id = os.environ.get('CLAUDE_SESSION_ID', 'default')
 
-    policies_path = os.path.join(os.getcwd(), 'config', 'policies.json')
-    if not os.path.exists(policies_path):
-        policies_path = os.path.expanduser('~/.claude/config/policies.json')
-    if not os.path.exists(policies_path):
+    # Installed copy only: cwd is the project dir, which an agent can write, so a
+    # cwd-relative config/policies.json would let it disable every block policy.
+    policies_path = os.path.expanduser('~/.claude/config/policies.json')
+    status, loaded = _read_policy_config(policies_path)
+    if status == 'missing':
         return 0, None
+
+    def _config_invalid(reason: str):
+        if override:
+            _audit_policy_override('policies-config-invalid', file_path[:256], session_id)
+            return 0, None
+        return 2, (
+            f'**[CAST-POLICY-BLOCK]** Policy config `{policies_path}` is unreadable or malformed '
+            f'({reason}); failing closed — this edit to `{file_path[:256]}` is blocked until it is repaired.\n'
+            f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
+        )
+
+    if status == 'invalid':
+        return _config_invalid(loaded)
+    config = loaded
+    if not isinstance(config, dict):
+        return _config_invalid('top level is not an object')
+    policies = config.get('policies', [])
+    if not isinstance(policies, list):
+        return _config_invalid('"policies" is not a list')
+    for policy in policies:
+        if not isinstance(policy, dict):
+            return _config_invalid('policy entry is not an object')
+        for key in ('id', 'description', 'requires_agent'):
+            if key in policy and not isinstance(policy[key], str):
+                return _config_invalid(f'policy "{key}" is not a string')
+        if policy.get('severity') not in ('block', 'warn'):
+            return _config_invalid('policy "severity" is missing or not exactly "block"/"warn"')
+        pattern = policy.get('path_pattern', '')
+        if not isinstance(pattern, str):
+            return _config_invalid('path_pattern is not a string')
+        if pattern:
+            try:
+                re.compile(pattern, re.IGNORECASE)
+            except (re.error, RecursionError, OverflowError, MemoryError):
+                return _config_invalid('invalid path_pattern regex')
+
+    if policies and len(file_path) > _POLICY_MAX_PATH_LEN:
+        if override:
+            _audit_policy_override('policy-path-too-long', file_path[:256], session_id)
+            return 0, None
+        return 2, (
+            f'**[CAST-POLICY-BLOCK]** The edit path is too long to evaluate safely '
+            f'({len(file_path)} chars > {_POLICY_MAX_PATH_LEN}); failing closed.\n'
+            f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
+        )
+
+    # Test the raw path AND its symlink-resolved form: a symlinked directory
+    # (hooks-link -> .githooks) would otherwise sidestep every path_pattern.
+    # Never let resolution raise into the fail-open wrapper: fall back to raw only.
+    candidates = [file_path]
     try:
-        with open(policies_path) as f:
-            config = json.load(f)
+        resolved = os.path.realpath(os.path.abspath(file_path))
+        if resolved != file_path:
+            candidates.append(resolved)
     except Exception:
-        return 0, None
+        pass
 
     agent_status_dir = os.path.expanduser('~/.claude/agent-status')
     now = datetime.datetime.now(datetime.timezone.utc).timestamp()
 
-    for policy in config.get('policies', []):
+    for policy in policies:
         pattern = policy.get('path_pattern', '')
         if not pattern:
             continue
-        try:
-            if not re.search(pattern, file_path, re.IGNORECASE):
-                continue
-        except re.error:
+        if not any(re.search(pattern, cand, re.IGNORECASE) for cand in candidates):
             continue
 
         policy_id = policy.get('id', 'unknown')
@@ -1508,14 +1616,14 @@ def _policy_evaluate(file_path: str):
 
         if severity == 'block':
             if override:
-                _audit_policy_override(policy_id, file_path, session_id)
+                _audit_policy_override(policy_id, file_path[:256], session_id)
                 return 0, None
             msg = (
                 f'**[CAST-POLICY-BLOCK]** Policy "{policy_id}" blocks this edit.\n'
                 f'Reason: {description}\n'
                 f'Required flow: dispatch `{required_agent}` REVIEW-ONLY — it must NOT apply this edit itself '
                 f'(its own edits stay blocked until its completion marker exists, which deadlocks). '
-                f'When it ends DONE its agent-status marker unblocks the session; then the ORCHESTRATOR applies the edit to `{file_path}`.\n'
+                f'When it ends DONE its agent-status marker unblocks the session; then the ORCHESTRATOR applies the edit to `{file_path[:256]}`.\n'
                 f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
             )
             return 2, msg

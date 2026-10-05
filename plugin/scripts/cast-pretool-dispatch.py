@@ -218,26 +218,27 @@ def _is_egress_tool(tool):
 
 
 def _run_egress(sentinel, data):
-    """Replicate cast-egress-sentinel.main()'s body with pre-parsed data.
+    """Run cast-egress-sentinel.evaluate() -- the SAME per-call body the sentinel's
+    own main() runs (load policy, classify, assess, record, plus the
+    policy-missing/invalid advisory) -- with pre-parsed data.
 
     RECORDS (the KEEP value); returns an action tuple or None.
-    ("advisory", verdict) or None. Never raises."""
+    ("advisory", verdict) or None. Never raises. Fail-open, but NOT silent: a
+    swallowed exception is logged (exception TYPE only, matching this file's
+    convention of never echoing tool payload text) so a disabled egress record
+    shows up in hook-errors.log."""
     try:
         tool_name = data.get("tool_name", "") or ""
         tool_input = data.get("tool_input", {}) or {}
         if not isinstance(tool_input, dict):
             tool_input = {}
         session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
-        policy = sentinel._load_policy()
-        event = sentinel.classify(tool_name, tool_input, policy)
-        if event is None:
-            return None
-        verdict = sentinel.assess_sensitivity(event, tool_input)
-        sentinel.record(event, verdict, tool_name, session_id)
-        if verdict.get("severity") == "warn":
+        verdict = sentinel.evaluate(tool_name, tool_input, session_id)
+        if verdict is not None:
             return ("advisory", verdict)
         return None
-    except Exception:
+    except Exception as e:
+        _log_error(f"egress evaluation failed (fail-open, no record/advisory this call): {type(e).__name__}")
         return None
 
 
