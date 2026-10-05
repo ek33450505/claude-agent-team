@@ -671,3 +671,279 @@ print('\n'.join(lines))
   assert_failure
   assert_output --partial "workflows-require-devops"
 }
+
+# ---------------------------------------------------------------------------
+# S3d-5 — the gate record is written by a FAST gate-only pass BEFORE the telemetry
+# stages, so a slow/killed telemetry pass (stage 9 can take 50-100 s; the SubagentStop
+# hook timeout is ~15 s) can no longer lose the requires_agent unblock record.
+# ---------------------------------------------------------------------------
+
+# Install a python3 PATH shim in $BATS_TEST_TMPDIR/bin. The real python3 is resolved to
+# an absolute path BEFORE the shim exists. The shim execs the real python3 for every
+# call EXCEPT one pass of cast_subagent_stop.py, which touches a marker and dies 137:
+#   mode "die":     the FULL telemetry pass (no --gate-only) exits 137 immediately.
+#                   Marker: $BATS_TEST_TMPDIR/full-pass-started
+#   mode "hang":    the FULL pass blocks until $BATS_TEST_TMPDIR/release exists (20 s
+#                   backstop), then exits 137. Same marker.
+#   mode "gatedie": the --gate-only pass exits 137 immediately (full pass runs for real).
+#                   Marker: $BATS_TEST_TMPDIR/gate-pass-started
+install_full_pass_shim() {
+  local mode="$1"
+  local real_py
+  real_py="$(command -v python3)"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '%s\n' \
+    '#!/bin/bash' \
+    "real_py=\"$real_py\"" \
+    "started=\"$BATS_TEST_TMPDIR/full-pass-started\"" \
+    "gate_started=\"$BATS_TEST_TMPDIR/gate-pass-started\"" \
+    "release=\"$BATS_TEST_TMPDIR/release\"" \
+    "mode=\"$mode\"" \
+    'script=0; gate=0' \
+    'for a in "$@"; do' \
+    '  case "$a" in' \
+    '    *cast_subagent_stop.py) script=1 ;;' \
+    '    --gate-only) gate=1 ;;' \
+    '  esac' \
+    'done' \
+    'if [ "$script" = 1 ] && [ "$gate" = 1 ] && [ "$mode" = gatedie ]; then' \
+    '  : > "$gate_started"' \
+    '  exit 137' \
+    'fi' \
+    'if [ "$script" = 1 ] && [ "$gate" = 0 ] && [ "$mode" != gatedie ]; then' \
+    '  : > "$started"' \
+    '  if [ "$mode" = hang ]; then' \
+    '    i=0' \
+    '    while [ ! -e "$release" ] && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done' \
+    '  fi' \
+    '  exit 137' \
+    'fi' \
+    'exec "$real_py" "$@"' \
+    > "$BATS_TEST_TMPDIR/bin/python3"
+  chmod +x "$BATS_TEST_TMPDIR/bin/python3"
+}
+
+@test "S3d-5a: gate record is written even when the FULL telemetry pass dies (exit 137)" {
+  local output
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  write_sidecar adevops0020 '{"agentType":"devops"}'
+  install_full_pass_shim die
+  run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$HOOK_SH" <<< "$(make_stop_payload devops "$output" adevops0020)"
+  assert_success
+  # Vacuity guard: the full pass really ran under the shim and died.
+  [[ -e "$BATS_TEST_TMPDIR/full-pass-started" ]]
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run grep -c '"status": "DONE"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -c '"session_id": "sess-gate-test"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -c '"agent_type": "devops"' "$f"
+  assert_success
+  assert_output "1"
+}
+
+@test "S3d-5a2: gate record already exists WHILE the full telemetry pass is still running (written before telemetry, not after)" {
+  local output payload_json
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  payload_json="$(make_stop_payload devops "$output" adevops0021)"
+  write_sidecar adevops0021 '{"agentType":"devops"}'
+  install_full_pass_shim hang
+  # fd 3/4 closed so the background hook can never hold bats' TAP pipe open.
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$HOOK_SH" <<< "$payload_json" >/dev/null 2>&1 3>&- 4>&- &
+  local pid=$!
+  # Bounded poll (15 s) for the marker the shim writes when the full pass STARTS.
+  local i=0
+  while [[ ! -e "$BATS_TEST_TMPDIR/full-pass-started" && "$i" -lt 150 ]]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  local started=0 f=""
+  [[ -e "$BATS_TEST_TMPDIR/full-pass-started" ]] && started=1
+  f="$(first_record devops)"
+  # Release + reap BEFORE asserting so a failed assertion cannot leak the background hook.
+  : > "$BATS_TEST_TMPDIR/release"
+  wait "$pid"
+  [[ "$started" -eq 1 ]]
+  [[ -n "$f" ]]
+  run grep -c '"status": "DONE"' "$f"
+  assert_success
+  assert_output "1"
+}
+
+@test "S3d-5b: exactly ONE completion record per stop on the normal path (the full pass writes no second record)" {
+  local output
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  write_sidecar adevops0030 '{"agentType":"devops"}'
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$output" adevops0030)"
+  assert_success
+  local n
+  n="$(find "$HOME/.claude/agent-status" -type f -name '*.json' | wc -l | tr -d ' ')"
+  [[ "$n" -eq 1 ]]
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run grep -c '"status": "DONE"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -c '"agent_type": "devops"' "$f"
+  assert_success
+  assert_output "1"
+}
+
+@test "S3d-5c: a heartbeat tick and a main-session Stop write NO record in either pass" {
+  # Tick: empty agent_type + an ephemeral agent_id that resolves to NO agent_runs row; its
+  # text is the ENCLOSING session's last message and says Status: DONE, so an admitted tick
+  # WOULD record DONE. Main-session Stop: no agent_type and no agent_id at all.
+  local tick main
+  tick='{"agent_type":"","agent_id":"tick-ephemeral-0001","session_id":"sess-gate-test","stop_reason":"end_turn","last_assistant_message":"Done.\n\nStatus: DONE\nSummary: enclosing session"}'
+  main='{"session_id":"sess-gate-test","stop_reason":"end_turn","last_assistant_message":"Done.\n\nStatus: DONE\nSummary: enclosing session"}'
+
+  # Pass 1 and pass 2 invoked directly: each must stay completely silent.
+  run env CAST_STOP_INPUT="$tick" CAST_DB_PATH="$CAST_DB_PATH" CAST_HOOK_DIR="$REPO_DIR/scripts" \
+    python3 "$REPO_DIR/scripts/cast_subagent_stop.py" --gate-only
+  assert_success
+  assert_output ""
+  run env CAST_STOP_INPUT="$tick" CAST_DB_PATH="$CAST_DB_PATH" CAST_HOOK_DIR="$REPO_DIR/scripts" \
+    python3 "$REPO_DIR/scripts/cast_subagent_stop.py"
+  assert_success
+  assert_output ""
+
+  # End to end through the wrapper.
+  run bash "$HOOK_SH" <<< "$tick"
+  assert_success
+  run bash "$HOOK_SH" <<< "$main"
+  assert_success
+  local n
+  n="$(find "$HOME/.claude/agent-status" -type f | wc -l | tr -d ' ')"
+  [[ "$n" -eq 0 ]]
+}
+
+@test "S3d-5d: --gate-only emits ONLY the gate tail vars and runs no stage" {
+  local output
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  write_sidecar adevops0040 '{"agentType":"devops"}'
+  run env CAST_STOP_INPUT="$(make_stop_payload devops "$output" adevops0040)" \
+    CAST_DB_PATH="$CAST_DB_PATH" CAST_HOOK_DIR="$REPO_DIR/scripts" \
+    python3 "$REPO_DIR/scripts/cast_subagent_stop.py" --gate-only
+  assert_success
+  assert_line --index 0 "__CAST_TAIL_BEGIN__"
+  assert_line "CAST_GATE_MATCH=DONE"
+  assert_line "SAFE_AGENT=devops"
+  assert_line "SAFE_SESSION_ID=sess-gate-test"
+  assert_line "SAFE_ROSTER_TYPE=devops"
+  assert_line --index 5 "__CAST_TAIL_END__"
+  refute_output --partial "CAST_SUCCESSORS"
+  refute_output --partial "hookSpecificOutput"
+  # No stage ran: stage 1 (event file) writes under cast/events in the full pass.
+  local n
+  n="$(find "$HOME/.claude/cast/events" -type f | wc -l | tr -d ' ')"
+  [[ "$n" -eq 0 ]]
+}
+
+@test "S3d-5e: OLD python that ignores --gate-only is detected: pass 1 IS the full pass (one python run, one record, one passthrough, one enqueue)" {
+  # Partial-deploy skew: a stub cast_subagent_stop.py that ignores argv and always emits
+  # a FULL tail (incl. CAST_SUCCESSORS) plus one hookSpecificOutput line, counting its runs.
+  local hookdir="$BATS_TEST_TMPDIR/oldhook"
+  mkdir -p "$hookdir"
+  cp "$HOOK_SH" "$hookdir/cast-subagent-stop-hook.sh"
+  printf '%s\n' \
+    'import os, sys' \
+    'open(os.environ["STUB_COUNT"], "a").write("run\n")' \
+    'sys.stdout.write("{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStop\",\"additionalContext\":\"stub-passthrough\"}}\n")' \
+    'sys.stdout.write("__CAST_TAIL_BEGIN__\nCAST_GATE_MATCH=DONE\nCAST_SUCCESSORS=code-reviewer\nSAFE_AGENT=devops\nSAFE_SESSION_ID=sess-gate-test\nSAFE_ROSTER_TYPE=devops\n__CAST_TAIL_END__\n")' \
+    > "$hookdir/cast_subagent_stop.py"
+  # Stub queue-add: records each enqueue as "<successor> <session>".
+  printf '%s\n' '#!/bin/bash' 'printf "%s %s\n" "$1" "$2" >> "$STUB_QUEUE"' \
+    > "$HOME/.claude/scripts/cast-queue-add.sh"
+  local text
+  text="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  run env STUB_COUNT="$BATS_TEST_TMPDIR/py-runs" STUB_QUEUE="$BATS_TEST_TMPDIR/queue" \
+    bash "$hookdir/cast-subagent-stop-hook.sh" <<< "$(make_stop_payload devops "$text")"
+  assert_success
+  # The hook's stdout carries the passthrough line exactly once.
+  [[ "$(printf '%s\n' "$output" | grep -c 'stub-passthrough')" -eq 1 ]]
+  # Exactly one python run: pass 2 was skipped.
+  [[ "$(wc -l < "$BATS_TEST_TMPDIR/py-runs" | tr -d ' ')" -eq 1 ]]
+  # Exactly one gate record, from pass 1's tail.
+  [[ "$(find "$HOME/.claude/agent-status" -type f -name '*.json' | wc -l | tr -d ' ')" -eq 1 ]]
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run grep -c '"status": "DONE"' "$f"
+  assert_success
+  assert_output "1"
+  # Step 4 used pass 1's CAST_SUCCESSORS, once.
+  [[ "$(cat "$BATS_TEST_TMPDIR/queue")" == "code-reviewer sess-gate-test" ]]
+}
+
+@test "S3d-5f: gate pass dies (137) on a BLOCKED stop after an older DONE: record deferred to pass 2, newest is BLOCKED, gate stays blocked" {
+  local done_text blocked_text
+  done_text="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  blocked_text="$(printf 'Found a problem.\n\nStatus: BLOCKED\nSummary: stop\n')"
+  write_sidecar adevops0050 '{"agentType":"devops"}'
+  # Seed a real DONE record through the normal path, then age it.
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$done_text" adevops0050)"
+  assert_success
+  local seed
+  seed="$(first_record devops)"
+  [[ -n "$seed" ]]
+  set_age "$seed" 60
+  # Sanity: the DONE record alone unblocks this session.
+  run_dispatch "$(payload_for_session sess-gate-test Write "file_path=.github/workflows/x.yml")"
+  assert_success
+  # A genuine BLOCKED stop whose gate pass is killed (shim exits 137 on --gate-only).
+  install_full_pass_shim gatedie
+  run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash "$HOOK_SH" <<< "$(make_stop_payload devops "$blocked_text" adevops0050)"
+  assert_success
+  # Vacuity guard: the gate pass really died under the shim.
+  [[ -e "$BATS_TEST_TMPDIR/gate-pass-started" ]]
+  # Exactly one NEW record (seed + 1), and the newest is the BLOCKED one.
+  [[ "$(find "$HOME/.claude/agent-status" -type f -name '*.json' | wc -l | tr -d ' ')" -eq 2 ]]
+  local newest
+  newest="$(ls -t "$HOME/.claude/agent-status"/*.json | head -1)"
+  run grep -c '"status": "BLOCKED"' "$newest"
+  assert_success
+  assert_output "1"
+  # End to end: the gate is blocked again, not left open by the stale DONE.
+  run_dispatch "$(payload_for_session sess-gate-test Write "file_path=.github/workflows/x.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "S3d-5g: inherited gate vars in the hook env never become a record: a tick with CAST_GATE_MATCH/SAFE_* exported writes NO record" {
+  local tick
+  tick='{"agent_type":"","agent_id":"tick-ephemeral-0002","session_id":"sess-gate-test","stop_reason":"end_turn","last_assistant_message":"Done.\n\nStatus: DONE\nSummary: enclosing session"}'
+  run env CAST_GATE_MATCH=DONE SAFE_AGENT=security SAFE_SESSION_ID=sess-x SAFE_ROSTER_TYPE=security \
+    bash "$HOOK_SH" <<< "$tick"
+  assert_success
+  [[ "$(find "$HOME/.claude/agent-status" -type f | wc -l | tr -d ' ')" -eq 0 ]]
+}
+
+@test "S3d-5h: a real stop with WRONG inherited gate vars records the COMPUTED values, not the inherited ones" {
+  local text
+  text="$(printf 'Found a problem.\n\nStatus: BLOCKED\nSummary: stop\n')"
+  write_sidecar adevops0060 '{"agentType":"devops"}'
+  run env CAST_GATE_MATCH=DONE SAFE_AGENT=security SAFE_SESSION_ID=sess-x SAFE_ROSTER_TYPE=security \
+    bash "$HOOK_SH" <<< "$(make_stop_payload devops "$text" adevops0060)"
+  assert_success
+  [[ "$(find "$HOME/.claude/agent-status" -type f -name '*.json' | wc -l | tr -d ' ')" -eq 1 ]]
+  [[ -z "$(first_record security)" ]]
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run grep -c '"status": "BLOCKED"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -c '"session_id": "sess-gate-test"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -c '"agent_type": "devops"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -c 'security\|sess-x' "$f"
+  assert_failure
+}

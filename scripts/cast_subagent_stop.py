@@ -556,7 +556,8 @@ def _handback_message(ctx) -> str:
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
-                _log_fail("handback", -1, "not-a-regular-file", ctx.session_id)
+                if not ctx.quiet_log:
+                    _log_fail("handback", -1, "not-a-regular-file", ctx.session_id)
                 return ""
             start = max(0, st.st_size - _TRANSCRIPT_TAIL_BYTES)
             if start:
@@ -602,7 +603,7 @@ def _handback_message(ctx) -> str:
     except Exception as exc:
         # Behaviour stays "" (fail closed: no verdict), but when a transcript candidate
         # EXISTED the suppression must be observable, not silent.
-        if path:
+        if path and not ctx.quiet_log:
             _log_fail("handback", -1, type(exc).__name__, ctx.session_id)
         return ""
 
@@ -728,10 +729,19 @@ class Ctx:
         self.has_agent_identity: bool = False
         # set by stage 0, consumed by stage 2
         self.fast_row_id = None
+        # True only for the --gate-only pass: suppresses the hook_failures writes that
+        # parse_input and its helpers can make (gate_match error, handback non-regular
+        # file) so a failure is recorded ONCE per stop — by the full pass, which
+        # re-runs the same deterministic parse — never twice.
+        self.quiet_log: bool = False
 
 
-def parse_input() -> Optional[Ctx]:
-    """Parse CAST_STOP_INPUT once; return a fully-classified Ctx (or None to no-op)."""
+def parse_input(quiet_log: bool = False) -> Optional[Ctx]:
+    """Parse CAST_STOP_INPUT once; return a fully-classified Ctx (or None to no-op).
+
+    quiet_log=True (the --gate-only pass) suppresses hook_failures writes so the full
+    pass's identical re-parse is the single recorder (see Ctx.quiet_log).
+    """
     raw = os.environ.get("CAST_STOP_INPUT", "")
     if not raw:
         return None
@@ -743,6 +753,7 @@ def parse_input() -> Optional[Ctx]:
         return None
 
     ctx = Ctx()
+    ctx.quiet_log = quiet_log
     ctx.data = data
 
     # Multi-path response extraction (hook lines 87-110): structured
@@ -954,7 +965,8 @@ def parse_input() -> Optional[Ctx]:
         # `|| true` swallows it, NO stage runs and NO record is written — so an earlier
         # DONE record would stay the newest despite a genuine BLOCKED. Record BLOCKED
         # instead (it supersedes). Exempt agents never write a gate record.
-        _log_fail("gate_match", -1, f"{type(exc).__name__}: {exc}", ctx.session_id)
+        if not ctx.quiet_log:
+            _log_fail("gate_match", -1, f"{type(exc).__name__}: {exc}", ctx.session_id)
         ctx.gate_match = "" if ctx.is_exempt else "BLOCKED"
     # Only resolve when a gate record will actually be written (Step 2.8).
     ctx.roster_type = _resolve_roster_type(ctx) if ctx.gate_match else ""
@@ -2803,18 +2815,25 @@ def stage16_compressed_output(ctx: Ctx) -> None:
 
 
 # ── Stage 17: tail-var emission for the bash wrapper ─────────────────────────
-def stage17_tail(ctx: Ctx) -> None:
-    """Emit a sentinel-delimited block of shlex-quoted vars for the wrapper to eval.
+def _emit_tail(ctx: Ctx, *, include_successors: bool) -> None:
+    """Write the sentinel-delimited, shlex-quoted tail block for the bash wrapper.
 
-    The wrapper evals ONLY the block between __CAST_TAIL_BEGIN__/__CAST_TAIL_END__.
+    Single home of the quoting contract for BOTH passes (full and --gate-only). The
+    wrapper evals ONLY the block between __CAST_TAIL_BEGIN__/__CAST_TAIL_END__.
     Every value is shlex.quote()'d — the eval downstream is safe ONLY because of that
     (arbitrary agent output flows into CAST_GATE_MATCH / CAST_SUCCESSORS). Removing the
     quoting would open a shell-injection path.
+
+    include_successors=False (the --gate-only pass) omits CAST_SUCCESSORS entirely:
+    chain successors are enqueued from the full pass only.
     """
     lines = [
         "__CAST_TAIL_BEGIN__",
         "CAST_GATE_MATCH=" + shlex.quote(ctx.gate_match or ""),
-        "CAST_SUCCESSORS=" + shlex.quote("\n".join(ctx.successors)),
+    ]
+    if include_successors:
+        lines.append("CAST_SUCCESSORS=" + shlex.quote("\n".join(ctx.successors)))
+    lines += [
         "SAFE_AGENT=" + shlex.quote(ctx.safe_agent or ""),
         "SAFE_SESSION_ID=" + shlex.quote(ctx.safe_session_id or ""),
         "SAFE_ROSTER_TYPE=" + shlex.quote(ctx.roster_type or ""),
@@ -2823,8 +2842,23 @@ def stage17_tail(ctx: Ctx) -> None:
     sys.stdout.write("\n".join(lines) + "\n")
 
 
-def main() -> int:
-    ctx = parse_input()
+def stage17_tail(ctx: Ctx) -> None:
+    """Emit the full tail block (gate vars + CAST_SUCCESSORS) for the wrapper."""
+    _emit_tail(ctx, include_successors=True)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Run the SubagentStop telemetry pipeline.
+
+    --gate-only (S3d-5): parse once, apply the SAME identity guards, emit ONLY the
+    gate tail vars (CAST_GATE_MATCH / SAFE_*), run NO stages, print nothing else. The
+    bash wrapper runs this fast pass FIRST so the requires_agent unblock record is
+    written before any slow telemetry stage (stage 9 can take 50-100 s) can be killed
+    by the hook timeout. The full pass (no flag) is unchanged.
+    """
+    args = sys.argv[1:] if argv is None else argv
+    gate_only = "--gate-only" in args
+    ctx = parse_input(quiet_log=gate_only)
     if ctx is None:
         return 0
     # Precondition guard (hook line 307): refuse telemetry for a main-session Stop
@@ -2842,6 +2876,10 @@ def main() -> int:
     # unresolved tick) drop silently here — no counter, no log line, no new
     # artifact; that is the whole mechanism.
     if not ctx.has_agent_identity:
+        return 0
+
+    if gate_only:
+        _emit_tail(ctx, include_successors=False)
         return 0
 
     run_stage("stage0_fast_write", stage0_fast_write, ctx)
