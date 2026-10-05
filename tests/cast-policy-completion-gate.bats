@@ -5,8 +5,9 @@
 # WRITER: cast-subagent-stop-hook.sh step 2.8 records the agent's real terminal verdict
 #         to ~/.claude/agent-status/<agent>-<ts>.json via status-writer.sh.
 # READER: cast-pretool-dispatch.py (via cast-git-guard.py _agent_completed_this_session)
-#         clears a block-severity policy ONLY when the MOST RECENT completion record for
-#         the required agent has status DONE or DONE_WITH_CONCERNS.
+#         clears a block-severity policy ONLY when the MOST RECENT completion record that
+#         is bound (by CONTENT: session_id + agent_type) to the payload's session and the
+#         required agent has status DONE or DONE_WITH_CONCERNS. Filenames are display-only.
 #
 # HARD RULES honored: temp-HOME isolation (setup_temp_home); zero GUI side effects;
 #   printf for all JSON fixtures (no heredocs inside @test); touch -t for mtime ordering.
@@ -36,6 +37,28 @@ print(json.dumps({'tool_name': tool, 'tool_input': ti, 'session_id': 'test'}))
 }
 
 run_dispatch() { run python3 "$DISPATCH" <<< "$1"; }
+
+# payload() with the session_id replaced: payload_for_session <sid> <tool> [k=v ...]
+payload_for_session() {
+  local sid="$1"
+  shift
+  payload "$@" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+d['session_id'] = sys.argv[1]
+print(json.dumps(d))
+" "$sid"
+}
+
+# payload() with NO session_id key at all.
+payload_no_session() {
+  payload "$@" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+d.pop('session_id', None)
+print(json.dumps(d))
+"
+}
 
 # Build a SubagentStop payload (mirrors cast-subagent-stop-hook.bats)
 # Optional 3rd arg: agent_id (the filename stem of Claude Code's subagent sidecar).
@@ -73,31 +96,58 @@ first_record() {
   find "$HOME/.claude/agent-status" -name "${1}-*.json" 2>/dev/null | head -1
 }
 
-# Write a completion record for <agent> with <STATUS>.
+# Set <file>'s mtime to <secs> seconds in the past (negative = in the future).
+# touch -t (portable CCYYMMDDhhmm.SS on macOS+Linux) takes LOCAL time, so format a naive
+# local datetime — a UTC-formatted stamp lands hours in the future on any non-UTC host
+# (the old helper did exactly that, which the gate's future-mtime check now exposes).
+set_age() {
+  local file="$1"
+  local age_secs="$2"
+  local touch_ts
+  touch_ts="$(python3 -c "
+from datetime import datetime, timedelta
+import sys
+t = datetime.now() - timedelta(seconds=int(sys.argv[1]))
+print(t.strftime('%Y%m%d%H%M.%S'))
+" "$age_secs")"
+  touch -t "$touch_ts" "$file"
+}
+
+# Write a completion record for <agent> with <STATUS>, bound the way the SubagentStop
+# hook binds a trusted one: content fields session_id + agent_type.
 # Optional age_secs: set mtime that many seconds in the past (for ordering tests).
-# Uses printf (no heredoc) and touch -t (portable CCYYMMDDhhmm.SS on macOS+Linux).
+# Optional session_id (default "test", the payload() session) and agent_type (default
+# = <agent>) override the bound content fields.
+# Uses printf (no heredoc).
 write_status_file() {
   local agent="$1"
   local status="$2"
   local age_secs="${3:-0}"
+  local sess="${4:-test}"
+  local atype="${5:-$agent}"
 
   local ts
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
-  # Include status in filename to avoid collision when called twice in same second
-  local filepath="$HOME/.claude/agent-status/${agent}-${status}-${ts}.json"
+  # Include status + session in filename to avoid collision when called twice in same second
+  local filepath="$HOME/.claude/agent-status/${agent}-${status}-${sess}-${ts}.json"
 
-  printf '{"agent": "%s", "status": "%s", "summary": "subagent completion record", "timestamp": "%s"}\n' \
-    "$agent" "$status" "$ts" > "$filepath"
+  printf '{"agent": "%s", "status": "%s", "summary": "subagent completion record", "timestamp": "%s", "session_id": "%s", "agent_type": "%s"}\n' \
+    "$agent" "$status" "$ts" "$sess" "$atype" > "$filepath"
 
   if [[ "$age_secs" -gt 0 ]]; then
-    local touch_ts
-    touch_ts="$(python3 -c "
-from datetime import datetime, timezone, timedelta
-import sys
-t = datetime.now(timezone.utc) - timedelta(seconds=int(sys.argv[1]))
-print(t.strftime('%Y%m%d%H%M.%S'))
-" "$age_secs")"
-    touch -t "$touch_ts" "$filepath"
+    set_age "$filepath" "$age_secs"
+  fi
+}
+
+# Write a record with arbitrary <name> and raw <json> content (legacy/unbound shapes,
+# filename-vs-content tests). Optional age_secs (negative = future mtime).
+write_raw_record() {
+  local name="$1"
+  local json="$2"
+  local age_secs="${3:-0}"
+  printf '%s\n' "$json" > "$HOME/.claude/agent-status/$name"
+  if [[ "$age_secs" -ne 0 ]]; then
+    set_age "$HOME/.claude/agent-status/$name" "$age_secs"
   fi
 }
 
@@ -218,6 +268,262 @@ teardown() { teardown_temp_home; }
   assert_output --partial "env-files-require-security"
 }
 
+@test "READER-7: devops DONE record from ANOTHER session → blocked (session-bound)" {
+  write_status_file devops DONE 0 some-other-session
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-8: legacy unbound record (no session_id / agent_type) → blocked" {
+  write_raw_record "devops-DONE-legacy.json" '{"agent": "devops", "status": "DONE", "summary": "old shape"}'
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-9a: content beats filename — devops-named file whose agent_type is security does NOT clear workflows" {
+  write_raw_record "devops-x.json" '{"agent": "devops", "status": "DONE", "session_id": "test", "agent_type": "security"}'
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-9b: content beats filename — arbitrary filename with agent_type devops + this session DOES clear workflows" {
+  write_raw_record "zzz.json" '{"agent": "whatever", "status": "DONE", "session_id": "test", "agent_type": "devops"}'
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_success
+}
+
+@test "READER-9c: agent_type must match exactly — devops2 / DEVOPS do not satisfy devops" {
+  write_raw_record "a.json" '{"status": "DONE", "session_id": "test", "agent_type": "devops2"}'
+  write_raw_record "b.json" '{"status": "DONE", "session_id": "test", "agent_type": "DEVOPS"}'
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-10: a bound record whose name does not end .json is ignored" {
+  write_raw_record "devops-DONE-test.txt" '{"status": "DONE", "session_id": "test", "agent_type": "devops"}'
+  write_raw_record ".hidden.json" '{"status": "DONE", "session_id": "test", "agent_type": "devops"}'
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-11: a symlinked record is ignored (lstat + O_NOFOLLOW)" {
+  printf '%s\n' '{"status": "DONE", "session_id": "test", "agent_type": "devops"}' > "$HOME/real-record.json"
+  ln -s "$HOME/real-record.json" "$HOME/.claude/agent-status/devops-link.json"
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-11b: a symlinked agent-status directory is refused" {
+  mv "$HOME/.claude/agent-status" "$HOME/real-status-dir"
+  ln -s "$HOME/real-status-dir" "$HOME/.claude/agent-status"
+  write_raw_record "devops-DONE.json" '{"status": "DONE", "session_id": "test", "agent_type": "devops"}'
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-12: a future-dated record (mtime > now + 60s) is ignored" {
+  write_raw_record "devops-future.json" '{"status": "DONE", "session_id": "test", "agent_type": "devops"}' -3600
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-13: payload with NO session_id blocks even when a record's session_id is empty" {
+  write_raw_record "devops-empty-sid.json" '{"status": "DONE", "session_id": "", "agent_type": "devops"}'
+  run_dispatch "$(payload_no_session Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-14: DONE_WITH_CONCERNS still unblocks (decision fence: the gate attests completion, not approval)" {
+  write_status_file devops DONE_WITH_CONCERNS
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_success
+}
+
+@test "READER-15: a NEWER other-session BLOCKED does not shadow an older same-session DONE" {
+  write_status_file devops DONE 3600
+  write_status_file devops BLOCKED 60 some-other-session
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_success
+}
+
+@test "READER-15b: a NEWER same-session BLOCKED still supersedes an older same-session DONE" {
+  write_status_file devops DONE 3600
+  write_status_file devops BLOCKED 60
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-16: more than 2000 candidate records → fail closed even with a matching DONE present" {
+  write_status_file devops DONE
+  python3 -c "
+import os, sys
+d = sys.argv[1]
+for i in range(2001):
+    open(os.path.join(d, 'junk-%d.json' % i), 'w').close()
+" "$HOME/.claude/agent-status"
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-17: block message names the session-bound trust rule and keeps the escape hatch" {
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "dispatched in THIS session"
+  assert_output --partial "devops__<label>"
+  assert_output --partial "CAST_POLICY_OVERRIDE=1"
+}
+
+@test "READER-18: a deeply nested junk record (RecursionError on CPython 3.9) next to no matching record → Write still blocked, never fail-open" {
+  # ~3 KB, well under the 64 KiB record cap. On /usr/bin/python3 (3.9) json.loads raises
+  # RecursionError at ~1000 levels; if that escaped the reader, evaluate()'s blanket
+  # fail-open would return 0 and EVERY policy block would be disabled by one junk file.
+  python3 -c "
+import sys
+sys.stdout.write('[' * 1500 + ']' * 1500)
+" > "$HOME/.claude/agent-status/junk-deep.json"
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+  if [[ -x /usr/bin/python3 ]]; then
+    run /usr/bin/python3 "$DISPATCH" <<< "$(payload Write "file_path=.github/workflows/deploy.yml")"
+    assert_failure
+    assert_output --partial "workflows-require-devops"
+  else
+    skip "no /usr/bin/python3 — default-interpreter half passed, 3.9 half not run"
+  fi
+}
+
+@test "READER-18b: a deeply nested junk record does not shadow a valid bound DONE record" {
+  python3 -c "
+import sys
+sys.stdout.write('[' * 1500 + ']' * 1500)
+" > "$HOME/.claude/agent-status/junk-deep.json"
+  write_status_file devops DONE
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_success
+  if [[ -x /usr/bin/python3 ]]; then
+    run /usr/bin/python3 "$DISPATCH" <<< "$(payload Write "file_path=.github/workflows/deploy.yml")"
+    assert_success
+  fi
+}
+
+@test "READER-19: a payload session_id outside [A-Za-z0-9-]{1,64} fails closed even when a record carries the identical id" {
+  write_raw_record "devops-us.json" '{"status": "DONE", "session_id": "sess_x", "agent_type": "devops"}'
+  run_dispatch "$(payload_for_session sess_x Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "READER-20: equal-mtime DONE and BLOCKED from the same session+type → blocked (conservative tie-break, either filename order)" {
+  write_raw_record "a-done.json" '{"status": "DONE", "session_id": "test", "agent_type": "devops"}'
+  write_raw_record "z-blocked.json" '{"status": "BLOCKED", "session_id": "test", "agent_type": "devops"}'
+  touch -r "$HOME/.claude/agent-status/a-done.json" "$HOME/.claude/agent-status/z-blocked.json"
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+  rm -f "$HOME/.claude/agent-status/a-done.json" "$HOME/.claude/agent-status/z-blocked.json"
+  write_raw_record "z-done.json" '{"status": "DONE", "session_id": "test", "agent_type": "devops"}'
+  write_raw_record "a-blocked.json" '{"status": "BLOCKED", "session_id": "test", "agent_type": "devops"}'
+  touch -r "$HOME/.claude/agent-status/z-done.json" "$HOME/.claude/agent-status/a-blocked.json"
+  run_dispatch "$(payload Write "file_path=.github/workflows/deploy.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+# Run the dispatcher with an explicit interpreter; python3 first, then /usr/bin/python3
+# (CPython 3.9 on macOS) when it exists and differs. Args: <payload-json>.
+dispatch_each_python() {
+  local pl="$1" py
+  for py in python3 /usr/bin/python3; do
+    command -v "$py" > /dev/null 2>&1 || continue
+    run "$py" "$DISPATCH" <<< "$pl"
+    assert_failure
+    assert_output --partial "CAST-POLICY-BLOCK"
+  done
+}
+
+now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+
+@test "READER-21: a 4096-char path with an embedded newline fails closed FAST (cubic .env backtracking guard)" {
+  # Without the control-char guard the default `.*\.env(\..*)?$` pattern backtracks
+  # cubically on the newline: ~24 s on CPython 3.14 vs the 5 s hook timeout.
+  local fp t0 t1
+  fp="$(python3 -c "
+import sys
+sys.stdout.write(('.env' * 1023) + '\nz')
+")"
+  [[ "${#fp}" -le 4096 ]]
+  local py
+  for py in python3 /usr/bin/python3; do
+    command -v "$py" > /dev/null 2>&1 || continue
+    t0="$(now_ms)"
+    run "$py" "$DISPATCH" <<< "$(payload Write "file_path=$fp")"
+    t1="$(now_ms)"
+    assert_failure
+    assert_output --partial "control characters"
+    # generous bound (interpreter start-up included); the unguarded path takes >20 s
+    [[ $((t1 - t0)) -lt 4000 ]]
+  done
+}
+
+@test "READER-21b: a short control-char path no policy matches is still blocked, and CAST_POLICY_OVERRIDE=1 releases it" {
+  dispatch_each_python "$(payload Write "file_path=$(printf 'src/ok\tname.txt')")"
+  run env CAST_POLICY_OVERRIDE=1 python3 "$DISPATCH" <<< "$(payload Write "file_path=$(printf 'src/ok\tname.txt')")"
+  assert_success
+}
+
+@test "READER-21c: a control-free symlink that RESOLVES to a newline target fails closed fast on both interpreters" {
+  # The raw path has no control characters; only realpath() exposes the newline. The regexes
+  # run on the resolved candidate too, so it needs the same guard (cubic backtracking).
+  local tgt link
+  tgt="$HOME/tgt/$(printf 'a\nb')"
+  mkdir -p "$tgt"
+  link="$HOME/link"
+  ln -s "$tgt" "$link"
+  local py t0 t1
+  for py in python3 /usr/bin/python3; do
+    command -v "$py" > /dev/null 2>&1 || continue
+    t0="$(now_ms)"
+    run "$py" "$DISPATCH" <<< "$(payload Write "file_path=$link/x.txt")"
+    t1="$(now_ms)"
+    assert_failure
+    assert_output --partial "symlink-resolved"
+    [[ $((t1 - t0)) -lt 4000 ]]
+  done
+  # control: a symlink to a plain directory is not affected
+  mkdir -p "$HOME/tgt/plain"
+  ln -s "$HOME/tgt/plain" "$HOME/link2"
+  run python3 "$DISPATCH" <<< "$(payload Write "file_path=$HOME/link2/x.txt")"
+  assert_success
+}
+
+@test "READER-22: a non-string file_path (int/list/dict/bool/null) or no path at all fails closed on both interpreters" {
+  local body
+  for body in '"file_path": 5' '"file_path": ["a"]' '"file_path": {"a": 1}' '"file_path": true' '"file_path": null' '"content": "x"'; do
+    dispatch_each_python "{\"tool_name\": \"Write\", \"session_id\": \"test\", \"tool_input\": {$body}}"
+    assert_output --partial "not a string"
+  done
+  dispatch_each_python '{"tool_name": "Edit", "session_id": "test", "tool_input": {"file_path": 5}}'
+}
+
+@test "READER-23: an empty-string file_path is still 'no path, no policy' (allowed); non-str + CAST_POLICY_OVERRIDE=1 is released" {
+  run python3 "$DISPATCH" <<< '{"tool_name": "Write", "session_id": "test", "tool_input": {"file_path": ""}}'
+  assert_success
+  run env CAST_POLICY_OVERRIDE=1 python3 "$DISPATCH" <<< '{"tool_name": "Write", "session_id": "test", "tool_input": {"file_path": 5}}'
+  assert_success
+}
+
 # ---------------------------------------------------------------------------
 # WRITER tests — cast-subagent-stop-hook.sh step 2.8 records verdicts
 # ---------------------------------------------------------------------------
@@ -332,4 +638,36 @@ print('\n'.join(lines))
   local count
   count="$(find "$HOME/.claude/agent-status" -name "general-purpose-*.json" 2>/dev/null | wc -l | tr -d ' ')"
   [[ "$count" -eq 0 ]]
+}
+
+# ---------------------------------------------------------------------------
+# END-TO-END — the real SubagentStop hook writes the record, the real dispatcher reads it
+# ---------------------------------------------------------------------------
+
+@test "E2E-1: unnamed devops subagent ends Status: DONE in sess-gate-test → Write to workflows in that session allowed" {
+  local output
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  write_sidecar adevops0010 '{"agentType":"devops"}'
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$output" adevops0010)"
+  assert_success
+  run_dispatch "$(payload_for_session sess-gate-test Write "file_path=.github/workflows/x.yml")"
+  assert_success
+  # ...but the same record does NOT unblock a different session.
+  run_dispatch "$(payload_for_session some-other-session Write "file_path=.github/workflows/x.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}
+
+@test "E2E-2: spoof — built-in teammate named devops (untrusted roster type) → record written but gate still blocks" {
+  local output
+  output="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  write_sidecar aspoof0010 '{"agentType":"devops","name":"devops","taskKind":"in_process_teammate","teamName":"t"}'
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$output" aspoof0010)"
+  assert_success
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run_dispatch "$(payload_for_session sess-gate-test Write "file_path=.github/workflows/x.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
 }

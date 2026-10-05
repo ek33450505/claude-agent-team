@@ -1145,8 +1145,11 @@ def main():
     if tool in ("Write", "Edit"):
         git_guard = _load("cast_git_guard", "cast-git-guard.py")
         if git_guard is not None:
+            # The requires_agent gate trusts only completion records bound to THIS
+            # payload's session_id; a missing/non-str value is "" (fails closed).
+            sid = data.get("session_id")
             try:
-                code, msg = git_guard.evaluate(tool, tool_input)
+                code, msg = git_guard.evaluate(tool, tool_input, sid if isinstance(sid, str) else "")
             except Exception:
                 code, msg = 0, ""
             if code == 2:

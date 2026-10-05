@@ -66,12 +66,13 @@ make_write_payload() {
 import json
 print(json.dumps({
   'tool_name': 'Write',
+  'session_id': 'ptg-sess',
   'tool_input': {
     'file_path': '$file_path',
     'content': 'test content'
   }
 }))
-" 2>/dev/null || echo '{"tool_name":"Write","tool_input":{"file_path":"'"$file_path"'"}}'
+" 2>/dev/null || echo '{"tool_name":"Write","session_id":"ptg-sess","tool_input":{"file_path":"'"$file_path"'"}}'
 }
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,20 @@ print(json.dumps({
   [[ ! -f "$CLAUDE_DIR/agent-status/agent1.json" ]]
   [[ ! -f "$CLAUDE_DIR/agent-status/agent2.json" ]]
   [[ -f "$CLAUDE_DIR/agent-status/agent3.json" ]]
+}
+
+@test "TTL sweep: a symlinked agent-status dir is refused — files in its TARGET are never deleted" {
+  # The sweep used to follow the symlink (isdir/getmtime) and delete >120-min *.json in
+  # the target. It now lstat-checks the fixed ~/.claude/agent-status and refuses.
+  mkdir -p "$HOME/real-status"
+  rmdir "$CLAUDE_DIR/agent-status"
+  ln -s "$HOME/real-status" "$CLAUDE_DIR/agent-status"
+  create_status_file "agent-old.json" 150 '{"status":"DONE"}'
+  [[ -f "$HOME/real-status/agent-old.json" ]]
+
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/tmp/test.txt")"
+
+  [[ -f "$HOME/real-status/agent-old.json" ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -2638,13 +2653,13 @@ _mk_update_ref_fixture() {
 }
 
 # ---------------------------------------------------------------------------
-# Status-file completion-gate __ prefix fix (2026-08-18). Roster dispatches
-# named `<agent-type>__<label>` (dispatch-naming convention) write
-# `<agent-type>__<label>-<ts>.json`, which a bare `<agent>-` prefix match
-# never sees, so a policy gate falsely reports the required agent as never
-# having completed. Exercised end-to-end through pre-tool-guard.sh's real
-# Write-tool path against this repo's actual config/policies.json
-# (`src/auth/.*` requires `security`, severity block).
+# Status-file completion gate: CONTENT-bound trust (S3d, 2026-10-05; supersedes the
+# 2026-08-18 `<agent>__` filename-prefix fix). The gate trusts only the content
+# fields the SubagentStop hook writes — `session_id` (== the payload's session_id,
+# `ptg-sess` here) and `agent_type` (the trusted roster type) — and never the
+# filename, so a dash name, a dunder name and an arbitrary name are all equal.
+# Exercised end-to-end through pre-tool-guard.sh's real Write-tool path against this
+# repo's actual config/policies.json (`src/auth/.*` requires `security`, severity block).
 #
 # The guard reads ONLY the installed ~/.claude/config/policies.json (security
 # M1, 2026-10-04: a cwd-relative config/policies.json is agent-writable, so
@@ -2658,39 +2673,55 @@ install_repo_policies() {
   cp "$REPO_DIR/config/policies.json" "$HOME/.claude/config/policies.json"
 }
 
-@test "Write to src/auth/*.php with NO completion record → blocks (exit 2) [policy-gate __ prefix fix: control]" {
+@test "Write to src/auth/*.php with NO completion record → blocks (exit 2) [policy-gate content-bound: control]" {
   install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe1.php")"
   assert_failure
   assert_output --partial "auth-requires-security"
 }
 
-@test "Write to src/auth/*.php with a plain security-<ts>.json record → allows (exit 0) [policy-gate __ prefix fix: pre-existing dash form regression fence]" {
-  create_status_file "security-1000.json" 0 '{"status":"DONE"}'
+@test "Write to src/auth/*.php with a bound security record under a dash name → allows (exit 0) [policy-gate content-bound]" {
+  create_status_file "security-1000.json" 0 '{"status":"DONE","session_id":"ptg-sess","agent_type":"security"}'
   install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe2.php")"
   assert_success
 }
 
-@test "Write to src/auth/*.php with a security__fix-x-<ts>.json record (dunder dispatch naming) → allows (exit 0) [policy-gate __ prefix fix]" {
-  create_status_file "security__fix-x-1000.json" 0 '{"status":"DONE"}'
+@test "Write to src/auth/*.php with the same bound record under a dunder name → allows (exit 0; filename is irrelevant) [policy-gate content-bound]" {
+  create_status_file "security__fix-x-1000.json" 0 '{"status":"DONE","session_id":"ptg-sess","agent_type":"security"}'
   install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe3.php")"
   assert_success
 }
 
-@test "Write to src/auth/*.php with a security2-<ts>.json record (must NOT satisfy 'security': anchoring regression) → blocks (exit 2) [policy-gate __ prefix fix: anchoring must hold]" {
-  create_status_file "security2-1000.json" 0 '{"status":"DONE"}'
+@test "Write to src/auth/*.php with a record whose agent_type is security2 (must NOT satisfy 'security') → blocks (exit 2) [policy-gate content-bound: exact match]" {
+  create_status_file "security-1000.json" 0 '{"status":"DONE","session_id":"ptg-sess","agent_type":"security2"}'
   install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe4.php")"
   assert_failure
   assert_output --partial "auth-requires-security"
 }
 
-@test "Write to src/auth/*.php with a securityX__fix-y-<ts>.json record (must NOT satisfy 'security': dunder anchoring regression) → blocks (exit 2) [policy-gate __ prefix fix: anchoring must hold]" {
-  create_status_file "securityX__fix-y-1000.json" 0 '{"status":"DONE"}'
+@test "Write to src/auth/*.php with a securityX__fix-y-<ts>.json record that is not bound to security → blocks (exit 2) [policy-gate content-bound: dunder name alone proves nothing]" {
+  create_status_file "securityX__fix-y-1000.json" 0 '{"status":"DONE","session_id":"ptg-sess","agent_type":"securityX"}'
   install_repo_policies
   run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe5.php")"
+  assert_failure
+  assert_output --partial "auth-requires-security"
+}
+
+@test "Write to src/auth/*.php with a legacy unbound record {status: DONE} named security-<ts>.json → blocks (exit 2) [policy-gate content-bound: filename no longer trusted]" {
+  create_status_file "security-1000.json" 0 '{"status":"DONE"}'
+  install_repo_policies
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe6.php")"
+  assert_failure
+  assert_output --partial "auth-requires-security"
+}
+
+@test "Write to src/auth/*.php with a bound security record from ANOTHER session → blocks (exit 2) [policy-gate content-bound: session binding]" {
+  create_status_file "security-1000.json" 0 '{"status":"DONE","session_id":"some-other-sess","agent_type":"security"}'
+  install_repo_policies
+  run bash "$HOOK_SH" <<< "$(make_write_payload "src/auth/probe7.php")"
   assert_failure
   assert_output --partial "auth-requires-security"
 }
