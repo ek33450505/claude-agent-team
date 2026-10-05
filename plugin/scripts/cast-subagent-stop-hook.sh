@@ -125,6 +125,7 @@ CAST_GATE_MATCH="${CAST_GATE_MATCH:-}"
 CAST_SUCCESSORS="${CAST_SUCCESSORS:-}"
 SAFE_AGENT="${SAFE_AGENT:-}"
 SAFE_SESSION_ID="${SAFE_SESSION_ID:-}"
+SAFE_ROSTER_TYPE="${SAFE_ROSTER_TYPE:-}"
 
 # ── Step 2.8: Policy-gate completion record (v9 P-trust) ─────────────────────
 # Records the agent's real self-reported terminal verdict to
@@ -132,7 +133,17 @@ SAFE_SESSION_ID="${SAFE_SESSION_ID:-}"
 # RECENT such record and clears requires_agent BLOCK policies only for DONE /
 # DONE_WITH_CONCERNS. A truncated agent (no recognized status) → CAST_GATE_MATCH
 # empty → no file written → gate stays blocked. Gate value computed once by the
-# python process (last-match-wins, non-exempt only).
+# python process (compute_gate_match, non-exempt only): ASYMMETRIC and
+# most-conservative-wins (BLOCKED > NEEDS_CONTEXT > DONE_WITH_CONCERNS > DONE) —
+# passing verdicts only from an unfenced line-anchored `Status: X` or a closed
+# ```json status``` fence; BLOCKED/NEEDS_CONTEXT from ANY line, fence-independent
+# and unanchored. NOT last-match-wins (quoted text must never override a block).
+# Identity: the gate trusts ONLY the record's `session_id` and `agent_type`
+# content fields, which only this hook supplies (args 6/7). `agent_type` is the
+# roster type read from Claude Code's subagent sidecar, NEVER the dispatch name
+# (a read-only Explore agent dispatched as name "security" would otherwise write
+# a `security` record). The filename and the `agent` field stay display-only; an
+# empty SAFE_ROSTER_TYPE (untrusted/ambiguous sidecar) omits `agent_type`.
 if [[ -n "$CAST_GATE_MATCH" ]]; then
   if [[ -r "${HOME}/.claude/scripts/status-writer.sh" ]]; then
     # shellcheck source=/dev/null
@@ -146,7 +157,9 @@ if [[ -n "$CAST_GATE_MATCH" ]]; then
       "subagent completion record" \
       "$SAFE_AGENT" \
       "" \
-      "" 2>/dev/null || true
+      "" \
+      "$SAFE_SESSION_ID" \
+      "$SAFE_ROSTER_TYPE" >/dev/null 2>&1 || true
   fi
 fi
 

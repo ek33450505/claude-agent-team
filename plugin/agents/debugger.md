@@ -59,7 +59,7 @@ Focus on fixing the underlying issue, not the symptoms.
    blockers: none | [describe blocker]
    key_decisions: [root cause summary — useful for downstream reviewers]
    ```
-10. Write a machine-readable status file: create a JSON file at `~/.claude/agent-status/debugger-<timestamp>.json` with keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp`. Use format `YYYY-MM-DDTHH:MM:SSZ` for timestamp. You can source `~/.claude/scripts/status-writer.sh` and call `cast_write_status` if available, otherwise write the JSON directly.
+10. Do NOT write files under `~/.claude/agent-status/` yourself — Write/Edit there is denied by settings, and the policy gate ignores hand-written records. The SubagentStop hook records your verdict from your final `Status:` line, so make that line accurate.
 11. Output this completion report as your final response:
 
 ---

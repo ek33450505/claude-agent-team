@@ -1379,18 +1379,22 @@ _FILTER_BRANCH_MSG = (
 SESSION_TIMEOUT = 7200  # 2 hours, matches the agent-status TTL
 
 
-def _claude_dir() -> str:
-    return os.environ.get('CLAUDE_DIR', os.path.join(os.path.expanduser('~'), '.claude'))
-
-
 # --------------------------------------------------------------------------
 # Write/Edit: agent-status TTL sweep + policy engine
 # --------------------------------------------------------------------------
 def _ttl_sweep_agent_status() -> None:
-    """Delete agent-status/*.json older than 120 min (mirrors `find -mmin +120 -delete`)."""
+    """Delete agent-status/*.json older than 120 min (mirrors `find -mmin +120 -delete`).
+
+    Same trust boundary as the gate reader: the directory is the fixed
+    ``~/.claude/agent-status`` (NOT the env-steerable CLAUDE_DIR), and it must be a REAL
+    directory per ``os.lstat`` — a symlinked agent-status dir is refused, so the sweep can
+    never delete files in the symlink's target. Each entry is lstat'ed and only REGULAR
+    files are unlinked (a symlink entry is never followed or removed through its target).
+    Never raises.
+    """
     try:
-        status_dir = os.path.join(_claude_dir(), 'agent-status')
-        if not os.path.isdir(status_dir):
+        status_dir = os.path.expanduser('~/.claude/agent-status')
+        if not stat.S_ISDIR(os.lstat(status_dir).st_mode):
             return
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
         for fname in os.listdir(status_dir):
@@ -1398,7 +1402,10 @@ def _ttl_sweep_agent_status() -> None:
                 continue
             fpath = os.path.join(status_dir, fname)
             try:
-                age_min = int((now - os.path.getmtime(fpath)) / 60)
+                st = os.lstat(fpath)
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                age_min = int((now - st.st_mtime) / 60)
                 if age_min > 120:
                     os.remove(fpath)
             except Exception:
@@ -1407,63 +1414,141 @@ def _ttl_sweep_agent_status() -> None:
         pass
 
 
-def _agent_completed_this_session(required_agent: str, agent_status_dir: str, now: float) -> bool:
-    """The MOST RECENT fresh (< SESSION_TIMEOUT) agent-status file for required_agent
-    reports DONE / DONE_WITH_CONCERNS.
+_STATUS_MAX_FILES = 2000          # more candidate records than this -> fail closed (bounded work)
+_STATUS_MAX_BYTES = 65536         # a record larger than this is skipped
+_STATUS_FUTURE_SKEW = 60          # mtime more than this far in the future is ignored
+_SESSION_ID_RE = re.compile(r'[A-Za-z0-9-]{1,64}')  # the shape the writer stores (fullmatch only)
 
-    Picks the newest matching file by mtime so a later BLOCKED/NEEDS_CONTEXT review
-    supersedes an earlier DONE (re-run safety). The filename written by
-    status-writer.sh is ``<agent>-<ts>.json``, so an exact ``<agent>-`` prefix match
-    avoids spurious hits from agent names that merely contain required_agent.
 
-    2026-08-18 fix (same defect class as the commit approval gate, fixed this
-    session in cast-events.sh — that file untouched here): the dispatch-naming
-    rule (`working-conventions.md` → Dispatch-Prompt Contract) requires roster
-    dispatches be named ``<agent-type>__<label>`` for attribution, so a
-    ``code-reviewer__fix-x`` run writes ``code-reviewer__fix-x-<ts>.json`` —
-    which does NOT start with ``code-reviewer-``. A required-agent policy gate
-    then sees a review that genuinely ran as never-having-run and blocks.
-    Fixed by accepting EITHER ``<agent>-`` OR ``<agent>__`` as the prefix,
-    still anchored to a real separator (not a bare ``required_agent`` prefix)
-    so ``code-reviewer2-...`` cannot satisfy a ``code-reviewer`` requirement —
-    that anchoring is the whole reason the dispatch convention uses `__` in
-    the first place, and this fix must not loosen it.
+def _read_status_record(fpath: str):
+    """Return (mtime, data) for a regular, fresh-enough JSON status record, or None.
 
-    Reads the structured ``status`` field (not a substring scan) and fails CLOSED
-    (keeps the block) on any read/parse error. Mirrors orchestrate-dispatch.py
-    cmd_recent_status.
+    lstat first (symlinks and non-regular files are skipped), then open with
+    O_NOFOLLOW|O_NONBLOCK and fstat the descriptor so a swap between the lstat and
+    the open cannot hand the gate a FIFO/device/symlink. Never raises: ANY failure to
+    obtain a record — including RecursionError / MemoryError from `json.loads` on a
+    deeply nested junk file (CPython 3.9 trips near ~1000 levels, well under the size
+    cap) — is "no record" (None). A reader error that escaped would reach `evaluate()`'s
+    blanket fail-open and silently disable EVERY policy block.
     """
-    if not os.path.isdir(agent_status_dir):
-        return False
-    prefix_dash = required_agent + '-'
-    prefix_dunder = required_agent + '__'
-    newest_path = None
-    newest_mtime = -1.0
-    for fname in os.listdir(agent_status_dir):
-        if not (fname.startswith(prefix_dash) or fname.startswith(prefix_dunder)):
-            continue
-        fpath = os.path.join(agent_status_dir, fname)
+    try:
+        st = os.lstat(fpath)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > _STATUS_MAX_BYTES:
+            return None
+        fd = os.open(fpath, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except Exception:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        raw = os.read(fd, _STATUS_MAX_BYTES + 1)
+    except Exception:
+        return None
+    finally:
         try:
-            mtime = os.path.getmtime(fpath)
+            os.close(fd)
         except OSError:
-            continue
-        if now - mtime >= SESSION_TIMEOUT:
-            continue
-        if mtime > newest_mtime:
-            newest_mtime = mtime
-            newest_path = fpath
-    if newest_path is None:
+            pass
+    if len(raw) > _STATUS_MAX_BYTES:
+        return None
+    try:
+        data = json.loads(raw.decode('utf-8'))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return st.st_mtime, data
+
+
+def _agent_completed_this_session(required_agent: str, agent_status_dir: str, now: float,
+                                  session_id: str) -> bool:
+    """A `required_agent`-typed subagent dispatched in THIS session finished with a
+    passing verdict: the newest fresh matching record reports DONE / DONE_WITH_CONCERNS.
+
+    TRUST MODEL. Only the CONTENT fields the SubagentStop hook writes are trusted:
+    ``session_id`` (the hook payload's session) and ``agent_type`` (the TRUSTED roster
+    type read from Claude Code's own sidecar — absent from the record when the sidecar
+    could not vouch for it). A record counts only when BOTH equal the values asked for
+    (exact string equality — no prefix, case or suffix matching). The filename and the
+    record's ``agent`` field are display-only and are never consulted, so neither a
+    ``<agent>-…`` / ``<agent>__…`` filename nor a hand-written ``agent`` value can unblock
+    anything. Legacy records with no ``session_id``/``agent_type`` never match, and a
+    gate call without a session_id (``session_id == ''``) fails closed. This replaces the
+    2026-08-18 filename-prefix rule (``<agent>-`` / ``<agent>__``), which any terminal could
+    satisfy for any session.
+
+    SESSION ID SHAPE. The writer stores the session id sanitized to ``[A-Za-z0-9-]{1,64}``.
+    The reader compares the RAW payload id and refuses (False) any id that does not fully
+    match that shape — it never sanitizes-then-compares, because ``a_b`` and ``ab`` would
+    collide after sanitizing.
+
+    SELECTION. Records are filtered by content BEFORE the newest is chosen (a newer
+    non-matching record cannot shadow a matching one), then the newest mtime decides, so
+    a later BLOCKED/NEEDS_CONTEXT from the same session and type supersedes an earlier
+    DONE (re-run safety). Equal-mtime ties are CONSERVATIVE: if any record at the newest
+    mtime is not DONE/DONE_WITH_CONCERNS, the gate stays blocked (the random filename
+    suffix must never decide a verdict).
+
+    DECISION (do not "fix"): DONE_WITH_CONCERNS still unblocks. The gate attests that a
+    ``required_agent``-typed subagent dispatched in THIS session finished with a passing
+    verdict — NOT that the review approved the change. Concerns are surfaced to the
+    orchestrator through the Status line, not through this gate.
+
+    BOUNDS / FAIL-CLOSED. The directory must be a real directory (a symlinked dir is
+    refused); records must be regular, non-symlink, <= 64 KiB, fresher than
+    SESSION_TIMEOUT and not future-dated; more than 2000 candidate ``*.json`` names
+    returns False; any per-file error (including RecursionError / MemoryError from a
+    deeply nested junk record) skips that file; this function never raises.
+
+    RESIDUALS. A Bash/subprocess write can still forge a matching record while the sandbox
+    is off. Write/Edit/NotebookEdit forgery is covered by the native Edit denies on
+    agent-status/** and the sidecars (commit 66dfff1).
+    """
+    if not (isinstance(required_agent, str) and required_agent
+            and isinstance(session_id, str) and _SESSION_ID_RE.fullmatch(session_id)):
         return False
     try:
-        with open(newest_path) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
+        if not stat.S_ISDIR(os.lstat(agent_status_dir).st_mode):
+            return False
+        names = [n for n in os.listdir(agent_status_dir)
+                 if n.endswith('.json') and not n.startswith('.')]
+    except Exception:
         return False
-    return data.get('status') in ('DONE', 'DONE_WITH_CONCERNS')
+    if len(names) > _STATUS_MAX_FILES:
+        return False
+    newest_mtime = None
+    newest_pass = False
+    for name in names:
+        try:
+            rec = _read_status_record(os.path.join(agent_status_dir, name))
+            if rec is None:
+                continue
+            mtime, data = rec
+            if now - mtime >= SESSION_TIMEOUT or mtime > now + _STATUS_FUTURE_SKEW:
+                continue
+            agent_type = data.get('agent_type')
+            rec_session = data.get('session_id')
+            if not (isinstance(agent_type, str) and agent_type == required_agent
+                    and isinstance(rec_session, str) and rec_session == session_id):
+                continue
+            status = data.get('status')
+            passing = isinstance(status, str) and status in ('DONE', 'DONE_WITH_CONCERNS')
+        except Exception:
+            continue  # no per-file error may reach evaluate()'s blanket fail-open
+        if newest_mtime is None or mtime > newest_mtime:
+            newest_mtime = mtime
+            newest_pass = passing
+        elif mtime == newest_mtime:
+            newest_pass = newest_pass and passing  # tie -> any non-passing record wins
+    return newest_pass
 
 
 _POLICY_MAX_BYTES = 1024 * 1024  # policies.json larger than this is rejected (fail closed)
 _POLICY_MAX_PATH_LEN = 4096      # longer file_paths are not regex-matched (quadratic-backtrack DoS)
+# A path with an embedded newline (or any control char) is never a real edit target, and a
+# newline makes the default `.*\.env(\..*)?$` pattern backtrack cubically (4096 chars ~ 24 s
+# against a 5 s hook timeout). Control-char paths fail closed BEFORE any regex or realpath.
+_POLICY_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 
 
 def _read_policy_config(path: str):
@@ -1510,7 +1595,7 @@ def _read_policy_config(path: str):
                 pass
 
 
-def _policy_evaluate(file_path: str):
+def _policy_evaluate(file_path: str, session_id: str = ''):
     """Evaluate the INSTALLED ~/.claude/config/policies.json against file_path.
     Returns (exit_code, message_or_None).
 
@@ -1525,11 +1610,18 @@ def _policy_evaluate(file_path: str):
     file, oversize, bad JSON, wrong shape, malformed policy entry, invalid
     path_pattern regex, severity not exactly "block"/"warn") FAILS CLOSED → (2, msg);
     CAST_POLICY_OVERRIDE=1 bypasses it (audit-logged). A file_path longer than
-    _POLICY_MAX_PATH_LEN is blocked rather than regex-matched. Each pattern is tested
+    _POLICY_MAX_PATH_LEN, or containing any control character, is blocked rather than
+    regex-matched (the raw path is checked before any regex or realpath, and the
+    symlink-resolved candidate is checked again before any regex runs). Each pattern is tested
     against BOTH the raw path and its realpath (symlinked-directory bypass).
+
+    `session_id` is the hook PAYLOAD's session_id (not an env var — env is agent-steerable):
+    the requires_agent gate only trusts completion records bound to that exact session
+    (see `_agent_completed_this_session`); an empty/non-str value fails closed.
     """
     override = os.environ.get('CAST_POLICY_OVERRIDE', '0') == '1'
-    session_id = os.environ.get('CLAUDE_SESSION_ID', 'default')
+    gate_session = session_id if isinstance(session_id, str) else ''
+    session_id = gate_session or os.environ.get('CLAUDE_SESSION_ID', 'default')  # audit label only
 
     # Installed copy only: cwd is the project dir, which an agent can write, so a
     # cwd-relative config/policies.json would let it disable every block policy.
@@ -1573,15 +1665,41 @@ def _policy_evaluate(file_path: str):
             except (re.error, RecursionError, OverflowError, MemoryError):
                 return _config_invalid('invalid path_pattern regex')
 
-    if policies and len(file_path) > _POLICY_MAX_PATH_LEN:
+    def _path_block(path: str, resolved: bool):
+        """(code, msg) when `path` must not reach the regexes, else None.
+
+        Applied to the raw file_path BEFORE realpath and again to the symlink-resolved
+        candidate BEFORE any pattern runs: a short, control-free symlink can resolve to a
+        target that is long and/or carries a newline (cubic backtracking on the default
+        `.*\\.env(\\..*)?$` pattern — measured 8.4 s at 3400 chars, vs a 5 s hook timeout).
+        """
+        if len(path) > _POLICY_MAX_PATH_LEN:
+            pid = 'path-too-long'
+            why = f'is too long to evaluate safely ({len(path)} chars > {_POLICY_MAX_PATH_LEN})'
+        elif _POLICY_CONTROL_CHAR_RE.search(path):
+            pid = 'path-control-chars'
+            why = ('contains control characters (a newline, tab, NUL or other 0x00-0x1f / 0x7f '
+                   'byte) and cannot be evaluated safely')
+        else:
+            return None
+        if resolved:
+            pid = 'resolved-' + pid
+            subject = ('The symlink-resolved edit path (the path resolves elsewhere through a '
+                       'symlink or the cwd)')
+        else:
+            subject = 'The edit path'
         if override:
-            _audit_policy_override('policy-path-too-long', file_path[:256], session_id)
+            _audit_policy_override(f'policy-{pid}', file_path[:256], session_id)
             return 0, None
         return 2, (
-            f'**[CAST-POLICY-BLOCK]** The edit path is too long to evaluate safely '
-            f'({len(file_path)} chars > {_POLICY_MAX_PATH_LEN}); failing closed.\n'
+            f'**[CAST-POLICY-BLOCK]** {subject} {why}; failing closed.\n'
             f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
         )
+
+    if policies:
+        blocked = _path_block(file_path, False)
+        if blocked is not None:
+            return blocked
 
     # Test the raw path AND its symlink-resolved form: a symlinked directory
     # (hooks-link -> .githooks) would otherwise sidestep every path_pattern.
@@ -1593,6 +1711,11 @@ def _policy_evaluate(file_path: str):
             candidates.append(resolved)
     except Exception:
         pass
+    if policies:
+        for cand in candidates[1:]:
+            blocked = _path_block(cand, True)
+            if blocked is not None:
+                return blocked
 
     agent_status_dir = os.path.expanduser('~/.claude/agent-status')
     now = datetime.datetime.now(datetime.timezone.utc).timestamp()
@@ -1611,7 +1734,7 @@ def _policy_evaluate(file_path: str):
 
         if not required_agent:
             continue
-        if _agent_completed_this_session(required_agent, agent_status_dir, now):
+        if _agent_completed_this_session(required_agent, agent_status_dir, now, gate_session):
             continue
 
         if severity == 'block':
@@ -1623,7 +1746,10 @@ def _policy_evaluate(file_path: str):
                 f'Reason: {description}\n'
                 f'Required flow: dispatch `{required_agent}` REVIEW-ONLY — it must NOT apply this edit itself '
                 f'(its own edits stay blocked until its completion marker exists, which deadlocks). '
-                f'When it ends DONE its agent-status marker unblocks the session; then the ORCHESTRATOR applies the edit to `{file_path[:256]}`.\n'
+                f'The marker must come from a `{required_agent}` subagent dispatched in THIS session, '
+                f'unnamed or named `{required_agent}__<label>` (a dispatch named exactly `{required_agent}`, '
+                f'or a built-in agent given that name, is not trusted); hand-written records are ignored. '
+                f'When it ends DONE its hook-written marker unblocks the session; then the ORCHESTRATOR applies the edit to `{file_path[:256]}`.\n'
                 f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
             )
             return 2, msg
@@ -2253,18 +2379,38 @@ def _git_evaluate_impl(command: str, suppressed_counter):
 # --------------------------------------------------------------------------
 # Top-level evaluation (importable by the dispatcher)
 # --------------------------------------------------------------------------
-def evaluate(tool_name: str, tool_input: dict):
+def evaluate(tool_name: str, tool_input: dict, session_id: str = ''):
     """Return (exit_code, message). 0 = allow, 2 = block (message is the block reason).
+
+    `session_id` is the hook payload's session_id; only the Write/Edit policy gate uses it
+    (requires_agent records must be bound to it — see `_agent_completed_this_session`).
 
     Never raises — internal errors fail-open to (0, '')."""
     try:
         if not isinstance(tool_input, dict):
             tool_input = {}
         if tool_name in ('Write', 'Edit'):
-            file_path = tool_input.get('file_path', tool_input.get('path', '')) or ''
+            # `file_path` wins when the key is present (as before); `path` is the fallback.
+            file_path = tool_input.get('file_path', tool_input.get('path'))
+            if not isinstance(file_path, str):
+                # Absent / null / int / list / dict / bool: regex matching would raise
+                # TypeError, which the blanket handler below turns into ALLOW. A malformed
+                # Write/Edit target fails CLOSED instead (an empty STRING is still "no path").
+                kind = 'missing or null' if file_path is None else f'of type {type(file_path).__name__}'
+                if os.environ.get('CAST_POLICY_OVERRIDE', '0') == '1':
+                    _audit_policy_override(
+                        'policy-path-not-a-string', f'<{kind} file_path>',
+                        session_id if isinstance(session_id, str) and session_id
+                        else os.environ.get('CLAUDE_SESSION_ID', 'default'))
+                    return 0, ''
+                return 2, (
+                    f'**[CAST-POLICY-BLOCK]** The {tool_name} target path (`file_path`/`path`) is {kind}, '
+                    f'not a string, so it cannot be checked against the policies; failing closed.\n'
+                    f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
+                )
             if file_path:
                 _ttl_sweep_agent_status()
-                code, msg = _policy_evaluate(file_path)
+                code, msg = _policy_evaluate(file_path, session_id)
                 if code == 2:
                     return 2, msg
             return 0, ''
@@ -2314,7 +2460,8 @@ def main() -> int:
     if os.environ.get('CLAUDE_SUBPROCESS', '0') == '1':
         return 0
 
-    code, msg = evaluate(tool_name, tool_input)
+    sid = data.get('session_id')
+    code, msg = evaluate(tool_name, tool_input, sid if isinstance(sid, str) else '')
     if code == 2:
         if msg:
             print(msg, file=sys.stderr)

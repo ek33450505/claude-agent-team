@@ -9,7 +9,14 @@
       "Bash(killall *)",
       "Bash(rm -rf ~)",
       "Bash(rm -rf ~/)",
-      "Bash(rm -rf ~/.claude*)"
+      "Bash(rm -rf ~/.claude*)",
+      "Edit(~/.claude/agent-status/**)",
+      "Edit(~/.claude/config/**)",
+      "Edit(~/.claude/projects/**/subagents/**)",
+      "Edit(~/.claude/settings.json)",
+      "Edit(~/.claude/settings.local.json)",
+      "Edit(~/.claude/managed-settings.d/**)",
+      "Edit(~/.claude/scripts/**)"
     ]
   }
 }

@@ -95,14 +95,14 @@ NEVER run any of: `git stash` (any form), `git reset` (any form), `git checkout 
 
 ## Status File
 
-Before emitting your prose Status line, write a machine-readable status file at `~/.claude/agent-status/<agent-name>-<timestamp>.json` — this is the truncation-resilient source of truth, so if your prose summary gets cut off the orchestrator falls back to the file. Keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp` (format: `YYYY-MM-DDTHH:MM:SSZ`).
+Before emitting your prose Status line, write a machine-readable status file at `~/.claude/agent-status/<agent-name>-<timestamp>.json` — a truncation fallback for display: if your prose summary gets cut off, the orchestrator can read the file. It never clears a policy gate (see below). Keys: `agent`, `status`, `summary`, `concerns` (if DONE_WITH_CONCERNS), `timestamp` (format: `YYYY-MM-DDTHH:MM:SSZ`).
 
 ```bash
 source ~/.claude/scripts/status-writer.sh 2>/dev/null || true
 cast_write_status "<STATUS>" "<one-line summary>" "<your-agent-name>" "<concerns or empty>" 2>/dev/null || true
 ```
 
-If the `cast_write_status` helper is unavailable, write the JSON directly. STATUS must be one of: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`.
+If the `cast_write_status` helper is unavailable, skip the file — never write it with Write/Edit (denied by settings). This file is a display/truncation fallback only: the requires_agent policy gate trusts only the record the SubagentStop hook writes from your final `Status:` line. STATUS must be one of: `DONE` | `DONE_WITH_CONCERNS` | `BLOCKED` | `NEEDS_CONTEXT`.
 
 ## Structured Output
 

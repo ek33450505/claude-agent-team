@@ -242,6 +242,32 @@ print('ok')
   assert_success
 }
 
+@test "11-deny.json denies Edit on agent-status, config, sidecars, settings and scripts" {
+  DENY_FRAG="$REPO_DIR/managed-settings.d/11-deny.json"
+  [ -f "$DENY_FRAG" ]
+  run env DENY_FRAG="$DENY_FRAG" python3 -I -c '
+import json, os, sys
+with open(os.environ["DENY_FRAG"]) as f:
+    deny = json.load(f)["permissions"]["deny"]
+required = [
+    "Edit(~/.claude/agent-status/**)",
+    "Edit(~/.claude/config/**)",
+    "Edit(~/.claude/projects/**/subagents/**)",
+    "Edit(~/.claude/settings.json)",
+    "Edit(~/.claude/settings.local.json)",
+    "Edit(~/.claude/managed-settings.d/**)",
+    "Edit(~/.claude/scripts/**)",
+]
+missing = [r for r in required if r not in deny]
+if missing:
+    print("missing deny entries: " + repr(missing))
+    sys.exit(1)
+print("ok")
+'
+  assert_success
+  assert_output "ok"
+}
+
 @test "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH fragment: 00-env.json sets it to \"1\"" {
   ENV_FRAG="$REPO_DIR/managed-settings.d/00-env.json"
   [ -f "$ENV_FRAG" ]

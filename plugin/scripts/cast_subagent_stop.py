@@ -20,6 +20,7 @@ import os
 import re
 import shlex
 import sqlite3
+import stat
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -71,14 +72,113 @@ _STATUS_RE = re.compile(r"[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*(" + _STATUS_VALUES 
 _STATUS_RE_TRAILING = re.compile(_STATUS_RE.pattern + r"[*_]{0,2}")
 _JSON_STATUS_RE = re.compile(r'"status"\s*:\s*"(' + _STATUS_VALUES + r')"')
 _VERDICT_RE = re.compile(r"\b(" + _STATUS_VALUES + r")\b")
-# Last-match-wins gate: prose "Status: X" OR JSON "status": "X" over the four verdicts.
-_GATE_RE = re.compile(
-    r'(?:[*_]{0,2}\s*Status:\s*[*_]{0,2}\s*|"status"\s*:\s*")(' + _GATE_VALUES + r')"?'
+# _STATUS_RE / _STATUS_RE_TRAILING are unanchored searches that
+# lead with (or contain) `\s*`, so they are QUADRATIC on a long whitespace run (130k
+# whitespace chars + "x" outlived the hook's 15 s timeout: process killed, no gate
+# record). They only ever test for / read the verdict word, and `\s*`/`\s+` accept any
+# run length, so their INPUT is squeezed first. ANY whitespace mix is collapsed (not just
+# horizontal): an alternating " \n" run defeats a horizontal-only squeeze (measured 2.3 s
+# at 40k chars). Threshold 16 bounds the per-start scan to 15 chars. Use ONLY for the
+# classifier searches — never for len()/tail/count logic, and never for the gate
+# (compute_gate_match is separate and already linear).
+_WS_RUN_RE = re.compile(r"\s{16,}")
+
+
+def _squeeze_ws(s: str) -> str:
+    """Collapse every run of 16+ whitespace chars to two spaces (linear)."""
+    return _WS_RUN_RE.sub("  ", s)
+
+
+# Gate verdict patterns (Step 2.8 — the verdict written into the requires_agent gate
+# record). History: this used to be ONE unanchored regex with last-match-wins, so a
+# genuine security agent whose output was "Status: BLOCKED ..." followed by a QUOTED
+# snippet `{"status": "DONE"}` from the diff it reviewed (or a quoted template line
+# "Status: DONE | DONE_WITH_CONCERNS | BLOCKED") recorded status=DONE under its real
+# identity and unblocked the gate (security M2 PoC). The rule is ASYMMETRIC:
+#   * PASSING verdicts (DONE, DONE_WITH_CONCERNS) — strict, and only from
+#       - _GATE_PROSE_RE: a LINE-anchored "Status: X" OUTSIDE fenced code blocks
+#         (optional ">" prefix, then an optional markdown heading "#{1,6} " or bullet
+#         "- "/"* ", then optional emphasis; a line starting "+", a backtick, or "-"
+#         with no following space (the diff-removed shape) never matches; a value
+#         followed by "|" is a template line and never matches), or
+#       - _GATE_JSON_RE: "status": "X" inside a CLOSED ```json status``` fence (the
+#         CAST structured-output convention).
+#   * BLOCKING verdicts (BLOCKED, NEEDS_CONTEXT) — deliberately broad and read from
+#     ANY line regardless of fence state (_GATE_BLOCK_PROSE_RE / _GATE_BLOCK_JSON_RE).
+#     Fence PARITY is attacker-influenced: a quoted bare ``` inside a reviewer's own
+#     fence flips every later fence boundary, which un-fences a hostile `Status: DONE`
+#     and swallows the reviewer's real `Status: BLOCKED` (security F1). Fence state may
+#     therefore only ever HIDE a passing verdict, never a blocking one. Cost accepted:
+#     quoted BLOCKED/NEEDS_CONTEXT text fails closed.
+# Verdicts are combined by precedence (see _GATE_RANK), never last-match-wins.
+# Every line regex below is LINEAR on whitespace runs (no two adjacent unbounded
+# quantifiers over overlapping classes — the old ones were quadratic, 40k spaces + "x"
+# took seconds); prefixes that need stripping are stripped with str methods first.
+_GATE_LINE_SPLIT_RE = re.compile(r"\r\n|\r|\n")  # NOT str.splitlines: U+2028 etc must not split
+_GATE_LONG_LINE = 4096  # longer lines are never passing verdicts or fences (see _gate_verdicts)
+_GATE_JSON_INFO_RE = re.compile(r"json[ \t]+status", re.IGNORECASE | re.ASCII)
+_GATE_PROSE_RE = re.compile(
+    r"[*_]{0,2}[ \t]*Status:[ \t]*(?:[*_]{1,2}[ \t]*)?(" + _GATE_VALUES + r")\b"
+    r"(?![*_]{0,2}[ \t]*\|)"
 )
+_GATE_JSON_RE = re.compile(r'"status"\s*:\s*"(' + _GATE_VALUES + r')"')
+# Blocking prose is deliberately UNANCHORED: "status" (any case), then 1-40
+# non-alphanumeric chars on the SAME line (":", "**: ", " | ", " = ", " -> ", an em
+# dash, quotes...), then BLOCKED/NEEDS_CONTEXT (any case). Anchoring it let a genuine
+# but off-contract verdict ("Final Status: BLOCKED", "| Status | BLOCKED |",
+# "Status = BLOCKED", `{"Status": "BLOCKED"}`) go unseen while a quoted anchored
+# `Status: DONE` minted DONE over it (security, regression vs the pre-M2 rule). The
+# alnum-only gap cannot reach BLOCKED across the stock template "Status: DONE |
+# DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT" (DONE is alphanumeric). Linear: the
+# gap is bounded and a fixed literal leads. Residuals (accepted, not caught): "Status
+# is BLOCKED" / "Status (final): BLOCKED" (a word between), a gap longer than 40, a
+# value on the next line, and keys other than "status" ("Verdict: BLOCKED").
+# Both patterns are ASCII-ONLY case-insensitive (re.ASCII): Unicode case folding makes
+# U+212A KELVIN SIGN match "k" (so "BLOC<KELVIN>ED" matched, upper() left it as-is and
+# `min()` over _GATE_RANK raised KeyError, killing every stage). The value also accepts
+# "NEEDS CONTEXT" / "needs-context"; _gate_verdicts normalises it to NEEDS_CONTEXT.
+_GATE_BLOCK_PROSE_RE = re.compile(
+    r"status[^A-Za-z0-9\r\n]{1,40}(BLOCKED|NEEDS[ _-]?CONTEXT)\b", re.IGNORECASE | re.ASCII
+)
+_GATE_BLOCK_JSON_RE = re.compile(
+    r"""\\?["']status\\?["']\s*:\s*\\?["'](BLOCKED|NEEDS[ _-]?CONTEXT)\b""",
+    re.IGNORECASE | re.ASCII,
+)
+# Most conservative first: injected text can ADD a verdict but never override a
+# BLOCKED / NEEDS_CONTEXT, and DONE vs DONE_WITH_CONCERNS conflicts record DWC.
+_GATE_RANK = {"BLOCKED": 0, "NEEDS_CONTEXT": 1, "DONE_WITH_CONCERNS": 2, "DONE": 3}
 # Fenced ```json status``` form — the main hook's Step 2.1 truncation guard (hook L706).
-_FENCED_JSON_STATUS_RE = re.compile(
-    r'```json\s+status[\s\S]*?"status"\s*:\s*"(' + _STATUS_VALUES + r')"', re.IGNORECASE
-)
+# This used to be ONE regex, r'```json\s+status[\s\S]*?"status"\s*:\s*"(VALUE)"': every
+# opener's lazy `[\s\S]*?` rescanned to the end of the text when no "status" key followed,
+# so repeated "```json status" tags were QUADRATIC (30k chars 0.3 s, 120k 5.8 s, ~600k
+# outlived the hook's 15 s timeout: process killed, NO gate record). It is now the linear
+# helper _fenced_json_status below.
+_FENCED_JSON_OPENER_RE = re.compile(r"```json\s+status", re.IGNORECASE)
+_FENCED_JSON_INNER_RE = re.compile(r'"status"\s*:\s*"(' + _STATUS_VALUES + r')"', re.IGNORECASE)
+_FENCED_JSON_MAX_SLICE = 65536  # bound on the text searched after any one opener
+
+
+def _fenced_json_status(text: str) -> Optional[str]:
+    """First ``"status": "<VALUE>"`` value inside a ```json status``` fence, or None.
+
+    Linear: for each opener the key is searched only in the slice up to the NEXT ```
+    (or end of text if unclosed; capped at _FENCED_JSON_MAX_SLICE), and those slices
+    never overlap, so total work is bounded by len(text). SEMANTICS NARROWED on purpose:
+    the old lazy scan could also match a "status" key AFTER the fence had closed (any
+    later `"status": "DONE"` anywhere in the text); this only looks INSIDE the fence,
+    which is what the guard always meant. Case-insensitive like the old regex. Callers
+    only test truthiness, and every value is a non-empty string.
+    """
+    for m in _FENCED_JSON_OPENER_RE.finditer(text):
+        start = m.end()
+        close = text.find("```", start)
+        stop = len(text) if close == -1 else close
+        found = _FENCED_JSON_INNER_RE.search(text[start:min(stop, start + _FENCED_JSON_MAX_SLICE)])
+        if found:
+            return found.group(1)
+    return None
+
+
 # Line-anchored prose-dispatch patterns (protocol-check L106-109) — case-insensitive,
 # start-of-line only so incidental mentions ("...will dispatch..." mid-line) do not match.
 _PROSE_DISPATCH_RE = re.compile(
@@ -116,9 +216,10 @@ def compute_trunc_class(output: str) -> int:
 
     0 = well-formed (Status block present); 1 = missing_formality; 2 = actual truncation.
     """
-    if _STATUS_RE.search(output) or _JSON_STATUS_RE.search(output):
+    squeezed = _squeeze_ws(output)  # regex input only: len/tail/fence-count use `output`
+    if _STATUS_RE.search(squeezed) or _JSON_STATUS_RE.search(squeezed):
         return 0
-    if _VERDICT_RE.search(output):
+    if _VERDICT_RE.search(squeezed):
         return 0
     length = len(output)
     if length < 200:
@@ -133,15 +234,131 @@ def compute_trunc_class(output: str) -> int:
     return 1
 
 
-def compute_gate_match(output_full: str, is_exempt: bool) -> str:
-    """Step 2.8 gate verdict — last full-pattern match, prose or JSON form.
+def _parse_fence(line: str) -> Optional[tuple]:
+    """``(fence char, fence length, info string)`` if ``line`` opens/closes a fence."""
+    s = line.lstrip(" \t>")
+    if s[:3] not in ("```", "~~~"):
+        return None
+    length = len(s) - len(s.lstrip(s[0]))
+    info = s[length:].strip()
+    # A backtick fence's info string cannot contain a backtick (that is inline code).
+    if s[0] == "`" and "`" in info:
+        return None
+    return s[0], length, info
 
-    Last-match-wins (hook lines 1029-1031 `tail -1`). Empty when exempt or no match.
+
+def _passing_prose_verdict(line: str) -> str:
+    """Strict line-anchored ``Status: X`` verdict on one (short) line, or ""."""
+    s = line.lstrip(" \t>")
+    if s.startswith("#"):
+        rest = s.lstrip("#")
+        if len(s) - len(rest) <= 6 and rest[:1] in (" ", "\t"):
+            s = rest.lstrip(" \t")
+    elif s[:1] in ("-", "*") and s[1:2] in (" ", "\t"):
+        s = s[1:].lstrip(" \t")
+    m = _GATE_PROSE_RE.match(s)
+    return m.group(1) if m else ""
+
+
+def _gate_verdicts(text: str) -> List[str]:
+    """Collect every gate verdict in ``text`` under the asymmetric M2 rule (pure)."""
+    # Blocking verdicts: anywhere in the text, any fence state, any line length
+    # (linear scans; neither pattern crosses a line for prose). Normalised to the two
+    # canonical values ("needs-context" -> NEEDS_CONTEXT).
+    verdicts: List[str] = [
+        "BLOCKED" if v[:1] in ("B", "b") else "NEEDS_CONTEXT"
+        for v in _GATE_BLOCK_JSON_RE.findall(text) + _GATE_BLOCK_PROSE_RE.findall(text)
+    ]
+    # Open fence state: (fence char, fence length, is `json status`, body lines).
+    fence: Optional[tuple] = None
+    for line in _GATE_LINE_SPLIT_RE.split(text):
+        if len(line) > _GATE_LONG_LINE:
+            continue  # never a passing verdict or a fence boundary
+        fp = _parse_fence(line)
+        if fence is not None:
+            ch, length, is_json, body = fence
+            if fp and fp[2] == "" and fp[0] == ch and fp[1] >= length:
+                if is_json:
+                    verdicts.extend(_GATE_JSON_RE.findall("\n".join(body)))
+                fence = None
+            else:
+                body.append(line)
+            continue
+        if fp:
+            fence = (fp[0], fp[1], bool(_GATE_JSON_INFO_RE.fullmatch(fp[2])), [])
+            continue
+        v = _passing_prose_verdict(line)
+        if v:
+            verdicts.append(v)
+    # An UNCLOSED fence contributes no passing verdict (blocking verdicts inside it,
+    # like inside every closed fence, were already counted by the whole-text scans).
+    # Belt and braces: only canonical values may reach min() over _GATE_RANK.
+    return [v for v in verdicts if v in _GATE_RANK]
+
+
+def compute_gate_match(output_full: str, is_exempt: bool) -> str:
+    """Step 2.8 gate verdict — asymmetric, most-conservative-wins (pure).
+
+    Replaces the old unanchored last-match-wins scan (security M2). Lines split on
+    ``\\r\\n|\\r|\\n`` (CR-only endings must not hide a later BLOCKED; U+2028 and
+    friends do not split). Rules:
+
+    PASSING verdicts (DONE, DONE_WITH_CONCERNS) are strict and fence-aware:
+      * Prose: a line-anchored ``Status: <VALUE>`` outside fenced code blocks,
+        optionally behind ``>`` quoting, a markdown heading (``## ``) or a bullet
+        (``- ``/``* `` — dash/star then whitespace) and emphasis. Template lines
+        (value followed by ``|``), mid-line mentions, and lines starting ``+``, a
+        backtick, or ``-`` with no following space (a diff-removed line) never count.
+      * JSON: ``"status": "<VALUE>"`` only inside a closed ```json status``` fence.
+      * Lines longer than 4096 chars are never passing verdicts or fence boundaries
+        (all line regexes are linear anyway; this bounds the work per line).
+
+    BLOCKING verdicts (BLOCKED, NEEDS_CONTEXT) are broad, UNANCHORED and
+    fence-INDEPENDENT (any case, any line length, inside any fence):
+      * Prose: ``status`` followed on the SAME line by 1-40 non-alphanumeric chars
+        and then the value — ``Status: BLOCKED``, ``Final Status: BLOCKED``,
+        ``**Overall Status: BLOCKED**``, ``| Status | BLOCKED |``, ``Status = BLOCKED``,
+        ``Status -> BLOCKED``, ``Status — Blocked``, ``Status: `BLOCKED` ``. Because
+        DONE is alphanumeric the gap can never reach BLOCKED across the stock template
+        ``Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT``. A mid-sentence
+        ``the Status: BLOCKED state`` therefore also counts (fail-closed).
+      * JSON: ``"status": "BLOCKED|NEEDS_CONTEXT"`` anywhere (key and value
+        case-insensitive, optionally backslash-escaped, any whitespace).
+      * Not caught (accepted): ``Status is BLOCKED`` (a word in the gap) and a value
+        on the line after ``Status:``.
+
+    Why asymmetric: fence parity is attacker-influenced. A reviewer quoting hostile
+    text in a bare ``` fence has its fence closed by the hostile ``` , which un-fences
+    a hostile ``Status: DONE`` while the reviewer's own closing fence now opens a
+    fence that swallows its real ``Status: BLOCKED`` (security F1). Fence state may
+    therefore only ever hide a passing verdict — it must never hide a blocking one.
+    Likewise a genuine blocking verdict may be written off-contract (``Final Status:
+    BLOCKED``) while a quoted anchored ``Status: DONE`` is not, so anchoring the
+    blocking side would let the quote win. Over-matching the blocking side only
+    fails closed. Cost accepted: quoted BLOCKED/NEEDS_CONTEXT text fails closed.
+
+    All verdicts found are combined by precedence
+    BLOCKED > NEEDS_CONTEXT > DONE_WITH_CONCERNS > DONE, so injected text can ADD a
+    verdict but never override a blocking one. Empty when exempt or no verdict.
+
+    Blocking-side residuals (accepted, not caught): a word between ``Status`` and the
+    value (``Status is BLOCKED``, ``Status (final): BLOCKED``), a gap longer than 40
+    characters, a value on the line after ``Status:``, and keys other than ``status``
+    (``Verdict: BLOCKED``). Blocking patterns are ASCII-only case-insensitive (Unicode
+    folding let U+212A KELVIN SIGN spell ``BLOCKED`` and crash ``min()``); ``NEEDS
+    CONTEXT`` / ``needs-context`` normalise to NEEDS_CONTEXT.
+
+    Residual (accepted): a truncated agent whose only anchored ``Status:`` line came
+    from quoted content can still mint a passing verdict. Fenced and diff-prefixed
+    (``+``/``-``) quotes are excluded; a bare quoted ``Status: DONE`` line, a diff
+    context line (single leading space), a diff-removed line whose source began with
+    whitespace (``-  Status: ...`` reads as a bullet), and a quoted full
+    ``json status`` fence are not.
     """
     if is_exempt:
         return ""
-    matches = _GATE_RE.findall(output_full or "")
-    return matches[-1] if matches else ""
+    verdicts = _gate_verdicts(output_full or "")
+    return min(verdicts, key=_GATE_RANK.__getitem__) if verdicts else ""
 
 
 def compute_event_type(has_turn_ceiling: bool, stop_reason: str) -> str:
@@ -165,6 +382,229 @@ def compute_successors(agent_name: str, event_type: str) -> List[str]:
         return [s for s in successors if s]
     except Exception:
         return []
+
+
+# ── Trusted roster type (requires_agent unblock gate — writer side) ──────────
+# The gate record's agent identity must NOT come from the hook payload
+# ``agent_type``: Claude Code overwrites it with the dispatch NAME, so any agent
+# (even a read-only Explore) dispatched with ``name: "security"`` would write a
+# ``security`` DONE record and clear every security-gated policy. The only
+# source that survives that is Claude Code's own sidecar next to the transcript.
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
+_AGENT_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_ROSTER_TYPE_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_META_MAX_BYTES = 65536
+
+
+def _roster_type_from_meta(meta) -> str:
+    """Roster agent type from a subagent ``.meta.json`` dict, or "" if untrusted.
+
+    LIVE-PROBED 2026-10-05 against Claude Code's
+    ``~/.claude/projects/<slug>/<session_id>/subagents/agent-<agent_id>.meta.json``.
+    Four shapes (exact live keys), and what each must yield:
+
+    1. Unnamed subagent, custom type:
+       ``{"agentType": "api-contract", "spawnDepth": 1, ...}`` -> ``api-contract``.
+    2. Named teammate, custom type:
+       ``{"agentType": "api-contract__rosterprobe", "name": "api-contract__rosterprobe",
+       "taskKind": "in_process_teammate", "teamName": "...", "customAgentType":
+       "api-contract", ...}`` -> ``customAgentType`` (``api-contract``).
+    3. Named teammate, BUILT-IN type Explore (THE SPOOF): ``{"agentType":
+       "security", "name": "security", "taskKind": "in_process_teammate",
+       "teamName": "...", ...}`` — ``agentType`` is the dispatch NAME and nothing
+       names Explore -> "" (untrusted). A read-only Explore agent dispatched as
+       ``name: "security"`` must NOT mint a ``security`` gate record.
+    4. Named regular subagent: ``{"agentType": "security", "name":
+       "security__cros-287"}`` (no customAgentType) -> ``agentType`` (the name
+       differs from the type, so the name did not overwrite it).
+
+    Why this matters (gate trust): the reader unblocks ``requires_agent`` policies
+    from this value, so when the evidence is ambiguous the answer is "" (fail
+    closed), never a best guess. Pure — no I/O.
+    """
+    if not isinstance(meta, dict):
+        return ""
+    custom = meta.get("customAgentType")
+    if isinstance(custom, str) and custom:
+        return custom
+    if meta.get("taskKind") == "in_process_teammate" or meta.get("teamName"):
+        return ""  # teammate agentType is the dispatch NAME (shape 3)
+    at, name = meta.get("agentType"), meta.get("name")
+    if not isinstance(at, str) or not at:
+        return ""
+    if isinstance(name, str) and name == at:
+        return ""  # name may have overwritten the type: ambiguous -> untrusted
+    return at
+
+
+def _find_subagent_artifact(ctx, suffix: str) -> str:
+    """Path of ``agent-<agent_id><suffix>`` next to this subagent's transcript, or "".
+
+    Shared by the sidecar read (``.meta.json``) and the transcript read (``.jsonl``)
+    so both trust the identical lookup: exactly the two layouts Claude Code writes
+    under ``~/.claude/projects/*/<session_id>/subagents/`` (flat, and
+    ``workflows/*/``), two non-recursive globs, ids validated as plain tokens
+    first (they are interpolated into a glob), and EXACTLY ONE candidate or "" —
+    never a newest-mtime pick, which a planted copy elsewhere could win. The
+    payload's own ``agent_transcript_path`` is deliberately not consulted.
+    """
+    sid, aid = ctx.session_id, ctx.agent_id
+    if not isinstance(sid, str) or not isinstance(aid, str):
+        return ""
+    if not _SESSION_ID_RE.fullmatch(sid) or not _AGENT_ID_RE.fullmatch(aid):
+        return ""
+    base = os.path.expanduser(f"~/.claude/projects/*/{sid}/subagents")
+    candidates = set(glob.glob(f"{base}/agent-{aid}{suffix}"))
+    candidates.update(glob.glob(f"{base}/workflows/*/agent-{aid}{suffix}"))
+    return next(iter(candidates)) if len(candidates) == 1 else ""
+
+
+def _resolve_roster_type(ctx) -> str:
+    """Trusted roster type for this SubagentStop, read from Claude Code's sidecar.
+
+    Looks for the sidecar at exactly the two layouts Claude Code writes (measured
+    over 6134 live sidecars on 2026-10-05: 4522 + 1612, and zero (session, agent)
+    pairs with more than one candidate)::
+
+        ~/.claude/projects/<slug>/<session_id>/subagents/agent-<agent_id>.meta.json
+        ~/.claude/projects/<slug>/<session_id>/subagents/workflows/<wfid>/agent-<agent_id>.meta.json
+
+    (payload ``session_id`` is the MAIN session id and ``agent_id`` is the filename
+    stem — both confirmed by the 2026-10-05 live probe; see
+    :func:`_roster_type_from_meta` for the four sidecar shapes). Two non-recursive
+    patterns, NOT a recursive ``**`` glob: an agent can plant a sidecar in another
+    project slug or at an arbitrary nesting depth, and a newest-mtime pick would
+    let that plant win. The gate therefore requires EXACTLY ONE candidate path;
+    zero or several (ambiguous) -> "" (untrusted).
+
+    Returns "" on ANY doubt: ids that are not plain tokens (they are interpolated
+    into a glob, so ``*``/``/``/``..`` are refused outright), no or several
+    sidecars, a symlink or non-regular file, an oversized file, bad JSON, an
+    untrusted shape, or a roster type outside ``[A-Za-z0-9_-]{1,64}`` (no fuzzy
+    sanitizing — a mismatch is untrusted, not repaired). Never raises.
+    """
+    try:
+        path = _find_subagent_artifact(ctx, ".meta.json")
+        if not path:
+            return ""
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return ""
+            data = os.read(fd, _META_MAX_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(data) > _META_MAX_BYTES:
+            return ""
+        roster = _roster_type_from_meta(json.loads(data.decode("utf-8")))
+        return roster if _ROSTER_TYPE_RE.fullmatch(roster) else ""
+    except Exception:
+        return ""
+
+
+# ── SubagentHandback self-report (gate verdict source when the payload is empty) ──
+_TRANSCRIPT_TAIL_BYTES = 1048576  # 1 MiB: the handback is the LAST assistant entry
+_HANDBACK_TOOL = "SubagentHandback"
+
+
+def _handback_message(ctx) -> str:
+    """The ``message`` of the subagent's final ``SubagentHandback`` call, or "".
+
+    Why this exists (LIVE capture, SubagentStop payload 2026-10-05): an async
+    subagent whose final action is its ``SubagentHandback`` tool call produces a
+    payload with NO ``last_assistant_message`` and NO ``agent_response`` (keys are
+    only agent_id, agent_transcript_path, agent_type, background_tasks, cwd,
+    hook_event_name, permission_mode, prompt_id, scratchpad_dir, session_crons,
+    session_id, stop_hook_active, transcript_path). ``output_full`` is therefore
+    "" and no gate record was ever written — none of that day's completed
+    security reviews minted one. The report only exists in the transcript, whose
+    last entries look like::
+
+        {"type":"assistant","message":{"content":[{"type":"tool_use",
+          "name":"SubagentHandback","input":{"message":"...\\nStatus: DONE"}}]}}
+        {"type":"user", ... tool_result ...}
+        {"type":"attachment", ...}
+
+    Why a handback ``message`` is a self-report but other recovered tool_use
+    blocks are not: ``SubagentHandback`` IS the agent's report channel — its
+    ``message`` is the same prose the agent would otherwise have returned as its
+    final text, so it gets exactly that trust (and still passes through the
+    anchored :func:`compute_gate_match` rule). A Bash/Edit/StructuredOutput
+    tool_use is the agent's ACTION, not its report: its input can contain any
+    quoted text (``git commit -m "Status: DONE"``), so ``parse_input`` still
+    never promotes those to a verdict.
+
+    The transcript is located with the SAME two layouts and exactly-one-candidate
+    rule as :func:`_resolve_roster_type` (shared via :func:`_find_subagent_artifact`);
+    the payload's ``agent_transcript_path`` is NOT trusted. Opened
+    ``O_RDONLY|O_NOFOLLOW|O_NONBLOCK`` and ``fstat`` must say regular file; only the
+    last 1 MiB is read (a partial first line is dropped after a seek). Walks back to
+    the LAST ``type == "assistant"`` entry and returns the ``input.message`` of EVERY
+    ``SubagentHandback`` tool_use in it (str messages only, joined with "\\n" so the
+    gate's precedence sees all of them — a BLOCKED cannot hide behind a DONE). If
+    that entry has no handback call (the agent kept acting, or ended on a Bash call)
+    the answer is "".
+    Returns "" on ANY doubt (bad ids, zero/several transcripts, symlink or
+    non-regular file, an unparsable line, non-str message). Never raises.
+    """
+    path = ""
+    try:
+        path = _find_subagent_artifact(ctx, ".jsonl")
+        if not path:
+            return ""
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                _log_fail("handback", -1, "not-a-regular-file", ctx.session_id)
+                return ""
+            start = max(0, st.st_size - _TRANSCRIPT_TAIL_BYTES)
+            if start:
+                os.lseek(fd, start, os.SEEK_SET)
+            chunks: List[bytes] = []
+            remaining = _TRANSCRIPT_TAIL_BYTES
+            while remaining > 0:
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        finally:
+            os.close(fd)
+        lines = b"".join(chunks).split(b"\n")
+        if start:
+            lines = lines[1:]  # the seek landed mid-line (or on a line start): drop it
+        for raw in reversed(lines):
+            raw = raw.strip()
+            if not raw:
+                continue
+            entry = json.loads(raw.decode("utf-8"))  # unparsable -> doubt -> except -> ""
+            if not isinstance(entry, dict) or entry.get("type") != "assistant":
+                continue
+            message = entry.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                return ""
+            handback = [
+                b for b in content
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == _HANDBACK_TOOL
+            ]
+            if not handback:
+                return ""
+            # Several handback blocks in one entry: return ALL their messages so the
+            # gate's precedence sees every verdict (a BLOCKED can't hide behind a DONE).
+            texts = [
+                b["input"]["message"] for b in handback
+                if isinstance(b.get("input"), dict) and isinstance(b["input"].get("message"), str)
+            ]
+            return "\n".join(texts)
+        return ""
+    except Exception as exc:
+        # Behaviour stays "" (fail closed: no verdict), but when a transcript candidate
+        # EXISTED the suppression must be observable, not silent.
+        if path:
+            _log_fail("handback", -1, type(exc).__name__, ctx.session_id)
+        return ""
 
 
 # ── File-class classifier (F2) ───────────────────────────────────────────────
@@ -270,6 +710,8 @@ class Ctx:
         # sanitized derivations
         self.safe_agent: str = ""
         self.safe_session_id: str = ""
+        # Trusted roster type from Claude Code's subagent sidecar ("" = untrusted/unknown).
+        self.roster_type: str = ""
         # db
         self.db_path: str = ""
         self.db_present: bool = False
@@ -380,6 +822,12 @@ def parse_input() -> Optional[Ctx]:
         except Exception:
             pass
     flat_output = data.get("last_assistant_message") or data.get("output") or ""
+    # A non-str payload value (list/dict/number) must not reach the str-only classifier
+    # regexes below (TypeError would abort the whole hook): coerce, never crash.
+    if not isinstance(flat_output, str):
+        flat_output = str(flat_output)
+    if not isinstance(response_text, str):
+        response_text = str(response_text)
 
     # Capture raw identity before coalescing — used for the precondition guard
     # (mirrors hook line-307 guard: both agent_id AND agent_name absent → main-session Stop).
@@ -444,7 +892,7 @@ def parse_input() -> Optional[Ctx]:
 
     try:
         ctx.duration_ms = int(data.get("duration_ms") or data.get("total_duration_ms") or 0)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):  # OverflowError: JSON `Infinity`
         ctx.duration_ms = 0
 
     tu = data.get("tool_uses")
@@ -453,18 +901,18 @@ def parse_input() -> Optional[Ctx]:
     else:
         try:
             ctx.tool_uses = int(data.get("tool_use_count") or 0)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             ctx.tool_uses = 0
 
     _cr = data.get("cache_read_input_tokens")
     _cc = data.get("cache_creation_input_tokens")
     try:
         ctx.cache_read = int(_cr) if _cr not in (None, "") else None
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         ctx.cache_read = None
     try:
         ctx.cache_create = int(_cc) if _cc not in (None, "") else None
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         ctx.cache_create = None
 
     # Timestamps — match the bash `date -u` formats (no microseconds) exactly.
@@ -492,7 +940,24 @@ def parse_input() -> Optional[Ctx]:
     ctx.is_exempt = is_exempt_agent(agent_name)
     ctx.trunc_class = compute_trunc_class(ctx.output_full)
     ctx.has_verdict_keyword = bool(_VERDICT_RE.search(ctx.output_full))
-    ctx.gate_match = compute_gate_match(ctx.output_full, ctx.is_exempt)
+    try:
+        if (ctx.output_full or "").strip() or ctx.is_exempt:
+            ctx.gate_match = compute_gate_match(ctx.output_full, ctx.is_exempt)
+        else:
+            # Empty payload: an async subagent that ended on its SubagentHandback call
+            # leaves its report only in the transcript (see _handback_message). Only
+            # that tool's `message` is read; output_full and every other stage are
+            # unchanged.
+            ctx.gate_match = compute_gate_match(_handback_message(ctx), ctx.is_exempt)
+    except Exception as exc:
+        # FAIL CLOSED: an uncaught error here aborts parse_input, the bash wrapper's
+        # `|| true` swallows it, NO stage runs and NO record is written — so an earlier
+        # DONE record would stay the newest despite a genuine BLOCKED. Record BLOCKED
+        # instead (it supersedes). Exempt agents never write a gate record.
+        _log_fail("gate_match", -1, f"{type(exc).__name__}: {exc}", ctx.session_id)
+        ctx.gate_match = "" if ctx.is_exempt else "BLOCKED"
+    # Only resolve when a gate record will actually be written (Step 2.8).
+    ctx.roster_type = _resolve_roster_type(ctx) if ctx.gate_match else ""
     ctx.successors = compute_successors(agent_name, ctx.event_type)
 
     return ctx
@@ -1320,7 +1785,8 @@ def stage4_truncation_record(ctx: Ctx) -> None:
     response_text = ctx.response_text or ""
     if len(response_text.strip()) < 50:
         return
-    if _STATUS_RE.search(response_text) or _FENCED_JSON_STATUS_RE.search(response_text):
+    _sq = _squeeze_ws(response_text)
+    if _STATUS_RE.search(_sq) or _fenced_json_status(_sq):
         return
 
     agent = ctx.agent_name
@@ -1366,7 +1832,8 @@ def stage5_completeness(ctx: Ctx) -> None:
     output = ctx.data.get("last_assistant_message") or ctx.data.get("output") or ""
     if not output:
         return
-    if _STATUS_RE.search(output) or _JSON_STATUS_RE.search(output):
+    _sq = _squeeze_ws(output)
+    if _STATUS_RE.search(_sq) or _JSON_STATUS_RE.search(_sq):
         return
 
     agent = ctx.agent_name or "unknown"
@@ -1588,7 +2055,7 @@ def stage8_quality_gate(ctx: Ctx) -> None:
     if not ctx.db_present:
         return
     out = ctx.output_full or ""
-    m = _STATUS_RE.search(out)
+    m = _STATUS_RE.search(_squeeze_ws(out))
     if not m:
         return
     status = m.group(1)
@@ -2143,7 +2610,8 @@ def stage15_incident_record(ctx: Ctx) -> None:
     if not inserted:
         is_blocked = bool(re.search(r"Status:\s*BLOCKED", stripped_text))
         # Broad ^BLOCKER line anchor is intentional (the F3 review-verdict convention).
-        blocker_match = re.search(r"^\s*BLOCKER\b(.*)", stripped_text, re.MULTILINE)
+        # [^\S\n]* (horizontal ws), not \s*: same matches, but linear on newline runs.
+        blocker_match = re.search(r"^[^\S\n]*BLOCKER\b(.*)", stripped_text, re.MULTILINE)
         if is_blocked or blocker_match:
             if blocker_match:
                 blocker_content = blocker_match.group(1).strip()
@@ -2223,7 +2691,11 @@ def stage16_compressed_output(ctx: Ctx) -> None:
     # */`/: cruft in the capture); this pattern matches 1370 (8 with cruft) — the 44
     # dropped matches are exactly the mid-sentence false positives, intentionally
     # excluded (pre-existing extraction behavior change, not a regression).
-    m = re.search(r"^[*_#\s]*Summary:[*_]*\s*(.+?)\s*$", text, re.MULTILINE)
+    # The prefix is (?:[*_#]|[^\S\n])* — horizontal whitespace only, not [*_#\s]*: at a
+    # line start the prefix can never usefully cross a newline (a later line start would
+    # do), so the match set and group(1) are identical, but `\s*` crossing newlines made
+    # a long newline run QUADRATIC (every line start rescanned the whole run).
+    m = re.search(r"^(?:[*_#]|[^\S\n])*Summary:[*_]*\s*(.+?)\s*$", text, re.MULTILINE)
     summary = m.group(1).strip() if m else ""
 
     # Concerns list (from a Concern(s): block up to the next heading / Status line)
@@ -2255,7 +2727,7 @@ def stage16_compressed_output(ctx: Ctx) -> None:
 
     # Status — longest-first alternation; leading/trailing emphasis tolerated.
     # Derived from module-level _STATUS_RE via _STATUS_RE_TRAILING (adds trailing [*_]{0,2}).
-    sm = _STATUS_RE_TRAILING.search(text)
+    sm = _STATUS_RE_TRAILING.search(_squeeze_ws(text))
     status = sm.group(1) if sm else "UNKNOWN"
 
     compressed = {"status": status, "summary": summary, "concerns": concerns}
@@ -2345,6 +2817,7 @@ def stage17_tail(ctx: Ctx) -> None:
         "CAST_SUCCESSORS=" + shlex.quote("\n".join(ctx.successors)),
         "SAFE_AGENT=" + shlex.quote(ctx.safe_agent or ""),
         "SAFE_SESSION_ID=" + shlex.quote(ctx.safe_session_id or ""),
+        "SAFE_ROSTER_TYPE=" + shlex.quote(ctx.roster_type or ""),
         "__CAST_TAIL_END__",
     ]
     sys.stdout.write("\n".join(lines) + "\n")

@@ -40,6 +40,8 @@ teardown() {
 }
 
 # Helper: write a status file with a fresh mtime (age 0 = "completed this session").
+# The gate trusts only CONTENT: session_id == the payload's session (gh-sess) and
+# agent_type == the required agent. The filename is display-only.
 create_status_file() {
   local name="$1"
   local content="$2"
@@ -53,6 +55,7 @@ make_write_payload() {
 import json, os
 print(json.dumps({
   'tool_name': 'Write',
+  'session_id': 'gh-sess',
   'tool_input': {'file_path': os.environ['GH_PATH'], 'content': 'echo hi'}
 }))
 "
@@ -64,6 +67,7 @@ make_edit_payload() {
 import json, os
 print(json.dumps({
   'tool_name': 'Edit',
+  'session_id': 'gh-sess',
   'tool_input': {'file_path': os.environ['GH_PATH'], 'old_string': 'a', 'new_string': 'b'}
 }))
 "
@@ -93,20 +97,34 @@ print(json.dumps({
   assert_output --partial "githooks-require-security"
 }
 
-@test "Write to .githooks/ with a plain security-<ts>.json DONE record -> allows (exit 0)" {
+@test "Write to .githooks/ with a bound security DONE record (this session) -> allows (exit 0)" {
+  create_status_file "security-1000.json" '{"status":"DONE","session_id":"gh-sess","agent_type":"security"}'
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
+  assert_success
+}
+
+@test "Write to .githooks/ with a bound security DONE record under a dunder name -> allows (exit 0): the filename is irrelevant" {
+  create_status_file "security__githooks-1000.json" '{"status":"DONE","session_id":"gh-sess","agent_type":"security"}'
+  run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
+  assert_success
+}
+
+@test "Write to .githooks/ with a legacy unbound security-<ts>.json {status: DONE} record -> still blocks (exit 2): the filename is not trusted" {
   create_status_file "security-1000.json" '{"status":"DONE"}'
   run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
-  assert_success
+  assert_failure 2
+  assert_output --partial "githooks-require-security"
 }
 
-@test "Write to .githooks/ with a security__githooks-<ts>.json DONE record (dunder dispatch naming) -> allows (exit 0)" {
-  create_status_file "security__githooks-1000.json" '{"status":"DONE"}'
+@test "Write to .githooks/ with a bound security DONE record from ANOTHER session -> still blocks (exit 2)" {
+  create_status_file "security-1000.json" '{"status":"DONE","session_id":"other-sess","agent_type":"security"}'
   run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
-  assert_success
+  assert_failure 2
+  assert_output --partial "githooks-require-security"
 }
 
-@test "Write to .githooks/ with a BLOCKED security record -> still blocks (exit 2): only DONE unblocks" {
-  create_status_file "security-1000.json" '{"status":"BLOCKED"}'
+@test "Write to .githooks/ with a bound BLOCKED security record -> still blocks (exit 2): only DONE unblocks" {
+  create_status_file "security-1000.json" '{"status":"BLOCKED","session_id":"gh-sess","agent_type":"security"}'
   run bash "$HOOK_SH" <<< "$(make_write_payload "/home/someone/Projects/x/.githooks/pre-commit")"
   assert_failure 2
   assert_output --partial "githooks-require-security"
@@ -155,14 +173,14 @@ print(json.dumps({
   assert_output --partial "git-internals-require-security"
 }
 
-@test "Write to /r/.git/config with a security-<ts>.json DONE record -> allows (exit 0)" {
-  create_status_file "security-1000.json" '{"status":"DONE"}'
+@test "Write to /r/.git/config with a bound security DONE record -> allows (exit 0)" {
+  create_status_file "security-1000.json" '{"status":"DONE","session_id":"gh-sess","agent_type":"security"}'
   run bash "$HOOK_SH" <<< "$(make_write_payload "/r/.git/config")"
   assert_success
 }
 
-@test "Write to /r/.git/config with a BLOCKED security record -> still blocks (exit 2): only DONE unblocks" {
-  create_status_file "security-1000.json" '{"status":"BLOCKED"}'
+@test "Write to /r/.git/config with a bound BLOCKED security record -> still blocks (exit 2): only DONE unblocks" {
+  create_status_file "security-1000.json" '{"status":"BLOCKED","session_id":"gh-sess","agent_type":"security"}'
   run bash "$HOOK_SH" <<< "$(make_write_payload "/r/.git/config")"
   assert_failure 2
   assert_output --partial "git-internals-require-security"
@@ -237,8 +255,8 @@ print(json.dumps({
   assert_output --partial "git-global-config-require-security"
 }
 
-@test "Write to /home/u/.gitconfig with a security DONE record -> allows (exit 0)" {
-  create_status_file "security-1000.json" '{"status":"DONE"}'
+@test "Write to /home/u/.gitconfig with a bound security DONE record -> allows (exit 0)" {
+  create_status_file "security-1000.json" '{"status":"DONE","session_id":"gh-sess","agent_type":"security"}'
   run bash "$HOOK_SH" <<< "$(make_write_payload "/home/u/.gitconfig")"
   assert_success
 }
