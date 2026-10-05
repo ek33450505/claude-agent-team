@@ -137,7 +137,10 @@
       "Edit(~/.claude/settings.json)",
       "Edit(~/.claude/settings.local.json)",
       "Edit(~/.claude/managed-settings.d/**)",
-      "Edit(~/.claude/scripts/**)"
+      "Edit(~/.claude/scripts/**)",
+      "Edit(~/.claude/logs/**)",
+      "Edit(**/.claude/settings*.json)",
+      "Edit(//**/.claude/settings*.json)"
     ],
     "ask": [
       "mcp__neon__delete*",
