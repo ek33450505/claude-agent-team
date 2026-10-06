@@ -40,7 +40,10 @@ ROUTING (by tool_name):
 
 FAIL-OPEN per guard: a crash/missing module in one guard never suppresses another
 (each load + call is independently guarded), and any load failure is logged to
-hook-errors.log so `cast doctor` can surface a silently-disabled guard. command-
+hook-errors.log so `cast doctor` can surface a silently-disabled guard. The ONE exception
+is the git/policy guard module (cast-git-guard.py) failing to LOAD, which fails CLOSED: a
+Write/Edit is blocked (unless CAST_POLICY_OVERRIDE=1) and Bash gets a coarse degraded-mode
+block of the irreversible git verbs (_degraded_git_block), each with its normal hatch. command-
 guard is always evaluated for Bash unless git-guard already hard-blocked — which
 prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 skips ONLY the Write/Edit policy + egress record + dispatch capture; the git commit/push/stash and destructive-command guards run in EVERY context (a subagent must not bypass the irreversibility/destructive guards), and so does the Neon MCP unsafe-tool notify guard (_notify_neon_risk) — a dispatched subagent's risky Neon call must be notified and recorded too. Any
 unhandled error → exit 0 (allow); a guard crash must never block all tool use.
@@ -720,9 +723,47 @@ def _unparseable_write_edit_verdict(raw, exc):
     m = _WRITE_EDIT_TOOL_NAME_SCAN_RE.search(raw)
     if m is None:
         return None
-    code, msg = _write_edit_gate_error(
-        _load("cast_git_guard", "cast-git-guard.py"), m.group(1), {}, "", exc)
+    git_guard = _load("cast_git_guard", "cast-git-guard.py")
+    if git_guard is None:
+        # Guard module failed to LOAD: same verdict (and content-free override log line) as
+        # the parsed Write/Edit path, rather than _write_edit_gate_error(None, ...).
+        code, msg = _write_edit_guard_unavailable(m.group(1))
+    else:
+        code, msg = _write_edit_gate_error(git_guard, m.group(1), {}, "", exc)
     return (code, msg) if code == 2 else None
+
+
+# Parse-failure scan for a Bash call (see _unparseable_bash_verdict). Linear, like the one above.
+_BASH_TOOL_NAME_SCAN_RE = re.compile(r'"tool_name"\s*:\s*"Bash"')
+# JSON string escapes (linear: one backslash + a fixed-width alternative). A command's newline
+# or quote reaches the raw text as `\n` / `\"`, which must not glue onto the neighbouring word.
+_JSON_ESCAPE_RE = re.compile(r'\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))')
+_JSON_ESCAPE_CHARS = {'"': '"', "\\": "\\", "/": "/", "b": " ", "f": " ",
+                      "n": "\n", "r": "\r", "t": "\t"}
+
+
+def _json_unescape_repl(m):
+    hex4 = m.group(1)
+    return chr(int(hex4, 16)) if hex4 is not None else _JSON_ESCAPE_CHARS[m.group(2)]
+
+
+def _unparseable_bash_verdict(raw, exc):
+    """Parse-failure branch ONLY. The degraded git block message (str) when the unparseable
+    stdin still LOOKS like a Bash call and its raw text runs a coarse irreversible git verb,
+    else None. Neither git guard ran on this payload (a Bash call whose JSON fails to parse --
+    e.g. absurd nesting in an extra tool_input key -- would otherwise be a blanket allow, in
+    healthy mode too), so the same coarse scan runs over the JSON-unescaped raw text; the
+    verbs' normal hatches are still honoured. Logs the exception CLASS only. A block is
+    stderr + exit 2, so the caller must NOT also print the Neon ask: one outcome per call.
+    Applies in EVERY context, like the parsed Bash path."""
+    if _BASH_TOOL_NAME_SCAN_RE.search(raw) is None:
+        return None
+    _log_error(f"unparseable Bash payload ({type(exc).__name__}); degraded git scan of raw text")
+    try:
+        text = _JSON_ESCAPE_RE.sub(_json_unescape_repl, raw)
+    except Exception:
+        text = raw
+    return _degraded_git_block(text, "was given an unparseable payload")
 
 
 def _emit_pretool_output(sentinel, action, neon_reason):
@@ -788,6 +829,146 @@ def _write_edit_gate_error(git_guard, tool, tool_input, session_id, exc):
         f"against the policies; failing closed.\n"
         f"Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason)."
     )
+
+
+def _write_edit_guard_unavailable(tool):
+    """(code, msg) for a Write/Edit when cast-git-guard.py failed to LOAD: fail CLOSED.
+
+    No policy ran, so the write is blocked unless CAST_POLICY_OVERRIDE=1. The guard's own
+    audit writer is unavailable, so an override is logged to hook-errors.log instead,
+    content-free (tool name only -- never a path or exception text). Never raises."""
+    if os.environ.get("CAST_POLICY_OVERRIDE", "0") == "1":
+        _log_error(f"{tool}: CAST_POLICY_OVERRIDE=1 override used while guard unavailable")
+        return 0, ""
+    _log_error(f"Write/Edit policy guard unavailable for {tool}; failing closed")
+    return 2, (
+        f"**[CAST-POLICY-BLOCK]** The policy guard module (cast-git-guard.py) failed to load, "
+        f"so this {tool} could not be checked; failing closed. "
+        f"Repair: bash install.sh from the claude-agent-team checkout "
+        f"(details: ~/.claude/logs/hook-errors.log).\n"
+        f"Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason)."
+    )
+
+
+# Degraded-mode git guard: cast-git-guard.py failed to LOAD, so ONLY this coarse list of
+# irreversible git verbs stays blocked (everything else is allowed so a repair is possible),
+# each with its EXISTING escape hatch. rebase/merge are deliberately absent: the normal guard
+# allows them and they have no hatch, so degraded mode must not be stricter than normal mode
+# with nothing to escape through.
+_DEGRADED_GIT_HATCHES = {
+    "commit": "CAST_COMMIT_AGENT=1",
+    "push": "CAST_PUSH_OK=1",
+    "reset": "CAST_RESET_OK=1",
+    "clean": "CAST_CLEAN_OK=1",
+    "stash": "CAST_STASH_OK=1",
+    "checkout": "CAST_CHECKOUT_OK=1",
+    "restore": "CAST_RESTORE_OK=1",
+    "branch": "CAST_BRANCH_OK=1",
+}
+# Normalization for the whole-command scan: command separators and the shell-syntax glue
+# that can sit flush against a git word are turned into spaces (`$(`, backticks, `<`/`>`
+# redirects, `${IFS}`, NUL, and the JSON punctuation `: , [ ]` that glues a word to its key
+# when the raw text of an unparseable payload is scanned); quotes and backslashes are
+# deleted (`"git" push`, `g\it push`).
+# NO segmentation: a separator INSIDE a git argument (`git -C "$(pwd)" push`,
+# `git -c user.name="Ed (K)" commit`) must not hide the verb from the scan.
+_DEGRADED_NORM_TABLE = {ord(c): " " for c in ";&|\n\r()`<>${}\x00:,[]"}
+_DEGRADED_NORM_TABLE.update({ord(c): None for c in "\"'\\"})
+
+
+def _degraded_normalize(text):
+    # `$'git'` / `$"git"` (ANSI-C / locale quoting) -> plain quotes first; then the table.
+    return text.replace("$'", "'").replace('$"', '"').translate(_DEGRADED_NORM_TABLE)
+
+
+def _degraded_git_scan(command, why):
+    """The degraded-mode scan proper (see _degraded_git_block). May raise; the caller fails
+    closed. Linear: one translate, one split, two passes over the tokens, <= 8 hatch lookups."""
+    # NUL: bash either drops it (glues the neighbours) or ends the word -- scan both readings.
+    variants = [command]
+    if "\x00" in command:
+        variants = [command.replace("\x00", " "), command.replace("\x00", "")]
+    present = None  # hatch tokens found in the WHOLE command; computed ONCE, never per match
+    for text in variants:
+        norm = _degraded_normalize(text)
+        if "git" not in norm.lower():
+            continue
+        tokens = norm.split()
+        start = None
+        for i, tok in enumerate(tokens):
+            low = tok.lower()  # `GIT push` runs on a case-insensitive macOS filesystem
+            if low == "git" or low.endswith("/git"):
+                start = i + 1
+                break
+        if start is None:
+            continue
+        seen = {}  # verb -> None, in first-seen order
+        has_D = has_d = has_f = False
+        for tok in tokens[start:]:
+            low = tok.lower()
+            if low in _DEGRADED_GIT_HATCHES:
+                seen[low] = None
+            elif tok.startswith("--"):
+                name = tok.split("=", 1)[0]
+                if len(name) >= 3:
+                    has_d = has_d or "--delete".startswith(name)
+                    has_f = has_f or "--force".startswith(name)
+            elif tok.startswith("-") and len(tok) > 1:
+                has_D = has_D or "D" in tok
+                has_d = has_d or "d" in tok
+                has_f = has_f or "f" in tok
+        if not seen:
+            continue
+        if present is None:
+            present = {h for h in _DEGRADED_GIT_HATCHES.values() if h in command}
+        for verb in seen:
+            if verb == "branch" and not (has_D or (has_d and has_f)):
+                continue
+            hatch = _DEGRADED_GIT_HATCHES[verb]
+            if hatch in present:
+                continue
+            return (
+                f"**[CAST]** The git guard module {why}, so git {verb} is blocked in "
+                f"degraded mode. Use the normal hatch ({hatch} …) if intended, and repair with "
+                f"bash install.sh (details: ~/.claude/logs/hook-errors.log)."
+            )
+    return None
+
+
+def _degraded_git_block(command, why="failed to load"):
+    """Block message (str) when `command` runs a coarse irreversible git verb and its hatch
+    token is absent from the WHOLE command, else None. Used ONLY when the git guard did not
+    run: its module failed to load (`why`, the default), its evaluate() raised, or the payload
+    was unparseable. COARSE: over-blocking is acceptable, under-blocking is not.
+
+    The whole command is normalized (_degraded_normalize) and tokenized -- NOT split into
+    segments, so a separator inside a git argument cannot hide the verb. The first token that
+    is `git` or ends in `/git` (case-insensitive) marks the start; EVERY later token is checked
+    against the verb table (so global options taking an argument, like `-C dir`, cannot hide
+    the verb, and `git status && make clean` over-blocks by design). `branch` blocks only with
+    a force-delete shape over the later tokens: -D, or d+f (-d -f / -df / -fd / --delete
+    --force), long flags matched by prefix since git accepts unambiguous abbreviations.
+    O(len(command)); the hatch lookup is done once (a per-match scan was O(matches x len)).
+
+    Fails CLOSED: an exception in the scan blocks any command that mentions `git` at all
+    (never allows it); a command without the substring `git` cannot name the binary."""
+    if not isinstance(command, str):
+        return None
+    try:
+        return _degraded_git_scan(command, why)
+    except Exception as exc:
+        _log_error(f"degraded git check raised {type(exc).__name__}; failing closed")
+        try:
+            names_git = "git" in command.lower()
+        except Exception:
+            names_git = True
+        if not names_git:
+            return None
+        return (
+            f"**[CAST]** The git guard module {why}, and the degraded-mode git check itself "
+            f"failed ({type(exc).__name__}), so this command is blocked. Repair with bash "
+            f"install.sh (details: ~/.claude/logs/hook-errors.log)."
+        )
 
 
 def _record_dispatch(data):
@@ -1028,14 +1209,105 @@ class _WorkflowLintTimeout(Exception):
     traceback escape -- an uncaught hook crash is a BLOCK to Claude Code >= 2.1.288."""
 
 
-def _run_under_watchdog(fn, budget):
+# Wall-clock budget for the Bash git guard (2026-10-06). The hook timeout is 5 s and a hook
+# TIMEOUT is a non-blocking error, i.e. an ALLOW: a command that sends the git guard
+# super-linear (measured: ~15 s for 100 KB of repeated `git ` tokens before the regex fix)
+# silently bypassed every git block in it. Past this budget any command that NAMES git is
+# blocked, hatches ignored (`_git_guard_timeout_block`; fail CLOSED). 2.0 s = the Workflow
+# lint's budget: well past the guard's measured worst case on a 1 MB command (~1.5 s, linear).
+_GIT_GUARD_BUDGET_SECS = 2.0
+
+
+class _GitGuardTimeout(BaseException):
+    """Private: raised by the SIGALRM handler when the Bash git guard outruns
+    _GIT_GUARD_BUDGET_SECS.
+
+    A BaseException, UNLIKE _WorkflowLintTimeout, ON PURPOSE: git_guard.evaluate("Bash") ends in
+    `except Exception: return 0, ''` (fail-open on a guard bug), and several helpers inside
+    it swallow `Exception` too. The alarm is one-shot, so an Exception swallowed anywhere on
+    the way up would let the slow scan run on unbounded -- and `evaluate` would then return
+    ALLOW. Reusing _WorkflowLintTimeout was tried first and is exactly that bug (measured: the
+    pre-fix guard under a 1 s alarm returned (0, '') at 1.0 s). BaseException passes through
+    every `except Exception` to the one `except _GitGuardTimeout` in main(); the guard module
+    has no bare `except:` / `except BaseException`."""
+
+
+# Total wall-clock budget for the two Bash guards (git guard, then command guard), measured
+# from the start of main(): the git guard gets _GIT_GUARD_BUDGET_SECS of it, the command guard
+# whatever is left but never less than _COMMAND_GUARD_MIN_BUDGET_SECS. 3.5 s leaves ~1.5 s of
+# the hook's 5 s for interpreter start-up and the egress / dispatch work after the guards.
+# A hook TIMEOUT is an ALLOW, and cast-command-guard.py (rm -rf / pkill / kill) is also
+# linear-but-slow on a huge command: 7.6-9.9 s observed on ~1 MB, run unwatched, which let the
+# hook time out and ALLOW a catastrophic rm behind a megabyte of padding.
+_BASH_GUARD_TOTAL_BUDGET_SECS = 3.5
+_COMMAND_GUARD_MIN_BUDGET_SECS = 0.5
+
+
+class _CommandGuardTimeout(BaseException):
+    """Private: raised by the SIGALRM handler when cast-command-guard.py outruns its budget.
+    BaseException for the same reason as _GitGuardTimeout: `safe_is_blocked` is
+    `try: ... except Exception: return False, ''` (fail-open on a guard bug), which would
+    swallow an Exception-based alarm and turn the timeout into an ALLOW."""
+
+
+_CONTINUATION = re.compile(r"\\\r?\n")   # backslash-newline / backslash-CRLF: bash deletes both
+_NON_LETTERS = re.compile(r"[^A-Za-z]+")
+
+
+def _git_guard_timeout_block(command, budget):
+    """Block message (str) for a command the git guard could not finish checking in `budget`
+    s, or None when the command does not name git at all.
+
+    Used ONLY on the timeout path (a load failure or an evaluate() raise still gets the coarse
+    `_degraded_git_block`). A timed-out scan decided NOTHING about this command, so the 8-verb
+    degraded table is not enough (it let rm, filter-branch, update-ref -d, reflog expire,
+    gc --prune, worktree remove --force, switch -f and `-c gc.*=` through) and it must not
+    honour a hatch (the degraded scan accepts a hatch token ANYWHERE in the command, which
+    reopens the per-segment scoping the guard fixed on 2026-08-17: `echo CAST_PUSH_OK=1; ...;
+    <raw push>`). So: ANY command that names git is refused, hatches ignored. "Names git" is
+    three steps, in this order: (1) delete line continuations exactly as bash does (backslash +
+    newline, and backslash + CR LF) -- `_degraded_normalize` deletes the backslash but turns the
+    newline into a SPACE, so `g\\<newline>it` (which bash runs as `git`) read as `g it` and a
+    command that timed out on it was ALLOWED (security round 2, HIGH-1); (2) the degraded
+    normalisation (quotes/backslashes deleted, `$'x'` unwrapped, separators and shell glue turned
+    into spaces); (3) collapse everything that is not an ASCII letter and test the letters for
+    `git`, case-insensitively. Step 3 makes the test independent of WHATEVER sits between the
+    letters (`g$''it`, `g''it`, `g\\it`, a continuation, a line of glue), so `GIT`, `$'git'`,
+    `g'i't`, `/usr/bin/git`, `$(git ...)` all count. This over-blocks on purpose and ONLY on this
+    path (`digit`, `github`, even `bag it` or `big;it`): a timed-out scan decided nothing, and a
+    false block here is one split command, a false allow is a bypass. A command that never
+    names git stays allowed. Linear; fails CLOSED (an internal error counts as naming git)."""
+    try:
+        text = command if isinstance(command, str) else ""
+        variants = [text]
+        if "\x00" in text:  # bash drops NUL or ends the word there: scan both readings
+            variants = [text.replace("\x00", " "), text.replace("\x00", "")]
+        names_git = any(
+            "git" in _NON_LETTERS.sub("", _degraded_normalize(_CONTINUATION.sub("", v))).lower()
+            for v in variants)
+    except Exception:
+        names_git = True
+    if not names_git:
+        return None
+    return (
+        f"**[CAST]** The git guard could not finish checking this command within "
+        f"{budget:g}s, so it is blocked. Split it into smaller commands (one git operation "
+        f"per command)."
+    )
+
+
+def _run_under_watchdog(fn, budget, exc_type=None):
     """fn() under ONE SIGALRM wall-clock budget of `budget` seconds.
 
-    Returns fn()'s result; raises _WorkflowLintTimeout when the budget expires
-    first. Runs fn() WITHOUT a watchdog -- same result, no protection -- where
+    Returns fn()'s result; raises `exc_type` (default _WorkflowLintTimeout) when the budget
+    expires first. Runs fn() WITHOUT a watchdog -- same result, no protection -- where
     SIGALRM/setitimer do not exist (non-POSIX) or signal.signal refuses (not the
     main thread of the main interpreter). Armed only around fn itself, never around
     the lint module load (an alarm mid-import would poison the module cache).
+
+    The handler raises only while an `armed` flag is set; the inner finally disarms it
+    BEFORE cancelling the timer, so an alarm already in flight at cancel time is a no-op
+    instead of raising out of the outer finally and leaking `_on_alarm` as the handler.
 
     Disposition afterwards: the timer is cancelled FIRST; then a previously
     installed Python handler (or SIG_IGN) is restored, but SIG_DFL / None is
@@ -1049,8 +1321,12 @@ def _run_under_watchdog(fn, budget):
     if not (hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")):
         return fn()
 
+    armed = [False]
+    timeout_exc = exc_type if exc_type is not None else _WorkflowLintTimeout
+
     def _on_alarm(signum, frame):
-        raise _WorkflowLintTimeout()
+        if armed[0]:
+            raise timeout_exc()
 
     def _noop(signum, frame):
         return None
@@ -1069,10 +1345,12 @@ def _run_under_watchdog(fn, budget):
             refused = True  # nothing installed -> nothing to restore
             return fn()
         try:
+            armed[0] = True
             signal.setitimer(signal.ITIMER_REAL, budget)
             return fn()
         finally:
-            signal.setitimer(signal.ITIMER_REAL, 0)  # cancel FIRST
+            armed[0] = False  # disarm FIRST: a stale in-flight alarm is now a no-op
+            signal.setitimer(signal.ITIMER_REAL, 0)  # then cancel
     finally:
         if not refused:
             if previous is unset or previous is None or previous == signal.SIG_DFL:
@@ -1193,6 +1471,7 @@ def _workflow_stage_model_guard(data, tool_input):
 def main():
     global _PAYLOAD_SESSION_ID
     _PAYLOAD_SESSION_ID = None  # per-call: a payload that never parses has none
+    t_main = time.monotonic()   # origin of _BASH_GUARD_TOTAL_BUDGET_SECS
     try:
         # Read BYTES and decode ourselves: sys.stdin.read() raises
         # UnicodeDecodeError on invalid UTF-8 (strict locale), which would
@@ -1224,6 +1503,9 @@ def main():
         verdict = _unparseable_write_edit_verdict(raw, parse_exc)
         if verdict is not None:
             return _block(verdict[1])
+        bash_msg = _unparseable_bash_verdict(raw, parse_exc)
+        if bash_msg:
+            return _block(bash_msg)
         _emit_unparseable_neon_ask(raw)
         return 0
     if not isinstance(data, dict):
@@ -1250,20 +1532,55 @@ def main():
     #    (the 2026-06 self-commit recurrence) OR the destructive-command guard
     #    (rm -rf etc.). Escape hatches still apply — the guards check allow patterns first.
     if tool == "Bash":
+        command = tool_input.get("command", "") or ""
         git_guard = _load("cast_git_guard", "cast-git-guard.py")
         if git_guard is not None:
             try:
-                gcode, gmsg = git_guard.evaluate("Bash", tool_input)
-            except Exception:
-                gcode, gmsg = 0, ""
+                gcode, gmsg = _run_under_watchdog(
+                    lambda: git_guard.evaluate("Bash", tool_input),
+                    _GIT_GUARD_BUDGET_SECS,
+                    _GitGuardTimeout,
+                )
+            except _GitGuardTimeout:
+                # The guard ran past its budget (a super-linear scan; a hook TIMEOUT would be
+                # an ALLOW) and decided NOTHING: block every command that names git, hatches
+                # ignored -- NOT the 8-verb degraded table (see _git_guard_timeout_block).
+                # Budget only is logged -- never the command text.
+                _log_error(f"Bash git guard timed out after {_GIT_GUARD_BUDGET_SECS:g}s; "
+                           f"blocking any command that names git")
+                gmsg = _git_guard_timeout_block(command, _GIT_GUARD_BUDGET_SECS)
+                gcode = 2 if gmsg else 0
+            except Exception as exc:
+                # evaluate() RAISED: the guard did not run. Same degraded-mode verdict as a
+                # load failure (a coarse irreversible-git block; else allow). The exception
+                # CLASS only is logged -- never str(exc), which can carry attacker text.
+                _log_error(f"Bash git guard evaluate() raised {type(exc).__name__}; "
+                           f"degraded git block")
+                gmsg = _degraded_git_block(command, "failed while checking this command")
+                gcode = 2 if gmsg else 0
             if gcode == 2:
                 return _block(gmsg)
-        command = tool_input.get("command", "") or ""
+        else:
+            # The guard module failed to LOAD: a coarse irreversible-git list stays
+            # blocked (own hatches apply); everything else is allowed so repair works.
+            dmsg = _degraded_git_block(command)
+            if dmsg:
+                return _block(dmsg)
         if command:
             cg = _load("cast_command_guard", "cast-command-guard.py")
             if cg is not None:
+                # Under the REMAINING share of the total Bash-guard budget: it is linear but
+                # slow on a huge command, and a hook timeout is an ALLOW of rm -rf / pkill.
+                cg_budget = max(_COMMAND_GUARD_MIN_BUDGET_SECS,
+                                _BASH_GUARD_TOTAL_BUDGET_SECS - (time.monotonic() - t_main))
                 try:
-                    blocked, message = cg.safe_is_blocked(command)
+                    blocked, message = _run_under_watchdog(
+                        lambda: cg.safe_is_blocked(command), cg_budget, _CommandGuardTimeout)
+                except _CommandGuardTimeout:
+                    _log_error(f"Bash command guard timed out after {cg_budget:.1f}s; blocking")
+                    return _block(
+                        "**[CAST]** The command guard could not finish checking this command in "
+                        "time, so it is blocked. Split it into smaller commands.")
                 except Exception:
                     blocked, message = False, ""
                 if blocked:
@@ -1314,6 +1631,11 @@ def main():
                 # Write/Edit fails CLOSED (unlike Bash above): the policy gate did not run.
                 code, msg = _write_edit_gate_error(
                     git_guard, tool, tool_input, sid if isinstance(sid, str) else "", exc)
+            if code == 2:
+                return _block(msg)
+        else:
+            # The guard module failed to LOAD: no policy ran -> fail CLOSED.
+            code, msg = _write_edit_guard_unavailable(tool)
             if code == 2:
                 return _block(msg)
 

@@ -775,6 +775,38 @@ class TestWorkflowStageModelGuard(_IsolatedHomeTestCase):
         self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
         del sentinel
 
+    def test_alarm_in_flight_at_cancel_is_a_noop_and_result_survives(self):
+        # The "armed flag" race: an alarm already in flight when setitimer(0) cancels the
+        # timer must NOT raise once fn has finished. Delivered here, deterministically, by
+        # signalling ourselves from inside the cancel call. Without the flag _on_alarm
+        # raises _WorkflowLintTimeout out of the finally and fn's result is lost.
+        real_setitimer = signal.setitimer
+        delivered = []
+
+        def setitimer_with_inflight_alarm(which, seconds, *rest):
+            old = real_setitimer(which, seconds, *rest)
+            if seconds == 0:
+                delivered.append(1)
+                os.kill(os.getpid(), signal.SIGALRM)
+            return old
+        self.addCleanup(real_setitimer, signal.ITIMER_REAL, 0)  # never poison later tests
+        sentinel = self._arm_probe()
+        with mock.patch.object(signal, 'setitimer', side_effect=setitimer_with_inflight_alarm):
+            result = cast_pretool_dispatch._run_under_watchdog(lambda: 'fn-result', 5.0)
+        self.assertEqual((result, delivered), ('fn-result', [1]))
+        self._assert_timer_clean(sentinel)
+
+    def test_alarm_after_watchdog_returns_is_harmless_and_handler_not_leaked(self):
+        prev = signal.signal(signal.SIGALRM, signal.SIG_DFL)
+        self.addCleanup(signal.signal, signal.SIGALRM, prev)
+        self.assertEqual(cast_pretool_dispatch._run_under_watchdog(lambda: 7, 5.0), 7)
+        os.kill(os.getpid(), signal.SIGALRM)  # must not raise, must not kill us
+        handler = signal.getsignal(signal.SIGALRM)
+        self.assertTrue(callable(handler))
+        self.assertNotEqual(handler.__name__, '_on_alarm', 'leaked the raising handler')
+        handler(signal.SIGALRM, None)  # whatever is installed must not raise
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
     def test_watchdog_armed_only_around_the_lint_itself(self):
         # Not for other tools, and not for any Workflow input that short-circuits
         # before linting (name-only, over either bound).
@@ -1226,6 +1258,51 @@ class TestGuardFailureDedupe(_IsolatedHomeTestCase):
         self.assertNotIn('env-session-ignored', {r[1] for r in self._rows()})
         self.assertEqual(self._guard_files(), [])
         self.assertEqual([n for n in os.listdir('/tmp/') if session in n], [])
+
+
+class TestDegradedGitBlockFailClosed(unittest.TestCase):
+    """_degraded_git_block must never ALLOW because its own scan failed (a hook crash or
+    timeout is an allow, so an exception inside the check cannot be a pass)."""
+
+    def setUp(self):
+        patch = mock.patch.object(cast_pretool_dispatch, '_log_error')
+        self.log_error = patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_scan_exception_blocks_a_command_naming_git_without_echoing_the_error(self):
+        with mock.patch.object(cast_pretool_dispatch, '_degraded_git_scan',
+                               side_effect=RuntimeError('secret-boom')):
+            msg = cast_pretool_dispatch._degraded_git_block('git status')
+        self.assertIsInstance(msg, str)
+        self.assertIn('RuntimeError', msg)
+        self.assertNotIn('secret-boom', msg)
+        self.assertNotIn('secret-boom', ' '.join(str(c) for c in self.log_error.call_args_list))
+        self.assertTrue(self.log_error.called)
+
+    def test_scan_exception_still_allows_a_command_that_cannot_name_git(self):
+        # Keeps `bash install.sh` (the repair) usable even if the scan itself is broken.
+        with mock.patch.object(cast_pretool_dispatch, '_degraded_git_scan',
+                               side_effect=RuntimeError('boom')):
+            self.assertIsNone(cast_pretool_dispatch._degraded_git_block('bash install.sh'))
+
+    def test_non_string_command_is_not_runnable_and_is_ignored(self):
+        self.assertIsNone(cast_pretool_dispatch._degraded_git_block(['git', 'push']))
+        self.assertIsNone(cast_pretool_dispatch._degraded_git_block(None))
+
+    def test_hatch_lookup_is_done_once_not_per_match(self):
+        # 3000 `git push` matches but a single hatch pass: the substring probe runs once per
+        # distinct hatch token (<= 8), never once per match.
+        class CountingStr(str):
+            probes = 0
+
+            def __contains__(self, item):
+                if item in cast_pretool_dispatch._DEGRADED_GIT_HATCHES.values():
+                    CountingStr.probes += 1
+                return str.__contains__(self, item)
+        cmd = CountingStr('git push;' * 3000 + 'git reset --hard')
+        msg = cast_pretool_dispatch._degraded_git_block(cmd)
+        self.assertIn('git push', msg)
+        self.assertLessEqual(CountingStr.probes, len(cast_pretool_dispatch._DEGRADED_GIT_HATCHES))
 
 
 if __name__ == '__main__':

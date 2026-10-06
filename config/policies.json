@@ -26,8 +26,8 @@
     },
     {
       "id": "env-files-require-security",
-      "description": "Environment config files require security agent review",
-      "path_pattern": ".*\\.env(\\..*)?$",
+      "description": "Environment config files (.env, .env.*, *.env, and direnv .envrc / .envrc.*) require security agent review; the committed templates .env.example, .env.sample and .env.template are exempt",
+      "path_pattern": ".*\\.env(rc(\\..*)?|\\.(?!(?:example|sample|template)$).*)?$",
       "requires_agent": "security",
       "scope": "session",
       "severity": "block"
