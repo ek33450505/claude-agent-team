@@ -4,6 +4,10 @@
 *.env
 # `*.env` misses .env.production / .env.local / .env.development.local; `.env.*` covers them (any depth).
 .env.*
+# Templates are meant to be committed; gitleaks / PII scans remain the secret net for them.
+!.env.example
+!.env.sample
+!.env.template
 *.key
 *.pem
 *.p12
