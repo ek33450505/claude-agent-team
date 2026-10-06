@@ -273,10 +273,28 @@ regex layer):
     are stripped, the escapes are not interpreted), other interpreters
     (`python -c`, `perl -e`, `node -e`), data piped to a shell (`echo 'git
     push' | sh`, `sh <<< '...'`, `source <(...)`), `xargs git`, aliases and
-    functions. The extraction scan stops at an unbalanced quote/paren (a
-    `'` in an UNQUOTED-delimiter heredoc body desyncs it) and then extracts
-    nothing further - the status quo, never a new allow. A single-quoted
-    `'git${IFS}push'` as a command word is a (harmless) false positive.
+    functions. The extraction scan FAILS CLOSED: ONE lexer reads every
+    context (top level, `$(...)`, `(...)`, `<(...)`, `${...}`, `((...))`,
+    unquoted-heredoc bodies) with bash's rules (blanks are only space/tab/
+    newline, so `echo a\xa0#; P` is no comment; `${x//(/y}` has a literal
+    paren; `$$'a\'` is `$$` then a quote; `<<` in arithmetic is a shift;
+    an unquoted heredoc body is scanned like a double-quoted string, so
+    `don't` in it is data; all pending heredocs of a line are tracked) and
+    raises on anything it cannot model with certainty - an unterminated quote
+    / substitution / expansion, `$[`, a quote inside arithmetic, a quote inside
+    a `${...}` that is itself double-quoted (`$'..'` aside: bash's `extquote`),
+    a heredoc delimiter it cannot quote-remove (`<<$'EOF'`, `<<"E'F"`), a
+    heredoc whose delimiter line is missing, nesting past 48 levels, or a
+    scanner crash. `_executable_segments()` turns that into a REFUSAL (BLOCK) -
+    but only when `git` is mentioned in the text from the start of the earliest
+    unresolved construct to the end (nothing there can run git otherwise, and
+    what was extracted before it is complete). Cost, accepted: a command with
+    such a construct AND a later git mention is refused (fix: split it, simplify
+    the quoting, or write long text with the Write tool); the real-command
+    corpus shows ~0 of these. The step cap (`_MAX_EXEC_SCAN_STEPS`) also refuses
+    a git-mentioning command of more than ~250k words/metacharacters. A
+    single-quoted `'git${IFS}push'` as a command word is a (harmless) false
+    positive.
     NOTE (2026-08-17 follow-up): this is distinct from — and NOT fixed by —
     the token-boundary fix below. Boundary anchoring (`\b`) closes ADJACENT
     empty-output command substitution appended to a flag/token
@@ -2139,16 +2157,26 @@ _TOKENIZE_BUDGET_MSG = (
     "than inline."
 )
 _EXEC_BUDGET_MSG = (
-    "**[CAST]** Bash command blocked: it nests far more `bash -c` / `eval` / `$(...)` code "
-    "than any hand-written command, and checking all of it against the git blocks would take "
-    "unbounded time. A guard that runs past the hook timeout is silently skipped, so the git "
-    "guard refuses (fails closed) instead of attempting it. Split it into separate commands."
+    "**[CAST]** Bash command blocked: it nests far more `bash -c` / `eval` / `$(...)` code (or "
+    "has far more words) than any hand-written command, and checking all of it against the git "
+    "blocks would take unbounded time. A guard that runs past the hook timeout is silently "
+    "skipped, so the git guard refuses (fails closed) instead of attempting it. Split it into "
+    "separate commands."
 )
 _NESTING_MSG = (
     "**[CAST]** Bash command blocked: it runs `git` from inside more than 3 levels of nested "
     "`bash -c` / `eval` / `$(...)`, deeper than the git guard follows. A guard that cannot see "
     "the command it is checking refuses (fails closed) instead of allowing it. Flatten the "
     "nesting, or run the git command directly."
+)
+_LEX_UNCERTAIN_MSG = (
+    "**[CAST]** Bash command blocked: the git guard could not parse it with certainty (an "
+    "unterminated or unusually quoted string, an unclosed `$(` / `${` / `((`, a heredoc "
+    "delimiter it cannot read, or a scanner fault) and `git` is mentioned from that point on, "
+    "so it cannot tell whether a guarded git command is executed. A guard that cannot see the "
+    "command it is checking refuses (fails closed) instead of allowing it. Split it into "
+    "separate commands, simplify the quoting, or write long text with the Write tool instead "
+    "of an inline heredoc."
 )
 _SCAN_BUDGET_MSG = (
     "**[CAST]** Bash command blocked: it contains far more `git` tokens per "
@@ -2382,14 +2410,29 @@ def _join_continuations(command: str):
 # them back through the SAME per-segment engine as extra VIRTUAL segments, so every verdict
 # rule (incl. a hatch being honoured only inside its own segment) applies to them unchanged.
 #
-# ADDITIVE ONLY: an extra segment can only add a block, never remove one - the real segments
-# are always yielded first and evaluated exactly as before. On anything the scanner does not
-# understand (an unbalanced quote or paren) it stops and extracts nothing more: the status quo.
+# ADDITIVE ONLY: an extra segment (or a `_Refusal`) can only add a block, never remove one - the
+# real segments are always yielded first and evaluated exactly as before.
 #
-# Extraction runs on the WHOLE command text (continuations joined, lines re-joined with `\n`),
-# not per segment: a quoted payload or a substitution body can itself contain `;`, `|`, `&&`
-# and newlines (`bash -c 'git push && echo done'`), so splitting on those first would cut it
-# open and leave `bash -c 'git push ` with an unbalanced quote.
+# FAILS CLOSED. The scan is only as good as its model of the shell's quoting, and a lexer that
+# disagrees with the shell about where a quote ends hides every command after that point (the
+# desync class: a `'` in an unquoted heredoc body, `#` after a non-blank, `${x//(/y}`, `$$'a\'`,
+# `$((1<<'2'))`, `<<$'EOF'`). So on any input it cannot model with certainty it raises
+# `_LexUncertain` (unterminated quote / substitution / expansion, a heredoc delimiter it cannot
+# quote-remove, a quote inside arithmetic, `$[`, nesting past `_MAX_LEX_NEST`), and
+# `_executable_segments` turns that into a `_Refusal` - EXCEPT when nothing from the start of the
+# earliest unresolved construct to the end of the text could spell a guarded git command
+# (`_GIT_MENTION`): then what was extracted before it is complete and is returned as is.
+#
+# ONE lexer (`_Lexer`) reads every context - top level, `$(...)`, `(...)`, `<(...)`, `>(...)`
+# are the same `cmd` routine, recursively - so a quoting rule cannot hold in one and not another.
+#
+# Extraction runs on the WHOLE RAW command text, not per segment: a quoted payload or a
+# substitution body can itself contain `;`, `|`, `&&` and newlines (`bash -c 'git push && echo
+# done'`), so splitting on those first would cut it open and leave `bash -c 'git push ` with an
+# unbalanced quote. RAW, not `_join_continuations`'d: a `\<newline>` is a continuation outside
+# quotes but NOT in a comment or single quotes, and joining first would merge a comment line with
+# the next one (`echo x # it's \` + newline + `b; <cmd>` hides `<cmd>` in the "comment") - the
+# lexer applies the real rule itself.
 _EXEC_SHELLS = frozenset(('bash', 'sh', 'zsh', 'dash', 'ksh', 'ash'))
 # Words that may precede the executing shell/`eval` in a simple command: option-taking wrappers
 # (the scan forward for the shell word skips their options and operands) and shell keywords.
@@ -2399,40 +2442,90 @@ _EXEC_PREFIX_WORDS = frozenset((
 ))
 _SHELL_OPT_WITH_ARG = frozenset(('-o', '+o', '-O', '+O', '--rcfile', '--init-file'))
 _MAX_EXEC_DEPTH = 3          # nested levels of `bash -c` / `eval` / `$(...)` that are followed
+# Nested constructs the lexer follows before refusing (it recurses; a hand-written command
+# nests a handful of levels, and Python's own stack is the other limit).
+_MAX_LEX_NEST = 48
 # The scanner is linear but a Python-level loop, and every nested code string is re-evaluated
 # by the whole per-segment engine: cap both, across every nesting level, so a padded command
-# cannot spend the hook budget in them. Measured ~1 us per scanner step and ~30 us per nested
-# code string, so these are ~0.3 s and ~0.15 s; a real command has a few dozen of each at
-# most. Over a cap the command is refused (fail closed), like the other caps above. STEPS, not
-# bytes: a megabyte of `x` is one step, so a huge git-free segment next to a small git command
-# is not refused (tests/test_cast_git_guard_perf.py pins that).
+# cannot spend the hook budget in them. A STEP is one scanner iteration (a run of plain text
+# up to the next metacharacter, a blank-separated word, a quote/expansion/heredoc) and costs
+# ~2-3 us; a real command has a few hundred at most - the largest of 31,322 real
+# git-mentioning commands (up to 70 KB) takes 952 steps INCLUDING its nested re-scans, and none
+# comes near either cap. RESIDUAL, accepted and fail closed: a command that mentions git AND has
+# more than the cap's worth of words/metacharacters (roughly a 1 MB script of short words, far
+# past any hand-written command) is refused rather than scanned to the end - in bounded time
+# (the worst of 12 padding shapes at 5 MB is ~0.3 s; each word of a run is charged BEFORE the
+# run is split, so a huge run is refused at once). Over a cap the command is refused, like the
+# other caps above. STEPS, not bytes: a megabyte of `x` is one step, an unquoted-heredoc body
+# costs one step per `\`, `$` or backtick, a quoted one a single regex search, and a text with
+# no git mention is never scanned (tests/test_cast_git_guard_perf.py pins those).
 _MAX_EXEC_SCAN_STEPS = 250_000
 _MAX_EXEC_CODES = 5_000
 
-_LEX_TOP = re.compile(r"""[\\'"`$();&|<#\s]""")
-_LEX_PAREN = re.compile(r"""[\\'"`()<#\n]""")
-_ANSI_C = re.compile(r"'(?:\\.|[^'\\])*'", re.S)         # a `$'...'` body: `\'` does not end it
-_COMMENT_START_PREV = frozenset(' \t\n;&|(`)')                # a `#` after one of these starts a comment
+_LEX_CMD_RUN = re.compile(r"""[^\\'"`$();&|<>#\n]*""")     # plain text and blanks up to a metacharacter
+_BLANKS = re.compile(r'[ \t]+')       # bash blanks are ONLY space and tab (`\r`, `\xa0`, `\x0b` ... are word chars)
+_DIGITS = re.compile(r'[0-9]+\Z')
 _LEX_DQ = re.compile(r'[\\"`$]')
 _LEX_BQ = re.compile(r'[\\`]')
+_LEX_PARAM = re.compile(r"""[\\'"`$}]""")
+_LEX_ARITH = re.compile(r"""[()\\'"`$]""")
+_LEX_HDBODY = re.compile(r'[\\`$]')
+_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+_ANSI_C = re.compile(r"'(?:\\.|[^'\\])*'", re.S)         # a `$'...'` body: `\'` does not end it
 _BQ_UNESCAPE = re.compile(r'\\([$`\\])')
-# The word after `<<` / `<<-`: quoted parts and backslash-escapes are part of it. A quoted
-# delimiter means the heredoc body is literal data (no expansion) - see `_executed_code`.
-_HEREDOC_WORD = re.compile(r"""(?:\\.|'[^']*'|"[^"]*"|[^\s;&|()<>'"\\])+""", re.S)
-_QUOTE_CHARS = re.compile(r'''['"\\]''')
+_BQ_UNESCAPE_DQ = re.compile(r'\\([$`\\"])')              # a `...` inside "..." also unescapes `\"`
+_HEREDOC_BARE = re.compile(r"""[^ \t\n;&|()<>'"\\`$]+""")
+_CASE_WORDS = frozenset(('case', 'in', 'esac'))
+# Words after which a command word may follow (so `case` / `esac` are reserved words there).
+_CMD_KEYWORDS = frozenset(('if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', 'time'))
+
+
+def _git_mentioned(text, start=0):
+    """Can `text[start:]` spell a git invocation? `_GIT_MENTION`, also across a `\\<newline>`
+    continuation (`gi\\` + newline + `t`) - the lexer scans the raw text, the shell joins those."""
+    if _GIT_MENTION.search(text, start):
+        return True
+    tail = text[start:] if start else text
+    return '\\\n' in tail and _GIT_MENTION.search(tail.replace('\\\n', '')) is not None
 
 
 class _ExecOverBudget(Exception):
     """`_executed_code` ran past its step budget."""
 
 
+class _LexUncertain(Exception):
+    """The scanner met input whose shell parse it cannot model with certainty. `pos` is the
+    offset of the construct that is unresolved (the enclosing ones are tracked by the lexer)."""
+
+    def __init__(self, pos):
+        Exception.__init__(self, pos)
+        self.pos = pos
+
+
 class _Refusal:
     """Yielded by `_executable_segments` in place of a segment when the command cannot be
-    checked within bounds; the evaluator turns it into a fail-closed BLOCK carrying `msg`."""
+    checked within bounds or with certainty; the evaluator turns it into a fail-closed BLOCK
+    carrying `msg`."""
     __slots__ = ('msg',)
 
     def __init__(self, msg):
         self.msg = msg
+
+
+class _W(str):
+    """One word of a simple command as `_Lexer` builds it: its de-quoted text (it IS a `str`),
+    plus `start`/`end`, its raw span in the scanned text, and `redir`, True for a redirection
+    OPERATOR token (`>`, `2>&`, `&>>`, `<<`, `<<<` ...). The word that follows a redirection
+    operator is that redirection's target (for `<<` it is the heredoc delimiter), not a command
+    word."""
+    __slots__ = ('start', 'end', 'redir')
+
+    def __new__(cls, text, start, end, redir=False):
+        self = str.__new__(cls, text)
+        self.start = start
+        self.end = end
+        self.redir = redir
+        return self
 
 
 def _shell_payloads(words):
@@ -2484,290 +2577,623 @@ def _shell_payloads(words):
     return []
 
 
+class _Lexer:
+    """The single shell lexer behind `_executed_code`. Method per context, all reading the same
+    `text`; each takes the offset to resume at and `lim`, the exclusive end of the region it may
+    read (the heredoc body, or the whole text), and returns the offset after the construct.
+
+      cmd       command text: top level, and the body of `$(...)` / `(...)` / `<(...)` / `>(...)`
+      dq        a "..." string          param     a `${...}` expansion       backtick  a `...`
+      arith     `((...))` / `$((...))`  hd_body   an UNQUOTED heredoc body (double-quote-like)
+      dollar    one `$` form
+
+    `emit` is True where a substitution found is the OUTERMOST one - its body is recorded in
+    `codes` (nested ones are found when that body is scanned again, one level down). Anything
+    it cannot model with certainty raises `_LexUncertain(offset of the unresolved construct)`;
+    `open` holds the start offsets of the constructs still open, outermost first."""
+
+    def __init__(self, text, budget):
+        self.text = text
+        self.budget = budget
+        self.codes = []
+        self.open = []
+
+    def _enter(self, start):
+        if len(self.open) >= _MAX_LEX_NEST:
+            raise _LexUncertain(start)
+        self.open.append(start)
+
+    # -- $ forms -------------------------------------------------------------------------
+    def dollar(self, j, lim, in_dq, emit, cur, ext=False):
+        """text[j] == '$'. Appends the word text of the form to `cur`; returns the offset after
+        it. `$$ $? $# $! $@ $* $- $0..$9` and `$name` are one unit each, so the `'` in `$$'a\\'`
+        starts an ordinary quote; `$'..'` is ANSI-C only for a `$` met HERE (a `$` that is the
+        second char of `$$`, or escaped, never reaches this point), and only outside double
+        quotes - except directly inside a `${...}` (`ext`: bash's default `extquote` option
+        performs `$'..'` there even when the expansion is double-quoted: `"${x%$'\n'}"`)."""
+        text = self.text
+        i = j + 1
+        if i >= lim:
+            cur.append('$')
+            return i
+        c = text[i]
+        if c == '(':
+            if text.startswith('((', i, lim):
+                e = self.arith(j, i + 2, lim, emit)
+                if e is not None:
+                    cur.append(text[j:e])
+                    return e
+            e = self.sub(j, i + 1, lim, emit)
+            cur.append(text[j:e])
+            return e
+        if c == '{':
+            e = self.param(j, i + 1, lim, in_dq, emit)
+            cur.append(text[j:e])
+            return e
+        if c == '[':                        # old `$[ ... ]` arithmetic: not modelled
+            raise _LexUncertain(j)
+        if c == "'" and (ext or not in_dq):     # `$'...'` ANSI-C quote: escapes NOT interpreted
+            am = _ANSI_C.match(text, i, lim)
+            if am is None:
+                raise _LexUncertain(j)
+            cur.append(am.group(0)[1:-1])
+            return am.end()
+        if c == '"' and not in_dq:          # `$"..."` locale quote: drop the `$`
+            return i
+        if c in '$?#!@*-' or '0' <= c <= '9':
+            cur.append(text[j:i + 1])
+            return i + 1
+        m = _NAME.match(text, i, lim)
+        if m is not None:
+            cur.append(text[j:m.end()])
+            return m.end()
+        cur.append('$')
+        return i
+
+    def sub(self, start, body, lim, emit):
+        """`$(`, `(`, `<(`, `>(` opened at `start`, body from `body`: lexed with `cmd`, the same
+        routine as the top level. Returns the offset after the closing `)`."""
+        self._enter(start)
+        end = self.cmd(body, lim, True, False)
+        self.open.pop()
+        if emit:
+            self.codes.append(self.text[body:end - 1])
+        return end
+
+    def param(self, start, i, lim, in_dq, emit):
+        """`${...}` (opened at `start`, body from `i`): `(` and `)` are literal, `}` closes,
+        `$(` / `${` / `$((` / backticks nest. Quotes parse as quotes at top level; inside a
+        double-quoted string their rules depend on the operator, so they are uncertain there
+        (`$'..'` aside: see `dollar`)."""
+        text = self.text
+        budget = self.budget
+        self._enter(start)
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_PARAM.search(text, i, lim)
+            if m is None:
+                raise _LexUncertain(start)
+            j = m.start()
+            c = text[j]
+            i = j + 1
+            if c == '}':
+                break
+            if c == '\\':
+                i += 1
+            elif c == '$':
+                i = self.dollar(j, lim, in_dq, emit, [], True)
+            elif c == '`':
+                i = self.backtick(i, lim, emit, j, in_dq)
+            elif in_dq:
+                raise _LexUncertain(j)
+            elif c == "'":
+                k = text.find("'", i, lim)
+                if k < 0:
+                    raise _LexUncertain(j)
+                i = k + 1
+            else:
+                i = self.dq(i, lim, [], emit, j)
+        self.open.pop()
+        return i
+
+    def dq(self, i, lim, cur, emit, start):
+        """A "..." string opened at `start`, body from `i`; the de-quoted text goes to `cur`.
+        Only `\\` (before `$`, backtick, `"`, `\\`, newline), `$` and backtick are active."""
+        text = self.text
+        budget = self.budget
+        self._enter(start)
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_DQ.search(text, i, lim)
+            if m is None:
+                raise _LexUncertain(start)
+            j = m.start()
+            if j > i:
+                cur.append(text[i:j])
+            c = text[j]
+            i = j + 1
+            if c == '"':
+                break
+            if c == '\\':
+                if i >= lim:
+                    raise _LexUncertain(start)
+                nx = text[i]
+                cur.append('' if nx == '\n' else nx if nx in '$`"\\' else '\\' + nx)
+                i += 1
+            elif c == '`':
+                i = self.backtick(i, lim, emit, j, True)
+                cur.append(text[j:i])
+            else:
+                i = self.dollar(j, lim, True, emit, cur)
+        self.open.pop()
+        return i
+
+    def backtick(self, i, lim, emit, start, in_dq):
+        """A `...` opened at `start`, body from `i`: it ends at the first UNESCAPED backtick
+        (quotes inside do not matter); the body the shell runs has `\\$`, `\\``, `\\\\` (and
+        `\\"` inside double quotes) unescaped. Its inner text is lexed when it is scanned as
+        code one level down, not here."""
+        text = self.text
+        budget = self.budget
+        k = i
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_BQ.search(text, k, lim)
+            if m is None:
+                raise _LexUncertain(start)
+            j = m.start()
+            if text[j] == '\\':
+                k = j + 2
+                continue
+            break
+        if emit:
+            raw = text[i:j]
+            body = _BQ_UNESCAPE.sub(r'\1', raw)
+            self.codes.append(body)
+            if in_dq:
+                alt = _BQ_UNESCAPE_DQ.sub(r'\1', raw)
+                if alt != body:
+                    self.codes.append(alt)
+        return j + 1
+
+    def arith(self, start, i, lim, emit):
+        """`$((` / `((` opened at `start`, body from `i`. Counts parens; `<<` / `>>` are shifts
+        here; `$(...)` / backticks nest; ANY quote is uncertain. Returns the offset after the
+        closing `))`, or None when the closer is a lone `)` (bash then reads `( (` nested
+        subshells - the caller re-lexes it as a subshell). The body itself is also recorded as
+        a code string (it covers that ambiguity); nested substitutions are found through it."""
+        text = self.text
+        budget = self.budget
+        body = i
+        self._enter(start)
+        depth = 0
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_ARITH.search(text, i, lim)
+            if m is None:
+                self.open.pop()
+                return None
+            j = m.start()
+            c = text[j]
+            i = j + 1
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                if depth:
+                    depth -= 1
+                elif text.startswith(')', i, lim):
+                    self.open.pop()
+                    if emit:
+                        self.codes.append(text[body:j])
+                    return i + 1
+                else:
+                    self.open.pop()
+                    return None
+            elif c == '\\':
+                i += 1
+            elif c == '`':
+                i = self.backtick(i, lim, False, j, True)
+            elif c == '$':
+                i = self.dollar(j, lim, True, False, [])
+            else:                           # ' or "
+                raise _LexUncertain(start)
+
+    def hd_word(self, k, lim, op):
+        """The word after `<<` / `<<-` at `k` -> (end offset, delimiter after quote removal,
+        quoted?). Only forms that can be quote-removed with certainty: bare word characters,
+        `'...'`, `"..."` holding no `\\` `$` backtick or `'`, `\\X`, and concatenations. Anything
+        else (`$'EOF'`, `"a\\"b"`, `$x`, nothing at all) raises."""
+        text = self.text
+        parts = []
+        quoted = False
+        start = k
+        while k < lim:
+            c = text[k]
+            if c in ' \t\n;&|()<>':
+                break
+            if c == "'":
+                e = text.find("'", k + 1, lim)
+                if e < 0:
+                    raise _LexUncertain(op)
+                parts.append(text[k + 1:e])
+                quoted = True
+                k = e + 1
+            elif c == '"':
+                e = text.find('"', k + 1, lim)
+                if e < 0:
+                    raise _LexUncertain(op)
+                inner = text[k + 1:e]
+                if '\\' in inner or '$' in inner or '`' in inner or "'" in inner:
+                    raise _LexUncertain(op)
+                parts.append(inner)
+                quoted = True
+                k = e + 1
+            elif c == '\\':
+                if k + 1 >= lim or text[k + 1] == '\n':
+                    raise _LexUncertain(op)
+                parts.append(text[k + 1])
+                quoted = True
+                k += 2
+            elif c == '$' or c == '`':
+                raise _LexUncertain(op)
+            else:
+                m = _HEREDOC_BARE.match(text, k, lim)
+                parts.append(m.group(0))
+                k = m.end()
+        if k == start:
+            raise _LexUncertain(op)
+        delim = ''.join(parts)
+        if '\n' in delim:
+            raise _LexUncertain(op)
+        return k, delim, quoted
+
+    def hd_body(self, i, end, emit, op):
+        """An UNQUOTED heredoc body, text[i:end]: scanned like a double-quoted string. Only `\\`
+        (before `$`, backtick, `\\`, newline), `$(`, `${`, `$((` and backticks are active;
+        `'`, `"`, `(`, `#` are literal data."""
+        text = self.text
+        budget = self.budget
+        self._enter(op)
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_HDBODY.search(text, i, end)
+            if m is None:
+                break
+            j = m.start()
+            c = text[j]
+            i = j + 1
+            if c == '\\':
+                i += 1
+            elif c == '`':
+                i = self.backtick(i, end, emit, j, False)
+            else:
+                i = self.dollar(j, end, True, emit, [])
+        self.open.pop()
+
+    # -- command text --------------------------------------------------------------------
+    def cmd(self, i, lim, closer, emit):
+        """Lex command text from `i` to `lim`; with `closer` (a `$(` / `(` body) stop after the
+        unmatched `)` and return the offset after it, else return `lim`. Builds the words of
+        each simple command (redirection operators are `_W(..., redir=True)` tokens, not
+        separators: `>&`, `&>` are not `&`, `|&` is a pipe) and, when `emit`, records the
+        payloads handed to a nested shell (`_shell_payloads`) and the outermost substitutions.
+        Tracks `case ... esac` (its `pat)` does not close a substitution) and pending heredocs."""
+        text = self.text
+        budget = self.budget
+        codes = self.codes
+        words = []              # words of the current simple command
+        cur = []                # pieces of the word being built
+        in_word = False
+        plain = True            # the word so far is plain unquoted text
+        wstart = 0
+        pend = []               # pending heredocs: (delimiter-line regex, body is literal, offset of `<<`)
+        cases = []              # open `case`s: 'in?' (before `in`), 'pat' (patterns), 'body' (commands)
+
+        def cmd_position():
+            return not words or all(w in _CMD_KEYWORDS for w in words)
+
+        def flush_word(end):
+            nonlocal in_word, plain
+            if not in_word:
+                return
+            s = ''.join(cur)
+            del cur[:]
+            was_plain = plain
+            in_word = False
+            plain = True
+            if was_plain and s in _CASE_WORDS:
+                if s == 'case':
+                    if cmd_position() and not (cases and cases[-1] == 'pat'):
+                        cases.append('in?')
+                elif s == 'in':
+                    if cases and cases[-1] == 'in?':
+                        cases[-1] = 'pat'
+                        del words[:]
+                        return
+                elif cases and cases[-1] != 'in?' and cmd_position():     # esac
+                    cases.pop()
+            words.append(_W(s, wstart, end))
+
+        def flush_cmd():
+            if words:
+                if emit:
+                    codes.extend(_shell_payloads(words))
+                del words[:]
+
+        def redir_op(j, op, fd=True):
+            # A redirection operator token. A word of ONLY digits right before it is the fd.
+            nonlocal in_word, plain
+            s = j
+            e = j + len(op)
+            if in_word:
+                w = ''.join(cur)
+                if fd and plain and _DIGITS.match(w):
+                    s = wstart
+                    op = w + op
+                    del cur[:]
+                    in_word = False
+                else:
+                    flush_word(j)
+            words.append(_W(op, s, e, True))
+
+        def read_heredocs(pos):
+            # `pos` is just past a newline: consume each pending body up to its delimiter line.
+            for rx, quoted, op in pend:
+                budget[0] -= 1
+                if budget[0] < 0:
+                    raise _ExecOverBudget()
+                dm = rx.search(text, pos, lim)
+                if dm is None:
+                    raise _LexUncertain(op)
+                if not quoted:
+                    self.hd_body(pos, dm.start(), emit, op)
+                pos = min(dm.end() + 1, lim)
+            del pend[:]
+            return pos
+
+        try:
+            while i < lim:
+                budget[0] -= 1
+                if budget[0] < 0:
+                    raise _ExecOverBudget()
+                j = _LEX_CMD_RUN.match(text, i, lim).end()
+                if j > i:
+                    # Each word of the run costs a step, charged BEFORE the (Python-level) loop
+                    # that splits it: the blanks are counted at C speed, so a megabyte of words
+                    # is refused up front instead of after it has been scanned.
+                    nb = text.count(' ', i, j) + text.count('\t', i, j)
+                    if nb:
+                        budget[0] -= nb
+                        if budget[0] < 0:
+                            raise _ExecOverBudget()
+                    pos = i
+                    for bm in _BLANKS.finditer(text, i, j):
+                        s = bm.start()
+                        if s > pos:
+                            if not in_word:
+                                in_word = True
+                                wstart = pos
+                            cur.append(text[pos:s])
+                        if in_word:
+                            flush_word(s)
+                        pos = bm.end()
+                    if pos < j:
+                        if not in_word:
+                            in_word = True
+                            wstart = pos
+                        cur.append(text[pos:j])
+                    if j >= lim:
+                        i = lim
+                        break
+                c = text[j]
+                i = j + 1
+                if c == '\n':
+                    flush_word(j)
+                    flush_cmd()
+                    if pend:
+                        i = read_heredocs(i)
+                elif c == '\\':
+                    if i < lim:
+                        nx = text[i]
+                        if nx != '\n':      # `\<newline>` is a continuation: no word material
+                            if not in_word:
+                                in_word = True
+                                wstart = j
+                            plain = False
+                            cur.append(nx)
+                        i += 1
+                    else:
+                        if not in_word:
+                            in_word = True
+                            wstart = j
+                        cur.append('\\')
+                elif c == "'":
+                    k = text.find("'", i, lim)
+                    if k < 0:
+                        raise _LexUncertain(j)
+                    if not in_word:
+                        in_word = True
+                        wstart = j
+                    plain = False
+                    cur.append(text[i:k])
+                    i = k + 1
+                elif c == '"':
+                    if not in_word:
+                        in_word = True
+                        wstart = j
+                    plain = False
+                    i = self.dq(i, lim, cur, emit, j)
+                elif c == '`':
+                    if not in_word:
+                        in_word = True
+                        wstart = j
+                    plain = False
+                    i = self.backtick(i, lim, emit, j, False)
+                    cur.append(text[j:i])
+                elif c == '$':
+                    if not in_word:
+                        in_word = True
+                        wstart = j
+                    plain = False
+                    i = self.dollar(j, lim, False, emit, cur)
+                elif c == '#':
+                    if in_word:
+                        cur.append('#')         # mid-word `a#b`: not a comment
+                    else:
+                        k = text.find('\n', i, lim)         # a comment runs to the end of the line
+                        i = lim if k < 0 else k
+                elif c == ';':
+                    flush_word(j)
+                    flush_cmd()
+                    if cases and cases[-1] == 'body' and i < lim and text[i] in ';&':
+                        i += 1                  # `;;` `;&` `;;&`: the next clause's patterns
+                        if text[i - 1] == ';' and i < lim and text[i] == '&':
+                            i += 1
+                        cases[-1] = 'pat'
+                elif c == '&':
+                    if text.startswith('&&', j, lim):
+                        flush_word(j)
+                        flush_cmd()
+                        i = j + 2
+                    elif text.startswith('&>', j, lim):
+                        n2 = 3 if text.startswith('&>>', j, lim) else 2
+                        redir_op(j, text[j:j + n2], False)
+                        i = j + n2
+                    else:
+                        flush_word(j)
+                        flush_cmd()
+                elif c == '|':
+                    flush_word(j)
+                    flush_cmd()
+                    if i < lim and text[i] in '|&':
+                        i += 1
+                elif c == ')':
+                    flush_word(j)
+                    if cases and cases[-1] == 'pat':
+                        del words[:]            # the `)` ends a case pattern, not a substitution
+                        cases[-1] = 'body'
+                    else:
+                        flush_cmd()
+                        if closer:
+                            if pend:
+                                raise _LexUncertain(pend[0][2])
+                            return i
+                elif c == '(':
+                    if cases and cases[-1] == 'pat' and not in_word:
+                        continue                # `(pat)`: the optional leading paren
+                    if not in_word and text.startswith('(', i, lim):
+                        e = self.arith(j, i + 1, lim, emit)
+                        if e is not None:       # `(( ... ))` command
+                            flush_cmd()
+                            i = e
+                            continue
+                    flush_word(j)
+                    flush_cmd()
+                    i = self.sub(j, i, lim, emit)
+                else:                           # `<` or `>`
+                    if c == '<' and text.startswith('<<', j, lim) and not text.startswith('<<<', j, lim):
+                        k = j + 2
+                        strip = k < lim and text[k] == '-'
+                        if strip:
+                            k += 1
+                        while k < lim and text[k] in ' \t':
+                            k += 1
+                        e, delim, quoted = self.hd_word(k, lim, j)
+                        redir_op(j, '<<-' if strip else '<<')
+                        words.append(_W(text[k:e], k, e))
+                        pend.append((re.compile(('^\t*' if strip else '^') + re.escape(delim) + '$', re.M),
+                                     quoted, j))
+                        i = e
+                    elif text.startswith('(', i, lim):     # `<(` / `>(` process substitution
+                        flush_word(j)
+                        e = self.sub(j, i + 1, lim, emit)
+                        in_word = True
+                        wstart = j
+                        plain = False
+                        cur.append(text[j:e])
+                        i = e
+                    else:
+                        two = text[j:j + 3]
+                        if two == '<<<':
+                            op = '<<<'
+                        elif two[:2] in ('>>', '>&', '>|', '<>', '<&'):
+                            op = two[:2]
+                        else:
+                            op = c
+                        redir_op(j, op)
+                        i = j + len(op)
+            if closer:
+                raise _LexUncertain(self.open[-1])
+            flush_word(lim)
+            if pend:
+                raise _LexUncertain(pend[0][2])
+        except _LexUncertain:
+            if emit and not closer:
+                flush_cmd()             # the commands completed before the unresolved construct
+            raise
+        flush_cmd()
+        return lim
+
+
 def _executed_code(text, budget):
     """Return the code strings that `text` hands to a nested shell, one level down:
       - the operand of `<shell> -c` and the arguments of `eval` (see `_shell_payloads`);
       - every OUTERMOST command substitution `$( ... )` / `` `...` ``, subshell `( ... )` and
         process substitution `<( ... )`, `>( ... )` (nested ones are found when that body is
-        itself scanned, one level deeper).
+        itself scanned, one level deeper), the bodies of `$(( ... ))` / `(( ... ))`, and the
+        substitutions inside an unquoted-delimiter heredoc body.
 
-    A single linear pass with a context stack. Inside single quotes nothing is extracted
-    (literal data). Inside double quotes only `$(` and backticks are (the shell executes
-    them); a backslash escapes the next character. A heredoc whose delimiter is QUOTED
-    (`<<'EOF'`) has a literal body, which is skipped - a commit message full of `` `git push` ``
-    must not read as code. An unquoted-delimiter body is left in the stream (its expansions
-    do run). Never raises; on an unbalanced quote/paren it stops and returns what it found so
-    far (the status quo for the rest) - a quote opened inside a heredoc body (`don't`) desyncs
-    the scan the same way, and that too only ever loses an extraction. `#` starts a comment
-    only at the start of a word, as in the shell (a comment's apostrophe must not desync the
-    rest of the command). `budget[0]` is the steps left; running out raises `_ExecOverBudget`."""
-    codes = []
-    n = len(text)
-    i = 0
-    stack = []                  # contexts above the top level: 'p' (...), 'd' "...", 'b' `...`
-    nsub = 0                    # 'p'/'b' entries in `stack`; 0 = collecting words
-    sub_start = sub_open = 0    # raw start / body start of the outermost open substitution
-    sub_kind = ''               # 'p' `$(`, 'P' bare `(`, 'b' backtick
-    words = []                  # complete words of the current simple command
-    cur = []                    # pieces of the word being built
-    in_word = False
-    pend = []                   # quoted heredoc (delimiter, strip_tabs) awaiting the next newline
+    One lexer (`_Lexer`) reads all of it. Inside single quotes nothing is extracted (literal
+    data); inside double quotes and unquoted heredoc bodies only `$(` and backticks are (the
+    shell executes them). A heredoc whose delimiter is QUOTED (`<<'EOF'`) has a literal body,
+    which is skipped - a commit message full of `` `git push` `` must not read as code. `#`
+    starts a comment only at the start of a word (blanks are only space and tab).
 
-    def flush_word():
-        nonlocal in_word
-        if in_word:
-            words.append(''.join(cur))
-            del cur[:]
-            in_word = False
-
-    def flush_cmd():
-        if words:
-            codes.extend(_shell_payloads(words))
-            del words[:]
-
-    def skip_heredocs(pos):
-        # `pos` is just past a newline: skip each pending literal body up to its delimiter line.
-        for delim, strip in pend:
-            while pos < n:
-                nl = text.find('\n', pos)
-                line = text[pos:] if nl < 0 else text[pos:nl]
-                pos = n if nl < 0 else nl + 1
-                if (line.lstrip('\t') if strip else line) == delim:
-                    break
-        del pend[:]
-        return pos
-
-    def heredoc_at(j):
-        # `text[j:j+2] == '<<'` (not `<<<`). Returns the index to resume at, or -1 to stop.
-        k = j + 2
-        strip = k < n and text[k] == '-'
-        if strip:
-            k += 1
-        while k < n and text[k] in ' \t':
-            k += 1
-        m = _HEREDOC_WORD.match(text, k)
-        if m is None:
-            return -1
-        raw = m.group(0)
-        if _QUOTE_CHARS.search(raw):
-            pend.append((_QUOTE_CHARS.sub('', raw), strip))
-        return m.end()
-
-    def close_sub(end):
-        # Outermost substitution closed at text[end]: record its body; the raw text stays part
-        # of the current word (it may be the operand of `-c`).
-        nonlocal in_word
-        body = text[sub_open:end]
-        if sub_kind == 'b':
-            body = _BQ_UNESCAPE.sub(r'\1', body)
-        codes.append(body)
-        if sub_kind != 'P':
-            cur.append(text[sub_start:end + 1])
-            in_word = True
-
-    while i < n:
-        budget[0] -= 1
-        if budget[0] < 0:
-            raise _ExecOverBudget()
-        ctx = stack[-1] if stack else 'T'
-        if ctx == 'T':
-            m = _LEX_TOP.search(text, i)
-            j = m.start() if m else n
-            if j > i:
-                cur.append(text[i:j])
-                in_word = True
-            if m is None:
-                i = n
-                break
-            c = text[j]
-            i = j + 1
-            if c == '\\':
-                if i < n:
-                    cur.append(text[i])
-                    i += 1
-                else:
-                    cur.append('\\')
-                in_word = True
-            elif c == "'":
-                k = text.find("'", i)
-                if k < 0:
-                    break
-                cur.append(text[i:k])
-                in_word = True
-                i = k + 1
-            elif c == '"':
-                stack.append('d')
-                in_word = True
-            elif c == '`':
-                sub_start, sub_open, sub_kind = j, i, 'b'
-                stack.append('b')
-                nsub = 1
-            elif c == '$':
-                if text.startswith('(', i):
-                    sub_start, sub_open, sub_kind = j, i + 1, 'p'
-                    stack.append('p')
-                    nsub = 1
-                    i += 1
-                elif text.startswith("'", i):       # `$'...'` ANSI-C quote: escapes NOT interpreted
-                    am = _ANSI_C.match(text, i)
-                    if am is None:
-                        break
-                    cur.append(am.group(0)[1:-1])
-                    in_word = True
-                    i = am.end()
-                elif text.startswith('"', i):       # `$"..."` locale quote: drop the `$`
-                    in_word = True
-                else:
-                    cur.append('$')
-                    in_word = True
-            elif c == '#':
-                if in_word:
-                    cur.append('#')                 # mid-word `a#b`: not a comment
-                else:
-                    k = text.find('\n', i)         # a comment runs to the end of the line
-                    i = n if k < 0 else k
-            elif c == '(':
-                flush_word()
-                flush_cmd()
-                sub_start, sub_open, sub_kind = j, i, 'P'
-                stack.append('p')
-                nsub = 1
-            elif c in ';&|)':
-                flush_word()
-                flush_cmd()
-            elif c == '<':
-                if text.startswith('<<<', j):
-                    flush_word()
-                    i = j + 3
-                elif text.startswith('<<', j):
-                    flush_word()
-                    i = heredoc_at(j)
-                    if i < 0:
-                        break
-                else:
-                    cur.append('<')
-                    in_word = True
-            elif c == '\n':
-                flush_word()
-                flush_cmd()
-                if pend:
-                    i = skip_heredocs(i)
-            else:
-                flush_word()
-        elif ctx == 'd':
-            m = _LEX_DQ.search(text, i)
-            if m is None:
-                break
-            j = m.start()
-            if nsub == 0 and j > i:
-                cur.append(text[i:j])
-            c = text[j]
-            i = j + 1
-            if c == '"':
-                stack.pop()
-            elif c == '\\':
-                if i >= n:
-                    break
-                if nsub == 0:
-                    nx = text[i]
-                    cur.append(nx if nx in '$`"\\\n' else '\\' + nx)
-                i += 1
-            elif c == '`':
-                if nsub == 0:
-                    sub_start, sub_open, sub_kind = j, i, 'b'
-                stack.append('b')
-                nsub += 1
-            elif text.startswith('(', i):
-                if nsub == 0:
-                    sub_start, sub_open, sub_kind = j, i + 1, 'p'
-                stack.append('p')
-                nsub += 1
-                i += 1
-            elif nsub == 0:
-                cur.append('$')
-        elif ctx == 'b':
-            m = _LEX_BQ.search(text, i)
-            if m is None:
-                break
-            j = m.start()
-            i = j + 1
-            if text[j] == '\\':
-                i += 1
-            else:
-                stack.pop()
-                nsub -= 1
-                if nsub == 0:
-                    close_sub(j)
-        else:  # 'p'
-            m = _LEX_PAREN.search(text, i)
-            if m is None:
-                break
-            j = m.start()
-            c = text[j]
-            i = j + 1
-            if c == '\\':
-                i += 1
-            elif c == "'":
-                if j > 0 and text[j - 1] == '$':    # `$'...'`: backslash escapes a quote
-                    am = _ANSI_C.match(text, j)
-                    if am is None:
-                        break
-                    i = am.end()
-                else:
-                    k = text.find("'", i)
-                    if k < 0:
-                        break
-                    i = k + 1
-            elif c == '"':
-                stack.append('d')
-            elif c == '`':
-                stack.append('b')
-                nsub += 1
-            elif c == '#':
-                if j == 0 or text[j - 1] in _COMMENT_START_PREV:
-                    k = text.find('\n', i)
-                    i = n if k < 0 else k
-            elif c == '(':
-                stack.append('p')
-                nsub += 1
-            elif c == ')':
-                stack.pop()
-                nsub -= 1
-                if nsub == 0:
-                    close_sub(j)
-            elif c == '<':
-                if text.startswith('<<<', j):
-                    i = j + 3
-                elif text.startswith('<<', j):
-                    i = heredoc_at(j)
-                    if i < 0:
-                        break
-            elif pend:  # newline
-                i = skip_heredocs(i)
-    if not stack:
-        flush_word()
-    flush_cmd()
-    return codes
+    FAILS CLOSED: input the lexer cannot model with certainty (see `_Lexer`) raises
+    `_LexUncertain` - unless nothing from the start of the earliest unresolved construct to the
+    end of `text` can spell git (`_GIT_MENTION`), in which case the codes found before it, which
+    are complete, are returned. `budget[0]` is the steps left; running out raises
+    `_ExecOverBudget`. Any other exception is a scanner fault and propagates to the caller."""
+    lx = _Lexer(text, budget)
+    try:
+        lx.cmd(0, len(text), False, True)
+    except _LexUncertain as exc:
+        start = min(exc.pos, lx.open[0]) if lx.open else exc.pos
+        if _git_mentioned(text, start):
+            raise
+    return lx.codes
 
 
 def _executable_segments(command, budget=None, depth=0):
     """Every shell segment of `command` (exactly what `_scannable_segments` yields, FIRST and
     unchanged), followed by the segments of the code it hands to a nested shell
     (`_executed_code`), recursively to `_MAX_EXEC_DEPTH`. A `_Refusal` is yielded instead when
-    the nested scan is over its step / code-count cap or nested too deep to follow - the
-    caller blocks. `budget` is `[scanner steps left, nested code strings left]`, shared by
-    every level.
+    the scan is over its step / code-count cap, nested too deep to follow, cannot parse the text
+    with certainty (`_LexUncertain`) or crashes - the caller blocks, so no failure of the scan
+    can turn into an allow. `budget` is `[scanner steps left, nested code strings left]`,
+    shared by every level.
 
     Only text that spells `git` is ever scanned for nested code: nested code is a de-quoted
     rewrite of its parent, so it can only contain a git invocation if the parent contains a
     `g<quotes>i<quotes>t` spelling. That keeps a big git-free command (a heredoc writing a
-    file) entirely off this path."""
+    file) entirely off this path. The scan reads the RAW command (see the note above); only
+    the real segments come from the continuation-joined lines."""
     joined = _join_continuations(command)
     for line in joined:
         for seg in re.split(r';|&&|\|\||\|', line):
             yield seg
-    text = '\n'.join(joined)
-    if not _GIT_MENTION.search(text):
+    text = command
+    if not _git_mentioned(text):
         return
     if budget is None:
         budget = [_MAX_EXEC_SCAN_STEPS, _MAX_EXEC_CODES]
@@ -2776,10 +3202,11 @@ def _executable_segments(command, budget=None, depth=0):
     except _ExecOverBudget:
         yield _Refusal(_EXEC_BUDGET_MSG)
         return
-    except Exception:   # never raise out of the guard: no nested code found = the status quo
+    except Exception:       # `_LexUncertain`, or a scanner fault: either way, cannot see = refuse
+        yield _Refusal(_LEX_UNCERTAIN_MSG)
         return
     for code in codes:
-        if not _GIT_MENTION.search(code):
+        if not _git_mentioned(code):
             continue
         budget[1] -= 1
         if budget[1] < 0:
