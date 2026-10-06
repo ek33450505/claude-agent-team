@@ -448,6 +448,27 @@ import sys
 # Matches: -C <path>, --no-pager, -c <cfg>, --git-dir=<d>, --work-tree=<w>
 _GIT_OPTS = r'(\s+(-C\s+\S+|--no-pager|-c\s+\S+|--git-dir=\S+|--work-tree=\S+))*'
 
+
+def _flag_cluster(letter: str) -> str:
+    """Regex source for a single-dash short-flag cluster CONTAINING `letter`
+    (`-f`, `-rf`, `-fb`, ...). Verdict-identical to the old
+    `-[a-zA-Z]*<letter>[a-zA-Z]*` but linear in the token length.
+
+    The old form is O(n^2) on one long token that ends in a word character
+    after the letter run (`-fff...f_`): for every position the first star
+    could stop at, the second star retried every length and `\\b` / `(\\s|$)`
+    failed each time. 2026-10-06 security finding: a ~60 KB token made one
+    `git branch`/`checkout`/`rm` segment cost >10 s, past the 5 s PreToolUse
+    hook timeout, and a hook timeout is a non-blocking ALLOW. The terminator
+    that follows every use of this fragment (`\\b` or `(\\s|$)`) can only
+    hold at the END of the maximal letter run — between two letters neither
+    holds — so "the run contains `letter`" is checked once in a lookahead
+    and the run is then consumed by a single greedy `+`, which on failure
+    backs off one position at a time (O(n)) instead of re-trying a nested
+    star at each. No capture group is introduced, so numbered groups in the
+    patterns that embed this fragment keep their numbering."""
+    return r'-(?=[a-zA-Z]*' + letter + r')[a-zA-Z]+'
+
 # --- git commit block -------------------------------------------------------
 # Tolerates extra VAR=value assignments between CAST_COMMIT_AGENT=1 and git
 # (e.g. CAST_COMMIT_AGENT=1 CAST_SKIP_PLUGIN_DRIFT=1 git commit ...).
@@ -514,7 +535,7 @@ _RESET_BLOCK = re.compile(
 _CLEAN_ALLOW = re.compile(
     r'(^|&&\s*)CAST_CLEAN_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+clean\b'
 )
-_CLEAN_DRY_RUN = r'(\s|^)(--dry-run|-[a-zA-Z]*n[a-zA-Z]*)(\s|$)'
+_CLEAN_DRY_RUN = r'(\s|^)(--dry-run|' + _flag_cluster('n') + r')(\s|$)'
 _CLEAN_BLOCK = re.compile(
     r'(^|\s)git' + _GIT_OPTS + r'\s+clean\b(?!.*' + _CLEAN_DRY_RUN + r')'
 )
@@ -778,7 +799,7 @@ def _checkout_bare_path_blocks(seg: str) -> bool:
 # Clusters with no `f` (`-b`, `-B`, `-q`, `-t`, `-p`, `-m`, `-d`, and any
 # combination of them) correctly do NOT match, since the class requires a
 # literal lowercase `f` present in the token.
-_FORCE_FLAG_LOOKAHEAD = r'(?:^|\s)(?:--force|-[a-zA-Z]*f[a-zA-Z]*)\b'
+_FORCE_FLAG_LOOKAHEAD = r'(?:^|\s)(?:--force|' + _flag_cluster('f') + r')\b'
 _CHECKOUT_FORCE_BLOCK = re.compile(
     r'(^|\s)git' + _GIT_OPTS + r'\s+checkout\b(?=.*' + _FORCE_FLAG_LOOKAHEAD + r')'
 )
@@ -1072,8 +1093,8 @@ _GIT_RM_BLOCK = re.compile(
 #     `-c -f` (force-copy onto an existing branch, same clobber class as
 #     `-M`, not in the reported gap but closed for free by the same fix),
 #     and bare `-f`/`--force` with no `-d`/`-m`/`-c` verb at all.
-_BRANCH_D_LOOKAHEAD = r'(?:^|\s)-[a-zA-Z]*D[a-zA-Z]*\b'
-_BRANCH_M_LOOKAHEAD = r'(?:^|\s)-[a-zA-Z]*M[a-zA-Z]*\b'
+_BRANCH_D_LOOKAHEAD = r'(?:^|\s)' + _flag_cluster('D') + r'\b'
+_BRANCH_M_LOOKAHEAD = r'(?:^|\s)' + _flag_cluster('M') + r'\b'
 _BRANCH_ALLOW = re.compile(
     r'(^|&&\s*)CAST_BRANCH_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+branch\b'
 )
@@ -1200,8 +1221,11 @@ def _update_ref_overwrites_existing(seg: str) -> bool:
         if cdir_m:
             cmd += ['-C', cdir_m.group(1)]
         cmd += ['rev-parse', '--verify', '--quiet', ref]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        return r.returncode == 0
+        # Memoised per `_git_evaluate` call (see `_EVAL_MEMO`): N `update-ref` segments naming
+        # the same ref are one spawn, not N (each up to 5 s).
+        return _memoized(
+            ('verify', tuple(cmd)),
+            lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=5).returncode == 0)
     except Exception:
         return False
 
@@ -1840,11 +1864,41 @@ def _audit_policy_override(policy_id: str, file_path: str, session_id: str) -> N
 # --------------------------------------------------------------------------
 # Bash: git commit / push / stash guards
 # --------------------------------------------------------------------------
+# Per-`_git_evaluate`-call memo (None whenever no call is in flight, so direct callers and
+# tests always recompute). 2026-10-06 security fix: `_audit_push_hatch` /
+# `_audit_commit_hatch` spawned one `git rev-parse` PER HATCHED SEGMENT (and
+# `_update_ref_overwrites_existing` one per `update-ref` segment) with no cap, so ~500
+# hatched segments (13 KB) cost seconds of subprocess time and pushed the guard past its
+# watchdog budget. Within one command the cwd and the repo do not change, so one spawn per
+# distinct (cwd / ref) answers every segment. Never memoises across calls: a stale
+# toplevel or ref answer in a later command would be wrong.
+_EVAL_MEMO = None
+
+
+def _memoized(key, compute):
+    """`compute()` once per `_git_evaluate` call for `key`; recomputed every time outside one."""
+    memo = _EVAL_MEMO
+    if memo is None:
+        return compute()
+    if key not in memo:
+        memo[key] = compute()
+    return memo[key]
+
+
 def _repo_toplevel() -> str:
     """Return the cwd repo's git toplevel, or '' on any failure (best-effort).
 
     A '' result degrades the hatch event to legacy-global handling in the
-    reconcile gate (fail-closed, per the D5 hardening compat table)."""
+    reconcile gate (fail-closed, per the D5 hardening compat table).
+    Memoised per `_git_evaluate` call (see `_EVAL_MEMO`)."""
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        cwd = None
+    return _memoized(('toplevel', cwd), _repo_toplevel_uncached)
+
+
+def _repo_toplevel_uncached() -> str:
     try:
         r = subprocess.run(['git', 'rev-parse', '--show-toplevel'],
                            capture_output=True, text=True, timeout=5)
@@ -1854,6 +1908,12 @@ def _repo_toplevel() -> str:
 
 
 def _hatch_session_id(repo: str) -> str:
+    """Memoised per `_git_evaluate` call (see `_EVAL_MEMO`): the DB tier would otherwise
+    open sqlite once per hatched segment."""
+    return _memoized(('sid', repo), lambda: _hatch_session_id_uncached(repo))
+
+
+def _hatch_session_id_uncached(repo: str) -> str:
     """Resolve the session id for a hatch event, mirroring cast-commit-provenance.
 
     Order: CAST_SESSION_ID → CLAUDE_SESSION_ID → DB unique-active-or-refuse
@@ -1939,6 +1999,104 @@ def _audit_push_hatch() -> None:
 # its per-segment loop — so this cap never touches the ALLOW/BLOCK verdict,
 # only whether the audit-record subprocess gets spawned.
 _MAX_HATCH_RECORDS_PER_COMMAND = 8
+
+# 2026-10-06 security fix (High): CPU-time bound on the regex scan. A hook
+# TIMEOUT is a non-blocking error, i.e. an ALLOW, so a command that makes this
+# guard run past the PreToolUse timeout (5 s) silently bypasses every git block
+# in it. Measured before this fix, in-process: `("git " * N) + "; git push ..."`
+# cost 0.66 s at N=5k, 2.5 s at 10k, 11.5 s at 20k, 41 s at 40k — about 60 KB of
+# padding in front of a raw push beat the hook timeout.
+#
+# Root cause: every BLOCK pattern is anchored at `(^|\s)git`, and `re.search`
+# retries that anchor at EVERY `git` token in the segment. Each retry then does
+# O(rest-of-segment) work — either a `(?=.*Y)` / `(?!.*Z)` lookahead
+# (`_GC_CINJECT_BLOCK` is just `git\b(?=.*-c gc.xxx=)`, so it pays even for a
+# bare `git git git ...`) or an option-run walk (`_GIT_OPTS` eats `-c git -c git
+# ...` to the end of the line and then backs off one iteration at a time). N
+# tokens x O(N) rest = O(N^2); 22 of the module's patterns were measured
+# super-linear this way. The cost is per token, so it is paid by padding BEFORE
+# the verb, and it is paid on a segment that itself matches nothing.
+#
+# Why a bound and not a rewrite of those 22 patterns: the retry-from-every-`git`
+# shape is inherent to `re.search` over a leftmost-anchored pattern with a
+# trailing lookahead, the rewrites are not verdict-obvious (a negative lookahead
+# such as `(?!.*--cached)` fails at every retry and cannot be cut off), and a
+# per-pattern fix leaves the NEXT pattern someone adds quadratic again. The bound
+# is pattern-independent: it caps the one quantity every one of them scales with.
+#
+# What is bounded: the super-linear part, `(git tokens - 1) x segment length`,
+# summed over every segment/variant of the command. One `git` token is linear
+# no matter how long the segment is, so it costs nothing against the bound;
+# real commands are far under it (a 40 KB segment may carry ~10 `git` tokens,
+# an 8 KB one ~50; a segment under ~1.3 KB can never trip it at all, since
+# it cannot hold enough tokens). Over the bound the command is BLOCKED
+# (fail closed): refusing a command nobody can write by hand is the safe
+# direction, whereas running it to the hook timeout is an allow. At the bound
+# the measured worst case across all patterns is ~0.2 s.
+#
+# The single-token quadratic (`-fff...f_`, one star group after another over the
+# same class) is NOT bounded here — it is a different shape (one start, O(n^2)
+# inside the token) and is removed exactly by `_flag_cluster`.
+_MAX_GIT_SCAN_WORK = 400_000
+_GIT_START_TOKEN = re.compile(r'(?:^|\s)git\b')
+
+# `shlex.split` (run by `_normalize_git_segment`) is O(n^2) in the length of its
+# LONGEST TOKEN — it grows `self.token` one character at a time, an attribute
+# `+=` CPython cannot do in place. Measured: 1.2 s at 400 KB, 4.5 s at 800 KB, for
+# one `x...x` token. Two exact-or-fail-closed cuts, neither changing a verdict a
+# real command can reach:
+#   1. `_normalize_git_segment` returns None unless the segment's first command
+#      word, quote- and escape-stripped, is `git`. A segment with no
+#      `g<quotes/backslashes>i<quotes/backslashes>t` anywhere cannot satisfy
+#      that (shlex only DELETES quote/backslash characters, it never adds or
+#      reorders letters), so it is not tokenised at all — same None as before.
+#   2. A segment that DOES mention `git` and is longer than
+#      `_MAX_GIT_SEGMENT_LEN` is blocked rather than tokenised: tokenising it
+#      costs up to the hook timeout, and 200 KB on one line (a newline,
+#      `;`, `&&` or `|` ends a segment) is not a hand-written command.
+_MAX_GIT_SEGMENT_LEN = 200_000
+# Round-2 security finding (HIGH-1): the per-segment cap alone is not enough. shlex costs ~0.3 s
+# per 195 KB token and the dispatcher's watchdog budget is 2 s, so FIVE 195 KB git-mentioning
+# segments (each under the cap) pushed the guard past the budget — and a command that is only
+# decided by the watchdog is decided by a blunt over-approximation, not by the guard. The bytes
+# handed to `_normalize_git_segment` are therefore also capped CUMULATIVELY across the whole
+# command: 2 x 195 KB (~0.6 s) still passes, a 3rd is refused up front, fail closed.
+_MAX_GIT_TOKENIZE_BYTES = 400_000
+_GIT_MENTION = re.compile(r'g[\\\'"]*i[\\\'"]*t')
+
+
+def _scan_work(v: str, limit: int) -> int:
+    """Super-linear regex work `v` costs: `(git start tokens - 1) x len(v)`
+    (0 for a segment with at most one `git` token). Stops counting once the
+    result exceeds `limit` and returns `limit + 1`, so a huge padded segment
+    is rejected after `limit / len(v)` iterations rather than after scanning
+    it all."""
+    n = len(v)
+    starts = 0
+    for _ in _GIT_START_TOKEN.finditer(v):
+        starts += 1
+        if starts > 1 and (starts - 1) * n > limit:
+            return limit + 1
+    return (starts - 1) * n if starts > 1 else 0
+
+
+_TOKENIZE_BUDGET_MSG = (
+    "**[CAST]** Bash command blocked: its git-mentioning lines/segments add up to far more "
+    "text than any hand-written command (over 400,000 characters), and tokenising it to "
+    "check the git blocks would take unbounded time. A guard that runs past the hook "
+    "timeout is silently skipped, so the git guard refuses (fails closed) instead of "
+    "attempting it. Split it into separate commands, or pass the data via a file rather "
+    "than inline."
+)
+_SCAN_BUDGET_MSG = (
+    "**[CAST]** Bash command blocked: it contains far more `git` tokens per "
+    "line/segment than any hand-written command, and checking it against the "
+    "git blocks would take unbounded time. A guard that runs past the hook "
+    "timeout is silently skipped, so the git guard refuses (fails closed) "
+    "instead of attempting the scan. Split it into separate commands (a "
+    "newline, `;`, `&&` or `|` starts a new segment), or pass the data via a "
+    "file rather than inline."
+)
 
 
 def _record_hatch(variable: str, value: str, git_op: str) -> None:
@@ -2099,27 +2257,59 @@ def _scannable_segments(command: str):
     # count of N backslashes leaves (N-1)/2 literal backslashes behind once
     # the continuation itself is consumed, matching bash's own escaped-pair
     # semantics (2026-08-24 correctness fix).
-    joined_lines = []
-    buf = ''
-    for line in command.split('\n'):
-        buf += line
-        trailing = 0
-        idx = len(buf) - 1
-        while idx >= 0 and buf[idx] == '\\':
-            trailing += 1
-            idx -= 1
-        if trailing % 2 == 1:
-            buf = buf[:len(buf) - trailing] + ('\\' * ((trailing - 1) // 2))
-            continue
-        joined_lines.append(buf)
-        buf = ''
-    if buf:
-        joined_lines.append(buf)
+    joined_lines = _join_continuations(command)
 
     # Step 2: split each joined line into shell segments.
     for line in joined_lines:
         for seg in re.split(r';|&&|\|\||\|', line):
             yield seg
+
+
+def _join_continuations(command: str):
+    """Step 1 of `_scannable_segments`: the list of logical lines after joining
+    backslash line-continuations (only an ODD trailing-backslash count joins; an odd
+    count of N leaves (N-1)/2 literal backslashes — see that docstring).
+
+    LINEAR (2026-10-06 security fix). The original kept one growing string and rebuilt
+    it with `buf = buf[:len(buf) - trailing] + ...` on every continuation line:
+    O(lines x length), 0.85 s at 900 KB and >9 s at 4.8 MB of `a\\\\\\n` lines. This keeps
+    the pieces in a list, tracks the length of the trailing backslash run instead of
+    re-scanning the string, and joins once per logical line. Output is identical to the
+    original for every input — the old loop is pinned as a reference implementation in
+    tests/test_cast_git_guard_perf.py and compared exhaustively on small alphabets and on
+    random inputs (including `\\r`, empty lines and runs of backslashes that span lines)."""
+    joined_lines = []
+    parts = []      # pieces of the logical line being built; ''.join(parts) is the old `buf`
+    tail_bs = 0     # backslashes at the very end of ''.join(parts)
+    for line in command.split('\n'):
+        parts.append(line)
+        stripped = line.rstrip('\\')
+        run = len(line) - len(stripped)          # backslashes ending `line` itself
+        # A line made ONLY of backslashes (or empty) extends the run already at the end of
+        # the buffer; otherwise the run ends inside `line` and the buffer's old tail is cut off.
+        trailing = tail_bs + run if not stripped else run
+        if trailing % 2 == 1:
+            # Drop the `trailing` backslashes from the end of the buffer ...
+            remaining = trailing
+            while remaining > 0:
+                piece = parts.pop()
+                if len(piece) <= remaining:
+                    remaining -= len(piece)
+                else:
+                    parts.append(piece[:len(piece) - remaining])
+                    remaining = 0
+            # ... and leave (trailing-1)//2 literal ones behind.
+            tail_bs = (trailing - 1) // 2
+            if tail_bs:
+                parts.append('\\' * tail_bs)
+            continue
+        joined_lines.append(''.join(parts))
+        parts = []
+        tail_bs = 0
+    buf = ''.join(parts)
+    if buf:
+        joined_lines.append(buf)
+    return joined_lines
 
 
 def _git_evaluate(command: str):
@@ -2130,13 +2320,16 @@ def _git_evaluate(command: str):
     tests and by probes; renaming it or changing its return shape breaks
     them.
 
-    The ONLY thing this wrapper adds over calling the impl directly is a
-    `finally` clause that emits exactly one `CAST_HATCH_RECORD_CAP`
-    sentinel `ack_events` row (via `_record_hatch`) if `_git_evaluate_impl`
-    suppressed one or more per-hatch records against
-    `_MAX_HATCH_RECORDS_PER_COMMAND`. `finally` fires on every exit path —
-    an ALLOW return, a BLOCK return, or an unexpected exception — which
-    matters because `_git_evaluate_impl` returns EARLY on the first BLOCK
+    The ONLY things this wrapper adds over calling the impl directly are (a) the
+    per-call `_EVAL_MEMO` scope (2026-10-06: one subprocess per distinct cwd/ref
+    answers every hatched/`update-ref` segment) and (b) emitting exactly one
+    `CAST_HATCH_RECORD_CAP` sentinel `ack_events` row (via `_record_hatch`) if
+    `_git_evaluate_impl` suppressed one or more per-hatch records against
+    `_MAX_HATCH_RECORDS_PER_COMMAND`. The sentinel is emitted on every exit
+    path — an ALLOW return, a BLOCK return, or an ordinary exception — EXCEPT
+    while a BaseException that is not an Exception is unwinding (the
+    dispatcher's watchdog alarm: the sentinel is a 2 s subprocess and the
+    budget has already expired). That matters because `_git_evaluate_impl` returns EARLY on the first BLOCK
     verdict in its per-segment loop: a suppression counter tallied only
     after the loop completes would be lost whenever a block follows a
     suppression later in the same command. The sentinel call itself is
@@ -2151,10 +2344,10 @@ def _git_evaluate(command: str):
     cap-sentinel row has the count and the command's rough timing only; the
     per-hatch detail for anything past the cap is gone, not just deferred.
     """
+    global _EVAL_MEMO
     suppressed_counter = [0]
-    try:
-        return _git_evaluate_impl(command, suppressed_counter)
-    finally:
+
+    def _emit_cap_sentinel():
         if suppressed_counter[0] > 0:
             try:
                 _record_hatch(
@@ -2165,6 +2358,22 @@ def _git_evaluate(command: str):
                 )
             except Exception:
                 pass
+
+    _EVAL_MEMO = {}   # see `_EVAL_MEMO`: scoped to exactly this call
+    try:
+        try:
+            result = _git_evaluate_impl(command, suppressed_counter)
+        except Exception:
+            _emit_cap_sentinel()   # an ordinary error still records the suppressed count
+            raise
+        # NOT emitted when a BaseException that is not an Exception is unwinding (the
+        # dispatcher's SIGALRM watchdog `_GitGuardTimeout`, KeyboardInterrupt, SystemExit):
+        # `_record_hatch` is a subprocess with a 2 s timeout, and spawning it AFTER the
+        # budget expired added 2 s to a 2 s budget (~4.2 s of the hook's 5 s).
+        _emit_cap_sentinel()
+        return result
+    finally:
+        _EVAL_MEMO = None
 
 
 def _git_evaluate_impl(command: str, suppressed_counter):
@@ -2240,6 +2449,8 @@ def _git_evaluate_impl(command: str, suppressed_counter):
     not a suppression and does not touch `suppressed_counter`.
     """
     hatch_record_count = 0
+    scan_work = 0  # running `_scan_work` total — see `_MAX_GIT_SCAN_WORK`
+    tokenized_bytes = 0  # running total handed to shlex — see `_MAX_GIT_TOKENIZE_BYTES`
     for seg in _scannable_segments(command):
         seg = seg.strip()
         if not seg:
@@ -2250,8 +2461,25 @@ def _git_evaluate_impl(command: str, suppressed_counter):
         # that's deliberate, not an oversight). `hit()` checks every pattern
         # against BOTH the raw segment and its normalized form, closing the
         # quoted-token evasion class without rewriting any BLOCK/ALLOW regex.
-        norm = _normalize_git_segment(seg)
+        mentions_git = _GIT_MENTION.search(seg) is not None
+        if mentions_git and len(seg) > _MAX_GIT_SEGMENT_LEN:
+            return 2, _SCAN_BUDGET_MSG  # see `_MAX_GIT_SEGMENT_LEN`
+        if mentions_git:
+            tokenized_bytes += len(seg)
+            if tokenized_bytes > _MAX_GIT_TOKENIZE_BYTES:
+                return 2, _TOKENIZE_BUDGET_MSG  # see `_MAX_GIT_TOKENIZE_BYTES`
+        norm = _normalize_git_segment(seg) if mentions_git else None
         variants = (seg, norm) if norm else (seg,)
+
+        # 2026-10-06 security fix: refuse (fail closed) before any pattern
+        # runs if this command's accumulated regex work would pass the bound
+        # — see `_MAX_GIT_SCAN_WORK`. Checked on BOTH variants: `norm` can
+        # turn `'git' 'git' ...` (no `git` token in `seg`) into a padded
+        # string of real ones. A timeout is an ALLOW; this is a BLOCK.
+        for variant in variants:
+            scan_work += _scan_work(variant, _MAX_GIT_SCAN_WORK - scan_work)
+        if scan_work > _MAX_GIT_SCAN_WORK:
+            return 2, _SCAN_BUDGET_MSG
 
         def hit(pattern, _v=variants):
             return any(pattern.search(v) for v in _v)
