@@ -1617,6 +1617,22 @@ def _read_policy_config(path: str):
                 pass
 
 
+def _running_from_installed_scripts() -> bool:
+    """True when this module was loaded from the INSTALLED ~/.claude/scripts dir.
+
+    Evaluated at call time (HOME may differ per call). The plugin runs this module
+    from ${CLAUDE_PLUGIN_ROOT}/scripts and repo checkouts from <repo>/scripts; neither
+    is the installed dir, so a missing installed policies.json is expected there.
+    Any failure computing the answer fails toward True (closed).
+    """
+    try:
+        here = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+        installed = os.path.realpath(os.path.expanduser('~/.claude/scripts'))
+        return here == installed
+    except Exception:
+        return True
+
+
 def _policy_evaluate(file_path: str, session_id: str = ''):
     """Evaluate the INSTALLED ~/.claude/config/policies.json against file_path.
     Returns (exit_code, message_or_None).
@@ -1627,8 +1643,12 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
     allow silently (the original routed warns to a suppressed stream).
 
     Only the installed copy is read (never a cwd-relative config/policies.json: the
-    project dir is agent-writable). A missing installed file (lstat ENOENT) means
-    CAST is not installed → (0, None). A PRESENT but unusable config (not a regular
+    project dir is agent-writable). A missing installed file (lstat ENOENT) is judged
+    by where this guard runs from: loaded from ~/.claude/scripts (CAST installed) →
+    deletion/corruption → FAILS CLOSED (2, msg; CAST_POLICY_OVERRIDE=1 bypasses,
+    audit-logged as policies-config-missing); loaded from anywhere else (the Claude
+    Code plugin's ${CLAUDE_PLUGIN_ROOT}/scripts, a repo checkout) → no installed
+    config is expected → (0, None). A PRESENT but unusable config (not a regular
     file, oversize, bad JSON, wrong shape, malformed policy entry, invalid
     path_pattern regex, severity not exactly "block"/"warn") FAILS CLOSED → (2, msg);
     CAST_POLICY_OVERRIDE=1 bypasses it (audit-logged). A file_path longer than
@@ -1650,7 +1670,19 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
     policies_path = os.path.expanduser('~/.claude/config/policies.json')
     status, loaded = _read_policy_config(policies_path)
     if status == 'missing':
-        return 0, None
+        if not _running_from_installed_scripts():
+            return 0, None
+        # Installed guard + absent config = deletion/corruption, not "never installed".
+        if override:
+            _audit_policy_override('policies-config-missing', file_path[:256], session_id)
+            return 0, None
+        return 2, (
+            f'**[CAST-POLICY-BLOCK]** Policy config `~/.claude/config/policies.json` is missing although '
+            f'CAST is installed (this guard runs from ~/.claude/scripts); failing closed — this edit to '
+            f'`{file_path[:256]}` is blocked until it is restored. Run `bash install.sh` from the '
+            f'claude-agent-team checkout.\n'
+            f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
+        )
 
     def _config_invalid(reason: str):
         if override:
