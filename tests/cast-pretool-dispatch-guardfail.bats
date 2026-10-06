@@ -437,6 +437,192 @@ break_git_guard_evaluate() {
     assert_output "0"
 }
 
+# A guard that LOADS but whose evaluate() runs far past the hook budget (a super-linear scan:
+# ~100 KB of repeated `git ` tokens took ~15 s before the 2026-10-06 regex fix). The hook
+# timeout is 5 s and a hook TIMEOUT is a non-blocking error -- an ALLOW -- so the dispatcher
+# runs evaluate() under a SIGALRM watchdog (_GIT_GUARD_BUDGET_SECS = 2 s) and, on expiry, falls
+# back to the degraded git block: fail CLOSED.
+break_git_guard_slow() {
+    printf 'import time\ndef evaluate(*a, **k):\n    time.sleep(10)\n    return 0, ""\n' \
+        > "$TMPSCRIPTS/cast-git-guard.py"
+}
+
+# slow_guard_dispatch <python> <command> <want exit> <stderr substring> [max seconds, default 4]: dispatch one Bash
+# payload through the slow guard. Passes only if the exit code matches, stderr contains the
+# substring, and the hook returned in < 4 s (budget 2 s + startup, well inside the 5 s hook
+# timeout; 4.5 s where the 3.5 s total Bash-guard budget applies). The run is bounded at 8 s and subprocess.run reaps the child on timeout, so a
+# missing watchdog FAILS the test (the guard sleeps 10 s) instead of hanging it, and nothing
+# is left behind holding bats' fds 3/4.
+slow_guard_dispatch() {
+    python3 -c '
+import json, subprocess, sys, time
+py, script, cmd, want, needle = sys.argv[1:6]
+maxsec = float(sys.argv[6])
+payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": "gf-slow"})
+t0 = time.monotonic()
+try:
+    p = subprocess.run([py, script], input=payload.encode(), capture_output=True, timeout=8)
+except subprocess.TimeoutExpired:
+    print("TIMEOUT (> 8 s): no watchdog -- the slow guard ran to completion")
+    sys.exit(1)
+elapsed = time.monotonic() - t0
+err = p.stderr.decode()
+print(py, repr(cmd), "exit", p.returncode, "in", round(elapsed, 2), "s")
+if p.returncode != int(want) or needle not in err or elapsed >= maxsec:
+    print("wanted exit", want, "with", repr(needle), "in <", maxsec, "s; stderr:", err[:300])
+    sys.exit(1)
+' "$1" "$TMPSCRIPTS/cast-pretool-dispatch.py" "$2" "$3" "$4" "${5:-4.0}"
+}
+
+# Run under the default python3 and, when present, /usr/bin/python3 (3.9 on macOS): SIGALRM
+# must interrupt the slow path on both. No skip: an absent system python is simply not
+# exercised (a new skip call site would also need a skip-ledger entry).
+@test "slow guard + Bash → git push blocked (2) within 4 s, naming the timeout" {
+    break_git_guard_slow
+    run slow_guard_dispatch python3 "git push origin main" 2 "could not finish checking this command within 2s"
+    assert_success
+    if [[ -x /usr/bin/python3 ]]; then
+        run slow_guard_dispatch /usr/bin/python3 "git push origin main" 2 "could not finish checking this command within 2s"
+        assert_success
+    fi
+}
+
+# Security round 1 (H1): on a TIMEOUT the guard decided nothing, so EVERY command that names git
+# is blocked -- not only the 8 verbs of the load-failure degraded table. A command that never
+# names git stays allowed by the git guard.
+@test "slow guard + Bash → ANY git-naming command is blocked (2), including verbs the degraded table lacks" {
+    break_git_guard_slow
+    local g="git" c
+    for c in "$g status" "$g filter-branch --index-filter x" "$g update-ref -d refs/heads/x" \
+             "$g reflog expire --expire=now --all" "$g gc --prune=now" \
+             "$g worktree remove --force w" "$g switch -f main" "$g -c gc.pruneExpire=now gc" \
+             "GIT push" "\$'$g' push" "g\\it push" "/usr/bin/$g push" "x;$g push" \
+             $'g\\\nit push' $'g\\\r\nit push' $'G\\\nIT push' "g\$''it push"; do
+        run slow_guard_dispatch python3 "$c" 2 "could not finish checking this command within 2s"
+        if [ "$status" -ne 0 ]; then
+            echo "command [$c]: $output" >&2
+            return 1
+        fi
+    done
+}
+
+@test "slow guard + Bash → a command that never names git is still allowed (0) within 4 s" {
+    break_git_guard_slow
+    run slow_guard_dispatch python3 "echo hello" 0 ""
+    assert_success
+    if [[ -x /usr/bin/python3 ]]; then
+        run slow_guard_dispatch /usr/bin/python3 "echo hello" 0 ""
+        assert_success
+    fi
+}
+
+# Security round 1 (M2): no hatch, in any position, unblocks a command whose scan timed out.
+@test "slow guard + Bash → hatches are IGNORED on a timeout (anywhere in the command)" {
+    break_git_guard_slow
+    local g="git" c
+    for c in "CAST_PUSH_OK=1 $g push origin main" "echo CAST_PUSH_OK=1; $g push origin main" \
+             "$g push origin main # CAST_PUSH_OK=1" "CAST_COMMIT_AGENT=1 $g commit -m x"; do
+        run slow_guard_dispatch python3 "$c" 2 "could not finish checking this command within 2s"
+        if [ "$status" -ne 0 ]; then
+            echo "command [$c]: $output" >&2
+            return 1
+        fi
+    done
+}
+
+@test "slow guard + Bash → the timeout is logged with the budget, never the command" {
+    break_git_guard_slow
+    run slow_guard_dispatch python3 "git push origin SENTINEL-branch-7f3a" 2 "could not finish checking this command"
+    assert_success
+    run grep -c "Bash git guard timed out after 2s; blocking any command that names git" "$HOME/.claude/logs/hook-errors.log"
+    assert_output "1"
+    run grep -c "SENTINEL-branch-7f3a" "$HOME/.claude/logs/hook-errors.log"
+    assert_output "0"
+}
+
+# Security round 1 (H1 cheap trigger): ~500 hatched segments (13 KB) used to spawn one
+# `git rev-parse` EACH from the audit hooks, ran the REAL guard past its 2 s budget, and a
+# trailing filter-branch (absent from the degraded table) was ALLOWED. Memoised, the real guard
+# decides it in well under a second.
+@test "real guard + 500 hatched pushes then filter-branch → blocked (2) well inside the budget" {
+    run python3 -c '
+import json, subprocess, sys, time
+g = "gi" + "t"
+cmd = ("CAST_PUSH_OK=1 " + g + " push x; ") * 500 + g + " filter-branch --index-filter x"
+payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": "gf-hatch500"})
+for py in sys.argv[2:]:
+    t0 = time.monotonic()
+    p = subprocess.run([py, sys.argv[1]], input=payload.encode(), capture_output=True, timeout=30)
+    elapsed = time.monotonic() - t0
+    print(py, "exit", p.returncode, "in", round(elapsed, 2), "s", p.stderr.decode()[:60])
+    if p.returncode != 2 or elapsed >= 1.5 or b"filter-branch" not in p.stderr:
+        sys.exit(1)
+' "$TMPSCRIPTS/cast-pretool-dispatch.py" python3 $( [[ -x /usr/bin/python3 ]] && echo /usr/bin/python3 )
+    assert_success
+}
+
+# Security round 2 (HIGH-1): `g\<newline>it` IS git to bash, but the timeout-path naming test saw
+# `g it` -- and five 195 KB segments of it (each under the 200 KB per-segment cap) made the guard
+# time out (shlex is quadratic per long token), so the raw push at the end was ALLOWED (rc 0 at
+# 2.5-3.5 s). Now the bytes handed to shlex are capped cumulatively (the guard refuses up front)
+# AND the timeout-path naming test sees through continuations. Built with json.dumps.
+@test "real guards + 5 and 8 continuation-spelled git segments of 195 KB then a raw push → blocked (2) in < 4.5 s" {
+    run python3 -c '
+import json, subprocess, sys, time
+for k in (5, 8):
+    cmd = ";".join(("g\\\nit" + "x" * 195000) for _ in range(k)) + ";g\\\nit push origin main"
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": "gf-high1"})
+    for py in sys.argv[2:]:
+        t0 = time.monotonic()
+        try:
+            p = subprocess.run([py, sys.argv[1]], input=payload.encode(), capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            print("TIMEOUT (> 30 s)"); sys.exit(1)
+        elapsed = time.monotonic() - t0
+        print("k =", k, py, "exit", p.returncode, "in", round(elapsed, 2), "s", p.stderr.decode()[:70])
+        if p.returncode != 2 or elapsed >= 4.5:
+            sys.exit(1)
+' "$TMPSCRIPTS/cast-pretool-dispatch.py" python3 $( [[ -x /usr/bin/python3 ]] && echo /usr/bin/python3 )
+    assert_success
+}
+
+# Security round 1 (M3): cast-command-guard.py (rm -rf / pkill) runs AFTER the git guard allows and
+# was unwatched, so ~1 MB of padding made it outrun the 5 s hook timeout (= ALLOW). It now gets the
+# remaining share of a 3.5 s total Bash-guard budget and BLOCKS on expiry.
+break_command_guard_slow() {
+    printf 'import time\ndef safe_is_blocked(c):\n    try:\n        time.sleep(10)\n    except Exception:\n        pass\n    return False, ""\ndef write_log(*a, **k):\n    pass\n' \
+        > "$TMPSCRIPTS/cast-command-guard.py"
+}
+
+@test "slow command guard + Bash → blocked (2) with its own message within 4.5 s, never allowed" {
+    break_command_guard_slow
+    run slow_guard_dispatch python3 "echo hello" 2 "The command guard could not finish checking this command in time" 4.5
+    assert_success
+    if [[ -x /usr/bin/python3 ]]; then
+        run slow_guard_dispatch /usr/bin/python3 "echo hello" 2 "The command guard could not finish checking this command in time" 4.5
+        assert_success
+    fi
+}
+
+@test "real guards + 1.2 MB non-git command ending in a catastrophic rm → decided (2) in < 4.5 s" {
+    run python3 -c '
+import json, subprocess, sys, time
+cmd = "a;" * 600000 + "rm -rf /"
+payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": "gf-1mb"})
+for py in sys.argv[2:]:
+    t0 = time.monotonic()
+    try:
+        p = subprocess.run([py, sys.argv[1]], input=payload.encode(), capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        print("TIMEOUT (> 30 s)"); sys.exit(1)
+    elapsed = time.monotonic() - t0
+    print(py, "exit", p.returncode, "in", round(elapsed, 2), "s", p.stderr.decode()[:70])
+    if p.returncode != 2 or elapsed >= 4.5:
+        sys.exit(1)
+' "$TMPSCRIPTS/cast-pretool-dispatch.py" python3 $( [[ -x /usr/bin/python3 ]] && echo /usr/bin/python3 )
+    assert_success
+}
+
 # Unparseable Write payload (a REAL RecursionError from 200000-deep nesting in an extra
 # tool_input key, as tests/test_cast_git_guard_fail_closed.py builds it) + broken guard.
 deep_write_payload_file() {
