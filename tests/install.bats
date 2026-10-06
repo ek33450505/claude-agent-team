@@ -275,7 +275,7 @@ make_clean_tmp_repo() {
   # The guard exits before any deploy step, so each probe is fast.
   local -a guarded
   guarded=(agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
-    macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/)
+    macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/ rules-personal/)
   local tmp_repo failures="" entry probe tracked
   tmp_repo="$(make_clean_tmp_repo)"
 
@@ -287,6 +287,7 @@ make_clean_tmp_repo() {
     # (1) untracked file under a directory entry
     if [[ "$entry" == */ ]]; then
       probe="${entry}zz-guard-probe.txt"
+      mkdir -p "$tmp_repo/$entry" # a guarded dir may be absent from the repo (rules-personal/)
       echo probe > "$tmp_repo/$probe"
       run bash "$tmp_repo/install.sh"
       { [ "$status" -eq 1 ] && [[ "$output" == *"$probe"* ]]; } || failures="$failures [untracked:$entry]"
@@ -339,6 +340,342 @@ make_clean_tmp_repo() {
   [ ! -e "$HOME/.claude" ]
 
   rm -rf "$not_git"
+}
+
+@test "Dirty-tree guard: an uncommitted file under rules-personal/ aborts install (--personal deploy source is guarded)" {
+  # install.sh --personal deploys rules-personal/* into ~/.claude/rules; an uncommitted edit there
+  # must not ship on the next reinstall. Fixture dir is created fresh (it is absent from the repo).
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  mkdir -p "$tmp_repo/rules-personal"
+  echo "# guard probe" > "$tmp_repo/rules-personal/zz-guard-probe.md"
+
+  run bash "$tmp_repo/install.sh" --personal
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"uncommitted changes"* ]]
+  [[ "$output" == *"rules-personal/zz-guard-probe.md"* ]]
+  # Guard runs before any deploy step: nothing may have been written to the temp HOME.
+  [ ! -e "$HOME/.claude" ]
+}
+
+# Helper: add + commit a broken-python fixture so the clean-tree guard passes and ONLY the
+# compile gate can reject the install. $1 = tmp repo, $2 = file name under scripts/, $3 = source.
+commit_py_fixture() {
+  printf '%s\n' "$3" > "$1/scripts/$2"
+  git -C "$1" add "scripts/$2"
+  git -C "$1" -c user.email="test@example.com" -c user.name="Test" \
+    -c core.hooksPath=/dev/null commit -q -m "fixture $2"
+}
+
+@test "Compile gate: a script that does not compile aborts install and writes nothing to ~/.claude" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  commit_py_fixture "$tmp_repo" zz-broken.py 'def x(:'
+
+  # No CAST_INSTALL_FORCE: tree is clean (fixture committed), so the dirty-tree guard passes and
+  # the abort below can only come from the compile gate.
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"zz-broken.py"* ]]
+  [[ "$output" == *"does not compile"* ]]
+  [[ "$output" == *"SyntaxError"* ]]
+  [[ "$output" != *"uncommitted changes"* ]]
+  # Gate runs before the first write (backups/mkdirs/copies): ~/.claude must not even exist.
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: CAST_INSTALL_FORCE=1 does NOT bypass the compile gate" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  # Untracked + FORCE: the dirty-tree guard is bypassed, so only the compile gate can stop this.
+  printf '%s\n' 'def x(:' > "$tmp_repo/scripts/zz-broken.py"
+
+  run env CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"zz-broken.py"* ]]
+  [[ "$output" == *"does not compile"* ]]
+  [ ! -e "$HOME/.claude/scripts" ]
+  [ ! -e "$HOME/.claude/agents" ]
+}
+
+@test "Compile gate: a successful install leaves no __pycache__ or .pyc under the repo's scripts/" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  # make_clean_tmp_repo cp -R's the live checkout, whose scripts/ may already hold gitignored
+  # __pycache__ from earlier runs. Clear them from the COPY (bound to the bats tmpdir) so a
+  # passing assertion proves this run wrote none.
+  [[ "$tmp_repo" == "$BATS_TEST_TMPDIR"/* ]] || { echo "refusing to rm outside tmpdir: $tmp_repo" >&2; return 1; }
+  find "$tmp_repo/scripts" -name '__pycache__' -type d -prune -exec rm -rf {} +
+  find "$tmp_repo/scripts" -name '*.pyc' -type f -delete
+  [ -z "$(find "$tmp_repo/scripts" \( -name '__pycache__' -o -name '*.pyc' \) | head -1)" ]
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -eq 0 ]
+  # The compile gate compiles in memory; a pyc written into the repo would be stray state.
+  local stray
+  stray="$(find "$tmp_repo/scripts" \( -name '__pycache__' -o -name '*.pyc' \) | head -3)"
+  [ -z "$stray" ] || { echo "stray bytecode in repo: $stray" >&2; return 1; }
+}
+
+@test "Compile gate: syntax newer than the macOS system python3 is rejected via /usr/bin/python3" {
+  # Hooks run bare `python3`, which can resolve to the system 3.9; a module using 3.10+ syntax
+  # would fail to load there and silently disable its guard. Only meaningful when /usr/bin/python3
+  # is a DIFFERENT, older interpreter than PATH's (macOS); skip elsewhere.
+  # Mirrors install.sh: on Darwin without the Command Line Tools /usr/bin/python3 is a failing
+  # shim that can pop a GUI installer dialog, so it is neither probed here nor used by the gate.
+  { [ -x /usr/bin/python3 ] && { [ "$(uname -s)" != "Darwin" ] || xcode-select -p >/dev/null 2>&1; }; } \
+    || skip "no usable /usr/bin/python3 (absent, or Darwin without Command Line Tools)"
+  [ "$(realpath /usr/bin/python3)" != "$(realpath "$(command -v python3)")" ] \
+    || skip "PATH python3 is /usr/bin/python3"
+  /usr/bin/python3 -I -c 'import sys; sys.exit(0 if sys.version_info < (3, 10) else 1)' \
+    || skip "/usr/bin/python3 is 3.10+"
+  command -v python3 >/dev/null
+  python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
+    || skip "PATH python3 is older than 3.10"
+
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  commit_py_fixture "$tmp_repo" zz-py310.py $'match 1:\n    case 1:\n        pass'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"zz-py310.py"* ]]
+  [[ "$output" == *"/usr/bin/python3"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+# Helper: commit everything in the tmp repo so the clean-tree guard passes and only the compile
+# gate can reject the install.
+commit_all_fixture() {
+  git -C "$1" add -A
+  git -C "$1" -c user.email="test@example.com" -c user.name="Test" \
+    -c core.hooksPath=/dev/null commit -q -m "fixture"
+}
+
+@test "Compile gate: a symlinked .py under scripts/ is refused (deploy cp would follow it past the gate)" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  # Broken target lives OUTSIDE scripts/, so find -type f never sees it: only the symlink check can stop this.
+  mkdir -p "$tmp_repo/zz-fixture"
+  printf '%s\n' 'def x(:' > "$tmp_repo/zz-fixture/broken-target.txt"
+  ln -s ../zz-fixture/broken-target.txt "$tmp_repo/scripts/zz-link.py"
+  commit_all_fixture "$tmp_repo"
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"non-regular entry"* ]]
+  [[ "$output" == *"scripts/zz-link.py"* ]]
+  [[ "$output" != *"uncommitted changes"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: a FIFO named zz.py under scripts/ is refused without hanging" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  mkfifo "$tmp_repo/scripts/zz.py"
+
+  # Without the gate the deploy `cp` blocks forever on the FIFO, so bound the run by hand
+  # (no GNU `timeout` on stock macOS). fd 3/4 are closed so a leaked child can't hold bats' pipes.
+  local out="$BATS_TEST_TMPDIR/fifo-install.out" pid i=0 rc=0
+  CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh" >"$out" 2>&1 </dev/null 3>&- 4>&- &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 200 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    # Release a `cp` blocked opening the FIFO (open O_RDWR never blocks) so nothing leaks.
+    { exec 7<>"$tmp_repo/scripts/zz.py"; } 2>/dev/null && exec 7>&-
+    echo "install.sh HUNG on the FIFO (gate did not refuse it)" >&2
+    return 1
+  fi
+  wait "$pid" || rc=$?
+  [ "$rc" -ne 0 ]
+  grep -q "non-regular entry" "$out"
+  grep -q "scripts/zz.py" "$out"
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: scripts/ replaced by a symlink is refused (find would not descend, gate would fail open)" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  mv "$tmp_repo/scripts" "$tmp_repo/zz-scripts-real"
+  ln -s zz-scripts-real "$tmp_repo/scripts"
+
+  # FORCE: with a symlinked scripts/ git's own pathspec check fails first (a different abort).
+  # The compile gate has no FORCE bypass, so it must still stop this.
+  run env CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"scripts/ is missing or is a symlink"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: a missing scripts/ is refused (empty file list must not skip the gate)" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  [[ "$tmp_repo" == "$BATS_TEST_TMPDIR"/* ]] || { echo "refusing to rm outside tmpdir: $tmp_repo" >&2; return 1; }
+  rm -rf "$tmp_repo/scripts"
+
+  run env CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"scripts/ is missing or is a symlink"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: a scripts/ tree with zero .py files is refused (count 0 must not skip the gate)" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  [[ "$tmp_repo" == "$BATS_TEST_TMPDIR"/* ]] || { echo "refusing to rm outside tmpdir: $tmp_repo" >&2; return 1; }
+  find "$tmp_repo/scripts" -type f \( -name '*.py' -o -name '*.py.template' \) -delete
+
+  run env CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"found no .py files"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: a failing find while listing scripts is refused (find status must not be hidden)" {
+  local tmp_repo shim="$BATS_TEST_TMPDIR/shim"
+  tmp_repo="$(make_clean_tmp_repo)"
+  mkdir -p "$shim"
+  # Pass the non-regular scan (-print) through; fail only the .py listing (-print0).
+  cat > "$shim/find" <<'SHIM'
+#!/bin/bash
+case "$*" in *-print0*) exit 3 ;; esac
+exec /usr/bin/find "$@"
+SHIM
+  chmod +x "$shim/find"
+
+  run env PATH="$shim:$PATH" CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not list scripts/*.py"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: a broken scripts/*.py.template is refused (deploy strips .template, so it ships as .py)" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  commit_py_fixture "$tmp_repo" zz-tmpl.py.template 'def x(:'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"zz-tmpl.py.template"* ]]
+  [[ "$output" == *"does not compile"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: control characters in a failing file name are stripped from the terminal output" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  commit_py_fixture "$tmp_repo" $'zz-ctl\001x.py' 'def x(:'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"zz-ctl?x.py"* ]]
+  [[ "$output" != *$'\001'* ]]
+}
+
+@test "Compile gate: UTF-8 C1 and bidi-override bytes in a failing file name never reach the terminal" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  # U+0085 (C1 NEL: c2 85) and U+202E (RIGHT-TO-LEFT OVERRIDE: e2 80 ae) are valid UTF-8 that a
+  # control-char strip leaves intact; every non-printable-ASCII byte must become '?'.
+  commit_py_fixture "$tmp_repo" $'zz-u\xc2\x85\xe2\x80\xaex.py' 'def x(:'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not compile"* ]]
+  [[ "$output" == *"zz-u?????x.py"* ]]
+  local c1 bidi
+  c1="$(printf '%s' "$output" | LC_ALL=C grep -c $'\xc2\x85' || true)"
+  bidi="$(printf '%s' "$output" | LC_ALL=C grep -c $'\xe2\x80\xae' || true)"
+  [ "$c1" = "0" ] || { echo "C1 bytes leaked to output" >&2; return 1; }
+  [ "$bidi" = "0" ] || { echo "bidi-override bytes leaked to output" >&2; return 1; }
+}
+
+@test "Compile gate: an upper-case .PY under scripts/ is refused (case-insensitive FS would overwrite a deployed script ungated)" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  commit_py_fixture "$tmp_repo" zz-case.PY 'def x(:'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"non-canonical Python file name"* ]]
+  [[ "$output" == *"scripts/zz-case.PY"* ]]
+  [[ "$output" != *"uncommitted changes"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: an upper-case .PY.template under scripts/ is refused" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  commit_py_fixture "$tmp_repo" zz-up.PY.template 'def x(:'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"non-canonical Python file name"* ]]
+  [[ "$output" == *"scripts/zz-up.PY.template"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: a broken upper-case .PY in a scripts/ subdirectory is still compiled (-iname)" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  # Only top-level names are deployed (and canonical-name checked); a subdirectory case-variant
+  # must still be compiled, so only the case-insensitive match can catch it.
+  commit_py_fixture "$tmp_repo" eval-graders/zz-sub.PY 'def x(:'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"eval-graders/zz-sub.PY"* ]]
+  [[ "$output" == *"does not compile"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Compile gate: the temp file list is removed when install.sh is terminated mid-gate" {
+  local tmp_repo shim="$BATS_TEST_TMPDIR/shim" tmpd="$BATS_TEST_TMPDIR/tmpd"
+  local mark="$BATS_TEST_TMPDIR/shim.pid" out="$BATS_TEST_TMPDIR/term-install.out" pid i=0 rc=0
+  tmp_repo="$(make_clean_tmp_repo)"
+  mkdir -p "$shim" "$tmpd"
+  # find shim: passes every scan through except the -print0 listing, which records its pid and
+  # parks. The list file already exists (mktemp ran, trap armed) while find is parked, which is
+  # the only window in which a signal could leak it.
+  cat > "$shim/find" <<SHIM
+#!/bin/bash
+case "\$*" in
+  *-print0*) echo \$\$ > "$mark"; exec sleep 30 ;;
+esac
+exec /usr/bin/find "\$@"
+SHIM
+  chmod +x "$shim/find"
+
+  TMPDIR="$tmpd" PATH="$shim:$PATH" CAST_INSTALL_FORCE=1 bash "$tmp_repo/install.sh" >"$out" 2>&1 </dev/null 3>&- 4>&- &
+  pid=$!
+  while [ ! -s "$mark" ] && kill -0 "$pid" 2>/dev/null && [ "$i" -lt 200 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -s "$mark" ] || { echo "install.sh never reached the listing step" >&2; kill "$pid" 2>/dev/null || true; return 1; }
+  # The list file must exist now (otherwise this test would prove nothing about its removal).
+  [ -n "$(ls "$tmpd"/cast-install-pylist.* 2>/dev/null)" ]
+
+  kill -TERM "$pid"
+  kill -TERM "$(cat "$mark")" 2>/dev/null || true
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+    echo "install.sh did not exit on SIGTERM" >&2
+    return 1
+  fi
+  wait "$pid" || rc=$?
+  [ "$rc" -eq 143 ]
+  [ -z "$(ls "$tmpd"/cast-install-pylist.* 2>/dev/null)" ] || { echo "leaked list file in $tmpd" >&2; return 1; }
+  [ ! -e "$HOME/.claude" ]
 }
 
 @test "Owned fragment backup: prior copy is backed up with mode 600 even when the live file was 644" {

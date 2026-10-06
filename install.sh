@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # to git status. bash 3.2-safe: plain indexed array, no declare -A / mapfile.
 GUARD_PATHS=(
   agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
-  macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/
+  macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/ rules-personal/
 )
 if [[ "${CAST_INSTALL_FORCE:-0}" != "1" ]]; then
   # One status call both detects and lists: tracked changes (staged or not) plus untracked
@@ -76,6 +76,129 @@ fi
 
 CAST_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "unknown")"
 printf "\n${BOLD}CAST Installer (v${CAST_VERSION})${NC}\n\n"
+
+# --- Compile gate: every script must compile BEFORE anything is deployed ---
+# scripts/cast-pretool-dispatch.py loads the guard modules (cast-git-guard.py,
+# cast-command-guard.py, cast-egress-sentinel.py, cast-lint-workflow-stage-models.py)
+# at hook time; a module that fails to load silently disables its guard. Catch that here,
+# before the first write into $CLAUDE_DIR (backups, mkdirs, copies), so a failed compile
+# leaves ~/.claude untouched. No CAST_INSTALL_FORCE bypass.
+# Compile is done IN MEMORY (compile(), not py_compile) so no __pycache__/.pyc lands in the
+# repo — an untracked file there would trip the next install's clean-tree guard.
+# `-I` is mandatory: cwd must not be on sys.path (planted json.py hijack class).
+# Fail CLOSED everywhere: an empty or unlistable file set must abort, never skip the gate.
+
+# Neutralise repo-controlled names/exception text before echoing to a terminal: every byte that
+# is not printable ASCII (control chars, DEL, UTF-8 C1 and bidi-override sequences, ...) -> '?'.
+_cast_clean() { printf '%s' "$1" | LC_ALL=C tr -c '[:print:]' '?'; }
+
+if ! command -v python3 >/dev/null 2>&1; then
+    error "ERROR: install.sh aborted — python3 not found in PATH (CAST hooks cannot run without it)."
+    exit 1
+fi
+
+# scripts/ must be a real directory: find does not descend into a symlinked root, so a
+# missing/symlinked scripts/ would yield an empty file list and the gate would fail OPEN.
+if [ ! -d "$SCRIPT_DIR/scripts" ] || [ -L "$SCRIPT_DIR/scripts" ]; then
+    error "ERROR: install.sh aborted — scripts/ is missing or is a symlink; refusing to deploy hook scripts from it."
+    exit 1
+fi
+
+# Refuse non-regular entries (symlink/FIFO/socket/device) under scripts/: the deploy loop's
+# `cp` follows symlinks, so a symlinked .py would ship content this gate never compiled, and
+# a device/FIFO (e.g. -> /dev/zero) would make the copy unbounded. Nothing legitimate is there.
+if ! _py_nonreg="$(find "$SCRIPT_DIR/scripts" ! -type f ! -type d -print 2>/dev/null)"; then
+    error "ERROR: install.sh aborted — could not scan scripts/ for non-regular files (find failed)."
+    exit 1
+fi
+if [ -n "$_py_nonreg" ]; then
+    _py_nl=$'\n'
+    _py_nonreg="${_py_nonreg%%"$_py_nl"*}"
+    error "ERROR: install.sh aborted — scripts/ contains a non-regular entry (symlink/FIFO/socket/device): $(_cast_clean "${_py_nonreg#"$SCRIPT_DIR"/}"). Replace it with a regular file."
+    exit 1
+fi
+
+# Top-level scripts/ names must be canonical lowercase `.py` / `.py.template`. The deploy loop
+# copies every top-level scripts/* and macOS APFS is case-insensitive: a committed `x.PY` would
+# overwrite a live `~/.claude/scripts/x.py` with content this gate never compiled (or collide
+# with a tracked `x.py` on checkout). Reject any case-variant before anything is written.
+if ! _py_case="$(find "$SCRIPT_DIR/scripts" -maxdepth 1 \( -iname '*.py' -o -iname '*.py.template' \) ! -name '*.py' ! -name '*.py.template' -print 2>/dev/null)"; then
+    error "ERROR: install.sh aborted — could not scan scripts/ for non-canonical Python file names (find failed)."
+    exit 1
+fi
+if [ -n "$_py_case" ]; then
+    _py_nl=$'\n'
+    _py_case="${_py_case%%"$_py_nl"*}"
+    error "ERROR: install.sh aborted — scripts/ has a non-canonical Python file name (must be lowercase .py / .py.template; a case-insensitive filesystem lets it overwrite a deployed script ungated): $(_cast_clean "${_py_case#"$SCRIPT_DIR"/}")"
+    exit 1
+fi
+
+# List every file the deploy loop would ship as a Python script. *.py.template is included:
+# the deploy loop strips `.template`, so x.py.template ships as x.py. -iname so a case-variant
+# in a subdirectory is still compiled.
+if ! _py_list="$(mktemp "${TMPDIR:-/tmp}/cast-install-pylist.XXXXXX")"; then
+    error "ERROR: install.sh aborted — could not create a temp file for the compile gate."
+    exit 1
+fi
+# Remove the list file on any exit path, including signals (the signal traps must exit: a
+# trap that merely returns would make the installer uninterruptible here).
+trap 'rm -f "$_py_list"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+if ! find "$SCRIPT_DIR/scripts" -type f \( -iname '*.py' -o -iname '*.py.template' \) -print0 >"$_py_list" 2>/dev/null; then
+    rm -f "$_py_list"
+    error "ERROR: install.sh aborted — could not list scripts/*.py (find failed)."
+    exit 1
+fi
+PY_COMPILE_FILES=()
+while IFS= read -r -d '' _py_file; do
+    PY_COMPILE_FILES+=("$_py_file")
+done <"$_py_list"
+rm -f "$_py_list"
+trap - EXIT INT TERM HUP
+if [ "${#PY_COMPILE_FILES[@]}" -eq 0 ]; then
+    error "ERROR: install.sh aborted — found no .py files under scripts/ (refusing to deploy without compiling the guard modules)."
+    exit 1
+fi
+
+PY_COMPILE_INTERPS=("$(command -v python3)")
+# macOS system python (3.9) may be what bare `python3` resolves to under a hook's PATH;
+# 3.10+-only syntax would fail to load there. Check it too when it is a different binary.
+# On Darwin without the Command Line Tools /usr/bin/python3 is a shim that fails AND can pop a
+# GUI installer dialog; with no CLT there is no real 3.9 to load hooks under, so skip it.
+if [ -x /usr/bin/python3 ] && { [ "$(uname -s)" != "Darwin" ] || xcode-select -p >/dev/null 2>&1; }; then
+    _py_path_real="$(realpath "${PY_COMPILE_INTERPS[0]}" 2>/dev/null || echo "${PY_COMPILE_INTERPS[0]}")"
+    _py_sys_real="$(realpath /usr/bin/python3 2>/dev/null || echo /usr/bin/python3)"
+    if [ "$_py_path_real" != "$_py_sys_real" ]; then
+        PY_COMPILE_INTERPS+=("/usr/bin/python3")
+    fi
+fi
+for _py_interp in "${PY_COMPILE_INTERPS[@]}"; do
+    # One interpreter process compiles every file; on the first failure it prints
+    # "<file>\037<ExcType>: <msg>" to stdout and exits 1 so the failing file can be named.
+    if ! _py_out="$("$_py_interp" -I -c 'import sys
+for f in sys.argv[1:]:
+    try:
+        with open(f, "rb") as fh:
+            compile(fh.read(), f, "exec")
+    except Exception as e:
+        sys.stdout.write("%s\037%s: %s\n" % (f, type(e).__name__, e))
+        sys.exit(1)' "${PY_COMPILE_FILES[@]}" 2>&1)"; then
+        _py_sep=$'\037'
+        _py_bad="${_py_out%%"$_py_sep"*}"
+        _py_msg="${_py_out#*"$_py_sep"}"
+        if [ "$_py_bad" = "$_py_out" ]; then
+            # Interpreter failed without naming a file (crash/startup error).
+            _py_bad="(unknown file)"
+            _py_msg="$(printf '%s\n' "$_py_out" | tail -n 1)"
+        fi
+        _py_msg="$(printf '%s\n' "$_py_msg" | tail -n 1)"
+        error "ERROR: install.sh aborted — $(_cast_clean "${_py_bad#"$SCRIPT_DIR"/}") does not compile under $_py_interp (guard modules that fail to load disable their guard). Fix it before installing."
+        printf '%s\n' "$(_cast_clean "$_py_msg")" >&2
+        exit 1
+    fi
+done
 
 # --- Backup existing dirs ---
 backup_if_needed() {
