@@ -44,7 +44,12 @@ gg = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gg)
 
 G = 'gi' + 't'            # the verb is assembled so no literal guarded command sits in this file
-BOUND_SECS = 1.0          # the contract: every padded command is decided in under a second
+# The contract: every padded command is decided within the dispatcher's git-guard watchdog budget
+# (`_GIT_GUARD_BUDGET_SECS` = 2.0 s in scripts/cast-pretool-dispatch.py). Measured 1.0-1.2 s on
+# GitHub's ubuntu runner vs ~0.3-0.9 s locally, so 1.0 s was a machine-dependent flake. This bound
+# is the secondary check: quadratic regressions take >= 4 s, which the verdict-message assertions
+# and TRIPWIRE_SECS catch.
+BOUND_SECS = 2.0
 TRIPWIRE_SECS = 4.0       # a regressed guard is aborted here instead of running for 40+ s
 
 
@@ -99,13 +104,13 @@ class _Timed(unittest.TestCase):
 class TestRepeatedGitTokensBeforeTheVerb(_Timed):
     """The reported bypass: padding of `git ` tokens ahead of a raw irreversible op."""
 
-    def test_push_after_40000_git_tokens_blocks_under_a_second(self):
+    def test_push_after_40000_git_tokens_blocks_within_the_budget(self):
         self.assert_blocked_fast(_pad(40000) + '; ' + G + ' push origin main', 'push')
 
-    def test_commit_after_40000_git_tokens_blocks_under_a_second(self):
+    def test_commit_after_40000_git_tokens_blocks_within_the_budget(self):
         self.assert_blocked_fast(_pad(40000) + '; ' + G + ' commit -m x', 'commit')
 
-    def test_reset_hard_after_40000_git_tokens_blocks_under_a_second(self):
+    def test_reset_hard_after_40000_git_tokens_blocks_within_the_budget(self):
         self.assert_blocked_fast(_pad(40000) + '; ' + G + ' reset --hard', 'reset --hard')
 
     def test_hatch_at_the_end_does_not_unblock_the_padded_command(self):
@@ -368,7 +373,7 @@ class TestContinuationJoinIsLinearAndIdentical(_Timed):
         self.assertEqual([s.strip() for s in gg._scannable_segments(G + ' \\\npush origin main')],
                          [G + ' push origin main'])
 
-    def test_4_8_MB_of_continuation_lines_then_a_raw_push_is_blocked_under_a_second(self):
+    def test_4_8_MB_of_continuation_lines_then_a_raw_push_is_blocked_within_the_budget(self):
         cmd = ('a\\\n' * 1600000) + '\n' + G + ' push origin main'
         self.assertGreaterEqual(len(cmd), 4800000)
         msg = self.assert_blocked_fast(cmd, '4.8 MB continuations')
