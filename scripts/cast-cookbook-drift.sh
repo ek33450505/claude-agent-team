@@ -10,7 +10,7 @@
 #
 # Monthly schedule registration (run once):
 #   /schedule --description "CAST Cookbook drift monthly audit" \
-#     --command "bash ~/Projects/personal/claude-agent-team/scripts/cast-cookbook-drift.sh" \
+#     --command "bash ~/.claude/scripts/cast-cookbook-drift.sh" \
 #     --frequency monthly --day-of-month 1 --time 09:00
 
 if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then
@@ -78,7 +78,7 @@ To execute the researcher agent dispatch, run one of:
 
   1. Via /schedule (recommended for monthly automation):
      /schedule --description "CAST Cookbook drift monthly audit" \
-       --command "bash ~/Projects/personal/claude-agent-team/scripts/cast-cookbook-drift.sh" \
+       --command "bash ~/.claude/scripts/cast-cookbook-drift.sh" \
        --frequency monthly --day-of-month 1 --time 09:00
 
   2. Via Agent tool (immediate, one-off):

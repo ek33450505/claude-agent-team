@@ -43,11 +43,12 @@ _write_scanner() {
   cat > "$1" <<'PYSCAN'
 import os, re, subprocess, sys
 
-# Interpreters: literal python[3[.x]], and variable interpreters ("$python_cmd", $PY, ${PYTHON:-python3}).
+# Interpreters: literal python[3[.x]], and variable interpreters ("$python_cmd", $PY, ${PYTHON:-python3},
+# array expansions "${PY[@]}" / "${PYTHON[*]}", and interpreter-named vars "$interp" / "$INTERPRETER").
 PY_RE = re.compile(r'(?<![\w.$-])(?:(?:/[\w.+-]+)*/)?python(?:3(?:\.\d+)?)?(?=\s|$)')
 VAR_RE = re.compile(
-    r'(?<![\w.$-])"?(?:\$([A-Za-z_]\w*)|\$\{([A-Za-z_]\w*)(?::?[-=+?][^}]*)?\})"?(?=\s|$)')
-VAR_NAME_RE = re.compile(r'(?i)python|(?:^|_)py(?:$|_)')
+    r'(?<![\w.$-])"?(?:\$([A-Za-z_]\w*)|\$\{([A-Za-z_]\w*)(?:\[[@*]\])?(?::?[-=+?][^}]*)?\})"?(?=\s|$)')
+VAR_NAME_RE = re.compile(r'(?i)python|(?:^|_)py(?:$|_)|interp(?:reter)?')
 # `sh -c "..."`, `bash -c '...'`, `eval "..."`: a quoted python3 after one of these IS executed.
 WRAP_RE = re.compile(r'(?:\b(?:ba|z|da|k)?sh\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*c|\beval)\s+["\']')
 OPT_RE = re.compile(r'\s+(-[A-Za-z0-9]*)(?=[\s<|;&)>"\'`]|$)')
@@ -283,4 +284,50 @@ _mk_fixture() { # <dir> <name> <line...>  -- writes a bash script containing exa
   [[ "$output" == *"offenders=15"* ]] || { echo "$output" >&2; return 1; }
   [[ "$output" != *ok_* ]]
   [[ "$output" != *ignored_offender* ]]
+}
+
+# ---------------------------------------------------------------------------------------------
+# Scanner self-test (array expansions + interpreter-named variables). Two further blind spots:
+# VAR_RE ignored a `[@]`/`[*]` subscript inside `${...}`, and VAR_NAME_RE ignored variables named
+# interp / interpreter. Fixtures are passed to the scanner as explicit file args (no git needed).
+# ---------------------------------------------------------------------------------------------
+@test "scanner self-test: array expansions and interp/interpreter variables are flagged when un-isolated" {
+  local fx="$BATS_TEST_TMPDIR/fx_arr_off"
+  mkdir -p "$fx"
+  _mk_fixture "$fx" off_array_at.sh '"${PY[@]}" -c '"'x'"
+  _mk_fixture "$fx" off_array_star.sh '"${PYTHON[*]}" -c '"'x'"
+  _mk_fixture "$fx" off_interp.sh '"$interp" -c '"'x'"
+  _mk_fixture "$fx" off_interpreter_caps.sh '"${INTERPRETER}" -m json.tool'
+
+  local scanner="$BATS_TEST_TMPDIR/scan.py"
+  _write_scanner "$scanner"
+  run python3 -I "$scanner" "$fx"/off_array_at.sh "$fx"/off_array_star.sh "$fx"/off_interp.sh "$fx"/off_interpreter_caps.sh
+  assert_success
+
+  local f
+  for f in off_array_at.sh off_array_star.sh off_interp.sh off_interpreter_caps.sh; do
+    printf '%s\n' "$output" | grep -q "^OFFENDER .*$f:" || {
+      echo "NOT FLAGGED (blind spot): $f" >&2
+      echo "$output" >&2
+      return 1
+    }
+  done
+  [[ "$output" == *"offenders=4"* ]] || { echo "$output" >&2; return 1; }
+}
+
+@test "scanner self-test: isolated array/interp forms pass, and a non-interpreter array is not a candidate" {
+  local fx="$BATS_TEST_TMPDIR/fx_arr_ok"
+  mkdir -p "$fx"
+  _mk_fixture "$fx" ok_array_at.sh '"${PY[@]}" -I -c '"'x'"
+  _mk_fixture "$fx" ok_interp.sh '"$interp" -I -c '"'x'"
+  # negative control: `-c` follows an array that is NOT an interpreter -- must not be flagged
+  _mk_fixture "$fx" ok_files_array.sh '"${files[@]}" -c '"'x'" 'ls "${files[@]}"'
+
+  local scanner="$BATS_TEST_TMPDIR/scan.py"
+  _write_scanner "$scanner"
+  run python3 -I "$scanner" "$fx"/ok_array_at.sh "$fx"/ok_interp.sh "$fx"/ok_files_array.sh
+  assert_success
+  # isolated=2 proves the two interpreter forms were recognised (not silently skipped); the
+  # negative control adds neither an isolated site nor an offender.
+  [[ "$output" == *"scanned=3 isolated=2 offenders=0"* ]] || { echo "$output" >&2; return 1; }
 }

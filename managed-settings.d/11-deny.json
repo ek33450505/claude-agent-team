@@ -19,7 +19,8 @@
       "Edit(~/.claude/scripts/**)",
       "Edit(~/.claude/logs/**)",
       "Edit(**/.claude/settings*.json)",
-      "Edit(//**/.claude/settings*.json)"
+      "Edit(//**/.claude/settings*.json)",
+      "Edit(~/.claude.json)"
     ]
   }
 }

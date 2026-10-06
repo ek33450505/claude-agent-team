@@ -174,16 +174,6 @@
         ]
       },
       {
-        "matcher": "AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-headless-guard.sh\"",
-            "timeout": 3
-          }
-        ]
-      },
-      {
         "id": "cast-write-guards",
         "matcher": "Write|Edit",
         "hooks": [

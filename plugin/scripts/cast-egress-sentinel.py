@@ -10,12 +10,23 @@ and the OS sandbox (Bash network/filesystem) — those enforce for all subproces
 This sentinel's net-new value is the local, inspectable audit record of WHAT
 leaves the machine across surfaces native rules don't record together:
 
-  Surfaces recorded (matcher: "mcp__.*|WebFetch|WebSearch|Bash|Read"):
-    1. Cloud-bound MCP calls   (mcp__<server>__<tool>, classified per-server)
-    2. WebFetch / WebSearch    (URL host/path only; query/tokens never stored)
-    3. Bash network egress     (curl/wget/scp/rsync/ssh/nc/... — name-matched)
-    4. Credential reads        (Read of .env, ~/.ssh/id_*, *.pem) for local
-                                correlation
+  Surfaces recorded (egress scope "mcp__.*|WebFetch|WebSearch|Bash|Read" — the
+  dispatcher's _EGRESS_TOOLS; classification data is the INSTALLED
+  ~/.claude/config/egress-policy.json):
+    1. Cloud-bound MCP calls   (mcp__<server>__<tool>, classified per-server; a
+                                server in neither list follows
+                                mcp_servers._default_unknown)
+    2. WebFetch / WebSearch    (WebFetch: scheme/host/port/path only — userinfo,
+                                query and fragment dropped, the query kept only
+                                as a 12-hex fingerprint; WebSearch: surface only,
+                                the search terms are never carried)
+    3. Bash network egress     (curl/wget/scp/rsync/ssh/nc/... matched as bare
+                                command words by cast-command-guard.py's
+                                shell-aware tokenizer; loopback-only targets are
+                                not recorded)
+    4. Credential reads        (Read of a path matching the policy's
+                                credential_path_globs — .env, ~/.ssh/id_*, *.pem,
+                                ... — for local correlation)
 
 DESIGN BOUNDARY (local-first thesis):
   Native Claude Code permissions.deny handles COARSE access control; the OS
@@ -24,11 +35,19 @@ DESIGN BOUNDARY (local-first thesis):
   also bypassed in headless/cron runs, so it could never be a hard guarantee.
   See docs/v9-a1-egress-sentinel.md.
 
-CONTRACT:
+CONTRACT (main(), the standalone entry point):
   stdin  — raw PreToolUse hook JSON (tool_name, tool_input, session_id, cwd...)
-  stdout — PreToolUse hookSpecificOutput JSON (additionalContext advisory only)
+  stdout — PreToolUse hookSpecificOutput JSON (additionalContext advisory), only
+           for a severity "warn" verdict (credential read, bash network command,
+           unknown MCP server) or when the policy is missing/invalid (that notice
+           once per session); "info" calls are recorded silently. Every value
+           interpolated from the tool input is sanitized (_clean) first.
   exit 0 — always. *** FAIL-OPEN: any internal error -> exit 0, log to
            hook-errors.log, never interrupt the user's work. ***
+
+In production the registered PreToolUse hook is scripts/cast-pretool-dispatch.py,
+which imports this module and runs the same evaluate() / emit_advisory() per call,
+so the two paths cannot drift.
 
 The coarse Bash name-matcher and the info/warn severity labels are awareness
 aids for the advisory line, NOT an enforcement decision — there is no block path.
@@ -40,6 +59,9 @@ import os
 import json
 import fnmatch
 import hashlib
+import ipaddress
+import re
+import unicodedata
 from datetime import datetime, timezone
 
 # --------------------------------------------------------------------------
@@ -162,14 +184,158 @@ def _expand(path: str) -> str:
     return os.path.expanduser(os.path.expandvars(path or ""))
 
 
+_WHATWG_SPECIAL_SCHEMES = frozenset({"http", "https", "ws", "wss", "ftp"})
+_C0_AND_SPACE = "".join(chr(i) for i in range(0x21))
+_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):")
+
+
+def _whatwg_normalize(url) -> str:
+    """Parse-only copy of `url` approximating how the WHATWG URL parser (what the
+    fetch actually uses) reads a special-scheme URL, so Python's stricter RFC 3986
+    urlsplit sees the SAME host the fetch will contact. Without this, a backslash
+    disguises the host (`https://evil.example\\@github.com/` -> urlsplit says
+    github.com, WHATWG fetches evil.example) and `https:\\\\host/`, `https:/host/`,
+    `http:host/` parse hostless. Steps: strip leading/trailing C0 controls + space;
+    drop ASCII tab/LF/CR anywhere; for http/https/ws/wss/ftp only, turn `\\` into `/`
+    before the first `?`/`#` and rewrite `scheme:` + any run of slashes to
+    `scheme://`. Non-special schemes are returned unchanged. Never raises."""
+    try:
+        s = str(url or "").strip(_C0_AND_SPACE)
+        s = s.replace("\t", "").replace("\n", "").replace("\r", "")
+        m = _SCHEME_RE.match(s)
+        if not m or m.group(1).lower() not in _WHATWG_SPECIAL_SCHEMES:
+            return s
+        rest = s[m.end():]
+        cut = min((i for i in (rest.find("?"), rest.find("#")) if i >= 0), default=len(rest))
+        rest = rest[:cut].replace("\\", "/") + rest[cut:]
+        return f"{m.group(1)}://{rest.lstrip('/')}"
+    except Exception:
+        return str(url or "")
+
+
+def _fingerprint(text) -> str:
+    """12-hex sha256 prefix. `surrogatepass`: a lone surrogate (agent-steerable via a
+    URL) must not make the encode raise and cost the caller its ledger row."""
+    return hashlib.sha256(str(text).encode("utf-8", "surrogatepass")).hexdigest()[:12]
+
+
+# Host canonicalization (WHATWG host parsing = percent-decode, then UTS46 mapping).
+# `.` look-alikes map to '.', UTS46-ignored code points are dropped.
+_HOST_XLATE = {
+    **dict.fromkeys((0x3002, 0xFF0E, 0xFF61), "."),
+    **dict.fromkeys((0x00AD, 0x200B, 0x2060, 0xFEFF, 0x034F,
+                     *range(0x180B, 0x180E), *range(0xFE00, 0xFE10))),
+}
+# NO '%': after the percent-decode a '%' is a WHATWG forbidden host code point.
+_HOST_NAME_OK = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_~!$&'()*+,;=")
+# Non-ASCII categories that make a host malformed: controls, surrogates, separators
+# (incl. NBSP, U+3000, U+2028/2029). Every OTHER non-ASCII code point is recorded as-is.
+_HOST_FATAL_CATS = frozenset({"Cc", "Cs", "Zs", "Zl", "Zp"})
+_HOST_V6_RE = re.compile(r"[0-9A-Fa-f:.]+(?:%[A-Za-z0-9._~%\-]+)?")
+_HOSTINFO_V6_RE = re.compile(r"\[[^\[\]]+\](?::([0-9]*))?")
+_PORT_RE = re.compile(r"0*[0-9]{1,5}")
+
+
+def _canonical_name(host: str):
+    """Canonical form of a registered-name host, or None when it is malformed.
+    Percent-decode (strict UTF-8) -> map U+3002/U+FF0E/U+FF61 to '.' and drop the
+    UTS46-ignored code points (U+00AD, U+200B, U+2060, U+FEFF, U+034F, U+180B-180D,
+    U+FE00-FE0F) -> lowercase, as WHATWG does, so `evil\u3002example` IS evil.example
+    and `git\u00adhub.com` IS github.com. This does NOT try to keep pace with the rest
+    of UTS46 (circled letters, U+180E/U+2062, IDN-valid punctuation ...): the fetch
+    contacts those hosts, so refusing them would hide the destination. WHAT IS FATAL
+    is deliberately narrow: an empty host; any ASCII char outside
+    `A-Za-z0-9.-_~!$&'()*+,;=` (a decoded `% / @ \\ [ ] : ? # < > ^ |`, controls, space
+    — the credential/userinfo smuggling class); any non-ASCII char of category Cc, Cs,
+    Zs, Zl or Zp (NBSP, U+3000, U+2028/2029); invalid UTF-8. Every other non-ASCII
+    code point is accepted and recorded as-is (the ledger json-escapes it). Safelist
+    matching compares this text exactly / by suffix, so an exotic char never matches
+    an ASCII entry (a safe-direction miss, e.g. `githu\u180eb.com` is not github.com)."""
+    try:
+        from urllib.parse import unquote_to_bytes
+        text = unquote_to_bytes(host).decode("utf-8").translate(_HOST_XLATE).lower()
+    except (UnicodeError, ValueError):
+        return None
+    if text and all((c in _HOST_NAME_OK) if ord(c) < 128
+                    else unicodedata.category(c) not in _HOST_FATAL_CATS
+                    for c in text):
+        return text
+    return None
+
+
+def _canonical_authority(p):
+    """(host, port) for a urlsplit result, canonicalized to the host the fetch will
+    really contact, or None when the authority is not one it could contact (the caller
+    then records no url / never safelists). `host` is lowercased and unbracketed;
+    `port` is an int or None. `https: //UID:PWD[at]evil.example/p` normalizes to netloc ' '
+    and `hostname` ' ' (truthy) with `UID:PWD[at]evil.example/p` left in the PATH; a bare
+    truthiness test let that through and persisted the credentials. ([at] is the at-sign,
+    spelled out so the PII scan does not read the example as an email address.)
+    Bracketed IPv6 (hostname has ':'): hex digits, ':' and '.', an optional %zone, and
+    the netloc host part must really be `[...]` (+ optional `:port`) — urlsplit also
+    reads `evil[::1]` (balanced brackets) as host `::1`, dropping the text before the
+    '['. Otherwise _canonical_name; a '[' / ']' anywhere in a non-bracketed host part
+    is malformed. The port text must be ASCII digits only and <= 65535 (empty = none):
+    Python 3.9's int() accepts `+80`, ` 80`, `8_0` and non-ASCII digits, which the
+    WHATWG parser rejects. Never raises."""
+    host = p.hostname
+    if not host:
+        return None
+    hostinfo = p.netloc.rpartition("@")[2]
+    if ":" in host:
+        m = _HOSTINFO_V6_RE.fullmatch(hostinfo)
+        if m is None or _HOST_V6_RE.fullmatch(host) is None:
+            return None
+        port_text = m.group(1) or ""
+    else:
+        if "[" in hostinfo or "]" in hostinfo:
+            return None
+        host = _canonical_name(host)
+        if host is None:
+            return None
+        port_text = hostinfo.partition(":")[2]
+    if not port_text:
+        return host, None
+    if _PORT_RE.fullmatch(port_text) is None or int(port_text) > 65535:
+        return None
+    return host, int(port_text)
+
+
 def _safe_url(url: str) -> str:
-    """Strip query string + fragment before persisting — they carry secrets
-    (OAuth access_token, pre-signed S3 signatures, API keys as query params).
-    Keep scheme/host/path only; the query is fingerprinted separately."""
+    """Strip query string + fragment + userinfo before persisting — they carry
+    secrets (OAuth access_token, pre-signed S3 signatures, API keys as query
+    params, `https://user:pw@host/` credentials). Keep scheme, host (lowercased,
+    IPv6 re-bracketed), port and path only; the query is fingerprinted separately.
+    Parses _whatwg_normalize(url) (the host the fetch will really contact) and
+    rebuilds from `hostname`/`port`, never `netloc`, so userinfo is dropped entirely
+    (not even the username). Returns '' — the caller then stores `url_hash` instead —
+    when the URL cannot be parsed confidently: urlsplit raises, the port is invalid
+    (e.g. `https://user:pa/ss@host/` parses as host `user`, port `pa`, with the
+    password tail in the path), or there is no host and the path holds an '@' (may
+    be unparsed userinfo), or the authority fails _canonical_authority (malformed host
+    or port, e.g. `https: //u:p@h/` parses as host ' ' with the credentials in the
+    path). The host is recorded CANONICAL (`evil\u3002example` -> evil.example). A
+    host with any non-ASCII char whose path holds an '@' is recorded with an EMPTY path:
+    a non-fatal invisible filler (U+3164, U+115F, U+2063 ...) as the host of a
+    WHATWG-rejected `https:\u3164//UID:PWD[at]evil.example/p` leaves the credentials in the
+    path ([at] is the at-sign), and nothing after the visible destination is worth that
+    risk. ASCII hosts
+    keep their path (`@types/node`). Never raises."""
     try:
         from urllib.parse import urlsplit, urlunsplit
-        p = urlsplit(url or "")
-        return urlunsplit((p.scheme, p.netloc, p.path, "", ""))
+        p = urlsplit(_whatwg_normalize(url))
+        if not p.hostname:
+            return "" if "@" in p.path else urlunsplit((p.scheme, "", p.path, "", ""))
+        auth = _canonical_authority(p)
+        if auth is None:
+            return ""
+        host, port = auth
+        if ":" in host:  # IPv6: hostname strips the brackets
+            host = f"[{host}]"
+        netloc = host if port is None else f"{host}:{port}"
+        path = "" if "@" in p.path and not host.isascii() else p.path
+        return urlunsplit((p.scheme, netloc, path, "", ""))
     except Exception:
         return ""
 
@@ -306,10 +472,51 @@ def classify(tool_name: str, tool_input: dict, policy: dict) -> dict | None:
     return None
 
 
+def _is_ip_literal(h: str) -> bool:
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        return False
+
+
 def _host_safelisted(url: str, policy: dict) -> bool:
+    """True when the URL's parsed HOST is a safelist entry or a subdomain of one
+    (`host == h or host.endswith('.' + h)`, case-insensitive, entries stripped).
+    Matching the parsed hostname — not a substring of the whole URL — keeps
+    `github.com` from matching `https://evil.com/github.com`, `evilgithub.com` or
+    `https://github.com[at]evil.com/` ([at] is the at-sign). Empty / whitespace-only /
+    non-string entries are
+    skipped (an empty entry would match every host). The host comes from the same
+    _whatwg_normalize() parse as _safe_url (a backslash can't disguise it), and a URL
+    that does not parse confidently (invalid port, or an authority failing
+    _canonical_authority) is never safelisted; the host compared is the CANONICAL one
+    (`git\u00adhub.com` is github.com, `evil.example%2f.github.com` is malformed). An entry that is an IP literal (IPv4/IPv6, optionally
+    bracketed) matches by EXACT host equality only — `evil.127.0.0.1` is not a
+    subdomain of `127.0.0.1`; suffix matching is for DNS names. The result only sets
+    the ledger's `safelisted` flag (assess_sensitivity never reads it). Never raises."""
     hosts = policy.get("safelist_hosts", {}).get("hosts", [])
-    low = (url or "").lower()
-    return any(h in low for h in hosts)
+    try:
+        from urllib.parse import urlsplit
+        auth = _canonical_authority(urlsplit(_whatwg_normalize(url)))
+    except Exception:
+        return False
+    if auth is None:
+        return False
+    host = auth[0]
+    for h in hosts:
+        if not isinstance(h, str):
+            continue
+        h = h.strip().lower()
+        if h.startswith("[") and h.endswith("]"):
+            h = h[1:-1]
+        if not h:
+            continue
+        if host == h:
+            return True
+        if not _is_ip_literal(h) and host.endswith("." + h):
+            return True
+    return False
 
 
 def _is_credential_path(file_path: str, policy: dict) -> bool:
@@ -488,19 +695,73 @@ def _bash_network_hits(command: str, policy: dict) -> list:
 # --------------------------------------------------------------------------
 # Sensitivity — awareness labels for the advisory line
 # --------------------------------------------------------------------------
+# Characters that must never reach the model-visible advisory (or a log viewer) raw:
+# controls (Cc: newline, ESC), format incl. bidi overrides + zero-width (Cf), line/
+# paragraph separators (Zl/Zp), surrogates (Cs) — the same set as
+# scripts/cast-subagent-worktree-check.sh's _BAD_CATS — plus Cn (unassigned: U+2065,
+# U+FFF0-FFF8, U+E0000-E0FFF ... are default-ignorable, i.e. invisible padding).
+_BAD_CATS = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs", "Cn"})
+_REASON_VALUE_CAP = 200
+
+
+def _clean(value, cap: int = _REASON_VALUE_CAP) -> str:
+    """Printable single-line form of an agent-controlled value for interpolation into
+    the advisory `reason`: each bad char (_BAD_CATS) -> '?', then capped at `cap`
+    chars with a trailing '…'. file_path / commands / server all come from the tool
+    input, so unsanitized they could forge lines in the model-visible advisory
+    (prompt-injection-shaped). Never raises."""
+    try:
+        s = "".join("?" if unicodedata.category(ch) in _BAD_CATS else ch for ch in str(value))
+    except Exception:
+        return "?"
+    return s if len(s) <= cap else s[:cap] + "…"
+
+
+def _defang(text: str) -> str:
+    """Square brackets -> parentheses, so agent text can never read as a
+    `[CAST-EGRESS:...]` advisory tag even mid-line."""
+    return text.replace("[", "(").replace("]", ")")
+
+
+_QUOTE_CAP = 400  # hard cap on the FINAL quoted string (quotes + escapes included)
+
+
+def _quote(value) -> str:
+    """An agent-controlled value as a quoted literal: _clean + _defang, then repr()
+    quoting — it reads unmistakably as a delimited VALUE (a forged `' ... [CAST-EGRESS
+    ...]` cannot close the quote: repr escapes it), and repr escapes any remaining
+    non-printable. Plain values render exactly as 'value'. The 200-char cap applies
+    to the raw value (_clean), but repr can expand a char up to 10x (`\\U000f0000`),
+    so the quoted result is ALSO hard-capped at _QUOTE_CAP chars: the SOURCE text is
+    shortened (never the repr cut mid-escape) until repr(text + '…') fits, so the
+    result still closes its quote, stays one line and round-trips ast.literal_eval."""
+    s = _defang(_clean(value))
+    q = repr(s)
+    if len(q) <= _QUOTE_CAP:
+        return q
+    body = s[:-1] if s.endswith("…") else s
+    while body and len(repr(body + "…")) > _QUOTE_CAP:
+        body = body[:-1]
+    return repr(body + "…")
+
+
 def assess_sensitivity(event: dict, tool_input: dict) -> dict:
     """Label the egress for the advisory line. AWARENESS ONLY — no block path.
-    Returns {'severity': 'info|warn', 'reason': str}."""
+    Returns {'severity': 'info|warn', 'reason': str}. Every value interpolated from
+    the tool input is sanitized — the reason is reflected to the model: file_path and
+    server via _quote (cleaned, defanged, quoted); bash commands via _clean + _defang
+    (they are only ever names that matched the installed policy's command list, and
+    stay unquoted so the documented `bash network command(s): curl` format holds)."""
     severity = "info"
     reason = f"off-machine-bound {event.get('surface')} call recorded"
     if event.get("surface") == "credential_read":
-        severity, reason = "warn", f"credential file read: {event.get('file_path')}"
+        severity, reason = "warn", f"credential file read: {_quote(event.get('file_path'))}"
     if event.get("surface") == "bash" and event.get("commands"):
         severity = "warn"
-        reason = f"bash network command(s): {', '.join(event['commands'])}"
+        reason = f"bash network command(s): {', '.join(_defang(_clean(c)) for c in event['commands'])}"
     if event.get("surface") == "mcp" and event.get("unknown_server"):
         severity = "warn"
-        reason = f"UNKNOWN MCP server '{event.get('server')}' (classify it in egress-policy.json)"
+        reason = f"UNKNOWN MCP server {_quote(event.get('server'))} (classify it in egress-policy.json)"
     return {"severity": severity, "reason": reason}
 
 
@@ -529,14 +790,23 @@ def record(event: dict, verdict: dict, tool_name: str, session_id: str) -> None:
             if k not in event:
                 continue
             if k == "url":
-                line["url"] = _safe_url(event["url"])
+                raw_url = event["url"]
+                line["url"] = _safe_url(raw_url)
+                # Each fingerprint has its OWN try: a hashing failure must cost that one
+                # field, never the whole ledger row (audit-evasion if agent-steerable).
                 try:
                     from urllib.parse import urlsplit
-                    q = urlsplit(event["url"] or "").query
+                    q = urlsplit(_whatwg_normalize(raw_url)).query
+                    if q:
+                        line["url_query_hash"] = _fingerprint(q)
                 except Exception:
-                    q = ""
-                if q:
-                    line["url_query_hash"] = hashlib.sha256(q.encode()).hexdigest()[:12]
+                    pass
+                if not line["url"] and raw_url:
+                    # url could not be stored safely: keep a fingerprint so repeats correlate.
+                    try:
+                        line["url_hash"] = _fingerprint(raw_url)
+                    except Exception:
+                        pass
             else:
                 line[k] = event[k]
         with open(EGRESS_LOG, "a") as f:
@@ -572,6 +842,56 @@ def emit_advisory(verdict: dict) -> None:
 # --------------------------------------------------------------------------
 _POLICY_INVALID_NOTE = ("egress policy missing or invalid - this call was not fully "
                         "classified (see logs/hook-errors.log)")
+# Fixed, CLAUDE_DIR-rooted (never tempfile.gettempdir()) marker dir: one empty file per
+# session that has already been shown _POLICY_INVALID_NOTE.
+_NOTICE_STATE_DIR = os.path.join(CLAUDE_DIR, "state", "egress-policy-notice")
+
+
+class _NoticeDirUnsafe(Exception):
+    """The policy-notice marker dir is (or sits behind) a symlink, or resolves outside CLAUDE_DIR."""
+
+
+def _claim_policy_notice(session_id) -> bool:
+    """True when _POLICY_INVALID_NOTE should be shown on this call: the FIRST call of
+    the session that finds the policy invalid. Atomic exclusive-create of a per-session
+    marker (open(path, 'x')), so concurrent hooks yield exactly one winner. The session
+    id is reduced to [A-Za-z0-9_-]{1,64} before it touches a path. Never raises, and
+    fails LOUD: no usable session id ('' / 'unknown' in any case -- one shared marker
+    would silence every such session forever), an unusable marker dir, or one that is /
+    sits behind a symlink or resolves outside CLAUDE_DIR -> True (show the notice), so
+    the notice can only ever be deduplicated, never lost to a state-dir fault. Every
+    call still logs the reason to hook-errors.log via _load_policy()."""
+    try:
+        sid = re.sub(r"[^A-Za-z0-9_\-]", "", str(session_id or ""))[:64]
+        if not sid or sid.lower() == "unknown":
+            return True
+        # The marker dir must RESOLVE to itself under CLAUDE_DIR: a symlink planted at
+        # `state/` or `state/egress-policy-notice` would otherwise redirect the marker
+        # (and the makedirs below) into the link target. Checked BEFORE makedirs so
+        # nothing is created through a link, and again after (islink + realpath) to
+        # narrow the window; any mismatch -> fail loud (the notice is shown).
+        expected = os.path.join(os.path.realpath(CLAUDE_DIR), "state", "egress-policy-notice")
+        if os.path.realpath(_NOTICE_STATE_DIR) != expected:
+            raise _NoticeDirUnsafe()
+        os.makedirs(_NOTICE_STATE_DIR, mode=0o700, exist_ok=True)
+        if os.path.islink(_NOTICE_STATE_DIR) or os.path.realpath(_NOTICE_STATE_DIR) != expected:
+            raise _NoticeDirUnsafe()
+        marker = os.path.join(_NOTICE_STATE_DIR, f"{sid}.marker")
+    except _NoticeDirUnsafe:
+        _log_error("policy-notice marker dir is a symlink or resolves outside CLAUDE_DIR (notice shown)")
+        return True
+    except Exception as e:
+        _log_error(f"policy-notice marker dir unusable (notice shown): {type(e).__name__}")
+        return True
+    try:
+        with open(marker, "x"):
+            pass
+        return True
+    except FileExistsError:
+        return False  # already shown this session
+    except Exception as e:
+        _log_error(f"policy-notice marker write failed (notice shown): {type(e).__name__}")
+        return True
 
 
 def evaluate(tool_name: str, tool_input: dict, session_id: str) -> dict | None:
@@ -582,8 +902,10 @@ def evaluate(tool_name: str, tool_input: dict, session_id: str) -> dict | None:
     see _load_policy()) the advisory is added even for a call classify() found
     nothing to say about: with no bash_network_commands / credential_path_globs
     the Bash and Read surfaces cannot classify anything, and that must never be a
-    silent state. The MCP/WebFetch fail-safe records are unchanged. A valid policy
-    never produces this notice."""
+    silent state. The notice is shown ONCE per session (_claim_policy_notice); later
+    calls in that session keep their own advisory/record and the per-call reason in
+    hook-errors.log, but do not repeat the notice. The MCP/WebFetch fail-safe records
+    are unchanged. A valid policy never produces this notice."""
     policy = _load_policy()
     verdict = None
     event = classify(tool_name, tool_input, policy)
@@ -592,7 +914,7 @@ def evaluate(tool_name: str, tool_input: dict, session_id: str) -> dict | None:
         record(event, assessed, tool_name, session_id)
         if assessed.get("severity") == "warn":
             verdict = dict(assessed, recorded=True)
-    if not policy:
+    if not policy and _claim_policy_notice(session_id):
         if verdict is None:
             verdict = {"severity": "warn", "reason": _POLICY_INVALID_NOTE, "recorded": False}
         else:

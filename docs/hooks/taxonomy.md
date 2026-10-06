@@ -14,7 +14,6 @@
 |---|---|---|---|---|
 | `pre-tool-guard.sh` | PreToolUse (Bash) | YES — blocks git commit/push/stash + policy violations | **(a) GATE** | YES |
 | `cast-audit-hook.sh` | PreToolUse (Write/Edit) | Conditional — exits 2 only when PII redact=on + cloud-bound | **(a) GATE** (conditional) + **(b) OBS** | YES |
-| `cast-headless-guard.sh` | PreToolUse (AskUserQuestion) | NO — exit 0, injects safe default answer | **(c) ROUTING** | YES |
 | `cast-stat-claim-guard.sh` | PreToolUse (Write/Edit) | YES — blocks README badges with wrong test counts | **(a) GATE** | YES |
 | `cast-tilde-write-guard.sh` | PreToolUse (Write/Edit) | YES — blocks literal-tilde path writes | **(a) GATE** | YES |
 | `cast-no-fake-success-guard.sh` | PreToolUse (Write/Edit) | NO — exit 0, emits warn only | **(b) OBS** | YES (async) |

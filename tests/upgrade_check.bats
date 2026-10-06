@@ -482,3 +482,45 @@ NOISYSCORE
   assert_output --partial 'Run: cast doctor'
   refute_output --partial 'cast upgrade list'
 }
+
+# ---------------------------------------------------------------------------
+# Field separator: the checker splits `tagName<SEP>publishedAt` with `read`. A
+# TAB separator is IFS-whitespace, so an EMPTY tagName's leading tab collapsed
+# and publishedAt landed in TAG (a misleading "unsafe tag" warning, only
+# harmless by accident). The separator is 0x1f (IFS non-whitespace), so an empty
+# tagName stays empty and takes the silent `-z` skip.
+# ---------------------------------------------------------------------------
+
+@test "upgrade-check: empty or null tagName is skipped silently via the empty-tag guard" {
+  _run_check_with_releases '[{"tagName":"","publishedAt":"2099-01-01T00:00:00Z"},{"tagName":null,"publishedAt":"2099-01-01T00:00:00Z"},{"publishedAt":"2099-01-01T00:00:00Z"},{"tagName":"v1.0.0","publishedAt":"2099-01-01T00:00:00Z"}]'
+  assert_success
+  local check_out="$output"
+  # The empty-tag guard is silent: publishedAt must NOT have shifted into TAG
+  # and tripped the allow-list ("unsafe tag" warning).
+  run bash -c 'printf "%s\n" "$1" | grep -c "unsafe tag name"' _ "$check_out"
+  assert_output '0'
+  # Nothing was viewed for an empty tag (no `release view` with an empty/date tag).
+  run grep -c '^release|view|[|2]' "$GH_LOG"
+  assert_output '0'
+  # The normal tag after the empty ones still flows - the loop continues.
+  run grep -c '^release|view|' "$GH_LOG"
+  assert_output '1'
+  run grep -c '^release|view|v1.0.0|--repo|test-org/test-repo|' "$GH_LOG"
+  assert_output '1'
+}
+
+@test "upgrade-check: a literal 0x1f in a tag is cleaned and cannot split the fields" {
+  # JSON \u001f inside tagName. Cleaned to a space it fails the allow-list and is
+  # skipped WITH the unsafe-tag warning; un-cleaned it would split into TAG=v1
+  # (allow-listed) + PUBLISHED=0.0 (unparseable) and be skipped with NO warning.
+  _run_check_with_releases '[{"tagName":"v1\u001f0.0","publishedAt":"2099-01-01T00:00:00Z"},{"tagName":"v1.0.0","publishedAt":"2099-01-01T00:00:00Z"}]'
+  assert_success
+  local check_out="$output"
+  run bash -c 'printf "%s\n" "$1" | grep -c "unsafe tag name from test-org/test-repo"' _ "$check_out"
+  assert_output '1'
+  # Only the normal tag was viewed; the 0x1f tag (or its v1 prefix) never was.
+  run grep -c '^release|view|' "$GH_LOG"
+  assert_output '1'
+  run grep -c '^release|view|v1.0.0|' "$GH_LOG"
+  assert_output '1'
+}

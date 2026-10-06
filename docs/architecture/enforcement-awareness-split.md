@@ -67,7 +67,6 @@ once a permission allows the command. A broad deny cannot carry a narrower allow
 | `write-guards` — no-fake-success | awareness | ❌ | **KEEP as hook** (already advisory) |
 | `cast-egress-sentinel` — off-machine-bound recording | **awareness** | partial (coarse access is native; the *record* + content-sensitivity is net-new) | **KEEP as hook** — the record is the product (§1) |
 | `cast-audit-hook` — web/PII audit record | **awareness** | partial | **KEEP as hook** (audit record) |
-| `cast-headless-guard` — AskUserQuestion auto-answer | awareness | ❌ | **KEEP as hook** |
 | Credential reads | **enforcement** (engagement-gated) | ✅ `sandbox.filesystem.denyRead` *(configured; inert where CC's sandbox doesn't engage — see caveat)* | **NATIVE WHERE ENGAGED** — egress hook is the live record, and the only layer where the sandbox is inert |
 | Network egress | **enforcement** (engagement-gated) | ✅ `sandbox.network.allowedDomains` *(configured; inert where CC's sandbox doesn't engage — see caveat)* | **NATIVE WHERE ENGAGED** — egress hook is the live record, and the only layer where the sandbox is inert |
 | Subagent model cap | **enforcement** | ✅ `Agent(model:)` deny | **ALREADY NATIVE** (shipped via `11-deny.json`; supersedes the direct `settings.json` edit from `73d0db1` — see §11-deny layer below) |

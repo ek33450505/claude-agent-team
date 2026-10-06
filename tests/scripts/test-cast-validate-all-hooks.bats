@@ -18,6 +18,8 @@ setup() {
   # Copy validator + its dependency into the sandbox repo
   cp "$REAL_REPO/scripts/cast-validate-all-hooks.sh" "$TEST_REPO/scripts/"
   cp "$REAL_REPO/scripts/cast-validate-hook-contracts.sh" "$TEST_REPO/scripts/" 2>/dev/null || true
+  # The validator sources its guard lib from its own dir to clean up its hook sandbox.
+  cp "$REAL_REPO/scripts/cast-guard-lib.sh" "$TEST_REPO/scripts/"
 
   # Sandbox runtime hook + settings
   cat > "$TEST_HOME/.claude/test-runtime-hook.sh" <<'SH'

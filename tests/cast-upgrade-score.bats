@@ -284,6 +284,73 @@ STUB
   assert_output '1'
 }
 
+# Run the scorer with a hostile repo/tag (failing claude stub, so the label reaches
+# BOTH the log header and the one-line stderr notice) and assert each carries
+# EXACTLY the expected label, byte for byte (cmp, under LC_ALL=C). An exact match
+# fails when a stripped byte survives AND when too much is stripped, so it cannot
+# pass merely because nothing was logged. Hostile bytes are built with printf
+# octal escapes so this file stays ASCII-only.
+_assert_label() {
+  local repo="$1" tag="$2" want="$3" dash
+  _stub_claude_failure
+  # Start each call from an empty log (HOME is the isolated temp HOME) so line 1
+  # is always THIS run's header.
+  mkdir -p "$HOME/.claude/logs"
+  : >"$HOME/.claude/logs/upgrade-score.log"
+  SCORE_RC=0
+  env PATH="$T/bin:$PATH" ANTHROPIC_API_KEY=x CLAUDE_SUBPROCESS=0 \
+    FAKE_ARGV="$FAKE_ARGV" bash "$SCORE_SH" "$repo" "$tag" "$T/notes.txt" \
+    >"$T/stdout" 2>"$T/stderr" || SCORE_RC=$?
+  [ "$SCORE_RC" -eq 0 ]
+  dash="$(printf '\342\200\224')"
+  printf '[cast-upgrade-score] claude exited 7 for %s %s see ~/.claude/logs/upgrade-score.log\n' \
+    "$want" "$dash" >"$T/want_stderr"
+  cmp "$T/stderr" "$T/want_stderr"
+  # Log header = line 1: "[<timestamp>] <label>".
+  LC_ALL=C sed -n '1p' "$HOME/.claude/logs/upgrade-score.log" |
+    LC_ALL=C sed 's/^\[[0-9TZ:-]*\] //' >"$T/got_log"
+  printf '%s\n' "$want" >"$T/want_log"
+  cmp "$T/got_log" "$T/want_log"
+}
+
+@test "score label: DEL (0x7f) is stripped from the log and the stderr notice" {
+  _assert_label "o/r$(printf '\177')x" "v1$(printf '\177')" 'o/rx@v1'
+}
+
+@test "score label: UTF-8 C1 controls (U+0080, U+0085, U+009B, U+009F) are stripped" {
+  # C2 80 / C2 85 (NEL) / C2 9B (CSI) / C2 9F in repo and tag.
+  _assert_label "o$(printf '\302\200')/r$(printf '\302\205')" \
+    "v$(printf '\302\233')1$(printf '\302\237')" 'o/r@v1'
+}
+
+@test "score label: bidi override/isolate chars (U+202A-202E, U+2066-2069) are stripped" {
+  # U+202E (RLO) in the repo spoofs "r.exe"-style reversals; U+2066/U+2069 in the tag.
+  _assert_label "o/r$(printf '\342\200\256')txt.exe" \
+    "v$(printf '\342\201\246')1$(printf '\342\201\251')" 'o/rtxt.exe@v1'
+}
+
+@test "score label: zero-width and BOM chars (U+200B-U+200F, U+FEFF) are stripped" {
+  _assert_label "o/r$(printf '\342\200\213')x$(printf '\342\200\217')" \
+    "v1$(printf '\357\273\277')" 'o/rx@v1'
+}
+
+@test "score label: a control spliced between bytes cannot reassemble a live C1 or Cf" {
+  # Nested C2 C2 80 80 -> C2 80 and E2 E2 80 AE 80 AE -> E2 80 AE after one sed
+  # pass; C2 <LF> 80 -> C2 80 after the tr pass. Both must still end up fully stripped (sed runs to a fixpoint).
+  _assert_label "o/r$(printf '\302\302\200\200')x" \
+    "v1$(printf '\302\n\200')$(printf '\342\342\200\256\200\256')" 'o/rx@v1'
+}
+
+@test "score label: ASCII and neighbouring valid UTF-8 characters pass through unchanged" {
+  # Ascii label; then characters just OUTSIDE the stripped ranges, which must survive:
+  # U+00A0 (C2 A0), U+200A (E2 80 8A), U+2010 (E2 80 90), U+202F (E2 80 AF),
+  # U+2065 (E2 81 A5), U+206A (E2 81 AA), U+FEFE (EF BB BE), plus e-acute.
+  _assert_label 'my-org/repo_1.x' 'v1.2.3+build@7' 'my-org/repo_1.x@v1.2.3+build@7'
+  local keep
+  keep="$(printf '\302\240\342\200\212\342\200\220\342\200\257\342\201\245\342\201\252\357\273\276\303\251')"
+  _assert_label "o/r${keep}" 'v1' "o/r${keep}@v1"
+}
+
 @test "score: scorer returns the model array only when the system prompt was sent" {
   # Discriminating stub: a valid non-empty array ONLY if --system-prompt arrived
   # with the JSON-only contract; otherwise prose (what the unfixed script

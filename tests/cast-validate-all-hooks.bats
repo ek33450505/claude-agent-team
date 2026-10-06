@@ -563,6 +563,9 @@ _setup_fake_repo() {
   mkdir -p "$dir/scripts"
   cp "$VALIDATOR_ALL" "$dir/scripts/cast-validate-all-hooks.sh"
   echo '#!/usr/bin/env bash' >"$dir/scripts/cast-validate-hook-contracts.sh"
+  # The validator removes its sandbox through cast_safe_rm (blast-radius lint), sourced
+  # from its own scripts/ dir — a fake repo without the lib would leak the sandbox.
+  cp "$REPO_DIR/scripts/cast-guard-lib.sh" "$dir/scripts/cast-guard-lib.sh"
   chmod +x "$dir/scripts/cast-validate-all-hooks.sh" "$dir/scripts/cast-validate-hook-contracts.sh"
 }
 
@@ -765,4 +768,291 @@ _refute_forged_ok_line() {
   assert_output --partial "wrong hookEventName"
   assert_output --partial '\n[ok] forged-via-event'
   _refute_forged_ok_line
+}
+
+# ---------------------------------------------------------------------------
+# V2 (2026-10-05): hooks must receive VALID JSON on stdin — the old
+# `${!payload_var:-{}}` ended at the first '}' and appended a stray one, so every
+# hook was validated on INVALID JSON — and, now that real hook logic runs, every hook
+# must run in a throwaway sandbox (HOME / cast.db / cwd / inherited CAST_* dirs),
+# never against the caller's live state. Keep in sync with the same block in
+# cast-hook-contracts.bats.
+# ---------------------------------------------------------------------------
+
+# Probe hook: emits valid <event> hookSpecificOutput iff stdin parses as a JSON object,
+# else the literal NOTJSON (which the validator then reports as non-JSON output).
+_write_json_probe_hook() { # path event
+  sed "s/__EVENT__/$2/" >"$1" <<'SCRIPT'
+#!/usr/bin/env bash
+payload="$(cat)"
+if printf '%s' "$payload" | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin), dict)' 2>/dev/null; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"__EVENT__","additionalContext":"payload-valid"}}'
+else
+  printf 'NOTJSON\n'
+fi
+SCRIPT
+  chmod +x "$1"
+}
+
+# Probe hook: dirties HOME and cwd, then records what it can see to <out>. The output
+# path is baked into the script (hooks run under `env -i`, so no env var can carry it).
+# Extra shell appended by the caller via $3 (e.g. removing the sentinel); it may use $PROBE_OUT.
+_write_isolation_probe_hook() { # path out [extra-shell]
+  sed "s|__PROBE_OUT__|$2|" >"$1" <<'SCRIPT'
+#!/usr/bin/env bash
+PROBE_OUT=__PROBE_OUT__
+cat >/dev/null
+mkdir -p "$HOME/.claude" && : >"$HOME/.claude/isolation-marker"
+: >"$PWD/cwd-marker"
+[ -n "${TMPDIR:-}" ] && : >"$TMPDIR/tmp-marker"
+{
+  printf 'HOME=%s\n' "$HOME"
+  printf 'DB=%s\n' "${CAST_DB_PATH-UNSET}"
+  printf 'PWD=%s\n' "$PWD"
+  printf 'PROJ=%s\n' "${CLAUDE_PROJECT_DIR-UNSET}"
+  printf 'JOURNAL=%s\n' "${CAST_JOURNAL_DIR-UNSET}"
+  printf 'GITIDX=%s\n' "${GIT_INDEX_FILE-UNSET}"
+  printf 'OSA=%s\n' "$(command -v osascript)"
+  printf 'TMPD=%s\n' "${TMPDIR-UNSET}"
+  printf 'DBURL=%s\n' "${CAST_DB_URL-UNSET}"
+  printf 'VAULT=%s\n' "${CAST_JOURNAL_VAULT-UNSET}"
+  printf 'BASHENV=%s\n' "${BASH_ENV-UNSET}"
+  printf 'LCALL=%s\n' "${LC_ALL-UNSET}"
+  printf 'TOPLEVEL=%s\n' "$(git rev-parse --show-toplevel 2>/dev/null || echo NOREPO)"
+} >"$PROBE_OUT"
+SCRIPT
+  [ -n "${3:-}" ] && printf '%s\n' "$3" >>"$1"
+  chmod +x "$1"
+}
+
+_write_probe_settings() { # path event hook-basename
+  printf '{"hooks":{"%s":[{"id":"probe","hooks":[{"type":"command","command":"bash ~/.claude/scripts/%s"}]}]}}\n' "$2" "$3" >"$1"
+}
+
+_probe_field() { # file key
+  grep "^$2=" "$1" | cut -d= -f2-
+}
+
+@test "validate-all: a hook receives its event's synthetic payload as VALID JSON" {
+  local fakerepo="$TEST_TMPDIR/fr_v2a" fake_home="$TEST_TMPDIR/fh_v2a"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude"
+  _write_json_probe_hook "$fakerepo/scripts/json-probe.sh" SessionEnd
+  _write_probe_settings "$fakerepo/settings.json" SessionEnd json-probe.sh
+
+  run env HOME="$fake_home" bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_success
+  assert_output --partial "[ok] probe (SessionEnd)"
+  refute_output --partial "non-JSON output"
+}
+
+@test "validate-all: an event with no synthetic payload still gets '{}' (valid JSON)" {
+  local fakerepo="$TEST_TMPDIR/fr_v2b" fake_home="$TEST_TMPDIR/fh_v2b"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude"
+  _write_json_probe_hook "$fakerepo/scripts/json-probe.sh" Notification
+  _write_probe_settings "$fakerepo/settings.json" Notification json-probe.sh
+
+  run env HOME="$fake_home" bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_success
+  assert_output --partial "[ok] probe (Notification)"
+}
+
+@test "validate-all: hooks run in a sandbox — real HOME, repo and cwd untouched; inherited CAST_*/GIT_* dirs unset" {
+  local fakerepo="$TEST_TMPDIR/fr_v2c" fake_home="$TEST_TMPDIR/fh_v2c"
+  local tmpd="$TEST_TMPDIR/tmpd_v2c" invoke="$TEST_TMPDIR/invoke_v2c" out="$TEST_TMPDIR/probe_v2c.out"
+  _setup_fake_repo "$fakerepo"
+  local vault="$TEST_TMPDIR/vault_v2c" bashenv="$TEST_TMPDIR/bashenv_v2c.sh"
+  mkdir -p "$fake_home/.claude" "$tmpd" "$invoke" "$vault"
+  : >"$bashenv"
+  _write_isolation_probe_hook "$fakerepo/scripts/iso-probe.sh" "$out"
+  _write_probe_settings "$fakerepo/settings.json" SessionEnd iso-probe.sh
+
+  cd "$invoke"
+  run env HOME="$fake_home" TMPDIR="$tmpd" \
+    CAST_JOURNAL_DIR="$TEST_TMPDIR/live-journal" GIT_INDEX_FILE="$TEST_TMPDIR/live-index" \
+    CAST_DB_URL="sqlite:///$TEST_TMPDIR/live.db" CAST_JOURNAL_VAULT="$vault" BASH_ENV="$bashenv" LC_ALL=C \
+    bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_success
+
+  # nothing the hook wrote reached the caller's HOME, the repo, or the caller's cwd
+  [ ! -e "$fake_home/.claude/isolation-marker" ]
+  [ ! -e "$fakerepo/.claude/isolation-marker" ]
+  [ ! -e "$invoke/cwd-marker" ]
+
+  # everything the hook saw lives under the validator's own temp dir
+  local sbx
+  sbx="$(cd "$tmpd" && pwd -P)"
+  [[ "$(_probe_field "$out" HOME)" == "$sbx"/cast-validate-home.* ]]
+  [ "$(_probe_field "$out" DB)" = "$(_probe_field "$out" HOME)/.claude/cast.db" ]
+  [ "$(_probe_field "$out" PWD)" = "$(_probe_field "$out" HOME)/work" ]
+  [ "$(_probe_field "$out" PROJ)" = "$(_probe_field "$out" HOME)/work" ]
+  [ "$(_probe_field "$out" OSA)" = "$(_probe_field "$out" HOME)/shim/osascript" ]
+  # inherited live-state pointers are gone inside the hook
+  [ "$(_probe_field "$out" JOURNAL)" = "UNSET" ]
+  [ "$(_probe_field "$out" GITIDX)" = "UNSET" ]
+  [ "$(_probe_field "$out" DBURL)" = "UNSET" ]
+  [ "$(_probe_field "$out" VAULT)" = "UNSET" ]
+  [ "$(_probe_field "$out" BASHENV)" = "UNSET" ]
+  # the hook's temp dir is the sandbox's, not the caller's; allowlisted locale passes through
+  [ "$(_probe_field "$out" TMPD)" = "$(_probe_field "$out" HOME)/tmp" ]
+  [ "$(_probe_field "$out" LCALL)" = "C" ]
+  [ ! -e "$tmpd/tmp-marker" ]
+  [ -z "$(ls -A "$vault")" ]
+}
+
+@test "validate-all: the sandbox is removed on exit (positive control: the hook ran inside it)" {
+  local fakerepo="$TEST_TMPDIR/fr_v2d" fake_home="$TEST_TMPDIR/fh_v2d"
+  local tmpd="$TEST_TMPDIR/tmpd_v2d" out="$TEST_TMPDIR/probe_v2d.out"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude" "$tmpd"
+  _write_isolation_probe_hook "$fakerepo/scripts/iso-probe.sh" "$out"
+  _write_probe_settings "$fakerepo/settings.json" SessionEnd iso-probe.sh
+
+  run env HOME="$fake_home" TMPDIR="$tmpd" \
+    bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_success
+
+  local seen
+  seen="$(_probe_field "$out" HOME)"
+  [[ "$seen" == "$(cd "$tmpd" && pwd -P)"/cast-validate-home.* ]] # it existed...
+  [ ! -e "$seen" ]                                                 # ...and is gone
+  [ "$(find "$tmpd" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "validate-all: cleanup refuses a sandbox that lost its sentinel (fail-closed)" {
+  local fakerepo="$TEST_TMPDIR/fr_v2e" fake_home="$TEST_TMPDIR/fh_v2e"
+  local tmpd="$TEST_TMPDIR/tmpd_v2e" out="$TEST_TMPDIR/probe_v2e.out"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude" "$tmpd"
+  _write_isolation_probe_hook "$fakerepo/scripts/iso-probe.sh" "$out" 'rm -f "$HOME/.cast-test-home"'
+  _write_probe_settings "$fakerepo/settings.json" SessionEnd iso-probe.sh
+
+  run env HOME="$fake_home" TMPDIR="$tmpd" \
+    bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_success
+
+  # no sentinel -> the validator must NOT delete it (left for a human; teardown removes $TEST_TMPDIR)
+  [ -d "$(_probe_field "$out" HOME)" ]
+}
+
+@test "validate-all --source: executes the sandbox COPY of the repo script (its dirname-\$0 is inside the sandbox, not the repo)" {
+  local fakerepo="$TEST_TMPDIR/fr_v2f" fake_home="$TEST_TMPDIR/fh_v2f"
+  local tmpd="$TEST_TMPDIR/tmpd_v2f" out="$TEST_TMPDIR/probe_v2f.out"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude" "$tmpd"
+  _write_isolation_probe_hook "$fakerepo/scripts/iso-probe.sh" "$out" 'printf "SELFDIR=%s\n" "$(cd "$(dirname "$0")" && pwd)" >>"$PROBE_OUT"'
+  _write_probe_settings "$fakerepo/settings.json" SessionEnd iso-probe.sh
+
+  run env HOME="$fake_home" TMPDIR="$tmpd" \
+    bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_success
+
+  # the hook ran from the seeded copy inside the sandbox...
+  [ "$(_probe_field "$out" SELFDIR)" = "$(_probe_field "$out" HOME)/.claude/scripts" ]
+  # ...not from the repo it was seeded from
+  [ "$(_probe_field "$out" SELFDIR)" != "$fakerepo/scripts" ]
+}
+
+@test "validate-all --source: a symlink in the seed source fails closed (exit 2) and leaves no sandbox" {
+  local fakerepo="$TEST_TMPDIR/fr_v2g" fake_home="$TEST_TMPDIR/fh_v2g" tmpd="$TEST_TMPDIR/tmpd_v2g"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude" "$tmpd"
+  _write_json_probe_hook "$fakerepo/scripts/json-probe.sh" SessionEnd
+  _write_probe_settings "$fakerepo/settings.json" SessionEnd json-probe.sh
+  ln -s "$TEST_TMPDIR" "$fakerepo/scripts/evil-link" # a dereferencing copy would pull this tree in
+
+  run env HOME="$fake_home" TMPDIR="$tmpd" bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] seed source contains symlinks:"
+  assert_output --partial "evil-link"
+  [ "$(find "$tmpd" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+@test "validate-all: git discovery in a hook cannot escape into a caller TMPDIR that is inside a work tree" {
+  local fakerepo="$TEST_TMPDIR/fr_v2h" fake_home="$TEST_TMPDIR/fh_v2h"
+  local callerrepo="$TEST_TMPDIR/callerrepo_v2h" out="$TEST_TMPDIR/probe_v2h.out"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude" "$callerrepo/tmp"
+  HOME="$fake_home" git init -q "$callerrepo"
+  _write_isolation_probe_hook "$fakerepo/scripts/iso-probe.sh" "$out"
+  _write_probe_settings "$fakerepo/settings.json" SessionEnd iso-probe.sh
+
+  run env HOME="$fake_home" TMPDIR="$callerrepo/tmp" bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  assert_success
+  [ "$(_probe_field "$out" TOPLEVEL)" = "NOREPO" ]
+}
+
+@test "validate-all --source: a symlink that appears in the sandbox copy AFTER seeding fails closed before any hook runs" {
+  local fakerepo="$TEST_TMPDIR/fr_v2i" fake_home="$TEST_TMPDIR/fh_v2i" tmpd="$TEST_TMPDIR/tmpd_v2i"
+  local shimdir="$TEST_TMPDIR/shim_v2i" out="$TEST_TMPDIR/probe_v2i.out"
+  _setup_fake_repo "$fakerepo"
+  mkdir -p "$fake_home/.claude" "$tmpd" "$shimdir"
+  _write_isolation_probe_hook "$fakerepo/scripts/iso-probe.sh" "$out"
+  _write_probe_settings "$fakerepo/settings.json" SessionEnd iso-probe.sh
+  # tar shim: real tar, then (extract side only) plant a symlink in the sandbox copy —
+  # stands in for the source changing between the pre-check and the copy (TOCTOU)
+  printf '#!/bin/sh\n"%s" "$@" || exit $?\ncase "$1" in -xf) ln -s /nonexistent planted-link ;; esac\n' "$(command -v tar)" >"$shimdir/tar"
+  chmod +x "$shimdir/tar"
+
+  run env HOME="$fake_home" TMPDIR="$tmpd" PATH="$shimdir:$PATH" bash "$fakerepo/scripts/cast-validate-all-hooks.sh" --source
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] seed source contains symlinks:"
+  assert_output --partial "planted-link"
+  [ ! -e "$out" ] # no hook ran
+  [ "$(find "$tmpd" -mindepth 1 | wc -l | tr -d ' ')" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# V3 (2026-10-05): NUL-byte capture, timed-out hooks still validated, common JSON
+# fields / event-scoped top-level keys. Keep in sync with cast-hook-contracts.bats.
+# ---------------------------------------------------------------------------
+
+# Plant a raw hook script (body $2 after a bash shebang) registered under event $1 in a
+# fake HOME and run the validator against it (sets $status/$output, stderr merged).
+_run_raw_hook() { # event body
+  local event="$1" body="$2"
+  local hook="$TEST_TMPDIR/raw-hook.sh" fake_home="$TEST_TMPDIR/fh_raw_$event"
+  printf '#!/usr/bin/env bash\n%s\n' "$body" >"$hook"
+  chmod +x "$hook"
+  mkdir -p "$fake_home/.claude"
+  printf '{"hooks":{"%s":[{"id":"raw","hooks":[{"type":"command","command":"bash %s"}]}]}}\n' "$event" "$hook" >"$fake_home/.claude/settings.json"
+  run env HOME="$fake_home" bash "$VALIDATOR_ALL"
+}
+
+@test "validate-all: output containing a NUL byte FAILS (a \$(...) capture would strip it and pass)" {
+  # Valid JSON once the NUL is dropped - exactly what command substitution would hand over.
+  _run_raw_hook SessionEnd "printf '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionEnd\",\\000\"additionalContext\":\"x\"}}'"
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] raw (SessionEnd)"
+  assert_output --partial "output contains NUL bytes"
+  refute_output --partial "[ok] raw"
+}
+
+@test "validate-all: a slow hook that printed INVALID output before the timeout FAILS (not just a timeout warn)" {
+  _run_raw_hook SessionEnd "printf 'not json'
+exec sleep 7"
+  [ "$status" -eq 2 ]
+  assert_output --partial "[fail] raw (SessionEnd) — non-JSON output"
+  assert_output --partial "hook also timed out"
+  refute_output --partial "[warn] raw (SessionEnd) — hook timed out"
+}
+
+@test "validate-all: a SessionStart hook printing only {systemMessage} is valid (no warn)" {
+  _validate_all_event_fixture SessionStart '{"systemMessage":"x"}'
+  [ "$status" -eq 0 ]
+  assert_output --partial "[ok] test-sessionstart-hook (SessionStart)"
+  refute_output --partial "[warn]"
+}
+
+@test "validate-all: a PostToolUse hook printing {decision,reason} is valid (no unknown-key warn)" {
+  _validate_all_event_fixture PostToolUse '{"decision":"block","reason":"x"}'
+  [ "$status" -eq 0 ]
+  refute_output --partial "[warn]"
+  refute_output --partial "[fail]"
+}
+
+@test "validate-all: a top-level updatedInput from PreToolUse is an unknown key (it belongs inside hookSpecificOutput)" {
+  _validate_all_event_fixture PreToolUse '{"updatedInput":{}}'
+  assert_output --partial "[warn] test-pretooluse-hook (PreToolUse) — unknown key 'updatedInput'"
 }

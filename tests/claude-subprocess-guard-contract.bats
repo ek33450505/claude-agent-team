@@ -21,7 +21,6 @@
 #   payload-based count asserts: test_cast_truncation_check,
 #     test_cast_agent_protocol_check — guard is correct but the value of these
 #     tests is in the count/content assertions, not the guard check alone.
-#   headless-guard responder: cast-headless-guard.bats — separate contract.
 #   post-tool-hook subprocess BEHAVIOR tests: post-tool-hook.bats — the guard
 #     here is coupled to the Write/Edit formatter behavior being suppressed.
 #   agent-status-reader inverted guard: agent-status-reader.bats — guard exits

@@ -218,7 +218,7 @@ CAST treats a defined set of operations as **irreversible or destructive** — t
 | Context | `CLAUDE_SUBPROCESS` | PreToolUse hooks | `AskUserQuestion` |
 |---|---|---|---|
 | Interactive main session **and in-session Agent-tool subagents** (incl. a `planner`→`/orchestrate` chain) | unset | **fire** | prompts the user |
-| Headless / managed sub-claude (`claude -p`, `cast-managed-agent.sh`) | `1` | **partial** — git-guard + command-guard destructive-op blocks (commit/push/stash, mass-kill, `rm -rf` of protected roots) still **fire**; Write/Edit-policy, egress recording, and dispatch-capture **skip** (`exit 0` on the `CLAUDE_SUBPROCESS` check) | auto-answered "safest default" (`cast-headless-guard.sh`) |
+| Headless / managed sub-claude (`claude -p`, `cast-managed-agent.sh`) | `1` | **partial** — git-guard + command-guard destructive-op blocks (commit/push/stash, mass-kill, `rm -rf` of protected roots) still **fire**; Write/Edit-policy, egress recording, and dispatch-capture **skip** (`exit 0` on the `CLAUDE_SUBPROCESS` check) | no CAST auto-answer (the former `AskUserQuestion` auto-answer hook was removed 2026-10-05); headless runs get Claude Code's native behaviour |
 | Cron / launchd direct (`cast-db-prune.py`, `cast-migrate.py`) | n/a | **absent** — no Claude in the loop | n/a |
 
 > Verified 2026-06-14: a native Agent-tool subagent runs with `CLAUDE_SUBPROCESS` **unset**, so the hook guards DO fire for it (a subagent's `pkill` is hard-blocked, exit 2). The "subagents run with `CLAUDE_SUBPROCESS=1`" notes elsewhere in this spec describe the older headless/managed dispatch model, not native Agent-tool subagents.

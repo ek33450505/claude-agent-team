@@ -429,8 +429,10 @@ regex layer):
     subcommand: doing so would require answering this exact open question
     first, and this pass could not.
 
-CONTRACT: exit 2 + stderr message = block; exit 0 = allow. FAIL-OPEN — any
-internal error allows the tool (a guard crash must never block all work).
+CONTRACT: exit 2 + stderr message = block; exit 0 = allow. Bash FAILS OPEN — an
+internal error in the git guards allows the tool (a guard crash must never block all
+Bash work). The Write/Edit policy gate (`evaluate`) FAILS CLOSED on an internal error
+(escape hatch: CAST_POLICY_OVERRIDE=1).
 CLAUDE_SUBPROCESS=1 (managed/headless sub-claude) skips ONLY the Write/Edit policy engine + TTL sweep; the git commit/push/stash guards run in EVERY context (a subagent must not bypass the irreversibility guards).
 """
 import datetime
@@ -1390,14 +1392,17 @@ def _ttl_sweep_agent_status() -> None:
     directory per ``os.lstat`` — a symlinked agent-status dir is refused, so the sweep can
     never delete files in the symlink's target. Each entry is lstat'ed and only REGULAR
     files are unlinked (a symlink entry is never followed or removed through its target).
-    Never raises.
+    At most `_STATUS_MAX_FILES` directory entries are examined per call (it runs on every
+    Write/Edit). Never raises.
     """
     try:
         status_dir = os.path.expanduser('~/.claude/agent-status')
         if not stat.S_ISDIR(os.lstat(status_dir).st_mode):
             return
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        for fname in os.listdir(status_dir):
+        for scanned, fname in enumerate(os.listdir(status_dir)):
+            if scanned >= _STATUS_MAX_FILES:
+                break  # bounded work: this runs on every Write/Edit; the rest waits for a later sweep
             if not fname.endswith('.json'):
                 continue
             fpath = os.path.join(status_dir, fname)
@@ -1551,6 +1556,23 @@ _POLICY_MAX_PATH_LEN = 4096      # longer file_paths are not regex-matched (quad
 _POLICY_CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 
 
+def _path_is_strict_utf8(path: str) -> bool:
+    """True when `path` encodes as STRICT UTF-8, i.e. holds no lone surrogate (U+D800..U+DFFF).
+    Any failure -> False (the caller blocks).
+
+    Deliberately NOT `os.fsencode`: its surrogateescape handler maps a lone U+DC80..U+DCFF to a
+    raw byte (0x80..0xFF), so Python's `realpath` would look up `lnk\\x80` -- while Claude Code's
+    Node-based Write/Edit encodes ANY lone surrogate as U+FFFD (EF BF BD) and opens
+    `lnk\\ufffd`. A symlink named with U+FFFD then escapes every resolved-path policy. The two
+    encoders disagree for every surrogate, so every surrogate is refused. (A real astral
+    code point, e.g. U+1F600, and a literal U+FFFD are valid UTF-8 and pass.)"""
+    try:
+        path.encode('utf-8')
+        return True
+    except Exception:
+        return False
+
+
 def _read_policy_config(path: str):
     """Load the installed policy config without trusting what sits at `path`.
 
@@ -1610,8 +1632,8 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
     file, oversize, bad JSON, wrong shape, malformed policy entry, invalid
     path_pattern regex, severity not exactly "block"/"warn") FAILS CLOSED → (2, msg);
     CAST_POLICY_OVERRIDE=1 bypasses it (audit-logged). A file_path longer than
-    _POLICY_MAX_PATH_LEN, or containing any control character, is blocked rather than
-    regex-matched (the raw path is checked before any regex or realpath, and the
+    _POLICY_MAX_PATH_LEN, containing any control character, or not strict UTF-8
+    (any lone surrogate), is blocked rather than regex-matched (the raw path is checked before any regex or realpath, and the
     symlink-resolved candidate is checked again before any regex runs). Each pattern is tested
     against BOTH the raw path and its realpath (symlinked-directory bypass).
 
@@ -1680,6 +1702,15 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
             pid = 'path-control-chars'
             why = ('contains control characters (a newline, tab, NUL or other 0x00-0x1f / 0x7f '
                    'byte) and cannot be evaluated safely')
+        elif not _path_is_strict_utf8(path):
+            # ANY lone surrogate (JSON "\ud800".."\udfff") is refused. Most can't be encoded for
+            # the filesystem at all (realpath would raise); U+DC80..U+DCFF *can* (surrogateescape
+            # -> a raw byte), but then Python resolves `lnk\x80` while the Node-based Write/Edit
+            # opens `lnk�`, so a U+FFFD-named symlink would skip every resolved-path
+            # policy. See `_path_is_strict_utf8`.
+            pid = 'path-not-encodable'
+            why = ('contains a code point that cannot be encoded as strict UTF-8 (a lone '
+                   'surrogate) and cannot be resolved safely')
         else:
             return None
         if resolved:
@@ -1703,17 +1734,15 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
 
     # Test the raw path AND its symlink-resolved form: a symlinked directory
     # (hooks-link -> .githooks) would otherwise sidestep every path_pattern.
-    # Never let resolution raise into the fail-open wrapper: fall back to raw only.
+    # A realpath failure is NOT swallowed (that would degrade to raw-path-only matching and
+    # let a symlinked dir bypass every resolved-path policy): it propagates to
+    # `_evaluate_write_edit`, which fails the Write/Edit closed.
     candidates = [file_path]
-    try:
+    if policies:
         resolved = os.path.realpath(os.path.abspath(file_path))
         if resolved != file_path:
             candidates.append(resolved)
-    except Exception:
-        pass
-    if policies:
-        for cand in candidates[1:]:
-            blocked = _path_block(cand, True)
+            blocked = _path_block(resolved, True)
             if blocked is not None:
                 return blocked
 
@@ -2379,48 +2408,100 @@ def _git_evaluate_impl(command: str, suppressed_counter):
 # --------------------------------------------------------------------------
 # Top-level evaluation (importable by the dispatcher)
 # --------------------------------------------------------------------------
+def _override_session_id(session_id) -> str:
+    """Session id recorded on a CAST_POLICY_OVERRIDE audit event."""
+    return (session_id if isinstance(session_id, str) and session_id
+            else os.environ.get('CLAUDE_SESSION_ID', 'default'))
+
+
+def _write_edit_internal_error(tool_name: str, file_path, session_id, exc: Exception):
+    """Verdict for an UNEXPECTED exception in the Write/Edit policy gate: fail CLOSED.
+
+    The block reason names the exception CLASS only — never `str(exc)` or the path, both of
+    which can carry attacker-controlled text. `CAST_POLICY_OVERRIDE=1` allows (audited as
+    `policy-internal-error`); the audit call is best-effort and cannot raise out of here, so
+    the hatch always resolves. Nothing in this function can raise."""
+    if os.environ.get('CAST_POLICY_OVERRIDE', '0') == '1':
+        try:
+            _audit_policy_override(
+                'policy-internal-error',
+                file_path if isinstance(file_path, str) else '<unresolved file_path>',
+                _override_session_id(session_id))
+        except Exception:
+            pass
+        return 0, ''
+    return 2, (
+        f'**[CAST-POLICY-BLOCK]** Internal error ({type(exc).__name__}) while checking this '
+        f'{tool_name} against the policies; failing closed.\n'
+        f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
+    )
+
+
+def _evaluate_write_edit(tool_name: str, tool_input: dict, session_id):
+    """Write/Edit policy gate. FAILS CLOSED: an unexpected exception blocks (see
+    `_write_edit_internal_error`); the Bash branch of `evaluate` is the fail-OPEN one."""
+    file_path = None
+    try:
+        # `file_path` wins when the key is present (as before); `path` is the fallback.
+        file_path = tool_input.get('file_path', tool_input.get('path'))
+        if not isinstance(file_path, str):
+            # Absent / null / int / list / dict / bool: regex matching would raise
+            # TypeError. A malformed Write/Edit target fails CLOSED (an empty STRING is
+            # still "no path").
+            kind = 'missing or null' if file_path is None else f'of type {type(file_path).__name__}'
+            if os.environ.get('CAST_POLICY_OVERRIDE', '0') == '1':
+                _audit_policy_override(
+                    'policy-path-not-a-string', f'<{kind} file_path>',
+                    _override_session_id(session_id))
+                return 0, ''
+            return 2, (
+                f'**[CAST-POLICY-BLOCK]** The {tool_name} target path (`file_path`/`path`) is {kind}, '
+                f'not a string, so it cannot be checked against the policies; failing closed.\n'
+                f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
+            )
+        if file_path:
+            try:
+                _ttl_sweep_agent_status()  # best-effort housekeeping; never decides the verdict
+            except Exception:
+                pass
+            code, msg = _policy_evaluate(file_path, session_id)
+            if code == 2:
+                return 2, msg
+        return 0, ''
+    except Exception as exc:
+        return _write_edit_internal_error(tool_name, file_path, session_id, exc)
+
+
+def _evaluate_bash(tool_input: dict):
+    """Bash git guard. FAILS OPEN on an internal error: a guard bug must not block every Bash
+    call (the irreversible git ops are also guarded directly in `main()`)."""
+    try:
+        command = tool_input.get('command', '') or ''
+        code, msg = _git_evaluate(command)
+        return (code, msg or '') if code == 2 else (0, '')
+    except Exception:
+        return 0, ''
+
+
 def evaluate(tool_name: str, tool_input: dict, session_id: str = ''):
     """Return (exit_code, message). 0 = allow, 2 = block (message is the block reason).
 
     `session_id` is the hook payload's session_id; only the Write/Edit policy gate uses it
     (requires_agent records must be bound to it — see `_agent_completed_this_session`).
 
-    Never raises — internal errors fail-open to (0, '')."""
-    try:
-        if not isinstance(tool_input, dict):
-            tool_input = {}
-        if tool_name in ('Write', 'Edit'):
-            # `file_path` wins when the key is present (as before); `path` is the fallback.
-            file_path = tool_input.get('file_path', tool_input.get('path'))
-            if not isinstance(file_path, str):
-                # Absent / null / int / list / dict / bool: regex matching would raise
-                # TypeError, which the blanket handler below turns into ALLOW. A malformed
-                # Write/Edit target fails CLOSED instead (an empty STRING is still "no path").
-                kind = 'missing or null' if file_path is None else f'of type {type(file_path).__name__}'
-                if os.environ.get('CAST_POLICY_OVERRIDE', '0') == '1':
-                    _audit_policy_override(
-                        'policy-path-not-a-string', f'<{kind} file_path>',
-                        session_id if isinstance(session_id, str) and session_id
-                        else os.environ.get('CLAUDE_SESSION_ID', 'default'))
-                    return 0, ''
-                return 2, (
-                    f'**[CAST-POLICY-BLOCK]** The {tool_name} target path (`file_path`/`path`) is {kind}, '
-                    f'not a string, so it cannot be checked against the policies; failing closed.\n'
-                    f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
-                )
-            if file_path:
-                _ttl_sweep_agent_status()
-                code, msg = _policy_evaluate(file_path, session_id)
-                if code == 2:
-                    return 2, msg
-            return 0, ''
-        if tool_name != 'Bash':
-            return 0, ''
-        command = tool_input.get('command', '') or ''
-        code, msg = _git_evaluate(command)
-        return (code, msg or '') if code == 2 else (0, '')
-    except Exception:
-        return 0, ''
+    Failure policy differs by tool, deliberately:
+      - Write/Edit fails CLOSED on an internal error -> (2, '**[CAST-POLICY-BLOCK]** ...');
+        escape hatch CAST_POLICY_OVERRIDE=1 (audited as `policy-internal-error`).
+      - Bash fails OPEN on an internal error -> (0, '').
+      - Any other tool -> (0, '').
+    Never raises."""
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    if tool_name in ('Write', 'Edit'):
+        return _evaluate_write_edit(tool_name, tool_input, session_id)
+    if tool_name == 'Bash':
+        return _evaluate_bash(tool_input)
+    return 0, ''
 
 
 def main() -> int:

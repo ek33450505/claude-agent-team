@@ -4,7 +4,7 @@
 # Verifies Task 4 of the 2026-07-04 PY39 audit:
 #   - When a guard module fails to load, the dispatcher still exits 0 (fail-open).
 #   - The failure is durably recorded to hook_failures in cast.db (once per session+module).
-#   - Deduplication via marker file: a second invocation does NOT write a second row.
+#   - Deduplication via the hook_failures row itself: a second invocation does NOT write a second row.
 #
 # Also exercises: the 5 PEP-604-fixed modules import cleanly under /usr/bin/python3
 # when that interpreter is present (skips gracefully when absent).
@@ -46,10 +46,15 @@ print(json.dumps({
 setup() {
     load 'helpers/setup'
     setup_temp_home
-    # Scope dedup marker files to this test's temp HOME so markers never leak
-    # across bats runs (prevents cross-run dedup flake on the dedup test).
-    export TMPDIR="$HOME/.cast-test-tmp"
-    mkdir -p "$TMPDIR"
+    # Dedup is on the hook_failures table itself (no marker file anywhere), so the temp
+    # CAST_DB_PATH alone scopes it (no cross-run dedup flake). Simulate the sandbox that
+    # once made gettempdir() fall back to the cwd: TMPDIR/TEMP/TMP unset and a scratch
+    # cwd; the dedup test asserts no cast-pretool-guard* file appears in it, in HOME, or
+    # in /tmp.
+    unset TMPDIR TEMP TMP
+    PROBE_CWD="$HOME/cwd-probe"
+    export PROBE_CWD
+    mkdir -p "$PROBE_CWD"
     mkdir -p "$HOME/.claude/logs" "$HOME/.claude/config" "$HOME/.claude/scripts"
     cp "$REPO_DIR/config/egress-policy.json" "$HOME/.claude/config/egress-policy.json"
 
@@ -146,6 +151,7 @@ teardown() {
     payload="$(safe_bash_payload "gf-session-dedup")"
 
     # First invocation — must record
+    cd "$PROBE_CWD"
     run python3 "$TMPSCRIPTS/cast-pretool-dispatch.py" <<< "$payload"
     assert_success
 
@@ -156,6 +162,15 @@ teardown() {
     run sqlite3 "$CAST_DB_PATH" \
         "SELECT COUNT(*) FROM hook_failures WHERE session_id='gf-session-dedup'"
     assert_output "1"
+
+    # Deduped by the DB row alone: no marker file in the cwd, anywhere under HOME, or
+    # in the system tmp dir.
+    run ls -A "$PROBE_CWD"
+    assert_output ""
+    run find "$HOME" -name 'cast-pretool-guard*'
+    assert_output ""
+    run compgen -G "/tmp/cast-pretool-guard-gf-session-dedup-*"
+    assert_failure
 }
 
 @test "different session IDs → separate hook_failures rows (no cross-session dedup)" {

@@ -32,6 +32,8 @@ Interface:
 
 Never crashes — all errors are caught and logged silently.
 """
+from __future__ import annotations
+
 import sys
 import json
 import os
