@@ -39,7 +39,6 @@
       ]
     },
     "excludedCommands": [
-      "git",
       "docker",
       "bq",
       "osascript"
