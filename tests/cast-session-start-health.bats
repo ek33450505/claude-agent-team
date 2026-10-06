@@ -688,7 +688,8 @@ PYEOF
   python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
-assert 'guard-failure check could not read cast.db (OperationalError)' in d['systemMessage'], d['systemMessage']
+msg = d['systemMessage']
+assert any('guard-failure check could not read cast.db (' + lab + ')' in msg for lab in ('OperationalError', 'timeout')), msg  # slow runners: the parent's budget can expire before SQLite's 1 s lock wait
 " <<< "$output"
 }
 
