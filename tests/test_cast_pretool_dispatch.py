@@ -17,6 +17,7 @@ the redaction block under test — this file covers the breadcrumb in isolation,
 not the dispatch_decisions INSERT itself.
 """
 import contextlib
+import gc
 import importlib.util
 import io
 import json
@@ -30,7 +31,10 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
+import uuid
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -744,6 +748,33 @@ class TestWorkflowStageModelGuard(_IsolatedHomeTestCase):
         self.assertEqual(box['allow'], (0, ''))
         self._assert_timer_clean(sentinel)
 
+    def test_alarm_landing_right_after_handler_install_still_restores(self):
+        # A stale in-flight alarm can raise the instant signal.signal() returns --
+        # before `previous` is bound. The install is inside the try (sentinel for
+        # `previous`), so the finally still replaces the leaked _on_alarm handler
+        # with a no-op, the timer is never left armed, and fn never runs.
+        real_signal = signal.signal
+        installed = []
+
+        def racing_signal(signum, handler):
+            prev = real_signal(signum, handler)
+            if signum == signal.SIGALRM and getattr(handler, '__name__', '') == '_on_alarm':
+                installed.append(handler)
+                raise cast_pretool_dispatch._WorkflowLintTimeout()
+            return prev
+        sentinel = self._arm_probe()
+        ran = []
+        with mock.patch.object(signal, 'signal', side_effect=racing_signal):
+            with self.assertRaises(cast_pretool_dispatch._WorkflowLintTimeout):
+                cast_pretool_dispatch._run_under_watchdog(lambda: ran.append(1), 5.0)
+        self.assertEqual((len(installed), ran), (1, []))
+        handler = signal.getsignal(signal.SIGALRM)
+        self.assertIsNot(handler, installed[0], 'leaked the alarm handler')
+        self.assertTrue(callable(handler))
+        self.assertEqual(handler.__name__, '_noop')
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+        del sentinel
+
     def test_watchdog_armed_only_around_the_lint_itself(self):
         # Not for other tools, and not for any Workflow input that short-circuits
         # before linting (name-only, over either bound).
@@ -752,6 +783,8 @@ class TestWorkflowStageModelGuard(_IsolatedHomeTestCase):
             {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'x'}},
             {'tool_name': 'Glob', 'tool_input': {}},
             self._wf(name='saved-workflow'),
+            self._wf(scriptPath=['a', 'b']),  # not a str -> no read, no window
+            self._wf(scriptPath=''),
             self._wf(script=too_big),
             self._wf(script="agent(P);\n" * 2001),
         ]
@@ -833,6 +866,102 @@ class TestWorkflowStageModelGuard(_IsolatedHomeTestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr.decode('utf-8', 'replace'))
         self.assertEqual(proc.stdout.decode().strip(), '[]')
 
+    # -- scriptPath read is bounded by its OWN watchdog window (S3c Low-2) -------
+    # O_NONBLOCK covers a FIFO; it does NOT bound a slow open()/read() of a REGULAR
+    # file (a stalled network filesystem). That stall is SIMULATED by patching os.open
+    # (or os.fdopen) to time.sleep for the target path only -- sleep is interrupted by
+    # the SIGALRM handler's raise exactly like an EINTR-able syscall. A real FIFO
+    # cannot reproduce it: the open is O_NONBLOCK, so a FIFO path never stalls here.
+    def _stalling_open(self, target, stall=30.0):
+        real_open = os.open
+
+        def fake_open(path, *a, **kw):
+            if path == target:
+                time.sleep(stall)
+            return real_open(path, *a, **kw)
+        return mock.patch.object(cast_pretool_dispatch.os, 'open', side_effect=fake_open)
+
+    def _read_timeout_lines(self):
+        return [ln for ln in self._read_log().splitlines()
+                if 'scriptPath read timed out' in ln]
+
+    def test_blocked_scriptpath_open_allows_within_read_budget(self):
+        path = self._write('stall.workflow.js', _WF_BAD)  # would DENY if it were read
+        sentinel = self._arm_probe()
+        with mock.patch.object(cast_pretool_dispatch, '_WORKFLOW_READ_BUDGET_SECS', 0.2), \
+                self._stalling_open(path):
+            t0 = time.monotonic()
+            self._assert_allow(self._wf(scriptPath=path))
+            elapsed = time.monotonic() - t0
+        self.assertLess(elapsed, 1.5, 'stalled scriptPath read was not cut off')
+        lines = self._read_timeout_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn('budget 0.2s', lines[0])
+        log = self._read_log()
+        self.assertNotIn('stall.workflow.js', log)   # content-free: no path
+        self.assertNotIn('stage-model lint timed out', log)  # the read, not the lint
+        self._assert_timer_clean(sentinel)
+        self.record_failure.assert_not_called()
+
+    def test_blocked_scriptpath_open_uses_the_default_budget_inside_the_hook_timeout(self):
+        d = cast_pretool_dispatch
+        self.assertLess(d._WORKFLOW_READ_BUDGET_SECS + d._WORKFLOW_LINT_BUDGET_SECS, 5.0)
+        path = self._write('stall.workflow.js', _WF_BAD)
+        with self._stalling_open(path):
+            t0 = time.monotonic()
+            self._assert_allow(self._wf(scriptPath=path))
+            elapsed = time.monotonic() - t0
+        self.assertLess(elapsed, d._WORKFLOW_READ_BUDGET_SECS + 1.0)
+        self.assertEqual(len(self._read_timeout_lines()), 1)
+
+    def test_blocked_scriptpath_is_unreadable_not_a_skipped_call(self):
+        # A stalled scriptPath behaves like any other unreadable scriptPath: an
+        # inline `script` in the same call is still linted.
+        path = self._write('stall.workflow.js', _WF_OK)
+        with mock.patch.object(cast_pretool_dispatch, '_WORKFLOW_READ_BUDGET_SECS', 0.1), \
+                self._stalling_open(path):
+            self._assert_deny(self._wf(script=_WF_BAD, scriptPath=path))
+            self._assert_allow(self._wf(script=_WF_OK, scriptPath=path))
+        self.assertEqual(len(self._read_timeout_lines()), 2)
+
+    def test_blocked_read_after_open_allows_and_closes_the_descriptor(self):
+        path = self._write('stall.workflow.js', _WF_BAD)
+        opened, closed = [], []
+        real_open, real_close = os.open, os.close
+
+        def spy_open(p, *a, **kw):
+            fd = real_open(p, *a, **kw)
+            if p == path:
+                opened.append(fd)
+            return fd
+
+        def spy_close(fd):
+            closed.append(fd)
+            return real_close(fd)
+
+        def stalled_fdopen(*a, **kw):
+            time.sleep(30)
+        sentinel = self._arm_probe()
+        with mock.patch.object(cast_pretool_dispatch, '_WORKFLOW_READ_BUDGET_SECS', 0.2), \
+                mock.patch.object(cast_pretool_dispatch.os, 'open', side_effect=spy_open), \
+                mock.patch.object(cast_pretool_dispatch.os, 'close', side_effect=spy_close), \
+                mock.patch.object(cast_pretool_dispatch.os, 'fdopen', side_effect=stalled_fdopen):
+            self._assert_allow(self._wf(scriptPath=path))
+        self.assertEqual(len(opened), 1)
+        self.assertIn(opened[0], closed, 'descriptor leaked on a mid-read timeout')
+        self.assertEqual(len(self._read_timeout_lines()), 1)
+        self._assert_timer_clean(sentinel)
+
+    def test_scriptpath_read_and_lint_use_separate_budget_windows(self):
+        d = cast_pretool_dispatch
+        path = self._write('ok.workflow.js', _WF_OK)
+        with mock.patch.object(signal, 'setitimer', wraps=signal.setitimer) as spy:
+            self._assert_allow(self._wf(scriptPath=path))
+        r = signal.ITIMER_REAL
+        self.assertEqual(spy.call_args_list, [
+            mock.call(r, d._WORKFLOW_READ_BUDGET_SECS), mock.call(r, 0),
+            mock.call(r, d._WORKFLOW_LINT_BUDGET_SECS), mock.call(r, 0)])
+
     def test_nul_and_lone_surrogate_scriptpaths_allow_quietly(self):
         for bad in ('a\x00b.js', '\ud800.js', '~\ud800/x.js'):
             with self.subTest(path=bad.encode('unicode_escape')):
@@ -896,6 +1025,207 @@ class TestWorkflowStageModelGuard(_IsolatedHomeTestCase):
         proc = self._spawn(self._wf(script=_WF_OK))
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(proc.stdout, b'')
+
+
+class TestGuardFailureDedupe(_IsolatedHomeTestCase):
+    """_record_guard_failure dedupes on the hook_failures table ITSELF -- no marker
+    file anywhere (S3c round 2).
+
+    Why: a marker file is steerable (a symlinked ~/.claude/run, an object planted at
+    the marker path) and, written BEFORE the DB row, permanently lost later records
+    when the DB write failed or when CLAUDE_SESSION_ID was unset ("unknown" shared by
+    every session). Now: an existence check on (hook_name, session_id) before the
+    write; any doubt -> write the row. Runs against a REAL temp cast.db (CAST_DB_PATH
+    under the isolated HOME); setUp also reproduces the sandbox that made
+    tempfile.gettempdir() fall back to the cwd (TMPDIR/TEMP/TMP unset, cwd = scratch).
+    """
+
+    SID = 'dedupe-session-1'
+    HOOK = 'cast-pretool-dispatch/cast_git_guard'
+
+    def setUp(self):
+        super().setUp()
+        env_patch = mock.patch.dict(os.environ)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        for k in ('TMPDIR', 'TEMP', 'TMP', 'CLAUDE_SESSION_ID'):
+            os.environ.pop(k, None)
+        self._cwd = tempfile.mkdtemp(prefix='cast-dedupe-cwd-')
+        self.addCleanup(shutil.rmtree, self._cwd, ignore_errors=True)
+        orig_cwd = os.getcwd()
+        os.chdir(self._cwd)
+        self.addCleanup(os.chdir, orig_cwd)
+        gt = mock.patch.object(tempfile, 'gettempdir', return_value=self._cwd)
+        gt.start()
+        self.addCleanup(gt.stop)
+        # cast_db._connect leaves sqlite connections to the GC (pre-existing, out of
+        # scope here); keep its ResourceWarnings out of this class's output.
+        wctx = warnings.catch_warnings()
+        wctx.__enter__()
+        self.addCleanup(wctx.__exit__, None, None, None)
+        warnings.simplefilter('ignore', ResourceWarning)
+        self.addCleanup(gc.collect)  # runs BEFORE the filter is popped (LIFO)
+        self.db = os.environ['CAST_DB_PATH']
+        if str(_SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(_SCRIPTS_DIR))
+        import cast_db
+        self.cast_db = cast_db
+
+    def _record(self, mod='cast_git_guard', sid=SID, err='boom'):
+        cast_pretool_dispatch._record_guard_failure(mod, err, sid)
+
+    def _rows(self):
+        if not os.path.exists(self.db):
+            return []
+        conn = sqlite3.connect(self.db)
+        try:
+            return conn.execute(
+                'SELECT hook_name, session_id, exit_code, stderr FROM hook_failures '
+                'ORDER BY timestamp, id').fetchall()
+        except sqlite3.OperationalError:  # table never created
+            return []
+        finally:
+            conn.close()
+
+    def _guard_files(self):
+        """Every file/dir/link named cast-pretool-guard* under HOME, cwd, or the
+        system temp dirs (matching only this test's session ids in the shared ones)."""
+        found = []
+        for root in (self._tmpdir, self._cwd):
+            for dirpath, dirnames, filenames in os.walk(root):
+                found += [os.path.join(dirpath, n) for n in dirnames + filenames
+                          if n.startswith('cast-pretool-guard')]
+        for sysdir in ('/tmp/', '/var/tmp/'):
+            if os.path.isdir(sysdir):
+                found += [n for n in os.listdir(sysdir)
+                          if n.startswith('cast-pretool-guard-dedupe-')]
+        return found
+
+    def test_same_session_and_module_is_recorded_once(self):
+        self._record()
+        self._record()
+        self._record()
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][:3], (self.HOOK, self.SID, -1))
+        self.assertIn('guard DISABLED', rows[0][3])
+        self.assertEqual(self._guard_files(), [])
+
+    def test_other_session_and_other_module_are_recorded_separately(self):
+        self._record('cast_git_guard', 'dedupe-session-1')
+        self._record('cast_command_guard', 'dedupe-session-1')
+        self._record('cast_git_guard', 'dedupe-session-2')
+        self._record('cast_git_guard', 'dedupe-session-2')  # dup of the third
+        pairs = sorted((r[0], r[1]) for r in self._rows())
+        self.assertEqual(pairs, sorted([
+            ('cast-pretool-dispatch/cast_git_guard', 'dedupe-session-1'),
+            ('cast-pretool-dispatch/cast_command_guard', 'dedupe-session-1'),
+            ('cast-pretool-dispatch/cast_git_guard', 'dedupe-session-2')]))
+
+    def test_payload_session_id_wins_over_the_env_fallback(self):
+        os.environ['CLAUDE_SESSION_ID'] = 'env-session'
+        self._record(sid='payload-session')
+        self._record(sid='payload-session-2')   # same env, new payload -> new row
+        self._record(sid=None)                  # no payload id -> env fallback
+        self._record(sid=None)                  # ... deduped on the env id
+        self.assertEqual(sorted(r[1] for r in self._rows()),
+                         ['env-session', 'payload-session', 'payload-session-2'])
+
+    def test_unusable_session_id_records_every_time_as_unknown(self):
+        bad = ['', None, 123, 'unknown', 'has space', 'new\nline', 'x' * 65, ['a']]
+        for sid in bad:
+            with self.subTest(sid=repr(sid)[:20]):
+                before = len(self._rows())
+                self._record(sid=sid)
+                self._record(sid=sid)
+                self.assertEqual(len(self._rows()) - before, 2)
+        self.assertEqual({r[1] for r in self._rows()}, {'unknown'})
+        self.assertEqual(self._guard_files(), [])
+
+    def test_unset_env_session_does_not_suppress_other_sessions(self):
+        # The old marker keyed an unset CLAUDE_SESSION_ID as "unknown" for everyone.
+        self._record(sid=None)
+        self._record(sid='real-session')
+        self.assertEqual(sorted(r[1] for r in self._rows()), ['real-session', 'unknown'])
+
+    def test_planted_objects_under_run_have_no_effect(self):
+        run = os.path.join(self._tmpdir, '.claude', 'run')
+        outside = os.path.join(self._tmpdir, 'outside')
+        os.makedirs(outside)
+        os.makedirs(os.path.dirname(run), exist_ok=True)
+        os.symlink(outside, run)                       # symlinked ~/.claude/run
+        name = 'cast-pretool-guard-%s-cast_git_guard.marker' % self.SID
+        os.symlink(os.path.join(outside, 'target'), os.path.join(outside, name))
+        os.mkfifo(os.path.join(outside, 'cast-pretool-guard-fifo'))
+        self._record()
+        self._record()
+        self.assertEqual(len(self._rows()), 1)         # recorded, deduped by the DB
+        self.assertEqual(sorted(os.listdir(outside)),
+                         sorted([name, 'cast-pretool-guard-fifo']))  # untouched
+        self.assertFalse(os.path.exists(os.path.join(outside, 'target')))
+
+    def test_db_write_failure_on_first_call_does_not_lose_the_second(self):
+        real = self.cast_db.db_write
+        with mock.patch.object(self.cast_db, 'db_write', side_effect=[False, None]) as w:
+            self._record()
+        self.assertEqual(w.call_count, 1)
+        self.assertEqual(self._rows(), [])             # call 1 wrote nothing
+        self.assertIs(self.cast_db.db_write, real)
+        self._record()                                 # call 2: nothing blocks it
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_unreadable_dedupe_check_still_records(self):
+        with mock.patch.object(self.cast_db, 'db_query', side_effect=RuntimeError('boom')):
+            self._record()
+        self.assertEqual(len(self._rows()), 1)
+        with mock.patch.object(self.cast_db, 'db_query', return_value=[]):
+            self._record()                             # query says "none" -> writes
+        self.assertEqual(len(self._rows()), 2)
+
+    def test_never_raises_when_the_db_layer_blows_up(self):
+        with mock.patch.object(self.cast_db, 'log_hook_failure',
+                               side_effect=RuntimeError('db down')):
+            self.assertIsNone(
+                cast_pretool_dispatch._record_guard_failure('cast_git_guard', 'boom', self.SID))
+        self.assertIn('_record_guard_failure', self._read_log())
+
+    def test_no_marker_file_is_created_anywhere(self):
+        for mod in ('cast_git_guard', 'cast_command_guard', 'cast_egress_sentinel'):
+            self._record(mod)
+            self._record(mod)
+        self.assertEqual(len(self._rows()), 3)
+        self.assertEqual(self._guard_files(), [])
+        self.assertFalse(os.path.exists(os.path.join(self._tmpdir, '.claude', 'run')))
+
+    def test_e2e_real_script_dedupes_on_the_payload_session_id(self):
+        # Real default path, nothing mocked: a copy of the dispatcher with a broken
+        # sibling guard, HOME isolated, TMPDIR/TEMP/TMP unset, cwd = scratch dir. The
+        # env CLAUDE_SESSION_ID deliberately differs from the payload session_id.
+        session = 'dedupe-e2e-' + uuid.uuid4().hex[:12]
+        scripts = os.path.join(self._tmpdir, 'scripts')
+        os.mkdir(scripts)
+        for name in ('cast-pretool-dispatch.py', 'cast_db.py'):
+            shutil.copy(str(_SCRIPTS_DIR / name), scripts)
+        with open(os.path.join(scripts, 'cast-git-guard.py'), 'w') as fh:
+            fh.write('raise ImportError("intentional test failure")\n')
+        env = dict(os.environ)
+        env.update(HOME=self._tmpdir, CLAUDE_SESSION_ID='env-session-ignored',
+                   CAST_DB_PATH=self.db)
+        for k in ('TMPDIR', 'TEMP', 'TMP', 'CLAUDE_SUBPROCESS'):
+            env.pop(k, None)
+        payload = {'tool_name': 'Bash', 'tool_input': {'command': 'echo hello'},
+                   'session_id': session}
+        for _ in range(2):
+            proc = subprocess.run(
+                [sys.executable, os.path.join(scripts, 'cast-pretool-dispatch.py')],
+                input=json.dumps(payload).encode('utf-8'), capture_output=True,
+                env=env, cwd=self._cwd, timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stderr.decode('utf-8', 'replace'))
+        git_rows = [r for r in self._rows() if r[0] == self.HOOK]
+        self.assertEqual([r[1] for r in git_rows], [session])   # one row, payload id
+        self.assertNotIn('env-session-ignored', {r[1] for r in self._rows()})
+        self.assertEqual(self._guard_files(), [])
+        self.assertEqual([n for n in os.listdir('/tmp/') if session in n], [])
 
 
 if __name__ == '__main__':

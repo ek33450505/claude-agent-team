@@ -22,7 +22,8 @@ ROUTING (by tool_name):
   0. Workflow: stage-model guard (_workflow_stage_model_guard) owns the call --
      DENY an inline/scriptPath script whose agent() stage lacks model:; every
      failure mode allows silently, incl. a lint that outruns its 2 s SIGALRM
-     watchdog. No other path below applies to Workflow.
+     watchdog (the scriptPath read has its own 1 s SIGALRM window; a stalled
+     read = an unreadable scriptPath). No other path below applies to Workflow.
   1. HARD BLOCKS first — CPU-bound (regex only, no I/O), so the wipe-protection
      guard is guaranteed to run before any egress I/O could stall the hook's
      timeout budget:
@@ -101,35 +102,73 @@ def _log_error(msg):
         pass
 
 
-def _record_guard_failure(mod_name: str, err_msg: str) -> None:
+# A session id usable as a dedupe key: a UUID-ish token. Anything else (empty,
+# non-str, whitespace/control chars, > 64 chars, "unknown") is NOT a key -- the
+# failure is still recorded, just never deduplicated.
+_SESSION_ID_RE = re.compile(r'[A-Za-z0-9_\-]{1,64}')
+_UNKNOWN_SESSION = "unknown"
+
+# The PreToolUse payload's session_id, set once by main() so _load() -- reached
+# from a dozen call sites -- can hand it to _record_guard_failure without threading
+# a parameter through all of them. Single-shot process; reset at the top of main().
+_PAYLOAD_SESSION_ID = None
+
+
+def _dedupe_session_id(*candidates):
+    """First candidate that is a usable dedupe key, else None. The payload
+    session_id is passed before the CLAUDE_SESSION_ID env fallback."""
+    for c in candidates:
+        if isinstance(c, str) and c != _UNKNOWN_SESSION and _SESSION_ID_RE.fullmatch(c):
+            return c
+    return None
+
+
+def _guard_failure_recorded(cast_db, hook_name, session_id):
+    """True only if a hook_failures row for (hook_name, session_id) provably
+    exists. ANY doubt -- the read raises, the DB is unreadable, the table is
+    missing -- is False, so the caller writes the row: fail toward recording."""
+    try:
+        cast_db.ensure_hook_failures_table()
+        rows = cast_db.db_query(
+            "SELECT 1 FROM hook_failures WHERE hook_name = ? AND session_id = ? LIMIT 1",
+            (hook_name, session_id),
+        )
+        return bool(rows)
+    except Exception:
+        return False
+
+
+def _record_guard_failure(mod_name: str, err_msg: str, session_id=None) -> None:
     """Write one hook_failures row for a guard module load failure.
 
-    Deduplication: at most one row per (session_id, module) per session, enforced
-    via a marker file under TMPDIR.  Never raises — must not crash the hook.
+    Deduplication: at most one row per (session_id, module), enforced by the
+    hook_failures table ITSELF -- an existence check on (hook_name, session_id)
+    before the write. There is deliberately NO marker file: a file in a
+    guessable location is steerable (a symlinked parent, an object planted at the
+    marker path) and, written before the DB row, silently dropped later records
+    whenever the DB write failed. The DB is the record, so it is also the dedupe.
+    `session_id` is the PreToolUse payload's (preferred), then CLAUDE_SESSION_ID;
+    with neither usable the failure is recorded every time (stored as "unknown",
+    no dedupe -- an id shared across sessions must not suppress anyone's record).
+    Not atomic across concurrent hook processes: two racing calls may both write
+    (a duplicate row is benign; a lost one is not).  Never raises — must not crash
+    the hook.
     """
     try:
-        import tempfile
-        session_id = os.environ.get("CLAUDE_SESSION_ID", "unknown")
-        safe_session = re.sub(r'[^A-Za-z0-9_\-]', '', (session_id or "unknown"))[:64]
-        safe_mod = re.sub(r'[^A-Za-z0-9_\-]', '', mod_name)[:32]
-        tmpdir = tempfile.gettempdir()
-        marker = os.path.join(tmpdir, f"cast-pretool-guard-{safe_session}-{safe_mod}.marker")
-        # Atomic exclusive create: avoids TOCTOU between exists-check and open.
-        try:
-            fd = open(marker, 'x')
-            fd.close()
-        except FileExistsError:
-            return  # already recorded for this (session, module) pair
+        sid = _dedupe_session_id(session_id, os.environ.get("CLAUDE_SESSION_ID"))
+        hook_name = f"cast-pretool-dispatch/{mod_name}"
         # Import cast_db lazily — only on failure path; keeps the hot path free of
         # an extra module load on every call.
         if SCRIPT_DIR not in sys.path:
             sys.path.insert(0, SCRIPT_DIR)
-        from cast_db import log_hook_failure
-        log_hook_failure(
-            f"cast-pretool-dispatch/{mod_name}",
+        import cast_db
+        if sid is not None and _guard_failure_recorded(cast_db, hook_name, sid):
+            return  # already recorded for this (session, module) pair
+        cast_db.log_hook_failure(
+            hook_name,
             -1,
             (f"guard module failed to load — guard DISABLED: {err_msg}")[:2000],
-            session_id,
+            sid if sid is not None else _UNKNOWN_SESSION,
         )
     except Exception as exc:
         _log_error(f"_record_guard_failure: {exc}")
@@ -155,7 +194,7 @@ def _load(mod_name, filename):
         mod = None
         err_str = str(e)
         _log_error(f"guard module failed to load ({filename}) — guard DISABLED this call: {err_str}")
-        _record_guard_failure(mod_name, err_str)
+        _record_guard_failure(mod_name, err_str, _PAYLOAD_SESSION_ID)
     _MODULE_CACHE[mod_name] = mod
     return mod
 
@@ -862,6 +901,10 @@ _WORKFLOW_SNIPPET_MAX = 80
 _WORKFLOW_MAX_SOURCE_CHARS = 256 * 1024
 _WORKFLOW_MAX_AGENT_CALLS = 2000
 _WORKFLOW_LINT_BUDGET_SECS = 2.0  # < the hook's 5 s timeout, with margin for startup
+# The scriptPath read gets its OWN window (not the lint's): the lint module load sits
+# between the two and must never run under an alarm. Worst case read + lint stays
+# 1 s + 2 s = 3 s, inside the 5 s hook timeout with margin for startup + the load.
+_WORKFLOW_READ_BUDGET_SECS = 1.0
 
 
 def _read_workflow_script_path(data, path):
@@ -872,8 +915,11 @@ def _read_workflow_script_path(data, path):
 
     Opened FIRST with O_NONBLOCK and judged with fstat on the SAME fd, so a path
     swapped for a FIFO between a stat and an open cannot block the hook (an
-    open() of a FIFO with no writer waits forever, outside the lint watchdog) and
-    a FIFO / device is never read."""
+    open() of a FIFO with no writer waits forever) and a FIFO / device is never
+    read. O_NONBLOCK does NOT bound a slow open()/read() of a REGULAR file (a
+    stalled network filesystem): that is _read_workflow_script_path_bounded's
+    SIGALRM window, and the one reason this function may raise
+    _WorkflowLintTimeout -- never call it unbounded from the guard."""
     if not isinstance(path, str) or not path:
         return None
     fd = -1
@@ -893,17 +939,49 @@ def _read_workflow_script_path(data, path):
         return None
     finally:
         if fd != -1:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                # An alarm landing between fdopen() and `fd = -1` leaves fh to close
+                # the descriptor as well; an EBADF here must not replace the
+                # in-flight exception.
+                pass
     if len(raw) > _WORKFLOW_SCRIPT_MAX_BYTES:
         return None
     return raw.decode("utf-8", errors="replace")
+
+
+def _read_workflow_script_path_bounded(data, path):
+    """_read_workflow_script_path under its own SIGALRM wall-clock budget
+    (_WORKFLOW_READ_BUDGET_SECS), so a `scriptPath` on a stalled filesystem cannot
+    hold the hook past its timeout (every other failure mode here allows silently,
+    so a hang would otherwise end in Claude Code's hook-timeout kill instead).
+
+    A read that outruns the budget is logged (content-free: no path, no text) and
+    treated exactly like any other unreadable scriptPath -> None, "nothing
+    lintable" -- so a scriptPath-only call is ALLOWED silently, same as a lint that
+    outruns its watchdog, while an inline `script` in the same call is still
+    linted. A path that is not even a non-empty str never opens a window."""
+    if not isinstance(path, str) or not path:
+        return None
+    t0 = time.monotonic()
+    try:
+        return _run_under_watchdog(
+            lambda: _read_workflow_script_path(data, path), _WORKFLOW_READ_BUDGET_SECS
+        )
+    except _WorkflowLintTimeout:
+        _log_error(
+            f"workflow scriptPath read timed out after {time.monotonic() - t0:.1f}s "
+            f"(budget {_WORKFLOW_READ_BUDGET_SECS:g}s) — scriptPath treated as unreadable"
+        )
+        return None
 
 
 def _workflow_sources(data, tool_input):
     """Workflow source texts to lint, as [(label, text), ...] (possibly empty).
 
     A non-empty `script` str is one source; a readable `scriptPath` (see
-    _read_workflow_script_path) is another. BOTH are linted when both exist -- an
+    _read_workflow_script_path_bounded) is another. BOTH are linted when both exist -- an
     empty or non-str `script` is "absent" and must never shadow a real file, and
     a clean `script` must not mask a violating file. Anything else (`name` of a
     saved workflow, resume, ...) yields no source -> allow."""
@@ -911,7 +989,7 @@ def _workflow_sources(data, tool_input):
     script = tool_input.get("script")
     if isinstance(script, str) and script:
         sources.append(("script", script))
-    text = _read_workflow_script_path(data, tool_input.get("scriptPath"))
+    text = _read_workflow_script_path_bounded(data, tool_input.get("scriptPath"))
     if text is not None:
         sources.append(("scriptPath", text))
     return sources
@@ -943,37 +1021,33 @@ def _workflow_deny_reason(entries):
 
 
 class _WorkflowLintTimeout(Exception):
-    """Private: raised by the SIGALRM handler when the lint outruns its budget.
-    Deliberately an Exception (not BaseException): if the alarm ever lands outside
-    the helper's own try, the guard's `except Exception` still turns it into an
-    ALLOW instead of letting a traceback escape -- an uncaught hook crash is a
-    BLOCK to Claude Code >= 2.1.288."""
+    """Private: raised by the SIGALRM handler when the lint -- or the scriptPath
+    read, in its own window -- outruns its budget. Deliberately an Exception (not
+    BaseException): if the alarm ever lands outside the helper's own try, the
+    guard's `except Exception` still turns it into an ALLOW instead of letting a
+    traceback escape -- an uncaught hook crash is a BLOCK to Claude Code >= 2.1.288."""
 
 
-def _lint_with_watchdog(lint, srcs):
-    """lint.find_violations_in_source over each text in `srcs`, all under ONE
-    SIGALRM wall-clock budget (_WORKFLOW_LINT_BUDGET_SECS).
+def _run_under_watchdog(fn, budget):
+    """fn() under ONE SIGALRM wall-clock budget of `budget` seconds.
 
-    Returns a list of the lint's (violations, unterminated), one per source;
-    raises _WorkflowLintTimeout when the budget expires first. Runs the lint
-    WITHOUT a watchdog -- same result, no protection -- where SIGALRM/setitimer do
-    not exist (non-POSIX) or signal.signal refuses (not the main thread of the
-    main interpreter). Armed only around the lint itself, never around the module
-    load (an alarm mid-import would poison the module cache).
+    Returns fn()'s result; raises _WorkflowLintTimeout when the budget expires
+    first. Runs fn() WITHOUT a watchdog -- same result, no protection -- where
+    SIGALRM/setitimer do not exist (non-POSIX) or signal.signal refuses (not the
+    main thread of the main interpreter). Armed only around fn itself, never around
+    the lint module load (an alarm mid-import would poison the module cache).
 
     Disposition afterwards: the timer is cancelled FIRST; then a previously
     installed Python handler (or SIG_IGN) is restored, but SIG_DFL / None is
     replaced by a no-op -- never restored. This process is single-shot, and a
     SIGALRM arriving after the restore (one already in flight when the timer was
     cancelled) would, under SIG_DFL, terminate it with exit 142: a crashed hook,
-    which Claude Code treats as a BLOCK."""
+    which Claude Code treats as a BLOCK. Windows are sequential (scriptPath read,
+    then lint), never nested."""
     import signal
 
-    def run_all():
-        return [lint.find_violations_in_source(src) for src in srcs]
-
     if not (hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")):
-        return run_all()
+        return fn()
 
     def _on_alarm(signum, frame):
         raise _WorkflowLintTimeout()
@@ -981,21 +1055,42 @@ def _lint_with_watchdog(lint, srcs):
     def _noop(signum, frame):
         return None
 
+    # `previous` starts as a sentinel: if a stale in-flight alarm raises right AFTER
+    # signal.signal() installed _on_alarm but BEFORE the assignment, the finally
+    # still runs and replaces the leaked handler with a no-op (the original is
+    # unknowable there, and a no-op is always safe -- see Disposition above).
+    unset = object()
+    previous = unset
+    refused = False
     try:
-        previous = signal.signal(signal.SIGALRM, _on_alarm)
-    except (ValueError, OSError):
-        return run_all()
-    try:
-        signal.setitimer(signal.ITIMER_REAL, _WORKFLOW_LINT_BUDGET_SECS)
         try:
-            return run_all()
+            previous = signal.signal(signal.SIGALRM, _on_alarm)
+        except (ValueError, OSError):
+            refused = True  # nothing installed -> nothing to restore
+            return fn()
+        try:
+            signal.setitimer(signal.ITIMER_REAL, budget)
+            return fn()
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0)  # cancel FIRST
     finally:
-        if previous is None or previous == signal.SIG_DFL:
-            signal.signal(signal.SIGALRM, _noop)
-        else:
-            signal.signal(signal.SIGALRM, previous)
+        if not refused:
+            if previous is unset or previous is None or previous == signal.SIG_DFL:
+                signal.signal(signal.SIGALRM, _noop)
+            else:
+                signal.signal(signal.SIGALRM, previous)
+
+
+def _lint_with_watchdog(lint, srcs):
+    """lint.find_violations_in_source over each text in `srcs`, all under ONE
+    wall-clock budget (_WORKFLOW_LINT_BUDGET_SECS, via _run_under_watchdog).
+
+    Returns a list of the lint's (violations, unterminated), one per source;
+    raises _WorkflowLintTimeout when the budget expires first."""
+    return _run_under_watchdog(
+        lambda: [lint.find_violations_in_source(src) for src in srcs],
+        _WORKFLOW_LINT_BUDGET_SECS,
+    )
 
 
 def _workflow_stage_model_guard(data, tool_input):
@@ -1085,7 +1180,8 @@ def _workflow_stage_model_guard(data, tool_input):
         name = type(e).__name__
         _log_error(f"workflow stage-model lint failed — allowed: {name}")
         _record_guard_failure("cast_lint_workflow_runtime",
-                              f"runtime error in Workflow stage-model guard: {name}")
+                              f"runtime error in Workflow stage-model guard: {name}",
+                              data.get("session_id"))
         return 0
     try:
         print(out)
@@ -1095,6 +1191,8 @@ def _workflow_stage_model_guard(data, tool_input):
 
 
 def main():
+    global _PAYLOAD_SESSION_ID
+    _PAYLOAD_SESSION_ID = None  # per-call: a payload that never parses has none
     try:
         # Read BYTES and decode ourselves: sys.stdin.read() raises
         # UnicodeDecodeError on invalid UTF-8 (strict locale), which would
@@ -1131,6 +1229,8 @@ def main():
     if not isinstance(data, dict):
         _emit_unparseable_neon_ask(raw)
         return 0
+
+    _PAYLOAD_SESSION_ID = data.get("session_id")
 
     tool = data.get("tool_name", "") or ""
     tool_input = data.get("tool_input", {}) or {}
