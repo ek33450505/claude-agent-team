@@ -23,7 +23,7 @@
 #       "hooks": [
 #         {
 #           "type": "command",
-#           "command": "bash ~/Projects/personal/claude-agent-team/scripts/cast-stop-failure-hook.sh"
+#           "command": "bash ~/.claude/scripts/cast-stop-failure-hook.sh"
 #         }
 #       ]
 #     }

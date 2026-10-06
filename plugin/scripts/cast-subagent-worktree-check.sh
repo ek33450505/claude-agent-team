@@ -82,9 +82,9 @@ except Exception as e:
     print(f'cast_git_safe unavailable ({_mod_path}): {e}; git not run', file=sys.stderr)
     sys.exit(1)
 
-# One shared deadline for every git call (under the hook's own timeout budget).
-DEADLINE = time.monotonic() + 8.0
-PER_CALL = 10.0
+# One shared deadline for every git call. Budget: 10 s hook timeout - ~2-4 s python start-up + DB write.
+DEADLINE = time.monotonic() + 6.0
+PER_CALL = 6.0
 
 
 def git(cwd, *args):

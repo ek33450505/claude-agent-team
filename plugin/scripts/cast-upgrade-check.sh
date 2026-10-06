@@ -114,15 +114,18 @@ while IFS= read -r REPO; do
 
   # Find releases newer than last check; fetch notes and score each
   while IFS= read -r RELEASE_LINE; do
-    # Single python3 call emits tab-separated fields to avoid two separate
-    # cold-start invocations that each re-parse the same RELEASE_LINE.
-    IFS=$'\t' read -r TAG PUBLISHED <<<"$(echo "$RELEASE_LINE" | python3 -I -c "
+    # Single python3 call emits unit-separator (0x1f) delimited fields to avoid two
+    # separate cold-start invocations that each re-parse the same RELEASE_LINE.
+    # The separator is deliberately NOT tab: tab is IFS-whitespace, so `read`
+    # collapses an empty leading field (empty tagName) and shifts publishedAt into
+    # TAG. 0x1f is IFS non-whitespace, so empty fields are preserved in place.
+    IFS=$'\037' read -r TAG PUBLISHED <<<"$(echo "$RELEASE_LINE" | python3 -I -c "
 import sys, json
 d = json.loads(sys.stdin.read())
 def clean(v):
-    return str(v).replace('\t', ' ').replace('\n', ' ') if v else ''
-print(f\"{clean(d.get('tagName'))}\t{clean(d.get('publishedAt'))}\")
-" 2>/dev/null || printf '\t')"
+    return str(v).replace('\x1f', ' ').replace('\n', ' ') if v else ''
+print(f\"{clean(d.get('tagName'))}\x1f{clean(d.get('publishedAt'))}\")
+" 2>/dev/null || printf '\037')"
 
     [ -z "$TAG" ] && continue
 
