@@ -8,19 +8,76 @@
 # (byte-budget, hook-wiring, agent-roster, agent-boilerplate). For one-time
 # emergencies only — address violations before the next merge.
 
+# This is an INSTALLED, agent-unwritable copy (~/.claude/githooks/, deployed by install.sh) and it
+# executes ONLY installed ~/.claude/scripts/* — never a repo script (git hooks run in the user's
+# unsandboxed terminal over an agent-writable repo). The repo is passed as DATA via
+# CAST_REPO_ROOT. A missing installed script on a gating step fails closed; no repo fallback.
+# Hook-contract RUNTIME validation (cast-validate-hook-contracts.sh --source) executes repo code,
+# so it is NOT run here: CI (`hook-contract-validation`) and `make ci-local` run it.
+
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+CAST_SCRIPTS="${HOME}/.claude/scripts"
+REPO_ROOT="$(git rev-parse --show-toplevel)"   # rev-parse is probe-verified not to run config programs
 cd "$REPO_ROOT"
+export CAST_REPO_ROOT="$REPO_ROOT"
+_cast_installed() {  # path of an installed script, or fail closed
+  if [[ -f "$CAST_SCRIPTS/$1" && ! -L "$CAST_SCRIPTS/$1" ]]; then printf '%s\n' "$CAST_SCRIPTS/$1"; return 0; fi
+  echo "[CAST pre-commit] installed $1 missing — run: bash install.sh" >&2; return 1
+}
+
+# Repo git calls go through cast_git_safe (repo-config exec paths neutralised) from the INSTALLED
+# lib. Fail closed if it cannot load. GIT_INDEX_FILE (set by git for `commit -a`/`<paths>`) is
+# passed through the lib's validated opt-in so staged-content reads see the index being committed.
+if _hook_lib="$(_cast_installed cast-hook-lib.sh)" && [[ -r "$_hook_lib" ]]; then
+  # shellcheck source=/dev/null
+  source "$_hook_lib"
+else
+  echo "ERROR [pre-commit]: installed cast-hook-lib.sh unavailable — refusing to run repo-derived checks. Run: bash install.sh" >&2
+  exit 1
+fi
+export CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}"
+_git() { cast_git_safe "$REPO_ROOT" "$@"; }
+
+# _run_installed <bash|python> <installed-script> [args...] — run an installed script; fail closed
+# (rc 1, install message) if it is missing or a symlink. Never falls back to a repo copy.
+_run_installed() {
+  local interp="$1" name="$2" path
+  shift 2
+  path="$(_cast_installed "$name")" || return 1
+  if [[ "$interp" == "python" ]]; then python3 -I "$path" "$@"; else bash "$path" "$@"; fi
+}
+
+# _cast_stage_file <repo-relative-file> — stage a regular, non-symlink file WITHOUT `git add`
+# (`git add` runs clean filters named by the repo's .gitattributes+config, and a symlinked target
+# would stage foreign content): hash the raw bytes, then update-index. Both go through
+# cast_git_safe (hash-object always gets --no-filters; update-index is limited to --cacheinfo), so
+# fsmonitor, filter drivers AND config-based hooks (hook.<name>.event=post-index-change) are
+# neutralised — raw `git -c core.hooksPath=/dev/null` does not gate config hooks. The index being
+# committed is honoured via CAST_GIT_SAFE_INDEX_FILE (exported above). Returns non-zero on any
+# problem; callers treat staging as best-effort.
+_cast_stage_file() {
+  local f="$1" blob
+  [[ -f "$f" && ! -L "$f" ]] || return 1
+  blob="$(_git hash-object -w -- "$f")" || return 1
+  _git update-index --add --cacheinfo "100644,${blob},${f}"
+}
 
 # Lint 1: Python cold-start counter — fail if >2 inline python3 -c calls per script
-# Grandfathered files: scripts in .githooks/cold-start-baseline.txt are permitted to keep
-# their existing count; they only fail if the count GROWS (regression).
+# Grandfathered files: scripts in the INSTALLED baseline (~/.claude/githooks/cold-start-baseline.txt,
+# deployed from .githooks/cold-start-baseline.txt by install.sh) are permitted to keep their
+# existing count; they only fail if the count GROWS (regression). The installed copy is the data
+# on purpose: an agent that edits the repo baseline to grandfather a script must not weaken the
+# gate — a baseline change takes effect only after the user reviews it and re-runs install.sh.
 # New files are subject to the strict >2 limit.
 _lint_python_cold_starts() {
   local failed=0
   local script baseline_file
-  baseline_file=".githooks/cold-start-baseline.txt"
+  baseline_file="${HOME}/.claude/githooks/cold-start-baseline.txt"
+  if [[ ! -f "$baseline_file" || -L "$baseline_file" ]]; then
+    echo "ERROR [lint-cold-starts]: installed cold-start baseline missing ($baseline_file) — run: bash install.sh" >&2
+    return 1
+  fi
 
   for script in scripts/*.sh; do
     [[ -f "$script" ]] || continue
@@ -57,7 +114,7 @@ _lint_python_cold_starts() {
     baseline_count=$(wc -l < "$baseline_file" | tr -d ' ')
   fi
   if [[ $baseline_count -gt 0 ]]; then
-    echo "[CAST] NOTE: .githooks/cold-start-baseline.txt grandfathers $baseline_count files with pre-existing violations. These should be consolidated into .py files as capacity allows." >&2
+    echo "[CAST] NOTE: the installed cold-start baseline grandfathers $baseline_count files with pre-existing violations. These should be consolidated into .py files as capacity allows." >&2
   fi
 
   return $failed
@@ -218,54 +275,42 @@ _lint_sql_injection() {
 
 # Lint 3: Orphan script detector — fail if a script is referenced in settings.json but missing from scripts/
 _lint_orphan_scripts() {
-  python3 scripts/cast-lint-orphan-scripts.py
+  _run_installed python cast-lint-orphan-scripts.py
 }
 
 # Lint 5 (self): Byte budget — fail if rules-core/ cumulative size exceeds budget
 _lint_byte_budget() {
-  bash scripts/cast-lint-byte-budget.sh
+  _run_installed bash cast-lint-byte-budget.sh
 }
 
 # Lint 6 (self): Hook wiring — fail on duplicate hook wiring in settings/fragments
 _lint_hook_wiring() {
-  python3 scripts/cast-lint-hook-wiring.py
+  _run_installed python cast-lint-hook-wiring.py
 }
 
 # Lint 7 (self): Agent roster — fail if docs/agents/AGENT-ROSTER.md diverges from agents/core/
 _lint_agent_roster() {
-  python3 scripts/cast-lint-agent-roster.py
+  _run_installed python cast-lint-agent-roster.py
 }
 
 # Lint 8 (self): Agent boilerplate — fail if any agent def inlines verbatim skill prose
 _lint_agent_boilerplate() {
-  bash scripts/cast-lint-agent-boilerplate.sh
+  _run_installed bash cast-lint-agent-boilerplate.sh
 }
 
 # Lint 9 (self): Blast-radius guard — any bare rm -rf / shutil.rmtree in scripts/ is a violation
 _lint_blast_radius() {
-  bash scripts/blast-radius-lint.sh
+  _run_installed bash blast-radius-lint.sh
 }
 
 # Lint 10 (self): Source guard — unguarded `source <file>` left of `||` under set -e is a violation
 _lint_source_guard() {
-  bash scripts/cast-lint-source-guard.sh
+  _run_installed bash cast-lint-source-guard.sh
 }
 
-# --- Hook contract validation ---
-# Exit code semantics: 0=all pass, 1=warn-only (benign), 2=errors found.
-# Only block (exit 1) when the validator reports ERRORS (exit 2). Warns let the commit proceed.
-if git diff --cached --name-only | grep -qE '^(settings\.json|managed-settings\.d/.*\.json)$'; then
-    if [[ -x scripts/cast-validate-hook-contracts.sh ]]; then
-        validate_exit=0
-        bash scripts/cast-validate-hook-contracts.sh --source || validate_exit=$?
-        if [[ $validate_exit -eq 2 ]]; then
-            echo "[pre-commit] Hook contract validator found ERRORS — see output above. Use CAST_SKIP_HOOK_VALIDATE=1 to bypass." >&2
-            [[ "${CAST_SKIP_HOOK_VALIDATE:-0}" != "1" ]] && exit 1
-        elif [[ $validate_exit -eq 1 ]]; then
-            echo "[pre-commit] Hook contract validator found warnings (non-blocking) — see output above." >&2
-        fi
-    fi
-fi
+# NOTE: hook-contract runtime validation (scripts/cast-validate-hook-contracts.sh --source) is NOT
+# run from pre-commit — it executes repo code. CI (`hook-contract-validation`) and `make ci-local`
+# run it; this hook keeps the static lints below.
 
 # Run all lints
 echo "[CAST pre-commit] Running regression lints..."
@@ -295,7 +340,7 @@ _lint_orphan_scripts || {
 # Fix: replace datetime.utcnow() with datetime.now(timezone.utc)
 _lint_utcnow() {
   local matches
-  matches=$(git diff --cached -U0 -- '*.py' '*.sh' | grep '^+' | grep -E 'datetime\.utcnow\(|\.utcnow\(\)' || true)
+  matches=$(_git diff --cached -U0 -- '*.py' '*.sh' | grep '^+' | grep -E 'datetime\.utcnow\(|\.utcnow\(\)' || true)
   if [[ -n "$matches" ]]; then
     echo "ERROR [lint-utcnow]: staged change introduces datetime.utcnow() (deprecated naive UTC)."
     echo "  Fix: replace with datetime.now(timezone.utc)"
@@ -333,27 +378,36 @@ fi
 # Test-coverage advisory — reports which existing BATS tests already cover each
 # staged scripts/bin/.githooks/completions file. Purely informational: the `|| true`
 # guarantees this can NEVER block or fail the commit, even if the script itself errors.
-bash scripts/cast-test-coverage-advisory.sh || true
+_run_installed bash cast-test-coverage-advisory.sh || true
 
 # Keep canonical cast-stats.json in sync with derived stats (git ls-files based → CI-consistent).
 # Only stages when a real stat field changed (--check ignores the volatile `updated` field),
 # so unrelated commits never churn the file. Never blocks the commit.
-if command -v jq >/dev/null 2>&1 && [[ -x scripts/gen-cast-stats.sh ]]; then
-  if ! bash scripts/gen-cast-stats.sh --check >/dev/null 2>&1; then
-    bash scripts/gen-cast-stats.sh >/dev/null 2>&1 || true
-    git add cast-stats.json 2>/dev/null || true
-    echo "[CAST pre-commit] refreshed cast-stats.json (stats changed)"
+# Informational step: a missing installed generator warns and continues (never the repo copy).
+if command -v jq >/dev/null 2>&1; then
+  if _gen_stats="$(_cast_installed gen-cast-stats.sh 2>/dev/null)"; then
+    if ! bash "$_gen_stats" --check >/dev/null 2>&1; then
+      bash "$_gen_stats" >/dev/null 2>&1 || true
+      _cast_stage_file cast-stats.json 2>/dev/null || true
+      echo "[CAST pre-commit] refreshed cast-stats.json (stats changed)"
+    fi
+  else
+    echo "[CAST pre-commit] WARNING: installed gen-cast-stats.sh missing — stats refresh skipped (run: bash install.sh)" >&2
   fi
 fi
 
 # Keep ecosystem-versions.json in sync with local sibling repos.
 # Runs in --local mode (reads sibling repos under ~/Projects/personal/); if siblings are absent
 # the script reuses committed values and --check passes — safe no-op. Never blocks the commit.
-if command -v jq >/dev/null 2>&1 && [[ -x scripts/gen-ecosystem-versions.sh ]]; then
-  if ! bash scripts/gen-ecosystem-versions.sh --check >/dev/null 2>&1; then
-    bash scripts/gen-ecosystem-versions.sh >/dev/null 2>&1 || true
-    git add ecosystem-versions.json 2>/dev/null || true
-    echo "[CAST pre-commit] refreshed ecosystem-versions.json"
+if command -v jq >/dev/null 2>&1; then
+  if _gen_eco="$(_cast_installed gen-ecosystem-versions.sh 2>/dev/null)"; then
+    if ! bash "$_gen_eco" --check >/dev/null 2>&1; then
+      bash "$_gen_eco" >/dev/null 2>&1 || true
+      _cast_stage_file ecosystem-versions.json 2>/dev/null || true
+      echo "[CAST pre-commit] refreshed ecosystem-versions.json"
+    fi
+  else
+    echo "[CAST pre-commit] WARNING: installed gen-ecosystem-versions.sh missing — refresh skipped (run: bash install.sh)" >&2
   fi
 fi
 
@@ -363,16 +417,16 @@ fi
 # Plugin-drift guard — only runs when bundled-source files are staged.
 # Catches the "passes locally (disk-vs-disk), fails in CI (committed-vs-regen)" trap.
 # Bypass: CAST_SKIP_PLUGIN_DRIFT=1 git commit ... (one-time emergency only)
-if git diff --cached --name-only | grep -qE '^(agents/core/|skills/|commands/|scripts/|managed-settings\.d/)'; then
+if _git diff --cached --name-only | grep -qE '^(agents/core/|skills/|commands/|scripts/|managed-settings\.d/)'; then
     if [[ "${CAST_SKIP_PLUGIN_DRIFT:-0}" != "1" ]]; then
         drift_exit=0
-        bash scripts/check-plugin-drift.sh || drift_exit=$?
+        _run_installed bash check-plugin-drift.sh || drift_exit=$?
         if [[ $drift_exit -ne 0 ]]; then
             echo "" >&2
             echo "ERROR [pre-commit]: plugin/ is out of sync with bundled source (plugin drift detected)." >&2
             echo "  Regenerate and stage plugin/ before committing:" >&2
             # shellcheck disable=SC2016  # single quotes intentional: literal command for user to paste
-            echo '    bash scripts/gen-plugin.sh "$(git rev-parse --show-toplevel)/plugin" && git add plugin/' >&2
+            echo '    CAST_REPO_ROOT="$(git rev-parse --show-toplevel)" bash ~/.claude/scripts/gen-plugin.sh "$(git rev-parse --show-toplevel)/plugin" && git add plugin/' >&2
             echo "  To bypass for a one-time emergency: CAST_SKIP_PLUGIN_DRIFT=1 git commit ..." >&2
             exit 1
         fi

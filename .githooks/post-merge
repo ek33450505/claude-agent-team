@@ -2,7 +2,7 @@
 # CAST post-merge hook
 #
 # Fires after `git merge` and the merge half of `git pull` (NOT after rebase).
-# Gates `install.sh` on actual CAST source changes (agents/, scripts/, bin/, rules-core/).
+# Gates `install.sh` on actual CAST source changes (agents/, scripts/, bin/, rules-core/, .githooks/).
 # If none of those directories changed, the hook exits silently.
 #
 # Logs to: ~/.claude/logs/auto-install.log
@@ -14,10 +14,23 @@
 # bash -c, so keep it simple (no shell metacharacters in the value).
 # Example: CAST_POST_MERGE_INSTALL_CMD='touch /tmp/installed.marker'
 
+# This is an INSTALLED, agent-unwritable copy (~/.claude/githooks/, deployed by install.sh) and it
+# calls ONLY installed ~/.claude/scripts/*; the repo is passed as data (CAST_REPO_ROOT).
+# ACCEPTED RESIDUAL: the one step below that runs repo code is `bash "$REPO_ROOT/install.sh"` —
+# that IS the deploy step, by design: it executes the install.sh just pulled/merged (install.sh
+# itself refuses to run on a dirty tree in the paths it deploys). A merged malicious install.sh
+# therefore runs here with the user's privileges; the guard is review of what is merged.
+
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+CAST_SCRIPTS="${HOME}/.claude/scripts"
+REPO_ROOT="$(git rev-parse --show-toplevel)"   # rev-parse is probe-verified not to run config programs
 cd "$REPO_ROOT"
+export CAST_REPO_ROOT="$REPO_ROOT"
+_cast_installed() {  # path of an installed script, or fail closed
+  if [[ -f "$CAST_SCRIPTS/$1" && ! -L "$CAST_SCRIPTS/$1" ]]; then printf '%s\n' "$CAST_SCRIPTS/$1"; return 0; fi
+  echo "[CAST post-merge] installed $1 missing — run: bash install.sh" >&2; return 1
+}
 
 LOG_DIR="$HOME/.claude/logs"
 LOG_FILE="$LOG_DIR/auto-install.log"
@@ -34,16 +47,26 @@ if [[ "${CAST_SKIP_POST_MERGE_INSTALL:-0}" == "1" ]]; then
   exit 0
 fi
 
+# Repo git calls go through cast_git_safe (config-exec paths neutralised) from the INSTALLED lib.
+# post-merge cannot block the merge, so "fail closed" = do nothing further, never use a repo copy.
+if _hook_lib="$(_cast_installed cast-hook-lib.sh)" && [[ -r "$_hook_lib" ]]; then
+  # shellcheck source=/dev/null
+  source "$_hook_lib"
+else
+  _log "installed cast-hook-lib.sh missing — skipping (run: bash install.sh)"
+  exit 0
+fi
+
 # ORIG_HEAD guard — squash merges and initial clones may lack ORIG_HEAD
-if ! git rev-parse --verify -q ORIG_HEAD >/dev/null 2>&1; then
+if ! cast_git_safe "$REPO_ROOT" rev-parse --verify -q ORIG_HEAD >/dev/null 2>&1; then
   _log "no ORIG_HEAD — cannot diff, skipping"
   exit 0
 fi
 
 # Gate: check whether any CAST source directories changed
-CHANGED="$(git diff-tree -r --name-only --no-commit-id ORIG_HEAD HEAD 2>/dev/null || echo "")"
+CHANGED="$(cast_git_safe "$REPO_ROOT" diff --no-renames --name-only ORIG_HEAD HEAD 2>/dev/null || echo "")"
 
-if ! echo "$CHANGED" | grep -qE "^(agents|scripts|bin|rules-core)/"; then
+if ! echo "$CHANGED" | grep -qE "^(agents|scripts|bin|rules-core|\.githooks)/"; then
   _log "no CAST source changes — skip reinstall"
   exit 0
 fi
@@ -85,11 +108,17 @@ GEN_STATS_FILES=(
 
 for f in "${GEN_STATS_FILES[@]}"; do
   # Only revert if the file is tracked AND currently dirty
-  if git ls-files --error-unmatch "$f" >/dev/null 2>&1 && \
-     ! git diff --quiet -- "$f" 2>/dev/null; then
-    git checkout -- "$f"
-    _log "reverted gen-stats churn: $f"
-    echo "[CAST post-merge] reverted gen-stats churn: $f" >&2
+  if cast_git_safe "$REPO_ROOT" ls-files --error-unmatch "$f" >/dev/null 2>&1 && \
+     ! cast_git_safe "$REPO_ROOT" diff --quiet -- "$f" 2>/dev/null; then
+    # Restore the committed blob WITHOUT `git checkout` (checkout runs smudge filters/fsmonitor
+    # and writes through an agent-planted symlink): raw blob -> cast_safe_write (symlink-safe).
+    if GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none git -c core.fsmonitor=false -c core.hooksPath=/dev/null \
+         cat-file blob "HEAD:$f" 2>/dev/null | cast_safe_write "$REPO_ROOT" "$f"; then
+      _log "reverted gen-stats churn: $f"
+      echo "[CAST post-merge] reverted gen-stats churn: $f" >&2
+    else
+      _log "could not revert gen-stats churn: $f (left as-is)"
+    fi
   fi
 done
 

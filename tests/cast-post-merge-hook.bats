@@ -57,6 +57,9 @@ _second_commit() {
 
 setup() {
   setup_temp_home
+  # The hook is an INSTALLED copy: it sources the installed cast-hook-lib.sh (never a repo copy).
+  mkdir -p "$HOME/.claude/scripts"
+  cp "$REPO_DIR/scripts/cast-hook-lib.sh" "$HOME/.claude/scripts/cast-hook-lib.sh"
   export BATS_TEST_TMPDIR="$(mktemp -d)"
   export MARKER="$BATS_TEST_TMPDIR/installed.marker"
   # Stub install command: just touch a marker file
@@ -179,4 +182,62 @@ teardown() {
 
   # Failure must be recorded in the log
   grep -q "install FAILED" "$HOME/.claude/logs/auto-install.log"
+}
+
+@test "CAST source change under .githooks/ triggers install (the hooks are deployed by install.sh)" {
+  local repo="$BATS_TEST_TMPDIR/repo-githooks"
+  _init_repo "$repo"
+  _second_commit "$repo" ".githooks/pre-commit"
+
+  run env GIT_DIR="$repo/.git" GIT_WORK_TREE="$repo" bash "$HOOK"
+  assert_success
+  [ -f "$MARKER" ]
+}
+
+@test "missing installed cast-hook-lib.sh: exits 0, does nothing, never falls back to a repo copy" {
+  local repo="$BATS_TEST_TMPDIR/repo-nolib"
+  _init_repo "$repo"
+  # A planted repo copy of the lib that would create a marker if sourced.
+  cat > "$repo/scripts/cast-hook-lib.sh" <<EOF
+touch "$BATS_TEST_TMPDIR/planted-lib-sourced"
+EOF
+  _second_commit "$repo" "scripts/something.sh"
+  rm -f "$HOME/.claude/scripts/cast-hook-lib.sh"
+
+  run env GIT_DIR="$repo/.git" GIT_WORK_TREE="$repo" bash "$HOOK"
+  assert_success
+  assert_output --partial "installed cast-hook-lib.sh missing"
+  [ ! -f "$MARKER" ]
+  [ ! -f "$BATS_TEST_TMPDIR/planted-lib-sourced" ]
+}
+
+@test "gen-stats churn: a dirty README.md is restored to the committed blob (no git checkout)" {
+  local repo="$BATS_TEST_TMPDIR/repo-churn"
+  _init_repo "$repo"
+  printf 'committed\n' > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m "add readme"
+  _second_commit "$repo" "scripts/something.sh"
+  printf 'dirty churn\n' > "$repo/README.md"
+
+  run env GIT_DIR="$repo/.git" GIT_WORK_TREE="$repo" bash "$HOOK"
+  assert_success
+  [ "$(cat "$repo/README.md")" = "committed" ]
+  grep -q "reverted gen-stats churn: README.md" "$HOME/.claude/logs/auto-install.log"
+}
+
+@test "gen-stats churn: a symlinked README.md is not written through" {
+  local repo="$BATS_TEST_TMPDIR/repo-churn-link"
+  _init_repo "$repo"
+  printf 'committed\n' > "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m "add readme"
+  _second_commit "$repo" "scripts/something.sh"
+  printf 'victim\n' > "$BATS_TEST_TMPDIR/victim.txt"
+  rm "$repo/README.md"
+  ln -s "$BATS_TEST_TMPDIR/victim.txt" "$repo/README.md"
+
+  run env GIT_DIR="$repo/.git" GIT_WORK_TREE="$repo" bash "$HOOK"
+  assert_success
+  [ "$(cat "$BATS_TEST_TMPDIR/victim.txt")" = "victim" ]
 }
