@@ -358,7 +358,7 @@ SQL
   assert [ -f "$epoch_file" ]
   # S3b: state lives in a 0700 dir under ~/.claude, never in TMPDIR
   assert [ ! -e "${TMPDIR}/cast-session-start-sess-uptime-1.epoch" ]
-  [ "$(stat -f '%Lp' "$HOME/.claude/cast-state" 2>/dev/null || stat -c '%a' "$HOME/.claude/cast-state")" = "700" ]
+  [ "$(file_mode "$HOME/.claude/cast-state")" = "700" ]
 }
 
 @test "uptime: on first run, shows 0m" {

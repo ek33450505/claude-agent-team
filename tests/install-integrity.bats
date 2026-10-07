@@ -73,7 +73,7 @@ wire_repo() {  # $1 = hooksPath value to put in the repo config ("" = leave unse
   [ "$(sed -n 1p "$MANIFEST")" = "# cast-install-manifest v2" ]
   [ "$(sed -n 2p "$MANIFEST")" = "# repo: $MASTER_REPO" ]
   [ "$(sed -n 3p "$MANIFEST")" = "# hooks-path: -" ]
-  [ "$(stat -f '%Lp' "$MANIFEST" 2>/dev/null || stat -c '%a' "$MANIFEST")" = "644" ]
+  [ "$(file_mode "$MANIFEST")" = "644" ]
   [ -z "$(find "$HOME/.claude" -maxdepth 1 -name '.install-manifest-*' | head -1)" ]
 }
 
@@ -143,10 +143,12 @@ wire_repo() {  # $1 = hooksPath value to put in the repo config ("" = leave unse
 
 @test "same-size edit of a script is still caught (hash, not size/mtime)" {
   local f="$HOME/.claude/scripts/cast-git-guard.py" sz mt
-  sz="$(wc -c < "$f")"; mt="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f")"
+  sz="$(wc -c < "$f")"; mt="$(file_mtime "$f")"
   # flip the first byte to a different one of the same width, then restore the mtime
   printf 'X' | dd of="$f" bs=1 count=1 conv=notrunc 2>/dev/null
-  touch -t "$(date -r "$mt" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$mt" +%Y%m%d%H%M.%S)" "$f"
+  local ts
+  if [[ "$OSTYPE" == darwin* ]]; then ts="$(date -r "$mt" +%Y%m%d%H%M.%S)"; else ts="$(date -d "@$mt" +%Y%m%d%H%M.%S)"; fi
+  touch -t "$ts" "$f"
   [ "$(wc -c < "$f")" -eq "$sz" ]
   run_health
   assert_output --partial "scripts/cast-git-guard.py changed since install"
@@ -670,8 +672,8 @@ SNAP_REL=".claude/cast-state/pyc-verified.json"
   assert_success
   [ -f "$HOME/$SNAP_REL" ]
   [ ! -L "$HOME/$SNAP_REL" ]
-  [ "$(stat -f '%Lp' "$HOME/$SNAP_REL" 2>/dev/null || stat -c '%a' "$HOME/$SNAP_REL")" = "600" ]
-  [ "$(stat -f '%Lp' "$HOME/.claude/cast-state" 2>/dev/null || stat -c '%a' "$HOME/.claude/cast-state")" = "700" ]
+  [ "$(file_mode "$HOME/$SNAP_REL")" = "600" ]
+  [ "$(file_mode "$HOME/.claude/cast-state")" = "700" ]
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["v"]==1 and len(d["entries"])>20, len(d["entries"])' "$HOME/$SNAP_REL"
 }
 

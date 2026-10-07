@@ -417,7 +417,7 @@ _s3b_assert_clean() {
   run_hook
   assert_failure 2
   [ -d "$HOME/.claude/cast-state" ] && [ ! -L "$HOME/.claude/cast-state" ]
-  [ "$(stat -f '%Lp' "$HOME/.claude/cast-state" 2>/dev/null || stat -c '%a' "$HOME/.claude/cast-state")" = "700" ]
+  [ "$(file_mode "$HOME/.claude/cast-state")" = "700" ]
   rm -rf "$HOME/.claude/cast-state"
   mkdir -p "$BATS_TEST_TMPDIR/attacker"
   ln -s "$BATS_TEST_TMPDIR/attacker" "$HOME/.claude/cast-state"

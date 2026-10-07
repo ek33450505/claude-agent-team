@@ -866,7 +866,7 @@ agent_payload_raw() { # subagent_type prompt
   local f
   for f in "$HOME"/.claude/agent-status/chain-dispatch-*.json; do
     [[ "$f" =~ chain-dispatch-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\.json$ ]]
-    [ "$(stat -f '%Lp' "$f" 2>/dev/null || stat -c '%a' "$f")" = "600" ]
+    [ "$(file_mode "$f")" = "600" ]
   done
 }
 

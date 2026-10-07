@@ -37,10 +37,6 @@ make_clean_tmp_repo() {
   echo "$tmp_repo"
 }
 
-file_mode() {  # BSD stat first, GNU fallback
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
-}
-
 @test "install.sh deploys the 5 hook files byte-identical with correct modes" {
   local repo name
   repo="$(make_clean_tmp_repo)"
