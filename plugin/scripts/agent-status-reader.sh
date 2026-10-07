@@ -208,7 +208,7 @@ _log_entry = json.dumps({
 _log_script = os.path.join(os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')), 'cast-log-append.py')
 if os.path.exists(_log_script):
     try:
-        subprocess.run([sys.executable, _log_script], input=_log_entry, text=True, timeout=3, check=False)
+        subprocess.run([sys.executable, '-I', _log_script], input=_log_entry, text=True, timeout=3, check=False)
     except Exception:
         pass  # logging failure must never break status handling
 

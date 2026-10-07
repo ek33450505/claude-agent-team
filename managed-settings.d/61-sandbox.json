@@ -38,11 +38,6 @@
         "~/.claude/cast.db"
       ]
     },
-    "excludedCommands": [
-      "docker",
-      "bq",
-      "osascript"
-    ],
     "credentials": {
       "files": [
         {"path": "~/.aws/credentials", "mode": "deny"},

@@ -204,7 +204,7 @@ def _pre_migration_backup(db_path: str) -> int:
 
     try:
         result = subprocess.run(
-            [sys.executable, str(backup_script)],
+            [sys.executable, '-I', str(backup_script)],
             capture_output=True,
             text=True,
             timeout=120,

@@ -5,6 +5,129 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 ## [Unreleased]
 
 ### Added
+- **Install integrity alarm (U6d, `scripts/cast-install-integrity.py`).** `install.sh` writes
+  `~/.claude/install-manifest.sha256` (sha256 + mode of every deployed hook, script and config file).
+  The SessionStart health hook checks it FIRST and `cast doctor` checks it in full. It alarms on a changed
+  or deleted file, an unlisted file in a protected dir, a `core.hooksPath` that is not what install set or
+  a config-based `hook.*` command (repo or other worktrees), interpreter env overrides (`PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONPYCACHEPREFIX`,
+  `PYTHONHOME`, `PYTHONUSERBASE`, `PYTHONEXECUTABLE`, `PYTHONINSPECT`), and any bytecode cache (default
+  `__pycache__` or the Apple `pycache_prefix`, including a symlinked or non-regular one) that does not
+  match its source. SessionStart verifies bytecode incrementally against a snapshot in
+  `~/.claude/cast-state` (dir_fd writes, key includes ctime + inode, rotating start so no cache starves)
+  and says SKIPPED loudly when it had no time; doctor ignores the snapshot. Children run from a trusted
+  interpreter, never `sys.executable`; the hook reads the checker bounded and without following symlinks.
+  The Edit tool is now denied on `~/.claude/cast-state`, the manifest and
+  `~/Library/{Caches/com.apple.python,Python,LaunchAgents}`. Accepted residuals: a forged snapshot hides
+  a forged cache from SessionStart (not doctor) only if `cast-state` is writable, which the Bash write
+  guard and the Edit deny now prevent; the checker attests itself; Homebrew's group-writable bin dir is
+  trusted.
+- **Isolated child python and new warn policies (U6c).** Hook-, cron- and launchd-run python children
+  start with `-I` (no cwd, `PYTHONPATH` or user site on `sys.path`). New warn-only policies flag
+  file-tool writes to `credentials*`, `secrets*` and an `auth/` dir outside `src/`. `docker`, `bq` and
+  `osascript` leave the sandbox `excludedCommands` (with the sandbox on, run them with `!`).
+- **Bash write guard for the installed exec surface (U6e, `scripts/cast-command-guard.py` RULE 5).**
+  Git hooks now run from `~/.claude/githooks` and call `~/.claude/scripts`; the Edit/Write tools are
+  denied there but Bash was not (`echo x > ~/.claude/githooks/pre-commit`, `mv ~/.claude/githooks ...`,
+  `rm -f ~/.claude/githooks/pre-push`, `ln -sfn /tmp/x ~/.claude/githooks`, `chmod -x ...` all passed;
+  only a recursive `rm -r[f]` of the .claude subtree was blocked). The command guard now blocks any Bash
+  command that writes (`>` `>>` `>|` `&>` `tee` `sponge`), copies/moves/installs/rsyncs into, moves a
+  protected source away, links over, chmod/chowns/touches/truncates, edits in place (`sed -i`, `perl -i`,
+  `ed`, `patch`, `dd of=`), downloads or unpacks into (`curl -o`, `wget -O`, `tar -x`, `unzip -d`), or
+  deletes (`rm`/`unlink`/`rmdir`/`find -delete`, recursive or not) a path under `~/.claude/githooks/`,
+  `~/.claude/scripts/`, `~/.claude/config/`, `~/.claude/install-manifest.sha256`, or those roots
+  themselves. Spellings are resolved like the shell does (quotes, `~`, `$HOME`, `${HOME}`, backslash-newline,
+  `..`, case, brace/glob/dynamic tails, `sudo`/`env`/`xargs` wrappers, `bash -c`/`eval` payloads,
+  `$(...)`/backtick bodies, literal `cd`, an existing symlink into the root). Reads, `bash install.sh` and
+  running installed scripts stay allowed. Hatch: `CAST_PROTECTED_WRITE_OK=1` (segment-scoped;
+  `CAST_RM_OK=1` also exempts a recursive `rm`). Accepted residuals (pinned as tests): interpreter writes,
+  editors, variable-built paths, same-command symlink-through-elsewhere, paths on stdin. The hard boundary
+  is the sandbox; this is defence-in-depth for sandbox-OFF. Tests: `tests/test_cast_command_guard_protected_write.py`.
+  Security round (5 High bypasses confirmed against a real /bin/bash, all fixed): the rule is now
+  FAIL-CLOSED -- a command not on a READ/EXEC allowlist that is handed a protected path in any argument
+  blocks (so unlisted wrappers such as `arch`/`caffeinate`/`setsid`/`su -c`, and `mkfifo`/`zip`/`split`/
+  `cpio`/`pax`/`sqlite3`/`defaults write`/`git clone` into a root, are caught without being listed);
+  ancestors of the roots are protected against merge/extract/delete (`cp -R src/. ~/.claude/`,
+  `rsync -a`, `tar -C ~/.claude -x`, `unzip -d`, `ditto`, `find ~ -delete`, `mv` of a root's name);
+  the APFS firmlink prefix `/System/Volumes/Data` is normalised; bracket classes (`~/.claude/[s]cripts`)
+  and glob-leading words against a tracked cwd (`cd ~/.claude/scripts && rm *`) resolve; `bash -o X -c`,
+  `+o X`, `-O X`, `--rcfile X`, `-c --` payloads are found; here-strings, `source <(echo ..)`, `trap '..'`,
+  `env -S`, fish/busybox payloads are scanned. Editors (`vim -es`) now block. Documented false positives
+  of the inversion: an interpreter given a protected data operand, unknown commands that merely READ a
+  protected path (`zip`, `ruff check`), and `cp -r ... ~/`. Fuzzed (3,700 inputs x 4 seeds, 0 exceptions).
+  Security round 2 (2 High, 1 Medium, all real-shell confirmed): the allowlist is now a per-command
+  SPEC TABLE (`_PW_READERS`, audited against man pages) -- `sort -o|-T|--output`, `uniq in OUT`,
+  `xxd [-r] in OUT`, `sdiff -o`, `tree -o`, `less|more -o|-O|--log-file`, `yq -i`, `file -C` write
+  through an operand and now block; `rg --pre`, `ag|ack --pager`, `sort --compress-program` values are
+  scanned as command strings; sed/awk program text is scanned (`sed 'w FILE'`). Environment-assignment
+  VALUES are inspected (`CAST_REPO_ROOT=~/.claude/scripts bash gen-plugin.sh`, `env VAR=..`, `export`,
+  `declare -x`, `D=..; export D`, `set -a`); `python -X pycache_prefix` is a write slot. mdls, lsof,
+  bat, most, colordiff, xargs left the allowlist (not characterisable). Pinned residuals: `git -c
+  <exec key>` (git guard) and `cd <root> && git add|commit`.
+  Security round 3 (5 High, 2 Medium, real-shell confirmed): readers are now STRICT -- sort, uniq, xxd,
+  sdiff, tree, rg, file, sed, awk declare their COMPLETE option table with exact arity (GNU unique-prefix
+  resolution: `sort --outp P`, `sort -zo P`), any unknown / ambiguous option drops the segment to the generic
+  fail-closed path, and the 60 `nowrite` entries are audited as having no writing option. A MENTION SCAN
+  blocks a protected root named anywhere inside a word (env values, option values, quoted strings, `sed
+  'w$HOME/..'`, interpreter code). Command-string variables (PS4, LESSOPEN, PAGER, EDITOR,
+  GIT_EXTERNAL_DIFF, GIT_SSH_COMMAND, *_COMMAND, *_CMD ...) are scanned as scripts; an ancestor / root value
+  in ANY variable blocks unless the command is a nowrite reader (no name list). git `-C|--git-dir|
+  --work-tree|GIT_DIR|GIT_WORK_TREE` naming a root or ancestor blocks except for pure-read subcommands.
+  Exports are tracked in any order and form (`declare|readonly|local X=P; export X`, `export X; X=P`,
+  `printf -v`, `X+=`, `env -S'..'`). less, more, yq, ag, ack left the allowlist (no --help to derive a
+  table from on this machine / too large). Documented FPs: interpreters, `gh`, and other unknown commands
+  whose arguments merely MENTION a protected path now block (hatch: CAST_PROTECTED_WRITE_OK=1).
+  Security round 4 (one High, two Medium): string-carrying builtins are no longer pure readers -- `alias`,
+  `set --`, `declare|local|readonly|typeset`, `export`, `read`, `for|select|case` and (with a sink such as a
+  shell or eval in the same command) `echo|printf` block when an operand holding whitespace / shell
+  metacharacters mentions a protected root, and tracked values (`X='cp a P'`, `read X <<< ..`, `printf -v`,
+  `set -- cp a P`) are expanded when they reappear as a command word, an `eval` operand, a `-c` payload or
+  `"$@"`. A `$(..)` / backtick body inside an assignment value that touches a root marks the value
+  protected; quoted globs and quote splices are resolved by the mention scan. less, more, bat, yq and ag are
+  tabled again (plain reads of installed files work; yq and ag tables are documented-partial); PYTHONPATH is
+  exempt like PATH; environment-insensitive strict readers ignore a protected env value. NEW protected roots:
+  `~/Library/Caches/com.apple.python` (forged .pyc), `~/Library/Python` (sitecustomize), and
+  `~/Library/LaunchAgents` (persistence), and `~/.claude/cast-state` (pyc-verification snapshot + hook state
+  files; hooks do not pass through this guard, Bash must not write there either).
+  Security round 5 (final): ONE structural rule for stored-string execution -- if any segment executes TEXT (a
+  dynamic command word after unwrapping `command`/`env`/`nohup`/`timeout`/`exec`/`time`/`nice`/`sudo`:
+  `$X`, `${X:-}`, `"$@"`, `$(..)`; or `eval` / `source` / `.` / a shell `-c`) AND any assignment value,
+  `+=` value, `m[k]=` / `arr=(..)` element or `declare|typeset|local|readonly|export|read|set|for|alias|
+  printf -v` operand mentions a protected root, the command blocks, whatever the name, modifier, IFS trick or
+  array form (accepted FP: `X=~/.claude/scripts; $X`). echo / printf operands are JOINED before the mention
+  check, and the sink list gained sqlite3, awk, ssh, at, batch, parallel, tclsh, expect, script, crontab and
+  make. `defaults read` and the `launchctl` lifecycle verbs (print list load unload bootstrap bootout enable
+  disable kickstart) no longer count as writing the plist. `pip install --user` and friends write into
+  ~/Library/Python without naming it -- an accepted, test-pinned residual. The final RESIDUALS list and the
+  boundary statement (defence-in-depth for sandbox-OFF; the hard boundary is the sandbox with allowWrite /tmp
+  only, detection is the U6d integrity alarm) are in the module docstring and the hatch row.
+  Also closes a pre-existing hole in RULES 1-4: a leading shell reserved word became the command word, so
+  `for x in 1; do rm -rf ~/.claude; done`, `if true; then pkill -9 bash; fi`, `! rm -rf ~/.claude`,
+  `while ..; do`, `until`, `elif`, `coproc` (and `tee .github/workflows/..` behind them) evaded every
+  rule. The command guard now skips leading `do`/`then`/`else`/`elif`/`if`/`while`/`until`/`!`/`{`/`}`/`coproc`.
+- **The Bash git guard closes the symlinked-worktree-entry hazard (U6a-2, probed E1).** `git worktree
+  prune` -- which every `git gc` form, git's implicit `gc --auto` and `git maintenance run` execute --
+  follows an agent-planted symlinked `.git/worktrees/<id>` entry and EMPTIES its target
+  (`gc.worktreePruneExpire=never` does not stop it). `scripts/cast-git-guard.py` now blocks `git
+  worktree prune` (except `-n`/`--dry-run`; hatch `CAST_WORKTREE_OK=1`), every `git gc` form and `git
+  maintenance run` (any task; hatch `CAST_GC_OK=1`) -- both previously allowed -- and ANY git command in
+  a repo whose `worktrees/*` holds a symlinked entry (or `gitdir` file, or a symlinked `worktrees`
+  dir): a pure filesystem check, no subprocess, ~50-150 us. No new hatch. The repo is resolved from the
+  cwd, literal `cd`/`pushd` targets earlier in the command, `-C` / `--git-dir <v>` / `GIT_DIR=` /
+  `env -C`, through path-spelled git (`/usr/bin/git`) and git's full global-option grammar. `ln -s`
+  into a `<x>.git/worktrees/` path is blocked too (hatch `CAST_WORKTREE_OK=1`). Also fixed: a dry-run
+  flag followed by `--no-dry-run` is NOT a dry run (the last toggle wins, measured with real git) for
+  clean / prune / worktree prune / rm. Residual: a dynamic `cd $D` / `-C "$D"`, `cd -`, a `GIT_DIR`
+  exported earlier, and a plant by `mv` / `cp -P` / an interpreter. Bounded work: at most 64 literal
+  `cd` targets are tracked per command and a git prefix past 8 KB / 128 words is unresolvable; either
+  makes a git segment fail CLOSED ("too complex", hatch `CAST_WORKTREE_OK=1`). The `ln -s` plant check
+  is case-insensitive, collapses `//` `/./` `..`, resolves relative link names against the tracked
+  `cd`, and recognises `.git/modules/<n>/worktrees` and bare repos (by the git dir on disk).
+- **U6c (git guard).** An installed `policies.json` with zero `block` policies (`{}`, `{"policies": []}`,
+  all `warn`) is now an invalid config -- fail closed like a missing file (`CAST_POLICY_OVERRIDE=1`
+  bypasses, audited) instead of allowing every edit. `_hatch_value` tokenizes only the leading
+  `VAR=value` prefix (it re-split the whole segment twice per hatched segment; two 195 KB hatched
+  segments hit the 2 s watchdog). `git grep -O<cmd>` / `--open-files-in-pager=<cmd>` is pinned as an
+  accepted residual (one-shot, the agent's own privilege).
 - **Exec-capable git config keys are blocked in the Bash git guard (U6a-1).** A repo's `.git/config`
   executes in Ed's unsandboxed terminal and in CAST hooks on the next `git status`/`log`/`diff`
   (`core.fsmonitor`, `core.hooksPath`, `core.pager`, `alias.*`, `filter.*.smudge`, `credential.helper`,

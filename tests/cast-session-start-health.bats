@@ -41,6 +41,25 @@ EOF
 
   export CAST_HEALTH_LAUNCHCTL_CMD="${STUB_DIR}/launchctl-ok.sh"
 
+  # A clean install integrity state (U6d): the health hook also verifies
+  # ~/.claude/install-manifest.sha256, and a missing manifest is an advisory notice that would
+  # break every "NO output" assertion below. Seed a minimal valid manifest + githooks dir + policies.json.
+  mkdir -p "${HOME}/.claude/githooks" "${HOME}/.claude/config"
+  local _h
+  for _h in pre-commit post-commit post-merge pre-push; do
+    printf '#!/bin/sh\nexit 0\n' > "${HOME}/.claude/githooks/${_h}"
+    chmod 755 "${HOME}/.claude/githooks/${_h}"
+  done
+  echo '{}' > "${HOME}/.claude/config/policies.json"
+  chmod 644 "${HOME}/.claude/config/policies.json"
+  {
+    printf '# cast-install-manifest v2\n# repo: %s\n# hooks-path: -\n' "${HOME}/repo"
+    for _h in pre-commit post-commit post-merge pre-push; do printf '# mode: 755 githooks/%s\n' "$_h"; done
+    printf '# mode: 644 config/policies.json\n'
+    (cd "${HOME}/.claude" && shasum -a 256 githooks/pre-commit githooks/post-commit githooks/post-merge \
+      githooks/pre-push config/policies.json)
+  } > "${HOME}/.claude/install-manifest.sha256"
+
   # Never inherit an ambient cast.db: the guard-load check reads CAST_DB_PATH (else
   # $HOME/.claude/cast.db, which is the empty temp HOME here). Tests that need a DB set it.
   unset CAST_DB_PATH
@@ -651,7 +670,9 @@ assert 'CAST_GIT_GUARD' not in ctx and 'Cast_Git_Guard' not in ctx, ctx
   python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
-assert d['systemMessage'] == '🩺 health | 1 launchd job failing', d['systemMessage']
+# The planted scanner stub is itself an UNLISTED file under scripts/ (U6d), so the integrity alarm
+# legitimately appears too; what matters here is that check (b) survives the hung scanner.
+assert '1 launchd job failing' in d['systemMessage'] and 'stale' not in d['systemMessage'], d['systemMessage']
 " <<< "$output"
 }
 

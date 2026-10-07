@@ -1349,33 +1349,59 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   assert_output --partial "gc"
 }
 
-@test "bare git gc → allows (exit 0) [regression: no false positive]" {
+@test "bare git gc → blocks (exit 2) [U6a-2: gc runs worktree prune, which follows a planted symlinked entry]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc")"
-  assert_success
+  assert_failure 2
+  assert_output --partial "worktree prune"
 }
 
-@test "git gc --aggressive → allows (exit 0) [regression: no false positive]" {
+@test "git gc --aggressive → blocks (exit 2) [U6a-2: gc runs worktree prune, which follows a planted symlinked entry]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --aggressive")"
-  assert_success
+  assert_failure 2
+  assert_output --partial "worktree prune"
 }
 
-@test "git gc --prune (no value) → allows (exit 0) [regression: no false positive]" {
+@test "git gc --prune (no value) → blocks (exit 2) [U6a-2: gc runs worktree prune, which follows a planted symlinked entry]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune")"
-  assert_success
+  assert_failure 2
+  assert_output --partial "worktree prune"
 }
 
-@test "git gc --no-prune → allows (exit 0) [regression: no false positive]" {
+@test "git gc --no-prune → blocks (exit 2) [U6a-2: gc runs worktree prune, which follows a planted symlinked entry]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --no-prune")"
-  assert_success
+  assert_failure 2
+  assert_output --partial "worktree prune"
 }
 
-@test "git gc --auto → allows (exit 0) [regression: no false positive]" {
+@test "git gc --auto → blocks (exit 2) [U6a-2: gc runs worktree prune, which follows a planted symlinked entry]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --auto")"
-  assert_success
+  assert_failure 2
+  assert_output --partial "worktree prune"
 }
 
 @test "git gcfoo (look-alike token) → allows (exit 0) [regression: no false positive]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gcfoo")"
+  assert_success
+}
+
+@test "CAST_GC_OK=1 git gc (bare) → allows (exit 0) [U6a-2 hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git gc")"
+  assert_success
+}
+
+@test "git maintenance run → blocks (exit 2) [U6a-2]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git maintenance run --task=gc")"
+  assert_failure 2
+  assert_output --partial "maintenance run"
+}
+
+@test "CAST_GC_OK=1 git maintenance run → allows (exit 0) [U6a-2 hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git maintenance run")"
+  assert_success
+}
+
+@test "git maintenance start → allows (exit 0) [U6a-2: only the run subcommand is blocked]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git maintenance start")"
   assert_success
 }
 
@@ -1432,8 +1458,19 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   assert_success
 }
 
-@test "git worktree prune (different subcommand's argument) → allows (exit 0) [regression: no false positive]" {
+@test "git worktree prune → blocks (exit 2) [U6a-2: follows a planted symlinked .git/worktrees entry and empties its target]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree prune")"
+  assert_failure 2
+  assert_output --partial "CAST_WORKTREE_OK=1"
+}
+
+@test "git worktree prune --dry-run → allows (exit 0) [U6a-2: dry run is the safe form]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree prune --dry-run")"
+  assert_success
+}
+
+@test "CAST_WORKTREE_OK=1 git worktree prune → allows (exit 0) [U6a-2 hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_WORKTREE_OK=1 git worktree prune")"
   assert_success
 }
 
@@ -1523,8 +1560,8 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   assert_success
 }
 
-@test "git -c gc.auto=0 gc (unrelated gc.* key) → allows (exit 0) [regression: no false positive]" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.auto=0 gc")"
+@test "git -c gc.auto=0 status (unrelated gc.* key) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.auto=0 status")"
   assert_success
 }
 
@@ -2217,8 +2254,8 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   assert_success
 }
 
-@test "git worktree prune → allows (exit 0)" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree prune")"
+@test "git worktree prune -n (dry run) → allows (exit 0)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git worktree prune -n")"
   assert_success
 }
 

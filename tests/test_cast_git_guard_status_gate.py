@@ -274,10 +274,16 @@ class TestControlCharPathFailsClosed(_Base):
         code, msg = gg.evaluate('Write', {'file_path': '/home/u/proj/src/app.py'}, SESS)
         self.assertEqual((code, msg), (0, ''))
 
-    def test_empty_policy_list_does_not_block_on_control_chars(self):
+    def test_empty_policy_list_is_an_invalid_config_not_a_free_pass(self):
+        # 2026-10-07 U6c: `{"policies": []}` used to allow everything (the path checks only run
+        # when there are policies). Zero block policies is now an INVALID installed config, so the
+        # edit is refused for THAT reason -- not for the control character in the path.
         self.write('policies.json', {'policies': []}, d=os.path.join(self.home, '.claude', 'config'))
-        code, msg = gg.evaluate('Write', {'file_path': 'a\nb'}, SESS)
-        self.assertEqual((code, msg), (0, ''))
+        for path in ('a\nb', 'src/ok.txt'):
+            code, msg = gg.evaluate('Write', {'file_path': path}, SESS)
+            self.assertEqual(code, 2, repr(path))
+            self.assertIn('defines no "block" policies', msg)
+            self.assertIn('bash install.sh', msg)
 
 
 class TestResolvedCandidateFailsClosed(_Base):

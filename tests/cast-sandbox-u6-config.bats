@@ -95,3 +95,36 @@ assert not bad, bad
 " "$SANDBOX"
   assert_success
 }
+
+# U6c-3 (Ed, 2026-10-07): docker/bq/osascript were dropped from sandbox.excludedCommands. They were
+# inert exact matches (a bare `docker`, not `docker *`) and a sandbox escape if ever widened, so
+# nothing may be excluded from the sandbox. Guards BOTH the fragment and the committed merged copy.
+@test "61-sandbox.json excludes no commands from the sandbox (docker/bq/osascript dropped)" {
+  run jq_py "$SANDBOX" "not d['sandbox'].get('excludedCommands')"
+  assert_success
+}
+
+@test "repo-root settings.json excludes no commands from the sandbox" {
+  run jq_py "$REPO_DIR/settings.json" "not d['sandbox'].get('excludedCommands')"
+  assert_success
+}
+
+@test "merged fragments exclude no commands from the sandbox (real merge into a temp HOME)" {
+  mkdir -p "$HOME/.claude/managed-settings.d"
+  cp "$REPO_DIR"/managed-settings.d/*.json "$HOME/.claude/managed-settings.d/"
+  run bash "$MERGE_SH" "$HOME/merged.json"
+  assert_success
+  run jq_py "$HOME/merged.json" "'sandbox' in d and not d['sandbox'].get('excludedCommands')"
+  assert_success
+}
+
+# U6d: the integrity manifest, its pyc snapshot and the interpreter/launchd cache roots are read by
+# the SessionStart integrity check. The Bash write guard covers shell writes; these Edit denies close
+# the Write/Edit-tool route (only Edit(path) rules are consulted for file tools).
+@test "11-deny.json and repo settings.json both deny Edit on the integrity-check roots" {
+  local f
+  for f in "$REPO_DIR/managed-settings.d/11-deny.json" "$REPO_DIR/settings.json"; do
+    run jq_py "$f" "{'Edit(~/.claude/cast-state/**)', 'Edit(~/Library/Caches/com.apple.python/**)', 'Edit(~/Library/Python/**)', 'Edit(~/Library/LaunchAgents/**)', 'Edit(~/.claude/install-manifest.sha256)'} <= set(d['permissions']['deny'])"
+    assert_success
+  done
+}
