@@ -11,8 +11,35 @@
 #   source "$(dirname "${BASH_SOURCE[0]}")/cast-stats-lib.sh"
 #   AGENT_COUNT=$(cast_stat_agents)
 
-# Resolve repo root once, relative to THIS file (BASH_SOURCE, never $0).
-CAST_STATS_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve repo root once. CAST_REPO_ROOT wins (installed-copy mode: the hook passes
+# the repo as data and this file lives in ~/.claude/scripts); else relative to THIS
+# file (BASH_SOURCE, never $0).
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+  if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+    echo "cast-stats-lib: FATAL — CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+    exit 1  # sourced: fail closed by terminating the sourcing script
+  fi
+  CAST_STATS_REPO_ROOT="$CAST_REPO_ROOT"
+else
+  CAST_STATS_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+# Hardened git (cast_git_safe). FAIL CLOSED: if the lib is not loadable beside this file, terminate
+# the sourcing script (like the CAST_REPO_ROOT check above) — never fall back to bare git, which
+# would honour repo-local exec config (core.fsmonitor ran for `git ls-files`). The -r guard matters:
+# on bash 3.2 a bare `source <missing-file>` aborts under set -e.
+_CAST_STATS_HOOK_LIB="$(dirname "${BASH_SOURCE[0]}")/cast-hook-lib.sh"
+# shellcheck source=cast-hook-lib.sh
+if [[ -r "$_CAST_STATS_HOOK_LIB" ]] && source "$_CAST_STATS_HOOK_LIB"; then
+  :
+else
+  echo "cast-stats-lib: FATAL — cast-hook-lib.sh not loadable beside ${BASH_SOURCE[0]}" >&2
+  exit 1  # sourced: fail closed by terminating the sourcing script
+fi
+# NOTE: the `git ls-files` calls below go through cast_git_safe (GIT_DIR/GIT_WORK_TREE and the
+# repo-local exec config are neutralised) but must KEEP reading the index the hook is committing:
+# the counts are tracked-file counts. cast_git_safe strips GIT_INDEX_FILE, so each call opts in
+# with CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}" (honoured only for a regular non-symlink
+# file directly inside the repo's git dir; see cast-hook-lib.sh).
 
 # cast_stat_version — echoes version string from VERSION file (whitespace stripped)
 cast_stat_version() {
@@ -23,7 +50,7 @@ cast_stat_version() {
 cast_stat_agents() {
   (
     cd "${CAST_STATS_REPO_ROOT}"
-    git ls-files 'agents/core/*.md' | grep -cE '^agents/core/[^/]+\.md$' | tr -d ' '
+    CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}" cast_git_safe "${CAST_STATS_REPO_ROOT}" ls-files 'agents/core/*.md' | grep -cE '^agents/core/[^/]+\.md$' | tr -d ' '
   )
 }
 
@@ -31,7 +58,7 @@ cast_stat_agents() {
 cast_stat_commands() {
   (
     cd "${CAST_STATS_REPO_ROOT}"
-    git ls-files 'commands/*.md' | wc -l | tr -d ' '
+    CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}" cast_git_safe "${CAST_STATS_REPO_ROOT}" ls-files 'commands/*.md' | wc -l | tr -d ' '
   )
 }
 
@@ -39,7 +66,7 @@ cast_stat_commands() {
 cast_stat_skills() {
   (
     cd "${CAST_STATS_REPO_ROOT}"
-    git ls-files 'skills/*' | grep -oE '^skills/[^/]+' | sort -u | wc -l | tr -d ' '
+    CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}" cast_git_safe "${CAST_STATS_REPO_ROOT}" ls-files 'skills/*' | grep -oE '^skills/[^/]+' | sort -u | wc -l | tr -d ' '
   )
 }
 
@@ -47,7 +74,7 @@ cast_stat_skills() {
 cast_stat_tests() {
   (
     cd "${CAST_STATS_REPO_ROOT}"
-    TEST_FILES=$(git ls-files 'tests/*.bats' 'tests/*/*.bats')
+    TEST_FILES=$(CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}" cast_git_safe "${CAST_STATS_REPO_ROOT}" ls-files 'tests/*.bats' 'tests/*/*.bats')
     if [[ -n "$TEST_FILES" ]]; then
       echo "$TEST_FILES" | xargs grep -h "^@test" 2>/dev/null | wc -l | tr -d ' '
     else
@@ -63,7 +90,7 @@ cast_stat_tests() {
 cast_stat_test_files() {
   (
     cd "${CAST_STATS_REPO_ROOT}"
-    git ls-files 'tests/*.bats' 'tests/*/*.bats' | wc -l | tr -d ' '
+    CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}" cast_git_safe "${CAST_STATS_REPO_ROOT}" ls-files 'tests/*.bats' 'tests/*/*.bats' | wc -l | tr -d ' '
   )
 }
 

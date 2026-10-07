@@ -19,6 +19,14 @@ set -euo pipefail
 # ── Subprocess guard ──────────────────────────────────────────────────────
 if [[ "${CLAUDE_SUBPROCESS:-0}" == "1" ]]; then exit 0; fi
 
+# ── Pinned PATH ───────────────────────────────────────────────────────────
+# Runs unattended under launchd, whose PATH is whatever the plist/user domain says, and python3 /
+# mktemp / date / sed / awk are resolved by NAME below. A python3 or mktemp planted earlier on that
+# PATH would run unsandboxed with our privileges, so pin PATH to the system dirs. Nothing needed
+# lives only in /opt/homebrew/bin: git is NOT found via PATH (cast_git_safe uses a fixed trusted
+# list) and python3 is /usr/bin/python3 (the stdlib-only helper runs under `python3 -I`).
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
 # _log_error: never fails, appends to hook-errors.log
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 _log_error() { printf '[%s] ERROR %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$0" "$1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }

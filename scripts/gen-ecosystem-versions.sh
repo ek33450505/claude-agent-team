@@ -14,8 +14,31 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Repo root: CAST_REPO_ROOT wins (installed-copy mode — this script then lives in
+# ~/.claude/scripts, so its parent is NOT the repo); else this script's own checkout.
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+  if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+    echo "[gen-ecosystem-versions] FATAL — CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+    exit 1
+  fi
+  REPO_ROOT="$CAST_REPO_ROOT"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+
+# Shared safe-write primitive (cast_safe_write). FAIL CLOSED: if the lib is not loadable beside
+# this script nothing is written (never fall back to a bare `>` redirect, which would follow a
+# symlink an agent planted at the target). The -r guard matters: on bash 3.2 a bare
+# `source <missing-file>` aborts under set -e.
+_CAST_LIB="$(dirname "${BASH_SOURCE[0]}")/cast-hook-lib.sh"
+# shellcheck source=cast-hook-lib.sh
+if [[ -r "$_CAST_LIB" ]] && source "$_CAST_LIB"; then
+  :
+else
+  echo "[gen-ecosystem-versions] FATAL — cast-hook-lib.sh not loadable beside $0; nothing written" >&2
+  exit 1
+fi
 
 # ── Error logging ──────────────────────────────────────────────────────────────
 _log_error() {
@@ -179,7 +202,12 @@ if [[ "$CHECK_MODE" -eq 1 ]]; then
 fi
 
 # ── Write mode ────────────────────────────────────────────────────────────────
-echo "$JSON" > "$VERSIONS_OUT"
+# cast_safe_write refuses a symlinked target / parent and replaces atomically (the default target
+# is <repo>/ecosystem-versions.json; a CAST_ECOSYSTEM_VERSIONS_OUT override is split into dir + name).
+printf '%s\n' "$JSON" | cast_safe_write "$(dirname "$VERSIONS_OUT")" "$(basename "$VERSIONS_OUT")" || {
+  _log_error "refused or failed to write ${VERSIONS_OUT} (nothing written)"
+  exit 1
+}
 echo "[gen-ecosystem-versions] wrote ${VERSIONS_OUT}" >&2
 for i in "${!SLUGS[@]}"; do
   echo "  ${SLUGS[$i]}: ${VERSIONS[$i]}" >&2

@@ -633,6 +633,7 @@ class TestPiiCandidatesSuperset(unittest.TestCase):
         # trigger, masking that the pattern was dead for all-letter keys. Split
         # so the pre-push PII scanner does not flag a benign fixture.
         'AWS_ACCESS_KEY': 'AKIA' + 'BCDEFGHIJKLMNOPQ',
+        'AWS_SECRET_ACCESS_KEY': 'aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
         'GITHUB_TOKEN': 'ghp_' + 'A' * 36,
         'ANTHROPIC_KEY': 'sk-ant-' + 'A' * 32,
         'OPENAI_KEY': 'sk-' + 'A' * 32,
@@ -1271,6 +1272,39 @@ class TestDatabaseUrlPatternLinearTime(unittest.TestCase):
         for text in ('postgres is a database', 'postgres://host/db', 'see redis://localhost:6379'):
             with self.subTest(text=text):
                 self.assertNotIn('<DATABASE_URL>', _redact(text))
+
+
+class TestAwsSecretAccessKeyPattern(unittest.TestCase):
+    """S3b-L1: a 40-char AWS secret access key assigned to an aws_secret_access_key-style name.
+
+    GENERIC_SECRET's leading \\b cannot match inside `aws_secret_access_key` (underscore is a word
+    char) and requires the operator right after `secret`, so these leaked entirely.
+    """
+    SECRET = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+
+    def test_secret_is_forty_chars(self):
+        self.assertEqual(len(self.SECRET), 40)
+
+    def test_env_style_assignment_redacted(self):
+        for text in (
+            f'aws_secret_access_key={self.SECRET}',
+            f'AWS_SECRET_ACCESS_KEY: "{self.SECRET}"',
+            f'export AWS_SECRET_KEY = {self.SECRET} # deploy',
+            f"aws-secret-access-key: '{self.SECRET}'",
+        ):
+            with self.subTest(text=text):
+                result = _redact(text)
+                self.assertNotIn(self.SECRET, result)
+                self.assertNotIn('K7MDENG', result)
+                self.assertIn('<AWS_SECRET_ACCESS_KEY>', result)
+
+    def test_bare_forty_char_hex_sha_is_not_redacted(self):
+        text = 'commit ' + 'a' * 40
+        self.assertNotIn('<AWS_SECRET_ACCESS_KEY>', _redact(text))
+
+    def test_variable_name_without_forty_char_value_untouched(self):
+        text = 'set aws_secret_access_key=short'
+        self.assertNotIn('<AWS_SECRET_ACCESS_KEY>', _redact(text))
 
 
 if __name__ == '__main__':

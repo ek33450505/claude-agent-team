@@ -354,8 +354,11 @@ SQL
   run bash "$SCRIPT" <<< "$json"
   assert_success
 
-  local epoch_file="${TMPDIR}/cast-session-start-sess-uptime-1.epoch"
+  local epoch_file="$HOME/.claude/cast-state/cast-session-start-sess-uptime-1.epoch"
   assert [ -f "$epoch_file" ]
+  # S3b: state lives in a 0700 dir under ~/.claude, never in TMPDIR
+  assert [ ! -e "${TMPDIR}/cast-session-start-sess-uptime-1.epoch" ]
+  [ "$(stat -f '%Lp' "$HOME/.claude/cast-state" 2>/dev/null || stat -c '%a' "$HOME/.claude/cast-state")" = "700" ]
 }
 
 @test "uptime: on first run, shows 0m" {
@@ -372,7 +375,8 @@ SQL
 
 @test "uptime: on second run, shows elapsed time" {
   local session_id="sess-uptime-elapsed"
-  local epoch_file="${TMPDIR}/cast-session-start-${session_id}.epoch"
+  local epoch_file="$HOME/.claude/cast-state/cast-session-start-${session_id}.epoch"
+  mkdir -m 700 -p "$HOME/.claude/cast-state"
 
   # Pre-seed the epoch file with a time ~5 minutes ago
   local now; now="$(date +%s)"
@@ -391,3 +395,50 @@ SQL
   [[ "$output" =~ "5m" ]] || [[ "$output" =~ "🕐" ]]
 }
 
+
+# S3b: the epoch path is derived exactly as agent-status-reader.sh derives it (same state dir, same
+# session-id validation/fallback). Run both for the same id and compare what lands in the state dir.
+_sl_state_files() { ls -1 "$HOME/.claude/cast-state" 2>/dev/null | sort | tr '\n' ' '; }
+
+@test "uptime S3b: statusline and agent-status-reader resolve the SAME epoch path (valid id and invalid id -> default)" {
+  local sid json statusline_files reader_files
+  for sid in "sess-same-1" "bad/../id with spaces"; do
+    rm -rf "$HOME/.claude/cast-state"
+    json="$(python3 -c 'import json,sys; print(json.dumps({"agent":{"name":"t"},"session_id":sys.argv[1],"model":{"display_name":"H"}}))' "$sid")"
+    run bash "$SCRIPT" <<< "$json"
+    assert_success
+    statusline_files="$(_sl_state_files)"
+    rm -rf "$HOME/.claude/cast-state"
+    run env CLAUDE_SUBPROCESS=1 CLAUDE_SESSION_ID="$sid" CAST_STATUS_DIR="$HOME/.claude/agent-status" bash "$REPO_DIR/scripts/agent-status-reader.sh" <<< "{}"
+    reader_files="$(_sl_state_files)"
+    [ -n "$statusline_files" ]
+    assert_equal "$statusline_files" "$reader_files"
+  done
+  # CONTROL: the invalid id really fell back to "default" (a raw id would have produced another name)
+  assert_equal "$reader_files" "cast-session-start-default.epoch "
+}
+
+@test "uptime S3b: a symlinked epoch file / state dir is refused (no write through it, no uptime)" {
+  local victim="$BATS_TEST_TMPDIR/victim.txt" json='{"agent":{"name":"t"},"session_id":"sess-sym","model":{"display_name":"H"}}'
+  echo SAFE > "$victim"
+  mkdir -m 700 -p "$HOME/.claude/cast-state"
+  ln -s "$victim" "$HOME/.claude/cast-state/cast-session-start-sess-sym.epoch"
+  run bash "$SCRIPT" <<< "$json"
+  assert_success
+  assert_equal "$(cat "$victim")" "SAFE"
+  rm -rf "$HOME/.claude/cast-state"
+  mkdir -p "$BATS_TEST_TMPDIR/attacker"
+  ln -s "$BATS_TEST_TMPDIR/attacker" "$HOME/.claude/cast-state"
+  run bash "$SCRIPT" <<< "$json"
+  assert_success
+  [ -z "$(ls -A "$BATS_TEST_TMPDIR/attacker")" ]
+}
+
+@test "uptime S3b: a non-numeric epoch file never reaches arithmetic (no code execution, no uptime)" {
+  local marker="$BATS_TEST_TMPDIR/pwned"
+  mkdir -m 700 -p "$HOME/.claude/cast-state"
+  echo "a[\$(touch $marker)]" > "$HOME/.claude/cast-state/cast-session-start-sess-num.epoch"
+  run bash "$SCRIPT" <<< '{"agent":{"name":"t"},"session_id":"sess-num","model":{"display_name":"H"}}'
+  assert_success
+  [ ! -e "$marker" ]
+}

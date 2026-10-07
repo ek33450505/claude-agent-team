@@ -63,6 +63,10 @@ _STANDARD_FALLBACK_PATTERNS = [
     # Secrets / tokens
     ("AWS_ACCESS_KEY",  r"(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])"),
     ("GITHUB_TOKEN",    r"(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{36,}"),
+    # Context-anchored ONLY: a bare 40-char base64 run is indistinguishable from a git SHA / hash.
+    # GENERIC_SECRET cannot cover this name (its \b does not hold inside `aws_secret_access_key`, and it
+    # needs the operator right after `secret`). Trigger: "secret" is already in _PII_CANDIDATES.
+    ("AWS_SECRET_ACCESS_KEY", r"aws[_-]?secret[_-]?(?:access[_-]?)?key['\"]?\s*[:=]\s*['\"]?([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])"),
     ("ANTHROPIC_KEY",   r"sk-ant-[A-Za-z0-9_\-]{32,}"),
     ("OPENAI_KEY",      r"sk-(?:proj-)?[A-Za-z0-9]{32,}"),
     ("BEARER_TOKEN",    r"(?i)bearer\s+([A-Za-z0-9_\-\.]{20,})"),

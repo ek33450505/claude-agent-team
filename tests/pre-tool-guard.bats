@@ -1518,8 +1518,8 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   assert_output --partial "gc"
 }
 
-@test "git -c core.pager=less log (unrelated key) → allows (exit 0) [regression: no false positive]" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c core.pager=less log")"
+@test "git -c core.quotepath=off log (unrelated key) → allows (exit 0) [regression: no false positive]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c core.quotepath=off log")"
   assert_success
 }
 
@@ -1900,9 +1900,15 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   assert_success
 }
 
-@test "git config alias.e \"edit\" (alias VALUE, not the edit subcommand) → allows (exit 0) [gate-finding regression fence: config-edit block must not overmatch on a value]" {
-  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config alias.e \"edit\"")"
+@test "git config user.name \"edit\" (value, not the edit subcommand) → allows (exit 0) [gate-finding regression fence: config-edit block must not overmatch on a value]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config user.name \"edit\"")"
   assert_success
+}
+
+@test "git config alias.e \"edit\" (alias.* is an exec-capable key) → blocks (exit 2) [exec-config block, CAST_GIT_CONFIG_OK]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git config alias.e \"edit\"")"
+  assert_failure 2
+  assert_output --partial "CAST_GIT_CONFIG_OK"
 }
 
 @test "CAST_RESET_OK=1 FOO=\"bar baz\" git reset --hard (hatch prefix with a whitespace-containing value) → allows (exit 0) [gate-finding regression fence: _normalize_git_segment must not break the hatch on a quoted multi-word value]" {

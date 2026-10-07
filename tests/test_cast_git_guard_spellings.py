@@ -2252,7 +2252,7 @@ class TestReviewM5Residuals(_Oracle):
     RESIDUALS = (
         "echo '@G@ push' | (bash)", "echo '@G@ push' | if true; then bash; fi", "{ echo '@G@ push'; } | bash",
         "echo '@G@ push' | xargs -I{} bash -c '{}'", "bash -c '@G@ ${1:-push}' x", "bash -c '@G@ ${1#}' x push",
-        "x=push; @G@ $x", "@G@ -c alias.x=push x", "python3 -c 'import os; os.system(\"@G@ push\")'",
+        "x=push; @G@ $x", "python3 -c 'import os; os.system(\"@G@ push\")'",
         "echo '@G@ push' | frobnicate bash", "printf 'g%s push' it | bash",
         # Unit B-v: the residuals the module docstring lists and the oracle confirmed (each RAN push in a shell)
         "source -- /dev/stdin <<< '@G@ push'", "{ bash; } <<< '@G@ push'", "( bash ) <<EOF\nGIT push\nEOF",

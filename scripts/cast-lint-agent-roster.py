@@ -27,18 +27,45 @@ Env overrides (for testing):
 
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
 
 def get_repo_root() -> str:
-    """Get the repository root directory."""
+    """Get the repository root directory.
+
+    CAST_REPO_ROOT wins (installed-copy mode: the hook passes the repo as data); it must be
+    an absolute path to an existing directory, else exit 1 (fail closed). Otherwise the cwd's
+    repo. GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE are not inherited: a git hook exports the
+    committing worktree's gitdir, which would mis-resolve the root (S3c-15).
+    """
+    env_root = os.environ.get("CAST_REPO_ROOT")
+    if env_root is not None:
+        if not os.path.isabs(env_root) or not os.path.isdir(env_root):
+            print(
+                f"ERROR [cast-lint-agent-roster]: CAST_REPO_ROOT must be an absolute path to an "
+                f"existing directory: {env_root!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return env_root
     try:
-        result = os.popen("git rev-parse --show-toplevel 2>/dev/null").read().strip()
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+        }
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            env=env,
+        ).stdout.strip()
         if result:
             return result
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
     return os.getcwd()
 

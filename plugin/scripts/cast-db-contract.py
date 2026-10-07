@@ -42,8 +42,23 @@ from typing import Optional
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-SCRIPT_DIR = Path(__file__).parent
-REPO_ROOT = SCRIPT_DIR.parent
+# Repo root: CAST_REPO_ROOT wins (installed-copy mode — this file then lives in
+# ~/.claude/scripts, so its own location is NOT the repo). Every SCRIPT_DIR use below is a
+# read of the repo's schema/writer sources, so SCRIPT_DIR follows the resolved root.
+_env_root = os.environ.get("CAST_REPO_ROOT")
+if _env_root is not None:
+    if not os.path.isabs(_env_root) or not os.path.isdir(_env_root):
+        print(
+            f"cast-db-contract: FATAL — CAST_REPO_ROOT must be an absolute path to an "
+            f"existing directory: {_env_root!r}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    REPO_ROOT = Path(_env_root)
+    SCRIPT_DIR = REPO_ROOT / "scripts"
+else:
+    SCRIPT_DIR = Path(__file__).parent
+    REPO_ROOT = SCRIPT_DIR.parent
 INIT_SCRIPT = SCRIPT_DIR / "cast-db-init.sh"
 MIGRATIONS_DIR = SCRIPT_DIR / "migrations"
 CAST_DB_PY = SCRIPT_DIR / "cast_db.py"
@@ -1142,13 +1157,37 @@ def format_table_output(contracts: list[ColumnContract], desktop_found: bool) ->
     return "\n".join(lines)
 
 
+def _minimal_bash_env() -> dict:
+    """Allowlisted environment for the bash that runs cast_git_safe: fixed PATH, HOME, locale."""
+    env = {"PATH": "/usr/bin:/bin"}
+    for k in ("HOME", "LANG", "LC_ALL"):
+        if k in os.environ:
+            env[k] = os.environ[k]
+    return env
+
+
 def _get_git_sha() -> str:
+    # Route through the bash lib's cast_git_safe rather than a bare `git`: this runs from git hooks
+    # in the user's terminal over a repo an agent can write to, and repo-local config can make bare
+    # git exec programs (core.fsmonitor, ...). Replicating the env/config neutralisation here would
+    # fork the single source of truth, so call the lib. The lib is the SIBLING of THIS file (the
+    # installed copy when installed) — never SCRIPT_DIR, which in installed mode is the repo's own
+    # (agent-writable) scripts/. Any failure (lib missing/unreadable, refusal, OSError) -> "unknown".
+    lib = Path(__file__).resolve().parent / "cast-hook-lib.sh"
+    if not lib.is_file():
+        return "unknown"
     try:
         r = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["/bin/bash", "--noprofile", "--norc", "-c", 'source "$1" || exit 3; shift; cast_git_safe "$@"',
+             "_", str(lib), str(REPO_ROOT), "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, cwd=str(REPO_ROOT),
+            # Minimal ALLOWLIST env, not a blocklist: the caller's environment can carry
+            # SHELLOPTS/BASHOPTS/PS4 (xtrace expands $(...) in PS4), exported BASH_FUNC_* functions,
+            # BASH_ENV/ENV, GIT_DIR & co. — none of it may reach bash or the git it runs
+            # (resolve HEAD from REPO_ROOT itself, S3c-15). cast_git_safe sanitises PATH again.
+            env=_minimal_bash_env(),
         )
-        return r.stdout.strip() if r.returncode == 0 else "unknown"
+        return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else "unknown"
     except OSError:
         return "unknown"
 

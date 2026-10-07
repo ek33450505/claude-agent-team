@@ -47,11 +47,36 @@ if [[ $# -gt 0 ]]; then
 	exit 2
 fi
 
-_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(git -C "$_script_dir" rev-parse --show-toplevel 2>/dev/null)" || {
-	echo "cast-check-skip-ledger: FATAL — ${_script_dir} is not inside a git repository" >&2
-	exit 1
-}
+# Repo-root resolution (U6b-1): CAST_REPO_ROOT wins (installed-copy mode — the
+# hook passes the repo as data); else this script's own checkout. The git call
+# drops GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE: under a git hook they point at the
+# committing worktree's gitdir and would mis-resolve the script's own repo
+# (false "ledger out of sync", S3c-15). This script only greps working-tree
+# files, never the index, so GIT_INDEX_FILE is dropped too.
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+	if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+		echo "cast-check-skip-ledger: FATAL — CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+		exit 1
+	fi
+	REPO="$CAST_REPO_ROOT"
+else
+	_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# Hardened git (cast_git_safe: repo-local exec config neutralised). FAIL CLOSED if the lib
+	# is not loadable beside this script. The -r guard matters: on bash 3.2 a bare
+	# `source <missing-file>` aborts under set -e.
+	_CAST_LIB="${_script_dir}/cast-hook-lib.sh"
+	# shellcheck source=cast-hook-lib.sh
+	if [[ -r "$_CAST_LIB" ]] && source "$_CAST_LIB"; then
+		:
+	else
+		echo "cast-check-skip-ledger: FATAL — cast-hook-lib.sh not loadable beside ${_script_dir} (fail closed)" >&2
+		exit 1
+	fi
+	REPO="$(cast_git_safe "$_script_dir" rev-parse --show-toplevel 2>/dev/null)" || {
+		echo "cast-check-skip-ledger: FATAL — ${_script_dir} is not inside a git repository" >&2
+		exit 1
+	}
+fi
 
 LEDGER="${CAST_SKIP_LEDGER_PATH:-$REPO/docs/test-skip-ledger.md}"
 

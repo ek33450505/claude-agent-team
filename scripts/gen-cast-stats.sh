@@ -23,7 +23,18 @@ if [[ -n "${BATS_TEST_NAME:-}" || -n "${BATS_TEST_FILENAME:-}" || -n "${BATS_TMP
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Repo root: CAST_REPO_ROOT wins (installed-copy mode — SCRIPT_DIR is then
+# ~/.claude/scripts, so SCRIPT_DIR/.. is NOT the repo); else this script's checkout.
+# SCRIPT_DIR stays the sibling-library location (cast-stats-lib.sh).
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+  if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+    echo "[gen-cast-stats] FATAL — CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+    exit 1
+  fi
+  REPO_ROOT="$CAST_REPO_ROOT"
+else
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
 
 # shellcheck source=scripts/cast-stats-lib.sh
 source "${SCRIPT_DIR}/cast-stats-lib.sh"
@@ -107,8 +118,13 @@ if [[ "$CHECK_MODE" -eq 1 ]]; then
   fi
 fi
 
-# Default: write the file
-echo "$JSON" > "$STATS_FILE"
+# Default: write the file. cast_safe_write refuses a symlinked target/parent (an agent-planted
+# cast-stats.json -> settings.json would otherwise be overwritten through the link) and replaces
+# atomically; its rc is checked explicitly so a refusal can never read as success.
+printf '%s\n' "$JSON" | cast_safe_write "$REPO_ROOT" cast-stats.json || {
+  echo "[gen-cast-stats] ABORT: refused or failed to write cast-stats.json (nothing written)." >&2
+  exit 1
+}
 echo "[gen-cast-stats] wrote ${STATS_FILE}" >&2
 echo "  version:    $VER" >&2
 echo "  agents:     $AGENTS" >&2

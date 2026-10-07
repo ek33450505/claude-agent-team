@@ -5,6 +5,16 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 ## [Unreleased]
 
 ### Added
+- **Exec-capable git config keys are blocked in the Bash git guard (U6a-1).** A repo's `.git/config`
+  executes in Ed's unsandboxed terminal and in CAST hooks on the next `git status`/`log`/`diff`
+  (`core.fsmonitor`, `core.hooksPath`, `core.pager`, `alias.*`, `filter.*.smudge`, `credential.helper`,
+  `include.path`, `url.*.insteadOf` ...). `scripts/cast-git-guard.py` now blocks `git config` writes of
+  those keys (any scope, `--file`, `--add`, `set`, `rename-section` into such a section), inline
+  `-c <key>`, `--config-env=<key>=ENV`, and `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_PARAMETERS` /
+  `GIT_CONFIG_GLOBAL|SYSTEM=<file>` env injection — any value, reads unaffected; hatch
+  `CAST_GIT_CONFIG_OK=1` (also accepted for `git config --edit`). The same `--config-env` /
+  `GIT_CONFIG_KEY_<n>` route for the gc-expiry keys, a documented residual until now, is closed.
+  Still uncovered: the env assignment in an earlier segment than the git that uses it.
 - **`skills/seo-index-census`** — index-coverage census discipline for sites with many
   programmatic routes. Covers the distinction that decides the lever: `Discovered – currently
   not indexed` is a crawl-budget signal (content depth does nothing for it), `Crawled –

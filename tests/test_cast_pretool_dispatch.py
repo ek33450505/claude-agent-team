@@ -1305,5 +1305,83 @@ class TestDegradedGitBlockFailClosed(unittest.TestCase):
         self.assertLessEqual(CountingStr.probes, len(cast_pretool_dispatch._DEGRADED_GIT_HATCHES))
 
 
+class TestNonStrSessionIdRecordWriters(TestDispatchDecisionsNameCapture):
+    """S3d item 3: a truthy NON-str payload session_id (int/list/dict) reached the two
+    RECORD-ONLY writers as-is. Both are fail-OPEN by design (record-only; never block):
+      * _record_dispatch: a list/dict made the INSERT raise -> swallowed -> the
+        dispatch_decisions row was SILENTLY DROPPED (an int bound fine);
+      * _run_egress: handed the non-str to the sentinel and into the egress ledger line.
+    Now a non-str/empty session_id is MISSING -> CLAUDE_SESSION_ID env -> "unknown", the
+    record still lands, and both writers stay fail-open (no exception, no block)."""
+
+    BAD = (5, ['sess'], {'k': 'v'}, True)
+
+    def setUp(self):
+        super().setUp()
+        self._orig_sess = os.environ.pop('CLAUDE_SESSION_ID', None)
+
+    def tearDown(self):
+        if self._orig_sess is not None:
+            os.environ['CLAUDE_SESSION_ID'] = self._orig_sess
+        super().tearDown()
+
+    def _sessions(self):
+        conn = sqlite3.connect(self._db_path)
+        try:
+            return [r[0] for r in conn.execute("SELECT session_id FROM dispatch_decisions ORDER BY id")]
+        finally:
+            conn.close()
+
+    def test_helper_returns_str_for_every_shape(self):
+        f = cast_pretool_dispatch._payload_session_id
+        self.assertEqual(f({'session_id': 'real-1'}), 'real-1')
+        for bad in self.BAD + ('', None):
+            self.assertEqual(f({'session_id': bad}), 'unknown', bad)
+        self.assertEqual(f({}), 'unknown')
+        os.environ['CLAUDE_SESSION_ID'] = 'env-sess'
+        try:
+            for bad in self.BAD:
+                self.assertEqual(f({'session_id': bad}), 'env-sess', bad)
+        finally:
+            os.environ.pop('CLAUDE_SESSION_ID', None)
+
+    def test_record_dispatch_still_records_a_row_for_a_non_str_session_id(self):
+        self._make_db(with_dispatch_name=True)
+        for bad in self.BAD:
+            data = self._data('code-reviewer')
+            data['session_id'] = bad
+            cast_pretool_dispatch._record_dispatch(data)  # must not raise
+        self.assertEqual(self._sessions(), ['unknown'] * len(self.BAD))
+
+    def test_record_dispatch_str_session_id_is_unchanged(self):
+        self._make_db(with_dispatch_name=True)
+        cast_pretool_dispatch._record_dispatch(self._data('code-reviewer'))
+        self.assertEqual(self._sessions(), ['test-session'])
+
+    def test_run_egress_hands_the_sentinel_a_str_and_stays_fail_open(self):
+        seen = []
+
+        class _Sentinel:
+            @staticmethod
+            def evaluate(tool_name, tool_input, session_id):
+                seen.append(session_id)
+                return None
+
+        for bad in self.BAD:
+            data = {'tool_name': 'WebFetch', 'tool_input': {'url': 'https://example.com'}, 'session_id': bad}
+            self.assertIsNone(cast_pretool_dispatch._run_egress(_Sentinel, data))
+        self.assertEqual(seen, ['unknown'] * len(self.BAD))
+        self.assertTrue(all(isinstance(x, str) for x in seen))
+
+    def test_run_egress_sentinel_exception_is_still_swallowed(self):
+        class _Boom:
+            @staticmethod
+            def evaluate(*a):
+                raise RuntimeError('boom')
+
+        data = {'tool_name': 'WebFetch', 'tool_input': {}, 'session_id': ['x']}
+        self.assertIsNone(cast_pretool_dispatch._run_egress(_Boom, data))
+
+
 if __name__ == '__main__':
     unittest.main()

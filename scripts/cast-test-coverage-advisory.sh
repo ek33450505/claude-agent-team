@@ -19,11 +19,44 @@
 #
 # Exit codes:
 #   0 — always (report-only; never blocks the commit under any condition)
+#       (sole exception: a malformed CAST_REPO_ROOT is a config error and exits 1 —
+#        the pre-commit hook invokes this script with `|| true`, so it still never blocks)
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Hardened git (cast_git_safe): repo-local exec config (core.fsmonitor ran for `git diff --cached`)
+# must not run from a hook. FAIL CLOSED if the lib is not loadable beside this script — never fall
+# back to bare git. The -r guard matters: on bash 3.2 a bare `source <missing-file>` aborts under
+# set -e.
+_CAST_LIB="$(dirname "$0")/cast-hook-lib.sh"
+# shellcheck source=cast-hook-lib.sh
+if [[ -r "$_CAST_LIB" ]] && source "$_CAST_LIB"; then
+	:
+else
+	echo "ERROR [cast-test-coverage-advisory]: cast-hook-lib.sh not loadable beside $0 (fail closed)" >&2
+	exit 1
+fi
+
+# CAST_REPO_ROOT wins (installed-copy mode: the hook passes the repo as data); else the
+# cwd's repo. GIT_DIR/GIT_WORK_TREE are dropped (a git hook exports the committing
+# worktree's gitdir, S3c-15). This script reads the STAGED set (`git diff --cached`), which
+# under `git commit <paths>` / `-a` lives in a temporary index named by GIT_INDEX_FILE:
+# cast_git_safe strips GIT_INDEX_FILE, so opt in via CAST_GIT_SAFE_INDEX_FILE (honoured only for
+# a regular non-symlink index file directly inside the repo's git dir; see cast-hook-lib.sh).
+# Not exported to anything else.
+# shellcheck disable=SC2034  # read by cast_git_safe (sourced lib), not by this script
+CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}"
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+	if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+		echo "ERROR [cast-test-coverage-advisory]: CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+		exit 1
+	fi
+	REPO_ROOT="$CAST_REPO_ROOT"
+else
+	REPO_ROOT="$(cast_git_safe "$PWD" rev-parse --show-toplevel 2>/dev/null || pwd)"
+fi
 cd "$REPO_ROOT"
+unset GIT_DIR GIT_WORK_TREE
 
 MAX_LISTED=6
 
@@ -32,7 +65,7 @@ MAX_LISTED=6
 STAGED_FILES=()
 while IFS= read -r f; do
 	[[ -n "$f" ]] && STAGED_FILES+=("$f")
-done < <(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+done < <(cast_git_safe "$REPO_ROOT" diff --cached --name-only --diff-filter=ACM || true)
 
 # Scan only these prefixes. Everything else (including tests/ and plugin/,
 # which are generated/derived surfaces) is intentionally skipped.

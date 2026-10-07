@@ -20,6 +20,7 @@ Override paths via environment variables:
 
 import os
 import re
+import subprocess
 import sys
 
 # Tables that are intentionally write-only meta/bookkeeping tables.
@@ -39,12 +40,37 @@ READ_PATTERN_TEMPLATE = r"\bFROM\s+{table}\b"
 
 
 def get_repo_root():
-    """Get the repository root directory."""
+    """Get the repository root directory.
+
+    CAST_REPO_ROOT wins; it must be an absolute path to an existing directory, else exit 1
+    (fail closed). Otherwise the cwd's repo. GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE are not
+    inherited: a git hook exports the committing worktree's gitdir (S3c-15).
+    """
+    env_root = os.environ.get("CAST_REPO_ROOT")
+    if env_root is not None:
+        if not os.path.isabs(env_root) or not os.path.isdir(env_root):
+            print(
+                "ERROR [lint-write-only-tables]: CAST_REPO_ROOT must be an absolute path "
+                f"to an existing directory: {env_root!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return env_root
     try:
-        result = os.popen("git rev-parse --show-toplevel 2>/dev/null").read().strip()
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+        }
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            env=env,
+        ).stdout.strip()
         if result:
             return result
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
     return os.getcwd()
 
@@ -104,7 +130,7 @@ def find_read_sites(repo_root, table):
 def main():
     strict = "--strict" in sys.argv
 
-    repo_root = os.environ.get("CAST_REPO_ROOT") or get_repo_root()
+    repo_root = get_repo_root()
     db_init_path = os.environ.get("CAST_DB_INIT_PATH") or os.path.join(
         repo_root, "scripts", "cast-db-init.sh"
     )

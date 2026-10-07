@@ -3500,12 +3500,14 @@ class TestHandbackGateWiring(_HandbackTranscriptMixin, _IsolatedDbPathTestCase):
 
     def test_payload_transcript_path_is_not_trusted(self):
         # The payload points at a planted transcript with a DONE handback; no
-        # transcript exists at the real project layout -> no verdict.
+        # transcript exists at the real project layout -> the planted DONE is never
+        # read. S3d: a payload that REFERENCES a transcript we cannot locate now fails
+        # closed to BLOCKED (was: "" / silence) — never DONE.
         planted = os.path.join(self._tmpdir, 'untrusted-planted.jsonl')
         with open(planted, 'w') as f:
             for e in self._handback_entries('Status: DONE'):
                 f.write(json.dumps(e) + '\n')
-        self.assertEqual(self._parse().gate_match, '')
+        self.assertEqual(self._parse().gate_match, 'BLOCKED')
 
     def test_non_empty_payload_text_is_not_overridden_by_transcript(self):
         # output_full present (no verdict): the transcript is NOT consulted.
@@ -3518,7 +3520,11 @@ class TestHandbackGateWiring(_HandbackTranscriptMixin, _IsolatedDbPathTestCase):
         self.assertEqual(self._parse(agent_type='Explore').gate_match, '')
 
     def test_no_transcript_no_verdict(self):
-        self.assertEqual(self._parse().gate_match, '')
+        # No transcript AND the payload does not reference one: genuinely nothing to read.
+        self.assertEqual(self._parse(agent_transcript_path=None).gate_match, '')
+
+    def test_referenced_but_unlocatable_transcript_fails_closed(self):
+        self.assertEqual(self._parse().gate_match, 'BLOCKED')
 
     def test_gate_match_exception_fails_closed_to_blocked(self):
         """M1: an exception while computing the verdict must record BLOCKED (it
@@ -3977,6 +3983,283 @@ class TestFencedJsonStatusHelper(_IsolatedDbPathTestCase):
         self.assertIsNone(self._fj(far))     # unclosed block, key beyond the cap
         near = '```json status\n' + 'x' * (css._FENCED_JSON_MAX_SLICE - 100) + '{"status": "DONE"}'
         self.assertEqual(self._fj(near), 'DONE')
+
+
+class TestStdinPayloadTransport(_IsolatedDbPathTestCase):
+    """S3d item 1: the wrapper hands the payload to python on STDIN (``--stdin``), not via
+    an exported env var. An env var is capped (E2BIG: ~1 MiB env+argv on macOS, 128 KiB per
+    string on Linux), so an oversized payload failed the exec outright and wrote NO record."""
+
+    def _payload(self, pad_bytes):
+        return json.dumps({
+            'agent_type': 'security', 'session_id': 'sess-stdin', 'agent_id': 'astdin01',
+            'stop_reason': 'end_turn',
+            'last_assistant_message': ('x' * pad_bytes) + '\nStatus: DONE\n',
+        })
+
+    def _run(self, args, stdin_text=None, extra_env=None):
+        env = {
+            'PATH': os.environ.get('PATH', ''), 'HOME': self._tmpdir,
+            'CAST_DB_PATH': os.environ['CAST_DB_PATH'], 'CAST_HOOK_DIR': _SCRIPTS_DIR,
+        }
+        env.update(extra_env or {})
+        return subprocess.run(
+            [sys.executable, os.path.join(_SCRIPTS_DIR, 'cast_subagent_stop.py')] + args,
+            input=(stdin_text or '').encode('utf-8', 'surrogateescape'),
+            env=env, capture_output=True, timeout=60,
+        )
+
+    def test_2mib_payload_on_stdin_yields_the_verdict(self):
+        r = self._run(['--gate-only', '--stdin'], self._payload(2 * 1024 * 1024))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(b'CAST_GATE_MATCH=DONE\n', r.stdout)
+
+    def test_200kib_payload_on_stdin_yields_the_verdict(self):
+        # > Linux's 128 KiB per-env-string cap (MAX_ARG_STRLEN), < macOS's ~1 MiB total.
+        r = self._run(['--gate-only', '--stdin'], self._payload(200 * 1024))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(b'CAST_GATE_MATCH=DONE\n', r.stdout)
+
+    def test_the_env_transport_cannot_carry_a_2mib_payload(self):
+        # Discriminator: proves the stdin tests above are not vacuous — the env path really
+        # cannot exec with this payload (E2BIG on both macOS and Linux).
+        with self.assertRaises(OSError) as cm:
+            self._run(['--gate-only'], extra_env={'CAST_STOP_INPUT': self._payload(2 * 1024 * 1024)})
+        import errno
+        self.assertEqual(cm.exception.errno, errno.E2BIG)
+
+    def test_stdin_flag_ignores_a_stale_env_payload(self):
+        # --stdin means stdin is THE payload: an inherited CAST_STOP_INPUT must not win.
+        stale = json.dumps({'agent_type': 'security', 'session_id': 'sess-stale',
+                            'last_assistant_message': 'Status: DONE\n'})
+        fresh = json.dumps({'agent_type': 'security', 'session_id': 'sess-fresh',
+                            'last_assistant_message': 'Status: BLOCKED\n'})
+        r = self._run(['--gate-only', '--stdin'], fresh, extra_env={'CAST_STOP_INPUT': stale})
+        self.assertIn(b'CAST_GATE_MATCH=BLOCKED\n', r.stdout)
+        self.assertIn(b'SAFE_SESSION_ID=sess-fresh\n', r.stdout)
+
+    def test_empty_stdin_is_a_silent_noop(self):
+        r = self._run(['--gate-only', '--stdin'], '')
+        self.assertEqual((r.returncode, r.stdout), (0, b''))
+
+    def test_without_the_flag_the_legacy_env_path_still_works(self):
+        r = self._run(['--gate-only'], extra_env={'CAST_STOP_INPUT': self._payload(10)})
+        self.assertIn(b'CAST_GATE_MATCH=DONE\n', r.stdout)
+
+    def test_parse_input_raw_argument_bypasses_the_env(self):
+        os.environ.pop('CAST_STOP_INPUT', None)
+        ctx = css.parse_input(raw=self._payload(10))
+        self.assertEqual(ctx.gate_match, 'DONE')
+        self.assertEqual(ctx.raw_input, self._payload(10))
+        self.assertIsNone(css.parse_input(raw=''))
+
+    def test_prose_dispatch_scan_reads_the_ctx_payload_not_the_env(self):
+        # stage 7 used to re-read os.environ["CAST_STOP_INPUT"] (E2BIG-capped). The tool_use
+        # marker sits ONLY in the raw payload text (a side key, not in the parsed content
+        # blocks), so only the raw scan can see it. With the payload carried on
+        # ctx.raw_input and the env UNSET it must still suppress the violation.
+        os.environ.pop('CAST_STOP_INPUT', None)
+        payload = {
+            'agent_type': 'security', 'session_id': 'sess-s7', 'agent_id': 'as7',
+            'agent_response': {'content': [
+                {'type': 'text', 'text': 'Dispatching code-reviewer to review this.\nStatus: DONE\n'},
+            ]},
+            'side_blob': {'type': 'tool_use', 'name': 'Agent'},
+        }
+        ctx = css.parse_input(raw=json.dumps(payload))
+        dbw = mock.MagicMock()
+        with mock.patch.object(css, '_load_db_write', return_value=dbw):
+            css.stage7_protocol_check(ctx)
+        self.assertEqual(dbw.call_count, 0)
+        # control: without the marker the SAME prose is flagged (the scan is not vacuous)
+        del payload['side_blob']
+        ctx2 = css.parse_input(raw=json.dumps(payload))
+        dbw2 = mock.MagicMock()
+        with mock.patch.object(css, '_load_db_write', return_value=dbw2), \
+                contextlib.redirect_stderr(io.StringIO()):
+            css.stage7_protocol_check(ctx2)
+        self.assertEqual(dbw2.call_count, 1)
+
+
+class TestNonStrIdentityFields(_IsolatedDbPathTestCase):
+    """S3d item 3: a truthy NON-str session_id / agent_type / agent_id used to reach
+    ``re.sub`` in parse_input and raise TypeError (parse_input aborted; the wrapper's
+    ``|| true`` swallowed it -> NO record, silently). Now a non-str identity field is
+    MISSING ("")."""
+
+    BAD = (5, ['sess'], {'k': 'v'}, True, 1.5)
+
+    def _parse(self, **over):
+        payload = {'agent_type': 'security', 'session_id': 'sess-ok', 'agent_id': 'aok01',
+                   'last_assistant_message': 'Done.\n\nStatus: DONE\n'}
+        payload.update(over)
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def test_non_str_session_id_is_missing_and_does_not_raise(self):
+        for bad in self.BAD:
+            ctx = self._parse(session_id=bad)
+            self.assertIsNotNone(ctx, bad)
+            self.assertEqual((ctx.session_id, ctx.safe_session_id), ('', ''), bad)
+            self.assertEqual(ctx.gate_match, 'DONE', bad)  # the verdict is still recorded
+
+    def test_non_str_agent_type_falls_through_to_the_next_identity_field(self):
+        for bad in self.BAD:
+            ctx = self._parse(agent_type=bad, agent_name='security')
+            self.assertEqual((ctx.agent_name, ctx.safe_agent), ('security', 'security'), bad)
+            self.assertTrue(ctx.has_agent_identity, bad)
+
+    def test_non_str_agent_type_with_no_other_identity_is_an_unattributed_stop(self):
+        # Treated as MISSING: no identity -> main() drops it like a main-session Stop.
+        # It must NOT be str()-ed into an identity ("5", "['sess']") nor crash.
+        for bad in self.BAD:
+            ctx = self._parse(agent_type=bad, agent_id='')
+            self.assertEqual(ctx.agent_name, 'unknown', bad)
+            self.assertFalse(ctx.has_agent_identity, bad)
+
+    def test_non_str_agent_id_is_missing(self):
+        for bad in self.BAD:
+            ctx = self._parse(agent_id=bad)
+            self.assertEqual(ctx.agent_id, '', bad)
+
+    def test_non_str_identity_through_main_is_silent_and_never_raises(self):
+        os.environ['CAST_STOP_INPUT'] = json.dumps(
+            {'agent_type': ['security'], 'session_id': {'a': 1}, 'last_assistant_message': 'Status: DONE'})
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(css.main(['--gate-only']), 0)
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+        self.assertEqual(buf.getvalue(), '')  # no identity -> no tail -> no record
+
+    def test_str_identity_is_unchanged(self):
+        ctx = self._parse()
+        self.assertEqual((ctx.agent_name, ctx.session_id, ctx.agent_id), ('security', 'sess-ok', 'aok01'))
+
+
+class TestUnreadableTranscriptFailsClosed(_HandbackTranscriptMixin, _IsolatedDbPathTestCase):
+    """S3d item 2: a transcript that was located (or referenced by the payload) but cannot
+    be read to an answer must record BLOCKED ("transcript unreadable"), not silence — silence
+    leaves an earlier DONE as the newest gate record."""
+
+    def _write_meta(self, meta):
+        with open(os.path.join(self._tx_dir(), f'agent-{self.AID}.meta.json'), 'w') as f:
+            json.dump(meta, f)
+
+    def _parse(self, agent_type='security', ref=True, **extra):
+        payload = {
+            'agent_id': self.AID, 'agent_type': agent_type, 'session_id': self.SID,
+            'hook_event_name': 'SubagentStop', 'stop_hook_active': False,
+        }
+        if ref:
+            payload['agent_transcript_path'] = os.path.join(self._tmpdir, 'referenced.jsonl')
+        payload.update(extra)
+        os.environ['CAST_STOP_INPUT'] = json.dumps(payload)
+        try:
+            return css.parse_input()
+        finally:
+            os.environ.pop('CAST_STOP_INPUT', None)
+
+    def _tail(self, ctx):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            css.stage17_tail(ctx)
+        return buf.getvalue()
+
+    def test_unparsable_transcript_records_blocked_with_a_reason(self):
+        path = self._write_transcript(self._handback_entries('Status: DONE'))
+        with open(path, 'a') as f:
+            f.write('{"type": "assistant", "message": {"cont\n')
+        self._write_meta({'agentType': 'security'})
+        ctx = self._parse()
+        self.assertEqual(ctx.gate_match, 'BLOCKED')
+        self.assertEqual(ctx.gate_reason, 'transcript unreadable')
+        self.assertEqual(ctx.roster_type, 'security')  # bound to the roster -> supersedes a DONE
+        self.assertIn("CAST_GATE_REASON='transcript unreadable'\n", self._tail(ctx))
+
+    def test_symlinked_transcript_records_blocked(self):
+        real = os.path.join(self._tmpdir, 'real.jsonl')
+        with open(real, 'w') as f:
+            f.write(json.dumps(self._handback_entries('Status: DONE')[1]) + '\n')
+        os.symlink(real, os.path.join(self._tx_dir(), f'agent-{self.AID}.jsonl'))
+        self.assertEqual(self._parse().gate_match, 'BLOCKED')
+
+    def test_non_regular_transcript_records_blocked(self):
+        os.mkfifo(os.path.join(self._tx_dir(), f'agent-{self.AID}.jsonl'))
+        self.assertEqual(self._parse().gate_match, 'BLOCKED')
+
+    def test_referenced_but_missing_transcript_records_blocked(self):
+        self._write_meta({'agentType': 'security'})  # sidecar present, transcript gone
+        ctx = self._parse()
+        self.assertEqual((ctx.gate_match, ctx.gate_reason), ('BLOCKED', 'transcript unreadable'))
+        self.assertEqual(ctx.roster_type, 'security')
+
+    def test_planted_transcript_elsewhere_is_never_a_done(self):
+        planted = os.path.join(self._tmpdir, 'referenced.jsonl')
+        with open(planted, 'w') as f:
+            for e in self._handback_entries('Status: DONE'):
+                f.write(json.dumps(e) + '\n')
+        self.assertEqual(self._parse().gate_match, 'BLOCKED')
+
+    def test_no_reference_and_no_transcript_stays_silent(self):
+        ctx = self._parse(ref=False)
+        self.assertEqual((ctx.gate_match, ctx.gate_reason), ('', ''))
+
+    def _big_final_handback(self, text):
+        # Final assistant entry (a SubagentHandback) larger than the 1 MiB tail window.
+        pad = 'x' * (css._TRANSCRIPT_TAIL_BYTES + 100 * 1024)
+        return self._handback_entries(pad + '\n\n' + text)
+
+    def test_final_handback_larger_than_the_tail_window_fails_closed(self):
+        self._write_meta({'agentType': 'security'})
+        for text in ('Status: BLOCKED', 'Status: DONE'):
+            self._write_transcript(self._big_final_handback(text))
+            ctx = self._parse()
+            self.assertEqual((ctx.gate_match, ctx.gate_reason), ('BLOCKED', 'transcript unreadable'), text)
+            self.assertEqual(ctx.roster_type, 'security', text)
+
+    def test_oversized_earlier_entry_with_small_final_handback_is_unaffected(self):
+        entries = [{'type': 'user', 'message': {'role': 'user', 'content': 'y' * (css._TRANSCRIPT_TAIL_BYTES + 100 * 1024)}}]
+        entries += self._handback_entries('ok\n\nStatus: DONE')
+        self._write_transcript(entries)
+        ctx = self._parse()
+        self.assertEqual((ctx.gate_match, ctx.gate_reason), ('DONE', ''))
+        self.assertFalse(ctx.transcript_unreadable)
+
+    def test_large_transcript_ending_on_a_non_handback_call_is_a_genuine_no_verdict(self):
+        entries = [{'type': 'user', 'message': {'role': 'user', 'content': 'y' * (css._TRANSCRIPT_TAIL_BYTES + 100 * 1024)}}]
+        entries.append(self._bash_entry('ls'))
+        self._write_transcript(entries)
+        ctx = self._parse()
+        self.assertEqual((ctx.gate_match, ctx.gate_reason), ('', ''))
+
+    def test_non_str_reference_does_not_count_as_a_reference(self):
+        for bad in (5, ['x'], {'a': 1}, ''):
+            self.assertEqual(self._parse(ref=False, agent_transcript_path=bad).gate_match, '', bad)
+
+    def test_readable_transcript_with_no_handback_is_a_genuine_no_verdict(self):
+        self._write_transcript([self._bash_entry('ls')])
+        ctx = self._parse()
+        self.assertEqual((ctx.gate_match, ctx.gate_reason), ('', ''))
+        self.assertFalse(ctx.transcript_unreadable)
+
+    def test_readable_handback_still_wins(self):
+        self._write_transcript(self._handback_entries('ok\n\nStatus: DONE'))
+        ctx = self._parse()
+        self.assertEqual((ctx.gate_match, ctx.gate_reason), ('DONE', ''))
+        self.assertNotIn('CAST_GATE_REASON', self._tail(ctx))
+
+    def test_exempt_agent_never_gets_a_blocked_record(self):
+        self.assertEqual(self._parse(agent_type='Explore').gate_match, '')
+
+    def test_non_empty_payload_text_does_not_consult_the_transcript(self):
+        ctx = self._parse(last_assistant_message='ran out of turns mid')
+        self.assertEqual((ctx.gate_match, ctx.gate_reason), ('', ''))
+
 
 if __name__ == '__main__':
     unittest.main()

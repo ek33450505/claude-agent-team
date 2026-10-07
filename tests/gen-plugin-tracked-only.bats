@@ -56,6 +56,7 @@ build_fixture_repo() {
 
   cp "$GEN_PLUGIN_SRC" "${repo}/scripts/gen-plugin.sh"
   cp "$GUARD_LIB_SRC" "${repo}/scripts/cast-guard-lib.sh"
+  cp "${REPO_DIR}/scripts/cast-hook-lib.sh" "${repo}/scripts/cast-hook-lib.sh"
 
   {
     printf 'skills/neon\n'
@@ -122,6 +123,7 @@ teardown() {
   printf 'third-party\n' >"${norepo}/skills/neon/SKILL.md"
   cp "$GEN_PLUGIN_SRC" "${norepo}/scripts/gen-plugin.sh"
   cp "$GUARD_LIB_SRC" "${norepo}/scripts/cast-guard-lib.sh"
+  cp "${REPO_DIR}/scripts/cast-hook-lib.sh" "${norepo}/scripts/cast-hook-lib.sh"
   # Deliberately no `git init` — norepo is not inside any work tree.
 
   run env PATH="$(_safe_test_path)" bash "${norepo}/scripts/gen-plugin.sh" "${BATS_TEST_TMPDIR}/norepo-out"
@@ -135,6 +137,7 @@ teardown() {
   printf 'no SKILL.md here\n' >"${repo}/skills/broken-skill/other.md"
   cp "$GEN_PLUGIN_SRC" "${repo}/scripts/gen-plugin.sh"
   cp "$GUARD_LIB_SRC" "${repo}/scripts/cast-guard-lib.sh"
+  cp "${REPO_DIR}/scripts/cast-hook-lib.sh" "${repo}/scripts/cast-hook-lib.sh"
   (
     cd "$repo" || exit 1
     git init -q

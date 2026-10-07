@@ -8,7 +8,34 @@
 # without appearing in the net diff; full-history coverage would need `git log --patch`.
 set -euo pipefail
 
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+# Hardened git (cast_git_safe): hook-run git must not honour repo-local exec config
+# (diff.external ran for `git diff HEAD~1 HEAD`). FAIL CLOSED if the lib is not loadable beside
+# this script — never fall back to bare git. The -r guard matters: on bash 3.2 a bare
+# `source <missing-file>` aborts under set -e.
+_CAST_LIB="$(dirname "$0")/cast-hook-lib.sh"
+# shellcheck source=cast-hook-lib.sh
+if [[ -r "$_CAST_LIB" ]] && source "$_CAST_LIB"; then
+  :
+else
+  echo "[pre-push-ci-check] FATAL — cast-hook-lib.sh not loadable beside $0 (fail closed)" >&2
+  exit 1
+fi
+
+# CAST_REPO_ROOT wins (installed-copy mode: the hook passes the repo as data); else the
+# cwd's repo. GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE are not inherited — a git hook exports the
+# committing worktree's gitdir (S3c-15) — and every git call below goes through cast_git_safe
+# against REPO_ROOT. This script reads pushed commits (refs from stdin), never the index.
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+  if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+    echo "[pre-push-ci-check] FATAL — CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+    exit 1
+  fi
+  REPO_ROOT="$CAST_REPO_ROOT"
+  cd "$REPO_ROOT"
+else
+  REPO_ROOT=$(cast_git_safe "$PWD" rev-parse --show-toplevel 2>/dev/null || pwd)
+fi
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 PASS=true
 
 echo "[pre-push-ci-check] Scanning $REPO_ROOT"
@@ -145,8 +172,8 @@ while IFS=' ' read -r _local_ref local_sha _remote_ref remote_sha || [[ -n "${lo
     # the merge-base with the default branch.
     base=""
     for _ref in origin/main origin/master main master; do
-      git rev-parse --verify --quiet "$_ref" >/dev/null 2>&1 || continue
-      base="$(git merge-base "$_ref" "$local_sha" 2>/dev/null || true)"
+      cast_git_safe "$REPO_ROOT" rev-parse --verify --quiet "$_ref" >/dev/null 2>&1 || continue
+      base="$(cast_git_safe "$REPO_ROOT" merge-base "$_ref" "$local_sha" 2>/dev/null || true)"
       [[ -n "$base" ]] && break
     done
     # Genuinely new repo with no upstream default branch → fall back to full history.
@@ -159,13 +186,13 @@ while IFS=' ' read -r _local_ref local_sha _remote_ref remote_sha || [[ -n "${lo
   # _pii_scan loop hang at 99% CPU for 18+ min — same hang class as the §3.8.D/E
   # empty-tree note above. plugin/ is excluded here; _is_allowed() retains its
   # plugin/* skip as a defensive belt-and-suspenders guard.
-  PUSH_DIFF+=$(git diff "$base" "$local_sha" -- . ':(exclude)plugin/' 2>/dev/null || true)
+  PUSH_DIFF+=$(cast_git_safe "$REPO_ROOT" diff "$base" "$local_sha" -- . ':(exclude)plugin/' 2>/dev/null || true)
   PUSH_DIFF+=$'\n'
 done
 
 # Standalone fallback (called directly, not from a hook with stdin refs).
 if [[ -z "${PUSH_DIFF// }" ]]; then
-  PUSH_DIFF=$(git diff HEAD~1 HEAD -- . ':(exclude)plugin/' 2>/dev/null || git diff "$EMPTY_TREE" HEAD -- . ':(exclude)plugin/' 2>/dev/null || true)
+  PUSH_DIFF=$(cast_git_safe "$REPO_ROOT" diff HEAD~1 HEAD -- . ':(exclude)plugin/' 2>/dev/null || cast_git_safe "$REPO_ROOT" diff "$EMPTY_TREE" HEAD -- . ':(exclude)plugin/' 2>/dev/null || true)
 fi
 
 # ---- Helpers ----------------------------------------------------------------

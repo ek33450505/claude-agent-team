@@ -971,9 +971,97 @@ diff-index --quiet HEAD
 worktree list
 worktree list --porcelain
 worktree -q list
+merge-base HEAD HEAD
 CALLS
   # CONTROL: the same check does fire on a refused subcommand.
   _hl_run_safe "$repo" gc
+  [ "$status" -eq 2 ]
+}
+
+# --- CAST_GIT_SAFE_INDEX_FILE: narrow opt-in to the index a hook is committing (U6b-2a) ---
+# GIT_INDEX_FILE itself stays stripped; only a regular non-symlink file named index | index.lock |
+# next-index-*.lock directly inside the git dir / common dir is honoured; anything else is rc 2.
+
+# _hl_tmp_index <repo> <name> — a copy of the repo's index named <name> inside the git dir, with
+# extra.txt staged ONLY in the copy (the real index never lists it).
+_hl_tmp_index() {
+  cp "$1/.git/index" "$1/.git/$2"
+  printf 'x\n' > "$1/extra.txt"
+  env GIT_INDEX_FILE="$1/.git/$2" git -C "$1" add extra.txt
+}
+
+@test "cast_git_safe: CAST_GIT_SAFE_INDEX_FILE inside the git dir is honoured (reads the temporary index)" {
+  local repo="$BATS_TEST_TMPDIR/idx1" n
+  _hl_repo "$repo"
+  for n in next-index-4242.lock index.lock; do
+    _hl_tmp_index "$repo" "$n"
+    export CAST_GIT_SAFE_INDEX_FILE="$repo/.git/$n"
+    _hl_run_safe "$repo" ls-files
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"extra.txt"* ]] || { echo "$n: $output" >&2; return 1; }
+    env GIT_INDEX_FILE="$repo/.git/$n" git -C "$repo" rm -q --cached extra.txt
+  done
+  # CONTROL: without the opt-in the real index is read and does not list extra.txt.
+  unset CAST_GIT_SAFE_INDEX_FILE
+  _hl_run_safe "$repo" ls-files
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"extra.txt"* ]]
+}
+
+@test "cast_git_safe: a RELATIVE CAST_GIT_SAFE_INDEX_FILE is resolved against <repo-dir>" {
+  local repo="$BATS_TEST_TMPDIR/idx2"
+  _hl_repo "$repo"
+  _hl_tmp_index "$repo" next-index-9.lock
+  export CAST_GIT_SAFE_INDEX_FILE=".git/next-index-9.lock"
+  _hl_run_safe "$repo" ls-files
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"extra.txt"* ]]
+}
+
+@test "cast_git_safe: an ambient GIT_INDEX_FILE alone is still stripped (no opt-in, no effect)" {
+  local repo="$BATS_TEST_TMPDIR/idx3"
+  _hl_repo "$repo"
+  _hl_tmp_index "$repo" next-index-5.lock
+  export GIT_INDEX_FILE="$repo/.git/next-index-5.lock"
+  _hl_run_safe "$repo" ls-files
+  unset GIT_INDEX_FILE
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"extra.txt"* ]]
+}
+
+@test "cast_git_safe: CAST_GIT_SAFE_INDEX_FILE outside the git dir is refused (rc 2), git not run" {
+  local repo="$BATS_TEST_TMPDIR/idx4"
+  _hl_repo "$repo"
+  _hl_tmp_index "$repo" next-index-1.lock
+  mkdir -p "$BATS_TEST_TMPDIR/outside"
+  cp "$repo/.git/next-index-1.lock" "$BATS_TEST_TMPDIR/outside/index"
+  export CAST_GIT_SAFE_INDEX_FILE="$BATS_TEST_TMPDIR/outside/index"
+  _hl_run_safe "$repo" ls-files
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not directly inside"* ]]
+  [[ "$output" != *"extra.txt"* ]]
+  # A valid name one level DEEPER than the git dir is not "directly inside" it.
+  mkdir -p "$repo/.git/sub"
+  cp "$repo/.git/next-index-1.lock" "$repo/.git/sub/index"
+  export CAST_GIT_SAFE_INDEX_FILE="$repo/.git/sub/index"
+  _hl_run_safe "$repo" ls-files
+  [ "$status" -eq 2 ]
+}
+
+@test "cast_git_safe: CAST_GIT_SAFE_INDEX_FILE that is a symlink, a wrong name, or missing is refused (rc 2)" {
+  local repo="$BATS_TEST_TMPDIR/idx5"
+  _hl_repo "$repo"
+  ln -s "$repo/.git/index" "$repo/.git/next-index-3.lock"
+  export CAST_GIT_SAFE_INDEX_FILE="$repo/.git/next-index-3.lock"
+  _hl_run_safe "$repo" ls-files
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"regular non-symlink"* ]]
+  export CAST_GIT_SAFE_INDEX_FILE="$repo/.git/HEAD"
+  _hl_run_safe "$repo" ls-files
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"name is not index"* ]]
+  export CAST_GIT_SAFE_INDEX_FILE="$repo/.git/next-index-nope.lock"
+  _hl_run_safe "$repo" ls-files
   [ "$status" -eq 2 ]
 }
 
@@ -1284,4 +1372,126 @@ _hl_reftable_repo() {
   git -C "$repo" branch other2
   _hl_run_safe "$repo-wt" branch -D -- other2
   [ "$status" -eq 0 ]
+}
+
+# --- STAGING VERBS: hash-object / update-index (U6b-2b M1) -------------------------------------
+# pre-commit stages a regenerated file via these two (never `git add`, which runs clean filters).
+# Raw `git -c core.hooksPath=/dev/null` does NOT gate config-based hooks, so both go through
+# cast_git_safe, which blanks hook.<name>.enabled and filter drivers and constrains the arguments.
+
+@test "cast_git_safe: hash-object -w stores the RAW bytes and never runs a clean filter (control: plain git does)" {
+  local repo="$BATS_TEST_TMPDIR/ho1" marker="$BATS_TEST_TMPDIR/ho1.marker" want got
+  _hl_repo "$repo"
+  _hl_canary "$BATS_TEST_TMPDIR/ho1-clean.sh" "$marker" cat
+  printf '* filter=pwn\n' > "$repo/.gitattributes"
+  git -C "$repo" config filter.pwn.clean "$BATS_TEST_TMPDIR/ho1-clean.sh"
+  printf 'payload\n' > "$repo/out.txt"
+  # CONTROL: plain hash-object applies the clean filter.
+  git -C "$repo" hash-object -w -- out.txt > /dev/null
+  [ -e "$marker" ]
+  rm -f "$marker"
+  _hl_run_safe "$repo" hash-object -w -- out.txt
+  [ "$status" -eq 0 ]
+  [ ! -e "$marker" ]
+  want="$(printf 'payload\n' | git -C "$repo" hash-object --stdin)"
+  [ "$output" = "$want" ]
+  got="$(git -C "$repo" cat-file blob "$output")"
+  [ "$got" = "payload" ]
+}
+
+@test "cast_git_safe: hash-object refuses --path, --stdin, --stdin-paths, --literally, -t and unknown flags (rc 2, git not run)" {
+  local repo="$BATS_TEST_TMPDIR/ho2" a
+  _hl_repo "$repo"
+  for a in --path=x --stdin --stdin-paths --literally -t --bogus; do
+    _hl_run_safe "$repo" hash-object -w "$a" -- tracked.txt
+    [ "$status" -eq 2 ] || { echo "$a: status=$status $output" >&2; return 1; }
+    [[ "$output" == *"hash-object accepts only"* ]]
+  done
+  # A path AFTER -- may start with '-' but never contain a newline.
+  _hl_run_safe "$repo" hash-object -w -- $'a\nb'
+  [ "$status" -eq 2 ]
+}
+
+@test "cast_git_safe: update-index --add --cacheinfo stages a blob; the bare --cacheinfo form works too" {
+  local repo="$BATS_TEST_TMPDIR/ui1" sha
+  _hl_repo "$repo"
+  printf 'new\n' > "$repo/new.txt"
+  _hl_run_safe "$repo" hash-object -w -- new.txt
+  sha="$output"
+  _hl_run_safe "$repo" update-index --add --cacheinfo "100644,${sha},new.txt"
+  [ "$status" -eq 0 ]
+  [[ "$(git -C "$repo" ls-files -s new.txt)" == "100644 ${sha} 0"*new.txt ]]
+  # bare form updates an already-tracked path
+  printf 'two\n' > "$repo/tracked.txt"
+  _hl_run_safe "$repo" hash-object -w -- tracked.txt
+  sha="$output"
+  _hl_run_safe "$repo" update-index --cacheinfo "100755,${sha},tracked.txt"
+  [ "$status" -eq 0 ]
+  [[ "$(git -C "$repo" ls-files -s tracked.txt)" == "100755 ${sha} 0"*tracked.txt ]]
+}
+
+@test "cast_git_safe: update-index refuses every form but [--add] --cacheinfo <mode>,<sha>,<path> (rc 2, index untouched)" {
+  local repo="$BATS_TEST_TMPDIR/ui2" good before
+  _hl_repo "$repo"
+  good="$(git -C "$repo" rev-parse HEAD:tracked.txt)"
+  before="$(git -C "$repo" ls-files -s)"
+  local bad
+  for bad in \
+    "--refresh" "--really-refresh" "--assume-unchanged tracked.txt" "--index-info" "--stdin" "-z" \
+    "--cacheinfo" "--add" "--add tracked.txt" "--cacheinfo 100644,${good}" "--cacheinfo 100644,${good}," \
+    "--cacheinfo 120000,${good},tracked.txt" "--cacheinfo 100644,nothex!,tracked.txt" \
+    "--cacheinfo 100644,abc123,tracked.txt" "--cacheinfo 100644,${good}x,tracked.txt" \
+    "--cacheinfo ${good},tracked.txt" "--cacheinfo 100644,${good},tracked.txt extra" \
+    "--add --add --cacheinfo 100644,${good},tracked.txt" "--force-remove tracked.txt"; do
+    # shellcheck disable=SC2086
+    _hl_run_safe "$repo" update-index $bad
+    [ "$status" -eq 2 ] || { echo "[$bad] status=$status $output" >&2; return 1; }
+    [[ "$output" == *"update-index accepts only"* ]]
+  done
+  [ "$(git -C "$repo" ls-files -s)" = "$before" ]
+  # a newline inside the path is refused too
+  _hl_run_safe "$repo" update-index --cacheinfo "100644,${good},a"$'\n'"b"
+  [ "$status" -eq 2 ]
+}
+
+# The M1 probe: a config-based hook on post-index-change fires for plain git (and for
+# `-c core.hooksPath=/dev/null`) but not through cast_git_safe.
+@test "cast_git_safe: hook.<name>.event=post-index-change does not fire on update-index (controls fire)" {
+  local repo="$BATS_TEST_TMPDIR/ui3" m_raw="$BATS_TEST_TMPDIR/ui3.raw" m_hp="$BATS_TEST_TMPDIR/ui3.hp" m_safe="$BATS_TEST_TMPDIR/ui3.safe" sha
+  _hl_repo "$repo"
+  sha="$(git -C "$repo" rev-parse HEAD:tracked.txt)"
+  # One hook per control so each marker is attributable.
+  _hl_canary "$BATS_TEST_TMPDIR/ui3-canary.sh" "$m_raw" cat
+  git -C "$repo" config hook.pwn.event post-index-change
+  git -C "$repo" config hook.pwn.command "$BATS_TEST_TMPDIR/ui3-canary.sh"
+  # CONTROL 1: plain git fires it.
+  git -C "$repo" update-index --add --cacheinfo "100644,${sha},c1.txt"
+  if [ ! -e "$m_raw" ]; then
+    skip "config-based hooks need git >= 2.54"
+  fi
+  # CONTROL 2: -c core.hooksPath=/dev/null (what the old _cast_stage_file used) does NOT stop it.
+  _hl_canary "$BATS_TEST_TMPDIR/ui3-canary.sh" "$m_hp" cat
+  git -C "$repo" -c core.fsmonitor=false -c core.hooksPath=/dev/null update-index --add --cacheinfo "100644,${sha},c2.txt"
+  [ -e "$m_hp" ]
+  # SAFE: cast_git_safe.
+  _hl_canary "$BATS_TEST_TMPDIR/ui3-canary.sh" "$m_safe" cat
+  _hl_run_safe "$repo" update-index --add --cacheinfo "100644,${sha},c3.txt"
+  [ "$status" -eq 0 ]
+  [ ! -e "$m_safe" ]
+  [[ "$(git -C "$repo" ls-files)" == *c3.txt* ]]
+}
+
+@test "cast_git_safe: update-index and hash-object honour CAST_GIT_SAFE_INDEX_FILE (stage into the temporary index only)" {
+  local repo="$BATS_TEST_TMPDIR/ui4" sha
+  _hl_repo "$repo"
+  cp "$repo/.git/index" "$repo/.git/next-index-77.lock"
+  printf 'staged\n' > "$repo/staged.txt"
+  export CAST_GIT_SAFE_INDEX_FILE="$repo/.git/next-index-77.lock"
+  _hl_run_safe "$repo" hash-object -w -- staged.txt
+  sha="$output"
+  _hl_run_safe "$repo" update-index --add --cacheinfo "100644,${sha},staged.txt"
+  [ "$status" -eq 0 ]
+  unset CAST_GIT_SAFE_INDEX_FILE
+  [[ "$(env GIT_INDEX_FILE="$repo/.git/next-index-77.lock" git -C "$repo" ls-files)" == *staged.txt* ]]
+  [[ "$(git -C "$repo" ls-files)" != *staged.txt* ]]
 }

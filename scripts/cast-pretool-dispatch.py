@@ -117,6 +117,21 @@ _UNKNOWN_SESSION = "unknown"
 _PAYLOAD_SESSION_ID = None
 
 
+def _payload_session_id(data):
+    """The payload's session_id for the RECORD-ONLY writers (egress record, dispatch_decisions).
+
+    A non-str value (int/list/dict) or an empty one is MISSING: fall back to
+    CLAUDE_SESSION_ID, then "unknown". Before this, a truthy non-str flowed on as-is: a
+    list/dict made the dispatch_decisions INSERT raise (row silently dropped) and was
+    handed to the egress sentinel as a non-str. Both writers stay fail-open (record-only,
+    never blocking); the value just has to be a str so the record still lands.
+    """
+    sid = data.get("session_id")
+    if isinstance(sid, str) and sid:
+        return sid
+    return os.environ.get("CLAUDE_SESSION_ID", "unknown")
+
+
 def _dedupe_session_id(*candidates):
     """First candidate that is a usable dedupe key, else None. The payload
     session_id is passed before the CLAUDE_SESSION_ID env fallback."""
@@ -274,7 +289,7 @@ def _run_egress(sentinel, data):
         tool_input = data.get("tool_input", {}) or {}
         if not isinstance(tool_input, dict):
             tool_input = {}
-        session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
+        session_id = _payload_session_id(data)
         verdict = sentinel.evaluate(tool_name, tool_input, session_id)
         if verdict is not None:
             return ("advisory", verdict)
@@ -1027,7 +1042,7 @@ def _record_dispatch(data):
             else:
                 prompt = _redacted
         model = ti.get("model")  # usually absent in tool_input → NULL
-        session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "unknown")
+        session_id = _payload_session_id(data)
         db = os.path.expanduser(os.environ.get("CAST_DB_PATH", "~/.claude/cast.db"))
         if not os.path.isfile(db):
             return

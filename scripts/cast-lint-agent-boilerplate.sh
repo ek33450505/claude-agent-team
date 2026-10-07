@@ -14,7 +14,7 @@
 #
 # Override dirs via environment:
 #   CAST_AGENTS_DIR — directory of agent definitions (default: <repo>/agents/core)
-#   CAST_REPO_ROOT  — repo root (default: git rev-parse --show-toplevel)
+#   CAST_REPO_ROOT  — repo root; absolute path to an existing dir, else exit 1 (default: git rev-parse --show-toplevel)
 #
 # Exit codes:
 #   0 — no verbatim skill lines found in agent definitions
@@ -54,11 +54,22 @@ SENTINELS=(
 
 # ---------------------------------------------------------------------------
 
+# CAST_REPO_ROOT wins and must be an absolute path to an existing directory (set-but-invalid
+# fails closed); else the cwd's repo. GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE are not inherited —
+# a git hook exports the committing worktree's gitdir (S3c-15).
 get_repo_root() {
-  git rev-parse --show-toplevel 2>/dev/null || pwd
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git rev-parse --show-toplevel 2>/dev/null || pwd
 }
 
-REPO_ROOT="${CAST_REPO_ROOT:-$(get_repo_root)}"
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+  if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+    echo "ERROR [lint-agent-boilerplate]: CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+    exit 1
+  fi
+  REPO_ROOT="$CAST_REPO_ROOT"
+else
+  REPO_ROOT="$(get_repo_root)"
+fi
 AGENTS_DIR="${CAST_AGENTS_DIR:-${REPO_ROOT}/agents/core}"
 
 if [[ ! -d "$AGENTS_DIR" ]]; then
