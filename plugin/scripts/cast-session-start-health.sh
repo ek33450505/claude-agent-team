@@ -92,6 +92,7 @@ _FIXED_PHRASE = {
 }
 _PATH_PHRASE = {"missing": "is missing", "changed": "changed since install",
                 "pyc": "compiled cache does not match its source",
+                "pyc-stale": "has a stale bytecode cache (python would not load it) - not expected after install; re-run bash install.sh",
                 "mode": "has different permissions than installed (git skips a hook without its exec bit)"}
 _UNEXPECTED_PARENTS = ("githooks", "scripts", "scripts/migrations", "scripts/__pycache__",
                        "scripts/migrations/__pycache__")

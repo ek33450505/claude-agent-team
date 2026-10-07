@@ -33,7 +33,10 @@ Checks (every failure is a problem; nothing is skipped silently):
   * scripts/, scripts/migrations/, config/ and githooks/ are real directories (a symlinked dir would
     redirect every path under it past the O_NOFOLLOW file checks); .DS_Store counts only as a regular file
   * every __pycache__ .pyc of a manifest script equals compile(its source): the marshalled code
-    object is compared to a fresh compile (co_filename is not part of code equality). A .pyc made by
+    object is compared to a fresh compile (co_filename is not part of code equality). Only a cache
+    python would LOAD is compared: one whose header (source mtime+size, or source hash) does not match
+    the CURRENT source is STALE - python ignores and rewrites it, so it is not an alarm (an install
+    leaves such caches behind, esp. under the Apple ~/Library/Caches prefix). A .pyc made by
     another installed interpreter (hooks run both /usr/bin/python3 and Homebrew python) is verified by
     spawning that interpreter on this very file (--pyc-verify); a .pyc NO interpreter can verify
     (unknown magic, interpreter gone) is an alarm - re-running install.sh purges __pycache__.
@@ -58,6 +61,14 @@ current time in seconds), so neither a tight budget nor a disabled snapshot (sym
 can starve the same last-sorted cache run after run; --max-verify K caps new verifications per
 interpreter per run (a deterministic stand-in for the time budget, used by tests). The JSON reports
 caches.verified (compiled this run) vs caches.skipped (vouched by the snapshot).
+Stale and hash-based caches: python IGNORES a timestamp-based cache whose header (source mtime/size)
+does not match the current source and rewrites it - that is "stale" (kind pyc-stale, its own alarm:
+install.sh purges every cache after deploying -- `--purge-caches --home H`, which removes exactly the
+caches _collect_pycs computes, default __pycache__ and each interpreter's pycache_prefix, by unlink only,
+never through a symlink -- so none is expected afterwards, and a planted stale-looking cache could be made
+loadable by a later source-mtime flip). Only TIMESTAMP caches can be stale: a hash-based cache that fails
+its hash (python loads it under check_hash_based_pycs=never, settable from a user-site hook) or has
+reserved flag bits is never written by python and alarms as a mismatch.
 A cache path that exists but is not a regular file (symlink - even dangling -, dir, FIFO) at a spot
 python would load from alarms: python follows a symlink there.
 Mismatches and unverifiable caches alarm every run until fixed (never snapshotted). `cast doctor` runs
@@ -408,7 +419,7 @@ def _snapshot_save(claude, entries):
         os.close(dfd)
 
 
-def _collect_pycs(claude, entries, prefix=""):
+def _collect_pycs(claude, entries, prefix="", purge=False):
     """[(pyc path, source rel, optimize level)] a python could LOAD for a manifest script: every
     well-named .pyc in the default __pycache__ dirs, plus - when the interpreter runs with a
     sys.pycache_prefix (macOS system python keeps its caches under ~/Library/Caches) - the cache
@@ -429,8 +440,11 @@ def _collect_pycs(claude, entries, prefix=""):
                 continue
             path = os.path.join(pc, name)
             try:
-                if not stat.S_ISREG(os.lstat(path).st_mode):
+                # verification only judges regular files (_scan_pycache alarms on the rest); a purge
+                # must also remove a symlink/FIFO planted under a cache name
+                if not purge and not stat.S_ISREG(os.lstat(path).st_mode):
                     continue
+                os.lstat(path)
             except OSError:
                 continue
             out.append((path, rel_dir + "/" + m.group(1) + ".py", int(m.group(2)[-1]) if m.group(2) else -1))
@@ -451,9 +465,33 @@ def _collect_pycs(claude, entries, prefix=""):
     return out
 
 
+def _pyc_header_current(data, src, src_mtime):
+    """True when CPython's SourceLoader would ACCEPT this cache for <src> (so it would execute it); False
+    when python would reject it and silently recompile (importlib._bootstrap_external._classify_pyc +
+    _validate_*_pyc). Same rules: reserved flag bits -> rejected; hash-based + check_source -> the
+    8-byte source_hash must match; hash-based unchecked -> accepted unseen (so still verified); else
+    the source mtime (low 32 bits) and size (low 32 bits) must match."""
+    import importlib.util
+    flags = int.from_bytes(data[4:8], "little")
+    if flags & ~0b11:
+        return False
+    if flags & 1:
+        return (not flags & 2) or data[8:16] == importlib.util.source_hash(src)
+    return (int.from_bytes(data[8:12], "little") == (src_mtime & 0xFFFFFFFF)
+            and int.from_bytes(data[12:16], "little") == (len(src) & 0xFFFFFFFF))
+
+
+def _pyc_is_timestamp_based(data):
+    """True for a normal timestamp-based cache (the only kind python itself writes); False for a
+    hash-based cache or one with reserved flag bits - nothing legitimate produces those."""
+    return int.from_bytes(data[4:8], "little") == 0
+
+
 def _verify_one(claude, pyc_path, src_rel, optimize, snap=None, hold=False):
     """-> (verdict, snapshot entry or None, served-from-snapshot). verdict: True = cache equals compile(source); False = does
-    not (or unreadable); None = other-magic cache this interpreter cannot judge; "pending" = out of
+    not (or unreadable); None = other-magic cache this interpreter cannot judge; "stale" = a
+    TIMESTAMP cache whose header does not match the CURRENT source, so python ignores it and rewrites it
+    (reported by the caller as its own alarm: install purges every cache, so none is expected after it); "pending" = out of
     time or compile quota (<hold>: the caller already did new work this run, so every run makes
     progress). With <snap>, a cache whose stat tuple (size, mtime_ns, ctime_ns, inode) and source
     sha256 equal a recorded OK verdict is True without compiling (ctime/inode cannot be reset by an
@@ -476,6 +514,13 @@ def _verify_one(claude, pyc_path, src_rel, optimize, snap=None, hold=False):
             return True, key, True
         if data[:4] != importlib.util.MAGIC_NUMBER:
             return None, None, False
+        if not _pyc_header_current(data, src, int(os.lstat(os.path.join(claude, src_rel)).st_mtime)):
+            # Only a TIMESTAMP cache can be stale (an old source's leftover). A hash-based cache that
+            # fails its hash, or one with reserved flag bits, is never written by python: python may still
+            # load it (check_hash_based_pycs can be set to "never" from a user-site hook) -> ALARM.
+            if _pyc_is_timestamp_based(data):
+                return "stale", None, False
+            return False, None, False
         if hold:
             return "pending", None, False
         want = compile(src, os.path.join(claude, src_rel), "exec", dont_inherit=True, optimize=optimize)
@@ -484,6 +529,19 @@ def _verify_one(claude, pyc_path, src_rel, optimize, snap=None, hold=False):
         return False, None, False
     except Exception:
         return False, None, False
+
+
+def _probe_prefix(exe, claude, seconds):
+    """sys.pycache_prefix of interpreter <exe> as hooks see it ('' when none). `-S`: skips `site`, so a
+    user-site usercustomize cannot print into or steer the probe; cwd=/ and no PYTHON* env keep it inert;
+    HOME is the checked home (the system python's prefix follows $HOME)."""
+    env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "HOME": os.path.dirname(claude)}
+    pr = subprocess.run([exe, "-S", "-c", "import sys; print(sys.pycache_prefix or '')"], cwd="/", env=env,
+                        capture_output=True, timeout=min(3.0, max(0.5, seconds)), stdin=subprocess.DEVNULL)
+    prefix = pr.stdout.decode("utf-8", "replace").strip() if pr.returncode == 0 else ""
+    if not prefix.startswith("/") or "\n" in prefix or len(prefix) > 1000:
+        return ""
+    return prefix
 
 
 def _run_verifier(exe, claude, incremental, seconds, max_verify, offset):
@@ -495,11 +553,7 @@ def _run_verifier(exe, claude, incremental, seconds, max_verify, offset):
     cwd=/ and no PYTHON* env keep it inert. (2) the isolated verifier (-I) on THIS file."""
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "HOME": os.path.dirname(claude)}  # prefix follows $HOME
     t0 = time.monotonic()
-    pr = subprocess.run([exe, "-S", "-c", "import sys; print(sys.pycache_prefix or '')"], cwd="/", env=env,
-                        capture_output=True, timeout=min(3.0, max(0.5, seconds)), stdin=subprocess.DEVNULL)
-    prefix = pr.stdout.decode("utf-8", "replace").strip() if pr.returncode == 0 else ""
-    if not prefix.startswith("/") or "\n" in prefix or len(prefix) > 1000:
-        prefix = ""
+    prefix = _probe_prefix(exe, claude, seconds)
     left = max(0.3, seconds - (time.monotonic() - t0))
     r = subprocess.run([exe, "-I", os.path.abspath(__file__), "--pyc-verify", claude, prefix,
                         "incr" if incremental else "full", "%.3f" % max(0.0, left - 0.2),
@@ -525,7 +579,7 @@ def _verify_pycs(claude, entries, bad, incremental, deadline, max_verify=None, o
     no interpreter verified, with every interpreter complete, is an alarm."""
     pool = {path: src for path, src, _o in _collect_pycs(claude, entries)}
     snap = _snapshot_load(claude) if incremental else {}
-    verified, mismatched, seen = {}, set(), set()
+    verified, mismatched, stale, stale_srcs, seen = {}, set(), set(), set(), set()
     pending, incomplete = 0, False
     for exe in [_own_exe()] + _trusted_exes(_PY_CANDIDATES):
         real = os.path.realpath(exe)
@@ -542,6 +596,8 @@ def _verify_pycs(claude, entries, bad, incremental, deadline, max_verify=None, o
                 counts["verified"] += int(res.get("compiled", 0))
                 counts["skipped"] += int(res.get("skipped", 0))
             mismatched.update(x for x in res["bad"] if isinstance(x, str))
+            stale.update(x for x in res.get("stale", []) if isinstance(x, str))
+            stale_srcs.update(x for x in res.get("stale_src", []) if isinstance(x, str))
             for ent in res["verified"]:
                 if isinstance(ent, list) and len(ent) == 6 and isinstance(ent[0], str):
                     verified[ent[0]] = ent[1:]
@@ -552,8 +608,16 @@ def _verify_pycs(claude, entries, bad, incremental, deadline, max_verify=None, o
             continue  # this interpreter could not judge; its caches stay unverified (fail closed)
     for src_rel in sorted(mismatched):
         bad("pyc", src_rel + " compiled cache does not match its source", src_rel)
+    # STALE timestamp caches: python ignores them, but install.sh purges every cache after deploying, so
+    # none is expected afterwards - a planted stale-looking cache can be made loadable by a later source
+    # mtime flip. Its own message (distinct from a forged cache); reported once per source, never on top
+    # of a mismatch for the same source.
+    for src_rel in sorted(stale_srcs - mismatched):
+        bad("pyc-stale", "bytecode cache for " + src_rel + " is stale (python would not load it) - not expected "
+            "after install; re-run bash install.sh", src_rel)
     # a cache already reported as a MISMATCH is not also "unverifiable" (one forged cache = one problem)
-    remaining = {p for p, src in pool.items() if p not in verified and src not in mismatched}
+    # nor is a STALE one (header != current source: python ignores and rewrites it, so it runs nothing)
+    remaining = {p for p, src in pool.items() if p not in verified and p not in stale and src not in mismatched}
     if incomplete or pending:
         pending = max(pending, len(remaining))
     elif remaining:
@@ -592,7 +656,7 @@ def _pyc_verify_child(claude, prefix, mode, seconds, max_verify, offset):
             ent = snap.get(it[0])
             return bool(ent) and ent[:4] == [st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino]
         items = [i for i in items if not vouched(i)] + [i for i in items if vouched(i)]  # stable
-    out = {"bad": [], "verified": [], "pending": 0, "compiled": 0, "skipped": 0}
+    out = {"bad": [], "verified": [], "stale": [], "stale_src": [], "pending": 0, "compiled": 0, "skipped": 0}
     new_work = 0
     for path, src_rel, opt in items:
         hold = incr and new_work > 0 and (time.monotonic() > deadline or (quota is not None and new_work >= quota))
@@ -609,7 +673,92 @@ def _pyc_verify_child(claude, prefix, mode, seconds, max_verify, offset):
             new_work += 1
         elif verdict == "pending":
             out["pending"] += 1
+        elif verdict == "stale":
+            out["stale"].append(path)
+            out["stale_src"].append(src_rel)
     sys.stdout.write(json.dumps(out))
+
+
+def _unlink_under(root, parts, follow_root):
+    """Unlink <root>/<parts...> without ever following a symlink BELOW <root>: every component is opened
+    with O_NOFOLLOW|O_DIRECTORY relative to its parent fd and the final entry is os.unlink'ed (so a
+    symlink is removed itself, its target untouched; a directory is refused, never rmtree'd)."""
+    fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | (0 if follow_root else getattr(os, "O_NOFOLLOW", 0)))
+    try:
+        for part in parts[:-1]:
+            nfd = os.open(part, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        os.unlink(parts[-1], dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
+def _purge_caches(home):
+    """Remove every bytecode cache python could load for the DEPLOYED scripts (scripts/*.py and
+    scripts/migrations/*.py): the default __pycache__ AND each trusted interpreter's pycache_prefix
+    location. A cache's file name carries the interpreter's tag (a.cpython-39.pyc), so each interpreter
+    computes its own paths in a child (--pyc-purge) via the same _collect_pycs that verification uses -
+    the two cannot drift. Run by install.sh right after deploying, so no cache of the previous source
+    survives (a leftover stale cache is otherwise harmless to python but can be made loadable by a later
+    source-mtime flip). -> (removed, failed)."""
+    claude = os.path.join(home, ".claude")
+    removed = failed = 0
+    seen = set()
+    for exe in [_own_exe()] + _trusted_exes(_PY_CANDIDATES):
+        real = os.path.realpath(exe)
+        if real in seen:
+            continue
+        seen.add(real)
+        try:
+            prefix = _probe_prefix(exe, claude, 3.0)
+            r = subprocess.run([exe, "-I", os.path.abspath(__file__), "--pyc-purge", claude, prefix], cwd="/",
+                               env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, capture_output=True, timeout=10.0,
+                               stdin=subprocess.DEVNULL)
+            res = json.loads(r.stdout[:4096].decode("utf-8", "replace"))
+            removed += int(res["removed"])
+            failed += int(res["failed"])
+        except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+            failed += 1
+    return removed, failed
+
+
+def _purge_child(claude, prefix):
+    """--pyc-purge <claude dir> <pycache prefix or ''>: unlink, for THIS interpreter, every cache of the
+    deployed scripts. Entries are removed with unlink only, below a fixed root, never through a symlink;
+    a path outside the computed cache locations is never touched; a directory is refused (no rmtree)."""
+    if not (os.open in os.supports_dir_fd and os.unlink in os.supports_dir_fd):
+        raise OSError("dir_fd unsupported")
+    entries = {}
+    for rel_dir in ("scripts", "scripts/migrations"):
+        d = os.path.join(claude, rel_dir)
+        if os.path.islink(d) or not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            if name.endswith(".py") and os.path.isfile(os.path.join(d, name)):
+                entries[rel_dir + "/" + name] = ""
+    roots = (os.path.join(claude, "scripts", "__pycache__"), os.path.join(claude, "scripts", "migrations", "__pycache__"))
+    removed = failed = 0
+    for path, _src, _opt in _collect_pycs(claude, entries, prefix, purge=True):
+        root, follow = None, False
+        for r in roots:
+            if path.startswith(r + os.sep):
+                root = r
+        if root is None and prefix and path.startswith(prefix.rstrip("/") + os.sep):
+            root, follow = prefix.rstrip("/"), True
+        if root is None:
+            continue  # never delete outside the computed cache locations
+        parts = [x for x in path[len(root) + 1:].split(os.sep) if x]
+        if not parts or ".." in parts:
+            continue
+        try:
+            _unlink_under(root, parts, follow)
+            removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError:
+            failed += 1
+    sys.stdout.write(json.dumps({"removed": removed, "failed": failed}))
 
 
 def check(home, incremental=False, budget=None, max_verify=None, offset=0):
@@ -740,6 +889,20 @@ def main(argv):
             return 0
         except Exception:
             return 3
+    if len(argv) == 3 and argv[0] == "--pyc-purge":
+        try:
+            _purge_child(argv[1], argv[2])
+            return 0
+        except Exception:
+            return 3
+    if len(argv) == 3 and argv[0] == "--purge-caches" and argv[1] == "--home":
+        try:
+            removed, failed = _purge_caches(argv[2])
+        except Exception as exc:
+            sys.stderr.write("purge failed (%s)\n" % type(exc).__name__)
+            return 1
+        sys.stdout.write("purged %d bytecode cache file(s)%s\n" % (removed, ", %d could not be removed" % failed if failed else ""))
+        return 1 if failed else 0
     as_json, home, incremental, budget = False, os.path.expanduser("~"), False, None
     max_verify, offset = None, int(time.time())  # rotating start offset when nothing persists
     i = 0

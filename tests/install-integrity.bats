@@ -784,6 +784,198 @@ PYEOF
   [ -L "$HOME/$SNAP_REL" ]
 }
 
+# --- Q1: a STALE cache (header != CURRENT source) is not an alarm; one python would LOAD still is ---
+# Live shape (2026-10-07): install.sh rewrote every script, but /usr/bin/python3's caches under
+# ~/Library/Caches/com.apple.python still held the OLD code with the OLD source mtime+size in their
+# header. python ignores and rewrites such a cache, so it can run nothing - the checker must not alarm.
+
+# Overwrite pyc $1 in place: header per $2, body = compile($3, "<f>"). The source file itself is untouched
+# (a changed source would trip the manifest sha256 check, which is not what these tests are about).
+#   $2 = stale-mtime | stale-size | hash-unchecked | hash-checked-bad | hash-checked-ok | stamp-ok
+rewrite_pyc() {
+  python3 -I -c '
+import importlib.util, marshal, os, struct, sys
+p, mode, code = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(os.path.join(sys.argv[4], ".claude", "scripts", "cast-git-guard.py"), "rb").read()
+b = open(p, "rb").read()
+magic, flags, w1, w2 = b[:4], struct.unpack("<I", b[4:8])[0], b[8:12], b[12:16]
+mt, sz = struct.unpack("<II", b[8:16])
+if mode == "stale-mtime":
+    hdr = magic + struct.pack("<III", 0, mt - 1000, sz)
+elif mode == "stale-size":
+    hdr = magic + struct.pack("<III", 0, mt, sz + 7)
+elif mode == "hash-unchecked":
+    hdr = magic + struct.pack("<I", 1) + b"\0" * 8
+elif mode == "hash-checked-bad":
+    hdr = magic + struct.pack("<I", 3) + b"\1" * 8
+elif mode == "hash-checked-ok":
+    hdr = magic + struct.pack("<I", 3) + importlib.util.source_hash(src)
+else:
+    hdr = b[:16]
+open(p, "wb").write(hdr + marshal.dumps(compile(code, "<f>", "exec")))
+' "$1" "$2" 'import os
+os.system("id")
+' "$HOME"
+}
+
+@test "Q1 stale TIMESTAMP cache in the default __pycache__ (old mtime or size): its own alarm, one problem, no mismatch/unverified duplicates" {
+  local pyc; pyc="$(make_pyc python3 cast-git-guard)"
+  rewrite_pyc "$pyc" stale-mtime
+  run_health
+  assert_output --partial "scripts/cast-git-guard.py has a stale bytecode cache (python would not load it)"
+  refute_output --partial "does not match its source"
+  run python3 -I "$CHECKER" --home "$HOME" --json
+  assert_failure
+  python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+assert [p["kind"] for p in d["problems"]] == ["pyc-stale"], d["problems"]
+assert "is stale (python would not load it) - not expected after install; re-run bash install.sh" in d["problems"][0]["detail"]
+' "$output"
+  pyc="$(make_pyc python3 cast-git-guard)"
+  rewrite_pyc "$pyc" stale-size
+  run python3 -I "$CHECKER" --home "$HOME" --json
+  assert_failure
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert [p["kind"] for p in d["problems"]]==["pyc-stale"], d["problems"]' "$output"
+}
+
+@test "Q1 stale cache under the Apple pycache_prefix of another interpreter (the live shape): alarm (stale, not forged)" {
+  local other pyc; apple_interp
+  pyc="$(make_pyc "$other" cast-git-guard)"
+  case "$pyc" in "$HOME/.claude/scripts/__pycache__/"*) skip "interpreter did not use its pycache prefix";; esac
+  rewrite_pyc "$pyc" stale-mtime
+  run_health
+  assert_output --partial "scripts/cast-git-guard.py has a stale bytecode cache (python would not load it)"
+  refute_output --partial "does not match its source"
+}
+
+@test "Q1 a forged cache whose header MATCHES the current source (python would load it): forged alarm, not stale" {
+  local pyc; pyc="$(make_pyc python3 cast-git-guard)"
+  rewrite_pyc "$pyc" stamp-ok
+  run_health
+  assert_output --partial "scripts/cast-git-guard.py compiled cache does not match its source"
+  refute_output --partial "stale bytecode cache"
+}
+
+@test "Q1 forged hash-based caches (unchecked, matching hash, WRONG hash) all alarm as forged - only timestamp caches can be stale" {
+  local pyc mode
+  for mode in hash-unchecked hash-checked-ok hash-checked-bad; do
+    pyc="$(make_pyc python3 cast-git-guard)"
+    rewrite_pyc "$pyc" "$mode"
+    run_health
+    assert_output --partial "scripts/cast-git-guard.py compiled cache does not match its source"
+    refute_output --partial "stale bytecode cache"
+  done
+}
+
+
+@test "Q1b one source with a stale cache from one interpreter AND a forged cache from another: ONE problem (forged), stale not double-counted" {
+  local other pyc_apple pyc_home; apple_interp
+  pyc_apple="$(make_pyc "$other" cast-git-guard)"
+  case "$pyc_apple" in "$HOME/.claude/scripts/__pycache__/"*) skip "interpreter did not use its pycache prefix";; esac
+  rewrite_pyc "$pyc_apple" stale-mtime
+  pyc_home="$(make_pyc python3 cast-git-guard)"
+  rewrite_pyc "$pyc_home" stamp-ok
+  run python3 -I "$CHECKER" --home "$HOME" --json
+  assert_failure
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert [p["kind"] for p in d["problems"]]==["pyc"], d["problems"]' "$output"
+}
+
+# --- Q1b: install purges every cache (default dir AND interpreter prefix); purge never leaves its roots ---
+
+# Where interpreter $1 would keep its cache for $2 under HOME $3 (prefix follows HOME).
+cache_path_for() {  # $1 interpreter, $2 source path, $3 home
+  HOME="$3" "$1" -c 'import importlib.util, sys; print(importlib.util.cache_from_source(sys.argv[1]))' "$2"
+}
+
+@test "Q1b install purges a planted stale Apple-prefix cache AND a stale default-dir cache" {
+  local other; apple_interp
+  local repo="$BATS_TEST_TMPDIR/repo-q1b" fresh="$BATS_TEST_TMPDIR/fresh-q1b" apple def
+  mkdir -p "$repo"; cp -R "$MASTER_REPO/." "$repo/"
+  mkdir -p "$fresh"; touch "$fresh/.cast-test-home"
+  apple="$(cache_path_for "$other" "$fresh/.claude/scripts/cast-git-guard.py" "$fresh")"
+  case "$apple" in "$fresh/.claude/scripts/__pycache__/"*) skip "interpreter did not use its pycache prefix";; esac
+  mkdir -p "$(dirname "$apple")"; echo stale > "$apple"
+  def="$fresh/.claude/scripts/__pycache__/cast-git-guard.cpython-314.pyc"
+  mkdir -p "$(dirname "$def")"; echo stale > "$def"
+  run env HOME="$fresh" bash "$repo/install.sh"
+  assert_success
+  assert_output --partial "Bytecode caches: purged"
+  [ ! -e "$apple" ]
+  [ ! -e "$def" ]
+}
+
+@test "Q1b purge mode: removes manifest-script caches in both locations and reports the count" {
+  local other; apple_interp
+  local apple; apple="$(cache_path_for "$other" "$HOME/.claude/scripts/cast-git-guard.py" "$HOME")"
+  mkdir -p "$(dirname "$apple")"; echo x > "$apple"
+  make_pyc python3 cast-git-guard > /dev/null
+  run python3 -I "$CHECKER" --purge-caches --home "$HOME"
+  assert_success
+  assert_output --regexp '^purged [1-9][0-9]* bytecode cache file\(s\)$'
+  [ ! -e "$apple" ]
+  [ -z "$(find "$HOME/.claude/scripts/__pycache__" -name 'cast-git-guard.*.pyc' 2>/dev/null)" ]
+}
+
+@test "Q1b purge mode: a SYMLINKED cache entry is unlinked and its target is untouched (default dir and prefix)" {
+  local other victim="$BATS_TEST_TMPDIR/victim-file" pyc
+  echo precious > "$victim"
+  pyc="$(make_pyc python3 cast-git-guard)"
+  rm -f "$pyc"; ln -s "$victim" "$pyc"
+  run python3 -I "$CHECKER" --purge-caches --home "$HOME"
+  assert_success
+  [ ! -L "$pyc" ]
+  [ ! -e "$pyc" ]
+  [ "$(cat "$victim")" = "precious" ]
+  apple_interp
+  local apple; apple="$(cache_path_for "$other" "$HOME/.claude/scripts/cast-git-guard.py" "$HOME")"
+  mkdir -p "$(dirname "$apple")"; ln -s "$victim" "$apple"
+  run python3 -I "$CHECKER" --purge-caches --home "$HOME"
+  assert_success
+  [ ! -L "$apple" ]
+  [ ! -e "$apple" ]
+  [ "$(cat "$victim")" = "precious" ]
+}
+
+@test "Q1b purge mode never removes anything outside the computed cache locations" {
+  local pc="$HOME/.claude/scripts/__pycache__"
+  mkdir -p "$pc"
+  echo keep > "$pc/notes.txt"                                   # not a cache name
+  echo keep > "$pc/json.cpython-314.pyc"                        # a cache of a NON-manifest module
+  echo keep > "$HOME/.claude/scripts/cast-git-guard.cpython-314.pyc"   # a pyc beside the source, not in __pycache__
+  mkdir -p "$pc/cast-git-guard.cpython-313.pyc"; echo keep > "$pc/cast-git-guard.cpython-313.pyc/inner"   # a DIRECTORY under a cache name
+  run python3 -I "$CHECKER" --purge-caches --home "$HOME"
+  [ "$status" -eq 1 ]                                            # the directory could not be removed: reported
+  assert_output --partial "could not be removed"
+  [ -f "$pc/notes.txt" ]
+  [ -f "$pc/json.cpython-314.pyc" ]
+  [ -f "$HOME/.claude/scripts/cast-git-guard.cpython-314.pyc" ]
+  [ -f "$pc/cast-git-guard.cpython-313.pyc/inner" ]               # never rmtree'd
+}
+
+@test "Q1b purge mode: a symlinked __pycache__ dir is not followed" {
+  local victim="$BATS_TEST_TMPDIR/victim-dir"; mkdir -p "$victim"
+  echo keep > "$victim/cast-git-guard.cpython-314.pyc"
+  rm -rf "$HOME/.claude/scripts/__pycache__"; ln -s "$victim" "$HOME/.claude/scripts/__pycache__"
+  run python3 -I "$CHECKER" --purge-caches --home "$HOME"
+  assert_success
+  [ "$(cat "$victim/cast-git-guard.cpython-314.pyc")" = "keep" ]
+}
+
+@test "Q1b purge mode: a symlinked path component INSIDE the prefix tree is not followed" {
+  local other apple rel first rest victim="$BATS_TEST_TMPDIR/victim-tree" prefix
+  apple_interp
+  apple="$(cache_path_for "$other" "$HOME/.claude/scripts/cast-git-guard.py" "$HOME")"
+  prefix="$(HOME="$HOME" "$other" -S -c 'import sys; print(sys.pycache_prefix)')"
+  rel="${apple#"$prefix"/}"; first="${rel%%/*}"
+  mkdir -p "$victim/$(dirname "${rel#"$first"/}")"
+  echo keep > "$victim/${rel#"$first"/}"
+  mkdir -p "$prefix"; ln -s "$victim" "$prefix/$first"
+  run python3 -I "$CHECKER" --purge-caches --home "$HOME"
+  [ "$status" -eq 1 ]                                            # refused (ELOOP), reported
+  [ "$(cat "$victim/${rel#"$first"/}")" = "keep" ]
+}
+
 # --- E1: a non-regular cache at a path python would load is an alarm ----------------------------
 
 apple_interp() {  # sets $other (an interpreter that reports a sys.pycache_prefix) or skips
@@ -908,7 +1100,9 @@ s = sys.argv[1]; py_compile.compile(s, cfile=importlib.util.cache_from_source(s)
   i="$(grep -n '^# ── Install integrity' "$HEALTH" | head -1 | cut -d: -f1)"
   s="$(grep -n '^# ── Stale memory detection' "$HEALTH" | head -1 | cut -d: -f1)"
   g="$(grep -n '^# ── Guard modules that failed to load' "$HEALTH" | head -1 | cut -d: -f1)"
-  [ -n "$i" ] && [ -n "$s" ] && [ -n "$g" ]
+  [ -n "$i" ]
+  [ -n "$s" ]
+  [ -n "$g" ]
   [ "$i" -lt "$s" ]
   [ "$i" -lt "$g" ]
 }

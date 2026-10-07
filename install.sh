@@ -461,6 +461,25 @@ if [ -d "$SCRIPT_DIR/scripts/migrations" ]; then
     done
     success "  Migrations installed"
 fi
+# Purge EVERY bytecode cache of the scripts just deployed, including each interpreter's pycache_prefix
+# location (macOS system python keeps caches under ~/Library/Caches/com.apple.python, which the
+# directory purge above never touched). Done right after deploy so no hook can compile old source in
+# between; afterwards any stale cache is unexpected and the integrity check alarms on it. The checker
+# does the work (one path computation shared with verification), run by a trusted interpreter. A failure
+# is a WARN, never an abort: the cache only costs a recompile.
+_pg_py=""
+for _pg_c in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if [ -x "$_pg_c" ]; then _pg_py="$_pg_c"; break; fi
+done
+[ -n "$_pg_py" ] || _pg_py="$(command -v python3 || true)"
+if [ -n "$_pg_py" ] && [ -f "$CLAUDE_DIR/scripts/cast-install-integrity.py" ]; then
+    if _pg_out="$("$_pg_py" -I "$CLAUDE_DIR/scripts/cast-install-integrity.py" --purge-caches --home "$HOME" 2>&1)"; then
+        info "  Bytecode caches: $_pg_out"
+    else
+        warn "  Could not purge every bytecode cache ($(_cast_clean "$_pg_out")) — the integrity check may flag a stale cache; re-run install.sh after fixing"
+    fi
+fi
+unset _pg_py _pg_c _pg_out
 # Remove scripts deleted in v4.1 (native feature adoption)
 rm -f "$CLAUDE_DIR/scripts/cast-route-install.sh"
 # Remove scripts consolidated into write-guards.sh in v7.5 Phase 4

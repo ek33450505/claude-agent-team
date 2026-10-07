@@ -16,6 +16,11 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
   `~/.claude/cast-state` (dir_fd writes, key includes ctime + inode, rotating start so no cache starves)
   and says SKIPPED loudly when it had no time; doctor ignores the snapshot. Children run from a trusted
   interpreter, never `sys.executable`; the hook reads the checker bounded and without following symlinks.
+  A cache Python would reject (a timestamp header that no longer matches the source) is told apart from
+  a forged one: `install.sh` now purges every cache of the deployed scripts after deploying, in
+  `__pycache__` and in each interpreter's `pycache_prefix` (`cast-install-integrity.py --purge-caches`;
+  unlink only, no symlink followed), so a stale cache found later alarms as `pyc-stale`. A hash-based
+  cache with a wrong hash alarms as forged (Python can be told to load it unchecked).
   The Edit tool is now denied on `~/.claude/cast-state`, the manifest and
   `~/Library/{Caches/com.apple.python,Python,LaunchAgents}`. Accepted residuals: a forged snapshot hides
   a forged cache from SessionStart (not doctor) only if `cast-state` is writable, which the Bash write

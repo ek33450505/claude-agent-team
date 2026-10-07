@@ -105,7 +105,7 @@ filesystem WRITE surface (Write/Edit tool), this protects the Bash COMMAND surfa
     named ANYWHERE inside a word blocks -- after the same normalisation words get ($HOME, `~`,
     the passwd / real home, the APFS firmlink prefix, case, `//` `/./` `..`). That covers option
     values, quoted command strings, environment values, `sed 'w$HOME/..'`, `awk '{print > ".."}'`
-    and interpreter code (`python3 -c "open('/Users/x/.claude/scripts/y','w')"`).
+    and interpreter code (`python3 -c "open('/Users/testuser/.claude/scripts/y','w')"`).
     ENVIRONMENT: command-string variables (PS4, PROMPT_COMMAND, BASH_ENV, ENV, LESSOPEN,
     LESSCLOSE, PAGER, MANPAGER, GIT_PAGER, EDITOR, VISUAL, GIT_EDITOR, GIT_SEQUENCE_EDITOR,
     GIT_EXTERNAL_DIFF, GIT_SSH[_COMMAND], GIT_ASKPASS, SSH_ASKPASS, FCEDIT, *_COMMAND, *_CMD,
@@ -1103,7 +1103,7 @@ def _pw_canon(path):
         p = '/' + p.lstrip('/')
     low = p.lower()
     if low == _FIRMLINK or low.startswith(_FIRMLINK + '/'):
-        # APFS firmlink: /System/Volumes/Data/Users/x IS /Users/x (realpath() does not see it)
+        # APFS firmlink: /System/Volumes/Data/Users/testuser IS /Users/testuser (realpath() does not see it)
         p = p[len(_FIRMLINK):] or '/'
     return p
 
