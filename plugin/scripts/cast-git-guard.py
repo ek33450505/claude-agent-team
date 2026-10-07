@@ -248,11 +248,153 @@ regex layer):
     on one line/segment cannot reach a destructive op on a different
     line/segment, so there is no line-2-hatch-unblocks-line-1-op risk from
     scanning further.
-  - Subshell / command-substitution indirection evades every BLOCK regex,
-    which all anchor on `(^|\s)git`: `(git reset --hard)`, `$(git reset
-    --hard)`, backticks, `{ git reset --hard; }`, `bash -c 'git reset
-    --hard'`. Chasing these would require a real shell parser, not regex —
-    out of scope for this module.
+  - Indirection and spelling (2026-10-06, security review; every one of these was ALLOWED). Every
+    BLOCK regex anchors on `(^|\s)git`, so a `git` that another shell runs, or that is written another
+    way, evaded them: `(git reset --hard)`, `$(git reset --hard)`, backticks, `{ git reset --hard; }`,
+    `bash -c 'git reset --hard'`, `GIT push` (APFS is case-insensitive), `$'git' push`,
+    `git${IFS}push`, `echo 'git push' | sh`. What is closed is exactly what the HOW list below
+    says; anything else is in RESIDUALS (one list, at the end of this item).
+    ADDITIVE, BY CONSTRUCTION: the real segments are evaluated first and unchanged
+    (`_executable_segments()` yields `_scannable_segments()` before anything else), and new
+    detection is only ever (a) an extra VIRTUAL segment - a code string fed through the same
+    per-segment engine - or (b) a `_Refusal`, a fail-closed BLOCK. The per-segment loop never
+    returns early on the strength of a virtual segment. Compared with main (9e19323),
+    BYTE-IDENTICAL: `_normalize_git_segment`, `_scannable_segments`, `_git_evaluate`,
+    `_join_continuations` and every BLOCK / ALLOW pattern. CHANGED: `_GIT_MENTION` (widened: it also
+    reads `$` between the letters, and is case-insensitive) and `_git_evaluate_impl` (its loop
+    iterates `_executable_segments` instead of `_scannable_segments`; the per-segment engine inside
+    it is untouched). `hit()` ORs every variant of a segment, hatch (ALLOW) patterns included, so a
+    rewrite of a REAL segment can remove a block (a `$` in a hatch VALUE was forged into a
+    well-formed hatch that way): nothing here adds a variant to a real segment.
+    HOW IT IS CLOSED (all in `_executable_segments()` / `_executed_code()` / `_Lexer` /
+    `_shell_payloads()`):
+      * ONE lexer reads every context - top level, `$(...)`, `(...)`, `<(...)`, `${...}`,
+        `((...))`, unquoted-heredoc bodies - with bash's rules (blanks are only space/tab/
+        newline, so `echo a\xa0#; P` is no comment; `${x//(/y}` has a literal paren; `$$'a\'` is
+        `$$` then a quote; `<<` in arithmetic is a shift; an unquoted heredoc body is scanned
+        like a double-quoted string, so `don't` in it is data; all pending heredocs of a line
+        are tracked). It FAILS CLOSED: input it cannot model with certainty - an unterminated
+        quote / substitution / expansion, `$[`, a quote inside arithmetic, a quote inside a
+        `${...}` that is itself double-quoted (`$'..'` aside: bash's `extquote`), a heredoc
+        delimiter it cannot quote-remove (`<<$'EOF'`, `<<"E'F"`), a heredoc whose delimiter line
+        is missing, nesting past 48 levels, a scanner crash - becomes a REFUSAL, but only when
+        `git` can be spelled in the text from the start of the earliest unresolved construct
+        (or of the command that hands words to a shell, or - when ANY `|` follows the construct -
+        of the pipeline's first stage) to the end: nothing there can run git otherwise, and what
+        was extracted before it is complete. Cost, accepted: a command with such a construct AND
+        a later git mention is refused, and so is one whose unresolved construct is followed by
+        any pipe (`echo 'git push' $[1] | grep x`): split it, simplify the quoting, or write long
+        text with the Write tool; the 31,322-command real corpus: 10 newly blocked, 0 newly allowed.
+      * PAYLOADS at ANY word of a simple command (`_shell_payloads`), so a wrapper (`find -exec`,
+        `arch`, `xargs`, `sudo`, `env`, `nohup`, a zsh `noglob` / `coproc`), a redirection (a
+        `{fd}>f` too) or an assignment in front does not hide one: the operand of `<shell> -c` (any
+        word that names a shell, options skipped - zsh's `=bash` / `=sh` / `=zsh`, ONE leading `=`, is
+        the shell's path (`_unequals`); fish's `--command` / `--command=` too), `eval`'s
+        arguments, `trap`'s action, `env -S STR`, a `<<<` herestring to a shell, and every
+        outermost `$(...)`, backticks, `(...)`, `<(...)`, `>(...)`, `$((...))` body and
+        unquoted-heredoc substitution. Followed 3 levels deep; deeper, or past a step / code-count
+        cap, REFUSES. An operand written with `$'...'` escapes (`bash -c $'git\x20push'`, `eval`
+        too) is also read as the shell reads it, in both readings of `\c\\` (bash 5; bash 3.2/zsh).
+        A hatch INSIDE such a payload is evaluated exactly like the same direct command (the
+        payload is a segment of its own, so `bash -c $'CAST_PUSH_OK=1 \x67it push'` is allowed
+        where `CAST_PUSH_OK=1 git push` is), unless main's raw pattern already blocks the OUTER
+        segment, which stays true (`bash -c 'CAST_PUSH_OK=1 git push'`); a hatch OUTSIDE
+        (`CAST_PUSH_OK=1 bash -c 'git push'`) never reaches the payload.
+      * POSITIONAL parameters: a `-c` payload that reads `$0`..`$9`, `${NN}`, `$@`, `$*`, `${@}`,
+        `${*}`, `${@:N}`, `${*:N:M}` is also evaluated with the operands after it substituted, as
+        the shell reads them (decoded: `$'\x70ush'`), three times: quoted (one word per operand),
+        raw (the operand's own words: what `eval "$1"`, `exec $1`, `$@` and `"$1"` run) and raw SPLIT
+        (a tab or newline in an operand is a blank: an unquoted `$1` / `$@` / `$*` is split at every
+        default-IFS character, newline included, where raw would leave a command separator between
+        the words) - `bash -c 'git $1' x push`, `bash -c '$1' x 'git push'`, `bash -c 'git $1' x
+        $'\npush'`, `bash -c '$1 $2' x $'git\n' push`. A `"$@"` / `"$*"` is read the unquoted way too
+        (the shell would not split it): accepted, it only blocks more.
+      * SPELLED GIT: a word whose shell reading (`_word_view`: quotes and backslashes removed,
+        `$'..'` escapes decoded, `$".."` as "..", split at an unquoted `$IFS` / `${IFS}`) has the
+        basename `git`, case-insensitively, becomes the virtual segment `git <rest of the
+        command>`: `GIT`, `/usr/bin/GIT`, `$'git'`, `$"git"`, `g''it`, `\git`, `git${IFS}push`,
+        `$'\x67it'`, `$'\147it'`, zsh's `=git`, at the command word or any later one (`command GIT
+        push`, `{ $'git' push; }`, `xargs GIT push`, `exec /usr/bin/git push`). A plain lower-case
+        `git` is skipped where main sees it as it runs (the first word of a main segment); a
+        PATH-qualified one (`/usr/bin/git`) only when, in addition, the command's raw span has no
+        `;` `|` `&` newline `$(` backtick `${` (main's raw pattern needs a space before a plain
+        `git`, so a quoted `;` or a `$(..)` in an assignment moves its segment boundary:
+        `A=$(echo 1) /usr/bin/git push`). The extractor's gate (`_git_mentioned`) also reads
+        numeric ANSI-C escapes, so `$'\x67it'` is "a git mention". Cost, accepted: a data word that
+        spells git and is followed by a guarded verb (`echo 'git' push`, `echo =git push`) blocks.
+      * PIPE TO A SHELL: a shell that reads its stdin (no `-c`; no script operand, or `-`,
+        `/dev/stdin`, `/dev/fd/0`, `/proc/self/fd/0` - the path as the OS reads it: `//dev/stdin`,
+        `/dev//stdin`, `/dev/./stdin`, `/dev/fd/00`, `/dev/stdin/` (`_is_stdin_path`); `-s`,
+        `$SHELL`, zsh's `=bash` count; `source` / `.` of those too) and stands at
+        the stage's COMMAND word (after assignments, redirections, `_STDIN_WRAPPERS` and their
+        options - a CLOSED list: `env command exec builtin eval nohup nice time sudo doas noglob
+        nocorrect stdbuf caffeinate arch timeout setsid ionice unbuffer sandbox-exec chroot taskset
+        chrt watch` - `| eval bash`, `eval source /dev/stdin <<< ..` - with the operand arity
+        `_WRAPPER_OPERANDS`) is handed the arguments of EVERY earlier stage
+        of its pipeline, each and all joined (`echo 'git push' | bash`, `| cat | sh`, `<<< 'git push'
+        | bash`, `echo git push | bash -s`), and the arguments of the commands inside a `<(...)` it
+        reads as script or stdin (`bash < <(echo 'git push')`, `source <(...)`, `bash <(...)`; one
+        level). A heredoc whose command or pipeline holds such a shell is code, also when the shell
+        is on a LATER line of a pipeline that continues over the newline (`cat <<EOF |` newline
+        body `EOF` newline `bash`).
+    HATCHES: a hatch is scoped to its own (virtual) segment and NEVER passes through a spelling.
+    `CAST_PUSH_OK=1 bash -c 'git push'` is blocked (the hatch is not inside the executed string),
+    `CAST_PUSH_OK=1 GIT push` is blocked (the virtual segment carries no assignment prefix), and a
+    hatch INSIDE a `-c` / `eval` payload is evaluated like the same direct command (see PAYLOADS):
+    NOT "no hatch is ever honoured".
+    The plain `CAST_PUSH_OK=1 git push` and `CAST_PUSH_OK=1 /usr/bin/git push` are honoured exactly
+    as on main; `CAST_COMMIT_AGENT=1 git commit -m "$(cat f)"` is unaffected (the substitution body
+    is `cat f`).
+    RESIDUALS - ONE LIST, ACCEPTED, NOT CHASED (each needs an expansion / data-flow engine, not a
+    lexer; `tests/test_cast_git_guard_spellings.py::TestReviewM5Residuals.RESIDUALS` pins a SAMPLE of
+    them - each of those is still allowed - not every form listed, so closing one is a deliberate
+    edit of this list, and of the sample where it is in it):
+      * a group or subshell piped INTO a shell (`{ echo 'git push'; } | bash`, `(echo ..) | bash`)
+        and a stdin shell INSIDE a group or subshell at the end of a pipe (`x | (bash)`, `x | { :;
+        bash; }`, `x | if true; then bash; fi`, `x | while read c; do eval "$c"; done`), `sh -c
+        'sh'`; a pipe producer that TRANSFORMS its data (`xxd -r -p | bash`, `base64 -d | sh`);
+        a stdin shell behind a wrapper that is not in `_STDIN_WRAPPERS`; `tee >(bash)`,
+        `> >(bash)`, `exec 3<<< ..; bash <&3`; `echo .. | env -S 'bash -s'`;
+      * a stdin shell whose input does not come straight from a pipe / herestring on it: `source --
+        /dev/stdin <<< ..`, a group or subshell around it (`{ source /dev/stdin; } <<< ..`, `{ bash; }
+        <<< ..`, `( bash ) <<< ..`, and `( bash ) <<EOF` with a SPELLED git in the body: a plain
+        lower-case line is main's to block), stdin through another fd (`source /dev/fd/3 3<<< ..`,
+        `/dev/fd/63`, `bash /dev/fd/3 3<&0`) and a COMPUTED or globbed path (`bash $(echo
+        /dev/stdin)`, `/dev/std?n`, `/dev/fd/$((0))`, `p=/dev/stdin; bash $p`);
+      * process substitution beyond one level of plain commands: a nested subshell body (`bash <
+        <((echo ..))`), a producer fed through a redirect (`cat < <(echo ..) | bash`, `bash < <(cat <
+        <(echo ..))`) and a heredoc inside it (`bash <(cat <<EOF` + a spelled git + `EOF` + `)`).
+        A `<(..)` that is an ARGUMENT of the producer IS read: `bash <(cat <(echo 'git push'))`;
+      * `xargs ... bash -c '{}'` fed from a pipe, `find -exec` fed by data;
+      * `git -c alias.x=push x` (main's own gap: the alias is defined inside the command), a
+        redirection inside git's own arguments (`git >/dev/null push`, `git {fd}>f push`) and a
+        quoted `;` in them (`git -c 'a;b' push`): main's segment-split gaps, inherited unchanged;
+      * command words built by a parameter, a substitution or an expansion: `x=push; git $x`,
+        `set -- push; git $1`, `eval "$(echo 'git push')"`, `$(echo git) push`, `g$(true)it`,
+        `$G push`, `g$xit`, `bash -c 'git ${1:-push}'` and `${1#}` / `${1/x/y}` / `${1:0}` /
+        `${1:0:4}` positional forms (`${N}` of any width and `$N` ARE read; zsh's `$10` is its tenth
+        parameter, bash's `${1}0`: read as bash's), `shift; git $1`, the implicit `$@` of `for a; do
+        $a; done` (`for a in "$@"` IS read), a `printf` format that builds the text (`printf
+        'g%s' it`), `\c\\` outside the `-c` / `eval` operands (read both ways only there; zsh reads
+        `\c` in `$'..'` as a literal `c`, so `zsh -c $'\c\nGIT push'` keeps its newline), brace,
+        glob and parameter-default spellings (`{git,} push`, `g{i..i}t`, `/usr/bin/g?t`,
+        `g${X:-i}t`, `bash -c "${x:-git push}"`), any word `_word_view` cannot finish without
+        running an expansion;
+      * other interpreters: `python -c`, `perl -e`, `awk`, `node -e`, `osascript -e`, `ruby -e`, a
+        script file written and run (`echo 'git push' > x.sh; bash x.sh`);
+      * aliases and functions defined in an EARLIER command (`alias g=git; g push`);
+      * zsh glob-qualifier eval (`*(e:'...':)`) and zsh's `$commands[git]`; zsh's `{fd}` with a
+        space before the redirection (`bash {fd} >/dev/null -c 'git push'`: the guard reads `{fd}` as
+        an ordinary word there, zsh as the descriptor variable);
+      * bash 3.2 and bash 5 disagree on a heredoc inside `$(...)`; bash 5.x is modelled;
+      * cap-driven false positives (a BLOCK of a command that does not run git, never an allow):
+        the size cap (a git-mentioning command of more than ~250k words / metacharacters, or more
+        than 5000 nested code strings, is REFUSED), any pipe after an unresolved construct, an
+        upper-case `Git` / `=git` ARGUMENT followed by a verb, `ssh host <<< 'git push'`, a hatched
+        plain git whose argument has a `$'..'` / `${IFS}` (judged without the hatch), a stdin shell
+        that is given BOTH a pipe and a heredoc / herestring (`echo 'git push' | bash <<EOF`: zsh
+        feeds both, bash only the body - both are read), a quoted `"$@"` over an operand with a
+        newline, a stdin path with a trailing slash (`bash /dev/stdin/`: Linux refuses it).
     NOTE (2026-08-17 follow-up): this is distinct from — and NOT fixed by —
     the token-boundary fix below. Boundary anchoring (`\b`) closes ADJACENT
     empty-output command substitution appended to a flag/token
@@ -2062,7 +2204,11 @@ _MAX_GIT_SEGMENT_LEN = 200_000
 # handed to `_normalize_git_segment` are therefore also capped CUMULATIVELY across the whole
 # command: 2 x 195 KB (~0.6 s) still passes, a 3rd is refused up front, fail closed.
 _MAX_GIT_TOKENIZE_BYTES = 400_000
-_GIT_MENTION = re.compile(r'g[\\\'"]*i[\\\'"]*t')
+# A GATE, never a verdict: necessary for `_executed_code` (and for the evaluator's normalisation
+# of a segment) to be worth running. Wider than what `_normalize_git_segment` accepts: `$` is in
+# the class because `$'g'it` / `g$'i't` spell git once the `$` of an ANSI-C / locale quote is
+# dropped; `re.I` because APFS is case-insensitive (`GIT push` runs git).
+_GIT_MENTION = re.compile(r'g[\\\'"$]*i[\\\'"$]*t', re.I)
 
 
 def _scan_work(v: str, limit: int) -> int:
@@ -2087,6 +2233,28 @@ _TOKENIZE_BUDGET_MSG = (
     "timeout is silently skipped, so the git guard refuses (fails closed) instead of "
     "attempting it. Split it into separate commands, or pass the data via a file rather "
     "than inline."
+)
+_EXEC_BUDGET_MSG = (
+    "**[CAST]** Bash command blocked: it nests far more `bash -c` / `eval` / `$(...)` code (or "
+    "has far more words) than any hand-written command, and checking all of it against the git "
+    "blocks would take unbounded time. A guard that runs past the hook timeout is silently "
+    "skipped, so the git guard refuses (fails closed) instead of attempting it. Split it into "
+    "separate commands."
+)
+_NESTING_MSG = (
+    "**[CAST]** Bash command blocked: it runs `git` from inside more than 3 levels of nested "
+    "`bash -c` / `eval` / `$(...)`, deeper than the git guard follows. A guard that cannot see "
+    "the command it is checking refuses (fails closed) instead of allowing it. Flatten the "
+    "nesting, or run the git command directly."
+)
+_LEX_UNCERTAIN_MSG = (
+    "**[CAST]** Bash command blocked: the git guard could not parse it with certainty (an "
+    "unterminated or unusually quoted string, an unclosed `$(` / `${` / `((`, a heredoc "
+    "delimiter it cannot read, or a scanner fault) and `git` is mentioned from that point on, "
+    "so it cannot tell whether a guarded git command is executed. A guard that cannot see the "
+    "command it is checking refuses (fails closed) instead of allowing it. Split it into "
+    "separate commands, simplify the quoting, or write long text with the Write tool instead "
+    "of an inline heredoc."
 )
 _SCAN_BUDGET_MSG = (
     "**[CAST]** Bash command blocked: it contains far more `git` tokens per "
@@ -2312,6 +2480,1677 @@ def _join_continuations(command: str):
     return joined_lines
 
 
+# --- executed-code extraction (2026-10-06 security fix) ----------------------------------
+# Every BLOCK regex anchors on `(^|\s)git`, so a git invocation that the SHELL executes but
+# that is not a bare word of the segment - `bash -c 'git push'`, `eval "git push"`,
+# `echo $(git push)`, `` `git push` `` - matched nothing and was ALLOWED. `_executed_code`
+# pulls those nested command strings out of a command; `_executable_segments` then feeds
+# them back through the SAME per-segment engine as extra VIRTUAL segments, so every verdict
+# rule (incl. a hatch being honoured only inside its own segment) applies to them unchanged.
+#
+# ADDITIVE ONLY: an extra segment (or a `_Refusal`) can only add a block, never remove one - the
+# real segments are always yielded first and evaluated exactly as before.
+#
+# FAILS CLOSED. The scan is only as good as its model of the shell's quoting, and a lexer that
+# disagrees with the shell about where a quote ends hides every command after that point (the
+# desync class: a `'` in an unquoted heredoc body, `#` after a non-blank, `${x//(/y}`, `$$'a\'`,
+# `$((1<<'2'))`, `<<$'EOF'`). So on any input it cannot model with certainty it raises
+# `_LexUncertain` (unterminated quote / substitution / expansion, a heredoc delimiter it cannot
+# quote-remove, a quote inside arithmetic, `$[`, nesting past `_MAX_LEX_NEST`), and
+# `_executable_segments` turns that into a `_Refusal` - EXCEPT when nothing from the start of the
+# earliest unresolved construct to the end of the text could spell a guarded git command
+# (`_GIT_MENTION`): then what was extracted before it is complete and is returned as is.
+#
+# ONE lexer (`_Lexer`) reads every context - top level, `$(...)`, `(...)`, `<(...)`, `>(...)`
+# are the same `cmd` routine, recursively - so a quoting rule cannot hold in one and not another.
+#
+# Extraction runs on the WHOLE RAW command text, not per segment: a quoted payload or a
+# substitution body can itself contain `;`, `|`, `&&` and newlines (`bash -c 'git push && echo
+# done'`), so splitting on those first would cut it open and leave `bash -c 'git push ` with an
+# unbalanced quote. RAW, not `_join_continuations`'d: a `\<newline>` is a continuation outside
+# quotes but NOT in a comment or single quotes, and joining first would merge a comment line with
+# the next one (`echo x # it's \` + newline + `b; <cmd>` hides `<cmd>` in the "comment") - the
+# lexer applies the real rule itself.
+# A word that names a shell by its de-quoted basename (lower-cased, like `git`): bash sh zsh dash
+# ksh ash csh tcsh fish mksh ksh93 bash5 ..., or by a variable that holds one (`$SHELL`,
+# "${BASH}"; matched on the RAW word). Wrappers are NOT listed: a payload is looked for at EVERY
+# word of a simple command, so `find . -exec bash -c P \;`, `arch -arm64 bash -c P` and zsh's
+# `noglob` / `repeat 1` / `coproc` precommand modifiers need no entry.
+_SHELL_BASENAME = re.compile(r'[a-z0-9_+-]*sh[0-9.]*\Z')
+_SHELL_VAR_WORD = re.compile(r'"?\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"?\Z')
+_SHELL_NAME_MAX = 32
+# `x=1`, `x+=1`, `x[0]=1`: an assignment word (`_ENV_ASSIGN`, which main uses, lacks the last two).
+_ANY_ASSIGN = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=')
+_ENV_SPLIT_SHORT = re.compile(r'-[iv0]*S(.*)\Z', re.S)      # `env -S STR`, `-SSTR`, `-iS STR`
+# `$0`..`$9`, `${0}`..`${NN}`, `$@`, `$*`, `${@}`, `${*}`, `${@:N}`, `${*:N}`, `${@:N:M}` and the quoted
+# `"$@"` / `"${@}"` ... : what a `-c` payload reads from the operands after it (`${1:-x}`, `${1#x}`
+# ... are a residual: see `_shell_payloads`).
+_ALL_OPERANDS = r'(?:[@*]|\{[@*](?::[0-9]{1,9}(?::[0-9]{1,9})?)?\})'
+_POSITIONAL = re.compile(r'"\$' + _ALL_OPERANDS + r'"|\$' + _ALL_OPERANDS + r'|\$\{[0-9]{1,9}\}|\$[0-9]')
+_SHELL_OPT_WITH_ARG = frozenset(('-o', '+o', '-O', '+O', '--rcfile', '--init-file'))
+_IFS_BLANKS = re.compile(r'[\t\n]')      # IFS whitespace besides the space: what an unquoted `$1` splits at
+_MAX_EXEC_DEPTH = 3          # nested levels of `bash -c` / `eval` / `$(...)` that are followed
+# Nested constructs the lexer follows before refusing (it recurses; a hand-written command
+# nests a handful of levels, and Python's own stack is the other limit).
+_MAX_LEX_NEST = 48
+# The scanner is linear but a Python-level loop, and every nested code string is re-evaluated
+# by the whole per-segment engine: cap both, across every nesting level, so a padded command
+# cannot spend the hook budget in them. A STEP is one scanner iteration (a run of plain text
+# up to the next metacharacter, a blank-separated word, a quote/expansion/heredoc) and costs
+# ~2-3 us; a real command has a few hundred at most - the largest of 31,322 real
+# git-mentioning commands (up to 70 KB) takes 952 steps INCLUDING its nested re-scans, and none
+# comes near either cap. RESIDUAL, accepted and fail closed: a command that mentions git AND has
+# more than the cap's worth of words/metacharacters (roughly a 1 MB script of short words, far
+# past any hand-written command) is refused rather than scanned to the end - in bounded time
+# (the worst of 12 padding shapes at 5 MB is ~0.3 s; each word of a run is charged BEFORE the
+# run is split, so a huge run is refused at once). Over a cap the command is refused, like the
+# other caps above. STEPS, not bytes: a megabyte of `x` is one step, an unquoted-heredoc body
+# costs one step per `\`, `$` or backtick, a quoted one a single regex search, and a text with
+# no git mention is never scanned (tests/test_cast_git_guard_perf.py pins those).
+_MAX_EXEC_SCAN_STEPS = 250_000
+_MAX_EXEC_CODES = 5_000
+
+_LEX_CMD_RUN = re.compile(r"""[^\\'"`$();&|<>#\n]*""")     # plain text and blanks up to a metacharacter
+_BLANKS = re.compile(r'[ \t]+')       # bash blanks are ONLY space and tab (`\r`, `\xa0`, `\x0b` ... are word chars)
+_BLANK_RUN = re.compile(r'[ \t\n]*')    # blanks and newlines: what may sit between a case pattern's `)` and the next token
+_DIGITS = re.compile(r'[0-9]+\Z')
+_LEX_DQ = re.compile(r'[\\"`$]')
+_LEX_BQ = re.compile(r'[\\`]')
+_LEX_PARAM = re.compile(r"""[\\'"`$}]""")
+_LEX_ARITH = re.compile(r"""[()\\'"`$]""")
+_LEX_HDBODY = re.compile(r'[\\`$]')
+_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+_ANSI_C = re.compile(r"'(?:\\.|[^'\\])*'", re.S)         # a `$'...'` body: `\'` does not end it
+_BQ_UNESCAPE = re.compile(r'\\([$`\\])')
+_BQ_UNESCAPE_DQ = re.compile(r'\\([$`\\"])')              # a `...` inside "..." also unescapes `\"`
+_HEREDOC_BARE = re.compile(r"""[^ \t\n;&|()<>'"\\`$]+""")
+_CASE_WORDS = frozenset(('case', 'in', 'esac'))
+# Words after which a command word may follow (so `case` / `esac` are reserved words there).
+_CMD_KEYWORDS = frozenset(('if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', 'time'))
+
+
+# bash's `$'...'` ANSI-C escapes: `\a \b \e \E \f \n \r \t \v \\ \' \" \?`, `\nnn` (1-3 octal digits),
+# `\xHH`, `\uHHHH`, `\UHHHHHHHH` (1-2 / 1-4 / 1-8 hex digits), `\cx` (control-x). Anything else
+# keeps its backslash; a NUL ends the string.
+_ANSI_ESCAPE = re.compile(r"\\(?:([abeEfnrtv\\'\"?])|([0-7]{1,3})|x([0-9A-Fa-f]{1,2})"
+                          r"|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(\\\\|.)|(.))", re.S)
+# bash 3.2 (macOS /bin/bash) and zsh take `\c` and ONE character; bash 5 takes `\c\\` (two backslashes)
+# as one. The two read the rest of `\c\\n` differently (`\n` is a newline for the first, a literal `n`
+# for the second), so a payload is read BOTH ways (`_ansi_value`).
+_ANSI_ESCAPE_LEGACY = re.compile(_ANSI_ESCAPE.pattern.replace(r'c(\\\\|.)', r'c(.)'), re.S)
+_ANSI_SIMPLE = {'a': '\a', 'b': '\b', 'e': '\x1b', 'E': '\x1b', 'f': '\f', 'n': '\n', 'r': '\r',
+                't': '\t', 'v': '\v', '\\': '\\', "'": "'", '"': '"', '?': '?'}
+# A numeric escape (`\x67`, `\147`, `\u0067`): the only kind that can spell a letter the text does
+# not contain. Looked for anywhere in a text that has a `$'`, not only inside a recognisable
+# `$'...'`: quoted around a payload (`bash -c '$'"'"'\x67it'"'"' push'`) the `$'...'` is cut up.
+_ANSI_NUMERIC = re.compile(r"\\(?:x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|0?[0-7]{1,3})")
+_ANSI_MENTION_MAX = 2000        # numeric escapes examined; past it a text that has `$'` counts as a mention
+_GIT_LETTER = re.compile(r'[gitGIT]')
+
+
+def _ansi_char(code):
+    return '�' if code > 0x10FFFF or 0xD800 <= code <= 0xDFFF else chr(code)
+
+
+def _ansi_escape(m):
+    simple, octal, hexa, u4, u8, ctl, other = m.groups()
+    if simple is not None:
+        return _ANSI_SIMPLE[simple]
+    if octal is not None:
+        return chr(int(octal, 8) & 0xFF)
+    if hexa is not None:
+        return chr(int(hexa, 16))
+    if u4 is not None:
+        return _ansi_char(int(u4, 16))
+    if u8 is not None:
+        return _ansi_char(int(u8, 16))
+    if ctl is not None:             # `\c\\` (two backslashes) is ONE control-backslash, 0x1c
+        ch = '\\' if ctl == '\\\\' else ctl
+        return '\x7f' if ch == '?' else chr(ord(ch) & 0x1F)
+    return '\\' + other
+
+
+def _ansi_c(body, legacy=False):
+    """The value of the `$'...'` string whose raw body is `body` (`legacy`: as bash 3.2 / zsh read
+    `\\c\\\\`, see `_ANSI_ESCAPE_LEGACY`)."""
+    s = (_ANSI_ESCAPE_LEGACY if legacy else _ANSI_ESCAPE).sub(_ansi_escape, body)
+    z = s.find('\0')
+    return s if z < 0 else s[:z]
+
+
+def _echo_octal(m):
+    return chr(int(m.group(1), 8) & 0xFF)
+
+
+def _git_mentioned(text, start=0):
+    """Can `text[start:]` spell a git invocation? `_GIT_MENTION`, also across a `\\<newline>`
+    continuation (`gi\\` + newline + `t`) - the lexer scans the raw text, the shell joins those -
+    and through an ANSI-C escape (`$'\\x67it'`, `$'\\147'it`): a text with a `$'` and a numeric
+    escape that decodes to any letter of `git`."""
+    if _GIT_MENTION.search(text, start):
+        return True
+    if text.find("$'", start) >= 0 or text.find('|', start) >= 0 or text.find('<(', start) >= 0:
+        # in a `$'...'`, in a pipeline (`printf 'g\\151t push' | sh`, `echo -e 'g\\0151t' | sh`: the
+        # producer reads the escapes) and in a process substitution (`bash <(printf 'g\\151t push')`)
+        seen = 0
+        for m in _ANSI_NUMERIC.finditer(text, start):
+            seen += 1
+            e = m.group()
+            if (seen > _ANSI_MENTION_MAX or _GIT_LETTER.search(_ansi_c(e)) is not None
+                    or _GIT_LETTER.search(_ansi_c(_ECHO_OCTAL.sub(_echo_octal, e))) is not None):
+                return True
+    tail = text[start:] if start else text
+    return '\\\n' in tail and _GIT_MENTION.search(tail.replace('\\\n', '')) is not None
+
+
+class _ExecOverBudget(Exception):
+    """`_executed_code` ran past its step budget."""
+
+
+class _LexUncertain(Exception):
+    """The scanner met input whose shell parse it cannot model with certainty. `pos` is the
+    offset of the construct that is unresolved (the enclosing ones are tracked by the lexer)."""
+
+    def __init__(self, pos):
+        Exception.__init__(self, pos)
+        self.pos = pos
+
+
+class _Refusal:
+    """Yielded by `_executable_segments` in place of a segment when the command cannot be
+    checked within bounds or with certainty; the evaluator turns it into a fail-closed BLOCK
+    carrying `msg`."""
+    __slots__ = ('msg',)
+
+    def __init__(self, msg):
+        self.msg = msg
+
+
+class _Virtual(str):
+    """A code string that is the virtual segment `git <the rest of the command>` of a spelled git
+    (or of a plain `git` that is not main's). It is ONE simple command with every argument quoted
+    (`shlex.join`), so there is nothing in it to scan for nested code: `_executable_segments`
+    judges its real segments and goes no deeper (a scan would find the later `git` words of the
+    command again - all of which the parent already has its own segment for)."""
+    __slots__ = ()
+
+
+class _W(str):
+    """One word of a simple command as `_Lexer` builds it: its de-quoted text (it IS a `str`),
+    plus `start`/`end`, its raw span in the scanned text, and `redir`, True for a redirection
+    OPERATOR token (`>`, `2>&`, `&>>`, `<<`, `<<<` ...). The word that follows a redirection
+    operator is that redirection's target (for `<<` it is the heredoc delimiter), not a command
+    word. `spelled` is True for a FIELD `_spell_words` cut out of a word at an unquoted `$IFS`:
+    its span is that whole word, its text one field of it."""
+    __slots__ = ('start', 'end', 'redir', 'spelled')
+
+    def __new__(cls, text, start, end, redir=False, spelled=False):
+        self = str.__new__(cls, text)
+        self.start = start
+        self.end = end
+        self.redir = redir
+        self.spelled = spelled
+        return self
+
+
+def _unequals(w):
+    """`w` without the ONE leading `=` of zsh's `=cmd` (the path of `cmd`: `=bash`, `=git`); `==cmd` is
+    no expansion, and a word that is only `=` stays one."""
+    return w[1:] if w[:1] == '=' and w[1:2] != '=' else w
+
+
+def _is_shell_word(w, text):
+    """Does the word `w` (a `_W`) name a shell? By its de-quoted basename (`_SHELL_BASENAME`,
+    case-insensitive; zsh's `=bash` too, `_unequals`) or, for a variable that holds one, by its RAW text
+    (`$SHELL`, "${BASH}")."""
+    base = _unequals(w).rsplit('/', 1)[-1]
+    if len(base) <= _SHELL_NAME_MAX and _SHELL_BASENAME.match(base.lower()) is not None:
+        return True
+    return (0 <= w.start < len(text) and text[w.start] in '$"' and w.end - w.start <= _SHELL_NAME_MAX
+            and _SHELL_VAR_WORD.match(text, w.start, w.end) is not None)
+
+
+# A script operand that IS stdin: `bash /dev/stdin`, `bash -`, `source /dev/stdin` (`_is_stdin_path`).
+_STDIN_FD_PATH = re.compile(r'/(?:dev|proc/self)/fd/0+\Z')
+
+
+def _is_stdin_path(w):
+    """Does the script operand `w` name the shell's stdin: `-`, `/dev/stdin`, `/dev/fd/0`,
+    `/proc/self/fd/0`? As the OS resolves the path: repeated slashes, `/./`, `/../`, a trailing slash
+    and leading zeros of the fd number name the same file (`//dev/stdin`, `/dev/./stdin`,
+    `/dev/fd/00`, `/dev/stdin/` - the last one no shell runs, blocked all the same). A relative path
+    is never one (`dev/stdin`, `./dev/stdin`). Linear in `len(w)`."""
+    if w == '-':
+        return True
+    if w[:1] != '/':
+        return False
+    parts = []
+    for c in w.split('/'):
+        if c == '..':
+            if parts:
+                parts.pop()
+        elif c and c != '.':
+            parts.append(c)
+    p = '/' + '/'.join(parts)
+    return p == '/dev/stdin' or _STDIN_FD_PATH.match(p) is not None
+
+
+def _substitute_positional(payload, ops, lo, hi, budget, raw=False, split=False):
+    """`payload` (the operand of `<shell> -c`) with the positional parameters it reads replaced by
+    the operand words `ops[lo:hi]` that follow it (`$0` is `ops[lo]`, `$1` the next one ...; `$@`,
+    `$*`, `${@}`, `${*}`, quoted or not, are `$1` .. `$n`, and `${@:N}` / `${*:N:M}` the slice from
+    `$N`). `ops` are the operands as the SHELL reads them (decoded: `$'\\x70ush'` is `push`). Each
+    is shlex-quoted - one word, what an unquoted `$1` is to a command - or, with `raw`, inserted as
+    written: the operand's own words, which is what `eval "$1"` / `exec $1` / `$@` run (`bash -c
+    '$1' x 'git push'`) and what a `"..."` around it must not be quoted twice. With `split` (and
+    `raw`) a tab or newline in an operand is a blank: an UNQUOTED `$1` is split on every default IFS
+    character, so `git` + newline + `push` in an operand is the two words `git push` to the command
+    that reads it, where `raw` would leave a newline - a command separator - between them. A parameter
+    with no operand behind it is empty. The work is charged to `budget[0]` BEFORE it is done - by operand
+    count, by operand size and by size of what is produced - and running out raises
+    `_ExecOverBudget`: n shell words each walking the operands behind it, or one `$@` repeated over
+    big operands, would otherwise cost n x n."""
+    budget[0] -= 1 + ((hi - lo) >> 4)
+    if budget[0] < 0:
+        raise _ExecOverBudget()
+    quoted = {}
+    spans = {}
+
+    def operand(idx):
+        if lo + idx >= hi:
+            return ''
+        if idx not in quoted:
+            word = ops[lo + idx]
+            budget[0] -= 1 + (len(word) >> 7)
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            quoted[idx] = (_IFS_BLANKS.sub(' ', word) if split else str(word)) if raw else shlex.quote(word)
+        return quoted[idx]
+
+    def repl(m):
+        t = m.group(0)
+        if t[0] == '"':
+            t = t[1:-1]
+        body = t[2:-1] if t[1] == '{' else t[1:]
+        if body[:1] in ('@', '*'):                  # `$@` `${@}` `${*:N}` `${@:N:M}`: a run of operands
+            key = body[1:]
+            if key not in spans:
+                first, _, count = key[1:].partition(':') if key else ('1', '', '')
+                start = int(first) if first else 1
+                stop = hi - lo if not count else min(hi - lo, start + int(count))
+                spans[key] = ' '.join([operand(i) for i in range(start, stop)])
+            out = spans[key]
+        else:
+            out = operand(int(body))
+        budget[0] -= 1 + (len(out) >> 7)
+        if budget[0] < 0:
+            raise _ExecOverBudget()
+        return out
+
+    return _POSITIONAL.sub(repl, payload)
+
+
+# What `_word_view` reads. `_VIEW_SPECIAL`: a character that makes a word more than plain text.
+_VIEW_SPECIAL = re.compile(r"[\\'\"$`]")
+_VIEW_PLAIN = re.compile(r"[^\\'\"$`]+")
+_VIEW_DQ_PLAIN = re.compile(r'[^\\"$`]+')
+_ANSI_BODY = re.compile(r"((?:[^'\\]|\\.)*)'", re.S)
+_NAME_CHAR = re.compile(r'[A-Za-z0-9_]')
+_VIEW_EXPANSION = frozenset('{(@*#?!$-[_')      # after a `$`: an expansion (with a letter or digit)
+# Any `|` / `|&`: where an unresolved construct earlier in the pipeline leaves `_executed_code`
+# unable to say whether what the pipeline writes reaches a shell. It used to look for a shell NAME
+# after the pipe, which a quote-split one (`ba's'h`, `s''h`, `b"a"s"h"`, `/bin/s\\h`) dodges and which
+# was quadratic on `echo $[1] ` + `| # ` x N; a plain `|` is linear and cannot be dodged.
+_PIPE_SINK = re.compile(r'\|')
+# The shells that, with no `-c` and no script, read their commands from stdin (`_SHELL_BASENAME`
+# is wider: it also takes `push`, `publish` ... for the `-c` payload, where a false positive costs
+# nothing without an operand).
+_STDIN_SHELL = re.compile(r'(?:r?ba|da|z|k|a|c|tc|fi|mk|pdk|ya)?sh[0-9.]*\Z')
+# What may stand between the start of a pipeline stage and the shell that reads its stdin: these
+# wrappers (and their options, `sudo -u root`, `nice -n 5`, `env -i A=1`) and `_CMD_KEYWORDS`
+# (`{`, `then`, `time` ...). A shell word anywhere else is an ARGUMENT (`grep -v sh`).
+# The list is CLOSED: a wrapper that is not here (`frobnicate bash`) hides the stdin shell - a documented
+# residual. `_WRAPPER_OPERANDS`: the positional operands a wrapper takes AFTER its options and before the
+# command (`timeout DUR`, `chroot DIR`, `taskset MASK`, `chrt PRIO`); an option's value (`ionice -c 2`,
+# `sandbox-exec -p PROFILE`, `timeout -s KILL`) is skipped by the option rule.
+_STDIN_WRAPPERS = frozenset(('env', 'command', 'exec', 'builtin', 'eval', 'nohup', 'nice', 'time', 'sudo', 'doas',
+                             'noglob', 'nocorrect', 'stdbuf', 'caffeinate', 'arch', 'timeout', 'setsid',
+                             'ionice', 'unbuffer', 'sandbox-exec', 'chroot', 'taskset', 'chrt', 'watch'))
+_WRAPPER_OPERANDS = {'timeout': 1, 'chroot': 1, 'taskset': 1, 'chrt': 1}
+# What in a simple command's raw span makes main split it differently from the shell (or hides a
+# substitution from it): a path-qualified git there is judged here too.
+_SPAN_UNSAFE = re.compile(r'[;|&\n`]|\$[({]')
+# `\0NNN` (echo -e's octal: a 0 and up to three digits; printf's `\NNN` is `_ANSI_ESCAPE`'s)
+_ECHO_OCTAL = re.compile(r'\\0([0-7]{1,3})')
+# What an UNQUOTED heredoc body does to a backslash: `\<newline>` is removed, `\$ \` \\` lose it.
+_HD_UNESCAPE = re.compile(r'\\(\n|[$`\\])')
+
+
+def _dq_view(raw, i, n, cur):
+    """`_word_view` inside "...": append what the text from `raw[i]` (just past the opening quote)
+    reads as to `cur` and return the offset after the closing quote - None when the string runs an
+    expansion (`$x`, `${..}`, `$(..)`, a backtick) or is unterminated."""
+    while i < n:
+        m = _VIEW_DQ_PLAIN.match(raw, i)
+        if m is not None:
+            cur.append(m.group())
+            i = m.end()
+            continue
+        c = raw[i]
+        if c == '"':
+            return i + 1
+        if c == '`':
+            return None
+        if c == '\\':
+            nx = raw[i + 1:i + 2]
+            if nx == '':
+                return None
+            if nx != '\n':
+                cur.append(nx if nx in '$`"\\' else '\\' + nx)
+            i += 2
+        else:
+            nx = raw[i + 1:i + 2]
+            if nx.isalnum() or nx in _VIEW_EXPANSION:
+                return None
+            cur.append('$')
+            i += 1
+    return None
+
+
+def _word_view(raw, split=None, legacy=False):
+    """The fields the shell makes of the word whose RAW text is `raw`, with the quoting resolved:
+    quotes and backslashes removed, `$'...'` ANSI-C escapes decoded (`_ansi_c`), `$"..."` as
+    "...", and the word split at an UNQUOTED `$IFS` / `${IFS}` (whitespace IFS: empty fields
+    drop). None when the word cannot be read without running an expansion - `$(`, a backtick,
+    `${..}`, `$name`, `$1`, `$@` ... (`${IFS}` and `$IFS` aside): it is a residual, not a guess.
+    `split`, a list, gets a True appended for each `$IFS` the word was split at. Linear in
+    `len(raw)`: plain runs are consumed by regex."""
+    fields = []
+    cur = []
+    i = 0
+    n = len(raw)
+    while i < n:
+        m = _VIEW_PLAIN.match(raw, i)
+        if m is not None:
+            cur.append(m.group())
+            i = m.end()
+            continue
+        c = raw[i]
+        if c == '\\':
+            nx = raw[i + 1:i + 2]
+            if nx == '':
+                cur.append('\\')
+            elif nx != '\n':                    # `\<newline>` is a continuation
+                cur.append(nx)
+            i += 2
+        elif c == "'":
+            k = raw.find("'", i + 1)
+            if k < 0:
+                return None
+            cur.append(raw[i + 1:k])
+            i = k + 1
+        elif c == '"':
+            i = _dq_view(raw, i + 1, n, cur)
+            if i is None:
+                return None
+        elif c == '`':
+            return None
+        else:                                   # `$`
+            nx = raw[i + 1:i + 2]
+            if nx == "'":
+                m = _ANSI_BODY.match(raw, i + 2)
+                if m is None:
+                    return None
+                cur.append(_ansi_c(m.group(1), legacy))
+                i = m.end()
+            elif nx == '"':
+                i = _dq_view(raw, i + 2, n, cur)
+                if i is None:
+                    return None
+            elif raw.startswith('{IFS}', i + 1) or (
+                    raw.startswith('IFS', i + 1) and _NAME_CHAR.match(raw, i + 4) is None):
+                fields.append(''.join(cur))
+                cur = []
+                if split is not None:
+                    split.append(True)
+                i += 6 if nx == '{' else 4
+            elif nx.isalnum() or nx in _VIEW_EXPANSION:
+                return None
+            else:
+                cur.append('$')
+                i += 1
+    fields.append(''.join(cur))
+    return [f for f in fields if f]
+
+
+def _ansi_value(w, text, legacy=False):
+    """The value of the operand `w` when it is written with `$'...'` ANSI-C escapes and differs
+    from the de-quoted text the lexer holds (`$'git\\x20push'` is `git push` to the shell, and
+    `git\\x20push` to the lexer); else None. Only operands that ARE code use it - never
+    an argument, so `echo $'git push'` stays data."""
+    if not isinstance(w, _W) or w.spelled or not 0 <= w.start < w.end <= len(text):
+        return None
+    raw = text[w.start:w.end]
+    if "$'" not in raw or '\\' not in raw:
+        return None
+    view = _word_view(raw, None, legacy)
+    if not view:
+        return None
+    value = ' '.join(view)
+    return value if value != w else None
+
+
+_FD_NAME = re.compile(r'\{[A-Za-z_][A-Za-z0-9_]*\}\Z')
+
+
+def _command_words(words):
+    """`(ops, here)` of one simple command: `words` without its redirection operators and their
+    targets (`ops`, the command words proper) and the targets of its `<<<` herestrings (`here`).
+    A `{name}` word that sits right against the operator after it (`{fd}>f`, `{fd}<&0`) is that
+    redirection's fd variable, one more part of the redirection: dropped with it."""
+    n = len(words)
+    ops = []
+    here = []
+    k = 0
+    while k < n:
+        w = words[k]
+        if w.redir:
+            if k + 1 < n and not words[k + 1].redir:
+                if w.endswith('<<<'):
+                    here.append(words[k + 1])
+                k += 2
+            else:
+                k += 1
+            continue
+        if (k + 1 < n and words[k + 1].redir and words[k + 1].start == w.end
+                and _FD_NAME.match(w) is not None):
+            k += 1                      # `{fd}` of `{fd}>f`: the operator (and its target) go next turn
+            continue
+        ops.append(w)
+        k += 1
+    return ops, here
+
+
+def _piped_data(args, budget):
+    """What the stages before a shell that reads its stdin can write to it (`args`: the arguments
+    of EVERY earlier stage of the pipeline, which the lexer's `flush_cmd` collects from `info[3]`): each argument, and all of them joined
+    with spaces (`echo <git words> | sh`). Every stage counts, not only the last one: a filter in
+    between (`| cat |`, `| tee f |`, `| sed s/x/y/ |`) passes the data on. A `\\n` / `\\t` inside an
+    argument is also read the way `printf` / `echo -e` do (`_ansi_c`). The work is charged to `budget[0]` BEFORE it is
+    done, by argument count and then by size."""
+    budget[0] -= 1 + len(args)
+    if budget[0] < 0:
+        raise _ExecOverBudget()
+    budget[0] -= sum(map(len, args)) >> 6
+    if budget[0] < 0:
+        raise _ExecOverBudget()
+    out = [a for a in args if a.strip()]
+    if len(args) > 1:
+        out.append(' '.join(args))
+    seen = set(out)
+    for a in list(out):
+        if '\\' in a:
+            # `printf` / `echo -e` read the escapes (`\n`, `\151`, `\x69`; echo's `\0151`): the
+            # decoded text is there too, next to the raw one
+            for v in (_ansi_c(a), _ansi_c(_ECHO_OCTAL.sub(_echo_octal, a))):
+                if v not in seen and v.strip():
+                    seen.add(v)
+                    out.append(v)
+    return out
+
+
+def _psub_args(body, budget):
+    """The arguments of every command in `body`, the inside of a `<( ... )` process substitution: what
+    the commands in it can write, as `_piped_data` reads a pipe producer's arguments. One level only
+    (a producer that is itself fed by another `<(..)` is a residual); what is unresolved is skipped."""
+    lx = _Lexer(body, budget)
+    lx.arg_sink = []
+    try:
+        lx.cmd(0, len(body), False, True)
+    except _LexUncertain:
+        pass
+    return lx.arg_sink
+
+
+def _spell_words(ops, text, budget):
+    """`(flat, vals, spec, diff)` for the command words `ops` (`_command_words`): how the SHELL
+    reads each of them, which is not how the lexer holds them. All four are parallel lists.
+
+      flat  the words the scan looks at: `ops`, but a word with an UNQUOTED `$IFS` / `${IFS}` is cut
+            into the fields the shell makes of it (`command${IFS}git` is the two words `command`
+            and `git`, each a `_W` that spans the whole word) and a word that is ONLY `$IFS`
+            vanishes - so a shell, `eval`, `env -S` or git is found at every field.
+      vals  the value of each: `_word_view`'s reading (quotes, `$'..'` / `$".."`, `\\x` resolved),
+            else the lexer's text (a word the reading cannot finish: `$x`, `$(..)`, a backtick).
+      spec  the raw word has a quote, backslash or `$`: the reading was made.
+      diff  the shell reads the word differently from what main's patterns see: split or dropped at
+            `$IFS`, or written with `$'..'` / `$".."` (main's normaliser takes plain quotes and
+            backslashes out, never those). A word that vanishes marks the one after it.
+
+    Every special word costs `1 + len >> 6` steps, charged BEFORE it is read; a plain word costs
+    nothing."""
+    flat = []
+    vals = []
+    spec = []
+    diff = []
+    n = len(text)
+    gone = False                        # a word before this one vanished (`$IFS` alone)
+    for w in ops:
+        raw = text[w.start:w.end] if 0 <= w.start < w.end <= n else ''
+        if not raw or _VIEW_SPECIAL.search(raw) is None:
+            flat.append(w)
+            vals.append(w)
+            spec.append(False)
+            diff.append(gone)
+            gone = False
+            continue
+        budget[0] -= 1 + (len(raw) >> 6)
+        if budget[0] < 0:
+            raise _ExecOverBudget()
+        cut = []
+        view = _word_view(raw, cut)
+        if view is None or (len(view) == 1 and not cut):
+            flat.append(w)
+            vals.append(w if view is None else view[0])
+            spec.append(True)
+            diff.append(gone or (view is not None and (view[0] != w or "$'" in raw or '$"' in raw)))
+            gone = False
+        elif not view and cut:
+            gone = True
+        elif not view:                  # `''`: an empty word that stays
+            flat.append(w)
+            vals.append('')
+            spec.append(True)
+            diff.append(gone)
+            gone = False
+        else:
+            for f in view:
+                flat.append(_W(f, w.start, w.end, False, True))
+                vals.append(f)
+                spec.append(True)
+                diff.append(True)
+            gone = False
+    return flat, vals, spec, diff
+
+
+def _starts_main_segment(text, pos):
+    """Does a simple command that starts at `text[pos]` start a segment of main's own split (`;`,
+    `&&`, `||`, `|`, a newline, or the start of the text)? Blanks before it do not count. A single
+    `&`, a `|&`, a `)` or `(` or `{` or a keyword (`then`, `if` ...) before it does NOT: main's
+    patterns and its normaliser see a segment from the previous such separator on."""
+    q = pos - 1
+    while q >= 0:
+        c = text[q]
+        if c in ' \t':
+            q -= 1
+        elif c == '\n' and q > 0 and text[q - 1] == '\\':
+            q -= 2                              # a `\<newline>` continuation is a blank
+        else:
+            break
+    if q < 0:
+        return True
+    c = text[q]
+    return c in ';|\n' or (c == '&' and q > 0 and text[q - 1] == '&')
+
+
+def _first_plain_word(ops, spec, diff):
+    """The index of the first word of `ops` that is not a plain `NAME=value` assignment (the form
+    `_normalize_git_segment` skips: `_ENV_ASSIGN`, read the same way by the shell) - `len(ops)` when
+    every word is one."""
+    for i, w in enumerate(ops):
+        if diff[i] or _ENV_ASSIGN.match(w) is None:
+            return i
+    return len(ops)
+
+
+def _shell_payloads(words, text, budget, prev=None, info=None):
+    """`(payloads, producing)` for one simple command (`words`, `_W`s: de-quoted, with their raw
+    span in `text`). `payloads` are the strings it hands to a nested shell, found at ANY word - a
+    wrapper (`find -exec`, `arch`, `xargs`), a zsh precommand modifier (`noglob`, `repeat 1`,
+    `coproc`), a redirection or an assignment in front of it do not hide one:
+
+      * the operand of `<shell> -c`, `<shell>` being any word that names a shell (`_is_shell_word`),
+        with its options skipped (`-o X`, `+o X`, `-O X`, `--rcfile F`, `--init-file F`, `--`, the
+        combined `-lc` / `-ec` / `-eo X`) - and, when that operand reads positional parameters
+        and operands follow it, two more payloads with them substituted, quoted and raw (`bash -c
+        'git $1' x push`, `bash -c '$1' x 'git push'`, `_substitute_positional`); fish's `--command STR` / `--command=STR` (and its unique
+        abbreviations) too;
+      * the space-joined words after `eval` - which, at the command position, is also a wrapper like
+        `exec` (`_STDIN_WRAPPERS`): the words after it are read here too (`| eval bash`), the first
+        `eval` alone carries the payload;
+      * the first operand of `trap` (the action string);
+      * the string of `env -S STR` / `-SSTR` / `--split-string STR` / `--split-string=STR`, once a
+        word `env` has been seen;
+      * the target of a `<<<` herestring when any word of the command names a shell (or `source`
+        / `.` reads `/dev/stdin`);
+      * what a `<( .. )` that a shell reads as its script (`bash <(..)`), that `source` / `.` reads
+        (`source <(..)`) or that feeds a stdin shell (`bash < <(..)`) writes (`_psub_args`: the
+        arguments of the commands inside it, one level);
+      * what the stages BEFORE it in a pipeline write (`prev`: the arguments of every command
+        before a `|` / `|&`, across a newline, blank lines and comments after the pipe), when this
+        command holds a shell that reads its stdin - no `-c` and no script operand (`bash`, `sh -s`,
+        `bash -`, `$SHELL`) - AND that shell is the stage's COMMAND word: the first word after
+        assignments and redirections, or after only `_STDIN_WRAPPERS` / `_CMD_KEYWORDS` and their
+        options (`sudo -u root bash`, `env A=1 bash`, `{ bash; }`); a shell word that is an
+        ARGUMENT (`grep -v sh`, `tee sh`) reads nothing. `echo 'git push' | bash` (`_piped_data`:
+        each argument, all of them joined, and `printf` / `echo -e` escapes decoded: `\\151`,
+        `\\x69`, `\\0151`); a filter in between (`| cat |`, `| tee f |`) does not hide it;
+      * the body of a heredoc whose command or pipeline holds such a stdin shell (`bash <<EOF`,
+        `cat <<'EOF' | bash`): the lexer (`read_heredocs`) hands the body over as code, via `info`;
+      * SPELLED GIT - the virtual segment `git <the rest of the command>` (`_Virtual`, ONE per git
+        word, identical strings once), the rest being every later word as the SHELL reads it
+        (`_spell_words`: `$'push'`, `$"push"`, `p$'u'sh`, `$IFS`, `${IFS}` resolved). It is made for
+        a git word that is spelled (`GIT`, `/usr/bin/GIT`, `$'git'`, `$"git"`, `g''it`, `\\git`,
+        `command${IFS}git`, `$'\\x67it'`: found at every field of every word), and for a plain
+        `git` too when main cannot be trusted to see it as the shell runs it. A plain lower-case
+        `git` (or `/usr/bin/git`) is skipped ONLY when ALL of these hold: every word before it is
+        a plain `NAME=value` (`_ENV_ASSIGN`, main's pattern) and no redirection precedes it; the
+        command starts a segment of main's own split (`_starts_main_segment`: the start, a
+        newline, `;`, `|`, `&&`, `||` - not a single `&`, a `)`, a `(`, a `{`, `then` ...); and no
+        later word is read differently from how main sees it (`diff`). Everything else - `echo
+        git`, `xargs git`, `time git`, `{ git --git-dir . push; }`, `sleep 0 &git push`, `case x
+        in x)git push`, `x+=1 /usr/bin/git push`, `>f /usr/bin/git push` - gets its segment, which
+        the per-segment engine judges as a plain `git` (and main's normaliser sees). The segment
+        never carries the assignments in front of the command: a hatch is NOT honoured through a
+        spelling. A word the reading cannot finish (`$(..)`, a backtick, `$x`, `${..}`) is a
+        residual, not a guess. Each rest word is charged a quarter step (`(m - k) >> 2`).
+
+    Redirection operators and the word after each (its target) are dropped first: they are not
+    command words (`>/dev/null bash -c P`, `bash 2>&1 -c P`, `{fd}>f bash -c P`), nor are leading
+    assignments (`x+=1`, `x[0]=1`). `producing` is True when the command hands (or, cut off at
+    an unresolved construct, can still hand) words to a shell: `eval`, a shell with `-c`, `trap`,
+    `env -S`, or a herestring to a shell - the refusal in `_executed_code` starts at such a
+    command. `info`, a list `[stdin_shell, seen, want_args, args]`, is the lexer's channel: it gets
+    `stdin_shell` (this command reads its stdin as code), shares `seen` (the virtual segments
+    already made) and, when `want_args`, gets `args` (what this stage writes to the next).
+
+    RESIDUALS: ONE list, in the module docstring ("RESIDUALS - ONE LIST"); the tests pin a SAMPLE of
+    it (`TestReviewM5Residuals.RESIDUALS`: each of those is still allowed), not every listed form, so
+    closing one is a deliberate edit of the list (and of the sample where it is in it).
+    Linear in the words, apart from the budget-charged positional substitution and the
+    budget-charged virtual segments (each carries the rest of the command)."""
+    ops, here = _command_words(words)
+    ops, vals, spec, diff = _spell_words(ops, text, budget)
+    m = len(ops)
+    j = 0
+    while j < m and _ANY_ASSIGN.match(ops[j]) is not None:
+        j += 1
+    first = j                   # the first command word
+    payloads = []
+
+    def add(w):
+        # a payload; and its value when it is written with ANSI-C escapes (`_ansi_value`)
+        payloads.append(w)
+        v = _ansi_value(w, text)
+        if v is not None:
+            payloads.append(v)
+        if isinstance(w, _W) and '\\c\\' in text[w.start:w.end]:
+            v2 = _ansi_value(w, text, True)         # bash 3.2 / zsh read `\c\\` differently
+            if v2 is not None and v2 != v:
+                payloads.append(v2)
+
+    producing = False
+    shell_seen = False
+    stdin_shell = False
+    env_seen = False
+    eval_seen = False           # an `eval` was met: its payload (everything after it) is made
+    chain = True                # `ops[j]` is the stage's command word, or follows only wrappers / options
+    opt_val = False             # the previous word was an option: this one may be its value
+    pend = 0                    # positional operands the last wrapper still takes (`timeout DUR`)
+    psubs = []                  # `<( .. )` words a shell or `source` reads as its script or its stdin
+    while j < m:
+        w = ops[j]
+        base = _unequals(w).rsplit('/', 1)[-1]          # zsh's `=bash`, `=env`: the command's path
+        low = base.lower() if len(base) <= _SHELL_NAME_MAX else ''
+        if env_seen and w[:1] == '-':
+            s = None
+            if w[:2] == '--':
+                key, eq, val = w.partition('=')
+                if len(key) > 3 and '--split-string'.startswith(key):
+                    s = val if eq else (ops[j + 1] if j + 1 < m else None)
+            else:
+                sm = _ENV_SPLIT_SHORT.match(w)
+                if sm is not None:
+                    s = sm.group(1) or (ops[j + 1] if j + 1 < m else None)
+            if s is not None:
+                producing = True
+                if s.strip():
+                    add(s)
+        if low == 'env':
+            env_seen = True
+        elif w == 'eval':
+            producing = True
+            if not eval_seen:                 # the first `eval` carries the payload: a later one is inside it
+                eval_seen = True
+                rest = ' '.join(ops[j + 1:])      # the rest is the payload: its own `eval` is found there
+                if rest.strip():
+                    payloads.append(rest)
+                    decoded = ' '.join([_ansi_value(x, text) or x for x in ops[j + 1:]])
+                    if decoded != rest:
+                        payloads.append(decoded)
+                    if any(isinstance(x, _W) and '\\c\\' in text[x.start:x.end] for x in ops[j + 1:]):
+                        # bash 3.2 / zsh read `\c\\` differently (`_ANSI_ESCAPE_LEGACY`): the same both-ways
+                        # reading `add` gives a `-c` operand
+                        legacy = ' '.join([_ansi_value(x, text, True) or x for x in ops[j + 1:]])
+                        if legacy != rest and legacy != decoded:
+                            payloads.append(legacy)
+            if not chain:
+                break                         # an `eval` that is an argument: the payload is all there is
+            # at the command position `eval` is a wrapper like `exec`: a stdin shell behind it (`| eval
+            # bash`, `eval source /dev/stdin <<< ..`) reads the pipe, so the words after it are read here too
+        elif w == 'trap':
+            producing = True
+            a = j + 1
+            while a < m and a < j + 4 and ops[a] in ('-p', '-l', '--'):
+                a += 1
+            if a < m and ops[a].strip():
+                add(ops[a])
+        elif w in ('source', '.') and chain and j + 1 < m and _is_stdin_path(ops[j + 1]):
+            shell_seen = stdin_shell = True         # `source /dev/stdin <<< 'git push'`: stdin is code
+        elif w in ('source', '.') and chain and j + 1 < m and ops[j + 1][:2] == '<(':
+            psubs.append(ops[j + 1])                # `source <(echo 'git push')`
+        elif _is_shell_word(w, text):
+            shell_seen = True
+            has_c = False
+            has_s = False
+            a = j + 1
+            while a < m:
+                x = ops[a]
+                if x in _SHELL_OPT_WITH_ARG:
+                    a += 2                  # `-o pipefail`, `--rcfile FILE`: the next word is its value
+                elif x == '--':
+                    a += 1                  # end of options: the next word is the operand
+                    break
+                elif len(x) > 1 and x[0] in '-+' and x[1] != '-':
+                    if x[0] == '-':
+                        if 'c' in x:
+                            has_c = True
+                        if 's' in x:
+                            has_s = True    # `-s`: read commands from stdin, operands are `$1` ...
+                    a += 2 if x[-1] in 'oO' else 1      # `-eo pipefail`
+                elif x[:2] == '--':
+                    key, eq, val = x.partition('=')
+                    if len(key) >= 3 and '--command'.startswith(key):
+                        # fish: `--command STR` / `--command=STR` (getopt abbreviations too)
+                        cmd_str = val if eq else (ops[a + 1] if a + 1 < m else None)
+                        producing = True
+                        if cmd_str is not None and cmd_str.strip():
+                            add(cmd_str)
+                            if eq:
+                                dv = _ansi_value(x, text)       # `--command=$'git\\x20push'`
+                                if dv is not None:
+                                    payloads.append(dv.partition('=')[2])
+                        a += 1 if eq else 2
+                    else:
+                        a += 1              # `--norc`, `--login`
+                else:
+                    break                   # first operand
+            if chain and not has_c and not has_s and a < m and ops[a][:2] == '<(':
+                psubs.append(ops[a])                # `bash <(echo 'git push')`: the script is a process substitution
+            if (chain and not has_c and (has_s or a >= m or _is_stdin_path(ops[a]))
+                    and (_STDIN_SHELL.match(low) is not None or _SHELL_BASENAME.match(low) is None)):
+                stdin_shell = True          # no command string, no script file: it reads its stdin
+            if has_c:
+                producing = True
+                if a < m:
+                    add(ops[a])                     # the command string
+                    if a + 1 < m and _POSITIONAL.search(ops[a]) is not None:
+                        done = {str(ops[a])}
+                        # quoted: one word per operand; raw: the operand's own words; split: raw, with a
+                        # tab / newline a blank (the unquoted `$1` is split at them)
+                        for raw, split in ((False, False), (True, False), (True, True)):
+                            subst = _substitute_positional(ops[a], vals, a + 1, m, budget, raw, split)
+                            if subst not in done:
+                                done.add(subst)
+                                payloads.append(subst)
+                    j = a
+        if chain:
+            if low in _STDIN_WRAPPERS or w in _CMD_KEYWORDS or _ANY_ASSIGN.match(w) is not None:
+                opt_val = False
+                pend = _WRAPPER_OPERANDS.get(low, 0) if low in _STDIN_WRAPPERS else 0
+            elif w[:1] == '-':
+                opt_val = True
+            elif opt_val:
+                opt_val = False
+            elif pend:
+                pend -= 1
+            else:
+                chain = False
+        j += 1
+    if shell_seen and here:
+        producing = True
+        for t in here:
+            if t.strip():
+                add(t)
+    seen = set()
+    if info is not None:
+        info[0] = stdin_shell
+        seen = info[1]
+        if info[2]:             # what this stage can write to the next one: its arguments, as the shell reads them
+            args = []
+            for x in range(first + 1, m):
+                args.append(str(ops[x]))
+                if vals[x] != ops[x]:
+                    args.append(str(vals[x]))       # as the shell reads it (`$'git\\x20push'`)
+            for t in here:
+                args.append(str(t))
+                v = _ansi_value(t, text)
+                if v is not None:
+                    args.append(v)
+            info[3] = args
+    if stdin_shell and prev:
+        payloads.extend(_piped_data(prev, budget))
+    if stdin_shell:
+        for x in range(len(words) - 1):             # `bash < <(echo 'git push')`
+            if words[x].redir and words[x] in ('<', '0<') and words[x + 1][:2] == '<(' and not words[x + 1].redir:
+                psubs.append(words[x + 1])
+    for pw in psubs:
+        if pw[-1:] == ')':
+            payloads.extend(_piped_data(_psub_args(pw[2:-1], budget), budget))
+    # Spelled git, at every word from the first command word on (see the docstring).
+    last_diff = m - 1 - diff[::-1].index(True) if True in diff else -1
+    plain_first = None
+    clean_span = None
+    for k in range(first, m):
+        v = vals[k]
+        zsh_equals = v[:1] == '=' and v[1:2] != '='     # zsh: `=git` is the path of git (one `=` only)
+        if zsh_equals:
+            v = v[1:]
+        if len(v) < 3 or v[-3:].lower() != 'git':
+            continue
+        base = v.rsplit('/', 1)[-1]
+        if len(base) != 3:
+            continue
+        if base == 'git' and not spec[k] and last_diff <= k and not zsh_equals:
+            # A plain lower-case `git` is main's: skipped ONLY where main's normaliser and anchored
+            # patterns see it as it runs - the first word of a main segment (after plain `NAME=value`
+            # assignments, no redirection before it) with no spelled word after it. A PATH-qualified
+            # one (`/usr/bin/git`) is main's only when main also splits the whole command the way
+            # the shell does: main's raw pattern needs a space before a plain `git`, so it cannot
+            # stand in for the normaliser when a `;` inside a quote or a `$(..)` in an assignment
+            # moves the segment boundary (`A=$(echo 1) /usr/bin/git push`).
+            if plain_first is None:
+                plain_first = _first_plain_word(ops, spec, diff)
+            if (k == plain_first and k < len(words) and words[k] is ops[k]
+                    and _starts_main_segment(text, words[0].start)):
+                if '/' in v and clean_span is None:
+                    clean_span = _SPAN_UNSAFE.search(text, words[0].start, words[-1].end) is None
+                if '/' not in v or clean_span:
+                    continue
+        budget[0] -= (m - k) >> 2                   # the rest rides along: four words cost a step
+        if budget[0] < 0:
+            raise _ExecOverBudget()
+        code = _Virtual('git ' + shlex.join(vals[k + 1:]))
+        if code not in seen:
+            seen.add(code)
+            payloads.append(code)
+    return payloads, producing
+
+
+class _Lexer:
+    """The single shell lexer behind `_executed_code`. Method per context, all reading the same
+    `text`; each takes the offset to resume at and `lim`, the exclusive end of the region it may
+    read (the heredoc body, or the whole text), and returns the offset after the construct.
+
+      cmd       command text: top level, and the body of `$(...)` / `(...)` / `<(...)` / `>(...)`
+      dq        a "..." string          param     a `${...}` expansion       backtick  a `...`
+      arith     `((...))` / `$((...))`  hd_body   an UNQUOTED heredoc body (double-quote-like)
+      dollar    one `$` form
+
+    `emit` is True where a substitution found is the OUTERMOST one - its body is recorded in
+    `codes` (nested ones are found when that body is scanned again, one level down). Anything
+    it cannot model with certainty raises `_LexUncertain(offset of the unresolved construct)`;
+    `open` holds the start offsets of the constructs still open, outermost first."""
+
+    def __init__(self, text, budget):
+        self.text = text
+        self.budget = budget
+        self.codes = []
+        self.open = []
+        self.refuse_from = None     # set when the outermost `cmd` is cut short: see its handler
+        self.virtual_seen = set()   # the `git ...` code strings spelled git already produced
+        self.arg_sink = None        # a list: the arguments of EVERY stage lexed (`_psub_args`)
+
+    def _enter(self, start):
+        if len(self.open) >= _MAX_LEX_NEST:
+            raise _LexUncertain(start)
+        self.open.append(start)
+
+    # -- $ forms -------------------------------------------------------------------------
+    def dollar(self, j, lim, in_dq, emit, cur, ext=False):
+        """text[j] == '$'. Appends the word text of the form to `cur`; returns the offset after
+        it. `$$ $? $# $! $@ $* $- $0..$9` and `$name` are one unit each, so the `'` in `$$'a\\'`
+        starts an ordinary quote; `$'..'` is ANSI-C only for a `$` met HERE (a `$` that is the
+        second char of `$$`, or escaped, never reaches this point), and only outside double
+        quotes - except directly inside a `${...}` (`ext`: bash's default `extquote` option
+        performs `$'..'` there even when the expansion is double-quoted: `"${x%$'\n'}"`)."""
+        text = self.text
+        i = j + 1
+        if i >= lim:
+            cur.append('$')
+            return i
+        c = text[i]
+        if c == '(':
+            if text.startswith('((', i, lim):
+                e = self.arith(j, i + 2, lim, emit)
+                if e is not None:
+                    cur.append(text[j:e])
+                    return e
+            e = self.sub(j, i + 1, lim, emit)
+            cur.append(text[j:e])
+            return e
+        if c == '{':
+            e = self.param(j, i + 1, lim, in_dq, emit)
+            cur.append(text[j:e])
+            return e
+        if c == '[':                        # old `$[ ... ]` arithmetic: not modelled
+            raise _LexUncertain(j)
+        if c == "'" and (ext or not in_dq):     # `$'...'` ANSI-C quote: escapes NOT interpreted
+            am = _ANSI_C.match(text, i, lim)
+            if am is None:
+                raise _LexUncertain(j)
+            cur.append(am.group(0)[1:-1])
+            return am.end()
+        if c == '"' and not in_dq:          # `$"..."` locale quote: drop the `$`
+            return i
+        if c in '$?#!@*-' or '0' <= c <= '9':
+            cur.append(text[j:i + 1])
+            return i + 1
+        m = _NAME.match(text, i, lim)
+        if m is not None:
+            cur.append(text[j:m.end()])
+            return m.end()
+        cur.append('$')
+        return i
+
+    def sub(self, start, body, lim, emit):
+        """`$(`, `(`, `<(`, `>(` opened at `start`, body from `body`: lexed with `cmd`, the same
+        routine as the top level. Returns the offset after the closing `)`."""
+        self._enter(start)
+        end = self.cmd(body, lim, True, False)
+        self.open.pop()
+        if emit:
+            self.codes.append(self.text[body:end - 1])
+        return end
+
+    def param(self, start, i, lim, in_dq, emit):
+        """`${...}` (opened at `start`, body from `i`): `(` and `)` are literal, `}` closes,
+        `$(` / `${` / `$((` / backticks nest. Quotes parse as quotes at top level; inside a
+        double-quoted string their rules depend on the operator, so they are uncertain there
+        (`$'..'` aside: see `dollar`)."""
+        text = self.text
+        budget = self.budget
+        self._enter(start)
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_PARAM.search(text, i, lim)
+            if m is None:
+                raise _LexUncertain(start)
+            j = m.start()
+            c = text[j]
+            i = j + 1
+            if c == '}':
+                break
+            if c == '\\':
+                i += 1
+            elif c == '$':
+                i = self.dollar(j, lim, in_dq, emit, [], True)
+            elif c == '`':
+                i = self.backtick(i, lim, emit, j, in_dq)
+            elif in_dq:
+                raise _LexUncertain(j)
+            elif c == "'":
+                k = text.find("'", i, lim)
+                if k < 0:
+                    raise _LexUncertain(j)
+                i = k + 1
+            else:
+                i = self.dq(i, lim, [], emit, j)
+        self.open.pop()
+        return i
+
+    def dq(self, i, lim, cur, emit, start):
+        """A "..." string opened at `start`, body from `i`; the de-quoted text goes to `cur`.
+        Only `\\` (before `$`, backtick, `"`, `\\`, newline), `$` and backtick are active."""
+        text = self.text
+        budget = self.budget
+        self._enter(start)
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_DQ.search(text, i, lim)
+            if m is None:
+                raise _LexUncertain(start)
+            j = m.start()
+            if j > i:
+                cur.append(text[i:j])
+            c = text[j]
+            i = j + 1
+            if c == '"':
+                break
+            if c == '\\':
+                if i >= lim:
+                    raise _LexUncertain(start)
+                nx = text[i]
+                cur.append('' if nx == '\n' else nx if nx in '$`"\\' else '\\' + nx)
+                i += 1
+            elif c == '`':
+                i = self.backtick(i, lim, emit, j, True)
+                cur.append(text[j:i])
+            else:
+                i = self.dollar(j, lim, True, emit, cur)
+        self.open.pop()
+        return i
+
+    def backtick(self, i, lim, emit, start, in_dq):
+        """A `...` opened at `start`, body from `i`: it ends at the first UNESCAPED backtick
+        (quotes inside do not matter); the body the shell runs has `\\$`, `\\``, `\\\\` (and
+        `\\"` inside double quotes) unescaped. Its inner text is lexed when it is scanned as
+        code one level down, not here."""
+        text = self.text
+        budget = self.budget
+        k = i
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_BQ.search(text, k, lim)
+            if m is None:
+                raise _LexUncertain(start)
+            j = m.start()
+            if text[j] == '\\':
+                k = j + 2
+                continue
+            break
+        if emit:
+            raw = text[i:j]
+            body = _BQ_UNESCAPE.sub(r'\1', raw)
+            self.codes.append(body)
+            if in_dq:
+                alt = _BQ_UNESCAPE_DQ.sub(r'\1', raw)
+                if alt != body:
+                    self.codes.append(alt)
+        return j + 1
+
+    def arith(self, start, i, lim, emit):
+        """`$((` / `((` opened at `start`, body from `i`. Counts parens; `<<` / `>>` are shifts
+        here; `$(...)` / backticks nest; ANY quote is uncertain. Returns the offset after the
+        closing `))`, or None when the closer is a lone `)` (bash then reads `( (` nested
+        subshells - the caller re-lexes it as a subshell). The body itself is also recorded as
+        a code string (it covers that ambiguity); nested substitutions are found through it."""
+        text = self.text
+        budget = self.budget
+        body = i
+        self._enter(start)
+        depth = 0
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_ARITH.search(text, i, lim)
+            if m is None:
+                self.open.pop()
+                return None
+            j = m.start()
+            c = text[j]
+            i = j + 1
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                if depth:
+                    depth -= 1
+                elif text.startswith(')', i, lim):
+                    self.open.pop()
+                    if emit:
+                        self.codes.append(text[body:j])
+                    return i + 1
+                else:
+                    self.open.pop()
+                    return None
+            elif c == '\\':
+                i += 1
+            elif c == '`':
+                i = self.backtick(i, lim, False, j, True)
+            elif c == '$':
+                i = self.dollar(j, lim, True, False, [])
+            else:                           # ' or "
+                raise _LexUncertain(start)
+
+    def hd_word(self, k, lim, op):
+        """The word after `<<` / `<<-` at `k` -> (end offset, delimiter after quote removal,
+        quoted?). Only forms that can be quote-removed with certainty: bare word characters,
+        `'...'`, `"..."` holding no `\\` `$` backtick or `'`, `\\X`, and concatenations. Anything
+        else (`$'EOF'`, `"a\\"b"`, `$x`, nothing at all) raises."""
+        text = self.text
+        parts = []
+        quoted = False
+        start = k
+        while k < lim:
+            c = text[k]
+            if c in ' \t\n;&|()<>':
+                break
+            if c == "'":
+                e = text.find("'", k + 1, lim)
+                if e < 0:
+                    raise _LexUncertain(op)
+                parts.append(text[k + 1:e])
+                quoted = True
+                k = e + 1
+            elif c == '"':
+                e = text.find('"', k + 1, lim)
+                if e < 0:
+                    raise _LexUncertain(op)
+                inner = text[k + 1:e]
+                if '\\' in inner or '$' in inner or '`' in inner or "'" in inner:
+                    raise _LexUncertain(op)
+                parts.append(inner)
+                quoted = True
+                k = e + 1
+            elif c == '\\':
+                if k + 1 >= lim or text[k + 1] == '\n':
+                    raise _LexUncertain(op)
+                parts.append(text[k + 1])
+                quoted = True
+                k += 2
+            elif c == '$' or c == '`':
+                raise _LexUncertain(op)
+            else:
+                m = _HEREDOC_BARE.match(text, k, lim)
+                parts.append(m.group(0))
+                k = m.end()
+        if k == start:
+            raise _LexUncertain(op)
+        delim = ''.join(parts)
+        if '\n' in delim or '\t' in delim:      # a tab: shells disagree on which `<<-` line ends it
+            raise _LexUncertain(op)
+        return k, delim, quoted
+
+    def hd_body(self, i, end, emit, op):
+        """An UNQUOTED heredoc body, text[i:end]: scanned like a double-quoted string. Only `\\`
+        (before `$`, backtick, `\\`, newline), `$(`, `${`, `$((` and backticks are active;
+        `'`, `"`, `(`, `#` are literal data."""
+        text = self.text
+        budget = self.budget
+        self._enter(op)
+        while True:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _ExecOverBudget()
+            m = _LEX_HDBODY.search(text, i, end)
+            if m is None:
+                break
+            j = m.start()
+            c = text[j]
+            i = j + 1
+            if c == '\\':
+                i += 1
+            elif c == '`':
+                i = self.backtick(i, end, emit, j, False)
+            else:
+                i = self.dollar(j, end, True, emit, [])
+        self.open.pop()
+
+    # -- command text --------------------------------------------------------------------
+    def cmd(self, i, lim, closer, emit):
+        """Lex command text from `i` to `lim`; with `closer` (a `$(` / `(` body) stop after the
+        unmatched `)` and return the offset after it, else return `lim`. Builds the words of
+        each simple command (redirection operators are `_W(..., redir=True)` tokens, not
+        separators: `>&`, `&>` are not `&`, `|&` is a pipe) and, when `emit`, records the
+        payloads handed to a nested shell (`_shell_payloads`) and the outermost substitutions.
+        Tracks `case ... esac` (its `pat)` does not close a substitution) and pending heredocs."""
+        text = self.text
+        budget = self.budget
+        codes = self.codes
+        words = []              # words of the current simple command
+        cur = []                # pieces of the word being built
+        in_word = False
+        plain = True            # the word so far is plain unquoted text
+        wstart = 0
+        pend = []               # pending heredocs: (offset of `<<`, delimiter, `<<-`?, body is literal)
+        cases = []              # open `case`s: 'in?' (before `in`), 'pat' (patterns), 'body' (commands)
+        pat_end = 0             # offset just after the `)` that last closed a case pattern
+        prev = None             # the arguments of the earlier stages, while a pipeline runs
+        pipe_from = 0           # where that pipeline starts
+        pipe_open = False       # the last command ended at a `|` / `|&`: the pipeline goes on, newlines or not
+        line_shell = False      # a command of this line reads its stdin as shell code (a heredoc body is code)
+        held = []               # heredoc bodies of a line that ENDS with a pipe: code if a LATER stage reads stdin as code
+
+        def cmd_position():
+            return not words or all(w in _CMD_KEYWORDS for w in words)
+
+        def flush_word(end):
+            nonlocal in_word, plain
+            if not in_word:
+                return
+            s = ''.join(cur)
+            del cur[:]
+            was_plain = plain
+            in_word = False
+            plain = True
+            if was_plain and s in _CASE_WORDS:
+                if s == 'case':
+                    if cmd_position() and not (cases and cases[-1] == 'pat'):
+                        cases.append('in?')
+                elif s == 'in':
+                    if cases and cases[-1] == 'in?':
+                        cases[-1] = 'pat'
+                        del words[:]
+                        return
+                elif cases and cases[-1] != 'in?' and cmd_position():     # esac
+                    cases.pop()
+            words.append(_W(s, wstart, end))
+
+        def flush_cmd(pipe=False):
+            # `pipe`: the command ends at a `|` / `|&`, so its words are what the next one reads.
+            nonlocal prev, pipe_from, pipe_open, line_shell
+            pipe_open = pipe
+            if words:
+                info = [False, self.virtual_seen, pipe or self.arg_sink is not None, []]
+                if emit:
+                    codes.extend(_shell_payloads(words, text, budget, prev, info)[0])
+                    line_shell = line_shell or info[0]
+                    if self.arg_sink is not None:
+                        self.arg_sink.extend(info[3])
+                    if info[0] and held:
+                        # `cat <<EOF |` newline body `EOF` newline `bash`: the shell is a later stage of
+                        # the pipeline the heredoc feeds, and it reads what that stage wrote
+                        codes.extend(held)
+                        del held[:]
+                if pipe:
+                    if prev is None:
+                        prev = []
+                        pipe_from = words[0].start      # the first stage of this pipeline
+                    prev.extend(info[3])
+                else:
+                    prev = None
+                    del held[:]
+                del words[:]
+            elif not pipe:
+                prev = None
+                del held[:]
+
+        def redir_op(j, op, fd=True):
+            # A redirection operator token. A word of ONLY digits right before it is the fd.
+            nonlocal in_word, plain
+            s = j
+            e = j + len(op)
+            if in_word:
+                w = ''.join(cur)
+                if fd and plain and _DIGITS.match(w):
+                    s = wstart
+                    op = w + op
+                    del cur[:]
+                    in_word = False
+                else:
+                    flush_word(j)
+            words.append(_W(op, s, e, True))
+
+        def read_heredocs(pos, feeds):
+            # `pos` is just past a newline: consume each pending body up to its delimiter line - the
+            # first line that IS the delimiter (after its leading tabs, for `<<-`). Found by string
+            # search and line comparison, never by a regex built per delimiter: a regex compile per
+            # distinct delimiter made a command of thousands of heredocs several times slower. Each
+            # line that merely CONTAINS the delimiter costs a step; every other line costs nothing.
+            for op, delim, strip, quoted in pend:
+                p = pos                 # always the start of a line
+                while True:
+                    budget[0] -= 1
+                    if budget[0] < 0:
+                        raise _ExecOverBudget()
+                    k = text.find(delim, p, lim)
+                    if k < 0:
+                        raise _LexUncertain(op)
+                    nl = text.rfind('\n', p, k)
+                    ls = p if nl < 0 else nl + 1                # start of the line holding the candidate
+                    le = text.find('\n', k, lim)
+                    if le < 0:
+                        le = lim
+                    line = text[ls:le]
+                    if (line.lstrip('\t') if strip else line) == delim:
+                        break
+                    if le >= lim:
+                        raise _LexUncertain(op)
+                    p = le + 1
+                if not quoted:
+                    self.hd_body(pos, ls, emit, op)
+                if emit and (feeds or pipe_open):
+                    # A shell reads this body as its commands (`bash <<EOF`, `cat <<EOF | bash`):
+                    # the body is code. Its text as written (a quoted delimiter: the shell reads it
+                    # as is) and, for an unquoted one, as the shell expands the backslashes. When the
+                    # line ends with a pipe (`pipe_open`) the shell may stand on a LATER line, after the
+                    # body: it is held until a later stage of the pipeline turns out to be one.
+                    body = text[pos:ls]
+                    if body.strip():
+                        budget[0] -= 1 + (len(body) >> 6)
+                        if budget[0] < 0:
+                            raise _ExecOverBudget()
+                        bodies = [body]
+                        if not quoted:
+                            plain = _HD_UNESCAPE.sub(lambda e: '' if e.group(1) == '\n' else e.group(1), body)
+                            if plain != body:
+                                bodies.append(plain)
+                        (codes if feeds else held).extend(bodies)
+                pos = min(le + 1, lim)
+            del pend[:]
+            return pos
+
+        try:
+            while i < lim:
+                budget[0] -= 1
+                if budget[0] < 0:
+                    raise _ExecOverBudget()
+                j = _LEX_CMD_RUN.match(text, i, lim).end()
+                if j > i:
+                    # Each word of the run costs a step, charged BEFORE the (Python-level) loop
+                    # that splits it: the blanks are counted at C speed, so a megabyte of words
+                    # is refused up front instead of after it has been scanned.
+                    nb = text.count(' ', i, j) + text.count('\t', i, j)
+                    if nb:
+                        budget[0] -= nb
+                        if budget[0] < 0:
+                            raise _ExecOverBudget()
+                    pos = i
+                    for bm in _BLANKS.finditer(text, i, j):
+                        s = bm.start()
+                        if s > pos:
+                            if not in_word:
+                                in_word = True
+                                wstart = pos
+                            cur.append(text[pos:s])
+                        if in_word:
+                            flush_word(s)
+                        pos = bm.end()
+                    if pos < j:
+                        if not in_word:
+                            in_word = True
+                            wstart = pos
+                        cur.append(text[pos:j])
+                    if j >= lim:
+                        i = lim
+                        break
+                c = text[j]
+                i = j + 1
+                if c == '\n':
+                    goes_on = pipe_open and not words and not in_word      # `a |` newline `b`
+                    flush_word(j)
+                    if not goes_on:
+                        flush_cmd()
+                    if pend:
+                        i = read_heredocs(i, line_shell)
+                    line_shell = False
+                elif c == '\\':
+                    if i < lim:
+                        nx = text[i]
+                        if nx != '\n':      # `\<newline>` is a continuation: no word material
+                            if not in_word:
+                                in_word = True
+                                wstart = j
+                            plain = False
+                            cur.append(nx)
+                        i += 1
+                    else:
+                        if not in_word:
+                            in_word = True
+                            wstart = j
+                        cur.append('\\')
+                elif c == "'":
+                    k = text.find("'", i, lim)
+                    if k < 0:
+                        raise _LexUncertain(j)
+                    if not in_word:
+                        in_word = True
+                        wstart = j
+                    plain = False
+                    cur.append(text[i:k])
+                    i = k + 1
+                elif c == '"':
+                    if not in_word:
+                        in_word = True
+                        wstart = j
+                    plain = False
+                    i = self.dq(i, lim, cur, emit, j)
+                elif c == '`':
+                    if not in_word:
+                        in_word = True
+                        wstart = j
+                    plain = False
+                    i = self.backtick(i, lim, emit, j, False)
+                    cur.append(text[j:i])
+                elif c == '$':
+                    if not in_word:
+                        in_word = True
+                        wstart = j
+                    plain = False
+                    i = self.dollar(j, lim, False, emit, cur)
+                elif c == '#':
+                    if in_word:
+                        cur.append('#')         # mid-word `a#b`: not a comment
+                    else:
+                        k = text.find('\n', i, lim)         # a comment runs to the end of the line
+                        i = lim if k < 0 else k
+                elif c == ';':
+                    flush_word(j)
+                    flush_cmd()
+                    if cases and cases[-1] == 'body' and i < lim and text[i] in ';&':
+                        i += 1                  # `;;` `;&` `;;&`: the next clause's patterns
+                        if text[i - 1] == ';' and i < lim and text[i] == '&':
+                            i += 1
+                        cases[-1] = 'pat'
+                elif c == '&':
+                    if text.startswith('&&', j, lim):
+                        flush_word(j)
+                        flush_cmd()
+                        i = j + 2
+                    elif text.startswith('&>', j, lim):
+                        n2 = 3 if text.startswith('&>>', j, lim) else 2
+                        redir_op(j, text[j:j + n2], False)
+                        i = j + n2
+                    else:
+                        flush_word(j)
+                        flush_cmd()
+                elif c == '|':
+                    flush_word(j)
+                    nxt = text[i] if i < lim else ''
+                    flush_cmd(nxt != '|')       # `||` is an or-list, `|` and `|&` pipe
+                    if nxt in ('|', '&'):
+                        i += 1
+                elif c == ')':
+                    flush_word(j)
+                    if cases and cases[-1] == 'pat':
+                        del words[:]            # the `)` ends a case pattern, not a substitution
+                        cases[-1] = 'body'
+                        pat_end = i
+                    else:
+                        if cases and cases[-1] == 'body' and _BLANK_RUN.match(text, pat_end, j).end() == j:
+                            # `(x))`: zsh reads `(x)` as a group pattern and this `)` as the one
+                            # that ends it, bash (and this lexer) a pattern `x` and a stray `)`
+                            # that closes the substitution early - after which the rest of the
+                            # case body would be read as arguments of the command around it.
+                            raise _LexUncertain(j)
+                        flush_cmd()
+                        if closer:
+                            if pend:
+                                raise _LexUncertain(pend[0][0])
+                            return i
+                elif c == '(':
+                    if cases and cases[-1] == 'pat' and not in_word:
+                        continue                # `(pat)`: the optional leading paren
+                    if not in_word and text.startswith('(', i, lim):
+                        e = self.arith(j, i + 1, lim, emit)
+                        if e is not None:       # `(( ... ))` command
+                            flush_cmd()
+                            i = e
+                            continue
+                    flush_word(j)
+                    flush_cmd()
+                    i = self.sub(j, i, lim, emit)
+                else:                           # `<` or `>`
+                    if c == '<' and text.startswith('<<', j, lim) and not text.startswith('<<<', j, lim):
+                        k = j + 2
+                        strip = k < lim and text[k] == '-'
+                        if strip:
+                            k += 1
+                        while k < lim and text[k] in ' \t':
+                            k += 1
+                        e, delim, quoted = self.hd_word(k, lim, j)
+                        redir_op(j, '<<-' if strip else '<<')
+                        words.append(_W(text[k:e], k, e))
+                        pend.append((j, delim, strip, quoted))
+                        i = e
+                    elif text.startswith('(', i, lim):     # `<(` / `>(` process substitution
+                        flush_word(j)
+                        e = self.sub(j, i + 1, lim, emit)
+                        in_word = True
+                        wstart = j
+                        plain = False
+                        cur.append(text[j:e])
+                        i = e
+                    else:
+                        two = text[j:j + 3]
+                        if two == '<<<':
+                            op = '<<<'
+                        elif two[:2] in ('>>', '>&', '>|', '<>', '<&'):
+                            op = two[:2]
+                        else:
+                            op = c
+                        redir_op(j, op)
+                        i = j + len(op)
+            if closer:
+                raise _LexUncertain(self.open[-1])
+            flush_word(lim)
+            if pend:
+                raise _LexUncertain(pend[0][0])
+        except _LexUncertain as exc:
+            if emit and not closer:
+                # What was read BEFORE the unresolved construct is complete code too, and the
+                # refusal (`_executed_code`) only looks from the construct on: so the word being
+                # built counts as a word (`bash -c 'git push '$[1]` hands `git push ` to a shell)
+                # and the commands completed so far are extracted. Only this outermost frame has
+                # anything to add: every nested frame lies inside `open[0]`, which the refusal
+                # already counts from.
+                #
+                # Extraction is not enough: the unresolved part can SUPPLY what follows - inside
+                # double quotes `${x:-'push'}` keeps its quotes, so `bash -c 'git '"${x:-'push'}"`
+                # runs `git push` while all that was extracted is `git `. So the refusal starts
+                # no later than the word being built, nor than the START of the current command
+                # when that command hands its words to a shell (`_shell_payloads`: eval, a shell
+                # with `-c`, trap, `env -S`, a herestring - or the word being built IS `eval` or
+                # a shell): the git mention that decides it may sit anywhere in that command.
+                starts = []
+                building = in_word
+                if building:
+                    starts.append(wstart)
+                flush_word(lim)
+                cur_start = words[0].start if words else None
+                if words:
+                    found, producing = _shell_payloads(words, text, budget, prev)
+                    codes.extend(found)
+                    if producing or (building and (words[-1] == 'eval' or _is_shell_word(words[-1], text))):
+                        starts.append(words[0].start)
+                    del words[:]
+                if (prev is not None or cur_start is not None) and _PIPE_SINK.search(text, exc.pos, lim):
+                    # The unresolved construct sits in a pipeline that goes on (ANY `|` after it:
+                    # the next stage can be a shell however it is spelled - `ba's'h`, `s''h`,
+                    # `$SHELL` - and this scan never gets that far): what the stages up to here
+                    # write can reach it. So the refusal starts at the first stage.
+                    starts.append(pipe_from if prev is not None else cur_start)
+                if starts:
+                    self.refuse_from = min(starts)
+            raise
+        flush_cmd()
+        return lim
+
+
+def _executed_code(text, budget):
+    """Return the code strings that `text` hands to a nested shell, one level down:
+      - the operand of `<shell> -c` (and fish's `--command`), the arguments of `eval`, `trap`'s
+        action, `env -S STR`, a herestring, the data piped into a shell that reads its stdin, the
+        body of a heredoc fed to one, and - for every word that SPELLS `git` however it is written
+        (`GIT`, `$'git'`, `g''it`, `command${IFS}git`, `$'\\x67it'`) and every plain `git` that is
+        not main's - the virtual segment `git <the rest of the command>`; all of it found at ANY
+        word of a simple command (see `_shell_payloads`, which holds the rules);
+      - every OUTERMOST command substitution `$( ... )` / `` `...` ``, subshell `( ... )` and
+        process substitution `<( ... )`, `>( ... )` (nested ones are found when that body is
+        itself scanned, one level deeper), the bodies of `$(( ... ))` / `(( ... ))`, and the
+        substitutions inside an unquoted-delimiter heredoc body.
+
+    One lexer (`_Lexer`) reads all of it. Inside single quotes nothing is extracted (literal
+    data); inside double quotes and unquoted heredoc bodies only `$(` and backticks are (the
+    shell executes them). A heredoc whose delimiter is QUOTED (`<<'EOF'`) has a literal body,
+    which is skipped - a commit message full of `` `git push` `` must not read as code. `#`
+    starts a comment only at the start of a word (blanks are only space and tab).
+
+    FAILS CLOSED: input the lexer cannot model with certainty (see `_Lexer`) raises
+    `_LexUncertain` - unless nothing from the start of the earliest unresolved construct to the
+    end of `text` can spell git (`_GIT_MENTION`), in which case the codes found before it are
+    returned: the commands completed so far AND the one being built, whose last word is cut at
+    the construct (`bash -c 'git push '$[1]` yields `git push `). `budget[0]` is the steps left;
+    running out raises `_ExecOverBudget`. Any other exception is a scanner fault and propagates
+    to the caller."""
+    lx = _Lexer(text, budget)
+    try:
+        lx.cmd(0, len(text), False, True)
+    except _LexUncertain as exc:
+        start = min(exc.pos, lx.open[0]) if lx.open else exc.pos
+        if lx.refuse_from is not None:
+            start = min(start, lx.refuse_from)
+        if _git_mentioned(text, start):
+            raise
+    return lx.codes
+
+
+def _executable_segments(command, budget=None, depth=0):
+    """Every shell segment of `command` (exactly what `_scannable_segments` yields, FIRST and
+    unchanged), followed by the segments of the code it hands to a nested shell and of the
+    virtual `git ...` segment of every spelled git (`_executed_code`; payloads, positional
+    parameters, spelled git, heredoc bodies and pipe-to-shell are all extra segments, none a
+    rewrite of a real one - so no hatch is ever honoured through them), recursively to
+    `_MAX_EXEC_DEPTH`. A virtual segment (`_Virtual`) is a leaf: its own segments are judged,
+    nothing is scanned inside it.
+    Detection is ADDITIVE: it only ever yields more segments or a refusal. A `_Refusal` is
+    yielded instead when the scan is over its step / code-count cap, nested too deep to follow,
+    cannot parse the text with certainty (`_LexUncertain`) or crashes - the caller blocks, so no
+    failure of the scan can turn into an allow. `budget` is `[scanner steps left, nested code
+    strings left]`, shared by every level.
+
+    Only text that spells `git` is ever scanned for nested code: nested code is a de-quoted
+    rewrite of its parent, so it can only contain a git invocation if the parent contains a
+    `g<quotes>i<quotes>t` spelling. That keeps a big git-free command (a heredoc writing a
+    file) entirely off this path. The scan reads the RAW command (see the note above); only
+    the real segments come from the continuation-joined lines."""
+    yield from _scannable_segments(command)
+    text = command
+    if not _git_mentioned(text):
+        return
+    if budget is None:
+        budget = [_MAX_EXEC_SCAN_STEPS, _MAX_EXEC_CODES]
+    try:
+        codes = _executed_code(text, budget)
+    except _ExecOverBudget:
+        yield _Refusal(_EXEC_BUDGET_MSG)
+        return
+    except Exception:       # `_LexUncertain`, or a scanner fault: either way, cannot see = refuse
+        yield _Refusal(_LEX_UNCERTAIN_MSG)
+        return
+    for code in codes:
+        if not _git_mentioned(code):
+            continue
+        budget[1] -= 1
+        if budget[1] < 0:
+            yield _Refusal(_EXEC_BUDGET_MSG)
+            return
+        if isinstance(code, _Virtual):
+            yield from _scannable_segments(code)        # a leaf: see `_Virtual`
+            continue
+        if depth >= _MAX_EXEC_DEPTH:
+            yield _Refusal(_NESTING_MSG)
+            return
+        yield from _executable_segments(code, budget, depth + 1)
+
+
 def _git_evaluate(command: str):
     """Thin wrapper around `_git_evaluate_impl()` (2026-08-27 I-3b Unit
     1b-i). Kept as the stable public entry point — same name, same
@@ -2451,7 +4290,9 @@ def _git_evaluate_impl(command: str, suppressed_counter):
     hatch_record_count = 0
     scan_work = 0  # running `_scan_work` total — see `_MAX_GIT_SCAN_WORK`
     tokenized_bytes = 0  # running total handed to shlex — see `_MAX_GIT_TOKENIZE_BYTES`
-    for seg in _scannable_segments(command):
+    for seg in _executable_segments(command):
+        if isinstance(seg, _Refusal):
+            return 2, seg.msg   # nested code over its step / count cap or `_MAX_EXEC_DEPTH`, or unparseable
         seg = seg.strip()
         if not seg:
             continue
