@@ -137,6 +137,7 @@
       "Edit(~/.claude/settings.local.json)",
       "Edit(~/.claude/managed-settings.d/**)",
       "Edit(~/.claude/scripts/**)",
+      "Edit(~/.claude/githooks/**)",
       "Edit(~/.claude/logs/**)",
       "Edit(**/.claude/settings*.json)",
       "Edit(//**/.claude/settings*.json)",

@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # to git status. bash 3.2-safe: plain indexed array, no declare -A / mapfile.
 GUARD_PATHS=(
   agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
-  macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/ rules-personal/
+  macos/ tools/justfile cast/ VERSION .githooks/ skills-personal/ managed-settings-personal/ rules-personal/
 )
 if [[ "${CAST_INSTALL_FORCE:-0}" != "1" ]]; then
   # One status call both detects and lists: tracked changes (staged or not) plus untracked
@@ -1005,8 +1005,63 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     fi
 fi
 
-# --- Wire git hooks (pre-commit, pre-push, post-merge auto-install) ---
-git -C "$SCRIPT_DIR" config core.hooksPath .githooks 2>/dev/null || true
+# --- Install git hooks (pre-commit, post-commit, post-merge, pre-push) ---
+# Git hooks run in the user's UNSANDBOXED terminal, so they must not live in an agent-writable
+# repo dir: deploy byte-identical copies to $CLAUDE_DIR/githooks/ (denied to agent edits by
+# managed-settings.d/11-deny.json) and point core.hooksPath at THAT absolute dir. The installed
+# hooks call only installed ~/.claude/scripts/* (the repo is passed as data via CAST_REPO_ROOT).
+# Refuses a symlinked destination dir/file or a non-regular source; each file is staged to a
+# temp name and renamed over the target (rename replaces a dir entry, never writes through one).
+GITHOOKS_DIR="$CLAUDE_DIR/githooks"
+info "Installing git hooks..."
+if [ -L "$GITHOOKS_DIR" ] || { [ -e "$GITHOOKS_DIR" ] && [ ! -d "$GITHOOKS_DIR" ]; }; then
+    error "ERROR: install.sh aborted — $GITHOOKS_DIR is a symlink or not a directory; refusing to deploy git hooks through it."
+    exit 1
+fi
+mkdir -p "$GITHOOKS_DIR"
+for _gh_name in pre-commit post-commit post-merge pre-push cold-start-baseline.txt; do
+    _gh_src="$SCRIPT_DIR/.githooks/$_gh_name"
+    _gh_dest="$GITHOOKS_DIR/$_gh_name"
+    _gh_mode=755
+    [ "$_gh_name" = "cold-start-baseline.txt" ] && _gh_mode=644
+    if [ -L "$_gh_src" ] || [ ! -f "$_gh_src" ]; then
+        error "ERROR: install.sh aborted — .githooks/$_gh_name is missing or not a regular file."
+        exit 1
+    fi
+    if [ -L "$_gh_dest" ] || { [ -e "$_gh_dest" ] && [ ! -f "$_gh_dest" ]; }; then
+        error "ERROR: install.sh aborted — $_gh_dest is a symlink or not a regular file; refusing to overwrite it."
+        exit 1
+    fi
+    _gh_tmp="$(mktemp "$GITHOOKS_DIR/.install-XXXXXX")" || { error "ERROR: install.sh aborted — could not stage $_gh_name."; exit 1; }
+    if ! { cp "$_gh_src" "$_gh_tmp" && chmod "$_gh_mode" "$_gh_tmp" && mv -f "$_gh_tmp" "$_gh_dest"; }; then
+        rm -f "$_gh_tmp"
+        error "ERROR: install.sh aborted — could not install $_gh_name."
+        exit 1
+    fi
+done
+unset _gh_name _gh_src _gh_dest _gh_mode _gh_tmp
+success "  Git hooks installed: $GITHOOKS_DIR"
+
+# --- Wire git hooks: core.hooksPath = the ABSOLUTE installed dir ---
+# Never write the repo's git config under a test/CI/temp HOME (same guard as launchctl above,
+# minus CAST_INSTALL_NO_LAUNCHCTL, which is launchd-specific):
+# a temp-HOME path must not land in a real repo's config, and CI checkouts are throwaway.
+_cast_skip_hookspath() {
+    [ -n "${CI:-}" ] && return 0
+    [ -n "${CLAUDE_SUBPROCESS:-}" ] && return 0
+    [ -f "$HOME/.cast-test-home" ] && return 0   # BATS temp-HOME sentinel
+    case "$HOME" in
+        /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) return 0 ;;
+    esac
+    return 1
+}
+if _cast_skip_hookspath; then
+    warn "  core.hooksPath NOT written (test/CI/temp HOME) — repo git config untouched"
+elif git -C "$SCRIPT_DIR" config core.hooksPath "$GITHOOKS_DIR" 2>/dev/null; then
+    success "  core.hooksPath -> $GITHOOKS_DIR"
+else
+    warn "  Could not set core.hooksPath — run: git config core.hooksPath $GITHOOKS_DIR"
+fi
 
 # --- Prune old install-snapshot backups (keep last 5) ---
 # Matches only timestamped dirs created by this script: YYYYMMDD-HHMMSS
