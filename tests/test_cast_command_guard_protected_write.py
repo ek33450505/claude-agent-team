@@ -46,7 +46,11 @@ class _Base(unittest.TestCase):
         cls.cg = _load()
 
     def setUp(self):
-        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="pwguard-"))
+        # Scratch HOME must NOT sit under /tmp: the ALLOW cases name /tmp (`find /tmp ... -delete`,
+        # `TMPDIR=/tmp ...`), and if /tmp is an ancestor of the protected roots the guard correctly
+        # BLOCKS them. Linux's default tempdir IS /tmp; macOS's is /var/folders. Prefer /var/tmp.
+        base = "/var/tmp" if os.access("/var/tmp", os.W_OK | os.X_OK) else None
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="pwguard-", dir=base))
         self.home = os.path.join(self.tmp, "home")
         self.work = os.path.join(self.tmp, "work")
         for d in ("githooks", "scripts", "config", "logs"):

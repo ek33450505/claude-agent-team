@@ -762,6 +762,8 @@ def _dry_run_block(pattern, variants) -> bool:
     """True if `pattern` (a command-only BLOCK regex) matches any variant WITHOUT a dry-run in
     effect after the match (see the note above `_DRY_TOGGLE`)."""
     for v in variants:
+        if pattern.search(v) is None:
+            continue                       # the common case: skip the toggle scan entirely
         last = None
         for t in _DRY_TOGGLE.finditer(v):
             last = t
@@ -1443,7 +1445,9 @@ def _exec_split_words(seg):
             if c == '\\':
                 quoted = True
                 if i + 1 < n:
-                    text.append(seg[i + 1]); dyn.append(False); unq.append('\0')
+                    text.append(seg[i + 1])
+                    dyn.append(False)
+                    unq.append('\0')
                 i += 2
             elif c == "'":
                 quoted = True
@@ -1451,7 +1455,9 @@ def _exec_split_words(seg):
                 if j < 0:
                     return None
                 for ch in seg[i + 1:j]:
-                    text.append(ch); dyn.append(False); unq.append('\0')
+                    text.append(ch)
+                    dyn.append(False)
+                    unq.append('\0')
                 i = j + 1
             elif c == '"':
                 quoted = True
@@ -1464,10 +1470,14 @@ def _exec_split_words(seg):
                         i += 1
                         break
                     if ch == '\\' and i + 1 < n and seg[i + 1] in '$`"\\\n':
-                        text.append(seg[i + 1]); dyn.append(False); unq.append('\0')
+                        text.append(seg[i + 1])
+                        dyn.append(False)
+                        unq.append('\0')
                         i += 2
                         continue
-                    text.append(ch); dyn.append(ch in '$`'); unq.append('\0')
+                    text.append(ch)
+                    dyn.append(ch in '$`')
+                    unq.append('\0')
                     if ch == '$' and (seg[i + 1:i + 2] in ('@', '*') or seg[i + 1:i + 3] in ('{@', '{*')):
                         splits = True
                     i += 1
@@ -1479,10 +1489,14 @@ def _exec_split_words(seg):
                 if j >= n:
                     return None
                 for ch in _ansi_c(seg[i + 2:j]):
-                    text.append(ch); dyn.append(False); unq.append('\0')
+                    text.append(ch)
+                    dyn.append(False)
+                    unq.append('\0')
                 i = j + 1
             else:
-                text.append(c); dyn.append(c in '$`*?['); unq.append(c)
+                text.append(c)
+                dyn.append(c in '$`*?[')
+                unq.append(c)
                 if c in '$`*?[':
                     splits = True
                 i += 1
@@ -2241,7 +2255,8 @@ def _worktree_common_dirs(texts, tracker):
     (N1). Memoised per `_git_evaluate` call on everything the answer depends on."""
     out, seen, unresolvable = [], set(), False
     for text in texts:
-        inv = _git_invocation_dirs(text)
+        # Pure in `text`, and padding repeats the same segment thousands of times: lex it once.
+        inv = _memoized(('wtinv', text), lambda t=text: _git_invocation_dirs(t))
         if inv is None:
             continue
         if inv is _CUT or tracker.overflow:
@@ -5771,7 +5786,7 @@ def _git_evaluate_impl(command: str, suppressed_counter):
         # 2026-10-07 U6a-1: exec-capable config keys (after the gc checks, so a
         # gc-expiry hit keeps its own message and hatch).
         if (any(hit_env(p) for p in _GIT_CONFIG_EXEC_BLOCKS)
-                or (mentions_git and _exec_config_cmd_blocks(seg))):
+                or (mentions_git and _memoized(('execcfg', seg), lambda: _exec_config_cmd_blocks(seg)))):
             if hit(_GIT_CONFIG_HATCH_ALLOW):
                 record_hatch_use('CAST_GIT_CONFIG_OK', 'git-config-exec')
             else:
