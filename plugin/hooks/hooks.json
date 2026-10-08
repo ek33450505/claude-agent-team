@@ -168,7 +168,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-pretool-dispatch.py\"",
+            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; python3 -E -s \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-pretool-dispatch.py\"",
             "timeout": 5
           }
         ]
