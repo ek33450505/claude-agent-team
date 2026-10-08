@@ -71,6 +71,39 @@ conn.close()
 " "$CAST_DB" "$sha" "$recorded_at" "$repo"
 }
 
+# D5b helpers. Identity event = a D5a line (has the "agent_type" key).
+# args: ts session_id agent_type agent_id [repo]
+write_identity_event() {
+    local ts="$1" sid="$2" atype="$3" aid="$4" repo="${5:-}"
+    local repo_json=""
+    [ -n "$repo" ] && repo_json=",\"repo\":\"$repo\""
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"%s","in_claude_session":true,"agent_type":"%s","agent_id":"%s"%s}\n' \
+        "$ts" "$sid" "$atype" "$aid" "$repo_json" >> "$AUDIT_FILE"
+}
+
+# Write Claude Code's subagent sidecar. args: session_id agent_id json [subdir]
+# subdir "" = flat layout; "workflows/w1" = the workflow layout.
+write_sidecar() {
+    local sid="$1" aid="$2" json="$3" sub="${4:-}"
+    local dir="$HOME/.claude/projects/-tmp-x/$sid/subagents"
+    [ -n "$sub" ] && dir="$dir/$sub"
+    mkdir -p "$dir"
+    printf '%s' "$json" > "$dir/agent-$aid.meta.json"
+}
+
+run_reconcile() {
+    run --separate-stderr env CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           PYTHONDONTWRITEBYTECODE=1 \
+           "$@" python3 "$RECONCILE"
+}
+
+# first violation's field
+viol_field() {
+    echo "$output" | python3 -c 'import sys,json; print(json.load(sys.stdin)["violations"][0][sys.argv[1]])' "$1"
+}
+
 # ---------------------------------------------------------------------------
 # T1: No audit file → status=skip, exit 0
 # ---------------------------------------------------------------------------
@@ -736,9 +769,29 @@ prepush_real_script_fixture() {
 # (Rewritten for S3c: this test previously asserted that ANY non-UTF-8 byte, even on an
 # unrelated line, made the whole check unverifiable. It now asserts that only a
 # marker-bearing undecodable line does.)
-@test "audit unparseable: non-UTF-8 line mentioning COMMIT_HATCH_USED → unverifiable (not skip), exit 0, sanitized reason, WARN, checkpoint kept" {
+# (Rewritten for D5b, intentional behavior change: a newline-TERMINATED non-UTF-8 line that
+# mentions COMMIT_HATCH_USED used to make the whole check unverifiable (exit 0); it is now
+# a "corrupt hatch line" VIOLATION (exit 1, Ed 2026-10-04). Only the LAST line of a file
+# with no trailing newline (an append in progress) stays unverifiable - tested below.)
+@test "audit unparseable: non-UTF-8 line mentioning COMMIT_HATCH_USED (newline-terminated) → corrupt hatch line violation, exit 1" {
     write_hatch_event "$T1" "sess-nonutf8" "true"
+    insert_provenance "$PROV_MATCH"
     printf '\377\376 {"event":"COMMIT_HATCH_USED"} not-utf8\n' >> "$AUDIT_FILE"
+    run --separate-stderr env -u PYTHONUTF8 LC_ALL=en_US.ISO8859-1 CAST_AUDIT_PATH="$AUDIT_FILE" \
+           CAST_DB_PATH="$CAST_DB" \
+           CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
+           python3 "$RECONCILE"
+    [ "$status" -eq 1 ]
+    [ "$(json_field status)" = "violations" ]
+    [ "$(viol_field reason)" = "corrupt hatch line (line 2)" ]
+    [[ "$stderr" == *"corrupt hatch line (line 2)"* ]]
+    # Nothing acked: the checkpoint must not advance.
+    [ "$(cat "$CHECKPOINT")" = "$T0" ]
+}
+
+@test "audit unparseable: non-UTF-8 hatch line as LAST line without trailing newline → unverifiable (not skip), exit 0, sanitized reason, WARN, checkpoint kept" {
+    write_hatch_event "$T1" "sess-nonutf8" "true"
+    printf '\377\376 {"event":"COMMIT_HATCH_USED"} not-utf8' >> "$AUDIT_FILE"
     run --separate-stderr env -u PYTHONUTF8 LC_ALL=en_US.ISO8859-1 CAST_AUDIT_PATH="$AUDIT_FILE" \
            CAST_DB_PATH="$CAST_DB" \
            CAST_RECONCILE_CHECKPOINT="$CHECKPOINT" \
@@ -875,4 +928,203 @@ prepush_real_script_fixture() {
     [ "$(json_field status)" = "violations" ]
     echo "$output" | python3 -c \
         'import sys,json; d=json.load(sys.stdin); assert any(v["session_id"]=="sess-after-nul" for v in d["violations"]), d'
+}
+
+
+# ===========================================================================
+# D5b: identity events - WHO made the hatch commit (sidecar-resolved, never the
+# event's own agent_type)
+# ===========================================================================
+
+@test "D5b a: identity event, sidecar agentType commit → clean exit 0 even with NO provenance row" {
+    write_identity_event "$T1" "sess-id1" "commit" "agentaaa1"
+    write_sidecar "sess-id1" "agentaaa1" '{"agentType":"commit","spawnDepth":1}'
+    run_reconcile
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+    [ "$(json_field checked)" = "1" ]
+}
+
+@test "D5b b: identity event with empty agent_id → main-session hatch violation exit 1, even WITH a provenance row" {
+    write_identity_event "$T1" "sess-id1" "" ""
+    insert_provenance "$PROV_MATCH"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(json_field status)" = "violations" ]
+    [ "$(viol_field reason)" = "main-session hatch" ]
+    [ "$(viol_field agent_id)" = "" ]
+    [[ "$stderr" == *"main-session hatch"* ]]
+    [[ "$stderr" == *"commit__<label>"* ]]
+    [[ "$stderr" == *"CAST_RECONCILE_ACK=1"* ]]
+}
+
+@test "D5b c: name-spoof sidecar (agentType==name==commit) → unverifiable violation, event agent_type is not trusted" {
+    write_identity_event "$T1" "sess-id1" "commit" "agentccc1"
+    write_sidecar "sess-id1" "agentccc1" '{"agentType":"commit","name":"commit"}'
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "commit-agent identity unverifiable (no trusted sidecar)" ]
+    [ "$(viol_field agent_type)" = "commit" ]
+    [ "$(viol_field agent_id)" = "agentccc1" ]
+}
+
+@test "D5b c2: identity event claiming commit but NO sidecar at all → unverifiable violation" {
+    write_identity_event "$T1" "sess-id1" "commit" "agentnone"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "commit-agent identity unverifiable (no trusted sidecar)" ]
+}
+
+@test "D5b d: sidecar agentType backend-writer → 'agent backend-writer is not the commit agent'" {
+    write_identity_event "$T1" "sess-id1" "commit" "agentddd1"
+    write_sidecar "sess-id1" "agentddd1" '{"agentType":"backend-writer"}'
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "agent backend-writer is not the commit agent" ]
+    [[ "$stderr" == *"agent backend-writer is not the commit agent"* ]]
+}
+
+@test "D5b e: named teammate shape with customAgentType commit → clean" {
+    write_identity_event "$T1" "sess-id1" "commit__x" "agenteee1"
+    write_sidecar "sess-id1" "agenteee1" '{"agentType":"commit__x","name":"commit__x","taskKind":"in_process_teammate","customAgentType":"commit"}'
+    run_reconcile
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+}
+
+@test "D5b f: two candidate sidecars (flat + workflows/w1) for one agent_id → unverifiable violation" {
+    write_identity_event "$T1" "sess-id1" "commit" "agentfff1"
+    write_sidecar "sess-id1" "agentfff1" '{"agentType":"commit","spawnDepth":1}'
+    write_sidecar "sess-id1" "agentfff1" '{"agentType":"commit","spawnDepth":1}' "workflows/w1"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "commit-agent identity unverifiable (no trusted sidecar)" ]
+}
+
+@test "D5b g: legacy event (no agent_type key) keeps the window rule - row in window → clean" {
+    write_hatch_event "$T1" "sess-leg" "true"
+    insert_provenance "$PROV_MATCH"
+    run_reconcile
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+}
+
+@test "D5b g2: legacy event (no agent_type key) with no row in window → violation" {
+    write_hatch_event "$T1" "sess-leg" "true"
+    insert_provenance "$PROV_OUTSIDE"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(json_field status)" = "violations" ]
+    [[ "$output" != *'"agent_type"'* ]]
+}
+
+@test "D5b h1: truncated-JSON line mentioning COMMIT_HATCH_USED mid-file → corrupt hatch line violation, exit 1" {
+    write_hatch_event "$T1" "sess-ok" "false"
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"s","in_cl\n' "$T1" >> "$AUDIT_FILE"
+    write_hatch_event "$T1" "sess-ok2" "false"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "corrupt hatch line (line 2)" ]
+    [[ "$stderr" == *"corrupt hatch line (line 2)"* ]]
+}
+
+@test "D5b h2: non-UTF-8 line mentioning COMMIT_HATCH_USED mid-file → corrupt hatch line violation, exit 1" {
+    write_hatch_event "$T1" "sess-ok" "false"
+    printf '\377\376 COMMIT_HATCH_USED\n' >> "$AUDIT_FILE"
+    write_hatch_event "$T1" "sess-ok2" "false"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "corrupt hatch line (line 2)" ]
+}
+
+@test "D5b h3: non-object JSON line mentioning COMMIT_HATCH_USED → corrupt hatch line violation" {
+    printf '["COMMIT_HATCH_USED"]\n' >> "$AUDIT_FILE"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "corrupt hatch line (line 1)" ]
+}
+
+@test "D5b h4: truncated-JSON hatch line as LAST line without trailing newline → unverifiable, exit 0, checkpoint kept" {
+    write_hatch_event "$T1" "sess-ok" "false"
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"s","in_cl' "$T1" >> "$AUDIT_FILE"
+    run_reconcile
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "unverifiable" ]
+    [[ "$(json_field warning)" == *"NOT performed"* ]]
+    [ "$(cat "$CHECKPOINT")" = "$T0" ]
+}
+
+@test "D5b h5: the same truncated line WITH a trailing newline → violation (newline decides)" {
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"s","in_cl\n' "$T1" >> "$AUDIT_FILE"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "corrupt hatch line (line 1)" ]
+}
+
+@test "D5b h6: corrupt line → violation; ACK run acks it and records its sha256; next non-ACK run → clean with acked_corrupt_lines 1" {
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"s","in_cl\n' "$T1" >> "$AUDIT_FILE"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "corrupt hatch line (line 1)" ]
+
+    run_reconcile CAST_RECONCILE_ACK=1
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "acked" ]
+    want="$(head -n 1 "$AUDIT_FILE" | tr -d '\n' | shasum -a 256 | cut -d' ' -f1)"
+    ack_line="$(grep RECONCILE_ACK_USED "$AUDIT_FILE")"
+    [[ "$ack_line" == *"\"corrupt_line_sha256\": [\"$want\"]"* ]]
+
+    run_reconcile
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+    [ "$(json_field acked_corrupt_lines)" = "1" ]
+}
+
+@test "D5b h7: a DIFFERENT corrupt line after an acked one → violation again" {
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"s","in_cl\n' "$T1" >> "$AUDIT_FILE"
+    run_reconcile CAST_RECONCILE_ACK=1
+    [ "$status" -eq 0 ]
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"other","in_c\n' "$T1" >> "$AUDIT_FILE"
+    run_reconcile
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "corrupt hatch line (line 4)" ]
+}
+
+@test "D5b h8: a forged RECONCILE_ACK_USED carrying the line's hash is accepted (documented cooperative boundary)" {
+    printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","session_id":"s","in_cl\n' "$T1" >> "$AUDIT_FILE"
+    h="$(head -n 1 "$AUDIT_FILE" | tr -d '\n' | shasum -a 256 | cut -d' ' -f1)"
+    printf '{"event":"RECONCILE_ACK_USED","corrupt_line_sha256":["%s"]}\n' "$h" >> "$AUDIT_FILE"
+    run_reconcile
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+    [ "$(json_field acked_corrupt_lines)" = "1" ]
+}
+
+@test "D5b i: CAST_RECONCILE_ACK=1 acks a main-session violation → exit 0 acked, RECONCILE_ACK_USED appended, checkpoint advanced" {
+    write_identity_event "$T1" "sess-id1" "" ""
+    run_reconcile CAST_RECONCILE_ACK=1
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "acked" ]
+    [ "$(viol_field reason)" = "main-session hatch" ]
+    grep -q RECONCILE_ACK_USED "$AUDIT_FILE"
+    [ "$(cat "$CHECKPOINT")" != "$T0" ]
+}
+
+@test "D5b j: foreign-repo identity event is still skipped" {
+    local other="$HOME/other-repo" mine="$HOME/my-repo"
+    mkdir -p "$other" "$mine"
+    write_identity_event "$T1" "sess-id1" "" "" "$other"
+    run_reconcile CAST_RECONCILE_REPO="$mine"
+    [ "$status" -eq 0 ]
+    [ "$(json_field status)" = "clean" ]
+    [ "$(json_field checked)" = "0" ]
+}
+
+@test "D5b k: own-repo main-session identity event IS judged (repo scoping keeps matching events)" {
+    local mine="$HOME/my-repo"
+    mkdir -p "$mine"
+    write_identity_event "$T1" "sess-id1" "" "" "$mine"
+    run_reconcile CAST_RECONCILE_REPO="$mine"
+    [ "$status" -eq 1 ]
+    [ "$(viol_field reason)" = "main-session hatch" ]
 }
