@@ -162,6 +162,7 @@ When given a worktree branch name (e.g., from a backend-writer, frontend-writer,
 3. If clean: merge with `git merge --no-ff <worktree-branch>` and delete the branch
 4. If conflicts: surface to user with the conflicting files listed — do NOT force-merge
 5. After successful merge: run `git worktree remove` if the worktree path still exists
+   - Use plain `git worktree remove <path>` only. `git worktree prune`, `git worktree remove --force` and `git gc` are blocked by the git guard (`CAST_WORKTREE_OK` / `CAST_GC_OK` are the user's call); if removal is refused, surface it to the user rather than forcing.
 
 ## Headless Defaults
 

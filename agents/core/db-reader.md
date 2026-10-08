@@ -26,6 +26,7 @@ this task is read-only analysis and the user should run write operations separat
 **Supported databases:**
 - BigQuery: `bq query --use_legacy_sql=false 'SELECT ...'`
 - SQLite: `sqlite3 path/to/db.sqlite 'SELECT ...'`
+- With the Claude Code sandbox ON, `bq` is no longer in `excludedCommands`: if a sandboxed `bq` call fails, ask the user to run the exact query in their terminal with `!` and paste the result.
 
 Write efficient, commented queries:
 ```sql
