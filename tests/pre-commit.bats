@@ -577,11 +577,12 @@ SH
     skip "config-based hooks need git >= 2.54"
   fi
   git rm -q --cached ctl.txt 2>/dev/null || true
-  run env CAST_TEST_MARKER="$m_hook" LIB="$HOME/.claude/scripts/cast-hook-lib.sh" HOOK="$TEST_REPO/.githooks/pre-commit" REPO_ROOT="$TEST_REPO" bash -c '
+  # sed script via env: macOS /bin/bash 3.2 brace-expands {/,/^} in nested "$( "…" )" quotes (bats-macos, PR #421).
+  run env SEDX='/^_cast_stage_file() {/,/^}/p' CAST_TEST_MARKER="$m_hook" LIB="$HOME/.claude/scripts/cast-hook-lib.sh" HOOK="$TEST_REPO/.githooks/pre-commit" REPO_ROOT="$TEST_REPO" bash -c '
     set -euo pipefail
     . "$LIB"
     _git() { cast_git_safe "$REPO_ROOT" "$@"; }
-    eval "$(sed -n "/^_cast_stage_file() {/,/^}/p" "$HOOK")"
+    eval "$(sed -n "$SEDX" "$HOOK")"
     cd "$REPO_ROOT"
     _cast_stage_file cast-stats.json
   '
