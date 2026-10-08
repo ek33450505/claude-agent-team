@@ -516,6 +516,50 @@ def _committer_epoch(commit_text: str):
     return None
 
 
+def _prov_head_before(tool_use_id):
+    """head_before from the git guard's COMMIT_HATCH_USED audit line for this tool_use_id.
+
+    Reads at most the last 256 KiB of ~/.claude/logs/audit.jsonl, scanning backwards.
+    Returns (head_before_sha, event_epoch) or None (any problem, including an
+    unparseable timestamp → None)."""
+    try:
+        if not isinstance(tool_use_id, str) or not re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', tool_use_id):
+            return None
+        path = os.path.expanduser("~/.claude/logs/audit.jsonl")
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            start = max(0, size - 262144)
+            f.seek(start)
+            raw = f.read()
+        lines = raw.split(b"\n")
+        if start > 0:
+            lines = lines[1:]  # partial first line
+        for line in reversed(lines):
+            if b"COMMIT_HATCH_USED" not in line:
+                continue
+            try:
+                obj = json.loads(line.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            if not isinstance(obj, dict) or obj.get("tool_use_id") != tool_use_id:
+                continue
+            hb = obj.get("head_before")
+            ts = obj.get("timestamp")
+            if not (isinstance(hb, str) and re.fullmatch(r'[0-9a-f]{40}([0-9a-f]{24})?', hb)):
+                return None
+            if not (isinstance(ts, str) and re.fullmatch(
+                    r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z', ts)):
+                return None
+            import calendar
+            import time as _t
+            epoch = calendar.timegm(_t.strptime(ts.split(".")[0].rstrip("Z"), "%Y-%m-%dT%H:%M:%S"))
+            return hb, epoch
+    except Exception:
+        return None
+    return None
+
+
 def part5_commit_provenance(data: dict) -> None:
     """Record a commit_provenance row for a successful hatch commit. Fail-open, silent."""
     try:
@@ -566,8 +610,8 @@ def part5_commit_provenance(data: dict) -> None:
             return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
 
         repo = _git("rev-parse", "--show-toplevel")
-        sha = _git("rev-parse", "HEAD")
-        if not repo or not re.match(r'^[0-9a-f]{40,64}$', sha):
+        head = _git("rev-parse", "HEAD")
+        if not repo or not re.match(r'^[0-9a-f]{40,64}$', head):
             return
 
         # core.worktree (repo-controlled config) can make --show-toplevel report an
@@ -577,35 +621,74 @@ def part5_commit_provenance(data: dict) -> None:
         if os.path.commonpath([os.path.realpath(cwd), real_top]) != real_top:
             return
 
+        # Range mode: the guard's COMMIT_HATCH_USED audit line (same tool_use_id) carries
+        # HEAD-before, so every commit this call created gets a row. Any failure → None
+        # → today's HEAD-only path with its age checks.
+        shas = [head]
+        hb_info = _prov_head_before(data.get("tool_use_id"))
+        head_before, event_epoch = hb_info if hb_info else (None, None)
+        use_range = False
+        if head_before:
+            try:
+                out = _git("rev-list", "--max-count=51", f"{head_before}..HEAD")
+            except Exception:
+                out = None  # call failed → HEAD-only fallback
+            rng = [x for x in (out or "").split() if re.fullmatch(r'[0-9a-f]{40}([0-9a-f]{24})?', x)]
+            if 0 < len(rng) <= 50:
+                shas, use_range = rng, True
+            elif out is not None and not out.strip() and head == head_before:
+                return  # empty range and HEAD unmoved: nothing was committed
+            # else (rev-list failed, e.g. unknown head_before, or >50 commits):
+            # HEAD-only path with its age checks.
+
         # Bound the read: a repo-controlled commit object can be arbitrarily large, so
         # check its size (no object body is read) before pulling it into memory. A
         # missing object fails here (rc != 0 → "") and records nothing.
-        size = _git("cat-file", "-s", sha)
-        if not re.fullmatch(r'[0-9]{1,9}', size) or int(size) > _PROV_MAX_COMMIT_BYTES:
-            return
-        commit_ts = _committer_epoch(_git("cat-file", "commit", sha))
-        if commit_ts is None:
-            return
+        def _ok_commit(sha):
+            size = _git("cat-file", "-s", sha)
+            if not re.fullmatch(r'[0-9]{1,9}', size) or int(size) > _PROV_MAX_COMMIT_BYTES:
+                return False
+            commit_ts = _committer_epoch(_git("cat-file", "commit", sha))
+            if commit_ts is None:
+                return False
+            if use_range:
+                # Range mode: keep only commits CREATED by this call. Commits merely
+                # brought in (ff-merge / pull) keep their old committer time and drop
+                # out; 5 s slack for skew between the audit line and the commit.
+                return commit_ts >= event_epoch - 5
+            # A hatch `git commit … || true` / "nothing to commit" leaves an OLD
+            # HEAD in place — never record that as this call's commit.
+            age = time.time() - commit_ts
+            return _PROV_MIN_HEAD_AGE_S <= age <= _PROV_MAX_HEAD_AGE_S
 
-        # A hatch `git commit … || true` / "nothing to commit" leaves an OLD
-        # HEAD in place — never record that as this call's commit.
-        age = time.time() - commit_ts
-        if age > _PROV_MAX_HEAD_AGE_S or age < _PROV_MIN_HEAD_AGE_S:
+        shas = [x for x in shas if _ok_commit(x)]
+        if not shas:
             return
 
         branch = _git("rev-parse", "--abbrev-ref", "HEAD")
         session_id = data.get("session_id") or ""
-        agent = data.get("agent_type") or "main-session"
+        if not isinstance(session_id, str):
+            session_id = ""
+        at = data.get("agent_type")
+        agent = at if isinstance(at, str) and re.fullmatch(r'[A-Za-z0-9._:@/-]{1,64}', at) else "main-session"
         recorded_at = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         from cast_db import db_execute
-        ok = db_execute(
-            "INSERT OR IGNORE INTO commit_provenance (sha, session_id, agent, branch, repo, recorded_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (sha, session_id, agent, branch, repo, recorded_at),
-        )
-        if not ok:
-            _log_hook_error("part5_commit_provenance", f"db_execute returned False for {sha}")
+        for sha in shas:
+            # UPSERT: ONLY the git post-commit hook's 'unattributed' row is upgraded to
+            # the payload identity; any other label is kept. recorded_at/repo are left
+            # alone (reconcile window).
+            ok = db_execute(
+                "INSERT INTO commit_provenance (sha, session_id, agent, branch, repo, recorded_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(sha) DO UPDATE SET agent = excluded.agent,"
+                " session_id = CASE WHEN excluded.session_id != '' THEN excluded.session_id"
+                " ELSE commit_provenance.session_id END"
+                " WHERE commit_provenance.agent = 'unattributed'",
+                (sha, session_id, agent, branch, repo, recorded_at),
+            )
+            if not ok:
+                _log_hook_error("part5_commit_provenance", f"db_execute returned False for {sha}")
     except Exception as e:
         _log_hook_error("part5_commit_provenance", e)
 

@@ -394,7 +394,7 @@ prov_commit() {
       commit -q --allow-empty -m "fixture"
 }
 
-# prov_payload <command> <cwd> [session_id] [agent_type] [exit_code]
+# prov_payload <command> <cwd> [session_id] [agent_type] [exit_code] [tool_use_id]
 prov_payload() {
   python3 - "$@" <<'PYEOF'
 import json, sys
@@ -410,6 +410,8 @@ if len(a) > 3 and a[3]:
     d['agent_type'] = a[3]
 if len(a) > 4 and a[4]:
     d['tool_response']['exit_code'] = int(a[4])
+if len(a) > 5 and a[5]:
+    d['tool_use_id'] = a[5]
 print(json.dumps(d))
 PYEOF
 }
@@ -432,6 +434,164 @@ prov_count() { sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM commit_provenance;"
   assert_output "${sha}|sess-abc|main-session|main|${toplevel}"
   run sqlite3 "$CAST_DB_PATH" "SELECT recorded_at FROM commit_provenance;"
   [[ "$output" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+}
+
+# prov_audit <tool_use_id> <head_before> [epoch]: plant a COMMIT_HATCH_USED audit
+# line; timestamp defaults to now.
+prov_audit() {
+  mkdir -p "$HOME/.claude/logs"
+  local ts
+  ts="$(python3 -c 'import sys,datetime as d; e=float(sys.argv[1]) if len(sys.argv)>1 and sys.argv[1] else None; print((d.datetime.fromtimestamp(e,d.timezone.utc) if e else d.datetime.now(d.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"))' "${3:-}")"
+  printf '{"event":"COMMIT_HATCH_USED","timestamp":"%s","tool_use_id":"%s","head_before":"%s"}\n' "$ts" "$1" "$2" \
+    >> "$HOME/.claude/logs/audit.jsonl"
+}
+
+@test "provenance: pre-existing 'unattributed' row is upgraded to payload agent_type + session" {
+  prov_init
+  prov_commit
+  local sha; sha="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  sqlite3 "$CAST_DB_PATH" "INSERT INTO commit_provenance (sha, session_id, agent, branch, repo, recorded_at) VALUES ('$sha','','unattributed','main','$PROV_REPO','2020-01-01T00:00:00Z');"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-up commit)"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT agent, session_id FROM commit_provenance WHERE sha='$sha';"
+  assert_output "commit|sess-up"
+  [ "$(prov_count)" = "1" ]
+}
+
+@test "provenance: no agent_type -> main-session upgrades a pre-existing 'unattributed' row (forgery case)" {
+  prov_init
+  prov_commit
+  local sha; sha="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  sqlite3 "$CAST_DB_PATH" "INSERT INTO commit_provenance (sha, session_id, agent, branch, repo, recorded_at) VALUES ('$sha','old-sess','unattributed','main','$PROV_REPO','2020-01-01T00:00:00Z');"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" "")"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT agent, session_id FROM commit_provenance WHERE sha='$sha';"
+  assert_output "main-session|old-sess"
+}
+
+@test "provenance: recorded_at and repo are unchanged on conflict" {
+  prov_init
+  prov_commit
+  local sha; sha="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  sqlite3 "$CAST_DB_PATH" "INSERT INTO commit_provenance (sha, session_id, agent, branch, repo, recorded_at) VALUES ('$sha','','unattributed','main','/orig/repo','2020-01-01T00:00:00Z');"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-x commit)"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT agent, repo, recorded_at FROM commit_provenance WHERE sha='$sha';"
+  assert_output "commit|/orig/repo|2020-01-01T00:00:00Z"
+}
+
+@test "provenance: a pre-existing 'commit' row is NOT relabelled by a main-session call covering it" {
+  prov_init
+  prov_commit
+  local before; before="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  prov_commit
+  local sha; sha="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  sqlite3 "$CAST_DB_PATH" "INSERT INTO commit_provenance (sha, session_id, agent, branch, repo, recorded_at) VALUES ('$sha','orig','commit','main','$PROV_REPO','2020-01-01T00:00:00Z');"
+  prov_audit tu_keep "$before"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" other "" "" tu_keep)"
+  assert_success
+  run sqlite3 "$CAST_DB_PATH" "SELECT agent, session_id FROM commit_provenance WHERE sha='$sha';"
+  assert_output "commit|orig"
+}
+
+@test "provenance: ff-merged (old committer time) commits get no row; only the new commit does" {
+  prov_init
+  prov_commit
+  local before; before="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  local old=$(( $(date +%s) - 3600 ))
+  prov_commit "$old +0000"; prov_commit "$old +0000"
+  prov_commit
+  local newsha; newsha="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  prov_audit tu_ff "$before"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-ff "" "" tu_ff)"
+  assert_success
+  [ "$(prov_count)" = "1" ]
+  run sqlite3 "$CAST_DB_PATH" "SELECT sha FROM commit_provenance;"
+  assert_output "$newsha"
+}
+
+@test "provenance: commits with committer time before the event timestamp are excluded, later ones kept" {
+  prov_init
+  prov_commit
+  local before; before="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  local now; now="$(date +%s)"
+  prov_commit "$(( now - 600 )) +0000"
+  prov_commit "$now +0000"
+  prov_commit "$(( now + 5 )) +0000"
+  prov_audit tu_time "$before" "$now"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-t "" "" tu_time)"
+  assert_success
+  [ "$(prov_count)" = "2" ]
+}
+
+@test "provenance: audit line without a parseable timestamp falls back to HEAD only" {
+  prov_init
+  prov_commit
+  local before; before="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  prov_commit; prov_commit
+  mkdir -p "$HOME/.claude/logs"
+  printf '{"event":"COMMIT_HATCH_USED","timestamp":"garbage","tool_use_id":"tu_nots","head_before":"%s"}\n' "$before" >> "$HOME/.claude/logs/audit.jsonl"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-n "" "" tu_nots)"
+  assert_success
+  [ "$(prov_count)" = "1" ]
+}
+
+@test "provenance: matching audit tool_use_id + head_before records every commit in the range" {
+  prov_init
+  prov_commit
+  local before; before="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  prov_commit; prov_commit; prov_commit
+  prov_audit tu_match "$before"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-r "" "" tu_match)"
+  assert_success
+  [ "$(prov_count)" = "3" ]
+  run sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM commit_provenance WHERE sha='$before';"
+  assert_output "0"
+}
+
+@test "provenance: mismatched audit tool_use_id falls back to HEAD only" {
+  prov_init
+  prov_commit
+  local before; before="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  prov_commit; prov_commit
+  prov_audit tu_other "$before"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-r "" "" tu_mine)"
+  assert_success
+  [ "$(prov_count)" = "1" ]
+  run sqlite3 "$CAST_DB_PATH" "SELECT sha FROM commit_provenance;"
+  assert_output "$(git -C "$PROV_REPO" rev-parse HEAD)"
+}
+
+@test "provenance: range over 50 commits falls back to HEAD only" {
+  prov_init
+  prov_commit
+  local before; before="$(git -C "$PROV_REPO" rev-parse HEAD)"
+  local i
+  for i in $(seq 1 51); do prov_commit; done
+  prov_audit tu_big "$before"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-r "" "" tu_big)"
+  assert_success
+  [ "$(prov_count)" = "1" ]
+}
+
+@test "provenance: well-formed but nonexistent head_before falls back to HEAD-only with payload agent" {
+  prov_init
+  prov_commit
+  prov_audit tu_bogus "$(printf 'ab%.0s' $(seq 1 20))"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-b backend-writer "" tu_bogus)"
+  assert_success
+  [ "$(prov_count)" = "1" ]
+  run sqlite3 "$CAST_DB_PATH" "SELECT sha, agent FROM commit_provenance;"
+  assert_output "$(git -C "$PROV_REPO" rev-parse HEAD)|backend-writer"
+}
+
+@test "provenance: empty range (head_before == HEAD) records nothing" {
+  prov_init
+  prov_commit
+  prov_audit tu_empty "$(git -C "$PROV_REPO" rev-parse HEAD)"
+  run python3 "$POST_TOOL_PY" <<< "$(prov_payload 'CAST_COMMIT_AGENT=1 git commit -m x' "$PROV_REPO" sess-r "" "" tu_empty)"
+  assert_success
+  [ "$(prov_count)" = "0" ]
 }
 
 @test "provenance: payload agent_type is recorded as the agent" {
@@ -551,7 +711,7 @@ prov_count() { sqlite3 "$CAST_DB_PATH" "SELECT COUNT(*) FROM commit_provenance;"
   [ "$(prov_count)" = "1" ]
 }
 
-@test "provenance: an existing row (post-commit hook / commit agent) is write-once — agent AND session_id unchanged" {
+@test "provenance: an existing row (post-commit hook / commit agent) is kept as-is unless 'unattributed' — agent AND session_id unchanged" {
   prov_init
   prov_commit
   local sha

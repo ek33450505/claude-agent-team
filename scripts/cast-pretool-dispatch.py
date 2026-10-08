@@ -1551,6 +1551,13 @@ def main():
         git_guard = _load("cast_git_guard", "cast-git-guard.py")
         if git_guard is not None:
             try:
+                # D5a-1: hand the hook payload's identity to the guard (hatch audit events).
+                # Best-effort: a failure here must never change the guard verdict.
+                if hasattr(git_guard, "set_hook_context"):
+                    git_guard.set_hook_context(data)
+            except Exception:
+                pass
+            try:
                 gcode, gmsg = _run_under_watchdog(
                     lambda: git_guard.evaluate("Bash", tool_input),
                     _GIT_GUARD_BUDGET_SECS,
@@ -1573,6 +1580,12 @@ def main():
                            f"degraded git block")
                 gmsg = _degraded_git_block(command, "failed while checking this command")
                 gcode = 2 if gmsg else 0
+            finally:
+                try:
+                    if hasattr(git_guard, "clear_hook_context"):
+                        git_guard.clear_hook_context()
+                except Exception:
+                    pass
             if gcode == 2:
                 return _block(gmsg)
         else:

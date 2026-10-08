@@ -131,7 +131,23 @@ teardown() {
   assert_success
 
   run sqlite3 "$TEST_DB" "SELECT session_id, agent FROM commit_provenance WHERE sha='$sha';"
-  assert_output "testsession42|commit"
+  assert_output "testsession42|unattributed"
+}
+
+@test "cast-commit-provenance: record --agent commit sets the agent label" {
+  local sha="cc00abcdef12"
+  run env CAST_DB_PATH="$TEST_DB" python3 "$SCRIPT" record "$sha" --agent commit
+  assert_success
+  run sqlite3 "$TEST_DB" "SELECT agent FROM commit_provenance WHERE sha='$sha';"
+  assert_output "commit"
+}
+
+@test "cast-commit-provenance: record --agent with invalid name exits 2 and writes nothing" {
+  local sha="cc00abcdef34"
+  run env CAST_DB_PATH="$TEST_DB" python3 "$SCRIPT" record "$sha" --agent 'a;b'
+  [ "$status" -eq 2 ]
+  run sqlite3 "$TEST_DB" "SELECT COUNT(*) FROM commit_provenance WHERE sha='$sha';"
+  assert_output "0"
 }
 
 # ---------------------------------------------------------------------------

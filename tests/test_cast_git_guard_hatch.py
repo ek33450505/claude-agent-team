@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -712,6 +713,161 @@ class TestRecordHatchUseFailOpen(unittest.TestCase):
                     'record_hatch_use instead of failing open'
                 )
         self.assertEqual((code, msg), (0, None))
+
+
+class TestHatchAuditIdentity(unittest.TestCase):
+    """D5a-1: hook-payload identity + head_before/main_repo in the hatch audit events.
+    Temp HOME (the guard appends to ~/.claude/logs/audit.jsonl) and a temp repo as cwd."""
+
+    COMMIT_CMD = 'CAST_COMMIT_AGENT=1 git ' + 'com' + 'mit -m x'
+    PUSH_CMD = 'CAST_PUSH_OK=1 git ' + 'pu' + 'sh origin main'
+
+    def _git(self, cwd, *args):
+        env = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@e.x',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@e.x')
+        return subprocess.run(['git', '-C', cwd, *args], capture_output=True,
+                              text=True, check=True, env=env).stdout.strip()
+
+    def setUp(self):
+        self._orig_home = os.environ.get('HOME')
+        self._orig_cwd = os.getcwd()
+        self._orig_env = {k: os.environ.pop(k, None)
+                          for k in ('CAST_SESSION_ID', 'CLAUDE_SESSION_ID')}
+        self._tmp = os.path.realpath(tempfile.mkdtemp(prefix='cast-hatch-ident-'))
+        self.home = os.path.join(self._tmp, 'home')
+        os.makedirs(self.home)
+        os.environ['HOME'] = self.home
+        self.repo = os.path.join(self._tmp, 'repo')
+        os.makedirs(self.repo)
+        self._git(self.repo, 'init', '-q')
+        cast_git_guard.clear_hook_context()
+
+    def tearDown(self):
+        cast_git_guard.clear_hook_context()
+        os.chdir(self._orig_cwd)
+        if self._orig_home is None:
+            os.environ.pop('HOME', None)
+        else:
+            os.environ['HOME'] = self._orig_home
+        for k, v in self._orig_env.items():
+            if v is not None:
+                os.environ[k] = v
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _commit_in_repo(self):
+        self._git(self.repo, 'com' + 'mit', '-q', '--allow-empty', '-m', 'init')
+
+    def _events(self, name):
+        import json
+        path = os.path.join(self.home, '.claude', 'logs', 'audit.jsonl')
+        with open(path) as f:
+            return [e for e in map(json.loads, f) if e.get('event') == name]
+
+    def _run(self, cmd, cwd=None):
+        os.chdir(cwd or self.repo)
+        self.assertEqual(cast_git_guard._git_evaluate(cmd), (0, None))
+
+    def test_a_subagent_payload_identity_in_commit_event(self):
+        cast_git_guard.set_hook_context({
+            'session_id': 'sess-123', 'agent_type': 'commit',
+            'agent_id': 'agent-abc.1', 'tool_use_id': 'toolu_01AB'})
+        self._run(self.COMMIT_CMD)
+        (ev,) = self._events('COMMIT_HATCH_USED')
+        self.assertEqual(ev['session_id'], 'sess-123')
+        self.assertEqual(ev['agent_type'], 'commit')
+        self.assertEqual(ev['agent_id'], 'agent-abc.1')
+        self.assertEqual(ev['tool_use_id'], 'toolu_01AB')
+
+    def test_b_no_context_main_session_falls_back(self):
+        os.environ['CAST_SESSION_ID'] = 'env-sess'
+        try:
+            self._run(self.COMMIT_CMD)
+        finally:
+            os.environ.pop('CAST_SESSION_ID', None)
+        (ev,) = self._events('COMMIT_HATCH_USED')
+        self.assertEqual(ev['agent_type'], '')
+        self.assertEqual(ev['agent_id'], '')
+        self.assertEqual(ev['tool_use_id'], '')
+        self.assertEqual(ev['session_id'], 'env-sess')
+
+    def test_c_invalid_values_become_empty(self):
+        cast_git_guard.set_hook_context({
+            'session_id': 12345, 'agent_type': 'x' * 200,
+            'agent_id': 'abc\ndef', 'tool_use_id': 'a;rm'})
+        self.assertEqual(cast_git_guard._HOOK_CTX,
+                         {'session_id': '', 'agent_type': '', 'agent_id': '', 'tool_use_id': ''})
+        cast_git_guard.set_hook_context({'agent_id': 'ok\n'})   # trailing newline
+        self.assertEqual(cast_git_guard._HOOK_CTX['agent_id'], '')
+        cast_git_guard.set_hook_context('not a dict')
+        self.assertEqual(cast_git_guard._HOOK_CTX, {})
+        cast_git_guard.set_hook_context({'agent_type': 'x' * 128})
+        self.assertEqual(cast_git_guard._HOOK_CTX['agent_type'], 'x' * 128)
+
+    def test_d_head_before(self):
+        self._commit_in_repo()
+        head = self._git(self.repo, 'rev-parse', 'HEAD')
+        self._run(self.COMMIT_CMD)
+        (ev,) = self._events('COMMIT_HATCH_USED')
+        self.assertEqual(ev['head_before'], head)
+
+    def test_d_empty_repo_head_before_empty(self):
+        self._run(self.COMMIT_CMD)
+        (ev,) = self._events('COMMIT_HATCH_USED')
+        self.assertEqual(ev['head_before'], '')
+        self.assertEqual(ev['main_repo'], os.path.realpath(self.repo))
+
+    def test_e_linked_worktree_main_repo(self):
+        self._commit_in_repo()
+        wt = os.path.join(self._tmp, 'wt')
+        self._git(self.repo, 'worktree', 'add', '-q', wt, '-b', 'side')
+        self._run(self.COMMIT_CMD, cwd=wt)
+        (ev,) = self._events('COMMIT_HATCH_USED')
+        self.assertEqual(os.path.realpath(ev['repo']), os.path.realpath(wt))
+        self.assertEqual(ev['main_repo'], os.path.realpath(self.repo))
+
+    def test_f_context_replaced_not_merged(self):
+        cast_git_guard.set_hook_context({'agent_type': 'commit', 'agent_id': 'A'})
+        cast_git_guard.set_hook_context({'session_id': 'only-b'})
+        self._run(self.COMMIT_CMD)
+        (ev,) = self._events('COMMIT_HATCH_USED')
+        self.assertEqual(ev['agent_type'], '')
+        self.assertEqual(ev['agent_id'], '')
+        self.assertEqual(ev['session_id'], 'only-b')
+
+    def test_g_push_hatch_carries_identity(self):
+        cast_git_guard.set_hook_context({'session_id': 's1', 'agent_type': 'push',
+                                         'agent_id': 'p1', 'tool_use_id': 'tu1'})
+        self._run(self.PUSH_CMD)
+        (ev,) = self._events('PUSH_HATCH_USED')
+        self.assertEqual((ev['session_id'], ev['agent_type'], ev['agent_id'], ev['tool_use_id']),
+                         ('s1', 'push', 'p1', 'tu1'))
+        self.assertNotIn('head_before', ev)
+
+    def test_h_many_hatched_segments_bounded_facts_and_audit_lines(self):
+        self._commit_in_repo()
+        calls = []
+        real_run = cast_git_guard._load_git_safe().run
+
+        class _Spy:
+            @staticmethod
+            def run(*a, **k):
+                calls.append(a)
+                return real_run(*a, **k)
+
+        os.chdir(self.repo)
+        cmd = ' && '.join([self.COMMIT_CMD] * 60)
+        with mock.patch.object(cast_git_guard, '_load_git_safe', return_value=_Spy):
+            t0 = time.monotonic()
+            self.assertEqual(cast_git_guard._git_evaluate(cmd), (0, None))
+            elapsed = time.monotonic() - t0
+        self.assertLessEqual(len(calls), 2)
+        self.assertLess(elapsed, 1.0)
+        n = len(self._events('COMMIT_HATCH_USED'))
+        self.assertGreaterEqual(n, 1)
+        self.assertLessEqual(n, cast_git_guard._MAX_HATCH_RECORDS_PER_COMMAND)
+        # the cap resets on the next call
+        self.assertEqual(cast_git_guard._git_evaluate(self.COMMIT_CMD), (0, None))
+        self.assertEqual(len(self._events('COMMIT_HATCH_USED')), n + 1)
 
 
 if __name__ == '__main__':
