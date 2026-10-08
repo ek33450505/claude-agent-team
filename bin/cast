@@ -3094,7 +3094,8 @@ PY
     _ii_out="$(python3 -I - "$_ii_script" "$HOME" "${CAST_DOCTOR_INTEGRITY_TIMEOUT:-15}" 2>&1 <<'PYEOF' || true
 import subprocess, sys
 try:
-    r = subprocess.run([sys.executable, "-I", sys.argv[1], "--home", sys.argv[2]], capture_output=True,
+    # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+    r = subprocess.run([sys._base_executable, "-I", sys.argv[1], "--home", sys.argv[2]], capture_output=True,
                        text=True, timeout=float(sys.argv[3]), stdin=subprocess.DEVNULL)
     sys.stdout.write(r.stdout[:20000])
 except subprocess.TimeoutExpired:
@@ -4692,7 +4693,8 @@ USAGE
 import subprocess, sys
 script, timeout_s = sys.argv[1], float(sys.argv[2])
 try:
-    sys.exit(subprocess.run([sys.executable, '-I', script], timeout=timeout_s).returncode)
+    # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+    sys.exit(subprocess.run([sys._base_executable, '-I', script], timeout=timeout_s).returncode)
 except subprocess.TimeoutExpired:
     sys.exit(124)
 except Exception:

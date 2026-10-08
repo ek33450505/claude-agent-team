@@ -129,13 +129,14 @@ def _log_integrity_error(label):
         pass
 
 
-# PYTHONEXECUTABLE overrides sys.executable even under -I (macOS), and every child below is SPAWNED from
-# it: a bogus value silently disables the checks and an existing fake file would be EXECUTED by the
-# hook. Children therefore run from a TRUSTED interpreter chosen by the checker's own rule
+# PYTHONEXECUTABLE overrides sys.executable even under -I (macOS, and Homebrew python), and every child
+# below is SPAWNED from the interpreter: a bogus value silently disables the checks and an existing fake
+# file would be EXECUTED by the hook. Children therefore spawn sys._base_executable (which that variable
+# does not touch), remapped to a TRUSTED interpreter chosen by the checker's own rule
 # (_trusted_exes over _PY_CANDIDATES: owned by root or us, directory not world-writable) - the single
 # copy of that rule, loaded here by exec of the source (no .pyc is read, so a forged cache of the checker
 # cannot run in the hook). The env var itself is reported by the checker's env check. If the checker
-# cannot be loaded, sys.executable is left alone: a bogus value then fails loudly (degraded notice).
+# cannot be loaded, sys._base_executable is left alone (the interpreter running this hook).
 _CHECKER_MAX = 1 << 20   # the real checker is ~40 KB; anything over 1 MiB is not it
 _checker_bad = False     # the checker file is not a plain, small, regular file (or failed to load)
 if os.path.isfile(_checker):
@@ -159,8 +160,8 @@ if os.path.isfile(_checker):
             _ns = {"__name__": "cast_install_integrity", "__file__": _checker}
             exec(compile(_csrc, _checker, "exec"), _ns)
         _exes = _ns["_trusted_exes"](_ns["_PY_CANDIDATES"])
-        _real = os.path.realpath(sys.executable)
-        sys.executable = next((e for e in _exes if os.path.realpath(e) == _real), _exes[0] if _exes else sys.executable)
+        _real = os.path.realpath(sys._base_executable)
+        sys._base_executable = next((e for e in _exes if os.path.realpath(e) == _real), _exes[0] if _exes else sys._base_executable)
     except Exception:
         _checker_bad = True
 
@@ -178,7 +179,7 @@ else:
     try:
         _ib = max(0.8, min(2.0, 4.5 - (time.monotonic() - _T0)))
         _ir = subprocess.run(
-            [sys.executable, "-I", _checker, "--json", "--home", home, "--incremental",
+            [sys._base_executable, "-I", _checker, "--json", "--home", home, "--incremental",
              "--budget", "%.2f" % max(0.3, _ib - 0.35)],
             capture_output=True, timeout=_ib, stdin=subprocess.DEVNULL,
         )
@@ -228,7 +229,7 @@ if os.path.isfile(_scanner):
         # its own dir on sys.path before importing cast_memory_meta). timeout=2: keep the
         # whole hook inside its 5s limit; on timeout the check is skipped silently (below).
         result = subprocess.run(
-            [sys.executable, "-I", _scanner],
+            [sys._base_executable, "-I", _scanner],
             capture_output=True, text=True, timeout=2,
         )
         scanner_lines = result.stdout.splitlines()
@@ -423,7 +424,7 @@ if os.path.isfile(_db_path):  # nonexistent DB = quiet skip (and we never create
     _th = None
     try:
         _proc = subprocess.Popen(
-            [sys.executable, "-I", "-c", _CHECK_C_CODE],
+            [sys._base_executable, "-I", "-c", _CHECK_C_CODE],
             env={"CAST_DB_PATH": os.path.abspath(_db_path),
                  "CAST_GUARD_MODULES": ",".join(_GUARD_MODULE_ORDER)},
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,

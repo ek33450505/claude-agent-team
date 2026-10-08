@@ -638,6 +638,39 @@ def _print_result(eval_case: dict, grader_results: List[dict], overall_status: s
 
 # ── Dry run ────────────────────────────────────────────────────────────────────
 
+def _validate_case_file(validate_script: Path, yaml_file: Path) -> Tuple[int, str]:
+    """Run validate-eval-yaml.py on `yaml_file`. Returns (exit_code, stderr_text).
+
+    With PyYAML importable here, validate IN-PROCESS: the validator needs `import yaml`, and a child
+    spawned from sys._base_executable under -I would miss a PyYAML that lives only in this
+    interpreter's venv. The source is compiled and exec'd directly (no .pyc is written next to it).
+    Without PyYAML, spawn `sys._base_executable -I` -- never sys's plain `executable` attribute:
+    PYTHONEXECUTABLE overrides that even under -I and the child would EXECUTE an attacker-chosen binary.
+    """
+    if _HAS_YAML:
+        import contextlib
+        import io
+        err = io.StringIO()
+        try:
+            src = validate_script.read_text(encoding='utf-8')
+            ns = {'__name__': 'validate_eval_yaml', '__file__': str(validate_script)}
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                exec(compile(src, str(validate_script), 'exec'), ns)
+                rc = ns['validate'](str(yaml_file))
+        except SystemExit as exc:
+            rc = exc.code if isinstance(exc.code, int) else 1
+        except Exception as exc:  # a crashing validator is INVALID, as a crashed child was
+            return 1, err.getvalue() + f'validator crashed: {exc!r}'
+        return rc, err.getvalue()
+    result = subprocess.run(
+        # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I
+        [sys._base_executable, '-I', str(validate_script), str(yaml_file)],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode, result.stderr
+
+
 def _dry_run(eval_case: dict, cases_dir: Path, repo_dir: Path) -> int:
     """Validate the case and print would-run graders. Returns 0 (valid) or 1 (invalid)."""
     eval_id = eval_case.get('id', '?')
@@ -650,15 +683,11 @@ def _dry_run(eval_case: dict, cases_dir: Path, repo_dir: Path) -> int:
     validate_script = repo_dir / 'scripts' / 'eval-graders' / 'validate-eval-yaml.py'
     yaml_file = _find_case_file(eval_id, cases_dir)
     if validate_script.exists() and yaml_file:
-        result = subprocess.run(
-            [sys.executable, '-I', str(validate_script), str(yaml_file)],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
+        rc, err = _validate_case_file(validate_script, yaml_file)
+        if rc == 0:
             print('  validation:   OK')
         else:
-            print(f'  validation:   INVALID — {result.stderr.strip()}')
+            print(f'  validation:   INVALID — {err.strip()}')
             return 1
     elif not validate_script.exists():
         print('  validation:   SKIPPED (validate-eval-yaml.py not found)')

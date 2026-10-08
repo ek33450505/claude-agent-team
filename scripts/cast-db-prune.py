@@ -212,7 +212,8 @@ def _pre_prune_backup() -> int:
 
     try:
         result = subprocess.run(
-            [sys.executable, '-I', str(backup_script)],
+            # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+            [sys._base_executable, '-I', str(backup_script)],
             capture_output=True,
             text=True,
             timeout=120,
@@ -285,7 +286,8 @@ def _pre_prune_rollup() -> int:
 
     try:
         result = subprocess.run(
-            [sys.executable, '-I', str(rollup_script), '--db', DB_PATH, '--authoritative-days', str(DAYS)],
+            # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+            [sys._base_executable, '-I', str(rollup_script), '--db', DB_PATH, '--authoritative-days', str(DAYS)],
             capture_output=True,
             text=True,
             timeout=120,

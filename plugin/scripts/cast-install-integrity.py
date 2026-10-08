@@ -569,10 +569,10 @@ def _run_verifier(exe, claude, incremental, seconds, max_verify, offset):
 
 
 def _own_exe():
-    """The interpreter to run verifiers with. NEVER sys.executable when a trusted candidate exists:
-    PYTHONEXECUTABLE overrides sys.executable (even under -I, macOS) and the verifier EXECUTES it."""
+    """The interpreter to run verifiers with. NEVER sys's plain `executable` attribute when a trusted
+    candidate exists: PYTHONEXECUTABLE overrides it (even under -I) and the verifier EXECUTES it."""
     exes = _trusted_exes(_PY_CANDIDATES)
-    return exes[0] if exes else sys.executable
+    return exes[0] if exes else sys._base_executable  # PYTHONEXECUTABLE does not touch _base_executable
 
 
 def _verify_pycs(claude, entries, bad, incremental, deadline, max_verify=None, offset=0, counts=None):

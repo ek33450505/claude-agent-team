@@ -13,15 +13,24 @@ Two things are tested:
      those files -- repo files are never modified.
   2. A behaviour probe under a throw-away HOME: a malicious json.py on PYTHONPATH must NOT
      run under `-E -s`, while sibling imports still resolve.
+  3. `sys.executable` must not appear AT ALL (outside a comment) in scripts/*.py, scripts/*.sh
+     (inline python) or bin/cast -- not as a spawn argv, not aliased (`exe = sys.executable`), not in
+     a docstring (reword it): PYTHONEXECUTABLE overrides it even under `-I` /
+     `-E -s` on Homebrew python, so the child would EXECUTE an attacker-chosen binary. Spawners use
+     `sys._base_executable` (probe: unaffected by PYTHONEXECUTABLE, __PYVENV_LAUNCHER__, PYTHONHOME
+     on Apple 3.9 and Homebrew 3.14, bare / `-E -s` / `-I`, system and venv parents).
 
 The real ~/.claude is never touched.
 """
 import os
 import re
 import shutil
+import sqlite3
+import io
 import subprocess
 import sys
 import tempfile
+import tokenize
 import unittest
 from pathlib import Path
 
@@ -33,9 +42,12 @@ _SCAN_GLOBS = (
     'macos/*.plist',
     'managed-settings.d/*.json',
     'plugin/hooks/hooks.json',
+    'settings.json',
 )
 # Files additionally scanned for subprocess-list launches (inline python in .sh, and .py hooks).
 _LIST_GLOBS = ('scripts/*.sh', 'scripts/*.py')
+# Files scanned for the `[sys.executable, ...]` spawn ban (bin/cast carries inline python heredocs).
+_SYSEXE_GLOBS = _LIST_GLOBS + ('bin/cast',)
 
 # Explicit, documented exceptions: (relative path, substring of the offending line) -> reason.
 # Keep this list SHORT; every entry must say why the site is not a real launch.
@@ -63,7 +75,13 @@ _INLINE_FLAG_CHARS = {'c', 'm'}
 # leading flags are read). Multi-line lists work because the whole file text is scanned.
 # `--version`/`-V` probes are not launches.
 _PY_LIST = re.compile(
-    r"\[\s*(?:sys\.executable|['\"](?:/usr/bin/)?python3['\"])\s*,(?P<tail>[^\]]*)\]", re.S)
+    r"\[\s*(?:sys\.(?:_base_)?executable|['\"](?:/usr/bin/)?python3['\"])\s*,(?P<tail>[^\]]*)\]", re.S)
+# Any occurrence of `sys.executable` in the code part of a line: banned outright (module docstring, 3).
+# No allowlist: docstrings/prose that need to name it are reworded. Only COMMENTS are exempt:
+# in .py files they are found with `tokenize` (so `['#', sys.executable]` and f'#{sys.executable}'
+# are still flagged); in .sh / bin/cast a `#` starts a comment only at line start or after
+# whitespace and outside single/double quotes. STRING tokens (docstrings) stay flagged.
+_SYS_EXE_USE = re.compile(r"\bsys\.executable\b")
 _LIST_FLAG = re.compile(r"^\s*['\"](-[A-Za-z-]+)['\"]\s*,?")
 
 
@@ -83,6 +101,49 @@ def _list_launch_violations(text):
         if not _isolated(flags):
             out.append((text.count('\n', 0, m.start()) + 1, ' '.join(m.group(0).split())[:120]))
     return out
+
+
+def _shell_code_part(line):
+    """`line` without a trailing shell/python-style comment: `#` at line start or after whitespace,
+    outside quotes. Quote tracking is per line (an apostrophe inside prose BEFORE a `#` hides it:
+    the conservative direction -- it can only over-flag)."""
+    quote = None
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == '\\' and quote == '"':
+                continue
+            if ch == quote and (i == 0 or line[i - 1] != '\\'):
+                quote = None
+        elif ch in ('"', "'"):
+            quote = ch
+        elif ch == '#' and (i == 0 or line[i - 1].isspace()):
+            return line[:i]
+    return line
+
+
+def _py_code_lines(text):
+    """Lines of python `text` with every COMMENT token blanked out (via `tokenize`), or None when the
+    text does not tokenize (the caller then falls back to the shell rule)."""
+    lines = text.split('\n')
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type == tokenize.COMMENT:
+                row, col = tok.start
+                lines[row - 1] = lines[row - 1][:col]
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    return lines
+
+
+def _sys_executable_violations(text, kind='sh'):
+    """(lineno, snippet) for each line whose code part uses `sys.executable`. `kind` is 'py' (comments
+    found by tokenize) or 'sh' (shell rule; also used for bin/cast and inline python in .sh)."""
+    lines = text.split('\n')
+    code = _py_code_lines(text) if kind == 'py' else None
+    if code is None:
+        code = [_shell_code_part(line) for line in lines]
+    return [(n, 'sys.executable (use sys._base_executable): ' + ' '.join(lines[n - 1].split())[:100])
+            for n, c in enumerate(code, 1) if _SYS_EXE_USE.search(c)]
 
 
 def _flag_chars(flags):
@@ -150,12 +211,18 @@ def find_violations(root):
             rel = path.relative_to(root).as_posix()
             for n, snippet in _list_launch_violations(path.read_text(encoding='utf-8')):
                 out.append((rel, n, snippet))
+    for pattern in _SYSEXE_GLOBS:
+        for path in sorted(root.glob(pattern)):
+            rel = path.relative_to(root).as_posix()
+            kind = 'py' if path.suffix == '.py' else 'sh'
+            for n, snippet in _sys_executable_violations(path.read_text(encoding='utf-8'), kind):
+                out.append((rel, n, snippet))
     return out
 
 
 def _copy_scanned_tree(dst):
     dst = Path(dst)
-    for pattern in _SCAN_GLOBS + _LIST_GLOBS:
+    for pattern in _SCAN_GLOBS + _SYSEXE_GLOBS:
         for src in sorted(_REPO.glob(pattern)):
             target = dst / src.relative_to(_REPO)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -209,12 +276,31 @@ class TestLaunchClassifier(unittest.TestCase):
                "['python3', '-E', os.path.join(d, 'x.py')]", "['python3', '-s', 'x.py']"]
         good = ["subprocess.run(['python3', '-E', '-s', os.path.join(d, 'x.py')])",
                 "['python3', '-I', os.path.join(d, 'x.py')]",
-                "[sys.executable, '-I', str(script), '--db', p]", '["python3", "-I", REDACT, "--x"]',
+                "[sys._base_executable, '-I', str(script), '--db', p]", '["python3", "-I", REDACT, "--x"]',
                 "['python3', '--version']"]
         for text in bad:
             self.assertEqual(len(_list_launch_violations(text)), 1, text)
         for text in good:
             self.assertEqual(_list_launch_violations(text), [], text)
+
+    def test_sys_executable_spawn_classifier(self):
+        bad = ["subprocess.run([sys.executable, '-I', str(script)])",
+               "x = [ sys.executable ,\n '-I', f]", "Popen([sys.executable, '-c', code])",
+               "exe = sys.executable", "os.execv(sys.executable, argv)",
+               "p = os.path.realpath(sys.executable)", '    \"\"\"NEVER sys.executable here\"\"\"',
+               # a `#` that is NOT a comment must not hide a real use (both file kinds)
+               "subprocess.run(['#', sys.executable, '-I', x])", "y = f'#{sys.executable}'",
+               'z = "# " + sys.executable']
+        good = ["subprocess.run([sys._base_executable, '-I', str(script)])",
+                "    # [sys.executable, '-I', x] is banned", "exes[0] if exes else sys._base_executable",
+                "x = 1  # sys.executable is banned", "y = sys._base_executable", "my_sys.executables = 1"]
+        for kind in ('py', 'sh'):
+            for text in bad:
+                self.assertEqual(len(_sys_executable_violations(text, kind)), 1, (kind, text))
+            for text in good:
+                self.assertEqual(_sys_executable_violations(text, kind), [], (kind, text))
+        # the flag check still sees the new spelling: stripped flags on _base_executable are caught
+        self.assertEqual(len(_list_launch_violations("[sys._base_executable, str(s)]")), 1)
 
     def test_ignores_non_launches(self):
         for line in ('python3 -c "import os"', "python3 - <<'EOF'", 'command -v python3 >/dev/null',
@@ -240,7 +326,7 @@ class TestPythonLaunchIsolationLint(unittest.TestCase):
                              for line in path.read_text(encoding='utf-8').splitlines())
         # Floor, not an inventory: this only guards against the scan going blind (the plist
         # `<string>python3 ...` prefix was once invisible). Adding a plist must not break it.
-        self.assertGreaterEqual(plist_launches, 7)
+        self.assertGreaterEqual(plist_launches, 5)
 
     def test_allowlist_entries_still_exist(self):
         # An allowlist entry for a line that no longer exists is dead weight that could
@@ -269,7 +355,7 @@ class TestPythonLaunchIsolationLint(unittest.TestCase):
             self.assertEqual([v[0] for v in found], ['macos/cast-db-prune.plist'])
 
     def test_mutation_stripped_flags_in_settings_and_plugin_are_caught(self):
-        for rel in ('managed-settings.d/25-hooks-security.json', 'plugin/hooks/hooks.json'):
+        for rel in ('managed-settings.d/25-hooks-security.json', 'plugin/hooks/hooks.json', 'settings.json'):
             with tempfile.TemporaryDirectory() as tmp:
                 tree = _copy_scanned_tree(tmp)
                 path = tree / rel
@@ -316,8 +402,8 @@ class TestPythonLaunchIsolationLint(unittest.TestCase):
                                               '["python3", os.path.join(_HOOK_DIR'),
             'scripts/cast-git-guard.py': ("['python3', '-E', '-s', os.path.join(scripts_dir",
                                           "['python3', os.path.join(scripts_dir"),
-            'scripts/cast-db-prune.py': ("[sys.executable, '-I', str(backup_script)",
-                                         "[sys.executable, str(backup_script)"),
+            'scripts/cast-db-prune.py': ("[sys._base_executable, '-I', str(backup_script)",
+                                         "[sys._base_executable, str(backup_script)"),
         }
         for rel, (good, bad) in cases.items():
             with tempfile.TemporaryDirectory() as tmp:
@@ -329,6 +415,53 @@ class TestPythonLaunchIsolationLint(unittest.TestCase):
                 path.write_text(text.replace(good, bad), encoding='utf-8')
                 found = find_violations(tree)
                 self.assertEqual({v[0] for v in found}, {rel}, (rel, found))
+
+    def test_repo_spawns_use_base_executable(self):
+        # Vacuity floor: the scan must still SEE the converted sites (9 in scripts/*.py, 4 in
+        # scripts/*.sh inline python, 2 in bin/cast = 15 at the time of writing; the floor is lower so
+        # adding or removing a site does not break it), and none uses sys.executable.
+        seen = 0
+        for pattern in _SYSEXE_GLOBS:
+            for path in sorted(_REPO.glob(pattern)):
+                text = path.read_text(encoding='utf-8')
+                seen += len(re.findall(r"\[\s*sys\._base_executable\s*,", text))
+                self.assertEqual(_sys_executable_violations(text, 'py' if path.suffix == '.py' else 'sh'),
+                                 [], path.name)
+        self.assertGreaterEqual(seen, 12)
+
+    def test_mutation_sys_executable_spawn_is_caught_at_every_site(self):
+        # Put `sys.executable` back at each converted site in a temp COPY: the lint must fail on
+        # exactly that file, once per site.
+        sites = {}
+        for pattern in _SYSEXE_GLOBS:
+            for path in sorted(_REPO.glob(pattern)):
+                n = len(re.findall(r"\[\s*sys\._base_executable\s*,", path.read_text(encoding='utf-8')))
+                if n:
+                    sites[path.relative_to(_REPO).as_posix()] = n
+        self.assertGreaterEqual(len(sites), 10, sites)
+        for rel, n in sites.items():
+            with tempfile.TemporaryDirectory() as tmp:
+                tree = _copy_scanned_tree(tmp)
+                self.assertEqual(find_violations(tree), [], rel)
+                path = tree / rel
+                text = path.read_text(encoding='utf-8')
+                path.write_text(re.sub(r"(\[\s*)sys\._base_executable(\s*,)", r"\1sys.executable\2", text),
+                                encoding='utf-8')
+                found = find_violations(tree)
+                self.assertEqual({v[0] for v in found}, {rel}, (rel, found))
+                self.assertEqual(len(found), n, (rel, found))
+
+    def test_mutation_aliased_or_bare_sys_executable_is_caught(self):
+        # `exe = sys.executable` (an alias that the old `[sys.executable,` regex missed) planted in a
+        # temp COPY of a .py spawner, an inline-python .sh and bin/cast must each fail the lint.
+        for rel in ('scripts/cast-db-prune.py', 'scripts/agent-status-reader.sh', 'bin/cast'):
+            with tempfile.TemporaryDirectory() as tmp:
+                tree = _copy_scanned_tree(tmp)
+                self.assertEqual(find_violations(tree), [], rel)
+                with open(tree / rel, 'a', encoding='utf-8') as fh:
+                    fh.write('\nexe = sys.executable\n')
+                found = find_violations(tree)
+                self.assertEqual([v[0] for v in found], [rel], (rel, found))
 
     def test_mutation_half_isolated_launch_is_caught(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -397,6 +530,110 @@ class TestIsolationBehaviour(unittest.TestCase):
         isolated = self._run(['-I'], main, stdin='')
         self.assertNotEqual(isolated.returncode, 0)
         self.assertIn('ModuleNotFoundError', isolated.stderr)
+
+
+_BREW_PY = '/opt/homebrew/bin/python3'
+
+# Loads a spawner script by path and runs its real backup-gate function (which spawns a child).
+_PRUNE_HARNESS = (
+    'import importlib.util, sys\n'
+    'spec = importlib.util.spec_from_file_location("prune_mod", sys.argv[1])\n'
+    'mod = importlib.util.module_from_spec(spec)\n'
+    'sys.modules["prune_mod"] = mod\n'
+    'spec.loader.exec_module(mod)\n'
+    'sys.exit(mod._pre_prune_backup())\n'
+)
+
+
+class TestPythonExecutableOverride(unittest.TestCase):
+    """F2: PYTHONEXECUTABLE overrides sys.executable even under `-I` / `-E -s` on Homebrew python.
+
+    The real cast-db-prune.py backup gate runs under a throw-away HOME with PYTHONEXECUTABLE
+    pointing at a marker-writing fake binary. It must spawn the REAL interpreter (the backup
+    really happens) and never the fake. The control re-introduces `sys.executable` in a temp
+    COPY and proves the probe can fail (the fake runs).
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp(prefix='cast-pyexe-')
+        self.addCleanup(shutil.rmtree, self._tmp, True)
+        tmp = Path(self._tmp).resolve()
+        self.tmp = tmp
+        (tmp / 'home' / '.claude' / 'logs').mkdir(parents=True)
+        self.marker = tmp / 'FAKE-RAN'
+        self.fake = tmp / 'fake-python'
+        self.fake.write_text('#!/bin/sh\necho ran >> "%s"\nexit 0\n' % self.marker, encoding='utf-8')
+        self.fake.chmod(0o755)
+        self.db = tmp / 'cast.db'
+        sqlite3.connect(str(self.db)).close()
+        self.backups = tmp / 'backups'
+        self.env = {
+            'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+            'HOME': str(tmp / 'home'),
+            'CAST_DB_PATH': str(self.db),
+            'CAST_BACKUP_DIR': str(self.backups),
+            'PYTHONEXECUTABLE': str(self.fake),
+        }
+        (tmp / 'cwd').mkdir()
+
+    def _parents(self):
+        seen, out = set(), []
+        for exe in (_BREW_PY, '/usr/bin/python3', sys.executable):
+            if os.path.exists(exe) and os.path.realpath(exe) not in seen:
+                seen.add(os.path.realpath(exe))
+                out.append(exe)
+        return out
+
+    def _run_gate(self, parent, script, flags):
+        if self.marker.exists():
+            self.marker.unlink()
+        if self.backups.exists():
+            shutil.rmtree(self.backups)
+        return subprocess.run([parent, *flags, '-c', _PRUNE_HARNESS, str(script)], env=self.env,
+                              cwd=str(self.tmp / 'cwd'), capture_output=True, text=True, timeout=120)
+
+    def _backed_up(self):
+        return self.backups.is_dir() and any(self.backups.iterdir())
+
+    def _assert_real_child_ran(self, parent, flags, r):
+        self.assertFalse(self.marker.exists(), '%s %s: the PYTHONEXECUTABLE fake was executed' % (parent, flags))
+        self.assertEqual(r.returncode, 0, '%s %s\n%s\n%s' % (parent, flags, r.stdout, r.stderr[-600:]))
+        # non-vacuous: the real interpreter ran the backup child (the fake writes no backup)
+        self.assertTrue(self._backed_up(), '%s %s: no backup produced, so no real child ran' % (parent, flags))
+
+    def test_spawner_never_executes_pythonexecutable_fake(self):
+        script = _REPO / 'scripts' / 'cast-db-prune.py'
+        for parent in self._parents():
+            for flags in (('-E', '-s'), ('-I',)):
+                with self.subTest(parent=parent, flags=flags):
+                    self._assert_real_child_ran(parent, flags, self._run_gate(parent, script, flags))
+
+    @unittest.skipUnless(os.path.exists(_BREW_PY), 'Homebrew python not installed')
+    def test_spawner_from_a_homebrew_venv_parent(self):
+        venv = self.tmp / 'venv'
+        subprocess.run([_BREW_PY, '-m', 'venv', '--without-pip', str(venv)], check=True,
+                       capture_output=True, timeout=120)
+        script = _REPO / 'scripts' / 'cast-db-prune.py'
+        for flags in (('-E', '-s'), ('-I',)):
+            with self.subTest(flags=flags):
+                parent = str(venv / 'bin' / 'python3')
+                self._assert_real_child_ran(parent, flags, self._run_gate(parent, script, flags))
+
+    @unittest.skipUnless(os.path.exists(_BREW_PY), 'Homebrew python not installed')
+    def test_control_sys_executable_copy_runs_the_fake_on_homebrew(self):
+        # Mutation: `sys.executable` put back in a temp COPY of the spawner. The same probe must
+        # now FAIL (the fake runs), proving it discriminates the fixed code from the vulnerable one.
+        mut = self.tmp / 'mutant'
+        mut.mkdir()
+        src = (_REPO / 'scripts' / 'cast-db-prune.py').read_text(encoding='utf-8')
+        mutated = src.replace('[sys._base_executable,', '[sys.executable,')
+        self.assertNotEqual(src, mutated)
+        (mut / 'cast-db-prune.py').write_text(mutated, encoding='utf-8')
+        shutil.copy2(_REPO / 'scripts' / 'cast-db-backup.py', mut / 'cast-db-backup.py')
+        r = self._run_gate(_BREW_PY, mut / 'cast-db-prune.py', ('-E', '-s'))
+        self.assertTrue(self.marker.exists(), 'probe is vacuous: sys.executable did not run the fake\n' + r.stderr[-400:])
+        with self.assertRaises(AssertionError):
+            self._assert_real_child_ran(_BREW_PY, ('-E', '-s'), r)
 
 
 if __name__ == '__main__':

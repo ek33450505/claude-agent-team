@@ -267,7 +267,8 @@ def _invoke_db_backup() -> dict:
 
     try:
         result = subprocess.run(
-            [sys.executable, '-I', str(db_backup_script)],
+            # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+            [sys._base_executable, '-I', str(db_backup_script)],
             capture_output=True,
             text=True,
             timeout=60,

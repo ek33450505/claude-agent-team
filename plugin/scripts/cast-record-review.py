@@ -791,7 +791,8 @@ def section_trend_alert(conn, repo_root: str, lookback_days: int = 7) -> tuple:
     if os.path.isfile(audit_script):
         try:
             result = subprocess.run(
-                [sys.executable, '-I', audit_script], capture_output=True, text=True, timeout=15
+                # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+                [sys._base_executable, '-I', audit_script], capture_output=True, text=True, timeout=15
             )
             lines.append(result.stdout.strip() or "(no output from audit script)")
             if result.returncode != 0:
@@ -848,7 +849,8 @@ def section_stale_memories() -> tuple:
 
     try:
         result = subprocess.run(
-            [sys.executable, '-I', scanner], capture_output=True, text=True, timeout=15
+            # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+            [sys._base_executable, '-I', scanner], capture_output=True, text=True, timeout=15
         )
     except Exception as e:
         return _degraded(f"scanner invocation failed: {e}")

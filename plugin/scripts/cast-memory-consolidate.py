@@ -75,7 +75,8 @@ def _pre_consolidate_backup(db_path: str) -> int:
 
     try:
         result = subprocess.run(
-            [sys.executable, '-I', backup_script],
+            # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+            [sys._base_executable, '-I', backup_script],
             capture_output=True,
             text=True,
             timeout=120,
