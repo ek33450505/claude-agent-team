@@ -158,6 +158,43 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
   duplicating it, and declared on the `researcher` agent — the tier that runs an index
   investigation — rather than on `frontend-qa`, whose scope is per-file `.tsx` review.
 
+### Security
+- **Commit identity at pre-push (D5a/D5b).** The pre-push reconcile used to ask only "is there a
+  provenance row near this hatch commit", so a main-session `CAST_COMMIT_AGENT=1` commit passed if
+  any row existed, and a commit agent's `cd other-repo && commit` (row filed under the hook cwd's
+  repo) false-blocked.
+  - **D5a (`aacaf1d`).** The dispatcher passes the PreToolUse payload to the git guard
+    (`set_hook_context`). `COMMIT_HATCH_USED` audit lines gain `agent_type`, `agent_id`,
+    `tool_use_id`, the payload `session_id`, `head_before` and `main_repo` (the main checkout of a
+    linked worktree); `PUSH_HATCH_USED` gains the identity fields. Git facts are memoized per call and
+    hatch lines are capped at 8 per call (`_MAX_HATCH_RECORDS_PER_COMMAND`), keeping many hatched
+    segments inside the 2 s Bash-guard watchdog (60 segments: 8.4 s before, ~1 s after).
+    `cast-commit-provenance.py record` now labels rows `'unattributed'` (optional validated
+    `--agent`); `cast-post-tool.py` `part5_commit_provenance` finds the call's `head_before` by
+    `tool_use_id` (last 256 KiB of `audit.jsonl`), records the commits created in that call
+    (`head_before..HEAD`, ≤ 50), labels them with the payload `agent_type` or `'main-session'`, and
+    upgrades only `'unattributed'` rows (`recorded_at`, `repo` kept).
+  - **D5b (`85c5d21`).** Identity events are authorized only if `agent_id` is non-empty and the roster
+    type resolved from Claude Code's subagent sidecar (`_resolve_roster_type`, S3d) is `commit`;
+    otherwise a violation (`main-session hatch`, `agent X is not the commit agent`, `commit-agent
+    identity unverifiable (no trusted sidecar)`). Legacy events (no `agent_type`) keep the window rule.
+    A corrupt `COMMIT_HATCH_USED` line is a violation; `CAST_RECONCILE_ACK=1` acks it and records
+    its sha256 in `RECONCILE_ACK_USED.corrupt_line_sha256` (later runs skip those hashes).
+  - Dispatch the commit agent unnamed or as `commit__<label>`; a dispatch named exactly `commit` is
+    unattributable and blocks the push.
+  - Gates: D5a code-reviewer x3 APPROVED, security R1 FIX REQUIRED (memoization, label overwrite) then
+    R2 CLEAN; D5b code-reviewer APPROVED, security CLEAN. Live: old reconcile blocked a commit-agent
+    probe on copies of the live audit log + cast.db, new one clean; push of `85c5d21` reported
+    `"status": "clean", "checked": 3`.
+  - Accepted LOW residuals are listed in `docs/architecture/enforcement-awareness-split.md`.
+
+### Documentation
+- 2026-10-08 docs pass: README "Built on Claude Code's primitives" section citing Anthropic docs;
+  guard and integrity coverage; the 17-hatch count; CONTRIBUTING, the authoring guide and ARCHITECTURE
+  now describe the installed `~/.claude/githooks`; spec §2.5 gains the RULE 5 row and the
+  SubagentStop tail contract; the enforcement-awareness-split closed-residuals list is complete
+  through v10.3.0 and D5.
+
 ## [10.2.0] — 2026-09-09
 
 Minor release. A security fix for replayed journal content, an ecosystem

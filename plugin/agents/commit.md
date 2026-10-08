@@ -150,6 +150,7 @@ After staging, run `git status --short` and inspect remaining lines.
      && echo "provenance: recorded" \
      || echo "provenance: not-recorded (script absent or failed)"
    ```
+   The recorder writes rows labelled `unattributed`; commit identity comes from the PostToolUse hook (relabelled from the hook payload), so this step stays best-effort, not the source of identity.
    If the script is missing or fails, add `provenance: not-recorded (<reason>)` to the Work Log and include a concern in the JSON status block. Do NOT re-attempt or block the commit result.
 9. Confirm success: run `git log --oneline -1` and `git rev-parse HEAD` to verify the commit landed, then show the commit hash
 

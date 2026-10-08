@@ -248,6 +248,48 @@ the orchestrator.
   Fixed: a `--gate-only` pass writes the record before any telemetry stage, and the claimed-work verifier is linear
   on agent output (was 50–100 s on 600 KB).
 
+## Commit identity at pre-push (D5a/D5b, 2026-10-08)
+
+Reuses the S3d resolver from the `requires_agent` gate above to answer "who made this hatch commit".
+Commits `aacaf1d` (D5a, record) and `85c5d21` (D5b, judge).
+
+**Mechanism.**
+- D5a: the dispatcher hands the PreToolUse payload to the git guard (`set_hook_context`);
+  `COMMIT_HATCH_USED` lines gain `agent_type`, `agent_id`, `tool_use_id`, `session_id`, `head_before`,
+  `main_repo` (`PUSH_HATCH_USED` gets the identity fields). Git facts are memoized per call; hatch lines
+  cap at 8 per call (`_MAX_HATCH_RECORDS_PER_COMMAND`) to stay inside the 2 s watchdog (60 segments:
+  8.4 s to ~1 s).
+- PostToolUse (`part5_commit_provenance`) finds `head_before` by `tool_use_id` in the last 256 KiB of
+  `audit.jsonl`, records `head_before..HEAD` (committer time >= hatch event - 5 s, <= 50; else HEAD-only
+  with age checks), labels with payload `agent_type` or `'main-session'`, UPSERTs over `'unattributed'`
+  rows only (`recorded_at`, `repo` kept).
+- D5b (`cast-commit-reconcile.py`): identity events are authorized iff `agent_id` is non-empty and
+  `_resolve_roster_type` (sidecar `~/.claude/projects/*/<session_id>/subagents/[workflows/<id>/]agent-<agent_id>.meta.json`)
+  returns `commit`. Rows are not consulted for identity events. Legacy events (no `agent_type`) keep the
+  [ts-60s, ts+15min] provenance-row window.
+
+**Trust source and fail directions.**
+
+| Condition | Result |
+|---|---|
+| sidecar type == `commit` | authorized |
+| `agent_id` empty | violation: `main-session hatch` |
+| resolved type != `commit` | violation: `agent X is not the commit agent` |
+| no / ambiguous / spoofed / teammate-shaped sidecar | violation: `commit-agent identity unverifiable (no trusted sidecar)` |
+| corrupt line containing `COMMIT_HATCH_USED` (non-UTF-8 / non-JSON / non-object) | violation (Ed, 2026-10-04) |
+| last line without trailing newline | `unverifiable`, exit 0 |
+
+`CAST_RECONCILE_ACK=1` acks all kinds; acked corrupt lines' sha256 go into `RECONCILE_ACK_USED.corrupt_line_sha256`.
+
+**Live verification.** A commit-agent subagent payload carries `agent_type:"commit"` + `agent_id`; the main
+session's carries neither. On copies of the live audit log and cast.db the old reconcile blocked (rc=1) on a
+commit-agent probe event, the new one was clean; the live push of `85c5d21` printed `"status": "clean", "checked": 3`.
+Gates: D5a code-reviewer x3 APPROVED, security R1 FIX REQUIRED (memoization, label overwrite) then R2 CLEAN;
+D5b code-reviewer APPROVED, security CLEAN.
+
+**Operational naming.** Dispatch the commit agent unnamed or as `commit__<label>`. A dispatch named exactly
+`commit` is unattributable (sidecar name equals the type, the ambiguous shape) and blocks the push.
+
 ## Project settings files: `env` and `disableAllHooks` (S3d F1, 2026-10-05)
 
 Claude Code reloads a project's `.claude/settings.json` and `.claude/settings.local.json` mid-session. Their `env`
@@ -293,3 +335,10 @@ These were judged and accepted, not fixed; each is a known limit, not an open it
 - `git grep -O`: an open-in-pager exec vector, pinned by a test as a known allow (#421).
 - RULE 5 residuals: runtime-built paths, script files, stdin data, earlier-call `cd`/aliases, `pip install --user` (see `scripts/cast-command-guard.py` docstring and the `CAST_PROTECTED_WRITE_OK` row in docs/escape-hatches.md).
 - U6d residuals: the integrity checker attests itself (in-process; tampering with it already defeats the check); Homebrew's group-writable `/opt/homebrew/bin` is trusted; install's cache purge falls back to PATH `python3` only when no system python exists.
+- D5: a hatch commit after `cd <other repo>` is attributed to the hook cwd's repo.
+- D5: a concurrent actor's commit landing during our tool call can get our label (label only; window = tool-call duration).
+- D5: a future-dated commit fast-forward-merged later gets the caller's own label.
+- D5: a corrupt hatch line is not repo-scoped (ackable).
+- D5: the reconcile reads `audit.jsonl` whole (~2.5x RAM; fine at the live 1.1 MB).
+- D5: the sidecar and `audit.jsonl` are agent-writable with the sandbox off (same cooperative boundary as the other records).
+- D5: the reconcile still returns `skip` for identity events when cast.db / `commit_provenance` is absent (tracked in S4).
