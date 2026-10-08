@@ -17,13 +17,12 @@ CAST is part of a multi-repo ecosystem — see the [Ecosystem section](README.md
 ```bash
 git clone https://github.com/ek33450505/claude-agent-team.git
 cd claude-agent-team
-git config core.hooksPath .githooks
-chmod +x .githooks/*
 make hooks
 bash install.sh
 ```
 
-`install.sh` wires hook scripts into `~/.claude/scripts/` and `~/.claude/settings.json`.
+`install.sh` deploys scripts to `~/.claude/scripts/`, deploys git hooks from `.githooks/` to `~/.claude/githooks/` (and points `core.hooksPath` there), merges `~/.claude/settings.json`, and writes `~/.claude/install-manifest.sha256`.
+Hooks run the installed copies, so re-run `bash install.sh` after editing `.githooks/` or `scripts/`.
 If something looks wrong after install, run `cast doctor` to diagnose the setup.
 
 > **Note:** Agent Step 0 code sources `~/.claude/scripts/cast-events.sh`, which ships via

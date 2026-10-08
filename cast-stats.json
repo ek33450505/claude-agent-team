@@ -8,7 +8,7 @@
   "commands": 21,
   "skills": 19,
   "packages": 9,
-  "updated": "2026-10-07",
+  "updated": "2026-10-08",
   "_source": "https://raw.githubusercontent.com/ek33450505/claude-agent-team/main/cast-stats.json",
   "_generator": "scripts/gen-cast-stats.sh"
 }

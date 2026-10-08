@@ -257,11 +257,9 @@ numbered fragment) is the correct install path — do not edit `settings.json` b
 ## 6. Git Pre-Commit Hook
 
 CAST ships a git pre-commit hook at `.githooks/pre-commit` that enforces three lints
-on every commit. Install it once per clone:
-
-```bash
-git config core.hooksPath .githooks
-```
+on every commit. `.githooks/` is the source; `bash install.sh` deploys it to
+`~/.claude/githooks` and sets `core.hooksPath` to that installed copy. Hooks run the
+installed copy, so re-run `bash install.sh` after editing `.githooks/`.
 
 ### Lints
 
@@ -303,6 +301,7 @@ Do not add new entries to the baseline — fix new violations instead.
 - **StopFailure** (REC-01) — Fires when agent API calls fail mid-task. Logs error details to `cast.db` `stop_failure_events` table; triggers osascript desktop notification with error context.
 - **CwdChanged** (REC-06) — Reads `.claude/cast.json` repo metadata and exports `CAST_REPO_CLASS` environment variable (values: `personal`, `work`). Enables repo-aware hooks and agent behavior.
 - **SessionStart** — Now reads the latest `~/Documents/Claude/YYYY-MM/*.md` journal entry (if present) and injects a context banner for continuity. Sourced via `cast-claudes_journal` standalone repo.
+- **SessionStart (install integrity)** — The health hook (`cast-session-start-health.sh`) also runs `cast-install-integrity.py`, which raises an alarm on drift from the install manifest. The fix is `bash install.sh`.
 
 **Hook Matcher Pattern (REC-02):**
 PreToolUse/PostToolUse hook entries in CAST use both the `matcher` field and the legacy `if` field. Live fragments in `managed-settings.d/` still contain entries using the `if` field (e.g. `cast-audit-hook.sh`, `post-tool-hook.sh` in the telemetry and security fragments). If `if` is deprecated in a future Claude Code release, those entries will need migration. Do not assume all hooks have been migrated to `matcher`.
