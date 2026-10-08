@@ -8,52 +8,23 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
+load 'helpers/prepush-installed'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOK="$REPO_DIR/.githooks/pre-push"
 
 setup() {
+  # The hook runs ONLY installed scripts (stubbed here under a temp HOME), never repo files.
+  setup_temp_home
+  seed_prepush_install
+
   # Create a minimal test fixture git repo
   TEST_REPO="$(mktemp -d)"
   git init -q "$TEST_REPO"
   git -C "$TEST_REPO" config user.email "test@example.com"
   git -C "$TEST_REPO" config user.name "CAST Test"
   git -C "$TEST_REPO" commit -q --allow-empty -m "init"
-
-  # Create stub scripts so the hook doesn't fail
-  mkdir -p "$TEST_REPO/scripts"
-
-  # Stub pre-push-ci-check.sh
-  cat > "$TEST_REPO/scripts/pre-push-ci-check.sh" <<'STUBEOF'
-#!/usr/bin/env bash
-exit 0
-STUBEOF
-  chmod +x "$TEST_REPO/scripts/pre-push-ci-check.sh"
-
-  # Stub gen-cast-stats.sh (created in worktree, so stub in original repo too)
-  cat > "$TEST_REPO/scripts/gen-cast-stats.sh" <<'STUBEOF'
-#!/usr/bin/env bash
-exit 0
-STUBEOF
-  chmod +x "$TEST_REPO/scripts/gen-cast-stats.sh"
-
-  # Create stub gen-rules-manifest.sh
-  cat > "$TEST_REPO/scripts/gen-rules-manifest.sh" <<'STUBEOF'
-#!/usr/bin/env bash
-mkdir -p .github
-touch .github/rules-core.manifest
-exit 0
-STUBEOF
-  chmod +x "$TEST_REPO/scripts/gen-rules-manifest.sh"
-
-  # Create stub cast-db-contract.py
-  cat > "$TEST_REPO/scripts/cast-db-contract.py" <<'STUBEOF'
-#!/usr/bin/env python3
-import sys
-if '--check' in sys.argv:
-    exit(0)
-STUBEOF
-  chmod +x "$TEST_REPO/scripts/cast-db-contract.py"
 
   # Create stub .github/db-contract-baseline.json
   mkdir -p "$TEST_REPO/.github"
@@ -71,6 +42,7 @@ STUBEOF
 
 teardown() {
   rm -rf "$TEST_REPO"
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------

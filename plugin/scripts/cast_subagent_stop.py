@@ -2,8 +2,9 @@
 """cast_subagent_stop.py — consolidated SubagentStop processor (parse-once).
 
 Single python process that replaces the 14 heredocs + 3 ``python3 -c`` calls of
-``cast-subagent-stop-hook.sh`` plus the deleted per-event sub-hooks. Stdin JSON
-(exported by the bash wrapper as ``CAST_STOP_INPUT``) is parsed exactly once; the
+``cast-subagent-stop-hook.sh`` plus the deleted per-event sub-hooks. The payload JSON
+(piped on stdin by the bash wrapper with ``--stdin``; direct callers may still set
+the legacy ``CAST_STOP_INPUT`` env var) is parsed exactly once; the
 one-time classification below is reused by every stage.
 
 Blueprint: plans/w2-1-subagentstop-consolidation-blueprint.md §2. Stages 0, 1, 2
@@ -546,16 +547,31 @@ def _handback_message(ctx) -> str:
     the answer is "".
     Returns "" on ANY doubt (bad ids, zero/several transcripts, symlink or
     non-regular file, an unparsable line, non-str message). Never raises.
+
+    Unreadable vs no-verdict: "" is ambiguous, so when the transcript was located
+    (or referenced by the payload's ``agent_transcript_path``) but could NOT be read
+    to an answer (open/read error, symlink, non-regular, unparsable line, referenced
+    but not locatable, or the final entry exceeds the 1 MiB tail window) this sets
+    ``ctx.transcript_unreadable``; parse_input then records BLOCKED ("transcript unreadable") instead of writing nothing — silence
+    would leave an earlier DONE as the newest record. A transcript that read fine but
+    ends on no handback call is a genuine "no verdict" and does NOT set the flag.
     """
     path = ""
     try:
         path = _find_subagent_artifact(ctx, ".jsonl")
         if not path:
+            # No (single) transcript located. If the payload REFERENCES one, the report
+            # exists somewhere we cannot read -> unreadable (the caller writes BLOCKED).
+            # No reference at all (e.g. a payload that never had a transcript) stays "".
+            ref = ctx.data.get("agent_transcript_path") if isinstance(ctx.data, dict) else None
+            if isinstance(ref, str) and ref:
+                ctx.transcript_unreadable = True
             return ""
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
+                ctx.transcript_unreadable = True
                 if not ctx.quiet_log:
                     _log_fail("handback", -1, "not-a-regular-file", ctx.session_id)
                 return ""
@@ -599,12 +615,25 @@ def _handback_message(ctx) -> str:
                 if isinstance(b.get("input"), dict) and isinstance(b["input"].get("message"), str)
             ]
             return "\n".join(texts)
+        if start:
+            # The window began past offset 0 and held no complete, parsable assistant
+            # entry: the final entry is larger than the window (its head was the dropped
+            # partial line). The verdict may be there but is unreadable -> fail closed
+            # (BLOCKED "transcript unreadable"), never silence — a stale DONE would
+            # otherwise stay the newest record. A transcript read from offset 0 with no
+            # assistant entry is a genuine "no verdict" and does NOT set the flag.
+            ctx.transcript_unreadable = True
+            if not ctx.quiet_log:
+                _log_fail("handback", -1, "final-entry-exceeds-tail-window", ctx.session_id)
         return ""
     except Exception as exc:
         # Behaviour stays "" (fail closed: no verdict), but when a transcript candidate
         # EXISTED the suppression must be observable, not silent.
-        if path and not ctx.quiet_log:
-            _log_fail("handback", -1, type(exc).__name__, ctx.session_id)
+        if path:
+            # A transcript candidate EXISTED but could not be read/parsed.
+            ctx.transcript_unreadable = True
+            if not ctx.quiet_log:
+                _log_fail("handback", -1, type(exc).__name__, ctx.session_id)
         return ""
 
 
@@ -734,15 +763,53 @@ class Ctx:
         # file) so a failure is recorded ONCE per stop — by the full pass, which
         # re-runs the same deterministic parse — never twice.
         self.quiet_log: bool = False
+        # The raw payload text, kept so a later stage can scan it without re-reading
+        # the environment (the wrapper hands the payload over on STDIN, not env).
+        self.raw_input: str = ""
+        # True when this subagent's transcript was referenced/located but could not be
+        # read to a verdict (see _handback_message) — parse_input turns that into a
+        # BLOCKED gate record instead of silence.
+        self.transcript_unreadable: bool = False
+        # Fixed (never agent-derived) reason string for the gate record's `concerns`
+        # field; "" when the verdict was read normally.
+        self.gate_reason: str = ""
 
 
-def parse_input(quiet_log: bool = False) -> Optional[Ctx]:
-    """Parse CAST_STOP_INPUT once; return a fully-classified Ctx (or None to no-op).
+def _read_stdin_payload() -> str:
+    """The whole stdin as text ("" on any read error). Never raises.
+
+    The bash wrapper pipes the SubagentStop payload here (``--stdin``) instead of
+    exporting it: an env var is capped (E2BIG — ~128 KiB per string on Linux, ~1 MiB
+    for the whole env+argv block on macOS), and an oversized payload used to fail
+    the exec outright and leave NO record.
+    """
+    try:
+        # surrogateescape mirrors how os.environ decodes, so behaviour is unchanged.
+        return sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
+    except Exception:
+        return ""
+
+
+def _str_field(value) -> str:
+    """A payload identity field as a str; anything that is not a str is MISSING ("").
+
+    A truthy non-str (int/list/dict) used to reach ``re.sub`` / a str-only classifier and
+    raise TypeError, aborting parse_input. Reject it explicitly instead.
+    """
+    return value if isinstance(value, str) else ""
+
+
+def parse_input(quiet_log: bool = False, raw: Optional[str] = None) -> Optional[Ctx]:
+    """Parse the SubagentStop payload once; return a fully-classified Ctx (or None to no-op).
+
+    ``raw`` is the payload text when the caller already has it (main() passes stdin);
+    when None the legacy ``CAST_STOP_INPUT`` env var is read (direct callers/tests).
 
     quiet_log=True (the --gate-only pass) suppresses hook_failures writes so the full
     pass's identical re-parse is the single recorder (see Ctx.quiet_log).
     """
-    raw = os.environ.get("CAST_STOP_INPUT", "")
+    if raw is None:
+        raw = os.environ.get("CAST_STOP_INPUT", "")
     if not raw:
         return None
     try:
@@ -754,6 +821,7 @@ def parse_input(quiet_log: bool = False) -> Optional[Ctx]:
 
     ctx = Ctx()
     ctx.quiet_log = quiet_log
+    ctx.raw_input = raw
     ctx.data = data
 
     # Multi-path response extraction (hook lines 87-110): structured
@@ -842,10 +910,16 @@ def parse_input(quiet_log: bool = False) -> Optional[Ctx]:
 
     # Capture raw identity before coalescing — used for the precondition guard
     # (mirrors hook line-307 guard: both agent_id AND agent_name absent → main-session Stop).
-    raw_name = data.get("agent_type") or data.get("agent_name") or data.get("subagent_name") or ""
-    agent_id = data.get("agent_id") or data.get("subagent_id") or ""
+    # Identity fields must be str: a truthy non-str (int/list/dict) is treated as MISSING
+    # (never str()-ed into an identity, never left to raise TypeError at the re.sub below).
+    raw_name = (
+        _str_field(data.get("agent_type"))
+        or _str_field(data.get("agent_name"))
+        or _str_field(data.get("subagent_name"))
+    )
+    agent_id = _str_field(data.get("agent_id")) or _str_field(data.get("subagent_id"))
     agent_name = raw_name or "unknown"
-    session_id = data.get("session_id") or ""
+    session_id = _str_field(data.get("session_id"))
 
     db_path = os.path.expanduser(os.environ.get("CAST_DB_PATH", "~/.claude/cast.db"))
 
@@ -960,6 +1034,13 @@ def parse_input(quiet_log: bool = False) -> Optional[Ctx]:
             # that tool's `message` is read; output_full and every other stage are
             # unchanged.
             ctx.gate_match = compute_gate_match(_handback_message(ctx), ctx.is_exempt)
+            if not ctx.gate_match and ctx.transcript_unreadable and not ctx.is_exempt:
+                # FAIL CLOSED on an unreadable/unlocatable transcript (see
+                # _handback_message): BLOCKED supersedes any earlier DONE record.
+                ctx.gate_match = "BLOCKED"
+                ctx.gate_reason = "transcript unreadable"
+                if not ctx.quiet_log:
+                    _log_fail("gate_match", -1, "transcript unreadable", ctx.session_id)
     except Exception as exc:
         # FAIL CLOSED: an uncaught error here aborts parse_input, the bash wrapper's
         # `|| true` swallows it, NO stage runs and NO record is written — so an earlier
@@ -968,6 +1049,7 @@ def parse_input(quiet_log: bool = False) -> Optional[Ctx]:
         if not ctx.quiet_log:
             _log_fail("gate_match", -1, f"{type(exc).__name__}: {exc}", ctx.session_id)
         ctx.gate_match = "" if ctx.is_exempt else "BLOCKED"
+        ctx.gate_reason = "" if ctx.is_exempt else "gate classification error"
     # Only resolve when a gate record will actually be written (Step 2.8).
     ctx.roster_type = _resolve_roster_type(ctx) if ctx.gate_match else ""
     ctx.successors = compute_successors(agent_name, ctx.event_type)
@@ -2013,7 +2095,7 @@ def stage7_protocol_check(ctx: Ctx) -> None:
         has_tool_use = True
     if (ctx.data.get("tool_use_count") or 0) > 0:
         has_tool_use = True
-    raw_input = os.environ.get("CAST_STOP_INPUT", "") or ""
+    raw_input = ctx.raw_input or ""
     if '"type": "tool_use"' in raw_input or '"type":"tool_use"' in raw_input:
         has_tool_use = True
 
@@ -2826,11 +2908,19 @@ def _emit_tail(ctx: Ctx, *, include_successors: bool) -> None:
 
     include_successors=False (the --gate-only pass) omits CAST_SUCCESSORS entirely:
     chain successors are enqueued from the full pass only.
+
+    CAST_GATE_REASON is CONDITIONAL: emitted only when parse_input synthesized a
+    fail-closed BLOCKED (fixed strings "transcript unreadable" / "gate classification
+    error", never agent text); the wrapper records it as the gate record's `concerns`.
     """
     lines = [
         "__CAST_TAIL_BEGIN__",
         "CAST_GATE_MATCH=" + shlex.quote(ctx.gate_match or ""),
     ]
+    if ctx.gate_reason:
+        # Only when a fail-closed BLOCKED was synthesized (fixed string, never agent text);
+        # the wrapper records it as the gate record's `concerns`.
+        lines.append("CAST_GATE_REASON=" + shlex.quote(ctx.gate_reason))
     if include_successors:
         lines.append("CAST_SUCCESSORS=" + shlex.quote("\n".join(ctx.successors)))
     lines += [
@@ -2858,7 +2948,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     """
     args = sys.argv[1:] if argv is None else argv
     gate_only = "--gate-only" in args
-    ctx = parse_input(quiet_log=gate_only)
+    # --stdin: the wrapper pipes the payload on stdin (no env/argv size cap). Without
+    # the flag parse_input falls back to the CAST_STOP_INPUT env var.
+    stdin_raw = _read_stdin_payload() if "--stdin" in args else None
+    ctx = parse_input(quiet_log=gate_only, raw=stdin_raw)
     if ctx is None:
         return 0
     # Precondition guard (hook line 307): refuse telemetry for a main-session Stop

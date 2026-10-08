@@ -13,6 +13,15 @@ set -euo pipefail
 mkdir -p "${HOME}/.claude/logs" 2>/dev/null || true
 _log_error() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR $0: $1" >> "${HOME}/.claude/logs/hook-errors.log" 2>/dev/null || true; }
 
+# _clean <text> — control characters (incl. newline/ESC/DEL) become '?' and the result is capped at
+# 200 chars. Project paths come from the agent-writable sessions table and CAST_EXTRA_PROJECT, so
+# they must never reach the error log or the block reason raw (log forging / terminal escapes).
+_clean() {
+  local _s
+  _s="$(printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '?')"
+  printf '%s' "${_s:0:200}"
+}
+
 # Shared hardened-git primitive (cast_git_safe). If the lib is missing we do NOT fall back to
 # bare git: the stub returns 3 (hardening not established), so every repo is treated as
 # status-unknown and the dirty check below fails closed. The -r guard matters: on bash 3.2 a
@@ -50,20 +59,49 @@ if [ -n "${CAST_EXTRA_PROJECT:-}" ] && [ -d "$CAST_EXTRA_PROJECT" ]; then
   KNOWN_PROJECTS+=("$CAST_EXTRA_PROJECT")
 fi
 
-# Also pull recent project paths from cast.db sessions (last 24h)
+# Also pull recent project paths from cast.db sessions (last 24h), most recent first so the
+# LIMIT keeps a deterministic subset. A path containing a control character (a newline would
+# split one path into two bogus entries, and bogus entries read as "not a repo" = fail open) is
+# never added to the list: it is counted and recorded as a status-unknown entry instead, which
+# blocks (fail closed).
 DB_PATH="${CAST_DB_PATH:-${HOME}/.claude/cast.db}"
+UNSAFE_DB_PATHS=0
+DB_QUERY_FAILED=0
 if command -v sqlite3 >/dev/null 2>&1 && [ -f "$DB_PATH" ]; then
-  while IFS= read -r proj_path; do
-    if [ -n "$proj_path" ] && [ -d "$proj_path" ]; then
-      KNOWN_PROJECTS+=("$proj_path")
-    fi
-  done < <(sqlite3 "$DB_PATH" \
-    "SELECT DISTINCT project_root FROM sessions WHERE datetime(started_at) > datetime('now','-1 day') AND project_root IS NOT NULL AND project_root != '' LIMIT 20;" \
-    2>/dev/null || true)
+  # cast.db is written on every tool call, so a bare query hits SQLITE_BUSY under routine lock
+  # contention: wait up to the busy timeout (default 3 s; CAST_PRECOMPACT_DB_TIMEOUT_MS overrides)
+  # and open read-only. Only an error that PERSISTS past the timeout fails closed.
+  _DB_TO="${CAST_PRECOMPACT_DB_TIMEOUT_MS:-3000}"
+  case "$_DB_TO" in '' | *[!0-9]*) _DB_TO=3000 ;; esac
+  _db_rc=0
+  _DB_ROWS="$(sqlite3 -readonly -cmd ".timeout $_DB_TO" "$DB_PATH" \
+    "SELECT project_root FROM sessions WHERE datetime(started_at) > datetime('now','-1 day') AND project_root IS NOT NULL AND project_root != '' AND NOT (project_root GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*')) GROUP BY project_root ORDER BY MAX(datetime(started_at)) DESC, project_root LIMIT 20;" \
+    2>/dev/null)" || _db_rc=$?
+  if [ "$_db_rc" -eq 0 ]; then
+    while IFS= read -r proj_path; do
+      if [ -n "$proj_path" ] && [ -d "$proj_path" ]; then
+        KNOWN_PROJECTS+=("$proj_path")
+      fi
+    done <<<"$_DB_ROWS"
+    UNSAFE_DB_PATHS="$(sqlite3 -readonly -cmd ".timeout $_DB_TO" "$DB_PATH" "SELECT count(DISTINCT project_root) FROM sessions WHERE datetime(started_at) > datetime('now','-1 day') AND project_root IS NOT NULL AND project_root != '' AND (project_root GLOB ('*[' || char(1) || '-' || char(31) || char(127) || ']*'));" 2>/dev/null)" || _db_rc=$?
+  fi
+  if [ "$_db_rc" -ne 0 ]; then
+    DB_QUERY_FAILED="$_db_rc"
+    UNSAFE_DB_PATHS=0
+  fi
+  case "$UNSAFE_DB_PATHS" in '' | *[!0-9]*) UNSAFE_DB_PATHS=0 ;; esac
 fi
 
 DIRTY_REPOS=()
 FAILED_REPOS=()
+if [ "$DB_QUERY_FAILED" -ne 0 ]; then
+  _log_error "sessions query on $(_clean "$DB_PATH") failed (rc=$DB_QUERY_FAILED); blocking (recent projects unknown)"
+  FAILED_REPOS+=("(sessions DB query failed - recent projects unknown) (rc=${DB_QUERY_FAILED})")
+fi
+if [ "$UNSAFE_DB_PATHS" -gt 0 ]; then
+  _log_error "$UNSAFE_DB_PATHS recent session project path(s) contain control characters; blocking (status unknown)"
+  FAILED_REPOS+=("(${UNSAFE_DB_PATHS} session project path(s) with control characters) (rc=4)")
+fi
 
 # Hostile-repo hardening. This hook runs OUTSIDE the Bash sandbox over project roots an
 # agent can write to, so the dirty check goes through cast_git_safe (cast-hook-lib.sh), which
@@ -74,16 +112,18 @@ FAILED_REPOS=()
 for proj in "${KNOWN_PROJECTS[@]}"; do
   # Defensive: reject paths starting with '-' so git -C can't reinterpret as an option
   case "$proj" in -*) continue ;; esac
-  [ -d "$proj/.git" ] || continue
+  # -e, not -d: a linked worktree / submodule checkout has a .git FILE (gitdir pointer); skipping it
+  # would let a dirty agent worktree never block. cast_git_safe resolves and hardens either form.
+  [ -e "$proj/.git" ] || continue
   # rc captured without `|| true` masking: a failed status must not read as a clean repo.
   _git_rc=0
   STATUS="$(cast_git_safe "$proj" status --porcelain 2>/dev/null)" || _git_rc=$?
   if [ "$_git_rc" -ne 0 ]; then
     # Fail closed: status unknown => block, with a reason that names the repo.
-    _log_error "git status failed in $proj (rc=$_git_rc); blocking (status unknown)"
-    FAILED_REPOS+=("$proj (rc=${_git_rc})")
+    _log_error "git status failed in $(_clean "$proj") (rc=$_git_rc); blocking (status unknown)"
+    FAILED_REPOS+=("$(_clean "$proj") (rc=${_git_rc})")
   elif [ -n "$STATUS" ]; then
-    DIRTY_REPOS+=("$proj")
+    DIRTY_REPOS+=("$(_clean "$proj")")
   fi
 done
 
@@ -116,20 +156,41 @@ fi
 # repos whose status could not be read get a separate sentence (commit cannot fix those).
 LIST=""
 if [ ${#DIRTY_REPOS[@]} -gt 0 ]; then
-  LIST="$(printf '%s, ' "${DIRTY_REPOS[@]}" | sed 's/, $//')"
+  LIST="$(printf '%s\037' "${DIRTY_REPOS[@]}")"
 fi
 FAILED_LIST=""
 if [ ${#FAILED_REPOS[@]} -gt 0 ]; then
-  FAILED_LIST="$(printf '%s, ' "${FAILED_REPOS[@]}" | sed 's/, $//')"
+  FAILED_LIST="$(printf '%s\037' "${FAILED_REPOS[@]}")"
 fi
 FALLBACK_REASON="Uncommitted changes detected"
 if [ ${#DIRTY_REPOS[@]} -eq 0 ]; then
   FALLBACK_REASON="Could not read git status for a tracked repo (operator fix needed; committing will not help)"
 fi
 CAST_DIRTY_LIST="$LIST" CAST_FAILED_LIST="$FAILED_LIST" python3 -I - <<'PYEOF' 2>/dev/null || printf '{"decision":"block","reason":"%s"}\n' "$FALLBACK_REASON"
-import json, os
-dirty_list = os.environ.get('CAST_DIRTY_LIST', '')
-failed_list = os.environ.get('CAST_FAILED_LIST', '')
+import json, os, unicodedata
+
+# Lists arrive 0x1f-separated (names are control-char-free). Re-sanitise here as well: drop every
+# Unicode control/format/line-separator char (bidi overrides, zero-width, U+2028/2029), neutralise
+# [ ], cap each name and the total length.
+def names(var):
+    out = []
+    for n in os.environ.get(var, '').split('\x1f'):
+        n = ''.join(c for c in n if unicodedata.category(c) not in ('Cc', 'Cf', 'Cs', 'Zl', 'Zp'))
+        # a repo name is agent-controlled text: neutralise [ ] so it cannot forge a [CAST-...] directive
+        n = n.replace('[', '(').replace(']', ')')
+        if n:
+            out.append(n if len(n) <= 120 else n[:117] + '...')
+    shown, total = [], 0
+    for n in out:
+        if total + len(n) > 600:
+            shown.append('(+%d more)' % (len(out) - len(shown)))
+            break
+        shown.append(n)
+        total += len(n) + 2
+    return ', '.join(shown)
+
+dirty_list = names('CAST_DIRTY_LIST')
+failed_list = names('CAST_FAILED_LIST')
 parts = []
 if dirty_list:
     parts.append(f"Uncommitted changes in: {dirty_list}. Commit before compacting (use commit agent).")

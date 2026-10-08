@@ -236,3 +236,48 @@ STUBEOF
     grep -q "skipped" "$HOME/.claude/logs/post-commit-provenance.log" || \
     grep -q "recorder" "$HOME/.claude/logs/post-commit-provenance.log"
 }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Installed-hook contract: a planted REPO recorder is never executed
+# ──────────────────────────────────────────────────────────────────────────────
+plant_repo_recorder() {
+    mkdir -p "$TEST_REPO/scripts"
+    cat > "$TEST_REPO/scripts/cast-commit-provenance.py" <<'PYEOF'
+import os
+open(os.environ["PLANT_MARKER"], "a").write("REPO RECORDER RAN\n")
+PYEOF
+    export PLANT_MARKER="$BATS_TEST_TMPDIR/plant-marker"
+    : > "$PLANT_MARKER"
+}
+
+@test "installed recorder missing: planted repo recorder is NOT used as a fallback (commit still succeeds)" {
+    cd "$TEST_REPO"
+    plant_repo_recorder
+    rm -f "$HOME/.claude/scripts/cast-commit-provenance.py"
+    echo x > f.txt
+    git add f.txt scripts
+    CLAUDECODE=1 git commit -q -m "no installed recorder"
+    [[ ! -s "$PLANT_MARKER" ]]
+    grep -q "installed recorder absent" "$HOME/.claude/logs/post-commit-provenance.log"
+}
+
+@test "installed recorder present: it runs and the planted repo recorder does not" {
+    cd "$TEST_REPO"
+    plant_repo_recorder
+    echo x > f.txt
+    git add f.txt scripts
+    CLAUDECODE=1 git commit -q -m "installed recorder"
+    [[ ! -s "$PLANT_MARKER" ]]
+    grep -q "recorder called with args" "$STUB_RECORDER_LOG"
+}
+
+@test "a symlinked installed recorder is refused (not executed)" {
+    cd "$TEST_REPO"
+    plant_repo_recorder
+    rm -f "$HOME/.claude/scripts/cast-commit-provenance.py"
+    ln -s "$TEST_REPO/scripts/cast-commit-provenance.py" "$HOME/.claude/scripts/cast-commit-provenance.py"
+    echo x > f.txt
+    git add f.txt scripts
+    CLAUDECODE=1 git commit -q -m "symlinked recorder"
+    [[ ! -s "$PLANT_MARKER" ]]
+}

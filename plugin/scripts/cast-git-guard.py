@@ -58,7 +58,9 @@ GUARANTEES PRESERVED (Subtraction Safety Gate, master_v9.md §0.2):
     requires `git` immediately after the env assignments and a non-git
     segment can never satisfy that. NOT covered by this pass (see KNOWN
     LIMITATIONS below for the durable list): subshell/`$()` wrapping,
-    `--config-env=`/`GIT_CONFIG_*` env indirection, unbalanced-quote parse
+    `GIT_CONFIG_*` env set in an earlier segment (the same-segment and
+    `--config-env` forms were closed 2026-10-07 — see the "Config-injection
+    indirection" note below), unbalanced-quote parse
     failures (raw-only fallback), and quoting a *safety*-flag token for
     `clean` specifically — that one is a structural asymmetry, not an
     oversight, documented in `_git_evaluate`'s docstring.
@@ -366,7 +368,8 @@ regex layer):
         <(echo ..))`) and a heredoc inside it (`bash <(cat <<EOF` + a spelled git + `EOF` + `)`).
         A `<(..)` that is an ARGUMENT of the producer IS read: `bash <(cat <(echo 'git push'))`;
       * `xargs ... bash -c '{}'` fed from a pipe, `find -exec` fed by data;
-      * `git -c alias.x=push x` (main's own gap: the alias is defined inside the command), a
+      * (`git -c alias.x=push x` was main's own gap — CLOSED 2026-10-07: every inline `-c alias.<n>`
+        now blocks as an exec-capable config key, see `_EXEC_CONFIG_KEY`); a
         redirection inside git's own arguments (`git >/dev/null push`, `git {fd}>f push`) and a
         quoted `;` in them (`git -c 'a;b' push`): main's segment-split gaps, inherited unchanged;
       * command words built by a parameter, a substitution or an expansion: `x=push; git $x`,
@@ -410,9 +413,9 @@ regex layer):
     (`hit(_RESTORE_HAS_STAGED) and not hit(_RESTORE_HAS_WORKTREE)`), so
     normalizing either operand independently fixes it — `git restore
     "--staged" f.txt` (blocked at HEAD, a fail-CLOSED false positive) now
-    correctly ALLOWS. `clean`'s dry-run safety instead lives INSIDE
-    `_CLEAN_BLOCK`'s own negative lookahead, evaluated once per variant and
-    OR'd by `hit()` — so if the RAW variant alone still trips the block (as
+    correctly ALLOWS. `clean`'s dry-run safety instead lives in
+    `_dry_run_block` (formerly `_CLEAN_BLOCK`'s own negative lookahead),
+    evaluated once per variant and OR'd — so if the RAW variant alone still trips the block (as
     it does for a quoted safety flag, since the lookahead never sees past
     the quote), the normalized variant's safe verdict can't override it:
     `git clean "-nd"` still blocks. Restructuring `_CLEAN_BLOCK` to match
@@ -470,14 +473,41 @@ regex layer):
     day; escape: CAST_REFLOG_OK=1). Read-only `git reflog`/`git reflog show`/
     `git reflog exists` stay UNBLOCKED.
   - `git gc --prune=<value>` (any explicit value, including `now`/`all`/an
-    age) blocked — same recovery-path rationale (escape: CAST_GC_OK=1). Bare
-    `git gc`, `--aggressive`, `--prune` with no value, `--no-prune`, and
-    `--auto` stay UNBLOCKED.
+    age) blocked — same recovery-path rationale (escape: CAST_GC_OK=1).
+  - EVERY `git gc` form (bare, `--aggressive`, `--auto`, `--prune`,
+    `--no-prune`, ...), every `git maintenance run` (any task) and every
+    `git worktree prune` except `-n`/`--dry-run` is blocked (2026-10-07 U6a-2,
+    probed hazard E1): `gc` and `maintenance run`'s gc task run `git worktree
+    prune`, which FOLLOWS an agent-planted SYMLINKED `.git/worktrees/<id>` entry
+    and EMPTIES its target (`gc.worktreePruneExpire=never` does not stop it).
+    Escapes: CAST_GC_OK=1 (gc / maintenance run), CAST_WORKTREE_OK=1 (worktree
+    prune). Plus a STATEFUL check (`_worktree_symlink_hazard`): ANY git
+    invocation is blocked while the target repo's common dir has a symlinked
+    `worktrees/*` entry (or `gitdir` file, or a symlinked `worktrees` dir) —
+    git's own implicit auto-gc (commit/merge/fetch/...) would otherwise run the
+    same prune; it is a pure filesystem check (no subprocess), the repo is
+    resolved from the cwd, literal `cd`/`pushd` targets earlier in the command, git's `-C`
+    / `--git-dir` (either spelling) / `GIT_DIR=` / `env -C`, through any path-spelled git
+    and git's full global-option grammar; unreadable dirs
+    fail OPEN (git, same uid, cannot traverse them either) and a dir over
+    `_MAX_WORKTREE_ENTRIES` fails CLOSED (hatch: CAST_WORKTREE_OK=1).
+    The plant itself (`ln -s ... <x>.git/worktrees/<id>`) is blocked too
+    (hatch CAST_WORKTREE_OK=1). RESIDUAL: a symlink planted AND used inside ONE
+    command line by a means other than `ln -s` (`mv`, `cp -P`, an interpreter) is not
+    visible at check time — the gc / maintenance / worktree-prune forms are blocked
+    statically for exactly that reason; an implicit auto-gc after such a plant is not.
+    A dynamic `cd $D` / `-C "$D"` target, `cd -`, `popd`, and a `GIT_DIR` exported in an
+    earlier segment are not resolved. A command with more than `_MAX_TRACKED_CDS` literal
+    cds, or a git prefix past the 8 KB / 128-word cap, is "too complex" and a git segment in
+    it fails CLOSED (hatch CAST_WORKTREE_OK=1). `cd` text inside a heredoc body or a quoted
+    string is read as a real `cd` (accepted false positive, only ever visible in a repo that is
+    already poisoned). `-n ... --no-dry-run` is NOT a dry run (the last
+    toggle wins; `_dry_run_block`) for clean / prune / worktree prune / rm.
   - `git prune` blocked in every non-dry-run form — measured MORE
     destructive than `git gc --prune=now` (no grace period at all; escape:
     CAST_PRUNE_OK=1). Dry runs (`-n`/`--dry-run`) stay UNBLOCKED, as do the
-    unrelated `git prune-packed`, `git remote prune`, and `git worktree
-    prune`.
+    unrelated `git prune-packed` and `git remote prune` (`git worktree prune`
+    has its own block, above).
   - `git -c gc.pruneExpire=<value>` / `-c gc.reflogExpire=<value>` / `-c
     gc.reflogExpireUnreachable=<value>` blocked on ANY git invocation
     regardless of subcommand — measured as a complete config-layer bypass of
@@ -520,8 +550,8 @@ regex layer):
     ref stays allowed, as designed). Each was verified 2026-10-02 by
     calling `_git_evaluate` directly as a module (return 2 = block). The
     residual limitations are the ones named elsewhere in this docstring
-    (subshell/`$( )` wrapping, `--config-env=`/`GIT_CONFIG_*` env
-    indirection, unbalanced-quote parsing); do not assume that list is
+    (subshell/`$( )` wrapping, `GIT_CONFIG_*` env set in an earlier segment,
+    unbalanced-quote parsing); do not assume that list is
     exhaustive. (`git reflog expire`/`git gc --prune=<value>`/`git prune`
     were once on the unguarded list; they are now covered by the
     reflog/gc/prune blocks above — see the 2026-08-17 recovery-path pass
@@ -539,19 +569,55 @@ regex layer):
     never appears as a `git ...` token on any line this module scans. That
     remains a real, named hole: bare `git gc` is not, and cannot be made,
     unconditionally safe by a command-line regex layer.
-  - Config-injection indirection (2026-08-17 recovery-path pass, follow-up,
-    measured — deliberately NOT chased, same family as the subshell/`$( )`
-    and quoted-token limitations: regex cannot win this arms race, and the
-    threat model here is a careless agent, not an adversary evading a
-    security boundary; the OS/tool sandbox is the real boundary):
+  - Config-injection indirection — CLOSED 2026-10-07 (U6a-1, CAST v10.3.0).
+    It was a measured, deliberately unchased residual (2026-08-17):
     `PRX=now git --config-env=gc.pruneExpire=PRX gc` and `GIT_CONFIG_COUNT=1
     GIT_CONFIG_KEY_0=gc.pruneExpire GIT_CONFIG_VALUE_0=now git gc` both
-    measured GONE (dangling blob deleted) and both ALLOWED by every check in
-    this module — `--config-env=` names the ENV VAR holding the value, not
-    the value itself, so the literal `gc.pruneExpire=now` text the `-c`
-    block keys on never appears on the line; the `GIT_CONFIG_KEY_0`/
-    `GIT_CONFIG_VALUE_0` form sets config purely via env-var assignments
-    git reads internally, with no `-c` or `config` token at all.
+    deleted the dangling blob and both were ALLOWED. Now BLOCKED (same
+    message and CAST_GC_OK hatch as the `-c` block): `_normalize_git_segment`
+    renders `--config-env=<k>=<E>` / `--config-env <k>=<E>` as the `-c` it is
+    equivalent to, and `_GC_ENV_KEY_BLOCK` / `_GC_ENV_PARAMETERS_BLOCK` match
+    `GIT_CONFIG_KEY_<n>=<gc key>` / a `GIT_CONFIG_PARAMETERS` value naming one
+    on the segment that runs git (also through `env ...` and `bash -c '...'`).
+    The exec-key analogue (`core.pager`, `alias.*`, `core.hooksPath`, ... —
+    see `_EXEC_CONFIG_KEY`) shares the same machinery under CAST_GIT_CONFIG_OK.
+    STILL UNCOVERED, measured 2026-10-07: the assignment in an EARLIER segment
+    than the git that consumes it (`export GIT_CONFIG_KEY_0=gc.pruneExpire;
+    git gc`, `export GIT_CONFIG_PARAMETERS=...; git status`) — the engine
+    evaluates one segment at a time and the exporting segment mentions no
+    git, so both are ALLOWED; and env vars that name a program rather than a
+    config key (`GIT_PAGER`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`, ...) or
+    a config file via an unlisted variable; and a DYNAMIC git command word
+    (`git $C core.pager v`, `G=git; $G config core.pager v`, shell aliases or
+    functions), the same limit as every other block here. Exec-key `git
+    config` writes fail CLOSED when the option parser cannot be modelled
+    exactly (abbreviated `--fil`, bundled `-zf`, dynamic `--$E`, quoted
+    redirection look-alikes, unquoted globs/`$K` in the key position); the
+    accepted over-blocks (a VALUE that is literally an exec key, e.g.
+    `config user.name "core.pager"`) are hatchable with CAST_GIT_CONFIG_OK=1
+    — see the block comment above `_exec_config_cmd_blocks`. A word-splitting
+    sole operand (`$KV`, `"$@"`) is key + value and is never a safe read. Also
+    blocked: `clone -c|--config <exec key>=<v>` (persists into the new repo) and
+    `clone|init --template` (copies hooks), abbreviations included (matched as
+    UNIQUE PREFIXES of the subcommand's real long options, `_EXEC_LONG_OPTS`,
+    from `git <sub> -h` on git 2.56 — an option git hides from `-h` is not in the
+    table). git's own shell-exec carriers — `submodule foreach <cmd>`, `rebase
+    -x|--exec <cmd>`, `difftool -x|--extcmd <cmd>`, `bisect run <cmd>` — hand a
+    STRING to a shell, so `_git_carrier_payloads` re-evaluates it through the
+    whole engine like a `bash -c` operand (a hatch on the OUTER command is not
+    honoured for it); an unreadable carrier is a refusal. `git grep -O<cmd>` and
+    other program-taking flags are not carriers (accepted, below).
+    ACCEPTED RESIDUALS, same class as the dynamic command word: a user's OWN
+    `~/.gitconfig` `help.autocorrect` or a pre-existing alias that turns a typo
+    into `config` (the guard sees the typed word; setting `help.autocorrect`
+    itself IS blocked), and CLI flags that run a program one-shot at the agent's
+    own privilege (`fetch|clone --upload-pack`, `clone -u`, `ext::` URLs — `ext`
+    is off by default via protocol.allow, and persisting `protocol.ext.allow` is
+    blocked), and `git grep -O<cmd>` / `--open-files-in-pager=<cmd>` (a
+    program-naming flag, one-shot, the agent's own privilege — real git 2.56
+    executes it; pinned ALLOW). The threat model is a careless
+    agent, not an adversary evading a security boundary; the OS/tool sandbox
+    is the real boundary.
   - Honest unresolved question, NOT smoothed over (2026-08-17 recovery-path
     pass, follow-up): whether inline expiry config plus git's own
     auto-gc (`git -c gc.auto=1 -c gc.pruneExpire=now commit`, or any
@@ -678,8 +744,37 @@ _CLEAN_ALLOW = re.compile(
     r'(^|&&\s*)CAST_CLEAN_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+clean\b'
 )
 _CLEAN_DRY_RUN = r'(\s|^)(--dry-run|' + _flag_cluster('n') + r')(\s|$)'
+# 2026-10-07 (U6a-2 security F1): the dry-run exemption used to be `(?!.*_CLEAN_DRY_RUN)` -- ANY `-n`
+# / `--dry-run` after the command exempted it. Measured with real git (clean, prune, worktree
+# prune, rm all use OPT__DRY_RUN): the LAST toggle wins, `--no-dry-run` (or an abbreviation of it,
+# `--no-d`...) turns a prior `-n` OFF, so `git clean -f -n --no-dry-run` REALLY deletes. The BLOCK
+# patterns below therefore only recognise the command; `_dry_run_block` applies the exemption: a
+# match is exempt only when the last dry-run toggle after it is ON. One linear scan per variant (a
+# regex `(?!.*ON(?!.*OFF))` would be O(n * toggles): a 40k-`-n` run was a latency lever).
+# An abbreviation of `--dry-run` itself (`--dry`) is NOT exempted (fail closed, as before).
+_DRY_TOGGLE = re.compile(
+    r'(?:\s|^)(?:(?P<on>--dry-run|' + _flag_cluster('n') + r')'
+    r'|(?P<off>--no-d(?:r(?:y(?:-(?:r(?:un?)?)?)?)?)?))(?=\s|$)'
+)
+
+
+def _dry_run_block(pattern, variants) -> bool:
+    """True if `pattern` (a command-only BLOCK regex) matches any variant WITHOUT a dry-run in
+    effect after the match (see the note above `_DRY_TOGGLE`)."""
+    for v in variants:
+        if pattern.search(v) is None:
+            continue                       # the common case: skip the toggle scan entirely
+        last = None
+        for t in _DRY_TOGGLE.finditer(v):
+            last = t
+        for m in pattern.finditer(v):
+            if last is None or last.start() < m.end() or last.group('off') is not None:
+                return True
+    return False
+
+
 _CLEAN_BLOCK = re.compile(
-    r'(^|\s)git' + _GIT_OPTS + r'\s+clean\b(?!.*' + _CLEAN_DRY_RUN + r')'
+    r'(^|\s)git' + _GIT_OPTS + r'\s+clean\b'
 )
 
 # --- git checkout (pathspec) block -------------------------------------------
@@ -857,6 +952,23 @@ def _normalize_git_segment(seg):
                 val = name + '=_'  # value is never load-bearing; only the KEY prefix is
             kept_tail.extend(('-c', val))
             j += 2
+        elif opt == '--config-env' and (eq or j + 1 < len(tokens)):
+            # 2026-10-07 U6a-1: `--config-env=<key>=<ENVVAR>` / `--config-env <key>=<ENVVAR>`
+            # set config exactly like `-c <key>=<value>` (the value comes from the
+            # environment), so render it as the `-c` it is equivalent to — the gc-expiry
+            # and exec-key `-c` blocks then see it, quote-stripped, with no new pattern.
+            val = _val if eq else tokens[j + 1]
+            kept_tail.extend(('-c', val.replace(' ', '_') if re.search(r'\s', val) else val))
+            j += 1 if eq else 2
+        elif opt.startswith('-c') and not opt.startswith('--') and len(opt) > 2:
+            # `-c<key>=<v>` (no space) is NOT a form git accepts (measured: "unknown
+            # option"), but the guard must not depend on that — same rendering as `-c <key>=<v>`.
+            val = tokens[j][2:]
+            if re.search(r'\s', val):
+                name, _sep, _v = val.partition('=')
+                val = name + '=_'
+            kept_tail.extend(('-c', val))
+            j += 1
         elif eq or opt not in _GIT_GLOBAL_VALUE_OPTS or j + 1 >= len(tokens):
             j += 1  # attached `opt=value`, or a no-value/unrecognized flag: drop it alone
         else:
@@ -1011,11 +1123,17 @@ _REFLOG_BLOCK = re.compile(
 # explicit value, including `now`/`all`, and even a value as generous as
 # `1.hour.ago` against a 3-hour-old dangling blob) deletes unreachable objects
 # — the same recovery path noted above. Bare `git gc`, `--aggressive`,
-# `--prune` with no `=value`, `--no-prune`, and `--auto` all stay allowed —
-# none of them force an immediate/explicit prune. The `--no-prune` case is the
-# trap: the flag lookahead below requires the literal substring `--prune=`
-# preceded by a token boundary, which `--no-prune` (no `=` at all) never
-# contains, so it cannot misfire on it.
+# `--prune` with no `=value`, `--no-prune`, and `--auto` were allowed then —
+# none of them force an immediate/explicit prune. 2026-10-07 (U6a-2): that
+# stopped being true for a DIFFERENT reason — every `git gc` form runs `git
+# worktree prune`, which follows an agent-planted symlinked `.git/worktrees/<id>`
+# entry and empties its target (`gc.worktreePruneExpire=never` does not stop
+# it). `_GC_ANY_BLOCK` therefore blocks every `git gc` form (hatch: CAST_GC_OK=1,
+# no new hatch); `_GC_BLOCK` keeps only the `--prune=<value>` shape so that
+# message (and its recovery-path rationale) is unchanged. The `--no-prune` trap
+# below still matters for `_GC_BLOCK`: the lookahead requires the literal
+# substring `--prune=` preceded by a token boundary, which `--no-prune` (no `=`
+# at all) never contains.
 # Tolerates extra VAR=value assignments between CAST_GC_OK=1 and git.
 _GC_ALLOW = re.compile(
     r'(^|&&\s*)CAST_GC_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+gc\b'
@@ -1023,6 +1141,17 @@ _GC_ALLOW = re.compile(
 _GC_PRUNE_VALUE = r'(?:^|\s)--prune=\S+'
 _GC_BLOCK = re.compile(
     r'(^|\s)git' + _GIT_OPTS + r'\s+gc\b(?=.*' + _GC_PRUNE_VALUE + r')'
+)
+# Every `git gc` form (U6a-2). `(?![\w-])`, not `\b`, so `git gcfoo`/`git gc-x` stay out.
+_GC_ANY_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+gc(?![\w-])'
+)
+# `git maintenance run` (any task / flag): its default and `--task=gc` run the same `worktree
+# prune`; `--task=worktree-prune` is the prune itself. `start`/`register`/`stop`/`unregister`
+# only edit config / the scheduler and stay allowed (the scheduled tasks exclude gc and
+# worktree-prune by default). Hatch: CAST_GC_OK=1.
+_MAINTENANCE_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+maintenance\s+run(?![\w-])'
 )
 
 # --- git prune block ----------------------------------------------------------
@@ -1034,7 +1163,7 @@ _GC_BLOCK = re.compile(
 # above. Must NOT match `git prune-packed` (a distinct, non-destructive
 # command), `git remote prune origin`, or `git worktree prune` (both `prune`
 # arguments to a DIFFERENT subcommand, not the top-level destructive `git
-# prune`). `\b` alone is wrong here — `prune\b` still matches inside
+# prune`; `git worktree prune` has its own block, `_WORKTREE_PRUNE_BLOCK`). `\b` alone is wrong here — `prune\b` still matches inside
 # `prune-packed` (the `e`->`-` transition IS a word/non-word boundary) — so a
 # negative lookahead `(?![\w-])` is used instead, rejecting anything where
 # `prune` is immediately followed by a word char or hyphen. `remote prune
@@ -1049,7 +1178,7 @@ _PRUNE_ALLOW = re.compile(
     r'(^|&&\s*)CAST_PRUNE_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+prune(?![\w-])'
 )
 _PRUNE_BLOCK = re.compile(
-    r'(^|\s)git' + _GIT_OPTS + r'\s+prune(?![\w-])(?!.*' + _CLEAN_DRY_RUN + r')'
+    r'(^|\s)git' + _GIT_OPTS + r'\s+prune(?![\w-])'      # dry-run exemption: `_dry_run_block`
 )
 
 # --- git gc/reflog config-injection block (config-route bypass follow-up) ----
@@ -1143,6 +1272,574 @@ _GC_CONFIG_EDIT_BLOCK = re.compile(
     r'|(?=.*(?:^|\s)(?:--edit|-e)\b))'
 )
 
+# --- exec-config injection block (2026-10-07 U6a-1, CAST v10.3.0) ------------
+# Threat: git config keys that make git EXECUTE a program (or load more config /
+# rewrite URLs into `ext::` transports) run in Ed's UNSANDBOXED terminal and in
+# CAST hooks the moment a later, innocent-looking `git status`/`git log`/`git
+# diff` is run in that repo. File-tool writes to `.git/config` / `~/.gitconfig`
+# are already denied by config/policies.json; the remaining route is a Bash
+# `git config` WRITE (persistent, the dangerous one) or a one-shot `-c` /
+# `--config-env` / `GIT_CONFIG_*` env injection (same privilege as the agent
+# itself — blocked as defence-in-depth). Same deny-by-default precedent as the
+# gc-expiry keys above: ANY value blocks (`=true`, empty, `=never`), READS stay
+# allowed, one hatch (CAST_GIT_CONFIG_OK=1).
+#
+# The key list is git-config(1)'s "runs a command / loads a file / rewrites a
+# URL" set: core.{fsmonitor,hooksPath,pager,editor,sshCommand,askPass,gitProxy,
+# alternateRefsCommand}, sequence.editor, ssh.variant, pager.<cmd>, alias.<n>,
+# filter.<n>.{clean,smudge,process}, diff.external, diff.<n>.{command,textconv},
+# merge.<n>.driver, {merge,diff}tool.<n>.{cmd,path}, gpg.program, gpg.<fmt>.
+# program, gpg.ssh.defaultKeyCommand, credential[.<url>].helper, remote.<n>.
+# {uploadpack,receivepack,vcs}, uploadpack.packObjectsHook, include.path,
+# includeIf.<cond>.path, protocol.<n>.allow, url.<base>.{insteadOf,
+# pushInsteadOf}, web.browser, browser.<t>.{cmd,path}, man.<t>.cmd, sendemail.
+# {smtpServer,toCmd,ccCmd,headerCmd}, plus four further exec keys from the same
+# man page: trailer.<t>.cmd, interactive.diffFilter, init.templateDir (copies
+# hooks into every new repo), submodule.<n>.update (`!command`).
+# Section/variable names are case-insensitive in git, subsection names are not
+# but are matched case-insensitively too (fail-closed). A subsection can hold
+# dots/anything (`includeIf.gitdir:~/x/.path`), so each pattern anchors on the
+# section start and the LAST component. `[^\s=]+` is the subsection class: a
+# `-c`/env key ends at the first `=`; a `git config` key may contain `=`, so
+# the write block uses the `\S+` flavour. Both end the way the match does only
+# at a token boundary, supplied by the caller's lookahead.
+def _exec_config_key(sub):
+    return (
+        r'(?i:'
+        r'core\.(?:fsmonitor|hooksPath|pager|editor|sshCommand|askPass|gitProxy|alternateRefsCommand)'
+        r'|sequence\.editor|ssh\.variant|interactive\.diffFilter|init\.templateDir'
+        r'|imap\.tunnel|instaweb\.(?:httpd|browser)|help\.(?:browser|autocorrect)|gc\.recentObjectsHook'
+        r'|uploadpack\.packObjectsHook|diff\.external|web\.browser'
+        r'|gpg\.program|gpg\.ssh\.defaultKeyCommand|gpg\.[^\s=.]+\.program'
+        r'|credential\.helper|include\.path'
+        r'|sendemail\.(?:smtpServer|toCmd|ccCmd|headerCmd)'
+        r'|sendemail\.' + sub + r'\.(?:smtpServer|toCmd|ccCmd|headerCmd)'
+        r'|(?:pager|alias)\.' + sub +
+        r'|filter\.' + sub + r'\.(?:clean|smudge|process)'
+        r'|diff\.' + sub + r'\.(?:command|textconv)'
+        r'|merge\.' + sub + r'\.driver'
+        r'|(?:mergetool|difftool|browser)\.' + sub + r'\.(?:cmd|path)'
+        r'|trailer\.' + sub + r'\.(?:cmd|command)'
+        r'|man\.' + sub + r'\.(?:cmd|path)'
+        r'|(?:guitool)\.' + sub + r'\.cmd'
+        r'|hook\.' + sub + r'\.command'
+        r'|credential\.' + sub + r'\.helper'
+        r'|remote\.' + sub + r'\.(?:uploadpack|receivepack|vcs)'
+        r'|(?:includeIf)\.' + sub + r'\.path'
+        r'|protocol\.' + sub + r'\.allow'
+        r'|url\.' + sub + r'\.(?:insteadOf|pushInsteadOf)'
+        r'|submodule\.' + sub + r'\.update'
+        r')'
+    )
+
+
+_EXEC_CONFIG_KEY = _exec_config_key(r'[^\s=]+')
+_EXEC_CONFIG_KEY_ANYSUB = _exec_config_key(r'\S+')
+_GIT_CONFIG_HATCH_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_GIT_CONFIG_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git\b'
+)
+
+# Global options before the subcommand: `_GIT_OPTS`' set plus `--config-env=`.
+# Every alternative consumes a distinct token shape, so the repeated group is
+# deterministic (no `-C -C -C ...` ambiguity -> no exponential backtracking).
+_EXEC_GLOBAL_OPTS = (
+    r'(?:\s+(?:-C\s+\S+|--no-pager|-c\s+\S+|--git-dir=\S+|--work-tree=\S+'
+    r'|--config-env=\S+))*'
+)
+_Q = r'''["']?'''
+
+# (b) inline `-c <key>[=<v>]` / `-c<key>=<v>` and `--config-env=<key>=<ENV>`.
+# `_normalize_git_segment` rewrites `--config-env <k>=<E>` / `--config-env=<k>=<E>` and the
+# attached `-c<k>=<v>` into the `-c <k>=<v>` form (quotes stripped), so the
+# quoted / space forms reach this pattern through the normalized view; the raw
+# alternatives cover the unquoted forms when shlex cannot tokenize.
+_EXEC_CINJECT_BLOCK = re.compile(
+    r'(^|\s)git' + _EXEC_GLOBAL_OPTS +
+    r'(?:\s+-c\s*' + _Q + _EXEC_CONFIG_KEY + _Q + r'(?:=|(?=\s|$))'
+    r'|\s+--config-env(?:=|\s+)' + _Q + _EXEC_CONFIG_KEY + _Q + r'=)'
+)
+
+# `git config` writes are decided on TOKENS, and fail CLOSED whenever the guard cannot model
+# git's own option parser exactly (security rounds 1+2, 2026-10-07). History: a line-wide
+# "read-looking token anywhere" lookahead let `config core.editor "a --get b"` /
+# `core.askpass x --get` through; then a tokenizer that dropped QUOTED redirection-looking
+# words (`core.pager '>/dev/null v'`) and trusted an option region that is not git's
+# (abbreviated `--fil`, bundled `-zf`, `--$E`) shifted the key operand. Structural rule now:
+#   1. `_exec_split_words` records per word whether ANY char was quoted/escaped and which
+#      chars come from an unresolvable expansion (`$`, backtick, unquoted glob/brace); only an
+#      entirely UNQUOTED word can be a redirection.
+#   2. A `git config` segment is a SAFE READ only if its option region is parsed EXACTLY (every
+#      option token an exact member of `_EXEC_CFG_ZERO_OPTS` / `_EXEC_CFG_VALUE_OPTS`, value
+#      options consuming exactly the next word or `=value`, no dynamic option token) AND it is
+#      a read form: an exact read/unset/list/remove-section flag, a get/list/unset/
+#      remove-section/edit subcommand, or at most one operand.
+#   3. Anything else is "not a recognized read": BLOCK if ANY word after `config` (decoded,
+#      quoted or not) is an exec key, a rename-section form's new section is exec-capable (any
+#      word, when the option region was not exactly parsed), or a word that could be the KEY
+#      (any non-final operand; any word at all when the option region was not exactly parsed)
+#      is dynamic. The final operand (the value) may contain `$`.
+# ACCEPTED OVER-BLOCKS (hatchable with CAST_GIT_CONFIG_OK=1): `git config user.name "core.pager"`
+# (a value that is literally an exec key) and any not-exactly-parsed option spelling that sits
+# next to an exec key. ACCEPTED RESIDUAL (pinned in tests, same limit as the rest of this
+# module): a dynamic git SUBCOMMAND or command word (`git $C core.pager v`, `G=git; $G config
+# core.pager v`, shell aliases/functions) is not seen.
+_EXEC_SECTIONS = (
+    r'(?i:core|pager|alias|sequence|ssh|filter|diff|merge|mergetool|difftool|gpg'
+    r'|credential|remote|uploadpack|include|includeIf|protocol|url|web|browser'
+    r'|man|sendemail|trailer|interactive|init|submodule|imap|instaweb|help|guitool|hook)'
+)
+_EXEC_KEY_FULL = re.compile(_EXEC_CONFIG_KEY_ANYSUB + r'\Z')
+_EXEC_SECTION_FULL = re.compile(_EXEC_SECTIONS + r'(?:\..*)?\Z', re.S)
+_EXEC_BRACE = re.compile(r'\{[^{}]*(?:,|\.\.)[^{}]*\}')
+_EXEC_REDIRECT = re.compile(r'[0-9]*(?:>>?|<<?<?|>&|<&|&>>?)')
+_EXEC_CFG_SUBCMDS = frozenset(('get', 'set', 'list', 'unset', 'edit', 'rename-section', 'remove-section'))
+_EXEC_CFG_READ_SUBCMDS = frozenset(('get', 'list', 'unset', 'remove-section', 'edit'))
+_EXEC_CFG_VALUE_OPTS = frozenset(('-f', '--file', '--blob', '--type', '--default', '--comment', '--value'))
+_EXEC_CFG_READ_FLAGS = frozenset((
+    '--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool',
+    '--unset', '--unset-all', '--list', '-l', '--remove-section', '--edit', '-e',
+))
+_EXEC_CFG_ZERO_OPTS = _EXEC_CFG_READ_FLAGS | frozenset((
+    '--local', '--global', '--system', '--worktree', '--add', '--replace-all', '--all',
+    '--fixed-value', '--bool', '--int', '--bool-or-int', '--path', '--expiry-date', '--no-type',
+    '--includes', '--no-includes', '--show-origin', '--show-scope', '--null', '-z', '--name-only',
+    '--rename-section',
+))
+# shlex (or this splitter) could not read the segment: fail CLOSED for a `git config` that
+# names an exec key at all, since a quote we cannot close may hide the real operand order.
+_EXEC_UNPARSEABLE = re.compile(
+    r'(^|\s)git\b(?=.*\sconfig\b)(?=.*(?:^|[\s"\'])' + _EXEC_CONFIG_KEY_ANYSUB + r'(?=[\s"\']|$))'
+)
+_ANSI_C_WORD = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
+
+
+def _decode_ansi_c_text(seg):
+    """`seg` with every `$'...'` replaced by the text the shell makes of it (quoted again only
+    if the decoded text would split into several words), for the regex views."""
+    def one(m):
+        v = _ansi_c(m.group(1))
+        if not re.search(r'\s', v):
+            return v
+        return "'" + v + "'" if "'" not in v else '"' + v.replace('"', '\\"') + '"'
+    return _ANSI_C_WORD.sub(one, seg)
+
+
+def _exec_split_words(seg):
+    """Shell-split `seg` into `(text, dyn, quoted)` words. `dyn[i]`: char i is produced by an
+    expansion the guard cannot resolve (unquoted/double-quoted `$` or backtick, an unquoted glob
+    char or `{a,b}` / `{1..3}` brace expansion). `quoted` is a bitmask: 1 = ANY char of the word was quoted or
+    escaped, 2 = the word can word-split into several words. Single-quoted text is literal; `$'..'` is decoded; an unquoted `#` at a word start
+    ends the command. None if a quote is unterminated."""
+    words = []
+    i, n = 0, len(seg)
+    while i < n:
+        while i < n and seg[i] in ' \t\r\n':
+            i += 1
+        if i >= n or seg[i] == '#':
+            break
+        text, dyn, unq = [], [], []
+        quoted = False
+        splits = False   # the word can become SEVERAL words (unquoted expansion, `"$@"`, `"$*"`)
+        while i < n and seg[i] not in ' \t\r\n':
+            c = seg[i]
+            if c == '\\':
+                quoted = True
+                if i + 1 < n:
+                    text.append(seg[i + 1])
+                    dyn.append(False)
+                    unq.append('\0')
+                i += 2
+            elif c == "'":
+                quoted = True
+                j = seg.find("'", i + 1)
+                if j < 0:
+                    return None
+                for ch in seg[i + 1:j]:
+                    text.append(ch)
+                    dyn.append(False)
+                    unq.append('\0')
+                i = j + 1
+            elif c == '"':
+                quoted = True
+                i += 1
+                while True:
+                    if i >= n:
+                        return None
+                    ch = seg[i]
+                    if ch == '"':
+                        i += 1
+                        break
+                    if ch == '\\' and i + 1 < n and seg[i + 1] in '$`"\\\n':
+                        text.append(seg[i + 1])
+                        dyn.append(False)
+                        unq.append('\0')
+                        i += 2
+                        continue
+                    text.append(ch)
+                    dyn.append(ch in '$`')
+                    unq.append('\0')
+                    if ch == '$' and (seg[i + 1:i + 2] in ('@', '*') or seg[i + 1:i + 3] in ('{@', '{*')):
+                        splits = True
+                    i += 1
+            elif c == '$' and seg.startswith("$'", i):
+                quoted = True
+                j = i + 2
+                while j < n and seg[j] != "'":
+                    j += 2 if seg[j] == '\\' else 1
+                if j >= n:
+                    return None
+                for ch in _ansi_c(seg[i + 2:j]):
+                    text.append(ch)
+                    dyn.append(False)
+                    unq.append('\0')
+                i = j + 1
+            else:
+                text.append(c)
+                dyn.append(c in '$`*?[')
+                unq.append(c)
+                if c in '$`*?[':
+                    splits = True
+                i += 1
+        for m in _EXEC_BRACE.finditer(''.join(unq)):
+            splits = True
+            for p in range(m.start(), m.end()):
+                dyn[p] = True
+        words.append((''.join(text), dyn, (1 if quoted else 0) | (2 if splits else 0)))
+    return words
+
+
+def _exec_key_dynamic(text, dyn):
+    """Is the KEY part (before the first `=`) of a `-c` / `--config-env` argument unresolvable?"""
+    k = text.find('=')
+    return any(dyn if k < 0 else dyn[:k])
+
+
+def _exec_cfg_operands(args):
+    """(sub, flags, ops, exact): `args` = the words after `config`. `exact` is False when any
+    option token is not an exact table member or is dynamic (git's parser is not modelled)."""
+    exact = True
+    sub = None
+    a = 0
+    if args and args[0][0] in _EXEC_CFG_SUBCMDS:
+        sub, a = args[0][0], 1
+        exact = exact and not any(args[0][1])
+    flags = set()
+    while a < len(args):                   # option region: stops at the first operand
+        t, d, _q = args[a]
+        if t == '--' and not (_q & 1):
+            a += 1
+            break
+        if not (t.startswith('-') and len(t) > 1):
+            break
+        name, eq, _v = t.partition('=')
+        if any(d):
+            exact = False
+        if name in _EXEC_CFG_VALUE_OPTS:
+            flags.add(name)
+            a += 1 if eq else 2
+        elif name in _EXEC_CFG_ZERO_OPTS and not eq:
+            flags.add(name)
+            a += 1
+        else:
+            exact = False
+            a += 1
+    return sub, flags, args[a:], exact
+
+
+# Long options of each subcommand (positive spellings; `--[no-]x` listed as `--x`), from `git <sub>
+# -h` on git 2.56. git's parse-options accepts any UNIQUE prefix of a long option, so `--t` or
+# `--tem` is `--template`; a name that could mean a guarded option (exactly, or as a prefix of
+# several options one of which is guarded) is treated as that option - fail closed - not by a
+# length threshold.
+_EXEC_LONG_OPTS = {
+    'clone': frozenset((
+        '--also-filter-submodules', '--bare', '--branch', '--bundle-uri', '--checkout', '--config',
+        '--depth', '--dissociate', '--filter', '--hardlinks', '--ipv4', '--ipv6', '--jobs',
+        '--local', '--mirror', '--no-checkout', '--no-hardlinks', '--origin', '--progress',
+        '--quiet', '--recurse-submodules', '--recursive', '--ref-format', '--reference',
+        '--reference-if-able', '--reject-shallow', '--remote-submodules', '--revision',
+        '--separate-git-dir', '--server-option', '--shallow-exclude', '--shallow-since',
+        '--shallow-submodules', '--shared', '--single-branch', '--sparse', '--tags', '--template',
+        '--upload-pack', '--verbose')),
+    'init': frozenset((
+        '--bare', '--initial-branch', '--object-format', '--quiet', '--ref-format',
+        '--separate-git-dir', '--shared', '--template')),
+    'rebase': frozenset((
+        '--abort', '--apply', '--autosquash', '--autostash', '--committer-date-is-author-date',
+        '--continue', '--edit-todo', '--empty', '--exec', '--ff', '--force-rebase', '--fork-point',
+        '--gpg-sign', '--ignore-whitespace', '--interactive', '--keep-base', '--merge', '--no-ff',
+        '--no-stat', '--no-verify', '--onto', '--quiet', '--quit', '--reapply-cherry-picks',
+        '--rebase-merges', '--rerere-autoupdate', '--reschedule-failed-exec', '--reset-author-date',
+        '--root', '--show-current-patch', '--signoff', '--skip', '--stat', '--strategy',
+        '--strategy-option', '--trailer', '--update-refs', '--verbose', '--verify', '--whitespace')),
+    'difftool': frozenset((
+        '--dir-diff', '--extcmd', '--gui', '--index', '--no-index', '--no-prompt', '--symlinks',
+        '--tool', '--tool-help', '--trust-exit-code')),
+}
+
+
+def _exec_long_means(name, sub, want):
+    """Can the long option spelling `name` (no `=value`) of subcommand `sub` mean `want`? An exact
+    option name means only itself; otherwise every option it is a prefix of is a candidate."""
+    table = _EXEC_LONG_OPTS[sub]
+    if name in table:
+        return name == want
+    return want in table and want.startswith(name)
+
+
+def _exec_config_arg_blocks(text, dyn):
+    """A `key=value` config argument: blocked if the key is an exec key or cannot be resolved."""
+    return _exec_key_dynamic(text, dyn) or _EXEC_KEY_FULL.match(text.partition('=')[0]) is not None
+
+
+def _exec_clone_blocks(sub, words):
+    """`clone -c|--config <key>=<v>` persists the key into the NEW repository's config (same
+    effect as a config write there), and `clone|init --template <dir>` copies that directory's
+    hooks into it (same class as init.templateDir). Short flags may be bundled / attached
+    (`-qc k=v`, `-ck=v`); value-taking letters end a cluster."""
+    i, n = 0, len(words)
+    while i < n:
+        t, d, _q = words[i]
+        i += 1
+        if t == '--':
+            break
+        if t.startswith('--'):
+            name, eq, val = t.partition('=')
+            if _exec_long_means(name, sub, '--template'):
+                return True
+            if sub == 'clone' and _exec_long_means(name, sub, '--config'):
+                if eq:
+                    arg = (val, d[len(name) + 1:])
+                elif i < n:
+                    arg = (words[i][0], words[i][1])
+                    i += 1
+                else:
+                    continue
+                if _exec_config_arg_blocks(*arg):
+                    return True
+        elif sub == 'clone' and t.startswith('-') and len(t) > 1:
+            for idx in range(1, len(t)):
+                ch = t[idx]
+                if ch == 'c':
+                    if idx + 1 < len(t):
+                        arg = (t[idx + 1:], d[idx + 1:])
+                    elif i < n:
+                        arg = (words[i][0], words[i][1])
+                        i += 1
+                    else:
+                        break
+                    if _exec_config_arg_blocks(*arg):
+                        return True
+                    break
+                if ch in 'bouj':
+                    if idx + 1 >= len(t):
+                        i += 1
+                    break
+    return False
+
+
+_GIT_CARRIER_HINT = re.compile(r'submodule|rebase|difftool|bisect')
+_GIT_CARRIER_FAIL = re.compile(
+    r'(^|\s)git\b.*?\s(?:submodule\s+(?:\S+\s+)*?foreach|rebase|difftool|bisect\s+run)\b')
+
+
+def _git_carrier_payloads(seg):
+    """`(payloads, refuse)` for one segment: the shell command strings git itself runs through a
+    shell for `git submodule foreach <cmd...>`, `git rebase -x|--exec <cmd>` (any position, also
+    `-i -x`, `-xCMD`, `--exec=CMD`, unique abbreviations), `git difftool -x|--extcmd <cmd>` and
+    `git bisect run <cmd...>`. Like a `bash -c` operand they are re-evaluated by the WHOLE engine
+    (`_executable_segments`), so `git submodule foreach 'git config core.pager x'` and `git
+    rebase -x 'git reset --hard'` are judged by every block, not just one. `refuse`: the segment
+    names a carrier but cannot be read (unterminated quote) - the caller blocks."""
+    if _GIT_CARRIER_HINT.search(seg) is None:
+        return [], False
+    words = _exec_split_words(seg)
+    if words is None:
+        return [], _GIT_CARRIER_FAIL.search(seg) is not None
+    k = 0
+    while k < len(words) and _ENV_ASSIGN.match(words[k][0]):
+        k += 1
+    if k >= len(words) or os.path.basename(words[k][0]).lower() != 'git':
+        return [], False
+    rest = [w for w in words[k + 1:]]
+    j = 0
+    while j < len(rest) and rest[j][0].startswith('-'):      # git's global options
+        t = rest[j][0]
+        if t in _GIT_GLOBAL_VALUE_OPTS and j + 1 < len(rest):
+            j += 2
+        else:
+            j += 1
+    if j >= len(rest):
+        return [], False
+    sub, args = rest[j][0], rest[j + 1:]
+    out = []
+    if sub in ('submodule', 'bisect'):
+        a = 0
+        while a < len(args) and args[a][0].startswith('-'):
+            a += 1
+        if a < len(args) and args[a][0] == ('foreach' if sub == 'submodule' else 'run'):
+            a += 1
+            if sub == 'submodule':
+                while a < len(args) and args[a][0].startswith('-'):
+                    a += 1
+            cmd = ' '.join(w[0] for w in args[a:])
+            if cmd.strip():
+                out.append(cmd)
+    elif sub in ('rebase', 'difftool'):
+        long_want, short_val = ('--exec', 'sXC') if sub == 'rebase' else ('--extcmd', 't')
+        short_cmd = 'x'
+        a = 0
+        while a < len(args):
+            t = args[a][0]
+            a += 1
+            if t == '--':
+                break
+            if t.startswith('--'):
+                name, eq, val = t.partition('=')
+                if _exec_long_means(name, sub, long_want):
+                    if eq:
+                        out.append(val)
+                    elif a < len(args):
+                        out.append(args[a][0])
+                        a += 1
+            elif t.startswith('-') and len(t) > 1:
+                for idx in range(1, len(t)):
+                    ch = t[idx]
+                    if ch == short_cmd:
+                        if idx + 1 < len(t):
+                            out.append(t[idx + 1:])
+                        elif a < len(args):
+                            out.append(args[a][0])
+                            a += 1
+                        break
+                    if ch in short_val:
+                        if idx + 1 >= len(t):
+                            a += 1
+                        break
+        out = [c for c in out if c.strip()]
+    return out, False
+
+
+def _exec_config_cmd_blocks(seg):
+    """True if `seg` runs `git config` in a way that is not a recognized read AND names an
+    exec-capable key (or a rename into an exec-capable section, or a key the guard cannot
+    determine statically), or passes a `-c` / `--config-env` key it cannot determine
+    statically. See the block comment above for the structural rule."""
+    words = _exec_split_words(seg)
+    if words is None:
+        return _EXEC_UNPARSEABLE.search(seg) is not None
+    k = 0
+    while k < len(words) and _ENV_ASSIGN.match(words[k][0]):
+        k += 1
+    if k >= len(words) or os.path.basename(words[k][0]).lower() != 'git':
+        return False
+    rest, skip = [], False
+    for w in words[k + 1:]:                # drop UNQUOTED redirections: `2>/dev/null`, `> f`
+        if skip:
+            skip = False
+        elif not (w[2] & 1) and _EXEC_REDIRECT.fullmatch(w[0]):
+            skip = True
+        elif not (w[2] & 1) and _EXEC_REDIRECT.match(w[0]):
+            pass
+        else:
+            rest.append(w)
+    j = 0
+    while j < len(rest) and rest[j][0].startswith('-'):      # git's global options
+        t, d, _q = rest[j]
+        if t in ('-c', '--config-env') and j + 1 < len(rest):
+            if _exec_key_dynamic(rest[j + 1][0], rest[j + 1][1]):
+                return True
+            j += 2
+        elif t.startswith('--config-env='):
+            if _exec_key_dynamic(t[13:], d[13:]):
+                return True
+            j += 1
+        elif t.startswith('-c') and not t.startswith('--') and len(t) > 2:
+            if _exec_key_dynamic(t[2:], d[2:]):
+                return True
+            j += 1
+        elif t in _GIT_GLOBAL_VALUE_OPTS and j + 1 < len(rest):
+            j += 2
+        else:
+            j += 1
+    if j < len(rest) and rest[j][0] in ('clone', 'init'):
+        return _exec_clone_blocks(rest[j][0], rest[j + 1:])
+    if j >= len(rest) or rest[j][0] != 'config':
+        return False
+    args = rest[j + 1:]
+    sub, flags, ops, exact = _exec_cfg_operands(args)
+    rename = sub == 'rename-section' or '--rename-section' in flags
+    if exact and not rename:
+        if sub in _EXEC_CFG_READ_SUBCMDS or flags & _EXEC_CFG_READ_FLAGS:
+            return False                   # exact read / unset / list / remove-section
+        if sub is None and len(ops) <= 1 and not any(o[2] & 2 for o in ops):
+            return False                   # a bare, non-splitting key is a read
+    if exact and rename:                   # operands only: flags may sit between old and new
+        pos, a = [], 0
+        while a < len(args):
+            t, _d, _q = args[a]
+            if t.startswith('-') and len(t) > 1:
+                name = t.partition('=')[0]
+                if name in _EXEC_CFG_VALUE_OPTS:
+                    a += 1 if '=' in t else 2
+                    continue
+                if name not in _EXEC_CFG_ZERO_OPTS or '=' in t:
+                    exact = False
+            else:
+                pos.append(args[a])
+            a += 1
+        if pos and pos[0][0] == 'rename-section':
+            pos = pos[1:]
+        if exact:
+            return len(pos) >= 2 and (any(pos[1][1]) or _EXEC_SECTION_FULL.match(pos[1][0]) is not None)
+    # Not a recognized read: any exec key among the words, a section among them when a rename
+    # is possible, or a key position that is dynamic.
+    for t, _d, _q in args:
+        if _EXEC_KEY_FULL.match(t) is not None:
+            return True
+        if (rename or not exact) and _EXEC_SECTION_FULL.match(t) is not None:
+            return True
+    if not exact:
+        return any(any(d) for _t, d, _q in args)
+    if len(ops) == 1 and ops[0][2] & 2:    # `$KV` / `"$@"` word-splits into key + value
+        return True
+    return any(any(d) for _t, d, _q in ops[:-1])
+
+
+# (c) env-var injection on a git command. `GIT_CONFIG_KEY_<n>=<key>` (the
+# GIT_CONFIG_COUNT/KEY/VALUE trio), `GIT_CONFIG_PARAMETERS` naming a key
+# anywhere in its (possibly quoted) value, and `GIT_CONFIG_GLOBAL` /
+# `GIT_CONFIG_SYSTEM` pointed anywhere but /dev/null (loads an arbitrary config
+# file). Anchored on a preceding blank so `rg 'GIT_CONFIG_KEY_0=core.pager'`
+# (quote before the name) is data, tied to the segment mentioning `git` by a
+# trailing lookahead (the assignment sits in the segment that runs git).
+_GIT_WORD_AFTER = r'(?=.*(?:^|[\s/])git\b)'
+_GC_ENV_KEY_BLOCK = re.compile(
+    r'(?:^|\s)GIT_CONFIG_KEY_\d+=' + _Q + _GC_CONFIG_KEY + _Q + r'(?=\s|$)' + _GIT_WORD_AFTER
+)
+_EXEC_ENV_KEY_BLOCK = re.compile(
+    r'(?:^|\s)GIT_CONFIG_KEY_\d+=' + _Q + _EXEC_CONFIG_KEY + _Q + r'(?=\s|$)' + _GIT_WORD_AFTER
+)
+# The value is searched WITHOUT leaving its own shell word: a run of non-blank
+# characters, or the inside of one double- / single-quoted string (git's own
+# format is `'k'='v' 'k2'='v2'`, i.e. blanks inside the quotes).
+def _params_block(key):
+    return re.compile(
+        r'(?:^|\s)GIT_CONFIG_PARAMETERS=(?:"[^"]*?|\'[^\']*?|[^\s"\']*?)'
+        r'''(?<![\w.-])["']*''' + key + r'''(?=["'=\s]|$)''' + _GIT_WORD_AFTER
+    )
+
+
+_GC_ENV_PARAMETERS_BLOCK = _params_block(_GC_CONFIG_KEY)
+_EXEC_ENV_PARAMETERS_BLOCK = _params_block(_EXEC_CONFIG_KEY)
+_EXEC_ENV_FILE_BLOCK = re.compile(
+    r'(?:^|\s)GIT_CONFIG_(?:GLOBAL|SYSTEM)='
+    r'(?!\$?' + _Q + r'/dev/null' + _Q + r'(?:\s|$))(?!\$?' + _Q + r'(?:\s|$))\S' + _GIT_WORD_AFTER
+)
+_GIT_CONFIG_EXEC_BLOCKS = (
+    _EXEC_CINJECT_BLOCK, _EXEC_ENV_KEY_BLOCK, _EXEC_ENV_PARAMETERS_BLOCK, _EXEC_ENV_FILE_BLOCK,
+)
+
 # --- git rm force block -------------------------------------------------------
 # 2026-08-17 remaining-destructive-ops pass: measured that `git rm` with a
 # force flag (-f, --force, or any single-dash cluster containing f: -rf, -fr,
@@ -1181,8 +1878,7 @@ _GIT_RM_ALLOW = re.compile(
 _GIT_RM_BLOCK = re.compile(
     r'(^|\s)git' + _GIT_OPTS + r'\s+rm\b'
     r'(?!.*(?:^|\s)--cached(?:\s|$))'
-    r'(?=.*' + _FORCE_FLAG_LOOKAHEAD + r')'
-    r'(?!.*' + _CLEAN_DRY_RUN + r')'
+    r'(?=.*' + _FORCE_FLAG_LOOKAHEAD + r')'      # dry-run exemption: `_dry_run_block`
 )
 
 # --- git branch force-delete block --------------------------------------------
@@ -1256,13 +1952,470 @@ _BRANCH_BLOCK = re.compile(
 # (git refuses on a dirty tree AND on untracked-only content, rc=128),
 # `git worktree add -f` (force there is not destructive — the pattern
 # anchors on the literal `worktree\s+remove` sequence, so `add -f` can never
-# match), `git worktree list`, `git worktree prune`.
+# match), `git worktree list`. (`git worktree prune` WAS in this list; it is no longer —
+# 2026-10-07 U6a-2: it follows an agent-planted symlinked `.git/worktrees/<id>` entry and
+# empties the target, see `_WORKTREE_PRUNE_BLOCK` below. `-n`/`--dry-run` stays allowed.)
 _WORKTREE_ALLOW = re.compile(
     r'(^|&&\s*)CAST_WORKTREE_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS + r'\s+worktree\s+remove\b'
 )
 _WORKTREE_BLOCK = re.compile(
     r'(^|\s)git' + _GIT_OPTS + r'\s+worktree\s+remove\b(?=.*' + _FORCE_FLAG_LOOKAHEAD + r')'
 )
+
+# --- git worktree prune block + symlinked-worktree-entry stateful check (U6a-2) -------------
+# Probed 2026-10-04 (hazard E1; see the `cast_git_safe` header in scripts/cast-hook-lib.sh):
+# `git worktree prune` — and therefore `git gc`, `git gc --auto` and `git maintenance run` —
+# FOLLOWS a symlinked `.git/worktrees/<id>` entry and EMPTIES its target; `gc.worktreePruneExpire=
+# never` does not stop it. Dry runs (`-n`/`--dry-run`, clustered `-nv` too) are the only safe
+# form. Hatch: CAST_WORKTREE_OK=1 (existing, worktree family).
+_WORKTREE_PRUNE_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_WORKTREE_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS
+    + r'\s+worktree\s+prune(?![\w-])'
+)
+_WORKTREE_PRUNE_BLOCK = re.compile(
+    r'(^|\s)git' + _GIT_OPTS + r'\s+worktree\s+prune(?![\w-])'   # exemption: `_dry_run_block`
+)
+# Any git op, any hatched segment: `CAST_WORKTREE_OK=1 git ...` (generic, like `_GC_HATCH_ALLOW`).
+_WORKTREE_HATCH_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_WORKTREE_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git\b'
+)
+_MAINTENANCE_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_GC_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*git' + _GIT_OPTS
+    + r'\s+maintenance\s+run(?![\w-])'
+)
+
+# The stateful half. The static blocks above cannot protect a repo that ALREADY holds a planted
+# symlink: git runs `gc --auto` implicitly after commit/merge/fetch/rebase/..., so ANY git op
+# there is the hazard. A pure-filesystem check (no subprocess: the guard already spawns git for
+# update-ref, and a git run inside an agent-written repo is itself a sandbox-escape surface):
+#   * start dir = cwd with each global `-C <dir>` applied in order (relative to the previous);
+#     `--git-dir=<d>` / `GIT_DIR=<d>` / `GIT_COMMON_DIR=<d>` in the segment name a git dir directly;
+#   * walk up for `<d>/.git` (a dir, or a `gitdir: <path>` file = linked worktree) or a bare repo
+#     (`HEAD` + `objects/` + `refs/`); the common dir is the git dir's `commondir` file if present;
+#   * hazard = `<common>/worktrees` is a symlink, an entry in it is a symlink, or an entry's
+#     `gitdir` file is a symlink.
+# FAIL-OPEN on errors listing the dir (EACCES/ENOTDIR/...): git runs as the same uid and cannot
+# traverse what we cannot, so there is nothing it could prune through, and blocking every git op
+# on an unreadable dir would be a lockout with no safety gain. FAIL-CLOSED when the dir holds more
+# than `_MAX_WORKTREE_ENTRIES` entries: an unbounded listing is a latency lever, and a repo with
+# 1000+ linked worktrees is not a real workflow (hatch: CAST_WORKTREE_OK=1). Cost: one lstat +
+# one scandir (+ one lstat per entry), memoised per `_git_evaluate` call.
+# KNOWN LIMITATIONS: a dynamic `-C "$DIR"` / `cd $D`, `cd -`, `popd`, a `GIT_DIR` exported in an
+# EARLIER segment, and a symlink planted in the same command line by anything but `ln -s` are not
+# resolved (same class as the dynamic command word); `GIT_CEILING_DIRECTORIES` / filesystem-
+# boundary discovery rules are not modelled. A git segment is checked against every literal
+# directory the command has `cd`-ed into so far (see `_DirTracker`).
+_MAX_WORKTREE_ENTRIES = 1024
+# Resolution reads the RAW tokenized prefix of the segment (shlex, posix, lazily, at most
+# `_MAX_PREFIX_CHARS` chars / `_MAX_PREFIX_TOKENS` tokens) -- never the normalised variant, which
+# drops `-C` -- so quoting, `g\\it`, `/usr/bin/git` (the git WORD is any token whose basename is
+# `git`), `env -C <dir>` and every git global option resolve the way the shell+git would.
+_MAX_PREFIX_CHARS = 8192
+_MAX_PREFIX_TOKENS = 128
+_MAX_TRACKED_DIRS = 64
+# N1: `cd d0; cd d1; ...` NESTS, so every realpath/normpath walked an ever-longer path (1.7 s at
+# 20 KB, 12 s at 50 KB). At most this many literal cd/pushd targets are tracked per command and a
+# tracked path may not exceed `_MAX_TRACKED_PATH`; past either the directory is UNKNOWN
+# (`_DirTracker.overflow`) and a git segment fails CLOSED (`too complex`), O(1) per segment.
+_MAX_TRACKED_CDS = 64
+_MAX_TRACKED_PATH = 4096
+_CUT = 'cut'    # `_git_invocation_dirs`: the prefix cap was hit inside what looks like a git invocation
+# git's real global-option grammar (git.c handle_options): these take a VALUE as the next word
+# (`--exec-path` takes one only as `--exec-path=<v>`); every other dash word is zero-arg.
+_GIT_VALUE_OPTS = frozenset((
+    '-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix',
+    '--list-cmds', '--attr-source'))
+_CTRL_WORDS = frozenset(('do', 'then', 'else', 'elif', 'if', 'while', 'until', 'time', '{', '(', '!'))
+_CTRL_STRIP = ' \t({!'
+# Words that may legitimately precede the git word; used only to decide whether a prefix that hit
+# the cap before any git word still LOOKS like the start of a git invocation (N2).
+_PREFIX_WRAPPERS = frozenset(('env', 'command', 'exec', 'sudo', 'doas', 'nohup', 'time', 'nice',
+                              'builtin', 'xargs', 'stdbuf', 'timeout', 'ionice', 'setsid'))
+
+
+def _prefix_tokens(text: str, state=None):
+    """Lazily yield the leading shell words of `text`. Stops silently at a quote error. When `state`
+    (a dict) is given, `state['cut']` is set if the words ran out for a reason other than the
+    text really ending: the token cap or the char cap -- i.e. the caller has NOT
+    seen the whole command prefix (a consumer that stops early never triggers it)."""
+    stripped = text.lstrip(_CTRL_STRIP)
+    truncated = len(stripped) > _MAX_PREFIX_CHARS
+    lex = shlex.shlex(stripped[:_MAX_PREFIX_CHARS], posix=True)
+    lex.whitespace_split = True
+    lex.commenters = ''
+    try:
+        for i, tok in enumerate(lex):
+            if i >= _MAX_PREFIX_TOKENS:
+                if state is not None:
+                    state['cut'] = True
+                return
+            yield tok
+    except ValueError:
+        # An unbalanced quote is NOT a cut by itself: segments are split on `&&`/`;` even inside
+        # quotes (`bash -c "cd P && git status"` -> `git status"`), so it is routine and the shell
+        # parser elsewhere refuses genuinely unparseable commands. Under the char cap it is a cut.
+        if truncated and state is not None:
+            state['cut'] = True
+        return
+    if truncated and state is not None:
+        state['cut'] = True
+
+
+def _git_invocation_dirs(text: str):
+    """(chdirs, git_dirs, common_dirs) for the first git word in the prefix of `text`, else None.
+    `chdirs` = `env -C|--chdir <d>` then git's own `-C <d>`, in order; `git_dirs` = `--git-dir`
+    (either spelling) and `GIT_DIR=`; `common_dirs` = `GIT_COMMON_DIR=`."""
+    chdirs, git_dirs, commons = [], [], []
+    state = {}
+    toks = _prefix_tokens(text, state)
+    in_env = False
+    prefix_like = True
+    for tok in toks:
+        if _ENV_ASSIGN.match(tok):
+            key, _, val = tok.partition('=')
+            if key == 'GIT_DIR':
+                git_dirs.append(val)
+            elif key == 'GIT_COMMON_DIR':
+                commons.append(val)
+            continue
+        if os.path.basename(tok) == 'git':
+            break
+        if os.path.basename(tok) == 'env':
+            in_env = True
+        elif in_env:
+            if tok in ('-C', '--chdir'):
+                val = next(toks, None)
+                if val is None:
+                    return None
+                chdirs.append(val)
+            elif tok.startswith('--chdir='):
+                chdirs.append(tok[len('--chdir='):])
+            elif tok in ('-u', '--unset', '-S', '--split-string'):
+                next(toks, None)
+        if not (tok in _CTRL_WORDS or tok.startswith('-') or os.path.basename(tok) in _PREFIX_WRAPPERS):
+            prefix_like = False
+    else:
+        # N2: the words ran out at a cap before any git word. Only a prefix made of assignments /
+        # wrappers / options (`FOO=1 x300`) is treated as a git invocation we could not finish
+        # reading; a long `echo ...` mentioning the word is not.
+        return _CUT if (state.get('cut') and prefix_like) else None
+    for tok in toks:
+        if tok == '--git-dir':
+            val = next(toks, None)
+            if val is not None:
+                git_dirs.append(val)
+        elif tok.startswith('--git-dir='):
+            git_dirs.append(tok[len('--git-dir='):])
+        elif tok == '-C':
+            val = next(toks, None)
+            if val is not None:
+                chdirs.append(val)
+        elif tok in _GIT_VALUE_OPTS:
+            next(toks, None)
+        elif tok.startswith('-') and tok != '-':
+            continue
+        else:
+            break
+    else:
+        if state.get('cut'):
+            return _CUT      # N2: the options never ended inside the cap
+    return chdirs, git_dirs, commons
+
+
+class _DirTracker:
+    """The directories a command line has `cd`/`pushd`-ed into so far (literal targets only),
+    in segment order. A git segment is checked against EVERY directory visited so far (a
+    deliberate over-approximation: a subshell `(cd P; ...)` or a later `cd ../Q` do not forget
+    P -- the cost is a possible extra block in an already-poisoned repo, never a miss). NOT
+    resolved: a dynamic target (`cd $D`, `cd "$(...)"`, a glob), `cd -`, `popd`, `CDPATH`."""
+    __slots__ = ('cur', 'visited', 'cds', 'overflow')
+
+    def __init__(self):
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            cwd = ''
+        self.cur = cwd
+        self.visited = [cwd] if cwd else []
+        self.cds = 0
+        self.overflow = False
+
+    def _add(self, d: str):
+        if d and d not in self.visited and len(self.visited) < _MAX_TRACKED_DIRS:
+            self.visited.append(d)
+
+    def observe(self, seg: str):
+        if self.overflow or ('cd' not in seg and 'pushd' not in seg):
+            return
+        toks = _prefix_tokens(seg)
+        word = None
+        for tok in toks:
+            if _ENV_ASSIGN.match(tok) or tok in _CTRL_WORDS:
+                continue
+            word = tok
+            break
+        if word in ('builtin', 'command'):
+            word = next(toks, None)
+        if word not in ('cd', 'pushd'):
+            return
+        target = None
+        for tok in toks:
+            if tok.startswith('-') and tok != '-':
+                continue            # `-P`, `-L`, `--`
+            target = tok
+            break
+        if word == 'cd' and target is None:
+            target = '~'
+        if (target is None or target == '-' or target[:1] == '+'
+                or any(ch in target for ch in '$`*?[')):
+            return
+        self.cds += 1
+        t = os.path.expanduser(target)
+        new = os.path.normpath(os.path.join(self.cur, t)) if self.cur else t
+        if self.cds > _MAX_TRACKED_CDS or len(new) > _MAX_TRACKED_PATH:
+            self.overflow = True     # N1: directory unknown from here on; see `_MAX_TRACKED_CDS`
+            return
+        self.cur = new
+        self._add(new)
+        real = os.path.realpath(new)
+        if real != new:
+            self._add(real)
+
+
+def _read_small(path: str, limit: int = 4096) -> str:
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as fh:
+            return fh.read(limit).strip()
+    except OSError:
+        return ''
+
+
+def _find_git_dir(start: str) -> str:
+    """The git dir git would discover from `start` ('' if none): `<d>/.git` as a dir, or as a
+    `gitdir: <path>` file (linked worktree / submodule), or `<d>` itself when it is a bare repo."""
+    d = start
+    for _ in range(128):
+        dotgit = os.path.join(d, '.git')
+        try:
+            st = os.stat(dotgit)
+        except OSError:
+            st = None
+        if st is not None:
+            if stat.S_ISDIR(st.st_mode):
+                return dotgit
+            if stat.S_ISREG(st.st_mode):
+                text = _read_small(dotgit)
+                if text.startswith('gitdir:'):
+                    return os.path.normpath(os.path.join(d, text[len('gitdir:'):].strip()))
+                return ''
+        if (os.path.isfile(os.path.join(d, 'HEAD')) and os.path.isdir(os.path.join(d, 'objects'))
+                and os.path.isdir(os.path.join(d, 'refs'))):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return ''
+        d = parent
+    return ''
+
+
+def _common_dir_of(git_dir: str) -> str:
+    rel = _read_small(os.path.join(git_dir, 'commondir'))
+    return os.path.normpath(os.path.join(git_dir, rel)) if rel else git_dir
+
+
+def _resolve_invocation(chdirs, git_dirs, commons, tracker) -> list:
+    out, seen = [], set()
+
+    def add(path: str):
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+
+    bases = [tracker.cur] if chdirs else (list(tracker.visited) or [''])
+    for base in bases:
+        start = base
+        for c in chdirs:
+            start = os.path.join(start, os.path.expanduser(c)) if start else os.path.expanduser(c)
+        start = os.path.normpath(start) if start else ''
+        for g in commons:
+            add(os.path.normpath(os.path.join(start, os.path.expanduser(g))))
+        if git_dirs:
+            for g in git_dirs:
+                add(_common_dir_of(os.path.normpath(os.path.join(start, os.path.expanduser(g)))))
+        elif start:
+            gd = _memoized(('gitdir', start), lambda s=start: _find_git_dir(s))
+            if gd:
+                add(_common_dir_of(gd))
+    return out
+
+
+def _worktree_common_dirs(texts, tracker):
+    """(common dirs, unresolvable) for the git invocation(s) in `texts`. `unresolvable` is True when
+    the repo cannot be located with certainty: the prefix cap was hit (N2) or the tracker overflowed
+    (N1). Memoised per `_git_evaluate` call on everything the answer depends on."""
+    out, seen, unresolvable = [], set(), False
+    for text in texts:
+        # Pure in `text`, and padding repeats the same segment thousands of times: lex it once.
+        inv = _memoized(('wtinv', text), lambda t=text: _git_invocation_dirs(t))
+        if inv is None:
+            continue
+        if inv is _CUT or tracker.overflow:
+            unresolvable = True
+            continue
+        chdirs, git_dirs, commons = inv
+        key = ('wtdirs', tuple(chdirs), tuple(git_dirs), tuple(commons), tracker.cur,
+               tuple(tracker.visited))
+        for path in _memoized(key, lambda: _resolve_invocation(chdirs, git_dirs, commons, tracker)):
+            if path not in seen:
+                seen.add(path)
+                out.append(path)
+    return out, unresolvable
+
+
+def _worktree_symlink_hazard_uncached(common: str):
+    """(kind, path) for the first hazard under `<common>/worktrees`, else None. See above."""
+    wt = os.path.join(common, 'worktrees')
+    try:
+        st = os.lstat(wt)
+        if stat.S_ISLNK(st.st_mode):
+            return ('dir', wt)
+        if not stat.S_ISDIR(st.st_mode):
+            return None
+        n = 0
+        with os.scandir(wt) as it:
+            for entry in it:
+                n += 1
+                if n > _MAX_WORKTREE_ENTRIES:
+                    return ('over', wt)
+                if entry.is_symlink():
+                    return ('entry', entry.path)
+                gd = os.path.join(entry.path, 'gitdir')
+                try:
+                    if stat.S_ISLNK(os.lstat(gd).st_mode):
+                        return ('gitdir', gd)
+                except OSError:
+                    pass
+    except OSError:
+        return None
+    return None
+
+
+def _worktree_symlink_hazard(texts, tracker):
+    """(kind, path) if the repo a git segment operates on holds a symlinked worktree entry.
+    Memoised per `_git_evaluate` call (see `_EVAL_MEMO`). Never raises (fails open)."""
+    try:
+        dirs, unresolvable = _worktree_common_dirs(texts, tracker)
+        for common in dirs:
+            hz = _memoized(('wtsym', common), lambda c=common: _worktree_symlink_hazard_uncached(c))
+            if hz:
+                return hz
+        if unresolvable:
+            return ('complex', '')
+    except Exception:
+        return None
+    return None
+
+
+# F5 (U6a-2 security): the PLANT itself. Blocks `ln -s ... <path under a worktrees dir>` (any
+# token -- the link name or, with `-t`/`--target-directory=`, its directory -- resolved against the
+# TRACKED cwd, so `cd .git/worktrees && ln -s /v x` is caught), with or without a git word in the
+# command: agents never create symlinks there. A `worktrees` component counts when it sits under
+# `.git` / `*.git` / `.git/modules/<name>` (case-insensitive, `//` `/./` `..` collapsed) or under a
+# directory that is a git dir on disk (a bare repo of any name). Deliberately NOT "any `ln -s`
+# under `.git/`" (legitimate hook / info symlinks live there). Hatch: CAST_WORKTREE_OK=1. NOT
+# covered (documented): the same plant by `mv` / `cp -P` / `python -c os.symlink`, a spelled
+# `.g\\it` path, `$VAR` paths, and a cwd that is itself unknown (tracker overflow); the stateful
+# check still blocks every later git command in that repo.
+_LN_WORD = re.compile(r'(?<![\w.-])ln(?![\w.-])')
+_LN_WRAPPERS = frozenset(('sudo', 'doas', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'builtin'))
+_WORKTREE_LN_ALLOW = re.compile(
+    r'(^|&&\s*)CAST_WORKTREE_OK=1\s+([A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:\S*/)?ln\b'
+)
+
+
+def _looks_like_git_dir(path: str) -> bool:
+    return (os.path.isfile(os.path.join(path, 'HEAD')) and os.path.isdir(os.path.join(path, 'objects'))
+            and os.path.isdir(os.path.join(path, 'refs')))
+
+
+def _names_a_worktrees_dir(token: str, cwd: str) -> bool:
+    """True if `token` (a path, resolved against `cwd`; lowercased, `//` `/./` `..` collapsed --
+    macOS is case-insensitive, so `.GIT` is a real git dir there) has a `worktrees` component
+    directly under a `.git` / `*.git` component or a `.git/modules/<name>`, or directly under a
+    directory that IS a git dir on disk (a bare repo named anything)."""
+    path = os.path.normpath(os.path.join(cwd, os.path.expanduser(token))) if cwd else os.path.normpath(token)
+    comps = [c for c in path.split('/') if c]
+    low = [c.lower() for c in comps]
+    for i, c in enumerate(low):
+        if c != 'worktrees' or i == 0:
+            continue
+        if low[i - 1].endswith('.git'):
+            return True
+        if i >= 3 and low[i - 2] == 'modules' and low[i - 3].endswith('.git'):
+            return True
+        if _looks_like_git_dir('/' + '/'.join(comps[:i])):
+            return True
+    return False
+
+
+def _plants_worktrees_symlink(seg: str, tracker) -> bool:
+    if _LN_WORD.search(seg) is None:
+        return False
+    try:
+        toks = list(_prefix_tokens(seg))
+    except Exception:
+        return False
+    for i, tok in enumerate(toks):
+        if _ENV_ASSIGN.match(tok) or tok in _CTRL_WORDS or tok.startswith('-') \
+                or os.path.basename(tok) in _LN_WRAPPERS:
+            continue
+        if os.path.basename(tok) != 'ln':
+            return False
+        rest = toks[i + 1:]
+        if not any(t == '--symbolic' or (t.startswith('-') and not t.startswith('--') and 's' in t)
+                   for t in rest):
+            return False
+        for t in rest:
+            if t.startswith('-'):
+                if '=' not in t:
+                    continue
+                t = t.split('=', 1)[1]          # `--target-directory=<dir>`
+            if t and _names_a_worktrees_dir(t, tracker.cur):
+                return True
+        return False
+    return False
+
+
+def _worktree_hazard_msg(hazard) -> str:
+    kind, path = hazard
+    if kind == 'complex':
+        return (
+            f'**[CAST]** This git command is blocked: it is too complex to tell which repository it '
+            f'runs in (more than {_MAX_TRACKED_CDS} literal `cd` targets in one command, or a prefix '
+            f'longer than {_MAX_PREFIX_TOKENS} words / {_MAX_PREFIX_CHARS} chars before the subcommand), '
+            f'so it cannot be checked for a symlinked `.git/worktrees/<id>` entry (`git worktree prune` '
+            f'-- run by gc, git\'s implicit `gc --auto` and `git maintenance run` -- follows one and '
+            f'EMPTIES its target). Simplify it (`git -C <dir> ...`, fewer `cd`s), or use '
+            f'`CAST_WORKTREE_OK=1 git ...` (document why).'
+        )
+    shown = ''.join(ch if ch.isprintable() else '?' for ch in path)[:200]
+    if kind == 'over':
+        what = (f'`{shown}` holds more than {_MAX_WORKTREE_ENTRIES} entries, too many to verify '
+                f'that none is a symlink')
+        fix = 'Remove the stale entries (`git worktree prune -n` lists them).'
+    else:
+        what = {'dir': f'`{shown}` is itself a SYMLINK',
+                'entry': f'`{shown}` is a SYMLINK',
+                'gitdir': f'`{shown}` (an entry\'s gitdir file) is a SYMLINK'}[kind]
+        fix = (f'Remove it WITHOUT following it: `unlink {shlex.quote(shown)}` (never `rm -r` on '
+               f'the entry), after checking where it points (`readlink`).')
+    return (
+        f'**[CAST]** Every git command is blocked in this repo: {what}. `git worktree prune` — which '
+        f'`git gc`, git\'s implicit `gc --auto` (after commit/merge/fetch/rebase/...) and `git '
+        f'maintenance run` all execute — FOLLOWS such an entry and EMPTIES its target (probed '
+        f'2026-10-04; `gc.worktreePruneExpire=never` does not stop it). Nothing legitimate creates '
+        f'one. {fix} If you must run git meanwhile, use `CAST_WORKTREE_OK=1 git ...` (document why).'
+    )
 
 # --- git update-ref delete block ------------------------------------------------
 # 2026-08-17 remaining-destructive-ops pass: measured that `git update-ref -d
@@ -1452,17 +2605,47 @@ _GC_MSG = (
     "**[CAST]** Raw `git gc --prune=<value>` blocked — an explicit prune value "
     "(including `now`/`all`, or any age) permanently deletes unreachable "
     "objects, closing off the same 2026-08-17 dangling-blob recovery path. "
-    "Bare `git gc`, `--aggressive`, `--prune` (no value), `--no-prune`, and "
-    "`--auto` are unaffected. If you genuinely need an explicit prune, use "
+    "If you genuinely need an explicit prune, use "
     "`CAST_GC_OK=1 git gc --prune=<value>` (document why)."
+)
+_GC_ANY_MSG = (
+    "**[CAST]** Raw `git gc` blocked (every form, `--auto` included) — gc runs "
+    "`git worktree prune`, which FOLLOWS a symlinked `.git/worktrees/<id>` entry "
+    "and EMPTIES its target (probed 2026-10-04; `gc.worktreePruneExpire=never` "
+    "does not stop it). Nothing here can see a symlink planted in the same "
+    "command line, so the command is blocked outright. If you genuinely need a "
+    "gc, check `.git/worktrees/` for symlinks first, then use "
+    "`CAST_GC_OK=1 git gc ...` (document why)."
+)
+_MAINTENANCE_MSG = (
+    "**[CAST]** `git maintenance run` blocked (any task) — its default and "
+    "`--task=gc` tasks run `git worktree prune`, which FOLLOWS a symlinked "
+    "`.git/worktrees/<id>` entry and EMPTIES its target (probed 2026-10-04). "
+    "`git maintenance start|register|stop|unregister` are unaffected. If you "
+    "genuinely need it, check `.git/worktrees/` for symlinks first, then use "
+    "`CAST_GC_OK=1 git maintenance run ...` (document why)."
+)
+_WORKTREE_PLANT_MSG = (
+    "**[CAST]** `ln -s` into a `.git/worktrees/` directory blocked — `git worktree prune` (run by "
+    "`git gc`, git's implicit `gc --auto` and `git maintenance run`) FOLLOWS a symlinked worktree "
+    "entry and EMPTIES its target (probed 2026-10-04). Nothing legitimate creates one. If you "
+    "genuinely need it, use `CAST_WORKTREE_OK=1 ln -s ...` (document why)."
+)
+_WORKTREE_PRUNE_MSG = (
+    "**[CAST]** `git worktree prune` blocked (`-n`/`--dry-run` is exempt) — it "
+    "FOLLOWS a symlinked `.git/worktrees/<id>` entry and EMPTIES its target "
+    "(probed 2026-10-04; `gc.worktreePruneExpire=never` does not stop it). If "
+    "you genuinely need to prune, check `.git/worktrees/` for symlinks first, "
+    "then use `CAST_WORKTREE_OK=1 git worktree prune` (document why)."
 )
 _PRUNE_MSG = (
     "**[CAST]** Raw `git prune` blocked (dry runs via `-n`/`--dry-run` are "
     "exempt) — it deletes unreachable objects with no grace period at all, "
     "closing off the same 2026-08-17 dangling-blob recovery path (more "
     "destructive than `git gc --prune=now`, which still respects "
-    "`gc.pruneExpire`). `git prune-packed`, `git remote prune`, and `git "
-    "worktree prune` are unaffected. If you genuinely need to prune, use "
+    "`gc.pruneExpire`). `git prune-packed` and `git remote prune` are "
+    "unaffected (`git worktree prune` has its own block). If you genuinely "
+    "need to prune, use "
     "`CAST_PRUNE_OK=1 git prune ...` (document why)."
 )
 _GC_CINJECT_MSG = (
@@ -1472,8 +2655,10 @@ _GC_CINJECT_MSG = (
     "config-layer bypass of the reflog/gc/prune blocks above: it reaches the "
     "exact same dangling-object/reflog recovery-path destruction with no "
     "`--prune=`/`expire`/`prune` token on the line for those checks to key "
-    "on. If you genuinely need to set one of these inline, use "
-    "`CAST_GC_OK=1 git -c gc.pruneExpire=<value> ...` (document why)."
+    "on. The same key via `--config-env=<key>=ENV` or `GIT_CONFIG_KEY_<n>=<key>` "
+    "(env-var injection) is blocked here too. If you genuinely need to set "
+    "one of these inline, use `CAST_GC_OK=1 git -c gc.pruneExpire=<value> ...` "
+    "(document why)."
 )
 _GC_CONFIG_WRITE_MSG = (
     "**[CAST]** `git config` write of `gc.pruneExpire` / `gc.reflogExpire` / "
@@ -1490,9 +2675,30 @@ _GC_CONFIG_EDIT_MSG = (
     "`gc.reflogExpire` / `gc.reflogExpireUnreachable` to `now` with NO "
     "key/value token ever appearing on the command line for the "
     "`git config` write block to key on — same config-layer bypass family, "
-    "closing the last route into it. If you genuinely need to edit git "
-    "config interactively, use `CAST_GC_OK=1 git config --edit` (document "
-    "why)."
+    "closing the last route into it. The same editor session can equally set "
+    "an exec key (`core.fsmonitor`, `core.hooksPath`, `alias.*`, ...), so it can "
+    "set EITHER kind of key and EITHER hatch allows it. If you genuinely need to "
+    "edit git config interactively, use `CAST_GC_OK=1 git config --edit` or "
+    "`CAST_GIT_CONFIG_OK=1 git config --edit` (document why)."
+)
+_GIT_CONFIG_EXEC_MSG = (
+    "**[CAST]** Setting a git config key that makes git EXECUTE a program or "
+    "load other config is blocked (key match is case-insensitive; ANY value "
+    "blocks, including `true`/empty; reads via `--get`/`list`/a bare key are "
+    "unaffected). Covers `git config` writes (any scope, `--file`, `--add`, "
+    "`set`, `rename-section` into such a section), inline `-c <key>[=v]` / "
+    "`--config-env=<key>=ENV`, `clone -c|--config <key>=<v>` / `clone|init "
+    "--template`, and `GIT_CONFIG_KEY_<n>=<key>` / "
+    "`GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_GLOBAL|SYSTEM=<file>` env "
+    "injection. Key class: `core.fsmonitor|hooksPath|pager|editor|sshCommand|"
+    "askPass|gitProxy`, `pager.*`, `alias.*`, `filter.*.clean|smudge|process`, "
+    "`diff.*.command|textconv`, `merge.*.driver`, `gpg*.program`, "
+    "`credential*.helper`, `remote.*.uploadpack|receivepack|vcs`, "
+    "`include[If].path`, `url.*.insteadOf` (`ext::`), `protocol.*.allow`, "
+    "`submodule.*.update`, ... A repo's `.git/config` runs in Ed's UNSANDBOXED "
+    "terminal and in CAST hooks on the next `git status`/`log`/`diff`, so an "
+    "agent must not plant one. If you genuinely need it, use "
+    "`CAST_GIT_CONFIG_OK=1 git config <key> <value>` (document why)."
 )
 
 _GIT_RM_MSG = (
@@ -1884,6 +3090,13 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
                 re.compile(pattern, re.IGNORECASE)
             except (re.error, RecursionError, OverflowError, MemoryError):
                 return _config_invalid('invalid path_pattern regex')
+
+    # 2026-10-07 U6c: a valid-but-EMPTY config ({} / {"policies": []} / every entry "warn") would
+    # allow every edit — exactly what an agent that truncates the installed file gets for free. The
+    # shipped config always carries block policies, so none = tampered / half-installed.
+    if not any(isinstance(p, dict) and p.get('severity') == 'block' for p in policies):
+        return _config_invalid('it defines no "block" policies, so it would allow every edit; '
+                               'run `bash install.sh` from the claude-agent-team checkout to restore it')
 
     def _path_block(path: str, resolved: bool):
         """(code, msg) when `path` must not reach the regexes, else None.
@@ -2332,13 +3545,30 @@ def _hatch_value(segment: str, variable: str) -> str:
     hatch value that itself contains unbalanced-quote-and-whitespace stays
     unrecoverable, which is a strict improvement on always returning ''.
     Never raises.
+
+    2026-10-07 U6c: tokenized LAZILY, stopping at the first non-assignment token. It used
+    to `shlex.split` the whole segment on every call (twice per hatched segment — the
+    CAST_HATCH_REASON lookup and the hatch's own value — while the cumulative
+    `_MAX_GIT_TOKENIZE_BYTES` budget counted the segment once), so two 195 KB hatched
+    segments tripped the 2 s watchdog (~2.04 s). Only the leading `VAR=value` prefix
+    is ever read, so the cost is now O(prefix). Same tokens as `shlex.split` (posix,
+    whitespace_split, no comment handling); an unbalanced quote LATER in the segment is
+    never reached, and one inside the prefix still falls back to a whitespace split.
     """
-    try:
-        tokens = shlex.split(segment)
-    except ValueError:
-        tokens = segment.split()
     prefix = f'{variable}='
-    for token in tokens:
+    try:
+        lex = shlex.shlex(segment, posix=True)
+        lex.whitespace_split = True
+        lex.commenters = ''
+        for token in lex:
+            if not _ENV_ASSIGN.match(token):
+                break
+            if token.startswith(prefix):
+                return token[len(prefix):]
+        return ''
+    except ValueError:
+        pass
+    for token in segment.split():
         if not _ENV_ASSIGN.match(token):
             break
         if token.startswith(prefix):
@@ -4102,7 +5332,39 @@ def _executed_code(text, budget):
     return lx.codes
 
 
+def _note_carriers(seg, carried):
+    """Collect the shell strings git runs for a segment (`_git_carrier_payloads`) into `carried`."""
+    if isinstance(seg, str) and 'git' in seg.lower():
+        payloads, refuse = _git_carrier_payloads(seg)
+        carried.extend(payloads)
+        if refuse:
+            carried.append(_Refusal(_LEX_UNCERTAIN_MSG))
+
+
 def _executable_segments(command, budget=None, depth=0):
+    """`_executable_segments_main`, then the segments of every shell string git itself runs for
+    the segments it yielded (`_git_carrier_payloads`): `git submodule foreach '<cmd>'`, `git
+    rebase -x '<cmd>'`, ... The payload is a nested command line like a `bash -c` operand and is
+    judged by the same whole engine; a payload that cannot be read is a `_Refusal`."""
+    if budget is None:
+        budget = [_MAX_EXEC_SCAN_STEPS, _MAX_EXEC_CODES]
+    carried = []
+    yield from _executable_segments_main(command, budget, depth, carried)
+    for item in carried:
+        if isinstance(item, _Refusal):
+            yield item
+            return
+        budget[1] -= 1
+        if budget[1] < 0:
+            yield _Refusal(_EXEC_BUDGET_MSG)
+            return
+        if depth >= _MAX_EXEC_DEPTH:
+            yield _Refusal(_NESTING_MSG)
+            return
+        yield from _executable_segments(item, budget, depth + 1)
+
+
+def _executable_segments_main(command, budget, depth, carried):
     """Every shell segment of `command` (exactly what `_scannable_segments` yields, FIRST and
     unchanged), followed by the segments of the code it hands to a nested shell and of the
     virtual `git ...` segment of every spelled git (`_executed_code`; payloads, positional
@@ -4121,12 +5383,12 @@ def _executable_segments(command, budget=None, depth=0):
     `g<quotes>i<quotes>t` spelling. That keeps a big git-free command (a heredoc writing a
     file) entirely off this path. The scan reads the RAW command (see the note above); only
     the real segments come from the continuation-joined lines."""
-    yield from _scannable_segments(command)
+    for seg in _scannable_segments(command):
+        yield seg
+        _note_carriers(seg, carried)
     text = command
     if not _git_mentioned(text):
         return
-    if budget is None:
-        budget = [_MAX_EXEC_SCAN_STEPS, _MAX_EXEC_CODES]
     try:
         codes = _executed_code(text, budget)
     except _ExecOverBudget:
@@ -4143,7 +5405,9 @@ def _executable_segments(command, budget=None, depth=0):
             yield _Refusal(_EXEC_BUDGET_MSG)
             return
         if isinstance(code, _Virtual):
-            yield from _scannable_segments(code)        # a leaf: see `_Virtual`
+            for seg in _scannable_segments(code):       # a leaf: see `_Virtual`
+                yield seg
+                _note_carriers(seg, carried)
             continue
         if depth >= _MAX_EXEC_DEPTH:
             yield _Refusal(_NESTING_MSG)
@@ -4288,6 +5552,7 @@ def _git_evaluate_impl(command: str, suppressed_counter):
     not a suppression and does not touch `suppressed_counter`.
     """
     hatch_record_count = 0
+    tracker = _DirTracker()   # literal cd/pushd targets so far -- see `_DirTracker`
     scan_work = 0  # running `_scan_work` total — see `_MAX_GIT_SCAN_WORK`
     tokenized_bytes = 0  # running total handed to shlex — see `_MAX_GIT_TOKENIZE_BYTES`
     for seg in _executable_segments(command):
@@ -4296,6 +5561,7 @@ def _git_evaluate_impl(command: str, suppressed_counter):
         seg = seg.strip()
         if not seg:
             continue
+        tracker.observe(seg)
         # 2026-08-17 shlex tokenization pass: `norm` is a quote-stripped,
         # absolute-path-normalized rendering of `seg` (None if `seg` isn't a
         # git invocation — see `_normalize_git_segment`'s docstring for why
@@ -4311,6 +5577,20 @@ def _git_evaluate_impl(command: str, suppressed_counter):
                 return 2, _TOKENIZE_BUDGET_MSG  # see `_MAX_GIT_TOKENIZE_BYTES`
         norm = _normalize_git_segment(seg) if mentions_git else None
         variants = (seg, norm) if norm else (seg,)
+        # 2026-10-07 U6a-1 security F5: `GIT_CONFIG_KEY_0=$'core.pager' git ...` — the ANSI-C
+        # string is decoded by the shell, so the regex views also get the decoded text.
+        # Deliberately NOT added to `variants`: a decoded `$'git'` would turn heredoc DATA
+        # into a spelled git for every other block. Only the GIT_CONFIG_* / exec-key
+        # checks below read `env_variants`.
+        dec_seg = (_decode_ansi_c_text(seg)
+                   if mentions_git and "$'" in seg and 'GIT_CONFIG_' in seg else seg)
+        env_variants = variants
+        if dec_seg != seg:
+            dec_norm = _normalize_git_segment(dec_seg)
+            env_variants = variants + ((dec_seg, dec_norm) if dec_norm else (dec_seg,))
+
+        def hit_env(pattern, _v=env_variants):
+            return any(pattern.search(v) for v in _v)
 
         # 2026-10-06 security fix: refuse (fail closed) before any pattern
         # runs if this command's accumulated regex work would pass the bound
@@ -4419,7 +5699,7 @@ def _git_evaluate_impl(command: str, suppressed_counter):
                 record_hatch_use('CAST_RESET_OK', 'reset')
             else:
                 return 2, _RESET_MSG
-        if hit(_CLEAN_BLOCK):
+        if _dry_run_block(_CLEAN_BLOCK, variants):
             if hit(_CLEAN_ALLOW):
                 record_hatch_use('CAST_CLEAN_OK', 'clean')
             else:
@@ -4450,17 +5730,41 @@ def _git_evaluate_impl(command: str, suppressed_counter):
                 record_hatch_use('CAST_REFLOG_OK', 'reflog')
             else:
                 return 2, _REFLOG_MSG
-        if hit(_GC_BLOCK):
+        # 2026-10-07 U6a-2 (hazard E1): any git op in a repo already holding a symlinked
+        # `worktrees/*` entry (implicit auto-gc runs the prune), then the static gc / maintenance
+        # / worktree-prune blocks (a symlink planted in the SAME command is invisible here).
+        if _plants_worktrees_symlink(seg, tracker):
+            if hit(_WORKTREE_LN_ALLOW):
+                record_hatch_use('CAST_WORKTREE_OK', 'worktree-symlink-plant')
+            else:
+                return 2, _WORKTREE_PLANT_MSG
+        if mentions_git and (hazard := _worktree_symlink_hazard(
+                (seg,) + ((dec_seg,) if dec_seg != seg else ()), tracker)):
+            if hit(_WORKTREE_HATCH_ALLOW):
+                record_hatch_use('CAST_WORKTREE_OK', 'worktree-symlink')
+            else:
+                return 2, _worktree_hazard_msg(hazard)
+        if hit(_GC_ANY_BLOCK):
             if hit(_GC_ALLOW):
                 record_hatch_use('CAST_GC_OK', 'gc')
             else:
-                return 2, _GC_MSG
-        if hit(_PRUNE_BLOCK):
+                return 2, _GC_MSG if hit(_GC_BLOCK) else _GC_ANY_MSG
+        if hit(_MAINTENANCE_BLOCK):
+            if hit(_MAINTENANCE_ALLOW):
+                record_hatch_use('CAST_GC_OK', 'maintenance')
+            else:
+                return 2, _MAINTENANCE_MSG
+        if _dry_run_block(_WORKTREE_PRUNE_BLOCK, variants):
+            if hit(_WORKTREE_PRUNE_ALLOW):
+                record_hatch_use('CAST_WORKTREE_OK', 'worktree-prune')
+            else:
+                return 2, _WORKTREE_PRUNE_MSG
+        if _dry_run_block(_PRUNE_BLOCK, variants):
             if hit(_PRUNE_ALLOW):
                 record_hatch_use('CAST_PRUNE_OK', 'prune')
             else:
                 return 2, _PRUNE_MSG
-        if hit(_GC_CINJECT_BLOCK):
+        if hit(_GC_CINJECT_BLOCK) or hit_env(_GC_ENV_KEY_BLOCK) or hit_env(_GC_ENV_PARAMETERS_BLOCK):
             if hit(_GC_HATCH_ALLOW):
                 record_hatch_use('CAST_GC_OK', 'gc-config')
             else:
@@ -4470,12 +5774,24 @@ def _git_evaluate_impl(command: str, suppressed_counter):
                 record_hatch_use('CAST_GC_OK', 'gc-config')
             else:
                 return 2, _GC_CONFIG_WRITE_MSG
+        # `config edit` can set an exec key as well as a gc key, so EITHER hatch
+        # (CAST_GC_OK / CAST_GIT_CONFIG_OK) lets it through; one block, one record.
         if hit(_GC_CONFIG_EDIT_BLOCK):
             if hit(_GC_HATCH_ALLOW):
                 record_hatch_use('CAST_GC_OK', 'gc-config')
+            elif hit(_GIT_CONFIG_HATCH_ALLOW):
+                record_hatch_use('CAST_GIT_CONFIG_OK', 'git-config-exec')
             else:
                 return 2, _GC_CONFIG_EDIT_MSG
-        if hit(_GIT_RM_BLOCK):
+        # 2026-10-07 U6a-1: exec-capable config keys (after the gc checks, so a
+        # gc-expiry hit keeps its own message and hatch).
+        if (any(hit_env(p) for p in _GIT_CONFIG_EXEC_BLOCKS)
+                or (mentions_git and _memoized(('execcfg', seg), lambda: _exec_config_cmd_blocks(seg)))):
+            if hit(_GIT_CONFIG_HATCH_ALLOW):
+                record_hatch_use('CAST_GIT_CONFIG_OK', 'git-config-exec')
+            else:
+                return 2, _GIT_CONFIG_EXEC_MSG
+        if _dry_run_block(_GIT_RM_BLOCK, variants):
             if hit(_GIT_RM_ALLOW):
                 record_hatch_use('CAST_GIT_RM_OK', 'git-rm')
             else:

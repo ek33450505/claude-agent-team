@@ -34,7 +34,7 @@
     },
     {
       "id": "githooks-require-security",
-      "description": "Git hooks (.githooks/ = core.hooksPath) run unsandboxed on the next commit/push; edits require a security review this session",
+      "description": "Git hooks run unsandboxed on the next commit/push (the repo's .githooks/ is the source install.sh deploys to ~/.claude/githooks, which core.hooksPath points at); edits require a security review this session",
       "path_pattern": "(^|/)\\.githooks/",
       "requires_agent": "security",
       "scope": "session",
@@ -47,6 +47,30 @@
       "requires_agent": "security",
       "scope": "session",
       "severity": "block"
+    },
+    {
+      "id": "credentials-files-warn",
+      "description": "Credential files (credentials*, *credentials*.json) hold secrets; a file-tool write here is flagged for security review. Warn only: never blocks",
+      "path_pattern": "(^|/)credentials[^/]*$|(^|/)[^/]*credentials[^/]*\\.json$",
+      "requires_agent": "security",
+      "scope": "session",
+      "severity": "warn"
+    },
+    {
+      "id": "secrets-files-warn",
+      "description": "Secrets files (secrets*, *.secrets*) hold secrets; a file-tool write here is flagged for security review. Warn only: never blocks",
+      "path_pattern": "(^|/)secrets[^/]*$|(^|/)[^/]*\\.secrets[^/]*$",
+      "requires_agent": "security",
+      "scope": "session",
+      "severity": "warn"
+    },
+    {
+      "id": "auth-dirs-outside-src-warn",
+      "description": "An auth/ directory outside src/auth/ (which auth-requires-security already blocks) holds authentication code; a file-tool write here is flagged for security review. Warn only: never blocks",
+      "path_pattern": "(^|/)(?<!src/)auth/",
+      "requires_agent": "security",
+      "scope": "session",
+      "severity": "warn"
     },
     {
       "id": "git-global-config-require-security",

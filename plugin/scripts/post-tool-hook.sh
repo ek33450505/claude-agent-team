@@ -33,7 +33,11 @@ if [ "$OUTPUT_LEN" -gt "$MAX_BYTES" ]; then
     printf '[REDACTION_FAILED — original %d bytes discarded for safety]' "$OUTPUT_LEN" > "$OVERFLOW_FILE" 2>/dev/null || true
     REDACTED_OK="false"
   fi
-  HOOK_OUTPUT="{\"overflow\": true, \"path\": \"$OVERFLOW_FILE\", \"original_bytes\": $OUTPUT_LEN, \"redacted\": $REDACTED_OK}"
+  # Built by json.dumps, never by string interpolation: $HOME (hence the path) may carry quotes,
+  # backslashes or newlines that would otherwise break out of the JSON string.
+  HOOK_OUTPUT="$(OVERFLOW_FILE="$OVERFLOW_FILE" OUTPUT_LEN="$OUTPUT_LEN" REDACTED_OK="$REDACTED_OK" \
+    python3 -I -c 'import json, os; print(json.dumps({"overflow": True, "path": os.environ["OVERFLOW_FILE"], "original_bytes": int(os.environ["OUTPUT_LEN"]), "redacted": os.environ["REDACTED_OK"] == "true"}))' 2>/dev/null)" \
+    || HOOK_OUTPUT='{"overflow": true, "redacted": false}'
 fi
 
 # Only emit if there is actual content — a bare newline from an empty

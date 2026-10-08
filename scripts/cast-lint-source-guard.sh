@@ -41,7 +41,19 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Repo root: CAST_REPO_ROOT wins (installed-copy mode: the hook passes the repo as data);
+# else the cwd's repo, else this script's own checkout. GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+# are not inherited — a git hook exports the committing worktree's gitdir (S3c-15); this
+# lint reads working-tree files only, never the index.
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+	if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+		echo "ERROR [cast-lint-source-guard]: CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+		exit 1
+	fi
+	REPO_ROOT="$CAST_REPO_ROOT"
+else
+	REPO_ROOT="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 SCRIPTS_DIR="${CAST_LINT_SCRIPTS_DIR:-${REPO_ROOT}/scripts}"
 
 # Hermetic zero-file sanity check — a lint that scans nothing must never pass.

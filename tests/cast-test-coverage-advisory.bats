@@ -32,6 +32,7 @@ setup() {
   git config user.name "BATS Test"
 
   cp "$REPO_ROOT/scripts/cast-test-coverage-advisory.sh" scripts/
+  cp "$REPO_ROOT/scripts/cast-hook-lib.sh" scripts/  # sourced from its own dir (fail closed without it); deliberately NOT staged
   chmod +x scripts/cast-test-coverage-advisory.sh
 
   git add scripts/cast-test-coverage-advisory.sh

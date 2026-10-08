@@ -121,7 +121,7 @@ SCRIPT
       cat > "$script_file" <<'SCRIPT'
 #!/bin/bash
 set -euo pipefail
-exec python3 "${HOME}/.claude/scripts/cast-db-prune.py"
+exec python3 -I "${HOME}/.claude/scripts/cast-db-prune.py"
 SCRIPT
       ;;
     log-compress)

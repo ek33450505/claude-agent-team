@@ -482,9 +482,19 @@ if [[ -f "$SCAFFOLD" ]]; then
 fi
 
 # === TEMP FILE CLEANUP ===
-rm -f "${TMPDIR:-/tmp}/cast-depth-${PPID}.depth" 2>/dev/null || true
-rm -f "${TMPDIR:-/tmp}/cast-blocked-${SESSION_ID}"*.count 2>/dev/null || true
-rm -f "${TMPDIR:-/tmp}/cast-dispatch-${SESSION_ID}.log" 2>/dev/null || true
-rm -f "${TMPDIR:-/tmp}/cast-session-start-${SESSION_ID}.epoch" 2>/dev/null || true
+# Per-session state lives in the 0700 ~/.claude/cast-state dir (see agent-status-reader.sh). The id is
+# validated to a plain token first, so the glob below can never be steered; rm -f unlinks a symlink
+# itself and never follows it. The legacy /tmp names are still removed for one release (own files).
+_se_sid="${SESSION_ID}"
+case "$_se_sid" in '' | *[!A-Za-z0-9_-]*) _se_sid="default" ;; esac
+_se_sid="${_se_sid:0:64}"
+_se_dir="${HOME}/.claude/cast-state"
+if [ -d "$_se_dir" ] && [ ! -L "$_se_dir" ] && [ -O "$_se_dir" ]; then
+  rm -f -- "${_se_dir}/cast-session-start-${_se_sid}.epoch" 2>/dev/null || true
+  rm -f -- "${_se_dir}/cast-blocked-${_se_sid}"-*.count 2>/dev/null || true
+fi
+rm -f -- "${TMPDIR:-/tmp}/cast-blocked-${_se_sid}"*.count 2>/dev/null || true
+rm -f -- "${TMPDIR:-/tmp}/cast-dispatch-${_se_sid}.log" 2>/dev/null || true
+rm -f -- "${TMPDIR:-/tmp}/cast-session-start-${_se_sid}.epoch" 2>/dev/null || true
 
 exit 0

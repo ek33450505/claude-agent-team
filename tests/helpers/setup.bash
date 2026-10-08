@@ -148,3 +148,14 @@ seed_rollup_tables() {
     );
   "
 }
+
+# file_mode <path> — octal permission bits (e.g. 644). BSD vs GNU stat chosen by $OSTYPE: GNU `stat -f`
+# is filesystem status and SUCCEEDS, so a `stat -f … || stat -c …` fallback never runs on Linux.
+file_mode() {
+  if [[ "$OSTYPE" == darwin* ]]; then stat -f %Lp "$1"; else stat -c %a "$1"; fi
+}
+
+# file_mtime <path> — mtime in epoch seconds (same BSD/GNU split).
+file_mtime() {
+  if [[ "$OSTYPE" == darwin* ]]; then stat -f %m "$1"; else stat -c %Y "$1"; fi
+}

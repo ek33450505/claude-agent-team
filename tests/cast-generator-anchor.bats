@@ -122,6 +122,7 @@ CASTEOF
   # Repo A: a copy of the generator plus a minimal rules-core tree.
   mkdir -p "$repoA/scripts" "$repoA/rules-core" "$repoA/.github"
   cp "$RULES_MANIFEST_GEN" "$repoA/scripts/gen-rules-manifest.sh"
+  cp "$REPO_DIR/scripts/cast-hook-lib.sh" "$repoA/scripts/cast-hook-lib.sh"  # sourced from its own dir; the generator fails closed without it
   printf '# fixture rule\n' > "$repoA/rules-core/fixture.md"
 
   # Repo B: an unrelated tracked manifest the generator would have

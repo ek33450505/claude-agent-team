@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # to git status. bash 3.2-safe: plain indexed array, no declare -A / mapfile.
 GUARD_PATHS=(
   agents/ commands/ skills/ rules-core/ scripts/ bin/ config/ managed-settings.d/
-  macos/ tools/justfile cast/ VERSION skills-personal/ managed-settings-personal/ rules-personal/
+  macos/ tools/justfile cast/ VERSION .githooks/ skills-personal/ managed-settings-personal/ rules-personal/
 )
 if [[ "${CAST_INSTALL_FORCE:-0}" != "1" ]]; then
   # One status call both detects and lists: tracked changes (staged or not) plus untracked
@@ -431,6 +431,20 @@ done
 
 # --- Install scripts (chmod +x) ---
 info "Installing scripts..."
+# Purge stale/forged bytecode caches so a clean install starts with none (python regenerates them; the
+# health hook and cast doctor verify any .pyc against its source). Never deletes through a symlink.
+for _pc_dir in "$CLAUDE_DIR/scripts/__pycache__" "$CLAUDE_DIR/scripts/migrations/__pycache__"; do
+    if [ -L "$_pc_dir" ]; then
+        error "ERROR: install.sh aborted — $_pc_dir is a symlink; refusing to purge through it. Remove the symlink and re-run."
+        exit 1
+    fi
+    if [ -d "$_pc_dir" ]; then
+        case "$_pc_dir" in
+            "$CLAUDE_DIR"/scripts/__pycache__|"$CLAUDE_DIR"/scripts/migrations/__pycache__) rm -rf -- "$_pc_dir" ;;
+        esac
+    fi
+done
+unset _pc_dir
 for script_file in "$SCRIPT_DIR"/scripts/*; do
     [ -d "$script_file" ] && continue
     base="$(basename "$script_file")"
@@ -447,6 +461,25 @@ if [ -d "$SCRIPT_DIR/scripts/migrations" ]; then
     done
     success "  Migrations installed"
 fi
+# Purge EVERY bytecode cache of the scripts just deployed, including each interpreter's pycache_prefix
+# location (macOS system python keeps caches under ~/Library/Caches/com.apple.python, which the
+# directory purge above never touched). Done right after deploy so no hook can compile old source in
+# between; afterwards any stale cache is unexpected and the integrity check alarms on it. The checker
+# does the work (one path computation shared with verification), run by a trusted interpreter. A failure
+# is a WARN, never an abort: the cache only costs a recompile.
+_pg_py=""
+for _pg_c in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if [ -x "$_pg_c" ]; then _pg_py="$_pg_c"; break; fi
+done
+[ -n "$_pg_py" ] || _pg_py="$(command -v python3 || true)"
+if [ -n "$_pg_py" ] && [ -f "$CLAUDE_DIR/scripts/cast-install-integrity.py" ]; then
+    if _pg_out="$("$_pg_py" -I "$CLAUDE_DIR/scripts/cast-install-integrity.py" --purge-caches --home "$HOME" 2>&1)"; then
+        info "  Bytecode caches: $_pg_out"
+    else
+        warn "  Could not purge every bytecode cache ($(_cast_clean "$_pg_out")) — the integrity check may flag a stale cache; re-run install.sh after fixing"
+    fi
+fi
+unset _pg_py _pg_c _pg_out
 # Remove scripts deleted in v4.1 (native feature adoption)
 rm -f "$CLAUDE_DIR/scripts/cast-route-install.sh"
 # Remove scripts consolidated into write-guards.sh in v7.5 Phase 4
@@ -1005,8 +1038,63 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     fi
 fi
 
-# --- Wire git hooks (pre-commit, pre-push, post-merge auto-install) ---
-git -C "$SCRIPT_DIR" config core.hooksPath .githooks 2>/dev/null || true
+# --- Install git hooks (pre-commit, post-commit, post-merge, pre-push) ---
+# Git hooks run in the user's UNSANDBOXED terminal, so they must not live in an agent-writable
+# repo dir: deploy byte-identical copies to $CLAUDE_DIR/githooks/ (denied to agent edits by
+# managed-settings.d/11-deny.json) and point core.hooksPath at THAT absolute dir. The installed
+# hooks call only installed ~/.claude/scripts/* (the repo is passed as data via CAST_REPO_ROOT).
+# Refuses a symlinked destination dir/file or a non-regular source; each file is staged to a
+# temp name and renamed over the target (rename replaces a dir entry, never writes through one).
+GITHOOKS_DIR="$CLAUDE_DIR/githooks"
+info "Installing git hooks..."
+if [ -L "$GITHOOKS_DIR" ] || { [ -e "$GITHOOKS_DIR" ] && [ ! -d "$GITHOOKS_DIR" ]; }; then
+    error "ERROR: install.sh aborted — $GITHOOKS_DIR is a symlink or not a directory; refusing to deploy git hooks through it."
+    exit 1
+fi
+mkdir -p "$GITHOOKS_DIR"
+for _gh_name in pre-commit post-commit post-merge pre-push cold-start-baseline.txt; do
+    _gh_src="$SCRIPT_DIR/.githooks/$_gh_name"
+    _gh_dest="$GITHOOKS_DIR/$_gh_name"
+    _gh_mode=755
+    [ "$_gh_name" = "cold-start-baseline.txt" ] && _gh_mode=644
+    if [ -L "$_gh_src" ] || [ ! -f "$_gh_src" ]; then
+        error "ERROR: install.sh aborted — .githooks/$_gh_name is missing or not a regular file."
+        exit 1
+    fi
+    if [ -L "$_gh_dest" ] || { [ -e "$_gh_dest" ] && [ ! -f "$_gh_dest" ]; }; then
+        error "ERROR: install.sh aborted — $_gh_dest is a symlink or not a regular file; refusing to overwrite it."
+        exit 1
+    fi
+    _gh_tmp="$(mktemp "$GITHOOKS_DIR/.install-XXXXXX")" || { error "ERROR: install.sh aborted — could not stage $_gh_name."; exit 1; }
+    if ! { cp "$_gh_src" "$_gh_tmp" && chmod "$_gh_mode" "$_gh_tmp" && mv -f "$_gh_tmp" "$_gh_dest"; }; then
+        rm -f "$_gh_tmp"
+        error "ERROR: install.sh aborted — could not install $_gh_name."
+        exit 1
+    fi
+done
+unset _gh_name _gh_src _gh_dest _gh_mode _gh_tmp
+success "  Git hooks installed: $GITHOOKS_DIR"
+
+# --- Wire git hooks: core.hooksPath = the ABSOLUTE installed dir ---
+# Never write the repo's git config under a test/CI/temp HOME (same guard as launchctl above,
+# minus CAST_INSTALL_NO_LAUNCHCTL, which is launchd-specific):
+# a temp-HOME path must not land in a real repo's config, and CI checkouts are throwaway.
+_cast_skip_hookspath() {
+    [ -n "${CI:-}" ] && return 0
+    [ -n "${CLAUDE_SUBPROCESS:-}" ] && return 0
+    [ -f "$HOME/.cast-test-home" ] && return 0   # BATS temp-HOME sentinel
+    case "$HOME" in
+        /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) return 0 ;;
+    esac
+    return 1
+}
+if _cast_skip_hookspath; then
+    warn "  core.hooksPath NOT written (test/CI/temp HOME) — repo git config untouched"
+elif git -C "$SCRIPT_DIR" config core.hooksPath "$GITHOOKS_DIR" 2>/dev/null; then
+    success "  core.hooksPath -> $GITHOOKS_DIR"
+else
+    warn "  Could not set core.hooksPath — run: git config core.hooksPath $GITHOOKS_DIR"
+fi
 
 # --- Prune old install-snapshot backups (keep last 5) ---
 # Matches only timestamped dirs created by this script: YYYYMMDD-HHMMSS
@@ -1058,6 +1146,93 @@ _prune_install_snapshots() {
   fi
 }
 _prune_install_snapshots
+
+# --- Write the install integrity manifest (DETECTION of post-install tampering) ---
+# $CLAUDE_DIR/install-manifest.sha256: "<sha256>  <path relative to ~/.claude>" for every file this
+# install deployed under scripts/ and githooks/ plus config/policies.json, preceded by the repo that
+# ran the install and the expected core.hooksPath ("-" when wiring was skipped under a test/CI/temp
+# HOME). The SessionStart health hook and `cast doctor` (scripts/cast-install-integrity.py) verify it:
+# git hooks run unsandboxed, and a deleted ~/.claude/githooks means git runs NO hooks, silently.
+# Hashes the files as they sit on disk NOW (the deployed bytes), written via temp + rename. Nothing is
+# skipped silently: any hashing/writing failure aborts the install.
+info "Writing install integrity manifest..."
+_mf_dest="$CLAUDE_DIR/install-manifest.sha256"
+if [ -L "$_mf_dest" ] || { [ -e "$_mf_dest" ] && [ ! -f "$_mf_dest" ]; }; then
+    error "ERROR: install.sh aborted — $_mf_dest is a symlink or not a regular file; refusing to overwrite it."
+    exit 1
+fi
+case "$SCRIPT_DIR$GITHOOKS_DIR" in
+    *$'\n'*|*\\*) error "ERROR: install.sh aborted — repo/githooks path contains a newline or backslash; cannot record it in the manifest."; exit 1 ;;
+esac
+if command -v shasum >/dev/null 2>&1; then _mf_sha=(shasum -a 256)
+elif command -v sha256sum >/dev/null 2>&1; then _mf_sha=(sha256sum)
+else error "ERROR: install.sh aborted — neither shasum nor sha256sum found; cannot write the integrity manifest."; exit 1
+fi
+_mf_files=()
+for _mf_src in "$SCRIPT_DIR"/scripts/*; do
+    [ -d "$_mf_src" ] && continue
+    _mf_base="$(basename "$_mf_src")"
+    _mf_files+=("scripts/${_mf_base%.template}")
+done
+if [ -d "$SCRIPT_DIR/scripts/migrations" ]; then
+    for _mf_src in "$SCRIPT_DIR"/scripts/migrations/*.sql; do
+        [ -f "$_mf_src" ] || continue
+        _mf_files+=("scripts/migrations/$(basename "$_mf_src")")
+    done
+fi
+_mf_files+=(githooks/pre-commit githooks/post-commit githooks/post-merge githooks/pre-push githooks/cold-start-baseline.txt config/policies.json)
+for _mf_rel in "${_mf_files[@]}"; do
+    case "$_mf_rel" in
+        *$'\n'*|*\\*|*$'\t'*) error "ERROR: install.sh aborted — deployed file name has a newline, tab or backslash: scripts/…; cannot record it in the manifest."; exit 1 ;;
+    esac
+    if [ -L "$CLAUDE_DIR/$_mf_rel" ] || [ ! -f "$CLAUDE_DIR/$_mf_rel" ]; then
+        error "ERROR: install.sh aborted — deployed file $_mf_rel is missing, a symlink, or not a regular file; cannot hash it."
+        exit 1
+    fi
+done
+_mf_sorted_arr=()
+while IFS= read -r _mf_line; do _mf_sorted_arr+=("$_mf_line"); done < <(printf '%s\n' "${_mf_files[@]}" | LC_ALL=C sort)
+if [ "${#_mf_sorted_arr[@]}" -ne "${#_mf_files[@]}" ]; then
+    error "ERROR: install.sh aborted — could not sort the manifest file list."
+    exit 1
+fi
+if ! _mf_out="$(cd "$CLAUDE_DIR" && "${_mf_sha[@]}" "${_mf_sorted_arr[@]}")"; then
+    error "ERROR: install.sh aborted — hashing the deployed files failed; refusing to write a partial integrity manifest."
+    exit 1
+fi
+if [ "$(printf '%s\n' "$_mf_out" | wc -l | tr -d ' ')" != "${#_mf_files[@]}" ]; then
+    error "ERROR: install.sh aborted — hash count does not match the deployed file count; refusing to write a partial integrity manifest."
+    exit 1
+fi
+if stat -c '%a' / >/dev/null 2>&1; then _mf_stat=(stat -c '%a %n'); else _mf_stat=(stat -f '%Lp %N'); fi   # GNU first: BSD rejects -c
+if ! _mf_modes="$(cd "$CLAUDE_DIR" && "${_mf_stat[@]}" "${_mf_sorted_arr[@]}")" \
+        || [ "$(printf '%s\n' "$_mf_modes" | wc -l | tr -d ' ')" != "${#_mf_files[@]}" ]; then
+    error "ERROR: install.sh aborted — could not read the deployed file modes; refusing to write a partial integrity manifest."
+    exit 1
+fi
+if _cast_skip_hookspath; then _mf_hp="-"; else _mf_hp="$GITHOOKS_DIR"; fi
+_mf_tmp="$(mktemp "$CLAUDE_DIR/.install-manifest-XXXXXX")" || { error "ERROR: install.sh aborted — could not stage the integrity manifest."; exit 1; }
+if ! { printf '# cast-install-manifest v2\n# repo: %s\n# hooks-path: %s\n%s\n%s\n' "$SCRIPT_DIR" "$_mf_hp" \
+        "$(printf '%s\n' "$_mf_modes" | sed 's/^/# mode: /')" "$_mf_out" > "$_mf_tmp" \
+        && chmod 644 "$_mf_tmp" && mv -f "$_mf_tmp" "$_mf_dest"; }; then
+    rm -f "$_mf_tmp"
+    error "ERROR: install.sh aborted — could not write the integrity manifest."
+    exit 1
+fi
+# Unmanaged files where code is loaded from (a planted scripts/json.py shadows the stdlib for the
+# un-isolated dispatcher): the checker alarms on them; say so loudly NOW. They are never blessed into
+# the manifest (leftovers of deleted scripts must be removed by hand: install never reconciles deletions).
+for _mf_dir in scripts scripts/migrations; do
+    while IFS= read -r _mf_u; do
+        case "$_mf_u" in .DS_Store|__pycache__) continue ;; esac
+        [ "$_mf_dir/$_mf_u" = "scripts/migrations" ] && continue
+        if ! printf '%s\n' "${_mf_files[@]}" | grep -Fxq -- "$_mf_dir/$_mf_u"; then
+            warn "  UNMANAGED file in ~/.claude/$_mf_dir: $(_cast_clean "$_mf_u") — not deployed by this install; remove it (the health hook and cast doctor will alarm on it)"
+        fi
+    done < <(ls -A "$CLAUDE_DIR/$_mf_dir" 2>/dev/null)
+done
+success "  Integrity manifest: $_mf_dest (${#_mf_files[@]} files)"
+unset _mf_stat _mf_modes _mf_dir _mf_u _mf_dest _mf_sha _mf_files _mf_src _mf_base _mf_rel _mf_tmp _mf_hp _mf_sorted_arr _mf_line _mf_out
 
 # --- Update README stats ---
 bash "$SCRIPT_DIR/scripts/gen-stats.sh" 2>/dev/null || true

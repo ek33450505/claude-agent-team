@@ -267,7 +267,7 @@ def _invoke_db_backup() -> dict:
 
     try:
         result = subprocess.run(
-            [sys.executable, str(db_backup_script)],
+            [sys.executable, '-I', str(db_backup_script)],
             capture_output=True,
             text=True,
             timeout=60,

@@ -75,7 +75,7 @@ def _pre_consolidate_backup(db_path: str) -> int:
 
     try:
         result = subprocess.run(
-            [sys.executable, backup_script],
+            [sys.executable, '-I', backup_script],
             capture_output=True,
             text=True,
             timeout=120,

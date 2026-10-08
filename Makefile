@@ -128,11 +128,12 @@ ci-local:
 # Sync docs then validate
 sync: docs validate
 
-# Wire the pre-commit and pre-push hooks
+# Install the git hooks: install.sh deploys .githooks/* to ~/.claude/githooks/ (agent-unwritable)
+# and sets core.hooksPath to that absolute dir (skipped under a test/CI/temp HOME). The hooks
+# call only installed ~/.claude/scripts/*, so this is a full install, not a repo-relative wiring.
 hooks:
-	git config core.hooksPath .githooks
-	chmod +x .githooks/pre-commit .githooks/pre-push
-	@echo "Pre-commit and pre-push hooks installed."
+	bash install.sh
+	@echo "Git hooks deployed to ~/.claude/githooks (core.hooksPath set by install.sh)."
 
 # Regenerate ecosystem-versions.json from local sibling repos
 ecosystem-versions:

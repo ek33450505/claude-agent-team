@@ -5,7 +5,7 @@
 # Fires when a subagent stops (naturally or at turn limit).
 # This wrapper does the minimum bash-owned work and delegates ALL telemetry to a
 # single parse-once python process (cast_subagent_stop.py):
-#   1. Read stdin once → export CAST_STOP_INPUT
+#   1. Read stdin once → hold in $INPUT; hand it to each python pass on STDIN (--stdin)
 #   2. Run cast_subagent_stop.py --gate-only (fast: parses once, runs NO stages);
 #      eval ONLY its shlex-quoted __CAST_TAIL__ sentinel block (S3d-5)
 #   3. Step 2.8 status-writer.sh call gated on $CAST_GATE_MATCH (bash-owned surface) —
@@ -80,9 +80,13 @@ if [ -d "$_CAST_STDIN_CAPTURE_DIR" ]; then
   fi
 fi
 
-# Export the raw payload for the python process. Identical trust boundary to the
-# old hook — the JSON is never interpolated into any source, only read from env.
-export CAST_STOP_INPUT="$INPUT"
+# The raw payload reaches each python pass on STDIN (``--stdin``), NOT via an exported
+# env var: an env var is capped (E2BIG — ~128 KiB per string on Linux, ~1 MiB for the
+# whole env+argv block on macOS), so an oversized payload used to fail the exec and
+# write NO record, silently. `printf` is a builtin (no exec arg limit) and the pipe has
+# no size cap. Same trust boundary as before — the JSON is never interpolated into any
+# source. Clear any inherited value so a stale env can never be mistaken for the payload.
+unset CAST_STOP_INPUT
 
 # Shared Status-contract helper — sourced only for the wrapper's own no-op
 # fallback path (exemption classification itself lives in the python process).
@@ -162,7 +166,7 @@ _write_gate_record() {
         "$CAST_GATE_MATCH" \
         "subagent completion record" \
         "$SAFE_AGENT" \
-        "" \
+        "$CAST_GATE_REASON" \
         "" \
         "$SAFE_SESSION_ID" \
         "$SAFE_ROSTER_TYPE" >/dev/null 2>&1 || true
@@ -189,6 +193,7 @@ _write_gate_record() {
 # Step 2.8 runs at most once per stop in every mode.
 _default_tail_vars() {
   CAST_GATE_MATCH="${CAST_GATE_MATCH:-}"
+  CAST_GATE_REASON="${CAST_GATE_REASON:-}"
   CAST_SUCCESSORS="${CAST_SUCCESSORS:-}"
   SAFE_AGENT="${SAFE_AGENT:-}"
   SAFE_SESSION_ID="${SAFE_SESSION_ID:-}"
@@ -196,7 +201,7 @@ _default_tail_vars() {
 }
 
 # ── Pass 1: fast gate-only python process (S3d-5) ────────────────────────────
-# Parses CAST_STOP_INPUT once, applies the same identity guards as the full pass,
+# Parses the stdin payload once, applies the same identity guards as the full pass,
 # runs NO telemetry stage, and emits ONLY the gate tail block (CAST_GATE_MATCH /
 # SAFE_*). Its stdout outside the tail block is discarded unless the flag was ignored
 # (mode "full" below) — the full pass is otherwise the sole hookSpecificOutput source.
@@ -204,9 +209,9 @@ _default_tail_vars() {
 # survive `_default_tail_vars` into `_write_gate_record` (a tick emits no tail in either
 # pass, so nothing would overwrite it). `unset` also lets the CAST_SUCCESSORS probe below
 # tell "assigned by pass 1's tail" from "never set".
-unset CAST_GATE_MATCH SAFE_AGENT SAFE_SESSION_ID SAFE_ROSTER_TYPE CAST_SUCCESSORS
-_GATE_OUT="$(CAST_DB_PATH="$DB_PATH" CAST_HOOK_DIR="$HOOK_DIR" \
-    python3 "$HOOK_DIR/cast_subagent_stop.py" --gate-only 2>>"$HOOK_ERROR_LOG" || true)"
+unset CAST_GATE_MATCH CAST_GATE_REASON SAFE_AGENT SAFE_SESSION_ID SAFE_ROSTER_TYPE CAST_SUCCESSORS
+_GATE_OUT="$(printf '%s' "$INPUT" | CAST_DB_PATH="$DB_PATH" CAST_HOOK_DIR="$HOOK_DIR" \
+    python3 "$HOOK_DIR/cast_subagent_stop.py" --gate-only --stdin 2>>"$HOOK_ERROR_LOG" || true)"
 _load_tail "$_GATE_OUT"
 _PASS1_PASSTHRU="$_PASSTHRU"
 _PASS1_MODE="none"
@@ -229,12 +234,12 @@ else
   fi
 
   # ── Pass 2: full parse-once python process (telemetry, stages 0-17) ────────
-  # It parses CAST_STOP_INPUT once, runs every telemetry stage (each isolated in
+  # It parses the stdin payload once, runs every telemetry stage (each isolated in
   # its own try/except), prints hookSpecificOutput JSON to stdout, and terminates
   # with a shlex-quoted __CAST_TAIL__ sentinel block (CAST_SUCCESSORS is consumed
   # by Step 4; in mode "gate" the gate vars were already acted on above).
-  _PY_OUT="$(CAST_DB_PATH="$DB_PATH" CAST_HOOK_DIR="$HOOK_DIR" \
-      python3 "$HOOK_DIR/cast_subagent_stop.py" 2>>"$HOOK_ERROR_LOG" || true)"
+  _PY_OUT="$(printf '%s' "$INPUT" | CAST_DB_PATH="$DB_PATH" CAST_HOOK_DIR="$HOOK_DIR" \
+      python3 "$HOOK_DIR/cast_subagent_stop.py" --stdin 2>>"$HOOK_ERROR_LOG" || true)"
 
   # Pass through everything OUTSIDE the sentinel block (the hookSpecificOutput JSON
   # lines); _load_tail has already eval'd ONLY the block.

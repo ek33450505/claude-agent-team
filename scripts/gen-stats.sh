@@ -39,7 +39,18 @@ if [[ "$CHECK_MODE" -eq 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="$(dirname "$SCRIPT_DIR")"
+# Repo root: CAST_REPO_ROOT wins (installed-copy mode — SCRIPT_DIR is then
+# ~/.claude/scripts, so its parent is NOT the repo); else this script's checkout.
+# SCRIPT_DIR stays the sibling-library location (cast-stats-lib.sh).
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+  if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+    echo "[gen-stats] FATAL — CAST_REPO_ROOT must be an absolute path to an existing directory: '${CAST_REPO_ROOT}'" >&2
+    exit 1
+  fi
+  REPO_DIR="$CAST_REPO_ROOT"
+else
+  REPO_DIR="$(dirname "$SCRIPT_DIR")"
+fi
 README="${README_ARG:-$REPO_DIR/README.md}"
 
 # --- Counts (sourced from shared lib — single source of truth) ---

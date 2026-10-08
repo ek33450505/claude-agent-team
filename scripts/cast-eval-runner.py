@@ -651,7 +651,7 @@ def _dry_run(eval_case: dict, cases_dir: Path, repo_dir: Path) -> int:
     yaml_file = _find_case_file(eval_id, cases_dir)
     if validate_script.exists() and yaml_file:
         result = subprocess.run(
-            [sys.executable, str(validate_script), str(yaml_file)],
+            [sys.executable, '-I', str(validate_script), str(yaml_file)],
             capture_output=True,
             text=True,
         )

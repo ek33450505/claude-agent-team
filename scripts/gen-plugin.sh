@@ -29,7 +29,34 @@ for arg in "$@"; do
 done
 
 # --- Step 1: Resolve paths ---
-REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+# Hardened git (cast_git_safe): this script runs from git hooks in the user's terminal over a repo
+# an agent can write to, and bare git there honours repo-local exec config (core.fsmonitor ran for
+# `git ls-files`). FAIL CLOSED if the lib is not loadable beside this script — never fall back to
+# bare git. The -r guard matters: on bash 3.2 a bare `source <missing-file>` aborts under set -e.
+_CAST_LIB="$(dirname "$0")/cast-hook-lib.sh"
+# shellcheck source=cast-hook-lib.sh
+if [[ -r "$_CAST_LIB" ]] && source "$_CAST_LIB"; then
+  :
+else
+  printf 'ERROR: cast-hook-lib.sh not loadable beside %s — refusing to run (fail closed)\n' "$0" >&2
+  exit 1
+fi
+# `git ls-files` here must enumerate the index the hook is committing, so a plugin/ regen sees the
+# staged tree. cast_git_safe strips GIT_INDEX_FILE, so opt in via CAST_GIT_SAFE_INDEX_FILE (honoured
+# only for a regular non-symlink index file directly inside the repo's git dir; see cast-hook-lib.sh).
+# shellcheck disable=SC2034  # read by cast_git_safe (sourced lib), not by this script
+CAST_GIT_SAFE_INDEX_FILE="${GIT_INDEX_FILE:-}"
+# CAST_REPO_ROOT wins (installed-copy mode: the hook passes the repo as data and this
+# script lives in ~/.claude/scripts); else this script's own checkout.
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+  if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+    printf 'ERROR: CAST_REPO_ROOT must be an absolute path to an existing directory: %s\n' "$CAST_REPO_ROOT" >&2
+    exit 1
+  fi
+  REPO_ROOT="$CAST_REPO_ROOT"
+else
+  REPO_ROOT="$(cast_git_safe "$(dirname "$0")" rev-parse --show-toplevel)"
+fi
 OUT="${POSITIONAL_OUT:-${REPO_ROOT}/dist/cast-plugin}"
 VERSION="$(cat "${REPO_ROOT}/VERSION" 2>/dev/null || echo "8.0.0")"
 
@@ -50,6 +77,23 @@ fi
 printf 'Generating CAST plugin v%s → %s\n' "$VERSION" "$OUT"
 [[ "$WITH_EXTRAS" == "true" ]] && printf '  (--with-extras: opt-in tier included)\n'
 
+# --- Step 1b: refuse a symlinked output dir (fail closed) ---
+# An agent-planted `plugin` -> <dir> symlink would make every cp below write through the link into an
+# arbitrary directory. Refuse OUT itself being a symlink, or resolving anywhere but directly under
+# its (resolved) parent. Missing OUT is fine (created below).
+if [[ -L "$OUT" ]]; then
+  printf 'ERROR: output dir is a symlink — refusing to write through it (fail closed)\n' >&2
+  exit 1
+fi
+if [[ -d "$OUT" ]]; then
+  _out_real="$(cd -P -- "$OUT" 2>/dev/null && pwd -P)" || _out_real=""
+  _out_parent_real="$(cd -P -- "$(dirname "$OUT")" 2>/dev/null && pwd -P)" || _out_parent_real=""
+  if [[ -z "$_out_real" || -z "$_out_parent_real" || "$_out_real" != "${_out_parent_real%/}/$(basename "$OUT")" ]]; then
+    printf 'ERROR: output dir does not resolve directly under its parent — refusing (fail closed)\n' >&2
+    exit 1
+  fi
+fi
+
 # --- Step 2: Clean + recreate output dirs ---
 if [[ -d "$OUT" ]]; then
   cast_declare_blast_radius "$(dirname "$OUT")"
@@ -62,6 +106,14 @@ mkdir -p \
   "${OUT}/hooks" \
   "${OUT}/scripts" \
   "${OUT}/.claude-plugin"
+# Every dir written into must be a real directory just created above, never a symlink (a swap
+# between the rm and the mkdir would otherwise redirect the writes).
+for _d in "$OUT" "${OUT}/agents" "${OUT}/skills" "${OUT}/commands" "${OUT}/hooks" "${OUT}/scripts" "${OUT}/.claude-plugin"; do
+  if [[ -L "$_d" || ! -d "$_d" ]]; then
+    printf 'ERROR: output subdir is a symlink or missing — refusing (fail closed)\n' >&2
+    exit 1
+  fi
+done
 
 # --- Step 3: Agents (curated keep-list) ---
 LEAN_AGENTS=(
@@ -228,7 +280,7 @@ if [[ -d "${REPO_ROOT}/skills" ]]; then
   # working-tree `cp -r` — a silent fallback would reintroduce this exact
   # leak, invisibly, in CI, a tarball build, or a fresh clone.
   _skills_tracked_list="$(mktemp)"
-  if ! git -C "${REPO_ROOT}" ls-files -z -- 'skills' > "${_skills_tracked_list}"; then
+  if ! cast_git_safe "${REPO_ROOT}" ls-files -z -- 'skills' > "${_skills_tracked_list}"; then
     printf 'ERROR: git ls-files failed for skills/ — refusing to fall back to a working-tree copy (fail closed)\n' >&2
     rm -f "${_skills_tracked_list}"
     exit 1
@@ -295,7 +347,7 @@ if [[ -d "${REPO_ROOT}/commands" ]]; then
   # skills/ above (fail closed; no working-tree fallback; see the comment
   # on that block for the full rationale).
   _commands_tracked_list="$(mktemp)"
-  if ! git -C "${REPO_ROOT}" ls-files -z -- 'commands/*.md' > "${_commands_tracked_list}"; then
+  if ! cast_git_safe "${REPO_ROOT}" ls-files -z -- 'commands/*.md' > "${_commands_tracked_list}"; then
     printf 'ERROR: git ls-files failed for commands/ — refusing to fall back to a working-tree glob (fail closed)\n' >&2
     rm -f "${_commands_tracked_list}"
     exit 1
@@ -365,6 +417,12 @@ printf '  Commands: %d copied\n' "$CMD_COUNT"
 # Use git ls-files for reproducibility — only tracked, top-level scripts are shipped;
 # untracked junk (.DS_Store, temp files) is automatically excluded.
 SCRIPT_COUNT=0
+# Capture first: a refused/failed cast_git_safe inside a process substitution would otherwise read
+# as an empty list (silently shipping a plugin with no scripts). Fail closed.
+_scripts_tracked="$(cast_git_safe "$REPO_ROOT" ls-files -- 'scripts/')" || {
+  printf 'ERROR: git ls-files failed for scripts/ — refusing to continue (fail closed)\n' >&2
+  exit 1
+}
 while IFS= read -r rel; do
   f="${REPO_ROOT}/${rel}"
   [[ -f "$f" ]] || continue
@@ -376,7 +434,7 @@ while IFS= read -r rel; do
   [[ "$skip_script" == true ]] && continue
   cp "$f" "${OUT}/scripts/"
   SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
-done < <(git -C "$REPO_ROOT" ls-files -- 'scripts/' | grep -E '^scripts/[^/]+$')
+done < <(printf '%s\n' "$_scripts_tracked" | grep -E '^scripts/[^/]+$' || true)
 
 printf '  Scripts: %d copied\n' "$SCRIPT_COUNT"
 

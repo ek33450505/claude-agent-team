@@ -419,3 +419,41 @@ teardown() {
   [[ -z "$ended_at" ]]
   unset CLAUDE_SESSION_ID
 }
+
+# S3b: per-session state is cleaned from the 0700 ~/.claude/cast-state dir (validated id, no
+# symlink following); other sessions' files are untouched; legacy /tmp names are still removed.
+@test "S3b cleanup: removes this session's state-dir files and legacy /tmp files, keeps other sessions'" {
+  local sd="$HOME/.claude/cast-state" victim="$BATS_TEST_TMPDIR/victim.txt"
+  echo SAFE > "$victim"
+  mkdir -m 700 -p "$sd"
+  : > "$sd/cast-session-start-sess-end-1.epoch"
+  : > "$sd/cast-blocked-sess-end-1-backend-writer.count"
+  : > "$sd/cast-blocked-sess-end-1-debugger.count"
+  : > "$sd/cast-session-start-sess-other.epoch"
+  : > "$sd/cast-blocked-sess-other-debugger.count"
+  ln -s "$victim" "$sd/cast-blocked-sess-end-1-linked.count"
+  : > "$TMPDIR/cast-blocked-sess-end-1-x.count"
+  : > "$TMPDIR/cast-session-start-sess-end-1.epoch"
+  export CLAUDE_SESSION_ID="sess-end-1"
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+  [ ! -e "$sd/cast-session-start-sess-end-1.epoch" ]
+  [ -z "$(ls "$sd" | grep 'sess-end-1')" ]
+  [ ! -L "$sd/cast-blocked-sess-end-1-linked.count" ]
+  assert_equal "$(cat "$victim")" "SAFE"
+  [ -e "$sd/cast-session-start-sess-other.epoch" ]
+  [ -e "$sd/cast-blocked-sess-other-debugger.count" ]
+  [ ! -e "$TMPDIR/cast-blocked-sess-end-1-x.count" ]
+  [ ! -e "$TMPDIR/cast-session-start-sess-end-1.epoch" ]
+}
+
+@test "S3b cleanup: a symlinked state dir is never traversed" {
+  local victim_dir="$BATS_TEST_TMPDIR/vd"
+  mkdir -p "$victim_dir"
+  : > "$victim_dir/cast-session-start-sess-end-2.epoch"
+  ln -s "$victim_dir" "$HOME/.claude/cast-state"
+  export CLAUDE_SESSION_ID="sess-end-2"
+  run bash "$HOOK_SH" <<< ""
+  assert_success
+  [ -e "$victim_dir/cast-session-start-sess-end-2.epoch" ]
+}

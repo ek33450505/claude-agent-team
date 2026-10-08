@@ -1319,3 +1319,27 @@ _gq_copy_reg() { # [plain] -> injected copy with the hook line just before the r
   [ -d "$GX_REPO/.claude/worktrees/agent-x" ]
   [ -z "$(find "$BATS_TEST_TMPDIR/qtarget" -mindepth 1 2>/dev/null)" ]
 }
+
+# S3b-D (2026-10-07): the groomer runs under launchd with an unpinned PATH and resolved python3 /
+# mktemp by NAME. PATH is now pinned to the system dirs, so a python3/mktemp planted earlier on PATH
+# never runs (the control: the same shims DO fire when invoked through that PATH directly).
+@test "groomer S3b-D: a python3/mktemp planted first on PATH never runs (control: the shims fire when PATH is used)" {
+  _gx_setup
+  local shim="$BATS_TEST_TMPDIR/evilbin" tool
+  mkdir -p "$shim"
+  for tool in python3 mktemp; do
+    printf '#!/bin/sh\ntouch "%s/fired-path-%s"\nexit 99\n' "$GX_MARK" "$tool" > "$shim/$tool"
+    chmod +x "$shim/$tool"
+  done
+  # CONTROL: with this PATH the shims are what `python3`/`mktemp` resolve to
+  PATH="$shim:$PATH" run bash -c 'python3 -c pass; mktemp'
+  [ "$(_gx_fired)" -eq 2 ]
+  rm -f "$GX_MARK"/fired-*
+  git -C "$GX_REPO" worktree add -q "$GX_REPO/.claude/worktrees/agent-pin" -b pin-branch
+  touch -t 202001010000 "$GX_REPO/.claude/worktrees/agent-pin"
+  PATH="$shim:$PATH" run bash "$GROOMER" --apply --worktrees --repo "$GX_REPO"
+  assert_success
+  assert_output --partial "Removed worktree"
+  [ "$(_gx_fired)" -eq 0 ]
+  [ ! -d "$GX_REPO/.claude/worktrees/agent-pin" ]
+}

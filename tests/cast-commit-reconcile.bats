@@ -9,6 +9,7 @@
 
 bats_require_minimum_version 1.5.0
 load helpers/setup
+load helpers/prepush-installed
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 RECONCILE="$REPO_ROOT/scripts/cast-commit-reconcile.py"
@@ -527,24 +528,26 @@ json_field() {
 
 # ===========================================================================
 # .githooks/pre-push surfaces the reconcile result honestly.
-# The hook is driven in a temp git repo whose scripts/cast-commit-reconcile.py
-# is a STUB (prints $STUB_OUT, writes $STUB_ERR to stderr, exits $STUB_RC), with
-# every other gate skipped — this isolates the reconcile block of the hook.
+# The hook is driven in a temp git repo against an INSTALLED (temp-HOME)
+# ~/.claude/scripts/cast-commit-reconcile.py that is a STUB (prints $STUB_OUT, writes
+# $STUB_ERR to stderr, exits $STUB_RC), with every other gate skipped — this isolates
+# the reconcile block of the hook. (The hook runs only installed scripts, never repo files.)
 # Before the fix the hook discarded the script's stderr on exit 0 and printed
 # "reconcile OK" even for an unverifiable (not-performed) check.
 # ===========================================================================
 
 prepush_fixture() {
     PP_REPO="$BATS_TEST_TMPDIR/pp-repo"
-    mkdir -p "$PP_REPO/scripts"
+    mkdir -p "$PP_REPO"
     git init -q "$PP_REPO"
+    seed_prepush_install
     printf '%s\n' \
         '#!/usr/bin/env python3' \
         'import os, sys' \
         'sys.stdout.write(os.environ.get("STUB_OUT", "") + "\n")' \
         'sys.stderr.write(os.environ.get("STUB_ERR", "") + "\n")' \
         'sys.exit(int(os.environ.get("STUB_RC", "0")))' \
-        > "$PP_REPO/scripts/cast-commit-reconcile.py"
+        > "$INSTALLED/cast-commit-reconcile.py"
     export PP_REPO PRE_PUSH_HOOK
     export CAST_SKIP_PII_CHECK=1 CAST_SKIP_STATS_PUSH=1 CAST_SKIP_DB_CONTRACT=1
     export CAST_SKIP_LEDGER_CHECK=1 CAST_SKIP_RULES_DRIFT=1 CAST_SKIP_README_STRUCTURE=1
@@ -668,13 +671,13 @@ run_prepush_hook() {
 # REAL-script end-to-end: the tests above feed the hook a STUB literal, so a change
 # to the real script's json.dumps formatting (e.g. separators) would silently drop
 # the hook's exact-match onto its fallback branch. These drive the hook with the
-# real script (+ its cast_db.py sibling) copied into the temp repo.
+# real script (+ its cast_db.py sibling) installed into the temp HOME.
 # ---------------------------------------------------------------------------
 
 prepush_real_script_fixture() {
     prepush_fixture
-    cp "$RECONCILE" "$PP_REPO/scripts/cast-commit-reconcile.py"
-    cp "$REPO_ROOT/scripts/cast_db.py" "$PP_REPO/scripts/cast_db.py"
+    cp "$RECONCILE" "$INSTALLED/cast-commit-reconcile.py"
+    cp "$REPO_ROOT/scripts/cast_db.py" "$INSTALLED/cast_db.py"
     export CAST_AUDIT_PATH="$AUDIT_FILE"
     export CAST_DB_PATH="$CAST_DB"
     export CAST_RECONCILE_CHECKPOINT="$CHECKPOINT"

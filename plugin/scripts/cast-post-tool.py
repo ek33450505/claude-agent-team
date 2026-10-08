@@ -17,6 +17,8 @@ import json
 import os
 import re
 import fcntl
+import unicodedata
+import stat
 
 # Security auto-dispatch helpers
 SECURITY_EXTENSIONS = re.compile(r'\.(sh|py)$')
@@ -45,6 +47,66 @@ def _read_stdin_json():
         return {}
 
 
+def _sanitize_text(value, limit: int = 200) -> str:
+    """Make attacker-influenced text safe to reflect into model context / a log.
+
+    Drops every control (Cc), format (Cf: bidi overrides, zero-width), surrogate (Cs) and
+    line/paragraph-separator (Zl U+2028, Zp U+2029) char, neutralises `[`/`]` to `(`/`)` so
+    agent-derived text cannot forge a `[CAST-...]` directive, then caps the length. Non-str input
+    renders as ''.
+    """
+    if not isinstance(value, str):
+        return ""
+    cleaned = "".join(c for c in value if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Zl", "Zp"))
+    cleaned = cleaned.replace("[", "(").replace("]", ")")
+    return cleaned if len(cleaned) <= limit else cleaned[:limit] + "..."
+
+
+_AGENT_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _safe_agent_name(value) -> str:
+    """A plain agent-name token, else 'unknown' (written to status files, echoed by the reader)."""
+    return value if isinstance(value, str) and _AGENT_NAME_RE.fullmatch(value) else "unknown"
+
+
+def _project_root(data: dict) -> str:
+    """The session's project root: CLAUDE_PROJECT_DIR, else the payload cwd; '' when unknown."""
+    root = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or ""
+    return root if isinstance(root, str) and root.startswith("/") else ""
+
+
+def _inside_project(data: dict, file_path: str) -> bool:
+    """False when the session's project root is known and file_path resolves OUTSIDE it.
+
+    A scratch file in /tmp or another repo must not trigger this session's review chain. With no
+    known root the legacy behaviour (fire) is kept.
+    """
+    root = _project_root(data)
+    if not root or not isinstance(file_path, str) or not file_path:
+        return True
+    try:
+        real = os.path.realpath(os.path.join(root, file_path))
+        base = os.path.realpath(root).rstrip("/")
+    except Exception:
+        return True
+    return real == base or real.startswith(base + "/")
+
+
+def _log_debug(msg: str) -> None:
+    """One-line record to ~/.claude/logs/hook-debug.log (no behaviour change). Never raises."""
+    try:
+        import datetime as _dt
+        log_path = os.path.expanduser("~/.claude/logs/hook-debug.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "a") as f:
+            f.write(f"[{ts}] DEBUG cast-post-tool.py: {_sanitize_text(msg, 700)}\n")
+    except Exception:
+        pass
+
+
 def _hook_output(msg: str) -> None:
     """Print a hookSpecificOutput JSON blob to stdout."""
     print(json.dumps({
@@ -63,6 +125,12 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
     # Review Gate: the dispatching session runs code-reviewer / security. A
     # subagent structurally cannot, so never instruct one to (it burns turns).
     if _in_subagent(data):
+        return
+
+    # Only files inside this session's project warrant its review chain (not /tmp scratch files).
+    if not _inside_project(data, file_path):
+        _log_debug(f"part1 directive suppressed: {_sanitize_text(file_path, 300)} is outside project root "
+                   f"{_sanitize_text(_project_root(data), 300)}")
         return
 
     is_code_file = bool(re.search(r'\.(js|jsx|ts|tsx|sh|py|mjs|cjs)$', file_path))
@@ -102,8 +170,8 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
     if is_code_file:
         msg = (
             "[CAST-CHAIN] Code file modified. MANDATORY: After completing your current logical unit, "
-            "dispatch in sequence: (1) `code-reviewer` (haiku) — review all changes in this unit. "
-            "(2) `test-writer` (sonnet) if logic was added. "
+            "dispatch in sequence: (1) `code-reviewer` — review all changes in this unit. "
+            "(2) `test-writer` if logic was added. "
             "Do NOT proceed to next unit or commit until code-reviewer returns Status: DONE or DONE_WITH_CONCERNS. "
             "Skipping is a protocol violation."
         )
@@ -122,6 +190,9 @@ def part1_directive(data: dict, tool_name: str, file_path: str) -> None:
         )
 
 
+_PLAN_READ_CAP = 256 * 1024
+
+
 def part2_plan_manifest(tool_name: str, file_path: str) -> None:
     """Detect Agent Dispatch Manifests in .md plan files."""
     if not (tool_name == "Write" and "/plans/" in file_path and file_path.endswith(".md")):
@@ -137,18 +208,37 @@ def part2_plan_manifest(tool_name: str, file_path: str) -> None:
         return
 
     try:
-        with open(real_path) as f:
-            contents = f.read()
+        # Bounded read: a plan can be arbitrarily large (or a FIFO/huge file); the manifest marker is
+        # looked for in the first _PLAN_READ_CAP bytes only.
+        with open(real_path, errors="replace") as f:
+            contents = f.read(_PLAN_READ_CAP)
     except Exception:
         return
 
     if "```json dispatch" in contents:
         msg = (
-            f"[CAST-ORCHESTRATE] Plan file at {real_path} contains an Agent Dispatch Manifest. "
+            f"[CAST-ORCHESTRATE] Plan file at {_sanitize_text(real_path, 300)} contains an Agent Dispatch Manifest. "
             "Invoke the `/orchestrate` skill with this plan file path. "
             "Present the queue to the user for approval before executing any batches."
         )
         _hook_output(msg)
+
+
+_ROUTING_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _rotate_routing_log(log_path: str) -> None:
+    """Rotate live -> .1 (after .1 -> .2). Refuses a symlinked LIVE log; a symlink planted at
+    .1/.2 is unlinked (the link itself, never its target) so rotation still bounds growth."""
+    old1, old2 = log_path + ".1", log_path + ".2"
+    if os.path.islink(log_path):
+        return
+    for p in (old1, old2):
+        if os.path.islink(p):
+            os.unlink(p)
+    if os.path.exists(old1):
+        os.replace(old1, old2)
+    os.replace(log_path, old1)
 
 
 def _append_routing_log(entry: dict) -> None:
@@ -156,18 +246,20 @@ def _append_routing_log(entry: dict) -> None:
     log_path = os.path.expanduser("~/.claude/routing-log.jsonl")
     line = json.dumps(entry)
     try:
-        with open(log_path, "a") as f:
+        # O_NOFOLLOW: a symlink planted at the log path is refused (ELOOP -> dropped), never followed.
+        # O_NONBLOCK: opening a FIFO planted at the log path must not hang the hook (ENXIO without a
+        # reader -> dropped); a non-regular file that DID open is skipped below.
+        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return
+        with os.fdopen(fd, "a") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             f.write(line + "\n")
             f.flush()
             try:
-                if os.path.getsize(log_path) > 5 * 1024 * 1024:
-                    old2 = log_path + ".2"
-                    old1 = log_path + ".1"
-                    if os.path.exists(old2):
-                        os.remove(old2)
-                    if os.path.exists(old1):
-                        os.rename(old1, old2)
+                if os.fstat(f.fileno()).st_size > _ROUTING_LOG_MAX_BYTES:
+                    _rotate_routing_log(log_path)
             except Exception:
                 pass
             # lock released on close
@@ -175,14 +267,58 @@ def _append_routing_log(entry: dict) -> None:
         pass
 
 
+# In-process cast-redact.py (same module cast_subagent_stop.py uses for response excerpts).
+_REDACT_MOD = None  # None=unattempted, False=import failed, module=loaded
+
+
+def _get_redact_module():
+    global _REDACT_MOD
+    if _REDACT_MOD is not None:
+        return _REDACT_MOD or None
+    try:
+        import importlib.util as _ilu
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cast-redact.py")
+        spec = _ilu.spec_from_file_location("cast_redact", path)
+        if spec and spec.loader:
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _REDACT_MOD = mod
+            return mod
+    except Exception:
+        pass
+    _REDACT_MOD = False
+    return None
+
+
+def _redacted_preview(prompt) -> str:
+    """80-char single-line preview of a dispatch prompt with secrets/PII redacted.
+
+    Redaction runs on a larger head first so a secret straddling the 80-char cut is still matched.
+    Fail closed: if redaction is unavailable or errors, no preview is logged.
+    """
+    if not isinstance(prompt, str) or not prompt:
+        return ""
+    # Sanitize FIRST: a zero-width/format char inside a token would otherwise split it so the regexes
+    # miss it, and it would then be stripped AFTER redaction, re-forming the secret in the log.
+    head = _sanitize_text(re.sub(r"[\r\n\t]", " ", prompt[:512]), 512)
+    mod = _get_redact_module()
+    if mod is None:
+        return "[redaction unavailable]"
+    try:
+        head = mod.redact_regex(head, mod.analyze_regex(head, []), "redact")
+    except Exception:
+        return "[redaction unavailable]"
+    return _sanitize_text(head, 80)
+
+
 def part3_agent_logging(data: dict) -> None:
     """Log agent dispatch to routing-log.jsonl and write status file."""
     import datetime
 
     ti = data.get("tool_input", {})
-    subagent_type = ti.get("subagent_type", ti.get("agent_type", "unknown"))
+    subagent_type = _safe_agent_name(ti.get("subagent_type", ti.get("agent_type", "unknown")))
     prompt = ti.get("prompt", ti.get("task", ""))
-    prompt_preview = prompt[:80].replace("\n", " ")
+    prompt_preview = _redacted_preview(prompt)
 
     session_id = os.environ.get("CLAUDE_SESSION_ID", "unknown")
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -202,7 +338,6 @@ def part3_agent_logging(data: dict) -> None:
     status_dir = os.path.expanduser("~/.claude/agent-status")
     os.makedirs(status_dir, exist_ok=True)
     ts_compact = timestamp.replace(":", "").replace("-", "")[:15] + "Z"
-    status_file = os.path.join(status_dir, f"chain-dispatch-{ts_compact}.json")
 
     status_data = {
         "agent": "dispatcher",
@@ -213,8 +348,23 @@ def part3_agent_logging(data: dict) -> None:
         "timestamp": timestamp
     }
     try:
-        with open(status_file, "w") as f:
-            json.dump(status_data, f, indent=2)
+        # Unpredictable name + O_EXCL|O_NOFOLLOW + 0600: a pre-planted file or symlink at the path is
+        # never opened/followed (the old predictable name + open(..., "w") followed symlinks).
+        # The reader picks the latest file by sorted name, so the timestamp prefix is kept.
+        last_err = None
+        for _ in range(5):
+            status_file = os.path.join(status_dir, f"chain-dispatch-{ts_compact}-{os.urandom(4).hex()}.json")
+            try:
+                fd = os.open(status_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            except FileExistsError as e:
+                last_err = e
+                continue
+            with os.fdopen(fd, "w") as f:
+                json.dump(status_data, f, indent=2)
+            last_err = None
+            break
+        if last_err is not None:
+            raise last_err
     except Exception as e:
         print(f"ERROR: status file write failed: {e}", file=sys.stderr)
         sys.exit(1)

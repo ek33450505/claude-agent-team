@@ -12,9 +12,9 @@ be blocked by a DB write failure.
 
 import argparse
 import datetime
-import glob
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -160,16 +160,47 @@ def cmd_recent_status(agent: str, max_age: int) -> None:
     """Print the status field from the most recent fresh status file, or nothing."""
     status_dir = Path.home() / '.claude' / 'agent-status'
     # Match the bare agent's status files AND its `<agent>__<label>` dispatch-naming
-    # variant (working-conventions.md dispatch-naming rule): a status file for
-    # "code-reviewer__fix-x" is named "code-reviewer__fix-x-<ts>.json" and the bare
-    # "{agent}-*.json" glob misses it.
-    files = glob.glob(str(status_dir / f'{agent}-*.json'))
-    files += glob.glob(str(status_dir / f'{agent}__*-*.json'))
+    # variant (working-conventions.md dispatch-naming rule) by an EXACT filename
+    # grammar, not a prefix glob: `<agent>[__<label>]-<ts>[-<pid>-<hex>].json` where
+    # <ts> is `YYYYmmddTHHMMSSZ` (cast_write_status) or bare digits (legacy). A prefix
+    # glob let `--agent code` match `code-reviewer-<ts>.json`. DISPLAY-ONLY: nothing
+    # here gates anything.
+    name_re = re.compile(
+        re.escape(agent) + r'(?:__[A-Za-z0-9_-]+)?-(?:\d{8}T\d{6}Z|\d+)(?:-\d+-[0-9a-f]+)?\.json'
+    )
+    try:
+        names = os.listdir(status_dir)
+    except OSError:
+        sys.exit(0)
+    files = [str(status_dir / n) for n in names if name_re.fullmatch(n)]
     if not files:
         sys.exit(0)
 
-    files.sort(key=lambda f: os.path.getmtime(f), reverse=True)
-    most_recent = files[0]
+    def _mtime(f):
+        try:
+            return os.path.getmtime(f)
+        except OSError:
+            return 0.0
+
+    files.sort(key=_mtime, reverse=True)
+    # Second check on the PARSED identity: when the record carries an `agent` field it
+    # must be this agent or its `<agent>__<label>` variant (the filename is only a
+    # prefilter). A record without the field (or unreadable) is trusted on its name.
+    most_recent = None
+    for f in files:
+        try:
+            with open(f) as fh:
+                rec_agent = json.load(fh).get('agent')
+        except Exception:
+            rec_agent = None
+        if isinstance(rec_agent, str) and rec_agent and not (
+            rec_agent == agent or rec_agent.startswith(agent + '__')
+        ):
+            continue
+        most_recent = f
+        break
+    if most_recent is None:
+        sys.exit(0)
 
     try:
         file_mtime = int(os.path.getmtime(most_recent))

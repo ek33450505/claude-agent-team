@@ -11,8 +11,34 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-GEN_SCRIPT="${REPO_ROOT}/scripts/gen-plugin.sh"
+# Hardened git (cast_git_safe): repo-local exec config (core.fsmonitor, ...) must not run from a
+# hook. FAIL CLOSED if the lib is not loadable beside this script — never fall back to bare git.
+# The -r guard matters: on bash 3.2 a bare `source <missing-file>` aborts under set -e.
+_CAST_LIB="$(dirname "$0")/cast-hook-lib.sh"
+# shellcheck source=cast-hook-lib.sh
+if [[ -r "$_CAST_LIB" ]] && source "$_CAST_LIB"; then
+  :
+else
+  printf 'ERROR: cast-hook-lib.sh not loadable beside %s — refusing to run (fail closed)\n' "$0" >&2
+  exit 1
+fi
+# CAST_REPO_ROOT wins (installed-copy mode: the hook passes the repo as data and this
+# script lives in ~/.claude/scripts); else this script's own checkout. GIT_DIR/GIT_WORK_TREE
+# are not inherited (a git hook exports the committing worktree's gitdir, S3c-15).
+# GIT_INDEX_FILE is kept in the ENVIRONMENT (inherited by the gen-plugin.sh child, which enumerates
+# the index with `git ls-files` and opts in via CAST_GIT_SAFE_INDEX_FILE).
+if [[ -n "${CAST_REPO_ROOT+x}" ]]; then
+  if [[ "$CAST_REPO_ROOT" != /* || ! -d "$CAST_REPO_ROOT" ]]; then
+    printf 'ERROR: CAST_REPO_ROOT must be an absolute path to an existing directory: %s\n' "$CAST_REPO_ROOT" >&2
+    exit 1
+  fi
+  REPO_ROOT="$CAST_REPO_ROOT"
+else
+  REPO_ROOT="$(cast_git_safe "$(dirname "$0")" rev-parse --show-toplevel)"
+fi
+# The generator is the SIBLING of this script (the installed copy when installed), never
+# the repo's own scripts/ — an installed gate must not execute repo-writable code.
+GEN_SCRIPT="$(dirname "$0")/gen-plugin.sh"
 
 # Load the cast-guard-lib for safe destructive operations (data-integrity pillar)
 # Existence-checked before sourcing — see cast-guard-lib.sh header (bash 3.2 + set -e
@@ -41,7 +67,7 @@ trap 'cast_safe_rm "$TMP" 2>/dev/null || true' EXIT
 
 # Generate the plugin (ignore exit — gen-plugin.sh runs validate internally;
 # we re-run validate ourselves below for clean per-check output)
-bash "$GEN_SCRIPT" "$TMP" 2>/dev/null || true
+CAST_REPO_ROOT="$REPO_ROOT" bash "$GEN_SCRIPT" "$TMP" 2>/dev/null || true
 
 printf '\n--- Running drift checks ---\n'
 

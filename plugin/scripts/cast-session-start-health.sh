@@ -10,6 +10,12 @@
 #       hook_failures object is skipped quietly; anything else unreadable (locked, corrupt, a VIEW,
 #       timeout) shows a degraded notice. Module names are an allowlist (the child emits indexes,
 #       never DB text); all other rows fold into one "unrecognised module" line.
+#   (d) install integrity: scripts/cast-install-integrity.py verifies ~/.claude/install-manifest.sha256
+#       (sha256 of every deployed script/githook + config/policies.json, the githooks dir, and the
+#       CAST repo's core.hooksPath). Git hooks run from ~/.claude/githooks; if it vanishes git runs NO
+#       hooks, silently. Any mismatch is a loud alarm; a missing manifest (pre-manifest install) is an
+#       advisory. Child process, budgeted timeout; its text is sanitised before it reaches the banner
+#       (a filename or .git/config value is attacker-influenced). Checker missing/failed = degraded notice.
 #
 # Emits ONE JSON object (systemMessage + hookSpecificOutput) only when something needs attention.
 # Exits 0 always — never blocks a session.
@@ -37,11 +43,168 @@ export CAST_LAUNCHCTL_OUTPUT="$LAUNCHCTL_OUTPUT"
 export CAST_HOME="$HOME"
 
 python3 -I - <<'PYEOF' || _log_error "session-start-health python block failed (exit $?)"
-import json, os, subprocess, sys, time
+import json, os, re, stat, subprocess, sys, time
 
 _T0 = time.monotonic()  # hook budget: Claude Code kills the hook at 5s
 home = os.environ.get("CAST_HOME", os.path.expanduser("~"))
 launchctl_out = os.environ.get("CAST_LAUNCHCTL_OUTPUT", "")
+
+# ── Install integrity (d) - runs FIRST ────────────────────────────────────────
+# First on purpose: it is the only check whose budget scales its verification coverage (a starved
+# checker verifies nothing), so it must get its full budget before the stale-memory scanner (<=2s) and
+# the guard-failure check (budget = 4.0s - elapsed, floor 0.5s) spend the hook's 5s. Worst case:
+# 2.0s here + 2.0s scanner + 0.5s guard = 4.5s, inside the kill.
+# Runs scripts/cast-install-integrity.py --json in a child (same lookup order as the stale-memory
+# scanner). Hashing ~190 small files in-process is a few ms, so the full sha256 compare always runs
+# (no size/mtime shortcut that a same-size edit could slip past). The child's JSON is re-validated and
+# every detail string is reduced to a safe charset + length-capped before it can reach model context.
+integ_problems = []     # sanitised detail strings
+integ_dropped = 0
+integ_advisory = ""     # sanitised advisory text (missing manifest)
+integ_error = ""        # fixed-vocabulary label when the check could not complete
+integ_skipped = False   # an incremental run that verified NOTHING while caches were pending (no budget)
+integ_pending = 0       # bytecode caches not yet verified (incremental run out of budget; resumes next session)
+_checker = os.path.join(home, ".claude", "scripts", "cast-install-integrity.py")
+if not os.path.isfile(_checker):
+    _sib2 = os.path.join(os.environ.get("CAST_HEALTH_SCRIPT_DIR", ""), "cast-install-integrity.py")
+    if _sib2 and os.path.isfile(_sib2):
+        _checker = _sib2
+if not os.path.isfile(_checker):
+    _repo2 = os.environ.get("CAST_REPO_DIR", "")
+    if _repo2:
+        _checker = os.path.join(_repo2, "scripts", "cast-install-integrity.py")
+
+
+# The model-visible notice carries NO checker-supplied free text (file names, git config values and
+# paths are attacker-influenced). Only a fixed phrase per problem KIND, plus - for manifest-listed
+# files only - a path that passes a strict allowlist regex; any other name is shown as a short hash.
+# Full names live in `cast doctor` output (a terminal, not model context).
+_SAFE_REL = re.compile(r"^(scripts|githooks|config)(/[A-Za-z0-9][A-Za-z0-9._-]{0,60}){1,2}$")
+_FIXED_PHRASE = {
+    "manifest-unreadable": "install manifest is unreadable",
+    "manifest-invalid": "install manifest is malformed or truncated",
+    "hooks-dir": "~/.claude/githooks is missing or not a real directory - git runs NO hooks",
+    "hooks-path": "core.hooksPath of the CAST repo differs from the installed value (or could not be read)",
+    "hook-config": "git config defines hook.*.command/event or a worktree hook override - hooks run regardless of core.hooksPath",
+    "env": "session environment sets GIT_*/PYTHON* overrides that change which git config, hooks or programs run",
+    "pyc-unverified": "a bytecode cache cannot be verified by any installed interpreter - re-run bash install.sh to purge it",
+    "checker-error": "the integrity checker failed unexpectedly",
+}
+_PATH_PHRASE = {"missing": "is missing", "changed": "changed since install",
+                "pyc": "compiled cache does not match its source",
+                "pyc-stale": "has a stale bytecode cache (python would not load it) - not expected after install; re-run bash install.sh",
+                "mode": "has different permissions than installed (git skips a hook without its exec bit)"}
+_UNEXPECTED_PARENTS = ("githooks", "scripts", "scripts/migrations", "scripts/__pycache__",
+                       "scripts/migrations/__pycache__")
+
+
+def _h8(value):
+    import hashlib
+    return hashlib.sha256(str(value).encode("utf-8", "replace")).hexdigest()[:8]
+
+
+def _render_problem(prob):
+    kind = prob.get("kind") if isinstance(prob, dict) else None
+    path = prob.get("path") if isinstance(prob, dict) else None
+    if kind in _FIXED_PHRASE:
+        return _FIXED_PHRASE[kind]
+    if kind in _PATH_PHRASE:
+        tag = path if (isinstance(path, str) and _SAFE_REL.match(path)) else "an entry <" + _h8(path) + ">"
+        return f"{tag} {_PATH_PHRASE[kind]}"
+    if kind == "dir-type":
+        tag = path if path in ("scripts", "scripts/migrations", "config") else "a managed directory"
+        return f"~/.claude/{tag} is a symlink or not a directory"
+    if kind == "unexpected":
+        parent = os.path.dirname(path) if isinstance(path, str) else ""
+        parent = parent if parent in _UNEXPECTED_PARENTS else "a managed directory"
+        return f"unlisted entry <{_h8(path)}> in ~/.claude/{parent}/ - run cast doctor for its name"
+    return "unrecognised integrity problem"
+
+
+def _log_integrity_error(label):
+    try:
+        with open(os.path.join(home, ".claude", "logs", "hook-errors.log"), "a") as lf:
+            lf.write(f"ERROR cast-session-start-health install-integrity check: {label}\n")
+    except OSError:
+        pass
+
+
+# PYTHONEXECUTABLE overrides sys.executable even under -I (macOS), and every child below is SPAWNED from
+# it: a bogus value silently disables the checks and an existing fake file would be EXECUTED by the
+# hook. Children therefore run from a TRUSTED interpreter chosen by the checker's own rule
+# (_trusted_exes over _PY_CANDIDATES: owned by root or us, directory not world-writable) - the single
+# copy of that rule, loaded here by exec of the source (no .pyc is read, so a forged cache of the checker
+# cannot run in the hook). The env var itself is reported by the checker's env check. If the checker
+# cannot be loaded, sys.executable is left alone: a bogus value then fails loudly (degraded notice).
+_CHECKER_MAX = 1 << 20   # the real checker is ~40 KB; anything over 1 MiB is not it
+_checker_bad = False     # the checker file is not a plain, small, regular file (or failed to load)
+if os.path.isfile(_checker):
+    try:
+        # Read it like an untrusted file: O_NOFOLLOW (a symlink is refused, never followed), O_NONBLOCK
+        # (a FIFO cannot hang the open), fstat must say regular file, and at most cap+1 bytes are read
+        # (an oversized file is refused before it can cost time or memory). Any violation or error leaves
+        # integ_error set below - the degraded notice - and the file is NEVER executed, here or as a child.
+        _cfd = os.open(_checker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(_cfd).st_mode):
+                raise ValueError("checker is not a regular file")
+            with os.fdopen(_cfd, "rb", closefd=False) as _cf:
+                _csrc = _cf.read(_CHECKER_MAX + 1)
+        finally:
+            os.close(_cfd)
+        if len(_csrc) > _CHECKER_MAX:
+            raise ValueError("checker over the size cap")
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            _ns = {"__name__": "cast_install_integrity", "__file__": _checker}
+            exec(compile(_csrc, _checker, "exec"), _ns)
+        _exes = _ns["_trusted_exes"](_ns["_PY_CANDIDATES"])
+        _real = os.path.realpath(sys.executable)
+        sys.executable = next((e for e in _exes if os.path.realpath(e) == _real), _exes[0] if _exes else sys.executable)
+    except Exception:
+        _checker_bad = True
+
+if not os.path.isfile(_checker):
+    # No manifest AND no checker = a pre-manifest install; with a manifest it is a real gap.
+    if os.path.lexists(os.path.join(home, ".claude", "install-manifest.sha256")):
+        integ_error = "checker not found"
+        _log_integrity_error(integ_error)
+    else:
+        integ_advisory = "no install integrity manifest - run bash install.sh to create it"
+elif _checker_bad:
+    integ_error = "checker failed"
+    _log_integrity_error(integ_error)
+else:
+    try:
+        _ib = max(0.8, min(2.0, 4.5 - (time.monotonic() - _T0)))
+        _ir = subprocess.run(
+            [sys.executable, "-I", _checker, "--json", "--home", home, "--incremental",
+             "--budget", "%.2f" % max(0.3, _ib - 0.35)],
+            capture_output=True, timeout=_ib, stdin=subprocess.DEVNULL,
+        )
+        if _ir.returncode not in (0, 1) or not _ir.stdout or len(_ir.stdout) > 65536:
+            raise ValueError("checker exit/stdout shape")
+        _ires = json.loads(_ir.stdout[:65536].decode("utf-8", "replace"))
+        _istate = _ires["state"]
+        if _istate not in ("ok", "alarm", "advisory") or not isinstance(_ires["problems"], list):
+            raise ValueError("checker state")
+        integ_pending = max(0, min(100000, int(_ires.get("pending", 0))))
+        _icaches = _ires.get("caches")
+        integ_skipped = bool(integ_pending) and isinstance(_icaches, dict) and _icaches.get("verified") == 0
+        if _istate == "advisory":
+            integ_advisory = "no install integrity manifest - run bash install.sh to create it"
+        elif _istate == "alarm":
+            for _p in _ires["problems"][:20]:
+                integ_problems.append(_render_problem(_p))
+            integ_dropped = max(0, len(_ires["problems"]) - 20) + max(0, int(_ires.get("dropped", 0)))
+            if not integ_problems:
+                raise ValueError("alarm without problems")
+    except subprocess.TimeoutExpired:
+        integ_error = "timeout"
+        _log_integrity_error(integ_error)
+    except Exception:  # bad JSON / shape / spawn failure: loud, never silent
+        integ_error = "checker failed"
+        _log_integrity_error(integ_error)
 
 # ── Stale memory detection ────────────────────────────────────────────────────
 # Canonical logic lives in cast-stale-memories.py (shared with bin/cast doctor).
@@ -335,7 +498,8 @@ if os.path.isfile(_db_path):  # nonexistent DB = quiet skip (and we never create
 stale_count = len(stale_memories)
 fail_count = len(failing_jobs)
 
-if stale_count == 0 and fail_count == 0 and guard_total == 0 and not guard_check_error:
+if (stale_count == 0 and fail_count == 0 and guard_total == 0 and not guard_check_error
+        and not integ_problems and not integ_advisory and not integ_error and not integ_pending):
     import sys; sys.exit(0)
 
 # Build compact banner line
@@ -343,6 +507,17 @@ mem_word = "memory" if stale_count == 1 else "memories"
 job_word = "job" if fail_count == 1 else "jobs"
 
 parts = []
+if integ_problems:
+    _n = len(integ_problems) + integ_dropped
+    parts.append(f"⚠ install integrity: {_n} problem{'s' if _n != 1 else ''} — git hooks / guard scripts may be altered")
+if integ_error:
+    parts.append(f"install integrity check could not complete ({integ_error})")
+if integ_advisory:
+    parts.append("install integrity manifest missing")
+if integ_skipped:
+    parts.append(f"⚠ install integrity: bytecode verification SKIPPED this session (no time budget, {integ_pending} caches unchecked)")
+elif integ_pending:
+    parts.append(f"install integrity: bytecode verification incomplete ({integ_pending} pending)")
 if guard_total > 0:
     guard_word = "failure" if guard_total == 1 else "failures"
     parts.append(f"⚠ {guard_total} guard load {guard_word} in 7d — protection was DISABLED")
@@ -356,6 +531,35 @@ banner = "🩺 health | " + " · ".join(parts)
 
 # Build detail lines (cap at 5 each to stay terse)
 detail_lines = []
+if integ_problems:
+    detail_lines.append("## Install integrity (git hooks run from ~/.claude/githooks):")
+    for _d in integ_problems[:8]:
+        detail_lines.append(f"  • {_d}")
+    _more = max(0, len(integ_problems) - 8) + integ_dropped
+    if _more:
+        detail_lines.append(f"  … and {_more} more")
+    detail_lines.append("  Fix: re-run bash install.sh from the claude-agent-team checkout; names and values: cast doctor")
+if integ_error:
+    detail_lines.append("## Install integrity check degraded:")
+    detail_lines.append(
+        f"  Could not verify the install manifest ({integ_error}); tampering cannot be ruled out. "
+        "Re-run bash install.sh; details in ~/.claude/logs/hook-errors.log"
+    )
+if integ_skipped:
+    detail_lines.append("## Install integrity: bytecode cache verification SKIPPED this session:")
+    detail_lines.append(
+        f"  No time budget was left, so NONE of the {integ_pending} bytecode cache file(s) were checked - "
+        "a forged cache would not have been caught this session. Run `cast doctor` for the full check."
+    )
+elif integ_pending:
+    detail_lines.append("## Install integrity: bytecode cache verification incomplete:")
+    detail_lines.append(
+        f"  {integ_pending} cache file(s) not yet verified this session (time budget); verification "
+        "resumes next session. Run cast doctor for the full check."
+    )
+if integ_advisory:
+    detail_lines.append("## Install integrity manifest not found (advisory):")
+    detail_lines.append("  Advisory: run bash install.sh to create the integrity manifest (~/.claude/install-manifest.sha256).")
 if guard_total > 0:
     detail_lines.append("## Guard modules that failed to load (last 7 days):")
     for mod, cnt, last in guard_rows:

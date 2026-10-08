@@ -947,3 +947,86 @@ install_full_pass_shim() {
   run grep -c 'security\|sess-x' "$f"
   assert_failure
 }
+
+# ---------------------------------------------------------------------------
+# S3d item 1: the wrapper hands the payload to python on STDIN, not via an env var.
+# An env var is capped (E2BIG: ~1 MiB env+argv on macOS, 128 KiB per string on Linux):
+# an oversized payload failed the exec and wrote NO record, silently.
+# ---------------------------------------------------------------------------
+
+@test "S3d-6a: a 2 MiB payload still writes the gate record end to end (stdin transport, no E2BIG)" {
+  local big="$BATS_TEST_TMPDIR/big-payload.json"
+  write_sidecar adevops0070 '{"agentType":"devops"}'
+  python3 -c "
+import json, sys
+msg = 'x' * (2 * 1024 * 1024) + '\nStatus: DONE\nSummary: big\n'
+json.dump({'agent_type': 'devops', 'session_id': 'sess-gate-test', 'agent_id': 'adevops0070',
+           'stop_reason': 'end_turn', 'last_assistant_message': msg}, open(sys.argv[1], 'w'))
+" "$big"
+  # Vacuity guard: the payload really is over the macOS env+argv ceiling.
+  [[ "$(wc -c < "$big" | tr -d ' ')" -gt 2000000 ]]
+  run bash "$HOOK_SH" < "$big"
+  assert_success
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run grep -c '"status": "DONE"' "$f"
+  assert_success
+  assert_output "1"
+  run grep -c '"agent_type": "devops"' "$f"
+  assert_success
+  assert_output "1"
+}
+
+@test "S3d-6b: an inherited CAST_STOP_INPUT is never the payload — the stdin payload wins" {
+  local stale text
+  stale="$(make_stop_payload devops "$(printf 'ok\n\nStatus: DONE\n')" adevops0071)"
+  text="$(printf 'Found a problem.\n\nStatus: BLOCKED\nSummary: stop\n')"
+  write_sidecar adevops0071 '{"agentType":"devops"}'
+  run env CAST_STOP_INPUT="$stale" bash "$HOOK_SH" <<< "$(make_stop_payload devops "$text" adevops0071)"
+  assert_success
+  local f
+  f="$(first_record devops)"
+  [[ -n "$f" ]]
+  run grep -c '"status": "BLOCKED"' "$f"
+  assert_success
+  assert_output "1"
+}
+
+# ---------------------------------------------------------------------------
+# S3d item 2: an unreadable / missing-but-referenced transcript fails CLOSED.
+# ---------------------------------------------------------------------------
+
+@test "S3d-6c: empty payload + a transcript the payload references but is gone -> BLOCKED record with a reason, supersedes an older DONE" {
+  local done_text
+  done_text="$(printf 'Reviewed.\n\nStatus: DONE\nSummary: ok\n')"
+  write_sidecar adevops0072 '{"agentType":"devops"}'
+  run bash "$HOOK_SH" <<< "$(make_stop_payload devops "$done_text" adevops0072)"
+  assert_success
+  local seed
+  seed="$(first_record devops)"
+  [[ -n "$seed" ]]
+  set_age "$seed" 60
+  run_dispatch "$(payload_for_session sess-gate-test Write "file_path=.github/workflows/x.yml")"
+  assert_success   # sanity: the DONE record unblocks
+
+  # Handback-style stop: NO report text, agent_transcript_path set, no transcript on disk.
+  run bash "$HOOK_SH" <<< '{"agent_type":"devops","agent_id":"adevops0072","session_id":"sess-gate-test","agent_transcript_path":"/nonexistent/agent-adevops0072.jsonl","hook_event_name":"SubagentStop","stop_hook_active":false}'
+  assert_success
+  [[ "$(find "$HOME/.claude/agent-status" -type f -name '*.json' | wc -l | tr -d ' ')" -eq 2 ]]
+  local newest
+  newest="$(ls -t "$HOME/.claude/agent-status"/*.json | head -1)"
+  run grep -c '"status": "BLOCKED"' "$newest"
+  assert_success
+  assert_output "1"
+  run grep -c '"concerns": "transcript unreadable"' "$newest"
+  assert_success
+  assert_output "1"
+  run grep -c '"agent_type": "devops"' "$newest"
+  assert_success
+  assert_output "1"
+  # End to end: the gate is closed again instead of left open by the stale DONE.
+  run_dispatch "$(payload_for_session sess-gate-test Write "file_path=.github/workflows/x.yml")"
+  assert_failure
+  assert_output --partial "workflows-require-devops"
+}

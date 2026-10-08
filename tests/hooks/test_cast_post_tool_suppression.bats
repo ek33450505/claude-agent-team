@@ -93,6 +93,7 @@ PYEOF
 
   unset CLAUDE_SUBPROCESS
   unset CAST_ORCHESTRATE_ACTIVE
+  unset CLAUDE_PROJECT_DIR
 }
 
 teardown() {

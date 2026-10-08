@@ -3077,6 +3077,47 @@ PY
     fi
   fi
 
+  # Install integrity — the same checks the SessionStart health hook runs
+  # (scripts/cast-install-integrity.py): ~/.claude/githooks present, every file in
+  # ~/.claude/install-manifest.sha256 present + sha256-matching, no unlisted file in githooks/, and
+  # the recorded repo's core.hooksPath == the manifest value. Git hooks run unsandboxed from
+  # ~/.claude/githooks; if it vanishes git runs NO hooks, silently. A mismatch fails doctor; a
+  # missing manifest (pre-manifest install) is an advisory only.
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "${C_BOLD}Install integrity${C_RESET}\n"
+  local _ii_script="${CAST_SCRIPTS_DIR}/cast-install-integrity.py" _ii_out _ii_lvl _ii_msg
+  [ -f "$_ii_script" ] || _ii_script="${CAST_REPO_DIR}/scripts/cast-install-integrity.py"
+  if [ ! -f "$_ii_script" ]; then
+    printf "%b install integrity: checker not found (cast-install-integrity.py) — run: bash install.sh\n" "$WARN"
+  else
+    # Bounded: a hung checker (swapped-in FIFO, stuck git) must never hang doctor.
+    _ii_out="$(python3 -I - "$_ii_script" "$HOME" "${CAST_DOCTOR_INTEGRITY_TIMEOUT:-15}" 2>&1 <<'PYEOF' || true
+import subprocess, sys
+try:
+    r = subprocess.run([sys.executable, "-I", sys.argv[1], "--home", sys.argv[2]], capture_output=True,
+                       text=True, timeout=float(sys.argv[3]), stdin=subprocess.DEVNULL)
+    sys.stdout.write(r.stdout[:20000])
+except subprocess.TimeoutExpired:
+    sys.stdout.write("err|integrity checker timed out after %ss\n" % sys.argv[3])
+except Exception as exc:
+    sys.stdout.write("err|integrity checker could not run (%s)\n" % type(exc).__name__)
+PYEOF
+)"
+    if [ -z "$_ii_out" ]; then
+      printf "%b install integrity: checker produced no output\n" "$ERR"
+      overall_ok=0
+    else
+      while IFS='|' read -r _ii_lvl _ii_msg; do
+        case "$_ii_lvl" in
+          ok)  printf "%b install integrity: %s\n" "$OK" "$_ii_msg" ;;
+          adv) printf "%b install integrity: %s\n" "$WARN" "$_ii_msg" ;;
+          err) printf "%b install integrity: %s\n" "$ERR" "$_ii_msg"; overall_ok=0 ;;
+          *)   printf "%b install integrity: unexpected checker output\n" "$ERR"; overall_ok=0 ;;
+        esac
+      done <<< "$_ii_out"
+    fi
+  fi
+
   # 14. Updates Available
   printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
@@ -4651,7 +4692,7 @@ USAGE
 import subprocess, sys
 script, timeout_s = sys.argv[1], float(sys.argv[2])
 try:
-    sys.exit(subprocess.run([sys.executable, script], timeout=timeout_s).returncode)
+    sys.exit(subprocess.run([sys.executable, '-I', script], timeout=timeout_s).returncode)
 except subprocess.TimeoutExpired:
     sys.exit(124)
 except Exception:

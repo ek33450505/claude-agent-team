@@ -38,34 +38,33 @@ if [[ "${CLAUDECODE:-0}" != "1" ]]; then
 	exit 0
 fi
 
+# Shared hook contract (identical text in every installed git hook): the hook is an INSTALLED,
+# agent-unwritable copy in ~/.claude/githooks/ and calls ONLY installed ~/.claude/scripts/*; the
+# repo is passed as data (CAST_REPO_ROOT). There is no repo-copy fallback.
+CAST_SCRIPTS="${HOME}/.claude/scripts"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+export CAST_REPO_ROOT="$REPO_ROOT"
+_cast_installed() {  # path of an installed script, or fail closed
+  if [[ -f "$CAST_SCRIPTS/$1" && ! -L "$CAST_SCRIPTS/$1" ]]; then printf '%s\n' "$CAST_SCRIPTS/$1"; return 0; fi
+  echo "[CAST post-commit] installed $1 missing — run: bash install.sh" >&2; return 1
+}
+
 # Capture the full 40-char SHA
 SHA="$(git rev-parse HEAD 2>/dev/null)" || {
 	_log "ERROR: git rev-parse HEAD failed — skipping provenance record"
 	exit 0
 }
 
-# Locate the recorder — prefer installed copy, fall back to repo-relative
-INSTALLED_RECORDER="$HOME/.claude/scripts/cast-commit-provenance.py"
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO_ROOT=""
-REPO_RECORDER=""
-if [[ -n "$REPO_ROOT" ]]; then
-	REPO_RECORDER="$REPO_ROOT/scripts/cast-commit-provenance.py"
-fi
-
-RECORDER=""
-if [[ -f "$INSTALLED_RECORDER" ]]; then
-	RECORDER="$INSTALLED_RECORDER"
-elif [[ -n "$REPO_RECORDER" && -f "$REPO_RECORDER" ]]; then
-	RECORDER="$REPO_RECORDER"
-fi
-
-if [[ -z "$RECORDER" ]]; then
-	_log "recorder absent — skipping provenance record for $SHA"
+# Recorder: informational step — a missing installed recorder is logged and skipped (provenance
+# is best-effort and must never block a commit), but the repo copy is NEVER used as a fallback.
+RECORDER="$(_cast_installed cast-commit-provenance.py)" || {
+	_log "installed recorder absent or a symlink — skipping provenance record for $SHA (run: bash install.sh)"
 	exit 0
-fi
+}
 
 # Record provenance — best-effort, never block the commit
-if python3 "$RECORDER" record "$SHA" 2>>"$LOG_FILE"; then
+if python3 -I "$RECORDER" record "$SHA" 2>>"$LOG_FILE"; then
 	_log "recorded provenance for $SHA (recorder: $RECORDER)"
 else
 	_rc=$?

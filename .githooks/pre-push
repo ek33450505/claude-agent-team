@@ -4,8 +4,23 @@
 
 set -euo pipefail
 
+# Installed-script contract (shared with every CAST githook): this hook runs in the user's
+# unsandboxed terminal over a repo an agent can write to, so it executes ONLY installed copies under
+# ~/.claude/scripts (never a repo file), passing the repo to them as DATA via CAST_REPO_ROOT.
+CAST_SCRIPTS="${HOME}/.claude/scripts"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
+export CAST_REPO_ROOT="$REPO_ROOT"
+_cast_installed() {  # path of an installed script, or fail closed
+  if [[ -f "$CAST_SCRIPTS/$1" && ! -L "$CAST_SCRIPTS/$1" ]]; then printf '%s\n' "$CAST_SCRIPTS/$1"; return 0; fi
+  echo "[CAST pre-push] installed $1 missing — run: bash install.sh" >&2; return 1
+}
+
+# Hardened git for every repo read below (cast_git_safe neutralises repo-config exec paths). FAIL
+# CLOSED when the installed lib is missing: never fall back to bare git over the agent-writable repo.
+_CAST_LIB="$(_cast_installed cast-hook-lib.sh)" || exit 1
+# shellcheck source=/dev/null
+source "$_CAST_LIB"
 
 # Consume git push refs from stdin ONCE at the top of the hook.
 # git passes "<local_ref> <local_sha> <remote_ref> <remote_sha>" lines via stdin.
@@ -36,21 +51,25 @@ fi
 # Commit-provenance reconcile gate — block push when unauthorized in-session
 # self-commits (COMMIT_HATCH_USED with in_claude_session==true, no provenance row)
 # are detected since the last reconcile checkpoint.
-# Missing python3 or missing script: warn and continue (infra absence ≠ violation).
+# Missing python3: warn and continue (infra absence ≠ violation). A missing INSTALLED reconcile
+# script is different: this is a GATE, and its absence means a broken install or tampering — an
+# agent-deleted script must not silently disable the check — so it FAILS CLOSED (escape hatch:
+# CAST_SKIP_RECONCILE=1, a human-approved exception like every other gate here).
 if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
-  _RECONCILE_SCRIPT="$REPO_ROOT/scripts/cast-commit-reconcile.py"
   if ! command -v python3 >/dev/null 2>&1; then
     echo "[CAST pre-push] python3 not found — skipping reconcile gate (install python3 to enable)" >&2
-  elif [ ! -f "$_RECONCILE_SCRIPT" ]; then
-    echo "[CAST pre-push] cast-commit-reconcile.py not found — skipping reconcile gate (run: bash install.sh)" >&2
   else
+    _RECONCILE_SCRIPT="$(_cast_installed cast-commit-reconcile.py)" || {
+      echo "To skip this gate (human-approved exception): CAST_SKIP_RECONCILE=1 git push" >&2
+      exit 1
+    }
     echo "[CAST pre-push] Running commit-provenance reconcile gate..."
     _RECONCILE_TMPSTDERR="$(mktemp)"
     # stdout (the JSON verdict) is captured so the exit-0 path can tell a performed
     # check ("clean"/"acked"/"skip") from one that could not run ("unverifiable":
     # audit log unreadable, e.g. inside the Claude Code Bash sandbox) — and is
     # still relayed to stdout in every case, as before.
-    if ! _RECONCILE_OUT="$(CAST_RECONCILE_REPO="$REPO_ROOT" python3 "$_RECONCILE_SCRIPT" 2>"$_RECONCILE_TMPSTDERR")"; then
+    if ! _RECONCILE_OUT="$(CAST_RECONCILE_REPO="$REPO_ROOT" python3 -I "$_RECONCILE_SCRIPT" 2>"$_RECONCILE_TMPSTDERR")"; then
       [ -z "$_RECONCILE_OUT" ] || printf '%s\n' "$_RECONCILE_OUT"
       cat "$_RECONCILE_TMPSTDERR" >&2
       rm -f "$_RECONCILE_TMPSTDERR"
@@ -96,7 +115,10 @@ fi
 if [ "$_ALL_DELETIONS" = "1" ]; then
   echo "[CAST pre-push] Skipping ubuntu check (deletion-only push)" >&2
 elif [ "${CAST_RUN_UBUNTU_PUSH:-0}" = "1" ]; then
-  bash "$REPO_ROOT/scripts/pre-push-ubuntu-check.sh" || true
+  # Informational: a missing installed copy warns and continues (the step never gates).
+  if _UBUNTU_SCRIPT="$(_cast_installed pre-push-ubuntu-check.sh)"; then
+    bash "$_UBUNTU_SCRIPT" || true
+  fi
 else
   echo "[CAST pre-push] Ubuntu CI-parity check is opt-in (2026-06-02 policy). Opt in: CAST_RUN_UBUNTU_PUSH=1 git push" >&2
 fi
@@ -104,7 +126,8 @@ fi
 # PII / secret gate — fail fast before spending time on tests
 if [ "${CAST_SKIP_PII_CHECK:-0}" != "1" ]; then
   echo "[CAST pre-push] Running PII/secret gate..."
-  if ! printf '%s' "$_PUSH_STDIN" | bash "$REPO_ROOT/scripts/pre-push-ci-check.sh"; then
+  _PII_SCRIPT="$(_cast_installed pre-push-ci-check.sh)" || exit 1
+  if ! printf '%s' "$_PUSH_STDIN" | bash "$_PII_SCRIPT"; then
     echo "ERROR: PII/secret check failed. Fix the issues above and try again." >&2
     echo "To skip this gate, set: CAST_SKIP_PII_CHECK=1 git push" >&2
     exit 1
@@ -115,12 +138,16 @@ fi
 
 # Stats-drift gate — validate the PUSHED tree (not the working tree) against cast-stats.json.
 # Reads push refs from $_PUSH_STDIN to identify the SHAs being sent to the remote.
-# For each unique non-deletion SHA a throwaway detached worktree is created so that
-# gen-cast-stats.sh --check derives all stats from the exact committed tree git push
-# will send.  Working-tree state (regenerated-but-uncommitted files, dirty index) is
-# completely invisible to the check.
+# For each unique non-deletion SHA the committed tree is materialised in a throwaway STANDALONE
+# repo (see _cast_export_tree) and the INSTALLED gen-cast-stats.sh / gen-stats.sh --check run
+# against it with CAST_REPO_ROOT pointing there, so all stats derive from the exact committed tree
+# the push will send.  Working-tree state (regenerated-but-uncommitted files, dirty index) is
+# completely invisible to the check, and no file from the pushed tree is ever executed.
 if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
   echo "[CAST pre-push] Checking cast-stats.json drift..."
+
+  _GEN_CAST_STATS="$(_cast_installed gen-cast-stats.sh)" || exit 1
+  _GEN_STATS="$(_cast_installed gen-stats.sh)" || exit 1
 
   # Extract unique non-deletion local SHAs from push refs.
   # Deletion pushes (local_sha = 40 zeros) are skipped — nothing is being pushed.
@@ -140,17 +167,66 @@ if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
 
   # Fall back to HEAD when invoked manually (no push refs on stdin).
   if [ -z "${_STATS_SHAS:-}" ]; then
-    _STATS_SHAS="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    _STATS_SHAS="$(cast_git_safe "$REPO_ROOT" rev-parse HEAD)" || {
+      echo "ERROR: could not resolve HEAD for the stats check" >&2
+      exit 1
+    }
   fi
 
-  # For each pushed SHA spin up a throwaway detached worktree and run
-  # gen-cast-stats.sh --check from that exact committed tree.
+  # _cast_export_tree <sha> <base> — materialise <sha>'s committed tree at <base>/wt as a fresh
+  # STANDALONE repo (own .git, objects borrowed read-only from the pushed repo via
+  # objects/info/alternates; HEAD = <sha>, index = <sha>'s tree, so the stats scripts' own
+  # `cast_git_safe ls-files` works).  WHY not git worktree add: a checkout in the pushed repo
+  # reads ITS config, which an agent can write — filter.<drv>.smudge/clean/process,
+  # core.fsmonitor, config-based hooks (hook.<name>.*) and .git/hooks/post-checkout all execute
+  # programs, unsandboxed, from this hook.  Here the new repo's config is empty: the pushed repo's
+  # config is never read, so there is no enumerate-then-blank list to keep complete.  (`git
+  # archive` is no alternative — it applies filter.<drv>.smudge too — and it yields no index.)
+  # git is the first executable of the three fixed system locations (never PATH-resolved: a planted
+  # ./git must not win) run under `env -i` with a whitelist (no GIT_EXEC_PATH/GIT_CONFIG_PARAMETERS/
+  # GIT_EXTERNAL_DIFF/GIT_TEMPLATE_DIR/... inherited); init uses an EMPTY template dir (no hooks).
+  # The user's own global/system git config still applies (trusted, outside the repo).
+  _cast_export_tree() {
+    local sha="$1" base="$2" gb="" g objdir
+    case "$sha" in
+      *[!0-9a-f]* | "") echo "refusing a non-hex sha" >&2; return 1 ;;
+    esac
+    for g in /opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git; do
+      if [ -x "$g" ]; then gb="$g"; break; fi
+    done
+    [ -n "$gb" ] || { echo "no git binary in /opt/homebrew/bin, /usr/local/bin or /usr/bin" >&2; return 1; }
+    cast_git_safe "$REPO_ROOT" rev-parse --verify --quiet "${sha}^{commit}" >/dev/null || {
+      echo "${sha} is not a commit in this repo" >&2; return 1
+    }
+    objdir="$(cast_git_safe "$REPO_ROOT" rev-parse --path-format=absolute --git-path objects)" || return 1
+    case "$objdir" in
+      /* ) ;;
+      * ) echo "unexpected objects path" >&2; return 1 ;;
+    esac
+    case "$objdir" in
+      *$'\n'*) echo "unexpected objects path" >&2; return 1 ;;
+    esac
+    mkdir "${base}/tmpl" "${base}/wt" || return 1
+    /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin LC_ALL=C GIT_TERMINAL_PROMPT=0 \
+      "$gb" init -q --template="${base}/tmpl" "${base}/wt" || return 1
+    printf '%s\n' "$objdir" > "${base}/wt/.git/objects/info/alternates" || return 1
+    _cast_wt_git() {
+      /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin LC_ALL=C \
+        GIT_DIR="${base}/wt/.git" GIT_WORK_TREE="${base}/wt" \
+        GIT_TERMINAL_PROMPT=0 GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL=none \
+        "$gb" --no-pager "$@"
+    }
+    _cast_wt_git read-tree "$sha" || return 1
+    _cast_wt_git update-ref --no-deref HEAD "$sha" || return 1
+    _cast_wt_git checkout-index -a -f || return 1
+  }
+
+  # For each pushed SHA export the tree and run the installed checks against it.
   _STATS_WT_BASE=""
   _stats_wt_cleanup() {
     if [ -n "${_STATS_WT_BASE:-}" ]; then
-      git -C "$REPO_ROOT" worktree remove --force "${_STATS_WT_BASE}/wt" 2>/dev/null || true
-      # No `git worktree prune` here: it follows an agent-planted symlink at .git/worktrees/<id>
-      # and empties its target. `worktree remove` above already drops this worktree's own entry.
+      # The base dir is our own mktemp -d and the standalone repo is plain files: nothing is
+      # registered in the pushed repo, so there is no worktree remove/prune to run there.
       rm -rf "${_STATS_WT_BASE}" 2>/dev/null || true
       _STATS_WT_BASE=""
     fi
@@ -162,11 +238,11 @@ if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
   # shellcheck disable=SC2086
   for _sha in $_STATS_SHAS; do
     _STATS_WT_BASE="$(mktemp -d)"
-    if ! git -C "$REPO_ROOT" worktree add --detach "${_STATS_WT_BASE}/wt" "$_sha" 2>/dev/null; then
-      echo "ERROR: Could not create stats-check worktree for ${_sha}" >&2
+    if ! _cast_export_tree "$_sha" "$_STATS_WT_BASE"; then
+      echo "ERROR: Could not export the pushed tree for ${_sha} for the stats check" >&2
       exit 1
     fi
-    if ! bash "${_STATS_WT_BASE}/wt/scripts/gen-cast-stats.sh" --check; then
+    if ! CAST_REPO_ROOT="${_STATS_WT_BASE}/wt" bash "$_GEN_CAST_STATS" --check; then
       _stats_wt_cleanup
       trap - EXIT
       echo "" >&2
@@ -176,7 +252,7 @@ if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
       exit 1
     fi
 
-    if ! (cd "${_STATS_WT_BASE}/wt" && bash scripts/gen-stats.sh --check); then
+    if ! CAST_REPO_ROOT="${_STATS_WT_BASE}/wt" bash "$_GEN_STATS" --check; then
       _stats_wt_cleanup
       trap - EXIT
       echo "" >&2
@@ -199,19 +275,15 @@ fi
 # Runs without --db (no live cast.db) so the check is fast and side-effect-free.
 if [ "${CAST_SKIP_DB_CONTRACT:-0}" != "1" ]; then
   echo "[CAST pre-push] Checking db-contract ratchet..."
-  _DBC_SCRIPT="$REPO_ROOT/scripts/cast-db-contract.py"
-  if [ -f "$_DBC_SCRIPT" ]; then
-    if ! python3 "$_DBC_SCRIPT" --check > /dev/null 2>&1; then
-      echo "" >&2
-      echo "ERROR: New schema-contract violations detected (not in .github/db-contract-baseline.json)." >&2
-      echo "  Fix: python3 scripts/cast-db-contract.py --update-baseline" >&2
-      echo "To skip this gate: CAST_SKIP_DB_CONTRACT=1 git push" >&2
-      exit 1
-    fi
-    echo "[CAST pre-push] db-contract ratchet OK ✓"
-  else
-    echo "[CAST pre-push] db-contract script not found — skipping (run: bash install.sh)" >&2
+  _DBC_SCRIPT="$(_cast_installed cast-db-contract.py)" || exit 1
+  if ! python3 -I "$_DBC_SCRIPT" --check > /dev/null 2>&1; then
+    echo "" >&2
+    echo "ERROR: New schema-contract violations detected (not in .github/db-contract-baseline.json)." >&2
+    echo "  Fix: python3 scripts/cast-db-contract.py --update-baseline" >&2
+    echo "To skip this gate: CAST_SKIP_DB_CONTRACT=1 git push" >&2
+    exit 1
   fi
+  echo "[CAST pre-push] db-contract ratchet OK ✓"
 else
   echo "[CAST pre-push] Skipping db-contract check (CAST_SKIP_DB_CONTRACT=1)" >&2
 fi
@@ -223,28 +295,24 @@ fi
 # added, local push was clean, CI went red on this exact drift).
 if [ "${CAST_SKIP_LEDGER_CHECK:-0}" != "1" ]; then
   echo "[CAST pre-push] Checking test-skip-ledger drift..."
-  _LEDGER_SCRIPT="$REPO_ROOT/scripts/cast-check-skip-ledger.sh"
-  if [ -f "$_LEDGER_SCRIPT" ]; then
-    _ledger_rc=0
-    bash "$_LEDGER_SCRIPT" >/dev/null 2>&1 || _ledger_rc=$?
-    if [ "$_ledger_rc" = "1" ]; then
-      echo "" >&2
-      echo "ERROR: docs/test-skip-ledger.md is out of sync with the real skip-site count." >&2
-      echo "  Fix: update the '**Total call sites: N** across M files' line in docs/test-skip-ledger.md" >&2
-      echo "  Run: bash scripts/cast-check-skip-ledger.sh   (shows both the recorded and actual numbers)" >&2
-      echo "To skip this gate: CAST_SKIP_LEDGER_CHECK=1 git push" >&2
-      exit 1
-    elif [ "$_ledger_rc" != "0" ]; then
-      echo "" >&2
-      echo "ERROR: cast-check-skip-ledger.sh exited $_ledger_rc (usage error, not drift) — the hook is calling it wrong." >&2
-      echo "  This is a bug in .githooks/pre-push, not in docs/test-skip-ledger.md. Do not treat as drift." >&2
-      echo "To skip this gate: CAST_SKIP_LEDGER_CHECK=1 git push" >&2
-      exit 1
-    fi
-    echo "[CAST pre-push] test-skip-ledger OK ✓"
-  else
-    echo "[CAST pre-push] skip-ledger script not found — skipping (run: bash install.sh)" >&2
+  _LEDGER_SCRIPT="$(_cast_installed cast-check-skip-ledger.sh)" || exit 1
+  _ledger_rc=0
+  bash "$_LEDGER_SCRIPT" >/dev/null 2>&1 || _ledger_rc=$?
+  if [ "$_ledger_rc" = "1" ]; then
+    echo "" >&2
+    echo "ERROR: docs/test-skip-ledger.md is out of sync with the real skip-site count." >&2
+    echo "  Fix: update the '**Total call sites: N** across M files' line in docs/test-skip-ledger.md" >&2
+    echo "  Run: bash scripts/cast-check-skip-ledger.sh   (shows both the recorded and actual numbers)" >&2
+    echo "To skip this gate: CAST_SKIP_LEDGER_CHECK=1 git push" >&2
+    exit 1
+  elif [ "$_ledger_rc" != "0" ]; then
+    echo "" >&2
+    echo "ERROR: cast-check-skip-ledger.sh exited $_ledger_rc (usage error, not drift) — the hook is calling it wrong." >&2
+    echo "  This is a bug in githooks/pre-push, not in docs/test-skip-ledger.md. Do not treat as drift." >&2
+    echo "To skip this gate: CAST_SKIP_LEDGER_CHECK=1 git push" >&2
+    exit 1
   fi
+  echo "[CAST pre-push] test-skip-ledger OK ✓"
 else
   echo "[CAST pre-push] Skipping test-skip-ledger check (CAST_SKIP_LEDGER_CHECK=1)" >&2
 fi
@@ -254,7 +322,9 @@ fi
 # (gen-rules-manifest.sh), then diffs freshly generated vs. committed HEAD version.
 if [ "${CAST_SKIP_RULES_DRIFT:-0}" != "1" ]; then
   echo "[CAST pre-push] Checking rules-core manifest drift..."
-  _MANIFEST="$REPO_ROOT/.github/rules-core.manifest"
+  _MANIFEST_REL=".github/rules-core.manifest"
+  _MANIFEST="$REPO_ROOT/$_MANIFEST_REL"
+  _GEN_MANIFEST="$(_cast_installed gen-rules-manifest.sh)" || exit 1
   _MANIFEST_SAVED="$(mktemp)"
   _MANIFEST_EXISTED=0
   if [ -f "$_MANIFEST" ]; then
@@ -262,40 +332,58 @@ if [ "${CAST_SKIP_RULES_DRIFT:-0}" != "1" ]; then
     _MANIFEST_EXISTED=1
   fi
   # Restore manifest to its pre-gate state on any exit — hook leaves no working-tree side effects.
+  # The restore goes through cast_safe_write (refuses a symlinked target/parent: a plain `cp`/`>`
+  # would write THROUGH an agent-planted symlink); the cleanup rm never follows a planted
+  # `.github` symlink either.
   # shellcheck disable=SC2064
   trap '
     if [ "$_MANIFEST_EXISTED" = "1" ]; then
-      cp "$_MANIFEST_SAVED" "$_MANIFEST" 2>/dev/null || true
-    else
+      cast_safe_write "$REPO_ROOT" "$_MANIFEST_REL" < "$_MANIFEST_SAVED" 2>/dev/null || true
+    elif [ ! -L "$REPO_ROOT/.github" ] && [ ! -L "$_MANIFEST" ]; then
       rm -f "$_MANIFEST"
     fi
     rm -f "$_MANIFEST_SAVED"
   ' EXIT
 
-  # Run canonical generator — fail loud if it fails (no || true, no stderr suppression).
-  if ! bash "$REPO_ROOT/scripts/gen-rules-manifest.sh"; then
+  # Run the INSTALLED canonical generator on the repo (CAST_REPO_ROOT, exported above) — fail loud
+  # if it fails (no || true, no stderr suppression).
+  if ! bash "$_GEN_MANIFEST"; then
     echo "" >&2
     echo "ERROR: gen-rules-manifest.sh failed. Cannot verify rules-core drift." >&2
     echo "To skip this gate: CAST_SKIP_RULES_DRIFT=1 git push" >&2
     exit 1
   fi
 
-  # Compare freshly generated manifest against committed HEAD version (mirrors CI diff step).
-  _TMPCOMMITTED="$(mktemp)"
-  if ! git -C "$REPO_ROOT" show HEAD:.github/rules-core.manifest > "$_TMPCOMMITTED" 2>/dev/null; then
-    # First-time run — no committed manifest yet; matches CI first-time escape.
-    rm -f "$_TMPCOMMITTED"
+  # Compare the freshly generated manifest against the committed HEAD version (mirrors the CI diff
+  # step) through the hardened git: `diff --quiet HEAD -- <manifest>` (rc 1 = drift; no textconv /
+  # ext-diff). rev-parse --verify --quiet rc 1 = no committed manifest yet (CI first-time escape);
+  # any other non-zero rc is an inability to verify and BLOCKS.
+  _mrc=0
+  cast_git_safe "$REPO_ROOT" rev-parse --verify --quiet "HEAD:${_MANIFEST_REL}" >/dev/null 2>&1 || _mrc=$?
+  if [ "$_mrc" = "1" ]; then
     echo "[CAST pre-push] rules-core manifest not yet committed (first-time run). Skipping drift check."
-  elif ! diff -q "$_TMPCOMMITTED" "$_MANIFEST" > /dev/null 2>&1; then
-    rm -f "$_TMPCOMMITTED"
+  elif [ "$_mrc" != "0" ]; then
     echo "" >&2
-    echo "ERROR: rules-core manifest is out of sync. Regenerate and commit it:" >&2
-    echo "  bash scripts/gen-rules-manifest.sh && git add .github/rules-core.manifest && git commit --amend --no-edit" >&2
+    echo "ERROR: could not read the committed rules-core manifest (rc=$_mrc) — cannot verify drift." >&2
     echo "To skip this gate: CAST_SKIP_RULES_DRIFT=1 git push" >&2
     exit 1
   else
-    rm -f "$_TMPCOMMITTED"
-    echo "[CAST pre-push] rules-core manifest in sync ✓"
+    _drc=0
+    cast_git_safe "$REPO_ROOT" diff --quiet HEAD -- "$_MANIFEST_REL" >/dev/null 2>&1 || _drc=$?
+    if [ "$_drc" = "0" ]; then
+      echo "[CAST pre-push] rules-core manifest in sync ✓"
+    elif [ "$_drc" = "1" ]; then
+      echo "" >&2
+      echo "ERROR: rules-core manifest is out of sync. Regenerate and commit it:" >&2
+      echo "  bash scripts/gen-rules-manifest.sh && git add .github/rules-core.manifest && git commit --amend --no-edit" >&2
+      echo "To skip this gate: CAST_SKIP_RULES_DRIFT=1 git push" >&2
+      exit 1
+    else
+      echo "" >&2
+      echo "ERROR: could not diff the rules-core manifest against HEAD (rc=$_drc) — cannot verify drift." >&2
+      echo "To skip this gate: CAST_SKIP_RULES_DRIFT=1 git push" >&2
+      exit 1
+    fi
   fi
 else
   echo "[CAST pre-push] Skipping rules-drift check (CAST_SKIP_RULES_DRIFT=1)" >&2
@@ -343,8 +431,10 @@ elif [ "$(uname -s)" != "Darwin" ]; then
   # would assert something this platform cannot actually test — a check that
   # cannot fail is not a check.
   echo "[CAST pre-push] bash-3.2 parse lint SKIPPED (needs macOS /bin/bash 3.2; this is $(uname -s))" >&2
-elif [ -f "$REPO_ROOT/scripts/cast-lint-bash32-parse.sh" ]; then
-  if ! bash "$REPO_ROOT/scripts/cast-lint-bash32-parse.sh"; then
+else
+  # Gate on Darwin: a missing INSTALLED copy fails closed (never a repo copy).
+  _B32_SCRIPT="$(_cast_installed cast-lint-bash32-parse.sh)" || exit 1
+  if ! bash "$_B32_SCRIPT"; then
     echo "ERROR: bash 3.2 parse lint failed — this WILL break the macOS CI job." >&2
     echo "  Reproduce with: /bin/bash -n <file>   (NOT 'bash -n', which is Homebrew bash here)" >&2
     exit 1
@@ -355,6 +445,7 @@ fi
 # A test that runs `bats tests/` without isolation can delete ~/.claude/ and other critical paths.
 # Per the 2026-06-02 test policy: passing tests are batched before releases, NOT a per-push gate.
 # Opt-in only via CAST_RUN_BATS_PUSH=1, which routes through the isolated runner (tests/run.sh).
+# NOTE: CAST_RUN_BATS_PUSH=1 / CAST_RUN_UBUNTU_PUSH=1 execute REPO code (tests/run.sh, make test-ubuntu) BY DESIGN — explicit user opt-ins, the one place pre-push leaves the installed-scripts-only contract.
 #
 # Each individual test file uses setup_temp_home to isolate its HOME, so they're safe even at push-time.
 # However, to prevent accidental non-isolated BATS invocations, the hook skips the BATS gate by default.

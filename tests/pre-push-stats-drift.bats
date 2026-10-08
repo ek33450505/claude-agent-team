@@ -8,12 +8,14 @@
 #   (d) CAST_SKIP_STATS_PUSH=1 bypasses the gate entirely
 #
 # Design:
-#   The gate creates a throwaway detached worktree from the pushed SHA and runs
-#   scripts/gen-cast-stats.sh --check from that committed tree.  Inside BATS the
-#   real gen-cast-stats.sh self-skips via its BATS_* env guard, so each fixture repo
-#   carries a stub scripts/gen-cast-stats.sh that exits 0 (clean) or 1 (drift).
-#   The stub travels with the fixture and is therefore the script the gate actually
-#   executes from the worktree.
+#   The gate materialises the pushed SHA's committed tree in a throwaway standalone
+#   repo and runs the INSTALLED gen-cast-stats.sh / gen-stats.sh --check against it
+#   (CAST_REPO_ROOT = that export; no repo file is ever executed).  Inside BATS the
+#   real gen-cast-stats.sh self-skips via its BATS_* env guard, so the installed copy
+#   here is a stub (temp HOME) that reads the verdict from the EXPORTED tree: it exits
+#   1 (drift) when $CAST_REPO_ROOT/cast-stats.json says "drift", else 0 (clean).  The
+#   fixture's committed cast-stats.json therefore decides the outcome, exactly as a
+#   real committed file would.
 #
 # Safety:
 #   All fixture repos live under mktemp -d directories.
@@ -23,6 +25,8 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
+load 'helpers/prepush-installed'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 HOOK="$REPO_DIR/.githooks/pre-push"
@@ -30,7 +34,7 @@ HOOK="$REPO_DIR/.githooks/pre-push"
 # ---------------------------------------------------------------------------
 # Helper: build a minimal fixture git repo.
 #
-# $1 — stub exit code for scripts/gen-cast-stats.sh (0 = clean, 1 = drift)
+# $1 — 0 = committed cast-stats.json is clean, 1 = it is drifted
 #
 # Prints the path to the fixture repo root.
 # ---------------------------------------------------------------------------
@@ -43,28 +47,13 @@ _make_fixture_repo() {
   git -C "$tmpdir" config user.email "test@example.com"
   git -C "$tmpdir" config user.name "CAST Test"
 
-  mkdir -p "$tmpdir/scripts"
-
-  # Stub gen-cast-stats.sh — the gate runs this from the pushed SHA's worktree.
-  # It deliberately has NO BATS guard so the exit code is predictable regardless
-  # of whether BATS_* env vars are set in the parent process.
-  printf '#!/usr/bin/env bash\n# stats-drift stub: exits %s\nexit %s\n' \
-    "$stub_exit" "$stub_exit" > "$tmpdir/scripts/gen-cast-stats.sh"
-  chmod +x "$tmpdir/scripts/gen-cast-stats.sh"
-
-  # Stub gen-stats.sh — the gate also runs this from the pushed SHA's worktree
-  # (added when .githooks/pre-push started checking README/docs sentinel drift
-  # in addition to cast-stats.json). None of these tests exercise ITS drift logic
-  # (that's covered elsewhere) — it always exits 0 so it never interferes with the
-  # cast-stats.json-focused assertions this file makes.
-  printf '#!/usr/bin/env bash\n# stats-drift stub: always clean\nexit 0\n' \
-    > "$tmpdir/scripts/gen-stats.sh"
-  chmod +x "$tmpdir/scripts/gen-stats.sh"
-
-  # Placeholder cast-stats.json so the pushed tree looks realistic.
-  printf '{"version":"stub"}\n' > "$tmpdir/cast-stats.json"
-
-  git -C "$tmpdir" add scripts/gen-cast-stats.sh scripts/gen-stats.sh cast-stats.json
+  # The verdict file travels with the pushed tree: "drift" makes the installed stub exit 1.
+  if [ "$stub_exit" = "0" ]; then
+    printf '{"version":"clean"}\n' > "$tmpdir/cast-stats.json"
+  else
+    printf '{"version":"drift"}\n' > "$tmpdir/cast-stats.json"
+  fi
+  git -C "$tmpdir" add cast-stats.json
   git -C "$tmpdir" commit -q -m "init"
 
   echo "$tmpdir"
@@ -111,6 +100,18 @@ _run_hook_in_fixture() {
 
 setup() {
   TEST_FIXTURES=()
+  setup_temp_home
+  seed_prepush_install
+  # Installed stub: the verdict is read from the tree the hook EXPORTED for the pushed SHA.
+  cat > "$INSTALLED/gen-cast-stats.sh" <<'STUBEOF'
+#!/usr/bin/env bash
+if grep -q drift "$CAST_REPO_ROOT/cast-stats.json"; then
+  echo "[stub gen-cast-stats] drift in $CAST_REPO_ROOT" >&2
+  exit 1
+fi
+exit 0
+STUBEOF
+  chmod +x "$INSTALLED/gen-cast-stats.sh"
 }
 
 teardown() {
@@ -119,6 +120,7 @@ teardown() {
   for f in "${TEST_FIXTURES[@]+"${TEST_FIXTURES[@]}"}"; do
     [ -d "$f" ] && rm -rf "$f"
   done
+  teardown_temp_home
 }
 
 # ---------------------------------------------------------------------------
@@ -133,20 +135,14 @@ teardown() {
   local sha
   sha="$(git -C "$repo" rev-parse HEAD)"
 
-  # Discriminating condition: overwrite the working-tree copy of gen-cast-stats.sh
-  # with an exit-0 stub WITHOUT committing.  This creates a divergence between what
-  # the working tree says (clean / exit 0) and what the committed pushed tree says
-  # (drift / exit 1).
+  # Discriminating condition: overwrite the working-tree cast-stats.json with a clean one
+  # WITHOUT committing.  This creates a divergence between what the working tree says
+  # (clean) and what the committed pushed tree says (drift).
   #
-  # Old implementation (runs gen-cast-stats.sh from the working tree):
-  #   sees exit 0 → would let the push through → assert_failure FAILS.
-  # New implementation (runs gen-cast-stats.sh from a detached worktree of the pushed SHA):
-  #   sees exit 1 → blocks the push → assert_failure PASSES.
-  #
-  # The test is therefore non-discriminating against the old implementation and
-  # discriminating (passing only) against the new one.
-  printf '#!/usr/bin/env bash\n# working-tree stub: regenerated clean — exit 0\nexit 0\n' \
-    > "$repo/scripts/gen-cast-stats.sh"
+  # An implementation that checks the working tree sees clean → lets the push through →
+  # assert_failure FAILS.  One that checks the pushed SHA's tree sees drift → blocks the
+  # push → assert_failure PASSES.
+  printf '{"version":"clean"}\n' > "$repo/cast-stats.json"
   # Do NOT commit — the dirty working-tree state is the discriminating condition.
 
   local ref_line="refs/heads/main ${sha} refs/heads/main 0000000000000000000000000000000000000000"
@@ -190,15 +186,15 @@ teardown() {
   sha="$(git -C "$repo" rev-parse HEAD)"
 
   # Deletion push: the local ref is being deleted (local_sha = all zeros).
-  # The gate must skip the zeros SHA — never pass it to git worktree add.
+  # The gate must skip the zeros SHA — never export it as a tree.
   # With no non-zero SHA to validate the gate falls back to HEAD; HEAD's stub
   # exits 0, so the overall gate passes.
   local ref_line="refs/heads/feature 0000000000000000000000000000000000000000 refs/heads/feature ${sha}"
 
   _run_hook_in_fixture "$repo" "$ref_line"
 
-  # Zeros SHA was never used as a worktree target.
-  refute_output --partial "Could not create stats-check worktree for 000000"
+  # Zeros SHA was never used as an export target.
+  refute_output --partial "Could not export the pushed tree for 000000"
   # Gate exits 0 — deletion push is not blocked.
   assert_success
 }

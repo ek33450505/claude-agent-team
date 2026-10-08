@@ -130,10 +130,29 @@ print(SEP.join(v.replace(SEP, "") for v in fields + [branch(), active, count]))
 # ── Session uptime ─────────────────────────────────────────────────────────────
 uptime_str=""
 if [ -n "$session_id" ]; then
-  epoch_file="${TMPDIR:-/tmp}/cast-session-start-${session_id}.epoch"
+  # Same path derivation as scripts/agent-status-reader.sh (keep the two identical; a test asserts
+  # they agree): token-only session id (else "default", capped at 64) and the 0700 state dir
+  # ~/.claude/cast-state, which must be a real, self-owned directory (never a symlink).
+  _sl_sid="$session_id"
+  case "$_sl_sid" in '' | *[!A-Za-z0-9_-]*) _sl_sid="default" ;; esac
+  _sl_sid="${_sl_sid:0:64}"
+  _sl_dir="${HOME}/.claude/cast-state"
+  epoch_file=""
+  if [ ! -L "$_sl_dir" ]; then
+    mkdir -p "${HOME}/.claude" 2>/dev/null || true
+    mkdir -m 700 "$_sl_dir" 2>/dev/null || true
+    if [ -d "$_sl_dir" ] && [ ! -L "$_sl_dir" ] && [ -O "$_sl_dir" ]; then
+      epoch_file="${_sl_dir}/cast-session-start-${_sl_sid}.epoch"
+    fi
+  fi
   now_epoch="$(date +%s 2>/dev/null || true)"
-  if [ -f "$epoch_file" ]; then
+  if [ -z "$epoch_file" ] || [ -L "$epoch_file" ]; then
+    :  # no trustworthy state file: no uptime
+  elif [ -f "$epoch_file" ]; then
     start_epoch="$(cat "$epoch_file" 2>/dev/null || echo "")"
+    # numeric only: this feeds $(( )), where arbitrary text is code
+    case "$start_epoch" in '' | *[!0-9]*) start_epoch="" ;; esac
+    case "$now_epoch" in '' | *[!0-9]*) now_epoch="" ;; esac
     if [ -n "$start_epoch" ] && [ -n "$now_epoch" ]; then
       elapsed=$(( now_epoch - start_epoch ))
       hours=$(( elapsed / 3600 ))
@@ -145,7 +164,8 @@ if [ -n "$session_id" ]; then
       fi
     fi
   elif [ -n "$now_epoch" ]; then
-    echo "$now_epoch" > "$epoch_file" 2>/dev/null || true
+    # noclobber = O_EXCL: create only when absent, never through a symlink
+    ( set -o noclobber; echo "$now_epoch" > "$epoch_file" ) 2>/dev/null || true
     uptime_str="0m"
   fi
 fi

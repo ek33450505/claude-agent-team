@@ -180,7 +180,7 @@ STUB
   # Get real log mtime before (if exists)
   local real_mtime_before=""
   if [[ -f "$real_log_file" ]]; then
-    real_mtime_before="$(stat -f%m "$real_log_file" 2>/dev/null || stat -c%Y "$real_log_file" 2>/dev/null)"
+    real_mtime_before="$(file_mtime "$real_log_file" 2>/dev/null)"
   fi
 
   # Run script in temp HOME
@@ -192,7 +192,7 @@ STUB
   # Verify real log unchanged
   if [[ -f "$real_log_file" && -n "$real_mtime_before" ]]; then
     local real_mtime_after
-    real_mtime_after="$(stat -f%m "$real_log_file" 2>/dev/null || stat -c%Y "$real_log_file" 2>/dev/null)"
+    real_mtime_after="$(file_mtime "$real_log_file" 2>/dev/null)"
     [[ "$real_mtime_before" == "$real_mtime_after" ]]
   fi
 }

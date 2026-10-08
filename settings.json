@@ -50,11 +50,6 @@
         "~/.claude/cast.db"
       ]
     },
-    "excludedCommands": [
-      "docker",
-      "bq",
-      "osascript"
-    ],
     "credentials": {
       "files": [
         {
@@ -137,6 +132,12 @@
       "Edit(~/.claude/settings.local.json)",
       "Edit(~/.claude/managed-settings.d/**)",
       "Edit(~/.claude/scripts/**)",
+      "Edit(~/.claude/githooks/**)",
+      "Edit(~/.claude/cast-state/**)",
+      "Edit(~/Library/Caches/com.apple.python/**)",
+      "Edit(~/Library/Python/**)",
+      "Edit(~/Library/LaunchAgents/**)",
+      "Edit(~/.claude/install-manifest.sha256)",
       "Edit(~/.claude/logs/**)",
       "Edit(**/.claude/settings*.json)",
       "Edit(//**/.claude/settings*.json)",

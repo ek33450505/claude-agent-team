@@ -125,3 +125,59 @@ teardown() {
   assert_success
   assert_output "BLOCKED"
 }
+
+# ---------------------------------------------------------------------------
+# S3d: recent-status matches on an EXACT filename grammar + the parsed `agent`
+# field, not a filename PREFIX — `--agent code` must not pick up a
+# `code-reviewer-<ts>.json` record. (Display-only; nothing gates on it.)
+# ---------------------------------------------------------------------------
+
+@test "recent-status --agent code does NOT match a code-reviewer-<ts>.json record (prefix collision)" {
+  status_dir="$HOME/.claude/agent-status"
+  mkdir -p "$status_dir"
+  echo '{"status":"DONE","agent":"code-reviewer"}' > "$status_dir/code-reviewer-20261007T010101Z-123-abcdef.json"
+  echo '{"status":"BLOCKED"}' > "$status_dir/code-reviewer__fix-x-20261007T010101Z-124-abcdef.json"
+
+  run python3 "$SCRIPT" recent-status --agent code --max-age 999999999
+  assert_success
+  assert_output ""
+}
+
+@test "recent-status matches the real cast_write_status grammar <agent>-<ts>-<pid>-<hex>.json" {
+  status_dir="$HOME/.claude/agent-status"
+  mkdir -p "$status_dir"
+  echo '{"status":"DONE","agent":"code"}' > "$status_dir/code-20261007T010101Z-123-abcdef.json"
+
+  run python3 "$SCRIPT" recent-status --agent code --max-age 999999999
+  assert_success
+  assert_output "DONE"
+}
+
+@test "recent-status skips a file whose parsed agent identity is another agent, even if the filename fits" {
+  status_dir="$HOME/.claude/agent-status"
+  mkdir -p "$status_dir"
+  echo '{"status":"DONE","agent":"code"}' > "$status_dir/code-1111111111.json"
+  touch -t 202001010000 "$status_dir/code-1111111111.json"
+  # Newer file, filename grammar fits `code`, but its content says it belongs to another agent.
+  echo '{"status":"BLOCKED","agent":"security"}' > "$status_dir/code-2222222222.json"
+
+  run python3 "$SCRIPT" recent-status --agent code --max-age 999999999
+  assert_success
+  assert_output "DONE"
+}
+
+@test "recent-status treats regex metacharacters in --agent literally" {
+  status_dir="$HOME/.claude/agent-status"
+  mkdir -p "$status_dir"
+  echo '{"status":"DONE"}' > "$status_dir/code-reviewer-1234567890.json"
+
+  run python3 "$SCRIPT" recent-status --agent 'code.*' --max-age 999999999
+  assert_success
+  assert_output ""
+}
+
+@test "recent-status with no agent-status directory prints nothing and succeeds" {
+  run python3 "$SCRIPT" recent-status --agent code --max-age 999999999
+  assert_success
+  assert_output ""
+}

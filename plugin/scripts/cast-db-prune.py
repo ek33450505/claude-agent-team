@@ -212,7 +212,7 @@ def _pre_prune_backup() -> int:
 
     try:
         result = subprocess.run(
-            [sys.executable, str(backup_script)],
+            [sys.executable, '-I', str(backup_script)],
             capture_output=True,
             text=True,
             timeout=120,
@@ -285,7 +285,7 @@ def _pre_prune_rollup() -> int:
 
     try:
         result = subprocess.run(
-            [sys.executable, str(rollup_script), '--db', DB_PATH, '--authoritative-days', str(DAYS)],
+            [sys.executable, '-I', str(rollup_script), '--db', DB_PATH, '--authoritative-days', str(DAYS)],
             capture_output=True,
             text=True,
             timeout=120,
