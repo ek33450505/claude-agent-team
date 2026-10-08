@@ -337,7 +337,7 @@ _db_log() {
     CAST_DB_LOG_MSG="$message" \
     CAST_DB_LOG_SESSION="${CAST_SESSION_ID:-cast-parallel}" \
     CAST_DB_LOG_PROJECT="$(basename "$PWD")" \
-    python3 -I - <<'_PYEOF' 2>/dev/null | python3 "$db_log_script" 2>/dev/null || true
+    python3 -I - <<'_PYEOF' 2>/dev/null | python3 -E -s "$db_log_script" 2>/dev/null || true
 import json, os, datetime
 print(json.dumps({
     "session_id":     os.environ["CAST_DB_LOG_SESSION"],

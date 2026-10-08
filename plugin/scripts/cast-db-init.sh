@@ -1232,7 +1232,7 @@ sqlite3 "$DB_PATH" "CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_
 _DROP_CHECK_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/cast-db-drop-status-check.py"
 if [ -f "$_DROP_CHECK_HELPER" ] && command -v python3 >/dev/null 2>&1; then
   _drop_rc=0
-  CAST_DB_PATH="$DB_PATH" python3 "$_DROP_CHECK_HELPER" "$DB_PATH" >&2 || _drop_rc=$?
+  CAST_DB_PATH="$DB_PATH" python3 -E -s "$_DROP_CHECK_HELPER" "$DB_PATH" >&2 || _drop_rc=$?
   if [ "$_drop_rc" -ne 0 ]; then
     # Loud and durable, never fatal: a failed migration leaves the row-dropping
     # CHECK in place, so say so on stderr AND persist a line for `cast doctor`/triage.

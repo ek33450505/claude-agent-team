@@ -1026,7 +1026,7 @@ def _record_dispatch(data):
             try:
                 import subprocess as _sp
                 _r = _sp.run(
-                    ["python3", os.path.join(SCRIPT_DIR, "cast-redact.py"),
+                    ["python3", "-I", os.path.join(SCRIPT_DIR, "cast-redact.py"),
                      "--engine", "regex", "--field", "redacted_text"],
                     input=prompt, capture_output=True, text=True, timeout=3,
                 )

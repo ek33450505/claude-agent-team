@@ -21,4 +21,4 @@
 # CLAUDE_SUBPROCESS handling moved into cast-git-guard.py:main() so the git
 # commit/push/stash guards fire even in subagent/headless context (only the
 # Write/Edit policy + TTL sweep are subprocess-skipped). Always exec the module.
-exec python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cast-git-guard.py"
+exec python3 -E -s "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cast-git-guard.py"

@@ -173,7 +173,7 @@ PYEOF
   # Call Python assertion runner (ignore exit code; python always outputs JSON)
   local result_json
   result_json="$(CAST_FIXTURE_CONTENT="$fixture_content" CAST_ASSERTIONS_JSON="$assertions_json" \
-    python3 "$SCRIPTS_DIR/cast_contract_runner.py" 2>/dev/null)" || true
+    python3 -E -s "$SCRIPTS_DIR/cast_contract_runner.py" 2>/dev/null)" || true
   [ -n "$result_json" ] || result_json='{"results":[],"error":"runner failed"}'
 
   # Parse results and print

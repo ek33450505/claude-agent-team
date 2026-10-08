@@ -116,8 +116,11 @@ class TestRecordHatch(unittest.TestCase):
         args, kwargs = mock_run.call_args
         argv = args[0]
         self.assertEqual(argv[0], 'python3')
-        self.assertTrue(argv[1].endswith('cast_ack.py'))
-        self.assertEqual(argv[2], 'CAST_COMMIT_AGENT')
+        # cast_ack.py imports a sibling (cast_db), so it cannot take -I; -E -s ignores
+        # PYTHONPATH/PYTHONSTARTUP and the user site inherited from a hook's environment.
+        self.assertEqual(argv[1:3], ['-E', '-s'])
+        self.assertTrue(argv[3].endswith('cast_ack.py'))
+        self.assertEqual(argv[4], 'CAST_COMMIT_AGENT')
         self.assertIn('--value', argv)
         self.assertEqual(argv[argv.index('--value') + 1], '1')
         self.assertIn('--script', argv)

@@ -194,7 +194,7 @@ entry = {
 }
 import subprocess
 subprocess.run(
-    ['python3', os.path.join(os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')), 'cast-db-log.py')],
+    ['python3', '-E', '-s', os.path.join(os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts')), 'cast-db-log.py')],
     input=json.dumps(entry), text=True, timeout=5
 )
 " 2>/dev/null || true
@@ -589,7 +589,7 @@ def _record_hatch_ack():
     try:
         scripts_dir = os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts'))
         subprocess.run(
-            ['python3', os.path.join(scripts_dir, 'cast_ack.py'),
+            ['python3', '-E', '-s', os.path.join(scripts_dir, 'cast_ack.py'),
              'CAST_REVIEW_BLOCK_OK', '--script', 'cast-events.sh'],
             timeout=5,
         )

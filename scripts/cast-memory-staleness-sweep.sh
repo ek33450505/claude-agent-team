@@ -61,7 +61,7 @@ try:
         # Call verifier
         try:
             result = subprocess.run(
-                ['python3', os.path.join(scripts_dir, 'cast_memory_verifier.py')],
+                ['python3', '-E', '-s', os.path.join(scripts_dir, 'cast_memory_verifier.py')],
                 input=content,
                 capture_output=True,
                 text=True,

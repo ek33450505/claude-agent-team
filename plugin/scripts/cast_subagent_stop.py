@@ -1747,7 +1747,7 @@ def _redact_excerpt_verbose(text: str):
             last_exc = type(exc).__name__
     try:
         res = subprocess.run(
-            ["python3", os.path.join(_HOOK_DIR, "cast-redact.py"), "--engine", "regex"],
+            ["python3", "-I", os.path.join(_HOOK_DIR, "cast-redact.py"), "--engine", "regex"],
             input=text.encode(),
             capture_output=True,
             timeout=5,

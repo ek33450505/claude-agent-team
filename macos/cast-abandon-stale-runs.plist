@@ -8,7 +8,7 @@
 	<array>
 		<string>/bin/bash</string>
 		<string>-c</string>
-		<string>python3 __HOME__/.claude/scripts/cast-abandon-stale-runs.py</string>
+		<string>python3 -E -s __HOME__/.claude/scripts/cast-abandon-stale-runs.py</string>
 	</array>
 	<key>StartInterval</key>
 	<integer>7200</integer>

@@ -207,7 +207,7 @@ if [[ ${#PROMPT_ARGS_RAW[@]} -gt 0 ]]; then
   SUPPLIED_ARGS_JSON="{${_supplied_parts:1}}"
 fi
 
-python3 "$_ARGS_VALIDATE_PY" "$PROMPT_ARGS_JSON" "$SUPPLIED_ARGS_JSON" >&2
+python3 -I "$_ARGS_VALIDATE_PY" "$PROMPT_ARGS_JSON" "$SUPPLIED_ARGS_JSON" >&2
 _ARGS_RC=$?
 rm -f "$_ARGS_VALIDATE_PY"
 if [[ "$_ARGS_RC" -ne 0 ]]; then
@@ -249,7 +249,7 @@ if missing:
         )
     sys.exit(1)
 PYEOF
-      python3 "$_MCP_PREFLIGHT_PY" "$MCP_REQUIRED_JSON" "$ROUTINE_NAME" "$SETTINGS_FILE" >&2
+      python3 -I "$_MCP_PREFLIGHT_PY" "$MCP_REQUIRED_JSON" "$ROUTINE_NAME" "$SETTINGS_FILE" >&2
       _MCP_RC=$?
       rm -f "$_MCP_PREFLIGHT_PY"
       if [[ "$_MCP_RC" -ne 0 ]]; then
@@ -330,7 +330,7 @@ fi
 
 if [[ -f "$DB_ROUTINES_SCRIPT" ]]; then
   CAST_DB_PATH="${CAST_DB_PATH:-$HOME/.claude/cast.db}" \
-    python3 "$DB_ROUTINES_SCRIPT" update-status "$ROUTINE_NAME" "$RUN_STATUS" "$OUTPUT_FILE" \
+    python3 -E -s "$DB_ROUTINES_SCRIPT" update-status "$ROUTINE_NAME" "$RUN_STATUS" "$OUTPUT_FILE" \
     >/dev/null 2>&1 || true
 fi
 

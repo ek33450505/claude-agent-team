@@ -71,5 +71,5 @@ for arg in "$@"; do
     shift_next=0
   fi
 done
-echo "$INPUT" | python3 "${SCRIPT_DIR}/cast-audit.py" --mode "$AUDIT_MODE"
+echo "$INPUT" | python3 -E -s "${SCRIPT_DIR}/cast-audit.py" --mode "$AUDIT_MODE"
 exit $?

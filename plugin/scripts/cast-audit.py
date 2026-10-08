@@ -535,7 +535,7 @@ def run_redact_analysis(text: str) -> dict:
         return {}
     try:
         result = subprocess.run(
-            ["python3", REDACT_SCRIPT, "--text", text, "--mode", "analyze"],
+            ["python3", "-I", REDACT_SCRIPT, "--text", text, "--mode", "analyze"],
             capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0 and result.stdout.strip():

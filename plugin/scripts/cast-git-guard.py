@@ -3663,7 +3663,7 @@ def _record_hatch(variable: str, value: str, git_op: str) -> None:
     try:
         scripts_dir = os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts'))
         subprocess.run(
-            ['python3', os.path.join(scripts_dir, 'cast_ack.py'),
+            ['python3', '-E', '-s', os.path.join(scripts_dir, 'cast_ack.py'),
              variable, '--value', value, '--script', 'cast-git-guard.py'],
             timeout=2,
             capture_output=True,

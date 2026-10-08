@@ -34,7 +34,7 @@ _log "=== Starting scheduled backup run ==="
 
 # Step 1: On-disk snapshot (must succeed)
 _log "Step 1: Running on-disk snapshot..."
-if python3 "${SCRIPTS_DIR}/cast-snapshot.py" >> "$LOG_FILE" 2>&1; then
+if python3 -E -s "${SCRIPTS_DIR}/cast-snapshot.py" >> "$LOG_FILE" 2>&1; then
   _log "Step 1: On-disk snapshot SUCCEEDED"
   SNAPSHOT_OK=1
 else
