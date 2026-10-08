@@ -781,32 +781,45 @@ def _unparseable_bash_verdict(raw, exc):
     return _degraded_git_block(text, "was given an unparseable payload")
 
 
-def _emit_pretool_output(sentinel, action, neon_reason):
+def _emit_pretool_output(sentinel, action, neon_reason, extra_context=None):
     """Print AT MOST ONE hookSpecificOutput JSON object on stdout (Claude Code
     2.1.288 BLOCKS the call when a PreToolUse hook's output fails to parse, so
     two concatenated objects must never happen).
 
       neon_reason set  -> {"permissionDecision": "ask", "permissionDecisionReason":
                           neon_reason}, plus "additionalContext" when an egress
-                          advisory also exists (the advisory text is folded in,
-                          not printed separately);
-      neon_reason None -> the egress advisory alone (unchanged behaviour), or
-                          nothing.
+                          advisory and/or `extra_context` also exist (their text is
+                          folded in, joined with "\\n", not printed separately);
+      neon_reason None -> the egress advisory and/or `extra_context` (a Write/Edit
+                          warn-policy advisory) as ONE additionalContext object, or
+                          nothing. With `extra_context` None this is the unchanged
+                          egress-advisory-alone behaviour.
     Never raises."""
     try:
         advisory = action is not None and action[0] == "advisory"
+        extra = extra_context if isinstance(extra_context, str) and extra_context else None
+        parts = []
+        if advisory and sentinel is not None:
+            try:
+                parts.append(sentinel.advisory_context(action[1]))
+            except Exception:
+                pass
+        if extra:
+            parts.append(extra)
         if neon_reason:
             out = {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "ask",
                 "permissionDecisionReason": neon_reason,
             }
-            if advisory and sentinel is not None:
-                try:
-                    out["additionalContext"] = sentinel.advisory_context(action[1])
-                except Exception:
-                    pass
+            if parts:
+                out["additionalContext"] = "\n".join(parts)
             print(json.dumps({"hookSpecificOutput": out}))
+        elif extra:
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "\n".join(parts),
+            }}))
         elif advisory and sentinel is not None:
             _emit_egress(sentinel, action)
     except Exception:
@@ -1646,7 +1659,10 @@ def main():
             )
         return 0
 
-    # 1. Write/Edit path policy (top-level sessions only).
+    # 1. Write/Edit path policy (top-level sessions only). A code-0 result may carry a
+    #    warn-policy advisory (policy_context): never a block, folded into the single
+    #    hookSpecificOutput object printed at step 2.
+    policy_context = None
     if tool in ("Write", "Edit"):
         git_guard = _load("cast_git_guard", "cast-git-guard.py")
         if git_guard is not None:
@@ -1661,6 +1677,8 @@ def main():
                     git_guard, tool, tool_input, sid if isinstance(sid, str) else "", exc)
             if code == 2:
                 return _block(msg)
+            if code == 0 and isinstance(msg, str) and msg:
+                policy_context = msg
         else:
             # The guard module failed to LOAD: no policy ran -> fail CLOSED.
             code, msg = _write_edit_guard_unavailable(tool)
@@ -1679,7 +1697,7 @@ def main():
         sentinel = _load("cast_egress_sentinel", "cast-egress-sentinel.py")
         if sentinel is not None:
             action = _run_egress(sentinel, data)
-    _emit_pretool_output(sentinel, action, neon_reason)
+    _emit_pretool_output(sentinel, action, neon_reason, policy_context)
 
     # F2: record the dispatch decision (record-only; NEVER blocks a dispatch).
     # The subagent-dispatch tool is "Agent" in current Claude Code and "Task" in

@@ -5,14 +5,13 @@
 writes to credential/secret files and to `auth/` directories outside `src/auth/` (which
 `auth-requires-security` already BLOCKS). They are warn-only: they must never block.
 
-IMPORTANT (reported to the orchestrator): scripts/cast-git-guard.py `_policy_evaluate` currently
-treats a matching `warn` policy as "allow silently" -- it returns (0, None) with no
-additionalContext. So today these entries are declarative: valid, loaded, matched, never
-blocking, but not yet SURFACED to the model. Surfacing needs an engine change (out of scope for
-this unit). The tests below therefore pin (a) the regexes fire / do not fire on the right
-paths, exactly as the engine applies them (re.search, IGNORECASE, raw + resolved path), and
-(b) the engine still returns (0, None) -- never a block -- for every matching path with no
-security record, and the existing .env policy and its template exemptions still hold.
+scripts/cast-git-guard.py `_policy_evaluate` surfaces a matching `warn` policy as an advisory:
+it returns (0, msg) where msg carries a `[CAST-POLICY-WARN]` line naming the policy id (the
+callers fold it into PreToolUse additionalContext -- see tests/test_cast_policy_warn_surface.py).
+The tests below pin (a) the regexes fire / do not fire on the right paths, exactly as the
+engine applies them (re.search, IGNORECASE, raw + resolved path), and (b) the engine returns
+(0, warn_msg) -- never a block -- for every matching path with no security record, and the
+existing .env policy and its template exemptions still hold.
 
 Near-miss decisions (documented, pinned):
   * `credential_utils.py` / `credentials` as a DIRECTORY name are NOT matched: the pattern keys
@@ -133,7 +132,10 @@ class TestWarnPolicyThroughEngine(unittest.TestCase):
                     continue
                 with self.subTest(policy=pid, path=path):
                     code, msg = gg._policy_evaluate(path, SESS)
-                    self.assertEqual((code, msg), (0, None))
+                    self.assertEqual(code, 0, msg)
+                    self.assertIsInstance(msg, str)
+                    self.assertIn('[CAST-POLICY-WARN]', msg)
+                    self.assertIn(f'Policy "{pid}"', msg)
 
     def test_existing_block_policies_still_block(self):
         # warn entries must not weaken the block policies or change which policy fires
@@ -149,6 +151,30 @@ class TestWarnPolicyThroughEngine(unittest.TestCase):
         for path in ('/home/u/p/.env.example', '/home/u/p/.env.sample', '/home/u/p/.env.template'):
             with self.subTest(path=path):
                 self.assertEqual(gg._policy_evaluate(path, SESS), (0, None))
+
+    def test_near_misses_stay_silent(self):
+        # Paths NO policy matches: engine must return exactly (0, None).
+        # Near-misses that another policy BLOCKS are asserted separately below.
+        silent = 0
+        all_policies = list(_policies().values())
+        for pid, paths in NEAR_MISSES.items():
+            for path in paths:
+                if not path.startswith('/') or any(
+                        re.search(p['path_pattern'], path, re.IGNORECASE)
+                        for p in all_policies):
+                    continue
+                with self.subTest(policy=pid, path=path):
+                    self.assertEqual(gg._policy_evaluate(path, SESS), (0, None))
+                silent += 1
+        self.assertGreater(silent, 10)  # the filter must not quietly empty the loop
+
+    def test_near_miss_inside_src_auth_is_a_block_not_a_silent_pass(self):
+        # `src/auth/` is excluded from the auth WARN because auth-requires-security BLOCKS it.
+        for path in ('/home/u/p/src/auth/x.ts', '/home/u/p/mysrc/auth/x.ts'):
+            with self.subTest(path=path):
+                code, msg = gg._policy_evaluate(path, SESS)
+                self.assertEqual(code, 2, msg)
+                self.assertIn('Policy "auth-requires-security"', msg)
 
 
 if __name__ == '__main__':
