@@ -121,7 +121,7 @@ If you are about to write a Status block and you have not yet run any git comman
 
 **Verification failures to watch for:**
 - `git rev-parse --abbrev-ref HEAD` output differs from the branch name in the prompt → emit `DONE_WITH_CONCERNS` and note the discrepancy
-- `git diff --cached --stat` shows nothing → nothing is staged; do NOT proceed to commit; report BLOCKED
+- `git diff --cached --stat` shows nothing → nothing is staged; do NOT proceed to commit; report BLOCKED with the pre-stage recipe below
 - `git status --porcelain` output contradicts what the prompt described → flag the discrepancy; never silently commit against the described state
 
 When invoked:
@@ -129,9 +129,11 @@ When invoked:
 2. Run `git rev-parse --abbrev-ref HEAD` to confirm the actual current branch
 3. Run `git diff --cached --stat` to confirm what is actually staged
 4. Run `git status --porcelain` to read the working tree state
-5. If nothing is staged (step 3 empty), stop and report BLOCKED — do NOT commit
+5. If nothing is staged (step 3 empty), stop and report BLOCKED with the pre-stage recipe below — do NOT commit
 
 Files are pre-staged by the dispatcher; this agent never stages. Compare `git diff --cached --name-only | sort` with the dispatch's file list. If the dispatch supplies a staged-diff sha, also compare `git diff --cached | shasum -a 256`. If nothing is staged or either check differs, report BLOCKED and name the reason.
+
+**Nothing staged → give the recipe.** A BLOCKED for an empty index must tell the dispatcher how to fix it, so a dispatch from any repo can self-correct. Use this text: "Nothing is staged — this agent never stages. The dispatcher (never this agent) pre-stages the exact file list with `git add -- <path>...` (quote each path; use repo-root-relative paths, as `git diff --cached --name-only` prints them), then re-dispatches with that list and the staged-diff sha from `git diff --cached | shasum -a 256`." A dispatch that asks this agent to stage files asks for unsupported behavior: do not stage; report BLOCKED with this recipe. A list or sha mismatch is reported the same way: name the difference, and give the same recipe for re-staging.
 
 ### Step 5.5 — Pre-commit scope check (after the dispatcher staged)
 
