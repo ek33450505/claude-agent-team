@@ -363,6 +363,9 @@ regex layer):
         lower-case line is main's to block), stdin through another fd (`source /dev/fd/3 3<<< ..`,
         `/dev/fd/63`, `bash /dev/fd/3 3<&0`) and a COMPUTED or globbed path (`bash $(echo
         /dev/stdin)`, `/dev/std?n`, `/dev/fd/$((0))`, `p=/dev/stdin; bash $p`);
+        `/proc/thread-self/fd/0`, `/proc/self/root/dev/stdin` and `/proc/<pid>/fd/0` are not
+        recognised as stdin either: `_STDIN_FD_PATH` matches only `/dev/fd/0…` and
+        `/proc/self/fd/0…` (one or more zeros), and those are Linux-only spellings (CAST targets macOS);
       * process substitution beyond one level of plain commands: a nested subshell body (`bash <
         <((echo ..))`), a producer fed through a redirect (`cat < <(echo ..) | bash`, `bash < <(cat <
         <(echo ..))`) and a heredoc inside it (`bash <(cat <<EOF` + a spelled git + `EOF` + `)`).
@@ -396,8 +399,14 @@ regex layer):
         upper-case `Git` / `=git` ARGUMENT followed by a verb, `ssh host <<< 'git push'`, a hatched
         plain git whose argument has a `$'..'` / `${IFS}` (judged without the hatch), a stdin shell
         that is given BOTH a pipe and a heredoc / herestring (`echo 'git push' | bash <<EOF`: zsh
-        feeds both, bash only the body - both are read), a quoted `"$@"` over an operand with a
-        newline, a stdin path with a trailing slash (`bash /dev/stdin/`: Linux refuses it).
+        feeds both, bash only the body - both are read), a quoted `"$@"` / `"$*"` / `"${@}"` (and
+        `"${*}"`) over an operand with a newline, a stdin path with a trailing slash (`bash
+        /dev/stdin/`: Linux refuses it);
+      * each `-c` payload that reads a positional parameter runs `_substitute_positional` up to 3
+        times (the quoted, raw and raw IFS-split readings; see `_shell_payloads`), so the positional
+        budget is charged up to 3x and `_MAX_EXEC_SCAN_STEPS` is not rescaled for it. Exhaustion
+        FAILS CLOSED (`_ExecOverBudget` -> `_Refusal(_EXEC_BUDGET_MSG)` in `_executable_segments_main`),
+        so the cost is a false BLOCK on a very long command, never a bypass.
     NOTE (2026-08-17 follow-up): this is distinct from — and NOT fixed by —
     the token-boundary fix below. Boundary anchoring (`\b`) closes ADJACENT
     empty-output command substitution appended to a flag/token
@@ -4071,7 +4080,8 @@ class _W(str):
 
 def _unequals(w):
     """`w` without the ONE leading `=` of zsh's `=cmd` (the path of `cmd`: `=bash`, `=git`); `==cmd` is
-    no expansion, and a word that is only `=` stays one."""
+    no expansion and is returned unchanged. A word that is only `=` loses that `=` too and becomes the
+    empty string (it is not kept as `=`); the empty string names no shell and no git."""
     return w[1:] if w[:1] == '=' and w[1:2] != '=' else w
 
 

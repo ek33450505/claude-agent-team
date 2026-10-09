@@ -493,8 +493,7 @@ if [ -d "$_se_dir" ] && [ ! -L "$_se_dir" ] && [ -O "$_se_dir" ]; then
   rm -f -- "${_se_dir}/cast-session-start-${_se_sid}.epoch" 2>/dev/null || true
   rm -f -- "${_se_dir}/cast-blocked-${_se_sid}"-*.count 2>/dev/null || true
 fi
-rm -f -- "${TMPDIR:-/tmp}/cast-blocked-${_se_sid}"*.count 2>/dev/null || true
-rm -f -- "${TMPDIR:-/tmp}/cast-dispatch-${_se_sid}.log" 2>/dev/null || true
+rm -f -- "${TMPDIR:-/tmp}/cast-blocked-${_se_sid}"-*.count 2>/dev/null || true
 rm -f -- "${TMPDIR:-/tmp}/cast-session-start-${_se_sid}.epoch" 2>/dev/null || true
 
 exit 0

@@ -282,8 +282,7 @@ class TestRetrieveRecordGlobal(unittest.TestCase):
         results = self.router.retrieve_record_global('resume distillate bullet points', top_n=3)
         # Manually call _log_injection for a memory hit (id is not None)
         mem_hits = [r for r in results if r['id'] is not None]
-        if not mem_hits:
-            self.skipTest('No memory/incident hit with id in results — seed issue')
+        self.assertTrue(mem_hits, 'seed must yield a memory hit with an integer id')
 
         conn = sqlite3.connect(self._tmp.name)
         before = conn.execute('SELECT COUNT(*) FROM injection_log').fetchone()[0]

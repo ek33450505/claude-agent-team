@@ -6,7 +6,9 @@ Output: JSON array of {kind, ref_id, ts, title, snippet} to stdout.
 
 On degraded/FTS5-unavailable path: JSON {"degraded": true, "rows": []}.
 On no results: [].
-Never crashes.
+The DB is opened read-only and is never created. A --db / env path refused by cast_db's
+allowlist exits 1 with the reason on stderr; a missing DB is a degraded result.
+Otherwise never crashes.
 """
 import importlib.util
 import json
@@ -14,7 +16,10 @@ import os
 import re
 import sqlite3
 import sys
-from pathlib import Path
+from urllib.parse import quote
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cast_db  # type: ignore  # noqa: E402
 
 
 # ── Embed module loader ──────────────────────────────────────────────────────
@@ -36,27 +41,25 @@ def _load_embed_module():
 SEMANTIC_CANDIDATE_FLOOR = 50  # re-rank at least this many FTS hits when --semantic
 
 
-# ── DB path resolution (mirrors cast_db._get_db_path) ───────────────────────
+# ── DB path resolution (validated through cast_db's allowlist) ──────────────
 
 def _get_db_path(override: str = "") -> str:
+    """Resolved, allowlist-checked DB path. An explicit --db gets the SAME checks as the
+    CAST_DB_URL / CAST_DB_PATH env vars. Raises ValueError on refusal."""
     if override:
-        return override
-    url = os.environ.get("CAST_DB_URL", "")
-    if url.startswith("sqlite:///"):
-        return url[len("sqlite:///"):]
-    return os.environ.get(
-        "CAST_DB_PATH",
-        str(Path.home() / ".claude" / "cast.db"),
-    )
+        return cast_db.validate_db_path(override, label="--db")
+    return cast_db._get_db_path()
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=5)
+    """Open `db_path` READ-ONLY. Never creates the file or its parent directory."""
+    if not os.path.isfile(db_path):
+        raise FileNotFoundError(f"database not found: {db_path}")
+    # quote() escapes '?' and '#' (and '%') so they stay part of the path in the URI.
+    conn = sqlite3.connect(f"file:{quote(db_path)}?mode=ro", uri=True, timeout=5)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA busy_timeout=5000;")
-        conn.execute("PRAGMA journal_mode=WAL;")
     except Exception:
         pass
     return conn
@@ -166,7 +169,10 @@ def search(
     project: str = "",
     mtype: str = "",
 ) -> dict:
-    """Return {"rows": [...]} or {"degraded": True, "rows": []} on error."""
+    """Return {"rows": [...]} or {"degraded": True, "rows": []} on error.
+
+    Raises ValueError if the DB path is refused by the cast_db allowlist (main() turns
+    that into a stderr message + exit 1)."""
     # Guard invalid limits: <=0 (and the non-int default handled in main()) fall back to the default.
     if limit <= 0:
         limit = 10
@@ -292,7 +298,11 @@ def main() -> None:
         print(json.dumps([]), flush=True)
         sys.exit(0)
 
-    result = search(query, kind=kind, since=since, limit=limit, db_path=db_path, semantic=semantic, agent=agent, project=project, mtype=mtype)
+    try:
+        result = search(query, kind=kind, since=since, limit=limit, db_path=db_path, semantic=semantic, agent=agent, project=project, mtype=mtype)
+    except (ValueError, RuntimeError, OSError) as e:  # DB path refused by the cast_db allowlist (RuntimeError: py3.9 resolve() symlink loop)
+        print(f"cast-ask-query: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # degraded → emit the full object so the caller can print an advisory
     if result.get("degraded"):

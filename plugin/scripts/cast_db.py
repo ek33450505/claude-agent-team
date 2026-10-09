@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """CAST database abstraction layer. Reads CAST_DB_URL env var, defaults to ~/.claude/cast.db."""
+import contextlib
 import os
 import re
 import sqlite3
@@ -120,27 +121,36 @@ def _validate_identifier(name: str) -> str:
     return name
 
 
-def _get_db_path() -> str:
-    url = os.environ.get('CAST_DB_URL', '')
-    if url.startswith('sqlite:///'):
-        raw = url[len('sqlite:///'):]
-    else:
-        raw = str(Path(os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))))
+def validate_db_path(raw: str, label: str = 'CAST_DB_URL/CAST_DB_PATH') -> str:
+    """Resolve `raw` and apply the DB allowlist (the ~/.claude positive rule plus the
+    constant prefixes). Returns the RESOLVED path; raises ValueError on refusal.
+
+    Shared by `_get_db_path` (env vars) and by callers that take an explicit path
+    (e.g. `cast-ask-query.py --db`), so an explicit path gets exactly the same checks."""
     resolved = str(Path(raw).resolve())
     reason = _claude_db_refusal(resolved)
     if reason:
-        raise ValueError(f'CAST_DB_URL/CAST_DB_PATH {reason}: {resolved!r}.')
+        raise ValueError(f'{label} {reason}: {resolved!r}.')
     prefixes = _allowed_db_prefixes()
     if not any(resolved.startswith(prefix) for prefix in prefixes):
         # Also accept exact match against the default db file (no trailing sep needed)
         default = str((Path.home() / '.claude' / 'cast.db').resolve())
         if resolved != default:
             raise ValueError(
-                f'CAST_DB_URL/CAST_DB_PATH resolves to an unexpected path: {resolved!r}. '
+                f'{label} resolves to an unexpected path: {resolved!r}. '
                 f'Must be under {prefixes}.'
             )
     # Connect to what was checked, not to the unresolved spelling (symlink/.. swaps)
     return resolved
+
+
+def _get_db_path() -> str:
+    url = os.environ.get('CAST_DB_URL', '')
+    if url.startswith('sqlite:///'):
+        raw = url[len('sqlite:///'):]
+    else:
+        raw = str(Path(os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))))
+    return validate_db_path(raw)
 
 
 def _connect():
@@ -176,7 +186,7 @@ def db_write(table: str, payload: dict) -> bool:
     sql = f'INSERT OR REPLACE INTO {table} ({cols}) VALUES ({placeholders})'
     for attempt in range(3):
         try:
-            with _connect() as conn:
+            with contextlib.closing(_connect()) as conn, conn:
                 conn.execute(sql, list(payload.values()))
                 conn.commit()
             return True
@@ -195,7 +205,7 @@ def db_write(table: str, payload: dict) -> bool:
 def db_query(sql: str, params: tuple = ()) -> list:
     """Run a SELECT and return list of Row objects."""
     try:
-        with _connect() as conn:
+        with contextlib.closing(_connect()) as conn, conn:
             return conn.execute(sql, params).fetchall()
     except Exception as e:
         _log_error(f'db_query failed: {e}')
@@ -211,7 +221,7 @@ def db_execute(sql: str, params: tuple = ()) -> bool:
     """
     for attempt in range(3):
         try:
-            with _connect() as conn:
+            with contextlib.closing(_connect()) as conn, conn:
                 conn.execute(sql, params)
                 conn.commit()
             return True

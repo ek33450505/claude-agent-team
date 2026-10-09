@@ -770,7 +770,7 @@ def assess_sensitivity(event: dict, tool_input: dict) -> dict:
 # --------------------------------------------------------------------------
 def record(event: dict, verdict: dict, tool_name: str, session_id: str) -> None:
     """Append one line to the local egress ledger. Never raises.
-    TODO(ed): optionally also emit a cast.db row (keep cast.db the record)."""
+    Decision (S3c-10, documented residual): the JSONL egress ledger is the record; no cast.db row by design."""
     try:
         os.makedirs(os.path.dirname(EGRESS_LOG), exist_ok=True)
         line = {

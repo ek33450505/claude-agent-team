@@ -66,6 +66,7 @@ def parse(raw):
 
 
 def branch():
+    # Intentionally ignores GIT_DIR/GIT_WORK_TREE: env-blind by design (agent-plantable env); bare/dotfile repos show no branch.
     try:
         cur = os.path.realpath(os.getcwd())
     except OSError:
