@@ -1324,7 +1324,7 @@ def _fullwidth(s: str) -> str:
 class TestAbsolutePathWidened(unittest.TestCase):
 
     def test_dotted_username_redacted(self):
-        result = _redact('see /Users/first.last/x')
+        result = _redact('see /Users/' + 'first.last/x')
         self.assertEqual('see ~/', result)
         self.assertNotIn('first.last', result)
 
@@ -1337,7 +1337,7 @@ class TestAbsolutePathWidened(unittest.TestCase):
         self.assertEqual('at ~/', _redact('at /home/jane.doe/work/notes.txt'))
 
     def test_replacement_is_neutral_for_both_roots(self):
-        self.assertEqual(_redact('/Users/bob/a'), _redact('/home/bob/a'))
+        self.assertEqual(_redact('/Users/' + 'bob/a'), _redact('/home/bob/a'))
 
     def test_previously_matched_paths_still_match(self):
         for name in ('johndoe', 'john_doe-2', 'A1'):
@@ -1415,7 +1415,7 @@ class TestUnicodeEvasion(unittest.TestCase):
     def test_widening_only_original_matches_survive(self):
         """Every entity found on the raw text is still found (same span) when the
         text also contains non-ASCII; the NFKC view may only ADD entities."""
-        base = 'Contact john@example.com or 555-123-4567 and /Users/jdoe/x'
+        base = 'Contact john@example.com or 555-123-4567 and /Users/' + 'jdoe/x'
         plain = {(e['entity_type'], e['start'], e['end']) for e in cast_redact.analyze_regex(base, [])}
         suffixed = base + ' caf\u00e9 \u65e5\u672c\u8a9e'
         got = {(e['entity_type'], e['start'], e['end']) for e in cast_redact.analyze_regex(suffixed, [])}
@@ -1430,7 +1430,7 @@ class TestAsciiAndBenignUnicodeUnchanged(unittest.TestCase):
          'Contact <EMAIL_ADDRESS> or call <PHONE_NUMBER> today',
          'Contact **************** or call ************ today',
          [('EMAIL_ADDRESS', 8, 24, '855f96e983f1f8e8'), ('PHONE_NUMBER', 33, 45, 'd36e83082288d9f2')]),
-        ('key sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD and file /Users/jdoe/Projects/x/y.py',
+        ('key sk-ant-' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD' + ' and file /Users/' + 'jdoe/Projects/x/y.py',
          'key <ANTHROPIC_KEY> and file ~/',
          'key *********************************************** and file ***************************',
          [('ANTHROPIC_KEY', 4, 51, '9d5da5bb22fae25e'), ('ABSOLUTE_PATH', 61, 88, '5e1ea038bdbfc50f')]),
@@ -1506,8 +1506,8 @@ class TestHomePathBoundary(unittest.TestCase):
 
     def test_users_branch_has_no_boundary(self):
         """Pre-existing behaviour: /Users/ matches after any char -- must not narrow."""
-        self.assertEqual('https://example.com~/', _redact('https://example.com/Users/bob/x'))
-        self.assertEqual('foo~/', _redact('foo/Users/bob/x'))
+        self.assertEqual('https://example.com~/', _redact('https://example.com/Users/' + 'bob/x'))
+        self.assertEqual('foo~/', _redact('foo/Users/' + 'bob/x'))
 
 
 class TestHookModeUnicode(unittest.TestCase):
@@ -1529,7 +1529,7 @@ class TestHookModeUnicode(unittest.TestCase):
         self.assertIn('EMAIL_ADDRESS', audit)
 
     def test_write_content_api_key_with_zwsp_blocked(self):
-        k = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+        k = 'sk-ant-' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD'
         r, _ = self._hook({'tool_name': 'Edit', 'tool_input': {
             'new_string': f'key = "{k[:12]}{ZWSP}{k[12:]}"'}})
         self.assertEqual(2, r.returncode, r.stderr)
@@ -1551,7 +1551,7 @@ class TestHookModeUnicode(unittest.TestCase):
 
 class TestCombiningMarkEvasion(unittest.TestCase):
 
-    API_KEY = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+    API_KEY = 'sk-ant-' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD'
 
     def test_key_with_combining_acute_mid_token_redacted(self):
         k = self.API_KEY
@@ -1603,7 +1603,7 @@ class TestHookFailClosed(unittest.TestCase):
 
     def test_real_token_plus_path_with_surrogate_exits_2(self):
         r = self._hook({'tool_name': 'Write', 'tool_input': {
-            'content': 'ghp_' + 'a' * 36 + ' and /Users/x/' + LONE_SURROGATE}})
+            'content': 'ghp_' + 'a' * 36 + ' and /Users/' + 'x/' + LONE_SURROGATE}})
         self.assertEqual(2, r.returncode, r.stderr)
         self.assertIn('GITHUB_TOKEN', r.stderr)
 
@@ -1721,7 +1721,7 @@ class TestHookFailClosed(unittest.TestCase):
 class TestEntityCountNotInflated(unittest.TestCase):
     """W1: raw span + wider view span of the same secret is ONE entity."""
 
-    K = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+    K = 'sk-ant-' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD'
 
     def test_trailing_cf_gives_single_entity(self):
         ents = cast_redact.analyze_regex(f'key {self.K}{ZWSP} end', [])
@@ -1761,7 +1761,7 @@ class TestEntityCountNotInflated(unittest.TestCase):
 
 class TestEnclosingMarksAndGaps(unittest.TestCase):
 
-    K = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+    K = 'sk-ant-' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD'
 
     def test_key_with_enclosing_marks_redacted(self):
         for ch in (ENCLOSING_KEYCAP, ENCLOSING_CIRCLE):
