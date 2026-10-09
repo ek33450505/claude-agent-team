@@ -153,7 +153,8 @@ filesystem WRITE surface (Write/Edit tool), this protects the Bash COMMAND surfa
     `cat > f <<EOF`, whose body stays inert data -- except that an UNQUOTED delimiter's
     `$(..)`/backtick substitutions run, while a quoted `<<'EOF'` body is pure data. ANY shell on the
     introducing line makes the body a script: `bash x; cat > f <<'EOF'` is a documented fail-closed
-    residual, so split such a command),
+    residual, so split such a command) (this is the PARSER's view; RULE 5-C blocks the whole
+    command first whenever its text names the surface),
     `$(..)`/backtick/`<(..)`/`>(..)` bodies,
     leading `do`/`then`/`!` keywords, `~user` (passwd lookup), parameters assigned earlier in
     the SAME command (`D=~/.claude; echo x > "$D/scripts/x"`, `export`/`declare`, and `for f in
@@ -172,10 +173,51 @@ filesystem WRITE surface (Write/Edit tool), this protects the Bash COMMAND surfa
     `declare|typeset|local|readonly|export|read|set|for|alias|printf -v` operand ANYWHERE in the
     command mentions a protected root, the command BLOCKS, whatever the variable name, modifier,
     IFS trick or array form. Accepted false positive: `X=~/.claude/scripts; $X`.
+    RULE 5-C -- COARSE DESYNC RULE (G1 guard freeze, 2026-10-09). Checked FIRST in is_blocked,
+    before every parser, on the raw AND the backslash-newline-joined text (bash joins first, so a
+    gate token or a spelling split by a join is whole there) with raw-text checks (substrings,
+    a character class, path canonicalisation, the existing mention scan, and a re-run of the
+    existing RULE 5 analyzer on the joined text); no NEW parsing rules. BLOCK when the
+    text (a) NAMES a protected root (the mention scan, which also runs on the text with quotes and
+    backslashes removed and `${HOME}` / `$HOME` read as `~`, as the shell sees a glob), a relative
+    root spelling (`.claude/scripts`, `Library/Python` ...) or a home-anchored ANCESTOR as a path
+    end (`~/.claude`, `$HOME/.claude`, `/Users/<u>/.claude`, `~/Library`, `~/Library/Caches`) --
+    spellings normalised per word (`//`, `/./`, `..` at any depth, a leading `~` / `$HOME` /
+    `${HOME}` expanded to the real home first) -- AND (b) contains a construct the line/quote
+    model can desync on: `<<` anywhere (heredoc, here-string, `<<` inside `$((..))` `$[..]`
+    `${..}` `a[..]` or quotes), `$'..'` / `$"..."` quoting, a control character other than tab/newline
+    or a non-ASCII blank (Python splits on them, bash does not), a `#` followed by a
+    quote/backtick on a line that is not the last, a `#` on a line that ends in a backslash
+    (bash does not join a comment to the next line), a blank-then-`#` inside `${..}` (bash
+    reads parameter text, the guard reads a comment), a `${HOME<modifier>}` anchor (the modifier
+    hides it from the parsers; plain `${HOME}` is excluded), or a `cd` / `pushd` word with a glob
+    metacharacter (`cd ~/.cl*/scripts`), also behind quotes (`"cd"`, a backslash-escaped `cd`,
+    `c''d`). Two further checks need no gate
+    construct: a comment-looking `#` (line start, or after a blank or `;` `&` `|` `(`) whose OWN
+    line tail names the surface (the guard reads a comment, bash may not), and a command that
+    contains backslash-newline whose JOINED text the existing RULE 5 analyzer blocks (a join
+    inside a word or between blanks hides a write from the line model; lines join only for an
+    ODD backslash run, and RULE 5's own hatch is neutralised in the joined text). Why: the
+    heredoc/quote parser kept desyncing
+    from bash (S4-b: `<<E\\OF` quote smuggling, `<<` in arithmetic/parameter/array contexts,
+    comment apostrophes, `$'a\\'b'` even on ONE line, `bash -c "$(cat <<'EOF' ..)"`,
+    backslash-newline joins); fixing one desync opened the next, and per the G1 freeze there are
+    no new parsing rules. NO escape hatch: CAST_PROTECTED_WRITE_OK=1 does not exempt it (one
+    hatch would also cover the lines a desync hid; that includes the backslash-newline re-run,
+    where `CAST_PROTECTED_WRITE_OK=` is neutralised). Fail-CLOSED past its gate. Accepted false
+    positives (measured over 30 days of real Bash calls: ~1/day outside guard development): a
+    `python3 - <<'EOF'` / `cat > f <<'EOF'` whose body names the surface, a quoted-heredoc
+    commit/PR message naming it, a teardown heredoc naming `$HOME/.claude`, a comment that names
+    it (`cp a b # see ~/.claude/scripts/x`). Workaround: write the
+    script/text with the Write tool and run the file, edit with the Edit tool, or split the call
+    so the heredoc/quoting call does not name the surface. The gate and the ancestor scan are
+    linear by construction; a `$HOME...` spelling with 65+ non-slash characters before the next
+    `/` fails closed.
     FINAL RESIDUALS -- accepted, NOT detected (each is a property of analysing a command STRING):
       1. code that never spells a root in one piece or builds it at runtime (`python3 -c
          "open(h+'/.claude/scripts/x','w')"`), any script FILE that writes (its body is invisible),
-         `python3 <<EOF` (a heredoc into a non-shell is inert text), `ssh host '..'`;
+         `python3 <<EOF` (a heredoc into a non-shell is inert text -- unless its text names the
+         surface, which RULE 5-C blocks), `ssh host '..'`;
       2. a path taken from a source the lexer cannot read: `read X < file`, command output, an
          inherited / exported environment, a function argument, a variable assigned in an EARLIER
          Bash call (`read` leaves the value unknown);
@@ -196,7 +238,16 @@ filesystem WRITE surface (Write/Edit tool), this protects the Bash COMMAND surfa
       9. expansion limits: more than 16 brace groups / 256 alternatives in one word degrade to a
          wildcard, more than 3 nested shells are refused (blocked), 1000 realpath lookups per command;
      10. the yq / ag option tables are partial (tools not installed here): an unlisted option only
-         drops the segment to the generic fail-closed path.
+         drops the segment to the generic fail-closed path;
+     11. RULE 5-C sees only what is SPELLED: an ancestor reached in relative steps (`cd ~; cd
+         .claude; echo x > scripts/y` behind a desync) or held in a non-home variable (`H=~` ...
+         `$H/.claude`) is only as safe as the parser, as is a brace-expanded spelling
+         (`.cl{a,b}ude`) behind a desync, an empty-expansion splice inside a root name
+         (`.cla$(:)ude`, `scri"$@"pts` -- accepted residual 1) and a variable-held target behind a
+         fake comment outside `${..}`; RULES 1-3 (pkill / `rm -rf ~`) share strip_heredocs's desyncs without a coarse
+         rule (they target accidents, not evasion). RULE 5-C reduces the desync surface; it does
+         not close it -- every security round has found a further pre-existing parser/bash
+         disagreement -- the sandbox is the boundary.
     BOUNDARY: this rule is DEFENCE-IN-DEPTH FOR SANDBOX-OFF. The hard boundary is the sandbox
     (allowWrite limited to /tmp-class paths); DETECTION of what slips past a string guard is the
     U6d integrity alarm. Escape hatch for a deliberate operation: CAST_PROTECTED_WRITE_OK=1.
@@ -248,14 +299,16 @@ DESIGN NOTES
     real `rm`/`pkill` on a still-later line look like heredoc body and be skipped. Same
     deliberate-evasion class as above (no agent emits this by accident); the accidental
     and improvised catastrophes the guard targets (e.g. `pkill -9 bash`, `rm -rf
-    ~/.claude`) are still caught.
+    ~/.claude`) are still caught. For RULE 5's protected roots this class is closed by
+    RULE 5-C (coarse desync rule); for RULES 1-3 it remains.
   - The escape hatch is PER-SEGMENT: `CAST_KILL_OK=1`/`CAST_RM_OK=1` exempts only the
     segment carrying it as a leading VAR= assignment, never the whole command line.
   - CLAUDE_SUBPROCESS=1 (managed / headless sub-claude) is skipped in the .sh wrapper,
     consistent with the other CAST guards. In-process Agent-tool subagents do NOT set
     that flag and ARE guarded.
   - FAIL-OPEN: any internal error → exit 0 (allow). A guard crash must never block all
-    Bash. Exit 2 = block, 0 = allow.
+    Bash. Exit 2 = block, 0 = allow. RULE 5-C runs before every parser and fails CLOSED past
+    its cheap gate, so a parser crash cannot skip it.
 """
 import fnmatch
 import json
@@ -1107,6 +1160,18 @@ PW_MSG = (
     "~/.claude/install-manifest.sha256, ~/.claude/cast-state, ~/Library/Caches/com.apple.python, "
     "~/Library/Python, ~/Library/LaunchAgents) via Bash is blocked — git hooks and python run from there. Deploy "
     "with `bash install.sh`. Deliberate? Prefix the segment with CAST_PROTECTED_WRITE_OK=1."
+)
+
+PW_COARSE_MSG = (
+    "**[CAST]** Blocked: this command names the installed CAST exec surface (~/.claude/scripts, "
+    "githooks, config, cast-state, ~/Library/Python, LaunchAgents, Caches/com.apple.python -- or "
+    "~/.claude / ~/Library itself) AND contains text the guard cannot reliably parse (a heredoc / "
+    "here-string, `$'..'` / `$\"..\"` quoting, a backslash-newline join, a `#` comment the guard "
+    "would misread, a `${HOME...}` modifier, or a `cd` into a glob). "
+    "CAST_PROTECTED_WRITE_OK=1 does NOT exempt this check. Instead: write the "
+    "script or text with the Write tool and run the file, edit files with the Edit tool, or "
+    "split the work into separate Bash calls so the call carrying the heredoc / quoting / glob "
+    "does not name the protected path."
 )
 
 # wrapper -> (short flags that take an argument, positionals to skip, skips VAR=val words)
@@ -2286,6 +2351,206 @@ def _pw_mention(ctx, text):
     return False
 
 
+# RULE 5-C (G1, 2026-10-09) -- the COARSE DESYNC RULE. Raw-text checks only; no NEW parsing rules.
+_PW_C_REL = re.compile(_PW_NAMES + r'(?![a-z0-9._-])')
+_PW_C_ANC = re.compile(
+    r'(?:~[a-z0-9._-]*|\$\{?home\b[^/\s]{0,64}|/users/[^/\s]+|/home/[^/\s]+|/var/root)'
+    r'/(?:\.claude|library|library/caches)(?:/\.)*/?(?![a-z0-9._-]|/[^\s;&|)<>`])'
+    # an over-long `$HOME...` spelling fails CLOSED: the {0,64} bound keeps the scan linear
+    # without narrowing what the rule catches
+    r'|\$\{?home\b[^/\s]{65}')
+# Characters Python's str.isspace() / split() treat as separators but bash does NOT (VT, FF, CR,
+# FS..US, NEL, NBSP, U+1680, U+2000-200A, U+2028/9, U+202F, U+205F, U+3000), every other C0
+# control, DEL and the BOM. The line/word model splits on them, so a `#` after one looks like a
+# comment start to the guard while bash runs the rest of the line. TAB and NEWLINE (real bash
+# blanks) are deliberately NOT in the set.
+_PW_C_ODD = re.compile(
+    r'[\x00-\x08\x0b-\x1f\x7f\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]')
+_PW_C_WORD_SEP = re.compile(r'[\s;&|()<>`]+')
+# a comment-looking `#`: at line start or after a blank / `;` `&` `|` `(`. finditer is
+# non-overlapping and the tail swallows the rest of the line, so each line yields at most its FIRST.
+_PW_C_HASH = re.compile(r'(?:^|[ \t;&|(])#([^\n]*)', re.M)
+_PW_C_PARAM_HASH = re.compile(r'[ \t]#')
+# any `${HOME<modifier>}` (plain `${HOME}` excluded): the modifier hides the anchor from the parsers
+_PW_C_HOME_MOD = re.compile(r'\$\{home[^}]', re.I)
+# a word's leading ~ / $HOME / ${HOME} (optionally after `NAME=`) followed by `/` or the word's end
+_PW_C_HOMEWORD = re.compile(r'([^/=]*=)?(?:~|\$home|\$\{home\})(?=/|$)')
+# `cd` / `pushd` as a word, split per `; & | newline` segment so that each search is O(1) per position
+_PW_C_CD_WORD = re.compile(r'(?:^|[(\s])(?:cd|pushd)\s')
+_PW_C_SEG_SEP = re.compile(r'[;&|\n]')
+# a backslash-newline joins lines only when it ends an ODD backslash run (`\\` + newline is an
+# escaped backslash followed by a real newline)
+_PW_C_JOIN = re.compile(r'(?<!\\)((?:\\\\)*)\\\n')
+# quotes and backslashes a shell removes before it expands a word (`.cl""*` is `.cl*`, `"cd"` is `cd`)
+_PW_C_UNQUOTE = re.compile(r"['\"\\]")
+# `${HOME}` / `$HOME` as a word part (not `$HOMEDIR`, not `${HOMEx}`)
+_PW_C_HOMEVAR = re.compile(r'\$\{home\}|\$home\b', re.I)
+_PW_C_HATCH = 'CAST_PROTECTED_WRITE_OK='
+_PW_C_HATCH_OFF = 'CAST_PROTECTED_WRITE_NOT_OK='
+
+
+def _pw_c_gated(command):
+    """The RULE 5-C gate, linear by construction (a backtracking regex over a long `#` line was
+    quadratic, and this runs on every Bash call): `<<` anywhere, `$'` / `$"`, a control
+    character other than tab/newline or a non-ASCII blank (Python splits on them, bash does
+    not), or -- on a line that is not the last -- a `#` followed by a quote / backtick, or a `#`
+    on a line that ends in a backslash (a comment bash does NOT join to the next line)."""
+    if '<<' in command or "$'" in command or '$"' in command or _PW_C_ODD.search(command):
+        return True
+    for line in command.split('\n')[:-1]:
+        i = line.find('#')
+        if i >= 0 and ("'" in line[i:] or '"' in line[i:] or '`' in line[i:]
+                       or line.endswith('\\')):
+            return True
+    return False
+
+
+def _pw_c_param_hash(command):
+    """F1a: a blank followed by `#` between the first `${` and the last `}` -- the guard reads it
+    as a comment start, bash treats it as parameter-expansion text (`echo ${x:- #b} > FILE`)."""
+    s = command.find('${')
+    e = command.rfind('}')
+    return s >= 0 and e > s and _PW_C_PARAM_HASH.search(command, s, e) is not None
+
+
+def _pw_c_strip(text):
+    """`text` the way the shell sees a word after quote removal: quotes and backslashes gone and
+    `${HOME}` / `$HOME` spelled `~`, so a glob split by quotes (`~/.cl""*/scripts`) or reached through
+    the home variable (`"$HOME"/.cl*/scripts`) is whole again."""
+    return _PW_C_HOMEVAR.sub('~', _PW_C_UNQUOTE.sub('', text))
+
+
+def _pw_c_cd_glob_words(command):
+    """`cd` / `pushd` arguments that contain a glob metacharacter (`cd ~/.cl*/scripts`), in the raw
+    text and in its quote-stripped form: linear (one split, then one search per segment that is
+    O(1) per position)."""
+    if '*' not in command and '?' not in command and '[' not in command:
+        return []
+    words = []
+    stripped = _pw_c_strip(command)   # `"cd"`, `\cd`, `c''d` and quote-spliced globs
+    for text in ((command,) if stripped == command else (command, stripped)):
+        for seg in _PW_C_SEG_SEP.split(text):
+            m = _PW_C_CD_WORD.search(seg)
+            if m is not None:
+                words.extend(w for w in seg[m.end():].split() if '*' in w or '?' in w or '[' in w)
+    return words
+
+
+def _pw_c_join(command):
+    """The text bash sees after line joining: remove a backslash-newline only when it ends an ODD
+    backslash run (linear)."""
+    return _PW_C_JOIN.sub(r'\1', command)
+
+
+def _pw_c_stack(word, home):
+    """Lexical `.` / `..` / `//` normalisation of ONE shell word (linear, no pass bound): a `..`
+    pops the previous segment, so `x/..` collapses at the end of a word too. A leading `~`,
+    `$HOME` or `${HOME}` (also after `NAME=`) is first expanded to the real home, so a `..`
+    that climbs out of it and back in (`~/../<user>/.claude`) lands on the right path."""
+    pre = ''
+    if home:
+        m = _PW_C_HOMEWORD.match(word)
+        if m is not None:
+            pre = m.group(1) or ''
+            word = home + word[m.end():]
+    absolute = word.startswith('/')
+    out = []
+    for seg in word.split('/'):
+        if seg in ('', '.'):
+            continue
+        if seg == '..':
+            if out and out[-1] != '..':
+                out.pop()
+            elif not absolute:
+                out.append('..')
+            continue
+        out.append(seg)
+    return pre + ('/' if absolute else '') + '/'.join(out)
+
+
+def _pw_c_canon(t, home=None):
+    """Normalise every word of `t` (split on whitespace and `; & | ( ) < > backtick`): `//`, `/./`
+    and `..` at ANY depth, also when the `..` ends the word, with a leading `~` / `$HOME` /
+    `${HOME}` expanded to `home` first. The result is a space-joined word list -- good for
+    searching, not for re-parsing."""
+    return ' '.join(_pw_c_stack(w, home) if '/' in w else w for w in _PW_C_WORD_SEP.split(t))
+
+
+def _pw_c_names(ctx, text):
+    """The RULE 5-C trigger: `text` NAMES a protected root (the mention scan, on the raw text and on
+    its quote-stripped form), a relative root spelling (`.claude/scripts`) or a home-anchored
+    ancestor as a path end (`~/.claude`)."""
+    if _pw_mention(ctx, text):
+        return True
+    stripped = _pw_c_strip(text)
+    if stripped != text and _pw_mention(ctx, stripped):   # glob pieces are glued back together
+        return True
+    t = re.sub(r"['\"\\]", '', text.lower()).replace(_FIRMLINK, '')
+    home = ctx.home.lower() if ctx.home.startswith('/') and ctx.home != '/' else None
+    t = _pw_c_canon(t, home)
+    for h in ctx.homes:
+        t = t.replace(h + '/', '~/')
+    return bool(_PW_C_REL.search(t) or _PW_C_ANC.search(t))
+
+
+def _pw_c_gate_any(text):
+    """Every RULE 5-C gate term: a desync construct, a blank-then-`#` inside `${..}`, a
+    `${HOME<modifier>}` anchor, or a `cd` / `pushd` word with a glob metacharacter."""
+    return bool(_pw_c_gated(text) or _pw_c_param_hash(text) or _PW_C_HOME_MOD.search(text)
+                or _pw_c_cd_glob_words(text))
+
+
+def _pw_c_ctx(cell):
+    """The protected-path context, built on first use and kept in the one-element list `cell`."""
+    if not cell:
+        cell.append(_pw_context())
+    return cell[0]
+
+
+def _pw_c_core(text, cell):
+    """The RULE 5-C check on ONE text: a gate term AND the text names the surface, or a
+    comment-looking `#` whose own line tail names it. `cell` lazily holds the (non-trivial to
+    build) protected-path context, so ungated commands never pay for it."""
+    if _pw_c_gate_any(text) and _pw_c_names(_pw_c_ctx(cell), text):
+        return True
+    if '#' in text:
+        tails = [m.group(1) for m in _PW_C_HASH.finditer(text)]
+        if tails and _pw_c_names(_pw_c_ctx(cell), '\n'.join(tails)):
+            return True
+    return False
+
+
+def pw_coarse_desync(command):
+    """RULE 5-C: True if the check below holds for the raw command OR for its backslash-newline-
+    joined text (bash joins first, so a gate token or a spelling split by a join is whole there).
+    The check: the text NAMES a protected root (mention scan), a relative root spelling
+    (`.claude/scripts`) or a home-anchored ancestor as a path end (`~/.claude`, `$HOME/.claude`,
+    `/Users/<u>/.claude`, `~/Library`, `~/Library/Caches`) -- spellings normalised per word
+    (`//`, `/./`, `..` at any depth, a leading `~` / `$HOME` expanded first) -- AND it contains a
+    construct the line/quote model can desync on: `<<` anywhere, `$'` / `$"`, a control character
+    other than tab/newline or a non-ASCII blank, a `#` followed by a quote / backtick on a line
+    that is not the last, a `#` on a line that ends in a backslash, a blank-then-`#` inside
+    `${..}`, a `${HOME<modifier>}` anchor, or a `cd` / `pushd` word with a glob metacharacter.
+    It also blocks a comment-looking `#` whose own line tail names the surface (the guard reads
+    it as a comment; bash may not). One more route: a command containing backslash-newline
+    whose joined text the existing RULE 5 analyzer blocks, with RULE 5's hatch neutralised:
+    there is NO escape hatch for any part of this rule. Fail-closed: an error (including a
+    non-str input) blocks."""
+    try:
+        cell = []
+        if _pw_c_core(command, cell):
+            return True
+        if '\\\n' in command:
+            joined = _pw_c_join(command)
+            if _pw_c_core(joined, cell):
+                return True
+            if protected_write_via_bash(joined.replace(_PW_C_HATCH, _PW_C_HATCH_OFF)):
+                return True
+        return False
+    except Exception:
+        return True
+
+
 def _pw_body_touches(ctx, body):
     """Does a command-substitution BODY mention / name / resolve to a protected path?"""
     if len(body) > PW_MAX_PAYLOAD:
@@ -3269,6 +3534,10 @@ def protected_write_via_bash(command):
 
 def is_blocked(command):
     """Return (blocked, message) for a raw Bash command string."""
+    # RULE 5-C (G1) -- the coarse desync rule runs FIRST, before any parser, so a parser crash
+    # (safe_is_blocked fails OPEN) or a watchdog timeout can never skip it.
+    if pw_coarse_desync(command):
+        return True, PW_COARSE_MSG
     # RULE 4 — workflow-write via Bash redirection (scans the raw command; it does
     # its own heredoc-strip + segment split). Checked first: a workflow write is a
     # policy-evasion class independent of the kill/rm rules.

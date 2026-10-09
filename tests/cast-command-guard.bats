@@ -471,9 +471,15 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
 # FIX 7 — comments & redirections not mis-collected as rm targets
 # ===========================================================================
 
-@test "FIX7 ALLOW: rm -rf ./build # mentions ~/.claude in comment → allows" {
-  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ./build # mentions ~/.claude in comment')"
+@test "FIX7 ALLOW: rm -rf ./build # mentions ~ in comment → allows (RULE 3 ignores comments)" {
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ./build # mentions ~ in comment')"
   assert_success
+}
+
+@test "G1 RULE 5-C: a comment naming ~/.claude blocks (accepted FP of the fake-comment check)" {
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload 'rm -rf ./build # mentions ~/.claude in comment')"
+  assert_failure
+  assert_output --partial "does NOT exempt"
 }
 
 @test "FIX7 ALLOW: rm -rf ./build > ~/.claude/build.log 2>&1 → allows (redirect target)" {
@@ -600,6 +606,23 @@ print(json.dumps({'tool_name': 'Write', 'tool_input': {'file_path': '/tmp/x', 'c
   assert_failure
   [[ "$status" -eq 2 ]]
   assert_output --partial "[CAST]"
+}
+
+# RULE 5-C (G1 coarse desync rule) — the raw text names the exec surface AND carries a construct
+# the heredoc/quote model can desync on; checked first, no escape hatch.
+
+@test "RULE5-C BLOCK: <<E\\OF quote-smuggle naming ~/.claude/scripts → blocks (no escape hatch)" {
+  CMD=$'cat <<E\\OF\n\'\nEOF\necho x > ~/.claude/scripts/evil\n#\''
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
+  assert_failure
+  [[ "$status" -eq 2 ]]
+  assert_output --partial "does NOT exempt"
+}
+
+@test "RULE5-C ALLOW: sqlite3 ~/.claude/cast.db <<'SQL' → allows (heredoc, but no protected root named)" {
+  CMD=$'sqlite3 ~/.claude/cast.db <<\'SQL\'\nSELECT 1;\nSQL'
+  run python3 "$HOOK_PY" <<< "$(make_bash_payload "$CMD")"
+  assert_success
 }
 
 # ===========================================================================
