@@ -45,8 +45,13 @@
 #     terminal (pre-existing);
 #   - a same-user process that changes the 0700 scratch dir between the S1 guard and grep can
 #     still make a pattern read as clean (same-user trust; out of scope);
-#   - the per-pattern join keeps hit/exclusion line numbers in memory: O(hit lines) (2M
-#     all-hit lines ~ 625 MB RSS); it fails closed if killed.
+#   - the per-pattern join keeps line numbers (line mode) or match indices (match mode) in
+#     memory: O(hit lines) or O(matches) (a 50 MB line of excluded matches ~ 20 s, 346 MB RSS);
+#     it fails closed if killed;
+#   - exclusions are substring searches within each match (`bob@example.com.corp.io` is
+#     excluded by `@example\.(com|org)`), as before;
+#   - scripts/ci-pii-scan.sh (the CI scan) still applies its exclusions per whole line
+#     (follow-up: align the two scanners, G6/G2).
 # COST (G1c): the diff is parsed ONCE (awk) into line-aligned added-line records, then each
 # pattern is ONE grep over all of them: O(patterns) processes, not one grep per added line per
 # pattern. git still runs one diff per (commit, parent); commits shared by several pushed refs
@@ -218,7 +223,7 @@ _PII_TMP=""
 _pii_cleanup() {
   if [[ -n "$_PII_TMP" && -d "$_PII_TMP" ]]; then
     rm -f -- "$_PII_TMP/commits" "$_PII_TMP/diff" "$_PII_TMP/names" "$_PII_TMP/added" \
-      "$_PII_TMP/files" "$_PII_TMP/hits" "$_PII_TMP/excl" 2>/dev/null || true
+      "$_PII_TMP/files" "$_PII_TMP/hits" "$_PII_TMP/excl" "$_PII_TMP/mtext" 2>/dev/null || true
     rmdir -- "$_PII_TMP" 2>/dev/null || true
   fi
 }
@@ -426,58 +431,84 @@ fi
 
 # Scan every added line for a pattern ($2), skipping allowlisted files (parsed above). Prints
 # hits as "  [label] file: content" in diff order. Returns 0 always (caller decides whether hits
-# are fatal). $3 (optional): extra grep flags (e.g., "-i"). $4 (optional): exclusion ERE, a hit
-# line that also matches it is suppressed. grep status: 0 = match, 1 = no match, anything else
-# (2 = bad pattern / I/O) is a SCAN ERROR and must not read as "no match". -n numbers lines as
-# the records are numbered; -a because the input is text by construction (no NUL survives the
-# $(...) capture) and grep must never switch to "Binary file matches"; -e keeps a '-'-leading
-# pattern a pattern. LC_ALL=C is exported for the whole of Check 4.
+# are fatal). $3 (optional): extra grep flags (e.g., "-i"). $4 (optional): exclusion ERE, tested
+# against each MATCH (grep -o), not the whole line: a line is a hit if ANY of its matches
+# survives, so a placeholder on the same line cannot hide a real address or path (the full line
+# is printed once). Without $4 the whole line is the unit (no -o). $4 requires a pattern that
+# cannot match the empty string: -o prints nothing for an empty match, so a line whose only
+# matches are empty would be dropped silently. Anchors and \b in $4 see only the match text.
+# grep status: 0 = match, 1 = no match, anything else (2 = bad pattern / I/O) is a SCAN ERROR
+# and must not read as "no match". -n numbers lines as the records are numbered; -a because the
+# input is text by construction (no NUL survives the $(...) capture) and grep must never switch
+# to "Binary file matches"; -e keeps a '-'-leading pattern a pattern. LC_ALL=C is exported for
+# Check 4.
 _pii_scan() {
-  local label="$1" pattern="$2" extra_flags="${3:-}" exclusion="${4:-}" rc=0
+  local label="$1" pattern="$2" extra_flags="${3:-}" exclusion="${4:-}" rc=0 mode="line"
   # Create/truncate the output files BEFORE grep: a redirect that cannot open its file never
   # runs grep and returns 1, which would read as "no match" (fail open). This closes the
   # open/create failures (a dangling path, ENOSPC on create); once the files exist, the `>`
   # below only truncates, which needs no space. A same-user process swapping the files between
   # this guard and grep is outside the boundary (see RESIDUALS).
-  if ! { : >"$_PII_TMP/hits" && : >"$_PII_TMP/excl"; } 2>/dev/null; then
+  if ! { : >"$_PII_TMP/hits" && : >"$_PII_TMP/excl" && : >"$_PII_TMP/mtext"; } 2>/dev/null; then
     echo "  [scan-error] $label: cannot write the scan scratch"
     return 0
   fi
-  # shellcheck disable=SC2086
-  grep -n -a $GREP_FLAGS $extra_flags -e "$pattern" -- "$_PII_TMP/added" >"$_PII_TMP/hits" 2>/dev/null || rc=$?
+  if [[ -n "$exclusion" ]]; then
+    # Match mode: one `N:match` hits line per match; the exclusion runs over the match texts.
+    mode="match"
+    # shellcheck disable=SC2086
+    grep -n -o -a $GREP_FLAGS $extra_flags -e "$pattern" -- "$_PII_TMP/added" >"$_PII_TMP/hits" 2>/dev/null || rc=$?
+  else
+    # shellcheck disable=SC2086
+    grep -n -a $GREP_FLAGS $extra_flags -e "$pattern" -- "$_PII_TMP/added" >"$_PII_TMP/hits" 2>/dev/null || rc=$?
+  fi
   if [[ "$rc" -eq 1 ]]; then
     return 0
   elif [[ "$rc" -ne 0 ]]; then
     echo "  [scan-error] $label: grep rc=$rc"
     return 0
   fi
-  if [[ -n "$exclusion" ]]; then
+  if [[ "$mode" == "match" ]]; then
+    # mtext line j = the text of hits line j; the exclusion grep's line numbers index hits lines.
+    if ! awk '{ i = index($0, ":"); print substr($0, i + 1) }' "$_PII_TMP/hits" >"$_PII_TMP/mtext" 2>/dev/null; then
+      echo "  [scan-error] $label: cannot extract matches"
+      return 0
+    fi
     rc=0
-    grep -n -a -E -e "$exclusion" -- "$_PII_TMP/added" >"$_PII_TMP/excl" 2>/dev/null || rc=$?
+    grep -n -a -E -e "$exclusion" -- "$_PII_TMP/mtext" >"$_PII_TMP/excl" 2>/dev/null || rc=$?
     if [[ "$rc" -ne 0 && "$rc" -ne 1 ]]; then
       echo "  [scan-error] $label: exclusion grep rc=$rc"
       return 0
     fi
   fi
   # Join: report record N when it is a hit and not excluded, naming the file of its header
-  # ordinal. Unparsable grep output, a record or file stream shorter than a hit's number, or
-  # rc 0 with no hit written (max == 0, e.g. the hits file is /dev/null) is a scan error. At
-  # most 200 hits are printed per pattern, then a count of the rest; the verdict is unchanged.
-  _PII_D="$_PII_TMP" awk -v label="$label" '
+  # ordinal. In line mode excl holds record numbers; in match mode (mode=match) it holds
+  # indices of hits lines, and record N is reported if ANY of its hits lines survives, once.
+  # Unparsable grep output, a record or file stream shorter than a hit's number, or rc 0 with
+  # no hits line written (nh == 0, or max == 0 in line mode; e.g. the hits file is /dev/null)
+  # is a scan error. At most 200 hits are printed per pattern, then a count of the rest; the
+  # verdict is unchanged.
+  _PII_D="$_PII_TMP" awk -v label="$label" -v mode="$mode" '
     function num(l,   i, n) {
       i = index(l, ":"); n = substr(l, 1, i - 1)
       return (i > 1 && n ~ /^[0-9]+$/) ? n + 0 : -1
     }
     BEGIN {
       d = ENVIRON["_PII_D"]
-      while ((r = (getline l < (d "/excl"))) > 0) { n = num(l); if (n < 0) { bad = 1; break }; ex[n] = 1 }
+      while ((r = (getline l < (d "/excl"))) > 0) {
+        n = num(l); if (n < 0) { bad = 1; break }
+        if (mode == "match") exm[n] = 1; else ex[n] = 1
+      }
       if (r < 0) bad = 1
       while (!bad && (r = (getline l < (d "/hits"))) > 0) {
-        n = num(l); if (n < 0) { bad = 1; break }; hit[n] = 1; if (n > max) max = n
+        n = num(l); if (n < 0) { bad = 1; break }
+        nh++
+        if (mode == "match" && (nh in exm)) continue
+        hit[n] = 1; if (n > max) max = n
       }
       if (r < 0) bad = 1
       if (bad) { print "  [scan-error] " label ": unparsable grep output"; exit 0 }
-      if (max == 0) {
+      if (nh == 0 || (mode == "line" && max == 0)) {
         print "  [scan-error] " label ": grep reported a match but wrote no hits"; exit 0
       }
       fo = 0; ft = ""; shown = 0
@@ -511,13 +542,13 @@ _pii_scan_ci() {
 PII_HITS=""
 
 # Generic email scan — flags any email address; safe senders and obvious placeholders
-# are excluded via a combined exclusion regex.
+# are excluded via a combined exclusion regex, applied per match.
 _EMAIL_EXCLUSION='users\.noreply\.github\.com|noreply@anthropic\.com|@example\.(com|org)|your-email@|user@example|@example\b'
 PII_HITS+=$(_pii_scan "email" '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "" "$_EMAIL_EXCLUSION" || true)
 
-# Generic hardcoded home-path scan — flags /Users/<name>; well-known CI runner
-# usernames and doc placeholders are excluded.
-_PATH_EXCLUSION='/Users/testuser\b|/Users/runner\b|/Users/<[^>]+>|/Users/\$'
+# Generic hardcoded home-path scan — flags /Users/<name>. CI-runner and fixture usernames are
+# excluded per match; /Users/<name> and /Users/$VAR never match the path pattern.
+_PATH_EXCLUSION='/Users/testuser\b|/Users/runner\b'
 PII_HITS+=$(_pii_scan "hardcoded-path" '/Users/[A-Za-z0-9._-]+' "" "$_PATH_EXCLUSION" || true)
 
 # Local deny-list scan — reads patterns from a file outside the repo.

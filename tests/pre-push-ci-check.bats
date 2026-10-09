@@ -1447,3 +1447,88 @@ _make_silent_grep_shim() {
   refute_output --partial "] tests/pre-push-ci-check.bats:"
   refute_output --partial "] r.txt:"
 }
+
+# ---------------------------------------------------------------------------
+# Per-match exclusion (G1c-B): the email / hardcoded-path exclusion is tested against each
+# MATCH, not the whole line, so a placeholder on the same line cannot hide a real address or
+# path. Every address and path below is built from fragments (no literal in the fixtures).
+# ---------------------------------------------------------------------------
+
+# A real address followed by an excluded placeholder, on ONE line.
+_mixed_email_line() {
+  printf 'cc %s%s%s and %s%s%s' "bob.real" "@" "corp-mail.io" "noreply" "@" "anthropic.com"
+}
+
+# A real home path followed by an excluded CI-runner path, on ONE line.
+_mixed_path_line() {
+  printf '%s%s %s%s' "/Use" "rs/alice/x" "/Use" "rs/runner/y"
+}
+
+# Only placeholders: every match of both scans is excluded.
+_placeholder_line() {
+  printf '%s%s%s and %s%s%s\n' "noreply" "@" "anthropic.com" "user" "@" "example.com"
+  printf '%s%s %s%s\n' "/Use" "rs/runner/x" "/Use" "rs/testuser/y"
+}
+
+# Two real addresses on one line.
+_two_emails_line() {
+  printf '%s%s%s %s%s%s' "a.one" "@" "corp-mail.io" "b.two" "@" "corp-mail.io"
+}
+
+_sc_mixed_email() {
+  _sc_file m.txt "$(_mixed_email_line)"
+}
+
+_sc_mixed_path() {
+  _sc_file m.txt "$(_mixed_path_line)"
+}
+
+_sc_placeholders() {
+  _sc_file m.txt "$(_placeholder_line)"
+}
+
+_sc_two_emails() {
+  _sc_file m.txt "$(_two_emails_line)"
+}
+
+@test "email: a placeholder on the same line no longer hides a real address" {
+  _run_scenario _sc_mixed_email
+  assert_failure
+  assert_output --partial "[email] m.txt: $(_mixed_email_line)"
+}
+
+@test "hardcoded-path: a CI-runner placeholder on the same line no longer hides a real home path" {
+  _run_scenario _sc_mixed_path
+  assert_failure
+  assert_output --partial "[hardcoded-path] m.txt: $(_mixed_path_line)"
+}
+
+@test "email and hardcoded-path: a line whose matches are all excluded still passes" {
+  _run_scenario _sc_placeholders
+  assert_success
+  refute_output --partial "[email]"
+  refute_output --partial "[hardcoded-path]"
+  assert_output --partial "All checks passed"
+}
+
+@test "email: a line with two real addresses is reported once" {
+  _run_scenario _sc_two_emails
+  assert_failure
+  local n
+  n="$(printf '%s\n' "$output" | grep -c '\[email\]' || true)"
+  [[ "$n" == "1" ]] || fail "expected exactly one [email] line, got $n: $output"
+  assert_output --partial "[email] m.txt: $(_two_emails_line)"
+}
+
+# Line 1: two excluded placeholders (every match excluded); line 2: a real address. The hit's
+# record number (2) differs from its hits-line index (3), so the join must map exclusions by
+# hits-line index, not by record number.
+_sc_placeholder_then_real() {
+  _sc_file m.txt "$(printf '%s%s%s and %s%s%s\n%s%s%s' "noreply" "@" "anthropic.com" "user" "@" "example.com" "bob.real" "@" "corp-mail.io")"
+}
+
+@test "email: a placeholder-only line before a real address does not hide the real line" {
+  _run_scenario _sc_placeholder_then_real
+  assert_failure
+  assert_output --partial "[email] m.txt: $(printf '%s%s%s' "bob.real" "@" "corp-mail.io")"
+}
