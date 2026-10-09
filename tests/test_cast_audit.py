@@ -38,6 +38,17 @@ cast_audit = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cast_audit)
 
 
+def setUpModule():
+    # Temp HOME (S4-1 D-D): cast_db._log_error is pinned to
+    # Path.home()/.claude/logs/db-write-errors.log and CAST_DB_PATH does not redirect
+    # it, so expected-error paths would otherwise write to the real log.
+    home = tempfile.mkdtemp(prefix='cast-audit-home-')
+    unittest.addModuleCleanup(shutil.rmtree, home, True)
+    patcher = mock.patch.dict(os.environ, {'HOME': home})
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
 class TestSha256(unittest.TestCase):
     """Test _sha256() — deterministic hash."""
 

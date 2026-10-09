@@ -17,6 +17,13 @@ so they would simply be gone.
 
 Every test here runs against an isolated temp DB via --db. The obvious way to
 test this bug is to trigger it, so it must never be able to reach ~/.claude/cast.db.
+
+HOME is isolated too (S4-1 D-D). cast_db._log_error is pinned to
+Path.home()/.claude/logs/db-write-errors.log by design, and CAST_DB_PATH does not
+redirect it, so the expected "no such table" errors from querying a deliberately
+partial fixture DB used to land in the real log. The temp HOME also seeds one
+fixture transcript where the FILE_SOURCES read ~/.claude/projects, so a full
+rebuild still has something to repopulate (the _seeded() ref_id discriminator).
 """
 import os
 import sqlite3
@@ -25,6 +32,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _INDEX_PATH = Path(__file__).parent.parent / 'scripts' / 'cast-ask-index.py'
 
@@ -61,6 +69,16 @@ class TestRebuildKindScope(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix='cast-doc4-')
         self.db = os.path.join(self.tmp, 'cast.db')
+        # Temp HOME: Path.home() reads $HOME at call time on POSIX, so this redirects
+        # cast_db's pinned error log for both the subprocess and the in-process test.
+        self.home = os.path.join(self.tmp, 'home')
+        proj = os.path.join(self.home, '.claude', 'projects', 'fixture-proj')
+        os.makedirs(proj)
+        with open(os.path.join(proj, 'sess.jsonl'), 'w', encoding='utf-8') as f:
+            f.write('{"type": "user", "message": {"content": "fixture transcript prompt"}}\n')
+        patcher = mock.patch.dict(os.environ, {'HOME': self.home, 'CAST_DB_PATH': self.db})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         con = sqlite3.connect(self.db)
         con.executescript(_DDL)
         # Seed one row per kind, standing in for the 18,162 real ones.
@@ -103,7 +121,7 @@ class TestRebuildKindScope(unittest.TestCase):
             'distillate', 'journal', 'plan')} | {i for i in ids if i.startswith('agent_run-')}
 
     def _run(self, *args):
-        env = dict(os.environ, CAST_DB_PATH=self.db)
+        env = dict(os.environ, CAST_DB_PATH=self.db, HOME=self.home)
         return subprocess.run([sys.executable, str(_INDEX_PATH), '--db', self.db, *args],
                               capture_output=True, text=True, env=env, timeout=120)
 
@@ -147,7 +165,6 @@ class TestRebuildKindScope(unittest.TestCase):
         import importlib.util
         spec = importlib.util.spec_from_file_location('cast_ask_index', _INDEX_PATH)
         mod = importlib.util.module_from_spec(spec)
-        os.environ['CAST_DB_PATH'] = self.db
         spec.loader.exec_module(mod)
 
         class _StubEmbed:

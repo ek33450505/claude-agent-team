@@ -15,17 +15,30 @@ Uses an isolated CAST_DB_PATH temp DB seeded with tiny record_fts + agent_memori
 NEVER touches ~/.claude/cast.db.
 """
 import os
+import shutil
 import sys
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS_DIR = str(Path(__file__).parent.parent / 'scripts')
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 # Import after path setup
+
+
+def setUpModule():
+    # Temp HOME (S4-1 D-D): cast_db._log_error is pinned to
+    # Path.home()/.claude/logs/db-write-errors.log and CAST_DB_PATH does not redirect
+    # it, so expected-error paths would otherwise write to the real log.
+    home = tempfile.mkdtemp(prefix='cast-router-home-')
+    unittest.addModuleCleanup(shutil.rmtree, home, True)
+    patcher = mock.patch.dict(os.environ, {'HOME': home})
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
 
 
 def _import_router():

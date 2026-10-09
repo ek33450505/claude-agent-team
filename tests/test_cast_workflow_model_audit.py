@@ -57,7 +57,9 @@ class WorkflowModelAuditOpusDetectionTest(unittest.TestCase):
         conn.close()
 
     def _run(self):
-        env = dict(os.environ, CAST_DB_PATH=self.db)
+        # HOME -> temp dir (S4-1 D-D): cast_db's error log is pinned to
+        # Path.home()/.claude/logs/, which CAST_DB_PATH does not redirect.
+        env = dict(os.environ, CAST_DB_PATH=self.db, HOME=self.tmp)
         env.pop('CAST_DB_URL', None)
         p = subprocess.run(
             [sys.executable, str(_SCRIPT)], env=env,

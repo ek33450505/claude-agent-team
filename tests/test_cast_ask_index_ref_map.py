@@ -16,6 +16,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _REPO = Path(__file__).parent.parent
 _INDEX_PATH = _REPO / 'scripts' / 'cast-ask-index.py'
@@ -50,6 +51,15 @@ class TestRecordFtsRefMap(unittest.TestCase):
         self.resume = os.path.join(self.tmp, 'resume')
         for d in (self.proj, self.journal, self.resume):
             os.makedirs(d)
+        # Temp HOME + CAST_DB_PATH for every subprocess (they copy os.environ) and the
+        # in-process test (S4-1 D-D). cast_db._log_error is pinned to
+        # Path.home()/.claude/logs/db-write-errors.log; CAST_DB_PATH does not redirect it.
+        # patch.dict also restores CAST_DB_PATH, which the in-process test used to leak.
+        self.home = os.path.join(self.tmp, 'home')
+        os.makedirs(self.home)
+        patcher = mock.patch.dict(os.environ, {'HOME': self.home, 'CAST_DB_PATH': self.db})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         r = subprocess.run(['bash', str(_DB_INIT), '--db', self.db], capture_output=True, text=True,
                            env=dict(os.environ, CAST_DB_PATH=self.db), timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -172,7 +182,6 @@ class TestRecordFtsRefMap(unittest.TestCase):
 
     def test_upsert_row_dedupes_on_kind_ref_id_and_keeps_map_consistent(self):
         import importlib.util
-        os.environ['CAST_DB_PATH'] = self.db
         sys.path.insert(0, str(_REPO / 'scripts'))
         spec = importlib.util.spec_from_file_location('cast_ask_index_under_test', _INDEX_PATH)
         mod = importlib.util.module_from_spec(spec)
