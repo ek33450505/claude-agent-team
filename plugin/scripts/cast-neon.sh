@@ -267,7 +267,7 @@ case "$CMD" in
       # Record the bypass BEFORE performing the delete. Best-effort per
       # cast_ack.py's contract (always exits 0) — see header comment: this
       # can silently fail to record while still allowing the delete.
-      python3 "$SCRIPT_DIR/cast_ack.py" CAST_NEON_BRANCH_DELETE_OK --script cast-neon.sh || true
+      python3 -E -s "$SCRIPT_DIR/cast_ack.py" CAST_NEON_BRANCH_DELETE_OK --script cast-neon.sh || true
     fi
 
     _do_request DELETE "/projects/${PROJECT_ID}/branches/${BRANCH_ID}"

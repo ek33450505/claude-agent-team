@@ -2,18 +2,45 @@
 """
 cast-commit-reconcile.py — Pre-push hatch audit reconciler.
 
-Enforcement rule (Ed-locked design):
-  A COMMIT_HATCH_USED audit event with in_claude_session==true and NO
-  commit_provenance row recorded within [event_ts - 60s, event_ts + 15min]
-  = unauthorized in-session self-commit.
+Enforcement rule (D5b — judges WHO made the commit, not only THAT one exists):
+  Per in-session, repo-scoped COMMIT_HATCH_USED audit event newer than the checkpoint:
+  1. LEGACY event (no "agent_type" key — written before D5a): unchanged D5 rule. NO
+     commit_provenance row recorded within [event_ts - 60s, event_ts + 15min] =
+     unauthorized in-session self-commit.
+  2. IDENTITY event (has the "agent_type" key): authorized only if "agent_id" is
+     non-empty AND the roster type resolved from Claude Code's own subagent sidecar
+     (~/.claude/projects/<slug>/<session_id>/subagents/agent-<agent_id>.meta.json, via
+     cast_subagent_stop._resolve_roster_type) is exactly "commit". The event's own
+     agent_type is NEVER trusted (Claude Code overwrites it with a dispatch's custom
+     name, so a differently-typed agent dispatched as name "commit" would forge it).
+     Violation reasons: "main-session hatch" (agent_id empty); "agent <roster> is not
+     the commit agent"; "commit-agent identity unverifiable (no trusted sidecar)", or
+     "... (sidecar resolver unavailable: <ExceptionClass>)" when the sidecar resolver
+     module could not be loaded (or the resolver raised). Identity and corrupt-line events need NO database: they are judged even when
+     cast.db or its commit_provenance table is absent (only LEGACY window-rule events
+     need it; with no DB they stay unjudged, as before).
+     A provenance row is NOT required for an authorized identity event (a commit
+     agent's `cd other-repo && commit` is attributed to the hook cwd repo).
+  3. CORRUPT hatch line (non-UTF-8, non-JSON, or non-object JSON, whose raw bytes
+     contain COMMIT_HATCH_USED) = violation "corrupt hatch line (line N)" (Ed,
+     2026-10-04: a damaged hatch event blocks, ackable). A corrupt line cannot be
+     dated, so it is identified by the sha256 of its raw bytes: an ACK run records
+     them in the RECONCILE_ACK_USED event ("corrupt_line_sha256"), and any later run
+     skips a corrupt line whose hash appears in ANY well-formed ack event in the log
+     (newest 1000 hashes; counted as "acked_corrupt_lines"). Untrusted corrupt bytes
+     are never parsed for dates. A forged ack event is accepted the same way (same
+     cooperative boundary as editing audit.jsonl).
+     EXCEPTION: the LAST line of a file with no trailing newline (an append in
+     progress) is reported "unverifiable" (exit 0, loud) as before.
 
 Exit codes:
   0 — clean / acked / skipped (infra absence) / unverifiable (audit file exists
-      but is unreadable or unparseable — e.g. inside the Claude Code Bash sandbox,
-      or a non-UTF-8 line that mentions COMMIT_HATCH_USED (a possibly damaged hatch
-      event; a non-UTF-8 line that does not is skipped and counted); the check was
+      but is unreadable — e.g. inside the Claude Code Bash sandbox — or its last,
+      newline-less line is a possibly half-written hatch event; the check was
       NOT performed, said loudly on stderr + in the JSON "warning")
   1 — unacked violations found OR DB error (fail-closed)
+  CAST_RECONCILE_ACK=1 acks ALL violation kinds (RECONCILE_ACK_USED event + checkpoint
+  advance).
 
 Output: valid JSON on stdout regardless of exit code.
 Errors: stderr only.
@@ -21,19 +48,25 @@ Errors: stderr only.
 Cooperative-tier limitations (D5 threat model — accepted traceless bypasses):
   Physical or repo-write access can bypass this gate via: (1) edit/delete
   audit.jsonl directly, (2) write the checkpoint file directly,
-  (3) CAST_SKIP_RECONCILE=1 git push, (4) git push --no-verify.
-  These require direct filesystem/repo access and are outside the model's scope.
+  (3) CAST_SKIP_RECONCILE=1 with the push, (4) the push's --no-verify flag,
+  (5) plant a sidecar: the subagent sidecar lives under ~/.claude/projects and is
+  agent-writable with the sandbox off, so it is the same cooperative boundary as
+  audit.jsonl (the resolver demands exactly one candidate and refuses spoof shapes,
+  but cannot stop a forged file). These require direct filesystem/repo access and
+  are outside the model's scope.
 """
 from __future__ import annotations
 
 import datetime
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import sqlite3
 import subprocess
 import sys
+import types
 
 # cast_db abstraction — mirrors pattern used in cast-commit-provenance.py
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -137,6 +170,11 @@ def _sanitize(s: str) -> str:
     return _SAFE_CHARS_RE.sub("?", str(s))
 
 
+def _sanitize_text(s: str) -> str:
+    """Like _sanitize but keeps spaces and parentheses (human-readable reason text)."""
+    return re.sub(r"[^a-zA-Z0-9._:TZ+\- ()]", "?", str(s))
+
+
 def _sanitize_path(s: str) -> str:
     """Like _sanitize but tolerates '/' for filesystem paths (repo roots).
 
@@ -238,15 +276,67 @@ def _parse_ts(raw_ts: str) -> datetime.datetime | None:
         return None
 
 
+_HATCH_MARKER = b"COMMIT_HATCH_USED"
+_MAX_ACKED_HASHES = 1000
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _corrupt_event(raw: bytes, lineno: int) -> dict:
+    """A violation-candidate for a corrupt hatch line, identified by sha256 of its
+    raw bytes (no line terminator). Nothing in the bytes is parsed."""
+    return {
+        "timestamp": "",
+        "session_id": "unknown",
+        "repo": "",
+        "_ts": None,
+        "corrupt_line": lineno,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+_AUDIT_READ_CHUNK = 1 << 16
+
+
+def _iter_audit_lines(path: str, chunk_size: int | None = None):
+    """Yield (raw_line_bytes, terminated) for every line of `path`, streaming in fixed-size
+    chunks. Line splitting is bytes.splitlines()'s: \\n, \\r and \\r\\n all end a line (a
+    \\r\\n straddling a chunk boundary is one terminator, not two). `terminated` is False only
+    for the final line of a file with no trailing terminator (an append in progress). Raises
+    what open()/read() raise (FileNotFoundError, PermissionError, ...)."""
+    size = chunk_size or _AUDIT_READ_CHUNK
+    partial: list[bytes] = []  # fragments of the current, not-yet-terminated line
+    skip_lf = False  # the previous chunk ended in \r: swallow a \n opening this one
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(size)
+            if not chunk:
+                break
+            if skip_lf and chunk.startswith(b"\n"):
+                chunk = chunk[1:]
+            skip_lf = chunk.endswith(b"\r")
+            for piece in chunk.splitlines(keepends=True):
+                if piece.endswith((b"\n", b"\r")):
+                    partial.append(piece[:-2] if piece.endswith(b"\r\n") else piece[:-1])
+                    yield b"".join(partial), True
+                    partial = []
+                else:
+                    partial.append(piece)
+    if partial:
+        yield b"".join(partial), False
+
+
 def load_hatch_events(since: datetime.datetime, stats: dict | None = None) -> list[dict]:
     """
     Parse audit.jsonl and return COMMIT_HATCH_USED events with
-    in_claude_session==True that are strictly newer than `since`.
+    in_claude_session==True that are strictly newer than `since`, plus a pseudo-event
+    (key "corrupt_line") for each corrupt line that mentions COMMIT_HATCH_USED and
+    whose sha256 no well-formed RECONCILE_ACK_USED event has acked (those are counted
+    in stats["acked_corrupt_lines"]).
 
     Grandfathering rules:
       - Events lacking in_claude_session field entirely → ignored (pre-feature lines).
       - Events with in_claude_session==false → not suspicious, skipped.
-    Garbage / non-JSON lines are silently skipped.
+    Other garbage / non-JSON lines (no hatch marker) are silently skipped.
 
     Repo scoping (D5 hardening), applied per event:
       - event repo non-empty AND CURRENT_REPO non-empty AND realpath(repo) !=
@@ -255,86 +345,198 @@ def load_hatch_events(since: datetime.datetime, stats: dict | None = None) -> li
       - event repo empty/missing → evaluate as legacy-global (fail-closed grandfather).
       - CURRENT_REPO == '' (repo undeterminable) → no filtering, full legacy behavior.
 
-    Decoding is strict UTF-8 PER LINE (never the locale default, never lossy):
-      - an undecodable line whose raw bytes contain b"COMMIT_HATCH_USED" may be a
-        damaged hatch event we cannot evaluate → the UnicodeDecodeError propagates
-        and the caller reports the whole check "unverifiable" (never a silent drop);
-      - any other undecodable line is junk like a non-JSON line: skipped, and counted
-        in stats["skipped_undecodable_lines"] when a `stats` dict is passed. One stray
-        bad byte elsewhere in the log must not switch off the provenance check.
+    Decoding is strict UTF-8 PER LINE (never the locale default, never lossy).
+    A line that is undecodable, not JSON, or JSON but not an object, AND whose raw
+    bytes contain b"COMMIT_HATCH_USED", is a damaged hatch event we cannot evaluate:
+      - normally → a corrupt pseudo-event (the caller reports a violation);
+      - if it is the LAST line of a file with no trailing newline (an append in
+        progress) → the original exception propagates and the caller reports the
+        whole check "unverifiable".
+    Any such line WITHOUT the marker is junk: skipped, and (undecodable only) counted
+    in stats["skipped_undecodable_lines"] when a `stats` dict is passed.
     """
     events: list[dict] = []
     skipped_undecodable = 0
+    acked_hashes: list[str] = []  # file order = oldest first
     try:
-        # Binary read + per-line strict decode. bytes.splitlines() splits on \n, \r and
-        # \r\n exactly like text-mode universal newlines, so line boundaries (and thus
-        # which events a lone \r separates) are unchanged from the old text-mode read.
-        with open(AUDIT_PATH, "rb") as f:
-            raw_lines = (piece for chunk in f for piece in chunk.splitlines())
-            for raw in raw_lines:
-                try:
-                    line = raw.decode("utf-8")
-                except UnicodeDecodeError:
-                    if b"COMMIT_HATCH_USED" in raw:
-                        raise  # possibly a damaged hatch event → unverifiable
-                    skipped_undecodable += 1
+        # Binary STREAMING read + per-line strict decode: the whole log is never held in
+        # memory (it used to be read whole, then split + decoded: ~2.5x its size).
+        for idx, (raw, terminated) in enumerate(_iter_audit_lines(AUDIT_PATH)):
+            lineno = idx + 1
+            is_open_tail = not terminated  # only the final line can lack a terminator
+            try:
+                line = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                if _HATCH_MARKER in raw:
+                    if is_open_tail:
+                        raise  # half-written append → unverifiable
+                    events.append(_corrupt_event(raw, lineno))
                     continue
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue  # garbage line — skip silently
+                skipped_undecodable += 1
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
                 if not isinstance(obj, dict):
-                    continue  # valid JSON but not an event object ([], "x", 3) — skip like garbage
+                    raise ValueError("audit line is not a JSON object")
+            except ValueError:  # JSONDecodeError is a ValueError
+                if _HATCH_MARKER in raw:
+                    if is_open_tail:
+                        raise
+                    events.append(_corrupt_event(raw, lineno))
+                continue  # garbage line without the marker — skip silently
 
-                # Only care about COMMIT_HATCH_USED events
-                if obj.get("event") != "COMMIT_HATCH_USED":
-                    continue
+            # Collect corrupt-line hashes acked by earlier ACK runs (any age).
+            if obj.get("event") == "RECONCILE_ACK_USED":
+                hashes = obj.get("corrupt_line_sha256")
+                if isinstance(hashes, list):
+                    acked_hashes.extend(
+                        h for h in hashes if isinstance(h, str) and _SHA256_RE.fullmatch(h)
+                    )
+                continue
 
-                # GRANDFATHER: missing in_claude_session field → ignore
-                if "in_claude_session" not in obj:
-                    continue
+            # Only care about COMMIT_HATCH_USED events
+            if obj.get("event") != "COMMIT_HATCH_USED":
+                continue
 
-                # in_claude_session==false → not suspicious, skip
-                if not obj["in_claude_session"]:
-                    continue
+            # GRANDFATHER: missing in_claude_session field → ignore
+            if "in_claude_session" not in obj:
+                continue
 
-                # Repo scoping: skip ONLY a foreign repo's scoped event. Empty
-                # event repo (legacy) or empty CURRENT_REPO → no filtering.
-                repo = obj.get("repo") or ""
-                if not isinstance(repo, str):
-                    continue  # malformed repo value — skip this line only
-                if repo and CURRENT_REPO:
-                    try:
-                        if os.path.realpath(repo) != CURRENT_REPO:
-                            continue
-                    except ValueError:
-                        continue  # e.g. NUL byte in repo — skip this line only
+            # in_claude_session==false → not suspicious, skip
+            if not obj["in_claude_session"]:
+                continue
 
-                # Parse timestamp
-                raw_ts = obj.get("timestamp") or obj.get("ts") or ""
-                evt_ts = _parse_ts(raw_ts)
-                if evt_ts is None:
-                    continue  # unparseable timestamp → skip
+            # Repo scoping: skip ONLY a foreign repo's scoped event. Empty
+            # event repo (legacy) or empty CURRENT_REPO → no filtering.
+            repo = obj.get("repo") or ""
+            if not isinstance(repo, str):
+                continue  # malformed repo value — skip this line only
+            if repo and CURRENT_REPO:
+                try:
+                    if os.path.realpath(repo) != CURRENT_REPO:
+                        continue
+                except ValueError:
+                    continue  # e.g. NUL byte in repo — skip this line only
 
-                # Only events strictly newer than checkpoint
-                if evt_ts <= since:
-                    continue
+            # Parse timestamp
+            raw_ts = obj.get("timestamp") or obj.get("ts") or ""
+            evt_ts = _parse_ts(raw_ts)
+            if evt_ts is None:
+                continue  # unparseable timestamp → skip
 
-                events.append({
-                    "timestamp": raw_ts,
-                    "session_id": obj.get("session_id", "unknown"),
-                    "repo": repo,
-                    "_ts": evt_ts,
-                })
+            # Only events strictly newer than checkpoint
+            if evt_ts <= since:
+                continue
+
+            evt = {
+                "timestamp": raw_ts,
+                "session_id": obj.get("session_id", "unknown"),
+                "repo": repo,
+                "_ts": evt_ts,
+            }
+            if "agent_type" in obj:  # D5a identity event
+                evt["identity"] = True
+                evt["agent_type"] = obj.get("agent_type")
+                evt["agent_id"] = obj.get("agent_id", "")
+            events.append(evt)
     except FileNotFoundError:
         pass  # handled by caller — audit file absent → skip
 
+    acked = set(acked_hashes[-_MAX_ACKED_HASHES:])
+    acked_corrupt = 0
+    kept: list[dict] = []
+    for evt in events:
+        if "corrupt_line" in evt and evt["sha256"] in acked:
+            acked_corrupt += 1
+        else:
+            kept.append(evt)
+
     if stats is not None:
         stats["skipped_undecodable_lines"] = skipped_undecodable
-    return events
+        stats["acked_corrupt_lines"] = acked_corrupt
+    return kept
+
+
+# ---------------------------------------------------------------------------
+# Identity check (D5b) — trusted roster type from Claude Code's subagent sidecar
+# ---------------------------------------------------------------------------
+
+_SUBAGENT_STOP_MOD = None  # None=unattempted, False=load failed, module=loaded
+_SUBAGENT_STOP_ERR = ""  # exception class name of a failed load (sanitized); "" otherwise
+
+
+def _err_class(exc: BaseException) -> str:
+    """The exception's class name, restricted to [A-Za-z0-9_] (it lands in a reason string)."""
+    return re.sub(r"[^A-Za-z0-9_]", "", type(exc).__name__)[:64] or "Exception"
+
+
+def _load_subagent_stop():
+    """Load cast_subagent_stop.py from THIS script's own directory (never ~/.claude
+    on sys.path, never the CWD). Importing it only defines names (its main is guarded
+    by __name__); it does insert CAST_HOOK_DIR/~/.claude/scripts at sys.path[0], so
+    sys.path is restored afterwards. False on any failure (callers fail closed), with
+    the failing exception's class kept in _SUBAGENT_STOP_ERR.
+
+    ONLY KeyboardInterrupt propagates (an operator's ^C must not be recorded as "the loader
+    failed"). Every other BaseException -- SystemExit included -- is a load FAILURE and fails
+    closed: a SystemExit(0) escaping from the import would make main() exit 0 with no JSON,
+    which pre-push reads as a skip. No watchdog or timeout exception rides through this try:
+    nothing here arms a signal/alarm, and cast_subagent_stop's import only defines names."""
+    global _SUBAGENT_STOP_MOD, _SUBAGENT_STOP_ERR
+    if _SUBAGENT_STOP_MOD is None:
+        saved_path = list(sys.path)
+        try:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cast_subagent_stop.py")
+            spec = importlib.util.spec_from_file_location("cast_subagent_stop", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _SUBAGENT_STOP_MOD = mod
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - any other failure → fail closed
+            _SUBAGENT_STOP_MOD = False
+            _SUBAGENT_STOP_ERR = _err_class(exc)
+        finally:
+            sys.path[:] = saved_path
+    return _SUBAGENT_STOP_MOD
+
+
+def _roster_type(session_id, agent_id) -> tuple[str, str]:
+    """-> (roster_type, error_class). roster_type is the sidecar-resolved roster type for
+    (session_id, agent_id), or '' on any doubt. error_class is '' unless the sidecar LOADER
+    (or the resolver itself) failed -- then the exception class name, so the caller can
+    report "sidecar resolver unavailable" instead of a plain "no trusted sidecar"."""
+    mod = _load_subagent_stop()
+    if not mod:
+        return "", _SUBAGENT_STOP_ERR or "LoadError"
+    try:
+        ctx = types.SimpleNamespace(session_id=session_id, agent_id=agent_id)
+        return mod._resolve_roster_type(ctx) or "", ""
+    except Exception as exc:  # noqa: BLE001
+        return "", _err_class(exc)
+
+
+def violation_reason(evt: dict) -> str | None:
+    """Why `evt` is an unauthorized hatch commit, or None if it is authorized."""
+    if "corrupt_line" in evt:
+        return f"corrupt hatch line (line {evt['corrupt_line']})"
+    if not evt.get("identity"):
+        # Legacy event: no identity to judge → D5 provenance-window rule.
+        return None if has_provenance(evt["_ts"], evt["repo"]) else "no commit provenance in window"
+    agent_id = evt.get("agent_id")
+    if agent_id == "":
+        return "main-session hatch"
+    roster, load_err = _roster_type(evt["session_id"], agent_id) if isinstance(agent_id, str) else ("", "")
+    if roster == "commit":
+        return None
+    if roster:
+        return f"agent {roster} is not the commit agent"
+    if load_err:  # the sidecar could not be consulted at all: still a violation, but say why
+        return f"commit-agent identity unverifiable (sidecar resolver unavailable: {load_err})"
+    return "commit-agent identity unverifiable (no trusted sidecar)"
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +622,7 @@ def append_ack_event(acked_events: list[dict]) -> None:
             }
             for e in acked_events
         ],
+        "corrupt_line_sha256": [e["sha256"] for e in acked_events if "sha256" in e],
     })
 
 
@@ -512,47 +715,50 @@ def main() -> int:
             return 0
         return _report_unverifiable(exc)
 
-    # 4. Skip cleanly if DB is missing (infra not yet deployed)
+    # 4. Is the provenance DB usable? Only LEGACY window-rule events need it. Identity events
+    #    (judged from the Claude Code sidecar) and corrupt-line events need NO database, so a
+    #    missing cast.db / commit_provenance table must not turn them into a quiet "skip".
+    db_gap = ""
     if not os.path.exists(DB_PATH):
-        result = {
-            "status": "skip",
-            "reason": "cast.db not found",
-            "checked": 0,
-            "violations": [],
-        }
-        print(json.dumps(result))
-        return 0
+        db_gap = "cast.db not found"  # infra not yet deployed
+    else:
+        # 5. Check commit_provenance table presence — fail-closed on DB error
+        try:
+            table_present = provenance_table_exists()
+        except _DBError as exc:
+            # Exception text can echo DB/path bytes: sanitize before JSON + stderr.
+            reason = _sanitize(str(exc))
+            result = {
+                "status": "error",
+                "reason": reason,
+                "checked": 0,
+                "violations": [],
+            }
+            print(json.dumps(result))
+            print(
+                f"\n[CAST pre-push] DB query failed — cannot verify provenance; push blocked.\n"
+                f"(Fail-closed on infra ERROR; skips only on genuine table absence.)\n"
+                f"Reason: {reason}\n",
+                file=sys.stderr,
+            )
+            return 1
+        if not table_present:
+            db_gap = "commit_provenance table not found"
 
-    # 5. Check commit_provenance table presence — fail-closed on DB error
-    try:
-        table_present = provenance_table_exists()
-    except _DBError as exc:
-        # Exception text can echo DB/path bytes: sanitize before JSON + stderr.
-        reason = _sanitize(str(exc))
-        result = {
-            "status": "error",
-            "reason": reason,
-            "checked": 0,
-            "violations": [],
-        }
-        print(json.dumps(result))
-        print(
-            f"\n[CAST pre-push] DB query failed — cannot verify provenance; push blocked.\n"
-            f"(Fail-closed on infra ERROR; skips only on genuine table absence.)\n"
-            f"Reason: {reason}\n",
-            file=sys.stderr,
-        )
-        return 1
-
-    if not table_present:
-        result = {
-            "status": "skip",
-            "reason": "commit_provenance table not found",
-            "checked": 0,
-            "violations": [],
-        }
-        print(json.dumps(result))
-        return 0
+    unjudged_legacy = 0
+    if db_gap:
+        judgeable = [e for e in events if e.get("identity") or "corrupt_line" in e]
+        unjudged_legacy = len(events) - len(judgeable)
+        if not judgeable:
+            result = {
+                "status": "skip",
+                "reason": db_gap,
+                "checked": 0,
+                "violations": [],
+            }
+            print(json.dumps(result))
+            return 0
+        events = judgeable
 
     # Undecodable junk lines are skipped, not fatal — surface the count in the JSON
     # (only when non-zero, so the common-case output is unchanged).
@@ -561,33 +767,46 @@ def main() -> int:
         if audit_stats.get("skipped_undecodable_lines")
         else {}
     )
+    if audit_stats.get("acked_corrupt_lines"):
+        skipped_note["acked_corrupt_lines"] = audit_stats["acked_corrupt_lines"]
+    if unjudged_legacy:
+        skipped_note["unjudged_legacy_events"] = unjudged_legacy
+        skipped_note["db_unavailable"] = db_gap
 
-    # 6. For each event, check provenance within the window
+    # 6. Judge each event (identity / provenance window / corrupt line)
     violations: list[dict] = []
     violation_events: list[dict] = []
     checked = 0
     for evt in events:
         checked += 1
-        if not has_provenance(evt["_ts"], evt["repo"]):
-            violations.append({
+        reason = violation_reason(evt)
+        if reason is not None:
+            v = {
                 "timestamp": evt["timestamp"],
                 "session_id": evt["session_id"],
                 "repo": evt["repo"],
-            })
+                "reason": reason,
+            }
+            if evt.get("identity"):
+                v["agent_type"] = evt.get("agent_type")
+                v["agent_id"] = evt.get("agent_id")
+            violations.append(v)
             violation_events.append(evt)
 
     # 7. Build response
     if not violations:
         result = {"status": "clean", "checked": checked, "violations": [], **skipped_note}
         print(json.dumps(result))
-        write_checkpoint(now, old_ts=checkpoint)
+        if not unjudged_legacy:  # legacy events still await a DB: keep them inside the window
+            write_checkpoint(now, old_ts=checkpoint)
         return 0
 
     if ACK_MODE:
         result = {"status": "acked", "checked": checked, "violations": violations, **skipped_note}
         print(json.dumps(result))
         append_ack_event(violation_events)
-        write_checkpoint(now, old_ts=checkpoint)
+        if not unjudged_legacy:  # an ack must not skip past a legacy event no DB could judge
+            write_checkpoint(now, old_ts=checkpoint)
         return 0
 
     # Unacked violations — exit 1 with remediation block on stderr (L1: sanitize audit values)
@@ -597,13 +816,15 @@ def main() -> int:
     offenders = "".join(
         f"  - session={_sanitize(v['session_id'])}  ts={_sanitize(v['timestamp'])}"
         f"  repo={_sanitize_path(v.get('repo', ''))}\n"
+        f"    reason: {_sanitize_text(v.get('reason', ''))}\n"
         for v in violations
     )
     print(
         f"\n[CAST pre-push] Unauthorized in-session self-commit(s) detected.\n"
         f"Offending sessions / timestamps:\n{offenders}\n"
         f"Remediation:\n"
-        f"  1. Re-commit via the commit agent (preferred): the commit agent records provenance.\n"
+        f"  1. Re-commit via the commit agent (dispatched by roster type `commit`, "
+        f"unnamed or `commit__<label>`).\n"
         f"  2. Human-approved exception: CAST_RECONCILE_ACK=1 git push\n"
         f"     (appends a RECONCILE_ACK_USED event to the audit log)\n",
         file=sys.stderr,

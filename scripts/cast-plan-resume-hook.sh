@@ -38,7 +38,7 @@ if [ ! -f "$PD_SCRIPT" ]; then PD_SCRIPT="${HOME}/.claude/scripts/cast-plan-doct
 if [ ! -f "$PD_SCRIPT" ]; then exit 0; fi  # tool missing → silent degrade, never block
 
 # --- Get the briefing (failures must never block the session) ---
-BRIEF="$(python3 "$PD_SCRIPT" --resume --plan "$PLAN" 2>/dev/null || true)"
+BRIEF="$(python3 -E -s "$PD_SCRIPT" --resume --plan "$PLAN" 2>/dev/null || true)"
 if [ -z "$BRIEF" ]; then exit 0; fi
 
 # --- Neutralize dispatch directives so re-injected plan text can't re-fire CAST triggers ---

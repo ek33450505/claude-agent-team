@@ -240,8 +240,10 @@ prose inside a heredoc that mentions a guarded git command will block and needs 
 is deliberate — the heredoc-suppression logic that avoided those false blocks produced two CRITICAL
 fail-open bypasses in review (a herestring, a quoted `<<`, a trailing-comment `<<`, and a backslash-escaped
 quote each fooled its detector into dropping every following line from the scan), so the suppression was
-removed rather than hardened. Still unmatched, pre-existing: a git invocation wrapped entirely inside a
-subshell or command substitution, which would need a real shell parser rather than regexes. The guard is
+removed rather than hardened. Correction (2026-10-08): since #420 (2026-10-06) a fail-closed shell lexer
+extracts executed code, so subshells, `$( )`, backticks and `bash -c` are blocked (probed 2026-10-08); remaining
+limits live in the KNOWN LIMITATIONS block of `scripts/cast-git-guard.py` (e.g. `GIT_CONFIG_*` exported in an
+earlier Bash call). The guard is
 advisory-grade — its threat model is a careless agent, not an adversary, and the OS/tool sandbox remains the
 real security boundary.
 
@@ -249,7 +251,7 @@ real security boundary.
 
 | Op class | Operation(s) | Enforced by | Type | Escape hatch | Auto-chain-safe? |
 |---|---|---|---|---|---|
-| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record` from the commit agent and `.githooks/post-commit`; the PostToolUse hook `cast-post-tool.py` also records it from outside the Bash sandbox, where cast.db is read-only) + pre-push reconcile (`cast-commit-reconcile.py`; reports `unverifiable` when the sandbox can't read the audit log) | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✓ hook (unconditional) |
+| Git commit | raw `git commit` | `pre-tool-guard.sh` (commit block) + provenance recording (`cast-commit-provenance.py record` from the commit agent and `~/.claude/githooks/post-commit` (deployed from `.githooks/`); the PostToolUse hook `cast-post-tool.py` also records it from outside the Bash sandbox, where cast.db is read-only) + pre-push reconcile (`cast-commit-reconcile.py`; reports `unverifiable` when the sandbox can't read the audit log). Identity judgment (D5a/D5b, 2026-10-08): `COMMIT_HATCH_USED` lines carry `agent_type`, `agent_id`, `tool_use_id`, `session_id`, `head_before`, `main_repo`; the reconcile authorizes only when `agent_id` is non-empty and the sidecar-resolved roster type (`_resolve_roster_type`) is `commit`; PostToolUse labels rows `agent_type` or `'main-session'` | hard-block + audit trail | `CAST_COMMIT_AGENT=1` (records provenance); `CAST_RECONCILE_ACK=1` (human-approved exception) | ✓ hook (unconditional) |
 | Git push | raw `git push` | `pre-tool-guard.sh` (push block) | hard-block | `CAST_PUSH_OK=1` | ✓ hook (unconditional) |
 | Force-push | `git push --force` | `push.md` (agent refusal) | refuse | none | ◑ agent-refusal |
 | Push to main (work repo) | push to `main`/`master` | `push.md` (branch rule) | refuse | `--force-main` / `repo_class=personal` | ◑ agent-refusal |
@@ -270,6 +272,7 @@ real security boundary.
 | Branch force-delete | `git branch -D` (incl. clusters, e.g. `-qD`), `--delete --force`, `-d … --force` (either order); `-d` alone, `-m`, `-c`, and read-only forms unaffected | `cast-git-guard.py` (branch block) | hard-block | `CAST_BRANCH_OK=1` | ✓ hook (unconditional) |
 | Worktree force-removal / prune | `git worktree remove -f`/`--force`; `git worktree prune` except `-n`/`--dry-run` (U6a-2); ANY git command while the repo's `.git/worktrees/*` holds a symlinked entry (stateful filesystem check). Bare `remove` (git itself refuses on a dirty or untracked-bearing tree), `add -f`, `list` unaffected | `cast-git-guard.py` (worktree block) | hard-block | `CAST_WORKTREE_OK=1` | ✓ hook (unconditional) |
 | Ref deletion | `git update-ref -d`, plus `--stdin` denied by default (its payload is invisible to a command-line scanner); create/update argument forms unaffected | `cast-git-guard.py` (update-ref block) | hard-block | `CAST_UPDATE_REF_OK=1` | ✓ hook (unconditional) |
+| Exec-surface write | Bash that writes, copies/moves/links into, chmods, edits in place, downloads/unpacks into, or deletes under the installed exec surface (`~/.claude/{githooks,scripts,config,cast-state}`, `~/.claude/install-manifest.sha256`, `~/Library/Caches/com.apple.python`, `~/Library/Python`, `~/Library/LaunchAgents`) | `cast-command-guard.py` (RULE 5) | hard-block | `CAST_PROTECTED_WRITE_OK=1` (per segment; not recorded in `ack_events`) | ✓ hook (unconditional; string analysis — residuals in docs/escape-hatches.md) |
 | History rewrite | `git filter-branch` (any form) | `cast-git-guard.py` (filter-branch block) | hard-block | `CAST_FILTER_BRANCH_OK=1` | ✓ hook (unconditional) |
 | Schema migration | destructive DDL/DML via `cast-migrate.py` | `cast-migrate.py` (`_pre_migration_backup`) | **fail-closed backup** | none | ✓ **script gate** |
 | DB row prune | nightly `DELETE` of old rows | `cast-db-prune.py` (`_pre_prune_backup`, then `_pre_prune_rollup`) | **fail-closed backup + fail-closed rollup** | none | ✓ **script gate** |
@@ -550,6 +553,8 @@ CAST uses three Claude Code hook events. Each hook script reads a JSON payload f
 | `Stop` | `cast-session-end.sh` | Session ends |
 | `SubagentStop` | `cast-subagent-stop-hook.sh` + `cast_subagent_stop.py` | A subagent has finished — updates agent_runs, detects truncation/completeness/protocol violations, records incidents, emits budget alerts, and compresses hookSpecificOutput; single python process, no sub-hook fan-out |
 | `SubagentStop` | `cast-subagent-worktree-check.sh` | Scans for stale git worktrees left by the subagent and prunes them; isolated from main hook so git mutations get their own 10s budget |
+
+**SubagentStop tail contract (`CAST_GATE_MATCH` / `CAST_GATE_REASON`).** `cast_subagent_stop.py` (`_emit_tail`) writes a block delimited by `__CAST_TAIL_BEGIN__`/`__CAST_TAIL_END__`, and the bash wrapper `eval`s ONLY that block. Every value is `shlex.quote()`d; that quoting is what makes the eval safe, because agent output flows into `CAST_GATE_MATCH` and `CAST_SUCCESSORS`. `CAST_GATE_MATCH` is always emitted. `CAST_GATE_REASON` is conditional: it is emitted only when `parse_input` synthesized a fail-closed BLOCKED (fixed strings "transcript unreadable" / "gate classification error", never agent text), and the wrapper records it as the gate record's `concerns`. The `--gate-only` pass omits `CAST_SUCCESSORS`; chain successors are enqueued from the full pass only.
 
 ### 5.2 `UserPromptSubmit` — `route.sh`
 

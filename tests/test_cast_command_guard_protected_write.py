@@ -1850,5 +1850,153 @@ class TestPerformance(_Base):
         self.check(f"echo x > ~/.claude/scripts/y; echo {pad}", True)
 
 
+class TestHeredocBodyAttribution(_Base):
+    """S4-b: heredoc bodies. A quoted-delimiter body fed to a non-shell is DATA; an unquoted body's
+    substitutions RUN; a heredoc on a line that runs ANY shell is scanned as a script (a documented
+    fail-closed residual, see test_shell_earlier_on_line_*); a delimiter the guard would read
+    differently from bash opens NO heredoc (so later lines are scanned, never hidden)."""
+
+    PRE = "S=/tmp/x; bash ~/.claude/githooks/pre-commit > $S/o 2>&1; cat > $S/m "
+    W = "cp x ~/.claude/scripts/y"
+
+    def blocked(self, cmd):
+        return self.cg.is_blocked(cmd)[0]
+
+    def test_repro_backticks_in_quoted_heredoc_allowed(self):
+        self.check(self.PRE + "<<'EOF'\n`stat -f x` text\nEOF", False)
+
+    def test_shell_earlier_on_line_is_a_documented_fail_closed_residual(self):
+        # The ORIGINAL false-positive shape stays BLOCKED on purpose: the guard cannot tell which
+        # command on a line a heredoc feeds, and narrowing it let `{ bash; } <<'EOF'` etc. through
+        # while bash ran the body (security High 1). Workaround: split into two commands.
+        self.check(self.PRE + "<<'EOF'\n`rm ~/.claude/scripts/a` text\nEOF", True)
+        self.check(self.PRE + "<<'EOF'\nrm -rf ~/.claude/scripts\nEOF", True)
+        # ... and the split form is allowed
+        self.check("bash ~/.claude/githooks/pre-commit\ncat > /tmp/m <<'EOF'\nrm -rf ~/.claude/scripts\nEOF",
+                   False)
+
+    def test_shell_on_the_line_in_any_position_makes_the_body_a_script(self):
+        for cmd in (
+            "{ bash; } <<'EOF'\n%s\nEOF",
+            "( bash ) <<'EOF'\n%s\nEOF",
+            "if true; then bash; fi <<'EOF'\n%s\nEOF",
+            "f() { bash; }; f <<'EOF'\n%s\nEOF",
+            "tee >(bash) <<'EOF'\n%s\nEOF",
+            "bash <(cat <<'EOF'\n%s\nEOF\n)",
+            ". <(cat <<'EOF'\n%s\nEOF\n)",
+            "bash -s <<'EOF'\n%s\nEOF",
+            "bash <<'EOF'\n%s\nEOF",
+            "bash <<EOF\n%s\nEOF",
+            "cat <<'EOF' | sh\n%s\nEOF",
+            "cat <<'EOF' | bash\n%s\nEOF",
+            "true; bash <<'EOF'\n%s\nEOF",
+            "source /dev/stdin <<'EOF'\n%s\nEOF",
+        ):
+            with self.subTest(cmd=cmd):
+                self.check(cmd % self.W, True)
+        self.check("bash <<'EOF'\n%s" % self.W, True)  # unterminated at EOF
+
+    def test_command_substitution_fed_to_bash_c_blocked(self):
+        for q in ("<<'EOF'", "<<EOF"):
+            with self.subTest(q=q):
+                self.check(f"bash -c $(cat {q}\n{self.W}\nEOF\n)", True)
+                self.assertTrue(self.blocked(f"bash -c $(cat {q}\nrm -rf $HOME\nEOF\n)"))
+
+    def test_quoted_delimiter_spellings_are_inert_for_non_shell(self):
+        for op in ("<<'EOF'", '<<"EOF"', "<<-'EOF'"):
+            with self.subTest(op=op):
+                self.check(f"cat > /tmp/f {op}\n`cp x ~/.claude/scripts/y`\nEOF", False)
+                self.check(f"cat > /tmp/f {op}\n$(cp x ~/.claude/scripts/y)\nEOF", False)
+
+    def test_quoted_heredoc_literal_write_line_is_data(self):
+        self.check("cat > /tmp/notes <<'EOF'\nrm -rf ~/.claude/scripts\nEOF", False)
+        self.check("cat > /tmp/notes <<EOF\nrm -rf ~/.claude/scripts\nEOF", False)  # plain text
+
+    def test_unquoted_heredoc_substitutions_are_scanned(self):
+        self.check("cat > /tmp/f <<EOF\n`cp x ~/.claude/scripts/y`\nEOF", True)
+        self.check("cat > /tmp/f <<EOF\nhello $(cp x ~/.claude/scripts/y) world\nEOF", True)
+        self.check("cat > /tmp/f <<-EOF\n\t`cp x ~/.claude/scripts/y`\n\tEOF", True)
+        # an apostrophe in the body is text, not a quote: it must not hide the substitution
+        self.check("cat > /tmp/f <<EOF\ndon't `cp x ~/.claude/scripts/y`\nEOF", True)
+
+    def test_unquoted_heredoc_line_continuation_does_not_hide_substitution(self):
+        # bash removes `\<newline>` before expansion, so `$\<NL>(cmd)` IS `$(cmd)`
+        self.check("cat > /tmp/f <<EOF\n$\\\n(cp x ~/.claude/scripts/y)\nEOF", True)
+        self.check("cat > /tmp/f <<EOF\n$(cp x \\\n~/.claude/scripts/y)\nEOF", True)
+        self.check("cat > /tmp/f <<EOF\n\\\n`cp x ~/.claude/scripts/y`\nEOF", True)
+        # an escaped backslash before the newline is NOT a continuation, and an escaped `$` is inert
+        self.check("cat > /tmp/f <<EOF\n\\\\\n(cp x ~/.claude/scripts/y)\nEOF", False)
+        self.check("cat > /tmp/f <<EOF\n\\$\\\n(cp x ~/.claude/scripts/y)\nEOF", False)
+
+    def test_unquoted_heredoc_benign_or_escaped_substitutions_allowed(self):
+        self.check("cat > /tmp/f <<EOF\n`date` $(echo hi) and ~/.claude/scripts as text\nEOF", False)
+        self.check("cat > /tmp/f <<EOF\n\\`cp x ~/.claude/scripts/y\\` \\$(rm ~/.claude/scripts/y)\nEOF",
+                   False)
+        self.check("cat > /tmp/f <<EOF\n$(cat ~/.claude/scripts/y)\nEOF", False)  # a reader
+
+    def test_backslash_delimiter_opens_no_heredoc_so_it_cannot_hide_commands(self):
+        # `<<\EOF` is quoted for bash, but recognising it hid these from RULES 1-3 and RULE 5
+        for cmd in ("bash <<\\EOF\npkill -9 claude\nEOF",
+                    "sh <<\\EOF\nkillall node\nEOF",
+                    "cat <<\\EOF | sh\npkill -9 claude\nEOF",
+                    'sh -c "$(cat <<\\EOF\n%s\nEOF\n)"' % self.W):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(self.blocked(cmd), cmd)
+
+    def test_two_heredocs_on_one_line(self):
+        self.check("cat <<'A' > /tmp/f; cat <<'B' > /tmp/g\nrm ~/.claude/scripts/y\nA\ncp x y\nB", False)
+        self.check("cat <<'A' > /tmp/f; bash <<'B'\nrm ~/.claude/scripts/y\nA\ncp x ~/.claude/scripts/y\nB",
+                   True)
+
+
+class TestHeredocDelimiterMismatch(_Base):
+    """S4-b (security High 2): where the guard's delimiter differs from bash's, the guard used to
+    drop everything after as heredoc body while bash ended the heredoc at the real terminator and
+    RAN the following lines. Such a `<<` now opens no heredoc (over-blocks, never hides)."""
+
+    WRITE = "cp x ~/.claude/scripts/y"
+
+    def cases(self, tail):
+        return {
+            "partial-quote": "cat <<'E'OF\nx\nEOF\n" + tail,
+            "inner-backslash": "cat <<E\\OF\nx\nEOF\n" + tail,
+            "arith-shift": "echo $((1<<EOF))\n" + tail + "\nEOF",
+            "arith-cmd": "(( x = 1<<EOF ))\n" + tail + "\nEOF",
+            "suffix-word": "cat <<EOF.txt\nx\nEOF.txt\n" + tail,
+        }
+
+    def test_blocked_by_rule5(self):
+        for name, cmd in self.cases(self.WRITE).items():
+            with self.subTest(name=name):
+                self.check(cmd, True, name)
+
+    def test_blocked_by_rm_and_pkill_rules(self):
+        for tail in ("rm -rf $HOME", "pkill -9 claude", "killall node"):
+            for name, cmd in self.cases(tail).items():
+                with self.subTest(name=name, tail=tail):
+                    blocked, _msg = self.cg.is_blocked(cmd)
+                    self.assertTrue(blocked, cmd)
+
+    def test_regular_heredocs_still_strip_their_bodies(self):
+        for op in ("<<EOF", "<<'EOF'", '<<"EOF"', "<<-EOF", "<<EOF >/tmp/f", "<<EOF>/tmp/f", "<<EOF;"):
+            with self.subTest(op=op):
+                self.check(f"cat {op}\nrm -rf ~/.claude/scripts\npkill x\nEOF\necho done", False)
+        self.check("echo $((1<<2)); cat <<EOF\nrm -rf ~/.claude/scripts\nEOF", False)  # shift closed first
+
+    def test_find_heredoc_words(self):
+        f = self.cg._find_heredoc_words_q
+        self.assertEqual(f("cat <<EOF"), [("EOF", False, False)])
+        self.assertEqual(f("cat <<-'EOF'"), [("EOF", True, True)])
+        self.assertEqual(f('cat <<"EOF"'), [("EOF", False, True)])
+        self.assertEqual(f("cat <<EOF | bash"), [("EOF", False, False)])
+        self.assertEqual(f("cat <<EOF;ls"), [("EOF", False, False)])
+        self.assertEqual(f("echo $((1<<2)); cat <<EOF"), [("EOF", False, False)])
+        self.assertEqual(self.cg._find_heredoc_words("cat <<EOF"), [("EOF", False)])
+        for line in ("cat <<\\EOF", "cat <<'E'OF", "cat <<E\\OF", "cat <<EOF.txt", "cat <<E\"O\"F",
+                     "echo $((1<<EOF))", "(( x = 1<<EOF ))", 'cat <<"E\\"F"', "cat <<'EOF", "cat <<EOF'x'"):
+            with self.subTest(line=line):
+                self.assertEqual(f(line), [], line)
+
+
 if __name__ == "__main__":
     unittest.main()

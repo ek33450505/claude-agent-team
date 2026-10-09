@@ -242,7 +242,7 @@ fi
 if command -v python3 >/dev/null 2>&1 && [[ -f "$DB" ]]; then
   PROV_SCRIPT="${CAST_SCRIPTS_DIR}/cast-provenance-chain.py"
   if [ -f "$PROV_SCRIPT" ]; then
-    python3 "$PROV_SCRIPT" append "$SESSION_ID" --db "$DB" >/dev/null 2>>"${HOME}/.claude/logs/provenance-chain.log" || true
+    python3 -E -s "$PROV_SCRIPT" append "$SESSION_ID" --db "$DB" >/dev/null 2>>"${HOME}/.claude/logs/provenance-chain.log" || true
   fi
 fi
 
@@ -463,7 +463,7 @@ if matches:
     print(max(matches, key=os.path.getmtime))
 " 2>/dev/null || true)"
   if [[ -f "${_TRANSCRIPT_PATH:-}" ]]; then
-    python3 "$DISTILLER" --input "$_TRANSCRIPT_PATH" --min-importance 0.7 \
+    python3 -E -s "$DISTILLER" --input "$_TRANSCRIPT_PATH" --min-importance 0.7 \
       >> "${HOME}/.claude/logs/distiller.log" 2>&1 || \
       _log_error "cast-session-end: distiller failed for $_TRANSCRIPT_PATH"
   fi
@@ -476,7 +476,7 @@ fi
 SCAFFOLD="${HOME}/.claude/scripts/cast-resume-scaffold.py"
 if [[ -f "$SCAFFOLD" ]]; then
   _REPO_CWD="${_STDIN_CWD:-$PWD}"
-  python3 "$SCAFFOLD" --repo "$_REPO_CWD" \
+  python3 -E -s "$SCAFFOLD" --repo "$_REPO_CWD" \
     >> "${HOME}/.claude/logs/resume-scaffold.log" 2>&1 || \
     _log_error "cast-session-end: resume-scaffold failed for $_REPO_CWD"
 fi

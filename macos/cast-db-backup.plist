@@ -19,7 +19,7 @@
 	<array>
 		<string>/bin/bash</string>
 		<string>-c</string>
-		<string>export HOME=__HOME__; export CAST_BACKUP_DIR="$HOME/Library/Application Support/cast/db-backups"; /usr/bin/python3 "$HOME/.claude/scripts/cast-db-backup.py"</string>
+		<string>export HOME=__HOME__; export CAST_BACKUP_DIR="$HOME/Library/Application Support/cast/db-backups"; /usr/bin/python3 -E -s "$HOME/.claude/scripts/cast-db-backup.py"</string>
 	</array>
 	<key>RunAtLoad</key>
 	<false/>

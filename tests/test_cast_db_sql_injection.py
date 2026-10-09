@@ -10,6 +10,7 @@ Covers:
 import os
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 # Resolve cast_db from the scripts/ sibling directory.
@@ -126,12 +127,13 @@ class TestDbPathValidation(unittest.TestCase):
     def test_tmp_cast_prefix_accepted(self):
         """Paths under /tmp/cast- are accepted (test fixtures)."""
         result = self._get_path_with_env(db_path='/tmp/cast-test/cast.db')
-        self.assertEqual(result, '/tmp/cast-test/cast.db')
+        # _get_db_path returns the RESOLVED path it validated (macOS: /tmp -> /private/tmp)
+        self.assertEqual(result, str(Path('/tmp/cast-test/cast.db').resolve()))
 
     def test_home_claude_subdir_accepted(self):
         home_claude = str(Path.home() / '.claude' / 'cast.db')
         result = self._get_path_with_env(db_path=home_claude)
-        self.assertEqual(result, home_claude)
+        self.assertEqual(result, str(Path(home_claude).resolve()))
 
     def test_etc_passwd_traversal_raises(self):
         with self.assertRaises(ValueError):
@@ -143,8 +145,11 @@ class TestDbPathValidation(unittest.TestCase):
 
     def test_traversal_via_dotdot_raises(self):
         home_claude = str(Path.home() / '.claude' / '..' / 'evil.db')
-        with self.assertRaises(ValueError):
-            self._get_path_with_env(db_path=home_claude)
+        # Deterministic: a HOME that sits under a static temp root would otherwise admit
+        # <home>/evil.db through that root. Only ~/.claude and the (emptied) roots remain.
+        with mock.patch.object(cast_db, '_STATIC_TEMP_ROOTS', ()):
+            with self.assertRaises(ValueError):
+                self._get_path_with_env(db_path=home_claude)
 
 
 if __name__ == '__main__':

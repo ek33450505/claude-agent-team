@@ -92,7 +92,8 @@ def _backup_gate() -> int:
         _log(f'ERROR: backup script not found: {script} — refusing to write')
         return 1
     try:
-        result = subprocess.run([sys.executable, '-I', str(script)], capture_output=True, text=True, timeout=120)
+        # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+        result = subprocess.run([sys._base_executable, '-I', str(script)], capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
         _log('ERROR: backup timed out after 120s — refusing to write')
         return 1

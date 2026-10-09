@@ -1,6 +1,6 @@
 {
-  "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-10-02.",
-  "_note": "Rates verified against https://platform.claude.com/docs/en/about-claude/pricing on 2026-10-02. _default is used when a model id is not in the table (approximate-but-nonzero). Consumers derive cache rates from cost_per_million_input: 5m cache write = 1.25x, cache read = cache_read_multiplier (optional per-model field; absent => 0.1x). Opus 5.5 reads cache at 0.05x; Fable 5.1 / Mythos 5.1 at 0.025x. Shared by scripts/cast_subagent_stop.py (_compute_cost_usd) and scripts/cast-recost-agent-runs.py (_cost).",
+  "_comment": "CAST model pricing config. Costs in USD per million tokens. Updated: 2026-10-08.",
+  "_note": "Rates verified against https://platform.claude.com/docs/en/about-claude/pricing on 2026-10-08. _default is used when a model id is not in the table (approximate-but-nonzero). Consumers derive cache rates from cost_per_million_input: 5m cache write = 1.25x, cache read = cache_read_multiplier (optional per-model field; absent => 0.1x). Opus 5.5 and Sonnet 5.5 read cache at 0.05x; Fable 5.1 / Mythos 5.1 at 0.025x. Haiku 5.5 prompts over 100K tokens are billed at $0.50/$2.50 per MTok, which this table does not model (the base tier is used). Shared by scripts/cast_subagent_stop.py (_compute_cost_usd) and scripts/cast-recost-agent-runs.py (_cost).",
   "models": {
     "_default": {
       "cost_per_million_input": 3.0,
@@ -25,6 +25,13 @@
     "claude-sonnet-5-5": {
       "cost_per_million_input": 2.0,
       "cost_per_million_output": 10.0,
+      "cache_read_multiplier": 0.05,
+      "tier": "cloud",
+      "provider": "anthropic"
+    },
+    "claude-haiku-5-5": {
+      "cost_per_million_input": 0.1,
+      "cost_per_million_output": 0.5,
       "tier": "cloud",
       "provider": "anthropic"
     },

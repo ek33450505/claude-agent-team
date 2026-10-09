@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""U6c-1: child interpreters launched via sys.executable run isolated (`-I`).
+"""U6c-1: child interpreters launched via sys._base_executable run isolated (`-I`).
 
-A bare `[sys.executable, script]` child inherits PYTHONPATH (and the user site) from the
+(F2: spawners use `sys._base_executable`, never `sys.executable` -- PYTHONEXECUTABLE overrides the
+latter even under `-I`; that ban is linted in test_cast_python_launch_isolation.py.)
+
+A bare `[sys._base_executable, script]` child inherits PYTHONPATH (and the user site) from the
 hook/launchd environment, so a planted `json.py` / `sqlite3.py` on that path executes in the
 child. `-I` ignores PYTHON* env and drops the user site. (`-I` also drops the script's own dir
 from sys.path, so every isolated child must be stdlib-only -- cast-db-backup.py and
@@ -11,7 +14,7 @@ cast-db-rollup.py are; validate-eval-yaml.py only needs PyYAML from the system s
                   backup child when launched bare; then each parent's launch function runs
                   with that PYTHONPATH exported and must NOT execute it, and must still
                   succeed (the child really ran).
-  2. Static     - every `[sys.executable, ...]` launch in scripts/ and bin/ carries `-I`.
+  2. Static     - every `[sys._base_executable, ...]` launch in scripts/ and bin/ carries `-I`.
 
 The parents run under `python3 -E` (ignores PYTHONPATH for themselves) with cwd = a scratch
 dir, so only the CHILD launch is exposed to the planted modules. Everything lives in a temp
@@ -108,10 +111,10 @@ class ChildIsolationTests(unittest.TestCase):
 
 
 class StaticLaunchTests(unittest.TestCase):
-    def test_every_sys_executable_launch_is_isolated(self):
+    def test_every_interpreter_launch_is_isolated(self):
         files = [p for p in list(SCRIPTS.glob('*.py')) + list(SCRIPTS.glob('*.sh')) + [REPO / 'bin' / 'cast']
                  if p.is_file()]
-        launch = re.compile(r'\[\s*sys\.executable\s*,\s*(?P<next>[^,\]]+)')
+        launch = re.compile(r'\[\s*sys\.(?:_base_)?executable\s*,\s*(?P<next>[^,\]]+)')
         sites, offenders = 0, []
         for p in files:
             for n, line in enumerate(p.read_text(errors='replace').splitlines(), 1):
@@ -121,8 +124,8 @@ class StaticLaunchTests(unittest.TestCase):
                     sites += 1
                     if m.group('next').strip().strip('"\'') != '-I':
                         offenders.append(f'{p.relative_to(REPO)}:{n}: {line.strip()}')
-        self.assertGreater(sites, 5, 'scan is vacuous: too few sys.executable launch sites found')
-        self.assertEqual(offenders, [], 'sys.executable child launched without -I')
+        self.assertGreater(sites, 5, 'scan is vacuous: too few interpreter launch sites found')
+        self.assertEqual(offenders, [], 'child interpreter launched without -I')
 
 
 if __name__ == '__main__':

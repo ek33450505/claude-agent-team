@@ -8,7 +8,7 @@
 	<array>
 		<string>/bin/bash</string>
 		<string>-c</string>
-		<string>python3 "$HOME/.claude/scripts/cast-db-prune.py"</string>
+		<string>python3 -E -s "$HOME/.claude/scripts/cast-db-prune.py"</string>
 	</array>
 	<key>StartCalendarInterval</key>
 	<dict>

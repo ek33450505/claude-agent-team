@@ -33,6 +33,8 @@
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
 		<key>HOME</key>
 		<string>__HOME__</string>
+		<key>PYTHONDONTWRITEBYTECODE</key>
+		<string>1</string>
 	</dict>
 </dict>
 </plist>

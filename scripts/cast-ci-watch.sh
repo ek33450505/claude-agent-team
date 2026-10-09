@@ -65,7 +65,7 @@ _cmd_start() {
   # If a live state file exists and its deadline is still in the future, refuse
   if [[ -f "$state_file" ]]; then
     local existing_deadline
-    existing_deadline="$(python3 "$PY" state-read "$state_file")"
+    existing_deadline="$(python3 -E -s "$PY" state-read "$state_file")"
     if [[ "$existing_deadline" -gt "$now" ]]; then
       echo '{"started":false,"reason":"loop already running"}'
       exit 0
@@ -73,7 +73,7 @@ _cmd_start() {
   fi
 
   local deadline=$(( now + DEADLINE_SECS ))
-  python3 "$PY" state-write "$state_file" "$pr" "$now" "$deadline"
+  python3 -E -s "$PY" state-write "$state_file" "$pr" "$now" "$deadline"
   echo "{\"started\":true,\"pr\":${pr},\"deadline_epoch\":${deadline}}"
 }
 
@@ -91,7 +91,7 @@ _cmd_status() {
   state_file="$(_state_file "$pr")"
   local deadline=0
   if [[ -f "$state_file" ]]; then
-    deadline="$(python3 "$PY" state-read "$state_file" 2>/dev/null || echo 0)"
+    deadline="$(python3 -E -s "$PY" state-read "$state_file" 2>/dev/null || echo 0)"
   fi
   local seconds_left=$(( deadline - now ))
   if [[ "$seconds_left" -lt 0 ]]; then seconds_left=0; fi
@@ -144,7 +144,7 @@ _cmd_status() {
   local checks_result="" mergeable="" merge_state="" unresolved_threads=0
   local parse_out="" parse_rc
   set +e
-  parse_out="$(python3 "$PY" parse-status "$pr_json" 2>/dev/null)"
+  parse_out="$(python3 -E -s "$PY" parse-status "$pr_json" 2>/dev/null)"
   parse_rc=$?
   set -e
 
@@ -191,7 +191,7 @@ _cmd_status() {
 
   local repo_info="" repo_parse_rc
   set +e
-  repo_info="$(python3 "$PY" parse-repo "$repo_json" 2>/dev/null)"
+  repo_info="$(python3 -E -s "$PY" parse-repo "$repo_json" 2>/dev/null)"
   repo_parse_rc=$?
   set -e
 
@@ -224,7 +224,7 @@ _cmd_status() {
 
   local threads_parse_rc
   set +e
-  unresolved_threads="$(python3 "$PY" parse-threads "$graphql_json" 2>/dev/null)"
+  unresolved_threads="$(python3 -E -s "$PY" parse-threads "$graphql_json" 2>/dev/null)"
   threads_parse_rc=$?
   set -e
 

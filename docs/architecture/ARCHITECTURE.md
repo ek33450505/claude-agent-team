@@ -69,9 +69,9 @@ CAST wires the Claude Code hook surface into a single enforcement-and-observabil
 
 | Event | Script(s) | Role |
 |---|---|---|
-| `SessionStart` | `cast-session-start.sh`, `cast-plugin-bootstrap.sh` | Bootstrap runtime dirs / symlinks / `cast.db`; inject the journal + context banner |
+| `SessionStart` | `cast-session-start.sh`, `cast-plugin-bootstrap.sh`, `cast-session-start-health.sh` → `cast-install-integrity.py` | Bootstrap runtime dirs / symlinks / `cast.db`; inject the journal + context banner; install-integrity alarm (manifest, git hooks, bytecode caches) |
 | `UserPromptSubmit` | `cast-user-prompt-hook.sh` → `cast-memory-router.py`, `route.sh` | Per-prompt memory recall (FTS5) + intent routing |
-| `PreToolUse: Bash` | `cast-pretool-dispatch.py` (unifies `cast-egress-hook.sh`, `pre-tool-guard.sh`, `cast-command-guard.py`) | Block raw `git commit`/`push`/`stash`; block process-kills + `rm -rf` of protected roots |
+| `PreToolUse: Bash` | `cast-pretool-dispatch.py` (unifies `cast-egress-hook.sh`, `pre-tool-guard.sh`, `cast-command-guard.py`) | Block raw `git commit`/`push`/`stash`; block process-kills + `rm -rf` of protected roots; block Bash writes into the installed exec surface (RULE 5) |
 | `PreToolUse: Write\|Edit` | `write-guards.sh`, `pre-tool-guard.sh` | Block writes outside the declared blast radius; inject `[CAST-REVIEW]` after code edits |
 | `PostToolUse` | `post-tool-hook.sh` | Lifecycle event emission → `cast.db` |
 | `SubagentStop` | `cast-subagent-stop-hook.sh` → `cast_handoff_parser.py` | Truncation detection, typed Handoff validation, honesty sensors, memory write |
@@ -86,7 +86,7 @@ CAST wires the Claude Code hook surface into a single enforcement-and-observabil
 Two deterministic PreToolUse gates make destructive actions structurally impossible, not merely discouraged. Both exit `2` to hard-block and surface the reason to **stderr** (Claude Code shows hook stderr on a PreToolUse block).
 
 - **Write-guards** (`scripts/write-guards.sh` / `write-guards.py`) protect the filesystem write surface: a literal-tilde path (the plan-mode `~`-as-a-directory bug) and any write that resolves to a protected root are refused. *(This guard caught a real harness bug while this very release was being planned.)*
-- **Command-guard** (`scripts/cast-command-guard.py` / `.sh`) is the command-layer analogue, added in v8 after an agent ran a machine-wide `pkill`. It blocks mass process-kills (`pkill`/`killall`, `kill -9 -1`, `kill 0`, `kill -- -N`) and recursive-force deletes of protected roots (`/`, `/*`, `$HOME`, the resolved home, and the `~/.claude` subtree), while allowing scoped single-PID kills and ordinary deletes. Per-segment escape hatches `CAST_KILL_OK=1` / `CAST_RM_OK=1` exist for deliberate use; the guard fails open (a parse error never blocks legitimate work).
+- **Command-guard** (`scripts/cast-command-guard.py`) is the command-layer analogue, added in v8 after an agent ran a machine-wide `pkill`. It blocks mass process-kills (`pkill`/`killall`, `kill -9 -1`, `kill 0`, `kill -- -N`) and recursive-force deletes of protected roots (`/`, `/*`, `$HOME`, the resolved home, and the `~/.claude` subtree), while allowing scoped single-PID kills and ordinary deletes. Per-segment escape hatches `CAST_KILL_OK=1` / `CAST_RM_OK=1` exist for deliberate use. RULE 5 hard-blocks Bash writes into the installed exec surface (`~/.claude/{githooks,scripts,config}`, `install-manifest.sha256` and related roots); its hatch is `CAST_PROTECTED_WRITE_OK=1`. Fail modes: the command guard itself still allows on an internal error (a parse error never blocks legitimate work), but the Bash guards run under a watchdog that blocks when they cannot finish, and the git guard (`scripts/cast-git-guard.py`) fails closed when it cannot load or check a call (#419).
 
 Both guards fire for **native Agent-tool subagents** — verified empirically: in-session subagents run with `CLAUDE_SUBPROCESS` unset, so the guards are not skipped (see [protocol-spec §2.5](cast-protocol-spec.md)).
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pre-push check: run BATS in Ubuntu Docker before pushing
-# Wire with: git config core.hooksPath .githooks && add to .githooks/pre-push
+# Called from .githooks/pre-push, which bash install.sh deploys to ~/.claude/githooks (core.hooksPath)
 # Exit code: 0 (pass or Docker not available), non-zero (test failure)
 
 set -euo pipefail

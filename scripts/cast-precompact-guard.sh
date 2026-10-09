@@ -40,7 +40,7 @@ INPUT="$(cat 2>/dev/null || true)"
 # Always allow manual /compact — only guard auto-compaction
 TRIGGER="$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('trigger','auto'))" 2>/dev/null || echo "auto")"
 if [[ "$TRIGGER" == "manual" ]]; then
-  CAST_INPUT="$INPUT" python3 "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
+  CAST_INPUT="$INPUT" python3 -E -s "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
   # proceed: no stdout (top-level "decision" accepts only approve|block)
   exit 0
 fi
@@ -146,7 +146,7 @@ fi
 
 if [ ${#DIRTY_REPOS[@]} -eq 0 ] && [ ${#FAILED_REPOS[@]} -eq 0 ]; then
   # Log observability event (carry forward from cast-pre-compact-hook.sh behavior)
-  CAST_INPUT="$INPUT" python3 "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
+  CAST_INPUT="$INPUT" python3 -E -s "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
   exit 0
 fi
 
@@ -200,6 +200,6 @@ print(json.dumps({"decision": "block", "reason": " ".join(parts)}))
 PYEOF
 
 # Log observability event
-CAST_INPUT="$INPUT" python3 "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
+CAST_INPUT="$INPUT" python3 -E -s "${HOME}/.claude/scripts/cast-precompact-log.py" 2>/dev/null || true
 
 exit 0

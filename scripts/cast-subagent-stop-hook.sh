@@ -211,7 +211,7 @@ _default_tail_vars() {
 # tell "assigned by pass 1's tail" from "never set".
 unset CAST_GATE_MATCH CAST_GATE_REASON SAFE_AGENT SAFE_SESSION_ID SAFE_ROSTER_TYPE CAST_SUCCESSORS
 _GATE_OUT="$(printf '%s' "$INPUT" | CAST_DB_PATH="$DB_PATH" CAST_HOOK_DIR="$HOOK_DIR" \
-    python3 "$HOOK_DIR/cast_subagent_stop.py" --gate-only --stdin 2>>"$HOOK_ERROR_LOG" || true)"
+    python3 -E -s "$HOOK_DIR/cast_subagent_stop.py" --gate-only --stdin 2>>"$HOOK_ERROR_LOG" || true)"
 _load_tail "$_GATE_OUT"
 _PASS1_PASSTHRU="$_PASSTHRU"
 _PASS1_MODE="none"
@@ -239,7 +239,7 @@ else
   # with a shlex-quoted __CAST_TAIL__ sentinel block (CAST_SUCCESSORS is consumed
   # by Step 4; in mode "gate" the gate vars were already acted on above).
   _PY_OUT="$(printf '%s' "$INPUT" | CAST_DB_PATH="$DB_PATH" CAST_HOOK_DIR="$HOOK_DIR" \
-      python3 "$HOOK_DIR/cast_subagent_stop.py" --stdin 2>>"$HOOK_ERROR_LOG" || true)"
+      python3 -E -s "$HOOK_DIR/cast_subagent_stop.py" --stdin 2>>"$HOOK_ERROR_LOG" || true)"
 
   # Pass through everything OUTSIDE the sentinel block (the hookSpecificOutput JSON
   # lines); _load_tail has already eval'd ONLY the block.

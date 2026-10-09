@@ -150,7 +150,11 @@ filesystem WRITE surface (Write/Edit tool), this protects the Bash COMMAND surfa
     `-o X` `+o X` `-O X` `--rcfile X` `--init-file X` `-eo pipefail` `--` -- are skipped to
     find the payload; fish/csh/tcsh/ash/busybox sh too), a here-string (`bash <<< '..'`),
     `source <(echo '..')`, a heredoc FED TO A SHELL (`bash <<EOF`, `cat <<EOF | sh` -- unlike
-    `cat > f <<EOF`, whose body stays inert data), `$(..)`/backtick/`<(..)`/`>(..)` bodies,
+    `cat > f <<EOF`, whose body stays inert data -- except that an UNQUOTED delimiter's
+    `$(..)`/backtick substitutions run, while a quoted `<<'EOF'` body is pure data. ANY shell on the
+    introducing line makes the body a script: `bash x; cat > f <<'EOF'` is a documented fail-closed
+    residual, so split such a command),
+    `$(..)`/backtick/`<(..)`/`>(..)` bodies,
     leading `do`/`then`/`!` keywords, `~user` (passwd lookup), parameters assigned earlier in
     the SAME command (`D=~/.claude; echo x > "$D/scripts/x"`, `export`/`declare`, and `for f in
     ~/.claude/scripts/*; do rm "$f"`), and literal `cd`/`pushd` (a relative target resolves
@@ -280,6 +284,8 @@ REDIR_RE = re.compile(r'^\d*[<>]')
 BARE_REDIR_RE = re.compile(r'^\d*[<>]{1,2}$')
 # bare (unquoted) heredoc delimiter word
 HEREDOC_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+# characters that end a heredoc delimiter word (whitespace, shell metacharacters)
+_HEREDOC_WORD_END = frozenset(' \t;|&<>()')
 
 # per-segment escape hatches (leading VAR= assignment), value 1 (optionally quoted)
 KILL_OK_ASSIGN = re.compile(r'^CAST_KILL_OK=["\']?1["\']?$')
@@ -360,18 +366,28 @@ def strip_all_quotes(tok):
 
 
 def _find_heredoc_words(line):
+    """(word, strip_tabs) pairs of _find_heredoc_words_q -- the historical 2-tuple shape."""
+    return [(w, st) for w, st, _q in _find_heredoc_words_q(line)]
+
+
+def _find_heredoc_words_q(line):
     """Find heredoc delimiter words introduced on a single line, quote/comment-aware.
 
     Mirrors tokenize()'s quote-state walk: a `<<WORD` opens a heredoc ONLY when its
     `<<` occurs OUTSIDE single/double quotes AND before any unquoted word-boundary `#`
     comment. A here-string `<<<WORD` (three `<`) is NOT a heredoc and never opens one.
-    Returns a FIFO-ordered list of (word, strip_tabs) for `<<WORD` / `<<-WORD` /
-    `<<'WORD'` / `<<"WORD"` operators found on the line.
+    Returns a FIFO-ordered list of (word, strip_tabs, quoted) for `<<WORD` / `<<-WORD` /
+    `<<'WORD'` / `<<"WORD"` operators found on the line. `quoted` is True when the delimiter
+    is quoted: bash then performs NO expansion on the body (it is inert data); an unquoted
+    delimiter's body undergoes `$(..)` / backtick expansion. A delimiter the shell would read
+    differently (`<<\\EOF`, `<<'E'OF`, `<<E\\OF`, `<<EOF.txt`) or a `<<` inside `((..))` /
+    `$((..))` opens NO heredoc, so the lines after it are still scanned as commands.
     """
     words = []
     i = 0
     n = len(line)
     in_single = in_double = False
+    arith = 0  # open unquoted `((` / `$((` arithmetic contexts: a `<<` there is a shift
     prev_ws = True  # start-of-line is a word boundary (so a leading `#` is a comment)
     while i < n:
         c = line[i]
@@ -407,6 +423,16 @@ def _find_heredoc_words(line):
             continue
         if c == '#' and prev_ws:
             break  # unquoted word-boundary comment — rest of the line is inert
+        if c == '(' and i + 1 < n and line[i + 1] == '(':
+            arith += 1
+            prev_ws = False
+            i += 2
+            continue
+        if c == ')' and arith and i + 1 < n and line[i + 1] == ')':
+            arith -= 1
+            prev_ws = False
+            i += 2
+            continue
         if c == '<' and i + 1 < n and line[i + 1] == '<':
             # exclude here-string `<<<` (a `<<` flanked by another unquoted `<`)
             prev_lt = i > 0 and line[i - 1] == '<'
@@ -423,8 +449,10 @@ def _find_heredoc_words(line):
             while j < n and line[j] in (' ', '\t'):
                 j += 1
             word = None
+            quoted = False
             if j < n and line[j] in ('"', "'"):
                 q = line[j]
+                quoted = True
                 j += 1
                 start = j
                 while j < n and line[j] != q:
@@ -432,13 +460,24 @@ def _find_heredoc_words(line):
                 word = line[start:j]
                 if j < n:
                     j += 1  # consume closing quote
+                else:
+                    word = None  # unterminated quote
+                if q == '"' and word is not None and '\\' in word:
+                    word = None  # `\"` etc. inside "..." : bash's delimiter differs from ours
             else:
                 m = HEREDOC_WORD_RE.match(line, j)
                 if m:
                     word = m.group(0)
                     j = m.end()
+            # Fail closed on any delimiter the shell would read differently from us: a partly
+            # quoted / escaped word (`<<'E'OF`, `<<E\OF`, `<<EOF.txt`), `<<\EOF`, or a `<<` that
+            # is an arithmetic shift (`$((1<<EOF))`). Opening a heredoc there would drop the
+            # lines up to OUR terminator while bash ends it elsewhere and RUNS those lines. No
+            # heredoc opened -> every later line is scanned as a command (over-blocks, never hides).
+            if arith or (word and j < n and line[j] not in _HEREDOC_WORD_END):
+                word = None
             if word:
-                words.append((word, strip_tabs))
+                words.append((word, strip_tabs, quoted))
             prev_ws = False
             i = j
             continue
@@ -2799,29 +2838,86 @@ _PW_SHELLS = frozenset(('bash', 'sh', 'zsh', 'dash', 'ksh', 'ksh93', 'ash', 'fis
                         'source', '.'))
 
 
-def _pw_shell_heredoc_bodies(command, ctx):
-    """Bodies of heredocs whose introducing line runs a shell (`bash <<EOF`, `cat <<EOF | sh`,
-    `source /dev/stdin <<EOF`). strip_heredocs drops every heredoc body as inert data, which is
-    right for `cat > file <<EOF` but hides a script handed to an interpreter. Other
-    interpreters (`python3 <<EOF`) stay an accepted residual."""
+def _pw_heredoc_substs(body):
+    """The command text of every `$(..)` / backtick substitution in an UNQUOTED heredoc body.
+    Bash expands those before the body reaches the command, so they RUN even when the body is
+    otherwise data. Single quotes are literal text inside a heredoc (no quote state); `\\$`,
+    `\\`` and `\\\\` are escapes and stay inert."""
+    # An unquoted heredoc body drops `\<newline>` (line continuation) BEFORE expansion, so
+    # `$\<NL>(cmd)` is a real `$(cmd)`: join the lines first. `\\` stays an escaped backslash.
+    if '\\\n' in body:
+        parts = []
+        k = 0
+        while k < len(body):
+            if body[k] == '\\' and k + 1 < len(body):
+                if body[k + 1] != '\n':
+                    parts.append(body[k:k + 2])
+                k += 2
+            else:
+                parts.append(body[k])
+                k += 1
+        body = ''.join(parts)
+    out = []
+    i = 0
+    n = len(body)
+    while i < n:
+        c = body[i]
+        if c == '\\':
+            i += 2
+        elif c == '`':
+            j = i + 1
+            while j < n and body[j] != '`':
+                j += 2 if body[j] == '\\' else 1
+            out.append(body[i + 1:j].replace('\\`', '`'))
+            i = j + 1
+        elif c == '$' and i + 1 < n and body[i + 1] == '(':
+            j = _pw_match_paren(body, i + 1)
+            out.append(body[i + 2:j])
+            i = j + 1
+        else:
+            i += 1
+    return out
+
+
+def _pw_heredoc_script_bodies(command, ctx):
+    """Heredoc-body text that RUNS and so must be scanned as commands, despite strip_heredocs
+    dropping every heredoc body as inert data (right for `cat > file <<'EOF'`):
+      * a heredoc FED TO A SHELL (`bash <<EOF`, `cat <<EOF | sh`, `source /dev/stdin <<EOF`):
+        the whole body is a script (quoted delimiter or not). Other interpreters
+        (`python3 <<EOF`) stay an accepted residual.
+      * the `$(..)` / backtick substitutions of an UNQUOTED-delimiter heredoc to any command:
+        bash expands them. A QUOTED delimiter (`<<'EOF'`, `<<"EOF"`) body is
+        literal data -- its backticks are text, not substitutions.
+    A heredoc is treated as shell-fed when ANY segment of its introducing line runs a shell
+    (`bash x; cat > f <<'EOF'` therefore scans the body: a documented fail-closed residual,
+    workaround = split the command). Narrowing that to the segment that carries the `<<`
+    let `{ bash; } <<'EOF'`, `( bash ) <<'EOF'`, `f() { bash; }; f <<'EOF'`, `tee >(bash) <<'EOF'`
+    and `bash <(cat <<'EOF' ..)` through while bash ran the body."""
     if '<<' not in command:
         return []
     bodies = []
-    pending = []  # [word, strip_tabs, runs_shell, lines]
+    pending = []  # [word, strip_tabs, runs_shell, quoted, lines]
+
+    def _close(entry):
+        if entry[2]:
+            bodies.append('\n'.join(entry[4]))
+        elif not entry[3]:
+            text = '\n'.join(entry[4])
+            if '$(' in text or '`' in text or '\\\n' in text:
+                bodies.extend(_pw_heredoc_substs(text))
+
     for line in command.split('\n'):
         if pending:
-            word, strip_tabs, _sh, buf = pending[0]
+            word, strip_tabs, _sh, _q, buf = pending[0]
             check = line.lstrip('\t') if strip_tabs else line
             if check.strip() == word:
-                done = pending.pop(0)
-                if done[2]:
-                    bodies.append('\n'.join(done[3]))
+                _close(pending.pop(0))
             else:
                 buf.append(line)
             continue
         if '<<' not in line:
             continue
-        words = _find_heredoc_words(line)
+        words = _find_heredoc_words_q(line)
         if not words:
             continue
         runs_shell = False
@@ -2832,11 +2928,10 @@ def _pw_shell_heredoc_bodies(command, ctx):
             if cmd is not None and basename(cmd) in _PW_SHELLS:
                 runs_shell = True
                 break
-        for word, strip_tabs in words:
-            pending.append([word, strip_tabs, runs_shell, []])
-    for _w, _t, sh, buf in pending:  # unterminated at EOF: bash still runs what it read
-        if sh:
-            bodies.append('\n'.join(buf))
+        for word, strip_tabs, quoted in words:
+            pending.append([word, strip_tabs, runs_shell, quoted, []])
+    for entry in pending:  # unterminated at EOF: bash still runs what it read
+        _close(entry)
     return bodies
 
 
@@ -2928,14 +3023,14 @@ def _pw_scan(command, ctx, cwd, depth, sd=0):
     rest of the line). cwd follows literal `cd` / `pushd` across segments (a subshell's `cd`
     is over-applied: fail-closed). Command-substitution bodies are scanned too, under both
     the starting and the final cwd."""
-    shell_docs = _pw_shell_heredoc_bodies(command, ctx)
+    shell_docs = _pw_heredoc_script_bodies(command, ctx)
     command = strip_heredocs(command)
     bodies = []
     if sd < 24:
         command, bodies = _pw_split_subst(command, ctx)
     start_cwd = cwd
     ps_queue = [bd for kd, bd in bodies if kd == 'ps']
-    for doc in shell_docs:  # a heredoc FED TO A SHELL is a script, not inert data
+    for doc in shell_docs:  # a heredoc fed to a shell / an unquoted body's $(..) RUNS
         if depth >= PW_MAX_DEPTH or _pw_scan(doc, ctx, cwd, depth + 1)[0]:
             return True, cwd
     for segment in split_segments(command, wr=True):

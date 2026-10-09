@@ -431,6 +431,20 @@ GHSTUB
   assert_output --partial "No .claude/cast.json"
 }
 
+@test "cast stack refresh: shows the --write refusal reason on stderr for a non-top-level dir" {
+  # A subdirectory of a git repo is not a work-tree top-level, so --write must refuse and
+  # bin/cast must let the one-line reason through (it used to be sent to /dev/null).
+  local repo="$BATS_TEST_TMPDIR/stack-refresh-repo"
+  mkdir -p "$repo/sub"
+  git init -q "$repo"
+  printf '%s\n' '{"dependencies":{"vite":"^5.0.0"}}' > "$repo/sub/package.json"
+  # stdout dropped, stderr captured into $output (no `run` flags: older bats lack them)
+  run bash -c 'bash "$1" stack refresh "$2" 2>&1 >/dev/null' _ "$CAST_CLI" "$repo/sub"
+  assert_success
+  [[ "$output" == *"--write skipped: target is not a git work-tree top-level"* ]]
+  [ ! -e "$repo/sub/.claude" ]
+}
+
 @test "cast stack show: cast.json without stack block prints 'No stack profile' message" {
   local fake_repo
   fake_repo="$(mktemp -d)"

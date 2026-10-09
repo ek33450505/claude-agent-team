@@ -36,7 +36,10 @@ FIXTURE = {
                         'cache_read_multiplier': 0.05},
     'claude-fable-5-1': {'cost_per_million_input': 10.0, 'cost_per_million_output': 50.0,
                          'cache_read_multiplier': 0.025},
-    'claude-sonnet-5-5': {'cost_per_million_input': 2.0, 'cost_per_million_output': 10.0},
+    'claude-sonnet-5-5': {'cost_per_million_input': 2.0, 'cost_per_million_output': 10.0,
+                          'cache_read_multiplier': 0.05},
+    # no cache_read_multiplier: exercises the 0.1x fallback
+    'claude-haiku-5-5': {'cost_per_million_input': 0.1, 'cost_per_million_output': 0.5},
 }
 
 
@@ -53,9 +56,13 @@ class RecostCostTests(unittest.TestCase):
         got = recost._cost(FIXTURE, 'claude-fable-5-1', 0, 0, 0, 1_000_000)
         self.assertEqual(got, 0.25)
 
-    def test_sonnet_5_5_default_01(self):
+    def test_sonnet_5_5_cache_read_005(self):
         got = recost._cost(FIXTURE, 'claude-sonnet-5-5', 0, 0, 0, 1_000_000)
-        self.assertEqual(got, 0.2)
+        self.assertEqual(got, 0.1)
+
+    def test_entry_without_multiplier_falls_back_to_01(self):
+        got = recost._cost(FIXTURE, 'claude-haiku-5-5', 0, 0, 0, 1_000_000)
+        self.assertEqual(got, 0.01)
 
     def test_unknown_model_uses_default_rates_and_01(self):
         got = recost._cost(FIXTURE, 'claude-nope', 1000, 1000, 1000, 1_000_000)
@@ -79,7 +86,23 @@ class RepoConfigTests(unittest.TestCase):
     def test_sonnet_5_5(self):
         e = self.models['claude-sonnet-5-5']
         self.assertEqual((e['cost_per_million_input'], e['cost_per_million_output']), (2.0, 10.0))
-        self.assertNotIn('cache_read_multiplier', e)
+        self.assertEqual(e['cache_read_multiplier'], 0.05)
+
+    def test_haiku_5_5_has_own_entry_with_base_cache_multiplier(self):
+        e = self.models['claude-haiku-5-5']
+        self.assertIsNot(e, self.models['_default'])
+        self.assertEqual((e['cost_per_million_input'], e['cost_per_million_output']), (0.1, 0.5))
+        self.assertEqual((e['tier'], e['provider']), ('cloud', 'anthropic'))
+        self.assertNotIn('cache_read_multiplier', e)  # standard 0.1x
+
+    def test_real_config_prices_both_consumers_per_model(self):
+        # Through the real config and BOTH consumers: sonnet-5-5 cache reads at 0.05x
+        # ($0.10/MTok); haiku-5-5 priced from its own entry, not _default ($3/$15).
+        for fn in (lambda m, *t: recost._cost(self.models, m, *t),
+                   lambda m, *t: css._compute_cost_usd(self.models.get(m) or self.models['_default'], *t)):
+            self.assertEqual(fn('claude-sonnet-5-5', 0, 0, 0, 1_000_000), 0.1)
+            self.assertEqual(fn('claude-haiku-5-5', 1_000_000, 1_000_000, 0, 0), 0.6)
+            self.assertEqual(fn('claude-haiku-5-5', 0, 0, 0, 1_000_000), 0.01)
 
     def test_fable_and_mythos_5_1(self):
         for k in ('claude-fable-5-1', 'claude-mythos-5-1'):

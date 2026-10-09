@@ -2,7 +2,11 @@
 """cast-commit-provenance.py — record and check commit provenance for D5 self-commit enforcement.
 
 Subcommands:
-  record <sha>  — insert a provenance row for the given commit SHA (INSERT OR IGNORE)
+  record <sha> [--agent NAME]
+                — insert a provenance row for the given commit SHA (INSERT OR IGNORE).
+                  The agent label defaults to 'unattributed' (the git post-commit hook
+                  cannot know who committed; the PostToolUse hook upgrades it from the
+                  hook payload). --agent must match ^[A-Za-z0-9._:@/-]{1,64}$ else exit 2.
   check <sha>   — exit 0 + {"found": true} if row exists; exit 1 + {"found": false} otherwise
                   NOTE: matches the FULL 40-char SHA exactly; no short-SHA normalization.
 
@@ -74,8 +78,11 @@ def _resolve_session_id(repo: str) -> str:
     return ""
 
 
-def cmd_record(sha: str) -> int:
-    """Insert a provenance row. INSERT OR IGNORE for idempotency."""
+def cmd_record(sha: str, agent: str = "unattributed") -> int:
+    """Insert a provenance row. INSERT OR IGNORE for idempotency.
+
+    The git post-commit hook cannot know who committed, so the default label is
+    'unattributed'; the PostToolUse hook later upgrades it from the payload."""
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
     repo = _git("rev-parse", "--show-toplevel")
     session_id = _resolve_session_id(repo)
@@ -85,7 +92,7 @@ def cmd_record(sha: str) -> int:
         ok = db_execute(
             "INSERT OR IGNORE INTO commit_provenance (sha, session_id, agent, branch, repo, recorded_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            (sha, session_id, "commit", branch, repo, recorded_at),
+            (sha, session_id, agent, branch, repo, recorded_at),
         )
         if ok:
             print(json.dumps({"recorded": sha}))
@@ -121,18 +128,26 @@ def cmd_check(sha: str) -> int:
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print(json.dumps({"error": "usage: cast-commit-provenance.py <record|check> <sha>"}))
+        print(json.dumps({"error": "usage: cast-commit-provenance.py <record|check> <sha> [--agent NAME]"}))
         return 1
 
     subcommand = sys.argv[1]
     sha = sys.argv[2]
+    agent = "unattributed"
+    extra = sys.argv[3:]
+    if extra:
+        if subcommand != "record" or len(extra) != 2 or extra[0] != "--agent" \
+                or not re.fullmatch(r'[A-Za-z0-9._:@/-]{1,64}', extra[1]):
+            print(json.dumps({"error": "invalid arguments: expected [--agent NAME] (record only)"}))
+            return 2
+        agent = extra[1]
 
     if not re.match(r'^[0-9a-fA-F]{7,64}$', sha):
         print(json.dumps({"error": "invalid sha format"}))
         return 1
 
     if subcommand == "record":
-        return cmd_record(sha)
+        return cmd_record(sha, agent)
     elif subcommand == "check":
         return cmd_check(sha)
     else:

@@ -62,6 +62,9 @@ once a permission allows the command. A broad deny cannot carry a narrower allow
 | `cast-git-guard` — git commit/push/stash blocks | enforcement-intent | ❌ env-var escape hatch + indirection-robustness | **KEEP as hook** (docs recommend a hook here) |
 | `cast-git-guard` — Write/Edit `requires_agent` policy | enforcement-intent | ❌ stateful (per-session agent-status) | **KEEP as hook** |
 | `cast-command-guard` — pkill/killall/mass-kill/catastrophic-rm | enforcement-intent | ❌ path-aware + escape hatch | **KEEP as hook** (already self-labeled "defense-in-depth, not a complete sandbox") |
+| `cast-command-guard` — RULE 5 Bash writes into the installed exec surface | enforcement-intent | ❌ path-aware Bash analysis + escape hatch (native deny covers only the file tools) | **KEEP as hook** (defence-in-depth for sandbox-OFF; the sandbox is the hard boundary) |
+| `cast-git-guard` — exec-capable git config / gc / worktree prune / symlinked worktree entries | enforcement-intent | ❌ argument + filesystem-state aware | **KEEP as hook** |
+| `cast-install-integrity` — install manifest alarm (SessionStart + doctor) | **awareness** (detection) | ❌ | **KEEP** (detects what slips past string guards) |
 | `write-guards` — literal-tilde write block | enforcement-intent | ❌ path-pattern correction | **KEEP as hook** |
 | `write-guards` — stat-claim badge gate | awareness/quality | ❌ | **KEEP as hook** (advisory) |
 | `write-guards` — no-fake-success | awareness | ❌ | **KEEP as hook** (already advisory) |
@@ -245,6 +248,48 @@ the orchestrator.
   Fixed: a `--gate-only` pass writes the record before any telemetry stage, and the claimed-work verifier is linear
   on agent output (was 50–100 s on 600 KB).
 
+## Commit identity at pre-push (D5a/D5b, 2026-10-08)
+
+Reuses the S3d resolver from the `requires_agent` gate above to answer "who made this hatch commit".
+Commits `aacaf1d` (D5a, record) and `85c5d21` (D5b, judge).
+
+**Mechanism.**
+- D5a: the dispatcher hands the PreToolUse payload to the git guard (`set_hook_context`);
+  `COMMIT_HATCH_USED` lines gain `agent_type`, `agent_id`, `tool_use_id`, `session_id`, `head_before`,
+  `main_repo` (`PUSH_HATCH_USED` gets the identity fields). Git facts are memoized per call; hatch lines
+  cap at 8 per call (`_MAX_HATCH_RECORDS_PER_COMMAND`) to stay inside the 2 s watchdog (60 segments:
+  8.4 s to ~1 s).
+- PostToolUse (`part5_commit_provenance`) finds `head_before` by `tool_use_id` in the last 256 KiB of
+  `audit.jsonl`, records `head_before..HEAD` (committer time >= hatch event - 5 s, <= 50; else HEAD-only
+  with age checks), labels with payload `agent_type` or `'main-session'`, UPSERTs over `'unattributed'`
+  rows only (`recorded_at`, `repo` kept).
+- D5b (`cast-commit-reconcile.py`): identity events are authorized iff `agent_id` is non-empty and
+  `_resolve_roster_type` (sidecar `~/.claude/projects/*/<session_id>/subagents/[workflows/<id>/]agent-<agent_id>.meta.json`)
+  returns `commit`. Rows are not consulted for identity events. Legacy events (no `agent_type`) keep the
+  [ts-60s, ts+15min] provenance-row window.
+
+**Trust source and fail directions.**
+
+| Condition | Result |
+|---|---|
+| sidecar type == `commit` | authorized |
+| `agent_id` empty | violation: `main-session hatch` |
+| resolved type != `commit` | violation: `agent X is not the commit agent` |
+| no / ambiguous / spoofed / teammate-shaped sidecar | violation: `commit-agent identity unverifiable (no trusted sidecar)` |
+| corrupt line containing `COMMIT_HATCH_USED` (non-UTF-8 / non-JSON / non-object) | violation (Ed, 2026-10-04) |
+| last line without trailing newline | `unverifiable`, exit 0 |
+
+`CAST_RECONCILE_ACK=1` acks all kinds; acked corrupt lines' sha256 go into `RECONCILE_ACK_USED.corrupt_line_sha256`.
+
+**Live verification.** A commit-agent subagent payload carries `agent_type:"commit"` + `agent_id`; the main
+session's carries neither. On copies of the live audit log and cast.db the old reconcile blocked (rc=1) on a
+commit-agent probe event, the new one was clean; the live push of `85c5d21` printed `"status": "clean", "checked": 3`.
+Gates: D5a code-reviewer x3 APPROVED, security R1 FIX REQUIRED (memoization, label overwrite) then R2 CLEAN;
+D5b code-reviewer APPROVED, security CLEAN.
+
+**Operational naming.** Dispatch the commit agent unnamed or as `commit__<label>`. A dispatch named exactly
+`commit` is unattributable (sidecar name equals the type, the ambiguous shape) and blocks the push.
+
 ## Project settings files: `env` and `disableAllHooks` (S3d F1, 2026-10-05)
 
 Claude Code reloads a project's `.claude/settings.json` and `.claude/settings.local.json` mid-session. Their `env`
@@ -264,9 +309,36 @@ Code writes only a debug-log line, and the guard appends a names-only line to `~
 ## Sandbox write-denies for git-executed paths (2026-10-04, U6b/U6c)
 
 `61-sandbox.json` adds `sandbox.filesystem.denyWrite: ["~/Projects/**/.git/worktrees", "~/Projects/**/.githooks"]`; `12-ask.json` adds the `ask` rule `Edit(**/.githooks/**)`. There is no `Write(...)` twin, because Claude Code consults only `Edit(path)` rules for the file tools and a `Write(path)` rule is inert. That ask rule prompted in manual mode but not in auto mode (probe 9). The mode-independent layer is the `githooks-require-security` block policy in `config/policies.json`, enforced by git-guard on Write/Edit. It needs a `security` completion in the session, or `CAST_POLICY_OVERRIDE=1`, and goes live only from the installed copy, after `install.sh`. It is a guardrail for compliant agents, not a boundary: agent-status completion records can be forged through the Write tool and aren't tied to a session (plan S3d). A sibling `git-internals-require-security` policy covers `.git/` (config, hooks, info). Never use `./` here: fragments merge into the USER `~/.claude/settings.json`, where `./` means `~/.claude`. A denyWrite glob compiles to a case-sensitive Seatbelt regex, e.g. `^/(.*/)?\.git/worktrees(/.*)?$` (dir + descendants).
-- **Why:** an agent could plant `.git/worktrees/zz -> <victim>`; the next UNSANDBOXED git (your terminal, auto-gc) runs `worktree prune` and empties the victim. `.githooks/` (this repo's `core.hooksPath`) was sandbox-writable, so your unsandboxed `git commit`/`push` ran agent-written hooks.
+- **Why:** an agent could plant `.git/worktrees/zz -> <victim>`; the next UNSANDBOXED git (your terminal, auto-gc) runs `worktree prune` and empties the victim. `.githooks/` (this repo's `core.hooksPath`) was sandbox-writable, so your unsandboxed `git commit`/`push` ran agent-written hooks. Since #421 (2026-10-07) `core.hooksPath` is the absolute installed `~/.claude/githooks` (Edit-denied, RULE 5, integrity alarm); the repo `.githooks/` is only the deploy source.
 - **Scope:** repos under `~/Projects` only; repos elsewhere are unprotected. Temp dirs are deliberately exempt (a leading `/**/` also matched `/tmp`/`$TMPDIR` and broke sandboxed bats fixtures that `git worktree add` or write `.githooks`).
-- **Residual:** hooks call repo `scripts/`, which stay agent-writable; review diffs before running repo code from your terminal. Best-effort only: no ancestor pinning, so renaming a NESTED repo's `.git` aside, populating it, and renaming back may evade the regex (the cwd repo's `.git` is pinned by built-in rules). Case variants (`.GitHooks`, APFS) are untested. Only `.githooks` is protected; `.husky`, `tools/hooks`, `.pre-commit-config.yaml` are not. A linked worktree's `.git` gitfile could be redirected (`gitdir: /tmp/x`); out of scope.
-- **Side effects:** sandboxed `git worktree add`, and sandboxed checkout/merge/pull that rewrite `.githooks` files, fail ("unable to unlink"/permission). `scripts/cast-parallel.sh` (`git worktree add/remove`) and the branch groomer's registry-entry removal must run from your terminal, not sandboxed Bash. `git` was removed from `excludedCommands` on 2026-10-06: `excludedCommands: ["git"]` matches only a bare `git` (docs: `git *`), so it was either dead (agent git is sandboxed anyway) or, if it ever matched, a sandbox escape (git has many exec vectors: hooks, fsmonitor, filters, aliases, pagers); pushes go through `scripts/cast-push.sh` via `!` in your terminal.
+- **Residual:** hooks now call only the installed `~/.claude/scripts/*` (with `CAST_REPO_ROOT`), so the residual moved to the installed scripts, which RULE 5 and the install manifest cover; repo `scripts/` changes reach hooks only through `bash install.sh`. Best-effort only: no ancestor pinning, so renaming a NESTED repo's `.git` aside, populating it, and renaming back may evade the regex (the cwd repo's `.git` is pinned by built-in rules). Case variants (`.GitHooks`, APFS) are untested. Only `.githooks` is protected; `.husky`, `tools/hooks`, `.pre-commit-config.yaml` are not. A linked worktree's `.git` gitfile could be redirected (`gitdir: /tmp/x`); out of scope.
+- **Side effects:** sandboxed `git worktree add`, and sandboxed checkout/merge/pull that rewrite `.githooks` files, fail ("unable to unlink"/permission). `scripts/cast-parallel.sh` (`git worktree add/remove`) and the branch groomer's registry-entry removal must run from your terminal, not sandboxed Bash. `git` was removed from `excludedCommands` on 2026-10-06: `excludedCommands: ["git"]` matches only a bare `git` (docs: `git *`), so it was either dead (agent git is sandboxed anyway) or, if it ever matched, a sandbox escape (git has many exec vectors: hooks, fsmonitor, filters, aliases, pagers); pushes go through `scripts/cast-push.sh` via `!` in your terminal. `docker`, `bq` and `osascript` were removed too in #421; with the sandbox ON, run them with `!` in your terminal.
 - **Live-probe results (2026-10-05, sandboxed Bash; control: `touch ~/x` EPERM, `TMPDIR=/tmp/claude-501`):** (1) `ln -s` into an existing `.git/worktrees` EPERM ✅; (2) `mkdir -p .git/worktrees/x` with no `.git/worktrees` EPERM ✅, so a deny on a not-yet-existing path DOES block creating it; (3) `mv`/`rmdir`/`touch` on a live `.git/worktrees/<id>` EPERM ✅; (4) `touch .githooks/x` and `mv .githooks …` EPERM ✅; (5) `.GitHooks/x`, `.Git/Worktrees/x` and `.git/WORKTREES/x` EPERM ✅ (APFS case variants are covered); (6) `mv .git .gitx` EPERM ✅; (7) `tests/cast-branch-groomer.bats` 53/53 sandboxed ✅ (fixtures live in `$TMPDIR`); (8) native `isolation: worktree` creation OK, but `git add` inside it FAILS (`.git/worktrees/<id>/index.lock` EPERM; the denyWrite beats the harness's temporary `.git` allowOnly), so worktree-isolated agents cannot stage or commit; (9) ❌ Write AND Edit on `.githooks/zz-cast-probe` landed in auto mode with NO prompt. The docs say explicit ask rules always prompt, and that `Write(path)` rules are inert (only `Edit(path)` is consulted). The cause of the `Edit(**/.githooks/**)` miss is unresolved; one suspect is the bare `Edit`/`Write` allow in `10-permissions.json`. (10) live `~/.claude/settings.json` carries both denyWrite entries and both ask rules ✅.
 - **Precondition:** a project `.claude/settings.local.json` with `"sandbox": {"enabled": false}` silently turns all of this off for that repo (found 2026-10-05; the first probe run was invalid). Probe a positive control (`touch ~/x` must fail) before trusting any sandbox probe.
+
+## Closed as documented residuals (v10.3.0 close-out, 2026-10-08)
+
+These were judged and accepted, not fixed; each is a known limit, not an open item.
+
+- S3c-1 pre-commit secret scan: there is no local pre-commit secret scan; CI gitleaks and the PII gate cover it.
+- S3c-11 policy engine: NotebookEdit and the audit path hash are not judged by the policy engine.
+- S3d-7 fenced verdicts: a verdict inside a code fence is not parsed; this fails closed (no unblock).
+- Path aliases: symlinked `..` and hardlink aliases of a protected path are not resolved by the string guards.
+- Health-alarm Lows: minor health-alarm wording/coverage gaps, accepted.
+- Degraded-scan residuals: when a scan degrades it reports degraded, not clean.
+- install.sh CLT-absent branch: the Command Line Tools-absent path is untested.
+- S3c-10 egress header comment: cosmetic.
+- U4d branch-delete TOCTOU: a window exists between the check and the delete; accepted.
+- Validator backgrounded-child litter: a backgrounded child of the validator may leave temp litter.
+- Dispatcher locked-DB path: under a locked cast.db the dispatcher can take ~16 s, and a planted `hook_failures` row is not distinguished.
+- Egress R1/R4/R8, the `%40` tail and raw ledger fields: accepted egress-sentinel limits.
+- `git grep -O`: an open-in-pager exec vector, pinned by a test as a known allow (#421).
+- RULE 5 residuals: runtime-built paths, script files, stdin data, earlier-call `cd`/aliases, `pip install --user` (see `scripts/cast-command-guard.py` docstring and the `CAST_PROTECTED_WRITE_OK` row in docs/escape-hatches.md).
+- U6d residuals: the integrity checker attests itself (in-process; tampering with it already defeats the check); Homebrew's group-writable `/opt/homebrew/bin` is trusted; install's cache purge falls back to PATH `python3` only when no system python exists.
+- D5: a hatch commit after `cd <other repo>` is attributed to the hook cwd's repo.
+- D5: a concurrent actor's commit landing during our tool call can get our label (label only; window = tool-call duration).
+- D5: a future-dated commit fast-forward-merged later gets the caller's own label.
+- D5: a corrupt hatch line is not repo-scoped (ackable).
+- D5: the reconcile reads `audit.jsonl` whole (~2.5x RAM; fine at the live 1.1 MB).
+- D5: the sidecar and `audit.jsonl` are agent-writable with the sandbox off (same cooperative boundary as the other records).
+- D5: the reconcile still returns `skip` for identity events when cast.db / `commit_provenance` is absent (tracked in S4).

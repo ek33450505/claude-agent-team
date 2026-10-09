@@ -459,7 +459,8 @@ def rewrite(o):
         # Rewrite any interpreter (bash/python3/sh) — CAST v9 P0 added the first
         # python3-interpreter hook (cast-pretool-dispatch.py); the prior bash-only
         # pattern left its ~/.claude/scripts path unrewritten (plugin-drift fail).
-        return re.sub(r'\b(bash|python3|sh) ~/\.claude/scripts/(\S+)',
+        # python3 may carry `-E -s` (env/user-site isolation); keep the flags in \1.
+        return re.sub(r'\b(bash|python3(?: -E -s)?|sh) ~/\.claude/scripts/(\S+)',
                       r'\1 "${CLAUDE_PLUGIN_ROOT}/scripts/\2"', o)
     return o
 merged = rewrite(merged)

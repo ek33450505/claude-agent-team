@@ -9,7 +9,7 @@
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>python3 __HOME__/.claude/scripts/cast-otel-collector.py --serve</string>
+    <string>python3 -E -s __HOME__/.claude/scripts/cast-otel-collector.py --serve</string>
   </array>
 
   <key>KeepAlive</key>

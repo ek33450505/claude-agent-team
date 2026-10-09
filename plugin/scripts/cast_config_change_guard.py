@@ -114,6 +114,14 @@ EXACT = frozenset({
     # pager, LESSOPEN preprocessor or ssh askpass/agent socket is a command-exec
     # or credential-theft hook.
     "EDITOR", "VISUAL", "PAGER", "LESSOPEN", "SSH_ASKPASS", "SSH_AUTH_SOCK",
+    # macOS xcrun shims: /usr/bin/python3 and /usr/bin/git are xcrun stubs that
+    # exec <DEVELOPER_DIR>/usr/bin/xcrun first, so an attacker DEVELOPER_DIR runs
+    # its fake xcrun even under `python3 -I` / `-E -s` (probe: exec for python3 and
+    # git). TOOLCHAINS selects the toolchain xcrun resolves tools from (no exec
+    # reproduced on a CommandLineTools-only host; blocked as a tool-resolution
+    # redirect). The xcrun_* knobs are the XCRUN_ prefix below (xcrun_db is the
+    # cache path; probe-proven exec via cache poisoning).
+    "DEVELOPER_DIR", "TOOLCHAINS",
 })
 
 # Prefix families, compared after .upper().
@@ -121,6 +129,11 @@ PREFIXES = (
     "CAST_",       # every CAST override / policy / DB-path knob (CAST_POLICY_OVERRIDE ...)
     "LD_",         # glibc dynamic-loader injection (LD_PRELOAD, LD_LIBRARY_PATH)
     "DYLD_",       # macOS dynamic-loader injection (DYLD_INSERT_LIBRARIES)
+    "XCRUN_",      # xcrun_db redirects xcrun's tool-path cache to an attacker-written file:
+                   # a poisoned entry makes /usr/bin/python3 and /usr/bin/git exec an
+                   # arbitrary binary (probe-confirmed); the other xcrun_* knobs
+                   # (nocache/log/verbose) showed no exec alone and are blocked as
+                   # the same family
     "PYTHON",      # PYTHONPATH/PYTHONSTARTUP/PYTHONHOME ... (python3 hooks)
     "GIT_",        # GIT_SSH_COMMAND/GIT_EXEC_PATH/GIT_CONFIG_* (git runs inside hooks)
     "BASH_FUNC_",  # exported bash functions: BASH_FUNC_name%% defines code

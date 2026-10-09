@@ -370,7 +370,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/scripts/cast-pretool-dispatch.py",
+            "command": "python3 -E -s ~/.claude/scripts/cast-pretool-dispatch.py",
             "timeout": 5
           }
         ]

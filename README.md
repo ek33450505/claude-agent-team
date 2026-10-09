@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-10.2.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-4332-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4384-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -50,10 +50,10 @@ them. What that costs, and what still holds, is written down in
 
 ```console
 $ cast status          # real layout; spend/memory values replaced with illustrative ones
-CAST v9.5.3
+CAST v10.2.0
 ======================================================================
 Agents      27 in ~/.claude/agents/
-Hooks       32 active
+Hooks       30 active
 Spend       $12.40 today  $84.10 this week
 Budget      $12.40 / $50.00 daily (24%)
 Memory      1008 entries | 61 stale (confidence < 0.4) | last verified: 2026-08-26 08:13:46
@@ -69,10 +69,8 @@ Recent agents (last 5):
 `+` is a clean `DONE`; `~` is still running; `x` is `BLOCKED` or `NEEDS_CONTEXT`. In-flight rows carry no
 model or elapsed time yet — those are written at completion, so an empty pair means *running*, not *broken*.
 
-> **Status.** Latest release **v9.5.3** (2026-07-11). **v10 is in active development** — a security and
-> reliability line hardening the enforcement surface; see the
-> [commit history](https://github.com/ek33450505/claude-agent-team/commits/main) (the `CHANGELOG.md`
-> `[Unreleased]` section is written at release time, so it is empty mid-line). Released history:
+> **Status.** Latest release **v10.2.0** (2026-09-10). **v10.3.0**, a security and reliability release
+> hardening the exec path and the guards, is in close-out. Released history:
 > [CHANGELOG.md](CHANGELOG.md).
 
 ---
@@ -109,13 +107,14 @@ agent_run · 2026-07-09T21:40:50 · researcher · DONE
    …including `[wipe]-canary-launchd.log`. It only writes to the [incident] directory…
 ```
 
-**Know the state of your own system.** `cast doctor` emits 34 check lines and, since v10, exits non-zero
+**Know the state of your own system.** `cast doctor` prints one line per check and, since v10, exits non-zero
 when something is actually wrong.
 
 ```console
 $ cast doctor
 [ok] Schema: 16/16 provisioned tables present
-[ok] Hooks registered: 32 entries
+[ok] Hooks registered: 30 entries
+[ok] Install integrity: manifest verified
 [!!] Stale memories: 38 flagged (verified_at > 30 days, names specific paths/flags)
 [ok] MCP servers: 3 configured, all reachable
 [ok] Litestream: replica fresh (lag 0s)
@@ -161,9 +160,10 @@ agents actually finished this kind of work. Most observability tells you what ha
 is *about to*.
 
 **2. Escape hatches are a recorded primitive, not an honor system.** Every guarded git operation has a
-hatch — and as of v10 all 16 of them write a row to `ack_events` when, and only when, the hatch actually
-averted a block. `CAST_HATCH_REASON="rebasing onto main"` records *why*. Bypassing a gate is allowed; doing
-it invisibly is not.
+hatch — and as of v10 all 17 git hatches write a row to `ack_events` when, and only when, the hatch actually
+averted a block. `CAST_HATCH_REASON="rebasing onto main"` records *why*. The command-guard hatches
+(`CAST_KILL_OK`, `CAST_RM_OK`, `CAST_PROTECTED_WRITE_OK`) are logged as block lines, not recorded in
+`ack_events`. Bypassing a gate is allowed; doing it invisibly is not.
 
 **3. It records its own failures in their own tables.** `agent_hallucinations`, `agent_truncations`,
 `completeness_events`, `hook_failures`, `agent_protocol_violations`. When a hook breaks it writes a row
@@ -206,7 +206,8 @@ cd claude-agent-team && bash install.sh
 
 The plugin is **opt-in** (`defaultEnabled: false`): until you run `/plugin enable`, the SessionStart
 bootstrap does not run. `install.sh` stays authoritative for the runtime layer (`~/.claude/scripts`,
-`cast.db`, launchd jobs, git hooks); when both are present the plugin's hooks defer via a
+`cast.db`, launchd jobs, git hooks — deployed to `~/.claude/githooks`, which `core.hooksPath` points at, so
+after editing `.githooks/` re-run `install.sh`); when both are present the plugin's hooks defer via a
 `~/.claude/config/cast-hook-owner` sentinel so nothing double-fires.
 
 The plugin ships **22 curated agents** — `push` (needs the install.sh runtime) and `morning-briefing` are
@@ -215,6 +216,29 @@ excluded. Add the 3 opt-in extras with `bash scripts/gen-plugin.sh --with-extras
 
 Then: `cast status` to verify, and **[the 5-minute tutorial](docs/tutorial/getting-started.md)** to run your
 first gated dispatch.
+
+---
+
+
+## Built on Claude Code's primitives
+
+CAST is a layer over Claude Code, not a replacement for it. Each row names the native primitive first, then what CAST adds.
+
+| Native primitive | What Claude Code gives you | What CAST adds |
+|---|---|---|
+| [Hooks](https://code.claude.com/docs/en/hooks) | Lifecycle events delivered as JSON to your commands. | Recorders that write typed rows to `cast.db`, an injection path back into the next turn, and guards that block before a tool call lands. |
+| [Subagents](https://code.claude.com/docs/en/sub-agents) | Markdown agent definitions with their own tools and model. | A <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT -->-agent roster with model tiering (Haiku 16 / Sonnet 10 / Opus 1), a typed Handoff/Status contract, truncation detection. |
+| [Settings](https://code.claude.com/docs/en/settings) & [permissions](https://code.claude.com/docs/en/permissions) | Allow/deny rules and layered settings files. | Path-tier command guards glob rules cannot express; agent edits to CAST's runtime and project settings denied; a `ConfigChange` guard blocks hot-reloaded `env`/`disableAllHooks`. |
+| [Sandbox](https://code.claude.com/docs/en/sandboxing) | An OS-level boundary for Bash. | Guards that do not depend on it; for users who enable it, write-denies on git-executed paths and `git`, `docker`, `bq`, `osascript` removed from `excludedCommands`. |
+| [Plan mode](https://code.claude.com/docs/en/common-workflows) | Plan-then-act in a single session. | Native plan mode is the default; the `planner` and `/orchestrate` chain is reserved for multi-agent work. |
+| [Skills](https://code.claude.com/docs/en/skills) & [plugins](https://code.claude.com/docs/en/plugins/overview) | On-demand instruction bundles and a distribution format. | Rules moved into on-demand skills; dual-ship as a native plugin alongside `install.sh`. |
+| [MCP](https://code.claude.com/docs/en/mcp) | A standard way to expose tools and data. | `cast mcp serve` exposes the record read-only. |
+
+The guards are a string-analysis defence-in-depth layer; the sandbox is the hard OS boundary. The maintainer
+runs with the sandbox off by choice, and the residuals are listed in
+[docs/known-limitations.md](docs/known-limitations.md) and
+[docs/architecture/enforcement-awareness-split.md](docs/architecture/enforcement-awareness-split.md). The
+design rule (adopt native, delete bespoke) is explained in the next section.
 
 ---
 
@@ -256,7 +280,14 @@ can check on everything else.
 (`scripts/cast-git-guard.py`) — no honor system, no flag you can quietly ignore. Commits route through a
 `commit` agent that records provenance, and a pre-push gate audits that every commit traces to a recorded
 session. Destructive operations (`rm -rf` of protected roots, `pkill`) are blocked by a command-guard with
-path-tier specificity that native glob permissions cannot express.
+path-tier specificity that native glob permissions cannot express. A Bash write guard (RULE 5 in
+`scripts/cast-command-guard.py`, hatch `CAST_PROTECTED_WRITE_OK=1`) hard-blocks Bash that writes into the
+installed exec surface (`~/.claude/{githooks,scripts,config}`, the install manifest, the `~/Library` python
+caches and LaunchAgents); deploy goes through `bash install.sh`. The git guard also blocks exec-capable
+`git config` keys, `git gc`/`maintenance`/`worktree prune` and symlinked worktree entries. The git guard
+fails **closed** when it cannot load or check a call, the Bash guards run under a watchdog that blocks when
+they cannot finish, and a missing installed policy config blocks Write/Edit. (The command guard itself still
+allows on an internal error — a crash there must not block every Bash call.)
 
 **Review you cannot skip.** Code changes mandate a fresh-context `code-reviewer` gate, enforced in the agent
 registry rather than in your discipline. The commit gate reads `quality_gates` to decide whether a change was
@@ -265,9 +296,11 @@ actually reviewed — and a rejection is *sticky*, so a later approval cannot si
 **The system audits itself.** A `SubagentStop` hook parses each agent's typed `## Handoff` contract, detects
 truncation (an agent cut off mid-task is flagged, never relayed as done), checks claimed work against real
 file changes, and records what it finds in `agent_hallucinations` and `agent_truncations`. When a hook fails,
-it writes to `hook_failures` instead of swallowing the error.
+it writes to `hook_failures` instead of swallowing the error. An install-integrity manifest
+(`~/.claude/install-manifest.sha256`) is verified at every SessionStart and by `cast doctor`, bytecode caches
+included, and raises an alarm when an installed hook or guard file, its mode, or git config drifts.
 
-**No false green.** `cast doctor` emits 34 check lines and reports what is actually wrong — stale backups, an
+**No false green.** `cast doctor` prints one line per check and reports what is actually wrong — stale backups, an
 unloaded canary, a non-writable evidence path — rather than a green tick. Separately,
 `scripts/cast-lint-write-only-tables.py` parses every `CREATE TABLE` and searches the source for a matching
 read site, so a table that is written but never read gets named. It is deliberately **advisory** — it always
@@ -326,8 +359,8 @@ work runs the `planner` → `/orchestrate` chain in waves. Full table with tiers
 ## Hooks
 
 Deterministic `command`-type hooks enforce; `prompt`-type hooks advise. The lifecycle: **SessionStart**
-(bootstrap + context banner) → **UserPromptSubmit** (memory recall + routing) → **PreToolUse:Bash**
-(commit/push/stash block, `pkill` and `rm -rf` command-guard) → **PreToolUse:Write|Edit** (write-guards +
+(bootstrap + context banner + install-integrity check) → **UserPromptSubmit** (memory recall + routing) →
+**PreToolUse:Bash** (commit/push/stash block, `pkill` and `rm -rf` command-guard, exec-surface write guard) → **PreToolUse:Write|Edit** (write-guards +
 reviewer injection) → **PostToolUse** → **SubagentStop** (truncation detection, Handoff validation, honesty
 sensors, memory write) → **PostCompact** → **SessionEnd** (memory distiller).
 
@@ -367,7 +400,7 @@ usage-aware, so a memory recalled often decays slower than one nobody reads.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->256<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4332<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->256<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4384<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
 guard logic, event emission and memory persistence — including tests that prove destructive operations
 **refuse**. Runs on macOS and Ubuntu in CI.
 

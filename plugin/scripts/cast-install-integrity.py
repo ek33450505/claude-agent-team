@@ -116,9 +116,11 @@ _ENV_OVERRIDES = frozenset((
     "GIT_CONFIG_NOSYSTEM", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_EXEC_PATH",
     "GIT_TEMPLATE_DIR", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_PROXY_COMMAND",
     "GIT_EXTERNAL_DIFF",
-    # The hook interpreters run `python3 script.py` NON-isolated, so they honour these (this checker and
-    # its children run under -I and ignore them). PYTHONINSPECT is listed because with it set the
-    # interpreter runs PYTHONSTARTUP after the script; PYTHONBREAKPOINT is not (needs a breakpoint() call).
+    # CAST launches its own hook/launchd python as `python3 -I` or `python3 -E -s`, which ignore these, but a
+    # set value is still a red flag: any other python (non-CAST hooks, `bin/cast`, a user's shell) honours
+    # them. This checker and its children run under -I and ignore them. PYTHONINSPECT is listed because
+    # with it set a non-isolated interpreter runs PYTHONSTARTUP after the script; PYTHONBREAKPOINT is not
+    # (needs a breakpoint() call).
     "PYTHONPATH", "PYTHONSTARTUP", "PYTHONPYCACHEPREFIX", "PYTHONHOME", "PYTHONUSERBASE",
     "PYTHONEXECUTABLE", "PYTHONINSPECT"))
 # Interpreters that may have written __pycache__ (hooks run python3 from PATH: system + Homebrew).
@@ -546,8 +548,10 @@ def _probe_prefix(exe, claude, seconds):
 
 def _run_verifier(exe, claude, incremental, seconds, max_verify, offset):
     """Ask interpreter <exe> to verify every cache it can read. -> {"bad", "verified", "pending"}.
-    Two spawns. (1) probe sys.pycache_prefix with `-S`: the system python sets it only outside -I/-E,
-    and hooks run `python3 script.py` non-isolated, but `-S` skips `site` so a user-site
+    Two spawns. (1) probe sys.pycache_prefix with `-S`: the system python sets it only outside -I/-E.
+    The probe models a NON-isolated interpreter (the prefix a plain `python3 script.py` would use); CAST's
+    own hooks now run `-I` / `-E -s`, which leave the Apple prefix unset, so they cache in-tree instead.
+    `-S` skips `site` so a user-site
     usercustomize/sitecustomize can neither print into nor steer the probe (an Apple-interpreter
     prefix we then derive ourselves would be the alternative; -S needs no per-interpreter knowledge).
     cwd=/ and no PYTHON* env keep it inert. (2) the isolated verifier (-I) on THIS file."""
@@ -565,10 +569,10 @@ def _run_verifier(exe, claude, incremental, seconds, max_verify, offset):
 
 
 def _own_exe():
-    """The interpreter to run verifiers with. NEVER sys.executable when a trusted candidate exists:
-    PYTHONEXECUTABLE overrides sys.executable (even under -I, macOS) and the verifier EXECUTES it."""
+    """The interpreter to run verifiers with. NEVER sys's plain `executable` attribute when a trusted
+    candidate exists: PYTHONEXECUTABLE overrides it (even under -I) and the verifier EXECUTES it."""
     exes = _trusted_exes(_PY_CANDIDATES)
-    return exes[0] if exes else sys.executable
+    return exes[0] if exes else sys._base_executable  # PYTHONEXECUTABLE does not touch _base_executable
 
 
 def _verify_pycs(claude, entries, bad, incremental, deadline, max_verify=None, offset=0, counts=None):

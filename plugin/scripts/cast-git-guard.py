@@ -2921,7 +2921,8 @@ def _agent_completed_this_session(required_agent: str, agent_status_dir: str, no
 
 
 _POLICY_MAX_BYTES = 1024 * 1024  # policies.json larger than this is rejected (fail closed)
-_POLICY_MAX_PATH_LEN = 4096      # longer file_paths are not regex-matched (quadratic-backtrack DoS)
+_POLICY_WARN_MAX_LINES = 4       # max warn-policy lines surfaced per edit; the rest become "(+N more)"
+_POLICY_MAX_PATH_LEN = 4096     # longer file_paths are not regex-matched (quadratic-backtrack DoS)
 # A path with an embedded newline (or any control char) is never a real edit target, and a
 # newline makes the default `.*\.env(\..*)?$` pattern backtrack cubically (4096 chars ~ 24 s
 # against a 5 s hook timeout). Control-char paths fail closed BEFORE any regex or realpath.
@@ -3005,6 +3006,34 @@ def _running_from_installed_scripts() -> bool:
         return True
 
 
+_POLICY_WARN_DESC_MAX = 300      # max chars of a policy description echoed in a warn line
+
+
+def _escape_for_context(text: str) -> str:
+    """Render untrusted text (a file path) for model-visible additionalContext: every
+    non-printable char (C0/C1 controls, U+2028/2029, bidi overrides, Unicode tag chars,
+    ...) and the backtick (which would close the surrounding code span) becomes a
+    \\uXXXX / \\UXXXXXXXX escape. A literal backslash is doubled so the encoding is
+    injective (a path containing the text `\\u202e` cannot masquerade as an escape)."""
+    out = []
+    for c in text:
+        if c == '\\':
+            out.append('\\\\')  # injective: a literal backslash is doubled, so '\\u202e' text != an escape
+        elif c.isprintable() and c != '`':
+            out.append(c)
+        elif ord(c) > 0xFFFF:
+            out.append(f'\\U{ord(c):08x}')
+        else:
+            out.append(f'\\u{ord(c):04x}')
+    return ''.join(out)
+
+
+def _cap_warn_description(desc: str) -> str:
+    if len(desc) > _POLICY_WARN_DESC_MAX:
+        return desc[:_POLICY_WARN_DESC_MAX] + '\u2026'
+    return desc
+
+
 def _policy_evaluate(file_path: str, session_id: str = ''):
     """Evaluate the INSTALLED ~/.claude/config/policies.json against file_path.
     Returns (exit_code, message_or_None).
@@ -3012,7 +3041,11 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
     Mirrors the inline policy engine: a `block`-severity policy whose path_pattern
     matches AND whose required_agent has NOT completed this session → (2, msg).
     CAST_POLICY_OVERRIDE=1 bypasses block policies (audit-logged). `warn` policies
-    allow silently (the original routed warns to a suppressed stream).
+    NEVER block: every matching warn policy whose required_agent has not completed
+    this session is collected (a later block policy still wins), and when no block
+    fires the result is (0, warn_text) with one `[CAST-POLICY-WARN]` line per policy
+    (capped at _POLICY_WARN_MAX_LINES + "(+N more)") for the caller to surface as
+    PreToolUse additionalContext. No warn match → (0, None).
 
     Only the installed copy is read (never a cwd-relative config/policies.json: the
     project dir is agent-writable). A missing installed file (lstat ENOENT) is judged
@@ -3159,6 +3192,7 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
 
     agent_status_dir = os.path.expanduser('~/.claude/agent-status')
     now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    warn_hits = []
 
     for policy in policies:
         pattern = policy.get('path_pattern', '')
@@ -3189,12 +3223,24 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
                 f'The marker must come from a `{required_agent}` subagent dispatched in THIS session, '
                 f'unnamed or named `{required_agent}__<label>` (a dispatch named exactly `{required_agent}`, '
                 f'or a built-in agent given that name, is not trusted); hand-written records are ignored. '
-                f'When it ends DONE its hook-written marker unblocks the session; then the ORCHESTRATOR applies the edit to `{file_path[:256]}`.\n'
+                f'When it ends DONE its hook-written marker unblocks the session; then the ORCHESTRATOR applies the edit to `{_escape_for_context(file_path[:256])}`.\n'
                 f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
             )
             return 2, msg
-        # severity == warn → allow silently (faithful to the original's suppressed warn stream)
-    return 0, None
+        # severity == warn → never blocks: collect it (a later block policy must still win)
+        warn_hits.append((policy_id, required_agent, description))
+
+    if not warn_hits:
+        return 0, None
+    lines = [
+        f'**[CAST-POLICY-WARN]** Policy "{pid}" flags this edit to `{_escape_for_context(file_path[:256])}`: '
+        f'{_cap_warn_description(desc)}. '
+        f'Not blocked — consider dispatching `{agent}` to review it (warn-only).'
+        for pid, agent, desc in warn_hits[:_POLICY_WARN_MAX_LINES]
+    ]
+    if len(warn_hits) > _POLICY_WARN_MAX_LINES:
+        lines.append(f'(+{len(warn_hits) - _POLICY_WARN_MAX_LINES} more)')
+    return 0, '\n'.join(lines)
 
 
 def _audit_policy_override(policy_id: str, file_path: str, session_id: str) -> None:
@@ -3293,12 +3339,108 @@ def _hatch_session_id_uncached(repo: str) -> str:
         return ''
 
 
+# D5a-1: hook-payload identity for the hatch audit events. The dispatcher (or `main()`)
+# hands the parsed PreToolUse payload to `set_hook_context` right before evaluating a Bash
+# command; `_audit_*_hatch` read it so the D5 reconcile gate can attribute a hatch to a
+# session / subagent. Replaced (never merged) on every call and cleared after, so one
+# command's identity can never leak into the next.
+_HOOK_CTX: dict = {}
+_HOOK_CTX_FIELDS = ('session_id', 'agent_type', 'agent_id', 'tool_use_id')
+_HOOK_CTX_RE = re.compile(r'^[A-Za-z0-9._:@/-]{1,128}$')
+
+
+def set_hook_context(data) -> None:
+    """Replace `_HOOK_CTX` with sanitized identity fields from a hook payload. Never raises.
+
+    A field is kept only if it is a `str` fully matching `^[A-Za-z0-9._:@/-]{1,128}$`
+    (`fullmatch`, so a trailing newline is rejected), else ''. A non-dict yields {}."""
+    global _HOOK_CTX
+    try:
+        if not isinstance(data, dict):
+            _HOOK_CTX = {}
+            return
+        ctx = {}
+        for key in _HOOK_CTX_FIELDS:
+            val = data.get(key)
+            ctx[key] = val if isinstance(val, str) and _HOOK_CTX_RE.fullmatch(val) else ''
+        _HOOK_CTX = ctx
+    except Exception:
+        _HOOK_CTX = {}
+
+
+def clear_hook_context() -> None:
+    global _HOOK_CTX
+    _HOOK_CTX = {}
+
+
+_SHA_RE = re.compile(r'^[0-9a-f]{40}([0-9a-f]{24})?$')
+
+
+def _load_git_safe():
+    """Load scripts/cast_git_safe.py from this file's own directory (importlib, no sys.path edit)."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cast_git_safe.py')
+    spec = importlib.util.spec_from_file_location('cast_git_safe', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _hatch_commit_git_facts(repo: str) -> tuple:
+    """(head_before, main_repo) for a hatch commit; '' for each unknown. Two git calls at
+    most (each <= 1.0s); the second is skipped if the first timed out (rc 124)."""
+    if not repo:
+        return '', ''
+    gs = _load_git_safe()
+    head_before = ''
+    r = gs.run(repo, ['rev-parse', '--verify', '-q', 'HEAD'], timeout=1.0)
+    if r.returncode == 124:
+        return '', ''
+    out = (r.stdout or '').strip()
+    if r.returncode == 0 and _SHA_RE.match(out):
+        head_before = out
+    main_repo = ''
+    r2 = gs.run(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir'], timeout=1.0)
+    if r2.returncode == 0:
+        common = (r2.stdout or '').strip()
+        if common and os.path.basename(common) == '.git':
+            main_repo = os.path.realpath(os.path.dirname(common))
+    return head_before, main_repo
+
+
+def _hatch_identity(repo: str) -> dict:
+    ctx = _HOOK_CTX if isinstance(_HOOK_CTX, dict) else {}
+    return {
+        'session_id': ctx.get('session_id') or _hatch_session_id(repo),
+        'agent_type': ctx.get('agent_type') or '',
+        'agent_id': ctx.get('agent_id') or '',
+        'tool_use_id': ctx.get('tool_use_id') or '',
+    }
+
+
+def _audit_budget_ok(kind: str) -> bool:
+    """Bound audit lines per `_git_evaluate` call to `_MAX_HATCH_RECORDS_PER_COMMAND` per kind
+    (counter lives in `_EVAL_MEMO`, so it resets per call; unbounded outside a call). The
+    verdict is never affected -- only the audit write is skipped. Mirrors the `_record_hatch`
+    cap so a many-segment command cannot spend the watchdog budget on audit I/O."""
+    memo = _EVAL_MEMO
+    if memo is None:
+        return True
+    key = ('audit_n', kind)
+    memo[key] = memo.get(key, 0) + 1
+    return memo[key] <= _MAX_HATCH_RECORDS_PER_COMMAND
+
+
 def _audit_commit_hatch() -> None:
     """Append a COMMIT_HATCH_USED line to audit.jsonl — best-effort, never blocks."""
     try:
+        if not _audit_budget_ok('commit'):
+            return
         repo = _repo_toplevel()
         audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
         os.makedirs(os.path.dirname(audit_path), exist_ok=True)
+        head_before, main_repo = _memoized(
+            ('hatch_facts', repo), lambda: _hatch_commit_git_facts(repo))
         event = {
             'timestamp': datetime.datetime.now(datetime.timezone.utc)
             .isoformat().replace('+00:00', 'Z'),
@@ -3306,7 +3448,9 @@ def _audit_commit_hatch() -> None:
             'override_env': 'CAST_COMMIT_AGENT',
             'git_op': 'commit',
             'repo': repo,
-            'session_id': _hatch_session_id(repo),
+            **_hatch_identity(repo),
+            'head_before': head_before,
+            'main_repo': main_repo,
             'in_claude_session': os.environ.get('CLAUDECODE') == '1',
         }
         with open(audit_path, 'a') as af:
@@ -3318,6 +3462,8 @@ def _audit_commit_hatch() -> None:
 def _audit_push_hatch() -> None:
     """Append a PUSH_HATCH_USED line to audit.jsonl — best-effort, never blocks."""
     try:
+        if not _audit_budget_ok('push'):
+            return
         repo = _repo_toplevel()
         audit_path = os.path.expanduser('~/.claude/logs/audit.jsonl')
         os.makedirs(os.path.dirname(audit_path), exist_ok=True)
@@ -3328,7 +3474,7 @@ def _audit_push_hatch() -> None:
             'override_env': 'CAST_PUSH_OK',
             'git_op': 'push',
             'repo': repo,
-            'session_id': _hatch_session_id(repo),
+            **_hatch_identity(repo),
             'in_claude_session': os.environ.get('CLAUDECODE') == '1',
         }
         with open(audit_path, 'a') as af:
@@ -3517,7 +3663,7 @@ def _record_hatch(variable: str, value: str, git_op: str) -> None:
     try:
         scripts_dir = os.environ.get('CAST_SCRIPTS_DIR', os.path.expanduser('~/.claude/scripts'))
         subprocess.run(
-            ['python3', os.path.join(scripts_dir, 'cast_ack.py'),
+            ['python3', '-E', '-s', os.path.join(scripts_dir, 'cast_ack.py'),
              variable, '--value', value, '--script', 'cast-git-guard.py'],
             timeout=2,
             capture_output=True,
@@ -5884,6 +6030,8 @@ def _evaluate_write_edit(tool_name: str, tool_input: dict, session_id):
             code, msg = _policy_evaluate(file_path, session_id)
             if code == 2:
                 return 2, msg
+            # code 0 may carry a warn-policy advisory: propagate it (never a block).
+            return 0, msg or ''
         return 0, ''
     except Exception as exc:
         return _write_edit_internal_error(tool_name, file_path, session_id, exc)
@@ -5902,6 +6050,11 @@ def _evaluate_bash(tool_input: dict):
 
 def evaluate(tool_name: str, tool_input: dict, session_id: str = ''):
     """Return (exit_code, message). 0 = allow, 2 = block (message is the block reason).
+
+    For Write/Edit a code-0 result may carry a NON-EMPTY message: an advisory from a
+    matching `warn`-severity policy. Callers must surface it as PreToolUse
+    `additionalContext` and must never treat it as a block (only code 2 blocks).
+    The Bash path always returns an empty message on code 0.
 
     `session_id` is the hook payload's session_id; only the Write/Edit policy gate uses it
     (requires_agent records must be bound to it — see `_agent_completed_this_session`).
@@ -5949,7 +6102,11 @@ def main() -> int:
     # (recursion prevention).
     if tool_name == 'Bash':
         command = tool_input.get('command', '') or ''
-        gcode, gmsg = _git_evaluate(command)
+        set_hook_context(data)
+        try:
+            gcode, gmsg = _git_evaluate(command)
+        finally:
+            clear_hook_context()
         if gcode == 2:
             if gmsg:
                 print(gmsg, file=sys.stderr)
@@ -5964,6 +6121,10 @@ def main() -> int:
         if msg:
             print(msg, file=sys.stderr)
         return 2
+    if code == 0 and isinstance(msg, str) and msg:
+        # warn-policy advisory: ONE hookSpecificOutput object, never a block.
+        print(json.dumps({'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse', 'additionalContext': msg}}))
     return 0
 
 

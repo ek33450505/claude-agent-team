@@ -54,6 +54,10 @@ LAUNCHED_PROGRAM_ENV = [
     "EDITOR", "VISUAL", "PAGER", "LESSOPEN", "SSH_ASKPASS", "SSH_AUTH_SOCK",
 ]
 TLS_SECRET_ENV = ["SSLKEYLOGFILE"]
+# macOS xcrun shim redirection (F3): DEVELOPER_DIR runs a fake xcrun, TOOLCHAINS
+# reselects the toolchain, xcrun_db poisons the tool-path cache.
+XCRUN_SHIM_ENV = ["DEVELOPER_DIR", "TOOLCHAINS"]
+XCRUN_PREFIX_ENV = ["xcrun_db", "XCRUN_DB", "xcrun_nocache", "xcrun_log", "Xcrun_Verbose"]
 PREFIX_SAMPLES = [
     "CAST_POLICY_OVERRIDE", "CAST_DB_PATH", "LD_PRELOAD", "LD_LIBRARY_PATH",
     "DYLD_INSERT_LIBRARIES", "PYTHONPATH", "PYTHONSTARTUP", "GIT_SSH_COMMAND",
@@ -96,6 +100,27 @@ class EvaluateTests(unittest.TestCase):
                 self.assertEqual(guard.evaluate({"env": {name: "x"}}), [name])
                 lower = name.lower()
                 self.assertEqual(guard.evaluate({"env": {lower: "x"}}), [lower])
+
+    def test_xcrun_shim_env_blocked_in_every_case(self):
+        for name in XCRUN_SHIM_ENV:
+            for spelling in (name, name.lower(), name.title()):
+                with self.subTest(name=spelling):
+                    self.assertEqual(guard.evaluate({"env": {spelling: "x"}}), [spelling])
+
+    def test_xcrun_prefix_env_blocked_in_every_case(self):
+        for name in XCRUN_PREFIX_ENV:
+            with self.subTest(name=name):
+                self.assertEqual(guard.evaluate({"env": {name: "x"}}), [name])
+
+    def test_xcrun_lookalikes_allowed(self):
+        env = {
+            "DEVELOPER_MODE": "1",   # DEVELOPER_DIR is whole-name, not a prefix
+            "MY_DEVELOPER_DIR": "x",
+            "TOOLCHAIN": "x",        # TOOLCHAINS needs the trailing S
+            "XCRUNNER": "x",         # XCRUN_ needs the trailing underscore
+            "MY_XCRUN_DB": "x",      # prefix, not substring
+        }
+        self.assertEqual(guard.evaluate({"env": env}), [])
 
     def test_prefix_families_blocked(self):
         for name in PREFIX_SAMPLES:
