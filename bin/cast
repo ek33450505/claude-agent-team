@@ -77,6 +77,34 @@ _warn()    { printf "${C_YELLOW}%s${C_RESET}\n" "$*" >&2; }
 _error()   { printf "${C_RED}Error: %s${C_RESET}\n" "$*" >&2; }
 _verbose() { [ "$CAST_VERBOSE" -eq 1 ] && printf "${C_DIM}[verbose] %s${C_RESET}\n" "$*" >&2; }
 
+# Run cast-ask-query.py; stdout is the JSON result, "[]" on any failure (keeps JSON
+# consumers working). Other stderr stays suppressed, EXCEPT lines starting with
+# "cast-ask-query:" (the allowlist-refusal reason) which are relayed via _error so a
+# refused CAST_DB_PATH is not mistaken for "no matches". Usage: _ask_query_run <script> <args...>
+_ask_query_run() {
+  local script="$1"; shift
+  local errfile out rc line
+  errfile="$(mktemp 2>/dev/null)" || errfile=""
+  if [ -n "$errfile" ]; then
+    out="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$script" "$@" 2>"$errfile")"; rc=$?
+  else
+    out="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$script" "$@" 2>/dev/null)"; rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    if [ -n "$errfile" ]; then
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+          "cast-ask-query:"*) _error "$line" ;;
+        esac
+      done < "$errfile"
+    fi
+    out="[]"
+  fi
+  [ -n "$errfile" ] && rm -f "$errfile"
+  printf '%s\n' "$out"
+  return 0
+}
+
 # True when a launchd job is loaded. `launchctl list <label>` sees an empty domain
 # inside a sandboxed shell (e.g. Claude Code's Bash tool) and reports every job as
 # not loaded; `launchctl print` resolves the service directly. Try the GUI domain,
@@ -1285,7 +1313,7 @@ _memory_search() {
   [ -n "$type_filter" ]    && args+=("--type"    "$type_filter")
 
   local result
-  result="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
+  result="$(_ask_query_run "$query_script" "${args[@]}")"
 
   # Adapt the unified record_fts row shape → the memory-search contract so the reroute is transparent.
   CAST_JSON="${CAST_JSON:-0}" python3 -I - "$result" <<'PYEOF'
@@ -2284,6 +2312,7 @@ routines incidents plan_sessions memory_consolidation_runs archived_memories bud
   local _sc_out _sc_rc=0
   _sc_out="$(CAST_SC_HELPER="$_sc_helper" python3 -I - "$CAST_DB_PATH" <<'PYEOF' 2>/dev/null
 import importlib.util, os, re, sqlite3, sys
+con = None
 try:
     spec = importlib.util.spec_from_file_location("_sc_helper", os.environ["CAST_SC_HELPER"])
     mod = importlib.util.module_from_spec(spec)
@@ -2296,6 +2325,9 @@ try:
     print("present" if mod._has_status_check(ddl) else "absent")
 except Exception:
     print("unknown")
+finally:
+    if con is not None:
+        con.close()
 PYEOF
   )" || _sc_rc=$?
   if [ "$_sc_rc" -ne 0 ]; then _sc_out="unknown"; fi
@@ -5454,7 +5486,7 @@ _cmd_ask() {
   [ "$semantic" -eq 1 ] && args+=("--semantic")
 
   local result
-  result="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$query_script" "${args[@]}" 2>/dev/null || echo "[]")"
+  result="$(_ask_query_run "$query_script" "${args[@]}")"
 
   if [ "${CAST_JSON:-0}" -eq 1 ]; then
     echo "$result"

@@ -290,47 +290,49 @@ def retrieve_record_global(prompt: str, top_n: int = 3) -> list:
     fts_match = ' OR '.join(f'"{t}"' for t in tokens)
 
     conn = _connect()
-
-    # Guard: record_fts must exist
-    has_table = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='record_fts'"
-    ).fetchone()
-    if not has_table:
-        return []
-
-    sql = """
-        SELECT rf.kind, rf.ref_id, rf.title, rf.body, rf.mtype, rf.rank,
-               am.confidence AS conf, am.last_validated_at AS lva
-        FROM record_fts rf
-        LEFT JOIN agent_memories am
-          ON rf.kind='memory' AND am.id = CAST(rf.ref_id AS INTEGER)
-        WHERE record_fts MATCH ?
-          AND rf.kind IN ('memory','incident','distillate')
-          AND (rf.kind != 'memory' OR (am.confidence >= 0.5 AND am.last_validated_at IS NOT NULL))
-        ORDER BY rf.rank
-        LIMIT ?
-    """
-
     try:
-        rows = conn.execute(sql, (fts_match, top_n)).fetchall()
-    except sqlite3.OperationalError:
-        return []
+        # Guard: record_fts must exist
+        has_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='record_fts'"
+        ).fetchone()
+        if not has_table:
+            return []
 
-    results = []
-    for row in rows:
-        kind, ref_id, title, body, mtype, rank, conf, lva = row
-        # Bounded, monotonic score: 1.0 - 1/(1+|rank|). More negative rank = stronger match = higher score.
-        score = round(1.0 - 1.0 / (1.0 + abs(rank)), 4) if rank is not None else 0.3
-        results.append({
-            'score': score,
-            'type': mtype if kind == 'memory' else kind,
-            'name': title,
-            'content': body,
-            'id': _safe_int(ref_id) if kind in ('memory', 'incident') else None,
-            'kind': kind,
-        })
+        sql = """
+            SELECT rf.kind, rf.ref_id, rf.title, rf.body, rf.mtype, rf.rank,
+                   am.confidence AS conf, am.last_validated_at AS lva
+            FROM record_fts rf
+            LEFT JOIN agent_memories am
+              ON rf.kind='memory' AND am.id = CAST(rf.ref_id AS INTEGER)
+            WHERE record_fts MATCH ?
+              AND rf.kind IN ('memory','incident','distillate')
+              AND (rf.kind != 'memory' OR (am.confidence >= 0.5 AND am.last_validated_at IS NOT NULL))
+            ORDER BY rf.rank
+            LIMIT ?
+        """
 
-    return results
+        try:
+            rows = conn.execute(sql, (fts_match, top_n)).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+        results = []
+        for row in rows:
+            kind, ref_id, title, body, mtype, rank, conf, lva = row
+            # Bounded, monotonic score: 1.0 - 1/(1+|rank|). More negative rank = stronger match = higher score.
+            score = round(1.0 - 1.0 / (1.0 + abs(rank)), 4) if rank is not None else 0.3
+            results.append({
+                'score': score,
+                'type': mtype if kind == 'memory' else kind,
+                'name': title,
+                'content': body,
+                'id': _safe_int(ref_id) if kind in ('memory', 'incident') else None,
+                'kind': kind,
+            })
+
+        return results
+    finally:
+        conn.close()
 
 
 def retrieve_memories(prompt, agent, top_n=5, type_filter=None, include_history=False, fts_only=False, agent_type=None):

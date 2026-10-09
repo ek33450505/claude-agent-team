@@ -779,7 +779,10 @@ def main() -> int:
         except Exception as e:
             print(f"cast ledger: cannot connect to db: {e}", file=sys.stderr)
             return 1
-        return _cmd_verify(args.verify, conn)
+        try:
+            return _cmd_verify(args.verify, conn)
+        finally:
+            conn.close()
 
     try:
         conn = _connect(db_path)
@@ -787,74 +790,77 @@ def main() -> int:
         print(f"cast ledger: cannot connect to db: {e}", file=sys.stderr)
         return 1
 
-    # Determine which sessions to render. A failed sessions query is a READ ERROR
-    # (exit 3), never "no sessions found" / "no such session" (exit 1).
-    session_rows: List[sqlite3.Row] = []
-    resolve_errors: List[Dict[str, str]] = []
+    try:
+        # Determine which sessions to render. A failed sessions query is a READ ERROR
+        # (exit 3), never "no sessions found" / "no such session" (exit 1).
+        session_rows: List[sqlite3.Row] = []
+        resolve_errors: List[Dict[str, str]] = []
 
-    if args.last is not None:
-        session_rows = _fetch_last_n_sessions(conn, args.last, resolve_errors)
-        if resolve_errors:
-            return _report_resolve_failure(resolve_errors)
-        if not session_rows:
-            print("cast ledger: no sessions found in cast.db", file=sys.stderr)
-            return 1
+        if args.last is not None:
+            session_rows = _fetch_last_n_sessions(conn, args.last, resolve_errors)
+            if resolve_errors:
+                return _report_resolve_failure(resolve_errors)
+            if not session_rows:
+                print("cast ledger: no sessions found in cast.db", file=sys.stderr)
+                return 1
 
-    elif args.since is not None:
-        session_rows = _fetch_sessions_since(conn, args.since, resolve_errors)
-        if resolve_errors:
-            return _report_resolve_failure(resolve_errors)
-        if not session_rows:
-            print(f"cast ledger: no sessions found since {args.since}", file=sys.stderr)
-            return 1
+        elif args.since is not None:
+            session_rows = _fetch_sessions_since(conn, args.since, resolve_errors)
+            if resolve_errors:
+                return _report_resolve_failure(resolve_errors)
+            if not session_rows:
+                print(f"cast ledger: no sessions found since {args.since}", file=sys.stderr)
+                return 1
 
-    elif args.session_id is not None:
-        row = _fetch_session(conn, args.session_id, resolve_errors)
-        if resolve_errors:
-            return _report_resolve_failure(resolve_errors)
-        if row is None:
-            print(f"cast ledger: no such session: {args.session_id}", file=sys.stderr)
-            return 1
-        session_rows = [row]
+        elif args.session_id is not None:
+            row = _fetch_session(conn, args.session_id, resolve_errors)
+            if resolve_errors:
+                return _report_resolve_failure(resolve_errors)
+            if row is None:
+                print(f"cast ledger: no such session: {args.session_id}", file=sys.stderr)
+                return 1
+            session_rows = [row]
 
-    else:
-        # Default: most-recent session
-        row = _fetch_most_recent_session(conn, resolve_errors)
-        if resolve_errors:
-            return _report_resolve_failure(resolve_errors)
-        if row is None:
-            print("cast ledger: no sessions found in cast.db", file=sys.stderr)
-            return 1
-        session_rows = [row]
+        else:
+            # Default: most-recent session
+            row = _fetch_most_recent_session(conn, resolve_errors)
+            if resolve_errors:
+                return _report_resolve_failure(resolve_errors)
+            if row is None:
+                print("cast ledger: no sessions found in cast.db", file=sys.stderr)
+                return 1
+            session_rows = [row]
 
-    # Render
-    multi = len(session_rows) > 1
-    incomplete = False
-    if not multi:
-        rendered, obj = _render_session(conn, session_rows[0], args.as_json)
-        incomplete = _warn_incomplete(obj.get("read_errors"))
-        _output(rendered, args.out)
-    else:
-        if args.as_json:
-            # JSON array
-            items = []
-            for row in session_rows:
-                _, obj = _render_session(conn, row, True)
-                incomplete = _warn_incomplete(obj.get("read_errors"), row["id"]) or incomplete
-                items.append(obj)
-            rendered = json.dumps(items, sort_keys=True, indent=2, default=str)
+        # Render
+        multi = len(session_rows) > 1
+        incomplete = False
+        if not multi:
+            rendered, obj = _render_session(conn, session_rows[0], args.as_json)
+            incomplete = _warn_incomplete(obj.get("read_errors"))
             _output(rendered, args.out)
         else:
-            # Markdown: separate with ---
-            parts = []
-            for row in session_rows:
-                rendered, obj = _render_session(conn, row, False)
-                incomplete = _warn_incomplete(obj.get("read_errors"), row["id"]) or incomplete
-                parts.append(rendered)
-            _output("\n---\n".join(parts), args.out)
+            if args.as_json:
+                # JSON array
+                items = []
+                for row in session_rows:
+                    _, obj = _render_session(conn, row, True)
+                    incomplete = _warn_incomplete(obj.get("read_errors"), row["id"]) or incomplete
+                    items.append(obj)
+                rendered = json.dumps(items, sort_keys=True, indent=2, default=str)
+                _output(rendered, args.out)
+            else:
+                # Markdown: separate with ---
+                parts = []
+                for row in session_rows:
+                    rendered, obj = _render_session(conn, row, False)
+                    incomplete = _warn_incomplete(obj.get("read_errors"), row["id"]) or incomplete
+                    parts.append(rendered)
+                _output("\n---\n".join(parts), args.out)
 
-    # The receipt is written either way; the exit code says whether it is complete.
-    return EXIT_INCOMPLETE if incomplete else 0
+        # The receipt is written either way; the exit code says whether it is complete.
+        return EXIT_INCOMPLETE if incomplete else 0
+    finally:
+        conn.close()
 
 
 def _report_resolve_failure(resolve_errors: List[Dict[str, str]]) -> int:

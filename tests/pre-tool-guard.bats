@@ -1556,6 +1556,26 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   assert_output --partial 'Raw `git gc` blocked'
 }
 
+# _GC_CINJECT_MSG coverage: every test above ends in `gc`, so the gc-any rule fires first.
+# These end in a NON-gc subcommand, so only the config-layer (-c gc.*Expire=) rule can block.
+@test "git -c gc.pruneExpire=now status (non-gc subcommand) → blocks with the config-layer-bypass message (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneExpire=now status")"
+  assert_failure 2
+  assert_output --partial 'config-layer bypass'
+  refute_output --partial 'Raw `git gc` blocked'
+}
+
+@test "git -c gc.reflogExpire=now fetch (non-gc subcommand) → blocks with the config-layer-bypass message (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpire=now fetch")"
+  assert_failure 2
+  assert_output --partial 'config-layer bypass'
+}
+
+@test "CAST_GC_OK=1 git -c gc.pruneExpire=now status → allows (exit 0) [cinject hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git -c gc.pruneExpire=now status")"
+  assert_success
+}
+
 @test "git -c core.quotepath=off log (unrelated key) → allows (exit 0) [regression: no false positive]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c core.quotepath=off log")"
   assert_success

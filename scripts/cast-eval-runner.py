@@ -21,6 +21,7 @@ Phase B: LLM judge (type: llm_judge), pass@k, cast eval report, cast eval record
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -390,7 +391,7 @@ def _run_llm_judge_grader(
 def _table_exists(table_name: str, db_path: str) -> bool:
     """Check if a table exists in a SQLite database (stdlib only, no cast_db)."""
     try:
-        with sqlite3.connect(db_path) as conn:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             result = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                 (table_name,),
