@@ -4,7 +4,7 @@ import os
 import re
 import sqlite3
 import datetime
-import tempfile
+import unicodedata
 from pathlib import Path
 
 # All tables that cast_db.py is allowed to write to.
@@ -49,27 +49,63 @@ ALLOWED_TABLES = {
 
 # Allowlist for CAST_DB_URL / CAST_DB_PATH resolved paths.
 # Goal: block traversals into /etc, /usr, /root, other users' homes — while
-# allowing the user's ~/.claude/ and any system tempdir used by BATS / pytest.
-# The allowlist is evaluated per-call (not cached at module level) so it reflects
-# current env vars (e.g. TMPDIR, BATS_TMPDIR) at the time of each DB access.
+# allowing the user's ~/.claude/ and the system temp roots used by BATS / pytest.
+# The prefixes are CONSTANTS plus ~/.claude. They are deliberately NOT derived from
+# TMPDIR/TMP/TEMP/BATS_* or tempfile.gettempdir() (which honours TMPDIR): those are
+# caller-steerable, and TMPDIR=$HOME (or a symlink to it) would admit every path under
+# $HOME. An env-derived temp dir that lies under one of these roots adds nothing (it is
+# already covered); one that lies elsewhere must NOT be admitted.
+_STATIC_TEMP_ROOTS = ('/tmp', '/private/tmp', '/var/folders', '/private/var/folders')
+
+# ~/.claude is NOT allowed as a whole: it holds code/config CAST executes or trusts
+# (scripts/, config/, settings*.json, install-manifest.sha256, venv/, ...), and a DB (plus its
+# -wal/-shm/-journal siblings) created there squats the name and breaks the reader. Inside
+# ~/.claude only a POSITIVE allowlist is admitted: a DIRECT child whose name ends in '.db'
+# (cast.db, cast-test.db, ...) and does not start with 'settings'. Repo-wide grep shows no real
+# CAST DB in any ~/.claude subdirectory (backups go to ~/Library/Application Support/cast),
+# so no subdirectory is admitted. Compared case-insensitively and NFC-normalised, because the
+# default macOS filesystem is case-insensitive (Scripts/ and scripts/ are the same directory).
+_CLAUDE_DB_SUFFIX = '.db'
+_CLAUDE_DB_DENY_PREFIXES = ('settings',)
+
+
+def _fold(path: str) -> str:
+    text = unicodedata.normalize('NFC', os.path.normcase(path))
+    return unicodedata.normalize('NFC', text.casefold())
+
+
+def _claude_db_refusal(resolved: str) -> str:
+    """'' when `resolved` is outside ~/.claude or an allowed DB location inside it; otherwise
+    the reason it is refused. Both the literal and the resolved spelling of ~/.claude count
+    HERE, but note the later allowlist step (`_allowed_db_prefixes`) admits only the LITERAL
+    ~/.claude prefix: under a symlinked ~/.claude only the default cast.db (via the resolved
+    default fallback in `_get_db_path`) is accepted."""
+    home_claude = Path.home() / '.claude'
+    target = _fold(resolved)
+    for base in {str(home_claude), os.path.realpath(home_claude)}:
+        fbase = _fold(base)
+        if target == fbase:
+            return 'is ~/.claude itself'
+        if not target.startswith(fbase + os.sep):
+            continue
+        rel = target[len(fbase) + 1:]
+        if os.sep in rel:
+            return 'is inside a ~/.claude subdirectory'
+        if (not rel.endswith(_CLAUDE_DB_SUFFIX) or len(rel) <= len(_CLAUDE_DB_SUFFIX)
+                or rel.startswith(_CLAUDE_DB_DENY_PREFIXES)):
+            return 'is not a *.db file directly under ~/.claude'
+        return ''
+    return ''
+
+
 def _allowed_db_prefixes() -> tuple:
-    prefixes = [
-        str(Path.home() / '.claude') + os.sep,
-        '/tmp/',
-        str(Path('/tmp').resolve()) + os.sep,
-        str(Path(tempfile.gettempdir()).resolve()) + os.sep,
-        # macOS system temp: /var/folders/... resolves to /private/var/folders/...
-        '/var/folders/',
-        str(Path('/var/folders').resolve()) + os.sep,
-    ]
-    # Include any temp-dir env vars (TMPDIR, TEMP, TMP) — handles macOS mktemp paths
-    for env_var in ('TMPDIR', 'TEMP', 'TMP'):
-        val = os.environ.get(env_var)
-        if val:
-            prefixes.append(str(Path(val).resolve()) + os.sep)
-    bats_tmpdir = os.environ.get('BATS_TEST_TMPDIR') or os.environ.get('BATS_TMPDIR')
-    if bats_tmpdir:
-        prefixes.append(str(Path(bats_tmpdir).resolve()) + os.sep)
+    prefixes = [str(Path.home() / '.claude') + os.sep]
+    for root in _STATIC_TEMP_ROOTS:
+        # the literal root and its realpath (macOS: /tmp -> /private/tmp; Linux: identity)
+        for form in (root, os.path.realpath(root)):
+            prefix = form + os.sep
+            if prefix not in prefixes:
+                prefixes.append(prefix)
     return tuple(prefixes)
 
 
@@ -91,6 +127,9 @@ def _get_db_path() -> str:
     else:
         raw = str(Path(os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))))
     resolved = str(Path(raw).resolve())
+    reason = _claude_db_refusal(resolved)
+    if reason:
+        raise ValueError(f'CAST_DB_URL/CAST_DB_PATH {reason}: {resolved!r}.')
     prefixes = _allowed_db_prefixes()
     if not any(resolved.startswith(prefix) for prefix in prefixes):
         # Also accept exact match against the default db file (no trailing sep needed)
@@ -100,7 +139,8 @@ def _get_db_path() -> str:
                 f'CAST_DB_URL/CAST_DB_PATH resolves to an unexpected path: {resolved!r}. '
                 f'Must be under {prefixes}.'
             )
-    return raw
+    # Connect to what was checked, not to the unresolved spelling (symlink/.. swaps)
+    return resolved
 
 
 def _connect():
@@ -187,16 +227,54 @@ def db_execute(sql: str, params: tuple = ()) -> bool:
             return False
 
 
+_LOG_MSG_MAX = 2000
+
+
+def _is_log_control(c: str) -> bool:
+    """C0, DEL, C1, line/paragraph separators, bidi controls (U+202A-202E, U+2066-2069 and the
+    marks U+200E/200F/061C), zero-width/format characters (U+200B-200D, U+2060-2064,
+    U+206A-206F, U+180E, U+FEFF): invisible or
+    reordering characters that can disguise a forged log line."""
+    o = ord(c)
+    return (o < 32 or 0x7f <= o <= 0x9f
+            or o in (0x2028, 0x2029, 0x200e, 0x200f, 0x061c, 0xfeff, 0x180e)
+            or 0x200b <= o <= 0x200d or 0x202a <= o <= 0x202e
+            or 0x2060 <= o <= 0x2064 or 0x2066 <= o <= 0x2069 or 0x206a <= o <= 0x206f)
+
+
+def _sanitize_log_msg(msg) -> str:
+    """One log line, no injection: CR/LF are escaped, every other control character (C0, DEL,
+    C1, separators, bidi and zero-width characters) becomes a space, and the result is
+    capped. Error text can embed attacker-influenced content (e.g. a trigger's RAISE
+    message), and the log is a line-oriented file."""
+    text = str(msg).replace('\r', '\\r').replace('\n', '\\n')
+    text = ''.join(' ' if _is_log_control(c) else c for c in text)
+    if len(text) > _LOG_MSG_MAX:
+        text = text[:_LOG_MSG_MAX] + '...[truncated]'
+    return text
+
+
 def _log_error(msg: str) -> None:
+    # NOTE: CAST_DB_PATH / CAST_DB_URL do NOT redirect this log - it always goes to
+    # ~/.claude/logs. A redirect beside the DB was an arbitrary-file-append primitive
+    # (hardlinks/symlink races); tests and tools must isolate HOME instead.
+    # Never raises (Path.home() is inside the try; the fallback is stderr).
+    try:
+        safe = _sanitize_log_msg(msg)
+    except Exception:
+        safe = '<unprintable message>'
     try:
         log_path = Path.home() / '.claude' / 'logs' / 'db-write-errors.log'
         log_path.parent.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
         with open(log_path, 'a') as f:
-            f.write(f'[{ts}] ERROR cast_db.py: {msg}\n')
+            f.write(f'[{ts}] ERROR cast_db.py: {safe}\n')
     except Exception:
         import sys
-        sys.stderr.write(f'cast_db.py ERROR (log unavailable): {msg}\n')
+        try:
+            sys.stderr.write(f'cast_db.py ERROR (log unavailable): {safe}\n')
+        except Exception:
+            pass
 
 
 def ensure_schema_columns() -> None:

@@ -31,17 +31,52 @@ print(json.dumps({'language':'unknown','framework':'unknown','build_cmd':'',
   exit 0
 fi
 
+# ── --write target gate (bash half) ────────────────────────────────────────
+# --write persists <REPO_ROOT>/.claude/cast.json, so REPO_ROOT must be a real git work-tree
+# top-level. Ask git (via the hardened cast_git_safe: REPO_ROOT is caller/agent-steerable and
+# repo config can otherwise make git run programs) for the top-level of REPO_ROOT; the Python
+# half compares it with REPO_ROOT and also refuses ~/.claude and $HOME. Any failure to load the
+# lib or run git leaves GIT_TOPLEVEL empty, which the Python half treats as "do not write".
+GIT_TOPLEVEL=""
+GATE_NOTE=""
+if [[ "$WRITE_FLAG" == "--write" ]]; then
+  _SD_DIR="$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P)" || _SD_DIR=""
+  _SD_LIB="$_SD_DIR/cast-hook-lib.sh"
+  # unset first: an inherited _CAST_HOOK_LIB_LOADED / exported function must not stand in for the lib
+  unset -f cast_git_safe 2>/dev/null || true
+  unset _CAST_HOOK_LIB_LOADED
+  _SD_LIB_OK=0
+  # (-r first: bash 3.2 exits the shell silently on a failed `source` of a missing file.)
+  if [[ -n "$_SD_DIR" && -r "$_SD_LIB" ]]; then
+    # shellcheck source=cast-hook-lib.sh
+    # shellcheck source-path=SCRIPTDIR
+    if source "$_SD_LIB" 2>/dev/null && declare -F cast_git_safe >/dev/null 2>&1; then
+      _SD_LIB_OK=1
+    fi
+  fi
+  if [[ "$_SD_LIB_OK" == "1" ]]; then
+    GIT_TOPLEVEL="$(cast_git_safe "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null)" || GIT_TOPLEVEL=""
+    [[ -n "$GIT_TOPLEVEL" ]] || GATE_NOTE="git could not report a work-tree top-level for the target"
+  else
+    GATE_NOTE="cast-hook-lib.sh could not be loaded (cannot verify the target is a git work tree)"
+  fi
+fi
+
 # Run detection and optional persist via Python stdlib (env-var pattern per python.md)
 REPO_ROOT="$REPO_ROOT" \
 WRITE_FLAG="$WRITE_FLAG" \
 FORCE_FLAG="$FORCE_FLAG" \
+GIT_TOPLEVEL="$GIT_TOPLEVEL" \
+GATE_NOTE="$GATE_NOTE" \
 python3 -I << 'PYTHON_BLOCK'
-import json, os, re, sys, glob
+import errno, json, os, re, stat, sys, glob
 from datetime import datetime, timezone
 
 REPO_ROOT  = os.environ.get('REPO_ROOT', '')
 WRITE_FLAG = os.environ.get('WRITE_FLAG', '')
 FORCE_FLAG = os.environ.get('FORCE_FLAG', '')
+GIT_TOPLEVEL = os.environ.get('GIT_TOPLEVEL', '')
+GATE_NOTE = os.environ.get('GATE_NOTE', '')
 
 now_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
@@ -172,41 +207,162 @@ except Exception:
     result['framework'] = 'unknown'
 
 # ── --write: persist to cast.json (best-effort, never crash) ──────────────
-if WRITE_FLAG == '--write':
-    try:
-        cast_json_dir  = os.path.join(REPO_ROOT, '.claude')
-        cast_json_path = os.path.join(cast_json_dir, 'cast.json')
+def _home_refusal(path):
+    """Reason when `path` (a realpath) is $HOME or inside ~/.claude, else ''."""
+    home = os.path.realpath(os.path.expanduser('~'))
+    claude_home = os.path.join(home, '.claude')
+    if path == home or path == claude_home or path.startswith(claude_home + os.sep):
+        return 'target is $HOME or under ~/.claude'
+    return ''
 
+
+def write_refusal():
+    """Why --write must not persist, or '' when REPO_ROOT is acceptable. It is acceptable only
+    when it is the top-level of a real git work tree AND is not ~/.claude (or anything under
+    it) or $HOME itself. A repo subdirectory (scripts/, managed-settings.d/) has a different
+    git top-level, so it is refused. Fails closed: no top-level => refusal."""
+    if not GIT_TOPLEVEL:
+        return GATE_NOTE or 'git could not report a work-tree top-level for the target'
+    real = os.path.realpath(REPO_ROOT)
+    if os.path.realpath(GIT_TOPLEVEL) != real:
+        return 'target is not a git work-tree top-level (it is a subdirectory or not the repo root)'
+    return _home_refusal(real)
+
+
+def profile_core(d):
+    """The stack profile minus its timestamp: what 'changed' means for a rewrite."""
+    return {k: v for k, v in d.items() if k != 'inferred_at'}
+
+
+_refusal = write_refusal() if WRITE_FLAG == '--write' else ''
+if _refusal:
+    print(f'cast-stack-detect: --write skipped: {_refusal}', file=sys.stderr)
+
+class Refuse(Exception):
+    """--write must not touch the target; str(e) is the one-line reason."""
+
+
+# RESIDUAL TOCTOU: the bash git-toplevel gate (cast_git_safe rev-parse) and this write are
+# separate steps. Swapping an ANCESTOR of the repo root (for a symlink) between them could
+# redirect the write, but that needs write access above the repo root, which an agent confined
+# to the repo does not have. Everything below the resolved root is fd-relative and O_NOFOLLOW.
+def persist_stack(real_root):
+    """Write <real_root>/.claude/cast.json without ever following a planted link.
+
+    The repo is agent-writable, so `.claude` and `cast.json` can be symlinks into ~/.claude
+    (config/policies.json, scripts/, ...), or hardlinks. Rules: `.claude` must be a real
+    directory (O_NOFOLLOW); cast.json, if present, a regular file with one link; the new
+    content is staged in a tmp file created inside that directory (O_EXCL|O_NOFOLLOW) and
+    renamed over cast.json, all relative to an O_NOFOLLOW directory fd, so a swap after the
+    checks cannot redirect the write. real_root is the realpath resolved ONCE by the caller.
+    """
+    cast_dir = os.path.join(real_root, '.claude')
+    try:
+        dst = os.lstat(cast_dir)
+    except FileNotFoundError:
+        dst = None
+    if dst is not None and (stat.S_ISLNK(dst.st_mode) or not stat.S_ISDIR(dst.st_mode)):
+        raise Refuse('<repo>/.claude is a symlink or not a directory')
+    reason = _home_refusal(os.path.realpath(cast_dir))
+    if reason:
+        raise Refuse(reason)
+
+    def open_dir():
+        try:
+            return os.open(cast_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as e:
+            if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                raise Refuse('<repo>/.claude is a symlink or not a directory')
+            raise
+
+    dir_fd = open_dir() if dst is not None else None
+    try:
         existing = {}
-        if os.path.isfile(cast_json_path):
-            with open(cast_json_path) as f:
-                existing = json.load(f)
+        mode = None  # None => new file: created 0o666 & ~umask by open(2) itself
+        if dir_fd is not None:
+            # Classify BEFORE opening: opening a FIFO read-only blocks until a writer appears
+            # (a planted FIFO named cast.json would hang the CwdChanged hook), and a device
+            # node can have side effects. lstat-style, relative to the verified directory fd.
+            try:
+                pre = os.stat('cast.json', dir_fd=dir_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pre = None
+            if pre is not None:
+                if stat.S_ISLNK(pre.st_mode):
+                    raise Refuse('<repo>/.claude/cast.json is a symlink')
+                if not stat.S_ISREG(pre.st_mode):
+                    raise Refuse('<repo>/.claude/cast.json is not a regular file')
+                # O_NONBLOCK: if the name is swapped for a FIFO after the check, open() must
+                # not block; the fstat re-check below then refuses it.
+                try:
+                    fd = os.open('cast.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=dir_fd)
+                except OSError as e:
+                    if e.errno == errno.ELOOP:
+                        raise Refuse('<repo>/.claude/cast.json is a symlink')
+                    raise
+                with os.fdopen(fd) as f:
+                    st = os.fstat(f.fileno())
+                    if not stat.S_ISREG(st.st_mode):
+                        raise Refuse('<repo>/.claude/cast.json is not a regular file')
+                    if st.st_nlink > 1:
+                        raise Refuse('<repo>/.claude/cast.json has multiple hard links')
+                    os.set_blocking(f.fileno(), True)  # clear O_NONBLOCK before reading
+                    mode = stat.S_IMODE(st.st_mode)
+                    existing = json.load(f)
 
         stack = existing.get('stack', {})
-
         # Respect _manual guard
-        if not stack.get('_manual'):
-            should_write = True
+        if stack.get('_manual'):
+            return
 
-            # 7-day age check (bypassed when --force)
-            if FORCE_FLAG != '--force' and stack.get('inferred_at'):
-                try:
-                    last_str = stack['inferred_at'].replace('Z', '+00:00')
-                    last = datetime.fromisoformat(last_str)
-                    age_days = (datetime.now(timezone.utc) - last).days
-                    if age_days < 7:
-                        should_write = False
-                except Exception:
-                    pass
+        # 7-day age check (bypassed when --force)
+        if FORCE_FLAG != '--force' and stack.get('inferred_at'):
+            try:
+                last = datetime.fromisoformat(stack['inferred_at'].replace('Z', '+00:00'))
+                if (datetime.now(timezone.utc) - last).days < 7:
+                    return
+            except Exception:
+                pass
 
-            if should_write:
-                existing['stack'] = result
-                os.makedirs(cast_json_dir, exist_ok=True)
-                with open(cast_json_path, 'w') as f:
-                    json.dump(existing, f, indent=2)
-                    f.write('\n')
+        # Unchanged profile (ignoring the timestamp): do not rewrite - a bare
+        # inferred_at bump only churns the tracked .claude/cast.json.
+        if stack and profile_core(stack) == profile_core(result):
+            return
+
+        existing['stack'] = result
+        if dir_fd is None:
+            os.mkdir(cast_dir, 0o755)
+            dir_fd = open_dir()
+        tmp_name = '.cast.json.tmp-%d-%s' % (os.getpid(), os.urandom(6).hex())
+        tmp_fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o666, dir_fd=dir_fd)
+        try:
+            with os.fdopen(tmp_fd, 'w') as f:
+                if mode is not None:  # existing file: keep its mode (new file: umask applied)
+                    os.fchmod(f.fileno(), mode)
+                json.dump(existing, f, indent=2)
+                f.write('\n')
+            os.replace(tmp_name, 'cast.json', src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp_name, dir_fd=dir_fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        if dir_fd is not None:
+            os.close(dir_fd)
+
+
+if WRITE_FLAG == '--write' and not _refusal:
+    try:
+        # Resolve the root ONCE and write only through the resolved path
+        persist_stack(os.path.realpath(REPO_ROOT))
+    except Refuse as e:
+        print(f'cast-stack-detect: --write skipped: {e}', file=sys.stderr)
     except Exception:
-        pass  # best-effort — never crash the caller
+        pass  # best-effort - never crash the caller
 
 print(json.dumps(result))
 PYTHON_BLOCK
