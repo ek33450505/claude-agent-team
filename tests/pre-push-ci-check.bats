@@ -412,7 +412,7 @@ _run_new_branch_push() {
   # Guard: if elapsed is empty the helper failed to capture it; fail explicitly.
   [[ -n "${elapsed_seconds:-}" ]] || fail "elapsed_seconds not set by helper"
   if (( elapsed_seconds >= 10 )); then
-    fail "New-branch push scan took ${elapsed_seconds}s — expected < 10s (merge-base fix may have regressed)"
+    fail "New-branch push scan took ${elapsed_seconds}s — expected < 10s (scan cost regressed)"
   fi
 }
 
@@ -629,7 +629,9 @@ _fake_key() {
 #   LOCAL_SHA   pushed sha            (default: HEAD after fn)
 #   REMOTE_SHA  remote sha on the ref (default: the base commit)
 #   SC_NOSTDIN  =1 -> run the gate with no stdin ref line (standalone mode)
-# then feeds one stdin ref to the gate. Sets $output and $status.
+#   SC_SECOND_REF  a second ref name -> a second stdin line for the SAME shas (e.g. a tag)
+# then feeds the stdin ref(s) to the gate. SC_BASH (outer env) picks the interpreter that runs
+# the gate (default bash). Sets $output and $status.
 _run_scenario() {
   local fn="$1"
   shift
@@ -655,10 +657,14 @@ _run_scenario() {
     "$fn" "$@"
     [[ -n "$LOCAL_SHA" ]] || LOCAL_SHA="$(git rev-parse HEAD)"
     if [[ "$SC_NOSTDIN" == "1" ]]; then
-      CAST_PII_LOCAL_DENYLIST="/nonexistent/path/pii-denylist-local.txt" bash "$SCRIPT" < /dev/null 2>&1
+      CAST_PII_LOCAL_DENYLIST="/nonexistent/path/pii-denylist-local.txt" "${SC_BASH:-bash}" "$SCRIPT" < /dev/null 2>&1
     else
-      printf 'refs/heads/main %s refs/heads/main %s\n' "$LOCAL_SHA" "$REMOTE_SHA" \
-        | CAST_PII_LOCAL_DENYLIST="${SC_DENYLIST_OVERRIDE:-/nonexistent/path/pii-denylist-local.txt}" bash "$SCRIPT" "$SC_REMOTE" 2>&1
+      {
+        printf 'refs/heads/main %s refs/heads/main %s\n' "$LOCAL_SHA" "$REMOTE_SHA"
+        if [[ -n "${SC_SECOND_REF:-}" ]]; then
+          printf '%s %s %s %s\n' "$SC_SECOND_REF" "$LOCAL_SHA" "$SC_SECOND_REF" "$REMOTE_SHA"
+        fi
+      } | CAST_PII_LOCAL_DENYLIST="${SC_DENYLIST_OVERRIDE:-/nonexistent/path/pii-denylist-local.txt}" "${SC_BASH:-bash}" "$SCRIPT" "$SC_REMOTE" 2>&1
     fi
   ) || rc=$?
 
@@ -1181,4 +1187,263 @@ _sc_email_line() {
   _run_scenario _sc_n_commits 1
   assert_failure
   assert_output --partial "must be a non-negative integer"
+}
+
+# ---------------------------------------------------------------------------
+# Single-pass scan (G1c): the diff is parsed once into line-aligned records and each pattern
+# is ONE grep over them (was one grep per added line per pattern; 1,000 added lines took 272 s
+# under /bin/bash 3.2).
+# ---------------------------------------------------------------------------
+
+# One commit adding big.txt (50,000 lines, a key on the LAST one) plus an ALLOWLISTED file that
+# also holds a key (it must stay skipped). The lines are generated with awk (fast).
+_sc_scale() {
+  awk -v k="$(_fake_key)" 'BEGIN {
+    for (i = 1; i < 50000; i++) printf "line %d filler text for the scale test\n", i
+    printf "key=%s\n", k
+  }' > big.txt
+  mkdir -p tests
+  printf 'k=%s\n' "$(_fake_key)" > tests/pre-push-ci-check.bats
+  git add -A
+  git commit -q -m "50k lines"
+}
+
+# One commit with a key, pushed on TWO refs (a branch and a tag) for the same shas.
+_sc_two_refs() {
+  printf 'k=%s\n' "$(_fake_key)" > s.txt
+  git add -A
+  git commit -q -m "secret"
+  SC_SECOND_REF="refs/tags/v1"
+}
+
+# Files in diff (path) order: a.txt (clean, 3 lines), two ALLOWLISTED files and a plugin/ file
+# that each hold a key (all skipped), then zz/b.txt whose 2nd line carries the key after a
+# colon and a tab. The skipped files sit BETWEEN the clean file and the hit, so a name/content
+# misalignment would attribute the hit to the wrong file.
+_sc_aligned() {
+  mkdir -p config plugin tests zz
+  printf 'one\ntwo\nthree\n' > a.txt
+  printf 'k=%s\n' "$(_fake_key)" > config/pii-patterns.json
+  printf 'k=%s\n' "$(_fake_key)" > plugin/x.txt
+  printf 'k=%s\n' "$(_fake_key)" > tests/pre-push-ci-check.bats
+  printf 'first\nk: v\t=%s\nlast\n' "$(_fake_key)" > zz/b.txt
+  git add -A
+  git commit -q -m "aligned"
+}
+
+# A clean commit; the gate's TMPDIR is made unusable AFTER the repo is built (the scenario runs
+# in a subshell, so the export reaches only the gate process).
+_sc_badtmp() {
+  _sc_file a.txt "clean"
+  export TMPDIR=/nonexistent/cast-g1c
+}
+
+@test "scale: 50,000 added lines scan within 30 s under /bin/bash and still catch a key on the last line" {
+  local t0 t1 elapsed
+  t0="$(date +%s)"
+  SC_BASH=/bin/bash _run_scenario _sc_scale
+  t1="$(date +%s)"
+  elapsed=$((t1 - t0))
+  echo "# scale elapsed: ${elapsed}s" >&3
+  assert_failure
+  local n
+  n="$(printf '%s\n' "$output" | grep -c '\[aws-key\]' || true)"
+  [[ "$n" == "1" ]] || fail "expected exactly one [aws-key] line, got $n: $output"
+  assert_output --partial "[aws-key] big.txt: key=$(_fake_key)"
+  if ((elapsed >= 30)); then
+    fail "50,000-line scan took ${elapsed}s under /bin/bash — expected < 30s (scan cost regressed)"
+  fi
+}
+
+@test "scan: a commit pushed on two refs is diffed once" {
+  _run_scenario _sc_two_refs
+  assert_failure
+  local n
+  n="$(printf '%s\n' "$output" | grep -c '\[aws-key\]' || true)"
+  [[ "$n" == "1" ]] || fail "expected exactly one [aws-key] line, got $n: $output"
+}
+
+@test "deny-list: a ^-anchored pattern anchors at the start of the added line's content" {
+  local dl
+  dl="$(mktemp)"
+  printf '^acmecorp\n' > "$dl"
+  export SC_DENYLIST_OVERRIDE="$dl"
+  _run_scenario _sc_file x.txt "acmecorp here"
+  rm -f "$dl"
+  assert_failure
+  assert_output --partial "[local-denylist] x.txt: acmecorp here"
+}
+
+@test "deny-list: the same ^-anchored pattern does not match content with a leading space (control)" {
+  local dl
+  dl="$(mktemp)"
+  printf '^acmecorp\n' > "$dl"
+  export SC_DENYLIST_OVERRIDE="$dl"
+  _run_scenario _sc_file x.txt " acmecorp here"
+  rm -f "$dl"
+  assert_success
+  refute_output --partial "[local-denylist]"
+}
+
+@test "scan: hit output keeps the file name and the full line (colon, tab) of a later file" {
+  local expected
+  expected="$(printf '  [aws-key] zz/b.txt: k: v\t=%s' "$(_fake_key)")"
+  _run_scenario _sc_aligned
+  assert_failure
+  grep -Fxq -- "$expected" <<<"$output" || fail "no exact line [$expected] in: $output"
+  local n
+  n="$(printf '%s\n' "$output" | grep -c '\[aws-key\]' || true)"
+  [[ "$n" == "1" ]] || fail "expected exactly one [aws-key] line, got $n: $output"
+  refute_output --partial "] a.txt:"
+  refute_output --partial "] config/pii-patterns.json:"
+  refute_output --partial "] plugin/x.txt:"
+  refute_output --partial "] tests/pre-push-ci-check.bats:"
+}
+
+@test "scratch dir: the gate leaves no cast-pii.* dir behind (pass and block)" {
+  local t
+  t="$(mktemp -d "${TMPDIR:-/tmp}/g1c-tmp.XXXXXX")"
+  TMPDIR="$t" _run_scenario _sc_file a.txt "clean"
+  assert_success
+  assert_output --partial "All checks passed"
+  TMPDIR="$t" _run_scenario _sc_file a.txt "k=$(_fake_key)"
+  assert_failure
+  assert_output --partial "[aws-key]"
+  local leaked=0
+  if compgen -G "$t/cast-pii.*" >/dev/null; then
+    leaked=1
+  fi
+  if [[ "$t" == "${TMPDIR:-/tmp}"/g1c-tmp.* ]]; then
+    rm -rf "$t"
+  fi
+  [[ "$leaked" == "0" ]] || fail "the gate left a cast-pii.* scratch dir behind"
+}
+
+@test "scratch dir: an unusable TMPDIR fails closed" {
+  _run_scenario _sc_badtmp
+  assert_failure
+  assert_output --partial "cannot create a private temp dir"
+}
+
+# Create a directory holding a `mktemp` shim: it runs the real mktemp and, ONLY when an
+# argument contains `cast-pii.` (the gate's scratch dir), plants a dangling symlink
+# hits -> missing/hits inside the new dir, so the gate's `>` onto it can never open. Prints the
+# shim directory (prefix it to PATH). The real mktemp is resolved BEFORE PATH changes.
+_make_mktemp_shim() {
+  local shim real
+  shim="$(mktemp -d "${TMPDIR:-/tmp}/mktempshim.XXXXXX")"
+  real="$(command -v mktemp)"
+  {
+    printf '#!/bin/bash\n'
+    printf 'd=$(%q "$@") || exit $?\n' "$real"
+    printf 'for a in "$@"; do\n'
+    printf '  case "$a" in\n'
+    printf '    *cast-pii.*) ln -s "$d/missing/hits" "$d/hits"; break ;;\n'
+    printf '  esac\n'
+    printf 'done\n'
+    printf 'printf "%%s\\n" "$d"\n'
+  } > "$shim/mktemp"
+  chmod +x "$shim/mktemp"
+  printf '%s' "$shim"
+}
+
+_rm_mktemp_shim() {
+  if [[ "$1" == "${TMPDIR:-/tmp}"/mktempshim.* ]]; then
+    rm -rf "$1"
+  fi
+}
+
+# 250 added lines that each hold a key (the printed hits are capped at 200 per pattern).
+_sc_many() {
+  awk -v k="$(_fake_key)" 'BEGIN { for (i = 1; i <= 250; i++) printf "k%d=%s\n", i, k }' > many.txt
+  git add -A
+  git commit -q -m "250 keys"
+}
+
+# 250 lines that the email exclusion suppresses (@example.com), then one real address in a LATER
+# file. Built from fragments so no literal address sits in this file.
+_sc_excluded() {
+  local i
+  for i in $(seq 1 250); do
+    printf '%s%s%s\n' "u$i" "@" "example.com"
+  done > e.txt
+  printf '%s%s%s\n' "real" "@" "corp.test" > f.txt
+  git add -A
+  git commit -q -m "excluded then real"
+}
+
+# The base commit's r.txt is DELETED (a header with zero added lines) between a clean file and
+# two files that hold a key: one allowlisted (skipped), one not. Header ordinals must stay
+# aligned with the header list across the deletion and the skipped file.
+_sc_delete_aligned() {
+  rm -f r.txt
+  mkdir -p tests zz
+  printf 'one\ntwo\n' > a.txt
+  printf 'k=%s\n' "$(_fake_key)" > tests/pre-push-ci-check.bats
+  printf 'k=%s\n' "$(_fake_key)" > zz/b.txt
+  git add -A
+  git commit -q -m "delete and add"
+}
+
+@test "scratch: an output file that cannot be created is a scan-error, not a clean pass" {
+  local shim
+  shim="$(_make_mktemp_shim)"
+  export PATH="$shim:$PATH"
+  _run_scenario _sc_file s.txt "k=$(_fake_key)"
+  _rm_mktemp_shim "$shim"
+  assert_failure
+  assert_output --partial "cannot write the scan scratch"
+}
+
+# Like _make_grep_shim, but the grep matching $1 exits 0 WITHOUT writing anything: "a match" with
+# no hit lines (what a hits file pointing at /dev/null produces). Use _rm_grep_shim to remove it.
+_make_silent_grep_shim() {
+  local shim real
+  shim="$(mktemp -d "${TMPDIR:-/tmp}/grepshim.XXXXXX")"
+  real="$(command -v grep)"
+  {
+    printf '#!/bin/bash\nfor a in "$@"; do case "$a" in *%s*) exit 0 ;; esac; done\n' "$1"
+    printf 'exec %s "$@"\n' "$real"
+  } > "$shim/grep"
+  chmod +x "$shim/grep"
+  printf '%s' "$shim"
+}
+
+@test "scan: a grep that reports a match but writes no hit is a scan-error, not a clean pass" {
+  local shim
+  shim="$(_make_silent_grep_shim AKIA)"
+  export PATH="$shim:$PATH"
+  _run_scenario _sc_n_commits 1
+  _rm_grep_shim "$shim"
+  assert_failure
+  assert_output --partial "[scan-error] aws-key: grep reported a match but wrote no hits"
+}
+
+@test "scan: printed hits are capped at 200 per pattern" {
+  _run_scenario _sc_many
+  assert_failure
+  local n
+  n="$(printf '%s\n' "$output" | grep -c '\[aws-key\] many.txt: ' || true)"
+  [[ "$n" == "200" ]] || fail "expected exactly 200 printed [aws-key] hit lines, got $n"
+  grep -Fxq -- "  [aws-key] ... and 50 more hit lines not shown" <<<"$output" \
+    || fail "no '... and 50 more hit lines not shown' line in: $output"
+}
+
+@test "scan: excluded lines do not consume the 200-hit cap" {
+  _run_scenario _sc_excluded
+  assert_failure
+  grep -Fxq -- "  [email] f.txt: real@corp.test" <<<"$output" \
+    || fail "no exact [email] f.txt line in: $output"
+  refute_output --partial "[email] ... and"
+}
+
+@test "scan: header ordinals stay aligned across a deletion-only file" {
+  _run_scenario _sc_delete_aligned
+  assert_failure
+  local n
+  n="$(printf '%s\n' "$output" | grep -c '\[aws-key\]' || true)"
+  [[ "$n" == "1" ]] || fail "expected exactly one [aws-key] line, got $n: $output"
+  assert_output --partial "[aws-key] zz/b.txt: k=$(_fake_key)"
+  refute_output --partial "] tests/pre-push-ci-check.bats:"
+  refute_output --partial "] r.txt:"
 }

@@ -14,15 +14,16 @@
 # bounded by CAST_PII_MAX_COMMITS (default 500), which fails closed with the escape-hatch
 # hint — the variable only tunes the cap; it cannot skip the scan.
 # FAILS CLOSED: a pushed sha that is not a local commit, any git failure while enumerating or
-# diffing (no `|| true` on a git call whose output is scanned), a diff with text but no
-# `diff --git` header, a grep that errors (a `[scan-error]` hit), an invalid deny-list regex,
-# a non-numeric cap, and running outside a git repo. Every diff is pinned (--text --no-color
-# --no-ext-diff --no-textconv --no-renames, a/ b/ prefixes) and every Check 4 grep runs under
-# LC_ALL=C (Checks 1 and 2 run earlier, under the caller's locale), so repo/user config and
-# invalid-UTF-8 bytes cannot blind the scan. The
-# standalone HEAD~1..HEAD fallback runs only when NO stdin ref line was read, so a
-# deletion-only push scans nothing and passes. The allowlist applies only to an exactly
-# parsed `diff --git a/P b/P` header; an unparsed header is scanned, never skipped.
+# diffing (no `|| true` on a git call whose output is scanned), a non-empty diff that does not
+# start with a `diff --git` header, a grep that errors or a join that cannot be parsed (a
+# `[scan-error]` hit), a scratch dir that cannot be created or written, an invalid deny-list
+# regex, a non-numeric cap, and running outside a git repo. Every diff is pinned (--text
+# --no-color --no-ext-diff --no-textconv --no-renames, a/ b/ prefixes) and every Check 4 grep
+# runs under LC_ALL=C (Checks 1 and 2 run earlier, under the caller's locale), so repo/user
+# config and invalid-UTF-8 bytes cannot blind the scan. The standalone HEAD~1..HEAD fallback
+# runs only when NO stdin ref line was read, so a deletion-only push scans nothing and passes.
+# The allowlist applies only to an exactly parsed `diff --git a/P b/P` header; an unparsed
+# header is scanned, never skipped.
 # RESIDUALS (not covered):
 #   - commit and annotated-tag MESSAGES are not scanned;
 #   - file-NAME lines (`diff --git`, `---`/`+++`) are not scanned, only added content;
@@ -36,12 +37,23 @@
 #     `foo` also excludes commits published only to a remote named `foo/bar` (under-scans
 #     only when remote names nest);
 #   - plugin/ is excluded from every Check 4 diff (a generated mirror, drift-gated by CI);
-#   - the `diff --git` sanity check is aggregate (any header anywhere satisfies it): a
-#     tripwire that is unreachable with the pinned flags, kept as defence in depth;
 #   - merging an already-published branch (main) into a feature branch re-scans that
 #     published content, so it can false-positive;
-#   - the per-line grep loop is slow, quadratic under /bin/bash 3.2 (pre-existing; hence the
-#     cap; follow-up G1c).
+#   - a SIGKILLed run leaves its 0700 `$TMPDIR/cast-pii.*` scratch (pushed diff text) behind;
+#     the EXIT trap covers exit, INT, TERM and HUP;
+#   - hit lines are echoed raw: control bytes (ESC, CR) in pushed content or paths reach the
+#     terminal (pre-existing);
+#   - a same-user process that changes the 0700 scratch dir between the S1 guard and grep can
+#     still make a pattern read as clean (same-user trust; out of scope);
+#   - the per-pattern join keeps hit/exclusion line numbers in memory: O(hit lines) (2M
+#     all-hit lines ~ 625 MB RSS); it fails closed if killed.
+# COST (G1c): the diff is parsed ONCE (awk) into line-aligned added-line records, then each
+# pattern is ONE grep over all of them: O(patterns) processes, not one grep per added line per
+# pattern. git still runs one diff per (commit, parent); commits shared by several pushed refs
+# are diffed once. No `${var//pat/}` on unbounded text: bash 3.2 runs it in quadratic time
+# (20 KB took 30 s). Before G1c, 1,000 added lines took 272 s on /bin/bash 3.2 and 14 s on
+# bash 5, and 5,000 took 62 s on bash 5; now 50,000 take ~1 s on /bin/bash 3.2.
+# Printed hits are capped at 200 per pattern (the verdict is unchanged).
 set -euo pipefail
 
 # Hardened git (cast_git_safe): hook-run git must not honour repo-local exec config
@@ -199,19 +211,38 @@ if ! cast_git_safe "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
   exit 1
 fi
 
-# Detect PCRE support; fall back to ERE if unavailable.
-if echo "" | grep -qP "." 2>/dev/null; then
-  GREP_FLAGS="-P"
-else
-  GREP_FLAGS="-E"
+# Private scratch for the single-pass scan: the diff text, the parsed records and grep output.
+# It holds pushed content, so it is mktemp's 0700 dir, removed on exit. FAILS CLOSED.
+_PII_TMP=""
+# shellcheck disable=SC2329 # invoked by the EXIT trap below
+_pii_cleanup() {
+  if [[ -n "$_PII_TMP" && -d "$_PII_TMP" ]]; then
+    rm -f -- "$_PII_TMP/commits" "$_PII_TMP/diff" "$_PII_TMP/names" "$_PII_TMP/added" \
+      "$_PII_TMP/files" "$_PII_TMP/hits" "$_PII_TMP/excl" 2>/dev/null || true
+    rmdir -- "$_PII_TMP" 2>/dev/null || true
+  fi
+}
+_pii_tmproot="${TMPDIR:-/tmp}"
+if ! _PII_TMP=$(mktemp -d "${_pii_tmproot%/}/cast-pii.XXXXXX" 2>/dev/null) || [[ ! -d "$_PII_TMP" ]]; then
+  echo "ERROR: cannot create a private temp dir for the scan — PII gate fails closed" >&2
+  exit 1
 fi
+trap _pii_cleanup EXIT
+if ! : >"$_PII_TMP/commits" || ! : >"$_PII_TMP/diff"; then
+  echo "ERROR: cannot write the scan scratch dir — PII gate fails closed" >&2
+  exit 1
+fi
+
+# Every pattern, built-in and deny-list, is an ERE (config/pii-denylist-local.txt.template
+# documents ERE). Pinned: the old `echo "" | grep -qP .` probe could never succeed (`.` cannot
+# match an empty line) and BSD grep has no -P, so every scan already ran with -E.
+GREP_FLAGS="-E"
 
 # Build the diff text from stdin (push refs); the HEAD~1..HEAD fallback runs only when
 # no ref line was read at all.
 # git pre-push hook stdin format: "<local-ref> <local-sha> <remote-ref> <remote-sha>"
 # SHA-1 empty tree; a SHA-256 repo has no such object, so root-commit diffs fail CLOSED there.
 EMPTY_TREE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-PUSH_DIFF=""
 # The remote being pushed to (git passes its name as the hook's $1; the hook forwards it).
 _pii_remote="${1:-}"
 
@@ -229,7 +260,7 @@ _DIFF_FLAGS=(--text --no-color --no-ext-diff --no-textconv --no-renames --src-pr
 # range are already published, first-parent alone is detection-equivalent. plugin/ is
 # excluded: it is a generated build artifact (mirror of scanned source) that is drift-gated by
 # CI; including it caused a ~43k-line diff that made the _pii_scan loop hang at 99% CPU for
-# 18+ min (same hang class as audit §3.8.D/E). _is_allowed() keeps a plugin/* skip as
+# 18+ min (same hang class as audit §3.8.D/E). The single-pass parse keeps a plugin/* skip as
 # belt-and-suspenders. FAILS CLOSED on any git error.
 _append_commit_diffs() {
   local c="$1" p d
@@ -242,8 +273,25 @@ _append_commit_diffs() {
       echo "ERROR: cannot diff pushed commit $c against $p — PII gate fails closed" >&2
       exit 1
     fi
-    PUSH_DIFF+="$d"$'\n'
+    _pii_add_diff "$d" "pushed commit $c against $p"
   done
+}
+
+# Append one pinned diff to the scan input. A non-empty diff must START with a `diff --git`
+# header (unreachable with the pinned flags; defence in depth: lines before the first header
+# would belong to no file). Test the start with a glob, never `${d//...}`. FAILS CLOSED.
+_pii_add_diff() {
+  if [[ -z "$1" ]]; then
+    return 0
+  fi
+  if [[ "$1" != "diff --git "* ]]; then
+    echo "ERROR: diff of $2 does not start with a 'diff --git' header (unexpected diff format) — PII gate fails closed" >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$1" >>"$_PII_TMP/diff"; then
+    echo "ERROR: cannot write the scan input — PII gate fails closed" >&2
+    exit 1
+  fi
 }
 
 _pii_cap="${CAST_PII_MAX_COMMITS:-500}"
@@ -288,136 +336,172 @@ while IFS=' ' read -r _local_ref local_sha _remote_ref remote_sha || [[ -n "${lo
   fi
   _n=0
   if [[ -n "$_lines" ]]; then
-    _nl="${_lines//[!$'\n']/}"
-    _n=$((${#_nl} + 1))
+    # awk, not `${_lines//[!$'\n']/}`: bash 3.2 pattern substitution is quadratic, which made
+    # the cap check itself the slow path on a big push.
+    if ! _n=$(printf '%s\n' "$_lines" | awk 'END { print NR }') || ! [[ "$_n" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: cannot count pushed commits for ${_local_ref:-$local_sha} — PII gate fails closed" >&2
+      exit 1
+    fi
   fi
   if ((_n > _pii_cap)); then
     echo "ERROR: $_n pushed commits exceed the per-commit scan cap — run gitleaks, then push with CAST_SKIP_PII_CHECK=1 if clean" >&2
     exit 1
   fi
-  while IFS= read -r _line; do
-    [[ -z "$_line" ]] && continue
-    read -r -a _fields <<<"$_line"
-    _append_commit_diffs "${_fields[@]}"
-  done <<<"$_lines"
+  if [[ -n "$_lines" ]] && ! printf '%s\n' "$_lines" >>"$_PII_TMP/commits"; then
+    echo "ERROR: cannot write the scan scratch dir — PII gate fails closed" >&2
+    exit 1
+  fi
 done
+
+# Commits shared by several pushed refs (--all, --mirror, a branch and its tag) are diffed once:
+# dedupe on the sha (field 1; a sha fixes its parents). FAILS CLOSED.
+if ! _commits=$(awk 'NF && !seen[$1]++' "$_PII_TMP/commits"); then
+  echo "ERROR: cannot dedupe pushed commits — PII gate fails closed" >&2
+  exit 1
+fi
+while IFS= read -r _line; do
+  [[ -z "$_line" ]] && continue
+  read -r -a _fields <<<"$_line"
+  _append_commit_diffs "${_fields[@]}"
+done <<<"$_commits"
 
 # Standalone fallback: called directly (not from a hook), so NO ref line was read. A
 # deletion-only push read a line and correctly scans nothing. FAILS CLOSED on a git error;
 # a repo with no commits has nothing to scan.
 if [[ "$_saw_ref" != "true" ]] && cast_git_safe "$REPO_ROOT" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
-  if PUSH_DIFF=$(cast_git_safe "$REPO_ROOT" diff "${_DIFF_FLAGS[@]}" HEAD~1 HEAD -- . ':(exclude)plugin/' 2>/dev/null); then
+  if _sd=$(cast_git_safe "$REPO_ROOT" diff "${_DIFF_FLAGS[@]}" HEAD~1 HEAD -- . ':(exclude)plugin/' 2>/dev/null); then
     :
-  elif PUSH_DIFF=$(cast_git_safe "$REPO_ROOT" diff "${_DIFF_FLAGS[@]}" "$EMPTY_TREE" HEAD -- . ':(exclude)plugin/' 2>/dev/null); then
+  elif _sd=$(cast_git_safe "$REPO_ROOT" diff "${_DIFF_FLAGS[@]}" "$EMPTY_TREE" HEAD -- . ':(exclude)plugin/' 2>/dev/null); then
     :
   else
     echo "ERROR: cannot diff HEAD for the standalone scan — PII gate fails closed" >&2
     exit 1
   fi
-fi
-
-# Sanity: a diff that carries text but no `diff --git` header is not in the shape the parser
-# understands (it would silently scan nothing). FAIL CLOSED.
-if [[ -n "${PUSH_DIFF//[[:space:]]/}" && $'\n'"$PUSH_DIFF" != *$'\n'"diff --git "* ]]; then
-  echo "ERROR: scanned diff text has no 'diff --git' header (unexpected diff format) — PII gate fails closed" >&2
-  exit 1
+  _pii_add_diff "$_sd" "HEAD for the standalone scan"
 fi
 
 # ---- Helpers ----------------------------------------------------------------
 
-# Check whether a file path is in the allowlist.
-_is_allowed() {
-  local file="$1"
-  local p
-  for p in "${PII_ALLOWLIST[@]}"; do
-    [[ "$file" == "$p" ]] && return 0
-  done
-  # Generated plugin build artifact — a curated mirror of already-scanned source
-  # (scripts/, agents/core/, skills/); the check-plugin-drift gate guarantees it
-  # equals regenerated source, so scanning it only false-positives on copies of
-  # the scanner self-test fixtures. (Check 1 already scans only tests/test/src.)
-  [[ "$file" == plugin/* ]] && return 0
-  return 1
-}
+# Single pass (G1c): parse the diff ONCE into line-aligned files, names (the ordinal of the
+# header of the file each added line belongs to) and added (the line without its leading '+'),
+# so each pattern below is ONE grep over every added line. The header text is written once per
+# header to files (line N = the Nth `diff --git` header), so the scratch grows with the diff,
+# not with header length x added lines. The rules are those of the per-line loop it replaced: EVERY
+# `diff --git` line resets the per-file state; a file's allowlist skip applies only when its
+# header is exactly `diff --git a/P b/P` (both halves equal, checked by length and string
+# equality, so a path containing " b/" cannot spoof an allowlisted name); anything else (quoted/
+# non-ASCII path, rename, ambiguous) keeps the raw header text as its name, is never
+# allowlisted, and has its added lines scanned. plugin/ (a generated mirror of already-scanned
+# source, drift-gated by CI) is skipped as belt-and-suspenders to the pathspec exclusion. Only
+# `+` lines after a hunk header are added lines; no `+++` exclusion: the `+++ b/file` header
+# only occurs before the first @@, so inside a hunk a `+++` line is real content. Byte-wise
+# under the exported LC_ALL=C; paths and the allowlist reach awk via ENVIRON (no -v escape
+# processing). FAILS CLOSED on any awk error.
+_PII_ALLOW=$(printf '%s\n' "${PII_ALLOWLIST[@]}")
+if ! _PII_D="$_PII_TMP" _PII_ALLOW="$_PII_ALLOW" awk '
+  BEGIN {
+    names = ENVIRON["_PII_D"] "/names"; added = ENVIRON["_PII_D"] "/added"
+    files = ENVIRON["_PII_D"] "/files"; nf = 0
+    n = split(ENVIRON["_PII_ALLOW"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") allow[a[i]] = 1
+    printf "" > names; printf "" > added; printf "" > files
+  }
+  substr($0, 1, 11) == "diff --git " {
+    rest = substr($0, 12); file = rest; skip = 0; inhunk = 0
+    L = length(rest); half = int((L - 5) / 2)
+    if (half > 0 && 2 * half + 5 == L && substr(rest, 1, 2) == "a/" \
+        && substr(rest, half + 3, 3) == " b/" && substr(rest, 3, half) == substr(rest, half + 6, half)) {
+      file = substr(rest, 3, half)
+      if ((file in allow) || substr(file, 1, 7) == "plugin/") skip = 1
+    }
+    nf++; print file > files
+    next
+  }
+  substr($0, 1, 2) == "@@" { inhunk = 1; next }
+  inhunk && !skip && substr($0, 1, 1) == "+" { print nf > names; print substr($0, 2) > added }
+' "$_PII_TMP/diff"; then
+  echo "ERROR: cannot parse the scan input — PII gate fails closed" >&2
+  exit 1
+fi
 
-# Scan the diff for a pattern, skipping allowlisted files.
-# Prints matching lines prefixed with [label] file:linecontent.
-# Returns 0 always (caller decides whether hits are fatal).
-# $3 (optional): extra grep flags (e.g., "-i" for case-insensitive)
-# $4 (optional): exclusion ERE pattern — candidate hit lines matching this are suppressed
+# Scan every added line for a pattern ($2), skipping allowlisted files (parsed above). Prints
+# hits as "  [label] file: content" in diff order. Returns 0 always (caller decides whether hits
+# are fatal). $3 (optional): extra grep flags (e.g., "-i"). $4 (optional): exclusion ERE, a hit
+# line that also matches it is suppressed. grep status: 0 = match, 1 = no match, anything else
+# (2 = bad pattern / I/O) is a SCAN ERROR and must not read as "no match". -n numbers lines as
+# the records are numbered; -a because the input is text by construction (no NUL survives the
+# $(...) capture) and grep must never switch to "Binary file matches"; -e keeps a '-'-leading
+# pattern a pattern. LC_ALL=C is exported for the whole of Check 4.
 _pii_scan() {
-  local label="$1"
-  local pattern="$2"
-  local extra_flags="${3:-}"
-  local exclusion="${4:-}"
-  local current_file=""
-  local skip=false
-  local in_hunk=false
-
-  while IFS= read -r line; do
-    # Diff file header. EVERY header resets the per-file state, so a header that cannot be
-    # parsed never inherits the previous file's allowlist skip. The allowlist applies only
-    # when the header is exactly `diff --git a/P b/P` (both halves equal, checked by length
-    # and string equality — a path containing " b/" cannot spoof an allowlisted name).
-    # Anything else (quoted/non-ASCII path, rename, ambiguous) keeps the raw header text as
-    # its name, is never allowlisted, and has its added lines scanned.
-    if [[ "$line" == "diff --git "* ]]; then
-      local rest="${line#diff --git }" half
-      current_file="$rest"
-      skip=false
-      in_hunk=false
-      half=$(((${#rest} - 5) / 2))
-      if ((half > 0 && 2 * half + 5 == ${#rest})) \
-        && [[ "${rest:0:2}" == "a/" && "${rest:$((half + 2)):3}" == " b/" \
-        && "${rest:2:$half}" == "${rest:$((half + 5)):$half}" ]]; then
-        current_file="${rest:2:$half}"
-        if _is_allowed "$current_file"; then
-          skip=true
-        fi
-      fi
-      continue
+  local label="$1" pattern="$2" extra_flags="${3:-}" exclusion="${4:-}" rc=0
+  # Create/truncate the output files BEFORE grep: a redirect that cannot open its file never
+  # runs grep and returns 1, which would read as "no match" (fail open). This closes the
+  # open/create failures (a dangling path, ENOSPC on create); once the files exist, the `>`
+  # below only truncates, which needs no space. A same-user process swapping the files between
+  # this guard and grep is outside the boundary (see RESIDUALS).
+  if ! { : >"$_PII_TMP/hits" && : >"$_PII_TMP/excl"; } 2>/dev/null; then
+    echo "  [scan-error] $label: cannot write the scan scratch"
+    return 0
+  fi
+  # shellcheck disable=SC2086
+  grep -n -a $GREP_FLAGS $extra_flags -e "$pattern" -- "$_PII_TMP/added" >"$_PII_TMP/hits" 2>/dev/null || rc=$?
+  if [[ "$rc" -eq 1 ]]; then
+    return 0
+  elif [[ "$rc" -ne 0 ]]; then
+    echo "  [scan-error] $label: grep rc=$rc"
+    return 0
+  fi
+  if [[ -n "$exclusion" ]]; then
+    rc=0
+    grep -n -a -E -e "$exclusion" -- "$_PII_TMP/added" >"$_PII_TMP/excl" 2>/dev/null || rc=$?
+    if [[ "$rc" -ne 0 && "$rc" -ne 1 ]]; then
+      echo "  [scan-error] $label: exclusion grep rc=$rc"
+      return 0
     fi
-    # Hunk header — reset in_hunk flag (we are in a hunk now)
-    if [[ "$line" =~ ^@@ ]]; then
-      in_hunk=true
-      continue
-    fi
-    # Only inspect added lines inside a hunk (skip context and removed lines). No `+++`
-    # exclusion: the `+++ b/file` header only occurs BEFORE the first @@ (in_hunk=false), so
-    # inside a hunk a line starting `+++` is real added content (e.g. a `++secret` line).
-    if [[ "$in_hunk" == "true" && "$skip" == "false" && "$line" =~ ^\+ ]]; then
-      local content="${line:1}" rc=0
-      # grep status: 0 = match, 1 = no match, anything else (2 = bad pattern / I/O) is a SCAN
-      # ERROR and must not read as "no match". Here-string, not a pipe: with pipefail a
-      # SIGPIPE'd `echo` on a long line could mask a match. -e keeps a '-'-leading pattern a
-      # pattern. LC_ALL=C is exported for the whole of Check 4.
-      # shellcheck disable=SC2086
-      grep -q $GREP_FLAGS $extra_flags -e "$pattern" <<<"$content" 2>/dev/null || rc=$?
-      if [[ "$rc" -eq 1 ]]; then
-        continue
-      elif [[ "$rc" -ne 0 ]]; then
-        echo "  [scan-error] $label: grep rc=$rc"
-        return 0
-      fi
-      # Apply exclusion filter if provided
-      if [[ -n "$exclusion" ]]; then
-        rc=0
-        grep -qE -e "$exclusion" <<<"$content" 2>/dev/null || rc=$?
-        if [[ "$rc" -eq 0 ]]; then
-          continue
-        elif [[ "$rc" -ne 1 ]]; then
-          echo "  [scan-error] $label: exclusion grep rc=$rc"
-          return 0
-        fi
-      fi
-      echo "  [$label] $current_file: $content"
-    fi
-  done <<< "$PUSH_DIFF"
+  fi
+  # Join: report record N when it is a hit and not excluded, naming the file of its header
+  # ordinal. Unparsable grep output, a record or file stream shorter than a hit's number, or
+  # rc 0 with no hit written (max == 0, e.g. the hits file is /dev/null) is a scan error. At
+  # most 200 hits are printed per pattern, then a count of the rest; the verdict is unchanged.
+  _PII_D="$_PII_TMP" awk -v label="$label" '
+    function num(l,   i, n) {
+      i = index(l, ":"); n = substr(l, 1, i - 1)
+      return (i > 1 && n ~ /^[0-9]+$/) ? n + 0 : -1
+    }
+    BEGIN {
+      d = ENVIRON["_PII_D"]
+      while ((r = (getline l < (d "/excl"))) > 0) { n = num(l); if (n < 0) { bad = 1; break }; ex[n] = 1 }
+      if (r < 0) bad = 1
+      while (!bad && (r = (getline l < (d "/hits"))) > 0) {
+        n = num(l); if (n < 0) { bad = 1; break }; hit[n] = 1; if (n > max) max = n
+      }
+      if (r < 0) bad = 1
+      if (bad) { print "  [scan-error] " label ": unparsable grep output"; exit 0 }
+      if (max == 0) {
+        print "  [scan-error] " label ": grep reported a match but wrote no hits"; exit 0
+      }
+      fo = 0; ft = ""; shown = 0
+      for (k = 1; k <= max; k++) {
+        if ((getline o < (d "/names")) <= 0 || (getline ct < (d "/added")) <= 0) {
+          print "  [scan-error] " label ": record stream ended early"; exit 0
+        }
+        if (!(k in hit) || (k in ex)) continue
+        o += 0
+        while (fo < o) {
+          if ((getline ft < (d "/files")) <= 0) {
+            print "  [scan-error] " label ": file list ended early"; exit 0
+          }
+          fo++
+        }
+        if (shown < 200) printf "  [%s] %s: %s\n", label, ft, ct
+        shown++
+      }
+      if (shown > 200) printf "  [%s] ... and %d more hit lines not shown\n", label, shown - 200
+    }' || echo "  [scan-error] $label: join failed"
 }
 
-# Case-insensitive variant of _pii_scan.
-# Uses -i flag directly so it works in both PCRE and ERE modes.
-# The pattern must NOT embed (?i) — that only works in PCRE.
+# Case-insensitive variant of _pii_scan. Patterns are EREs; case-insensitivity comes from the
+# -i flag, so a pattern must NOT embed (?i) (that is PCRE syntax, not ERE).
 _pii_scan_ci() {
   _pii_scan "$1" "$2" "-i" "${3:-}"
 }
