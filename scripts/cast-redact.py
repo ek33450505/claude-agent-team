@@ -43,10 +43,22 @@ import re
 import hashlib
 import argparse
 import os
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
 PATTERNS_CONFIG = os.path.expanduser("~/.claude/config/pii-patterns.json")
+
+# Unicode categories removed from the matching VIEW (never from the output): Cf = format
+# (zero-width / BOM / soft hyphen), Mn = nonspacing combining marks, Me = enclosing marks
+# (U+20DD, U+20E3 ...).
+_VIEW_STRIPPED_CATEGORIES = frozenset(("Cf", "Mn", "Me"))
+
+
+def _hash16(original: str) -> str:
+    """sha256 prefix of matched text.  `surrogatepass`: input may hold lone surrogates
+    (e.g. JSON `\\ud800`); a plain .encode() would raise and crash the hook (fail-open)."""
+    return hashlib.sha256(original.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 # ── Built-in fallback regex patterns (used when Presidio is unavailable) ─────
 
@@ -83,7 +95,7 @@ _STANDARD_FALLBACK_PATTERNS = [
     ("PRIVATE_KEY",     r"-----BEGIN[A-Z ]+(?:PRIVATE KEY|CERTIFICATE)-----"),
     ("API_KEY",         r"(?i)(?:api[_-]?key|apikey|x-api-key)[:\s=]+['\"]?([A-Za-z0-9_\-]{20,})['\"]?"),
     # Paths and URLs
-    ("ABSOLUTE_PATH",   r"/Users/[a-zA-Z0-9_\-]+/[^\s]*"),
+    ("ABSOLUTE_PATH",   r"(?:/Users/|(?<![\w.\-])/home/)[^/\s]+/[^\s]*"),
     ("BITBUCKET_URL",   r"bitbucket\.org/[^\s]+"),
     ("SLACK_WEBHOOK",   r"hooks\.slack\.com/[^\s]+"),
     # C1b: additional secret/token vendors (closing redaction-engine gaps for the
@@ -280,7 +292,7 @@ def analyze_presidio(text: str, custom_patterns: list[dict]) -> tuple[Any, list[
             "end": r.end,
             "score": round(r.score, 4),
             "original": original,
-            "original_hash": hashlib.sha256(original.encode()).hexdigest()[:16],
+            "original_hash": _hash16(original),
         })
 
     return results, entities
@@ -306,31 +318,48 @@ def redact_presidio(text: str, analyzer_results, mode: str) -> str:
     return result.text
 
 
-def analyze_regex(text: str, custom_patterns: list[dict]) -> list[dict]:
-    """Fallback: detect PII using built-in + custom regex patterns.
+def _normalized_view(text: str) -> tuple[str, list[int] | None]:
+    """Return (view, index_map) where view is NFKC(text) with every Unicode `Cf`
+    (format), `Mn` (combining mark) and `Me` (enclosing mark) char removed, and
+    index_map[i] is the index in `text` of the source char that produced view[i].  Returns (text, None) when the view equals the text
+    (all plain ASCII, the common case, short-circuits without allocating a map).
 
-    F3: short-circuits immediately when text lacks any characters that could
-    trigger a FALLBACK_PATTERNS match (see _PII_CANDIDATES superset rationale above).
-    F2: uses precompiled _COMPILED_PATTERNS rather than compiling per-call.
+    Why: a zero-width / format char (U+200B/C/D, U+2060, U+FEFF, U+00AD ...) spliced
+    into a secret, or fullwidth/compatibility forms, evade the ASCII-oriented
+    FALLBACK_PATTERNS.  NFKC is applied PER CHARACTER so every view char maps back to
+    exactly one source char; callers translate view spans to original-text spans via
+    the map, so the text that is finally redacted is NEVER normalised -- non-secret
+    text (cafe, CJK, ligatures, invisible chars outside a secret) is returned
+    byte-for-byte.
+
+    Boundaries, by design: stripped chars INSIDE a match are covered by the mapped span
+    and TRAILING ones glued to its end are absorbed (see analyze_regex), but LEADING
+    Cf/Mn/Me chars before a match are NOT absorbed -- they are invisible/combining, carry
+    no secret material, and the output must change as little as possible.
     """
-    # F3: fast exit — no PII trigger characters present in text
-    if not _PII_CANDIDATES.search(text):
-        return []
+    if text.isascii():
+        return text, None
+    chars: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(text):
+        # No pre-NFKC skip of stripped-category chars: verified over all of Unicode that no
+        # Cf/Mn/Me char NFKC-maps to anything outside those categories, so the per-output
+        # filter below already drops them.  That filter IS load-bearing: e.g. U+FF9E
+        # (halfwidth voiced sound mark, Lm) NFKC-maps to U+3099 (Mn), which must go.
+        for n in unicodedata.normalize("NFKC", ch):
+            if unicodedata.category(n) not in _VIEW_STRIPPED_CATEGORIES:
+                chars.append(n)
+                idx.append(i)
+    view = "".join(chars)
+    if view == text:
+        return text, None
+    return view, idx
 
-    # F2: use precompiled built-in patterns; compile custom patterns on demand
-    compiled: list[tuple[str, re.Pattern]] = list(_COMPILED_PATTERNS)
-    for p in custom_patterns:
-        entity_type = p.get("entity_type", "CUSTOM")
-        regex = p.get("regex", "")
-        if regex:
-            try:
-                compiled.append((entity_type, re.compile(regex, re.IGNORECASE)))
-            except re.error:
-                continue
 
-    entities = []
-    seen_spans = set()
-
+def _scan(text: str, compiled: list[tuple[str, re.Pattern]]) -> list[tuple[str, int, int]]:
+    """Run compiled patterns over `text`; return (entity_type, start, end) spans
+    in `text` coordinates, in pattern-then-finditer order (the pre-existing order)."""
+    found: list[tuple[str, int, int]] = []
     for entity_type, pattern in compiled:
         try:
             for m in pattern.finditer(text):
@@ -353,21 +382,116 @@ def analyze_regex(text: str, custom_patterns: list[dict]) -> list[dict]:
                         trimmed_end -= 1
                     if trimmed_end - start >= 6:
                         end = trimmed_end
-                span = (start, end)
-                if span in seen_spans:
-                    continue
-                seen_spans.add(span)
-                original = text[start:end]
-                entities.append({
-                    "entity_type": entity_type,
-                    "start": start,
-                    "end": end,
-                    "score": 0.8,
-                    "original": original,
-                    "original_hash": hashlib.sha256(original.encode()).hexdigest()[:16],
-                })
+                found.append((entity_type, start, end))
         except re.error:
             continue
+    return found
+
+
+def _union_same_type_view_spans(
+    raw: list[tuple[str, int, int]], view: list[tuple[str, int, int]]
+) -> list[tuple[str, int, int]]:
+    """Combine raw-text spans with mapped view spans, in discovery order (raw first).
+
+    A view span usually re-finds a raw match but a little wider (it absorbs the invisible
+    chars the raw regex stopped at), which would otherwise be reported as TWO entities and
+    inflate entity_count.  Same-entity-type spans that overlap or touch AND include at
+    least one view span are replaced by their union.  Groups made only of raw spans (all
+    that exists for plain ASCII) are left exactly as the raw scan produced them, and
+    different-type overlaps are untouched (redact_regex merges those).
+    """
+    tagged = [(t, s, e, False) for t, s, e in raw] + [(t, s, e, True) for t, s, e in view]
+    if not view:
+        return [(t, s, e) for t, s, e, _ in tagged]
+    by_type: dict[str, list[tuple[int, int, bool, int]]] = {}
+    for n, (t, s, e, v) in enumerate(tagged):
+        by_type.setdefault(t, []).append((s, e, v, n))
+    out: list[tuple[int, str, int, int]] = []
+
+    def flush(t: str, group: list[tuple[int, int, bool, int]]) -> None:
+        if len(group) > 1 and any(v for _, _, v, _ in group):
+            out.append((min(n for *_, n in group), t,
+                        min(s for s, *_ in group), max(e for _, e, *_ in group)))
+        else:
+            out.extend((n, t, s, e) for s, e, _, n in group)
+
+    for t, items in by_type.items():
+        items.sort()
+        group = [items[0]]
+        group_end = items[0][1]
+        for it in items[1:]:
+            if it[0] <= group_end:  # overlap or adjacent
+                group.append(it)
+                group_end = max(group_end, it[1])
+            else:
+                flush(t, group)
+                group, group_end = [it], it[1]
+        flush(t, group)
+    return [(t, s, e) for _, t, s, e in sorted(out)]
+
+
+def analyze_regex(text: str, custom_patterns: list[dict]) -> list[dict]:
+    """Fallback: detect PII using built-in + custom regex patterns.
+
+    F3: short-circuits immediately when text lacks any characters that could
+    trigger a FALLBACK_PATTERNS match (see _PII_CANDIDATES superset rationale above).
+    F2: uses precompiled _COMPILED_PATTERNS rather than compiling per-call.
+
+    Unicode evasion (S4-1 R1): patterns run over BOTH the raw text and, for non-ASCII
+    text, an NFKC + Cf-stripped view (see _normalized_view); view spans are mapped back
+    to original-text offsets.  The result is the UNION, so detection only ever widens
+    relative to raw-text matching, and plain-ASCII input takes the exact pre-existing
+    path.  Entity offsets/`original` always refer to the ORIGINAL text.
+    """
+    view, idx = _normalized_view(text)
+
+    # F3: fast exit — no PII trigger characters present in text (or its normalised view)
+    if not _PII_CANDIDATES.search(text) and (idx is None or not _PII_CANDIDATES.search(view)):
+        return []
+
+    # F2: use precompiled built-in patterns; compile custom patterns on demand
+    compiled: list[tuple[str, re.Pattern]] = list(_COMPILED_PATTERNS)
+    for p in custom_patterns:
+        entity_type = p.get("entity_type", "CUSTOM")
+        regex = p.get("regex", "")
+        if regex:
+            try:
+                compiled.append((entity_type, re.compile(regex, re.IGNORECASE)))
+            except re.error:
+                continue
+
+    spans = _scan(text, compiled)
+    view_spans: list[tuple[str, int, int]] = []
+    if idx is not None:
+        for entity_type, vstart, vend in _scan(view, compiled):
+            if vend <= vstart:
+                # Zero-width view match: no source chars to cover; map to a point.
+                ostart = oend = idx[vstart] if vstart < len(idx) else len(text)
+            else:
+                ostart, oend = idx[vstart], idx[vend - 1] + 1
+                # Also swallow stripped chars (Cf/Mn) glued to the end of the secret, so a
+                # trailing combining mark does not survive as an orphan next to the tag.
+                while oend < len(text) and unicodedata.category(text[oend]) in _VIEW_STRIPPED_CATEGORIES:
+                    oend += 1
+            view_spans.append((entity_type, ostart, oend))
+
+    entities = []
+    seen_spans = set()
+    # Raw-text matches come first, in the original pattern order; first span wins.
+    for entity_type, start, end in _union_same_type_view_spans(spans, view_spans):
+        span = (start, end)
+        if span in seen_spans:
+            continue
+        seen_spans.add(span)
+        original = text[start:end]
+        entities.append({
+            "entity_type": entity_type,
+            "start": start,
+            "end": end,
+            "score": 0.8,
+            "original": original,
+            "original_hash": _hash16(original),
+        })
 
     return sorted(entities, key=lambda e: e["start"])
 
@@ -463,35 +587,65 @@ def _run_hook_mode() -> None:
       - exit 0, no stdout  → silent allow (no PII found)
       - exit 2, one-line   → block the tool call (PII detected)
 
-    Never prints JSON. Never raises unhandled exceptions (malformed stdin → exit 0).
+    Never prints JSON. Never raises an unhandled exception. Only input that is not valid
+    JSON at all (empty, whitespace, truncated, garbled -> json.JSONDecodeError) is allowed
+    (exit 0); every other parse failure (RecursionError, MemoryError, the 4300-digit int
+    ValueError, invalid UTF-8, ...) fails closed (exit 2).
     """
     try:
         raw = sys.stdin.read()
         data = json.loads(raw)
-    except Exception:
-        # Malformed or empty stdin — allow silently; don't crash the hook
+    except json.JSONDecodeError:
+        # Not JSON at all (empty, whitespace, truncated, garbled) — allow silently.
+        # Deliberately NOT ValueError/UnicodeDecodeError: JSONDecodeError is the only
+        # failure that proves there is no parseable payload to hold a secret.
         sys.exit(0)
+    except Exception as exc:
+        # Anything else is NOT "malformed input": the payload may well carry a secret.
+        # Includes RecursionError (deep nesting), MemoryError, the int-digit-limit
+        # ValueError (3.11+: JSON integer literal > 4300 digits), and UnicodeDecodeError
+        # (Claude Code always sends valid UTF-8, so blocking it cannot false-positive).
+        # Fail closed.
+        print(
+            f"[CAST-REDACT] Blocked: could not parse tool input ({type(exc).__name__}); failing closed.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
-    tool_name = data.get("tool_name", "")
-    tool_input = data.get("tool_input", {})
+    # FAIL CLOSED: any error while analysing (lone surrogates, non-dict payload, ...) must
+    # BLOCK.  An uncaught exception exits 1, which Claude Code treats as non-blocking, so a
+    # co-located real secret would pass.  SystemExit/KeyboardInterrupt are not `Exception`
+    # and still propagate (the sys.exit(0) "clean" path below relies on that).
+    try:
+        tool_name = data.get("tool_name", "")
+        tool_input = data.get("tool_input", {})
 
-    # Extract the text to scan
-    if tool_name == "Bash":
-        text = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-    else:
-        text = json.dumps(tool_input) if tool_input is not None else ""
+        # Extract the text to scan
+        if tool_name == "Bash":
+            text = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+        else:
+            # ensure_ascii=False: this text is ANALYSED only (never stored/returned), and the
+            # default ensure_ascii=True would turn a zero-width char inside a secret into the
+            # ASCII text `\\u200b`, hiding it from analyze_regex's Unicode-evasion view.
+            text = json.dumps(tool_input, ensure_ascii=False) if tool_input is not None else ""
 
-    if not text or not text.strip():
-        sys.exit(0)
+        if not text or not text.strip():
+            sys.exit(0)
 
-    # Detection only — regex engine for speed (no Presidio startup cost in hook path)
-    entities = analyze_regex(text, [])
-    entities = [e for e in entities if e["score"] >= 0.5]
+        # Detection only — regex engine for speed (no Presidio startup cost in hook path)
+        entities = analyze_regex(text, [])
+        entities = [e for e in entities if e["score"] >= 0.5]
 
-    # Strip known-safe system addresses (git attribution, CI bots) before blocking.
-    # Exact-match set — avoids substring bypass (e.g. noreply@anthropic.com.badactor.com).
-    _SAFE_EMAILS = {"noreply@anthropic.com", "noreply@github.com", "actions@github.com"}
-    entities = [e for e in entities if e["original"].lower() not in _SAFE_EMAILS]
+        # Strip known-safe system addresses (git attribution, CI bots) before blocking.
+        # Exact-match set — avoids substring bypass (e.g. noreply@anthropic.com.badactor.com).
+        _SAFE_EMAILS = {"noreply@anthropic.com", "noreply@github.com", "actions@github.com"}
+        entities = [e for e in entities if e["original"].lower() not in _SAFE_EMAILS]
+    except Exception as exc:
+        print(
+            f"[CAST-REDACT] Blocked: could not analyse tool input ({type(exc).__name__}); failing closed.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     if not entities:
         sys.exit(0)

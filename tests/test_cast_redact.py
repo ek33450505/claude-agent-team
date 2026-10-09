@@ -13,7 +13,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import unittest
+import io
+import os
 import re
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
@@ -50,12 +55,11 @@ class TestAbsolutePathPattern(unittest.TestCase):
         result = _redact(text)
         self.assertEqual(text, result)
 
-    def test_no_match_on_linux_home(self):
-        """Linux /home/ paths are not covered by this pattern (scope: macOS /Users/)."""
-        text = 'path at /home/ubuntu/projects/'
-        result = _redact(text)
-        # Pattern only matches /Users/... so this should be unchanged
-        self.assertEqual(text, result)
+    def test_linux_home_redacted(self):
+        """S4-1 R2: Linux /home/<name>/ paths are redacted like /Users/<name>/."""
+        result = _redact('path at /home/ubuntu/projects/')
+        self.assertEqual('path at ~/', result)
+        self.assertNotIn('ubuntu', result)
 
 
 class TestBitbucketUrlPattern(unittest.TestCase):
@@ -1305,6 +1309,485 @@ class TestAwsSecretAccessKeyPattern(unittest.TestCase):
     def test_variable_name_without_forty_char_value_untouched(self):
         text = 'set aws_secret_access_key=short'
         self.assertNotIn('<AWS_SECRET_ACCESS_KEY>', _redact(text))
+
+
+# ── S4-1 D-A: R2 (wider ABSOLUTE_PATH) + R1 (Unicode-evasion-resistant matching) ──
+
+ZWSP, ZWNJ, ZWJ, WJ, BOM = '\u200b', '\u200c', '\u200d', '\u2060', '\ufeff'
+
+
+def _fullwidth(s: str) -> str:
+    """ASCII printable -> fullwidth forms (U+FF01..U+FF5E); NFKC maps them back."""
+    return ''.join(chr(ord(c) + 0xFEE0) if '!' <= c <= '~' else c for c in s)
+
+
+class TestAbsolutePathWidened(unittest.TestCase):
+
+    def test_dotted_username_redacted(self):
+        result = _redact('see /Users/first.last/x')
+        self.assertEqual('see ~/', result)
+        self.assertNotIn('first.last', result)
+
+    def test_linux_home_redacted(self):
+        result = _redact('see /home/alice/x')
+        self.assertEqual('see ~/', result)
+        self.assertNotIn('alice', result)
+
+    def test_linux_home_dotted_username_redacted(self):
+        self.assertEqual('at ~/', _redact('at /home/jane.doe/work/notes.txt'))
+
+    def test_replacement_is_neutral_for_both_roots(self):
+        self.assertEqual(_redact('/Users/bob/a'), _redact('/home/bob/a'))
+
+    def test_previously_matched_paths_still_match(self):
+        for name in ('johndoe', 'john_doe-2', 'A1'):
+            self.assertEqual('~/', _redact(f'/Users/{name}/Projects/x'))
+
+    def test_bare_home_without_user_subdir_untouched(self):
+        text = 'cd /home and ls /Users'
+        self.assertEqual(text, _redact(text))
+
+
+class TestUnicodeEvasion(unittest.TestCase):
+
+    API_KEY = 'sk-ant-' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+
+    def test_api_key_with_zwsp_inside_redacted(self):
+        k = self.API_KEY
+        text = f'key {k[:12]}{ZWSP}{k[12:]} end'
+        result = _redact(text)
+        self.assertEqual('key <ANTHROPIC_KEY> end', result)
+
+    def test_each_format_char_variant_inside_key_redacted(self):
+        k = self.API_KEY
+        for ch in (ZWSP, ZWNJ, ZWJ, WJ, BOM, '\u00ad'):
+            with self.subTest(ch=hex(ord(ch))):
+                text = f'key {k[:10]}{ch}{k[10:25]}{ch}{k[25:]} end'
+                self.assertEqual('key <ANTHROPIC_KEY> end', _redact(text))
+
+    def test_email_with_feff_redacted(self):
+        text = f'mail john{BOM}.doe@exa{BOM}mple.com now'
+        result = _redact(text)
+        self.assertEqual('mail <EMAIL_ADDRESS> now', result)
+        self.assertNotIn('doe', result)
+
+    def test_secret_keyword_split_by_zwsp_redacted(self):
+        text = f'pass{ZWSP}word=Hunter22secret'
+        result = _redact(text)
+        self.assertNotIn('Hunter22secret', result)
+
+    def test_fullwidth_ssn_redacted(self):
+        text = 'ssn ' + _fullwidth('123-45-6789') + ' ok'
+        self.assertEqual('ssn <US_SSN> ok', _redact(text))
+
+    def test_fullwidth_email_redacted(self):
+        text = 'to ' + _fullwidth('john@example.com') + ' now'
+        self.assertEqual('to <EMAIL_ADDRESS> now', _redact(text))
+
+    def test_fullwidth_key_prefix_redacted(self):
+        k = _fullwidth('sk-ant-') + 'abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+        self.assertNotIn('abcdefghijklmnopqrstuvwxyz', _redact(f'key {k} end'))
+
+    def test_secret_followed_by_text_leaves_surroundings_untouched(self):
+        """Invisible chars OUTSIDE a secret survive; only the secret span is replaced."""
+        k = self.API_KEY
+        text = f'caf\u00e9{ZWSP} {k[:9]}{ZWSP}{k[9:]} na\u00efve'
+        self.assertEqual(f'caf\u00e9{ZWSP} <ANTHROPIC_KEY> na\u00efve', _redact(text))
+
+    def test_mask_mode_covers_invisible_chars(self):
+        k = self.API_KEY
+        text = f'key {k[:12]}{ZWSP}{k[12:]} end'
+        entities = cast_redact.analyze_regex(text, [])
+        masked = cast_redact.redact_regex(text, entities, 'mask')
+        self.assertEqual('key ' + '*' * (len(k) + 1) + ' end', masked)
+
+    def test_entity_offsets_index_original_text(self):
+        k = self.API_KEY
+        text = f'key {k[:12]}{ZWSP}{k[12:]} end'
+        (ent,) = cast_redact.analyze_regex(text, [])
+        self.assertEqual(text[ent['start']:ent['end']], ent['original'])
+        self.assertEqual(f'{k[:12]}{ZWSP}{k[12:]}', ent['original'])
+
+    def test_hook_style_analyze_detects_zwsp_email(self):
+        ents = cast_redact.analyze_regex(f'a{ZWSP}b@exam{ZWSP}ple.com', [])
+        self.assertEqual(['EMAIL_ADDRESS'], [e['entity_type'] for e in ents])
+
+    def test_widening_only_original_matches_survive(self):
+        """Every entity found on the raw text is still found (same span) when the
+        text also contains non-ASCII; the NFKC view may only ADD entities."""
+        base = 'Contact john@example.com or 555-123-4567 and /Users/jdoe/x'
+        plain = {(e['entity_type'], e['start'], e['end']) for e in cast_redact.analyze_regex(base, [])}
+        suffixed = base + ' caf\u00e9 \u65e5\u672c\u8a9e'
+        got = {(e['entity_type'], e['start'], e['end']) for e in cast_redact.analyze_regex(suffixed, [])}
+        self.assertTrue(plain <= got)
+
+
+class TestAsciiAndBenignUnicodeUnchanged(unittest.TestCase):
+    """Pinned from the PRE-EDIT script (S4-1): exact outputs must not drift."""
+
+    PINNED = [
+        ('Contact john@example.com or call 555-123-4567 today',
+         'Contact <EMAIL_ADDRESS> or call <PHONE_NUMBER> today',
+         'Contact **************** or call ************ today',
+         [('EMAIL_ADDRESS', 8, 24, '855f96e983f1f8e8'), ('PHONE_NUMBER', 33, 45, 'd36e83082288d9f2')]),
+        ('key sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD and file /Users/jdoe/Projects/x/y.py',
+         'key <ANTHROPIC_KEY> and file ~/',
+         'key *********************************************** and file ***************************',
+         [('ANTHROPIC_KEY', 4, 51, '9d5da5bb22fae25e'), ('ABSOLUTE_PATH', 61, 88, '5e1ea038bdbfc50f')]),
+        ('api_key = abcdefghijklmnopqrstuvwxyz123456 ok; password=Hunter22!, ssn 123-45-6789 ip 10.0.0.1',
+         'api_key = <API_KEY> ok; password=<GENERIC_SECRET>, ssn <US_SSN> ip <IP_ADDRESS>',
+         'api_key = ******************************** ok; password=*********, ssn *********** ip ********',
+         [('API_KEY', 10, 42, 'f6d527e6d0186548'), ('GENERIC_SECRET', 56, 65, 'b1021a2e11838f67'),
+          ('US_SSN', 71, 82, '01a54629efb95228'), ('IP_ADDRESS', 86, 94, 'f5047344122f0dee')]),
+        ('token ghp_' + 'a' * 36 + ' at bitbucket.org/team/repo and hooks.slack.com/services/T0/B0/xyz',
+         'token <GITHUB_TOKEN> at [BITBUCKET_URL] and [SLACK_WEBHOOK]',
+         'token **************************************** at *********************** and **********************************',
+         [('GITHUB_TOKEN', 6, 46, 'ba94fef946060f5e'), ('BITBUCKET_URL', 50, 73, 'de2ca7c0da5e1195'),
+          ('SLACK_WEBHOOK', 78, 112, 'f355a014e8b153c3')]),
+    ]
+
+    def test_pinned_ascii_outputs_byte_identical(self):
+        for text, want_redact, want_mask, want_ents in self.PINNED:
+            with self.subTest(text=text[:30]):
+                ents = cast_redact.analyze_regex(text, [])
+                self.assertEqual(want_redact, cast_redact.redact_regex(text, ents, 'redact'))
+                self.assertEqual(want_mask, cast_redact.redact_regex(text, ents, 'mask'))
+                self.assertEqual(want_ents, [(e['entity_type'], e['start'], e['end'], e['original_hash']) for e in ents])
+
+    def test_plain_prose_unchanged(self):
+        text = 'plain prose with no secrets at all, just words.'
+        self.assertEqual(text, _redact(text))
+
+    def test_non_ascii_text_without_secrets_unchanged(self):
+        for text in (
+            'Un caf\u00e9 na\u00efve fa\u00e7ade, r\u00e9sum\u00e9 and \u00fcber-cool coordinates',
+            '\u65e5\u672c\u8a9e\u306e\u30c6\u30ad\u30b9\u30c8\u3001\u4e2d\u6587\u6587\u672c\u3068\u30cf\u30f3\u30b0\u30eb is fine',
+            'Fullwidth \uff21\uff22\uff23 and ligature \ufb01 and zwj\u200dfamily with a/b path',
+            'combining e\u0301 and a\u0308 marks, emoji \U0001F600 and arrows \u2192 here/there',
+        ):
+            with self.subTest(text=text[:20]):
+                self.assertEqual([], cast_redact.analyze_regex(text, []))
+                self.assertEqual(text, _redact(text))
+
+    def test_non_ascii_context_preserved_around_ascii_secret(self):
+        text = 'caf\u00e9 \u65e5\u672c john@example.com na\u00efve'
+        self.assertEqual('caf\u00e9 \u65e5\u672c <EMAIL_ADDRESS> na\u00efve', _redact(text))
+
+
+# ── S4-1 D-A follow-ups: hook-mode ensure_ascii, /home/ lookbehind, Mn stripping ──
+
+COMBINING_ACUTE = '\u0301'
+
+
+class TestHomePathBoundary(unittest.TestCase):
+    """The /home/ branch needs a left boundary; the /Users/ branch has none.
+
+    NOTE: the `"~/` expectation below (closing quote swallowed by the `[^\\s]*` tail) is
+    pinned ON PURPOSE -- it mirrors the pre-existing /Users/ behaviour; do not "fix" it here.
+    """
+
+    def test_url_path_with_home_segment_not_redacted(self):
+        for text in ('https://example.com/home/dashboard/x', 'see example.com/home/dashboard/x',
+                     'api-v1.host/home/u/x'):
+            with self.subTest(text=text):
+                self.assertEqual(text, _redact(text))
+
+    def test_home_paths_in_common_contexts_redacted(self):
+        for text, want in (
+            ('see /home/alice/x', 'see ~/'),
+            ('"/home/alice/x"', '"~/'),  # [^\\s]* swallows the closing quote (same as /Users/)
+            ('path=/home/alice/x', 'path=~/'),
+            ('file:///home/alice/x', 'file://~/'),
+            ('(/home/alice/x)', '(~/'),
+            ('/home/alice/x', '~/'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(want, _redact(text))
+
+    def test_users_branch_has_no_boundary(self):
+        """Pre-existing behaviour: /Users/ matches after any char -- must not narrow."""
+        self.assertEqual('https://example.com~/', _redact('https://example.com/Users/bob/x'))
+        self.assertEqual('foo~/', _redact('foo/Users/bob/x'))
+
+
+class TestHookModeUnicode(unittest.TestCase):
+    """--hook mode must see a zero-width char inside a secret in a NON-Bash tool_input."""
+
+    def _hook(self, payload: dict):
+        with tempfile.TemporaryDirectory() as home:  # audit.jsonl goes under the temp HOME
+            env = {'HOME': home, 'PATH': os.environ.get('PATH', ''), 'PYTHONDONTWRITEBYTECODE': '1'}
+            r = subprocess.run([sys.executable, str(_REDACT_PATH), '--hook'],
+                               input=json.dumps(payload), capture_output=True, text=True, env=env)
+            audit = Path(home, '.claude', 'logs', 'audit.jsonl')
+            return r, (audit.read_text(encoding='utf-8') if audit.exists() else '')
+
+    def test_write_content_email_with_zwsp_blocked(self):
+        r, audit = self._hook({'tool_name': 'Write', 'tool_input': {
+            'file_path': '/tmp/x.txt', 'content': f'mail jo{ZWSP}hn@exam{ZWSP}ple.org please'}})
+        self.assertEqual(2, r.returncode, r.stderr)
+        self.assertIn('EMAIL_ADDRESS', r.stderr)
+        self.assertIn('EMAIL_ADDRESS', audit)
+
+    def test_write_content_api_key_with_zwsp_blocked(self):
+        k = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+        r, _ = self._hook({'tool_name': 'Edit', 'tool_input': {
+            'new_string': f'key = "{k[:12]}{ZWSP}{k[12:]}"'}})
+        self.assertEqual(2, r.returncode, r.stderr)
+        self.assertIn('ANTHROPIC_KEY', r.stderr)
+
+    def test_write_clean_non_ascii_content_allowed(self):
+        r, audit = self._hook({'tool_name': 'Write', 'tool_input': {
+            'content': 'caf\u00e9 \u65e5\u672c\u8a9e and ' + ZWSP + ' nothing secret'}})
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertEqual('', r.stdout)
+        self.assertEqual('', audit)
+
+    def test_audit_record_stays_ascii_safe_json(self):
+        _, audit = self._hook({'tool_name': 'Write', 'tool_input': {'content': f'a{ZWSP}b@exam{ZWSP}ple.org'}})
+        rec = json.loads(audit.strip().splitlines()[-1])
+        self.assertEqual(['EMAIL_ADDRESS'], rec['entity_types'])
+        self.assertNotIn('content', rec)
+
+
+class TestCombiningMarkEvasion(unittest.TestCase):
+
+    API_KEY = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+
+    def test_key_with_combining_acute_mid_token_redacted(self):
+        k = self.API_KEY
+        text = f'key {k[:14]}{COMBINING_ACUTE}{k[14:]} end'
+        self.assertEqual('key <ANTHROPIC_KEY> end', _redact(text))
+
+    def test_email_with_combining_marks_redacted(self):
+        text = f'mail jo{COMBINING_ACUTE}hn@exa\u0308mple.com now'
+        self.assertEqual('mail <EMAIL_ADDRESS> now', _redact(text))
+
+    def test_combining_mark_on_every_key_char_redacted(self):
+        k = self.API_KEY
+        text = 'key ' + ''.join(c + COMBINING_ACUTE for c in k) + ' end'
+        self.assertEqual('key <ANTHROPIC_KEY> end', _redact(text))
+
+    def test_decomposed_cafe_in_prose_byte_identical(self):
+        text = f'We met at cafe{COMBINING_ACUTE} on nai\u0308ve terms.'
+        self.assertEqual([], cast_redact.analyze_regex(text, []))
+        self.assertEqual(text, _redact(text))
+
+    def test_decomposed_text_around_secret_preserved(self):
+        text = f'cafe{COMBINING_ACUTE} john@example.com nai\u0308ve'
+        self.assertEqual(f'cafe{COMBINING_ACUTE} <EMAIL_ADDRESS> nai\u0308ve', _redact(text))
+
+
+# ── Redactor review round 2: C1 (fail-closed hook), W1 (count), W2 (Me), W3 (gaps) ──
+
+LONE_SURROGATE = '\ud800'
+ENCLOSING_KEYCAP, ENCLOSING_CIRCLE = '\u20e3', '\u20dd'  # category Me
+
+
+class TestHookFailClosed(unittest.TestCase):
+    """C1: a lone surrogate must never turn the hook fail-open (exit 1 = non-blocking)."""
+
+    def _hook(self, payload):
+        raw = payload if isinstance(payload, str) else json.dumps(payload)
+        with tempfile.TemporaryDirectory() as home:  # audit.jsonl goes under the temp HOME
+            env = {'HOME': home, 'PATH': os.environ.get('PATH', ''), 'PYTHONDONTWRITEBYTECODE': '1'}
+            return subprocess.run([sys.executable, str(_REDACT_PATH), '--hook'],
+                                  input=raw, capture_output=True, text=True, env=env)
+
+    def test_write_with_surrogate_and_secret_exits_2(self):
+        r = self._hook('{"tool_name":"Write","tool_input":{"content":"password=Hunter2\\ud800abcdef"}}')
+        self.assertEqual(2, r.returncode, r.stderr)
+
+    def test_bash_with_surrogate_and_secret_exits_2(self):
+        r = self._hook('{"tool_name":"Bash","tool_input":{"command":"echo password=Hunter2\\ud800abcdef"}}')
+        self.assertEqual(2, r.returncode, r.stderr)
+
+    def test_real_token_plus_path_with_surrogate_exits_2(self):
+        r = self._hook({'tool_name': 'Write', 'tool_input': {
+            'content': 'ghp_' + 'a' * 36 + ' and /Users/x/' + LONE_SURROGATE}})
+        self.assertEqual(2, r.returncode, r.stderr)
+        self.assertIn('GITHUB_TOKEN', r.stderr)
+
+    def test_clean_payload_with_surrogate_is_not_blocked(self):
+        r = self._hook('{"tool_name":"Write","tool_input":{"content":"hello \\ud800 world"}}')
+        self.assertEqual(0, r.returncode, r.stderr)
+
+    def test_non_dict_json_payload_fails_closed(self):
+        r = self._hook('[1, 2, 3]')
+        self.assertEqual(2, r.returncode, r.stderr)
+
+    def test_deeply_nested_json_with_secret_fails_closed(self):
+        """RecursionError in json.loads is not 'malformed input' -- it must BLOCK (exit 2)."""
+        depth = 300_000
+        raw = ('{"tool_name":"Write","tool_input":{"x":' + '[' * depth + '"ghp_' + 'a' * 36 + '"'
+               + ']' * depth + '}}')
+        r = self._hook(raw)
+        self.assertEqual(2, r.returncode, r.stderr[-300:])
+        self.assertIn('RecursionError', r.stderr)
+
+    def _hook_in_process(self, payload, exc):
+        orig_stdin, orig_stderr, orig_loads = cast_redact.sys.stdin, cast_redact.sys.stderr, cast_redact.json.loads
+        cast_redact.sys.stdin, cast_redact.sys.stderr = io.StringIO(payload), io.StringIO()
+        def boom(*a, **k):
+            raise exc
+        cast_redact.json.loads = boom
+        try:
+            with self.assertRaises(BaseException) as cm:
+                cast_redact._run_hook_mode()
+        finally:
+            cast_redact.sys.stdin, cast_redact.sys.stderr, cast_redact.json.loads = orig_stdin, orig_stderr, orig_loads
+        return cm.exception
+
+    def test_parse_recursion_error_blocks_in_process(self):
+        e = self._hook_in_process('{}', RecursionError('deep'))
+        self.assertIsInstance(e, SystemExit)
+        self.assertEqual(2, e.code)
+
+    def test_parse_memory_error_blocks_in_process(self):
+        e = self._hook_in_process('{}', MemoryError())
+        self.assertIsInstance(e, SystemExit)
+        self.assertEqual(2, e.code)
+
+    def test_parse_keyboard_interrupt_propagates_in_process(self):
+        self.assertIsInstance(self._hook_in_process('{}', KeyboardInterrupt()), KeyboardInterrupt)
+
+    def test_malformed_and_empty_input_still_allowed(self):
+        for raw in ('', '   ', '{not json', '{"tool_name": '):
+            with self.subTest(raw=raw):
+                r = self._hook(raw)
+                self.assertEqual(0, r.returncode, r.stderr)
+
+    def test_invalid_utf8_stdin_fails_closed(self):
+        """Claude Code always sends valid UTF-8; undecodable stdin is not 'no payload'.
+
+        PYTHONIOENCODING pins strict decoding: under a C/POSIX locale Python reads stdin
+        with surrogateescape instead (no UnicodeDecodeError; the bytes are still analysed)."""
+        with tempfile.TemporaryDirectory() as home:
+            env = {'HOME': home, 'PATH': os.environ.get('PATH', ''), 'PYTHONDONTWRITEBYTECODE': '1',
+                   'PYTHONIOENCODING': 'utf-8:strict'}
+            r = subprocess.run([sys.executable, str(_REDACT_PATH), '--hook'],
+                               input=b'{"tool_name":"Write","tool_input":{"c":"\xff\xfe"}}',
+                               capture_output=True, env=env)
+        self.assertEqual(2, r.returncode, r.stderr)
+
+    def test_oversized_int_literal_with_secret_fails_closed(self):
+        """3.11+ raises ValueError for a >4300-digit JSON int; that must not read as
+        'malformed -> allow'.  Exit 2 on every interpreter: either the parse fails closed
+        (limit present) or the ghp_ token is detected (limit absent, e.g. 3.9)."""
+        raw = json.dumps({'tool_name': 'Write', 'tool_input': {'content': 'ghp_' + 'a' * 36}})
+        raw = raw[:-2] + ',"n":' + '9' * 5000 + '}}'
+        r = self._hook(raw)
+        self.assertEqual(2, r.returncode, r.stderr[-300:])
+
+    def test_parse_valueerror_blocks_in_process(self):
+        """A non-JSONDecodeError ValueError at the parse stage fails closed."""
+        e = self._hook_in_process('{}', ValueError('Exceeds the limit (4300 digits)'))
+        self.assertIsInstance(e, SystemExit)
+        self.assertEqual(2, e.code)
+
+    def test_analysis_exception_blocks_in_process(self):
+        payload = json.dumps({'tool_name': 'Write', 'tool_input': {'content': 'anything at all here'}})
+        orig_stdin, orig_analyze = cast_redact.sys.stdin, cast_redact.analyze_regex
+        cast_redact.sys.stdin = io.StringIO(payload)
+        cast_redact.analyze_regex = lambda *a, **k: (_ for _ in ()).throw(RuntimeError('boom'))
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                cast_redact._run_hook_mode()
+        finally:
+            cast_redact.sys.stdin, cast_redact.analyze_regex = orig_stdin, orig_analyze
+        self.assertEqual(2, cm.exception.code)
+
+    def test_keyboard_interrupt_still_propagates(self):
+        payload = json.dumps({'tool_name': 'Write', 'tool_input': {'content': 'anything at all here'}})
+        orig_stdin, orig_analyze = cast_redact.sys.stdin, cast_redact.analyze_regex
+        cast_redact.sys.stdin = io.StringIO(payload)
+        cast_redact.analyze_regex = lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt())
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                cast_redact._run_hook_mode()
+        finally:
+            cast_redact.sys.stdin, cast_redact.analyze_regex = orig_stdin, orig_analyze
+
+    def test_analyze_regex_surrogate_text_does_not_raise_and_detects(self):
+        for text in (f'password=Hunter2{LONE_SURROGATE}abcdef',
+                     f'note {LONE_SURROGATE} john@example.com {ZWSP}tail',
+                     f'{LONE_SURROGATE}' + 'ghp_' + 'a' * 36):
+            with self.subTest(text=text[:20]):
+                ents = cast_redact.analyze_regex(text, [])
+                self.assertTrue(ents)
+                self.assertTrue(all(len(e['original_hash']) == 16 for e in ents))
+                self.assertNotIn('Hunter2', _redact(text))
+
+
+class TestEntityCountNotInflated(unittest.TestCase):
+    """W1: raw span + wider view span of the same secret is ONE entity."""
+
+    K = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+
+    def test_trailing_cf_gives_single_entity(self):
+        ents = cast_redact.analyze_regex(f'key {self.K}{ZWSP} end', [])
+        self.assertEqual([('ANTHROPIC_KEY', 4, 4 + len(self.K) + 1)], [(e['entity_type'], e['start'], e['end']) for e in ents])
+
+    def test_inner_and_trailing_invisible_chars_single_entity(self):
+        text = f'key {self.K[:12]}{ZWSP}{self.K[12:]}{COMBINING_ACUTE} end'
+        ents = cast_redact.analyze_regex(text, [])
+        self.assertEqual(['ANTHROPIC_KEY'], [e['entity_type'] for e in ents])
+        self.assertEqual(text[ents[0]['start']:ents[0]['end']], ents[0]['original'])
+        self.assertEqual('key <ANTHROPIC_KEY> end', _redact(text))
+
+    def test_two_separate_secrets_stay_two_entities(self):
+        text = f'a john@example.com{ZWSP} b jane@example.org{ZWSP} c'
+        ents = cast_redact.analyze_regex(text, [])
+        self.assertEqual(['EMAIL_ADDRESS', 'EMAIL_ADDRESS'], [e['entity_type'] for e in ents])
+
+    def test_different_type_overlap_not_merged_by_union(self):
+        spans = cast_redact._union_same_type_view_spans(
+            [('IP_ADDRESS', 5, 12)], [('DATABASE_URL', 0, 20)])
+        self.assertEqual([('IP_ADDRESS', 5, 12), ('DATABASE_URL', 0, 20)], spans)
+
+    def test_union_only_when_a_view_span_is_involved(self):
+        raw_only = [('DATABASE_URL', 0, 10), ('DATABASE_URL', 5, 20)]
+        self.assertEqual(raw_only, cast_redact._union_same_type_view_spans(raw_only, []))
+        self.assertEqual([('DATABASE_URL', 0, 21)],
+                         cast_redact._union_same_type_view_spans(raw_only, [('DATABASE_URL', 18, 21)]))
+
+    def test_raw_only_group_untouched_when_unrelated_view_span_present(self):
+        raw = [('DATABASE_URL', 0, 10), ('DATABASE_URL', 5, 20)]
+        got = cast_redact._union_same_type_view_spans(raw, [('EMAIL_ADDRESS', 30, 35)])
+        self.assertEqual(raw + [('EMAIL_ADDRESS', 30, 35)], got)
+
+    def test_adjacent_same_type_view_and_raw_spans_merge(self):
+        self.assertEqual([('X', 0, 8)], cast_redact._union_same_type_view_spans([('X', 0, 4)], [('X', 4, 8)]))
+
+
+class TestEnclosingMarksAndGaps(unittest.TestCase):
+
+    K = 'sk-ant-abcdefghijklmnopqrstuvwxyz0123456789ABCD'
+
+    def test_key_with_enclosing_marks_redacted(self):
+        for ch in (ENCLOSING_KEYCAP, ENCLOSING_CIRCLE):
+            with self.subTest(ch=hex(ord(ch))):
+                text = f'key {self.K[:15]}{ch}{self.K[15:]}{ch} end'
+                self.assertEqual('key <ANTHROPIC_KEY> end', _redact(text))
+
+    def test_email_with_enclosing_mark_redacted(self):
+        self.assertEqual('to <EMAIL_ADDRESS> now', _redact(f'to jo{ENCLOSING_KEYCAP}hn@example.com now'))
+
+    def test_nfkc_output_mark_is_stripped_from_view(self):
+        """U+FF9E / U+FF9F (halfwidth sound marks, category Lm) NFKC-map to U+3099 / U+309A
+        (Mn).  The per-output Mn filter must drop them or the key no longer matches."""
+        for ch in ('\uff9e', '\uff9f'):
+            with self.subTest(ch=hex(ord(ch))):
+                text = f'key {self.K[:20]}{ch}{self.K[20:]} end'
+                self.assertEqual('key <ANTHROPIC_KEY> end', _redact(text))
+
+    def test_trailing_format_char_absorbed(self):
+        for ch in (ZWSP, BOM, '\u00ad'):
+            with self.subTest(ch=hex(ord(ch))):
+                self.assertEqual('key <ANTHROPIC_KEY> end', _redact(f'key {self.K}{ch} end'))
+
+    def test_leading_format_char_not_absorbed(self):
+        """Documented boundary: only TRAILING stripped chars are absorbed."""
+        self.assertEqual(f'key {ZWSP}<ANTHROPIC_KEY> end', _redact(f'key {ZWSP}{self.K} end'))
 
 
 if __name__ == '__main__':
