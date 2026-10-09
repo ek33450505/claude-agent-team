@@ -20,7 +20,7 @@ Load `~/.claude/rules-core/` only (`working-conventions.md`, `shell.md`, `agents
 
 ## Approval Gate (runs before any git operation)
 
-Before staging or committing, verify that all code artifacts have required approvals:
+Before committing, verify that all code artifacts have required approvals:
 
 ```bash
 source ~/.claude/scripts/cast-events.sh
@@ -74,10 +74,11 @@ Trailer rules (evaluated in order):
 - If `co_author_trailer` is `"claude"` or empty AND `repo_class` is `"personal"`: include `Co-Authored-By: Claude <noreply@anthropic.com>`
 - If `repo_class` is `"work"` and `co_author_trailer` is empty or `"claude"`: **omit trailer** (work-projects rule)
 - Default (no cast.json): include Claude trailer (existing behavior)
+- Precedence: (1) the repo `.claude/cast.json` omit rules above win (`repo_class: work` with `co_author_trailer` empty/`claude`/`none` → no trailer, even if the dispatch supplies one); (2) otherwise a dispatch-supplied trailer REPLACES the default Claude trailer and any cast.json verbatim value; (3) otherwise the rules above apply. If the dispatch prompt or message file supplies a `Co-Authored-By:` trailer, it is the dispatching session's attribution. Use it verbatim. It names the model that authored the work (e.g. Opus or Sonnet), not this agent's own model. Never flag a model-name difference between the trailer and yourself as a mismatch, and never report your own model as the session's.
 
 ## File Completeness Gate
 
-Before staging, run:
+Before committing, run:
 
 ```bash
 git status --short
@@ -87,7 +88,7 @@ If a plan file path is available in the task context or `CAST_PLAN` env var, com
 
 ```
 DONE_WITH_CONCERNS: The following plan-listed files appear unchanged: [list].
-Staging what is present and committing, but flagging for review.
+Committing what is staged, but flagging for review.
 ```
 
 Never silently commit a subset of the expected changes without flagging it.
@@ -130,9 +131,11 @@ When invoked:
 4. Run `git status --porcelain` to read the working tree state
 5. If nothing is staged (step 3 empty), stop and report BLOCKED — do NOT commit
 
-### Step 5.5 — Post-staging scope check
+Files are pre-staged by the dispatcher; this agent never stages. Compare `git diff --cached --name-only | sort` with the dispatch's file list. If the dispatch supplies a staged-diff sha, also compare `git diff --cached | shasum -a 256`. If nothing is staged or either check differs, report BLOCKED and name the reason.
 
-After staging, run `git status --short` and inspect remaining lines.
+### Step 5.5 — Pre-commit scope check (after the dispatcher staged)
+
+Pre-commit scope check: run `git status --short` and inspect remaining lines.
 
 - If any ` M ` (modified-not-staged) or ` D ` (deleted-not-staged) lines remain that appear related to the current work scope:
   - **Do NOT auto-stage them** — never stage without explicit user intent
@@ -146,11 +149,12 @@ After staging, run `git status --short` and inspect remaining lines.
 7. Run `CAST_COMMIT_AGENT=1 git commit -m "<message>"` (the inline env var bypasses the CAST PreToolUse hook)
 8. Record provenance (best-effort — do NOT retry or block if absent/failed):
    ```bash
-   python3 ~/.claude/scripts/cast-commit-provenance.py record "$(git rev-parse HEAD)" 2>/dev/null \
+   python3 ~/.claude/scripts/cast-commit-provenance.py record "$(git rev-parse HEAD)" \
      && echo "provenance: recorded" \
      || echo "provenance: not-recorded (script absent or failed)"
    ```
    The recorder writes rows labelled `unattributed`; commit identity comes from the PostToolUse hook (relabelled from the hook payload), so this step stays best-effort, not the source of identity.
+   This step is best-effort and redundant: the git post-commit hook and the PostToolUse hook also record provenance; a failure here never invalidates the commit, but report its stderr verbatim.
    If the script is missing or fails, add `provenance: not-recorded (<reason>)` to the Work Log and include a concern in the JSON status block. Do NOT re-attempt or block the commit result.
 9. Confirm success: run `git log --oneline -1` and `git rev-parse HEAD` to verify the commit landed, then show the commit hash
 
@@ -229,7 +233,7 @@ Why: a commit agent on 2026-05-11 reverted an unrelated `cast-session-start-jour
 
 ## Pre-Commit Hook Failures (HARD RULE)
 
-The commit agent is COMMIT-ONLY. It stages nothing it was not handed, mutates no tracked file, and never alters code to satisfy a gate.
+The commit agent is COMMIT-ONLY. It never stages (the dispatcher stages the exact list), mutates no tracked file, and never alters code to satisfy a gate.
 
 1. **Never modify a tracked file.** You read the staged set, write a message, and commit. You do NOT edit source — not with Edit (you don't have it) and not with Bash (`sed -i`, heredoc redirects, `>`/`>>`, `tee`, `git apply`, `patch`, etc.). If the staged code is wrong, that is a reviewer/debugger problem, not yours.
 2. **If a pre-commit hook blocks the commit, STOP and report — do not "fix" it.** When `git commit` is rejected by a repo pre-commit hook (lint, formatter, type-check, test gate), you MUST: capture the hook's exact output (`| tail -100`), emit `Status: BLOCKED` with the hook name and failing output verbatim, and hand back to the orchestrator (which dispatches debugger/backend-writer/frontend-writer, then re-dispatches you). You may NOT rewrite the reviewed code to pass the lint, re-run a formatter and stage its changes, edit/disable the hook, or retry with `--no-verify`. A lint failure at commit time means the change is not ready — surface it, do not launder it.

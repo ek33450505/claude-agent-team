@@ -436,7 +436,8 @@ wire_repo_with_worktree() {
   run env HOME="$fresh" bash "$repo/install.sh"
   assert_success
   assert_output --partial "UNMANAGED file in ~/.claude/scripts: stale-leftover.sh"
-  ! grep -q 'stale-leftover' "$fresh/.claude/install-manifest.sha256"
+  run grep -q 'stale-leftover' "$fresh/.claude/install-manifest.sha256"
+  assert_failure 1
 }
 
 # --- M2: non-regular files / hangs -------------------------------------------------------------

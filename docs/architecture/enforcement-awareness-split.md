@@ -189,22 +189,24 @@ This is a **belt over the existing suspenders** — it does NOT replace:
 - `cast_safe_rm` (guarded delete helper)
 
 Native `permissions.deny` is **session-scoped**: fires inside interactive `claude` sessions
-and headless `claude -p` calls. The script gates cover cron jobs, CI, and any non-session
-context where `permissions.deny` does not apply.
+and headless `claude -p` calls. The script gates run in cron/CI only where a job explicitly
+invokes them, and cover any non-session context where `permissions.deny` does not apply.
 
 **Why belt + suspenders and not just one?**
 - Native deny is coarse (prefix-glob, no env-var exceptions, no path semantics) but fires
-  before the model even generates the command — zero runtime cost, impossible to bypass in a
-  session.
+  at the permission check when the tool call is made, before the tool runs — zero runtime cost,
+  impossible to bypass in a session.
 - Script gates are nuanced (path-aware, escape-hatch-aware) but are hook-advisory-grade in
-  interactive sessions and absent in cron/CI without explicit wiring.
+  interactive sessions and run in cron/CI only where a job explicitly invokes them.
 
 ### Source-of-truth
 
 `managed-settings.d/11-deny.json` is the fragment source. `settings.json` in the repo root
 carries the merged result (kept in sync manually — `cast-merge-settings.sh` reads the live
-`~/.claude/managed-settings.d`, not the repo fragments). The `11-deny.json` fragment is
-CAST-owned in `install.sh` (pattern `11-deny.json` in the overwrite case), so reinstall
+`~/.claude/managed-settings.d`, not the repo fragments). No drift gate covers the full set;
+`tests/cast-sandbox-u6-config.bats` checks a subset of the Edit denies only. Both sets had
+26 entries on 2026-10-09.
+The `11-deny.json` fragment is CAST-owned in `install.sh` (pattern `11-deny.json` in the overwrite case), so reinstall
 propagates security updates to existing deployments.
 
 ## The `requires_agent` unblock gate: session-bound, roster-typed records (S3d, 2026-10-05)

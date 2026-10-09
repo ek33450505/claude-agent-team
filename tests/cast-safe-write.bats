@@ -115,11 +115,7 @@ _sw() {
   _sw "$FIX" sub/out.json 'new content'
   [ "$status" -eq 0 ]
   [ "$(cat "$FIX/sub/out.json")" = "new content" ]
-  if [[ "$OSTYPE" == darwin* ]]; then
-    [ "$(stat -f %Lp "$FIX/sub/out.json")" = "644" ]
-  else
-    [ "$(stat -c %a "$FIX/sub/out.json")" = "644" ]
-  fi
+  [ "$(file_mode "$FIX/sub/out.json")" = "644" ]
   [ -z "$(find "$FIX/sub" -name '.cast-safe-write.*')" ]
 }
 

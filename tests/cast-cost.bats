@@ -173,7 +173,9 @@ print('OK')
   pos_writer=$(printf '%s\n' "$output" | grep -n "code-writer" | head -1 | cut -d: -f1)
   pos_reviewer=$(printf '%s\n' "$output" | grep -n "code-reviewer" | head -1 | cut -d: -f1)
   pos_debugger=$(printf '%s\n' "$output" | grep -n "debugger" | head -1 | cut -d: -f1)
-  [ -n "$pos_writer" ] && [ -n "$pos_reviewer" ] && [ -n "$pos_debugger" ]
+  [ -n "$pos_writer" ]
+  [ -n "$pos_reviewer" ]
+  [ -n "$pos_debugger" ]
   [ "$pos_writer" -lt "$pos_reviewer" ]
   [ "$pos_writer" -lt "$pos_debugger" ]
 }
@@ -246,8 +248,11 @@ print('OK')
   pos_precap=$(printf '%s\n' "$output" | grep -n "(pre-capture)" | head -1 | cut -d: -f1)
   pos_x=$(printf '%s\n' "$output" | grep -n "feature/x" | head -1 | cut -d: -f1)
   pos_y=$(printf '%s\n' "$output" | grep -n "feature/y" | head -1 | cut -d: -f1)
-  [ -n "$pos_precap" ] && [ -n "$pos_x" ] && [ -n "$pos_y" ]
-  [ "$pos_precap" -lt "$pos_x" ] && [ "$pos_x" -lt "$pos_y" ]
+  [ -n "$pos_precap" ]
+  [ -n "$pos_x" ]
+  [ -n "$pos_y" ]
+  [ "$pos_precap" -lt "$pos_x" ]
+  [ "$pos_x" -lt "$pos_y" ]
 }
 
 @test "cast cost --by-branch --json: emits valid JSON with branch_capture_active flag" {
@@ -314,7 +319,9 @@ SQL
   local pos_s2 pos_s1
   pos_s2=$(printf '%s\n' "$output" | grep -n "sess-2" | head -1 | cut -d: -f1)
   pos_s1=$(printf '%s\n' "$output" | grep -n "sess-1" | head -1 | cut -d: -f1)
-  [ -n "$pos_s2" ] && [ -n "$pos_s1" ] && [ "$pos_s2" -lt "$pos_s1" ]
+  [ -n "$pos_s2" ]
+  [ -n "$pos_s1" ]
+  [ "$pos_s2" -lt "$pos_s1" ]
 }
 
 @test "cast cost --by-task --json: emits valid JSON with session details" {

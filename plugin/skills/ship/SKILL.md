@@ -29,4 +29,4 @@ Invoke with: `/ship` or include "run the ship workflow" in your prompt.
 
 - Never skip the test step, even for "trivial" changes
 - Never skip the CI sanity check before push
-- If the push fails with sandbox errors, do not disable the sandbox: ask the user to run the push in their terminal with `!` (e.g. `! bash scripts/cast-push.sh`).
+- If the push fails with sandbox errors, do not disable the sandbox: ask the user to run the push in their terminal with `!` (e.g. `! bash ~/.claude/scripts/cast-push.sh`).

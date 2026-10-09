@@ -187,7 +187,8 @@ SQL
 @test "no {{ }} placeholder tokens anywhere in the generated document" {
   run_scaffold
   assert_success
-  ! grep -q "{{" "$OUT_DIR/$OUT_FILE_NAME"
+  run grep -q "{{" "$OUT_DIR/$OUT_FILE_NAME"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------
@@ -254,7 +255,8 @@ EOF
   assert_success
   local f="$OUT_DIR/$OUT_FILE_NAME"
   grep -q "current-plan.md" "$f"
-  ! grep -q "old-superseded.md" "$f"
+  run grep -q "old-superseded.md" "$f"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------
@@ -295,7 +297,8 @@ EOF
   assert_success
   local f="$OUT_DIR/$OUT_FILE_NAME"
   [ -f "$f" ]
-  ! grep -q "{{" "$f"
+  run grep -q "{{" "$f"
+  assert_failure 1
   grep -qE "no DONE_WITH_CONCERNS runs|record unavailable" "$f"
 }
 
@@ -305,7 +308,8 @@ EOF
   assert_success
   local f="$OUT_DIR/$OUT_FILE_NAME"
   [ -f "$f" ]
-  ! grep -q "{{" "$f"
+  run grep -q "{{" "$f"
+  assert_failure 1
   grep -q "no DONE_WITH_CONCERNS runs" "$f"
 }
 
@@ -330,5 +334,6 @@ EOF
   # scoped this way).
   awk '/^## 5\. Next scope/{p=1} p&&/^## 6\./{exit} p' "$f" \
     | grep -q "plant the resume-scaffold DB read"
-  ! grep -q "{{" "$f"
+  run grep -q "{{" "$f"
+  assert_failure 1
 }

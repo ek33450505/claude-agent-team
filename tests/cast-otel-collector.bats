@@ -200,7 +200,8 @@ PYEOF
 @test "BIND-SAFETY: cast-otel-collector.py does NOT contain 0.0.0.0 (local-first)" {
   # This should FAIL (grep returns 1 when pattern not found) — which means
   # the script does NOT contain 0.0.0.0
-  ! grep -q "0.0.0.0" "$COLLECTOR_PY"
+  run grep -q "0.0.0.0" "$COLLECTOR_PY"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------

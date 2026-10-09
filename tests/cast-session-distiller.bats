@@ -162,8 +162,10 @@ _count_pending() {
   local fpath
   fpath=$(ls "$PENDING_DIR"/feedback_*.md 2>/dev/null | head -1)
   # The body mentions "verified_at" in review instructions — check the YAML key form is absent
-  ! grep -q "^  verified_at:" "$fpath"
-  ! grep -q "^verified_at:" "$fpath"
+  run grep -q "^  verified_at:" "$fpath"
+  assert_failure 1
+  run grep -q "^verified_at:" "$fpath"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------
@@ -342,17 +344,28 @@ with open(sys.argv[1], 'w') as f:
 PYEOF
   run python3 "$DISTILLER" --input "$inject_transcript" --pending-dir "$PENDING_DIR"
   assert_success
-  # If a file was written, assert the injected "type: evil" line is not present
+  # Assert the injected "type: evil" line is not present in the written file
   local fpath
   fpath=$(ls "$PENDING_DIR"/project_*.md 2>/dev/null | head -1)
-  if [[ -n "$fpath" ]]; then
-    # The frontmatter must not contain a bare "type: evil" line
-    ! grep -q "^type: evil" "$fpath"
-    # The description line must be a single YAML scalar (no newline break)
-    local desc_lines
-    desc_lines=$(grep -c "^description:" "$fpath" || true)
-    [ "$desc_lines" -eq 1 ]
-  fi
+  # A hard assertion: the product must have written the file (no vacuous pass on zero assertions)
+  [ -n "$fpath" ]
+  [ -f "$fpath" ]
+  # The FRONTMATTER (between the first two '---' lines) must not contain a "type: evil" key line.
+  # Scope to the frontmatter: the body legitimately quotes the user turn verbatim, so a whole-file
+  # grep matches the quoted "type: evil" body line (a line the product is supposed to emit).
+  local fm="$BATS_TEST_TMPDIR/frontmatter.txt"
+  awk 'NR==1 && /^---$/ {f=1; next} f && /^---$/ {exit} f' "$fpath" >"$fm"
+  [ -s "$fm" ] # the frontmatter was really extracted (not an empty, vacuously clean file)
+  grep -q "^name:" "$fm"
+  run grep -E "^[[:space:]]*type: evil" "$fm"
+  assert_failure 1
+  # exactly one type: key in the frontmatter, and it is the real one
+  [ "$(grep -cE '^[[:space:]]*type:' "$fm")" -eq 1 ]
+  grep -q "^  type: project$" "$fm"
+  # The description line must be a single YAML scalar (no newline break)
+  local desc_lines
+  desc_lines=$(grep -c "^description:" "$fpath" || true)
+  [ "$desc_lines" -eq 1 ]
 }
 
 # ---------------------------------------------------------------------------

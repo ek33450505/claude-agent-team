@@ -149,7 +149,8 @@ teardown() {
 
   # Assert that the sentinel was updated (should not be 666 anymore)
   # We check that the CAST_TEST_COUNT line no longer has 666
-  ! grep -q "<!-- CAST_TEST_COUNT -->666<!-- /CAST_TEST_COUNT -->" "$TEST_README"
+  run grep -q "<!-- CAST_TEST_COUNT -->666<!-- /CAST_TEST_COUNT -->" "$TEST_README"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------

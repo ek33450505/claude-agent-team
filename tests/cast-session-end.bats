@@ -133,7 +133,8 @@ teardown() {
 
   # Verify that guard didn't log an error for this safe ID
   if [[ -f "$HOME/.claude/logs/hook-errors.log" ]]; then
-    ! grep -q "Refusing unsafe SESSION_ID.*sess-abc123" "$HOME/.claude/logs/hook-errors.log"
+    run grep -q "Refusing unsafe SESSION_ID.*sess-abc123" "$HOME/.claude/logs/hook-errors.log"
+    assert_failure 1
   fi
 }
 
@@ -149,7 +150,8 @@ teardown() {
 
   # Verify no error was logged for this safe ID
   if [[ -f "$HOME/.claude/logs/hook-errors.log" ]]; then
-    ! grep -q "Refusing unsafe SESSION_ID.*Sess_Test-123" "$HOME/.claude/logs/hook-errors.log"
+    run grep -q "Refusing unsafe SESSION_ID.*Sess_Test-123" "$HOME/.claude/logs/hook-errors.log"
+    assert_failure 1
   fi
 }
 
@@ -165,7 +167,8 @@ teardown() {
 
   # Verify no error for the default safe ID
   if [[ -f "$HOME/.claude/logs/hook-errors.log" ]]; then
-    ! grep -q "Refusing unsafe SESSION_ID.*default" "$HOME/.claude/logs/hook-errors.log"
+    run grep -q "Refusing unsafe SESSION_ID.*default" "$HOME/.claude/logs/hook-errors.log"
+    assert_failure 1
   fi
 }
 

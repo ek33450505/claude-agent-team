@@ -21,7 +21,8 @@ VALIDATOR_CONTRACT="$REPO_DIR/scripts/cast-validate-hook-contracts.sh"
 # Migrating to the canonical helpers is tracked as a follow-up — doing it
 # here would rewrite 11 pre-existing tests for no isolation gain.
 setup() {
-  export TEST_TMPDIR="$(mktemp -d /tmp/cast-validate-all-hooks-test.XXXXXXXX)"
+  local _tmp="${TMPDIR:-/tmp}" # macOS $TMPDIR ends in "/": strip it so the path has no "//"
+  export TEST_TMPDIR="$(mktemp -d "${_tmp%/}/cast-validate-all-hooks-test.XXXXXXXX")"
 }
 
 teardown() {
