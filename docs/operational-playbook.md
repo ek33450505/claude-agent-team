@@ -63,6 +63,16 @@ gh run view <run-id> --json jobs --jq '.jobs[] | select(.name|test("macos")) | {
 - **Hard rule:** Any agent or skill that creates a branch or worktree MUST clean up on success. The groomer is a safety net, not the primary cleanup mechanism. Orphaned branches from failed or abandoned agent runs must be cleaned manually.
 - **CI contract validation:** The `hook-contract-validation` job in `.github/workflows/bats-ci.yml` validates `hookSpecificOutput` format. Non-spec output is a hard CI fail — fix before pushing.
 
+## Committing a `gen-plugin.sh` change (two-step recipe)
+
+The pre-commit drift check runs the INSTALLED `check-plugin-drift.sh`, which runs the INSTALLED `gen-plugin.sh`. A staged generator is never executed, so an agent cannot swap the generator to get past the check. As a result, a generator change can't be committed in the same commit as output that depends on it. Split it:
+
+1. **Commit A:** the `gen-plugin.sh` change, plus anything whose plugin output the OLD generator already produces correctly. Keep new files the change exists for (for example a new script in `EXCLUDE_SCRIPTS`) untracked, and park them in a temp dir outside the repo (`mktemp -d`), so `install.sh` sees a clean tree.
+2. `bash install.sh`, then `cmp scripts/gen-plugin.sh ~/.claude/scripts/gen-plugin.sh`.
+3. **Commit B:** restore and stage the dependent files, then regenerate (`bash scripts/gen-plugin.sh "$PWD/plugin"`) and commit. The drift check now runs the new generator.
+
+Never use `CAST_SKIP_PLUGIN_DRIFT` for this. A staged-generator exception was considered and dropped (2026-10-09) because it narrows the check.
+
 ## Workflow Closures (Phase 5b)
 
 - **Auto mode:** `defaultMode: "auto"` is set but has a session-start bug — use `--permission-mode auto` until upstream fixes it.
