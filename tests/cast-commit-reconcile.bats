@@ -620,6 +620,20 @@ run_prepush_hook() {
     [[ "$stderr" != *"NOT verified"* ]]
 }
 
+@test "pre-push: clean reconcile with unjudged legacy events (cast.db unavailable) → 'partially verified', never plain 'reconcile OK', push allowed" {
+    prepush_fixture
+    export STUB_RC=0
+    export STUB_OUT='{"status": "clean", "checked": 1, "violations": [], "unjudged_legacy_events": 3, "db_unavailable": "cast.db not found"}'
+    export STUB_ERR='stub-noise-that-must-stay-hidden'
+    run_prepush_hook
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"unjudged_legacy_events": 3'* ]]
+    [[ "$stderr" == *"reconcile partially verified: 3 legacy events unjudged (cast.db unavailable)"* ]]
+    [[ "$output" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"reconcile OK"* ]]
+    [[ "$stderr" != *"stub-noise-that-must-stay-hidden"* ]]
+}
+
 @test "pre-push: only the exact status key/value counts ('unverifiable' inside another field is a skip, not NOT-verified)" {
     prepush_fixture
     export STUB_RC=0

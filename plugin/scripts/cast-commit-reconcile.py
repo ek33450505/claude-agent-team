@@ -14,7 +14,11 @@ Enforcement rule (D5b — judges WHO made the commit, not only THAT one exists):
      agent_type is NEVER trusted (Claude Code overwrites it with a dispatch's custom
      name, so a differently-typed agent dispatched as name "commit" would forge it).
      Violation reasons: "main-session hatch" (agent_id empty); "agent <roster> is not
-     the commit agent"; "commit-agent identity unverifiable (no trusted sidecar)".
+     the commit agent"; "commit-agent identity unverifiable (no trusted sidecar)", or
+     "... (sidecar resolver unavailable: <ExceptionClass>)" when the sidecar resolver
+     module could not be loaded (or the resolver raised). Identity and corrupt-line events need NO database: they are judged even when
+     cast.db or its commit_provenance table is absent (only LEGACY window-rule events
+     need it; with no DB they stay unjudged, as before).
      A provenance row is NOT required for an authorized identity event (a commit
      agent's `cd other-repo && commit` is attributed to the hook cwd repo).
   3. CORRUPT hatch line (non-UTF-8, non-JSON, or non-object JSON, whose raw bytes
@@ -290,6 +294,37 @@ def _corrupt_event(raw: bytes, lineno: int) -> dict:
     }
 
 
+_AUDIT_READ_CHUNK = 1 << 16
+
+
+def _iter_audit_lines(path: str, chunk_size: int | None = None):
+    """Yield (raw_line_bytes, terminated) for every line of `path`, streaming in fixed-size
+    chunks. Line splitting is bytes.splitlines()'s: \\n, \\r and \\r\\n all end a line (a
+    \\r\\n straddling a chunk boundary is one terminator, not two). `terminated` is False only
+    for the final line of a file with no trailing terminator (an append in progress). Raises
+    what open()/read() raise (FileNotFoundError, PermissionError, ...)."""
+    size = chunk_size or _AUDIT_READ_CHUNK
+    partial: list[bytes] = []  # fragments of the current, not-yet-terminated line
+    skip_lf = False  # the previous chunk ended in \r: swallow a \n opening this one
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(size)
+            if not chunk:
+                break
+            if skip_lf and chunk.startswith(b"\n"):
+                chunk = chunk[1:]
+            skip_lf = chunk.endswith(b"\r")
+            for piece in chunk.splitlines(keepends=True):
+                if piece.endswith((b"\n", b"\r")):
+                    partial.append(piece[:-2] if piece.endswith(b"\r\n") else piece[:-1])
+                    yield b"".join(partial), True
+                    partial = []
+                else:
+                    partial.append(piece)
+    if partial:
+        yield b"".join(partial), False
+
+
 def load_hatch_events(since: datetime.datetime, stats: dict | None = None) -> list[dict]:
     """
     Parse audit.jsonl and return COMMIT_HATCH_USED events with
@@ -324,15 +359,11 @@ def load_hatch_events(since: datetime.datetime, stats: dict | None = None) -> li
     skipped_undecodable = 0
     acked_hashes: list[str] = []  # file order = oldest first
     try:
-        # Binary read + per-line strict decode. bytes.splitlines() splits on \n, \r and
-        # \r\n exactly like text-mode universal newlines.
-        with open(AUDIT_PATH, "rb") as f:
-            data = f.read()
-        raw_lines = data.splitlines()
-        open_tail = bool(data) and not data.endswith((b"\n", b"\r"))
-        for idx, raw in enumerate(raw_lines):
+        # Binary STREAMING read + per-line strict decode: the whole log is never held in
+        # memory (it used to be read whole, then split + decoded: ~2.5x its size).
+        for idx, (raw, terminated) in enumerate(_iter_audit_lines(AUDIT_PATH)):
             lineno = idx + 1
-            is_open_tail = open_tail and idx == len(raw_lines) - 1
+            is_open_tail = not terminated  # only the final line can lack a terminator
             try:
                 line = raw.decode("utf-8")
             except UnicodeDecodeError:
@@ -434,14 +465,27 @@ def load_hatch_events(since: datetime.datetime, stats: dict | None = None) -> li
 # ---------------------------------------------------------------------------
 
 _SUBAGENT_STOP_MOD = None  # None=unattempted, False=load failed, module=loaded
+_SUBAGENT_STOP_ERR = ""  # exception class name of a failed load (sanitized); "" otherwise
+
+
+def _err_class(exc: BaseException) -> str:
+    """The exception's class name, restricted to [A-Za-z0-9_] (it lands in a reason string)."""
+    return re.sub(r"[^A-Za-z0-9_]", "", type(exc).__name__)[:64] or "Exception"
 
 
 def _load_subagent_stop():
     """Load cast_subagent_stop.py from THIS script's own directory (never ~/.claude
     on sys.path, never the CWD). Importing it only defines names (its main is guarded
     by __name__); it does insert CAST_HOOK_DIR/~/.claude/scripts at sys.path[0], so
-    sys.path is restored afterwards. False on any failure (callers fail closed)."""
-    global _SUBAGENT_STOP_MOD
+    sys.path is restored afterwards. False on any failure (callers fail closed), with
+    the failing exception's class kept in _SUBAGENT_STOP_ERR.
+
+    ONLY KeyboardInterrupt propagates (an operator's ^C must not be recorded as "the loader
+    failed"). Every other BaseException -- SystemExit included -- is a load FAILURE and fails
+    closed: a SystemExit(0) escaping from the import would make main() exit 0 with no JSON,
+    which pre-push reads as a skip. No watchdog or timeout exception rides through this try:
+    nothing here arms a signal/alarm, and cast_subagent_stop's import only defines names."""
+    global _SUBAGENT_STOP_MOD, _SUBAGENT_STOP_ERR
     if _SUBAGENT_STOP_MOD is None:
         saved_path = list(sys.path)
         try:
@@ -450,23 +494,29 @@ def _load_subagent_stop():
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             _SUBAGENT_STOP_MOD = mod
-        except BaseException:  # noqa: BLE001 - any failure → fail closed
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - any other failure → fail closed
             _SUBAGENT_STOP_MOD = False
+            _SUBAGENT_STOP_ERR = _err_class(exc)
         finally:
             sys.path[:] = saved_path
     return _SUBAGENT_STOP_MOD
 
 
-def _roster_type(session_id, agent_id) -> str:
-    """Sidecar-resolved roster type for (session_id, agent_id), or '' on any doubt."""
+def _roster_type(session_id, agent_id) -> tuple[str, str]:
+    """-> (roster_type, error_class). roster_type is the sidecar-resolved roster type for
+    (session_id, agent_id), or '' on any doubt. error_class is '' unless the sidecar LOADER
+    (or the resolver itself) failed -- then the exception class name, so the caller can
+    report "sidecar resolver unavailable" instead of a plain "no trusted sidecar"."""
     mod = _load_subagent_stop()
     if not mod:
-        return ""
+        return "", _SUBAGENT_STOP_ERR or "LoadError"
     try:
         ctx = types.SimpleNamespace(session_id=session_id, agent_id=agent_id)
-        return mod._resolve_roster_type(ctx) or ""
-    except Exception:  # noqa: BLE001
-        return ""
+        return mod._resolve_roster_type(ctx) or "", ""
+    except Exception as exc:  # noqa: BLE001
+        return "", _err_class(exc)
 
 
 def violation_reason(evt: dict) -> str | None:
@@ -479,11 +529,13 @@ def violation_reason(evt: dict) -> str | None:
     agent_id = evt.get("agent_id")
     if agent_id == "":
         return "main-session hatch"
-    roster = _roster_type(evt["session_id"], agent_id) if isinstance(agent_id, str) else ""
+    roster, load_err = _roster_type(evt["session_id"], agent_id) if isinstance(agent_id, str) else ("", "")
     if roster == "commit":
         return None
     if roster:
         return f"agent {roster} is not the commit agent"
+    if load_err:  # the sidecar could not be consulted at all: still a violation, but say why
+        return f"commit-agent identity unverifiable (sidecar resolver unavailable: {load_err})"
     return "commit-agent identity unverifiable (no trusted sidecar)"
 
 
@@ -663,47 +715,50 @@ def main() -> int:
             return 0
         return _report_unverifiable(exc)
 
-    # 4. Skip cleanly if DB is missing (infra not yet deployed)
+    # 4. Is the provenance DB usable? Only LEGACY window-rule events need it. Identity events
+    #    (judged from the Claude Code sidecar) and corrupt-line events need NO database, so a
+    #    missing cast.db / commit_provenance table must not turn them into a quiet "skip".
+    db_gap = ""
     if not os.path.exists(DB_PATH):
-        result = {
-            "status": "skip",
-            "reason": "cast.db not found",
-            "checked": 0,
-            "violations": [],
-        }
-        print(json.dumps(result))
-        return 0
+        db_gap = "cast.db not found"  # infra not yet deployed
+    else:
+        # 5. Check commit_provenance table presence — fail-closed on DB error
+        try:
+            table_present = provenance_table_exists()
+        except _DBError as exc:
+            # Exception text can echo DB/path bytes: sanitize before JSON + stderr.
+            reason = _sanitize(str(exc))
+            result = {
+                "status": "error",
+                "reason": reason,
+                "checked": 0,
+                "violations": [],
+            }
+            print(json.dumps(result))
+            print(
+                f"\n[CAST pre-push] DB query failed — cannot verify provenance; push blocked.\n"
+                f"(Fail-closed on infra ERROR; skips only on genuine table absence.)\n"
+                f"Reason: {reason}\n",
+                file=sys.stderr,
+            )
+            return 1
+        if not table_present:
+            db_gap = "commit_provenance table not found"
 
-    # 5. Check commit_provenance table presence — fail-closed on DB error
-    try:
-        table_present = provenance_table_exists()
-    except _DBError as exc:
-        # Exception text can echo DB/path bytes: sanitize before JSON + stderr.
-        reason = _sanitize(str(exc))
-        result = {
-            "status": "error",
-            "reason": reason,
-            "checked": 0,
-            "violations": [],
-        }
-        print(json.dumps(result))
-        print(
-            f"\n[CAST pre-push] DB query failed — cannot verify provenance; push blocked.\n"
-            f"(Fail-closed on infra ERROR; skips only on genuine table absence.)\n"
-            f"Reason: {reason}\n",
-            file=sys.stderr,
-        )
-        return 1
-
-    if not table_present:
-        result = {
-            "status": "skip",
-            "reason": "commit_provenance table not found",
-            "checked": 0,
-            "violations": [],
-        }
-        print(json.dumps(result))
-        return 0
+    unjudged_legacy = 0
+    if db_gap:
+        judgeable = [e for e in events if e.get("identity") or "corrupt_line" in e]
+        unjudged_legacy = len(events) - len(judgeable)
+        if not judgeable:
+            result = {
+                "status": "skip",
+                "reason": db_gap,
+                "checked": 0,
+                "violations": [],
+            }
+            print(json.dumps(result))
+            return 0
+        events = judgeable
 
     # Undecodable junk lines are skipped, not fatal — surface the count in the JSON
     # (only when non-zero, so the common-case output is unchanged).
@@ -714,6 +769,9 @@ def main() -> int:
     )
     if audit_stats.get("acked_corrupt_lines"):
         skipped_note["acked_corrupt_lines"] = audit_stats["acked_corrupt_lines"]
+    if unjudged_legacy:
+        skipped_note["unjudged_legacy_events"] = unjudged_legacy
+        skipped_note["db_unavailable"] = db_gap
 
     # 6. Judge each event (identity / provenance window / corrupt line)
     violations: list[dict] = []
@@ -739,14 +797,16 @@ def main() -> int:
     if not violations:
         result = {"status": "clean", "checked": checked, "violations": [], **skipped_note}
         print(json.dumps(result))
-        write_checkpoint(now, old_ts=checkpoint)
+        if not unjudged_legacy:  # legacy events still await a DB: keep them inside the window
+            write_checkpoint(now, old_ts=checkpoint)
         return 0
 
     if ACK_MODE:
         result = {"status": "acked", "checked": checked, "violations": violations, **skipped_note}
         print(json.dumps(result))
         append_ack_event(violation_events)
-        write_checkpoint(now, old_ts=checkpoint)
+        if not unjudged_legacy:  # an ack must not skip past a legacy event no DB could judge
+            write_checkpoint(now, old_ts=checkpoint)
         return 0
 
     # Unacked violations — exit 1 with remediation block on stderr (L1: sanitize audit values)

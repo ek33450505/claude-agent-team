@@ -3223,7 +3223,7 @@ def _policy_evaluate(file_path: str, session_id: str = ''):
                 f'The marker must come from a `{required_agent}` subagent dispatched in THIS session, '
                 f'unnamed or named `{required_agent}__<label>` (a dispatch named exactly `{required_agent}`, '
                 f'or a built-in agent given that name, is not trusted); hand-written records are ignored. '
-                f'When it ends DONE its hook-written marker unblocks the session; then the ORCHESTRATOR applies the edit to `{file_path[:256]}`.\n'
+                f'When it ends DONE its hook-written marker unblocks the session; then the ORCHESTRATOR applies the edit to `{_escape_for_context(file_path[:256])}`.\n'
                 f'Escape hatch: Set CAST_POLICY_OVERRIDE=1 to bypass (document your reason).'
             )
             return 2, msg

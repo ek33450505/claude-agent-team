@@ -237,6 +237,26 @@ class TestWarnTextHardening(_TempHome):
         self.assertEqual(esc('\ud800'), '\\ud800')
         self.assertNotIn('\ud800', esc('x\ud800y'))
 
+    def test_block_message_escapes_hostile_path_and_still_exits_2(self):
+        # S4-b: the BLOCK message echoes the path too -- a backtick would close the code span and
+        # U+202E would reorder the text the model reads. Same escaping as the warn line.
+        pols = {'policies': [
+            {'id': 'b-evil', 'path_pattern': r'evil', 'severity': 'block',
+             'requires_agent': 'security', 'description': 'blocked on purpose'}]}
+        with open(os.path.join(self.home, '.claude', 'config', 'policies.json'), 'w') as f:
+            json.dump(pols, f)
+        code, msg = self.gg._policy_evaluate(
+            os.path.join(self.proj, 'evil`‮ .txt'), SESS)
+        self.assertEqual(code, 2, msg)
+        self.assertIn('CAST-POLICY-BLOCK', msg)
+        for ch in ('‮', ' '):
+            self.assertNotIn(ch, msg)
+        for esc in ('\\u0060', '\\u202e', '\\u2028'):
+            self.assertIn(esc, msg)
+        # only the template's own code spans (`security` x2 in the flow text + the path) remain
+        self.assertNotIn('evil`', msg)
+        self.assertEqual(msg.count('`') % 2, 0)
+
     def test_lone_surrogate_path_is_blocked_before_the_warn(self):
         # `_path_block`'s strict-UTF-8 check rejects the path before any policy runs, so a
         # lone surrogate never reaches the warn builder: code 2, not a warn.

@@ -90,9 +90,20 @@ if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
         echo "[CAST pre-push] commit-provenance reconcile NOT verified (audit log unreadable or unparseable) — push allowed; if this is a sandboxed shell, re-push from a normal terminal; otherwise check ~/.claude/logs/audit.jsonl" >&2
         ;;
       *'"status": "clean"'* | *'"status": "acked"'*)
-        # Only a check that actually ran to a verdict earns "OK".
+        # Only a check that actually ran to a verdict earns "OK". With cast.db unavailable the
+        # script still judges identity / corrupt-line events but leaves LEGACY (window-rule)
+        # events unjudged and reports their count: say "partially verified", not "OK".
         rm -f "$_RECONCILE_TMPSTDERR"
-        echo "[CAST pre-push] commit-provenance reconcile OK ✓"
+        case "$_RECONCILE_OUT" in
+          *'"unjudged_legacy_events": '*)
+            _unjudged="${_RECONCILE_OUT#*\"unjudged_legacy_events\": }"
+            _unjudged="${_unjudged%%[!0-9]*}"
+            echo "[CAST pre-push] commit-provenance reconcile partially verified: ${_unjudged:-some} legacy events unjudged (cast.db unavailable) — push allowed" >&2
+            ;;
+          *)
+            echo "[CAST pre-push] commit-provenance reconcile OK ✓"
+            ;;
+        esac
         ;;
       *)
         # "skip" (audit/cast.db/table absent) or any unknown/missing status on exit 0:
