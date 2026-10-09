@@ -349,13 +349,15 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# Test: new-branch push (all-zeros remote SHA) uses merge-base, not empty tree
+# Test: new-branch push (all-zeros remote SHA) scans only the pushed commits, not the whole repo
 # Regression for audit §3.8.D/E — empty-tree diff hung on ~540 files.
 # ---------------------------------------------------------------------------
 
 # Helper: simulate a new-branch push via stdin refs in an isolated repo.
-# Creates a repo with a 'main' branch (so merge-base resolution works),
-# then branches off, adds one commit, and feeds all-zeros remote SHA via stdin.
+# Creates a repo with a 'main' branch, branches off and adds one commit, then feeds the
+# all-zeros remote SHA via stdin with the remote name 'origin' as the gate's $1 (as the hook
+# does). The repo has no remote-tracking refs, so every commit up to the branch tip is
+# in the scanned range (`rev-list <tip> --not --remotes=origin`): a handful of tiny commits.
 # Sets $output, $status, and $elapsed_seconds.
 _run_new_branch_push() {
   local filename="$1"
@@ -373,7 +375,7 @@ _run_new_branch_push() {
     git init -q
     git config user.email "ci@example.com"
     git config user.name "CI"
-    # Establish a 'main' branch so merge-base resolution finds it.
+    # Establish a 'main' branch for the feature branch to start from.
     git commit -q --allow-empty -m "root"
     git checkout -b main -q 2>/dev/null || true
     git commit -q --allow-empty -m "main-base"
@@ -387,7 +389,7 @@ _run_new_branch_push() {
     # Feed the all-zeros remote SHA that a new-branch push produces.
     printf 'refs/heads/feature/regression-test %s refs/heads/feature/regression-test 0000000000000000000000000000000000000000\n' \
       "$local_sha" \
-      | CAST_PII_LOCAL_DENYLIST="$denylist" bash "$SCRIPT" 2>&1
+      | CAST_PII_LOCAL_DENYLIST="$denylist" bash "$SCRIPT" origin 2>&1
   ) || rc=$?
   end_ts="$(date +%s)"
   elapsed=$(( end_ts - start_ts ))
@@ -422,4 +424,761 @@ _run_new_branch_push() {
   rm -f "$fake_denylist"
   assert_failure
   assert_output --partial "local-denylist"
+}
+
+# ---------------------------------------------------------------------------
+# Per-commit scan (G1b): a literal added in one pushed commit and removed in a
+# later commit of the SAME push never appears in `git diff <base> <local_sha>`
+# but still lands in history (GitHub secret-scanning alert #2, 2026-10-09).
+# ---------------------------------------------------------------------------
+
+# Helper: build an isolated repo and feed one stdin push ref to the gate.
+# $1 mode:
+#   new      add-then-remove commits, all-zeros remote sha (new branch)
+#   existing add-then-remove commits, remote sha = main's sha (existing remote branch)
+#   delete   same history, but a branch-deletion line (all-zeros LOCAL sha)
+#   bogus    existing remote sha, local sha that is not an object
+#   merge    new branch whose only secret lives in a MERGE commit's resolution
+#   unknownremote  add-then-remove commits, remote sha is NOT a local object (unfetched remote)
+#   noupstream     no main/master/origin at all; the secret stays in the final tree
+#   corrupt  existing remote; the first pushed commit's object is deleted (rev-list fails)
+#   noblob   existing remote; the pushed file's blob is deleted (per-commit diff fails)
+# $2 content written to .env.test (add-then-remove modes) or merge-added.txt (merge mode)
+# Sets $output and $status.
+_run_commit_range_push() {
+  local mode="$1"
+  local content="$2"
+
+  local tmproot="${TMPDIR:-/tmp}"
+  local tmpdir
+  tmpdir="$(mktemp -d "$tmproot/range-test.XXXXXX")"
+
+  local out rc=0
+  out=$(
+    cd "$tmpdir" || exit 1
+    git init -q
+    git config user.email "ci@example.com"
+    git config user.name "CI"
+    # noupstream: the only branch is 'trunk', so no origin/main|master or main|master exists.
+    [[ "$mode" == "noupstream" ]] && git symbolic-ref HEAD refs/heads/trunk
+    git commit -q --allow-empty -m "root"
+    if [[ "$mode" != "noupstream" ]]; then
+      git checkout -b main -q 2>/dev/null || true
+      git commit -q --allow-empty -m "main-base"
+    fi
+    local main_sha zeros local_sha remote_sha add_sha blob_sha
+    main_sha="$(git rev-parse HEAD)"
+    zeros="0000000000000000000000000000000000000000"
+    git checkout -b feature/range-test -q
+    if [[ "$mode" == "noupstream" ]]; then
+      printf '%s' "$content" > .env.test
+      git add .env.test
+      git commit -q -m "add"
+    elif [[ "$mode" == "merge" ]]; then
+      printf 'clean feature\n' > feat.txt
+      git add feat.txt
+      git commit -q -m "feature commit"
+      git checkout -q -b side main
+      printf 'clean side\n' > side.txt
+      git add side.txt
+      git commit -q -m "side commit"
+      git checkout -q feature/range-test
+      git merge -q --no-ff --no-commit side
+      printf '%s' "$content" > merge-added.txt
+      git add merge-added.txt
+      git commit -q -m "merge side"
+    else
+      printf '%s' "$content" > .env.test
+      git add .env.test
+      git commit -q -m "add"
+      add_sha="$(git rev-parse HEAD)"
+      blob_sha="$(git rev-parse HEAD:.env.test)"
+      git rm -q .env.test
+      git commit -q -m "remove"
+    fi
+    local_sha="$(git rev-parse HEAD)"
+    remote_sha="$zeros"
+    # Corrupt the throwaway repo (never anything outside $tmpdir): loose object files are
+    # <objects>/<2 hex>/<38 hex>.
+    if [[ "$mode" == "corrupt" ]]; then
+      rm -f ".git/objects/${add_sha:0:2}/${add_sha:2}"
+    elif [[ "$mode" == "noblob" ]]; then
+      rm -f ".git/objects/${blob_sha:0:2}/${blob_sha:2}"
+    fi
+    case "$mode" in
+      existing | corrupt | noblob) remote_sha="$main_sha" ;;
+      unknownremote) remote_sha="0123456789abcdef0123456789abcdef01234567" ;;
+      delete)
+        remote_sha="$main_sha"
+        local_sha="$zeros"
+        ;;
+      bogus)
+        remote_sha="$main_sha"
+        local_sha="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        ;;
+    esac
+    printf 'refs/heads/feature/range-test %s refs/heads/feature/range-test %s\n' \
+      "$local_sha" "$remote_sha" \
+      | CAST_PII_LOCAL_DENYLIST="/nonexistent/path/pii-denylist-local.txt" bash "$SCRIPT" origin 2>&1
+  ) || rc=$?
+
+  # Only remove the dir we created, and only if it is under the temp root.
+  if [[ -n "$tmpdir" && "$tmpdir" == "$tmproot"/range-test.* ]]; then
+    rm -rf "$tmpdir"
+  fi
+
+  output="$out"
+  status="$rc"
+}
+
+@test "per-commit scan: secret added then removed in one new-branch push blocks" {
+  local aws_key
+  aws_key="AKIA""AAAAAAAAAAAAAAAA"
+  _run_commit_range_push new "AWS_ACCESS_KEY_ID=$aws_key"
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "per-commit scan: secret added then removed in one existing-branch push blocks" {
+  local aws_key
+  aws_key="AKIA""AAAAAAAAAAAAAAAA"
+  _run_commit_range_push existing "AWS_ACCESS_KEY_ID=$aws_key"
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "per-commit scan: clean add-then-remove push still passes" {
+  _run_commit_range_push new "echo hello world"
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "per-commit scan: branch-deletion push (all-zeros local sha) exits 0" {
+  local aws_key
+  aws_key="AKIA""AAAAAAAAAAAAAAAA"
+  _run_commit_range_push delete "AWS_ACCESS_KEY_ID=$aws_key"
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "per-commit scan: local sha that is not a local commit fails closed" {
+  _run_commit_range_push bogus "echo hello world"
+  assert_failure
+  assert_output --partial "is not a local commit"
+  assert_output --partial "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+}
+
+@test "per-commit scan: remote sha unknown locally still scans the branch (secret blocks)" {
+  local aws_key
+  aws_key="AKIA""AAAAAAAAAAAAAAAA"
+  _run_commit_range_push unknownremote "AWS_ACCESS_KEY_ID=$aws_key"
+  assert_failure
+  assert_output --partial "aws-key"
+  refute_output --partial "cannot enumerate"
+}
+
+@test "per-commit scan: remote sha unknown locally with clean content passes" {
+  _run_commit_range_push unknownremote "echo hello world"
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "per-commit scan: no default branch and no remote-tracking ref: pushed commits are still scanned" {
+  local aws_key
+  aws_key="AKIA""AAAAAAAAAAAAAAAA"
+  _run_commit_range_push noupstream "AWS_ACCESS_KEY_ID=$aws_key"
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "per-commit scan: unreadable commit history in the range fails closed" {
+  _run_commit_range_push corrupt "echo hello world"
+  assert_failure
+  # The exact commit-enumeration message — the later merge-enumeration guard shares the
+  # "cannot enumerate" prefix and would otherwise mask a removed primary guard.
+  assert_output --partial "cannot enumerate pushed commits for"
+}
+
+@test "per-commit scan: a pushed commit whose patch cannot be read fails closed" {
+  _run_commit_range_push noblob "echo hello world"
+  assert_failure
+  assert_output --partial "cannot diff pushed commit"
+}
+
+@test "per-commit scan: secret that exists only in a merge commit blocks (merge diffed against its parents)" {
+  local aws_key
+  aws_key="AKIA""AAAAAAAAAAAAAAAA"
+  _run_commit_range_push merge "AWS_ACCESS_KEY_ID=$aws_key"
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+# ---------------------------------------------------------------------------
+# Security / review round 1 (G1b): evil merge, header spoofing, binary / -diff,
+# '++' content, remote-tracking range, orphan roots, deletion-only pushes, the
+# commit cap and the standalone fallback.
+# ---------------------------------------------------------------------------
+
+# A fake credential built from fragments (never a literal in this file).
+_fake_key() {
+  printf '%s%s' "AKIA" "AAAAAAAAAAAAAAAA"
+}
+
+# Helper: isolated repo on branch 'main' holding one base commit (r.txt). Calls
+# `<fn> [args...]` INSIDE the repo; the function makes commits and may set
+#   LOCAL_SHA   pushed sha            (default: HEAD after fn)
+#   REMOTE_SHA  remote sha on the ref (default: the base commit)
+#   SC_NOSTDIN  =1 -> run the gate with no stdin ref line (standalone mode)
+# then feeds one stdin ref to the gate. Sets $output and $status.
+_run_scenario() {
+  local fn="$1"
+  shift
+  local tmproot="${TMPDIR:-/tmp}"
+  local tmpdir
+  tmpdir="$(mktemp -d "$tmproot/scenario.XXXXXX")"
+
+  local out rc=0
+  out=$(
+    cd "$tmpdir" || exit 1
+    git init -q
+    git config user.email "ci@example.com"
+    git config user.name "CI"
+    git symbolic-ref HEAD refs/heads/main
+    printf 'x\n' > r.txt
+    git add r.txt
+    git commit -q -m "base"
+    REMOTE_SHA="$(git rev-parse HEAD)"
+    LOCAL_SHA=""
+    SC_NOSTDIN=0
+    # git passes the remote name as the hook's $1; the hook forwards it to the gate.
+    SC_REMOTE="${SC_REMOTE_OVERRIDE-origin}"
+    "$fn" "$@"
+    [[ -n "$LOCAL_SHA" ]] || LOCAL_SHA="$(git rev-parse HEAD)"
+    if [[ "$SC_NOSTDIN" == "1" ]]; then
+      CAST_PII_LOCAL_DENYLIST="/nonexistent/path/pii-denylist-local.txt" bash "$SCRIPT" < /dev/null 2>&1
+    else
+      printf 'refs/heads/main %s refs/heads/main %s\n' "$LOCAL_SHA" "$REMOTE_SHA" \
+        | CAST_PII_LOCAL_DENYLIST="${SC_DENYLIST_OVERRIDE:-/nonexistent/path/pii-denylist-local.txt}" bash "$SCRIPT" "$SC_REMOTE" 2>&1
+    fi
+  ) || rc=$?
+
+  if [[ -n "$tmpdir" && "$tmpdir" == "$tmproot"/scenario.* ]]; then
+    rm -rf "$tmpdir"
+  fi
+
+  output="$out"
+  status="$rc"
+}
+
+# --- scenario functions (run inside the throwaway repo) ---------------------
+
+# $1 path, $2 content: one commit adding that file.
+_sc_file() {
+  mkdir -p "$(dirname "$1")"
+  printf '%s' "$2" > "$1"
+  git add -A
+  git commit -q -m "add file"
+}
+
+# Secret added inside a MERGE commit, removed by the next commit.
+_sc_evilmerge() {
+  local key
+  key="$(_fake_key)"
+  git checkout -q -b side
+  printf 'side\n' > side.txt
+  git add side.txt
+  git commit -q -m "side"
+  git checkout -q main
+  printf 'main\n' > main.txt
+  git add main.txt
+  git commit -q -m "main work"
+  git merge -q --no-ff --no-commit side
+  printf 'k=%s\n' "$key" > evil.txt
+  git add evil.txt
+  git commit -q -m "merge side"
+  git rm -q evil.txt
+  git commit -q -m "cleanup"
+}
+
+# A non-ASCII (quoted-header) file with a secret next to an ALLOWLISTED file edit.
+# $1 = same (both in one commit) | cross (older commit adds the secret file, newer edits
+# the allowlisted file, so the allowlisted diff is scanned first).
+_sc_quoted() {
+  local key uni
+  key="$(_fake_key)"
+  uni=$'\303\251.txt'
+  mkdir -p config tests
+  printf '{}\n' > config/pii-patterns.json
+  printf 'x\n' > tests/pre-push-ci-check.bats
+  git add -A
+  git commit -q -m "allowlisted files"
+  if [[ "$1" == "same" ]]; then
+    printf '{"a":1}\n' > config/pii-patterns.json
+    printf 'k=%s\n' "$key" > "$uni"
+    git add -A
+    git commit -q -m "edit allowlisted + add unicode file"
+  else
+    printf 'k=%s\n' "$key" > "$uni"
+    git add -A
+    git commit -q -m "add unicode file"
+    printf 'y\n' > tests/pre-push-ci-check.bats
+    git add -A
+    git commit -q -m "edit allowlisted"
+  fi
+}
+
+# Binary / -diff content with a secret. $1 = nul | attr
+_sc_binary() {
+  local key
+  key="$(_fake_key)"
+  if [[ "$1" == "nul" ]]; then
+    printf '\000\001%s\n' "$key" > b.dat
+    git add -A
+    git commit -q -m "binary"
+  else
+    printf '*.lock -diff\n' > .gitattributes
+    git add -A
+    git commit -q -m "attrs"
+    printf 'k=%s\n' "$key" > x.lock
+    git add -A
+    git commit -q -m "lock"
+  fi
+}
+
+# Only a NON-origin remote-tracking ref exists; local main carries an unpushed secret
+# (added on main, removed by the next commit). $1 = feat (new branch off main tip, zeros
+# remote) | tip (new tag on the main tip, zeros remote).
+_sc_nonorigin() {
+  local key
+  key="$(_fake_key)"
+  git update-ref refs/remotes/backup/main "$REMOTE_SHA"
+  printf 'k=%s\n' "$key" > s.txt
+  git add -A
+  git commit -q -m "main secret"
+  git rm -q s.txt
+  git commit -q -m "main cleanup"
+  REMOTE_SHA="0000000000000000000000000000000000000000"
+  if [[ "$1" == "feat" ]]; then
+    git checkout -q -b feat
+    printf 'f\n' > f.txt
+    git add -A
+    git commit -q -m "feat"
+  fi
+}
+
+# Orphan (unrelated-history) branch: a root commit with a secret, removed by a later commit.
+# $1 = zeros (new branch; origin/main exists) | known (remote sha = main's tip, a local commit).
+_sc_orphan() {
+  local key main_tip
+  key="$(_fake_key)"
+  main_tip="$(git rev-parse HEAD)"
+  git update-ref refs/remotes/origin/main "$main_tip"
+  git checkout -q --orphan orph
+  git rm -rf -q .
+  printf 'k=%s\n' "$key" > s.txt
+  git add -A
+  git commit -q -m "orphan root with secret"
+  git rm -q s.txt
+  printf 'ok\n' > ok.txt
+  git add -A
+  git commit -q -m "orphan cleanup"
+  if [[ "$1" == "zeros" ]]; then
+    REMOTE_SHA="0000000000000000000000000000000000000000"
+  fi
+}
+
+# Deletion-only push where HEAD~1..HEAD carries a secret. $1 = zeros length.
+_sc_deletion() {
+  local key zeros
+  key="$(_fake_key)"
+  printf 'k=%s\n' "$key" > s.txt
+  git add -A
+  git commit -q -m "head commit carries a secret"
+  zeros="$(printf '%0*d' "$1" 0)"
+  LOCAL_SHA="$zeros"
+}
+
+# $1 = number of clean commits on top of the base.
+_sc_n_commits() {
+  local i
+  for i in $(seq 1 "$1"); do
+    printf 'c%s\n' "$i" > "f$i.txt"
+    git add -A
+    git commit -q -m "c$i"
+  done
+}
+
+# Standalone run (no stdin ref) whose HEAD patch cannot be read: the blob is deleted.
+_sc_standalone_unreadable() {
+  local blob
+  printf 'content\n' > u.txt
+  git add -A
+  git commit -q -m "unreadable"
+  blob="$(git rev-parse HEAD:u.txt)"
+  rm -f ".git/objects/${blob:0:2}/${blob:2}"
+  SC_NOSTDIN=1
+}
+
+# --- tests -------------------------------------------------------------------
+
+@test "per-commit scan: evil merge (secret added in the merge, removed next commit) blocks" {
+  _run_scenario _sc_evilmerge
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "header parse: ' b/' in a path cannot spoof the gate-script allowlist entry" {
+  local key
+  key="$(_fake_key)"
+  _run_scenario _sc_file "zz b/scripts/pre-push-ci-check.sh" "k=$key"
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "header parse: ' b/' in a path cannot spoof a plugin/ skip" {
+  local key
+  key="$(_fake_key)"
+  _run_scenario _sc_file "zz b/plugin/x.txt" "k=$key"
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "header parse: ' b/' in a path cannot spoof the pii-patterns allowlist entry" {
+  local key
+  key="$(_fake_key)"
+  _run_scenario _sc_file "zz b/config/pii-patterns.json" "k=$key"
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "header parse: a genuine allowlisted file is still skipped" {
+  local key
+  key="$(_fake_key)"
+  _run_scenario _sc_file "config/pii-patterns.json" "k=$key"
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "header parse: quoted-path header does not inherit the previous file's allowlist skip" {
+  _run_scenario _sc_quoted same
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "header parse: quoted-path header does not inherit an allowlist skip across commits" {
+  _run_scenario _sc_quoted cross
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "diff --text: a secret in a NUL-containing (binary) file blocks" {
+  _run_scenario _sc_binary nul
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "diff --text: a secret in a file with the -diff attribute blocks" {
+  _run_scenario _sc_binary attr
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "scan: added content starting with '++' is not mistaken for a +++ header" {
+  local key
+  key="$(_fake_key)"
+  _run_scenario _sc_file "p.md" "++$key"
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "range: unpushed main commits are scanned when the only remote is not origin (new branch)" {
+  _run_scenario _sc_nonorigin feat
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "range: unpushed main commits are scanned when the only remote is not origin (new tag)" {
+  _run_scenario _sc_nonorigin tip
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "range: orphan branch (new, origin/main exists) add-then-remove blocks" {
+  _run_scenario _sc_orphan zeros
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "range: orphan root commit with a removed secret blocks when the remote sha is main" {
+  _run_scenario _sc_orphan known
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "deletion-only push scans nothing and passes even if HEAD~1..HEAD holds a secret" {
+  _run_scenario _sc_deletion 40
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "deletion sentinel is any-length zeros (64-hex SHA-256 style)" {
+  _run_scenario _sc_deletion 64
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "commit cap: a push over CAST_PII_MAX_COMMITS fails closed" {
+  export CAST_PII_MAX_COMMITS=2
+  _run_scenario _sc_n_commits 3
+  assert_failure
+  assert_output --partial "scan cap"
+}
+
+@test "commit cap: a push at exactly the cap is scanned and passes" {
+  export CAST_PII_MAX_COMMITS=3
+  _run_scenario _sc_n_commits 3
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "commit cap: a non-numeric CAST_PII_MAX_COMMITS fails closed" {
+  export CAST_PII_MAX_COMMITS=lots
+  _run_scenario _sc_n_commits 1
+  assert_failure
+  assert_output --partial "must be a non-negative integer"
+}
+
+@test "standalone fallback: an unreadable HEAD patch fails closed" {
+  _run_scenario _sc_standalone_unreadable
+  assert_failure
+  assert_output --partial "cannot diff HEAD"
+}
+
+# ---------------------------------------------------------------------------
+# Round 2 (G1b): byte-wise scanning, pinned diffs, grep errors, remote scoping,
+# renames, standalone-outside-a-repo and cap parsing.
+# ---------------------------------------------------------------------------
+
+# $1 = invalid (an invalid UTF-8 byte BEFORE the secret on one line) | blob (binary bytes
+# around an embedded key).
+_sc_bytes() {
+  local key
+  key="$(_fake_key)"
+  if [[ "$1" == "invalid" ]]; then
+    printf '\377 k=%s\n' "$key" > bad.txt
+  else
+    printf '\377\376\000\200\201%s\377\n' "$key" > blob.bin
+  fi
+  git add -A
+  git commit -q -m "bytes"
+}
+
+# $1 = ui | diff: git colour forced ON in the repo config; the commit carries a secret.
+_sc_color() {
+  git config "color.$1" always
+  printf 'k=%s\n' "$(_fake_key)" > s.txt
+  git add -A
+  git commit -q -m "coloured"
+}
+
+# diff.noprefix=true drops the a/ b/ prefixes; the secret sits in an ALLOWLISTED file.
+_sc_noprefix() {
+  git config diff.noprefix true
+  mkdir -p config
+  printf 'k=%s\n' "$(_fake_key)" > config/pii-patterns.json
+  git add -A
+  git commit -q -m "allowlisted file under diff.noprefix"
+}
+
+# The secret commit is published ONLY on another remote's tracking ref (private/main).
+_sc_crossremote() {
+  printf 'k=%s\n' "$(_fake_key)" > s.txt
+  git add -A
+  git commit -q -m "secret on the private remote"
+  git update-ref refs/remotes/private/main HEAD
+  REMOTE_SHA="0000000000000000000000000000000000000000"
+}
+
+# A published secret (origin/main) with a clean feature commit on top; new branch.
+_sc_published() {
+  printf 'k=%s\n' "$(_fake_key)" > s.txt
+  git add -A
+  git commit -q -m "published secret"
+  git update-ref refs/remotes/origin/main HEAD
+  printf 'f\n' > f.txt
+  git add -A
+  git commit -q -m "feature"
+  REMOTE_SHA="0000000000000000000000000000000000000000"
+}
+
+# A secret added to an ALLOWLISTED path, then a pure rename out of it.
+_sc_rename() {
+  mkdir -p tests docs
+  printf 'k=%s\n' "$(_fake_key)" > tests/pre-push-ci-check.bats
+  git add -A
+  git commit -q -m "secret in an allowlisted path"
+  git mv tests/pre-push-ci-check.bats docs/leak.txt
+  git commit -q -m "rename out of the allowlisted path"
+}
+
+@test "locale: an invalid UTF-8 byte before a secret on the same line still blocks" {
+  # Needs a UTF-8 locale to bite (BSD grep stops at the bad byte); elsewhere it is a no-op.
+  export LC_ALL=en_US.UTF-8
+  _run_scenario _sc_bytes invalid
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "locale: a binary blob with an embedded key blocks" {
+  export LC_ALL=en_US.UTF-8
+  _run_scenario _sc_bytes blob
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "diff pinning: color.ui=always in the repo config still blocks" {
+  _run_scenario _sc_color ui
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "diff pinning: color.diff=always in the repo config still blocks" {
+  _run_scenario _sc_color diff
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "diff pinning: diff.noprefix=true does not make an allowlisted file false-positive" {
+  _run_scenario _sc_noprefix
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "diff pinning: a pure rename out of an allowlisted path cannot launder a secret" {
+  _run_scenario _sc_rename
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "range: a secret published only to ANOTHER remote still blocks a push to origin" {
+  export SC_REMOTE_OVERRIDE=origin
+  _run_scenario _sc_crossremote
+  assert_failure
+  assert_output --partial "aws-key"
+}
+
+@test "range: the same push to the remote that holds the commit passes (control)" {
+  export SC_REMOTE_OVERRIDE=private
+  _run_scenario _sc_crossremote
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "range: a hook argument that is not a plain remote name excludes nothing (over-scan)" {
+  local r
+  for r in "" "https://example.com/team/repo.git" "*" "or*"; do
+    export SC_REMOTE_OVERRIDE="$r"
+    _run_scenario _sc_published
+    assert_failure
+    assert_output --partial "aws-key"
+  done
+}
+
+@test "range: with the real remote name its published commits are excluded (control)" {
+  export SC_REMOTE_OVERRIDE=origin
+  _run_scenario _sc_published
+  assert_success
+  assert_output --partial "All checks passed"
+}
+
+@test "deny-list: an invalid regex fails closed instead of silently matching nothing" {
+  local dl
+  dl="$(mktemp)"
+  printf 'Users/(bob\n' > "$dl"
+  export SC_DENYLIST_OVERRIDE="$dl"
+  _run_scenario _sc_n_commits 1
+  rm -f "$dl"
+  assert_failure
+  assert_output --partial "invalid deny-list pattern"
+}
+
+# Create a directory holding a `grep` shim that exits 2 whenever any argument contains the
+# substring $1 and otherwise execs the real grep. Prints the directory (prefix it to PATH).
+_make_grep_shim() {
+  local shim real
+  shim="$(mktemp -d "${TMPDIR:-/tmp}/grepshim.XXXXXX")"
+  real="$(command -v grep)"
+  printf '#!/bin/bash\nfor a in "$@"; do case "$a" in *%s*) exit 2 ;; esac; done\nexec %s "$@"\n' "$1" "$real" > "$shim/grep"
+  chmod +x "$shim/grep"
+  printf '%s' "$shim"
+}
+
+_rm_grep_shim() {
+  if [[ "$1" == "${TMPDIR:-/tmp}"/grepshim.* ]]; then
+    rm -rf "$1"
+  fi
+}
+
+# One added line that is a candidate email (so the exclusion grep runs). Built from fragments.
+_sc_email_line() {
+  printf 'contact: %s%s%s\n' "who" "@" "acme-test.invalid" > mail.txt
+  git add -A
+  git commit -q -m "email line"
+}
+
+@test "scan: a grep that exits 2 is a visible scan-error failure, not a silent pass" {
+  local shim
+  shim="$(_make_grep_shim AKIA)"
+  export PATH="$shim:$PATH"
+  _run_scenario _sc_n_commits 1
+  _rm_grep_shim "$shim"
+  assert_failure
+  assert_output --partial "[scan-error] aws-key: grep rc=2"
+}
+
+@test "scan: an exclusion grep that exits 2 is a visible scan-error failure too" {
+  local shim
+  shim="$(_make_grep_shim noreply)"
+  export PATH="$shim:$PATH"
+  _run_scenario _sc_email_line
+  _rm_grep_shim "$shim"
+  assert_failure
+  assert_output --partial "[scan-error] email: exclusion grep rc=2"
+}
+
+@test "standalone run outside a git repository fails closed" {
+  local d out rc=0
+  d="$(mktemp -d "${TMPDIR:-/tmp}/norepo.XXXXXX")"
+  out=$(cd "$d" && env -u CAST_REPO_ROOT CAST_PII_LOCAL_DENYLIST="/nonexistent/path/pii-denylist-local.txt" bash "$SCRIPT" < /dev/null 2>&1) || rc=$?
+  if [[ "$d" == "${TMPDIR:-/tmp}"/norepo.* ]]; then
+    rm -rf "$d"
+  fi
+  output="$out"
+  status="$rc"
+  assert_failure
+  assert_output --partial "not a git repository"
+}
+
+@test "commit cap: a leading-zero value is decimal (08 is 8 and still trips the cap)" {
+  # Without 10#, "08" is an invalid octal: `(( n > 08 ))` errors, which reads as FALSE, so the
+  # cap would silently never trip. 9 commits must exceed a cap of 08.
+  export CAST_PII_MAX_COMMITS=08
+  _run_scenario _sc_n_commits 9
+  assert_failure
+  assert_output --partial "scan cap"
+}
+
+@test "commit cap: a leading-zero value within the cap scans cleanly (no arithmetic error)" {
+  export CAST_PII_MAX_COMMITS=08
+  _run_scenario _sc_n_commits 3
+  assert_success
+  refute_output --partial "value too great"
+  assert_output --partial "All checks passed"
+}
+
+@test "commit cap: a value of more than 9 digits fails closed" {
+  export CAST_PII_MAX_COMMITS=1234567890
+  _run_scenario _sc_n_commits 1
+  assert_failure
+  assert_output --partial "must be a non-negative integer"
 }

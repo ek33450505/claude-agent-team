@@ -2,10 +2,46 @@
 # pre-push-ci-check.sh — CI safety checks before pushing
 # Catches the recurring failure classes documented in the 2026-04-16 insights report.
 # Extended (2026-06-01) with PII / secret scanning of the push diff.
-# New-branch pushes scan the NET diff vs the upstream default branch's merge-base
-# (audit §3.8.E) — NOT the whole repo (which previously hung the gate). KNOWN LIMITATION:
-# a secret introduced and then removed across commits within the SAME push lands in history
-# without appearing in the net diff; full-history coverage would need `git log --patch`.
+# Pushes are scanned PER COMMIT (Check 4): every pushed commit's own patch, once per parent
+# for a merge (defence in depth: with already-published ancestors excluded, first-parent alone
+# is detection-equivalent) and against the empty tree for a root, because GitHub secret
+# scanning inspects every commit — a secret added and removed within the SAME push lands in
+# history yet never appears in the net diff (alert #2, 2026-10-09).
+# Range: <remote>..<local> when the remote sha is a local commit; otherwise (new branch, or an
+# unfetched / non-fast-forward remote sha) every pushed commit NOT on the remote-tracking refs
+# of THE REMOTE BEING PUSHED TO (`rev-list <local> --not --remotes=<name>`; the hook forwards
+# git's remote name as $1). No usable name (empty, URL, glob) excludes nothing: over-scan,
+# bounded by CAST_PII_MAX_COMMITS (default 500), which fails closed with the escape-hatch
+# hint — the variable only tunes the cap; it cannot skip the scan.
+# FAILS CLOSED: a pushed sha that is not a local commit, any git failure while enumerating or
+# diffing (no `|| true` on a git call whose output is scanned), a diff with text but no
+# `diff --git` header, a grep that errors (a `[scan-error]` hit), an invalid deny-list regex,
+# a non-numeric cap, and running outside a git repo. Every diff is pinned (--text --no-color
+# --no-ext-diff --no-textconv --no-renames, a/ b/ prefixes) and every Check 4 grep runs under
+# LC_ALL=C (Checks 1 and 2 run earlier, under the caller's locale), so repo/user config and
+# invalid-UTF-8 bytes cannot blind the scan. The
+# standalone HEAD~1..HEAD fallback runs only when NO stdin ref line was read, so a
+# deletion-only push scans nothing and passes. The allowlist applies only to an exactly
+# parsed `diff --git a/P b/P` header; an unparsed header is scanned, never skipped.
+# RESIDUALS (not covered):
+#   - commit and annotated-tag MESSAGES are not scanned;
+#   - file-NAME lines (`diff --git`, `---`/`+++`) are not scanned, only added content;
+#   - SHA-256 repos fail closed on root commits (the empty-tree literal is SHA-1);
+#   - a remote-tracking ref AHEAD of the remote's real state (a server-side rewind or
+#     delete, or a hand-set ref) makes `--remotes=<name>` exclude commits that are not
+#     published: that can UNDER-scan (a stale ref behind the remote only over-scans);
+#   - `git remote set-url` to another host without refetching leaves the tracking refs
+#     ahead of the new remote (same family as the rewound-ref residual above);
+#   - nested remote names: `--remotes=<name>` globs `refs/remotes/<name>/*`, so a push to
+#     `foo` also excludes commits published only to a remote named `foo/bar` (under-scans
+#     only when remote names nest);
+#   - plugin/ is excluded from every Check 4 diff (a generated mirror, drift-gated by CI);
+#   - the `diff --git` sanity check is aggregate (any header anywhere satisfies it): a
+#     tripwire that is unreachable with the pinned flags, kept as defence in depth;
+#   - merging an already-published branch (main) into a feature branch re-scans that
+#     published content, so it can false-positive;
+#   - the per-line grep loop is slow, quadratic under /bin/bash 3.2 (pre-existing; hence the
+#     cap; follow-up G1c).
 set -euo pipefail
 
 # Hardened git (cast_git_safe): hook-run git must not honour repo-local exec config
@@ -151,6 +187,18 @@ echo ""
 echo "=== Check 4: PII and secret scan ==="
 # PII_ALLOWLIST defined above — shared with Check 1.
 
+# Scan BYTE-WISE. BSD grep (macOS) stops matching at an invalid multibyte sequence under a
+# UTF-8 locale, so `\xff k=AKIA…` or a binary blob would PASS the scan. Exported before any
+# scan grep runs (Check 1 above is a path-portability check, not a secret gate, and keeps the
+# caller's locale).
+export LC_ALL=C
+
+# This gate reads a git repo. Outside one, "nothing to scan" must not read as "clean".
+if ! cast_git_safe "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  echo "ERROR: $REPO_ROOT is not a git repository — PII gate fails closed" >&2
+  exit 1
+fi
+
 # Detect PCRE support; fall back to ERE if unavailable.
 if echo "" | grep -qP "." 2>/dev/null; then
   GREP_FLAGS="-P"
@@ -158,41 +206,121 @@ else
   GREP_FLAGS="-E"
 fi
 
-# Build the diff text from stdin (push refs) or fall back to HEAD~1..HEAD.
+# Build the diff text from stdin (push refs); the HEAD~1..HEAD fallback runs only when
+# no ref line was read at all.
 # git pre-push hook stdin format: "<local-ref> <local-sha> <remote-ref> <remote-sha>"
+# SHA-1 empty tree; a SHA-256 repo has no such object, so root-commit diffs fail CLOSED there.
 EMPTY_TREE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 PUSH_DIFF=""
-# Consume stdin; may be empty when the script is run standalone.
+# The remote being pushed to (git passes its name as the hook's $1; the hook forwards it).
+_pii_remote="${1:-}"
+
+# EVERY Check 4 diff is pinned so repo/user config cannot change what the parser sees:
+#   --text           binary files and `-diff` attributes would otherwise yield no added lines
+#   --no-color       color.ui/color.diff=always puts ANSI codes before `diff --git` and `@@`
+#   --no-ext-diff --no-textconv   no repo-configured drivers
+#   --no-renames     a pure rename shows no hunk; delete+add forces the full content to be scanned
+#   --src-prefix=a/ --dst-prefix=b/   diff.noprefix / diff.mnemonicPrefix change header shape
+_DIFF_FLAGS=(--text --no-color --no-ext-diff --no-textconv --no-renames --src-prefix=a/ --dst-prefix=b/)
+
+# Append the pinned `git diff <parent> <commit>` for EVERY parent of <commit> ($1; its parents
+# follow as $2..). A root commit (no parents) is diffed against the empty tree. Diffing each
+# parent of a merge is defence in depth: under the premise that parents outside the pushed
+# range are already published, first-parent alone is detection-equivalent. plugin/ is
+# excluded: it is a generated build artifact (mirror of scanned source) that is drift-gated by
+# CI; including it caused a ~43k-line diff that made the _pii_scan loop hang at 99% CPU for
+# 18+ min (same hang class as audit §3.8.D/E). _is_allowed() keeps a plugin/* skip as
+# belt-and-suspenders. FAILS CLOSED on any git error.
+_append_commit_diffs() {
+  local c="$1" p d
+  shift
+  if [[ $# -eq 0 ]]; then
+    set -- "$EMPTY_TREE"
+  fi
+  for p in "$@"; do
+    if ! d=$(cast_git_safe "$REPO_ROOT" diff "${_DIFF_FLAGS[@]}" "$p" "$c" -- . ':(exclude)plugin/' 2>/dev/null); then
+      echo "ERROR: cannot diff pushed commit $c against $p — PII gate fails closed" >&2
+      exit 1
+    fi
+    PUSH_DIFF+="$d"$'\n'
+  done
+}
+
+_pii_cap="${CAST_PII_MAX_COMMITS:-500}"
+if ! [[ "$_pii_cap" =~ ^[0-9]{1,9}$ ]]; then
+  echo "ERROR: CAST_PII_MAX_COMMITS must be a non-negative integer of at most 9 digits ('$_pii_cap') — PII gate fails closed" >&2
+  exit 1
+fi
+_pii_cap=$((10#$_pii_cap)) # decimal: "08" / "0500" are not octal
+_saw_ref=false
 while IFS=' ' read -r _local_ref local_sha _remote_ref remote_sha || [[ -n "${local_sha:-}" ]]; do
   [[ -z "${local_sha:-}" ]] && continue
-  if [[ "${remote_sha:-}" == "0000000000000000000000000000000000000000" ]] || [[ -z "${remote_sha:-}" ]]; then
-    # New branch: the remote ref does not exist yet. Diffing against the empty tree
-    # would scan the ENTIRE repo (~540 files) and hang the gate (audit §3.8.D/E).
-    # Scan only what this branch adds over the shared upstream history: diff against
-    # the merge-base with the default branch.
-    base=""
-    for _ref in origin/main origin/master main master; do
-      cast_git_safe "$REPO_ROOT" rev-parse --verify --quiet "$_ref" >/dev/null 2>&1 || continue
-      base="$(cast_git_safe "$REPO_ROOT" merge-base "$_ref" "$local_sha" 2>/dev/null || true)"
-      [[ -n "$base" ]] && break
-    done
-    # Genuinely new repo with no upstream default branch → fall back to full history.
-    [[ -z "$base" ]] && base="$EMPTY_TREE"
-  else
-    base="$remote_sha"
+  _saw_ref=true
+  # Branch-deletion push (local sha all zeros, any length): nothing is pushed, nothing to scan.
+  [[ "$local_sha" =~ ^0+$ ]] && continue
+  # FAIL CLOSED on an unusable pushed sha: it must resolve to a commit in this repo.
+  if ! cast_git_safe "$REPO_ROOT" rev-parse --verify --quiet "${local_sha}^{commit}" >/dev/null 2>&1; then
+    echo "ERROR: pushed sha $local_sha is not a local commit — PII gate fails closed" >&2
+    exit 1
   fi
-  # Exclude plugin/ from the diff: it is a generated build artifact (mirror of scanned
-  # source) that is drift-gated by CI. Including it caused a ~43k-line diff that made
-  # _pii_scan loop hang at 99% CPU for 18+ min — same hang class as the §3.8.D/E
-  # empty-tree note above. plugin/ is excluded here; _is_allowed() retains its
-  # plugin/* skip as a defensive belt-and-suspenders guard.
-  PUSH_DIFF+=$(cast_git_safe "$REPO_ROOT" diff "$base" "$local_sha" -- . ':(exclude)plugin/' 2>/dev/null || true)
-  PUSH_DIFF+=$'\n'
+  # Range selection. Remote sha is a local commit: scan <remote>..<local>. Otherwise (new
+  # branch: all zeros / empty; or a remote sha we do not have: non-fast-forward, unfetched
+  # remote) there is no usable range start: scan every pushed commit that is NOT on the
+  # remote-tracking refs of THIS remote (--remotes=<name>; a commit published only to some
+  # OTHER remote is not published here). A hook argument that is not a plain remote name
+  # (empty, a URL, a glob) excludes nothing: over-scan, bounded by the cap. Never a
+  # merge-base guess that can fail open.
+  if [[ -n "${remote_sha:-}" ]] && ! [[ "$remote_sha" =~ ^0+$ ]] \
+    && cast_git_safe "$REPO_ROOT" rev-parse --verify --quiet "${remote_sha}^{commit}" >/dev/null 2>&1; then
+    _revargs=("$remote_sha..$local_sha")
+  elif [[ "$_pii_remote" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    _revargs=("$local_sha" --not "--remotes=$_pii_remote")
+  else
+    _revargs=("$local_sha")
+  fi
+  # One rev-list: every pushed commit (merges included) with its parents, "<sha> <p1> [<p2>…]".
+  # Each commit's OWN patch is scanned, not the net diff: GitHub secret scanning inspects every
+  # commit, so a literal added in one commit and removed in a later one of the same push is
+  # invisible to `diff base local_sha` yet still lands in history (alert #2, 2026-10-09).
+  if ! _lines=$(cast_git_safe "$REPO_ROOT" rev-list --parents "${_revargs[@]}" 2>/dev/null); then
+    echo "ERROR: cannot enumerate pushed commits for ${_local_ref:-$local_sha} — PII gate fails closed" >&2
+    exit 1
+  fi
+  _n=0
+  if [[ -n "$_lines" ]]; then
+    _nl="${_lines//[!$'\n']/}"
+    _n=$((${#_nl} + 1))
+  fi
+  if ((_n > _pii_cap)); then
+    echo "ERROR: $_n pushed commits exceed the per-commit scan cap — run gitleaks, then push with CAST_SKIP_PII_CHECK=1 if clean" >&2
+    exit 1
+  fi
+  while IFS= read -r _line; do
+    [[ -z "$_line" ]] && continue
+    read -r -a _fields <<<"$_line"
+    _append_commit_diffs "${_fields[@]}"
+  done <<<"$_lines"
 done
 
-# Standalone fallback (called directly, not from a hook with stdin refs).
-if [[ -z "${PUSH_DIFF// }" ]]; then
-  PUSH_DIFF=$(cast_git_safe "$REPO_ROOT" diff HEAD~1 HEAD -- . ':(exclude)plugin/' 2>/dev/null || cast_git_safe "$REPO_ROOT" diff "$EMPTY_TREE" HEAD -- . ':(exclude)plugin/' 2>/dev/null || true)
+# Standalone fallback: called directly (not from a hook), so NO ref line was read. A
+# deletion-only push read a line and correctly scans nothing. FAILS CLOSED on a git error;
+# a repo with no commits has nothing to scan.
+if [[ "$_saw_ref" != "true" ]] && cast_git_safe "$REPO_ROOT" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+  if PUSH_DIFF=$(cast_git_safe "$REPO_ROOT" diff "${_DIFF_FLAGS[@]}" HEAD~1 HEAD -- . ':(exclude)plugin/' 2>/dev/null); then
+    :
+  elif PUSH_DIFF=$(cast_git_safe "$REPO_ROOT" diff "${_DIFF_FLAGS[@]}" "$EMPTY_TREE" HEAD -- . ':(exclude)plugin/' 2>/dev/null); then
+    :
+  else
+    echo "ERROR: cannot diff HEAD for the standalone scan — PII gate fails closed" >&2
+    exit 1
+  fi
+fi
+
+# Sanity: a diff that carries text but no `diff --git` header is not in the shape the parser
+# understands (it would silently scan nothing). FAIL CLOSED.
+if [[ -n "${PUSH_DIFF//[[:space:]]/}" && $'\n'"$PUSH_DIFF" != *$'\n'"diff --git "* ]]; then
+  echo "ERROR: scanned diff text has no 'diff --git' header (unexpected diff format) — PII gate fails closed" >&2
+  exit 1
 fi
 
 # ---- Helpers ----------------------------------------------------------------
@@ -227,15 +355,26 @@ _pii_scan() {
   local in_hunk=false
 
   while IFS= read -r line; do
-    # Diff file header
-    if [[ "$line" =~ ^diff\ --git\ a/(.+)\ b/(.+)$ ]]; then
-      current_file="${BASH_REMATCH[2]}"
-      if _is_allowed "$current_file"; then
-        skip=true
-      else
-        skip=false
-      fi
+    # Diff file header. EVERY header resets the per-file state, so a header that cannot be
+    # parsed never inherits the previous file's allowlist skip. The allowlist applies only
+    # when the header is exactly `diff --git a/P b/P` (both halves equal, checked by length
+    # and string equality — a path containing " b/" cannot spoof an allowlisted name).
+    # Anything else (quoted/non-ASCII path, rename, ambiguous) keeps the raw header text as
+    # its name, is never allowlisted, and has its added lines scanned.
+    if [[ "$line" == "diff --git "* ]]; then
+      local rest="${line#diff --git }" half
+      current_file="$rest"
+      skip=false
       in_hunk=false
+      half=$(((${#rest} - 5) / 2))
+      if ((half > 0 && 2 * half + 5 == ${#rest})) \
+        && [[ "${rest:0:2}" == "a/" && "${rest:$((half + 2)):3}" == " b/" \
+        && "${rest:2:$half}" == "${rest:$((half + 5)):$half}" ]]; then
+        current_file="${rest:2:$half}"
+        if _is_allowed "$current_file"; then
+          skip=true
+        fi
+      fi
       continue
     fi
     # Hunk header — reset in_hunk flag (we are in a hunk now)
@@ -243,17 +382,35 @@ _pii_scan() {
       in_hunk=true
       continue
     fi
-    # Only inspect added lines inside a hunk (skip context and removed lines)
-    if [[ "$in_hunk" == "true" && "$skip" == "false" && "$line" =~ ^\+ && ! "$line" =~ ^\+\+\+ ]]; then
-      local content="${line:1}"
+    # Only inspect added lines inside a hunk (skip context and removed lines). No `+++`
+    # exclusion: the `+++ b/file` header only occurs BEFORE the first @@ (in_hunk=false), so
+    # inside a hunk a line starting `+++` is real added content (e.g. a `++secret` line).
+    if [[ "$in_hunk" == "true" && "$skip" == "false" && "$line" =~ ^\+ ]]; then
+      local content="${line:1}" rc=0
+      # grep status: 0 = match, 1 = no match, anything else (2 = bad pattern / I/O) is a SCAN
+      # ERROR and must not read as "no match". Here-string, not a pipe: with pipefail a
+      # SIGPIPE'd `echo` on a long line could mask a match. -e keeps a '-'-leading pattern a
+      # pattern. LC_ALL=C is exported for the whole of Check 4.
       # shellcheck disable=SC2086
-      if echo "$content" | grep -q $GREP_FLAGS $extra_flags "$pattern" 2>/dev/null; then
-        # Apply exclusion filter if provided
-        if [[ -n "$exclusion" ]] && echo "$content" | grep -qE "$exclusion" 2>/dev/null; then
-          continue
-        fi
-        echo "  [$label] $current_file: $content"
+      grep -q $GREP_FLAGS $extra_flags -e "$pattern" <<<"$content" 2>/dev/null || rc=$?
+      if [[ "$rc" -eq 1 ]]; then
+        continue
+      elif [[ "$rc" -ne 0 ]]; then
+        echo "  [scan-error] $label: grep rc=$rc"
+        return 0
       fi
+      # Apply exclusion filter if provided
+      if [[ -n "$exclusion" ]]; then
+        rc=0
+        grep -qE -e "$exclusion" <<<"$content" 2>/dev/null || rc=$?
+        if [[ "$rc" -eq 0 ]]; then
+          continue
+        elif [[ "$rc" -ne 1 ]]; then
+          echo "  [scan-error] $label: exclusion grep rc=$rc"
+          return 0
+        fi
+      fi
+      echo "  [$label] $current_file: $content"
     fi
   done <<< "$PUSH_DIFF"
 }
@@ -284,14 +441,32 @@ PII_HITS+=$(_pii_scan "hardcoded-path" '/Users/[A-Za-z0-9._-]+' "" "$_PATH_EXCLU
 # ~/.claude/config/pii-denylist-local.txt. If absent, prints a NOTE and continues.
 _DENYLIST_FILE="${CAST_PII_LOCAL_DENYLIST:-$HOME/.claude/config/pii-denylist-local.txt}"
 if [[ -f "$_DENYLIST_FILE" ]]; then
+  # Pass 1: collect AND validate every pattern up front. An invalid regex makes grep exit 2,
+  # which would otherwise read as "no match" and silently disable that pattern: fail closed.
+  # (The pattern text is not echoed: deny-list entries are the identifiers being protected.)
+  _deny_patterns=""
+  _deny_lineno=0
   while IFS= read -r _deny_pattern || [[ -n "$_deny_pattern" ]]; do
+    _deny_lineno=$((_deny_lineno + 1))
     # Trim leading/trailing whitespace so patterns with extra spaces don't match literally
     _deny_pattern=$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' <<< "$_deny_pattern")
     # Skip blank/whitespace-only lines and comments
     [[ -z "$_deny_pattern" ]] && continue
     [[ "$_deny_pattern" =~ ^# ]] && continue
-    PII_HITS+=$(_pii_scan_ci "local-denylist" "$_deny_pattern" || true)
+    _deny_rc=0
+    # shellcheck disable=SC2086
+    grep -q $GREP_FLAGS -i -e "$_deny_pattern" </dev/null 2>/dev/null || _deny_rc=$?
+    if [[ "$_deny_rc" -ge 2 ]]; then
+      echo "ERROR: invalid deny-list pattern at line $_deny_lineno of $_DENYLIST_FILE (grep rc=$_deny_rc) — PII gate fails closed" >&2
+      exit 1
+    fi
+    _deny_patterns+="$_deny_pattern"$'\n'
   done < "$_DENYLIST_FILE"
+  # Pass 2: scan.
+  while IFS= read -r _deny_pattern; do
+    [[ -z "$_deny_pattern" ]] && continue
+    PII_HITS+=$(_pii_scan_ci "local-denylist" "$_deny_pattern" || true)
+  done <<< "$_deny_patterns"
 else
   echo "  NOTE: No local deny-list found at $_DENYLIST_FILE — work/personal patterns are not being scanned."
   echo "        Copy config/pii-denylist-local.txt.template to that path and add your identifiers."

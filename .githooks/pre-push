@@ -138,7 +138,7 @@ fi
 if [ "${CAST_SKIP_PII_CHECK:-0}" != "1" ]; then
   echo "[CAST pre-push] Running PII/secret gate..."
   _PII_SCRIPT="$(_cast_installed pre-push-ci-check.sh)" || exit 1
-  if ! printf '%s' "$_PUSH_STDIN" | bash "$_PII_SCRIPT"; then
+  if ! printf '%s' "$_PUSH_STDIN" | bash "$_PII_SCRIPT" "${1:-}"; then
     echo "ERROR: PII/secret check failed. Fix the issues above and try again." >&2
     echo "To skip this gate, set: CAST_SKIP_PII_CHECK=1 git push" >&2
     exit 1
