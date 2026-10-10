@@ -530,14 +530,17 @@ _run_commit_range_push() {
         exit 97
       fi
     fi
+    # Arms use the leading-paren form `(pattern)`: bash 3.2 (macOS /bin/bash, which runs bats-macos)
+    # ends a `$( )` at the first bare `pattern)` of a case arm, so a bare arm inside this command
+    # substitution is a syntax error there and the whole file's setup_file fails (CI 2026-10-09).
     case "$mode" in
-      existing | corrupt | noblob) remote_sha="$main_sha" ;;
-      unknownremote) remote_sha="0123456789abcdef0123456789abcdef01234567" ;;
-      delete)
+      (existing | corrupt | noblob) remote_sha="$main_sha" ;;
+      (unknownremote) remote_sha="0123456789abcdef0123456789abcdef01234567" ;;
+      (delete)
         remote_sha="$main_sha"
         local_sha="$zeros"
         ;;
-      bogus)
+      (bogus)
         remote_sha="$main_sha"
         local_sha="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
         ;;
