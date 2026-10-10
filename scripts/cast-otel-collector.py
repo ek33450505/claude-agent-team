@@ -45,6 +45,7 @@ Usage:
 
 import sys
 import os
+import contextlib
 import json
 import gzip
 import sqlite3
@@ -114,7 +115,7 @@ def _db_execute(sql: str, params: tuple) -> bool:
     db_path = os.environ.get('CAST_DB_PATH', str(Path.home() / '.claude' / 'cast.db'))
     try:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(db_path, timeout=5) as conn:
+        with contextlib.closing(sqlite3.connect(db_path, timeout=5)) as conn, conn:
             conn.execute('PRAGMA journal_mode=WAL;')
             conn.execute(sql, params)
             conn.commit()

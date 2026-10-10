@@ -17,6 +17,7 @@ Per-source failures are logged to stderr; one bad source does not abort the rest
 """
 
 import argparse
+import contextlib
 import datetime
 import glob
 import importlib.util
@@ -413,7 +414,7 @@ def _ensure_ref_map() -> bool:
     (one transaction) rather than patched. Returns False only if the map could not be made usable.
     """
     try:
-        with cast_db._connect() as conn:
+        with contextlib.closing(cast_db._connect()) as conn, conn:
             for ddl in _REF_MAP_DDL:
                 conn.execute(ddl)
             n_fts = conn.execute("SELECT count(*) FROM record_fts").fetchone()[0]
@@ -482,7 +483,7 @@ def _upsert_row(kind: str, ref_id: str, ts: str, title: str, body: str,
         _do(conn)
         return
     try:
-        with cast_db._connect() as own:
+        with contextlib.closing(cast_db._connect()) as own, own:
             _do(own)
             own.commit()
     except sqlite3.Error as exc:
@@ -629,7 +630,7 @@ def _index_file_source(src: Dict[str, Any], rebuild: bool) -> int:
             # All chunk ref_ids are "<path>#<int>"; '#'..'#\U0010ffff' bounds every suffix.
             # Purge + re-insert share ONE transaction (and resolve rowids via record_fts_ref,
             # not a record_fts scan): a crash can never leave a file half-purged or the map drifted.
-            with cast_db._connect() as conn:
+            with contextlib.closing(cast_db._connect()) as conn, conn:
                 _purge_range(conn, kind, path + '#', path + '#\U0010ffff')
                 for i, chunk_body in enumerate(chunks):
                     if not chunk_body.strip():
@@ -766,7 +767,7 @@ def main() -> int:
         # _index_file_source already scoped itself exactly this way; this one never did.
         # record_fts and its record_fts_ref map are cleared together, in one transaction.
         try:
-            with cast_db._connect() as conn:
+            with contextlib.closing(cast_db._connect()) as conn, conn:
                 if args.kind:
                     conn.execute("DELETE FROM record_fts WHERE kind = ?", (args.kind,))
                     conn.execute("DELETE FROM record_fts_ref WHERE kind = ?", (args.kind,))

@@ -355,6 +355,105 @@ _lint_utcnow || {
   exit 1
 }
 
+# Lint 11: ruff — mirror CI's `ruff check scripts/*.py` (security-scan.yml) on STAGED scripts/*.py
+# only, so an E702-style violation is caught here instead of in CI. ruff is a developer tool, not
+# a CAST dependency: if it is not installed, print ONE warning and continue (never block on a
+# missing tool). Real ruff findings block. CI pins ruff 0.15.14; the repo's ruff.toml supplies the
+# rules. Hardening (security review):
+#   --no-cache  keeps ruff from writing .ruff_cache into the repo.
+#   --no-fix    a repo ruff.toml with `fix = true` would otherwise make ruff REWRITE files
+#               (probed: it followed a swapped-in dir symlink and rewrote a file outside the repo).
+#   real-path   each file's physical path must be strictly inside <repo>/scripts/; anything else
+#               (symlinked parent dir, leaf symlink, missing file) is skipped with a WARN.
+#   -z + tmpfile  NUL-delimited names (core.quotePath would quote non-ASCII/"/\ names and they
+#               would be silently skipped); the git call is captured to a file so a git failure
+#               fails CLOSED instead of vanishing inside a process substitution.
+#   config WARN a staged ruff.toml/.ruff.toml/pyproject.toml (at ANY depth: ruff discovers the
+#               nearest config, so scripts/ruff.toml can silence rules) changes what this lint
+#               (and CI) accept.
+#   ACMRT       a staged rename-with-edits (R092 old.py -> new.py) is linted: --name-only prints
+#               the NEW path; CI's `ruff check scripts/*.py` would see it. T (typechange, e.g.
+#               symlink -> regular file) is included so it is not silently dropped.
+#   Known limit: a git clean filter (.gitattributes filter=) on scripts/*.py would make every staged file read as dirty -> blocks (fail-closed); the repo has none.
+#   index==tree ruff reads the WORKING-TREE bytes, but the INDEX bytes are what gets recorded.
+#               Any staged file with unstaged changes is refused (fail-closed) so the linted
+#               bytes are the recorded bytes. Checked only when ruff is present, so a missing
+#               tool never blocks. (show/cat-file are not on cast_git_safe's allowlist;
+#               diff --quiet is.)
+_lint_ruff() {
+  local staged=() dirty=() f tmp root_real dir dir_real real cfg_changed=0 rc
+  tmp="$(mktemp "${TMPDIR:-/tmp}/cast-lint-ruff.XXXXXX")" || {
+    echo "ERROR [lint-ruff]: mktemp failed; cannot enumerate staged files." >&2
+    return 1
+  }
+  # F3: a staged ruff config change is reviewer-relevant. Warn, never block.
+  if ! _git diff --cached --name-only -z --diff-filter=ACMRD -- ':(glob)**/ruff.toml' ':(glob)**/.ruff.toml' ':(glob)**/pyproject.toml' >"$tmp"; then
+    echo "ERROR [lint-ruff]: git diff (ruff config check) failed; refusing to continue." >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  [[ -s "$tmp" ]] && cfg_changed=1
+  if [[ "$cfg_changed" -eq 1 ]]; then
+    echo "[CAST pre-commit] WARN: ruff config (ruff.toml / .ruff.toml / pyproject.toml) changed in this commit - the reviewer must check it; it alters what ruff (here and in CI) accepts." >&2
+  fi
+  if ! _git diff --cached --name-only -z --diff-filter=ACMRT -- 'scripts/*.py' >"$tmp"; then
+    echo "ERROR [lint-ruff]: git diff (staged scripts/*.py) failed; refusing to continue." >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  root_real="$(cd -P -- "$REPO_ROOT" 2>/dev/null && pwd -P)" || root_real=""
+  if [[ -z "$root_real" ]]; then
+    echo "ERROR [lint-ruff]: cannot resolve the repo root's physical path." >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  while IFS= read -r -d '' f; do
+    [[ -n "$f" ]] || continue
+    dir_real=""
+    if [[ "$f" == */* ]]; then dir="${f%/*}"; else dir="."; fi
+    dir_real="$(cd -P -- "$dir" 2>/dev/null && pwd -P)" || dir_real=""
+    real="$dir_real/${f##*/}"
+    if [[ -f "$f" && ! -L "$f" && -n "$dir_real" && "$real" == "$root_real/scripts/"* ]]; then
+      staged+=("$f")
+    else
+      printf '[CAST pre-commit] WARN: ruff lint skipped %q (not a regular file strictly inside %s/scripts/ - symlink, missing, or outside the repo)\n' "$f" "$root_real" >&2
+    fi
+  done <"$tmp"
+  rm -f "$tmp"
+  [[ "${#staged[@]}" -gt 0 ]] || return 0
+  if ! command -v ruff >/dev/null 2>&1; then
+    echo "[CAST pre-commit] WARN: ruff not installed — staged scripts/*.py not linted (CI runs ruff 0.15.14; pip install ruff==0.15.14)" >&2
+    return 0
+  fi
+  for f in "${staged[@]}"; do
+    rc=0
+    _git diff --quiet -- "$f" || rc=$?
+    case "$rc" in
+      0) ;;
+      1) dirty+=("$f") ;;
+      *)
+        printf 'ERROR [lint-ruff]: git diff --quiet failed (rc=%s) for %q; refusing to continue.\n' "$rc" "$f" >&2
+        return 1
+        ;;
+    esac
+  done
+  if [[ "${#dirty[@]}" -gt 0 ]]; then
+    printf 'ERROR [lint-ruff]: staged file(s) have unstaged changes, so ruff would lint bytes that are not the staged bytes:' >&2
+    printf ' %q' "${dirty[@]}" >&2
+    printf '\n  Stage the remaining changes (or undo them) so the linted bytes are the committed bytes.\n' >&2
+    return 1
+  fi
+  if ! ruff check --no-cache --no-fix -- "${staged[@]}" >&2; then
+    echo "ERROR [lint-ruff]: ruff found errors in staged scripts/*.py (CI runs the same check). Fix them, then re-stage." >&2
+    return 1
+  fi
+  return 0
+}
+_lint_ruff || {
+  echo "ERROR [pre-commit]: ruff lint failed. See above." >&2
+  exit 1
+}
+
 # Self-lints: byte-budget, hook-wiring, agent-roster, agent-boilerplate, blast-radius, source-guard
 if [[ "${CAST_SKIP_SELF_LINTS:-0}" == "1" ]]; then
   echo "[CAST pre-commit] WARNING: CAST_SKIP_SELF_LINTS=1 — self-lints (byte-budget, hook-wiring, agent-roster, agent-boilerplate, blast-radius, source-guard) skipped. This bypass is for one-time emergencies only." >&2

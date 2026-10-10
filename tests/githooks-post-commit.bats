@@ -158,7 +158,8 @@ STUBEOF
     # Assert: log file should NOT exist OR should be empty (no "record" invocation)
     if [ -f "$STUB_RECORDER_LOG" ]; then
         # File exists — must not contain "record" call
-        ! grep -q "record" "$STUB_RECORDER_LOG"
+        run grep -q "record" "$STUB_RECORDER_LOG"
+        assert_failure 1
     else
         # File does not exist — that's correct (no invocation recorded)
         true

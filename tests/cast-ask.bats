@@ -2,6 +2,8 @@
 # Tests for cast ask and cast memory search (A3 "Ask-Your-Record")
 # Exercises the unified record_fts FTS5 backend (U6)
 
+bats_require_minimum_version 1.5.0
+
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
@@ -373,4 +375,40 @@ SQL
   assert_success
   assert_output --partial "flarn one"
   assert_output --partial "flarn two"
+}
+
+# ───────────────────────────────────────────────────────────────────────────
+# SECTION: refused-DB-path message must reach the user (S4-d follow-up)
+# cast-ask-query.py exits 1 with a "cast-ask-query: <reason>" stderr line when the
+# DB path is refused by the allowlist; bin/cast must relay it, not swallow it as "[]".
+# ───────────────────────────────────────────────────────────────────────────
+
+@test "cast ask: refused CAST_DB_PATH surfaces the cast-ask-query reason (no crash)" {
+  run env CAST_DB_PATH=/etc/hosts bash "$CAST_BIN" ask "launchctl" --no-refresh
+  assert_success
+  assert_output --partial "cast-ask-query:"
+  assert_output --partial "unexpected path"
+}
+
+@test "cast ask --json: refused CAST_DB_PATH keeps stdout as [] and relays the reason on stderr" {
+  run --separate-stderr env CAST_DB_PATH=/etc/hosts bash "$CAST_BIN" ask "launchctl" --no-refresh --json
+  assert_success
+  [ "$output" = "[]" ]
+  [[ "$stderr" == *"cast-ask-query:"* ]]
+}
+
+@test "cast memory search: refused CAST_DB_PATH surfaces the cast-ask-query reason" {
+  run env CAST_DB_PATH=/etc/hosts bash "$CAST_BIN" memory search "launchctl"
+  assert_success
+  assert_output --partial "cast-ask-query:"
+}
+
+@test "cast ask / memory search: allowed temp DB emits no cast-ask-query refusal message" {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  run bash "$CAST_BIN" ask "launchctl" --no-refresh
+  assert_success
+  refute_output --partial "cast-ask-query:"
+  run bash "$CAST_BIN" memory search "launchctl"
+  assert_success
+  refute_output --partial "cast-ask-query:"
 }

@@ -314,13 +314,28 @@ _assert_policy_advisory_and_log() {
 }
 
 @test "dispatcher logs a swallowed egress-evaluation exception (fail-open but NOT silent)" {
-  # A non-string Bash command makes classify() raise inside _run_egress; the
-  # dispatcher must still exit 0 / emit nothing, AND leave a hook-errors.log line.
-  run python3 "$DISPATCH" <<< '{"tool_name":"Bash","tool_input":{"command":5},"session_id":"t"}'
+  # A non-string Read file_path makes classify() raise inside _run_egress (TypeError in
+  # _is_credential_path); the dispatcher must still exit 0 / emit nothing, AND leave a
+  # hook-errors.log line. NOT a Bash payload: the command guard (RULE 5-C, G1) deliberately
+  # fails CLOSED on a non-string Bash command, so that call never reaches the egress step.
+  run python3 "$DISPATCH" <<< '{"tool_name":"Read","tool_input":{"file_path":5},"session_id":"t"}'
   assert_success
   run cat "$HOME/.claude/logs/hook-errors.log"
   assert_success
   assert_output --partial 'cast-pretool-dispatch.py: egress evaluation failed'
+}
+
+@test "dispatcher fails CLOSED on a non-string Bash command (RULE 5-C), never reaching egress" {
+  # Pins the intended G1 behaviour the Read-based test above steers around: the command
+  # guard treats a non-str command as malformed input and blocks (exit 2) rather than
+  # failing open. The egress step never runs, so no egress-evaluation error is logged.
+  run python3 "$DISPATCH" <<< '{"tool_name":"Bash","tool_input":{"command":5},"session_id":"t"}'
+  assert_failure 2
+  assert_output --partial '[CAST]'
+  if [[ -f "$HOME/.claude/logs/hook-errors.log" ]]; then
+    run cat "$HOME/.claude/logs/hook-errors.log"
+    refute_output --partial 'egress evaluation failed'
+  fi
 }
 
 # --- credential read ------------------------------------------------------

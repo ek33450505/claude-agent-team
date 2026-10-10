@@ -15,17 +15,30 @@ Uses an isolated CAST_DB_PATH temp DB seeded with tiny record_fts + agent_memori
 NEVER touches ~/.claude/cast.db.
 """
 import os
+import shutil
 import sys
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS_DIR = str(Path(__file__).parent.parent / 'scripts')
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 # Import after path setup
+
+
+def setUpModule():
+    # Temp HOME (S4-1 D-D): cast_db._log_error is pinned to
+    # Path.home()/.claude/logs/db-write-errors.log and CAST_DB_PATH does not redirect
+    # it, so expected-error paths would otherwise write to the real log.
+    home = tempfile.mkdtemp(prefix='cast-router-home-')
+    unittest.addModuleCleanup(shutil.rmtree, home, True)
+    patcher = mock.patch.dict(os.environ, {'HOME': home})
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
 
 
 def _import_router():
@@ -282,8 +295,7 @@ class TestRetrieveRecordGlobal(unittest.TestCase):
         results = self.router.retrieve_record_global('resume distillate bullet points', top_n=3)
         # Manually call _log_injection for a memory hit (id is not None)
         mem_hits = [r for r in results if r['id'] is not None]
-        if not mem_hits:
-            self.skipTest('No memory/incident hit with id in results — seed issue')
+        self.assertTrue(mem_hits, 'seed must yield a memory hit with an integer id')
 
         conn = sqlite3.connect(self._tmp.name)
         before = conn.execute('SELECT COUNT(*) FROM injection_log').fetchone()[0]

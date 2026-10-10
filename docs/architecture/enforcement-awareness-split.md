@@ -62,7 +62,7 @@ once a permission allows the command. A broad deny cannot carry a narrower allow
 | `cast-git-guard` — git commit/push/stash blocks | enforcement-intent | ❌ env-var escape hatch + indirection-robustness | **KEEP as hook** (docs recommend a hook here) |
 | `cast-git-guard` — Write/Edit `requires_agent` policy | enforcement-intent | ❌ stateful (per-session agent-status) | **KEEP as hook** |
 | `cast-command-guard` — pkill/killall/mass-kill/catastrophic-rm | enforcement-intent | ❌ path-aware + escape hatch | **KEEP as hook** (already self-labeled "defense-in-depth, not a complete sandbox") |
-| `cast-command-guard` — RULE 5 Bash writes into the installed exec surface | enforcement-intent | ❌ path-aware Bash analysis + escape hatch (native deny covers only the file tools) | **KEEP as hook** (defence-in-depth for sandbox-OFF; the sandbox is the hard boundary) |
+| `cast-command-guard` — RULE 5 Bash writes into the installed exec surface | enforcement-intent | ❌ path-aware Bash analysis + escape hatch, plus the RULE 5-C coarse desync rule (no hatch; see *Guard freeze*) (native deny covers only the file tools) | **KEEP as hook** (defence-in-depth for sandbox-OFF; the sandbox is the hard boundary) |
 | `cast-git-guard` — exec-capable git config / gc / worktree prune / symlinked worktree entries | enforcement-intent | ❌ argument + filesystem-state aware | **KEEP as hook** |
 | `cast-install-integrity` — install manifest alarm (SessionStart + doctor) | **awareness** (detection) | ❌ | **KEEP** (detects what slips past string guards) |
 | `write-guards` — literal-tilde write block | enforcement-intent | ❌ path-pattern correction | **KEEP as hook** |
@@ -189,22 +189,24 @@ This is a **belt over the existing suspenders** — it does NOT replace:
 - `cast_safe_rm` (guarded delete helper)
 
 Native `permissions.deny` is **session-scoped**: fires inside interactive `claude` sessions
-and headless `claude -p` calls. The script gates cover cron jobs, CI, and any non-session
-context where `permissions.deny` does not apply.
+and headless `claude -p` calls. The script gates run in cron/CI only where a job explicitly
+invokes them, and cover any non-session context where `permissions.deny` does not apply.
 
 **Why belt + suspenders and not just one?**
 - Native deny is coarse (prefix-glob, no env-var exceptions, no path semantics) but fires
-  before the model even generates the command — zero runtime cost, impossible to bypass in a
-  session.
+  at the permission check when the tool call is made, before the tool runs — zero runtime cost,
+  impossible to bypass in a session.
 - Script gates are nuanced (path-aware, escape-hatch-aware) but are hook-advisory-grade in
-  interactive sessions and absent in cron/CI without explicit wiring.
+  interactive sessions and run in cron/CI only where a job explicitly invokes them.
 
 ### Source-of-truth
 
 `managed-settings.d/11-deny.json` is the fragment source. `settings.json` in the repo root
 carries the merged result (kept in sync manually — `cast-merge-settings.sh` reads the live
-`~/.claude/managed-settings.d`, not the repo fragments). The `11-deny.json` fragment is
-CAST-owned in `install.sh` (pattern `11-deny.json` in the overwrite case), so reinstall
+`~/.claude/managed-settings.d`, not the repo fragments). No drift gate covers the full set;
+`tests/cast-sandbox-u6-config.bats` checks a subset of the Edit denies only. Both sets had
+26 entries on 2026-10-09.
+The `11-deny.json` fragment is CAST-owned in `install.sh` (pattern `11-deny.json` in the overwrite case), so reinstall
 propagates security updates to existing deployments.
 
 ## The `requires_agent` unblock gate: session-bound, roster-typed records (S3d, 2026-10-05)
@@ -315,6 +317,42 @@ Code writes only a debug-log line, and the guard appends a names-only line to `~
 - **Side effects:** sandboxed `git worktree add`, and sandboxed checkout/merge/pull that rewrite `.githooks` files, fail ("unable to unlink"/permission). `scripts/cast-parallel.sh` (`git worktree add/remove`) and the branch groomer's registry-entry removal must run from your terminal, not sandboxed Bash. `git` was removed from `excludedCommands` on 2026-10-06: `excludedCommands: ["git"]` matches only a bare `git` (docs: `git *`), so it was either dead (agent git is sandboxed anyway) or, if it ever matched, a sandbox escape (git has many exec vectors: hooks, fsmonitor, filters, aliases, pagers); pushes go through `scripts/cast-push.sh` via `!` in your terminal. `docker`, `bq` and `osascript` were removed too in #421; with the sandbox ON, run them with `!` in your terminal.
 - **Live-probe results (2026-10-05, sandboxed Bash; control: `touch ~/x` EPERM, `TMPDIR=/tmp/claude-501`):** (1) `ln -s` into an existing `.git/worktrees` EPERM ✅; (2) `mkdir -p .git/worktrees/x` with no `.git/worktrees` EPERM ✅, so a deny on a not-yet-existing path DOES block creating it; (3) `mv`/`rmdir`/`touch` on a live `.git/worktrees/<id>` EPERM ✅; (4) `touch .githooks/x` and `mv .githooks …` EPERM ✅; (5) `.GitHooks/x`, `.Git/Worktrees/x` and `.git/WORKTREES/x` EPERM ✅ (APFS case variants are covered); (6) `mv .git .gitx` EPERM ✅; (7) `tests/cast-branch-groomer.bats` 53/53 sandboxed ✅ (fixtures live in `$TMPDIR`); (8) native `isolation: worktree` creation OK, but `git add` inside it FAILS (`.git/worktrees/<id>/index.lock` EPERM; the denyWrite beats the harness's temporary `.git` allowOnly), so worktree-isolated agents cannot stage or commit; (9) ❌ Write AND Edit on `.githooks/zz-cast-probe` landed in auto mode with NO prompt. The docs say explicit ask rules always prompt, and that `Write(path)` rules are inert (only `Edit(path)` is consulted). The cause of the `Edit(**/.githooks/**)` miss is unresolved; one suspect is the bare `Edit`/`Write` allow in `10-permissions.json`. (10) live `~/.claude/settings.json` carries both denyWrite entries and both ask rules ✅.
 - **Precondition:** a project `.claude/settings.local.json` with `"sandbox": {"enabled": false}` silently turns all of this off for that repo (found 2026-10-05; the first probe run was invalid). Probe a positive control (`touch ~/x` must fail) before trusting any sandbox probe.
+
+## Guard freeze: no new string-parsing rules (G1, 2026-10-09)
+
+**Decision (Ed, 2026-10-09).** The Bash guards (`cast-command-guard.py`, `cast-git-guard.py`) analyse a command STRING, and a shell cannot be parsed into safety. The RULE 5 heredoc/quote model kept drifting out of step with bash: in S4-b, fixing one desync opened the next, and narrowing a fail-closed false positive opened a bypass (reverted). From G1 on:
+- No NEW string-parsing guard rules. Allowed: bug and false-positive fixes, fail-closed hardening, and coarse checks on the raw text.
+- Never narrow a guard to fix a false positive. Widen or fail closed; the false positive becomes a workaround or a documented residual.
+- The hard boundary is the sandbox (G4). A string guard is defence-in-depth, and the U6d integrity alarm detects what slips past it.
+
+**RULE 5-C, the coarse desync rule.** It runs first in `is_blocked`, before every parser. It uses raw-text checks: substrings, a character class, per-word path canonicalisation, the existing mention scan, and a re-run of the existing RULE 5 analyzer. It adds no NEW parsing rules. The check runs on the raw text AND on the backslash-newline-joined text (bash joins first; only an odd backslash run joins). It blocks when the text names a protected root (or a relative root spelling, or a home-anchored ancestor as a path end: `~/.claude`, `$HOME/.claude`, `~/Library`, `~/Library/Caches`; per word, a leading `~`/`$HOME` expands to the real home, then `//`, `/./` and `..` at any depth are canonicalised) AND contains a construct the parser can desync on. Those constructs are:
+- `<<` anywhere, and `$'…'`/`$"…"` quoting;
+- a control character other than tab/newline, or a non-ASCII blank (Python splits on them, bash does not);
+- on a line that is not the last, a `#` followed by a quote, or a `#` on a line ending in a backslash;
+- a `#` the parser would read as a comment where bash does not (a blank-`#` inside `${…}`), or a comment-looking `#` whose remaining line names the surface;
+- `${HOME…}` with a modifier, or a `cd`/`pushd` word containing a glob character.
+
+When the text contains a backslash-newline, it also blocks if the RULE 5 analyzer blocks the joined text with the hatch neutralised. There is no escape hatch, not even in that re-run: a deliberate `CAST_PROTECTED_WRITE_OK=1` write split by backslash-newline is blocked, so write it on one line. It fails closed past its gate (including on non-string input). Its own checks are linear-time; the RULE 5 re-run costs what the existing analyzer costs. A `$HOME…` spelling with 65+ non-slash characters fails closed. **It reduces the desync surface; it does not close it.** Each security round found a further pre-existing disagreement between the parser and bash, so the sandbox (G4) remains the boundary.
+- **Evidence (2026-10-09).** A corpus of 139 cases has 106 shapes that real bash 3.2/5 executes, 38 of which the previous guard allowed: the S4-b probes, H1–H3/P1–P3, and a new single-line bypass, `echo $'a\'b'; <write>`. All 106 are blocked. So are the further shapes that code review (4 rounds) and security (3 rounds, the cap; round 3 fuzzed 56,000 cases against real bash) reproduced. All were pre-existing:
+- odd-whitespace fake comments;
+- a comment joined to the next line by backslash-newline;
+- a blank-`#` inside `${…}`;
+- a backslash-newline before, inside or splitting the home prefix, the surface name or a gate token;
+- `${HOME<modifier>}` with `//`/`/./` in the root path;
+- `cd` into a glob-spelled root;
+- ancestor spellings with `/./`, `//`, a trailing or deep `..`, or an escape above home (`~/../<user>/.claude`).
+
+A replay of 30 days of real Bash calls (99,760 unique commands) gives 0 new allows and 451 new blocks (~15/day). Of those, ~1/day fall outside guard development: python/cat heredocs whose body names the surface. Workaround: the Write/Edit tool, or a script file.
+- **Rejected alternatives.** Blocking every multi-line command that names a root (~20/day, including CAST's own `source cast-events.sh` and `orchestrate-dispatch.py` calls). A per-line re-scan, which has a lower false-positive rate but depends on the parser and leaks `$(`, `|` and array forms that span lines.
+- **Residuals.** These are exposed only behind a desync:
+  - an ancestor reached in relative steps, or held in a non-home variable;
+  - a brace-expanded spelling (`.cl{a,b}ude`);
+  - an empty-expansion splice inside a root name (`.cla$(:)ude`, `scri"$@"pts`), which is accepted residual 1;
+  - a variable-held target behind a fake comment outside `${…}`.
+
+  Accepted false positives (all 0–3 in 30 days): `cd ~/Library*/…` or `cd ~/Library/Caches/*` (the glob can match a protected name), and a comment naming the surface (`cp a b # see ~/.claude/scripts/x`). RULES 1–3 (`pkill`, `rm -rf ~`) share the heredoc stripper's desyncs without a coarse rule; they target accidents, not evasion.
+
+  Pre-existing parser cost (not G1): a 1 MB `#` run followed by a quote takes ~27 s, and one real 1,451-character command takes ~1.2 s. The backslash-newline re-run doubles the parser cost on absurd inputs (a 1 MB backslash run takes ~36 s). The dispatcher watchdog blocks anything over its budget.
 
 ## Closed as documented residuals (v10.3.0 close-out, 2026-10-08)
 

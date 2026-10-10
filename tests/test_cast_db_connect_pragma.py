@@ -11,8 +11,10 @@ Uses a temp DB path so the real cast.db is never touched.
 import os
 import sys
 import tempfile
+import shutil
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS_DIR = str(Path(__file__).parent.parent / 'scripts')
 if _SCRIPTS_DIR not in sys.path:
@@ -26,6 +28,12 @@ class TestConnectPragma(unittest.TestCase):
 
     def setUp(self):
         self._orig_db_path = os.environ.get('CAST_DB_PATH')
+        # Temp HOME (S4-1 D-D): cast_db's error log is pinned to Path.home()/.claude/logs/.
+        home = tempfile.mkdtemp(prefix='cast-pragma-home-')
+        self.addCleanup(shutil.rmtree, home, True)
+        patcher = mock.patch.dict(os.environ, {'HOME': home})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self._tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
         self._tmp.close()
         os.environ['CAST_DB_PATH'] = self._tmp.name

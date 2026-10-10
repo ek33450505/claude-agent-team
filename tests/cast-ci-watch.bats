@@ -20,7 +20,8 @@ setup() {
   setup_temp_home   # isolates ~/.claude/cast/ci-watch/ to a temp HOME
 
   export TEST_TMPDIR
-  TEST_TMPDIR="$(mktemp -d /tmp/cast-ci-watch-test.XXXXXXXX)"
+  local _tmp="${TMPDIR:-/tmp}" # macOS $TMPDIR ends in "/": strip it so the path has no "//"
+  TEST_TMPDIR="$(mktemp -d "${_tmp%/}/cast-ci-watch-test.XXXXXXXX")"
   export STUB_GH="$TEST_TMPDIR/stub-gh"
   export CAST_CI_WATCH_GH_CMD="$STUB_GH"
 

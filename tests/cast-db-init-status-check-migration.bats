@@ -93,7 +93,8 @@ _count_drop_log_lines() {
   local content sum
   content="$(cat "$stamp")"
   sum="${content#* }"
-  [ -n "$sum" ] && [ "$sum" != "$content" ]
+  [ -n "$sum" ]
+  [ "$sum" != "$content" ]
   printf '2000-01-01 %s\n' "$sum" >"$stamp"
   run bash "$SCRIPTS_COPY/cast-db-init.sh" --db "$TDB"
   assert_success

@@ -36,6 +36,11 @@ jobs:
       - name: Source-guard lint
         run: bash scripts/cast-lint-source-guard.sh
 
+      # GNU `stat -f` is filesystem status and succeeds on Linux, so a BSD-first
+      # `stat -f ... || stat -c ...` test fallback never runs there. Use file_mode/file_mtime.
+      - name: BSD-first stat lint (tests/)
+        run: bash scripts/cast-lint-bsd-stat.sh
+
       - name: Plugin drift check
         run: bash scripts/check-plugin-drift.sh
 

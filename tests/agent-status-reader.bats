@@ -416,7 +416,8 @@ _s3b_assert_clean() {
   write_status_file "BLOCKED" "test-agent" "stuck" ""
   run_hook
   assert_failure 2
-  [ -d "$HOME/.claude/cast-state" ] && [ ! -L "$HOME/.claude/cast-state" ]
+  [ -d "$HOME/.claude/cast-state" ]
+  [ ! -L "$HOME/.claude/cast-state" ]
   [ "$(file_mode "$HOME/.claude/cast-state")" = "700" ]
   rm -rf "$HOME/.claude/cast-state"
   mkdir -p "$BATS_TEST_TMPDIR/attacker"

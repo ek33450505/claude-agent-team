@@ -252,15 +252,14 @@ PYEOF
 @test "safe_rmtree refuses directory-traversal path that escapes blast radius (sentinel survives)" {
   local radius sentinel_dir py traversal_path depth dotdots
 
-  radius="/tmp/cast-swarm-traversal-test-$$"
-  mkdir -p "$radius"
+  radius="$(mktemp -d)"
 
   # Create sentinel outside the radius
   sentinel_dir="$(mktemp -d)"
   touch "$sentinel_dir/__MUST_SURVIVE__"
 
-  # Build traversal path: /tmp/cast-swarm-traversal-test-$$/../../.../sentinel_dir
-  # Count '/' in sentinel_dir to determine how many ".." we need to reach /
+  # Build traversal path: <radius>/../../.../sentinel_dir
+  # Count "/" in sentinel_dir to determine how many ".." we need to reach /
   depth=$(echo "$sentinel_dir" | tr -cd '/' | wc -c | tr -d ' ')
   dotdots=""
   local i

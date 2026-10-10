@@ -92,6 +92,16 @@ teardown() {
   assert_output "old content"
 }
 
+@test "--apply with no TTY (e.g. Claude Code's ! prefix) names the ! case and the CAST_RULES_SYNC_ACK=\"<reason>\" form" {
+  echo "old content" >"$LIVE_DIR/foo.md"
+  echo "new content" >"$CORE_DIR/foo.md"
+
+  run bash "$SCRIPT" --apply </dev/null
+  assert_failure
+  assert_output --partial "'!' prefix has no TTY"
+  assert_output --partial 'CAST_RULES_SYNC_ACK="<reason>" bash ~/.claude/scripts/cast-rules-sync.sh --apply'
+}
+
 @test "TEMPLATE sources are never synced, even under --apply" {
   echo "template body" >"$CORE_DIR/foo.md.template"
   echo "core body" >"$CORE_DIR/tracked.md"

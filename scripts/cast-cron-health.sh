@@ -49,7 +49,7 @@ _check_recent_failures() {
       failure_count=$((failure_count + 1))
       failure_details+=$'\n'"  - $basename contains error markers"
     fi
-  done < <(find "$LOGS_DIR" -name "cron-*.log" -mtime -7 2>/dev/null || true)
+  done < <(find "$LOGS_DIR" -maxdepth 1 -type f -name 'cron-*.log' -mtime -7 2>/dev/null)
 
   echo "$failure_count"
   # Explicit `if`, not `[[ ]] && echo`: with no failures the `&&` form returns 1,

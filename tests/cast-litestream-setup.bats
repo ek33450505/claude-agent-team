@@ -190,7 +190,8 @@ teardown() {
   [ -f "$plist" ] || skip "plist source not present in this checkout"
   grep -q "SuccessfulExit" "$plist"
   # Ensure the bare <true/> form for KeepAlive is NOT present (replaced by dict)
-  ! grep -q "<key>KeepAlive</key>[[:space:]]*<true/>" "$plist"
+  run grep -q "<key>KeepAlive</key>[[:space:]]*<true/>" "$plist"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------

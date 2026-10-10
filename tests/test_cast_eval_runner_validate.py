@@ -4,6 +4,7 @@ With PyYAML importable in the parent, validation runs IN-PROCESS (a child spawne
 sys._base_executable under -I would miss a PyYAML that lives only in the parent's venv).
 Without PyYAML it spawns `sys._base_executable -I` -- never sys.executable (PYTHONEXECUTABLE).
 """
+import gc
 import importlib.util
 import os
 import shutil
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -75,10 +77,24 @@ class ValidateCaseFileTests(unittest.TestCase):
         copy = copy_dir / 'validate-eval-yaml.py'
         shutil.copy2(_VALIDATOR, copy)
         good = _good_case()
-        with mock.patch.object(runner, '_HAS_YAML', True), \
-                mock.patch.object(sys, 'dont_write_bytecode', False):
-            rc, err = runner._validate_case_file(copy, good)
-        self.assertEqual((rc, err), (0, ''))
+        # `_validate_case_file` captures stderr, so a stray finalizer message from an EARLIER test's
+        # unclosed sqlite connection (ResourceWarning, "Exception ignored while finalizing ...") that
+        # happens to be collected mid-call lands in `err` (order-dependent in full discover, 1/1929).
+        # Collect first, keep the cycle GC off for the call, and ignore warnings: the assertions stay
+        # strict about the validator's own output.
+        gc.collect()
+        gc.disable()
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                with mock.patch.object(runner, '_HAS_YAML', True), \
+                        mock.patch.object(sys, 'dont_write_bytecode', False):
+                    rc, err = runner._validate_case_file(copy, good)
+        finally:
+            gc.enable()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(err, '', 'validator wrote to stderr: %r' % err)
+        self.assertEqual(list(copy_dir.rglob('*.pyc')), [])
         self.assertFalse((copy_dir / '__pycache__').exists(), list(copy_dir.iterdir()))
 
     @unittest.skipUnless(_HAVE_YAML, 'PyYAML not installed')

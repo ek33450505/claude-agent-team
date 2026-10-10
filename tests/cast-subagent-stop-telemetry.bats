@@ -9,7 +9,8 @@ HOOK_SH="$REPO_DIR/scripts/cast-subagent-stop-hook.sh"
 setup() {
   load 'helpers/setup'
   setup_temp_home
-  export TEST_TMPDIR="$(mktemp -d /tmp/cast-stop-test.XXXXXXXX)"
+  local _tmp="${TMPDIR:-/tmp}" # macOS $TMPDIR ends in "/": strip it so the path has no "//"
+  export TEST_TMPDIR="$(mktemp -d "${_tmp%/}/cast-stop-test.XXXXXXXX")"
   export TEMP_DB="$TEST_TMPDIR/test.db"
   sqlite3 "$TEMP_DB" "CREATE TABLE agent_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +50,8 @@ teardown() {
   duration=$(sqlite3 "$TEMP_DB" "SELECT duration_ms FROM agent_runs WHERE agent_id='aid1';")
   tool_uses=$(sqlite3 "$TEMP_DB" "SELECT tool_uses FROM agent_runs WHERE agent_id='aid1';")
   [ "$tool_uses" = "2" ]
-  [ -n "$duration" ] && [ "$duration" -gt 0 ]
+  [ -n "$duration" ]
+  [ "$duration" -gt 0 ]
 }
 
 @test "SubagentStop: missing payload duration_ms still computes duration from timestamps (not NULL)" {
@@ -61,7 +63,8 @@ teardown() {
   duration=$(sqlite3 "$TEMP_DB" "SELECT duration_ms FROM agent_runs WHERE agent_id='aid2';")
   tool_uses=$(sqlite3 "$TEMP_DB" "SELECT tool_uses FROM agent_runs WHERE agent_id='aid2';")
   [ "$tool_uses" = "0" ]
-  [ -n "$duration" ] && [ "$duration" -gt 0 ]
+  [ -n "$duration" ]
+  [ "$duration" -gt 0 ]
 }
 
 @test "SubagentStop: empty stdin exits 0 without error" {

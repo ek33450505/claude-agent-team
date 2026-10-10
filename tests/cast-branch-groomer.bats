@@ -1038,7 +1038,10 @@ _gq_copy_del() { # [nopin] -> injected copy with the hook line just before the q
   if [ "${1:-}" = "nopin" ]; then
     sed -i.bak '/^    \[\[ "\$(pwd -P)" == "\$GROOM_QROOT_REAL\/\$base" \]\] || exit 1$/d' "$s/groomer.sh"
     rm -f "$s/groomer.sh.bak"
-    ! grep -q 'GROOM_QROOT_REAL/\$base' "$s/groomer.sh" # the mutation really applied
+    # the pwd-check mutation really applied (match the check LINE only: the pinned delete on the next
+    # line also names $GROOM_QROOT_REAL/$base, so a bare path pattern matches it and never proves the deletion)
+    run grep -qF '[[ "$(pwd -P)" == "$GROOM_QROOT_REAL/$base" ]]' "$s/groomer.sh"
+    assert_failure 1
     # ...and revert the delete to the pre-U2c-pin cwd-relative rm (the pinned primitive is a 2nd layer)
     sed -i.bak 's#^    python3 -I "\$_GROOM_FS" rmtree-pinned "\$GROOM_QROOT_REAL/\$base" "\$name" "\$GROOM_QROOT_REAL" || exit 1$#    rm -rf -- "./$name" || exit 1#' "$s/groomer.sh"
     rm -f "$s/groomer.sh.bak"
@@ -1157,23 +1160,32 @@ _gq_copy_reg() { # [plain] -> injected copy with the hook line just before the r
     [ -z "$output" ]
     [[ "$stderr" != *Traceback* ]]
   done
-  [ -e "$d/gone/sub/f" ] && [ -e "$d/keep" ] && [ -e "$BATS_TEST_TMPDIR/outside/gone/p" ] && [ -L "$d/escape" ]
+  [ -e "$d/gone/sub/f" ]
+  [ -e "$d/keep" ]
+  [ -e "$BATS_TEST_TMPDIR/outside/gone/p" ]
+  [ -L "$d/escape" ]
   # success
   run --separate-stderr python3 -I "$h" rmtree-pinned "$d" gone "$r"
   assert_success
   [ -z "$output" ]
-  [ ! -e "$d/gone" ] && [ -d "$d/keep" ] && [ -e "$BATS_TEST_TMPDIR/outside/gone/p" ]
+  [ ! -e "$d/gone" ]
+  [ -d "$d/keep" ]
+  [ -e "$BATS_TEST_TMPDIR/outside/gone/p" ]
   # a missing/broken cast_guard.py next to the helper -> exit 1, no traceback, no delete
   local s="$BATS_TEST_TMPDIR/hs"
   mkdir -p "$s" "$d/gone2"
   cp "$h" "$s/"
   run --separate-stderr python3 -I "$s/cast_groom_fs.py" rmtree-pinned "$d" gone2 "$r"
   assert_failure
-  [ -z "$output" ] && [[ "$stderr" != *Traceback* ]] && [ -d "$d/gone2" ]
+  [ -z "$output" ]
+  [[ "$stderr" != *Traceback* ]]
+  [ -d "$d/gone2" ]
   echo 'raise SystemError("broken")' >"$s/cast_guard.py"
   run --separate-stderr python3 -I "$s/cast_groom_fs.py" rmtree-pinned "$d" gone2 "$r"
   assert_failure
-  [ -z "$output" ] && [[ "$stderr" != *Traceback* ]] && [ -d "$d/gone2" ]
+  [ -z "$output" ]
+  [[ "$stderr" != *Traceback* ]]
+  [ -d "$d/gone2" ]
 }
 
 @test "groomer --apply --worktrees: an ignored FILE named build is kept; an ignored build/ DIRECTORY is removed" {
@@ -1258,7 +1270,8 @@ _gq_copy_reg() { # [plain] -> injected copy with the hook line just before the r
   assert_output ""
   run python3 -I "$h" rename "$d/file" "$d/file2"
   assert_success
-  [ -e "$d/file2" ] && [ ! -e "$d/file" ]
+  [ -e "$d/file2" ]
+  [ ! -e "$d/file" ]
   run python3 -I "$h" rename "$d/missing" "$d/x"
   assert_failure
   chmod 700 "$d/real"
@@ -1303,7 +1316,9 @@ _gq_copy_reg() { # [plain] -> injected copy with the hook line just before the r
   assert_output --regexp "Removed worktree: .*/\.claude/worktrees/agent-x"
   [ -d "$HOME/.claude/groomer-quarantine" ]
   [ -z "$(find "$HOME/.claude/groomer-quarantine" -mindepth 1 2>/dev/null)" ]
-  ! git -C "$GX_REPO" worktree list | grep -q agent-x
+  run git -C "$GX_REPO" worktree list
+  assert_success
+  refute_output --partial agent-x
   [ ! -e "$GX_REPO/.git/worktrees/agent-x" ]
 }
 

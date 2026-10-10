@@ -590,3 +590,273 @@ SH
   [[ ! -e "$m_hook" ]]
   [[ "$(git ls-files -s cast-stats.json)" == "100644 $(git hash-object cast-stats.json) 0"*cast-stats.json ]]
 }
+
+# === LINT 11: ruff on staged scripts/*.py (mirrors CI's `ruff check scripts/*.py`) ===
+# ruff is a PATH-shimmed fake: the hook must (a) run it on STAGED scripts/*.py only, (b) block on
+# findings, (c) warn once and continue when ruff is absent. The fake records its argv.
+
+# Make the fixture repo clear every earlier gate so the ruff step is reached: the orphan-script lint
+# needs the script settings.json references to exist.
+_ruff_fixture() {
+  cd "$TEST_REPO"
+  printf '#!/bin/bash\nexit 0\n' > scripts/test-script.sh
+  chmod +x scripts/test-script.sh
+  printf 'x = 1\n' > scripts/mod.py
+  printf 'y = 2\n' > scripts/unstaged.py
+  printf 'z = 3\n' > other.py
+  git add scripts/test-script.sh scripts/mod.py other.py
+  FAKE_BIN="$TEST_DIR/fakebin"
+  RUFF_LOG="$TEST_DIR/ruff.argv"
+  mkdir -p "$FAKE_BIN"
+}
+
+_fake_ruff() {  # <exit-code> [message]
+  printf '#!/bin/bash\nprintf "%%s\\n" "$@" > "%s"\n[ -z "%s" ] || echo "%s"\nexit %s\n' "$RUFF_LOG" "${2:-}" "${2:-}" "$1" > "$FAKE_BIN/ruff"
+  chmod +x "$FAKE_BIN/ruff"
+}
+
+# PATH with every directory that provides a real `ruff` removed (the dev machine has one).
+_path_without_ruff() {
+  local d out="" IFS=:
+  for d in $PATH; do
+    [[ -x "$d/ruff" ]] && continue
+    out="${out:+$out:}$d"
+  done
+  printf '%s' "$out"
+}
+
+@test "lint-ruff: staged scripts/*.py passes through to a clean ruff; only the staged scripts file is checked" {
+  _ruff_fixture
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  [[ "$output" != *"lint-ruff"* ]]
+  [[ "$output" != *"ruff not installed"* ]]
+  # no ruff config staged -> the config-change WARN must be ABSENT
+  [[ "$output" != *"reviewer must check"* ]]
+  [[ -f "$RUFF_LOG" ]]
+  grep -qx 'scripts/mod.py' "$RUFF_LOG"
+  # `! grep` can never fail under bats' set -e (a negated command is exempt); use run + assert_failure
+  run grep -q 'unstaged.py' "$RUFF_LOG"
+  assert_failure
+  run grep -q 'other.py' "$RUFF_LOG"
+  assert_failure
+}
+
+@test "lint-ruff: ruff is invoked with --no-cache, --no-fix and a -- separator (a repo fix=true must not rewrite files)" {
+  _ruff_fixture
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  [[ -f "$RUFF_LOG" ]]
+  grep -qx -- '--no-cache' "$RUFF_LOG"
+  grep -qx -- '--no-fix' "$RUFF_LOG"
+  # the fake logs one argv entry per line: `--` must exist AND sit before the first file operand
+  # (an empty line number would compare as 0 and false-pass, so require both explicitly)
+  local dd file_ln
+  dd="$(grep -n -x -- '--' "$RUFF_LOG" | head -1 | cut -d: -f1)"
+  file_ln="$(grep -n -x 'scripts/mod.py' "$RUFF_LOG" | head -1 | cut -d: -f1)"
+  [[ -n "$dd" && -n "$file_ln" ]]
+  [[ "$dd" -lt "$file_ln" ]]
+}
+
+@test "lint-ruff: a staged DELETION of ruff.toml prints the config-change WARN too" {
+  cd "$TEST_REPO"
+  printf 'line-length = 100\n' > ruff.toml
+  git add ruff.toml
+  git -c core.hooksPath=/dev/null commit -q -m "seed ruff.toml"
+  git rm -q ruff.toml
+  _ruff_fixture
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  assert_output --partial "reviewer must check"
+}
+
+@test "lint-ruff: a staged leaf symlink is skipped with a WARN, not passed to ruff" {
+  _ruff_fixture
+  ln -s mod.py scripts/link.py
+  git add scripts/link.py
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  # assert on THIS run's output (the hook is not re-run): the WARN names the symlink
+  assert_output --partial "ruff lint skipped scripts/link.py"
+  [[ -f "$RUFF_LOG" ]]
+  grep -qx 'scripts/mod.py' "$RUFF_LOG"
+  run grep -qx 'scripts/link.py' "$RUFF_LOG"
+  assert_failure
+}
+
+@test "lint-ruff: a staged typechange (symlink -> regular file) scripts/*.py IS passed to ruff" {
+  _ruff_fixture
+  # commit scripts/t.py as a symlink to a sibling in-repo file (isolated TEST_REPO; hook bypassed)
+  ln -s mod.py scripts/t.py
+  git add scripts/t.py
+  git -c user.name=t -c user.email=t@example.invalid commit --no-verify -q -m "symlink t.py"
+  # replace the symlink with a regular file and stage the typechange
+  rm scripts/t.py
+  printf 't = 1\n' > scripts/t.py
+  git add scripts/t.py
+  # fixture sanity: the index really records a typechange (T)
+  run git diff --cached --name-status
+  [[ "$output" == *$'T\tscripts/t.py'* ]]
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  [[ -f "$RUFF_LOG" ]]
+  grep -qx 'scripts/t.py' "$RUFF_LOG"
+}
+
+@test "lint-ruff: a staged non-ASCII name (scripts/é.py) IS passed to ruff (git -z, no core.quotePath skip)" {
+  _ruff_fixture
+  printf 'x = 1\n' > "scripts/é.py"
+  git add "scripts/é.py"
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  [[ -f "$RUFF_LOG" ]]
+  grep -qx 'scripts/mod.py' "$RUFF_LOG"
+  grep -qx 'scripts/é.py' "$RUFF_LOG"
+  [[ "$output" != *"ruff lint skipped"* ]]
+}
+
+@test "lint-ruff: a staged file under a dir symlinked OUT of the repo is NOT passed to ruff and a WARN names it" {
+  _ruff_fixture
+  mkdir -p scripts/sub "$TEST_DIR/outside"
+  printf 'v = 1\n' > scripts/sub/evil.py
+  git add scripts/sub/evil.py
+  # swap the real dir for a symlink to a dir outside the repo (the index still has scripts/sub/evil.py)
+  [[ "$TEST_REPO/scripts/sub" == "$TEST_DIR"/* ]]   # destructive-path guard: only ever under our mktemp dir
+  rm -rf "$TEST_REPO/scripts/sub"
+  printf 'v = 1\n' > "$TEST_DIR/outside/evil.py"
+  ln -s "$TEST_DIR/outside" scripts/sub
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  local first_out="$output"
+  [[ -f "$RUFF_LOG" ]]
+  grep -qx 'scripts/mod.py' "$RUFF_LOG"
+  run grep -q 'evil.py' "$RUFF_LOG"
+  assert_failure
+  [[ "$first_out" == *"ruff lint skipped scripts/sub/evil.py"* ]]
+}
+
+@test "lint-ruff: a staged ruff.toml prints the config-change WARN and does not block on its own" {
+  _ruff_fixture
+  printf 'line-length = 100\n' > ruff.toml
+  git add ruff.toml
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  assert_output --partial "ruff config"
+  assert_output --partial "reviewer must check"
+  [[ "$output" != *"ERROR [lint-ruff]"* ]]
+}
+
+@test "lint-ruff: a staged nested scripts/ruff.toml prints the config-change WARN (a nested config can silence rules)" {
+  _ruff_fixture
+  printf 'lint.ignore = ["E", "F"]\n' > scripts/ruff.toml
+  git add scripts/ruff.toml
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  assert_output --partial "reviewer must check"
+  [[ "$output" != *"ERROR [lint-ruff]"* ]]
+}
+
+@test "lint-ruff: a staged rename-with-edits (R) IS passed to ruff under its NEW path" {
+  cd "$TEST_REPO"
+  printf 'a = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n' > scripts/old.py
+  git add scripts/old.py
+  git -c core.hooksPath=/dev/null commit -q -m "seed old.py"
+  git mv scripts/old.py scripts/new.py
+  printf 'g = 7\n' >> scripts/new.py
+  git add scripts/new.py
+  [[ "$(git diff --cached --name-status | cut -c1)" == "R" ]]   # fixture sanity: git really sees a rename
+  _ruff_fixture
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  [[ -f "$RUFF_LOG" ]]
+  grep -qx 'scripts/new.py' "$RUFF_LOG"
+  run grep -q 'old.py' "$RUFF_LOG"
+  assert_failure
+}
+
+@test "lint-ruff: a staged file with unstaged changes blocks (N1: the linted bytes must be the staged bytes) and ruff is not run" {
+  _ruff_fixture
+  printf 'v = 1\n' > scripts/a.py
+  git add scripts/a.py
+  printf 'v = 2\n' > scripts/a.py   # working copy now differs from the staged blob
+  _fake_ruff 0
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  assert_failure
+  assert_output --partial "ERROR [lint-ruff]"
+  assert_output --partial "unstaged changes"
+  assert_output --partial "scripts/a.py"
+  # the clean staged file is not named as dirty (the orphan-script WARN above legitimately names it)
+  [[ "$(grep 'ERROR \[lint-ruff\]' <<<"$output")" != *"mod.py"* ]]
+  [[ ! -f "$RUFF_LOG" ]]
+}
+
+@test "lint-ruff: ruff absent + a staged file with unstaged changes only WARNs (a missing tool never blocks)" {
+  _ruff_fixture
+  printf 'x = 99\n' > scripts/mod.py
+  run env PATH="$(_path_without_ruff)" bash .githooks/pre-commit
+  assert_output --partial "WARN: ruff not installed"
+  [[ "$output" != *"ERROR [lint-ruff]"* ]]
+}
+
+# Fail-closed branches: wrap the INSTALLED cast_git_safe (temp HOME copy only) so one specific
+# git call exits 128; the hook sources that lib and resolves git itself (PATH is never consulted,
+# so a PATH git shim would not be used). $1 = argv token that triggers the failure.
+_break_git_call() {
+  cat >> "$HOME/.claude/scripts/cast-hook-lib.sh" <<EOF
+eval "\$(declare -f cast_git_safe | sed '1s/cast_git_safe/_orig_cast_git_safe/')"
+cast_git_safe() {
+  local a
+  for a in "\$@"; do
+    [[ "\$a" == "$1" ]] && return 128
+  done
+  _orig_cast_git_safe "\$@"
+}
+EOF
+}
+
+@test "lint-ruff: a failing staged-file listing (git exit 128) fails closed, naming the listing" {
+  _ruff_fixture
+  _fake_ruff 0
+  _break_git_call "--diff-filter=ACMRT"
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  assert_failure
+  assert_output --partial "git diff (staged scripts/*.py) failed"
+  [[ ! -f "$RUFF_LOG" ]]
+}
+
+@test "lint-ruff: a failing index-vs-worktree check (git diff --quiet exit 128) fails closed and ruff is not run" {
+  _ruff_fixture
+  _fake_ruff 0
+  _break_git_call "--quiet"
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  assert_failure
+  assert_output --partial "git diff --quiet failed (rc=128)"
+  [[ ! -f "$RUFF_LOG" ]]
+}
+
+@test "lint-ruff: ruff findings block the commit with a clear message" {
+  _ruff_fixture
+  _fake_ruff 1 "scripts/mod.py:1:5: E702 Multiple statements on one line"
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  assert_failure
+  assert_output --partial "E702"
+  assert_output --partial "ERROR [lint-ruff]"
+  assert_output --partial "ruff lint failed"
+}
+
+@test "lint-ruff: ruff absent prints ONE warning and does not block" {
+  _ruff_fixture
+  run env PATH="$(_path_without_ruff)" bash .githooks/pre-commit
+  [[ "$output" != *"lint-ruff"* ]]
+  [[ "$(grep -c 'ruff not installed' <<<"$output")" == "1" ]]
+  assert_output --partial "WARN: ruff not installed"
+}
+
+@test "lint-ruff: no staged scripts/*.py means ruff is never invoked" {
+  _ruff_fixture
+  git rm -q --cached scripts/mod.py   # unstage the only staged scripts/*.py
+  _fake_ruff 1 "should never run"
+  run env PATH="$FAKE_BIN:$PATH" bash .githooks/pre-commit
+  [[ ! -f "$RUFF_LOG" ]]
+  [[ "$output" != *"should never run"* ]]
+}

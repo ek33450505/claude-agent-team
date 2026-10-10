@@ -8,7 +8,8 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 
 setup() {
   setup_temp_home
-  export TEST_TMPDIR="$(mktemp -d /tmp/cast-install-merge-test.XXXXXXXX)"
+  local _tmp="${TMPDIR:-/tmp}" # macOS $TMPDIR ends in "/": strip it so the path has no "//"
+  export TEST_TMPDIR="$(mktemp -d "${_tmp%/}/cast-install-merge-test.XXXXXXXX")"
   export TEST_CLAUDE_DIR="$TEST_TMPDIR/.claude"
   mkdir -p "$TEST_CLAUDE_DIR/scripts"
   mkdir -p "$TEST_CLAUDE_DIR/managed-settings.d"

@@ -446,7 +446,11 @@ for _pc_dir in "$CLAUDE_DIR/scripts/__pycache__" "$CLAUDE_DIR/scripts/migrations
 done
 unset _pc_dir
 for script_file in "$SCRIPT_DIR"/scripts/*; do
-    [ -d "$script_file" ] && continue
+    [ -e "$script_file" ] || [ -L "$script_file" ] || continue   # unmatched glob (literal scripts/*)
+    [ -d "$script_file" ] && continue                            # subdirectories (migrations/ handled below)
+    if [ ! -f "$script_file" ]; then   # dangling symlink / FIFO / socket: fail closed, never skip silently
+        error "ERROR: install.sh aborted — scripts/ entry is not a regular file: $script_file"; exit 1
+    fi
     base="$(basename "$script_file")"
     dest_name="${base%.template}"
     cp "$script_file" "$CLAUDE_DIR/scripts/$dest_name"
@@ -1170,7 +1174,11 @@ else error "ERROR: install.sh aborted — neither shasum nor sha256sum found; ca
 fi
 _mf_files=()
 for _mf_src in "$SCRIPT_DIR"/scripts/*; do
-    [ -d "$_mf_src" ] && continue
+    [ -e "$_mf_src" ] || [ -L "$_mf_src" ] || continue   # unmatched glob (literal scripts/*)
+    [ -d "$_mf_src" ] && continue                        # subdirectories (migrations/ handled below)
+    if [ ! -f "$_mf_src" ]; then   # dangling symlink / FIFO / socket: fail closed, never skip silently
+        error "ERROR: install.sh aborted — scripts/ entry is not a regular file: $_mf_src"; exit 1
+    fi
     _mf_base="$(basename "$_mf_src")"
     _mf_files+=("scripts/${_mf_base%.template}")
 done

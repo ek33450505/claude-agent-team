@@ -139,8 +139,10 @@ print('ok')
   export CLAUDE_ENV_FILE="$env_file"
   unset OTEL_EXPORTER_OTLP_ENDPOINT
   bash "$HOOK_SH" <<< "$(make_payload "sess-off" "/tmp")"
-  ! grep -q "OTEL_METRICS_EXPORTER" "$env_file"
-  ! grep -q "CLAUDE_CODE_ENABLE_TELEMETRY" "$env_file"
+  run grep -q "OTEL_METRICS_EXPORTER" "$env_file"
+  assert_failure 1
+  run grep -q "CLAUDE_CODE_ENABLE_TELEMETRY" "$env_file"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------

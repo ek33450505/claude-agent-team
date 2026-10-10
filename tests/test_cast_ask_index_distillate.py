@@ -14,11 +14,13 @@ Loads cast-ask-index.py via importlib (hyphenated module name).
 """
 import importlib.util
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
 _INDEX_PATH = _SCRIPTS_DIR / 'cast-ask-index.py'
@@ -95,6 +97,15 @@ class TestDistillateFileSource(unittest.TestCase):
         # for whichever test module runs next alphabetically.
         self._orig_db_path = os.environ.get('CAST_DB_PATH')
         self._orig_resume_dir = os.environ.get('CAST_RESUME_PROMPTS_DIR')
+
+        # Temp HOME (S4-1 D-D): cast_db._log_error is pinned to
+        # Path.home()/.claude/logs/db-write-errors.log; CAST_DB_PATH does not redirect
+        # it. Path.home() reads $HOME at call time on POSIX.
+        self._home = tempfile.mkdtemp(prefix='cast-distillate-home-')
+        self.addCleanup(shutil.rmtree, self._home, True)
+        patcher = mock.patch.dict(os.environ, {'HOME': self._home})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         # Isolated temp DB
         self._db_fd, self._db_path = tempfile.mkstemp(suffix='.db')

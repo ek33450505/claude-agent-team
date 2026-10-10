@@ -374,73 +374,75 @@ except Exception as e:
     print(f"[CAST-WARN] cast-session-end: cannot connect to {db_path}: {e}", file=sys.stderr)
     sys.exit(1)
 
-now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
+try:
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
 
-agent_dirs = [
-    d for d in os.listdir(memory_dir)
-    if os.path.isdir(os.path.join(memory_dir, d))
-]
+    agent_dirs = [
+        d for d in os.listdir(memory_dir)
+        if os.path.isdir(os.path.join(memory_dir, d))
+    ]
 
-for agent in sorted(agent_dirs):
-    agent_dir = os.path.join(memory_dir, agent)
-    md_files = glob.glob(os.path.join(agent_dir, '*.md'))
+    for agent in sorted(agent_dirs):
+        agent_dir = os.path.join(memory_dir, agent)
+        md_files = glob.glob(os.path.join(agent_dir, '*.md'))
 
-    for fpath in sorted(md_files):
-        try:
-            with open(fpath, 'r', encoding='utf-8') as f:
-                raw = f.read()
-        except Exception as e:
-            print(f"[ERROR] Could not read {fpath}: {e}", file=sys.stderr)
-            errors += 1
-            continue
+        for fpath in sorted(md_files):
+            try:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    raw = f.read()
+            except Exception as e:
+                print(f"[ERROR] Could not read {fpath}: {e}", file=sys.stderr)
+                errors += 1
+                continue
 
-        try:
-            fields, body = parse_frontmatter(raw)
-        except Exception as e:
-            print(f"[ERROR] Could not parse frontmatter in {fpath}: {e}", file=sys.stderr)
-            errors += 1
-            continue
+            try:
+                fields, body = parse_frontmatter(raw)
+            except Exception as e:
+                print(f"[ERROR] Could not parse frontmatter in {fpath}: {e}", file=sys.stderr)
+                errors += 1
+                continue
 
-        name = fields.get('name', '') or os.path.splitext(os.path.basename(fpath))[0]
-        description = fields.get('description', '') or ''
-        mem_type = fields.get('type', '') or ''
-        project_from_fm = fields.get('project') or None
-        content = body
+            name = fields.get('name', '') or os.path.splitext(os.path.basename(fpath))[0]
+            description = fields.get('description', '') or ''
+            mem_type = fields.get('type', '') or ''
+            project_from_fm = fields.get('project') or None
+            content = body
 
-        if not name:
-            continue
+            if not name:
+                continue
 
-        try:
-            cur.execute(
-                "SELECT id FROM agent_memories WHERE agent = ? AND name = ?",
-                (agent, name)
-            )
-            row = cur.fetchone()
-
-            if row:
+            try:
                 cur.execute(
-                    """UPDATE agent_memories
-                       SET content = ?, description = ?, type = ?, updated_at = ?
-                       WHERE agent = ? AND name = ?""",
-                    (content, description, mem_type, now, agent, name)
+                    "SELECT id FROM agent_memories WHERE agent = ? AND name = ?",
+                    (agent, name)
                 )
-                updated += 1
-            else:
-                cur.execute(
-                    """INSERT INTO agent_memories
-                       (agent, project, type, name, description, content, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (agent, project_from_fm, mem_type, name, description, content, now, now)
-                )
-                inserted += 1
+                row = cur.fetchone()
 
-        except Exception as e:
-            print(f"[ERROR] DB operation failed for {fpath}: {e}", file=sys.stderr)
-            errors += 1
-            continue
+                if row:
+                    cur.execute(
+                        """UPDATE agent_memories
+                           SET content = ?, description = ?, type = ?, updated_at = ?
+                           WHERE agent = ? AND name = ?""",
+                        (content, description, mem_type, now, agent, name)
+                    )
+                    updated += 1
+                else:
+                    cur.execute(
+                        """INSERT INTO agent_memories
+                           (agent, project, type, name, description, content, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (agent, project_from_fm, mem_type, name, description, content, now, now)
+                    )
+                    inserted += 1
 
-conn.commit()
-conn.close()
+            except Exception as e:
+                print(f"[ERROR] DB operation failed for {fpath}: {e}", file=sys.stderr)
+                errors += 1
+                continue
+
+    conn.commit()
+finally:
+    conn.close()
 
 print(f"cast-session-end: memory sync {inserted} inserted, {updated} updated, {errors} errors", file=sys.stderr)
 PYEOF
@@ -493,8 +495,7 @@ if [ -d "$_se_dir" ] && [ ! -L "$_se_dir" ] && [ -O "$_se_dir" ]; then
   rm -f -- "${_se_dir}/cast-session-start-${_se_sid}.epoch" 2>/dev/null || true
   rm -f -- "${_se_dir}/cast-blocked-${_se_sid}"-*.count 2>/dev/null || true
 fi
-rm -f -- "${TMPDIR:-/tmp}/cast-blocked-${_se_sid}"*.count 2>/dev/null || true
-rm -f -- "${TMPDIR:-/tmp}/cast-dispatch-${_se_sid}.log" 2>/dev/null || true
+rm -f -- "${TMPDIR:-/tmp}/cast-blocked-${_se_sid}"-*.count 2>/dev/null || true
 rm -f -- "${TMPDIR:-/tmp}/cast-session-start-${_se_sid}.epoch" 2>/dev/null || true
 
 exit 0

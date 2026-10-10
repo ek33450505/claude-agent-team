@@ -32,7 +32,8 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
 }
 
 @test "commit does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/commit.md"
+  run grep -q "^effort:" "$AGENTS_DIR/commit.md"
+  assert_failure 1
 }
 
 @test "devops does NOT have effort field" {

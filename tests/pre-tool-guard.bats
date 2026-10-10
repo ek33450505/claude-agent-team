@@ -367,7 +367,8 @@ print(json.dumps({
   assert_success
   [[ -f "$HOME/.claude/logs/audit.jsonl" ]]
   grep -q 'COMMIT_HATCH_USED' "$HOME/.claude/logs/audit.jsonl"
-  ! grep -q 'test hatch' "$HOME/.claude/logs/audit.jsonl"
+  run grep -q 'test hatch' "$HOME/.claude/logs/audit.jsonl"
+  assert_failure 1
   # E1: repo field must be non-empty (populated by _repo_toplevel() inside git repo)
   # E4: session_id must match CAST_SESSION_ID
   python3 -c "
@@ -1334,19 +1335,19 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
 @test "git gc --prune=now without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc --prune=<value>`'
 }
 
 @test "git gc --prune=all without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=all")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc --prune=<value>`'
 }
 
 @test "git gc --prune=1.hour.ago without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=1.hour.ago")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc --prune=<value>`'
 }
 
 @test "bare git gc → blocks (exit 2) [U6a-2: gc runs worktree prune, which follows a planted symlinked entry]" {
@@ -1419,7 +1420,7 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   export CLAUDE_SUBPROCESS=1
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc --prune=now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc --prune=<value>`'
 }
 
 # ---------------------------------------------------------------------------
@@ -1522,37 +1523,57 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
 @test "git -c gc.pruneExpire=now gc without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneExpire=now gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc` blocked'
 }
 
 @test "git -c gc.reflogExpire=now gc without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpire=now gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc` blocked'
 }
 
 @test "git -c gc.reflogExpireUnreachable=now gc without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpireUnreachable=now gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc` blocked'
 }
 
 @test "git -c gc.reflogExpire=now -c gc.pruneExpire=now gc (combined, ONE command) without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpire=now -c gc.pruneExpire=now gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc` blocked'
 }
 
 @test "git --git-dir=.git -c gc.pruneExpire=now gc (global option tolerance) → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git --git-dir=.git -c gc.pruneExpire=now gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc` blocked'
 }
 
 @test "git -c gc.pruneexpire=now gc (lowercase key, git config keys are case-insensitive) → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneexpire=now gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc` blocked'
+}
+
+# _GC_CINJECT_MSG coverage: every test above ends in `gc`, so the gc-any rule fires first.
+# These end in a NON-gc subcommand, so only the config-layer (-c gc.*Expire=) rule can block.
+@test "git -c gc.pruneExpire=now status (non-gc subcommand) → blocks with the config-layer-bypass message (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneExpire=now status")"
+  assert_failure 2
+  assert_output --partial 'config-layer bypass'
+  refute_output --partial 'Raw `git gc` blocked'
+}
+
+@test "git -c gc.reflogExpire=now fetch (non-gc subcommand) → blocks with the config-layer-bypass message (exit 2)" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.reflogExpire=now fetch")"
+  assert_failure 2
+  assert_output --partial 'config-layer bypass'
+}
+
+@test "CAST_GC_OK=1 git -c gc.pruneExpire=now status → allows (exit 0) [cinject hatch]" {
+  run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git -c gc.pruneExpire=now status")"
+  assert_success
 }
 
 @test "git -c core.quotepath=off log (unrelated key) → allows (exit 0) [regression: no false positive]" {
@@ -1585,43 +1606,43 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   export CLAUDE_SUBPROCESS=1
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c gc.pruneExpire=now gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc` blocked'
 }
 
 @test "git config gc.pruneExpire now without escape hatch → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial '`git config` write of'
 }
 
 @test "git config --local gc.pruneExpire now (any form) → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --local gc.pruneExpire now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial '`git config` write of'
 }
 
 @test "git config --replace-all gc.pruneExpire now (any form) → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git config --replace-all gc.pruneExpire now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial '`git config` write of'
 }
 
 @test "git config gc.pruneexpire now (lowercase key) → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneexpire now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial '`git config` write of'
 }
 
 @test "git config gc.reflogExpire now → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.reflogExpire now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial '`git config` write of'
 }
 
 @test "git config gc.reflogExpireUnreachable now → blocks (exit 2)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.reflogExpireUnreachable now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial '`git config` write of'
 }
 
 @test "git config user.email x (unrelated key) → allows (exit 0) [regression: no false positive]" {
@@ -1670,25 +1691,25 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
   export CLAUDE_SUBPROCESS=1
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial '`git config` write of'
 }
 
 @test "git config gc.pruneExpire now && git gc (config-write-then-bare-gc bypass) → blocks (exit 2) [the exact measured bypass this closes]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git config gc.pruneExpire now && git gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial '`git config` write of'
 }
 
 @test "CAST_GC_OK=1 git -c gc.pruneExpire=now gc && git gc --prune=now → still BLOCKS (segment 2 carries no hatch)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git -c gc.pruneExpire=now gc && git gc --prune=now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc --prune=<value>`'
 }
 
 @test "CAST_GC_OK=1 git config gc.pruneExpire now && git gc --prune=now → still BLOCKS (segment 2 carries no hatch)" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "CAST_GC_OK=1 git config gc.pruneExpire now && git gc --prune=now")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc --prune=<value>`'
 }
 
 # ---------------------------------------------------------------------------
@@ -1779,7 +1800,7 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
 @test "git gc \"--prune=now\" (quoted flag) → blocks (exit 2) [shlex tokenization]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git gc \"--prune=now\"")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc --prune=<value>`'
 }
 
 @test "git reflog \"expire\" --all (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {
@@ -1797,7 +1818,7 @@ print(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': sys.argv[1]}}))
 @test "git -c \"gc.pruneExpire=now\" gc (quoted -c value) → blocks (exit 2) [shlex tokenization]" {
   run bash "$HOOK_SH" <<< "$(make_bash_payload "git -c \"gc.pruneExpire=now\" gc")"
   assert_failure
-  assert_output --partial "gc"
+  assert_output --partial 'Raw `git gc` blocked'
 }
 
 @test "git \"config\" gc.pruneExpire now (quoted subcommand) → blocks (exit 2) [shlex tokenization]" {

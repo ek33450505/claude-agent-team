@@ -16,15 +16,21 @@ Covers:
       db_query's fail-open contract, exercised end to end through _index_source.
 
 Uses an isolated CAST_DB_PATH temp DB — never touches the real ~/.claude/cast.db.
+HOME is isolated too (S4-1 D-D): cast_db._log_error is pinned to
+Path.home()/.claude/logs/db-write-errors.log and CAST_DB_PATH does not redirect it,
+so the expected "no such table: ack_events" error in test 4 used to pollute the
+real log. setUp points HOME at a temp dir (Path.home() reads $HOME at call time).
 Loads cast-ask-index.py via importlib (hyphenated module name).
 """
 import importlib.util
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
 _INDEX_PATH = _SCRIPTS_DIR / 'cast-ask-index.py'
@@ -52,6 +58,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS record_fts USING fts5(
 )
 """
 
+# Mirrors the record_fts_ref block in scripts/cast-db-init.sh (companion map the
+# indexer maintains alongside every record_fts write).
+_RECORD_FTS_REF_DDL = """
+CREATE TABLE IF NOT EXISTS record_fts_ref (
+  fts_rowid INTEGER PRIMARY KEY,
+  kind      TEXT NOT NULL,
+  ref_id    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_record_fts_ref_kind_ref ON record_fts_ref(kind, ref_id);
+"""
+
 # Mirrors scripts/migrations/034_ack_events.sql (schema only, no data).
 _ACK_EVENTS_DDL = """
 CREATE TABLE IF NOT EXISTS ack_events (
@@ -72,6 +89,7 @@ def _init_test_db(db_path: str, with_ack_events: bool = True) -> None:
     """Create the minimal schema needed by cast-ask-index.py in a temp DB."""
     conn = sqlite3.connect(db_path)
     conn.execute(_RECORD_FTS_DDL)
+    conn.executescript(_RECORD_FTS_REF_DDL)
     if with_ack_events:
         conn.execute(_ACK_EVENTS_DDL)
     conn.commit()
@@ -130,6 +148,12 @@ class TestHatchSource(unittest.TestCase):
 
     def setUp(self):
         self._orig_db_path = os.environ.get('CAST_DB_PATH')
+
+        self._home = tempfile.mkdtemp(prefix='cast-hatch-home-')
+        self.addCleanup(shutil.rmtree, self._home, True)
+        patcher = mock.patch.dict(os.environ, {'HOME': self._home})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         self._db_fd, self._db_path = tempfile.mkstemp(suffix='.db')
         os.close(self._db_fd)

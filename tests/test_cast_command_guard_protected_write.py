@@ -17,8 +17,10 @@ CAST_CMD_GUARD_PATH selects the module under test (used by the mutation checks).
 import importlib.util
 import json
 import os
+import posixpath
 import pwd
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -73,6 +75,29 @@ class _Base(unittest.TestCase):
             self.assertIn(HATCH, msg, f"blocked by the wrong rule {label}: {cmd!r} -> {msg}")
         else:
             self.assertFalse(blocked, f"expected ALLOW {label}: {cmd!r} -> {msg}")
+
+    def parser_blocked(self, cmd):
+        """is_blocked() WITHOUT the RULE 5-C front gate: what the PARSERS (RULES 1-5) say. RULE 5-C
+        runs before every parser and blocks any `<<` text that names the surface, so is_blocked()
+        alone can no longer tell whether a parser still reads a heredoc body correctly."""
+        with mock.patch.object(self.cg, "pw_coarse_desync", return_value=False):
+            return self.cg.is_blocked(cmd)
+
+    def check_parser(self, cmd, expect_block, label=""):
+        """Pin the PARSER verdict (RULE 5-C off) so heredoc / quote handling stays covered.
+        BLOCK: the parsers block it AND the full guard blocks it. ALLOW: the parsers treat it as
+        data (RULES 1-5 and protected_write_via_bash allow) while RULE 5-C -- the text names the
+        surface and carries a `<<` -- still blocks the whole command (an accepted false positive)."""
+        blocked, msg = self.parser_blocked(cmd)
+        if expect_block:
+            self.assertTrue(blocked, f"parser: expected BLOCK {label}: {cmd!r}")
+            self.assertIn(HATCH, msg, f"parser: blocked by the wrong rule {label}: {cmd!r} -> {msg}")
+            self.check(cmd, True, label)
+        else:
+            self.assertFalse(blocked, f"parser: expected ALLOW {label}: {cmd!r} -> {msg}")
+            self.assertFalse(self.cg.protected_write_via_bash(cmd), f"parser: RULE 5 {label}: {cmd!r}")
+            self.assertEqual(self.cg.is_blocked(cmd), (True, self.cg.PW_COARSE_MSG),
+                             f"RULE 5-C should block {label}: {cmd!r}")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -286,10 +311,7 @@ ALLOW = [
     'for f in ~/.claude/scripts/*.sh; do cat "$f" > /tmp/o; done',
     'D=~/.claude/scripts; cat "$D/x" > /tmp/y',
     "echo x > ~root/y",
-    "echo hi # > ~/.claude/scripts/x",
-    "echo hi # rm ~/.claude/scripts/x",
-    "cat > /tmp/s.sh <<'EOF'\nrm ~/.claude/scripts/x\necho x > ~/.claude/githooks/y\nEOF",
-    "cat <<EOF\nrm ~/.claude/scripts/x\nEOF",
+    # (comments that NAME the surface moved to COARSE_FP: RULE 5-C reads such a comment as suspect)
     "bash /tmp/s.sh <<EOF\nfine\nEOF",
     "for f in ~/.claude/scripts/*.py; do shasum -a 256 $f; done",
     "cp -p ~/.claude/scripts/x scripts/x",
@@ -372,7 +394,24 @@ ALLOW = [
     "echo ~/.claude/scripts/x | xargs rm",   # path arrives on stdin
     "ls ~/.claude/scripts | xargs rm",
     "ln ~/.claude/scripts/x /tmp/h; echo x > /tmp/h",  # hard link made elsewhere
+]
+
+# ACCEPTED FALSE POSITIVES of RULE 5-C (the coarse desync rule). The PARSER still treats each body
+# as inert data (protected_write_via_bash is False -- pinned by TestCoarseDesyncRule); the coarse
+# rule blocks the whole command first because its text NAMES the surface AND carries a `<<`.
+# These used to be ALLOW entries (here and in SEC3_ALLOW).
+COARSE_FP = [
+    "cat > /tmp/s.sh <<'EOF'\nrm ~/.claude/scripts/x\necho x > ~/.claude/githooks/y\nEOF",
+    "cat <<EOF\nrm ~/.claude/scripts/x\nEOF",
     "python3 <<EOF\nopen('@H@/.claude/scripts/x','w')\nEOF",
+    # a COMMENT that names the surface: the parser reads data, bash may read code (RULE 5-C, F1b:
+    # a comment-looking `#` whose own line tail names the surface). The hatch does not exempt it.
+    "echo hi # > ~/.claude/scripts/x",
+    "echo hi # rm ~/.claude/scripts/x",
+    "cp a b # see ~/.claude/scripts/x",
+    # a `cd` into a glob that can match a protected root's NAME (`~/Library/Caches/*` can match the
+    # protected `com.apple.python`): the glob check is conservative; the parser sees plain data
+    'cd "${HOME}/Library/Caches"/* ; ls',
 ]
 
 
@@ -968,8 +1007,7 @@ SEC3_ALLOW = [
     # a mention inside pure data
     "echo 'see ~/.claude/scripts/x'", "git commit -m 'update ~/.claude/scripts/x docs'",
     "grep -rn '~/.claude/scripts' docs", "printf '%s\\n' \"$HOME/.claude/scripts\"",
-    # residual pins: heredoc into a non-shell interpreter is still inert text
-    "python3 <<EOF\nopen('@H@/.claude/scripts/x','w')\nEOF",
+    # (the `python3 <<EOF` residual pin moved to COARSE_FP: RULE 5-C blocks it)
 ]
 
 
@@ -1457,8 +1495,9 @@ class TestSecurityRound(_Base):
 
     def test_hatch_still_exempts_the_new_shapes(self):
         for cmd in ("arch -arm64 cp a ~/.claude/scripts/x", "cp -R src/. ~/.claude/",
-                    "bash -o errexit -c 'rm ~/.claude/scripts/x'", "mkfifo ~/.claude/scripts/f",
-                    "bash <<< 'rm ~/.claude/scripts/x'"):
+                    "bash -o errexit -c 'rm ~/.claude/scripts/x'", "mkfifo ~/.claude/scripts/f"):
+            # (the here-string `bash <<< '..'` is no longer exempt: RULE 5-C has no hatch --
+            # pinned in TestCoarseDesyncRule)
             with self.subTest(cmd=cmd):
                 self.check(f"{HATCH}=1 {cmd}", False)
 
@@ -1803,10 +1842,12 @@ class TestPerformance(_Base):
         "print(time.perf_counter() - t, int(blocked))\n"
     )
 
-    def _timed(self, cmd):
+    _CHILD_COARSE = _CHILD.replace("g.is_blocked(cmd)", "(g.pw_coarse_desync(cmd), '')")
+
+    def _timed(self, cmd, child=None):
         env = dict(os.environ, HOME=self.home)
-        r = subprocess.run([sys.executable, "-c", self._CHILD, str(_GUARD)], input=cmd, text=True,
-                           capture_output=True, env=env, cwd=self.work, timeout=60)
+        r = subprocess.run([sys.executable, "-c", child or self._CHILD, str(_GUARD)], input=cmd,
+                           text=True, capture_output=True, env=env, cwd=self.work, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         secs, blocked = r.stdout.split()
         return float(secs), bool(int(blocked))
@@ -1844,6 +1885,70 @@ class TestPerformance(_Base):
             self.assertTrue(blocked)
             self.assertLess(secs, self.BUDGET)
 
+    def test_1mb_coarse_gated_command_blocked_in_time(self):
+        """RULE 5-C is substring / regex only: a ~1 MB command that carries a `<<` and names the
+        surface is blocked well inside the budget (it runs before every parser)."""
+        cmd = "x" * 1_000_000 + "\n<<EOF\n" + "echo x > ~/.claude/scripts/evil"
+        secs, blocked = self._timed(cmd)
+        self.assertTrue(blocked)
+        self.assertLess(secs, self.BUDGET)
+
+    def test_coarse_rule_is_linear_on_adversarial_1mb(self):
+        """RULE 5-C runs FIRST on every Bash call, so its gate, ancestor scan, comment scan,
+        cd-glob scan, home expansion and backslash-newline join / re-run must be linear: a
+        backtracking `#...'...\\n` gate and an unbounded `$HOME[^/\\s]*` were both quadratic. Each
+        case also pins the VERDICT, so a fast wrong answer (a rule that silently stopped firing)
+        cannot pass.
+
+        The rule alone is always held to BUDGET. The whole guard is held to BUDGET when the rule
+        decides (expected True: it runs first and returns), and to 4 x BUDGET otherwise: then the
+        PRE-EXISTING parsers dominate (~1.4 s on these 1 MB inputs on an idle machine) and a loaded
+        machine would make a strict bound flaky without telling us anything about RULE 5-C."""
+        names = "# ~/.claude/scripts/x\n"
+        cases = {
+            # name: (command, does the rule block it?, also time the whole guard?)
+            '"$HOME" run': ("$HOME" * 200_000 + "\n<<EOF\n", True, True),
+            '"${HOME:-" run': ("${HOME:-" * 125_000 + "\n<<x", True, True),
+            "'#' run, then a heredoc": ("#" * 1_000_000 + "\n<<x", False, True),
+            "'#' run, quote on the last line": ("x\n" + "#" * 1_000_000 + "'", False, False),
+            '"$HOME/./.claude/" run': ("$HOME/./.claude/" * 62_500 + "\n<<x", True, True),
+            '"$HOME/./x/" run, names no root': ("$HOME/./x/" * 100_000 + "\n<<x", False, True),
+            "'/.' run": ("/." * 500_000 + "/\n<<x", False, True),
+            "'/a/../' run": ("/a/../" * 160_000 + "\n<<x", False, True),
+            "'a/b/../c;' words": ("a/b/../c;" * 110_000 + "\n<<x", False, True),
+            "comment + backslash lines": ("# a \\\n" * 150_000, False, True),
+            "1 MB of VT": ("\x0b" * 1_000_000, False, True),
+            "backslash-newline lines": ("echo hi \\\n" * 100_000, False, True),
+            "'a<B>' pairs (parser-slow at HEAD)": ("a\\\n" * 400_000, False, False),
+            "250k comment lines": ("# a\n" * 250_000, False, True),
+            "comment tails that name the surface": (names * 50_000, True, True),
+            "'${a #b}' run": ("${a #b}" * 140_000, False, True),
+            "'a #' run on one line": ("a #" * 330_000, False, True),
+            "'cd ' words, one glob": ("cd " * 300_000 + "*", False, True),
+            "'cd ~/x*' lines": ("cd ~/x*\n" * 60_000, False, True),
+            "'[[ a ]]' lines": ("[[ a == b ]]\n" * 70_000, False, True),
+            '"${HOME-}/x" run': ("${HOME-}/x" * 100_000, False, True),
+            '"${HOME-}/.claude//scripts" run': ("${HOME-}/.claude//scripts " * 40_000, True, True),
+            "'~/x/../' words": ("~/x/../" * 140_000 + "\n<<x", False, True),
+            "'$HOME/a ' words": ("$HOME/a " * 120_000 + "\n<<x", False, True),
+            "'d=~/a ' words": ("d=~/a " * 150_000 + "\n<<x", False, True),
+            "'=' run": ("=" * 1_000_000 + "/\n<<x", False, True),
+            "1 MB word, no slash": ("a" * 1_000_000 + "\n<<x", False, True),
+        }
+        for name, (cmd, expected, whole) in cases.items():
+            with self.subTest(case=name):
+                # the rule alone: this is what a regex regression would slow down ...
+                secs, blocked = self._timed(cmd, self._CHILD_COARSE)
+                self.assertLess(secs, self.BUDGET, name)
+                self.assertEqual(blocked, expected, name)
+                # ... and the whole guard (skipped where the pre-existing tokenizer alone costs seconds:
+                # ~27 s at HEAD for a long `#` run + trailing quote, ~29 s for 400k `a<B>` pairs)
+                if whole:
+                    secs, blocked = self._timed(cmd)
+                    self.assertLess(secs, self.BUDGET if expected else 4 * self.BUDGET,
+                                    name + " (full guard)")
+                    self.assertEqual(blocked, expected, name + " (full guard)")
+
     def test_padding_does_not_hide_the_write(self):
         pad = "A" * 60_000
         self.check(f"echo {pad}; echo x > ~/.claude/scripts/y", True)
@@ -1851,28 +1956,32 @@ class TestPerformance(_Base):
 
 
 class TestHeredocBodyAttribution(_Base):
-    """S4-b: heredoc bodies. A quoted-delimiter body fed to a non-shell is DATA; an unquoted body's
-    substitutions RUN; a heredoc on a line that runs ANY shell is scanned as a script (a documented
-    fail-closed residual, see test_shell_earlier_on_line_*); a delimiter the guard would read
-    differently from bash opens NO heredoc (so later lines are scanned, never hidden)."""
+    """S4-b: heredoc bodies, at the PARSER level (RULE 5-C off -- see check_parser). A quoted-delimiter
+    body fed to a non-shell is DATA; an unquoted body's substitutions RUN; a heredoc on a line that
+    runs ANY shell is scanned as a script (a documented fail-closed residual, see
+    test_shell_earlier_on_line_*); a delimiter the guard would read differently from bash opens NO
+    heredoc (so later lines are scanned, never hidden). Since G1 the FULL guard blocks every one of
+    the "data" shapes below anyway (RULE 5-C: the text names the surface AND carries a `<<`);
+    check_parser(.., False) pins both halves."""
 
     PRE = "S=/tmp/x; bash ~/.claude/githooks/pre-commit > $S/o 2>&1; cat > $S/m "
     W = "cp x ~/.claude/scripts/y"
 
     def blocked(self, cmd):
-        return self.cg.is_blocked(cmd)[0]
+        return self.parser_blocked(cmd)[0]
 
     def test_repro_backticks_in_quoted_heredoc_allowed(self):
-        self.check(self.PRE + "<<'EOF'\n`stat -f x` text\nEOF", False)
+        """Parser-level ALLOW (the original S4-b false positive); RULE 5-C now blocks the command."""
+        self.check_parser(self.PRE + "<<'EOF'\n`stat -f x` text\nEOF", False)
 
     def test_shell_earlier_on_line_is_a_documented_fail_closed_residual(self):
         # The ORIGINAL false-positive shape stays BLOCKED on purpose: the guard cannot tell which
         # command on a line a heredoc feeds, and narrowing it let `{ bash; } <<'EOF'` etc. through
         # while bash ran the body (security High 1). Workaround: split into two commands.
-        self.check(self.PRE + "<<'EOF'\n`rm ~/.claude/scripts/a` text\nEOF", True)
-        self.check(self.PRE + "<<'EOF'\nrm -rf ~/.claude/scripts\nEOF", True)
+        self.check_parser(self.PRE + "<<'EOF'\n`rm ~/.claude/scripts/a` text\nEOF", True)
+        self.check_parser(self.PRE + "<<'EOF'\nrm -rf ~/.claude/scripts\nEOF", True)
         # ... and the split form is allowed
-        self.check("bash ~/.claude/githooks/pre-commit\ncat > /tmp/m <<'EOF'\nrm -rf ~/.claude/scripts\nEOF",
+        self.check_parser("bash ~/.claude/githooks/pre-commit\ncat > /tmp/m <<'EOF'\nrm -rf ~/.claude/scripts\nEOF",
                    False)
 
     def test_shell_on_the_line_in_any_position_makes_the_body_a_script(self):
@@ -1893,46 +2002,49 @@ class TestHeredocBodyAttribution(_Base):
             "source /dev/stdin <<'EOF'\n%s\nEOF",
         ):
             with self.subTest(cmd=cmd):
-                self.check(cmd % self.W, True)
-        self.check("bash <<'EOF'\n%s" % self.W, True)  # unterminated at EOF
+                self.check_parser(cmd % self.W, True)
+        self.check_parser("bash <<'EOF'\n%s" % self.W, True)  # unterminated at EOF
 
     def test_command_substitution_fed_to_bash_c_blocked(self):
         for q in ("<<'EOF'", "<<EOF"):
             with self.subTest(q=q):
-                self.check(f"bash -c $(cat {q}\n{self.W}\nEOF\n)", True)
+                self.check_parser(f"bash -c $(cat {q}\n{self.W}\nEOF\n)", True)
                 self.assertTrue(self.blocked(f"bash -c $(cat {q}\nrm -rf $HOME\nEOF\n)"))
 
     def test_quoted_delimiter_spellings_are_inert_for_non_shell(self):
+        """Parser-level: a quoted-delimiter body fed to a non-shell is data (RULE 5-C still blocks)."""
         for op in ("<<'EOF'", '<<"EOF"', "<<-'EOF'"):
             with self.subTest(op=op):
-                self.check(f"cat > /tmp/f {op}\n`cp x ~/.claude/scripts/y`\nEOF", False)
-                self.check(f"cat > /tmp/f {op}\n$(cp x ~/.claude/scripts/y)\nEOF", False)
+                self.check_parser(f"cat > /tmp/f {op}\n`cp x ~/.claude/scripts/y`\nEOF", False)
+                self.check_parser(f"cat > /tmp/f {op}\n$(cp x ~/.claude/scripts/y)\nEOF", False)
 
     def test_quoted_heredoc_literal_write_line_is_data(self):
-        self.check("cat > /tmp/notes <<'EOF'\nrm -rf ~/.claude/scripts\nEOF", False)
-        self.check("cat > /tmp/notes <<EOF\nrm -rf ~/.claude/scripts\nEOF", False)  # plain text
+        """Parser-level: a literal write line in a `cat > f <<EOF` body is data (RULE 5-C blocks)."""
+        self.check_parser("cat > /tmp/notes <<'EOF'\nrm -rf ~/.claude/scripts\nEOF", False)
+        self.check_parser("cat > /tmp/notes <<EOF\nrm -rf ~/.claude/scripts\nEOF", False)  # plain text
 
     def test_unquoted_heredoc_substitutions_are_scanned(self):
-        self.check("cat > /tmp/f <<EOF\n`cp x ~/.claude/scripts/y`\nEOF", True)
-        self.check("cat > /tmp/f <<EOF\nhello $(cp x ~/.claude/scripts/y) world\nEOF", True)
-        self.check("cat > /tmp/f <<-EOF\n\t`cp x ~/.claude/scripts/y`\n\tEOF", True)
+        self.check_parser("cat > /tmp/f <<EOF\n`cp x ~/.claude/scripts/y`\nEOF", True)
+        self.check_parser("cat > /tmp/f <<EOF\nhello $(cp x ~/.claude/scripts/y) world\nEOF", True)
+        self.check_parser("cat > /tmp/f <<-EOF\n\t`cp x ~/.claude/scripts/y`\n\tEOF", True)
         # an apostrophe in the body is text, not a quote: it must not hide the substitution
-        self.check("cat > /tmp/f <<EOF\ndon't `cp x ~/.claude/scripts/y`\nEOF", True)
+        self.check_parser("cat > /tmp/f <<EOF\ndon't `cp x ~/.claude/scripts/y`\nEOF", True)
 
     def test_unquoted_heredoc_line_continuation_does_not_hide_substitution(self):
         # bash removes `\<newline>` before expansion, so `$\<NL>(cmd)` IS `$(cmd)`
-        self.check("cat > /tmp/f <<EOF\n$\\\n(cp x ~/.claude/scripts/y)\nEOF", True)
-        self.check("cat > /tmp/f <<EOF\n$(cp x \\\n~/.claude/scripts/y)\nEOF", True)
-        self.check("cat > /tmp/f <<EOF\n\\\n`cp x ~/.claude/scripts/y`\nEOF", True)
+        self.check_parser("cat > /tmp/f <<EOF\n$\\\n(cp x ~/.claude/scripts/y)\nEOF", True)
+        self.check_parser("cat > /tmp/f <<EOF\n$(cp x \\\n~/.claude/scripts/y)\nEOF", True)
+        self.check_parser("cat > /tmp/f <<EOF\n\\\n`cp x ~/.claude/scripts/y`\nEOF", True)
         # an escaped backslash before the newline is NOT a continuation, and an escaped `$` is inert
-        self.check("cat > /tmp/f <<EOF\n\\\\\n(cp x ~/.claude/scripts/y)\nEOF", False)
-        self.check("cat > /tmp/f <<EOF\n\\$\\\n(cp x ~/.claude/scripts/y)\nEOF", False)
+        self.check_parser("cat > /tmp/f <<EOF\n\\\\\n(cp x ~/.claude/scripts/y)\nEOF", False)
+        self.check_parser("cat > /tmp/f <<EOF\n\\$\\\n(cp x ~/.claude/scripts/y)\nEOF", False)
 
     def test_unquoted_heredoc_benign_or_escaped_substitutions_allowed(self):
-        self.check("cat > /tmp/f <<EOF\n`date` $(echo hi) and ~/.claude/scripts as text\nEOF", False)
-        self.check("cat > /tmp/f <<EOF\n\\`cp x ~/.claude/scripts/y\\` \\$(rm ~/.claude/scripts/y)\nEOF",
+        """Parser-level ALLOW only; the full guard blocks each of these via RULE 5-C."""
+        self.check_parser("cat > /tmp/f <<EOF\n`date` $(echo hi) and ~/.claude/scripts as text\nEOF", False)
+        self.check_parser("cat > /tmp/f <<EOF\n\\`cp x ~/.claude/scripts/y\\` \\$(rm ~/.claude/scripts/y)\nEOF",
                    False)
-        self.check("cat > /tmp/f <<EOF\n$(cat ~/.claude/scripts/y)\nEOF", False)  # a reader
+        self.check_parser("cat > /tmp/f <<EOF\n$(cat ~/.claude/scripts/y)\nEOF", False)  # a reader
 
     def test_backslash_delimiter_opens_no_heredoc_so_it_cannot_hide_commands(self):
         # `<<\EOF` is quoted for bash, but recognising it hid these from RULES 1-3 and RULE 5
@@ -1944,8 +2056,9 @@ class TestHeredocBodyAttribution(_Base):
                 self.assertTrue(self.blocked(cmd), cmd)
 
     def test_two_heredocs_on_one_line(self):
-        self.check("cat <<'A' > /tmp/f; cat <<'B' > /tmp/g\nrm ~/.claude/scripts/y\nA\ncp x y\nB", False)
-        self.check("cat <<'A' > /tmp/f; bash <<'B'\nrm ~/.claude/scripts/y\nA\ncp x ~/.claude/scripts/y\nB",
+        """Parser-level: only the heredoc fed to a shell is a script (RULE 5-C blocks both lines)."""
+        self.check_parser("cat <<'A' > /tmp/f; cat <<'B' > /tmp/g\nrm ~/.claude/scripts/y\nA\ncp x y\nB", False)
+        self.check_parser("cat <<'A' > /tmp/f; bash <<'B'\nrm ~/.claude/scripts/y\nA\ncp x ~/.claude/scripts/y\nB",
                    True)
 
 
@@ -1968,20 +2081,21 @@ class TestHeredocDelimiterMismatch(_Base):
     def test_blocked_by_rule5(self):
         for name, cmd in self.cases(self.WRITE).items():
             with self.subTest(name=name):
-                self.check(cmd, True, name)
+                self.check_parser(cmd, True, name)
 
     def test_blocked_by_rm_and_pkill_rules(self):
         for tail in ("rm -rf $HOME", "pkill -9 claude", "killall node"):
             for name, cmd in self.cases(tail).items():
                 with self.subTest(name=name, tail=tail):
-                    blocked, _msg = self.cg.is_blocked(cmd)
+                    blocked, _msg = self.parser_blocked(cmd)  # RULES 1-3 + 5, RULE 5-C off
                     self.assertTrue(blocked, cmd)
 
     def test_regular_heredocs_still_strip_their_bodies(self):
+        """Parser-level (RULE 5-C off): RULES 1-5 still skip a regular heredoc body."""
         for op in ("<<EOF", "<<'EOF'", '<<"EOF"', "<<-EOF", "<<EOF >/tmp/f", "<<EOF>/tmp/f", "<<EOF;"):
             with self.subTest(op=op):
-                self.check(f"cat {op}\nrm -rf ~/.claude/scripts\npkill x\nEOF\necho done", False)
-        self.check("echo $((1<<2)); cat <<EOF\nrm -rf ~/.claude/scripts\nEOF", False)  # shift closed first
+                self.check_parser(f"cat {op}\nrm -rf ~/.claude/scripts\npkill x\nEOF\necho done", False)
+        self.check_parser("echo $((1<<2)); cat <<EOF\nrm -rf ~/.claude/scripts\nEOF", False)  # shift closed first
 
     def test_find_heredoc_words(self):
         f = self.cg._find_heredoc_words_q
@@ -1996,6 +2110,743 @@ class TestHeredocDelimiterMismatch(_Base):
                      "echo $((1<<EOF))", "(( x = 1<<EOF ))", 'cat <<"E\\"F"', "cat <<'EOF", "cat <<EOF'x'"):
             with self.subTest(line=line):
                 self.assertEqual(f(line), [], line)
+
+
+class TestCoarseDesyncRule(_Base):
+    """RULE 5-C (G1 guard freeze): checked FIRST in is_blocked, on the RAW text, substring tests only.
+    BLOCK when the text NAMES the exec surface (a root, a relative root spelling, or a home-anchored
+    ancestor as a path end) AND carries a construct the line/quote model can desync on (`<<`
+    anywhere, `$'`/`$"`, a control character other than tab/newline or a non-ASCII blank, a `#` +
+    quote/backtick before a later line, a `#` on a line that ends in a backslash). Spellings of the
+    surface are normalised (`//`, `/./`, `x/../`). No parsing, NO escape hatch, fail CLOSED. The backslash-newline re-run neutralises RULE 5's own hatch too."""
+
+    P = "echo x > ~/.claude/scripts/evil"
+    SMUGGLE = "cat <<E\\OF\n'\nEOF\n"   # bash: heredoc `EOF` (quoted); the guard used to read `E\OF`
+
+    def coarse(self, cmd):
+        return self.cg.is_blocked(cmd)
+
+    def assert_coarse(self, cmd, label=""):
+        self.assertEqual(self.coarse(cmd), (True, self.cg.PW_COARSE_MSG), f"{label}: {cmd!r}")
+
+    def block_cases(self):
+        P = self.P
+        return {
+            "H1 E\\OF quote smuggle": "cat <<E\\OF\n'\nEOF\n" + P + "\n#'",
+            "partial-quote delimiter": "cat <<'E'OF\n\"\nEOF\n" + P + "\n#\"",
+            "$[ ] shift": "echo $[ 1<<EOF ]\n" + P + "\nx\nEOF\n",
+            "${ } shift": "a=abcdef; echo ${a:1<<EOF }\n" + P + "\nx\nEOF\n",
+            "array subscript shift": "a[1<<EOF ]=1\n" + P + "\nx\nEOF\n",
+            "$'..' with escaped quote": "echo $'it\\'s <<EOF '\nx\nEOF\n" + P,
+            "<< inside nested quotes": 'echo "$(echo "<<EOF " )"\n' + P + "\nx\nEOF\n",
+            "comment apostrophe": "echo hi # it's\n" + P + "\n",
+            "$'a\\'b' on ONE line": "echo $'a\\'b'; " + P,
+            'locale $"..."': 'echo $"x"; ' + P,
+            "bash -c $(cat <<'EOF')": "bash -c \"$(cat <<'EOF'\n" + P + "\nEOF\n)\"",
+            "backslash-newline in a bash <<EOF body": "bash <<EOF\ncp /dev/null \\\n~/.claude/scripts/evil\nEOF",
+            "heredoc then backslash-newline | sh": "cat <<'A' \\\n| sh\n" + P + "\nA",
+            "heredoc, pipe on the next line": "cat <<'EOF' |\n" + P + "\nEOF\nbash",
+            "exec 3<<'EOF' + bash <&3": "exec 3<<'EOF'\n" + P + "\nEOF\nbash <&3",
+            "read -d '' s <<'EOF'; eval": "read -d '' s <<'EOF'\n" + P + "\nEOF\neval \"$s\"",
+            "$SHELL <<'EOF'": "$SHELL <<'EOF'\n" + P + "\nEOF",
+            # ancestors / relative spellings reached behind a desync
+            "ancestor held in $D": self.SMUGGLE + "D=$HOME/.claude\ncp /dev/null $D/scripts/evil\n#'",
+            "ancestor via cd": self.SMUGGLE + "cd ~/.claude\necho x > scripts/evil\n#'",
+            "relative root after bare cd": "cd\n" + self.SMUGGLE + "echo x > .claude/scripts/evil\n#'",
+            "absolute home spelling": self.SMUGGLE + f"echo x > {self.home}/.claude/scripts/evil\n#'",
+            "Library root": self.SMUGGLE + "echo x > ~/Library/LaunchAgents/evil.plist\n#'",
+            "here-string": "bash <<< 'rm ~/.claude/scripts/x'",
+            "here-string, hatch is NOT honoured": f"{HATCH}=1 bash <<< 'rm ~/.claude/scripts/x'",
+            **self.round2_block_cases(),
+            **self.round3_block_cases(),
+            **self.round4_block_cases(),
+            **self.round5_block_cases(),
+        }
+
+    def round3_block_cases(self):
+        """Security round 2 + review round 2: a `#` the parser reads as a comment but bash does not
+        (F1), and `..` chains collapsed at any depth, also at the end of a word (HIGH-A)."""
+        S = "~/.claude/scripts/evil"
+        SM = self.SMUGGLE
+        tail = "echo x > scripts/evil\n#'"
+        cases = {
+            "F1 H1a ${x:- #b} redirect": "echo ${x:- #b} > " + S,
+            "F1 H1b ${x:-a #b} redirect": "echo ${x:-a #b} > " + S,
+            "F1 H1c ${x:-a #b} tee": "echo q | tee ${x:-a #b} " + S,
+            "F1 H1i ${x:+ #b} touch": "touch ${x:+ #b} " + S,
+            "F1 E3 assignment ${x:- #b}": "y=${x:- #b} echo q > " + S,
+            "F1 E9 tee ${x:- #b}": "echo q | tee ${x:- #b} " + S + " ",
+            # needs F1a (the surface is named BEFORE the fake comment; nothing after it names it)
+            "F1a E10 cd ancestor, then ${x:- #b}, relative write":
+                "cd ~/.claude ${x:- #b}; echo x > scripts/evil",
+            "F1a ${x:- #b} after an ancestor cd": "cd ~/.claude\necho ${x:-a #b}; echo x > scripts/evil",
+            # `..` at the END of a word, before every terminator, and chains deeper than 4
+            "HA cd ~/.claude/x/..": "cd ~/.claude/x/..\n" + SM + tail,
+            "HA .. before a blank": "cd ~/.claude/x/.. \n" + SM + tail,
+            "HA .. before ;": "cd ~/.claude/x/..;\n" + SM + tail,
+            "HA .. before &&": "cd ~/.claude/x/.. && true\n" + SM + tail,
+            "HA .. before )": "(cd ~/.claude/x/..)\n" + SM + tail,
+            "HA .. before |": "cd ~/.claude/x/..|cat\n" + SM + tail,
+            "HA 16 pairs": "cd ~" + "/x/../" * 16 + ".claude\n" + SM + tail,
+            "HA 40 pairs": "cd ~" + "/x/../" * 40 + ".claude\n" + SM + tail,
+            "HA 5-deep ..": SM + "echo q > ~/.claude/a/b/c/d/e/../../../../../scripts/evil\n#'",
+            "HA 6-deep ..": SM + "echo q > ~/.claude/a/b/c/d/e/f/../../../../../../scripts/evil\n#'",
+        }
+        return cases
+
+    def setUp(self):
+        super().setUp()
+        # real directories for the glob-spelled roots (G3-3) and the home-escape walks
+        for d in ("Library/LaunchAgents", "Library/Python", ".claude/cast-state", ".claude/x"):
+            os.makedirs(os.path.join(self.home, d), exist_ok=True)
+
+    def round4_block_cases(self):
+        """Security round 3 + review round 3: `${HOME<modifier>}` anchors (G3-1), a backslash-newline
+        inside the root spelling behind a comment-quote desync (G3-2), `cd` into a glob-spelled
+        root (G3-3), and a home escape `~/../<user>/.claude`."""
+        SM = self.SMUGGLE
+        tail = "echo x > scripts/evil\n#'"
+        user = os.path.basename(self.home)
+        cases = {}
+        anchors = ["${HOME/oe}", "${HOME/zz/}", "${HOME-}", "${HOME:-}", "${HOME:0}", "${HOME%}",
+                   "${HOME#}", "${HOME,}", '"${HOME-}"', "${HOME+$HOME}", "${HOME:-~}", "${HOME%%zz}",
+                   "${HOME##zz}"]
+        spellings = {
+            "leading //": "//.claude/scripts/evil",
+            "inner //": "/.claude//scripts/evil",
+            "leading /./": "/./.claude/scripts/evil",
+            "inner /./": "/.claude/./scripts/evil",
+            "x/..": "/.claude/x/../scripts/evil",
+            "upper case": "/.CLAUDE/SCRIPTS/evil",
+        }
+        for anchor in anchors:
+            for label, path in spellings.items():
+                cases["G3-1 %s %s" % (anchor, label)] = "echo q > " + anchor + path
+        for anchor in ("${HOME-}", "${HOME:-}"):
+            for path in ("/Library//LaunchAgents/evil.plist", "/.claude//cast-state/evil",
+                         "/.claude/./config/evil", "/.claude//githooks/evil",
+                         "/Library/./Python/evil"):
+                cases["G3-1 %s %s" % (anchor, path)] = "echo q > " + anchor + path
+        cases.update({
+            "G3-2 comment apostrophe + B in the dot-dir": "# '\necho q > ~/.cla\\\nude/scripts/evil",
+            "G3-2 comment apostrophe + B in the subdir": "# '\necho q > ~/.claude/scr\\\nipts/evil",
+            'G3-2 comment double quote + B': '# "\necho q > ~/.cla\\\nude/scripts/evil',
+            "G3-2 comment backtick + B": "# `\necho q > ~/.cla\\\nude/scripts/evil",
+            "G3-2 heredoc gate + B": "cat <<'E'\nx\nE\necho q > ~/.cla\\\nude/scripts/evil",
+            "G3-2 $'..' gate + B": ": $'a'\necho q > $HOME/.cla\\\nude/scripts/evil",
+            "G3-2 param-hash gate + B": ": ${x:- #b}\necho q > ~/.cla\\\nude/scripts/evil",
+            "G3-2 VT gate + B": "\x0b\necho q > ~/.cla\\\nude/scripts/evil",
+            "G3-2 no gate, Library, B": "echo q > ~/Libr\\\nary/LaunchAgents/evil",
+            "G3-3 cd ~/Library*/LaunchAgents": "cd ~/Library*/LaunchAgents; echo q > evil",
+            "G3-3 cd ~/.cl*/scripts": "cd ~/.cl*/scripts; echo q > evil",
+            "G3-3 cd ~/.claud?/scripts": "cd ~/.claud?/scripts; echo q > evil",
+            "G3-3 cd ~/.claude/scr*": "cd ~/.claude/scr*; echo q > evil",
+            "G3-3 pushd glob": "pushd ~/.cl*/scripts; echo q > evil",
+            "G3-3 bracket class": "cd ~/.cl[a]ude/scripts; echo q > evil",
+            "G3-3 cd after &&": "true && cd ~/.cl*/scripts && echo q > evil",
+            "G3-3 cd in a subshell": "(cd ~/.cl*/scripts; echo q > evil)",
+            "G3-3 cd on its own line": "ls\ncd ~/.cl*/scripts\necho q > evil",
+            "G3-3 cd -- glob": "cd -- ~/.cl*/scripts; echo q > evil",
+            # home escape: `..` climbs out of the home and back in
+            "HE cd ~/../U/.claude": "cd ~/../%s/.claude\n" % user + SM + tail,
+            "HE cd $HOME/../U/.claude": "cd $HOME/../%s/.claude\n" % user + SM + tail,
+            "HE cd ${HOME}/../U/.claude": "cd ${HOME}/../%s/.claude\n" % user + SM + tail,
+            "HE D=~/../U/.claude": "D=~/../%s/.claude\n" % user + SM + "cp /dev/null $D/scripts/evil\n#'",
+            "HE export D=$HOME/../U/.claude":
+                "export D=$HOME/../%s/.claude\n" % user + SM + "cp /dev/null $D/scripts/evil\n#'",
+            "HE cd ~/x/../../U/.claude": "cd ~/x/../../%s/.claude\n" % user + SM + tail,
+            "HE cd ~/../U/.claude/scripts": "cd ~/../%s/.claude/scripts\n" % user + SM + tail,
+        })
+        return cases
+
+    def round5_block_cases(self):
+        """Final review: the shell removes quotes and backslashes and expands `$HOME` BEFORE it
+        globs, so `cd "$HOME"/.cl*/scripts`, `"cd" ~/.cl*/...` and a quote-spliced glob target
+        (`~/.cl""*/scripts/..`) reach the real roots (F1, F12)."""
+        cases = {
+            "F1 cd ${HOME}/.cl*": "cd ${HOME}/.cl*/scripts; echo q > evil",
+            'F1 cd "$HOME"/.cl*': 'cd "$HOME"/.cl*/scripts; echo q > evil',
+            'F1 cd ~/.cl""*': 'cd ~/.cl""*/scripts; echo q > evil',
+            "F1 cd ~/.cl''*": "cd ~/.cl''*/scripts; echo q > evil",
+            "F1 cd ~/.cl*/s'cripts'": "cd ~/.cl*/s'cripts'; echo q > evil",
+            'F1 "cd" ~/.cl*': '"cd" ~/.cl*/scripts; echo q > evil',
+            "F1 \\cd ~/.cl*": "\\cd ~/.cl*/scripts; echo q > evil",
+            "F1 c''d ~/.cl*": "c''d ~/.cl*/scripts; echo q > evil",
+            "F1 pushd with quotes": 'pushd "$HOME"/.cl*/scripts; echo q > evil',
+            "F12 $'x' gate, quote-spliced glob target": "echo $'x'; echo Q > ~/.cl\"\"*/scripts/evil",
+            "F12 comment-quote gate, quote-spliced glob target": "# '\necho Q > ~/.cl\"\"*/scripts/evil",
+            "F12 $'a\\'b' gate, quote-spliced glob target": "echo $'a\\'b'; echo Q > ~/.cl\"\"*/scripts/evil",
+            "F12 comment-quote gate, plain glob target": "# '\necho Q > ~/.cl*/scripts/evil",
+            "F12 comment-quote gate, $HOME + quote-spliced glob": "# '\necho Q > \"$HOME\"/.cl''*/scripts/evil",
+        }
+        return cases
+
+    def bsnl_block_cases(self):
+        """F2: backslash-newline hides a write from the line model. Blocked by re-running RULE 5's
+        analyzer on the joined text (blank-surrounded joins too, so a gate on splices alone is not
+        enough). These never trip the other gate terms."""
+        B = "\\\n"
+        S = "~/.claude/scripts/evil"
+        return {
+            "H4f ~ B /.claude": "echo q > ~" + B + "/.claude/scripts/evil",
+            "K3 > B ~/": "echo q > " + B + S,
+            "K4 tee ~ B /": "echo q | tee ~" + B + "/.claude/scripts/evil",
+            "K5 cp ~ B /": "cp /dev/null ~" + B + "/.claude/scripts/evil",
+            "K8 $ B HOME": "echo q > $" + B + "HOME/.claude/scripts/evil",
+            "K13 > B blank": "echo q >" + B + " " + S,
+            "K14 > B no blank": "echo q >" + B + S,
+            "K15 ls; ~ B /": "ls; echo q > ~" + B + "/.claude/scripts/evil",
+            "blank B blank before the target": "echo q > " + B + " " + S,
+            "command split by B": "echo q " + B + " > " + S,
+            "TAB after B": "echo q > " + B + "\t" + S,
+            "B before tee": "echo q | " + B + "  tee " + S,
+            "word B blank": "cp /dev/null" + B + " " + S,
+            "splice > B ~": "echo q > " + B + S,
+            "splice cp B path": "cp /dev/null " + B + S,
+            "BN1 cd split by B": "cd ~/.cla" + B + "ude/scripts && echo x > evil",
+            "BN4 heredoc + cd split by B": "cat <<'E'\nbody\nE\ncd ~/.cla" + B + "ude/scripts\necho x > evil\n",
+            # the WHOLE check also runs on the joined text: a gate token or a spelling split by a join
+            "gate `<<` split by B (heredoc smuggle)": "bash <" + B + "<E\necho q > " + S + "\nE",
+            "gate `<<` split by B, quoted delimiter": "bash <" + B + "<'E'\necho q > " + S + "\nE",
+            "gate `$'` split by B": "echo $" + B + "'a\\'b'; echo q > " + S,
+            'gate `$"` split by B': 'echo $' + B + '"x"; echo q > ' + S,
+            "F1b comment tail names the surface only once joined": "echo hi # see ~/.cla" + B + "ude/scripts/x",
+            # ... shapes the RULE 5 analyzer reads as inert data on the joined text (so only the gate
+            # + names check on the joined text can block them; the same accepted false positives
+            # as their unsplit forms)
+            "inert heredoc `<<` split by B": "cat <" + B + "<E\necho q > " + S + "\nE",
+            "inert `$'` split by B": "echo $" + B + "'x' " + S,
+            'inert `$"` split by B': 'echo $' + B + '"x" ' + S,
+        }
+
+    def round2_block_cases(self):
+        """Code-review + security round 1: desyncs real bash executes and the guard allowed."""
+        R = "~/.claude/scripts/evil"
+        W = "echo x > " + R
+        SM = self.SMUGGLE
+        cases = {
+            # odd whitespace: Python splits on it, bash does not, so `#` after it is no comment
+            "NEL fake comment": "echo a\x85# b > " + R,
+            "VT fake comment cp": "cp /dev/null\x0b#x " + R,
+            "VT then touch": "touch\x0b#x " + R,
+            "NBSP fake comment tee": "echo a\xa0#| tee " + R,
+            "VT, absolute home": "echo a\x0b# b > " + self.home + "/.claude/scripts/evil",
+            "VT, $HOME": "echo a\x0b# b > $HOME/.claude/scripts/evil",
+            "VT, githooks": "echo a\x0b# b > ~/.claude/githooks/evil",
+            "VT, config": "echo a\x0b# b > ~/.claude/config/evil",
+            "VT, Library/Python": "echo a\x0b# b > ~/Library/Python/evil",
+            "VT, LaunchAgents": "echo a\x0b# b > ~/Library/LaunchAgents/evil",
+            "CRLF comment": "# c\r\n" + W,
+            "NUL": "echo a\x00# b > " + R,
+            # a comment bash does NOT join to the next line
+            "comment, backslash-newline": "# c \\\n" + W,
+            "comment, backslash-newline, mid-line": "echo hi # note \\\n" + W,
+            "comment, backslash-newline, $HOME": "echo hi # note \\\necho x > $HOME/.claude/scripts/evil",
+            "comment, backslash-newline, line start": "# c\\\n" + W,
+            # spellings of an ancestor / relative root reached behind a desync
+            "cd $HOME/./.claude": "cd $HOME/./.claude\n" + SM + "echo x > scripts/evil\n#'",
+            "cd ~/./.claude": "cd ~/./.claude\n" + SM + "echo x > scripts/evil\n#'",
+            "cd $HOME, .claude/./scripts": "cd $HOME\n" + SM + "echo x > .claude/./scripts/evil\n#'",
+            "cd $HOME/x/../.claude": "cd $HOME/x/../.claude\n" + SM + "echo x > scripts/evil\n#'",
+            "cd $HOME//.claude": SM + "cd $HOME//.claude\necho x > scripts/evil\n#'",
+            "cd ${HOME}/./.claude": "cd ${HOME}/./.claude\n" + SM + "echo x > scripts/evil\n#'",
+            "cd firmlink home/.claude": "cd /System/Volumes/Data" + self.home + "/.claude\n" + SM
+                                        + "echo x > scripts/evil\n#'",
+            "cd ~/.CLAUDE": "cd ~/.CLAUDE\n" + SM + "echo x > scripts/evil\n#'",
+            'cd ~/.cl""aude': 'cd ~/.cl""aude\n' + SM + "echo x > scripts/evil\n#'",
+            "cd ~/.claude/.": "cd ~/.claude/.\n" + SM + "echo x > scripts/evil\n#'",
+            "cd ~/.claude/././": "cd ~/.claude/././\n" + SM + "echo x > scripts/evil\n#'",
+            "~/.claude//scripts write": SM + "echo x > ~/.claude//scripts/evil\n#'",
+            "scratch home /./ spelling": "cd " + self.tmp + "/./home/./.claude\n" + SM
+                                         + "echo x > scripts/evil\n#'",
+        }
+        for name, ch in (("VT", "\x0b"), ("FF", "\x0c"), ("CR", "\r"), ("NBSP", "\xa0"),
+                         ("U+2028", "\u2028"), ("FS", "\x1c")):
+            cases[name + " fake comment"] = "echo x a" + ch + "# > " + R
+        return cases
+
+    def test_block(self):
+        for name, cmd in self.block_cases().items():
+            with self.subTest(name=name):
+                self.assert_coarse(cmd, name)
+
+    def test_hatch_does_not_exempt(self):
+        """No part of RULE 5-C has an escape hatch -- also not the backslash-newline re-run."""
+        for name, cmd in {**self.block_cases(), **self.bsnl_block_cases()}.items():
+            with self.subTest(name=name):
+                self.assert_coarse(f"{HATCH}=1 {cmd}", name)
+                self.assert_coarse(f"{HATCH}=1; {cmd}", name)
+
+    def test_accepted_false_positives_are_parser_level_data(self):
+        for cmd in COARSE_FP:
+            cmd = cmd.replace("@H@", self.home)
+            with self.subTest(cmd=cmd):
+                self.assertFalse(self.cg.protected_write_via_bash(cmd))   # the parser sees data
+                self.assertFalse(self.parser_blocked(cmd)[0])
+                self.assert_coarse(cmd, "accepted FP")                   # ... RULE 5-C blocks anyway
+                self.assert_coarse(f"{HATCH}=1 {cmd}", "accepted FP, hatch")
+
+    def test_allow_controls(self):
+        """Real CAST conventions / common shapes that must keep working."""
+        for cmd in (
+            "source ~/.claude/scripts/cast-events.sh 2>/dev/null || true\n"
+            "cast_emit_event \"task_completed\" \"push\" \"x\" \"\" \"done\" \"DONE\"",
+            'python3 ~/.claude/scripts/cast-commit-provenance.py record "$(git rev-parse HEAD)" '
+            '2>/dev/null \\\n  && echo "provenance: recorded" \\\n  || echo "provenance: not-recorded"',
+            'grep -E "^#" ~/.claude/scripts/cast-push.sh | head -20',
+            'python3 ~/.claude/scripts/orchestrate-dispatch.py log-dispatch --plan "$PLAN" 2>/dev/null ||\n  true',
+            "cat > /tmp/notes.txt <<'EOF'\nhello\nEOF",
+            "cat <<EOF\nrm -rf /\nEOF",
+            "IFS=$'\\t' read -r a b < /tmp/x.tsv",
+            "ls ~/.claude/scripts # it's fine",
+            "sqlite3 ~/.claude/cast.db <<'SQL'\nSELECT 1;\nSQL",
+            "mkdir -p .claude\ncat > .claude/cast.json <<'EOF'\n{}\nEOF",
+            "cmp scripts/a.py ~/.claude/scripts/a.py\ncmp scripts/b.py ~/.claude/scripts/b.py",
+            # a TAB is a real bash blank: it must NOT gate
+            "cmp\tscripts/a.py\t~/.claude/scripts/a.py\t# note",
+            "ls\t~/.claude/scripts\n#\tfine",
+            # a backslash-ended comment on the LAST line joins nothing: not gated
+            "ls ~/.claude/scripts # note \\",
+            "ls ~/.claude/scripts\necho hi # note \\",
+            # a CAST-style \-continued provenance call that names the surface: the joined text is
+            # a plain script execution, so the backslash-newline re-run allows it
+            "python3 ~/.claude/scripts/evil record x 2>/dev/null \\\n  && echo ok \\\n  || echo no",
+            # F1b: the comment tail must name the surface, not the text BEFORE the `#`
+            "echo a ~/.claude/scripts/x # note",
+            "ls ~/.claude/scripts\nls ~/.claude/githooks # note",
+            "ls ~/.claude/scripts # note\nls /tmp # other note",
+            # `#` that is not a comment start, `$#`, `${#}`, a mid-word `#`
+            "echo ${#} ~/.claude/scripts/x",
+            "echo $# ~/.claude/scripts/x",
+            "ls ~/.claude/scripts/a#b",
+            # a `${..}` with no blank-then-`#` inside
+            "echo ${x:-a} > /tmp/o; ls ~/.claude/scripts",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertIs(self.cg.is_blocked(cmd)[0], False, cmd)
+                self.assertFalse(self.cg.pw_coarse_desync(cmd), cmd)
+
+    def test_fails_closed_past_the_gate(self):
+        gated = "cat <<EOF\nx\nEOF"
+        ungated = "echo hi; ls /tmp"
+        for target in ("_pw_mention", "_pw_context"):
+            with self.subTest(target=target):
+                with mock.patch.object(self.cg, target, side_effect=RuntimeError("boom")):
+                    self.assertTrue(self.cg.pw_coarse_desync(gated))
+                    self.assertFalse(self.cg.pw_coarse_desync(ungated))
+
+    def test_backslash_newline_rejoin_blocks(self):
+        """F2: the joined text is blocked by RULE 5's own analyzer (re-run, no new parsing)."""
+        for name, cmd in self.bsnl_block_cases().items():
+            with self.subTest(name=name):
+                self.assert_coarse(cmd, name)
+
+    def test_backslash_newline_rejoin_does_not_honour_the_hatch(self):
+        """5-C has NO escape hatch, also not in the backslash-newline re-run: RULE 5's own hatch is
+        neutralised in the joined text. (The same write typed on ONE line keeps RULE 5's hatch.)"""
+        S = "~/.claude/scripts/evil"
+        for cmd in (f"{HATCH}=1 echo q >\\\n {S}",
+                    f"{HATCH}=1 cp /dev/null ~\\\n/.claude/scripts/evil",
+                    f"{HATCH}='1' echo q >\\\n {S}",
+                    f"{HATCH}=\"1\" echo q >\\\n {S}",
+                    f"CAST_PROTECTED_WRITE\\\n_OK=1 echo q >\\\n {S}",
+                    f"{HATCH}=1 echo ok\\\n; echo q > {S}"):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(self.cg.pw_coarse_desync(cmd))
+                self.assert_coarse(cmd)
+        one_line = f"{HATCH}=1 echo q > {S}"
+        self.assertFalse(self.cg.is_blocked(one_line)[0])   # RULE 5's hatch still works on one line
+
+    def test_join_only_joins_an_odd_backslash_run(self):
+        """`\\` + newline is an escaped backslash and a REAL newline, not a continuation."""
+        for n in range(1, 8):
+            cmd = "a" + "\\" * n + "\nb"
+            want = "a" + "\\" * (n - 1) + "b" if n % 2 else cmd
+            self.assertEqual(self.cg._pw_c_join(cmd), want, n)
+        # mixed runs in one command: odd joins, even stays, odd (3) keeps its escaped pair
+        self.assertEqual(self.cg._pw_c_join("a\\\nb\\\\\nc\\\\\\\nd"), "ab\\\\\nc\\\\d")
+        self.assertEqual(self.cg._pw_c_join("no join here\nat all"), "no join here\nat all")
+
+    def test_escaped_backslash_newline_is_a_separator_not_a_join(self):
+        """A hatch-led first line, an escaped backslash, a newline, then an UNHATCHED write: bash runs
+        the write unhatched, so the joined re-run must not fold the lines together."""
+        S = "~/.claude/scripts/evil"
+        cmd = f"{HATCH}=1 true \\\\\necho P > {S}"
+        self.assertTrue(self.cg.pw_coarse_desync(cmd))
+        self.assert_coarse(cmd)
+        # ... while a genuine odd-run join of the same hatch-led text is still one segment (blocked too,
+        # because the hatch is neutralised)
+        self.assertTrue(self.cg.pw_coarse_desync(f"{HATCH}=1 true \\\necho P > {S}"))
+
+    def test_backslash_newline_rejoin_fails_closed(self):
+        """An error in the re-run blocks; a command with no backslash-newline never calls it."""
+        with mock.patch.object(self.cg, "protected_write_via_bash", side_effect=RuntimeError("boom")) as m:
+            self.assertTrue(self.cg.pw_coarse_desync("echo a \\\n b"))
+            self.assertFalse(self.cg.pw_coarse_desync("echo a b"))
+            self.assertEqual(m.call_count, 1)
+
+    def test_param_expansion_hash_gate(self):
+        """F1a: a blank-then-`#` between the first `${` and the last `}`."""
+        f = self.cg._pw_c_param_hash
+        for yes in ("echo ${x:- #b}", "echo ${a:-\t#b}", "x ${a} y ${b:- #c} z"):
+            self.assertTrue(f(yes), yes)
+        for no in ("echo ${#}", "echo $# x", "echo #b ${x}", "echo ${x} #b", "echo ${x:-a#b}",
+                   "no braces # here", "} #b ${", "echo ${x:-a}"):
+            self.assertFalse(f(no), no)
+        # the gate alone is not a block: the text must also name the surface
+        self.assertFalse(self.cg.pw_coarse_desync("echo ${x:- #b} > /tmp/o"))
+        self.assert_coarse("cd ~/.claude ${x:- #b}; echo x > scripts/evil", "F1a with an ancestor")
+
+    def test_comment_tail_naming_the_surface_blocks(self):
+        """F1b: only the text AFTER a comment-looking `#` counts, and only the first `#` per line."""
+        S = "~/.claude/scripts/x"
+        for text in ("cp a b # see " + S, "# see " + S, "ls;# " + S, "ls &# " + S, "echo hi |# " + S,
+                     "(# " + S, "ls # a\n# b " + S, "echo q #" + S + " # tail"):
+            with self.subTest(blocks=text):
+                self.assertTrue(self.cg.pw_coarse_desync(text), text)
+        for text in ("echo a ~/.claude/scripts/x # note", "echo a#b " + S, "echo $# " + S,
+                     "echo ${#} " + S, "ls " + S + "\nls # n", "ls # n1\nls # n2 /tmp"):
+            with self.subTest(allows=text):
+                self.assertFalse(self.cg.pw_coarse_desync(text), text)
+
+    def test_normalisation_agrees_with_posixpath_on_random_walks(self):
+        """Every `~/...` walk that posixpath.normpath resolves to a protected root / ancestor must
+        trip the trigger. `~` is the REAL home here (a walk may leave it and come back through its
+        parent: `~/../<user>/.claude`), which the old literal-`~` model could not see."""
+        rng = random.Random(7)
+        user = os.path.basename(self.home)
+        alpha = ["x", ".", "..", ".claude", "scripts", "y", "", user]
+        prot = ("scripts", "githooks", "config", "cast-state")
+        root = self.home.lower() + "/.claude"
+
+        def protected(path):
+            n = posixpath.normpath(self.home + path[1:]).lower()
+            return n == root or any(n == root + "/" + d or n.startswith(root + "/" + d + "/")
+                                    for d in prot)
+
+        paths = ["~/" + "/".join(rng.choice(alpha) for _ in range(rng.randint(1, 30))) for _ in range(3000)]
+        paths += ["~/" + "x/../" * k + t for k in range(40)
+                  for t in (".claude", ".claude/scripts", ".claude/", ".claude/./scripts",
+                            ".claude/x/../scripts", ".claude/x/..")]
+        paths += ["~/" + "../" * k + user + "/" + t for k in range(1, 4)
+                  for t in (".claude", ".claude/scripts", ".claude/x/..", "x/../.claude/config")]
+        parent = os.path.basename(os.path.dirname(self.home))
+        paths += ["~/../../%s/%s/%s" % (parent, user, t)
+                  for t in (".claude", ".claude/scripts", ".claude/x/..", "x/../.claude/config")]
+        hits = 0
+        escapes = 0
+        for path in paths:
+            if protected(path):
+                hits += 1
+                escapes += ".." in path and path.split("/")[1:2] == [".."]
+                self.assertTrue(self.cg.pw_coarse_desync(path + " <<"), path)
+        self.assertGreater(hits, 300)
+        self.assertGreater(escapes, 5)   # walks that leave the home and re-enter it were exercised
+
+    def test_home_modifier_gate(self):
+        """G3-1: any `${HOME<modifier>}` gates the command; plain `${HOME}` / `$HOME` do not."""
+        for yes in ("${HOME-}", "${HOME:-}", "${HOME/x/}", "${home%%zz}", "x ${HOME:0} y"):
+            self.assertIsNotNone(self.cg._PW_C_HOME_MOD.search(yes), yes)
+        for no in ("${HOME}", "$HOME", "echo ${H}", "$HOMEDIR", "${USER-}"):
+            self.assertIsNone(self.cg._PW_C_HOME_MOD.search(no), no)
+        # the gate alone is not a block: the text must also name the surface
+        self.assertFalse(self.cg.pw_coarse_desync("echo ${HOME:-/tmp} > /tmp/o"))
+        self.assertFalse(self.cg.pw_coarse_desync("ls ${HOME-}/Projects"))
+        # a plain `${HOME}` with `//` is the parser's job (already blocked there), not 5-C's
+        plain = "echo q > ${HOME}//.claude/scripts/evil"
+        self.assertFalse(self.cg.pw_coarse_desync(plain))
+        self.assertTrue(self.cg.is_blocked(plain)[0])
+
+    def test_cd_glob_words(self):
+        """G3-3: `cd` / `pushd` arguments with a glob metacharacter gate the command."""
+        f = self.cg._pw_c_cd_glob_words
+        self.assertEqual(f("cd ~/x*"), ["~/x*"])
+        self.assertEqual(f("pushd ~/.cl?"), ["~/.cl?"])
+        self.assertEqual(f("true && cd -- ~/a[bc]; ls *"), ["~/a[bc]"])
+        self.assertEqual(f("(cd ~/b*; ls)"), ["~/b*"])
+        self.assertEqual(f("ls\ncd ~/c*\necho x"), ["~/c*"])
+        for none in ("ls *", "cd ~/plain", "cd a; ls *", "cdx *", "abcd *"):
+            self.assertEqual(f(none), [], none)
+
+    def test_benign_cd_globs_stay_allowed(self):
+        # (accepted FP, not pinned as allow: `cd ~/Library*/Safari` -- the glob can match the Library
+        # ancestor itself, which the mention scan treats as naming the surface)
+        for cmd in ("cd ~/proj*/src; ls", "cd ~/w*; ls", "cd /tmp/*; ls", "pushd ~/Pro?ects; ls"):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(self.cg.pw_coarse_desync(cmd), cmd)
+                self.assertFalse(self.cg.is_blocked(cmd)[0], cmd)
+
+    def test_home_is_expanded_before_dotdot_popping(self):
+        """`~/../<user>/.claude` IS the home's .claude: expand the leading ~ / $HOME / ${HOME} first."""
+        user = os.path.basename(self.home)
+        ctx = self.cg._pw_context()
+        for spelling in ("~", "$HOME", "${HOME}"):
+            text = "cd %s/../%s/.claude <<x" % (spelling, user)
+            with self.subTest(spelling=spelling):
+                self.assertTrue(self.cg._pw_c_names(ctx, text), text)
+        # ... after NAME= too, but never for `~user` or a longer variable name
+        self.assertTrue(self.cg._pw_c_names(ctx, "D=~/../%s/.claude" % user))
+        self.assertFalse(self.cg._pw_c_names(ctx, "cd ~/../%s/Projects" % user))
+        self.assertFalse(self.cg._pw_c_names(ctx, "cd ~root/../%s/.claude/x" % user))
+        self.assertFalse(self.cg._pw_c_names(ctx, "cd $HOMEDIR/../%s/.claude/x" % user))
+
+    def test_quote_spliced_glob_write_with_a_trailing_comment_quote_is_blocked(self):
+        """`... #'` on the LAST line is no gate, so 5-C stays out of it; the RULE 5 parser (which has no
+        desync to suffer from there) still blocks the write."""
+        cmd = "echo Q > ~/.cl\"\"*/scripts/evil #'"
+        self.assertFalse(self.cg.pw_coarse_desync(cmd))
+        self.assertTrue(self.cg.is_blocked(cmd)[0])
+
+    def test_benign_globs_behind_a_gate_or_a_quoted_home_stay_allowed(self):
+        """The reviewer's 7 benign cd-glob probes and 6 benign gate + glob controls: quotes, `$HOME`
+        and `#`-apostrophes alone do not make a glob suspicious; the glob must reach the surface."""
+        for cmd in (
+            'cd "$HOME"/Projects/*/src && ls',
+            "cd ${HOME}/Documents/*; ls",
+            "cd ~/Projects/personal/*; git status",
+            'cd ~/Projects/"claude-agent-team"/tests/*; ls',
+            'echo "$HOME"/notes/*.md > /tmp/x',
+            "cd ~/Desktop/* && echo hi",
+            'cd "$HOME"/Downloads/*; ls',
+            "# it's\nls \"$HOME\"/Projects/*/src",
+            "# it's\necho ok > \"$HOME\"/notes/*.md",
+            "# don't\ncd ~/Projects/*; ls",
+            "# it's\ncp \"$HOME\"/Documents/a* /tmp/x",
+            "echo $'x'; ls ~/Downloads/*",
+            "# it's\ncat ${HOME}/Library/Preferences/*.plist > /tmp/x",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(self.cg.pw_coarse_desync(cmd), cmd)
+                self.assertFalse(self.cg.is_blocked(cmd)[0], cmd)
+
+    def test_strip_helper(self):
+        f = self.cg._pw_c_strip
+        self.assertEqual(f('cd ~/.cl""*/s\'c\'ripts'), "cd ~/.cl*/scripts")
+        self.assertEqual(f('"cd" ${HOME}/a "$HOME"/b $home/c'), "cd ~/a ~/b ~/c")
+        self.assertEqual(f("\\cd c''d"), "cd cd")
+        # a longer variable name is not the home variable
+        self.assertEqual(f("$HOMEDIR ${HOMEx} $HOME_X"), "$HOMEDIR ${HOMEx} $HOME_X")
+
+    def test_cd_glob_words_see_through_quotes(self):
+        f = self.cg._pw_c_cd_glob_words
+        for text in ('"cd" ~/a*', "\\cd ~/a*", "c''d ~/a*", 'cd "$HOME"/a*', "cd ~/a\"\"*"):
+            with self.subTest(text=text):
+                self.assertTrue(f(text), text)
+
+    def test_non_str_input_fails_closed(self):
+        """The gate call is INSIDE the try: a non-str input blocks (never raises); an ungated str is False."""
+        for bad in (5, None, b"cat <<EOF", ["echo x"]):
+            with self.subTest(bad=bad):
+                self.assertTrue(self.cg.pw_coarse_desync(bad))
+        self.assertFalse(self.cg.pw_coarse_desync("echo hi"))
+
+    def test_overlong_home_spelling_fails_closed(self):
+        """`$HOME` + 65+ non-slash characters before the next `/` is not scanned (the {0,64} bound
+        keeps the scan linear) -- it must BLOCK rather than slip through."""
+        self.assertTrue(self.cg.pw_coarse_desync("<<x\n${HOME:-" + "a" * 70 + "}"))
+        self.assertTrue(self.cg.pw_coarse_desync("<<x\n$HOME" + "-" * 70))
+        self.assertFalse(self.cg.pw_coarse_desync("<<x\n$HOME" + "-" * 10))
+        self.assert_coarse(self.SMUGGLE + "D=${HOME:-" + "a" * 70 + "}/.claude\ncd $D\n"
+                           "echo x > scripts/evil\n#'", "over-long $HOME spelling")
+        # the ancestor still resolves normally when the spelling is short
+        self.assert_coarse(self.SMUGGLE + "D=${HOME:-" + "a" * 10 + "}/.claude\ncd $D\n"
+                           "echo x > scripts/evil\n#'", "short $HOME spelling")
+
+    def test_comment_quote_on_the_last_line_is_not_a_gate(self):
+        """The command NAMES the surface, so only the last-line rule keeps it from being gated."""
+        cmd = "ls ~/.claude/scripts\nls ~/.claude/githooks # it's"
+        self.assertTrue(self.cg._pw_mention(self.cg._pw_context(), cmd))   # premise: it names the surface
+        self.assertFalse(self.cg._pw_c_gated(cmd))
+        self.assertFalse(self.cg.pw_coarse_desync(cmd))
+        # the same text with one more line after the comment IS gated (and blocks)
+        self.assert_coarse(cmd + "\nls", "comment quote no longer last")
+        self.assert_coarse(cmd + "\n", "comment quote followed by a newline")
+        self.assertFalse(self.cg._pw_c_gated("echo hi\n# it's"))
+        self.assertTrue(self.cg._pw_c_gated("echo hi # it's\nls"))
+        self.assertTrue(self.cg._pw_c_gated("# `x\nls"))
+
+    def test_gate_is_a_superset_of_the_regex_it_replaced(self):
+        """_pw_c_gated is a linear rewrite that is intentionally WIDER than the original gate
+        `<<|\\$['\"]|#[^\\n]*['\"`][^\\n]*\\n`: whenever the old regex matches, the gate must be True."""
+        old = re.compile(r"<<|\$['\"]|#[^\n]*['\"`][^\n]*\n")
+        rng = random.Random(5)
+        alphabet = ["#", "'", '"', "`", "\n", "<", "$", "a", " ", "\\", "\t", "\x0b", "\xa0", "\r"]
+        for _ in range(4000):
+            cmd = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 14)))
+            if old.search(cmd):
+                self.assertTrue(self.cg._pw_c_gated(cmd), repr(cmd))
+
+    def test_every_python_blank_that_bash_does_not_split_on_is_a_gate(self):
+        """Python's split()/isspace() separate words on characters bash treats as ordinary word text.
+        Every such code point (all of Unicode) must trip the gate; TAB / NEWLINE / space must not."""
+        odd = [c for c in map(chr, range(0x110000)) if c.isspace() and c not in " \t\n"]
+        self.assertGreater(len(odd), 20)
+        for c in odd:
+            self.assertTrue(self.cg._pw_c_gated("x" + c + "y"), hex(ord(c)))
+        for c in " \t":
+            self.assertFalse(self.cg._pw_c_gated("x" + c + "y"), hex(ord(c)))
+        self.assertFalse(self.cg._pw_c_gated("x\ny"))
+        for i in list(range(0, 9)) + list(range(0x0b, 0x20)) + [0x7f]:   # every other C0 control + DEL
+            self.assertTrue(self.cg._pw_c_gated("x" + chr(i) + "y"), hex(i))
+
+    def test_spellings_are_normalised_like_the_mention_scan(self):
+        gate = "\n<<x"
+        for name, text in {
+            "$HOME/./.claude": "cd $HOME/./.claude",
+            "~/./.claude": "cd ~/./.claude",
+            "$HOME//.claude": "cd $HOME//.claude",
+            "$HOME/x/../.claude": "cd $HOME/x/../.claude",
+            "$HOME/a/b/../../.claude": "cd $HOME/a/b/../../.claude",
+            ".claude/./scripts": "echo x > .claude/./scripts/y",
+            ".claude//scripts": "echo x > .claude//scripts/y",
+            "~/Library/./Caches": "cd ~/Library/./Caches",
+            "trailing .. + blank": "cd ~/.claude/x/.. ls",
+            "trailing .. + ;": "cd ~/.claude/x/..; ls",
+            "trailing .. + &&": "cd ~/.claude/x/.. && ls",
+            "trailing .. + newline": "cd ~/.claude/x/..\nls",
+            "trailing .. + )": "(cd ~/.claude/x/..)",
+            "trailing .. + |": "cd ~/.claude/x/..|cat",
+            "5-deep ..": "cd ~/.claude/a/b/c/d/e/../../../../../",
+            "$HOME 6-deep ..": "cd $HOME/.claude/a/b/c/d/e/f/../../../../../..",
+            "16 pairs": "cd ~" + "/x/../" * 16 + ".claude",
+        }.items():
+            with self.subTest(spelling=name):
+                self.assertTrue(self.cg.pw_coarse_desync(text + gate), name)
+        # normalisation must not invent a root: a sibling directory stays allowed
+        for text in ("cd $HOME/./Projects", "cd $HOME/x/../Projects", "cd ~/.claudeX/./y"):
+            with self.subTest(allow=text):
+                self.assertFalse(self.cg.pw_coarse_desync(text + gate), text)
+
+    def test_runs_before_every_parser(self):
+        """A parser crash makes safe_is_blocked fail OPEN; RULE 5-C runs first so it cannot be skipped."""
+        cmd = self.block_cases()["H1 E\\OF quote smuggle"]
+        for target in ("workflow_write_via_bash", "strip_heredocs", "split_segments",
+                       "protected_write_via_bash", "_pw_scan"):
+            with self.subTest(parser=target):
+                with mock.patch.object(self.cg, target, side_effect=RuntimeError("parser crash")):
+                    self.assert_coarse(cmd, target)
+                    self.assertEqual(self.cg.safe_is_blocked(cmd), (True, self.cg.PW_COARSE_MSG))
+
+    def test_gate_constructs(self):
+        """Each gate construct alone, with a surface mention, trips the rule; the mention alone, or a
+        gate construct alone, does not."""
+        P = self.P
+        for name, cmd in {
+            "heredoc": "cat <<EOF\n" + P + "\nEOF",
+            "here-string": "cat <<< x; " + P,
+            "$'..'": "echo $'x'; " + P,
+            '$"..."': 'echo $"x"; ' + P,
+            "comment with quote, later line": "# it's\n" + P,
+            "comment with backtick, later line": "echo hi # `x\n" + P,
+        }.items():
+            with self.subTest(gate=name):
+                self.assert_coarse(cmd, name)
+        for name, cmd in {
+            "mention only": P,
+            "gate only": "cat <<EOF\nhello\nEOF",
+            "comment quote on the LAST line only": P + " # it's",
+        }.items():
+            with self.subTest(allow=name):
+                self.assertFalse(self.cg.pw_coarse_desync(cmd), name)
+
+    def test_parser_blocks_hold_without_the_front_gate(self):
+        """RULE 5-C runs first, so every BLOCK table above could now pass on it alone. Re-run them with
+        it OFF: the parsers must still block each (mutation guard: a parser regression stays visible)."""
+        for table in (BLOCK, SEC_BLOCK, SEC2_BLOCK, SEC3_BLOCK, SEC4_BLOCK, SEC5_BLOCK):
+            for cmd in table:
+                cmd = cmd.replace("@H@", self.home)
+                with self.subTest(cmd=cmd):
+                    blocked, msg = self.parser_blocked(cmd)
+                    self.assertTrue(blocked, cmd)
+                    self.assertIn(HATCH, msg, cmd)
+
+
+class TestCoarseDesyncRealShell(_Base):
+    """Premise check for RULE 5-C: each hidden-line shape REALLY runs in /bin/bash against the scratch
+    HOME and writes into the protected root; then the guard blocks that same string via RULE 5-C."""
+
+    def _real(self, cmd, name):
+        target = os.path.join(self.home, ".claude", "scripts", name)
+        self.assertFalse(os.path.exists(target))
+        env = {"HOME": self.home, "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        subprocess.run(["/bin/bash", "-c", cmd], cwd=self.work, env=env, capture_output=True, timeout=30)
+        if not os.path.exists(target):
+            self.fail(f"premise: the real shell did not write {target}: {cmd!r}")
+        self.assertEqual(self.cg.is_blocked(cmd), (True, self.cg.PW_COARSE_MSG), cmd)
+
+    def test_h1_backslash_delimiter_smuggle(self):
+        self._real("cat <<E\\OF\n'\nEOF\necho x > ~/.claude/scripts/c1\n#'", "c1")
+
+    def test_comment_apostrophe(self):
+        self._real("echo hi # it's\necho x > ~/.claude/scripts/c2\n", "c2")
+
+    def test_single_line_ansi_c_escaped_quote(self):
+        self._real("echo $'a\\'b'; echo x > ~/.claude/scripts/c3", "c3")
+
+    def test_command_substitution_heredoc_fed_to_bash_c(self):
+        self._real("bash -c \"$(cat <<'EOF'\necho x > ~/.claude/scripts/c4\nEOF\n)\"", "c4")
+
+    def test_backslash_newline_inside_an_unquoted_bash_heredoc(self):
+        self._real("bash <<EOF\ncp /dev/null \\\n~/.claude/scripts/c5\nEOF", "c5")
+
+    def test_heredoc_with_backslash_newline_pipe_to_sh(self):
+        self._real("cat <<'A' \\\n| sh\necho x > ~/.claude/scripts/c6\nA", "c6")
+
+    def test_odd_whitespace_fake_comment(self):
+        """VT is not a bash blank: `a<VT>#` is one word, so the redirect after it RUNS."""
+        self._real("echo x a\x0b# > ~/.claude/scripts/c7", "c7")
+
+    def test_comment_ending_in_backslash_does_not_join_the_next_line(self):
+        self._real("echo hi # note \\\necho x > ~/.claude/scripts/c8", "c8")
+
+    def test_blank_then_hash_inside_parameter_expansion(self):
+        """`${x:- #b}` is parameter text for bash (it expands to `#b`), not a comment start."""
+        self._real("echo ${x:- #b} > ~/.claude/scripts/c10", "c10")
+
+    def test_backslash_newline_between_blanks(self):
+        self._real("echo q > \\\n ~/.claude/scripts/c11", "c11")
+
+    def test_dot_dot_at_the_end_of_a_word(self):
+        os.makedirs(os.path.join(self.home, ".claude", "x"))
+        self._real("cd ~/.claude/x/..\ncat <<E\\OF\n'\nEOF\necho x > scripts/c12\n#'", "c12")
+
+    def test_home_modifier_anchor_with_a_noncanonical_root(self):
+        """G3-1: `${HOME-}` expands to HOME, so `//` inside the root still lands in it."""
+        self._real("echo q > ${HOME-}/.claude//scripts/c13", "c13")
+
+    def test_backslash_newline_inside_the_root_behind_a_comment_quote(self):
+        """G3-2: the comment apostrophe desyncs the parser; bash joins `.cla\\<NL>ude`."""
+        self._real("# '\necho q > ~/.cla\\\nude/scripts/c14", "c14")
+
+    def test_cd_into_a_glob_spelled_root_then_relative_write(self):
+        """G3-3: bash expands `~/.cl*` to the real dot-dir, so the relative write lands in it."""
+        self._real("cd ~/.cl*/scripts; echo q > c15", "c15")
+
+    def test_home_escape_through_the_parent(self):
+        user = os.path.basename(self.home)
+        self._real("cd ~/../%s/.claude\ncat <<E\\OF\n'\nEOF\necho x > scripts/c16\n#'" % user, "c16")
+
+    def test_heredoc_operator_split_by_a_backslash_newline(self):
+        """`<\\<NL><E` is `<<E` for bash: the body runs. The raw text has no `<<`, so 5-C's check must
+        also run on the joined text."""
+        self._real("bash <\\\n<E\necho q > ~/.claude/scripts/c17\nE", "c17")
+
+    def test_cd_through_the_quoted_home_variable_into_a_glob(self):
+        """F1: bash removes the quotes, expands `$HOME` and globs `.cl*` BEFORE `cd` runs."""
+        self._real('cd "$HOME"/.cl*/scripts; echo q > c18', "c18")
+
+    def test_comment_quote_then_a_quote_spliced_glob_target(self):
+        """F12: `~/.cl""*/scripts/c19` globs onto an EXISTING file and overwrites it."""
+        target = os.path.join(self.home, ".claude", "scripts", "c19")
+        Path(target).write_text("orig\n")
+        cmd = "# '\necho q > ~/.cl\"\"*/scripts/c19"
+        env = {"HOME": self.home, "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        subprocess.run(["/bin/bash", "-c", cmd], cwd=self.work, env=env, capture_output=True, timeout=30)
+        self.assertEqual(Path(target).read_text(), "q\n", "premise: the real shell did not overwrite")
+        self.assertEqual(self.cg.is_blocked(cmd), (True, self.cg.PW_COARSE_MSG), cmd)
+
+    def test_dot_slash_ancestor_behind_a_desync(self):
+        self._real("cd $HOME/./.claude\ncat <<E\\OF\n'\nEOF\necho x > scripts/c9\n#'", "c9")
 
 
 if __name__ == "__main__":

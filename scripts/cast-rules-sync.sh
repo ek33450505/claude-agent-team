@@ -239,7 +239,9 @@ run_apply() {
 	if [[ ! -t 0 ]]; then
 		if [[ -z "$ack" ]]; then
 			echo "ERROR: --apply requires an interactive TTY to confirm." >&2
-			echo "Non-interactive callers must set CAST_RULES_SYNC_ACK=\"<reason>\" to proceed unattended." >&2
+			echo "Claude Code's '!' prefix has no TTY, so --apply is refused there too." >&2
+			echo "Non-interactive callers (including '!') must set CAST_RULES_SYNC_ACK=\"<reason>\" to proceed unattended, e.g.:" >&2
+			echo "  ! CAST_RULES_SYNC_ACK=\"<reason>\" bash ~/.claude/scripts/cast-rules-sync.sh --apply" >&2
 			exit 1
 		fi
 		echo "Non-interactive apply acknowledged via CAST_RULES_SYNC_ACK: $ack"
