@@ -459,6 +459,17 @@ _run_commit_range_push() {
     git init -q
     git config user.email "ci@example.com"
     git config user.name "CI"
+    # No background housekeeping in the fixture. Since git 2.54 every `git commit` may spawn a
+    # DETACHED `maintenance run --auto` (geometric strategy); in 2.55.0 it fires as soon as
+    # objects/17 holds 2 loose objects (a random commit sha starting "17" plus the fixed
+    # .env.test tree) and packs the loose objects, racing the `rm -f` of a loose object below:
+    # the object stays readable, the gate is rightly clean, and corrupt/noblob flake (CI 2026-10-10).
+    # core.commitGraph=false: a commit-graph would also serve a deleted commit's parents/tree.
+    git config gc.auto 0
+    git config maintenance.auto false
+    git config maintenance.autoDetach false
+    git config core.commitGraph false
+    git config gc.writeCommitGraph false
     # noupstream: the only branch is 'trunk', so no origin/main|master or main|master exists.
     [[ "$mode" == "noupstream" ]] && git symbolic-ref HEAD refs/heads/trunk
     git commit -q --allow-empty -m "root"
@@ -500,10 +511,24 @@ _run_commit_range_push() {
     remote_sha="$zeros"
     # Corrupt the throwaway repo (never anything outside $tmpdir): loose object files are
     # <objects>/<2 hex>/<38 hex>.
+    local victim="" victim_what=""
     if [[ "$mode" == "corrupt" ]]; then
-      rm -f ".git/objects/${add_sha:0:2}/${add_sha:2}"
+      victim="$add_sha"
+      victim_what="the first pushed commit"
     elif [[ "$mode" == "noblob" ]]; then
-      rm -f ".git/objects/${blob_sha:0:2}/${blob_sha:2}"
+      victim="$blob_sha"
+      victim_what="the pushed file's blob"
+    fi
+    if [[ -n "$victim" ]]; then
+      rm -f ".git/objects/${victim:0:2}/${victim:2}"
+      rm -rf .git/objects/info/commit-graph .git/objects/info/commit-graphs
+      # VERIFY the corruption is real: if the object was already packed (the rm above was a no-op)
+      # or is served from elsewhere, the gate is rightly clean and its verdict would mislead.
+      if git cat-file -e "$victim" 2> /dev/null; then
+        printf 'FIXTURE SETUP FAILED: %s (%s) is still readable after deleting its loose object (packed by background maintenance?), so the corruption this test needs is not real\n' \
+          "$victim_what" "$victim"
+        exit 97
+      fi
     fi
     case "$mode" in
       existing | corrupt | noblob) remote_sha="$main_sha" ;;
@@ -525,6 +550,11 @@ _run_commit_range_push() {
   # Only remove the dir we created, and only if it is under the temp root.
   if [[ -n "$tmpdir" && "$tmpdir" == "$tmproot"/range-test.* ]]; then
     rm -rf "$tmpdir"
+  fi
+
+  # A fixture that failed to corrupt is a setup error, not a gate verdict: fail the test loudly.
+  if [[ "$rc" -eq 97 && "$out" == "FIXTURE SETUP FAILED"* ]]; then
+    fail "$out"
   fi
 
   output="$out"
