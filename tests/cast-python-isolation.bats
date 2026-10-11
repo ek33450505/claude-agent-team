@@ -208,12 +208,12 @@ PYSCAN
   [ ! -f "$marker" ]                          # checked FIRST: the planted module must not have run
   [[ "$output" == *hookSpecificOutput* ]]     # ...and the python snippet really ran (real json)
 
-  # Hook 2: UserPromptSubmit (python3 -I - heredoc, json imported first). It logs a prompt row,
-  # which proves the interpreter ran past `import json`.
+  # Hook 2: UserPromptSubmit (python3 -I - heredoc, json imported first). It writes a routing_events
+  # row into cast.db (sqlite connect creates the file), which proves the interpreter ran past `import json`.
   run bash -c 'cd "$1" && printf "%s" "{}" | bash "$2"' _ "$dir" "$REPO_ROOT/scripts/cast-user-prompt-hook.sh"
   assert_success
   [ ! -f "$marker" ]
-  [ -f "$HOME/.claude/cast/user-prompts.jsonl" ]
+  [ -f "$HOME/.claude/cast.db" ]
 }
 
 # ---------------------------------------------------------------------------------------------

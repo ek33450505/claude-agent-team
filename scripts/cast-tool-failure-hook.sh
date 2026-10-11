@@ -3,8 +3,7 @@
 # Fires when a tool call fails.
 # Responsibilities:
 #   1. Guard against subprocess invocations
-#   2. Log failure metadata to ~/.claude/cast/tool-failures.jsonl
-#   3. Log to cast.db tool_call_failures table
+#   2. Log to cast.db tool_call_failures table
 #
 # Stdin JSON fields (PostToolUseFailure):
 #   session_id  — current session ID
@@ -37,30 +36,11 @@ except Exception:
 
 session_id    = data.get("session_id", "unknown")
 tool_name     = data.get("tool_name", "unknown")
-tool_input    = str(data.get("tool_input", ""))[:200]
 error_text    = str(data.get("error", ""))
 error_preview = error_text[:200]
-input_preview = tool_input[:100]
 
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-# Log to tool-failures.jsonl
-entry = {
-    "timestamp":     iso_ts,
-    "session_id":    session_id,
-    "tool_name":     tool_name,
-    "error_preview": error_preview,
-    "input_preview": input_preview,
-}
-
-log_path = os.path.expanduser("~/.claude/cast/tool-failures.jsonl")
-os.makedirs(os.path.dirname(log_path), exist_ok=True)
-try:
-    with open(log_path, "a") as f:
-        f.write(json.dumps(entry) + "\n")
-except Exception:
-    pass
 
 # Log to cast.db tool_call_failures
 db_path = os.path.expanduser("~/.claude/cast.db")

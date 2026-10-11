@@ -3,8 +3,7 @@
 # Fires each time the user submits a prompt.
 # Responsibilities:
 #   1. Guard against subprocess invocations
-#   2. Log prompt metadata (never full text) to ~/.claude/cast/user-prompts.jsonl
-#   3. Log to cast.db routing_events table
+#   2. Log prompt metadata (never full text) to cast.db routing_events table
 #
 # Stdin JSON fields (UserPromptSubmit):
 #   session_id — current session ID
@@ -130,22 +129,6 @@ if not _redaction_ok:
 
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-# Log to user-prompts.jsonl
-entry = {
-    "timestamp":      iso_ts,
-    "session_id":     session_id,
-    "prompt_length":  prompt_length,
-    "prompt_preview": prompt_preview,
-}
-
-log_path = os.path.expanduser("~/.claude/cast/user-prompts.jsonl")
-os.makedirs(os.path.dirname(log_path), exist_ok=True)
-try:
-    with open(log_path, "a") as f:
-        f.write(json.dumps(entry) + "\n")
-except Exception:
-    pass
 
 # Log to cast.db routing_events
 db_path = os.path.expanduser("~/.claude/cast.db")

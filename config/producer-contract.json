@@ -6,7 +6,7 @@
   "tables": [
     {
       "table": "sessions",
-      "writers": ["cast-session-start-hook.sh:117"],
+      "writers": ["cast-session-start-hook.sh:86"],
       "cadence": "per_session",
       "status": "live"
     },
@@ -56,7 +56,7 @@
     },
     {
       "table": "routing_events",
-      "writers": ["cast-user-prompt-hook.sh:109", "cast_subagent_stop.py:1549", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
+      "writers": ["cast-user-prompt-hook.sh:142", "cast_subagent_stop.py:1549", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -81,7 +81,7 @@
     },
     {
       "table": "tool_call_failures",
-      "writers": ["cast-tool-failure-hook.sh:85"],
+      "writers": ["cast-tool-failure-hook.sh:65"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -170,7 +170,7 @@
     },
     {
       "table": "pane_bindings",
-      "writers": ["cast-session-start-hook.sh:176"],
+      "writers": ["cast-session-start-hook.sh:122"],
       "cadence": "per_session",
       "status": "live",
       "notes": "started_at is INTEGER epoch, not ISO"

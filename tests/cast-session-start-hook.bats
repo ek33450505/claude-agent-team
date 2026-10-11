@@ -44,30 +44,26 @@ teardown() {
 # 2. Happy path: log file created with correct fields
 # ---------------------------------------------------------------------------
 
-@test "valid payload → appends to session-starts.jsonl" {
+@test "valid payload → exits 0, writes env vars, does NOT create session-starts.jsonl" {
+  local env_file="$HOME/cast-env-valid.sh"
+  export CLAUDE_ENV_FILE="$env_file"
   run bash "$HOOK_SH" <<< "$(make_payload "sess-abc" "/projects/foo")"
   assert_success
-  [ -f "$HOME/.claude/cast/session-starts.jsonl" ]
-  python3 -c "
-import json
-with open('$HOME/.claude/cast/session-starts.jsonl') as f:
-    d = json.loads(f.readline().strip())
-assert d.get('session_id') == 'sess-abc',       f'session_id={d.get(\"session_id\")}'
-assert d.get('cwd')        == '/projects/foo',  f'cwd={d.get(\"cwd\")}'
-assert 'timestamp' in d,                         'missing timestamp'
-print('ok')
-"
+  grep -q "CAST_SESSION_ID=sess-abc"        "$env_file"
+  grep -q "CAST_SESSION_CWD=/projects/foo"  "$env_file"
+  [ ! -e "$HOME/.claude/cast/session-starts.jsonl" ]
 }
 
 # ---------------------------------------------------------------------------
 # 3. Missing CLAUDE_ENV_FILE — still logs, skips env write
 # ---------------------------------------------------------------------------
 
-@test "no CLAUDE_ENV_FILE → still logs to session-starts.jsonl" {
+@test "no CLAUDE_ENV_FILE → exits 0, no error log, no session-starts.jsonl" {
   unset CLAUDE_ENV_FILE
   run bash "$HOOK_SH" <<< "$(make_payload "sess-noenv" "/tmp")"
   assert_success
-  [ -f "$HOME/.claude/cast/session-starts.jsonl" ]
+  [ ! -e "$HOME/.claude/cast/session-starts.jsonl" ]
+  [ ! -s "$HOME/.claude/logs/hook-errors.log" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -103,15 +99,16 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 8. Multiple calls → appends, not overwrites
+# 8. Multiple calls → env file appends, not overwrites
 # ---------------------------------------------------------------------------
 
-@test "two payloads → two lines in jsonl" {
+@test "two payloads → env file appended twice, no session-starts.jsonl" {
+  local env_file="$HOME/cast-env-two.sh"
+  export CLAUDE_ENV_FILE="$env_file"
   bash "$HOOK_SH" <<< "$(make_payload "sess-1" "/tmp/a")"
   bash "$HOOK_SH" <<< "$(make_payload "sess-2" "/tmp/b")"
-  local lines
-  lines=$(wc -l < "$HOME/.claude/cast/session-starts.jsonl")
-  [ "$lines" -eq 2 ]
+  [ "$(grep -c '^CAST_SESSION_ID=' "$env_file")" -eq 2 ]
+  [ ! -e "$HOME/.claude/cast/session-starts.jsonl" ]
 }
 
 # ---------------------------------------------------------------------------
