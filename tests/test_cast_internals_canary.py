@@ -373,19 +373,19 @@ class TestInputHandling(CanaryBase):
 
 
 class TestOutput(CanaryBase):
-    SECRET = "ZZ-DISTINCT-SECRET-VALUE"
+    MARKER = "ZZ-DISTINCT-MARKER-VALUE"
 
     def _plant(self):
-        self.sidecar({**GOOD, "description": self.SECRET,
-                      "bad key\nSECRETKEY": self.SECRET, "okNewKey": 1})
-        self.hatch(session_id=self.SECRET)
+        self.sidecar({**GOOD, "description": self.MARKER,
+                      "bad key\nMARKERKEY": self.MARKER, "okNewKey": 1})
+        self.hatch(session_id=self.MARKER)
 
     def test_value_leak_json(self):
         self._plant()
         _, out = self.run_main()
         text = json.dumps(out)
-        self.assertNotIn(self.SECRET, text)
-        self.assertNotIn("SECRETKEY", text)
+        self.assertNotIn(self.MARKER, text)
+        self.assertNotIn("MARKERKEY", text)
         self.assertIn("okNewKey", text)
         self.assertIn("1 unprintable", text)
 
@@ -394,8 +394,8 @@ class TestOutput(CanaryBase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             canary.main(["--home", str(self.home)])
-        self.assertNotIn(self.SECRET, buf.getvalue())
-        self.assertNotIn("SECRETKEY", buf.getvalue())
+        self.assertNotIn(self.MARKER, buf.getvalue())
+        self.assertNotIn("MARKERKEY", buf.getvalue())
         self.assertIn("[--] SIDECAR_NEW_KEYS", buf.getvalue())
 
     def test_text_formats(self):
