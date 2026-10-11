@@ -457,6 +457,30 @@ wire_repo_with_worktree() {
   assert_output --partial "integrity checker timed out after 2s"
 }
 
+@test "doctor bounds a hung internals canary (timeout, not a hang)" {
+  local stub="$BATS_TEST_TMPDIR/hang-canary"
+  mkdir -p "$stub"; printf 'import time\ntime.sleep(60)\n' > "$stub/cast-internals-canary.py"
+  run env CAST_SCRIPTS_DIR="$stub" CAST_DOCTOR_CANARY_TIMEOUT=2 bash "$REPO_DIR/bin/cast" doctor
+  assert_output --partial "canary timed out after 2s"
+}
+
+@test "doctor: canary drift shows the ERR line" {
+  local stub="$BATS_TEST_TMPDIR/drift-canary"
+  mkdir -p "$stub"
+  printf 'print("[!!] SIDECAR_AGENTTYPE: x")\nprint("[!!] Claude Code shape drift: CAST identity checks may fail closed")\nraise SystemExit(1)\n' > "$stub/cast-internals-canary.py"
+  run env CAST_SCRIPTS_DIR="$stub" bash "$REPO_DIR/bin/cast" doctor
+  # doctor's overall exit is not asserted: the suite env already fails doctor for unrelated reasons
+  assert_output --regexp 'ERR.*SIDECAR_AGENTTYPE: x'
+}
+
+@test "doctor: canary ok line maps to an OK line" {
+  local stub="$BATS_TEST_TMPDIR/ok-canary"
+  mkdir -p "$stub"
+  printf 'print("[ok] canary stub fine")\n' > "$stub/cast-internals-canary.py"
+  run env CAST_SCRIPTS_DIR="$stub" bash "$REPO_DIR/bin/cast" doctor
+  assert_output --regexp 'ok.*canary stub fine'
+}
+
 # --- L2: env overrides -------------------------------------------------------------------------
 
 @test "L2/N4 git env overrides that redirect config, hooks or programs: alarm (each variable)" {

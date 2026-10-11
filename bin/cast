@@ -3151,6 +3151,45 @@ PYEOF
     fi
   fi
 
+  # Claude Code internals — scripts/cast-internals-canary.py (same check the SessionStart hook runs):
+  # CAST trusts undocumented Claude Code shapes (subagent sidecars, hatch audit keys, SubagentStop
+  # agent_id); drift makes identity/provenance checks fail closed. Text mode lines map by prefix.
+  printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
+  printf "${C_BOLD}Claude Code internals${C_RESET}\n"
+  local _ic_script="${CAST_SCRIPTS_DIR}/cast-internals-canary.py" _ic_out _ic_line
+  [ -f "$_ic_script" ] || _ic_script="${CAST_REPO_DIR}/scripts/cast-internals-canary.py"
+  if [ ! -f "$_ic_script" ]; then
+    printf "%b internals canary: not found (cast-internals-canary.py) — run: bash install.sh\n" "$WARN"
+  else
+    # Bounded: a hung canary must never hang doctor.
+    _ic_out="$(python3 -I - "$_ic_script" "$HOME" "${CAST_DOCTOR_CANARY_TIMEOUT:-10}" 2>&1 <<'PYEOF' || true
+import subprocess, sys
+try:
+    # sys._base_executable, not sys.executable: PYTHONEXECUTABLE overrides the latter even under -I and the child would EXECUTE it
+    r = subprocess.run([sys._base_executable, "-I", sys.argv[1], "--home", sys.argv[2]], capture_output=True,
+                       text=True, timeout=float(sys.argv[3]), stdin=subprocess.DEVNULL)
+    sys.stdout.write(r.stdout[:20000])
+except subprocess.TimeoutExpired:
+    sys.stdout.write("[!!] canary timed out after %ss\n" % sys.argv[3])
+except Exception as exc:
+    sys.stdout.write("[!!] canary could not run (%s)\n" % type(exc).__name__)
+PYEOF
+)"
+    if [ -z "$_ic_out" ]; then
+      printf "%b internals canary: checker produced no output\n" "$ERR"
+      overall_ok=0
+    else
+      while IFS= read -r _ic_line; do
+        case "$_ic_line" in
+          "[ok] "*) printf "%b %s\n" "$OK" "${_ic_line#"[ok] "}" ;;
+          "[!!] "*) printf "%b %s\n" "$ERR" "${_ic_line#"[!!] "}"; overall_ok=0 ;;
+          "[--] "*) printf "%b %s\n" "$INFO" "${_ic_line#"[--] "}" ;;
+          *)        printf "%b internals canary: unexpected checker output\n" "$ERR"; overall_ok=0 ;;
+        esac
+      done <<< "$_ic_out"
+    fi
+  fi
+
   # 14. Updates Available
   printf "%s\n" "$(python3 -I -c "print('-' * 52)" 2>/dev/null || printf '%0.s-' {1..52})"
   printf "${C_BOLD}Updates Available${C_RESET}\n"
