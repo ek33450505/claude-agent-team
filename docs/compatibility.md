@@ -50,13 +50,6 @@ The `PreCompact` guard (which blocks `/compact` on dirty worktrees) requires the
 
 **Symptom:** `/compact` runs without the dirty-worktree check.
 
-### CwdChanged not exporting CAST_REPO_CLASS (< v2.0)
-
-The `CwdChanged` event is used by CAST to export `CAST_REPO_CLASS` (values: `personal`,
-`work`) based on `.claude/cast.json`. On older builds this event does not fire.
-
-**Symptom:** Repo-aware hooks behave as if no `cast.json` is present.
-
 ### MCP tool hooks silently no-op (< v2.1.118)
 
 Hook entries with `"type": "mcp_tool"` are ignored on Claude Code < v2.1.118.

@@ -116,18 +116,6 @@ Expected output:
 9c2b7a51-0d4e-4f3a-8e21-5b6c3d9f0a12|my-project|2026-05-06T14:00:00Z|ended
 ```
 
-For session starts specifically:
-
-```bash
-cat ~/.claude/cast/session-starts.jsonl | tail -3
-```
-
-Expected output (one JSON object per line):
-
-```json
-{"timestamp": "2026-05-06T14:20:00Z", "session_id": "1614e68d-6b78-4151-8483-a7bcbb07c6c8", "cwd": "~/project"}
-```
-
 ---
 
 ## What just happened (conceptually)
@@ -135,7 +123,7 @@ Expected output (one JSON object per line):
 When you opened a Claude Code session earlier:
 1. Claude Code fired `SessionStart` with `{"session_id":"...","cwd":"..."}`
 2. `cast-session-start-hook.sh` received that JSON on stdin
-3. The script parsed it and appended a line to `~/.claude/cast/session-starts.jsonl`
+3. The script parsed it, wrote CAST env vars to `$CLAUDE_ENV_FILE`, and inserted a row into the `sessions` table of `~/.claude/cast.db`
 4. The script exited 0 — Claude Code continued normally
 
 You didn't see any of this. Hooks are silent by default. The only evidence is the log

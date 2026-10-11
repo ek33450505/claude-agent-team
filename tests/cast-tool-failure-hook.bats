@@ -59,56 +59,52 @@ teardown() {
 # 2. Happy path: log entry created with correct fields
 # ---------------------------------------------------------------------------
 
-@test "valid payload → appends to tool-failures.jsonl with correct fields" {
+@test "valid payload → cast.db row has correct fields, no tool-failures.jsonl" {
   bash "$HOOK_SH" <<< "$(make_payload "sess-fail-1" "Read" "src/missing.ts" "File not found")"
-  [ -f "$HOME/.claude/cast/tool-failures.jsonl" ]
   python3 -c "
-import json
-with open('$HOME/.claude/cast/tool-failures.jsonl') as f:
-    d = json.loads(f.readline().strip())
-assert d.get('session_id')    == 'sess-fail-1',    f'session_id={d.get(\"session_id\")}'
-assert d.get('tool_name')     == 'Read',           f'tool_name={d.get(\"tool_name\")}'
-assert d.get('error_preview') == 'File not found', f'error_preview={d.get(\"error_preview\")}'
-assert d.get('input_preview') == 'src/missing.ts', f'input_preview={d.get(\"input_preview\")}'
-assert 'timestamp' in d, 'missing timestamp'
+import sqlite3, os
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+row = con.execute('SELECT tool_name, error FROM tool_call_failures WHERE session_id=?', ('sess-fail-1',)).fetchone()
+con.close()
+assert row is not None, 'no row written'
+assert row == ('Read', 'File not found'), f'row={row}'
+
 print('ok')
 "
+  [ ! -e "$HOME/.claude/cast/tool-failures.jsonl" ]
 }
 
 # ---------------------------------------------------------------------------
 # 3. Long error message → error_preview truncated to 200 chars
 # ---------------------------------------------------------------------------
 
-@test "error longer than 200 chars → error_preview capped at 200" {
+@test "error longer than 200 chars → db error capped at 200" {
   local long_error
   long_error=$(python3 -c "print('E' * 400)")
   bash "$HOOK_SH" <<< "$(make_payload "sess-longerr" "Bash" "ls" "$long_error")"
   python3 -c "
-import json
-with open('$HOME/.claude/cast/tool-failures.jsonl') as f:
-    d = json.loads(f.readline().strip())
-preview_len = len(d.get('error_preview', ''))
-assert preview_len == 200, f'expected 200, got {preview_len}'
+import sqlite3, os
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+row = con.execute('SELECT error FROM tool_call_failures WHERE session_id=?', ('sess-longerr',)).fetchone()
+con.close()
+assert row is not None and len(row[0]) == 200, f'row={row and len(row[0])}'
+
 print('ok')
 "
 }
 
 # ---------------------------------------------------------------------------
-# 5. Long tool_input → input_preview truncated to 100 chars
+# 5. Sink removed: no tool-failures.jsonl is created
 # ---------------------------------------------------------------------------
 
-@test "tool_input longer than 100 chars → input_preview capped at 100" {
+@test "tool_input longer than 100 chars → exits 0, no tool-failures.jsonl" {
   local long_input
   long_input=$(python3 -c "print('I' * 300)")
-  bash "$HOOK_SH" <<< "$(make_payload "sess-longinput" "Bash" "$long_input" "error")"
-  python3 -c "
-import json
-with open('$HOME/.claude/cast/tool-failures.jsonl') as f:
-    d = json.loads(f.readline().strip())
-input_len = len(d.get('input_preview', ''))
-assert input_len == 100, f'expected 100, got {input_len}'
-print('ok')
-"
+  run bash "$HOOK_SH" <<< "$(make_payload "sess-longinput" "Bash" "$long_input" "error")"
+  assert_success
+  [ ! -e "$HOME/.claude/cast/tool-failures.jsonl" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -130,26 +126,35 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 8. Multiple failures → appends, not overwrites
+# 8. Multiple failures → one DB row each
 # ---------------------------------------------------------------------------
 
-@test "two failures → two lines in jsonl" {
+@test "two failures → two cast.db rows, no tool-failures.jsonl" {
   bash "$HOOK_SH" <<< "$(make_payload "sess-a" "Bash" "cmd1" "err1")"
   bash "$HOOK_SH" <<< "$(make_payload "sess-b" "Read" "file" "err2")"
-  local lines
-  lines=$(wc -l < "$HOME/.claude/cast/tool-failures.jsonl")
-  [ "$lines" -eq 2 ]
+  run python3 -c "
+import sqlite3, os
+con = sqlite3.connect(os.path.join(os.environ['HOME'], '.claude', 'cast.db'))
+print(con.execute('SELECT COUNT(*) FROM tool_call_failures').fetchone()[0])
+"
+  assert_output "2"
+  [ ! -e "$HOME/.claude/cast/tool-failures.jsonl" ]
 }
 
 # ---------------------------------------------------------------------------
 # 9. Error with quotes and special chars → handled safely
 # ---------------------------------------------------------------------------
 
-@test "error with special chars → exits 0 and logs" {
+@test "error with special chars → exits 0 and writes DB row" {
   local special_error="Failed: 'quote' and \"dquote\" and \$var and {json}"
   run bash "$HOOK_SH" <<< "$(make_payload "sess-special" "Write" "/tmp/f" "$special_error")"
   assert_success
-  [ -f "$HOME/.claude/cast/tool-failures.jsonl" ]
+  run python3 -c "
+import sqlite3, os
+con = sqlite3.connect(os.path.join(os.environ['HOME'], '.claude', 'cast.db'))
+print(con.execute('SELECT COUNT(*) FROM tool_call_failures WHERE session_id=?', ('sess-special',)).fetchone()[0])
+"
+  assert_output "1"
 }
 
 # ---------------------------------------------------------------------------

@@ -46,18 +46,6 @@
           }
         ]
       }
-    ],
-    "InstructionsLoaded": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-instructions-loaded-hook.sh",
-            "timeout": 3,
-            "async": true
-          }
-        ]
-      }
     ]
   }
 }

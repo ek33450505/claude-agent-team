@@ -4,7 +4,7 @@
 # Responsibilities:
 #   1. Guard against subprocess invocations
 #   2. Write CAST env vars to $CLAUDE_ENV_FILE if set
-#   3. Log session start to ~/.claude/cast/session-starts.jsonl
+#   3. Insert the session row into cast.db (and bind the desktop pane)
 #
 # Stdin JSON fields (SessionStart):
 #   session_id — the new session's ID
@@ -43,7 +43,7 @@ except Exception:
 now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-# ── Part 1: env-file write + session-starts.jsonl (session_id defaults 'unknown') ──
+# ── Part 1: env-file write (session_id defaults 'unknown') ──
 session_id_log = data.get("session_id", "unknown")
 cwd_log        = data.get("cwd", "")
 
@@ -63,24 +63,6 @@ if env_file:
         os.makedirs(log_dir, exist_ok=True)
         with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
             lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: env_file write failed: {e}\n")
-
-entry = {
-    "timestamp":  iso_ts,
-    "session_id": session_id_log,
-    "cwd":        cwd_log,
-}
-
-log_path = os.path.expanduser("~/.claude/cast/session-starts.jsonl")
-os.makedirs(os.path.dirname(log_path), exist_ok=True)
-try:
-    with open(log_path, "a") as f:
-        f.write(json.dumps(entry) + "\n")
-except Exception as e:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    log_dir = os.path.expanduser("~/.claude/logs")
-    os.makedirs(log_dir, exist_ok=True)
-    with open(os.path.join(log_dir, "hook-errors.log"), "a") as lf:
-        lf.write(f"[{ts}] ERROR cast-session-start-hook.sh: session-starts.jsonl write failed: {e}\n")
 
 # ── Part 2: sessions DB insert (session_id empty string, not 'unknown') ──
 session_id = data.get("session_id", "")

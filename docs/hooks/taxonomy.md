@@ -31,10 +31,6 @@
 | `cast-session-end.sh` | Stop + SessionEnd | exit 0 | **(b) OBS** | YES |
 | `cast-stop-failure-hook.sh` | StopFailure | exit 0 | **(b) OBS** | YES |
 | `cast-subagent-start-hook.sh` | SubagentStart | exit 0 | **(b) OBS** | YES |
-| `cast-cwdchanged-hook.sh` | CwdChanged | exit 0 | **(b) OBS** | YES |
-| `cast-filechanged-hook.sh` | FileChanged | exit 0 | **(b) OBS** | YES |
-| `cast-post-compact-hook.sh` | PostCompact | exit 0 | **(b) OBS** | YES |
-| `cast-instructions-loaded-hook.sh` | InstructionsLoaded | exit 0 | **(b) OBS** | YES |
 | `cast-task-created-hook.sh` | TaskCreated | exit 0 | **(b) OBS** | YES |
 
 ---

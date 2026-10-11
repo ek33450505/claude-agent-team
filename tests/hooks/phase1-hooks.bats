@@ -133,18 +133,14 @@ print('ok')
   assert_success
 }
 
-# 7. Writes to ~/.claude/cast/user-prompts.jsonl or events/
-@test "user-prompt: valid payload → writes to user-prompts.jsonl" {
+# 7. Writes a routing_events row to ~/.claude/cast.db; the user-prompts.jsonl sink is gone
+@test "user-prompt: valid payload → writes routing_events row, no user-prompts.jsonl" {
+  # The hook writes to ~/.claude/cast.db (not CAST_DB_PATH), so create the table there.
+  sqlite3 "$HOME/.claude/cast.db" "CREATE TABLE IF NOT EXISTS routing_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, timestamp TEXT, prompt_preview TEXT, action TEXT, matched_route TEXT, match_type TEXT, pattern TEXT, confidence TEXT, project TEXT, event_type TEXT, data TEXT)"
   bash "$USER_PROMPT_HOOK" <<< "$(make_user_prompt_payload "sess-p-1" "Tell me about CAST")"
-  [ -f "$HOME/.claude/cast/user-prompts.jsonl" ]
-  python3 -c "
-import json
-with open('$HOME/.claude/cast/user-prompts.jsonl') as f:
-    d = json.loads(f.readline().strip())
-assert d.get('session_id') == 'sess-p-1', f'got {d.get(\"session_id\")}'
-assert 'timestamp' in d
-print('ok')
-"
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id='sess-p-1'"
+  assert_output "1"
+  [ ! -e "$HOME/.claude/cast/user-prompts.jsonl" ]
 }
 
 # 8. Exits 0 on empty input (defensive parse)

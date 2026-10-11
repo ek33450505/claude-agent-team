@@ -127,18 +127,6 @@
         ]
       }
     ],
-    "InstructionsLoaded": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-instructions-loaded-hook.sh\"",
-            "timeout": 3,
-            "async": true
-          }
-        ]
-      }
-    ],
     "ConfigChange": [
       {
         "matcher": "project_settings|local_settings",
@@ -181,33 +169,6 @@
             "type": "command",
             "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/write-guards.sh\"",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "CwdChanged": [
-      {
-        "id": "cast-cwd-changed",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-cwdchanged-hook.sh\"",
-            "timeout": 5,
-            "async": true
-          }
-        ]
-      }
-    ],
-    "FileChanged": [
-      {
-        "id": "cast-file-changed",
-        "matcher": ".envrc|.env|.cast|cast.json",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-filechanged-hook.sh\"",
-            "timeout": 5,
-            "async": true
           }
         ]
       }
@@ -301,18 +262,6 @@
             "type": "command",
             "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-stop-failure-hook.sh\"",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -f \"$HOME/.claude/config/cast-hook-owner\" ]; then exit 0; fi; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/cast-post-compact-hook.sh\"",
-            "timeout": 5,
-            "async": true
           }
         ]
       }

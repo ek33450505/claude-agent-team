@@ -32,14 +32,10 @@
 #   scripts/cast-user-prompt-hook.sh
 #   scripts/cast-task-created-hook.sh
 #   scripts/cast-session-start-health.sh
-#   scripts/cast-filechanged-hook.sh
-#   scripts/cast-cwdchanged-hook.sh
 #   scripts/cast-session-start-hook.sh
 #   scripts/cast-subagent-worktree-check.sh
-#   scripts/cast-instructions-loaded-hook.sh
 #   scripts/cast-tool-failure-hook.sh
 #   scripts/cast-time-context-hook.sh
-#   scripts/cast-post-compact-hook.sh
 #   scripts/cast-session-start-journal.sh
 #   scripts/cast-precompact-memory-save.sh
 
@@ -55,14 +51,10 @@ OBSERVER_SCRIPTS=(
   "scripts/cast-user-prompt-hook.sh"
   "scripts/cast-task-created-hook.sh"
   "scripts/cast-session-start-health.sh"
-  "scripts/cast-filechanged-hook.sh"
-  "scripts/cast-cwdchanged-hook.sh"
   "scripts/cast-session-start-hook.sh"
   "scripts/cast-subagent-worktree-check.sh"
-  "scripts/cast-instructions-loaded-hook.sh"
   "scripts/cast-tool-failure-hook.sh"
   "scripts/cast-time-context-hook.sh"
-  "scripts/cast-post-compact-hook.sh"
   "scripts/cast-session-start-journal.sh"
   "scripts/cast-precompact-memory-save.sh"
 )

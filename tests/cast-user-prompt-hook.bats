@@ -57,19 +57,22 @@ teardown() {
 # 2. Happy path: log entry created with correct fields
 # ---------------------------------------------------------------------------
 
-@test "valid payload → appends to user-prompts.jsonl with correct fields" {
+@test "valid payload → routing_events data has correct fields, no user-prompts.jsonl" {
   bash "$HOOK_SH" <<< "$(make_payload "sess-prompt-1" "Tell me about CAST")"
-  [ -f "$HOME/.claude/cast/user-prompts.jsonl" ]
   python3 -c "
-import json
-with open('$HOME/.claude/cast/user-prompts.jsonl') as f:
-    d = json.loads(f.readline().strip())
-assert d.get('session_id')     == 'sess-prompt-1',     f'session_id={d.get(\"session_id\")}'
-assert d.get('prompt_preview') == 'Tell me about CAST', f'preview={d.get(\"prompt_preview\")}'
-assert d.get('prompt_length')  == len('Tell me about CAST'), f'length={d.get(\"prompt_length\")}'
-assert 'timestamp' in d, 'missing timestamp'
+import sqlite3, os, json
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+row = con.execute('SELECT data FROM routing_events WHERE session_id=?', ('sess-prompt-1',)).fetchone()
+con.close()
+assert row is not None, 'no routing_events row'
+d = json.loads(row[0])
+assert d.get('prompt_preview') == 'Tell me about CAST', f'preview={d.get("prompt_preview")}'
+assert d.get('prompt_length')  == len('Tell me about CAST'), f'length={d.get("prompt_length")}'
+
 print('ok')
 "
+  [ ! -e "$HOME/.claude/cast/user-prompts.jsonl" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -81,12 +84,16 @@ print('ok')
   long_prompt=$(python3 -c "print('A' * 200)")
   bash "$HOOK_SH" <<< "$(make_payload "sess-long" "$long_prompt")"
   python3 -c "
-import json
-with open('$HOME/.claude/cast/user-prompts.jsonl') as f:
-    d = json.loads(f.readline().strip())
-preview_len = len(d.get('prompt_preview', ''))
-assert preview_len == 120, f'expected 120, got {preview_len}'
-assert d.get('prompt_length') == 200, f'expected length 200, got {d.get(\"prompt_length\")}'
+import sqlite3, os, json
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+row = con.execute('SELECT data FROM routing_events WHERE session_id=?', ('sess-long',)).fetchone()
+con.close()
+assert row is not None, 'no routing_events row'
+d = json.loads(row[0])
+assert len(d.get('prompt_preview', '')) == 120, f'expected 120, got {len(d.get("prompt_preview", ""))}'
+assert d.get('prompt_length') == 200, f'expected length 200, got {d.get("prompt_length")}'
+
 print('ok')
 "
 }
@@ -100,10 +107,15 @@ print('ok')
   exact_prompt=$(python3 -c "print('B' * 120)")
   bash "$HOOK_SH" <<< "$(make_payload "sess-exact" "$exact_prompt")"
   python3 -c "
-import json
-with open('$HOME/.claude/cast/user-prompts.jsonl') as f:
-    d = json.loads(f.readline().strip())
-assert len(d.get('prompt_preview', '')) == 120, f'got {len(d.get(\"prompt_preview\",\"\"))}'
+import sqlite3, os, json
+db = os.path.join(os.environ['HOME'], '.claude', 'cast.db')
+con = sqlite3.connect(db)
+row = con.execute('SELECT data FROM routing_events WHERE session_id=?', ('sess-exact',)).fetchone()
+con.close()
+assert row is not None, 'no routing_events row'
+d = json.loads(row[0])
+assert len(d.get('prompt_preview', '')) == 120, f'got {len(d.get("prompt_preview", ""))}'
+
 print('ok')
 "
 }
@@ -127,26 +139,27 @@ print('ok')
 }
 
 # ---------------------------------------------------------------------------
-# 8. Multiple calls → appends, not overwrites
+# 8. Multiple calls → one DB row each
 # ---------------------------------------------------------------------------
 
-@test "two prompts → two lines in jsonl" {
+@test "two prompts → two routing_events rows, no user-prompts.jsonl" {
   bash "$HOOK_SH" <<< "$(make_payload "sess-a" "first prompt")"
   bash "$HOOK_SH" <<< "$(make_payload "sess-b" "second prompt")"
-  local lines
-  lines=$(wc -l < "$HOME/.claude/cast/user-prompts.jsonl")
-  [ "$lines" -eq 2 ]
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id IN ('sess-a','sess-b')"
+  assert_output "2"
+  [ ! -e "$HOME/.claude/cast/user-prompts.jsonl" ]
 }
 
 # ---------------------------------------------------------------------------
 # 9. Special chars in prompt → handled safely
 # ---------------------------------------------------------------------------
 
-@test "prompt with quotes and special chars → exits 0 and logs" {
+@test "prompt with quotes and special chars → exits 0 and writes DB row" {
   local special_prompt="It's a \"test\" with \$pecial ch@rs & more"
   run bash "$HOOK_SH" <<< "$(make_payload "sess-special" "$special_prompt")"
   assert_success
-  [ -f "$HOME/.claude/cast/user-prompts.jsonl" ]
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id='sess-special'"
+  assert_output "1"
 }
 
 # ---------------------------------------------------------------------------
@@ -1005,13 +1018,11 @@ print('ok')
 # P-6: redaction + router run IN-PROCESS (no python subprocess spawns)
 # ---------------------------------------------------------------------------
 
-@test "in-process redaction: secret in prompt is redacted in jsonl and routing_events" {
+@test "in-process redaction: secret in prompt is redacted in routing_events (no jsonl sink)" {
   local key
   key="AKIA""IOSFODNN7EXAMPLE"   # built at runtime; never a literal secret in source
   bash "$HOOK_SH" <<< "$(make_payload "sess-redact-live" "my aws key is $key please keep it safe")"
-  [ -f "$HOME/.claude/cast/user-prompts.jsonl" ]
-  run grep -c "$key" "$HOME/.claude/cast/user-prompts.jsonl"
-  assert_output "0"
+  [ ! -e "$HOME/.claude/cast/user-prompts.jsonl" ]
   run sqlite3 "$HOME/.claude/cast.db" "SELECT prompt_preview || data FROM routing_events WHERE session_id='sess-redact-live'"
   assert_success
   refute_output --partial "$key"
@@ -1019,26 +1030,24 @@ print('ok')
   [ -n "$output" ]
 }
 
-@test "in-process redaction fail-closed: redact module missing → no jsonl, no DB row" {
+@test "in-process redaction fail-closed: redact module missing → no DB row" {
   local d
   d="$(mktemp -d)"
   cp "$HOOK_SH" "$d/hook.sh"   # sibling cast-redact.py deliberately absent
   run bash "$d/hook.sh" <<< "$(make_payload "sess-nored" "some long enough prompt text here")"
   assert_success
-  [ ! -s "$HOME/.claude/cast/user-prompts.jsonl" ]
   run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id='sess-nored'"
   assert_output "0"
   rm -rf "$d"
 }
 
-@test "in-process redaction fail-closed: redact module raises → no jsonl, no DB row" {
+@test "in-process redaction fail-closed: redact module raises → no DB row" {
   local d
   d="$(mktemp -d)"
   cp "$HOOK_SH" "$d/hook.sh"
   printf 'raise RuntimeError("boom")\n' > "$d/cast-redact.py"
   run bash "$d/hook.sh" <<< "$(make_payload "sess-raise" "some long enough prompt text here")"
   assert_success
-  [ ! -s "$HOME/.claude/cast/user-prompts.jsonl" ]
   run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id='sess-raise'"
   assert_output "0"
   rm -rf "$d"
@@ -1051,7 +1060,8 @@ print('ok')
   printf 'import sys\nprint("{\\"redacted_text\\": \\"x\\"}")\nsys.exit(3)\n' > "$d/cast-redact.py"
   run bash "$d/hook.sh" <<< "$(make_payload "sess-rc3" "some long enough prompt text here")"
   assert_success
-  [ ! -s "$HOME/.claude/cast/user-prompts.jsonl" ]
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT count(*) FROM routing_events WHERE session_id='sess-rc3'"
+  assert_output "0"
   rm -rf "$d"
 }
 

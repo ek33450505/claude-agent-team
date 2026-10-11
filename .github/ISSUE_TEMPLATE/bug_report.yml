@@ -36,7 +36,6 @@ body:
       options:
         - cast-audit-hook.sh
         - cast-budget-alert.sh
-        - cast-cwdchanged-hook.sh
         - cast-session-start-hook.sh
         - cast-subagent-stop-hook.sh
         - cast-user-prompt-hook.sh

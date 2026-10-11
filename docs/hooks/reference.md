@@ -6,7 +6,7 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 
 | Script | Matcher | What it does |
 |---|---|---|
-| `cast-session-start-hook.sh` | `*` | Writes CAST env vars to `$CLAUDE_ENV_FILE` and logs session start to `session-starts.jsonl`. |
+| `cast-session-start-hook.sh` | `*` | Writes CAST env vars to `$CLAUDE_ENV_FILE` and records the session in `cast.db` (`sessions`, plus `pane_bindings`). |
 | `cast-time-context-hook.sh` | `*` | Injects local date/time/timezone context into Claude's context window via `hookSpecificOutput`. |
 | `cast-session-start-journal.sh` | `*` | Injects the most recent dated journal entry from the Obsidian vault at session start. |
 
@@ -14,13 +14,13 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 
 | Script | Matcher | What it does |
 |---|---|---|
-| `cast-user-prompt-hook.sh` | `*` | Logs prompt metadata (never full text) to `user-prompts.jsonl` and `cast.db routing_events`. |
+| `cast-user-prompt-hook.sh` | `*` | Logs prompt metadata (never full text) to `cast.db routing_events`. |
 
 ## PostToolUseFailure hooks (1)
 
 | Script | Matcher | What it does |
 |---|---|---|
-| `cast-tool-failure-hook.sh` | `*` | Logs tool failure metadata to `tool-failures.jsonl` and `cast.db routing_events`. |
+| `cast-tool-failure-hook.sh` | `*` | Logs tool failure metadata to `cast.db tool_call_failures`. |
 
 ## PostToolUse hooks (2)
 
@@ -33,7 +33,6 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 
 | Script | Matcher | What it does |
 |---|---|---|
-| `cast-instructions-loaded-hook.sh` | `*` | Logs active `CLAUDE.md` files at session start to `instructions-loaded.jsonl`. |
 
 ## PreToolUse hooks (6)
 
@@ -45,17 +44,10 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 | `pre-tool-guard.sh` | `Bash` | Blocks `git commit`, `git push`, and `git stash` calls (and other policy violations) in agent sessions (exit 2). |
 | `cast-tilde-write-guard.sh` | `Write\|Edit` | Blocks writes to literal-tilde paths (e.g. `~/foo`) that would resolve incorrectly in non-interactive contexts (exit 2). |
 
-## CwdChanged hooks (1)
-
-| Script | Matcher | What it does |
-|---|---|---|
-| `cast-cwdchanged-hook.sh` | `*` | Logs cwd changes to `cast.db` and exports `CAST_REPO_CLASS` from the new directory's `cast.json`. |
-
 ## FileChanged hooks (1)
 
 | Script | Matcher | What it does |
 |---|---|---|
-| `cast-filechanged-hook.sh` | `.envrc\|.env\|.cast\|cast.json` | Logs changes to environment and CAST config files to `cast.db` via `cast-events.sh`. |
 
 ## PreCompact hooks (2)
 
@@ -95,12 +87,6 @@ One row per hook that ships in `settings.json`. See `authoring-guide.md` for the
 | Script | Matcher | What it does |
 |---|---|---|
 | `cast-stop-failure-hook.sh` | `*` | Logs stop-failure events to `cast.db` and fires a macOS desktop notification when a subagent fails due to API errors or rate limits. |
-
-## PostCompact hooks (1)
-
-| Script | Matcher | What it does |
-|---|---|---|
-| `cast-post-compact-hook.sh` | `*` | Logs context compaction events to `cast/events/` and `compact-log.jsonl` (observability only). |
 
 ## TaskCreated hooks (1)
 

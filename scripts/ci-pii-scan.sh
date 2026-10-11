@@ -10,6 +10,11 @@
 # Exit codes: 0 = clean (or self-test passed), 1 = findings detected
 set -euo pipefail
 
+# Scan BYTE-WISE. Under a UTF-8 locale a line holding an invalid byte loses its PII hit (grep
+# stops matching at the bad sequence), and GNU grep -E is quadratic on long lines. Exported
+# before any scan grep runs; the grep -P capability probe below is unaffected by C.
+export LC_ALL=C
+
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 FINDINGS=()
 
@@ -58,13 +63,27 @@ _is_allowed() {
 # Exclusion patterns — mirror pre-push-ci-check.sh
 # ---------------------------------------------------------------------------
 
-# Hardcoded-path exclusion: testuser, runner, janedoe, doc placeholders, $USER,
-# regex literals like /Users/[a-z], and generic fake names used in test fixtures.
-# Also covers: /Users/you, /Users/yourname, /Users/... (doc patterns).
-_PATH_EXCLUSION='/Users/testuser\b|/Users/runner\b|/Users/janedoe\b|/Users/johndoe\b|/Users/john_doe|/Users/alice\b|/Users/bob\b|/Users/you\b|/Users/yourname\b|/Users/\.\.\.|/Users/\[|/Users/<|/Users/\$'
+# Exclusions are applied per MATCH (not per line) and anchored to the WHOLE match text.
+# Keep the two assignment lines below byte-identical with scripts/pre-push-ci-check.sh
+# (drift-tested). The path pattern's char class cannot match "[", "<" or "$", so doc
+# placeholders like those never reach the exclusion.
+# Hardcoded-path exclusion: CI-runner / fixture usernames and doc placeholders.
+_PATH_EXCLUSION='^/Users/(testuser|runner|janedoe|johndoe|alice|bob|you|yourname)$|^/Users/\.+$'
 
 # Email exclusion: known safe addresses and obvious placeholders.
-_EMAIL_EXCLUSION='users\.noreply\.github\.com|noreply@anthropic\.com|@example\.(com|org)|your-email@|user@example|@example\b|test@test\.(com|org)|ci@example|@test\.(com|org)'
+_EMAIL_EXCLUSION='^[A-Za-z0-9._%+-]+@users\.noreply\.github\.com$|^noreply@anthropic\.com$|^(noreply|actions)@github\.com$|@example\.(com|org|net)$|@test\.(com|org)$|\.(test|example|invalid|localhost)$'
+
+# True (0) if ANY match of $1 (ERE) in $2 survives exclusion $3. Safe under set -e / pipefail.
+_has_unexcluded_match() {
+  local pattern="$1" content="$2" exclusion="$3" m
+  while IFS= read -r m; do
+    [[ -z "$m" ]] && continue
+    if ! printf '%s\n' "$m" | grep -qE -e "$exclusion"; then
+      return 0
+    fi
+  done < <(printf '%s\n' "$content" | grep -oE -e "$pattern" 2>/dev/null || true)
+  return 1
+}
 
 # Secret exclusion: test files that explicitly label fakes
 # (the file path check for test files is handled by the "test-fixture" label below)
@@ -125,17 +144,13 @@ _scan_all() {
     echo "$relpath" | grep -qE "$_SECRET_TEST_FILE_PATTERN" 2>/dev/null && is_secret_fixture=1
 
     # --- hardcoded-path (exclusion: $_PATH_EXCLUSION) ---
-    if echo "$content" | grep -qE '/Users/[A-Za-z0-9._-]+' 2>/dev/null; then
-      if ! echo "$content" | grep -qE "$_PATH_EXCLUSION" 2>/dev/null; then
-        _HITS_PATH+=("  [hardcoded-path] $relpath: $content")
-      fi
+    if _has_unexcluded_match '/Users/[A-Za-z0-9._-]+' "$content" "$_PATH_EXCLUSION"; then
+      _HITS_PATH+=("  [hardcoded-path] $relpath: $content")
     fi
 
     # --- email (exclusion: $_EMAIL_EXCLUSION) ---
-    if echo "$content" | grep -qE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' 2>/dev/null; then
-      if ! echo "$content" | grep -qE "$_EMAIL_EXCLUSION" 2>/dev/null; then
-        _HITS_EMAIL+=("  [email] $relpath: $content")
-      fi
+    if _has_unexcluded_match '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$content" "$_EMAIL_EXCLUSION"; then
+      _HITS_EMAIL+=("  [email] $relpath: $content")
     fi
 
     # --- secret keys (skip if test-fixture file) ---

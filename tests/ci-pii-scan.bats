@@ -186,3 +186,98 @@ echo "$FAKE_PATH"
   assert_success
   assert_output --partial "--self-test PASSED"
 }
+
+# ---------------------------------------------------------------------------
+# G1c-C: exclusions are per-MATCH and anchored to the whole match
+# ---------------------------------------------------------------------------
+@test "G1c-C flags example.com absorbed as a local part" {
+  _run_scan "notes/a.txt" 'contact x@example.com.ed@corp.io today'
+  assert_failure
+  assert_output --partial "[email]"
+}
+
+@test "G1c-C flags noreply-domain absorbed as a local part" {
+  _run_scan "notes/a.txt" 'contact users.noreply.github.com.ed@corp.io today'
+  assert_failure
+  assert_output --partial "[email]"
+}
+
+@test "G1c-C flags example.community (suffix, not example.com)" {
+  _run_scan "notes/a.txt" 'contact bob@example.community today'
+  assert_failure
+  assert_output --partial "[email]"
+}
+
+@test "G1c-C flags evil-actions at github.com" {
+  _run_scan "notes/a.txt" 'contact evil-actions@github.com today'
+  assert_failure
+  assert_output --partial "[email]"
+}
+
+@test "G1c-C flags /Users/runner.real" {
+  _run_scan "notes/a.txt" 'path /Users/runner.real/x'
+  assert_failure
+  assert_output --partial "[hardcoded-path]"
+}
+
+@test "G1c-C flags /Users/testuser.alice" {
+  _run_scan "notes/a.txt" 'path /Users/testuser.alice/x'
+  assert_failure
+  assert_output --partial "[hardcoded-path]"
+}
+
+@test "G1c-C flags a real address sharing a line with an excluded one" {
+  _run_scan "notes/a.txt" 'cc noreply@anthropic.com and carol@corp.io'
+  assert_failure
+  assert_output --partial "[email]"
+}
+
+@test "G1c-C passes t@example.invalid" {
+  _run_scan "notes/a.txt" 'contact t@example.invalid today'
+  assert_success
+}
+
+@test "G1c-C passes /Users/alice and /Users/..." {
+  _run_scan "notes/a.txt" 'see /Users/alice/x and /Users/.../y'
+  assert_success
+}
+
+@test "G1c-C passes actions at github.com" {
+  _run_scan "notes/a.txt" 'sender actions@github.com'
+  assert_success
+}
+
+@test "G1c-C drift: exclusion constants byte-identical with pre-push-ci-check.sh" {
+  local other="$REPO_DIR/scripts/pre-push-ci-check.sh" k a b
+  for k in _EMAIL_EXCLUSION _PATH_EXCLUSION; do
+    a="$(grep "^${k}=" "$SCRIPT")"
+    b="$(grep "^${k}=" "$other")"
+    [ -n "$a" ]
+    [ "$a" = "$b" ]
+  done
+}
+
+@test "G1c-C round 2: flags user@example.co.uk (real domain, not a placeholder)" {
+  _run_scan "notes/a.txt" 'contact user@example.co.uk today'
+  assert_failure
+  assert_output --partial "[email]"
+}
+
+@test "G1c-C round 2: invalid UTF-8 byte does not hide a real address under a UTF-8 locale" {
+  local loc="" l
+  while IFS= read -r l; do
+    case "$l" in
+      en_US.UTF-8 | en_US.utf8) loc="$l"; break ;;
+    esac
+  done < <(locale -a 2>/dev/null || true)
+  if [ -z "$loc" ]; then
+    while IFS= read -r l; do
+      if printf '%s\n' "$l" | grep -qiE 'utf-?8'; then loc="$l"; break; fi
+    done < <(locale -a 2>/dev/null || true)
+  fi
+  [ -n "$loc" ] || skip "no UTF-8 locale available"
+  export LC_ALL="$loc"
+  _run_scan "notes/a.txt" "caf$(printf '\xe9') contact carol@corp.io"
+  assert_failure
+  assert_output --partial "[email]"
+}

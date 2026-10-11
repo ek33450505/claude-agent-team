@@ -134,18 +134,6 @@
           }
         ]
       }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-post-compact-hook.sh",
-            "timeout": 5,
-            "async": true
-          }
-        ]
-      }
     ]
   }
 }

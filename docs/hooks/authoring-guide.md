@@ -24,7 +24,7 @@ Each hook event has its own payload. Common fields across all events:
 | `tool_input` | object | (PreToolUse/PostToolUse) Tool call arguments |
 | `agent_type` | string | (SubagentStop) Agent that just stopped |
 | `stop_reason` | string | (SubagentStop) `"end_turn"`, `"max_turns"`, `"error"` |
-| `cwd` | string | (SessionStart, CwdChanged) Working directory |
+| `cwd` | string | (SessionStart) Working directory |
 
 Read stdin **once**, immediately, before any other work:
 
@@ -205,7 +205,7 @@ managed-settings.d/
   00-env.json             # Environment variables
   20-hooks-telemetry.json # Observability hooks
   25-hooks-security.json  # PreToolUse security gates
-  30-hooks-session.json   # SessionStart, CwdChanged
+  30-hooks-session.json   # SessionStart
   40-hooks-tasks.json     # SubagentStop, PostToolUse
 ```
 
@@ -299,7 +299,6 @@ Do not add new entries to the baseline — fix new violations instead.
 
 **New Hook Events:**
 - **StopFailure** (REC-01) — Fires when agent API calls fail mid-task. Logs error details to `cast.db` `stop_failure_events` table; triggers osascript desktop notification with error context.
-- **CwdChanged** (REC-06) — Reads `.claude/cast.json` repo metadata and exports `CAST_REPO_CLASS` environment variable (values: `personal`, `work`). Enables repo-aware hooks and agent behavior.
 - **SessionStart** — Now reads the latest `~/Documents/Claude/YYYY-MM/*.md` journal entry (if present) and injects a context banner for continuity. Sourced via `cast-claudes_journal` standalone repo.
 - **SessionStart (install integrity)** — The health hook (`cast-session-start-health.sh`) also runs `cast-install-integrity.py`, which raises an alarm on drift from the install manifest. The fix is `bash install.sh`.
 
