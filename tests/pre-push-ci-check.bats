@@ -156,8 +156,8 @@ teardown() {
 # Test: generic hardcoded home-path scan
 # ---------------------------------------------------------------------------
 
-@test "hardcoded /Users/janedoe path in diff blocks push" {
-  _run_check "paths.txt" "path=/Users/janedoe/projects/secret" "$FAKE_DENYLIST"
+@test "hardcoded /Users/mallory path in diff blocks push" {
+  _run_check "paths.txt" "path=/Users/mallory/projects/secret" "$FAKE_DENYLIST"
   assert_failure
   assert_output --partial "hardcoded-path"
 }
@@ -1400,7 +1400,7 @@ _sc_excluded() {
   for i in $(seq 1 250); do
     printf '%s%s%s\n' "u$i" "@" "example.com"
   done > e.txt
-  printf '%s%s%s\n' "real" "@" "corp.test" > f.txt
+  printf '%s%s%s\n' "real" "@" "corp.io" > f.txt
   git add -A
   git commit -q -m "excluded then real"
 }
@@ -1465,7 +1465,7 @@ _make_silent_grep_shim() {
 @test "scan: excluded lines do not consume the 200-hit cap" {
   _run_scenario _sc_excluded
   assert_failure
-  grep -Fxq -- "  [email] f.txt: real@corp.test" <<<"$output" \
+  grep -Fxq -- "  [email] f.txt: real@corp.io" <<<"$output" \
     || fail "no exact [email] f.txt line in: $output"
   refute_output --partial "[email] ... and"
 }
@@ -1494,7 +1494,7 @@ _mixed_email_line() {
 
 # A real home path followed by an excluded CI-runner path, on ONE line.
 _mixed_path_line() {
-  printf '%s%s %s%s' "/Use" "rs/alice/x" "/Use" "rs/runner/y"
+  printf '%s%s %s%s' "/Use" "rs/mallory/x" "/Use" "rs/runner/y"
 }
 
 # Only placeholders: every match of both scans is excluded.
@@ -1564,4 +1564,27 @@ _sc_placeholder_then_real() {
   _run_scenario _sc_placeholder_then_real
   assert_failure
   assert_output --partial "[email] m.txt: $(printf '%s%s%s' "bob.real" "@" "corp-mail.io")"
+}
+
+# ---------------------------------------------------------------------------
+# G1c-C: exclusions anchored to the whole match
+# ---------------------------------------------------------------------------
+@test "G1c-C: example.com absorbed as a local part blocks" {
+  _run_check "contact.txt" "email: x@example.com.ed@corp.io" "$FAKE_DENYLIST"
+  assert_failure
+}
+
+@test "G1c-C: /Users/runner.real blocks" {
+  _run_check "paths.txt" "path=/Users/runner.real/x" "$FAKE_DENYLIST"
+  assert_failure
+}
+
+@test "G1c-C: example.invalid address does not block" {
+  _run_check "contact.txt" "email: t@example.invalid" "$FAKE_DENYLIST"
+  assert_success
+}
+
+@test "G1c-C round 2: your-email at a real domain blocks" {
+  _run_check "contact.txt" "email: your-email@gmail.com" "$FAKE_DENYLIST"
+  assert_failure
 }

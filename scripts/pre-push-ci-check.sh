@@ -48,10 +48,9 @@
 #   - the per-pattern join keeps line numbers (line mode) or match indices (match mode) in
 #     memory: O(hit lines) or O(matches) (a 50 MB line of excluded matches ~ 20 s, 346 MB RSS);
 #     it fails closed if killed;
-#   - exclusions are substring searches within each match (`bob@example.com.corp.io` is
-#     excluded by `@example\.(com|org)`), as before;
-#   - scripts/ci-pii-scan.sh (the CI scan) still applies its exclusions per whole line
-#     (follow-up: align the two scanners, G6/G2).
+#   - exclusions are anchored to the whole match (G1c-C) and kept byte-identical with
+#     scripts/ci-pii-scan.sh (drift-tested); residual: the email pattern is ASCII-only
+#     (a non-ASCII local part is not matched at all).
 # COST (G1c): the diff is parsed ONCE (awk) into line-aligned added-line records, then each
 # pattern is ONE grep over all of them: O(patterns) processes, not one grep per added line per
 # pattern. git still runs one diff per (commit, parent); commits shared by several pushed refs
@@ -542,13 +541,16 @@ _pii_scan_ci() {
 PII_HITS=""
 
 # Generic email scan — flags any email address; safe senders and obvious placeholders
-# are excluded via a combined exclusion regex, applied per match.
-_EMAIL_EXCLUSION='users\.noreply\.github\.com|noreply@anthropic\.com|@example\.(com|org)|your-email@|user@example|@example\b'
+# are excluded via a combined exclusion regex, applied per match and anchored to the WHOLE
+# match (each alternative is tested against one match text). Keep byte-identical with
+# scripts/ci-pii-scan.sh (drift-tested).
+_EMAIL_EXCLUSION='^[A-Za-z0-9._%+-]+@users\.noreply\.github\.com$|^noreply@anthropic\.com$|^(noreply|actions)@github\.com$|@example\.(com|org|net)$|@test\.(com|org)$|\.(test|example|invalid|localhost)$'
 PII_HITS+=$(_pii_scan "email" '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "" "$_EMAIL_EXCLUSION" || true)
 
 # Generic hardcoded home-path scan — flags /Users/<name>. CI-runner and fixture usernames are
-# excluded per match; /Users/<name> and /Users/$VAR never match the path pattern.
-_PATH_EXCLUSION='/Users/testuser\b|/Users/runner\b'
+# excluded per match, anchored to the whole match; /Users/<name> and /Users/$VAR never match
+# the path pattern. Keep byte-identical with scripts/ci-pii-scan.sh (drift-tested).
+_PATH_EXCLUSION='^/Users/(testuser|runner|janedoe|johndoe|alice|bob|you|yourname)$|^/Users/\.+$'
 PII_HITS+=$(_pii_scan "hardcoded-path" '/Users/[A-Za-z0-9._-]+' "" "$_PATH_EXCLUSION" || true)
 
 # Local deny-list scan — reads patterns from a file outside the repo.

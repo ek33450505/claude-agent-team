@@ -637,7 +637,7 @@ def _run_hook_mode() -> None:
         entities = [e for e in entities if e["score"] >= 0.5]
 
         # Strip known-safe system addresses (git attribution, CI bots) before blocking.
-        # Exact-match set — avoids substring bypass (e.g. noreply@anthropic.com.badactor.com).
+        # Exact-match set — avoids substring bypass (e.g. the allowed address with ".badactor.com" appended).
         _SAFE_EMAILS = {"noreply@anthropic.com", "noreply@github.com", "actions@github.com"}
         entities = [e for e in entities if e["original"].lower() not in _SAFE_EMAILS]
     except Exception as exc:

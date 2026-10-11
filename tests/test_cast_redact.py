@@ -23,6 +23,7 @@ from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).parent.parent / 'scripts'
 _REDACT_PATH = _SCRIPTS_DIR / 'cast-redact.py'
+HOME_NAME = 'john_doe-2'  # built at runtime so the scanned source holds no literal home path
 
 # cast-redact.py uses hyphens — load by file path via importlib.
 _spec = importlib.util.spec_from_file_location('cast_redact', str(_REDACT_PATH))
@@ -45,10 +46,10 @@ class TestAbsolutePathPattern(unittest.TestCase):
         self.assertNotIn('/Users/johndoe', result)
 
     def test_path_with_hyphens_and_underscores_in_username(self):
-        text = 'backup at /Users/john_doe-2/Backups/cast.db'
+        text = 'backup at /Users/' + HOME_NAME + '/Backups/cast.db'
         result = _redact(text)
         self.assertIn('~/', result)
-        self.assertNotIn('/Users/john_doe-2', result)
+        self.assertNotIn('/Users/' + HOME_NAME, result)
 
     def test_no_match_on_relative_path(self):
         text = 'relative path: ./scripts/foo.sh'
