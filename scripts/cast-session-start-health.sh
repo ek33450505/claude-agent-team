@@ -16,6 +16,9 @@
 #       hooks, silently. Any mismatch is a loud alarm; a missing manifest (pre-manifest install) is an
 #       advisory. Child process, budgeted timeout; its text is sanitised before it reaches the banner
 #       (a filename or .git/config value is attacker-influenced). Checker missing/failed = degraded notice.
+#   (e) Claude Code internals canary: scripts/cast-internals-canary.py --json checks the undocumented
+#       shapes CAST trusts (subagent sidecars, hatch audit keys, SubagentStop agent_id). Child process,
+#       <=1s; only fixed parent-side phrases reach the banner (never the child's text). Drift = banner.
 #
 # Emits ONE JSON object (systemMessage + hookSpecificOutput) only when something needs attention.
 # Exits 0 always — never blocks a session.
@@ -53,7 +56,8 @@ launchctl_out = os.environ.get("CAST_LAUNCHCTL_OUTPUT", "")
 # First on purpose: it is the only check whose budget scales its verification coverage (a starved
 # checker verifies nothing), so it must get its full budget before the stale-memory scanner (<=2s) and
 # the guard-failure check (budget = 4.0s - elapsed, floor 0.5s) spend the hook's 5s. Worst case:
-# 2.0s here + 2.0s scanner + 0.5s guard = 4.5s, inside the kill.
+# 2.0s here + 2.0s scanner + 0.5s guard = 4.5s, inside the kill. Check (e), the internals canary, runs
+# last with min(1.0s, 4.6s - elapsed) and is skipped if under 0.3s remains.
 # Runs scripts/cast-install-integrity.py --json in a child (same lookup order as the stale-memory
 # scanner). Hashing ~190 small files in-process is a few ms, so the full sha256 compare always runs
 # (no size/mtime shortcut that a same-size edit could slip past). The child's JSON is re-validated and
@@ -495,12 +499,92 @@ if os.path.isfile(_db_path):  # nonexistent DB = quiet skip (and we never create
             except Exception:
                 pass
 
+# ── Claude Code internals canary (e) ──────────────────────────────────────────
+# Runs scripts/cast-internals-canary.py --json in a child (lookup: installed, then sibling). CAST trusts
+# undocumented Claude Code shapes (subagent sidecars, payload keys); drift makes identity checks fail closed.
+# Only findings with severity "drift" whose code is in the parent-side tuple below are used, each rendered
+# from a PARENT-SIDE fixed phrase - no child free text (incl. `detail`) ever reaches model context.
+# Budget: <=1.0s and never past ~4.6s into the hook; if under 0.3s remains, skip quietly (budget exhausted;
+# `cast doctor` covers it). Both skips are LOG-ONLY (no banner): a missing installed canary is alarmed by
+# install-integrity (d) once manifest-listed; a budget skip is covered by doctor.
+_CANARY_PHRASES = {
+    "SIDECAR_LAYOUT": "subagent runs recorded but no agent-*.meta.json sidecars at the expected path (layout moved?)",
+    "SIDECAR_AGENTTYPE": "sidecars missing the agentType key (renamed?)",
+    "SIDECAR_SPAWNDEPTH": "sidecars missing an integer spawnDepth",
+    "SIDECAR_UNPARSABLE": "many sidecars unparsable (format changed?)",
+    "TEAMMATE_MARKERS": "teammate sidecars missing taskKind or teamName (renamed? spoof detection degraded)",
+    "TEAMMATE_CUSTOM_TYPE": "teammate sidecars mostly lack customAgentType (renamed? teammate identity checks fail closed)",
+    "HATCH_AGENT_ID": "commit-hatch lines from subagents have an empty agent_id (payload key renamed?)",
+    "HATCH_KEYS": "commit-hatch audit lines missing identity keys",
+    "PAYLOAD_AGENT_ID": "recent agent_runs mostly lack agent_id (SubagentStop payload key renamed?)",
+}
+_CANARY_CODES = tuple(_CANARY_PHRASES)
+canary_codes = []       # recognised drift codes (parent-side vocabulary)
+canary_unrec = 0        # drift findings with an unknown code
+canary_error = ""       # fixed-vocabulary label when the check could not complete
+
+
+def _log_canary_error(label):
+    try:
+        with open(os.path.join(home, ".claude", "logs", "hook-errors.log"), "a") as lf:
+            lf.write(f"ERROR cast-session-start-health internals-canary check: {label}\n")
+    except OSError:
+        pass
+
+
+_canary = os.path.join(home, ".claude", "scripts", "cast-internals-canary.py")
+if not os.path.isfile(_canary):
+    _csib = os.path.join(os.environ.get("CAST_HEALTH_SCRIPT_DIR", ""), "cast-internals-canary.py")
+    if os.environ.get("CAST_HEALTH_SCRIPT_DIR") and os.path.isfile(_csib):
+        _canary = _csib
+_cb = min(1.0, 4.6 - (time.monotonic() - _T0))
+if not os.path.isfile(_canary):
+    _log_canary_error("not installed")
+elif _cb < 0.3:
+    _log_canary_error("skipped: no budget")
+else:
+    try:
+        _cr = subprocess.run(
+            [sys._base_executable, "-I", _canary, "--json", "--home", home],
+            capture_output=True, timeout=_cb, stdin=subprocess.DEVNULL,
+        )
+        if _cr.returncode not in (0, 1) or not _cr.stdout or len(_cr.stdout) > 65536:
+            raise ValueError("canary exit/stdout shape")
+        _cres = json.loads(_cr.stdout[:65536].decode("utf-8", "replace"))
+        if _cres["state"] not in ("ok", "drift", "no_data") or not isinstance(_cres["findings"], list):
+            raise ValueError("canary state")
+        # rc and state must agree: rc 1 <=> drift; rc 0 <=> ok/no_data. ok/no_data may not carry drift findings.
+        if (_cr.returncode == 1) != (_cres["state"] == "drift"):
+            raise ValueError("canary rc/state mismatch")
+        if _cres["state"] != "drift" and any(
+                isinstance(_f, dict) and _f.get("severity") == "drift" for _f in _cres["findings"][:50]):
+            raise ValueError("canary non-drift state carries drift findings")
+        if _cres["state"] == "drift":
+            for _f in _cres["findings"][:50]:
+                if not isinstance(_f, dict) or _f.get("severity") != "drift":
+                    continue
+                _fc = _f.get("code")
+                if isinstance(_fc, str) and _fc in _CANARY_CODES:
+                    if _fc not in canary_codes:
+                        canary_codes.append(_fc)
+                else:
+                    canary_unrec += 1
+            if not canary_codes and not canary_unrec:
+                raise ValueError("drift without recognised findings")
+    except subprocess.TimeoutExpired:
+        canary_error = "timeout"
+        _log_canary_error(canary_error)
+    except Exception:  # bad JSON / shape / spawn failure: loud, never silent
+        canary_error = "checker failed"
+        _log_canary_error(canary_error)
+
 # ── Emit banner only when something is wrong ──────────────────────────────────
 stale_count = len(stale_memories)
 fail_count = len(failing_jobs)
 
 if (stale_count == 0 and fail_count == 0 and guard_total == 0 and not guard_check_error
-        and not integ_problems and not integ_advisory and not integ_error and not integ_pending):
+        and not integ_problems and not integ_advisory and not integ_error and not integ_pending
+        and not canary_codes and not canary_unrec and not canary_error):
     import sys; sys.exit(0)
 
 # Build compact banner line
@@ -524,6 +608,11 @@ if guard_total > 0:
     parts.append(f"⚠ {guard_total} guard load {guard_word} in 7d — protection was DISABLED")
 if guard_check_error:
     parts.append(f"guard-failure check could not read cast.db ({guard_check_error})")
+if canary_codes or canary_unrec:
+    _cn = len(canary_codes) + canary_unrec
+    parts.append(f"⚠ Claude Code internals drift: {_cn} signal(s) — push provenance checks may false-BLOCK")
+if canary_error:
+    parts.append(f"internals canary could not complete ({canary_error})")
 if stale_count > 0:
     parts.append(f"{stale_count} stale {mem_word}")
 if fail_count > 0:
@@ -576,6 +665,22 @@ if guard_check_error:
     detail_lines.append(
         f"  Could not read cast.db ({guard_check_error}); guard load failures cannot be "
         "confirmed. Details in ~/.claude/logs/hook-errors.log"
+    )
+if canary_codes or canary_unrec:
+    detail_lines.append("## Claude Code internals canary (CAST trusts these undocumented shapes):")
+    for _cc in canary_codes:
+        detail_lines.append(f"  • {_CANARY_PHRASES[_cc]}")
+    if canary_unrec:
+        detail_lines.append(f"  • unrecognised drift signal ({canary_unrec}×)")
+    detail_lines.append(
+        "  Fix: check the Claude Code changelog (claude --version); "
+        "details: python3 ~/.claude/scripts/cast-internals-canary.py"
+    )
+if canary_error:
+    detail_lines.append("## Internals canary degraded:")
+    detail_lines.append(
+        f"  Could not run the Claude Code internals canary ({canary_error}); drift cannot be ruled out. "
+        "Run cast doctor; details in ~/.claude/logs/hook-errors.log"
     )
 if stale_memories:
     detail_lines.append("## Stale memories (verified_at > 30 days + concrete ref):")

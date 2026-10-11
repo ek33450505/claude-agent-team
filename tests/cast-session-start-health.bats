@@ -743,3 +743,113 @@ d = json.loads(sys.stdin.read())
 assert 'guard-failure check could not read cast.db (DatabaseError)' in d['systemMessage'], d['systemMessage']
 " <<< "$output"
 }
+
+# ── (e) Claude Code internals canary ──────────────────────────────────────────
+
+_plant_canary_stub() {  # $1 = python body for the stub canary
+  mkdir -p "${HOME}/.claude/scripts"
+  printf '%s\n' "$1" > "${HOME}/.claude/scripts/cast-internals-canary.py"
+}
+
+@test "canary: clean real canary on an empty temp HOME → no canary banner" {
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  refute_output --partial "internals"
+}
+
+@test "canary: planted sidecar drift → banner and fixed SIDECAR_AGENTTYPE phrase" {
+  local d="${HOME}/.claude/projects/p/s/subagents" i
+  mkdir -p "$d"
+  for i in $(seq 1 12); do printf '{"spawnDepth": 1}\n' > "$d/agent-x${i}.meta.json"; done
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output --partial "Claude Code internals drift"
+  assert_output --partial "sidecars missing the agentType key (renamed?)"
+}
+
+@test "canary: child free text never reaches output; unknown code → unrecognised" {
+  _plant_canary_stub 'import json
+print(json.dumps({"state":"drift","sidecars":1,"hatch_lines":0,"db_rows":None,"findings":[
+ {"code":"HATCH_KEYS","severity":"drift","detail":"ZZMARKER_INJECT_9431"},
+ {"code":"TEAMMATE_CUSTOM_TYPE","severity":"drift","detail":"ZZMARKER_INJECT_9431"},
+ {"code":"EVIL_CODE_ZZMARKER","severity":"drift","detail":"ZZMARKER_INJECT_9431"}]}))
+raise SystemExit(1)'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  refute_output --partial "ZZMARKER"
+  assert_output --partial "commit-hatch audit lines missing identity keys"
+  assert_output --partial "teammate sidecars mostly lack customAgentType"
+  assert_output --partial "unrecognised drift signal"
+}
+
+@test "canary: error state with exit 2 → degraded notice" {
+  _plant_canary_stub 'print("{\"state\": \"error\", \"findings\": []}")
+raise SystemExit(2)'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output --partial "internals canary could not complete (checker failed)"
+}
+
+@test "canary: exit 3 → degraded notice; garbage stdout → degraded notice" {
+  _plant_canary_stub 'raise SystemExit(3)'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output --partial "internals canary could not complete (checker failed)"
+  _plant_canary_stub 'print("not json at all")'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output --partial "internals canary could not complete (checker failed)"
+}
+
+@test "canary: drift state with no recognised findings → checker failure, not silence" {
+  _plant_canary_stub 'import json
+print(json.dumps({"state":"drift","findings":[]}))
+raise SystemExit(1)'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output --partial "internals canary could not complete (checker failed)"
+}
+
+@test "canary: hung canary → hook exits 0 within budget, timeout notice, other checks intact" {
+  export CAST_HEALTH_LAUNCHCTL_CMD="${STUB_DIR}/launchctl-failing.sh"
+  _plant_canary_stub 'import time
+time.sleep(5)'
+  local t0=$SECONDS
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  [ $((SECONDS - t0)) -le 3 ]
+  assert_output --partial "internals canary could not complete (timeout)"
+  assert_output --partial "1 launchd job failing"
+}
+
+@test "canary: state no_data with rc 0 → no canary banner" {
+  _plant_canary_stub 'print("{\"state\": \"no_data\", \"findings\": []}")'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  refute_output --partial "internals"
+}
+
+@test "canary: state error with rc 1 → degraded notice (rc/state cross-check)" {
+  _plant_canary_stub 'print("{\"state\": \"error\", \"findings\": []}")
+raise SystemExit(1)'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output --partial "internals canary could not complete (checker failed)"
+}
+
+@test "canary: state ok rc 0 carrying a drift finding → degraded notice" {
+  _plant_canary_stub 'import json
+print(json.dumps({"state":"ok","findings":[{"code":"HATCH_KEYS","severity":"drift","detail":"x"}]}))'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output --partial "internals canary could not complete (checker failed)"
+  refute_output --partial "Claude Code internals drift"
+}
+
+@test "canary: state drift with rc 0 → degraded notice (rc/state cross-check)" {
+  _plant_canary_stub 'import json
+print(json.dumps({"state":"drift","findings":[{"code":"HATCH_KEYS","severity":"drift","detail":"x"}]}))'
+  run bash "$SCRIPT" <<< '{}'
+  assert_success
+  assert_output --partial "internals canary could not complete (checker failed)"
+}
