@@ -674,7 +674,7 @@ if canary_codes or canary_unrec:
         detail_lines.append(f"  • unrecognised drift signal ({canary_unrec}×)")
     detail_lines.append(
         "  Fix: check the Claude Code changelog (claude --version); "
-        "details: python3 ~/.claude/scripts/cast-internals-canary.py"
+        "details: python3 -I ~/.claude/scripts/cast-internals-canary.py"
     )
 if canary_error:
     detail_lines.append("## Internals canary degraded:")

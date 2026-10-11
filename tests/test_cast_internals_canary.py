@@ -39,8 +39,9 @@ class CanaryBase(unittest.TestCase):
         self.addCleanup(self._restore_env)
 
     def _restore_env(self):
-        os.environ.pop("CAST_DB_PATH", None)
-        if self._old is not None:
+        if self._old is None:
+            os.environ.pop("CAST_DB_PATH", None)
+        else:
             os.environ["CAST_DB_PATH"] = self._old
 
     def sidecar(self, obj=None, raw=None, where=None):
