@@ -16,6 +16,5 @@ scripts/pre-tool-guard.sh:0
 scripts/cast-batch-dispatch.sh:2
 scripts/cast-managed-agent.sh:12
 scripts/cast-routine-runner.sh:7
-scripts/cast-cwdchanged-hook.sh:5
 scripts/cast-otel.sh:4
 scripts/cast-session-start-journal.sh:3

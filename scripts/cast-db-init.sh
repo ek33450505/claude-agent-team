@@ -910,7 +910,7 @@ fi
 # (high false-positive rate); table was empty (0 rows) with no writers. Physical DROP from live DB
 # is a separate gated maintenance step; canonical schema no longer provisions this table.
 
-# compaction_events: context compaction telemetry (writer: cast-post-compact-hook.sh)
+# compaction_events: context compaction telemetry (writer: cast-precompact-log.py; PostCompact hook removed G6 2026-10-11)
 if ! sqlite3 "$DB_PATH" ".tables" 2>/dev/null | grep -q "compaction_events"; then
   sqlite3 "$DB_PATH" <<'COMPACTION_EVENTS_TABLE'
 CREATE TABLE IF NOT EXISTS compaction_events (

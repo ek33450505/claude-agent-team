@@ -248,11 +248,11 @@ PYEOF
 
 # ---------------------------------------------------------------------------
 # Test 9: Subtraction Safety Gate — native OTEL feed captures compaction events
-# (v9 B3 recorder-subtraction: cast-post-compact-hook.sh DB write retired;
+# (v9 B3 recorder-subtraction: PostCompact hook DB write retired;
 # the native 'compaction' event now covers this via otel_events)
 # Audit: plans/b3-hook-feed-coverage-audit.md
 # ---------------------------------------------------------------------------
-@test "subtraction-safety: compaction event lands in otel_events (covers retired cast-post-compact-hook.sh DB write)" {
+@test "subtraction-safety: compaction event lands in otel_events (covers retired PostCompact hook DB write)" {
   # Build compaction fixture path (tests/fixtures/otel/compaction.json)
   local fixture_path
   fixture_path="$FIXTURES_DIR/compaction.json"

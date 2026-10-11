@@ -329,18 +329,6 @@
         ]
       }
     ],
-    "InstructionsLoaded": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-instructions-loaded-hook.sh",
-            "timeout": 3,
-            "async": true
-          }
-        ]
-      }
-    ],
     "ConfigChange": [
       {
         "matcher": "project_settings|local_settings",
@@ -383,33 +371,6 @@
             "type": "command",
             "command": "bash ~/.claude/scripts/write-guards.sh",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "CwdChanged": [
-      {
-        "id": "cast-cwd-changed",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-cwdchanged-hook.sh",
-            "timeout": 5,
-            "async": true
-          }
-        ]
-      }
-    ],
-    "FileChanged": [
-      {
-        "id": "cast-file-changed",
-        "matcher": ".envrc|.env|.cast|cast.json",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-filechanged-hook.sh",
-            "timeout": 5,
-            "async": true
           }
         ]
       }
@@ -503,18 +464,6 @@
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-stop-failure-hook.sh",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/scripts/cast-post-compact-hook.sh",
-            "timeout": 5,
-            "async": true
           }
         ]
       }
