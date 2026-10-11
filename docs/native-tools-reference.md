@@ -21,7 +21,7 @@ these in their `tools:` frontmatter to access them. Names are as confirmed.
   to log a PASS/FAIL/PARTIAL verdict to cast.db `quality_gates`. There is no `orchestrator` agent — orchestration runs in the main session via the `/orchestrate` skill. Until the skill explicitly invokes this tool, it is unavailable within orchestrate flows.
 - **AgentHook / PromptHook**: hook types beyond `BashCommandHook` are available. CAST
   currently only uses `BashCommandHook` (type: "command"). `PromptHook` (type: "prompt")
-  is already used in the PostCompact fragment. `AgentHook` dispatches a sub-agent — useful
+  is available. `AgentHook` dispatches a sub-agent — useful
   for reactive escalation patterns.
 - **allowedHttpHookUrls**: any `type: "http"` hook requires the target URL to be listed
   in `allowedHttpHookUrls` in settings.json. Without it, HTTP hooks are silently blocked.

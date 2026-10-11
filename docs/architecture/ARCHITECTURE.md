@@ -75,9 +75,9 @@ CAST wires the Claude Code hook surface into a single enforcement-and-observabil
 | `PreToolUse: Write\|Edit` | `write-guards.sh`, `pre-tool-guard.sh` | Block writes outside the declared blast radius; inject `[CAST-REVIEW]` after code edits |
 | `PostToolUse` | `post-tool-hook.sh` | Lifecycle event emission → `cast.db` |
 | `SubagentStop` | `cast-subagent-stop-hook.sh` → `cast_handoff_parser.py` | Truncation detection, typed Handoff validation, honesty sensors, memory write |
-| `PostCompact` | `cast-precompact-guard.sh` | Preserve state across context compaction |
+| `PreCompact` | `cast-precompact-guard.sh` → `cast-precompact-log.py` | Guard dirty-worktree compaction; record to `compaction_events` |
 | `SessionEnd` | `cast-session-distiller.py` | Distill user-prose memory candidates to the review queue |
-| `StopFailure` / `CwdChanged` | `cast-stop-failure.sh`, hook | Log mid-task API failures; export `CAST_REPO_CLASS` per repo |
+| `StopFailure` | `cast-stop-failure-hook.sh` | Log mid-task API failures |
 
 ---
 

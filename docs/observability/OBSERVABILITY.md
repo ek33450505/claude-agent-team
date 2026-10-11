@@ -39,7 +39,6 @@ TaskCreated and WorktreeCreate are production-hardened hooks capturing backgroun
 | `WorktreeCreate` | `cast-worktree-create-hook.sh` | Creates isolated worktree; seeds agent identity preamble |
 | `PreToolUse:Bash` | `pre-tool-guard.sh` | Hard-blocks `git commit` / `git push` (exit 2) |
 | `PostToolUse:Write\|Edit` | `post-tool-hook.sh` | Logs file modifications; emits HTTP event to dashboard |
-| `PostCompact` | `cast-post-compact-hook.sh` | Logs context-compaction events |
 | `SessionEnd` | `cast-session-end.sh` | Archives session, syncs peer messages, closes cast.db rows |
 
 **Exit code convention:**
