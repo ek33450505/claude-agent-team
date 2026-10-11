@@ -240,10 +240,10 @@ git worktree add "$WORKTREE" HEAD~1
 (cd "$WORKTREE" && <run tests>)
 git worktree remove "$WORKTREE"
 ```
-Worktrees never touch the stash stack and never modify the active working tree. Always prefer this over `git stash`-based baselining.
+Worktrees never touch the stash stack and never modify the active working tree. Stash-based baselining is not an option: the git guard blocks every `git stash` form.
 Remove it with plain `git worktree remove` (never `--force`, `git worktree prune` or `git gc`; the git guard blocks those). If removal is refused or `git worktree add` fails under the sandbox, ask the user to run it with `!`.
 
-**Stash safety (if you must use stash anyway):** never run `git stash pop` or `git stash apply` without a captured SHA from `git stash create`. `stash@{N}` refs are unstable — any other process that stashes (a hook, a parallel agent, an editor) shifts the indexes. If you cannot use a worktree and cannot capture a SHA, escalate to `Status: BLOCKED` and let the orchestrator decide.
+If you cannot use a worktree, escalate to `Status: BLOCKED` and let the orchestrator decide.
 
 **Practical application:**
 - test-runner: if the test framework reports failures, the Status is `BLOCKED` with the failing-test list. test-runner does not classify pre-existing.
