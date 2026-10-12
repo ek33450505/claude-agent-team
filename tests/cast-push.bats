@@ -16,10 +16,12 @@ setup() {
   # Create a bare "origin" repo.
   ORIGIN_DIR="$(mktemp -d)"
   git init --bare -q "$ORIGIN_DIR"
+  cast_git_fixture_quiet "$ORIGIN_DIR"
 
   # Create a work repo seeded with one commit.
   WORK_DIR="$(mktemp -d)"
   git -C "$WORK_DIR" init -q
+  cast_git_fixture_quiet "$WORK_DIR"
   git -C "$WORK_DIR" config user.email "cast-test@example.com"
   git -C "$WORK_DIR" config user.name "CAST Test"
   # Silence init.defaultBranch noise; pin to 'main'.

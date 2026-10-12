@@ -643,6 +643,7 @@ _probe_field() { # file key
   local callerrepo="$BATS_TEST_TMPDIR/callerrepo" out="$BATS_TEST_TMPDIR/probe.out"
   mkdir -p "$callerrepo/tmp"
   git init -q "$callerrepo"
+  cast_git_fixture_quiet "$callerrepo"
   _probe_repo SessionEnd iso-probe.sh
   _write_isolation_probe_hook "$PS/scripts/iso-probe.sh" "$out"
 

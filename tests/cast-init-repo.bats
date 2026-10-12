@@ -19,6 +19,7 @@ setup() {
   export TEST_DIR="$(mktemp -d)"
   cd "$TEST_DIR"
   git init -q
+  cast_git_fixture_quiet
   git config user.email "test@test.com"
   git config user.name "Test"
 }

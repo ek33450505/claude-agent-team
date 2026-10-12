@@ -67,6 +67,7 @@ build_fixture_repo() {
   (
     cd "$repo" || exit 1
     git init -q
+    cast_git_fixture_quiet
     git config user.email "test@example.com"
     git config user.name "gen-plugin-tests"
     git add -A
@@ -141,6 +142,7 @@ teardown() {
   (
     cd "$repo" || exit 1
     git init -q
+    cast_git_fixture_quiet
     git config user.email "test@example.com"
     git config user.name "gen-plugin-tests"
     git add -A

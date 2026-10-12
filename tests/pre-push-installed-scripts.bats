@@ -66,6 +66,7 @@ _mk_repo() {
   REPO="$HOME/repo"
   mkdir -p "$REPO/scripts" "$REPO/.github"
   _git init -q "$REPO"
+  cast_git_fixture_quiet "$REPO"
   for n in $SCRIPTS_BASH $SCRIPTS_PY; do _plant_repo_script "$n"; done
   printf '# Fixture\n## Installation\n## Agents\n## Hooks\n## Testing\n' > "$REPO/README.md"
   printf 'same\n' > "$REPO/.github/rules-core.manifest"

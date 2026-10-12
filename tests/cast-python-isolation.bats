@@ -232,6 +232,7 @@ _mk_fixture() { # <dir> <name> <line...>  -- writes a bash script containing exa
   mkdir -p "$fx/scripts" "$fx/bin" "$fx/.githooks"
   cd "$fx"
   git init -q .
+  cast_git_fixture_quiet .
 
   # --- offenders (every one must be reported) ---
   _mk_fixture scripts off_literal.sh "python3 -c 'import json'"

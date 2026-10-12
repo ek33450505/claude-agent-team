@@ -24,6 +24,7 @@ setup() {
   # Isolated fake "origin": a local bare repo, never the real overlay repo.
   FAKE_REMOTE="$BATS_TEST_TMPDIR/fake-origin.git"
   git init --bare -q "$FAKE_REMOTE"
+  cast_git_fixture_quiet "$FAKE_REMOTE"
 
   # Pre-seed the overlay dir as an existing clone of the fake remote, so the
   # script's "clone if missing" branch (which calls `gh repo create`) is

@@ -18,6 +18,7 @@
 
 load test_helper/bats-support/load
 load test_helper/bats-assert/load
+load helpers/setup
 
 REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 
@@ -28,6 +29,7 @@ setup() {
 
   cd "$TEST_REPO"
   git init --initial-branch=main >/dev/null 2>&1
+  cast_git_fixture_quiet
   git config user.email "test@example.com"
   git config user.name "BATS Test"
 

@@ -2,6 +2,7 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 VALIDATOR_ALL="$REPO_DIR/scripts/cast-validate-all-hooks.sh"
@@ -976,6 +977,7 @@ _probe_field() { # file key
   _setup_fake_repo "$fakerepo"
   mkdir -p "$fake_home/.claude" "$callerrepo/tmp"
   HOME="$fake_home" git init -q "$callerrepo"
+  cast_git_fixture_quiet "$callerrepo"
   _write_isolation_probe_hook "$fakerepo/scripts/iso-probe.sh" "$out"
   _write_probe_settings "$fakerepo/settings.json" SessionEnd iso-probe.sh
 

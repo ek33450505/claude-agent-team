@@ -437,6 +437,7 @@ GHSTUB
   local repo="$BATS_TEST_TMPDIR/stack-refresh-repo"
   mkdir -p "$repo/sub"
   git init -q "$repo"
+  cast_git_fixture_quiet "$repo"
   printf '%s\n' '{"dependencies":{"vite":"^5.0.0"}}' > "$repo/sub/package.json"
   # stdout dropped, stderr captured into $output (no `run` flags: older bats lack them)
   run bash -c 'bash "$1" stack refresh "$2" 2>&1 >/dev/null' _ "$CAST_CLI" "$repo/sub"
