@@ -109,6 +109,16 @@ assert not bad, bad
   assert_success
 }
 
+@test "61-sandbox.json sets enableWeakerNetworkIsolation true (gh TLS via trustd) and keeps allowUnsandboxedCommands false" {
+  run jq_py "$SANDBOX" "d['sandbox'].get('enableWeakerNetworkIsolation') is True and d['sandbox'].get('allowUnsandboxedCommands') is False"
+  assert_success
+}
+
+@test "repo-root settings.json sets enableWeakerNetworkIsolation true (gh TLS via trustd) and keeps allowUnsandboxedCommands false" {
+  run jq_py "$REPO_DIR/settings.json" "d['sandbox'].get('enableWeakerNetworkIsolation') is True and d['sandbox'].get('allowUnsandboxedCommands') is False"
+  assert_success
+}
+
 @test "merged fragments exclude no commands from the sandbox (real merge into a temp HOME)" {
   mkdir -p "$HOME/.claude/managed-settings.d"
   cp "$REPO_DIR"/managed-settings.d/*.json "$HOME/.claude/managed-settings.d/"
