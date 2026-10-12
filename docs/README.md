@@ -22,6 +22,7 @@ All CAST documentation with one-line descriptions. Start with the Tutorial if yo
 | [Compatibility Matrix](compatibility.md) | Claude Code version requirements for each CAST feature and known breakages |
 | [Hook Authoring Guide](hooks/authoring-guide.md) | Write, test, and install custom hook scripts end-to-end |
 | [Known Limitations](known-limitations.md) | Documented constraints and workarounds |
+| [Sandbox-ON Profile](sandbox-profile.md) | What works, degrades, or needs `!` with the Claude Code Bash sandbox ON |
 | [Native Tools Reference](native-tools-reference.md) | Claude Code built-in tools that CAST hooks interact with |
 | [Token Optimization](TOKEN-OPTIMIZATION.md) | Model tiering, response budgets, and Ollama local routing to reduce token spend |
 
