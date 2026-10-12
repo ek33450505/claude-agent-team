@@ -169,7 +169,7 @@ OUTPUT_FILE="$OUTPUT_DIR_REAL/$TIMESTAMP.md"
 # ── Step 5b: Validate required prompt_args ───────────────────────────────────
 # Build a JSON object of supplied args from PROMPT_ARGS_RAW.
 # Use a temp file to avoid heredoc-in-condition parsing issues.
-_ARGS_VALIDATE_PY="$(mktemp -t cast-routine-args.XXXXXX)"
+_ARGS_VALIDATE_PY="$(mktemp "${TMPDIR:-/tmp}/cast-routine-args.XXXXXX")"
 cat > "$_ARGS_VALIDATE_PY" <<'PYEOF'
 import sys, json
 
@@ -222,7 +222,7 @@ if [[ "${CAST_ROUTINE_SKIP_MCP_CHECK:-0}" != "1" ]]; then
       # No settings.json at all — warn but continue
       echo "[MCP pre-flight] Warning: ~/.claude/settings.json not found; skipping MCP check." >&2
     else
-      _MCP_PREFLIGHT_PY="$(mktemp -t cast-routine-mcp.XXXXXX)"
+      _MCP_PREFLIGHT_PY="$(mktemp "${TMPDIR:-/tmp}/cast-routine-mcp.XXXXXX")"
       cat > "$_MCP_PREFLIGHT_PY" <<'PYEOF'
 import sys, json
 

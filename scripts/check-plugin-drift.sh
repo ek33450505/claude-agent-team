@@ -61,7 +61,7 @@ _ok()   { printf '[OK]   %s\n' "$1"; PASS=$((PASS + 1)); }
 _fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
 # Generate to a single temp dir; declare blast radius once and use it for cleanup
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/cast-plugin-drift.XXXXXX")"
 cast_declare_blast_radius "$(dirname "$TMP")"
 trap 'cast_safe_rm "$TMP" 2>/dev/null || true' EXIT
 
@@ -157,8 +157,8 @@ if [[ -d "$COMMITTED_PLUGIN" ]]; then
     } | sort
   }
 
-  _MF_REGEN="$(mktemp)"
-  _MF_COMMIT="$(mktemp)"
+  _MF_REGEN="$(mktemp "${TMPDIR:-/tmp}/cast-plugin-drift-regen.XXXXXX")"
+  _MF_COMMIT="$(mktemp "${TMPDIR:-/tmp}/cast-plugin-drift-commit.XXXXXX")"
   _build_manifest "$TMP"              > "$_MF_REGEN"
   _build_manifest "$COMMITTED_PLUGIN" > "$_MF_COMMIT"
 

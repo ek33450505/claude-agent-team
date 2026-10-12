@@ -64,7 +64,7 @@ if [ "${CAST_SKIP_RECONCILE:-0}" != "1" ]; then
       exit 1
     }
     echo "[CAST pre-push] Running commit-provenance reconcile gate..."
-    _RECONCILE_TMPSTDERR="$(mktemp)"
+    _RECONCILE_TMPSTDERR="$(mktemp "${TMPDIR:-/tmp}/cast-pre-push.XXXXXX")"
     # stdout (the JSON verdict) is captured so the exit-0 path can tell a performed
     # check ("clean"/"acked"/"skip") from one that could not run ("unverifiable":
     # audit log unreadable, e.g. inside the Claude Code Bash sandbox) — and is
@@ -248,7 +248,7 @@ if [ "${CAST_SKIP_STATS_PUSH:-0}" != "1" ]; then
   # SC2086: intentional word-split on space-separated SHA string (bash 3.2, no mapfile).
   # shellcheck disable=SC2086
   for _sha in $_STATS_SHAS; do
-    _STATS_WT_BASE="$(mktemp -d)"
+    _STATS_WT_BASE="$(mktemp -d "${TMPDIR:-/tmp}/cast-pre-push-stats.XXXXXX")"
     if ! _cast_export_tree "$_sha" "$_STATS_WT_BASE"; then
       echo "ERROR: Could not export the pushed tree for ${_sha} for the stats check" >&2
       exit 1
@@ -336,7 +336,7 @@ if [ "${CAST_SKIP_RULES_DRIFT:-0}" != "1" ]; then
   _MANIFEST_REL=".github/rules-core.manifest"
   _MANIFEST="$REPO_ROOT/$_MANIFEST_REL"
   _GEN_MANIFEST="$(_cast_installed gen-rules-manifest.sh)" || exit 1
-  _MANIFEST_SAVED="$(mktemp)"
+  _MANIFEST_SAVED="$(mktemp "${TMPDIR:-/tmp}/cast-pre-push-manifest.XXXXXX")"
   _MANIFEST_EXISTED=0
   if [ -f "$_MANIFEST" ]; then
     cp "$_MANIFEST" "$_MANIFEST_SAVED"

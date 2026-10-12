@@ -32,7 +32,7 @@ if [[ ! -f "$MMD_IN" ]]; then
 fi
 
 # --- Write temp puppeteer config (no-sandbox for CI) ---
-TMPDIR_LOCAL="$(mktemp -d)"
+TMPDIR_LOCAL="$(mktemp -d "${TMPDIR:-/tmp}/cast-arch-diagram.XXXXXX")"
 PUPPETEER_CFG="${TMPDIR_LOCAL}/puppeteer-cfg.json"
 cat > "$PUPPETEER_CFG" <<'EOF'
 {"args":["--no-sandbox","--disable-setuid-sandbox"]}

@@ -84,7 +84,7 @@ _verbose() { [ "$CAST_VERBOSE" -eq 1 ] && printf "${C_DIM}[verbose] %s${C_RESET}
 _ask_query_run() {
   local script="$1"; shift
   local errfile out rc line
-  errfile="$(mktemp 2>/dev/null)" || errfile=""
+  errfile="$(mktemp "${TMPDIR:-/tmp}/cast-bin.XXXXXX" 2>/dev/null)" || errfile=""
   if [ -n "$errfile" ]; then
     out="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$script" "$@" 2>"$errfile")"; rc=$?
   else
