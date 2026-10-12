@@ -539,10 +539,10 @@ commit_all_fixture() {
   local tmp_repo shim="$BATS_TEST_TMPDIR/shim"
   tmp_repo="$(make_clean_tmp_repo)"
   mkdir -p "$shim"
-  # Pass the non-regular scan (-print) through; fail only the .py listing (-print0).
+  # Pass the non-regular scan (-print) through; fail only the .py listing (-type f ... -print0).
   cat > "$shim/find" <<'SHIM'
 #!/bin/bash
-case "$*" in *-print0*) exit 3 ;; esac
+case "$*" in *"-type f"*-print0*) exit 3 ;; esac
 exec /usr/bin/find "$@"
 SHIM
   chmod +x "$shim/find"
@@ -785,7 +785,7 @@ SHIM
   cat > "$shim/find" <<SHIM
 #!/bin/bash
 case "\$*" in
-  *-print0*) echo \$\$ > "$mark"; exec sleep 30 ;;
+  *"-type f"*-print0*) echo \$\$ > "$mark"; exec sleep 30 ;;
 esac
 exec /usr/bin/find "\$@"
 SHIM
