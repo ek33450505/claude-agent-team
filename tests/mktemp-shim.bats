@@ -10,7 +10,9 @@ REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 SHIM="$REPO_DIR/tests/helpers/bin/mktemp"
 
 setup() {
-  CUSTOM_TMP="$(mktemp -d "${TMPDIR:-/tmp}/mktemp-shim.XXXXXX")"
+  local base="${TMPDIR:-/tmp}"
+  base="${base%/}"
+  CUSTOM_TMP="$(mktemp -d "$base/mktemp-shim.XXXXXX")"
 }
 
 teardown() {
@@ -77,8 +79,9 @@ teardown() {
   [[ "$output" == -foo.* ]]
 }
 
-# Only passes when run through tests/run.sh — that is the point: it verifies run.sh's PATH wiring.
+# Verifies run.sh's PATH wiring; skipped when run by plain bats (make test / CI), which bypasses run.sh.
 @test "run.sh puts the shim first on PATH (Darwin)" {
   [[ "$(uname -s)" == Darwin ]] || skip "Darwin-only wiring"
+  [[ "${CAST_TESTS_VIA_RUN_SH:-}" == 1 ]] || skip "not run via tests/run.sh (e.g. make test / CI bats)"
   [ "$(command -v mktemp)" = "$REPO_DIR/tests/helpers/bin/mktemp" ]
 }
