@@ -24,11 +24,13 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
 # ---------------------------------------------------------------------------
 
 @test "bash-specialist does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/bash-specialist.md"
+  run grep -q "^effort:" "$AGENTS_DIR/bash-specialist.md"
+  assert_failure 1
 }
 
 @test "code-reviewer does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/code-reviewer.md"
+  run grep -q "^effort:" "$AGENTS_DIR/code-reviewer.md"
+  assert_failure 1
 }
 
 @test "commit does NOT have effort field" {
@@ -37,31 +39,38 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
 }
 
 @test "devops does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/devops.md"
+  run grep -q "^effort:" "$AGENTS_DIR/devops.md"
+  assert_failure 1
 }
 
 @test "docs does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/docs.md"
+  run grep -q "^effort:" "$AGENTS_DIR/docs.md"
+  assert_failure 1
 }
 
 @test "frontend-qa does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/frontend-qa.md"
+  run grep -q "^effort:" "$AGENTS_DIR/frontend-qa.md"
+  assert_failure 1
 }
 
 @test "morning-briefing does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/morning-briefing.md"
+  run grep -q "^effort:" "$AGENTS_DIR/morning-briefing.md"
+  assert_failure 1
 }
 
 @test "push does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/push.md"
+  run grep -q "^effort:" "$AGENTS_DIR/push.md"
+  assert_failure 1
 }
 
 @test "test-runner does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/test-runner.md"
+  run grep -q "^effort:" "$AGENTS_DIR/test-runner.md"
+  assert_failure 1
 }
 
 @test "test-writer does NOT have effort field" {
-  ! grep -q "^effort:" "$AGENTS_DIR/test-writer.md"
+  run grep -q "^effort:" "$AGENTS_DIR/test-writer.md"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------
@@ -70,35 +79,48 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
 # ---------------------------------------------------------------------------
 
 @test "debugger does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/debugger.md"
+  run grep -q "^effort:" "$AGENTS_DIR/debugger.md"
+  assert_failure 1
 }
 
 @test "planner does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/planner.md"
+  run grep -q "^effort:" "$AGENTS_DIR/planner.md"
+  assert_failure 1
 }
 
-@test "code-writer does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/code-writer.md"
+@test "backend-writer does NOT have effort field (sonnet — N/A)" {
+  run grep -q "^effort:" "$AGENTS_DIR/backend-writer.md"
+  assert_failure 1
+}
+
+@test "frontend-writer does NOT have effort field (sonnet — N/A)" {
+  run grep -q "^effort:" "$AGENTS_DIR/frontend-writer.md"
+  assert_failure 1
 }
 
 @test "researcher does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/researcher.md"
+  run grep -q "^effort:" "$AGENTS_DIR/researcher.md"
+  assert_failure 1
 }
 
 @test "security does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/security.md"
+  run grep -q "^effort:" "$AGENTS_DIR/security.md"
+  assert_failure 1
 }
 
 @test "api-contract does NOT have effort field (haiku — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/api-contract.md"
+  run grep -q "^effort:" "$AGENTS_DIR/api-contract.md"
+  assert_failure 1
 }
 
 @test "eval-writer does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/eval-writer.md"
+  run grep -q "^effort:" "$AGENTS_DIR/eval-writer.md"
+  assert_failure 1
 }
 
 @test "pr-reviewer does NOT have effort field (sonnet — N/A)" {
-  ! grep -q "^effort:" "$AGENTS_DIR/pr-reviewer.md"
+  run grep -q "^effort:" "$AGENTS_DIR/pr-reviewer.md"
+  assert_failure 1
 }
 
 # ---------------------------------------------------------------------------
@@ -118,7 +140,9 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
 
 @test "no non-opus agent in agents/core/ has an effort: field" {
   local violations=()
+  local count=0
   for f in "$AGENTS_DIR"/*.md; do
+    count=$((count + 1))
     local name
     name="$(basename "$f")"
     # Extract model from frontmatter (lines between first pair of --- markers)
@@ -133,6 +157,10 @@ PERSONAL_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../../agents/personal" 2>/d
       violations+=("$name (model: ${model:-unknown})")
     fi
   done
+  if [[ "$count" -lt 10 ]]; then
+    echo "Sweep iterated only $count agent files in $AGENTS_DIR (expected >= 10)"
+    return 1
+  fi
   if [[ ${#violations[@]} -gt 0 ]]; then
     echo "Non-opus agents with forbidden effort: field:"
     printf '  %s\n' "${violations[@]}"
