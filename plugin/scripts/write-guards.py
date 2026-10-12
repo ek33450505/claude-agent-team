@@ -48,6 +48,14 @@ def extract_metadata(data):
     file_path = ti.get('file_path', ti.get('path', ''))
     content = ti.get('content', ti.get('new_string', ''))
     old_string = ti.get('old_string', '')
+    # A null / non-string field (e.g. "file_path": null) must not reach the str-method
+    # checks below -- treat it as absent.
+    if not isinstance(file_path, str):
+        file_path = ''
+    if not isinstance(content, str):
+        content = ''
+    if not isinstance(old_string, str):
+        old_string = ''
     return tool, file_path, content, old_string
 
 def write_log(log_path, message):
@@ -100,32 +108,47 @@ def check_stat_claim(file_path, content, home):
     
     log_path = os.path.join(home, '.claude/logs/stat-guard.log')
     
+    # Extract claimed count first: no `tests-N` claim means nothing to verify, so a count
+    # failure below must never block such a write.
+    import re
+    match = re.search(r'tests-(\d+)', content)
+    claimed_count = int(match.group(1)) if match else 0
+    if not claimed_count:
+        return False, ""
+    
     # Count actual @test lines
     try:
         import subprocess
         result = subprocess.run(
             ["git", "ls-files", "tests/*.bats", "tests/*/*.bats"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=1.5
         )
+        if result.returncode != 0:
+            # e.g. cwd is not a git repo: no count is available -- NOT "zero tests".
+            raise RuntimeError(f"git ls-files exited {result.returncode}")
         test_files = result.stdout.strip().split('\n') if result.stdout.strip() else []
         
         if test_files:
             grep_result = subprocess.run(
                 ["grep", "-h", "^@test"] + test_files,
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=1.5
             )
+            if grep_result.returncode > 1:
+                # rc 1 = no matches (a legitimate 0); rc >= 2 = error (e.g. a tracked file
+                # missing on disk), so the count would be partial.
+                raise RuntimeError(f"grep exited {grep_result.returncode}")
             real_count = len([l for l in grep_result.stdout.split('\n') if l.strip()])
         else:
             real_count = 0
     except Exception:
-        real_count = 0
+        # Could not count (git/grep timed out or failed). Do NOT report a mismatch against
+        # a fabricated count of 0; block honestly, since the claim cannot be verified.
+        write_log(log_path, f"Stat claim check: claimed={claimed_count}, could not count @test lines")
+        return True, ("[CAST STAT GUARD] Could not count @test lines (git/grep failed or timed out), "
+                      "so the README test-count badge cannot be verified. Retry the edit; if it "
+                      "persists, check `git ls-files tests/` in this repo.")
     
-    # Extract claimed count
-    import re
-    match = re.search(r'tests-(\d+)', content)
-    claimed_count = int(match.group(1)) if match else 0
-    
-    if claimed_count and claimed_count != real_count:
+    if claimed_count != real_count:
         write_log(log_path, f"Stat claim check: claimed={claimed_count}, actual={real_count}")
         msg = f"[CAST STAT GUARD] Badge claims {claimed_count} tests but actual @test count is {real_count}. Difference: {claimed_count - real_count}. Update the badge before proceeding. (See: feedback_bats_count_method.md)"
         return True, msg
@@ -143,13 +166,15 @@ def record_no_fake_success(file_path, pattern, home, session_id):
             gate_id = str(uuid.uuid4())
             timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
-            conn = sqlite3.connect(db_path, timeout=5)
-            conn.execute(
-                "INSERT OR IGNORE INTO quality_gates (id, session_id, agent_name, timestamp, status_line, gate_type, contract_passed) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (gate_id, session_id, 'cast-no-fake-success-guard', timestamp, 'WARN', 'no-fake-success', 0)
-            )
-            conn.commit()
-            conn.close()
+            conn = sqlite3.connect(db_path, timeout=1)
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO quality_gates (id, session_id, agent_name, timestamp, status_line, gate_type, contract_passed) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (gate_id, session_id, 'cast-no-fake-success-guard', timestamp, 'WARN', 'no-fake-success', 0)
+                )
+                conn.commit()
+            finally:
+                conn.close()
         except Exception:
             pass
 
@@ -251,12 +276,12 @@ def check_no_fake_success(file_path, content, home, session_id):
         return record_no_fake_success(file_path, pattern, home, session_id)
     return ""
 
-if __name__ == '__main__':
+def main():
     data = load_input()
     tool, file_path, content, old_string = extract_metadata(data)
     # Early filter: only Write/Edit (defense-in-depth; harness matcher also gates)
     if tool not in ('Write', 'Edit'):
-        sys.exit(0)
+        return 0
     home = os.path.expanduser('~')
     session_id = os.environ.get('CAST_SESSION_ID', 'unknown')
 
@@ -282,4 +307,19 @@ if __name__ == '__main__':
     guard3 = check_no_fake_success(file_path, content, home, session_id)
     if guard3:
         sys.stdout.write(guard3 + "\n")
-    sys.exit(0)
+    return 0
+
+
+if __name__ == '__main__':
+    # PreToolUse runs with onFailure:block: an uncaught exception (exit 1) would block
+    # every Write/Edit. Unexpected crashes stay fail-OPEN, mirroring cast-pretool-dispatch.py;
+    # the intentional sys.exit(2) blocks above still propagate.
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:
+        # Exception CLASS only -- never str(exc), which can echo payload content.
+        write_log(os.path.join(os.path.expanduser('~'), '.claude/logs/hook-errors.log'),
+                  f"write-guards.py: unexpected {type(exc).__name__} (fail-open)")
+        sys.exit(0)

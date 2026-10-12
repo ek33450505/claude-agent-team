@@ -36,7 +36,7 @@ POLICY_DENY = {"Bash(pkill *)", "Bash(killall *)"}
 # hooks is a reviewed edit of three places: the fragment,
 # macos/managed-settings.json, and this constant. Recompute it with
 # --print-floor-hash.
-FLOOR_SHA256 = "474b7b3c6b69104caf2bbed49cb4bbf7e5cdd3c9a3cfc34bbfc99a9b602bdea7"
+FLOOR_SHA256 = "fa6bffd579ed4e3c84ad43121bb110885e37708bd5d90fd186cb37e3b36e507a"
 REQUIRED_IDS = ("cast-pretool-dispatch", "cast-write-guards")
 ACL_LINE = re.compile(r"^\s*\d+: ")
 

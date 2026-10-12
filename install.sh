@@ -673,6 +673,12 @@ if [ -x "$CLAUDE_DIR/scripts/cast-merge-settings.sh" ]; then
     fi
 fi
 
+# --- Claude Code version floor (hook onFailure:"block" needs >= 2.1.295) — WARN only ---
+CC_FLOOR_MSG="$(bash "$SCRIPT_DIR/scripts/cast-cc-version-floor.sh" 2>/dev/null || true)"
+if [ -n "$CC_FLOOR_MSG" ]; then
+    warn "  $CC_FLOOR_MSG"
+fi
+
 # --- Optional RTK check ---
 info "Checking for RTK (optional token compression)..."
 if command -v rtk >/dev/null 2>&1; then

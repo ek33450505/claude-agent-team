@@ -32,7 +32,8 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/cast-config-change-guard.sh",
-            "timeout": 5
+            "timeout": 5,
+            "onFailure": "block"
           }
         ]
       }
@@ -45,7 +46,8 @@
           {
             "type": "command",
             "command": "python3 -E -s ~/.claude/scripts/cast-pretool-dispatch.py",
-            "timeout": 5
+            "timeout": 5,
+            "onFailure": "block"
           }
         ]
       },
@@ -56,7 +58,8 @@
           {
             "type": "command",
             "command": "bash ~/.claude/scripts/write-guards.sh",
-            "timeout": 5
+            "timeout": 5,
+            "onFailure": "block"
           }
         ]
       }

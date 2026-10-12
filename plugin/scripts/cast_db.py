@@ -4,6 +4,7 @@ import contextlib
 import os
 import re
 import sqlite3
+import time
 import datetime
 import unicodedata
 from pathlib import Path
@@ -153,17 +154,56 @@ def _get_db_path() -> str:
     return validate_db_path(raw)
 
 
+# Optional wall-clock budget for latency-sensitive callers (PreToolUse hooks with
+# onFailure:block, where a slow RECORD must not become a blocked tool call). None =
+# unbounded: every other caller keeps the 5 s lock wait + 3-attempt retry below.
+_DEADLINE = None
+
+
+@contextlib.contextmanager
+def deadline(seconds: float):
+    """Bound every cast_db call inside the block by a shared `seconds` budget.
+
+    Each connection's busy wait is capped at the budget remaining; a write's COMMIT may
+    wait once more, so the worst case is ~2x `seconds`. Past the deadline _connect()
+    raises 'database is locked' immediately and the retry loops stop retrying, so the
+    never-raise wrappers return False/[] at once.
+    Restores the previous deadline on exit (callers in one process stay independent).
+    Nesting never EXTENDS an outer deadline: the earlier cutoff wins."""
+    global _DEADLINE
+    prev = _DEADLINE
+    cutoff = time.monotonic() + seconds
+    _DEADLINE = cutoff if prev is None else min(prev, cutoff)
+    try:
+        yield
+    finally:
+        _DEADLINE = prev
+
+
+def _deadline_left():
+    """Seconds left in the active deadline, or None when unbounded."""
+    return None if _DEADLINE is None else max(0.0, _DEADLINE - time.monotonic())
+
+
 def _connect():
     db_path = _get_db_path()
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=5)
+    left = _deadline_left()
+    if left is not None and left <= 0:
+        raise sqlite3.OperationalError('database is locked (cast_db deadline exceeded)')
+    wait = 5 if left is None else left
+    conn = sqlite3.connect(db_path, timeout=wait)
     conn.row_factory = sqlite3.Row
     # Harden against lock contention and ensure WAL mode (idempotent if already WAL).
     # Never raise — a PRAGMA failure must not crash the hook pipeline.
     try:
-        conn.execute('PRAGMA busy_timeout=5000;')
-        conn.execute('PRAGMA journal_mode=WAL;')
-        conn.execute('PRAGMA synchronous=NORMAL;')
+        conn.execute(f'PRAGMA busy_timeout={int(wait * 1000)};')
+        if left is None:
+            # Both skipped under a deadline: each needs a read of the DB header and takes
+            # its own busy wait, which would double the bound (measured 2.1 s for a 1 s
+            # deadline on a rollback-journal DB). cast.db is persistently WAL already.
+            conn.execute('PRAGMA journal_mode=WAL;')
+            conn.execute('PRAGMA synchronous=NORMAL;')
     except Exception as e:
         _log_error(f'_connect PRAGMA setup failed (non-fatal): {e}')
     return conn
@@ -191,8 +231,7 @@ def db_write(table: str, payload: dict) -> bool:
                 conn.commit()
             return True
         except sqlite3.OperationalError as e:
-            if 'locked' in str(e) and attempt < 2:
-                import time
+            if 'locked' in str(e) and attempt < 2 and _deadline_left() != 0.0:
                 time.sleep(0.1 * (attempt + 1))
             else:
                 _log_error(f'db_write failed on {table}: {e}')
@@ -226,8 +265,7 @@ def db_execute(sql: str, params: tuple = ()) -> bool:
                 conn.commit()
             return True
         except sqlite3.OperationalError as e:
-            if 'locked' in str(e) and attempt < 2:
-                import time
+            if 'locked' in str(e) and attempt < 2 and _deadline_left() != 0.0:
                 time.sleep(0.1 * (attempt + 1))
             else:
                 _log_error(f'db_execute failed: {e}')

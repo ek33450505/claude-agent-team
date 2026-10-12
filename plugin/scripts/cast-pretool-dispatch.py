@@ -110,6 +110,7 @@ def _log_error(msg):
 # failure is still recorded, just never deduplicated.
 _SESSION_ID_RE = re.compile(r'[A-Za-z0-9_\-]{1,64}')
 _UNKNOWN_SESSION = "unknown"
+_RECORD_DEADLINE_S = 1.0  # wall-clock cap on the advisory guard-failure DB record
 
 # The PreToolUse payload's session_id, set once by main() so _load() -- reached
 # from a dozen call sites -- can hand it to _record_guard_failure without threading
@@ -180,14 +181,20 @@ def _record_guard_failure(mod_name: str, err_msg: str, session_id=None) -> None:
         if SCRIPT_DIR not in sys.path:
             sys.path.insert(0, SCRIPT_DIR)
         import cast_db
-        if sid is not None and _guard_failure_recorded(cast_db, hook_name, sid):
-            return  # already recorded for this (session, module) pair
-        cast_db.log_hook_failure(
-            hook_name,
-            -1,
-            (f"guard module failed to load — guard DISABLED: {err_msg}")[:2000],
-            sid if sid is not None else _UNKNOWN_SESSION,
-        )
+        # PreToolUse runs with onFailure:block and a 5 s hook timeout: this record is
+        # advisory and must not turn a locked cast.db (~16 s of cast_db lock waits) into
+        # a blocked tool call on a path that intends to ALLOW. The deadline caps each
+        # connection's busy wait at the remaining budget; a write's COMMIT may wait once
+        # more, so the worst case is ~2x the budget (~2 s for 1.0 s), well under 5 s.
+        with cast_db.deadline(_RECORD_DEADLINE_S):
+            if sid is not None and _guard_failure_recorded(cast_db, hook_name, sid):
+                return  # already recorded for this (session, module) pair
+            cast_db.log_hook_failure(
+                hook_name,
+                -1,
+                (f"guard module failed to load — guard DISABLED: {err_msg}")[:2000],
+                sid if sid is not None else _UNKNOWN_SESSION,
+            )
     except Exception as exc:
         _log_error(f"_record_guard_failure: {exc}")
 
@@ -1028,7 +1035,7 @@ def _record_dispatch(data):
                 _r = _sp.run(
                     ["python3", "-I", os.path.join(SCRIPT_DIR, "cast-redact.py"),
                      "--engine", "regex", "--field", "redacted_text"],
-                    input=prompt, capture_output=True, text=True, timeout=3,
+                    input=prompt, capture_output=True, text=True, timeout=1.5,
                 )
                 _out = _r.stdout.strip()
                 if _r.returncode == 0 and _out:
