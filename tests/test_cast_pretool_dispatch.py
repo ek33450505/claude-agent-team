@@ -387,8 +387,10 @@ class TestWorkflowStageModelGuard(_IsolatedHomeTestCase):
 
     Stages without model: silently inherit the opus main-loop model (cost lever,
     Ed-approved 2026-10-03; mode = DENY with reason). The path must be
-    exception-proof: Claude Code >= 2.1.288 BLOCKS a tool call when a PreToolUse
-    hook crashes or prints malformed output, so every failure mode here must
+    exception-proof: with onFailure:block an uncaught hook crash (exit 1) BLOCKS the
+    tool call, and unparseable stdout was observed NOT to block on CC 2.1.296 (probe
+    2026-10-12) although the hooks docs list it as a failure; a single valid JSON
+    object is required for the decision to be honoured, so every failure mode here must
     ALLOW silently (nothing on stdout, exit 0) and be logged.
 
     Each in-process test drives main() with a patched stdin and captured stdout;
@@ -1261,8 +1263,8 @@ class TestGuardFailureDedupe(_IsolatedHomeTestCase):
 
 
 class TestDegradedGitBlockFailClosed(unittest.TestCase):
-    """_degraded_git_block must never ALLOW because its own scan failed (a hook crash or
-    timeout is an allow, so an exception inside the check cannot be a pass)."""
+    """_degraded_git_block must never ALLOW because its own scan failed (an exception
+    inside the check must not turn into a pass; the dispatcher's catch-all would ALLOW it)."""
 
     def setUp(self):
         patch = mock.patch.object(cast_pretool_dispatch, '_log_error')

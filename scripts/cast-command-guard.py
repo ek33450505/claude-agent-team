@@ -3535,7 +3535,7 @@ def protected_write_via_bash(command):
 def is_blocked(command):
     """Return (blocked, message) for a raw Bash command string."""
     # RULE 5-C (G1) -- the coarse desync rule runs FIRST, before any parser, so a parser crash
-    # (safe_is_blocked fails OPEN) or a watchdog timeout can never skip it.
+    # (safe_is_blocked fails OPEN) or a hook timeout can never skip it.
     if pw_coarse_desync(command):
         return True, PW_COARSE_MSG
     # RULE 4 — workflow-write via Bash redirection (scans the raw command; it does

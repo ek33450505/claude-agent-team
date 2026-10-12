@@ -308,6 +308,20 @@ every hook. Before this, only the auto-mode classifier stood in the way, and `by
 The denylist is defence in depth, not an inventory. A block shows no message to the user or to Claude. Claude
 Code writes only a debug-log line, and the guard appends a names-only line to `~/.claude/logs/config-change-guard.jsonl`.
 
+## Hook failure semantics: native `onFailure:block` (2026-10-12)
+
+The three enforcement hooks (the PreToolUse dispatcher, the Write/Edit `write-guards.sh` hook and the ConfigChange guard, all in `managed-settings.d/25-hooks-security.json`) carry Claude Code's native `"onFailure": "block"` (CC >= 2.1.295; `scripts/cast-cc-version-floor.sh` WARNs at install below that). Live-probed on CC 2.1.296: a hook that times out, exits non-0/2 or can't start BLOCKS the tool call. Malformed JSON stdout does NOT block (it is treated as plain text), contrary to the hooks docs, so a single valid JSON object is still required for a decision to be honoured. This is why the dispatcher has no Bash git-guard or command-guard watchdog any more: on CC >= 2.1.295, and only when the copy of the hook that Claude Code actually runs carries `onFailure`, native block-on-timeout is strictly broader (it blocks ANY timed-out call, not only commands naming git). Below CC 2.1.295 a timeout is again an ALLOW; that is covered only by the install WARN (accepted).
+
+What stays ALLOW by owner decision: the dispatcher's own `except Exception: sys.exit(0)` catch-all and the per-guard fail-open paths (a guard bug in one module never suppresses another). The one fail-closed exception is unchanged: the git guard module failing to LOAD (degraded block). A project-scope duplicate of the hook with `onFailure:continue` was probed not to override a HIGHER-scope copy that carries `onFailure:block` (2026-10-12); the probe used the `--settings` flag scope as the stand-in for the higher scope, and managed-vs-project was not probed directly. The Workflow stage-model lint watchdog is the opposite direction (it ALLOWS on timeout) and is kept.
+
+Residuals of this change (accepted or operational, none are code):
+
+- **Deploy order.** The root-owned `/Library/Application Support/ClaudeCode/managed-settings.json` must be reinstalled (sudo, `python3 -I scripts/cast-managed-settings-verify.py --print-install`) and `cast-managed-settings-verify.py` must pass BEFORE or together with `install.sh`: a stale higher-scope copy without `onFailure` may win de-duplication over the user copy (being probed), and then none of the above applies.
+- **Plugin-only installs** never run `install.sh`, so they get no CC-version WARN, and the plugin copy's `onFailure` was not live-probed.
+- **A CC downgrade after install is silent**: there is no session-start or doctor floor check.
+- **A native timeout block leaves no CAST trace**: no CAST log line, no `hook_failures` row, and its generic message cannot be cleared by an escape hatch. A legitimate command whose guards exceed the 5 s hook timeout must be split.
+- **A broken dispatcher blocks every covered tool call** (a crash the interpreter cannot catch: syntax/import error at load, can't-start, signal kill). Recover from a terminal (`bash install.sh`) or the `!` prefix.
+
 ## Sandbox write-denies for git-executed paths (2026-10-04, U6b/U6c)
 
 `61-sandbox.json` adds `sandbox.filesystem.denyWrite: ["~/Projects/**/.git/worktrees", "~/Projects/**/.githooks"]`; `12-ask.json` adds the `ask` rule `Edit(**/.githooks/**)`. There is no `Write(...)` twin, because Claude Code consults only `Edit(path)` rules for the file tools and a `Write(path)` rule is inert. That ask rule prompted in manual mode but not in auto mode (probe 9). The mode-independent layer is the `githooks-require-security` block policy in `config/policies.json`, enforced by git-guard on Write/Edit. It needs a `security` completion in the session, or `CAST_POLICY_OVERRIDE=1`, and goes live only from the installed copy, after `install.sh`. It is a guardrail for compliant agents, not a boundary: agent-status completion records can be forged through the Write tool and aren't tied to a session (plan S3d). A sibling `git-internals-require-security` policy covers `.git/` (config, hooks, info). Never use `./` here: fragments merge into the USER `~/.claude/settings.json`, where `./` means `~/.claude`. A denyWrite glob compiles to a case-sensitive Seatbelt regex, e.g. `^/(.*/)?\.git/worktrees(/.*)?$` (dir + descendants).
@@ -368,7 +382,7 @@ These were judged and accepted, not fixed; each is a known limit, not an open it
 - S3c-10 egress header comment: cosmetic.
 - U4d branch-delete TOCTOU: a window exists between the check and the delete; accepted.
 - Validator backgrounded-child litter: a backgrounded child of the validator may leave temp litter.
-- Dispatcher locked-DB path: under a locked cast.db the dispatcher can take ~16 s, and a planted `hook_failures` row is not distinguished.
+- Dispatcher locked-DB path: the guard-failure record is bounded by `cast_db.deadline` (~1 s, worst ~2 s), so a locked cast.db no longer stalls the 5 s hook, and a hook timeout BLOCKS under `onFailure:block`; a planted `hook_failures` row is still not distinguished.
 - Egress R1/R4/R8, the `%40` tail and raw ledger fields: accepted egress-sentinel limits.
 - `git grep -O`: an open-in-pager exec vector, pinned by a test as a known allow (#421).
 - RULE 5 residuals: runtime-built paths, script files, stdin data, earlier-call `cd`/aliases, `pip install --user` (see `scripts/cast-command-guard.py` docstring and the `CAST_PROTECTED_WRITE_OK` row in docs/escape-hatches.md).

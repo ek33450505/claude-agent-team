@@ -6,8 +6,9 @@ BLOCK pattern is anchored at `(^|\\s)git`, `re.search` retries that anchor at EV
 token, and each retry did O(rest-of-segment) work (a `(?=.*Y)` lookahead, or an option-run
 walk). Measured before the fix, `("git " * N) + "; git push origin main"`: N=10k 2.5 s, 20k
 11.5 s, 40k 41 s -- and ~100 KB of padding through the dispatcher took ~15 s. The PreToolUse
-hook timeout is 5 s and a hook TIMEOUT is a non-blocking error, i.e. an ALLOW: ~60 KB of padding
-in front of a raw `git push` bypassed the push / commit / reset blocks.
+hook timeout is 5 s and a hook TIMEOUT was a non-blocking error, i.e. an ALLOW (now a BLOCK
+under onFailure:block, CC >= 2.1.295): ~60 KB of padding in front of a raw `git push`
+bypassed the push / commit / reset blocks.
 
 Three fixes are pinned here:
   1. `_flag_cluster` -- exact, linear rewrite of `-[a-zA-Z]*f[a-zA-Z]*`-style clusters (one long
@@ -44,8 +45,10 @@ gg = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gg)
 
 G = 'gi' + 't'            # the verb is assembled so no literal guarded command sits in this file
-# The contract: every padded command is decided within the dispatcher's git-guard watchdog budget
-# (`_GIT_GUARD_BUDGET_SECS` = 2.0 s in scripts/cast-pretool-dispatch.py). Measured 1.0-1.2 s on
+# The contract: every padded command is decided well inside the 5 s hook timeout. Under native
+# onFailure:block a hook that times out BLOCKS the call, so this bound guards USABILITY (a guard
+# slower than the timeout refuses legitimate commands), not bypass. It must stay well under the
+# 5 s hook timeout minus interpreter start-up. Measured 1.0-1.2 s on
 # GitHub's ubuntu runner vs ~0.3-0.9 s locally, so 1.0 s was a machine-dependent flake. This bound
 # is the secondary check: quadratic regressions take >= 4 s, which the verdict-message assertions
 # and TRIPWIRE_SECS catch.
@@ -206,8 +209,8 @@ class TestShlexIsNotRunOnTokensItCannotUse(_Timed):
 
     def test_the_bytes_handed_to_shlex_are_capped_cumulatively_across_segments(self):
         # HIGH-1 (security round 2): each segment is under the 200 KB per-segment cap, but shlex
-        # costs ~0.3 s per 195 KB token, so FIVE of them ran the guard past the dispatcher's 2 s
-        # watchdog (and, with `g\<newline>it` spellings, past a naming test that missed them).
+        # costs ~0.3 s per 195 KB token, so FIVE of them ran the guard past the 2 s budget
+        # the caps were sized for (and, with `g\<newline>it` spellings, past a naming test that missed them).
         # Refused up front by the cumulative cap instead.
         seg = G + ' log ' + 'x' * 195000
         self.assertLess(len(seg), gg._MAX_GIT_SEGMENT_LEN)
@@ -387,8 +390,8 @@ class TestContinuationJoinIsLinearAndIdentical(_Timed):
 
 class TestAuditSpawnsAreMemoisedPerCall(_Timed):
     """Security round 1: `_audit_push_hatch` / `_audit_commit_hatch` spawned one `git rev-parse`
-    per hatched segment (uncapped), so ~500 hatched segments (13 KB) ran the guard past its
-    watchdog budget. One spawn per distinct cwd per `_git_evaluate` call answers all of them."""
+    per hatched segment (uncapped), so ~500 hatched segments (13 KB) ran the guard far past its
+    time bound. One spawn per distinct cwd per `_git_evaluate` call answers all of them."""
 
     def _count_spawns(self, cmd):
         calls = []
@@ -438,7 +441,8 @@ class TestAuditSpawnsAreMemoisedPerCall(_Timed):
 
 class TestCapSentinelIsNotEmittedWhileUnwindingABaseException(unittest.TestCase):
     """L1 (security round 1): the CAP sentinel is a `_record_hatch` subprocess (timeout 2 s); run
-    in `finally` while the dispatcher's watchdog exception unwound, it added 2 s to a 2 s budget."""
+    in `finally` while a BaseException (KeyboardInterrupt / SystemExit) unwound, it added 2 s to a
+    hook that was already ending."""
 
     class _Alarm(BaseException):
         pass
