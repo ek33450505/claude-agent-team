@@ -159,3 +159,14 @@ file_mode() {
 file_mtime() {
   if [[ "$OSTYPE" == darwin* ]]; then stat -f %m "$1"; else stat -c %Y "$1"; fi
 }
+
+# cast_git_fixture_quiet [repo] — disable auto gc/maintenance in a throwaway fixture repo.
+# Since git 2.54 `git commit` can spawn a DETACHED `maintenance run --auto` that repacks/writes into .git
+# mid-test or during cleanup ("rm: .git: Directory not empty" flake). Repo-local config only; fine for --bare.
+cast_git_fixture_quiet() {
+  local repo="${1:-.}"
+  # env -u: an inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE (tests run from a git hook) must not redirect this to the OUTER repo.
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$repo" config gc.auto 0 &&
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$repo" config maintenance.auto false &&
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$repo" config maintenance.autoDetach false
+}

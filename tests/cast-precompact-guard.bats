@@ -74,6 +74,7 @@ _pc_hostile_repo() {
   _pc_marker_script fsmonitor
   _pc_marker_script eqfilter cat
   git init -q --initial-branch=main "$PC_REPO"
+  cast_git_fixture_quiet "$PC_REPO"
   git -C "$PC_REPO" config user.email "test@example.com"
   git -C "$PC_REPO" config user.name "Test"
   printf 'a.txt filter=x\nb.txt filter=Y.z\nc.txt filter=a=b\n' > "$PC_REPO/.gitattributes"
@@ -112,6 +113,7 @@ _pc_run_hook() {
   mkdir -p "$PC_MARK" "$BATS_TEST_TMPDIR/subsrc"
   _pc_marker_script subfilter cat
   git init -q --initial-branch=main "$BATS_TEST_TMPDIR/subsrc"
+  cast_git_fixture_quiet "$BATS_TEST_TMPDIR/subsrc"
   git -C "$BATS_TEST_TMPDIR/subsrc" config user.email t@t
   git -C "$BATS_TEST_TMPDIR/subsrc" config user.name t
   printf '* filter=sf\n' > "$BATS_TEST_TMPDIR/subsrc/.gitattributes"
@@ -119,6 +121,7 @@ _pc_run_hook() {
   git -C "$BATS_TEST_TMPDIR/subsrc" add -A
   git -C "$BATS_TEST_TMPDIR/subsrc" commit -q -m i
   git init -q --initial-branch=main "$PC_REPO"
+  cast_git_fixture_quiet "$PC_REPO"
   git -C "$PC_REPO" config user.email t@t
   git -C "$PC_REPO" config user.name t
   git -C "$PC_REPO" -c protocol.file.allow=always submodule add -q "$BATS_TEST_TMPDIR/subsrc" sub >/dev/null 2>&1
@@ -140,6 +143,7 @@ _pc_run_hook() {
   mkdir -p "$PC_MARK" "$PC_REPO"
   _pc_marker_script fsmonitor
   git init -q --initial-branch=main "$PC_REPO"
+  cast_git_fixture_quiet "$PC_REPO"
   git -C "$PC_REPO" config user.email t@t
   git -C "$PC_REPO" config user.name t
   echo x > "$PC_REPO/a.txt"
@@ -197,9 +201,10 @@ _pc_run_hook() {
   local clean_repo
   clean_repo=$(mktemp -d)
   TEMP_GIT_REPO="$clean_repo"
+  git -C "$clean_repo" init -q
+  cast_git_fixture_quiet "$clean_repo"
   (
     cd "$clean_repo"
-    git init -q
     git config user.email "test@example.com"
     git config user.name "Test"
     echo "init" > README.md
@@ -218,9 +223,10 @@ _pc_run_hook() {
   local dirty_repo
   dirty_repo=$(mktemp -d)
   TEMP_GIT_REPO="$dirty_repo"
+  git -C "$dirty_repo" init -q
+  cast_git_fixture_quiet "$dirty_repo"
   (
     cd "$dirty_repo"
-    git init -q
     git config user.email "test@example.com"
     git config user.name "Test"
     echo "init" > README.md
@@ -304,9 +310,10 @@ _pc_run_hook() {
   local dirty_repo test_db threshold fixture_started_at
   dirty_repo=$(mktemp -d)
   TEMP_GIT_REPO="$dirty_repo"
+  git -C "$dirty_repo" init -q
+  cast_git_fixture_quiet "$dirty_repo"
   (
     cd "$dirty_repo"
-    git init -q
     git config user.email "test@example.com"
     git config user.name "Test"
     echo "init" > README.md
@@ -340,6 +347,7 @@ _pc_run_hook() {
 _pg_repo() { # dir — committed clean repo; tracked files carry an old mtime (never racily clean)
   mkdir -p "$1"
   git init -q --initial-branch=main "$1"
+  cast_git_fixture_quiet "$1"
   git -C "$1" config user.email "test@example.com"
   git -C "$1" config user.name "Test"
   printf 'evil.txt filter=evil\n' > "$1/.gitattributes"

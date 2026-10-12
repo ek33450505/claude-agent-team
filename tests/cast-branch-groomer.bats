@@ -2,6 +2,7 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 GROOMER="$REPO_DIR/scripts/cast-branch-groomer.sh"
@@ -21,6 +22,7 @@ setup() {
 
   # Create isolated git repo
   git init "$TEST_REPO" --initial-branch=main >/dev/null 2>&1
+  cast_git_fixture_quiet "$TEST_REPO"
   git -C "$TEST_REPO" config user.email "test@example.com"
   git -C "$TEST_REPO" config user.name "Test User"
   git -C "$TEST_REPO" commit --allow-empty -m "Initial commit" >/dev/null 2>&1
@@ -78,6 +80,7 @@ _gx_setup() {
   _gx_marker_script textconv 'cat "$1"'
   _gx_marker_script gpg 'exit 1'
   git init -q --initial-branch=main "$GX_REPO"
+  cast_git_fixture_quiet "$GX_REPO"
   git -C "$GX_REPO" config user.email "test@example.com"
   git -C "$GX_REPO" config user.name "Test User"
   printf 'a.txt filter=x\nb.txt filter=Y.z\nc.txt filter=a=b\n*.txt diff=y\n' > "$GX_REPO/.gitattributes"
@@ -140,6 +143,7 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
   _gx_setup
   mkdir -p "$BATS_TEST_TMPDIR/subsrc"
   git init -q --initial-branch=main "$BATS_TEST_TMPDIR/subsrc"
+  cast_git_fixture_quiet "$BATS_TEST_TMPDIR/subsrc"
   git -C "$BATS_TEST_TMPDIR/subsrc" config user.email t@t
   git -C "$BATS_TEST_TMPDIR/subsrc" config user.name t
   printf '* filter=sf\n' > "$BATS_TEST_TMPDIR/subsrc/.gitattributes"
@@ -177,6 +181,7 @@ _gx_plant() { # hostile config planted AFTER the base commit / worktree creation
   _gx_setup
   mkdir -p "$BATS_TEST_TMPDIR/subsrc"
   git init -q --initial-branch=main "$BATS_TEST_TMPDIR/subsrc"
+  cast_git_fixture_quiet "$BATS_TEST_TMPDIR/subsrc"
   git -C "$BATS_TEST_TMPDIR/subsrc" config user.email t@t
   git -C "$BATS_TEST_TMPDIR/subsrc" config user.name t
   echo f > "$BATS_TEST_TMPDIR/subsrc/f.txt"
@@ -460,6 +465,7 @@ _gx_run_shimmed() { # <mode> <groomer args...>
 _gx_deputy_fixture() { # <repo> <victim-dir> <self|other>
   local repo="$1" victim="$2" mode="$3" other="$1-other" adm sha
   git init -q --initial-branch=main "$repo"
+  cast_git_fixture_quiet "$repo"
   git -C "$repo" config user.email t@t
   git -C "$repo" config user.name t
   git -C "$repo" commit -q --allow-empty -m base
@@ -472,6 +478,7 @@ _gx_deputy_fixture() { # <repo> <victim-dir> <self|other>
     printf 'keep-me.txt\n' >> "$repo/.git/info/exclude"
   else
     git init -q --initial-branch=main "$other"
+    cast_git_fixture_quiet "$other"
     git -C "$other" config user.email t@t
     git -C "$other" config user.name t
     git -C "$other" commit -q --allow-empty -m base
@@ -487,6 +494,7 @@ _gx_deputy_fixture() { # <repo> <victim-dir> <self|other>
 # A real, clean agent worktree whose path is then swapped for a symlink to <target>.
 _gx_symlink_fixture() { # <repo> <target>
   git init -q --initial-branch=main "$1"
+  cast_git_fixture_quiet "$1"
   git -C "$1" config user.email t@t
   git -C "$1" config user.name t
   echo tracked > "$1/tracked.txt"
@@ -1054,6 +1062,7 @@ _gq_copy_del() { # [nopin] -> injected copy with the hook line just before the q
   _gx_setup
   # control: plain git DOES delete the symlink target on prune (the exact C1 reproduction)
   git init -q --initial-branch=main "$BATS_TEST_TMPDIR/ctl"
+  cast_git_fixture_quiet "$BATS_TEST_TMPDIR/ctl"
   mkdir -p "$BATS_TEST_TMPDIR/ctl/.git/worktrees" "$BATS_TEST_TMPDIR/vctl/sub"
   echo precious >"$BATS_TEST_TMPDIR/vctl/sub/f.txt"
   ln -s "$BATS_TEST_TMPDIR/vctl" "$BATS_TEST_TMPDIR/ctl/.git/worktrees/zz"
