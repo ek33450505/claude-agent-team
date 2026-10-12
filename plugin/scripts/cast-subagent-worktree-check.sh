@@ -5,6 +5,10 @@
 # security / frontend-qa dispatches. DETECT-ONLY: it never deletes, prunes or moves anything.
 # Clean ones get an informational banner, dirty ones an escalation banner; both are logged to the
 # cast.db worktree_anomalies table. Always exits 0.
+# A repeat of the SAME (worktree_path, state, reason) is suppressed (no row, no banner) for 24 h so a
+# known leftover is reported once, then at most daily; a changed reason/state reports immediately.
+# Known limits (accepted): the lookup-then-insert is not atomic (two concurrent stops can both report);
+# worktree_path is unindexed (fine at the table's size).
 #
 # Why detect-only (security, 2026-10-04): this hook runs OUTSIDE the sandbox after every agent stop,
 # with cwd = the project, which the agent can write. `git worktree prune` / `worktree remove` follow
@@ -66,7 +70,7 @@ import subprocess
 import sys
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 agent_id, db_path, script_dir = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -108,7 +112,10 @@ def banner_text(s, cap=300):
     return ''.join('?' if _is_bad(ch) else ch for ch in str(s))[:cap]
 
 
-_ESC = {'\n': '\\n', '\r': '\\r', '\t': '\\t'}
+# Backslash is escaped too, so the mapping is injective (a real newline -> `\n`, a literal `\n` -> `\\n`).
+# The stored path is the dedupe key; rows written before this encoding keep the old one, so each
+# leftover path is re-reported once after an upgrade (accepted).
+_ESC = {'\\': '\\\\', '\n': '\\n', '\r': '\\r', '\t': '\\t'}
 
 
 def db_text(s, cap=1024):
@@ -133,6 +140,37 @@ def db_text(s, cap=1024):
 def emit(line):
     sys.stdout.buffer.write((line + '\n').encode('utf-8', 'replace'))
     sys.stdout.buffer.flush()
+
+
+# A leftover worktree already reported with the same state + reason is not re-reported inside this window.
+DEDUPE_WINDOW = timedelta(hours=24)
+
+
+def _parse_utc(ts):
+    """cast.db timestamps are mixed (`...Z`, `+00:00`, naive): normalise to aware UTC."""
+    t = str(ts).strip()
+    if t.endswith(('Z', 'z')):
+        t = t[:-1] + '+00:00'
+    dt = datetime.fromisoformat(t)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def already_reported(conn, wt_db, state, reason, now):
+    """True only when the newest row for this path has the same state + reason and is < DEDUPE_WINDOW old.
+    Any query/parse error -> False (fail toward reporting, never toward silence)."""
+    try:
+        prev = conn.execute(
+            'SELECT state, reason, detected_at FROM worktree_anomalies WHERE worktree_path=? ORDER BY id DESC LIMIT 1',
+            (wt_db,)
+        ).fetchone()
+        if prev is None or prev[0] != state or prev[1] != reason:
+            return False
+        age = now - _parse_utc(prev[2])
+        return timedelta(0) <= age < DEDUPE_WINDOW
+    except Exception:
+        return False
 
 
 # --- repo discovery (no git outside cast_git_safe, bounded by DEADLINE) ---
@@ -252,14 +290,20 @@ for b in blocks:
     safe_wt = banner_text(wt)
     safe_agent = banner_text(agent_id, 100)
     row = (db_text(agent_id), db_text(wt), now_iso, db_text(repo_root))
+    now_dt = datetime.now(timezone.utc)
     if not reason_bits:
+        clean_reason = 'clean and at upstream; detect-only, not removed'
+        if already_reported(conn, row[1], 'clean-detected', clean_reason, now_dt):
+            continue
         conn.execute(
             'INSERT INTO worktree_anomalies (agent_id, worktree_path, detected_at, repo_root, state, reason) VALUES (?,?,?,?,?,?)',
-            row + ('clean-detected', 'clean and at upstream; detect-only, not removed')
+            row + ('clean-detected', clean_reason)
         )
         emit(f'ℹ AGENT-WORKTREE LEFT BEHIND (clean): {safe_wt} — remove with: cast clean --apply --worktrees (agent {safe_agent})')
     else:
         reason = '; '.join(reason_bits)
+        if already_reported(conn, row[1], 'dirty-escalated', db_text(reason), now_dt):
+            continue
         conn.execute(
             'INSERT INTO worktree_anomalies (agent_id, worktree_path, detected_at, repo_root, state, reason) VALUES (?,?,?,?,?,?)',
             row + ('dirty-escalated', db_text(reason))

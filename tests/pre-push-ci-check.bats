@@ -249,6 +249,16 @@ teardown() {
   assert_output --partial "aws-key"
 }
 
+@test "hits from two different scans print on separate lines (not glued)" {
+  local aws_key
+  aws_key="AKIA""AAAAAAAAAAAAAAAA"
+  # hardcoded-path scan runs before aws-key scan; each must start its own line.
+  _run_check "multi.txt" "path=/Users/mallory/x key=$aws_key" "$FAKE_DENYLIST"
+  assert_failure
+  printf '%s\n' "$output" | grep -qE '^  \[hardcoded-path\] '
+  printf '%s\n' "$output" | grep -qE '^  \[aws-key\] '
+}
+
 @test "Google OAuth secret pattern in diff blocks push" {
   local oauth_secret
   oauth_secret="GOCSPX-""abcdefghijklmnopqrstuvwxyz1234"

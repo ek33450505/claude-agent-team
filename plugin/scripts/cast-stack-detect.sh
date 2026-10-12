@@ -281,7 +281,7 @@ def persist_stack(real_root):
         mode = None  # None => new file: created 0o666 & ~umask by open(2) itself
         if dir_fd is not None:
             # Classify BEFORE opening: opening a FIFO read-only blocks until a writer appears
-            # (a planted FIFO named cast.json would hang the CwdChanged hook), and a device
+            # (a planted FIFO named cast.json would hang the caller: cast init / bin/cast), and a device
             # node can have side effects. lstat-style, relative to the verified directory fd.
             try:
                 pre = os.stat('cast.json', dir_fd=dir_fd, follow_symlinks=False)

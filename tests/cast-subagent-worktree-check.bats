@@ -326,3 +326,123 @@ last_state() {
   [ "$rc" -eq 0 ]
   [ "$elapsed" -lt 14 ]
 }
+
+# --- repeat suppression (same path + state + reason within 24 h is reported once) ---
+
+run_hook() { bash -c "echo '$STDIN_JSON' | bash '$HOOK'"; }
+
+dirty_worktree() {
+  cd "$REPO"
+  mkdir -p ".claude/worktrees"
+  git worktree add -q ".claude/worktrees/agent-dedupe01" HEAD
+  echo "real change" >> ".claude/worktrees/agent-dedupe01/README.md"
+}
+
+@test "dedupe: same dirty worktree reported twice in a row -> 1 row, 1 banner" {
+  dirty_worktree
+  run run_hook
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"AGENT-WORKTREE DETECTED (DIRTY)"* ]]
+  run run_hook
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"AGENT-WORKTREE"* ]]
+  [ "$(count_anomalies)" -eq 1 ]
+}
+
+@test "dedupe: same clean worktree reported twice in a row -> 1 row, 1 banner" {
+  cd "$REPO"
+  mkdir -p ".claude/worktrees"
+  git worktree add -q ".claude/worktrees/agent-dedupe02" HEAD
+  run run_hook
+  [[ "$output" == *"LEFT BEHIND (clean)"* ]]
+  run run_hook
+  [[ "$output" != *"AGENT-WORKTREE"* ]]
+  [ "$(count_anomalies)" -eq 1 ]
+}
+
+@test "dedupe: prior row older than 24 h -> reported again (2 rows, 2 banners)" {
+  dirty_worktree
+  run run_hook
+  [[ "$output" == *"DIRTY"* ]]
+  sqlite3 "$CAST_DB_PATH" "UPDATE worktree_anomalies SET detected_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','-25 hours');"
+  run run_hook
+  [[ "$output" == *"DIRTY"* ]]
+  [ "$(count_anomalies)" -eq 2 ]
+}
+
+@test "dedupe: prior row inside 24 h in +00:00 and naive formats is still suppressed" {
+  dirty_worktree
+  run run_hook
+  sqlite3 "$CAST_DB_PATH" "UPDATE worktree_anomalies SET detected_at = strftime('%Y-%m-%dT%H:%M:%S','now','-1 hours') || '+00:00';"
+  run run_hook
+  [[ "$output" != *"AGENT-WORKTREE"* ]]
+  sqlite3 "$CAST_DB_PATH" "UPDATE worktree_anomalies SET detected_at = strftime('%Y-%m-%d %H:%M:%S','now','-1 hours');"
+  run run_hook
+  [[ "$output" != *"AGENT-WORKTREE"* ]]
+  [ "$(count_anomalies)" -eq 1 ]
+}
+
+@test "dedupe: changed reason (second untracked file) -> new row + banner" {
+  dirty_worktree
+  run run_hook
+  [[ "$output" == *"(1 changed/untracked files)"* ]]
+  echo "more" > ".claude/worktrees/agent-dedupe01/extra.txt"
+  run run_hook
+  [[ "$output" == *"DIRTY"* ]]
+  [[ "$output" == *"(2 changed/untracked files)"* ]]
+  [ "$(count_anomalies)" -eq 2 ]
+}
+
+@test "dedupe: state flip (dirty then clean) -> new row + banner" {
+  dirty_worktree
+  run run_hook
+  [[ "$output" == *"DIRTY"* ]]
+  echo "seed" > ".claude/worktrees/agent-dedupe01/README.md"
+  run run_hook
+  [[ "$output" == *"LEFT BEHIND (clean)"* ]]
+  [ "$(count_anomalies)" -eq 2 ]
+  [ "$(last_state)" = "clean-detected" ]
+}
+
+@test "dedupe: unparsable detected_at in the prior row -> still reports" {
+  dirty_worktree
+  run run_hook
+  sqlite3 "$CAST_DB_PATH" "UPDATE worktree_anomalies SET detected_at = 'not-a-timestamp';"
+  run run_hook
+  [[ "$output" == *"DIRTY"* ]]
+  [ "$(count_anomalies)" -eq 2 ]
+}
+
+@test "dedupe: NULL detected_at in the prior row -> still reports" {
+  dirty_worktree
+  run run_hook
+  sqlite3 "$CAST_DB_PATH" "UPDATE worktree_anomalies SET detected_at = NULL;"
+  run run_hook
+  [[ "$output" == *"DIRTY"* ]]
+  [ "$(count_anomalies)" -eq 2 ]
+}
+
+@test "dedupe: prior row timestamped in the future -> not suppressed (still reports)" {
+  dirty_worktree
+  run run_hook
+  sqlite3 "$CAST_DB_PATH" "UPDATE worktree_anomalies SET detected_at = strftime('%Y-%m-%dT%H:%M:%SZ','now','+1 hours');"
+  run run_hook
+  [[ "$output" == *"DIRTY"* ]]
+  [ "$(count_anomalies)" -eq 2 ]
+}
+
+@test "db_text injective: real-newline and literal-backslash-n worktree names are both reported" {
+  cd "$REPO"
+  mkdir -p ".claude/worktrees"
+  git worktree add -q ".claude/worktrees/agent-bs"$'\n'"x" HEAD
+  git worktree add -q ".claude/worktrees/agent-bs"'\n'"x" HEAD
+  run run_hook
+  [ "$status" -eq 0 ]
+  [ "$(count_anomalies)" -eq 2 ]
+  # second run: both suppressed individually, neither rides the other's suppression
+  run run_hook
+  [[ "$output" != *"AGENT-WORKTREE"* ]]
+  [ "$(count_anomalies)" -eq 2 ]
+  # stored forms differ: newline -> \n, literal backslash-n -> \\n
+  [ "$(sqlite3 "$CAST_DB_PATH" "SELECT count(DISTINCT worktree_path) FROM worktree_anomalies;")" -eq 2 ]
+}

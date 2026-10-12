@@ -113,9 +113,8 @@ _HITS_SECRETS=()
 # arrays and the appropriate exclusion is applied.
 # ---------------------------------------------------------------------------
 _scan_all() {
-  # Use PCRE if available, else ERE
+  # Patterns are ERE by design (byte-identical with pre-push-ci-check.sh); never PCRE.
   local grep_flag="-E"
-  echo "" | grep -qP "." 2>/dev/null && grep_flag="-P"
 
   # Get tracked text files; -I skips binary files.
   # Run from REPO_ROOT so that ls-files' repo-relative paths resolve correctly

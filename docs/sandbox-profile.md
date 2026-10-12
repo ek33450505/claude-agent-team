@@ -27,9 +27,10 @@ The Write and Edit tools are not sandboxed. Hooks run outside the sandbox, so `c
 | Workflow | Status | Notes |
 |---|---|---|
 | `pre-commit` lints, plugin-drift check, stats refresh | works | Before 2026-10-11, the plugin-drift check died on `mktemp` (EPERM) and reported "plugin/ is out of sync". Fixed. |
-| `commit` agent | works | The `post-commit` provenance write fails (logs/`cast.db` are denied). The unsandboxed PostToolUse hook records the row instead. |
+| `commit` agent | works | The `post-commit` provenance write fails (logs/`cast.db` are denied). The unsandboxed PostToolUse hook records the row instead (verified 2026-10-12: rows exist for every commit whose agent reported "not-recorded"). |
 | D5 reconcile (`pre-push`) | degrades, loudly | `audit.jsonl` is unreadable, so the result is `"status": "unverifiable"` and pre-push prints "NOT verified … push allowed". Commits made in the sandbox do not false-block a later unsandboxed push. To get a real verdict, push from your terminal. |
 | `git fetch` / `ls-remote` | works | |
+| `git switch` / `pull` that rewrites `.githooks/` | fails | `.githooks` is write-denied, so a checkout that changes a file there aborts part-way. Run that pull or switch with `!`. |
 | Push (`CAST_PUSH_OK=1 bash scripts/cast-push.sh <branch>`) | works | Verified 2026-10-11: the pre-push hook ran in the sandbox and every gate reached a verdict (reconcile degrades as above). Before 2026-10-11 it died at its first `mktemp`. `.git/config` lock may be denied, so `--set-upstream` may not stick. |
 | `gh` (PRs, checks, merge) | works | Needs `enableWeakerNetworkIsolation: true`. Verified 2026-10-11: `gh pr list` and `gh api` succeed after `install.sh`, with no restart. Without the key, gh fails with `x509: OSStatus -26276`, because the trustd lookup is blocked. The key opens only `com.apple.trustd.agent`; gh stays sandboxed. |
 | `install.sh`, `cast-rules-sync.sh --apply`, `cast-merge-settings.sh` | `!` only | They write `~/.claude`. Never start them sandboxed: a partial install is worse than none. |
