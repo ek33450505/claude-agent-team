@@ -15,7 +15,7 @@
 #
 # Recommended schedule (Sunday 06:00 local): com.cast.branch-groomer.plist
 # Output: ~/.claude/reports/branch-grooming-YYYY-MM-DD.md
-# Exit:   0 always (advisory)
+# Exit:   0 (advisory; never blocks), except 2 on a usage error (--repo without a path)
 #
 # Usage: bash scripts/cast-branch-groomer-schedule.sh [--repo <path>]
 
@@ -35,7 +35,13 @@ _log_error() {
 REPO_DIR=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo) REPO_DIR="$2"; shift 2 ;;
+    --repo)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        _log_error "--repo requires a path"
+        printf '[cast-branch-groomer-schedule] ERROR: --repo requires a path\n' >&2
+        exit 2
+      fi
+      REPO_DIR="$2"; shift 2 ;;
     --help|-h)
       grep '^#' "$0" | grep -v '^#!' | sed 's/^# \?//'
       exit 0

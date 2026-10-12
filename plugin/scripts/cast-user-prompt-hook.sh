@@ -131,11 +131,37 @@ now    = datetime.now(timezone.utc)
 iso_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # Log to cast.db routing_events
+# CAST_DB_PATH override (project convention), validated through cast_db.validate_db_path so
+# a refused path is not written. python -I drops the script dir from sys.path, so load
+# cast_db.py by file path next to cast-redact.py. Any failure to validate -> skip the write.
 db_path = os.path.expanduser("~/.claude/cast.db")
+_env_db = os.environ.get("CAST_DB_PATH", "")
+if _env_db:
+    try:
+        import importlib.util as _ilu
+        _cdb_file = os.path.join(os.path.dirname(_redact_script), "cast_db.py")
+        _spec = _ilu.spec_from_file_location("cast_db", _cdb_file)
+        _cdb = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_cdb)
+        db_path = _cdb.validate_db_path(_env_db, "CAST_DB_PATH")
+    except Exception as _e:
+        # Refused path / unloadable validator: skip the row but leave a trace. Log the
+        # exception CLASS only (never the raw path or prompt text). Must never crash the hook.
+        db_path = None
+        try:
+            _err_log2 = os.path.expanduser("~/.claude/logs/hook-errors.log")
+            os.makedirs(os.path.dirname(_err_log2), exist_ok=True)
+            _ts2 = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            with open(_err_log2, 'a') as _f2:
+                _f2.write(f"[{_ts2}] ERROR cast-user-prompt-hook.sh: CAST_DB_PATH refused — routing_events row skipped ({type(_e).__name__})\n")
+        except Exception:
+            pass
 prompt_preview_db = prompt_preview[:80]
 project = os.path.basename(os.getcwd().rstrip('/')) or "unknown"
 data_json = json.dumps({"prompt_length": prompt_length, "prompt_preview": prompt_preview})
 try:
+    if db_path is None:
+        raise ValueError("CAST_DB_PATH refused")
     import sqlite3 as _sqlite3
     con = _sqlite3.connect(db_path, timeout=3)
     con.execute(

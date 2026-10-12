@@ -1791,5 +1791,108 @@ class TestEnclosingMarksAndGaps(unittest.TestCase):
         self.assertEqual(f'key {ZWSP}<ANTHROPIC_KEY> end', _redact(f'key {ZWSP}{self.K} end'))
 
 
+class TestVarHomePath(unittest.TestCase):
+    """ostree distros (Silverblue/Kinoite/Bazzite) keep homes at /var/home/<user>/."""
+
+    def test_var_home_redacted_whole_path(self):
+        for text, want in (
+            ('/var/home/bob/notes.txt', '~/'),
+            ('see /var/home/bob/notes.txt', 'see ~/'),
+            ('x=/var/home/jane.doe/a/b', 'x=~/'),
+        ):
+            with self.subTest(text=text):
+                got = _redact(text)
+                self.assertEqual(want, got)
+                self.assertNotIn('bob', got)
+                self.assertNotIn('/var', got)
+
+    def test_var_home_json_entity_type_is_absolute_path(self):
+        ents = cast_redact.analyze_regex('/var/home/bob/notes.txt', [])
+        self.assertIn('ABSOLUTE_PATH', {e['entity_type'] for e in ents})
+
+    def test_plain_home_still_redacted_and_glued_home_still_not(self):
+        self.assertEqual('~/', _redact('/home/bob/x'))
+        self.assertEqual('https://example.com/home/dashboard/x',
+                         _redact('https://example.com/home/dashboard/x'))
+        self.assertEqual('api-v1.host/home/u/x', _redact('api-v1.host/home/u/x'))
+
+    def test_var_home_without_user_subdir_untouched(self):
+        self.assertEqual('cd /var/home and ls', _redact('cd /var/home and ls'))
+
+
+class TestCliSurrogateInput(unittest.TestCase):
+    """CLI output must never crash on lone surrogates, and never carries the unredacted secret."""
+
+    AWS = 'AKIA' + 'IOSFODNN7EXAMPLE'
+
+    def _run(self, *extra, stdin=None):
+        env = {'HOME': tempfile.gettempdir(), 'PATH': os.environ.get('PATH', ''),
+               'PYTHONDONTWRITEBYTECODE': '1',
+               # strict stdin/stdout, as under a normal UTF-8 locale (-I would ignore this var;
+               # the C-locale default is surrogateescape, which hides the bug).
+               'PYTHONIOENCODING': 'utf-8:strict'}
+        return subprocess.run([sys.executable, str(_REDACT_PATH), '--engine', 'regex', *extra],
+                              input=stdin, capture_output=True, env=env)
+
+    def _check(self, r, field):
+        self.assertEqual(0, r.returncode, r.stderr[-300:])
+        self.assertEqual(b'', r.stderr)
+        out = r.stdout.decode('utf-8')  # strict: output must be valid UTF-8
+        self.assertNotIn(self.AWS, out.split('"entities"')[0])  # redacted_text / field value
+        self.assertIn('<AWS_ACCESS_KEY>', out)
+        self.assertIn('\ufffd', out)
+        if field:
+            self.assertTrue(out.startswith('token <AWS_ACCESS_KEY> '), out)
+        else:
+            self.assertEqual('token <AWS_ACCESS_KEY> \ufffd tail xx', json.loads(out)['redacted_text'])
+
+    def test_text_argv_invalid_utf8(self):
+        arg = os.fsdecode(('token ' + self.AWS + ' ').encode() + b'\xff tail xx')
+        for field in (None, 'redacted_text'):
+            with self.subTest(field=field):
+                extra = ['--text', arg] + (['--field', field] if field else [])
+                self._check(self._run(*extra), field)
+
+    def test_stdin_invalid_utf8(self):
+        data = ('token ' + self.AWS + ' ').encode() + b'\xff tail xx'
+        for field in (None, 'redacted_text'):
+            with self.subTest(field=field):
+                extra = ['--field', field] if field else []
+                self._check(self._run(*extra, stdin=data), field)
+
+    def test_file_invalid_utf8(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / 'in.txt'
+            f.write_bytes(('token ' + self.AWS + ' ').encode() + b'\xff tail xx')
+            for field in (None, 'redacted_text'):
+                with self.subTest(field=field):
+                    extra = ['--file', str(f)] + (['--field', field] if field else [])
+                    self._check(self._run(*extra), field)
+
+    def test_secret_split_by_invalid_byte_fully_redacted(self):
+        """An invalid byte spliced into a secret must not leave the halves unredacted."""
+        cases = (
+            (b'AKIAIOSFODNN7\xffEXAMPLE', 'IOSFODNN7'),
+            (b'ghp_' + b'A' * 18 + b'\xff' + b'A' * 18, 'ghp_AAAA'),
+            (b'apikey=abcdefghij\xe9klmnopqrstu', 'abcdefghij'),
+        )
+        with tempfile.TemporaryDirectory() as d:
+            for data, leak in cases:
+                f = Path(d) / 'in.txt'
+                f.write_bytes(b'x ' + data + b' y')
+                for via, r in (('stdin', self._run(stdin=b'x ' + data + b' y')),
+                               ('file', self._run('--file', str(f)))):
+                    with self.subTest(via=via, leak=leak):
+                        self.assertEqual(0, r.returncode, r.stderr[-300:])
+                        red = json.loads(r.stdout.decode('utf-8'))['redacted_text']
+                        self.assertNotIn(leak, red)
+                        self.assertRegex(red, r'^x .*<[A-Z_]+> y$')
+
+    def test_valid_unicode_output_unchanged(self):
+        r = self._run('--text', 'token ' + self.AWS + ' caf\u00e9 \u2713', '--field', 'redacted_text')
+        self.assertEqual(0, r.returncode)
+        self.assertEqual('token <AWS_ACCESS_KEY> caf\u00e9 \u2713\n', r.stdout.decode('utf-8'))
+
+
 if __name__ == '__main__':
     unittest.main()

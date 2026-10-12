@@ -539,10 +539,10 @@ commit_all_fixture() {
   local tmp_repo shim="$BATS_TEST_TMPDIR/shim"
   tmp_repo="$(make_clean_tmp_repo)"
   mkdir -p "$shim"
-  # Pass the non-regular scan (-print) through; fail only the .py listing (-print0).
+  # Pass the non-regular scan (-print) through; fail only the .py listing (-type f ... -print0).
   cat > "$shim/find" <<'SHIM'
 #!/bin/bash
-case "$*" in *-print0*) exit 3 ;; esac
+case "$*" in *"-type f"*-print0*) exit 3 ;; esac
 exec /usr/bin/find "$@"
 SHIM
   chmod +x "$shim/find"
@@ -619,6 +619,147 @@ SHIM
   [ ! -e "$HOME/.claude" ]
 }
 
+# Helper: succeed (rc 0) when $1 is on a case-insensitive filesystem (APFS default).
+fs_is_case_insensitive() {
+  local d="$1"
+  : > "$d/cci-probe-a"
+  : > "$d/CCI-PROBE-A"
+  [ "$(find "$d" -maxdepth 1 -iname 'cci-probe-a' | wc -l | tr -d ' ')" = "1" ]
+}
+
+# Helper: install a `find` shim in $1 that, for the case-collision gate's own listing ONLY
+# (first arg ends in /scripts AND -mindepth is present), runs the real find and then appends the
+# NUL-separated names read from file $2. Every other find call passes through untouched.
+make_collision_find_shim() {
+  local shim="$1" fake="$2" real_find
+  real_find="$(command -v find)"
+  mkdir -p "$shim"
+  cat > "$shim/find" <<SHIM
+#!/bin/bash
+"$real_find" "\$@" || exit \$?
+case "\$1:\$*" in
+  */scripts:*" -mindepth "*) cat "$fake" ;;
+esac
+SHIM
+  chmod +x "$shim/find"
+}
+
+# Helper: run install.sh against $1 with the collision shim listing the NUL-separated names in
+# $3 (a printf format + args are passed through printf '%s\0').
+run_collision_shim() {
+  local tmp_repo="$1" fake="$BATS_TEST_TMPDIR/fake-names" shim="$BATS_TEST_TMPDIR/shim"
+  shift
+  printf '%s\0' "$@" > "$fake"
+  make_collision_find_shim "$shim" "$fake"
+  run env PATH="$shim:$PATH" bash "$tmp_repo/install.sh"
+}
+
+@test "Case-collision gate: zz-dup.sh + ZZ-DUP.sh under scripts/ aborts install and writes nothing" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  if fs_is_case_insensitive "$BATS_TEST_TMPDIR"; then
+    skip "case-insensitive filesystem cannot hold two case-variant names; see the find-shim tests"
+  fi
+  commit_py_fixture "$tmp_repo" zz-dup.sh 'true'
+  commit_py_fixture "$tmp_repo" ZZ-DUP.sh 'true'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"differing only in case"* ]]
+  [[ "$output" == *"zz-dup.sh"* ]]
+  [[ "$output" == *"ZZ-DUP.sh"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Case-collision gate: ASCII pair via the listing shim names BOTH original spellings" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  run_collision_shim "$tmp_repo" "$tmp_repo/scripts/Zz-Fake.sh" "$tmp_repo/scripts/zz-fake.SH"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"differing only in case"* ]]
+  [[ "$output" == *"scripts/Zz-Fake.sh and scripts/zz-fake.SH"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Case-collision gate: non-ASCII pair (cafe-acute.sh vs upper-case) is a collision" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  run_collision_shim "$tmp_repo" "$tmp_repo/scripts/café.sh" "$tmp_repo/scripts/CAFÉ.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"differing only in case"* ]]
+  # _cast_clean turns each non-ASCII byte into '?', so assert on the cleaned originals.
+  [[ "$output" == *"scripts/caf??.sh and scripts/CAF??.sh"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Case-collision gate: NFC vs NFD spelling of the same name is a collision" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  # e-acute precomposed (U+00E9, c3 a9) vs e + combining acute (U+0065 U+0301, 65 cc 81).
+  run_collision_shim "$tmp_repo" "$tmp_repo/scripts/zz-nf"$'\xc3\xa9'".sh" "$tmp_repo/scripts/zz-nf"$'e\xcc\x81'".sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"differing only in case or Unicode normalization"* ]]
+  [[ "$output" == *"scripts/zz-nf??.sh and scripts/zz-nfe??.sh"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Case-collision gate: fails closed when the scripts/ listing find fails" {
+  local tmp_repo shim="$BATS_TEST_TMPDIR/shim" real_find
+  tmp_repo="$(make_clean_tmp_repo)"
+  real_find="$(command -v find)"
+  mkdir -p "$shim"
+  cat > "$shim/find" <<SHIM
+#!/bin/bash
+case "\$1:\$*" in
+  */scripts:*" -mindepth "*) exit 3 ;;
+esac
+exec "$real_find" "\$@"
+SHIM
+  chmod +x "$shim/find"
+
+  run env PATH="$shim:$PATH" bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"case-colliding file names (find failed)"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Case-collision gate: fails closed when python3 fails" {
+  local tmp_repo shim="$BATS_TEST_TMPDIR/pyshim"
+  tmp_repo="$(make_clean_tmp_repo)"
+  mkdir -p "$shim"
+  printf '#!/bin/bash\nexit 1\n' > "$shim/python3"
+  chmod +x "$shim/python3"
+
+  run env PATH="$shim:$PATH" bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"case-colliding file names (python3 failed)"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Shell syntax gate: an upper-case .SH with a syntax error is also checked (-iname)" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  commit_py_fixture "$tmp_repo" zz-broken-up.SH 'if then fi'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"scripts/zz-broken-up.SH"* ]]
+  [[ "$output" == *"shell syntax error"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
+@test "Shell syntax gate: a scripts/*.sh with a syntax error aborts install, names it, writes nothing" {
+  local tmp_repo
+  tmp_repo="$(make_clean_tmp_repo)"
+  commit_py_fixture "$tmp_repo" zz-broken.sh 'if then fi'
+
+  run bash "$tmp_repo/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"scripts/zz-broken.sh"* ]]
+  [[ "$output" == *"shell syntax error"* ]]
+  [ ! -e "$HOME/.claude" ]
+}
+
 @test "Compile gate: a broken upper-case .PY in a scripts/ subdirectory is still compiled (-iname)" {
   local tmp_repo
   tmp_repo="$(make_clean_tmp_repo)"
@@ -644,7 +785,7 @@ SHIM
   cat > "$shim/find" <<SHIM
 #!/bin/bash
 case "\$*" in
-  *-print0*) echo \$\$ > "$mark"; exec sleep 30 ;;
+  *"-type f"*-print0*) echo \$\$ > "$mark"; exec sleep 30 ;;
 esac
 exec /usr/bin/find "\$@"
 SHIM

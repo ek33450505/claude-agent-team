@@ -85,6 +85,14 @@ _ask_query_run() {
   local script="$1"; shift
   local errfile out rc line
   errfile="$(mktemp "${TMPDIR:-/tmp}/cast-bin.XXXXXX" 2>/dev/null)" || errfile=""
+  # Remove the temp file on a signal, then exit with the conventional code (a trap that
+  # merely returned would make the call uninterruptible). Traps are call-scoped and cleared
+  # below; bin/cast sets no other INT/TERM/HUP traps (same pattern as install.sh).
+  if [ -n "$errfile" ]; then
+    trap 'rm -f "$errfile"; exit 130' INT
+    trap 'rm -f "$errfile"; exit 143' TERM
+    trap 'rm -f "$errfile"; exit 129' HUP
+  fi
   if [ -n "$errfile" ]; then
     out="$(CAST_DB_PATH="${CAST_DB_PATH}" python3 "$script" "$@" 2>"$errfile")"; rc=$?
   else
@@ -100,7 +108,10 @@ _ask_query_run() {
     fi
     out="[]"
   fi
-  [ -n "$errfile" ] && rm -f "$errfile"
+  if [ -n "$errfile" ]; then
+    rm -f "$errfile"
+    trap - INT TERM HUP
+  fi
   printf '%s\n' "$out"
   return 0
 }

@@ -412,3 +412,76 @@ SQL
   assert_success
   refute_output --partial "cast-ask-query:"
 }
+
+# ---------------------------------------------------------------------------
+# _ask_query_run must remove its stderr temp file when interrupted (SIGINT/TERM/HUP)
+# and exit with the conventional 128+N code (a returning trap would be uninterruptible).
+# The function is extracted from bin/cast (a dispatcher, not sourceable) and run inside
+# `$(...)` exactly as its real callers do. A python driver starts the harness in its own
+# session (bash ignores SIGINT for `&` jobs, so a bash-backgrounded harness could not trap
+# it), waits on a ready-file written by the python3 shim (no sleep tuning), then signals
+# the whole process group like a terminal Ctrl-C; the harness records the call's exit status.
+# ---------------------------------------------------------------------------
+
+_run_ask_query_signal() {
+  local sig="$1" work="$BATS_TEST_TMPDIR/askq-$1"
+  mkdir -p "$work/shim" "$work/tmp"
+  cat > "$work/shim/python3" <<SHIM
+#!/bin/bash
+: > "$work/ready"
+sleep 30
+SHIM
+  chmod +x "$work/shim/python3"
+  {
+    echo '_error() { :; }'
+    sed -n '/^_ask_query_run() {/,/^}/p' "$CAST_BIN"
+    echo 'CAST_DB_PATH=/nonexistent'
+    # the harness itself survives the group signal (handler, not ignore: a subshell resets
+    # handlers but inherits ignores) so it can record the call's own exit status
+    echo "trap ':' INT TERM HUP"
+    echo 'r="$(_ask_query_run ignored-script)"; echo "$?" > "'"$work"'/rc"'
+    echo 'exit 0'
+  } > "$work/harness.sh"
+  cat > "$work/drive.py" <<'PY'
+import os, signal, subprocess, sys, time
+work, sig = sys.argv[1], getattr(signal, "SIG" + sys.argv[2])
+env = dict(os.environ, PATH=work + "/shim:" + os.environ["PATH"], TMPDIR=work + "/tmp")
+p = subprocess.Popen(["/bin/bash", work + "/harness.sh"], env=env, start_new_session=True)
+deadline = time.time() + 20
+while not os.path.exists(work + "/ready"):
+    if p.poll() is not None or time.time() > deadline:
+        p.kill(); print("harness never reached the python3 shim"); sys.exit(99)
+    time.sleep(0.05)
+os.killpg(p.pid, sig)
+try:
+    rc = p.wait(timeout=20)
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL); print("harness did not exit after signal"); sys.exit(98)
+print(open(work + "/rc").read().strip())
+PY
+  run python3 "$work/drive.py" "$work" "$sig"
+}
+
+@test "_ask_query_run: SIGINT removes its cast-bin temp file and exits 130" {
+  _run_ask_query_signal INT
+  assert_success
+  assert_output "130"
+  run bash -c "ls '$BATS_TEST_TMPDIR'/askq-INT/tmp/cast-bin.* 2>/dev/null"
+  assert_failure
+}
+
+@test "_ask_query_run: SIGHUP removes its cast-bin temp file and exits 129" {
+  _run_ask_query_signal HUP
+  assert_success
+  assert_output "129"
+  run bash -c "ls '$BATS_TEST_TMPDIR'/askq-HUP/tmp/cast-bin.* 2>/dev/null"
+  assert_failure
+}
+
+@test "_ask_query_run: SIGTERM removes its cast-bin temp file and exits 143" {
+  _run_ask_query_signal TERM
+  assert_success
+  assert_output "143"
+  run bash -c "ls '$BATS_TEST_TMPDIR'/askq-TERM/tmp/cast-bin.* 2>/dev/null"
+  assert_failure
+}
