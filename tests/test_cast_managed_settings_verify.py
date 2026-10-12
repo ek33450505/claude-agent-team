@@ -334,9 +334,59 @@ class VerifyTests(unittest.TestCase):
     def test_print_install_after_source_ok(self):
         r = run("--print-install", "--repo", self.tmp)
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("sudo install -o root -g wheel -m 0644", r.stdout)
-        self.assertIn("sudo mkdir -p '/Library/Application Support/ClaudeCode'", r.stdout)
-        self.assertIn("sudo -k", r.stdout)
+        lines = r.stdout.splitlines()
+        self.assertTrue(any(l.startswith("SRC=") for l in lines), r.stdout)
+        self.assertIn("DEST='/Library/Application Support/ClaudeCode/managed-settings.json'", lines)
+        self.assertIn('sudo mkdir -p "$(dirname -- "$DEST")"', lines)
+        self.assertIn('sudo install -o root -g wheel -m 0644 -- "$SRC" "$DEST"', lines)
+        self.assertIn("sudo -k", lines)
+        # No line may be long enough to wrap on paste, except the path assignments.
+        for l in lines:
+            if not l.startswith(("SRC=", "DEST=")):
+                self.assertLessEqual(len(l), 100, l)
+
+    def _eval_printed_install(self, *extra):
+        """Run the printed SRC/DEST/mkdir/install lines under bash and zsh with a
+        sudo stub that echoes its argv; yield (shell, mkdir_argv, install_argv)."""
+        r = run("--print-install", "--repo", self.tmp, *extra)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        cmds = [l for l in r.stdout.splitlines()
+                if l.startswith(("SRC=", "DEST=", "sudo ")) and l != "sudo -k"]
+        self.assertEqual(len(cmds), 4, cmds)
+        script = "sudo() { printf 'ARG<%s>\\n' \"$@\"; printf 'END\\n'; }\n" + "\n".join(cmds) + "\n"
+        shells = [s for s in ("/bin/bash", shutil.which("zsh")) if s]
+        self.assertTrue(shells)
+        for sh in shells:
+            p = subprocess.run([sh, "-c", script], capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(p.stderr, "", sh)
+            calls = p.stdout.split("END\n")[:-1]
+            self.assertEqual(len(calls), 2, p.stdout)
+            yield sh, calls[0].splitlines(), calls[1].splitlines()
+
+    def test_print_install_commands_run_in_bash_and_zsh(self):
+        expect_src = os.path.join(os.path.abspath(self.tmp), "macos", "managed-settings.json")
+        expect_dest = "/Library/Application Support/ClaudeCode/managed-settings.json"
+        for sh, mk, inst in self._eval_printed_install():
+            with self.subTest(shell=sh):
+                self.assertEqual(mk, ["ARG<mkdir>", "ARG<-p>",
+                                      "ARG</Library/Application Support/ClaudeCode>"])
+                self.assertEqual(inst[-3:], ["ARG<-->", f"ARG<{expect_src}>", f"ARG<{expect_dest}>"])
+
+    def test_print_install_special_char_dest(self):
+        dest = os.path.join(self.tmp, "we$ird 'q\"d dir", "managed settings.json")
+        expect_src = os.path.join(os.path.abspath(self.tmp), "macos", "managed-settings.json")
+        for sh, mk, inst in self._eval_printed_install("--installed", dest):
+            with self.subTest(shell=sh):
+                self.assertEqual(mk, ["ARG<mkdir>", "ARG<-p>", f"ARG<{os.path.dirname(dest)}>"])
+                self.assertEqual(inst[-3:], ["ARG<-->", f"ARG<{expect_src}>", f"ARG<{dest}>"])
+
+    def test_print_install_leading_dash_dest(self):
+        expect_src = os.path.join(os.path.abspath(self.tmp), "macos", "managed-settings.json")
+        for sh, mk, inst in self._eval_printed_install("--installed=-dash.json"):
+            with self.subTest(shell=sh):
+                self.assertEqual(mk, ["ARG<mkdir>", "ARG<-p>", "ARG<.>"])
+                self.assertEqual(inst[-3:], ["ARG<-->", f"ARG<{expect_src}>", "ARG<-dash.json>"])
 
     def test_print_install_refused_when_source_fails(self):
         self.mutate(lambda d: d.update({"env": {}}))

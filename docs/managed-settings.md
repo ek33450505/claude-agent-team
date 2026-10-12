@@ -20,7 +20,7 @@ Contents: the destructive-`rm` home-directory denies, the `Edit(...)` self-prote
 python3 -I scripts/cast-managed-settings-verify.py --print-install
 ```
 
-Run from a COMMITTED, clean tree and read `macos/managed-settings.json` first. Run in a separate terminal, not via `!` inside Claude, then `sudo -k`. It runs the source checks, then prints (never runs) the `sudo mkdir -p`, `sudo install -o root -g wheel -m 0644` and `sudo -k` lines.
+Run from a COMMITTED, clean tree and read `macos/managed-settings.json` first. Run in a separate terminal, not via `!` inside Claude, then `sudo -k`. It runs the source checks, then prints (never runs) short lines: `SRC=` and `DEST=` assignments, then `sudo mkdir -p`, `sudo install -o root -g wheel -m 0644 "$SRC" "$DEST"` and `sudo -k`. Paste them as printed (one long line wrapped on paste and failed).
 
 ## Verify
 
@@ -34,7 +34,7 @@ python3 -I scripts/cast-managed-settings-verify.py --source # source only
 ## Limits
 
 - A malformed managed file blocks startup; an unreadable (e.g. 600) file is silently skipped; source priority is first-wins remote > plist > file, so a plist or remote source shadows the file ([managed-settings](https://code.claude.com/docs/en/managed-settings)). Always run `--source` first.
-- The hooks run user-owned scripts resolved via PATH (`python3`, `bash`) and HOME (`~`). Anyone who can change PATH/HOME/env or the scripts defeats the guard; the managed layer does not fix that.
+- The hooks run user-owned scripts resolved via PATH (`python3`, `bash`) and HOME (`~`). Anyone who can change PATH/HOME/env or the scripts defeats the guard; the managed layer does not fix that. Accepted residual (2026-10-12): absolute paths were not adopted. Whatever can set Claude Code's env (e.g. project settings `env`) can usually also add project hooks or edit the user-owned scripts, and a bare `/usr/bin/python3` without the Command Line Tools is a shim that would make the guard fail open (only exit 2 blocks). Boundary: the managed layer keeps the denies and guard-hook entries out of reach of user/project settings files; it does not protect against code running as the user.
 - Bash/MCP write paths to `~/.claude/scripts` are not covered by `Edit()` denies; only the user-owned dispatcher and the OS sandbox hold them.
 - UNVERIFIED: that `Edit()` denies cover Write/NotebookEdit (live probe pending), and whether identical user and managed hooks run twice.
 - The source file and verifier are agent-writable: install only from a committed tree, after reading the file.
