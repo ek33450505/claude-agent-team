@@ -121,6 +121,33 @@ teardown() {
   assert [ "$result_status" -eq 1 ]
 }
 
+# A broken `diff` (sandbox: /dev/fd EPERM -> rc 2) must not change the --check verdict.
+@test "gen-cast-stats.sh --check verdict is independent of diff (in sync + failing diff exits 0)" {
+  mkdir -p "${TMPDIR_STATS}/shim"
+  printf '#!/bin/bash\necho "diff: Operation not permitted" >&2\nexit 2\n' > "${TMPDIR_STATS}/shim/diff"
+  chmod +x "${TMPDIR_STATS}/shim/diff"
+  run env -u BATS_TEST_NAME -u BATS_TEST_FILENAME -u BATS_TMPDIR \
+    PATH="${TMPDIR_STATS}/shim:$PATH" bash "$GEN_STATS_SH" --check
+  assert_success
+  assert_output --partial "in sync"
+}
+
+@test "gen-cast-stats.sh --check verdict is independent of diff (drift + failing diff exits 1 DRIFT DETECTED)" {
+  local orig_json="${TMPDIR_STATS}/cast-stats.json.orig"
+  cp "$CANONICAL_JSON" "$orig_json"
+  jq '.agents = 999' < "$orig_json" > "$CANONICAL_JSON"
+  mkdir -p "${TMPDIR_STATS}/shim"
+  printf '#!/bin/bash\necho "diff: Operation not permitted" >&2\nexit 2\n' > "${TMPDIR_STATS}/shim/diff"
+  chmod +x "${TMPDIR_STATS}/shim/diff"
+  run env -u BATS_TEST_NAME -u BATS_TEST_FILENAME -u BATS_TMPDIR \
+    PATH="${TMPDIR_STATS}/shim:$PATH" bash "$GEN_STATS_SH" --check
+  local result_status=$status
+  local result_output=$output
+  cp "$orig_json" "$CANONICAL_JSON"
+  assert [ "$result_status" -eq 1 ]
+  [[ "$result_output" == *"DRIFT DETECTED"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # 4. cast-stats-drift-check.sh exits 0 with matching --json
 # ---------------------------------------------------------------------------

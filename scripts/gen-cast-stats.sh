@@ -106,12 +106,27 @@ if [[ "$CHECK_MODE" -eq 1 ]]; then
   fi
   CANONICAL=$(echo "$JSON" | jq -S 'del(.updated)')
   COMMITTED=$(jq -S 'del(.updated)' < "$STATS_FILE")
-  if diff_output=$(diff <(echo "$COMMITTED") <(echo "$CANONICAL")); then
+  # Verdict is a plain string compare (no /dev/fd: process substitution fails in a sandbox and
+  # would read as drift); the diff below is display-only.
+  if [[ "$COMMITTED" == "$CANONICAL" ]]; then
     echo "[gen-cast-stats] cast-stats.json is in sync." >&2
     exit 0
   else
     echo "[gen-cast-stats] DRIFT DETECTED — cast-stats.json is stale:" >&2
-    echo "$diff_output" >&2
+    # Display-only: runs in a subshell so a failure here can never change the verdict, and
+    # the trap removes the temp files on any exit or signal.
+    (
+      diff_old="" diff_new=""
+      trap 'rm -f "$diff_old" "$diff_new"' EXIT
+      if diff_old="$(mktemp "${TMPDIR:-/tmp}/gen-cast-stats.XXXXXX" 2>/dev/null)" \
+        && diff_new="$(mktemp "${TMPDIR:-/tmp}/gen-cast-stats.XXXXXX" 2>/dev/null)"; then
+        printf '%s\n' "$COMMITTED" >"$diff_old"
+        printf '%s\n' "$CANONICAL" >"$diff_new"
+        diff "$diff_old" "$diff_new" >&2 || true
+      else
+        echo "(diff unavailable: could not create a temp file)" >&2
+      fi
+    ) || true
     echo "" >&2
     echo "Run: bash scripts/gen-cast-stats.sh  to regenerate." >&2
     exit 1

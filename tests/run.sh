@@ -78,6 +78,15 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
+# macOS BSD mktemp ignores $TMPDIR for template-less calls, which the Claude Code
+# Bash sandbox (Seatbelt) refuses; shim it so bare `mktemp` honours $TMPDIR.
+# Linux/CI GNU mktemp already honours TMPDIR.
+# Marker so tests can tell they were launched via run.sh (vs plain bats / make test).
+export CAST_TESTS_VIA_RUN_SH=1
+if [[ "$(uname -s)" == Darwin ]]; then
+  export PATH="$REPO/tests/helpers/bin:$PATH"
+fi
+
 # Create isolated temp HOME + TAP capture file; register combined cleanup
 TEST_HOME="$(mktemp -d)"
 TAP_OUT="$(mktemp)"

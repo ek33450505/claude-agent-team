@@ -1,0 +1,48 @@
+#!/bin/bash
+# mktemp shim for the BATS harness on macOS. BSD mktemp ignores $TMPDIR when
+# given no template or `-t prefix` and falls back to /var/folders/..., which
+# the Claude Code Bash sandbox (Seatbelt) refuses to write. Rewrite those forms
+# to an explicit template under $TMPDIR; explicit templates pass through.
+base="${TMPDIR:-/tmp}"
+base="${base%/}"
+flags=()
+tmpls=()
+prefix=""
+while (($#)); do
+  case "$1" in
+    --)
+      shift
+      while (($#)); do
+        tmpls+=("$1")
+        shift
+      done
+      ;;
+    -t)
+      if (($# < 2)); then
+        echo "usage: mktemp [-d] [-q] [-t prefix] [-u] template ..." >&2
+        exit 1
+      fi
+      prefix="$2"
+      shift 2
+      ;;
+    -t?*)
+      prefix="${1#-t}"
+      shift
+      ;;
+    -*)
+      flags+=("$1")
+      shift
+      ;;
+    *)
+      tmpls+=("$1")
+      shift
+      ;;
+  esac
+done
+if ((${#tmpls[@]})); then
+  exec /usr/bin/mktemp ${flags[@]+"${flags[@]}"} -- "${tmpls[@]}"
+fi
+if [[ -n "$prefix" ]]; then
+  exec /usr/bin/mktemp ${flags[@]+"${flags[@]}"} "$base/$prefix.XXXXXXXX"
+fi
+exec /usr/bin/mktemp ${flags[@]+"${flags[@]}"} "$base/tmp.XXXXXXXXXX"

@@ -406,7 +406,7 @@ else
   # Use --no-buffer to get progressive output; accumulate lines for cast.db write.
   curl_sse_exit=0
   parse_sse_exit=0
-  sse_tmpfile="$(mktemp)"
+  sse_tmpfile="$(mktemp "${TMPDIR:-/tmp}/cast-managed-agent-sse.XXXXXX")"
 
   # NOTE: this is a 4-stage pipeline (echo|curl|tee|_parse_sse_lines). Under
   # `set -o pipefail` the pipeline's own exit status is the rightmost NONZERO

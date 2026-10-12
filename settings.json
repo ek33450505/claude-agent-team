@@ -16,6 +16,7 @@
     "enabled": true,
     "autoAllowBashIfSandboxed": true,
     "allowUnsandboxedCommands": false,
+    "enableWeakerNetworkIsolation": true,
     "network": {
       "allowedDomains": [
         "github.com",

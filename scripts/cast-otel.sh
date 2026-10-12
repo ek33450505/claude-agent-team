@@ -336,10 +336,16 @@ _status() {
   fi
 
   # Check process
-  if pgrep -qf "cast-otel-collector.py"; then
+  # pgrep exits 1 for "no match" but 3 when the process list is unreadable (sandboxed
+  # shell, e.g. Claude Code's Bash tool) — that is "unknown", not "not running".
+  local _otel_pgrep_rc
+  pgrep -qf "cast-otel-collector.py" && _otel_pgrep_rc=0 || _otel_pgrep_rc=$?
+  if [ "$_otel_pgrep_rc" -eq 0 ]; then
     echo "  ✓ Process running"
-  else
+  elif [ "$_otel_pgrep_rc" -eq 1 ]; then
     echo "  ✗ Process not running"
+  else
+    echo "  ? Process state unknown (process list unavailable — sandboxed shell?)"
   fi
 
   echo ""

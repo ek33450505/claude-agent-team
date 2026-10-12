@@ -101,7 +101,7 @@ _cmd_status() {
   # If gh exits non-zero with empty stdout → NO_PR.
   # If gh exits non-zero with non-empty stderr → transient error → ERROR.
   local probe_out probe_err_file probe_stderr_content probe_rc
-  probe_err_file="$(mktemp)"
+  probe_err_file="$(mktemp "${TMPDIR:-/tmp}/cast-ci-watch.XXXXXX")"
   set +e
   probe_out="$("$GH" pr view "$pr" --json "number" 2>"$probe_err_file")"
   probe_rc=$?

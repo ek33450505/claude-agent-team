@@ -181,6 +181,33 @@ _run_script() {
   assert_output --partial "cast-fixture-a"
 }
 
+# A broken `diff` (sandbox: /dev/fd EPERM -> rc 2) must not change the verdict.
+_broken_diff_shim() {
+  mkdir -p "${FIXTURE_DIR}/shim"
+  printf '#!/bin/bash\necho "diff: Operation not permitted" >&2\nexit 2\n' > "${FIXTURE_DIR}/shim/diff"
+  chmod +x "${FIXTURE_DIR}/shim/diff"
+}
+
+@test "--check verdict is independent of diff: in sync with a failing diff exits 0" {
+  _run_script
+  assert_success
+  _broken_diff_shim
+  PATH="${FIXTURE_DIR}/shim:$PATH" _run_script --check
+  assert_success
+  assert_output --partial "in sync"
+  refute_output --partial "DRIFT"
+}
+
+@test "--check verdict is independent of diff: drift with a failing diff still exits 1 DRIFT DETECTED" {
+  _run_script
+  assert_success
+  printf '9.9.9\n' > "${FIXTURE_REPOS}/cast-fixture-a/VERSION"
+  _broken_diff_shim
+  PATH="${FIXTURE_DIR}/shim:$PATH" _run_script --check
+  assert_failure
+  assert_output --partial "DRIFT DETECTED"
+}
+
 # ---------------------------------------------------------------------------
 # (d) Plausibility floor: non-semver VERSION causes exit 1
 # ---------------------------------------------------------------------------

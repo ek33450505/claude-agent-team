@@ -178,7 +178,7 @@ _scan_all() {
 if [[ "${1:-}" == "--self-test" ]]; then
   echo "[ci-pii-scan] --self-test mode"
 
-  TMPDIR_SELF="$(mktemp -d)"
+  TMPDIR_SELF="$(mktemp -d "${TMPDIR:-/tmp}/cast-pii-scan.XXXXXX")"
   trap 'rm -rf "$TMPDIR_SELF"' EXIT
 
   # Plant a fake anthropic key in a temp file (not in the real tree)

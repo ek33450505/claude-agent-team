@@ -38,7 +38,7 @@ _has_future_import() {
 if [[ "${1:-}" == "--self-test" ]]; then
     echo "[ci-py39-annotations-lint] --self-test mode"
 
-    TMPDIR_SELF="$(mktemp -d)"
+    TMPDIR_SELF="$(mktemp -d "${TMPDIR:-/tmp}/cast-py39-lint.XXXXXX")"
     trap 'rm -f "$TMPDIR_SELF/violation_a.py"; rmdir "$TMPDIR_SELF" 2>/dev/null || true' EXIT
 
     # Plant a file that violates class A (annotation pipe, no future import).
