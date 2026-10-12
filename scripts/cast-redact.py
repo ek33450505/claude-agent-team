@@ -51,8 +51,10 @@ PATTERNS_CONFIG = os.path.expanduser("~/.claude/config/pii-patterns.json")
 
 # Unicode categories removed from the matching VIEW (never from the output): Cf = format
 # (zero-width / BOM / soft hyphen), Mn = nonspacing combining marks, Me = enclosing marks
-# (U+20DD, U+20E3 ...).
-_VIEW_STRIPPED_CATEGORIES = frozenset(("Cf", "Mn", "Me"))
+# (U+20DD, U+20E3 ...), Cs = lone surrogates (invalid UTF-8 bytes decoded with
+# surrogateescape, JSON \\ud800): one spliced into a secret would otherwise split it and
+# leave the halves unredacted, so the view drops it and the joined secret matches.
+_VIEW_STRIPPED_CATEGORIES = frozenset(("Cf", "Mn", "Me", "Cs"))
 
 
 def _hash16(original: str) -> str:
@@ -95,7 +97,9 @@ _STANDARD_FALLBACK_PATTERNS = [
     ("PRIVATE_KEY",     r"-----BEGIN[A-Z ]+(?:PRIVATE KEY|CERTIFICATE)-----"),
     ("API_KEY",         r"(?i)(?:api[_-]?key|apikey|x-api-key)[:\s=]+['\"]?([A-Za-z0-9_\-]{20,})['\"]?"),
     # Paths and URLs
-    ("ABSOLUTE_PATH",   r"(?:/Users/|(?<![\w.\-])/home/)[^/\s]+/[^\s]*"),
+    # /var/home/<user>/ = ostree distros (Silverblue/Kinoite/Bazzite): the (?<![\w.\-]) guard on
+    # /home/ rejects it (preceded by "r"), so /var/home/ is its own alternative.
+    ("ABSOLUTE_PATH",   r"(?:/Users/|/var/home/|(?<![\w.\-])/home/)[^/\s]+/[^\s]*"),
     ("BITBUCKET_URL",   r"bitbucket\.org/[^\s]+"),
     ("SLACK_WEBHOOK",   r"hooks\.slack\.com/[^\s]+"),
     # C1b: additional secret/token vendors (closing redaction-engine gaps for the
@@ -320,7 +324,7 @@ def redact_presidio(text: str, analyzer_results, mode: str) -> str:
 
 def _normalized_view(text: str) -> tuple[str, list[int] | None]:
     """Return (view, index_map) where view is NFKC(text) with every Unicode `Cf`
-    (format), `Mn` (combining mark) and `Me` (enclosing mark) char removed, and
+    (format), `Mn` (combining mark), `Me` (enclosing mark) and `Cs` (lone surrogate) char removed, and
     index_map[i] is the index in `text` of the source char that produced view[i].  Returns (text, None) when the view equals the text
     (all plain ASCII, the common case, short-circuits without allocating a map).
 
@@ -334,7 +338,7 @@ def _normalized_view(text: str) -> tuple[str, list[int] | None]:
 
     Boundaries, by design: stripped chars INSIDE a match are covered by the mapped span
     and TRAILING ones glued to its end are absorbed (see analyze_regex), but LEADING
-    Cf/Mn/Me chars before a match are NOT absorbed -- they are invisible/combining, carry
+    Cf/Mn/Me/Cs chars before a match are NOT absorbed -- they are invisible/combining, carry
     no secret material, and the output must change as little as possible.
     """
     if text.isascii():
@@ -570,14 +574,34 @@ def _emit(output: dict, field: str | None = None) -> None:
       - field absent:  print nothing, exit 1 (triggers the caller's ``|| fallback``)
 
     Default behavior (field=None) is byte-identical to the prior ``print(json.dumps(output))``
-    so existing callers and tests are unaffected.
+    so existing callers and tests are unaffected -- for any output that is encodable.
+
+    Lone surrogates (argv invalid UTF-8 -> surrogateescape \\udcXX, or stdin/--file decoded
+    with surrogates) are not encodable as UTF-8: a bare print() raised UnicodeEncodeError
+    (rc=1, traceback, empty stdout), which a caller's ``|| fallback`` could turn into the
+    UNREDACTED text. Redaction has already run by here, so _write_stdout only makes the
+    output emittable (lone surrogates -> U+FFFD). In redact/mask mode that output is already
+    redacted; analyze mode returns the raw text by design.
     """
     if field is not None:
         if field not in output:
             sys.exit(1)
-        print(output[field])
+        _write_stdout(f"{output[field]}\n")
         sys.exit(0)
-    print(json.dumps(output, ensure_ascii=False))
+    _write_stdout(json.dumps(output, ensure_ascii=False) + "\n")
+
+
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
+def _write_stdout(s: str) -> None:
+    """Write s to stdout; lone surrogates become U+FFFD instead of raising.
+
+    Substituted unconditionally, not only on UnicodeEncodeError: under the C/POSIX locale
+    stdout uses surrogateescape, which would not raise but would emit the raw invalid byte.
+    """
+    sys.stdout.write(_LONE_SURROGATE_RE.sub("\ufffd", s))
+    sys.stdout.flush()
 
 
 def _run_hook_mode() -> None:
@@ -734,7 +758,9 @@ def main():
     # ── Read input ─────────────────────────────────────────────────────────────
     if args.file:
         try:
-            with open(args.file) as f:
+            # surrogateescape: invalid UTF-8 bytes become lone surrogates (redacted, then
+            # emitted as U+FFFD by _emit) instead of aborting the read.
+            with open(args.file, errors="surrogateescape") as f:
                 text = f.read()
         except Exception as e:
             _emit({"error": str(e)}, args.field)
@@ -742,6 +768,10 @@ def main():
     elif args.text:
         text = args.text
     elif not sys.stdin.isatty():
+        # CLI only (hook mode above keeps strict decoding and fails closed): invalid UTF-8 on
+        # stdin must be redacted, not crash the read with a traceback and no output.
+        if hasattr(sys.stdin, "reconfigure"):
+            sys.stdin.reconfigure(errors="surrogateescape")
         text = sys.stdin.read()
     else:
         parser.print_help()

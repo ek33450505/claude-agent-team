@@ -179,3 +179,19 @@ STUB
   grep -q 'boom' "$(_report)"
   grep -q 'groomer non-zero' "$HOME/.claude/logs/hook-errors.log"
 }
+
+@test "--repo with no value: exits 2, stderr message, error logged (no silent unbound-variable abort)" {
+  run --separate-stderr bash "$SCRIPT" --repo
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"ERROR: --repo requires a path"* ]]
+  grep -q -- '--repo requires a path' "$HOME/.claude/logs/hook-errors.log"
+  [ ! -f "$STUB_LOG" ]
+}
+
+@test "--repo with an empty value: exits 2, stderr message, error logged" {
+  run --separate-stderr bash "$SCRIPT" --repo ""
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"ERROR: --repo requires a path"* ]]
+  grep -q -- '--repo requires a path' "$HOME/.claude/logs/hook-errors.log"
+  [ ! -f "$STUB_LOG" ]
+}

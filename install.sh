@@ -133,6 +133,52 @@ if [ -n "$_py_case" ]; then
     exit 1
 fi
 
+# Two top-level scripts/ names that differ only in case (`foo.sh` + `Foo.sh`, both committable
+# on a case-sensitive FS) silently overwrite each other on case-insensitive APFS: the deploy loop
+# ships whichever copies last and the integrity manifest records that winner. Reject before
+# anything is written. bash-3.2 safe (no mapfile / ${x,,} / assoc arrays); the find rc is
+# captured on its own so a pipe can never hide a scan failure (fail closed).
+# The fold is done in python3 (already required by the compile gate below): APFS folds
+# NON-ASCII case too (CAFÉ.sh overwrites café.sh) and is normalization-insensitive (NFC vs NFD
+# `é` collide), and a byte-based `tr` can do neither portably. Key = NFD(casefold(NFD(name))).
+# Names are listed NUL-separated into a temp file so a newline in a name cannot split a key and
+# so the find rc is never hidden by a pipe. python rc: 0 = clean, 3 = collision, else = failure.
+if ! _sc_list="$(mktemp "${TMPDIR:-/tmp}/cast-install-sclist.XXXXXX")"; then
+    error "ERROR: install.sh aborted — could not create a temp file for the case-collision gate."
+    exit 1
+fi
+trap 'rm -f "$_sc_list"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+if ! find "$SCRIPT_DIR/scripts" -mindepth 1 -maxdepth 1 -print0 >"$_sc_list" 2>/dev/null; then
+    error "ERROR: install.sh aborted — could not scan scripts/ for case-colliding file names (find failed)."
+    exit 1
+fi
+_sc_rc=0
+_sc_dup="$(python3 -I -c 'import sys, unicodedata
+seen = {}
+for raw in open(sys.argv[1], "rb").read().split(b"\0"):
+    if not raw:
+        continue
+    base = raw.rsplit(b"/", 1)[-1]
+    n = unicodedata.normalize("NFD", base.decode("utf-8", "surrogateescape"))
+    key = unicodedata.normalize("NFD", n.casefold())
+    if key in seen:
+        sys.stdout.buffer.write(seen[key] + b"\037" + base)
+        sys.exit(3)
+    seen[key] = base' "$_sc_list" 2>/dev/null)" || _sc_rc=$?
+rm -f "$_sc_list"
+trap - EXIT INT TERM HUP
+if [ "$_sc_rc" -eq 3 ]; then
+    _sc_sep=$'\037'
+    error "ERROR: install.sh aborted — scripts/ has two names differing only in case or Unicode normalization (a case-insensitive filesystem lets one overwrite the other at deploy): scripts/$(_cast_clean "${_sc_dup%%"$_sc_sep"*}") and scripts/$(_cast_clean "${_sc_dup#*"$_sc_sep"}")"
+    exit 1
+elif [ "$_sc_rc" -ne 0 ]; then
+    error "ERROR: install.sh aborted — could not check scripts/ for case-colliding file names (python3 failed)."
+    exit 1
+fi
+
 # List every file the deploy loop would ship as a Python script. *.py.template is included:
 # the deploy loop strips `.template`, so x.py.template ships as x.py. -iname so a case-variant
 # in a subdirectory is still compiled.
@@ -199,6 +245,28 @@ for f in sys.argv[1:]:
         exit 1
     fi
 done
+
+# Shell syntax gate: every top-level scripts/*.sh is deployed and executed (hooks included); one
+# that fails to parse disables whatever it guards. /bin/bash is bash 3.2 on macOS, the oldest
+# parser we ship under, so prefer it. PARSE-LEVEL ONLY: `-n` does not catch bash-4 runtime
+# constructs (e.g. mapfile, ${x,,}) that parse fine and fail when executed. -iname so a
+# `.SH` variant is checked too. Fail CLOSED: an unlistable scripts/ aborts.
+if [ -x /bin/bash ]; then _sh_interp=/bin/bash; else _sh_interp=bash; fi
+if ! _sh_list="$(find "$SCRIPT_DIR/scripts" -maxdepth 1 -type f -iname '*.sh' -print 2>/dev/null)"; then
+    error "ERROR: install.sh aborted — could not list scripts/*.sh (find failed)."
+    exit 1
+fi
+while IFS= read -r _sh_file; do
+    [ -n "$_sh_file" ] || continue
+    if ! _sh_out="$("$_sh_interp" -n "$_sh_file" 2>&1)"; then
+        _sh_out="$(printf '%s\n' "$_sh_out" | sed -n 1p)"
+        error "ERROR: install.sh aborted — $(_cast_clean "${_sh_file#"$SCRIPT_DIR"/}") has a shell syntax error under $_sh_interp -n (a hook script that fails to parse disables its guard). Fix it before installing."
+        printf '%s\n' "$(_cast_clean "$_sh_out")" >&2
+        exit 1
+    fi
+done <<EOT
+$_sh_list
+EOT
 
 # --- Backup existing dirs ---
 backup_if_needed() {

@@ -262,11 +262,14 @@ def main(argv: List[str]) -> int:
             return 1
         src = shlex.quote(os.path.join(os.path.abspath(args.repo), "macos", "managed-settings.json"))
         dest = shlex.quote(args.installed)
-        parent = shlex.quote(os.path.dirname(args.installed))
         print("# Run from a COMMITTED, clean tree, and read the source file first.")
         print("# Run in a separate terminal (not via ! inside Claude), then `sudo -k`.")
-        print(f"sudo mkdir -p {parent}")
-        print(f"sudo install -o root -g wheel -m 0644 {src} {dest}")
+        # Short variable-based lines: one long sudo line wrapped on paste and failed.
+        print(f"SRC={src}")
+        print(f"DEST={dest}")
+        # `--` so a leading-dash DEST is a path, not an option, for dirname/install.
+        print('sudo mkdir -p "$(dirname -- "$DEST")"')
+        print('sudo install -o root -g wheel -m 0644 -- "$SRC" "$DEST"')
         print("sudo -k")
     return 0 if ok else 1
 

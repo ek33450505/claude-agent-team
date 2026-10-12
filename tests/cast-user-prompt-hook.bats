@@ -1101,3 +1101,34 @@ PYX
   assert_output "ok"
   rm -rf "$d"
 }
+
+# ---------------------------------------------------------------------------
+# CAST_DB_PATH override: the row lands in the override DB, the default DB is untouched
+# ---------------------------------------------------------------------------
+
+@test "CAST_DB_PATH override → routing_events row lands in override DB, default DB untouched" {
+  local alt="$HOME/alt/override.db"
+  mkdir -p "$(dirname "$alt")"
+  sqlite3 "$alt" "CREATE TABLE routing_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, timestamp TEXT, prompt_preview TEXT, action TEXT, matched_route TEXT, match_type TEXT, pattern TEXT, confidence TEXT, project TEXT, event_type TEXT, data TEXT);"
+  # Remove the default DB that setup() created so "not created" is observable
+  rm -f "$HOME/.claude/cast.db"
+  CAST_DB_PATH="$alt" run bash "$HOOK_SH" <<< "$(make_payload override-sess 'Override db path prompt')"
+  assert_success
+  run sqlite3 "$alt" "SELECT COUNT(*) FROM routing_events WHERE session_id='override-sess' AND event_type='user_prompt_submit'"
+  assert_output "1"
+  [ ! -e "$HOME/.claude/cast.db" ]
+}
+
+@test "refused CAST_DB_PATH → exit 0, nothing written anywhere, refusal logged (class only, no path)" {
+  # a db inside a ~/.claude subdirectory is refused by cast_db.validate_db_path
+  local bad="$HOME/.claude/sub/x.db"
+  rm -f "$HOME/.claude/cast.db"
+  CAST_DB_PATH="$bad" run bash "$HOOK_SH" <<< "$(make_payload refused-sess 'Refused db path prompt')"
+  assert_success
+  [ ! -e "$bad" ]
+  [ ! -e "$HOME/.claude/cast.db" ]
+  run grep -F "CAST_DB_PATH refused — routing_events row skipped (ValueError)" "$HOME/.claude/logs/hook-errors.log"
+  assert_success
+  run grep -F "$bad" "$HOME/.claude/logs/hook-errors.log"
+  assert_failure
+}
