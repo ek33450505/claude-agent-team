@@ -280,7 +280,7 @@ if [[ -d "${REPO_ROOT}/skills" ]]; then
   # work tree, corrupted index, etc.) ABORT rather than falling back to a
   # working-tree `cp -r` — a silent fallback would reintroduce this exact
   # leak, invisibly, in CI, a tarball build, or a fresh clone.
-  _skills_tracked_list="$(mktemp)"
+  _skills_tracked_list="$(mktemp "${TMPDIR:-/tmp}/cast-gen-plugin.XXXXXX")"
   if ! cast_git_safe "${REPO_ROOT}" ls-files -z -- 'skills' > "${_skills_tracked_list}"; then
     printf 'ERROR: git ls-files failed for skills/ — refusing to fall back to a working-tree copy (fail closed)\n' >&2
     rm -f "${_skills_tracked_list}"
@@ -347,7 +347,7 @@ if [[ -d "${REPO_ROOT}/commands" ]]; then
   # Bundle only git-tracked *.md files — same untracked-content guard as
   # skills/ above (fail closed; no working-tree fallback; see the comment
   # on that block for the full rationale).
-  _commands_tracked_list="$(mktemp)"
+  _commands_tracked_list="$(mktemp "${TMPDIR:-/tmp}/cast-gen-plugin.XXXXXX")"
   if ! cast_git_safe "${REPO_ROOT}" ls-files -z -- 'commands/*.md' > "${_commands_tracked_list}"; then
     printf 'ERROR: git ls-files failed for commands/ — refusing to fall back to a working-tree glob (fail closed)\n' >&2
     rm -f "${_commands_tracked_list}"
