@@ -13,6 +13,7 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 SCRIPT="$REPO_DIR/scripts/check-docs-deletion.sh"
@@ -30,6 +31,7 @@ _make_fixture_repo() {
   tmpdir="$(mktemp -d)"
 
   git init -q "$tmpdir"
+  cast_git_fixture_quiet "$tmpdir"
   git -C "$tmpdir" config user.email "test@example.com"
   git -C "$tmpdir" config user.name "CAST Test"
 
@@ -85,6 +87,7 @@ teardown() {
   TEST_FIXTURES+=("$repo")
 
   git init -q "$repo"
+  cast_git_fixture_quiet "$repo"
   git -C "$repo" config user.email "test@example.com"
   git -C "$repo" config user.name "CAST Test"
 
@@ -117,6 +120,7 @@ teardown() {
   TEST_FIXTURES+=("$repo")
 
   git init -q "$repo"
+  cast_git_fixture_quiet "$repo"
   git -C "$repo" config user.email "test@example.com"
   git -C "$repo" config user.name "CAST Test"
 
@@ -145,6 +149,7 @@ teardown() {
   TEST_FIXTURES+=("$repo")
 
   git init -q "$repo"
+  cast_git_fixture_quiet "$repo"
   git -C "$repo" config user.email "test@example.com"
   git -C "$repo" config user.name "CAST Test"
 
@@ -174,6 +179,7 @@ teardown() {
   TEST_FIXTURES+=("$repo")
 
   git init -q "$repo"
+  cast_git_fixture_quiet "$repo"
   git -C "$repo" config user.email "test@example.com"
   git -C "$repo" config user.name "CAST Test"
 
@@ -204,6 +210,7 @@ teardown() {
   TEST_FIXTURES+=("$repo")
 
   git init -q "$repo"
+  cast_git_fixture_quiet "$repo"
   git -C "$repo" config user.email "test@example.com"
   git -C "$repo" config user.name "CAST Test"
 
@@ -235,6 +242,7 @@ teardown() {
   TEST_FIXTURES+=("$repo")
 
   git init -q "$repo"
+  cast_git_fixture_quiet "$repo"
   git -C "$repo" config user.email "test@example.com"
   git -C "$repo" config user.name "CAST Test"
 

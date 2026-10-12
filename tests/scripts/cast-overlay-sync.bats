@@ -4,6 +4,8 @@
 # All tests use isolated temp dirs and a real git repo (not mocks).
 # HARD RULE: never touch the real repo or $HOME.
 
+load '../helpers/setup'
+
 setup() {
   # Create isolated directories
   BATS_OVERLAY_DIR="$BATS_TEST_TMPDIR/overlay"
@@ -29,6 +31,7 @@ setup() {
   # Initialize the overlay source as a bare git repo
   cd "$BATS_OVERLAY_SOURCE"
   git init -q --bare
+  cast_git_fixture_quiet
   cd - >/dev/null
 
   # Resolve the repo directory
@@ -71,6 +74,7 @@ teardown() {
   mkdir -p "$TEMP_CLONE"
   cd "$TEMP_CLONE"
   git init -q
+  cast_git_fixture_quiet
   git config user.email "test@example.com"
   git config user.name "Test User"
   touch README.md
@@ -106,6 +110,7 @@ teardown() {
   mkdir -p "$TEMP_CLONE"
   cd "$TEMP_CLONE"
   git init -q
+  cast_git_fixture_quiet
   git config user.email "test@example.com"
   git config user.name "Test User"
   touch README.md
@@ -143,6 +148,7 @@ teardown() {
   mkdir -p "$TEMP_CLONE"
   cd "$TEMP_CLONE"
   git init -q
+  cast_git_fixture_quiet
   git config user.email "test@example.com"
   git config user.name "Test User"
   touch README.md

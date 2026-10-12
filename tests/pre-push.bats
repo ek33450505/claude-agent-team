@@ -22,6 +22,7 @@ setup() {
   # Create a minimal test fixture git repo
   TEST_REPO="$(mktemp -d)"
   git init -q "$TEST_REPO"
+  cast_git_fixture_quiet "$TEST_REPO"
   git -C "$TEST_REPO" config user.email "test@example.com"
   git -C "$TEST_REPO" config user.name "CAST Test"
   git -C "$TEST_REPO" commit -q --allow-empty -m "init"

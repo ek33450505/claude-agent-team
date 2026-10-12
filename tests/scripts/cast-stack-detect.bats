@@ -6,6 +6,8 @@
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/../.." && pwd)"
 SCRIPT="$REPO_DIR/scripts/cast-stack-detect.sh"
 
+load '../helpers/setup'
+
 setup() {
   FAKE_REPO="$BATS_TEST_TMPDIR/fake-repo"
   FAKE_HOME="$BATS_TEST_TMPDIR/home"
@@ -17,6 +19,7 @@ setup() {
 # must make the target one. Quiet, no user config needed (init only).
 git_init() {
   git init -q "$1"
+  cast_git_fixture_quiet "$1"
 }
 
 # ── Test 1: vite-react (non-TS) detected from package.json ───────────────

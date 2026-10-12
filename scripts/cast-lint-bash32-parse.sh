@@ -145,17 +145,42 @@ for root in "${SCAN_ROOTS[@]}"; do
 	done < <(find "${root}" -type f -print 2>/dev/null | sort)
 done
 
-if [[ ${#BASH_FILES[@]} -eq 0 ]]; then
-	echo "ERROR [cast-lint-bash32-parse]: scanned 0 bash-shebang files under: ${SCAN_ROOTS[*]} — refusing to pass on empty input" >&2
+# Second scan: .bats files (see header SCOPE). Same CAST_LINT_BASH32_DIR override.
+BATS_FILES=()
+if [[ -n "${CAST_LINT_BASH32_DIR:-}" ]]; then
+	BATS_ROOT="${CAST_LINT_BASH32_DIR}"
+else
+	BATS_ROOT="${REPO_ROOT}/tests"
+fi
+if [[ -d "${BATS_ROOT}" ]]; then
+	while IFS= read -r f; do
+		[[ -f "${f}" ]] && BATS_FILES+=("${f}")
+	done < <(find "${BATS_ROOT}" -type f -name '*.bats' ! -path "${BATS_ROOT}/test_helper/*" -print 2>/dev/null | sort)
+fi
+
+if [[ $((${#BASH_FILES[@]} + ${#BATS_FILES[@]})) -eq 0 ]]; then
+	echo "ERROR [cast-lint-bash32-parse]: scanned 0 bash-shebang or .bats files under: ${SCAN_ROOTS[*]} — refusing to pass on empty input" >&2
 	exit 1
 fi
 
 errors=0
 declare -a error_report=()
 
-for f in "${BASH_FILES[@]}"; do
+for f in "${BASH_FILES[@]+"${BASH_FILES[@]}"}"; do
 	err_out=""
 	if ! err_out="$("${BASH_BIN}" -n "${f}" 2>&1)"; then
+		errors=$((errors + 1))
+		error_report+=("${f}")
+		error_report+=("${err_out}")
+	fi
+done
+
+# NOTE: the rewrite masks the test NAME (bats never executes it as a function).
+# Rewrite `@test "name" {` headers to function headers (line count preserved),
+# then parse the result from stdin; errors are labelled with the real path.
+for f in "${BATS_FILES[@]+"${BATS_FILES[@]}"}"; do
+	err_out=""
+	if ! err_out="$(sed -E 's/^[[:space:]]*@test[[:space:]].*\{([[:space:]]*#.*)?[[:space:]]*$/_bats_test_N() {/' "${f}" | "${BASH_BIN}" -n 2>&1)"; then
 		errors=$((errors + 1))
 		error_report+=("${f}")
 		error_report+=("${err_out}")
@@ -175,7 +200,7 @@ if [[ "${errors}" -gt 0 ]]; then
 	exit 1
 fi
 
-echo "OK [cast-lint-bash32-parse]: ${#BASH_FILES[@]} bash-shebang file(s) parse clean under ${BASH_BIN}"
+echo "OK [cast-lint-bash32-parse]: ${#BASH_FILES[@]} bash-shebang file(s) + ${#BATS_FILES[@]} .bats file(s) parse clean under ${BASH_BIN}"
 
 # --- Bash-4-only builtin check (separate mechanism from -n above; see header) ---
 # `-n` cannot see this class of bug: mapfile/readarray parse fine on 3.2 and
@@ -187,13 +212,13 @@ echo "[cast-lint-bash32-parse] checking for bash-4-only builtins (mapfile, reada
 builtin_errors=0
 declare -a builtin_report=()
 
-for f in "${BASH_FILES[@]}"; do
+for f in "${BASH_FILES[@]+"${BASH_FILES[@]}"}" "${BATS_FILES[@]+"${BATS_FILES[@]}"}"; do
 	# Exclude this lint script's OWN file: the grep pattern immediately
 	# below contains the literal words "mapfile"/"readarray" as CODE (not
 	# just a comment), which would otherwise self-match — the same
 	# self-match trap tests/skip-ledger-drift.bats handles by excluding
 	# its own filename from the enumeration it verifies.
-	[[ "${f}" == *"cast-lint-bash32-parse.sh" ]] && continue
+	[[ "${f}" == *"cast-lint-bash32-parse.sh" || "${f}" == *"/cast-lint-bash32-parse.bats" ]] && continue
 
 	hits=$(grep -nE '(^|[^#[:alnum:]_])(mapfile|readarray)([[:space:]]|$)' "${f}" 2>/dev/null |
 		grep -vE '^[0-9]+:[[:space:]]*#' || true)

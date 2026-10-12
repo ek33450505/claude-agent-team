@@ -12,69 +12,69 @@
     },
     {
       "table": "agent_runs",
-      "writers": ["cast-subagent-start-hook.sh:155", "cast-subagent-start-hook.sh:160"],
+      "writers": ["cast-subagent-start-hook.sh:190", "cast-subagent-start-hook.sh:195"],
       "cadence": "per_agent_run",
       "status": "live"
     },
     {
       "table": "agent_truncations",
-      "writers": ["cast_subagent_stop.py:964"],
+      "writers": ["cast_subagent_stop.py:1898"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "agent_protocol_violations",
-      "writers": ["cast_subagent_stop.py:1469"],
+      "writers": ["cast_subagent_stop.py:2429"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "quality_gates",
-      "writers": ["cast_subagent_stop.py:1219", "orchestrate-dispatch.py:139", "write-guards.py:130"],
+      "writers": ["cast_subagent_stop.py:2165", "orchestrate-dispatch.py:138", "write-guards.py:148"],
       "cadence": "per_agent_run",
       "status": "live",
       "notes": "gate_type populated from 2026-07-03"
     },
     {
       "table": "agent_hallucinations",
-      "writers": ["cast_claimed_work_verifier.py:206"],
+      "writers": ["cast_claimed_work_verifier.py:251"],
       "cadence": "per_agent_run",
       "status": "live",
       "notes": "records [VERIFIED] confirmations from 2026-07-03"
     },
     {
       "table": "agent_memories",
-      "writers": ["cast-memory-write.sh", "cast-memory-router.py:374", "cast-session-end.sh:401", "cast-memory-facts-write.py"],
+      "writers": ["cast-memory-write.sh", "cast-memory-router.py:555", "cast-session-end.sh:431", "cast-memory-facts-write.py"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "injection_log",
-      "writers": ["cast-memory-router.py:242"],
+      "writers": ["cast-memory-router.py:243"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "routing_events",
-      "writers": ["cast-user-prompt-hook.sh:142", "cast_subagent_stop.py:1549", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
+      "writers": ["cast-user-prompt-hook.sh:142", "cast_subagent_stop.py:2509", "cast-db-log.py (via cast-events.sh, cast-parallel.sh)"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "dispatch_decisions",
-      "writers": ["cast-pretool-dispatch.py:319"],
+      "writers": ["cast-pretool-dispatch.py:1073"],
       "cadence": "per_agent_run",
       "status": "live"
     },
     {
       "table": "dispatch_events",
-      "writers": ["cast-cookbook-drift.sh:60"],
+      "writers": ["cast-cookbook-drift.sh:66"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "file_writes",
-      "writers": ["cast-post-tool.py:333"],
+      "writers": ["cast-post-tool.py:755"],
       "cadence": "per_tool_call",
       "status": "live",
       "notes": "run_id attributable from 2026-07-03"
@@ -87,13 +87,13 @@
     },
     {
       "table": "completeness_events",
-      "writers": ["cast_subagent_stop.py:1025"],
+      "writers": ["cast_subagent_stop.py:1960"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "stop_failure_events",
-      "writers": ["cast-stop-failure-hook.sh:184"],
+      "writers": ["cast-stop-failure-hook.sh:187"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -105,7 +105,7 @@
     },
     {
       "table": "swarm_sessions",
-      "writers": ["cast-teammate-idle-hook.sh:74", "cast-task-completed-hook.sh:74"],
+      "writers": ["cast-teammate-idle-hook.sh:81", "cast-task-completed-hook.sh:81"],
       "cadence": "per_event",
       "status": "live",
       "notes": "closer: cast-session-end.sh; reaper: cast-abandon-stale-runs.py; closer added 2026-07-03"
@@ -119,7 +119,7 @@
     },
     {
       "table": "task_queue",
-      "writers": ["cast-queue-add.sh:164", "cast-task-created-hook.sh:84"],
+      "writers": ["cast-queue-add.sh:168", "cast-task-created-hook.sh:88"],
       "cadence": "per_event",
       "status": "live",
       "notes": "write-only by design; consumer removed v9 I9"
@@ -132,19 +132,19 @@
     },
     {
       "table": "commit_provenance",
-      "writers": ["cast-commit-provenance.py:50", "cast-post-tool.py:part5_commit_provenance (PostToolUse hook; sandbox-safe writer)"],
+      "writers": ["cast-commit-provenance.py:93", "cast-post-tool.py:part5_commit_provenance (PostToolUse hook; sandbox-safe writer)"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "provenance_chain",
-      "writers": ["cast-provenance-chain.py:141"],
+      "writers": ["cast-provenance-chain.py:228"],
       "cadence": "per_event",
       "status": "live"
     },
     {
       "table": "incidents",
-      "writers": ["cast_subagent_stop.py:1713", "cast-abandon-stale-runs.py:137"],
+      "writers": ["cast_subagent_stop.py:2677", "cast-abandon-stale-runs.py:524"],
       "cadence": "per_event",
       "status": "live"
     },
@@ -156,14 +156,14 @@
     },
     {
       "table": "otel_events",
-      "writers": ["cast-otel-collector.py:296"],
+      "writers": ["cast-otel-collector.py:297"],
       "cadence": "per_event",
       "status": "live",
       "notes": "max received_at 2026-07-02 — collector possibly stalled; flagged 2026-07-03"
     },
     {
       "table": "otel_metrics",
-      "writers": ["cast-otel-collector.py:279"],
+      "writers": ["cast-otel-collector.py:280"],
       "cadence": "per_event",
       "status": "live",
       "notes": "max received_at 2026-07-02 — collector possibly stalled; flagged 2026-07-03"
@@ -177,13 +177,13 @@
     },
     {
       "table": "eval_runs",
-      "writers": ["cast-eval-runner.py:600"],
+      "writers": ["cast-eval-runner.py:614"],
       "cadence": "on_demand",
       "status": "live"
     },
     {
       "table": "budgets",
-      "writers": ["bin/cast:1417"],
+      "writers": ["bin/cast:1620"],
       "cadence": "on_demand",
       "status": "live"
     },
@@ -203,7 +203,7 @@
     },
     {
       "table": "record_embed",
-      "writers": ["cast-ask-index.py:560 (--embed)"],
+      "writers": ["cast-ask-index.py:696 (--embed)"],
       "cadence": "daily",
       "status": "live",
       "notes": "live from 2026-07-03 (maintenance step)"
@@ -268,7 +268,7 @@
     },
     {
       "table": "ack_events",
-      "writers": ["cast_ack.py:146", "cast-git-guard.py:1847", "cast-events.sh:623", "cast-neon.sh:270"],
+      "writers": ["cast_ack.py:146", "cast-git-guard.py:_record_hatch (shells out to cast_ack.py, which db_writes ack_events)", "cast-events.sh:_record_hatch_ack (shells out to cast_ack.py, which db_writes ack_events)", "cast-neon.sh:CAST_NEON_BRANCH_DELETE_OK (branch-delete arm shells out to cast_ack.py, which db_writes ack_events)"],
       "cadence": "per_hatch_use",
       "status": "live",
       "notes": "NEW v10 (migration 034). A row means the op was PERMITTED, not that it ran (PreToolUse). Recording is gated on the hatch actually averting a block — a harmless hatched command records nothing. `value` is USER-SUPPLIED FREE TEXT when CAST_HATCH_REASON is set (sanitized, <=500 chars); never render it as evidence of what executed. has_reason=0 iff value is a bare 1/true/yes. Capped at 8 records per command; overflow emits ONE sentinel row with variable='CAST_HATCH_RECORD_CAP' — exclude it from hatch counts. created_at is SQLite space format ('YYYY-MM-DD HH:MM:SS'), not ISO-T/Z. Reader: cast-ask-index.py:330 (kind='hatch')."

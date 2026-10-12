@@ -44,6 +44,7 @@ _make_fixture_repo() {
   tmpdir="$(mktemp -d)"
 
   git init -q "$tmpdir"
+  cast_git_fixture_quiet "$tmpdir"
   git -C "$tmpdir" config user.email "test@example.com"
   git -C "$tmpdir" config user.name "CAST Test"
 

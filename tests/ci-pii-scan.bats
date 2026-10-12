@@ -3,6 +3,7 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
 
 REPO_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 SCRIPT="$REPO_DIR/scripts/ci-pii-scan.sh"
@@ -24,13 +25,14 @@ _run_scan() {
   local rc=0
   out=$(
     cd "$tmpdir" || exit 1
-    git init -q
-    git config user.email "ci@example.com"
-    git config user.name "CI"
+    git init -q || exit 97
+    cast_git_fixture_quiet || exit 97
+    git config user.email "ci@example.com" || exit 97
+    git config user.name "CI" || exit 97
     # Create file and track it (git ls-files needs it staged/tracked)
-    mkdir -p "$(dirname "$filename")"
-    printf '%s' "$content" > "$filename"
-    git add "$filename"
+    mkdir -p "$(dirname "$filename")" || exit 97
+    printf '%s' "$content" > "$filename" || exit 97
+    git add "$filename" || exit 97
     bash "$SCRIPT" 2>&1
   ) || rc=$?
 
@@ -162,13 +164,14 @@ echo "$FAKE_PATH"
   local out rc=0
   out=$(
     cd "$tmpdir" || exit 1
-    git init -q
-    git config user.email "ci@example.com"
-    git config user.name "CI"
-    mkdir -p scripts
-    printf '%s\n' '#!/usr/bin/env bash' > scripts/pre-push-ci-check.sh
-    printf '%s\n' '# /Users/johnsmith/Projects is documented here intentionally' >> scripts/pre-push-ci-check.sh
-    git add scripts/pre-push-ci-check.sh
+    git init -q || exit 97
+    cast_git_fixture_quiet || exit 97
+    git config user.email "ci@example.com" || exit 97
+    git config user.name "CI" || exit 97
+    mkdir -p scripts || exit 97
+    printf '%s\n' '#!/usr/bin/env bash' > scripts/pre-push-ci-check.sh || exit 97
+    printf '%s\n' '# /Users/johnsmith/Projects is documented here intentionally' >> scripts/pre-push-ci-check.sh || exit 97
+    git add scripts/pre-push-ci-check.sh || exit 97
     bash "$SCRIPT" 2>&1
   ) || rc=$?
 

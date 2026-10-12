@@ -71,7 +71,7 @@ case "${1:-}" in
 esac
 echo "$_PRUNE_ERR"
 EOF
-  CAST_LINT_BASH32_BASH="$probe_bash" CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_BASH="$probe_bash" CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
   assert_failure
   assert_output --partial "bad.sh"
   assert_output --partial "BLOCKED"
@@ -89,13 +89,13 @@ PRUNE_SQL
 )"
 echo "$OUT"
 EOF
-  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
   assert_success
   assert_output --partial "parse clean"
 }
 
 @test "bash32-parse-lint --help exits 0 and prints usage" {
-  run bash "$LINT_SCRIPT" --help
+  run /bin/bash "$LINT_SCRIPT" --help
   assert_success
   assert_output --partial "Usage"
 }
@@ -108,7 +108,7 @@ EOF
 set -euo pipefail
 echo "hi"
 EOF
-  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
   assert_success
   assert_output --partial "WEAKER on Linux"
 }
@@ -116,7 +116,7 @@ EOF
 @test "bash32-parse-lint exits 1 with scanned-0 error for an empty directory" {
   local d="$BATS_TEST_TMPDIR/scan-empty"
   mkdir -p "$d"
-  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
   assert_failure
   assert_output --partial "scanned 0"
 }
@@ -134,7 +134,7 @@ set -euo pipefail
 mapfile -t lines < <(printf '%s\n' a b c)
 printf '%s\n' "${lines[@]}"
 EOF
-  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
   assert_failure
   assert_output --partial "uses-mapfile.sh"
   assert_output --partial "bash-4-only builtin"
@@ -149,7 +149,7 @@ set -euo pipefail
 readarray -t lines < <(printf '%s\n' a b c)
 printf '%s\n' "${lines[@]}"
 EOF
-  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
   assert_failure
   assert_output --partial "uses-readarray.sh"
   assert_output --partial "bash-4-only builtin"
@@ -169,7 +169,7 @@ lines=()
 while IFS= read -r l; do lines+=("$l"); done < <(printf '%s\n' a b c)
 printf '%s\n' "${lines[@]}"
 EOF
-  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
   assert_success
   assert_output --partial "0 bash-4-only builtin"
 }
@@ -186,7 +186,86 @@ EOF
 set -euo pipefail
 echo "hi"
 EOF
-  CAST_LINT_BASH32_DIR="$d" run bash "$LINT_SCRIPT"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
   assert_success
   assert_output --partial "1 bash-shebang"
+}
+
+# --- .bats scanning (the @test token is built at runtime; never literal in fixtures) ---
+
+@test "bash32-parse-lint passes a .bats-only fixture with a valid test block" {
+  local d="$BATS_TEST_TMPDIR/scan-bats-good"
+  mkdir -p "$d"
+  local at='@'
+  {
+    printf '#!/usr/bin/env bats\n'
+    printf '%stest "x" {\n' "$at"
+    printf '  run echo hi\n'
+    printf '  [ "$status" -eq 0 ]\n'
+    printf '}\n'
+  } > "$d/good.bats"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
+  assert_success
+  assert_output --partial "1 .bats file"
+}
+
+@test "bash32-parse-lint BLOCKS a .bats file with a bash-3.2-only construct and names it" {
+  local probe_bash="${CAST_LINT_BASH32_BASH:-/bin/bash}"
+  if "$probe_bash" -n <<'PROBE_EOF' 2>/dev/null
+case "x" in
+  a) echo a ;;&
+  b) echo b ;;
+esac
+PROBE_EOF
+  then
+    skip "${probe_bash} parses ';;&' cleanly; bash-3.2 .bats detection not exercisable here (covered by bats-macos CI)."
+  fi
+
+  local d="$BATS_TEST_TMPDIR/scan-bats-bad"
+  mkdir -p "$d"
+  local at='@'
+  {
+    printf '#!/usr/bin/env bats\n'
+    printf '%stest "y" {\n' "$at"
+    printf '  case "$1" in\n'
+    printf '    a) echo a ;;&\n'
+    printf '    b) echo b ;;\n'
+    printf '  esac\n'
+    printf '}\n'
+  } > "$d/bad-fixture.bats"
+  CAST_LINT_BASH32_BASH="$probe_bash" CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
+  assert_failure
+  assert_output --partial "bad-fixture.bats"
+  assert_output --partial "BLOCKED"
+}
+
+@test "bash32-parse-lint BLOCKS a .bats file that invokes the bash-4-only mapfile builtin" {
+  local d="$BATS_TEST_TMPDIR/scan-bats-mapfile"
+  mkdir -p "$d"
+  local at='@' mf='map''file'
+  {
+    printf '#!/usr/bin/env bats\n'
+    printf '%stest "z" {\n' "$at"
+    printf '  %s -t lines < <(printf "a\\n")\n' "$mf"
+    printf '}\n'
+  } > "$d/uses-mapfile-fixture.bats"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
+  assert_failure
+  assert_output --partial "uses-mapfile-fixture.bats"
+  assert_output --partial "bash-4-only builtin"
+}
+
+@test "bash32-parse-lint accepts a test header with a trailing comment" {
+  local d="$BATS_TEST_TMPDIR/scan-bats-comment"
+  mkdir -p "$d"
+  local at='@'
+  {
+    printf '#!/usr/bin/env bats\n'
+    printf '%stest "c" { # note\n' "$at"
+    printf '  true\n'
+    printf '}\n'
+  } > "$d/comment.bats"
+  CAST_LINT_BASH32_DIR="$d" run /bin/bash "$LINT_SCRIPT"
+  assert_success
+  assert_output --partial "1 .bats file"
 }

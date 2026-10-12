@@ -46,11 +46,14 @@ else
 fi
 
 # Declare blast radius for the mktemp restore directory.
-# Prefixes canonicalize at registration: /tmp → /private/tmp on macOS.
+# One base shared by the declaration and mktemp so the radius always covers
+# the created dir. Prefixes canonicalize at registration (parent realpath),
+# so symlinked bases (/tmp, /var -> /private/...) resolve. TMPDIR may end in "/".
+_VERIFY_TMP_BASE="${TMPDIR:-/tmp}"
+_VERIFY_TMP_BASE="${_VERIFY_TMP_BASE%/}"
+[[ -n "$_VERIFY_TMP_BASE" ]] || _VERIFY_TMP_BASE=/tmp
 _VERIFY_TMP_PREFIX="cast-ls-verify-"
-cast_declare_blast_radius \
-  "/tmp/${_VERIFY_TMP_PREFIX}" \
-  "/private/tmp/${_VERIFY_TMP_PREFIX}"
+cast_declare_blast_radius "${_VERIFY_TMP_BASE}/${_VERIFY_TMP_PREFIX}"
 
 # ---- Resolve paths ----------------------------------------------------------
 
@@ -115,7 +118,7 @@ fi
 
 # ---- Step 4: restore --------------------------------------------------------
 
-RESTORE_TMP="$(mktemp -d "/tmp/${_VERIFY_TMP_PREFIX}XXXXXX")"
+RESTORE_TMP="$(mktemp -d "${_VERIFY_TMP_BASE}/${_VERIFY_TMP_PREFIX}XXXXXX")"
 RESTORED_DB="${RESTORE_TMP}/restored.db"
 
 echo "[cast-litestream-verify] Restoring replica → ${RESTORED_DB} ..."

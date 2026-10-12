@@ -18,6 +18,7 @@ _git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
 _mk_repo() {
   mkdir -p "$1"
   _git init -q "$1"
+  cast_git_fixture_quiet "$1"
 }
 
 # Copy repo scripts into the simulated installed location.

@@ -44,6 +44,7 @@ _make_retired_repo() {
     (
         cd "$repo_dir" || exit 1
         git init -q
+        cast_git_fixture_quiet
         git config user.email "bats@example.com"
         git config user.name "bats-test"
         touch "scripts/$basename"
@@ -512,7 +513,7 @@ EOF
     local fake_repo="$BATS_TEST_TMPDIR/fake-repo"
     mkdir -p "$fake_repo/a" "$fake_repo/b"
     touch "$fake_repo/a/dup.md" "$fake_repo/b/dup.md"
-    ( cd "$fake_repo" && git init -q && git add -A )
+    ( cd "$fake_repo" && git init -q && cast_git_fixture_quiet && git add -A )
 
     run python3 -c "
 import sys
@@ -916,7 +917,7 @@ EOF
     local fake_repo="$BATS_TEST_TMPDIR/mirror-repo"
     mkdir -p "$fake_repo/agents/core" "$fake_repo/plugin/agents"
     touch "$fake_repo/agents/core/planner.md" "$fake_repo/plugin/agents/planner.md"
-    ( cd "$fake_repo" && git init -q && git add -A )
+    ( cd "$fake_repo" && git init -q && cast_git_fixture_quiet && git add -A )
 
     run python3 -c "
 import sys, importlib.util
@@ -936,7 +937,7 @@ print('OK resolved to the source, not the mirror')
     mkdir -p "$fake_repo/skills/a" "$fake_repo/skills/b" "$fake_repo/plugin/skills/a"
     touch "$fake_repo/skills/a/SKILL.md" "$fake_repo/skills/b/SKILL.md" \
           "$fake_repo/plugin/skills/a/SKILL.md"
-    ( cd "$fake_repo" && git init -q && git add -A )
+    ( cd "$fake_repo" && git init -q && cast_git_fixture_quiet && git add -A )
 
     run python3 -c "
 import sys, importlib.util

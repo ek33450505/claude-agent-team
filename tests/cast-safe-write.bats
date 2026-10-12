@@ -59,6 +59,7 @@ _mk_stats_fixture() {
   tok='@te''st'
   mkdir -p "$root"
   _git init -q "$root"
+  cast_git_fixture_quiet "$root"
   printf '1.2.3\n' >"$root/VERSION"
   mkdir -p "$root/agents/core" "$root/commands" "$root/skills" "$root/tests" "$root/scripts"
   for i in $(seq 1 22); do printf 'a\n' >"$root/agents/core/a${i}.md"; done
@@ -343,6 +344,7 @@ _mk_eco_fixture() {
   _install gen-plugin.sh cast-guard-lib.sh
   mkdir -p "$FIX" "$HOME/elsewhere"
   _git init -q "$FIX"
+  cast_git_fixture_quiet "$FIX"
   printf '1.2.3\n' >"$FIX/VERSION"
   printf 'keep\n' >"$HOME/elsewhere/keep.txt"
   ln -s "$HOME/elsewhere" "$FIX/plugin"
@@ -384,6 +386,7 @@ _mk_eco_fixture() {
   _install cast-test-coverage-advisory.sh
   mkdir -p "$FIX/scripts"
   _git init -q "$FIX"
+  cast_git_fixture_quiet "$FIX"
   printf 'x\n' >"$FIX/scripts/x.sh"
   _git -C "$FIX" add scripts/x.sh
   _canary "$HOME/fsm.sh" "$HOME/FSMARK"
@@ -403,6 +406,7 @@ _mk_eco_fixture() {
   _install gen-plugin.sh cast-guard-lib.sh
   mkdir -p "$FIX/scripts"
   _git init -q "$FIX"
+  cast_git_fixture_quiet "$FIX"
   printf '1.2.3\n' >"$FIX/VERSION"
   printf 'x\n' >"$FIX/scripts/x.sh"
   _git -C "$FIX" add -A
@@ -423,6 +427,7 @@ _mk_eco_fixture() {
   _install pre-push-ci-check.sh
   mkdir -p "$FIX"
   _git init -q "$FIX"
+  cast_git_fixture_quiet "$FIX"
   printf 'one\n' >"$FIX/f.txt"
   _git -C "$FIX" add f.txt
   _commit "$FIX" one

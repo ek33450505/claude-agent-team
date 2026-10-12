@@ -573,6 +573,7 @@ prepush_fixture() {
     PP_REPO="$BATS_TEST_TMPDIR/pp-repo"
     mkdir -p "$PP_REPO"
     git init -q "$PP_REPO"
+    cast_git_fixture_quiet "$PP_REPO"
     seed_prepush_install
     printf '%s\n' \
         '#!/usr/bin/env python3' \

@@ -27,6 +27,7 @@ HOOK="$REPO_DIR/.githooks/post-merge"
 _init_repo() {
   local repo="$1"
   git init -q "$repo"
+  cast_git_fixture_quiet "$repo"
   git -C "$repo" config user.email "test@cast"
   git -C "$repo" config user.name "CAST Test"
   # Initial commit

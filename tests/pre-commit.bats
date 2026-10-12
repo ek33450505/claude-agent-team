@@ -30,6 +30,7 @@ setup() {
   # Initialize a git repo for testing
   cd "$TEST_REPO"
   git init --initial-branch=main >/dev/null 2>&1
+  cast_git_fixture_quiet
   git config user.email "test@example.com"
   git config user.name "BATS Test"
 

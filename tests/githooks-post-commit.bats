@@ -24,6 +24,7 @@ setup() {
     mkdir -p "$TEST_REPO"
     cd "$TEST_REPO"
     git init -q
+    cast_git_fixture_quiet
     git config user.email "test@example.com"
     git config user.name "Test User"
 

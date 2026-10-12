@@ -172,6 +172,7 @@ teardown() {
   # Create a temp git repo so _git('rev-parse','--show-toplevel') returns a known path.
   local repo="$HOME/test-repo-single"
   git init "$repo" >/dev/null 2>&1
+  cast_git_fixture_quiet "$repo"
   local real_repo
   real_repo="$(python3 -c 'import os; print(os.path.realpath("'"$repo"'"))')"
   # Insert exactly one active session whose project_root matches the git repo path.
@@ -198,6 +199,7 @@ conn.close()
   # Create a temp git repo so _git('rev-parse','--show-toplevel') returns a known path.
   local repo="$HOME/test-repo-double"
   git init "$repo" >/dev/null 2>&1
+  cast_git_fixture_quiet "$repo"
   local real_repo
   real_repo="$(python3 -c 'import os; print(os.path.realpath("'"$repo"'"))')"
   # Insert TWO active sessions — the wave-1 incident scenario (stuck teammate rows).

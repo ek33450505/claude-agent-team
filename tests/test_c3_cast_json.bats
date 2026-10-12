@@ -8,11 +8,13 @@
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
+load 'helpers/setup'
 
 setup() {
   TEST_REPO="$(mktemp -d)"
   cd "$TEST_REPO"
   git init -q
+  cast_git_fixture_quiet
   mkdir -p .claude
 }
 teardown() { rm -rf "$TEST_REPO"; }
