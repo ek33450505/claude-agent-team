@@ -98,3 +98,95 @@ JSON
   [ "$status" -eq 1 ]
   [[ "$output" == *"not found"* ]]
 }
+
+# --- line-content check: a numeric file:line must actually write the table ---
+
+_plant_line_fixture() {
+  # $1 = table name in contract, $2 = writer suffix (":N" or ":func (desc)")
+  FIXTURE="$BATS_TEST_TMPDIR/fixture-writer.sh"
+  cat > "$FIXTURE" <<'SH'
+#!/usr/bin/env bash
+# a comment line that says nothing useful
+echo "INSERT INTO agent_runs_daily (day) VALUES ('x')"
+echo "INSERT INTO agent_runs (agent) VALUES ('x')"
+SH
+  PLANTED="$BATS_TEST_TMPDIR/line-contract.json"
+  cat > "$PLANTED" <<JSON
+{"schema_version": "1.0", "tables": [
+  {"table": "$1", "writers": ["$FIXTURE$2"], "cadence": "per_event", "status": "live"}
+]}
+JSON
+}
+
+@test "live writer: in-range line that does not write the table fails" {
+  _plant_line_fixture agent_runs ":2"
+  run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"line 2 of"* ]]
+  [[ "$output" == *"does not write agent_runs"* ]]
+}
+
+@test "live writer: line writing a different table (agent_runs_daily) does not satisfy agent_runs" {
+  _plant_line_fixture agent_runs ":3"
+  run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not write agent_runs"* ]]
+}
+
+@test "live writer: line that really writes the table passes" {
+  _plant_line_fixture agent_runs ":4"
+  run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
+  [ "$status" -eq 0 ]
+}
+
+@test "live writer: non-numeric file:func suffix still passes without a line check" {
+  _plant_line_fixture agent_runs ":agent_runs_daily (indirect writer; identifier present in code)"
+  run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
+  [ "$status" -eq 0 ]
+}
+
+# --- identifier suffix + verb word-boundary checks ---
+
+_plant_ident_fixture() {
+  # $1 = writer suffix (e.g. ":some_fn")
+  FIXTURE="$BATS_TEST_TMPDIR/ident-writer.sh"
+  cat > "$FIXTURE" <<'SH'
+#!/usr/bin/env bash
+# only_in_comment is mentioned here but never used
+real_fn() { echo hi; }
+echo "row updated for agent_runs"
+SH
+  PLANTED="$BATS_TEST_TMPDIR/ident-contract.json"
+  cat > "$PLANTED" <<JSON
+{"schema_version": "1.0", "tables": [
+  {"table": "agent_runs", "writers": ["$FIXTURE$1"], "cadence": "per_event", "status": "live"}
+]}
+JSON
+}
+
+@test "identifier suffix absent from the file fails" {
+  _plant_ident_fixture ":no_such_fn"
+  run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"identifier no_such_fn not found"* ]]
+}
+
+@test "identifier suffix present only in a comment fails" {
+  _plant_ident_fixture ":only_in_comment"
+  run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"identifier only_in_comment not found"* ]]
+}
+
+@test "identifier suffix present in code passes" {
+  _plant_ident_fixture ":real_fn"
+  run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
+  [ "$status" -eq 0 ]
+}
+
+@test "line naming the table with only 'updated' is not a write" {
+  _plant_ident_fixture ":4"
+  run python3 "$CHECK_SCRIPT" --contract "$PLANTED"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not write agent_runs"* ]]
+}

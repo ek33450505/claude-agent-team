@@ -10,7 +10,15 @@ silently lying to the dashboard. This closes that gap (audit MED, 2026-08-04).
 
 Checks: every `writers` entry belonging to a `"status": "live"` table must
 resolve to a real file on disk. If the entry also carries a numeric `:line`
-suffix, that line number must be within the file's line count. Non-"live"
+suffix, that line number must be within the file's line count AND the cited
+line's text must contain the table name as a whole identifier (\\btable\\b)
+plus a write marker (INSERT, REPLACE, UPDATE, db_write, db_execute,
+_db_execute; case-insensitive). A writer that writes only indirectly (via a
+helper) must use the non-numeric `file:funcname (description)` form. A bare
+identifier suffix (`[A-Za-z_][A-Za-z0-9_]*`) must appear as a whole word on at
+least one non-comment line of the file; other suffixes and no suffix are
+file-existence only. Known residual: a numeric ref landing on a comment line
+that names the table and a verb still passes. Non-"live"
 statuses (dormant, external, dead_writer_retired, retired_this_session, ...)
 are intentionally NOT checked — an empty or free-text `writers` list is
 expected for those.
@@ -36,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -51,7 +60,11 @@ def _resolve(file_part: str) -> Path:
     return SCRIPT_DIR / file_part
 
 
-def _check_writer(writer: str) -> str | None:
+_WRITE_MARKER = re.compile(r"\b(?:INSERT|REPLACE|UPDATE)\b|db_write|_?db_execute", re.IGNORECASE)
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _check_writer(writer: str, table: str = "") -> str | None:
     """Return an error message if `writer` is dangling, else None."""
     token = writer.split()[0] if writer.split() else writer
     file_part, _, line_part = token.partition(":")
@@ -63,12 +76,20 @@ def _check_writer(writer: str) -> str | None:
     if line_part.isdigit():
         line_no = int(line_part)
         with path.open(encoding="utf-8", errors="replace") as f:
-            line_count = sum(1 for _ in f)
-        if line_no > line_count:
+            lines = f.read().split("\n")
+        if line_no > len(lines) or line_no < 1:
             return (
                 f"line {line_no} out of range for {file_part!r} "
-                f"({line_count} lines total; writer: {writer!r})"
+                f"({len(lines)} lines total; writer: {writer!r})"
             )
+        text = lines[line_no - 1]
+        if not (re.search(rf"\b{re.escape(table)}\b", text) and _WRITE_MARKER.search(text)):
+            return f"line {line_no} of {file_part} does not write {table}: {text.strip()[:100]}"
+    elif _IDENT.match(line_part):
+        with path.open(encoding="utf-8", errors="replace") as f:
+            code = [ln for ln in f.read().split("\n") if not ln.lstrip().startswith("#")]
+        if not any(re.search(rf"\b{re.escape(line_part)}\b", ln) for ln in code):
+            return f"identifier {line_part} not found in {file_part}"
     return None
 
 
@@ -80,7 +101,7 @@ def check_contract(contract: dict) -> list[str]:
             continue
         table = entry.get("table", "<unknown>")
         for writer in entry.get("writers", []):
-            err = _check_writer(writer)
+            err = _check_writer(writer, table)
             if err:
                 errors.append(f"table {table!r}: {err}")
     return errors
