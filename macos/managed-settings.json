@@ -1,0 +1,65 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/)",
+      "Bash(rm -rf ~/.claude*)",
+      "Edit(~/.claude/agent-status/**)",
+      "Edit(~/.claude/config/**)",
+      "Edit(~/.claude/projects/**/subagents/**)",
+      "Edit(~/.claude/settings.json)",
+      "Edit(~/.claude/settings.local.json)",
+      "Edit(~/.claude/managed-settings.d/**)",
+      "Edit(~/.claude/scripts/**)",
+      "Edit(~/.claude/githooks/**)",
+      "Edit(~/.claude/cast-state/**)",
+      "Edit(~/Library/Caches/com.apple.python/**)",
+      "Edit(~/Library/Python/**)",
+      "Edit(~/Library/LaunchAgents/**)",
+      "Edit(~/.claude/install-manifest.sha256)",
+      "Edit(~/.claude/logs/**)",
+      "Edit(**/.claude/settings*.json)",
+      "Edit(//**/.claude/settings*.json)",
+      "Edit(~/.claude.json)",
+      "Edit(//Library/Application Support/ClaudeCode/**)"
+    ]
+  },
+  "hooks": {
+    "ConfigChange": [
+      {
+        "matcher": "project_settings|local_settings",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/cast-config-change-guard.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "id": "cast-pretool-dispatch",
+        "matcher": "mcp__.*|WebFetch|WebSearch|Bash|Read|Write|Edit|Task|Agent|Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -E -s ~/.claude/scripts/cast-pretool-dispatch.py",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "id": "cast-write-guards",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/write-guards.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
