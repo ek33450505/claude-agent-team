@@ -329,6 +329,21 @@ STUBEOF
   refute_output --partial "Not loaded"
 }
 
+@test "status shows 'not running' when pgrep finds no match (exit 1)" {
+  run bash "$OTEL_SH" status
+  assert_success
+  assert_output --partial "Process not running"
+}
+
+@test "status shows 'unknown' not 'not running' when pgrep cannot list processes (exit 3)" {
+  # Sandboxed shells block the process list: pgrep exits 3, which is not "no match".
+  printf '#!/bin/bash\necho "pgrep: Cannot get process list" >&2\nexit 3\n' > "$HOME/.claude/stubs/pgrep"
+  run bash "$OTEL_SH" status
+  assert_success
+  assert_output --partial "Process state unknown"
+  refute_output --partial "Process not running"
+}
+
 @test "status shows env key count after enable" {
   bash "$OTEL_SH" enable >/dev/null 2>&1
   run bash "$OTEL_SH" status

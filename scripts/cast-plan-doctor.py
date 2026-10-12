@@ -442,6 +442,7 @@ def _probe_otel_claim(plan_text: str) -> list[dict[str, Any]]:
         except OSError:
             pass
 
+    unknown_reason = ""
     try:
         pgrep = subprocess.run(
             ["pgrep", "-f", "cast-otel-collector.py"],
@@ -450,9 +451,33 @@ def _probe_otel_claim(plan_text: str) -> list[dict[str, Any]]:
             timeout=5,
             check=False,
         )
-        otel_running = pgrep.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        otel_running = False
+        # pgrep: 0 match, 1 no match, 2/3 syntax/fatal (e.g. process list blocked in a sandbox)
+        otel_running: bool | None = (
+            True if pgrep.returncode == 0 else False if pgrep.returncode == 1 else None
+        )
+        if otel_running is None:
+            unknown_reason = f"pgrep exit {pgrep.returncode}: process list unavailable"
+    except subprocess.TimeoutExpired:
+        otel_running = None
+        unknown_reason = "pgrep timed out"
+    except FileNotFoundError:
+        otel_running = None
+        unknown_reason = "pgrep not found"
+    except OSError as exc:
+        otel_running = None
+        unknown_reason = f"pgrep failed: {type(exc).__name__}"
+
+    if run_at_load is not True and otel_running is None:
+        findings.append(
+            make_finding(
+                key="settings:otel_default",
+                severity=WARN,
+                claim="Plan asserts OTEL is 'on by default'",
+                expected="RunAtLoad=true or cast-otel-collector.py running",
+                actual=f"RunAtLoad={run_at_load}, process_running=unknown ({unknown_reason})",
+            )
+        )
+        return findings
 
     actual_on_by_default = run_at_load is True or otel_running
     if not actual_on_by_default:

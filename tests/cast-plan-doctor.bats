@@ -279,3 +279,63 @@ write_plan() {
   assert_success
   assert_output --partial "Canonical plan: $HOME/elsewhere/marked.md"
 }
+
+# ---------------------------------------------------------------------------
+# OTEL on-by-default probe: pgrep exit code 3 (process list blocked, e.g. in a
+# sandbox) is "unknown", never a CONTRADICTION; exit 1 is a genuine "not running".
+# ---------------------------------------------------------------------------
+
+_run_otel_probe() {
+  local rc="$1"
+  mkdir -p "$HOME/stubs"
+  printf '#!/bin/bash\nexit %s\n' "$rc" > "$HOME/stubs/pgrep"
+  chmod +x "$HOME/stubs/pgrep"
+  PATH="$HOME/stubs:$PATH" run python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("doctor", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+for f in m._probe_otel_claim("OTEL is on by default"):
+    print(f["severity"], f["actual"])
+' "$DOCTOR"
+}
+
+@test "plan-doctor otel probe: pgrep exit 1 (no match) is a CONTRADICTION" {
+  _run_otel_probe 1
+  assert_success
+  assert_output --partial "CONTRADICTION"
+  assert_output --partial "process_running=False"
+}
+
+@test "plan-doctor otel probe: pgrep exit 3 (list unavailable) is unknown, not a CONTRADICTION" {
+  _run_otel_probe 3
+  assert_success
+  refute_output --partial "CONTRADICTION"
+  assert_output --partial "process_running=unknown"
+}
+
+@test "plan-doctor otel probe: pgrep exit 0 (running) yields no finding" {
+  _run_otel_probe 0
+  assert_success
+  assert_output ""
+}
+
+@test "plan-doctor otel probe: pgrep exit 3 WARN names the exit code" {
+  _run_otel_probe 3
+  assert_output --partial "pgrep exit 3"
+}
+
+@test "plan-doctor otel probe: missing pgrep is unknown (pgrep not found), not a CONTRADICTION" {
+  # Empty-PATH python run: pgrep cannot be resolved.
+  run env PATH="$HOME/nonexistent" "$(command -v python3)" -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("doctor", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+for f in m._probe_otel_claim("OTEL is on by default"):
+    print(f["severity"], f["actual"])
+' "$DOCTOR"
+  assert_success
+  refute_output --partial "CONTRADICTION"
+  assert_output --partial "pgrep not found"
+}
