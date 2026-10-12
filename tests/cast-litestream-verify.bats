@@ -133,6 +133,30 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# 3b. Restore dir is cleaned up under $TMPDIR (declared radius must cover the
+#     mktemp dir, else cast_safe_rm refuses silently and the dir leaks)
+# ---------------------------------------------------------------------------
+@test "restore temp dir is removed from TMPDIR after a run that reaches restore" {
+  _install_fake_litestream "$FAKE_BIN" junk
+  _setup_valid_replica_env
+
+  local scratch="${BATS_TEST_TMPDIR}/verify-tmpdir"
+  mkdir -p "$scratch"
+
+  run env TMPDIR="$scratch" bash "$VERIFY_SCRIPT"
+  assert_failure
+  assert_output --partial "integrity"
+  # Prove mktemp honored $TMPDIR (else the leak check below is vacuous).
+  assert_output --partial "Restoring replica → ${scratch}/cast-ls-verify-"
+
+  # Guard against a vacuous pass: mktemp must have actually used $scratch.
+  # (cleanup ran, so the dir is gone; leaked entries would show here)
+  local leaked
+  leaked="$(find "$scratch" -mindepth 1 -maxdepth 1 -name 'cast-ls-verify-*' | wc -l | tr -d ' ')"
+  [ "$leaked" = "0" ]
+}
+
+# ---------------------------------------------------------------------------
 # 4. Config file missing → FAIL with "config not found"
 # ---------------------------------------------------------------------------
 @test "missing config exits non-zero with config-not-found message" {

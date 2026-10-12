@@ -112,7 +112,7 @@ setup() {
 @test "cast_safe_rm refuses path equal to declared blast radius prefix root (FATAL)" {
   # Use a prefix with no trailing slash so equality test is clear
   local prefix
-  prefix="/tmp/cast-guard-root-${BATS_TEST_NUMBER}-$$"
+  prefix="${BATS_TEST_TMPDIR}/cast-guard-root-${BATS_TEST_NUMBER}-$$"
   mkdir -p "$prefix"
 
   cast_declare_blast_radius "$prefix"
