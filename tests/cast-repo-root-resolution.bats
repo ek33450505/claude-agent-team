@@ -169,6 +169,62 @@ STUB
   grep -q "ran root=$FIX " "$HOME/marker"
 }
 
+@test "check-plugin-drift: stale plugin/ prints added/removed/changed lines (sorted temp files, no process substitution)" {
+  _install check-plugin-drift.sh cast-guard-lib.sh
+  # Stub generator emits the "regenerated" tree: keep.txt, new.txt, mod.txt(v2).
+  cat >"$INSTALLED/gen-plugin.sh" <<'STUB'
+#!/usr/bin/env bash
+printf 'same\n' >"$1/keep.txt"
+printf 'new\n' >"$1/new.txt"
+printf 'v2\n' >"$1/mod.txt"
+STUB
+  # Committed tree: keep.txt, gone.txt, mod.txt(v1).
+  mkdir -p "$HOME/committed-plugin"
+  printf 'same\n' >"$HOME/committed-plugin/keep.txt"
+  printf 'old\n' >"$HOME/committed-plugin/gone.txt"
+  printf 'v1\n' >"$HOME/committed-plugin/mod.txt"
+  mkdir -p "$HOME/shim"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$HOME/shim/claude"
+  chmod +x "$HOME/shim/claude"
+  cd "$UNRELATED"
+  PATH="$HOME/shim:$PATH" CAST_REPO_ROOT="$FIX" CAST_PLUGIN_DIR="$HOME/committed-plugin" run bash "$INSTALLED/check-plugin-drift.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"committed plugin/ is STALE"* ]]
+  printf '%s\n' "$output" | grep -qx '  added: new.txt'
+  printf '%s\n' "$output" | grep -qx '  removed: gone.txt'
+  printf '%s\n' "$output" | grep -qx '  changed: mod.txt'
+  # The drift display must leave no path-list temp files behind.
+  [ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'cast-plugin-drift-paths.*' -newer "$INSTALLED/gen-plugin.sh" 2>/dev/null)" ]
+}
+
+@test "check-plugin-drift: a failing display sort is non-fatal (note printed, verdict and exit status unchanged)" {
+  _install check-plugin-drift.sh cast-guard-lib.sh
+  cat >"$INSTALLED/gen-plugin.sh" <<'STUB'
+#!/usr/bin/env bash
+printf 'new\n' >"$1/new.txt"
+STUB
+  mkdir -p "$HOME/committed-plugin" "$HOME/shim"
+  printf 'old\n' >"$HOME/committed-plugin/gone.txt"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$HOME/shim/claude"
+  # sort shim: the first two calls (the two manifest builds) succeed; later calls (the
+  # display path lists) fail.
+  cat >"$HOME/shim/sort" <<'SHIM'
+#!/usr/bin/env bash
+n=$(cat "$SORT_COUNT" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" >"$SORT_COUNT"
+if [ "$n" -gt 2 ]; then cat >/dev/null; exit 1; fi
+exec /usr/bin/sort "$@"
+SHIM
+  chmod +x "$HOME/shim/claude" "$HOME/shim/sort"
+  cd "$UNRELATED"
+  SORT_COUNT="$HOME/sort-count" PATH="$HOME/shim:$PATH" CAST_REPO_ROOT="$FIX" CAST_PLUGIN_DIR="$HOME/committed-plugin" run bash "$INSTALLED/check-plugin-drift.sh"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"committed plugin/ is STALE"* ]]
+  [[ "$output" == *"[display unavailable]"* ]]
+  [[ "$output" == *" failed ---"* ]]
+}
+
 # ── (b) relative / nonexistent CAST_REPO_ROOT fails closed ─────────────────────
 
 @test "every changed script rejects a relative or nonexistent CAST_REPO_ROOT with a stderr message" {

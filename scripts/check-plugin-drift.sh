@@ -63,7 +63,8 @@ _fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 # Generate to a single temp dir; declare blast radius once and use it for cleanup
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/cast-plugin-drift.XXXXXX")"
 cast_declare_blast_radius "$(dirname "$TMP")"
-trap 'cast_safe_rm "$TMP" 2>/dev/null || true' EXIT
+_MF_DIR=""
+trap 'cast_safe_rm "$TMP" 2>/dev/null || true; [[ -z "$_MF_DIR" ]] || cast_safe_rm "$_MF_DIR" 2>/dev/null || true' EXIT
 
 # Generate the plugin (ignore exit — gen-plugin.sh runs validate internally;
 # we re-run validate ourselves below for clean per-check output)
@@ -159,6 +160,10 @@ if [[ -d "$COMMITTED_PLUGIN" ]]; then
 
   _MF_REGEN="$(mktemp "${TMPDIR:-/tmp}/cast-plugin-drift-regen.XXXXXX")"
   _MF_COMMIT="$(mktemp "${TMPDIR:-/tmp}/cast-plugin-drift-commit.XXXXXX")"
+  # Sorted path lists for the drift display live in one dir that the EXIT trap removes.
+  _MF_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cast-plugin-drift-paths.XXXXXX")"
+  _MF_REGEN_P="${_MF_DIR}/regen.paths"
+  _MF_COMMIT_P="${_MF_DIR}/commit.paths"
   _build_manifest "$TMP"              > "$_MF_REGEN"
   _build_manifest "$COMMITTED_PLUGIN" > "$_MF_COMMIT"
 
@@ -167,17 +172,20 @@ if [[ -d "$COMMITTED_PLUGIN" ]]; then
   else
     _fail "committed plugin/ is STALE — regenerate and recommit: bash scripts/gen-plugin.sh \"\${REPO_ROOT}/plugin\" && git add plugin/"
     {
+      # Sorted path lists live in temp files: process substitution needs /dev/fd,
+      # which the Claude Code sandbox denies (docs/sandbox-profile.md).
+      # The verdict is the cmp above: a display failure must never change the exit
+      # status or abort before the FAIL line, so a failed sort prints a note instead.
+      if awk '{print $1}' "$_MF_REGEN" | sort > "$_MF_REGEN_P" \
+        && awk '{print $1}' "$_MF_COMMIT" | sort > "$_MF_COMMIT_P"; then
       # Paths only in regen (missing from committed): added
-      comm -23 <(awk '{print $1}' "$_MF_REGEN" | sort) \
-               <(awk '{print $1}' "$_MF_COMMIT" | sort) \
+      comm -23 "$_MF_REGEN_P" "$_MF_COMMIT_P" \
         | while IFS= read -r p; do printf '  added: %s\n' "$p"; done
       # Paths only in committed (missing from regen): removed
-      comm -13 <(awk '{print $1}' "$_MF_REGEN" | sort) \
-               <(awk '{print $1}' "$_MF_COMMIT" | sort) \
+      comm -13 "$_MF_REGEN_P" "$_MF_COMMIT_P" \
         | while IFS= read -r p; do printf '  removed: %s\n' "$p"; done
       # Paths in both but entry differs: changed or symlink-target-changed
-      comm -12 <(awk '{print $1}' "$_MF_REGEN" | sort) \
-               <(awk '{print $1}' "$_MF_COMMIT" | sort) \
+      comm -12 "$_MF_REGEN_P" "$_MF_COMMIT_P" \
         | while IFS= read -r p; do
             _rl="$(awk -v q="$p" '$1 == q {print; exit}' "$_MF_REGEN")"
             _cl="$(awk -v q="$p" '$1 == q {print; exit}' "$_MF_COMMIT")"
@@ -190,7 +198,10 @@ if [[ -d "$COMMITTED_PLUGIN" ]]; then
               printf '  changed: %s\n' "$p"
             fi
           done
-    } >&2
+      else
+        printf '  [display unavailable] could not build the sorted path lists\n'
+      fi
+    } >&2 || true
   fi
   rm -f "$_MF_REGEN" "$_MF_COMMIT"
 

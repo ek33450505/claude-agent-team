@@ -540,18 +540,26 @@ _pii_scan_ci() {
 
 PII_HITS=""
 
+# Append one scan's captured hits. $(...) strips the trailing newline, so a bare
+# `PII_HITS+=$(...)` glues one scan's last hit to the next scan's first; join with a
+# newline, and only when the chunk is non-empty (the -n gate below is unchanged).
+_pii_append() {
+  [[ -n "$1" ]] || return 0
+  PII_HITS+="${PII_HITS:+$'\n'}$1"
+}
+
 # Generic email scan — flags any email address; safe senders and obvious placeholders
 # are excluded via a combined exclusion regex, applied per match and anchored to the WHOLE
 # match (each alternative is tested against one match text). Keep byte-identical with
 # scripts/ci-pii-scan.sh (drift-tested).
 _EMAIL_EXCLUSION='^[A-Za-z0-9._%+-]+@users\.noreply\.github\.com$|^noreply@anthropic\.com$|^(noreply|actions)@github\.com$|@example\.(com|org|net)$|@test\.(com|org)$|\.(test|example|invalid|localhost)$'
-PII_HITS+=$(_pii_scan "email" '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "" "$_EMAIL_EXCLUSION" || true)
+_pii_append "$(_pii_scan "email" '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "" "$_EMAIL_EXCLUSION" || true)"
 
 # Generic hardcoded home-path scan — flags /Users/<name>. CI-runner and fixture usernames are
 # excluded per match, anchored to the whole match; /Users/<name> and /Users/$VAR never match
 # the path pattern. Keep byte-identical with scripts/ci-pii-scan.sh (drift-tested).
 _PATH_EXCLUSION='^/Users/(testuser|runner|janedoe|johndoe|alice|bob|you|yourname)$|^/Users/\.+$'
-PII_HITS+=$(_pii_scan "hardcoded-path" '/Users/[A-Za-z0-9._-]+' "" "$_PATH_EXCLUSION" || true)
+_pii_append "$(_pii_scan "hardcoded-path" '/Users/[A-Za-z0-9._-]+' "" "$_PATH_EXCLUSION" || true)"
 
 # Local deny-list scan — reads patterns from a file outside the repo.
 # The file path is configurable via CAST_PII_LOCAL_DENYLIST; defaults to
@@ -582,17 +590,17 @@ if [[ -f "$_DENYLIST_FILE" ]]; then
   # Pass 2: scan.
   while IFS= read -r _deny_pattern; do
     [[ -z "$_deny_pattern" ]] && continue
-    PII_HITS+=$(_pii_scan_ci "local-denylist" "$_deny_pattern" || true)
+    _pii_append "$(_pii_scan_ci "local-denylist" "$_deny_pattern" || true)"
   done <<< "$_deny_patterns"
 else
   echo "  NOTE: No local deny-list found at $_DENYLIST_FILE — work/personal patterns are not being scanned."
   echo "        Copy config/pii-denylist-local.txt.template to that path and add your identifiers."
 fi
 
-PII_HITS+=$(_pii_scan "google-oauth"    'GOCSPX-[A-Za-z0-9_-]+' || true)
-PII_HITS+=$(_pii_scan "anthropic-key"   'sk-ant-[A-Za-z0-9_-]{32,}' || true)
-PII_HITS+=$(_pii_scan "github-pat"      '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}' || true)
-PII_HITS+=$(_pii_scan "aws-key"         'AKIA[0-9A-Z]{16}' || true)
+_pii_append "$(_pii_scan "google-oauth"    'GOCSPX-[A-Za-z0-9_-]+' || true)"
+_pii_append "$(_pii_scan "anthropic-key"   'sk-ant-[A-Za-z0-9_-]{32,}' || true)"
+_pii_append "$(_pii_scan "github-pat"      '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}' || true)"
+_pii_append "$(_pii_scan "aws-key"         'AKIA[0-9A-Z]{16}' || true)"
 
 if [[ -n "$PII_HITS" ]]; then
   echo "FAIL: PII or secret patterns found in push diff:"
