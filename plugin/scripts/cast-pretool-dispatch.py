@@ -31,7 +31,8 @@ ROUTING (by tool_name):
        Write/Edit:  git-guard policy engine (TTL sweep + config/policies.json).
      First hard block wins → block reason to stderr + exit 2. There is no Bash guard
      watchdog: a hook timeout, crash or can't-start now BLOCKS the call via native
-     onFailure:block (CC >= 2.1.295, managed-settings.d/25-hooks-security.json).
+     onFailure:block (CC >= 2.1.295, and only when the highest-scope copy of the hook
+     carries onFailure; managed-settings.d/25-hooks-security.json).
   2. EGRESS scope (mcp__*, WebFetch, WebSearch, Bash, Read), reached only when
      nothing hard-blocked: classify + RECORD to the local egress ledger (the KEEP
      value — master_v9.md §1) + emit advisory (record-only). The hard-block set
@@ -50,7 +51,9 @@ guard is always evaluated for Bash unless git-guard already hard-blocked — whi
 prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 skips ONLY the Write/Edit policy + egress record + dispatch capture; the git commit/push/stash and destructive-command guards run in EVERY context (a subagent must not bypass the irreversibility/destructive guards), and so does the Neon MCP unsafe-tool notify guard (_notify_neon_risk) — a dispatched subagent's risky Neon call must be notified and recorded too. Any
 unhandled error → exit 0 (allow, owner decision): an exception INSIDE main() still exits 0.
 (That describes the dispatcher's own catch-all and per-guard paths. A crash the interpreter
-cannot catch -- a syntax/import error at load, a failure to start, a signal kill -- and a hook
+cannot catch -- a syntax/import error at load, a failure to start, a signal kill, a
+BaseException other than SystemExit such as KeyboardInterrupt escaping `__main__`'s
+`except Exception` -- and a hook
 TIMEOUT instead BLOCK every covered tool call (Bash/Read/Write/Edit/...), so recovery from a
 broken dispatcher is from a terminal (`bash install.sh`) or the `!` prefix. That is the native
 onFailure:block, CC >= 2.1.295, 25-hooks-security.json -- which is why the Bash guards

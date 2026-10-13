@@ -411,5 +411,211 @@ class RealFileTests(unittest.TestCase):
         self.assertNotIn("pkill", text)
 
 
+CAST_CMDS = (
+    "bash ~/.claude/scripts/cast-config-change-guard.sh",
+    "python3 -E -s ~/.claude/scripts/cast-pretool-dispatch.py",
+    "bash ~/.claude/scripts/write-guards.sh",
+)
+
+
+def _inner_hooks(doc):
+    for groups in doc["hooks"].values():
+        for grp in groups:
+            for h in grp["hooks"]:
+                yield h
+
+
+class CheckOnFailureTests(unittest.TestCase):
+    """--check-onfailure: the install.sh gate against a stale managed file."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="cast-ms-onfail-", dir=os.environ.get("TMPDIR"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.path = os.path.join(self.tmp, "managed-settings.json")
+        with open(os.path.join(REPO, "macos", "managed-settings.json")) as fh:
+            self.doc = json.load(fh)
+
+    def write(self, doc=None, raw=None):
+        with open(self.path, "w") as fh:
+            fh.write(raw if raw is not None else json.dumps(doc if doc is not None else self.doc))
+
+    def gate(self, path=None):
+        return run("--check-onfailure", "--installed", path or self.path)
+
+    def test_absent_file_passes(self):
+        r = self.gate(os.path.join(self.tmp, "absent.json"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertTrue(r.stdout.startswith("OK:"), r.stdout)
+
+    def test_all_cast_hooks_block_passes(self):
+        self.write()
+        r = self.gate()
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(r.stdout.count("OK:"), 3, r.stdout)
+
+    def test_each_cast_hook_missing_onfailure_fails_and_is_named(self):
+        for cmd in CAST_CMDS:
+            doc = json.loads(json.dumps(self.doc))
+            for h in _inner_hooks(doc):
+                if h["command"] == cmd:
+                    del h["onFailure"]
+            self.write(doc)
+            r = self.gate()
+            self.assertEqual(r.returncode, 1, (cmd, r.stdout))
+            self.assertIn("FAIL:", r.stdout)
+            self.assertIn(cmd, r.stdout)
+
+    def test_onfailure_continue_fails(self):
+        for h in _inner_hooks(self.doc):
+            if h["command"] == CAST_CMDS[1]:
+                h["onFailure"] = "continue"
+        self.write()
+        r = self.gate()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("cast-pretool-dispatch.py", r.stdout)
+
+    def test_malformed_json_fails_closed(self):
+        self.write(raw="{not json")
+        r = self.gate()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("malformed", r.stdout)
+
+    def test_duplicate_key_fails_closed(self):
+        self.write(raw='{"hooks": {}, "hooks": {}}')
+        self.assertEqual(self.gate().returncode, 1)
+
+    def test_symlinked_installed_path_fails(self):
+        self.write()
+        link = os.path.join(self.tmp, "link.json")
+        os.symlink(self.path, link)
+        r = self.gate(link)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("cannot open", r.stdout)
+
+    def test_non_cast_hook_without_onfailure_ignored(self):
+        self.doc["hooks"]["PostToolUse"] = [
+            {"matcher": "Write", "hooks": [{"type": "command", "command": "bash ~/other-hook.sh"}]}]
+        self.write()
+        r = self.gate()
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_repo_source_satisfies_gate(self):
+        r = self.gate(os.path.join(REPO, "macos", "managed-settings.json"))
+        self.assertEqual(r.returncode, 0, r.stdout)
+        # exactly the 3 CAST registrations were matched and each reported OK
+        self.assertEqual(r.stdout.count("OK: managed hook"), 3, r.stdout)
+        self.assertNotIn("FAIL", r.stdout)
+
+    def test_nonstandard_shapes_without_onfailure_fail(self):
+        cmd = CAST_CMDS[1]
+        shapes = {
+            "bare matcher+command at top level": {"matcher": "Bash", "command": cmd},
+            "hooks as a list": {"hooks": [{"type": "command", "command": cmd}]},
+            "group dict carrying command": {"hooks": {"PreToolUse": [{"matcher": "Bash", "command": cmd}]}},
+            "deeply nested": {"a": [{"b": {"c": [{"command": cmd}]}}]},
+            "event value is a dict not a list": {"hooks": {"PreToolUse": {"hooks": [{"command": cmd}]}}},
+        }
+        for name, doc in shapes.items():
+            self.write(doc)
+            r = self.gate()
+            self.assertEqual(r.returncode, 1, (name, r.stdout))
+            self.assertIn("cast-pretool-dispatch.py", r.stdout, name)
+
+    def test_nonstandard_shape_with_block_passes(self):
+        self.write({"hooks": [{"command": CAST_CMDS[2], "onFailure": "block"}]})
+        r = self.gate()
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_respelled_commands_without_onfailure_fail(self):
+        for cmd in ("bash  ~/.claude/scripts/write-guards.sh",
+                    "bash /opt/cast-fixture/.claude/scripts/write-guards.sh",
+                    "bash ~/.claude/scripts/write-guards.sh ",
+                    "python3 -E -s  ~/.claude/scripts/cast-pretool-dispatch.py",
+                    "/bin/bash $HOME/.claude/scripts/cast-config-change-guard.sh"):
+            self.write({"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": cmd}]}]}})
+            r = self.gate()
+            self.assertEqual(r.returncode, 1, (cmd, r.stdout))
+
+    def test_onfailure_must_be_exact_string_block(self):
+        for val in ("Block", "block ", True, ["block"], None, 1):
+            doc = json.loads(json.dumps(self.doc))
+            for h in _inner_hooks(doc):
+                if h["command"] == CAST_CMDS[0]:
+                    h["onFailure"] = val
+            self.write(doc)
+            self.assertEqual(self.gate().returncode, 1, repr(val))
+
+    def test_two_registrations_one_without_block_fails(self):
+        cmd = CAST_CMDS[2]
+        self.write({"hooks": {"PreToolUse": [
+            {"hooks": [{"command": cmd, "onFailure": "block"}]},
+            {"hooks": [{"command": cmd}]}]}})
+        r = self.gate()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertEqual(r.stdout.count("OK:"), 1, r.stdout)
+        self.assertEqual(r.stdout.count("FAIL:"), 1, r.stdout)
+
+    def test_very_deep_nesting_fails_closed(self):
+        # A CAST registration buried 50k levels deep must not slip past the walk: it is
+        # either found (iterative walk, rc 1) or the parse refuses it (RecursionError, rc 1).
+        n = 50000
+        self.write(raw="[" * n + '{"command": "bash ~/.claude/scripts/write-guards.sh"}' + "]" * n)
+        r = self.gate()
+        self.assertEqual(r.returncode, 1, r.stdout[-300:])
+        self.assertIn("FAIL:", r.stdout)
+        self.assertNotIn("Traceback", r.stdout + r.stderr)
+
+    def test_deep_nesting_with_block_passes_without_recursion(self):
+        # ~1100 levels exceeds Python's default recursion limit (1000): a recursive walk
+        # would crash; the explicit-stack walk must reach the registration and pass it.
+        n = 1100
+        self.write(raw="[" * n + '{"command": "bash ~/.claude/scripts/write-guards.sh", "onFailure": "block"}' + "]" * n)
+        r = self.gate()
+        self.assertEqual(r.returncode, 0, r.stdout[-300:] + r.stderr[-300:])
+        self.assertEqual(r.stdout.count("OK: managed hook"), 1, r.stdout)
+
+    def test_non_str_command_naming_a_basename_is_a_registration(self):
+        self.write({"hooks": [{"command": ["bash", "~/.claude/scripts/write-guards.sh"]}]})
+        r = self.gate()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("write-guards.sh", r.stdout)
+        self.write({"hooks": [{"command": ["bash", "~/.claude/scripts/write-guards.sh"], "onFailure": "block"}]})
+        self.assertEqual(self.gate().returncode, 0)
+
+    def test_fragment_block_commands_match_gate_basenames(self):
+        """Drift guard: the gate's basenames cannot silently go stale vs the fragment."""
+        spec = importlib.util.spec_from_file_location("msv", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with open(os.path.join(REPO, "managed-settings.d", "25-hooks-security.json")) as fh:
+            frag = json.load(fh)
+        block_cmds = [h["command"] for h in _inner_hooks(frag) if h.get("onFailure") == "block"]
+        self.assertTrue(block_cmds, "fragment has no onFailure:block hooks")
+        for cmd in block_cmds:
+            self.assertTrue(any(b in cmd for b in mod.ONFAILURE_BASENAMES),
+                            f"{cmd!r} carries onFailure:block but matches no gate basename")
+        for b in mod.ONFAILURE_BASENAMES:
+            self.assertTrue(any(b in cmd for cmd in block_cmds),
+                            f"basename {b!r} matches no onFailure:block fragment command")
+
+    def test_stale_pre_onfailure_file_fails(self):
+        # Today's stale live file shape: the three hooks with no onFailure key.
+        for h in _inner_hooks(self.doc):
+            h.pop("onFailure", None)
+        self.write()
+        r = self.gate()
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertEqual(r.stdout.count("FAIL:"), 3, r.stdout)
+
+    def test_historical_9e93a1a_content_fails(self):
+        g = subprocess.run(["git", "-C", REPO, "--no-pager", "show", "9e93a1a:macos/managed-settings.json"],
+                           capture_output=True, text=True, timeout=30)
+        if g.returncode != 0:
+            self.skipTest("commit 9e93a1a not available (shallow clone)")
+        self.write(raw=g.stdout)
+        r = self.gate()
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

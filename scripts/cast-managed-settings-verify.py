@@ -5,12 +5,20 @@ Usage:
     python3 -I scripts/cast-managed-settings-verify.py [--source] [--repo DIR]
                                                        [--installed PATH]
                                                        [--print-install] [--print-floor-hash]
+                                                       [--check-onfailure]
 
 Source checks (always run) validate macos/managed-settings.json against the
 user fragments managed-settings.d/11-deny.json and 25-hooks-security.json,
 and against the code-pinned FLOOR_SHA256 (two independent checks).
 Installed checks (skipped with --source) verify the installed copy is a
 root-owned, non-writable, readable regular file identical to the source.
+
+--check-onfailure is the install.sh gate: it reads ONLY the installed managed
+file and fails (exit 1) unless every CAST enforcement hook in it carries
+"onFailure": "block". The highest-scope copy of an identical hook command wins,
+so a stale managed copy (no onFailure) cancels the user copy's block. An absent
+file is fine (nothing at a higher scope); unreadable/malformed fails closed.
+No owner/mode/ACL/byte-identity checks (that is the full mode).
 
 Prints one OK:/FAIL: line per check. Exit 0 only if every check passes; any
 failure or unexpected exception exits 1 (fail closed).
@@ -38,6 +46,16 @@ POLICY_DENY = {"Bash(pkill *)", "Bash(killall *)"}
 # --print-floor-hash.
 FLOOR_SHA256 = "fa6bffd579ed4e3c84ad43121bb110885e37708bd5d90fd186cb37e3b36e507a"
 REQUIRED_IDS = ("cast-pretool-dispatch", "cast-write-guards")
+# Script basenames of the three fail-closed CAST guards (ConfigChange guard, PreToolUse
+# dispatcher, Write/Edit guards). Matched as a SUBSTRING of any "command" string anywhere in
+# the managed document, so a respelled command (extra spaces, absolute path) or an unusual
+# JSON shape still counts as a CAST registration (Claude Code dedupes by command, and its
+# normalisation is unprobed). Over-matching fails closed.
+ONFAILURE_BASENAMES = (
+    "cast-config-change-guard.sh",
+    "cast-pretool-dispatch.py",
+    "write-guards.sh",
+)
 ACL_LINE = re.compile(r"^\s*\d+: ")
 
 Result = Tuple[bool, str]
@@ -229,6 +247,63 @@ def installed_checks(repo: str, installed: str) -> List[Result]:
     return results
 
 
+def onfailure_check(installed: str) -> List[Result]:
+    """Fail unless every CAST enforcement hook in the INSTALLED managed file
+    carries onFailure=block (absent file passes: nothing outranks the user copy)."""
+    try:
+        fd = os.open(installed, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return [(True, f"no managed settings at {installed}; nothing at a higher scope can cancel onFailure:block")]
+    except OSError as exc:
+        return [(False, f"cannot open {installed} (symlink or unreadable; fail closed): {exc}")]
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return [(False, f"{installed} is not a regular file (fail closed)")]
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            raw = fh.read()
+    except OSError as exc:
+        return [(False, f"cannot read {installed} (fail closed): {exc}")]
+    finally:
+        os.close(fd)
+    try:
+        doc = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_dup_keys,
+                         parse_constant=_reject_constant)
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        return [(False, f"{installed} is malformed (fail closed): {exc}")]
+
+    # Walk the WHOLE document (dicts and lists, any depth, explicit stack): an
+    # entry in any shape whose "command" mentions a CAST guard script is a CAST
+    # registration and must itself carry onFailure=block. Over-matching fails closed.
+    found: List[Tuple[str, Any]] = []
+    stack: List[Any] = [doc]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            cmd = node.get("command")
+            if cmd is not None:
+                # A non-str command (e.g. an argv list) is serialised so a basename inside
+                # it still marks a CAST registration (the except below is unreachable after json.loads).
+                try:
+                    text = cmd if isinstance(cmd, str) else json.dumps(cmd)
+                except (TypeError, ValueError):
+                    text = ""
+                if any(b in text for b in ONFAILURE_BASENAMES):
+                    found.append((cmd if isinstance(cmd, str) else text, node.get("onFailure")))
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    results: List[Result] = []
+    for cmd, val in sorted(found, key=lambda t: t[0]):
+        if isinstance(val, str) and val == "block":
+            results.append((True, f"managed hook {cmd!r} carries onFailure=block"))
+        else:
+            results.append((False, f"managed hook {cmd!r} lacks onFailure=block (got {val!r}); "
+                                   "it would CANCEL the user copy's block"))
+    if not results:
+        results.append((True, "managed file registers no CAST enforcement hooks; nothing cancels onFailure:block"))
+    return results
+
+
 def main(argv: List[str]) -> int:
     default_repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     ap = argparse.ArgumentParser(description="Verify CAST managed settings")
@@ -236,6 +311,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--repo", default=default_repo)
     ap.add_argument("--installed", default=DEFAULT_INSTALLED)
     ap.add_argument("--print-install", action="store_true", help="print install commands (after source checks)")
+    ap.add_argument("--check-onfailure", action="store_true", help="install gate: installed managed hooks must carry onFailure=block")
     ap.add_argument("--print-floor-hash", action="store_true", help="print the canonical sha256 of the source file (hash only, no validation against the fragments; run --source first)")
     args = ap.parse_args(argv)
 
@@ -246,6 +322,12 @@ def main(argv: List[str]) -> int:
             print(f"FAIL: cannot load source: {exc}")
             return 1
         return 0
+
+    if args.check_onfailure:
+        results = onfailure_check(args.installed)
+        for passed, msg in results:
+            print(f"{'OK' if passed else 'FAIL'}: {msg}")
+        return 0 if all(p for p, _ in results) else 1
 
     results = source_checks(args.repo)
     if not (args.source or args.print_install):
