@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.3.0] — 2026-10-13
+
 ### Added
 - **Install integrity alarm (U6d, `scripts/cast-install-integrity.py`).** `install.sh` writes
   `~/.claude/install-manifest.sha256` (sha256 + mode of every deployed hook, script and config file).
