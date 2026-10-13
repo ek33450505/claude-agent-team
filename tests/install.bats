@@ -1288,3 +1288,20 @@ PYEOF
   new_content="$(cat "$HOME/.claude/config/egress-policy.json")"
   [ "$new_content" != "$old_content" ]
 }
+
+@test "install aborts when sqlite3 is missing, before deploying anything" {
+  # PATH of symlinks to the basics only -- deliberately NO sqlite3 (macOS ships /usr/bin/sqlite3,
+  # so PATH can't just be trimmed). Absolute /bin/bash so the shell itself resolves regardless.
+  local bindir="$BATS_TEST_TMPDIR/nosqlite-bin" t p
+  mkdir -p "$bindir"
+  for t in python3 git cat dirname basename date tr sed awk grep ls mkdir rm cp mv chmod find sort uniq wc head tail cut env readlink uname id whoami printf test stat shasum xargs mktemp ln touch diff tee sleep; do
+    p="$(command -v "$t" 2>/dev/null || true)"
+    case "$p" in /*) ln -sf "$p" "$bindir/$t" ;; esac
+  done
+  [ ! -e "$bindir/sqlite3" ]
+
+  run env PATH="$bindir" CAST_INSTALL_FORCE=1 /bin/bash "$REPO_DIR/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"sqlite3 not found"* ]]
+  [ ! -e "$HOME/.claude/agents" ]
+}
