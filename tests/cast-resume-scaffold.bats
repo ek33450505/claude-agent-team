@@ -21,6 +21,10 @@
 #  13. §4 degrades honestly when cast.db is absent (exit 0, no placeholder).
 #  14. §4 degrades honestly when cast.db has no matching rows (exit 0, no placeholder).
 #  15. §5 names the planted plan's own NEXT ACTION line.
+#  16. §4 does NOT bleed a concern from another repo's session (same branch).
+#  17. §4 does NOT match a sibling path sharing a string prefix (no "/").
+#  18. §4 DOES include a session rooted in a worktree/subdir of the repo.
+#  19. §4 unknown-branch fallback is repo-scoped too.
 
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
@@ -107,7 +111,11 @@ run_scaffold() {
 # Status: line, so the planted row's status column is 'DONE' on purpose.
 _seed_concern() {
   bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
-  sqlite3 "$CAST_DB_PATH" <<'SQL'
+  local top
+  top="$(git -C "$FIXTURE_REPO" rev-parse --show-toplevel)"
+  sqlite3 "$CAST_DB_PATH" <<SQL
+INSERT INTO sessions (id, project, project_root, started_at, status)
+VALUES ('sess-fixture', 'fixture-repo', '$top', '2026-07-05T00:00:00Z', 'ended');
 INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, branch, response)
 VALUES (
   'sess-fixture', 'backend-writer', '2026-07-05T00:00:00Z', '2026-07-05T00:10:00Z',
@@ -115,6 +123,24 @@ VALUES (
   'Status: DONE_WITH_CONCERNS
 Summary: planted fixture summary for the resume scaffold test
 Concerns: fixture-planted-concern-marker.txt:42 - planted for the resume-scaffold test'
+);
+SQL
+}
+
+# Plant a DONE_WITH_CONCERNS run whose session lives at <project_root>.
+# Args: session_id project_root marker branch. Initializes the schema.
+_seed_foreign_concern() {
+  bash "$REPO_DIR/scripts/cast-db-init.sh" >/dev/null 2>&1
+  sqlite3 "$CAST_DB_PATH" <<SQL
+INSERT INTO sessions (id, project, project_root, started_at, status)
+VALUES ('$1', 'p', '$2', '2026-07-05T00:00:00Z', 'ended');
+INSERT INTO agent_runs (session_id, agent, started_at, ended_at, status, branch, response)
+VALUES (
+  '$1', 'code-reviewer', '2026-07-05T00:00:00Z', '2026-07-05T00:10:00Z',
+  'DONE', '$4',
+  'Status: DONE_WITH_CONCERNS
+Summary: foreign
+Concerns: $3 planted'
 );
 SQL
 }
@@ -336,4 +362,56 @@ EOF
     | grep -q "plant the resume-scaffold DB read"
   run grep -q "{{" "$f"
   assert_failure 1
+}
+
+# ---------------------------------------------------------------------------
+# 16-19. §4 repo scope — no cross-project bleed
+# ---------------------------------------------------------------------------
+
+@test "section 4 does not bleed a concern from another repo's session (same branch)" {
+  _seed_foreign_concern sess-other "$HOME/other-repo" other-repo-bleed-marker main
+  run_scaffold
+  assert_success
+  run grep -q "other-repo-bleed-marker" "$OUT_DIR/$OUT_FILE_NAME"
+  assert_failure 1
+  grep -q "no DONE_WITH_CONCERNS runs found for this repo" "$OUT_DIR/$OUT_FILE_NAME"
+}
+
+@test "section 4 does not match a sibling path that shares a string prefix" {
+  local top
+  top="$(git -C "$FIXTURE_REPO" rev-parse --show-toplevel)"
+  _seed_foreign_concern sess-sib "${top}-sibling" sibling-bleed-marker main
+  run_scaffold
+  assert_success
+  run grep -q "sibling-bleed-marker" "$OUT_DIR/$OUT_FILE_NAME"
+  assert_failure 1
+}
+
+@test "section 4 includes a session rooted in a worktree under the repo" {
+  local top
+  top="$(git -C "$FIXTURE_REPO" rev-parse --show-toplevel)"
+  _seed_foreign_concern sess-wt "$top/.claude/worktrees/wt1" worktree-included-marker main
+  run_scaffold
+  assert_success
+  grep -q "worktree-included-marker" "$OUT_DIR/$OUT_FILE_NAME"
+}
+
+@test "section 4 unknown-branch fallback is also repo-scoped" {
+  # Branch resolves to "unknown" when rev-parse yields nothing (e.g. HEAD points
+  # at an unborn ref); only then does the unfiltered-by-branch query run. Plant rows on
+  # branch main for another repo AND this repo, with no branch filter in play.
+  local top
+  top="$(git -C "$FIXTURE_REPO" rev-parse --show-toplevel)"
+  _seed_foreign_concern sess-other "$HOME/other-repo" other-repo-bleed-marker main
+  _seed_foreign_concern sess-mine "$top" mine-fallback-marker main
+  # Force the fallback path: make rev-parse --abbrev-ref HEAD fail.
+  git -C "$FIXTURE_REPO" symbolic-ref HEAD refs/heads/does-not-exist
+  run_scaffold
+  assert_success
+  run grep -q "other-repo-bleed-marker" "$OUT_DIR/$OUT_FILE_NAME"
+  assert_failure 1
+  # Positive controls: the fallback ran (branch unknown) and this repo's own
+  # row still surfaces.
+  grep -q "Branch: unknown" "$OUT_DIR/$OUT_FILE_NAME"
+  grep -q "mine-fallback-marker" "$OUT_DIR/$OUT_FILE_NAME"
 }

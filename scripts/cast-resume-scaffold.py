@@ -256,31 +256,48 @@ def _load_db_query():
         return None
 
 
-def _query_concerns(branch: str) -> Optional[List[str]]:
-    """Recent confirmed DONE_WITH_CONCERNS runs on *branch*, as bullet strings.
+def _query_concerns(repo: str, branch: str) -> Optional[List[str]]:
+    """Recent confirmed DONE_WITH_CONCERNS runs in *repo* on *branch*, as bullets.
 
     Returns None if cast_db could not be imported at all (record fully
     unavailable). Returns [] if cast_db loaded but nothing matched — absent
-    DB file, empty/missing table, or simply no concerns on this branch all
+    DB file, empty/missing table, or simply no concerns for this repo/branch all
     legitimately collapse to [] via db_query's own try/except.
     """
     db_query = _load_db_query()
     if db_query is None:
         return None
 
+    # Repo scope: every repo has a `main`, so branch alone bled other projects'
+    # agent output into this resume. Scope through sessions.project_root (the raw
+    # session cwd): exact repo root, or anything under it (subdirs, .claude/
+    # worktrees/<x>) via a substr prefix match with a trailing "/" — substr, not
+    # LIKE, because repo paths may contain "_" / "%". Runs whose session has no
+    # sessions row are excluded on purpose: fail toward omission, never bleed.
+    # Known boundaries: a session whose cwd is inside a NESTED git repo under
+    # this one (e.g. a submodule) still matches the prefix (the record holds
+    # none; telling it apart from a worktree needs per-root git calls), and a
+    # session cwd spelled through a symlink of the repo root does not match
+    # git's resolved toplevel (omission only, never bleed).
+    repo_norm = repo.rstrip("/")
+    if not repo_norm:
+        # A toplevel of "/" would make the prefix "/" match every session.
+        return []
+    prefix = repo_norm + "/"
+    base = (
+        "SELECT a.agent, a.response, a.ended_at FROM agent_runs a "
+        "JOIN sessions s ON s.id = a.session_id "
+        "WHERE a.status = 'DONE' AND a.response LIKE '%DONE_WITH_CONCERNS%' "
+        "AND (s.project_root = ? OR substr(s.project_root, 1, length(?)) = ?) "
+    )
+    scope = (repo_norm, prefix, prefix)
     if branch and branch != "unknown":
         rows = db_query(
-            "SELECT agent, response, ended_at FROM agent_runs "
-            "WHERE status = 'DONE' AND response LIKE '%DONE_WITH_CONCERNS%' "
-            "AND branch = ? ORDER BY id DESC LIMIT 30",
-            (branch,),
+            base + "AND a.branch = ? ORDER BY a.id DESC LIMIT 30",
+            scope + (branch,),
         )
     else:
-        rows = db_query(
-            "SELECT agent, response, ended_at FROM agent_runs "
-            "WHERE status = 'DONE' AND response LIKE '%DONE_WITH_CONCERNS%' "
-            "ORDER BY id DESC LIMIT 30"
-        )
+        rows = db_query(base + "ORDER BY a.id DESC LIMIT 30", scope)
 
     bullets: List[str] = []
     confirmed_rows = 0
@@ -450,13 +467,17 @@ def _section3_open(repo: str, default_branch: str) -> str:
     return "\n".join(lines)
 
 
-def _section4_surfaced(branch: str) -> str:
+def _section4_surfaced(repo: str, branch: str) -> str:
     header = "## 4. Surfaced — NOT fixed (needs an OK before touching)\n\n"
-    concerns = _query_concerns(branch)
+    concerns = _query_concerns(repo, branch)
     if concerns is None:
         return header + "- _(record unavailable — cast.db not readable from here)_"
     if not concerns:
-        where = f" found on branch `{branch}`" if branch and branch != "unknown" else " found"
+        where = (
+            f" found for this repo on branch `{branch}`"
+            if branch and branch != "unknown"
+            else " found for this repo"
+        )
         return header + f"- _(no DONE_WITH_CONCERNS runs{where})_"
     return header + "\n".join(concerns)
 
@@ -549,7 +570,7 @@ def _build_document(
         _section1_tldr(repo, branch, default_branch, newest_plan),
         _section2_shipped(repo),
         _section3_open(repo, default_branch),
-        _section4_surfaced(branch),
+        _section4_surfaced(repo, branch),
         _section5_next(newest_plan, next_action),
         _section6_constraints(),
         _section7_kickoff(default_branch, newest_plan, slug, next_action),

@@ -4,6 +4,15 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+### Fixed
+- **Resume prompts no longer carry other repos' agent notes (`scripts/cast-resume-scaffold.py`).** §4 "Surfaced — NOT
+  fixed" selected DONE_WITH_CONCERNS `agent_runs` rows by branch name only, and the `unknown`-branch fallback had no
+  filter at all. Every repo has a `main`, so one repo's resume could carry another repo's agent responses. The query
+  now joins `sessions` and keeps only runs whose session `project_root` is the repo root or a path under it
+  (subdirectories, `.claude/worktrees/<x>`), on both paths. Runs with no `sessions` row are left out. Known limits: a
+  session started inside a nested repo under this one still matches, and a cwd reached through a symlink of the repo
+  root does not (omission only).
+
 ## [10.3.0] — 2026-10-13
 
 ### Added
