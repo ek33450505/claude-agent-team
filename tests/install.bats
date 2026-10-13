@@ -1305,3 +1305,20 @@ PYEOF
   [[ "$output" == *"sqlite3 not found"* ]]
   [ ! -e "$HOME/.claude/agents" ]
 }
+
+@test "install aborts non-zero when cast.db initialization fails (fail closed)" {
+  # CAST_DB_PATH under a regular FILE: cast-db-init.sh's `mkdir -p "$(dirname "$DB_PATH")"` fails,
+  # so init exits non-zero. Isolated temp HOME (setup_temp_home) -- nothing real is touched.
+  local blocker="$BATS_TEST_TMPDIR/blocker"
+  : > "$blocker"
+
+  run env CAST_DB_PATH="$blocker/cast.db" CAST_INSTALL_FORCE=1 bash "$REPO_DIR/install.sh"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cast.db initialization failed"* ]]
+  [[ "$output" == *"Install is partial"* ]]
+  # The injected cause (init's own mkdir failure) must surface from the captured stderr tail.
+  [[ "$output" == *"mkdir"* ]]
+  [[ "$output" != *"Installation complete"* ]]
+  # Aborted before settings were regenerated / hooks wired.
+  [ ! -e "$HOME/.claude/settings.json" ]
+}

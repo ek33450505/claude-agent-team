@@ -3440,13 +3440,80 @@ PYEOF
   local backup_root
   backup_root="${CAST_BACKUP_ROOT:-${HOME}/Library/Application Support/cast/backups}"
   local backup_max_age_hours="${CAST_BACKUP_MAX_AGE_HOURS:-48}"
+  [[ "$backup_max_age_hours" =~ ^(0|[1-9][0-9]{0,6})$ ]] || backup_max_age_hours=48
   local newest_snapshot=""
   if [[ -d "$backup_root" ]]; then
     newest_snapshot="$(ls -dt "${backup_root}"/cast-snapshot-* 2>/dev/null | head -1)"
   fi
+  # "Fresh install" predicate, computed ONCE and shared with the Litestream check
+  # below: no backup exists yet AND cast.db is younger than the backup threshold,
+  # so nothing has had a chance to run. Age = the OLDER of (a) filesystem birth
+  # time where the platform has it (macOS) and (b) the oldest schema_migrations row;
+  # taking the older source can only make the install look less fresh. If the ledger
+  # cannot be read or any row fails to parse, the age is unknown even when birth time
+  # exists; a readable ledger with zero rows falls back to birth time alone. Unknown
+  # -> NOT fresh -> the WARN path stays. Never
+  # mtime/ctime: a live DB is always "young", which would silence the alarm forever.
+  local _db_age_hours
+  _db_age_hours="$(python3 -I - "$CAST_DB_PATH" <<'PYEOF' 2>/dev/null || echo unknown
+import os, sqlite3, sys, time
+from datetime import datetime, timezone
+db = sys.argv[1]
+ages = []
+try:
+    bt = getattr(os.stat(db), "st_birthtime", None)
+    if bt:
+        ages.append(time.time() - bt)
+except Exception:
+    pass
+if not os.path.isfile(db):
+    # sqlite3.connect() would CREATE a missing file; a missing DB has no age.
+    print("unknown")
+    sys.exit(0)
+try:
+    # Plain connect + query_only, not a ?mode=ro URI: the URI open fails on an idle
+    # WAL DB (no -wal/-shm sidecars) under the macOS system python 3.9 / SQLite 3.51.
+    # query_only blocks data writes. Closing may still checkpoint committed WAL frames
+    # into the main file (no data change), the same as the sqlite3 CLI reads in doctor.
+    con = sqlite3.connect(db)
+    try:
+        con.execute("PRAGMA query_only=ON")
+        rows = con.execute("SELECT applied_at FROM schema_migrations").fetchall()
+    finally:
+        con.close()
+except Exception:
+    # Ledger unreadable (open/table/query failed): age unknowable -> fail loud.
+    # A readable ledger with ZERO rows is different: it falls through to birth
+    # time alone (fresh install before the first migrate).
+    print("unknown")
+    sys.exit(0)
+# Parse EVERY row (MIN() compares mixed formats as strings and returns '' for an
+# empty value); any NULL/empty/unparseable row makes the age unknowable.
+for (raw,) in rows:
+    try:
+        d = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        ages.append(time.time() - d.timestamp())
+    except Exception:
+        print("unknown")
+        sys.exit(0)
+print(int(max(ages) // 3600) if ages else "unknown")
+PYEOF
+)"
+  local _fresh_install=0
+  if [[ -z "$newest_snapshot" && "$_db_age_hours" =~ ^[0-9]+$ ]] \
+    && [[ "$_db_age_hours" -lt "$backup_max_age_hours" ]]; then
+    _fresh_install=1
+  fi
   if [[ -z "$newest_snapshot" ]]; then
-    printf "%b Backups: no snapshot found in %s\n" "$WARN" "$backup_root"
-    overall_ok=0
+    if [[ "$_fresh_install" -eq 1 ]]; then
+      printf "%b Backups: no snapshot yet (new install: cast.db is %sh old) — run: cast backup\n" \
+        "$INFO" "$_db_age_hours"
+    else
+      printf "%b Backups: no snapshot found in %s\n" "$WARN" "$backup_root"
+      overall_ok=0
+    fi
   else
     local snap_age_hours
     snap_age_hours="$(python3 -I -c 'import os,sys,time
@@ -3489,7 +3556,11 @@ except Exception:
     local _has_real_files
     _has_real_files="$(find "$_ls_replica" -type f ! -name '.*' -print -quit 2>/dev/null || true)"
     if [[ ! -d "$_ls_replica" ]] || [[ -z "$_has_real_files" ]]; then
-      printf "%b Litestream: replica dir missing or empty (%s)\n" "$WARN" "$_ls_replica"
+      if [[ "$_fresh_install" -eq 1 ]]; then
+        printf "%b Litestream: replica dir empty (new install: cast.db is %sh old) (%s)\n" "$INFO" "$_db_age_hours" "$_ls_replica"
+      else
+        printf "%b Litestream: replica dir missing or empty (%s)\n" "$WARN" "$_ls_replica"
+      fi
     else
       local _ls_lag_s="-1"
       _ls_lag_s="$(python3 -I - "$_ls_replica" "$CAST_DB_PATH" <<'PYEOF'

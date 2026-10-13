@@ -36,7 +36,7 @@
 
 | Repo | Description |
 |---|---|
-| [cast-website](https://github.com/ek33450505/cast-website) | castframework.dev — marketing site and docs portal for the CAST ecosystem. |
+| [cast-website](https://github.com/ek33450505/cast-website) | Retired (2026-10): the former castframework.dev site. The repo docs replace it. |
 | [ek33450505](https://github.com/ek33450505) | GitHub profile — CAST ecosystem landing page |
 | [Edward_Kubiak](https://github.com/ek33450505/Edward_Kubiak) | Personal portfolio site — React/Vite. Hosts the CAST origin story. |
 
