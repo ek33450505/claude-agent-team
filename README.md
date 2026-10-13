@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-10.2.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-4670-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4690-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -22,8 +22,7 @@
   <a href="docs/tutorial/getting-started.md">Quick Start</a> ·
   <a href="docs/architecture/ARCHITECTURE.md">Architecture</a> ·
   <a href="docs/agents/AGENT-ROSTER.md">Agent Roster</a> ·
-  <a href="CHANGELOG.md">Changelog</a> ·
-  <a href="https://castframework.dev">castframework.dev</a>
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 ---
@@ -298,7 +297,7 @@ archives and promotes memories, and a memory recalled often decays more slowly t
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->257<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4670<!-- /CAST_TEST_COUNT --> test cases) cover hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->258<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4690<!-- /CAST_TEST_COUNT --> test cases) cover hooks, migrations,
 guard logic, event emission and memory persistence, including tests that prove destructive operations
 **refuse**.
 
@@ -353,6 +352,8 @@ that would have happened anyway. See [docs/TOKEN-OPTIMIZATION.md](docs/TOKEN-OPT
 - **Native `onFailure: "block"` needs Claude Code 2.1.295 or later.** Older versions do not block on a
   crashed or timed-out guard hook.
 - **macOS-first.** launchd jobs and the Litestream replica path are macOS-specific; Ubuntu is covered in CI.
+  On Linux, backups still go to `~/Library/Application Support/cast` (no XDG path yet), and no backup job is
+  scheduled, so run `cast backup` yourself.
 
 Full list, with what still holds in each case: [docs/known-limitations.md](docs/known-limitations.md).
 
@@ -402,4 +403,4 @@ MIT — see [LICENSE](LICENSE).
 
 Built and maintained by **[Edward Kubiak](https://github.com/ek33450505)**, full-stack engineer. CAST is the
 system I wanted for building software with Claude Code every day, so I built it, broke it, and hardened it.
-[castframework.dev](https://castframework.dev) · [edwardkubiak.com](https://edwardkubiak.com)
+[edwardkubiak.com](https://edwardkubiak.com)
