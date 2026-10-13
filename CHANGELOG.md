@@ -157,6 +157,148 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
   installed or vendored. Cross-linked with `seo-checklist` in both directions without
   duplicating it, and declared on the `researcher` agent — the tier that runs an index
   investigation — rather than on `frontend-qa`, whose scope is per-file `.tsx` review.
+- **Claude Code internals canary (G3, #424).** SessionStart and `cast doctor` check the undocumented
+  subagent sidecar and hook payload shapes that commit provenance and the roster-type gate read. A
+  Claude Code change to those shapes now reports a drift code, instead of every push blocking with
+  "identity unverifiable" and no cause given.
+- **Managed settings source and fail-closed verifier (G5, #429).** `macos/managed-settings.json` holds
+  CAST's self-protection denies and the three core guard hooks for the root-owned managed settings file.
+  `scripts/cast-managed-settings-verify.py` checks the source and the installed copy and fails closed
+  (exit 1). Install and recovery steps are in `docs/managed-settings.md`.
+- **Sandbox-ON supported profile (G4, #428).** `docs/sandbox-profile.md` lists which workflows work,
+  degrade, or need `!` with the Bash sandbox on. The test harness and `gen-plugin.sh` now run inside the
+  sandbox. Sandboxed `gh` verifies TLS through `enableWeakerNetworkIsolation`, which has a stated
+  side-channel residual.
+- **New `cast doctor` checks (#409, #411, #412).** Doctor reports unloaded `com.cast.*` launchd jobs, warns when the
+  cast.db WAL file exceeds `CAST_DOCTOR_WAL_WARN_MB` (default 256), and warns when a recorded model has no
+  price in the pricing table.
+- **Session-start alarm for guard modules that fail to load (#419).** When the PreToolUse dispatcher cannot
+  load a guard module, that guard is off and only a `hook_failures` row records it. The SessionStart health
+  hook now reports those rows from the last 7 days in its banner.
+
+### Changed
+- **README rewrite (#434).** Drops the "things you will not find elsewhere" section and the "unusual"
+  framing. A plain "What it does" section describes behavior, the native Claude Code features CAST builds
+  on are credited, and a "Known limits" section covers hook-skipping modes, string-analysis guards,
+  macOS-first support and the Claude Code 2.1.295 floor. The site links are removed, since castframework.dev
+  is retired (G8b).
+- **Guard hooks use native `onFailure: "block"` (#433).** The three enforcement hooks (PreToolUse
+  dispatcher, write guards, ConfigChange guard) set `onFailure: "block"`, so a hook that cannot start,
+  exits with a code other than 0 or 2, or times out blocks the action. The Bash guard SIGALRM watchdogs
+  are removed because the native timeout covers them. Install warns below Claude Code 2.1.295.
+- **Install prerequisites documented; tutorial refreshed (G8).** The README gains a Prerequisites block
+  (git, python3, the sqlite3 CLI, Claude Code 2.1.295 or later; optional bats-core, Litestream, python3-venv).
+  The getting-started tutorial matches current install output and the two-command Homebrew path, because `brew install`
+  does not run `install.sh`.
+- **`cast doctor` reports INFO for a new install (G8b).** A missing backup snapshot is INFO while the install
+  is new: no snapshot exists and cast.db is younger than `CAST_BACKUP_MAX_AGE_HOURS` (default 48). The age is
+  the older of the file birth time and the oldest schema migration row. A missing bats is reported as INFO,
+  since bats is needed only for CAST's own tests.
+- **Linux backup limit documented (G8b).** Known limits now state that on Linux, backups still go to
+  `~/Library/Application Support/cast`, no backup job is scheduled, and `cast backup` must be run by hand.
+- **Git hooks run from installed copies (U6b-2b, #421).** `install.sh` deploys the hooks to
+  `~/.claude/githooks` and sets `core.hooksPath` to that absolute path. The hooks execute only installed
+  `~/.claude/scripts` copies, with the repo passed as data (`CAST_REPO_ROOT`), and a missing installed piece
+  fails closed. `make hooks` runs `install.sh`.
+- **Install checks run before any write (#412, #419, #431, G8).** `install.sh` compiles every
+  `scripts/**/*.py` and aborts on a failure, aborts on a non-regular entry in `scripts/`, and rejects script
+  names that collide under APFS case or Unicode normalisation. It runs a shell syntax check on `scripts/*.sh`,
+  aborts when the sqlite3 CLI is missing, and refuses a dirty tree in every deploy source, including `config/`
+  and `managed-settings.d/`. The dirty-tree guard now also covers `rules-personal/`.
+- **Commit agent stages nothing and reports mismatches as BLOCKED (#423, #432).** It compares the staged
+  list and the expected staged-diff sha256 with the dispatch, and reports BLOCKED with the pre-stage recipe when
+  they differ. Its exit statuses are captured to a temp log, not through a pipe, so a failed provenance write is
+  no longer reported as recorded. Non-hook commit failures are reported verbatim.
+- **Workflow stages that inherit the session model are denied (#412).** The PreToolUse hook denies a Workflow
+  call whose `agent()` stages omit `model:`, because such a stage inherits the main-loop model.
+- **Undertone channel classified as local-only egress (#408).** `mcp__undertone__reply` writes to a local 0600
+  unix socket and has no network path, so spoken replies no longer trip `CAST-EGRESS:warn`.
+- **Hot-path cost reduced (#410).** The UserPromptSubmit hook runs its redactor and memory router in-process,
+  where it had cold-started three Python interpreters (122 ms per prompt). `cast review` walks the transcript
+  tree once per run instead of once per event. The stale-run reaper retires rows whose transcripts passed
+  retention, instead of re-globbing for every candidate.
+- **`/roadmap` reads the maintenance plan (#413).** It summarises `plans/next-session.md` read-only and never
+  edits the plan, starts work or dispatches agents. The file it read before was deleted in the v4 rebuild.
+- **Agent conventions for review rounds and guard friction (#425, #426).** `cast-conventions` lists the command
+  shapes the guards accept (commit hatch with `-F`, stash via `git reflog`, script files for fixtures) and says
+  to probe guards under a temp HOME. Working conventions gain a delta-scoped re-review rule and a security-loop
+  stop rule.
+- **`cast doctor` and `cast agents --live` report evidence, not a guessed cause (#405).** Runs that stopped
+  without a Status are classified by their response (no output, session limit, partial, completed) instead of
+  being blamed on maxTurns. The stuck-agent threshold is per agent: 1.5x its 30-day baseline, at least 120 s,
+  and 600 s when there is no baseline.
+- **Faster record queries and status line (#405, #410).** Date filters in `bin/cast` (`agents --live`, doctor
+  checks, `cast tidy`, `cast cost`, `cast status`, `cast budget`) use half-open ranges, so SQLite searches the
+  `started_at` indexes instead of scanning. The ask index purges chunks through a new `record_fts_ref` table
+  (a 3000-file rebuild went from 69.9 s to 1.98 s). The status line renders from one Python process, and `jq`
+  is no longer a dependency.
+- **`cast-plan-doctor` no longer fails on a bare run (#405, #412).** It follows the active-plan marker, else the
+  newest top-level `plans/*.md`, instead of a hardcoded plan file.
+- **CAST-owned settings fragments are overwritten on reinstall (#412).** The ask, behavior and permissions
+  fragments are replaced on every install, with a backup and a notice, so a fix to them reaches existing
+  installs.
+
+### Removed
+- **Hooks with no consumer removed (G6, #427).** InstructionsLoaded, CwdChanged, FileChanged and PostCompact are
+  unregistered and their scripts deleted. The PostCompact prompt hook had already been dropped (#417), because
+  PostCompact accepts only command, http and mcp_tool hooks.
+- **Write-only JSONL sinks removed (G6, #427).** `session-starts.jsonl`, `user-prompts.jsonl` and
+  `tool-failures.jsonl` duplicated cast.db rows and had no reader. The hooks keep their cast.db writes. The
+  unread `telemetry.env_keys` object is removed from `config/egress-policy.json`.
+- **Prompt hooks that never fired removed (#413, #418).** Two PreToolUse prompt hooks in
+  `27-hooks-advanced.json` used `|` alternation in file-path rules, which gitignore syntax does not support, so
+  they never fired. The AskUserQuestion auto-answer hook (`cast-headless-guard.sh`) is removed too: Claude Code
+  ignores its top-level output, and it skipped headless runs while firing in interactive ones.
+- **Bash guard watchdogs and `scripts/cast-compat.sh` removed (#433, #423).** The SIGALRM watchdogs existed
+  because a hook timeout used to allow; with `onFailure: "block"` they are redundant. `cast-compat.sh` backed a
+  `cast compat` subcommand that was removed in v4.
+
+### Fixed
+- **Install no longer reports false UNMANAGED warnings (G8).** A pipefail race in the integrity-manifest
+  check flagged 87-109 freshly deployed scripts on each fresh Ubuntu install. Membership is now checked without
+  a pipe.
+- **Install fails closed when cast.db init fails (G8b).** A failed init previously printed "Installation
+  complete!" and exited 0. Init now retries up to 3 times, then aborts with exit 1, the last lines of its
+  stderr, and a note that the install is partial.
+- **Opus 5.5 and Sonnet 5.5 are priced, with per-model cache-read rates (#409, e7187f7).** Their model ids fell
+  through to the default $3/$15 rate, which overstated cost. Cache reads were costed at a flat 0.1x: Opus 5.5
+  reads at 0.05x, and Sonnet 5.5 reads at 0.05x (it had been costed at twice that). `claude-haiku-5-5` is
+  added, and `cast-recost-agent-runs` reprices rows that fell back to the default rate.
+- **Nightly prune VACUUM is gated on the freelist ratio (#411).** VACUUM ran after every nightly delete, rewriting
+  a 915 MB database for about 32 minutes each night and leaving a 0.9-1.6 GB WAL. It now runs only when the
+  freelist ratio warrants it.
+- **Hook fixes: PreCompact, PostToolUse and hook validators (#417, #413, #418).** Both PreCompact hooks printed
+  `{"decision":"allow"}`, which Claude Code rejects, so every `/compact` showed a validation error; they now print
+  nothing to proceed and `{"decision":"block"}` only to block. The PostToolUse hook's `if` filter held a pipe list that Claude Code reads as one literal
+  rule, so the hook had not spawned since #326; file-write rows, commit provenance and CAST-CHAIN context were
+  missing until now. The hook-contract validators now feed valid JSON, so each hook's real logic is exercised.
+- **Release-notes scorer and cast-ledger reads (#412).** The scorer never passed its system prompt to `claude -p`,
+  so every run scored nothing; it now does, and release tags starting with `-` are rejected. Ledger fetchers
+  returned empty results on SQLite errors, which rendered an empty receipt that looked valid; read errors are
+  now reported.
+- **Doctor and commit reconcile report sandbox limits honestly (#412).** Inside the Bash sandbox, `launchctl list`
+  sees an empty domain, so doctor reported every launchd job as not loaded. An unreadable audit log is now
+  reported as unverifiable, and the pre-push reconcile prints "OK" only when provenance was actually checked.
+- **`cron-health` exits cleanly on healthy runs (#412).** Two checks ended with `[[ -n … ]] && echo …`, which
+  returns 1 when there is nothing to report. Under `set -e` that aborted the script before `cron-health.log`
+  was written.
+- **Regex backtracking in redaction and the claimed-work verifier (#410, #417).** The EMAIL_ADDRESS and
+  DATABASE_URL redaction patterns were quadratic on crafted input (27 s and 4.5 s in hot hooks) and are now
+  bounded. Four URL shapes that leaked credentials are now redacted (`mongodb+srv://`, an empty-user
+  `redis://:pw@host`, SQLAlchemy driver suffixes such as `postgresql+psycopg2`, and `rediss://`). The claimed-work verifier is
+  linear on agent output.
+- **Managed agent SSE exit status is read from curl (#405).** Under `pipefail`, the SSE pipeline's status was read
+  from its rightmost failing stage, so a parser bug could be reported as a curl failure and the reverse. The gate
+  now reads curl's own status.
+- **Worktree check reports a leftover worktree once per 24 hours (#432).** One leftover worktree produced an
+  identical banner at every agent stop. A repeat report for the same worktree and reason is skipped within 24
+  hours; a changed reason or state still reports. Detection only; nothing is deleted.
+- **Smaller fixes (#409, #411, #418, #431).** `/var/home` paths are redacted, and the CLI survives lone surrogates.
+  `cast-merge-settings` refuses a directory as output, and `cast_safe_rm` works under zsh, where its `path` local
+  had clobbered `$PATH`. The groomer's `--repo` without a value exits with a usage error instead of aborting.
+  `plansDirectory` no longer creates a literal `~` directory at the repo root. Reconcile decodes the audit log per
+  line, so one non-UTF-8 byte no longer makes it unverifiable. `cast-audit.py` imports on the macOS system Python
+  3.9. `*.env` in `.gitignore` now also covers `.env.*`.
 
 ### Security
 - **Commit identity at pre-push (D5a/D5b).** The pre-push reconcile used to ask only "is there a
@@ -187,6 +329,66 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
     probe on copies of the live audit log + cast.db, new one clean; push of `85c5d21` reported
     `"status": "clean", "checked": 3`.
   - Accepted LOW residuals are listed in `docs/architecture/enforcement-awareness-split.md`.
+- **Guard hooks fail closed, and a stale managed settings file is refused (#433).** Claude Code applies the highest
+  scope's `onFailure` to identical hook commands, so a root-owned managed file that registers a guard hook without
+  `onFailure: "block"` would cancel the user copy's block. `install.sh` now refuses to deploy while such a file is
+  present, and prints the sudo commands to update it.
+- **Write and Edit block on internal errors, and missing policy config fails closed (#415, #418, #419).** A missing
+  installed `policies.json`, a git guard module that fails to load, an internal policy error, an unencodable path,
+  or an unparseable Write/Edit payload now blocks instead of allowing. `CAST_POLICY_OVERRIDE=1` allows and is
+  audited. Path and egress policy config is read from the installed copy only.
+- **Git guard checks spelled git and shell payloads at any word; its lexer fails closed (#420).** Spellings such as
+  `$'\x67it'`, `\git` and `git${IFS}push`, and code handed to `sh -c`, `eval`, `trap`, `env -S` or a heredoc, are
+  now checked. Input the lexer cannot parse with certainty is refused when git is mentioned.
+- **Hook git calls run through `cast_git_safe` (#414).** Hooks and launchd jobs run git in repos an agent can write
+  to, and repo config can execute programs. The shared primitive forces hardened config (fsmonitor, hooksPath,
+  filter drivers, git hook config, lazy fetch) and fails closed if the hardening read fails.
+- **CAST's Python children run isolated, and xcrun shim variables are blocked (#422).** Hook, cron and launchd Python
+  children run with `-E -s`, and spawns use `sys._base_executable`, because on Homebrew Python `PYTHONEXECUTABLE`
+  overrode `sys.executable` even under `-I`. The ConfigChange guard blocks changes to `DEVELOPER_DIR`, `TOOLCHAINS`
+  and `XCRUN_*`, which can point the macOS xcrun shims at attacker-chosen tools.
+- **Bash command guard RULE 5 and heredoc parsing hardened (#423, #422).** RULE 5-C blocks a command that names the
+  installed exec surface and contains a construct the parser can desync on (heredoc, `$'..'`, a comment the parser
+  misreads, and similar), with no escape hatch. Heredocs open only for an exact delimiter, so `<<'E'OF` and
+  `$((1<<EOF))` no longer hide later commands. The change narrows the desync surface; it does not close it, and the
+  sandbox remains the boundary.
+- **Redactor fails closed and resists Unicode evasion; Resend and GitLab tokens are redacted (#423, #409).**
+  Zero-width, combining and fullwidth characters no longer hide a secret. In hook mode, an analysis error now blocks
+  instead of crashing, because Claude Code treats a crash as allow. Resend, GitLab and JSON-keyed vendor tokens are
+  added to both pattern sources.
+- **Pre-push scans every pushed commit, and PII exclusions apply per match (#423, #427).** A secret added in one
+  pushed commit and removed in a later one is now scanned. Email and path exclusions apply to each match, so a
+  placeholder on the same line no longer hides a real address, and the exclusions are anchored to the whole match.
+- **DB path allowlist; `cast ask` refuses a DB path outside it (#422, #423).** A DB path must be a direct `*.db` child of
+  `~/.claude`, or sit under `/tmp`, `/private/tmp`, `/var/folders` or `/private/var/folders`. TMPDIR and
+  `gettempdir()` no longer widen the allowlist. `cast ask` refuses such a path, and `bin/cast` prints `[]` for it.
+  `cast-stack-detect --write` refuses symlinked, hardlinked and non-regular `.claude/cast.json` targets.
+- **Gate records bound to session and roster type (#416, #417).** The `requires_agent` unblock gate clears only on
+  records bound to the session and to a roster type resolved from Claude Code's subagent sidecar. A read-only agent
+  dispatched as `security` could previously write a DONE record that cleared the gate.
+- **Agent Write/Edit denied on gate inputs, hook scripts and project settings (#416, #417).** Edit denies cover
+  agent-status records, `config/**`, `scripts/**`, `managed-settings.d/**`, subagent directories, `~/.claude/logs/**`,
+  and project `.claude/settings*.json` files. Project settings are hot-reloaded mid-session, and their `env` block
+  reaches every hook process while `disableAllHooks` switches off user-level hooks. Project settings changes that
+  disable or subvert hooks are blocked at the hook layer as well.
+- **Neon write tools prompt before running (#412).** Eleven Neon write or credential-returning tools matched no `ask`
+  glob and ran with no prompt, because the hook only notified after the fact. They now prompt.
+- **Git removed from the sandbox `excludedCommands` (#419).** A no-wildcard entry matches only a bare `git` with no
+  arguments, so it was dead at best. Given git's exec vectors (hooks, fsmonitor, filters, aliases, pagers), it would
+  be a sandbox escape if it matched more. Pushes go through `scripts/cast-push.sh`.
+- **Egress advisories and ledger URLs are sanitised against agent input (#418).** Agent-controlled values in egress
+  advisories (credential paths, MCP server names, command names) are cleaned of control and format characters before
+  they are printed.
+- **`git worktree prune` removed from CAST (#414).** `git worktree prune` follows an agent-planted symlinked
+  `.git/worktrees/<id>` entry and empties its target. The daily maintenance job, the pre-push hook and
+  `cast-parallel` no longer call it, `cast tidy` only reports stale or symlinked entries, and the worktree check
+  records leftover agent worktrees without deleting them.
+- **Backups are private and complete (#405).** DB backups are written 0600 in 0700 directories (8 of 11 had been
+  0644), the WAL is checkpointed first so each backup is one file, and the daily snapshot now covers archived
+  project memory.
+- **The release-notes scorer runs with no tools (#411, #412).** It runs `claude -p` with tools disabled and
+  without skipped permissions, and values reach inline Python through argv, because a hostile release tag could
+  previously execute Python.
 
 ### Documentation
 - 2026-10-08 docs pass: README "Built on Claude Code's primitives" section citing Anthropic docs;

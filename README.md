@@ -62,8 +62,7 @@ Recent agents (last 5):
 `+` is a clean `DONE`; `~` is still running; `x` is `BLOCKED` or `NEEDS_CONTEXT`. In-flight rows carry no
 model or elapsed time yet. Those are written at completion, so an empty pair means *running*, not *broken*.
 
-> **Status.** Latest release **v10.2.0** (2026-09-10). **v10.3.0**, a security and reliability release, is in
-> close-out. Released history: [CHANGELOG.md](CHANGELOG.md).
+> **Status.** Latest release **v10.2.0** (2026-09-10). Released history: [CHANGELOG.md](CHANGELOG.md).
 
 ## See it work
 
