@@ -182,6 +182,11 @@ egress and no sign-in. Cloud features (Managed Agents, local-model routing via
 
 ## Installation
 
+**Prerequisites**
+
+- Required: `git`, `python3`, the `sqlite3` CLI, and [Claude Code](https://code.claude.com/docs/en/overview) 2.1.295 or later (CAST's guard hooks rely on its `onFailure: "block"`). macOS ships python3 and sqlite3; on Debian/Ubuntu: `sudo apt-get install git python3 sqlite3`.
+- Optional: bats-core ≥ 1.10 (only to run CAST's own tests; see Testing), [Litestream](docs/backups.md) (database replication), and `python3-venv` on Debian/Ubuntu (used by `cast dash`; falls back to system Python).
+
 **Homebrew**
 
 ```bash
@@ -210,6 +215,9 @@ launchd jobs, git hooks in `~/.claude/githooks`), and when both are present the 
 `~/.claude/config/cast-hook-owner` sentinel so nothing double-fires. The plugin ships **22 curated agents**
 (`push` and `morning-briefing` are excluded); add the 3 opt-in extras with
 `bash scripts/gen-plugin.sh --with-extras dist/cast-plugin`. A full `install.sh` carries all <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT -->.
+
+The installer links `cast` into `~/.local/bin`. If `cast` is not found, add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 
 Then run `cast status` to verify, and follow **[the 5-minute tutorial](docs/tutorial/getting-started.md)** to
 run your first gated dispatch.
