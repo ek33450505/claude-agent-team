@@ -259,8 +259,9 @@ Commits `aacaf1d` (D5a, record) and `85c5d21` (D5b, judge).
 - D5a: the dispatcher hands the PreToolUse payload to the git guard (`set_hook_context`);
   `COMMIT_HATCH_USED` lines gain `agent_type`, `agent_id`, `tool_use_id`, `session_id`, `head_before`,
   `main_repo` (`PUSH_HATCH_USED` gets the identity fields). Git facts are memoized per call; hatch lines
-  cap at 8 per call (`_MAX_HATCH_RECORDS_PER_COMMAND`) to stay inside the 2 s watchdog (60 segments:
-  8.4 s to ~1 s).
+  cap at 8 per call (`_MAX_HATCH_RECORDS_PER_COMMAND`) to stay well inside the 5 s hook timeout (60 segments:
+  8.4 s to ~1 s). A timeout now BLOCKS the call via native `onFailure:block` (CC >= 2.1.295, only when the
+  highest-scope copy of the hook carries it); below CC 2.1.295 the 2026-10-06 padded-command git bypass reopens.
 - PostToolUse (`part5_commit_provenance`) finds `head_before` by `tool_use_id` in the last 256 KiB of
   `audit.jsonl`, records `head_before..HEAD` (committer time >= hatch event - 5 s, <= 50; else HEAD-only
   with age checks), labels with payload `agent_type` or `'main-session'`, UPSERTs over `'unattributed'`
@@ -307,6 +308,22 @@ every hook. Before this, only the auto-mode classifier stood in the way, and `by
 
 The denylist is defence in depth, not an inventory. A block shows no message to the user or to Claude. Claude
 Code writes only a debug-log line, and the guard appends a names-only line to `~/.claude/logs/config-change-guard.jsonl`.
+
+## Hook failure semantics: native `onFailure:block` (2026-10-12)
+
+The three enforcement hooks (the PreToolUse dispatcher, the Write/Edit `write-guards.sh` hook and the ConfigChange guard, all in `managed-settings.d/25-hooks-security.json`) carry Claude Code's native `"onFailure": "block"` (CC >= 2.1.295; `scripts/cast-cc-version-floor.sh` WARNs at install below that). Live-probed on CC 2.1.296: a hook that times out, exits non-0/2 or can't start BLOCKS the tool call. Malformed JSON stdout does NOT block (it is treated as plain text), contrary to the hooks docs, so a single valid JSON object is still required for a decision to be honoured. This is why the dispatcher has no Bash git-guard or command-guard watchdog any more: on CC >= 2.1.295, and only when the copy of the hook that Claude Code actually runs carries `onFailure`, native block-on-timeout is strictly broader (it blocks ANY timed-out call, not only commands naming git). Below CC 2.1.295 a timeout is again an ALLOW; that is covered only by the install WARN (accepted).
+
+What stays ALLOW by owner decision: the dispatcher's own `except Exception: sys.exit(0)` catch-all and the per-guard fail-open paths (a guard bug in one module never suppresses another). The one fail-closed exception is unchanged: the git guard module failing to LOAD (degraded block). A project-scope duplicate of the hook with `onFailure:continue` was probed not to override a HIGHER-scope copy that carries `onFailure:block` (2026-10-12); the probe used the `--settings` flag scope as the stand-in for the higher scope, and managed-vs-project was not probed directly. The Workflow stage-model lint watchdog is the opposite direction (it ALLOWS on timeout) and is kept.
+
+Residuals of this change (accepted or operational, none are code):
+
+- **Highest scope wins (P6 + P8, probed 2026-10-12, CC 2.1.296).** When the IDENTICAL hook command is registered at several settings scopes, the HIGHEST scope's `onFailure` is the one that applies: P6, higher-scope `block` + lower-scope `continue` => blocked; P8, higher-scope copy with NO `onFailure` + lower-scope `block` => ALLOWED. Both probes used the `--settings` flag scope as the stand-in for the higher scope over project scope; managed-vs-user was not probed directly. Consequence: the root-owned managed copy is authoritative. Once it carries `block`, nothing lower can undo it; while it is stale (no `onFailure`) it CANCELS the user copy's `block`, and with the Bash watchdogs gone the 2026-10-06 padded-command git bypass reopens.
+- **Deploy order (enforced).** `install.sh` runs `python3 -I scripts/cast-managed-settings-verify.py --check-onfailure` before it writes anything and ABORTS (exit 1, nothing deployed) unless every CAST enforcement hook in the installed managed file carries `onFailure:block` (an absent file passes). On failure it prints the sudo commands from `--print-install`; run them in a separate terminal, then re-run `install.sh`. The gate walks the WHOLE managed document (any shape, any depth) and requires every dict whose `command` contains one of the three guard script basenames to carry exactly `"onFailure": "block"`. The gate is skipped ONLY when the canonical `$HOME` carries the BATS `.cast-test-home` sentinel AND is under a temp prefix (`/tmp`, `/private/tmp`, `/var/folders`, `/private/var/folders`; `_cast_is_test_home`), and the skip prints a notice, never silent; `CI`, `CLAUDE_SUBPROCESS` and `CAST_INSTALL_NO_LAUNCHCTL` do NOT skip it (a headless or agent install must not deploy the watchdog-free dispatcher over a stale managed file; CI runners have no managed file, so it passes there), and there is no override env var of its own. It checks `onFailure` only; owner/mode/ACL/byte-identity remain the full `cast-managed-settings-verify.py` mode.
+- **Residuals of the install gate (accepted, not closed).** (1) It runs at install time only: a later managed-file revert, MDM push or Claude Code downgrade is not re-checked. (2) The test sentinel is agent-plantable; it is honoured only when the CANONICAL (`cd -P`, symlinks and `..` resolved) `$HOME` is under a temp prefix and carries the sentinel, and the skip is never silent. Boundary: the gate defends Ed's own `bash install.sh` from a stale managed file and from an agent-planted sentinel in the real HOME. It does NOT defend against whoever runs `install.sh` controlling `HOME`/`PATH` or running a modified `install.sh` or verifier (the same class as editing `~/.claude/scripts` directly); no further hardening of the skip predicate is planned. (3) It reads only `/Library/Application Support/ClaudeCode/managed-settings.json`, not a `managed-settings.d` drop-in directory, MDM/plist policy or server-managed settings (all unprobed). (4) Matching is by script basename anywhere in the document, so over-matching fails closed. (5) Claude Code's dedupe key (exact string vs normalised command, command vs command+matcher) is unprobed, which is why respelled commands are treated as CAST registrations.
+- **Plugin-only installs** never run `install.sh`, so they get no CC-version WARN, and the plugin copy's `onFailure` was not live-probed.
+- **A CC downgrade after install is silent**: there is no session-start or doctor floor check.
+- **A native timeout block leaves no CAST trace**: no CAST log line, no `hook_failures` row, and its generic message cannot be cleared by an escape hatch. A legitimate command whose guards exceed the 5 s hook timeout must be split.
+- **A broken dispatcher blocks every covered tool call** (a crash the interpreter cannot catch: syntax/import error at load, can't-start, signal kill). Recover from a terminal (`bash install.sh`) or the `!` prefix.
 
 ## Sandbox write-denies for git-executed paths (2026-10-04, U6b/U6c)
 
@@ -368,7 +385,7 @@ These were judged and accepted, not fixed; each is a known limit, not an open it
 - S3c-10 egress header comment: cosmetic.
 - U4d branch-delete TOCTOU: a window exists between the check and the delete; accepted.
 - Validator backgrounded-child litter: a backgrounded child of the validator may leave temp litter.
-- Dispatcher locked-DB path: under a locked cast.db the dispatcher can take ~16 s, and a planted `hook_failures` row is not distinguished.
+- Dispatcher locked-DB path: the guard-failure record is bounded by `cast_db.deadline` (~1 s, worst ~2 s), so a locked cast.db no longer stalls the 5 s hook, and a hook timeout BLOCKS under `onFailure:block`; a planted `hook_failures` row is still not distinguished.
 - Egress R1/R4/R8, the `%40` tail and raw ledger fields: accepted egress-sentinel limits.
 - `git grep -O`: an open-in-pager exec vector, pinned by a test as a known allow (#421).
 - RULE 5 residuals: runtime-built paths, script files, stdin data, earlier-call `cd`/aliases, `pip install --user` (see `scripts/cast-command-guard.py` docstring and the `CAST_PROTECTED_WRITE_OK` row in docs/escape-hatches.md).

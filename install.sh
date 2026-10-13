@@ -268,6 +268,44 @@ done <<EOT
 $_sh_list
 EOT
 
+# >>> cast-managed-onfailure-gate
+# --- Managed-settings gate: a stale root-owned managed file must not cancel onFailure:block ---
+# Claude Code resolves identical hook commands registered at several settings scopes by the
+# HIGHEST scope's onFailure (probed 2026-10-12, CC 2.1.296: managed copy without onFailure +
+# user copy with block => ALLOWED). The dispatcher's Bash-guard watchdogs were removed in favour
+# of onFailure:block, so deploying the new dispatcher under a stale managed file reopens the
+# 2026-10-06 padded-command git bypass. Abort BEFORE anything is written. Skipped ONLY for a
+# BATS temp HOME: the .cast-test-home sentinel AND a temp-prefix $HOME (a dev mac's real
+# /Library managed file must not trip BATS installs; an agent-planted sentinel under a real
+# HOME does not skip it). The skip is never silent. Deliberately NOT skipped by CI /
+# CLAUDE_SUBPROCESS / CAST_INSTALL_NO_LAUNCHCTL: a headless or agent install must not deploy
+# the watchdog-free dispatcher over a stale managed file. CI runners have no managed file,
+# so the gate passes there (absent => OK).
+_cast_is_test_home() {
+    local _h
+    # Canonicalise first (resolves symlinks and ..): both checks run on the REAL path, so a
+    # raw-string temp prefix cannot disguise a real HOME. macOS canonicalises /tmp and
+    # /var/folders to /private/..., which the case patterns below already cover.
+    _h="$(CDPATH='' cd -P -- "$HOME" 2>/dev/null && pwd -P)" || return 1
+    [ -f "$_h/.cast-test-home" ] || return 1   # BATS temp-HOME sentinel
+    case "$_h" in   # mirrors tests/helpers/setup.bash teardown guard (b)
+        /tmp/*|/private/tmp/*|/var/folders/*|/private/var/folders/*) return 0 ;;
+    esac
+    return 1
+}
+
+if _cast_is_test_home; then
+    warn "managed-settings onFailure gate skipped (test HOME)"
+elif ! _ms_out="$(python3 -I "$SCRIPT_DIR/scripts/cast-managed-settings-verify.py" --check-onfailure 2>&1)"; then
+    printf '%s\n' "$_ms_out" | LC_ALL=C tr -c '[:print:]\n' '?' >&2
+    error "ERROR: install.sh aborted — the root-owned managed settings are stale (or unreadable) and would CANCEL the guards' onFailure:block, reopening the padded-command git bypass."
+    error "Update the root-owned managed file — commands below (if the verifier refuses to print them, fix the source checks it reports first), then re-run install.sh:"
+    _ms_cmds="$(python3 -I "$SCRIPT_DIR/scripts/cast-managed-settings-verify.py" --print-install 2>&1)" || true
+    printf '%s\n' "$_ms_cmds" | LC_ALL=C tr -c '[:print:]\n' '?' >&2
+    exit 1
+fi
+# <<< cast-managed-onfailure-gate
+
 # --- Backup existing dirs ---
 backup_if_needed() {
     local dir="$1"
@@ -671,6 +709,12 @@ if [ -x "$CLAUDE_DIR/scripts/cast-merge-settings.sh" ]; then
     else
         warn "  Settings merge failed — settings.json may be stale. Run: bash ~/.claude/scripts/cast-merge-settings.sh"
     fi
+fi
+
+# --- Claude Code version floor (hook onFailure:"block" needs >= 2.1.295) — WARN only ---
+CC_FLOOR_MSG="$(bash "$SCRIPT_DIR/scripts/cast-cc-version-floor.sh" 2>/dev/null || true)"
+if [ -n "$CC_FLOOR_MSG" ]; then
+    warn "  $CC_FLOOR_MSG"
 fi
 
 # --- Optional RTK check ---

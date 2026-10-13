@@ -70,8 +70,9 @@ print(json.dumps({'tool_name': sys.argv[1], 'tool_input': json.loads(sys.argv[2]
 run_dispatch_stdout() { run bash -c 'cd "${2:-.}" && python3 "$1" 2>/dev/null' _ "$DISPATCH" "${2:-}" <<< "$1"; }
 
 # assert_one_json_doc <stdout> -- stdout must parse as EXACTLY ONE JSON document
-# (json.loads rejects two concatenated objects with "Extra data"; Claude Code
-# 2.1.288 blocks the tool call when a PreToolUse hook's output fails to parse).
+# (json.loads rejects two concatenated objects with "Extra data"; a single valid JSON
+# object is required for the decision to be honoured -- unparseable stdout was observed
+# NOT to block on CC 2.1.296, probe 2026-10-12, although the hooks docs list it as a failure).
 assert_one_json_doc() {
   python3 -c 'import json,sys; json.loads(sys.stdin.read())' <<< "$1" || {
     echo "stdout is not exactly one JSON document: $1" >&2

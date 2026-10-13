@@ -676,7 +676,8 @@ def _flag_cluster(letter: str) -> str:
     could stop at, the second star retried every length and `\\b` / `(\\s|$)`
     failed each time. 2026-10-06 security finding: a ~60 KB token made one
     `git branch`/`checkout`/`rm` segment cost >10 s, past the 5 s PreToolUse
-    hook timeout, and a hook timeout is a non-blocking ALLOW. The terminator
+    hook timeout (then a non-blocking ALLOW; since onFailure:block, CC >= 2.1.295, a
+    BLOCK of a legitimate command). The terminator
     that follows every use of this fragment (`\\b` or `(\\s|$)`) can only
     hold at the END of the maximal letter run — between two letters neither
     holds — so "the run contains `letter`" is checked once in a lookahead
@@ -3278,8 +3279,8 @@ def _audit_policy_override(policy_id: str, file_path: str, session_id: str) -> N
 # tests always recompute). 2026-10-06 security fix: `_audit_push_hatch` /
 # `_audit_commit_hatch` spawned one `git rev-parse` PER HATCHED SEGMENT (and
 # `_update_ref_overwrites_existing` one per `update-ref` segment) with no cap, so ~500
-# hatched segments (13 KB) cost seconds of subprocess time and pushed the guard past its
-# watchdog budget. Within one command the cwd and the repo do not change, so one spawn per
+# hatched segments (13 KB) cost seconds of subprocess time and pushed the guard past the
+# 5 s hook timeout (a native onFailure:block BLOCK of the call). Within one command the cwd and the repo do not change, so one spawn per
 # distinct (cwd / ref) answers every segment. Never memoises across calls: a stale
 # toplevel or ref answer in a later command would be wrong.
 _EVAL_MEMO = None
@@ -3431,7 +3432,7 @@ def _audit_budget_ok(kind: str) -> bool:
     """Bound audit lines per `_git_evaluate` call to `_MAX_HATCH_RECORDS_PER_COMMAND` per kind
     (counter lives in `_EVAL_MEMO`, so it resets per call; unbounded outside a call). The
     verdict is never affected -- only the audit write is skipped. Mirrors the `_record_hatch`
-    cap so a many-segment command cannot spend the watchdog budget on audit I/O."""
+    cap so a many-segment command cannot spend the 5 s hook timeout on audit I/O."""
     memo = _EVAL_MEMO
     if memo is None:
         return True
@@ -3541,8 +3542,9 @@ _MAX_HATCH_RECORDS_PER_COMMAND = 8
 # an 8 KB one ~50; a segment under ~1.3 KB can never trip it at all, since
 # it cannot hold enough tokens). Over the bound the command is BLOCKED
 # (fail closed): refusing a command nobody can write by hand is the safe
-# direction, whereas running it to the hook timeout is an allow. At the bound
-# the measured worst case across all patterns is ~0.2 s.
+# direction, whereas running it to the 5 s hook timeout blocks the call anyway
+# (onFailure:block). At the bound the measured worst case across all patterns
+# is ~0.2 s.
 #
 # The single-token quadratic (`-fff...f_`, one star group after another over the
 # same class) is NOT bounded here — it is a different shape (one start, O(n^2)
@@ -3566,9 +3568,10 @@ _GIT_START_TOKEN = re.compile(r'(?:^|\s)git\b')
 #      `;`, `&&` or `|` ends a segment) is not a hand-written command.
 _MAX_GIT_SEGMENT_LEN = 200_000
 # Round-2 security finding (HIGH-1): the per-segment cap alone is not enough. shlex costs ~0.3 s
-# per 195 KB token and the dispatcher's watchdog budget is 2 s, so FIVE 195 KB git-mentioning
-# segments (each under the cap) pushed the guard past the budget — and a command that is only
-# decided by the watchdog is decided by a blunt over-approximation, not by the guard. The bytes
+# per 195 KB token and the hook timeout is 5 s (the caps below were sized for a 2 s budget, which
+# the deleted dispatcher watchdog used; they stay, conservatively), so FIVE 195 KB git-mentioning
+# segments (each under the cap) pushed the guard past that budget — and a command that is only
+# decided by a timeout is decided by a blunt over-approximation, not by the guard. The bytes
 # handed to `_normalize_git_segment` are therefore also capped CUMULATIVELY across the whole
 # command: 2 x 195 KB (~0.6 s) still passes, a 3rd is refused up front, fail closed.
 _MAX_GIT_TOKENIZE_BYTES = 400_000
@@ -3705,7 +3708,7 @@ def _hatch_value(segment: str, variable: str) -> str:
     to `shlex.split` the whole segment on every call (twice per hatched segment — the
     CAST_HATCH_REASON lookup and the hatch's own value — while the cumulative
     `_MAX_GIT_TOKENIZE_BYTES` budget counted the segment once), so two 195 KB hatched
-    segments tripped the 2 s watchdog (~2.04 s). Only the leading `VAR=value` prefix
+    segments cost ~2.04 s (past the 2 s budget the caps were sized for). Only the leading `VAR=value` prefix
     is ever read, so the cost is now O(prefix). Same tokens as `shlex.split` (posix,
     whitespace_split, no comment handling); an unbalanced quote LATER in the segment is
     never reached, and one inside the prefix still falls back to a whitespace split.
@@ -5587,8 +5590,8 @@ def _git_evaluate(command: str):
     `_MAX_HATCH_RECORDS_PER_COMMAND`. The sentinel is emitted on every exit
     path — an ALLOW return, a BLOCK return, or an ordinary exception — EXCEPT
     while a BaseException that is not an Exception is unwinding (the
-    dispatcher's watchdog alarm: the sentinel is a 2 s subprocess and the
-    budget has already expired). That matters because `_git_evaluate_impl` returns EARLY on the first BLOCK
+    KeyboardInterrupt / SystemExit: the sentinel is a 2 s subprocess and the
+    hook is already ending). That matters because `_git_evaluate_impl` returns EARLY on the first BLOCK
     verdict in its per-segment loop: a suppression counter tallied only
     after the loop completes would be lost whenever a block follows a
     suppression later in the same command. The sentinel call itself is
@@ -5625,10 +5628,10 @@ def _git_evaluate(command: str):
         except Exception:
             _emit_cap_sentinel()   # an ordinary error still records the suppressed count
             raise
-        # NOT emitted when a BaseException that is not an Exception is unwinding (the
-        # dispatcher's SIGALRM watchdog `_GitGuardTimeout`, KeyboardInterrupt, SystemExit):
-        # `_record_hatch` is a subprocess with a 2 s timeout, and spawning it AFTER the
-        # budget expired added 2 s to a 2 s budget (~4.2 s of the hook's 5 s).
+        # NOT emitted when a BaseException that is not an Exception is unwinding
+        # (KeyboardInterrupt, SystemExit): `_record_hatch` is a subprocess with a 2 s
+        # timeout, and spawning it while unwinding would add 2 s to a hook that is
+        # already ending (the hook timeout is 5 s).
         _emit_cap_sentinel()
         return result
     finally:
@@ -5752,7 +5755,8 @@ def _git_evaluate_impl(command: str, suppressed_counter):
         # runs if this command's accumulated regex work would pass the bound
         # — see `_MAX_GIT_SCAN_WORK`. Checked on BOTH variants: `norm` can
         # turn `'git' 'git' ...` (no `git` token in `seg`) into a padded
-        # string of real ones. A timeout is an ALLOW; this is a BLOCK.
+        # string of real ones. A guard that runs on is a hook timeout (a BLOCK under
+        # onFailure:block, but a refused legit command); this refuses it up front.
         for variant in variants:
             scan_work += _scan_work(variant, _MAX_GIT_SCAN_WORK - scan_work)
         if scan_work > _MAX_GIT_SCAN_WORK:

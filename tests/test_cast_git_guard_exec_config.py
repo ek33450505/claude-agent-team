@@ -325,7 +325,9 @@ class TestHatch(_Base):
 
 
 class TestLinear(_Base):
-    """The new patterns must stay linear: a hook timeout is an ALLOW, so a slow regex is a bypass."""
+    """The new patterns must stay linear: a hook timeout now BLOCKS under native onFailure:block
+    (CC >= 2.1.295), so a slow regex refuses legitimate commands (usability/compat guard, and a
+    bypass guard on CC < 2.1.295, where a timeout is an ALLOW)."""
 
     BOUND_SECS = 2.0
 

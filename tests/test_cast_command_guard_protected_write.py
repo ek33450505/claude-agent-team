@@ -1825,11 +1825,11 @@ class TestEndToEnd(_Base):
 
 
 class TestPerformance(_Base):
-    """The dispatcher gives the command guard ~3.5 s total and a hook TIMEOUT is an ALLOW (the
-    dispatcher blocks instead, fail-closed -- but a slow guard still means a refused command),
-    so RULE 5 must stay near-linear on the same 200 KB paddings. Each case is timed in a FRESH
-    process, like the real hook: inside one long-lived interpreter the pre-existing
-    string-concatenating tokenizer degrades 10x once the heap is fragmented (head: 0.09 s ->
+    """A hook TIMEOUT now BLOCKS under native onFailure:block (CC >= 2.1.295; on older CC it is
+    an ALLOW, i.e. a bypass), so a slow guard means a refused command. This bound is a usability /
+    compat guard (and a bypass guard on CC < 2.1.295): RULE 5 must stay near-linear on the
+    same 200 KB paddings. Each case is timed in a FRESH process, like the real hook: inside one
+    long-lived interpreter the pre-existing string-concatenating tokenizer degrades 10x once the heap is fragmented (head: 0.09 s ->
     1.2 s on the same input), which would make an in-process timing a flaky proxy."""
 
     BUDGET = 2.5

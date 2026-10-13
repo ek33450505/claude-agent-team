@@ -30,7 +30,7 @@
     },
     {
       "table": "quality_gates",
-      "writers": ["cast_subagent_stop.py:2165", "orchestrate-dispatch.py:138", "write-guards.py:148"],
+      "writers": ["cast_subagent_stop.py:2165", "orchestrate-dispatch.py:138", "write-guards.py:172"],
       "cadence": "per_agent_run",
       "status": "live",
       "notes": "gate_type populated from 2026-07-03"
@@ -62,7 +62,7 @@
     },
     {
       "table": "dispatch_decisions",
-      "writers": ["cast-pretool-dispatch.py:1073"],
+      "writers": ["cast-pretool-dispatch.py:1093"],
       "cadence": "per_agent_run",
       "status": "live"
     },

@@ -29,7 +29,10 @@ ROUTING (by tool_name):
      timeout budget:
        Bash:        git-guard (commit/push/stash) THEN command-guard (kill/rm).
        Write/Edit:  git-guard policy engine (TTL sweep + config/policies.json).
-     First hard block wins → block reason to stderr + exit 2.
+     First hard block wins → block reason to stderr + exit 2. There is no Bash guard
+     watchdog: a hook timeout, crash or can't-start now BLOCKS the call via native
+     onFailure:block (CC >= 2.1.295, and only when the highest-scope copy of the hook
+     carries onFailure; managed-settings.d/25-hooks-security.json).
   2. EGRESS scope (mcp__*, WebFetch, WebSearch, Bash, Read), reached only when
      nothing hard-blocked: classify + RECORD to the local egress ledger (the KEEP
      value — master_v9.md §1) + emit advisory (record-only). The hard-block set
@@ -46,7 +49,16 @@ Write/Edit is blocked (unless CAST_POLICY_OVERRIDE=1) and Bash gets a coarse deg
 block of the irreversible git verbs (_degraded_git_block), each with its normal hatch. command-
 guard is always evaluated for Bash unless git-guard already hard-blocked — which
 prevents the whole command from executing anyway. CLAUDE_SUBPROCESS=1 skips ONLY the Write/Edit policy + egress record + dispatch capture; the git commit/push/stash and destructive-command guards run in EVERY context (a subagent must not bypass the irreversibility/destructive guards), and so does the Neon MCP unsafe-tool notify guard (_notify_neon_risk) — a dispatched subagent's risky Neon call must be notified and recorded too. Any
-unhandled error → exit 0 (allow); a guard crash must never block all tool use.
+unhandled error → exit 0 (allow, owner decision): an exception INSIDE main() still exits 0.
+(That describes the dispatcher's own catch-all and per-guard paths. A crash the interpreter
+cannot catch -- a syntax/import error at load, a failure to start, a signal kill, a
+BaseException other than SystemExit such as KeyboardInterrupt escaping `__main__`'s
+`except Exception` -- and a hook
+TIMEOUT instead BLOCK every covered tool call (Bash/Read/Write/Edit/...), so recovery from a
+broken dispatcher is from a terminal (`bash install.sh`) or the `!` prefix. That is the native
+onFailure:block, CC >= 2.1.295, 25-hooks-security.json -- which is why the Bash guards
+carry no SIGALRM watchdog. Unparseable stdout was observed NOT to block on CC 2.1.296,
+probe 2026-10-12.)
 
 CONTRACT (identical to the wrappers): exit 2 + stderr = block; stdout
 hookSpecificOutput JSON = egress advisory (and, for a risky Neon MCP call, a
@@ -110,6 +122,7 @@ def _log_error(msg):
 # failure is still recorded, just never deduplicated.
 _SESSION_ID_RE = re.compile(r'[A-Za-z0-9_\-]{1,64}')
 _UNKNOWN_SESSION = "unknown"
+_RECORD_DEADLINE_S = 1.0  # wall-clock cap on the advisory guard-failure DB record
 
 # The PreToolUse payload's session_id, set once by main() so _load() -- reached
 # from a dozen call sites -- can hand it to _record_guard_failure without threading
@@ -180,14 +193,20 @@ def _record_guard_failure(mod_name: str, err_msg: str, session_id=None) -> None:
         if SCRIPT_DIR not in sys.path:
             sys.path.insert(0, SCRIPT_DIR)
         import cast_db
-        if sid is not None and _guard_failure_recorded(cast_db, hook_name, sid):
-            return  # already recorded for this (session, module) pair
-        cast_db.log_hook_failure(
-            hook_name,
-            -1,
-            (f"guard module failed to load — guard DISABLED: {err_msg}")[:2000],
-            sid if sid is not None else _UNKNOWN_SESSION,
-        )
+        # PreToolUse runs with onFailure:block and a 5 s hook timeout: this record is
+        # advisory and must not turn a locked cast.db (~16 s of cast_db lock waits) into
+        # a blocked tool call on a path that intends to ALLOW. The deadline caps each
+        # connection's busy wait at the remaining budget; a write's COMMIT may wait once
+        # more, so the worst case is ~2x the budget (~2 s for 1.0 s), well under 5 s.
+        with cast_db.deadline(_RECORD_DEADLINE_S):
+            if sid is not None and _guard_failure_recorded(cast_db, hook_name, sid):
+                return  # already recorded for this (session, module) pair
+            cast_db.log_hook_failure(
+                hook_name,
+                -1,
+                (f"guard module failed to load — guard DISABLED: {err_msg}")[:2000],
+                sid if sid is not None else _UNKNOWN_SESSION,
+            )
     except Exception as exc:
         _log_error(f"_record_guard_failure: {exc}")
 
@@ -782,9 +801,10 @@ def _unparseable_bash_verdict(raw, exc):
 
 
 def _emit_pretool_output(sentinel, action, neon_reason, extra_context=None):
-    """Print AT MOST ONE hookSpecificOutput JSON object on stdout (Claude Code
-    2.1.288 BLOCKS the call when a PreToolUse hook's output fails to parse, so
-    two concatenated objects must never happen).
+    """Print AT MOST ONE hookSpecificOutput JSON object on stdout (a single valid
+    JSON object is required for the decision to be honoured: unparseable stdout was
+    observed NOT to block on CC 2.1.296 -- probe 2026-10-12, although the hooks docs
+    list it as a failure -- so two concatenated objects must never happen).
 
       neon_reason set  -> {"permissionDecision": "ask", "permissionDecisionReason":
                           neon_reason}, plus "additionalContext" when an egress
@@ -1028,7 +1048,7 @@ def _record_dispatch(data):
                 _r = _sp.run(
                     ["python3", "-I", os.path.join(SCRIPT_DIR, "cast-redact.py"),
                      "--engine", "regex", "--field", "redacted_text"],
-                    input=prompt, capture_output=True, text=True, timeout=3,
+                    input=prompt, capture_output=True, text=True, timeout=1.5,
                 )
                 _out = _r.stdout.strip()
                 if _r.returncode == 0 and _out:
@@ -1234,101 +1254,14 @@ class _WorkflowLintTimeout(Exception):
     read, in its own window -- outruns its budget. Deliberately an Exception (not
     BaseException): if the alarm ever lands outside the helper's own try, the
     guard's `except Exception` still turns it into an ALLOW instead of letting a
-    traceback escape -- an uncaught hook crash is a BLOCK to Claude Code >= 2.1.288."""
+    traceback escape -- with onFailure:block an uncaught hook crash (exit 1) BLOCKS."""
 
 
-# Wall-clock budget for the Bash git guard (2026-10-06). The hook timeout is 5 s and a hook
-# TIMEOUT is a non-blocking error, i.e. an ALLOW: a command that sends the git guard
-# super-linear (measured: ~15 s for 100 KB of repeated `git ` tokens before the regex fix)
-# silently bypassed every git block in it. Past this budget any command that NAMES git is
-# blocked, hatches ignored (`_git_guard_timeout_block`; fail CLOSED). 2.0 s = the Workflow
-# lint's budget: well past the guard's measured worst case on a 1 MB command (~1.5 s, linear).
-_GIT_GUARD_BUDGET_SECS = 2.0
-
-
-class _GitGuardTimeout(BaseException):
-    """Private: raised by the SIGALRM handler when the Bash git guard outruns
-    _GIT_GUARD_BUDGET_SECS.
-
-    A BaseException, UNLIKE _WorkflowLintTimeout, ON PURPOSE: git_guard.evaluate("Bash") ends in
-    `except Exception: return 0, ''` (fail-open on a guard bug), and several helpers inside
-    it swallow `Exception` too. The alarm is one-shot, so an Exception swallowed anywhere on
-    the way up would let the slow scan run on unbounded -- and `evaluate` would then return
-    ALLOW. Reusing _WorkflowLintTimeout was tried first and is exactly that bug (measured: the
-    pre-fix guard under a 1 s alarm returned (0, '') at 1.0 s). BaseException passes through
-    every `except Exception` to the one `except _GitGuardTimeout` in main(); the guard module
-    has no bare `except:` / `except BaseException`."""
-
-
-# Total wall-clock budget for the two Bash guards (git guard, then command guard), measured
-# from the start of main(): the git guard gets _GIT_GUARD_BUDGET_SECS of it, the command guard
-# whatever is left but never less than _COMMAND_GUARD_MIN_BUDGET_SECS. 3.5 s leaves ~1.5 s of
-# the hook's 5 s for interpreter start-up and the egress / dispatch work after the guards.
-# A hook TIMEOUT is an ALLOW, and cast-command-guard.py (rm -rf / pkill / kill) is also
-# linear-but-slow on a huge command: 7.6-9.9 s observed on ~1 MB, run unwatched, which let the
-# hook time out and ALLOW a catastrophic rm behind a megabyte of padding.
-_BASH_GUARD_TOTAL_BUDGET_SECS = 3.5
-_COMMAND_GUARD_MIN_BUDGET_SECS = 0.5
-
-
-class _CommandGuardTimeout(BaseException):
-    """Private: raised by the SIGALRM handler when cast-command-guard.py outruns its budget.
-    BaseException for the same reason as _GitGuardTimeout: `safe_is_blocked` is
-    `try: ... except Exception: return False, ''` (fail-open on a guard bug), which would
-    swallow an Exception-based alarm and turn the timeout into an ALLOW."""
-
-
-_CONTINUATION = re.compile(r"\\\r?\n")   # backslash-newline / backslash-CRLF: bash deletes both
-_NON_LETTERS = re.compile(r"[^A-Za-z]+")
-
-
-def _git_guard_timeout_block(command, budget):
-    """Block message (str) for a command the git guard could not finish checking in `budget`
-    s, or None when the command does not name git at all.
-
-    Used ONLY on the timeout path (a load failure or an evaluate() raise still gets the coarse
-    `_degraded_git_block`). A timed-out scan decided NOTHING about this command, so the 8-verb
-    degraded table is not enough (it let rm, filter-branch, update-ref -d, reflog expire,
-    gc --prune, worktree remove --force, switch -f and `-c gc.*=` through) and it must not
-    honour a hatch (the degraded scan accepts a hatch token ANYWHERE in the command, which
-    reopens the per-segment scoping the guard fixed on 2026-08-17: `echo CAST_PUSH_OK=1; ...;
-    <raw push>`). So: ANY command that names git is refused, hatches ignored. "Names git" is
-    three steps, in this order: (1) delete line continuations exactly as bash does (backslash +
-    newline, and backslash + CR LF) -- `_degraded_normalize` deletes the backslash but turns the
-    newline into a SPACE, so `g\\<newline>it` (which bash runs as `git`) read as `g it` and a
-    command that timed out on it was ALLOWED (security round 2, HIGH-1); (2) the degraded
-    normalisation (quotes/backslashes deleted, `$'x'` unwrapped, separators and shell glue turned
-    into spaces); (3) collapse everything that is not an ASCII letter and test the letters for
-    `git`, case-insensitively. Step 3 makes the test independent of WHATEVER sits between the
-    letters (`g$''it`, `g''it`, `g\\it`, a continuation, a line of glue), so `GIT`, `$'git'`,
-    `g'i't`, `/usr/bin/git`, `$(git ...)` all count. This over-blocks on purpose and ONLY on this
-    path (`digit`, `github`, even `bag it` or `big;it`): a timed-out scan decided nothing, and a
-    false block here is one split command, a false allow is a bypass. A command that never
-    names git stays allowed. Linear; fails CLOSED (an internal error counts as naming git)."""
-    try:
-        text = command if isinstance(command, str) else ""
-        variants = [text]
-        if "\x00" in text:  # bash drops NUL or ends the word there: scan both readings
-            variants = [text.replace("\x00", " "), text.replace("\x00", "")]
-        names_git = any(
-            "git" in _NON_LETTERS.sub("", _degraded_normalize(_CONTINUATION.sub("", v))).lower()
-            for v in variants)
-    except Exception:
-        names_git = True
-    if not names_git:
-        return None
-    return (
-        f"**[CAST]** The git guard could not finish checking this command within "
-        f"{budget:g}s, so it is blocked. Split it into smaller commands (one git operation "
-        f"per command)."
-    )
-
-
-def _run_under_watchdog(fn, budget, exc_type=None):
+def _run_under_watchdog(fn, budget):
     """fn() under ONE SIGALRM wall-clock budget of `budget` seconds.
 
-    Returns fn()'s result; raises `exc_type` (default _WorkflowLintTimeout) when the budget
-    expires first. Runs fn() WITHOUT a watchdog -- same result, no protection -- where
+    Returns fn()'s result; raises _WorkflowLintTimeout when the budget expires first.
+    Runs fn() WITHOUT a watchdog -- same result, no protection -- where
     SIGALRM/setitimer do not exist (non-POSIX) or signal.signal refuses (not the
     main thread of the main interpreter). Armed only around fn itself, never around
     the lint module load (an alarm mid-import would poison the module cache).
@@ -1350,11 +1283,10 @@ def _run_under_watchdog(fn, budget, exc_type=None):
         return fn()
 
     armed = [False]
-    timeout_exc = exc_type if exc_type is not None else _WorkflowLintTimeout
 
     def _on_alarm(signum, frame):
         if armed[0]:
-            raise timeout_exc()
+            raise _WorkflowLintTimeout()
 
     def _noop(signum, frame):
         return None
@@ -1408,8 +1340,9 @@ def _workflow_stage_model_guard(data, tool_input):
     both are present; a violation in either denies.
 
     ALWAYS returns 0 and prints at most ONE hookSpecificOutput object, built in
-    full before printing: Claude Code >= 2.1.288 BLOCKS a tool call whose
-    PreToolUse hook crashes or emits malformed output, so every failure mode
+    full before printing: with onFailure:block a hook crash BLOCKS the tool call, and
+    a single valid JSON object is required for the decision to be honoured (unparseable
+    stdout was observed NOT to block on CC 2.1.296, probe 2026-10-12), so every failure mode
     (lint module missing, any exception, a parse anomaly, a source over the
     size / agent( count bounds, or a lint that outruns its 2 s wall-clock
     watchdog) ALLOWS silently and is logged. Content-free logging: exception
@@ -1499,7 +1432,6 @@ def _workflow_stage_model_guard(data, tool_input):
 def main():
     global _PAYLOAD_SESSION_ID
     _PAYLOAD_SESSION_ID = None  # per-call: a payload that never parses has none
-    t_main = time.monotonic()   # origin of _BASH_GUARD_TOTAL_BUDGET_SECS
     try:
         # Read BYTES and decode ourselves: sys.stdin.read() raises
         # UnicodeDecodeError on invalid UTF-8 (strict locale), which would
@@ -1571,20 +1503,7 @@ def main():
             except Exception:
                 pass
             try:
-                gcode, gmsg = _run_under_watchdog(
-                    lambda: git_guard.evaluate("Bash", tool_input),
-                    _GIT_GUARD_BUDGET_SECS,
-                    _GitGuardTimeout,
-                )
-            except _GitGuardTimeout:
-                # The guard ran past its budget (a super-linear scan; a hook TIMEOUT would be
-                # an ALLOW) and decided NOTHING: block every command that names git, hatches
-                # ignored -- NOT the 8-verb degraded table (see _git_guard_timeout_block).
-                # Budget only is logged -- never the command text.
-                _log_error(f"Bash git guard timed out after {_GIT_GUARD_BUDGET_SECS:g}s; "
-                           f"blocking any command that names git")
-                gmsg = _git_guard_timeout_block(command, _GIT_GUARD_BUDGET_SECS)
-                gcode = 2 if gmsg else 0
+                gcode, gmsg = git_guard.evaluate("Bash", tool_input)
             except Exception as exc:
                 # evaluate() RAISED: the guard did not run. Same degraded-mode verdict as a
                 # load failure (a coarse irreversible-git block; else allow). The exception
@@ -1610,18 +1529,8 @@ def main():
         if command:
             cg = _load("cast_command_guard", "cast-command-guard.py")
             if cg is not None:
-                # Under the REMAINING share of the total Bash-guard budget: it is linear but
-                # slow on a huge command, and a hook timeout is an ALLOW of rm -rf / pkill.
-                cg_budget = max(_COMMAND_GUARD_MIN_BUDGET_SECS,
-                                _BASH_GUARD_TOTAL_BUDGET_SECS - (time.monotonic() - t_main))
                 try:
-                    blocked, message = _run_under_watchdog(
-                        lambda: cg.safe_is_blocked(command), cg_budget, _CommandGuardTimeout)
-                except _CommandGuardTimeout:
-                    _log_error(f"Bash command guard timed out after {cg_budget:.1f}s; blocking")
-                    return _block(
-                        "**[CAST]** The command guard could not finish checking this command in "
-                        "time, so it is blocked. Split it into smaller commands.")
+                    blocked, message = cg.safe_is_blocked(command)
                 except Exception:
                     blocked, message = False, ""
                 if blocked:

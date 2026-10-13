@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-10.2.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-4640-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4669-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -285,8 +285,8 @@ path-tier specificity that native glob permissions cannot express. A Bash write 
 installed exec surface (`~/.claude/{githooks,scripts,config}`, the install manifest, the `~/Library` python
 caches and LaunchAgents); deploy goes through `bash install.sh`. The git guard also blocks exec-capable
 `git config` keys, `git gc`/`maintenance`/`worktree prune` and symlinked worktree entries. The git guard
-fails **closed** when it cannot load or check a call, the Bash guards run under a watchdog that blocks when
-they cannot finish, and a missing installed policy config blocks Write/Edit. (The command guard itself still
+fails **closed** when it cannot load or check a call, a hook that times out or crashes is blocked natively
+(`onFailure:block`, Claude Code 2.1.295 or later), and a missing installed policy config blocks Write/Edit. (The command guard itself still
 allows on an internal error — a crash there must not block every Bash call.)
 
 **Review you cannot skip.** Code changes mandate a fresh-context `code-reviewer` gate, enforced in the agent
@@ -400,7 +400,7 @@ usage-aware, so a memory recalled often decays slower than one nobody reads.
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->256<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4640<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->257<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4669<!-- /CAST_TEST_COUNT --> test cases) covering hooks, migrations,
 guard logic, event emission and memory persistence — including tests that prove destructive operations
 **refuse**. Runs on macOS and Ubuntu in CI.
 
