@@ -11,33 +11,31 @@ This is Part 1 of the CAST tutorial. It covers installation and verifying your s
 ## Prerequisites
 
 - macOS (Apple Silicon or Intel) or Linux
-- [Claude Code](https://claude.ai/code) installed and authenticated
-- Homebrew (macOS) or curl (Linux)
+- git, python3 and the sqlite3 CLI (see the README's [Prerequisites](../../README.md#installation) for install commands and optional extras)
+- [Claude Code](https://claude.ai/code) 2.1.295 or later, installed and authenticated
+- Homebrew (optional, macOS)
 
 ---
 
-## Step 1: Install CAST via Homebrew
+## Step 1: Install CAST
+
+With Homebrew:
 
 ```bash
-brew tap ek33450505/cast
-brew install cast
+brew tap ek33450505/cast && brew install cast
+bash "$(brew --prefix)/opt/cast/libexec/install.sh"   # sets up ~/.claude, cast.db, hooks
 ```
 
-Expected output:
+`brew install cast` only places the files; the second command runs the installer.
+
+Expected output (abbreviated):
 
 ```
-==> Tapping ek33450505/cast
-==> Downloading https://github.com/ek33450505/claude-agent-team/...
-==> Installing cast
-  CAST Installer (v9.0.0)
+CAST Installer (v10.2.0)
+...
+Installation complete! (CAST v10.2.0)
 
-  ✓ Installed <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents -> ~/.claude/agents/
-  ✓ Installed <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> slash commands -> ~/.claude/commands/
-  ✓ Installed <!-- CAST_SKILL_COUNT -->19<!-- /CAST_SKILL_COUNT --> skills -> ~/.claude/skills/
-  ✓ Installed hook scripts -> ~/.claude/scripts/
-  ✓ Installed 9 rules -> ~/.claude/rules/
-  ✓ Wired settings.json (hooks, permissions)
-  Installation complete! (CAST v9.0.0)
+  Installed: <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agents, <!-- CAST_COMMAND_COUNT -->21<!-- /CAST_COMMAND_COUNT --> commands, <!-- CAST_SKILL_COUNT -->19<!-- /CAST_SKILL_COUNT --> skills
 ```
 
 ### Alternative: clone + install
@@ -53,7 +51,7 @@ bash install.sh
 ```text
 # Marketplace install — run these slash commands inside a Claude Code session:
 /plugin marketplace add ek33450505/claude-agent-team
-/plugin install cast
+/plugin install cast@cast
 /plugin enable cast@cast
 ```
 
@@ -62,7 +60,7 @@ bash install.sh
 claude --plugin-dir ./plugin
 ```
 
-Both paths install the same curated agents, skills, and hooks. See the README "[Install as a plugin (beta)](../../README.md#install-as-a-plugin-beta)" section for details.
+Both paths install the same curated agents, skills, and hooks. See the README "[Installation](../../README.md#installation)" section for details.
 
 ---
 
@@ -77,13 +75,13 @@ cast status
 Expected output (abbreviated):
 
 ```
-CAST v9.0.0
+CAST v10.2.0
 ======================================================================
-Agents      22 in ~/.claude/agents/
-Hooks       34 active
+Agents      <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> in ~/.claude/agents/
+Hooks       NN active
 Spend       $X.XX today  $X.XX this week
-Budget      $X.XX / $500.00 daily (NN%)
-Memory      N entries | N stale (confidence < 0.4) | last verified: YYYY-MM-DD HH:MM:SS
+Budget      not configured (run cast init-repo)
+Memory      not configured
 ======================================================================
 ```
 
@@ -112,14 +110,14 @@ backend-writer.md    debugger.md       docs.md
 ...
 ```
 
-You should see 22 `.md` files. Each file is a fully-configured agent definition with
+A full `install.sh` gives you <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> `.md` files (the plugin install ships a curated 22). Each file is a fully-configured agent definition with
 YAML frontmatter specifying the model and memory for that specialist.
 
 ---
 
 ## What just happened
 
-`brew install cast` ran `install.sh`, which:
+`install.sh` (run via the Homebrew libexec path or from a clone):
 1. Copied <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT --> agent definition files into `~/.claude/agents/` — Claude Code loads these automatically
 2. Installed slash commands (e.g., `/commit`, `/review`, `/plan`) into `~/.claude/commands/`
 3. Wired hook scripts into `~/.claude/settings.json` so hook events (SessionStart, PreToolUse, SubagentStop, etc.) fire on every session

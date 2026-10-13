@@ -71,7 +71,7 @@ fi
 
 if ! command -v bats >/dev/null 2>&1; then
     warn "Warning: 'bats' test framework not found in PATH."
-    warn "  Install with: brew install bats-core (macOS) or apt-get install bats (Ubuntu/Debian)"
+    warn "  Only needed to run CAST's own tests. Needs bats-core >= 1.10: brew install bats-core (macOS) or npm install -g bats (Debian/Ubuntu)."
 fi
 
 CAST_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "unknown")"
@@ -94,6 +94,11 @@ _cast_clean() { printf '%s' "$1" | LC_ALL=C tr -c '[:print:]' '?'; }
 
 if ! command -v python3 >/dev/null 2>&1; then
     error "ERROR: install.sh aborted — python3 not found in PATH (CAST hooks cannot run without it)."
+    exit 1
+fi
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+    error "ERROR: install.sh aborted — sqlite3 not found in PATH (cast.db cannot be initialised without it). Install it first (Debian/Ubuntu: apt-get install sqlite3)."
     exit 1
 fi
 
@@ -919,9 +924,10 @@ if [ -f "$CAST_BIN_SRC" ]; then
         warn "  Re-run install.sh from a PERMANENT clone (e.g. ~/Projects/...) so cast resolves to a stable checkout"
     fi
     unset _cast_src_ephemeral
-    if ! echo "$PATH" | tr ':' '\n' | grep -q "$LOCAL_BIN"; then
-        warn "  Note: $LOCAL_BIN is not in your PATH"
-    fi
+    case ":$PATH:" in
+        *":$LOCAL_BIN:"*) ;;
+        *) warn "  Note: $LOCAL_BIN is not in your PATH" ;;
+    esac
 fi
 
 # --- Copy VERSION ---
@@ -1342,17 +1348,23 @@ fi
 # Unmanaged files where code is loaded from (a planted scripts/json.py shadows the stdlib for the
 # un-isolated dispatcher): the checker alarms on them; say so loudly NOW. They are never blessed into
 # the manifest (leftovers of deleted scripts must be removed by hand: install never reconciles deletions).
+# Membership is a pipe-free `case` over a newline-delimited list: `printf | grep -q` under
+# `set -o pipefail` fails when grep exits on an early match and printf takes EPIPE (false UNMANAGED).
+_mf_list=$'\n'"$(printf '%s\n' "${_mf_files[@]}")"$'\n'
 for _mf_dir in scripts scripts/migrations; do
     while IFS= read -r _mf_u; do
         case "$_mf_u" in .DS_Store|__pycache__) continue ;; esac
         [ "$_mf_dir/$_mf_u" = "scripts/migrations" ] && continue
-        if ! printf '%s\n' "${_mf_files[@]}" | grep -Fxq -- "$_mf_dir/$_mf_u"; then
-            warn "  UNMANAGED file in ~/.claude/$_mf_dir: $(_cast_clean "$_mf_u") — not deployed by this install; remove it (the health hook and cast doctor will alarm on it)"
-        fi
+        case "$_mf_list" in
+            *$'\n'"$_mf_dir/$_mf_u"$'\n'*) ;;
+            *)
+                warn "  UNMANAGED file in ~/.claude/$_mf_dir: $(_cast_clean "$_mf_u") — not deployed by this install; remove it (the health hook and cast doctor will alarm on it)"
+                ;;
+        esac
     done < <(ls -A "$CLAUDE_DIR/$_mf_dir" 2>/dev/null)
 done
 success "  Integrity manifest: $_mf_dest (${#_mf_files[@]} files)"
-unset _mf_stat _mf_modes _mf_dir _mf_u _mf_dest _mf_sha _mf_files _mf_src _mf_base _mf_rel _mf_tmp _mf_hp _mf_sorted_arr _mf_line _mf_out
+unset _mf_stat _mf_modes _mf_dir _mf_u _mf_dest _mf_sha _mf_files _mf_src _mf_base _mf_rel _mf_tmp _mf_hp _mf_sorted_arr _mf_line _mf_out _mf_list
 
 # --- Update README stats ---
 bash "$SCRIPT_DIR/scripts/gen-stats.sh" 2>/dev/null || true

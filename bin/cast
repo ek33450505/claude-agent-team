@@ -2463,8 +2463,7 @@ PYEOF
   if command -v bats >/dev/null 2>&1; then
     printf "%b BATS available\n" "$OK"
   else
-    printf "%b BATS not found (install: brew install bats-core)\n" "$WARN"
-    overall_ok=0
+    printf "%b BATS not found (only needed to run CAST's own tests; bats-core >= 1.10)\n" "$INFO"
   fi
 
   # 8. Database migrations

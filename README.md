@@ -13,7 +13,7 @@
   <a href="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml"><img src="https://github.com/ek33450505/claude-agent-team/actions/workflows/bats-ci.yml/badge.svg" alt="BATS Tests"></a>
   <img src="https://img.shields.io/badge/version-10.2.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/agents-27-green" alt="Agents">
-  <img src="https://img.shields.io/badge/tests-4669-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4670-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
   <img src="https://img.shields.io/badge/Claude_Code-plugin-blueviolet" alt="Claude Code plugin">
 </p>
@@ -182,6 +182,11 @@ egress and no sign-in. Cloud features (Managed Agents, local-model routing via
 
 ## Installation
 
+**Prerequisites**
+
+- Required: `git`, `python3`, the `sqlite3` CLI, and [Claude Code](https://code.claude.com/docs/en/overview) 2.1.295 or later (CAST's guard hooks rely on its `onFailure: "block"`). macOS ships python3 and sqlite3; on Debian/Ubuntu: `sudo apt-get install git python3 sqlite3`.
+- Optional: bats-core ≥ 1.10 (only to run CAST's own tests; see Testing), [Litestream](docs/backups.md) (database replication), and `python3-venv` on Debian/Ubuntu (used by `cast dash`; falls back to system Python).
+
 **Homebrew**
 
 ```bash
@@ -210,6 +215,9 @@ launchd jobs, git hooks in `~/.claude/githooks`), and when both are present the 
 `~/.claude/config/cast-hook-owner` sentinel so nothing double-fires. The plugin ships **22 curated agents**
 (`push` and `morning-briefing` are excluded); add the 3 opt-in extras with
 `bash scripts/gen-plugin.sh --with-extras dist/cast-plugin`. A full `install.sh` carries all <!-- CAST_AGENT_COUNT -->27<!-- /CAST_AGENT_COUNT -->.
+
+The installer links `cast` into `~/.local/bin`. If `cast` is not found, add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 
 Then run `cast status` to verify, and follow **[the 5-minute tutorial](docs/tutorial/getting-started.md)** to
 run your first gated dispatch.
@@ -290,7 +298,7 @@ archives and promotes memories, and a memory recalled often decays more slowly t
 
 ## Testing
 
-<!-- CAST_TEST_FILE_COUNT -->257<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4669<!-- /CAST_TEST_COUNT --> test cases) cover hooks, migrations,
+<!-- CAST_TEST_FILE_COUNT -->257<!-- /CAST_TEST_FILE_COUNT --> BATS test files (<!-- CAST_TEST_COUNT -->4670<!-- /CAST_TEST_COUNT --> test cases) cover hooks, migrations,
 guard logic, event emission and memory persistence, including tests that prove destructive operations
 **refuse**.
 
