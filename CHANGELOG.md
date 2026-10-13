@@ -4,6 +4,8 @@ All notable changes to CAST are documented here. This project adheres to [Keep a
 
 ## [Unreleased]
 
+## [10.3.1] — 2026-10-13
+
 ### Fixed
 - **Resume prompts no longer carry other repos' agent notes (`scripts/cast-resume-scaffold.py`).** §4 "Surfaced — NOT
   fixed" selected DONE_WITH_CONCERNS `agent_runs` rows by branch name only, and the `unknown`-branch fallback had no
