@@ -629,6 +629,50 @@ rm -rf "$CLAUDE_DIR/skills/compact-discipline" "$CLAUDE_DIR/skills/thinking-budg
 rm -f "$CLAUDE_DIR/config/routing-table.json"
 success "  Scripts installed (including cast_db.py)"
 
+# --- Initialize cast.db ---
+# Runs right after the scripts/ deploy and BEFORE settings/hooks are wired, so a failed init aborts
+# before settings.json is regenerated. Fail closed: a broken cast.db must not end in "Installation
+# complete!" rc=0 (G8 outsider test). scripts/ was just deployed, so a missing init script means a
+# broken install. Any init failure is retried (init is idempotent) before aborting: the live cast.db
+# is WAL-mode and hooks write it constantly, and init sets no busy_timeout, so a lock is the likely
+# transient cause.
+DB_INIT_SCRIPT="$CLAUDE_DIR/scripts/cast-db-init.sh"
+if [ ! -f "$DB_INIT_SCRIPT" ]; then
+    error "ERROR: install.sh aborted — cast.db init script missing after deploy ($DB_INIT_SCRIPT). Install is partial (stopped before settings, config, git hooks and the integrity manifest)."
+    exit 1
+fi
+mkdir -p "$CLAUDE_DIR/logs"
+if ! _db_init_err="$(mktemp "$CLAUDE_DIR/logs/cast-install-dbinit.XXXXXX")"; then
+    error "ERROR: install.sh aborted — could not create a temp file for the cast.db init log."
+    exit 1
+fi
+# Remove the log on any exit path, including signals (the signal traps must exit: a trap that
+# merely returns would make the installer uninterruptible here).
+trap 'rm -f "$_db_init_err"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+_db_init_ok=false
+for _db_init_try in 1 2 3; do
+    if bash "$DB_INIT_SCRIPT" 2>"$_db_init_err"; then
+        _db_init_ok=true
+        break
+    fi
+    if [ "$_db_init_try" -lt 3 ]; then sleep 2; fi
+done
+if [ "$_db_init_ok" = true ]; then
+    success "  cast.db initialized"
+else
+    error "ERROR: install.sh aborted — cast.db initialization failed ($DB_INIT_SCRIPT) after 3 attempts. Install is partial (stopped before settings, config, git hooks and the integrity manifest). Fix the cause below, then re-run install.sh."
+    tail -n 5 "$_db_init_err" | while IFS= read -r _db_init_line || [ -n "$_db_init_line" ]; do
+        printf '  %s\n' "$(_cast_clean "$_db_init_line")"
+    done
+    exit 1
+fi
+rm -f "$_db_init_err"
+trap - EXIT INT TERM HUP
+unset _db_init_err _db_init_ok _db_init_try _db_init_line
+
 # --- Install managed-settings.d fragments ---
 # Policy: CAST-owned fragments overwrite — they ship behavior changes that must reach the
 # deployed copy. CAST-owned set: *-hooks-*.json (hook wiring), 50-mcp.json (MCP server
@@ -728,16 +772,6 @@ if command -v rtk >/dev/null 2>&1; then
     success "  rtk found: $(rtk --version 2>/dev/null || echo 'version unknown')"
 else
     info "  rtk not installed (optional — install Rust and run: cargo install --git https://github.com/rtk-ai/rtk)"
-fi
-
-# --- Initialize cast.db ---
-DB_INIT_SCRIPT="$CLAUDE_DIR/scripts/cast-db-init.sh"
-if [ -f "$DB_INIT_SCRIPT" ]; then
-    if bash "$DB_INIT_SCRIPT" 2>/dev/null; then
-        success "  cast.db initialized"
-    else
-        warn "  cast.db initialization failed — run cast-db-init.sh manually"
-    fi
 fi
 
 # --- Run migrations ---
