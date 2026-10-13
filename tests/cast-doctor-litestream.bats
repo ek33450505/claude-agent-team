@@ -96,6 +96,12 @@ _run_doctor_with_path() {
     bash "$CAST_BIN" doctor 2>&1
 }
 
+# Age the DB past the backup threshold so doctor does not treat it as a fresh
+# install (fresh install + no snapshot downgrades the replica-empty WARN to INFO).
+_make_db_old() {
+  sqlite3 "$CAST_DB_PATH" "INSERT INTO schema_migrations (version, applied_at) VALUES (1, datetime('now','-10 days'));"
+}
+
 # Install a fake litestream binary in FAKE_BIN
 _install_fake_litestream() {
   cat > "${FAKE_BIN}/litestream" <<'EOF'
@@ -250,6 +256,7 @@ os.utime(p, (stale_time, stale_time))
 # ---------------------------------------------------------------------------
 @test "replica dir with only .DS_Store: treated as empty, prints WARN" {
   _install_fake_litestream
+  _make_db_old
   _install_fake_launchctl_loaded
   _write_fake_config
   # Create replica dir with only a hidden junk file
@@ -284,6 +291,7 @@ os.utime(p, (stale_time, stale_time))
 # ---------------------------------------------------------------------------
 @test "replica dir missing: prints WARN" {
   _install_fake_litestream
+  _make_db_old
   _install_fake_launchctl_loaded
   _write_fake_config
   # Replica dir intentionally not created
@@ -294,6 +302,7 @@ os.utime(p, (stale_time, stale_time))
 
 @test "replica dir empty: prints WARN" {
   _install_fake_litestream
+  _make_db_old
   _install_fake_launchctl_loaded
   _write_fake_config
   # Create empty replica dir
