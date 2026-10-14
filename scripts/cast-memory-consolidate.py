@@ -128,9 +128,10 @@ SAFE_COL = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*\Z')
 
 def get_db_path():
     """Resolve cast.db path using same logic as cast_db.py."""
-    url = os.environ.get('CAST_DB_URL', '')
-    if url.startswith('sqlite:///'):
-        return url[len('sqlite:///'):]
+    if os.environ.get('CAST_DB_URL'):
+        raise ValueError(
+            'CAST_DB_URL was retired in v10.4.0; set CAST_DB_PATH to the database file instead.'
+        )
     return os.environ.get('CAST_DB_PATH', os.path.expanduser('~/.claude/cast.db'))
 
 

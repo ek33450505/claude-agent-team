@@ -44,8 +44,8 @@ SEMANTIC_CANDIDATE_FLOOR = 50  # re-rank at least this many FTS hits when --sema
 # ── DB path resolution (validated through cast_db's allowlist) ──────────────
 
 def _get_db_path(override: str = "") -> str:
-    """Resolved, allowlist-checked DB path. An explicit --db gets the SAME checks as the
-    CAST_DB_URL / CAST_DB_PATH env vars. Raises ValueError on refusal."""
+    """Resolved, allowlist-checked DB path. An explicit --db gets the SAME checks as
+    the CAST_DB_PATH env var. Raises ValueError on refusal."""
     if override:
         return cast_db.validate_db_path(override, label="--db")
     return cast_db._get_db_path()

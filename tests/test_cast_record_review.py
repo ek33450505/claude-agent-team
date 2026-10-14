@@ -3,7 +3,7 @@
 Unit tests for pure helpers in scripts/cast-record-review.py.
 
 Covers:
-  - get_db_path(cli_db='') — precedence: cli > CAST_DB_URL > CAST_DB_PATH > default
+  - get_db_path(cli_db='') — precedence: cli > CAST_DB_PATH > default (CAST_DB_URL refused)
   - table_exists(conn, name) — checks sqlite_master for table presence
   - safe_query(conn, sql, params=()) — returns list of dicts; [] on error
   - parse_agent_max_turns(agents_dir, agent_name) — extracts maxTurns: N from YAML frontmatter
@@ -34,7 +34,7 @@ _spec.loader.exec_module(cast_record_review)
 
 
 class TestGetDbPath(unittest.TestCase):
-    """Test get_db_path() precedence: cli > CAST_DB_URL > CAST_DB_PATH > default."""
+    """Test get_db_path() precedence: cli > CAST_DB_PATH > default (CAST_DB_URL refused)."""
 
     def setUp(self):
         """Save original env vars before each test."""
@@ -62,18 +62,23 @@ class TestGetDbPath(unittest.TestCase):
         result = cast_record_review.get_db_path('/x/cli.db')
         self.assertEqual(result, '/x/cli.db')
 
-    def test_cast_db_url_with_sqlite_prefix(self):
-        """CAST_DB_URL with sqlite:/// prefix should be stripped."""
+    def test_cast_db_url_is_refused(self):
+        """CAST_DB_URL is retired: refuse rather than fall through to the live default DB."""
         os.environ['CAST_DB_URL'] = 'sqlite:////tmp/u.db'
-        result = cast_record_review.get_db_path('')
-        self.assertEqual(result, '/tmp/u.db')
+        with self.assertRaises(ValueError) as cm:
+            cast_record_review.get_db_path('')
+        self.assertIn('retired', str(cm.exception))
 
-    def test_cast_db_url_beats_path(self):
-        """CAST_DB_URL should beat CAST_DB_PATH when both set."""
+    def test_cast_db_url_refused_even_with_cast_db_path(self):
+        """A valid CAST_DB_PATH does not rescue a set CAST_DB_URL."""
         os.environ['CAST_DB_URL'] = 'sqlite:////tmp/url.db'
         os.environ['CAST_DB_PATH'] = '/tmp/path.db'
-        result = cast_record_review.get_db_path('')
-        self.assertEqual(result, '/tmp/url.db')
+        with self.assertRaises(ValueError):
+            cast_record_review.get_db_path('')
+
+    def test_cli_arg_still_wins_over_cast_db_url(self):
+        os.environ['CAST_DB_URL'] = 'sqlite:////tmp/url.db'
+        self.assertEqual(cast_record_review.get_db_path('/x/cli.db'), '/x/cli.db')
 
     def test_cast_db_path_when_no_url(self):
         """CAST_DB_PATH should be used when URL is not set."""

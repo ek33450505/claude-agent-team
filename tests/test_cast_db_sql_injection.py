@@ -8,7 +8,9 @@ Covers:
   (d) invalid CAST_DB_URL raises ValueError in _get_db_path
 """
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -98,7 +100,7 @@ class TestAllowedTables(unittest.TestCase):
 
 
 class TestDbPathValidation(unittest.TestCase):
-    """(d) invalid CAST_DB_URL raises ValueError."""
+    """(d) CAST_DB_URL is retired and refused; CAST_DB_PATH is allowlist-validated."""
 
     def _get_path_with_env(self, url=None, db_path=None):
         old_url = os.environ.pop('CAST_DB_URL', None)
@@ -119,6 +121,11 @@ class TestDbPathValidation(unittest.TestCase):
             elif 'CAST_DB_PATH' in os.environ:
                 del os.environ['CAST_DB_PATH']
 
+    def _good_db(self):
+        d = tempfile.mkdtemp(prefix='cast-url-')
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return str(Path(d) / 'ok.db')
+
     def test_default_path_is_valid(self):
         """No env vars set → default path accepted without raising."""
         result = self._get_path_with_env()
@@ -137,7 +144,26 @@ class TestDbPathValidation(unittest.TestCase):
 
     def test_etc_passwd_traversal_raises(self):
         with self.assertRaises(ValueError):
-            self._get_path_with_env(url='sqlite:////etc/passwd')
+            self._get_path_with_env(db_path='/etc/passwd')
+
+    def test_any_nonempty_cast_db_url_is_refused_as_retired(self):
+        good = self._good_db()
+        for url in (f'sqlite:///{good}', 'sqlite:////etc/passwd', 'postgres://x/y', 'x'):
+            with self.subTest(url=url):
+                with self.assertRaises(ValueError) as cm:
+                    self._get_path_with_env(url=url)
+                self.assertIn('retired', str(cm.exception))
+
+    def test_cast_db_url_refusal_wins_over_valid_cast_db_path(self):
+        good = self._good_db()
+        with self.assertRaises(ValueError) as cm:
+            self._get_path_with_env(url=f'sqlite:///{good}', db_path=good)
+        self.assertIn('retired', str(cm.exception))
+
+    def test_empty_cast_db_url_falls_through_to_cast_db_path(self):
+        good = self._good_db()
+        self.assertEqual(self._get_path_with_env(url='', db_path=good),
+                         str(Path(good).resolve()))
 
     def test_arbitrary_path_raises(self):
         with self.assertRaises(ValueError):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """cast_db error-log and DB-path-allowlist hardening.
 
-1. _log_error ALWAYS writes ~/.claude/logs/db-write-errors.log. CAST_DB_PATH / CAST_DB_URL
+1. _log_error ALWAYS writes ~/.claude/logs/db-write-errors.log. CAST_DB_PATH
    do not redirect it (a redirect beside the DB was an arbitrary-file-append primitive: a
    hardlinked log file passes is_symlink/resolve checks). Tests that exercise error paths
    must isolate HOME - done here with a mkdtemp HOME.
@@ -62,10 +62,11 @@ class LogLocationTests(_TempHomeCase):
         self.assertIn('db_execute failed', self.home_log.read_text())
         self.assertFalse((self.work / 'logs').exists(), 'log written beside the DB')
 
-    def test_cast_db_url_does_not_redirect_the_log(self):
+    def test_retired_cast_db_url_is_refused_and_does_not_redirect_the_log(self):
         self._env(CAST_DB_URL=f'sqlite:///{self.work}/cast.db')
         self.assertFalse(cast_db.db_execute(_BAD_SQL))
-        self.assertTrue(self.home_log.is_file())
+        self.assertIn('CAST_DB_URL was retired', self.home_log.read_text())
+        self.assertFalse((self.work / 'cast.db').exists(), 'URL must not select a database')
         self.assertFalse((self.work / 'logs').exists(), 'log written beside the DB')
 
     def test_hardlinked_log_beside_the_db_is_never_appended_to(self):
@@ -317,8 +318,8 @@ class ClaudeDirAllowlistTests(_TempHomeCase):
                 self._refused(link / 'x.db')
         self._refused(self.claude / 'state' / '..' / 'scripts' / 'x.db')
 
-    def test_cast_db_url_is_checked_the_same_way(self):
-        self._env(CAST_DB_URL=f'sqlite:///{self.claude / "Scripts" / "x.db"}')
+    def test_cast_db_path_under_a_protected_subdir_is_refused(self):
+        self._env(CAST_DB_PATH=str(self.claude / "Scripts" / "x.db"))
         with self.assertRaises(ValueError):
             cast_db._get_db_path()
 

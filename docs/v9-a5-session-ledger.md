@@ -268,10 +268,9 @@ CAST_DB_PATH=/path/to/custom.db cast ledger
 
 # Flag
 cast ledger --db /path/to/custom.db
-
-# SQLite URL
-CAST_DB_URL="sqlite:///path/to/custom.db" cast ledger
 ```
+
+`CAST_DB_URL` was retired in v10.4.0 and is refused; use `CAST_DB_PATH`.
 
 ---
 

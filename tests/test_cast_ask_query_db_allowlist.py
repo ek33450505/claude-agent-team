@@ -87,7 +87,7 @@ class TestAskQueryDbAllowlist(_Base):
         r = self.run_query('zebracorn', env_extra={'CAST_DB_PATH': '/var/db/cast-askq-evil.db'})
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertNotIn('Traceback', r.stderr)
-        self.assertIn('CAST_DB_URL/CAST_DB_PATH', r.stderr)
+        self.assertIn('CAST_DB_PATH', r.stderr)
         self.assertFalse(os.path.exists('/var/db/cast-askq-evil.db'))
 
     def test_claude_subdir_and_non_db_refused(self):
@@ -164,16 +164,16 @@ class TestValidateDbPathParity(unittest.TestCase):
         self.assertEqual(self._env(db_path='/tmp/cast-x/cast.db'),
                          str(Path('/tmp/cast-x/cast.db').resolve()))
 
-    def test_env_url_form_refused_with_legacy_message(self):
+    def test_env_path_outside_allowlist_refused_with_message(self):
         with self.assertRaises(ValueError) as cm:
-            self._env(url='sqlite:////etc/passwd')
-        self.assertIn('CAST_DB_URL/CAST_DB_PATH resolves to an unexpected path', str(cm.exception))
+            self._env(db_path='/etc/passwd')
+        self.assertIn('CAST_DB_PATH resolves to an unexpected path', str(cm.exception))
 
     def test_env_claude_subdir_refused_with_legacy_message(self):
         p = str(Path.home() / '.claude' / 'scripts' / 'x.db')
         with self.assertRaises(ValueError) as cm:
             self._env(db_path=p)
-        self.assertIn('CAST_DB_URL/CAST_DB_PATH is inside a ~/.claude subdirectory', str(cm.exception))
+        self.assertIn('CAST_DB_PATH is inside a ~/.claude subdirectory', str(cm.exception))
 
     def test_validate_matches_get_db_path_and_label_is_used(self):
         self.assertEqual(cast_db.validate_db_path('/tmp/cast-x/cast.db'),
