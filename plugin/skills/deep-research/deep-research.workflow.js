@@ -149,9 +149,11 @@ async function structuredWithFallback(workPrompt, schema, opts) {
   const label = (opts && opts.label) || "agent"
   const phase = opts && opts.phase
   const model = opts && opts.model
+  if (!model) throw new Error("structuredWithFallback: opts.model is required (pin a model per stage)")
   const base = { label, ...(phase ? { phase } : {}), ...(model ? { model } : {}) }
   // 1) structured attempt
   try {
+    // cast-lint: inherit-model -- model comes from opts.model via ...base
     const direct = await agent(workPrompt + STRUCTURED_SUFFIX, { ...base, schema })
     return direct  // null here = genuine user-skip; do NOT burn the fallback on it
   } catch (e) {
@@ -162,6 +164,7 @@ async function structuredWithFallback(workPrompt, schema, opts) {
   // 2) free-text work pass (no schema)
   let raw
   try {
+    // cast-lint: inherit-model -- model comes from opts.model via ...base
     raw = await agent(workPrompt + PROSE_SUFFIX, { ...base, label: label + "·prose" })
   } catch (e2) {
     return null
@@ -169,6 +172,7 @@ async function structuredWithFallback(workPrompt, schema, opts) {
   if (!raw || !String(raw).trim()) return null
   // 3) structure-only pass (no web work, sole job = emit StructuredOutput)
   try {
+    // cast-lint: inherit-model -- model comes from opts.model via ...base
     const structured = await agent(
       "## Structuring pass — no research, no web tools\n\n" +
       "Convert the analysis below into the required structured result. Do NOT do any new research or call any tool except StructuredOutput. " +

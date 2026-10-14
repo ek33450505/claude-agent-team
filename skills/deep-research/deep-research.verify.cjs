@@ -124,6 +124,9 @@ const check = (name, cond, detail) => {
     check('all sources have claims (none dropped)', srcs.length > 0 && srcs.every(s => s.claimCount > 0))
     check('verify still confirmed (extract-only failure)', result.stats.confirmed === MVC, 'got ' + result.stats.confirmed) }
 
+  console.log('[8] structuredWithFallback refuses to run without a pinned model (inherit-model opt-outs rely on it)')
+  check('source guards opts.model is required', body.includes('opts.model is required'))
+
   console.log('\n' + (failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'))
   process.exit(failures === 0 ? 0 : 1)
 })().catch(e => { console.error('HARNESS ERROR:', e.stack || e.message); process.exit(2) })
