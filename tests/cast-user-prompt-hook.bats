@@ -1132,3 +1132,66 @@ PYX
   run grep -F "$bad" "$HOME/.claude/logs/hook-errors.log"
   assert_failure
 }
+
+# ---------------------------------------------------------------------------
+# CAST_DB_URL: the hook resolves the DB exactly like cast_db._get_db_path
+# ---------------------------------------------------------------------------
+
+_mk_routing_db() {
+  mkdir -p "$(dirname "$1")"
+  sqlite3 "$1" "CREATE TABLE routing_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, timestamp TEXT, prompt_preview TEXT, action TEXT, matched_route TEXT, match_type TEXT, pattern TEXT, confidence TEXT, project TEXT, event_type TEXT, data TEXT);"
+}
+
+@test "CAST_DB_URL only → row lands in URL DB, default DB not created" {
+  local url_db="$HOME/alt/url.db"
+  _mk_routing_db "$url_db"
+  rm -f "$HOME/.claude/cast.db"
+  env -u CAST_DB_PATH CAST_DB_URL="sqlite:///$url_db" bash "$HOOK_SH" <<< "$(make_payload url-sess 'Url db prompt here')"
+  run sqlite3 "$url_db" "SELECT COUNT(*) FROM routing_events WHERE session_id='url-sess' AND event_type='user_prompt_submit'"
+  assert_output "1"
+  [ ! -e "$HOME/.claude/cast.db" ]
+}
+
+@test "CAST_DB_URL and CAST_DB_PATH both set → URL DB wins, PATH DB untouched" {
+  local url_db="$HOME/alt/url.db" path_db="$HOME/alt/path.db"
+  _mk_routing_db "$url_db"
+  _mk_routing_db "$path_db"
+  CAST_DB_PATH="$path_db" CAST_DB_URL="sqlite:///$url_db" run bash "$HOOK_SH" <<< "$(make_payload both-sess 'Both set prompt here')"
+  assert_success
+  run sqlite3 "$url_db" "SELECT COUNT(*) FROM routing_events WHERE session_id='both-sess'"
+  assert_output "1"
+  run sqlite3 "$path_db" "SELECT COUNT(*) FROM routing_events"
+  assert_output "0"
+}
+
+@test "refused CAST_DB_URL → exit 0, nothing written, refusal names CAST_DB_URL (class only, no path)" {
+  local bad="$HOME/.claude/sub/x.db"
+  rm -f "$HOME/.claude/cast.db"
+  run env -u CAST_DB_PATH CAST_DB_URL="sqlite:///$bad" bash "$HOOK_SH" <<< "$(make_payload refusedurl-sess 'Refused url prompt here')"
+  assert_success
+  [ ! -e "$bad" ]
+  [ ! -e "$HOME/.claude/cast.db" ]
+  run grep -F "CAST_DB_URL refused — routing_events row skipped (ValueError)" "$HOME/.claude/logs/hook-errors.log"
+  assert_success
+  run grep -F "$bad" "$HOME/.claude/logs/hook-errors.log"
+  assert_failure
+}
+
+@test "empty CAST_DB_PATH (present, CAST_DB_URL unset) → refused, default DB gets no row, refusal logged" {
+  run env -u CAST_DB_URL CAST_DB_PATH="" bash "$HOOK_SH" <<< "$(make_payload emptypath-sess 'Empty path prompt here')"
+  assert_success
+  run sqlite3 "$HOME/.claude/cast.db" "SELECT COUNT(*) FROM routing_events WHERE session_id='emptypath-sess'"
+  assert_output "0"
+  run grep -F "CAST_DB_PATH refused — routing_events row skipped (ValueError)" "$HOME/.claude/logs/hook-errors.log"
+  assert_success
+}
+
+@test "refused CAST_DB_URL with valid CAST_DB_PATH → no fallback, PATH DB gets 0 rows" {
+  local path_db="$HOME/alt/path.db" bad="$HOME/.claude/sub/x.db"
+  _mk_routing_db "$path_db"
+  run env CAST_DB_PATH="$path_db" CAST_DB_URL="sqlite:///$bad" bash "$HOOK_SH" <<< "$(make_payload nofallback-sess 'No fallback prompt here')"
+  assert_success
+  run sqlite3 "$path_db" "SELECT COUNT(*) FROM routing_events"
+  assert_output "0"
+  [ ! -e "$bad" ]
+}
